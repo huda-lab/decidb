@@ -168,40 +168,6 @@ def test_a_frame_with_no_else_keeps_one_entry_per_variant(decidb_cli):
     assert [(node["entries"], node["instances"]) for node in roots] == [(1, 1)], containers
 
 
-def settled(cli, sql, text):
-    """Each entry's settled instance in the values dump of the node written `text`, `-` where it holds none."""
-    env = {**os.environ, **(cli.env or {}), "DECIDB_DUMP_VALUES": "1"}
-    result = subprocess.run(
-        [cli.exe, "-c", "SET threads=1; SET decide_direct_solve='off'; " + sql],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    assert result.returncode == 0, result.stderr
-    values = result.stderr.split("DECIDB_VALUES_BEGIN\n", 1)[1].split("DECIDB_VALUES_END", 1)[0]
-    return re.findall(r" instance (\S+)", values.split(f" {text}\n", 1)[1].split("\nnode ", 1)[0])
-
-
-#: E settles into variants (decide_tree_evaluation.cpp, Scope): an entry whose variant an earlier entry holds reads
-#: what that one reads. An `else` keeps each anchor's entry apart until O settles, and `first` never reaches it, so
-#: each timeline is one variant. Each case reaches one arm.
-SETTLED_CASES = {
-    # A clause in the grouped shape folds each variant of its group once: group a's second entry holds none.
-    "grouped": ("sum(x) by (t.g) <= at(first else t.w: t.v) over (t.p within t.g)", ["0", "-", "1"]),
-    # Any other E maps each entry to its variant's instance, which a reducer over it reads once.
-    "per-one": ("per (): y <= at(first else t.w: t.v) over (t.p)", ["0", "0", "0"]),
-}
-
-
-@pytest.mark.parametrize("case", list(SETTLED_CASES))
-def test_an_entry_settles_into_its_variant(decidb_cli, case):
-    clause, instances = SETTLED_CASES[case]
-    sql = f"""SELECT id, x FROM (VALUES (1, 'a', 1, 4, 5), (2, 'a', 2, 6, 1), (3, 'b', 3, 7, 2)) t(id, g, p, v, w)
-        DECIDE x(INT), per (): y(INT) SUCH THAT x <= 3 AND y <= 9 AND {clause} MAXIMIZE sum(x) + y ORDER BY id"""
-    assert settled(decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"}), sql, clause) == instances
-
-
 _PINNED_ROWS = (
     "(VALUES (1, 'a', 'East', 'c1', TRUE, 20, 30), (2, 'a', 'East', 'c1', TRUE, 15, 30), "
     "(3, 'a', 'West', 'c2', FALSE, 10, 50), (4, 'b', 'West', 'c3', TRUE, 25, 45)) t(id, g, r, k, p, d, c)"

@@ -20,11 +20,15 @@
 
 #pragma once
 
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/decidb/formulation/solver_input.hpp"
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
+
+#include <functional>
+#include <map>
 
 namespace duckdb {
 
@@ -189,6 +193,33 @@ DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec
                                    PerGroupCache &per_group_cache, idx_t num_rows,
                                    ChunkExprCache &chunk_expr_cache);
 
+//! What each anchor of `map` reads, once its anchors, timelines and peers are known (`first_peer[t]` the first peer of
+//! timeline `t`, then one past the last): a point's selected peer, a range's window (language/guide.md §5.6), and the
+//! anchors where the frame reads nothing. BuildDecideFrameMap's second half, which the tree's frames share: their
+//! timelines are its descent's (DecideDescentTimeline).
+void SelectDecideFramePeers(ClientContext &context, const DecideFrameSpec &frame, const vector<idx_t> &first_peer,
+                            DecideFrameMap &map);
+
+//! An expression's values on the rows a frame reads it on, one slot per row and one after them for the caller: NULL on
+//! every other row, and each row's error kept with its value until a reader reaches the row, as the one pass keeps a
+//! row's error (DecideRowStore).
+struct DecideFrameValues {
+	DecideFrameValues(const LogicalType &type, idx_t count) : values(type, count) {
+	}
+	Vector values;
+	std::map<idx_t, ErrorData> errors;
+};
+
+//! Where a frame's columns read an expression on the rows `rows` marks: flat's one pass, or the tree's programs on the
+//! frame's anchors (DecideTreeColumns).
+using DecideFrameRead = std::function<DecideFrameValues(const Expression &expression, const vector<bool> &rows)>;
+
+//! Flat's read (DecideFrameRead): `expr` on the rows `rows` marks, as the one pass computed it. A computed value can
+//! fail on a row that no surviving instance reads, so its failure stays with the value until a consumer reaches it, as
+//! the pass keeps it for its expressions (DecideRowStore::Slot).
+DecideFrameValues ReadDecideFrameRows(ClientContext &context, const Expression &expr, idx_t num_rows,
+                                      const vector<bool> &rows, ChunkExprCache &chunk_expr_cache);
+
 //! For each class of `row_to_class` (INVALID_INDEX: a row in none), the row holding the least value of `expr` -- a
 //! column's spelling -- as ORDER BY places it.
 vector<idx_t> LeastSpellingRows(const Expression &expr, const vector<idx_t> &row_to_class, idx_t num_classes,
@@ -204,12 +235,33 @@ void CheckDecideFramePartition(ClientContext &context, const DecideFrameSpec &fr
                                const vector<DecideKey> &keys, PerGroupCache &per_group_cache,
                                idx_t num_rows, ChunkExprCache &chunk_expr_cache);
 
+//! D75's message: the class `class_values` of the partition key (its elements `class_names`) lies in the two
+//! timelines `left` and `right`.
+string DecideFramePartitionMessage(const DecideFrameSpec &frame, const vector<string> &class_names,
+                                   const vector<Value> &class_values, const vector<Value> &left,
+                                   const vector<Value> &right);
+
+//! D73's message: the position `position` names (the timeline's values, then the order key's) holds `rows` rows that
+//! read different payloads.
+string DecideAmbiguousPositionMessage(const DecideFrameSpec &frame, idx_t rows, const vector<Value> &position);
+
+//! Whether the frame reads each peer of `map`: a point where some anchor selects it, a range where some window visits
+//! it -- one that reads only NULLs included, else which row of a tied position comes first would decide whether its
+//! rows are compared (D73).
+vector<bool> DecideReadPeers(const DecideFrameMap &map);
+
 //! A range over decisions skips the values it reads as NULL, as SQL's aggregate skips them (D84): `payload` are the
 //! coefficients of its payload's terms, read at the rows its windows read, `fallback` those of its `else`, read at the
-//! anchors that reach it; a NULL among a row's makes that row no member (DecideFrameMap::SkipNullReads).
-void SkipDecideRangeNullReads(ClientContext &context, const vector<const Expression *> &payload,
-                              const vector<const Expression *> &fallback, DecideFrameMap &map,
-                              idx_t num_rows, ChunkExprCache &chunk_expr_cache);
+//! anchors that reach it, each through `read`; a NULL among a row's makes that row no member
+//! (DecideFrameMap::SkipNullReads).
+void SkipDecideRangeNullReads(const vector<const Expression *> &payload, const vector<const Expression *> &fallback,
+                              DecideFrameMap &map, idx_t num_rows, const DecideFrameRead &read);
+
+//! The values the frames' windows skip as NULL, read through `read` before any window is numbered or listed
+//! (SkipDecideRangeNullReads): a range over decisions' payload coefficients and `else`s (its helper's, `links`), and a
+//! range over data's `else`, which reads no value at an anchor where it is NULL (D86).
+void SkipDecideFrameNullReads(const DecidePreparedModel &prepared, const vector<LogicalDecide::ReducerValueLink> &links,
+                              vector<DecideFrameMap> &maps, idx_t num_rows, const DecideFrameRead &read);
 
 //! Adds to the one pass's columns (DecideRowStore::AppendColumn) the value of each of `prepared.frame_columns`
 //! on every row (DecideFrameColumn), each computed on the rows its kind names only: a
@@ -221,6 +273,47 @@ void SkipDecideRangeNullReads(ClientContext &context, const vector<const Express
 void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSpec> &frames,
                               const vector<DecideFrameMap> &maps, const DecidePreparedModel &prepared,
                               idx_t num_rows, ChunkExprCache &chunk_expr_cache);
+
+//! The frame columns AppendDecideFrameColumns appends, each with its rows' errors: every one before the first reducer
+//! over data reading frames (AGGREGATE), each expression read through `read`.
+struct DecideFrameColumnValues {
+	vector<unique_ptr<Vector>> values;
+	vector<std::map<idx_t, ErrorData>> errors;
+};
+DecideFrameColumnValues ComputeDecideFrameColumns(ClientContext &context, const vector<DecideFrameSpec> &frames,
+                                                  const vector<DecideFrameMap> &maps,
+                                                  const DecidePreparedModel &prepared, idx_t num_rows,
+                                                  const DecideFrameRead &read);
+
+//! A range frame's helper's classes (DecideOptimizer::RewriteFrameRanges): one per window of its frame, read by the
+//! window's anchors; an anchor whose window reads nothing is in none.
+KeyedMapping DecideFrameWindowMapping(const DecideFrameMap &map);
+
+//! A range frame's helper's members (language/guide.md §5.6), one group per window that reads something, read at its
+//! anchor: a member per row the window reads, and one for its `else`, the payload's coefficients `payload` of the
+//! decisions `payload_vars` at those rows and the `else`'s `fallback` of `fallback_vars` at the anchor. A SUM or AVG
+//! counts each value -- a row once per visit, the `else` once per missing position -- and an AVG divides by their
+//! number; a MIN or MAX reads each once.
+void DecideListFrameMembers(const DecideFrameMap &map, const LogicalDecide::ReducerValueLink &link,
+                            const string &frame_text, const vector<CoefficientColumn> &payload,
+                            const vector<idx_t> &payload_vars, const vector<CoefficientColumn> &fallback,
+                            const vector<idx_t> &fallback_vars, ReducerValueMembers &out);
+
+//! Whether a term reading its decision through `map` (DecideTerm::frame_read) reads, at `row`, an instance with no
+//! value (D84): where the frame reads nothing, or at the row it selects where `absent` says the decision has none. A
+//! missing position whose `else` stands in reads the `else`, not the term.
+template <class ABSENT>
+bool DecideFrameReadsAbsent(const DecideFrameMap &map, idx_t row, ABSENT &&absent) {
+	if (map.Absent(row)) {
+		return true;
+	}
+	const auto at = map.SelectedRow(row);
+	return at != DConstants::INVALID_INDEX && absent(at);
+}
+
+//! The profile's counts of the frames' work (DECIDB_PROFILE): the positions they request, one per anchor of a point and
+//! each value a range's window lists, once per window however many anchors share it.
+void DecideCountFrames(const vector<DecideFrameMap> &maps);
 
 //! The aggregate of `column`'s reducer (function and arguments; not its filter) over the rows `members` keeps of each
 //! group into `out`, on each row its group's value: `group` numbers the rows' groups below `groups`, INVALID_INDEX for

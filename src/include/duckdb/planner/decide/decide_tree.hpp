@@ -46,11 +46,24 @@ struct DecideTermSite {
 //! reads (a coefficient's inputs, an admitted bound's a and r, a square's scale).
 enum class DecideProgramRole : uint8_t { COEFFICIENT, BOUND, TIGHTEST_BOUND, TEST, VALUE };
 
-//! A value a node's programs read from a G over data, a data reducer (language/guide.md §6.1): at an entry, the G's
-//! fold in the slot the entry's row reads it in, NULL where the row reaches none.
+//! A value a node's programs read from another node (language/guide.md §6.1): a G over data's, a data reducer's, at an
+//! entry the G's fold in the slot the entry's row reads it in, NULL where the row reaches none; or an O's, a column of
+//! its frame (`column`, DecidePreparedModel::frame_columns) at the entry's row, the anchor the frame is read at.
 struct DecideHole {
 	idx_t node;
 	LogicalType type;
+	idx_t column = DConstants::INVALID_INDEX;
+};
+
+//! What an O computes on its anchors for one of its frame's columns (DecidePreparedModel::frame_columns, flat's
+//! blocks ComputeDecideFrameColumns and SkipDecideRangeNullReads read them): programs on the O, its `value`, its
+//! `fallback` and a range's reducer's arguments; INVALID where the column has none. Its own frame's columns are
+//! computed from them before the O's other programs, which may read them.
+struct DecideFrameColumnPrograms {
+	idx_t node = DConstants::INVALID_INDEX;
+	idx_t value = DConstants::INVALID_INDEX;
+	idx_t fallback = DConstants::INVALID_INDEX;
+	vector<idx_t> arguments;
 };
 
 //! An expression a node's entries compute (language/guide.md §6.1), over the node's layout: its carried columns, then
@@ -102,14 +115,18 @@ struct DecideBody {
 	idx_t upper = DConstants::INVALID_INDEX;
 	//! A clause whose rows a signature splits into variants (DecideClauseScope::signature): what a variant's name reads
 	//! at its first row, programs on its root, as written: its class key's elements, then each value and each `by`
-	//! key's elements its signature reads (language/guide.md §7.1).
+	//! key's elements its signature reads, and each frame's timeline and, read relative to the anchor, its order key
+	//! (language/guide.md §7.1).
 	vector<idx_t> names;
+	//! Of those, each collated order key and its frame: a position is named by its least spelling over its rows (D69).
+	vector<pair<idx_t, idx_t>> position_names;
 	//! A data check's message, a program on its hidden root; INVALID for any other node.
 	idx_t check = DConstants::INVALID_INDEX;
-	//! A G over data's operand: its function's arguments, programs on it, which the G folds per slot.
+	//! A G over data's operand: its function's arguments, programs on it, which the G folds per slot; and a reducer
+	//! over frames written as a norm, its written body, whose NaN its fold refuses (the norm's definition can hide one,
+	//! as SIGN reads it as 0); INVALID for any other.
 	vector<idx_t> arguments;
-	//! What the tree computes no value for yet, the first reason met: the node's query has no arm until it does.
-	string uncompiled;
+	idx_t norm_body = DConstants::INVALID_INDEX;
 	//! The rank flat's evaluation gives the stage-05 list the body was copied from (PhysicalDecide::Evaluate):
 	//! constraints by their place, the objective, composed clauses, then the objective's composed terms.
 	DecideErrorPhase phase = DecideErrorPhase::INVALID;
@@ -182,7 +199,8 @@ struct DecideNode {
 	//! A grouped root whose `per K:` names the classes its rows stand for (DecideClauseScope::NAMES_CLASSES): its
 	//! instances are its `by` key's groups (language/guide.md §6.4), so it holds a kept row in no class of K too, in a
 	//! slot of its own (DecideDescentGroup::in_a_class). So does a relation-qualified reducer's operand: its reducer
-	//! reads every row its `when` keeps, and its `per K'` keeps no value of a row in no class of K' (§5.3).
+	//! reads every row its `when` keeps, and its `per K'` keeps no value of a row in no class of K' (§5.3). So does an
+	//! O an anchor in no timeline (§5.6, D75).
 	bool holds_rows_in_no_class = false;
 	//! Where flat reads its key: a grouped clause's root and its G's of its `by` key read it where flat groups the kept
 	//! rows, after their terms, and a helper's G after its members' rows (DecideBlock::BY_KEY), so a row the key raises
@@ -236,6 +254,13 @@ struct DecideTree {
 	vector<DecideBoundBox> singleton_row_boxes;
 	vector<LogicalDecide::UserBoundSpec> user_singleton_row_bounds;
 	vector<idx_t> signed_helper_vars;
+	//! Per frame (LogicalDecide::frames), its O; per reducer over data reading a frame
+	//! (LogicalDecide::frame_aggregates), its G.
+	vector<idx_t> frame_nodes;
+	vector<idx_t> frame_aggregate_nodes;
+	//! Per frame column (DecidePreparedModel::frame_columns), what its O computes for it; a reducer's over frames
+	//! (AGGREGATE) is its G's fold.
+	vector<DecideFrameColumnPrograms> frame_columns;
 
 	//! Reject dangling edges, cycles, invalid keys and non-physical source reads.
 	void Validate() const;

@@ -27,6 +27,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <unordered_map>
 
 namespace duckdb {
 
@@ -1066,6 +1068,96 @@ string DecideObjectiveTwiceMessage(const vector<DecideSignatureField> &fields, c
 	    "DECIDE objective: %s, so the objective would be produced more than once; move it inside a reducer or fix it "
 	    "with when.",
 	    VariantDifference(fields, keys, scopes, read));
+}
+
+string DecideFrameDifference(const DecideSignatureField &field, const DecideFrameSpec &frame,
+                             const vector<DecideKey> &keys, const DecideFrameReader &read) {
+	bool timelines = false;
+	bool positions = false;
+	idx_t first_peer = DConstants::INVALID_INDEX;
+	idx_t last_peer = 0;
+	std::unordered_map<idx_t, idx_t> peer_of_timeline;
+	for (auto &row : read.rows) {
+		auto seen = peer_of_timeline.emplace(row.first, row.second).first;
+		positions = positions || seen->second != row.second;
+		first_peer = MinValue(first_peer, row.second);
+		last_peer = MaxValue(last_peer, row.second);
+		timelines = timelines || row.first != read.rows[0].first;
+	}
+	if (frame.Relative() && positions) {
+		const auto names = read.positions(first_peer, last_peer);
+		return StringUtil::Format("'%s' reads more than one position over the kept rows (%s = %s, %s)", field.text,
+		                          frame.order_name, DecideSqlLiteral(names.first), DecideSqlLiteral(names.second));
+	}
+	if (timelines) {
+		auto &elements = DecideKeyElements(keys, frame.timeline_key);
+		string values;
+		for (idx_t e = 0; e < elements.size(); e++) {
+			if (read.timeline(e, *elements[e].expression, values)) {
+				return StringUtil::Format("'%s' reads more than one timeline over the kept rows (%s = %s)", field.text,
+				                          elements[e].name, values);
+			}
+		}
+		return StringUtil::Format("'%s' reads more than one timeline over the kept rows", field.text);
+	}
+	return read.fallbacks()
+	           ? StringUtil::Format("'%s' falls back to more than one value over the kept rows", field.text)
+	           : string();
+}
+
+void TakeTightestFrameBound(ExpressionType comparison, const string &written, const vector<bool> &kept,
+                            const vector<bool> &bound_null, const vector<idx_t> &kept_groups,
+                            const vector<idx_t> &instances, idx_t num_groups, bool grouped, vector<double> &rhs,
+                            vector<bool> &null_rows) {
+	const bool one_group = kept_groups.empty();
+	const idx_t groups = one_group ? 1 : num_groups;
+	vector<bool> held(groups, instances.empty());
+	for (auto group : instances) {
+		if (group != DConstants::INVALID_INDEX) {
+			held[one_group ? 0 : group] = true;
+		}
+	}
+	for (idx_t row = 0; grouped && row < null_rows.size(); row++) {
+		const idx_t instance = instances.empty() ? 0 : instances[row];
+		if (null_rows[row] && instance != DConstants::INVALID_INDEX) {
+			held[one_group ? 0 : instance] = false;
+		}
+	}
+	auto group_of = [&](idx_t row) {
+		const idx_t group = one_group ? 0 : kept_groups[row];
+		return group != DConstants::INVALID_INDEX && held[group] ? group : DConstants::INVALID_INDEX;
+	};
+	vector<double> least(groups, std::numeric_limits<double>::infinity());
+	vector<double> greatest(groups, -std::numeric_limits<double>::infinity());
+	vector<bool> has_value(groups, false);
+	for (idx_t row = 0; row < kept.size(); row++) {
+		const idx_t group = group_of(row);
+		if (!kept[row] || bound_null[row] || group == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		least[group] = MinValue(least[group], rhs[row]);
+		greatest[group] = MaxValue(greatest[group], rhs[row]);
+		has_value[group] = true;
+	}
+	const bool upper = comparison == ExpressionType::COMPARE_LESSTHAN ||
+	                   comparison == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
+	                   comparison == ExpressionType::COMPARE_EQUAL;
+	for (idx_t row = 0; row < kept.size(); row++) {
+		const idx_t group = group_of(row);
+		if (!kept[row] || group == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		if (!has_value[group]) {
+			null_rows[row] = true;
+			continue;
+		}
+		if (comparison == ExpressionType::COMPARE_EQUAL && least[group] != greatest[group]) {
+			throw InvalidInputException("`%s` takes more than one value here (%g and %g) — an `=` bound cannot hold "
+			                            "two different values at once, so this DECIDE query is infeasible.",
+			                            written, least[group], greatest[group]);
+		}
+		rhs[row] = upper ? least[group] : greatest[group];
+	}
 }
 
 } // namespace duckdb

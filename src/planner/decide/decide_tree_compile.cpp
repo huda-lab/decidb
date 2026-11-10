@@ -14,11 +14,13 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 
+#include <algorithm>
 #include <sstream>
 
 namespace duckdb {
@@ -398,6 +400,18 @@ public:
 				for (auto &element : DecideKeyElements(tree.keys, field.key)) {
 					add(*element.expression);
 				}
+			} else if (field.kind == DecideSignatureFieldKind::FRAME) {
+				// Its timeline, and its anchor's place there when it reads relative to it.
+				auto &frame = *tree.nodes[tree.frame_nodes[field.frame]]->frame_spec;
+				for (auto &element : DecideKeyElements(tree.keys, frame.timeline_key)) {
+					add(*element.expression);
+				}
+				if (frame.Relative()) {
+					add(*frame.order);
+					if (frame.order_collation) {
+						node.compiled.position_names.emplace_back(node.compiled.names.size() - 1, field.frame);
+					}
+				}
 			}
 		}
 	}
@@ -416,7 +430,7 @@ public:
 		for (idx_t i = 0; i < node.member_tests.size(); i++) {
 			DecideProgram program;
 			program.role = DecideProgramRole::TEST;
-			program.expression = TranslateTree(index, *node.member_tests[i], "a member test reads a child");
+			program.expression = TranslateTree(index, *node.member_tests[i], "a member test");
 			program.written = node.member_tests[i]->Copy();
 			program.part = first.first;
 			program.group = first.second;
@@ -432,7 +446,7 @@ public:
 	void AddData(idx_t index) {
 		auto &node = *tree.nodes[index];
 		if (node.value_check) {
-			node.compiled.check = AddValue(index, *node.body, "a data check reads a child");
+			node.compiled.check = AddValue(index, *node.body, "a data check");
 		}
 		if (node.kind != DecideNodeKind::REDUCER || node.decision_value || !node.function) {
 			return;
@@ -440,7 +454,12 @@ public:
 		const auto operand = DecideTreeOperand(tree, index);
 		auto &operand_node = *tree.nodes[operand];
 		for (auto &argument : operand_node.arguments) {
-			operand_node.compiled.arguments.push_back(AddValue(operand, *argument, "a data reducer reads a child"));
+			operand_node.compiled.arguments.push_back(AddValue(operand, *argument, "a data reducer's argument"));
+		}
+		// A reducer over frames, which no data check reads, refuses a NaN its norm's body reads itself.
+		auto &over_frames = tree.frame_aggregate_nodes;
+		if (node.body && std::find(over_frames.begin(), over_frames.end(), index) != over_frames.end()) {
+			operand_node.compiled.norm_body = AddValue(operand, *node.body, "a norm's body");
 		}
 	}
 
@@ -465,11 +484,11 @@ private:
 	}
 
 	//! A program of `index`'s own computing `expression`, in the tree's terms, ranked with the node.
-	idx_t AddValue(idx_t index, const Expression &expression, const char *child_reason) {
+	idx_t AddValue(idx_t index, const Expression &expression, const char *what) {
 		auto &node = *tree.nodes[index];
 		DecideProgram program;
 		program.role = DecideProgramRole::VALUE;
-		program.expression = TranslateTree(index, expression, child_reason);
+		program.expression = TranslateTree(index, expression, what);
 		program.written = expression.Copy();
 		node.programs.push_back(std::move(program));
 		return node.programs.size() - 1;
@@ -480,13 +499,6 @@ private:
 		for (auto &input : inputs) {
 			site.inputs.push_back(Add(site.node, DecideProgramRole::VALUE, *input, owner, block, group, position));
 		}
-	}
-
-	static unique_ptr<Expression> Uncompiled(DecideBody &body, const char *reason, const LogicalType &type) {
-		if (body.uncompiled.empty()) {
-			body.uncompiled = reason;
-		}
-		return make_uniq<BoundConstantExpression>(Value(type));
 	}
 
 	//! A source column's place in `site`'s layout: among its carried columns, else among its program columns, added.
@@ -525,7 +537,7 @@ private:
 			if (kind == ExpressionClass::BOUND_REF) {
 				const auto column = leaf_expression.Cast<BoundReferenceExpression>().index;
 				if (column >= op.prepared.frame_column_base) {
-					return Uncompiled(body, "reads a frame", type);
+					return FrameColumn(site, column - op.prepared.frame_column_base, type);
 				}
 				return make_uniq<BoundReferenceExpression>(type, Column(site, type, column));
 			}
@@ -543,24 +555,99 @@ private:
 		return ToChunkReferences(expression, context, leaf);
 	}
 
-	//! A G over data's value as `site` reads it: a hole of its layout, after its program columns, which are known once
-	//! every program is compiled (BindLayout).
-	unique_ptr<Expression> Hole(idx_t site, idx_t reducer, const LogicalType &type) {
+	//! A G over data's value as `site` reads it, or an O's frame column `column`: a hole of its layout, after its
+	//! program columns, which are known once every program is compiled (BindLayout).
+	unique_ptr<Expression> Hole(idx_t site, idx_t node, const LogicalType &type,
+	                            idx_t column = DConstants::INVALID_INDEX) {
 		auto &holes = tree.nodes[site]->holes;
 		idx_t hole = 0;
-		while (hole < holes.size() && holes[hole].node != reducer) {
+		while (hole < holes.size() && (holes[hole].node != node || holes[hole].column != column)) {
 			hole++;
 		}
 		if (hole == holes.size()) {
-			holes.push_back({reducer, type});
+			holes.push_back({node, type, column});
 		}
 		return make_uniq<BoundReferenceExpression>(type, DECIDE_HOLE_BASE + hole);
 	}
 
-	//! An expression Lower already read in the tree's terms (a member test, a data check, a data reducer's argument):
-	//! a source column among its node's carried ones, and a G over data's value as a hole. A decision-valued child's
-	//! result it reads, it computes no value for yet.
-	unique_ptr<Expression> TranslateTree(idx_t index, const Expression &expression, const char *child_reason) {
+	//! Frame column `j` (DecidePreparedModel::frame_columns) as `site` reads it, of type `type`: the column of its
+	//! frame's O at the entry's row (language/guide.md §5.6), or a reducer's over frames, its G's fold.
+	unique_ptr<Expression> FrameColumn(idx_t site, idx_t j, const LogicalType &type) {
+		auto &column = op.prepared.frame_columns[j];
+		if (column.kind == DecideFrameColumn::Kind::AGGREGATE) {
+			idx_t aggregate = DConstants::INVALID_INDEX;
+			if (!TryParseFrameAggregateTag(column.value->GetAlias(), aggregate) ||
+			    aggregate >= tree.frame_aggregate_nodes.size() ||
+			    tree.frame_aggregate_nodes[aggregate] == DConstants::INVALID_INDEX) {
+				throw InternalException("DECIDE tree: %s has no node", column.text);
+			}
+			return Hole(site, tree.frame_aggregate_nodes[aggregate], type);
+		}
+		if (tree.frame_nodes[column.frame] == DConstants::INVALID_INDEX) {
+			throw InternalException("DECIDE tree: frame %llu has no node", column.frame);
+		}
+		return Hole(site, tree.frame_nodes[column.frame], type, j);
+	}
+
+	//! An O's value as an expression Lower read in the tree's terms reads it: over data, its frame's one value (a
+	//! point's VALUE or a range's REDUCED column), of the read's type; over decisions, a reducer's NULL test of it, its
+	//! DEFINED column, as stage 05 reads both (DecideFrameColumn).
+	unique_ptr<Expression> FrameRead(idx_t site, const DecideNode &frame, const LogicalType &type) {
+		auto &columns = op.prepared.frame_columns;
+		for (idx_t j = 0; j < columns.size(); j++) {
+			auto kind = columns[j].kind;
+			const bool read = frame.decision_value
+			                      ? kind == DecideFrameColumn::Kind::DEFINED
+			                      : kind == DecideFrameColumn::Kind::VALUE || kind == DecideFrameColumn::Kind::REDUCED;
+			if (read && columns[j].frame == frame.frame) {
+				auto hole = FrameColumn(site, j, columns[j].type);
+				return frame.decision_value ? std::move(hole)
+				                            : BoundCastExpression::AddCastToType(context, std::move(hole), type);
+			}
+		}
+		throw InternalException("DECIDE tree: %s has no column its reader reads", frame.text);
+	}
+
+public:
+	//! What each frame column's O computes on its anchors (DecideFrameColumnPrograms), in stage 05's terms: its value,
+	//! a range's reducer's arguments, and its `else`.
+	void AddFrameColumns() {
+		auto &columns = op.prepared.frame_columns;
+		tree.frame_columns.resize(columns.size());
+		for (idx_t j = 0; j < columns.size(); j++) {
+			auto &column = columns[j];
+			if (column.kind == DecideFrameColumn::Kind::AGGREGATE || column.kind == DecideFrameColumn::Kind::DEFINED) {
+				continue;
+			}
+			auto &programs = tree.frame_columns[j];
+			programs.node = tree.frame_nodes[column.frame];
+			auto add = [&](const Expression &expression) {
+				DecideProgram program;
+				program.role = DecideProgramRole::VALUE;
+				program.expression = Translate(programs.node, expression, tree.nodes[programs.node]->compiled);
+				program.written = expression.Copy();
+				auto &node = *tree.nodes[programs.node];
+				node.programs.push_back(std::move(program));
+				return node.programs.size() - 1;
+			};
+			if (column.kind == DecideFrameColumn::Kind::REDUCED) {
+				for (auto &argument : column.value->Cast<BoundAggregateExpression>().children) {
+					programs.arguments.push_back(add(*argument));
+				}
+			} else {
+				programs.value = add(*column.value);
+			}
+			if (column.fallback) {
+				programs.fallback = add(*column.fallback);
+			}
+		}
+	}
+
+private:
+	//! An expression Lower already read in the tree's terms (`what`: a member test, a data check, a data reducer's
+	//! argument): a source column among its node's carried ones, and a G's or an O's value over data as a hole. Such an
+	//! expression reads data alone.
+	unique_ptr<Expression> TranslateTree(idx_t index, const Expression &expression, const char *what) {
 		auto &node = *tree.nodes[index];
 		DecideChunkLeaf leaf = [&](const Expression &leaf_expression) -> unique_ptr<Expression> {
 			auto &type = leaf_expression.return_type;
@@ -578,7 +665,11 @@ private:
 				if (child.kind == DecideNodeKind::REDUCER && !child.decision_value && child.function) {
 					return Hole(index, column - tree.input_column_count, type);
 				}
-				return Uncompiled(node.compiled, child_reason, type);
+				if (child.kind == DecideNodeKind::FRAME) {
+					return FrameRead(index, child, type);
+				}
+				throw InternalException("DECIDE tree: %s of %s reads %s, which has no data value", what, node.text,
+				                        child.text);
 			}
 			for (idx_t i = 0; i < node.columns.size(); i++) {
 				if (node.columns[i]->Equals(leaf_expression)) {
@@ -703,6 +794,7 @@ static void CompilePrograms(ClientContext &context, const LogicalDecide &op, Dec
 		compiler.AddTests(i);
 		compiler.AddData(i);
 	}
+	compiler.AddFrameColumns();
 }
 
 //! A node's layout is known once every program on it is compiled: its holes follow its program columns, and an
@@ -859,7 +951,11 @@ static void ProgramLines(std::ostringstream &out, const DecideNode &node) {
 	}
 	for (idx_t h = 0; h < node.holes.size(); h++) {
 		out << "  hole #" << node.columns.size() + node.program_columns.size() + h << " reads node "
-		    << node.holes[h].node << "\n";
+		    << node.holes[h].node;
+		if (node.holes[h].column != DConstants::INVALID_INDEX) {
+			out << " column " << node.holes[h].column;
+		}
+		out << "\n";
 	}
 	for (idx_t p = 0; p < node.programs.size(); p++) {
 		auto &program = node.programs[p];
@@ -880,7 +976,7 @@ string DecideTree::BodiesToString() const {
 	for (idx_t i = 0; i < nodes.size(); i++) {
 		auto &node = *nodes[i];
 		auto &body = node.compiled;
-		if (body.phase == DecideErrorPhase::INVALID && node.programs.empty() && body.uncompiled.empty()) {
+		if (body.phase == DecideErrorPhase::INVALID && node.programs.empty()) {
 			continue;
 		}
 		out << "node " << i << " " << decide_tree_compile::Head(node) << "\n";
@@ -896,9 +992,6 @@ string DecideTree::BodiesToString() const {
 			decide_tree_compile::Terms(out, body.fallback, body.fallback_sites, "    ", "term");
 		}
 		decide_tree_compile::ProgramLines(out, node);
-		if (!body.uncompiled.empty()) {
-			out << "  uncompiled: " << body.uncompiled << "\n";
-		}
 	}
 	return out.str();
 }

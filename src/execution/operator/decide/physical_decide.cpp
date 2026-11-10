@@ -7,9 +7,7 @@
 #include "duckdb/execution/operator/decide/decide_row_evaluation.hpp"
 #include "duckdb/execution/operator/decide/decide_row_store.hpp"
 #include "duckdb/execution/operator/decide/decide_descent.hpp"
-#include "duckdb/execution/operator/decide/decide_tree_evaluation.hpp"
 #include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
-#include "duckdb/decidb/formulation/decide_tree_formulation.hpp"
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/execution/executor.hpp"
@@ -1879,31 +1877,10 @@ void PhysicalDecide::BuildFrames(ClientContext &context, DecideGlobalSinkState &
 		// D75: each class of a `per` key reads one timeline.
 		CheckDecideFramePartition(context, frame, gstate.frame_maps.back(), keys, per_group_cache, num_rows, chunk_expr_cache);
 	}
-	// A range over decisions is a helper (RewriteFrameRanges) whose members skip the values its windows read as NULL,
-	// read before any window is numbered or listed: its payload's coefficients, and its `else`'s (FALLBACK columns).
-	for (auto &link : reducer_value_links) {
-		if (link.frame == DConstants::INVALID_INDEX) {
-			continue;
-		}
-		vector<const Expression *> payload, fallback;
-		for (auto &term : link.inner_terms) {
-			payload.push_back(term.coefficient.get());
-		}
-		for (auto &column : prepared.frame_columns) {
-			if (column.frame == link.frame && column.kind == DecideFrameColumn::Kind::FALLBACK) {
-				fallback.push_back(column.value.get());
-			}
-		}
-		SkipDecideRangeNullReads(context, payload, fallback, gstate.frame_maps[link.frame], num_rows,
-		                         chunk_expr_cache);
-	}
-	// A range over data reads an `else` that is NULL at its anchor as no `else` there (D86, deck p. 50): a window
-	// left with nothing to read has no value, `count`'s too. A NULL its payload reads is a value its aggregate skips.
-	for (auto &column : prepared.frame_columns) {
-		if (column.kind == DecideFrameColumn::Kind::REDUCED && column.fallback) {
-			SkipDecideRangeNullReads(context, {}, {column.fallback.get()}, gstate.frame_maps[column.frame], num_rows, chunk_expr_cache);
-		}
-	}
+	SkipDecideFrameNullReads(prepared, reducer_value_links, gstate.frame_maps, num_rows,
+	                         [&](const Expression &expr, const vector<bool> &rows) {
+		                         return ReadDecideFrameRows(context, expr, num_rows, rows, chunk_expr_cache);
+	                         });
 	AppendDecideFrameColumns(context, frames, gstate.frame_maps, prepared, num_rows, chunk_expr_cache);
 	for (idx_t j = 0; j < prepared.frame_columns.size(); j++) {
 		gstate.frame_column_refs.push_back(
@@ -1912,24 +1889,7 @@ void PhysicalDecide::BuildFrames(ClientContext &context, DecideGlobalSinkState &
 	AppendDecideFrameAggregates(context,
 	                            SignatureFrames {frames, gstate.frame_maps, prepared, gstate.frame_column_refs}, keys,
 	                            variable_scopes, num_rows, chunk_expr_cache);
-	if (DecideProfileScope::Enabled()) {
-		// The positions the frames request: one per anchor of a point, and each value a range's window lists, once per
-		// window however many anchors share it.
-		idx_t windows = 0, positions = 0;
-		for (auto &map : gstate.frame_maps) {
-			if (!map.range) {
-				positions += std::count(map.anchors.begin(), map.anchors.end(), true);
-				continue;
-			}
-			windows += map.WindowCount();
-			for (idx_t w = 0; w < map.WindowCount(); w++) {
-				positions += map.ValueCount(w);
-			}
-		}
-		DecideProfileScope::Counter("anr.frames", static_cast<double>(frames.size()));
-		DecideProfileScope::Counter("anr.frame_windows", static_cast<double>(windows));
-		DecideProfileScope::Counter("anr.frame_positions", static_cast<double>(positions));
-	}
+	DecideCountFrames(gstate.frame_maps);
 }
 
 void PhysicalDecide::CheckFramePeers(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
@@ -2031,13 +1991,9 @@ static bool TermReadsAbsent(const DecideTerm &term, const vector<DecideVarScopeI
 	if (term.frame_read == DConstants::INVALID_INDEX) {
 		return DecisionAbsent(scopes, mappings, absent_reads, term.variable_index, row);
 	}
-	auto &map = frame_maps[term.frame_read];
-	if (map.Absent(row)) {
-		return true;
-	}
-	// A missing position whose `else` stands in reads the else, not this term.
-	const auto at = map.SelectedRow(row);
-	return at != DConstants::INVALID_INDEX && DecisionAbsent(scopes, mappings, absent_reads, term.variable_index, at);
+	return DecideFrameReadsAbsent(frame_maps[term.frame_read], row, [&](idx_t at) {
+		return DecisionAbsent(scopes, mappings, absent_reads, term.variable_index, at);
+	});
 }
 
 //! Whether `term` may read an instance with no value on some row (TermReadsAbsent), so that only such a term is read
@@ -2067,16 +2023,7 @@ KeyedMapping PhysicalDecide::BuildScopeMapping(ClientContext &context, DecideGlo
 	// reducer is NULL there, so a read of it skips its instance.
 	if (scope.value_link != DConstants::INVALID_INDEX &&
 	    reducer_value_links[scope.value_link].frame != DConstants::INVALID_INDEX) {
-		// A range frame's helper (DecideOptimizer::RewriteFrameRanges): one class per window of its frame, read by
-		// the window's anchors; an anchor whose window reads nothing is in none.
-		auto &map = gstate.frame_maps[reducer_value_links[scope.value_link].frame];
-		mapping.num_classes = map.WindowCount();
-		mapping.row_to_class.assign(num_rows, DConstants::INVALID_INDEX);
-		for (idx_t row = 0; row < num_rows; row++) {
-			if (map.anchors[row] && !map.Absent(row)) {
-				mapping.row_to_class[row] = map.window[row];
-			}
-		}
+		mapping = DecideFrameWindowMapping(gstate.frame_maps[reducer_value_links[scope.value_link].frame]);
 	} else if (scope.value_link != DConstants::INVALID_INDEX) {
 		auto &link = reducer_value_links[scope.value_link];
 		vector<bool> kept;
@@ -2275,26 +2222,6 @@ vector<bool> PhysicalDecide::ValueLinkMembers(ClientContext &context, DecideGlob
 	return read;
 }
 
-//! Why a query has no arm, empty when it has one: its first shape with none (DecideModelEmitter::Uncovered), else a
-//! node the tree computes no value for yet (DecideTreeColumns::Uncomputed). `counter` counts in DECIDB_PROFILE each
-//! query that had none, and DECIDB_TREE_COVERAGE_LOG gets a line per query, the reason after `counter`, or `covered`
-//! and the evaluator that read the query (DECIDB_EVALUATOR, which a tree run sets).
-static string TreeCoverage(const char *counter, const DecideTree &tree, const PhysicalDecide &op) {
-	auto reason = DecideModelEmitter::Uncovered(tree, op);
-	if (reason.empty()) {
-		reason = DecideTreeColumns::Uncomputed(tree);
-	}
-	if (!reason.empty()) {
-		DecideProfileScope::Counter(counter, 1);
-	}
-	if (const char *path = std::getenv("DECIDB_TREE_COVERAGE_LOG")) {
-		const auto line =
-		    reason.empty() ? "covered: " + string(std::getenv("DECIDB_EVALUATOR")) : counter + (": " + reason);
-		std::ofstream(path, std::ios::app) << line << "\n";
-	}
-	return reason;
-}
-
 SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
     DecideProfileScope profile("execution.finalize");
@@ -2334,14 +2261,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // by every other call site that asks for the same expression set.
     PerGroupCache per_group_cache;
 
-	// A query the tree has an arm for is evaluated by it and formulated as flat's; one with none takes the interim
-	// formulator.
-	if (tree && (SelectedDecideEvaluator() == DecideEvaluator::TREE ||
-	             SelectedDecideEvaluator() == DecideEvaluator::TREE_NOSIDE)) {
-		if (!TreeCoverage("execution.tree_fallback", *tree, *this).empty()) {
-			return FinalizeWithTreeFormulator(context, gstate, num_rows, bench, model_timer, solver_timer);
-		}
-	}
 	DecideRowStore row_store(context, gstate.data);
 	vector<KeyedMapping> keyed_mappings;
 	EvaluatedClauses evaluated;
@@ -2438,17 +2357,13 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	if (!silent && std::getenv("DECIDB_DUMP_CONTAINERS")) {
 		fprintf(stderr, "DECIDB_CONTAINERS_BEGIN\n%sDECIDB_CONTAINERS_END\n", descent->Dump().c_str());
 	}
-	// The bottom-up values are the interim interpreter's, run for this dump alone: the columns keep no dump.
-	if (!silent && std::getenv("DECIDB_DUMP_VALUES")) {
-		DecideTreeEvaluation values(*tree, *descent, context);
-		values.Evaluate();
-		fprintf(stderr, "DECIDB_VALUES_BEGIN\n%sDECIDB_VALUES_END\n", values.Dump().c_str());
-	}
 	// Bottom-up: each node's programs over its entries, written as stage 06 reads them, in flat's order.
 	phase.Next("execution.tree_model");
 	const auto names = Names();
 	DecideTreeColumns columns(
 	    *tree, *descent, context, names, [&](idx_t clause) { return WrittenClause(clause); }, errors);
+	// The frames' timelines and the columns they read, before any program reads one (language/guide.md §5.6).
+	columns.ReadFrames(frames, prepared, reducer_value_links, num_rows, gstate.frame_maps);
 	// What the data checks and the data reducers no clause reads raise, at their ranks, before any clause is read.
 	columns.CheckData();
 	DecideModelEmitter emitter(*this, context, *tree, *descent, columns, gstate, per_group_cache, names, num_rows,
@@ -2466,127 +2381,11 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 		ReportSkippedInstances(gstate, silent);
 	}
 	emitter.ValueLinks();
+	// The bottom-up values the evaluation computed, each node's programs on its entries.
+	if (!silent && std::getenv("DECIDB_DUMP_VALUES")) {
+		fprintf(stderr, "DECIDB_VALUES_BEGIN\n%sDECIDB_VALUES_END\n", columns.Dump().c_str());
+	}
 	errors.ThrowIfAny();
-}
-
-//! The interim formulator's Finalize, for a query the model emitter has no arm for yet: the descent, the
-//! per-entry evaluation and TreeFormulator. It goes when every shape has an arm.
-SinkFinalizeType PhysicalDecide::FinalizeWithTreeFormulator(ClientContext &context, DecideGlobalSinkState &gstate,
-                                                            idx_t num_rows, bool bench, Profiler &model_timer,
-                                                            Profiler &solver_timer) const {
-	// The descent reads the buffered input in Finalize's one scan of it, so the sink stays parallel and a row is the
-	// position the buffer gives it, the one every later phase reads.
-	gstate.descent = make_uniq<DecideDescent>(*tree, context);
-	DecideInputScans() = 0;
-	DecideRowStore(context, gstate.data).Build([&](DataChunk &chunk, idx_t offset) {
-		AppendDecideDescent(*gstate.descent, chunk, offset);
-		gstate.descent_rows += chunk.size();
-	});
-	gstate.descent->Finish();
-	if (std::getenv("DECIDB_DUMP_BODIES")) {
-		fprintf(stderr, "DECIDB_BODIES_BEGIN\n%sDECIDB_BODIES_END\n", tree->BodiesToString().c_str());
-	}
-	DecideTreeEvaluation values(*tree, *gstate.descent, context);
-	values.Evaluate();
-	values.RequireSupported();
-	for (auto root : tree->roots) {
-		auto &node = *tree->nodes[root];
-		if (node.objective || node.hidden || node.folded || node.repair_rows) {
-			continue;
-		}
-		auto &result = values.Results()[root];
-		gstate.CountInstances(node.source_clause_id, result.held, result.instance_entries.size());
-	}
-	ReportSkippedInstances(gstate, false);
-	if (std::getenv("DECIDB_DUMP_TREE")) {
-		fprintf(stderr, "DECIDB_TREE_BEGIN\n%sDECIDB_TREE_END\n", tree->ToString().c_str());
-	}
-	if (std::getenv("DECIDB_DUMP_CONTAINERS")) {
-		fprintf(stderr, "DECIDB_CONTAINERS_BEGIN\n%sDECIDB_CONTAINERS_END\n", gstate.descent->Dump().c_str());
-	}
-	if (std::getenv("DECIDB_DUMP_VALUES")) {
-		fprintf(stderr, "DECIDB_VALUES_BEGIN\n%sDECIDB_VALUES_END\n", values.Dump().c_str());
-	}
-	SolverInput solver_input;
-	solver_input.num_rows = num_rows;
-	solver_input.num_decide_vars = decide_variables.size();
-	solver_input.first_frame_read = solver_input.num_decide_vars;
-	solver_input.variable_scopes = variable_scopes;
-	solver_input.variable_scopes.resize(solver_input.num_decide_vars, DecideVarScopeInfo::Row());
-	solver_input.sense = decide_sense;
-	solver_input.objective_constant = objective_constant_offset;
-	solver_input.constraint_sources = constraint_sources;
-	solver_input.objective_written = DecideWrittenObjective(decide_sense, written_objective);
-	solver_input.keyed_mappings = DecideDeclaredMappings(*gstate.descent);
-	vector<string> variable_names;
-	for (idx_t var = 0; var < decide_variables.size(); var++) {
-		auto &variable = *decide_variables[var];
-		const bool boolean = var < is_boolean_var.size() && is_boolean_var[var];
-		solver_input.variable_types.push_back(boolean ? LogicalType::BOOLEAN : variable.return_type);
-		variable_names.push_back(variable.GetName());
-		solver_input.lower_bounds.push_back(gstate.singleton_row_boxes[var].EffectiveLower());
-		solver_input.upper_bounds.push_back(gstate.singleton_row_boxes[var].upper);
-		if (var < tree->value_nodes.size() && tree->value_nodes[var] != DConstants::INVALID_INDEX) {
-			solver_input.variable_scopes[var].scope = DecideVarScope::INLINED;
-		}
-	}
-	solver_input.rigid_lower_bounds = solver_input.lower_bounds;
-	solver_input.rigid_upper_bounds = solver_input.upper_bounds;
-	for (auto &bound : gstate.user_singleton_row_bounds) {
-		auto variable = bound.decide_var_idx;
-		const bool boolean = variable < is_boolean_var.size() && is_boolean_var[variable];
-		if (bound.sense == '<' || bound.sense == '=') {
-			solver_input.rigid_upper_bounds[variable] = boolean ? 1.0 : NumericLimits<double>::Maximum();
-		}
-		if (bound.sense == '>' || bound.sense == '=') {
-			solver_input.rigid_lower_bounds[variable] = boolean ? 0.0 : -NumericLimits<double>::Maximum();
-		}
-	}
-	auto indexer = VarIndexer::Build(solver_input);
-	unique_ptr<ElasticFormulation> elastic;
-	if (diagnose) {
-		elastic = make_uniq<ElasticFormulation>();
-		elastic->input = solver_input;
-		elastic->var_indexer = indexer;
-		elastic->formulate = [&](SolverInput &repair_input, VarIndexer &repair_indexer) {
-			// The snapshot's raw rows serve only to size the widened box. Rebuild every row and auxiliary.
-			repair_input.global_constraints.clear();
-			FormulateDecideTree(*tree, *gstate.descent, values, repair_input, repair_indexer,
-			                    NativeConstructPolicy {use_native_constructs.min_max, force_native_constructs},
-			                    variable_names, true);
-			repair_indexer.total_vars = repair_indexer.global_block_start + repair_input.num_global_vars;
-		};
-	}
-	FormulateDecideTree(*tree, *gstate.descent, values, solver_input, indexer,
-	                    NativeConstructPolicy {use_native_constructs.min_max, force_native_constructs}, variable_names);
-	if (elastic) {
-		elastic->input.global_constraints = solver_input.global_constraints;
-		for (auto &polynomial : solver_input.raw_quadratic_constraints) {
-			elastic->input.global_constraints.push_back(polynomial.linear);
-		}
-		// Data bounds refine individual instances during tree formulation. Their hull gives the repair box
-		// finite starting magnitudes; each bound is emitted as a loosenable row when repair is formulated.
-		for (idx_t var = 0; var < solver_input.num_decide_vars; var++) {
-			const auto count = indexer.NamedInstances(var);
-			if (!count) {
-				continue;
-			}
-			double lower = NumericLimits<double>::Maximum(), upper = -NumericLimits<double>::Maximum();
-			for (idx_t instance = 0; instance < count; instance++) {
-				lower = MinValue(lower, solver_input.InstanceBoxLower(var, instance, solver_input.lower_bounds));
-				upper = MaxValue(upper, solver_input.InstanceBoxUpper(var, instance, solver_input.upper_bounds));
-			}
-			elastic->input.lower_bounds[var] = lower;
-			elastic->input.upper_bounds[var] = upper;
-		}
-	}
-	indexer.total_vars = indexer.global_block_start + solver_input.num_global_vars;
-	ReportAnEmptyObjective(solver_input);
-	EvaluatedClauses evaluated;
-	DecideProfileScope::Counter("execution.input_scans", static_cast<double>(DecideInputScans()));
-	DecideProfileScope::Counter("execution.descent_rows", static_cast<double>(gstate.descent_rows));
-	return FinalizeSolveResult(context, gstate, solver_input, indexer, evaluated, elastic.get(), bench, model_timer,
-	                           solver_timer);
 }
 
 void PhysicalDecide::Evaluate(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
@@ -2952,25 +2751,15 @@ void PhysicalDecide::VerifyEvaluation(ClientContext &context, DecideGlobalSinkSt
 	stood_aside.SwapWith(gstate);
 	vector<LogicalDecide::RewriteAccount> first_accounts;
 	std::swap(first_accounts, run_time_accounts);
-	ChunkExprCache second_chunk_exprs;
 	PerGroupCache second_groups;
-	DecideRowStore second_store(context, gstate.data);
 	vector<KeyedMapping> second_mappings;
 	EvaluatedClauses second_evaluated;
 	ErrorData second_error;
 	DecideEvaluationRecord second;
-	// The second run is the tree's where it has an arm for the query, flat's again where it has none. Its descent
-	// outlives the record, whose names read it.
-	const auto reason = TreeCoverage("verify.no_arm", *tree, *this);
+	// The second run is the tree's. Its descent outlives the record, whose names read it.
 	unique_ptr<DecideDescent> second_descent;
 	try {
-		if (reason.empty()) {
-			EvaluateTree(context, gstate, num_rows, second_descent, second_groups, second_mappings, second_evaluated,
-			             true);
-		} else {
-			Evaluate(context, gstate, num_rows, second_store, second_chunk_exprs, second_groups, second_mappings,
-			         second_evaluated, true);
-		}
+		EvaluateTree(context, gstate, num_rows, second_descent, second_groups, second_mappings, second_evaluated, true);
 		second = RecordEvaluation(gstate, num_rows, second_groups, second_mappings, second_evaluated);
 	} catch (std::exception &ex) {
 		second_error = ErrorData(ex);
@@ -3023,10 +2812,9 @@ vector<Value> ReadRowValues(const Expression &expr, ChunkExprCache &chunk_expr_c
 	return values;
 }
 
-//! Why the kept rows `ids` numbers are more than one value of the frame `field` names, by its keys (FrameFieldClasses):
-//! more than one position of one timeline, when it reads relative to the anchor, more than one timeline, or more than
-//! one fallback; empty when it splits none of them. `varies` gives the least and greatest value of an expression over
-//! them.
+//! Why the kept rows `ids` numbers are more than one value of the frame `field` names (DecideFrameDifference), read
+//! from the rows: a position by its name, a timeline by the least and greatest value `varies` gives of an expression
+//! over them, and the fallback by its classes (FrameFieldClasses).
 static string DescribeFrameDifference(const DecideSignatureField &field, const vector<DecideKey> &keys,
                                       const vector<DecideVarScopeInfo> &variable_scopes,
                                       const vector<KeyedMapping> &keyed_mappings, const SignatureFrames &frames,
@@ -3035,62 +2823,41 @@ static string DescribeFrameDifference(const DecideSignatureField &field, const v
                                       const std::function<bool(const Expression &, string &)> &varies) {
 	auto &frame = frames.frames[field.frame];
 	auto &map = frames.maps[field.frame];
-	idx_t first = DConstants::INVALID_INDEX;
-	bool timelines = false;
-	bool positions = false;
-	idx_t first_peer = DConstants::INVALID_INDEX;
-	idx_t last_peer = 0;
-	std::unordered_map<idx_t, idx_t> peer_of_timeline;
+	DecideFrameReader read;
 	for (idx_t row = 0; row < ids.size(); row++) {
-		if (ids[row] == DConstants::INVALID_INDEX) {
-			continue;
+		if (ids[row] != DConstants::INVALID_INDEX) {
+			read.rows.emplace_back(map.timeline[row], map.peer[row]);
 		}
-		auto seen = peer_of_timeline.emplace(map.timeline[row], map.peer[row]).first;
-		positions = positions || seen->second != map.peer[row];
-		first_peer = MinValue(first_peer, map.peer[row]);
-		last_peer = MaxValue(last_peer, map.peer[row]);
-		if (first == DConstants::INVALID_INDEX) {
-			first = row;
-			continue;
-		}
-		timelines = timelines || map.timeline[row] != map.timeline[first];
 	}
-	string values;
-	if (frame.Relative() && positions) {
-		// Its first and last position in the frame's own order, each by its name.
+	read.positions = [&](idx_t first, idx_t last) {
 		auto named = DecidePositionRows(context, frame, map, chunk_expr_cache);
 		auto order = ReadRowValues(*frame.order, chunk_expr_cache, context, &map.anchors);
-		return StringUtil::Format("'%s' reads more than one position over the kept rows (%s = %s, %s)", field.text,
-		                          frame.order_name, DecideSqlLiteral(order[named[first_peer]]),
-		                          DecideSqlLiteral(order[named[last_peer]]));
-	}
-	if (timelines) {
-		for (auto &element : DecideKeyElements(keys, frame.timeline_key)) {
-			if (varies(*element.expression, values)) {
-				return StringUtil::Format("'%s' reads more than one timeline over the kept rows (%s = %s)", field.text,
-				                          element.name, values);
+		return make_pair(order[named[first]], order[named[last]]);
+	};
+	read.timeline = [&](idx_t, const Expression &value, string &values) {
+		return varies(value, values);
+	};
+	read.fallbacks = [&]() {
+		vector<unique_ptr<vector<idx_t>>> owned;
+		vector<const vector<idx_t> *> classes;
+		FrameFieldClasses(field.frame, frames, variable_scopes, keyed_mappings, chunk_expr_cache, context, ids.size(),
+		                  rows, owned, classes);
+		// The classes after the keys' are the fallback's.
+		for (idx_t c = 1; c < classes.size(); c++) {
+			idx_t seen = DConstants::INVALID_INDEX;
+			for (idx_t row = 0; row < ids.size(); row++) {
+				if (ids[row] == DConstants::INVALID_INDEX) {
+					continue;
+				}
+				if (seen != DConstants::INVALID_INDEX && (*classes[c])[row] != seen) {
+					return true;
+				}
+				seen = (*classes[c])[row];
 			}
 		}
-		return StringUtil::Format("'%s' reads more than one timeline over the kept rows", field.text);
-	}
-	vector<unique_ptr<vector<idx_t>>> owned;
-	vector<const vector<idx_t> *> classes;
-	FrameFieldClasses(field.frame, frames, variable_scopes, keyed_mappings, chunk_expr_cache, context, ids.size(),
-	                  rows, owned, classes);
-	// The classes after the keys' are the fallback's.
-	for (idx_t c = 1; c < classes.size(); c++) {
-		idx_t seen = DConstants::INVALID_INDEX;
-		for (idx_t row = 0; row < ids.size(); row++) {
-			if (ids[row] == DConstants::INVALID_INDEX) {
-				continue;
-			}
-			if (seen != DConstants::INVALID_INDEX && (*classes[c])[row] != seen) {
-				return StringUtil::Format("'%s' falls back to more than one value over the kept rows", field.text);
-			}
-			seen = (*classes[c])[row];
-		}
-	}
-	return string();
+		return false;
+	};
+	return DecideFrameDifference(field, frame, keys, read);
 }
 
 //! The scope check's message for the rows of `ids` (a signature's numbering over the kept rows `rows`, null for every
@@ -3212,8 +2979,7 @@ void PhysicalDecide::ReportAnEmptyObjective(const SolverInput &input) const {
 		}
 		return false;
 	};
-	if (!input.raw_quadratic_objective.empty() ||
-	    std::any_of(input.objective_coefficients.begin(), input.objective_coefficients.end(), reads) ||
+	if (std::any_of(input.objective_coefficients.begin(), input.objective_coefficients.end(), reads) ||
 	    std::any_of(input.quadratic_inner_coefficients.begin(), input.quadratic_inner_coefficients.end(), reads) ||
 	    std::any_of(input.bilinear_objective_terms.begin(), input.bilinear_objective_terms.end(),
 	                [&](const SolverInput::BilinearObjectiveTerm &term) { return reads(term.row_coefficients); }) ||
@@ -3280,70 +3046,6 @@ static void MarkAbsentDecisionReads(const DecideTerm &term, const vector<DecideV
 		    TermReadsAbsent(term, scopes, mappings, absent_reads, frame_maps, row)) {
 			null_rows[row] = true;
 		}
-	}
-}
-
-//! The bound of a clause over groups that reads a frame and may differ within a group (FRAME_TIGHTEST_BOUND_TAG, D85):
-//! each group's instance takes its tightest value among all its kept rows where the bound has one, a row its reducers'
-//! own `when`s drop included (a group's every kept row bounds it) -- the least under `<`
-//! and `<=`, the greatest under `>` and `>=`, its one value under `=` -- as a side table takes a column's (paper
-//! §3.2.1). A row where the bound has none (`bound_null`) bounds nothing, and a group with no such row has no instance
-//! (`null_rows`). `kept_groups` numbers each kept row's group, empty for every kept row in one; `instances` is what
-//! remains of those groups once a clause's rules have dropped some (empty: all of one group), and a group it no longer
-//! holds has no instance, so no bound to read (D68). So does a `grouped` clause's group holding a row of `null_rows`, a
-//! NULL its left side reads, which SkipNullInstances drops next.
-static void TakeTightestFrameBound(ExpressionType comparison, const string &written, const vector<bool> &kept,
-                                   const vector<bool> &bound_null, const vector<idx_t> &kept_groups,
-                                   const vector<idx_t> &instances, idx_t num_groups, bool grouped, vector<double> &rhs,
-                                   vector<bool> &null_rows) {
-	const bool one_group = kept_groups.empty();
-	const idx_t groups = one_group ? 1 : num_groups;
-	vector<bool> held(groups, instances.empty());
-	for (auto group : instances) {
-		if (group != DConstants::INVALID_INDEX) {
-			held[one_group ? 0 : group] = true;
-		}
-	}
-	for (idx_t row = 0; grouped && row < null_rows.size(); row++) {
-		const idx_t instance = instances.empty() ? 0 : instances[row];
-		if (null_rows[row] && instance != DConstants::INVALID_INDEX) {
-			held[one_group ? 0 : instance] = false;
-		}
-	}
-	auto group_of = [&](idx_t row) {
-		const idx_t group = one_group ? 0 : kept_groups[row];
-		return group != DConstants::INVALID_INDEX && held[group] ? group : DConstants::INVALID_INDEX;
-	};
-	vector<double> least(groups, std::numeric_limits<double>::infinity());
-	vector<double> greatest(groups, -std::numeric_limits<double>::infinity());
-	vector<bool> has_value(groups, false);
-	for (idx_t row = 0; row < kept.size(); row++) {
-		const idx_t group = group_of(row);
-		if (!kept[row] || bound_null[row] || group == DConstants::INVALID_INDEX) {
-			continue;
-		}
-		least[group] = MinValue(least[group], rhs[row]);
-		greatest[group] = MaxValue(greatest[group], rhs[row]);
-		has_value[group] = true;
-	}
-	const bool upper = comparison == ExpressionType::COMPARE_LESSTHAN ||
-	                   comparison == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
-	                   comparison == ExpressionType::COMPARE_EQUAL;
-	for (idx_t row = 0; row < kept.size(); row++) {
-		const idx_t group = group_of(row);
-		if (!kept[row] || group == DConstants::INVALID_INDEX) {
-			continue;
-		}
-		if (!has_value[group]) {
-			null_rows[row] = true;
-			continue;
-		}
-		if (comparison == ExpressionType::COMPARE_EQUAL && least[group] != greatest[group]) {
-			throw InvalidInputException("`%s` takes more than one value here (%g and %g) — an `=` bound cannot hold "
-			                            "two different values at once, so this DECIDE query is infeasible.",
-			                            written, least[group], greatest[group]);
-		}
-		rhs[row] = upper ? least[group] : greatest[group];
 	}
 }
 
@@ -4523,31 +4225,7 @@ void PhysicalDecide::EvaluateFrameLink(ClientContext &context, DecideGlobalSinkS
 	for (auto &term : link.fallback_terms) {
 		fallback_vars.push_back(gstate.ReadVariable(term));
 	}
-	// One group per window that reads something, read at its anchor: a member per row the window reads, and one for
-	// its `else`. A SUM or AVG counts each value -- a row once per visit, the `else` once per missing position -- and
-	// an AVG divides by their number; a MIN or MAX reads each once.
-	const bool extremum = link.agg_name == "min" || link.agg_name == "max";
-	const bool is_avg = link.agg_name == "avg";
-	for (idx_t w = 0; w < map.WindowCount(); w++) {
-		if (map.WindowAbsent(w)) {
-			continue;
-		}
-		const idx_t values = map.ValueCount(w);
-		if (values == 0) {
-			throw InternalException("DECIDE: %s's window reads nothing but is not absent", frames[link.frame].text);
-		}
-		const double share = is_avg ? 1.0 / static_cast<double>(values) : 1.0;
-		out.AddGroup(map.window_anchor[w]);
-		map.ForEachRead(w, [&](idx_t row, idx_t times) {
-			DecideListMember(payload, payload_vars, row, (extremum ? 1.0 : static_cast<double>(times)) * share,
-			                 link.label, out);
-		});
-		const idx_t fallbacks = map.WindowFallbacks(w);
-		if (fallbacks > 0) {
-			DecideListMember(fallback, fallback_vars, map.window_anchor[w],
-			                 (extremum ? 1.0 : static_cast<double>(fallbacks)) * share, link.label, out);
-		}
-	}
+	DecideListFrameMembers(map, link, frames[link.frame].text, payload, payload_vars, fallback, fallback_vars, out);
 }
 
 void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
@@ -5155,7 +4833,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 //! value elsewhere in the model from inflating its constants. A row may still require a
 //! much larger widening than the column's current magnitude; that coupling is local and
 //! semantic rather than model-wide.
-static void OpenElasticColumnBox(SolverInput &input, const VarIndexer &indexer) {
+static void OpenElasticColumnBox(SolverInput &input) {
     //! Headroom every loosenable direction gets, as a multiple of the column's own
     //! magnitude. It is the floor, not the whole answer: it covers a column whose repair
     //! target is not visible in any row — the bound behind an `ABS(x) >= 5`, where the
@@ -5194,24 +4872,6 @@ static void OpenElasticColumnBox(SolverInput &input, const VarIndexer &indexer) 
                 if (std::isfinite(demand)) {
                     row_demand[v] = std::max(row_demand[v], demand);
                 }
-            }
-        }
-    }
-
-    for (const auto &row : input.global_constraints) {
-        if (!std::isfinite(row.rhs) || row.rhs == 0.0) {
-            continue;
-        }
-        for (idx_t term = 0; term < row.indices.size(); term++) {
-            auto column = idx_t(row.indices[term]);
-            double coefficient = std::abs(row.coefficients[term]);
-            if (column >= indexer.global_block_start || coefficient <= NEGLIGIBLE_COEFFICIENT) {
-                continue;
-            }
-            auto variable = indexer.OwnerOf(column);
-            double demand = std::abs(row.rhs) / coefficient;
-            if (variable < row_demand.size() && std::isfinite(demand)) {
-                row_demand[variable] = std::max(row_demand[variable], demand);
             }
         }
     }
@@ -5274,12 +4934,8 @@ SolverModel PhysicalDecide::FormulateElasticModel(const ElasticFormulation &elas
     VarIndexer indexer = elastic.var_indexer;
     input.keep_singleton_rows = keep_singleton_rows;
 
-    OpenElasticColumnBox(input, indexer);
-    if (elastic.formulate) {
-        elastic.formulate(input, indexer);
-    } else {
-        FormulateModel(input, FormulationBox::OfSolvedModel(input), indexer, evaluated);
-    }
+    OpenElasticColumnBox(input);
+    FormulateModel(input, FormulationBox::OfSolvedModel(input), indexer, evaluated);
 
     // Same reconciliation the solved model gets before its build: the `<>` label channel
     // is a prefix of the global block, padded to its final length.

@@ -198,6 +198,7 @@ public:
 		link_nodes.assign(op.reducer_value_links.size(), DConstants::INVALID_INDEX);
 		frame_nodes.assign(op.frames.size(), DConstants::INVALID_INDEX);
 		record_nodes.assign(op.retained_bound_aggregates.size(), DConstants::INVALID_INDEX);
+		tree->frame_aggregate_nodes.assign(op.frame_aggregates.size(), DConstants::INVALID_INDEX);
 	}
 
 	//! The nodes, their edges, sigma, gates and definitions, before stage 05 lowers the clauses.
@@ -322,6 +323,7 @@ public:
 	unique_ptr<DecideTree> Finish() {
 		sources.link_nodes = link_nodes;
 		sources.record_nodes = record_nodes;
+		tree->frame_nodes = frame_nodes;
 		CompileDecideTree(context, op, *tree, sources);
 		PostOrder();
 		ErrorRanks();
@@ -407,6 +409,8 @@ private:
 		vector<bool> assigned(tree->nodes.size(), false);
 		std::function<void(idx_t, DecideErrorRank)> visit = [&](idx_t index, DecideErrorRank rank) {
 			auto &node = *tree->nodes[index];
+			auto &aggregates = tree->frame_aggregate_nodes;
+			const auto aggregate = idx_t(std::find(aggregates.begin(), aggregates.end(), index) - aggregates.begin());
 			// Where its clause evaluates it, if not where it is first computed.
 			DecideErrorRank evaluated;
 			if (node.value_check) {
@@ -415,6 +419,14 @@ private:
 				rank = {DecideErrorPhase::SOURCE_CHECK, 1, rank.clause, 0};
 			} else if (node.kind == DecideNodeKind::FRAME) {
 				rank = {DecideErrorPhase::FRAMES, 1, node.frame, 0};
+				if (node.link != DConstants::INVALID_INDEX) {
+					// A range frame's helper reads its members' coefficients after every clause.
+					evaluated = {DecideErrorPhase::VALUE_LINKS, 0, node.link, 0};
+				}
+			} else if (aggregate < aggregates.size()) {
+				// A reducer over data reading frames is computed once every frame's columns are, in its column's
+				// order (AppendDecideFrameAggregates), before any keyed mapping.
+				rank = {DecideErrorPhase::FRAMES, 1, op.frames.size() + aggregate, 0};
 			} else if (node.defined_var != DConstants::INVALID_INDEX) {
 				// Flat resolves each auxiliary's absence in turn, reading its definitions in their order (D88), then
 				// evaluates each definition again at its place among the clauses.
@@ -847,6 +859,7 @@ private:
 		    frame_aggregate < op.frame_aggregates.size()) {
 			node.key = op.frame_aggregates[frame_aggregate].key;
 			node.text = op.frame_aggregates[frame_aggregate].text;
+			tree->frame_aggregate_nodes[frame_aggregate] = index;
 		}
 		node.function = unique_ptr_cast<Expression, BoundAggregateExpression>(aggregate.Copy());
 		auto operand = NewNode(DecideNodeKind::SCOPE);
@@ -994,6 +1007,9 @@ private:
 		node.frame = frame_index;
 		node.frame_spec = CopyFrame(frame);
 		node.key = frame.timeline_key;
+		// An anchor whose `within` column is NULL lies in no timeline, so it reads no value (D75): the O holds it in a
+		// slot of its own, which no timeline is built from (DecideTreeColumns::ReadFrames).
+		node.holds_rows_in_no_class = true;
 		node.text = frame.text;
 		node.aggregate = frame.reducer;
 		Gates(index, frame.rows.get());
@@ -1293,11 +1309,13 @@ void DecideTree::Validate() const {
 			}
 		}
 		// A program reads its node's layout, then the results of its arguments, and no column of a plan. A hole reads a
-		// G over data.
+		// G over data, or a frame's column of its O.
 		for (auto &hole : node.holes) {
-			if (hole.node >= nodes.size() || nodes[hole.node]->kind != DecideNodeKind::REDUCER ||
-			    nodes[hole.node]->decision_value) {
-				throw InternalException("DECIDE tree node %llu reads a hole of no data reducer", i);
+			const bool frame = hole.column != DConstants::INVALID_INDEX;
+			if (hole.node >= nodes.size() ||
+			    (frame ? hole.column >= frame_columns.size() || nodes[hole.node]->kind != DecideNodeKind::FRAME
+			           : nodes[hole.node]->kind != DecideNodeKind::REDUCER || nodes[hole.node]->decision_value)) {
+				throw InternalException("DECIDE tree node %llu reads a hole of no data reducer or frame", i);
 			}
 		}
 		for (auto &program : node.programs) {

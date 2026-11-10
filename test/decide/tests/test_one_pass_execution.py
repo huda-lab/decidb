@@ -7,7 +7,6 @@ import subprocess
 
 import pytest
 
-from . import _diagnose_relation
 from ._anr_cases import F1_MAX, F1_SUM, F2_PREVIOUS
 from ._scope_cases import answer, dump_counts
 
@@ -51,6 +50,16 @@ def test_changing_a_data_child_changes_the_answer(decidb_cli):
     assert changed.returncode == 0, changed.stderr
     assert [row["x"] for row in json.loads(original.stdout)] == [5, 5]
     assert [row["x"] for row in json.loads(changed.stdout)] == [8, 8]
+    # A node that computes no data value, the clause's root, takes no stand-in, so the change above reached the G.
+    root = re.search(r"(?m)^\s*(\d+) E root .*", original.stderr)
+    refused = subprocess.run(
+        [decidb_cli.exe, "-json", "-c", sql],
+        env={**env, "DECIDB_TREE_INJECT": root[1] + ":data:8"},
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert f"DECIDB_TREE_INJECT: node {root[1]} computes no data value" in refused.stderr, refused.stderr
 
 
 #: Each query reaches one arm of the descent's nesting rule (decide_descent.cpp, Visit: an E's classes lie within the
@@ -78,38 +87,6 @@ NESTING_CASES = {
 @pytest.mark.parametrize("case", list(NESTING_CASES))
 def test_the_tree_nesting_rule(decidb_cli, case):
     sql, expected = NESTING_CASES[case]
-    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
-    assert answer(cli, "SET decide_direct_solve='off'; " + sql) == expected
-
-
-#: Each query reaches a branch of the tree formulator's column box (decide_tree_formulation.cpp) that no other case
-#: reaches, with its answer worked by hand. The default suite runs flat, which never reaches that file.
-BOX_CASES = {
-    # FoldBound refuses `<>`, which is no interval, and the `<>` is lowered after the auxiliaries, as its Big-M reads
-    # the product's range: b = 1 and x = 3.
-    "a-not-equal-reads-the-settled-box": (
-        """SELECT id, x, b FROM (VALUES (1)) t(id) DECIDE x(INT), per (): b(BOOL)
-        SUCH THAT x <= 4 AND b * SUM(x) <> 4 MAXIMIZE SUM(x) + 4 * b""",
-        [{"id": 1, "x": 3, "b": True}],
-    ),
-    # AuxiliaryRange intersects: the folded b * x <= t.k survives the product's derived range [0, 5].
-    "a-derived-range-keeps-a-folded-bound": (
-        """SELECT id, x, b FROM (VALUES (1, 2), (2, 1)) t(id, k) DECIDE x(INT), b(BOOL)
-        SUCH THAT x <= 5 AND b * x <= t.k MAXIMIZE SUM(x) + 4.5 * SUM(b) ORDER BY id""",
-        [{"id": 1, "x": 2, "b": True}, {"id": 2, "x": 1, "b": True}],
-    ),
-    # A floor the user wrote moves into the instance before the auxiliary's floor lowers: |x - q| >= 30 holds.
-    "a-lowered-floor-keeps-the-written-floor": (
-        """SELECT id, x FROM (VALUES (1, 10.0), (2, 20.0)) t(id, q) DECIDE x(REAL)
-        SUCH THAT x <= 100 AND ABS(x - q) >= 30 MINIMIZE SUM(x) ORDER BY id""",
-        [{"id": 1, "x": 40.0}, {"id": 2, "x": 50.0}],
-    ),
-}
-
-
-@pytest.mark.parametrize("case", list(BOX_CASES))
-def test_the_tree_column_box(decidb_cli, case):
-    sql, expected = BOX_CASES[case]
     cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
     assert answer(cli, "SET decide_direct_solve='off'; " + sql) == expected
 
@@ -252,117 +229,11 @@ def test_an_ungrouped_root_is_one_model_row(decidb_cli, tmp_path):
     assert dump_counts(cli.dump_model(sql, tmp_path / "tree.dump"))["num_rows"] == 1
 
 
-#: An expanded diagnosis names what a grouped instance stands for (decide_tree_formulation.cpp, Provenance). Group a's
-#: two BOOL rows reach 2, so `>= 3` loosens to `>= 2` there; group b's three rows meet it. Each case reaches an arm of
-#: the class set no other case reaches.
-EXPANDED_CASES = {
-    # With no `per`, every kept row of its group (SolverInput::ClassSet's KEPT_ROWS), not only the row holding its
-    # entry: rows 0 and 1.
-    "no-per": (
-        "sum(x) by (t.g) >= 3",
-        [("expanded_row", "NULL", "0", "sum(x) by (t.g) >= 2"), ("expanded_row", "NULL", "1", "sum(x) by (t.g) >= 2")],
-    ),
-    # A written `per` names its classes (KEY_VALUES), though its instance also stands for a group: the class a.
-    "a-per-key": (
-        "per t.g: sum(x) by (t.g) >= 3",
-        [("expanded_group", "a", "NULL", "per t.g: sum(x) by (t.g) >= 2")],
-    ),
-}
-
-
-@pytest.mark.parametrize("case", list(EXPANDED_CASES))
-def test_an_expanded_diagnosis_names_what_a_grouped_instance_stands_for(decidb_cli, case):
-    clause, expected = EXPANDED_CASES[case]
-    sql = f"""SELECT id, x FROM (VALUES (1, 'a'), (2, 'a'), (3, 'b'), (4, 'b'), (5, 'b')) t(id, g)
-        DECIDE x(BOOL) SUCH THAT {clause} MAXIMIZE SUM(x)"""
-    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
-    result = _diagnose_relation.run(cli, sql, setup="SET decide_direct_solve='off';\n", scope="expanded")
-    edits = [row for row in _diagnose_relation.rows(result) if row["clause"] == clause]
-    found = [(row["edit_source"], row["group"], row["row"], row["suggested_change"]) for row in edits]
-    assert found == expected, result.stdout
-
-
-def test_the_anchors_of_a_group_share_its_class_set(decidb_cli):
-    """With no `per`, each anchor of a frame bound is an instance of the group it bounds (D85), and every one stands for
-    the group's kept rows: one class set per group (decide_tree_formulation.cpp, Provenance), which merging the anchors
-    into the group's one row leaves alone (MergeClasses). A set per anchor, or a merge of the set into itself, took
-    over 30 s here, against under a second. The reducer reads row 0 alone, bound by the least `previous` value, 5, so
-    every x is 1."""
-    sql = """SET decide_direct_solve='off';
-        SELECT count(*) AS n, sum(x) AS total FROM (SELECT * FROM (SELECT i AS s, (i % 13) + 5.0 AS c
-        FROM range(6000) r(i)) t DECIDE x(REAL) SUCH THAT x <= 1 AND sum(when t.s = 0: x) <= at(previous: t.c)
-        over (t.s) MAXIMIZE sum(x))"""
-    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
-    rows, _ = cli.execute(sql, timeout=20)
-    assert rows == [(6000, 6000.0)]
-
-
-#: A floor below 0 that a clause lifts lands on each decision the clause bounds (decide_tree_formulation.cpp,
-#: LiftedFloors through Bounded): an easy extremum's members, whichever row holds its group's entry. `p` keeps rows 1
-#: and 4, whose x may go down to -5, and rows 2 and 3 keep the default floor of 0, so MINIMIZE takes -5, 0, 0, -5. Each
-#: case reaches one side the comparison pushes.
-LIFTED_FLOOR_CASES = {
-    "a-minimum-bounded-below": "min(when p: x) >= -5",
-    "a-maximum-bounded-above": "max(when p: -x) <= 5",
-}
-
-
-@pytest.mark.parametrize("case", list(LIFTED_FLOOR_CASES))
-def test_a_lifted_floor_lands_on_each_member(decidb_cli, case):
-    sql = f"""SET decide_direct_solve='off';
-        SELECT id, x FROM (VALUES (1, true), (2, false), (3, false), (4, true)) t(id, p)
-        DECIDE x(INT) SUCH THAT x <= 10 AND {LIFTED_FLOOR_CASES[case]} MINIMIZE SUM(x) ORDER BY id"""
-    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
-    assert answer(cli, sql) == [{"id": 1, "x": -5}, {"id": 2, "x": 0}, {"id": 3, "x": 0}, {"id": 4, "x": -5}]
-
-
-def test_the_tree_walks_a_shared_value_once(decidb_cli):
-    """Every row of a group reads the group's sum: x_i + S_g <= 10. RequireSupported (decide_tree_evaluation.cpp) runs
-    once, in Finalize, and walks a value again only under an earlier rank, so the counter is linear in the rows.
-    Without that memo each of the 600 rows walked its group's 200 members (about 124,000 walks); the formulator's
-    second call reported a second counter. The cap of 1 is a frame's, which the model emitter has no arm for, so the
-    query takes the interim evaluation. The answer: with m the largest x of a group, S_g <= 10 - m and S_g <= 200 m,
-    so S_g = 10 - 10/201 and the total is 3 * (10 - 10/201) = 29.850746."""
-    rows = 600
-    sql = f"""SET threads=1; SET decide_direct_solve='off';
-        SELECT round(sum(x), 6) AS total FROM (SELECT i, x FROM (SELECT i, i % 3 AS g, 1 AS one FROM range({rows})
-        r(i)) t DECIDE x(REAL) SUCH THAT x <= at(previous else 1: t.one) over (t.i) AND x + sum(x) by (t.g) <= 10
-        MAXIMIZE sum(x))"""
-    cli = decidb_cli.without_verify_serializer().with_env({"DECIDB_EVALUATOR": "tree", "DECIDB_PROFILE": "1"})
-    profiled = cli.execute_raw(sql)
-    events = [
-        json.loads(line[len("DECIDB_PROFILE: ") :])
-        for line in profiled.stderr.splitlines()
-        if line.startswith("DECIDB_PROFILE: ")
-    ]
-    walks = [event["value"] for event in events if event.get("name") == "execution.required_values"]
-    assert len(walks) == 1 and walks[0] < 20 * rows, walks
-    assert "29.850746" in profiled.stdout, profiled.stdout
-
-
-def test_a_shared_error_ranks_at_its_earliest_reader(decidb_cli):
-    """Position t.p = 1 holds two rows, so the frame raises where row 3 reads it, an error that takes the rank of its
-    reader. The ABS auxiliary's definition reads it (KEYED_MAPPING), and so does its clause (CONSTRAINTS) through the
-    auxiliary, first. RequireSupported walks it again under the definition's earlier rank, so it raises before the
-    sqrt of clause 1, as flat raises its frame peers before its constraints. Kept at its first reader's rank, clause
-    2's, it raised the sqrt of row 1 instead, the error this query raises when its positions are distinct."""
-    sql = """SET threads=1; SET decide_direct_solve='off';
-        SELECT id, x FROM (VALUES (1, 1, -1.0, 5.0), (2, 1, 4.0, 6.0), (3, 2, 9.0, 7.0)) t(id, p, r, v) DECIDE x(REAL)
-        SUCH THAT x <= 10 AND sqrt(t.r) * x <= 5 AND abs(x - at(previous else 0: t.v) over (t.p)) <= 30
-        MAXIMIZE sum(x)"""
-    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
-    assert cli.execute_raw(sql).stderr.strip() == (
-        "Invalid Input Error: DECIDE: at(previous else 0: t.v) over (t.p) finds 2 rows at t.p = 1; "
-        "a position must hold one row."
-    )
-
-
 def test_an_interrupt_stops_the_bottom_up_evaluation(decidb_cli):
-    """Twelve frames over data, each read at 5,000 anchors over windows of about 4,000 positions, hold the tree's
-    bottom-up evaluation for about 11 s, about 1 s a frame. Evaluate polls the query's interrupt before each node, as
-    the descent does before each visit, so a Ctrl-C 1.5 s in stops the query with DuckDB's interrupt. Without that
-    poll the evaluation ran to its end, and the solver's poll stopped the query with "DECIDE stopped at your
-    request"."""
+    """Twelve frames over data, each read at 5,000 anchors over windows of about 4,000 positions: listing their windows
+    holds the tree's evaluation for about 6 s, as it holds flat's. The tree lists them through flat's block
+    (SelectDecideFramePeers, ListRangeWindows), which polls the query's interrupt at each timeline and position, so a
+    Ctrl-C 1.5 s in stops the query with DuckDB's interrupt."""
     frames = " AND ".join(f"x <= sum(from {k} previous to {k} next: t.v) over (t.i)" for k in range(2000, 2012))
     sql = f"""SET threads=1; SET decide_direct_solve='off'; SET decide_frame_limit=1000000000;
         SELECT count(*) FROM (SELECT i, x FROM (SELECT i, (i * 7919) % 100 AS v FROM range(5000) r(i)) t
@@ -372,7 +243,7 @@ def test_an_interrupt_stops_the_bottom_up_evaluation(decidb_cli):
 
 
 #: A clause in the grouped shape is one instance per group of its `by` key, whatever else tells its entries apart
-#: (language/guide.md §6.4, §7.4; decide_tree_evaluation.cpp, Scope), so D90 counts groups, as flat does: a and b, whose
+#: (language/guide.md §6.4, §7.4; DecideModelEmitter::Groups), so D90 counts groups, as flat does: a and b, whose
 #: rows the reducer's `when` leaves empty. Each case reaches an arm no other case reaches. Counting entries said 4, and
 #: 5 with row 6.
 GROUPED_COUNT_ROWS = ((1, "a", 3, 1), (2, "a", 4, 2), (3, "a", 9, 3), (4, "b", 2, 1), (5, "b", 6, 1))
@@ -410,8 +281,8 @@ def _fallback_split(second):
         MAXIMIZE sum(x) ORDER BY id"""
 
 
-#: D90 counts each instance once, with a value or not (language/guide.md §7.4; decide_tree_evaluation.cpp, Scope), as
-#: flat counts. Each case reaches an arm no other case reaches.
+#: D90 counts each instance once, with a value or not (language/guide.md §7.4; DecideModelEmitter::Variants), as flat
+#: counts. Each case reaches an arm no other case reaches.
 INSTANCE_COUNT_CASES = {
     # Under `per t.product`, a variant per fallback its anchors reach (D82). A's first period falls back to its rows'
     # `t.w`, 5 and 2, two instances with a value; its second period reads 4; B and C fall back to a NULL, none.
@@ -439,51 +310,3 @@ def test_explain_counts_each_instance_once(decidb_cli, case):
     assert result.returncode == 0, result.stderr
     text = "".join(line.strip().strip("│").strip() for line in result.stdout.splitlines()).replace(" ", "")
     assert f"↳{skipped}instanceshavenovalueandareskipped" in text, text
-
-
-def test_a_grouped_clause_folds_only_its_own_groups_entries(decidb_cli, tmp_path):
-    """Formulation folds a grouped instance's entries into its row under the tightest bound
-    (decide_tree_formulation.cpp, Constraints), one row per group as flat makes. Groups a and b of region R read the
-    same terms, 2 y_R + 2 z_R, under 5 and 3: two rows. Folding by terms alone merged them into one."""
-    sql = """SET decide_direct_solve='off';
-        SELECT id, y, z FROM (VALUES (1, 'R', 'a', 5), (2, 'R', 'a', 7), (3, 'R', 'b', 3), (4, 'R', 'b', 8))
-            t(id, r, g, c)
-        DECIDE per t.r: y(INT), per t.r: z(INT) SUCH THAT y <= 9 AND z <= 9 AND sum(y + z) by (t.g) <= t.c
-        MAXIMIZE sum(2 * y + z) ORDER BY id"""
-    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
-    assert answer(cli, sql) == [{"id": i, "y": 1, "z": 0} for i in range(1, 5)]
-    assert dump_counts(cli.dump_model(sql, tmp_path / "tree.dump"))["num_rows"] == 2
-
-
-#: `<>` keeps each value of a group's bound its own exclusion (language/guide.md §5): formulation folds an entry into
-#: an earlier exclusion of its instance only where the two values agree (decide_tree_formulation.cpp, Constraints).
-#: Each case reaches one side of that test.
-GROUPED_NOT_EQUAL_CASES = {
-    # Depots D1 and D2 of region E both exclude 5: one exclusion, as flat makes, where an exclusion per entry made
-    # three indicators and six rows.
-    "one-value": (
-        """SELECT id, x FROM (VALUES (1, 'D1', 'E', 10), (2, 'D1', 'E', 20), (3, 'D2', 'E', 30), (4, 'D3', 'W', 15))
-            t(id, depot, region, cap)
-        DECIDE x(INT) SUCH THAT x <= t.cap AND per t.depot: sum(x) by (t.region) <> 5 MAXIMIZE SUM(x)""",
-        {"num_vars": 6, "num_rows": 4},
-    ),
-    # Group a excludes 3 and 2, so its three x of at most 1 sum to 1, and b's one x is 0. Folding 2 into 3 let a reach
-    # 2.
-    "two-values": (
-        """SELECT sum(x) AS total FROM (SELECT * FROM (VALUES (1, 'a', 3), (2, 'a', 2), (3, 'a', 3), (4, 'b', 1))
-            t(id, g, k)
-        DECIDE x(INT) SUCH THAT x <= 1 AND sum(x) by (t.g) <> t.k MAXIMIZE SUM(x))""",
-        None,
-    ),
-}
-
-
-@pytest.mark.parametrize("case", list(GROUPED_NOT_EQUAL_CASES))
-def test_a_grouped_not_equal_excludes_each_value_once(decidb_cli, tmp_path, case):
-    sql, counts = GROUPED_NOT_EQUAL_CASES[case]
-    sql = "SET decide_direct_solve='off'; " + sql
-    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree", "DECIDB_NATIVE_CONSTRUCTS": "off"})
-    if counts:
-        assert dump_counts(cli.dump_model(sql, tmp_path / "tree.dump")) == counts
-    else:
-        assert answer(cli, sql) == [{"total": 1}]

@@ -700,7 +700,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         return (static_cast<uint64_t>(r) << 32) | static_cast<uint32_t>(c);
     };
 
-    if (has_power_quadratic || has_bilinear || !input.raw_quadratic_objective.empty()) {
+    if (has_power_quadratic || has_bilinear) {
         // Accumulate Q in a map: (var_i, var_j) -> value (lower triangle only, var_i >= var_j)
         std::unordered_map<uint64_t, double> q_map;
 
@@ -793,14 +793,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 }
             }
         }
-
-		if (!input.raw_quadratic_objective.empty()) {
-			model.has_quadratic_obj = true;
-			model.nonconvex_quadratic |= input.raw_quadratic_objective_nonconvex;
-			for (auto &term : input.raw_quadratic_objective) {
-				AddCoefficient(q_map[pack_q_key(term.row, term.column)], term.coefficient, input.objective_written);
-			}
-		}
 
         // Convert map to COO vectors
         model.q_rows.reserve(q_map.size());
@@ -1464,37 +1456,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         constr.provenance.typed_k = raw.typed_k;
         PushNormalizedConstraint(std::move(constr));
     }
-
-	// The tree evaluator has already expanded the polynomial algebra of these
-	// rows. Keep the same source/provenance contract as every other quadratic row.
-	for (auto &raw : input.raw_quadratic_constraints) {
-		auto &linear = raw.linear;
-		SolverModel::QuadraticConstraint row;
-		row.linear_indices = std::move(linear.indices);
-		row.linear_coefficients = std::move(linear.coefficients);
-		row.sense = linear.sense;
-		row.rhs = linear.rhs;
-		row.provenance.kind = linear.kind;
-		row.provenance.shape = linear.shape;
-		row.provenance.source_clause_id = linear.source_clause_id;
-		row.provenance.repair_group_id = linear.repair_group_id;
-		row.provenance.removal_group_id = linear.removal_group_id;
-		row.provenance.indicator_col = linear.indicator_col;
-		row.provenance.class_set = linear.class_set;
-		row.provenance.group_key = linear.group_key;
-		row.provenance.group_name = linear.group_name;
-		row.provenance.is_aggregate = linear.is_aggregate;
-		row.provenance.rhs_mechanism_offset = linear.rhs_mechanism_offset;
-		row.provenance.rhs_label = linear.rhs_label;
-		row.provenance.strict = linear.strict;
-		row.provenance.typed_k = linear.typed_k;
-		for (auto &term : raw.quadratic) {
-			row.q_rows.push_back(term.row);
-			row.q_cols.push_back(term.column);
-			row.q_coefficients.push_back(term.coefficient);
-		}
-		model.quadratic_constraints.push_back(std::move(row));
-	}
 
     // Conditional rows the chosen backend states itself. Whatever `LowerDecideConstructs`
     // did not lower arrives here still conditioned; everything it did lower is an ordinary

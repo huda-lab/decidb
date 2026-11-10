@@ -16,65 +16,6 @@ namespace duckdb {
 
 class DecideGlobalSinkState;
 
-//! The shapes stage 06 accepts, by what it reads of the evaluated clauses and the query (EvaluatedConstraint,
-//! SolverInput): each has one arm, which calls flat's own blocks. The first twenty-one have theirs; a query with any
-//! other has none yet (DecideModelEmitter::Uncovered).
-enum class DecideModelShape : uint8_t {
-	//! A clause with one model row per kept row.
-	ROWS,
-	//! A folded bound's rows, which only a repair model emits (DecidePreparedModel::singleton_row_constraints).
-	REPAIR_ROWS,
-	//! A declared decision's classes (KeyedScopeInfo).
-	KEYED_DECLARED,
-	//! An objective's linear terms, each a column over the rows it reads (SolverInput::objective_coefficients).
-	OBJECTIVE_LINEAR,
-	//! A clause in the aggregate shape (EvaluatedConstraint::lhs_is_aggregate): one model row per group of its `by`
-	//! key, named by the key's values.
-	GROUP_ROWS,
-	//! A `<>` clause's rows, each excluding its bound (EvaluatedConstraint::ne_clause_idx), which stage 06 expands.
-	NOT_EQUAL_ROWS,
-	//! A row defining an auxiliary, which has no value where the row's reads have none (SolverInput::absent_reads).
-	DEFINED_READS,
-	//! A clause in the per-row shape under `per K:` (DecideClauseScope::ONE_ROW_PER_CLASS): one model row per variant
-	//! of each class of K, named by the class.
-	CLASS_ROWS,
-	//! The classes a clause's rows stand for, which a diagnosis reports (SolverInput::class_sets).
-	CLASS_SETS,
-	//! A relation-qualified reducer's classes, split by the values its body reads (KeyedScopeInfo::signature).
-	KEYED_SIGNATURE,
-	//! A MIN or a MAX the clause's direction does not drive (EvaluatedConstraint::minmax_agg_type): its group's rows,
-	//! the members stage 06 takes the extremum over.
-	EXTREMUM_ROWS,
-	//! A MIN or a MAX its direction drives (DecideConstraint::was_minmax_easy): a model row per member, grouped by its
-	//! `by` key, or a bound on one decision admitted on each member.
-	MEMBER_ROWS,
-	//! A MIN or a MAX objective, whose auxiliary stage 06 writes over its terms' rows.
-	OBJECTIVE_EXTREMUM,
-	//! A clause adding MIN, MAX, SUM and AVG reducers (EvaluatedClauses::composed_constraints): each a column over the
-	//! members of its reducer, which stage 06 gives an auxiliary and one outer row.
-	COMPOSED,
-	//! The objective's composed terms (EvaluatedClauses::composed_objective_terms).
-	OBJECTIVE_COMPOSED,
-	//! A clause's products of two decisions (EvaluatedConstraint::bilinear_terms), each a column over the rows it is
-	//! read on.
-	PRODUCT_TERMS,
-	//! A clause's squares (EvaluatedConstraint::quadratic_groups): each a sign, its query-wide factor applied, and a
-	//! column per term of what it squares.
-	SQUARE_TERMS,
-	//! The objective's squares, a column per term of what it squares (SolverInput::quadratic_inner_coefficients).
-	OBJECTIVE_SQUARES,
-	//! The objective's products of two decisions (SolverInput::bilinear_objective_terms).
-	OBJECTIVE_PRODUCTS,
-	//! A product with a BOOLEAN factor the optimizer made an auxiliary of (LogicalDecide::BilinearLink), whose rows
-	//! stage 06 writes, and which has no value where a factor has none (SolverInput::absent_reads).
-	PRODUCT_LINKS,
-	//! A helper decision of a reducer the value rewrite lifted (SolverInput::reducer_value_links): its members per
-	//! group of its `by` key, and its classes, the groups that hold one (KeyedMapping).
-	VALUE_LINKS,
-	TIGHTEST_BOUND,
-	FRAME_READS
-};
-
 //! The variants of a signature over the rows a node holds (language/guide.md §7.1, D70), numbered as flat numbers them,
 //! and the classes of its key, numbered by the key's values: each row's, INVALID_INDEX for a row the node does not
 //! hold in a class.
@@ -93,11 +34,6 @@ public:
 	                   const DecideDescent &descent, DecideTreeColumns &columns, DecideGlobalSinkState &gstate,
 	                   PerGroupCache &groups, const DecideSourceNames &names, idx_t num_rows, DecideErrorLedger &errors,
 	                   DataChunk &first);
-
-	//! The query's first shape with no arm, empty when every shape it has has one. Such a query takes the interim
-	//! formulator, or verify's flat second run, until every shape has one; so does one with a node the tree computes
-	//! no value for (DecideTreeColumns::Uncomputed).
-	static string Uncovered(const DecideTree &tree, const PhysicalDecide &op);
 
 	//! Each declared decision's classes, numbered by its key's values, each relation-qualified reducer's, its classes
 	//! split by its body's values, and each helper's, the groups that hold a member, a row in none in a class of its
@@ -154,6 +90,16 @@ private:
 	//! The variants of `signature` (null: none, so its key's classes) over the rows `node` holds, its instances, in
 	//! flat's numbering (BuildSignatureIds).
 	DecideVariants Variants(idx_t node, const DecideSignature *signature) const;
+	//! What tells `entry` of `node` apart as a variant (language/guide.md §7.1, D70): its class of the node's key and
+	//! its sigma's values, a frame by its keys.
+	vector<Value> Identity(idx_t node, idx_t entry) const;
+	//! What frame `frame`'s `else` reads at `row` (D82, flat's FrameFieldClasses): whether the anchor reaches it, and
+	//! where it does, its terms' coefficients and its decisions' instances, which split a variant.
+	vector<Value> Fallback(idx_t frame, idx_t row) const;
+	//! The scope check's message for an objective `root` with more than one variant over its kept rows (D72,
+	//! DecideObjectiveTwiceMessage): its sigma read on the entries `surviving` names, a variant each, and its frames
+	//! by their keys.
+	string ObjectiveDifference(idx_t root, const vector<idx_t> &surviving) const;
 	//! The names of `root`'s variants, by their class's values and their own, read at their first rows as written
 	//! (DecideBody::names, DecideNameVariants).
 	vector<GroupName> NameVariants(idx_t root, const DecideSignature &signature, const vector<idx_t> &class_of,
@@ -173,6 +119,15 @@ private:
 	//! A helper's classes: the groups of its `by` key that hold a member, each read by the rows of its group the
 	//! clause keeps; its members kept for ValueLinks (link_members).
 	KeyedMapping HelperMapping(idx_t link);
+	//! A range frame's helper's members (language/guide.md §5.6), per window of its frame (DecideListFrameMembers): its
+	//! payload's terms on the rows the windows read, its `else`'s at the anchors that reach it, each a program on the
+	//! frame's O `node`, as flat lists them (PhysicalDecide::EvaluateFrameLink).
+	void FrameMembers(idx_t node, const LogicalDecide::ReducerValueLink &link, ReducerValueMembers &out);
+	//! A grouped clause's bound on each of `rows` (its kept rows and their root's entries), a NULL one marking its row
+	//! in `null_rows`; for a tightest frame bound (D85) the rows where it bounds nothing instead, which are returned
+	//! (TakeTightestFrameBound): empty for any other bound, and for one the whole clause shares (DescribeBound).
+	vector<bool> GroupBound(idx_t root, const vector<pair<idx_t, idx_t>> &rows, vector<bool> &null_rows,
+	                        EvaluatedConstraint &evaluated);
 	//! A bound on one decision: the values it admits on each row its term is read on, which the model builder folds
 	//! into the decision's column.
 	void Admit(const DecideBody &body, EvaluatedConstraint &evaluated);
@@ -214,9 +169,11 @@ private:
 	void AvgGroups(bool avg_scale, idx_t avg_group_key, idx_t child, idx_t site, TermFilterState &filter);
 	//! A grouped clause's terms on `rows`, its kept rows and their root's entries, with each term's, product's and
 	//! square's filter as flat reads it, and the rows some reducer's filter keeps (`active`, every row with a part that
-	//! keeps every kept row). Returns whether some filter keeps fewer than the kept rows.
+	//! keeps every kept row), and the rows where a term's coefficient is NULL (`null_rows`). Returns whether some
+	//! filter keeps fewer than the kept rows.
 	bool ReadGroupedTerms(idx_t root, const vector<pair<idx_t, idx_t>> &rows, const vector<bool> &kept,
-	                      EvaluatedConstraint &evaluated, vector<TermFilterState> &filters, vector<bool> &active);
+	                      EvaluatedConstraint &evaluated, vector<TermFilterState> &filters, vector<bool> &active,
+	                      vector<bool> &null_rows);
 	//! The rows a term in a reducer is read on, each with the entry of its site `site` standing for it: of the entries
 	//! `reads` marks, every row each stands for, but a relation-qualified reducer's term its entry's first row alone,
 	//! the first of its class (language/guide.md §5.1).
@@ -228,14 +185,15 @@ private:
 	//! part is read on (ReadRows, ReadEntriesOf), returned with their entries, and every row its members stand for
 	//! (`members`), which decide whether the filter keeps fewer than the clause.
 	vector<pair<idx_t, idx_t>> Filter(idx_t site, bool qualified, TermFilterState &filter, vector<bool> &members);
-	//! A term beside a grouped clause's reducers, on each of `rows` (the kept rows and their root's entries).
+	//! A term beside a grouped clause's reducers, on each of `rows` (the kept rows and their root's entries), a NULL
+	//! coefficient marking its row (`null_rows`).
 	void ReadBesideReducers(idx_t root, const DecideTerm &term, const DecideTermSite &site,
-	                        const vector<pair<idx_t, idx_t>> &rows, CoefficientColumn &column);
+	                        const vector<pair<idx_t, idx_t>> &rows, CoefficientColumn &column, vector<bool> &null_rows);
 	//! A term in a reducer, on each member of the G it ranges over: an entry of its operand, which the reducer's `when`
 	//! routed and its member tests keep, a kept row in no group among them, since flat computes the term on every kept
-	//! row. Returns the rows its filter keeps.
+	//! row; a NULL coefficient marks its row (`null_rows`). Returns the rows its filter keeps.
 	vector<bool> ReadInReducer(const DecideTerm &term, const DecideTermSite &site, CoefficientColumn &column,
-	                           TermFilterState &filter);
+	                           TermFilterState &filter, vector<bool> &null_rows);
 	//! The grouped root's G of its `by` key.
 	idx_t ByReducer(idx_t root) const;
 	//! Each of `kept_groups`, groups of the G `by`, named by its key's values.
@@ -253,10 +211,5 @@ SolverInput::KeyValues DecideGroupKeyValues(const DecideTree &tree, const Decide
 //! Each row `node`'s entries stand for, with the entry standing for it: a set E's routed rows, a node per row's own.
 vector<pair<idx_t, idx_t>> DecideEntryRows(const DecideTree &tree, const DecideDescent &descent, idx_t node);
 
-//! The scope check's message for an objective with more than one instance over its kept rows (D72,
-//! DecideObjectiveTwiceMessage): `node`'s sigma read on the entries of `container` that `surviving` names, an instance
-//! each.
-string DecideObjectiveDifference(const DecideTree &tree, const DecideNode &node, const DecideNodeContainer &container,
-                                 const vector<idx_t> &surviving);
 
 } // namespace duckdb

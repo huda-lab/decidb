@@ -269,6 +269,20 @@ void ScaleAvgTerms(const DecideConstraint &constraint, const vector<TermFilterSt
 void HoistAvgIntoNotEqualBound(const DecideConstraint &constraint, vector<TermFilterState> &filters,
                                EvaluatedConstraint &evaluated);
 
+//! The bound of a clause over groups that reads a frame and may differ within a group (FRAME_TIGHTEST_BOUND_TAG, D85):
+//! each group's instance takes its tightest value among all its kept rows where the bound has one, a row its reducers'
+//! own `when`s drop included (a group's every kept row bounds it) -- the least under `<`
+//! and `<=`, the greatest under `>` and `>=`, its one value under `=` -- as a side table takes a column's (paper
+//! §3.2.1). A row where the bound has none (`bound_null`) bounds nothing, and a group with no such row has no instance
+//! (`null_rows`). `kept_groups` numbers each kept row's group, empty for every kept row in one; `instances` is what
+//! remains of those groups once a clause's rules have dropped some (empty: all of one group), and a group it no longer
+//! holds has no instance, so no bound to read (D68). So does a `grouped` clause's group holding a row of `null_rows`, a
+//! NULL its left side reads, which SkipNullInstances drops next.
+void TakeTightestFrameBound(ExpressionType comparison, const string &written, const vector<bool> &kept,
+                            const vector<bool> &bound_null, const vector<idx_t> &kept_groups,
+                            const vector<idx_t> &instances, idx_t num_groups, bool grouped, vector<double> &rhs,
+                            vector<bool> &null_rows);
+
 //! The classes each group's rows stand for (language/guide.md §8.1, D28), kept for the diagnosis: under a `per K:`,
 //! K's classes among the group's kept rows, in the order its rows first read them; with no `per`, every kept row of
 //! the group; under `per ()`, the whole clause, one set its groups share. One SolverInput::ClassSet per group with
@@ -349,7 +363,8 @@ struct DecideVariantReader {
 	std::function<bool(idx_t field, idx_t element, const Expression &value, string &values)> values;
 	//! Whether field `field`'s decision has more than one instance over the kept rows.
 	std::function<bool(idx_t field)> instances;
-	//! Why field `field`'s frame reads more than one value over the kept rows; empty when it reads one.
+	//! Why field `field`'s frame reads more than one value over the kept rows (DecideFrameDifference); empty when it
+	//! reads one.
 	std::function<string(idx_t field)> frame;
 };
 
@@ -357,5 +372,26 @@ struct DecideVariantReader {
 //! once (D72, language/guide.md §7.3): the first field `read` finds two values or instances of, and the edit.
 string DecideObjectiveTwiceMessage(const vector<DecideSignatureField> &fields, const vector<DecideKey> &keys,
                                    const vector<DecideVarScopeInfo> &scopes, const DecideVariantReader &read);
+
+//! How an evaluator reads a frame field of the objective's signature over its kept rows, for the scope check's message
+//! (DecideFrameDifference): flat from the rows, the tree from its root's entries.
+struct DecideFrameReader {
+	//! Each kept row's timeline and peer (DecideFrameMap::timeline, peer), in row order.
+	vector<pair<idx_t, idx_t>> rows;
+	//! The names of peers `first` and `last`.
+	std::function<pair<Value, Value>(idx_t first, idx_t last)> positions;
+	//! The least and the greatest of element `element` of the frame's timeline key, `value`, over the kept rows
+	//! (DecideValueRange::Spans).
+	std::function<bool(idx_t element, const Expression &value, string &values)> timeline;
+	//! Whether what the frame's `else` reads differs over the kept rows: whether the anchor reaches it, and there its
+	//! coefficients, a NULL as one value, and its decisions' instances.
+	std::function<bool()> fallbacks;
+};
+
+//! Why the kept rows are more than one variant of the frame field `field`, by the frame's keys (D82): more than one
+//! position of one timeline, when it reads relative to the anchor, named by its first and last in its own order, more
+//! than one timeline, or more than one value its `else` reads; empty when none (language/guide.md §7.3).
+string DecideFrameDifference(const DecideSignatureField &field, const DecideFrameSpec &frame,
+                             const vector<DecideKey> &keys, const DecideFrameReader &read);
 
 } // namespace duckdb

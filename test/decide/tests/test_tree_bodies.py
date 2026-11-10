@@ -306,15 +306,27 @@ PROGRAMS = {
         r"node 0 entries\n  program 0 VALUE expr=CASE  WHEN \(\(#0 IS NULL\)\) THEN \(NULL\) ELSE CASE  WHEN "
         r"\(isnan\(#1\)\) THEN ",
     ),
-    # A read of a frame has no value yet: a NULL, printed as computed, not by its alias.
+    # A read of a frame is a hole of its reader's layout, the column of the frame's O at the reader's row.
     "a-frame": (
         decide(ROWS, "x(REAL)", "x <= 9 AND x - at(previous: x) over (t.id) <= 1"),
-        r"uncompiled: reads a frame",
+        r"  hole #0 reads node \d+ column 0\n  program 0 COEFFICIENT [^\n]*\n  program 1 COEFFICIENT expr=#0 "
+        r"written=at\(previous: x\) over \(t.id\)__frame_column__ ",
     ),
-    # A body that reads a frame in a term names it, though its bound's data reducer is a hole.
-    "the-first-reason": (
-        decide(ROWS, "x(REAL)", "x <= 9 AND x - at(previous: x) over (t.id) <= max(t.c) by (t.g)"),
-        r"uncompiled: reads a frame\n",
+    # A reducer over data reading a frame is its G's fold, whose operand reads the frame's one value as Lower read it.
+    "a-reducer-over-a-frame": (
+        decide(ROWS, "x(REAL)", "x <= 9 AND x <= sum(at(previous else 1: t.c) over (t.id) * t.w) by (t.g)"),
+        r"  hole #0 reads node \d+\n  program 0 COEFFICIENT [^\n]*\n  program 1 BOUND expr=CAST\(#0 AS DOUBLE\) "
+        r"(?:.*\n)*  hole #1 reads node \d+ column 0\n  program 0 VALUE expr=\"\*\"\(#1, ",
+    ),
+    # A point's O computes its payload and its `else` on its anchors, which its columns read.
+    "a-points-payload-and-else": (
+        decide(ROWS, "x(REAL)", "x <= 9 AND x <= at(previous else t.w: t.c) over (t.id)"),
+        r"node \d+ entries\n  program 0 VALUE expr=#0 written=c [^\n]*\n  program 1 VALUE expr=#1 written=w ",
+    ),
+    # A range's O computes its reducer's argument on its anchors.
+    "a-ranges-argument": (
+        decide(ROWS, "x(REAL)", "x <= 9 AND x <= sum(from previous to next: t.c) over (t.id)"),
+        r"node \d+ entries\n  program 0 VALUE expr=#0 written=c block=FILTERS ",
     ),
     # The objective's squared terms follow its terms.
     "objective-squares": (
@@ -330,7 +342,7 @@ PROGRAMS = {
     "frame-else": (
         decide(ROWS, "x(REAL)", "x <= 9 AND x <= sum(from previous to next else t.w: x) over (t.id)"),
         r"  fallback\n    term 0 var=-1 child=-1 site=(\d+) program=1 [^\n]*\n(?:.*\n)*?  program 1 COEFFICIENT "
-        r"expr=NULL [^\n]* block=TERMS group=0 position=1 ",
+        r"expr=#\d+ [^\n]* block=TERMS group=0 position=1 ",
     ),
 }
 

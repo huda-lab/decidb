@@ -392,16 +392,12 @@ private:
     void Evaluate(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows, DecideRowStore &row_store,
                   ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
                   vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated, bool silent) const;
-    //! The tree's evaluation of a query it has an arm for (DecideModelEmitter::Uncovered): its descent over the input
-    //! (into `descent`), each node's programs over its entries, and the model emitter, filling what Evaluate fills,
-    //! with the values its groups are named by in `per_group_cache`. It prints only when not `silent`.
+    //! The tree's evaluation (language/guide.md §6.4): its descent over the input (into `descent`), each node's
+    //! programs over its entries, and the model emitter, filling what Evaluate fills, with the values its groups are
+    //! named by in `per_group_cache`. It prints only when not `silent`.
     void EvaluateTree(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                       unique_ptr<DecideDescent> &descent, PerGroupCache &per_group_cache,
                       vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated, bool silent) const;
-    //! The interim tree formulator, which a query with no arm in the model emitter takes until every shape has
-    //! one: its descent, per-entry evaluation and formulation, then the solve.
-    SinkFinalizeType FinalizeWithTreeFormulator(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                                                bool bench, Profiler &model_timer, Profiler &solver_timer) const;
     //! What Evaluate left, in the form two runs compare.
     DecideEvaluationRecord RecordEvaluation(DecideGlobalSinkState &gstate, idx_t num_rows, const PerGroupCache &cache,
                                             const vector<KeyedMapping> &keyed_mappings,
@@ -487,8 +483,6 @@ private:
     struct ElasticFormulation {
         SolverInput input;
         VarIndexer var_indexer;
-        //! Tree formulation closes over synthesized values, which outlive the diagnostic solve.
-        std::function<void(SolverInput &, VarIndexer &)> formulate;
     };
 
     //! PHASE 3, solve + readback: build_var_labels, the RouteSolveResult switch and its
