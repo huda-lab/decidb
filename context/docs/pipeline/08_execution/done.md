@@ -110,7 +110,8 @@ solved model after the evaluation, and read the named input columns in a pass of
 
 The literal one-pass plan (`.claude/local/literal_one_pass_plan.md`, §7) builds the deck's evaluator beside this one:
 Branch by Abstraction with a whole Parallel Run. `DECIDB_EVALUATOR` picks one, read once and kept off the wire:
-`flat` (the default, the evaluator above), `verify`, `tree` and `tree-noside`.
+`tree-noside` (the default since the flip: the tree, planned with no side plans), `flat` (the evaluator above),
+`verify` and `tree`. Flat and the switch stay until the next step deletes them.
 `PhysicalDecide::Evaluate` is the region from the one pass to the helper decisions' members. Under `verify` it runs as
 ever and alone prints; then the evaluation fields of the sink state stand aside, a second run fills its own in silence,
 and `CompareDecideEvaluations` (`decide_evaluator.hpp`) compares what each would hand the model, before

@@ -11,6 +11,9 @@ Every test builds the model the rule defines in Python, solves it with the oracl
 feasible for it and reaches its optimum.
 """
 
+import os
+import subprocess
+
 import pytest
 
 from solver.types import ObjSense, VarType
@@ -216,8 +219,9 @@ def test_a_null_factor_on_an_unreduced_objective_term_drops_only_that_term(decid
 @pytest.mark.parametrize("c_on_row_2, reads_the_test", [(4.0, False), (None, True)], ids=["never_null", "null"])
 def test_a_null_test_the_statistics_decide_is_not_read(decidb_cli, oracle_solver, c_on_row_2, reads_the_test):
     """`SUM(c * x)` skips a row whose `c` is NULL. On a table whose statistics prove `c` never NULL, the test is decided
-    before the query runs and no filter is read (no `extraction.term_filters` span); with a NULL on row 2 it is read
-    and skips that row. Either way the answer reaches the oracle's optimum."""
+    before the query runs, and the term's member test is the constant `true`, which reads no row's `c`; with a NULL on
+    row 2 the member test reads `c IS NOT NULL` and skips that row. Either way the answer reaches the oracle's
+    optimum."""
     rows = [(i, c_on_row_2 if i == 2 else c, p) for i, c, p in ROWS]
     values = ", ".join(f"({i}, {'NULL' if c is None else c}::DOUBLE, {p})" for i, c, p in rows)
     sql = f"""SET decide_direct_solve='off';
@@ -225,10 +229,17 @@ def test_a_null_test_the_statistics_decide_is_not_read(decidb_cli, oracle_solver
         SELECT id, x FROM (FROM w DECIDE x(INT) SUCH THAT x <= 3 AND SUM(c * x) <= 4 MAXIMIZE SUM(p * x)) q
         ORDER BY id"""
     cli = decidb_cli.without_verify_serializer()
-    profiled = cli.with_env({"DECIDB_PROFILE": "1"}).execute_raw(sql)
-    assert profiled.returncode == 0, profiled.stderr
-    reads = [line for line in profiled.stderr.splitlines() if '"event":"begin"' in line and "term_filters" in line]
-    assert bool(reads) == reads_the_test, profiled.stderr
+    # In a process of its own: the dump names generated terms, which the wrapper's leak check refuses.
+    dumped = subprocess.run(
+        [cli.exe, "-c", sql],
+        env={**os.environ, **(cli.env or {}), "DECIDB_DUMP_TREE": "1", "DECIDB_DUMP_BODIES": "1"},
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert dumped.returncode == 0 and "Error" not in dumped.stderr, dumped.stderr
+    reads = [line for line in dumped.stderr.splitlines() if " TEST " in line and "written=(c IS NOT NULL)" in line]
+    assert bool(reads) == reads_the_test, dumped.stderr
     answer = {row[0]: row[1] for row in cli.execute(sql)[0]}
 
     def build(oracle):

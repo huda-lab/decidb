@@ -15,7 +15,7 @@ namespace duckdb {
 DecideEvaluator SelectedDecideEvaluator() {
 	static const DecideEvaluator selected = []() {
 		const char *setting = std::getenv("DECIDB_EVALUATOR");
-		const string value = setting ? setting : "flat";
+		const string value = setting ? setting : "tree-noside";
 		if (value == "flat") {
 			return DecideEvaluator::FLAT;
 		}

@@ -1760,7 +1760,7 @@ def test_a_collated_timeline_is_named_by_each_evaluators_spelling(decidb_cli, ca
     assert flat in run(decidb_cli, sql, "flat").stderr
     assert tree in run(decidb_cli, sql).stderr
     # The suite's own evaluator: under verify, flat's run raises last, and the difference is allowed (D12).
-    evaluator = os.environ.get("DECIDB_EVALUATOR", "flat")
+    evaluator = os.environ.get("DECIDB_EVALUATOR", "tree-noside")
     assert (tree if evaluator.startswith("tree") else flat) in run(decidb_cli, sql, evaluator).stderr
 
 
