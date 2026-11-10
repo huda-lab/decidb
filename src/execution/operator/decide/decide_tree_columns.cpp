@@ -804,7 +804,16 @@ void DecideTreeColumns::ReadFrames(const vector<DecideFrameSpec> &frames, const 
 		}
 		return FrameRows(found->second.first, found->second.second, rows);
 	};
-	SkipDecideFrameNullReads(prepared, links, maps, num_rows, read);
+	// A keyed decision has an instance at a row only where the row is in a class of its key. A range's payload reads a
+	// declared decision alone, since a reducer inside a frame is refused, and the descent records a declared
+	// decision's class on every row.
+	auto absent = [&](idx_t variable, idx_t row) {
+		if (variable == DConstants::INVALID_INDEX || !tree.variable_scopes[variable].IsKeyed()) {
+			return false;
+		}
+		return descent.DecisionRows()[tree.variable_scopes[variable].keyed_scope_idx][row] == DConstants::INVALID_INDEX;
+	};
+	SkipDecideFrameNullReads(prepared, links, maps, num_rows, read, absent);
 	frame_values = ComputeDecideFrameColumns(context, frames, maps, prepared, num_rows, read);
 	CheckPositions(frames);
 	DecideCountFrames(maps);

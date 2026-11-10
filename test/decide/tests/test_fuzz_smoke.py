@@ -39,8 +39,9 @@ SEEDS = {
     # A nest under `=`, a nest over data and one over pinned decisions read at every row, and `<>` over a MAX of a MIN,
     # which the language reads.
     "nests": (22, 8, 5, 24),
-    # A range over a keyed decision, a position holding two payloads (an expected error), a point under a reducer.
-    "frames": (4, 6, 15),
+    # A range over a keyed decision, a position holding two payloads (an expected error), a point under a reducer, and
+    # a range whose window reads a keyed decision at a row with no instance of it, which is no member (D4).
+    "frames": (4, 6, 15, 37),
     # A MIN over groups, two frame values under `=` (an expected error), a MAX plus a SUM.
     "bounds": (2, 7, 10),
     # A UNION ALL and a default collation, a subquery with NULL keys first, a join with NULL keys.

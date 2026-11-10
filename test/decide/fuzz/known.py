@@ -32,15 +32,6 @@ DEFECTS: dict[str, tuple[str, dict[tuple[str, str, str], tuple[int, ...]]]] = {
         "its lower bound, and the query is reported infeasible, while DIAGNOSE says feasible.",
         {},
     ),
-    "D4": (
-        "A range frame over a keyed decision whose window holds a row with no instance (`per t.p, t.s: x` and a NULL "
-        "key) raises INTERNAL 'a column was asked of instance N of decision 0, which has none' and invalidates the "
-        "database. A point frame answers.",
-        {
-            ("frames", "gurobi", "internal"): (37, 47, 70, 328, 376, 450, 463, 572, 633, 690, 728, 735, 761, 780, 875),
-            ("frames", "highs", "internal"): (37, 47, 70, 328),
-        },
-    ),
     "D5": (
         "On HiGHS, 'Rewriting MIN/MAX requires a finite bound on x' for a keyed decision that `x = t.v` pins, once a "
         "row has no instance of it: `per t.p: x(REAL)`, `x = t.v AND max(x) >= 5` over a row with a NULL p refuses, "

@@ -663,7 +663,8 @@ window (the emitter's `HelperMapping` reads the windows; an absent anchor is in 
 per window (`DecideModelEmitter::ValueLinks`): a member per row read, times its visits for SUM and AVG, one for the
 `else` times the missing positions, AVG dividing by the window's values. A value read as NULL -- a payload coefficient
 at a row, an `else` coefficient at the anchor -- is no member (`SkipDecideRangeNullReads`, before the windows are
-numbered), and a window left with none is absent.
+numbered), and so is a payload read of a declared keyed decision at a row in no class of its key, which has no instance
+there (D84): a window left with none is absent.
 
 ## 4a. PHASE 1.6 — variants, and how a clause is read
 
