@@ -99,9 +99,13 @@ static bool DescentFrameReadsOrder(const DecideNode &frame) {
 
 //! The columns of `node`'s signature values, as Signature computes them: a value, a decision and its instance, a
 //! key's elements, a frame's timeline and, read relative to the anchor, its order key.
-static vector<LogicalType> DescentSignatureTypes(const DecideTree &tree, const DecideNode &node) {
+static vector<LogicalType> DescentSignatureTypes(const DecideTree &tree, const DecideNode &node,
+                                                 const DecideSignatureField *one = nullptr) {
 	vector<LogicalType> types;
 	for (auto &field : node.signature) {
+		if (one && &field != one) {
+			continue;
+		}
 		switch (field.kind) {
 		case DecideSignatureFieldKind::VALUE:
 			if (field.value) {
@@ -310,9 +314,22 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 		auto &container = containers[n];
 		shared[n] = paths[n] > 1;
 		signature_types[n] = DescentSignatureTypes(tree, node);
-		// An entry's values: its signature's, its carried and program columns, and an O's order key and partition.
-		auto types = signature_types[n];
+		// An entry's values: its signature's, its carried and program columns, and an O's order key and partition. An
+		// entry standing for its row alone holds no decision's instance, which the row gives.
+		const auto set = node.kind == DecideNodeKind::SCOPE && node.per != DecideTreePer::ROW;
 		auto &layout = container.layout;
+		vector<LogicalType> types;
+		idx_t value = 0;
+		for (auto &field : node.signature) {
+			const auto width = DescentSignatureTypes(tree, node, &field).size();
+			for (idx_t w = 0; w < width; w++, value++) {
+				const auto held = set || field.kind != DecideSignatureFieldKind::DECISION;
+				layout.signature.push_back(held ? types.size() : DConstants::INVALID_INDEX);
+				if (held) {
+					types.push_back(signature_types[n][value]);
+				}
+			}
+		}
 		layout.columns = types.size();
 		auto columns = DescentTypes(node.columns);
 		types.insert(types.end(), columns.begin(), columns.end());
@@ -357,12 +374,14 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 			continue;
 		}
 		// A set E: its instances by (slot, signature), its entries by those, its carried columns and its reads. A key
-		// of the descent's own numbers alone -- a signature of decisions' instances, no carried column -- is remembered
-		// by its slot (DecideKeyMap's memo).
+		// of the descent's own numbers alone -- a signature whose values are decisions' instances, no carried column --
+		// is remembered by its slot (DecideKeyMap's memo).
 		container.shares_instances = true;
-		const auto numbered =
-		    std::all_of(node.signature.begin(), node.signature.end(),
-		                [](const DecideSignatureField &f) { return f.kind == DecideSignatureFieldKind::DECISION; });
+		bool numbered = true;
+		for (auto &field : node.signature) {
+			numbered = numbered && (field.kind == DecideSignatureFieldKind::DECISION ||
+			                        DescentSignatureTypes(tree, node, &field).empty());
+		}
 		vector<LogicalType> instance {LogicalType::UBIGINT};
 		instance.insert(instance.end(), signature_types[n].begin(), signature_types[n].end());
 		instance_maps[n] = make_uniq<DecideKeyMap>(context, instance, numbered);
@@ -790,17 +809,10 @@ void DecideDescent::Signature(idx_t node_index, DataChunk &chunk, const Reach &r
 		}
 		case DecideSignatureFieldKind::DECISION: {
 			vector<idx_t> classes;
-			idx_t scope = DConstants::INVALID_INDEX;
 			bool global = false;
-			if (field.decision < tree.variable_scopes.size()) {
-				auto &variable = tree.variable_scopes[field.decision];
-				global = variable.IsGlobal();
-				if (variable.IsKeyed() || variable.scope == DecideVarScope::INLINED) {
-					scope = variable.keyed_scope_idx;
-					if (scope < tree.keyed_scopes.size()) {
-						classes = DecisionClasses(field.decision, chunk, rows, row_base);
-					}
-				}
+			const auto scope = DecisionScope(field.decision, global);
+			if (scope < tree.keyed_scopes.size()) {
+				classes = DecisionClasses(field.decision, chunk, rows, row_base);
 			}
 			auto decisions = FlatVector::GetData<uint64_t>(values.data[column++]);
 			auto instances = FlatVector::GetData<uint64_t>(values.data[column++]);
@@ -1040,6 +1052,44 @@ void DecideDescent::FindDecisionGroups(idx_t scope, DataChunk &keys, const unsaf
 	}
 }
 
+idx_t DecideDescent::DecisionScope(idx_t variable, bool &global) const {
+	global = false;
+	if (variable >= tree.variable_scopes.size()) {
+		return DConstants::INVALID_INDEX;
+	}
+	auto &scope = tree.variable_scopes[variable];
+	global = scope.IsGlobal();
+	return scope.IsKeyed() || scope.scope == DecideVarScope::INLINED ? scope.keyed_scope_idx
+	                                                                 : DConstants::INVALID_INDEX;
+}
+
+vector<Value> DecideDescent::Signature(idx_t node_index, idx_t entry) const {
+	auto &node = *tree.nodes[node_index];
+	auto &container = containers[node_index];
+	auto &layout = container.layout;
+	vector<Value> values;
+	idx_t value = 0;
+	for (auto &field : node.signature) {
+		if (field.kind == DecideSignatureFieldKind::DECISION && layout.signature[value] == DConstants::INVALID_INDEX) {
+			// Its instance where its row reads it: a keyed decision's class there, a query-wide one's one, a row's
+			// own.
+			bool global;
+			const auto scope = DecisionScope(field.decision, global);
+			const auto row = container.rows[entry];
+			values.push_back(Value::UBIGINT(field.decision));
+			values.push_back(
+			    Value::UBIGINT(scope < tree.keyed_scopes.size() ? decision_rows[scope][row] : (global ? 0 : row)));
+			value += 2;
+			continue;
+		}
+		const auto width = DescentSignatureTypes(tree, node, &field).size();
+		for (idx_t w = 0; w < width; w++, value++) {
+			values.push_back(container.values.GetValue(layout.signature[value], entry));
+		}
+	}
+	return values;
+}
+
 vector<idx_t> DecideDescent::DecisionClasses(idx_t variable, DataChunk &chunk, const Reach &rows, idx_t row_base) {
 	const auto scope = tree.variable_scopes[variable].keyed_scope_idx;
 	auto &mapping = decision_rows[scope];
@@ -1116,31 +1166,38 @@ void DecideDescent::InsertDistinct(Pending &batch, idx_t row_base) {
 	}
 	types.insert(types.end(), node.dependencies.size(), LogicalType::UBIGINT);
 	DataChunk probe;
-	probe.Initialize(Allocator::Get(context), types);
-	DescentIds(probe.data[0], batch.slots.data(), count);
+	probe.InitializeEmpty(types);
+	Vector slots(LogicalType::UBIGINT, count);
+	DescentIds(slots, batch.slots.data(), count);
+	probe.data[0].Reference(slots);
 	for (idx_t c = 0; c < value_columns; c++) {
 		probe.data[1 + c].Reference(batch.values.data[c]);
 	}
-	// Where its row reads each node it depends on (DecideNodeContainer::routed).
+	// Where its row reads each node it depends on (DecideNodeContainer::routed); INVALID for a node whose rows land
+	// nowhere (an E).
 	for (idx_t d = 0; d < node.dependencies.size(); d++) {
 		auto &landing = landed[node.dependencies[d]];
-		auto reads = FlatVector::GetData<uint64_t>(probe.data[1 + value_columns + d]);
+		Vector read(LogicalType::UBIGINT, count);
+		auto reads = FlatVector::GetData<uint64_t>(read);
 		for (idx_t i = 0; i < count; i++) {
 			reads[i] = landing.empty() ? DConstants::INVALID_INDEX : landing.data()[batch.rows.rows[i]];
 		}
+		probe.data[1 + value_columns + d].Reference(read);
 	}
 	probe.SetCardinality(count);
 	unsafe_vector<idx_t> entries(count);
 	idx_t next = container.Count();
 	entry_maps[batch.node]->FindOrCreate(probe, entries.data(), next);
-	// The rows that make a new entry, each the first to read its values.
+	// The rows that make a new entry, each the first to read its values; every row routed, appended whole.
 	unsafe_vector<idx_t> created;
+	unsafe_vector<pair<idx_t, idx_t>> routed(count);
 	for (idx_t i = 0; i < count; i++) {
-		container.routed.emplace_back(row_base + batch.rows.rows[i], entries[i]);
+		routed[i] = {row_base + batch.rows.rows[i], entries[i]};
 		if (entries[i] == container.Count() + created.size()) {
 			created.push_back(i);
 		}
 	}
+	container.routed.insert(container.routed.end(), routed.begin(), routed.end());
 	if (created.empty()) {
 		return;
 	}
@@ -1230,8 +1287,10 @@ void DecideDescent::Store(idx_t node_index, DataChunk &chunk, const Reach &store
 	}
 	DataChunk signatures;
 	Signature(node_index, chunk, stored, row_base, signatures);
-	for (idx_t c = 0; c < layout.columns; c++) {
-		values.data[c].Reference(signatures.data[c]);
+	for (idx_t c = 0; c < layout.signature.size(); c++) {
+		if (layout.signature[c] != DConstants::INVALID_INDEX) {
+			values.data[layout.signature[c]].Reference(signatures.data[c]);
+		}
 	}
 	for (idx_t c = 0; c < node.columns.size(); c++) {
 		Evaluate(*node.columns[c], chunk, stored, values.data[layout.columns + c]);
@@ -1617,9 +1676,9 @@ void DecideDescent::Timelines(idx_t node_index) {
 					spelled.push_back(container.Order(*e));
 				}
 				const auto sort_keys = SpellingKeys(spelled, node.over->return_type);
-				const auto signature = container.Signature(*at);
+				const auto signature = Signature(node_index, *at);
 				for (idx_t k = 1; k < sort_keys.size(); k++) {
-					conflict = conflict || !DescentEqual(signature, container.Signature(at[k]));
+					conflict = conflict || !DescentEqual(signature, Signature(node_index, at[k]));
 					if (sort_keys[k] < sort_keys[least]) {
 						least = k;
 					}
@@ -1695,7 +1754,7 @@ string DecideDescent::Dump() const {
 		for (idx_t e = 0; e < container.Count(); e++) {
 			out << "  row " << container.rows[e] << " parent " << container.parent_slots[e] << " slot "
 			    << container.Slot(e) << " instance " << container.Instance(e) << " (";
-			print(container.Signature(e));
+			print(Signature(n, e));
 			out << ") data=(";
 			print(container.Columns(e));
 			out << ")";

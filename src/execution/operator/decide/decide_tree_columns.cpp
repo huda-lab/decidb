@@ -16,6 +16,7 @@
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
@@ -218,9 +219,14 @@ void DecideTreeColumns::ComputeNode(idx_t index, NodeColumns &columns, bool fram
 		if (column.values || (!frames && ReadsFrame(index, p))) {
 			continue;
 		}
-		computed.push_back(p);
-		// Folded where it is executed, as flat folds what it evaluates (TransformToChunkExpression).
+		// Folded where it is executed, as flat folds what it evaluates (TransformToChunkExpression). One that folds
+		// to a constant is that constant on every entry, read in place.
 		column.folded = DecideFoldConstants(node.programs[p].expression->Copy(), context);
+		if (column.folded->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+			column.values = make_uniq<Vector>(column.folded->Cast<BoundConstantExpression>().value);
+			continue;
+		}
+		computed.push_back(p);
 		column.values = make_uniq<Vector>(column.folded->return_type, MaxValue<idx_t>(count, 1));
 		if (node.programs[p].arguments.empty()) {
 			over_layout.push_back(p);
@@ -447,9 +453,18 @@ vector<bool> DecideTreeColumns::NullEntries(idx_t node, idx_t program, const vec
 	const auto count = rows.size();
 	UnifiedVectorFormat format;
 	column.ToUnifiedFormat(count, format);
-	vector<bool> nulls(count, false);
+	// None where the program holds no NULL.
+	vector<bool> nulls;
+	if (format.validity.AllValid()) {
+		return nulls;
+	}
+	nulls.assign(count, false);
+	std::vector<bool> &marked = nulls;
+	const std::vector<bool> &read = reads;
 	for (idx_t e = 0; e < count; e++) {
-		nulls[e] = reads[e] && !format.validity.RowIsValid(format.sel->get_index(e));
+		if (read[e] && !format.validity.RowIsValid(format.sel->get_index(e))) {
+			marked[e] = true;
+		}
 	}
 	return nulls;
 }

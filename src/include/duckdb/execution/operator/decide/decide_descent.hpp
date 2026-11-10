@@ -126,6 +126,9 @@ struct DecideNodeTimelines {
 //! (DecideDescent::Signature), its carried columns, its program columns, and an O's order value, its comparison bytes,
 //! its D75 partition's values -- which can be wider than its timeline -- and whether a class of it holds the entry.
 struct DecideEntryLayout {
+	//! Per value of the signature, its column, or INVALID for a decision's of an entry that stands for its row alone,
+	//! which its row gives (DecideDescent::Signature): the decision and its instance there.
+	vector<idx_t> signature;
 	idx_t columns = 0;
 	idx_t program_columns = 0;
 	idx_t order = DConstants::INVALID_INDEX;
@@ -174,9 +177,6 @@ struct DecideNodeContainer {
 	idx_t Instances() const {
 		return shares_instances ? instance_entries.size() : Count();
 	}
-	vector<Value> Signature(idx_t entry) const {
-		return values.GetValues(entry, 0, layout.columns);
-	}
 	vector<Value> Columns(idx_t entry) const {
 		return values.GetValues(entry, layout.columns, layout.program_columns);
 	}
@@ -209,6 +209,9 @@ public:
 	const vector<vector<idx_t>> &DecisionRows() const {
 		return decision_rows;
 	}
+	//! Entry `entry` of `node`'s signature values (Signature), a decision's instance read off its row where the entry
+	//! holds none.
+	vector<Value> Signature(idx_t node, idx_t entry) const;
 	//! The label a message quotes for group `group` of key `key` (D69; flat's GroupKeyReader): a collated column at its
 	//! least spelling over every row the query read the key on, as GROUP BY shows a collated group, and any other
 	//! column as it groups. Complete once every row is appended.
@@ -396,6 +399,8 @@ private:
 	void FindDecisionGroups(idx_t scope, DataChunk &keys, const unsafe_vector<bool> &present, const vector<idx_t> &rows,
 	                        vector<idx_t> &classes);
 	vector<idx_t> DecisionClasses(idx_t variable, DataChunk &chunk, const Reach &rows, idx_t row_base);
+	//! The scope decision `variable`'s instances lie in, INVALID for one not keyed, and whether it is query-wide.
+	idx_t DecisionScope(idx_t variable, bool &global) const;
 	//! A set E's window of entries once every root has descended: one entry per distinct slot, signature, columns
 	//! and reads.
 	void InsertDistinct(Pending &batch, idx_t row_base);

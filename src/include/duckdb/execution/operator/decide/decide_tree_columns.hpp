@@ -83,7 +83,7 @@ public:
 	//! Of the entries of `node` that `reads` marks, those at which `program` is NULL, as flat reads what a definition
 	//! reads for its absence on the rows it keeps (DefinitionNulls), and what its evaluation raised there, held at
 	//! `rank` in the window of its entry's row: no value is checked, which the clause's read of the program does
-	//! (Numbers).
+	//! (Numbers). Empty where the program is NULL on no entry.
 	vector<bool> NullEntries(idx_t node, idx_t program, const vector<bool> &reads, DecideErrorRank rank);
 	//! `program` on entry `entry` of `node`, as written: what a variant's name reads (DecideBody::names). What it
 	//! raises is never read: the descent read the same key, and the clause the same value.

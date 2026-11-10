@@ -141,9 +141,10 @@ private:
 	//! each class among them (Classes).
 	EvaluatedConstraint Rows(idx_t root, bool counted);
 	//! The model rows of a clause in the per-row shape under `per K:` (DecideClauseScope::ONE_ROW_PER_CLASS), its
-	//! kept rows `rows`: one per variant of each class of K, at its first row with a value (D88), numbered and named
-	//! as flat numbers and names them, and the classes each stands for under DIAGNOSE.
-	void Classes(idx_t root, const vector<pair<idx_t, idx_t>> &rows, EvaluatedConstraint &evaluated);
+	//! kept rows those its entries `tested` marks stand for: one per variant of each class of K, at its first row with
+	//! a value (D88), numbered and named as flat numbers and names them, and the classes each stands for under
+	//! DIAGNOSE.
+	void Classes(idx_t root, const vector<bool> &tested, EvaluatedConstraint &evaluated);
 	//! The variants of `signature` (null: none, so its key's classes) over the rows `node` holds, its instances, in
 	//! flat's numbering (BuildSignatureIds); with `by_row` false only how many there are.
 	DecideVariants Variants(idx_t node, const DecideSignature *signature, bool by_row = true) const;

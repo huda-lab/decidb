@@ -171,13 +171,13 @@ string DecideModelEmitter::ObjectiveDifference(idx_t root, const vector<idx_t> &
 	auto &container = descent.Containers()[root];
 	const auto starts = SignatureStarts(tree, node);
 	auto varies = [&](idx_t column, string &values) {
-		if (column >= container.layout.columns) {
+		if (column >= container.layout.signature.size()) {
 			return false;
 		}
 		// The range holds the values it is given, so they outlive it.
 		vector<Value> read;
 		for (auto entry : surviving) {
-			read.push_back(container.values.GetValue(column, entry));
+			read.push_back(descent.Signature(root, entry)[column]);
 		}
 		DecideValueRange range;
 		for (auto &value : read) {
@@ -376,11 +376,15 @@ void DecideModelEmitter::DefinitionAbsence(idx_t root) {
 	auto null_rows = [&](idx_t node, idx_t program) {
 		rank.position = position++;
 		const auto nulls = columns.NullEntries(node, program, columns.Tested(node), rank);
-		for (auto read : DecideEntryRows(tree, descent, node)) {
-			if (nulls[read.second]) {
-				mark(read.first);
-			}
+		if (nulls.empty()) {
+			return;
 		}
+		const std::vector<bool> &null_entries = nulls;
+		DecideEntryRows(tree, descent, node).ForEach([&](idx_t row, idx_t entry) {
+			if (null_entries[entry]) {
+				mark(row);
+			}
+		});
 	};
 	// A decision it reads has no instance on a row, wherever the row lies: a term's, a product's factors, a
 	// square's terms'.
@@ -447,13 +451,12 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 	// row reads a reducer's body on the reducer's members), with the entry standing for each: one model row stands on
 	// each, or under `per K:` on one row of each variant of a class.
 	auto &tested = columns.Tested(root);
-	const auto rows = ReadRows(root, tested, false);
 	vector<bool> nulls(entries, false);
 	auto scatter = [&](const vector<double> &numbers, CoefficientColumn &column) {
 		column.AssignDense(num_rows);
-		for (auto read : rows) {
-			column.Set(read.first, numbers[read.second]);
-		}
+		const auto values = column.MutableDense().data();
+		const auto computed = numbers.data();
+		ForEachRead(root, tested, false, [&](idx_t row, idx_t entry) { values[row] = computed[entry]; });
 	};
 	for (idx_t t = 0; t < clause.lhs_terms.size(); t++) {
 		auto &site = body.linear[t];
@@ -462,12 +465,11 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 		        evaluated.row_coefficients[t]);
 	}
 	if (clause.scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
-		Classes(root, rows, evaluated);
+		Classes(root, tested, evaluated);
 	} else if (clause.scope.when) {
 		evaluated.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
-		for (auto read : rows) {
-			evaluated.row_group_ids[read.first] = 0;
-		}
+		const auto groups = evaluated.row_group_ids.data();
+		ForEachRead(root, tested, false, [&](idx_t row, idx_t) { groups[row] = 0; });
 		evaluated.num_groups = 1;
 	}
 	const auto instances = CountInstances(evaluated.row_group_ids, evaluated.num_groups, num_rows, false);
@@ -483,12 +485,15 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 		}
 	}
 	vector<bool> null_rows(num_rows, false);
-	for (auto read : rows) {
-		null_rows[read.first] = nulls[read.second];
+	std::vector<bool> &nulled = null_rows;
+	const std::vector<bool> &null_entries = nulls;
+	ForEachRead(root, tested, false, [&](idx_t row, idx_t entry) {
+		bool null = null_entries[entry];
 		for (auto term : absent_terms) {
-			null_rows[read.first] = null_rows[read.first] || columns.TermAbsentAt(*term, read.first);
+			null = null || columns.TermAbsentAt(*term, row);
 		}
-	}
+		nulled[row] = null;
+	});
 	if (clause.admitted_lower) {
 		Admit(body, evaluated);
 	}
@@ -502,7 +507,7 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 	return evaluated;
 }
 
-void DecideModelEmitter::Classes(idx_t root, const vector<pair<idx_t, idx_t>> &rows, EvaluatedConstraint &evaluated) {
+void DecideModelEmitter::Classes(idx_t root, const vector<bool> &tested, EvaluatedConstraint &evaluated) {
 	auto &clause = *tree.nodes[root]->compiled.clause;
 	const auto signature =
 	    clause.scope.signature == DConstants::INVALID_INDEX ? nullptr : &op.signatures[clause.scope.signature];
@@ -532,9 +537,7 @@ void DecideModelEmitter::Classes(idx_t root, const vector<pair<idx_t, idx_t>> &r
 	}
 	// Each variant's row stands for its class (D28), and is named as its own where its class has more than one.
 	vector<bool> kept(num_rows, false);
-	for (auto read : rows) {
-		kept[read.first] = true;
-	}
+	ForEachRead(root, tested, false, [&](idx_t row, idx_t) { kept[row] = true; });
 	evaluated.group_class_set = DecideGroupClassSets(
 	    clause.scope, num_rows, kept, evaluated.row_group_ids, variants.count,
 	    [&](vector<idx_t> &ids, vector<GroupName> &named) {
@@ -551,7 +554,7 @@ vector<Value> DecideModelEmitter::Identity(idx_t node, idx_t entry) const {
 	auto &fields = tree.nodes[node]->signature;
 	const auto starts = SignatureStarts(tree, *tree.nodes[node]);
 	auto identity = container.groups.Key(container.Slot(entry));
-	const auto read = container.Signature(entry);
+	const auto read = descent.Signature(node, entry);
 	const auto row = container.rows[entry];
 	for (idx_t i = 0; i < fields.size(); i++) {
 		if (fields[i].kind != DecideSignatureFieldKind::FRAME) {
