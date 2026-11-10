@@ -214,6 +214,12 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     (linear terms, the rows kept, constants and squares); how many squares a rule admits, with which signs and weights,
     is the rule's to check. An `ABS` term stays out of it, so a rule that calls it sees an `ABS` as a term it does not
     read. The header also holds `DirectNamesOf` and `DirectIsFiniteWhereKept`, described under Number messages.
+  - **One factor, one orientation.** A part's constant factor (`2 * SUM(...)`, `SUM(...) / 2`) is one `DirectFactor`:
+    whether there is one, whether it divides, and its value at plan time. A division stays a division, because
+    multiplying by the reciprocal rounds. `DirectOriented` turns a number into its minimized orientation: the number
+    times the part's sign and its factor. Every objective is a minimization, so nothing else orients a part. Every rule
+    reads the factor through these two, and `DirectScaledTerm`, `DirectCheckNumber` and `DirectScaledMagnitude` take
+    the `DirectFactor` whole.
   - **Policy stays in the rule.** Each rule keeps its own policy around the readers, and no rule keeps a copy of one.
     S1 declines a filtered part, a non-linear term, a second decision and a coefficient that may raise beside other
     terms, and flattens the part per term. N1 and A2 fold the objective square's slope with `DirectFoldConstantSum`; A1
@@ -267,7 +273,7 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   `DirectIsSourceOnlyPredicate` (a deterministic, nonthrowing BOOLEAN over source columns: a `when` the plan evaluates
   on every row), `DirectHasColumnReference`, `DirectRemapSourceReferences` (re-points source columns at a projection
   over the source), `DirectIsWholeNumbered` (an `INT` or `BOOL` decision), `DirectIsLowerBound` and `DirectIsUpperBound`
-  (which comparisons bound a count from below and from above), `DirectPartScale`, `DIRECT_CONSTANT`,
+  (which comparisons bound a count from below and from above), `DirectPartFactor`, `DIRECT_CONSTANT`,
   `DIRECT_FINITE_CONSTANT`, `DirectIRConstraint::PlainSum` and `DirectPart::IsPlainSum` answer "may a rule use this
   value" once for all rules. `DirectIRConstraint::Membership` gives the rows an aggregate constraint covers: its sum's
   own `when` or the clause's `when`; with both, the rules decline (the solver reads both).

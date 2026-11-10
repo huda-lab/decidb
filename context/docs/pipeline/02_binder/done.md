@@ -538,7 +538,10 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
   `ValidateScopeData` refuses them with a caret, in that order, before execution sees the
   query. A `per` key cannot hold one: the grammar takes only columns and relations there;
 - a reducer inside a reducer: *"DECIDE: an aggregate inside an aggregate is not supported
-  yet"*, except the objective's two-level form (`IsTwoLevelObjective`), and except a
+  yet"*, except the objective's two-level form, alone or under a unary minus or a factor
+  that reads no decision (`IsTwoLevelObjective`, through `ObjectiveFactorOperand`; the
+  factor binds with the rest of the term, and a factor that varies per row keeps the
+  objective's own refusal), and except a
   reducer over data alone under a `*` or `/` that holds a decision (`sum(avg(cap) * x)`):
   that is a coefficient, refused by `ValidateDecideNoDataAggregateFactor` with its remedy.
 

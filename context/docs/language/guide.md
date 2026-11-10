@@ -291,8 +291,9 @@ MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))      -- two-level form
   - A factor on a reducer must be one value over the kept rows (§5).
 - **`by` on a top-level reducer** must be one group over the kept rows: `by ()`, or a `Γ` with one value there
   (`MAXIMIZE when g = 'A': sum(x) by (g)`).
-- **Two-level form** `outer(per k: inner(e) by (k))`, the whole objective: `inner` once per class of `k` (NULL a
+- **Two-level form** `outer(per k: inner(e) by (k))`, the objective's one term: `inner` once per class of `k` (NULL a
   class), then `outer` over those values. All nine `SUM`/`MIN`/`MAX` pairs; `k` may list several columns. It takes a
+  unary minus or a constant factor (`MINIMIZE -max(per k: ...)`, `2 * max(per k: ...)`, `max(per k: ...) / 2`) and a
   `when` in front, not inside; the inner reducer takes no `per`; the `by` key must be the `per` key; an outer `AVG` is
   refused, since `sum` over the classes ranks solutions the same way.
 - **Quadratic objectives**: `MINIMIZE SUM(POWER(linear, 2))` is convex QP on both solvers (HiGHS only when continuous

@@ -649,7 +649,8 @@ MAX} and inner ∈ {SUM, MIN, MAX, AVG}: `sum(per k: sum(e) by (k))` equal to th
 `sum(e)`, every `sum(per k: max/min(...))` direction (easy and hard inner),
 `max/min(per k: sum(...))`, `sum(per k: avg(...))` with unequal and extremely unequal
 groups, `max(per k: avg(...))` and `min(per k: avg(...))`, the two-level form under a
-`when` in front, a single class, and hard inner MIN/MAX over `power(...)` (Gurobi).
+`when` in front, under a unary minus, a factor on either side and a divisor
+(`test_two_level_under_a_factor`), a single class, and hard inner MIN/MAX over `power(...)` (Gurobi).
 `max(per g: max(c * x) by (g))` with mixed-sign coefficients is in `test_min_max.py`.
 
 #### Error cases

@@ -693,7 +693,7 @@ through `AddAuxiliaryDecision` (`decide_optimizer_internal.hpp`): the column ref
 its Boolean flag, its scope (recorded only once some decision is not row-scoped, the
 convention every reader follows) and its label (F6). The label is the expression the
 column stands for, rendered as a plan prints it (`RenderForPlan`, which sees the labels
-of the auxiliaries earlier passes made): `abs(e)`,
+of the auxiliaries earlier passes made): `abs(e)` under the name the call was written with (`@(e)`),
 `(e >= 0)` for the sign indicator, `(b * x)`, `(e <> 0)` for an L0 indicator, `(x = v)`
 for an `IN` indicator, `sum(e) by (g)` for a helper. Each rewrite also records what it
 made of a construct as a fact (`AddRewriteAccount` → `LogicalDecide::rewrite_accounts`:
@@ -740,7 +740,11 @@ detected and the easy/hard classification is precomputed into typed metadata —
 `per_inner_is_easy` / `per_outer_is_easy` / `per_inner_was_avg` — so the physical
 layer reads the decision rather than re-deriving it. The outer level is SUM, MIN or MAX
 (the binder refuses an outer AVG); an inner AVG becomes a SUM with `per_inner_was_avg`
-set. `RewriteMinMaxObjectiveTree` is split out from `RewriteMinMaxObjective` because the
+set. The two-level form is the objective's one term, `[-] [factor] outer(...)`: the term's direction is its sign
+times its factor's sign (`ScaleSignAtPlanTime`), and both stay on the term, where extraction reads them into every
+member coefficient, so an outer extremum under a negative direction is the other one over the negated members. The
+physical layer fixes that extremum at plan time, so a factor whose sign is known only when the query runs is refused
+with the binder's text (FRM-4). `RewriteMinMaxObjectiveTree` is split out from `RewriteMinMaxObjective` because the
 rewrite writes through a pointer that walks *into* the tree past the two-level form's
 wrapper, the `when` wrapper and casts, and has early returns: the objective must be
 detached, rewritten, and reinstalled through `SetObjective`.

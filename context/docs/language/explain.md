@@ -80,7 +80,7 @@ prints its operator and quotes its children; a cast with no location is display 
 canonical layer prints the respelled product, and a message never searches for the other layer's text. A reprinted
 call prints the name the user wrote, which the binder keeps in a tag when it renames an alias to its primary
 (`DecideWrittenName`, `../pipeline/02_binder/done.md` § One spelling per function): `pow(x - v, 2)` reprints as `pow`
-and `@(x - v)` as `@`. The ABS rewrite's account label is the one exception: it prints `abs` (OPT-5).
+and `@(x - v)` as `@`, also in the ABS rewrite's account label.
 `Expression::ToString()` is not used because the bound tree is not the query: it carries casts the binder inserted,
 prints functions in call form, and keeps pipeline tags in aliases that `GetName()` prints verbatim
 (`__source_clause_0__`).
@@ -101,7 +101,7 @@ child, so reconciliation casts never appear.
 |---|---|
 | `PER_CLASS_TAG` (`per K:`) | add `per K`, key as written (`PerClassQualifier`); recurse |
 | `WHEN_FILTER_TAG` (`when c:`) | add `when c` in front (`WhenQualifier`); recurse |
-| `TWO_LEVEL_OBJECTIVE_TAG` (two-level objective) | print it whole (`RenderTwoLevelObjective`) |
+| `TWO_LEVEL_OBJECTIVE_TAG` (two-level objective) | print it whole where its outer reducer stands in the term, so a sign or factor prints around it: `-max(per k: ...)`, `2 * max(per k: ...)` (`RenderTwoLevelObjective`) |
 | `AND` | recurse into each child |
 | `COMPARE_IN` marker | `<target> IN (v1, …)` |
 | leaf | `RenderDecideSource`: the cut text of a located node, else the reprint; quoted with its qualifier by `QuoteWrittenClause` |

@@ -425,8 +425,8 @@ subquery, is not distributed: the product stays one atom and takes the VALUE sha
 
 **Like terms merge.** After decomposition, decision atoms that are multiples of one
 term, each by a factor known before the query runs (a reducer's peeled factor, none
-counting as 1 and a divisor as its reciprocal; for any other term the constant factors of its
-product form, §3.3b), become one atom scaled by the sum of their
+counting as 1; a divisor divides, since multiplying by its reciprocal rounds; for any other term
+the constant factors of its product form, §3.3b), become one atom scaled by the sum of their
 signed factors (`MergeLikeAtoms`): `x + x >= -4` is emitted as `2 * x >= -4`,
 `x - 3 * x <= 4` as `-2 * x <= 4`, `2 * min(x) + min(x) >= -6` as `3 * min(x) >= -6`,
 `x*x + x*x <= 8` as `2 * POWER(x, 2) <= 8`. The
