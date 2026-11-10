@@ -319,6 +319,8 @@ private:
 	vector<KeyReads> key_reads;
 	//! How many reads raised: a read that raised on a row holds none of its values.
 	idx_t raised = 0;
+	//! The slots HoldKeyed finds for a node's rows, until its children are visited.
+	unsafe_vector<idx_t> slot_buffer;
 	//! Per node of an empty key, its slot by enclosing slot plus one, 0 for none: INVALID where none is made yet.
 	vector<unsafe_vector<idx_t>> empty_key_slots;
 	//! Per set E, its entries by (slot, signature, columns, reads) and its instances by (slot, signature).

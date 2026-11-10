@@ -1435,7 +1435,10 @@ const DecideDescent::Reach &DecideDescent::HoldKeyed(idx_t node_index, DataChunk
 			grouped.push_back(i);
 		}
 	}
-	unsafe_vector<idx_t> slots(count, DConstants::INVALID_INDEX);
+	// Each row's slot, read for the rows that take one alone: a buffer kept across visits, as nothing reads it once
+	// the node's children are reached.
+	auto &slots = slot_buffer;
+	slots.resize(MaxValue<idx_t>(slots.size(), count));
 	FindGroups(node_index, rows, grouped, keys, present, row_base, slots);
 	// A collated key's own least spelling over the rows the node holds in the group.
 	if (!spelled.sort_keys.empty()) {

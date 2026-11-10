@@ -1297,10 +1297,26 @@ void DecideTree::Validate() const {
 				throw InternalException("DECIDE tree node %llu runs before a dependency", i);
 			}
 		}
+		// The descent reads of a row its node's own `when` parts, keys and bare source columns alone, each key once
+		// (language/guide.md §6.1): a carried column, a program column and a signature's value are each a source
+		// column.
+		auto source = [&](const Expression &column) {
+			return column.GetExpressionClass() == ExpressionClass::BOUND_REF &&
+			       column.Cast<BoundReferenceExpression>().index < input_column_count;
+		};
 		for (auto &column : node.columns) {
-			if (column->GetExpressionClass() != ExpressionClass::BOUND_REF ||
-			    column->Cast<BoundReferenceExpression>().index >= input_column_count) {
+			if (!source(*column)) {
 				throw InternalException("DECIDE tree entry carries a non-source column");
+			}
+		}
+		for (auto &column : node.program_columns) {
+			if (!source(*column)) {
+				throw InternalException("DECIDE tree node %llu's program reads a non-source column", i);
+			}
+		}
+		for (auto &field : node.signature) {
+			if (field.kind == DecideSignatureFieldKind::VALUE && field.value && !source(*field.value)) {
+				throw InternalException("DECIDE tree node %llu's signature reads a non-source value", i);
 			}
 		}
 		for (auto &read : node.child_reads) {

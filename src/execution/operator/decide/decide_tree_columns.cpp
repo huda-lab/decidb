@@ -326,9 +326,12 @@ void DecideTreeColumns::ReadTests(idx_t index, NodeColumns &columns) {
 		UnifiedVectorFormat format;
 		column.values->ToUnifiedFormat(count, format);
 		auto truth = UnifiedVectorFormat::GetData<bool>(format);
+		std::vector<bool> &tested = columns.tested;
 		for (idx_t e = 0; e < count; e++) {
 			const auto i = format.sel->get_index(e);
-			columns.tested[e] = columns.tested[e] && format.validity.RowIsValid(i) && truth[i];
+			if (!format.validity.RowIsValid(i) || !truth[i]) {
+				tested[e] = false;
+			}
 		}
 	}
 }
