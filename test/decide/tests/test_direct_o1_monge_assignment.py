@@ -1,0 +1,279 @@
+"""O1 (Monge assignment), checked three ways: the independent oracle, the solver path, the direct path.
+
+Every case is one DECIDE query over a cross product of two sides, `per l` and `per r` each selecting one pair. The
+oracle builds its own model from the raw rows: one binary variable for each pair row, one equality for each distinct
+left row and each distinct right row (a class is a whole row, NULL compared as a value). DeciDB runs the query with
+`decide_direct_solve='off'` (the solver) and `'require'` (direct solve; a query the rule does not apply to fails). The
+case passes when all three agree: both runs return an assignment that picks one pair for every class on each side and
+reaches the oracle's objective (the pairs may differ on ties), or all three say infeasible.
+
+Rows with identical values are one class, so `duplicate_*` cases have more rows than classes, and a pair row is one of
+several copies of a pair. The checker therefore reads classes from the result rows, not from row positions.
+
+What a result comparison cannot see (which plan ran, EXPLAIN, prepared plans, DIAGNOSE, the all-rows read) stays in
+`test_direct_rule_conformance.py`.
+
+Note: `oracle_solver` caches each result under the test node id plus a hash of the test function's source. The case
+table and the model builder live outside that source, so after editing a case or `_oracle_model`, remove its entries
+from `results/oracle_cache.json`.
+"""
+
+from collections import Counter
+
+import pytest
+
+from solver.types import ObjSense, VarType
+
+from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
+from ._direct_oracle_common import agree_with_oracle, outcome, run, sql_literal
+
+NAN = float("nan")
+
+PER_SIDE = "per l: SUM(x) by (l) = 1 AND per r: SUM(x) by (r) = 1"
+ABS = "ABS(l.lpos - r.rpos)"
+SQUARED = "POWER(l.lpos - r.rpos, 2)"
+PRODUCT = "l.lpos * r.rpos"
+
+# Three rows out of order on each side; every objective below has one optimum on them.
+LEFT = [(1, 10.0), (2, 1.0), (3, 4.0)]
+RIGHT = [(7, 6.0), (8, 11.0), (9, 2.0)]
+
+
+def _case(objective, cost, sense="MINIMIZE", left=LEFT, right=RIGHT, **extra):
+    """`cost(a, b)` is the written coefficient of a pair at left position `a` and right position `b`."""
+    return dict(objective=objective, cost=cost, sense=sense, left=left, right=right, **extra)
+
+
+def _abs(a, b):
+    return abs(a - b)
+
+
+def _squared(a, b):
+    return (a - b) ** 2
+
+
+def _product(a, b):
+    return a * b
+
+
+ORACLE_CASES = {
+    # Each objective shape and direction, on the same rows.
+    "abs_min": _case(f"MINIMIZE SUM({ABS} * x)", _abs),
+    "abs_min_scaled": _case(f"MINIMIZE 2.5 * SUM({ABS} * x)", lambda a, b: 2.5 * abs(a - b)),
+    "squared_min": _case(f"MINIMIZE SUM({SQUARED} * x)", _squared),
+    "squared_min_scaled": _case(f"MINIMIZE SUM(3 * {SQUARED} * x)", lambda a, b: 3 * (a - b) ** 2),
+    "squared_zero_factor": _case(f"MINIMIZE 0 * SUM({SQUARED} * x)", lambda a, b: 0.0),
+    "product_max": _case(f"MAXIMIZE SUM({PRODUCT} * x)", _product, "MAXIMIZE"),
+    "product_min": _case(f"MINIMIZE SUM({PRODUCT} * x)", _product),
+    # A negative factor turns the direction round: maximizing -2ab is minimizing ab, and the other way.
+    "product_max_negative_factor": _case(f"MAXIMIZE SUM(-2 * {PRODUCT} * x)", lambda a, b: -2 * a * b, "MAXIMIZE"),
+    "product_min_negative_factor": _case(f"MINIMIZE SUM(-2 * {PRODUCT} * x)", lambda a, b: -2 * a * b),
+    # The positions the other way round.
+    "abs_min_swapped": _case("MINIMIZE SUM(ABS(r.rpos - l.lpos) * x)", _abs),
+    "squared_min_swapped": _case("MINIMIZE SUM(POWER(r.rpos - l.lpos, 2) * x)", _squared),
+    "product_max_swapped": _case("MAXIMIZE SUM(r.rpos * l.lpos * x)", _product, "MAXIMIZE"),
+    # Identical rows are one class: two copies on the left, two on the right, and both.
+    "duplicate_left": _case(
+        f"MINIMIZE SUM({SQUARED} * x)", _squared, left=[(1, 5.0), (1, 5.0), (2, 9.0)], right=[(7, 6.0), (8, 1.0)]
+    ),
+    "duplicate_right": _case(
+        f"MINIMIZE SUM({SQUARED} * x)", _squared, left=[(1, 5.0), (2, 9.0)], right=[(7, 6.0), (7, 6.0), (8, 1.0)]
+    ),
+    "duplicate_both": _case(
+        f"MINIMIZE SUM({SQUARED} * x)",
+        _squared,
+        left=[(1, 5.0), (1, 5.0), (2, 9.0)],
+        right=[(7, 6.0), (8, 1.0), (8, 1.0), (8, 1.0)],
+    ),
+    # A NULL in a class column is a value of the class, so two NULL-keyed rows are one class.
+    "null_key_class": _case(
+        f"MINIMIZE SUM({SQUARED} * x)",
+        _squared,
+        left=[(None, 5.0), (None, 5.0), (1, 2.0)],
+        right=[(7, 3.0), (8, 6.0)],
+    ),
+    # Different classes at the same position: the ranks of tied rows are arbitrary, the cost is not.
+    "tied_positions": _case(
+        f"MINIMIZE SUM({ABS} * x)", _abs, left=[(1, 3.0), (2, 3.0), (3, 8.0)], right=[(7, 3.0), (8, 5.0), (9, 5.0)]
+    ),
+    # Ranked by value, not by size: -5 comes before -1, and the product is least when the ranks run opposite.
+    "negative_positions": _case(
+        f"MINIMIZE SUM({PRODUCT} * x)",
+        _product,
+        left=[(1, -5.0), (2, -1.0), (3, 2.0)],
+        right=[(7, -4.0), (8, -3.0), (9, 6.0)],
+    ),
+    "integer_positions": _case(
+        f"MINIMIZE SUM({ABS} * x)", _abs, left=[(1, 9), (2, 3), (3, 5)], right=[(7, 4), (8, 8), (9, 1)], integer=True
+    ),
+    # A WHERE on one side leaves that side's remaining rows complete against the other.
+    "where_left": _case(
+        f"MINIMIZE SUM({SQUARED} * x)",
+        _squared,
+        left=[(1, 10.0), (2, -3.0), (3, 1.0), (4, 4.0)],
+        where="l.lpos > 0",
+        keep_left=lambda row: row[1] > 0,
+    ),
+    "where_right": _case(
+        f"MINIMIZE SUM({SQUARED} * x)",
+        _squared,
+        right=[(7, 6.0), (8, 11.0), (9, 2.0), (10, -8.0)],
+        where="r.rpos > 0",
+        keep_right=lambda row: row[1] > 0,
+    ),
+    # No complete assignment: three left classes against two right classes, and three rows against three whose
+    # classes are two against three.
+    "unequal_sizes": _case(f"MINIMIZE SUM({SQUARED} * x)", _squared, right=RIGHT[:2]),
+    "unequal_classes_equal_rows": _case(
+        f"MINIMIZE SUM({SQUARED} * x)", _squared, left=[(1, 5.0), (1, 5.0), (2, 9.0)], right=RIGHT
+    ),
+}
+
+
+def _side(alias, rows, position):
+    """One side as a derived table `alias(<alias>id, <alias>pos)`; with no rows, a typed empty select."""
+    types = ("INTEGER", position)
+    columns = f"{alias}({alias}id, {alias}pos)"
+    if not rows:
+        return f"(SELECT {', '.join(sql_literal(None, t) for t in types)} WHERE false) {columns}"
+    values = ", ".join("(" + ", ".join(sql_literal(v, t) for v, t in zip(row, types)) + ")" for row in rows)
+    return f"(VALUES {values}) {columns}"
+
+
+def _sql(case, wrap="plain"):
+    position = "INTEGER" if case.get("integer") else "DOUBLE"
+    where = f"WHERE {case['where']}" if "where" in case else ""
+    source = f"FROM {_side('l', case['left'], position)} CROSS JOIN {_side('r', case['right'], position)} {where}"
+    decide = f"DECIDE x(BOOL) SUCH THAT {PER_SIDE} {case['objective']}"
+    select = "SELECT lid, lpos, rid, rpos, x"
+    if wrap == "plain":
+        return f"{select} FROM ({source} {decide}) q"
+    if wrap == "parent_join":
+        return f"{select} FROM ({source} {decide}) q JOIN (VALUES (1), (2), (3), (4)) k(lid) USING (lid)"
+    if wrap == "recombined_filters":
+        # The parent filters the result two complementary ways and unions them. A filter on the DECIDE input would
+        # solve a smaller problem on each side and break the assignment, and a filter on a column the DECIDE passes
+        # through is pushed there unless the DECIDE is a materialized CTE.
+        return (
+            f"WITH solved AS MATERIALIZED ({source} {decide}) "
+            f"{select} FROM solved WHERE lid < 2 UNION ALL {select} FROM solved WHERE lid >= 2"
+        )
+    raise ValueError(wrap)
+
+
+def _kept(case):
+    left = [row for row in case["left"] if case.get("keep_left", lambda row: True)(row)]
+    right = [row for row in case["right"] if case.get("keep_right", lambda row: True)(row)]
+    return left, right
+
+
+def _oracle_model(oracle_solver, case):
+    """One binary variable for each pair row, one equality for each distinct row of each side."""
+    left, right = _kept(case)
+    oracle_solver.create_model("direct_o1_monge_assignment")
+    pairs = {(i, j): f"x_{i}_{j}" for i in range(len(left)) for j in range(len(right))}
+    for name in pairs.values():
+        oracle_solver.add_variable(name, VarType.BINARY)
+    for distinct in set(left):
+        oracle_solver.add_constraint({n: 1.0 for (i, _), n in pairs.items() if left[i] == distinct}, "=", 1.0)
+    for distinct in set(right):
+        oracle_solver.add_constraint({n: 1.0 for (_, j), n in pairs.items() if right[j] == distinct}, "=", 1.0)
+    sense = ObjSense.MAXIMIZE if case["sense"] == "MAXIMIZE" else ObjSense.MINIMIZE
+    oracle_solver.set_objective(
+        {name: float(case["cost"](left[i][1], right[j][1])) for (i, j), name in pairs.items()}, sense
+    )
+    return oracle_solver.solve()
+
+
+def _check_assignment(case, oracle, rows, columns, mode):
+    """The rows are the whole pair set, each class has one selected pair, and the cost is the oracle's."""
+    left, right = _kept(case)
+    assert columns == ["lid", "lpos", "rid", "rpos", "x"], mode
+    assert Counter(tuple(row[:4]) for row in rows) == Counter(l + r for l in left for r in right), mode
+    assert all(type(row[4]) is int and row[4] in (0, 1) for row in rows), mode
+    for classes, part in ((left, slice(0, 2)), (right, slice(2, 4))):
+        for distinct in set(classes):
+            selected = sum(row[4] for row in rows if tuple(row[part]) == distinct)
+            assert selected == 1, (mode, distinct, selected)
+    cost = sum(case["cost"](row[1], row[3]) * row[4] for row in rows)
+    assert cost == pytest.approx(oracle.objective_value, abs=1e-6), (mode, cost, oracle.objective_value)
+
+
+def _agree(decidb_cli, oracle_solver, name, wrap="plain"):
+    case = ORACLE_CASES[name]
+    oracle = _oracle_model(oracle_solver, case)
+    agree_with_oracle(
+        decidb_cli,
+        _sql(case, wrap=wrap),
+        oracle,
+        lambda rows, columns, mode: _check_assignment(case, oracle, rows, columns, mode),
+    )
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(ORACLE_CASES))
+def test_o1_monge_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name):
+    _agree(decidb_cli, oracle_solver, name)
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.sql_subquery
+@pytest.mark.correctness
+@pytest.mark.parametrize("wrap", ["parent_join", "recombined_filters"])
+def test_o1_monge_agrees_inside_a_parent_context(decidb_cli, oracle_solver, wrap):
+    _agree(decidb_cli, oracle_solver, "squared_min", wrap)
+
+
+@pytest.mark.var_boolean
+@pytest.mark.correctness
+@pytest.mark.parametrize("empty", ["left", "right"])
+def test_o1_monge_an_empty_side_gives_an_empty_result_not_an_infeasible_error(decidb_cli, empty):
+    # The other side has rows, so the class counts differ; the cross product has no pair rows and the solver answers it.
+    case = _case(f"MINIMIZE SUM({SQUARED} * x)", _squared, **{empty: []})
+    sql = _sql(case)
+    for mode in ("off", "require"):
+        assert run(decidb_cli, sql, mode)[0] == [], mode
+
+
+@pytest.mark.var_boolean
+@pytest.mark.correctness
+def test_o1_monge_a_filter_across_both_sides_keeps_the_solver(decidb_cli):
+    # `l.lpos < r.rpos` makes a join, and the join misses the pair (2, 7): the rule has no complete cross product. The
+    # solver still answers it, and `auto` runs the solver.
+    case = _case(
+        f"MINIMIZE SUM({SQUARED} * x)",
+        _squared,
+        left=[(1, 1.0), (2, 4.0)],
+        right=[(7, 2.0), (8, 6.0)],
+        where="l.lpos < r.rpos",
+    )
+    sql = _sql(case)
+    refused = outcome(decidb_cli, sql, "require")
+    assert refused == ("error", "direct_not_applied"), refused
+    solver = outcome(decidb_cli, sql, "off")
+    assert solver[0] == "ok" and len(solver[1]) == 3, solver
+    assert outcome(decidb_cli, sql, "auto") == solver
+
+
+# NaN is an error on both paths and the same error. (A NULL position is not: the solver leaves a NULL term out of the
+# objective and answers, so it has no row in this table.)
+ERROR_CASES = {
+    "nan_left_abs": _case(f"MINIMIZE SUM({ABS} * x)", _abs, left=[(1, NAN), (2, 1.0), (3, 4.0)]),
+    "nan_right_squared": _case(f"MINIMIZE SUM({SQUARED} * x)", _squared, right=[(7, 6.0), (8, NAN), (9, 2.0)]),
+    "nan_left_product": _case(
+        f"MAXIMIZE SUM({PRODUCT} * x)", _product, "MAXIMIZE", left=[(1, 10.0), (2, NAN), (3, 4.0)]
+    ),
+}
+
+
+@pytest.mark.var_boolean
+@pytest.mark.error
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(ERROR_CASES))
+def test_o1_monge_error_cases_fail_on_both_paths(decidb_cli, name):
+    sql = _sql(ERROR_CASES[name])
+    assert outcome(decidb_cli, sql, "off") == ("error", "invalid_value")
+    assert outcome(decidb_cli, sql, "require") == ("error", "invalid_value")

@@ -617,7 +617,23 @@ def test_r1_infeasible_and_unbounded_errors_are_the_solvers_error_word_for_word(
     assert direct == solver
 
 
-_N1_ROWS = "(1, 3.0::DOUBLE, 1.0::DOUBLE, 9.0::DOUBLE, 'a'), (2, {s}::DOUBLE, {y}::DOUBLE, {l}::DOUBLE, {k})"
+@pytest.mark.correctness
+def test_o1_monge_infeasible_error_is_the_solvers_error_word_for_word(decidb_cli):
+    # Three left classes against two right classes: no assignment gives each class a pair. The error has no row
+    # position, so one function builds its text for both paths.
+    sql = """
+        SELECT lid, rid, x FROM (
+            FROM (VALUES (1, 1.0), (2, 4.0), (3, 10.0)) l(lid, lpos) CROSS JOIN (VALUES (7, 2.0), (8, 6.0)) r(rid, rpos)
+            DECIDE x(BOOL) SUCH THAT per l: SUM(x) by (l) = 1 AND per r: SUM(x) by (r) = 1
+            MINIMIZE SUM(POWER(l.lpos - r.rpos, 2) * x)
+        ) q
+    """
+    direct = _raw(decidb_cli, sql, mode="require").stderr
+    assert "infeasible" in direct, direct
+    assert direct == _raw(decidb_cli, sql, mode="off").stderr
+
+
+_N1_ROWS ="(1, 3.0::DOUBLE, 1.0::DOUBLE, 9.0::DOUBLE, 'a'), (2, {s}::DOUBLE, {y}::DOUBLE, {l}::DOUBLE, {k})"
 _N1_MAX = "SUM(POWER(x, 2)) <= l MAXIMIZE SUM(s * x)"
 
 

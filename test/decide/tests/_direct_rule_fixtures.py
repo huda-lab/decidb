@@ -478,7 +478,86 @@ A2 = RuleFixture(
 )
 
 
-RULE_FIXTURES = (S1, A1, R1, N1, A2)
+_O1_PER_SIDE = "per l: SUM(x) by (l) = 1 AND per r: SUM(x) by (r) = 1"
+_O1_SQUARED = "MINIMIZE SUM(POWER(l.lpos - r.rpos, 2) * x)"
+
+
+def _o1_late_error(left_position):
+    """Two sides of 2,000 classes (4,000,000 pairs) whose last left row is invalid. Rows 0 to 1998 are ordinary."""
+    return f"""
+        FROM (SELECT i, {left_position} AS lpos FROM range(2000) t(i)) l
+        CROSS JOIN (SELECT i AS rid, i::DOUBLE AS rpos FROM range(2000) t(i)) r
+        DECIDE x(BOOL) SUCH THAT {_O1_PER_SIDE}
+        {_O1_SQUARED}
+        """
+
+
+O1 = RuleFixture(
+    rule="O1_MONGE_ASSIGNMENT",
+    condition=(
+        "x in {0,1}, SUM(x) = 1 per left and per right class, "
+        "min SUM(ABS(a - b)*x) or SUM((a - b)^2*x), min/max SUM(a*b*x)"
+    ),
+    # The worked example of the rule's definition with the rows out of order: ranks pair 1-2, 4-6 and 10-11. The optimum
+    # is unique, so the rows equal the solver's exactly and the query also runs on forced HiGHS.
+    applies=f"""
+        SELECT lid, lpos, rid, rpos, x FROM (
+            FROM (VALUES (1, 10.0::DOUBLE), (2, 1.0::DOUBLE), (3, 4.0::DOUBLE)) l(lid, lpos)
+            CROSS JOIN (VALUES (7, 6.0::DOUBLE), (8, 11.0::DOUBLE), (9, 2.0::DOUBLE)) r(rid, rpos)
+            DECIDE x(BOOL) SUCH THAT {_O1_PER_SIDE}
+            {_O1_SQUARED}
+        ) q ORDER BY lid, rid
+    """,
+    empty_applies=f"""
+        SELECT lid, lpos, rid, rpos, x FROM (
+            FROM (VALUES (1, 10.0::DOUBLE), (2, 1.0::DOUBLE)) l(lid, lpos)
+            CROSS JOIN (SELECT * FROM (VALUES (7, 6.0::DOUBLE), (8, 11.0::DOUBLE)) t(rid, rpos) WHERE false) r
+            DECIDE x(BOOL) SUCH THAT {_O1_PER_SIDE}
+            {_O1_SQUARED}
+        ) q ORDER BY lid, rid
+    """,
+    table_setup="""
+        CREATE TEMP TABLE direct_o1_left(lid INTEGER, lpos DOUBLE);
+        CREATE TEMP TABLE direct_o1_right(rid INTEGER, rpos DOUBLE);
+        INSERT INTO direct_o1_left VALUES (1,1),(2,4);
+        INSERT INTO direct_o1_right VALUES (7,2),(8,6);
+    """,
+    table_applies=f"""
+        SELECT lid, rid, x FROM (
+            FROM direct_o1_left l CROSS JOIN direct_o1_right r
+            DECIDE x(BOOL) SUCH THAT {_O1_PER_SIDE}
+            {_O1_SQUARED}
+        ) q
+    """,
+    table_change="ALTER TABLE direct_o1_left ADD COLUMN extra INTEGER;",
+    # Each is the plain form with one condition changed: a key that is a column, a position that is computed, a third
+    # constraint, and a `when` in a constraint and on the objective. A filter across both sides (a join, not a cross
+    # product) needs a source of its own, so it is `test_direct_o1_monge_assignment.py`'s.
+    near_misses=(
+        ("x(BOOL)", "per l.lid: SUM(x) by (l.lid) = 1 AND per r: SUM(x) by (r) = 1", _O1_SQUARED),
+        ("x(BOOL)", _O1_PER_SIDE, "MINIMIZE SUM(POWER(l.lpos * 2 - r.rpos, 2) * x)"),
+        ("x(BOOL)", f"{_O1_PER_SIDE} AND SUM(x) <= 3", _O1_SQUARED),
+        ("x(BOOL)", "per l: SUM(when l.lpos > 0: x) by (l) = 1 AND per r: SUM(x) by (r) = 1", _O1_SQUARED),
+        ("x(BOOL)", _O1_PER_SIDE, "MINIMIZE when l.lpos > 0: SUM(POWER(l.lpos - r.rpos, 2) * x)"),
+    ),
+    # Forms that look like near misses and apply: the difference the other way round and a constant factor. A one-side
+    # `WHERE` is in the oracle suite for the same reason as the cross-side filter.
+    near_miss_applies=(
+        ("x(BOOL)", _O1_PER_SIDE, "MINIMIZE SUM(POWER(r.rpos - l.lpos, 2) * x)"),
+        ("x(BOOL)", _O1_PER_SIDE, "MINIMIZE 2 * SUM(ABS(l.lpos - r.rpos) * x)"),
+    ),
+    near_miss_source="FROM (VALUES (1, 1.0::DOUBLE), (2, 4.0::DOUBLE), (3, 10.0::DOUBLE)) l(lid, lpos) "
+    "CROSS JOIN (VALUES (7, 2.0::DOUBLE), (8, 6.0::DOUBLE), (9, 11.0::DOUBLE)) r(rid, rpos)",
+    near_miss_column="lid",
+    late_errors=(
+        # A NaN position on the last left row raises on every pair that row is in.
+        (_o1_late_error("CASE WHEN i=1999 THEN 'NaN'::DOUBLE ELSE i::DOUBLE END"), "is NaN or infinite on some rows"),
+    ),
+    late_column="i",
+)
+
+
+RULE_FIXTURES = (S1, A1, R1, N1, A2, O1)
 
 
 # Bounds S1 applies that the oracle checks, as (constraint, the bound's value over the source
