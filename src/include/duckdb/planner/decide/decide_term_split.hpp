@@ -77,9 +77,11 @@ inline bool DecideSplitTerm::IsProduct() const {
 
 //! Bind `name` for exactly these children through FunctionBinder. Rebuilding a bound function by reusing another
 //! node's signature over different children silently reinterprets their physical types; this is the only rebuild
-//! that stays correct, and every rebuilt coefficient goes through it.
+//! that stays correct, and every rebuilt coefficient goes through it. `name` is a function's primary name (`**`, `@`);
+//! `written_name` is what a plan prints for it (`power`, `abs`), empty for the primary itself.
 unique_ptr<Expression> DecideRebindOperator(ClientContext &context, const string &name,
-                                            vector<unique_ptr<Expression>> children);
+                                            vector<unique_ptr<Expression>> children,
+                                            const string &written_name = string());
 
 //! The coefficient of two like terms summed into one: `sign_first * (first ± next)`, taking `-` exactly when the terms'
 //! signs differ. The solver's like-term collection and the direct-solve plans both build their merged coefficient here,

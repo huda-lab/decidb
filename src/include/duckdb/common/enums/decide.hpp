@@ -417,6 +417,28 @@ static constexpr const char *NORM_MARKER_TAG_PREFIX = "__decide_norm_";
 //! prefix must not contain NORM_MARKER_TAG_PREFIX.
 static constexpr const char *WRITTEN_NORM_TAG_PREFIX = "__written_norm_";
 
+//! On a call whose name was rewritten to its primary's: `abs` for `@`, `pow`, `power` and `^` for `**`, `mean` for
+//! `avg`. DuckDB registers each alias with its primary's implementation, so the binder renames every such call in a
+//! DECIDE clause's algebra (RespellDecideAliases) and every check matches the primary alone. The tag holds the name
+//! the user wrote, which a plan and a message print. Display only: two calls that differ in it are equal.
+static constexpr const char *WRITTEN_NAME_TAG_PREFIX = "__written_name_";
+
+//! The name a call was written under, from its tags, else `name`.
+inline string DecideWrittenName(const string &tags, const string &name) {
+	string written;
+	return ExtractDecideTagPayload(tags, WRITTEN_NAME_TAG_PREFIX, written) ? written : name;
+}
+
+//! The tags without the written-name tag, for comparing structure.
+inline string WithoutWrittenName(const string &tags) {
+	string written;
+	string result = tags;
+	if (ExtractDecideTagPayload(tags, WRITTEN_NAME_TAG_PREFIX, written)) {
+		RemoveDecideTag(result, string(WRITTEN_NAME_TAG_PREFIX) + written + "__");
+	}
+	return result;
+}
+
 //! Semantic provenance stamped on the flattened value produced by an UNCORRELATED
 //! scalar subquery. Shape alone cannot distinguish that query-wide column ref from
 //! ordinary row data after PlanSubqueries.

@@ -1,5 +1,7 @@
 #include "duckdb/planner/expression_binder/decide/decide_declarations_binder.hpp"
 
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/catalog/catalog_entry/function_entry.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
@@ -68,6 +70,34 @@ static void RefuseQualifiedDecisionReferences(const ParsedExpression &expr, Bind
 	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
 		RefuseQualifiedDecisionReferences(child, bind_context, variables, data_position);
 	});
+}
+
+//! One spelling per function. DuckDB registers some functions under several names (`pow`, `power` and `^` for `**`;
+//! `abs` for `@`; `add`, `subtract` and `multiply` for `+`, `-` and `*`; `mean` for `avg`), each with its primary's
+//! implementation. Every call of the clause's algebra whose name resolves, as the binder resolves it, to such an
+//! alias is renamed to its primary, so every check from here on matches one name per function. The call keeps the
+//! name it was written under as a display tag (WRITTEN_NAME_TAG_PREFIX), which plans and messages read. A `when`
+//! condition and a `by` key are respelled too; a subquery is left as written.
+static void RespellDecideAliases(ClientContext &context, ParsedExpression &expr) {
+	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
+		ParsedExpressionIterator::EnumerateChildren(
+		    expr, [&](ParsedExpression &child) { RespellDecideAliases(context, child); });
+		return;
+	}
+	auto &func = expr.Cast<FunctionExpression>();
+	auto entry = Catalog::GetEntry(context, CatalogType::SCALAR_FUNCTION_ENTRY, func.catalog, func.schema,
+	                               func.function_name, OnEntryNotFound::RETURN_NULL);
+	if (entry &&
+	    (entry->type == CatalogType::SCALAR_FUNCTION_ENTRY || entry->type == CatalogType::AGGREGATE_FUNCTION_ENTRY)) {
+		auto &function = entry->Cast<FunctionEntry>();
+		if (!function.primary_name.empty()) {
+			AddDecideTag(func.alias, string(WRITTEN_NAME_TAG_PREFIX) + function.name + "__");
+			func.function_name = function.primary_name;
+		}
+	}
+	for (auto &child : func.children) {
+		RespellDecideAliases(context, *child);
+	}
 }
 
 //! One declaration `[per K:] name(TYPE)` as the parser leaves it: the comparison
@@ -185,6 +215,14 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 		                    : type_marker == "bool_variable" ? LogicalType::INTEGER
 		                                                     : LogicalType::BIGINT);
 		is_boolean_var.push_back(type_marker == "bool_variable");
+	}
+
+	// One spelling per function, before any check below reads a name.
+	if (statement.decide_constraints) {
+		RespellDecideAliases(context, *statement.decide_constraints);
+	}
+	if (statement.decide_objective) {
+		RespellDecideAliases(context, *statement.decide_objective);
 	}
 
 	// A decision is referenced by its bare name, wherever the query names it.

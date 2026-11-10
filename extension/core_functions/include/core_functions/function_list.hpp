@@ -26,6 +26,8 @@ struct StaticFunctionDefinition {
 	get_scalar_function_set_t get_function_set;
 	get_aggregate_function_t get_aggregate_function;
 	get_aggregate_function_set_t get_aggregate_function_set;
+	//! The name this function is an alias of (the primary it is registered with), or null when it is a primary.
+	const char *primary;
 
 	static const StaticFunctionDefinition *GetFunctionList();
 };

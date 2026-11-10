@@ -22,10 +22,11 @@ void DecideShapeCheck::Refuse(const Expression &term, const string &problem, con
 	throw InvalidInputException(term, "%s In %s.", problem, clause);
 }
 
-//! An operator as SQL writes it: `COALESCE`, `IS NULL`, `%`.
+//! An operator as SQL writes it: `COALESCE`, `IS NULL`, `%`; a function as the user wrote it (`mod` for `%`).
 static string OperatorName(const Expression &expr) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-		return expr.Cast<BoundFunctionExpression>().function.name;
+		auto &func = expr.Cast<BoundFunctionExpression>();
+		return DecideWrittenName(func.GetAlias(), func.function.name);
 	}
 	auto name = EnumUtil::ToString(expr.type).substr(strlen("OPERATOR_"));
 	return StringUtil::Replace(name, "_", " ");
@@ -63,7 +64,7 @@ void DecideShapeCheck::CheckVocabulary(const Expression &expr, const string &cla
 		       clause);
 	case ExpressionClass::BOUND_FUNCTION: {
 		auto &func = expr.Cast<BoundFunctionExpression>();
-		auto name = StringUtil::Lower(func.function.name);
+		auto &name = func.function.name;
 		idx_t exponent;
 		if (IsDecidePowerCall(func)) {
 			if (!TryGetDecideWholeExponent(context, *func.children[1], exponent)) {
@@ -77,12 +78,11 @@ void DecideShapeCheck::CheckVocabulary(const Expression &expr, const string &cla
 			if (BoundExpressionReferencesDecide(*func.children[1], decide_index)) {
 				Refuse(expr, "DECIDE: cannot divide by a DECIDE variable.", clause);
 			}
-		} else if (name != "+" && name != "-" && name != "*" && name != "abs") {
+		} else if (name != "+" && name != "-" && name != "*" && name != "@") {
 			// The vocabulary of the model.
 			Refuse(expr,
 			       StringUtil::Format("DECIDE: %s '%s' cannot take a DECIDE variable.",
-			                          func.is_operator ? "operator" : "function",
-			                          func.is_operator ? OperatorName(expr) : func.function.name),
+			                          func.is_operator ? "operator" : "function", OperatorName(expr)),
 			       clause);
 		}
 		break;

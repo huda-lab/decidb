@@ -70,13 +70,13 @@ BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpress
 		return BindResult(BinderException::Unsupported(
 		    outer, StringUtil::Format("DECIDE: when inside the outer reducer of %s(per %s: ...) is not supported "
 		                              "yet; write it in front of the objective",
-		                              StringUtil::Lower(outer.function_name), DecideKeyToString(per))));
+		                              StringUtil::Lower(DecideWrittenFunctionName(outer)), DecideKeyToString(per))));
 	}
 	auto &inner_by = per.children[0]->Cast<FunctionExpression>();
 	auto &inner = inner_by.children[0]->Cast<FunctionExpression>();
-	auto form =
-	    StringUtil::Format("%s(per %s: %s(...) by (%s))", StringUtil::Lower(outer.function_name),
-	                       DecideKeyToString(per), StringUtil::Lower(inner.function_name), DecideKeyToString(inner_by));
+	auto form = StringUtil::Format("%s(per %s: %s(...) by (%s))", StringUtil::Lower(DecideWrittenFunctionName(outer)),
+	                               DecideKeyToString(per), StringUtil::Lower(DecideWrittenFunctionName(inner)),
+	                               DecideKeyToString(inner_by));
 	if (StringUtil::Lower(outer.function_name) == "avg") {
 		// The nested objective it would bind onto treats an outer AVG as a SUM, which is
 		// not an average over the classes; language/guide.md §4 admits sum, min and max
@@ -239,10 +239,11 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
 		return DecideExpression::SUM;
 	}
 	if (ContainsDecideAggregate(expr)) {
-		error_msg = StringUtil::Format("[MAXIMIZE|MINIMIZE] does not support wrapping an aggregate in '%s'. "
-		                               "The aggregate must be the outermost function. "
-		                               "For quadratic objectives use SUM(POWER(expr, 2)), not %s(AGG(expr), ...).",
-		                               func.function_name, StringUtil::Upper(func.function_name));
+		error_msg =
+		    StringUtil::Format("[MAXIMIZE|MINIMIZE] does not support wrapping an aggregate in '%s'. "
+		                       "The aggregate must be the outermost function. "
+		                       "For quadratic objectives use SUM(POWER(expr, 2)), not %s(AGG(expr), ...).",
+		                       DecideWrittenFunctionName(func), StringUtil::Upper(DecideWrittenFunctionName(func)));
 		return DecideExpression::INVALID;
 	}
 	error_msg = StringUtil::Format(

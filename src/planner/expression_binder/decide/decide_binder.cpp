@@ -258,7 +258,7 @@ static void ValidateScopePlacement(const ParsedExpression &expr, ScopePlacement 
 	    !(placement.scales_a_decision && !ExpressionContainsDecideVariable(expr, placement.variables))) {
 		throw BinderException(expr, "DECIDE: an aggregate inside an aggregate is not supported yet");
 	}
-	if (func.is_operator && (func.function_name == "*" || func.function_name == "/") &&
+	if ((func.function_name == "*" || func.function_name == "/") &&
 	    ExpressionContainsDecideVariable(expr, placement.variables)) {
 		placement.scales_a_decision = true;
 	}
@@ -641,7 +641,7 @@ void ValidateDecideNoDataAggregateFactor(ClientContext &context, const ParsedExp
                                          const case_insensitive_map_t<idx_t> &variables) {
 	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
 		auto &func = expr.Cast<const FunctionExpression>();
-		if (func.is_operator && func.function_name == "*" && ExpressionContainsDecideVariable(expr, variables) &&
+		if (func.function_name == "*" && ExpressionContainsDecideVariable(expr, variables) &&
 		    ContainsDataOnlyAggregate(context, expr, variables)) {
 			// A data-only aggregate multiplied by a decision variable
 			// (`SUM(avg(p) * x)`) is not a per-row coefficient: the aggregate
@@ -656,7 +656,7 @@ void ValidateDecideNoDataAggregateFactor(ClientContext &context, const ParsedExp
 		// A data-only aggregate stays on the bound side (S10). Like the multiplier
 		// above, it may not share a scaled term with a decision: as the divisor, or
 		// inside the dividend (`(sum(x) + sum(cap)) / 2`).
-		if (func.is_operator && func.function_name == "/" && ExpressionContainsDecideVariable(expr, variables) &&
+		if (func.function_name == "/" && ExpressionContainsDecideVariable(expr, variables) &&
 		    ContainsDataOnlyAggregate(context, expr, variables)) {
 			throw BinderException("An aggregate over table columns (e.g. AVG(col), MIN(col)) cannot %s a decision "
 			                      "variable. Pre-compute it as a scalar in a subquery or CTE and reference that value.",
@@ -1009,7 +1009,7 @@ static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoi
 		// declared return type is the wrong thing to read here for the same reason it is
 		// wrong for an L0 count. A fractional or negative exponent is not a polynomial
 		// degree at all and DecideShapeCheck refuses it, so it need not be answered here.
-		if (name == "pow" || name == "power" || name == "**" || name == "^") {
+		if (name == "**") {
 			double exp_val;
 			if (TryGetConstantExponent(*func.children[1], exp_val) && exp_val >= 0.0 &&
 			    exp_val == std::floor(exp_val)) {
@@ -1118,7 +1118,8 @@ void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t deci
 }
 
 string DecideWrittenFunctionName(const FunctionExpression &func) {
-	return StringUtil::CIEquals(func.function_name, "count_star") ? "count(*)" : func.function_name;
+	return StringUtil::CIEquals(func.function_name, "count_star") ? "count(*)"
+	                                                              : DecideWrittenName(func.alias, func.function_name);
 }
 
 //! A reducer's argument, read for what only the binder can see: a nested reducer that reads no decision, a
@@ -1139,7 +1140,7 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 		if (func.is_operator) {
 			break;
 		}
-		if (func_name_lower == "abs" && func.children.size() != 1) {
+		if (func_name_lower == "@" && func.children.size() != 1) {
 			error_msg = "ABS requires exactly one argument";
 			return false;
 		}
@@ -1151,7 +1152,7 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 				return true;
 			}
 			error_msg = StringUtil::Format("Nested %s() inside DECIDE expression must reference a DECIDE variable",
-			                               StringUtil::Upper(func_name_lower));
+			                               StringUtil::Upper(DecideWrittenFunctionName(func)));
 			return false;
 		}
 		break;
@@ -1299,7 +1300,8 @@ bool DecideBinder::ClassifyReducerCall(FunctionExpression &func, DecideExpressio
 	if (IsDecideAggregateName(fname)) {
 		// A reducer takes one argument: MAX(x, n) and MIN(x, n) are DuckDB's top-n aggregates, which return a list.
 		if (func.children.size() != 1) {
-			error_msg = StringUtil::Format("%s needs one argument, found '%s'", StringUtil::Upper(fname),
+			error_msg = StringUtil::Format("%s needs one argument, found '%s'",
+			                               StringUtil::Upper(DecideWrittenFunctionName(func)),
 			                               DecideWrittenSql(func, qualifier_context->source_text));
 			result = DecideExpression::INVALID;
 			return true;
@@ -1309,9 +1311,10 @@ bool DecideBinder::ClassifyReducerCall(FunctionExpression &func, DecideExpressio
 		auto &body = const_cast<ParsedExpression &>(ReducerArgumentBody(*func.children.front()));
 		if (ExpressionContainsDecideVariable(body, variables) && IsRowInvariantExpression(body)) {
 			auto body_text = DecideWrittenSql(body, qualifier_context->source_text);
-			error_msg = StringUtil::Format("%s is a query-wide decision, so %s(%s) has nothing to aggregate over; "
-			                               "use %s on its own",
-			                               body_text, StringUtil::Upper(fname), body_text, body_text);
+			error_msg =
+			    StringUtil::Format("%s is a query-wide decision, so %s(%s) has nothing to aggregate over; "
+			                       "use %s on its own",
+			                       body_text, StringUtil::Upper(DecideWrittenFunctionName(func)), body_text, body_text);
 			result = DecideExpression::INVALID;
 		} else if (!ValidateSumArgument(body, variables, qualifier_context->source_text, error_msg)) {
 			error_msg += ", found '" + DecideWrittenSql(func, qualifier_context->source_text) + "'";
@@ -1335,7 +1338,7 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 		return BindResult(BinderException::Unsupported(
 		    aggr, StringUtil::Format(
 		              "DECIDE clause does not support aggregate '%s', only SUM, AVG, MIN, MAX, or COUNT is allowed.",
-		              func.name)));
+		              DecideWrittenFunctionName(aggr))));
 	}
 
 	// COUNT over a DECIDE variable is degenerate: decision variables are never null, so
@@ -1368,6 +1371,14 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 			return result;
 		}
 		auto &bound_child = result.expression;
+		// BindExpression, unlike Bind, leaves the parsed call's tags behind: the name it was written under is kept.
+		if (HasDecideTag(child_expr->GetAlias(), WRITTEN_NAME_TAG_PREFIX) &&
+		    !HasDecideTag(bound_child->GetAlias(), WRITTEN_NAME_TAG_PREFIX)) {
+			auto tags = bound_child->GetAlias();
+			AddDecideTag(tags,
+			             string(WRITTEN_NAME_TAG_PREFIX) + DecideWrittenName(child_expr->GetAlias(), string()) + "__");
+			bound_child->SetAlias(std::move(tags));
+		}
 		child_types.push_back(bound_child->return_type);
 		children.push_back(std::move(bound_child));
 	}

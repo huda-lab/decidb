@@ -1,5 +1,6 @@
 #include "duckdb/parser/base_expression.hpp"
 
+#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/common/printer.hpp"
 
@@ -15,7 +16,9 @@ string BaseExpression::GetName() const {
 		return ToString();
 	}
 #endif
-	return !alias.empty() ? alias : ToString();
+	// DECIDE tags ride in the alias and are never part of a name.
+	auto name = StripDecideTags(alias);
+	return !name.empty() ? name : ToString();
 }
 
 bool BaseExpression::Equals(const BaseExpression &other) const {

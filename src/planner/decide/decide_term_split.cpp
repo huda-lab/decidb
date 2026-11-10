@@ -1,5 +1,6 @@
 #include "duckdb/planner/decide/decide_term_split.hpp"
 
+#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
@@ -26,12 +27,17 @@ namespace duckdb {
 //! computes the matching return type and bind data, and inserts whatever casts the
 //! signature needs.
 unique_ptr<Expression> DecideRebindOperator(ClientContext &context, const string &name,
-                                            vector<unique_ptr<Expression>> children) {
+                                            vector<unique_ptr<Expression>> children, const string &written_name) {
 	FunctionBinder function_binder(context);
 	ErrorData error;
 	auto result = function_binder.BindScalarFunction(DEFAULT_SCHEMA, name, std::move(children), error);
 	if (error.HasError()) {
 		throw InternalException("DECIDE failed to bind '%s': %s", name, error.Message());
+	}
+	if (!written_name.empty()) {
+		auto tags = result->GetAlias();
+		AddDecideTag(tags, string(WRITTEN_NAME_TAG_PREFIX) + written_name + "__");
+		result->SetAlias(std::move(tags));
 	}
 	return result;
 }
@@ -58,7 +64,7 @@ static unique_ptr<Expression> RebindMultiply(ClientContext &context, unique_ptr<
 
 static bool IsAbsFunction(const Expression &expr) {
 	return expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
-	       StringUtil::Lower(expr.Cast<BoundFunctionExpression>().function.name) == "abs" &&
+	       expr.Cast<BoundFunctionExpression>().function.name == "@" &&
 	       expr.Cast<BoundFunctionExpression>().children.size() == 1;
 }
 

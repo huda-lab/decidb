@@ -487,9 +487,12 @@ private:
 	//! form is the bare term, which only a rebuild gives.
 	bool IsSignedSpine(const Expression &side, const vector<Atom> &atoms) const;
 
-	unique_ptr<Expression> BindOp(const string &name, unique_ptr<Expression> left, unique_ptr<Expression> right) const;
+	//! `written_name` is what a plan prints for a function with aliases (`power` for `**`), empty for its primary.
+	unique_ptr<Expression> BindOp(const string &name, unique_ptr<Expression> left, unique_ptr<Expression> right,
+	                              const string &written_name = string()) const;
 	//! Unary form, for the leading negative term of a rebuilt spine.
-	unique_ptr<Expression> BindOp(const string &name, unique_ptr<Expression> operand) const;
+	unique_ptr<Expression> BindOp(const string &name, unique_ptr<Expression> operand,
+	                              const string &written_name = string()) const;
 
 	ClientContext &context;
 	idx_t decide_index;

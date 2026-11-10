@@ -1,4 +1,5 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/catalog/catalog_entry/scalar_function_catalog_entry.hpp"
 #include "duckdb/common/types/hash.hpp"
@@ -50,8 +51,10 @@ bool BoundFunctionExpression::CanThrow() const {
 }
 
 string BoundFunctionExpression::ToString() const {
-	return FunctionExpression::ToString<BoundFunctionExpression, Expression>(*this, string(), string(), function.name,
-	                                                                         is_operator);
+	// A DECIDE clause's call under its primary's name prints as the user wrote it (decide.hpp,
+	// WRITTEN_NAME_TAG_PREFIX).
+	return FunctionExpression::ToString<BoundFunctionExpression, Expression>(
+	    *this, string(), string(), DecideWrittenName(alias, function.name), is_operator);
 }
 bool BoundFunctionExpression::PropagatesNullValues() const {
 	return function.null_handling == FunctionNullHandling::SPECIAL_HANDLING ? false

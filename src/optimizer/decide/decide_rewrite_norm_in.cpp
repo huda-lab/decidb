@@ -28,6 +28,7 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
@@ -115,7 +116,9 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		    add_link(make_mz(),
 		             optimizer.BindScalarFunction("-", make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0)),
 		                                          aggregate.children[0]->Copy()));
-		    add_link(optimizer.BindScalarFunction("abs", aggregate.children[0]->Copy()),
+		    vector<unique_ptr<Expression>> absolute_children;
+		    absolute_children.push_back(aggregate.children[0]->Copy());
+		    add_link(DecideRebindOperator(optimizer.context, "@", std::move(absolute_children), "abs"),
 		             optimizer.BindScalarFunction(
 		                 "*",
 		                 make_uniq<BoundConstantExpression>(Value::DOUBLE(GetDecideL0Tolerance(optimizer.context))),

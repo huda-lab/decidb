@@ -1,4 +1,5 @@
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 
 #include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
@@ -19,7 +20,8 @@ BoundAggregateExpression::BoundAggregateExpression(AggregateFunction function, v
 
 string BoundAggregateExpression::ToString() const {
 	return FunctionExpression::ToString<BoundAggregateExpression, Expression, BoundOrderModifier>(
-	    *this, string(), string(), function.name, false, IsDistinct(), filter.get(), order_bys.get());
+	    *this, string(), string(), DecideWrittenName(alias, function.name), false, IsDistinct(), filter.get(),
+	    order_bys.get());
 }
 
 hash_t BoundAggregateExpression::Hash() const {

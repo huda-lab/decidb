@@ -181,7 +181,8 @@ bool IsCheapLoneExtremum(ClientContext &context, BoundComparisonExpression &comp
 
 //! Copies of one reducer under one `when`: they share a helper.
 bool SameReducer(const BodySite &a, const BodySite &b) {
-	if (a.reducer->alias != b.reducer->alias || !a.reducer->Equals(*b.reducer)) {
+	if (WithoutWrittenName(a.reducer->alias) != WithoutWrittenName(b.reducer->alias) ||
+	    !a.reducer->Equals(*b.reducer)) {
 		return false;
 	}
 	auto a_when = a.scope.Condition();

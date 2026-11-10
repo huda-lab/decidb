@@ -479,7 +479,8 @@ static string UserFacingName(const Expression &expr) {
 		if (auto body = WrittenNormBody(agg, order)) {
 			return "NORM(" + UserFacingName(*body) + ", " + order + ")";
 		}
-		return StringUtil::Upper(agg.function.name) + "(" + UserFacingName(*agg.children[0]) + ")";
+		return StringUtil::Upper(DecideWrittenName(agg.GetAlias(), agg.function.name)) + "(" +
+		       UserFacingName(*agg.children[0]) + ")";
 	}
 	auto name = StripDecideTags(cur->GetName());
 	return name.empty() ? cur->ToString() : name;
@@ -829,14 +830,14 @@ void DecideCanonicalizer::DesugarNormsInPlace(unique_ptr<Expression> &expr) cons
 	auto &body = *marker.children[0];
 	unique_ptr<Expression> definition;
 	if (order == "2") {
-		definition = RebindReducer(marker, "sum",
-		                           BindOp("power", body.Copy(), make_uniq<BoundConstantExpression>(Value::INTEGER(2))));
+		definition = RebindReducer(
+		    marker, "sum", BindOp("**", body.Copy(), make_uniq<BoundConstantExpression>(Value::INTEGER(2)), "power"));
 	} else if (order == "1" || order == "inf") {
-		definition = RebindReducer(marker, order == "1" ? "sum" : "max", BindOp("abs", body.Copy()));
+		definition = RebindReducer(marker, order == "1" ? "sum" : "max", BindOp("@", body.Copy(), "abs"));
 	} else {
 		// An L0 norm of data counts the rows whose value is not 0; its `M` bounds a decision and means nothing here.
 		// SIGN reads a NaN as 0, so a value check reads the body (DecideWrittenNormBody), not this definition.
-		definition = RebindReducer(marker, "sum", BindOp("abs", BindOp("sign", body.Copy())));
+		definition = RebindReducer(marker, "sum", BindOp("@", BindOp("sign", body.Copy()), "abs"));
 	}
 	// A norm and its definition are one value (the order is in the alias, for a display).
 	DecideReplaces(*definition, marker);
@@ -974,17 +975,18 @@ bool DecideCanonicalizer::MergeLikeAtoms(vector<Atom> &atoms) const {
 }
 
 unique_ptr<Expression> DecideCanonicalizer::BindOp(const string &name, unique_ptr<Expression> left,
-                                                   unique_ptr<Expression> right) const {
+                                                   unique_ptr<Expression> right, const string &written_name) const {
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(left));
 	children.push_back(std::move(right));
-	return DecideRebindOperator(context, name, std::move(children));
+	return DecideRebindOperator(context, name, std::move(children), written_name);
 }
 
-unique_ptr<Expression> DecideCanonicalizer::BindOp(const string &name, unique_ptr<Expression> operand) const {
+unique_ptr<Expression> DecideCanonicalizer::BindOp(const string &name, unique_ptr<Expression> operand,
+                                                   const string &written_name) const {
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(operand));
-	return DecideRebindOperator(context, name, std::move(children));
+	return DecideRebindOperator(context, name, std::move(children), written_name);
 }
 
 unique_ptr<Expression> DecideCanonicalizer::BuildAdditive(const vector<Atom> &atoms) const {

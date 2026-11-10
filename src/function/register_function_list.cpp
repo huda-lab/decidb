@@ -11,6 +11,9 @@ template <class T>
 static void FillExtraInfo(const StaticFunctionDefinition &function, T &info) {
 	info.internal = true;
 	FillFunctionDescriptions(function, info);
+	if (function.primary) {
+		info.primary_name = function.primary;
+	}
 }
 
 static void RegisterFunctionList(Catalog &catalog, CatalogTransaction transaction,

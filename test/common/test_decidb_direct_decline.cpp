@@ -1230,6 +1230,11 @@ duckdb::vector<Shape> O1AppliesShapes() {
 	duckdb::vector<Shape> shapes;
 	shapes.push_back(O1Cost("plain form: the absolute distance of one position of each side", O1_OBJECTIVE));
 	shapes.push_back(O1Cost("a squared distance", "MINIMIZE SUM(POWER(l.position - r.rposition, 2) * x)"));
+	// One function under each name DuckDB registers for it.
+	shapes.push_back(O1Cost("a power written with **", "MINIMIZE SUM((l.position - r.rposition) ** 2 * x)"));
+	shapes.push_back(O1Cost("a power written with ^", "MINIMIZE SUM((l.position - r.rposition) ^ 2 * x)"));
+	shapes.push_back(O1Cost("a power written with pow", "MINIMIZE SUM(pow(l.position - r.rposition, 2) * x)"));
+	shapes.push_back(O1Cost("an absolute value written with @", "MINIMIZE SUM((@(l.position - r.rposition)) * x)"));
 	shapes.push_back(O1Cost("the right position first", "MINIMIZE SUM(ABS(r.rposition - l.position) * x)"));
 	shapes.push_back(O1("the right key first", "per r: SUM(x) by (r) = 1 AND per l: SUM(x) by (l) = 1"));
 	shapes.push_back(O1Cost("a factor before the cost", "MINIMIZE SUM(3 * ABS(l.position - r.rposition) * x)"));
@@ -1315,7 +1320,6 @@ duckdb::vector<Shape> O1DeclineShapes() {
 	    O1Cost("a difference of a sum and a column", "MINIMIZE SUM(ABS((l.position + 1) - r.rposition) * x)"));
 	shapes.push_back(O1Cost("a cube", "MINIMIZE SUM(POWER(l.position - r.rposition, 3) * x)"));
 	shapes.push_back(O1Cost("a square of a sum", "MINIMIZE SUM(POWER(l.position + r.rposition, 2) * x)"));
-	shapes.push_back(O1Cost("a power written with **", "MINIMIZE SUM((l.position - r.rposition) ** 2 * x)"));
 	shapes.push_back(O1Cost("a distance rounded", "MINIMIZE SUM(ROUND(ABS(l.position - r.rposition)) * x)"));
 	shapes.push_back(O1Cost("a distance cast to a whole number",
 	                        "MINIMIZE SUM(ABS(l.position - r.rposition)::INTEGER * x)",

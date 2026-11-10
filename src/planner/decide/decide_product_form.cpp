@@ -24,8 +24,7 @@ bool IsDecidePowerCall(const Expression &expr) {
 		return false;
 	}
 	auto &func = expr.Cast<BoundFunctionExpression>();
-	auto name = StringUtil::Lower(func.function.name);
-	return func.children.size() == 2 && (name == "pow" || name == "power" || name == "**" || name == "^");
+	return func.children.size() == 2 && func.function.name == "**";
 }
 
 bool TryGetDecideWholeExponent(ClientContext &context, const Expression &exponent, idx_t &out) {
@@ -73,7 +72,7 @@ DecideTermDegree DecideDegreeOf(ClientContext &context, const Expression &expr, 
 	}
 	auto &func = node.Cast<BoundFunctionExpression>();
 	auto name = StringUtil::Lower(func.function.name);
-	if (name == "+" || name == "-" || name == "abs") {
+	if (name == "+" || name == "-" || name == "@") {
 		for (auto &child : func.children) {
 			absorb(*child, false);
 		}
@@ -108,7 +107,7 @@ static bool DecisionAliasesEqual(const Expression &left, const Expression &right
 	if (!BoundExpressionReferencesDecide(left, decide_index)) {
 		return true;
 	}
-	if (left.GetAlias() != right.GetAlias()) {
+	if (WithoutWrittenName(left.GetAlias()) != WithoutWrittenName(right.GetAlias())) {
 		return false;
 	}
 	vector<const Expression *> left_children;
@@ -309,11 +308,11 @@ DecideProductForm ReadDecideProduct(ClientContext &context, const Expression &ex
 }
 
 static unique_ptr<Expression> Bind(ClientContext &context, const string &name, unique_ptr<Expression> left,
-                                   unique_ptr<Expression> right) {
+                                   unique_ptr<Expression> right, const string &written_name = string()) {
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(left));
 	children.push_back(std::move(right));
-	return DecideRebindOperator(context, name, std::move(children));
+	return DecideRebindOperator(context, name, std::move(children), written_name);
 }
 
 //! A factor as the spelling writes it: its base, or POWER of its base and the whole exponent as its number, however the
@@ -322,8 +321,8 @@ static unique_ptr<Expression> BuildFactor(ClientContext &context, const DecidePr
 	if (factor.power == 1) {
 		return factor.base->Copy();
 	}
-	return Bind(context, "power", factor.base->Copy(),
-	            make_uniq<BoundConstantExpression>(Value::INTEGER(static_cast<int32_t>(factor.power))));
+	return Bind(context, "**", factor.base->Copy(),
+	            make_uniq<BoundConstantExpression>(Value::INTEGER(static_cast<int32_t>(factor.power))), "power");
 }
 
 unique_ptr<Expression> BuildDecideProductCoefficient(ClientContext &context, const DecideProductForm &form) {

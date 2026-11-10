@@ -113,7 +113,8 @@ static int ArithmeticPrecedence(const string &name) {
 }
 
 static string RenderFunction(const BoundFunctionExpression &func, const RenderContext &ctx, int parent_precedence) {
-	auto name = func.function.name;
+	// As the user wrote it: `abs` for `@`, `pow`, `power` and `^` for `**`.
+	auto name = DecideWrittenName(func.GetAlias(), func.function.name);
 	if (func.children.size() == 1 && name == "-") {
 		// `--` starts a SQL comment, so a negated negation keeps its parentheses.
 		auto operand = RenderSource(*func.children[0], ctx, 40);
@@ -246,7 +247,7 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 		return "count(*)" + (has_by ? " by (" + ByText(agg, ctx, group_key) + ")" : string());
 	}
 	string result = (!carrier.empty() ? carrier
-	                 : order.empty()  ? StringUtil::Lower(agg.function.name)
+	                 : order.empty()  ? StringUtil::Lower(DecideWrittenName(agg.GetAlias(), agg.function.name))
 	                                  : string("norm")) +
 	                "(";
 	idx_t scope_idx;
@@ -806,10 +807,13 @@ static unique_ptr<string> RenderTwoLevelObjective(const BoundConjunctionExpressi
 	}
 	auto &inner = outer.children[0]->Cast<BoundAggregateExpression>();
 	string inner_body = RenderSource(*inner.children[0], ContextOf(names));
-	auto inner_text =
-	    RenderDecideTwoLevelInner(StringUtil::Lower(inner.function.name) + "(" + inner_body + ")", parts.key);
-	return make_uniq<string>((parts.when.empty() ? string() : "when " + parts.when + ": ") +
-	                         RenderDecideTwoLevelOuter(StringUtil::Lower(outer.function.name), parts.key, inner_text));
+	auto inner_text = RenderDecideTwoLevelInner(
+	    StringUtil::Lower(DecideWrittenName(inner.GetAlias(), inner.function.name)) + "(" + inner_body + ")",
+	    parts.key);
+	return make_uniq<string>(
+	    (parts.when.empty() ? string() : "when " + parts.when + ": ") +
+	    RenderDecideTwoLevelOuter(StringUtil::Lower(DecideWrittenName(outer.GetAlias(), outer.function.name)),
+	                              parts.key, inner_text));
 }
 
 //! The same wrapper once the objective rewrite has replaced `outer(inner(e))` by the inner
@@ -822,7 +826,9 @@ static string RenderTwoLevelInner(const BoundConjunctionExpression &per, const D
 	ctx.print_by = false; // the `by` is the per key, written once below
 	string inner_body = RenderSource(*inner.children[0], ctx);
 	return (parts.when.empty() ? string() : "when " + parts.when + " ") + "per " + parts.key + ": " +
-	       RenderDecideTwoLevelInner(StringUtil::Lower(inner.function.name) + "(" + inner_body + ")", parts.key);
+	       RenderDecideTwoLevelInner(StringUtil::Lower(DecideWrittenName(inner.GetAlias(), inner.function.name)) + "(" +
+	                                     inner_body + ")",
+	                                 parts.key);
 }
 
 //! An objective tree rendered in the direction it was written: the terms of its additive spine, each with its sign

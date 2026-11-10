@@ -98,8 +98,7 @@ static bool IsAbsOverDecideVar(const Expression &expr, idx_t decide_index) {
 		return false;
 	}
 	auto &func = expr.Cast<BoundFunctionExpression>();
-	return StringUtil::CIEquals(func.function.name, "abs") &&
-	       BoundExpressionReferencesDecide(*func.children[0], decide_index);
+	return func.function.name == "@" && BoundExpressionReferencesDecide(*func.children[0], decide_index);
 }
 
 static bool ContainsAbsOverDecideVar(const Expression &expr, idx_t decide_index) {

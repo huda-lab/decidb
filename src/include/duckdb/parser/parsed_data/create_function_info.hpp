@@ -29,6 +29,9 @@ struct CreateFunctionInfo : public CreateInfo {
 
 	//! Function name
 	string name;
+	//! The name of the function this one is an alias of, empty for a primary. An alias is registered with its
+	//! primary's implementation, so the two answer alike.
+	string primary_name;
 	//! Function description
 	vector<FunctionDescription> descriptions;
 

@@ -156,10 +156,10 @@ bool ReadCost(ClientContext &context, const Factors &factors, const BoundColumnR
 		return a && b;
 	}
 	double exponent;
-	if (auto absolute = CallOf(*factors.cores[0], "abs", 1)) {
+	if (auto absolute = CallOf(*factors.cores[0], "@", 1)) {
 		return ReadDifference(*absolute->children[0], a, b);
 	}
-	auto square = CallOf(*factors.cores[0], "power", 2);
+	auto square = CallOf(*factors.cores[0], "**", 2);
 	return square && FoldsTo(context, *square->children[1], exponent) && exponent == 2.0 &&
 	       ReadDifference(*square->children[0], a, b);
 }
