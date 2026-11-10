@@ -707,18 +707,36 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 		obj_expr = conj.children[0].get();
 	}
 
-	// A MAXIMIZE objective was written as its negation, `-outer(inner(e))` or `-max(e)` (the canonicalizer carries
-	// the flip by the sign of the term). The sign stays on the term, where extraction reads it into every
-	// coefficient below, so each extremum under it is the other one over the negated terms: `-max(e)` is `min(-e)`.
+	// The objective is one term, `[-] [factor *] outer(...)`: the canonicalizer carries a MAXIMIZE objective's flip by
+	// the sign of the term, and keeps the user's factor beside the reducer. Both stay on the term, where extraction
+	// reads them into every coefficient below, so the term's direction is its sign times its factor's, and each
+	// extremum under a negative one is the other one over the negated terms: `-max(e)` is `min(-e)`.
 	int sign = 1;
 	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &negation = obj_expr->Cast<BoundFunctionExpression>();
-		if (negation.function.name != "-" || negation.children.size() != 1) {
+		if (negation.function.name == "-" && negation.children.size() == 1) {
+			sign = -1;
+			obj_owner = &negation.children[0];
+			obj_expr = negation.children[0].get();
+		}
+	}
+	// A factor is read on the two-level form only: a factor on the flat form is the composed rewrite's (below).
+	ScaledAggregateMatch factor;
+	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		if (!has_per || !TryMatchScaledAggregate(*obj_expr, decide.decide_index, factor)) {
 			return;
 		}
-		sign = -1;
-		obj_owner = &negation.children[0];
-		obj_expr = negation.children[0].get();
+		sign *= ScaleSignAtPlanTime(optimizer.context, factor.scale, factor.divides);
+		if (sign == 0) {
+			throw BinderException("DECIDE: an aggregate inside an aggregate is not supported yet");
+		}
+		obj_owner = &obj_expr->Cast<BoundFunctionExpression>().children[factor.divides ? 0 : 1];
+		obj_expr = obj_owner->get();
+		// The cast that brings the reducer to the factor's type stays around whatever replaces the reducer.
+		while (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+			obj_owner = &obj_expr->Cast<BoundCastExpression>().child;
+			obj_expr = obj_owner->get();
+		}
 	}
 
 	// The flat form is a bare MIN or MAX, signed or not: a factor on it is the composed rewrite's, which claimed it.

@@ -59,10 +59,15 @@ BindResult DecideObjectiveBinder::BindScopedObjective(unique_ptr<ParsedExpressio
 }
 
 BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
-	// `outer(per k: inner(e) by (k)) [by ()]`.
+	// `outer(per k: inner(e) by (k)) [by ()]`, under any unary minus and factor, which bind with the rest of the term.
 	auto *outer_slot = &expr_ptr;
+	for (auto operand = ObjectiveFactorOperand(**outer_slot, variables); operand.IsValid();
+	     operand = ObjectiveFactorOperand(**outer_slot, variables)) {
+		outer_slot = &(*outer_slot)->Cast<FunctionExpression>().children[operand.GetIndex()];
+	}
 	if (IsDecideMarker(**outer_slot, REDUCER_BY_TAG)) {
-		outer_slot = &(*outer_slot)->Cast<FunctionExpression>().children[0];
+		auto outer_call = std::move((*outer_slot)->Cast<FunctionExpression>().children[0]);
+		*outer_slot = std::move(outer_call);
 	}
 	auto &outer = (*outer_slot)->Cast<FunctionExpression>();
 	auto &per = outer.children[0]->Cast<FunctionExpression>();
@@ -122,7 +127,7 @@ BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpress
 	}
 	// The bound form: `outer(inner(e))` under a PER wrapper naming the key.
 	outer.children[0] = std::move(inner_by.children[0]);
-	auto result = BindExpression(*outer_slot, depth);
+	auto result = BindExpression(expr_ptr, depth);
 	if (result.HasError()) {
 		return result;
 	}
@@ -172,7 +177,7 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 		    (func.function_name == SCOPE_PER_TAG || func.function_name == SCOPE_WHEN_TAG)) {
 			return BindScopedObjective(expr_ptr, depth);
 		}
-		if (is_top_expression && IsTwoLevelObjective(expr)) {
+		if (is_top_expression && IsTwoLevelObjective(expr, variables)) {
 			return BindTwoLevelObjective(expr_ptr, depth);
 		}
 		if (is_top_expression && GetExpressionType(expr, error_msg) == DecideExpression::INVALID) {

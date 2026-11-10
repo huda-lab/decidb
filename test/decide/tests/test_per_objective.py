@@ -1236,3 +1236,82 @@ def test_sum_avg_per_extreme_unequal_groups(decidb_cli, duckdb_conn, oracle_solv
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
+
+
+# ===========================================================================
+# The two-level objective under a unary minus or a factor
+# ===========================================================================
+
+
+@pytest.mark.per_clause
+@pytest.mark.min_max
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "sense, term, pushes_up",
+    [
+        # A unary minus: the term's sign alone turns the minimization into a maximization of the outer MAX.
+        pytest.param("MINIMIZE", "-max(per l_returnflag: sum(x * l_quantity) by (l_returnflag))", True, id="minus"),
+        # A factor on the left of the reducer, then on its right (a negative one turns the sense).
+        pytest.param("MAXIMIZE", "3 * max(per l_returnflag: sum(x * l_quantity) by (l_returnflag))", True, id="left"),
+        pytest.param("MINIMIZE", "max(per l_returnflag: sum(x * l_quantity) by (l_returnflag)) * -2", True, id="right"),
+        # A divisor: the reducer is cast to the quotient's type, and a negative one turns the sense.
+        pytest.param(
+            "MAXIMIZE", "max(per l_returnflag: sum(x * l_quantity) by (l_returnflag)) / -2", False, id="quotient"
+        ),
+    ],
+)
+def test_two_level_under_a_factor(decidb_cli, duckdb_conn, oracle_solver, perf_tracker, sense, term, pushes_up):
+    """`sense term` answers as the outer MAX of the per-flag sums, pushed up or down by the term's sign and factor."""
+    sql = f"""
+        SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
+        FROM lineitem WHERE l_orderkey <= 10
+        DECIDE x(BOOL)
+        SUCH THAT per l_returnflag: sum(x) by (l_returnflag) >= 2
+        {sense} {term}
+    """
+    t0 = time.perf_counter()
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
+
+    data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 10")
+    n = len(data)
+    groups = _group_rows(data, 3)
+    qty_sum_all = sum(r[2] for r in data) + 1.0
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("two_level_under_a_factor")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    for flag, idxs in groups.items():
+        oracle_solver.add_constraint({vnames[i]: 1.0 for i in idxs}, ">=", 2.0, name=f"sum_ge_{flag}")
+    sums = [{vnames[i]: data[i][2] for i in idxs} for idxs in groups.values()]
+    if pushes_up:
+        w = emit_hard_inner_max(oracle_solver, name_prefix="outer", row_coeffs=sums, row_ub=qty_sum_all)
+        oracle_solver.set_objective({w: 1.0}, ObjSense.MAXIMIZE)
+    else:
+        oracle_solver.add_variable("w", VarType.CONTINUOUS, lb=0.0, ub=qty_sum_all)
+        for k, link in enumerate(sums):
+            oracle_solver.add_constraint({**link, "w": -1.0}, "<=", 0.0, name=f"w_ge_{k}")
+        oracle_solver.set_objective({"w": 1.0}, ObjSense.MINIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    def decidb_obj(rs, cs):
+        gs = _per_group_values_if_selected(rs, cs, "l_returnflag", lambda r: r[cs.index("l_quantity")])
+        return max((sum(v) for v in gs.values()), default=0.0)
+
+    cmp = compare_solutions(rows, cols, result, data, ["x"], decidb_objective_fn=decidb_obj)
+    perf_tracker.record(
+        "two_level_under_a_factor",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n + 1,
+        len(groups) + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
+    )

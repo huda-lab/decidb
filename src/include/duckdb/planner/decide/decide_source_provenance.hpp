@@ -111,13 +111,14 @@ string RenderDecidePerKey(const BoundConjunctionExpression &per, const DecideSou
 
 //! The two-level objective `outer(per k: inner(e) by (k))` (language/guide.md), which binds to the nested
 //! `outer(inner(e))` under a TWO_LEVEL_OBJECTIVE_TAG wrapper keyed on k, taken apart: the `when` in front of the body
-//! (empty for none), the key as the query writes it, and the body under both, without the negation a MAXIMIZE
-//! objective carries (the texts are in the direction the user wrote). Every text of the form is built from
-//! these parts by the two formatters below: the written objective, the rows the solver receives after the rewrite
-//! (`per k: inner(e) by (k)`) and the rewrite's accounts.
+//! (empty for none), the key as the query writes it, the objective's one term under both, and the reducer in that term
+//! (its sign and factor aside). Every text of the form is built from these parts by the two formatters below: the
+//! written objective, the rows the solver receives after the rewrite (`per k: inner(e) by (k)`) and the rewrite's
+//! accounts.
 struct DecideTwoLevelParts {
 	string when; //!< the condition as written, empty for none
 	string key;
+	const Expression *term = nullptr;
 	const Expression *body = nullptr;
 };
 DecideTwoLevelParts SplitDecideTwoLevel(const BoundConjunctionExpression &per, const DecideSourceNames &names);

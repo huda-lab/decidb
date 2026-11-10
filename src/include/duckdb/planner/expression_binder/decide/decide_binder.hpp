@@ -108,11 +108,15 @@ void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr, const c
 void ValidateDecideScopeSpellings(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
                                   bool objective, const DecideSourceText *text);
 
-//! Whether an objective (its `[when c] [per ()]:` peeled) has the two-level form
-//! `outer(per k: inner(e) by (k'))`: an outer reducer, optionally `by ()`, over a `per`
-//! whose body is one inner reducer with a `by`. Whether k and k' are the same key is
-//! the binder's question.
-bool IsTwoLevelObjective(const ParsedExpression &body);
+//! The child an objective's unary minus or factor applies to: `-e`, `c * e`, `e * c` and `e / c`, where
+//! only `e` reads a decision. Invalid for any other expression.
+optional_idx ObjectiveFactorOperand(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
+
+//! Whether an objective (its `[when c] [per ()]:` peeled), under any unary minus and factor
+//! (ObjectiveFactorOperand), has the two-level form `outer(per k: inner(e) by (k'))`: an
+//! outer reducer, optionally `by ()`, over a `per` whose body is one inner reducer with a
+//! `by`. Whether k and k' are the same key is the binder's question.
+bool IsTwoLevelObjective(const ParsedExpression &body, const case_insensitive_map_t<idx_t> &variables);
 
 bool ContainsDecideAggregate(const ParsedExpression &expr);
 

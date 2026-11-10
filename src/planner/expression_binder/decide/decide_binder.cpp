@@ -279,7 +279,29 @@ static void ValidateScopePlacement(const ParsedExpression &expr, ScopePlacement 
 	}
 }
 
-bool IsTwoLevelObjective(const ParsedExpression &body) {
+optional_idx ObjectiveFactorOperand(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
+	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
+		return optional_idx();
+	}
+	auto &func = expr.Cast<const FunctionExpression>();
+	if (func.function_name == "-" && func.children.size() == 1) {
+		return optional_idx(0);
+	}
+	if (func.children.size() != 2 || (func.function_name != "*" && func.function_name != "/")) {
+		return optional_idx();
+	}
+	// A quotient has its operand on the left; a product on either side.
+	for (idx_t operand = 0; operand < (func.function_name == "*" ? 2 : 1); operand++) {
+		if (ExpressionContainsDecideVariable(*func.children[operand], variables) &&
+		    !ExpressionContainsDecideVariable(*func.children[1 - operand], variables)) {
+			return optional_idx(operand);
+		}
+	}
+	return optional_idx();
+}
+
+//! Whether `body` is the two-level form itself, with no factor around it.
+static bool IsTwoLevelRoot(const ParsedExpression &body) {
 	const ParsedExpression *outer = &body;
 	if (IsDecideMarker(*outer, REDUCER_BY_TAG)) {
 		auto &by = outer->Cast<const FunctionExpression>();
@@ -309,12 +331,21 @@ bool IsTwoLevelObjective(const ParsedExpression &body) {
 	       IsScopedReducerCall(*inner->Cast<const FunctionExpression>().children[0]);
 }
 
+bool IsTwoLevelObjective(const ParsedExpression &body, const case_insensitive_map_t<idx_t> &variables) {
+	const ParsedExpression *form = &body;
+	for (auto operand = ObjectiveFactorOperand(*form, variables); operand.IsValid();
+	     operand = ObjectiveFactorOperand(*form, variables)) {
+		form = form->Cast<const FunctionExpression>().children[operand.GetIndex()].get();
+	}
+	return IsTwoLevelRoot(*form);
+}
+
 static void ValidateScopeClause(const ParsedExpression &clause, const case_insensitive_map_t<idx_t> &variables,
                                 bool objective, const DecideSourceText *text) {
 	auto &body = PeelScopeSpelling(clause, variables, text);
 	// Every clause follows the scope rules (D30).
 	ScopePlacement placement {variables, text};
-	placement.two_level = objective && IsTwoLevelObjective(body);
+	placement.two_level = objective && IsTwoLevelObjective(body, variables);
 	ValidateScopePlacement(body, placement);
 }
 

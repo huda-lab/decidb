@@ -815,3 +815,34 @@ def test_a_maximize_objective_whose_like_terms_merge_reads_as_written(decidb_cli
     """
     out = _explain(decidb_cli, sql)
     assert _objective_block(out).startswith("MAXIMIZESUM(x)+SUM(x)-3*SUM(x)≡-1*sum(x)"), _plan_text(out)
+
+
+@pytest.mark.explain
+@pytest.mark.parametrize(
+    "objective, shown",
+    [
+        # A MINIMIZE objective's negation is the user's own, and prints in its layer.
+        pytest.param(
+            "MINIMIZE -MAX(per g: SUM(x * w) by (g))",
+            "MINIMIZE-MAX(perg:SUM(x*w)by(g))≡-max(perg:sum(w*x)by(g))",
+            id="minimize-minus",
+        ),
+        # A MAXIMIZE objective's layer reads in the written sense, with the factor in place.
+        pytest.param(
+            "MAXIMIZE 2 * MAX(per g: SUM(x * w) by (g))",
+            "MAXIMIZE2*MAX(perg:SUM(x*w)by(g))≡2*max(perg:sum(w*x)by(g))",
+            id="maximize-factor",
+        ),
+    ],
+)
+def test_a_two_level_objective_prints_its_sign_and_factor(decidb_cli, objective, shown):
+    """The outer reducer prints as the two-level form where it stands in its term, so the sign and the factor around
+    it print too."""
+    sql = f"""
+        SELECT id, x FROM (VALUES (1, 'a', 2.0), (2, 'a', 3.0), (3, 'b', 4.0)) t(id, g, w)
+        DECIDE x(BOOL)
+        SUCH THAT per g: sum(x) by (g) >= 1
+        {objective}
+    """
+    out = _explain(decidb_cli, sql)
+    assert _objective_block(out).startswith(shown), _plan_text(out)

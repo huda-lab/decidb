@@ -53,6 +53,9 @@ struct RenderContext {
 	//! True quotes every located node as written, as a message and a diagnosis do. False quotes the data-only ones and
 	//! reprints the decision structure, which canonicalization and the rewrites reshape, as a plan's layers do.
 	bool written = false;
+	//! A node that prints as `substitute_text` instead of itself (the two-level objective's outer reducer).
+	const Expression *substitute = nullptr;
+	string substitute_text;
 };
 } // namespace
 
@@ -343,6 +346,9 @@ static bool QuoteSpan(const Expression &expr, const RenderContext &ctx, string &
 }
 
 static string RenderSource(const Expression &expr, const RenderContext &ctx, int parent_precedence) {
+	if (&expr == ctx.substitute) {
+		return ctx.substitute_text;
+	}
 	if (HasDecideTag(expr.GetAlias(), NULL_GUARD_TAG)) {
 		return RenderSource(DecideUnguarded(expr), ctx, parent_precedence);
 	}
@@ -763,15 +769,21 @@ static bool IsTruePlaceholder(const Expression &expr) {
 	return value.type().id() == LogicalTypeId::BOOLEAN && !value.IsNull() && value.GetValue<bool>();
 }
 
-//! `expr` without the negation a MAXIMIZE objective carries, which is a unary minus around its one term.
-static const Expression &WithoutNegation(const Expression &expr) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-		auto &func = expr.Cast<BoundFunctionExpression>();
-		if (func.function.name == "-" && func.children.size() == 1) {
-			return *func.children[0];
-		}
+//! The reducer of an objective that is one term, whatever stands around it: the negation a MAXIMIZE objective carries,
+//! a factor, a cast. It lies on the one path of children that reads a decision.
+static const Expression &TermReducer(const Expression &expr, idx_t decide_index) {
+	const Expression *term = &expr;
+	while (term->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		const Expression *next = nullptr;
+		ExpressionIterator::EnumerateChildren(*term, [&](const Expression &child) {
+			if (!next && BoundExpressionReferencesDecide(child, decide_index)) {
+				next = &child;
+			}
+		});
+		D_ASSERT(next);
+		term = next;
 	}
-	return expr;
+	return *term;
 }
 
 DecideTwoLevelParts SplitDecideTwoLevel(const BoundConjunctionExpression &per, const DecideSourceNames &names) {
@@ -782,7 +794,8 @@ DecideTwoLevelParts SplitDecideTwoLevel(const BoundConjunctionExpression &per, c
 		parts.when = WrittenWhen(wrapper, ContextOf(names));
 		parts.body = wrapper.children[0].get();
 	}
-	parts.body = &WithoutNegation(*parts.body);
+	parts.term = parts.body;
+	parts.body = &TermReducer(*parts.term, names.decide_index);
 	parts.key = RenderDecidePerKey(per, names.text, &names.keys);
 	return parts;
 }
@@ -793,42 +806,6 @@ string RenderDecideTwoLevelInner(const string &inner, const string &key) {
 
 string RenderDecideTwoLevelOuter(const string &outer_name, const string &key, const string &inner) {
 	return outer_name + "(per " + key + ": " + inner + ")";
-}
-
-//! The two-level objective `outer(per k: inner(e) by (k))`, which binds to the nested
-//! `outer(inner(e))` under a TWO_LEVEL_OBJECTIVE_TAG wrapper keyed on k: rendered as written
-//! when the wrapper still holds the nested reducer, else null.
-static unique_ptr<string> RenderTwoLevelObjective(const BoundConjunctionExpression &per,
-                                                  const DecideSourceNames &names) {
-	auto parts = SplitDecideTwoLevel(per, names);
-	auto &outer = parts.body->Cast<BoundAggregateExpression>();
-	if (outer.children[0]->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-		return nullptr;
-	}
-	auto &inner = outer.children[0]->Cast<BoundAggregateExpression>();
-	string inner_body = RenderSource(*inner.children[0], ContextOf(names));
-	auto inner_text = RenderDecideTwoLevelInner(
-	    StringUtil::Lower(DecideWrittenName(inner.GetAlias(), inner.function.name)) + "(" + inner_body + ")",
-	    parts.key);
-	return make_uniq<string>(
-	    (parts.when.empty() ? string() : "when " + parts.when + ": ") +
-	    RenderDecideTwoLevelOuter(StringUtil::Lower(DecideWrittenName(outer.GetAlias(), outer.function.name)),
-	                              parts.key, inner_text));
-}
-
-//! The same wrapper once the objective rewrite has replaced `outer(inner(e))` by the inner
-//! reducer alone: `[when c ]per k: inner(e) by (k)`, the rows the solver receives (one
-//! inner value per class).
-static string RenderTwoLevelInner(const BoundConjunctionExpression &per, const DecideSourceNames &names) {
-	auto parts = SplitDecideTwoLevel(per, names);
-	auto &inner = parts.body->Cast<BoundAggregateExpression>();
-	auto ctx = ContextOf(names);
-	ctx.print_by = false; // the `by` is the per key, written once below
-	string inner_body = RenderSource(*inner.children[0], ctx);
-	return (parts.when.empty() ? string() : "when " + parts.when + " ") + "per " + parts.key + ": " +
-	       RenderDecideTwoLevelInner(StringUtil::Lower(DecideWrittenName(inner.GetAlias(), inner.function.name)) + "(" +
-	                                     inner_body + ")",
-	                                 parts.key);
 }
 
 //! An objective tree rendered in the direction it was written: the terms of its additive spine, each with its sign
@@ -849,6 +826,45 @@ static string RenderWrittenSense(const Expression &expr, const RenderContext &ct
 	return result;
 }
 
+//! The two-level objective `outer(per k: inner(e) by (k))`, which binds to the nested
+//! `outer(inner(e))` under a TWO_LEVEL_OBJECTIVE_TAG wrapper keyed on k: rendered as written
+//! when the wrapper still holds the nested reducer, else null. The form stands where the outer reducer stands in
+//! its term, so the term's sign and factor print around it.
+static unique_ptr<string> RenderTwoLevelObjective(const BoundConjunctionExpression &per, const DecideSourceNames &names,
+                                                  bool written_sense) {
+	auto parts = SplitDecideTwoLevel(per, names);
+	auto &outer = parts.body->Cast<BoundAggregateExpression>();
+	if (outer.children[0]->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		return nullptr;
+	}
+	auto &inner = outer.children[0]->Cast<BoundAggregateExpression>();
+	string inner_body = RenderSource(*inner.children[0], ContextOf(names));
+	auto inner_text = RenderDecideTwoLevelInner(
+	    StringUtil::Lower(DecideWrittenName(inner.GetAlias(), inner.function.name)) + "(" + inner_body + ")",
+	    parts.key);
+	auto ctx = ContextOf(names);
+	ctx.substitute = &outer;
+	ctx.substitute_text = RenderDecideTwoLevelOuter(
+	    StringUtil::Lower(DecideWrittenName(outer.GetAlias(), outer.function.name)), parts.key, inner_text);
+	return make_uniq<string>((parts.when.empty() ? string() : "when " + parts.when + ": ") +
+	                         (written_sense ? RenderWrittenSense(*parts.term, ctx) : RenderSource(*parts.term, ctx)));
+}
+
+//! The same wrapper once the objective rewrite has replaced `outer(inner(e))` by the inner
+//! reducer alone: `[when c ]per k: inner(e) by (k)`, the rows the solver receives (one
+//! inner value per class).
+static string RenderTwoLevelInner(const BoundConjunctionExpression &per, const DecideSourceNames &names) {
+	auto parts = SplitDecideTwoLevel(per, names);
+	auto &inner = parts.body->Cast<BoundAggregateExpression>();
+	auto ctx = ContextOf(names);
+	ctx.print_by = false; // the `by` is the per key, written once below
+	string inner_body = RenderSource(*inner.children[0], ctx);
+	return (parts.when.empty() ? string() : "when " + parts.when + " ") + "per " + parts.key + ": " +
+	       RenderDecideTwoLevelInner(StringUtil::Lower(DecideWrittenName(inner.GetAlias(), inner.function.name)) + "(" +
+	                                     inner_body + ")",
+	                                 parts.key);
+}
+
 //! `CollectDecideExpressionStrings` with the pending `when c per K:` front qualifier.
 static void CollectExpressionStrings(const Expression &expr, const DecideSourceNames &names, vector<string> &out,
                                      vector<idx_t> *out_source_ids, DecideEnclosingScope scope, bool written_sense) {
@@ -856,7 +872,7 @@ static void CollectExpressionStrings(const Expression &expr, const DecideSourceN
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
 		if (IsTwoLevelObjectiveWrapper(conj)) {
 			const auto front = ScopeQualifier(scope, ContextOf(names));
-			auto two_level = RenderTwoLevelObjective(conj, names);
+			auto two_level = RenderTwoLevelObjective(conj, names, written_sense);
 			if (two_level) {
 				PushClause(out, out_source_ids, *two_level, DConstants::INVALID_INDEX);
 				return;

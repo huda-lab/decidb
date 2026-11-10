@@ -1180,6 +1180,12 @@ class TestBinderRefusalBranches:
             ("sum(per k: max(w * x) by (k + 1))", r"the by key must be the per key"),
             # A reducer in a reducer under a product with a decision.
             ("SUM(2 * SUM(x))", r"an aggregate inside an aggregate is not supported yet"),
+            # A factor on the two-level form that is no constant: its sign is unknown before the query runs, and the
+            # rewrite that reads it (RewriteMinMaxObjectiveTree) has nowhere to put the other extremum.
+            (
+                "(SELECT sum(c) FROM (VALUES (1), (-1)) s(c)) * max(per k: sum(w * x) by (k))",
+                r"an aggregate inside an aggregate is not supported yet",
+            ),
             # An aggregate with arguments no function takes.
             ("SUM(w * x, 2)", r"SUM needs one argument, found 'SUM\(w \* x, 2\)'"),
             # MAX(x, n) is DuckDB's top-n aggregate, a list: the objective refuses it as a constraint does.
