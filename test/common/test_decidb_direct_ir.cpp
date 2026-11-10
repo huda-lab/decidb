@@ -610,8 +610,13 @@ TEST_CASE("A1 IR reads each objective spelling the solver accepts", "[decidb]") 
 	REQUIRE(!outside.ir.objective.parts[0].scale_divides);
 	QueryIR divided(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(x - w, 2))/2"));
 	REQUIRE(divided.ir.objective.parts[0].scale_divides);
-	QueryIR negated(con, IRQuery("x(REAL)", "x <= cap", "MAXIMIZE -SUM(POWER(x - w, 2))"));
+	QueryIR negated(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE -SUM(POWER(x - w, 2))"));
 	REQUIRE(negated.ir.objective.parts[0].sign == -1);
+	// The objective is a minimization: MAXIMIZE writes its flip as the sign of each part.
+	QueryIR maximized(con, IRQuery("x(REAL)", "x <= cap", "MAXIMIZE SUM(POWER(x - w, 2))"));
+	REQUIRE(maximized.ir.objective.parts[0].sign == -1);
+	QueryIR maximized_negation(con, IRQuery("x(REAL)", "x <= cap", "MAXIMIZE -SUM(POWER(x - w, 2))"));
+	REQUIRE(maximized_negation.ir.objective.parts[0].sign == 1);
 
 	// x*x - 2*w*x is a square plus a negative linear term; a constant stays beside the square.
 	QueryIR expanded(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE SUM(x*x - 2*w*x + 5)"));
@@ -639,7 +644,6 @@ TEST_CASE("A1 IR reads each objective spelling the solver accepts", "[decidb]") 
 	QueryIR when(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE when flag: SUM(POWER(x - w, 2))"));
 	REQUIRE(when.ir.objective.scope.when != nullptr);
 	QueryIR none(con, IRQuery("x(REAL)", "x <= cap", ""));
-	REQUIRE(none.ir.objective.sense == DecideSense::FEASIBILITY);
 	REQUIRE(none.ir.objective.parts.empty());
 
 	// A per-row bound with a coefficient keeps the coefficient in the term; the constant moves to the right side.

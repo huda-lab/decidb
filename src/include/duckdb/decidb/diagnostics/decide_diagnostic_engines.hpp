@@ -52,6 +52,9 @@ struct InfeasibleDiagnosisInput {
 	//! depending on the operator or the solver facade — same boundary, and the
 	//! same testability, as DiagnoseUnbounded's get_candidates.
 	std::function<SolverResult(const SolverModel &model)> solve_model;
+	//! The query was written MAXIMIZE: its model minimizes the negation of the objective, so the achievable objective
+	//! the diagnosis reports is the negated model value (`0.0 - v`), as the user wrote it.
+	bool negate_shown_objective = false;
 };
 
 enum class ElasticRepairTier { DATA_OFFSET, EDITABLE_LOOSEN };

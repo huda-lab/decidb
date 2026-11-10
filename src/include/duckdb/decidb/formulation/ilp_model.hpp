@@ -340,9 +340,9 @@ struct SolverModel {
 	vector<bool> is_integer;  //!< True for INTEGER/BOOLEAN vars, false for REAL (continuous)
 	vector<bool> is_binary;   //!< True if binary (0/1), subset of integer
 
-	//! Linear objective: minimize/maximize c^T x + obj_constant
+	//! Linear objective: minimize c^T x + obj_constant. A model is always a minimization: a MAXIMIZE query is built
+	//! as its negation (DecideCanonicalizer::CanonicalizeObjective).
 	vector<double> obj_coeffs; //!< Coefficient per variable (linear part)
-	bool maximize;             //!< True = maximize, false = minimize
 	//! The objective's constant term (an LP's objective offset): what the objective as written adds whatever the
 	//! decisions are -- a constant beside the reducers (`SUM(x) + 3`), a constant inside one (`SUM(x + 7)`), and the
 	//! constant of an expanded square (`POWER(x - 5, 2)`). It moves no optimum, so no backend is given it: a session

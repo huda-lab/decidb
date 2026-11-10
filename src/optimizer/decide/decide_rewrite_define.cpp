@@ -262,7 +262,7 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 	    };
 	walk(*decide.decide_constraints, string(), DecideEnclosingScope());
 
-	// The objective reads as one expression under its sense; a two-level `per` wrapper and a `when` carry no sign,
+	// The objective reads as one minimized expression; a two-level `per` wrapper and a `when` carry no sign,
 	// and the `when` keeps the rows its helper rows read. It is detached while its reducers are rewritten.
 	unique_ptr<Expression> objective;
 	const idx_t constraint_sites = sites.size();
@@ -277,9 +277,8 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 		}
 		unordered_map<const Expression *, int> signs;
 		CollectReducerSigns(context, *body, 1, decide_index, signs);
-		const auto outer = decide.decide_sense == DecideSense::MINIMIZE ? ExtremumPush::DOWN : ExtremumPush::UP;
-		CollectBodySites(context, *body, decide_index, false, false, false, outer, signs, OBJECTIVE_ROW_TAG, scope,
-		                 sites);
+		CollectBodySites(context, *body, decide_index, false, false, false, ExtremumPush::DOWN, signs,
+		                 OBJECTIVE_ROW_TAG, scope, sites);
 	}
 
 	if (!decide.use_native_constructs.min_max) {

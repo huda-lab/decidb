@@ -611,7 +611,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		idx_t var_idx = indexer.global_block_start + g;
 		model.obj_coeffs[var_idx] = input.global_obj_coeffs[g];
 	}
-	model.maximize = (input.sense == DecideSense::MAXIMIZE);
 	model.obj_constant = input.objective_constant;
 
 	if (!input.objective_variable_indices.empty()) {
@@ -649,7 +648,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 			// Shared with stage 05's plan-time prediction, so the refusal there and the fact recorded here cannot
 			// disagree.
 			model.nonconvex_quadratic =
-			    model.nonconvex_quadratic || IsNonconvexProductGroup(group.square, group.weight_sign, input.sense);
+			    model.nonconvex_quadratic || IsNonconvexProductGroup(group.square, group.weight_sign);
 			for (idx_t row = 0; row < num_rows; row++) {
 				AddProductGroupRow(
 				    group, row, indexer, q_map,

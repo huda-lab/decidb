@@ -197,10 +197,13 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 					written_objective = rendered_objective;
 				}
 				canonicalizer.BuildObjectiveScopeChecks(*statement.decide_objective, scope_checks);
-				statement.decide_objective = canonicalizer.CanonicalizeObjective(*statement.decide_objective,
-				                                                                 statement.objective_constant_offset);
+				statement.decide_objective = canonicalizer.CanonicalizeObjective(
+				    *statement.decide_objective, statement.objective_constant_offset, statement.decide_sense);
 				canonicalizer.VerifyCanonicalObjective(*statement.decide_objective);
-				canonical_objective = RenderDecideObjective(*statement.decide_objective, objective_names);
+				// The canonical objective is a minimization; its layer reads in the sense the user wrote, so the flip
+				// alone is no difference to show.
+				canonical_objective = RenderDecideObjective(*statement.decide_objective, objective_names,
+				                                            statement.decide_sense == DecideSense::MAXIMIZE);
 				shape_check.CheckObjective(*statement.decide_objective, written_objective);
 				objective_canonical_differs = canonical_objective != rendered_objective;
 				canonicalizer.SkipNullData(*statement.decide_objective, statement.keyed_scopes, statement.decide_keys);

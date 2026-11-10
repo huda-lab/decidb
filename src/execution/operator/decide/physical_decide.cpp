@@ -1244,11 +1244,11 @@ static void ScaleAvgRows(CoefficientColumn &col, bool has_filter, const vector<b
 PhysicalDecide::PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardinality,
                                unique_ptr<PhysicalOperator> child, idx_t decide_index,
                                vector<unique_ptr<Expression>> decide_variables,
-                               unique_ptr<Expression> decide_constraints, DecideSense decide_sense,
+                               unique_ptr<Expression> decide_constraints, DecideSense written_sense,
                                unique_ptr<Expression> decide_objective)
     : PhysicalOperator(PhysicalOperatorType::DECIDE, std::move(types), estimated_cardinality),
       decide_index(decide_index), decide_variables(std::move(decide_variables)),
-      decide_constraints(std::move(decide_constraints)), decide_sense(decide_sense),
+      decide_constraints(std::move(decide_constraints)), written_sense(written_sense),
       decide_objective(std::move(decide_objective)) {
 	children.push_back(std::move(child));
 }
@@ -1258,7 +1258,7 @@ DecideSourceNames PhysicalDecide::Names() const {
 }
 
 string PhysicalDecide::WrittenClause(idx_t source_clause_id) const {
-	return DecideWrittenClause(constraint_sources, DecideWrittenObjective(decide_sense, written_objective),
+	return DecideWrittenClause(constraint_sources, DecideWrittenObjective(written_sense, written_objective),
 	                           source_clause_id);
 }
 
@@ -1718,8 +1718,10 @@ string FormatDecideGapPercent(double gap) {
 }
 
 //! Print the path-1 (solution found) / path-2 (no solution) status block to stderr.
-//! Info only — the "keep improving it?" prompt lands with the S3 continuation loop.
-static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_seconds, double time_limit) {
+//! Info only — the "keep improving it?" prompt lands with the S3 continuation loop. The model minimizes, so a query
+//! written MAXIMIZE (`negate_objective`) shows its best objective so far as the negated model value, as it wrote it.
+static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_seconds, double time_limit,
+                                     bool negate_objective) {
 	string limit_str = FormatDuration(time_limit);
 	// 0 means "not measurable here" (Windows, or a getrusage failure), not "no memory
 	// used" — say nothing rather than print "peak memory 0 B".
@@ -1731,12 +1733,13 @@ static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_
 	// A user Ctrl-C and a wall-clock timeout share the same best-so-far readback, but
 	// must not read the same to the user: "you stopped it" vs "the clock ran out".
 	if (result.has_solution) {
+		const double shown = negate_objective ? 0.0 - result.objective_value : result.objective_value;
 		// gap is a fraction on both backends; render as a percentage. It is NaN when
 		// no proven bound exists (LP/QP timeouts, failed reads) — claim nothing then.
 		string closeness = std::isfinite(result.gap)
 		                       ? StringUtil::Format("  best objective so far: %g  (within %s%% of the best possible)\n",
-		                                            result.objective_value, FormatDecideGapPercent(result.gap))
-		                       : StringUtil::Format("  best objective so far: %g\n", result.objective_value);
+		                                            shown, FormatDecideGapPercent(result.gap))
+		                       : StringUtil::Format("  best objective so far: %g\n", shown);
 		if (result.user_interrupted) {
 			fprintf(stderr, "DECIDE stopped at your request with a usable solution (not proven best).\n%s%s",
 			        closeness.c_str(), tail.c_str());
@@ -3149,7 +3152,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// `x OP const` / BETWEEN constraints; those comparisons were skipped in
 	// AnalyzeConstraint so we don't re-emit them as per-row model rows.
 	solver_input.constraint_sources = constraint_sources;
-	solver_input.objective_written = DecideWrittenObjective(decide_sense, written_objective);
+	solver_input.objective_written = DecideWrittenObjective(written_sense, written_objective);
 	// A variable the query never explicitly lowered gets the default lower bound 0 and
 	// stays non-negative. A variable with an explicit (possibly negative) lower bound
 	// keeps it, and a written bound of -1e30 or below is no bound, as -1e29 is. Must
@@ -3217,7 +3220,6 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 		VerifyCountedOnce(gstate.objective->terms, solver_input.objective_coefficients, vector<idx_t>());
 	}
 #endif
-	solver_input.sense = decide_sense;
 	solver_input.objective_constant = objective_constant_offset;
 
 	solver_input.objective_product_groups = std::move(gstate.evaluated_objective_groups);
@@ -3850,7 +3852,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 			if (!solve_result.has_solution) {
 				throw Exception(ExceptionType::INTERRUPT, "DECIDE stopped at your request before finding a solution.");
 			}
-			PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
+			PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget, written_sense == DecideSense::MAXIMIZE);
 			fprintf(stderr,
 			        "DECIDE is returning the best solution found so far — it is NOT proven the best possible.\n");
 			context.interrupted = false;
@@ -3859,7 +3861,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 			// The clock ran out and nobody is at the keyboard (tests, benchmarks, `-c`
 			// pipes, the C API), so there is no one to answer the offer. Print the
 			// checkpoint once and raise: never prompt where no one can answer.
-			PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
+			PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget, written_sense == DecideSense::MAXIMIZE);
 			ThrowDecideSolveError(solve_result, PlannedSolverBackend());
 		} else {
 			// The interrupt poll installed on the first solve persists on the retained
@@ -3874,7 +3876,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 
 			// Report at each boundary, then continue or stop.
 			for (;;) {
-				PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
+				PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget, written_sense == DecideSense::MAXIMIZE);
 
 				// stdin is a terminal (can_prompt guaranteed this), so it is safe to block
 				// reading the user's decision. The CLI's line editor is inactive
@@ -4080,8 +4082,14 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 			number_warning.Say();
 		}
 		InfeasibleDiagnosisInput diag_input {
-		    elastic_model, elastic_indexer,        var_labels, var_is_aux, elastic_global_labels,
-		    diag_params,   solve_diagnostic_model,
+		    elastic_model,
+		    elastic_indexer,
+		    var_labels,
+		    var_is_aux,
+		    elastic_global_labels,
+		    diag_params,
+		    solve_diagnostic_model,
+		    written_sense == DecideSense::MAXIMIZE,
 		};
 		diag = DiagnoseInfeasible(diag_input);
 		// The engine reads every status it gets: a solve it can do without (the tie-break, the

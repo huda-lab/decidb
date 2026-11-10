@@ -73,7 +73,6 @@ struct Condition final : DirectApplicabilityCondition {
 	idx_t upper = 0;
 	bool has_upper = false;
 	bool impossible = false;
-	DecideSense sense;
 	vector<ObjectivePart> objective_parts;
 	//! What a message names for each reducer's share of the score (DirectNamesOf), and the objective, which the score
 	//! names once every share is fine and their sum is not.
@@ -277,7 +276,6 @@ public:
 		if (condition->bound_factors.empty()) {
 			return nullptr;
 		}
-		condition->sense = ir.objective.sense;
 		if (!ProveScope(ir, *condition) || !ProveFixedVariables(ir, context, *condition) ||
 		    !ProveBounds(ir, context, *condition) || !ProveObjective(ir, context, *condition)) {
 			return nullptr;
@@ -1033,14 +1031,14 @@ private:
 		            calc.If(calc.Col(LogicalType::BOOLEAN, fixed_zero_binding), calc.Bool(false), calc.Bool(true))));
 	}
 
-	//! Order a window: free rows first when fixed values exist, then best score first.
+	//! Order a window: free rows first when fixed values exist, then best score first (the least: the score is
+	//! minimized).
 	void AddOrder(BoundWindowExpression &expression) const {
 		if (has_fixes) {
 			expression.orders.emplace_back(OrderType::DESCENDING, OrderByNullType::NULLS_LAST, FreeRow());
 		}
-		expression.orders.emplace_back(
-		    condition.sense == DecideSense::MAXIMIZE ? OrderType::DESCENDING : OrderType::ASCENDING,
-		    OrderByNullType::NULLS_LAST, calc.Out(calc.Col(LogicalType::DOUBLE, score_binding)));
+		expression.orders.emplace_back(OrderType::ASCENDING, OrderByNullType::NULLS_LAST,
+		                               calc.Out(calc.Col(LogicalType::DOUBLE, score_binding)));
 	}
 
 	//! Stage 4: rank rows within their scope, raise the errors of the checks in the solver's order (what the group
@@ -1197,9 +1195,8 @@ private:
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
 			result_expressions.push_back(calc.Out(calc.Col(source_types[i], ColumnBinding(score_index, i))));
 		}
-		auto improving = calc.Cmp(condition.sense == DecideSense::MAXIMIZE ? ExpressionType::COMPARE_GREATERTHAN
-		                                                                   : ExpressionType::COMPARE_LESSTHAN,
-		                          calc.Col(LogicalType::DOUBLE, score_binding), calc.Num(0.0));
+		auto improving =
+		    calc.Cmp(ExpressionType::COMPARE_LESSTHAN, calc.Col(LogicalType::DOUBLE, score_binding), calc.Num(0.0));
 		auto free_choose = improving;
 		auto choose = improving;
 		auto rank = calc.Col(LogicalType::BIGINT, rank_binding);
@@ -1237,8 +1234,6 @@ private:
 DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
                              const DirectApplicabilityCondition &candidate, const DirectStateErrors &errors) const {
 	auto &condition = static_cast<const Condition &>(candidate);
-	// CheckCondition declines an objective that is not there, and an objective that has no linear term.
-	D_ASSERT(!condition.objective_parts.empty() || condition.sense == DecideSense::FEASIBILITY);
 	PlanBuilder plan_builder(condition, optimizer, reader.SourceBindings(), reader.SourceTypes(), errors);
 	unique_ptr<LogicalOperator> classes;
 	if (condition.HasGroupBound()) {

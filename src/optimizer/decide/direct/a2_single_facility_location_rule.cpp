@@ -121,10 +121,10 @@ public:
 	                      const ExprPtr &has_class) const = 0;
 };
 
-//! The factor that turns a part's value into a minimum: the sense, the part's sign and its constant factor.
-static double Orientation(const DirectIR &ir, const DirectLinearPart &linear) {
+//! The factor that turns a part's value into a minimum: the part's sign and its constant factor.
+static double Orientation(const DirectLinearPart &linear) {
 	double part_factor = linear.scaled ? (linear.divides ? 1.0 / linear.scale : linear.scale) : 1.0;
-	return (ir.objective.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0) * linear.sign * part_factor;
+	return linear.sign * part_factor;
 }
 
 //! Forwards a DOUBLE column of the class through P3, and names it by its binding there.
@@ -143,7 +143,7 @@ static void MoveInto(vector<unique_ptr<Expression>> &to, vector<unique_ptr<Expre
 struct SquareColumns final : LossColumns {
 	//! P1: the part as DirectLayoutQuadraticPart lays it out.
 	DirectQuadraticColumns laid;
-	//! P2: the row's `a` and `b`, with the sense applied.
+	//! P2: the row's `a` and `b`.
 	ColumnBinding row_a;
 	ColumnBinding row_b;
 	//! W, then P3: the class's `a` and `b`.
@@ -157,7 +157,7 @@ struct SquareColumns final : LossColumns {
 //! linear and the minimum is at an end of the interval.
 class SquareLoss final : public Loss {
 public:
-	SquareLoss(DirectQuadraticPart part_p, double sense_p) : sense(sense_p) {
+	explicit SquareLoss(DirectQuadraticPart part_p) {
 		parts.push_back(std::move(part_p));
 	}
 
@@ -176,8 +176,8 @@ public:
 		auto &square = columns.Cast<SquareColumns>();
 		auto &calc = tools.calc;
 		auto sum = DirectFoldQuadratic(tools.optimizer, calc, parts, {square.laid}, 0);
-		square.row_a = p2.Add(calc.Out(calc.Mul(calc.Num(sense), sum.a)));
-		square.row_b = p2.Add(calc.Out(calc.Mul(calc.Num(sense), sum.b)));
+		square.row_a = p2.Add(calc.Out(sum.a));
+		square.row_b = p2.Add(calc.Out(sum.b));
 	}
 
 	void Aggregate(const PlanTools &, const ClassAggregate &classes, LossColumns &columns) const override {
@@ -237,8 +237,6 @@ private:
 
 	//! The one part of the objective, in a vector because DirectFoldQuadratic reads a list of parts.
 	vector<DirectQuadraticPart> parts;
-	//! The sense as a factor: -1 for a maximum.
-	double sense;
 };
 
 //! The columns of a loss over centers: a term's slope and constant (P1), then the row's center and weight (P2).
@@ -478,15 +476,15 @@ bool Rule::ProveInterval(const DirectIR &ir, ClientContext &context, Condition &
 	return true;
 }
 
-//! The square is convex in the sense: its factor `K * w^2`, with the sense, the part's sign and its constant factor
-//! applied, is positive. A weight read from the data has no sign before the rows are read, so the check is left to the
-//! plan, which reads the sign of the total.
-static bool SquareIsConvex(ClientContext &context, const DirectIR &ir, const DirectQuadraticPart &part, double slope) {
+//! The square is convex: its factor `K * w^2`, with the part's sign and its constant factor applied, is positive. A
+//! weight read from the data has no sign before the rows are read, so the check is left to the plan, which reads the
+//! sign of the total.
+static bool SquareIsConvex(ClientContext &context, const DirectQuadraticPart &part, double slope) {
 	double weight;
 	if (!DirectFoldConstantSum(context, part.squares[0].weight, weight)) {
 		return true;
 	}
-	double oriented = Orientation(ir, part.linear) * (weight * (slope * slope));
+	double oriented = Orientation(part.linear) * (weight * (slope * slope));
 	return std::isfinite(oriented) && oriented > 0.0;
 }
 
@@ -503,17 +501,16 @@ static unique_ptr<Loss> ProveSquare(const DirectIR &ir, ClientContext &context, 
 	}
 	double slope;
 	if (!DirectFoldConstantSum(context, part.squares[0].inner.linear, slope) || slope == 0.0 ||
-	    !SquareIsConvex(context, ir, part, slope)) {
+	    !SquareIsConvex(context, part, slope)) {
 		return nullptr;
 	}
-	double sense = ir.objective.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0;
-	return make_uniq<SquareLoss>(std::move(part), sense);
+	return make_uniq<SquareLoss>(std::move(part));
 }
 
 //! The one `ABS` of a part, read into `part.squares` so the shared layout of a part lays it out: the weight, the slope
 //! and the constant of `K * ABS(s*c + t)`. `weight` is `K` oriented as a minimum and `slope` is `s`. False when
-//! `s` is not a nonzero constant, or `K` is not a constant that is positive once the sense is applied: a weight read
-//! from the data is the solver's. The part holds the `ABS` and no other term (ProveObjective).
+//! `s` is not a nonzero constant, or `K` is not a constant that is positive once the part's sign is applied: a weight
+//! read from the data is the solver's. The part holds the `ABS` and no other term (ProveObjective).
 static bool ReadAbsolute(const DirectIR &ir, ClientContext &context, const DirectPart &part_ir,
                          DirectQuadraticPart &part, double &weight, double &slope) {
 	if (!DirectReadLinearPart(ir, context, part_ir, ir.objective.written, part.linear) ||
@@ -527,7 +524,7 @@ static bool ReadAbsolute(const DirectIR &ir, ClientContext &context, const Direc
 	    !DirectFoldConstantSum(context, read.inner.linear, slope) || slope == 0.0) {
 		return false;
 	}
-	weight = Orientation(ir, part.linear) * constant;
+	weight = Orientation(part.linear) * constant;
 	return std::isfinite(weight) && weight > 0.0;
 }
 
@@ -552,8 +549,7 @@ static unique_ptr<Loss> ProveMaxAbsolute(const DirectIR &ir, ClientContext &cont
 	double weight, slope;
 	// The reducer is a MAX (ProveObjective): a plain one is not qualified by a keyed scope or grouped by a key.
 	bool plain = part_ir.qualifier == DConstants::INVALID_INDEX && part_ir.by.empty();
-	if (!plain || ir.objective.sense != DecideSense::MINIMIZE ||
-	    !ReadAbsolute(ir, context, part_ir, part, weight, slope)) {
+	if (!plain || !ReadAbsolute(ir, context, part_ir, part, weight, slope)) {
 		return nullptr;
 	}
 	return make_uniq<MaxAbsoluteLoss>(std::move(part), weight);

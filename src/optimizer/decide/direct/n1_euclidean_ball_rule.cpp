@@ -29,7 +29,6 @@ constexpr const char *RULE_NAME = "N1_EUCLIDEAN_BALL";
 struct Condition final : DirectApplicabilityCondition {
 	//! The box is [0, inf), rather than (-inf, inf).
 	bool nonnegative = true;
-	DecideSense sense = DecideSense::FEASIBILITY;
 	//! The objective as a message names it: a number computed past a DOUBLE names it, as the solver path names one.
 	string objective_written;
 	//! The clause's scope (DirectSharedScope).
@@ -74,7 +73,6 @@ public:
 			return nullptr;
 		}
 		auto condition = make_uniq<Condition>();
-		condition->sense = ir.objective.sense;
 		condition->objective_written = ir.objective.written;
 		condition->source_reads = 2;
 		if (!ProveLimitClause(ir, context, *condition) || !ProveBox(ir, context, *condition) ||
@@ -178,16 +176,15 @@ bool Rule::ProveBox(const DirectIR &ir, ClientContext &context, Condition &condi
 	return true;
 }
 
-//! The square of an objective part: its factor folds to one constant, and it is convex in the sense.
-static bool SquareIsConvex(ClientContext &context, const DirectIR &ir, const DirectQuadraticPart &part) {
+//! The square of an objective part: its factor folds to one constant, and it is convex.
+static bool SquareIsConvex(ClientContext &context, const DirectQuadraticPart &part) {
 	double factor;
 	if (!FoldSquareFactor(context, part.squares[0], factor)) {
 		return false;
 	}
 	auto &linear = part.linear;
 	double part_factor = linear.scaled ? (linear.divides ? 1.0 / linear.scale : linear.scale) : 1.0;
-	double sense = ir.objective.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0;
-	double oriented = sense * linear.sign * part_factor * factor;
+	double oriented = linear.sign * part_factor * factor;
 	return std::isfinite(oriented) && oriented > 0.0;
 }
 
@@ -213,7 +210,7 @@ static bool SquareCoversEveryLinearTerm(const vector<DirectQuadraticPart> &parts
 	return true;
 }
 
-//! No objective, or `SUM` parts of linear terms, per-row constants and at most one square, convex in the sense.
+//! No objective, or `SUM` parts of linear terms, per-row constants and at most one square, convex.
 bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	for (auto &part : ir.objective.parts) {
 		DirectQuadraticPart read;
@@ -221,7 +218,7 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 			return false;
 		}
 		if (!read.squares.empty()) {
-			if (condition.has_square || read.squares.size() > 1 || !SquareIsConvex(context, ir, read)) {
+			if (condition.has_square || read.squares.size() > 1 || !SquareIsConvex(context, read)) {
 				return false;
 			}
 			condition.has_square = true;
@@ -541,11 +538,10 @@ private:
 			result.limit_inputs.push_back(columns);
 		}
 		auto sum = DirectFoldQuadratic(optimizer, calc, condition.parts, raw.parts, 0);
-		double sense = condition.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0;
-		result.a = p2.Add(calc.Out(calc.Mul(calc.Num(sense), sum.a)));
+		result.a = p2.Add(calc.Out(sum.a));
 		// Without a square the row's target is the direction -b (TargetOf), so b is oriented that way here, and no
 		// column is negated again above it.
-		result.b = p2.Add(calc.Out(calc.Mul(calc.Num(condition.has_square ? sense : -sense), sum.b)));
+		result.b = p2.Add(calc.Out(condition.has_square ? sum.b : calc.Mul(calc.Num(-1.0), sum.b)));
 		// Every check is true or raises; a row passes when all of them do.
 		result.valid = p2.Add(DirectAllHold(calc, std::move(raw.checks)));
 		return result;

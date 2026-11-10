@@ -749,3 +749,69 @@ def test_a_lifted_clause_keeps_its_written_position(decidb_cli):
         packed.index("SUM(x)>=30"),
     ]
     assert positions == sorted(positions), _plan_text(out)
+
+
+def _objective_block(out: str) -> str:
+    """The packed text of the Objective entry, up to the Constraints."""
+    return _packed(out).split("Objective:")[1].split("Constraints:")[0]
+
+
+@pytest.mark.explain
+@pytest.mark.obj_maximize
+@pytest.mark.parametrize(
+    "objective, shown",
+    [
+        pytest.param("MAXIMIZE SUM(x)", "MAXIMIZESUM(x)", id="plain-sum"),
+        pytest.param("MAXIMIZE SUM(w * x) - 2 * SUM(x)", "MAXIMIZESUM(w*x)-2*SUM(x)", id="two-terms"),
+        pytest.param("MAXIMIZE -SUM(x)", "MAXIMIZE-SUM(x)", id="negated"),
+        pytest.param("MAXIMIZE -(2 * SUM(w * x))", "MAXIMIZE-(2*SUM(w*x))", id="negated-product"),
+    ],
+)
+def test_a_maximize_objective_has_no_canonical_line_for_the_flip(decidb_cli, objective, shown):
+    """The objective is minimized as its negation, which is no canonicalization to show: the layer reads in the sense
+    the user wrote, so an objective canonicalization leaves as it is prints one line."""
+    sql = f"""
+        SELECT id, x FROM (VALUES (1, 2.0), (2, 3.0)) t(id, w)
+        DECIDE x(REAL)
+        SUCH THAT x <= 4
+        {objective}
+    """
+    block = _objective_block(_explain(decidb_cli, sql))
+    assert _CANONICAL_MARK not in block, block
+    assert block.startswith(shown), block
+
+
+@pytest.mark.explain
+@pytest.mark.obj_maximize
+@pytest.mark.parametrize(
+    "objective, shown",
+    [
+        pytest.param("MAXIMIZE -SUM(POWER(x, 1))", "MAXIMIZE-SUM(POWER(x,1))≡-sum(x)", id="negated"),
+        pytest.param("MAXIMIZE SUM(x) + SUM(x)", "MAXIMIZESUM(x)+SUM(x)≡2*sum(x)", id="like-terms"),
+        pytest.param("MAXIMIZE 2 * (SUM(POWER(x, 1)) - 1)", "MAXIMIZE2*(SUM(POWER(x,1))-1)≡2*sum(x)", id="distributed"),
+    ],
+)
+def test_a_maximize_objective_canonical_layer_reads_in_the_written_sense(decidb_cli, objective, shown):
+    """What canonicalization does change shows, in the sense the user wrote (not as the negation the model minimizes)."""
+    sql = f"""
+        SELECT id, x FROM (VALUES (1, 2.0), (2, 3.0)) t(id, w)
+        DECIDE x(REAL)
+        SUCH THAT x <= 4
+        {objective}
+    """
+    assert _objective_block(_explain(decidb_cli, sql)).startswith(shown), _plan_text(_explain(decidb_cli, sql))
+
+
+@pytest.mark.explain
+@pytest.mark.obj_maximize
+def test_a_maximize_objective_whose_like_terms_merge_reads_as_written(decidb_cli):
+    """Like terms merge as they are written and the flip is applied after: `SUM(x) + SUM(x) - 3*SUM(x)` merges to
+    `-1 * SUM(x)`, minimized as `-(-1 * SUM(x))`, and the written-sense layer reads it back as `-1 * sum(x)`."""
+    sql = """
+        SELECT id, x FROM (VALUES (1, 2.0), (2, 3.0)) t(id, w)
+        DECIDE x(REAL)
+        SUCH THAT x <= 4
+        MAXIMIZE SUM(x) + SUM(x) - 3 * SUM(x)
+    """
+    out = _explain(decidb_cli, sql)
+    assert _objective_block(out).startswith("MAXIMIZESUM(x)+SUM(x)-3*SUM(x)≡-1*sum(x)"), _plan_text(out)

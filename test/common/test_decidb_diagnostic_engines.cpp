@@ -42,7 +42,6 @@ SolverModel MakeSingleVarModel(const duckdb::vector<SingleVarRow> &rows) {
 	m.is_integer = {false};
 	m.is_binary = {false};
 	m.obj_coeffs = {0.0};
-	m.maximize = false;
 	for (idx_t i = 0; i < rows.size(); i++) {
 		ModelConstraint c;
 		c.indices = {0};
@@ -90,7 +89,6 @@ SolverModel MakeModel(idx_t num_vars, const duckdb::vector<MultiVarRow> &rows) {
 	m.is_integer.assign(num_vars, false);
 	m.is_binary.assign(num_vars, false);
 	m.obj_coeffs.assign(num_vars, 0.0);
-	m.maximize = false;
 	std::map<idx_t, idx_t> source_by_repair_group;
 	for (const auto &r : rows) {
 		ModelConstraint c;
@@ -170,7 +168,6 @@ SolverModel MakeNotEqualModel() {
 	m.is_integer = {false, true};
 	m.is_binary = {false, true};
 	m.obj_coeffs = {0.0, 0.0};
-	m.maximize = false;
 	for (char sense : {'<', '>'}) {
 		ModelConstraint c;
 		c.indices = {0, 1};
@@ -415,7 +412,6 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(elastic.model.obj_coeffs[1] == 0.0);
 		CHECK(elastic.model.obj_coeffs[2] == 0.0);
 		CHECK(elastic.model.obj_coeffs[3] == 0.0);
-		CHECK(!elastic.model.maximize);
 
 		REQUIRE(elastic.slacks.size() == 2);
 		const auto &b0 = elastic.slacks[0];
@@ -724,7 +720,6 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		m.is_integer = {false, false};
 		m.is_binary = {false, false};
 		m.obj_coeffs = {0.0, 0.0};
-		m.maximize = false;
 		ModelConstraint avg_row;
 		avg_row.indices = {0, 1};
 		avg_row.coefficients = {0.5, 0.5}; // (1/2)x0 + (1/2)x1 = AVG(x)
@@ -764,7 +759,6 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		model.is_integer = {false};
 		model.is_binary = {false};
 		model.obj_coeffs = {0.0};
-		model.maximize = false;
 		SolverModel::QuadraticConstraint qc;
 		qc.q_rows = {0};
 		qc.q_cols = {0};
@@ -807,7 +801,6 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 			model.is_integer = {false, false};
 			model.is_binary = {false, false};
 			model.obj_coeffs = {0.0, 0.0};
-			model.maximize = false;
 			for (idx_t row = 0; row < 2; row++) {
 				SolverModel::QuadraticConstraint qc;
 				qc.q_rows = {static_cast<int>(row)};
@@ -854,7 +847,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		// Two editable caps x <= 0, y <= 0 conflict with the rigid floor x + y >= 10.
 		// Total loosening S* = 10 with MANY minimizers (loosen x, loosen y, or split).
 		// Freezing arbitrary stage-1 amounts could loosen y (giving objective 0);
-		// stage 2 maximizes x, so it must loosen x's cap to 10 and report objective 10.
+		// stage 2 maximizes x (the model minimizes -x), so it must loosen x's cap to 10 and report objective 10.
 		SolverModel model =
 		    MakeModel(2, {
 		                     {0, 1.0, '<', 0.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
@@ -867,10 +860,11 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		floor.rhs = 10.0;
 		floor.provenance.kind = ConstraintKind::STRUCTURAL;
 		model.constraints.push_back(std::move(floor));
-		model.obj_coeffs = {1.0, 0.0}; // MAXIMIZE x
-		model.maximize = true;
+		model.obj_coeffs = {-1.0, 0.0}; // MAXIMIZE x, minimized as -x
+		const bool written_maximize = true;
 
-		InfeasibleDiagnosisInput diag_input {model, indexer2, labels2, is_aux2, kNoGlobalLabels, params, solve_highs};
+		InfeasibleDiagnosisInput diag_input {model,           indexer2, labels2,     is_aux2,
+		                                     kNoGlobalLabels, params,   solve_highs, written_maximize};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
@@ -893,8 +887,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		                     {0, 1.0, '<', 0.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
 		                     {0, 1.0, '>', 5.0, ConstraintKind::STRUCTURAL},
 		                 });
-		model.obj_coeffs = {0.0, 1.0}; // MAXIMIZE y (unbounded)
-		model.maximize = true;
+		model.obj_coeffs = {0.0, -1.0}; // MAXIMIZE y (unbounded), minimized as -y
 
 		InfeasibleDiagnosisInput diag_input {model, indexer2, labels2, is_aux2, kNoGlobalLabels, params, solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);

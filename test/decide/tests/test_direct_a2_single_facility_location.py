@@ -1725,3 +1725,20 @@ def test_a2_a_bad_value_on_the_last_row_raises_under_an_absolute_loss(decidb_cli
         for outer in (f"SELECT COUNT(*) FROM ({inner}) q", f"SELECT i FROM ({inner}) q WHERE i = 0"):
             with pytest.raises(DeciDBCliError, match=r"v is NaN or infinite on some rows"):
                 _run(decidb_cli, outer, "require")
+
+
+# ---------------------------------------------------------------------------
+# A maximized negated maximum absolute loss is the minimized one: the rule reads the part's sign, not the sense.
+# ---------------------------------------------------------------------------
+
+MAXIMIZED_NEGATED_MAX = AbsObjective("MAXIMIZE -MAX(ABS(c - v))", "max", _abs_terms(1.0, 1.0, _minus))
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_perrow
+@pytest.mark.correctness
+@pytest.mark.parametrize("box", ["interior", "clamped_up", "clamped_down"])
+def test_a2_a_maximized_negated_maximum_absolute_loss_applies_and_agrees(decidb_cli, oracle_solver, box):
+    """Under `require` the query applies (it did not while the rule demanded MINIMIZE), and the center is the midpoint of
+    the extreme values, clamped into the interval as for the minimized loss."""
+    _agree_abs(decidb_cli, oracle_solver, Case(BOXES[box], MAXIMIZED_NEGATED_MAX, ROWS))

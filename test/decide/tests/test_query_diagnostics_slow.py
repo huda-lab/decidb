@@ -34,6 +34,7 @@ driven through a pseudo-terminal (``execute_interactive``) so ``isatty`` is true
 """
 
 import random
+import re
 
 import pytest
 
@@ -348,3 +349,31 @@ class TestSlowFirstSolveInterrupt:
         assert not out.strip(), "no incumbent means no rows"
         # A stop at the far 20s boundary would take ~19s; 5s leaves margin for a loaded machine.
         assert latency < 5.0, f"interrupt took {latency:.2f}s — expected a stop well before the 20s limit"
+
+
+_BEST_SO_FAR = re.compile(r"best objective so far: (\S+)")
+
+
+@pytest.mark.query_diagnostics
+class TestTimeoutObjectiveSign:
+    """The model minimizes, so a MAXIMIZE query's incumbent is the negation of its objective; the report shows the
+    objective as the user wrote it, and a MINIMIZE query's with its own sign."""
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    @pytest.mark.parametrize(
+        "sense, objective, positive",
+        [
+            pytest.param("MAXIMIZE", "SUM(p*x)", True, id="maximize-positive"),
+            pytest.param("MINIMIZE", "SUM(-p*x)", False, id="minimize-negative"),
+        ],
+    )
+    def test_best_objective_so_far_has_the_written_sign(self, request, cli_fixture, sense, objective, positive):
+        """The knapsack's every profit is positive and its incumbents select some of them, so the objective of an
+        incumbent is above zero as `MAXIMIZE SUM(p*x)` and below zero as `MINIMIZE SUM(-p*x)`."""
+        cli = _slow_cli(request.getfixturevalue(cli_fixture), 1)
+        sql = _KNAPSACK_SQL.replace("MAXIMIZE SUM(p*x)", f"{sense} {objective}")
+        result = cli.execute_raw(sql, timeout=30)
+        reported = _BEST_SO_FAR.search((result.stderr + result.stdout).lower())
+        assert reported, (result.stderr + result.stdout)[:800]
+        value = float(reported[1])
+        assert (value > 0) == positive and value != 0, reported[0]

@@ -47,7 +47,6 @@ struct Condition final : DirectApplicabilityCondition {
 		unique_ptr<Expression> value;
 		unique_ptr<DecideGroupBound> group;
 	};
-	DecideSense sense = DecideSense::FEASIBILITY;
 	//! Which rows the budget covers, and in which groups: a row whose `when` holds and whose `by` key has no NULL in a
 	//! NO_GROUP element (D5) belongs to the budget of its group; any other row is outside every budget. Every clause
 	//! of the budget has this scope. Empty without a key: one budget for all the rows it covers.
@@ -106,7 +105,6 @@ public:
 		}
 		auto condition = make_uniq<Condition>();
 		condition->source_reads = SOURCE_READS;
-		condition->sense = ir.objective.sense;
 		if (!ProveBudget(ir, context, budgets, *condition) || !ProveBounds(ir, context, *condition) ||
 		    !ProveObjective(ir, context, *condition)) {
 			return nullptr;
@@ -1015,8 +1013,8 @@ private:
 		return messages;
 	}
 
-	//! The value of a decision's items: the objective as a maximum, so MINIMIZE negates it, and zero for no objective
-	//! or for a decision the objective does not name.
+	//! The value of a decision's items: the objective as a maximum, so the minimization is negated, and zero for no
+	//! objective or for a decision the objective does not name.
 	ExprPtr ValueOf(idx_t decision) const {
 		ExprPtr value = Zero();
 		for (idx_t p = 0; p < condition.objective.size(); p++) {
@@ -1029,7 +1027,7 @@ private:
 			    DirectScaledTerm(optimizer, calc.Out(C(name)), part.sign, part.scaled, part.scale, part.divides));
 			value = calc.Add(value, scaled);
 		}
-		return condition.sense == DecideSense::MINIMIZE ? calc.Neg(value) : value;
+		return condition.objective.empty() ? value : calc.Neg(value);
 	}
 
 	//! P2: the message of every check of a raw value, each clause's bounds, and each decision's v.

@@ -60,7 +60,7 @@ void AttachUnboundedRayIfRequested(const SolverModel &model, SolverBackend backe
 		return;
 	}
 
-	double improvement = ComputeLinearObjectiveValue(ray_model, ray_result.solution);
+	double improvement = -ComputeLinearObjectiveValue(ray_model, ray_result.solution);
 	if (std::isfinite(improvement) && improvement > DIAGNOSTIC_RAY_EPSILON) {
 		result.ray = std::move(ray_result.solution);
 	}
@@ -149,7 +149,7 @@ void DumpSolverModel(const SolverModel &model) {
 	}
 
 	std::string out = "=== DECIDB MODEL DUMP ===\n";
-	out += "sense: " + std::string(model.maximize ? "maximize" : "minimize") + "\n";
+	out += "sense: minimize\n";
 	out += "num_vars: " + std::to_string(model.num_vars) + "\n";
 	out += "num_rows: " + std::to_string(model.constraints.size()) + "\n";
 	out += "num_qrows: " + std::to_string(model.quadratic_constraints.size()) + "\n";

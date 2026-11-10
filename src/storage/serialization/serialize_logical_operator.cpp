@@ -372,7 +372,7 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<idx_t>(200, "decide_index", decide_index);
 	serializer.WritePropertyWithDefault<vector<unique_ptr<Expression>>>(201, "decide_variables", decide_variables);
 	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(202, "decide_constraints", decide_constraints);
-	serializer.WriteProperty<DecideSense>(203, "decide_sense", decide_sense);
+	serializer.WriteProperty<DecideSense>(203, "written_sense", written_sense);
 	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(204, "decide_objective", decide_objective);
 	serializer.WritePropertyWithDefault<bool>(205, "diagnose", diagnose);
 	serializer.WritePropertyWithDefault<idx_t>(206, "num_auxiliary_vars", num_auxiliary_vars);
@@ -398,7 +398,7 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithDefault<idx_t>(200, "decide_index", result->decide_index);
 	deserializer.ReadPropertyWithDefault<vector<unique_ptr<Expression>>>(201, "decide_variables", result->decide_variables);
 	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(202, "decide_constraints", result->decide_constraints);
-	deserializer.ReadProperty<DecideSense>(203, "decide_sense", result->decide_sense);
+	deserializer.ReadProperty<DecideSense>(203, "written_sense", result->written_sense);
 	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(204, "decide_objective", result->decide_objective);
 	deserializer.ReadPropertyWithDefault<bool>(205, "diagnose", result->diagnose);
 	deserializer.ReadPropertyWithDefault<idx_t>(206, "num_auxiliary_vars", result->num_auxiliary_vars);

@@ -15,7 +15,7 @@ using namespace duckdb;
 
 namespace {
 
-// Minimal SolverInput with a trivial MAXIMIZE objective on var 0 so SolverModel::Build
+// Minimal SolverInput with a trivial objective on var 0 so SolverModel::Build
 // is happy; provenance is independent of the objective. Bounds default (row-scoped vars).
 SolverInput MakeBaseInput(idx_t num_rows, idx_t num_vars) {
 	SolverInput input;
@@ -24,7 +24,6 @@ SolverInput MakeBaseInput(idx_t num_rows, idx_t num_vars) {
 	input.variable_types.assign(num_vars, LogicalType::DOUBLE);
 	input.objective_variable_indices = {0};
 	input.objective_coefficients = {CoefficientColumn::MakeScalar(1.0, num_rows)};
-	input.sense = DecideSense::MAXIMIZE;
 	return input;
 }
 

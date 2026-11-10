@@ -72,11 +72,9 @@ SolverModel BuildUnboundedRayFallbackModel(const SolverModel &model) {
 	ray_model.is_integer.assign(model.num_vars, false);
 	ray_model.is_binary.assign(model.num_vars, false);
 
-	ray_model.obj_coeffs.resize(model.obj_coeffs.size(), 0.0);
-	for (idx_t col = 0; col < model.obj_coeffs.size(); col++) {
-		ray_model.obj_coeffs[col] = model.maximize ? model.obj_coeffs[col] : -model.obj_coeffs[col];
-	}
-	ray_model.maximize = true;
+	// The ray improves the objective by moving it down: the model is a minimization, so its value along the ray is
+	// negative.
+	ray_model.obj_coeffs = model.obj_coeffs;
 
 	ray_model.constraints.reserve(model.constraints.size());
 	for (const auto &constraint : model.constraints) {

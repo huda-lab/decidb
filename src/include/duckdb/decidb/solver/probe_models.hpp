@@ -18,7 +18,7 @@ namespace duckdb {
 SolverModel MakeZeroObjectiveProbeModel(const SolverModel &model);
 
 //! Build the portable fallback LP for extracting an unbounded ray:
-//! maximize signed(c)^T d subject to homogenized linear rows (and the linear part of each quadratic row), each d_j in
+//! minimize c^T d subject to homogenized linear rows (and the linear part of each quadratic row), each d_j in
 //! [-1, 1] on the sides column j's box leaves open and 0 on a bounded side. A column that appears in a non-linear
 //! part (a square or product, a general constraint, an indicator constraint) is fixed at 0, so every such part keeps
 //! its value along the ray.

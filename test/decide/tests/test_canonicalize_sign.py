@@ -477,3 +477,50 @@ def test_negated_extremum_member_is_bounded_per_row(decidb_cli_gurobi, tmp_path)
         lambda a: all((a[f"x{i}"] - rows[i][1]) ** 2 <= 4 for i in range(3)),
         lambda a: sum(a.values()),
     )
+
+
+# ---------------------------------------------------------------------------
+# An objective's sense is a sign: `MAXIMIZE f` and `MINIMIZE -f` are one problem.
+# ---------------------------------------------------------------------------
+
+_SAME_OBJECTIVE_CASES = [
+    pytest.param("MAXIMIZE MIN(x * t.w)", "MINIMIZE -MIN(x * t.w)", "min", id="flat-min"),
+    pytest.param("MAXIMIZE MAX(x * t.w)", "MINIMIZE -MAX(x * t.w)", "max", id="flat-max"),
+    pytest.param(
+        "MAXIMIZE when t.g = 'a': MIN(x * t.w)", "MINIMIZE when t.g = 'a': -MIN(x * t.w)", "min", id="under-when"
+    ),
+]
+
+
+@pytest.mark.min_max
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+@pytest.mark.parametrize("maximized, negated, agg", _SAME_OBJECTIVE_CASES)
+def test_maximize_an_extremum_and_minimize_its_negation_are_one_problem(
+    decidb_cli, scope_solver, tmp_path, maximized, negated, agg
+):
+    """Both spellings build one model and answer as the oracle does, on the flat MIN/MAX path the sign selects."""
+    when = (lambda r: r["g"] == "a") if "when" in maximized else None
+    model = ScopedModel(
+        [dict(zip(_SIGN_COLUMNS, row)) for row in _SIGN_ROWS],
+        [Decision("x", var_type=VarType.INTEGER, ub=6)],
+    )
+    clauses = [Scoped((Reduce("sum", lambda r: {"x": 1.0}),), "<=", (lambda r: {CONSTANT: 9},), per=())]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce(agg, lambda r: {"x": r["w"]}),), when=when)
+    expected = model.solve_scoped(scope_solver, clauses, objective)
+
+    def sql(objective_text):
+        return f"""
+            SELECT id, x {table('t', _SIGN_COLUMNS, _SIGN_ROWS)}
+            DECIDE x(INT)
+            SUCH THAT x <= 6 AND SUM(x) <= 9
+            {objective_text}
+            ORDER BY id"""
+
+    for text in (maximized, negated):
+        assert model.judge_scoped(answer(decidb_cli, sql(text)), clauses, objective) == pytest.approx(
+            expected, abs=1e-4
+        )
+    assert decidb_cli.dump_model(sql(maximized), tmp_path / "maximized.txt") == decidb_cli.dump_model(
+        sql(negated), tmp_path / "negated.txt"
+    )

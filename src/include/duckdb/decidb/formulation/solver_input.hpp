@@ -546,7 +546,6 @@ struct SolverInput {
 	// Linear objective
 	vector<CoefficientColumn> objective_coefficients; // [term_idx] = column of length num_rows
 	vector<idx_t> objective_variable_indices;         // [term_idx]
-	DecideSense sense;
 	//! The constant canonicalization peeled off the objective (LogicalDecide::objective_constant_offset). The model
 	//! builder adds the constants it meets in the terms to it (SolverModel::obj_constant).
 	double objective_constant = 0.0;

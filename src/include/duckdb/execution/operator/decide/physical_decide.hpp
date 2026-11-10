@@ -69,7 +69,7 @@ public:
 public:
 	PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardinality, unique_ptr<PhysicalOperator> child,
 	               idx_t decide_index, vector<unique_ptr<Expression>> decide_variables,
-	               unique_ptr<Expression> decide_constraints, DecideSense decide_sense,
+	               unique_ptr<Expression> decide_constraints, DecideSense written_sense,
 	               unique_ptr<Expression> decide_objective);
 
 	// The table index for the new columns
@@ -93,14 +93,15 @@ public:
 	//! The DECIDE tail as the user wrote it, copied from LogicalDecide.
 	DecideSourceText source_text;
 
-	// The optimization sense (MINIMIZE or MAXIMIZE)
-	DecideSense decide_sense;
+	//! The direction the objective was written in, copied from LogicalDecide. Only a message, EXPLAIN and a shown value
+	//! read it: `decide_objective` is a minimization.
+	DecideSense written_sense;
 
-	// The bound objective function expression
+	//! The bound objective function expression, minimized.
 	unique_ptr<Expression> decide_objective;
 
 	//! The constant canonicalization peeled off the objective (LogicalDecide::objective_constant_offset), so the
-	//! objective value a solve reports is the objective as written.
+	//! objective value a solve reports is the minimized objective's (the negation of a MAXIMIZE query's).
 	double objective_constant_offset = 0.0;
 
 	// Number of auxiliary variables (e.g. from ABS linearization) at the end of decide_variables

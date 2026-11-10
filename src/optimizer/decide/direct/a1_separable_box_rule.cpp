@@ -29,7 +29,6 @@ struct Decision {
 };
 
 struct Condition final : DirectApplicabilityCondition {
-	DecideSense sense = DecideSense::FEASIBILITY;
 	//! The objective as written, which a message names when a decision's quadratic or linear coefficient, computed from
 	//! finite values, is too large for a DOUBLE (TOO_LARGE), as the solver path names it.
 	string objective_written;
@@ -111,7 +110,6 @@ public:
 			}
 		}
 		auto condition = make_uniq<Condition>();
-		condition->sense = ir.objective.sense;
 		condition->objective_written = ir.objective.written;
 		for (auto &decision : ir.decisions) {
 			Decision prepared;
@@ -362,7 +360,6 @@ private:
 			bounds.floor.push_back(lowering_whens.empty() ? floor
 			                                              : calc.Col(LogicalType::DOUBLE, p2.Add(calc.Out(floor))));
 		}
-		double sense = condition.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0;
 		for (idx_t d = 0; d < condition.decisions.size(); d++) {
 			auto sum = DirectFoldQuadratic(optimizer, calc, condition.parts, raw.parts, d);
 			// The linear coefficient the parts' like terms merge into, `b + b` for SUM(b * x) + SUM(b * x), as the
@@ -370,8 +367,8 @@ private:
 			if (sum.linear) {
 				checks.push_back(DirectRaiseTooLarge(optimizer, sum.linear, condition.objective_written));
 			}
-			bounds.a.push_back(p2.Add(calc.Out(calc.Mul(calc.Num(sense), sum.a))));
-			bounds.b.push_back(p2.Add(calc.Out(calc.Mul(calc.Num(sense), sum.b))));
+			bounds.a.push_back(p2.Add(calc.Out(sum.a)));
+			bounds.b.push_back(p2.Add(calc.Out(sum.b)));
 		}
 		// Every check is true or raises; a row passes when all of them do.
 		bounds.valid_data = p2.Add(DirectAllHold(calc, std::move(checks)));

@@ -296,7 +296,7 @@ public:
 
 public:
 	LogicalDecide(idx_t decide_index, vector<unique_ptr<Expression>> decide_variables,
-	              unique_ptr<Expression> decide_constraints, DecideSense decide_sense,
+	              unique_ptr<Expression> decide_constraints, DecideSense written_sense,
 	              unique_ptr<Expression> decide_objective);
 
 	LogicalDecide();
@@ -343,10 +343,14 @@ public:
 	//! serializer carries the record directly.
 	vector<DecideSourceColumnName> source_columns;
 
-	// The optimization sense (MINIMIZE or MAXIMIZE)
-	DecideSense decide_sense;
+	//! The direction the objective was written in (MINIMIZE, MAXIMIZE, or FEASIBILITY for none). Read only by what
+	//! shows the user the objective: a message, EXPLAIN, and a value shown (a timeout's best objective so far,
+	//! DIAGNOSE's achievable objective). Everything else reads `decide_objective`, which is always a minimization
+	//! (DecideCanonicalizer::CanonicalizeObjective): a MAXIMIZE objective is its negation, carried by the sign of each
+	//! term.
+	DecideSense written_sense;
 
-	// The bound objective function expression
+	//! The bound objective function expression, minimized.
 	unique_ptr<Expression> decide_objective;
 
 	//! The `DIAGNOSE` prefix, carried from the statement that was written. True means
@@ -361,9 +365,9 @@ public:
 
 	// Additive constant peeled from the objective body by
 	// DecideCanonicalizer::CanonicalizeObjective (e.g. the `3` in
-	// `MAXIMIZE SUM(x) + 3`). It moves no argmax/argmin; it travels to the solver
-	// model's objective constant (SolverModel::obj_constant), so an objective value a
-	// solve reports is the objective as written. SetObjective ADDS
+	// `MAXIMIZE SUM(x) + 3`, which is the `-3` of the minimization). It moves no argmax/argmin; it travels to the
+	// solver model's objective constant (SolverModel::obj_constant), so an objective value a solve reports is the
+	// minimized objective's, which a shown value negates for a MAXIMIZE query. SetObjective ADDS
 	// to it, so a later optimizer rewrite cannot discard the user's constant.
 	// Zero when nothing was peeled.
 	double objective_constant_offset = 0.0;

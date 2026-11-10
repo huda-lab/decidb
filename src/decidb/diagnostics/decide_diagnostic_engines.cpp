@@ -117,7 +117,6 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 	// drop any quadratic objective. DiagnoseInfeasible sets one tier objective per
 	// lexicographic pass.
 	elastic.ClearObjective();
-	elastic.maximize = false;
 
 	// Append a REAL, non-negative, uncapped slack column (sᵢ≥0 REAL even for integer
 	// RHS — decision 4). No ceiling is needed: what a repair can actually reach is
@@ -615,7 +614,6 @@ static bool TierHasTerms(const vector<BlockSlackRef> &slacks, ElasticRepairTier 
 
 static void SetTierObjective(SolverModel &model, const vector<BlockSlackRef> &slacks, ElasticRepairTier tier) {
 	model.ClearObjective();
-	model.maximize = false;
 
 	ModelConstraint objective_terms;
 	if (!AppendTierTerms(objective_terms, slacks, tier)) {
@@ -687,7 +685,6 @@ static SolverModel BuildStage2Model(const SolverModel &elastic, const vector<Blo
 	stage2.q_vals = original.q_vals;
 	stage2.has_quadratic_obj = original.has_quadratic_obj;
 	stage2.nonconvex_quadratic = original.nonconvex_quadratic;
-	stage2.maximize = original.maximize;
 
 	return stage2;
 }
@@ -747,7 +744,7 @@ static bool BuildTieBreakModel(SolverModel &tiebreak, const vector<BlockSlackRef
 		if (freeze.indices.empty()) {
 			return false; // constant objective: nothing to preserve, nothing to tie-break against
 		}
-		freeze.sense = tiebreak.maximize ? '>' : '<';
+		freeze.sense = '<';
 		freeze.provenance.kind = ConstraintKind::STRUCTURAL; // rigid: never slacked or edited
 		tiebreak.constraints.push_back(std::move(freeze));
 	}
@@ -766,7 +763,6 @@ static bool BuildTieBreakModel(SolverModel &tiebreak, const vector<BlockSlackRef
 			tiebreak.obj_coeffs[sl.neg_col] = coeff;
 		}
 	}
-	tiebreak.maximize = false;
 	return true;
 }
 
@@ -979,7 +975,7 @@ static int CompareDisplayed(double lhs, double rhs) {
 	return a < b ? -1 : (a > b ? 1 : 0);
 }
 
-static bool BetterCandidate(const RemovalCandidate &lhs, const RemovalCandidate &rhs, bool maximize) {
+static bool BetterCandidate(const RemovalCandidate &lhs, const RemovalCandidate &rhs) {
 	int cmp = CompareDisplayed(lhs.data_cost, rhs.data_cost);
 	if (cmp != 0)
 		return cmp < 0;
@@ -991,7 +987,7 @@ static bool BetterCandidate(const RemovalCandidate &lhs, const RemovalCandidate 
 	if (!lhs.objective_unbounded && lhs.has_objective && rhs.has_objective) {
 		cmp = CompareDisplayed(lhs.objective_value, rhs.objective_value);
 		if (cmp != 0)
-			return maximize ? cmp > 0 : cmp < 0;
+			return cmp < 0;
 	}
 	return std::lexicographical_compare(lhs.signature.begin(), lhs.signature.end(), rhs.signature.begin(),
 	                                    rhs.signature.end());
@@ -1044,7 +1040,7 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 			if (candidate.status == CandidateStatus::INFEASIBLE) {
 				return true;
 			}
-			if (!found || BetterCandidate(candidate, best, input.model.maximize)) {
+			if (!found || BetterCandidate(candidate, best)) {
 				best = std::move(candidate);
 				found = true;
 			}
@@ -1070,8 +1066,9 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 		if (best.objective_unbounded) {
 			return BuildInfeasibleDiagnostic(edits, "", /*unbounded_after_fix=*/true);
 		}
-		return BuildInfeasibleDiagnostic(
-		    edits, best.has_objective ? FormatNum(SnapDiagnosticValue(best.objective_value)) : string());
+		// The model minimizes; a MAXIMIZE query shows the value as it wrote it.
+		const double shown = input.negate_shown_objective ? 0.0 - best.objective_value : best.objective_value;
+		return BuildInfeasibleDiagnostic(edits, best.has_objective ? FormatNum(SnapDiagnosticValue(shown)) : string());
 	}
 	return BuildElasticInfeasibleDiagnostic();
 }

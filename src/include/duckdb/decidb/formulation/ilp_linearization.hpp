@@ -534,10 +534,10 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
 //! How stage 05 classified the objective's MIN/MAX shape, as `LinearizeMinMaxObjective`
 //! needs it. `flat_*` describes an unqualified `MIN(expr)` / `MAX(expr)` objective;
 //! `per_*` describes the two-level `outer(per k: inner(e) by (k))` form, whose group
-//! ids arrive on `SolverInput::objective_row_group_ids`. An objective is *easy* when the
-//! optimization direction already drives the auxiliary to the extreme (MINIMIZE+MAX,
-//! MAXIMIZE+MIN) and one envelope row per row suffices; the hard direction additionally
-//! needs the per-row indicator layer.
+//! ids arrive on `SolverInput::objective_row_group_ids`. The objective is a minimization, and
+//! it is *easy* when that already drives the auxiliary to the extreme (a minimized MAX:
+//! `MINIMIZE MAX(e)`, or `MAXIMIZE MIN(e)` written as `MINIMIZE MAX(-e)`) and one envelope
+//! row per row suffices; the hard direction additionally needs the per-row indicator layer.
 struct MinMaxObjectiveSpec {
 	ObjectiveAggregateType flat_agg = ObjectiveAggregateType::NONE;
 	bool flat_is_easy = false;

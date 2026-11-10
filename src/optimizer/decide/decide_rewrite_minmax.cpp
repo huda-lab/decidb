@@ -97,20 +97,6 @@ static bool IsFunctionNode(const Expression &e, idx_t decide_index, const char *
 	return StringUtil::Lower(u.Cast<BoundFunctionExpression>().function.name) == name;
 }
 
-//! The aggregate of a lone `factor * min/max(e)` (or `min/max(e) / factor`) with a decision in `e` and none in the
-//! factor, else null. The factor is `match.scale`.
-static const BoundAggregateExpression *MatchLoneScaledExtremum(const Expression &e, idx_t decide_index,
-                                                               ScaledAggregateMatch &match) {
-	if (!TryMatchScaledAggregate(e, decide_index, match)) {
-		return nullptr;
-	}
-	auto &agg = *match.aggregate;
-	if (!IsExtremumName(StringUtil::Lower(agg.function.name))) {
-		return nullptr;
-	}
-	return &agg;
-}
-
 //! The aggregate of a left side that is one signed MIN or MAX term, `[-] [factor *] min/max(e)`, else null. Its sign
 //! is `sign` and its factor `match.scale`, if any: the term's direction is the comparison's times both.
 static const BoundAggregateExpression *MatchLoneSignedExtremum(const Expression &lhs, idx_t decide_index, int &sign,
@@ -412,10 +398,16 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 	// The second case is here rather than on the flat path because the flat path
 	// replaces the whole objective with its auxiliary at coefficient 1.0 -- it has
 	// nowhere to put a factor. The composed path already carries one per term, and a
-	// one-term composition is a perfectly good degenerate case. An UNSCALED lone
-	// MIN/MAX still goes to the flat path, which keeps its cheaper encoding.
+	// one-term composition is a perfectly good degenerate case. A lone MIN/MAX with no
+	// factor, signed or not (`MAXIMIZE MIN(e)` is `-MIN(e)`), still goes to the flat path,
+	// which keeps its cheaper encoding and the box it derives for its auxiliary.
 	ScaledAggregateMatch lone_match;
-	if (!MatchLoneScaledExtremum(*body, decide.decide_index, lone_match)) {
+	int lone_sign;
+	if (MatchLoneSignedExtremum(*body, decide.decide_index, lone_sign, lone_match)) {
+		if (!lone_match.aggregate) {
+			return;
+		}
+	} else {
 		if (!IsFunctionNode(*body, decide.decide_index, "+") && !IsFunctionNode(*body, decide.decide_index, "-")) {
 			return;
 		}
@@ -424,17 +416,15 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 		}
 	}
 
-	// Direction: MAXIMIZE pushes each term UP; MINIMIZE pushes each term DOWN.
-	const ExtremumPush outer_push =
-	    decide.decide_sense == DecideSense::MINIMIZE ? ExtremumPush::DOWN : ExtremumPush::UP;
-
+	// The objective is minimized, which pushes each term DOWN; a term's own sign and its factor's turn that into the
+	// term's direction.
 	vector<LogicalDecide::ComposedMinMaxTerm> terms;
 	vector<pair<int, const Expression *>> beside;
 	// An objective always has a direction, so no term needs the both-sides pin here.
 	auto names = DecidePlanNames(decide.source_text, decide.keyed_scopes, decide.keys, decide.decide_index,
 	                             decide.aux_var_expressions);
 	WalkComposedLhs(optimizer.context, decide, DConstants::INVALID_INDEX, *body, /*sign=*/1, decide.decide_index,
-	                outer_push, terms, names, beside);
+	                ExtremumPush::DOWN, terms, names, beside);
 	ScopeComposedTerms(terms, scoped_when);
 
 	decide.composed_minmax_objective_terms = std::move(terms);
@@ -717,23 +707,31 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 		obj_expr = conj.children[0].get();
 	}
 
-	// A factor peeled onto the objective's reducer (`2 * MAX(x*v)`, `MAX(x*v) * 2`).
-	// Objectives are not canonicalized, so either order arrives as written.
-	ScaledAggregateMatch scale_match;
-	const BoundAggregateExpression *scaled_obj_agg =
-	    TryMatchScaledAggregate(*obj_expr, decide.decide_index, scale_match) ? scale_match.aggregate : nullptr;
-	auto obj_scale = scale_match.scale;
+	// A MAXIMIZE objective was written as its negation, `-outer(inner(e))` or `-max(e)` (the canonicalizer carries
+	// the flip by the sign of the term). The sign stays on the term, where extraction reads it into every
+	// coefficient below, so each extremum under it is the other one over the negated terms: `-max(e)` is `min(-e)`.
+	int sign = 1;
+	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &negation = obj_expr->Cast<BoundFunctionExpression>();
+		if (negation.function.name != "-" || negation.children.size() != 1) {
+			return;
+		}
+		sign = -1;
+		obj_owner = &negation.children[0];
+		obj_expr = negation.children[0].get();
+	}
 
-	if (!scaled_obj_agg && obj_expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+	// The flat form is a bare MIN or MAX, signed or not: a factor on it is the composed rewrite's, which claimed it.
+	if (obj_expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
 		return;
 	}
-	auto &outer_agg = scaled_obj_agg ? const_cast<BoundAggregateExpression &>(*scaled_obj_agg)
-	                                 : obj_expr->Cast<BoundAggregateExpression>();
+	auto &outer_agg = obj_expr->Cast<BoundAggregateExpression>();
 	auto outer_name = StringUtil::Lower(outer_agg.function.name);
 
-	// The objective's sense pushes every term the same way: MINIMIZE down, MAXIMIZE up.
-	const ExtremumPush objective_push =
-	    decide.decide_sense == DecideSense::MINIMIZE ? ExtremumPush::DOWN : ExtremumPush::UP;
+	// What the model minimizes: the reducer as written, or the other extremum under a negative sign.
+	auto minimized = [&](const string &written) -> string {
+		return sign < 0 && IsExtremumName(written) ? (written == "max" ? "min" : "max") : written;
+	};
 
 	// The two-level form: OUTER(per k: INNER(expr) by (k)). The binder builds it with a single-argument INNER over
 	// decisions (BindTwoLevelObjective).
@@ -743,19 +741,19 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 
 		// Found the two-level pattern: set metadata. (The binder refuses an outer
 		// avg: BindTwoLevelObjective.)
-		decide.per_outer_agg = StrToAggType(outer_name);
+		decide.per_outer_agg = StrToAggType(minimized(outer_name));
 		if (inner_name == "avg") {
 			decide.per_inner_agg = ObjectiveAggregateType::SUM;
 			decide.per_inner_was_avg = true;
 		} else {
-			decide.per_inner_agg = StrToAggType(inner_name);
+			decide.per_inner_agg = StrToAggType(minimized(inner_name));
 		}
 
 		if (IsExtremumName(inner_name)) {
-			decide.per_inner_is_easy = IsEasyExtremum(inner_name == "max", objective_push);
+			decide.per_inner_is_easy = IsEasyExtremum(minimized(inner_name) == "max", ExtremumPush::DOWN);
 		}
 		if (IsExtremumName(outer_name)) {
-			decide.per_outer_is_easy = IsEasyExtremum(outer_name == "max", objective_push);
+			decide.per_outer_is_easy = IsEasyExtremum(minimized(outer_name) == "max", ExtremumPush::DOWN);
 		}
 		// What the plan says the two levels became, read before the inner is rebuilt.
 		// The `by` of the inner reducer is the `per` key, which the wrapper holds, so the
@@ -805,14 +803,11 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 	// A FACTOR on it never reaches here: this path replaces the whole objective with
 	// its auxiliary at coefficient 1.0, so there is nowhere to put one.
 	// RewriteComposedMinMaxObjectiveTop claims the scaled case first (it runs earlier
-	// and carries a per-term scale), leaving this path the unscaled shape it was
-	// written for and its cheaper encoding.
-	if (obj_scale) {
-		return;
-	}
+	// and carries a per-term scale), leaving this path a bare shape, signed or not, and its cheaper
+	// encoding.
 	if (IsExtremumName(outer_name)) {
-		decide.flat_objective_agg = StrToAggType(outer_name);
-		decide.flat_objective_is_easy = IsEasyExtremum(outer_name == "max", objective_push);
+		decide.flat_objective_agg = StrToAggType(minimized(outer_name));
+		decide.flat_objective_is_easy = IsEasyExtremum(minimized(outer_name) == "max", ExtremumPush::DOWN);
 		AddRewriteAccount(decide, DConstants::INVALID_INDEX, ExtremumAccount(decide.flat_objective_is_easy, outer_agg),
 		                  RenderForPlan(outer_agg, decide));
 		*obj_owner = BindSumOver(optimizer, outer_agg.children[0]->Copy(), outer_agg.filter.get());

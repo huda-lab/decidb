@@ -123,16 +123,17 @@ struct SolverModelClass {
 	bool singular_quadratic = false;
 };
 
-//! Is one product group of the objective (DecideProductGroup) non-convex under this sense? A product of two forms is
-//! indefinite whatever its weight. A square `w * f * fᵀ` is semi-definite with the sign of `w`, so it is non-convex
-//! when that sign fights the direction of optimization (MAXIMIZE of a positive weight, MINIMIZE of a negative one) or
-//! is not known until the query runs (`weight_sign` 0).
+//! Is one product group of the objective (DecideProductGroup) non-convex? The objective is minimized, so the weight
+//! carries the direction the query was written in (MAXIMIZE of a positive weight is a negative one). A product of two
+//! forms is indefinite whatever its weight. A square `w * f * fᵀ` is semi-definite with the sign of `w`, so it is
+//! non-convex when that sign is negative, which fights the minimization, or is not known until the query runs
+//! (`weight_sign` 0).
 //!
 //! Shared on purpose. Stage 05 asks it of the prepared groups to PREDICT the model class, and stage 06 asks it again
 //! of the evaluated groups to record the FACT. Those two answers must agree for the plan-time refusal to be honest, so
 //! they read one predicate rather than two copies of one expression.
-inline bool IsNonconvexProductGroup(bool square, int weight_sign, DecideSense sense) {
-	return !square || weight_sign == 0 || (weight_sign > 0) == (sense == DecideSense::MAXIMIZE);
+inline bool IsNonconvexProductGroup(bool square, int weight_sign) {
+	return !square || weight_sign <= 0;
 }
 
 //! What the model-class question reads of one query (ClassifyDecideModel), filled term by term with AddTerm by each
@@ -143,12 +144,11 @@ inline bool IsNonconvexProductGroup(bool square, int weight_sign, DecideSense se
 //! A reader that cannot tell what a term becomes in the built model says which way it errs: the gate demands more
 //! (SolverModelClass), direct solve reports less.
 struct DecideModelShape {
-	DecideSense sense = DecideSense::FEASIBILITY;
 	//! Some column of the model may be integral: a declared INT or BOOL, or a helper a rewrite adds as one.
 	bool integral_column = false;
 	bool quadratic_constraints = false;
 	bool quadratic_objective = false;
-	//! Some product of the objective is non-convex under `sense` (IsNonconvexProductGroup).
+	//! Some product of the objective is non-convex (IsNonconvexProductGroup).
 	bool nonconvex_objective = false;
 	//! Some product of the objective couples two decisions, so its Q is rank-deficient (SolverModelClass).
 	bool coupled_objective = false;
@@ -163,7 +163,7 @@ struct DecideModelShape {
 			return;
 		}
 		quadratic_objective = true;
-		nonconvex_objective = nonconvex_objective || IsNonconvexProductGroup(square, weight_sign, sense);
+		nonconvex_objective = nonconvex_objective || IsNonconvexProductGroup(square, weight_sign);
 		coupled_objective = coupled_objective || !square || decisions >= 2;
 	}
 };

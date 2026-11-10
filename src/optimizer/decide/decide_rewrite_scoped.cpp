@@ -327,10 +327,9 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		if (HasDecideTag((*body)->GetAlias(), VALUE_REWRITE_TAG)) {
 			vector<ReducerSite> sites;
 			CollectReducerSites(*body, 1, optimizer.context, decide.decide_index, booleans, sites);
-			const auto outer = decide.decide_sense == DecideSense::MINIMIZE ? ExtremumPush::DOWN : ExtremumPush::UP;
 			for (auto &site : sites) {
 				if (site.under_decision) {
-					ReplaceReducer(helpers, names, scope, outer, DConstants::INVALID_INDEX, site);
+					ReplaceReducer(helpers, names, scope, ExtremumPush::DOWN, DConstants::INVALID_INDEX, site);
 				}
 			}
 			FindAndReplaceBilinear(*body, decide, OBJECTIVE_ROW_TAG);

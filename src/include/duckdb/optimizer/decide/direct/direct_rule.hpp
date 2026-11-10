@@ -176,10 +176,11 @@ struct DirectIRConstraint {
 
 struct DirectIRObjective {
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
-	DecideSense sense = DecideSense::FEASIBILITY;
-	//! Decision-free additive constant canonicalization folded out of the objective.
+	//! Decision-free additive constant canonicalization folded out of the objective. The parts below are a
+	//! minimization, so both are of the objective negated when the query was written MAXIMIZE.
 	double offset = 0;
-	//! The objective as a message names it, sense in front (DecideWrittenObjective), as the solver path names it.
+	//! The objective as a message names it, in the direction written (DecideWrittenObjective), as the solver path
+	//! names it.
 	string written;
 	vector<DirectPart> parts;
 	DirectIRScope scope;
@@ -279,7 +280,7 @@ struct DirectSubstitute {
 };
 
 //! Whether the front end read the whole IR: the constraints and the objective are all proved (each constraint too),
-//! the objective offset is finite and the sense is one the rules know. The decisions, the keyed scopes and the source
+//! the objective offset is finite. The decisions, the keyed scopes and the source
 //! are always read in full. The rule driver offers a rule an IR only when this holds, so a rule checks only what
 //! concerns its own class.
 bool DirectIRIsReadable(const DirectIR &ir);

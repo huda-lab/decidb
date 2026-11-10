@@ -166,8 +166,8 @@ DirectLayoutBoundClauses(Optimizer &optimizer, const ExpressionBuilder &calc, Di
 
 //! One decision's objective as `a*x^2 + b*x`, summed over the parts, each scaled by its sign and factor. A part that
 //! has neither a linear term nor a square on the decision adds nothing. `linear` is the part of `b` the linear terms
-//! make, which a rule tests for a number past a DOUBLE; it is null when no part has one. The rule applies the
-//! objective's sense.
+//! make, which a rule tests for a number past a DOUBLE; it is null when no part has one. The parts are a
+//! minimization's, so the rule minimizes `a*x^2 + b*x`.
 struct DirectQuadraticSum {
 	ExprPtr a;
 	ExprPtr b;

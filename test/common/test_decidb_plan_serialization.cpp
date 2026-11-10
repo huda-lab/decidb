@@ -350,7 +350,7 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 	REQUIRE(after->source_text.tail_start == before->source_text.tail_start);
 	REQUIRE(after->source_text.spans == before->source_text.spans);
 	REQUIRE(after->objective_constant_offset == before->objective_constant_offset);
-	REQUIRE(after->decide_sense == before->decide_sense);
+	REQUIRE(after->written_sense == before->written_sense);
 	REQUIRE(after->is_boolean_var == before->is_boolean_var);
 	REQUIRE(after->num_auxiliary_vars == before->num_auxiliary_vars);
 	REQUIRE(after->decide_variables.size() == before->decide_variables.size());

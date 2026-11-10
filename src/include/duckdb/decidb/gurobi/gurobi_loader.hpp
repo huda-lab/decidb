@@ -22,10 +22,6 @@ static constexpr char GRB_CONTINUOUS = 'C';
 static constexpr char GRB_BINARY = 'B';
 static constexpr char GRB_INTEGER = 'I';
 
-// Objective sense
-static constexpr int GRB_MINIMIZE = 1;
-static constexpr int GRB_MAXIMIZE = -1;
-
 // Model status codes (must match Gurobi's GRB_* values in gurobi_c.h)
 static constexpr int GRB_OPTIMAL = 2;
 static constexpr int GRB_INFEASIBLE = 3;
@@ -46,7 +42,6 @@ static constexpr int GRB_SUBOPTIMAL = 13;
 static constexpr double GRB_INFINITY_VALUE = 1e100;
 
 // Attribute name strings
-static constexpr const char *GRB_INT_ATTR_MODELSENSE = "ModelSense";
 static constexpr const char *GRB_INT_ATTR_STATUS = "Status";
 static constexpr const char *GRB_INT_ATTR_SOLCOUNT = "SolCount";
 static constexpr const char *GRB_DBL_ATTR_X = "X";

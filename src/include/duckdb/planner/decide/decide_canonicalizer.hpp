@@ -265,7 +265,15 @@ public:
 	//! An objective with no decision content at all is returned unchanged: the
 	//! optimizer's composed MIN/MAX rewrite deliberately installs a constant
 	//! placeholder and supplies coefficients from its own spec.
-	unique_ptr<Expression> CanonicalizeObjective(const Expression &objective, double &out_constant_offset) const;
+	//!
+	//! The result is always a minimization. `sense` is the direction the objective was written in: MAXIMIZE writes
+	//! `f` as `-f`, the flip carried by the sign of each term, never by a factor, and it is the last step (the
+	//! objective is canonicalized as written, so like terms merge as in a MINIMIZE). Every stage after this one reads a
+	//! minimization; what the user wrote is LogicalDecide::written_sense, which only messages, EXPLAIN and a shown
+	//! value read. An objective an optimizer rewrite hands back (LogicalDecide::SetObjective) is a minimization
+	//! already.
+	unique_ptr<Expression> CanonicalizeObjective(const Expression &objective, double &out_constant_offset,
+	                                             DecideSense sense = DecideSense::MINIMIZE) const;
 
 	//! A reducer skips a row whose data it reads is NULL, as SQL's does (deck p. 50): for each
 	//! reducer over decisions, every data value its body reads where a NULL makes the summand
@@ -431,8 +439,8 @@ private:
 	unique_ptr<Expression> RebindReducer(const BoundAggregateExpression &from, const string &name,
 	                                     unique_ptr<Expression> child) const;
 	unique_ptr<Expression> CanonicalizeComparisonInternal(const Expression &comparison) const;
-	unique_ptr<Expression> CanonicalizeObjectiveInternal(const Expression &objective,
-	                                                     double &out_constant_offset) const;
+	unique_ptr<Expression> CanonicalizeObjectiveInternal(const Expression &objective, double &out_constant_offset,
+	                                                     bool negate) const;
 
 	//! Wrapper-aware structural half of VerifyCanonicalObjective. Runs before the
 	//! fixed-point check so a malformed body is reported as the invariant it breaks,

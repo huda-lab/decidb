@@ -79,13 +79,14 @@ _GROUPED_ROWS = "(VALUES (1,'a',3),(2,'a',5),(3,'b',2)) t(id,g,c)"
 @pytest.mark.min_max
 @pytest.mark.correctness
 @pytest.mark.parametrize(
-    "sense,extra",
+    "sense,extra,box",
     [
-        ("MAXIMIZE", "AND SUM(x) <= 6"),  # hard direction: indicators + Big-M
-        ("MINIMIZE", "AND SUM(x) >= 3"),  # easy direction: one-sided envelope pin
+        # hard direction: indicators + Big-M. The model minimizes the negation, so the box is the mirror image.
+        ("MAXIMIZE", "AND SUM(x) <= 6", (-20.0, 0.0)),
+        ("MINIMIZE", "AND SUM(x) >= 3", (0.0, 20.0)),  # easy direction: one-sided envelope pin
     ],
 )
-def test_flat_minmax_objective_auxiliary_is_boxed(decidb_cli, tmp_path, sense, extra):
+def test_flat_minmax_objective_auxiliary_is_boxed(decidb_cli, tmp_path, sense, extra, box):
     """The flat `MAXIMIZE/MINIMIZE MAX(expr)` auxiliary — the site the cliff was found on.
 
     Both directions are checked: the hard one because it is where the cost showed up, the
@@ -101,7 +102,7 @@ def test_flat_minmax_objective_auxiliary_is_boxed(decidb_cli, tmp_path, sense, e
         tmp_path / f"flat_{sense.lower()}.dump",
     )
     assert _assert_all_boxed(dump, 1) == [
-        (2, 0.0, 20.0)
+        (2, *box)
     ], f"flat MIN/MAX auxiliary is not boxed by the per-row range:\n{dump}"
 
 
@@ -112,7 +113,8 @@ def test_per_inner_minmax_auxiliaries_are_boxed(decidb_cli, tmp_path):
     """One `z_g` per group, each an extremum over its group's rows.
 
     Every `z_g` shares the per-row family's box: a group's extremum cannot leave the range
-    any single row can reach, whichever rows the group holds.
+    any single row can reach, whichever rows the group holds. The model minimizes, so a
+    MAXIMIZE query holds the extremum of the negated rows: the box is the mirror, [-20, 0].
     """
     dump = _lowering(decidb_cli).dump_model(
         f"""
@@ -124,8 +126,8 @@ def test_per_inner_minmax_auxiliaries_are_boxed(decidb_cli, tmp_path):
     )
     aux = _assert_all_boxed(dump, 2)
     assert [(lb, ub) for _, lb, ub in aux] == [
-        (0.0, 20.0),
-        (0.0, 20.0),
+        (-20.0, 0.0),
+        (-20.0, 0.0),
     ], f"per-group z_g auxiliaries are not boxed by the per-row range:\n{dump}"
 
 
@@ -133,7 +135,8 @@ def test_per_inner_minmax_auxiliaries_are_boxed(decidb_cli, tmp_path):
 @pytest.mark.per_clause
 @pytest.mark.correctness
 def test_per_outer_minmax_over_group_values_is_boxed(decidb_cli, tmp_path):
-    """`w` reducing over the `z_g`s inherits their box, since each one lives inside it."""
+    """`w` reducing over the `z_g`s inherits their box, since each one lives inside it (the mirror of the per-row range,
+    as a MAXIMIZE query is minimized as its negation)."""
     dump = _lowering(decidb_cli).dump_model(
         f"""
             SELECT id, x FROM {_GROUPED_ROWS}
@@ -144,7 +147,7 @@ def test_per_outer_minmax_over_group_values_is_boxed(decidb_cli, tmp_path):
     )
     aux = _assert_all_boxed(dump, 3)  # two z_g plus the outer w
     assert [(lb, ub) for _, lb, ub in aux] == [
-        (0.0, 20.0)
+        (-20.0, 0.0)
     ] * 3, f"outer w over z_g is not boxed by the per-row range:\n{dump}"
 
 
@@ -156,7 +159,8 @@ def test_per_outer_minmax_over_group_sums_is_boxed(decidb_cli, tmp_path):
 
     A group sum leaves any single row's range the moment the group holds more than one
     row, so this auxiliary is boxed by the actual per-group sums: group 'a' reaches
-    3*4 + 5*4 = 32, group 'b' reaches 2*4 = 8, so w lives in [0, 32]. Widening the per-row
+    3*4 + 5*4 = 32, group 'b' reaches 2*4 = 8, so w lives in [0, 32], or [-32, 0] as the negation a MAXIMIZE query
+    minimizes. Widening the per-row
     range (20) by the row count (3) would also be correct but nearly twice as loose at 60,
     and the looseness grows with the relation — which is the whole reason to derive it.
     """
@@ -169,7 +173,7 @@ def test_per_outer_minmax_over_group_sums_is_boxed(decidb_cli, tmp_path):
         tmp_path / "per_outer_sums.dump",
     )
     assert _assert_all_boxed(dump, 1) == [
-        (3, 0.0, 32.0)
+        (3, -32.0, 0.0)
     ], f"outer w over group sums is not boxed by the group-sum range:\n{dump}"
 
 
@@ -208,8 +212,9 @@ def test_composed_minmax_term_auxiliaries_are_boxed(decidb_cli, tmp_path):
         ("open above only", "(VALUES (1,3),(2,5)) t(id,c)", "MINIMIZE", (0.0, 1e30)),
         # A negative coefficient swaps which end of `x`'s box feeds which end of the term:
         # the open ceiling on `x` opens the expression's FLOOR, and 0 becomes its ceiling.
-        # Blaming the side without respecting sign would get this backwards.
-        ("open below only", "(VALUES (1,-3),(2,-5)) t(id,c)", "MAXIMIZE", (-1e30, 0.0)),
+        # Blaming the side without respecting sign would get this backwards. The model minimizes the negation of
+        # a MAXIMIZE objective, which mirrors the box: the floor is 0 and the ceiling is open.
+        ("open below only", "(VALUES (1,-3),(2,-5)) t(id,c)", "MAXIMIZE", (0.0, 1e30)),
         # Both signs in one family: the extremum ranges over a term open above and a term
         # open below, so nothing is derivable and the column is free. This is the case the
         # test was originally written for.
@@ -234,7 +239,8 @@ def test_unbounded_variable_keeps_whichever_end_it_can(decidb_cli_gurobi, tmp_pa
     both arms, so the arm decides which shapes are expressible, not what is covered.
 
     The auxiliary is named by its objective coefficient rather than by position: the hard
-    direction pins an extra column per row, and only the extremum carries the objective.
+    direction pins an extra column per row, and only the extremum carries the objective (1 under
+    MINIMIZE, -1 under MAXIMIZE, which minimizes the negation).
     """
     dump = decidb_cli_gurobi.dump_model(
         f"""
@@ -245,7 +251,7 @@ def test_unbounded_variable_keeps_whichever_end_it_can(decidb_cli_gurobi, tmp_pa
         tmp_path / f"unbounded_{name.replace(' ', '_')}.dump",
     )
     reduced = [
-        (idx, lb, ub) for idx, lb, ub in _continuous_columns(dump) if re.search(rf"^col {idx}: .* obj=1$", dump, re.M)
+        (idx, lb, ub) for idx, lb, ub in _continuous_columns(dump) if re.search(rf"^col {idx}: .* obj=-?1$", dump, re.M)
     ]
     assert len(reduced) == 1, f"expected exactly one objective auxiliary:\n{dump}"
     _, lb, ub = reduced[0]
@@ -332,10 +338,13 @@ def test_a_family_on_one_side_of_zero_is_not_stretched_to_zero(decidb_cli, tmp_p
 
 @pytest.mark.min_max
 @pytest.mark.correctness
-@pytest.mark.parametrize("sense", ["MAXIMIZE MIN", "MINIMIZE MAX"])
-def test_an_objective_extremum_over_a_family_above_zero_is_boxed_by_it(decidb_cli, tmp_path, sense):
+@pytest.mark.parametrize(
+    "sense, box",
+    [("MAXIMIZE MIN", (-20.0, -10.0)), ("MINIMIZE MAX", (10.0, 20.0))],  # the first is minimized as its negation
+)
+def test_an_objective_extremum_over_a_family_above_zero_is_boxed_by_it(decidb_cli, tmp_path, sense, box):
     dump = _lowering(decidb_cli).dump_model(
         f"SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(INT) SUCH THAT x >= 5 AND x <= 10 {sense}(2 * x)",
         tmp_path / "objective_family.dump",
     )
-    assert [(lb, ub) for _, lb, ub in _assert_all_boxed(dump, 1)] == [(10.0, 20.0)], dump
+    assert [(lb, ub) for _, lb, ub in _assert_all_boxed(dump, 1)] == [box], dump

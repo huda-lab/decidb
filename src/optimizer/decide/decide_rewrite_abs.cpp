@@ -225,18 +225,18 @@ static void ClassifyAbsConstraints(ClientContext &context, Expression &expr, idx
 	});
 }
 
-// The objective read as one signed expression under its sense. MINIMIZE pushes a
-// positive term down, MAXIMIZE a negative one; every ABS whose sign is the other
-// one, or is not known until the query runs, needs the exact envelope. This is the
-// comparison rule above with the sense standing in for the relation.
-static void ClassifyAbsObjective(ClientContext &context, Expression &objective, idx_t decide_index, DecideSense sense) {
+// The objective read as one signed expression. It is minimized, which pushes a
+// positive term down; every ABS whose sign is the other one, or is not known until
+// the query runs, needs the exact envelope. This is the comparison rule above with
+// the minimization standing in for the relation.
+static void ClassifyAbsObjective(ClientContext &context, Expression &objective, idx_t decide_index) {
 	// A `when` or two-level `per` wrapper carries no sign: the body is its first child.
 	Expression *body = &objective;
 	while (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conjunction = body->Cast<BoundConjunctionExpression>();
 		body = conjunction.children[0].get();
 	}
-	const int pinning_sign = sense == DecideSense::MINIMIZE ? 1 : -1;
+	const int pinning_sign = 1;
 	vector<std::pair<Expression *, int>> signed_abs;
 	CollectAbsWithSign(context, *body, 1, decide_index, signed_abs, pinning_sign);
 	for (auto &entry : signed_abs) {
@@ -249,7 +249,7 @@ static void ClassifyAbsObjective(ClientContext &context, Expression &objective, 
 void decide_rewrite::TagAbsForBigM(ClientContext &context, LogicalDecide &decide) {
 	ClassifyAbsConstraints(context, *decide.decide_constraints, decide.decide_index);
 	if (decide.decide_objective) {
-		ClassifyAbsObjective(context, *decide.decide_objective, decide.decide_index, decide.decide_sense);
+		ClassifyAbsObjective(context, *decide.decide_objective, decide.decide_index);
 	}
 }
 
@@ -384,7 +384,7 @@ static string AbsWrittenClause(const LogicalDecide &decide, const string &clause
 	    source_clause_id < decide.constraint_sources.size()) {
 		return QuoteWrittenClause(decide.constraint_sources[source_clause_id]);
 	}
-	return DecideWrittenObjective(decide.decide_sense, decide.written_objective);
+	return DecideWrittenObjective(decide.written_sense, decide.written_objective);
 }
 
 //! Refuses an argument of an ABS whose data is NaN or infinite where the ABS is read, on the rows it is read on, before

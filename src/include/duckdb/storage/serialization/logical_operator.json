@@ -966,7 +966,7 @@
       },
       {
         "id": 203,
-        "name": "decide_sense",
+        "name": "written_sense",
         "type": "DecideSense"
       },
       {

@@ -77,7 +77,6 @@ idx_t CountGroupDecisions(const DecideProductGroup &group) {
 //! two decisions counts as coupled whatever its coefficients turn out to be.
 DecideModelShape ReadPreparedModelShape(const LogicalDecide &op) {
 	DecideModelShape shape;
-	shape.sense = op.decide_sense;
 	shape.integral_column = MayHaveIntegralColumn(op);
 	for (auto &constraint : op.prepared.constraints) {
 		for (auto &group : constraint->product_groups) {
@@ -92,11 +91,11 @@ DecideModelShape ReadPreparedModelShape(const LogicalDecide &op) {
 	return shape;
 }
 
-//! The objective's first product group that is non-convex under the sense (IsNonconvexProductGroup), which the
-//! refusal names. The gate asks only for a non-convex class, which an objective's group makes.
+//! The objective's first product group that is non-convex (IsNonconvexProductGroup), which the refusal names. The gate
+//! asks only for a non-convex class, which an objective's group makes.
 const DecideProductGroup &FirstNonconvexGroup(const LogicalDecide &op) {
 	for (auto &group : op.prepared.objective->product_groups) {
-		if (IsNonconvexProductGroup(group.square, group.weight_sign, op.decide_sense)) {
+		if (IsNonconvexProductGroup(group.square, group.weight_sign)) {
 			return group;
 		}
 	}
@@ -141,9 +140,9 @@ RefusalText DescribeGap(const LogicalDecide &op, SolverModelClassGap gap) {
 			        "query runs",
 			        "multiply the square by a constant, or use a linear objective"};
 		}
-		return {op.decide_sense == DecideSense::MAXIMIZE ? "the objective MAXIMIZEs squared decision terms"
-		                                                 : "the objective MINIMIZEs negated squared decision terms",
-		        op.decide_sense == DecideSense::MAXIMIZE
+		return {op.written_sense == DecideSense::MAXIMIZE ? "the objective MAXIMIZEs squared decision terms"
+		                                                  : "the objective MINIMIZEs negated squared decision terms",
+		        op.written_sense == DecideSense::MAXIMIZE
 		            ? "MINIMIZE the squared terms instead, or use a linear objective"
 		            : "MINIMIZE the squared terms without negating them, or use a linear objective"};
 	}

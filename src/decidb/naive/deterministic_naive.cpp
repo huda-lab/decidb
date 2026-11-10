@@ -440,7 +440,6 @@ bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
 		is_mip = is_mip || model.is_integer[i];
 	}
 
-	ObjSense sense = model.maximize ? ObjSense::kMaximize : ObjSense::kMinimize;
 	// Columns first: a column's scale multiplies its matrix entries, cost and Hessian
 	// entries, which the row and objective scaling below then place.
 	column_exponent = ChooseHighsColumnScales(model);
@@ -488,7 +487,7 @@ bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
 	phase.Next("highs.pack_columns");
 	lp.num_col_ = total_vars;
 	lp.num_row_ = model.constraints.size();
-	lp.sense_ = sense;
+	lp.sense_ = ObjSense::kMinimize;
 	lp.offset_ = 0.0;
 	lp.col_lower_ = model.col_lower;
 	lp.col_upper_ = model.col_upper;

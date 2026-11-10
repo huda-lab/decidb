@@ -232,12 +232,6 @@ void GurobiSession::Load(const SolverModel &ilp) {
 		throw InternalException("Failed to create Gurobi model: %s", api.geterrormsg(guard.env));
 	}
 
-	int grb_sense = ilp.maximize ? GRB_MAXIMIZE : GRB_MINIMIZE;
-	error = api.setintattr(guard.model, GRB_INT_ATTR_MODELSENSE, grb_sense);
-	if (error) {
-		throw InternalException("Failed to set Gurobi model sense: %s", api.geterrormsg(guard.env));
-	}
-
 	//===--------------------------------------------------------------------===//
 	// 3. Add constraints
 	//===--------------------------------------------------------------------===//

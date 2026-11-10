@@ -283,12 +283,12 @@ bool Rule::ProveCost(const DirectIR &ir, ClientContext &context, Condition &cond
 	if (!not_null(condition.left) || !not_null(condition.right)) {
 		return false;
 	}
-	bool maximize = objective.sense == DecideSense::MAXIMIZE;
-	if (distance && (maximize || factors.sign < 0)) {
+	// The cost is minimized. A distance of negative weight is a maximized distance, which no ranking gives.
+	if (distance && factors.sign < 0) {
 		return false;
 	}
-	// Equal ranks minimize a distance and, by the rearrangement inequality, maximize a product of positive weight.
-	condition.opposite = !distance && (factors.sign > 0) != maximize;
+	// Equal ranks minimize a distance and, by the rearrangement inequality, a product of negative weight.
+	condition.opposite = !distance && factors.sign > 0;
 	return true;
 }
 

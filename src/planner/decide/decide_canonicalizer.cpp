@@ -1121,14 +1121,16 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 }
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjective(const Expression &objective,
-                                                                  double &out_constant_offset) const {
+                                                                  double &out_constant_offset,
+                                                                  DecideSense sense) const {
 	auto desugared = DesugarNorms(objective);
 	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : objective);
-	return CanonicalizeObjectiveInternal(*written, out_constant_offset);
+	return CanonicalizeObjectiveInternal(*written, out_constant_offset, sense == DecideSense::MAXIMIZE);
 }
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const Expression &objective,
-                                                                          double &out_constant_offset) const {
+                                                                          double &out_constant_offset,
+                                                                          bool negate) const {
 	DecideProfileScope profile("canonicalize.objective");
 	// A `when` or `per` wrapper carries no algebra: recurse into the objective child and copy
 	// the condition or grouping columns unchanged. Identical rule to C0, and the same
@@ -1136,7 +1138,8 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 	if (objective.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conjunction = objective.Cast<BoundConjunctionExpression>();
 		auto result = make_uniq<BoundConjunctionExpression>(conjunction.type);
-		result->children.push_back(CanonicalizeObjectiveInternal(*conjunction.children[0], out_constant_offset));
+		result->children.push_back(
+		    CanonicalizeObjectiveInternal(*conjunction.children[0], out_constant_offset, negate));
 		for (idx_t i = 1; i < conjunction.children.size(); i++) {
 			result->children.push_back(conjunction.children[i]->Copy());
 		}
@@ -1155,6 +1158,8 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 	}
 
 	vector<Atom> atoms;
+	// The objective is canonicalized in the direction it was written: like terms merge and a factor distributes as they
+	// would in a MINIMIZE. The flip of a MAXIMIZE objective is the last step (below).
 	Decompose(objective, 1, atoms, Clause::OBJECTIVE);
 	MergeLikeAtoms(atoms);
 
@@ -1181,9 +1186,16 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 			                      "the objective. Remove it, or move it to the SELECT list.",
 			                      Quote(*atom.expr));
 		}
-		out_constant_offset += atom.sign * value;
+		out_constant_offset += (negate ? -atom.sign : atom.sign) * value;
 	}
 
+	// The last step: a MAXIMIZE objective is minimized as its negation, which every term carries in its sign and the
+	// offset in its value, never in a factor.
+	if (negate) {
+		for (auto &atom : decision_atoms) {
+			atom.sign = -atom.sign;
+		}
+	}
 	auto result = BuildAdditive(decision_atoms);
 	// A reducer under a Boolean decision takes the VALUE shape, as a comparison does: the value rewrite holds the
 	// reducer in a helper decision, and the product with it is a Boolean product.

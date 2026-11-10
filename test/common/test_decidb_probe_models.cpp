@@ -14,7 +14,7 @@ namespace {
 constexpr double DEFAULT_INFINITY = DECIDE_SOLVER_INFINITY;
 constexpr double RAY_EPSILON = 1e-8;
 
-SolverModel MakeLinearModel(const duckdb::vector<double> &objective, bool maximize = true) {
+SolverModel MakeLinearModel(const duckdb::vector<double> &objective) {
 	SolverModel model;
 	model.num_vars = objective.size();
 	model.col_lower.assign(model.num_vars, 0.0);
@@ -22,7 +22,6 @@ SolverModel MakeLinearModel(const duckdb::vector<double> &objective, bool maximi
 	model.is_integer.assign(model.num_vars, false);
 	model.is_binary.assign(model.num_vars, false);
 	model.obj_coeffs = objective;
-	model.maximize = maximize;
 	return model;
 }
 
@@ -41,7 +40,7 @@ duckdb::vector<double> SolveFallbackRayWithHighs(const SolverModel &model) {
 	REQUIRE(result.status == SolverStatus::OPTIMAL);
 	REQUIRE(result.solution.size() == model.num_vars);
 
-	double improvement = ObjectiveValue(ray_model, result.solution);
+	double improvement = -ObjectiveValue(ray_model, result.solution);
 	if (improvement <= RAY_EPSILON) {
 		return {};
 	}
@@ -55,28 +54,17 @@ SolverInput MakeUnboundedTwoVariableInput() {
 	input.variable_types = {LogicalType::DOUBLE, LogicalType::DOUBLE};
 	input.objective_variable_indices = {0, 1};
 	input.objective_coefficients = {
-	    CoefficientColumn::MakeScalar(1.0, input.num_rows),
-	    CoefficientColumn::MakeScalar(1.0, input.num_rows),
+	    CoefficientColumn::MakeScalar(-1.0, input.num_rows),
+	    CoefficientColumn::MakeScalar(-1.0, input.num_rows),
 	};
-	input.sense = DecideSense::MAXIMIZE;
 	return input;
 }
 
 } // namespace
 
 TEST_CASE("DeciDB query diagnostics unbounded ray fallback", "[decidb][query_diagnostics]") {
-	SECTION("symmetric MAX LP returns full-support ray") {
-		SolverModel model = MakeLinearModel({1.0, 1.0}, true);
-
-		duckdb::vector<double> ray = SolveFallbackRayWithHighs(model);
-
-		REQUIRE(ray.size() == 2);
-		CHECK(std::fabs(ray[0] - 1.0) <= RAY_EPSILON);
-		CHECK(std::fabs(ray[1] - 1.0) <= RAY_EPSILON);
-	}
-
-	SECTION("MINIMIZE with negative coefficients uses signed objective") {
-		SolverModel model = MakeLinearModel({-2.0, -3.0}, false);
+	SECTION("symmetric LP returns full-support ray") {
+		SolverModel model = MakeLinearModel({-1.0, -1.0});
 
 		duckdb::vector<double> ray = SolveFallbackRayWithHighs(model);
 
@@ -86,7 +74,7 @@ TEST_CASE("DeciDB query diagnostics unbounded ray fallback", "[decidb][query_dia
 	}
 
 	SECTION("finite original upper bounds force ray components to zero") {
-		SolverModel model = MakeLinearModel({1.0, 1.0}, true);
+		SolverModel model = MakeLinearModel({-1.0, -1.0});
 		model.col_upper[0] = 5.0;
 
 		duckdb::vector<double> ray = SolveFallbackRayWithHighs(model);
@@ -97,7 +85,7 @@ TEST_CASE("DeciDB query diagnostics unbounded ray fallback", "[decidb][query_dia
 	}
 
 	SECTION("bounded feasible shape yields no improving ray") {
-		SolverModel model = MakeLinearModel({1.0, 1.0}, true);
+		SolverModel model = MakeLinearModel({-1.0, -1.0});
 		ModelConstraint constraint;
 		constraint.indices = {0, 1};
 		constraint.coefficients = {1.0, 1.0};
@@ -115,7 +103,7 @@ TEST_CASE("DeciDB query diagnostics unbounded ray fallback", "[decidb][query_dia
 		// survive homogenization: pushing d0 to its box max forces d1 up to match.
 		// A flipped sense ('<=') would leave d1 free to stay at 0, so asserting
 		// d1 == 1 guards against the wrong-sign branch.
-		SolverModel model = MakeLinearModel({1.0, 0.0}, true);
+		SolverModel model = MakeLinearModel({-1.0, 0.0});
 		ModelConstraint constraint;
 		constraint.indices = {0, 1};
 		constraint.coefficients = {-1.0, 1.0};
@@ -133,7 +121,7 @@ TEST_CASE("DeciDB query diagnostics unbounded ray fallback", "[decidb][query_dia
 	SECTION("equality row couples ray components") {
 		// Objective on x0 only, with x0 == x1. The '=' row ties d1 to d0, so the
 		// ray names both even though only x0 carries objective weight.
-		SolverModel model = MakeLinearModel({1.0, 0.0}, true);
+		SolverModel model = MakeLinearModel({-1.0, 0.0});
 		ModelConstraint constraint;
 		constraint.indices = {0, 1};
 		constraint.coefficients = {1.0, -1.0};
@@ -149,7 +137,7 @@ TEST_CASE("DeciDB query diagnostics unbounded ray fallback", "[decidb][query_dia
 	}
 
 	SECTION("integer flags are relaxed in the ray LP") {
-		SolverModel model = MakeLinearModel({1.0, 1.0}, true);
+		SolverModel model = MakeLinearModel({-1.0, -1.0});
 		model.is_integer = {true, true};
 
 		SolverModel ray_model = BuildUnboundedRayFallbackModel(model);

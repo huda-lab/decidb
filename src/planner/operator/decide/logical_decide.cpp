@@ -165,11 +165,11 @@ vector<string> DecideKey::Names() const {
 }
 
 LogicalDecide::LogicalDecide(idx_t decide_index, vector<unique_ptr<Expression>> decide_variables,
-                             unique_ptr<Expression> decide_constraints, DecideSense decide_sense,
+                             unique_ptr<Expression> decide_constraints, DecideSense written_sense,
                              unique_ptr<Expression> decide_objective)
     : LogicalOperator(LogicalOperatorType::LOGICAL_DECIDE), decide_index(decide_index),
       decide_variables(std::move(decide_variables)), decide_constraints(std::move(decide_constraints)),
-      decide_sense(decide_sense), decide_objective(std::move(decide_objective)) {
+      written_sense(written_sense), decide_objective(std::move(decide_objective)) {
 }
 
 LogicalDecide::LogicalDecide() : LogicalOperator(LogicalOperatorType::LOGICAL_DECIDE) {

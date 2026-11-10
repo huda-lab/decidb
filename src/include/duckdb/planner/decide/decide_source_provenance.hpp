@@ -111,7 +111,8 @@ string RenderDecidePerKey(const BoundConjunctionExpression &per, const DecideSou
 
 //! The two-level objective `outer(per k: inner(e) by (k))` (language/guide.md), which binds to the nested
 //! `outer(inner(e))` under a TWO_LEVEL_OBJECTIVE_TAG wrapper keyed on k, taken apart: the `when` in front of the body
-//! (empty for none), the key as the query writes it, and the body under both. Every text of the form is built from
+//! (empty for none), the key as the query writes it, and the body under both, without the negation a MAXIMIZE
+//! objective carries (the texts are in the direction the user wrote). Every text of the form is built from
 //! these parts by the two formatters below: the written objective, the rows the solver receives after the rewrite
 //! (`per k: inner(e) by (k)`) and the rewrite's accounts.
 struct DecideTwoLevelParts {
@@ -134,8 +135,11 @@ string RenderDecideTwoLevelOuter(const string &outer_name, const string &key, co
 //! `out_source_ids`, when supplied, receives the source_clause_id behind each emitted
 //! string -- DConstants::INVALID_INDEX for a row no clause claims. This is what lets a
 //! caller group the post-optimizer rows under the clause they came from.
+//! `written_sense` renders an objective in the direction it was written: the tree is a minimization, so a MAXIMIZE
+//! objective reads with the sign of each of its terms reversed (DecideCanonicalizer::CanonicalizeObjective), as the
+//! layers of a plan show the user's own sense and not the flip.
 void CollectDecideExpressionStrings(const Expression &expr, const DecideSourceNames &names, vector<string> &out,
-                                    vector<idx_t> *out_source_ids = nullptr);
+                                    vector<idx_t> *out_source_ids = nullptr, bool written_sense = false);
 
 //! Render a whole objective tree as one display string.
 //!
@@ -143,7 +147,7 @@ void CollectDecideExpressionStrings(const Expression &expr, const DecideSourceNa
 //! conjunction, which the leaf renderer spells `sum(x) AND cond` rather than the
 //! `when cond: sum(x)` the user wrote. Only the clause walker unwraps those tags, so the
 //! objective's snapshots go through it too.
-string RenderDecideObjective(const Expression &expr, const DecideSourceNames &names);
+string RenderDecideObjective(const Expression &expr, const DecideSourceNames &names, bool written_sense = false);
 
 //! One user clause, rendered at each layer that says something different about it.
 //!
@@ -235,9 +239,10 @@ InsertionOrderPreservingMap<string> RenderDecideParams(const OP &op) {
 	                                        objective_rows, op.rewrite_accounts);
 	string constraints_text = RenderDecideClauseLayers(layers, unattributed);
 	if (op.decide_objective) {
-		string sense_prefix = (op.decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
+		const bool maximize = op.written_sense == DecideSense::MAXIMIZE;
+		string sense_prefix = maximize ? "MAXIMIZE " : "MINIMIZE ";
 		vector<string> objective_strs;
-		CollectDecideExpressionStrings(*op.decide_objective, names, objective_strs);
+		CollectDecideExpressionStrings(*op.decide_objective, names, objective_strs, nullptr, maximize);
 		// A MIN/MAX objective leaves a carrier in the tree -- a SUM standing for the
 		// extremum, or what the composed objective keeps (its 0.0 placeholder or the terms
 		// beside its reducers) -- that its accounts describe and a row would misread. An AVG's sum stays, under its

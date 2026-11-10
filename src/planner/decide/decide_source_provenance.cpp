@@ -18,6 +18,8 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_subquery_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/planner/decide/decide_canonicalizer.hpp"
+#include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/bind_context.hpp"
 
@@ -760,6 +762,17 @@ static bool IsTruePlaceholder(const Expression &expr) {
 	return value.type().id() == LogicalTypeId::BOOLEAN && !value.IsNull() && value.GetValue<bool>();
 }
 
+//! `expr` without the negation a MAXIMIZE objective carries, which is a unary minus around its one term.
+static const Expression &WithoutNegation(const Expression &expr) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &func = expr.Cast<BoundFunctionExpression>();
+		if (func.function.name == "-" && func.children.size() == 1) {
+			return *func.children[0];
+		}
+	}
+	return expr;
+}
+
 DecideTwoLevelParts SplitDecideTwoLevel(const BoundConjunctionExpression &per, const DecideSourceNames &names) {
 	DecideTwoLevelParts parts;
 	parts.body = per.children[0].get();
@@ -768,6 +781,7 @@ DecideTwoLevelParts SplitDecideTwoLevel(const BoundConjunctionExpression &per, c
 		parts.when = WrittenWhen(wrapper, ContextOf(names));
 		parts.body = wrapper.children[0].get();
 	}
+	parts.body = &WithoutNegation(*parts.body);
 	parts.key = RenderDecidePerKey(per, names.text, &names.keys);
 	return parts;
 }
@@ -811,9 +825,27 @@ static string RenderTwoLevelInner(const BoundConjunctionExpression &per, const D
 	       RenderDecideTwoLevelInner(StringUtil::Lower(inner.function.name) + "(" + inner_body + ")", parts.key);
 }
 
+//! An objective tree rendered in the direction it was written: the terms of its additive spine, each with its sign
+//! reversed (only the sign: a factor on a term is the user's number and stays). The text is the one the same objective
+//! written as a minimization renders to (RenderFunction): a leading negative term takes the unary minus, the others
+//! ` + ` and ` - `.
+static string RenderWrittenSense(const Expression &expr, const RenderContext &ctx) {
+	string result;
+	for (auto &atom : ReadCanonicalAtoms(expr, ctx.decide_index)) {
+		const bool negative = atom.sign > 0;
+		if (result.empty()) {
+			auto operand = RenderSource(*atom.term, ctx, negative ? 40 : 10);
+			result = !negative ? operand : operand.rfind('-', 0) == 0 ? "-(" + operand + ")" : "-" + operand;
+		} else {
+			result += (negative ? " - " : " + ") + RenderSource(*atom.term, ctx, negative ? 11 : 10);
+		}
+	}
+	return result;
+}
+
 //! `CollectDecideExpressionStrings` with the pending `when c per K:` front qualifier.
 static void CollectExpressionStrings(const Expression &expr, const DecideSourceNames &names, vector<string> &out,
-                                     vector<idx_t> *out_source_ids, DecideEnclosingScope scope) {
+                                     vector<idx_t> *out_source_ids, DecideEnclosingScope scope, bool written_sense) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
 		if (IsTwoLevelObjectiveWrapper(conj)) {
@@ -834,7 +866,7 @@ static void CollectExpressionStrings(const Expression &expr, const DecideSourceN
 		auto inner = EnterDecideScope(conj, scope);
 		for (idx_t i = 0; i < conj.children.size(); i++) {
 			if (IsConstraintChild(conj, i)) {
-				CollectExpressionStrings(*conj.children[i], names, out, out_source_ids, inner);
+				CollectExpressionStrings(*conj.children[i], names, out, out_source_ids, inner, written_sense);
 			}
 		}
 		return;
@@ -853,18 +885,21 @@ static void CollectExpressionStrings(const Expression &expr, const DecideSourceN
 		return;
 	}
 	auto front_qualifier = FrontQualifier(ScopeQualifier(scope, ContextOf(names)));
-	PushClause(out, out_source_ids, AppendQualifier(front_qualifier, RenderSource(expr, ContextOf(names))),
-	           leaf_source_id);
+	auto ctx = ContextOf(names);
+	PushClause(
+	    out, out_source_ids,
+	    AppendQualifier(front_qualifier, written_sense ? RenderWrittenSense(expr, ctx) : RenderSource(expr, ctx)),
+	    leaf_source_id);
 }
 
 void CollectDecideExpressionStrings(const Expression &expr, const DecideSourceNames &names, vector<string> &out,
-                                    vector<idx_t> *out_source_ids) {
-	CollectExpressionStrings(expr, names, out, out_source_ids, DecideEnclosingScope());
+                                    vector<idx_t> *out_source_ids, bool written_sense) {
+	CollectExpressionStrings(expr, names, out, out_source_ids, DecideEnclosingScope(), written_sense);
 }
 
-string RenderDecideObjective(const Expression &expr, const DecideSourceNames &names) {
+string RenderDecideObjective(const Expression &expr, const DecideSourceNames &names, bool written_sense) {
 	vector<string> parts;
-	CollectDecideExpressionStrings(expr, names, parts);
+	CollectDecideExpressionStrings(expr, names, parts, nullptr, written_sense);
 	// An objective is one clause: its `when` and `per` wrappers hold it in their first child.
 	if (parts.size() != 1) {
 		throw InternalException("DECIDE: an objective rendered as %llu clauses; the objective binder wraps it as one",

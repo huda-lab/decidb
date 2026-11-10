@@ -152,7 +152,6 @@ private:
 	}
 
 	void ReadModelShape(DirectIR &ir) const {
-		ir.model_shape.sense = ir.objective.sense;
 		for (auto &decision : ir.decisions) {
 			ir.model_shape.integral_column = ir.model_shape.integral_column || decision.domain != DirectDomain::REAL;
 		}
@@ -561,9 +560,8 @@ private:
 	//===--------------------------------------------------------------------===//
 
 	void ReadObjective(DirectIRObjective &objective) const {
-		objective.sense = decide.decide_sense;
 		objective.offset = decide.objective_constant_offset;
-		objective.written = DecideWrittenObjective(decide.decide_sense, decide.written_objective);
+		objective.written = DecideWrittenObjective(decide.written_sense, decide.written_objective);
 		if (!decide.decide_objective) {
 			return;
 		}
