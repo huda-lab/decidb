@@ -45,6 +45,10 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
    (`direct_plan_fragments.cpp`, `direct_runtime_checks.cpp`, `direct_bound_reader.cpp`); `../framework/done.md`
    lists every shared helper and what it does.
 
+   A rule over a cross-product source whose work runs on each side's own rows (O1) reads the source once
+   (`TakeRecomputedSource`) and builds one `DirectSourceReader` per side; each side then makes the reader's choice
+   between a rescan and a copy, and no read holds the pairs.
+
    Build every expression with the `ExpressionBuilder` (`direct_expression.hpp`); build a node by hand only when the
    builder has no operation for it (a window expression), and say so in a comment. A helper only your rule uses stays in
    your rule's own files until a second rule needs it. Inside the rule's namespace, names carry no `Direct` or class

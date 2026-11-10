@@ -1,7 +1,7 @@
 # O1 (Monge assignment) — what works today
 
-Verified on 2026-11-10 at `5dff818acd`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
-serializer, highs) 6,602 passed; C++ `build/release/test/unittest "[decidb]"` 5,796 assertions in 102 cases. Code:
+Verified on 2026-11-10 at `804e1efab5`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
+serializer, highs) 6,614 passed; C++ `build/release/test/unittest "[decidb]"` 5,796 assertions in 102 cases. Code:
 `src/optimizer/decide/direct/o1_monge_assignment_rule.cpp`. Class definition: [definition.md](definition.md).
 
 ## What it admits
@@ -41,18 +41,25 @@ empty result, as the solver's empty model does.
 
 ## How it works
 
-Group-then-join over three reads of the source (`DirectBuildOverRead` twice, `DirectBuildOverOneRead` once).
+Eager aggregation (Yan–Larson), applied to windows: every step whose keys come from one side runs on that side's own
+rows, below the cross product, and the pairs are formed once. `Rule::Apply` takes DECIDE's own cross product from the
+reader (`source_reads = 1`, `TakeRecomputedSource`) and builds one `DirectSourceReader` per side, two reads each, so
+each side makes the reader's choice between a rescan and a copy of its n rows (a side whose filter calls `random()` is
+copied once, and both reads see the same rows).
 
-1. `RankClasses`, once per side: a hash aggregate on the side's key gives one row per class, and a window gives each
-   class its `ROW_NUMBER` and the `COUNT(*)` of classes, both ordered by position (descending on the right side for
-   opposite ranks), so the two share one sort.
-2. `Assign`, on the third read of the pairs: the written coefficient on every pair (`DirectScaledTerm`, checked by
-   `DirectCheckNumber`), then a join to each side's class answers (`DirectJoinClassAnswers`, which compares each key
-   column by what a NULL means in it), then the class-count check (`DirectInfeasibleErrorPredicate`).
-3. A `ROW_NUMBER` window partitioned by the two ranks picks one copy of each class pair; `x` is 1 where the ranks are
-   equal and the number is 1.
-4. The number and the coefficient stay as validated columns: no parent can prune them, so every pair is read and
-   checked before a `LIMIT` returns.
+1. `CheckPairs`: the written coefficient on the cross product of one read of each side, checked by
+   `DirectCheckNumber`, in a `bool_and` over every pair (`DirectAllRowsValid`) that gates the left reader (A1's
+   verify-then-stream). Where the type proves every coefficient finite, the check still reads the coefficient, so
+   DuckDB's own evaluation error (a DECIMAL product that overflows) raises.
+2. `Rank`, per side: one window of `ROW_NUMBER`, `RANK` and `DENSE_RANK`, ordered by the position (descending on the
+   right side for opposite ranks), then every other key column, so the rows of one class are peers. `DENSE_RANK` is the
+   class's rank, the greatest `DENSE_RANK` (a second window, no second sort) is the number of classes, and
+   `ROW_NUMBER = RANK` marks one copy of each class.
+3. `Assign`, over DECIDE's own cross-product node with the two ranked sides as its children: the source columns, `x` =
+   equal class ranks and both copies marked, and the class-count check (`DirectInfeasibleErrorPredicate`) as a
+   validated column. Every pair carries the same counts, so the first pair raises.
+
+The right reader is finished outermost, because the left side's verdict reads the right side's copy.
 
 `EXPLAIN` shows `O1_MONGE_ASSIGNMENT` and its summary line.
 
@@ -86,9 +93,46 @@ on these shapes is in [todo.md](todo.md).
 - Differential oracle: `test/decide/tests/test_direct_o1_monge_assignment.py`: every objective form, sign and spelling,
   duplicate rows, a NULL key value, tied, negative and integer positions, one-side `WHERE`s, unequal sizes, against the
   oracle; parent contexts; an empty side; a `WHERE` across both sides and nullable positions keep the solver; NaN
-  positions fail on both paths; a NaN on the last of 71 × 71 pairs raises under `LIMIT 1` and `COUNT(*)`.
+  positions fail on both paths; a NaN on the last of 71 × 71 pairs raises under `LIMIT 1` and `COUNT(*)`. A side
+  copied once (left, right, both, both with duplicates) applies and holds the copies `EXPLAIN` counts; duplicate rows
+  with a NULL key on both sides; -0.0 against 0.0 and NaN in a key column are one class each, as on the solver path; a
+  DECIMAL product that overflows raises on both paths with no check of its own.
 - Error text: `test_o1_monge_infeasible_error_is_the_solvers_error_word_for_word` in `test_direct_user_facing.py`.
 - C++: `O1AppliesShapes` and `O1DeclineShapes` in `test/common/test_decidb_direct_decline.cpp`, one decline per
   `CheckCondition` branch, and the partition test against every other rule; the IR's `cross_product` and `not_null` in
   `test_decidb_direct_ir.cpp`.
 - Join order: `test_a_parent_filter_stays_above_a_decide_over_a_join` in `test_nested_decide.py`.
+
+## Performance
+
+Measured on 2026-11-10, on an 11-core Apple M3 Pro at a load of about 5. The query is
+`benchmark/decide/direct_solve/queries/o1.sql`: `supplier` paired with itself, one `BOOL` per pair, the least total
+product of the paired balances (opposite ranks). Its decision count is the square of the supplier count.
+
+**Against a hand-written plan.** `run.py --compare --sf 0.32 --queries o1` at `804e1efab5`, best of 5, over 3,200
+suppliers a side (10.24M pairs), beside `hand/o1.sql`, which ranks each side and forms the pairs once. Both gave the
+same answer.
+
+| Query | Direct CPU | Hand CPU | CPU ratio | Direct latency | Hand latency | DECIDE planning |
+|---|---:|---:|---:|---:|---:|---:|
+| `o1` | 123.6 ms | 43.1 ms | 2.87 | 131.4 ms | 44.2 ms | 0.13 ms |
+
+The rule's extra work is the pass that checks the coefficient on every pair before any pair is returned, and the
+copy and class ranks of each side, which the hand plan does not need on distinct supplier rows.
+
+**Against the solvers.** `run.py --sf 0.01 0.02 0.04 0.08 0.16 --queries o1`: direct solve at `804e1efab5`, Gurobi and
+HiGHS at `01bb152842` (the solver path is the same at both), a fresh `decidb` process per run, median of 3. At every
+size each solver's objective agreed with direct solve's within 1e-6. Times include process start and database open,
+about 20 ms, which is most of the direct time here.
+
+| Suppliers a side | Pairs | Direct | Direct, 1 thread | Direct peak | Gurobi | Gurobi peak | HiGHS | HiGHS peak | Speedup (Gurobi, HiGHS) |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 100 | 10,000 | 0.020 s | 0.020 s | 28 MiB | 0.072 s | 69 MiB | 0.157 s | 62 MiB | 3.5x, 7.8x |
+| 200 | 40,000 | 0.020 s | 0.020 s | 28 MiB | 0.333 s | 136 MiB | 0.769 s | 164 MiB | 16x, 38x |
+| 400 | 160,000 | 0.023 s | 0.024 s | 28 MiB | 4.250 s | 514 MiB | 5.307 s | 573 MiB | 183x, 229x |
+| 800 | 640,000 | 0.032 s | 0.033 s | 29 MiB | 2.420 s | 1,382 MiB | 41.886 s | 2,095 MiB | 76x, 1,309x |
+| 1,600 | 2,560,000 | 0.057 s | 0.058 s | 30 MiB | 11.732 s | 5,060 MiB | 330.841 s | 5,677 MiB | 206x, 5,794x |
+
+O1 is ahead of both solvers at every size. The solver path builds one binary per pair and an equality per class, so
+its model grows with the square of the side; O1 sorts each side's n rows, and its memory stays flat. Gurobi's time is
+not monotone in the size (160,000 pairs took longer than 640,000); that is inside its solve.
