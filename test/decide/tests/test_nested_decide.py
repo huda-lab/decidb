@@ -20,6 +20,7 @@ Covers:
   - The duplicate-DECIDE guard is not tripped by a nested declaration
   - Three levels of DECIDE nesting, oracle verified
   - A plain scalar subquery inside a nested clause's constraint and objective
+  - A parent query's filter over a DECIDE whose source holds a join stays above the DECIDE
 
 The second group has a different cause -- subquery flattening rather than the
 lexer -- documented above that group below.
@@ -428,3 +429,29 @@ def test_a_decide_over_a_decide_in_from(decidb_cli, oracle_solver, sql):
     rows, cols = decidb_cli.execute(sql)
     ci = {c: i for i, c in enumerate(cols)}
     assert sum(int(r[ci["x"]]) * int(r[ci["id"]]) for r in rows) == pytest.approx(expected)
+
+
+# A filter written above a DECIDE query is applied to its answer, not to its input. The join-order
+# pass treats DECIDE as one relation, so the filter stays above it whether the source is a cross
+# product or a comparison join; moved below, it would remove rows the problem needs and change it.
+_FILTER_L = "(VALUES (1, 1.0), (2, 4.0), (3, 10.0)) l(lid, lpos)"
+_FILTER_R = "(VALUES (1, 2.0), (2, 6.0), (3, 11.0)) r(rid, rpos)"
+
+
+@pytest.mark.sql_subquery
+@pytest.mark.parametrize(
+    "source",
+    [f"{_FILTER_L} CROSS JOIN {_FILTER_R}", f"{_FILTER_L} JOIN {_FILTER_R} ON lpos <= rpos"],
+    ids=["cross_product", "comparison_join"],
+)
+def test_a_parent_filter_stays_above_a_decide_over_a_join(decidb_cli, source):
+    inner = (
+        f"SELECT lid, rid, x FROM {source} DECIDE x(BOOL) SUCH THAT "
+        "per l: sum(x) by (lid) = 1 AND per r: sum(x) by (rid) = 1 MINIMIZE sum(abs(lpos - rpos) * x)"
+    )
+    unfiltered, _ = decidb_cli.execute(f"SET decide_direct_solve = 'off'; SELECT lid, rid, x FROM ({inner}) q")
+    expected = sorted(row for row in unfiltered if row[0] < 2)
+    assert 0 < len(expected) < len(unfiltered)
+
+    rows, _ = decidb_cli.execute(f"SET decide_direct_solve = 'off'; SELECT lid, rid, x FROM ({inner}) q WHERE lid < 2")
+    assert sorted(rows) == expected

@@ -97,6 +97,7 @@ static bool OperatorNeedsRelation(LogicalOperatorType op_type) {
 	case LogicalOperatorType::LOGICAL_DELIM_GET:
 	case LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY:
 	case LogicalOperatorType::LOGICAL_WINDOW:
+	case LogicalOperatorType::LOGICAL_DECIDE:
 	case LogicalOperatorType::LOGICAL_SAMPLE:
 		return true;
 	default:
@@ -277,6 +278,21 @@ bool RelationManager::ExtractJoinRelations(JoinOrderOptimizer &optimizer, Logica
 		}
 		ModifyStatsIfLimit(limit_op.get(), child_stats);
 		AddAggregateOrWindowRelation(input_op, parent, operator_stats, op->type);
+		return true;
+	}
+	case LogicalOperatorType::LOGICAL_DECIDE: {
+		// DECIDE is a relation boundary: a filter above it must not move below, where it would change the problem.
+		// It keeps every input row, so its cardinality is its child's.
+		RelationStats child_stats;
+		auto child_optimizer = optimizer.CreateChildOptimizer();
+		op->children[0] = child_optimizer.Optimize(std::move(op->children[0]), &child_stats);
+		op->SetEstimatedCardinality(child_stats.cardinality);
+		if (!datasource_filters.empty()) {
+			child_stats.cardinality = LossyNumericCast<idx_t>(static_cast<double>(child_stats.cardinality) *
+			                                                  RelationStatisticsHelper::DEFAULT_SELECTIVITY);
+		}
+		ModifyStatsIfLimit(limit_op.get(), child_stats);
+		AddAggregateOrWindowRelation(input_op, parent, child_stats, op->type);
 		return true;
 	}
 	case LogicalOperatorType::LOGICAL_UNNEST: {
