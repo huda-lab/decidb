@@ -917,7 +917,7 @@ bool DecideCanonicalizer::ReadLikeTermMultiple(const Atom &atom, DecideProductFo
 		    (atom.scale_divides && scale == 0.0)) {
 			return false;
 		}
-		multiple *= atom.scale_divides ? 1.0 / scale : scale;
+		multiple = atom.scale_divides ? multiple / scale : multiple * scale;
 	}
 	auto &body = PeelConstantDivisors(context, *atom.expr, decide_index, multiple);
 	term = ReadDecideProduct(context, body, decide_index);
