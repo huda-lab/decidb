@@ -462,7 +462,7 @@ path, exceptions included.
 |---|---|
 | Environment | `GRBemptyenvinternal()` then `GRBstartenv()`, `OutputFlag = 0` (1 under `DECIDB_PROFILE_SOLVER_LOG`) |
 | Variables | one `GRBnewmodel()` with type/bound/objective arrays — `GRB_BINARY`, `GRB_INTEGER`, `GRB_CONTINUOUS` |
-| Sense | `GRBsetintattr(GRB_INT_ATTR_MODELSENSE, ...)` |
+| Sense | none set: Gurobi's default `ModelSense` minimizes, and every model is a minimization |
 | Constraints | `GRBaddconstr()` per row, taking COO directly |
 | Quadratic objective | `GRBaddqpterms()` (COO). Gurobi supports continuous QP **and** MIQP |
 

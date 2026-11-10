@@ -134,9 +134,10 @@ different reasons:
 - **Not model load.** A refusal there would fire after a full scan and a full model
   build, and nothing about the four classes needs a single row: `quadratic_constraints` is tree shape (a constraint with a product group), `miqp` is declared
   integrality, `nonconvex_quadratic` is judged per product group of the objective
-  (`IsNonconvexProductGroup(square, weight_sign, sense)`) and `singular_quadratic` is whether a group couples
-  two decisions. A product of two forms is always non-convex. A square is non-convex when the sign of its weight
-  fights the sense (a positive weight under `MAXIMIZE`, a negative one under `MINIMIZE`) or is not known before the
+  (`IsNonconvexProductGroup(square, weight_sign)`) and `singular_quadratic` is whether a group couples
+  two decisions. A product of two forms is always non-convex. The objective is a minimization, so a square is
+  non-convex when the sign of its weight there is negative (a positive weight written under `MAXIMIZE`, a negative
+  one under `MINIMIZE`) or is not known before the
   query runs. The plan knows a constant weight's sign (`ScaleSignAtPlanTime`) and not a data weight's, which counts as
   0. So `MINIMIZE SUM(w * POWER(x, 2))` is refused on HiGHS: *"the objective multiplies a squared decision term by a
   value whose sign is known only when the query runs"*, with the advice to multiply the square by a constant or use a
@@ -376,19 +377,19 @@ check is a value scope check, so `install_row_checks` runs after this pass.
 
 `AbsPairInfo::needs_bigm` records whether the auxiliary needs an upper envelope.
 It is false when solver pressure or the clause's shape pins `aux` to `|inner|`
-naturally — an objective term the sense pushes down (a positive ABS under
+naturally — an objective term the minimization pushes down (a positive ABS under
 `MINIMIZE`, a negative one under `MAXIMIZE`), or a constraint shape that already
 upper-bounds `aux`. When true (a constraint hard direction, an objective term the
-sense pushes up, or a term of unknown sign), `abs_maximize_links` carries the
+minimization pushes up, or a term of unknown sign), `abs_maximize_links` carries the
 auxiliary and a binary sign indicator, and execution derives the two upper-bound
 rows from the tagged lower-bound constraints.
 
 `TagAbsForBigM` decides this by reading a constraint as `E <op> 0` and asking
 whether each ABS term's signed position pushes its auxiliary down, and the
-objective the same way with the sense standing in for the relation: `MINIMIZE E`
-pins what `E <= K` pins, `MAXIMIZE E` what `E >= K` pins. So `MINIMIZE -abs(e)` and
-`MAXIMIZE abs(e)` take the envelope, `MAXIMIZE -abs(e)` does not. Reading the sense alone would
-call `MINIMIZE 0 * sum(x) - abs(sum(x) - 9)` unbounded.
+objective the same way with the minimization standing in for the relation: the objective
+`E` pins what `E <= K` pins, and a `MAXIMIZE E` arrives as `-E`. So `MINIMIZE -abs(e)` and
+`MAXIMIZE abs(e)` take the envelope, `MAXIMIZE -abs(e)` does not. Reading the objective's direction alone
+would call `MINIMIZE 0 * sum(x) - abs(sum(x) - 9)` unbounded.
 `CollectAbsWithSign` reads each ABS term's sign from the polarity walk
 `WalkPolarity` (`decide_optimizer.cpp`), which the definition of non-linear reducer bodies
 shares: it folds signs through `+`, unary and binary `-`, casts, aggregate bodies, and
@@ -540,7 +541,7 @@ Plaisted–Greenbaum encoding (the polarity-aware Tseitin transformation) states
 definition only in the polarity it occurs in. SUM, AVG, MIN and MAX never decrease when a
 member grows, so a member is pushed the way its reducer is, and the reducer's sign comes
 from the same polarity walk the ABS classifier reads (`WalkPolarity`): the clause read as
-`LHS - RHS <op> 0`, the objective under its sense. Pushed down, `t >= q`; pushed up,
+`LHS - RHS <op> 0`, the objective as the minimization it is. Pushed down, `t >= q`; pushed up,
 `t <= q`; neither (`=`, a factor whose sign only the rows decide, a dead term under a
 factor of 0), `t = q`. A convex `q` pushed down stays convex. `t` is `INTEGER` when the
 body is whole-numbered by declared types (`DecideValueIsWholeNumbered`), so a strict
@@ -678,7 +679,7 @@ known, so only the `BOOL` factor keeps the push.
 
 **The objective** is walked the same way when stage 04 stamped it `VALUE_REWRITE_TAG`
 (a reducer under a `BOOL` factor): `MAXIMIZE b * sum(x)` replaces `sum(x)` by a helper
-pushed by the sense and the term's sign, and the product is one auxiliary the objective reads
+pushed by the term's sign in the minimization, and the product is one auxiliary the objective reads
 once. A reducer no decision multiplies stays in the objective. A factor declared per row is
 refused by the objective's scope check.
 

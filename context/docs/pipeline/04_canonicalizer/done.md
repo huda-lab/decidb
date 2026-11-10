@@ -271,6 +271,15 @@ reprints the decision structure, so a clause written `x * w` prints a second lin
 reads as written in both. The transformer gives each parsed expression its token's location; a call it rewrites into
 another expression (`IF`, `IFNULL`) keeps the call's, so a refusal over a `COALESCE` or `IFNULL` points at it too.
 
+### 3.3c One spelling per meaning: a function's aliases
+
+DuckDB registers one function under several names (`pow`, `power` and `^` for `**`; `abs` for `@`; `add`, `subtract` and
+`multiply` for `+`, `-` and `*`; `mean` for `avg`). The binder renames every such call in a DECIDE clause to its primary
+before any check reads a name (`../02_binder/done.md` § One spelling per function), so this stage and every later one
+match one name per function: the primary. A call keeps the name the user wrote in a display tag
+(`__written_name_<name>__`), which only rendering reads, as a desugared norm keeps its written form (§3.3a). A node this
+stage builds for the user's call passes the written name to `BindOp`: a norm's definition prints `power` and `abs`.
+
 ### 3.4 Placement
 
 ```text
@@ -378,11 +387,14 @@ What may be a factor (`PeelScale`, the single place that judges it):
   refused: *"DECIDE objective: 'w' varies per row, so it cannot multiply SUM(x). Move
   it inside the aggregate, e.g. SUM(x * w)."*, or, for a correlated subquery, *"this
   subquery returns a different value for each row, ..."*;
-- a `BOOL` decision on a bare reducer (`IsBooleanFactor`: `b`, `-b`, or data times `b`, such as `2 * b`), in a
-  constraint and in the objective. The comparison takes the VALUE shape; the value rewrite holds the reducer in a
-  helper decision and the product `b * helper` is linearized as every Boolean product is (stage 05). The objective is
-  stamped `VALUE_REWRITE_TAG` when a reducer sits under such a factor. A `BOOL` is never negative, so it keeps the
-  push of the term it scales (`PlanTimeSignOf` reads it POSITIVE through `BooleanDecisions`);
+- a `BOOL` decision on a bare reducer (`IsBooleanFactor`: `b`, or data times `b`, such as `2 * b`), in a constraint and
+  in the objective. A minus over a factor that reads a decision is the term's sign, not part of the factor:
+  `-b * SUM(x)` is the term `-(b * SUM(x))` (`PeelScale` takes the minus off, `WithoutDecisionNegation`). A minus over
+  data stays in the factor, since DuckDB evaluates it and can raise where moving the sign would not. The comparison
+  takes the VALUE shape; the value rewrite holds the reducer in a helper decision and the product `b * helper` is
+  linearized as every Boolean product is (stage 05). The objective is stamped `VALUE_REWRITE_TAG` when a reducer sits
+  under such a factor. A `BOOL` is never negative, so it keeps the push of the term it scales (`PlanTimeSignOf` reads it
+  POSITIVE through `BooleanDecisions`);
 - any other decision — nowhere: *"DECIDE constraint: 's' is a decision, so it cannot multiply
   SUM(x). Only data or a BOOL decision can scale SUM/AVG/MIN/MAX."* (the objective says *"Only constants,
   query-wide values or a BOOL decision ..."*). An `INT` or `REAL` decision times a reducer is not convex, and a `BOOL`
@@ -427,13 +439,12 @@ as the scaled single term it is. A group whose factors cancel (`x - x`) is
 left as written rather than dropped, which could empty the side. A row-varying factor
 or a subquery is not summable and its atom is not merged.
 
-**A lone negated reducer** carries its sign in its factor:
-`-max(e) <= -cap` is emitted as `-1 * max(e) <= -cap`, `-(2 * max(e))` as
-`-(2) * max(e)` (`IsLoneNegatedReducer`, `FoldNegationIntoFactor`), and one written with
-signs around it, `-(-max(e))`, as the bare term (`IsSignedSpine`). The MIN/MAX rewrite
-then reads it as a factor of known sign, the route a `by` can take; left as `-max(e)` it
-would be an additive spine, which the composed formulation takes. Whether a factor's sign
-is known before the query runs is `ScaleSignAtPlanTime` (`decide_cast_policy`), which
+**Negation is a term's sign.** `-max(e) <= -cap` is emitted as written, a term of sign
+`-`; `-(2 * max(e))` is the term `max(e)` with sign `-` and factor `2`; and a term written
+with signs around it, `-(-max(e))`, is the bare term (`IsSignedSpine`). The MIN/MAX rewrite
+reads a term's direction as the comparison's times the term's sign times its factor's sign,
+as `WalkComposedLhs` does, so `-max(e)` and `-1 * max(e)` build one model. Whether a factor's
+sign is known before the query runs is `ScaleSignAtPlanTime` (`decide_cast_policy`), which
 this stage and the MIN/MAX rewrite share.
 
 **Composition reassociates, and that is accepted.** `(SUM(x) / 2) / 3` emits
@@ -462,10 +473,12 @@ Provenance is **side-agnostic**: `x <= (SELECT 5)` and `(SELECT 5) >= x` are the
 same shared cap after canonicalization and must produce the same actionable
 diagnosis. Internal names such as `SUBQUERY` never appear in suggested SQL.
 
-Tags live in the same `alias` field a plain user alias would occupy, so any code
-that names an expression for a rejection message must strip them first —
-`GetName()` returns the alias whenever one is set, tag or not.
-`UserFacingName` (this file) and `ScaleUserName`
+Tags live in the same `alias` field a plain user alias would occupy. `GetName()` strips
+them (`StripDecideTags`, `base_expression.cpp`), and a call's `ToString()` prints the name
+it was written under (`DecideWrittenName`, §3.3c). `StripDecideTags` removes every trailing
+`__…__` run, so a user alias that ends in one loses it there; a result column takes its
+name from the alias itself, so only a DECIDE message naming such an expression could show
+it. `UserFacingName` (this file) and `ScaleUserName`
 (`src/optimizer/decide/decide_linear_form.cpp`) are the two "name it the way the
 user wrote it, for an error message" helpers this boundary and stage 5 rely on;
 both call `StripDecideTags` before falling back to `ToString()`. This matters on
@@ -497,6 +510,21 @@ reason objectives get a boundary instead of their own normalizer.
 | **O3** | The spine contains only `+`, binary `-`, unary `-`, and binder casts over decision algebra. Data casts are atoms. | C4, verbatim |
 | **O4** | A factor on a decision-bearing reducer is one query-wide value, sits outside the reducer, and has one spelling (in a constraint it may vary by row, which makes the comparison VALUE, §3.10). | C6, same `PeelScale` |
 | **O5** | Structural tags survive rebuilding. The result is a fixed point. | C7 |
+| **O6** | The result is a minimization. A `MAXIMIZE` objective is canonicalized as written, then, as the last step, every term's sign and the constant offset are negated (CVXPY's `FlipObjective`): `MAXIMIZE f` is `MINIMIZE -f`, the sign carried by each term, never by a factor. | — |
+
+**One sense.** Every stage after this one reads a minimization and the terms' signs.
+`LogicalDecide::written_sense` keeps the direction the user wrote, and only messages,
+`EXPLAIN`, the solver gate's message and two shown values read it: the timeout's best
+objective so far and DIAGNOSE's achievable objective, each the model value negated
+(`0.0 - v`) for a `MAXIMIZE` query. `SetObjective` takes a minimization, so an objective an
+optimizer rewrite hands back needs no flip and the pass stays a fixed point. FEASIBILITY
+has no objective.
+
+The flip is the last step so that like terms merge and a factor distributes in the written
+direction. `EXPLAIN` renders the canonical layer in the written sense (`RenderWrittenSense`
+reverses each term's sign and keeps its factor), so the flip alone adds no `≡` line, and
+`MAXIMIZE SUM(x) + SUM(x)` shows `≡ 2 * sum(x)`. Merged after the flip, the same objective
+would render as `-(-2 * sum(x))` (owner's rulings, 2026-11-10).
 
 Two consequences:
 
@@ -582,7 +610,7 @@ It refuses, for each clause as written:
 
 | Refused | Message |
 |---|---|
-| A function over a decision outside the vocabulary (`+`, `-`, `*`, a division by data, a whole-exponent `POWER`, `ABS`, the reducers and DeciDB's markers) | `DECIDE: function 'sqrt' cannot take a DECIDE variable.` |
+| A function over a decision outside the vocabulary (`+`, `-`, `*`, a division by data, a whole-exponent `POWER`, `ABS`, the reducers and DeciDB's markers, each under any name DuckDB registers for it, §3.3c) | `DECIDE: function 'sqrt' cannot take a DECIDE variable.` |
 | An operator over a decision outside it (`%`, `COALESCE`) | `DECIDE: operator '%' cannot take a DECIDE variable.` |
 | A `POWER` over a decision whose exponent is not a whole number known before the query runs | `POWER over a DECIDE variable needs an exponent that is a whole number known before the query runs, found '0.5'.` |
 | A division by a decision | `DECIDE: cannot divide by a DECIDE variable.` |

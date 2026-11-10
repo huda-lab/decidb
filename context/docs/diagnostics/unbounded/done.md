@@ -23,7 +23,7 @@ extracts one with a portable LP built over the prepared `SolverModel`
 the model's columns:
 
 ```
-maximize    σ · cᵀd            σ = +1 if the model maximizes, −1 if it minimizes
+minimize    cᵀd                the model's own objective (every model is a minimization)
 subject to  Aⱼ · d  {≤,=,≥} 0   for every linear row j, and the linear part of every quadratic row
                                  (its sense preserved, RHS homogenized to 0)
             dᵢ = 0               where column i appears in a non-linear part
@@ -34,8 +34,8 @@ subject to  Aⱼ · d  {≤,=,≥} 0   for every linear row j, and the linear pa
             d continuous         (integrality relaxed)
 ```
 
-`σ` makes the objective always a *maximize* of the improving direction, so the box-LP
-is sense-agnostic. Homogenizing every row to RHS `0` keeps only the recession cone of
+The model is a minimization, so the box-LP reads its `c` as it is, and an improving direction
+has a negative value `cᵀd`. Homogenizing every row to RHS `0` keeps only the recession cone of
 the feasible region; the unit box on each open side (the recession cone of the column box) makes
 it bounded so the LP terminates, and a column with both bounds finite is fixed to `0`. A column
 falling toward −∞ is named as one rising toward +∞ is, and its remedy is a floor
@@ -50,7 +50,7 @@ It can miss an escape that runs through a non-linear part: a runaway inside a sq
 When a model escapes both ways (`MAXIMIZE SUM(POWER(x, 2) + y)` with `x` and `y` open), the finding
 names only the linear runaway (`y`); a bound on it leaves the other.
 
-A recession ray exists iff this LP is `OPTIMAL` with objective > `DIAGNOSTIC_RAY_EPSILON`;
+A recession ray exists iff this LP is `OPTIMAL` with an improvement `−cᵀd` > `DIAGNOSTIC_RAY_EPSILON`;
 then `d` is the ray and its nonzero entries are exactly the escaping columns. The ray
 is attached to `SolverResult::ray` only in that case. The builder, solver and engine share
 both thresholds ("Shared diagnostic constants" in `../foundations/done.md`). Ray extraction
@@ -293,7 +293,7 @@ statement) · `test/common/test_decidb_diagnostic_engines.cpp` (`DiagnoseUnbound
 injected grouping, plus the renderer and the statement-scoped handoff) · `test/common/test_decidb_escape_characterization.cpp`
 (the pure `CharacterizeEscape` core: threshold gating, union/sort, all-escape,
 excluded instances, empty-rules fallback) · `test/common/test_decidb_probe_models.cpp`
-(ray fallback: full-support ray, signed objective, finite-UB zeroing, row-sense
+(ray fallback: full-support ray, finite-UB zeroing, row-sense
 preservation, integrality relaxation, opt-in attachment) ·
 `test/common/test_decidb_variable_provenance.cpp` (USER/AUX/GLOBAL_AUX resolution).
 The characterization string is asserted against constructed cases (oracle/pinned

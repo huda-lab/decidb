@@ -47,11 +47,10 @@ solver path answers those queries, so none of them is wrong, only slower.
 
 - **Problem.** A constant factor reaches a rule as three fields of `DirectLinearPart`: whether there is one, its value
   and whether it divides (with `DirectScaledTerm` and `DirectCheckNumber` in `direct_bound_reader.hpp`). Each rule
-  turns them into a number on its own: A2's `Orientation` (`a2_single_facility_location_rule.cpp:124-128`) and the same
-  lines inline in N1 (`n1_euclidean_ball_rule.cpp:186-190`).
+  turns them into a number on its own: A2's `Orientation` (`a2_single_facility_location_rule.cpp:125-128`) and the same
+  lines inline in N1 (`n1_euclidean_ball_rule.cpp:186-187`).
 - **Change.** One value type for a factor (its expression, whether it divides, its value at plan time) and one
   orientation of a part (its sign times its factor), which every rule reads. Division stays division: multiplying by
   the reciprocal rounds and hides a zero divisor.
-- **Needs.** CAN-2 (the sense leaves the orientation there).
 - **Done when.** No answer or plan changes; `./test/decide/run_tests.sh -n 2 -k "a1_separable or a2_single or
   n1_euclidean or r1_continuous or s1_uniform or o1_monge"` and `build/release/test/unittest "[decidb]"` pass.

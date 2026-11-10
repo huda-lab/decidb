@@ -163,7 +163,7 @@ stage 1E:  E* = min Σ αᵢ s_edit    subject to D ≤ D*, fixed G
   are reported as `x <= 5`.
 - **Engine (`decide_diagnostic_engines.cpp`, `DiagnoseInfeasible`).** Pure model math.
   Copies the model, clears the user objective for the repair passes (zeroes linear objective,
-  drops the quadratic objective, `maximize=false`), and adds a slack to every relaxable **linear**
+  drops the quadratic objective), and adds a slack to every relaxable **linear**
   row (`IsRelaxableForElastic` ⇒ `USER_PARAMETER`). The active repair objective is installed
   per lexicographic tier. Quadratic rows and
   `STRUCTURAL`/`USER_MECHANISM` rows stay rigid; ABS pin rows
@@ -695,8 +695,8 @@ choice is *indifferent* between two equally-minimal repairs — two DROP sets, o
 put the same loosening on either of two clauses (or split it fractionally across both where
 one edit suffices) — the solver may pick arbitrarily. `BuildTieBreakModel` makes common ties
 stable with one extra pass over every repair knob: when a stage-2a objective exists, freeze it
-at its optimum with a one-sided row (`obj ≥
-Z*` for MAXIMIZE / `≤ Z*` for MINIMIZE — the rhs is **exact**, no tolerance cushion: any eps of
+at its optimum with a one-sided row (`obj ≤
+Z*`, the model being a minimization — the rhs is **exact**, no tolerance cushion: any eps of
 objective room is monetized by the rank objective, which would shave eps of repair onto a
 lower-ranked slack and split the edit; the stage-2a point attains `Z*` to machine precision,
 and a rounding pathology just makes the pass non-optimal, keeping the stage-2a repair). Then
@@ -752,7 +752,7 @@ Stage 2 reports the **achievable objective** the user gets after the minimal fix
 specific edit that achieves it. For each fixed DROP candidate, stage 1 (above) finds the
 lexicographically least repair budgets `(D*, E*)`, but when that minimum is non-unique it returns an **arbitrary**
 minimizer whose edit need not be the one best for the user's objective. Stage 2 is a final
-lexicographic tier: among all fixes within those repair budgets, pick the one that maximizes
+lexicographic tier: among all fixes within those repair budgets, pick the one best for
 the user's original objective, and report **that** edit so the edit and the objective agree.
 
 **Method (freeze the budget, not the amounts).** `BuildStage2Model`
@@ -764,7 +764,7 @@ wired) and:
   directional slacks (`s⁺ + s⁻`). The caps are exact stage-1 tier optima; the backend
   feasibility tolerance supplies the only cushion that keeps the re-solve feasible.
 - **restores the user's original objective** (linear `obj_coeffs`, the quadratic objective
-  `q_*` / `has_quadratic_obj` / `nonconvex_quadratic`, and the `maximize` sense), with the
+  `q_*` / `has_quadratic_obj` / `nonconvex_quadratic`), with the
   slack columns set to zero objective weight so the reported objective is exactly `cᵀx` over
   the user's variables. Stage 1 had zeroed and dropped the objective; stage 2 needs it back.
 
@@ -776,7 +776,7 @@ objective.
 
 **Reading the result.** On `OPTIMAL`, the stage-2 slacks are re-read into the edit list
 (`ReadElasticEdits`, the shared stage-1/stage-2 reader) and the objective value is reported.
-Because the budget is enforced only to the feasibility tolerance, a maximizing re-solve can
+Because the budget is enforced only to the feasibility tolerance, the re-solve can
 ride that tolerance (a clean `7` arriving as `7.00000028`). The objective and repair costs are
 snapped by `SnapDiagnosticValue`: to the nearest integer within `DECIDE_FEASIBILITY_TOLERANCE`
 plus a relative `1e-9`, the floating-point error of a value summed over many terms (recovering
@@ -802,13 +802,15 @@ HiGHS's QP path on the user's query (`issues/bugs.md` § Limitations).
 **Objective value plumbing.** The objective's constant (a data term, the `c²` of
 `POWER(x - c, 2)`, a peeled `+ 3`) is `SolverModel::obj_constant`. No solver receives it, since a
 constant moves no optimum and would change a relative MIP gap; `SolverSession` adds it to every
-objective value and bound a solve reads back (`../../pipeline/07_solver/done.md`), so the
-`achievable_objective` is the objective as written. It is summed without a range check: terms past a
+objective value and bound a solve reads back (`../../pipeline/07_solver/done.md`), so a solve's value is the
+minimized objective's. `DiagnoseInfeasible` reports the `achievable_objective` as written: the value negated
+(`0.0 - v`) for a `MAXIMIZE` query (`InfeasibleDiagnosisInput::negate_shown_objective`, set from
+`written_sense`). The constant is summed without a range check: terms past a
 DOUBLE make it ±inf, and the query still answers (a constant never changes the answer).
 `SolverModel::ClearObjective()`
 clears it with the rest of the objective for every derived model. `SolverResult` carries
 `objective_value`, populated on
-`OPTIMAL` by both backends in the model's own sense (`gurobi_solver.cpp` via
+`OPTIMAL` by both backends as the value of the minimization (`gurobi_solver.cpp` via
 `GRB_DBL_ATTR_OBJVAL` through the loader's `getdblattr` scalar getter;
 `deterministic_naive.cpp` via HiGHS `getInfo().objective_function_value`). The engine still
 reads the stage-2 achievable objective directly from this field; stage-1 tier budgets are

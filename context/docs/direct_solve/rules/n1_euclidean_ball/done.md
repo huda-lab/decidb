@@ -23,9 +23,10 @@ One row-scoped `REAL` decision, with:
 - **The box.** Exactly `[0, inf)` (`x >= 0`, or nothing written) or `(-inf, inf)` (`x >= -1e30`).
 - **The objective.** None, or signed `SUM` parts, each with an optional constant factor or divisor and an optional `when`,
   plus an optional objective-level `when`. Terms: a row-valued coefficient times the decision, a per-row constant, and at
-  most one square `k * (w * x + t)^2` with a constant `w` and a row-valued `t`, convex in the sense. A square under a
-  `when`, or under the NULL guard of a nullable `t`, leaves some rows without it, so every linear term must be in its
-  part: K is then one constant on every row with a linear term.
+  most one square `k * (w * x + t)^2` with a constant `w` and a row-valued `t`, convex in the minimization: `k` is
+  positive once the part's sign and factor are applied. A square under a `when`, or under the NULL guard of a nullable
+  `t`, leaves some rows without it, so every linear term must be in its part: K is then one constant on every row with
+  a linear term.
 
 **The answer.** Each row orients as minimize `K*x^2 + b*x`. Let the row's value be `y = -b / (2*K)` with a square and
 `d = -b` without one, after `GREATEST(., 0)` in `[0, inf)`, let `h` be the sum of the squared values over the ball, and

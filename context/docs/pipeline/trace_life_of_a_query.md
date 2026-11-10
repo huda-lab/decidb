@@ -76,7 +76,9 @@ shape, one row for the one `by ()` group of the kept rows. The scope checks find
 nothing to check — no `when`, no `per`, a literal bound.
 
 The objective is canonicalized through the same machinery: one additive term, `value * x`,
-decision-bearing, nothing to fold into `objective_constant_offset`. The shape check then reads both clauses: every term
+decision-bearing, nothing to fold into `objective_constant_offset`. As its last step the pass writes the `MAXIMIZE` as
+a minimization by negating the term's sign: the objective is `-SUM(value * x)`, and `LogicalDecide::written_sense`
+keeps `MAXIMIZE` for EXPLAIN and the messages. The shape check then reads both clauses: every term
 has degree 1 and nothing is outside the model's vocabulary, so it refuses nothing.
 
 `VerifyCanonical` and `VerifyCanonicalObjective` both pass, and re-canonicalizing
@@ -98,7 +100,7 @@ Before the first row arrives, the physical plan is built: `plan_decide.cpp` call
 flattening (`AnalyzeConstraint`) produces one
 `DecideConstraint` with `lhs_is_aggregate = true` and one `Term`
 `{variable_index: 0, coefficient: weight, sign: +1}`. `AnalyzeObjective` produces
-one term with coefficient `value`.
+one term with coefficient `value` and sign -1.
 
 Then `Sink` runs. Row 4 was already eliminated by the filter, so three rows are
 buffered:
@@ -118,7 +120,7 @@ buffered:
 executed over the buffer, and cast once to `double`:
 
 - constraint: `row_coefficients[0] = [20, 10, 30]`, `rhs_values = [50]`
-- objective: `[100, 60, 120]`
+- objective: `[-100, -60, -120]`, the term's sign applied
 
 No `when`, `per` or `by`, so `row_group_ids` stays empty and `num_groups` is 0 — the
 fast path. Nothing is NULL, NaN or infinite.
@@ -134,8 +136,8 @@ once — so no two (term, row) pairs share a column and each row's terms are rea
 `[0,1]` and `is_binary`.
 
 ```
-Maximize
- obj: 100 x0 + 60 x1 + 120 x2
+Minimize
+ obj: -100 x0 - 60 x1 - 120 x2
 Subject To
  c1: 20 x0 + 10 x1 + 30 x2 <= 50
 Bounds
@@ -148,7 +150,7 @@ Binaries
 
 `SelectSolverBackend()` returns Gurobi if available, HiGHS otherwise. Either way
 the result normalizes to `SolverStatus::OPTIMAL` with
-`solution = [1, 0, 1]` and `objective_value = 220`.
+`solution = [1, 0, 1]` and `objective_value = -220`, the value of the minimization.
 
 Check: `20·1 + 10·0 + 30·1 = 50 ≤ 50`, value `100 + 120 = 220`. Taking rows 1 and 2
 instead would weigh 30 and be worth only 160.

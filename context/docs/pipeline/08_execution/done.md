@@ -635,7 +635,8 @@ MAXIMIZE".
 A `SolverInput` carrying `num_rows`, `num_decide_vars`, `variable_types`
 (reported as `BOOLEAN` wherever `is_boolean_var` is set), resolved
 `lower_bounds` / `upper_bounds`, the `EvaluatedConstraint` vector, objective
-coefficient and variable-index arrays, keyed mappings, and `sense`.
+coefficient and variable-index arrays, keyed mappings, and the objective's constant. The objective is a
+minimization and carries no sense.
 
 When the objective is quadratic, the same evaluation runs on `product_groups` **in
 addition to** `terms`, not instead of: the linear terms fill `objective_coefficients` /

@@ -169,6 +169,11 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   quotes the clause as written and points at the term. Without the check, such a
   function would be dropped or reach execution unmodelled. `POWER(x, 1)` is `x` and `POWER(x, 0)` is 1. Tests:
   `test_error_binder.py`, `test_product_normal_form.py`, `test_error_case_expression.py`.
+- **Every name DuckDB registers for a function** answers as that function: `pow`, `power`, `**` and `^`; `abs` and
+  `@`; `add`, `subtract` and `multiply` beside `+`, `-` and `*`; `mean` beside `avg`. Plans and messages quote the
+  name as written (`../pipeline/02_binder/done.md` § One spelling per function). The prefix `@` binds more loosely than
+  `*`, as in PostgreSQL: `@(a - b) * x` is `@((a - b) * x)`, so a factor outside the absolute value needs parentheses,
+  `(@(a - b)) * x`, or `ABS(a - b) * x`. Tests: `test_function_aliases.py`.
 - **Functions and operators over data only** (`%`, bitwise, `mod()`, `floor()`, `POWER(qty, 3)`, `COALESCE`, `CASE`) are
   per-row coefficients: the term is an atom nothing opens, and DuckDB's `ExpressionExecutor` evaluates it. A data-only
   *aggregate* inside a reducer (`SUM(avg(col) * x)`) is refused, since it needs the whole row set; compute it as a

@@ -20,7 +20,7 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
 - **Rule interface.** `CheckCondition`, `Apply` and a fixed `Summary()` line for `EXPLAIN`, plus a shared Map step that
   checks the slot map. Rules are listed in `direct_registry.cpp`; a test seam replaces the list per connection. The
   rule driver first checks that the front end read the whole IR (`DirectIRIsReadable`: every
-  constraint and the objective proved, a finite offset, a known sense); an IR that fails is offered to no rule, so each
+  constraint and the objective proved, a finite offset); an IR that fails is offered to no rule, so each
   rule checks only what concerns its own class. Otherwise the driver runs CheckCondition for every rule (disjoint
   rules: [rules.md](../architecture/rules.md)).
 - **Result adapter** ([result_adapter.md](../architecture/result_adapter.md)). It serializes, prunes outputs only when
@@ -47,8 +47,9 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     checks it (NaN and infinity raise, NULL skips the row), and a constant one has no check. It appends the check of
     each value that can fail to the rule's list, and reads a constant one term at a time, never summed.
     `DirectFoldQuadratic` (P2) folds one decision's `a` and `b` over the parts, each scaled by its sign and factor, and
-    returns the part of `b` the linear terms make, which the rule tests for a number past a DOUBLE; the rule applies the
-    objective's sense. Every sum starts from its first term and has no `0.0` seed: `0.0 + x` is `x` except at
+    returns the part of `b` the linear terms make, which the rule tests for a number past a DOUBLE. The parts are a
+    minimization, so `a` and `b` are the minimized objective's. Every sum starts from its first term and has no `0.0`
+    seed: `0.0 + x` is `x` except at
     `x = -0.0`, and a seed is one addition more on every row. A sum of no term is `0.0`. `DirectTurningPoint` returns
     the turning point `-b / (2a)`, or for a whole-numbered decision the first integer whose next step no longer improves
     (the smaller one on a tie), with its precision flag (Number-range warning, below).

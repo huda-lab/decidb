@@ -96,7 +96,8 @@ from S1, which counts `BOOL` decisions.
 `definition.md` § Relational construction and § The plan, built by `AggregatePlanBuilder` for every condition R1
 admits. The per-row values of an item (stage 1 of § The plan) come from `ItemStages`: every raw value (coefficient,
 bound, mask, data limit) evaluated on the rows that read it, with its NULL and NaN check (a row a `when` drops reads
-nothing), each clause's bounds, the value `v` (negated under `MINIMIZE`, zero with no objective, and zero in a part
+nothing), each clause's bounds, the value `v` (the minimized objective's coefficient negated, zero with no objective,
+and zero in a part
 whose `when` drops the row), the box `[l, u]`, and per decision whether the box is empty, the anchor, the break-even price `t = v / w` (items with `w = 0` or outside every budget take their best end and enter no
 sum), and the finite room up and down. An infinite room is a flag, counted apart, so no sum adds infinity to minus
 infinity. `ItemAlgebra` holds the verdicts, the candidate price, the price, the sums at the price and the answer.

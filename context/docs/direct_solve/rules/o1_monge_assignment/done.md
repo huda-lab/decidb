@@ -1,7 +1,7 @@
 # O1 (Monge assignment) — what works today
 
-Verified on 2026-11-10 at `804e1efab5`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
-serializer, highs) 6,614 passed; C++ `build/release/test/unittest "[decidb]"` 5,796 assertions in 102 cases. Code:
+Verified on 2026-11-10 at `8515df17ae`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
+serializer, highs) 6,715 passed; C++ `build/release/test/unittest "[decidb]"` 6,035 assertions in 103 cases. Code:
 `src/optimizer/decide/direct/o1_monge_assignment_rule.cpp`. Class definition: [definition.md](definition.md).
 
 ## What it admits
@@ -21,16 +21,30 @@ MINIMIZE SUM(POWER(l.position - r.position, 2) * x);
   filter pushdown has placed it inside that side.
 - **The decision.** One `BOOL` per row, with no `per` of its own.
 - **The constraints.** Exactly two, each `per K: SUM(x) by (K) = 1` with no `when`, the same key on `per` and `by`,
-  every element of the key a column of one side (`per l`, `per l.id, l.position`), and the two keys on different sides.
-  A key element that stands for a relation takes NULL as a value, so a class is a distinct row of its side and a
-  duplicate row shares its class.
-- **The objective.** One term, `k * cost * x`, where `k` folds to a constant (casts, `*`, unary `-`, a scale outside the
-  `SUM`, and the sense all fold into one sign) and `cost` is one of:
-  - `ABS(a - b)` or `POWER(a - b, 2)`, minimized with `k >= 0`: equal ranks;
-  - `a * b`: equal ranks when the signed term is maximized, opposite ranks when it is minimized.
+  every element of the key a column of one side (`per l`, `per l.id`), and the two keys on different sides. A key
+  element that stands for a relation takes NULL as a value, so a class is a distinct row of its side and a duplicate
+  row shares its class. A key element written as a column is declared `NOT NULL`: a NULL in it puts its row in no
+  class, which the plan does not model.
+- **The objective.** One term, `k * cost * x`, where `k` folds to a constant (casts, `*`, unary `-` and a scale outside
+  the `SUM` fold into one sign, and a `MAXIMIZE` objective reaches the rule as the minimization of its negation) and
+  `cost` is one of:
+  - `ABS(a - b)` or `POWER(a - b, 2)`, in any of their spellings (`@`, `pow`, `**`, `^`), minimized with `k >= 0`
+    (`MINIMIZE k * ...`, `MAXIMIZE -k * ...`): equal ranks;
+  - `a * b`: by the rearrangement inequality, equal ranks when the minimized term has `k < 0`, opposite ranks when
+    `k > 0`.
 
   `a` is a numeric column of one side and `b` of the other, in either order, with casts looked through.
 - **The positions.** `a` and `b` are declared `NOT NULL` on the tables their sides scan directly (the IR's `not_null`).
+- **The key determines the position.** Rows that agree on a side's key agree on its position: the key holds the
+  position column, or it holds a key of the position's table (the IR's `keys`). So `per l.id` answers when `id` is a
+  key of the table `l` scans, and its classes are `per l`'s.
+
+A table's keys are its UNIQUE constraints, the PRIMARY KEY included, whose columns the scan reads and the table
+declares all `NOT NULL`. UNIQUE lets NULLs repeat, and DuckDB declares a PRIMARY KEY's columns `NOT NULL`, so the
+`NOT NULL` test covers both (owner's ruling, 2026-11-10). A key is a fact of the catalog, which a direct-solve rule may
+read and the canonicalizer may not (`../../../pipeline/04_canonicalizer/done.md` § What a rule must be). DuckDB's
+index and `GROUP BY` agree on a DOUBLE key (-0.0 and 0.0 are one value, and so are NaNs); the index ignores a column's
+collation where `GROUP BY` applies it, and a collated key is no bare column, so it declines.
 
 **The answer.** Each side's classes are ranked by position; the pair of the left class and the right class of equal
 rank (or opposite rank) gets `x = 1`, once per matched class pair, and every other pair gets 0. An empty side gives an
@@ -70,11 +84,10 @@ on these shapes is in [todo.md](todo.md).
 
 | Shape | Why |
 |---|---|
-| A maximized distance, or a distance with `k < 0` | Opposite ranks are optimal there, but not proved for the rule; CAN-2 makes `MAXIMIZE` one sense. |
-| `pow`, `**`, `^` | Only the name `power` is read; CAN-2 gives the power one spelling. |
+| A maximized distance: `k < 0` in the minimization (`MAXIMIZE k * ABS(a - b)` with `k > 0`) | Opposite ranks are optimal there, but not proved for the rule. |
 | `TRY_CAST` around a position | It can make a NULL the table never holds. |
 | A position column not declared `NOT NULL`, or read through a projection, outer join or computed expression | A NULL position makes its item free (`SUM` drops the term), and ranks no longer place it. |
-| `per l.id` and other column keys | A column key puts a NULL in no class; the primary-key form is O1-7. |
+| A column key that does not determine the position (`per l.name` with no key on `name`, one column of a composite key), or a key column that may be NULL | Rows of one class may hold different positions, and a NULL puts its row in no class. |
 | A `WHERE` reading both sides | It makes a join: not every pair exists. |
 | A `when`, a third constraint, fixed pairs, a bound other than `= 1` | Not a plain matching. |
 | A second objective term or part, `AVG`, no objective | Not one cost. |
@@ -96,11 +109,18 @@ on these shapes is in [todo.md](todo.md).
   positions fail on both paths; a NaN on the last of 71 × 71 pairs raises under `LIMIT 1` and `COUNT(*)`. A side
   copied once (left, right, both, both with duplicates) applies and holds the copies `EXPLAIN` counts; duplicate rows
   with a NULL key on both sides; -0.0 against 0.0 and NaN in a key column are one class each, as on the solver path; a
-  DECIMAL product that overflows raises on both paths with no check of its own.
+  DECIMAL product that overflows raises on both paths with no check of its own. A negated distance under `MAXIMIZE`
+  applies (`test_o1_monge_maximizing_a_negated_distance_is_minimizing_it`). Column keys: a PRIMARY KEY, a UNIQUE
+  NOT NULL column, a key that is the position, a composite key written in full, and a column key beside a relation key
+  answer under `require`; no key, a nullable UNIQUE column, one column of a composite key and a key with a nullable
+  column keep the solver (`test_o1_monge_a_column_key_of_its_table_agrees_with_the_oracle`,
+  `test_o1_monge_a_column_that_is_no_key_of_its_table_keeps_the_solver`).
+- Spellings: `test_alias_o1_monge_reads_a_square_or_an_absolute_value_under_any_spelling` in
+  `test_function_aliases.py`.
 - Error text: `test_o1_monge_infeasible_error_is_the_solvers_error_word_for_word` in `test_direct_user_facing.py`.
 - C++: `O1AppliesShapes` and `O1DeclineShapes` in `test/common/test_decidb_direct_decline.cpp`, one decline per
-  `CheckCondition` branch, and the partition test against every other rule; the IR's `cross_product` and `not_null` in
-  `test_decidb_direct_ir.cpp`.
+  `CheckCondition` branch, and the partition test against every other rule; the IR's `cross_product`, `not_null` and
+  `keys` in `test_decidb_direct_ir.cpp`.
 - Join order: `test_a_parent_filter_stays_above_a_decide_over_a_join` in `test_nested_decide.py`.
 
 ## Performance

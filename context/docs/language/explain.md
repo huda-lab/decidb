@@ -42,7 +42,9 @@ rewritten clause, the account lines (what the rewrite made of the construct) com
 a fact the rewrite recorded (`LogicalDecide::rewrite_accounts`), worded in one place by `RenderDecideRewriteAccount`
 (D27). The objective has the same layers (`written_objective`, cut from the `OBJECTIVE` span; `canonical_objective` and
 `objective_canonical_differs`, captured around `CanonicalizeObjective` in `Binder::CreatePlan`); rows a rewrite added
-for it carry `OBJECTIVE_ROW_TAG` and print under `Objective:`.
+for it carry `OBJECTIVE_ROW_TAG` and print under `Objective:`. The canonical objective is a minimization
+(`../pipeline/04_canonicalizer/done.md` §3.9), and its layer renders in the sense written (`RenderWrittenSense`
+reverses each term's sign and keeps its factor), so the flip of a `MAXIMIZE` objective adds no `≡` line.
 
 EXPLAIN shows the model that was built, not only the query: the rows linearization emitted are part of the picture.
 An auxiliary column prints as the expression it stands for (`abs(ship - 20)`, `(open * ship)`, `max(ship)`,
@@ -75,7 +77,10 @@ keeps its parentheses and `a + b * c` gains none. A message and a `DIAGNOSE` rep
 canonical and rewritten layers quote every located subtree that reads no decision and reprint the decision structure,
 which canonicalization and the rewrites reshape: the colon form prints as `sum(per D: e)` there (D38). A reprinted node
 prints its operator and quotes its children; a cast with no location is display noise and prints as its child. The
-canonical layer prints the respelled product, and a message never searches for the other layer's text.
+canonical layer prints the respelled product, and a message never searches for the other layer's text. A reprinted
+call prints the name the user wrote, which the binder keeps in a tag when it renames an alias to its primary
+(`DecideWrittenName`, `../pipeline/02_binder/done.md` § One spelling per function): `pow(x - v, 2)` reprints as `pow`
+and `@(x - v)` as `@`. The ABS rewrite's account label is the one exception: it prints `abs` (OPT-5).
 `Expression::ToString()` is not used because the bound tree is not the query: it carries casts the binder inserted,
 prints functions in call form, and keeps pipeline tags in aliases that `GetName()` prints verbatim
 (`__source_clause_0__`).

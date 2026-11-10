@@ -159,7 +159,8 @@ into no box (`FoldKnownBound`), so its row's coefficient check refuses it. A coe
 names the first input a column holds that is not finite on the failing row, else the clause
 (`../../direct_solve/framework/done.md`, "Number messages").
 
-`maximize` comes from `input.sense`.
+The model is always a minimization and carries no sense. A `MAXIMIZE` query arrives as the minimization of its
+negation, carried by every term's sign and the constant offset (`DecideCanonicalizer::CanonicalizeObjective`, stage 04).
 
 ---
 
@@ -343,8 +344,9 @@ group on each row, in the objective and in a quadratic constraint alike:
 4. **Storage** — accumulated in a map over the lower triangle, then serialized to `q_rows` / `q_cols` / `q_vals`.
 
 **Convexity is judged per group, not guaranteed by construction.** A square with weight `w` adds `w·a·aᵀ`, which is
-positive semi-definite for `w > 0` and negative semi-definite for `w < 0`, so a sum of squares is convex exactly when
-every weight's sign agrees with the sense. A product is indefinite. The builder records `nonconvex_quadratic` from
+positive semi-definite for `w > 0` and negative semi-definite for `w < 0`. The objective is minimized, so a sum of
+squares is convex exactly when every weight is positive (a square written under `MAXIMIZE` arrives with its weight
+negated). A product is indefinite. The builder records `nonconvex_quadratic` from
 `IsNonconvexProductGroup`, the predicate stage 05's plan-time prediction reads (`../05_optimizer/done.md` → "The
 model-class gate"). A weight whose sign only the query knows (data) has `weight_sign` 0 and counts as non-convex.
 
@@ -569,9 +571,9 @@ A link has **two independent sides**, and which of them the surrounding model al
 supplies is a property of the *site*, not of the construct:
 
 - The **envelope** (`result >= member` for MAX) holds the result at or above every
-  member. An objective that minimizes it supplies this for free.
+  member. An objective that maximizes it supplies this for free.
 - The **closing** side pins the result down onto some member: one Big-M row per
-  member and a `SUM(y) >= 1` that makes one bind. An objective that maximizes it
+  member and a `SUM(y) >= 1` that makes one bind. An objective that minimizes it
   supplies this for free.
 
 An objective-side link therefore needs exactly one of the two, and which one is the
@@ -724,10 +726,12 @@ rows pin: `z` for the flat `MAXIMIZE max(e)`, and for the two-level
 them. The objective is then just that auxiliary.
 
 Each level is *easy* or *hard*, and that classification is exactly which of the two
-sides of an extremum link the objective supplies for free. Easy (`MINIMIZE`+`MAX`,
-`MAXIMIZE`+`MIN`) means the direction already drives the auxiliary onto the extremum,
+sides of an extremum link the objective supplies for free. The objective is a minimization, and
+under a negative sign stage 05 names the other extremum over the negated members: `MAXIMIZE min(e)`
+is built as `MINIMIZE max(-e)`, its auxiliary the extremum negated. Easy (a minimized MAX: `MINIMIZE`+`MAX`,
+`MAXIMIZE`+`MIN`) means the minimization already drives the auxiliary onto the extremum,
 so the closing side is free and only the envelope is emitted — no binaries. Hard
-(`MAXIMIZE`+`MAX`, `MINIMIZE`+`MIN`) pushes the auxiliary the other way, so the
+(a minimized MIN: `MAXIMIZE`+`MAX`, `MINIMIZE`+`MIN`) pushes the auxiliary the other way, so the
 envelope is free and the closing side is emitted instead. `M` is the global span of
 the objective expression over the rows (`max_r exprmax - min_r exprmin`, constants
 included), which dominates `|z - expr_r|` at every row.
@@ -900,8 +904,9 @@ member.
 ### ABS under MAXIMIZE
 
 Stage 05 emits `aux >= inner` and `aux >= -inner` and tags them via `abs_aux_idx` /
-`abs_is_pos_bound`. Under MINIMIZE those two alone pin `aux = |inner|`, because the
-objective pushes `aux` down. Under MAXIMIZE they do not — `aux` is free to run
+`abs_is_pos_bound`. Where the term's sign in the minimization pushes `aux` down (a positive
+ABS under `MINIMIZE`), those two alone pin `aux = |inner|`. Where it pushes `aux` up (a positive
+ABS under `MAXIMIZE`, which arrives negated) they do not — `aux` is free to run
 above `|inner|` — so `LinearizeAbsMaximize()` pairs the tagged rows and derives the
 matching Big-M upper bounds that close it.
 

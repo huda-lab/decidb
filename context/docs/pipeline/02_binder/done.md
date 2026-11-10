@@ -207,6 +207,35 @@ expansion keeps the call's location on its root, clears the body's (they index t
 and leaves the arguments' as written (`ExpressionBinder::UnfoldMacroExpression`). A parameter is quoted as written
 (`$1`).
 
+### One spelling per function
+
+DuckDB registers one function under several names: `pow`, `power` and `^` for `**`; `abs` for `@`; `add`, `subtract`
+and `multiply` for `+`, `-` and `*`; `mean` for `avg`. At the start of `BindDeclarations`, before any check reads a
+name, `RespellDecideAliases` renames every call in the DECIDE clauses (both sides of each constraint, the objective,
+reducer bodies, data, `when` conditions and `by` keys) whose name resolves in the catalog to an alias of a built-in
+function, scalar or aggregate, to its primary. A subquery is left as written.
+
+- **The relation is DuckDB's registration.** An alias is registered with its primary's implementation, and the
+  `*_ALIAS` macros of the function lists record the primary (`StaticFunctionDefinition::primary`, kept as
+  `FunctionEntry::primary_name`). DeciDB keeps no alias list, and the canonical names are DuckDB's primaries. The
+  lookup resolves a name as the binder does, so a user's macro of the same name is the function called and is left
+  as written.
+- **An alias answers as its primary does.** Every check from here on matches one name per function: the objective's
+  composition of a reducer (`+`, `-`, `*`, §5), the refusal of an aggregate over table columns that multiplies a
+  decision, the whole-number check of a strict comparison (§4), `IsBoundAvgAggregate`, the shape check, and every
+  rewrite and direct-solve rule. So `multiply(x, v)` answers as `x * v`, `MINIMIZE multiply(sum(x), 2)` as
+  `MINIMIZE sum(x) * 2`, `add(x, 0.5) < 3` as `x + 0.5 < 3`, and `multiply(avg(v), x)` is refused as `avg(v) * x` is.
+  A function DECIDE accepts over a decision is accepted under each of its names.
+- **The written name is display only.** The call keeps the name the user wrote in a tag (`__written_name_<name>__`,
+  `WRITTEN_NAME_TAG_PREFIX`). `DecideWrittenName` reads it: the DECIDE renderer, `ToString` of a bound function or
+  aggregate, and messages print it, and `GetName` strips every DECIDE tag (`StripDecideTags`). Two calls that differ
+  only in the tag are equal, so `pow(v, 2)` and `power(v, 2)` in one product are a square, and `mean` and `avg` of one
+  body share a helper.
+
+The respelling runs here, not in the canonicalizer, because the checks above read names on the bound tree before
+stage 04 runs: respelled after them, `multiply(avg(v), x)` would pass the refusal of `avg(v) * x`. A plan reads the
+written name from the tag, since cutting it from the source text fails for an infix `^` (owner's rulings, 2026-11-10).
+
 ---
 
 ## 3. Reducers
@@ -570,8 +599,9 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 ## 5. Objective
 
 `DecideObjectiveBinder` binds `MAXIMIZE` / `MINIMIZE` bodies through the same
-`DecideBinder` rules. It knows the sense (`decide_sense`) because a few checks
-depend on it. A scope in front (`BindScopedObjective`) and the two-level form
+`DecideBinder` rules. It knows the sense the user wrote (`decide_sense`), which its
+messages quote; stage 04 writes every objective as a minimization
+(`../04_canonicalizer/done.md` §3.9). A scope in front (`BindScopedObjective`) and the two-level form
 (`BindTwoLevelObjective`) are bound as §4a describes. It performs no algebraic
 rewriting: the objective's shape — its additive spine, its reducer scales, its
 constant offset — is decided once by `DecideCanonicalizer::CanonicalizeObjective` on
@@ -609,7 +639,8 @@ the select list is bound before any exists, so an auxiliary never appears in
 
 | Concern | Location |
 |---|---|
-| Declarations, scopes, types, the parsed-tree validators (`BindDeclarations`, `RefuseQualifiedDecisionReferences`) | `src/planner/expression_binder/decide/decide_declarations_binder.cpp` |
+| Declarations, scopes, types, the parsed-tree validators (`BindDeclarations`, `RefuseQualifiedDecisionReferences`), the respelling of aliases (`RespellDecideAliases`) | `src/planner/expression_binder/decide/decide_declarations_binder.cpp` |
+| An alias's primary: the `*_ALIAS` macros fill `StaticFunctionDefinition::primary`, registration copies it to `CreateFunctionInfo::primary_name` and `FunctionEntry::primary_name` | `src/function/function_list.cpp`, `extension/core_functions/function_list.cpp`, `src/function/register_function_list.cpp` |
 | Shared DECIDE expression rules (`IsDataOperand`), reducers, key scopes (`FindOrCreateKeyScope`, `FindOrCreateScope`, `BindKey`), where scopes may stand (`ValidateDecideScopeSpellings`) | `src/planner/expression_binder/decide/decide_binder.cpp` |
 | Degree, and the check that refuses on it (stage 04) | `src/planner/decide/decide_product_form.cpp`, `decide_shape_check.cpp` |
 | `SUCH THAT` binding and a constraint's scope (`BindScopedConstraint`) | `src/planner/expression_binder/decide/decide_constraints_binder.cpp` |

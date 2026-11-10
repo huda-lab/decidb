@@ -26,10 +26,11 @@ One `REAL` decision shared by many rows, query-wide (`per ():`) or keyed (`per k
   `MAXIMIZE -SUM(...)` and an objective constant (`+ 5`) all read through one formula, with no case list.
   - **Squared:** `SUM(k * POWER(w*c + t, 2))`, where the weight `k` is a constant or a value of the source row, of
     any sign.
-  - **Absolute:** `SUM(k * ABS(w*c + t))` and `norm(c - v, 1)`, where `k` is a constant, positive once the sense is
+  - **Absolute:** `SUM(k * ABS(w*c + t))` and `norm(c - v, 1)`, where `k` is a constant, positive once the part's sign
+    in the minimization is applied.
+  - **Maximum absolute:** `MINIMIZE MAX(k * ABS(w*c + t))`, `MAXIMIZE -MAX(k * ABS(w*c + t))` and
+    `MINIMIZE norm(c - v, 'inf')`, where `k` is a constant, positive once the part's sign in the minimization is
     applied.
-  - **Maximum absolute:** `MINIMIZE MAX(k * ABS(w*c + t))` and `MINIMIZE norm(c - v, 'inf')`, where `k` is a positive
-    constant.
 
 **The answer.** Each loss gives a target per class; the plan clamps it into the class's interval and repeats it on
 every row of the class. When several points are optimal, A2 returns the one nearest 0 (the owner's ruling). The clamp
