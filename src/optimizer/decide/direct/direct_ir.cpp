@@ -16,6 +16,9 @@
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
+#include "duckdb/planner/operator/logical_get.hpp"
+#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/parser/constraints/not_null_constraint.hpp"
 
 namespace duckdb {
 
@@ -77,6 +80,7 @@ public:
 		source_bindings = decide.SourceBindings();
 		ir.source_bindings = source_bindings;
 		ReadCrossProduct(ir);
+		ReadNotNull(*decide.children[0], ir);
 		ReadDecisions(ir);
 		ReadKeyedScopes(ir);
 		ReadConstraints(ir);
@@ -103,6 +107,32 @@ private:
 		if (source.type == LogicalOperatorType::LOGICAL_CROSS_PRODUCT) {
 			ir.cross_product.left = source.children[0]->GetColumnBindings();
 			ir.cross_product.right = source.children[1]->GetColumnBindings();
+		}
+	}
+
+	//! DirectIR::not_null: the NOT NULL columns of the tables the source scans directly. The walk goes down through
+	//! filters and cross products, which pass their children's bindings and values through; any other operator
+	//! (a projection, a join) ends it, so a binding it makes is never recorded.
+	void ReadNotNull(const LogicalOperator &op, DirectIR &ir) const {
+		if (op.type == LogicalOperatorType::LOGICAL_FILTER || op.type == LogicalOperatorType::LOGICAL_CROSS_PRODUCT) {
+			for (auto &child : op.children) {
+				ReadNotNull(*child, ir);
+			}
+		} else if (op.type == LogicalOperatorType::LOGICAL_GET && op.Cast<LogicalGet>().GetTable()) {
+			auto &get = op.Cast<LogicalGet>();
+			auto &table = *get.GetTable();
+			auto &column_ids = get.GetColumnIds();
+			for (auto &constraint : table.GetConstraints()) {
+				if (constraint->type != ConstraintType::NOT_NULL) {
+					continue;
+				}
+				auto declared = constraint->Cast<NotNullConstraint>().index.index;
+				for (idx_t i = 0; i < column_ids.size(); i++) {
+					if (column_ids[i].GetPrimaryIndex() == declared) {
+						ir.not_null.emplace_back(get.table_index, i);
+					}
+				}
+			}
 		}
 	}
 

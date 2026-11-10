@@ -145,6 +145,37 @@ TEST_CASE("Direct-solve IR retains complete bound-clause attribution", "[decidb]
 	REQUIRE(!DirectIRIsReadable(damaged));
 }
 
+TEST_CASE("Direct-solve IR records the source columns declared NOT NULL", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	REQUIRE_NO_FAIL(con.Query("CREATE TABLE t (a INTEGER NOT NULL, b INTEGER, k INTEGER PRIMARY KEY)"));
+	REQUIRE_NO_FAIL(con.Query("INSERT INTO t VALUES (1, 2, 3)"));
+	REQUIRE_NO_FAIL(con.Query("SET disabled_optimizers='decide_optimizer'"));
+	con.BeginTransaction();
+
+	// The source columns of `t`, in order, are a, b and k.
+	auto read = [&](const string &source) {
+		auto plan =
+		    IRPlan(con, "SELECT * FROM (FROM " + source + " DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(x)) q");
+		auto *decide = FindDirectIRInput(*plan);
+		REQUIRE(decide != nullptr);
+		return DirectIR::Read(*con.context, *decide).not_null;
+	};
+	// A declared column is in it, and so is a primary key; an undeclared one is not.
+	auto scanned = read("t");
+	REQUIRE(scanned.size() == 2);
+	REQUIRE(scanned[0].table_index == scanned[1].table_index);
+	REQUIRE(scanned[0].column_index == 0);
+	REQUIRE(scanned[1].column_index == 2);
+	// A filter passes the scan's bindings through.
+	REQUIRE(read("t WHERE b > 0").size() == 2);
+	// A projection makes bindings of its own.
+	REQUIRE(read("(SELECT a + 0 AS a FROM t) p").empty());
+	// A table with the same columns, undeclared, is not in it.
+	REQUIRE_NO_FAIL(con.Query("CREATE TABLE u AS SELECT * FROM t"));
+	REQUIRE(read("u").empty());
+}
+
 TEST_CASE("S1 IR preserves both interval bounds and exact equality", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);

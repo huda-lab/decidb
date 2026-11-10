@@ -16,6 +16,7 @@ add_library_unity(
   direct_late_materialization.cpp
   direct_source_reader.cpp
   n1_euclidean_ball_rule.cpp
+  o1_monge_assignment_rule.cpp
   r1_continuous_knapsack_rule.cpp
   s1_uniform_matroid_rule.cpp)
 set(ALL_OBJECT_FILES

@@ -26,4 +26,9 @@ unique_ptr<DirectSolveRule> MakeN1EuclideanBallRule();
 //! location).
 unique_ptr<DirectSolveRule> MakeA2SingleFacilityLocationRule();
 
+//! The sixth direct-solve rule: a one-to-one matching of the classes of the two sides of a cross product, under a
+//! distance or product cost of one position of each class, answered by pairing equal (or opposite) ranks (O1, the
+//! Monge assignment).
+unique_ptr<DirectSolveRule> MakeO1MongeAssignmentRule();
+
 } // namespace duckdb

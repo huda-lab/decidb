@@ -229,6 +229,8 @@ struct DirectIR {
 	vector<DirectIRKeyedScope> keyed_scopes;
 	vector<ColumnBinding> source_bindings;
 	DirectIRCrossProduct cross_product;
+	//! The source bindings of a directly scanned table's columns that the table declares NOT NULL.
+	vector<ColumnBinding> not_null;
 	vector<DirectIRConstraint> constraints;
 	DirectIRObjective objective;
 	//! The scope checks the plan makes on the source rows, which the rule driver adds above every rule's plan.

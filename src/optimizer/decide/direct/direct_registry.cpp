@@ -10,6 +10,7 @@ vector<unique_ptr<DirectSolveRule>> RegisteredDirectRules() {
 	rules.push_back(MakeR1ContinuousKnapsackRule());
 	rules.push_back(MakeN1EuclideanBallRule());
 	rules.push_back(MakeA2SingleFacilityLocationRule());
+	rules.push_back(MakeO1MongeAssignmentRule());
 	return rules;
 }
 

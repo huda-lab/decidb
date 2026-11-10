@@ -46,6 +46,8 @@ struct Shape {
 	string constraints;
 	string objective;
 	Edit edit;
+	//! The query's FROM clause; null for SOURCE_ROWS.
+	const char *source;
 };
 
 //! Source columns: id, w (DOUBLE), cap (INTEGER), flag (BOOLEAN), name (VARCHAR), f (FLOAT).
@@ -105,8 +107,8 @@ bool Applies(MakeRule make_rule, Connection &con, const Shape &shape) {
 	};
 	con.context->registered_state->Remove(DIRECT_RULE_TEST_SEAM_KEY);
 	con.context->registered_state->Insert(DIRECT_RULE_TEST_SEAM_KEY, std::move(state));
-	auto sql = "EXPLAIN SELECT id FROM (FROM " + string(SOURCE_ROWS) + " DECIDE " + shape.declaration + " SUCH THAT " +
-	           shape.constraints + " " + shape.objective + ") q";
+	auto sql = "EXPLAIN SELECT id FROM (FROM " + string(shape.source ? shape.source : SOURCE_ROWS) + " DECIDE " +
+	           shape.declaration + " SUCH THAT " + shape.constraints + " " + shape.objective + ") q";
 	auto result = con.Query(sql);
 	REQUIRE_NO_FAIL(*result);
 	REQUIRE(offered);
@@ -1177,6 +1179,191 @@ TEST_CASE("A2 and every other rule never apply to the same query", "[decidb]") {
 	ExpectDeclines(MakeA2SingleFacilityLocationRule, con, A1AppliesShapes());
 	ExpectDeclines(MakeA2SingleFacilityLocationRule, con, R1AppliesShapes());
 	ExpectDeclines(MakeA2SingleFacilityLocationRule, con, N1AppliesShapes());
+}
+
+//===--------------------------------------------------------------------===//
+// O1
+//===--------------------------------------------------------------------===//
+
+//! The tables of the sources below. A position declared NOT NULL is one the rule can rank.
+void CreateO1Tables(Connection &con) {
+	for (auto sql : {"CREATE TABLE o1_left (id INTEGER, position INTEGER NOT NULL, flag BOOLEAN)",
+	                 "CREATE TABLE o1_right (rid INTEGER, rposition INTEGER NOT NULL)",
+	                 "CREATE TABLE o1_left_dec (id INTEGER, position DECIMAL(3, 2) NOT NULL)",
+	                 "CREATE TABLE o1_right_dec (rid INTEGER, rposition DECIMAL(4, 2) NOT NULL)",
+	                 "CREATE TABLE o1_right_double (rid INTEGER, rposition DOUBLE NOT NULL)",
+	                 "CREATE TABLE o1_left_key (id INTEGER, position INTEGER PRIMARY KEY)",
+	                 "CREATE TABLE o1_left_null (id INTEGER, position INTEGER, flag BOOLEAN)",
+	                 "CREATE TABLE o1_right_null (rid INTEGER, rposition INTEGER)"}) {
+		REQUIRE_NO_FAIL(con.Query(sql));
+	}
+	for (auto name : {"o1_left", "o1_left_null"}) {
+		REQUIRE_NO_FAIL(con.Query(string("INSERT INTO ") + name + " VALUES (1, 1, TRUE), (2, 4, FALSE)"));
+	}
+	for (auto name : {"o1_right", "o1_right_null"}) {
+		REQUIRE_NO_FAIL(con.Query(string("INSERT INTO ") + name + " VALUES (1, 2), (2, 6)"));
+	}
+	REQUIRE_NO_FAIL(con.Query("INSERT INTO o1_left_dec VALUES (1, 1.5), (2, 4.25)"));
+	REQUIRE_NO_FAIL(con.Query("INSERT INTO o1_right_dec VALUES (1, 2.25), (2, 6.5)"));
+	REQUIRE_NO_FAIL(con.Query("INSERT INTO o1_right_double VALUES (1, 2.5), (2, 6)"));
+	REQUIRE_NO_FAIL(con.Query("INSERT INTO o1_left_key VALUES (1, 1), (2, 4)"));
+}
+
+//! Two sides of a cross product: l(id, position, flag) and r(rid, rposition).
+const char *O1_SOURCE = "o1_left l CROSS JOIN o1_right r";
+//! The same with a third relation between them, which neither key names.
+const char *O1_THREE_SOURCE = "o1_left l CROSS JOIN (VALUES (1), (2)) m(m) CROSS JOIN o1_right r";
+const char *O1_CONSTRAINTS = "per l: SUM(x) by (l) = 1 AND per r: SUM(x) by (r) = 1";
+const char *O1_OBJECTIVE = "MINIMIZE SUM(ABS(l.position - r.rposition) * x)";
+
+Shape O1(const string &branch, const string &constraints, Edit edit = nullptr, const string &objective = O1_OBJECTIVE,
+         const string &declaration = "x(BOOL)", const char *source = O1_SOURCE) {
+	return {branch, declaration, constraints, objective, std::move(edit), source};
+}
+
+//! The plain constraints with an objective.
+Shape O1Cost(const string &branch, const string &objective, const char *source = O1_SOURCE) {
+	return O1(branch, O1_CONSTRAINTS, nullptr, objective, "x(BOOL)", source);
+}
+
+duckdb::vector<Shape> O1AppliesShapes() {
+	duckdb::vector<Shape> shapes;
+	shapes.push_back(O1Cost("plain form: the absolute distance of one position of each side", O1_OBJECTIVE));
+	shapes.push_back(O1Cost("a squared distance", "MINIMIZE SUM(POWER(l.position - r.rposition, 2) * x)"));
+	shapes.push_back(O1Cost("the right position first", "MINIMIZE SUM(ABS(r.rposition - l.position) * x)"));
+	shapes.push_back(O1("the right key first", "per r: SUM(x) by (r) = 1 AND per l: SUM(x) by (l) = 1"));
+	shapes.push_back(O1Cost("a factor before the cost", "MINIMIZE SUM(3 * ABS(l.position - r.rposition) * x)"));
+	shapes.push_back(O1Cost("a factor after the cost", "MINIMIZE SUM(ABS(l.position - r.rposition) * 3 * x)"));
+	shapes.push_back(O1Cost("a factor on the sum", "MINIMIZE 3 * SUM(ABS(l.position - r.rposition) * x)"));
+	shapes.push_back(O1Cost("a divisor on the sum", "MINIMIZE SUM(ABS(l.position - r.rposition) * x) / 4"));
+	shapes.push_back(O1Cost("a zero factor", "MINIMIZE 0 * SUM(ABS(l.position - r.rposition) * x)"));
+	shapes.push_back(O1Cost("a product maximized", "MAXIMIZE SUM(l.position * r.rposition * x)"));
+	shapes.push_back(O1Cost("a product minimized", "MINIMIZE SUM(l.position * r.rposition * x)"));
+	shapes.push_back(O1Cost("a product of the right position first", "MAXIMIZE SUM(r.rposition * l.position * x)"));
+	shapes.push_back(O1Cost("a negated product", "MAXIMIZE SUM(-l.position * r.rposition * x)"));
+	shapes.push_back(O1Cost("a negated sum of products", "MINIMIZE -SUM(l.position * r.rposition * x)"));
+	shapes.push_back(O1Cost("a factor inside a product", "MINIMIZE SUM(l.position * 2 * r.rposition * x)"));
+	shapes.push_back(O1Cost("a distance of DECIMAL and DOUBLE positions", O1_OBJECTIVE,
+	                        "o1_left_dec l CROSS JOIN o1_right_double r"));
+	shapes.push_back(O1Cost("a square of DECIMAL positions of two widths",
+	                        "MINIMIZE SUM(POWER(l.position - r.rposition, 2) * x)",
+	                        "o1_left_dec l CROSS JOIN o1_right_dec r"));
+	shapes.push_back(O1Cost("a product of DECIMAL positions of two widths",
+	                        "MAXIMIZE SUM(l.position * r.rposition * x)", "o1_left_dec l CROSS JOIN o1_right_dec r"));
+	shapes.push_back(
+	    O1Cost("a position cast to a common type", "MINIMIZE SUM(ABS(l.position::DOUBLE - r.rposition) * x)"));
+	shapes.push_back(O1Cost("a key that is part of its side", O1_OBJECTIVE, O1_THREE_SOURCE));
+	shapes.push_back(O1Cost("a filter on one side", O1_OBJECTIVE, "o1_left l CROSS JOIN o1_right r WHERE l.flag"));
+	shapes.push_back(O1Cost("a position that is a primary key", O1_OBJECTIVE, "o1_left_key l CROSS JOIN o1_right r"));
+	return shapes;
+}
+
+duckdb::vector<Shape> O1DeclineShapes() {
+	duckdb::vector<Shape> shapes;
+	// CheckCondition: the source, the decision and the constraint count.
+	shapes.push_back(
+	    O1Cost("a source that is a join", O1_OBJECTIVE, "o1_left l, o1_right r WHERE l.position < r.rposition"));
+	shapes.push_back(O1("two decisions", O1_CONSTRAINTS, nullptr, O1_OBJECTIVE, "x(BOOL), y(BOOL)"));
+	shapes.push_back(O1("a REAL decision", O1_CONSTRAINTS, nullptr, O1_OBJECTIVE, "x(REAL)"));
+	shapes.push_back(O1("a query-wide decision", O1_CONSTRAINTS,
+	                    [](DirectIR &ir) { ir.decisions[0].scope = DecideVarScope::GLOBAL; }));
+	shapes.push_back(O1("a keyed scope", O1_CONSTRAINTS, [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));
+	shapes.push_back(O1("one constraint", "per l: SUM(x) by (l) = 1"));
+	shapes.push_back(O1("a third constraint", string(O1_CONSTRAINTS) + " AND x <= 1"));
+	// ProveClause.
+	shapes.push_back(O1("a clause without a per", "SUM(x) = 1 AND per r: SUM(x) by (r) = 1"));
+	shapes.push_back(O1("a clause per the empty key", "per (): SUM(x) by () = 1 AND per r: SUM(x) by (r) = 1"));
+	shapes.push_back(O1("a clause that is not an equality", "per l: SUM(x) by (l) <= 1 AND per r: SUM(x) by (r) = 1"));
+	shapes.push_back(
+	    O1("a clause that sums to another count", "per l: SUM(x) by (l) = 2 AND per r: SUM(x) by (r) = 1"));
+	shapes.push_back(O1("a clause that sums to a column", "per l: SUM(x) by (l) = l.id AND per r: SUM(x) by (r) = 1"));
+	shapes.push_back(O1("a scaled sum", "per l: 2 * SUM(x) by (l) = 1 AND per r: SUM(x) by (r) = 1"));
+	shapes.push_back(O1("a sum under a WHEN", "per l: SUM(when l.flag: x) by (l) = 1 AND per r: SUM(x) by (r) = 1"));
+	shapes.push_back(O1("a clause under a WHEN", "when l.flag per l: SUM(x) by (l) = 1 AND per r: SUM(x) by (r) = 1"));
+	shapes.push_back(O1("a sum that is not by its key", "per l: SUM(x) by (r) = 1 AND per r: SUM(x) by (r) = 1"));
+	shapes.push_back(O1("a coefficient other than one", "per l: SUM(2 * x) by (l) = 1 AND per r: SUM(x) by (r) = 1"));
+	shapes.push_back(
+	    O1("a negative term", O1_CONSTRAINTS, [](DirectIR &ir) { ir.constraints[0].lhs[0].terms[0].sign = -1; }));
+	shapes.push_back(O1("a constant beside the decision", "per l: SUM(x + 1) by (l) = 1 AND per r: SUM(x) by (r) = 1"));
+	shapes.push_back(O1("a square of the decision", "per l: SUM(x * x) by (l) = 1 AND per r: SUM(x) by (r) = 1"));
+	shapes.push_back(O1("a column key", "per l.id: SUM(x) by (l.id) = 1 AND per r.rid: SUM(x) by (r.rid) = 1"));
+	shapes.push_back(O1("a key element that is not a column", O1_CONSTRAINTS, [](DirectIR &ir) {
+		ir.constraints[0].classes[0].grouping = True();
+		ir.constraints[0].lhs[0].by[0].grouping = True();
+	}));
+	shapes.push_back(O1("a key of both sides", "per l, r: SUM(x) by (l, r) = 1 AND per r: SUM(x) by (r) = 1"));
+	shapes.push_back(O1("both keys of one side", "per l: SUM(x) by (l) = 1 AND per l: SUM(x) by (l) = 1"));
+	// ProveCost.
+	shapes.push_back(O1Cost("no objective", ""));
+	shapes.push_back(O1Cost("two parts", "MINIMIZE SUM(ABS(l.position - r.rposition) * x) + SUM(x)"));
+	shapes.push_back(O1Cost("an objective WHEN", "MINIMIZE when l.flag: SUM(ABS(l.position - r.rposition) * x)"));
+	shapes.push_back(O1Cost("an average", "MINIMIZE AVG(ABS(l.position - r.rposition) * x)"));
+	shapes.push_back(O1Cost("a part WHEN", "MINIMIZE SUM(when l.flag: ABS(l.position - r.rposition) * x)"));
+	shapes.push_back(O1Cost("two terms", "MINIMIZE SUM(ABS(l.position - r.rposition) * x + 2 * x)"));
+	shapes.push_back(O1Cost("a term of degree two", "MINIMIZE SUM(ABS(l.position - r.rposition) * x * x)"));
+	shapes.push_back(O1Cost("a cost fixed only within the query",
+	                        "MINIMIZE SUM(ABS(l.position - r.rposition) * txid_current() * x)"));
+	shapes.push_back(O1Cost("a constant cost", "MINIMIZE SUM(5 * x)"));
+	shapes.push_back(O1Cost("three columns", "MINIMIZE SUM(l.position * r.rposition * l.id * x)"));
+	shapes.push_back(O1Cost("one column", "MINIMIZE SUM(l.position * x)"));
+	shapes.push_back(O1Cost("a product of a column and a sum", "MAXIMIZE SUM(l.position * (r.rposition + 1) * x)"));
+	shapes.push_back(O1Cost("an absolute value of a column", "MINIMIZE SUM(ABS(l.position) * x)"));
+	shapes.push_back(O1Cost("an absolute value of a sum", "MINIMIZE SUM(ABS(l.position + r.rposition) * x)"));
+	shapes.push_back(
+	    O1Cost("a difference of a column and a sum", "MINIMIZE SUM(ABS(l.position - (r.rposition + 1)) * x)"));
+	shapes.push_back(
+	    O1Cost("a difference of a sum and a column", "MINIMIZE SUM(ABS((l.position + 1) - r.rposition) * x)"));
+	shapes.push_back(O1Cost("a cube", "MINIMIZE SUM(POWER(l.position - r.rposition, 3) * x)"));
+	shapes.push_back(O1Cost("a square of a sum", "MINIMIZE SUM(POWER(l.position + r.rposition, 2) * x)"));
+	shapes.push_back(O1Cost("a power written with **", "MINIMIZE SUM((l.position - r.rposition) ** 2 * x)"));
+	shapes.push_back(O1Cost("a distance rounded", "MINIMIZE SUM(ROUND(ABS(l.position - r.rposition)) * x)"));
+	shapes.push_back(O1Cost("a distance cast to a whole number",
+	                        "MINIMIZE SUM(ABS(l.position - r.rposition)::INTEGER * x)",
+	                        "o1_left_dec l CROSS JOIN o1_right_dec r"));
+	shapes.push_back(
+	    O1Cost("a distance cast that may fail", "MINIMIZE SUM(TRY_CAST(ABS(l.position - r.rposition) AS DOUBLE) * x)"));
+	shapes.push_back(O1Cost("positions of one side", "MINIMIZE SUM(ABS(l.position - l.id) * x)"));
+	shapes.push_back(
+	    O1Cost("a position that is not a key column", "MINIMIZE SUM(ABS(m.m - r.rposition) * x)", O1_THREE_SOURCE));
+	shapes.push_back(O1Cost("a left position that may be NULL", O1_OBJECTIVE, "o1_left_null l CROSS JOIN o1_right r"));
+	shapes.push_back(O1Cost("a right position that may be NULL", O1_OBJECTIVE, "o1_left l CROSS JOIN o1_right_null r"));
+	shapes.push_back(O1Cost("a position that a projection computes", O1_OBJECTIVE,
+	                        "(SELECT id, position + 0 AS position, flag FROM o1_left) l CROSS JOIN o1_right r"));
+	shapes.push_back(O1Cost("a distance maximized", "MAXIMIZE SUM(ABS(l.position - r.rposition) * x)"));
+	shapes.push_back(O1Cost("a negated distance", "MINIMIZE -SUM(ABS(l.position - r.rposition) * x)"));
+	shapes.push_back(O1Cost("a negated distance term", "MINIMIZE SUM(-ABS(l.position - r.rposition) * x)"));
+	return shapes;
+}
+
+TEST_CASE("O1 applies to the forms of its class", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	CreateO1Tables(con);
+	ExpectApplies(MakeO1MongeAssignmentRule, con, O1AppliesShapes());
+}
+
+TEST_CASE("O1 declines each shape that is not exactly its class", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	CreateO1Tables(con);
+	ExpectDeclines(MakeO1MongeAssignmentRule, con, O1DeclineShapes());
+}
+
+// The rules partition the problems they apply to: no two rules apply to one IR.
+TEST_CASE("O1 and every other rule never apply to the same query", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	CreateO1Tables(con);
+	ExpectDeclines(MakeS1UniformMatroidRule, con, O1AppliesShapes());
+	ExpectDeclines(MakeA1SeparableBoxRule, con, O1AppliesShapes());
+	ExpectDeclines(MakeR1ContinuousKnapsackRule, con, O1AppliesShapes());
+	ExpectDeclines(MakeN1EuclideanBallRule, con, O1AppliesShapes());
+	ExpectDeclines(MakeA2SingleFacilityLocationRule, con, O1AppliesShapes());
+	ExpectDeclines(MakeO1MongeAssignmentRule, con, S1AppliesShapes());
+	ExpectDeclines(MakeO1MongeAssignmentRule, con, A1AppliesShapes());
+	ExpectDeclines(MakeO1MongeAssignmentRule, con, R1AppliesShapes());
+	ExpectDeclines(MakeO1MongeAssignmentRule, con, N1AppliesShapes());
+	ExpectDeclines(MakeO1MongeAssignmentRule, con, A2AppliesShapes());
 }
 
 //===--------------------------------------------------------------------===//
