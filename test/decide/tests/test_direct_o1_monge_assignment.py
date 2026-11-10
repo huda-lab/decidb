@@ -1,8 +1,9 @@
 """O1 (Monge assignment), checked three ways: the independent oracle, the solver path, the direct path.
 
-Every case is one DECIDE query over a cross product of two sides, `per l` and `per r` each selecting one pair. The
-oracle builds its own model from the raw rows: one binary variable for each pair row, one equality for each distinct
-left row and each distinct right row (a class is a whole row, NULL compared as a value). DeciDB runs the query with
+Every case is one DECIDE query over a cross product of two temporary tables whose position columns are declared NOT NULL
+(the rule reads no other), `per l` and `per r` each selecting one pair. The oracle builds its own model from the raw
+rows: one binary variable for each pair row, one equality for each distinct left row and each distinct right row (a
+class is a whole row, NULL compared as a value). DeciDB runs the query with
 `decide_direct_solve='off'` (the solver) and `'require'` (direct solve; a query the rule does not apply to fails). The
 case passes when all three agree: both runs return an assignment that picks one pair for every class on each side and
 reaches the oracle's objective (the pairs may differ on ties), or all three say infeasible.
@@ -130,32 +131,40 @@ ORACLE_CASES = {
 }
 
 
-def _side(alias, rows, position):
-    """One side as a derived table `alias(<alias>id, <alias>pos)`; with no rows, a typed empty select."""
-    types = ("INTEGER", position)
-    columns = f"{alias}({alias}id, {alias}pos)"
-    if not rows:
-        return f"(SELECT {', '.join(sql_literal(None, t) for t in types)} WHERE false) {columns}"
-    values = ", ".join("(" + ", ".join(sql_literal(v, t) for v, t in zip(row, types)) + ")" for row in rows)
-    return f"(VALUES {values}) {columns}"
+def _tables(case):
+    """The statements that create the two sides as temporary tables. A position is declared NOT NULL, as the rule
+    requires, unless the case names its side in `nullable`."""
+    position = "INTEGER" if case.get("integer") else "DOUBLE"
+    statements = []
+    for side, alias in (("left", "l"), ("right", "r")):
+        null_rule = "" if case.get("nullable") == side else " NOT NULL"
+        table = f"o1_{side}"
+        statements.append(f"CREATE OR REPLACE TEMP TABLE {table}({alias}id INTEGER, {alias}pos {position}{null_rule});")
+        if case[side]:
+            types = ("INTEGER", position)
+            values = ", ".join(
+                "(" + ", ".join(sql_literal(v, t) for v, t in zip(row, types)) + ")" for row in case[side]
+            )
+            statements.append(f"INSERT INTO {table} VALUES {values};")
+    return " ".join(statements)
 
 
 def _sql(case, wrap="plain"):
-    position = "INTEGER" if case.get("integer") else "DOUBLE"
     where = f"WHERE {case['where']}" if "where" in case else ""
-    source = f"FROM {_side('l', case['left'], position)} CROSS JOIN {_side('r', case['right'], position)} {where}"
+    source = f"FROM o1_left l CROSS JOIN o1_right r {where}"
     decide = f"DECIDE x(BOOL) SUCH THAT {PER_SIDE} {case['objective']}"
     select = "SELECT lid, lpos, rid, rpos, x"
+    setup = _tables(case)
     if wrap == "plain":
-        return f"{select} FROM ({source} {decide}) q"
+        return f"{setup} {select} FROM ({source} {decide}) q"
     if wrap == "parent_join":
-        return f"{select} FROM ({source} {decide}) q JOIN (VALUES (1), (2), (3), (4)) k(lid) USING (lid)"
+        return f"{setup} {select} FROM ({source} {decide}) q JOIN (VALUES (1), (2), (3), (4)) k(lid) USING (lid)"
     if wrap == "recombined_filters":
         # The parent filters the result two complementary ways and unions them. A filter on the DECIDE input would
         # solve a smaller problem on each side and break the assignment, and a filter on a column the DECIDE passes
         # through is pushed there unless the DECIDE is a materialized CTE.
         return (
-            f"WITH solved AS MATERIALIZED ({source} {decide}) "
+            f"{setup} WITH solved AS MATERIALIZED ({source} {decide}) "
             f"{select} FROM solved WHERE lid < 2 UNION ALL {select} FROM solved WHERE lid >= 2"
         )
     raise ValueError(wrap)
@@ -165,6 +174,11 @@ def _kept(case):
     left = [row for row in case["left"] if case.get("keep_left", lambda row: True)(row)]
     right = [row for row in case["right"] if case.get("keep_right", lambda row: True)(row)]
     return left, right
+
+
+def _coefficient(case, a, b):
+    """The written coefficient of a pair. A NULL position makes it NULL, and a NULL term is left out of the sum."""
+    return 0.0 if a is None or b is None else float(case["cost"](a, b))
 
 
 def _oracle_model(oracle_solver, case):
@@ -180,7 +194,7 @@ def _oracle_model(oracle_solver, case):
         oracle_solver.add_constraint({n: 1.0 for (_, j), n in pairs.items() if right[j] == distinct}, "=", 1.0)
     sense = ObjSense.MAXIMIZE if case["sense"] == "MAXIMIZE" else ObjSense.MINIMIZE
     oracle_solver.set_objective(
-        {name: float(case["cost"](left[i][1], right[j][1])) for (i, j), name in pairs.items()}, sense
+        {name: _coefficient(case, left[i][1], right[j][1]) for (i, j), name in pairs.items()}, sense
     )
     return oracle_solver.solve()
 
@@ -195,7 +209,7 @@ def _check_assignment(case, oracle, rows, columns, mode):
         for distinct in set(classes):
             selected = sum(row[4] for row in rows if tuple(row[part]) == distinct)
             assert selected == 1, (mode, distinct, selected)
-    cost = sum(case["cost"](row[1], row[3]) * row[4] for row in rows)
+    cost = sum(_coefficient(case, row[1], row[3]) * row[4] for row in rows)
     assert cost == pytest.approx(oracle.objective_value, abs=1e-6), (mode, cost, oracle.objective_value)
 
 
@@ -258,8 +272,39 @@ def test_o1_monge_a_filter_across_both_sides_keeps_the_solver(decidb_cli):
     assert outcome(decidb_cli, sql, "auto") == solver
 
 
-# NaN is an error on both paths and the same error. (A NULL position is not: the solver leaves a NULL term out of the
-# objective and answers, so it has no row in this table.)
+# A position not declared NOT NULL keeps the solver, whether or not a NULL is stored: the solver leaves a NULL term out
+# of the sum, which is not what ranking the positions answers. `null_position` is the case where it matters, a
+# NULL pair costing nothing. `require` declines; `off` is checked against the oracle, and `auto` answers as `off` does.
+NULLABLE_CASES = {
+    "nullable_left_column": _case(f"MINIMIZE SUM({SQUARED} * x)", _squared, nullable="left"),
+    "nullable_right_column": _case(f"MINIMIZE SUM({SQUARED} * x)", _squared, nullable="right"),
+    "null_position": _case(
+        f"MINIMIZE SUM({SQUARED} * x)", _squared, left=[(1, 10.0), (2, None), (3, 4.0)], nullable="left"
+    ),
+}
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(NULLABLE_CASES))
+def test_o1_monge_a_position_not_declared_not_null_keeps_the_solver(decidb_cli, oracle_solver, name):
+    case = NULLABLE_CASES[name]
+    sql = _sql(case)
+    oracle = _oracle_model(oracle_solver, case)
+    agree_with_oracle(
+        decidb_cli,
+        sql,
+        oracle,
+        lambda rows, columns, mode: _check_assignment(case, oracle, rows, columns, mode),
+        modes=("off",),
+    )
+    assert outcome(decidb_cli, sql, "require") == ("error", "direct_not_applied")
+    assert outcome(decidb_cli, sql, "auto") == outcome(decidb_cli, sql, "off")
+
+
+# NaN is an error on both paths and the same error. (A NULL position is not, and has no row in this table: see
+# `NULLABLE_CASES`.)
 ERROR_CASES = {
     "nan_left_abs": _case(f"MINIMIZE SUM({ABS} * x)", _abs, left=[(1, NAN), (2, 1.0), (3, 4.0)]),
     "nan_right_squared": _case(f"MINIMIZE SUM({SQUARED} * x)", _squared, right=[(7, 6.0), (8, NAN), (9, 2.0)]),
