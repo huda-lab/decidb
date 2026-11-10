@@ -489,7 +489,7 @@ _O1_SOURCE = f"{_O1_ALL_PAIRS} WHERE n.n_nationkey BETWEEN 5 AND 9"
 O1 = RuleFixture(
     rule="O1_MONGE_ASSIGNMENT",
     condition=(
-        "x in {0,1}, SUM(x) = 1 per left and per right class, "
+        "x in {0,1}, SUM(x) = 1 in each left and each right class, "
         "min SUM(ABS(a - b)*x) or SUM((a - b)^2*x), min/max SUM(a*b*x)"
     ),
     # Nations 5 to 9 against regions 0 to 4: the ranks pair 5-0 up to 9-4. The optimum is unique, so the rows equal the

@@ -196,7 +196,7 @@ public:
 		return std::move(condition);
 	}
 	string Summary() const override {
-		return "x in {0,1}, SUM(x) = 1 per left and per right class, min SUM(ABS(a - b)*x) or SUM((a - b)^2*x), "
+		return "x in {0,1}, SUM(x) = 1 in each left and each right class, min SUM(ABS(a - b)*x) or SUM((a - b)^2*x), "
 		       "min/max SUM(a*b*x)";
 	}
 	DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
