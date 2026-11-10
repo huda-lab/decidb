@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "PRAGMA diagnose_decide_infeasible_slack_scope='expanded'; DIAGNOSE SELECT id, y FROM (VALUES (1, -0.0::DOUBLE, 4.0), (2, 0.0::DOUBLE, 1.0),\n        (3, 1.0::DOUBLE, 7.0)) t(id, g, c) DECIDE per t.g: y(BOOL) SUCH THAT per t.g: y + t.c <= 0.5",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "┌────────────┬──────────────────────────┬────────────────────────────────┬────────┬───────┬─────────┬────────────────┬───────────┬───────┐\n│   state    │          clause          │        suggested_change        │ amount │ total │  scope  │  edit_source   │   group   │  row  │\n│  varchar   │         varchar          │            varchar             │ double │ int64 │ varchar │    varchar     │  varchar  │ int64 │\n├────────────┼──────────────────────────┼────────────────────────────────┼────────┼───────┼─────────┼────────────────┼───────────┼───────┤\n│ infeasible │ per t.g: y <= -t.c + 0.5 │ per t.g: y <= -t.c + 0.5 + 3.5 │    3.5 │  NULL │ NULL    │ expanded_group │ -0.0, 4.0 │  NULL │\n│ infeasible │ per t.g: y <= -t.c + 0.5 │ per t.g: y <= -t.c + 0.5 + 0.5 │    0.5 │  NULL │ NULL    │ expanded_group │ 0.0, 1.0  │  NULL │\n│ infeasible │ per t.g: y <= -t.c + 0.5 │ per t.g: y <= -t.c + 0.5 + 6.5 │    6.5 │  NULL │ NULL    │ expanded_group │ 1.0       │  NULL │\n└────────────┴──────────────────────────┴────────────────────────────────┴────────┴───────┴─────────┴────────────────┴───────────┴───────┘\n",
+   "stderr": ""
+  }
+ }
+}

@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x FROM (VALUES (1, 'a', NULL::DOUBLE), (2, 'a', 3.0), (3, 'b', 5.0), (4, NULL, 2.0)) t(id, g, c) DECIDE x(REAL) SUCH THAT x <= 9 AND x >= 1 MINIMIZE sum(abs(x - t.c))",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "┌───────┬────────┐\n│  id   │   x    │\n│ int32 │ double │\n├───────┼────────┤\n│     1 │    1.0 │\n│     2 │    3.0 │\n│     3 │    5.0 │\n│     4 │    2.0 │\n└───────┴────────┘\n",
+   "stderr": ""
+  }
+ }
+}

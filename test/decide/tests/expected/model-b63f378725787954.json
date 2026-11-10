@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT id, y FROM (SELECT id, g COLLATE NOCASE AS g, p FROM (VALUES (1, 'a', 5.0), (2, 'A', 4.0), (3, 'b', 3.0)) v(id, g, p)) t DECIDE per t.g: y(INT) SUCH THAT y <= 10 AND sum(per t.g: y) <= 12 MAXIMIZE sum(t.p * y)",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "any": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 2\nnum_rows: 1\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=10 int=1 bin=0 obj=9\ncol 1: lb=0 ub=10 int=1 bin=0 obj=3\nrow 0: sense=< rhs=12 nnz=2 | 0:1 1:1\n=== END MODEL DUMP ===\n"
+ }
+}

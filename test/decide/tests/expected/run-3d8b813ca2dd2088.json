@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x, y FROM (VALUES (1, 'a', 3.0, 2.0, true), (2, 'a', 5.0, 1.0, false), (3, 'b', 1.0, 4.0, true),\n    (4, 'b', 4.0, NULL, true)) t(id, g, c, w, p) DECIDE x(REAL), y(REAL) SUCH THAT x <= 9 AND y <= 9 MAXIMIZE sum(x) - max(per t.g: t.c * y)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "┌───────┬────────┬────────┐\n│  id   │   x    │   y    │\n│ int32 │ double │ double │\n├───────┼────────┼────────┤\n│     1 │    9.0 │    0.0 │\n│     2 │    9.0 │    0.0 │\n│     3 │    9.0 │    0.0 │\n│     4 │    9.0 │    0.0 │\n└───────┴────────┴────────┘\n",
+   "stderr": ""
+  }
+ }
+}

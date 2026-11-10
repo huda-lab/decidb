@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT id, x FROM (VALUES (1, 'a', NULL, 3.0::DOUBLE, true), (2, 'a', 'u', 4.0, false), (3, 'b', 'v', 5.0, true), (4, NULL, 'v', 6.0, true), (5, 'b', 'u', 7.0, false), (6, 'b', 'v', 8.0, false)) t(id, g, k, c, p) DECIDE x(REAL), per t.g: y(REAL), per (): z(REAL)\n        SUCH THAT x <= 9 AND y <= 9 AND z <= 9 AND when t.c > 3.5: sum(x) by (t.g) <= 5 MAXIMIZE sum(x) + sum(y) + z",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "any": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 9\nnum_rows: 2\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=9 int=0 bin=0 obj=1\ncol 1: lb=0 ub=9 int=0 bin=0 obj=1\ncol 2: lb=0 ub=9 int=0 bin=0 obj=1\ncol 3: lb=0 ub=9 int=0 bin=0 obj=1\ncol 4: lb=0 ub=9 int=0 bin=0 obj=1\ncol 5: lb=0 ub=9 int=0 bin=0 obj=1\ncol 6: lb=0 ub=9 int=0 bin=0 obj=2\ncol 7: lb=0 ub=9 int=0 bin=0 obj=3\ncol 8: lb=0 ub=9 int=0 bin=0 obj=1\nrow 0: sense=< rhs=5 nnz=1 | 1:1\nrow 1: sense=< rhs=5 nnz=3 | 2:1 4:1 5:1\n=== END MODEL DUMP ===\n"
+ }
+}

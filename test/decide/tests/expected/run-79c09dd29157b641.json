@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x FROM (SELECT range AS id, CASE WHEN range = 2500 THEN 0.0 ELSE 2.0 END AS a, CASE WHEN range = 10 THEN -1.0 ELSE 2.0 END AS w, 1.0 AS v FROM range(3000)) t DECIDE x(REAL) SUCH THAT x <= 1 MAXIMIZE sum(when ln(t.a) > -100: ln(t.w) * t.v * x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Out of Range Error: cannot take logarithm of a negative number\n"
+  }
+ }
+}

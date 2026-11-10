@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT t.id FROM (VALUES (1, 'a', 3.0), (2, 'a', 5.0), (3, 'b', 1.0)) t(id, g, c)\n    JOIN (VALUES ('a', 1), ('a', 2), ('b', 3)) w(g, k) ON t.g = w.g DECIDE per t: x(REAL) SUCH THAT x <= 9 AND x <= 0.5 * sum(t: x) by (t.g) + 1 MAXIMIZE sum(x)",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "any": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 3\nnum_rows: 5\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=9 int=0 bin=0 obj=2\ncol 1: lb=0 ub=9 int=0 bin=0 obj=2\ncol 2: lb=0 ub=9 int=0 bin=0 obj=1\nrow 0: sense=< rhs=1 nnz=2 | 0:0.5 1:-0.5\nrow 1: sense=< rhs=1 nnz=2 | 0:-0.5 1:0.5\nrow 2: sense=< rhs=1 nnz=1 | 2:0.5\nrow 3: sense=< rhs=1 nnz=2 | 0:0.5 1:-0.5\nrow 4: sense=< rhs=1 nnz=2 | 0:-0.5 1:0.5\n=== END MODEL DUMP ===\n"
+ }
+}

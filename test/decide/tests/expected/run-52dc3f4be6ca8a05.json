@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x FROM (VALUES (1, 1e308, 1e308)) t(id, a, b) DECIDE x(REAL) SUCH THAT t.a * x + t.b * x <= 5",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Invalid Input Error: DECIDE: t.a * x + t.b * x <= 5 computes a number too large for a DOUBLE. Scale its data down.\n"
+  }
+ }
+}

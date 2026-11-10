@@ -1,0 +1,17 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x FROM (VALUES (1, 'a', NULL, 3.0::DOUBLE, true), (2, 'a', 'u', 4.0, false), (3, 'b', 'v', 5.0, true), (4, NULL, 'v', 6.0, true), (5, 'b', 'u', 7.0, false), (6, 'b', 'v', 8.0, false)) t(id, g, k, c, p) DECIDE x(INT) SUCH THAT x >= 0 AND sum(x) <= 10 AND x <> 3 MAXIMIZE sum(x) ORDER BY id",
+ "env": {},
+ "values": {
+  "gurobi": {
+   "returncode": 0,
+   "stdout": "┌───────┬───────┐\n│  id   │   x   │\n│ int32 │ int64 │\n├───────┼───────┤\n│     1 │     2 │\n│     2 │     2 │\n│     3 │     2 │\n│     4 │     2 │\n│     5 │     2 │\n│     6 │     0 │\n└───────┴───────┘\n",
+   "stderr": ""
+  },
+  "highs": {
+   "returncode": 0,
+   "stdout": "┌───────┬───────┐\n│  id   │   x   │\n│ int32 │ int64 │\n├───────┼───────┤\n│     1 │     0 │\n│     2 │     2 │\n│     3 │     0 │\n│     4 │     0 │\n│     5 │     8 │\n│     6 │     0 │\n└───────┴───────┘\n",
+   "stderr": ""
+  }
+ }
+}

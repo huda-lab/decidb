@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT t.id FROM (SELECT i AS id, CASE WHEN i = 2500 THEN 'NaN'::DOUBLE ELSE 1.0 END AS a,\n    CASE WHEN i = 10 THEN 'NaN'::DOUBLE ELSE 1.0 END AS b, CASE WHEN i = 2500 THEN -1.0 ELSE 1.0 END AS la,\n    CASE WHEN i = 10 THEN -1.0 ELSE 1.0 END AS lb FROM range(3000) r(i)) t DECIDE x(REAL), y(REAL) SUCH THAT x <= 9 AND y <= 9 AND x <= 9 MAXIMIZE sum(t.a * x) + sum(when ln(t.lb) > -100: x * y)",
+ "env": {},
+ "values": {
+  "gurobi": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Invalid Input Error: DECIDE: t.a is NaN or infinite on some rows. Skip those rows with 'when isfinite(t.a):'.\n"
+  }
+ }
+}

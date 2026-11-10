@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x, y FROM (SELECT i AS id, CASE WHEN i = 2500 THEN -1.0 ELSE 2.0 END AS la,\n    CASE WHEN i = 10 THEN -1.0 ELSE 2.0 END AS lb, CASE WHEN i = 2 THEN 0.0 ELSE 2.0 END AS a,\n    CASE WHEN i = 1 THEN -1.0 ELSE 2.0 END AS b, 1 AS h FROM range(3000) r(i)) t DECIDE x(REAL), y(REAL) SUCH THAT x <= 9 AND y <= 9 AND sum(when ln(t.a) > -100: x) + max(when sqrt(t.b) > 0: y) <= 9 MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Out of Range Error: cannot take logarithm of zero\n"
+  }
+ }
+}

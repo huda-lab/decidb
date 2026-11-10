@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x FROM (VALUES (1, 'a', 3.0::DOUBLE), (2, 'a', 4.0::DOUBLE), (3, 'b', 5.0::DOUBLE)) t(id, g, c) DECIDE x(REAL), per (): y(REAL)\n        SUCH THAT x <= 9 AND y <= 4 MAXIMIZE sum(x) + t.c * y",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Invalid Input Error: DECIDE objective: 't.c' takes more than one value over the kept rows (3.0, 5.0), so the objective would be produced more than once; move it inside a reducer or fix it with when.\n"
+  }
+ }
+}

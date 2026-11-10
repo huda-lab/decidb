@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT t.id FROM (VALUES (1, -1.0, 1.0), (2, 1.0, -1.0), (3, 1.0, 1.0)) t(id, la, lb) DECIDE x(REAL), y(REAL) SUCH THAT x <= 9 AND y <= 9 AND sum(when sqrt(t.la) > -1: x * y) + sum(when ln(t.lb) > -100: x) <= 50",
+ "env": {},
+ "values": {
+  "gurobi": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Out of Range Error: cannot take logarithm of a negative number\n"
+  }
+ }
+}

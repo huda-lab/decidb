@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x FROM (VALUES (1, 2.0), (2, -1.0), (3, 3.0)) t(id, c) DECIDE x(REAL) SUCH THAT x <= 9 AND sum(ln(t.c) * x) by (sqrt(t.c)) <= 8 MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Out of Range Error: cannot take logarithm of a negative number\n"
+  }
+ }
+}

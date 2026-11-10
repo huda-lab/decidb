@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT t.id FROM (SELECT i AS id, CASE WHEN i = 30 THEN -1.0 ELSE 1.0 END AS c,\n    CASE WHEN i = 10 THEN 0.0 ELSE 1.0 END AS d, CASE WHEN i = 20 THEN -1.0 ELSE 1.0 END AS e FROM range(100) r(i)) t DECIDE x(REAL) SUCH THAT x <= 5 AND x <= sum(ln(t.e) * abs(x - sqrt(t.c))) + 9 MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Out of Range Error: cannot take square root of a negative number\n"
+  }
+ }
+}

@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT t.id FROM (VALUES (1, 'a', 3.0, 1.0, true), (2, 'a', 5.0, 2.0, false), (3, 'b', 1.0, 3.0, true),\n    (4, 'b', 4.0, 2.0, true)) t(id, g, c, w, p) DECIDE x(REAL)\n        SUCH THAT x <= 9 AND (SELECT NULL::DOUBLE) * sum(power(x - t.c, 2)) <= 50 MAXIMIZE sum(x)",
+ "env": {
+  "warnings": "constrains nothing"
+ },
+ "values": {
+  "gurobi": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 4\nnum_rows: 0\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=9 int=0 bin=0 obj=1\ncol 1: lb=0 ub=9 int=0 bin=0 obj=1\ncol 2: lb=0 ub=9 int=0 bin=0 obj=1\ncol 3: lb=0 ub=9 int=0 bin=0 obj=1\n=== END MODEL DUMP ===\n"
+ }
+}

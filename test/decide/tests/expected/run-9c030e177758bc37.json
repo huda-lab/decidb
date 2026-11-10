@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x FROM (VALUES (1, 2.0, -1.0, 1.0), (2, -1.0, 2.0, 1.0)) t(id, a, w, v) DECIDE x(REAL) SUCH THAT x <= 1 MAXIMIZE sum(when sqrt(t.a) > -1 AND ln(t.w) > -100: x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Out of Range Error: cannot take square root of a negative number\n"
+  }
+ }
+}

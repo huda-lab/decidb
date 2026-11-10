@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x FROM (VALUES (1, 1.0, 'NaN'::DOUBLE), (2, 'NaN'::DOUBLE, 1.0)) t(id, a, b) DECIDE x(REAL) SUCH THAT t.a * x <= t.b",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Invalid Input Error: DECIDE: t.a is NaN or infinite on some rows. Skip those rows with 'when isfinite(t.a):'.\n"
+  }
+ }
+}

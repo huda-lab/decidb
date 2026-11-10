@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT t.id, s.k, x FROM (VALUES (1, 'a', 3.0, true), (2, 'a', 4.0, false), (3, 'b', 5.0, true),\n        (4, NULL, 6.0, true)) t(id, g, c, p) JOIN (VALUES (1, 'u'), (1, 'v'), (2, 'u'), (3, 'u'), (3, 'v'), (3, 'w'),\n        (4, 'u')) s(id, k) ON t.id = s.id\n        DECIDE per t.id: x(REAL) SUCH THAT x <= 9 AND avg(t: x) by (t.g) <= 2 MAXIMIZE sum(t: x)",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "any": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 4\nnum_rows: 2\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=9 int=0 bin=0 obj=1\ncol 1: lb=0 ub=9 int=0 bin=0 obj=1\ncol 2: lb=0 ub=9 int=0 bin=0 obj=1\ncol 3: lb=0 ub=9 int=0 bin=0 obj=1\nrow 0: sense=< rhs=2 nnz=2 | 0:0.5 1:0.5\nrow 1: sense=< rhs=2 nnz=1 | 2:1\n=== END MODEL DUMP ===\n"
+ }
+}

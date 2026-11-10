@@ -9,6 +9,8 @@ import subprocess
 
 import pytest
 
+from ._expected import expected
+
 ROWS = "(VALUES (1, 'a', 3.0::DOUBLE), (2, 'a', 4.0::DOUBLE), (3, 'b', 5.0::DOUBLE)) t(id, g, c)"
 #: Every clause in the per-row shape and no objective: the shapes with an arm.
 ROWS_ONLY = f"SELECT id, x FROM {ROWS} DECIDE x(REAL) SUCH THAT x <= t.c AND x + 1 >= 2"
@@ -38,14 +40,40 @@ def counters(result, name):
     return values
 
 
+#: What a stored expectation is not keyed on: the solver, which it is keyed on apart, and switches that change no output.
+_UNKEYED = ("DECIDB_FORCE_SOLVER", "DECIDB_EVALUATOR", "DECIDB_TEST_DIRECT_SOLVE", "DECIDB_VERIFY_SERIALIZER")
+
+
+def _keyed(cli, env):
+    return {k: v for k, v in {**(cli.env or {}), **env}.items() if k not in _UNKEYED}
+
+
 def models(cli, sql, tmp_path, warnings=()):
-    """The model flat builds and the one the tree builds, each printing `warnings`."""
-    return [
-        cli.with_env({"DECIDB_EVALUATOR": evaluator}).dump_model(
-            sql, tmp_path / f"{evaluator}.dump", expect_warnings=warnings
-        )
-        for evaluator in ("flat", "tree")
-    ]
+    """The model the query's stored expectation holds, flat's when it was recorded (_expected.py), and the one the tree
+    builds, each printing `warnings`."""
+
+    def dump(evaluator):
+        path = tmp_path / f"{evaluator}.dump"
+        return cli.with_env({"DECIDB_EVALUATOR": evaluator}).dump_model(sql, path, expect_warnings=warnings)
+
+    key = _keyed(cli, {"warnings": ",".join(warnings)})
+    return [expected("model", sql, key, cli.warning_backend(), lambda: dump("flat")), dump("tree")]
+
+
+def run_model(cli, sql, tmp_path):
+    """The model the tree builds for the query."""
+    return cli.with_env({"DECIDB_EVALUATOR": "tree"}).dump_model(sql, tmp_path / "tree.dump")
+
+
+def reference(cli, sql, **env):
+    """What the query printed when its expectation was recorded, flat's run (_expected.py), as `run` returns it."""
+
+    def produce():
+        result = run(cli, sql, "flat", **env)
+        return {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
+
+    value = expected("run", sql, _keyed(cli, env), cli.warning_backend(), produce)
+    return subprocess.CompletedProcess([], value["returncode"], value["stdout"], value["stderr"])
 
 
 def test_a_query_is_formulated_as_flat_formulates_it(decidb_cli, tmp_path):
@@ -53,8 +81,8 @@ def test_a_query_is_formulated_as_flat_formulates_it(decidb_cli, tmp_path):
     result = run(decidb_cli, ROWS_ONLY, DECIDB_PROFILE="1")
     assert result.returncode == 0, result.stderr
     assert counters(result, "execution.descent_rows") == [3], result.stderr
-    flat, tree = models(decidb_cli, ROWS_ONLY, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, ROWS_ONLY, tmp_path)
+    assert tree == stored
 
 
 def test_a_null_coefficient_skips_its_row(decidb_cli, tmp_path):
@@ -62,16 +90,16 @@ def test_a_null_coefficient_skips_its_row(decidb_cli, tmp_path):
     included."""
     sql = """SELECT id, x, y FROM (VALUES (1, 2.0), (2, NULL), (3, 4.0)) t(id, w)
         DECIDE x(REAL), y(REAL) SUCH THAT x <= 10 AND t.w * x + y <= 8"""
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
 
 
 def test_a_keyed_decision_with_no_class_skips_its_row(decidb_cli, tmp_path):
     """A decision declared `per t.g` has no instance at a row whose g is NULL (D84): the row reads none."""
     sql = """SELECT id, x FROM (VALUES (1, 'a', 3.0), (2, NULL, 4.0), (3, 'b', 5.0)) t(id, g, c)
         DECIDE per t.g: x(INT) SUCH THAT x <= 10 AND x + 0 * t.c <= t.c"""
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
 
 
 def test_rows_in_no_class_share_one_absent_class(decidb_cli, tmp_path):
@@ -79,8 +107,8 @@ def test_rows_in_no_class_share_one_absent_class(decidb_cli, tmp_path):
     instances flat gives it, one per class and one for both rows."""
     sql = """SELECT id, x FROM (VALUES (1, 'a', 3.0), (2, NULL, 4.0), (3, NULL, 5.0), (4, 'b', 6.0)) t(id, g, c)
         DECIDE per t.g: x(INT) SUCH THAT x <= 10 AND x + 0 * t.c <= t.c"""
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
 
 
 #: Each case raises flat's error, which the rank of the tree's errors decides among those it holds.
@@ -164,10 +192,10 @@ RAISED = {
 @pytest.mark.parametrize("case", list(RAISED))
 def test_the_tree_raises_flats_error(decidb_cli, case):
     sql, message = RAISED[case]
-    flat = run(decidb_cli, sql, "flat")
+    stored = reference(decidb_cli, sql)
     tree = run(decidb_cli, sql)
-    assert message in flat.stderr, flat.stderr
-    assert tree.stderr == flat.stderr
+    assert message in stored.stderr, stored.stderr
+    assert tree.stderr == stored.stderr
 
 
 #: Clause 0 holds no value on any row, which flat reports once its clauses are read, unless one of them raised.
@@ -181,16 +209,16 @@ NOTHING = (
 def test_skipped_instances_are_reported_unless_a_clause_raised(decidb_cli, d, warned):
     result = run(decidb_cli, NOTHING.format(d=d))
     assert ("constrains nothing" in result.stderr) == warned, result.stderr
-    assert result.stderr == run(decidb_cli, NOTHING.format(d=d), "flat").stderr
+    assert result.stderr == reference(decidb_cli, NOTHING.format(d=d)).stderr
 
 
 def test_a_folded_bounds_repair_rows_are_emitted_under_diagnose(decidb_cli):
     """`x >= 4` and `x <= 2` are folded into x's box; only the repair model has their rows."""
     sql = """DIAGNOSE SELECT id, x FROM (VALUES (1, 3.0), (2, 4.0)) t(id, c)
         DECIDE x(INT), y(INT) SUCH THAT x >= 4 AND x <= 2 AND x + y <= 20"""
-    flat = run(decidb_cli, sql, "flat")
-    assert "x >= 4" in flat.stdout, flat.stdout
-    assert run(decidb_cli, sql).stdout == flat.stdout
+    stored = reference(decidb_cli, sql)
+    assert "x >= 4" in stored.stdout, stored.stdout
+    assert run(decidb_cli, sql).stdout == stored.stdout
 
 
 @pytest.mark.parametrize("c", ["5.0", "NULL"], ids=["a-bound-on-every-row", "a-null-bound"])
@@ -198,8 +226,8 @@ def test_an_admitted_bound_folds_flats_box(decidb_cli, tmp_path, c):
     """`x <= t.c` admits a range of x on each row, which the model builder folds into x's column; a NULL bound leaves
     its row with no value."""
     sql = f"SELECT id, x FROM (VALUES (1, 3.0), (2, {c}), (3, 4.0)) t(id, c) DECIDE x(REAL) SUCH THAT x <= t.c AND x + 1 >= 2"
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
 
 
 def test_a_null_in_a_later_window_marks_its_own_entry(decidb_cli, tmp_path):
@@ -207,16 +235,18 @@ def test_a_null_in_a_later_window_marks_its_own_entry(decidb_cli, tmp_path):
     node, not in the window: row 2,500 has no value, and row 452 keeps its range."""
     sql = """SELECT id, x FROM (SELECT i AS id, CASE WHEN i = 2500 THEN NULL ELSE 5.0 END AS c FROM range(3000) r(i)) t
         DECIDE x(REAL) SUCH THAT x <= t.c AND x + 1 >= 2"""
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
+    model = run_model(decidb_cli, sql, tmp_path)
+    bounds = dict(re.findall(r"(?m)^col (\d+): lb=1 ub=(\S+) ", model))
+    assert len(bounds) == 3000 and bounds.pop("2500") == "1e+30", model[:300]
+    assert set(bounds.values()) == {"5"}, model[:300]
 
 
 def test_a_folded_bound_with_no_repair_rows_is_no_clause(decidb_cli, tmp_path):
     """A BOOLEAN's bound is its box, with no rows even for a repair model: its root has no clause to emit."""
     sql = """SELECT id, x, b FROM (VALUES (1, 2.0), (2, 5.0)) t(id, c)
         DECIDE x(REAL), b(BOOL) SUCH THAT x + 1 <= t.c AND b <= 1 AND x + b <= 8"""
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
 
 
 def test_a_covered_query_prints_each_dump_it_is_asked_for(decidb_cli):
@@ -235,8 +265,8 @@ def test_a_covered_query_prints_each_dump_it_is_asked_for(decidb_cli):
 
 def test_a_linear_objective_is_formulated_as_flat_formulates_it(decidb_cli, tmp_path):
     """The objective's arm: each term a column over the members of the G it ranges over."""
-    flat, tree = models(decidb_cli, PLAIN, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, PLAIN, tmp_path)
+    assert tree == stored
 
 
 #: Rows 2 and 3 have p, so the objective keeps them; c is NULL on row 3, and the groups of g hold 2 rows and 1.
@@ -263,8 +293,8 @@ OBJECTIVES = {
 def test_an_objective_reads_the_rows_flat_reads(decidb_cli, tmp_path, case):
     sql = f"""SELECT id, x, y FROM {OBJECTIVE_ROWS}
         DECIDE x(REAL), per (): y(REAL) SUCH THAT x <= 9 AND y <= 4 MAXIMIZE {OBJECTIVES[case]}"""
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
 
 
 def test_a_qualified_reducer_reads_one_row_per_class(decidb_cli, tmp_path):
@@ -273,8 +303,8 @@ def test_a_qualified_reducer_reads_one_row_per_class(decidb_cli, tmp_path):
     sql = (
         f"SELECT id, x, y FROM {ROWS} DECIDE x(REAL), per t.g: y(REAL) SUCH THAT x + y <= t.c MAXIMIZE sum(per t.g: y)"
     )
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
 
 
 def test_a_member_test_keeps_its_terms_from_being_read(decidb_cli, tmp_path):
@@ -283,17 +313,17 @@ def test_a_member_test_keeps_its_terms_from_being_read(decidb_cli, tmp_path):
     sql = """SELECT id, x FROM (VALUES (1, 2::BIGINT, 1::BIGINT, 1.0),
         (2, 4611686018427387904::BIGINT, 4::BIGINT, NULL), (3, 3::BIGINT, 2::BIGINT, 2.0)) t(id, a, b, v)
         DECIDE x(REAL) SUCH THAT x <= 9 MAXIMIZE sum(t.a * t.b * x + t.v * x)"""
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
 
 
 def test_a_member_test_that_raises_raises_flats_error(decidb_cli):
     """The test `ln(t.w) * t.v IS NOT NULL` raises on row 2, which its reducer reads: flat's message."""
     sql = """SELECT id, x FROM (VALUES (1, 2.0, 1.0), (2, 0.0, NULL), (3, 3.0, 2.0)) t(id, w, v)
         DECIDE x(REAL) SUCH THAT x <= 9 MAXIMIZE sum(ln(t.w) * t.v * x)"""
-    flat = run(decidb_cli, sql, "flat")
-    assert "cannot take logarithm of zero" in flat.stderr, flat.stderr
-    assert run(decidb_cli, sql).stderr == flat.stderr
+    stored = reference(decidb_cli, sql)
+    assert "cannot take logarithm of zero" in stored.stderr, stored.stderr
+    assert run(decidb_cli, sql).stderr == stored.stderr
 
 
 #: Flat reads the objective's `when` over every row, then each term's filter, its reducer's member tests among them,
@@ -311,10 +341,10 @@ OBJECTIVE_RAISED = {
 def test_a_member_test_raises_in_flats_order(decidb_cli, case):
     sql = f"""SELECT id, x FROM (VALUES (1, 2.0, -1.0, 1.0), (2, 0.0, 2.0, 1.0)) t(id, a, w, v)
         DECIDE x(REAL) SUCH THAT x <= 1 MAXIMIZE {OBJECTIVE_RAISED[case]}"""
-    flat = run(decidb_cli, sql, "flat")
-    assert "cannot take logarithm of zero" in flat.stderr, flat.stderr
+    stored = reference(decidb_cli, sql)
+    assert "cannot take logarithm of zero" in stored.stderr, stored.stderr
     tree = run(decidb_cli, sql)
-    assert tree.stderr == flat.stderr
+    assert tree.stderr == stored.stderr
 
 
 #: Row 2's g is NULL, so it reads no instance of y, declared per t.g. The objective keeps row 2 alone, so y, outside
@@ -331,17 +361,17 @@ ABSENT = {
 def test_a_term_reading_no_instance_is_dropped(decidb_cli, tmp_path, case):
     sql = f"""SELECT id, x, y FROM (VALUES (1, 'a', 3.0::DOUBLE), (2, NULL, {ABSENT[case]})) t(id, g, c)
         DECIDE x(REAL), per t.g: y(REAL) SUCH THAT x <= 1 AND y <= 2 MAXIMIZE when t.id = 2: sum(x) + t.c * y"""
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
 
 
 def test_an_objective_produced_twice_raises_flats_error(decidb_cli):
     """t.c, outside every reducer, takes two values over the kept rows: the objective has two instances (D72)."""
     sql = f"""SELECT id, x FROM {ROWS} DECIDE x(REAL), per (): y(REAL)
         SUCH THAT x <= 9 AND y <= 4 MAXIMIZE sum(x) + t.c * y"""
-    flat = run(decidb_cli, sql, "flat")
-    assert "the objective would be produced more than once" in flat.stderr, flat.stderr
-    assert run(decidb_cli, sql).stderr == flat.stderr
+    stored = reference(decidb_cli, sql)
+    assert "the objective would be produced more than once" in stored.stderr, stored.stderr
+    assert run(decidb_cli, sql).stderr == stored.stderr
 
 
 #: Rows for the aggregate shape: group a holds rows 1 and 2, group b rows 3, 5 and 6, and row 4's g is NULL, so it is in
@@ -390,16 +420,16 @@ GROUPED = {
 def test_a_grouped_clause_is_formulated_as_flat_formulates_it(decidb_cli, tmp_path, case):
     sql = f"""SELECT id, x FROM {GROUPED_ROWS} DECIDE x(REAL), per t.g: y(REAL), per (): z(REAL)
         SUCH THAT x <= 9 AND y <= 9 AND z <= 9 AND {GROUPED[case]} MAXIMIZE sum(x) + sum(y) + z"""
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
 
 
 def test_a_clause_with_no_class_of_its_per_holds_no_instance(decidb_cli, tmp_path):
     """Every k is NULL, so `per t.k` names no class: the clause holds no instance."""
     sql = """SELECT id, x FROM (VALUES (1, 'a', NULL::VARCHAR), (2, 'b', NULL)) t(id, g, k)
         DECIDE x(REAL) SUCH THAT x <= 9 AND per t.k: sum(x) by (t.g) <= 5 MAXIMIZE sum(x)"""
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
 
 
 def test_an_emptied_group_is_counted_as_flat_counts_it(decidb_cli):
@@ -407,9 +437,9 @@ def test_an_emptied_group_is_counted_as_flat_counts_it(decidb_cli):
     which the tree counts as flat does."""
     sql = f"""SELECT id, x FROM {GROUPED_ROWS} DECIDE x(REAL)
         SUCH THAT x <= 9 AND sum(when t.c > 100: x) by (t.g) <= 5 MAXIMIZE sum(x)"""
-    flat = run(decidb_cli, sql, "flat")
-    assert "each of its 2 instances has no value" in flat.stderr, flat.stderr
-    assert run(decidb_cli, sql).stderr == flat.stderr
+    stored = reference(decidb_cli, sql)
+    assert "each of its 2 instances has no value" in stored.stderr, stored.stderr
+    assert run(decidb_cli, sql).stderr == stored.stderr
 
 
 #: Rows 1 and 2 share a NOCASE class of g, spelled 'a' and 'A', which the reducer's member test reads apart.
@@ -428,8 +458,8 @@ QUALIFIED = {
 @pytest.mark.parametrize("case", list(QUALIFIED))
 def test_a_qualified_reducer_reads_each_class_once(decidb_cli, tmp_path, case):
     sql = f"SELECT id, y FROM {NOCASE_ROWS} DECIDE per t.g: y(INT) SUCH THAT {QUALIFIED[case]}"
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
 
 
 def test_a_qualified_avg_divides_by_its_classes(decidb_cli, tmp_path):
@@ -439,17 +469,17 @@ def test_a_qualified_avg_divides_by_its_classes(decidb_cli, tmp_path):
         (4, NULL, 6.0, true)) t(id, g, c, p) JOIN (VALUES (1, 'u'), (1, 'v'), (2, 'u'), (3, 'u'), (3, 'v'), (3, 'w'),
         (4, 'u')) s(id, k) ON t.id = s.id
         DECIDE per t.id: x(REAL) SUCH THAT x <= 9 AND avg(t: x) by (t.g) <= 2 MAXIMIZE sum(t: x)"""
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
 
 
 def test_a_data_check_raises_flats_message_without_side_plans(decidb_cli):
     """Under tree-noside no side plan checks the data reducer's values: its hidden root does, at the check's rank."""
     sql = """SELECT id, x FROM (VALUES (1, 'a', 2.0::DOUBLE), (2, 'a', 'NaN'::DOUBLE)) t(id, g, c)
         DECIDE x(REAL) SUCH THAT x <= max(t.c) by (t.g) MAXIMIZE sum(x)"""
-    flat = run(decidb_cli, sql, "flat")
-    assert "the bound t.c is NaN on some rows" in flat.stderr, flat.stderr
-    assert run(decidb_cli, sql, "tree-noside").stderr == flat.stderr
+    stored = reference(decidb_cli, sql)
+    assert "the bound t.c is NaN on some rows" in stored.stderr, stored.stderr
+    assert run(decidb_cli, sql, "tree-noside").stderr == stored.stderr
 
 
 def test_a_folds_error_raises_flats_message_without_side_plans(decidb_cli):
@@ -458,9 +488,9 @@ def test_a_folds_error_raises_flats_message_without_side_plans(decidb_cli):
     sql = """SELECT id, x FROM (VALUES (1, 'a', 99999999999999999999999999999999999999::DECIMAL(38, 0)),
         (2, 'a', 99999999999999999999999999999999999999::DECIMAL(38, 0)), (3, 'b', 5::DECIMAL(38, 0))) t(id, g, c)
         DECIDE x(REAL) SUCH THAT x <= 9 AND x <= sum(t.c) by (t.g) / 1e40 MAXIMIZE sum(x)"""
-    flat = run(decidb_cli, sql, "flat")
-    assert "Overflow in HUGEINT addition" in flat.stderr, flat.stderr
-    assert run(decidb_cli, sql, "tree-noside").stderr == flat.stderr
+    stored = reference(decidb_cli, sql)
+    assert "Overflow in HUGEINT addition" in stored.stderr, stored.stderr
+    assert run(decidb_cli, sql, "tree-noside").stderr == stored.stderr
 
 
 def test_a_data_check_raises_what_its_window_meets_first(decidb_cli):
@@ -469,9 +499,9 @@ def test_a_data_check_raises_what_its_window_meets_first(decidb_cli):
     sql = """SELECT id, x FROM (VALUES (1, 'a', 2.0::DOUBLE, -1.0), (2, 'a', -3.0, 2.0), (3, 'b', 3.0, 5.0))
         t(id, g, c, w) DECIDE x(REAL) SUCH THAT x <= 9 AND when sqrt(t.c) > -1: x <= max(ln(t.w)) by (t.g)
         MAXIMIZE sum(x)"""
-    flat = run(decidb_cli, sql, "flat")
-    assert "cannot take square root of a negative number" in flat.stderr, flat.stderr
-    assert run(decidb_cli, sql, "tree-noside").stderr == flat.stderr
+    stored = reference(decidb_cli, sql)
+    assert "cannot take square root of a negative number" in stored.stderr, stored.stderr
+    assert run(decidb_cli, sql, "tree-noside").stderr == stored.stderr
 
 
 #: Flat reads a reducer's own `when` in its terms' filter, window by window and term by term, after the routes and
@@ -516,10 +546,10 @@ FILTER_RAISED = {
 def test_a_reducers_when_raises_in_its_filter(decidb_cli, case):
     rows, objective, message = FILTER_RAISED[case]
     sql = f"SELECT id, x FROM {rows} DECIDE x(REAL) SUCH THAT x <= 1 MAXIMIZE {objective}"
-    flat = run(decidb_cli, sql, "flat")
-    assert message in flat.stderr, flat.stderr
+    stored = reference(decidb_cli, sql)
+    assert message in stored.stderr, stored.stderr
     tree = run(decidb_cli, sql)
-    assert tree.stderr == flat.stderr
+    assert tree.stderr == stored.stderr
 
 
 def test_a_grouped_clauses_reducers_raise_in_term_order(decidb_cli):
@@ -527,10 +557,10 @@ def test_a_grouped_clauses_reducers_raise_in_term_order(decidb_cli):
     sql = """SELECT id, x FROM (VALUES (1, 'a', 0.0, 2.0, 1.0), (2, 'a', 2.0, -1.0, 1.0)) t(id, g, a, w, v)
         DECIDE x(REAL) SUCH THAT x <= 1 AND sum(ln(t.w) * t.v * x) by (t.g) + sum(when ln(t.a) > -100: x) by (t.g) <= 5
         MAXIMIZE sum(x)"""
-    flat = run(decidb_cli, sql, "flat")
-    assert "logarithm of a negative number" in flat.stderr, flat.stderr
+    stored = reference(decidb_cli, sql)
+    assert "logarithm of a negative number" in stored.stderr, stored.stderr
     tree = run(decidb_cli, sql)
-    assert tree.stderr == flat.stderr
+    assert tree.stderr == stored.stderr
 
 
 #: Flat groups a clause's kept rows by its `by` key after it computes the terms, so a key's error ranks after theirs:
@@ -563,38 +593,35 @@ KEY_RAISED = {
 }
 
 
-@pytest.mark.parametrize("evaluator", ["tree", "verify"])
 @pytest.mark.parametrize("case", list(KEY_RAISED))
-def test_a_by_key_raises_after_the_terms(decidb_cli, case, evaluator):
+def test_a_by_key_raises_after_the_terms(decidb_cli, case):
     rows, clause, message = KEY_RAISED[case]
     sql = f"SELECT id, x FROM {rows} DECIDE x(REAL) SUCH THAT x <= 9 AND {clause} MAXIMIZE sum(x)"
-    flat = run(decidb_cli, sql, "flat")
-    assert message in flat.stderr, flat.stderr
-    result = run(decidb_cli, sql, evaluator)
-    assert result.stderr == flat.stderr
+    stored = reference(decidb_cli, sql)
+    assert message in stored.stderr, stored.stderr
+    result = run(decidb_cli, sql)
+    assert result.stderr == stored.stderr
 
 
-@pytest.mark.parametrize("evaluator", ["tree", "verify"])
-def test_a_row_in_no_group_reaches_the_operand(decidb_cli, evaluator):
+def test_a_row_in_no_group_reaches_the_operand(decidb_cli):
     """Row 2's g is NULL, so it is in no group of the G: it still reaches the G's operand, which flat computes on every
     row the G reads, so its NaN coefficient raises flat's message (DecideDescent::Visit)."""
     sql = """SELECT id, x FROM (VALUES (1, 'a', 3.0::DOUBLE), (2, NULL, 'NaN'::DOUBLE), (3, 'b', 5.0)) t(id, g, c)
         DECIDE x(REAL) SUCH THAT x <= 9 AND sum(t.c * x) by (t.g) <= 8 MAXIMIZE sum(x)"""
-    flat = run(decidb_cli, sql, "flat")
-    assert "t.c is NaN or infinite on some rows" in flat.stderr, flat.stderr
-    result = run(decidb_cli, sql, evaluator)
-    assert result.stderr == flat.stderr
+    stored = reference(decidb_cli, sql)
+    assert "t.c is NaN or infinite on some rows" in stored.stderr, stored.stderr
+    result = run(decidb_cli, sql)
+    assert result.stderr == stored.stderr
 
 
-@pytest.mark.parametrize("evaluator", ["tree", "verify"])
-def test_the_objective_reads_no_term_at_a_row_in_no_group(decidb_cli, evaluator):
+def test_the_objective_reads_no_term_at_a_row_in_no_group(decidb_cli):
     """Flat reads the objective's sum of group sums in place (D81), on the rows of each group: row 2's g is NULL, so
     its logarithm of 0 is never computed, and the objective's G does not route the row to its operand."""
     sql = """SELECT id, x FROM (VALUES (1, 'a', 1.0), (2, NULL, 0.0), (3, 'b', 2.0)) t(id, g, w)
         DECIDE x(INT) SUCH THAT x <= 10 AND sum(x) <= 10 MAXIMIZE sum(per t.g: sum(ln(t.w) * x) by (t.g))"""
-    result = run(decidb_cli, sql, evaluator)
+    result = run(decidb_cli, sql)
     assert result.returncode == 0 and result.stderr == "", result.stderr
-    assert result.stdout == run(decidb_cli, sql, "flat").stdout
+    assert result.stdout == reference(decidb_cli, sql).stdout
 
 
 #: A relation's columns compare NULL as a value: rows 2 and 3 are one group of d, which flat numbers after every other.
@@ -608,8 +635,8 @@ def test_a_null_key_value_is_the_last_group(decidb_cli, tmp_path):
         JOIN (SELECT DISTINCT g AS dg, c AS dc FROM {RELATION_ROWS} s(id, g, c)) d
         ON t.g IS NOT DISTINCT FROM d.dg AND t.c = d.dc
         DECIDE x(REAL) SUCH THAT x <= 9 AND sum(x) by (d) <= t.c MAXIMIZE sum(x)"""
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
 
 
 def test_a_relations_null_key_class_is_numbered_last(decidb_cli):
@@ -622,10 +649,9 @@ def test_a_relations_null_key_class_is_numbered_last(decidb_cli):
 
 
 def _verified(cli, sql):
-    """The query under verify, whose second run is the tree's: it raises if what the two hand stage 06 differs, and
-    prints what flat prints otherwise."""
-    result = run(cli, sql, "verify")
-    assert result.stderr == run(cli, sql, "flat").stderr
+    """The query under the tree prints what its stored expectation holds: flat's output when it was recorded."""
+    result, stored = run(cli, sql), reference(cli, sql)
+    assert (result.stdout, result.stderr) == (stored.stdout, stored.stderr)
 
 
 #: A diagnosis of a clause in the aggregate shape reports the classes each group's row stands for
@@ -684,8 +710,8 @@ def test_a_row_per_class_is_formulated_as_flat_formulates_it(decidb_cli, tmp_pat
         SUCH THAT x <= 9 AND y <= 9 AND z <= 9 AND {CLASSES[case]} MAXIMIZE sum(x) + sum(y) + z"""
     _verified(decidb_cli, diagnose + sql)
     if not diagnose:
-        flat, tree = models(decidb_cli, sql, tmp_path)
-        assert tree == flat
+        stored, tree = models(decidb_cli, sql, tmp_path)
+        assert tree == stored
 
 
 #: A relation-qualified reducer reads one value per class and value of what its body reads (KeyedScopeInfo::signature):
@@ -705,8 +731,8 @@ def test_a_qualified_reducers_classes_are_split_by_its_values(decidb_cli, tmp_pa
     sql = f"""SELECT id, x FROM {CLASS_ROWS} DECIDE x(REAL), per t.g: y(REAL), per (): z(REAL)
         SUCH THAT x <= 9 AND y <= 9 AND z <= 9 AND {SPLIT_CLASSES[case]}"""
     _verified(decidb_cli, sql)
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
 
 
 #: A relation-qualified reducer reads its terms on every row its `when` keeps, and keeps no value of a row in no class
@@ -732,7 +758,7 @@ def test_a_qualified_reducer_reads_its_rows_in_no_class_as_flat_does(decidb_cli,
     c, clause = IN_NO_CLASS[case]
     sql = f"SELECT id, x FROM {NO_CLASS_ROWS.format(c=c)} DECIDE x(REAL) SUCH THAT {clause}"
     _verified(decidb_cli, sql)
-    assert run(decidb_cli, sql).stderr == run(decidb_cli, sql, "flat").stderr
+    assert run(decidb_cli, sql).stderr == reference(decidb_cli, sql).stderr
 
 
 #: A variant is named by what its class key and its fields read at its first row, as written (DecideBody::names), and
@@ -790,8 +816,8 @@ def test_an_auxiliary_has_no_value_where_its_definition_has_none(decidb_cli, tmp
     sql = f"""SELECT id, x FROM {ABSENT_ROWS} DECIDE x(REAL), per t.g: y(REAL)
         SUCH THAT x <= 9 AND y <= 9 AND {DEFINED[case]} MAXIMIZE sum(x) + sum(y)"""
     _verified(decidb_cli, sql)
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
 
 
 #: Three thousand rows, two windows of 2,048 rows: row 10's d is 0 and row 2,500's c is -1, so ln(t.d) raises in the
@@ -829,28 +855,26 @@ DEFINITION_ERRORS = {
 @pytest.mark.parametrize("case", list(DEFINITION_ERRORS))
 def test_a_definitions_error_ranks_where_flat_raises_it(decidb_cli, case):
     sql = f"SELECT i, x FROM {DEFINITION_ERRORS[case]} MAXIMIZE sum(x)"
-    flat = run(decidb_cli, sql, "flat").stderr
-    assert "Error" in flat
-    for evaluator in ("tree", "verify"):
-        result = run(decidb_cli, sql, evaluator)
-        assert result.stderr == flat
+    stored = reference(decidb_cli, sql).stderr
+    assert "Error" in stored
+    assert run(decidb_cli, sql).stderr == stored
 
 
 def test_the_objective_drops_an_auxiliary_with_no_value(decidb_cli, tmp_path):
     """Row 1's |x - t.c| has no value, so the objective drops its term there (D84; DecideTreeColumns::ReadEntries)."""
     sql = f"SELECT id, x FROM {ABSENT_ROWS} DECIDE x(REAL) SUCH THAT x <= 9 AND x >= 1 MINIMIZE sum(abs(x - t.c))"
     _verified(decidb_cli, sql)
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
 
 
 def test_a_not_equal_answers_through_its_implied_bounds(decidb_cli, tmp_path):
     """The sum bounds each x, which stage 06 reads into the `<>` it expands (EvaluatedConstraint::ne_clause_idx): the
     tree's rows are flat's, so it answers as flat does."""
     sql = f"SELECT id, x FROM {GROUPED_ROWS} DECIDE x(INT) SUCH THAT x >= 0 AND sum(x) <= 10 AND x <> 3 MAXIMIZE sum(x)"
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
-    assert run(decidb_cli, f"{sql} ORDER BY id").stdout == run(decidb_cli, f"{sql} ORDER BY id", "flat").stdout
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
+    assert run(decidb_cli, f"{sql} ORDER BY id").stdout == reference(decidb_cli, f"{sql} ORDER BY id").stdout
 
 
 def test_an_avg_under_not_equal_multiplies_its_bound(decidb_cli, tmp_path):
@@ -858,8 +882,8 @@ def test_an_avg_under_not_equal_multiplies_its_bound(decidb_cli, tmp_path):
     (HoistAvgIntoNotEqualBound), as flat's model does."""
     sql = f"""SELECT id, x FROM {GROUPED_ROWS} DECIDE x(INT)
         SUCH THAT x >= 0 AND x <= 5 AND avg(x) by (t.g) <> 3 MAXIMIZE sum(x)"""
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
 
 
 #: Rows for the MIN and MAX arms: g's groups a (rows 1, 2) and b (rows 3, 4), whose least c, 3 and 1, a group's bound
@@ -870,8 +894,8 @@ EXTREMA = """(VALUES (1, 'a', 3.0, 2.0, true), (2, 'a', 5.0, 1.0, false), (3, 'b
 
 def _modelled_as_flat(cli, sql, tmp_path):
     """The tree's model is flat's; returns the model."""
-    flat, tree = models(cli, sql, tmp_path)
-    assert tree == flat
+    stored, tree = models(cli, sql, tmp_path)
+    assert tree == stored
     return tree
 
 
@@ -900,9 +924,9 @@ def test_a_hard_extremum_is_diagnosed_by_the_bound_as_written(decidb_cli):
         f"DIAGNOSE SELECT id, x FROM {EXTREMA} DECIDE x(REAL) SUCH THAT x <= 1 AND max(x) by (t.g) >= 2 MINIMIZE sum(x)"
     )
     result = run(decidb_cli, sql)
-    flat = run(decidb_cli, sql, "flat").stdout
-    assert "max(x) by (t.g) >= 1" in flat, flat
-    assert result.stdout == flat
+    stored = reference(decidb_cli, sql).stdout
+    assert "max(x) by (t.g) >= 1" in stored, stored
+    assert result.stdout == stored
 
 
 def test_a_folded_extremums_repair_rows_count_no_instance(decidb_cli):
@@ -985,14 +1009,9 @@ def test_a_composed_clause_is_formulated_as_flat_formulates_it(decidb_cli, tmp_p
         SUCH THAT {clause} AND x <= 5 AND y <= 5 MAXIMIZE sum(x) + sum(y)"""
     result = run(decidb_cli, sql)
     assert ("constrains nothing" in result.stderr) == warned, result.stderr
-    assert result.stderr == run(decidb_cli, sql, "flat").stderr
-    flat, tree = [
-        decidb_cli.with_env({"DECIDB_EVALUATOR": evaluator}).dump_model(
-            sql, tmp_path / f"{evaluator}.dump", expect_warnings=("constrains nothing",) if warned else ()
-        )
-        for evaluator in ("flat", "tree")
-    ]
-    assert tree == flat
+    assert result.stderr == reference(decidb_cli, sql).stderr
+    stored, tree = models(decidb_cli, sql, tmp_path, ("constrains nothing",) if warned else ())
+    assert tree == stored
     if case == "an-outer-row":
         assert len(re.findall(r"sense=> rhs=0 nnz=2", tree)) == 4 and "sense=< rhs=9 nnz=5" in tree, tree
     _verified(decidb_cli, sql)
@@ -1004,7 +1023,7 @@ def test_a_composed_clause_is_diagnosed_per_class_of_its_per(decidb_cli):
     sql = f"""DIAGNOSE SELECT id, x, y FROM {EXTREMA} DECIDE x(INT), y(INT)
         SUCH THAT per t.g: sum(x) + max(y) >= 90 AND x <= 5 AND y <= 5 MAXIMIZE sum(x) + sum(y)"""
     _verified(decidb_cli, sql)
-    assert run(decidb_cli, sql).stdout == run(decidb_cli, sql, "flat").stdout
+    assert run(decidb_cli, sql).stdout == reference(decidb_cli, sql).stdout
 
 
 #: Each an objective with composed terms (OBJECTIVE_COMPOSED): its terms, and a term over no row, which is dropped.
@@ -1044,9 +1063,9 @@ def test_a_composed_clause_raises_flats_error(decidb_cli, case):
     clauses, message = COMPOSED_RAISED[case]
     sql = f"""SELECT id, x, y FROM {COMPOSED_NANS} DECIDE x(REAL), y(REAL)
         SUCH THAT x <= 9 AND y <= 9 AND {clauses} MAXIMIZE sum(x)"""
-    flat = run(decidb_cli, sql, "flat")
-    assert message in flat.stderr, flat.stderr
-    assert run(decidb_cli, sql).stderr == flat.stderr
+    stored = reference(decidb_cli, sql)
+    assert message in stored.stderr, stored.stderr
+    assert run(decidb_cli, sql).stderr == stored.stderr
 
 
 #: Three thousand rows: la is -1 on row 2,500, in the second window, and lb on row 10, in the first; in the first window
@@ -1099,11 +1118,9 @@ COMPOSED_WHEN_RAISED = {
 def test_a_composed_when_raises_in_its_terms_filters(decidb_cli, case):
     rest, message = COMPOSED_WHEN_RAISED[case]
     sql = f"SELECT id, x, y FROM {COMPOSED_WINDOWS} DECIDE x(REAL), y(REAL) SUCH THAT x <= 9 AND y <= 9 {rest}"
-    flat = run(decidb_cli, sql, "flat").stderr
-    assert message in flat, flat
-    for evaluator in ("tree", "verify"):
-        result = run(decidb_cli, sql, evaluator)
-        assert result.stderr == flat
+    stored = reference(decidb_cli, sql).stderr
+    assert message in stored, stored
+    assert run(decidb_cli, sql).stderr == stored
 
 
 def test_a_square_objective_answers_under_tree(decidb_cli, tmp_path):
@@ -1114,8 +1131,8 @@ def test_a_square_objective_answers_under_tree(decidb_cli, tmp_path):
     result = run(decidb_cli, sql)
     values = [round(float(value), 4) for value in re.findall(r"│\s+\d+ │\s+([\d.]+) │", result.stdout)]
     assert values == [3.0, 5.0], result.stdout
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
 
 
 #: Four rows in two groups; NULL_POLYNOMIAL_ROWS has a NULL g on row 2 and a NULL c on row 4.
@@ -1219,14 +1236,9 @@ def test_a_null_square_factor_skips_its_clause(decidb_cli_gurobi, tmp_path):
         SUCH THAT x <= 9 AND (SELECT NULL::DOUBLE) * sum(power(x - t.c, 2)) <= 50 MAXIMIZE sum(x)"""
     result = run(decidb_cli_gurobi, sql)
     assert "constrains nothing" in result.stderr
-    assert result.stderr == run(decidb_cli_gurobi, sql, "flat").stderr
-    flat, tree = [
-        decidb_cli_gurobi.with_env({"DECIDB_EVALUATOR": evaluator}).dump_model(
-            sql, tmp_path / f"{evaluator}.dump", expect_warnings=("constrains nothing",)
-        )
-        for evaluator in ("flat", "tree")
-    ]
-    assert tree == flat
+    assert result.stderr == reference(decidb_cli_gurobi, sql).stderr
+    stored, tree = models(decidb_cli_gurobi, sql, tmp_path, ("constrains nothing",))
+    assert tree == stored
 
 
 def test_a_data_norm_is_folded_as_its_reducer(decidb_cli, tmp_path):
@@ -1353,10 +1365,10 @@ POLYNOMIAL_RAISED = {
 def test_a_product_or_square_raises_flats_error(decidb_cli_gurobi, case):
     rows, clauses, message = POLYNOMIAL_RAISED[case]
     sql = f"SELECT t.id FROM {rows} DECIDE x(REAL), y(REAL) SUCH THAT x <= 9 AND y <= 9 AND {clauses}"
-    flat = run(decidb_cli_gurobi, sql, "flat").stderr
-    assert message in flat, flat
+    stored = reference(decidb_cli_gurobi, sql).stderr
+    assert message in stored, stored
     result = run(decidb_cli_gurobi, sql)
-    assert result.stderr == flat
+    assert result.stderr == stored
 
 
 LINK_ROWS = """(VALUES (1, 'a', 3.0, true), (2, 'a', 5.0, false), (3, 'b', 1.0, false), (4, NULL, 2.0, true),
@@ -1393,20 +1405,17 @@ VALUE_LINKS = {
 def test_a_helper_is_formulated_as_flat_formulates_it(decidb_cli, tmp_path, case):
     rows, decisions, clause = VALUE_LINKS[case]
     sql = f"SELECT t.id FROM {rows} DECIDE {decisions} SUCH THAT x <= 9 AND {clause} MAXIMIZE sum(x)"
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
-    # Verify compares the members and the classes, which a helper no row reads leaves out of the model.
-    verified = run(decidb_cli, sql, "verify")
-    assert verified.returncode == 0 and "differ" not in verified.stderr, verified.stderr
+    stored, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == stored
 
 
 def test_a_helper_over_every_row_is_one_column(decidb_cli, tmp_path):
     """Each of 2,000 rows reads one helper of their sum: each row's two terms, x and the helper, and the helper's own
     row of its 2,000 members and itself, 6,001 terms, where writing the sum into every row made 4,000,000."""
     sql = "SELECT i FROM range(2000) r(i) DECIDE x(REAL) SUCH THAT x <= 9 AND x <= 0.01 * SUM(x) + 1 MAXIMIZE sum(x)"
-    flat, tree = models(decidb_cli, sql, tmp_path)
-    assert tree == flat
-    assert sum(int(n) for n in re.findall(r"nnz=(\d+)", tree)) == 6001
+    model = run_model(decidb_cli, sql, tmp_path)
+    counts = [int(n) for n in re.findall(r"(?m)^row \d+: .*? nnz=(\d+)", model)]
+    assert counts == [2] * 2000 + [2001] and sum(counts) == 6001, model[:300]
 
 
 def test_a_helper_read_once_is_written_where_it_is_read(decidb_cli):
@@ -1414,7 +1423,7 @@ def test_a_helper_read_once_is_written_where_it_is_read(decidb_cli):
     ANALYZE accounts for it (PhysicalDecide::ReportInlinedHelpers), as under flat."""
     sql = f"""EXPLAIN ANALYZE SELECT id FROM {ROWS} DECIDE x(REAL)
         SUCH THAT x <= t.c AND sum(abs(x - avg(x) by (t.g))) <= 1 MAXIMIZE sum(x)"""
-    accounts = [re.sub(r"[│\s]+", " ", run(decidb_cli, sql, evaluator).stdout) for evaluator in ("flat", "tree")]
+    accounts = [re.sub(r"[│\s]+", " ", result.stdout) for result in (reference(decidb_cli, sql), run(decidb_cli, sql))]
     assert "avg(x) by (t.g) is written where it is read, with no column" in accounts[1], accounts[1]
     assert re.sub(r"\d+\.\d+s", "", accounts[1]) == re.sub(r"\d+\.\d+s", "", accounts[0])
 
@@ -1493,10 +1502,10 @@ LINK_RAISED = {
 def test_a_helper_raises_flats_error(decidb_cli, case):
     rows, clauses, message = LINK_RAISED[case]
     sql = f"SELECT t.id FROM {rows} DECIDE x(REAL) SUCH THAT x <= 5 AND {clauses} MAXIMIZE sum(x)"
-    flat = run(decidb_cli, sql, "flat").stderr
-    assert message in flat, flat
+    stored = reference(decidb_cli, sql).stderr
+    assert message in stored, stored
     result = run(decidb_cli, sql)
-    assert result.stderr == flat
+    assert result.stderr == stored
 
 
 #: Rows for the frames' arm: ordered by id, g's timelines a (rows 1, 2) and b (row 4), row 3's g NULL, so it lies in
@@ -1545,9 +1554,9 @@ def test_a_frame_is_formulated_as_flat_formulates_it(decidb_cli, tmp_path, case)
     clause, _, objective = FRAMES[case].partition(" MAXIMIZE ")
     sql = f"""SELECT id, x FROM {FRAME_ROWS} DECIDE x(REAL), per (): y(REAL), per t.k: z(REAL)
         SUCH THAT x <= 9 AND y <= 9 AND z <= 9 AND {clause} MAXIMIZE {objective or 'sum(x) + y + sum(z)'}"""
-    assert run(decidb_cli, sql).stderr == run(decidb_cli, sql, "flat").stderr
-    flat, tree = models(decidb_cli, sql, tmp_path, ("constrains nothing",) if case in FRAMES_SKIPPED else ())
-    assert tree == flat
+    assert run(decidb_cli, sql).stderr == reference(decidb_cli, sql).stderr
+    stored, tree = models(decidb_cli, sql, tmp_path, ("constrains nothing",) if case in FRAMES_SKIPPED else ())
+    assert tree == stored
 
 
 #: The rows of test_anr_frames.py's points: product A's periods 1, 2, 3 and B's 1, 2.
@@ -1622,7 +1631,7 @@ def test_a_collated_position_is_one_variant_named_by_its_least_spelling(decidb_c
         (VALUES (1, 'a', 10.0), (2, 'A', 10.0), (3, 'b', 30.0)) r(id, k, v)) t DECIDE per t.g: y(INT)
         SUCH THAT per t.g: y = at(previous else 5: t.v) over (t.k) MAXIMIZE sum(y)"""
     tree = run(decidb_cli, sql)
-    assert "g, A" in tree.stdout and tree.stdout == run(decidb_cli, sql, "flat").stdout, tree.stdout + tree.stderr
+    assert "g, A" in tree.stdout and tree.stdout == reference(decidb_cli, sql).stdout, tree.stdout + tree.stderr
 
 
 #: Each an error a frame raises, which the tree raises as flat does, by the branch it reaches.
@@ -1726,9 +1735,9 @@ def test_a_frame_raises_flats_error(decidb_cli, case):
     rows, clause, objective, message = FRAME_RAISED[case]
     sql = f"""SET decide_frame_limit=3; SELECT id, x FROM {rows} t(id, product, period, v, w) DECIDE x(INT)
         SUCH THAT {clause} {objective}"""
-    flat = run(decidb_cli, sql, "flat").stderr
-    assert message in flat, flat
-    assert run(decidb_cli, sql).stderr == flat
+    stored = reference(decidb_cli, sql).stderr
+    assert message in stored, stored
+    assert run(decidb_cli, sql).stderr == stored
 
 
 #: Each a frame refusal naming a NOCASE `within` key's timeline, by the branch it reaches, and the spelling each
@@ -1752,16 +1761,12 @@ COLLATED_FRAME_RAISED = {
 }
 
 
-@pytest.mark.verify_known_difference("D12", ["raised"])
 @pytest.mark.parametrize("case", list(COLLATED_FRAME_RAISED))
 def test_a_collated_timeline_is_named_by_each_evaluators_spelling(decidb_cli, case):
     rows, clause, (flat, tree) = COLLATED_FRAME_RAISED[case]
     sql = f"SELECT id, x FROM {rows} DECIDE x(REAL) SUCH THAT x <= 9 AND {clause} MAXIMIZE sum(x)"
-    assert flat in run(decidb_cli, sql, "flat").stderr
+    assert flat in reference(decidb_cli, sql).stderr
     assert tree in run(decidb_cli, sql).stderr
-    # The suite's own evaluator: under verify, flat's run raises last, and the difference is allowed (D12).
-    evaluator = os.environ.get("DECIDB_EVALUATOR", "tree-noside")
-    assert (tree if evaluator.startswith("tree") else flat) in run(decidb_cli, sql, evaluator).stderr
 
 
 #: Each a frame that raises nothing where nothing reads its error, by the branch it reaches.
@@ -1780,7 +1785,7 @@ def test_a_frame_raises_nothing_no_read_reaches(decidb_cli, case):
         SUCH THAT x <= 9 AND {FRAME_UNRAISED[case]} MAXIMIZE sum(x)"""
     tree = run(decidb_cli, sql)
     assert tree.returncode == 0 and tree.stderr == "", tree.stderr
-    assert tree.stdout == run(decidb_cli, sql, "flat").stdout
+    assert tree.stdout == reference(decidb_cli, sql).stdout
 
 
 #: Each a reducer over data reading a frame, which no data check reads, so its fold refuses a NaN itself
@@ -1803,6 +1808,6 @@ def test_a_reducer_over_a_frame_refuses_a_nan(decidb_cli, case):
     clause, message = FRAME_FOLDS[case]
     sql = f"""SELECT id, x FROM (VALUES (1, 1.0::DOUBLE), (2, 'NaN'::DOUBLE), (3, 4.0::DOUBLE)) t(id, f)
         DECIDE x(REAL) SUCH THAT x <= 100 AND {clause} MAXIMIZE sum(x)"""
-    tree, flat = run(decidb_cli, sql), run(decidb_cli, sql, "flat")
+    tree, stored = run(decidb_cli, sql), reference(decidb_cli, sql)
     assert message in tree.stderr and (message or tree.stderr == ""), tree.stderr
-    assert (tree.stdout, tree.stderr) == (flat.stdout, flat.stderr)
+    assert (tree.stdout, tree.stderr) == (stored.stdout, stored.stderr)

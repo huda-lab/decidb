@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT t.id, s.k, x, y FROM (VALUES (1, 'a', 1), (2, 'a', 2), (3, 'b', 3)) t(id, g, n)\n    JOIN (VALUES (1, 'u'), (1, 'v'), (2, 'u'), (3, 'u'), (3, 'v')) s(id, k) ON t.id = s.id DECIDE x(REAL), y(REAL) SUCH THAT x <= 9 AND y <= 9 AND sum(t: t.n * x) + max(s.id * y) <= 10 MAXIMIZE sum(x) + sum(y)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "┌───────┬─────────┬────────┬────────────────────┐\n│  id   │    k    │   x    │         y          │\n│ int32 │ varchar │ double │       double       │\n├───────┼─────────┼────────┼────────────────────┤\n│     1 │ u       │    0.0 │                9.0 │\n│     1 │ v       │    0.0 │                9.0 │\n│     2 │ u       │    0.0 │                5.0 │\n│     3 │ u       │    0.0 │ 3.3333333333333335 │\n│     3 │ v       │    0.0 │ 3.3333333333333335 │\n└───────┴─────────┴────────┴────────────────────┘\n",
+   "stderr": ""
+  }
+ }
+}

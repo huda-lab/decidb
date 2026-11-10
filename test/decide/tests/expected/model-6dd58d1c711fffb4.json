@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT id, x FROM (VALUES (1, 2::BIGINT, 1::BIGINT, 1.0),\n        (2, 4611686018427387904::BIGINT, 4::BIGINT, NULL), (3, 3::BIGINT, 2::BIGINT, 2.0)) t(id, a, b, v)\n        DECIDE x(REAL) SUCH THAT x <= 9 MAXIMIZE sum(t.a * t.b * x + t.v * x)",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "any": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 3\nnum_rows: 0\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=9 int=0 bin=0 obj=3\ncol 1: lb=0 ub=9 int=0 bin=0 obj=0\ncol 2: lb=0 ub=9 int=0 bin=0 obj=8\n=== END MODEL DUMP ===\n"
+ }
+}

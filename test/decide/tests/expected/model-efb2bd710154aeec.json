@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT id, x FROM (VALUES (1, 'a', 3.0), (2, NULL, 4.0), (3, NULL, 5.0), (4, 'b', 6.0)) t(id, g, c)\n        DECIDE per t.g: x(INT) SUCH THAT x <= 10 AND x + 0 * t.c <= t.c",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "any": "=== DECIDB MODEL DUMP ===\nsense: minimize\nnum_vars: 2\nnum_rows: 0\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=3 int=1 bin=0 obj=0\ncol 1: lb=0 ub=6 int=1 bin=0 obj=0\n=== END MODEL DUMP ===\n"
+ }
+}

@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT id, x FROM (VALUES (1, 'a', 3.0, 2.0, true), (2, 'a', 5.0, 1.0, false), (3, 'b', 1.0, 4.0, true),\n    (4, 'b', 4.0, NULL, true)) t(id, g, c, w, p) DECIDE x(REAL) SUCH THAT x <= t.c AND x >= 1\n        MINIMIZE when t.p: max(t.w * x)",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "any": "=== DECIDB MODEL DUMP ===\nsense: minimize\nnum_vars: 5\nnum_rows: 2\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=1 ub=3 int=0 bin=0 obj=0\ncol 1: lb=1 ub=5 int=0 bin=0 obj=0\ncol 2: lb=1 ub=1 int=0 bin=0 obj=0\ncol 3: lb=1 ub=4 int=0 bin=0 obj=0\ncol 4: lb=0 ub=20 int=0 bin=0 obj=1\nrow 0: sense=> rhs=0 nnz=2 | 0:-2 4:1\nrow 1: sense=> rhs=0 nnz=2 | 2:-4 4:1\n=== END MODEL DUMP ===\n"
+ }
+}

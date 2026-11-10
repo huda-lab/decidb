@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT i, x FROM (SELECT i, CASE WHEN i = 2500 THEN -1.0 ELSE 1.0 END AS c, CASE WHEN i = 10 THEN 0.0 ELSE 1.0 END AS d\n    FROM range(3000) r(i)) t\n        DECIDE x(REAL) SUCH THAT x <= 9 AND x + abs(sqrt(t.c) * x - ln(t.d)) <= 20 MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Out of Range Error: cannot take logarithm of zero\n"
+  }
+ }
+}

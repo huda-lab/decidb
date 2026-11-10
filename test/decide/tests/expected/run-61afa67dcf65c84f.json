@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x FROM (SELECT id, g COLLATE NOCASE AS g, k, p, v FROM (VALUES (1, 'b', 1, 1, 4.0), (2, 'B', 2, 2, 5.0),\n        (3, 'a', 1, 1, 6.0), (4, 'A', 1, 2, 7.0)) r(id, g, k, p, v)) t DECIDE x(REAL) SUCH THAT x <= 9 AND per t.k: x <= at(first: t.v) over (t.p within t.g) MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Invalid Input Error: DECIDE: per t.k does not determine the timeline t.g of at(first: t.v) over (t.p within t.g). t.k = 1 spans t.g = 'b', 'a'.\n"
+  }
+ }
+}

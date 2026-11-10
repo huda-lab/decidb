@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT id, x FROM (VALUES (1, 'a', 'u', 3.0::DOUBLE, 2.0::DOUBLE), (2, 'a', NULL, 4.0::DOUBLE, 1.0::DOUBLE),\n    (3, NULL, 'v', 5.0::DOUBLE, 3.0::DOUBLE), (4, 'b', 'v', 6.0::DOUBLE, 4.0::DOUBLE)) t(id, g, k, c, w) DECIDE x(REAL), per (): y(REAL), per t.k: z(REAL)\n        SUCH THAT x <= 9 AND y <= 9 AND z <= 9 AND x - at(previous: z) over (t.id) <= 1 MAXIMIZE sum(x) + y + sum(z)",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "any": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 7\nnum_rows: 2\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=9 int=0 bin=0 obj=1\ncol 1: lb=0 ub=9 int=0 bin=0 obj=1\ncol 2: lb=0 ub=9 int=0 bin=0 obj=1\ncol 3: lb=0 ub=9 int=0 bin=0 obj=1\ncol 4: lb=0 ub=9 int=0 bin=0 obj=1\ncol 5: lb=0 ub=9 int=0 bin=0 obj=2\ncol 6: lb=0 ub=9 int=0 bin=0 obj=1\nrow 0: sense=< rhs=1 nnz=2 | 1:1 4:-1\nrow 1: sense=< rhs=1 nnz=2 | 3:1 5:-1\n=== END MODEL DUMP ===\n"
+ }
+}

@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x FROM (VALUES (1, 'a', 0.0, 2.0, 1.0), (2, 'a', 2.0, -1.0, 1.0)) t(id, g, a, w, v)\n        DECIDE x(REAL) SUCH THAT x <= 1 AND sum(ln(t.w) * t.v * x) by (t.g) + sum(when ln(t.a) > -100: x) by (t.g) <= 5\n        MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Out of Range Error: cannot take logarithm of a negative number\n"
+  }
+ }
+}

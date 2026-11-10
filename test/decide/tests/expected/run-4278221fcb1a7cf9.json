@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x FROM (VALUES (1, 'a', 1.0), (2, NULL, 0.0), (3, 'b', 2.0)) t(id, g, w)\n        DECIDE x(INT) SUCH THAT x <= 10 AND sum(x) <= 10 MAXIMIZE sum(per t.g: sum(ln(t.w) * x) by (t.g))",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "┌───────┬───────┐\n│  id   │   x   │\n│ int32 │ int64 │\n├───────┼───────┤\n│     1 │     0 │\n│     2 │     0 │\n│     3 │    10 │\n└───────┴───────┘\n",
+   "stderr": ""
+  }
+ }
+}

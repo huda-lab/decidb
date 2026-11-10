@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT t.id, s.k, x, y FROM (VALUES (1, 'a', 1), (2, 'a', 2), (3, 'b', 3)) t(id, g, n)\n    JOIN (VALUES (1, 'u'), (1, 'v'), (2, 'u'), (3, 'u'), (3, 'v')) s(id, k) ON t.id = s.id DECIDE x(REAL), y(REAL) SUCH THAT x <= 9 AND y <= 9 AND sum(t: t.n * x) + max(s.id * y) <= 10 MAXIMIZE sum(x) + sum(y)",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "any": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 11\nnum_rows: 6\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=9 int=0 bin=0 obj=1\ncol 1: lb=0 ub=9 int=0 bin=0 obj=1\ncol 2: lb=0 ub=9 int=0 bin=0 obj=1\ncol 3: lb=0 ub=9 int=0 bin=0 obj=1\ncol 4: lb=0 ub=9 int=0 bin=0 obj=1\ncol 5: lb=0 ub=9 int=0 bin=0 obj=1\ncol 6: lb=0 ub=9 int=0 bin=0 obj=1\ncol 7: lb=0 ub=9 int=0 bin=0 obj=1\ncol 8: lb=0 ub=9 int=0 bin=0 obj=1\ncol 9: lb=0 ub=9 int=0 bin=0 obj=1\ncol 10: lb=0 ub=27 int=0 bin=0 obj=0\nrow 0: sense=> rhs=0 nnz=2 | 1:-1 10:1\nrow 1: sense=> rhs=0 nnz=2 | 3:-1 10:1\nrow 2: sense=> rhs=0 nnz=2 | 5:-2 10:1\nrow 3: sense=> rhs=0 nnz=2 | 7:-3 10:1\nrow 4: sense=> rhs=0 nnz=2 | 9:-3 10:1\nrow 5: sense=< rhs=10 nnz=6 | 0:1 2:1 4:2 6:3 8:3 10:1\n=== END MODEL DUMP ===\n"
+ }
+}

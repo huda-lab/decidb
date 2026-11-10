@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x FROM (VALUES (1, 2.0), (2, 0.0), (3, -1.0)) t(id, w) DECIDE x(REAL) SUCH THAT x <= 9 AND ln(t.w) * x <= 100",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Out of Range Error: cannot take logarithm of zero\n"
+  }
+ }
+}

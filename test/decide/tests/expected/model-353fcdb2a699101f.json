@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT t.id FROM (VALUES (1, 'a', 3.0, true), (2, 'a', 4.0, false), (3, 'b', 5.0, true), (4, NULL, 6.0, true))\n    t(id, g, c, p) JOIN (VALUES (1, 'u'), (1, 'v'), (2, 'u'), (3, 'u'), (3, 'v'), (3, 'w'), (4, 'u')) s(id, k)\n    ON t.id = s.id DECIDE per t.id: x(REAL) SUCH THAT x <= 9 AND sum(t: power(x - t.c, 2)) by (t.g) <= 20 MAXIMIZE sum(t: x)",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "gurobi": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 4\nnum_rows: 0\nnum_qrows: 2\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=9 int=0 bin=0 obj=1\ncol 1: lb=0 ub=9 int=0 bin=0 obj=1\ncol 2: lb=0 ub=9 int=0 bin=0 obj=1\ncol 3: lb=0 ub=9 int=0 bin=0 obj=1\nqrow 0: sense=< rhs=-5 | 0:-6 1:-8 | 0,0:1 1,1:1\nqrow 1: sense=< rhs=-5 | 2:-10 | 2,2:1\n=== END MODEL DUMP ===\n"
+ }
+}

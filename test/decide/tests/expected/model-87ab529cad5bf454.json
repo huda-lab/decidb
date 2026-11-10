@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT id, x FROM (VALUES (1, 'b', 3.0::DOUBLE), (2, 'a', 4.0), (3, 'b', 5.0), (4, 'a', 4.0), (5, NULL, 1.0)) t(id, g, c) DECIDE x(REAL), per t.g: y(REAL), per (): z(REAL)\n        SUCH THAT x <= 9 AND y <= 9 AND z <= 9 AND per (): z + t.c <= 20 MAXIMIZE sum(x) + sum(y) + z",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "any": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 8\nnum_rows: 0\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=9 int=0 bin=0 obj=1\ncol 1: lb=0 ub=9 int=0 bin=0 obj=1\ncol 2: lb=0 ub=9 int=0 bin=0 obj=1\ncol 3: lb=0 ub=9 int=0 bin=0 obj=1\ncol 4: lb=0 ub=9 int=0 bin=0 obj=1\ncol 5: lb=0 ub=9 int=0 bin=0 obj=2\ncol 6: lb=0 ub=9 int=0 bin=0 obj=2\ncol 7: lb=0 ub=9 int=0 bin=0 obj=1\n=== END MODEL DUMP ===\n"
+ }
+}

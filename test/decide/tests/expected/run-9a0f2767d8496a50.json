@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x FROM (VALUES (1, 'A', 'a', 1, 4, 2), (2, 'A', 'a', 2, 6, 1), (3, 'A', 'a', 3, 6, 3),\n        (4, 'B', 'b', 1, 7, 4), (5, 'B', NULL, 2, 8, 2)) t(id, product, g, period, v, w) DECIDE x(REAL)\n        SUCH THAT x <= 9 AND x <= at(first: t.v) over (t.w) MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "┌───────┬────────┐\n│  id   │   x    │\n│ int32 │ double │\n├───────┼────────┤\n│     1 │    6.0 │\n│     2 │    6.0 │\n│     3 │    6.0 │\n│     4 │    6.0 │\n│     5 │    6.0 │\n└───────┴────────┘\n",
+   "stderr": ""
+  }
+ }
+}

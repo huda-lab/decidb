@@ -1,0 +1,11 @@
+{
+ "kind": "model",
+ "sql": "SELECT id, x FROM (VALUES (1, 'a', NULL, 3.0::DOUBLE, true), (2, 'a', 'u', 4.0, false), (3, 'b', 'v', 5.0, true), (4, NULL, 'v', 6.0, true), (5, 'b', 'u', 7.0, false), (6, 'b', 'v', 8.0, false)) t(id, g, k, c, p) DECIDE x(INT)\n        SUCH THAT x >= 0 AND x <= 5 AND avg(x) by (t.g) <> 3 MAXIMIZE sum(x)",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "gurobi": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 8\nnum_rows: 0\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 4\ncol 0: lb=0 ub=5 int=1 bin=0 obj=1\ncol 1: lb=0 ub=5 int=1 bin=0 obj=1\ncol 2: lb=0 ub=5 int=1 bin=0 obj=1\ncol 3: lb=0 ub=5 int=1 bin=0 obj=1\ncol 4: lb=0 ub=5 int=1 bin=0 obj=1\ncol 5: lb=0 ub=5 int=1 bin=0 obj=1\ncol 6: lb=0 ub=1 int=1 bin=1 obj=0\ncol 7: lb=0 ub=1 int=1 bin=1 obj=0\nind 0: bin=6==0 sense=< rhs=5 | 0:1 1:1\nind 1: bin=6==1 sense=> rhs=7 | 0:1 1:1\nind 2: bin=7==0 sense=< rhs=8 | 2:1 4:1 5:1\nind 3: bin=7==1 sense=> rhs=10 | 2:1 4:1 5:1\n=== END MODEL DUMP ===\n",
+  "highs": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 8\nnum_rows: 4\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=5 int=1 bin=0 obj=1\ncol 1: lb=0 ub=5 int=1 bin=0 obj=1\ncol 2: lb=0 ub=5 int=1 bin=0 obj=1\ncol 3: lb=0 ub=5 int=1 bin=0 obj=1\ncol 4: lb=0 ub=5 int=1 bin=0 obj=1\ncol 5: lb=0 ub=5 int=1 bin=0 obj=1\ncol 6: lb=0 ub=1 int=1 bin=1 obj=0\ncol 7: lb=0 ub=1 int=1 bin=1 obj=0\nrow 0: sense=< rhs=5 nnz=3 | 0:1 1:1 6:-6\nrow 1: sense=> rhs=-1 nnz=3 | 0:1 1:1 6:-8\nrow 2: sense=< rhs=8 nnz=4 | 2:1 4:1 5:1 7:-8\nrow 3: sense=> rhs=-1 nnz=4 | 2:1 4:1 5:1 7:-11\n=== END MODEL DUMP ===\n"
+ }
+}

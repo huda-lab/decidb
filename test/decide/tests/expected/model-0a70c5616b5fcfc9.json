@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT id, x, y FROM (VALUES (1, 'a', 3.0::DOUBLE), (2, 'a', 4.0::DOUBLE), (3, 'b', 5.0::DOUBLE)) t(id, g, c) DECIDE x(REAL), per t.g: y(REAL) SUCH THAT x + y <= t.c MAXIMIZE sum(per t.g: y)",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "any": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 5\nnum_rows: 3\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=5 int=0 bin=0 obj=0\ncol 1: lb=0 ub=5 int=0 bin=0 obj=0\ncol 2: lb=0 ub=5 int=0 bin=0 obj=0\ncol 3: lb=0 ub=5 int=0 bin=0 obj=1\ncol 4: lb=0 ub=5 int=0 bin=0 obj=1\nrow 0: sense=< rhs=3 nnz=2 | 0:1 3:1\nrow 1: sense=< rhs=4 nnz=2 | 1:1 3:1\nrow 2: sense=< rhs=5 nnz=2 | 2:1 4:1\n=== END MODEL DUMP ===\n"
+ }
+}

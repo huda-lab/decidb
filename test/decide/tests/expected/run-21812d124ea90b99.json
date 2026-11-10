@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT i, x FROM (VALUES (1, 'NaN'::DOUBLE, 0.0), (2, 1.0, 1.0)) t(i, c, d)\n        DECIDE x(REAL) SUCH THAT x <= ln(t.d) + 9 AND x + abs(t.c * x - 1) <= 20 MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Out of Range Error: cannot take logarithm of zero\n"
+  }
+ }
+}

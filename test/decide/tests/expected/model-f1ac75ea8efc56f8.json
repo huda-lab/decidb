@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT id, x, y FROM (VALUES (1, 'a', 3.0, 2.0, true), (2, 'a', 5.0, 1.0, false), (3, 'b', 1.0, 4.0, true),\n    (4, 'b', 4.0, NULL, true)) t(id, g, c, w, p) DECIDE x(INT), y(INT)\n        SUCH THAT sum(x) + max(when t.c > 100: y) <= 9 AND x <= 5 AND y <= 5 MAXIMIZE sum(x) + sum(y)",
+ "env": {
+  "warnings": "constrains nothing"
+ },
+ "values": {
+  "any": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 8\nnum_rows: 0\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=5 int=1 bin=0 obj=1\ncol 1: lb=0 ub=5 int=1 bin=0 obj=1\ncol 2: lb=0 ub=5 int=1 bin=0 obj=1\ncol 3: lb=0 ub=5 int=1 bin=0 obj=1\ncol 4: lb=0 ub=5 int=1 bin=0 obj=1\ncol 5: lb=0 ub=5 int=1 bin=0 obj=1\ncol 6: lb=0 ub=5 int=1 bin=0 obj=1\ncol 7: lb=0 ub=5 int=1 bin=0 obj=1\n=== END MODEL DUMP ===\n"
+ }
+}

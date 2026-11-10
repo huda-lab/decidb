@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "PRAGMA diagnose_decide_infeasible_slack_scope='expanded'; DIAGNOSE SELECT id, y FROM (SELECT id, g COLLATE NOCASE AS g, c, v FROM (VALUES\n        (1, 'A', -1, 1.0), (2, 'a', 1, 2.0), (3, 'a', 1, 3.0), (4, 'b', 1, 1.0)) w(id, g, c, v)) t\n        DECIDE per t.g: y(BOOL) SUCH THAT when t.c > 0 per t.g: y + t.v >= 10 MAXIMIZE sum(y)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "┌────────────┬──────────────────────────────────────┬──────────────────────────────────────────┬────────┬───────┬─────────┬──────────────────────┬─────────┬───────┐\n│   state    │                clause                │             suggested_change             │ amount │ total │  scope  │     edit_source      │  group  │  row  │\n│  varchar   │               varchar                │                 varchar                  │ double │ int64 │ varchar │       varchar        │ varchar │ int64 │\n├────────────┼──────────────────────────────────────┼──────────────────────────────────────────┼────────┼───────┼─────────┼──────────────────────┼─────────┼───────┤\n│ infeasible │ when t.c > 0 per t.g: y >= -t.v + 10 │ when t.c > 0 per t.g: y >= -t.v + 10 - 7 │    7.0 │  NULL │ NULL    │ expanded_group       │ a, 2.0  │  NULL │\n│ infeasible │ when t.c > 0 per t.g: y >= -t.v + 10 │ when t.c > 0 per t.g: y >= -t.v + 10 - 6 │    6.0 │  NULL │ NULL    │ expanded_group       │ a, 3.0  │  NULL │\n│ infeasible │ when t.c > 0 per t.g: y >= -t.v + 10 │ when t.c > 0 per t.g: y >= -t.v + 10 - 8 │    8.0 │  NULL │ NULL    │ expanded_group       │ b       │  NULL │\n│ infeasible │ NULL                                 │ NULL                                     │    4.0 │  NULL │ NULL    │ achievable_objective │ NULL    │  NULL │\n└────────────┴──────────────────────────────────────┴──────────────────────────────────────────┴────────┴───────┴─────────┴──────────────────────┴─────────┴───────┘\n",
+   "stderr": ""
+  }
+ }
+}

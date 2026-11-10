@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT id, x, y FROM (VALUES (1, 'a', 3.0, 2.0, true), (2, 'a', 5.0, 1.0, false), (3, 'b', 1.0, 4.0, true),\n    (4, 'b', 4.0, NULL, true)) t(id, g, c, w, p) DECIDE x(REAL), y(REAL) SUCH THAT x <= 9 AND y <= 9 MAXIMIZE sum(x) - max(per t.g: t.c * y)",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "any": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 9\nnum_rows: 4\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=9 int=0 bin=0 obj=1\ncol 1: lb=0 ub=9 int=0 bin=0 obj=0\ncol 2: lb=0 ub=9 int=0 bin=0 obj=1\ncol 3: lb=0 ub=9 int=0 bin=0 obj=0\ncol 4: lb=0 ub=9 int=0 bin=0 obj=1\ncol 5: lb=0 ub=9 int=0 bin=0 obj=0\ncol 6: lb=0 ub=9 int=0 bin=0 obj=1\ncol 7: lb=0 ub=9 int=0 bin=0 obj=0\ncol 8: lb=0 ub=45 int=0 bin=0 obj=-1\nrow 0: sense=> rhs=0 nnz=2 | 1:-3 8:1\nrow 1: sense=> rhs=0 nnz=2 | 3:-5 8:1\nrow 2: sense=> rhs=0 nnz=2 | 5:-1 8:1\nrow 3: sense=> rhs=0 nnz=2 | 7:-4 8:1\n=== END MODEL DUMP ===\n"
+ }
+}

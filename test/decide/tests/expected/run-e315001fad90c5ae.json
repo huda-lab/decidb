@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT t.id FROM (VALUES (1, 'a', 3.0, 1.0, true), (2, 'a', 5.0, 2.0, false), (3, 'b', 1.0, 3.0, true),\n    (4, 'b', 4.0, 2.0, true)) t(id, g, c, w, p) DECIDE x(REAL), y(REAL) SUCH THAT x <= 9 AND y <= 9 AND sum(power(x - t.c, 2)) / (SELECT 0.0) <= 9",
+ "env": {},
+ "values": {
+  "gurobi": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Invalid Input Error: DECIDE constraint: division by zero -- the factor on a squared aggregate evaluated to 0.\n"
+  }
+ }
+}

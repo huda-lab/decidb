@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "DIAGNOSE SELECT id, x FROM (VALUES (1, 3.0), (2, 4.0)) t(id, c)\n        DECIDE x(INT), y(INT) SUCH THAT x >= 4 AND x <= 2 AND x + y <= 20",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "┌────────────┬─────────┬──────────────────┬────────┬───────┬─────────┬────────────────┬─────────┬───────┐\n│   state    │ clause  │ suggested_change │ amount │ total │  scope  │  edit_source   │  group  │  row  │\n│  varchar   │ varchar │     varchar      │ double │ int64 │ varchar │    varchar     │ varchar │ int64 │\n├────────────┼─────────┼──────────────────┼────────┼───────┼─────────┼────────────────┼─────────┼───────┤\n│ infeasible │ x >= 4  │ x >= 2           │    2.0 │  NULL │ NULL    │ source_literal │ NULL    │  NULL │\n└────────────┴─────────┴──────────────────┴────────┴───────┴─────────┴────────────────┴─────────┴───────┘\n",
+   "stderr": ""
+  }
+ }
+}

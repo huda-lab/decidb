@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT id, x, y FROM (VALUES (1, 'a', 3.0::DOUBLE), (2, NULL, 3.0::DOUBLE)) t(id, g, c)\n        DECIDE x(REAL), per t.g: y(REAL) SUCH THAT x <= 1 AND y <= 2 MAXIMIZE when t.id = 2: sum(x) + t.c * y",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "any": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 3\nnum_rows: 0\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=1 int=0 bin=0 obj=0\ncol 1: lb=0 ub=1 int=0 bin=0 obj=1\ncol 2: lb=0 ub=2 int=0 bin=0 obj=0\n=== END MODEL DUMP ===\n"
+ }
+}

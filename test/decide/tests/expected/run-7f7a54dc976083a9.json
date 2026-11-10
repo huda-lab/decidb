@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT T.k, y FROM (VALUES (1, NULL), (2, 4.0), (NULL, 5.0)) T(k, v)\n        JOIN (VALUES (1, 'u'), (1, 'w'), (2, 'u'), (NULL, 'z')) W(k, c) ON T.k IS NOT DISTINCT FROM W.k\n        DECIDE per T: y(REAL) SUCH THAT y <= 9 MAXIMIZE sum(T: y)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "┌───────┬────────┐\n│   k   │   y    │\n│ int32 │ double │\n├───────┼────────┤\n│     1 │    9.0 │\n│     1 │    9.0 │\n│     2 │    9.0 │\n│  NULL │    9.0 │\n└───────┴────────┘\n",
+   "stderr": ""
+  }
+ }
+}

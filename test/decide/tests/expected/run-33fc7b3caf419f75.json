@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x FROM (VALUES (1, 'a', 99999999999999999999999999999999999999::DECIMAL(38, 0)),\n        (2, 'a', 99999999999999999999999999999999999999::DECIMAL(38, 0)), (3, 'b', 5::DECIMAL(38, 0))) t(id, g, c)\n        DECIDE x(REAL) SUCH THAT x <= 9 AND x <= sum(t.c) by (t.g) / 1e40 MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Out of Range Error: Overflow in HUGEINT addition: 99999999999999999999999999999999999999 + 99999999999999999999999999999999999999\n"
+  }
+ }
+}

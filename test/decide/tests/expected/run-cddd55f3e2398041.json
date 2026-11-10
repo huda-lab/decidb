@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT t.id FROM (VALUES (1, 'a', 1e308::DOUBLE, 1.0), (2, 'b', 1e308::DOUBLE, 2.0)) t(id, g, s, c) DECIDE x(REAL) SUCH THAT x <= 5 AND t.c * sum(t.s * x + t.s * x) <= 10 MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Invalid Input Error: DECIDE: sum(t.s * x + t.s * x) computes a number too large for a DOUBLE. Scale its data down.\n"
+  }
+ }
+}

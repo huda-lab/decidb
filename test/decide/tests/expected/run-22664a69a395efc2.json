@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x, y FROM (VALUES (1, 'a', 3.0, 2.0, true), (2, 'a', 5.0, 1.0, false), (3, 'b', 1.0, 4.0, true),\n    (4, 'b', 4.0, NULL, true)) t(id, g, c, w, p) DECIDE x(INT), y(INT)\n        SUCH THAT sum(x) + max(when t.c > 100: y) <= 9 AND x <= 5 AND y <= 5 MAXIMIZE sum(x) + sum(y)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "┌───────┬───────┬───────┐\n│  id   │   x   │   y   │\n│ int32 │ int64 │ int64 │\n├───────┼───────┼───────┤\n│     1 │     5 │     5 │\n│     2 │     5 │     5 │\n│     3 │     5 │     5 │\n│     4 │     5 │     5 │\n└───────┴───────┴───────┘\n",
+   "stderr": "DECIDE warning: 'sum(x) + max(when t.c > 100: y) <= 9' constrains nothing: its one instance has no value, so it is skipped.\n"
+  }
+ }
+}

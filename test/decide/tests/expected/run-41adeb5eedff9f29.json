@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "PRAGMA diagnose_decide_infeasible_slack_scope='expanded'; DIAGNOSE SELECT id, y FROM (SELECT id, g, h COLLATE NOCASE AS h, c FROM (VALUES (1, 'a', 'U', 3.0),\n        (2, 'a', 'v', 4.0), (3, 'b', 'w', 7.0), (4, 'a', 'u', 2.0)) v(id, g, h, c)) t\n        DECIDE per t.g: y(BOOL) SUCH THAT per t.g: y + sum(t.c) by (t.h) <= 4.5 MAXIMIZE sum(y)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "┌────────────┬────────────────────────────────────────┬──────────────────────────────────────────────┬────────┬───────┬─────────┬──────────────────────┬─────────┬───────┐\n│   state    │                 clause                 │               suggested_change               │ amount │ total │  scope  │     edit_source      │  group  │  row  │\n│  varchar   │                varchar                 │                   varchar                    │ double │ int64 │ varchar │       varchar        │ varchar │ int64 │\n├────────────┼────────────────────────────────────────┼──────────────────────────────────────────────┼────────┼───────┼─────────┼──────────────────────┼─────────┼───────┤\n│ infeasible │ per t.g: y <= -sum(t.c) by (t.h) + 4.5 │ per t.g: y <= -sum(t.c) by (t.h) + 4.5 + 0.5 │    0.5 │  NULL │ NULL    │ expanded_group       │ a, U    │  NULL │\n│ infeasible │ per t.g: y <= -sum(t.c) by (t.h) + 4.5 │ per t.g: y <= -sum(t.c) by (t.h) + 4.5 + 2.5 │    2.5 │  NULL │ NULL    │ expanded_group       │ b       │  NULL │\n│ infeasible │ NULL                                   │ NULL                                         │    0.0 │  NULL │ NULL    │ achievable_objective │ NULL    │  NULL │\n└────────────┴────────────────────────────────────────┴──────────────────────────────────────────────┴────────┴───────┴─────────┴──────────────────────┴─────────┴───────┘\n",
+   "stderr": ""
+  }
+ }
+}

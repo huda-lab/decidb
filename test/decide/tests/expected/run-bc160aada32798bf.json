@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SET decide_frame_limit=3; SELECT id, x FROM (VALUES (1, 'A', 1, 4, 2), (2, 'A', 2, 6, 1), (3, 'A', 3, 1, 3), (4, 'B', 1, 7, 2), (5, 'B', 2, 3, 1)) t(id, product, period, v, w) DECIDE x(INT)\n        SUCH THAT x <= 9 MAXIMIZE when t.product = 'A': at(previous: x) over (t.period within t.product)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Invalid Input Error: DECIDE objective: 'at(previous: x) over (t.period within t.product)' reads more than one position over the kept rows (t.period = 2, 3), so the objective would be produced more than once; move it inside a reducer or fix it with when.\n"
+  }
+ }
+}

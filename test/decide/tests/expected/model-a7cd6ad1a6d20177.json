@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT id, x, y FROM (VALUES (1, 2.0), (2, NULL), (3, 4.0)) t(id, w)\n        DECIDE x(REAL), y(REAL) SUCH THAT x <= 10 AND t.w * x + y <= 8",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "any": "=== DECIDB MODEL DUMP ===\nsense: minimize\nnum_vars: 6\nnum_rows: 2\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=10 int=0 bin=0 obj=0\ncol 1: lb=0 ub=1e+30 int=0 bin=0 obj=0\ncol 2: lb=0 ub=10 int=0 bin=0 obj=0\ncol 3: lb=0 ub=1e+30 int=0 bin=0 obj=0\ncol 4: lb=0 ub=10 int=0 bin=0 obj=0\ncol 5: lb=0 ub=1e+30 int=0 bin=0 obj=0\nrow 0: sense=< rhs=8 nnz=2 | 0:2 1:1\nrow 1: sense=< rhs=8 nnz=2 | 4:4 5:1\n=== END MODEL DUMP ===\n"
+ }
+}

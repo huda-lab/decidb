@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x FROM (VALUES (1, 'a', 3.0::DOUBLE), (2, NULL, 'NaN'::DOUBLE), (3, 'b', 5.0)) t(id, g, c)\n        DECIDE x(REAL) SUCH THAT x <= 9 AND sum(t.c * x) by (t.g) <= 8 MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Invalid Input Error: DECIDE: t.c is NaN or infinite on some rows. Skip those rows with 'when isfinite(t.c):'.\n"
+  }
+ }
+}

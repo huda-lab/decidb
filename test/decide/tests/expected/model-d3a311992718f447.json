@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT t.id FROM (VALUES (1, 'a', 3.0), (2, NULL, 1000.0), (3, 'b', 1.0)) t(id, g, c) DECIDE per t.g: x(REAL), per t.g: y(REAL) SUCH THAT x <= 9 AND y <= 9 AND x >= 0 AND y >= 0 MINIMIZE max(x * y - t.c::TINYINT)",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "gurobi": "=== DECIDB MODEL DUMP ===\nsense: minimize\nnum_vars: 8\nnum_rows: 2\nnum_qrows: 2\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=-1e+30 ub=1e+30 int=0 bin=0 obj=0\ncol 1: lb=0 ub=0 int=0 bin=0 obj=0\ncol 2: lb=-1e+30 ub=1e+30 int=0 bin=0 obj=0\ncol 3: lb=0 ub=9 int=0 bin=0 obj=0\ncol 4: lb=0 ub=9 int=0 bin=0 obj=0\ncol 5: lb=0 ub=9 int=0 bin=0 obj=0\ncol 6: lb=0 ub=9 int=0 bin=0 obj=0\ncol 7: lb=-1e+30 ub=1e+30 int=0 bin=0 obj=1\nrow 0: sense=> rhs=0 nnz=2 | 0:-1 7:1\nrow 1: sense=> rhs=0 nnz=2 | 2:-1 7:1\nqrow 0: sense=> rhs=-3 | 0:1 | 5,3:-1\nqrow 1: sense=> rhs=-1 | 2:1 | 6,4:-1\n=== END MODEL DUMP ===\n"
+ }
+}

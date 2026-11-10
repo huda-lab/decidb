@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT t.id FROM (VALUES (1, 'a', 3.0, 1.0, true), (2, 'a', 5.0, 2.0, false), (3, 'b', 1.0, 3.0, true),\n    (4, 'b', 4.0, 2.0, true)) t(id, g, c, w, p) DECIDE x(REAL), per (): y(REAL), per (): z(REAL) SUCH THAT x <= 9 AND x <= 9 AND y <= 3 AND z <= 3 MAXIMIZE when t.id > 1: sum(x) + 2 * y * z",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "gurobi": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 6\nnum_rows: 0\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=9 int=0 bin=0 obj=0\ncol 1: lb=0 ub=9 int=0 bin=0 obj=1\ncol 2: lb=0 ub=9 int=0 bin=0 obj=1\ncol 3: lb=0 ub=9 int=0 bin=0 obj=1\ncol 4: lb=0 ub=3 int=0 bin=0 obj=0\ncol 5: lb=0 ub=3 int=0 bin=0 obj=0\nqobj: nonconvex=1\n  q 5,4:2\n=== END MODEL DUMP ===\n"
+ }
+}

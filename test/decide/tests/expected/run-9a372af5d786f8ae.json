@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SET decide_frame_limit=3; SELECT id, x FROM (VALUES (1, 'A', 1, 4, 2), (2, 'A', 2, 6, 1), (3, 'A', 3, 1, 3), (4, 'B', 1, 7, 2), (5, 'B', 2, 3, 1)) t(id, product, period, v, w) DECIDE x(INT)\n        SUCH THAT per t.w: x <= at(first: t.v) over (t.period within t.product) MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Invalid Input Error: DECIDE: per t.w does not determine the timeline t.product of at(first: t.v) over (t.period within t.product). t.w = 2 spans t.product = 'A', 'B'.\n"
+  }
+ }
+}

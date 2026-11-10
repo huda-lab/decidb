@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT t.id FROM (VALUES (1, 'a', 4.0, 1.0), (2, NULL, -1.0, 2.0), (3, 'b', 9.0, 3.0)) t(id, g, s, c) DECIDE x(REAL) SUCH THAT x <= 5 AND when sqrt(t.s) > 0: x <= 0.5 * sum(ln(t.c - 1.5) * x) + 0.5 * sum(x) by (t.g) + 9 MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Out of Range Error: cannot take square root of a negative number\n"
+  }
+ }
+}

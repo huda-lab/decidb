@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT i, x FROM (VALUES (1, -1.0, 0.0), (2, 1.0, 1.0)) t(i, c, d)\n        DECIDE x(REAL) SUCH THAT x <= 9 AND x + abs(sqrt(t.c) * x - ln(t.d)) <= 20 MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Out of Range Error: cannot take logarithm of zero\n"
+  }
+ }
+}

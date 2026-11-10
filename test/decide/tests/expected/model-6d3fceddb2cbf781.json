@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT id, x FROM (VALUES (1, 'A', 1, 4, 2), (2, 'A', 2, 6, 2), (3, NULL, 1, 9, 2)) t(id, product, period, v, w) DECIDE x(INT)\n        SUCH THAT x <= 9 AND per t.w: x >= at(first: t.v) over (t.period within t.product) MAXIMIZE sum(x)",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "any": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 3\nnum_rows: 2\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=9 int=1 bin=0 obj=1\ncol 1: lb=0 ub=9 int=1 bin=0 obj=1\ncol 2: lb=0 ub=9 int=1 bin=0 obj=1\nrow 0: sense=> rhs=4 nnz=1 | 0:1\nrow 1: sense=> rhs=4 nnz=1 | 1:1\n=== END MODEL DUMP ===\n"
+ }
+}

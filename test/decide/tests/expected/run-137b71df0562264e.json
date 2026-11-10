@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "DIAGNOSE SELECT id, x FROM (VALUES (1, 'b', 3.0::DOUBLE), (2, 'a', 4.0), (3, 'b', 5.0), (4, 'a', 4.0), (5, NULL, 1.0)) t(id, g, c) DECIDE x(REAL), per t.g: y(REAL), per (): z(REAL)\n        SUCH THAT x <= 9 AND y <= 9 AND z <= 9 AND per t.g: x + t.c <= 20 MAXIMIZE sum(x) + sum(y) + z",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "┌──────────┬─────────┬──────────────────┬────────┬───────┬─────────┬─────────────┬─────────┬───────┐\n│  state   │ clause  │ suggested_change │ amount │ total │  scope  │ edit_source │  group  │  row  │\n│ varchar  │ varchar │     varchar      │ double │ int64 │ varchar │   varchar   │ varchar │ int64 │\n├──────────┼─────────┼──────────────────┼────────┼───────┼─────────┼─────────────┼─────────┼───────┤\n│ feasible │ NULL    │ NULL             │   NULL │  NULL │ NULL    │ NULL        │ NULL    │  NULL │\n└──────────┴─────────┴──────────────────┴────────┴───────┴─────────┴─────────────┴─────────┴───────┘\n",
+   "stderr": ""
+  }
+ }
+}

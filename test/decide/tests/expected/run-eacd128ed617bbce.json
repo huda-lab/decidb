@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SET decide_frame_limit=3; SELECT id, x FROM (VALUES (1, 'A', 1, 4, 2), (2, 'A', 2, 6, 1), (3, 'A', 3, 1, 3), (4, 'B', 1, 7, 2), (5, 'B', 2, 3, 1)) t(id, product, period, v, w) DECIDE x(INT)\n        SUCH THAT x <= sqrt(t.v - 5) AND x <= at(next else 0: t.v) over (t.id) + at(previous else 0: t.v) over (t.period) MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Invalid Input Error: DECIDE: at(previous else 0: t.v) over (t.period) finds 2 rows at t.period = 1; a position must hold one row.\n"
+  }
+ }
+}

@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x, y FROM (VALUES (1, 1.0, 'NaN'::DOUBLE), (2, 'NaN'::DOUBLE, 1.0), (3, 1.0, 1.0)) t(id, v, w) DECIDE x(REAL), y(REAL)\n        SUCH THAT x <= 9 AND y <= 9 AND sum(t.v * x) + max(t.w * y) <= 10 MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Invalid Input Error: DECIDE: t.v is NaN or infinite on some rows. Skip those rows with 'when isfinite(t.v):'.\n"
+  }
+ }
+}

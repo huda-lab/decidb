@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT id, x, y FROM (VALUES (1, 'a', 3.0::DOUBLE, false), (2, 'a', 4.0::DOUBLE, true), (3, 'b', NULL, true)) t(id, g, c, p)\n        DECIDE x(REAL), per (): y(REAL) SUCH THAT x <= 9 AND y <= 4 MAXIMIZE avg(t.c * x)",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "any": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 4\nnum_rows: 0\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=9 int=0 bin=0 obj=1.5\ncol 1: lb=0 ub=9 int=0 bin=0 obj=2\ncol 2: lb=0 ub=9 int=0 bin=0 obj=0\ncol 3: lb=0 ub=4 int=0 bin=0 obj=0\n=== END MODEL DUMP ===\n"
+ }
+}

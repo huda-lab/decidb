@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x, y FROM (VALUES (1, 1.0, 'NaN'::DOUBLE), (2, 'NaN'::DOUBLE, 1.0), (3, 1.0, 1.0)) t(id, v, w) DECIDE x(REAL), y(REAL)\n        SUCH THAT x <= 9 AND y <= 9 AND sum(x) + max(1e308 * 10 * y) <= 10 MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Invalid Input Error: DECIDE: sum(x) + max(1e308 * 10 * y) <= 10 computes a number too large for a DOUBLE. Scale its data down.\n"
+  }
+ }
+}

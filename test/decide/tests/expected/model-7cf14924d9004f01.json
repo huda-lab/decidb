@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT t.id, s.k, keep FROM (VALUES (1, 'a', 1), (2, 'a', 2), (3, 'b', 3)) t(id, g, n)\n    JOIN (VALUES (1, 'u'), (1, 'v'), (2, 'u'), (3, 'u'), (3, 'v')) s(id, k) ON t.id = s.id DECIDE per t: keep(BOOL) SUCH THAT MIN(t: t.n * keep) <= 1 AND SUM(t: keep) >= 2 MAXIMIZE SUM(t: keep)",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "any": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 9\nnum_rows: 8\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=1 int=1 bin=1 obj=1\ncol 1: lb=0 ub=1 int=1 bin=1 obj=1\ncol 2: lb=0 ub=1 int=1 bin=1 obj=1\ncol 3: lb=0 ub=3 int=0 bin=0 obj=0\ncol 4: lb=0 ub=1 int=1 bin=1 obj=0\ncol 5: lb=0 ub=1 int=1 bin=1 obj=0\ncol 6: lb=0 ub=1 int=1 bin=1 obj=0\ncol 7: lb=0 ub=1 int=1 bin=1 obj=0\ncol 8: lb=0 ub=1 int=1 bin=1 obj=0\nrow 0: sense=> rhs=2 nnz=3 | 0:1 1:1 2:1\nrow 1: sense=> rhs=-3 nnz=3 | 0:-1 3:1 4:-3\nrow 2: sense=> rhs=-3 nnz=3 | 0:-1 3:1 5:-3\nrow 3: sense=> rhs=-3 nnz=3 | 1:-2 3:1 6:-3\nrow 4: sense=> rhs=-3 nnz=3 | 2:-3 3:1 7:-3\nrow 5: sense=> rhs=-3 nnz=3 | 2:-3 3:1 8:-3\nrow 6: sense=> rhs=1 nnz=5 | 4:1 5:1 6:1 7:1 8:1\nrow 7: sense=< rhs=1 nnz=1 | 3:1\n=== END MODEL DUMP ===\n"
+ }
+}

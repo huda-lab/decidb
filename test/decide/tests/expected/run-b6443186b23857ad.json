@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x FROM (VALUES (1, 1.0::DOUBLE), (2, 'NaN'::DOUBLE), (3, 4.0::DOUBLE)) t(id, f)\n        DECIDE x(REAL) SUCH THAT x <= 100 AND x <= sqrt(t.f - 3) AND x <= min(at(first: t.f) over (t.id within t.id)) MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Invalid Input Error: DECIDE: min(at(first: t.f) over (t.id within t.id)) reads a NaN on some rows. Skip those rows with a 'when' on the column it reads.\n"
+  }
+ }
+}

@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT t.id FROM (VALUES (1, 'a', 3.0, 1.0, true), (2, NULL, 5.0, 2.0, false), (3, 'b', 1.0, 3.0, true),\n    (4, 'b', NULL, 2.0, true)) t(id, g, c, w, p) DECIDE x(REAL), per t.g: b(BOOL)\n        SUCH THAT x <= 9 AND b * x <= 5 MAXIMIZE sum(x) + sum(b)",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "any": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 10\nnum_rows: 9\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=9 int=0 bin=0 obj=1\ncol 1: lb=0 ub=5 int=0 bin=0 obj=0\ncol 2: lb=0 ub=9 int=0 bin=0 obj=1\ncol 3: lb=0 ub=0 int=0 bin=0 obj=0\ncol 4: lb=0 ub=9 int=0 bin=0 obj=1\ncol 5: lb=0 ub=5 int=0 bin=0 obj=0\ncol 6: lb=0 ub=9 int=0 bin=0 obj=1\ncol 7: lb=0 ub=5 int=0 bin=0 obj=0\ncol 8: lb=0 ub=1 int=1 bin=1 obj=1\ncol 9: lb=0 ub=1 int=1 bin=1 obj=2\nrow 0: sense=< rhs=0 nnz=2 | 1:1 8:-9\nrow 1: sense=> rhs=-9 nnz=3 | 0:-1 1:1 8:-9\nrow 2: sense=< rhs=0 nnz=2 | 0:-1 1:1\nrow 3: sense=< rhs=0 nnz=2 | 5:1 9:-9\nrow 4: sense=> rhs=-9 nnz=3 | 4:-1 5:1 9:-9\nrow 5: sense=< rhs=0 nnz=2 | 4:-1 5:1\nrow 6: sense=< rhs=0 nnz=2 | 7:1 9:-9\nrow 7: sense=> rhs=-9 nnz=3 | 6:-1 7:1 9:-9\nrow 8: sense=< rhs=0 nnz=2 | 6:-1 7:1\n=== END MODEL DUMP ===\n"
+ }
+}

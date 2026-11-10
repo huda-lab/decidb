@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x FROM (SELECT id, g COLLATE NOCASE AS g, k, p, v FROM (VALUES (1, 'b', 1, 1, 4.0), (2, 'B', 1, 1, 5.0),\n        (3, 'b', 1, 2, 6.0), (4, 'a', 1, 1, 7.0)) r(id, g, k, p, v)) t DECIDE x(REAL) SUCH THAT x <= 9 AND x <= at(previous else 0: t.v) over (t.p within t.g) MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Invalid Input Error: DECIDE: at(previous else 0: t.v) over (t.p within t.g) finds 2 rows at t.g = 'b', t.p = 1; a position must hold one row.\n"
+  }
+ }
+}

@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x FROM (VALUES (1, NULL::DOUBLE, 1.0), (2, NULL, 2.0)) t(id, n, d) DECIDE x(REAL) SUCH THAT x + 2 <= t.n AND x + 1 <= t.d",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "┌───────┬────────┐\n│  id   │   x    │\n│ int32 │ double │\n├───────┼────────┤\n│     1 │    0.0 │\n│     2 │    0.0 │\n└───────┴────────┘\n",
+   "stderr": "DECIDE warning: 'x + 2 <= t.n' constrains nothing: each of its 2 instances has no value, so each is skipped.\n"
+  }
+ }
+}

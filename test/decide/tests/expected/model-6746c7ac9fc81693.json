@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT t.id FROM (VALUES (1, 'a', 3.0, 1.0, true), (2, NULL, 5.0, 2.0, false), (3, 'b', 1.0, 3.0, true),\n    (4, 'b', NULL, 2.0, true)) t(id, g, c, w, p) DECIDE x(REAL), y(REAL) SUCH THAT x <= 9 AND y <= 9 AND x >= 0 AND y >= 0 MINIMIZE max(x * y - t.c)",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "gurobi": "=== DECIDB MODEL DUMP ===\nsense: minimize\nnum_vars: 13\nnum_rows: 3\nnum_qrows: 3\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=9 int=0 bin=0 obj=0\ncol 1: lb=0 ub=9 int=0 bin=0 obj=0\ncol 2: lb=-1e+30 ub=1e+30 int=0 bin=0 obj=0\ncol 3: lb=0 ub=9 int=0 bin=0 obj=0\ncol 4: lb=0 ub=9 int=0 bin=0 obj=0\ncol 5: lb=-1e+30 ub=1e+30 int=0 bin=0 obj=0\ncol 6: lb=0 ub=9 int=0 bin=0 obj=0\ncol 7: lb=0 ub=9 int=0 bin=0 obj=0\ncol 8: lb=-1e+30 ub=1e+30 int=0 bin=0 obj=0\ncol 9: lb=0 ub=9 int=0 bin=0 obj=0\ncol 10: lb=0 ub=9 int=0 bin=0 obj=0\ncol 11: lb=-1e+30 ub=1e+30 int=0 bin=0 obj=0\ncol 12: lb=-1e+30 ub=1e+30 int=0 bin=0 obj=1\nrow 0: sense=> rhs=0 nnz=2 | 2:-1 12:1\nrow 1: sense=> rhs=0 nnz=2 | 5:-1 12:1\nrow 2: sense=> rhs=0 nnz=2 | 8:-1 12:1\nqrow 0: sense=> rhs=-3 | 2:1 | 1,0:-1\nqrow 1: sense=> rhs=-5 | 5:1 | 4,3:-1\nqrow 2: sense=> rhs=-1 | 8:1 | 7,6:-1\n=== END MODEL DUMP ===\n"
+ }
+}

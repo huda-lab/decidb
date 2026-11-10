@@ -1,0 +1,10 @@
+{
+ "kind": "model",
+ "sql": "SELECT id, x FROM (VALUES (1, 3.0), (2, 5.0), (3, 4.0)) t(id, c) DECIDE x(REAL) SUCH THAT x <= t.c AND x + 1 >= 2",
+ "env": {
+  "warnings": ""
+ },
+ "values": {
+  "any": "=== DECIDB MODEL DUMP ===\nsense: minimize\nnum_vars: 3\nnum_rows: 0\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=1 ub=3 int=0 bin=0 obj=0\ncol 1: lb=1 ub=5 int=0 bin=0 obj=0\ncol 2: lb=1 ub=4 int=0 bin=0 obj=0\n=== END MODEL DUMP ===\n"
+ }
+}

@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x FROM (SELECT i AS id, CASE WHEN i = 2500 THEN 'NaN'::DOUBLE ELSE 1.0 END AS a, CASE WHEN i = 10 THEN 'NaN'::DOUBLE ELSE 1.0 END AS b FROM range(3000) r(i)) t DECIDE x(REAL), y(REAL) SUCH THAT t.a * x + t.b * y <= 10",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Invalid Input Error: DECIDE: t.b is NaN or infinite on some rows. Skip those rows with 'when isfinite(t.b):'.\n"
+  }
+ }
+}

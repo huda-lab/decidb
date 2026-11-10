@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT id, x FROM (SELECT range AS id, range % 2 AS g, CASE WHEN range = 2500 THEN -1.0 ELSE 2.0 END AS a, CASE WHEN range = 10 THEN -1.0 ELSE 2.0 END AS w FROM range(3000)) t DECIDE x(REAL), per t.g: y(REAL) SUCH THAT x <= 1 AND y <= 1 AND when sqrt(t.a) > -1: sum(ln(t.w) * x) by (t.g) + 2 * y <= 5 MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Out of Range Error: cannot take square root of a negative number\n"
+  }
+ }
+}

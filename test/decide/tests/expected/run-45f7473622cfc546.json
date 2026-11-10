@@ -1,0 +1,12 @@
+{
+ "kind": "run",
+ "sql": "SELECT i, x FROM (VALUES (1, 1.0, 'NaN'::DOUBLE), (2, 'NaN'::DOUBLE, 1.0)) t(i, c, d)\n        DECIDE x(REAL) SUCH THAT x <= t.d AND x + abs(x - t.c) <= 20 MAXIMIZE sum(x)",
+ "env": {},
+ "values": {
+  "any": {
+   "returncode": 0,
+   "stdout": "",
+   "stderr": "Invalid Input Error: DECIDE: the bound t.d is NaN on some rows. Skip those rows with 'when NOT isnan(t.d):'.\n"
+  }
+ }
+}
