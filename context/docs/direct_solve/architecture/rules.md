@@ -60,7 +60,8 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
   `COUNT(*)`. A plan that streams gates its rows on a verdict over every row (`DirectAllRowsValid`,
   `DirectSourceReader::Gate`); a rank window already reads everything. Only `LIMIT 0` may skip the read.
 - **An error on the same inputs.** Where the solver raises, direct solve raises: invalid data-valued bounds and fixed
-  values on the rows that read them; invalid objective coefficients (NULL, NaN, infinity); infeasibility. Nothing is
+  values on the rows that read them; invalid objective coefficients (NaN, infinity); infeasibility. A NULL objective
+  term is dropped, as `SUM` drops it in SQL (guide § NULL), so the solver answers there and a rule must too. Nothing is
   computed on a row a `when` drops (syntax reference §6.3): a value there must not raise, on either path
   (`DirectOnKeptRows`, which makes the value NULL there, so its check passes; `test_direct_source_values.py` checks
   each place a rule masks). Silently answering where the solver refuses is a wrong answer. What

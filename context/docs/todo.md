@@ -8,20 +8,18 @@ Read first: `.claude/CLAUDE.md`, `direct_solve/rules/o1_monge_assignment/todo.md
 Checks: each task's **Done when** while working; the full gate in `direct_solve/framework/todo.md` § How to work any
 task, once at combine.
 
-## 1. The rule and its tests (parallel: O1-2, O1-3 | O1-4)
+## 1. Owner decisions
 
-- [ ] O1-2 O1's recognition — direct_solve/rules/o1_monge_assignment/todo.md § O1-2
-- [ ] O1-3 O1's plan — direct_solve/rules/o1_monge_assignment/todo.md § O1-3 (needs: O1-2)
-- [ ] O1-4 O1's standard tests — direct_solve/rules/o1_monge_assignment/todo.md § O1-4
+- [ ] O1-8 The number-range warning on O1's plan — direct_solve/rules/o1_monge_assignment/todo.md § O1-8
 
-## 2. Docs (needs: 1) (one lane)
+## 2. Docs (one lane)
 
-- [ ] O1-5 O1's docs leave Prototype — direct_solve/rules/o1_monge_assignment/todo.md § O1-5 (needs: O1-3, O1-4)
+- [ ] O1-5 O1's docs leave Prototype — direct_solve/rules/o1_monge_assignment/todo.md § O1-5
 
 ## 3. Measurement, quiet machine (needs: 2) (one lane)
 
 - [ ] O1-6 O1's Performance is measured — direct_solve/rules/o1_monge_assignment/todo.md § O1-6
 
-## 4. Optional (needs: 1) (one lane)
+## 4. Optional (one lane)
 
 - [ ] O1-7 `per l.id` on a primary key — direct_solve/rules/o1_monge_assignment/todo.md § O1-7

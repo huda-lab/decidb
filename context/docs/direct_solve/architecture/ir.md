@@ -41,6 +41,11 @@ mark it not proved.
   one-side `WHERE` keeps it, because filter pushdown runs before the DECIDE optimizer and places the filter inside its
   side; a filter across both sides makes a join, and any operator between DECIDE and the cross product leaves it
   empty. Looking through operators would need a proof per operator, so the front end does not.
+- `not_null` holds the source columns that a table the source scans directly declares `NOT NULL` (a `PRIMARY KEY`
+  column carries the constraint too). The front end walks down from DECIDE's child through filters and cross products,
+  which pass values through unchanged, to each table scan; any other operator ends the walk, because a projection or
+  an outer join can make a NULL the table never holds. A declared constraint holds for every row a plan reads; column
+  statistics describe the data when the plan was built, so they prove nothing.
 - A per-row comparison carries the solver path's own reading of it (`DecideReadSingletonRow`): `singleton_row`
   when it is a bound on one decision, and `bound`, the interval of values it admits as DuckDB evaluates the comparison
   (D64). `variable_bound` is set when the solver path folds it into its decision's box instead of emitting a model row

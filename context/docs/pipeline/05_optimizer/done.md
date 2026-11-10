@@ -1031,7 +1031,9 @@ because they dominate everything above:
 - **`WHERE`-clause filtering** — standard DuckDB predicate pushdown, no
   DECIDE-specific code. Rows eliminated by `WHERE` never become decision
   variables, which for most queries is the single most impactful optimization
-  there is.
+  there is. A filter written above a DECIDE stays above it: join ordering treats DECIDE as one relation, as it does a
+  window (`relation_manager.cpp`), so a parent query's `WHERE` over a DECIDE whose source holds a join never moves
+  into that source, where it would change the problem.
 - **`when` filtering** — stage 08. Nothing is computed on a row a `when` drops: a
   reducer reads only the rows its clause's `when` and its own keep, a per-row clause
   emits no row there, and the objective's `when` folds into every term's filter. A
