@@ -22,17 +22,20 @@ wrong admit is a wrong answer.
   a table their side scans directly; otherwise the rule declines. `SUM` drops a NULL term (guide § NULL; deck p. 56),
   so an item with a NULL position pairs with anyone at no cost, and rank pairing is no longer optimal. A declared
   constraint holds for every row the plan will read, which column statistics do not promise.
-- **Plan.** Group-then-join over the source reader: the distinct classes of each side, ranked by position, joined back
-  to the pair rows. A hand plan of this shape ran in 64 ms at 600 × 600, where Gurobi took 1.47 s.
 - **Lean.** No new shared helper until a second rule needs it; no case outside the shapes above.
 
-## O1-7 — `per l.id` on a primary key
+## O1-7 — `per l.id` on a key of its table
 
-- **Needs.** Optional.
-- **Problem.** `per l.id` declines, because a column key may have duplicates or NULLs and its position need not be a
-  function of it. Users write this spelling naturally.
-- **Change.** Admit a column key when its columns are the declared `PRIMARY KEY` of a table its side scans directly,
-  so each class is one row and its position is fixed. `DirectIR::not_null` already walks to those scans; the front end
-  records the primary-key columns on the same walk. Every other column key declines.
-- **Done when.** An oracle case with a primary key answers under `require`; the same query without the key declines;
-  `./test/decide/run_tests.sh -n 2 -k o1_monge` passes.
+- **Problem.** `per l.id` declines, because a column key may hold duplicates or NULLs and need not determine the
+  position. Users write this spelling naturally. When `id` is a key of the table `l` scans, `per l.id` gives the same
+  classes as `per l`, but only under that table's constraints: a fact of the catalog, which the canonicalizer may not
+  use (`../../../pipeline/04_canonicalizer/done.md` § What a rule must be).
+- **Change.** The direct IR records the keys of each directly scanned table on the same walk as `not_null`: every
+  UNIQUE constraint, the PRIMARY KEY included, whose columns are all declared NOT NULL and read by the scan. O1 admits
+  a column key when it determines the side's position: the key holds the position, or holds one of those keys of the
+  position's table. Every other column key declines. **Ruling (owner, 2026-11-10).** A UNIQUE key counts only when
+  all its columns are declared NOT NULL: UNIQUE lets NULLs repeat, and a column key puts a row with a NULL key in no
+  class. DuckDB declares a PRIMARY KEY's columns NOT NULL, so it needs no case of its own.
+- **Done when.** Oracle cases: a PRIMARY KEY column and a UNIQUE NOT NULL column answer under `require`; the same query
+  without the key, and on a nullable UNIQUE column, declines; the IR's keys are checked in `test_decidb_direct_ir.cpp`;
+  `./test/decide/run_tests.sh -n 2 -k o1_monge` and `build/release/test/unittest "[decidb]"` pass.

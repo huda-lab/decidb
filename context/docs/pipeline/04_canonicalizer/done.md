@@ -55,6 +55,23 @@ The pass never multiplies out a power or a product of sums, never folds constant
 or a subquery. It is total (it never declines an input), pure (it returns a new tree), writes one spelling per meaning,
 and is a fixed point. The shape check runs right after it.
 
+### What a rule must be
+
+One form per meaning is the purpose of the pass, as in a compiler's canonicalization pass (LLVM's InstCombine): each
+later stage matches one shape, not every spelling of it. A rewrite belongs here only when all six hold:
+
+1. It is an identity under DuckDB's evaluation for every input: the same value, type, NULL and error. On the
+   objective, the same optima, with the inverse of any change to the reported value recorded.
+2. It reads only what binding knows, never a fact of the plan or the catalog.
+3. It is total and a fixed point at all three entry points.
+4. Anything it erases that a user or a message needs survives as provenance (a source location, a written tag), and
+   only rendering and result reporting read it.
+5. Its form serves every consumer. A form only one back end wants belongs in that back end.
+6. It removes a variant that some consumer checks.
+
+The limits keep the pass from becoming a second optimizer: a rewrite that needs a key or a NOT NULL holds only for
+some tables, and a form one back end prefers is a formulation choice.
+
 ### Why it runs after binding
 
 A decision variable is *exactly* a `BoundColumnRefExpression` on `decide_index` —
@@ -678,6 +695,8 @@ relation aliases, since only planning still knows them.
   never refuses;
 - refuse a term for its algebra: that is the shape check (§3.11);
 - evaluate data, reducers, `when` conditions, `per` classes or `by` groups;
+- use a fact of the plan or the catalog (a key, a NOT NULL, a statistic): the direct IR front end reads those from
+  the scans of the optimized plan;
 - choose a solver formulation.
 
 Expression association is fixed by the stage-01 grammar; this stage never
