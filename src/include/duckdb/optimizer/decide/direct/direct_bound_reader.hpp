@@ -134,14 +134,18 @@ struct DirectLinearTerm {
 //! the rule.
 struct DirectLinearPart {
 	int sign = 1;
-	bool scaled = false;
-	double scale = 1.0;
-	bool divides = false;
+	DirectFactor factor;
 	vector<DirectLinearTerm> terms;
 	//! For each decision, what a message names for the part's like terms on it (DirectNamesOf): the values of the
 	//! solver path's one coefficient of the decision, and the part's clause.
 	vector<DirectNumberNames> names;
 };
+
+//! `number` oriented as a minimum: times the part's sign and its factor (DirectFactor). The canonicalizer writes every
+//! objective as a minimization, so a part's orientation is its sign times its factor and nothing else.
+inline double DirectOriented(const DirectLinearPart &part, double number) {
+	return part.sign * part.factor.ApplyTo(number);
+}
 
 //! The terms of `part` that name `decision`, each as a signed value.
 vector<DirectSignedValue> DirectValuesOn(const DirectLinearPart &part, idx_t decision);
@@ -151,19 +155,19 @@ vector<DirectSignedValue> DirectValuesOn(const DirectLinearPart &part, idx_t dec
 //! the clause, as the solver path names it.
 DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedValue> &values, const string &clause);
 
-//! Whether a number computed from `values` (with the part's factor, when `scaled`) needs no invalid-value check: the
+//! Whether a number computed from `values` (with the part's `factor`) needs no invalid-value check: the
 //! sum of the magnitude bounds of the values (DirectMagnitudeBound), each read as a row its NULL guard keeps reads it
 //! and times the factor, is below the range of a DOUBLE. A value of an exact numeric type is bounded by its type, so
 //! only a FLOAT or DOUBLE column, or an expression of one, keeps its check. A row the guard skips reads 0, so the
 //! number is finite on every row. A constant that is not finite keeps its check, which raises at run time as the solver
 //! path does.
-bool DirectIsFiniteWhereKept(Optimizer &optimizer, const vector<DirectSignedValue> &values, bool scaled = false,
-                             double scale = 1.0, bool divides = false);
+bool DirectIsFiniteWhereKept(Optimizer &optimizer, const vector<DirectSignedValue> &values,
+                             const DirectFactor &factor = DirectFactor());
 
 //! A bound on the magnitude of one term of a number DirectIsFiniteWhereKept judges: the bound of `value`
-//! (DirectMagnitudeBound, through its NULL guard) times the part's factor, when `scaled`. A rule whose number is made
+//! (DirectMagnitudeBound, through its NULL guard) times the part's factor. A rule whose number is made
 //! of terms with factors of their own sums these and asks DirectSumIsFinite.
-double DirectScaledMagnitude(Optimizer &optimizer, const Expression &value, bool scaled, double scale, bool divides);
+double DirectScaledMagnitude(Optimizer &optimizer, const Expression &value, const DirectFactor &factor);
 
 //! Whether a number whose terms' magnitudes sum to at most `total` is below the range of a DOUBLE, whatever the
 //! rounding of its sums.

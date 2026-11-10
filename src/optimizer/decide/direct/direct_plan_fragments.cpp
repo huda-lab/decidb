@@ -37,15 +37,15 @@ unique_ptr<BoundWindowExpression> DirectWindowMatchingCount(const ExpressionBuil
 	return count;
 }
 
-unique_ptr<Expression> DirectScaledTerm(Optimizer &optimizer, unique_ptr<Expression> value, int sign, bool scaled,
-                                        double scale, bool divides) {
+unique_ptr<Expression> DirectScaledTerm(Optimizer &optimizer, unique_ptr<Expression> value, int sign,
+                                        const DirectFactor &factor) {
 	ExpressionBuilder calc(optimizer.context);
 	auto term = calc.Cast(calc.Wrap(std::move(value)), LogicalType::DOUBLE);
 	if (sign < 0) {
 		term = calc.Neg(term);
 	}
-	if (scaled) {
-		term = divides ? calc.Div(term, calc.Num(scale)) : calc.Mul(term, calc.Num(scale));
+	if (factor.present) {
+		term = factor.divides ? calc.Div(term, calc.Num(factor.value)) : calc.Mul(term, calc.Num(factor.value));
 	}
 	return calc.Out(term);
 }
@@ -96,8 +96,7 @@ unique_ptr<Expression> DirectSumOf(Optimizer &optimizer, const vector<DirectSign
 	ExpressionBuilder calc(optimizer.context);
 	unique_ptr<Expression> total;
 	for (auto &value : values) {
-		auto term = DirectScaledTerm(optimizer, over ? over(*value.expr) : value.expr->Copy(), value.sign * sign, false,
-		                             1.0, false);
+		auto term = DirectScaledTerm(optimizer, over ? over(*value.expr) : value.expr->Copy(), value.sign * sign);
 		total = total ? calc.Out(calc.Add(calc.Wrap(std::move(total)), calc.Wrap(std::move(term)))) : std::move(term);
 	}
 	return total;
@@ -120,10 +119,8 @@ DirectQuadraticColumns DirectLayoutQuadraticPart(Optimizer &optimizer, const Exp
 		return p1.Add(calc.Out(DirectOnKeptRows(calc, kept, value)));
 	};
 	auto check_number = [&](ColumnBinding number, const DirectNumberNames &names,
-	                        const vector<DirectSignedValue> &values, bool scaled = false, double scale = 1.0,
-	                        bool divides = false) {
-		if (auto check = DirectCheckNumber(optimizer, number, names, values, source_bindings, p1.index, scaled, scale,
-		                                   divides)) {
+	                        const vector<DirectSignedValue> &values, const DirectFactor &factor = DirectFactor()) {
+		if (auto check = DirectCheckNumber(optimizer, number, names, values, source_bindings, p1.index, factor)) {
 			checks.push_back(std::move(check));
 		}
 	};
@@ -157,12 +154,11 @@ DirectQuadraticColumns DirectLayoutQuadraticPart(Optimizer &optimizer, const Exp
 	// A constant adds nothing to the answer, so like the solver path it is read one term at a time, with the part's
 	// factor applied, and never added up; each must still be valid.
 	for (auto &term : part.constants) {
-		auto value = calc.Wrap(DirectScaledTerm(optimizer, over ? over(*term.value) : term.value->Copy(), term.sign,
-		                                        part.linear.scaled, part.linear.scale, part.linear.divides));
+		auto value = calc.Wrap(
+		    DirectScaledTerm(optimizer, over ? over(*term.value) : term.value->Copy(), term.sign, part.linear.factor));
 		vector<DirectSignedValue> read;
 		read.push_back({term.sign, term.value->Copy()});
-		check_number(on_kept(value), term.value_names, read, part.linear.scaled, part.linear.scale,
-		             part.linear.divides);
+		check_number(on_kept(value), term.value_names, read, part.linear.factor);
 	}
 	return columns;
 }
@@ -247,8 +243,7 @@ DirectQuadraticSum DirectFoldQuadratic(Optimizer &optimizer, const ExpressionBui
 			continue;
 		}
 		auto scaled = [&](ExprPtr value) {
-			auto result = calc.Wrap(DirectScaledTerm(optimizer, calc.Out(value), part.linear.sign, part.linear.scaled,
-			                                         part.linear.scale, part.linear.divides));
+			auto result = calc.Wrap(DirectScaledTerm(optimizer, calc.Out(value), part.linear.sign, part.linear.factor));
 			return laid.has_mask ? calc.If(calc.Col(LogicalType::BOOLEAN, laid.mask), result, calc.Num(0.0)) : result;
 		};
 		vector<ExprPtr> b_part;

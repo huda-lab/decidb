@@ -60,9 +60,23 @@ constexpr uint32_t DIRECT_CONSTANT = FOLD_STABLE | FOLD_CATCH_DUCKDB_ERRORS;
 //! The same, for a numeric constant that must also be finite and survive a round trip through DOUBLE.
 constexpr uint32_t DIRECT_FINITE_CONSTANT = DIRECT_CONSTANT | FOLD_EXACT_FINITE;
 
-//! The factor a query-wide `2 * SUM(...)` or `SUM(...) / 2` puts on a reducer: 1 without one. False unless it is a
-//! finite foldable constant, and nonzero when it divides.
-bool DirectPartScale(ClientContext &context, const DirectPart &part, double &scale);
+//! The constant factor a query-wide `2 * SUM(...)` or `SUM(...) / 2` puts on a reducer, at plan time: whether there is
+//! one, its value (1 without one) and whether the reducer divides by it. A division stays a division: multiplying by
+//! the reciprocal rounds, and hides a zero divisor.
+struct DirectFactor {
+	bool present = false;
+	bool divides = false;
+	double value = 1.0;
+
+	//! `number` times the factor, or divided by it.
+	double ApplyTo(double number) const {
+		return divides ? number / value : number * value;
+	}
+};
+
+//! Reads the factor of `part` (DirectFactor). False unless it is a finite foldable constant, and nonzero when it
+//! divides.
+bool DirectPartFactor(ClientContext &context, const DirectPart &part, DirectFactor &factor);
 
 //! A data-valued value a rule may read per row and check for NULL: numeric, nonthrowing,
 //! deterministic, decision-free, over source columns only, and mentioning at least one.

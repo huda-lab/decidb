@@ -94,12 +94,12 @@ unique_ptr<Expression> DirectRaiseTooLarge(Optimizer &optimizer, const ExprPtr &
 
 //! The check of a raw value of a projection: `number`, a DOUBLE column of the projection `projection_index`, which
 //! carries the source first (`source_bindings`). It raises what DirectNumberMessage names, reading the values the
-//! number is made of in those source columns. `values` are what the number is made of (with the part's factor, when
-//! `scaled`). Null when they are finite constants, which no row can fail (DirectIsFiniteWhereKept).
+//! number is made of in those source columns. `values` are what the number is made of (with the part's `factor`). Null
+//! when they are finite constants, which no row can fail (DirectIsFiniteWhereKept).
 unique_ptr<Expression> DirectCheckNumber(Optimizer &optimizer, ColumnBinding number, const DirectNumberNames &names,
                                          const vector<DirectSignedValue> &values,
                                          const vector<ColumnBinding> &source_bindings, idx_t projection_index,
-                                         bool scaled = false, double scale = 1.0, bool divides = false);
+                                         const DirectFactor &factor = DirectFactor());
 
 //! Joins checks into one BOOLEAN expression that is true when every check is. The checks run in the order given, as a
 //! CASE chain, so an earlier check guards the later ones: a row raises the error of the first check it fails. A check

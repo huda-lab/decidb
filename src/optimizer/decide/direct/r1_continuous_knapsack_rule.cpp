@@ -1023,8 +1023,7 @@ private:
 			if (columns.find(name) == columns.end()) {
 				continue;
 			}
-			auto scaled = calc.Wrap(
-			    DirectScaledTerm(optimizer, calc.Out(C(name)), part.sign, part.scaled, part.scale, part.divides));
+			auto scaled = calc.Wrap(DirectScaledTerm(optimizer, calc.Out(C(name)), part.sign, part.factor));
 			value = calc.Add(value, scaled);
 		}
 		return condition.objective.empty() ? value : calc.Neg(value);

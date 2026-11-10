@@ -176,8 +176,8 @@ unique_ptr<Expression> DirectRaiseTooLarge(Optimizer &optimizer, const ExprPtr &
 unique_ptr<Expression> DirectCheckNumber(Optimizer &optimizer, ColumnBinding number, const DirectNumberNames &names,
                                          const vector<DirectSignedValue> &values,
                                          const vector<ColumnBinding> &source_bindings, idx_t projection_index,
-                                         bool scaled, double scale, bool divides) {
-	if (DirectIsFiniteWhereKept(optimizer, values, scaled, scale, divides)) {
+                                         const DirectFactor &factor) {
+	if (DirectIsFiniteWhereKept(optimizer, values, factor)) {
 		return nullptr;
 	}
 	ExpressionBuilder calc(optimizer.context);

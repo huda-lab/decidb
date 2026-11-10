@@ -200,8 +200,8 @@ DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedVal
 	return names;
 }
 
-bool DirectIsFiniteWhereKept(Optimizer &optimizer, const vector<DirectSignedValue> &values, bool scaled, double scale,
-                             bool divides) {
+bool DirectIsFiniteWhereKept(Optimizer &optimizer, const vector<DirectSignedValue> &values,
+                             const DirectFactor &factor) {
 	if (values.empty()) {
 		throw InternalException("DECIDE: a number check has no value to read; its caller promises at least one");
 	}
@@ -209,17 +209,13 @@ bool DirectIsFiniteWhereKept(Optimizer &optimizer, const vector<DirectSignedValu
 	// (DirectScaledTerm), so its magnitude is at most the sum of the values' bounds times the factor.
 	double total = 0.0;
 	for (auto &value : values) {
-		total += DirectScaledMagnitude(optimizer, *value.expr, scaled, scale, divides);
+		total += DirectScaledMagnitude(optimizer, *value.expr, factor);
 	}
 	return DirectSumIsFinite(total);
 }
 
-double DirectScaledMagnitude(Optimizer &optimizer, const Expression &value, bool scaled, double scale, bool divides) {
-	double bound = DirectMagnitudeBound(optimizer.context, DecideUnguarded(value));
-	if (scaled) {
-		bound = divides ? bound / std::fabs(scale) : bound * std::fabs(scale);
-	}
-	return bound;
+double DirectScaledMagnitude(Optimizer &optimizer, const Expression &value, const DirectFactor &factor) {
+	return std::fabs(factor.ApplyTo(DirectMagnitudeBound(optimizer.context, DecideUnguarded(value))));
 }
 
 bool DirectSumIsFinite(double total) {
@@ -240,9 +236,7 @@ vector<DirectSignedValue> DirectValuesOn(const DirectLinearPart &part, idx_t dec
 bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const DirectPart &part, const string &clause,
                           DirectLinearPart &out) {
 	out.sign = part.sign;
-	out.scaled = part.scale != nullptr;
-	out.divides = part.scale_divides;
-	if (!DirectPartScale(context, part, out.scale)) {
+	if (!DirectPartFactor(context, part, out.factor)) {
 		return false;
 	}
 	for (auto &term : part.terms) {

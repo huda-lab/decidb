@@ -29,9 +29,9 @@ unique_ptr<BoundWindowExpression> DirectWindowMatchingCount(const ExpressionBuil
                                                             unique_ptr<Expression> predicate);
 
 //! A per-row numeric value read as the solver reads a coefficient: cast to DOUBLE, negated when `sign` is negative,
-//! then multiplied or divided by the query-wide factor of its reducer (`scale`, when `scaled`).
-unique_ptr<Expression> DirectScaledTerm(Optimizer &optimizer, unique_ptr<Expression> value, int sign, bool scaled,
-                                        double scale, bool divides);
+//! then multiplied or divided by the query-wide `factor` of its reducer.
+unique_ptr<Expression> DirectScaledTerm(Optimizer &optimizer, unique_ptr<Expression> value, int sign,
+                                        const DirectFactor &factor = DirectFactor());
 
 //! The class key of a scoped rule: the columns its rows group on and join their class's answer on. A row is in a class
 //! when its key has a class, and the key is built so that a row in no class has a NULL where the join compares with `=`

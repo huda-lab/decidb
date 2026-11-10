@@ -121,12 +121,6 @@ public:
 	                      const ExprPtr &has_class) const = 0;
 };
 
-//! The factor that turns a part's value into a minimum: the part's sign and its constant factor.
-static double Orientation(const DirectLinearPart &linear) {
-	double part_factor = linear.scaled ? (linear.divides ? 1.0 / linear.scale : linear.scale) : 1.0;
-	return linear.sign * part_factor;
-}
-
 //! Forwards a DOUBLE column of the class through P3, and names it by its binding there.
 static void CarryDouble(const ExpressionBuilder &calc, DirectProjectionStage &p3, ColumnBinding &column) {
 	column = p3.Add(calc.Out(calc.Col(LogicalType::DOUBLE, column)));
@@ -484,7 +478,7 @@ static bool SquareIsConvex(ClientContext &context, const DirectQuadraticPart &pa
 	if (!DirectFoldConstantSum(context, part.squares[0].weight, weight)) {
 		return true;
 	}
-	double oriented = Orientation(part.linear) * (weight * (slope * slope));
+	double oriented = DirectOriented(part.linear, weight * (slope * slope));
 	return std::isfinite(oriented) && oriented > 0.0;
 }
 
@@ -524,7 +518,7 @@ static bool ReadAbsolute(const DirectIR &ir, ClientContext &context, const Direc
 	    !DirectFoldConstantSum(context, read.inner.linear, slope) || slope == 0.0) {
 		return false;
 	}
-	weight = Orientation(part.linear) * constant;
+	weight = DirectOriented(part.linear, constant);
 	return std::isfinite(weight) && weight > 0.0;
 }
 

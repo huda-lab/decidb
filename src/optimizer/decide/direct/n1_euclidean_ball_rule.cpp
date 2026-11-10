@@ -182,9 +182,7 @@ static bool SquareIsConvex(ClientContext &context, const DirectQuadraticPart &pa
 	if (!FoldSquareFactor(context, part.squares[0], factor)) {
 		return false;
 	}
-	auto &linear = part.linear;
-	double part_factor = linear.scaled ? (linear.divides ? 1.0 / linear.scale : linear.scale) : 1.0;
-	double oriented = linear.sign * part_factor * factor;
+	double oriented = DirectOriented(part.linear, factor);
 	return std::isfinite(oriented) && oriented > 0.0;
 }
 

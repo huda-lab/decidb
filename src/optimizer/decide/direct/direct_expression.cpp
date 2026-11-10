@@ -128,10 +128,15 @@ bool DirectIsSourceOnlyPredicate(const Expression &expr, idx_t decide_index,
 	       DirectIsDecisionFreeDeterministic(expr, decide_index) && DirectReferencesOnlySource(expr, source_bindings);
 }
 
-bool DirectPartScale(ClientContext &context, const DirectPart &part, double &scale) {
-	scale = 1.0;
-	return !part.scale || (TryEvaluateFoldableDouble(context, *part.scale, scale, DIRECT_FINITE_CONSTANT) &&
-	                       !(part.scale_divides && scale == 0.0));
+bool DirectPartFactor(ClientContext &context, const DirectPart &part, DirectFactor &factor) {
+	factor = DirectFactor();
+	if (!part.scale) {
+		return true;
+	}
+	factor.present = true;
+	factor.divides = part.scale_divides;
+	return TryEvaluateFoldableDouble(context, *part.scale, factor.value, DIRECT_FINITE_CONSTANT) &&
+	       !(factor.divides && factor.value == 0.0);
 }
 
 bool DirectIsSourceOnlyNumeric(const Expression &expr, idx_t decide_index,

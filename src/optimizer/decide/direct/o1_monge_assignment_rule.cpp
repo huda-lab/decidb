@@ -278,7 +278,7 @@ bool Rule::ProveCost(const DirectIR &ir, ClientContext &context, Condition &cond
 	}
 	auto &cost = condition.cost;
 	Factors factors;
-	factors.sign = cost.sign * cost.terms[0].sign * SignOf(cost.scale);
+	factors.sign = cost.sign * cost.terms[0].sign * SignOf(cost.factor.value);
 	SplitFactors(context, *cost.terms[0].coefficient, factors);
 	const BoundColumnRefExpression *a, *b;
 	bool distance;
@@ -343,11 +343,10 @@ public:
 		auto &term = cost.terms[0];
 		auto written = term.coefficient->Copy();
 		DirectReplaceColumns(written, source_bindings, as_read);
-		auto coefficient = p1.Add(DirectScaledTerm(optimizer, std::move(written), cost.sign * term.sign, cost.scaled,
-		                                           cost.scale, cost.divides));
+		auto coefficient = p1.Add(DirectScaledTerm(optimizer, std::move(written), cost.sign * term.sign, cost.factor));
 		vector<unique_ptr<Expression>> checks;
 		if (auto valid = DirectCheckNumber(optimizer, coefficient, cost.names[0], DirectValuesOn(cost, 0),
-		                                   source_bindings, p1.index, cost.scaled, cost.scale, cost.divides)) {
+		                                   source_bindings, p1.index, cost.factor)) {
 			checks.push_back(std::move(valid));
 		} else {
 			// No value can make it past the DOUBLE range, but DuckDB's own evaluation of it can still raise, and only

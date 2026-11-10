@@ -59,10 +59,8 @@ struct Condition final : DirectApplicabilityCondition {
 		idx_t part;
 		int sign;
 		unique_ptr<Expression> coefficient;
-		//! A constant factor the part's objective term is multiplied by, or divided by when `divides`.
-		bool scaled = false;
-		double scale = 1.0;
-		bool divides = false;
+		//! A constant factor the part's objective term is multiplied or divided by.
+		DirectFactor factor;
 	};
 
 	//! The constraints of the IR, which outlives the condition: the count bounds, and the fixed Boolean values.
@@ -526,8 +524,8 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 			if (term_count > 1 && DirectMayThrow(*term.coefficient)) {
 				return false;
 			}
-			condition.objective_parts.push_back({condition.part_names.size(), read.sign * term.sign,
-			                                     std::move(term.coefficient), read.scaled, read.scale, read.divides});
+			condition.objective_parts.push_back(
+			    {condition.part_names.size(), read.sign * term.sign, std::move(term.coefficient), read.factor});
 		}
 		// Every term is in `x`, the one decision.
 		condition.part_names.push_back(std::move(read.names[0]));
@@ -787,7 +785,7 @@ private:
 	bool ScoreCanFail() const {
 		double total = 0.0;
 		for (auto &term : condition.objective_parts) {
-			total += DirectScaledMagnitude(optimizer, *term.coefficient, term.scaled, term.scale, term.divides);
+			total += DirectScaledMagnitude(optimizer, *term.coefficient, term.factor);
 		}
 		return !DirectSumIsFinite(total);
 	}
@@ -803,7 +801,7 @@ private:
 			}
 		}
 		D_ASSERT(scaling);
-		return DirectIsFiniteWhereKept(optimizer, values, scaling->scaled, scaling->scale, scaling->divides);
+		return DirectIsFiniteWhereKept(optimizer, values, scaling->factor);
 	}
 
 	//! Stage 3: the score projection. It forwards the source columns, the combined linear score, the scope and
@@ -826,8 +824,7 @@ private:
 		vector<ExprPtr> part_scores(condition.part_names.size());
 		for (auto &part : condition.objective_parts) {
 			auto coefficient = CopyIntoState(*part.coefficient, scope);
-			auto term = calc.Wrap(
-			    DirectScaledTerm(optimizer, std::move(coefficient), part.sign, part.scaled, part.scale, part.divides));
+			auto term = calc.Wrap(DirectScaledTerm(optimizer, std::move(coefficient), part.sign, part.factor));
 			if (auto &kept = condition.part_kept[part.part]) {
 				// A row the part drops reads no coefficient, so nothing in it can raise, and scores 0.
 				auto over_state = CopyIntoState(*kept, scope);
@@ -881,7 +878,7 @@ private:
 			}
 			auto value = CopyIntoState(*bound.value, scope);
 			if (bound.negated) {
-				value = DirectScaledTerm(optimizer, std::move(value), -1, false, 1.0, false);
+				value = DirectScaledTerm(optimizer, std::move(value), -1);
 			}
 			append_at(bound_bindings[i], calc.Out(calc.Cast(calc.Wrap(std::move(value)), LogicalType::DOUBLE)));
 		}
@@ -920,7 +917,7 @@ private:
 		auto &limit = upper != bound.negated ? group_values[index].upper : group_values[index].lower;
 		D_ASSERT(limit);
 		if (bound.negated) {
-			return calc.Wrap(DirectScaledTerm(optimizer, calc.Out(limit), -1, false, 1.0, false));
+			return calc.Wrap(DirectScaledTerm(optimizer, calc.Out(limit), -1));
 		}
 		return calc.Cast(limit, LogicalType::DOUBLE);
 	}
