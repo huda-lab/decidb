@@ -211,6 +211,13 @@ struct DirectRowCheck {
 	DecideDeterminesText text;
 };
 
+//! The two sides of a source that is a complete cross product: every row of one side meets every row of the other. Both
+//! are empty when the source is not a cross product.
+struct DirectIRCrossProduct {
+	vector<ColumnBinding> left;
+	vector<ColumnBinding> right;
+};
+
 struct DirectIR {
 	static DirectIR Read(ClientContext &context, LogicalDecide &decide);
 
@@ -221,6 +228,7 @@ struct DirectIR {
 	vector<DirectIRDecision> decisions;
 	vector<DirectIRKeyedScope> keyed_scopes;
 	vector<ColumnBinding> source_bindings;
+	DirectIRCrossProduct cross_product;
 	vector<DirectIRConstraint> constraints;
 	DirectIRObjective objective;
 	//! The scope checks the plan makes on the source rows, which the rule driver adds above every rule's plan.

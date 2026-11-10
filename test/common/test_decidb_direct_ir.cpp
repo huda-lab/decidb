@@ -753,3 +753,40 @@ TEST_CASE("Direct-solve IR marks a clause the front end cannot read as not prove
 	QueryIR known_row(con, IRQuery("x(INT)", "ABS(x - cap) <= 9", "MAXIMIZE SUM(w*x)"));
 	REQUIRE(known_row.ir.constraints[0].status == DirectAnalysisStatus::PROVED);
 }
+
+TEST_CASE("Direct-solve IR records the two sides of a cross product", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	REQUIRE_NO_FAIL(con.Query("CREATE TABLE l AS SELECT * FROM (VALUES (1, 5), (2, -3), (3, 8)) t(id, pos)"));
+	REQUIRE_NO_FAIL(con.Query("CREATE TABLE r AS SELECT * FROM (VALUES (1, 4), (2, 6)) t(id, pos)"));
+
+	SECTION("A one-side filter sits inside its side, so the cross product is complete") {
+		QueryIR query(con,
+		              "SELECT sel FROM l CROSS JOIN r WHERE l.pos > 0 DECIDE sel(BOOL) SUCH THAT per l: "
+		              "SUM(sel) BY (l) = 1 AND per r: SUM(sel) BY (r) = 1 MINIMIZE SUM(POWER(l.pos - r.pos, 2) * sel)");
+		auto &sides = query.ir.cross_product;
+		// l stores (id, pos) and r stores (id, pos): each side holds exactly its own columns, left first.
+		REQUIRE(sides.left.size() == 2);
+		REQUIRE(sides.right.size() == 2);
+		REQUIRE(query.ir.source_bindings.size() == 4);
+		for (idx_t i = 0; i < 2; i++) {
+			REQUIRE(sides.left[i] == query.ir.source_bindings[i]);
+			REQUIRE(sides.right[i] == query.ir.source_bindings[2 + i]);
+		}
+	}
+
+	SECTION("A filter across both sides makes a join, which leaves both empty") {
+		QueryIR query(con,
+		              "SELECT sel FROM l CROSS JOIN r WHERE l.pos < r.pos DECIDE sel(BOOL) SUCH THAT per l: "
+		              "SUM(sel) BY (l) = 1 AND per r: SUM(sel) BY (r) = 1 MINIMIZE SUM(POWER(l.pos - r.pos, 2) * sel)");
+		REQUIRE(query.ir.cross_product.left.empty());
+		REQUIRE(query.ir.cross_product.right.empty());
+	}
+
+	SECTION("A single table has no sides") {
+		QueryIR query(
+		    con, "SELECT sel FROM l DECIDE sel(BOOL) SUCH THAT per l: SUM(sel) BY (l) = 1 MINIMIZE SUM(pos * sel)");
+		REQUIRE(query.ir.cross_product.left.empty());
+		REQUIRE(query.ir.cross_product.right.empty());
+	}
+}

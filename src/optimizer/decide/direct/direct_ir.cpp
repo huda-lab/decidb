@@ -76,6 +76,7 @@ public:
 		D_ASSERT(decide.children.size() == 1 && decide.children[0]);
 		source_bindings = decide.SourceBindings();
 		ir.source_bindings = source_bindings;
+		ReadCrossProduct(ir);
 		ReadDecisions(ir);
 		ReadKeyedScopes(ir);
 		ReadConstraints(ir);
@@ -94,6 +95,16 @@ private:
 	vector<ColumnBinding> source_bindings;
 	//! Set while reading: a recorded bound a rule could not reduce.
 	mutable bool bounds_to_record = false;
+
+	//! DirectIR::cross_product: only DECIDE's own child counts. A projection, filter or join between them leaves it
+	//! empty.
+	void ReadCrossProduct(DirectIR &ir) const {
+		auto &source = *decide.children[0];
+		if (source.type == LogicalOperatorType::LOGICAL_CROSS_PRODUCT) {
+			ir.cross_product.left = source.children[0]->GetColumnBindings();
+			ir.cross_product.right = source.children[1]->GetColumnBindings();
+		}
+	}
 
 	//! DirectIR::model_shape: each degree-2 term of a part, with the sign of its weight as the plan knows it (the
 	//! part's sign and scale, the term's sign and coefficient), outside MIN and MAX.
