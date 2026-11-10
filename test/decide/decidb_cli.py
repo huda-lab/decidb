@@ -5,14 +5,14 @@ execution), this module shells out to the native ``build/release/decidb``
 binary so that DECIDE queries can leverage all available cores.
 
 Error detection relies on stderr: the DeciDB CLI writes error messages to
-stderr (exit code is always 0).  Successful JSON results go to stdout,
-possibly preceded by solver-license preamble lines (e.g. Gurobi).
+stderr (exit code is always 0).  Successful results go to stdout in the shell's
+quote mode, possibly preceded by solver-license preamble lines (e.g. Gurobi).
 """
 
 from __future__ import annotations
 
 import atexit
-import json
+import math
 import os
 import re
 import resource
@@ -210,11 +210,10 @@ class _Session:
             self.proc.wait()
         Path(self.query_file).unlink(missing_ok=True)
 
-    def run(self, sql: str, *, json_mode: bool, timeout: float) -> subprocess.CompletedProcess:
+    def run(self, sql: str, *, mode: str, timeout: float) -> subprocess.CompletedProcess:
         self.count += 1
         marker = f"__DECIDB_SESSION_END_{self.count}__"
         Path(self.query_file).write_text(sql)
-        mode = "json" if json_mode else "duckbox"
         commands = f".mode {mode}\n.read {self.query_file}\n.print {marker}\nSELECT error('{marker}');\n"
         out, err = bytearray(), bytearray()
         end_out, end_err = marker.encode() + b"\n", f"Invalid Input Error: {marker}\n".encode()
@@ -271,7 +270,7 @@ def _run_in_session(
     sql: str,
     env: dict[str, str] | None,
     *,
-    json_mode: bool,
+    mode: str,
     timeout: float,
     removed_spelling: bool = False,
 ) -> subprocess.CompletedProcess | None:
@@ -292,11 +291,46 @@ def _run_in_session(
     _SESSIONS[key] = session
     while len(_SESSIONS) > _MAX_SESSIONS:
         _SESSIONS.pop(next(iter(_SESSIONS))).close()
-    result = session.run(sql, json_mode=json_mode, timeout=timeout)
+    result = session.run(sql, mode=mode, timeout=timeout)
     if not session.alive():
         session.close()
         del _SESSIONS[key]
     return _check(result, sql, removed_spelling)
+
+
+#: The shell mode ``execute`` reads results in. JSON would do, but it writes a NaN as ``null``, the same as a
+#: NULL. Quote mode writes a NULL as ``NULL``, a NaN as ``nan``, a string in single quotes (``''`` for a quote
+#: inside), and a number or boolean bare.
+_RESULT_MODE = "quote"
+
+#: One field of a quote-mode row: a quoted string, or a bare token up to the next separator.
+_QUOTE_FIELD = re.compile(r"'((?:[^']|'')*)'|([^,\n']*)")
+
+_QUOTE_BARE = {"NULL": None, "true": True, "false": False, "nan": math.nan, "-nan": math.nan}
+
+
+def _quote_value(token: str):
+    """A bare quote-mode token as the Python value the JSON mode gave: NULL as None, NaN as ``nan``."""
+    if token in _QUOTE_BARE:
+        return _QUOTE_BARE[token]
+    try:
+        return int(token)
+    except ValueError:
+        return float(token)  # also reads inf and -inf
+
+
+def _parse_quote_rows(text: str) -> list[list]:
+    """Split quote-mode output into rows of values. A separator or newline inside a quoted string is data."""
+    rows, row, pos = [], [], 0
+    while pos < len(text):
+        field = _QUOTE_FIELD.match(text, pos)
+        quoted, bare = field.groups()
+        row.append(quoted.replace("''", "'") if quoted is not None else _quote_value(bare))
+        pos = field.end() + 1
+        if text[field.end() : pos] != ",":
+            rows.append(row)
+            row = []
+    return rows
 
 
 def _last_complete_model_dump(text: str) -> str:
@@ -438,8 +472,8 @@ class DeciDBCli:
     ) -> tuple[list[tuple], list[str]]:
         """Run a SQL query and return ``(rows, column_names)``.
 
-        Rows are returned as tuples with native Python types (int, float, str)
-        parsed from the CLI's JSON output.
+        Rows are returned as tuples with native Python types (int, float, str, bool) parsed from the CLI's
+        quote-mode output. A NULL is ``None``; a NaN is ``float('nan')``.
 
         Raises
         ------
@@ -448,8 +482,8 @@ class DeciDBCli:
             when the test did not declare it with ``expect_number_range``; a declared one must be printed.
         """
         env = self._subprocess_env(status_markers=True)
-        proc = _run_in_session(self._argv(), sql, env, json_mode=True, timeout=timeout) or _run(
-            self._argv("-json", "-c", sql), sql, timeout=timeout, env=env
+        proc = _run_in_session(self._argv(), sql, env, mode=_RESULT_MODE, timeout=timeout) or _run(
+            self._argv("-cmd", f".mode {_RESULT_MODE}", "-c", sql), sql, timeout=timeout, env=env
         )
 
         stderr = self._settle_number_range_warning(proc.stderr, expect_number_range).strip()
@@ -466,23 +500,14 @@ class DeciDBCli:
             if error_lines:
                 raise DeciDBCliError("\n".join(error_lines), status=status)
 
-        stdout = proc.stdout
-        # Find the JSON array start — skip any solver preamble on stdout
-        bracket = stdout.find("[")
-        if bracket == -1:
+        # The header row is the first line that starts with a quote; solver preamble comes before it.
+        header = re.search(r"^'", proc.stdout, re.MULTILINE)
+        if header is None:
             return [], []
-
-        try:
-            rows_dicts: list[dict] = json.loads(stdout[bracket:])
-        except json.JSONDecodeError:
-            return [], []
-
-        if not rows_dicts:
-            return [], []
-
-        cols = list(rows_dicts[0].keys())
-        rows = [tuple(d[c] for c in cols) for d in rows_dicts]
-        return rows, cols
+        table = _parse_quote_rows(proc.stdout[header.start() :])
+        # A repeated column name keeps its last value, as the JSON reader did.
+        last = {name: i for i, name in enumerate(table[0])}
+        return [tuple(values[i] for i in last.values()) for values in table[1:]], list(last)
 
     def dump_model(
         self, sql: str, path, *, timeout: float = 120, expect_number_range: bool | dict[str, bool] = False
@@ -530,7 +555,7 @@ class DeciDBCli:
         settled out of ``stderr`` first (see ``execute``), so a caller reads the rest of it as it was printed."""
         env = self._subprocess_env()
         proc = _run_in_session(
-            self._argv(), sql, env, json_mode=False, timeout=timeout, removed_spelling=removed_spelling
+            self._argv(), sql, env, mode="duckbox", timeout=timeout, removed_spelling=removed_spelling
         ) or _run(self._argv("-c", sql), sql, removed_spelling=removed_spelling, timeout=timeout, env=env)
         return self._settled(proc, expect_number_range)
 

@@ -464,9 +464,8 @@ def _keyed_sql(case):
 
 
 def _same_value(value):
-    """The value as SQL equality sees it: -0.0 is 0.0, and every NaN is one value. The CLI's JSON writes a NaN as null,
-    and these tables hold no NULL."""
-    return "nan" if value is None or math.isnan(value) else value + 0.0
+    """The value as SQL equality sees it: -0.0 is 0.0, and every NaN is one value. A NULL stays None."""
+    return None if value is None else "nan" if math.isnan(value) else value + 0.0
 
 
 def _check_keyed_assignment(case, oracle, rows, columns, mode):
