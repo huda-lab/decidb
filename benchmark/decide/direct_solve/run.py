@@ -7,8 +7,8 @@ Each file in `queries/` is one DECIDE query over the TPC-H tables, with two head
 also returns the objective it reached.
 
 Modes. `direct` pins `decide_direct_solve='require'`, so a query the rule does not take fails instead of using the
-solver. `direct_1t` does the same on one thread, so a speedup can be told apart from the core count. `gurobi` and
-`highs` pin `'off'`, choose the backend with `DECIDB_FORCE_SOLVER`, and report model-build and solve time.
+solver. `gurobi` and `highs` pin `'off'`, choose the backend with `DECIDB_FORCE_SOLVER`, and report model-build and
+solve time. Every mode runs DuckDB on 32 threads, the most Gurobi uses by default, so both sides have the same cores.
 
 Each measured run is a fresh `decidb` process that only opens the stored database, under `/usr/bin/time`, so its
 wall time and peak memory are the query's own. A size's database is read once first, so no mode pays for the first
@@ -70,8 +70,8 @@ import run_benchmarks as bench  # noqa: E402  (the parent folder's /usr/bin/time
 # of a scale factor above 1 (sf=1.25 generates sf=1), so the larger ones are whole numbers.
 SCALE_FACTORS = (0.125, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512)
 SOLVERS = ("gurobi", "highs")
-MODES = ("direct", "direct_1t") + SOLVERS
-DEFAULT_MODES = ("direct", "direct_1t", "gurobi")
+MODES = ("direct",) + SOLVERS
+DEFAULT_MODES = ("direct", "gurobi")
 TOLERANCE = 1e-6  # relative, on the objective
 
 
@@ -245,7 +245,6 @@ def run(db, mode, sql, timeout):
     """One fresh process. Returns (wall seconds, peak MiB, status, stdout, stderr); status is None when the run
     finished."""
     setting = "off" if mode in SOLVERS else "require"
-    threads = "SET threads=1; " if mode == "direct_1t" else ""
     env = {k: v for k, v in os.environ.items() if k not in ("DECIDB_FORCE_SOLVER", "DECIDB_BENCH", "DECIDB_TIME_LIMIT")}
     if mode in SOLVERS:
         env["DECIDB_FORCE_SOLVER"] = mode
@@ -260,7 +259,7 @@ def run(db, mode, sql, timeout):
         "-noheader",
         "-csv",
         "-c",
-        f"SET decide_direct_solve='{setting}'; {threads}{sql}",
+        f"SET decide_direct_solve='{setting}'; SET threads=32; {sql}",
     ]
     start = time.perf_counter()
     proc = subprocess.Popen(

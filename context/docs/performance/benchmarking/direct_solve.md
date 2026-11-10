@@ -17,7 +17,7 @@ python3 benchmark/decide/direct_solve/run.py --sf 0.125 0.25 --queries r1  # a s
 |---|---|---|
 | `--sf` | `0.125` doubling to `512` | TPC-H scale factors, run smallest first |
 | `--queries` | every file in `queries/` | the file names in `queries/`, such as `s1`, `a2_keyed`, `o1` |
-| `--modes` | `direct direct_1t gurobi` | must include `direct`, the baseline for every speedup and objective; `highs` is also available |
+| `--modes` | `direct gurobi` | must include `direct`, the baseline for every speedup and objective; `highs` is also available |
 | `--repeats` | 3 (5 under `--compare`) | runs of every mode per cell, or of each side under `--compare` |
 | `--repeat-budget` | 1800 | a run past this many seconds is its cell's last, so the `runs` column can read less than `--repeats` |
 | `--timeout` | 21600 | seconds before a run is killed |
@@ -79,9 +79,10 @@ the decision count and the objective it reached, and the time does not include s
 | Mode | Setting | Effect |
 |---|---|---|
 | `direct` | `SET decide_direct_solve='require'` | direct solve answers the query, or the query fails |
-| `direct_1t` | `'require'`, `SET threads=1` | the same, on one thread, so a speedup can be told apart from the core count |
 | `gurobi` | `'off'`, `DECIDB_FORCE_SOLVER=gurobi` | the solver path on Gurobi |
 | `highs` | `'off'`, `DECIDB_FORCE_SOLVER=highs` | the solver path on HiGHS |
+
+Every mode runs `SET threads=32`, the most Gurobi uses by default, so both sides have the same cores.
 
 A solver mode also sets `DECIDB_TIME_LIMIT` above `--timeout`, because DeciDB otherwise stops a solve at 300 s and the
 query fails, and `DECIDB_BENCH`, which gives the model-build and solve split.
@@ -169,8 +170,7 @@ The script also prints the table as Markdown while it runs.
 ## Known limits
 
 - Times include process start and database open, about 20 ms.
-- Direct solve runs on DuckDB's default of 160 threads on the benchmark machine, Gurobi on its own default. `direct_1t`
-  is there to show the difference.
+- Gurobi's thread count is its own default, 32 on the benchmark machine; DeciDB does not set it.
 - TPC-H group sizes are fixed across scale factors: 80 offers per supplier and 4 suppliers per part. Only the number
   of groups grows, never their size.
 - Each query runs at one parameter setting: K = 2 per supplier and a tenth of all rows for S1, a target of 5,000 for A1,
