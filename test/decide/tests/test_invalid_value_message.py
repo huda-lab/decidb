@@ -331,8 +331,24 @@ DERIVED_TOO_LARGE = [
         "x(REAL), y(REAL) SUCH THAT x <= 5 AND y <= 5 AND SUM(x) + MAX(b * y) <= 10 MAXIMIZE SUM(x)",
         "SUM(x) + MAX(b * y) <= 10",
     ),
+    # The same reach on the objective's MIN/MAX: the one signed walk sizes it as it sizes a composed term.
+    (
+        "reach_of_an_extremum_in_the_objective",
+        "y(REAL) SUCH THAT y <= 5 MINIMIZE MAX(b * y)",
+        "MINIMIZE MAX(b * y)",
+    ),
+    # The two-level form's outer MIN/MAX reduces over group sums: the sum of an overflowed member overflows.
+    (
+        "reach_of_a_group_sum_extremum",
+        "y(REAL) SUCH THAT y <= 5 MINIMIZE MAX(per id: SUM(b * y) BY (id))",
+        "MINIMIZE MAX(per id: SUM(b * y) BY (id))",
+    ),
     # Members of either sign near the limit: the span of the MIN/MAX link is no Big-M (EmitExtremumLink).
     ("span_of_an_extremum", "y(REAL) SUCH THAT y <= 5 AND MAX(y + c) >= 0 MAXIMIZE SUM(y)", "MAX(y + c) >= 0"),
+    # A MIN/MAX bounded from its far side: the Big-M on HiGHS, the native auxiliary's box on Gurobi.
+    ("extremum_bounded_below", "y(REAL) SUCH THAT y <= 5 AND MAX(b * y) >= 1 MINIMIZE SUM(y)", "MAX(b * y) >= 1"),
+    # ABS the objective pushes up: the Big-M on HiGHS, the native auxiliary's box on Gurobi.
+    ("abs_in_the_objective", "y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(ABS(b * y))", "MAXIMIZE SUM(ABS(b * y))"),
     # Lowered through ABS on HiGHS (DeriveAbsAuxiliaryBounds), stated natively on Gurobi.
     ("reach_of_a_norm", "y(REAL) SUCH THAT y <= 5 AND norm(b * y, 0) <= 1 MAXIMIZE SUM(y)", "norm(b * y, 0) <= 1"),
     # A literal past a DOUBLE on one decision folds into no box (FoldKnownBound): the row's coefficient check
@@ -404,21 +420,7 @@ def test_a_literal_past_a_double_in_the_objective_names_it_on_the_solver_path(de
     assert _too_large("MAXIMIZE SUM(2e308 * y)") in stderr
 
 
-# HiGHS only: Gurobi states MIN/MAX and ABS natively, so their Big-M rewrites never run there. Every member's box is
-# finite, so the refusal names the clause, not a decision to bound.
-HIGHS_BIG_M_TOO_LARGE = [
-    ("abs_in_the_objective", "y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(ABS(b * y))", "MAXIMIZE SUM(ABS(b * y))"),
-    ("extremum_bounded_below", "y(REAL) SUCH THAT y <= 5 AND MAX(b * y) >= 1 MINIMIZE SUM(y)", "MAX(b * y) >= 1"),
-]
-
-
-@pytest.mark.error
-@pytest.mark.parametrize("mode", ["off"])
-@pytest.mark.parametrize("name,decide,written", HIGHS_BIG_M_TOO_LARGE, ids=[c[0] for c in HIGHS_BIG_M_TOO_LARGE])
-def test_a_big_m_past_a_double_names_its_clause(decidb_cli_highs, mode, name, decide, written):
-    assert _too_large(written) in _stderr(decidb_cli_highs, _huge_query(decide), mode)
-
-
+# HiGHS only: Gurobi states MIN/MAX natively and needs no bound on `y`. An open end asks for its bound, not the clause.
 @pytest.mark.error
 @pytest.mark.parametrize("mode", ["off"])
 def test_a_big_m_over_an_open_decision_still_asks_for_its_bound(decidb_cli_highs, mode):
@@ -429,7 +431,8 @@ def test_a_big_m_over_an_open_decision_still_asks_for_its_bound(decidb_cli_highs
 @pytest.mark.error
 @pytest.mark.parametrize("mode", ["off"])
 def test_a_reciprocal_past_a_double_on_a_squared_sum_names_its_clause(decidb_cli_gurobi, mode):
-    # Gurobi only, as above. A query-wide factor is read when the query runs; its reciprocal is computed then.
+    # Gurobi only: HiGHS has no quadratic constraints. A query-wide factor is read when the query runs; its
+    # reciprocal is computed then.
     decide = "y(REAL) SUCH THAT y <= 5 AND SUM(POWER(y, 2)) / (SELECT 1e-310) <= 10 MAXIMIZE SUM(y)"
     stderr = _stderr(decidb_cli_gurobi, _huge_query(decide), mode)
     assert _too_large("SUM(POWER(y, 2)) / (SELECT 1e-310) <= 10") in stderr
@@ -627,17 +630,14 @@ def test_the_constant_terms_of_the_objective_are_never_summed(request, cli_fixtu
 
 
 # A model whose numbers are each finite, which the solver then reads its own way: the warning stays (the CLI wrapper
-# checks it is printed), and so does the solver's verdict.
+# checks it is printed), and so does the solver's verdict. Gurobi answers; HiGHS refuses to load the range.
 @pytest.mark.error
 @pytest.mark.parametrize("mode", ["off"])
 def test_a_model_of_finite_huge_numbers_keeps_the_solvers_verdict(decidb_cli_gurobi, decidb_cli_highs, mode):
-    def stderr(cli, decide):
-        sql = f"SET decide_direct_solve='{mode}'; {_huge_query(decide)}"
-        return cli.execute_raw(sql, expect_number_range=True).stderr
-
-    unbounded = stderr(decidb_cli_gurobi, "y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(ABS(b * y))")
-    assert "DECIDE optimization is unbounded." in unbounded, unbounded
-    refused = stderr(decidb_cli_highs, "y(REAL) SUCH THAT y <= 5 MINIMIZE MAX(b * y)")
+    sql = f"SET decide_direct_solve='{mode}'; {_huge_query('y(REAL) SUCH THAT y <= 5 MINIMIZE SUM(ABS(b * y))')}"
+    answered = decidb_cli_gurobi.execute_raw(sql, expect_number_range=True).stderr
+    assert "Error" not in answered, answered
+    refused = decidb_cli_highs.execute_raw(sql, expect_number_range=True).stderr
     assert "mixes numbers too far apart in size for HiGHS to load" in refused, refused
 
 

@@ -34,29 +34,23 @@ bool IsExtremum(const ReducerValueLinkSpec &link) {
 AuxRange GroupReach(const ReducerValueLinkSpec &link, const SolverInput &input, const vector<idx_t> &rows) {
 	AuxRange reach;
 	const bool extremum = IsExtremum(link);
-	double sum_lo = 0.0, sum_hi = 0.0;
+	// A SUM's or AVG's group: open at an end when a member is.
+	SignedRowRange sum;
 	for (auto row : rows) {
-		double lo, hi;
-		DecideRowSignedRange(link.rows, row, input.lower_bounds, input.upper_bounds, lo, hi);
+		auto range = DecideRowSignedRange(link.rows, row, input.lower_bounds, input.upper_bounds);
 		double constant =
 		    DecideRowFixedLhsOffset(link.rows.variable_indices, link.rows.row_coefficients, row, link.label);
 		if (extremum) {
-			reach.CoverRowSided(lo + constant, hi + constant, DConstants::INVALID_INDEX);
+			range.CoverInto(reach, constant);
 			continue;
 		}
-		if (std::isinf(lo)) {
-			reach.MarkLoUnbounded(DConstants::INVALID_INDEX);
-		} else {
-			sum_lo += lo + constant;
-		}
-		if (std::isinf(hi)) {
-			reach.MarkHiUnbounded(DConstants::INVALID_INDEX);
-		} else {
-			sum_hi += hi + constant;
-		}
+		sum.lo += range.lo + constant;
+		sum.hi += range.hi + constant;
+		sum.lo_open |= range.lo_open;
+		sum.hi_open |= range.hi_open;
 	}
 	if (!extremum) {
-		reach.CoverRowSided(sum_lo, sum_hi, DConstants::INVALID_INDEX);
+		sum.CoverInto(reach);
 	}
 	return reach;
 }

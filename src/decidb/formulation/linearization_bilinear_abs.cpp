@@ -208,9 +208,9 @@ static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t nu
 			// The auxiliary has to cover the worst `S` the box allows, and only an
 			// UPWARD demand matters here: this raises a ceiling, and an ABS auxiliary
 			// is non-negative and floored by its own definitional pair.
-			double lo = 0.0;
-			double hi = 0.0;
-			DecideRowSignedRange(ec, r, input.lower_bounds, input.upper_bounds, lo, hi, aux_idx);
+			auto range = DecideRowSignedRange(ec, r, input.lower_bounds, input.upper_bounds, aux_idx);
+			double lo = range.Lo();
+			double hi = range.Hi();
 			if (a > 0.0 && pushes_up && std::isfinite(lo)) {
 				demanded = MaxValue<double>(demanded, (k - lo) / a);
 			} else if (a < 0.0 && pushes_down && std::isfinite(hi)) {
@@ -255,17 +255,14 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
 			// and RewriteAbs refuses it where it reads the argument, whichever path follows.
 			double link_rhs = c1.rhs_values.Get(r);
 			D_ASSERT(std::isfinite(link_rhs));
-			double vars_lo = 0.0;
-			double vars_hi = 0.0;
-			DecideRowSignedRange(c1, r, input.lower_bounds, input.upper_bounds, vars_lo, vars_hi, link.aux_idx,
-			                     &instances);
-			// Negating the variable part swaps its two ends.
-			double row_lo = link_rhs - vars_hi;
-			double row_hi = link_rhs - vars_lo;
-			if (!std::isfinite(row_lo) || !std::isfinite(row_hi)) {
+			auto vars = DecideRowSignedRange(c1, r, input.lower_bounds, input.upper_bounds, link.aux_idx, &instances);
+			if (vars.lo_open || vars.hi_open) {
 				abs_unbounded = true;
 				continue;
 			}
+			// Negating the variable part swaps its two ends.
+			double row_lo = link_rhs - vars.hi;
+			double row_hi = link_rhs - vars.lo;
 			lo = seen_row ? std::min(lo, row_lo) : row_lo;
 			hi = seen_row ? std::max(hi, row_hi) : row_hi;
 			seen_row = true;
@@ -451,10 +448,7 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
 			//   inner_r = k_r - sum_{v != aux} c_v x_v
 			// and negating the variable walk swaps its two ends. Skipping the auxiliary
 			// is what makes this the range of the expression rather than of the row.
-			double vars_lo = 0.0;
-			double vars_hi = 0.0;
-			DecideRowSignedRange(c1, r, input.lower_bounds, input.upper_bounds, vars_lo, vars_hi, link.aux_idx,
-			                     &instances);
+			auto vars = DecideRowSignedRange(c1, r, input.lower_bounds, input.upper_bounds, link.aux_idx, &instances);
 			double k = c1.rhs_values.Get(r);
 			// Each end on its own. A row open on one side still contributes its closed
 			// side, and a row whose contributors are all bounded gets a real box even
@@ -463,7 +457,7 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
 			// which is precisely the query this arm exists to answer and the only case
 			// that earns a free column. The bracket carries the constant, as `k` here.
 			AuxRange inner_range;
-			inner_range.CoverRowSided(k - vars_hi, k - vars_lo, DConstants::INVALID_INDEX);
+			inner_range.CoverRowEnds(k - vars.hi, k - vars.lo, vars.hi_open, vars.lo_open, DConstants::INVALID_INDEX);
 			// `ABS(x)` is the common shape, and there `t = x`: one column and one
 			// equality row per data row to restate a column that already exists. C1
 			// spells the argument as `inner = k - sum c_t x_t`, so a renaming is one

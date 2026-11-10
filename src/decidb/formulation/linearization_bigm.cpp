@@ -73,52 +73,28 @@ double decide_linearize::DecideRowEffectiveBound(const EvaluatedConstraint &ec, 
 //! dominate one. A collapse needs to know which side of `K` the range lies on, so the
 //! coefficient sign has to be respected rather than taken through `abs`.
 //!
-//! An unbounded side yields an infinite endpoint rather than failing outright: the two
+//! An unbounded side is an open end (SignedRowRange) rather than a failure: the two
 //! collapses are one-sided, and `SUM(x) <> 0` over decisions that are merely
 //! non-negative — the case worth serving — has a finite floor and no ceiling at all.
-//! Comparisons against an infinite endpoint simply never fire, so the classifier needs
-//! no separate unbounded branch.
+//! `Lo()` / `Hi()` read an open end as an infinity, against which comparisons simply
+//! never fire, so the classifier needs no separate unbounded branch.
 //!
 //! `lower_bounds` / `upper_bounds` must be the rigid box: see
 //! `SolverInput::rigid_lower_bounds`.
-void decide_linearize::DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row,
-                                            const vector<double> &lower_bounds, const vector<double> &upper_bounds,
-                                            double &out_lo, double &out_hi, idx_t skip_idx,
-                                            const InstanceBox *instances) {
-	constexpr double INF = std::numeric_limits<double>::infinity();
-	double lo = 0.0;
-	double hi = 0.0;
-	bool lo_unbounded = false;
-	bool hi_unbounded = false;
-	for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
-		idx_t v = ec.variable_indices[t];
-		if (v == DConstants::INVALID_INDEX || v == skip_idx) {
-			continue; // constant term: accounted for by DecideRowEffectiveBound
-		}
-		double coef = ec.row_coefficients[t].Get(row);
-		if (std::abs(coef) < 1e-15) {
-			continue;
-		}
-		double lb = instances ? instances->LowerOfRow(v, row, lower_bounds) : lower_bounds[v];
-		double ub = instances ? instances->UpperOfRow(v, row, upper_bounds) : upper_bounds[v];
-		bool lb_unbounded = DecideIsOpenBelow(lb);
-		bool ub_unbounded = DecideIsOpenAbove(ub);
-		// The low end of a positive term comes from the variable's low end, and from its
-		// high end when the coefficient flips the sense.
-		bool lo_from_ub = coef < 0.0;
-		if (lo_from_ub ? ub_unbounded : lb_unbounded) {
-			lo_unbounded = true;
-		} else {
-			lo += coef * (lo_from_ub ? ub : lb);
-		}
-		if (lo_from_ub ? lb_unbounded : ub_unbounded) {
-			hi_unbounded = true;
-		} else {
-			hi += coef * (lo_from_ub ? lb : ub);
-		}
-	}
-	out_lo = lo_unbounded ? -INF : lo;
-	out_hi = hi_unbounded ? INF : hi;
+SignedRowRange decide_linearize::DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row,
+                                                      const vector<double> &lower_bounds,
+                                                      const vector<double> &upper_bounds, idx_t skip_idx,
+                                                      const InstanceBox *instances) {
+	auto &variables = ec.variable_indices;
+	return SignedRowRange::Of(
+	    variables.size(), [&](idx_t t) { return variables[t]; },
+	    // A constant term is accounted for by DecideRowEffectiveBound, and `skip_idx` is left out: both read as zero.
+	    [&](idx_t t) {
+		    idx_t v = variables[t];
+		    return v == DConstants::INVALID_INDEX || v == skip_idx ? 0.0 : ec.row_coefficients[t].Get(row);
+	    },
+	    [&](idx_t v) { return instances ? instances->LowerOfRow(v, row, lower_bounds) : lower_bounds[v]; },
+	    [&](idx_t v) { return instances ? instances->UpperOfRow(v, row, upper_bounds) : upper_bounds[v]; });
 }
 
 //! Refuse a Big-M linearization that has no finite M, naming a column to bound.

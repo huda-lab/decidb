@@ -51,9 +51,9 @@ enum class NECollapse : uint8_t {
 //! tolerance cleanly separates "can reach K" from "cannot".
 static NECollapse ClassifyNERow(const EvaluatedConstraint &ec, idx_t row, const vector<double> &lower_bounds,
                                 const vector<double> &upper_bounds, const InstanceBox &floors, const string &written) {
-	double lo;
-	double hi;
-	DecideRowSignedRange(ec, row, lower_bounds, upper_bounds, lo, hi, DConstants::INVALID_INDEX, &floors);
+	auto range = DecideRowSignedRange(ec, row, lower_bounds, upper_bounds, DConstants::INVALID_INDEX, &floors);
+	double lo = range.Lo();
+	double hi = range.Hi();
 	// K is finite: LinearizeNotEqual drops a clause whose bound is not whole (an infinite one included) before this.
 	double k = DecideRowEffectiveBound(ec, row, written);
 	if (hi < k - 0.5 || lo > k + 0.5) {
@@ -361,12 +361,10 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 			double grp_lo = 0.0;
 			double grp_hi = 0.0;
 			for (idx_t k = g_begin; k < g_end; k++) {
-				double row_lo;
-				double row_hi;
-				DecideRowSignedRange(ec, flat_rows[k], input.rigid_lower_bounds, input.rigid_upper_bounds, row_lo,
-				                     row_hi, DConstants::INVALID_INDEX, &floors);
-				grp_lo += row_lo; // -inf is absorbing, and only ever accumulates here
-				grp_hi += row_hi;
+				auto range = DecideRowSignedRange(ec, flat_rows[k], input.rigid_lower_bounds, input.rigid_upper_bounds,
+				                                  DConstants::INVALID_INDEX, &floors);
+				grp_lo += range.Lo(); // -inf is absorbing, and only ever accumulates here
+				grp_hi += range.Hi();
 			}
 
 			// The group's LHS as a snapshot, copied for every excluded value's disjunction below (only the last

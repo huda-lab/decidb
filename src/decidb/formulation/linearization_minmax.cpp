@@ -138,11 +138,9 @@ bool ClassifyMinMaxGroups(EvaluatedConstraint &ec, idx_t num_rows, bool is_max_a
 //! shifted by it, which is also what the Big-M over the family reads.
 static AuxRange MinMaxRowRange(const SolverInput &input, const EvaluatedConstraint &ec, idx_t row,
                                const string &written) {
-	double row_lo = 0.0, row_hi = 0.0;
-	DecideRowSignedRange(ec, row, input.lower_bounds, input.upper_bounds, row_lo, row_hi);
-	double constant = DecideRowFixedLhsOffset(ec.variable_indices, ec.row_coefficients, row, written);
+	auto rr = DecideRowSignedRange(ec, row, input.lower_bounds, input.upper_bounds);
 	AuxRange range;
-	range.CoverRowSided(row_lo + constant, row_hi + constant, DConstants::INVALID_INDEX);
+	rr.CoverInto(range, DecideRowFixedLhsOffset(ec.variable_indices, ec.row_coefficients, row, written));
 	return range;
 }
 
@@ -532,59 +530,12 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer, con
 	}
 
 	// One row of the saved objective expression, bracketed against every contributing
-	// variable's box. Constant terms are INCLUDED: an auxiliary is pinned against the
-	// whole expression, and the Big-M over the family is this bracket's own span.
-	//! An end no contributing variable's box could derive is reported as an infinity
-	//! rather than as a flag beside a partial sum. That is what lets a caller add these
-	//! up: a group sum is open below exactly when some member is, and `-inf + finite`
-	//! already says so. The two ends never mix (`lo` is only ever `-inf`, `hi` only
-	//! ever `+inf`), so no accumulation can reach a NaN.
-	struct SavedRowRange {
-		double lo = 0.0;
-		double hi = 0.0;
-		idx_t unbounded_var = DConstants::INVALID_INDEX;
-	};
-	auto saved_row_range = [&](idx_t r) -> SavedRowRange {
-		constexpr double INF = std::numeric_limits<double>::infinity();
-		SavedRowRange out;
-		for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
-			double c = saved_obj_coefficients[t].Get(r);
-			if (std::abs(c) < 1e-15) {
-				continue;
-			}
-			idx_t v = saved_obj_var_indices[t];
-			if (v == DConstants::INVALID_INDEX) {
-				out.lo += c;
-				out.hi += c;
-				continue;
-			}
-			double lb = input.lower_bounds[v];
-			double ub = input.upper_bounds[v];
-			// Each end of this term separately, exactly as `DecideRowSignedRange` does
-			// it on the constraint side. A negative coefficient swaps which end of the
-			// variable's box feeds which end of the term, so an open ceiling on `v` can
-			// open the term's FLOOR — sign has to be respected before blaming a side.
-			bool lb_open = DecideIsOpenBelow(lb);
-			bool ub_open = DecideIsOpenAbove(ub);
-			bool lo_from_ub = c < 0.0;
-			if (lo_from_ub ? ub_open : lb_open) {
-				if (out.unbounded_var == DConstants::INVALID_INDEX) {
-					out.unbounded_var = v;
-				}
-				out.lo = -INF;
-			} else {
-				out.lo += lo_from_ub ? c * ub : c * lb;
-			}
-			if (lo_from_ub ? lb_open : ub_open) {
-				if (out.unbounded_var == DConstants::INVALID_INDEX) {
-					out.unbounded_var = v;
-				}
-				out.hi = INF;
-			} else {
-				out.hi += lo_from_ub ? c * lb : c * ub;
-			}
-		}
-		return out;
+	// variable's box (`SignedRowRange`).
+	auto saved_row_range = [&](idx_t r) -> SignedRowRange {
+		return SignedRowRange::Of(
+		    saved_obj_var_indices.size(), [&](idx_t t) { return saved_obj_var_indices[t]; },
+		    [&](idx_t t) { return saved_obj_coefficients[t].Get(r); }, [&](idx_t v) { return input.lower_bounds[v]; },
+		    [&](idx_t v) { return input.upper_bounds[v]; });
 	};
 
 	// The family every per-row MIN/MAX auxiliary (z, z_g) reduces over: one entry per
@@ -605,7 +556,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer, con
 		if (!row_family_cached) {
 			for (idx_t r = 0; r < num_rows; r++) {
 				auto rr = saved_row_range(r);
-				row_family_range.CoverRowSided(rr.lo, rr.hi, rr.unbounded_var);
+				rr.CoverInto(row_family_range);
 			}
 			row_family_cached = true;
 		}
@@ -616,7 +567,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer, con
 	auto row_range_for = [&](idx_t row) -> AuxRange {
 		AuxRange range;
 		auto rr = saved_row_range(row);
-		range.CoverRowSided(rr.lo, rr.hi, rr.unbounded_var);
+		rr.CoverInto(range);
 		return range;
 	};
 
@@ -784,22 +735,23 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer, con
 			// per-group sums — each group's rows added up under the same inner-AVG
 			// scale the pinning rows below use — which is both correct and tighter than
 			// widening the per-row family by num_rows.
-			// `scale` is positive, so a member's floor stays the sum's floor and an
-			// infinite end carries through the addition on its own.
+			// `scale` is positive, so a member's floor stays the sum's floor, and a sum is open
+			// at an end exactly when some member is.
 			AuxRange group_sum_family;
 			for (idx_t g = 0; g < K; g++) {
 				double scale = spec.per_inner_was_avg ? 1.0 / static_cast<double>(group_size(g)) : 1.0;
-				double g_lo = 0.0, g_hi = 0.0;
-				idx_t g_unbounded_var = DConstants::INVALID_INDEX;
+				SignedRowRange group_sum;
 				for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
 					auto rr = saved_row_range(obj_flat_rows[k]);
-					g_lo += rr.lo * scale;
-					g_hi += rr.hi * scale;
-					if (g_unbounded_var == DConstants::INVALID_INDEX) {
-						g_unbounded_var = rr.unbounded_var;
+					group_sum.lo += rr.lo * scale;
+					group_sum.hi += rr.hi * scale;
+					group_sum.lo_open |= rr.lo_open;
+					group_sum.hi_open |= rr.hi_open;
+					if (group_sum.unbounded_var == DConstants::INVALID_INDEX) {
+						group_sum.unbounded_var = rr.unbounded_var;
 					}
 				}
-				group_sum_family.CoverRowSided(g_lo, g_hi, g_unbounded_var);
+				group_sum.CoverInto(group_sum_family);
 			}
 			idx_t w_idx = AddGlobalContinuousAux(input, indexer, group_sum_family, 1.0); // objective = w
 
@@ -909,28 +861,11 @@ static AuxRange ComposedTermRange(const SolverInput &input, const vector<DecideT
 		if (!filter_mask[row]) {
 			continue;
 		}
-		double row_lo = 0.0, row_hi = 0.0;
-		for (idx_t it = 0; it < inner_terms.size(); it++) {
-			double c = per_term_coefs[it][row];
-			if (std::abs(c) < 1e-15) {
-				continue;
-			}
-			idx_t v = inner_terms[it].variable_index;
-			if (v == DConstants::INVALID_INDEX) {
-				row_lo += c;
-				row_hi += c;
-				continue;
-			}
-			double lb = input.lower_bounds[v];
-			double ub = input.upper_bounds[v];
-			if (DecideIsOpenAbove(ub) || DecideIsOpenBelow(lb)) {
-				range.MarkUnbounded(v);
-				continue;
-			}
-			row_lo += (c > 0.0) ? c * lb : c * ub;
-			row_hi += (c > 0.0) ? c * ub : c * lb;
-		}
-		range.CoverRow(row_lo, row_hi);
+		auto rr = SignedRowRange::Of(
+		    inner_terms.size(), [&](idx_t it) { return inner_terms[it].variable_index; },
+		    [&](idx_t it) { return per_term_coefs[it][row]; }, [&](idx_t v) { return input.lower_bounds[v]; },
+		    [&](idx_t v) { return input.upper_bounds[v]; });
+		rr.CoverInto(range);
 	}
 	return range;
 }

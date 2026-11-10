@@ -314,6 +314,37 @@ def test_half_open_range_keeps_its_closed_side(decidb_cli_gurobi, tmp_path):
         assert ub >= 1e20, f"auxiliary col {idx} was given a ceiling nothing derived: [{lb}, {ub}]\n{dump}"
 
 
+@pytest.mark.min_max
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "rows,expected",
+    [
+        # Positive coefficients: `x >= 0` with no ceiling floors the term at 0 and leaves its ceiling open.
+        ("(VALUES (1,3),(2,5)) t(id,c)", (0.0, 1e30)),
+        # Negative coefficients swap the ends: the open ceiling on `x` opens the term's floor, and 0 is its ceiling.
+        ("(VALUES (1,-3),(2,-5)) t(id,c)", (-1e30, 0.0)),
+    ],
+    ids=["open_above", "open_below"],
+)
+def test_composed_minmax_term_keeps_the_end_its_decision_can_derive(decidb_cli, tmp_path, rows, expected):
+    """A composed term over a decision open at one end is boxed by the other end, as the flat walk boxes it.
+
+    The composed `z_k` reads each end of a row through the same signed walk as the objective's auxiliaries
+    (`test_unbounded_variable_keeps_whichever_end_it_can`). Marking both ends open whenever a decision was open
+    at either gave this term a free column where the flat path gives it a half box.
+    """
+    dump = _lowering(decidb_cli).dump_model(
+        f"""
+            SELECT id, x FROM {rows}
+            DECIDE x(INT) SUCH THAT x >= 0 AND MAX(x * c) + SUM(x) <= 10
+            MINIMIZE SUM(x)
+        """,
+        tmp_path / "composed_half_open.dump",
+    )
+    aux = _continuous_columns(dump)
+    assert [(lb, ub) for _, lb, ub in aux] == [expected], f"composed z_k box is not {expected}:\n{dump}"
+
+
 # A family's range is the cover of its members, not the cover of its members and 0. The two differ exactly when every
 # member lies on one side of 0, and the span (the Big-M of a hard MIN/MAX) is the part of that gap that is dead weight.
 @pytest.mark.min_max

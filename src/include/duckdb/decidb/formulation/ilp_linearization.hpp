@@ -378,24 +378,18 @@ struct AuxRange {
 		hi_unbounded = hi_unbounded || other.hi_unbounded;
 	}
 
-	//! Extend by one more row expression bracketed by [`row_lo`, `row_hi`].
-	void CoverRow(double row_lo, double row_hi) {
-		D_ASSERT(!std::isinf(row_lo) && !std::isinf(row_hi));
-		FoldLo(row_lo);
-		FoldHi(row_hi);
-	}
-
-	//! `CoverRow` for a bracket that may be infinite on either end, as the signed walk
-	//! over a row's terms returns. Each end is folded in or marked open on its own, so
-	//! a row open on one side still contributes its closed side to the box. `var`
-	//! names the variable to blame if a Big-M is later asked for over this family.
-	void CoverRowSided(double row_lo, double row_hi, idx_t var) {
-		if (std::isinf(row_lo)) {
+	//! Extend by one more row expression bracketed by [`row_lo`, `row_hi`], each end folded in or marked open on its
+	//! own (SignedRowRange), so a row open on one side still contributes its closed side to the box. An open end's
+	//! value is ignored; an end that is not open is folded in as it is, so a value that overflowed a DOUBLE reaches
+	//! the box as an infinity and the hand-off names the clause. `var` names the variable to blame if a Big-M is later
+	//! asked for over this family.
+	void CoverRowEnds(double row_lo, double row_hi, bool lo_open, bool hi_open, idx_t var) {
+		if (lo_open) {
 			MarkLoUnbounded(var);
 		} else {
 			FoldLo(row_lo);
 		}
-		if (std::isinf(row_hi)) {
+		if (hi_open) {
 			MarkHiUnbounded(var);
 		} else {
 			FoldHi(row_hi);
