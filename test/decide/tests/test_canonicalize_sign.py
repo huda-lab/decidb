@@ -26,6 +26,7 @@ import time
 
 import pytest
 
+from decidb_cli import DeciDBCliError
 from solver.types import VarType, ObjSense, SolverStatus
 from ._brute_force import judge_rows
 from ._oracle_helpers import emit_hard_inner_max, emit_hard_inner_min
@@ -524,3 +525,84 @@ def test_maximize_an_extremum_and_minimize_its_negation_are_one_problem(
     assert decidb_cli.dump_model(sql(maximized), tmp_path / "maximized.txt") == decidb_cli.dump_model(
         sql(negated), tmp_path / "negated.txt"
     )
+
+
+# ---------------------------------------------------------------------------
+# A minus over a factor that reads a decision is the term's sign: `-b * SUM(x)` is `-(b * SUM(x))`.
+# ---------------------------------------------------------------------------
+#
+# The minus lives only in the model's algebra there, so moving it is an identity. A minus over data is DuckDB's to
+# evaluate, and it can raise, so it stays where it is.
+
+_BOOL_FACTOR_DOMAINS = {**{f"x{i}": range(4) for i in range(3)}, "b": range(2)}
+
+
+def _bool_factor_sql(clause, objective):
+    return f"""
+        SELECT id, x, b FROM (VALUES (1), (2), (3)) t(id)
+        DECIDE x(INT), per (): b(BOOL)
+        SUCH THAT x <= 3 AND {clause}
+        {objective}
+        ORDER BY id"""
+
+
+def _bool_factor_sum(a):
+    return a["x0"] + a["x1"] + a["x2"]
+
+
+@pytest.mark.min_max
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "maximized, minimized, scale",
+    [
+        pytest.param("-b * SUM(x) + 4 * b", "b * SUM(x) - 4 * b", 1, id="bare-minus"),
+        pytest.param("2 * -b * SUM(x) + 8 * b", "2 * b * SUM(x) - 8 * b", 2, id="minus-inside-a-product"),
+    ],
+)
+def test_maximize_a_negated_boolean_factor_and_minimize_the_factor_are_one_problem(
+    decidb_cli_highs, tmp_path, maximized, minimized, scale
+):
+    """`MAXIMIZE -b * SUM(x) + 4 * b` is `MINIMIZE b * SUM(x) - 4 * b`: both build one model, and each answers as every
+    assignment of the three rows says (the objective is `b * (4 - SUM(x))`, best at b = 1 and SUM(x) = 2). The minus
+    is taken off the factor whether it stands alone or inside a product."""
+    clause = "SUM(x) >= 2 AND SUM(x) <= 7"
+    maximized_sql = _bool_factor_sql(clause, f"MAXIMIZE {maximized}")
+    minimized_sql = _bool_factor_sql(clause, f"MINIMIZE {minimized}")
+    feasible = lambda a: 2 <= _bool_factor_sum(a) <= 7  # noqa: E731
+    for sql, maximize in ((maximized_sql, True), (minimized_sql, False)):
+        # The written objective: `scale * b * (4 - SUM(x))` maximized, or its negation minimized.
+        value = lambda a: (1 if maximize else -1) * scale * a["b"] * (4 - _bool_factor_sum(a))  # noqa: E731
+        judge_rows(answer(decidb_cli_highs, sql), _BOOL_FACTOR_DOMAINS, feasible, value, maximize)
+    assert decidb_cli_highs.dump_model(maximized_sql, tmp_path / "maximized.txt") == decidb_cli_highs.dump_model(
+        minimized_sql, tmp_path / "minimized.txt"
+    )
+
+
+@pytest.mark.min_max
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_a_constraint_with_a_negated_boolean_factor_answers_as_the_oracle(decidb_cli_highs):
+    """`-b * SUM(x) >= -4` bounds b * SUM(x) by 4: b = 1 only while the sum stays at 4 or below."""
+    sql = _bool_factor_sql("SUM(x) >= 2 AND -b * SUM(x) >= -4", "MAXIMIZE SUM(x) + 6 * b")
+    judge_rows(
+        answer(decidb_cli_highs, sql),
+        _BOOL_FACTOR_DOMAINS,
+        lambda a: _bool_factor_sum(a) >= 2 and -a["b"] * _bool_factor_sum(a) >= -4,
+        lambda a: _bool_factor_sum(a) + 6 * a["b"],
+    )
+
+
+@pytest.mark.error
+@pytest.mark.correctness
+def test_a_minus_over_data_stays_in_the_data(decidb_cli_highs):
+    """`-c * SUM(x)` with c the INT minimum: DuckDB evaluates `-c` and raises, as it does for the query written alone.
+    Moving that minus onto the term's sign would drop the error."""
+    sql = """
+        SET decide_direct_solve='off';
+        SELECT id, x FROM (VALUES (1, (-2147483647 - 1)::INTEGER), (2, 3)) t(id, c)
+        DECIDE x(INT)
+        SUCH THAT x <= 3 AND -c * SUM(x) <= 5
+        MAXIMIZE SUM(x)"""
+    with pytest.raises(DeciDBCliError, match="Overflow in negation"):
+        decidb_cli_highs.execute(sql)

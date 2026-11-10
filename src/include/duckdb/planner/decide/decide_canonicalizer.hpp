@@ -402,11 +402,18 @@ private:
 	//! In a constraint a factor that varies by row is a tuple term of the row's constraint
 	//! (language/guide.md §6.4): it is peeled like any other and the comparison takes the
 	//! VALUE shape, where the reducer becomes a helper decision the row's factor multiplies.
+	//!
+	//! A minus over a factor that reads a decision (`-b * SUM(x)`) is the term's sign, not part of the factor: it is
+	//! taken off the factor and `out_negated` says the term is negated. A minus over data stays where it is, since
+	//! DuckDB evaluates it and can raise.
 	const Expression &PeelScale(const Expression &expr, unique_ptr<Expression> &out_scale, bool &out_divides,
-	                            Clause clause = Clause::CONSTRAINT) const;
+	                            bool &out_negated, Clause clause = Clause::CONSTRAINT) const;
+	//! A copy of `factor` without the minus signs over what it reads of a decision (`-b`, `-(2 * b)`, `2 * -b`), with
+	//! `negated` toggled for each.
+	unique_ptr<Expression> WithoutDecisionNegation(const Expression &factor, bool &negated) const;
 
-	//! True when `expr` is one decision declared BOOL, under the binder's casts, a sign, and factors known before the
-	//! query runs: `b`, `-b`, `2 * b`. A reducer under such a factor takes the VALUE shape.
+	//! True when `expr` is one decision declared BOOL, under the binder's casts, and factors known before the query
+	//! runs: `b`, `2 * b`. A reducer under such a factor takes the VALUE shape.
 	bool IsBooleanFactor(const Expression &expr) const;
 	//! The scope of a tuple term, as a key of the key lattice (JoinDecideKeys): the join of its factors' scopes. A
 	//! decision has its own key (decision_keys), data `data_key` -- the enclosing `per` key, whose scope check makes

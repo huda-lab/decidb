@@ -361,9 +361,6 @@ bool DecideCanonicalizer::IsBooleanFactor(const Expression &expr) const {
 		return false;
 	}
 	auto &func = cur->Cast<BoundFunctionExpression>();
-	if (func.function.name == "-" && func.children.size() == 1) {
-		return IsBooleanFactor(*func.children[0]); // `-b * SUM(x)`
-	}
 	if (func.function.name == "*") {
 		// Data times the Boolean. A product of two decisions beside a reducer is degree 3, which the shape check
 		// refuses after canonicalization, so reading its first decision here only decides the shape it is refused in.
@@ -497,10 +494,34 @@ bool DecideCanonicalizer::IsCorrelatedSubqueryRef(const Expression &expr) const 
 	return correlated_subquery_table_indexes.find(idx) != correlated_subquery_table_indexes.end();
 }
 
+unique_ptr<Expression> DecideCanonicalizer::WithoutDecisionNegation(const Expression &factor, bool &negated) const {
+	auto &bare = *UnwrapDecideCasts(factor, decide_index);
+	if (bare.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return factor.Copy();
+	}
+	auto &func = bare.Cast<BoundFunctionExpression>();
+	if (func.function.name == "-" && func.children.size() == 1 && ReferencesDecideVar(*func.children[0])) {
+		negated = !negated;
+		return WithoutDecisionNegation(*func.children[0], negated);
+	}
+	if (func.function.name == "*" && func.children.size() == 2) {
+		const bool before = negated;
+		auto left = ReferencesDecideVar(*func.children[0]) ? WithoutDecisionNegation(*func.children[0], negated)
+		                                                   : func.children[0]->Copy();
+		auto right = ReferencesDecideVar(*func.children[1]) ? WithoutDecisionNegation(*func.children[1], negated)
+		                                                    : func.children[1]->Copy();
+		if (negated != before) {
+			return BindOp("*", std::move(left), std::move(right));
+		}
+	}
+	return factor.Copy();
+}
+
 const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_ptr<Expression> &out_scale,
-                                                 bool &out_divides, Clause clause) const {
+                                                 bool &out_divides, bool &out_negated, Clause clause) const {
 	out_scale = nullptr;
 	out_divides = false;
+	out_negated = false;
 	const char *clause_name = clause == Clause::OBJECTIVE ? "DECIDE objective" : "DECIDE constraint";
 
 	// Only a DECISION-BEARING reducer is scaled here: a data-only reducer
@@ -514,6 +535,8 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 	// rule covers `M * AGG`, `AGG / D` and every nesting of the two.
 	vector<const Expression *> multipliers;
 	vector<const Expression *> divisors;
+	//! The factors whose minus signs were taken off (WithoutDecisionNegation); `multipliers` points into them.
+	vector<unique_ptr<Expression>> without_negation;
 	const Expression *cur = &expr;
 
 	while (true) {
@@ -560,8 +583,10 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 			// either kind a Boolean decision on a bare reducer: the clause takes the VALUE shape, where the
 			// reducer becomes a helper decision and the product `b * helper` is linearized as every Boolean
 			// product is. An INT or REAL decision is not convex, and no decision divides.
+			bool factor_negated = false;
+			auto positive_factor = WithoutDecisionNegation(*factor, factor_negated);
 			const bool boolean_factor =
-			    !factor_divides && IsBooleanFactor(*factor) &&
+			    !factor_divides && IsBooleanFactor(*positive_factor) &&
 			    UnwrapDecideCasts(*term, decide_index)->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE;
 			if (!boolean_factor) {
 				throw BinderException(
@@ -570,7 +595,9 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 				                                 : "Only constants, query-wide values or a BOOL decision can scale "
 				                                   "SUM/AVG/MIN/MAX.");
 			}
-			multipliers.push_back(factor);
+			out_negated = out_negated != factor_negated;
+			without_negation.push_back(std::move(positive_factor));
+			multipliers.push_back(without_negation.back().get());
 			cur = term;
 			continue;
 		}
@@ -699,7 +726,11 @@ void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Ato
 		    // composes with it.
 		    unique_ptr<Expression> scale;
 		    bool divides = false;
-		    auto &term = PeelScale(whole, scale, divides, clause);
+		    bool negated;
+		    auto &term = PeelScale(whole, scale, divides, negated, clause);
+		    if (negated) {
+			    term_sign = -term_sign;
+		    }
 		    if (factor) {
 			    scale = ComposeScale(factor, factor_divides, std::move(scale), divides, divides);
 		    }
