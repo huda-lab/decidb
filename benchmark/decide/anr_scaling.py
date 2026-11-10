@@ -17,6 +17,7 @@ stays near 1.
     python3 benchmark/decide/anr_scaling.py --only range     # workloads whose name matches
     python3 benchmark/decide/anr_scaling.py --phase P0       # store these numbers as P0's
     python3 benchmark/decide/anr_scaling.py --phase P2 --against P0
+    DECIDB_EVALUATOR=tree python3 benchmark/decide/anr_scaling.py --phase T --against P2
 
 Writes results/anr_scaling.csv, or with --phase results/anr_scaling_<phase>.csv, where a run
 replaces the workloads and sizes it measured and keeps the rest, so `--only` can add to a
@@ -163,7 +164,11 @@ def run(name: str, n: int) -> dict:
         f".output /dev/null\nSET decide_frame_limit = 1000000000;\nSET decide_direct_solve = 'off';\n"
         f"CREATE TEMP TABLE result AS {sql};\n"
     )
-    env = {key: value for key, value in os.environ.items() if not key.startswith("DECIDB_")}
+    # The caller's DECIDB_ switches are dropped, so that a stray dump or limit does not skew a
+    # measurement, except the evaluator: `DECIDB_EVALUATOR=tree <this script>` measures the tree.
+    env = {
+        key: value for key, value in os.environ.items() if not key.startswith("DECIDB_") or key == "DECIDB_EVALUATOR"
+    }
     env.update(DECIDB_BENCH="1", DECIDB_PROFILE="1", DECIDB_TIME_LIMIT="120")
     returncode, stderr, peak_bytes = run_measured([str(DECIDB), ":memory:"], script, env, timeout=900)
     row = {"workload": name, "rows": n, "status": "ok" if returncode == 0 else "error"}
