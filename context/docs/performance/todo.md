@@ -23,9 +23,9 @@ Find the point where each workload and backend stops fitting comfortably, and wh
 
 ## PERF-23 — Variant numbering
 
-Measure `BuildSignatureIds` (`execution.evaluate_constraints`) on d1, a 1M-row join with `per l.l_orderkey: assign <=
-o.o_shippriority + 1`, where every class has one variant, and on a variant of it where some classes hold several: the
-numbering groups the kept rows once more by key and fields. Compare with the same clause without `per`.
+Measure the descent's variant numbering (`execution.tree_descent`: a set E's entries and instances) on d1, a 1M-row
+join with `per l.l_orderkey: assign <= o.o_shippriority + 1`, where every class has one variant, and on a variant of it
+where some classes hold several. Compare with the same clause without `per`.
 
 ## PERF-24 — A nested objective's helpers
 

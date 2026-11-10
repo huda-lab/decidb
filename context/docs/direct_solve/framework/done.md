@@ -70,10 +70,10 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   gated read passes a row only once the CTE is computed, whichever side of the product is built first, so a check raises
   before any rule-built raise. Gates chain: a rule gates the reader again on its own verdict (A1), computed from reads
   the row checks gate, so a bad value raises before a rule's own, and every read after waits for the newest verdict
-  alone; the verdict CTEs nest oldest outermost (`DirectSourceReader::Finish`). The solver path uses the same reader
-  with one read plus the side tables' and the checks' (`DirectInstallRowChecks`); `PhysicalDecide::RunScopeChecks` keeps
-  only the objective's produced-once check (D72). A rule builds a plan over one read with `DirectBuildOverRead`, or over
-  its only read with `DirectBuildOverOneRead`.
+  alone; the verdict CTEs nest oldest outermost (`DirectSourceReader::Finish`). The solver path plans no side plan: it
+  keeps the checks and the side tables' records for the tree, which evaluates them on the rows it reads
+  (`DirectRetainRowChecks`, `DecideTreeColumns::CheckData`). A rule builds a plan over one read with
+  `DirectBuildOverRead`, or over its only read with `DirectBuildOverOneRead`.
 - **Per-row bound reader** (`direct_bound_reader.{hpp,cpp}`; A1 is its only user until R1 is built on it). It makes sure
   two rules cannot read a bound differently. Its header defines `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for
   every direct-solve file. A per-row bound is read by the solver path's own classifier

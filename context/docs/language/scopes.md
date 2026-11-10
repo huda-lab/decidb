@@ -98,7 +98,8 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
   relation-qualified reducer over decisions, given a keyed scope of its own (`KeyedScopeInfo::signature`), and the
   objective (`objective_signature`). A field is a data value (the data terms of one additive context summed into one,
   D83), a decision by instance, or a reducer's `by` key; one the key holds by construction (`KeyHoldsField`) is none.
-  Execution numbers the rows by key and fields (`BuildSignatureIds`), so a class splits only where the data differs.
+  Execution numbers the rows by key and fields (a set E's instances in the descent), so a class splits only where the
+  data differs.
   The bound-side rewrite adds `VALUE_IS_VALID` checks for the data values bounds read; an empty group is no check:
   execution skips its instance (D68, `SkipGroupsWithAnEmptyReducer`).
 
@@ -119,21 +120,21 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
 
 ## Execution
 
-In `src/execution/operator/decide/physical_decide.cpp`:
+In `src/execution/operator/decide/` (the tree: `decide_descent.cpp`, `decide_tree_columns.cpp`,
+`decide_model_emitter.cpp`):
 
-- `RunScopeChecks` first: the objective's signature must have one variant (D72). Then each clause reads only its kept
-  rows: `KeptRows` / `KeepRowsWhere` evaluate a condition
-  (the `and`/`or` order of guide §6.3), and `ExecuteOnReadRows` runs every other expression only on the rows a mask
-  marks, NULL elsewhere.
-- `BuildGroupIds` partitions rows by a key, NULL a class; `LookupOrBuildPerGroupIds` caches one partition per key so
+- The descent reads each node's `when` first, on the rows that reach it (`DecideDescent::Gate`, the `and`/`or` order
+  of guide §6.3), and passes on only the rows it keeps, so every other expression runs only on those rows.
+- A key's dictionary (`DecideKeyMap`) partitions rows by the key, NULL a class; the nodes of one key share it, so
   every clause and check on the same key shares the numbering. An empty or constant key is one group.
-  `CollectGroupClasses` lists the classes a model row stands for (DIAGNOSE's `group` column).
-- `BuildKeyedMappings` gives every row its class's solver column, for keyed decisions and for helpers.
-- `BuildQualifierKeepMask` keeps one row per class of an inner `per` (or colon form) in each group, among the rows
-  the reducer reads; `ApplyQualifierToFilter` ANDs it into the term's filter. AVG's denominator then counts classes
-  without special code. A reducer whose body has a field keeps one row per variant of each class: its own keyed
-  scope numbers the rows by key and signature (D71), so every row it keeps stands for rows that read the same value.
-  The mask is per term, so `SUM(D: a * open) + sum(b * ship)` de-duplicates only the first.
+  `DecideGroupClassSets` lists the classes a model row stands for (DIAGNOSE's `group` column).
+- The model emitter's keyed mappings give every row its class's solver column, for keyed decisions and for helpers;
+  the objective's signature must have one variant (D72).
+- An inner `per` (or colon form) keeps one row per class in each group, among the rows the reducer reads: its operand
+  holds one entry per class, and the reducer reads each one's first row (`FirstOfEachInstance`). AVG's denominator then
+  counts classes without special code. A reducer whose body has a field keeps one row per variant of each class: its own
+  keyed scope numbers the rows by key and signature (D71), so every row it keeps stands for rows that read the same
+  value. The mask is per term, so `SUM(D: a * open) + sum(b * ship)` de-duplicates only the first.
 - The prepared model (`decide_prepared_model.hpp`) carries a clause's scope as one `DecideClauseScope` — `when`,
   `per` (`PerRole`: `NONE`, `ONE_ROW_PER_CLASS`, `NAMES_CLASSES`) and `class_key` — embedded in `DecideConstraint`
   (beside its `group_key`) and `ComposedMinMaxConstraint`, and on `DecideObjective` as `when_condition`; an objective
