@@ -42,7 +42,8 @@ reducers to any depth. Example 9: `sum(max(ship) by (S.customerID)) by (D.depotI
   - a `by` key other than the `per` key: needs inner groups that differ from the outer classes in the two-level
     rewrite;
   - `avg` as the outer reducer: needs an average over classes, whose count is data;
-  - the two-level objective beside another term.
+  - the two-level objective beside another term, and with it a factor whose sign is known only when the query runs:
+    both need the outer extremum pinned in both directions, as the composed pass pins a flat one.
 - **What admitting a shape takes:** lift the gate for it, and let the value rewrite (`RewriteScopedReducers`) recurse:
   one inner helper per class of the inner `by`, inside the outer group, defined before the outer reducer that reads
   it.

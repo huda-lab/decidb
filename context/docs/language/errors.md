@@ -80,7 +80,7 @@ what DeciDB formulates; their open work is in the owning stage's `todo.md`.
 |---|---|
 | **roadmap** A reducer inside a reducer, except the two-level objective | `DECIDE: an aggregate inside an aggregate is not supported yet` |
 | **roadmap** The two-level objective beside another term | the same |
-| The two-level objective under a factor whose sign is known only when the query runs (`(SELECT ...) * max(per k: ...)`) | the same |
+| **roadmap** The two-level objective under a factor whose sign is known only when the query runs (`(SELECT ...) * max(per k: ...)`) | the same |
 | **roadmap** A `per` inside the two-level objective's inner reducer | `DECIDE: per inside the inner reducer of min(per g: sum(...) by (g)) is not supported yet` |
 | **roadmap** A `when` inside either reducer of the two-level objective | `DECIDE: when inside the outer reducer of min(per g: ...) is not supported yet; write it in front of the objective` (inner reducer likewise) |
 | **roadmap** A two-level `by` key other than its `per` key | `DECIDE: in min(per g: sum(...) by (id)) the by key must be the per key; any other is not supported yet` |

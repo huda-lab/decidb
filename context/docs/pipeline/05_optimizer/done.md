@@ -744,7 +744,11 @@ set. The two-level form is the objective's one term, `[-] [factor] outer(...)`: 
 times its factor's sign (`ScaleSignAtPlanTime`), and both stay on the term, where extraction reads them into every
 member coefficient, so an outer extremum under a negative direction is the other one over the negated members. The
 physical layer fixes that extremum at plan time, so a factor whose sign is known only when the query runs is refused
-with the binder's text (FRM-4). `RewriteMinMaxObjectiveTree` is split out from `RewriteMinMaxObjective` because the
+with the binder's text. The refusal is the design, not a gap: the two-level form is the objective's only term, so a
+factor only scales its optimum unless its sign flips the direction, and the refusal never answers wrongly. Pinning the
+outer extremum in both directions, as the composed pass pins a flat one, pays for itself once the two-level form can
+sit beside another term ([roadmap.md](../../language/roadmap.md#nested-reducers-anr-pp-25-2832)).
+`RewriteMinMaxObjectiveTree` is split out from `RewriteMinMaxObjective` because the
 rewrite writes through a pointer that walks *into* the tree past the two-level form's
 wrapper, the `when` wrapper and casts, and has early returns: the objective must be
 detached, rewritten, and reinstalled through `SetObjective`.
