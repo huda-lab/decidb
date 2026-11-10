@@ -198,7 +198,7 @@ struct DecideNode {
 	bool tightest_bound = false;
 	//! A grouped root whose `per K:` names the classes its rows stand for (DecideClauseScope::NAMES_CLASSES): its
 	//! instances are its `by` key's groups (language/guide.md §6.4), so it holds a kept row in no class of K too, in a
-	//! slot of its own (DecideDescentGroup::in_a_class). So does a relation-qualified reducer's operand: its reducer
+	//! slot of its own (DecideNodeGroups::in_a_class). So does a relation-qualified reducer's operand: its reducer
 	//! reads every row its `when` keeps, and its `per K'` keeps no value of a row in no class of K' (§5.3). So does an
 	//! O an anchor in no timeline (§5.6, D75).
 	bool holds_rows_in_no_class = false;
@@ -224,7 +224,7 @@ struct DecideNode {
 	vector<DecideProgram> programs;
 	vector<idx_t> tests;
 	//! The source columns its programs read beyond `columns` (a query-wide scale on a reducer's operand), as chunk
-	//! references. Its entries carry them (DecideDescentEntry::program_columns), but they are no field and split no
+	//! references. Its entries carry them (DecideEntryLayout::program_columns), but they are no field and split no
 	//! entry.
 	vector<unique_ptr<Expression>> program_columns;
 	//! The data reducers its programs read, after its program columns in its layout.

@@ -2,6 +2,7 @@
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/hash.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/create_sort_key.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -160,21 +161,176 @@ static vector<Value> DescentColumnValues(Vector &values, idx_t count) {
 	return result;
 }
 
-//! A UBIGINT column of `values`.
-static void DescentIds(Vector &result, const vector<idx_t> &values) {
+//! A UBIGINT column of `count` values.
+static void DescentIds(Vector &result, const idx_t *values, idx_t count) {
 	auto data = FlatVector::GetData<uint64_t>(result);
-	for (idx_t i = 0; i < values.size(); i++) {
+	for (idx_t i = 0; i < count; i++) {
 		data[i] = values[i];
 	}
+}
+
+static void DescentIds(Vector &result, const vector<idx_t> &values) {
+	DescentIds(result, values.data(), values.size());
+}
+
+void DecideColumns::Initialize(Allocator &allocator_p, vector<LogicalType> types_p) {
+	allocator = &allocator_p;
+	types = std::move(types_p);
+	chunks.clear();
+	count = 0;
+}
+
+void DecideColumns::Append(DataChunk &source, const SelectionVector &selection, idx_t append) {
+	if (types.empty()) {
+		count += append;
+		return;
+	}
+	for (idx_t done = 0; done < append;) {
+		const auto offset = count % STANDARD_VECTOR_SIZE;
+		if (offset == 0) {
+			chunks.push_back(make_uniq<DataChunk>());
+			chunks.back()->Initialize(*allocator, types);
+		}
+		auto &target = *chunks.back();
+		const auto take = MinValue<idx_t>(append - done, STANDARD_VECTOR_SIZE - offset);
+		for (idx_t c = 0; c < types.size(); c++) {
+			VectorOperations::Copy(source.data[c], target.data[c], selection, done + take, done, offset);
+		}
+		target.SetCardinality(offset + take);
+		count += take;
+		done += take;
+	}
+}
+
+Value DecideColumns::GetValue(idx_t column, idx_t row) const {
+	return chunks[row / STANDARD_VECTOR_SIZE]->GetValue(column, row % STANDARD_VECTOR_SIZE);
+}
+
+vector<Value> DecideColumns::GetValues(idx_t row, idx_t begin, idx_t end) const {
+	vector<Value> values;
+	values.reserve(end - begin);
+	for (idx_t c = begin; c < end; c++) {
+		values.push_back(GetValue(c, row));
+	}
+	return values;
+}
+
+vector<Value> DecideNodeGroups::Key(idx_t slot) const {
+	if (per_row) {
+		return {Value::UBIGINT(first_rows[slot])};
+	}
+	return keys.GetValues(slot, 0, keys.Types().size());
+}
+
+const DecideSpelling &DecideNodeGroups::Spelling(idx_t slot) const {
+	return spellings[slot];
+}
+
+//! Ranks numbering `count` items by their sort keys, `keys` of `count` BLOBs as CreateSortKey writes them, equal keys
+//! in item order: flat's NumberGroupsByValue.
+static vector<idx_t> DescentRanks(const vector<string_t> &keys) {
+	vector<idx_t> order(keys.size());
+	std::iota(order.begin(), order.end(), 0);
+	std::stable_sort(order.begin(), order.end(), [&](idx_t left, idx_t right) {
+		auto &l = keys[left];
+		auto &r = keys[right];
+		const auto compared = memcmp(l.GetData(), r.GetData(), MinValue(l.GetSize(), r.GetSize()));
+		return compared != 0 ? compared < 0 : l.GetSize() < r.GetSize();
+	});
+	vector<idx_t> ranks(keys.size());
+	for (idx_t rank = 0; rank < order.size(); rank++) {
+		ranks[order[rank]] = rank;
+	}
+	return ranks;
+}
+
+//! The sort keys of `columns`' rows `count` of them, each column ascending with NULL after every value, as ORDER BY
+//! places them and flat numbers a key's groups (EncodeSortKeys), held in `heap`.
+static void DescentSortKeys(DataChunk &columns, StringHeap &heap, vector<string_t> &keys) {
+	const vector<OrderModifiers> modifiers(columns.ColumnCount(),
+	                                       OrderModifiers(OrderType::ASCENDING, OrderByNullType::NULLS_LAST));
+	Vector encoded(LogicalType::BLOB, MaxValue<idx_t>(columns.size(), 1));
+	CreateSortKeyHelpers::CreateSortKey(columns, modifiers, encoded);
+	auto data = FlatVector::GetData<string_t>(encoded);
+	for (idx_t i = 0; i < columns.size(); i++) {
+		keys.push_back(heap.AddBlob(data[i]));
+	}
+}
+
+//! A node's slots by value: of the enclosing slot, then of the key (flat's NumberGroupsByValue). A node per row's slot
+//! is keyed by its row, so its slots rank by enclosing slot and then row: they are made in row order within one
+//! enclosing slot, unless two paths reach the node, which a sort of that slot's rows orders.
+static void DescentRankGroups(DecideNodeGroups &groups) {
+	const auto count = groups.size();
+	if (groups.per_row) {
+		idx_t enclosing = 0;
+		for (auto parent : groups.parent_slots) {
+			if (parent != DConstants::INVALID_INDEX) {
+				enclosing = MaxValue(enclosing, parent + 1);
+			}
+		}
+		// A counting sort by the enclosing slot, INVALID last.
+		vector<idx_t> begin(enclosing + 2, 0);
+		auto bucket = [&](idx_t slot) {
+			const auto parent = groups.parent_slots[slot];
+			return parent == DConstants::INVALID_INDEX ? enclosing : parent;
+		};
+		for (idx_t slot = 0; slot < count; slot++) {
+			begin[bucket(slot) + 1]++;
+		}
+		for (idx_t b = 1; b < begin.size(); b++) {
+			begin[b] += begin[b - 1];
+		}
+		vector<idx_t> order(count);
+		auto next = begin;
+		for (idx_t slot = 0; slot < count; slot++) {
+			order[next[bucket(slot)]++] = slot;
+		}
+		for (idx_t b = 0; b + 1 < begin.size(); b++) {
+			auto first = order.begin() + begin[b];
+			auto last = order.begin() + begin[b + 1];
+			auto by_row = [&](idx_t left, idx_t right) {
+				return groups.first_rows[left] < groups.first_rows[right];
+			};
+			if (!std::is_sorted(first, last, by_row)) {
+				std::stable_sort(first, last, by_row);
+			}
+		}
+		groups.ranks.assign(count, 0);
+		for (idx_t rank = 0; rank < count; rank++) {
+			groups.ranks[order[rank]] = rank;
+		}
+		return;
+	}
+	StringHeap heap;
+	vector<string_t> keys;
+	keys.reserve(count);
+	const auto key_columns = groups.keys.Types().size();
+	vector<LogicalType> types {LogicalType::UBIGINT};
+	types.insert(types.end(), groups.keys.Types().begin(), groups.keys.Types().end());
+	DataChunk columns;
+	columns.InitializeEmpty(types);
+	Vector parents(LogicalType::UBIGINT);
+	for (idx_t start = 0; start < count; start += STANDARD_VECTOR_SIZE) {
+		const auto size = MinValue<idx_t>(STANDARD_VECTOR_SIZE, count - start);
+		DescentIds(parents, groups.parent_slots.data() + start, size);
+		columns.data[0].Reference(parents);
+		for (idx_t c = 0; c < key_columns; c++) {
+			columns.data[1 + c].Reference(groups.keys.Window(start / STANDARD_VECTOR_SIZE).data[c]);
+		}
+		columns.SetCardinality(size);
+		DescentSortKeys(columns, heap, keys);
+	}
+	groups.ranks = DescentRanks(keys);
 }
 
 DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
     : tree(tree_p), context(context_p), containers(tree.nodes.size()), group_maps(tree.nodes.size()),
       entry_maps(tree.nodes.size()), instance_maps(tree.nodes.size()), signature_types(tree.nodes.size()),
       shared(tree.nodes.size(), false), seen(tree.nodes.size()), landed(tree.nodes.size()),
-      decision_groups(tree.keyed_scopes.size()), decision_rows(tree.keyed_scopes.size()),
-      decision_recorded(tree.keyed_scopes.size()), decision_layouts(tree.keyed_scopes.size()),
-      spellings(tree.keys.size()), failed_rows(tree.nodes.size()) {
+      decision_groups(tree.keyed_scopes.size()), decision_sort_keys(tree.keyed_scopes.size()),
+      decision_rows(tree.keyed_scopes.size()), decision_recorded(tree.keyed_scopes.size()),
+      decision_layouts(tree.keyed_scopes.size()), spellings(tree.keys.size()), failed_rows(tree.nodes.size()) {
 	// The paths that reach each node, roots first: a node reached by one reads each of a window's rows once.
 	vector<idx_t> paths(tree.nodes.size(), 0);
 	std::function<void(idx_t)> reach = [&](idx_t node) {
@@ -188,24 +344,52 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 	for (auto root : tree.roots) {
 		reach(root);
 	}
+	auto &allocator = Allocator::Get(context);
 	for (idx_t n = 0; n < tree.nodes.size(); n++) {
 		auto &node = *tree.nodes[n];
+		auto &container = containers[n];
 		shared[n] = paths[n] > 1;
 		signature_types[n] = DescentSignatureTypes(tree, node);
+		// An entry's values: its signature's, its carried and program columns, and an O's order key and partition.
+		auto types = signature_types[n];
+		auto &layout = container.layout;
+		layout.columns = types.size();
+		auto columns = DescentTypes(node.columns);
+		types.insert(types.end(), columns.begin(), columns.end());
+		layout.program_columns = types.size();
+		auto program_columns = DescentTypes(node.program_columns);
+		types.insert(types.end(), program_columns.begin(), program_columns.end());
+		if (node.kind == DecideNodeKind::FRAME && node.over) {
+			layout.order = types.size();
+			types.push_back(node.over->return_type);
+			layout.order_key = types.size();
+			types.push_back(LogicalType::BLOB);
+			if (node.frame_spec) {
+				layout.partition = types.size();
+				auto partition = DescentKeyTypes(tree, node.frame_spec->partition_key);
+				types.insert(types.end(), partition.begin(), partition.end());
+				layout.partition_present = types.size();
+				types.push_back(LogicalType::BOOLEAN);
+			}
+		}
+		layout.end = types.size();
+		container.values.Initialize(allocator, types);
 		const auto scope = node.kind == DecideNodeKind::SCOPE;
 		// A node per row has no key (DecideTreePer): each row is a slot of its own.
 		D_ASSERT(!scope || node.per != DecideTreePer::ROW || node.key == DConstants::INVALID_INDEX);
 		if (scope && node.per == DecideTreePer::ROW) {
+			container.groups.per_row = true;
 			continue;
 		}
-		vector<LogicalType> types;
-		if (scope) {
-			types.push_back(LogicalType::UBIGINT);
-		}
 		auto key = DescentKeyTypes(tree, node.key);
-		types.insert(types.end(), key.begin(), key.end());
-		if (!types.empty()) {
-			group_maps[n] = make_uniq<DecideKeyMap>(context, types);
+		container.groups.keys.Initialize(allocator, key);
+		vector<LogicalType> slot_types;
+		if (scope) {
+			slot_types.push_back(LogicalType::UBIGINT);
+		}
+		slot_types.insert(slot_types.end(), key.begin(), key.end());
+		if (!slot_types.empty()) {
+			group_maps[n] = make_uniq<DecideKeyMap>(context, slot_types);
 		}
 		if (!scope) {
 			continue;
@@ -215,7 +399,6 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 		instance.insert(instance.end(), signature_types[n].begin(), signature_types[n].end());
 		instance_maps[n] = make_uniq<DecideKeyMap>(context, instance);
 		auto entry = instance;
-		auto columns = DescentTypes(node.columns);
 		entry.insert(entry.end(), columns.begin(), columns.end());
 		entry.insert(entry.end(), node.dependencies.size(), LogicalType::UBIGINT);
 		entry_maps[n] = make_uniq<DecideKeyMap>(context, entry);
@@ -531,13 +714,13 @@ void DecideDescent::FindGroups(idx_t node_index, const Reach &rows, const vector
 	auto &node = *tree.nodes[node_index];
 	auto &groups = containers[node_index].groups;
 	const auto scope = node.kind == DecideNodeKind::SCOPE;
-	auto create = [&](idx_t i, vector<Value> key) {
-		DecideDescentGroup group;
-		group.parent_slot = scope ? rows.parents[i] : DConstants::INVALID_INDEX;
-		group.key = std::move(key);
-		group.first_row = row_base + rows.rows[i];
-		group.in_a_class = present[i];
-		groups.push_back(std::move(group));
+	// A slot made by row `i`, keyed by its row of `keys`, whose values the caller appends.
+	auto create = [&](idx_t i) {
+		groups.parent_slots.push_back(scope ? rows.parents[i] : DConstants::INVALID_INDEX);
+		groups.first_rows.push_back(row_base + rows.rows[i]);
+		if (!groups.per_row) {
+			groups.in_a_class.push_back(present[i]);
+		}
 	};
 	auto &map = group_maps[node_index];
 	if (!map) {
@@ -545,14 +728,15 @@ void DecideDescent::FindGroups(idx_t node_index, const Reach &rows, const vector
 			if (scope) {
 				// An E's per never merges a node per row's rows: each is a slot of its own, keyed by its row.
 				slots[i] = groups.size();
-				create(i, {Value::UBIGINT(row_base + rows.rows[i])});
+				create(i);
 				continue;
 			}
 			// A G's or O's empty key is one slot.
-			if (groups.empty()) {
-				create(i, {});
+			if (groups.size() == 0) {
+				create(i);
+				groups.keys.Append(keys, *FlatVector::IncrementalSelectionVector(), 1);
 			}
-			groups[0].first_row = MinValue(groups[0].first_row, row_base + rows.rows[i]);
+			groups.first_rows[0] = MinValue(groups.first_rows[0], row_base + rows.rows[i]);
 			slots[i] = 0;
 		}
 		return;
@@ -592,15 +776,19 @@ void DecideDescent::FindGroups(idx_t node_index, const Reach &rows, const vector
 	vector<idx_t> found(count);
 	idx_t next = groups.size();
 	map->FindOrCreate(probe, found.data(), next);
+	SelectionVector created(count);
+	idx_t created_count = 0;
 	for (idx_t j = 0; j < count; j++) {
 		const auto i = selected[j];
 		if (found[j] == groups.size()) {
-			create(i, DescentRowValues(keys, 0, keys.ColumnCount(), i));
+			create(i);
+			created.set_index(created_count++, i);
 		}
-		auto &group = groups[found[j]];
-		group.first_row = MinValue(group.first_row, row_base + rows.rows[i]);
+		auto &first = groups.first_rows[found[j]];
+		first = MinValue(first, row_base + rows.rows[i]);
 		slots[i] = found[j];
 	}
+	groups.keys.Append(keys, created, created_count);
 }
 
 void DecideDescent::FindDecisionGroups(idx_t scope, DataChunk &keys, const vector<bool> &present,
@@ -618,12 +806,12 @@ void DecideDescent::FindDecisionGroups(idx_t scope, DataChunk &keys, const vecto
 			layout->map = make_uniq<DecideKeyMap>(context, types);
 		}
 	}
-	auto create = [&](idx_t i, vector<Value> key) {
-		DecideDescentGroup group;
-		group.parent_slot = DConstants::INVALID_INDEX;
-		group.key = std::move(key);
-		group.first_row = rows[i];
-		groups.push_back(std::move(group));
+	// A class made by row `i`: its value order is its key's (Finish), so only its sort key is kept.
+	auto &sort_keys = decision_sort_keys[scope];
+	auto create = [&](idx_t i) {
+		groups.parent_slots.push_back(DConstants::INVALID_INDEX);
+		groups.first_rows.push_back(rows[i]);
+		groups.in_a_class.push_back(true);
 	};
 	classes.assign(rows.size(), DConstants::INVALID_INDEX);
 	vector<idx_t> selected;
@@ -636,10 +824,11 @@ void DecideDescent::FindDecisionGroups(idx_t scope, DataChunk &keys, const vecto
 		for (auto i : selected) {
 			if (layout->empty_slot == DConstants::INVALID_INDEX) {
 				layout->empty_slot = groups.size();
-				create(i, {});
+				create(i);
+				sort_keys.push_back(string_t());
 			}
-			auto &group = groups[layout->empty_slot];
-			group.first_row = MinValue(group.first_row, rows[i]);
+			auto &first = groups.first_rows[layout->empty_slot];
+			first = MinValue(first, rows[i]);
 			classes[i] = layout->empty_slot;
 		}
 		return;
@@ -657,14 +846,23 @@ void DecideDescent::FindDecisionGroups(idx_t scope, DataChunk &keys, const vecto
 	vector<idx_t> found(selected.size());
 	idx_t next = groups.size();
 	layout->map->FindOrCreate(probe, found.data(), next);
+	SelectionVector created(selected.size());
+	idx_t created_count = 0;
 	for (idx_t j = 0; j < selected.size(); j++) {
 		const auto i = selected[j];
 		if (found[j] == groups.size()) {
-			create(i, DescentRowValues(keys, 0, keys.ColumnCount(), i));
+			create(i);
+			created.set_index(created_count++, j);
 		}
-		auto &group = groups[found[j]];
-		group.first_row = MinValue(group.first_row, rows[i]);
+		auto &first = groups.first_rows[found[j]];
+		first = MinValue(first, rows[i]);
 		classes[i] = found[j];
+	}
+	if (created_count > 0) {
+		DataChunk made;
+		made.InitializeEmpty(types);
+		made.Slice(probe, created, created_count);
+		DescentSortKeys(made, decision_heap, sort_keys);
 	}
 }
 
@@ -749,7 +947,7 @@ void DecideDescent::InsertDistinct(Pending &batch, idx_t row_base) {
 	for (idx_t c = 0; c < value_columns; c++) {
 		probe.data[1 + c].Reference(batch.values.data[c]);
 	}
-	// Where its row reads each node it depends on (DecideDescentEntry::reads).
+	// Where its row reads each node it depends on (DecideNodeContainer::routed).
 	vector<vector<idx_t>> reads(node.dependencies.size(), vector<idx_t>(count, DConstants::INVALID_INDEX));
 	for (idx_t d = 0; d < node.dependencies.size(); d++) {
 		auto &landing = landed[node.dependencies[d]];
@@ -760,13 +958,13 @@ void DecideDescent::InsertDistinct(Pending &batch, idx_t row_base) {
 	}
 	probe.SetCardinality(count);
 	vector<idx_t> entries(count);
-	idx_t next = container.entries.size();
+	idx_t next = container.Count();
 	entry_maps[batch.node]->FindOrCreate(probe, entries.data(), next);
 	// The rows that make a new entry, each the first to read its values.
 	vector<idx_t> created;
 	for (idx_t i = 0; i < count; i++) {
 		container.routed.emplace_back(row_base + batch.rows.rows[i], entries[i]);
-		if (entries[i] == container.entries.size() + created.size()) {
+		if (entries[i] == container.Count() + created.size()) {
 			created.push_back(i);
 		}
 	}
@@ -789,22 +987,126 @@ void DecideDescent::InsertDistinct(Pending &batch, idx_t row_base) {
 	for (idx_t k = 0; k < created.size(); k++) {
 		const auto i = created[k];
 		if (instances[k] == container.instance_entries.size()) {
-			container.instance_entries.push_back(container.entries.size());
+			container.instance_entries.push_back(container.Count());
 		}
-		DecideDescentEntry entry;
-		entry.row = row_base + batch.rows.rows[i];
-		entry.parent_slot = batch.rows.parents[i];
-		entry.slot = batch.slots[i];
-		entry.instance = instances[k];
-		entry.signature = DescentRowValues(batch.values, 0, signature_columns, i);
-		entry.columns = DescentRowValues(batch.values, signature_columns, value_columns, i);
-		entry.program_columns = DescentRowValues(batch.values, value_columns, batch.values.ColumnCount(), i);
-		for (auto &read : reads) {
-			entry.reads.push_back(read[i]);
-		}
-		container.groups[entry.slot].entries.push_back(container.entries.size());
-		container.entries.push_back(std::move(entry));
+		container.rows.push_back(row_base + batch.rows.rows[i]);
+		container.parent_slots.push_back(batch.rows.parents[i]);
+		container.slots.push_back(batch.slots[i]);
+		container.instances.push_back(instances[k]);
 	}
+	container.values.Append(batch.values, selection, created.size());
+}
+
+void DecideDescent::FrameOrder(const DecideNode &node, const DecideEntryLayout &layout, DataChunk &chunk,
+                               const Reach &stored, DataChunk &values) {
+	if (node.frame_spec) {
+		DataChunk partition;
+		vector<bool> present;
+		Key(node.frame_spec->partition_key, chunk, stored, partition, present);
+		for (idx_t c = 0; c < partition.ColumnCount(); c++) {
+			values.data[layout.partition + c].Reference(partition.data[c]);
+		}
+		auto flags = FlatVector::GetData<bool>(values.data[layout.partition_present]);
+		for (idx_t i = 0; i < stored.size(); i++) {
+			flags[i] = present[i];
+		}
+	}
+	auto &order = values.data[layout.order];
+	Evaluate(*node.over, chunk, stored, order);
+	// Use ORDER BY's comparison bytes, including its bound collation, direction and configured NULL placement, rather
+	// than Value's order.
+	Vector *compared = &order;
+	unique_ptr<Vector> collated;
+	if (node.frame_spec && node.frame_spec->order_collation) {
+		DataChunk raw;
+		raw.InitializeEmpty({node.over->return_type});
+		raw.data[0].Reference(order);
+		raw.SetCardinality(stored.size());
+		Reach positions;
+		for (idx_t i = 0; i < stored.size(); i++) {
+			positions.Add(NumericCast<sel_t>(i), 0);
+		}
+		collated = make_uniq<Vector>(node.frame_spec->order_collation->return_type);
+		Evaluate(*node.frame_spec->order_collation, raw, positions, *collated);
+		compared = collated.get();
+	}
+	const auto direction =
+	    node.frame_spec && node.frame_spec->descending ? OrderType::DESCENDING : OrderType::ASCENDING;
+	OrderModifiers modifiers(direction,
+	                         DBConfig::GetConfig(context).ResolveNullOrder(direction, OrderByNullType::ORDER_DEFAULT));
+	CreateSortKeyHelpers::CreateSortKey(*compared, stored.size(), modifiers, values.data[layout.order_key]);
+}
+
+void DecideDescent::Store(idx_t node_index, DataChunk &chunk, const Reach &stored, const vector<idx_t> &slots,
+                          idx_t row_base) {
+	auto &node = *tree.nodes[node_index];
+	auto &container = containers[node_index];
+	auto &layout = container.layout;
+	// A node records the classes of the keyed decisions it defines or reads where it is reached. Its sigma need not
+	// name them: a root's names only what its written clause reads.
+	for (auto variable : node.decisions) {
+		if (variable < tree.variable_scopes.size() && tree.variable_scopes[variable].IsKeyed()) {
+			DecisionClasses(variable, chunk, stored, row_base);
+		}
+	}
+	// Its entries' values, as its layout holds them: its signature's, its carried and program columns, an O's order
+	// key and partition.
+	DataChunk values;
+	if (layout.end > 0) {
+		values.Initialize(Allocator::Get(context), container.values.Types());
+	}
+	DataChunk signatures;
+	Signature(node_index, chunk, stored, row_base, signatures);
+	for (idx_t c = 0; c < layout.columns; c++) {
+		values.data[c].Reference(signatures.data[c]);
+	}
+	for (idx_t c = 0; c < node.columns.size(); c++) {
+		Evaluate(*node.columns[c], chunk, stored, values.data[layout.columns + c]);
+	}
+	for (idx_t c = 0; c < node.program_columns.size(); c++) {
+		Evaluate(*node.program_columns[c], chunk, stored, values.data[layout.program_columns + c]);
+	}
+	if (layout.order != DConstants::INVALID_INDEX && !stored.empty()) {
+		FrameOrder(node, layout, chunk, stored, values);
+	}
+	values.SetCardinality(stored.size());
+	// An entry per row no read failed on.
+	SelectionVector kept(MaxValue<idx_t>(stored.size(), 1));
+	idx_t kept_count = 0;
+	for (idx_t i = 0; i < stored.size(); i++) {
+		if (!Failed(stored.rows[i])) {
+			kept.set_index(kept_count++, i);
+		}
+	}
+	if (kept_count == 0) {
+		return;
+	}
+	if (node.kind == DecideNodeKind::SCOPE && node.per != DecideTreePer::ROW) {
+		// A set E's row reads the G and O nodes it depends on, its children and the helpers its decisions stand for,
+		// which another root may route later in the window. So its entries wait for every root.
+		auto batch = make_uniq<Pending>();
+		batch->node = node_index;
+		for (idx_t k = 0; k < kept_count; k++) {
+			const auto i = kept.get_index(k);
+			batch->rows.Add(stored.rows[i], stored.parents[i]);
+			batch->slots.push_back(slots[i]);
+		}
+		if (layout.end > 0) {
+			batch->values.InitializeEmpty(container.values.Types());
+			batch->values.Slice(values, kept, kept_count);
+		}
+		pending.push_back(std::move(batch));
+		return;
+	}
+	for (idx_t k = 0; k < kept_count; k++) {
+		const auto i = kept.get_index(k);
+		container.rows.push_back(row_base + stored.rows[i]);
+		container.parent_slots.push_back(stored.parents[i]);
+		container.slots.push_back(slots[i]);
+		container.instances.push_back(container.instance_entries.size());
+		container.instance_entries.push_back(container.Count() - 1);
+	}
+	container.values.Append(values, kept, kept_count);
 }
 
 void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base, const Reach &incoming) {
@@ -899,10 +1201,13 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base, co
 			continue;
 		}
 		const auto slot = slots[i];
-		auto &group = container.groups[slot];
 		// A collated key's own least spelling over the rows the node holds in the group.
 		if (!spelled.sort_keys.empty()) {
-			group.spelling.Fold(group.key, spelled.spelled, spelled.sort_keys, i);
+			auto &groups = container.groups;
+			groups.spellings.resize(groups.size());
+			auto &spelling = groups.spellings[slot];
+			spelling.Fold(spelling.least.empty() ? groups.Key(slot) : spelling.label, spelled.spelled,
+			              spelled.sort_keys, i);
 		}
 		children.Add(row, scope ? rows.parents[i] : slot);
 		// A row in no group of a G has no value of it (language/guide.md §5.2), so it holds no entry of the G; it still
@@ -914,141 +1219,12 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base, co
 		stored.Add(row, rows.parents[i]);
 		stored_slots.push_back(slot);
 		// A reader reads a G's or O's value at its group or timeline, and an `else` at the anchor's own row
-		// (language/guide.md §5.6; DecideDescentEntry::reads).
+		// (language/guide.md §5.6; DecideNodeContainer::routed).
 		if (!scope && landing[row] == DConstants::INVALID_INDEX) {
 			landing[row] = node.fallback ? row_base + row : slot;
 		}
 	}
-	// A node records the classes of the keyed decisions it defines or reads where it is reached. Its sigma need not
-	// name them: a root's names only what its written clause reads.
-	for (auto variable : node.decisions) {
-		if (variable < tree.variable_scopes.size() && tree.variable_scopes[variable].IsKeyed()) {
-			DecisionClasses(variable, chunk, stored, row_base);
-		}
-	}
-	DataChunk signatures;
-	Signature(node_index, chunk, stored, row_base, signatures);
-	auto carry = [&](const vector<unique_ptr<Expression>> &carried, DataChunk &values) {
-		if (carried.empty()) {
-			return;
-		}
-		values.Initialize(Allocator::Get(context), DescentTypes(carried));
-		for (idx_t c = 0; c < carried.size(); c++) {
-			Evaluate(*carried[c], chunk, stored, values.data[c]);
-		}
-		values.SetCardinality(stored.size());
-	};
-	DataChunk columns;
-	DataChunk program_columns;
-	carry(node.columns, columns);
-	carry(node.program_columns, program_columns);
-	vector<Value> order, order_keys;
-	vector<vector<Value>> partitions;
-	vector<bool> partition_present;
-	if (node.kind == DecideNodeKind::FRAME && node.over && !stored.empty()) {
-		if (node.frame_spec) {
-			DataChunk partition;
-			Key(node.frame_spec->partition_key, chunk, stored, partition, partition_present);
-			for (idx_t i = 0; i < stored.size(); i++) {
-				partitions.push_back(DescentRowValues(partition, 0, partition.ColumnCount(), i));
-			}
-		}
-		Vector over(node.over->return_type);
-		Evaluate(*node.over, chunk, stored, over);
-		order = DescentColumnValues(over, stored.size());
-		order_keys = order;
-		if (node.frame_spec && node.frame_spec->order_collation) {
-			DataChunk raw;
-			raw.Initialize(context, {node.over->return_type});
-			raw.SetCardinality(stored.size());
-			for (idx_t i = 0; i < stored.size(); i++) {
-				raw.SetValue(0, i, order[i]);
-			}
-			Reach positions;
-			for (idx_t i = 0; i < stored.size(); i++) {
-				positions.Add(i, 0);
-			}
-			Vector collated(node.frame_spec->order_collation->return_type);
-			Evaluate(*node.frame_spec->order_collation, raw, positions, collated);
-			order_keys = DescentColumnValues(collated, stored.size());
-		}
-		// Use ORDER BY's comparison bytes, including its bound collation,
-		// direction and configured NULL placement, rather than Value's order.
-		const auto direction = node.frame_spec && node.frame_spec->descending ? OrderType::DESCENDING
-		                                                                    : OrderType::ASCENDING;
-		OrderModifiers modifiers(direction,
-		                         DBConfig::GetConfig(context).ResolveNullOrder(direction, OrderByNullType::ORDER_DEFAULT));
-		const auto type = node.frame_spec && node.frame_spec->order_collation
-		                      ? node.frame_spec->order_collation->return_type
-		                      : node.over->return_type;
-		Vector compared(type, MaxValue<idx_t>(stored.size(), 1));
-		for (idx_t i = 0; i < stored.size(); i++) {
-			compared.SetValue(i, order_keys[i]);
-		}
-		Vector encoded(LogicalType::BLOB, MaxValue<idx_t>(stored.size(), 1));
-		CreateSortKeyHelpers::CreateSortKey(compared, stored.size(), modifiers, encoded);
-		for (idx_t i = 0; i < stored.size(); i++) {
-			order_keys[i] = encoded.GetValue(i);
-		}
-	}
-	const auto distinct = scope && node.per != DecideTreePer::ROW;
-	auto batch = make_uniq<Pending>();
-	batch->node = node_index;
-	vector<idx_t> kept;
-	for (idx_t i = 0; i < stored.size(); i++) {
-		if (Failed(stored.rows[i])) {
-			continue;
-		}
-		if (distinct) {
-			batch->rows.Add(stored.rows[i], stored.parents[i]);
-			batch->slots.push_back(stored_slots[i]);
-			kept.push_back(i);
-			continue;
-		}
-		DecideDescentEntry entry;
-		entry.row = row_base + stored.rows[i];
-		entry.parent_slot = stored.parents[i];
-		entry.slot = stored_slots[i];
-		entry.signature = DescentRowValues(signatures, 0, signatures.ColumnCount(), i);
-		entry.columns = DescentRowValues(columns, 0, columns.ColumnCount(), i);
-		entry.program_columns = DescentRowValues(program_columns, 0, program_columns.ColumnCount(), i);
-		if (!order.empty()) {
-			entry.order = std::move(order[i]);
-			entry.order_key = std::move(order_keys[i]);
-			if (!partitions.empty()) {
-				entry.partition = std::move(partitions[i]);
-				entry.partition_present = partition_present[i];
-			}
-		}
-		entry.instance = container.instance_entries.size();
-		container.instance_entries.push_back(container.entries.size());
-		container.groups[entry.slot].entries.push_back(container.entries.size());
-		container.entries.push_back(std::move(entry));
-	}
-	if (!kept.empty()) {
-		// A set E's row reads the G and O nodes it depends on, its children and the helpers its decisions stand for,
-		// which another root may route later in the window. So its entries wait for every root.
-		SelectionVector selection(kept.size());
-		for (idx_t k = 0; k < kept.size(); k++) {
-			selection.set_index(k, kept[k]);
-		}
-		vector<LogicalType> types;
-		for (auto *source : {&signatures, &columns, &program_columns}) {
-			auto source_types = source->GetTypes();
-			types.insert(types.end(), source_types.begin(), source_types.end());
-		}
-		if (!types.empty()) {
-			batch->values.InitializeEmpty(types);
-		}
-		idx_t column = 0;
-		for (auto *source : {&signatures, &columns, &program_columns}) {
-			for (idx_t c = 0; c < source->ColumnCount(); c++) {
-				batch->values.data[column++].Slice(source->data[c], selection, kept.size());
-			}
-		}
-		batch->values.SetCardinality(kept.size());
-		pending.push_back(std::move(batch));
-	}
+	Store(node_index, chunk, stored, stored_slots, row_base);
 	Reach reached;
 	for (idx_t i = 0; i < children.size(); i++) {
 		if (!Failed(children.rows[i])) {
@@ -1112,76 +1288,97 @@ void DecideDescent::Append(DataChunk &chunk, idx_t row_base) {
 	pending.clear();
 }
 
+void DecideDescent::Timelines(idx_t node_index) {
+	auto &node = *tree.nodes[node_index];
+	auto &container = containers[node_index];
+	auto &layout = container.layout;
+	auto &timelines = container.timelines;
+	const auto count = container.Count();
+	// Each slot's entries in entry order, which is row order: a counting sort by slot.
+	const auto slot_count = container.groups.size();
+	vector<idx_t> begin(slot_count + 1, 0);
+	for (auto slot : container.slots) {
+		begin[slot + 1]++;
+	}
+	for (idx_t slot = 0; slot < slot_count; slot++) {
+		begin[slot + 1] += begin[slot];
+	}
+	vector<idx_t> by_slot(count);
+	auto next = begin;
+	for (idx_t e = 0; e < count; e++) {
+		by_slot[next[container.slots[e]]++] = e;
+	}
+	auto order_key = [&](idx_t e) {
+		return FlatVector::GetData<string_t>(
+		    container.values.Window(e / STANDARD_VECTOR_SIZE).data[layout.order_key])[e % STANDARD_VECTOR_SIZE];
+	};
+	auto compare = [](const string_t &left, const string_t &right) {
+		const auto compared = memcmp(left.GetData(), right.GetData(), MinValue(left.GetSize(), right.GetSize()));
+		return compared != 0 ? compared : (left.GetSize() < right.GetSize() ? -1 : (left.GetSize() > right.GetSize()));
+	};
+	// A timeline's entries by their order key's comparison bytes, then by row.
+	auto before = [&](idx_t left, idx_t right) {
+		const auto compared = compare(order_key(left), order_key(right));
+		return compared != 0 ? compared < 0 : container.rows[left] < container.rows[right];
+	};
+	vector<idx_t> by_rank(slot_count);
+	for (idx_t slot = 0; slot < slot_count; slot++) {
+		by_rank[container.groups.ranks[slot]] = slot;
+	}
+	for (auto slot : by_rank) {
+		auto first = by_slot.begin() + begin[slot];
+		auto last = by_slot.begin() + begin[slot + 1];
+		if (!std::is_sorted(first, last, before)) {
+			std::stable_sort(first, last, before);
+		}
+		timelines.slots.push_back(slot);
+		timelines.first_position.push_back(timelines.Positions());
+		for (auto at = first; at != last;) {
+			// A position: the entries of one order key.
+			auto end = at + 1;
+			while (end != last && compare(order_key(*at), order_key(*end)) == 0) {
+				end++;
+			}
+			timelines.first_entry.push_back(timelines.entries.size());
+			timelines.entries.insert(timelines.entries.end(), at, end);
+			// Named by its least spelling (D69; flat's DecidePositionRows), and a duplicate position conflicts where
+			// its entries' payload signatures differ.
+			idx_t least = 0;
+			bool conflict = false;
+			if (end - at > 1) {
+				vector<Value> spelled;
+				for (auto e = at; e != end; e++) {
+					spelled.push_back(container.Order(*e));
+				}
+				const auto sort_keys = SpellingKeys(spelled, node.over->return_type);
+				const auto signature = container.Signature(*at);
+				for (idx_t k = 1; k < sort_keys.size(); k++) {
+					conflict = conflict || !DescentEqual(signature, container.Signature(at[k]));
+					if (sort_keys[k] < sort_keys[least]) {
+						least = k;
+					}
+				}
+			}
+			timelines.named_by.push_back(at[least]);
+			timelines.conflict.push_back(conflict);
+			at = end;
+		}
+	}
+	timelines.first_position.push_back(timelines.Positions());
+	timelines.first_entry.push_back(timelines.entries.size());
+}
+
 void DecideDescent::Finish() {
 	if (finished) {
 		return;
 	}
-	for (auto &groups : decision_groups) {
-		vector<idx_t> order(groups.size());
-		std::iota(order.begin(), order.end(), 0);
-		std::stable_sort(order.begin(), order.end(), [&](idx_t left, idx_t right) {
-			return DecideDescentKeyLess(groups[left].key, groups[right].key);
-		});
-		for (idx_t rank = 0; rank < order.size(); rank++) {
-			groups[order[rank]].rank = rank;
-		}
+	for (idx_t scope = 0; scope < decision_groups.size(); scope++) {
+		decision_groups[scope].ranks = DescentRanks(decision_sort_keys[scope]);
 	}
 	for (idx_t n = 0; n < tree.nodes.size(); n++) {
-		auto &node = *tree.nodes[n];
-		auto &container = containers[n];
-		vector<idx_t> order(container.groups.size());
-		std::iota(order.begin(), order.end(), 0);
-		std::stable_sort(order.begin(), order.end(), [&](idx_t left, idx_t right) {
-			auto &l = container.groups[left];
-			auto &r = container.groups[right];
-			return l.parent_slot != r.parent_slot ? l.parent_slot < r.parent_slot : DecideDescentKeyLess(l.key, r.key);
-		});
-		for (idx_t rank = 0; rank < order.size(); rank++) {
-			container.groups[order[rank]].rank = rank;
-		}
-		if (node.kind != DecideNodeKind::FRAME) {
-			continue;
-		}
-		// A position is named by its least spelling, as a group is (D69; flat's DecidePositionRows).
-		vector<Value> spelled;
-		for (auto &entry : container.entries) {
-			spelled.push_back(entry.order);
-		}
-		const auto sort_keys = SpellingKeys(spelled, node.over->return_type);
-		for (auto slot : order) {
-			auto entries = container.groups[slot].entries;
-			std::stable_sort(entries.begin(), entries.end(), [&](idx_t left, idx_t right) {
-				auto &l = container.entries[left];
-				auto &r = container.entries[right];
-				if (Value::NotDistinctFrom(l.order_key, r.order_key)) {
-					return l.row < r.row;
-				}
-				return DescentLess(l.order_key, r.order_key);
-			});
-			DecideDescentTimeline timeline;
-			timeline.slot = slot;
-			idx_t least = DConstants::INVALID_INDEX;
-			for (auto index : entries) {
-				auto &entry = container.entries[index];
-				if (timeline.positions.empty() ||
-				    !Value::NotDistinctFrom(container.entries[timeline.positions.back().entries[0]].order_key,
-				                            entry.order_key)) {
-					DecideDescentPosition position;
-					position.order = entry.order;
-					position.entries.push_back(index);
-					timeline.positions.push_back(std::move(position));
-					least = index;
-				} else {
-					auto &position = timeline.positions.back();
-					position.conflict |= !DescentEqual(container.entries[position.entries[0]].signature, entry.signature);
-					position.entries.push_back(index);
-					if (sort_keys[index] < sort_keys[least]) {
-						position.order = entry.order;
-						least = index;
-					}
-				}
-			}
-			container.timelines.push_back(std::move(timeline));
+		DescentRankGroups(containers[n].groups);
+		if (tree.nodes[n]->kind == DecideNodeKind::FRAME && containers[n].layout.order != DConstants::INVALID_INDEX) {
+			Timelines(n);
 		}
 	}
 	finished = true;
@@ -1192,39 +1389,41 @@ string DecideDescent::Dump() const {
 	for (idx_t n = 0; n < containers.size(); n++) {
 		auto &container = containers[n];
 		auto &node = *tree.nodes[n];
+		auto &groups = container.groups;
 		const auto kind = node.kind == DecideNodeKind::SCOPE ? "E" : node.kind == DecideNodeKind::REDUCER ? "G" : "O";
 		out << "node " << n << " " << kind << " rows " << container.rows_in << " -> " << container.rows_out
-		    << " groups=" << container.groups.size() << " entries=" << container.entries.size()
+		    << " groups=" << groups.size() << " entries=" << container.Count()
 		    << " instances=" << container.instance_entries.size() << " text=" << node.text << "\n";
-		for (idx_t slot = 0; slot < container.groups.size(); slot++) {
-			auto &group = container.groups[slot];
-			out << "  group " << slot << " rank " << group.rank << " parent " << group.parent_slot << " key=(";
-			for (idx_t i = 0; i < group.key.size(); i++) {
-				out << (i ? ", " : "") << group.key[i].ToString();
+		auto print = [&](const vector<Value> &values) {
+			for (idx_t i = 0; i < values.size(); i++) {
+				out << (i ? ", " : "") << values[i].ToString();
 			}
+		};
+		for (idx_t slot = 0; slot < groups.size(); slot++) {
+			out << "  group " << slot << " rank " << groups.ranks[slot] << " parent " << groups.parent_slots[slot]
+			    << " key=(";
+			print(groups.Key(slot));
 			out << ")\n";
 		}
-		for (auto &entry : container.entries) {
-			out << "  row " << entry.row << " parent " << entry.parent_slot << " slot " << entry.slot
-			    << " instance " << entry.instance << " (";
-			for (idx_t i = 0; i < entry.signature.size(); i++) {
-				out << (i ? ", " : "") << entry.signature[i].ToString();
-			}
+		for (idx_t e = 0; e < container.Count(); e++) {
+			out << "  row " << container.rows[e] << " parent " << container.parent_slots[e] << " slot "
+			    << container.slots[e] << " instance " << container.instances[e] << " (";
+			print(container.Signature(e));
 			out << ") data=(";
-			for (idx_t i = 0; i < entry.columns.size(); i++) {
-				out << (i ? ", " : "") << entry.columns[i].ToString();
-			}
+			print(container.Columns(e));
 			out << ")";
 			if (node.kind == DecideNodeKind::FRAME) {
-				out << " over=" << entry.order.ToString();
+				out << " over=" << container.Order(e).ToString();
 			}
 			out << "\n";
 		}
-		for (auto &timeline : container.timelines) {
-			out << "  timeline " << timeline.slot << " {";
-			for (auto &position : timeline.positions) {
-				out << position.order.ToString() << ":" << position.entries.size()
-				    << (position.conflict ? "!" : "") << ";";
+		auto &timelines = container.timelines;
+		for (idx_t t = 0; t < timelines.size(); t++) {
+			out << "  timeline " << timelines.slots[t] << " {";
+			for (auto p = timelines.first_position[t]; p < timelines.first_position[t + 1]; p++) {
+				out << container.Order(timelines.named_by[p]).ToString() << ":"
+				    << timelines.first_entry[p + 1] - timelines.first_entry[p] << (timelines.conflict[p] ? "!" : "")
+				    << ";";
 			}
 			out << "}\n";
 		}

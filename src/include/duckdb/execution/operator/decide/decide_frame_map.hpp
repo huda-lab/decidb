@@ -196,7 +196,7 @@ DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec
 //! What each anchor of `map` reads, once its anchors, timelines and peers are known (`first_peer[t]` the first peer of
 //! timeline `t`, then one past the last): a point's selected peer, a range's window (language/guide.md §5.6), and the
 //! anchors where the frame reads nothing. BuildDecideFrameMap's second half, which the tree's frames share: their
-//! timelines are its descent's (DecideDescentTimeline).
+//! timelines are its descent's (DecideNodeTimelines).
 void SelectDecideFramePeers(ClientContext &context, const DecideFrameSpec &frame, const vector<idx_t> &first_peer,
                             DecideFrameMap &map);
 

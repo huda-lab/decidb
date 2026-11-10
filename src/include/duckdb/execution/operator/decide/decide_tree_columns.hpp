@@ -149,9 +149,9 @@ private:
 	DecideFrameColumnValues frame_values;
 	struct FramePeer {
 		idx_t slot;
-		const DecideDescentPosition *position;
+		idx_t position;
 	};
-	//! Per frame, each peer's timeline slot and position (DecideDescentTimeline), which name it.
+	//! Per frame, each peer's timeline slot and position (DecideNodeTimelines), which name it.
 	vector<vector<FramePeer>> frame_peers;
 
 	//! Per G over data, its folds, once computed; per G, the slot each row lies in, once read.
@@ -171,7 +171,7 @@ private:
 	//! A frame column's value carries the error its row raised (DecideFrameValues), which `program` of `node`, reading
 	//! it there, raises, as flat's read of the row raises it.
 	void CarryFrameErrors(idx_t node, idx_t program, ProgramColumn &column);
-	//! A frame's map from the timelines and positions of its O `node` (DecideDescentTimeline): its anchors, timelines
+	//! A frame's map from the timelines and positions of its O `node` (DecideNodeTimelines): its anchors, timelines
 	//! and peers, which SelectDecideFramePeers selects from; and each peer's timeline slot and position, which D73
 	//! names a position of two payloads by.
 	DecideFrameMap FrameMap(const DecideFrameSpec &frame, idx_t node, idx_t num_rows, vector<FramePeer> &peers) const;

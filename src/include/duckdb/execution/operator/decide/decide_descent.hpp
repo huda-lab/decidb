@@ -10,6 +10,7 @@
 #pragma once
 
 #include "duckdb/common/types/data_chunk.hpp"
+#include "duckdb/common/types/string_heap.hpp"
 #include "duckdb/common/unordered_map.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/execution/expression_executor.hpp"
@@ -24,31 +25,6 @@ namespace duckdb {
 //! key's groups (NumberGroupsByValue), so a group's rank is flat's group number.
 bool DecideDescentKeyLess(const vector<Value> &left, const vector<Value> &right);
 
-struct DecideDescentEntry {
-	idx_t row;
-	//! The enclosing reducer/timeline slot; E's per never changes it.
-	idx_t parent_slot;
-	//! This E instance, reducer group or frame timeline.
-	idx_t slot;
-	//! Distinct sigma within the class. Carried-value error witnesses may
-	//! have several entries belonging to this one instance.
-	idx_t instance = DConstants::INVALID_INDEX;
-	vector<Value> signature;
-	vector<Value> columns;
-	//! What its node's programs read beyond `columns` (DecideNode::program_columns): no field, so it splits no entry.
-	vector<Value> program_columns;
-	//! A set E's, per node it depends on, where its row reads that node's value: a G's group, an O's timeline, or the
-	//! row where the O has an `else`, INVALID where the row did not reach it or an E's, read by class (D88). Rows
-	//! equal in sigma, columns and reads are one entry.
-	vector<idx_t> reads;
-	//! Raw and comparison forms of a frame's over key.
-	Value order;
-	Value order_key;
-	//! D75's per/path partition can be wider than this frame's timeline.
-	vector<Value> partition;
-	bool partition_present = true;
-};
-
 //! A group's least spelling of each collated column of its key, as `min` folds a group's values (D69): its label, a
 //! column not collated as it groups, and per column the sort key of the spelling the label holds.
 struct DecideSpelling {
@@ -60,50 +36,138 @@ struct DecideSpelling {
 	          idx_t i);
 };
 
-struct DecideDescentGroup {
-	//! The G or O slot an E's class lies in; INVALID for a G's or O's group, whose key is its whole path key.
-	idx_t parent_slot;
-	//! The values its rows group on, a collated column under its collation; a message quotes its Label.
-	vector<Value> key;
-	idx_t first_row;
-	//! Value-order rank, assigned by Finish; storage addresses remain stable.
-	idx_t rank = DConstants::INVALID_INDEX;
-	vector<idx_t> entries;
+//! Columns of values, a row per entry or slot, in chunks of STANDARD_VECTOR_SIZE rows as DuckDB's ColumnDataCollection
+//! chunks its rows, but held in memory so that a row is read by its index and a window of rows is one chunk, which an
+//! executor reads in place (DecideTreeColumns).
+class DecideColumns {
+public:
+	void Initialize(Allocator &allocator, vector<LogicalType> types);
+	const vector<LogicalType> &Types() const {
+		return types;
+	}
+	idx_t Count() const {
+		return count;
+	}
+	//! Copies rows `selection[0, count)` of `source`'s first Types().size() columns after the last row, a string into
+	//! the chunk's own heap: no row refers to `source` afterwards.
+	void Append(DataChunk &source, const SelectionVector &selection, idx_t count);
+	Value GetValue(idx_t column, idx_t row) const;
+	//! The values of row `row`'s columns `begin` to `end`.
+	vector<Value> GetValues(idx_t row, idx_t begin, idx_t end) const;
+	//! The rows from `window * STANDARD_VECTOR_SIZE` on, at most STANDARD_VECTOR_SIZE of them.
+	DataChunk &Window(idx_t window) const {
+		return *chunks[window];
+	}
+	idx_t Windows() const {
+		return chunks.size();
+	}
+
+private:
+	Allocator *allocator = nullptr;
+	vector<LogicalType> types;
+	vector<unique_ptr<DataChunk>> chunks;
+	idx_t count = 0;
+};
+
+//! A node's slots (language/guide.md §6.1), or a keyed scope's classes: per slot the G or O slot an E's class lies in
+//! (INVALID for a G's or O's group, whose key is its whole path key), its first row, its rank by value, and the
+//! values its rows group on, a collated column under its collation, which a message quotes through Label. A node per
+//! row's slots are its rows: each is a class of its own, keyed by its row, and holds no key values.
+struct DecideNodeGroups {
+	vector<idx_t> parent_slots;
+	vector<idx_t> first_rows;
+	//! Value order, of the enclosing slot and then the key, assigned by Finish (flat's NumberGroupsByValue).
+	vector<idx_t> ranks;
 	//! False for a slot of rows in no class of the key: a root's (DecideNode::holds_rows_in_no_class), and a G's, whose
-	//! rows reach its operand alone and hold no entry of it.
-	bool in_a_class = true;
-	//! A collated key's least spelling over the rows its node holds in it, which flat names a variant of the class by
-	//! (LeastSpellingRows); Label's is the least over every read of the key. Empty for a key with no collated column.
-	DecideSpelling spelling;
+	//! rows reach its operand alone and hold no entry of it. Empty for a node per row.
+	vector<bool> in_a_class;
+	DecideColumns keys;
+	//! A collated key's least spelling over the rows its node holds in each slot, which flat names a variant of the
+	//! class by (LeastSpellingRows); Label's is the least over every read of the key. Empty for a key with no collated
+	//! column.
+	vector<DecideSpelling> spellings;
+	bool per_row = false;
+
+	idx_t size() const {
+		return parent_slots.size();
+	}
+	bool InAClass(idx_t slot) const {
+		return per_row || in_a_class[slot];
+	}
+	vector<Value> Key(idx_t slot) const;
+	const DecideSpelling &Spelling(idx_t slot) const;
 };
 
-struct DecideDescentPosition {
-	//! Its least spelling of the order key over its rows, which a collation lets them differ in: the name a message
-	//! gives it (D69). Set by Finish.
-	Value order;
+//! An O's timelines (language/guide.md §5.6), in its slots' rank order: per timeline its slot and its positions, per
+//! position its entries, by row, the entry whose order value names it -- its least spelling over its rows, which a
+//! collation lets them differ in (D69) -- and whether its entries' payload signatures differ, which is raised only if
+//! bottom-up selection reads that position (D73). Set by Finish.
+struct DecideNodeTimelines {
+	vector<idx_t> slots;
+	//! Per timeline, its first position; one more for the end.
+	vector<idx_t> first_position;
+	//! Per position, its first entry in `entries`; one more for the end.
+	vector<idx_t> first_entry;
 	vector<idx_t> entries;
-	//! A duplicate position has different payload signatures. This is raised
-	//! only if bottom-up selection reads that position (D73).
-	bool conflict = false;
+	vector<idx_t> named_by;
+	vector<bool> conflict;
+
+	idx_t size() const {
+		return slots.size();
+	}
+	idx_t Positions() const {
+		return named_by.size();
+	}
 };
 
-struct DecideDescentTimeline {
-	idx_t slot;
-	vector<DecideDescentPosition> positions;
+//! Where an entry's values lie among its node's columns (DecideNodeContainer::values): its signature's values
+//! (DecideDescent::Signature), its carried columns, its program columns, and an O's order value, its comparison bytes,
+//! its D75 partition's values -- which can be wider than its timeline -- and whether a class of it holds the entry.
+struct DecideEntryLayout {
+	idx_t columns = 0;
+	idx_t program_columns = 0;
+	idx_t order = DConstants::INVALID_INDEX;
+	idx_t order_key = DConstants::INVALID_INDEX;
+	idx_t partition = DConstants::INVALID_INDEX;
+	idx_t partition_present = DConstants::INVALID_INDEX;
+	idx_t end = 0;
 };
 
+//! A node's entries as columns (language/guide.md §6.1): per entry its row, the enclosing reducer or timeline slot
+//! (E's per never changes it), its own slot -- an E instance, a reducer group or a frame timeline -- and its instance,
+//! its distinct sigma within the class, which several entries of a set E can share; and its values.
 struct DecideNodeContainer {
-	vector<DecideDescentEntry> entries;
+	vector<idx_t> rows;
+	vector<idx_t> parent_slots;
+	vector<idx_t> slots;
+	vector<idx_t> instances;
+	DecideColumns values;
+	DecideEntryLayout layout;
+	//! Per instance, its first entry.
 	vector<idx_t> instance_entries;
-	//! A set E keeps one entry per distinct slot, signature, carried columns and reads, at least one per variant and
-	//! fewer than its rows (DecideDescent::Insert): each row it keeps, with the entry standing for it, a pair per row
-	//! for every set E, though only the objective's root reads them yet. Empty for a node per row, whose entries are
-	//! its rows.
+	//! A set E keeps one entry per distinct slot, signature, carried columns and reads -- where its row reads each node
+	//! it depends on: a G's group, an O's timeline, or the row where the O has an `else` (D88) -- at least one per
+	//! variant and fewer than its rows (DecideDescent::InsertDistinct): each row it keeps, with the entry standing for
+	//! it, a pair per row for every set E, though only the objective's root reads them yet. Empty for a node per row,
+	//! whose entries are its rows.
 	vector<pair<idx_t, idx_t>> routed;
-	vector<DecideDescentGroup> groups;
-	vector<DecideDescentTimeline> timelines;
+	DecideNodeGroups groups;
+	DecideNodeTimelines timelines;
 	idx_t rows_in = 0;
 	idx_t rows_out = 0;
+
+	idx_t Count() const {
+		return rows.size();
+	}
+	vector<Value> Signature(idx_t entry) const {
+		return values.GetValues(entry, 0, layout.columns);
+	}
+	vector<Value> Columns(idx_t entry) const {
+		return values.GetValues(entry, layout.columns, layout.program_columns);
+	}
+	Value Order(idx_t entry) const {
+		return values.GetValue(layout.order, entry);
+	}
 };
 
 //! Composite traversal, vectorized by selection: a node's `when` parts, keys and signature fields execute only on the
@@ -121,7 +185,7 @@ public:
 	vector<DecideNodeContainer> &Containers() {
 		return containers;
 	}
-	const vector<vector<DecideDescentGroup>> &DecisionGroups() const {
+	const vector<DecideNodeGroups> &DecisionGroups() const {
 		return decision_groups;
 	}
 	const vector<vector<idx_t>> &DecisionRows() const {
@@ -172,7 +236,7 @@ private:
 		//! The one class of an empty layout.
 		idx_t empty_slot = DConstants::INVALID_INDEX;
 	};
-	//! A set E's entries of a window, inserted once every root has descended (DecideDescentEntry::reads): its rows,
+	//! A set E's entries of a window, inserted once every root has descended (DecideNodeContainer::routed): its rows,
 	//! their enclosing slots and their own, and their signature, carried and program columns.
 	struct Pending {
 		idx_t node;
@@ -196,10 +260,13 @@ private:
 	vector<bool> shared;
 	//! Per shared node and window, the (row, enclosing slot) pairs that arrived.
 	vector<std::set<pair<idx_t, idx_t>>> seen;
-	//! Per G or O and window: where each row it reaches reads its value (DecideDescentEntry::reads), INVALID where it
+	//! Per G or O and window: where each row it reaches reads its value (DecideNodeContainer::routed), INVALID where it
 	//! reaches none.
 	vector<vector<idx_t>> landed;
-	vector<vector<DecideDescentGroup>> decision_groups;
+	vector<DecideNodeGroups> decision_groups;
+	//! Per keyed scope, each class's sort key (Finish ranks them), held in `decision_heap`.
+	vector<vector<string_t>> decision_sort_keys;
+	StringHeap decision_heap;
 	vector<vector<idx_t>> decision_rows;
 	vector<vector<bool>> decision_recorded;
 	vector<vector<DecisionLayout>> decision_layouts;
@@ -220,7 +287,7 @@ private:
 		return active_node < failed_rows.size() && !failed_rows[active_node].empty() &&
 		       failed_rows[active_node].count(active_row_base + row);
 	}
-	//! A set E's entries of the current window, inserted once every root has descended (DecideDescentEntry::reads).
+	//! A set E's entries of the current window, inserted once every root has descended (DecideNodeContainer::routed).
 	vector<unique_ptr<Pending>> pending;
 
 	void Visit(idx_t node, DataChunk &chunk, idx_t row_base, const Reach &incoming);
@@ -246,6 +313,15 @@ private:
 	//! A set E's window of entries once every root has descended: one entry per distinct slot, signature, columns
 	//! and reads.
 	void InsertDistinct(Pending &batch, idx_t row_base);
+	//! What `node` holds of its `stored` rows, each in its slot of `slots`: the classes of the keyed decisions it
+	//! reads, and an entry per row no read failed on, its signature, carried and program columns and an O's order;
+	//! a set E's wait for every root (pending).
+	void Store(idx_t node, DataChunk &chunk, const Reach &stored, const vector<idx_t> &slots, idx_t row_base);
+	//! An O's order value on `stored`, its comparison bytes and its partition, into `values` at `layout`.
+	void FrameOrder(const DecideNode &node, const DecideEntryLayout &layout, DataChunk &chunk, const Reach &stored,
+	                DataChunk &values);
+	//! An O's timelines (DecideNodeTimelines), once every row is appended and its slots are ranked.
+	void Timelines(idx_t node);
 };
 
 } // namespace duckdb

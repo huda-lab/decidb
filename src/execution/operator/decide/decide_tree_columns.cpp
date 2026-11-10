@@ -170,8 +170,8 @@ bool DecideTreeColumns::ReadsFrame(idx_t index, idx_t program) const {
 
 void DecideTreeColumns::ComputeNode(idx_t index, NodeColumns &columns, bool frames) {
 	auto &node = *tree.nodes[index];
-	auto &entries = descent.Containers()[index].entries;
-	const idx_t count = entries.size();
+	auto &container = descent.Containers()[index];
+	const idx_t count = container.Count();
 	// The node's layout (DecideProgram): its carried columns, then its program columns, as its entries hold them, then
 	// its holes, the data reducers and frame columns they read; with no frame read, a frame column's hole is NULL.
 	vector<LogicalType> layout;
@@ -219,17 +219,16 @@ void DecideTreeColumns::ComputeNode(idx_t index, NodeColumns &columns, bool fram
 		}
 		DataChunk chunk;
 		chunk.Initialize(context, types);
+		// The carried and program columns as the entries hold them, a window of entries in place.
+		const auto carried = node.columns.size() + node.program_columns.size();
 		for (idx_t start = 0; start < count; start += STANDARD_VECTOR_SIZE) {
 			const idx_t size = MinValue<idx_t>(STANDARD_VECTOR_SIZE, count - start);
 			chunk.Reset();
+			for (idx_t j = 0; j < carried; j++) {
+				chunk.data[j].Reference(
+				    container.values.Window(start / STANDARD_VECTOR_SIZE).data[container.layout.columns + j]);
+			}
 			for (idx_t i = 0; i < size; i++) {
-				auto &entry = entries[start + i];
-				for (idx_t j = 0; j < entry.columns.size(); j++) {
-					chunk.data[j].SetValue(i, entry.columns[j]);
-				}
-				for (idx_t j = 0; j < entry.program_columns.size(); j++) {
-					chunk.data[entry.columns.size() + j].SetValue(i, entry.program_columns[j]);
-				}
 				for (idx_t h = 0; h < holes.size(); h++) {
 					chunk.data[layout.size() - holes.size() + h].SetValue(i, holes[h][start + i]);
 				}
@@ -264,7 +263,7 @@ void DecideTreeColumns::ComputeNode(idx_t index, NodeColumns &columns, bool fram
 
 void DecideTreeColumns::CarryFrameErrors(idx_t index, idx_t program, ProgramColumn &column) {
 	auto &node = *tree.nodes[index];
-	auto &entries = descent.Containers()[index].entries;
+	auto &rows = descent.Containers()[index].rows;
 	const auto base = node.columns.size() + node.program_columns.size();
 	ExpressionIterator::EnumerateExpression(node.programs[program].expression, [&](Expression &expression) {
 		if (expression.GetExpressionClass() != ExpressionClass::BOUND_REF) {
@@ -275,8 +274,8 @@ void DecideTreeColumns::CarryFrameErrors(idx_t index, idx_t program, ProgramColu
 			return;
 		}
 		auto &carried = frame_values.errors[node.holes[hole].column];
-		for (idx_t e = 0; e < entries.size() && !carried.empty(); e++) {
-			auto error = carried.find(entries[e].row);
+		for (idx_t e = 0; e < rows.size() && !carried.empty(); e++) {
+			auto error = carried.find(rows[e]);
 			if (error != carried.end()) {
 				column.errors[e] = error->second;
 			}
@@ -285,7 +284,7 @@ void DecideTreeColumns::CarryFrameErrors(idx_t index, idx_t program, ProgramColu
 }
 
 void DecideTreeColumns::ReadTests(idx_t index, NodeColumns &columns) {
-	const idx_t count = descent.Containers()[index].entries.size();
+	const idx_t count = descent.Containers()[index].Count();
 	// An entry whose member test is false is no member: flat's reducer reads no term on its row. A test that raises
 	// where an entry was reached raises, as flat's raises reading the reducer's filter. A test is `X IS NOT NULL`, so
 	// it is NULL only where it raised: that entry is no member either, so its undefined value is never read, and its
@@ -315,7 +314,7 @@ void DecideTreeColumns::ReadTests(idx_t index, NodeColumns &columns) {
 DecideErrorRank DecideTreeColumns::Rank(idx_t node, idx_t p, idx_t entry, bool value) const {
 	auto &program = tree.nodes[node]->programs[p];
 	auto rank = tree.nodes[program.owner == DConstants::INVALID_INDEX ? node : program.owner]->clause_rank;
-	const auto row = descent.Containers()[node].entries[entry].row;
+	const auto row = descent.Containers()[node].rows[entry];
 	rank.expression = DecideBlockExpression(program.block, row, value);
 	rank.group = program.group;
 	rank.position = program.position;
@@ -338,9 +337,9 @@ const vector<bool> &DecideTreeColumns::Tested(idx_t node) {
 
 vector<bool> DecideTreeColumns::ReadEntries(idx_t node, const DecideTerm &term) {
 	auto reads = Tested(node);
-	auto &entries = descent.Containers()[node].entries;
+	auto &rows = descent.Containers()[node].rows;
 	for (idx_t e = 0; e < reads.size(); e++) {
-		reads[e] = reads[e] && !TermAbsentAt(term, entries[e].row);
+		reads[e] = reads[e] && !TermAbsentAt(term, rows[e]);
 	}
 	return reads;
 }
@@ -350,7 +349,7 @@ vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, const vector<bool
 	auto &program = tree.nodes[node]->programs[p];
 	Report(node, p, reads);
 	auto &column = *Computed(node).programs[p].values;
-	const idx_t count = descent.Containers()[node].entries.size();
+	const idx_t count = descent.Containers()[node].Count();
 	D_ASSERT(reads.size() == count && (!nulls || nulls->size() == count));
 	// The entry a message reads an input on: the window's first, then the one entry a retry reads.
 	idx_t base = 0;
@@ -409,18 +408,18 @@ vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, const vector<bool
 vector<bool> DecideTreeColumns::NullEntries(idx_t node, idx_t program, const vector<bool> &reads,
                                             DecideErrorRank rank) {
 	auto &computed = Computed(node).programs[program];
-	auto &entries = descent.Containers()[node].entries;
+	auto &rows = descent.Containers()[node].rows;
 	// Flat executes a definition's reads together, a window at a time: one block, whose window ranks first.
 	for (auto &error : computed.errors) {
 		if (!reads[error.first]) {
 			continue;
 		}
-		rank.row = entries[error.first].row;
+		rank.row = rows[error.first];
 		rank.expression = DecideBlockExpression(DecideBlock::TERMS, rank.row, false);
 		errors.Add(rank, error.second);
 	}
 	auto &column = *computed.values;
-	const auto count = entries.size();
+	const auto count = rows.size();
 	UnifiedVectorFormat format;
 	column.ToUnifiedFormat(count, format);
 	vector<bool> nulls(count, false);
@@ -473,8 +472,8 @@ vector<Value> DecideTreeColumns::HoleValues(idx_t node, idx_t hole) {
 		// A frame's column, at the entry's row: the anchor it reads the frame at.
 		auto &column = *frame_values.values[read.column];
 		vector<Value> result;
-		for (auto &entry : descent.Containers()[node].entries) {
-			result.push_back(column.GetValue(entry.row).DefaultCastAs(read.type));
+		for (auto row : descent.Containers()[node].rows) {
+			result.push_back(column.GetValue(row).DefaultCastAs(read.type));
 		}
 		return result;
 	}
@@ -482,14 +481,15 @@ vector<Value> DecideTreeColumns::HoleValues(idx_t node, idx_t hole) {
 	// The slot each row lies in: a G over data has an entry per row it reaches (DecideDescent::Visit).
 	auto &slots = row_slots[read.node];
 	if (slots.empty()) {
-		for (auto &entry : descent.Containers()[read.node].entries) {
-			slots.resize(MaxValue<idx_t>(slots.size(), entry.row + 1), DConstants::INVALID_INDEX);
-			slots[entry.row] = entry.slot;
+		auto &reducer = descent.Containers()[read.node];
+		for (idx_t e = 0; e < reducer.Count(); e++) {
+			slots.resize(MaxValue<idx_t>(slots.size(), reducer.rows[e] + 1), DConstants::INVALID_INDEX);
+			slots[reducer.rows[e]] = reducer.slots[e];
 		}
 	}
 	vector<Value> result;
-	for (auto &entry : descent.Containers()[node].entries) {
-		const auto slot = entry.row < slots.size() ? slots[entry.row] : DConstants::INVALID_INDEX;
+	for (auto row : descent.Containers()[node].rows) {
+		const auto slot = row < slots.size() ? slots[row] : DConstants::INVALID_INDEX;
 		result.push_back(slot == DConstants::INVALID_INDEX ? Value(read.type) : values[slot].DefaultCastAs(read.type));
 	}
 	return result;
@@ -503,7 +503,7 @@ const vector<Value> &DecideTreeColumns::Folds(idx_t reducer) {
 	auto &node = *tree.nodes[reducer];
 	const auto operand = DecideTreeOperand(tree, reducer);
 	auto &arguments = tree.nodes[operand]->compiled.arguments;
-	auto &entries = descent.Containers()[operand].entries;
+	auto &entries = descent.Containers()[operand];
 	// Its members are the operand's entries its member tests keep, each variant of a class once, at its first row,
 	// where the reducer reads a class per K (language/guide.md §5.3, §7.1).
 	const auto &tested = Tested(operand);
@@ -515,11 +515,11 @@ const vector<Value> &DecideTreeColumns::Folds(idx_t reducer) {
 	vector<vector<Value>> values(arguments.size());
 	vector<Value> body;
 	vector<idx_t> slots;
-	for (idx_t e = 0; e < entries.size(); e++) {
+	for (idx_t e = 0; e < entries.Count(); e++) {
 		if (!members[e]) {
 			continue;
 		}
-		slots.push_back(entries[e].parent_slot);
+		slots.push_back(entries.parent_slots[e]);
 		for (idx_t a = 0; a < arguments.size(); a++) {
 			values[a].push_back(Computed(operand).programs[arguments[a]].values->GetValue(e));
 		}
@@ -557,7 +557,7 @@ void DecideTreeColumns::CheckData() {
 		if (!node.value_check) {
 			continue;
 		}
-		auto &entries = descent.Containers()[root].entries;
+		auto &rows = descent.Containers()[root].rows;
 		const auto check = node.compiled.check;
 		// The check stands for a side plan's, which DuckDB evaluates a chunk at a time: a window that raises raises
 		// what its whole evaluation meets first, as the side plan's chunk would.
@@ -566,11 +566,11 @@ void DecideTreeColumns::CheckData() {
 			errors.Add(Rank(root, check, raised.first, false), raised.second);
 		}
 		auto &messages = *column.values;
-		for (idx_t e = 0; e < entries.size(); e++) {
+		for (idx_t e = 0; e < rows.size(); e++) {
 			auto message = messages.GetValue(e);
 			if (!message.IsNull()) {
 				auto rank = node.value_rank;
-				rank.row = entries[e].row;
+				rank.row = rows[e];
 				errors.Add(rank, ErrorData(InvalidInputException(message.ToString())));
 			}
 		}
@@ -583,8 +583,8 @@ vector<bool> DecideTreeColumns::FirstOfEachInstance(idx_t node, const vector<boo
 	vector<bool> seen(container.instance_entries.size(), false);
 	for (idx_t e = 0; e < reads.size(); e++) {
 		// A row in no class of the key has no value to read (DecideNode::holds_rows_in_no_class).
-		const auto instance = container.entries[e].instance;
-		if (reads[e] && container.groups[container.entries[e].slot].in_a_class && !seen[instance]) {
+		const auto instance = container.instances[e];
+		if (reads[e] && container.groups.InAClass(container.slots[e]) && !seen[instance]) {
 			seen[instance] = true;
 			first[e] = true;
 		}
@@ -601,23 +601,26 @@ DecideFrameMap DecideTreeColumns::FrameMap(const DecideFrameSpec &frame, idx_t n
 	map.anchors.assign(num_rows, false);
 	map.timeline.assign(num_rows, DConstants::INVALID_INDEX);
 	map.peer.assign(num_rows, DConstants::INVALID_INDEX);
-	for (auto &entry : container.entries) {
-		map.anchors[entry.row] = true;
+	for (auto row : container.rows) {
+		map.anchors[row] = true;
 	}
 	// Its timelines by value, each position a peer whose rows ascend (DecideDescent::Finish); a row whose `within`
 	// column is NULL lies in none (D75).
 	vector<idx_t> first_peer;
-	for (auto &timeline : container.timelines) {
-		if (!container.groups[timeline.slot].in_a_class) {
+	auto &timelines = container.timelines;
+	for (idx_t timeline = 0; timeline < timelines.size(); timeline++) {
+		const auto slot = timelines.slots[timeline];
+		if (!container.groups.InAClass(slot)) {
 			continue;
 		}
 		const auto t = first_peer.size();
 		first_peer.push_back(map.peer_begin.size());
-		for (auto &position : timeline.positions) {
+		for (auto position = timelines.first_position[timeline]; position < timelines.first_position[timeline + 1];
+		     position++) {
 			map.peer_begin.push_back(map.peer_rows.size());
-			peers.push_back({timeline.slot, &position});
-			for (auto e : position.entries) {
-				const auto row = container.entries[e].row;
+			peers.push_back({slot, position});
+			for (auto e = timelines.first_entry[position]; e < timelines.first_entry[position + 1]; e++) {
+				const auto row = container.rows[timelines.entries[e]];
 				map.peer_rows.push_back(row);
 				map.peer[row] = map.peer_begin.size() - 1;
 				map.timeline[row] = t;
@@ -635,35 +638,39 @@ void DecideTreeColumns::CheckPartition(const DecideFrameSpec &frame, idx_t node)
 		return;
 	}
 	auto &container = descent.Containers()[node];
-	vector<idx_t> order(container.entries.size());
+	auto &layout = container.layout;
+	vector<idx_t> order(container.Count());
 	std::iota(order.begin(), order.end(), 0);
 	std::sort(order.begin(), order.end(),
-	          [&](idx_t left, idx_t right) { return container.entries[left].row < container.entries[right].row; });
+	          [&](idx_t left, idx_t right) { return container.rows[left] < container.rows[right]; });
+	auto partition = [&](idx_t e) {
+		return container.values.GetValues(e, layout.partition, layout.partition_present);
+	};
 	// Each class's first anchor, by the class's values; an anchor in no timeline lies in none, so it spans none.
 	std::map<vector<Value>, idx_t, bool (*)(const vector<Value> &, const vector<Value> &)> first(DecideDescentKeyLess);
 	for (auto e : order) {
-		auto &entry = container.entries[e];
-		if (!entry.partition_present || !container.groups[entry.slot].in_a_class) {
+		if (!container.values.GetValue(layout.partition_present, e).GetValue<bool>() ||
+		    !container.groups.InAClass(container.slots[e])) {
 			continue;
 		}
-		auto known = first.emplace(entry.partition, e);
-		auto &earlier = container.entries[known.first->second];
-		if (known.second || earlier.slot == entry.slot) {
+		auto known = first.emplace(partition(e), e);
+		const auto earlier = known.first->second;
+		if (known.second || container.slots[earlier] == container.slots[e]) {
 			continue;
 		}
 		vector<string> names;
 		for (auto &element : DecideKeyElements(tree.keys, frame.partition_key)) {
 			names.push_back(element.name);
 		}
-		auto timeline = [&](const DecideDescentEntry &anchor) {
-			return descent.Label(tree.nodes[node]->key, container.groups[anchor.slot].key);
+		auto timeline = [&](idx_t anchor) {
+			return descent.Label(tree.nodes[node]->key, container.groups.Key(container.slots[anchor]));
 		};
 		auto rank = tree.nodes[node]->route_rank;
 		rank.expression = DecideBlockExpression(DecideBlock::FILTERS, 0, false) + 1;
-		rank.row = entry.row;
+		rank.row = container.rows[e];
 		errors.Add(rank, ErrorData(InvalidInputException(DecideFramePartitionMessage(
-		                     frame, names, descent.Label(frame.partition_key, earlier.partition), timeline(earlier),
-		                     timeline(entry)))));
+		                     frame, names, descent.Label(frame.partition_key, partition(earlier)), timeline(earlier),
+		                     timeline(e)))));
 		return;
 	}
 }
@@ -752,9 +759,9 @@ DecideFrameValues DecideTreeColumns::FrameRows(idx_t node, idx_t program, const 
 	const auto num_rows = rows.size();
 	DecideFrameValues result(column.values->GetType(), num_rows + 1);
 	FlatVector::Validity(result.values).SetAllInvalid(num_rows + 1);
-	auto &entries = descent.Containers()[node].entries;
+	auto &entries = descent.Containers()[node].rows;
 	for (idx_t e = 0; e < entries.size(); e++) {
-		const auto row = entries[e].row;
+		const auto row = entries[e];
 		if (!rows[row]) {
 			continue;
 		}
@@ -772,19 +779,22 @@ void DecideTreeColumns::CheckPositions(const vector<DecideFrameSpec> &frames) {
 		const auto node = tree.frame_nodes[f];
 		const auto read = DecideReadPeers((*frame_maps)[f]);
 		auto &peers = frame_peers[f];
+		auto &container = descent.Containers()[node];
+		auto &timelines = container.timelines;
 		for (idx_t peer = 0; peer < peers.size(); peer++) {
-			auto &position = *peers[peer].position;
-			if (!position.conflict || !read[peer]) {
+			const auto position = peers[peer].position;
+			if (!timelines.conflict[position] || !read[peer]) {
 				continue;
 			}
 			// Named by its timeline's values and its order key's least spelling (D69).
-			auto named = descent.Label(tree.nodes[node]->key, descent.Containers()[node].groups[peers[peer].slot].key);
-			named.push_back(position.order);
+			auto named = descent.Label(tree.nodes[node]->key, container.groups.Key(peers[peer].slot));
+			named.push_back(container.Order(timelines.named_by[position]));
 			auto rank = tree.nodes[node]->route_rank;
 			rank.phase = DecideErrorPhase::FRAME_PEERS;
 			rank.expression = peer;
-			errors.Add(rank, ErrorData(InvalidInputException(
-			                     DecideAmbiguousPositionMessage(frames[f], position.entries.size(), named))));
+			const auto entries = timelines.first_entry[position + 1] - timelines.first_entry[position];
+			errors.Add(rank,
+			           ErrorData(InvalidInputException(DecideAmbiguousPositionMessage(frames[f], entries, named))));
 			break;
 		}
 	}
@@ -795,7 +805,9 @@ Value DecideTreeColumns::FrameValue(idx_t column, idx_t row) const {
 }
 
 Value DecideTreeColumns::PositionName(idx_t frame, idx_t row) const {
-	return frame_peers[frame][(*frame_maps)[frame].peer[row]].position->order;
+	auto &container = descent.Containers()[tree.frame_nodes[frame]];
+	const auto position = frame_peers[frame][(*frame_maps)[frame].peer[row]].position;
+	return container.Order(container.timelines.named_by[position]);
 }
 
 DecideTreeInjection ReadDecideTreeInjection(const DecideTree &tree) {
@@ -836,14 +848,14 @@ string DecideTreeColumns::Dump() const {
 		}
 		auto &columns = *nodes[n];
 		out << "node " << n << " " << tree.nodes[n]->text << "\n";
-		auto &entries = descent.Containers()[n].entries;
-		for (idx_t e = 0; e < entries.size(); e++) {
-			out << "  row " << entries[e].row << " ->";
+		auto &entries = descent.Containers()[n];
+		for (idx_t e = 0; e < entries.Count(); e++) {
+			out << "  row " << entries.rows[e] << " ->";
 			for (idx_t p = 0; p < columns.programs.size(); p++) {
 				auto &program = columns.programs[p];
 				out << (p ? ", " : " ") << (program.errors.count(e) ? "error" : program.values->GetValue(e).ToString());
 			}
-			out << (columns.tested[e] ? "" : " untested") << " instance " << entries[e].instance << "\n";
+			out << (columns.tested[e] ? "" : " untested") << " instance " << entries.instances[e] << "\n";
 		}
 	}
 	return out.str();
