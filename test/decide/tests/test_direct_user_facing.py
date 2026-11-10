@@ -621,9 +621,14 @@ def test_r1_infeasible_and_unbounded_errors_are_the_solvers_error_word_for_word(
 def test_o1_monge_infeasible_error_is_the_solvers_error_word_for_word(decidb_cli):
     # Three left classes against two right classes: no assignment gives each class a pair. The error has no row
     # position, so one function builds its text for both paths.
+    # The rule reads positions declared NOT NULL on a table, which a VALUES list does not declare.
     sql = """
+        CREATE OR REPLACE TEMP TABLE o1_left(lid INTEGER, lpos DOUBLE NOT NULL);
+        CREATE OR REPLACE TEMP TABLE o1_right(rid INTEGER, rpos DOUBLE NOT NULL);
+        INSERT INTO o1_left VALUES (1, 1.0), (2, 4.0), (3, 10.0);
+        INSERT INTO o1_right VALUES (7, 2.0), (8, 6.0);
         SELECT lid, rid, x FROM (
-            FROM (VALUES (1, 1.0), (2, 4.0), (3, 10.0)) l(lid, lpos) CROSS JOIN (VALUES (7, 2.0), (8, 6.0)) r(rid, rpos)
+            FROM o1_left l CROSS JOIN o1_right r
             DECIDE x(BOOL) SUCH THAT per l: SUM(x) by (l) = 1 AND per r: SUM(x) by (r) = 1
             MINIMIZE SUM(POWER(l.lpos - r.rpos, 2) * x)
         ) q
