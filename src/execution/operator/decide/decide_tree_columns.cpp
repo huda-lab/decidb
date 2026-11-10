@@ -357,16 +357,17 @@ const vector<bool> &DecideTreeColumns::Tested(idx_t node) {
 	return Computed(node).tested;
 }
 
-vector<bool> DecideTreeColumns::ReadEntries(idx_t node, const DecideTerm &term) {
-	auto reads = Tested(node);
+const vector<bool> &DecideTreeColumns::ReadEntries(idx_t node, const DecideTerm &term, vector<bool> &present) {
+	auto &tested = Tested(node);
 	if (!MayBeAbsent(term)) {
-		return reads;
+		return tested;
 	}
+	present = tested;
 	auto &rows = descent.Containers()[node].rows;
-	for (idx_t e = 0; e < reads.size(); e++) {
-		reads[e] = reads[e] && !TermAbsentAt(term, rows[e]);
+	for (idx_t e = 0; e < present.size(); e++) {
+		present[e] = present[e] && !TermAbsentAt(term, rows[e]);
 	}
-	return reads;
+	return present;
 }
 
 vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, const vector<bool> &reads, vector<bool> *nulls,
@@ -402,8 +403,7 @@ vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, const vector<bool
 	out.reserve(count);
 	for (idx_t start = 0; start < count; start += STANDARD_VECTOR_SIZE) {
 		const idx_t size = MinValue<idx_t>(STANDARD_VECTOR_SIZE, count - start);
-		Vector window(column.GetType(), size);
-		VectorOperations::Copy(column, window, start + size, start, 0);
+		Vector window(column, start, start + size);
 		try {
 			base = start;
 			ExtractDoubleColumn(window, size, program.sign, out, source, nulls, &reads, start);

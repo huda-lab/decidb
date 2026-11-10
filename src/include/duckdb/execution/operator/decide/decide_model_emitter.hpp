@@ -62,6 +62,20 @@ public:
 	Iterator end() const {
 		return Iterator(*this, size());
 	}
+	//! `read(row, entry)` for each row and the entry standing for it, in order.
+	template <class F>
+	void ForEach(F &&read) const {
+		if (routed) {
+			for (auto &pair : *routed) {
+				read(pair.first, pair.second);
+			}
+			return;
+		}
+		const auto data = rows->data();
+		for (idx_t entry = 0; entry < rows->size(); entry++) {
+			read(data[entry], entry);
+		}
+	}
 
 private:
 	//! A set E's routed rows; null for a node per row, whose entries are its rows.
@@ -131,8 +145,8 @@ private:
 	//! as flat numbers and names them, and the classes each stands for under DIAGNOSE.
 	void Classes(idx_t root, const vector<pair<idx_t, idx_t>> &rows, EvaluatedConstraint &evaluated);
 	//! The variants of `signature` (null: none, so its key's classes) over the rows `node` holds, its instances, in
-	//! flat's numbering (BuildSignatureIds).
-	DecideVariants Variants(idx_t node, const DecideSignature *signature) const;
+	//! flat's numbering (BuildSignatureIds); with `by_row` false only how many there are.
+	DecideVariants Variants(idx_t node, const DecideSignature *signature, bool by_row = true) const;
 	//! What tells `entry` of `node` apart as a variant (language/guide.md §7.1, D70): its class of the node's key and
 	//! its sigma's values, a frame by its keys.
 	vector<Value> Identity(idx_t node, idx_t entry) const;
@@ -221,13 +235,17 @@ private:
 	//! `reads` marks, every row each stands for, but a relation-qualified reducer's term its entry's first row alone,
 	//! the first of its class (language/guide.md §5.1).
 	vector<pair<idx_t, idx_t>> ReadRows(idx_t site, const vector<bool> &reads, bool qualified) const;
+	//! ReadRows' rows, each passed to `read(row, entry)` in order, none listed.
+	template <class F>
+	void ForEachRead(idx_t site, const vector<bool> &reads, bool qualified, F &&read) const;
 	//! The entries of `site` a term in a reducer is read on: those its member tests keep, a relation-qualified
-	//! reducer's first of each class (language/guide.md §5.1).
-	vector<bool> ReadEntriesOf(idx_t site, bool qualified);
+	//! reducer's first of each class (language/guide.md §5.1), which `first` then holds.
+	const vector<bool> &ReadEntriesOf(idx_t site, bool qualified, vector<bool> &first);
 	//! A reducer's filter of a part of a grouped clause (a term, a product, a square), its site `site`: the rows the
-	//! part is read on (ReadRows, ReadEntriesOf), returned with their entries, and every row its members stand for
-	//! (`members`), which decide whether the filter keeps fewer than the clause.
-	vector<pair<idx_t, idx_t>> Filter(idx_t site, bool qualified, TermFilterState &filter, vector<bool> &members);
+	//! part is read on (ReadRows, ReadEntriesOf), each passed to `read(row, entry)`, and every row its members stand
+	//! for (`members`), which decide whether the filter keeps fewer than the clause.
+	template <class F>
+	void Filter(idx_t site, bool qualified, TermFilterState &filter, vector<bool> &members, F &&read);
 	//! A term beside a grouped clause's reducers, on each of `rows` (the kept rows and their root's entries), a NULL
 	//! coefficient marking its row (`null_rows`).
 	void ReadBesideReducers(idx_t root, const DecideTerm &term, const DecideTermSite &site, const DecideEntryRows &rows,

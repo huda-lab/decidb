@@ -278,6 +278,7 @@ static unsafe_vector<idx_t> DescentGroupRanks(const DecideNodeGroups &groups) {
 
 DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
     : tree(tree_p), context(context_p), containers(tree.nodes.size()), group_maps(tree.nodes.size()),
+      dictionaries(tree.keys.size()), own_slots(tree.nodes.size()), key_reads(tree.keys.size()),
       empty_key_slots(tree.nodes.size()), entry_maps(tree.nodes.size()), instance_maps(tree.nodes.size()),
       signature_types(tree.nodes.size()), shared(tree.nodes.size(), false), enclosed(tree.nodes.size(), false),
       seen(tree.nodes.size()), landed(tree.nodes.size()), decision_groups(tree.keyed_scopes.size()),
@@ -342,26 +343,33 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 		}
 		auto key = DescentKeyTypes(tree, node.key);
 		container.groups.keys.Initialize(allocator, key);
-		vector<LogicalType> slot_types;
-		if (enclosed[n]) {
-			slot_types.push_back(LogicalType::UBIGINT);
-		}
-		slot_types.insert(slot_types.end(), key.begin(), key.end());
-		// An empty key's slots are found by their enclosing slot alone, in a table (FindGroups).
-		if (!key.empty()) {
+		// An empty key's slots are found by their enclosing slot alone, in a table (FindGroups); a key outside an
+		// enclosing slot by its values alone, in the dictionary its nodes share.
+		if (!key.empty() && enclosed[n]) {
+			vector<LogicalType> slot_types {LogicalType::UBIGINT};
+			slot_types.insert(slot_types.end(), key.begin(), key.end());
 			group_maps[n] = make_uniq<DecideKeyMap>(context, slot_types);
+		} else if (!key.empty() && !dictionaries[node.key]) {
+			dictionaries[node.key] = make_uniq<SharedDictionary>();
+			dictionaries[node.key]->map = make_uniq<DecideKeyMap>(context, key);
 		}
 		if (!scope) {
 			continue;
 		}
-		// A set E: its instances by (slot, signature), its entries by those, its carried columns and its reads.
+		// A set E: its instances by (slot, signature), its entries by those, its carried columns and its reads. A key
+		// of the descent's own numbers alone -- a signature of decisions' instances, no carried column -- is remembered
+		// by its slot (DecideKeyMap's memo).
+		container.shares_instances = true;
+		const auto numbered =
+		    std::all_of(node.signature.begin(), node.signature.end(),
+		                [](const DecideSignatureField &f) { return f.kind == DecideSignatureFieldKind::DECISION; });
 		vector<LogicalType> instance {LogicalType::UBIGINT};
 		instance.insert(instance.end(), signature_types[n].begin(), signature_types[n].end());
-		instance_maps[n] = make_uniq<DecideKeyMap>(context, instance);
+		instance_maps[n] = make_uniq<DecideKeyMap>(context, instance, numbered);
 		auto entry = instance;
 		entry.insert(entry.end(), columns.begin(), columns.end());
 		entry.insert(entry.end(), node.dependencies.size(), LogicalType::UBIGINT);
-		entry_maps[n] = make_uniq<DecideKeyMap>(context, entry);
+		entry_maps[n] = make_uniq<DecideKeyMap>(context, entry, numbered && columns.empty());
 	}
 }
 
@@ -377,6 +385,9 @@ void DecideDescent::Reserve(idx_t rows) {
 		}
 		container.rows.reserve(rows);
 		container.parent_slots.reserve(rows);
+		if (!container.groups.per_row) {
+			container.slots.reserve(rows);
+		}
 	}
 }
 
@@ -437,6 +448,7 @@ void DecideDescent::Evaluate(const Expression &expression, DataChunk &chunk, con
 			if (error.Type() == ExceptionType::INTERNAL) {
 				throw;
 			}
+			raised++;
 			rank.row = active_row_base + rows.rows[i];
 			if (read_block != DecideBlock::ROUTE) {
 				rank.expression = DecideBlockExpression(read_block, rank.row, false);
@@ -510,18 +522,107 @@ vector<uint8_t> DecideDescent::Truth(const Expression &expression, DataChunk &ch
 	return result;
 }
 
-void DecideDescent::Key(idx_t key, DataChunk &chunk, const Reach &rows, DataChunk &values, vector<bool> &present,
-                        KeySpellings *read) {
-	present.assign(rows.size(), true);
-	auto &elements = DecideKeyElements(tree.keys, key);
-	if (elements.empty()) {
+void DecideDescent::KeyReads::Initialize(Allocator &allocator, const vector<LogicalType> &types, idx_t columns,
+                                         idx_t window) {
+	values.Initialize(allocator, types);
+	spelled.spelled.resize(columns);
+	spelled.sort_keys.resize(columns);
+	position.assign(window, DConstants::INVALID_INDEX);
+}
+
+void DecideDescent::KeyReads::Reset(idx_t window) {
+	if (!whole && values.size() > 0) {
+		std::fill(position.begin(), position.end(), DConstants::INVALID_INDEX);
+	}
+	position.resize(window, DConstants::INVALID_INDEX);
+	whole = false;
+	values.Reset();
+	for (idx_t c = 0; c < spelled.spelled.size(); c++) {
+		spelled.spelled[c].clear();
+		spelled.sort_keys[c].clear();
+	}
+}
+
+void DecideDescent::KeyReads::CopyInto(Allocator &allocator, KeyReads &copy, idx_t room) const {
+	copy.values.Initialize(allocator, values.GetTypes(), MaxValue<idx_t>(values.size() + room, 1));
+	copy.values.Append(values, true);
+	copy.spelled = spelled;
+	copy.whole = whole;
+	copy.position = position;
+}
+
+const DecideDescent::Reach &DecideDescent::KeyReads::Missing(const Reach &rows, Reach &own) const {
+	if (whole) {
+		return own;
+	}
+	if (values.size() == 0) {
+		return rows;
+	}
+	for (idx_t i = 0; i < rows.size(); i++) {
+		if (position[rows.rows[i]] == DConstants::INVALID_INDEX) {
+			own.Add(rows.rows[i], rows.parents[i]);
+		}
+	}
+	return own;
+}
+
+void DecideDescent::KeyReads::Hold(DataChunk &read, const KeySpellings &read_spelled, const Reach &missing,
+                                   idx_t window) {
+	for (idx_t c = 0; c < spelled.spelled.size(); c++) {
+		auto &column = spelled.spelled[c];
+		column.insert(column.end(), read_spelled.spelled[c].begin(), read_spelled.spelled[c].end());
+		auto &sort_keys = spelled.sort_keys[c];
+		sort_keys.insert(sort_keys.end(), read_spelled.sort_keys[c].begin(), read_spelled.sort_keys[c].end());
+	}
+	if (missing.size() == window && values.size() == 0) {
+		// The first read of the window reads all of it: its values are held in place.
+		for (idx_t c = 0; c < values.ColumnCount(); c++) {
+			values.data[c].Reference(read.data[c]);
+		}
+		values.SetCardinality(window);
+		whole = true;
 		return;
 	}
-	values.Initialize(Allocator::Get(context), DescentKeyTypes(tree, key));
+	const auto base = values.size();
+	values.Append(read, true);
+	for (idx_t j = 0; j < missing.size(); j++) {
+		position[missing.rows[j]] = base + j;
+	}
+}
+
+void DecideDescent::KeyReads::Slice(const Reach &rows, idx_t window, DataChunk &result) const {
+	result.InitializeEmpty(values.GetTypes());
+	const auto in_place = whole && rows.size() == window;
+	SelectionVector selection(MaxValue<idx_t>(rows.size(), 1));
+	for (idx_t i = 0; i < rows.size() && !in_place; i++) {
+		selection.set_index(i, At(rows, i));
+	}
+	for (idx_t c = 0; c < values.ColumnCount(); c++) {
+		if (in_place) {
+			result.data[c].Reference(values.data[c]);
+		} else {
+			result.data[c].Slice(values.data[c], selection, rows.size());
+		}
+	}
+	result.SetCardinality(rows.size());
+}
+
+void DecideDescent::ReadKey(idx_t key, DataChunk &chunk, const Reach &rows, const Reach &missing, DataChunk &values,
+                            KeySpellings &spelled) {
+	auto &elements = DecideKeyElements(tree.keys, key);
+	values.Initialize(Allocator::Get(context), DescentKeyTypes(tree, key), MaxValue<idx_t>(missing.size(), 1));
+	spelled.spelled.resize(elements.size());
+	spelled.sort_keys.resize(elements.size());
+	// A held row counts as read again, so the ranks of what the node reads next are those of a read of every row.
+	auto evaluate = [&](const Expression &expression, Vector &result) {
+		if (missing.empty()) {
+			current_rank.expression += rows.empty() ? 0 : 1;
+			return;
+		}
+		Evaluate(expression, chunk, missing, result);
+	};
 	// A collated column groups under its collation and is named by its spelling, read as GROUP BY reads both (D69).
 	// The spelling is the same read of the column, at its rank: a row it fails on failed the grouping first.
-	vector<vector<Value>> spelled(elements.size());
-	vector<vector<string>> sort_keys(elements.size());
 	bool collated = false;
 	for (idx_t c = 0; c < elements.size(); c++) {
 		auto &element = elements[c];
@@ -529,36 +630,81 @@ void DecideDescent::Key(idx_t key, DataChunk &chunk, const Reach &rows, DataChun
 			current_rank.position = c;
 		}
 		const auto rank = current_rank.expression;
-		Evaluate(element.Grouping(), chunk, rows, values.data[c]);
-		if (element.collated) {
-			current_rank.expression = rank;
-			Vector spelling(element.expression->return_type);
-			Evaluate(*element.expression, chunk, rows, spelling);
-			spelled[c] = DescentColumnValues(spelling, rows.size());
-			sort_keys[c] = SpellingKeys(spelled[c], element.expression->return_type);
-			collated = true;
+		evaluate(element.Grouping(), values.data[c]);
+		if (!element.collated) {
+			continue;
 		}
-		if (element.null_mode == DecideKeyNullMode::NO_GROUP && !rows.empty()) {
-			UnifiedVectorFormat format;
-			values.data[c].ToUnifiedFormat(rows.size(), format);
-			for (idx_t i = 0; i < rows.size(); i++) {
-				if (!format.validity.RowIsValid(format.sel->get_index(i))) {
-					present[i] = false;
-				}
+		current_rank.expression = rank;
+		Vector spelling(element.expression->return_type);
+		evaluate(*element.expression, spelling);
+		collated = true;
+		if (!missing.empty()) {
+			spelled.spelled[c] = DescentColumnValues(spelling, missing.size());
+			spelled.sort_keys[c] = SpellingKeys(spelled.spelled[c], element.expression->return_type);
+		}
+	}
+	values.SetCardinality(missing.size());
+	if (collated && !missing.empty()) {
+		vector<vector<Value>> groups;
+		for (idx_t i = 0; i < missing.size(); i++) {
+			groups.push_back(DescentRowValues(values, 0, values.ColumnCount(), i));
+		}
+		Spell(key, groups, spelled.spelled, spelled.sort_keys);
+	}
+}
+
+void DecideDescent::Key(idx_t key, DataChunk &chunk, const Reach &rows, DataChunk &values, unsafe_vector<bool> &present,
+                        KeySpellings *read) {
+	present.assign(rows.size(), true);
+	auto &elements = DecideKeyElements(tree.keys, key);
+	if (elements.empty()) {
+		return;
+	}
+	auto &held = key_reads[key];
+	if (held.values.ColumnCount() == 0) {
+		held.Initialize(Allocator::Get(context), DescentKeyTypes(tree, key), elements.size(), chunk.size());
+	}
+	// The rows no read of the window holds yet, which this read evaluates. What it evaluates joins the held reads,
+	// unless it raised on a row: then it is read beside them, this once, and each later read of the row raises anew.
+	Reach own;
+	auto &missing = held.Missing(rows, own);
+	DataChunk evaluated;
+	KeySpellings spelled;
+	const auto raised_before = raised;
+	ReadKey(key, chunk, rows, missing, evaluated, spelled);
+	KeyReads once;
+	auto &source = raised == raised_before ? held : once;
+	if (raised != raised_before) {
+		held.CopyInto(Allocator::Get(context), once, missing.size());
+	}
+	source.Hold(evaluated, spelled, missing, chunk.size());
+	source.Slice(rows, chunk.size(), values);
+	for (idx_t c = 0; c < elements.size(); c++) {
+		if (elements[c].null_mode != DecideKeyNullMode::NO_GROUP || rows.empty()) {
+			continue;
+		}
+		UnifiedVectorFormat format;
+		values.data[c].ToUnifiedFormat(rows.size(), format);
+		for (idx_t i = 0; i < rows.size() && !format.validity.AllValid(); i++) {
+			if (!format.validity.RowIsValid(format.sel->get_index(i))) {
+				present[i] = false;
 			}
 		}
 	}
-	values.SetCardinality(rows.size());
-	if (collated) {
-		vector<vector<Value>> groups;
-		for (idx_t i = 0; i < rows.size(); i++) {
-			groups.push_back(DescentRowValues(values, 0, values.ColumnCount(), i));
-		}
-		Spell(key, groups, spelled, sort_keys);
+	bool collated = false;
+	for (auto &element : elements) {
+		collated = collated || element.collated;
 	}
-	if (collated && read) {
-		read->spelled = std::move(spelled);
-		read->sort_keys = std::move(sort_keys);
+	if (!read || !collated) {
+		return;
+	}
+	read->spelled.assign(elements.size(), vector<Value>());
+	read->sort_keys.assign(elements.size(), vector<string>());
+	for (idx_t c = 0; c < elements.size(); c++) {
+		for (idx_t i = 0; i < rows.size() && elements[c].collated; i++) {
+			read->spelled[c].push_back(source.spelled.spelled[c][source.At(rows, i)]);
+			read->sort_keys[c].push_back(source.spelled.sort_keys[c][source.At(rows, i)]);
+		}
 	}
 }
 
@@ -633,7 +779,7 @@ void DecideDescent::Signature(idx_t node_index, DataChunk &chunk, const Reach &r
 			const auto position = current_rank.position;
 			read_block = DecideBlock::BY_KEY;
 			DataChunk keys;
-			vector<bool> present;
+			unsafe_vector<bool> present;
 			Key(field.key, chunk, rows, keys, present);
 			read_block = block;
 			current_rank.position = position;
@@ -670,7 +816,7 @@ void DecideDescent::Signature(idx_t node_index, DataChunk &chunk, const Reach &r
 				throw InternalException("DECIDE tree: signature names missing frame %llu", field.frame);
 			}
 			DataChunk keys;
-			vector<bool> present;
+			unsafe_vector<bool> present;
 			Key(frame->key, chunk, rows, keys, present);
 			for (idx_t c = 0; c < keys.ColumnCount(); c++) {
 				values.data[column++].Reference(keys.data[c]);
@@ -686,7 +832,7 @@ void DecideDescent::Signature(idx_t node_index, DataChunk &chunk, const Reach &r
 }
 
 void DecideDescent::FindGroups(idx_t node_index, const Reach &rows, const unsafe_vector<idx_t> &selected,
-                               DataChunk &keys, const vector<bool> &present, idx_t row_base,
+                               DataChunk &keys, const unsafe_vector<bool> &present, idx_t row_base,
                                unsafe_vector<idx_t> &slots) {
 	auto &node = *tree.nodes[node_index];
 	auto &groups = containers[node_index].groups;
@@ -698,10 +844,24 @@ void DecideDescent::FindGroups(idx_t node_index, const Reach &rows, const unsafe
 		groups.in_a_class.push_back(present[i]);
 	};
 	auto &map = group_maps[node_index];
-	if (!map) {
+	if (groups.keys.Types().empty()) {
 		// An empty key: a G's or O's is one slot, an E's one per enclosing slot, found by it in a direct-address
 		// table, the slot outside any last.
 		auto &table = empty_key_slots[node_index];
+		if (!enclosed[node_index] && !selected.empty()) {
+			// Outside an enclosing slot every row lies in the one slot, the window's first row least among them.
+			if (table.empty()) {
+				table.push_back(groups.size());
+				create(selected[0]);
+				groups.keys.Append(keys, *FlatVector::IncrementalSelectionVector(), 1);
+			}
+			auto &first = groups.first_rows[table[0]];
+			first = MinValue(first, row_base + rows.rows[selected[0]]);
+			for (auto i : selected) {
+				slots[i] = table[0];
+			}
+			return;
+		}
 		for (auto i : selected) {
 			const auto parent = scope ? rows.parents[i] : DConstants::INVALID_INDEX;
 			const auto at = parent == DConstants::INVALID_INDEX ? 0 : parent + 1;
@@ -726,34 +886,32 @@ void DecideDescent::FindGroups(idx_t node_index, const Reach &rows, const unsafe
 	// An E's classes lie within the group it feeds. A G's or O's key is already its whole path key (the path rule,
 	// language/guide.md §5.5; DecideReducerPath::KeysOf), so no enclosing slot adds a level. A G a rewrite generates,
 	// as S3's tightest bound, is on no reducer's path: the reducers its operand reads keep their groups.
-	SelectionVector selection(count);
-	for (idx_t j = 0; j < count; j++) {
-		selection.set_index(j, selected[j]);
-	}
-	vector<LogicalType> types;
-	if (enclosed[node_index]) {
-		types.push_back(LogicalType::UBIGINT);
-	}
-	auto key_types = keys.GetTypes();
-	types.insert(types.end(), key_types.begin(), key_types.end());
-	DataChunk probe;
-	probe.InitializeEmpty(types);
-	idx_t column = 0;
-	Vector parents(LogicalType::UBIGINT);
-	if (enclosed[node_index]) {
+	unsafe_vector<idx_t> found(count);
+	if (map) {
+		SelectionVector selection(count);
+		for (idx_t j = 0; j < count; j++) {
+			selection.set_index(j, selected[j]);
+		}
+		auto key_types = keys.GetTypes();
+		vector<LogicalType> types {LogicalType::UBIGINT};
+		types.insert(types.end(), key_types.begin(), key_types.end());
+		DataChunk probe;
+		probe.InitializeEmpty(types);
+		Vector parents(LogicalType::UBIGINT);
 		auto data = FlatVector::GetData<uint64_t>(parents);
 		for (idx_t j = 0; j < count; j++) {
 			data[j] = rows.parents[selected[j]];
 		}
-		probe.data[column++].Reference(parents);
+		probe.data[0].Reference(parents);
+		for (idx_t c = 0; c < keys.ColumnCount(); c++) {
+			probe.data[1 + c].Slice(keys.data[c], selection, count);
+		}
+		probe.SetCardinality(count);
+		idx_t next = groups.size();
+		map->FindOrCreate(probe, found.data(), next);
+	} else {
+		FindShared(node_index, rows, selected, keys, found);
 	}
-	for (idx_t c = 0; c < keys.ColumnCount(); c++) {
-		probe.data[column++].Slice(keys.data[c], selection, count);
-	}
-	probe.SetCardinality(count);
-	vector<idx_t> found(count);
-	idx_t next = groups.size();
-	map->FindOrCreate(probe, found.data(), next);
 	SelectionVector created(count);
 	idx_t created_count = 0;
 	for (idx_t j = 0; j < count; j++) {
@@ -769,7 +927,45 @@ void DecideDescent::FindGroups(idx_t node_index, const Reach &rows, const unsafe
 	groups.keys.Append(keys, created, created_count);
 }
 
-void DecideDescent::FindDecisionGroups(idx_t scope, DataChunk &keys, const vector<bool> &present,
+void DecideDescent::FindShared(idx_t node_index, const Reach &rows, const unsafe_vector<idx_t> &selected,
+                               DataChunk &keys, unsafe_vector<idx_t> &found) {
+	auto &dictionary = *dictionaries[tree.nodes[node_index]->key];
+	auto &window_slots = dictionary.window_slots;
+	// The rows whose slot no node has found in this window.
+	const idx_t count = selected.size();
+	SelectionVector missing(count);
+	idx_t missing_count = 0;
+	for (idx_t j = 0; j < count; j++) {
+		if (window_slots[rows.rows[selected[j]]] == DConstants::INVALID_INDEX) {
+			missing.set_index(missing_count++, selected[j]);
+		}
+	}
+	if (missing_count > 0) {
+		DataChunk probe;
+		probe.InitializeEmpty(keys.GetTypes());
+		probe.Slice(keys, missing, missing_count);
+		unsafe_vector<idx_t> shared_slots(missing_count);
+		dictionary.map->FindOrCreate(probe, shared_slots.data(), dictionary.count);
+		for (idx_t k = 0; k < missing_count; k++) {
+			window_slots[rows.rows[missing.get_index(k)]] = shared_slots[k];
+		}
+	}
+	// The node numbers its own slots in the order its rows reach them: one it has not reached is its next.
+	auto &own = own_slots[node_index];
+	auto next = containers[node_index].groups.size();
+	for (idx_t j = 0; j < count; j++) {
+		const auto shared_slot = window_slots[rows.rows[selected[j]]];
+		if (shared_slot >= own.size()) {
+			own.resize(MaxValue<idx_t>(shared_slot + 1, own.size() * 2), DConstants::INVALID_INDEX);
+		}
+		if (own[shared_slot] == DConstants::INVALID_INDEX) {
+			own[shared_slot] = next++;
+		}
+		found[j] = own[shared_slot];
+	}
+}
+
+void DecideDescent::FindDecisionGroups(idx_t scope, DataChunk &keys, const unsafe_vector<bool> &present,
                                        const vector<idx_t> &rows, vector<idx_t> &classes) {
 	auto &groups = decision_groups[scope];
 	auto &layouts = decision_layouts[scope];
@@ -862,7 +1058,7 @@ vector<idx_t> DecideDescent::DecisionClasses(idx_t variable, DataChunk &chunk, c
 			definition = tree.definition_nodes[variable][0];
 		}
 		DataChunk keys;
-		vector<bool> present;
+		unsafe_vector<bool> present;
 		Key(definition != DConstants::INVALID_INDEX ? tree.nodes[definition]->key : tree.keyed_scopes[scope].key, chunk,
 		    missing, keys, present);
 		// A definition's classes are its key's, split by its signature.
@@ -978,7 +1174,7 @@ void DecideDescent::FrameOrder(const DecideNode &node, const DecideEntryLayout &
                                const Reach &stored, DataChunk &values) {
 	if (node.frame_spec) {
 		DataChunk partition;
-		vector<bool> present;
+		unsafe_vector<bool> present;
 		Key(node.frame_spec->partition_key, chunk, stored, partition, present);
 		for (idx_t c = 0; c < partition.ColumnCount(); c++) {
 			values.data[layout.partition + c].Reference(partition.data[c]);
@@ -1067,42 +1263,42 @@ void DecideDescent::Store(idx_t node_index, DataChunk &chunk, const Reach &store
 	if (node.kind == DecideNodeKind::SCOPE && node.per != DecideTreePer::ROW) {
 		// A set E's row reads the G and O nodes it depends on, its children and the helpers its decisions stand for,
 		// which another root may route later in the window. So its entries wait for every root.
-		auto batch = make_uniq<Pending>();
-		batch->node = node_index;
-		batch->rows.rows.resize(kept_count);
-		batch->rows.parents.resize(kept_count);
-		batch->slots.resize(kept_count);
+		pending.push_back(make_uniq<Pending>());
+		auto &batch = *pending.back();
+		batch.node = node_index;
+		batch.rows.rows.resize(kept_count);
+		batch.rows.parents.resize(kept_count);
+		batch.slots.resize(kept_count);
 		for (idx_t k = 0; k < kept_count; k++) {
 			const auto i = kept->get_index(k);
-			batch->rows.rows[k] = stored.rows[i];
-			batch->rows.parents[k] = stored.parents[i];
-			batch->slots[k] = slots[i];
+			batch.rows.rows[k] = stored.rows[i];
+			batch.rows.parents[k] = stored.parents[i];
+			batch.slots[k] = slots[i];
 		}
 		if (layout.end > 0) {
-			batch->values.InitializeEmpty(container.values.Types());
-			batch->values.Slice(values, *kept, kept_count);
+			batch.values.InitializeEmpty(container.values.Types());
+			batch.values.Slice(values, *kept, kept_count);
 		}
-		pending.push_back(std::move(batch));
 		return;
 	}
 	// Each entry is an instance of its own; a node per row's entry is its own slot too (DecideNodeGroups::per_row).
-	const auto base = container.Count();
-	container.rows.resize(base + kept_count);
-	container.parent_slots.resize(base + kept_count);
-	auto entry_rows = container.rows.data() + base;
-	auto entry_parents = container.parent_slots.data() + base;
+	// Gathered a window at a time and appended whole, so the arrays' new room is written once.
+	idx_t gathered[STANDARD_VECTOR_SIZE];
 	for (idx_t k = 0; k < kept_count; k++) {
-		const auto i = kept->get_index(k);
-		entry_rows[k] = row_base + stored.rows[i];
-		entry_parents[k] = stored.parents[i];
+		gathered[k] = row_base + stored.rows[kept->get_index(k)];
 	}
-	for (idx_t k = 0; k < kept_count && !container.groups.per_row; k++) {
-		container.slots.push_back(slots[kept->get_index(k)]);
-		container.instances.push_back(container.instance_entries.size());
-		container.instance_entries.push_back(base + k);
+	container.rows.insert(container.rows.end(), gathered, gathered + kept_count);
+	for (idx_t k = 0; k < kept_count; k++) {
+		gathered[k] = stored.parents[kept->get_index(k)];
 	}
+	container.parent_slots.insert(container.parent_slots.end(), gathered, gathered + kept_count);
 	if (container.groups.per_row) {
 		container.groups.per_row_slots += kept_count;
+	} else {
+		for (idx_t k = 0; k < kept_count; k++) {
+			gathered[k] = slots[kept->get_index(k)];
+		}
+		container.slots.insert(container.slots.end(), gathered, gathered + kept_count);
 	}
 	container.values.Append(values, *kept, kept_count);
 }
@@ -1153,7 +1349,7 @@ const DecideDescent::Reach &DecideDescent::HoldKeyed(idx_t node_index, DataChunk
                                                      idx_t row_base, Reach &own_children) {
 	auto &node = *tree.nodes[node_index];
 	auto &container = containers[node_index];
-	vector<bool> present;
+	unsafe_vector<bool> present;
 	KeySpellings spelled;
 	DataChunk keys;
 	// A grouped clause's keys are read where flat groups its kept rows, after its terms (DecideNode::key_block).
@@ -1304,6 +1500,17 @@ void DecideDescent::Append(DataChunk &chunk, idx_t row_base) {
 	for (idx_t row = 0; row < chunk.size(); row++) {
 		rows.Add(row, DConstants::INVALID_INDEX);
 	}
+	// What a window's rows read and found is held for that window alone.
+	for (auto &held : key_reads) {
+		if (held.values.ColumnCount() > 0) {
+			held.Reset(chunk.size());
+		}
+	}
+	for (auto &dictionary : dictionaries) {
+		if (dictionary) {
+			dictionary->window_slots.assign(chunk.size(), DConstants::INVALID_INDEX);
+		}
+	}
 	// A declared decision's dictionary belongs to Source as well as the clauses:
 	// it must include every row, even one no constraint reaches. Helper scopes
 	// are instead populated when their defining/reading nodes are reached.
@@ -1313,7 +1520,7 @@ void DecideDescent::Append(DataChunk &chunk, idx_t row_base) {
 			continue;
 		}
 		DataChunk keys;
-		vector<bool> present;
+		unsafe_vector<bool> present;
 		Key(definition.key, chunk, rows, keys, present);
 		keys.SetCardinality(chunk.size());
 		auto &mapping = decision_rows[scope];

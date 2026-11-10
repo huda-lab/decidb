@@ -141,9 +141,12 @@ struct DecideEntryLayout {
 struct DecideNodeContainer {
 	unsafe_vector<idx_t> rows;
 	unsafe_vector<idx_t> parent_slots;
-	//! Per entry its slot and its instance, and per instance its first entry, read through Slot, Instance and
-	//! Instances: empty for a node per row, whose entry is its own slot and instance (DecideNodeGroups::per_row).
+	//! Per entry its slot, read through Slot: empty for a node per row, whose entry is its own slot
+	//! (DecideNodeGroups::per_row).
 	unsafe_vector<idx_t> slots;
+	//! Per entry its instance and per instance its first entry, read through Instance and Instances: held for a set E
+	//! alone, whose entries can share an instance; any other node's entry is an instance of its own.
+	bool shares_instances = false;
 	unsafe_vector<idx_t> instances;
 	unsafe_vector<idx_t> instance_entries;
 	DecideColumns values;
@@ -166,10 +169,10 @@ struct DecideNodeContainer {
 		return groups.per_row ? entry : slots[entry];
 	}
 	idx_t Instance(idx_t entry) const {
-		return groups.per_row ? entry : instances[entry];
+		return shares_instances ? instances[entry] : entry;
 	}
 	idx_t Instances() const {
-		return groups.per_row ? Count() : instance_entries.size();
+		return shares_instances ? instance_entries.size() : Count();
 	}
 	vector<Value> Signature(idx_t entry) const {
 		return values.GetValues(entry, 0, layout.columns);
@@ -263,12 +266,56 @@ private:
 		unsafe_vector<idx_t> slots;
 		DataChunk values;
 	};
+	//! A key's values on the window's rows read so far: a key is evaluated once on a row of the window, by the first
+	//! node that reads it there, and every later read of it on the row slices these. A row a read raised on is not
+	//! held, so each node reading it raises at its own rank.
+	struct KeyReads {
+		DataChunk values;
+		KeySpellings spelled;
+		//! Whether `values` holds every row of the window at its own place, as a read of the whole window leaves it.
+		bool whole = false;
+		//! Otherwise, per row of the window, where `values` holds it; INVALID where no read holds it.
+		unsafe_vector<idx_t> position;
+
+		void Initialize(Allocator &allocator, const vector<LogicalType> &types, idx_t columns, idx_t window);
+		//! Holds nothing, for the window of `window` rows that starts.
+		void Reset(idx_t window);
+		//! A copy that holds what this one holds.
+		void CopyInto(Allocator &allocator, KeyReads &copy, idx_t room) const;
+		//! The rows of `rows` this does not hold, `rows` itself where it holds none.
+		const Reach &Missing(const Reach &rows, Reach &own) const;
+		//! Holds the values and spellings `read` and `spelled` evaluated on `missing`, of a window of `window` rows.
+		void Hold(DataChunk &read, const KeySpellings &spelled, const Reach &missing, idx_t window);
+		//! Where row `i` of `rows` lies among the held values.
+		idx_t At(const Reach &rows, idx_t i) const {
+			return whole ? rows.rows[i] : position[rows.rows[i]];
+		}
+		//! The values of `rows`, in place where they are the window's.
+		void Slice(const Reach &rows, idx_t window, DataChunk &result) const;
+	};
+	//! A key's dictionary, which every node of the key outside an enclosing slot shares (a Flyweight): its slots are
+	//! numbered across those nodes, and each node numbers its own (own_slots) in the order its rows reach them. Each
+	//! row of the window keeps the slot it found, so a row probes the dictionary once.
+	struct SharedDictionary {
+		unique_ptr<DecideKeyMap> map;
+		idx_t count = 0;
+		unsafe_vector<idx_t> window_slots;
+	};
 	const DecideTree &tree;
 	ClientContext &context;
 	vector<DecideNodeContainer> containers;
-	//! Per node, the dictionary of its (enclosing slot, key); null for a node per row, whose rows are each a slot of
-	//! their own, and for an empty key, whose slots its enclosing slots find (empty_key_slots).
+	//! Per node in an enclosing slot, the dictionary of its (enclosing slot, key); null for a node per row, whose rows
+	//! are each a slot of their own, for an empty key, whose slots its enclosing slots find (empty_key_slots), and for
+	//! a node outside an enclosing slot, which reads its key's shared dictionary.
 	vector<unique_ptr<DecideKeyMap>> group_maps;
+	//! Per key, the dictionary its nodes outside an enclosing slot share; per node of one, its slot by the shared one,
+	//! INVALID where it has none.
+	vector<unique_ptr<SharedDictionary>> dictionaries;
+	vector<unsafe_vector<idx_t>> own_slots;
+	//! Per key, its values on the window's rows read so far.
+	vector<KeyReads> key_reads;
+	//! How many reads raised: a read that raised on a row holds none of its values.
+	idx_t raised = 0;
 	//! Per node of an empty key, its slot by enclosing slot plus one, 0 for none: INVALID where none is made yet.
 	vector<unsafe_vector<idx_t>> empty_key_slots;
 	//! Per set E, its entries by (slot, signature, columns, reads) and its instances by (slot, signature).
@@ -328,17 +375,25 @@ private:
 	vector<uint8_t> Truth(const Expression &expression, DataChunk &chunk, const Reach &rows);
 	//! The values of `key` on `rows`, a column per element into `values`, and which hold no NULL that leaves a row in
 	//! no group; with `read`, what a collated key spelled, left empty for a key with no collated column.
-	void Key(idx_t key, DataChunk &chunk, const Reach &rows, DataChunk &values, vector<bool> &present,
+	void Key(idx_t key, DataChunk &chunk, const Reach &rows, DataChunk &values, unsafe_vector<bool> &present,
 	         KeySpellings *read = nullptr);
+	//! The values of `key` on `missing`, the rows of `rows` it holds no read of, into `values`, a collated column's
+	//! spellings into `spelled`; with none missing, the ranks advance as if `rows` were read.
+	void ReadKey(idx_t key, DataChunk &chunk, const Reach &rows, const Reach &missing, DataChunk &values,
+	             KeySpellings &spelled);
 	void Spell(idx_t key, const vector<vector<Value>> &groups, const vector<vector<Value>> &spelled,
 	           const vector<vector<string>> &sort_keys);
 	//! `node`'s signature on `rows`, its values' columns (signature_types) into `values`.
 	void Signature(idx_t node, DataChunk &chunk, const Reach &rows, idx_t row_base, DataChunk &values);
 	//! The slot each of `rows` lies in, `selected` of them by their key `keys`, created in row order.
 	void FindGroups(idx_t node, const Reach &rows, const unsafe_vector<idx_t> &selected, DataChunk &keys,
-	                const vector<bool> &present, idx_t row_base, unsafe_vector<idx_t> &slots);
+	                const unsafe_vector<bool> &present, idx_t row_base, unsafe_vector<idx_t> &slots);
+	//! The slots of `selected` of `rows` for a node outside an enclosing slot, by its key `keys` (aligned with `rows`)
+	//! in the key's shared dictionary, each the node's own (`found`, aligned with `selected`).
+	void FindShared(idx_t node, const Reach &rows, const unsafe_vector<idx_t> &selected, DataChunk &keys,
+	                unsafe_vector<idx_t> &found);
 	//! Of a keyed scope, the class of each row of `keys` (its layout's columns), INVALID where `present` is false.
-	void FindDecisionGroups(idx_t scope, DataChunk &keys, const vector<bool> &present, const vector<idx_t> &rows,
+	void FindDecisionGroups(idx_t scope, DataChunk &keys, const unsafe_vector<bool> &present, const vector<idx_t> &rows,
 	                        vector<idx_t> &classes);
 	vector<idx_t> DecisionClasses(idx_t variable, DataChunk &chunk, const Reach &rows, idx_t row_base);
 	//! A set E's window of entries once every root has descended: one entry per distinct slot, signature, columns

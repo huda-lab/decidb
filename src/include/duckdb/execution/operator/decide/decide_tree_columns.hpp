@@ -92,8 +92,9 @@ public:
 	//! other programs are read on these alone.
 	const vector<bool> &Tested(idx_t node);
 	//! The entries of `node` an objective term `term` is read on, flat's read rows of the term: those its member tests
-	//! keep that read an instance of its decision (TermAbsentAt). A term reading none has no value there (D84).
-	vector<bool> ReadEntries(idx_t node, const DecideTerm &term);
+	//! keep that read an instance of its decision (TermAbsentAt), in `present` unless they are all it keeps. A term
+	//! reading none has no value there (D84).
+	const vector<bool> &ReadEntries(idx_t node, const DecideTerm &term, vector<bool> &present);
 	//! Whether decision `variable` has no instance to read at `row` (D84, D88): a keyed decision's row in no class of
 	//! its scope, a helper's where its group holds no member, or an auxiliary's row where what defines it has no value
 	//! (`absent_reads`, or a factor of its product). None for no decision (INVALID_INDEX).
