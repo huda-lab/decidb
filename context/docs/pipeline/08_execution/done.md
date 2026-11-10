@@ -151,16 +151,32 @@ flat alone reads):
   range's argument, are programs on its O (`DecideFrameColumnPrograms`), in stage 05's terms. A child a data
   expression reads that has no data value is an internal error.
 - *Top-down* (`decide_descent.hpp`): the descent reads the buffered input in `Finalize`'s one scan
-  (`DecideRowStore::Build`), so the sink stays parallel. A G's or O's groups lie in no enclosing slot, because the
-  rewrites already make a reducer's key its whole path key (`language/guide.md` §5.5): only a `by` opens a level, and an
-  E's classes lie within the G or O they feed. A collated key folds each read's spelling into its group's least at
-  insert, one dictionary per key across every node, and a position takes its rows' least spelling when the descent
-  finishes (D69). Each group of a collated key also keeps its own least spelling over the rows its node holds in it
-  (`DecideDescentGroup::spelling`), which flat names a variant's class by. A set E keeps one entry per distinct slot, σ,
-  carried columns and reads, at least one per variant, and records each row it keeps with the entry standing for it
-  (`DecideNodeContainer::routed`): a pair per kept row, for every set E, which the objective's root, a grouped or class
-  root and a relation-qualified reducer's operand read. A grouped root under `per K:` holds a kept row in no class of K
-  too, in a slot of its own (`DecideDescentGroup::in_a_class`), since the row still lies in a group whose row reads it.
+  (`DecideRowStore::Build`), so the sink stays parallel. It is a Composite traversal vectorized by selection, as
+  DuckDB's filters hand a selection vector on: a window of the input at a time, a node's `when` parts, keys and σ
+  fields execute only on the rows that reach it (`Reach`: the rows, and the enclosing slot each arrives in), and
+  each key's rows find their slots in a `DecideKeyMap` (`decide_key_map.hpp`). That is DuckDB's GROUP BY hash table
+  (`GroupedAggregateHashTable`) with no aggregate and one register per group, which holds the group's slot, probed a
+  vector at a time: NULL is equal to NULL, and a collated column compares under its collation. The nodes of one key
+  outside an enclosing slot share its dictionary (a Flyweight, `SharedDictionary`), each numbering its own slots in
+  the order its rows reach them. A key is evaluated once on a row of a window, by the first node that reads it there,
+  and every later read slices those values (`KeyReads`); a row a read raised on is not held, so each node reading it
+  raises at its own rank. `DecideTree::Validate` checks at plan time that the descent reads of a row only its nodes'
+  own `when` parts, keys and bare input columns: a carried column, a program column and a σ value are each an input
+  column. A node's entries are columns (`DecideNodeContainer`): per entry its row, its enclosing slot, its slot and,
+  for a set E alone, its instance, and its values in `DecideColumns`, chunks of 2,048 rows held in memory, so that a
+  window of entries is one chunk an executor reads in place. An entry that stands for its row alone holds no
+  decision's instance (`DecideEntryLayout::signature`), which its row gives; a node per row keeps no slot arrays,
+  since its entries are its slots; a constant program column is held once. A G's or O's groups lie in no enclosing
+  slot, because the rewrites already make a reducer's key its whole path key (`language/guide.md` §5.5): only a `by`
+  opens a level, and an E's classes lie within the G or O they feed. A collated key folds each read's spelling into
+  its group's least, one dictionary per key across every node, and a position takes its rows' least spelling when the
+  descent finishes (D69). Each slot of a collated key also keeps its own least spelling over the rows its node holds
+  in it (`DecideNodeGroups::spellings`), which flat names a variant's class by. A set E keeps one entry per distinct
+  slot, σ, carried columns and reads, found by one probe of its entries' `DecideKeyMap`, at least one per variant;
+  its instances are its distinct (slot, σ). It records each row it keeps with the entry standing for it
+  (`DecideNodeContainer::routed`): a pair per kept row, which the objective's root, a grouped or class root and a
+  relation-qualified reducer's operand read. A grouped root under `per K:` holds a kept row in no class of K too, in
+  a slot of its own (`DecideNodeGroups::in_a_class`), since the row still lies in a group whose row reads it.
   So does an O an anchor whose `within` column is NULL: it lies in no timeline (D75), and its slot is no timeline's. So
   does a relation-qualified reducer's operand hold a row its `when` keeps in no class of its `per`: flat computes the
   reducer's terms there and its qualifier keeps no value of the row
@@ -368,6 +384,14 @@ plan reads a clause's `when` on every row, with the data reducer's arguments it 
 the tree reads the `when` at the clause's rank and the arguments only on the rows it keeps, so an argument's error ranks
 before an error of the `when` that the side plan meets first (open). A record no clause reads, an orphan's hidden root,
 is folded by no reader, so under `tree-noside` its errors are not raised (open: no query is known to make one).
+
+**Cost.** Against flat on one binary (`DECIDB_EVALUATOR=tree benchmark/decide/anr_scaling.py --against` a flat run),
+the tree's own time at 10^5 rows is 0.84x to 1.33x flat's on every workload (`flat-sum` the most), and its peak memory
+1.01x to 1.20x; at 10^6 `flat-sum` is 1.43x (132 against 92 ms). On TPC-H `large` (`run_benchmarks.py --sizes large`)
+the wall time in total is within 1% of flat's, the model's construction 13.5% over it (2,699 against 3,063 ms; the
+most on the smallest queries, Q5 3.9x of 2.5 ms and Q7 2.3x of 21.5 ms), and the peak memory at most 1.30x. Before the
+descent was vectorized, its keys and entries one `Value` at a time, it was 2x to 32x flat's time and 1.4x to 6.3x its
+memory at 10^5 rows, and 66% over flat's wall time on TPC-H `large`. Growth stays linear in the rows.
 
 Switches for the tree: `DECIDB_DUMP_TREE`, `DECIDB_DUMP_CONTAINERS`, `DECIDB_DUMP_BODIES` and `DECIDB_DUMP_VALUES`
 print the tree, the containers, the bodies and their programs, and the columns' values, each node's programs the
