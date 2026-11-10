@@ -49,7 +49,8 @@ DuckDB conventions: PascalCase types and methods, snake_case variables and files
 
 - **While developing:** build, then `run_tests.sh -k <pattern>` over the tests the change touches. Always pass `-k` or
   `-m`: a file-only run prunes the oracle cache.
-- **At each commit:** `make decide-test` once. Add `unittest "[decidb]"` if the change touches C++ tests or the code
+- **At each commit:** `make decide-test` once. Exception: lane commits inside `/phase` run only their focused tests;
+  the phase's one full gate covers them at combine. Add `unittest "[decidb]"` if the change touches C++ tests or the code
   they cover (serialization, the direct IR).
 - **Only when the change is in that area:**
   - serialization (`nodes.json`, `logical_operator.json`, `Serialize`/`Deserialize`):

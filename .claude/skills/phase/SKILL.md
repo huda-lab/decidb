@@ -5,8 +5,10 @@ description: Run one phase of the work queue (context/docs/todo.md) in parallel 
 
 # /phase — parallel lanes, one combine
 
-You are the orchestrator, in the main tree. Each lane of the phase is one agent in its own git worktree, working one
-queue batch (F1, F2, ...) start to finish. You collect decisions first, relay questions while lanes run, gate each
+You are the orchestrator, in the main tree. Each lane of the phase is one agent working one queue batch (F1, F2, ...)
+start to finish. A worktree exists only to keep lanes that run at the same time apart: a phase of two or more lanes
+gives each its own worktree; a phase of one lane runs on the branch in the main tree, with no worktree, no lane
+branch and no rebase. You collect decisions first, relay questions while lanes run, gate each
 lane, and combine. `/orchestrate` is the one-lane form of this skill; its ground rules hold here except where this
 skill says otherwise (worktrees, lane branches, commits at combine).
 
@@ -53,11 +55,12 @@ Lane rules:
   how to reproduce) and the orchestrator files it.
 - Any design choice the brief does not settle: stop and report it under DECISIONS HIT with the options and your
   recommendation. The orchestrator asks the owner and resumes you.
-- Build with `CMAKE_BUILD_PARALLEL_LEVEL=3 make release` (other lanes build at the same time). Run only focused tests:
-  `./test/decide/run_tests.sh -n 2 -k <pattern>`, once per task before its commit, not after every edit. Settle
-  evidence by reading the code first (no caller, the case that already reaches the branch); run a focused test for
-  evidence only when reading cannot settle it. Never run `make decide-test` or a full suite: the orchestrator runs
-  one full gate for the whole phase after combining.
+- Build with `CMAKE_BUILD_PARALLEL_LEVEL=3 make release` (other lanes build at the same time). Run only the focused
+  tests each task's **Done when** names, once per task before its commit, not after every edit; never widen the
+  pattern. Settle evidence by reading the code first (no caller, the case that already reaches the branch); run a
+  focused test for evidence only when reading cannot settle it. Never run `make decide-test`,
+  `run_direct_matrix.sh` or any full suite, whatever another doc says: the orchestrator runs one full gate for the
+  whole phase after combining.
 - Do not edit docs (todo.md, done.md, bugs.md, ...). Do not edit context/docs/todo.md under any circumstances.
 - Commit on your worktree branch when a task is done: subject prefixed `decide:`, no trailer, never push.
 
@@ -73,8 +76,12 @@ formatting), minus "Do not commit".
 Record the phase base: the main tree's `HEAD` commit, with every doc and ruling from steps 1–2 committed first. Put
 it in each brief in place of `<PHASE_BASE>`.
 
-One `Agent` call per lane, in one message: `subagent_type: "general-purpose"`, `model: "sonnet"`,
-`isolation: "worktree"`. The tool creates each worktree at `.claude/worktrees/agent-<id>` inside the repository, on a
+**One lane:** one `Agent` call, `subagent_type: "general-purpose"`, `model: "sonnet"`, no `isolation`. It works and
+commits on the branch in the main tree; drop the worktree line of the lane rules and the `<PHASE_BASE>` reset. In
+step 6, skip the stacking and the worktree cleanup.
+
+**Two or more lanes:** one `Agent` call per lane, in one message: `subagent_type: "general-purpose"`,
+`model: "sonnet"`, `isolation: "worktree"`. The tool creates each worktree at `.claude/worktrees/agent-<id>` inside the repository, on a
 branch `worktree-agent-<id>`, starting from origin's default branch; the lane resets it to the phase base itself
 (lane rules). `.gitignore` ignores `.claude/worktrees/`. Then `git worktree list`: every lane
 worktree must sit there. The owner forbids hand-made folders beside the repo; if a worktree landed

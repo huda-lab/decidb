@@ -27,6 +27,8 @@ Read first: <2–4 paths>. Checks: <one command or path § section>.
 
 - One line per task. No columns, sizes, estimates or prose under a heading.
 - Groups run in order. `needs:` appears only when a task or group depends on another.
+- Each group heading ends with `(one lane)` when its tasks chain or share files, or `(parallel: <ID>, <ID> | <ID>)`
+  listing the lanes that can run side by side. `/phase` gives worktrees only to parallel lanes.
 - Owner decisions form the first group when any exist.
 - When a task ships, delete its line. Never tick and keep it.
 
@@ -45,7 +47,9 @@ Read first: <2–4 paths>. Checks: <one command or path § section>.
 - **Recommendation.** (decisions only)
 - **Change.** What to build, at the level of outcome and constraints, not line-by-line.
 - **Needs.** (only if blocked) What must exist first.
-- **Done when.** The checks that pass and the regressions that exist.
+- **Done when.** The regressions that exist and the focused tests that pass, as commands
+  (`./test/decide/run_tests.sh -n 2 -k <pattern>`, `build/release/test/unittest "<test name>"`). Never a full suite:
+  those run once, where the work is combined or committed.
 ```
 
 - A task is pickable when one agent can finish it in one sitting (about a day at most) without asking anything but the

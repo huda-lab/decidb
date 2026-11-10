@@ -10,11 +10,11 @@ solver path answers those queries, so none of them is wrong, only slower.
 - Each task stands alone. Read its **Problem**, make the change and run the checks. When it ships, its result moves to
   the owning `done.md` and the task is deleted from its `todo.md`.
 - The baseline to compare against is the stamp at the top of `done.md`. Any other failure after your change is yours.
-- Checks that every code task runs (from the repository root): `make decide-test`,
-  `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`, `DECIDB_VERIFY_SERIALIZER=1 make decide-test`,
-  `DECIDB_FORCE_SOLVER=highs make decide-test`, and `build/release/test/unittest "[decidb]"`. Rebuild first with
-  `make release`. `test/decide/run_direct_matrix.sh` runs all five and prints one line each (about 3 minutes). Doc-only
-  tasks need no checks.
+- A task runs only the focused tests its **Done when** names, after `make release`. The full gate runs once where
+  the work is combined or committed, not per task: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make
+  decide-test`, `DECIDB_VERIFY_SERIALIZER=1 make decide-test`, `DECIDB_FORCE_SOLVER=highs make decide-test`, and
+  `build/release/test/unittest "[decidb]"`; `test/decide/run_direct_matrix.sh` runs all five and prints one line each
+  (about 3 minutes). Doc-only tasks need no checks.
 - Do not loosen or delete a test to make it pass. If a test fails for a reason the task did not predict, stop and report
   it.
 - Tasks marked **Decision needed** have two or more reasonable answers. Ask the owner before coding.

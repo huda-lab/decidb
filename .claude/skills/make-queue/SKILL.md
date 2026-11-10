@@ -46,7 +46,9 @@ done format. Keep the area's one "how to work" section.
 
 Write `context/docs/todo.md` in the queue format. Group by dependency and by what can be batched (owner
 decisions, quick tasks, larger tasks, measurement runs last, blocked tasks). "Read first" and "Checks" are pointers, not
-copies.
+copies. Mark each group one lane or parallel from the tasks' **Needs** and the files they touch: two tasks are parallel
+lanes only when neither needs the other and they edit no file in common. Every code task's **Done when** names its
+focused test commands; "Checks" points to the full gate, which runs once at combine.
 
 ### 5. Self-check before showing it
 

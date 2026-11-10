@@ -13,7 +13,6 @@ checklist and the standard tests). Remove its row here when its `todo.md` exists
 | A6 | [Rank-one bounded least squares](rules/a6_rank_one_least_squares/definition.md) |
 | D1 | [Block-diagonal decomposition](rules/d1_block_decomposition/definition.md) |
 | N2 | [Ellipsoid support function](rules/n2_ellipsoid_support/definition.md) |
-| O1 | [Monge assignment](rules/o1_monge_assignment/definition.md) |
 | O2 | [Monge transportation problem](rules/o2_monge_transportation/definition.md) |
 | R2 | [Discrete separable convex resource allocation](rules/r2_discrete_resource_allocation/definition.md) |
 | R3 | [Continuous quadratic knapsack](rules/r3_quadratic_knapsack/definition.md) |
