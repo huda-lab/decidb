@@ -1686,6 +1686,15 @@ FRAME_RAISED = {
         "MAXIMIZE sum(x)",
         "cannot take logarithm of a negative number",
     ),
+    # Row 3's order key raises where clause 1 reads the frame, and flat reads every frame's order key before any
+    # clause: before clause 0's square root of row 2. The clause's signature reads the frame keeping the row, so the
+    # frame's O raises it.
+    "an-order-key-before-an-earlier-clause": (
+        EDGE_ROWS,
+        "x <= sqrt(t.w - 2) AND x <= at(previous else 0: t.v) over (ln(t.v - 2))",
+        "MAXIMIZE sum(x)",
+        "cannot take logarithm of a negative number",
+    ),
     # A range's helper's members are read after every clause (VALUE_LINKS): clause 0's square root of row 1 before
     # the member's logarithm of row 5.
     "a-clause-before-a-range-helpers-member": (

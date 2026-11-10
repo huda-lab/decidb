@@ -790,21 +790,33 @@ void DecideDescent::Signature(idx_t node_index, DataChunk &chunk, const Reach &r
 			Evaluate(*field.value, chunk, rows, values.data[column++]);
 			break;
 		}
-		case DecideSignatureFieldKind::BY_KEY: {
-			// A field naming a reducer's `by` key reads its values as a `by` key's read, which keeps the row: the node
-			// grouping by the key raises what it raises, where flat reads it (a helper's G, where flat builds the
-			// helper's classes).
+		case DecideSignatureFieldKind::BY_KEY:
+		case DecideSignatureFieldKind::FRAME: {
+			// A field naming another node -- a reducer's `by` key, a frame's timeline and position -- reads that
+			// node's values as a `by` key's read, which keeps the row: the node raises what it raises, where flat
+			// reads it (a helper's G where flat builds the helper's classes, a frame's O where flat builds every
+			// frame before any clause, language/guide.md §5.6).
 			const auto block = read_block;
 			const auto position = current_rank.position;
 			read_block = DecideBlock::BY_KEY;
+			const DecideNode *frame = nullptr;
+			if (field.kind == DecideSignatureFieldKind::FRAME) {
+				frame = DescentFrameNode(tree, field.frame);
+				if (!frame || !frame->over) {
+					throw InternalException("DECIDE tree: signature names missing frame %llu", field.frame);
+				}
+			}
 			DataChunk keys;
 			unsafe_vector<bool> present;
-			Key(field.key, chunk, rows, keys, present);
-			read_block = block;
-			current_rank.position = position;
+			Key(frame ? frame->key : field.key, chunk, rows, keys, present);
 			for (idx_t c = 0; c < keys.ColumnCount(); c++) {
 				values.data[column++].Reference(keys.data[c]);
 			}
+			if (frame && DescentFrameReadsOrder(*frame)) {
+				Evaluate(*frame->over, chunk, rows, values.data[column++]);
+			}
+			read_block = block;
+			current_rank.position = position;
 			break;
 		}
 		case DecideSignatureFieldKind::DECISION: {
@@ -819,22 +831,6 @@ void DecideDescent::Signature(idx_t node_index, DataChunk &chunk, const Reach &r
 			for (idx_t i = 0; i < rows.size(); i++) {
 				decisions[i] = field.decision;
 				instances[i] = scope < tree.keyed_scopes.size() ? classes[i] : (global ? 0 : row_base + rows.rows[i]);
-			}
-			break;
-		}
-		case DecideSignatureFieldKind::FRAME: {
-			auto frame = DescentFrameNode(tree, field.frame);
-			if (!frame || !frame->over) {
-				throw InternalException("DECIDE tree: signature names missing frame %llu", field.frame);
-			}
-			DataChunk keys;
-			unsafe_vector<bool> present;
-			Key(frame->key, chunk, rows, keys, present);
-			for (idx_t c = 0; c < keys.ColumnCount(); c++) {
-				values.data[column++].Reference(keys.data[c]);
-			}
-			if (DescentFrameReadsOrder(*frame)) {
-				Evaluate(*frame->over, chunk, rows, values.data[column++]);
 			}
 			break;
 		}
