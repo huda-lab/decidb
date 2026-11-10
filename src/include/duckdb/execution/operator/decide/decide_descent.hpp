@@ -12,9 +12,11 @@
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/unordered_map.hpp"
 #include "duckdb/common/unordered_set.hpp"
+#include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/execution/operator/decide/decide_key_map.hpp"
 #include "duckdb/planner/decide/decide_tree.hpp"
 
-#include <functional>
+#include <set>
 
 namespace duckdb {
 
@@ -104,11 +106,13 @@ struct DecideNodeContainer {
 	idx_t rows_out = 0;
 };
 
-//! Composite traversal, vectorized by selection. A node's when/key expressions
-//! execute only on its incoming selection. Bodies and aggregates are deferred.
+//! Composite traversal, vectorized by selection: a node's `when` parts, keys and signature fields execute only on the
+//! rows reaching it, a window of the input at a time, and each key's rows find their slots in a DecideKeyMap. Bodies
+//! and aggregates are deferred.
 class DecideDescent {
 public:
 	DecideDescent(const DecideTree &tree, ClientContext &context);
+	~DecideDescent();
 	void Append(DataChunk &chunk, idx_t row_base);
 	void Finish();
 	const vector<DecideNodeContainer> &Containers() const {
@@ -117,9 +121,6 @@ public:
 	vector<DecideNodeContainer> &Containers() {
 		return containers;
 	}
-	//! A solver's existing keyed mapping can supply identity while the evaluators
-	//! coexist. The complete tree evaluator resolves it from declaration keys.
-	void SetDecisionResolver(std::function<idx_t(idx_t, idx_t)> resolver);
 	const vector<vector<DecideDescentGroup>> &DecisionGroups() const {
 		return decision_groups;
 	}
@@ -136,20 +137,20 @@ public:
 	}
 
 private:
-	struct RoutingRow {
-		idx_t row;
-		idx_t parent_slot;
-	};
-	struct NodeIndex {
-		unordered_map<hash_t, vector<idx_t>> groups;
-		//! A set E's instances by (slot, sigma), and its entries by (slot, sigma, columns, reads).
-		unordered_map<hash_t, vector<idx_t>> signatures;
-		unordered_map<hash_t, vector<idx_t>> entries;
-		//! Shared DAG edges may route the same row/context twice. Its input
-		//! value is inserted once, independently of which reader visits first.
-		unordered_map<hash_t, vector<pair<idx_t, idx_t>>> seen;
-		//! A G's or O's, for the current chunk: where each row it reaches reads its value (DecideDescentEntry::reads).
-		unordered_map<idx_t, idx_t> landed;
+	//! The rows of a window reaching a node: each row of the window, and the enclosing slot it arrives in.
+	struct Reach {
+		vector<sel_t> rows;
+		vector<idx_t> parents;
+		idx_t size() const {
+			return rows.size();
+		}
+		bool empty() const {
+			return rows.empty();
+		}
+		void Add(sel_t row, idx_t parent) {
+			rows.push_back(row);
+			parents.push_back(parent);
+		}
 	};
 	//! A group of a collated key and its least spelling so far: a hash aggregate over every read of the key (Key),
 	//! whose label Label returns.
@@ -163,17 +164,49 @@ private:
 		vector<vector<Value>> spelled;
 		vector<vector<string>> sort_keys;
 	};
+	//! A keyed scope's classes, one dictionary per layout its keys come in (DecisionClasses), all numbered in one
+	//! count: a declaration's key, a definition's key and signature.
+	struct DecisionLayout {
+		vector<LogicalType> types;
+		unique_ptr<DecideKeyMap> map;
+		//! The one class of an empty layout.
+		idx_t empty_slot = DConstants::INVALID_INDEX;
+	};
+	//! A set E's entries of a window, inserted once every root has descended (DecideDescentEntry::reads): its rows,
+	//! their enclosing slots and their own, and their signature, carried and program columns.
+	struct Pending {
+		idx_t node;
+		Reach rows;
+		vector<idx_t> slots;
+		DataChunk values;
+	};
 	const DecideTree &tree;
 	ClientContext &context;
 	vector<DecideNodeContainer> containers;
-	vector<NodeIndex> indexes;
+	//! Per node, the dictionary of its (enclosing slot, key); null for a node per row, whose rows are each a slot of
+	//! their own, and for an empty key outside any slot, which is one.
+	vector<unique_ptr<DecideKeyMap>> group_maps;
+	//! Per set E, its entries by (slot, signature, columns, reads) and its instances by (slot, signature).
+	vector<unique_ptr<DecideKeyMap>> entry_maps;
+	vector<unique_ptr<DecideKeyMap>> instance_maps;
+	//! Per node, the types of its signature's values (Signature).
+	vector<vector<LogicalType>> signature_types;
+	//! Per node, whether more than one path of the tree reaches it: only then may a window's row arrive twice with one
+	//! enclosing slot, and only its first arrival is read.
+	vector<bool> shared;
+	//! Per shared node and window, the (row, enclosing slot) pairs that arrived.
+	vector<std::set<pair<idx_t, idx_t>>> seen;
+	//! Per G or O and window: where each row it reaches reads its value (DecideDescentEntry::reads), INVALID where it
+	//! reaches none.
+	vector<vector<idx_t>> landed;
 	vector<vector<DecideDescentGroup>> decision_groups;
 	vector<vector<idx_t>> decision_rows;
 	vector<vector<bool>> decision_recorded;
-	vector<unordered_map<hash_t, vector<idx_t>>> decision_indexes;
+	vector<vector<DecisionLayout>> decision_layouts;
 	//! Per key, its groups' spellings; empty for a key with no collated column.
 	vector<unordered_map<hash_t, vector<KeySpelling>>> spellings;
-	std::function<idx_t(idx_t, idx_t)> decision_resolver;
+	//! One executor per expression the descent reads, kept across windows as DuckDB's operators keep theirs.
+	unordered_map<const Expression *, unique_ptr<ExpressionExecutor>> executors;
 	bool finished = false;
 	DecideErrorLedger errors;
 	DecideErrorRank current_rank;
@@ -184,27 +217,35 @@ private:
 	DecideBlock read_block = DecideBlock::ROUTE;
 	vector<unordered_set<idx_t>> failed_rows;
 	bool Failed(idx_t row) const {
-		return active_node < failed_rows.size() && failed_rows[active_node].count(active_row_base + row);
+		return active_node < failed_rows.size() && !failed_rows[active_node].empty() &&
+		       failed_rows[active_node].count(active_row_base + row);
 	}
+	//! A set E's entries of the current window, inserted once every root has descended (DecideDescentEntry::reads).
+	vector<unique_ptr<Pending>> pending;
 
-	void Visit(idx_t node, DataChunk &chunk, idx_t row_base, const vector<RoutingRow> &incoming);
-	vector<Value> Evaluate(const Expression &expression, DataChunk &chunk, const vector<RoutingRow> &rows);
-	vector<uint8_t> Truth(const Expression &expression, DataChunk &chunk, const vector<RoutingRow> &rows);
-	//! The values of `key` on `rows`, and which hold no NULL that leaves a row in no group; with `read`, what a
-	//! collated key spelled, left empty for a key with no collated column.
-	vector<vector<Value>> Key(idx_t key, DataChunk &chunk, const vector<RoutingRow> &rows, vector<bool> &present,
-	                          KeySpellings *read = nullptr);
+	void Visit(idx_t node, DataChunk &chunk, idx_t row_base, const Reach &incoming);
+	//! `expression` on `rows` into `result`, a vector of its type; a row it fails on is NULL, its error held at the
+	//! read's rank.
+	void Evaluate(const Expression &expression, DataChunk &chunk, const Reach &rows, Vector &result);
+	vector<uint8_t> Truth(const Expression &expression, DataChunk &chunk, const Reach &rows);
+	//! The values of `key` on `rows`, a column per element into `values`, and which hold no NULL that leaves a row in
+	//! no group; with `read`, what a collated key spelled, left empty for a key with no collated column.
+	void Key(idx_t key, DataChunk &chunk, const Reach &rows, DataChunk &values, vector<bool> &present,
+	         KeySpellings *read = nullptr);
 	void Spell(idx_t key, const vector<vector<Value>> &groups, const vector<vector<Value>> &spelled,
 	           const vector<vector<string>> &sort_keys);
-	vector<vector<Value>> Signature(const DecideNode &node, DataChunk &chunk,
-	                                const vector<RoutingRow> &rows, idx_t row_base);
-	idx_t FindGroup(idx_t node, idx_t parent, vector<Value> key, idx_t row);
-	idx_t FindDecisionGroup(idx_t scope, vector<Value> key, idx_t row);
-	vector<idx_t> DecisionClasses(idx_t variable, DataChunk &chunk, const vector<RoutingRow> &rows, idx_t row_base);
-	void Insert(idx_t node, DecideDescentEntry entry, bool distinct);
-	idx_t FindInstance(idx_t node, hash_t variant, const DecideDescentEntry &entry);
-	//! A set E's entries of the current chunk, inserted once every root has descended (DecideDescentEntry::reads).
-	vector<pair<idx_t, DecideDescentEntry>> pending;
+	//! `node`'s signature on `rows`, its values' columns (signature_types) into `values`.
+	void Signature(idx_t node, DataChunk &chunk, const Reach &rows, idx_t row_base, DataChunk &values);
+	//! The slot each of `rows` lies in, `selected` of them by their key `keys`, created in row order.
+	void FindGroups(idx_t node, const Reach &rows, const vector<idx_t> &selected, DataChunk &keys,
+	                const vector<bool> &present, idx_t row_base, vector<idx_t> &slots);
+	//! Of a keyed scope, the class of each row of `keys` (its layout's columns), INVALID where `present` is false.
+	void FindDecisionGroups(idx_t scope, DataChunk &keys, const vector<bool> &present, const vector<idx_t> &rows,
+	                        vector<idx_t> &classes);
+	vector<idx_t> DecisionClasses(idx_t variable, DataChunk &chunk, const Reach &rows, idx_t row_base);
+	//! A set E's window of entries once every root has descended: one entry per distinct slot, signature, columns
+	//! and reads.
+	void InsertDistinct(Pending &batch, idx_t row_base);
 };
 
 } // namespace duckdb

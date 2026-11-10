@@ -1310,6 +1310,10 @@ static void AppendDecideDescent(DecideDescent &descent, DataChunk &chunk, idx_t 
 		}
 		chunk_size = size;
 	}
+	if (chunk.size() <= chunk_size) {
+		descent.Append(chunk, row_base);
+		return;
+	}
 	for (idx_t first = 0; first < chunk.size(); first += chunk_size) {
 		auto count = MinValue<idx_t>(chunk_size, chunk.size() - first);
 		DataChunk slice;
