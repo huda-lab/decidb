@@ -183,9 +183,9 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   The stage is the same on every read, so no plan depends on which read has which rows. Materializing it trades one
   held copy of the stage's output for the work of computing it once per read; the reader makes that trade only where it
   already holds the source.
-- **Bound and term reader** (`direct_bound_reader.{hpp,cpp}`; the name is the first half's). The file reads two things,
-  and reads each once, so that no two rules read a bound or an objective term differently. Its header defines
-  `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for every direct-solve file.
+- **Bound and term reader** (`direct_bound_reader.{hpp,cpp}`; the name is the first half's). The file reads three
+  things, and reads each once, so that no two rules read a bound, a limit or an objective term differently. Its header
+  defines `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for every direct-solve file.
   - **Per-row bounds on a decision.** A per-row bound is read by the solver path's own classifier
     (`DecideReadSingletonRow`, stored on the IR node as `singleton_row` and `bound`), so direct solve admits the
     values the solver admits, as DuckDB evaluates the comparison (D64). A per-row constraint is read as a bound only
@@ -200,9 +200,15 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     infinite end clamps nothing, because −∞ is `GREATEST`'s identity and +∞ is `LEAST`'s for every value but NaN, and a
     NaN bound has raised before the box is read. A box with no other end on that side is the constant ±∞. The floor of
     a decision that no `when` can lower is the constant itself, so the plan carries no column for it.
+  - **The limit of an aggregate constraint.** `DirectReadLimit` reads a budget's right side into a `DirectLimit`: a
+    constant of magnitude below 1e20 (from 1e20 the solver's reading depends on the rows, so the rule declines), or a
+    value of the data (`DirectDataLimit`), either a numeric expression over source columns that may raise, evaluated
+    on the rows that read it as the solver evaluates it, or the group aggregates the bound-side rewrite left to the
+    plan (`DirectGroupBoundIsReadable`). R1 and S3 read their budget's limit with it.
   - **Terms of an objective part or a budget.** `DirectReadLinearPart` reads one linear part into a `DirectLinearPart`:
     its sign and constant factor, and each linear term's decision, sign and proved coefficient; it skips other term
-    kinds. `DirectReadConstantTerm` reads a per-row constant. `DirectReadLinearForm` reads a linear form `w*x + t` in
+    kinds, so a rule that admits only linear terms checks the list with `DirectOnlyLinearTerms` first.
+    `DirectReadConstantTerm` reads a per-row constant. `DirectReadLinearForm` reads a linear form `w*x + t` in
     one decision (its `inner.linear` and `inner.constant`, with their names) and declines a form in two decisions.
     `DirectReadSquareTerm` reads a square of such a form under a weight, constant or read from the data, as signed
     values, and `DirectReadAbsTerm` reads `ABS` of such a form; both fill one `DirectWeightedForm`
