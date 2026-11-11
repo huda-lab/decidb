@@ -169,6 +169,7 @@ public:
     // quote it as written; its clause reaches the repair model through
     // DecidePreparedModel::singleton_row_constraints. A BETWEEN contributes two entries.
     vector<LogicalDecide::UserBoundSpec> user_singleton_row_bounds;
+    vector<LogicalDecide::UserBoundSpec> member_singleton_row_bounds;
 
     // --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
 

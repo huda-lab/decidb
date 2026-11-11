@@ -647,6 +647,9 @@ public:
     vector<DecideBoundBox> singleton_row_boxes;
     //! Every folded user bound, in folding order. A BETWEEN contributes two specs.
     vector<UserBoundSpec> user_singleton_row_bounds;
+    //! A bound on the members of an easy extremum's `by` groups, a constant on each (`max(x) by (g) <= -5`): no box
+    //! takes it, since a row in no group is no member, but the domain check reads it as written.
+    vector<UserBoundSpec> member_singleton_row_bounds;
 
     // --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
 

@@ -15,12 +15,6 @@ from __future__ import annotations
 
 #: id -> (what is wrong, {(module, solver, category): failing seeds}).
 DEFECTS: dict[str, tuple[str, dict[tuple[str, str, str], tuple[int, ...]]]] = {
-    "D1": (
-        "A bare MIN or MAX over a `by` key constrains a row whose key is NULL, which is in no group: over rows "
-        "(1,'q'), (2,'q'), (3,NULL), `min(x) by (t.h) >= 1` MINIMIZE gives 1,1,1 where 1,1,0 is right. Seed 453 is "
-        "`per t.k: min(2 * x) by (t.g, t.h) >= 2`, seed 3408 `min(per t.k: 2 * x) by (t.h) = 2`.",
-        {("nests", "gurobi", "wrong-answer"): (453, 3408), ("nests", "highs", "wrong-answer"): (453,)},
-    ),
     "D2": (
         "`<>` drops a whole group or class when one of its rows has a NULL bound: over rows (1,'w',0), (2,'w',NULL), "
         "`sum(x) by (t.k) <> t.b` MINIMIZE gives 0,0 and warns that it constrains nothing, where x1 + x2 <> 0 stands. "

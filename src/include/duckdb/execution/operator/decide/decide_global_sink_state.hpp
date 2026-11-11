@@ -115,6 +115,11 @@ public:
             // (`x = -0.5` admits no INT, which the solve reports as infeasible), so it is not the
             // box the user wrote.
             DecideWrittenBox written;
+            for (const auto &bound : op.member_singleton_row_bounds) {
+                if (bound.decide_var_idx == var) {
+                    written.Add(bound.sense, bound.k);
+                }
+            }
             for (const auto &bound : user_singleton_row_bounds) {
                 if (bound.decide_var_idx != var) {
                     continue;
@@ -147,11 +152,13 @@ public:
 			// The clause that set the bound `k`, as written (`max(x) <= -5` as much as `x <= -5`, a strict
 			// `x < 0` as typed rather than the folded `x <= -1`).
 			auto written_bound = [&](bool upper, double k) {
-				for (const auto &bound : user_singleton_row_bounds) {
-					if (bound.decide_var_idx == var && bound.sense != (upper ? '>' : '<') && bound.k == k &&
-					    bound.source_clause_id < op.constraint_sources.size()) {
-						auto &source = op.constraint_sources[bound.source_clause_id];
-						return QuoteWrittenClause(source);
+				const vector<UserBoundSpec> *lists[] = {&user_singleton_row_bounds, &op.member_singleton_row_bounds};
+				for (auto *bounds : lists) {
+					for (const auto &bound : *bounds) {
+						if (bound.decide_var_idx == var && bound.sense != (upper ? '>' : '<') && bound.k == k &&
+						    bound.source_clause_id < op.constraint_sources.size()) {
+							return QuoteWrittenClause(op.constraint_sources[bound.source_clause_id]);
+						}
 					}
 				}
 				return StringUtil::Format("%s %s %g", vname, upper ? "<=" : ">=", k);

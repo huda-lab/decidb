@@ -532,6 +532,16 @@ def test_an_easy_max_below_the_floor_is_refused_as_written(decidb_cli, clause):
     assert message in decidb_cli.execute_raw(f"DIAGNOSE {sql}").stderr
 
 
+def test_an_easy_max_with_its_own_when_is_refused_only_through_its_members(decidb_cli):
+    """An easy max whose own `when` keeps no row bounds no member: it is no refusal before solving, as a bound over
+    the rows of its `by` groups alone is, and its instances have no value."""
+    sql = """SELECT id, x FROM (VALUES (1, 'q', false), (2, 'r', false)) t(id, h, p)
+        DECIDE x(INT) SUCH THAT x <= 5 AND max(when t.p: x) by (t.h) <= -5 MAXIMIZE sum(x) ORDER BY id"""
+    result = decidb_cli.execute_raw(sql)
+    assert "constrains nothing" in result.stderr and "infeasible" not in result.stderr, result.stderr
+    assert result.stdout.count("│     5 │") == 2, result.stdout
+
+
 @pytest.mark.diagnose
 @pytest.mark.parametrize(
     "clause, expected",

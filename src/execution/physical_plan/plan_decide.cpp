@@ -150,6 +150,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     decide_op->rewrite_accounts = std::move(op.rewrite_accounts);
     decide_op->singleton_row_boxes = std::move(op.singleton_row_boxes);
     decide_op->user_singleton_row_bounds = std::move(op.user_singleton_row_bounds);
+    decide_op->member_singleton_row_bounds = std::move(op.member_singleton_row_bounds);
     decide_op->flat_objective_agg = op.flat_objective_agg;
     decide_op->flat_objective_is_easy = op.flat_objective_is_easy;
     // The flattened constraints and objective, produced by the DECIDE optimizer's

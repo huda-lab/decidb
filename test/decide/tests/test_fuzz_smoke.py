@@ -36,9 +36,9 @@ from tests._anr_oracle import (
 
 #: Seeds each module answers cleanly today on both solvers, chosen to judge values: each has instances.
 SEEDS = {
-    # A nest under `=`, a nest over data and one over pinned decisions read at every row, and `<>` over a MAX of a MIN,
-    # which the language reads.
-    "nests": (22, 8, 5, 24),
+    # A nest under `=`, a nest over data and one over pinned decisions read at every row, `<>` over a MAX of a MIN,
+    # which the language reads, and a MIN over a `by` key with a NULL, whose row is no member (D1).
+    "nests": (22, 8, 5, 24, 453),
     # A range over a keyed decision, a position holding two payloads (an expected error), a point under a reducer, and
     # a range whose window reads a keyed decision at a row with no instance of it, which is no member (D4).
     "frames": (4, 6, 15, 37),

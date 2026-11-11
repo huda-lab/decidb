@@ -149,16 +149,37 @@ static void AdmittedInterval(const ExpressionBuilder &calc, ExpressionType compa
 //! reads (its `when`, the reducer's filter, chooses them), and the extremum of one member is that member: the clause is
 //! read with the member in the reducer's place (`2 * max(c * x) <= K` reads as `2 * (c * x) <= K`), and `filter` is
 //! set to the reducer's filter. The reducer stays in the tree, so EXPLAIN and DIAGNOSE read the clause as written.
-static unique_ptr<Expression> ReadAsRow(const ExpressionBuilder &calc, const BoundComparisonExpression &comparison,
-                                        unique_ptr<Expression> &filter) {
+static unique_ptr<Expression> ReadAsRow(const ExpressionBuilder &calc, const LogicalDecide &decide,
+                                        const BoundComparisonExpression &comparison, unique_ptr<Expression> &filter,
+                                        bool &by_key_only) {
 	auto row = calc.Out(calc.Of(*comparison.left));
 	if (HasDecideTag(comparison.GetAlias(), MINMAX_EASY_REWRITE_TAG)) {
+		// The reducer's `by` key is on the written reducer: the copy above keeps no alias.
+		idx_t key = DConstants::INVALID_INDEX;
+		std::function<void(const Expression &)> find = [&](const Expression &node) {
+			if (node.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+				key = DecideReducerGroupKey(node.Cast<BoundAggregateExpression>());
+				return;
+			}
+			ExpressionIterator::EnumerateChildren(node, find);
+		};
+		find(*comparison.left);
 		ReplaceDecisionTerm(
 		    row, [](const Expression &node) { return node.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE; },
 		    [&](const Expression &node) {
 			    auto &reducer = node.Cast<BoundAggregateExpression>();
 			    D_ASSERT(reducer.children.size() == 1);
 			    filter = reducer.filter ? reducer.filter->Copy() : nullptr;
+			    by_key_only = !filter;
+			    // A row in no group of the reducer's `by` key, a NULL in a column the user wrote (language/guide.md
+			    // §5.2), is no member, as a row its filter leaves out is none.
+			    for (auto &element : DecideKeyElements(decide.keys, key)) {
+				    if (element.null_mode == DecideKeyNullMode::NO_GROUP) {
+					    auto member = filter ? calc.Of(*filter) : calc.Bool(true);
+					    filter = calc.Out(calc.If(calc.IsNull(calc.Of(element.Grouping())), calc.Bool(false), member));
+				    }
+			    }
+			    by_key_only = by_key_only && filter;
 			    return calc.Out(calc.Cast(calc.Of(*reducer.children[0]), reducer.return_type));
 		    });
 	}
@@ -231,7 +252,9 @@ bool DecideReadSingletonRow(ClientContext &context, const LogicalDecide &decide,
 	ExpressionBuilder calc(context);
 	DecideTermSplitter splitter(context, decide.decide_index, decide.decide_variables);
 	unique_ptr<Expression> member_filter;
-	auto row = ReadAsRow(calc, comparison, member_filter);
+	bool by_key_only = false;
+	auto row = ReadAsRow(calc, decide, comparison, member_filter, by_key_only);
+	out.members_by_key_only = by_key_only;
 	ExprPtr a, b;
 	if (!ReadAffine(calc, splitter, *row, out.var_idx, a, b) || out.var_idx >= decide.decide_variables.size()) {
 		return false;
@@ -387,7 +410,16 @@ void DecideOptimizer::FoldSingletonRowsInExpression(Expression &expr, LogicalDec
 		TryParseRemovalGroupTag(comp.GetAlias(), removal_group_id);
 
 		DecideSingletonRow bound;
-		if (!DecideReadSingletonRow(optimizer.context, decide, comp, bound) || !bound.folds) {
+		if (!DecideReadSingletonRow(optimizer.context, decide, comp, bound)) {
+			break;
+		}
+		if (!bound.folds) {
+			// A bound on the members of an easy extremum's `by` groups bounds each by a constant: no box takes it,
+			// since a row in no group is no member, but the domain check reads it as written.
+			if (bound.members_by_key_only && bound.constant_on_read_rows) {
+				decide.member_singleton_row_bounds.push_back(
+				    {bound.var_idx, bound.sense, bound.written_k, source_clause_id, removal_group_id});
+			}
 			break;
 		}
 		// The comparison stays in the tree so EXPLAIN keeps rendering what the user
@@ -436,6 +468,7 @@ void DecideOptimizer::FoldSingletonRows(LogicalDecide &decide) {
 	idx_t num_decide_vars = decide.decide_variables.size();
 	decide.singleton_row_boxes.assign(num_decide_vars, DecideBoundBox());
 	decide.user_singleton_row_bounds.clear();
+	decide.member_singleton_row_bounds.clear();
 
 	// Seed a BOOLEAN's intrinsic ceiling here rather than leaving every variable at
 	// 1e30 and repairing it at model-build time. The box travels to stage 06 as

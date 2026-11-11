@@ -56,6 +56,8 @@ struct DecideSingletonRow {
 	//! easy extremum (`min(x) filter (where p) >= -5`) does not fold, since a row the filter leaves out admits every
 	//! value, but it bounds each member by a constant.
 	bool constant_on_read_rows = false;
+	//! True when the members are the rows in a group of the easy extremum's `by` key alone: its reducer has no filter.
+	bool members_by_key_only = false;
 
 	//! True when the bound replaces the default floor of 0 on the rows its clause keeps: a constant lower bound (D41,
 	//! applied per row). A bound under a `when` or a reducer filter replaces it on those rows alone, so the decision's
