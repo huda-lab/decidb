@@ -147,7 +147,7 @@ summed; latency is on all threads; the planning DECIDE adds is apart. Both sides
 |---|---:|---:|---:|---:|---:|---:|
 | `a1` | 29.7 ms | 25.9 ms | 1.14 | 7.3 ms | 5.4 ms | 0.50 ms |
 
-**Against the solvers.** `run.py --sf 0.125 0.25 0.5 1 --queries a1`: a fresh `decidb` process per run, median of 3.
+**Against Gurobi.** `run.py --sf 0.125 0.25 0.5 1 --queries a1`: a fresh `decidb` process per run, median of 3.
 At every size Gurobi's objective agreed with direct solve's within 1e-6. A speedup divides Gurobi's median by direct's
 median from the same sweep. Times include process start and database open, about 20 ms, which is most of the direct
 time at these sizes.
@@ -160,6 +160,4 @@ time at these sizes.
 | 800,000 | 0.028 s | 0.047 s | 28 MiB | 0.353 s | 456 MiB | 12.5x |
 
 At 800,000 rows direct solve answers 12.5 times as fast as Gurobi in a sixteenth of its peak memory, and all threads
-take 0.6 of one thread's time. HiGHS has no cell: its QP solver stops with "Large nullspace" once more than 4,000
-decisions end strictly inside their bounds, which A1's do at 10,000 rows (`../../../pipeline/07_solver/done.md`, HiGHS
-backend).
+take 0.6 of one thread's time.

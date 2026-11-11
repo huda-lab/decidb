@@ -13,9 +13,9 @@ closest to every row" (one query-wide or keyed `REAL` decision under a squared, 
 **O1**, "match two tables one to one by position" (a `BOOL` per pair of a cross product, one pair per row of each side,
 under a distance or product cost); and **S3**, "as many rows as fit one budget" (one `SUM(w*x) <= B` over a `BOOL`
 decision, maximizing the count, or the fewest rows that reach `SUM(w*x) >= B`, per group or over all rows). Each class's
-`done.md` but S3's gives its speed against Gurobi and HiGHS; every class is faster than each solver that takes it, at
-every size measured. N1 also answers without a Gurobi license, where the solver path refuses a quadratic limit. The
-other 12 classes in the catalogue are not started.
+`done.md` gives its speed against Gurobi; every class is faster than Gurobi at every size measured. N1 also answers
+without a Gurobi license, where the solver path refuses a quadratic limit. The other 12 classes in the catalogue are not
+started.
 
 ## Where to look
 
@@ -28,7 +28,7 @@ other 12 classes in the catalogue are not started.
 | See what is open for a working class | `rules/<id>_<slug>/todo.md`: [S1](rules/s1_uniform_matroid/todo.md), [A1](rules/a1_separable_box/todo.md), [R1](rules/r1_continuous_knapsack/todo.md), [N1](rules/n1_euclidean_ball/todo.md), [A2](rules/a2_single_facility_location/todo.md), [O1](rules/o1_monge_assignment/todo.md), [S3](rules/s3_max_cardinality_knapsack/todo.md) |
 | Work on the shared engine or error wording | [framework/](framework/) |
 | See a class that is not built yet, or start one | [todo.md](todo.md) |
-| Time direct solve against Gurobi and HiGHS on TPC-H | [../performance/benchmarking/direct_solve.md](../performance/benchmarking/direct_solve.md) |
+| Time direct solve against Gurobi on TPC-H | [../performance/benchmarking/direct_solve.md](../performance/benchmarking/direct_solve.md) |
 | Rerun an archived measurement a doc cites | [../performance/benchmarking/archive_profilers.md](../performance/benchmarking/archive_profilers.md) |
 | Know why `auto` is the default, or what a user can notice | [architecture/policy.md](architecture/policy.md) |
 | Read the definition and correctness argument of a class | `rules/<id>_<slug>/definition.md` |

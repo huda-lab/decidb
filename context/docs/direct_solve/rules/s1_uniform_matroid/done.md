@@ -161,22 +161,21 @@ latency is on all threads; the planning DECIDE adds is apart. Both sides gave th
 
 Both are within the measurement's noise of the hand plan: the plan is the hand plan's rank window and the rule's check.
 
-**Against the solvers.** `run.py --sf 0.125 0.25 0.5 1 --queries s1 s1_global` (Gurobi) and the same with `--modes
-direct highs`: a fresh `decidb` process per run, median of 3, load 3 to 6. At every size each solver's objective agreed
-with direct solve's within 1e-6. A speedup divides the solver's median by direct's median from the same sweep. Times
-include process start and database open, about 20 ms, which is most of the direct time at these sizes.
+**Against Gurobi.** `run.py --sf 0.125 0.25 0.5 1 --queries s1 s1_global`: a fresh `decidb` process per run, median of
+3, load 3 to 6. At every size Gurobi's objective agreed with direct solve's within 1e-6. A speedup divides Gurobi's
+median by direct's median from the same sweep. Times include process start and database open, about 20 ms, which is most
+of the direct time at these sizes.
 
-| Query | Rows | Direct | Direct, 1 thread | Direct peak | Gurobi | Gurobi peak | HiGHS | HiGHS peak | Speedup (Gurobi, HiGHS) |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `s1` | 100,000 | 0.026 s | 0.029 s | 44 MiB | 0.493 s | 100 MiB | 0.089 s | 99 MiB | 19.0x, 3.8x |
-| `s1` | 200,000 | 0.027 s | 0.038 s | 56 MiB | 0.717 s | 162 MiB | 0.176 s | 170 MiB | 26.6x, 5.9x |
-| `s1` | 400,000 | 0.032 s | 0.058 s | 80 MiB | 1.437 s | 294 MiB | 0.349 s | 317 MiB | 44.8x, 10.1x |
-| `s1` | 800,000 | 0.037 s | 0.091 s | 120 MiB | 2.909 s | 563 MiB | 0.672 s | 601 MiB | 78.2x, 17.2x |
-| `s1_global` | 100,000 | 0.025 s | 0.025 s | 34 MiB | 0.365 s | 103 MiB | 0.108 s | 98 MiB | 14.6x, 4.5x |
-| `s1_global` | 200,000 | 0.029 s | 0.032 s | 46 MiB | 0.276 s | 142 MiB | 0.248 s | 173 MiB | 9.5x, 7.8x |
-| `s1_global` | 400,000 | 0.035 s | 0.049 s | 75 MiB | 0.591 s | 249 MiB | 0.555 s | 321 MiB | 16.8x, 15.2x |
-| `s1_global` | 800,000 | 0.040 s | 0.069 s | 118 MiB | 0.704 s | 465 MiB | 0.999 s | 610 MiB | 17.7x, 24.7x |
+| Query | Rows | Direct | Direct, 1 thread | Direct peak | Gurobi | Gurobi peak | Speedup |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `s1` | 100,000 | 0.026 s | 0.029 s | 44 MiB | 0.493 s | 100 MiB | 19.0x |
+| `s1` | 200,000 | 0.027 s | 0.038 s | 56 MiB | 0.717 s | 162 MiB | 26.6x |
+| `s1` | 400,000 | 0.032 s | 0.058 s | 80 MiB | 1.437 s | 294 MiB | 44.8x |
+| `s1` | 800,000 | 0.037 s | 0.091 s | 120 MiB | 2.909 s | 563 MiB | 78.2x |
+| `s1_global` | 100,000 | 0.025 s | 0.025 s | 34 MiB | 0.365 s | 103 MiB | 14.6x |
+| `s1_global` | 200,000 | 0.029 s | 0.032 s | 46 MiB | 0.276 s | 142 MiB | 9.5x |
+| `s1_global` | 400,000 | 0.035 s | 0.049 s | 75 MiB | 0.591 s | 249 MiB | 16.8x |
+| `s1_global` | 800,000 | 0.040 s | 0.069 s | 118 MiB | 0.704 s | 465 MiB | 17.7x |
 
-The solver path builds one binary decision per row; HiGHS solves the per-supplier model faster than Gurobi. Direct solve
-is ahead of both at every size, 18 to 78 times Gurobi and 17 to 25 times HiGHS at 800,000 rows, in a fourth to a fifth
-of their peak memory.
+The solver path builds one binary decision per row. Direct solve is ahead of Gurobi at every size, 18 to 78 times its
+speed at 800,000 rows, in a fourth to a fifth of its peak memory.

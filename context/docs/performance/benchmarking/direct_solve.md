@@ -1,7 +1,8 @@
 # Direct-solve benchmark
 
-`benchmark/decide/direct_solve/run.py` times direct solve against the forced solver, Gurobi and HiGHS, on the same
-DECIDE query as the data grows. Direct solve is the optimizer rewrite that answers some DECIDE problems with relational
+`benchmark/decide/direct_solve/run.py` times direct solve against the solver path on Gurobi, on the same DECIDE query as
+the data grows. Gurobi is the solver direct solve competes with; HiGHS is the fallback for a machine without a Gurobi
+license, so it is not measured. Direct solve is the optimizer rewrite that answers some DECIDE problems with relational
 operators instead of a solver ([`../../direct_solve/README.md`](../../direct_solve/README.md)). The numbers feed the
 paper's direct-solve section. There is a query for each direct-solve rule that works today: A1, O1, A2 in four forms,
 and S1, S3, R1 and N1 in two forms each, many small groups and one bound over every row.
@@ -17,7 +18,7 @@ python3 benchmark/decide/direct_solve/run.py --sf 0.125 0.25 --queries r1  # a s
 |---|---|---|
 | `--sf` | `0.125` doubling to `512` | TPC-H scale factors, run smallest first |
 | `--queries` | every file in `queries/` | the file names in `queries/`, such as `s1`, `a2_keyed`, `o1` |
-| `--modes` | `direct gurobi` | must include `direct`, the baseline for every speedup and objective; `highs` is also available |
+| `--modes` | `direct gurobi` | must include `direct`, the baseline for every speedup and objective |
 | `--repeats` | 3 (5 under `--compare`) | runs of every mode per cell, or of each side under `--compare` |
 | `--repeat-budget` | 1800 | a run past this many seconds is its cell's last, so the `runs` column can read less than `--repeats` |
 | `--timeout` | 21600 | seconds before a run is killed |
@@ -82,7 +83,6 @@ the decision count and the objective it reached, and the time does not include s
 |---|---|---|
 | `direct` | `SET decide_direct_solve='require'` | direct solve answers the query, or the query fails |
 | `gurobi` | `'off'`, `DECIDB_FORCE_SOLVER=gurobi` | the solver path on Gurobi |
-| `highs` | `'off'`, `DECIDB_FORCE_SOLVER=highs` | the solver path on HiGHS |
 
 Every mode runs `SET threads=32`, the most Gurobi uses by default, so both sides have the same cores.
 
@@ -165,8 +165,8 @@ sit in their own folder, as the archived S1 profilers' do, because `view_results
   the agreement flag, each mode's runs, median, minimum and maximum seconds and peak MiB, each solver's model-build and
   solve seconds, and the speedup of direct solve over each solver (solver median divided by direct median).
 - `direct_solve_<stamp>.json`: a manifest with the commit, whether `src/`, `third_party/` or
-  `benchmark/decide/direct_solve/` has uncommitted changes and their diff, the binary and its build time, the DeciDB, Gurobi and
-  HiGHS versions, the thread count, the CPU, core count, memory, platform and the arguments.
+  `benchmark/decide/direct_solve/` has uncommitted changes and their diff, the binary and its build time, the DeciDB and
+  Gurobi versions, the thread count, the CPU, core count, memory, platform and the arguments.
 
 The script also prints the table as Markdown while it runs.
 
@@ -180,13 +180,8 @@ The script also prints the table as Markdown while it runs.
   per supplier and 1,000,000 over all rows for S3, a target of 5,000 for A1, a cap of 5,000 per part and a tenth of the
   total cost for R1, and a limit of 1,000,000 for N1. S3's global budget is a constant, so the share of rows it selects
   falls as the data grows.
-- HiGHS has no quadratic constraints, so its N1 cells read `error`.
-- HiGHS (1.15.1, as 1.11) cannot solve A1 beyond 800 decisions. Its QP solver stops with "Large nullspace" once more than 4,000
-  variables end strictly inside their bounds, and about half of A1's do (`../../pipeline/07_solver/done.md`, HiGHS
-  backend). The cell reads `error` at 9,600 and the larger sizes are skipped. This is a limit of HiGHS's QP method,
-  not of the model: the bounds reach HiGHS as column bounds, not rows.
-- Gurobi and HiGHS solve to a gap of 0 (`../../pipeline/07_solver/done.md`, Optimality gap), so on S1 every path
-  returns the same optimum; Gurobi's default gap of 1e-4 returned a different, slightly lower one on each run.
+- Gurobi solves to a gap of 0 (`../../pipeline/07_solver/done.md`, Optimality gap), so on S1 both paths return the
+  same optimum; Gurobi's default gap of 1e-4 returns a different, slightly lower one on each run.
 
 ## Latest results
 

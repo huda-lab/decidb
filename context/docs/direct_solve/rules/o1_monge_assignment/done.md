@@ -140,19 +140,19 @@ same answer.
 The rule's extra work is the pass that checks the coefficient on every pair before any pair is returned, and the
 copy and class ranks of each side, which the hand plan does not need on distinct supplier rows.
 
-**Against the solvers.** `run.py --sf 0.01 0.02 0.04 0.08 0.16 --queries o1`: direct solve at `804e1efab5`, Gurobi and
-HiGHS at `01bb152842` (the solver path is the same at both), a fresh `decidb` process per run, median of 3. At every
-size each solver's objective agreed with direct solve's within 1e-6. Times include process start and database open,
-about 20 ms, which is most of the direct time here.
+**Against Gurobi.** `run.py --sf 0.01 0.02 0.04 0.08 0.16 --queries o1`: direct solve at `804e1efab5`, Gurobi at
+`01bb152842` (the solver path is the same at both), a fresh `decidb` process per run, median of 3. At every size
+Gurobi's objective agreed with direct solve's within 1e-6. Times include process start and database open, about 20 ms,
+which is most of the direct time here.
 
-| Suppliers a side | Pairs | Direct | Direct, 1 thread | Direct peak | Gurobi | Gurobi peak | HiGHS | HiGHS peak | Speedup (Gurobi, HiGHS) |
-|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 100 | 10,000 | 0.020 s | 0.020 s | 28 MiB | 0.072 s | 69 MiB | 0.157 s | 62 MiB | 3.5x, 7.8x |
-| 200 | 40,000 | 0.020 s | 0.020 s | 28 MiB | 0.333 s | 136 MiB | 0.769 s | 164 MiB | 16x, 38x |
-| 400 | 160,000 | 0.023 s | 0.024 s | 28 MiB | 4.250 s | 514 MiB | 5.307 s | 573 MiB | 183x, 229x |
-| 800 | 640,000 | 0.032 s | 0.033 s | 29 MiB | 2.420 s | 1,382 MiB | 41.886 s | 2,095 MiB | 76x, 1,309x |
-| 1,600 | 2,560,000 | 0.057 s | 0.058 s | 30 MiB | 11.732 s | 5,060 MiB | 330.841 s | 5,677 MiB | 206x, 5,794x |
+| Suppliers a side | Pairs | Direct | Direct, 1 thread | Direct peak | Gurobi | Gurobi peak | Speedup |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 100 | 10,000 | 0.020 s | 0.020 s | 28 MiB | 0.072 s | 69 MiB | 3.5x |
+| 200 | 40,000 | 0.020 s | 0.020 s | 28 MiB | 0.333 s | 136 MiB | 16x |
+| 400 | 160,000 | 0.023 s | 0.024 s | 28 MiB | 4.250 s | 514 MiB | 183x |
+| 800 | 640,000 | 0.032 s | 0.033 s | 29 MiB | 2.420 s | 1,382 MiB | 76x |
+| 1,600 | 2,560,000 | 0.057 s | 0.058 s | 30 MiB | 11.732 s | 5,060 MiB | 206x |
 
-O1 is ahead of both solvers at every size. The solver path builds one binary per pair and an equality per class, so
+O1 is ahead of Gurobi at every size. The solver path builds one binary per pair and an equality per class, so
 its model grows with the square of the side; O1 sorts each side's n rows, and its memory stays flat. Gurobi's time is
 not monotone in the size (160,000 pairs took longer than 640,000); that is inside its solve.

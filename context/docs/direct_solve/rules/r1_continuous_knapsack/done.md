@@ -187,22 +187,21 @@ TPC-H's data cannot trip them (every box is finite and starts at 0). Reading the
 need a second plan shape for several decisions, and is not done for this gain (`../../framework/todo.md` § How to work
 any task, Small gains).
 
-**Against the solvers.** `run.py --sf 0.125 0.25 0.5 1 --queries r1 r1_global` (Gurobi) and the same with `--modes
-direct highs`: a fresh `decidb` process per run, median of 3, load 3 to 6. At every size each solver's objective agreed
-with direct solve's within 1e-6. A speedup divides the solver's median by direct's median from the same sweep. Times
-include process start and database open, about 20 ms, which is most of the direct time at these sizes.
+**Against Gurobi.** `run.py --sf 0.125 0.25 0.5 1 --queries r1 r1_global`: a fresh `decidb` process per run, median of
+3, load 3 to 6. At every size Gurobi's objective agreed with direct solve's within 1e-6. A speedup divides Gurobi's
+median by direct's median from the same sweep. Times include process start and database open, about 20 ms, which is most
+of the direct time at these sizes.
 
-| Query | Rows | Direct | Direct, 1 thread | Direct peak | Gurobi | Gurobi peak | HiGHS | HiGHS peak | Speedup (Gurobi, HiGHS) |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `r1` | 100,000 | 0.071 s | 0.069 s | 133 MiB | 0.156 s | 125 MiB | 0.109 s | 118 MiB | 2.2x, 1.6x |
-| `r1` | 200,000 | 0.079 s | 0.114 s | 173 MiB | 0.310 s | 203 MiB | 0.216 s | 206 MiB | 3.9x, 2.6x |
-| `r1` | 400,000 | 0.092 s | 0.198 s | 229 MiB | 0.671 s | 422 MiB | 0.411 s | 377 MiB | 7.3x, 4.0x |
-| `r1` | 800,000 | 0.120 s | 0.375 s | 345 MiB | 1.386 s | 855 MiB | 0.794 s | 764 MiB | 11.5x, 6.5x |
-| `r1_global` | 100,000 | 0.042 s | 0.057 s | 70 MiB | 0.140 s | 130 MiB | 0.111 s | 98 MiB | 3.3x, 2.9x |
-| `r1_global` | 200,000 | 0.048 s | 0.092 s | 94 MiB | 0.259 s | 216 MiB | 0.247 s | 174 MiB | 5.5x, 4.5x |
-| `r1_global` | 400,000 | 0.062 s | 0.164 s | 149 MiB | 0.576 s | 390 MiB | 0.525 s | 319 MiB | 9.3x, 7.8x |
-| `r1_global` | 800,000 | 0.092 s | 0.308 s | 254 MiB | 1.132 s | 744 MiB | 1.047 s | 623 MiB | 12.3x, 10.4x |
+| Query | Rows | Direct | Direct, 1 thread | Direct peak | Gurobi | Gurobi peak | Speedup |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `r1` | 100,000 | 0.071 s | 0.069 s | 133 MiB | 0.156 s | 125 MiB | 2.2x |
+| `r1` | 200,000 | 0.079 s | 0.114 s | 173 MiB | 0.310 s | 203 MiB | 3.9x |
+| `r1` | 400,000 | 0.092 s | 0.198 s | 229 MiB | 0.671 s | 422 MiB | 7.3x |
+| `r1` | 800,000 | 0.120 s | 0.375 s | 345 MiB | 1.386 s | 855 MiB | 11.5x |
+| `r1_global` | 100,000 | 0.042 s | 0.057 s | 70 MiB | 0.140 s | 130 MiB | 3.3x |
+| `r1_global` | 200,000 | 0.048 s | 0.092 s | 94 MiB | 0.259 s | 216 MiB | 5.5x |
+| `r1_global` | 400,000 | 0.062 s | 0.164 s | 149 MiB | 0.576 s | 390 MiB | 9.3x |
+| `r1_global` | 800,000 | 0.092 s | 0.308 s | 254 MiB | 1.132 s | 744 MiB | 12.3x |
 
-Direct solve is ahead of both solvers at every size, 11.5 to 12.3 times Gurobi and 6.5 to 10.4 times HiGHS at 800,000
-rows, in a third to two fifths of Gurobi's peak memory. It runs on all threads: 0.12 s against 0.38 s on one for `r1` at
-800,000 rows.
+Direct solve is ahead of Gurobi at every size, 11.5 to 12.3 times its speed at 800,000 rows, in a third to two fifths of
+Gurobi's peak memory. It runs on all threads: 0.12 s against 0.38 s on one for `r1` at 800,000 rows.

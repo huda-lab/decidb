@@ -27,12 +27,13 @@ Databases and results are gitignored (`benchmark/decide/.gitignore`), so keep th
 ```bash
 make decide-bench-setup && make decide-bench                    # TPC-H suite: databases once, then every query
 python3 benchmark/decide/profile_pipeline.py                     # pipeline profiler (constants at the top of the file)
-python3 benchmark/decide/direct_solve/run.py                     # direct solve against Gurobi and HiGHS
+python3 benchmark/decide/direct_solve/run.py                     # direct solve against Gurobi
 python3 benchmark/decide/diagnose_examples/run.py               # DIAGNOSE output for the example corpus
 python3 benchmark/decide/direct_solve/archive/<profiler>.py -h   # one archived profiler; see archive_profilers.md
 ```
 
-The pipeline profiler and the direct-solve benchmark force each backend in turn, so both need a Gurobi license.
+The pipeline profiler forces each backend in turn and the direct-solve benchmark forces Gurobi, so both need a Gurobi
+license.
 HiGHS is built into the CLI.
 
 ## Recording results
