@@ -134,6 +134,26 @@ the k-smallest prefix fits the budget
 
 The largest feasible prefix gives the greatest possible item count, which is exactly the objective.
 
+## The fewest items that reach a minimum
+
+The mirror variant selects the fewest items whose weight reaches a minimum:
+
+```sql
+SELECT id, selected
+FROM items
+DECIDE selected(BOOL)
+SUCH THAT SUM(weight*selected) >= 9
+MINIMIZE SUM(selected);
+```
+
+With the weights of the worked example, 6 and then 4 reach 10, so the answer selects D and C.
+
+Among all subsets containing exactly k items, the k largest weights have the largest total. A size-k subset reaches B
+if and only if the k-largest prefix does, so the smallest k whose prefix reaches B is the fewest items possible. SQL
+sorts by weight descending, includes the empty prefix (it reaches any B of at most 0), and takes the smallest prefix
+whose total reaches B. With negative weights the prefix totals rise and then fall, so every prefix is checked. If none
+reaches B, the result is DECIDE infeasibility.
+
 ## Eligibility conditions
 
 > • Every free decision is Boolean.
