@@ -103,16 +103,6 @@ struct Condition final : DirectApplicabilityCondition {
 	}
 };
 
-//! Every term is the decision times a coefficient.
-bool OnlyDecisionTerms(const vector<DecideSplitTerm> &terms) {
-	for (auto &term : terms) {
-		if (!term.IsLinear()) {
-			return false;
-		}
-	}
-	return true;
-}
-
 //! The signed sum of the terms' coefficients, as the solver's like-term collection sums them; false when one is not a
 //! finite constant.
 bool ConstantSlope(ClientContext &context, const vector<DecideSplitTerm> &terms, double &slope) {
@@ -152,7 +142,7 @@ struct CountBody {
 //! body shifts the limit by an amount that depends on the group's row count, and the solver answers that.
 bool ReadCountBody(ClientContext &context, const vector<DecideSplitTerm> &terms, CountBody &body) {
 	double slope;
-	if (!OnlyDecisionTerms(terms) || !ConstantSlope(context, terms, slope) || (slope != 1.0 && slope != -1.0)) {
+	if (!DirectOnlyLinearTerms(terms) || !ConstantSlope(context, terms, slope) || (slope != 1.0 && slope != -1.0)) {
 		return false;
 	}
 	body.direction = slope > 0 ? 1 : -1;
@@ -162,7 +152,7 @@ bool ReadCountBody(ClientContext &context, const vector<DecideSplitTerm> &terms,
 //! The decision's terms on a per-row left side, as in a fixed value `x = 1`; null otherwise. CheckCondition has
 //! declined a membership constraint before it asks, and checks that the terms add up to exactly one `x`.
 const vector<DecideSplitTerm> *FixedTerms(const DirectIRConstraint &ir_node) {
-	if (ir_node.aggregate || !OnlyDecisionTerms(ir_node.lhs[0].terms)) {
+	if (ir_node.aggregate || !DirectOnlyLinearTerms(ir_node.lhs[0].terms)) {
 		return nullptr;
 	}
 	return &ir_node.lhs[0].terms;
@@ -501,13 +491,8 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 	idx_t term_count = 0;
 	condition.objective_written = ir.objective.written;
 	for (auto &part : parts) {
-		if (!part.IsPlainSum()) {
+		if (!part.IsPlainSum() || !DirectOnlyLinearTerms(part.terms)) {
 			return false;
-		}
-		for (auto &term : part.terms) {
-			if (!term.IsLinear()) {
-				return false;
-			}
 		}
 		term_count += part.terms.size();
 	}

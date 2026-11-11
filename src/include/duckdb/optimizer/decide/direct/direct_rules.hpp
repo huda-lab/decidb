@@ -31,4 +31,9 @@ unique_ptr<DirectSolveRule> MakeA2SingleFacilityLocationRule();
 //! Monge assignment).
 unique_ptr<DirectSolveRule> MakeO1MongeAssignmentRule();
 
+//! The seventh direct-solve rule: one row-scoped Boolean under one budget `SUM(w*x) <= B`, maximizing how many rows it
+//! selects, answered by the longest prefix of the rows sorted by weight that fits the budget (S3, the
+//! maximum-cardinality knapsack).
+unique_ptr<DirectSolveRule> MakeS3MaxCardinalityKnapsackRule();
+
 } // namespace duckdb

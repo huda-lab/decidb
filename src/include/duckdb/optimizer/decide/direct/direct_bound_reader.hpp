@@ -17,8 +17,9 @@ class ClientContext;
 // The shared reader of what a direct rule takes from the IR. The file is named for its first half, the per-row bounds
 // on a decision. It also reads the terms of an objective part or a budget: linear terms (DirectReadLinearPart),
 // per-row constants (DirectReadConstantTerm), squares (DirectReadSquareTerm) and the rows a part reads
-// (DirectObjectivePartKept), composed into DirectReadQuadraticPart. DirectNamesOf and DirectIsFiniteWhereKept, which
-// name and test a value those readers produce, stand here too.
+// (DirectObjectivePartKept), composed into DirectReadQuadraticPart. It reads the limit of an aggregate constraint too
+// (DirectReadLimit). DirectNamesOf and DirectIsFiniteWhereKept, which name and test a value those readers produce,
+// stand here too.
 
 //! The solver's infinite ends of a box, written once for every rule that builds or reads one.
 constexpr double POSITIVE_INFINITY = std::numeric_limits<double>::infinity();
@@ -119,6 +120,38 @@ void DirectRowBox(const ExpressionBuilder &calc, const ExprPtr &static_lower, do
 ExprPtr DirectBoxIsEmpty(const ExpressionBuilder &calc, const ExprPtr &lower, const ExprPtr &upper);
 
 //===--------------------------------------------------------------------===//
+// The limit of an aggregate constraint
+//===--------------------------------------------------------------------===//
+
+//! A limit read from the data: a source column or an expression over source columns, or the bound-side rewrite's
+//! aggregates of the group (DecideGroupBound). The plan takes the group's tightest value of a `value`
+//! (DirectTightestBound) and computes a `group`'s aggregates in its group aggregate. A NULL skips its instance: the
+//! group's MIN or MAX passes over it.
+struct DirectDataLimit {
+	ExpressionType comparison = ExpressionType::INVALID;
+	//! The limit, one value on every kept row of a group already. Null with a `group`.
+	unique_ptr<Expression> value;
+	unique_ptr<DecideGroupBound> group;
+};
+
+//! The limit of one aggregate constraint: a constant, or a value of the data.
+struct DirectLimit {
+	//! True when the limit is the constant `number`; `data` is then empty.
+	bool constant = false;
+	double number = 0;
+	DirectDataLimit data;
+};
+
+//! Reads the right side of an aggregate constraint: a constant the solver reads as a number, of magnitude below
+//! DECIDE_EFFECTIVE_INFINITY (from there the solver stops reading a right side as a number, so those stay with it), or
+//! a value of the data, which is read at run time instead. A value of the data is a numeric, deterministic expression
+//! over source columns that mentions at least one and may raise (the plan evaluates it on the rows that read it, as the
+//! solver does, so both raise on the same inputs), or the aggregates of its group that the bound-side rewrite left to
+//! the plan (DirectGroupBoundIsReadable). False when it is neither.
+bool DirectReadLimit(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &constraint,
+                     DirectLimit &limit);
+
+//===--------------------------------------------------------------------===//
 // Linear terms of a part
 //===--------------------------------------------------------------------===//
 
@@ -172,6 +205,10 @@ double DirectScaledMagnitude(Optimizer &optimizer, const Expression &value, cons
 //! Whether a number whose terms' magnitudes sum to at most `total` is below the range of a DOUBLE, whatever the
 //! rounding of its sums.
 bool DirectSumIsFinite(double total);
+
+//! True when every term is linear: a coefficient times one decision. DirectReadLinearPart skips any other term and
+//! leaves this check to the rule.
+bool DirectOnlyLinearTerms(const vector<DecideSplitTerm> &terms);
 
 //! Reads the sign and constant factor of one part and each of its linear terms. Returns false when the factor is not a
 //! finite constant (or divides by zero) or when a linear term's coefficient is not a numeric value of the source row.

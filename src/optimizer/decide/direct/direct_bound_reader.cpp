@@ -183,6 +183,27 @@ ExprPtr DirectBoxIsEmpty(const ExpressionBuilder &calc, const ExprPtr &lower, co
 	                 calc.Cmp(ExpressionType::COMPARE_EQUAL, upper, calc.Num(NEGATIVE_INFINITY))});
 }
 
+bool DirectReadLimit(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &constraint,
+                     DirectLimit &limit) {
+	if (TryEvaluateFoldableDouble(context, *constraint.rhs, limit.number, DIRECT_FINITE_CONSTANT)) {
+		limit.constant = true;
+		return std::fabs(limit.number) < DECIDE_EFFECTIVE_INFINITY;
+	}
+	limit.data.comparison = constraint.comparison;
+	if (constraint.group_bound) {
+		if (!DirectGroupBoundIsReadable(ir, *constraint.group_bound)) {
+			return false;
+		}
+		limit.data.group = constraint.group_bound->Copy();
+		return true;
+	}
+	if (!DirectIsSourceOnlyNumericMayRaise(*constraint.rhs, ir.decide_index, ir.source_bindings)) {
+		return false;
+	}
+	limit.data.value = constraint.rhs->Copy();
+	return true;
+}
+
 DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedValue> &values, const string &clause) {
 	DirectNumberNames names;
 	for (auto &value : values) {
@@ -231,6 +252,15 @@ vector<DirectSignedValue> DirectValuesOn(const DirectLinearPart &part, idx_t dec
 		}
 	}
 	return values;
+}
+
+bool DirectOnlyLinearTerms(const vector<DecideSplitTerm> &terms) {
+	for (auto &term : terms) {
+		if (!term.IsLinear()) {
+			return false;
+		}
+	}
+	return true;
 }
 
 bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const DirectPart &part, const string &clause,

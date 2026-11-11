@@ -37,16 +37,6 @@ constexpr const char *RULE_NAME = "R1_CONTINUOUS_KNAPSACK";
 static constexpr idx_t SOURCE_READS = 4;
 
 struct Condition final : DirectApplicabilityCondition {
-	//! A limit of the budget read from the data: a source column or an expression over source columns, or the
-	//! bound-side rewrite's aggregates of the group (DecideGroupBound). The plan takes the group's tightest value of a
-	//! `value` (DirectTightestBound) and computes a `group`'s aggregates in its group aggregate, and makes the checks
-	//! the rewrite would have made. A NULL skips its instance: the group's MIN or MAX passes over it.
-	struct DataLimit {
-		ExpressionType comparison = ExpressionType::INVALID;
-		//! The limit, one value on every kept row of a group already. Null with a `group`.
-		unique_ptr<Expression> value;
-		unique_ptr<DecideGroupBound> group;
-	};
 	//! Which rows the budget covers, and in which groups: a row whose `when` holds and whose `by` key has no NULL in a
 	//! NO_GROUP element (D5) belongs to the budget of its group; any other row is outside every budget. Every clause
 	//! of the budget has this scope. Empty without a key: one budget for all the rows it covers.
@@ -72,7 +62,8 @@ struct Condition final : DirectApplicabilityCondition {
 	//! limit, counting the data limits below.
 	double lower = NEGATIVE_INFINITY;
 	double upper = POSITIVE_INFINITY;
-	vector<DataLimit> data_limits;
+	//! The limits of the budget read from the data (DirectDataLimit).
+	vector<DirectDataLimit> data_limits;
 	//! The objective's parts, each a signed, scaled sum of linear terms. None for no objective.
 	vector<DirectLinearPart> objective;
 	//! The rows each part reads (DirectObjectivePartKept), null for every row: any other row's value in it is 0.
@@ -81,16 +72,6 @@ struct Condition final : DirectApplicabilityCondition {
 	//! it, as the solver path names the coefficient it merges.
 	string objective_written;
 };
-
-//! The terms are all linear.
-bool OnlyLinearTerms(const vector<DecideSplitTerm> &terms) {
-	for (auto &term : terms) {
-		if (!term.IsLinear()) {
-			return false;
-		}
-	}
-	return true;
-}
 
 class Rule final : public DirectSolveRule {
 public:
@@ -131,7 +112,6 @@ private:
 	                       Condition &condition, bool first) const;
 	bool ProveLimit(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &ir_node,
 	                Condition &condition) const;
-	bool ProveDataLimit(const DirectIR &ir, const DirectIRConstraint &ir_node, Condition &condition) const;
 	bool ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 };
@@ -201,7 +181,7 @@ bool Rule::ProveBudgetClause(const DirectIR &ir, ClientContext &context, const D
                              Condition &condition, bool first) const {
 	// ProveBudgetScope has proved that every clause is a plain SUM.
 	auto sum = ir_node.PlainSum();
-	if (!OnlyLinearTerms(sum->terms)) {
+	if (!DirectOnlyLinearTerms(sum->terms)) {
 		return false;
 	}
 	DirectLinearPart weights;
@@ -217,47 +197,25 @@ bool Rule::ProveBudgetClause(const DirectIR &ir, ClientContext &context, const D
 }
 
 //! The limit of a clause: a constant the solver reads as a number, folded into the budget's interval, or a value of the
-//! source row, kept for the plan to reduce per group. A constant of magnitude 1e20 or more is where the solver stops
-//! reading a right side as a number, so those stay with the solver; a value of the data is read at run time instead
-//! (AggregatePlanBuilder::GroupTotals).
+//! source row, kept for the plan to reduce per group (DirectReadLimit; AggregatePlanBuilder::GroupTotals).
 bool Rule::ProveLimit(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &ir_node,
                       Condition &condition) const {
-	// The binder refuses `<`, `>` and `<>` over a REAL decision, so the comparison is `<=`, `>=` or `=`.
-	auto comparison = ir_node.comparison;
-	double limit;
-	if (!TryEvaluateFoldableDouble(context, *ir_node.rhs, limit, DIRECT_FINITE_CONSTANT)) {
-		return ProveDataLimit(ir, ir_node, condition);
-	}
-	if (std::fabs(limit) >= DECIDE_EFFECTIVE_INFINITY) {
+	DirectLimit limit;
+	if (!DirectReadLimit(ir, context, ir_node, limit)) {
 		return false;
 	}
+	if (!limit.constant) {
+		condition.data_limits.push_back(std::move(limit.data));
+		return true;
+	}
+	// The binder refuses `<`, `>` and `<>` over a REAL decision, so the comparison is `<=`, `>=` or `=`.
+	auto comparison = ir_node.comparison;
 	if (DirectIsUpperBound(comparison)) {
-		condition.upper = std::min(condition.upper, limit);
+		condition.upper = std::min(condition.upper, limit.number);
 	}
 	if (DirectIsLowerBound(comparison)) {
-		condition.lower = std::max(condition.lower, limit);
+		condition.lower = std::max(condition.lower, limit.number);
 	}
-	return true;
-}
-
-//! A limit read from the data: a numeric, deterministic expression over source columns that mentions at least one, and
-//! may raise (the plan evaluates it on the rows that read it, as the solver does, so both raise on the same inputs), or
-//! the aggregates of its group that the bound-side rewrite left to the plan.
-bool Rule::ProveDataLimit(const DirectIR &ir, const DirectIRConstraint &ir_node, Condition &condition) const {
-	Condition::DataLimit limit;
-	limit.comparison = ir_node.comparison;
-	if (ir_node.group_bound) {
-		if (!DirectGroupBoundIsReadable(ir, *ir_node.group_bound)) {
-			return false;
-		}
-		limit.group = ir_node.group_bound->Copy();
-	} else {
-		if (!DirectIsSourceOnlyNumericMayRaise(*ir_node.rhs, ir.decide_index, ir.source_bindings)) {
-			return false;
-		}
-		limit.value = ir_node.rhs->Copy();
-	}
-	condition.data_limits.push_back(std::move(limit));
 	return true;
 }
 
@@ -289,7 +247,7 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 //! The objective: signed, scaled `SUM(v*x)` parts, or none. Each coefficient must be a value of the source row.
 bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	for (auto &part : ir.objective.parts) {
-		if (!part.IsPlainSum() || !OnlyLinearTerms(part.terms)) {
+		if (!part.IsPlainSum() || !DirectOnlyLinearTerms(part.terms)) {
 			return false;
 		}
 		DirectLinearPart read;

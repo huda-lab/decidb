@@ -1411,6 +1411,117 @@ TEST_CASE("O1 and every other rule never apply to the same query", "[decidb]") {
 }
 
 //===--------------------------------------------------------------------===//
+// S3
+//===--------------------------------------------------------------------===//
+
+const char *S3_BUDGET = "SUM(w*x) <= 9";
+const char *S3_OBJECTIVE = "MAXIMIZE SUM(x)";
+
+Shape S3(const string &branch, const string &constraints = S3_BUDGET, Edit edit = nullptr,
+         const string &objective = S3_OBJECTIVE, const string &declaration = "x(BOOL)") {
+	return {branch, declaration, constraints, objective, std::move(edit)};
+}
+
+duckdb::vector<Shape> S3AppliesShapes() {
+	duckdb::vector<Shape> shapes;
+	shapes.push_back(S3("plain form: the worked example, a budget on a column weight and a count to maximize"));
+	shapes.push_back(S3("a budget per a column", "SUM(w*x) by (flag) <= 9"));
+	shapes.push_back(S3("a budget limit read from a column", "SUM(w*x) <= cap"));
+	shapes.push_back(S3("a budget limit per a group, read from a reducer of the group",
+	                    "SUM(w*x) by (flag) <= 2 * COUNT(*) by (flag)"));
+	shapes.push_back(S3("a count scaled by a factor", S3_BUDGET, nullptr, "MAXIMIZE 2 * SUM(x)"));
+	shapes.push_back(S3("a constant weight of 2", "SUM(2*x) <= 9"));
+	shapes.push_back(S3("a weight that may raise", "SUM(CAST(cap AS TINYINT) * x) <= 9"));
+	// The front end guards every term of a body that reads a column, so a constant term of 1 beside a column term is
+	// not a constant either; an edit makes it one.
+	shapes.push_back(S3("a constant weight of 1 beside a column weight", "SUM(x + w*x) <= 9", [](DirectIR &ir) {
+		LeftPart(ir).terms[0].coefficient = make_uniq<BoundConstantExpression>(Value::DOUBLE(1.0));
+	}));
+	return shapes;
+}
+
+duckdb::vector<Shape> S3DeclineShapes() {
+	duckdb::vector<Shape> shapes;
+	// ProveDecision: each condition of the decision.
+	shapes.push_back(
+	    S3("a second decision", "SUM(w*x + w*y) <= 9", nullptr, "MAXIMIZE SUM(x + y)", "x(BOOL), y(BOOL)"));
+	shapes.push_back(S3("a REAL decision", S3_BUDGET, nullptr, S3_OBJECTIVE, "x(REAL)"));
+	shapes.push_back(
+	    S3("a query-wide decision", S3_BUDGET, [](DirectIR &ir) { ir.decisions[0].scope = DecideVarScope::GLOBAL; }));
+	shapes.push_back(S3("a keyed scope", S3_BUDGET, [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));
+	// ProveConstraint: the budget is the only constraint, an aggregate, compared with `<=`.
+	shapes.push_back(S3("a per-row bound beside the budget", "SUM(w*x) <= 9 AND x <= flag"));
+	shapes.push_back(S3("a strict budget", "SUM(cap*x) < 9"));
+	shapes.push_back(S3("a budget that is a minimum", "SUM(w*x) >= 9"));
+	shapes.push_back(S3("a budget that is an exact fill", "SUM(w*x) = 9"));
+	// ProveScope: it proves the constraint is a plain aggregate SUM, as a per-row bound is not.
+	shapes.push_back(S3("a scaled budget", "2 * SUM(w*x) <= 18"));
+	shapes.push_back(S3("a budget under a WHEN", "when flag: SUM(w*x) <= 9"));
+	shapes.push_back(S3("a budget with an aggregate WHEN", "SUM(when flag: w*x) <= 9"));
+	shapes.push_back(S3("a budget per class of a column", "per flag: SUM(w*x) <= 9"));
+	// ProveBudget: the body, the weights and the limit.
+	shapes.push_back(S3("a budget with a constant term", "SUM(w*x + 1) <= 9"));
+	shapes.push_back(S3("a weight fixed only within the query", "SUM(txid_current()*x) <= 9"));
+	shapes.push_back(S3("a weight that is infinite", "SUM('inf'::DOUBLE * x) <= 9"));
+	shapes.push_back(S3("a count of weight 1", "SUM(x) <= 9"));
+	shapes.push_back(S3("a count of weight -1", "SUM(-x) <= 9"));
+	shapes.push_back(S3("constant weights that add up to 1", "SUM(3*x - 2*x) <= 9"));
+	shapes.push_back(S3("a budget limit of 1e20", "SUM(w*x) <= 1e20"));
+	shapes.push_back(S3("a budget limit fixed only within the query", "SUM(w*x) <= SUM(cap) * txid_current()"));
+	// ProveObjective.
+	shapes.push_back(S3("no objective", S3_BUDGET, nullptr, ""));
+	shapes.push_back(S3("a minimized count", S3_BUDGET, nullptr, "MINIMIZE SUM(x)"));
+	shapes.push_back(S3("an objective whose coefficient is zero", S3_BUDGET, nullptr, "MAXIMIZE SUM(0*x)"));
+	shapes.push_back(
+	    S3("an objective whose parts net to a minimization", S3_BUDGET, nullptr, "MAXIMIZE SUM(5*x) - 3 * SUM(2*x)"));
+	shapes.push_back(S3("an objective whose terms net to a minimization", S3_BUDGET, nullptr, "MAXIMIZE SUM(x - 2*x)"));
+	shapes.push_back(S3("an objective past a DOUBLE", S3_BUDGET, nullptr, "MAXIMIZE SUM(1e308*x + 1e308*x)"));
+	shapes.push_back(S3("an objective with a by key", S3_BUDGET, nullptr, "MAXIMIZE SUM(x) by (flag)"));
+	shapes.push_back(S3("an objective with a constant term in the sum", S3_BUDGET, nullptr, "MAXIMIZE SUM(x + 1)"));
+	shapes.push_back(S3("an objective coefficient fixed only within the query", S3_BUDGET, nullptr,
+	                    "MAXIMIZE SUM(x + txid_current()*x)"));
+	shapes.push_back(S3("an objective WHEN that reads more than the source", S3_BUDGET, nullptr,
+	                    "MAXIMIZE when txid_current() >= 0: SUM(x)"));
+	shapes.push_back(S3("an objective WHEN", S3_BUDGET, nullptr, "MAXIMIZE when flag: SUM(x)"));
+	shapes.push_back(S3("an objective part WHEN", S3_BUDGET, nullptr, "MAXIMIZE SUM(when flag: x)"));
+	shapes.push_back(S3("an objective coefficient read from the data", S3_BUDGET, nullptr, "MAXIMIZE SUM(w*x)"));
+	return shapes;
+}
+
+TEST_CASE("S3 applies to the forms of its class", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	ExpectApplies(MakeS3MaxCardinalityKnapsackRule, con, S3AppliesShapes());
+}
+
+TEST_CASE("S3 declines each shape that is not exactly its class", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	ExpectDeclines(MakeS3MaxCardinalityKnapsackRule, con, S3DeclineShapes());
+}
+
+// The rules partition the problems they apply to: no two rules apply to one IR.
+TEST_CASE("S3 and every other rule never apply to the same query", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	CreateO1Tables(con);
+	ExpectDeclines(MakeS1UniformMatroidRule, con, S3AppliesShapes());
+	ExpectDeclines(MakeA1SeparableBoxRule, con, S3AppliesShapes());
+	ExpectDeclines(MakeR1ContinuousKnapsackRule, con, S3AppliesShapes());
+	ExpectDeclines(MakeN1EuclideanBallRule, con, S3AppliesShapes());
+	ExpectDeclines(MakeA2SingleFacilityLocationRule, con, S3AppliesShapes());
+	ExpectDeclines(MakeO1MongeAssignmentRule, con, S3AppliesShapes());
+	ExpectDeclines(MakeS3MaxCardinalityKnapsackRule, con, S1AppliesShapes());
+	ExpectDeclines(MakeS3MaxCardinalityKnapsackRule, con, S1KeyedShapes());
+	ExpectDeclines(MakeS3MaxCardinalityKnapsackRule, con, A1AppliesShapes());
+	ExpectDeclines(MakeS3MaxCardinalityKnapsackRule, con, R1AppliesShapes());
+	ExpectDeclines(MakeS3MaxCardinalityKnapsackRule, con, R1KeyedShapes());
+	ExpectDeclines(MakeS3MaxCardinalityKnapsackRule, con, N1AppliesShapes());
+	ExpectDeclines(MakeS3MaxCardinalityKnapsackRule, con, A2AppliesShapes());
+	ExpectDeclines(MakeS3MaxCardinalityKnapsackRule, con, O1AppliesShapes());
+}
+
+//===--------------------------------------------------------------------===//
 // The rule driver's check that the front end read the whole IR
 //===--------------------------------------------------------------------===//
 
