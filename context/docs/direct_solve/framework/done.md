@@ -37,7 +37,7 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   `DirectSumOf` (the signed sum of proved values, each read as DOUBLE), `DirectOnKeptRows` and `DirectOverProjection`
   (a copy of a value re-pointed at a projection over the source). A rule assembles each projection of its plan in a
   `DirectProjectionStage`, which gives every column its binding as it is added and becomes a `LogicalProjection` over a
-  child. S1, R1 and N1 also share `DirectProveSharedScope` (the clauses read together have
+  child. S1, R1, N1 and S3 also share `DirectProveSharedScope` (the clauses read together have
   one `by` key, `per` classes and `when`, else the rule declines) and `DirectAddInstanceFlag` (a `per K:` clause with
   no kept class has no instance, D5).
   - **A separable quadratic objective** (A1, N1 and A2: `a*x^2 + b*x` per decision) takes three fragments, in plan
@@ -245,8 +245,8 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   scope projection (`DirectProjectScope`), the message of a per-row bound read from the data
   (`DirectRowBoundMessage`) and `DirectWindowExtremum` are shared in
   `direct_plan_fragments.{hpp,cpp}`: any rule whose aggregate takes a `when` or a group key, or whose bound comes from
-  the data, needs them. `DirectRunningSum` (R1 and A2) is a window sum over the rows up to the current one in a given
-  order, per partition. `DirectLayoutBoundClauses` (A1 and A2) lays out each per-row bound clause in a rule's first
+  the data, needs them. `DirectRunningSum` (R1, A2 and S3) is a window sum over the rows up to the current one in a
+  given order, per partition. `DirectLayoutBoundClauses` (A1 and A2) lays out each per-row bound clause in a rule's first
   projection: its coefficient, right side and ends, each computed only on the rows the clause keeps, and the checks of
   the coefficient and the right side, which pass on a dropped row because both values are NULL there.
 - **Numeric policy.** `src/include/duckdb/common/decide_numeric_policy.hpp` is the one home of the numeric facts that
@@ -318,7 +318,7 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     (`sum(x) by (g) <= sum(cap) by (g)`) is an expression over those reducers' aggregates. A rule proves it can compute
     the bound (`DirectGroupBoundIsReadable`), lays out the columns of each input (`DirectGroupLayout`,
     `DirectGroupInputs`) and adds the aggregates to the group aggregate it already runs, with no branch per bound
-    (`DirectAddGroupBound` and a rule's `DirectGroupSink`: N1 a window through `DirectWindowSink`; S1, R1 and A2
+    (`DirectAddGroupBound` and a rule's `DirectGroupSink`: N1 and S3 a window through `DirectWindowSink`; S1, R1 and A2
     their hash aggregate through `DirectAggregateSink`), so a direct plan has no side table for them. Only the
     solver path records their aggregates (`RecordGroupBound`, from `RecordReducedBounds`), and it returns the checks
     in the order a rule raises them: every bound's per-row reads, then each bound's NaN limit and `=` agreement. A

@@ -5,15 +5,17 @@ replaces the DECIDE node with ordinary DuckDB operators (sort, rank, filter) tha
 problem takes the existing solver path, unchanged. It is **on by default** (`decide_direct_solve = 'auto'`); `off` forces
 the solver and `require` raises an error when no rule applies.
 
-Six problem classes work: **S1**, "choose K rows by score" (count bounds on one `BOOL` variable); **A1**, "each row
+Seven problem classes work: **S1**, "choose K rows by score" (count bounds on one `BOOL` variable); **A1**, "each row
 gets its best value in its own range" (per-row bounds on `BOOL`, `INT` or `REAL` decisions with a linear or one-square
 objective); **R1**, "fill one budget by value per unit" (one budget over `REAL` decisions); **N1**, "stay inside one sum
-of squares" (one `SUM(POWER(x, 2)) <= B` over a `REAL` decision, per group or over all rows); and **A2**, "one shared
-value closest to every row" (one query-wide or keyed `REAL` decision under a squared, absolute or maximum absolute
-loss); and **O1**, "match two tables one to one by position" (a `BOOL` per pair of a cross product, one pair
-per row of each side, under a distance or product cost). Each class's `done.md` gives its speed against Gurobi and HiGHS; every class is faster than
-each solver that takes it, at every size measured. N1 also answers without a Gurobi license, where the solver path
-refuses a quadratic limit. The other 13 classes in the catalogue are not started.
+of squares" (one `SUM(POWER(x, 2)) <= B` over a `REAL` decision, per group or over all rows); **A2**, "one shared value
+closest to every row" (one query-wide or keyed `REAL` decision under a squared, absolute or maximum absolute loss);
+**O1**, "match two tables one to one by position" (a `BOOL` per pair of a cross product, one pair per row of each side,
+under a distance or product cost); and **S3**, "as many rows as fit one budget" (one `SUM(w*x) <= B` over a `BOOL`
+decision, maximizing the count, per group or over all rows). Each class's `done.md` but S3's gives its speed against
+Gurobi and HiGHS; every class is faster than each solver that takes it, at every size measured. N1 also answers without
+a Gurobi license, where the solver path refuses a quadratic limit. The other 12 classes in the catalogue are not
+started.
 
 ## Where to look
 
@@ -22,8 +24,8 @@ refuses a quadratic limit. The other 13 classes in the catalogue are not started
 | Understand how it works | [architecture/overview.md](architecture/overview.md), then the other files there |
 | Look up a term, its standard name and the identifiers it covers | [../glossary.md](../glossary.md) |
 | Add a new problem class | [architecture/rules.md](architecture/rules.md), then a new folder under `rules/` |
-| See what a working class covers, where it differs from the solver, how it is tested and how fast it is | `rules/<id>_<slug>/done.md`: [S1](rules/s1_uniform_matroid/done.md), [A1](rules/a1_separable_box/done.md), [R1](rules/r1_continuous_knapsack/done.md), [N1](rules/n1_euclidean_ball/done.md), [A2](rules/a2_single_facility_location/done.md), [O1](rules/o1_monge_assignment/done.md) |
-| See what is open for a working class | `rules/<id>_<slug>/todo.md`: [S1](rules/s1_uniform_matroid/todo.md), [A1](rules/a1_separable_box/todo.md), [R1](rules/r1_continuous_knapsack/todo.md), [N1](rules/n1_euclidean_ball/todo.md), [A2](rules/a2_single_facility_location/todo.md), [O1](rules/o1_monge_assignment/todo.md) |
+| See what a working class covers, where it differs from the solver, how it is tested and how fast it is | `rules/<id>_<slug>/done.md`: [S1](rules/s1_uniform_matroid/done.md), [A1](rules/a1_separable_box/done.md), [R1](rules/r1_continuous_knapsack/done.md), [N1](rules/n1_euclidean_ball/done.md), [A2](rules/a2_single_facility_location/done.md), [O1](rules/o1_monge_assignment/done.md), [S3](rules/s3_max_cardinality_knapsack/done.md) |
+| See what is open for a working class | `rules/<id>_<slug>/todo.md`: [S1](rules/s1_uniform_matroid/todo.md), [A1](rules/a1_separable_box/todo.md), [R1](rules/r1_continuous_knapsack/todo.md), [N1](rules/n1_euclidean_ball/todo.md), [A2](rules/a2_single_facility_location/todo.md), [O1](rules/o1_monge_assignment/todo.md), [S3](rules/s3_max_cardinality_knapsack/todo.md) |
 | Work on the shared engine or error wording | [framework/](framework/) |
 | See a class that is not built yet, or start one | [todo.md](todo.md) |
 | Time direct solve against Gurobi and HiGHS on TPC-H | [../performance/benchmarking/direct_solve.md](../performance/benchmarking/direct_solve.md) |
@@ -46,7 +48,7 @@ refuses a quadratic limit. The other 13 classes in the catalogue are not started
 | [N2](rules/n2_ellipsoid_support/) | Ellipsoid support function | Exact | Not started |
 | [S1](rules/s1_uniform_matroid/) | Uniform-matroid optimization | Exact | **Works**, on by default, including per `by` group |
 | [S2](rules/s2_laminar_matroid/) | Laminar-matroid optimization | Exact | Not started |
-| [S3](rules/s3_max_cardinality_knapsack/) | Maximum-cardinality knapsack | Exact | Not started |
+| [S3](rules/s3_max_cardinality_knapsack/) | Maximum-cardinality knapsack | Exact | **Works**, on by default, including per `by` group |
 | [S4](rules/s4_bottleneck_knapsack/) | Cardinality-constrained bottleneck knapsack | Exact | Not started |
 | [R1](rules/r1_continuous_knapsack/) | Continuous (fractional) knapsack | Exact | **Works**, on by default, including per `by` group |
 | [R2](rules/r2_discrete_resource_allocation/) | Discrete separable convex resource allocation | Exact | Not started |

@@ -5,6 +5,8 @@ Catalogue status: Exact.
 > Any assignment with the same objective value is acceptable. Wherever this text describes a stable or deterministic
 > tie order, it describes the catalogue's construction, not a requirement on the result.
 
+What the implementation admits today is in [done.md](done.md); this file is the class as the catalogue defines it.
+
 ## Worked example
 
 S3 selects as many Boolean items as possible while staying within one shared budget.
@@ -151,3 +153,5 @@ The largest feasible prefix gives the greatest possible item count, which is exa
 > • Grouped or conditional forms have been separated into proved-disjoint components.
 >
 > • Empty input, NULL handling, numeric comparisons, ties, Boolean types, decision identity, and output mapping preserve DECIDE semantics.
+>   A NULL weight is 0, as the solver path's front end reads it. A prefix total is compared with the budget exactly, in
+>   DOUBLE, and a total past a DOUBLE raises.
