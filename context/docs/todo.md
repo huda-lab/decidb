@@ -11,7 +11,3 @@ combine.
 ## 4. Measurement, owner starts the run (one lane)
 
 - [ ] S3-5 S3's Performance is measured — direct_solve/rules/s3_max_cardinality_knapsack/todo.md § S3-5
-
-## 5. Shared engine (one lane)
-
-- [ ] FRM-5 A fixed value read from an expression of the row — direct_solve/framework/todo.md § FRM-5

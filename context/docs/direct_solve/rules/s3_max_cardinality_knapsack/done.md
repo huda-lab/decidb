@@ -1,7 +1,7 @@
 # S3 (maximum-cardinality knapsack) — what works today
 
-Verified on 2026-11-11 at `53b0e285ca`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
-serializer, highs) 6,851 passed; C++ `build/release/test/unittest "[decidb]"` 7,167 assertions in 106 cases. Code:
+Verified on 2026-11-11 at `a94e16e743`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
+serializer, highs) 6,864 passed; C++ `build/release/test/unittest "[decidb]"` 7,233 assertions in 106 cases. Code:
 `src/optimizer/decide/direct/s3_max_cardinality_knapsack_rule.cpp`. Class definition: [definition.md](definition.md).
 
 ## What it admits
@@ -23,7 +23,9 @@ MAXIMIZE SUM(selected);
   of the budget or inside its sum, drops a row from the budget: it reads no weight, and a NaN weight there raises
   nothing.
 - **Fixed items.** Any other constraint is a per-row clause on `x` (`when must: x = 1`, `x <= flag`, `x <> c`), read
-  by the shared `DirectReadFixedValues` as S1 reads its own: the set of {0, 1} each row allows. A row fixed to 1 is
+  by the shared `DirectReadFixedValues` as S1 reads its own: the set of {0, 1} each row allows. A value or coefficient
+  may be an expression of the row that may raise (`x >= CAST(w AS TINYINT) - 2`); it is read only on the rows the
+  clause keeps, as the solver reads it. A row fixed to 1 is
   selected and its weight counts toward its group's budget; a row fixed to 0 is not selected; a row that allows
   neither is infeasible.
 - **The weight.** `w` is the signed sum of the terms' coefficients: finite constants and numeric values of the source
@@ -125,17 +127,20 @@ and constant weights that add up past a DOUBLE raise the solver's TOO_LARGE text
   duplicate rows and a NULL weight; a `when` in front of the budget, inside its sum and both, with negative weights,
   `by` groups and limits read on kept rows, and the objective's `when` equal to the budget's; rows fixed to 1 and to 0
   of each sign of weight, constant and data bounds, a fixed total meeting the budget exactly or rescued by a negative
-  free weight, fixed rows outside every budget; the `at_least_*` cases for `>=` (the worked example, totals that rise
-  then fall, a minimum of 0, `by` groups, a data minimum's MAX, a NULL key, a `when`, fixed items); a joined source,
-  with and without a `when`, a parent `COUNT(*)`, `LIMIT` and filter; an empty source. Each case is the one test that
-  catches some mutation of the plan or its recognition.
+  free weight, fixed rows outside every budget, a bound and a coefficient that are expressions of the row, each also
+  with its raising value on a row the clause's `when` drops; the `at_least_*` cases for `>=` (the worked example, totals
+  that rise then fall, a minimum of 0, `by` groups, a data minimum's MAX, a NULL key, a `when`, fixed items); a joined
+  source, with and without a `when`, a parent `COUNT(*)`, `LIMIT` and filter; an empty source. Each case is the one test
+  that catches some mutation of the plan or its recognition.
 - A dropped row: `test_s3_a_nan_weight_on_a_dropped_row_raises_on_neither_path`.
 - S1's counts: `test_s3_leaves_a_count_to_s1` (`EXPLAIN` names S1 for four spellings of a count).
 - Errors on both paths: `test_s3_error_cases_fail_on_both_paths` (NaN, +inf and -inf weights, a NaN limit, a negative
   constant budget no prefix meets, one infeasible group; a fixed set over the budget, a row allowing neither value, a
   constant bound no `BOOL` meets under a `when`, a NaN bound; under `>=`, no prefix reaching `B`, only negative
   weights, one unreachable group, a NaN weight and a NaN limit), and
-  `test_s3_constant_weights_that_add_up_past_a_double_raise_the_solvers_error`.
+  `test_s3_constant_weights_that_add_up_past_a_double_raise_the_solvers_error`, and
+  `test_s3_a_fixed_value_that_raises_on_a_kept_row_raises_the_solvers_error` (a bound and a coefficient, word for
+  word with the solver's error).
 - Differences: `test_s3_direct_compares_a_prefix_total_with_the_budget_exactly_in_a_double`,
   `test_s3_a_running_total_past_a_double_raises_where_the_solver_answers`,
   `test_s3_fixed_rows_past_a_double_raise_where_the_solver_answers`.

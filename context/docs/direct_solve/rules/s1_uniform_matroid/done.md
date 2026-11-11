@@ -1,7 +1,7 @@
 # S1 (uniform-matroid optimization) — what works today
 
-Verified on 2026-11-08 at `73b52ab1d1`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
-serializer, highs) 7,020 passed; C++ `build/release/test/unittest "[decidb]"` 4,635 assertions in 85 cases.
+Verified on 2026-11-11 at `a94e16e743`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
+serializer, highs) 6,864 passed; C++ `build/release/test/unittest "[decidb]"` 7,233 assertions in 106 cases.
 
 Code: `src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp`; its scope projection and bound validation are the
 shared fragments in `direct_plan_fragments.{hpp,cpp}`. Class definition: [definition.md](definition.md).
@@ -41,27 +41,28 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
   per-row fixed values. A `when` that keeps no row, or a sum whose own `when` keeps no row, leaves the clause with no
   instance, as on the solver (D68).
 - **Per-row bounds on `x`:** any comparison (`=`, `<>`, `<`, `<=`, `>`, `>=`) against a foldable constant, a numeric
-  source column, or a deterministic nonthrowing numeric expression over source columns (`COALESCE`, `TRY_CAST` of a
-  column), with an optional source-only `when`. Each row's value is read as the set of {0, 1} it allows. Both allowed
-  means no constraint (`x <= 1`, `x >= 0`, `x BETWEEN 0 AND 1`, `x <> 2`); one allowed fixes the row to that value (`x
-  >= 0.5` fixes to 1); none allowed makes the row infeasible. A bound with a `when` takes any constant. A constant bound
-  without a `when` is read the same way when it can hold: a lower bound below 0 (`x >= -3`, `x > -3`) allows both
-  values, because the solver keeps a Boolean's box at [0, 1] and a written bound only narrows it. One that cannot hold
-  is left to the solver (see the out-of-scope table). A bound on `x` allows the values in the interval the solver path's
-  classifier admits (`DecideReadSingletonRow`, D64), whatever its constant coefficient: `x > 0.5` and `2*x >= 1`
-  allow 1, `x < 1.5` allows 0 and 1, `2*x <= cap` allows 0 where `cap` is below 2. One expression says whether a row
-  allows `x = v`, for 0 and for 1: folded once against a constant, evaluated per row against a column value, with or
-  without a `when`, as the solver does. Whether a constant
-  bound is one the solver folds into the variable's box is the IR's `variable_bound` flag (no `when`), the same flag A1
-  reads. The rest of the reading is the shared `DirectReadFixedValues` (`../../framework/done.md`), which S1 and S3
-  call: it asks which of {0, 1} a row allows, where A1 asks for an interval, and admits `<>` and Boolean sources
-  (`x = flag`), which the classifier does not read; those require a coefficient of exactly 1.
-  A bound on `x` may also read its coefficient from the row (`w *
-  x >= 1`, `hi * x <= cap2`), as a deterministic nonthrowing source expression; the row allows the values the
-  classifier admits over that row's `w`, so a zero `w` allows what `0 >= 1` says. Any other coefficient is a finite
-  constant. Contradictory active bounds are infeasible. A NULL value or coefficient skips the bound on that row, and a
-  NaN value raises the solver's error on every row the bound's `when` keeps (`DirectRowBoundMessage`); a NaN or
-  infinite coefficient raises the solver's coefficient error. A row the `when` drops is not read.
+  source column, or a deterministic numeric expression over source columns (`COALESCE`, `TRY_CAST` of a column,
+  `CAST(c AS TINYINT) - 2`), with an optional source-only `when`. An expression that may raise is read only on the rows
+  the clause's `when` keeps, as the solver reads it: it raises DuckDB's error on a kept row and nothing on a dropped
+  one. Each row's value is read as the set of {0, 1} it allows. Both allowed means no constraint (`x <= 1`, `x >= 0`,
+  `x BETWEEN 0 AND 1`, `x <> 2`); one allowed fixes the row to that value (`x >= 0.5` fixes to 1); none allowed makes
+  the row infeasible. A bound with a `when` takes any constant. A constant bound without a `when` is read the same way
+  when it can hold: a lower bound below 0 (`x >= -3`, `x > -3`) allows both values, because the solver keeps a Boolean's
+  box at [0, 1] and a written bound only narrows it. One that cannot hold is left to the solver (see the out-of-scope
+  table). A bound on `x` allows the values in the interval the solver path's classifier admits
+  (`DecideReadSingletonRow`, D64), whatever its constant coefficient: `x > 0.5` and `2*x >= 1` allow 1, `x < 1.5` allows
+  0 and 1, `2*x <= cap` allows 0 where `cap` is below 2. One expression says whether a row allows `x = v`, for 0 and for
+  1: folded once against a constant, evaluated per row against a column value, with or without a `when`, as the solver
+  does. Whether a constant bound is one the solver folds into the variable's box is the IR's `variable_bound` flag (no
+  `when`), the same flag A1 reads. The rest of the reading is the shared `DirectReadFixedValues`
+  (`../../framework/done.md`), which S1 and S3 call: it asks which of {0, 1} a row allows, where A1 asks for an
+  interval, and admits `<>` and Boolean sources (`x = flag`), which the classifier does not read; those require a
+  coefficient of exactly 1. A bound on `x` may also read its coefficient from the row (`w * x >= 1`, `hi * x <= cap2`),
+  as a deterministic source expression that may raise, read as a value is; the row allows the values the classifier
+  admits over that row's `w`, so a zero `w` allows what `0 >= 1` says. Any other coefficient is a finite constant.
+  Contradictory active bounds are infeasible. A NULL value or coefficient skips the bound on that row, and a NaN value
+  raises the solver's error on every row the bound's `when` keeps (`DirectRowBoundMessage`); a NaN or infinite
+  coefficient raises the solver's coefficient error. A row the `when` drops is not read.
 - **Objective:** a signed sum of per-row coefficients times `x`, `MAXIMIZE` or `MINIMIZE`, plus an optional finite constant,
   or none. Without one every row scores 0, so the plan picks only the rows the lower limits and fixed values require.
   Coefficients are numeric, decision-free, deterministic; several terms must be non-throwing. Each `SUM(...)` may carry a
@@ -139,7 +140,7 @@ source, and joined to the rows of the window (group-then-join, as A2).
 
 | Check | What it covers |
 |---|---|
-| `test_direct_s1_uniform_matroid.py` (627 tests) | The answers. Each case runs on the independent ILP oracle (`oracle_solver`, built from the raw rows), on the solver path (`off`) and on the direct path (`require`, so the test fails if S1 does not apply); both DeciDB runs must satisfy every constraint and reach the oracle's objective, or all must say infeasible. Cases: every comparison against whole and fractional limits (strict bounds as the solver path reads them), intervals, `by` and NULL keys, a `when` in front, inside the sum and in both places, source-valued bounds and `COALESCE`, several bounds at once, row-count bounds (`COUNT(*)`, exact decimal arithmetic, and `test_s1_count_bound_raises_only_where_the_solver_does` for where an overflow may raise), group-aggregate bounds (`MIN`, `MAX`, `COUNT(col)`, small-integer `SUM` and `AVG`, in arithmetic, with `by`, a `when` in front and inside the sum, their NULL, NaN and infinity errors, a group they read no row of, and every declined reducer), negated count bodies (each comparison and an interval, every scope, a group whose own `when` keeps no row, an unreachable limit, constant, column, `COALESCE`, `COUNT(*)` and group-aggregate limits), constant terms with and without `by` and an own `when` included, pins and per-row bounds on `x` (a generated grid with and without `when`), column pins, no objective (every count bound shape, with and without `by` and `when`, checked for feasibility only), 11 objective shapes (sums, differences, negation, scaled and divided, offset, products), the nine beyond the plain score in both senses, objective `when` shapes (in front, inside the sum, in both places, on one part and on every part, a NULL `when`, one that keeps no row, beside a count `when` and a `by` key, over a NULL coefficient, on rows whose coefficient is NaN or raises, and the NaN error on a row it keeps, word for word with the solver's), and tied scores. Parent-query contexts (CTE, wide source, joined and correlated source, parent join, recombined filters), a nested `DECIDE`, and empty inputs. Error cases that must fail on both paths (an infeasible `byR` bound, an equality bound that varies within a group, a NaN fixed value, NaN in a group-aggregate bound); empty sets on both paths are in `test_empty_groups.py`. Boundary cases against the solver path only (infinite and beyond-2^53 limits, every numeric source type, exact decimal arithmetic) and tiny scores against the exact finite-DOUBLE optimum. Grouped cases run on both paths, with NULL keys and per-class differential cases. The three oracle grids (482 cases) keep one case per path through the DECIDE pipeline (`make decide-coverage`); where cases share a path, each value on a boundary the code or DuckDB's operators treat differently stays (zero, a whole number against a fraction, the edge of a binary domain, the largest exact double, `MIN` against `MAX`), since the values reach DuckDB's sort, rank, filter and aggregate operators, which coverage does not see. |
+| `test_direct_s1_uniform_matroid.py` (637 tests) | The answers. Each case runs on the independent ILP oracle (`oracle_solver`, built from the raw rows), on the solver path (`off`) and on the direct path (`require`, so the test fails if S1 does not apply); both DeciDB runs must satisfy every constraint and reach the oracle's objective, or all must say infeasible. Cases: every comparison against whole and fractional limits (strict bounds as the solver path reads them), intervals, `by` and NULL keys, a `when` in front, inside the sum and in both places, source-valued bounds and `COALESCE`, several bounds at once, row-count bounds (`COUNT(*)`, exact decimal arithmetic, and `test_s1_count_bound_raises_only_where_the_solver_does` for where an overflow may raise), group-aggregate bounds (`MIN`, `MAX`, `COUNT(col)`, small-integer `SUM` and `AVG`, in arithmetic, with `by`, a `when` in front and inside the sum, their NULL, NaN and infinity errors, a group they read no row of, and every declined reducer), negated count bodies (each comparison and an interval, every scope, a group whose own `when` keeps no row, an unreachable limit, constant, column, `COALESCE`, `COUNT(*)` and group-aggregate limits), constant terms with and without `by` and an own `when` included, pins and per-row bounds on `x` (a generated grid with and without `when`), column pins, no objective (every count bound shape, with and without `by` and `when`, checked for feasibility only), 11 objective shapes (sums, differences, negation, scaled and divided, offset, products), the nine beyond the plain score in both senses, objective `when` shapes (in front, inside the sum, in both places, on one part and on every part, a NULL `when`, one that keeps no row, beside a count `when` and a `by` key, over a NULL coefficient, on rows whose coefficient is NaN or raises, and the NaN error on a row it keeps, word for word with the solver's), and tied scores. Parent-query contexts (CTE, wide source, joined and correlated source, parent join, recombined filters), a nested `DECIDE`, and empty inputs. Error cases that must fail on both paths (an infeasible `byR` bound, an equality bound that varies within a group, a NaN fixed value, a fixed value or coefficient that raises on a kept row, NaN in a group-aggregate bound); empty sets on both paths are in `test_empty_groups.py`. Boundary cases against the solver path only (infinite and beyond-2^53 limits, every numeric source type, exact decimal arithmetic) and tiny scores against the exact finite-DOUBLE optimum. Grouped cases run on both paths, with NULL keys and per-class differential cases. The three oracle grids (486 cases) keep one case per path through the DECIDE pipeline (`make decide-coverage`); where cases share a path, each value on a boundary the code or DuckDB's operators treat differently stays (zero, a whole number against a fraction, the edge of a binary domain, the largest exact double, `MIN` against `MAX`), since the values reach DuckDB's sort, rank, filter and aggregate operators, which coverage does not see. |
 | `test_direct_rule_conformance.py` (102 tests, shared with every rule) | The checks every rule owes: schema and rows, all-rows read, serializer, prepared plans, `EXPLAIN` and profiling, `off`, forced backend, `DIAGNOSE`, an empty source, constant bounds that contradict the built-in domain, and near misses, each of which must decline under `require`, keep the solver plan, and answer under `auto` as under `off` (this is where the shapes S1 leaves on the solver are tested) |
 | `test_direct_user_facing.py` (108 tests, shared with every rule) | What a SQL user sees besides the answer: direct solve on by default, the pinned exact reading of a bound near an integer, the full text of every NaN error compared with the solver's, a NULL bound skipped on both paths, unused wide columns pruned, forced-backend and binder-error policy |
 | C++ `[decidb]` | S1 applicability condition, IR, rule driver |

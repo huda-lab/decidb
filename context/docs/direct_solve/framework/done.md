@@ -201,13 +201,16 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     infinite end clamps nothing, because −∞ is `GREATEST`'s identity and +∞ is `LEAST`'s for every value but NaN, and a
     NaN bound has raised before the box is read. A box with no other end on that side is the constant ±∞. The floor of
     a decision that no `when` can lower is the constant itself, so the plan carries no column for it.
-  - **Fixed values of a `BOOL` decision.** `DirectReadFixedValues` (S1 and S3) reads each per-row clause on the
-    decision (`DirectFixedTerms`: `x = 1`, `2 * x >= 1`, `x <= flag`, `x <> c`, under an optional `when`) as the set of
-    {0, 1} it allows, into a condition per clause that fixes a row to 1 and one that fixes it to 0; a row that allows
-    neither meets both, which is infeasible. A value read from the row is checked as the solver checks it
-    (`DirectSourceFixedValue`, its message from `DirectFixedValueMessage`). `DirectConstantSlope` sums the signed
-    constant coefficients of a body as the solver's like-term collection does, and `DirectAnyCondition` tests the
-    conditions in the solver's order.
+  - **Fixed values of a `BOOL` decision.** `DirectReadFixedValues` (S1 and S3) reads each per-row clause on the decision
+    (`DirectFixedTerms`: `x = 1`, `2 * x >= 1`, `x <= flag`, `x <> c`, under an optional `when`) as the set of {0, 1} it
+    allows, into a condition per clause that fixes a row to 1 and one that fixes it to 0; a row that allows neither
+    meets both, which is infeasible. A value read from the row is checked as the solver checks it
+    (`DirectSourceFixedValue`, its message from `DirectFixedValueMessage`). A value or coefficient read from the row may
+    raise (`DirectIsSourceOnlyNumericMayRaise`): the plan evaluates it only on the rows the clause keeps, where the
+    solver evaluates it too. A Boolean read as such (`x <= flag`) must not raise, because it fixes one side only and
+    another clause that fixes the row first skips it; one that may raise is read as a number, which both sides test.
+    `DirectConstantSlope` sums the signed constant coefficients of a body as the solver's like-term collection does, and
+    `DirectAnyCondition` tests the conditions in the solver's order.
   - **The limit of an aggregate constraint.** `DirectReadLimit` reads a budget's right side into a `DirectLimit`: a
     constant of magnitude below 1e20 (from 1e20 the solver's reading depends on the rows, so the rule declines), or a
     value of the data (`DirectDataLimit`), either a numeric expression over source columns that may raise, evaluated
@@ -282,15 +285,15 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   `DirectCastMayThrow` and `DirectMayThrow` copy DuckDB's `CanThrow` on purpose: DuckDB's counts `TRY_CAST` as throwing,
   and fixing that would change DuckDB itself. Test: `test/common/test_decidb_numeric_policy.cpp` (`[numeric_policy]`, 5
   cases).
-- **Shared admission predicates.** `DirectIsDecisionFreeDeterministic`, `DirectIsSourceOnlyNumeric`,
-  `DirectIsSourceOnlyNumericMayRaise`, `DirectIsSourceOnlyValue` (which admits a value that can raise),
-  `DirectIsSourceOnlyPredicate` (a deterministic, nonthrowing BOOLEAN over source columns: a `when` the plan evaluates
-  on every row), `DirectHasColumnReference`, `DirectRemapSourceReferences` (re-points source columns at a projection
-  over the source), `DirectIsWholeNumbered` (an `INT` or `BOOL` decision), `DirectIsLowerBound` and `DirectIsUpperBound`
-  (which comparisons bound a count from below and from above), `DirectPartFactor`, `DIRECT_CONSTANT`,
-  `DIRECT_FINITE_CONSTANT`, `DirectIRConstraint::PlainSum` and `DirectPart::IsPlainSum` answer "may a rule use this
-  value" once for all rules. `DirectIRConstraint::Membership` gives the rows an aggregate constraint covers: its sum's
-  own `when` or the clause's `when`; with both, the rules decline (the solver reads both).
+- **Shared admission predicates.** `DirectIsDecisionFreeDeterministic`, `DirectIsSourceOnlyNumericMayRaise`,
+  `DirectIsSourceOnlyValue` (which admits a value that can raise), `DirectIsSourceOnlyPredicate` (a deterministic,
+  nonthrowing BOOLEAN over source columns: a `when` the plan evaluates on every row), `DirectHasColumnReference`,
+  `DirectRemapSourceReferences` (re-points source columns at a projection over the source), `DirectIsWholeNumbered` (an
+  `INT` or `BOOL` decision), `DirectIsLowerBound` and `DirectIsUpperBound` (which comparisons bound a count from below
+  and from above), `DirectPartFactor`, `DIRECT_CONSTANT`, `DIRECT_FINITE_CONSTANT`, `DirectIRConstraint::PlainSum` and
+  `DirectPart::IsPlainSum` answer "may a rule use this value" once for all rules. `DirectIRConstraint::Membership` gives
+  the rows an aggregate constraint covers: its sum's own `when` or the clause's `when`; with both, the rules decline
+  (the solver reads both).
 - **One evaluate-to-DOUBLE function.** `TryEvaluateFoldableDouble(context, expr, out, flags)` (`decide_cast_policy.hpp`)
   is the only code that folds a constant expression to a `DOUBLE`, for the planner, the rewrites and the direct rules.
   Callers differ only in the flags they pass: `FOLD_STABLE` (no row, parameter or subquery can change it),

@@ -42,17 +42,3 @@ solver path answers those queries, so none of them is wrong, only slower.
   type (a2_abs_global, 0.6 ms); R1's per-row answer from window frames (a second plan shape for several decisions, and
   prefix sums the segment tree does not keep monotone); proving R1's group checks at plan time. **Ruling (owner,
   2026-11-09).**
-
-## FRM-5 — A fixed value read from an expression of the row
-
-- **Problem.** `DirectReadFixedValues` reads a per-row bound on a `BOOL` decision only when its value is a column or
-  a constant: `DirectIsSourceOnlyNumeric` refuses an expression whose arithmetic may raise (`x >= w - 2`), so S1 and
-  S3 leave such a query to the solver. Reproduce: S3's `SUM(w*x) <= 9 AND x >= w - 2 MAXIMIZE SUM(x)` under
-  `require`.
-- **Ruling (owner, 2026-11-11).** Admit a value that may raise: read it with `DirectIsSourceOnlyNumericMayRaise` and
-  evaluate it on the rows the clause keeps, as R1 reads a data limit, so both paths raise on the same inputs.
-- **Change.** The shared fixed-value reading (`DirectReadFixedValues`) reads a value and a row coefficient that may
-  raise, for S1 and S3 alike.
-- **Done when.** Oracle cases in S1's and S3's tables for an expression bound, an error case where it raises on a kept
-  row and none where it raises on a dropped row, and `./test/decide/run_tests.sh -n 2 -k "s1_uniform or
-  s3_max_cardinality"` passes.

@@ -11,7 +11,7 @@ the focused tests its **Done when** names; the full gate runs once at combine. T
 - **Problem.** `done.md` has no Performance section, which every working class has.
 - **Change.** Measure the queries `s3` and `s3_global` (`benchmark/decide/direct_solve/queries/`) against their
   comparators in `hand/` (`run.py --compare --sf 1 --queries s3 s3_global`) and against Gurobi and HiGHS (the sweep,
-  `run.py --queries s3 s3_global --modes direct gurobi highs`), as `../../../performance/benchmarking/direct_solve.md`
-  describes. The comparators drop the rank and the largest fitting rank, which TPC-H's positive costs make unnecessary,
-  so the CPU ratio is what S3 pays for admitting negative weights.
+  `run.py --sf 0.125 0.25 0.5 1 --queries s3 s3_global --modes direct gurobi highs`, the sizes S1 and R1 report), as
+  `../../../performance/benchmarking/direct_solve.md` describes. The comparators drop the rank and the largest fitting
+  rank, which TPC-H's positive costs make unnecessary, so the CPU ratio is what S3 pays for admitting negative weights.
 - **Done when.** `done.md` § Performance gives CPU against the hand plan and speed against both solvers.
