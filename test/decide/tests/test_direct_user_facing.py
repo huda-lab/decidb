@@ -638,6 +638,21 @@ def test_o1_monge_infeasible_error_is_the_solvers_error_word_for_word(decidb_cli
     assert direct == _raw(decidb_cli, sql, mode="off").stderr
 
 
+@pytest.mark.correctness
+def test_s3_infeasible_error_is_the_solvers_error_word_for_word(decidb_cli):
+    # No prefix of the weights meets the budget, the empty one included. The error has no row position, so one function
+    # builds its text for both paths.
+    sql = """
+        SELECT id, x FROM (
+            FROM (VALUES (1, 2.0::DOUBLE), (2, 3.0::DOUBLE), (3, 4.0::DOUBLE)) t(id, w)
+            DECIDE x(BOOL) SUCH THAT SUM(w * x) <= -1 MAXIMIZE SUM(x)
+        ) q
+    """
+    direct = _raw(decidb_cli, sql, mode="require").stderr
+    assert "infeasible" in direct and "decide_direct_solve=require" not in direct, direct
+    assert direct == _raw(decidb_cli, sql, mode="off").stderr
+
+
 _N1_ROWS = "(1, 3.0::DOUBLE, 1.0::DOUBLE, 9.0::DOUBLE, 'a'), (2, {s}::DOUBLE, {y}::DOUBLE, {l}::DOUBLE, {k})"
 _N1_MAX = "SUM(POWER(x, 2)) <= l MAXIMIZE SUM(s * x)"
 

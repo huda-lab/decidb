@@ -552,7 +552,79 @@ O1 = RuleFixture(
 )
 
 
-RULE_FIXTURES = (S1, A1, R1, N1, A2, O1)
+def _s3_late_error(decision_sql, w_sql="1.0"):
+    """A 5,000-row problem whose last row is invalid. Rows 0 to 4998 are ordinary."""
+    return f"""
+        FROM (SELECT i, {w_sql} AS w FROM range(5000) t(i)) s
+        DECIDE {decision_sql}
+        """
+
+
+S3 = RuleFixture(
+    rule="S3_MAX_CARDINALITY_KNAPSACK",
+    condition="max c*SUM(x), SUM(w*x) <= B",
+    # The worked example of the rule's definition: weights 2, 3, 4 and 6 under a budget of 9 select the first three. The
+    # weights are distinct, so the optimum is unique and the rows equal the solver's exactly; the query also runs on
+    # forced HiGHS.
+    applies="""
+        SELECT id, w, x FROM (
+            FROM (VALUES (0, CAST('2.0' AS DOUBLE)), (1, CAST('3.0' AS DOUBLE)), (2, CAST('4.0' AS DOUBLE)),
+                         (3, CAST('6.0' AS DOUBLE))) t(id, w)
+            DECIDE x(BOOL) SUCH THAT SUM(w * x) <= 9
+            MAXIMIZE SUM(x)
+        ) q ORDER BY id
+    """,
+    empty_applies="""
+        SELECT id, w, x FROM (
+            FROM (SELECT * FROM (VALUES (0, CAST('2.0' AS DOUBLE)), (1, CAST('3.0' AS DOUBLE))) t(id, w)
+                  WHERE false) t
+            DECIDE x(BOOL) SUCH THAT SUM(w * x) <= 9
+            MAXIMIZE SUM(x)
+        ) q ORDER BY id
+    """,
+    table_setup="""
+        CREATE TEMP TABLE direct_s3_life(id INTEGER, w DOUBLE);
+        INSERT INTO direct_s3_life VALUES (1,2),(2,3);
+    """,
+    table_applies="""
+        SELECT id,x FROM (
+            FROM direct_s3_life DECIDE x(BOOL)
+            SUCH THAT SUM(w*x)<=4 MAXIMIZE SUM(x)
+        ) q
+    """,
+    table_change="ALTER TABLE direct_s3_life ADD COLUMN extra INTEGER;",
+    # Each is the plain form with one condition changed: a value per row in the objective (the general 0-1 knapsack), a
+    # strict bound over an integer weight, a `when` on the budget and a second constraint. A weight of exactly 1 is S1's
+    # count, which `require` answers with S1, so it is no near miss here; `test_direct_s3_max_cardinality_knapsack.py`
+    # checks that S3 leaves it to S1.
+    near_misses=(
+        ("x(BOOL)", "SUM(w*x) <= 4", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(wi*x) < 4", "MAXIMIZE SUM(x)"),
+        ("x(BOOL)", "when p > 9: SUM(w*x) <= 4", "MAXIMIZE SUM(x)"),
+        ("x(BOOL)", "SUM(w*x) <= 4 AND SUM(p*x) <= 12", "MAXIMIZE SUM(x)"),
+    ),
+    # Forms that look like near misses and apply: a constant factor on the count and a constant weight of 2.
+    near_miss_applies=(
+        ("x(BOOL)", "SUM(w*x) <= 4", "MAXIMIZE 2 * SUM(x)"),
+        ("x(BOOL)", "SUM(2*x) <= 4", "MAXIMIZE SUM(x)"),
+    ),
+    near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 2.0::DOUBLE, 2), (2, 10.0::DOUBLE, 3.0::DOUBLE, 3)) t(id,p,w,wi)",
+    near_miss_column="id",
+    late_errors=(
+        # A NaN weight on the last of 5,000 rows.
+        (
+            _s3_late_error(
+                "x(BOOL) SUCH THAT SUM(w*x) <= 3000 MAXIMIZE SUM(x)",
+                w_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
+            ),
+            "w is NaN or infinite on some rows",
+        ),
+    ),
+    late_column="i",
+)
+
+
+RULE_FIXTURES = (S1, A1, R1, N1, A2, O1, S3)
 
 
 # Bounds S1 applies that the oracle checks, as (constraint, the bound's value over the source
