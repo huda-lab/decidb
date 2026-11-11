@@ -300,4 +300,53 @@ bool DirectReadQuadraticPart(const DirectIR &ir, ClientContext &context, const D
 //! 0. False when a `when` is not a predicate of the source that cannot raise.
 bool DirectObjectivePartKept(const DirectIR &ir, const DirectPart &part, unique_ptr<Expression> &kept);
 
+//===--------------------------------------------------------------------===//
+// Fixed values of a BOOL decision
+//===--------------------------------------------------------------------===//
+
+//! The signed sum of the terms' coefficients, as the solver's like-term collection sums them; false when one is not a
+//! finite constant.
+bool DirectConstantSlope(ClientContext &context, const vector<DecideSplitTerm> &terms, double &slope);
+
+//! The decision's terms on a per-row left side, as in a fixed value `x = 1`; null for an aggregate constraint or a
+//! left side with a term that is not linear. A membership constraint (`x IN (...)`) is the caller's to decline.
+const vector<DecideSplitTerm> *DirectFixedTerms(const DirectIRConstraint &constraint);
+
+//! A value from the row that fixes `x`: it must be neither NULL nor, for a floating point value, NaN; a coefficient
+//! must also be finite.
+struct DirectSourceFixedValue {
+	unique_ptr<Expression> value;
+	bool reject_nan = false;
+	//! The clause's `when`; the value is read only on the rows it keeps. Null for every row.
+	unique_ptr<Expression> when;
+	bool coefficient = false;
+	//! The value as the user wrote it, which the error names.
+	string written;
+};
+
+//! What the per-row clauses on a BOOL decision fix, read as the set of {0, 1} each row allows: a condition per clause
+//! under which a row is fixed to 1 and one under which it is fixed to 0 (a row that allows neither satisfies both: the
+//! problem is infeasible), over the source, and the values the plan checks. All are over the source's bindings.
+struct DirectFixedValues {
+	vector<unique_ptr<Expression>> one_conditions;
+	vector<unique_ptr<Expression>> zero_conditions;
+	vector<DirectSourceFixedValue> source_values;
+
+	bool Any() const {
+		return !one_conditions.empty() || !zero_conditions.empty();
+	}
+};
+
+//! Reads each clause of `clauses` (per-row constraints with DirectFixedTerms) as a fixed value: `x = 1`, `2 * x >= 1`,
+//! `x <= flag`, `x <> c`, under an optional `when`. False when a clause is not one the plan can read, or when a bound
+//! the solver folds contradicts the decision's built-in domain (DirectContradictsDomain: the solver raises that error
+//! before it reads a row).
+bool DirectReadFixedValues(const DirectIR &ir, ClientContext &context,
+                           const vector<const DirectIRConstraint *> &clauses, DirectFixedValues &fixed);
+
+//! True on a row where any of `conditions` is true; false for none. `Any` tests its first condition first and this
+//! tests the last first, the solver's order.
+unique_ptr<Expression> DirectAnyCondition(const ExpressionBuilder &calc,
+                                          const vector<unique_ptr<Expression>> &conditions);
+
 } // namespace duckdb

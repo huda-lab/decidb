@@ -105,6 +105,10 @@ class Case:
     kept: object = lambda row: True
     #: row -> whether the objective counts the row (the rows its `when` keeps).
     counted: object = lambda row: True
+    #: The per-row clauses beside the budget as written ('' for none), and row -> the values of x the row's clauses
+    #: allow, stated here in Python: (0, 1) for a free row, (1,) for a row fixed to 1, (0,) for one fixed to 0.
+    fixes: str = ""
+    allowed: object = lambda row: (0, 1)
 
 
 CASES = {}
@@ -294,6 +298,160 @@ add(
     kept=KEPT,
     counted=KEPT,
 )
+# Fixed items. A row a clause fixes to 1 is selected and its weight counts toward the budget; a row fixed to 0 leaves
+# the prefix; the free rows take the longest prefix that fits beside the rows fixed to 1.
+PINNED = lambda row: (1,) if row["must"] else (0,) if row["ban"] else (0, 1)  # noqa: E731
+FIX_MUST = "when must: x = 1"
+FIX_BAN = "when ban: x = 0"
+# The 6 is fixed to 1: the free rows 2, 3 and 4 are left 3 of the budget, and only the 2 fits.
+add(
+    "fixed_to_one_leaves_the_rest_of_the_budget",
+    _rows([2.0, 3.0, 4.0, 6.0], must=[False, False, False, True]),
+    "SUM(w*x) <= 9",
+    constant(9.0),
+    fixes=FIX_MUST,
+    allowed=PINNED,
+)
+# The 2 is fixed to 0: the 3 and the 4 fit, the 6 does not.
+add(
+    "fixed_to_zero_leaves_the_prefix",
+    _rows([2.0, 3.0, 4.0, 6.0], ban=[True, False, False, False]),
+    "SUM(w*x) <= 9",
+    constant(9.0),
+    fixes=FIX_BAN,
+    allowed=PINNED,
+)
+add(
+    "fixed_to_one_and_to_zero",
+    _rows([2.0, 3.0, 4.0, 6.0, 1.0], must=[False, True, False, False, False], ban=[True, False, False, False, False]),
+    "SUM(w*x) <= 9",
+    constant(9.0),
+    fixes=f"{FIX_MUST} AND {FIX_BAN}",
+    allowed=PINNED,
+)
+# A fixed row of each sign of weight: a negative weight fixed to 1 is a credit (-5 leaves 9 for the free rows), fixed to
+# 0 it is lost; a zero weight costs nothing either way.
+NEGATIVE_FIXED = [-5.0, 2.0, 3.0, 4.0, 6.0, 0.0]
+add(
+    "negative_weight_fixed_to_one",
+    _rows(NEGATIVE_FIXED, must=[True] + [False] * 5),
+    "SUM(w*x) <= 4",
+    constant(4.0),
+    fixes=FIX_MUST,
+    allowed=PINNED,
+)
+add(
+    "negative_weight_fixed_to_zero",
+    _rows(NEGATIVE_FIXED, ban=[True] + [False] * 5),
+    "SUM(w*x) <= 4",
+    constant(4.0),
+    fixes=FIX_BAN,
+    allowed=PINNED,
+)
+add(
+    "zero_weight_fixed_to_one_and_to_zero",
+    _rows([0.0, 0.0, 2.0, 3.0, 4.0], must=[True, False, False, False, False], ban=[False, True, False, False, False]),
+    "SUM(w*x) <= 5",
+    constant(5.0),
+    fixes=f"{FIX_MUST} AND {FIX_BAN}",
+    allowed=PINNED,
+)
+# The rows fixed to 1 use the budget exactly: 4 + 5 = 9 fits (a comparison with `<=`), and the free row of 5 is the one
+# that completes it.
+add(
+    "fixed_total_and_prefix_total_meet_the_budget",
+    _rows([4.0, 5.0, 6.0], must=[True, False, False]),
+    "SUM(w*x) <= 9",
+    constant(9.0),
+    fixes=FIX_MUST,
+    allowed=PINNED,
+)
+# The fixed rows alone are over the budget (10 > 9), and the free row of -3 brings the total back within it: the
+# empty prefix is not feasible, the prefix of one row is.
+add(
+    "fixed_over_the_budget_rescued_by_a_negative_free_weight",
+    _rows([10.0, -3.0, 2.0], must=[True, False, False]),
+    "SUM(w*x) <= 9",
+    constant(9.0),
+    fixes=FIX_MUST,
+    allowed=PINNED,
+)
+# Bounds read from the data: lo = 1 fixes a row to 1, hi = 0 fixes it to 0.
+add(
+    "data_bounds_fix_rows",
+    _rows([2.0, 3.0, 4.0, 6.0], lo=[0.0, 1.0, 0.0, 0.0], hi=[1.0, 1.0, 0.0, 1.0]),
+    "SUM(w*x) <= 9",
+    constant(9.0),
+    fixes="x >= lo AND x <= hi",
+    allowed=lambda row: (1,) if row["lo"] >= 1 else (0,) if row["hi"] < 1 else (0, 1),
+)
+# A constant bound on every row: no row is selected whatever the budget allows.
+add(
+    "constant_bound_fixes_every_row_to_zero",
+    _rows([2.0, 3.0, 4.0]),
+    "SUM(w*x) <= 9",
+    constant(9.0),
+    fixes="x <= 0",
+    allowed=lambda row: (0,),
+)
+# Fixed rows in groups, each with its own budget; the groups' fixed rows are counted in their own budget alone.
+FIXED_GROUPS = _rows(
+    [2.0, 3.0, 4.0, 5.0, 1.0, 2.0, 4.0],
+    group=["a"] * 3 + ["b"] * 4,
+    caps=[6.0] * 3 + [5.0] * 4,
+    must=[False, False, True, False, True, False, False],
+    ban=[False, True, False, False, False, False, True],
+)
+add(
+    "fixed_rows_in_by_groups",
+    FIXED_GROUPS,
+    "SUM(w*x) by (g) <= cap",
+    column,
+    by=True,
+    fixes=f"{FIX_MUST} AND {FIX_BAN}",
+    allowed=PINNED,
+)
+# A fixed row outside every budget (a NULL key, a dropped row) is fixed all the same; a row fixed to 1 there costs
+# nothing, and one fixed to 0 is lost to the objective, which counts it.
+OUTSIDE = _rows(
+    [2.0, 3.0, 4.0, 100.0, 200.0, 7.0],
+    group=["a", "a", "a", None, None, "a"],
+    flag=[True, True, True, True, True, False],
+    ban=[False, False, False, True, False, True],
+    must=[False, False, False, False, True, False],
+)
+add(
+    "fixed_rows_outside_every_budget",
+    OUTSIDE,
+    "when flag: SUM(w*x) by (g) <= 5",
+    constant(5.0),
+    by=True,
+    kept=KEPT,
+    fixes=f"{FIX_MUST} AND {FIX_BAN}",
+    allowed=PINNED,
+)
+add(
+    "fixed_rows_outside_every_budget_with_the_objective_when",
+    OUTSIDE,
+    "when flag: SUM(w*x) by (g) <= 5",
+    constant(5.0),
+    objective="MAXIMIZE when flag: SUM(x)",
+    by=True,
+    kept=KEPT,
+    counted=KEPT,
+    fixes=f"{FIX_MUST} AND {FIX_BAN}",
+    allowed=PINNED,
+)
+# A data limit with fixed rows: the group's tightest limit (7) is shared by the fixed row of 3 and the prefix.
+add(
+    "fixed_row_beside_a_data_budget",
+    _rows([2.0, 3.0, 4.0, 6.0], caps=[9.0, 7.0, 12.0, 8.0], must=[False, True, False, False]),
+    "SUM(w*x) <= cap",
+    column,
+    fixes=FIX_MUST,
+    allowed=PINNED,
+)
+
 # A `when` that drops every row leaves no budget: every row is selected.
 add(
     "when_that_drops_every_row",
@@ -310,7 +468,8 @@ add(
 
 
 def _decide(case):
-    return f"DECIDE x(BOOL) SUCH THAT {case.budget} {case.objective}"
+    fixes = f" AND {case.fixes}" if case.fixes else ""
+    return f"DECIDE x(BOOL) SUCH THAT {case.budget}{fixes} {case.objective}"
 
 
 def _sql(case, wrap="plain"):
@@ -360,8 +519,9 @@ def _limits(case, members):
 
 def _solve_with_oracle(oracle_solver, case):
     oracle_solver.create_model("direct_s3_max_cardinality_knapsack")
-    for index, _ in enumerate(case.rows):
-        oracle_solver.add_variable(f"x_{index}", VarType.BINARY)
+    for index, row in enumerate(case.rows):
+        allowed = case.allowed(row)
+        oracle_solver.add_variable(f"x_{index}", VarType.BINARY, lb=min(allowed), ub=max(allowed))
     positions = {id(row): index for index, row in enumerate(case.rows)}
     for members in _groups(case).values():
         weights = {f"x_{positions[id(row)]}": case.weight(row) for row in members}
@@ -389,6 +549,7 @@ def _check_assignment(case, rows, columns, oracle, mode):
     assert [row[0] for row in rows] == [row["id"] for row in case.rows], mode
     assert all(type(row[4]) is int and row[4] in (0, 1) for row in rows), (mode, rows)
     selected = [row[4] for row in rows]
+    assert all(chosen in case.allowed(row) for row, chosen in zip(case.rows, selected)), (mode, selected)
     _check_budgets(case, selected)
     counted = sum(chosen for row, chosen in zip(case.rows, selected) if case.counted(row))
     assert math.isclose(case.factor * counted, oracle.objective_value, abs_tol=1e-6), (
@@ -587,6 +748,38 @@ S3_ERROR_CASES = {
         "infeasible",
     ),
 }
+
+
+_FIXED_SOURCE = (
+    "(1, 2.0::DOUBLE, true, {lo}::DOUBLE), (2, 3.0::DOUBLE, false, 0.0::DOUBLE), (3, 4.0::DOUBLE, true, 0.0::DOUBLE)"
+)
+
+
+def _fixed_problem(lo, budget="SUM(w*x) <= 5", fixes="when must: x = 1"):
+    return (
+        f"SELECT id, x FROM (FROM (VALUES {_FIXED_SOURCE.format(lo=lo)}) t(id, w, must, lo) "
+        f"DECIDE x(BOOL) SUCH THAT {budget} AND {fixes} MAXIMIZE SUM(x)) q"
+    )
+
+
+S3_ERROR_CASES.update(
+    {
+        # The rows fixed to 1 weigh 2 and 4, over the budget of 5, and no free weight is negative.
+        "fixed_rows_over_the_budget": (_fixed_problem(0.0), "infeasible"),
+        # Row 1 allows neither value: fixed to both.
+        "row_allows_neither_value": (_fixed_problem(2.0, "SUM(w*x) <= 9", "x >= lo"), "infeasible"),
+        "constant_bound_no_bool_meets_under_a_when": (
+            _fixed_problem(0.0, "SUM(w*x) <= 9", "when must: x >= 2"),
+            "infeasible",
+        ),
+        "nan_fixed_bound": (_fixed_problem("'NaN'", "SUM(w*x) <= 9", "x >= lo"), "null_bound"),
+        # One group's fixed rows are over its budget; the other group is fine.
+        "fixed_rows_over_one_groups_budget": (
+            _problem(_SOURCE.format(w="3.0", cap="9.0"), "SUM(w*x) by (g) <= 4 AND when g = 'a': x = 1"),
+            "infeasible",
+        ),
+    }
+)
 
 
 @pytest.mark.var_boolean

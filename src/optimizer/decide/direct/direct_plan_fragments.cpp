@@ -653,6 +653,20 @@ ExprPtr DirectRowBoundMessage(ClientContext &context, const ExpressionBuilder &c
 	return message;
 }
 
+ExprPtr DirectFixedValueMessage(ClientContext &context, const ExpressionBuilder &calc,
+                                const DirectSourceFixedValue &fixed,
+                                const std::function<unique_ptr<Expression>(const Expression &)> &over) {
+	DirectRowBound bound;
+	bound.value = over(*fixed.value);
+	if (fixed.when) {
+		bound.kept = DirectActiveWhen(calc, over(*fixed.when).get());
+	}
+	bound.reject_nan = fixed.reject_nan;
+	bound.coefficient = fixed.coefficient;
+	bound.written = fixed.written;
+	return DirectRowBoundMessage(context, calc, bound);
+}
+
 //===--------------------------------------------------------------------===//
 // Group bounds
 //===--------------------------------------------------------------------===//

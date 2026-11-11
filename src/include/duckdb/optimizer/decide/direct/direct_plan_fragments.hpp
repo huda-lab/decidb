@@ -467,4 +467,10 @@ struct DirectRowBound {
 //! NULL when the bound is valid, or skips the instance it reaches.
 ExprPtr DirectRowBoundMessage(ClientContext &context, const ExpressionBuilder &calc, const DirectRowBound &bound);
 
+//! The same for a value that fixes a decision (DirectSourceFixedValue); `over` re-points the value and its `when` at
+//! the projection the plan reads them in.
+ExprPtr DirectFixedValueMessage(ClientContext &context, const ExpressionBuilder &calc,
+                                const DirectSourceFixedValue &fixed,
+                                const std::function<unique_ptr<Expression>(const Expression &)> &over);
+
 } // namespace duckdb

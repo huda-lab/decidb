@@ -10,6 +10,7 @@
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 
@@ -413,6 +414,197 @@ bool DirectReadQuadraticPart(const DirectIR &ir, ClientContext &context, const D
 		}
 	}
 	return true;
+}
+
+//===--------------------------------------------------------------------===//
+// Fixed values of a BOOL decision
+//===--------------------------------------------------------------------===//
+
+bool DirectConstantSlope(ClientContext &context, const vector<DecideSplitTerm> &terms, double &slope) {
+	slope = 0;
+	for (auto &term : terms) {
+		double value;
+		if (!TryEvaluateFoldableDouble(context, *term.coefficient, value, DIRECT_FINITE_CONSTANT)) {
+			return false;
+		}
+		slope += term.sign * value;
+	}
+	return true;
+}
+
+const vector<DecideSplitTerm> *DirectFixedTerms(const DirectIRConstraint &constraint) {
+	if (constraint.aggregate || !DirectOnlyLinearTerms(constraint.lhs[0].terms)) {
+		return nullptr;
+	}
+	return &constraint.lhs[0].terms;
+}
+
+//! True when every term's coefficient is a finite constant or a number of the source row (`w`, `w / 2`), which a plan
+//! can read. A literal that is not a finite number is the solver's to report.
+static bool SourceOnlyCoefficients(ClientContext &context, const DirectIR &ir, const vector<DecideSplitTerm> &terms) {
+	for (auto &term : terms) {
+		double value;
+		if (term.coefficient->IsFoldable()
+		        ? !TryEvaluateFoldableDouble(context, *term.coefficient, value, DIRECT_FINITE_CONSTANT)
+		        : !DirectIsSourceOnlyNumeric(*term.coefficient, ir.decide_index, ir.source_bindings)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static const Expression *SourceBooleanFixedValue(const Expression &expr, idx_t decide_index,
+                                                 const vector<ColumnBinding> &source_bindings) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_CAST) {
+		return nullptr;
+	}
+	auto &cast = expr.Cast<BoundCastExpression>();
+	if (cast.child->return_type != LogicalType::BOOLEAN || !expr.return_type.IsNumeric() ||
+	    DirectMayThrow(*cast.child) || !DirectIsDecisionFreeDeterministic(*cast.child, decide_index) ||
+	    !DirectReferencesOnlySource(*cast.child, source_bindings) || !DirectHasColumnReference(*cast.child)) {
+		return nullptr;
+	}
+	return cast.child.get();
+}
+
+//! `value` on the rows a clause's `when` keeps, and false on the rest.
+static unique_ptr<Expression> OnKeptRows(const ExpressionBuilder &calc, const Expression *when, const ExprPtr &value) {
+	return calc.Out(when ? calc.If(calc.Of(*when), value, calc.Bool(false)) : value);
+}
+
+//! `x = flag`, `x >= flag` and `x <= flag` against a Boolean source fix the row to 1 where the source is true (`=`,
+//! `>=`) and to 0 where it is false (`=`, `<=`).
+static void FixFromBooleanSource(const ExpressionBuilder &calc, ExpressionType type, const Expression &source,
+                                 const Expression *when, DirectFixedValues &fixed) {
+	if (type == ExpressionType::COMPARE_EQUAL || type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
+		fixed.one_conditions.push_back(OnKeptRows(calc, when, calc.Of(source)));
+	}
+	if (type == ExpressionType::COMPARE_EQUAL || type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
+		fixed.zero_conditions.push_back(
+		    OnKeptRows(calc, when, calc.Cmp(ExpressionType::COMPARE_EQUAL, calc.Of(source), calc.Bool(false))));
+	}
+	fixed.source_values.push_back({source.Copy(), false, when ? when->Copy() : nullptr, false, string()});
+}
+
+//! A clause read as the values of {0, 1} each row allows.
+static bool FixFromAllowedValues(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &factor,
+                                 bool constant_slope, DirectFixedValues &fixed) {
+	ExpressionBuilder calc(context);
+	auto when = factor.scope.when.get();
+	auto &value = *factor.rhs;
+	// A literal that is not a finite number is the solver's to report.
+	double constant;
+	bool constant_value = TryEvaluateFoldableDouble(context, value, constant, DIRECT_FINITE_CONSTANT);
+	if (!constant_value &&
+	    (value.IsFoldable() || !DirectIsSourceOnlyNumeric(value, ir.decide_index, ir.source_bindings))) {
+		return false;
+	}
+	// Whether the row allows `x = v`. A singleton row allows the values between the ends the solver path's classifier
+	// reads (DecideSingletonRow), as DuckDB evaluates the comparison: `2 * x >= 1` allows 1, `x < 1.5` allows 0 and 1.
+	// A `<>` bounds nothing and allows the values that compare unequal.
+	auto le = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+	auto allows = [&](double v) -> ExprPtr {
+		if (factor.singleton_row) {
+			return calc.If(calc.Cmp(le, calc.Wrap(factor.bound.RowLower()), calc.Num(v)),
+			               calc.Cmp(le, calc.Num(v), calc.Wrap(factor.bound.RowUpper())), calc.Bool(false));
+		}
+		return calc.Cmp(factor.comparison, calc.Num(v), calc.Cast(calc.Of(value), LogicalType::DOUBLE));
+	};
+	if (constant_value && constant_slope) {
+		double zero, one;
+		auto as_number = [&](double v) {
+			return calc.Out(calc.If(allows(v), calc.Num(1.0), calc.Num(0.0)));
+		};
+		if (!TryEvaluateFoldableDouble(context, *as_number(0.0), zero, FOLD_CATCH_ALL) ||
+		    !TryEvaluateFoldableDouble(context, *as_number(1.0), one, FOLD_CATCH_ALL)) {
+			return false;
+		}
+		// Both values allowed is no constraint. Neither allowed fixes the row to both, which the plan reports as
+		// DECIDE's infeasible error.
+		if (zero == 0.0) {
+			fixed.one_conditions.push_back(OnKeptRows(calc, when, calc.Bool(true)));
+		}
+		if (one == 0.0) {
+			fixed.zero_conditions.push_back(OnKeptRows(calc, when, calc.Bool(true)));
+		}
+		return true;
+	}
+	// A value from the row: the row is fixed to the one value it allows, and is infeasible when it allows neither.
+	// The solver reads every coefficient of the row before its right side.
+	auto disallows = [&](double v) {
+		return calc.If(allows(v), calc.Bool(false), calc.Bool(true));
+	};
+	fixed.one_conditions.push_back(OnKeptRows(calc, when, disallows(0.0)));
+	fixed.zero_conditions.push_back(OnKeptRows(calc, when, disallows(1.0)));
+	for (auto &term : *DirectFixedTerms(factor)) {
+		if (!term.coefficient->IsFoldable()) {
+			fixed.source_values.push_back(
+			    {term.coefficient->Copy(), true, when ? when->Copy() : nullptr, true, ir.render(*term.coefficient)});
+		}
+	}
+	if (!constant_value) {
+		auto reject_nan = value.return_type == LogicalType::FLOAT || value.return_type == LogicalType::DOUBLE;
+		fixed.source_values.push_back(
+		    {value.Copy(), reject_nan, when ? when->Copy() : nullptr, false, ir.render(value)});
+	}
+	return true;
+}
+
+//! One clause on `x` alone: the rows it fixes to 1 or to 0, and the values the plan checks on each row.
+static bool ReadFixedValue(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &factor,
+                           DirectFixedValues &fixed) {
+	auto when = factor.scope.when.get();
+	if (when && !DirectIsSourceOnlyPredicate(*when, ir.decide_index, ir.source_bindings)) {
+		return false;
+	}
+	auto type = factor.comparison;
+	auto &terms = *DirectFixedTerms(factor);
+	// The coefficients add up to one constant, as the solver's like-term collection sums them, or, in a singleton
+	// row, to a value of the row (`w * x >= 1`), whose ends the classifier reads per row. A `<>` and a Boolean source
+	// compare one `x`: `x`, `1*x`, `(1+0)*x`.
+	double slope;
+	bool constant_slope = DirectConstantSlope(context, terms, slope);
+	bool unit = constant_slope && slope == 1.0;
+	if (!constant_slope && !(factor.singleton_row && SourceOnlyCoefficients(context, ir, terms))) {
+		return false;
+	}
+	auto source_value = SourceBooleanFixedValue(*factor.rhs, ir.decide_index, ir.source_bindings);
+	if (source_value && unit &&
+	    (type == ExpressionType::COMPARE_EQUAL || type == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
+	     type == ExpressionType::COMPARE_GREATERTHANOREQUALTO)) {
+		FixFromBooleanSource(ExpressionBuilder(context), type, *source_value, when, fixed);
+		return true;
+	}
+	if (!factor.singleton_row && !unit) {
+		return false;
+	}
+	return FixFromAllowedValues(ir, context, factor, constant_slope, fixed);
+}
+
+bool DirectReadFixedValues(const DirectIR &ir, ClientContext &context,
+                           const vector<const DirectIRConstraint *> &clauses, DirectFixedValues &fixed) {
+	// A bound the solver folds that contradicts the Boolean's built-in domain makes it raise an error that quotes the
+	// bound (`x >= 2 cannot hold for a BOOL variable.`) before it reads a row; that early error is not a rule's to
+	// reproduce.
+	if (DirectContradictsDomain(ir)) {
+		return false;
+	}
+	for (auto clause : clauses) {
+		if (!ReadFixedValue(ir, context, *clause, fixed)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+unique_ptr<Expression> DirectAnyCondition(const ExpressionBuilder &calc,
+                                          const vector<unique_ptr<Expression>> &conditions) {
+	vector<ExprPtr> ordered;
+	for (auto &condition : conditions) {
+		ordered.push_back(calc.Of(*condition));
+	}
+	std::reverse(ordered.begin(), ordered.end());
+	return calc.Out(calc.Any(ordered));
 }
 
 } // namespace duckdb

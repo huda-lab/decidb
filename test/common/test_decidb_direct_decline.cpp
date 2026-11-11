@@ -1431,6 +1431,13 @@ duckdb::vector<Shape> S3AppliesShapes() {
 	                    "SUM(w*x) by (flag) <= 2 * COUNT(*) by (flag)"));
 	shapes.push_back(S3("a count scaled by a factor", S3_BUDGET, nullptr, "MAXIMIZE 2 * SUM(x)"));
 	shapes.push_back(S3("a constant weight of 2", "SUM(2*x) <= 9"));
+	shapes.push_back(S3("a per-row bound beside the budget", "SUM(w*x) <= 9 AND x <= flag"));
+	shapes.push_back(S3("a row fixed to 1 under a WHEN", "SUM(w*x) <= 9 AND when flag: x = 1"));
+	shapes.push_back(S3("a row fixed to 0 by a constant", "SUM(w*x) <= 9 AND x <= 0"));
+	shapes.push_back(S3("a bound read from a column", "SUM(w*x) <= 9 AND x <= f"));
+	shapes.push_back(S3("fixed rows beside a budget WHEN and the same objective WHEN",
+	                    "when name <> 'b': SUM(w*x) <= 9 AND when flag: x = 1", nullptr,
+	                    "MAXIMIZE when name <> 'b': SUM(x)"));
 	shapes.push_back(S3("a budget under a WHEN", "when flag: SUM(w*x) <= 9"));
 	shapes.push_back(S3("a budget with an aggregate WHEN", "SUM(when flag: w*x) <= 9"));
 	shapes.push_back(S3("a budget WHEN and the same objective WHEN", "when flag: SUM(w*x) <= 9", nullptr,
@@ -1455,8 +1462,12 @@ duckdb::vector<Shape> S3DeclineShapes() {
 	shapes.push_back(
 	    S3("a query-wide decision", S3_BUDGET, [](DirectIR &ir) { ir.decisions[0].scope = DecideVarScope::GLOBAL; }));
 	shapes.push_back(S3("a keyed scope", S3_BUDGET, [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));
-	// ProveConstraint: the budget is the only constraint, an aggregate, compared with `<=`.
-	shapes.push_back(S3("a per-row bound beside the budget", "SUM(w*x) <= 9 AND x <= flag"));
+	// ProveConstraints: one budget, compared with `<=`, beside the per-row clauses that fix items.
+	shapes.push_back(S3("a second budget", "SUM(w*x) <= 9 AND SUM(cap*x) <= 9"));
+	shapes.push_back(S3("no budget, a fixed value alone", "x = 1"));
+	shapes.push_back(S3("a membership constraint beside the budget", "SUM(w*x) <= 9 AND x IN (0, 1)"));
+	shapes.push_back(S3("a fixed value no BOOL meets", "SUM(w*x) <= 9 AND x >= 2"));
+	shapes.push_back(S3("a fixed value fixed only within the query", "SUM(w*x) <= 9 AND x <= txid_current()"));
 	shapes.push_back(S3("a strict budget", "SUM(cap*x) < 9"));
 	shapes.push_back(S3("a budget that is a minimum", "SUM(w*x) >= 9"));
 	shapes.push_back(S3("a budget that is an exact fill", "SUM(w*x) = 9"));

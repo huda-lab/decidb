@@ -604,12 +604,14 @@ S3 = RuleFixture(
         ("x(BOOL)", "SUM(w*x) <= 4 AND SUM(p*x) <= 12", "MAXIMIZE SUM(x)"),
     ),
     # Forms that look like near misses and apply: a constant factor on the count, a constant weight of 2, a `when` on
-    # the budget (the row it drops is selected) and the same `when` on the objective (the row is not selected).
+    # the budget (the row it drops is selected), the same `when` on the objective (the row is not selected) and a row
+    # fixed to 1 (it takes its weight from the budget).
     near_miss_applies=(
         ("x(BOOL)", "SUM(w*x) <= 4", "MAXIMIZE 2 * SUM(x)"),
         ("x(BOOL)", "SUM(2*x) <= 4", "MAXIMIZE SUM(x)"),
         ("x(BOOL)", "when p > 9: SUM(w*x) <= 4", "MAXIMIZE SUM(x)"),
         ("x(BOOL)", "when p > 9: SUM(w*x) <= 4", "MAXIMIZE when p > 9: SUM(x)"),
+        ("x(BOOL)", "SUM(w*x) <= 4 AND when p > 9: x = 1", "MAXIMIZE SUM(x)"),
     ),
     near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 2.0::DOUBLE, 2), (2, 10.0::DOUBLE, 3.0::DOUBLE, 3)) t(id,p,w,wi)",
     near_miss_column="id",
