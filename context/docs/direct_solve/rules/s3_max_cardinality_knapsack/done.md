@@ -149,3 +149,44 @@ and constant weights that add up past a DOUBLE raise the solver's TOO_LARGE text
 - Error text: `test_s3_infeasible_error_is_the_solvers_error_word_for_word` in `test_direct_user_facing.py`.
 - C++: `S3AppliesShapes` and `S3DeclineShapes` in `test/common/test_decidb_direct_decline.cpp`, one decline per
   `CheckCondition` branch, and the partition test against every other rule.
+
+## Performance
+
+Measured on 2026-11-11 at `4988843298`, on an 11-core Apple M3 Pro at a load of 1.9 to 4.2.
+
+**Against a hand-written plan.** `benchmark/decide/direct_solve/run.py --compare --sf 1 --queries s3 s3_global` runs the
+direct plan beside a query written by hand for the same answer (`hand/<query>.sql`), in one process, best of 5, over the
+800,000 rows of `partsupp`. CPU is every operator's time summed; latency is on all threads; the planning DECIDE adds is
+apart; "1 thread / all" is the latency on one thread over the latency on all. Both sides gave the same answer.
+
+| Query | Direct CPU | Hand CPU | CPU ratio | Direct latency | Hand latency | DECIDE planning | 1 thread / all (direct, hand) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `s3` | 316.1 ms | 200.9 ms | 1.57 | 56.9 ms | 32.6 ms | 0.09 ms | 2.97, 3.71 |
+| `s3_global` | 285.9 ms | 278.6 ms | 1.03 | 177.3 ms | 68.9 ms | 0.09 ms | 1.03, 2.32 |
+
+The hand plans are one running-sum window cut at `total <= B`, which TPC-H's positive costs make correct. The
+direct plan also finds the largest rank that fits (step 4 of § How it works), which negative weights need, so `s3`
+takes 1.57 times the hand plan's CPU. `s3_global` takes the same CPU as its hand plan but 2.6 times its latency, and
+gains nothing from threads: with no `by`, step 4's window has an empty `OVER ()`, which DuckDB's `PhysicalWindow` treats
+as order-dependent and fills from one thread, so the sorted running-sum window before it also runs on one thread
+(`../../framework/todo.md` § FRM-6).
+
+**Against Gurobi.** `run.py --sf 0.125 0.25 0.5 1 --queries s3 s3_global --modes direct gurobi`: a fresh `decidb`
+process per run, median of 3. At every size Gurobi's objective agreed with direct solve's within 1e-6. A speedup
+divides Gurobi's median by direct's median from the same sweep. Times include process start and database open, about
+20 ms.
+
+| Query | Rows | Direct | Direct peak | Gurobi | Gurobi peak | Speedup |
+|---|---:|---:|---:|---:|---:|---:|
+| `s3` | 100,000 | 0.053 s | 64 MiB | 0.607 s | 100 MiB | 11.5x |
+| `s3` | 200,000 | 0.092 s | 85 MiB | 1.546 s | 170 MiB | 16.8x |
+| `s3` | 400,000 | 0.065 s | 101 MiB | 2.952 s | 297 MiB | 45.3x |
+| `s3` | 800,000 | 0.092 s | 143 MiB | 4.887 s | 570 MiB | 52.9x |
+| `s3_global` | 100,000 | 0.044 s | 31 MiB | 2.024 s | 198 MiB | 45.7x |
+| `s3_global` | 200,000 | 0.072 s | 44 MiB | 6.469 s | 278 MiB | 89.9x |
+| `s3_global` | 400,000 | 0.116 s | 65 MiB | 10.403 s | 409 MiB | 89.5x |
+| `s3_global` | 800,000 | 0.207 s | 103 MiB | 22.978 s | 665 MiB | 110.8x |
+
+The solver path builds one binary decision per row and a knapsack row per budget, and must prove that no other
+selection fits more rows; many rows of equal cost make many selections equally good. Direct solve is ahead at every
+size, 53 to 111 times Gurobi at 800,000 rows, in a fourth to a sixth of its peak memory.

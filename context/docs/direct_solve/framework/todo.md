@@ -42,3 +42,30 @@ solver path answers those queries, so none of them is wrong, only slower.
   type (a2_abs_global, 0.6 ms); R1's per-row answer from window frames (a second plan shape for several decisions, and
   prefix sums the segment tree does not keep monotone); proving R1's group checks at plan time. **Ruling (owner,
   2026-11-09).**
+
+## FRM-6 — A whole-table window of an order-independent aggregate runs on one thread
+
+- **Problem.** DuckDB's `PhysicalWindow` (`src/execution/operator/aggregate/physical_window.cpp`, its constructor)
+  marks a window order-dependent when any of its expressions has no `PARTITION BY` and no `ORDER BY`, and an
+  order-dependent window is filled from one thread (`ParallelSink`). The pipeline that fills it runs on one thread, a
+  sorted window before it included. S3 without a `by` builds such windows (step 4's `min` or `max` of the fitting rank,
+  step 5's `bool_and`), so `s3_global` at SF 1 takes 177 ms against its hand plan's 69 ms at the same CPU
+  (`../rules/s3_max_cardinality_knapsack/done.md` § Performance). Reproduce on the SF 1 database at 1 and at 11
+  threads, about 175 ms both:
+  `SELECT COUNT(*), SUM(CASE WHEN rn <= k THEN 1 ELSE 0 END) FROM (SELECT *, MAX(CASE WHEN total <= 1e6 THEN rn ELSE 0
+  END) OVER () AS k FROM (SELECT *, sum(ps_supplycost::DOUBLE) OVER (ORDER BY ps_supplycost::DOUBLE ROWS UNBOUNDED
+  PRECEDING) AS total, row_number() OVER (ORDER BY ps_supplycost::DOUBLE) AS rn FROM partsupp))`. With
+  `OVER (PARTITION BY 1)` it takes 96 to 140 ms on 11 threads.
+- **Decision needed.**
+  - (a) In `PhysicalWindow`: an `OVER ()` expression is order-dependent only when its result depends on the order of
+    its input, that is unless it is a window aggregate over the whole partition, with no argument `ORDER BY`, whose
+    function DuckDB marks `AggregateOrderDependent::NOT_ORDER_DEPENDENT` (`min`, `max`, `count`, `bool_and`,
+    `bool_or`). The flag already exists, so no case list; every query gains, S3's and N1's included; DuckDB's core
+    changes.
+  - (b) S3 partitions its whole-table windows by a constant. Local to S3, but a workaround in our plan for DuckDB's
+    behavior, which N1 and every later rule would repeat.
+  - Recommendation: (a), the layer that owns the behavior.
+- **Done when.** In `run.py --compare --sf 1 --queries s3 s3_global`, `s3_global`'s direct "1 thread / all" is above
+  1.5 and its latency is within 2 times the hand plan's; a C++ test checks that an `OVER ()` window of `max` is filled
+  from every thread and one of `row_number` from one; `build/release/test/unittest "test/sql/window/*"` and
+  `make decide-test` pass.

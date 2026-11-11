@@ -8,6 +8,6 @@ Read first: `.claude/CLAUDE.md`, `direct_solve/architecture/rules.md`,
 Checks: each task's **Done when**; the full gate in `direct_solve/framework/todo.md` § How to work any task, once at
 combine.
 
-## 4. Measurement, owner starts the run (one lane)
+## 6. Owner decision, then shared engine (one lane)
 
-- [ ] S3-5 S3's Performance is measured — direct_solve/rules/s3_max_cardinality_knapsack/todo.md § S3-5
+- [ ] FRM-6 A whole-table window runs on one thread — direct_solve/framework/todo.md § FRM-6
