@@ -85,6 +85,21 @@ public:
 	void Append(const DecideErrorLedger &other) {
 		errors.insert(errors.end(), other.errors.begin(), other.errors.end());
 	}
+	//! The ranks of errors raised over rows numbered from 0, rebased on rows numbered from `offset`: a row's window,
+	//! which a block's expression packs (DecideBlockExpression), is the rebased row's.
+	void Rebase(idx_t offset) {
+		for (auto &entry : errors) {
+			auto &rank = entry.rank;
+			if (rank.row == DConstants::INVALID_INDEX) {
+				continue;
+			}
+			rank.row += offset;
+			if (rank.expression != DConstants::INVALID_INDEX && (rank.expression >> 56) != 0) {
+				rank.expression =
+				    DecideBlockExpression(DecideBlock(rank.expression >> 56), rank.row, rank.expression & 1);
+			}
+		}
+	}
 	//! Whether an error ranks in a phase before `phase`: one flat raises before that phase runs.
 	bool HasErrorBefore(DecideErrorPhase phase) const {
 		return std::any_of(errors.begin(), errors.end(), [&](const Entry &entry) { return entry.rank.phase < phase; });

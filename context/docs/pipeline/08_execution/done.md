@@ -44,7 +44,8 @@ BilinearTerm` (`solver_input.hpp`) is the one bilinear-term struct; there is no 
 | # | Where | What |
 |---|---|---|
 | 1 | `GetGlobalSinkState` → `DecideGlobalSinkState` ctor | Read the folded variable box and alias the prepared linear form |
-| 2 | `Sink` → `DecideDescent` | Materialize every surviving tuple into a `ColumnDataCollection`, and read it top-down as it arrives: each node's `when` parts, keys and σ fields on the rows that reach it, into its containers (§1a) |
+| 2 | `Sink` → `DecideDescent` | Materialize every surviving tuple into the thread's `ColumnDataCollection`, and read it top-down as it arrives: each node's `when` parts, keys and σ fields on the rows that reach it, into the thread's containers (§1a) |
+| 2a | `Combine` → `DecideDescent::Merge` | Place the thread's rows after those placed before, and merge its descent into the operator's at them |
 | 3 | `Finalize` → `EvaluateTree` | Settle the containers (`DecideDescent::Finish`: ranks, timelines) |
 | 4 | `EvaluateTree` → `DecideTreeColumns` | Bottom-up: the frames' timelines and columns (§4b), the data checks, each node's programs over its entries, the data reducers' folds |
 | 5 | `EvaluateTree` → `DecideModelEmitter` | The key scopes' classes (§4), the objective produced once (§4a), then the clauses, the objective, the composed clauses and the helper decisions' members (§5) |
@@ -70,7 +71,7 @@ its children's containers. Stage 08 does the same:
 | Deck | Stage 08 |
 |---|---|
 | The annotated tree: each node with what it reads per row (pp. 81, 99) | `DecideTree`, built at plan time (below): the E, G and O nodes, each with its `when` parts, key, σ, carried columns and programs |
-| Top-down construction: one pass over the rows (pp. 83-91, 100-105) | `DecideDescent`, in `Sink`, each chunk read as it arrives, under the sink's lock, a window at a time |
+| Top-down construction: one pass over the rows (pp. 83-91, 100-105) | `DecideDescent`, in `Sink`, each chunk read as it arrives, a window at a time, by a descent per thread merged in `Combine` |
 | A node's container (p. 110) | `DecideNodeContainer`: its entries as columns, its slots found in a `DecideKeyMap` |
 | Bottom-up evaluation (pp. 93-97, 106-108) | `DecideTreeColumns`: each node's programs over its entries, children before parents; then `DecideModelEmitter` writes what stage 06 reads |
 
@@ -81,10 +82,11 @@ that reads it. The least is raised once every phase has run, in the order `langu
 interrupt, an out-of-memory error and a fatal error stop the evaluation where they arise.
 
 Each row is read once, as it arrives, and the evaluation scans the buffered input no more (`execution.input_scans` 0,
-`DECIDB_PROFILE`). One descent fills the containers, so `Sink` reads a chunk whole before the next: a descent per
-thread, merged in `Combine`, would remap every slot, entry, instance and error rank. Reading in `Sink` took the same
-wall time as the scan in `Finalize` it replaced, at 10^6 rows (the descent is single-threaded either way, and now
-overlaps the operators below it). The unbounded
+`DECIDB_PROFILE`). Each thread reads its rows into a descent of its own, as a hash aggregate builds a table per
+thread, and `Combine` merges it into the operator's (below). The merges run one after another under the sink's lock
+and copy every entry (`execution.descent_merge`): over 4 million stored rows, the query reached `Finalize` after
+0.23 s on 8 threads, 0.17 s of it merging, against 0.31 s on one, in a query whose model and solve took 3.7 s. A merge in parallel, as a hash aggregate finalizes its partitions, is not built.
+The unbounded
 diagnosis's column groupings (§7b) explain the solved model after the evaluation, and read the named input columns in
 a scan of their own.
 
@@ -123,9 +125,20 @@ references, `tests/_expected.py`, were recorded from flat's runs):
   read otherwise, and a reducer's over frames its G's fold. What a frame's columns read, its payload, its `else` and a
   range's argument, are programs on its O (`DecideFrameColumnPrograms`), in stage 05's terms. A child a data
   expression reads that has no data value is an internal error.
-- *Top-down* (`decide_descent.hpp`): the descent reads each chunk as `Sink` receives it, under the sink's lock, and
-  numbers its rows by their places in the buffer, which every later phase reads; the buffer is never scanned to evaluate
-  a row (`execution.input_scans` 0, `execution.descent_rows` the rows read). It is a Composite traversal vectorized by selection, as
+- *Top-down* (`decide_descent.hpp`): each thread's descent reads each chunk as `Sink` receives it, and numbers its
+  rows by their places in the thread's buffer; the buffer is never scanned to evaluate a row (`execution.input_scans`
+  0, `execution.descent_rows` the rows read). `Combine` places the thread's buffer after the rows placed before
+  (`ColumnDataCollection::Combine`) and merges its descent into the operator's at them (`DecideDescent::Merge`), the
+  first thread's descent becoming the operator's: its rows are rebased; its keyed classes are found again by layout
+  and sort key, its slots by key -- and enclosing slot, a G's or O's before an E's -- in the operator's dictionaries,
+  a set E's entries by slot, signature, carried columns and reads (`DecideNodeContainer::reads`), with a decision's
+  instance and a read rebased as the classes, slots and rows are; a collated key's spellings fold into the least; and
+  its errors take their ranks at their rebased rows (`DecideErrorLedger::Rebase`). Each is found again in the order
+  the thread made it, which is its rows', so the merged containers number as one descent over every row would. An O
+  two reducers' operands read takes its rows in the slots of both, which no enclosing slot tells apart: its entries
+  keep none once merged, which no reader reads. `DECIDB_DESCENT_SPLIT=n` merges every `n` rows as a thread of its own
+  would (`test_descent_merge.py`; the whole suite passes under it, but for the inputs of tens of thousands of rows a
+  descent per row cannot read within their time limits). It is a Composite traversal vectorized by selection, as
   DuckDB's filters hand a selection vector on: a window of the input at a time, a node's `when` parts, keys and σ fields
   execute only on the rows that reach it (`Reach`: the rows, and the enclosing slot each arrives in), and each key's
   rows find their slots in a `DecideKeyMap` (`decide_key_map.hpp`). That is DuckDB's GROUP BY hash table
@@ -283,7 +296,7 @@ references, `tests/_expected.py`, were recorded from flat's runs):
   relation-qualified one's first row of each class, with flat's name and label (`DecideComposedTerm`). A qualified
   term's operand is the one its scope's keyed mapping reads, as a written reducer's and a helper's are
   (`DecideTreeBuilder::Qualified`), so a scope whose classes its values split (D70) has them. A term's factor is one
-  value for the whole query, read as flat reads it, on the input's first chunk, which the sink keeps,
+  value for the whole query, read as flat reads it, on the buffer's first chunk, fetched once,
   whatever the clause keeps (`DecideQueryWideScale`). A NULL factor or a reducer over no row skips the clause
   (`DecideComposedTermReadsNoRow`); its one instance holds where its `when` keeps a row, the rows its root holds, and
   under DIAGNOSE it stands for the classes of its `per K:` among those rows, by flat's own tail

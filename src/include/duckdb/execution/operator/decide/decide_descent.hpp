@@ -34,6 +34,8 @@ struct DecideSpelling {
 	//! sort keys `sort_keys`, empty for a column not collated.
 	void Fold(const vector<Value> &group, const vector<vector<Value>> &spelled, const vector<vector<string>> &sort_keys,
 	          idx_t i);
+	//! Folds another descent's least spellings of the same group.
+	void Fold(const DecideSpelling &other);
 };
 
 //! Columns of values, a row per entry or slot, in chunks of STANDARD_VECTOR_SIZE rows as DuckDB's ColumnDataCollection
@@ -160,6 +162,9 @@ struct DecideNodeContainer {
 	//! it, a pair per row for every set E, though only the objective's root reads them yet. Empty for a node per row,
 	//! whose entries are its rows.
 	unsafe_vector<pair<idx_t, idx_t>> routed;
+	//! A set E's, per entry, where its row reads each node it depends on (DecideNode::dependencies, its entry map's
+	//! last columns), so that another descent's entries are found again (DecideDescent::Merge).
+	unsafe_vector<idx_t> reads;
 	DecideNodeGroups groups;
 	DecideNodeTimelines timelines;
 	idx_t rows_in = 0;
@@ -193,6 +198,12 @@ public:
 	DecideDescent(const DecideTree &tree, ClientContext &context);
 	~DecideDescent();
 	void Append(DataChunk &chunk, idx_t row_base);
+	//! Takes in `other`, a descent of the same tree that read rows `offset` onward, every one after the rows this one
+	//! read: a descent per thread, each over the rows its thread received, merged in the order the rows were placed.
+	//! Its rows are rebased; its slots, classes, entries and instances are found again in this descent's maps, in the
+	//! order `other` made them, which is its rows' order, so they number as one descent over every row would; and its
+	//! errors take their ranks at their rows here.
+	void Merge(DecideDescent &other, idx_t offset);
 	void Finish();
 	const vector<DecideNodeContainer> &Containers() const {
 		return containers;
@@ -343,11 +354,22 @@ private:
 	vector<vector<idx_t>> decision_rows;
 	vector<vector<bool>> decision_recorded;
 	vector<vector<DecisionLayout>> decision_layouts;
+	//! Per keyed scope, each class's layout (decision_layouts).
+	vector<vector<idx_t>> decision_class_layouts;
+	//! Per keyed scope, its classes by their layout's types and sort key, built when a merge first needs them (Merge).
+	vector<unordered_map<string, idx_t>> merged_classes;
+	//! Per node, the G or O whose slots its rows arrive in (DecideNodeContainer::parent_slots), INVALID for none and
+	//! MIXED_ENCLOSING for several.
+	vector<idx_t> enclosing;
+	static constexpr idx_t MIXED_ENCLOSING = DConstants::INVALID_INDEX - 1;
 	//! Per key, its groups' spellings; empty for a key with no collated column.
 	vector<unordered_map<hash_t, vector<KeySpelling>>> spellings;
 	//! One executor per expression the descent reads, kept across windows as DuckDB's operators keep theirs.
 	unordered_map<const Expression *, unique_ptr<ExpressionExecutor>> executors;
 	bool finished = false;
+	//! Whether another descent was merged in, whose classes the layouts' dictionaries and recorded rows do not hold:
+	//! no row follows.
+	bool merged = false;
 	DecideErrorLedger errors;
 	DecideErrorRank current_rank;
 	idx_t active_node = DConstants::INVALID_INDEX;
