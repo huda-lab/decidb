@@ -15,12 +15,6 @@ from __future__ import annotations
 
 #: id -> (what is wrong, {(module, solver, category): failing seeds}).
 DEFECTS: dict[str, tuple[str, dict[tuple[str, str, str], tuple[int, ...]]]] = {
-    "D2": (
-        "`<>` drops a whole group or class when one of its rows has a NULL bound: over rows (1,'w',0), (2,'w',NULL), "
-        "`sum(x) by (t.k) <> t.b` MINIMIZE gives 0,0 and warns that it constrains nothing, where x1 + x2 <> 0 stands. "
-        "In seed 3657 a row with no bound in each `by` group drops both groups.",
-        {("nests", "gurobi", "wrong-answer"): (3657,)},
-    ),
     "D3": (
         "AVG coefficients that sum to 6.999999999999999 in some row orders put a helper's upper bound one ulp below "
         "its lower bound, and the query is reported infeasible, while DIAGNOSE says feasible.",

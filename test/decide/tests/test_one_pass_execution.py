@@ -310,3 +310,33 @@ def test_explain_counts_each_instance_once(decidb_cli, case):
     assert result.returncode == 0, result.stderr
     text = "".join(line.strip().strip("│").strip() for line in result.stdout.splitlines()).replace(" ", "")
     assert f"↳{skipped}instanceshavenovalueandareskipped" in text, text
+
+
+#: Each a `<>` reading a NULL bound, by the branch it reaches, the least sum its answer reaches, and whether a warning
+#: says the clause constrains nothing.
+NULL_NOT_EQUAL_CASES = {
+    # Row 2's bound is NULL: it excludes no value, and x2 stays in the group's sum, which must avoid row 1's 0.
+    "a-null-bound-excludes-nothing": ("(VALUES (1, 'w', 0), (2, 'w', NULL))", "sum(x) by (t.k) <> t.b", 1, False),
+    # Row 1 excludes 1 alone: the NULL bound adds no value to exclude, so the sum may be 0.
+    "a-null-bound-adds-no-value": ("(VALUES (1, 'w', 1), (2, 'w', NULL))", "sum(x) by (t.k) <> t.b", 0, False),
+    # Every bound of the group is NULL: it excludes nothing, so its instance has no value and is skipped.
+    "a-group-of-null-bounds-holds-nothing": (
+        "(VALUES (1, 'w', NULL::INT), (2, 'w', NULL))",
+        "sum(x) by (t.k) <> t.b",
+        0,
+        True,
+    ),
+    # A row's own `<>` with a NULL bound has no value there, and that instance is skipped: x2 is free, x1 avoids 0.
+    "a-row-with-a-null-bound-is-skipped": ("(VALUES (1, 'w', 0), (2, 'w', NULL))", "x <> t.b", 1, False),
+}
+
+
+@pytest.mark.parametrize("case", list(NULL_NOT_EQUAL_CASES))
+def test_a_null_bound_of_a_not_equal(decidb_cli, case):
+    rows, clause, least, warned = NULL_NOT_EQUAL_CASES[case]
+    sql = f"""SELECT id, x FROM {rows} t(id, k, b) DECIDE x(INT)
+        SUCH THAT x <= 3 AND {clause} MINIMIZE sum(x) ORDER BY id"""
+    result = decidb_cli.execute_raw(sql)
+    assert ("constrains nothing" in result.stderr) == warned, result.stderr
+    values = [int(cell) for cell in re.findall(r"│\s+\d+\s+│\s+(\d+)\s+│", result.stdout)]
+    assert len(values) == 2 and sum(values) == least, result.stdout

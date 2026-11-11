@@ -958,7 +958,15 @@ vector<bool> DecideModelEmitter::GroupBound(idx_t root, const DecideEntryRows &r
 	evaluated.rhs_values.AssignDense(num_rows);
 	const auto values = evaluated.rhs_values.MutableDense().data();
 	const auto computed = bound.data();
-	std::vector<bool> &marked = tightest ? bound_null : null_rows;
+	// A grouped `<>` excludes each value its rows' bounds take (language/guide.md §6.4): a NULL one excludes none, and
+	// its row stays a member of the group's sum. Every `<>` here is one (a MIN or MAX under `<>` is refused), and keeps
+	// every value of its bound rather than a tightest one.
+	const auto excludes = clause.comparison_type == ExpressionType::COMPARE_NOTEQUAL;
+	D_ASSERT(!excludes || (clause.lhs_is_aggregate && !tightest));
+	std::vector<bool> &marked = tightest ? bound_null : excludes ? evaluated.no_exclusion : null_rows;
+	if (excludes) {
+		marked.assign(num_rows, false);
+	}
 	const std::vector<bool> &null_entries = nulls;
 	const std::vector<bool> &read_entries = reads;
 	rows.ForEach([&](idx_t row, idx_t entry) {
@@ -967,6 +975,26 @@ vector<bool> DecideModelEmitter::GroupBound(idx_t root, const DecideEntryRows &r
 			marked[row] = true;
 		}
 	});
+	if (excludes) {
+		// A group none of whose rows has a bound excludes nothing: its instance has no value.
+		const auto groups = evaluated.row_group_ids.empty() ? idx_t(1) : evaluated.num_groups;
+		vector<bool> bounded(groups, false);
+		auto group_of = [&](idx_t row) {
+			return evaluated.row_group_ids.empty() ? idx_t(0) : evaluated.row_group_ids[row];
+		};
+		for (idx_t row = 0; row < num_rows; row++) {
+			const auto group = group_of(row);
+			if (group != DConstants::INVALID_INDEX && !marked[row]) {
+				bounded[group] = true;
+			}
+		}
+		for (idx_t row = 0; row < num_rows; row++) {
+			const auto group = group_of(row);
+			if (group != DConstants::INVALID_INDEX && !bounded[group]) {
+				null_rows[row] = true;
+			}
+		}
+	}
 	return bound_null;
 }
 

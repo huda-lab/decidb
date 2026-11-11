@@ -404,6 +404,9 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
             // runs once, identically to before this supported more than one.
             vector<double> distinct_rhs;
             for (idx_t k = g_begin; k < g_end; k++) {
+                if (!ec.no_exclusion.empty() && ec.no_exclusion[flat_rows[k]]) {
+                    continue;
+                }
                 double raw = ec.rhs_values.Get(flat_rows[k]);
                 if (std::find(distinct_rhs.begin(), distinct_rhs.end(), raw) == distinct_rhs.end()) {
                     distinct_rhs.push_back(raw);

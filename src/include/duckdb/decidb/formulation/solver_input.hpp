@@ -256,6 +256,9 @@ struct EvaluatedConstraint {
     //! coefficients / non-aggregate rows) fall back to the numeric reconstruction.
     vector<string> coefficient_labels;
     CoefficientColumn rhs_values;                // RHS column (logical size = num_rows)
+    //! A grouped `<>` row whose bound is NULL: still a member of its group's sum, it excludes no value
+    //! (language/guide.md §6.4). Empty for any other clause.
+    vector<bool> no_exclusion;
     //! A per-row bound on one decision: the values it admits on each row (DecideConstraint::admitted_lower and
     //! admitted_upper), ±infinity on an open side. Logical size 0 for any other constraint.
     CoefficientColumn admitted_lower;
