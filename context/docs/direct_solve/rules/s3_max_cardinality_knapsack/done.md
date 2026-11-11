@@ -164,12 +164,14 @@ apart; "1 thread / all" is the latency on one thread over the latency on all. Bo
 | `s3` | 316.1 ms | 200.9 ms | 1.57 | 56.9 ms | 32.6 ms | 0.09 ms | 2.97, 3.71 |
 | `s3_global` | 285.9 ms | 278.6 ms | 1.03 | 177.3 ms | 68.9 ms | 0.09 ms | 1.03, 2.32 |
 
-The hand plans are one running-sum window cut at `total <= B`, which TPC-H's positive costs make correct. The
-direct plan also finds the largest rank that fits (step 4 of § How it works), which negative weights need, so `s3`
-takes 1.57 times the hand plan's CPU. `s3_global` takes the same CPU as its hand plan but 2.6 times its latency, and
-gains nothing from threads: with no `by`, step 4's window has an empty `OVER ()`, which DuckDB's `PhysicalWindow` treats
-as order-dependent and fills from one thread, so the sorted running-sum window before it also runs on one thread
-(`../../framework/todo.md` § FRM-6).
+The hand plans are one running-sum window cut at `total <= B`, which TPC-H's positive costs make correct. The direct
+plan also finds the largest rank that fits (step 4 of § How it works), which negative weights need, so `s3` takes 1.57
+times the hand plan's CPU. `s3_global` takes the same CPU as its hand plan but 2.6 times its latency, and gains nothing
+from threads: with no `by`, step 4's window has an empty `OVER ()`, which DuckDB's `PhysicalWindow` treats as
+order-dependent and fills from one thread, so the sorted running-sum window before it also runs on one thread. DuckDB
+does this to return rows in table order, which other queries rely on. A constant partition fills it from every thread
+(80 to 105 ms) but sorts every row, at 1.8 times the hand plan's CPU, so the plan keeps the one-thread window
+(`../../framework/todo.md` § How to work any task, Small gains).
 
 **Against Gurobi.** `run.py --sf 0.125 0.25 0.5 1 --queries s3 s3_global --modes direct gurobi`: a fresh `decidb`
 process per run, median of 3. At every size Gurobi's objective agreed with direct solve's within 1e-6. A speedup

@@ -41,31 +41,6 @@ solver path answers those queries, so none of them is wrong, only slower.
   machinery. Not done on this rule: a smallest-magnitude analysis to drop the below-normal check of a value of an exact
   type (a2_abs_global, 0.6 ms); R1's per-row answer from window frames (a second plan shape for several decisions, and
   prefix sums the segment tree does not keep monotone); proving R1's group checks at plan time. **Ruling (owner,
-  2026-11-09).**
-
-## FRM-6 — A whole-table window of an order-independent aggregate runs on one thread
-
-- **Problem.** DuckDB's `PhysicalWindow` (`src/execution/operator/aggregate/physical_window.cpp`, its constructor)
-  marks a window order-dependent when any of its expressions has no `PARTITION BY` and no `ORDER BY`, and fills an
-  order-dependent window from one thread (`ParallelSink`). The pipeline that fills it runs on one thread, a sorted
-  window before it included. S3 without a `by` builds such windows (step 4's `min` or `max` of the fitting rank, step
-  5's `bool_and`), so `s3_global` at SF 1 takes 177 ms against its hand plan's 69 ms at the same CPU
-  (`../rules/s3_max_cardinality_knapsack/done.md` § Performance). Reproduce on the SF 1 database at 1 and at 11
-  threads, about 175 ms both:
-  `SELECT COUNT(*), SUM(CASE WHEN rn <= k THEN 1 ELSE 0 END) FROM (SELECT *, MAX(CASE WHEN total <= 1e6 THEN rn ELSE 0
-  END) OVER () AS k FROM (SELECT *, sum(ps_supplycost::DOUBLE) OVER (ORDER BY ps_supplycost::DOUBLE ROWS UNBOUNDED
-  PRECEDING) AS total, row_number() OVER (ORDER BY ps_supplycost::DOUBLE) AS rn FROM partsupp))`. With
-  `OVER (PARTITION BY 1)` it takes 96 to 140 ms on 11 threads.
-- **Why DuckDB does this.** An `OVER ()` window returns its rows in the order it receives them, and DuckDB returns the
-  rows of a query without `ORDER BY` in table order (`preserve_insertion_order`, default on; DuckDB commit
-  `1f6635a039`, "maintaining insertion order in window function"). Filled from one thread, `SELECT ps_partkey,
-  max(ps_supplycost) OVER () FROM partsupp` returns all 800,000 rows in table order; with `PARTITION BY 1` it returns
-  them in five runs out of order. DuckDB's rule stays: changing it would reorder the output of every such query.
-- **Why S3 does not need it.** A direct plan promises no row order (`done.md`: "Output row order and the choice among
-  equal optima are not guaranteed"), and S3's step 2 sort has already put the rows in weight order,
-  not table order, so the one-thread window keeps an order no reader relies on.
-- **Change.** S3 partitions its whole-table windows by a constant when the budget has no `by`, which tells DuckDB the
-  window keeps no order, and its comment says why. N1's whole-table window is left as it is: nothing costly runs before
-  it (`n1` is 7.6 ms against its hand plan's 5.9 ms).
-- **Done when.** In `run.py --compare --sf 1 --queries s3 s3_global`, `s3_global`'s direct "1 thread / all" is above
-  1.5; `./test/decide/run_tests.sh -n 2 -k s3_max_cardinality` and `build/release/test/unittest "S3*"` pass.
+  2026-11-09).** Not done either: filling S3's whole-table windows from every thread. A constant partition sorts every
+  row and takes 1.8 times the hand plan's CPU for `s3_global`; a shared row stage with an aggregate joined back is a
+  second plan shape; DuckDB's one-thread `OVER ()` keeps table order for other queries. **Ruling (owner, 2026-11-11).**
