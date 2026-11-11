@@ -139,11 +139,6 @@ bool DirectPartFactor(ClientContext &context, const DirectPart &part, DirectFact
 	       !(factor.divides && factor.value == 0.0);
 }
 
-bool DirectIsSourceOnlyNumeric(const Expression &expr, idx_t decide_index,
-                               const vector<ColumnBinding> &source_bindings) {
-	return !DirectMayThrow(expr) && DirectIsSourceOnlyNumericMayRaise(expr, decide_index, source_bindings);
-}
-
 bool DirectIsSourceOnlyNumericMayRaise(const Expression &expr, idx_t decide_index,
                                        const vector<ColumnBinding> &source_bindings) {
 	return expr.return_type.IsNumeric() && DirectIsSourceOnlyValue(expr, decide_index, source_bindings) &&

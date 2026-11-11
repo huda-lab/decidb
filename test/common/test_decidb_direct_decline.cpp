@@ -236,6 +236,10 @@ duckdb::vector<Shape> S1AppliesShapes() {
 	shapes.push_back(S1("a fixed value through TRY_CAST", "SUM(x) <= 2 AND x <= TRY_CAST(cap AS TINYINT)"));
 	shapes.push_back(S1("a fixed value through a cast to the same type",
 	                    "SUM(x) <= 2 AND x <= CAST(CAST(cap AS DECIMAL(5,2)) AS DECIMAL(9,2))"));
+	shapes.push_back(
+	    S1("a fixed value with a coefficient that may raise", "SUM(x) <= 2 AND CAST(cap AS TINYINT) * x <= 1"));
+	shapes.push_back(S1("a fixed value from a Boolean expression that may raise",
+	                    "SUM(x) <= 2 AND x <= CAST(CAST(cap AS TINYINT) AS BOOLEAN)"));
 	return shapes;
 }
 
@@ -283,8 +287,6 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	}));
 	// ProveFixedVariables.
 	shapes.push_back(
-	    S1("a fixed value with a coefficient that may raise", "SUM(x) <= 2 AND CAST(cap AS TINYINT) * x <= 1"));
-	shapes.push_back(
 	    S1("a fixed value with an infinite coefficient", "SUM(x) <= 2 AND CAST('inf' AS DOUBLE) * x <= 1"));
 	shapes.push_back(S1("a not-equal value with a column coefficient", "SUM(x) <= 2 AND cap * x <> 1"));
 	shapes.push_back(S1("a not-equal value with a coefficient other than 1", "SUM(x) <= 2 AND 2 * x <> 2"));
@@ -294,8 +296,6 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	shapes.push_back(
 	    S1("a fixed value that is a constant but not a finite number", "SUM(x) <= 2 AND x = 'inf'::DOUBLE"));
 	// SourceBooleanFixedValue: the value is a Boolean column or expression cast to a number.
-	shapes.push_back(S1("a fixed value from a Boolean expression that may raise",
-	                    "SUM(x) <= 2 AND x <= CAST(CAST(cap AS TINYINT) AS BOOLEAN)"));
 	shapes.push_back(
 	    S1("a fixed value from a Boolean expression over a column outside the source", "SUM(x) <= 2 AND x <= flag",
 	       [](DirectIR &ir) { ir.constraints[1].rhs->Cast<BoundCastExpression>().child = ForeignBoolean(); }));
@@ -1442,6 +1442,9 @@ duckdb::vector<Shape> S3AppliesShapes() {
 	shapes.push_back(S3("a row fixed to 1 under a WHEN", "SUM(w*x) <= 9 AND when flag: x = 1"));
 	shapes.push_back(S3("a row fixed to 0 by a constant", "SUM(w*x) <= 9 AND x <= 0"));
 	shapes.push_back(S3("a bound read from a column", "SUM(w*x) <= 9 AND x <= f"));
+	shapes.push_back(S3("a bound that may raise", "SUM(w*x) <= 9 AND x <= CAST(cap AS TINYINT) - 1"));
+	shapes.push_back(
+	    S3("a coefficient of a fixed row that may raise", "SUM(w*x) <= 9 AND CAST(cap AS TINYINT) * x <= 1"));
 	shapes.push_back(S3("fixed rows beside a budget WHEN and the same objective WHEN",
 	                    "when name <> 'b': SUM(w*x) <= 9 AND when flag: x = 1", nullptr,
 	                    "MAXIMIZE when name <> 'b': SUM(x)"));

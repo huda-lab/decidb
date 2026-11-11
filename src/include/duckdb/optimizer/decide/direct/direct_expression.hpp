@@ -78,20 +78,17 @@ struct DirectFactor {
 //! divides.
 bool DirectPartFactor(ClientContext &context, const DirectPart &part, DirectFactor &factor);
 
-//! A data-valued value a rule may read per row and check for NULL: numeric, nonthrowing,
-//! deterministic, decision-free, over source columns only, and mentioning at least one.
-bool DirectIsSourceOnlyNumeric(const Expression &expr, idx_t decide_index,
-                               const vector<ColumnBinding> &source_bindings);
-
-//! The same, for a plan that evaluates the value on every row as the solver does, so an expression that can raise (an
-//! overflow, a failed cast) raises on both paths or on neither: numeric, deterministic, decision-free, over source
-//! columns only, mentioning at least one. It may raise.
+//! A data-valued value a rule may read per row and check for NULL, for a plan that evaluates the value on the rows
+//! that read it as the solver does, so an expression that can raise (an overflow, a failed cast) raises on both paths
+//! or on neither: numeric, deterministic, decision-free, over source columns only, mentioning at least one. It may
+//! raise.
 bool DirectIsSourceOnlyNumericMayRaise(const Expression &expr, idx_t decide_index,
                                        const vector<ColumnBinding> &source_bindings);
 
 //! A numeric or Boolean value a rule may read per row: deterministic, independent of the decisions, over source columns
-//! only, with or without a column. Unlike DirectIsSourceOnlyNumeric it may raise when evaluated, for a rule that
-//! evaluates it on the rows that read it, where the solver raises too (nothing is computed on a row a `when` drops).
+//! only, with or without a column. Unlike DirectIsSourceOnlyNumericMayRaise it may be Boolean and mention no column,
+//! for a rule that evaluates it on the rows that read it, where the solver raises too (nothing is computed on a row a
+//! `when` drops).
 bool DirectIsSourceOnlyValue(const Expression &expr, idx_t decide_index, const vector<ColumnBinding> &source_bindings);
 
 //! Abstract interpretation over magnitudes, seeded by types: the largest magnitude a value of `type` holds, as a

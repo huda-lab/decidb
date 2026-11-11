@@ -126,7 +126,10 @@ NAN_WHERE_DROPPED = [
     _row(4, "b", 4.0, 2, True, cap2=7.0),
 ]
 
-DATASETS = {"main": MAIN, "ties": TIES, "nan": NAN_WHERE_DROPPED}
+# `cap` is 300 (it does not fit a TINYINT) on the one row `flag` leaves out.
+CAP_WHERE_DROPPED = [dict(row, cap=300) if row["id"] == 2 else row for row in MAIN]
+
+DATASETS = {"main": MAIN, "ties": TIES, "nan": NAN_WHERE_DROPPED, "cap_dropped": CAP_WHERE_DROPPED}
 
 # Objective name -> (SQL, per-row coefficient of x). The oracle evaluates the Python function.
 OBJECTIVES = {
@@ -299,6 +302,8 @@ def _values(records, names=NAMES):
 #                                      column; `when` (SQL) keeps the rows the clause reads
 #   noop      [SQL]                    clauses that restate the BOOL domain and change nothing
 #   colfixed  True                     x >= lo AND x <= hi, the bounds read from each row
+#   exprfixed [(clause, read)]         a clause whose bound or coefficient is an expression of the row; read(row) is the
+#                                      (coefficient, op, limit) the row states, or None for a row its `when` drops
 #   objective key of OBJECTIVES (default "score"), or "none" for a query with no objective (every score is 0)
 #   sense     "MAXIMIZE" (default) or "MINIMIZE"; unused when there is no objective
 
@@ -428,6 +433,37 @@ S1_CASES = {
     "column_fixed_global": {"bounds": [("<=", 3)], "colfixed": True},
     "column_fixed_global_min": {"bounds": [("<=", 3)], "colfixed": True, "sense": "MINIMIZE"},
     "column_fixed_per_interval": {"bounds": [(">=", 1), ("<=", 2)], "per": True, "colfixed": True},
+    # A bound and a coefficient that are expressions of the row and may raise (a cast to TINYINT). `x >= cap - 2` fixes
+    # the rows of cap 3 to 1; `cap * x <= 1` fixes every row of cap 2 or more to 0.
+    "expression_bound_fixes_rows": {
+        "bounds": [("<=", 3)],
+        "exprfixed": [("x >= CAST(cap AS TINYINT) - 2", lambda r: (1.0, ">=", float(r["cap"] - 2)))],
+    },
+    "expression_coefficient_fixes_rows": {
+        "bounds": [("<=", 3)],
+        "exprfixed": [("CAST(cap AS TINYINT) * x <= 1", lambda r: (float(r["cap"]), "<=", 1.0))],
+    },
+    # The expression raises on a row (cap 300) the clause's `when` drops: nothing is computed there, on either path.
+    "expression_bound_that_raises_on_a_row_the_when_drops": {
+        "data": "cap_dropped",
+        "bounds": [("<=", 3)],
+        "exprfixed": [
+            (
+                "when flag: x >= CAST(cap AS TINYINT) - 1",
+                lambda r: (1.0, ">=", float(r["cap"] - 1)) if r["flag"] else None,
+            )
+        ],
+    },
+    "expression_coefficient_that_raises_on_a_row_the_when_drops": {
+        "data": "cap_dropped",
+        "bounds": [("<=", 3)],
+        "exprfixed": [
+            (
+                "when flag: CAST(cap AS TINYINT) * x <= 1",
+                lambda r: (float(r["cap"]), "<=", 1.0) if r["flag"] else None,
+            )
+        ],
+    },
     # --- tied scores: a plan that ranks with ties selects too many rows ---
     "ties_top_k": {"data": "ties", "bounds": [("<=", 2)]},
     "ties_one_per_group": {"data": "ties", "bounds": [(">=", 1), ("<=", 1)], "per": True},
@@ -609,6 +645,7 @@ def _decide_clause(case):
         clauses.extend(["x >= lo", "x <= hi"])
     if case.get("colscaled"):
         clauses.append("2*x <= hi")
+    clauses.extend(clause for clause, _ in case.get("exprfixed", ()))
     for column, op, rhs, *when in case.get("colcoefficient", ()):
         clauses.append(f"{'when ' + when[0] + ': ' if when else ''}{column}*x {op} {rhs}")
     objective = case.get("objective", "score")
@@ -770,6 +807,10 @@ def _s1_constraints(case):
             constraints.append(({names[i]: 1.0}, "<=", float(row["hi"])))
     if case.get("colscaled"):
         constraints.extend(({names[i]: 2.0}, "<=", float(row["hi"])) for i, row in enumerate(rows))
+    for _, read in case.get("exprfixed", ()):
+        for i, row in enumerate(rows):
+            if (stated := read(row)) is not None:
+                constraints.append(({names[i]: stated[0]}, stated[1], stated[2]))
     for column, op, rhs, *_ in case.get("colcoefficient", ()):
         for i, row in enumerate(rows):
             # A NULL coefficient skips the instance, and the cases' `when` is `<column> IS NOT NULL`.
@@ -1057,6 +1098,31 @@ def test_s1_column_coefficient_raises_the_solver_error(decidb_cli, rows):
     """A coefficient read from the row (`w*x <= 1`) is checked on every row the clause keeps, with the solver's own
     message: S1 applies and raises it word for word."""
     sql = _problem(rows, "id, score, w", "SUM(x) <= 2 AND w*x <= 1")
+    with pytest.raises(DeciDBCliError) as solver_error:
+        _run(decidb_cli, sql, "off")
+    with pytest.raises(DeciDBCliError) as direct_error:
+        _run(decidb_cli, sql, "require")
+    assert "decide_direct_solve=require" not in str(direct_error.value), str(direct_error.value)
+    assert str(direct_error.value) == str(solver_error.value)
+
+
+# A bound or a coefficient of a fixed row that raises (300 does not fit a TINYINT) on a row its clause keeps raises on both
+# paths, with DuckDB's own error. The Boolean bound beside `x >= 1`, which fixes every row first, is still read on the
+# row that raises.
+@pytest.mark.var_boolean
+@pytest.mark.error
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "fixes",
+    [
+        "x >= CAST(cap AS TINYINT) - 2",
+        "CAST(cap AS TINYINT) * x <= 1",
+        "x >= CAST(CAST(cap AS TINYINT) AS BOOLEAN) AND x >= 1",
+    ],
+    ids=["bound", "coefficient", "boolean_bound_beside_a_bound_that_fixes_first"],
+)
+def test_s1_a_fixed_value_that_raises_on_a_kept_row_raises_the_solvers_error(decidb_cli, fixes):
+    sql = _problem("(1, 9.0, 1), (2, 5.0, 300)", "id, score, cap", f"SUM(x) <= 2 AND {fixes}")
     with pytest.raises(DeciDBCliError) as solver_error:
         _run(decidb_cli, sql, "off")
     with pytest.raises(DeciDBCliError) as direct_error:

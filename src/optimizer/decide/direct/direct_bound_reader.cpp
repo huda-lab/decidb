@@ -439,20 +439,24 @@ const vector<DecideSplitTerm> *DirectFixedTerms(const DirectIRConstraint &constr
 	return &constraint.lhs[0].terms;
 }
 
-//! True when every term's coefficient is a finite constant or a number of the source row (`w`, `w / 2`), which a plan
-//! can read. A literal that is not a finite number is the solver's to report.
+//! True when every term's coefficient is a finite constant or a number of the source row (`w`, `w / 2`, `w - 2`), which
+//! a plan can read on the rows its clause keeps, where a coefficient that can raise raises as the solver does. A
+//! literal that is not a finite number is the solver's to report.
 static bool SourceOnlyCoefficients(ClientContext &context, const DirectIR &ir, const vector<DecideSplitTerm> &terms) {
 	for (auto &term : terms) {
 		double value;
 		if (term.coefficient->IsFoldable()
 		        ? !TryEvaluateFoldableDouble(context, *term.coefficient, value, DIRECT_FINITE_CONSTANT)
-		        : !DirectIsSourceOnlyNumeric(*term.coefficient, ir.decide_index, ir.source_bindings)) {
+		        : !DirectIsSourceOnlyNumericMayRaise(*term.coefficient, ir.decide_index, ir.source_bindings)) {
 			return false;
 		}
 	}
 	return true;
 }
 
+//! The Boolean a fixed value casts, when it cannot raise. A clause here fixes one side (`x >= flag` fixes to 1 only),
+//! so another clause that is true first can skip evaluating it on a row where the solver raises; a Boolean that may
+//! raise is read as a number instead (FixFromAllowedValues), which both sides evaluate.
 static const Expression *SourceBooleanFixedValue(const Expression &expr, idx_t decide_index,
                                                  const vector<ColumnBinding> &source_bindings) {
 	if (expr.GetExpressionClass() != ExpressionClass::BOUND_CAST) {
@@ -492,11 +496,12 @@ static bool FixFromAllowedValues(const DirectIR &ir, ClientContext &context, con
 	ExpressionBuilder calc(context);
 	auto when = factor.scope.when.get();
 	auto &value = *factor.rhs;
-	// A literal that is not a finite number is the solver's to report.
+	// A literal that is not a finite number is the solver's to report. A value of the row may raise: the plan reads it
+	// on the rows the clause keeps (OnKeptRows), where the solver reads it too.
 	double constant;
 	bool constant_value = TryEvaluateFoldableDouble(context, value, constant, DIRECT_FINITE_CONSTANT);
 	if (!constant_value &&
-	    (value.IsFoldable() || !DirectIsSourceOnlyNumeric(value, ir.decide_index, ir.source_bindings))) {
+	    (value.IsFoldable() || !DirectIsSourceOnlyNumericMayRaise(value, ir.decide_index, ir.source_bindings))) {
 		return false;
 	}
 	// Whether the row allows `x = v`. A singleton row allows the values between the ends the solver path's classifier

@@ -360,6 +360,43 @@ add(
     fixes="x >= lo AND x <= hi",
     allowed=lambda row: (1,) if row["lo"] >= 1 else (0,) if row["hi"] < 1 else (0, 1),
 )
+# A bound and a coefficient that are expressions of the row, and may raise (a cast to TINYINT). The bound `x >= w - 2`
+# fixes the rows of weight 3 to 1; the coefficient `hi * x <= 0` fixes the row whose hi is 1 to 0. Without them the
+# budget would hold the three lightest rows (6), and the three lightest free rows (9).
+add(
+    "bound_expression_fixes_rows",
+    _rows([1.0, 2.0, 3.0, 3.0]),
+    "SUM(w*x) <= 6",
+    constant(6.0),
+    fixes="x >= CAST(w AS TINYINT) - 2",
+    allowed=lambda row: (1,) if int(row["w"]) - 2 >= 1 else (0, 1),
+)
+add(
+    "coefficient_expression_fixes_rows",
+    _rows([2.0, 3.0, 4.0, 6.0], hi=[1.0, 0.0, 0.0, 0.0]),
+    "SUM(w*x) <= 9",
+    constant(9.0),
+    fixes="CAST(hi AS TINYINT) * x <= 0",
+    allowed=lambda row: (0,) if int(row["hi"]) > 0 else (0, 1),
+)
+# The value that raises (300 does not fit a TINYINT) is on a row the clause's `when` drops: nothing is computed there,
+# on either path.
+add(
+    "bound_expression_that_raises_on_a_row_the_when_drops",
+    _rows([1.0, 2.0, 3.0, 3.0, 300.0], flag=[True, True, True, True, False]),
+    "SUM(w*x) <= 6",
+    constant(6.0),
+    fixes="when flag: x >= CAST(w AS TINYINT) - 2",
+    allowed=lambda row: (1,) if row["flag"] and int(row["w"]) - 2 >= 1 else (0, 1),
+)
+add(
+    "coefficient_expression_that_raises_on_a_row_the_when_drops",
+    _rows([2.0, 3.0, 4.0, 6.0, 5.0], hi=[300.0, 1.0, 0.0, 0.0, 0.0], flag=[False, True, True, True, True]),
+    "SUM(w*x) <= 9",
+    constant(9.0),
+    fixes="when flag: CAST(hi AS TINYINT) * x <= 0",
+    allowed=lambda row: (0,) if row["flag"] and int(row["hi"]) > 0 else (0, 1),
+)
 # A constant bound on every row: no row is selected whatever the budget allows.
 add(
     "constant_bound_fixes_every_row_to_zero",
@@ -966,6 +1003,25 @@ def test_s3_error_cases_fail_on_both_paths(decidb_cli, name):
     if expected in ("invalid_value", "null_bound"):
         # A NaN or infinite value is worded by one function for both paths.
         assert str(direct_error.value) == str(solver_error.value)
+
+
+# A bound or a coefficient of a fixed row that raises (300 does not fit a TINYINT) on a row its clause keeps raises on
+# both paths, with DuckDB's own error.
+@pytest.mark.var_boolean
+@pytest.mark.error
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "fixes", ["x >= CAST(w AS TINYINT) - 2", "CAST(w AS TINYINT) * x <= 1"], ids=["bound", "coefficient"]
+)
+def test_s3_a_fixed_value_that_raises_on_a_kept_row_raises_the_solvers_error(decidb_cli, fixes):
+    sql = _problem(_SOURCE.format(w="300.0", cap="9.0"), f"SUM(w*x) <= 9 AND {fixes}")
+    with pytest.raises(DeciDBCliError) as solver_error:
+        _run(decidb_cli, sql, "off")
+    with pytest.raises(DeciDBCliError) as direct_error:
+        _run(decidb_cli, sql, "require")
+    assert "decide_direct_solve=require" not in str(direct_error.value), str(direct_error.value)
+    assert str(direct_error.value) == str(solver_error.value)
 
 
 @pytest.mark.var_boolean
