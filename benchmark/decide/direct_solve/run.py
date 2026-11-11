@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Times direct solve against the forced solver (Gurobi, HiGHS) on one query per direct-solve class, over TPC-H.
+"""Times direct solve against the solver path on Gurobi on one query per direct-solve class, over TPC-H. HiGHS, the
+fallback backend, is not measured.
 
 Each file in `queries/` is one DECIDE query over the TPC-H tables, with two header comments the runner reads:
 `-- decision: <column>` and `-- objective: <expression over the output>`. The parent query reads
@@ -7,8 +8,8 @@ Each file in `queries/` is one DECIDE query over the TPC-H tables, with two head
 also returns the objective it reached.
 
 Modes. `direct` pins `decide_direct_solve='require'`, so a query the rule does not take fails instead of using the
-solver. `gurobi` and `highs` pin `'off'`, choose the backend with `DECIDB_FORCE_SOLVER`, and report model-build and
-solve time. Every mode runs DuckDB on 32 threads, the most Gurobi uses by default, so both sides have the same cores.
+solver. `gurobi` pins `'off'`, forces the backend with `DECIDB_FORCE_SOLVER`, and reports model-build and solve
+time. Every mode runs DuckDB on 32 threads, the most Gurobi uses by default, so both sides have the same cores.
 
 Each measured run is a fresh `decidb` process that only opens the stored database, under `/usr/bin/time`, so its
 wall time and peak memory are the query's own. A size's database is read once first, so no mode pays for the first
@@ -69,9 +70,8 @@ import run_benchmarks as bench  # noqa: E402  (the parent folder's /usr/bin/time
 # TPC-H scale factors; partsupp holds one decision per row: 100K rows, doubling up to 409.6M. dbgen drops the fraction
 # of a scale factor above 1 (sf=1.25 generates sf=1), so the larger ones are whole numbers.
 SCALE_FACTORS = (0.125, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512)
-SOLVERS = ("gurobi", "highs")
+SOLVERS = ("gurobi",)
 MODES = ("direct",) + SOLVERS
-DEFAULT_MODES = ("direct", "gurobi")
 TOLERANCE = 1e-6  # relative, on the objective
 
 
@@ -356,11 +356,6 @@ def cpu_model(cpuinfo=Path("/proc/cpuinfo")):
 
 def manifest(args, stamp, output):
     """The setup a reader needs to reproduce or compare the run."""
-    highs = dict(
-        re.findall(
-            r"#define HIGHS_VERSION_(MAJOR|MINOR|PATCH) (\d+)", (REPO / "third_party/highs/HConfig.h").read_text()
-        )
-    )
     duckdb = command_output([str(BINARY), "-noheader", "-csv", "-c", "SELECT version(), current_setting('threads');"])
     return {
         "command": "benchmark/decide/direct_solve/run.py",
@@ -380,7 +375,6 @@ def manifest(args, stamp, output):
         # the libraries the binary's dlopen search finds outside GUROBI_HOME; `gurobi_cl` needs a library path to run
         "gurobi": sorted(path.name for path in Path.home().glob("gurobi*/linux64/lib/libgurobi*.so*")),
         "gurobi_home": os.environ.get("GUROBI_HOME"),
-        "highs": f"{highs['MAJOR']}.{highs['MINOR']}.{highs['PATCH']}",
         "solver_threads": "solver default (DeciDB sets no thread count)",
         "platform": platform.platform(),
         "cpu": cpu_model(),
@@ -395,7 +389,7 @@ def main():
     names = sorted(p.stem for p in QUERIES.glob("*.sql"))
     parser.add_argument("--sf", nargs="+", type=float, default=list(SCALE_FACTORS), help="TPC-H scale factors")
     parser.add_argument("--queries", nargs="+", choices=names, default=names)
-    parser.add_argument("--modes", nargs="+", choices=MODES, default=list(DEFAULT_MODES))
+    parser.add_argument("--modes", nargs="+", choices=MODES, default=list(MODES))
     parser.add_argument(
         "--repeats",
         type=int,
