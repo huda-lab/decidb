@@ -562,7 +562,7 @@ def _s3_late_error(decision_sql, w_sql="1.0"):
 
 S3 = RuleFixture(
     rule="S3_MAX_CARDINALITY_KNAPSACK",
-    condition="max c*SUM(x), SUM(w*x) <= B",
+    condition="max c*SUM(x), SUM(w*x) <= B; min c*SUM(x), SUM(w*x) >= B",
     # The worked example of the rule's definition: weights 2, 3, 4 and 6 under a budget of 9 select the first three. The
     # weights are distinct, so the optimum is unique and the rows equal the solver's exactly; the query also runs on
     # forced HiGHS.
@@ -594,24 +594,27 @@ S3 = RuleFixture(
     """,
     table_change="ALTER TABLE direct_s3_life ADD COLUMN extra INTEGER;",
     # Each is the plain form with one condition changed: a value per row in the objective (the general 0-1 knapsack), a
-    # strict bound over an integer weight, an objective `when` that is not the budget's (a two-value knapsack) and a
-    # second constraint. A weight of exactly 1 is S1's count, which `require` answers with S1, so it is no near miss
-    # here; `test_direct_s3_max_cardinality_knapsack.py` checks that S3 leaves it to S1.
+    # strict bound over an integer weight, an objective `when` that is not the budget's (a two-value knapsack), a
+    # second constraint and a minimum with a maximized count (select every row). A weight of exactly 1 is S1's count,
+    # which `require` answers with S1, so it is no near miss here; `test_direct_s3_max_cardinality_knapsack.py` checks
+    # that S3 leaves it to S1.
     near_misses=(
         ("x(BOOL)", "SUM(w*x) <= 4", "MAXIMIZE SUM(p*x)"),
         ("x(BOOL)", "SUM(wi*x) < 4", "MAXIMIZE SUM(x)"),
         ("x(BOOL)", "when p > 9: SUM(w*x) <= 4", "MAXIMIZE when p > 5: SUM(x)"),
         ("x(BOOL)", "SUM(w*x) <= 4 AND SUM(p*x) <= 12", "MAXIMIZE SUM(x)"),
+        ("x(BOOL)", "SUM(w*x) >= 3", "MAXIMIZE SUM(x)"),
     ),
     # Forms that look like near misses and apply: a constant factor on the count, a constant weight of 2, a `when` on
-    # the budget (the row it drops is selected), the same `when` on the objective (the row is not selected) and a row
-    # fixed to 1 (it takes its weight from the budget).
+    # the budget (the row it drops is selected), the same `when` on the objective (the row is not selected), a row
+    # fixed to 1 (it takes its weight from the budget) and a minimum with a minimized count.
     near_miss_applies=(
         ("x(BOOL)", "SUM(w*x) <= 4", "MAXIMIZE 2 * SUM(x)"),
         ("x(BOOL)", "SUM(2*x) <= 4", "MAXIMIZE SUM(x)"),
         ("x(BOOL)", "when p > 9: SUM(w*x) <= 4", "MAXIMIZE SUM(x)"),
         ("x(BOOL)", "when p > 9: SUM(w*x) <= 4", "MAXIMIZE when p > 9: SUM(x)"),
         ("x(BOOL)", "SUM(w*x) <= 4 AND when p > 9: x = 1", "MAXIMIZE SUM(x)"),
+        ("x(BOOL)", "SUM(w*x) >= 3", "MINIMIZE SUM(x)"),
     ),
     near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 2.0::DOUBLE, 2), (2, 10.0::DOUBLE, 3.0::DOUBLE, 3)) t(id,p,w,wi)",
     near_miss_column="id",

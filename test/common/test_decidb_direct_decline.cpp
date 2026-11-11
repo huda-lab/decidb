@@ -1431,6 +1431,13 @@ duckdb::vector<Shape> S3AppliesShapes() {
 	                    "SUM(w*x) by (flag) <= 2 * COUNT(*) by (flag)"));
 	shapes.push_back(S3("a count scaled by a factor", S3_BUDGET, nullptr, "MAXIMIZE 2 * SUM(x)"));
 	shapes.push_back(S3("a constant weight of 2", "SUM(2*x) <= 9"));
+	shapes.push_back(S3("a minimum budget with a minimized count", "SUM(w*x) >= 9", nullptr, "MINIMIZE SUM(x)"));
+	shapes.push_back(
+	    S3("a minimum budget with a maximized negated count", "SUM(w*x) >= 9", nullptr, "MAXIMIZE -SUM(x)"));
+	shapes.push_back(S3("a minimum budget with a limit read from a column and a reducer",
+	                    "SUM(w*x) by (flag) >= cap + 0.5 * SUM(cap) by (flag)", nullptr, "MINIMIZE 3 * SUM(x)"));
+	shapes.push_back(S3("a minimum budget with fixed rows and the same WHEN on the objective",
+	                    "when flag: SUM(w*x) >= 9 AND x <= f", nullptr, "MINIMIZE when flag: SUM(x)"));
 	shapes.push_back(S3("a per-row bound beside the budget", "SUM(w*x) <= 9 AND x <= flag"));
 	shapes.push_back(S3("a row fixed to 1 under a WHEN", "SUM(w*x) <= 9 AND when flag: x = 1"));
 	shapes.push_back(S3("a row fixed to 0 by a constant", "SUM(w*x) <= 9 AND x <= 0"));
@@ -1469,7 +1476,7 @@ duckdb::vector<Shape> S3DeclineShapes() {
 	shapes.push_back(S3("a fixed value no BOOL meets", "SUM(w*x) <= 9 AND x >= 2"));
 	shapes.push_back(S3("a fixed value fixed only within the query", "SUM(w*x) <= 9 AND x <= txid_current()"));
 	shapes.push_back(S3("a strict budget", "SUM(cap*x) < 9"));
-	shapes.push_back(S3("a budget that is a minimum", "SUM(w*x) >= 9"));
+	shapes.push_back(S3("a maximized count under a minimum budget", "SUM(w*x) >= 9"));
 	shapes.push_back(S3("a budget that is an exact fill", "SUM(w*x) = 9"));
 	// ProveScope: it proves the constraint is a plain aggregate SUM, as a per-row bound is not.
 	shapes.push_back(S3("a scaled budget", "2 * SUM(w*x) <= 18"));

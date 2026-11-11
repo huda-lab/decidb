@@ -109,6 +109,9 @@ class Case:
     #: allow, stated here in Python: (0, 1) for a free row, (1,) for a row fixed to 1, (0,) for one fixed to 0.
     fixes: str = ""
     allowed: object = lambda row: (0, 1)
+    #: True for a minimum, `SUM(w*x) >= B`, with a minimized count: the fewest items that reach B. Otherwise the budget
+    #: is a maximum and the count is maximized.
+    at_least: bool = False
 
 
 CASES = {}
@@ -228,7 +231,7 @@ add("when_inside_the_sum", DROPPED, "SUM(when flag: w*x) <= 9", constant(9.0), k
 # The clause's `when` and the sum's own: a row is in the budget when both keep it.
 add(
     "when_in_front_and_inside_the_sum",
-    _rows([2.0, 3.0, 4.0, 6.0, 1.0], must=[True, True, True, True, False]),
+    _rows([2.0, 3.0, 4.0, 6.0, 1.0], flag=[True, True, True, False, True], must=[True, True, True, True, False]),
     "when flag: SUM(when must: w*x) <= 9",
     constant(9.0),
     kept=lambda row: bool(row["flag"]) and bool(row["must"]),
@@ -239,25 +242,6 @@ add(
     "objective_when_equal_to_the_budgets",
     DROPPED,
     "when flag: SUM(w*x) <= 9",
-    constant(9.0),
-    objective="MAXIMIZE when flag: SUM(x)",
-    kept=KEPT,
-    counted=KEPT,
-)
-add(
-    "objective_part_when_equal_to_the_sums",
-    DROPPED,
-    "SUM(when flag: w*x) <= 9",
-    constant(9.0),
-    objective="MAXIMIZE 2 * SUM(when flag: x)",
-    factor=2.0,
-    kept=KEPT,
-    counted=KEPT,
-)
-add(
-    "objective_when_in_front_equal_to_the_sums",
-    DROPPED,
-    "SUM(when flag: w*x) <= 9",
     constant(9.0),
     objective="MAXIMIZE when flag: SUM(x)",
     kept=KEPT,
@@ -287,7 +271,6 @@ WHEN_GROUPS = _rows(
     group=["a"] * 4 + ["b"] * 3 + ["a", "b", None],
     flag=[True] * 7 + [False, False, True],
 )
-add("when_with_by_groups", WHEN_GROUPS, "when flag: SUM(w*x) by (g) <= 5", constant(5.0), by=True, kept=KEPT)
 add(
     "when_with_by_groups_and_equal_objective_when",
     WHEN_GROUPS,
@@ -348,14 +331,6 @@ add(
     fixes=FIX_BAN,
     allowed=PINNED,
 )
-add(
-    "zero_weight_fixed_to_one_and_to_zero",
-    _rows([0.0, 0.0, 2.0, 3.0, 4.0], must=[True, False, False, False, False], ban=[False, True, False, False, False]),
-    "SUM(w*x) <= 5",
-    constant(5.0),
-    fixes=f"{FIX_MUST} AND {FIX_BAN}",
-    allowed=PINNED,
-)
 # The rows fixed to 1 use the budget exactly: 4 + 5 = 9 fits (a comparison with `<=`), and the free row of 5 is the one
 # that completes it.
 add(
@@ -411,24 +386,14 @@ add(
     fixes=f"{FIX_MUST} AND {FIX_BAN}",
     allowed=PINNED,
 )
-# A fixed row outside every budget (a NULL key, a dropped row) is fixed all the same; a row fixed to 1 there costs
-# nothing, and one fixed to 0 is lost to the objective, which counts it.
+# A fixed row outside every budget (a NULL key, a dropped row) is fixed all the same: the row fixed to 0 is lost to
+# the objective, and a row fixed to 1 is selected though the objective's `when` drops it too.
 OUTSIDE = _rows(
     [2.0, 3.0, 4.0, 100.0, 200.0, 7.0],
     group=["a", "a", "a", None, None, "a"],
     flag=[True, True, True, True, True, False],
-    ban=[False, False, False, True, False, True],
-    must=[False, False, False, False, True, False],
-)
-add(
-    "fixed_rows_outside_every_budget",
-    OUTSIDE,
-    "when flag: SUM(w*x) by (g) <= 5",
-    constant(5.0),
-    by=True,
-    kept=KEPT,
-    fixes=f"{FIX_MUST} AND {FIX_BAN}",
-    allowed=PINNED,
+    ban=[False, False, False, True, False, False],
+    must=[False, False, False, False, True, True],
 )
 add(
     "fixed_rows_outside_every_budget_with_the_objective_when",
@@ -450,6 +415,176 @@ add(
     column,
     fixes=FIX_MUST,
     allowed=PINNED,
+)
+
+# The fewest items that reach a minimum: `SUM(w*x) >= B` with a minimized count. The heaviest rows come first.
+FEWEST = "MINIMIZE SUM(x)"
+# The worked example of definition.md under `>= 9`: 6 and then 4 reach 10, so D and C are selected.
+add("at_least_worked_example", WORKED, "SUM(w*x) >= 9", constant(9.0), objective=FEWEST, at_least=True)
+# The weights reach B exactly with the first two.
+add(
+    "at_least_total_meets_the_minimum_exactly",
+    _rows([2.0, 3.0, 4.0]),
+    "SUM(w*x) >= 7",
+    constant(7.0),
+    objective=FEWEST,
+    at_least=True,
+)
+# Every row is needed.
+add(
+    "at_least_every_row_is_needed",
+    _rows([1.5, 2.5, 3.0]),
+    "SUM(w*x) >= 7",
+    constant(7.0),
+    objective=FEWEST,
+    at_least=True,
+)
+# Negative weights: the totals of the heaviest first are 5, 8, -2 and -12, so they rise and then fall. Only the second
+# reaches 8; the search stops at the shortest prefix that reaches B, and a later one would not reach it.
+add(
+    "at_least_prefix_totals_rise_and_then_fall",
+    _rows([5.0, -10.0, -10.0, 3.0]),
+    "SUM(w*x) >= 8",
+    constant(8.0),
+    objective=FEWEST,
+    at_least=True,
+)
+add(
+    "at_least_negative_and_zero_weights",
+    _rows([-3.0, -1.0, 0.0, 2.0, 0.0, 4.0]),
+    "SUM(w*x) >= 5",
+    constant(5.0),
+    objective=FEWEST,
+    at_least=True,
+)
+# A minimum of at most 0 is met by the empty prefix: nothing is selected, whatever the weights.
+add("at_least_zero_minimum", _rows([2.0, 3.0]), "SUM(w*x) >= 0", constant(0.0), objective=FEWEST, at_least=True)
+add(
+    "at_least_negative_minimum_with_negative_weights",
+    _rows([-2.0, -3.0]),
+    "SUM(w*x) >= -1",
+    constant(-1.0),
+    objective=FEWEST,
+    at_least=True,
+)
+# A maximized negation of the count is the minimized count.
+add(
+    "at_least_maximized_negated_count",
+    WORKED,
+    "SUM(w*x) >= 9",
+    constant(9.0),
+    objective="MAXIMIZE SUM(-x)",
+    at_least=True,
+)
+# Groups. a needs 9 (6 and 4: two rows), b needs 3 (2 and 1: two), c needs 4 (one row of 5), d is met by the empty
+# prefix (0 reaches -1), e needs 2 (one row of 2).
+AT_LEAST_GROUPS = _rows(
+    [2.0, 3.0, 4.0, 6.0, 1.0, 1.0, 2.0, 5.0, 5.0, -2.0, 1.0, 1.0, 2.0],
+    group=["a"] * 4 + ["b"] * 3 + ["c"] * 2 + ["d"] * 2 + ["e"] * 2,
+    caps=[9.0] * 4 + [3.0] * 3 + [4.0] * 2 + [-1.0] * 2 + [2.0] * 2,
+)
+add(
+    "at_least_by_groups_with_different_minimums",
+    AT_LEAST_GROUPS,
+    "SUM(w*x) by (g) >= cap",
+    column,
+    objective=FEWEST,
+    by=True,
+    at_least=True,
+)
+# A row with a NULL key is in no group, so no minimum needs it: it is not selected.
+add(
+    "at_least_null_key_rows_are_outside_every_minimum",
+    NULL_KEY,
+    "SUM(w*x) by (g) >= 5",
+    constant(5.0),
+    objective=FEWEST,
+    by=True,
+    at_least=True,
+)
+# A limit read from the data: the group's value is the highest of its rows' limits (9, not 5 or 7).
+add(
+    "at_least_data_minimum_takes_the_highest_limit",
+    _rows([2.0, 3.0, 4.0, 6.0], caps=[5.0, 9.0, 7.0, 6.0]),
+    "SUM(w*x) >= cap",
+    column,
+    objective=FEWEST,
+    at_least=True,
+)
+# A `when` on the budget: a dropped row is in no minimum, and the objective counts it either way, so it is not selected.
+add(
+    "at_least_when_in_front_of_the_budget",
+    DROPPED,
+    "when flag: SUM(w*x) >= 9",
+    constant(9.0),
+    objective=FEWEST,
+    kept=KEPT,
+    at_least=True,
+)
+add(
+    "at_least_objective_when_equal_to_the_budgets",
+    DROPPED,
+    "when flag: SUM(w*x) >= 9",
+    constant(9.0),
+    objective="MINIMIZE when flag: SUM(x)",
+    kept=KEPT,
+    counted=KEPT,
+    at_least=True,
+)
+# Fixed items beside a minimum: the 4 is fixed to 1 and counts toward the 9, so the 6 reaches it (two items).
+add(
+    "at_least_fixed_to_one_counts_toward_the_minimum",
+    _rows([4.0, 2.0, 3.0, 6.0], must=[True, False, False, False]),
+    "SUM(w*x) >= 9",
+    constant(9.0),
+    objective=FEWEST,
+    fixes=FIX_MUST,
+    allowed=PINNED,
+    at_least=True,
+)
+# With the 6 fixed to 0 the free rows are 3 and 2: 4 + 3 + 2 = 9 needs both.
+add(
+    "at_least_fixed_to_zero_leaves_the_prefix",
+    _rows([4.0, 2.0, 3.0, 6.0], must=[True, False, False, False], ban=[False, False, False, True]),
+    "SUM(w*x) >= 9",
+    constant(9.0),
+    objective=FEWEST,
+    fixes=f"{FIX_MUST} AND {FIX_BAN}",
+    allowed=PINNED,
+    at_least=True,
+)
+# The fixed rows alone reach the minimum (10 >= 9): no free row is selected.
+add(
+    "at_least_fixed_rows_reach_the_minimum_alone",
+    _rows([10.0, 2.0, 3.0], must=[True, False, False]),
+    "SUM(w*x) >= 9",
+    constant(9.0),
+    objective=FEWEST,
+    fixes=FIX_MUST,
+    allowed=PINNED,
+    at_least=True,
+)
+add(
+    "at_least_negative_weight_fixed_to_one",
+    _rows([-5.0, 2.0, 3.0, 4.0, 6.0], must=[True, False, False, False, False]),
+    "SUM(w*x) >= 4",
+    constant(4.0),
+    objective=FEWEST,
+    fixes=FIX_MUST,
+    allowed=PINNED,
+    at_least=True,
+)
+add(
+    "at_least_fixed_rows_outside_every_budget",
+    OUTSIDE,
+    "when flag: SUM(w*x) by (g) >= 3",
+    constant(3.0),
+    objective=FEWEST,
+    by=True,
+    kept=KEPT,
+    fixes=f"{FIX_MUST} AND {FIX_BAN}",
+    allowed=PINNED,
+    at_least=True,
 )
 
 # A `when` that drops every row leaves no budget: every row is selected.
@@ -526,9 +661,9 @@ def _solve_with_oracle(oracle_solver, case):
     for members in _groups(case).values():
         weights = {f"x_{positions[id(row)]}": case.weight(row) for row in members}
         for limit in _limits(case, members):
-            oracle_solver.add_constraint(weights, "<=", limit)
+            oracle_solver.add_constraint(weights, ">=" if case.at_least else "<=", limit)
     counts = {f"x_{index}": case.factor for index, row in enumerate(case.rows) if case.counted(row)}
-    oracle_solver.set_objective(counts, ObjSense.MAXIMIZE)
+    oracle_solver.set_objective(counts, ObjSense.MINIMIZE if case.at_least else ObjSense.MAXIMIZE)
     return oracle_solver.solve()
 
 
@@ -541,7 +676,7 @@ def _check_budgets(case, selected):
             spend[key] = spend.get(key, 0.0) + case.weight(row) * chosen
     for key, members in _groups(case).items():
         for limit in _limits(case, members):
-            assert spend[key] <= limit, (key, spend[key], limit)
+            assert spend[key] >= limit if case.at_least else spend[key] <= limit, (key, spend[key], limit)
 
 
 def _check_assignment(case, rows, columns, oracle, mode):
@@ -611,8 +746,9 @@ def test_s3_agrees_with_the_oracle_when_a_when_drops_rows_over_a_joined_source(d
         ("when flag: SUM(w*x) <= 9", "MAXIMIZE SUM(x)", 1),
         ("SUM(when flag: w*x) <= 9", "MAXIMIZE SUM(x)", 1),
         ("when flag: SUM(w*x) <= 9", "MAXIMIZE when flag: SUM(x)", None),
+        ("SUM(when flag: w*x) <= 9", "MAXIMIZE SUM(when flag: x)", None),
     ],
-    ids=["when_in_front", "when_inside_the_sum", "objective_when_equal"],
+    ids=["when_in_front", "when_inside_the_sum", "objective_when_equal", "objective_part_when_equal"],
 )
 def test_s3_a_nan_weight_on_a_dropped_row_raises_on_neither_path(decidb_cli, budget, objective, dropped_row_selected):
     rows = "(1, 2.0::DOUBLE, true), (2, 'NaN'::DOUBLE, false), (3, 4.0::DOUBLE, true)"
@@ -722,10 +858,10 @@ def test_s3_leaves_a_count_to_s1(decidb_cli, budget):
 # ---------------------------------------------------------------------------
 
 
-def _problem(rows, budget="SUM(w*x) <= 9", columns=("id", "g", "w", "cap")):
+def _problem(rows, budget="SUM(w*x) <= 9", columns=("id", "g", "w", "cap"), objective="MAXIMIZE SUM(x)"):
     return (
         f"SELECT id, x FROM (FROM (VALUES {rows}) t({', '.join(columns)}) "
-        f"DECIDE x(BOOL) SUCH THAT {budget} MAXIMIZE SUM(x)) q"
+        f"DECIDE x(BOOL) SUCH THAT {budget} {objective}) q"
     )
 
 
@@ -764,6 +900,37 @@ def _fixed_problem(lo, budget="SUM(w*x) <= 5", fixes="when must: x = 1"):
 
 S3_ERROR_CASES.update(
     {
+        # No prefix of the heaviest first reaches the minimum: 3 + 4 + 2 = 9 is under 10.
+        "no_prefix_reaches_the_minimum": (
+            _problem(_SOURCE.format(w="3.0", cap="9.0"), "SUM(w*x) >= 10", objective="MINIMIZE SUM(x)"),
+            "infeasible",
+        ),
+        # Only negative weights: no prefix, the empty one included, reaches a positive minimum.
+        "negative_weights_cannot_reach_a_positive_minimum": (
+            _problem(
+                "(1, 'a', -2.0::DOUBLE, 9.0::DOUBLE), (2, 'a', -3.0::DOUBLE, 9.0::DOUBLE)",
+                "SUM(w*x) >= 1",
+                objective="MINIMIZE SUM(x)",
+            ),
+            "infeasible",
+        ),
+        # One group's minimum is out of reach (group b has one row of 4 under a minimum of 9).
+        "minimum_out_of_reach_in_one_group": (
+            _problem(
+                _SOURCE.format(w="3.0", cap="9.0"),
+                "SUM(w*x) by (g) >= CASE WHEN g = 'b' THEN 9 ELSE 3 END",
+                objective="MINIMIZE SUM(x)",
+            ),
+            "infeasible",
+        ),
+        "nan_weight_under_a_minimum": (
+            _problem(_SOURCE.format(w="'NaN'", cap="9.0"), "SUM(w*x) >= 3", objective="MINIMIZE SUM(x)"),
+            "invalid_value",
+        ),
+        "nan_limit_of_a_minimum": (
+            _problem(_SOURCE.format(w="3.0", cap="'NaN'"), "SUM(w*x) >= cap", objective="MINIMIZE SUM(x)"),
+            "null_bound",
+        ),
         # The rows fixed to 1 weigh 2 and 4, over the budget of 5, and no free weight is negative.
         "fixed_rows_over_the_budget": (_fixed_problem(0.0), "infeasible"),
         # Row 1 allows neither value: fixed to both.
@@ -830,6 +997,30 @@ def test_s3_a_running_total_past_a_double_raises_where_the_solver_answers(decidb
         "(4, 1e308::DOUBLE), (5, 1e308::DOUBLE)) t(id, w) DECIDE x(BOOL) SUCH THAT SUM(w*x) <= 0 MAXIMIZE SUM(x)) q"
     )
     assert len(_run(decidb_cli, sql, "off", expect_number_range=True)[0]) == 5
+    with pytest.raises(DeciDBCliError) as direct_error:
+        _run(decidb_cli, sql, "require")
+    assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
+    assert "SUM(w*x) <= 0 computes a number too large for a DOUBLE" in str(direct_error.value)
+
+
+# The rows fixed to 1 are summed too. Like the running total of the prefix, a sum past a DOUBLE is a number the plan
+# computes: direct solve raises and names the budget, where the solver warns and answers. The first case has no free
+# row, so only the fixed rows' own total overflows; in the second each total is finite and their sum is not.
+@pytest.mark.var_boolean
+@pytest.mark.error
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "rows",
+    ["(1, -1e308::DOUBLE, true), (2, -1e308::DOUBLE, true)", "(1, -1e308::DOUBLE, true), (2, -1e308::DOUBLE, false)"],
+    ids=["fixed_total_past_a_double", "fixed_total_and_prefix_total_sum_past_a_double"],
+)
+def test_s3_fixed_rows_past_a_double_raise_where_the_solver_answers(decidb_cli, rows):
+    sql = (
+        f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, w, must) "
+        "DECIDE x(BOOL) SUCH THAT SUM(w*x) <= 0 AND when must: x = 1 MAXIMIZE SUM(x)) q"
+    )
+    assert len(_run(decidb_cli, sql, "off", expect_number_range=True)[0]) == 2
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
     assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
