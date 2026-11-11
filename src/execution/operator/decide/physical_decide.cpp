@@ -575,14 +575,8 @@ static void ResolveGroupNames(const PerGroupCache &cache, DecideGlobalSinkState 
 class DecideLocalSinkState : public LocalSinkState {
 public:
     DecideProfileTotals profile_sink {"execution.sink_append"};
-    explicit DecideLocalSinkState(ClientContext &context, const PhysicalDecide &op)
-        : data(context, op.children[0]->GetTypes()) {
-        data.InitializeAppend(append_state);
+    explicit DecideLocalSinkState(ClientContext &context, const PhysicalDecide &op) {
     }
-
-    // A local collection to buffer chunks before merging into the global state
-    ColumnDataCollection data;
-    ColumnDataAppendState append_state;
 };
 
 unique_ptr<GlobalSinkState> PhysicalDecide::GetGlobalSinkState(ClientContext &context) const {
@@ -595,19 +589,28 @@ unique_ptr<LocalSinkState> PhysicalDecide::GetLocalSinkState(ExecutionContext &c
 
 SinkResultType PhysicalDecide::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
     auto &lstate = input.local_state.Cast<DecideLocalSinkState>();
+    auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
     DecideProfileSample profile(lstate.profile_sink);
-    lstate.data.Append(lstate.append_state, chunk);
+	// Top-down (language/guide.md §6.1): the descent reads each chunk as it arrives, and a row is the position the
+	// buffer gives it, the one every later phase reads. The descent fills one set of containers, so a chunk is read
+	// whole before the next.
+	lock_guard<mutex> guard(gstate.lock);
+	const auto row_base = gstate.data.Count();
+	gstate.data.Append(gstate.append_state, chunk);
+	if (!gstate.descent) {
+		gstate.descent = make_uniq<DecideDescent>(*tree, context.client);
+	}
+	if (row_base == 0) {
+		gstate.first.Initialize(Allocator::Get(context.client), chunk.GetTypes());
+		chunk.Copy(gstate.first);
+	}
+	AppendDecideDescent(*gstate.descent, chunk, row_base);
+	gstate.descent_rows += chunk.size();
     return SinkResultType::NEED_MORE_INPUT;
 }
 
 SinkCombineResultType PhysicalDecide::Combine(ExecutionContext &context, OperatorSinkCombineInput &input) const {
     DecideProfileScope profile("execution.sink_combine");
-    auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
-    auto &lstate = input.local_state.Cast<DecideLocalSinkState>();
-
-    lock_guard<mutex> guard(gstate.lock);
-    gstate.data.Combine(lstate.data);
-
     return SinkCombineResultType::FINISHED;
 }
 
@@ -1019,22 +1022,10 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
                                   unique_ptr<DecideDescent> &descent, PerGroupCache &per_group_cache,
                                   vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated,
                                   bool silent) const {
-	// Top-down: the descent reads the buffered input in Finalize's one scan of it, so the sink stays parallel and a
-	// row is the position the buffer gives it, the one every later phase reads.
+	// Top-down: the descent read every chunk as Sink received it, and the buffer is never scanned to evaluate a row.
 	DecideProfileScope phase("execution.tree_descent");
-	descent = make_uniq<DecideDescent>(*tree, context);
-	descent->Reserve(num_rows);
 	DecideInputScans() = 0;
-	// The input's first chunk, where a value the whole query shares is read (a composed term's or a square's factor).
-	DataChunk first;
-	DecideRowStore(context, gstate.data).Build([&](DataChunk &chunk, idx_t offset) {
-		AppendDecideDescent(*descent, chunk, offset);
-		gstate.descent_rows += chunk.size();
-		if (offset == 0) {
-			first.Initialize(Allocator::Get(context), chunk.GetTypes());
-			chunk.Copy(first);
-		}
-	});
+	auto &first = gstate.first;
 	descent->Finish();
 	DecideProfileScope::Counter("execution.descent_rows", static_cast<double>(gstate.descent_rows));
 	// One ledger for the evaluation: what the descent's routing raised, then what the programs raise where a read

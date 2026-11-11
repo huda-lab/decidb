@@ -6,9 +6,9 @@
 // One scan of the operator's buffered input (pipeline/08_execution/done.md).
 //===----------------------------------------------------------------------===//
 //
-// The tree's descent reads the input in one scan of it (DecideRowStore::Build with a callback per chunk), so the sink
-// stays parallel. The unbounded diagnosis reads the columns it names in a scan of its own after the evaluation, its
-// expressions registered and evaluated in the pass, and their values read back window by window (DecideRowWindows).
+// The unbounded diagnosis reads the columns it names in a scan of its own after the evaluation, its expressions
+// registered and evaluated in the pass, and their values read back window by window (DecideRowWindows). The tree's
+// descent reads its rows in Sink, as they arrive.
 //
 // The pass evaluates an expression on every row, so an error an expression raises on a row is kept with the row's
 // value, and raised only when a read reaches that row, as evaluating it there would have (language/guide.md §6.3).

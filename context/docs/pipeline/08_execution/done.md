@@ -21,7 +21,7 @@ on `PhysicalDecide`, in call order:
 
 | Method | Phase |
 |---|---|
-| `EvaluateTree` | 1–2 — the evaluation (§1a): the tree's descent over the input in one scan (`DecideDescent`), each node's programs over its entries (`DecideTreeColumns`), and the model emitter (`DecideModelEmitter`), which writes the key scopes' classes, the clauses, the objective, the composed clauses and the helper decisions' members as stage 06 reads them |
+| `EvaluateTree` | 1–2 — the evaluation (§1a): the tree's descent, which read each chunk as `Sink` received it (`DecideDescent`), each node's programs over its entries (`DecideTreeColumns`), and the model emitter (`DecideModelEmitter`), which writes the key scopes' classes, the clauses, the objective, the composed clauses and the helper decisions' members as stage 06 reads them |
 | `BuildSolverInput` | 3a — assembles `SolverInput`, settles the column box, builds the `VarIndexer` |
 | `FormulateModel` | 3b — derives the constants and emits the rows, against a given box |
 | `FormulateElasticModel` | 3b again, under `DIAGNOSE` only — the same pass against the widened box a repair searches |
@@ -44,8 +44,8 @@ BilinearTerm` (`solver_input.hpp`) is the one bilinear-term struct; there is no 
 | # | Where | What |
 |---|---|---|
 | 1 | `GetGlobalSinkState` → `DecideGlobalSinkState` ctor | Read the folded variable box and alias the prepared linear form |
-| 2 | `Sink` / `Combine` | Materialize every surviving tuple into a `ColumnDataCollection` |
-| 3 | `Finalize` → `EvaluateTree` → `DecideDescent` | Top-down: one scan of the input, each node's `when` parts, keys and σ fields on the rows that reach it, into its containers (§1a) |
+| 2 | `Sink` → `DecideDescent` | Materialize every surviving tuple into a `ColumnDataCollection`, and read it top-down as it arrives: each node's `when` parts, keys and σ fields on the rows that reach it, into its containers (§1a) |
+| 3 | `Finalize` → `EvaluateTree` | Settle the containers (`DecideDescent::Finish`: ranks, timelines) |
 | 4 | `EvaluateTree` → `DecideTreeColumns` | Bottom-up: the frames' timelines and columns (§4b), the data checks, each node's programs over its entries, the data reducers' folds |
 | 5 | `EvaluateTree` → `DecideModelEmitter` | The key scopes' classes (§4), the objective produced once (§4a), then the clauses, the objective, the composed clauses and the helper decisions' members (§5) |
 | 6 | `Finalize` → `BuildSolverInput` → `FormulateModel` | Assemble `SolverInput` and settle the box, then linearize against it (stage 06) |
@@ -70,7 +70,7 @@ its children's containers. Stage 08 does the same:
 | Deck | Stage 08 |
 |---|---|
 | The annotated tree: each node with what it reads per row (pp. 81, 99) | `DecideTree`, built at plan time (below): the E, G and O nodes, each with its `when` parts, key, σ, carried columns and programs |
-| Top-down construction: one pass over the rows (pp. 83-91, 100-105) | `DecideDescent`, in `Finalize`'s one scan of the buffered input (`DecideRowStore::Build`), a window at a time |
+| Top-down construction: one pass over the rows (pp. 83-91, 100-105) | `DecideDescent`, in `Sink`, each chunk read as it arrives, under the sink's lock, a window at a time |
 | A node's container (p. 110) | `DecideNodeContainer`: its entries as columns, its slots found in a `DecideKeyMap` |
 | Bottom-up evaluation (pp. 93-97, 106-108) | `DecideTreeColumns`: each node's programs over its entries, children before parents; then `DecideModelEmitter` writes what stage 06 reads |
 
@@ -80,8 +80,13 @@ reads, so a read of a row the `when` drops raises nothing (`when t.w > 0: x <= l
 that reads it. The least is raised once every phase has run, in the order `language/guide.md` §7.3 gives. An
 interrupt, an out-of-memory error and a fatal error stop the evaluation where they arise.
 
-The input is scanned once (`execution.input_scans`, `DECIDB_PROFILE`). The unbounded diagnosis's column groupings
-(§7b) explain the solved model after the evaluation, and read the named input columns in a scan of their own.
+Each row is read once, as it arrives, and the evaluation scans the buffered input no more (`execution.input_scans` 0,
+`DECIDB_PROFILE`). One descent fills the containers, so `Sink` reads a chunk whole before the next: a descent per
+thread, merged in `Combine`, would remap every slot, entry, instance and error rank. Reading in `Sink` took the same
+wall time as the scan in `Finalize` it replaced, at 10^6 rows (the descent is single-threaded either way, and now
+overlaps the operators below it). The unbounded
+diagnosis's column groupings (§7b) explain the solved model after the evaluation, and read the named input columns in
+a scan of their own.
 
 ---
 
@@ -118,8 +123,9 @@ references, `tests/_expected.py`, were recorded from flat's runs):
   read otherwise, and a reducer's over frames its G's fold. What a frame's columns read, its payload, its `else` and a
   range's argument, are programs on its O (`DecideFrameColumnPrograms`), in stage 05's terms. A child a data
   expression reads that has no data value is an internal error.
-- *Top-down* (`decide_descent.hpp`): the descent reads the buffered input in `Finalize`'s one scan
-  (`DecideRowStore::Build`), so the sink stays parallel. It is a Composite traversal vectorized by selection, as
+- *Top-down* (`decide_descent.hpp`): the descent reads each chunk as `Sink` receives it, under the sink's lock, and
+  numbers its rows by their places in the buffer, which every later phase reads; the buffer is never scanned to evaluate
+  a row (`execution.input_scans` 0, `execution.descent_rows` the rows read). It is a Composite traversal vectorized by selection, as
   DuckDB's filters hand a selection vector on: a window of the input at a time, a node's `when` parts, keys and σ fields
   execute only on the rows that reach it (`Reach`: the rows, and the enclosing slot each arrives in), and each key's
   rows find their slots in a `DecideKeyMap` (`decide_key_map.hpp`). That is DuckDB's GROUP BY hash table
@@ -277,7 +283,7 @@ references, `tests/_expected.py`, were recorded from flat's runs):
   relation-qualified one's first row of each class, with flat's name and label (`DecideComposedTerm`). A qualified
   term's operand is the one its scope's keyed mapping reads, as a written reducer's and a helper's are
   (`DecideTreeBuilder::Qualified`), so a scope whose classes its values split (D70) has them. A term's factor is one
-  value for the whole query, read as flat reads it, on the input's first chunk, which the descent's one scan keeps,
+  value for the whole query, read as flat reads it, on the input's first chunk, which the sink keeps,
   whatever the clause keeps (`DecideQueryWideScale`). A NULL factor or a reducer over no row skips the clause
   (`DecideComposedTermReadsNoRow`); its one instance holds where its `when` keeps a row, the rows its root holds, and
   under DIAGNOSE it stands for the classes of its `per K:` among those rows, by flat's own tail

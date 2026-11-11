@@ -1,7 +1,8 @@
-"""One-pass evaluation (deck §3, pp. 77-119): the operator reads its collected rows once, filling every node's
-container top-down, and evaluates the containers bottom-up (``pipeline/08_execution/done.md``).
+"""One-pass evaluation (deck §3, pp. 77-119): the operator reads each row once, as Sink receives it, filling every
+node's container top-down, and evaluates the containers bottom-up (``pipeline/08_execution/done.md``).
 
-``execution.input_scans`` (DECIDB_PROFILE) counts the scans of the input a query's evaluation makes.
+``execution.input_scans`` (DECIDB_PROFILE) counts the scans of the buffered input a query's evaluation makes, and
+``execution.descent_rows`` the rows the descent read.
 """
 
 import json
@@ -11,8 +12,8 @@ import pytest
 from ._anr_cases import EXAMPLE_9, F1_MAX, F1_SUM, F2_PREVIOUS
 
 
-def input_scans(cli, sql: str) -> list[float]:
-    """The `execution.input_scans` counters a query reports, one per evaluation."""
+def counters(cli, sql: str, name: str) -> list[float]:
+    """The `name` counters a query reports, one per evaluation."""
     profiled = cli.with_env({"DECIDB_PROFILE": "1"}).execute_raw(
         "SET threads = 1; SET decide_direct_solve = 'off';\n" + sql
     )
@@ -21,12 +22,16 @@ def input_scans(cli, sql: str) -> list[float]:
         if not line.startswith("DECIDB_PROFILE: "):
             continue
         event = json.loads(line[len("DECIDB_PROFILE: ") :])
-        if event.get("event") == "counter" and event.get("name") == "execution.input_scans":
+        if event.get("event") == "counter" and event.get("name") == name:
             counters.append(event["value"])
     return counters
 
 
 @pytest.mark.parametrize("case", [F1_MAX, F1_SUM, F2_PREVIOUS, EXAMPLE_9], ids=lambda case: case.name)
 def test_the_evaluation_reads_the_input_once(decidb_cli, case):
-    """Nested reducers, a frame and the deck's example 9: every clause, key and frame reads the pass."""
-    assert input_scans(decidb_cli.without_verify_serializer(), case.sql) == [1]
+    """Nested reducers, a frame and the deck's example 9: the descent reads each row as it arrives, and the evaluation
+    never scans the buffer."""
+    cli = decidb_cli.without_verify_serializer()
+    assert counters(cli, case.sql, "execution.input_scans") == [0]
+    rows = counters(cli, case.sql, "execution.descent_rows")
+    assert len(rows) == 1 and rows[0] > 0, rows

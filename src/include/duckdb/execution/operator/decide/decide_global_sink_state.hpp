@@ -34,6 +34,7 @@ public:
 	explicit DecideGlobalSinkState(ClientContext &context, const PhysicalDecide &op)
 	    : data(context, op.children[0]->GetTypes()), context(context), op(op),
 	      canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.keys, op.is_boolean_var) {
+		data.InitializeAppend(append_state);
         // The decision column box was resolved by DecideOptimizer::FoldSingletonRows.
         // A variable whose box never had a lower bound written is one the query never
         // lowered, and Finalize resolves it to the default 0 floor.
@@ -177,10 +178,15 @@ public:
 	}
 
     mutex lock;
+	//! The tree's descent, which reads each chunk as Sink receives it (language/guide.md §6.1): the rows are read
+	//! once, as they arrive, and the buffer below is never scanned to evaluate them.
 	unique_ptr<DecideDescent> descent;
 	idx_t descent_rows = 0;
-    // This collection will hold all the data from the child operator
+	//! The input's first chunk, where a value the whole query shares is read (a composed term's or a square's factor).
+	DataChunk first;
+    // This collection will hold all the data from the child operator, in the order the descent read it
     ColumnDataCollection data;
+	ColumnDataAppendState append_state;
 
     //! Needed to evaluate coefficient expressions against the materialized rows.
     ClientContext &context;

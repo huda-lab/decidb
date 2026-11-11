@@ -395,21 +395,6 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 DecideDescent::~DecideDescent() {
 }
 
-void DecideDescent::Reserve(idx_t rows) {
-	for (idx_t n = 0; n < tree.nodes.size(); n++) {
-		auto &container = containers[n];
-		if (tree.nodes[n]->kind == DecideNodeKind::SCOPE && !container.groups.per_row) {
-			container.routed.reserve(rows);
-			continue;
-		}
-		container.rows.reserve(rows);
-		container.parent_slots.reserve(rows);
-		if (!container.groups.per_row) {
-			container.slots.reserve(rows);
-		}
-	}
-}
-
 void DecideDescent::Evaluate(const Expression &expression, DataChunk &chunk, const Reach &rows, Vector &result) {
 	if (rows.empty()) {
 		return;

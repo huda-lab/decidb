@@ -192,9 +192,6 @@ class DecideDescent {
 public:
 	DecideDescent(const DecideTree &tree, ClientContext &context);
 	~DecideDescent();
-	//! Room for `rows` input rows: a node holds at most an entry per row, a set E a routed row per row. Memory is
-	//! committed only as rows arrive.
-	void Reserve(idx_t rows);
 	void Append(DataChunk &chunk, idx_t row_base);
 	void Finish();
 	const vector<DecideNodeContainer> &Containers() const {
