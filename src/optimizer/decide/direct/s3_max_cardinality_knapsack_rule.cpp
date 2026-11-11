@@ -32,6 +32,17 @@ struct Condition final : DirectApplicabilityCondition {
 	DirectLimit limit;
 	//! The budget's `by` key: each group has a budget of its own. Empty without a key: one budget for all the rows.
 	vector<DirectKeyElement> group_keys;
+	//! The rows the budget covers: its `when` (the clause's, with the sum's own), over the source; null for every row.
+	//! A row it drops reads no weight and is in no budget.
+	unique_ptr<Expression> when;
+	//! Whether the objective counts the budget's rows only: its `when` is the budget's, so a row the budget drops adds
+	//! nothing to the objective either. Otherwise every row adds one, and a row outside the budget is selected.
+	bool objective_on_kept = false;
+
+	//! Whether rows can be outside every budget: a `when` drops them, or a NULL in a `by` key element.
+	bool Scoped() const {
+		return when || !group_keys.empty();
+	}
 };
 
 class Rule final : public DirectSolveRule {
@@ -45,7 +56,7 @@ public:
 			return nullptr;
 		}
 		auto condition = make_uniq<Condition>();
-		if (!ProveBudget(ir, context, *condition) || !ProveObjective(ir, context)) {
+		if (!ProveBudget(ir, context, *condition) || !ProveObjective(ir, context, *condition)) {
 			return nullptr;
 		}
 		return std::move(condition);
@@ -65,8 +76,11 @@ private:
 	bool ProveBudget(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 	bool ProveScope(const DirectIR &ir, Condition &condition) const;
 	bool ProveWeights(ClientContext &context, const DirectLinearPart &budget) const;
-	bool ProveObjectivePart(const DirectIR &ir, ClientContext &context, const DirectPart &part, double &count) const;
-	bool ProveObjective(const DirectIR &ir, ClientContext &context) const;
+	bool ProveObjectivePart(const DirectIR &ir, ClientContext &context, const DirectPart &part,
+	                        unique_ptr<Expression> &kept, double &count) const;
+	bool ProveObjectiveRows(const Condition &condition, const unique_ptr<Expression> &kept, bool first,
+	                        bool &filtered) const;
+	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 };
 
 //! One decision, BOOL, one per row.
@@ -81,15 +95,16 @@ bool Rule::ProveConstraint(const DirectIR &ir) const {
 	return ir.constraints.size() == 1 && ir.constraints[0].comparison == ExpressionType::COMPARE_LESSTHANOREQUALTO;
 }
 
-//! The budget covers every row, or every row of a group of its `by` key. A `when` (on the clause or in the sum) or a
-//! `per K:` class gives it a smaller scope, which stays with the solver.
+//! The budget covers the rows its `when` (on the clause or in the sum) keeps, or every row, in the groups of its `by`
+//! key. A `per K:` class gives it a smaller scope, which stays with the solver.
 bool Rule::ProveScope(const DirectIR &ir, Condition &condition) const {
 	vector<const DirectIRConstraint *> budgets {&ir.constraints[0]};
 	DirectSharedScope scope;
 	// A gated scope has classes, so the classes decline it too.
-	if (!DirectProveSharedScope(ir, budgets, scope) || scope.when || !scope.classes.empty()) {
+	if (!DirectProveSharedScope(ir, budgets, scope) || !scope.classes.empty()) {
 		return false;
 	}
+	condition.when = std::move(scope.when);
 	condition.group_keys = std::move(scope.keys);
 	return true;
 }
@@ -128,16 +143,16 @@ bool Rule::ProveBudget(const DirectIR &ir, ClientContext &context, Condition &co
 	       ProveWeights(context, condition.budget) && DirectReadLimit(ir, context, ir_node, condition.limit);
 }
 
-//! One objective part: a plain SUM of linear terms on every row, each coefficient a finite constant. `count` is the
-//! part's coefficient on the decision in the objective's own (minimizing) direction.
-bool Rule::ProveObjectivePart(const DirectIR &ir, ClientContext &context, const DirectPart &part, double &count) const {
+//! One objective part: a plain SUM of linear terms, each coefficient a finite constant, on the rows `kept` names (null
+//! for every row). `count` is the part's coefficient on the decision in the objective's own (minimizing) direction.
+bool Rule::ProveObjectivePart(const DirectIR &ir, ClientContext &context, const DirectPart &part,
+                              unique_ptr<Expression> &kept, double &count) const {
 	if (!part.IsPlainSum() || !DirectOnlyLinearTerms(part.terms)) {
 		return false;
 	}
 	DirectLinearPart read;
-	unique_ptr<Expression> kept;
 	if (!DirectReadLinearPart(ir, context, part, ir.objective.written, read) ||
-	    !DirectObjectivePartKept(ir, part, kept) || kept) {
+	    !DirectObjectivePartKept(ir, part, kept)) {
 		return false;
 	}
 	double slope = 0;
@@ -152,18 +167,37 @@ bool Rule::ProveObjectivePart(const DirectIR &ir, ClientContext &context, const 
 	return true;
 }
 
+//! The rows every part of the objective counts are all the rows or exactly the budget's: the same `when`, by expression
+//! equality, in every part. A part with a `when` of its own gives the rows of one budget values of 0 and 1, a two-value
+//! knapsack, and a decline. `filtered` is what the first part (`first`) settled.
+bool Rule::ProveObjectiveRows(const Condition &condition, const unique_ptr<Expression> &kept, bool first,
+                              bool &filtered) const {
+	bool part_filtered = kept != nullptr;
+	if (part_filtered && (!condition.when || !Expression::Equals(*kept, *condition.when))) {
+		return false;
+	}
+	if (first) {
+		filtered = part_filtered;
+	}
+	return part_filtered == filtered;
+}
+
 //! The objective counts the selected rows: its parts' coefficients add up to a number below zero (the parts are a
-//! minimization, so a count that is maximized is negative) that is finite. Any other objective, none included, is a
-//! decline.
-bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context) const {
+//! minimization, so a count that is maximized is negative) that is finite, on all the rows or on the budget's. Any
+//! other objective, none included, is a decline.
+bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	double total = 0;
-	for (auto &part : ir.objective.parts) {
+	bool filtered = false;
+	for (idx_t i = 0; i < ir.objective.parts.size(); i++) {
+		unique_ptr<Expression> kept;
 		double count;
-		if (!ProveObjectivePart(ir, context, part, count)) {
+		if (!ProveObjectivePart(ir, context, ir.objective.parts[i], kept, count) ||
+		    !ProveObjectiveRows(condition, kept, i == 0, filtered)) {
 			return false;
 		}
 		total += count;
 	}
+	condition.objective_on_kept = filtered;
 	return std::isfinite(total) && total < 0;
 }
 
@@ -187,8 +221,9 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context) const {
 //!
 //! The slot map: the source columns in order (the reader's: the source row id and the bounds' values come after the
 //! node's, and the driver drops them), then x (INTEGER 0/1), then the column of the checks, which keeps them live
-//! (`validated_columns`). A row outside every group (a NULL in a NO_GROUP element of the `by` key, D5) is in no budget
-//! and selecting it costs nothing, so x = 1 there.
+//! (`validated_columns`). A row outside every budget (a NULL in a NO_GROUP element of the `by` key, D5, or dropped by
+//! the budget's `when`) is in no budget and selecting it costs nothing, so x = 1 there, unless the objective drops it
+//! too (its `when` is the budget's): then it adds nothing and x = 0.
 //!
 //! Rows of equal weight are ordered as the sort gives them, and the answer is right only if the rank and the running
 //! sum see the same order: with two sorts, tied rows a and b of weight 5 under B = 7 could be ranked a, b by one and
@@ -202,7 +237,7 @@ public:
 	            const vector<LogicalType> &source_types_p, const DirectStateErrors &errors_p)
 	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context),
 	      source_bindings(source_bindings_p), source_types(source_types_p), errors(errors_p),
-	      scoped(!condition_p.group_keys.empty()) {
+	      scoped(condition_p.Scoped()) {
 		D_ASSERT(source_bindings.size() == source_types.size());
 		auto &limit = condition.limit;
 		if (limit.constant) {
@@ -216,7 +251,8 @@ public:
 	}
 
 	DirectSubstitute Build(unique_ptr<LogicalOperator> rows) const {
-		auto state = DirectProjectScope(binder, std::move(rows), scoped, nullptr, condition.group_keys, {}, nullptr);
+		auto state =
+		    DirectProjectScope(binder, std::move(rows), scoped, condition.when.get(), condition.group_keys, {}, nullptr);
 		auto from_scope = DirectCarriedOf(state, source_bindings.size());
 
 		DirectProjectionStage p1(binder.GenerateTableIndex());
@@ -256,6 +292,8 @@ private:
 	struct Weighted {
 		DirectCarried carried;
 		ColumnBinding weight;
+		//! Whether the budget's `when` keeps the row; set only when the objective counts the budget's rows only.
+		ColumnBinding kept;
 		//! What the aggregates of the data limit read, one member per input of the limit's group bound.
 		vector<DirectGroupInputColumns> limit_inputs;
 		//! The checks of the weight and of what the limit reads. Each reads P1's columns, so P2 evaluates them.
@@ -273,6 +311,8 @@ private:
 		ColumnBinding rank;
 		//! The rank when the row's prefix fits the limit, else NULL.
 		ColumnBinding fit_rank;
+		//! Whether the budget's `when` keeps the row; set only when the objective counts the budget's rows only.
+		ColumnBinding kept;
 		//! Whether the empty prefix fits the limit; set only when a verdict is needed.
 		ColumnBinding empty_fits;
 		ColumnBinding valid;
@@ -336,7 +376,15 @@ private:
 			}
 		}
 		auto values = DirectValuesOn(condition.budget, 0);
-		result.weight = p1.Add(calc.Wrap(DirectSumOf(optimizer, values, over_state)));
+		// A row the `when` drops reads no weight: it is NULL there, so the check passes it and no total counts it.
+		ExprPtr kept;
+		if (condition.when) {
+			kept = calc.Wrap(DirectActiveWhen(calc, over_state(*condition.when).get()));
+			if (condition.objective_on_kept) {
+				result.kept = p1.Add(kept);
+			}
+		}
+		result.weight = p1.Add(DirectOnKeptRows(calc, kept, calc.Wrap(DirectSumOf(optimizer, values, over_state))));
 		if (auto check = DirectCheckNumber(optimizer, result.weight, condition.budget.names[0], values, source_bindings,
 		                                   p1.index)) {
 			checks.push_back(std::move(check));
@@ -397,6 +445,9 @@ private:
 		result.rank = p2.Add(calc.Out(rank));
 		auto fits = Fits(sorted, Column(LogicalType::DOUBLE, sorted.total));
 		result.fit_rank = p2.Add(calc.Out(calc.If(fits, rank, calc.Constant(Value(LogicalType::BIGINT)))));
+		if (condition.objective_on_kept) {
+			result.kept = p2.Add(Column(LogicalType::BOOLEAN, weighted.kept));
+		}
 		if (NeedsVerdict()) {
 			result.empty_fits = p2.Add(calc.Out(Fits(sorted, calc.Num(0.0))));
 		}
@@ -436,6 +487,10 @@ private:
 		                       calc.Coalesce({k, calc.Constant(Value::BIGINT(0))}));
 		auto chosen =
 		    scoped ? calc.If(Column(LogicalType::BOOLEAN, fitted.carried.eligible), within, calc.Bool(true)) : within;
+		if (condition.objective_on_kept) {
+			// A row the budget's `when` drops adds nothing to the objective and costs nothing: it is not selected.
+			chosen = calc.If(Column(LogicalType::BOOLEAN, fitted.kept), chosen, calc.Bool(false));
+		}
 		out.Add(calc.Out(calc.If(chosen, calc.Constant(Value::INTEGER(1)), calc.Constant(Value::INTEGER(0)))));
 		vector<unique_ptr<Expression>> checks;
 		checks.push_back(calc.Out(Column(LogicalType::BOOLEAN, fitted.valid)));

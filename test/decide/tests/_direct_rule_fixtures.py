@@ -594,19 +594,22 @@ S3 = RuleFixture(
     """,
     table_change="ALTER TABLE direct_s3_life ADD COLUMN extra INTEGER;",
     # Each is the plain form with one condition changed: a value per row in the objective (the general 0-1 knapsack), a
-    # strict bound over an integer weight, a `when` on the budget and a second constraint. A weight of exactly 1 is S1's
-    # count, which `require` answers with S1, so it is no near miss here; `test_direct_s3_max_cardinality_knapsack.py`
-    # checks that S3 leaves it to S1.
+    # strict bound over an integer weight, an objective `when` that is not the budget's (a two-value knapsack) and a
+    # second constraint. A weight of exactly 1 is S1's count, which `require` answers with S1, so it is no near miss
+    # here; `test_direct_s3_max_cardinality_knapsack.py` checks that S3 leaves it to S1.
     near_misses=(
         ("x(BOOL)", "SUM(w*x) <= 4", "MAXIMIZE SUM(p*x)"),
         ("x(BOOL)", "SUM(wi*x) < 4", "MAXIMIZE SUM(x)"),
-        ("x(BOOL)", "when p > 9: SUM(w*x) <= 4", "MAXIMIZE SUM(x)"),
+        ("x(BOOL)", "when p > 9: SUM(w*x) <= 4", "MAXIMIZE when p > 5: SUM(x)"),
         ("x(BOOL)", "SUM(w*x) <= 4 AND SUM(p*x) <= 12", "MAXIMIZE SUM(x)"),
     ),
-    # Forms that look like near misses and apply: a constant factor on the count and a constant weight of 2.
+    # Forms that look like near misses and apply: a constant factor on the count, a constant weight of 2, a `when` on
+    # the budget (the row it drops is selected) and the same `when` on the objective (the row is not selected).
     near_miss_applies=(
         ("x(BOOL)", "SUM(w*x) <= 4", "MAXIMIZE 2 * SUM(x)"),
         ("x(BOOL)", "SUM(2*x) <= 4", "MAXIMIZE SUM(x)"),
+        ("x(BOOL)", "when p > 9: SUM(w*x) <= 4", "MAXIMIZE SUM(x)"),
+        ("x(BOOL)", "when p > 9: SUM(w*x) <= 4", "MAXIMIZE when p > 9: SUM(x)"),
     ),
     near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 2.0::DOUBLE, 2), (2, 10.0::DOUBLE, 3.0::DOUBLE, 3)) t(id,p,w,wi)",
     near_miss_column="id",

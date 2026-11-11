@@ -50,18 +50,35 @@ COLUMNS = (
     ("cap", "DOUBLE"),  # a limit read from the data
 )
 NAMES = [name for name, _ in COLUMNS]
-TYPES = dict(COLUMNS)
+# Columns the queries read but the results do not show: `flag` is the `when` of a budget or an objective; `must` and
+# `ban` pin a row to 1 and to 0; `lo` and `hi` are the ends a row allows `x`.
+HIDDEN = (
+    ("flag", "BOOLEAN"),
+    ("must", "BOOLEAN"),
+    ("ban", "BOOLEAN"),
+    ("lo", "DOUBLE"),
+    ("hi", "DOUBLE"),
+)
+SOURCE_NAMES = NAMES + [name for name, _ in HIDDEN]
+TYPES = dict(COLUMNS + HIDDEN)
+ROW_DEFAULTS = dict(g="a", cap=0.0, flag=True, must=False, ban=False, lo=0.0, hi=1.0)
 
 
-def _rows(weights, group="a", caps=None):
-    """One row per weight, numbered from 1, in one group (or in the groups `group` lists), with the limits `caps`."""
+def _rows(weights, group="a", caps=None, **columns):
+    """One row per weight, numbered from 1, in one group (or in the groups `group` lists), with the limits `caps`.
+
+    A keyword names a hidden column and lists its value on every row (`flag=[True, False]`)."""
     groups = group if isinstance(group, (list, tuple)) else [group] * len(weights)
     caps = caps if caps is not None else [0.0] * len(weights)
-    return tuple(dict(id=i, g=g, w=w, cap=c) for i, (w, g, c) in enumerate(zip(weights, groups, caps), 1))
+    rows = []
+    for i, (w, g, c) in enumerate(zip(weights, groups, caps), 1):
+        hidden = {name: values[i - 1] for name, values in columns.items()}
+        rows.append(dict(ROW_DEFAULTS, id=i, g=g, w=w, cap=c, **hidden))
+    return tuple(rows)
 
 
 def _values(rows):
-    return values_clause(rows, NAMES, TYPES, sql_literal)
+    return values_clause(rows, SOURCE_NAMES, TYPES, sql_literal)
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +101,10 @@ class Case:
     factor: float = 1.0
     #: row -> the row's weight in the budget; a NULL weight is a NULL summand, which SUM skips.
     weight: object = lambda row: 0.0 if row["w"] is None else row["w"]
+    #: row -> whether the budget's `when` keeps the row. A row it drops has no weight and is in no budget.
+    kept: object = lambda row: True
+    #: row -> whether the objective counts the row (the rows its `when` keeps).
+    counted: object = lambda row: True
 
 
 CASES = {}
@@ -183,15 +204,104 @@ add(
 
 # Duplicate rows (the same id and the same weight) stay separate rows: 2 and one of the two 3s fit.
 DUPLICATES = (
-    dict(id=1, g="a", w=2.0, cap=0.0),
-    dict(id=2, g="a", w=3.0, cap=0.0),
-    dict(id=2, g="a", w=3.0, cap=0.0),
-    dict(id=3, g="a", w=4.0, cap=0.0),
+    dict(ROW_DEFAULTS, id=1, w=2.0),
+    dict(ROW_DEFAULTS, id=2, w=3.0),
+    dict(ROW_DEFAULTS, id=2, w=3.0),
+    dict(ROW_DEFAULTS, id=3, w=4.0),
 )
 add("duplicate_rows", DUPLICATES, "SUM(w*x) <= 5", constant(5.0))
 
 # A NULL weight is a NULL summand, which SUM skips: the row costs nothing and is selected.
 add("null_weight", _rows([2.0, None, 4.0, 6.0]), "SUM(w*x) <= 5", constant(5.0))
+
+# A `when` on the budget. The rows it drops (flag false or NULL) have no weight and are in no budget, so they cost
+# nothing; the objective counts them (it has no `when`), so they are selected: the weights 2, 3 and 4 fit under 9, and
+# the two dropped rows, 100 and 200, are selected beside them.
+KEPT = lambda row: bool(row["flag"])  # noqa: E731  (NULL drops the row)
+DROPPED = _rows([2.0, 3.0, 4.0, 6.0, 100.0, 200.0], flag=[True, True, True, True, False, None])
+add("when_in_front_of_the_budget", DROPPED, "when flag: SUM(w*x) <= 9", constant(9.0), kept=KEPT)
+add("when_inside_the_sum", DROPPED, "SUM(when flag: w*x) <= 9", constant(9.0), kept=KEPT)
+# The clause's `when` and the sum's own: a row is in the budget when both keep it.
+add(
+    "when_in_front_and_inside_the_sum",
+    _rows([2.0, 3.0, 4.0, 6.0, 1.0], must=[True, True, True, True, False]),
+    "when flag: SUM(when must: w*x) <= 9",
+    constant(9.0),
+    kept=lambda row: bool(row["flag"]) and bool(row["must"]),
+)
+# The objective's `when` is the budget's: a row dropped from both adds nothing and costs nothing, so the count is the
+# kept rows' alone (3, not 5).
+add(
+    "objective_when_equal_to_the_budgets",
+    DROPPED,
+    "when flag: SUM(w*x) <= 9",
+    constant(9.0),
+    objective="MAXIMIZE when flag: SUM(x)",
+    kept=KEPT,
+    counted=KEPT,
+)
+add(
+    "objective_part_when_equal_to_the_sums",
+    DROPPED,
+    "SUM(when flag: w*x) <= 9",
+    constant(9.0),
+    objective="MAXIMIZE 2 * SUM(when flag: x)",
+    factor=2.0,
+    kept=KEPT,
+    counted=KEPT,
+)
+add(
+    "objective_when_in_front_equal_to_the_sums",
+    DROPPED,
+    "SUM(when flag: w*x) <= 9",
+    constant(9.0),
+    objective="MAXIMIZE when flag: SUM(x)",
+    kept=KEPT,
+    counted=KEPT,
+)
+# A limit read from the data is read on the rows the `when` keeps alone: the dropped row's limit of 0.5 is not one of
+# the group's limits (the tightest of the others is 7).
+add(
+    "when_budget_reads_limits_of_kept_rows_only",
+    _rows([2.0, 3.0, 4.0, 6.0, 1.0], caps=[9.0, 7.0, 12.0, 8.0, 0.5], flag=[True, True, True, True, False]),
+    "when flag: SUM(w*x) <= cap",
+    column,
+    kept=KEPT,
+)
+# Negative weights among the kept rows, and a dropped row too heavy for any budget.
+add(
+    "when_budget_with_negative_weights",
+    _rows([-3.0, -1.0, 2.0, 4.0, 5.0, 1000.0], flag=[True, True, True, True, True, False]),
+    "when flag: SUM(w*x) <= 4",
+    constant(4.0),
+    kept=KEPT,
+)
+# A `when` and a `by` key: each group's kept rows fit their group's budget, a dropped row is in no group, and a kept
+# row with a NULL key is outside every budget too.
+WHEN_GROUPS = _rows(
+    [2.0, 3.0, 4.0, 6.0, 1.0, 1.0, 2.0, 5.0, 7.0, 8.0],
+    group=["a"] * 4 + ["b"] * 3 + ["a", "b", None],
+    flag=[True] * 7 + [False, False, True],
+)
+add("when_with_by_groups", WHEN_GROUPS, "when flag: SUM(w*x) by (g) <= 5", constant(5.0), by=True, kept=KEPT)
+add(
+    "when_with_by_groups_and_equal_objective_when",
+    WHEN_GROUPS,
+    "when flag: SUM(w*x) by (g) <= 5",
+    constant(5.0),
+    objective="MAXIMIZE when flag: SUM(x)",
+    by=True,
+    kept=KEPT,
+    counted=KEPT,
+)
+# A `when` that drops every row leaves no budget: every row is selected.
+add(
+    "when_that_drops_every_row",
+    _rows([2.0, 3.0, 4.0], flag=[False] * 3),
+    "when flag: SUM(w*x) <= 1",
+    constant(1.0),
+    kept=KEPT,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -206,16 +316,16 @@ def _decide(case):
 def _sql(case, wrap="plain"):
     """The case as a query. `plain` selects every source column and `x`, ordered by id."""
     decide = _decide(case)
-    columns = ", ".join(NAMES)
-    select = f"SELECT {columns}, x"
+    columns = ", ".join(SOURCE_NAMES)
+    select = f"SELECT {', '.join(NAMES)}, x"
     if wrap == "plain":
         return f"{select} FROM (FROM (VALUES {_values(case.rows)}) t({columns}) {decide}) q ORDER BY id"
     if wrap == "joined_source":
         # The weights come from a second table through a join, so the source is not a scan.
-        others = [name for name in NAMES if name != "w"]
+        others = [name for name in SOURCE_NAMES if name != "w"]
         base = f"(VALUES {values_clause(case.rows, others, TYPES, sql_literal)}) t({', '.join(others)})"
         weights = f"(VALUES {values_clause(case.rows, ['id', 'w'], TYPES, sql_literal)}) z(id, w)"
-        picked = ", ".join("z.w" if name == "w" else f"t.{name}" for name in NAMES)
+        picked = ", ".join("z.w" if name == "w" else f"t.{name}" for name in SOURCE_NAMES)
         joined = f"SELECT {picked} FROM {base} JOIN {weights} ON z.id = t.id"
         return f"{select} FROM (FROM ({joined}) j {decide}) q ORDER BY id"
     if wrap == "counted":
@@ -228,13 +338,17 @@ def _group_of(case, row):
     return row["g"] if case.by and row["g"] is not None else None
 
 
+def _in_a_budget(case, row):
+    """Whether a budget covers the row: its `when` keeps it, and its `by` key (if any) is not NULL."""
+    return case.kept(row) and (not case.by or row["g"] is not None)
+
+
 def _groups(case):
-    """key -> the rows of that group; the key None (outside every budget) is left out."""
+    """key -> the rows of that group; the rows outside every budget are left out."""
     groups = {}
     for row in case.rows:
-        key = _group_of(case, row)
-        if key is not None or not case.by:
-            groups.setdefault(key, []).append(row)
+        if _in_a_budget(case, row):
+            groups.setdefault(_group_of(case, row), []).append(row)
     return groups
 
 
@@ -253,7 +367,8 @@ def _solve_with_oracle(oracle_solver, case):
         weights = {f"x_{positions[id(row)]}": case.weight(row) for row in members}
         for limit in _limits(case, members):
             oracle_solver.add_constraint(weights, "<=", limit)
-    oracle_solver.set_objective({f"x_{index}": case.factor for index in range(len(case.rows))}, ObjSense.MAXIMIZE)
+    counts = {f"x_{index}": case.factor for index, row in enumerate(case.rows) if case.counted(row)}
+    oracle_solver.set_objective(counts, ObjSense.MAXIMIZE)
     return oracle_solver.solve()
 
 
@@ -261,8 +376,8 @@ def _check_budgets(case, selected):
     """Asserts the budget of every group holds as written for the rows `selected` (a list of 0/1 in row order)."""
     spend = {}
     for row, chosen in zip(case.rows, selected):
-        key = _group_of(case, row)
-        if key is not None or not case.by:
+        if _in_a_budget(case, row):
+            key = _group_of(case, row)
             spend[key] = spend.get(key, 0.0) + case.weight(row) * chosen
     for key, members in _groups(case).items():
         for limit in _limits(case, members):
@@ -275,9 +390,10 @@ def _check_assignment(case, rows, columns, oracle, mode):
     assert all(type(row[4]) is int and row[4] in (0, 1) for row in rows), (mode, rows)
     selected = [row[4] for row in rows]
     _check_budgets(case, selected)
-    assert math.isclose(case.factor * sum(selected), oracle.objective_value, abs_tol=1e-6), (
+    counted = sum(chosen for row, chosen in zip(case.rows, selected) if case.counted(row))
+    assert math.isclose(case.factor * counted, oracle.objective_value, abs_tol=1e-6), (
         mode,
-        sum(selected),
+        counted,
         oracle.objective_value,
     )
 
@@ -310,6 +426,46 @@ def test_s3_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name):
 @pytest.mark.correctness
 def test_s3_agrees_with_the_oracle_over_a_joined_source(decidb_cli, oracle_solver):
     _agree(decidb_cli, oracle_solver, CASES["worked_example_reversed"], wrap="joined_source")
+
+
+# The `when` of the budget and of the objective is read through the join's columns too.
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.sql_subquery
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", ["when_in_front_of_the_budget", "objective_when_equal_to_the_budgets"])
+def test_s3_agrees_with_the_oracle_when_a_when_drops_rows_over_a_joined_source(decidb_cli, oracle_solver, name):
+    _agree(decidb_cli, oracle_solver, CASES[name], wrap="joined_source")
+
+
+# Nothing is computed on a row a `when` drops: a NaN weight there raises on neither path, wherever the `when` is and
+# whether or not the objective drops the row too. The kept rows (1 and 3, weights 2 and 4) both fit under 9.
+@pytest.mark.var_boolean
+@pytest.mark.error
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "budget, objective, dropped_row_selected",
+    [
+        ("when flag: SUM(w*x) <= 9", "MAXIMIZE SUM(x)", 1),
+        ("SUM(when flag: w*x) <= 9", "MAXIMIZE SUM(x)", 1),
+        ("when flag: SUM(w*x) <= 9", "MAXIMIZE when flag: SUM(x)", None),
+    ],
+    ids=["when_in_front", "when_inside_the_sum", "objective_when_equal"],
+)
+def test_s3_a_nan_weight_on_a_dropped_row_raises_on_neither_path(decidb_cli, budget, objective, dropped_row_selected):
+    rows = "(1, 2.0::DOUBLE, true), (2, 'NaN'::DOUBLE, false), (3, 4.0::DOUBLE, true)"
+    sql = (
+        f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, w, flag) "
+        f"DECIDE x(BOOL) SUCH THAT {budget} {objective}) q ORDER BY id"
+    )
+    for mode in ("off", "require"):
+        answer = dict(_run(decidb_cli, sql, mode)[0])
+        assert answer[1] == answer[3] == 1, mode
+        if dropped_row_selected is not None:
+            assert answer[2] == dropped_row_selected, mode
+    # Direct solve drops the row from an objective that drops it too.
+    assert dict(_run(decidb_cli, sql, "require")[0])[2] == (dropped_row_selected or 0)
 
 
 @pytest.mark.var_boolean

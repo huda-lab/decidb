@@ -1431,6 +1431,12 @@ duckdb::vector<Shape> S3AppliesShapes() {
 	                    "SUM(w*x) by (flag) <= 2 * COUNT(*) by (flag)"));
 	shapes.push_back(S3("a count scaled by a factor", S3_BUDGET, nullptr, "MAXIMIZE 2 * SUM(x)"));
 	shapes.push_back(S3("a constant weight of 2", "SUM(2*x) <= 9"));
+	shapes.push_back(S3("a budget under a WHEN", "when flag: SUM(w*x) <= 9"));
+	shapes.push_back(S3("a budget with an aggregate WHEN", "SUM(when flag: w*x) <= 9"));
+	shapes.push_back(S3("a budget WHEN and the same objective WHEN", "when flag: SUM(w*x) <= 9", nullptr,
+	                    "MAXIMIZE when flag: SUM(x)"));
+	shapes.push_back(S3("a budget aggregate WHEN and the same objective part WHEN", "SUM(when flag: w*x) <= 9", nullptr,
+	                    "MAXIMIZE SUM(when flag: x)"));
 	shapes.push_back(S3("a weight that may raise", "SUM(CAST(cap AS TINYINT) * x) <= 9"));
 	// The front end guards every term of a body that reads a column, so a constant term of 1 beside a column term is
 	// not a constant either; an edit makes it one.
@@ -1456,8 +1462,7 @@ duckdb::vector<Shape> S3DeclineShapes() {
 	shapes.push_back(S3("a budget that is an exact fill", "SUM(w*x) = 9"));
 	// ProveScope: it proves the constraint is a plain aggregate SUM, as a per-row bound is not.
 	shapes.push_back(S3("a scaled budget", "2 * SUM(w*x) <= 18"));
-	shapes.push_back(S3("a budget under a WHEN", "when flag: SUM(w*x) <= 9"));
-	shapes.push_back(S3("a budget with an aggregate WHEN", "SUM(when flag: w*x) <= 9"));
+	shapes.push_back(S3("a budget WHEN that reads more than the source", "when txid_current() >= 0: SUM(w*x) <= 9"));
 	shapes.push_back(S3("a budget per class of a column", "per flag: SUM(w*x) <= 9"));
 	// ProveBudget: the body, the weights and the limit.
 	shapes.push_back(S3("a budget with a constant term", "SUM(w*x + 1) <= 9"));
@@ -1484,6 +1489,10 @@ duckdb::vector<Shape> S3DeclineShapes() {
 	                    "MAXIMIZE when txid_current() >= 0: SUM(x)"));
 	shapes.push_back(S3("an objective WHEN", S3_BUDGET, nullptr, "MAXIMIZE when flag: SUM(x)"));
 	shapes.push_back(S3("an objective part WHEN", S3_BUDGET, nullptr, "MAXIMIZE SUM(when flag: x)"));
+	shapes.push_back(S3("an objective WHEN that is not the budget's", "when flag: SUM(w*x) <= 9", nullptr,
+	                    "MAXIMIZE when cap > 0: SUM(x)"));
+	shapes.push_back(S3("an objective part WHEN beside a part without one", "when flag: SUM(w*x) <= 9", nullptr,
+	                    "MAXIMIZE SUM(when flag: x) + SUM(x)"));
 	shapes.push_back(S3("an objective coefficient read from the data", S3_BUDGET, nullptr, "MAXIMIZE SUM(w*x)"));
 	return shapes;
 }
