@@ -46,26 +46,26 @@ solver path answers those queries, so none of them is wrong, only slower.
 ## FRM-6 — A whole-table window of an order-independent aggregate runs on one thread
 
 - **Problem.** DuckDB's `PhysicalWindow` (`src/execution/operator/aggregate/physical_window.cpp`, its constructor)
-  marks a window order-dependent when any of its expressions has no `PARTITION BY` and no `ORDER BY`, and an
-  order-dependent window is filled from one thread (`ParallelSink`). The pipeline that fills it runs on one thread, a
-  sorted window before it included. S3 without a `by` builds such windows (step 4's `min` or `max` of the fitting rank,
-  step 5's `bool_and`), so `s3_global` at SF 1 takes 177 ms against its hand plan's 69 ms at the same CPU
+  marks a window order-dependent when any of its expressions has no `PARTITION BY` and no `ORDER BY`, and fills an
+  order-dependent window from one thread (`ParallelSink`). The pipeline that fills it runs on one thread, a sorted
+  window before it included. S3 without a `by` builds such windows (step 4's `min` or `max` of the fitting rank, step
+  5's `bool_and`), so `s3_global` at SF 1 takes 177 ms against its hand plan's 69 ms at the same CPU
   (`../rules/s3_max_cardinality_knapsack/done.md` § Performance). Reproduce on the SF 1 database at 1 and at 11
   threads, about 175 ms both:
   `SELECT COUNT(*), SUM(CASE WHEN rn <= k THEN 1 ELSE 0 END) FROM (SELECT *, MAX(CASE WHEN total <= 1e6 THEN rn ELSE 0
   END) OVER () AS k FROM (SELECT *, sum(ps_supplycost::DOUBLE) OVER (ORDER BY ps_supplycost::DOUBLE ROWS UNBOUNDED
   PRECEDING) AS total, row_number() OVER (ORDER BY ps_supplycost::DOUBLE) AS rn FROM partsupp))`. With
   `OVER (PARTITION BY 1)` it takes 96 to 140 ms on 11 threads.
-- **Decision needed.**
-  - (a) In `PhysicalWindow`: an `OVER ()` expression is order-dependent only when its result depends on the order of
-    its input, that is unless it is a window aggregate over the whole partition, with no argument `ORDER BY`, whose
-    function DuckDB marks `AggregateOrderDependent::NOT_ORDER_DEPENDENT` (`min`, `max`, `count`, `bool_and`,
-    `bool_or`). The flag already exists, so no case list; every query gains, S3's and N1's included; DuckDB's core
-    changes.
-  - (b) S3 partitions its whole-table windows by a constant. Local to S3, but a workaround in our plan for DuckDB's
-    behavior, which N1 and every later rule would repeat.
-  - Recommendation: (a), the layer that owns the behavior.
+- **Why DuckDB does this.** An `OVER ()` window returns its rows in the order it receives them, and DuckDB returns the
+  rows of a query without `ORDER BY` in table order (`preserve_insertion_order`, default on; DuckDB commit
+  `1f6635a039`, "maintaining insertion order in window function"). Filled from one thread, `SELECT ps_partkey,
+  max(ps_supplycost) OVER () FROM partsupp` returns all 800,000 rows in table order; with `PARTITION BY 1` it returns
+  them in five runs out of order. DuckDB's rule stays: changing it would reorder the output of every such query.
+- **Why S3 does not need it.** A direct plan promises no row order (`done.md`: "Output row order and the choice among
+  equal optima are not guaranteed"), and S3's step 2 sort has already put the rows in weight order,
+  not table order, so the one-thread window keeps an order no reader relies on.
+- **Change.** S3 partitions its whole-table windows by a constant when the budget has no `by`, which tells DuckDB the
+  window keeps no order, and its comment says why. N1's whole-table window is left as it is: nothing costly runs before
+  it (`n1` is 7.6 ms against its hand plan's 5.9 ms).
 - **Done when.** In `run.py --compare --sf 1 --queries s3 s3_global`, `s3_global`'s direct "1 thread / all" is above
-  1.5 and its latency is within 2 times the hand plan's; a C++ test checks that an `OVER ()` window of `max` is filled
-  from every thread and one of `row_number` from one; `build/release/test/unittest "test/sql/window/*"` and
-  `make decide-test` pass.
+  1.5; `./test/decide/run_tests.sh -n 2 -k s3_max_cardinality` and `build/release/test/unittest "S3*"` pass.
