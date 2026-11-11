@@ -53,9 +53,10 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
   allows `x = v`, for 0 and for 1: folded once against a constant, evaluated per row against a column value, with or
   without a `when`, as the solver does. Whether a constant
   bound is one the solver folds into the variable's box is the IR's `variable_bound` flag (no `when`), the same flag A1
-  reads. The rest of the reading stays S1's own and is not the shared bound reader's: S1 asks which of {0, 1} a row
-  allows, A1 asks for an interval, and S1 alone admits `<>` and Boolean sources (`x = flag`), which the classifier does
-  not read; those require a coefficient of exactly 1. A bound on `x` may also read its coefficient from the row (`w *
+  reads. The rest of the reading is the shared `DirectReadFixedValues` (`../../framework/done.md`), which S1 and S3
+  call: it asks which of {0, 1} a row allows, where A1 asks for an interval, and admits `<>` and Boolean sources
+  (`x = flag`), which the classifier does not read; those require a coefficient of exactly 1.
+  A bound on `x` may also read its coefficient from the row (`w *
   x >= 1`, `hi * x <= cap2`), as a deterministic nonthrowing source expression; the row allows the values the
   classifier admits over that row's `w`, so a zero `w` allows what `0 >= 1` says. Any other coefficient is a finite
   constant. Contradictory active bounds are infeasible. A NULL value or coefficient skips the bound on that row, and a

@@ -49,8 +49,12 @@ solver path answers those queries, so none of them is wrong, only slower.
   a constant: `DirectIsSourceOnlyNumeric` refuses an expression whose arithmetic may raise (`x >= w - 2`), so S1 and
   S3 leave such a query to the solver. Reproduce: S3's `SUM(w*x) <= 9 AND x >= w - 2 MAXIMIZE SUM(x)` under
   `require`.
-- **Change.** Read the value with `DirectIsSourceOnlyNumericMayRaise` and evaluate it on the rows the clause keeps, as
-  R1 reads a data limit, so both paths raise on the same inputs.
+- **Decision needed.** S1's `done.md` admits only a nonthrowing expression here, by choice. Admitting one that may
+  raise (read with `DirectIsSourceOnlyNumericMayRaise` and evaluated on the rows the clause keeps, as R1 reads a data
+  limit, so both paths raise on the same inputs) widens S1 and S3 at once and needs an error case per path. Keeping
+  the limit costs only a slower answer from the solver. Recommendation: admit it, since R1 already proves the same
+  reading safe for its limits.
+- **Change.** If admitted: read the value as above, and correct S1's `done.md` § Per-row bounds on `x`.
 - **Done when.** Oracle cases in S1's and S3's tables for an expression bound, an error case where it raises on a kept
   row and none where it raises on a dropped row, and `./test/decide/run_tests.sh -n 2 -k "s1_uniform or
   s3_max_cardinality"` passes.
