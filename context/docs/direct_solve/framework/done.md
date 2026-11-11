@@ -183,8 +183,9 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   The stage is the same on every read, so no plan depends on which read has which rows. Materializing it trades one
   held copy of the stage's output for the work of computing it once per read; the reader makes that trade only where it
   already holds the source.
-- **Bound and term reader** (`direct_bound_reader.{hpp,cpp}`; the name is the first half's). The file reads three
-  things, and reads each once, so that no two rules read a bound, a limit or an objective term differently. Its header
+- **Bound and term reader** (`direct_bound_reader.{hpp,cpp}`; the name is the first half's). The file reads four
+  things, and reads each once, so that no two rules read a bound, a fixed value, a limit or an objective term
+  differently. Its header
   defines `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for every direct-solve file.
   - **Per-row bounds on a decision.** A per-row bound is read by the solver path's own classifier
     (`DecideReadSingletonRow`, stored on the IR node as `singleton_row` and `bound`), so direct solve admits the
@@ -200,6 +201,13 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     infinite end clamps nothing, because −∞ is `GREATEST`'s identity and +∞ is `LEAST`'s for every value but NaN, and a
     NaN bound has raised before the box is read. A box with no other end on that side is the constant ±∞. The floor of
     a decision that no `when` can lower is the constant itself, so the plan carries no column for it.
+  - **Fixed values of a `BOOL` decision.** `DirectReadFixedValues` (S1 and S3) reads each per-row clause on the
+    decision (`DirectFixedTerms`: `x = 1`, `2 * x >= 1`, `x <= flag`, `x <> c`, under an optional `when`) as the set of
+    {0, 1} it allows, into a condition per clause that fixes a row to 1 and one that fixes it to 0; a row that allows
+    neither meets both, which is infeasible. A value read from the row is checked as the solver checks it
+    (`DirectSourceFixedValue`, its message from `DirectFixedValueMessage`). `DirectConstantSlope` sums the signed
+    constant coefficients of a body as the solver's like-term collection does, and `DirectAnyCondition` tests the
+    conditions in the solver's order.
   - **The limit of an aggregate constraint.** `DirectReadLimit` reads a budget's right side into a `DirectLimit`: a
     constant of magnitude below 1e20 (from 1e20 the solver's reading depends on the rows, so the rule declines), or a
     value of the data (`DirectDataLimit`), either a numeric expression over source columns that may raise, evaluated
@@ -246,9 +254,9 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   (`DirectRowBoundMessage`) and `DirectWindowExtremum` are shared in
   `direct_plan_fragments.{hpp,cpp}`: any rule whose aggregate takes a `when` or a group key, or whose bound comes from
   the data, needs them. `DirectRunningSum` (R1, A2 and S3) is a window sum over the rows up to the current one in a
-  given order, per partition. `DirectLayoutBoundClauses` (A1 and A2) lays out each per-row bound clause in a rule's first
-  projection: its coefficient, right side and ends, each computed only on the rows the clause keeps, and the checks of
-  the coefficient and the right side, which pass on a dropped row because both values are NULL there.
+  given order, per partition. `DirectLayoutBoundClauses` (A1 and A2) lays out each per-row bound clause in a rule's
+  first projection: its coefficient, right side and ends, each computed only on the rows the clause keeps, and the
+  checks of the coefficient and the right side, which pass on a dropped row because both values are NULL there.
 - **Numeric policy.** `src/include/duckdb/common/decide_numeric_policy.hpp` is the one home of the numeric facts that
   DuckDB's own evaluation cannot supply. It includes only `<cmath>`, so the planner, the optimizer and direct-solve
   rules, the model builder and the solver backends all read it without including each other. It holds:
@@ -419,8 +427,8 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   0 whatever lower bound is written), or a `BOOL` lower bound above 1. The box is the bounds as written
   (`DecideWrittenBox` in `decide_singleton_row_folding.{hpp,cpp}`), and the error quotes the clause, under `DIAGNOSE`
   too. The solver's pre-check (`DecideGlobalSinkState`) raises it; direct solve reads the same box through
-  `DirectContradictsDomain`, which `DirectReadBounds` and S1 call, and only declines these queries so the
-  solver raises the error.
+  `DirectContradictsDomain`, which `DirectReadBounds` and `DirectReadFixedValues` call, and only declines these
+  queries so the solver raises the error.
 - **One box, one way to combine bounds.** A decision's unconditional bounds fold into a `DecideBoundBox`
   (`decide_numeric_policy.hpp`) through `DecideFoldSingletonRow`, which keeps the tightest value on each side. The
   solver's folding pass, the written box of the domain check (`DecideWrittenBox`) and `DirectReadBounds` all call it.

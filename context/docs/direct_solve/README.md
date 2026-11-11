@@ -12,10 +12,10 @@ of squares" (one `SUM(POWER(x, 2)) <= B` over a `REAL` decision, per group or ov
 closest to every row" (one query-wide or keyed `REAL` decision under a squared, absolute or maximum absolute loss);
 **O1**, "match two tables one to one by position" (a `BOOL` per pair of a cross product, one pair per row of each side,
 under a distance or product cost); and **S3**, "as many rows as fit one budget" (one `SUM(w*x) <= B` over a `BOOL`
-decision, maximizing the count, per group or over all rows). Each class's `done.md` but S3's gives its speed against
-Gurobi and HiGHS; every class is faster than each solver that takes it, at every size measured. N1 also answers without
-a Gurobi license, where the solver path refuses a quadratic limit. The other 12 classes in the catalogue are not
-started.
+decision, maximizing the count, or the fewest rows that reach `SUM(w*x) >= B`, per group or over all rows). Each class's
+`done.md` but S3's gives its speed against Gurobi and HiGHS; every class is faster than each solver that takes it, at
+every size measured. N1 also answers without a Gurobi license, where the solver path refuses a quadratic limit. The
+other 12 classes in the catalogue are not started.
 
 ## Where to look
 

@@ -12,8 +12,6 @@ combine.
 
 - [ ] S3-5 S3's Performance is measured — direct_solve/rules/s3_max_cardinality_knapsack/todo.md § S3-5
 
-## 5. Optional widenings (one lane: all edit the rule file)
+## 5. Shared engine (one lane)
 
-- [ ] S3-6 `when` on the budget and the objective — direct_solve/rules/s3_max_cardinality_knapsack/todo.md § S3-6
-- [ ] S3-7 Fixed items — direct_solve/rules/s3_max_cardinality_knapsack/todo.md § S3-7
-- [ ] S3-8 The fewest items that reach a minimum — direct_solve/rules/s3_max_cardinality_knapsack/todo.md § S3-8
+- [ ] FRM-5 A fixed value read from an expression of the row — direct_solve/framework/todo.md § FRM-5

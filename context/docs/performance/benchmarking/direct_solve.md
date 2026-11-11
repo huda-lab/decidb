@@ -4,7 +4,7 @@
 DECIDE query as the data grows. Direct solve is the optimizer rewrite that answers some DECIDE problems with relational
 operators instead of a solver ([`../../direct_solve/README.md`](../../direct_solve/README.md)). The numbers feed the
 paper's direct-solve section. There is a query for each direct-solve rule that works today: A1, O1, A2 in four forms,
-and S1, R1 and N1 in two forms each, many small groups and one bound over every row.
+and S1, S3, R1 and N1 in two forms each, many small groups and one bound over every row.
 
 ## Running
 
@@ -60,6 +60,8 @@ the pairs of a cross product, so it reads `supplier` twice, and its decision cou
 |---|---|---|---|
 | `s1.sql` | S1, uniform matroid | `pick(BOOL)`, `SUM(pick) by (ps_suppkey) <= 2`, `MAXIMIZE SUM(ps_availqty * pick)` | each supplier keeps its two offers with the most stock |
 | `s1_global.sql` | S1, uniform matroid | `pick(BOOL)`, `SUM(pick) <= 0.1 * COUNT(*)`, `MAXIMIZE SUM(ps_availqty * pick)` | keep the tenth of all offers with the most stock |
+| `s3.sql` | S3, maximum-cardinality knapsack | `pick(BOOL)`, `SUM(ps_supplycost * pick) by (ps_suppkey) <= 5000`, `MAXIMIZE SUM(pick)` | each supplier takes as many of its offers as fit a cost budget of 5,000 |
+| `s3_global.sql` | S3, maximum-cardinality knapsack | `pick(BOOL)`, `SUM(ps_supplycost * pick) <= 1000000`, `MAXIMIZE SUM(pick)` | take as many offers as fit one cost budget of 1,000,000 |
 | `a1.sql` | A1, separable box | `ship(REAL)`, `ship BETWEEN 0 AND ps_availqty`, `MINIMIZE SUM(POWER(ship - 5000, 2))` | ship each offer as close to 5,000 units as its stock allows |
 | `r1.sql` | R1, continuous knapsack | `ship(REAL)`, `ship BETWEEN 0 AND ps_availqty AND SUM(ship) by (ps_partkey) <= 5000`, `MAXIMIZE SUM(ps_supplycost * ship)` | each part ships at most 5,000 units across its suppliers, at the highest total cost |
 | `r1_global.sql` | R1, continuous knapsack | `ship(REAL)`, `ship BETWEEN 0 AND 1 AND SUM(ship * ps_supplycost) <= 0.1 * SUM(ps_supplycost)`, `MAXIMIZE SUM(ps_availqty * ship)` | take a fraction of each offer, spending at most a tenth of the total cost, to secure the most stock |
@@ -128,6 +130,7 @@ that is not the plan, so each carries what its rule owes:
 | `r1.sql`, `r1_global.sql` | the price ranking by one window; offers at the same price share what the budget leaves them in proportion to their room, so the answer is the same on every run (a `ROWS` frame would split a tie by the order the rows arrive); the box clamp; a budget read from the data comes from a first read |
 | `o1.sql` | each side ranked by one window, the right side descending, and equal ranks selected; supplier rows are distinct and both sides are one table, so the rule's distinct classes, one-copy window and class-count check have nothing to do, and a product of two balances is always finite |
 | `s1.sql`, `s1_global.sql` | the ranking by one window and the cut at the bound; for a bound read from the data, the check that it is not below the lower bound 0 (infeasible) |
+| `s3.sql`, `s3_global.sql` | the running total by one window and the cut at the budget, compared in DOUBLE as the rule compares it; a TPC-H cost is at least 1.00, so a running total only rises and a row fits exactly when its own total does, with no rank and no largest fitting rank (the rule needs both for negative weights); a constant budget of 0 or more fits the empty prefix, so no infeasible check |
 
 A comparator is cheaper than the rule's plan only where the plan does work the comparator does not need. Where a check
 has nothing to raise on the benchmark data (every box is finite and starts at 0), the comparator's header says so and
@@ -173,8 +176,10 @@ The script also prints the table as Markdown while it runs.
 - Gurobi's thread count is its own default, 32 on the benchmark machine; DeciDB does not set it.
 - TPC-H group sizes are fixed across scale factors: 80 offers per supplier and 4 suppliers per part. Only the number
   of groups grows, never their size.
-- Each query runs at one parameter setting: K = 2 per supplier and a tenth of all rows for S1, a target of 5,000 for A1,
-  a cap of 5,000 per part and a tenth of the total cost for R1, and a limit of 1,000,000 for N1.
+- Each query runs at one parameter setting: K = 2 per supplier and a tenth of all rows for S1, a cost budget of 5,000
+  per supplier and 1,000,000 over all rows for S3, a target of 5,000 for A1, a cap of 5,000 per part and a tenth of the
+  total cost for R1, and a limit of 1,000,000 for N1. S3's global budget is a constant, so the share of rows it selects
+  falls as the data grows.
 - HiGHS has no quadratic constraints, so its N1 cells read `error`.
 - HiGHS (1.15.1, as 1.11) cannot solve A1 beyond 800 decisions. Its QP solver stops with "Large nullspace" once more than 4,000
   variables end strictly inside their bounds, and about half of A1's do (`../../pipeline/07_solver/done.md`, HiGHS
