@@ -1103,8 +1103,8 @@ public:
 	}
 
 private:
-	//! Stage 1 as one read of the source builds it: the read, and the columns of the stage's plan (ItemStages::Columns),
-	//! which the plan built over the read re-points at the read's own (Repoint).
+	//! Stage 1 as one read of the source builds it: the read, and the columns of the stage's plan
+	//! (ItemStages::Columns), which the plan built over the read re-points at the read's own (Repoint).
 	struct Items {
 		unique_ptr<LogicalOperator> plan;
 		ItemColumns columns;
