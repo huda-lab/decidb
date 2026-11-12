@@ -17,5 +17,4 @@ checklist and the standard tests). Remove its row here when its `todo.md` exists
 | R2 | [Discrete separable convex resource allocation](rules/r2_discrete_resource_allocation/definition.md) |
 | R3 | [Continuous quadratic knapsack](rules/r3_quadratic_knapsack/definition.md) |
 | R4 | [Weighted max-min fair allocation](rules/r4_max_min_fairness/definition.md) |
-| S2 | [Laminar-matroid optimization](rules/s2_laminar_matroid/definition.md) |
 | S4 | [Cardinality-constrained bottleneck knapsack](rules/s4_bottleneck_knapsack/definition.md) |
