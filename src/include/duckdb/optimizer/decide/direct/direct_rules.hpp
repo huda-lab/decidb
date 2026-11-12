@@ -36,4 +36,9 @@ unique_ptr<DirectSolveRule> MakeO1MongeAssignmentRule();
 //! maximum-cardinality knapsack).
 unique_ptr<DirectSolveRule> MakeS3MaxCardinalityKnapsackRule();
 
+//! The eighth direct-solve rule: one row-scoped Boolean under upper count quotas whose groups nest (departments inside
+//! divisions inside one global cap), maximizing a linear score, answered by one ranking per level from the finest to
+//! the coarsest (S2, the laminar matroid).
+unique_ptr<DirectSolveRule> MakeS2LaminarMatroidRule();
+
 } // namespace duckdb

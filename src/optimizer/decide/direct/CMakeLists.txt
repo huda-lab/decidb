@@ -20,6 +20,7 @@ add_library_unity(
   o1_monge_assignment_rule.cpp
   r1_continuous_knapsack_rule.cpp
   s1_uniform_matroid_rule.cpp
+  s2_laminar_matroid_rule.cpp
   s3_max_cardinality_knapsack_rule.cpp)
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:duckdb_optimizer_decide_direct>

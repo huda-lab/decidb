@@ -1489,6 +1489,143 @@ TEST_CASE("S3 declines each shape that is not exactly its class", "[decidb]") {
 }
 
 //===--------------------------------------------------------------------===//
+// S2
+//===--------------------------------------------------------------------===//
+
+const char *S2_OBJECTIVE = "MAXIMIZE SUM(w*x)";
+//! Two scopes that nest: names inside flags, and the whole query beside them.
+const char *S2_CHAIN = "SUM(x) by (name, flag) <= 1 AND SUM(x) by (flag) <= 2 AND SUM(x) <= 3";
+
+Shape S2(const string &branch, const string &constraints, Edit edit = nullptr, const string &objective = S2_OBJECTIVE,
+         const string &declaration = "x(BOOL)") {
+	return {branch, declaration, constraints, objective, std::move(edit)};
+}
+
+duckdb::vector<Shape> S2AppliesShapes() {
+	duckdb::vector<Shape> shapes;
+	shapes.push_back(S2("plain form: three nested scopes and a linear objective", S2_CHAIN));
+	shapes.push_back(S2("two nested scopes", "SUM(x) by (flag) <= 1 AND SUM(x) <= 2"));
+	shapes.push_back(S2("the clauses written from the coarsest scope to the finest",
+	                    "SUM(x) <= 3 AND SUM(x) by (flag) <= 2 AND SUM(x) by (name, flag) <= 1"));
+	shapes.push_back(S2("a key whose columns are listed in another order",
+	                    "SUM(x) by (flag, name) <= 1 AND SUM(x) by (name) <= 2 AND SUM(x) <= 3"));
+	shapes.push_back(S2("clauses of one scope merged into one level",
+	                    "SUM(x) <= 4 AND SUM(x) < 3 AND SUM(x) by (flag) <= 1 AND SUM(x) by (flag) <= 2"));
+	shapes.push_back(S2("a negated count body", "SUM(-x) >= -2 AND SUM(x) by (flag) <= 1"));
+	shapes.push_back(S2("a strict limit and a fractional limit", "SUM(x) < 3 AND SUM(x) by (flag) <= 1.5"));
+	shapes.push_back(S2("a limit below zero", "SUM(x) <= -1 AND SUM(x) by (flag) <= 1"));
+	shapes.push_back(S2("a zero limit", "SUM(x) <= 2 AND SUM(x) by (flag) <= 0"));
+	shapes.push_back(S2("keys that are expressions", "SUM(x) by (cap + 1, flag) <= 1 AND SUM(x) by (cap + 1) <= 2"));
+	shapes.push_back(S2("a relation key inside a column key", "SUM(x) by (t) <= 1 AND SUM(x) by (flag) <= 2"));
+	shapes.push_back(S2("a WHEN on the finer scope only", "when flag: SUM(x) by (name) <= 1 AND SUM(x) <= 2"));
+	shapes.push_back(S2("the same WHEN on both scopes", "when flag: SUM(x) by (name) <= 1 AND when flag: SUM(x) <= 2"));
+	shapes.push_back(S2("the same WHEN inside the sums of both scopes",
+	                    "SUM(when flag: x) by (name) <= 1 AND SUM(when flag: x) <= 2"));
+	shapes.push_back(S2("the same key under a WHEN on the finer scope",
+	                    "when flag: SUM(x) by (name) <= 1 AND SUM(x) by (name) <= 2"));
+	shapes.push_back(S2("the same class on both scopes",
+	                    "per flag: SUM(x) by (flag) <= 1 AND per flag: SUM(x) by (flag) <= 2"
+	                    " AND per flag: SUM(x) <= 3"));
+	shapes.push_back(S2("the empty class on both scopes", "per (): SUM(x) by (flag) <= 1 AND per (): SUM(x) <= 2"));
+	shapes.push_back(S2("rows fixed beside the scopes", S2_CHAIN + string(" AND x = 1 AND x >= flag AND x <= cap")));
+	shapes.push_back(S2("a minimized objective", S2_CHAIN, nullptr, "MINIMIZE SUM(w*x)"));
+	shapes.push_back(S2("a scaled objective of two parts", S2_CHAIN, nullptr, "MAXIMIZE 2 * SUM(w*x) - SUM(f*x) / 4"));
+	shapes.push_back(S2("an objective WHEN", S2_CHAIN, nullptr, "MAXIMIZE when flag: SUM(w*x)"));
+	shapes.push_back(S2("a feasibility problem", S2_CHAIN, nullptr, ""));
+	return shapes;
+}
+
+duckdb::vector<Shape> S2DeclineShapes() {
+	duckdb::vector<Shape> shapes;
+	// CheckCondition: the decision, the constraints and the objective, which S1 and S3 prove as well.
+	shapes.push_back(S2("two decisions", S2_CHAIN, nullptr, S2_OBJECTIVE, "x(BOOL), y(BOOL)"));
+	shapes.push_back(S2("a REAL decision", S2_CHAIN, nullptr, S2_OBJECTIVE, "x(REAL)"));
+	shapes.push_back(S2("a query-wide decision", "s <= 1", nullptr, "MAXIMIZE s", "per (): s(BOOL)"));
+	shapes.push_back(S2("a keyed scope", S2_CHAIN, [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));
+	shapes.push_back(S2("a membership constraint", string(S2_CHAIN) + " AND x IN (0, 1)"));
+	shapes.push_back(S2("no count clause, only a fixed value", "x = 1"));
+	shapes.push_back(
+	    S2("a fixed value with an infinite coefficient", string(S2_CHAIN) + " AND CAST('inf' AS DOUBLE) * x <= 1"));
+	shapes.push_back(S2("an objective with a by key", S2_CHAIN, nullptr, "MAXIMIZE SUM(w*x) by (flag)"));
+	shapes.push_back(S2("an objective constant", S2_CHAIN, nullptr, "MAXIMIZE SUM(w*x + 1)"));
+	shapes.push_back(S2("an objective coefficient fixed only within the query", S2_CHAIN, nullptr,
+	                    "MAXIMIZE SUM(txid_current()*x)"));
+	// ProveLevels: the scope of a clause (DirectReadScope).
+	shapes.push_back(S2("a clause that is not a plain count", "2 * SUM(x) by (flag) <= 2 AND SUM(x) <= 3"));
+	shapes.push_back(S2("an average where a count is", "AVG(x) by (flag) <= 1 AND SUM(x) <= 3"));
+	shapes.push_back(S2("a qualified count", S2_CHAIN, [](DirectIR &ir) { ir.constraints[0].lhs[0].qualifier = 0; }));
+	shapes.push_back(S2("a count whose part has a negative sign", S2_CHAIN,
+	                    [](DirectIR &ir) { ir.constraints[0].lhs[0].sign = -1; }));
+	shapes.push_back(S2("a WHEN that reads more than the source",
+	                    "when txid_current() >= 0: SUM(x) by (flag) <= 1 AND SUM(x) <= 3"));
+	shapes.push_back(S2("a key that reads a decision", "SUM(x) by (flag) <= 1 AND SUM(x) <= 3", [](DirectIR &ir) {
+		LeftPart(ir).by[0].grouping =
+		    make_uniq<BoundColumnRefExpression>(LogicalType::INTEGER, ColumnBinding(ir.decide_index, 0));
+	}));
+	// ProveLevels: the body and the limit of a clause.
+	shapes.push_back(S2("a count body with a column coefficient", "SUM(w*x) by (flag) <= 1 AND SUM(x) <= 3"));
+	shapes.push_back(S2("a count body that adds up to two", "SUM(2*x) by (flag) <= 2 AND SUM(x) <= 3"));
+	shapes.push_back(S2("a count body that is a square", "SUM(POWER(x, 2)) by (flag) <= 1 AND SUM(x) <= 3"));
+	shapes.push_back(S2("a limit of 1e20", "SUM(x) by (flag) <= 1 AND SUM(x) <= 1e20"));
+	shapes.push_back(S2("a limit of minus 1e20", "SUM(x) by (flag) <= 1 AND SUM(x) <= -1e20"));
+	shapes.push_back(S2("a limit that is infinite", "SUM(x) by (flag) <= 1 AND SUM(x) <= 'inf'::DOUBLE"));
+	shapes.push_back(S2("a limit read from the data", "SUM(x) by (flag) <= cap AND SUM(x) <= 3"));
+	shapes.push_back(S2("a limit that is an expression of the data", "SUM(x) by (flag) <= 1 AND SUM(x) <= cap + 1"));
+	shapes.push_back(
+	    S2("a limit that is an aggregate of the source", "SUM(x) by (flag) <= 1 AND SUM(x) <= 0.5 * SUM(cap)"));
+	// A lower limit, an equal limit and a range can force a selection, which the cascade of upper quotas cannot honor.
+	shapes.push_back(S2("a lower limit on the finer scope", "SUM(x) by (flag) >= 1 AND SUM(x) <= 3"));
+	shapes.push_back(S2("a lower limit on the coarser scope", "SUM(x) by (flag) <= 1 AND SUM(x) >= 1"));
+	shapes.push_back(S2("an equal limit", "SUM(x) by (flag) <= 1 AND SUM(x) = 2"));
+	shapes.push_back(S2("a range on one scope", "SUM(x) by (flag) <= 1 AND SUM(x) >= 1 AND SUM(x) <= 2"));
+	shapes.push_back(S2("a negated body with a lower limit", "SUM(x) by (flag) <= 1 AND SUM(-x) <= 2"));
+	shapes.push_back(S2("a limit that is not equal", "SUM(x) by (flag) <= 1 AND SUM(x) <> 2"));
+	shapes.push_back(S2("a limit beyond the exact range", "SUM(x) by (flag) <= 1 AND SUM(x) <= 1e19"));
+	// ProveLevels: one scope is S1's.
+	shapes.push_back(S2("one scope", "SUM(x) <= 2"));
+	shapes.push_back(S2("one scope, a key", "SUM(x) by (flag) <= 2"));
+	shapes.push_back(S2("two clauses of one scope", "SUM(x) <= 2 AND SUM(x) < 5"));
+	shapes.push_back(S2("two clauses of one keyed scope, the key listed in another order",
+	                    "SUM(x) by (flag, name) <= 2 AND SUM(x) by (name, flag) <= 1"));
+	// Contains: the key.
+	shapes.push_back(S2("two scopes that do not nest", "SUM(x) by (flag) <= 1 AND SUM(x) by (name) <= 2"));
+	shapes.push_back(S2("two keys that overlap, neither within the other",
+	                    "SUM(x) by (name, flag) <= 1 AND SUM(x) by (name, cap) <= 2"));
+	shapes.push_back(S2("a chain whose finest scope has a scope beside it",
+	                    "SUM(x) by (name, flag) <= 1 AND SUM(x) by (flag) <= 2 AND SUM(x) by (cap) <= 2"));
+	shapes.push_back(S2("two scopes inside one finer scope, neither inside the other",
+	                    "SUM(x) by (name, flag, cap) <= 1 AND SUM(x) by (flag) <= 2 AND SUM(x) by (name) <= 2"));
+	// Contains: the WHEN.
+	shapes.push_back(
+	    S2("another WHEN on each scope", "when flag: SUM(x) by (name) <= 1 AND when NOT flag: SUM(x) <= 2"));
+	shapes.push_back(S2("a WHEN on the coarser scope only", "SUM(x) by (name) <= 1 AND when flag: SUM(x) <= 2"));
+	shapes.push_back(S2("another WHEN inside the sum of the coarser scope",
+	                    "when flag: SUM(x) by (name) <= 1 AND SUM(when cap > 1: x) <= 2"));
+	// Contains: the `per` of the clauses.
+	shapes.push_back(S2("a `per` on the finer scope only", "per flag: SUM(x) by (flag) <= 1 AND SUM(x) <= 2"));
+	shapes.push_back(S2("a `per` on the coarser scope only", "SUM(x) by (flag) <= 1 AND per (): SUM(x) <= 2"));
+	shapes.push_back(S2("the same key and a `per` on one of two clauses",
+	                    "per flag: SUM(x) by (flag) <= 1 AND SUM(x) by (flag) <= 2"));
+	shapes.push_back(
+	    S2("a `per` of a class on each scope", "per flag: SUM(x) by (flag) <= 1 AND per name: SUM(x) <= 2"));
+	shapes.push_back(S2("a `per` of another class on the coarser scope",
+	                    "per flag: SUM(x) by (name, flag) <= 1 AND per name: SUM(x) by (flag) <= 2"));
+	return shapes;
+}
+
+TEST_CASE("S2 applies to the forms of its class", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	ExpectApplies(MakeS2LaminarMatroidRule, con, S2AppliesShapes());
+}
+
+TEST_CASE("S2 declines each shape that is not exactly its class", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	ExpectDeclines(MakeS2LaminarMatroidRule, con, S2DeclineShapes());
+}
+
+//===--------------------------------------------------------------------===//
 // No two rules apply to one query
 //===--------------------------------------------------------------------===//
 
