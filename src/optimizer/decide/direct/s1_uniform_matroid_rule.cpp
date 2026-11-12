@@ -55,7 +55,7 @@ public:
 		return RULE_NAME;
 	}
 	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
-		if (!DirectIsOneRowBool(ir)) {
+		if (!DirectIsOneRowDecision(ir, DirectDomain::BOOL)) {
 			return nullptr;
 		}
 		auto condition = make_uniq<Condition>();

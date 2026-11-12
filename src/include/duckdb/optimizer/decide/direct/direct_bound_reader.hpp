@@ -341,8 +341,9 @@ bool DirectReadCountBody(ClientContext &context, const vector<DecideSplitTerm> &
 //! left side with a term that is not linear. A membership constraint (`x IN (...)`) is the caller's to decline.
 const vector<DecideSplitTerm> *DirectFixedTerms(const DirectIRConstraint &constraint);
 
-//! Whether the problem declares one BOOL decision, one per row, and no keyed scope: the shape S1 and S3 read.
-bool DirectIsOneRowBool(const DirectIR &ir);
+//! Whether the problem declares one decision of `domain`, one per row, and no keyed scope: the shape
+//! S1, S2, S3, N1 and O1 read.
+bool DirectIsOneRowDecision(const DirectIR &ir, DirectDomain domain);
 
 //! Splits the constraints in order: the per-row clauses on the decision (DirectFixedTerms), which DirectReadFixedValues
 //! reads, go to `fixes`, and every other constraint goes to `others`. False on a membership constraint (`x IN (...)`).

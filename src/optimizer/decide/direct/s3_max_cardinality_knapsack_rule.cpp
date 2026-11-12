@@ -58,7 +58,7 @@ public:
 	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
 		auto condition = make_uniq<Condition>();
 		const DirectIRConstraint *clause = nullptr;
-		if (!DirectIsOneRowBool(ir) || !ProveConstraints(ir, context, *condition, clause) ||
+		if (!DirectIsOneRowDecision(ir, DirectDomain::BOOL) || !ProveConstraints(ir, context, *condition, clause) ||
 		    !ProveBudget(ir, context, *clause, *condition) || !ProveObjective(ir, context, *condition)) {
 			return nullptr;
 		}

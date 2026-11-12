@@ -191,8 +191,8 @@ public:
 		return RULE_NAME;
 	}
 	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
-		if (ir.cross_product.left.empty() || ir.decisions.size() != 1 || ir.decisions[0].domain != DirectDomain::BOOL ||
-		    ir.decisions[0].scope != DecideVarScope::ROW || !ir.keyed_scopes.empty() || ir.constraints.size() != 2) {
+		if (ir.cross_product.left.empty() || !DirectIsOneRowDecision(ir, DirectDomain::BOOL) ||
+		    ir.constraints.size() != 2) {
 			return nullptr;
 		}
 		auto condition = make_uniq<Condition>();

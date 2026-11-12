@@ -60,8 +60,7 @@ public:
 	}
 
 	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
-		if (ir.decisions.size() != 1 || ir.decisions[0].domain != DirectDomain::REAL ||
-		    ir.decisions[0].scope != DecideVarScope::ROW || !ir.keyed_scopes.empty()) {
+		if (!DirectIsOneRowDecision(ir, DirectDomain::REAL)) {
 			return nullptr;
 		}
 		auto condition = make_uniq<Condition>();

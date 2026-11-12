@@ -466,8 +466,8 @@ const vector<DecideSplitTerm> *DirectFixedTerms(const DirectIRConstraint &constr
 	return &constraint.lhs[0].terms;
 }
 
-bool DirectIsOneRowBool(const DirectIR &ir) {
-	return ir.decisions.size() == 1 && ir.decisions[0].domain == DirectDomain::BOOL &&
+bool DirectIsOneRowDecision(const DirectIR &ir, DirectDomain domain) {
+	return ir.decisions.size() == 1 && ir.decisions[0].domain == domain &&
 	       ir.decisions[0].scope == DecideVarScope::ROW && ir.keyed_scopes.empty();
 }
 
