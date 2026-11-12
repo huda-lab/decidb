@@ -1742,20 +1742,11 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 			    reach_lower == solver_input.instance_reach_lower && reach_upper == solver_input.instance_reach_upper) {
 				break;
 			}
-			// Clauses that contradict each other make a box cross, and from there each pass pushes its ends further
-			// apart, forever. A crossed box is the proof that the model is infeasible: stop at the first one, whose
-			// ends are still finite, and the solver reports it as for any empty box (DIAGNOSE formulates its own).
-			bool crossed = false;
-			for (idx_t var = 0; var < solver_input.lower_bounds.size() && !crossed; var++) {
-				const double lo = solver_input.lower_bounds[var];
-				const double hi = solver_input.upper_bounds[var];
-				crossed = lo > hi + 1e-9 * MaxValue<double>(1.0, std::abs(hi));
-			}
-			if (crossed) {
-				break;
-			}
 			// Each pass leaves valid boxes, only tighter ones: one that still moves after as many passes as the
-			// constructs nest is closing in by ever smaller steps, so the boxes stand as they are.
+			// constructs nest is closing in by ever smaller steps, so the boxes stand as they are. Clauses that
+			// contradict each other make a box cross, and from there each pass pushes its ends further apart: the
+			// passes still bound every helper a later one reads, and the solver reports the crossed box as for any
+			// empty one (DIAGNOSE formulates its own).
 			if (pass == max_passes) {
 				break;
 			}

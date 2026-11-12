@@ -61,3 +61,22 @@ def test_a_pinned_keyed_decision_bounds_a_max_on_highs(decidb_cli):
         DECIDE per t.p: x(REAL) SUCH THAT x = t.v AND max(x) >= 5 MAXIMIZE sum(x) ORDER BY id"""
     cli = decidb_cli.with_env({"DECIDB_FORCE_SOLVER": "highs"})
     assert [row["x"] for row in answer(cli, SETUP + sql)] == [10, 10, None]
+
+
+def test_a_crossed_box_leaves_every_helper_bounded_on_highs(decidb_cli):
+    """nests seed 2235: the clauses contradict each other, which crosses a box, and the MIN reads helpers defined from
+    one another (`max(... y)`, the sum of its absolute value): the bound passes still box every helper, so HiGHS
+    builds the MIN's Big-M and the solver reports the query infeasible, as the oracle says. The passes stopped at the
+    first crossed box, and HiGHS refused the MIN for want of a bound on the outer helper."""
+    rows = (
+        "(VALUES (2, 'a', 'p', 'v', true, false, 1, 1, -1, 6), (3, 'a', 'p', 'v', NULL, true, NULL, 1, -2, 2), "
+        "(1, 'b', 'p', 'w', true, false, 1, 2, 1, 11)) t(id, g, h, k, p, q, v, w, c, cap)"
+    )
+    sql = f"""SELECT t.id, x, y, z FROM {rows} DECIDE x(INT), per t.g: y(INT), per t.k: z(INT)
+        SUCH THAT x <= 2 AND y <= 2 AND z <= 2 AND sum(per t.k: z) <= 1
+        AND min(sum(when t.q: abs(max(when t.q per t.h: y) by (t.w % 2))) by (t.g, t.h)) by (t.h)
+            <= ((t.cap - max(min(per t.k: t.v) by (t.h, t.w + t.v)) by (t.g)) - 5)
+        MAXIMIZE sum(t.c * x) + sum(y) + sum(z) + min(when t.p: (y + min(when t.v > 1 per t.h: y) by (t.h, t.w + t.v)))
+        ORDER BY t.id"""
+    result = decidb_cli.with_env({"DECIDB_FORCE_SOLVER": "highs"}).execute_raw(SETUP + sql)
+    assert "DECIDE optimization is infeasible" in result.stderr, result.stderr
