@@ -449,11 +449,37 @@ bool DirectConstantSlope(ClientContext &context, const vector<DecideSplitTerm> &
 	return true;
 }
 
+bool DirectReadCountBody(ClientContext &context, const vector<DecideSplitTerm> &terms, bool &negated) {
+	double slope;
+	if (!DirectOnlyLinearTerms(terms) || !DirectConstantSlope(context, terms, slope) ||
+	    (slope != 1.0 && slope != -1.0)) {
+		return false;
+	}
+	negated = slope < 0;
+	return true;
+}
+
 const vector<DecideSplitTerm> *DirectFixedTerms(const DirectIRConstraint &constraint) {
 	if (constraint.aggregate || !DirectOnlyLinearTerms(constraint.lhs[0].terms)) {
 		return nullptr;
 	}
 	return &constraint.lhs[0].terms;
+}
+
+bool DirectIsOneRowBool(const DirectIR &ir) {
+	return ir.decisions.size() == 1 && ir.decisions[0].domain == DirectDomain::BOOL &&
+	       ir.decisions[0].scope == DecideVarScope::ROW && ir.keyed_scopes.empty();
+}
+
+bool DirectSplitFixes(const DirectIR &ir, vector<const DirectIRConstraint *> &fixes,
+                      vector<const DirectIRConstraint *> &others) {
+	for (auto &constraint : ir.constraints) {
+		if (constraint.comparison == ExpressionType::COMPARE_IN) {
+			return false;
+		}
+		(DirectFixedTerms(constraint) ? fixes : others).push_back(&constraint);
+	}
+	return true;
 }
 
 //! True when every term's coefficient is a finite constant or a number of the source row (`w`, `w / 2`, `w - 2`), which

@@ -330,9 +330,24 @@ bool DirectObjectivePartKept(const DirectIR &ir, const DirectPart &part, unique_
 //! finite constant.
 bool DirectConstantSlope(ClientContext &context, const vector<DecideSplitTerm> &terms, double &slope);
 
+//! Whether the sum of `terms` counts the selected rows: every term linear with a finite constant coefficient, the
+//! signed coefficients adding up to exactly +1 or -1, as the solver's like-term collection sums them. `negated` is set
+//! when they add up to -1 (the sum is `-x`). Any other term, a constant included, reads no count: a constant term
+//! shifts the limit by an amount that depends on the group's row count, and the solver answers that. S1 solves a count,
+//! and a rule that must not take one (S3) declines it by this test.
+bool DirectReadCountBody(ClientContext &context, const vector<DecideSplitTerm> &terms, bool &negated);
+
 //! The decision's terms on a per-row left side, as in a fixed value `x = 1`; null for an aggregate constraint or a
 //! left side with a term that is not linear. A membership constraint (`x IN (...)`) is the caller's to decline.
 const vector<DecideSplitTerm> *DirectFixedTerms(const DirectIRConstraint &constraint);
+
+//! Whether the problem declares one BOOL decision, one per row, and no keyed scope: the shape S1 and S3 read.
+bool DirectIsOneRowBool(const DirectIR &ir);
+
+//! Splits the constraints in order: the per-row clauses on the decision (DirectFixedTerms), which DirectReadFixedValues
+//! reads, go to `fixes`, and every other constraint goes to `others`. False on a membership constraint (`x IN (...)`).
+bool DirectSplitFixes(const DirectIR &ir, vector<const DirectIRConstraint *> &fixes,
+                      vector<const DirectIRConstraint *> &others);
 
 //! A value from the row that fixes `x`: it must be neither NULL nor, for a floating point value, NaN; a coefficient
 //! must also be finite.

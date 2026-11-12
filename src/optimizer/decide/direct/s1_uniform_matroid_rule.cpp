@@ -4,7 +4,6 @@
 
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/exception.hpp"
-#include "duckdb/function/aggregate/distributive_functions.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/decide/direct/direct_ranked_prefix.hpp"
@@ -50,50 +49,18 @@ struct Condition final : DirectApplicabilityCondition {
 	vector<DirectCountLimit> source_bounds;
 };
 
-//! What the sum counts: `direction * (number of selected rows)`.
-struct CountBody {
-	//! +1 for `x`; -1 for `-x`.
-	int direction = 1;
-};
-
-//! Reads a reducer body as `a*x`. The signed constant coefficients of `x` must add up to exactly +1 or -1, as the
-//! solver's like-term collection sums them. Any other term, a constant included, is a decline: a constant term in the
-//! body shifts the limit by an amount that depends on the group's row count, and the solver answers that.
-bool ReadCountBody(ClientContext &context, const vector<DecideSplitTerm> &terms, CountBody &body) {
-	double slope;
-	if (!DirectOnlyLinearTerms(terms) || !DirectConstantSlope(context, terms, slope) ||
-	    (slope != 1.0 && slope != -1.0)) {
-		return false;
-	}
-	body.direction = slope > 0 ? 1 : -1;
-	return true;
-}
-
 class Rule final : public DirectSolveRule {
 public:
 	const char *Name() const override {
 		return RULE_NAME;
 	}
 	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
-		if (ir.decisions.size() != 1 || ir.decisions[0].domain != DirectDomain::BOOL ||
-		    ir.decisions[0].scope != DecideVarScope::ROW || !ir.keyed_scopes.empty()) {
+		if (!DirectIsOneRowBool(ir)) {
 			return nullptr;
 		}
 		auto condition = make_uniq<Condition>();
-		for (auto &ir_node : ir.constraints) {
-			if (ir_node.comparison == ExpressionType::COMPARE_IN) {
-				return nullptr;
-			}
-			if (DirectFixedTerms(ir_node)) {
-				condition->local_fixes.push_back(&ir_node);
-				continue;
-			}
-			if (!DirectIsLowerBound(ir_node.comparison) && !DirectIsUpperBound(ir_node.comparison)) {
-				return nullptr;
-			}
-			condition->bound_factors.push_back(&ir_node);
-		}
-		if (condition->bound_factors.empty()) {
+		if (!DirectSplitFixes(ir, condition->local_fixes, condition->bound_factors) ||
+		    condition->bound_factors.empty()) {
 			return nullptr;
 		}
 		if (!ProveScope(ir, *condition) ||
@@ -124,15 +91,15 @@ bool Rule::ProveScope(const DirectIR &ir, Condition &condition) const {
 }
 
 //! The count bounds: constant ones fold into one inclusive interval, source-valued ones are kept for the plan to
-//! read per group. Every bound counts `x` once, as `x` or `-x` (DirectReadCountLimit). A constant term in the body
-//! (`SUM(x + c)`) is a decline.
+//! read per group. Every bound counts `x` once, as `x` or `-x` (DirectReadCountBody), and bounds the count from one
+//! side or both (a `<>` is a decline).
 bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	for (auto factor : condition.bound_factors) {
-		auto sum = factor->PlainSum();
-		CountBody body;
+		bool negated;
 		DirectCountLimit count;
-		if (!ReadCountBody(context, sum->terms, body) ||
-		    !DirectReadCountLimit(ir, context, *factor, body.direction < 0, count)) {
+		if (!DirectReadCountBody(context, factor->PlainSum()->terms, negated) ||
+		    !DirectReadCountLimit(ir, context, *factor, negated, count) ||
+		    (!DirectIsLowerBound(count.comparison) && !DirectIsUpperBound(count.comparison))) {
 			return false;
 		}
 		// A source-valued bound has one value per group already. The plan evaluates it on the rows of the groups, as
@@ -304,18 +271,7 @@ private:
 		if (!has_lower || condition.impossible) {
 			return;
 		}
-		if (HasFixes()) {
-			row_count = add(DirectWindowMatchingCount(calc, FreeRow(rows)));
-			return;
-		}
-		// Hand-built, like the rank: a window is an operator-specific node, which the builder (scalar expressions) has
-		// no operation for.
-		auto count =
-		    make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_AGGREGATE, LogicalType::BIGINT,
-		                                     make_uniq<AggregateFunction>(CountStarFun::GetFunction()), nullptr);
-		count->start = WindowBoundary::UNBOUNDED_PRECEDING;
-		count->end = WindowBoundary::UNBOUNDED_FOLLOWING;
-		row_count = add(std::move(count));
+		row_count = add(DirectWindowMatchingCount(calc, HasFixes() ? FreeRow(rows) : calc.Out(calc.Bool(true))));
 	}
 
 	//! The value of source-valued bound `index` on a side, as DOUBLE: the group's value when the plan computes its

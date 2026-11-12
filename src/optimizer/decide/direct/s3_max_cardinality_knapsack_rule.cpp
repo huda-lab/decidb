@@ -1,5 +1,6 @@
 #include "duckdb/optimizer/decide/direct/direct_rules.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 #include "duckdb/common/exception.hpp"
@@ -57,7 +58,7 @@ public:
 	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
 		auto condition = make_uniq<Condition>();
 		const DirectIRConstraint *clause = nullptr;
-		if (!ProveDecision(ir) || !ProveConstraints(ir, context, *condition, clause) ||
+		if (!DirectIsOneRowBool(ir) || !ProveConstraints(ir, context, *condition, clause) ||
 		    !ProveBudget(ir, context, *clause, *condition) || !ProveObjective(ir, context, *condition)) {
 			return nullptr;
 		}
@@ -73,15 +74,12 @@ public:
 	                       const DirectStateErrors &errors) const override;
 
 private:
-	bool ProveDecision(const DirectIR &ir) const;
 	bool ProveConstraints(const DirectIR &ir, ClientContext &context, Condition &condition,
 	                      const DirectIRConstraint *&clause) const;
-	bool SplitConstraints(const DirectIR &ir, const DirectIRConstraint *&clause,
-	                      vector<const DirectIRConstraint *> &fixes) const;
 	bool ProveBudget(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &clause,
 	                 Condition &condition) const;
 	bool ProveScope(const DirectIR &ir, const DirectIRConstraint &clause, Condition &condition) const;
-	bool ProveWeights(ClientContext &context, const DirectLinearPart &budget) const;
+	bool ProveWeights(ClientContext &context, const vector<DecideSplitTerm> &terms) const;
 	bool ProveObjectivePart(const DirectIR &ir, ClientContext &context, const DirectPart &part,
 	                        unique_ptr<Expression> &kept, double &count) const;
 	bool ProveObjectiveRows(const Condition &condition, const unique_ptr<Expression> &kept, bool first,
@@ -89,43 +87,19 @@ private:
 	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 };
 
-//! One decision, BOOL, one per row.
-bool Rule::ProveDecision(const DirectIR &ir) const {
-	return ir.decisions.size() == 1 && ir.decisions[0].domain == DirectDomain::BOOL &&
-	       ir.decisions[0].scope == DecideVarScope::ROW && ir.keyed_scopes.empty();
-}
-
 //! The constraints are one budget, compared with `<=` or `>=`, and the per-row clauses on the decision, which fix items
-//! (DirectReadFixedValues reads them as S1 does); any other constraint is a decline. That the budget is an aggregate
-//! is proved with its scope (ProveScope).
+//! (DirectReadFixedValues reads them as S1 does); a membership constraint, a second budget and no budget are declines.
+//! That the budget is an aggregate is proved with its scope (ProveScope).
 bool Rule::ProveConstraints(const DirectIR &ir, ClientContext &context, Condition &condition,
                             const DirectIRConstraint *&clause) const {
-	vector<const DirectIRConstraint *> fixes;
-	if (!SplitConstraints(ir, clause, fixes)) {
+	vector<const DirectIRConstraint *> fixes, budgets;
+	if (!DirectSplitFixes(ir, fixes, budgets) || budgets.size() != 1) {
 		return false;
 	}
+	clause = budgets[0];
 	condition.at_least = clause->comparison == ExpressionType::COMPARE_GREATERTHANOREQUALTO;
 	return (condition.at_least || clause->comparison == ExpressionType::COMPARE_LESSTHANOREQUALTO) &&
 	       DirectReadFixedValues(ir, context, fixes, condition.fixed);
-}
-
-//! The budget `clause`, the one constraint that is not a per-row clause on the decision, and the clauses in `fixes`. A
-//! membership constraint, a second budget and no budget are declines.
-bool Rule::SplitConstraints(const DirectIR &ir, const DirectIRConstraint *&clause,
-                            vector<const DirectIRConstraint *> &fixes) const {
-	for (auto &constraint : ir.constraints) {
-		if (constraint.comparison == ExpressionType::COMPARE_IN) {
-			return false;
-		}
-		if (DirectFixedTerms(constraint)) {
-			fixes.push_back(&constraint);
-		} else if (clause) {
-			return false;
-		} else {
-			clause = &constraint;
-		}
-	}
-	return clause != nullptr;
 }
 
 //! The budget covers the rows its `when` (on the clause or in the sum) keeps, or every row, in the groups of its `by`
@@ -137,23 +111,16 @@ bool Rule::ProveScope(const DirectIR &ir, const DirectIRConstraint &clause, Cond
 }
 
 //! Each weight is a finite constant or a number of the source row (DirectReadLinearPart has proved the latter, which
-//! may raise when evaluated; the plan evaluates it on every row, as the solver does). Constants that add up to exactly
-//! 1 or -1 make the sum a count, which is S1's (S1's ReadCountBody sums the signed constants the same way).
-bool Rule::ProveWeights(ClientContext &context, const DirectLinearPart &budget) const {
-	bool all_constant = true;
-	double slope = 0;
-	for (auto &term : budget.terms) {
-		if (!term.coefficient->IsFoldable()) {
-			all_constant = false;
-			continue;
-		}
-		double value;
-		if (!TryEvaluateFoldableDouble(context, *term.coefficient, value, DIRECT_FINITE_CONSTANT)) {
-			return false;
-		}
-		slope += term.sign * value;
-	}
-	return !all_constant || (slope != 1.0 && slope != -1.0);
+//! may raise when evaluated; the plan evaluates it on every row, as the solver does). A body of constants only must
+//! have them all finite, and must not count the rows: constants that add up to exactly 1 or -1 are S1's
+//! (DirectReadCountBody).
+bool Rule::ProveWeights(ClientContext &context, const vector<DecideSplitTerm> &terms) const {
+	bool constants_only = std::all_of(terms.begin(), terms.end(),
+	                                  [](const DecideSplitTerm &term) { return term.coefficient->IsFoldable(); });
+	double slope;
+	bool negated;
+	return (!constants_only || DirectConstantSlope(context, terms, slope)) &&
+	       !DirectReadCountBody(context, terms, negated);
 }
 
 //! `SUM(w*x) <= B` or `>= B`: a plain SUM of linear terms on the decision, in the scope ProveScope proves, with weights
@@ -167,7 +134,7 @@ bool Rule::ProveBudget(const DirectIR &ir, ClientContext &context, const DirectI
 	auto sum = clause.PlainSum();
 	return DirectOnlyLinearTerms(sum->terms) &&
 	       DirectReadLinearPart(ir, context, *sum, clause.written, condition.budget) &&
-	       ProveWeights(context, condition.budget) && DirectReadLimit(ir, context, clause, condition.limit);
+	       ProveWeights(context, sum->terms) && DirectReadLimit(ir, context, clause, condition.limit);
 }
 
 //! One objective part: a plain SUM of linear terms, each coefficient a finite constant, on the rows `kept` names (null
@@ -182,13 +149,9 @@ bool Rule::ProveObjectivePart(const DirectIR &ir, ClientContext &context, const 
 	    !DirectObjectivePartKept(ir, part, kept)) {
 		return false;
 	}
-	double slope = 0;
-	for (auto &term : read.terms) {
-		double value;
-		if (!TryEvaluateFoldableDouble(context, *term.coefficient, value, DIRECT_FINITE_CONSTANT)) {
-			return false;
-		}
-		slope += term.sign * value;
+	double slope;
+	if (!DirectConstantSlope(context, part.terms, slope)) {
+		return false;
 	}
 	count = DirectOriented(read, slope);
 	return true;
