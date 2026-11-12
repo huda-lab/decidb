@@ -262,8 +262,9 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     comparison stepped by one, nothing past 2^53, an upper side below 0 impossible and a NULL no limit.
   - **A count body, a decision and fixed rows.** `DirectReadCountBody` reads a SUM whose constant coefficients add up
     to exactly 1 or -1 (`DirectConstantSlope`) as a count and gives its sign; S1 takes such a body and S3 declines it,
-    so the two rules are apart by one test. `DirectIsOneRowBool` proves one `BOOL` decision per row, and
-    `DirectSplitFixes` splits the clauses into those that fix a row and the coupling ones.
+    so the two rules are apart by one test. `DirectIsOneRowDecision` proves one decision of a domain per row (S1, S2,
+    S3 and O1 read `BOOL`, N1 `REAL`), and `DirectSplitFixes` splits the clauses into those that fix a row and the
+    coupling ones.
   - **A linear score** (`DirectLinearScore`): the objective of a ranked rule read as a signed sum of `SUM(coefficient
     * x)` terms (`Prove`), and its layout over the rows the rule reads: the score of a row (`Combined`), whether it can
     fail (`CanFail`) and its message (`Message`), which names a failing reducer before the objective. S1 reads its

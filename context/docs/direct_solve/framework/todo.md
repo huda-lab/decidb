@@ -49,22 +49,3 @@ solver path answers those queries, so none of them is wrong, only slower.
   the rules' checks for 1 or -1 are a fixed list (the sign). Dividing by c brings a rounding edge (`SUM(0.1*x) <= 0.3`
   gives 2.9999999999999996) that needs a decline of its own; in the shared canonicalizer the division also moves the
   solver's rows, tolerance and diagnostics. **Ruling (owner, 2026-11-12).**
-
-## FRM-28 — R1 re-points its answer with a binding replacer
-
-- **Problem.** R1 re-points the columns its answer reads through a per-field `where` map
-  (`r1_continuous_knapsack_rule.cpp`, the answer's stage), one entry per column it carries. The ranked prefix re-points
-  its answer at the held rows with one `ColumnBindingReplacer`, which treats every binding alike, including the ones
-  only a rule holds.
-- **Change.** R1 re-points with a `ColumnBindingReplacer` (`stop_operator` the stage it reads), and the `where` map
-  goes. Plans, answers and error texts stay as they are. A BLOAT task (§ Removing bloat).
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "direct_r1"`; `build/release/test/unittest "[decidb]"`.
-
-## FRM-29 — N1 and O1 read the one-row decision with the shared test
-
-- **Problem.** `DirectIsOneRowBool` proves one `BOOL` decision per row for S1 and S3. N1 (`n1_euclidean_ball_rule.cpp`)
-  and O1 (`o1_monge_assignment_rule.cpp`) repeat part of that test for decisions of other domains.
-- **Change.** One shared test of a one-row decision that takes the domain, read by S1, S3, N1 and O1, if their tests
-  differ only in the domain; where they differ in more, the task is a stop and report. A BLOAT task.
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "direct_s1 or direct_s3 or direct_n1 or direct_o1"`;
-  `build/release/test/unittest "[decidb]"`.
