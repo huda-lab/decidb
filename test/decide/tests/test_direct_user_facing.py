@@ -302,6 +302,8 @@ def test_a1_a_box_clamps_only_to_a_finite_static_end(decidb_cli, bounds, kept, l
     plan = _raw(decidb_cli, sql).stdout
     assert "A1_SEPARABLE_BOX" in plan, plan
     plan = "".join(plan.replace("│", "").split())
+    # A flat objective takes the clamp of 0 into the box (DirectMinimizeOnInterval), which is not a clamp of the box.
+    plan = plan.replace("least(greatest(0.0,", "")
     assert not any(text in plan for text in left_out), plan
     if kept:
         assert kept in plan, plan
@@ -402,7 +404,7 @@ def test_a_quadratic_sum_of_columns_has_no_zero_seed(decidb_cli, rule, decide):
     "column_type,objective,message",
     [
         # S1's score is the sum of its parts' terms. Values of exact types, whose bounds (with the parts' factors) sum
-        # below the range of a DOUBLE, cannot fail, so the rank window holds no minimum of a message beside the rank.
+        # below the range of a DOUBLE, cannot fail, so the score projection holds no check of the score.
         ("INTEGER", "SUM(p * x)", False),
         ("INTEGER", "SUM(p * x) + SUM(q * x)", False),
         ("INTEGER", "SUM(p * x) / 2", False),
@@ -425,7 +427,8 @@ def test_s1_a_score_that_cannot_fail_has_no_message_to_take_the_minimum_of(decid
     """
     plan = "".join(_raw(decidb_cli, sql).stdout.replace("│", "").split())
     assert "S1_UNIFORM_MATROID" in plan, plan
-    assert ("min(#" in plan) == message, plan
+    # The score's check is a number check (DirectCheckNumber), the one `isfinite` of these plans.
+    assert ("isfinite(" in plan) == message, plan
 
 
 @pytest.mark.correctness
