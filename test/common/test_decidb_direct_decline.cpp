@@ -1528,6 +1528,24 @@ duckdb::vector<Shape> S2AppliesShapes() {
 	                    " AND per flag: SUM(x) <= 3"));
 	shapes.push_back(S2("the empty class on both scopes", "per (): SUM(x) by (flag) <= 1 AND per (): SUM(x) <= 2"));
 	shapes.push_back(S2("rows fixed beside the scopes", S2_CHAIN + string(" AND x = 1 AND x >= flag AND x <= cap")));
+	// A cap read from the data (S2-4), at each level and written each way the group bound reads it.
+	shapes.push_back(S2("a cap read from the data at the finer scope", "SUM(x) by (flag) <= cap AND SUM(x) <= 3"));
+	shapes.push_back(S2("a cap that is an expression of the data at the coarser scope",
+	                    "SUM(x) by (flag) <= 1 AND SUM(x) <= cap + 1"));
+	shapes.push_back(
+	    S2("a cap that is an aggregate of the source", "SUM(x) by (flag) <= 1 AND SUM(x) <= 0.5 * SUM(cap)"));
+	shapes.push_back(
+	    S2("a cap that is an aggregate of its own group",
+	       "SUM(x) by (name, flag) <= MAX(cap) by (name, flag) AND SUM(x) by (flag) <= COUNT(*) by (flag) / 2"));
+	shapes.push_back(
+	    S2("a cap that is one value of its group's key", "SUM(x) by (name, flag) <= LENGTH(name) AND SUM(x) <= 3"));
+	shapes.push_back(S2("a cap read from the data beside a constant cap of its scope",
+	                    "SUM(x) by (flag) <= cap AND SUM(x) by (flag) <= 2 AND SUM(x) <= 3"));
+	shapes.push_back(S2("two caps read from the data on one scope",
+	                    "SUM(x) by (flag) <= cap AND SUM(x) by (flag) < cap + 1 "
+	                    "AND SUM(x) <= 3"));
+	shapes.push_back(
+	    S2("a negated count body with a cap read from the data", "SUM(-x) by (flag) >= -cap AND SUM(x) <= 3"));
 	shapes.push_back(S2("a minimized objective", S2_CHAIN, nullptr, "MINIMIZE SUM(w*x)"));
 	shapes.push_back(S2("a scaled objective of two parts", S2_CHAIN, nullptr, "MAXIMIZE 2 * SUM(w*x) - SUM(f*x) / 4"));
 	shapes.push_back(S2("an objective WHEN", S2_CHAIN, nullptr, "MAXIMIZE when flag: SUM(w*x)"));
@@ -1569,10 +1587,8 @@ duckdb::vector<Shape> S2DeclineShapes() {
 	shapes.push_back(S2("a limit of 1e20", "SUM(x) by (flag) <= 1 AND SUM(x) <= 1e20"));
 	shapes.push_back(S2("a limit of minus 1e20", "SUM(x) by (flag) <= 1 AND SUM(x) <= -1e20"));
 	shapes.push_back(S2("a limit that is infinite", "SUM(x) by (flag) <= 1 AND SUM(x) <= 'inf'::DOUBLE"));
-	shapes.push_back(S2("a limit read from the data", "SUM(x) by (flag) <= cap AND SUM(x) <= 3"));
-	shapes.push_back(S2("a limit that is an expression of the data", "SUM(x) by (flag) <= 1 AND SUM(x) <= cap + 1"));
-	shapes.push_back(
-	    S2("a limit that is an aggregate of the source", "SUM(x) by (flag) <= 1 AND SUM(x) <= 0.5 * SUM(cap)"));
+	shapes.push_back(S2("a limit that is a reducer over a value fixed only within the query",
+	                    "SUM(x) by (flag) <= 1 AND SUM(x) <= SUM(txid_current())"));
 	// A lower limit, an equal limit and a range can force a selection, which the cascade of upper quotas cannot honor.
 	shapes.push_back(S2("a lower limit on the finer scope", "SUM(x) by (flag) >= 1 AND SUM(x) <= 3"));
 	shapes.push_back(S2("a lower limit on the coarser scope", "SUM(x) by (flag) <= 1 AND SUM(x) >= 1"));

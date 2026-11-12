@@ -19,7 +19,11 @@ decision point each:
   beyond a quota are infeasible, at the finest level and at a coarser one;
 - the objective: MINIMIZE, negative scores, ties, no objective;
 - rows outside a level: a `when` on the finer level only, the same `when` on every level, a `when` inside the sum, a NULL
-  key at each level.
+  key at each level;
+- caps read from the data (S2_DATA_CAP_CASES): a source value per row (the group's tightest) or an aggregate of the
+  group's rows, at the finer level, the coarser level and every level, beside a constant cap or another data cap of the
+  same level, rounded as the constant ones are, NULL (no limit), below zero (infeasible), with fixed rows and under a
+  `when`; a NaN cap raises the solver's error before the first row leaves.
 
 Note: `oracle_solver` caches each result under the test node id plus a hash of the test function's source. The case
 tables and the model builder live outside that source, so editing them does not invalidate the cache; a stale value
@@ -28,6 +32,7 @@ fails loudly with an objective mismatch. After changing a case or `_s2_constrain
 """
 
 import math
+import re
 
 import pytest
 
@@ -116,7 +121,21 @@ TIES = [
 # Every row scores below zero: nothing improves a maximized objective.
 LOSSES = [_row(i, "N" if i < 3 else "S", "a" if i % 2 else "b", -1.0 - i) for i in range(6)]
 
+# MAIN with a cap per row, read from the data. Per department the tightest cap is 1 (N sales), 2 (N research), 1 (S
+# sales), 3 (S research), 1 (W research) and 1 (W tools); per division 1, 1 and 1; the whole query 1. The largest are 2, 2,
+# 1, 3, 2, 1 per department and 2, 3, 2 per division.
+CAPS = [2.0, 1.0, 2.0, 2.0, 1.0, 1.0, 3.0, 2.0, 1.0, 1.0, 5.0, 2.0]
+CAPPED = [dict(row, cap=cap) for row, cap in zip(MAIN, CAPS)]
+
+# The same with NULL caps: every cap of S research, W research and W tools is NULL, so those departments, and the
+# division W, have no cap from the data, and N research and S sales have one cap each among their rows.
+CAPPED_NULLS = [
+    dict(row, cap=cap) for row, cap in zip(MAIN, [2.0, None, None, 2.0, 1.0, None, None, None, None, None, 5.0, None])
+]
+
 DATASETS = {
+    "capped": CAPPED,
+    "capped_nulls": CAPPED_NULLS,
     "main": MAIN,
     "example": EXAMPLE,
     "counter": COUNTER,
@@ -131,9 +150,15 @@ DEPT = ("div", "dept")
 TEAM = ("div", "dept", "team")
 
 
-def Q(keys, cap, op="<=", when=None, body="x"):
-    """One quota clause: `SUM(body) by (keys) op cap`, under `when` (None, "flag" in front, "local" inside the sum)."""
-    return dict(keys=keys, cap=cap, op=op, when=when, body=body)
+def Q(keys, cap, op="<=", when=None, body="x", cap_of=None):
+    """One quota clause: `SUM(body) by (keys) op cap`, under `when` (None, "flag" in front, "local" inside the sum).
+
+    `cap` is the SQL text of the limit. A limit read from the data also gives `cap_of(members, whole)`, the limit the
+    solver reads for one group as Python computes it from the raw rows: `members` are the rows of the group (the rows
+    the clause's `when` keeps with no NULL key) and `whole` all rows with the same key, which a reducer reads when the
+    `when` stands inside the sum. None means NULL, which skips the group's instance.
+    """
+    return dict(keys=keys, cap=cap, op=op, when=when, body=body, cap_of=cap_of)
 
 
 # A case is a dict with these keys:
@@ -231,18 +256,211 @@ S2_CASES = {
 
 _OPNAMES = {"<=": "le", "<": "lt", ">=": "ge", ">": "gt"}
 
+# ---------------------------------------------------------------------------
+# Caps read from the data: what each reads per group, as the solver does
+# ---------------------------------------------------------------------------
+
+
+def _caps(members):
+    return [r["cap"] for r in members if r["cap"] is not None]
+
+
+def _tightest(members, whole):
+    """A per-row cap's tightest value in the group; NULL when every row's is NULL."""
+    return min(_caps(members), default=None)
+
+
+def _largest(members, whole):
+    """MAX(cap) over the group's rows; NULL when every cap is NULL."""
+    return max(_caps(members), default=None)
+
+
+def _largest_of_the_key(members, whole):
+    """MAX(cap) by the same key, which a `when` inside the sum does not narrow."""
+    return max(_caps(whole), default=None)
+
+
+def _plus(read, amount):
+    return lambda members, whole: None if read(members, whole) is None else read(members, whole) + amount
+
+
+def _half_the_rows(members, whole):
+    return len(members) / 2
+
+
+def _rows_less_one(members, whole):
+    return len(members) - 1
+
+
+def _a_sixth_of_the_caps(members, whole):
+    return sum(_caps(members)) / 6
+
+
+def _the_length_of_the_department(members, whole):
+    return len(members[0]["dept"]) - 4
+
+
+FINE = Q(DEPT, "cap", cap_of=_tightest)
+S2_DATA_CAP_CASES = {
+    # --- a source value per row: the group's tightest ---
+    "per_row_cap_at_the_finer_level": {"data": "capped", "quotas": [FINE, Q(DIV, 2), Q((), 4)]},
+    "per_row_cap_at_the_coarser_level": {
+        "data": "capped",
+        "quotas": [Q(DEPT, 2), Q(DIV, "cap + 1", cap_of=_plus(_tightest, 1)), Q((), 5)],
+    },
+    "per_row_cap_at_every_level": {
+        "data": "capped",
+        "quotas": [FINE, Q(DIV, "cap + 1", cap_of=_plus(_tightest, 1)), Q((), "cap + 3", cap_of=_plus(_tightest, 3))],
+    },
+    "per_row_cap_that_is_one_value_of_the_key": {
+        "data": "capped",
+        "quotas": [Q(DEPT, "LENGTH(dept) - 4", cap_of=_the_length_of_the_department), Q(DIV, 2), Q((), 4)],
+    },
+    # --- an aggregate of the group's rows ---
+    "aggregate_cap_at_the_finer_level": {
+        "data": "capped",
+        "quotas": [Q(DEPT, "MAX(cap) by (div, dept)", cap_of=_largest), Q(DIV, 2), Q((), 4)],
+    },
+    "aggregate_cap_at_the_coarser_level": {
+        "data": "capped",
+        "quotas": [Q(DEPT, 1), Q(DIV, "COUNT(*) by (div) / 2", cap_of=_half_the_rows), Q((), 5)],
+    },
+    "aggregate_cap_at_every_level": {
+        "data": "capped",
+        "quotas": [
+            Q(DEPT, "MAX(cap) by (div, dept)", cap_of=_largest),
+            Q(DIV, "COUNT(*) by (div) / 2", cap_of=_half_the_rows),
+            Q((), "SUM(cap) / 6", cap_of=_a_sixth_of_the_caps),
+        ],
+    },
+    "aggregate_cap_under_a_when": {
+        "data": "capped",
+        "quotas": [Q(DEPT, "MAX(cap) by (div, dept)", when="flag", cap_of=_largest), Q(DIV, 2), Q((), 4)],
+    },
+    # A reducer reads every row of its key, though the sum counts only the rows the `when` keeps.
+    "aggregate_cap_beside_a_when_inside_the_sum": {
+        "data": "capped",
+        "quotas": [Q(DEPT, "MAX(cap) by (div, dept)", when="local", cap_of=_largest_of_the_key), Q(DIV, 2), Q((), 4)],
+    },
+    # --- rounding: a fractional, a strict and a negated cap, as for a constant ---
+    "cap_strict_and_fractional": {
+        "data": "capped",
+        "quotas": [
+            Q(DEPT, "cap / 2.0", "<", cap_of=lambda m, w: _tightest(m, w) / 2),
+            Q(DIV, "COUNT(*) by (div) / 2", "<", cap_of=_half_the_rows),
+            Q((), 4),
+        ],
+    },
+    "cap_with_a_negated_count_body": {
+        "data": "capped",
+        "quotas": [
+            Q(DEPT, "-cap", ">=", body="-x", cap_of=lambda m, w: -_tightest(m, w)),
+            Q(DIV, "-COUNT(*) by (div) / 2", ">", body="-x", cap_of=lambda m, w: -_half_the_rows(m, w)),
+            Q((), 4),
+        ],
+    },
+    "cap_zero": {"data": "capped", "quotas": [Q(DEPT, "cap - 1", cap_of=_plus(_tightest, -1)), Q(DIV, 3), Q((), 5)]},
+    # --- several clauses of one level: the group's room is the least of them ---
+    # The constant cap 2 is the least where the data's is 3 (S research) and the data's where it is 1 (N sales).
+    "cap_beside_a_constant_cap_of_its_level": {
+        "data": "capped",
+        "quotas": [Q(DEPT, 2), FINE, Q(DIV, 3), Q((), 6)],
+    },
+    "two_data_caps_on_one_level": {
+        "data": "capped",
+        "quotas": [
+            FINE,
+            Q(DEPT, "COUNT(*) by (div, dept) - 1", cap_of=_rows_less_one),
+            Q(DIV, 3),
+            Q((), 9),
+        ],
+    },
+    "two_data_caps_and_a_constant_on_one_level": {
+        "data": "capped",
+        "quotas": [
+            Q(DEPT, 1),
+            Q(DIV, "cap + 2", cap_of=_plus(_tightest, 2)),
+            Q(DIV, "MAX(cap) by (div)", cap_of=_largest),
+            Q(DIV, 3),
+            Q((), 5),
+        ],
+    },
+    # --- a NULL cap is no limit; the group's tightest skips a NULL ---
+    "null_per_row_cap_is_no_limit": {
+        "data": "capped_nulls",
+        "quotas": [FINE, Q(DIV, "cap", cap_of=_tightest), Q((), "cap", cap_of=_tightest)],
+    },
+    "null_aggregate_cap_is_no_limit": {
+        "data": "capped_nulls",
+        "quotas": [
+            Q(DEPT, "MAX(cap) by (div, dept)", cap_of=_largest),
+            Q(DIV, "MAX(cap) by (div)", cap_of=_largest),
+            Q((), "MAX(cap)", cap_of=_largest),
+        ],
+    },
+    "null_cap_beside_a_constant_cap": {"data": "capped_nulls", "quotas": [FINE, Q(DEPT, 1), Q(DIV, 2), Q((), 4)]},
+    # --- a cap with fixed rows: a row fixed to 1 takes a place of every level it is in ---
+    "cap_with_fixed_rows": {
+        "data": "capped",
+        "quotas": [FINE, Q(DIV, "cap + 1", cap_of=_plus(_tightest, 1)), Q((), 5)],
+        "fixed": [(1, [1, 6]), (0, [0])],
+    },
+    "cap_with_a_fixed_row_that_fills_it": {
+        "data": "capped",
+        "quotas": [FINE, Q(DIV, 3), Q((), 5)],
+        "fixed": [(1, [3, 4])],
+    },
+    # --- infeasible: a cap below zero, or fixed rows beyond a cap ---
+    "cap_below_zero_at_the_finer_level": {
+        "data": "capped",
+        "quotas": [Q(DEPT, "cap - 3", cap_of=_plus(_tightest, -3)), Q(DIV, 5), Q((), 9)],
+    },
+    "cap_below_zero_at_the_coarser_level": {
+        "data": "capped",
+        "quotas": [Q(DEPT, 2), Q(DIV, "cap - 2", cap_of=_plus(_tightest, -2)), Q((), 9)],
+    },
+    "aggregate_cap_below_zero": {
+        "data": "capped",
+        "quotas": [Q(DEPT, 2), Q(DIV, 3), Q((), "COUNT(*) / 2 - 7", cap_of=lambda m, w: len(m) / 2 - 7)],
+    },
+    "strict_cap_of_zero": {
+        "data": "capped",
+        "quotas": [Q(DEPT, "cap - 1", "<", cap_of=_plus(_tightest, -1)), Q(DIV, 5), Q((), 9)],
+    },
+    "fixed_rows_beyond_a_cap_at_the_finer_level": {
+        "data": "capped",
+        "quotas": [FINE, Q(DIV, 5), Q((), 9)],
+        "fixed": [(1, [0, 1])],
+    },
+    "fixed_rows_beyond_a_cap_at_the_coarser_level": {
+        "data": "capped",
+        "quotas": [Q(DEPT, 3), Q(DIV, "cap", cap_of=_tightest), Q((), 9)],
+        "fixed": [(1, [0, 3])],
+    },
+}
+
+INFEASIBLE_DATA_CAP_CASES = [
+    "cap_below_zero_at_the_finer_level",
+    "cap_below_zero_at_the_coarser_level",
+    "aggregate_cap_below_zero",
+    "strict_cap_of_zero",
+    "fixed_rows_beyond_a_cap_at_the_finer_level",
+    "fixed_rows_beyond_a_cap_at_the_coarser_level",
+]
+
 
 def _dataset(case):
     return DATASETS[case.get("data", "main")]
 
 
 def _names(case):
-    return NAMES + (["team"] if case.get("data") == "deep" else [])
+    return NAMES + [name for name in ("team", "cap") if name in _dataset(case)[0]]
 
 
 def _sql_types(case):
     types = dict(COLUMNS)
     types["team"] = "VARCHAR"
+    types["cap"] = "DOUBLE"
     return types
 
 
@@ -281,6 +499,14 @@ def _inclusive(op, limit):
     return op, limit
 
 
+def _limit_of(quota, rows, members, key):
+    """The limit one group of the quota has: the written constant, or what the quota reads from the data."""
+    if quota["cap_of"] is None:
+        return float(quota["cap"])
+    whole = [r for r in rows if tuple(r[k] for k in quota["keys"]) == key]
+    return quota["cap_of"]([rows[i] for i in members], whole)
+
+
 def _s2_constraints(case):
     """The case as plain linear constraints over x_<row index>, one per group of each quota.
 
@@ -298,8 +524,11 @@ def _s2_constraints(case):
                 continue
             groups.setdefault(tuple(row[key] for key in quota["keys"]), []).append(index)
         sign = -1.0 if quota["body"] == "-x" else 1.0
-        op, rhs = _inclusive(quota["op"], float(quota["cap"]))
-        for members in groups.values():
+        for key, members in groups.items():
+            limit = _limit_of(quota, rows, members, key)
+            if limit is None:
+                continue
+            op, rhs = _inclusive(quota["op"], limit)
             constraints.append(({names[i]: sign for i in members}, op, rhs))
     for value, ids in case.get("fixed", ()):
         constraints.extend(({names[i]: 1.0}, "=", float(value)) for i in ids if i < len(rows))
@@ -552,7 +781,7 @@ def test_s2_error_cases_fail_on_both_paths(decidb_cli, name):
 DECLINED = {
     "scopes_that_do_not_nest": "SUM(x) by (div) <= 1 AND SUM(x) by (dept) <= 2",
     "a_lower_limit": "SUM(x) by (div) <= 2 AND SUM(x) >= 1",
-    "a_limit_from_the_data": "SUM(x) by (div) <= 2 AND SUM(x) <= flag_cap",
+    "a_lower_limit_from_the_data": "SUM(x) by (div) <= 2 AND SUM(x) >= flag_cap",
     "a_when_on_the_coarser_scope_only": "SUM(x) by (div, dept) <= 1 AND when flag: SUM(x) by (div) <= 2",
     "another_when_on_each_scope": "when flag: SUM(x) by (div, dept) <= 1 AND when NOT flag: SUM(x) by (div) <= 2",
     "a_per_on_one_scope_only": "per div, dept: SUM(x) by (div, dept) <= 1 AND per div: SUM(x) by (div) <= 2 AND SUM(x) <= 3",
@@ -573,3 +802,100 @@ def test_s2_leaves_what_it_cannot_prove_to_the_solver(decidb_cli, name):
     assert "decide_direct_solve=require" in str(declined.value), declined.value
     assert _outcome(decidb_cli, sql, "auto") == _outcome(decidb_cli, sql, "off")
     assert _outcome(decidb_cli, sql, "off")[0] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Caps read from the data
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(S2_DATA_CAP_CASES))
+def test_s2_data_cap_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name):
+    _agree(decidb_cli, oracle_solver, S2_DATA_CAP_CASES[name])
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", ["per_row_cap_at_every_level", "aggregate_cap_at_every_level"])
+def test_s2_data_cap_agrees_inside_a_parent_context(decidb_cli, oracle_solver, name):
+    _agree(decidb_cli, oracle_solver, S2_DATA_CAP_CASES[name], "parent_join")
+
+
+@pytest.mark.var_boolean
+@pytest.mark.error
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", INFEASIBLE_DATA_CAP_CASES)
+def test_s2_a_data_cap_that_cannot_be_met_raises_the_same_error_on_both_paths(decidb_cli, name):
+    sql = _wrapped_sql(S2_DATA_CAP_CASES[name])
+    errors = {}
+    for mode in ("off", "require"):
+        with pytest.raises(DeciDBCliError, match=r"(?i)infeasible") as raised:
+            _run(decidb_cli, sql, mode)
+        errors[mode] = error_class(str(raised.value))
+    assert errors["off"] == errors["require"], errors
+    # The error comes before the first row leaves: a parent that reads one row, or counts them, meets it too.
+    for outer in (f"SELECT id FROM ({sql}) q LIMIT 1", f"SELECT COUNT(*) FROM ({sql}) q"):
+        with pytest.raises(DeciDBCliError, match=r"(?i)infeasible"):
+            _run(decidb_cli, outer, "require")
+
+
+# A NaN cap raises the solver's error, word for word, on the rows the clause reads. The NaN is on the last row, in the
+# last group of every level, so a plan that raised late would let the first rows leave.
+_NAN_CAP_ROWS = (
+    "(1, 'N', 'a', 9.0, 2.0), (2, 'N', 'a', 8.0, 1.0), (3, 'N', 'b', 7.0, 2.0), (4, 'S', 'a', 6.0, 2.0), "
+    "(5, 'S', 'b', 5.0, CAST('NaN' AS DOUBLE))"
+)
+NAN_CAP_QUOTAS = {
+    "per_row_cap_at_the_finer_level": "SUM(x) by (div, dept) <= cap AND SUM(x) by (div) <= 2 AND SUM(x) <= 3",
+    "per_row_cap_at_the_coarser_level": "SUM(x) by (div, dept) <= 1 AND SUM(x) by (div) <= cap AND SUM(x) <= 3",
+    "per_row_cap_at_the_global_level": "SUM(x) by (div, dept) <= 1 AND SUM(x) by (div) <= 2 AND SUM(x) <= cap",
+    "aggregate_cap_at_the_finer_level": (
+        "SUM(x) by (div, dept) <= MAX(cap) by (div, dept) AND SUM(x) by (div) <= 2 AND SUM(x) <= 3"
+    ),
+    "aggregate_cap_at_the_coarser_level": (
+        "SUM(x) by (div, dept) <= 1 AND SUM(x) by (div) <= MAX(cap) by (div) AND SUM(x) <= 3"
+    ),
+    "aggregate_cap_of_a_nan_sum": (
+        "SUM(x) by (div, dept) <= 1 AND SUM(x) by (div) <= 2 AND SUM(x) <= SUM(cap) - SUM(cap)"
+    ),
+}
+
+
+NAN_INPUT_OF_AN_AGGREGATE = ("aggregate_cap_at_the_finer_level", "aggregate_cap_at_the_coarser_level")
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.error
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(NAN_CAP_QUOTAS))
+def test_s2_a_nan_cap_raises_the_solver_error_before_the_first_row_leaves(decidb_cli, name):
+    rows = (
+        _NAN_CAP_ROWS
+        if name != "aggregate_cap_of_a_nan_sum"
+        else _NAN_CAP_ROWS.replace("CAST('NaN' AS DOUBLE)", "CAST('Infinity' AS DOUBLE)")
+    )
+    sql = (
+        f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, div, dept, score, cap) "
+        f"DECIDE x(BOOL) SUCH THAT {NAN_CAP_QUOTAS[name]} MAXIMIZE SUM(score*x)) q ORDER BY id"
+    )
+    with pytest.raises(DeciDBCliError) as solver_error:
+        _run(decidb_cli, sql, "off")
+    assert "NaN" in str(solver_error.value), solver_error.value
+    for outer in (sql, f"SELECT id FROM ({sql}) q LIMIT 1", f"SELECT COUNT(*) FROM ({sql}) q"):
+        with pytest.raises(DeciDBCliError) as direct_error:
+            _run(decidb_cli, outer, "require")
+        assert "decide_direct_solve=require" not in str(direct_error.value), str(direct_error.value)
+        if name in NAN_INPUT_OF_AN_AGGREGATE:
+            # Two checks fail: the NaN the reducer reads and the NaN it gives. Error order is not owed, so either
+            # message is the solver's; each is its own text, whichever check the thread meets first.
+            for error in (solver_error, direct_error):
+                assert re.search(
+                    r"DECIDE: the bound (cap|MAX\(cap\) by \(div(, dept)?\)) is NaN on some rows", str(error.value)
+                )
+        else:
+            assert str(direct_error.value) == str(solver_error.value)
