@@ -476,7 +476,7 @@ private:
 	//! W1: the counts of the group's rows, which the lower bound's feasibility reads.
 	void AddGroupWindows(LogicalWindow &w1, const DirectRankedColumns &rows) override {
 		auto add = [&](unique_ptr<BoundWindowExpression> count) {
-			PartitionByGroup(rows.carried, *count);
+			OverRank(rows.carried, *count);
 			w1.expressions.push_back(std::move(count));
 			return ColumnBinding(w1.window_index, w1.expressions.size() - 1);
 		};

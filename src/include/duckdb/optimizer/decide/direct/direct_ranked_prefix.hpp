@@ -80,7 +80,8 @@ protected:
 	//! owes below the rank window to `checks_below`, over `state`'s columns.
 	virtual ColumnBinding LayoutRows(DirectProjectionStage &p1, const DirectScopeState &state) = 0;
 	//! W1: adds to `w1` the windows of the rule over the group in order of the ranking column (a running sum of it, a
-	//! count), partitioned with PartitionByGroup. `rows` are the columns of P1, RankKey the ranking column's.
+	//! count), over the rank's partition and order (OverRank). `rows` are the columns of P1, RankKey the ranking
+	//! column's.
 	virtual void AddGroupWindows(LogicalWindow &w1, const DirectRankedColumns &rows) = 0;
 	//! P2: adds the rule's columns over `input`, the columns W1 gives (P1's columns and the rank), and the group limits
 	//! (GroupValues). It appends the checks it owes above W1 to `checks_above`, over the same columns.
@@ -102,6 +103,12 @@ protected:
 	//! What the registered bound gives, over the columns of W1; valid in LayoutPrefix and after.
 	const DirectGroupValues &GroupValues(idx_t bound) const;
 
+	//! Makes `window`, an aggregate over the whole group, take the rank's partition and order. DuckDB runs a window
+	//! with no order, or no partition, on one thread and sorts it on its own; with the rank's order it shares the
+	//! rank's sort and stays parallel, and its frame over the whole partition (ROWS BETWEEN UNBOUNDED PRECEDING AND
+	//! UNBOUNDED FOLLOWING) leaves its value the same on every row. The group limits take it, and a rule's own windows
+	//! over the group should too (AddGroupWindows).
+	void OverRank(const DirectCarried &carried, BoundWindowExpression &window) const;
 	//! The ranking column as W1 reads it, an expression over P1's columns: the rule's column, NULL on a row a clause
 	//! fixes to 1 or to 0, which ranks last and which a sum skips.
 	ExprPtr RankKey() const;

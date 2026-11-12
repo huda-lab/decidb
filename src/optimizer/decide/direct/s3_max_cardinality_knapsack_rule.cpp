@@ -361,7 +361,7 @@ private:
 		total = ColumnBinding(w1.window_index, w1.expressions.size() - 1);
 		if (HasFixes()) {
 			auto sum = DirectWindowExtremum(optimizer, "sum", calc.Out(Column(LogicalType::DOUBLE, fixed_weight)));
-			PartitionByGroup(rows.carried, *sum);
+			OverRank(rows.carried, *sum);
 			w1.expressions.push_back(std::move(sum));
 			fixed_total = ColumnBinding(w1.window_index, w1.expressions.size() - 1);
 		}

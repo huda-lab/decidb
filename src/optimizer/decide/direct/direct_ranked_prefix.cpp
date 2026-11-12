@@ -41,6 +41,11 @@ void DirectRankedPrefix::PartitionByGroup(const DirectCarried &carried, BoundWin
 	}
 }
 
+void DirectRankedPrefix::OverRank(const DirectCarried &carried, BoundWindowExpression &window) const {
+	PartitionByGroup(carried, window);
+	window.orders.emplace_back(RankOrder(), OrderByNullType::NULLS_LAST, calc.Out(RankKey()));
+}
+
 ExprPtr DirectRankedPrefix::FixedOne(const DirectScopeState &state) const {
 	return Column(LogicalType::BOOLEAN, state.extra[0]);
 }
@@ -116,12 +121,11 @@ void DirectRankedPrefix::RankRows(Stage &rows) {
 	    make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT, nullptr, nullptr);
 	rank->start = WindowBoundary::UNBOUNDED_PRECEDING;
 	rank->end = WindowBoundary::UNBOUNDED_FOLLOWING;
-	PartitionByGroup(columns.carried, *rank);
-	rank->orders.emplace_back(RankOrder(), OrderByNullType::NULLS_LAST, calc.Out(RankKey()));
+	OverRank(columns.carried, *rank);
 	w1->expressions.push_back(std::move(rank));
 	columns.rank = ColumnBinding(w1->window_index, 0);
 	AddGroupWindows(*w1, columns);
-	DirectWindowSink sink(*w1, [&](BoundWindowExpression &aggregate) { PartitionByGroup(columns.carried, aggregate); });
+	DirectWindowSink sink(*w1, [&](BoundWindowExpression &aggregate) { OverRank(columns.carried, aggregate); });
 	auto in_group = scoped ? Column(LogicalType::BOOLEAN, columns.carried.eligible) : nullptr;
 	for (idx_t i = 0; i < bounds.size(); i++) {
 		bound_values.push_back(DirectAddGroupBound(calc, *bounds[i], bound_inputs[i], sink, in_group));
