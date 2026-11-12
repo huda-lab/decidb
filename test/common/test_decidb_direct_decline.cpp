@@ -1643,6 +1643,7 @@ duckdb::vector<Shape> Join(duckdb::vector<Shape> first, const duckdb::vector<Sha
 duckdb::vector<RuleShapes> EveryRuleWithItsShapes() {
 	duckdb::vector<RuleShapes> rows;
 	rows.push_back({MakeS1UniformMatroidRule, Join(S1AppliesShapes(), S1KeyedShapes())});
+	rows.push_back({MakeS2LaminarMatroidRule, S2AppliesShapes()});
 	rows.push_back({MakeS3MaxCardinalityKnapsackRule, S3AppliesShapes()});
 	rows.push_back({MakeR1ContinuousKnapsackRule, Join(R1AppliesShapes(), R1KeyedShapes())});
 	rows.push_back({MakeA1SeparableBoxRule, A1AppliesShapes()});

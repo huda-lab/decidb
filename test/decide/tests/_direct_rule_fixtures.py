@@ -155,6 +155,104 @@ S1 = RuleFixture(
 )
 
 
+def _s2_late_error(decision_sql, score_sql="1.0"):
+    """A 5,000-row problem whose last row is invalid, in two levels of groups: `h` (a hundred groups of fifty rows) lies
+    inside `g` (fifty groups of a hundred rows). Rows 0 to 4998 are ordinary."""
+    return f"""
+        FROM (SELECT i, i % 50 AS g, i % 100 AS h, {score_sql} AS score FROM range(5000) t(i)) s
+        DECIDE {decision_sql}
+        """
+
+
+_S2_QUOTAS = "SUM(x) by (g, h) <= 30 AND SUM(x) by (g) <= 60 AND SUM(x) <= 1000"
+
+S2 = RuleFixture(
+    rule="S2_LAMINAR_MATROID",
+    condition="min/max SUM(s*x), x in {0,1}, nested SUM(x) <= k quotas",
+    # The worked example of the rule's definition: one candidate per department, one per division, two overall. The
+    # scores are distinct, so the optimum is unique and the rows equal the solver's exactly; the query also runs on
+    # forced HiGHS.
+    applies="""
+        SELECT id, division, department, score, x FROM (
+            FROM (VALUES (0, 'North', 'Sales', CAST('9.0' AS DOUBLE)), (1, 'North', 'Sales', CAST('7.0' AS DOUBLE)),
+                         (2, 'North', 'Research', CAST('8.0' AS DOUBLE)), (3, 'South', 'Sales', CAST('6.0' AS DOUBLE)),
+                         (4, 'South', 'Sales', CAST('5.0' AS DOUBLE)), (5, 'West', 'Research', CAST('4.0' AS DOUBLE)))
+                t(id, division, department, score)
+            DECIDE x(BOOL) SUCH THAT SUM(x) by (division, department) <= 1 AND SUM(x) by (division) <= 1
+                AND SUM(x) <= 2
+            MAXIMIZE SUM(score * x)
+        ) q ORDER BY id
+    """,
+    empty_applies="""
+        SELECT id, division, department, score, x FROM (
+            FROM (SELECT * FROM (VALUES (0, 'North', 'Sales', CAST('9.0' AS DOUBLE)),
+                                        (1, 'South', 'Sales', CAST('7.0' AS DOUBLE)))
+                      t(id, division, department, score) WHERE false) t
+            DECIDE x(BOOL) SUCH THAT SUM(x) by (division, department) <= 1 AND SUM(x) by (division) <= 1
+                AND SUM(x) <= 2
+            MAXIMIZE SUM(score * x)
+        ) q ORDER BY id
+    """,
+    table_setup="""
+        CREATE TEMP TABLE direct_s2_life(id INTEGER, division VARCHAR, score DOUBLE);
+        INSERT INTO direct_s2_life VALUES (1,'a',2),(2,'a',9);
+    """,
+    table_applies="""
+        SELECT id,x FROM (
+            FROM direct_s2_life DECIDE x(BOOL)
+            SUCH THAT SUM(x) by (division)<=1 AND SUM(x)<=2 MAXIMIZE SUM(score*x)
+        ) q
+    """,
+    table_change="ALTER TABLE direct_s2_life ADD COLUMN extra INTEGER;",
+    # The plain form with one condition changed, so the rule has to decline it: scopes that do not nest, a lower
+    # limit, a limit read from the data, a `per` on one scope only (the form of the definition's example, which writes
+    # `per` on the finer clauses), and a `when` on the coarser scope only. The other declines are
+    # `test_decidb_direct_decline.cpp`'s.
+    near_misses=(
+        ("x(BOOL)", "SUM(x) by (g) <= 1 AND SUM(x) by (h) <= 2", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(x) by (g) <= 1 AND SUM(x) >= 1", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(x) by (g) <= 1 AND SUM(x) <= cap", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "per g: SUM(x) by (g) <= 1 AND SUM(x) <= 2", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(x) by (g, h) <= 1 AND when p > 9: SUM(x) by (g) <= 2", "MAXIMIZE SUM(p*x)"),
+    ),
+    # Forms that look like near misses and apply: a `when` on the finer scope only, a zero limit, and the same `per` on
+    # both scopes.
+    near_miss_applies=(
+        ("x(BOOL)", "when p > 9: SUM(x) by (g, h) <= 1 AND SUM(x) by (g) <= 2", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(x) by (g, h) <= 0 AND SUM(x) by (g) <= 2", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "per g: SUM(x) by (g) <= 1 AND per g: SUM(x) <= 2", "MAXIMIZE SUM(p*x)"),
+    ),
+    near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 'a', 'x', 2), (2, 10.0::DOUBLE, 'a', 'y', 1), "
+    "(3, 8.0::DOUBLE, 'b', 'x', 2)) t(id,p,g,h,cap)",
+    near_miss_column="id",
+    late_errors=(
+        # A NaN score on the last of 5,000 rows, which the plan reads below its rank windows.
+        (
+            _s2_late_error(f"x(BOOL) SUCH THAT {_S2_QUOTAS} MAXIMIZE SUM(score*x)", score_sql=_S1_NAN_LAST),
+            "score is NaN or infinite on some rows",
+        ),
+        # A level that fails only in its last group. Two rows fixed to 1 share one group of the finer level (rows 4899
+        # and 4999 are in group h = 99) or of the coarser level (rows 4949 and 4999 are in group g = 49), and its cap is
+        # 1: the verdict of each level is raised before the first row leaves, whichever level the group is in.
+        (
+            _s2_late_error(
+                "x(BOOL) SUCH THAT SUM(x) by (g, h) <= 1 AND SUM(x) by (g) <= 60 AND SUM(x) <= 1000"
+                " AND when i = 4899 OR i = 4999: x = 1 MAXIMIZE SUM(score*x)"
+            ),
+            "infeasible",
+        ),
+        (
+            _s2_late_error(
+                "x(BOOL) SUCH THAT SUM(x) by (g, h) <= 30 AND SUM(x) by (g) <= 1 AND SUM(x) <= 1000"
+                " AND when i = 4949 OR i = 4999: x = 1 MAXIMIZE SUM(score*x)"
+            ),
+            "infeasible",
+        ),
+    ),
+    late_column="i",
+)
+
+
 def _a1_late_error(decision_sql, cap_sql):
     """A 5,000-row problem whose last row is invalid. Rows 0 to 4998 are ordinary."""
     return f"""
@@ -730,7 +828,7 @@ S3 = RuleFixture(
 )
 
 
-RULE_FIXTURES = (S1, A1, R1, N1, A2, O1, S3)
+RULE_FIXTURES = (S1, S2, A1, R1, N1, A2, O1, S3)
 
 
 # Bounds S1 applies that the oracle checks, as (constraint, the bound's value over the source
