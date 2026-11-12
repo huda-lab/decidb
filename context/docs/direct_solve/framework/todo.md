@@ -110,7 +110,6 @@ solver path answers those queries, so none of them is wrong, only slower.
 
 ## FRM-26 — The ranked-prefix builder ranks over several nested levels
 
-- **Decision needed.**
 - **Problem.** The builder (`direct_ranked_prefix`) holds one group key throughout: one `DirectSharedScope` and one
   `scoped` flag, one scope projection, one key in `DirectCarried`, one rank in W1, `PartitionByGroup` and `OverRank`
   over that key, and one eligible flag in the group checks. S2 ranks a chain of nested levels: each level ranks the
@@ -124,8 +123,8 @@ solver path answers those queries, so none of them is wrong, only slower.
      uses above one.
   2. S2 builds its own chain, and the builder's fixed rows, group checks and answer move out as shared fragments.
      The builder stays one level; S2 repeats its skeleton.
-- **Recommendation.** Option 1.
-- **Change.** The option the owner rules. The hooks return their checks instead of pushing to the base class's
+- **Recommendation.** Option 1. **Ruling (owner, 2026-11-12).** Option 1.
+- **Change.** Levels inside the builder (option 1). The hooks return their checks instead of pushing to the base class's
   vectors. S1 and S3 keep their plans: one level gives the plan it gives today.
 - **Needs.** FRM-22 (both rewrite CloseGroups), FRM-25.
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "direct_s1 or direct_s3 or every_input_row_is_read or

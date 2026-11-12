@@ -7,7 +7,6 @@ standard tests are in `../../architecture/rules.md` § The standard tests every 
 
 ## S2-1 — Recognition: nested upper count quotas over one decision
 
-- **Decision needed.**
 - **Problem.** No rule takes a query with two or more upper count quotas of different scope, such as
   `SUM(x) by (division, department) <= 1 AND SUM(x) by (division) <= 1 AND SUM(x) <= 2 MAXIMIZE SUM(score*x)`; the
   solver path answers it. The IR holds each clause with its own key, `when` and `per` classes (`DirectIRConstraint`),
@@ -19,7 +18,7 @@ standard tests are in `../../architecture/rules.md` § The standard tests every 
      no `when` or the same `when` as F, and the two have the same `per` gating. Provable families are chains, so the
      plan is a straight cascade. `by (department)` beside `by (division)` declines, though the data may nest them.
   2. Option 1 plus a finer `when` that implies the coarser one. Needs an implication proof between predicates.
-- **Recommendation.** Option 1.
+- **Recommendation.** Option 1. **Ruling (owner, 2026-11-12).** Option 1.
 - **Change.** Rule `S2_LAMINAR_MATROID`, registered beside S1 (`../../architecture/rules.md` § Adding a rule). It
   requires Boolean decisions, the linear objective S1 reads (FRM-23), every coupling clause an upper count limit read
   by the shared reader (FRM-24, FRM-25), and at least two scopes forming a chain under the containment the ruling
