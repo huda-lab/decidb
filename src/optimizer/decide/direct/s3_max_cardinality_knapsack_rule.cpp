@@ -35,22 +35,17 @@ struct Condition final : DirectApplicabilityCondition {
 	//! Otherwise the budget is a maximum, `<= B`, and the objective maximizes the count. The plan is the same with the
 	//! sort reversed, the comparison turned and the shortest prefix taken for the longest.
 	bool at_least = false;
-	//! The budget's `by` key: each group has a budget of its own. Empty without a key: one budget for all the rows.
-	vector<DirectKeyElement> group_keys;
-	//! The rows the budget covers: its `when` (the clause's, with the sum's own), over the source; null for every row.
-	//! A row it drops reads no weight and is in no budget.
-	unique_ptr<Expression> when;
+	//! The rows and groups the budget covers (DirectSharedScope): its `when` (the clause's, with the sum's own), over
+	//! the source, null for every row, a row it drops reading no weight and being in no budget; and its `by` key, each
+	//! group a budget of its own, empty for one budget for all the rows. A `per K:` class is declined, so `classes` and
+	//! `gated` are empty.
+	DirectSharedScope scope;
 	//! Whether the objective counts the budget's rows only: its `when` is the budget's, so a row the budget drops adds
 	//! nothing to the objective either. Otherwise every row adds one, and a row outside the budget is selected.
 	bool objective_on_kept = false;
 	//! What the per-row clauses fix: a row fixed to 1 is selected and its weight counts toward its group's budget; a
 	//! row fixed to 0 is not selected and leaves the prefix; a row fixed to both is infeasible.
 	DirectFixedValues fixed;
-
-	//! Whether rows can be outside every budget: a `when` drops them, or a NULL in a `by` key element.
-	bool Scoped() const {
-		return when || !group_keys.empty();
-	}
 };
 
 class Rule final : public DirectSolveRule {
@@ -137,14 +132,8 @@ bool Rule::SplitConstraints(const DirectIR &ir, const DirectIRConstraint *&claus
 //! key. A `per K:` class gives it a smaller scope, which stays with the solver.
 bool Rule::ProveScope(const DirectIR &ir, const DirectIRConstraint &clause, Condition &condition) const {
 	vector<const DirectIRConstraint *> budgets {&clause};
-	DirectSharedScope scope;
 	// A gated scope has classes, so the classes decline it too.
-	if (!DirectProveSharedScope(ir, budgets, scope) || !scope.classes.empty()) {
-		return false;
-	}
-	condition.when = std::move(scope.when);
-	condition.group_keys = std::move(scope.keys);
-	return true;
+	return DirectProveSharedScope(ir, budgets, condition.scope) && condition.scope.classes.empty();
 }
 
 //! Each weight is a finite constant or a number of the source row (DirectReadLinearPart has proved the latter, which
@@ -211,7 +200,7 @@ bool Rule::ProveObjectivePart(const DirectIR &ir, ClientContext &context, const 
 bool Rule::ProveObjectiveRows(const Condition &condition, const unique_ptr<Expression> &kept, bool first,
                               bool &filtered) const {
 	bool part_filtered = kept != nullptr;
-	if (part_filtered && (!condition.when || !Expression::Equals(*kept, *condition.when))) {
+	if (part_filtered && (!condition.scope.when || !Expression::Equals(*kept, *condition.scope.when))) {
 		return false;
 	}
 	if (first) {
@@ -279,17 +268,13 @@ public:
 	            const vector<LogicalType> &source_types_p, const DirectStateErrors &errors_p)
 	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context),
 	      source_bindings(source_bindings_p), source_types(source_types_p), errors(errors_p),
-	      scoped(condition_p.Scoped()) {
+	      scoped(condition_p.scope.Scoped()) {
 		D_ASSERT(source_bindings.size() == source_types.size());
 		auto &limit = condition.limit;
 		if (limit.constant) {
 			return;
 		}
-		// A limit the rewrite left as a group bound is one already; any other is one value per row, whose tightest
-		// value in the group is the limit.
-		limit_bound = limit.data.group ? limit.data.group->Copy()
-		                               : DirectTightestBound(optimizer, limit.data.comparison, limit.data.value->Copy(),
-		                                                     string(), nullptr);
+		limit_bound = limit.data.GroupBound(optimizer);
 	}
 
 	DirectSubstitute Build(unique_ptr<LogicalOperator> rows) const {
@@ -299,8 +284,8 @@ public:
 			flags.push_back(DirectAnyCondition(calc, condition.fixed.one_conditions));
 			flags.push_back(DirectAnyCondition(calc, condition.fixed.zero_conditions));
 		}
-		auto state = DirectProjectScope(binder, std::move(rows), scoped, condition.when.get(), condition.group_keys,
-		                                std::move(flags), nullptr);
+		auto state = DirectProjectScope(binder, std::move(rows), scoped, condition.scope.when.get(),
+		                                condition.scope.keys, std::move(flags), nullptr);
 		auto from_scope = DirectCarriedOf(state, source_bindings.size());
 
 		DirectProjectionStage p1(binder.GenerateTableIndex());
@@ -440,20 +425,8 @@ private:
 			return;
 		}
 		auto eligible = scoped ? Column(LogicalType::BOOLEAN, from_scope.eligible) : nullptr;
-		for (auto &input : DirectGroupInputs(calc, *limit_bound, eligible, over_state)) {
-			DirectGroupInputColumns columns;
-			if (input.reads) {
-				columns.reads = p1.Add(calc.Out(input.reads));
-			}
-			if (input.argument) {
-				columns.argument = p1.Add(calc.Out(input.argument));
-			}
-			if (input.invalid) {
-				auto message = Column(LogicalType::VARCHAR, p1.Add(calc.Out(input.invalid)));
-				result.checks.push_back(DirectRaiseMessage(optimizer, calc, message));
-			}
-			result.limit_inputs.push_back(columns);
-		}
+		result.limit_inputs =
+		    DirectLayoutGroupInputs(optimizer, calc, p1, *limit_bound, eligible, over_state, &result.checks);
 	}
 
 	//! P1: whether a clause fixes the row to 1 and to 0 (the scope projection computed both), the weight of a row fixed
@@ -490,8 +463,8 @@ private:
 		auto values = DirectValuesOn(condition.budget, 0);
 		// A row the `when` drops reads no weight: it is NULL there, so the check passes it and no total counts it.
 		ExprPtr kept;
-		if (condition.when) {
-			kept = calc.Wrap(DirectActiveWhen(calc, over_state(*condition.when).get()));
+		if (condition.scope.when) {
+			kept = calc.Wrap(DirectActiveWhen(calc, over_state(*condition.scope.when).get()));
 			if (DropsRowsFromObjective()) {
 				result.kept = p1.Add(kept);
 			}

@@ -786,6 +786,29 @@ vector<DirectGroupInput> DirectGroupInputs(const ExpressionBuilder &calc, const 
 	return inputs;
 }
 
+vector<DirectGroupInputColumns>
+DirectLayoutGroupInputs(Optimizer &optimizer, const ExpressionBuilder &calc, DirectProjectionStage &stage,
+                        const DecideGroupBound &bound, const ExprPtr &eligible,
+                        const std::function<unique_ptr<Expression>(const Expression &)> &over,
+                        vector<unique_ptr<Expression>> *checks) {
+	vector<DirectGroupInputColumns> columns;
+	for (auto &input : DirectGroupInputs(calc, bound, eligible, over)) {
+		DirectGroupInputColumns column;
+		if (input.reads) {
+			column.reads = stage.Add(calc.Out(input.reads));
+		}
+		if (input.argument) {
+			column.argument = stage.Add(calc.Out(input.argument));
+		}
+		if (input.invalid && checks) {
+			auto message = calc.Col(LogicalType::VARCHAR, stage.Add(calc.Out(input.invalid)));
+			checks->push_back(DirectRaiseMessage(optimizer, calc, message));
+		}
+		columns.push_back(column);
+	}
+	return columns;
+}
+
 DirectGroupValues DirectAddGroupBound(const ExpressionBuilder &calc, const DecideGroupBound &bound,
                                       const vector<DirectGroupInputColumns> &inputs, DirectGroupSink &sink,
                                       const ExprPtr &eligible) {

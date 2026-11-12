@@ -132,6 +132,10 @@ struct DirectDataLimit {
 	//! The limit, one value on every kept row of a group already. Null with a `group`.
 	unique_ptr<Expression> value;
 	unique_ptr<DecideGroupBound> group;
+
+	//! The group bound the plan computes: the `group` the rewrite left, or else the tightest of the per-row `value`
+	//! in the group (DirectTightestBound).
+	unique_ptr<DecideGroupBound> GroupBound(Optimizer &optimizer) const;
 };
 
 //! The limit of one aggregate constraint: a constant, or a value of the data.

@@ -895,7 +895,7 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	}));
 	shapes.push_back(N1("a square past a DOUBLE", "SUM(POWER(1e200 * x, 2)) <= 25"));
 	shapes.push_back(N1("a negative square", "SUM(-POWER(x, 2)) <= 25"));
-	// ProveLimitValue.
+	// DirectReadLimit.
 	shapes.push_back(N1("a limit of 1e20", "SUM(POWER(x, 2)) <= 1e20"));
 	shapes.push_back(N1("a limit of minus 1e20", "SUM(POWER(x, 2)) <= -1e20"));
 	shapes.push_back(N1("an infinite limit", "SUM(POWER(x, 2)) <= 'inf'::DOUBLE"));

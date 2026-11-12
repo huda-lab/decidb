@@ -402,6 +402,15 @@ DirectGroupValues DirectAddGroupBound(const ExpressionBuilder &calc, const Decid
                                       const vector<DirectGroupInputColumns> &inputs, DirectGroupSink &sink,
                                       const ExprPtr &eligible);
 
+//! Lays out the inputs of the bound (DirectGroupInputs) as columns of `stage`, and returns where each one's reads and
+//! argument are (DirectAddGroupBound takes them). Each message an input raises is a column of `stage` too, and its
+//! check goes to the end of `checks`; a null `checks` leaves the messages to the caller.
+vector<DirectGroupInputColumns>
+DirectLayoutGroupInputs(Optimizer &optimizer, const ExpressionBuilder &calc, DirectProjectionStage &stage,
+                        const DecideGroupBound &bound, const ExprPtr &eligible,
+                        const std::function<unique_ptr<Expression>(const Expression &)> &over,
+                        vector<unique_ptr<Expression>> *checks);
+
 //! The rows and groups the clauses of one rule's aggregate share (S1's count bounds, R1's budget): a rule reads them
 //! as one scope or declines.
 struct DirectSharedScope {

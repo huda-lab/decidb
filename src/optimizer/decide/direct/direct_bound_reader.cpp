@@ -184,6 +184,10 @@ ExprPtr DirectBoxIsEmpty(const ExpressionBuilder &calc, const ExprPtr &lower, co
 	                 calc.Cmp(ExpressionType::COMPARE_EQUAL, upper, calc.Num(NEGATIVE_INFINITY))});
 }
 
+unique_ptr<DecideGroupBound> DirectDataLimit::GroupBound(Optimizer &optimizer) const {
+	return group ? group->Copy() : DirectTightestBound(optimizer, comparison, value->Copy(), string(), nullptr);
+}
+
 bool DirectReadLimit(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &constraint,
                      DirectLimit &limit) {
 	if (TryEvaluateFoldableDouble(context, *constraint.rhs, limit.number, DIRECT_FINITE_CONSTANT)) {

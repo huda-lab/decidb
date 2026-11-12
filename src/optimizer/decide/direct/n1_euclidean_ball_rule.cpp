@@ -31,19 +31,11 @@ struct Condition final : DirectApplicabilityCondition {
 	bool nonnegative = true;
 	//! The objective as a message names it: a number computed past a DOUBLE names it, as the solver path names one.
 	string objective_written;
-	//! The clause's scope (DirectSharedScope).
-	bool scoped = false;
-	bool gated = false;
-	unique_ptr<Expression> when;
-	vector<DirectKeyElement> group_keys;
-	vector<DirectKeyElement> per_class_keys;
-	//! The limit B and the factor q of the sum of squares, so the ball is `SUM(x^2) <= B / q`. B is the constant
-	//! `limit`, or a limit read from the data, whose NULL skips the instance: `limit_group`, the aggregates of its
-	//! group that the bound-side rewrite left to the plan (DecideGroupBound), or `limit_value`, a value of the source
-	//! row, whose tightest value in a group applies (DirectTightestBound).
-	double limit = 0.0;
-	unique_ptr<Expression> limit_value;
-	unique_ptr<DecideGroupBound> limit_group;
+	//! The clause's scope.
+	DirectSharedScope scope;
+	//! The limit B and the factor q of the sum of squares, so the ball is `SUM(x^2) <= B / q`. B is a constant, or a
+	//! limit read from the data, whose NULL skips the instance.
+	DirectLimit limit;
 	double square_factor = 1.0;
 	vector<DirectQuadraticPart> parts;
 	bool has_square = false;
@@ -92,8 +84,6 @@ public:
 
 private:
 	bool ProveLimitClause(const DirectIR &ir, ClientContext &context, Condition &condition) const;
-	bool ProveLimitValue(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &clause,
-	                     Condition &condition) const;
 	bool ProveBox(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 };
@@ -117,15 +107,9 @@ bool Rule::ProveLimitClause(const DirectIR &ir, ClientContext &context, Conditio
 	if (!clause || clause->comparison != ExpressionType::COMPARE_LESSTHANOREQUALTO) {
 		return false;
 	}
-	DirectSharedScope scope;
-	if (!DirectProveSharedScope(ir, {clause}, scope)) {
+	if (!DirectProveSharedScope(ir, {clause}, condition.scope)) {
 		return false;
 	}
-	condition.scoped = scope.Scoped();
-	condition.gated = scope.gated;
-	condition.when = std::move(scope.when);
-	condition.group_keys = std::move(scope.keys);
-	condition.per_class_keys = std::move(scope.classes);
 	// DirectProveSharedScope has proved that the clause is a plain SUM.
 	auto &terms = clause->PlainSum()->terms;
 	if (terms.size() != 1 || !terms[0].IsSquare()) {
@@ -136,29 +120,7 @@ bool Rule::ProveLimitClause(const DirectIR &ir, ClientContext &context, Conditio
 	    !FoldSquareFactor(context, square, condition.square_factor) || condition.square_factor <= 0.0) {
 		return false;
 	}
-	return ProveLimitValue(ir, context, *clause, condition);
-}
-
-//! A constant the solver reads as a number, or a limit read from the data: the aggregates of its group that the
-//! bound-side rewrite left to the plan, or a numeric, deterministic expression over source columns. A limit of
-//! magnitude 1e20 or more is where the solver stops reading a right side as a number, so those stay with the solver.
-bool Rule::ProveLimitValue(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &clause,
-                           Condition &condition) const {
-	if (TryEvaluateFoldableDouble(context, *clause.rhs, condition.limit, DIRECT_FINITE_CONSTANT)) {
-		return std::fabs(condition.limit) < DECIDE_EFFECTIVE_INFINITY;
-	}
-	if (clause.group_bound) {
-		if (!DirectGroupBoundIsReadable(ir, *clause.group_bound)) {
-			return false;
-		}
-		condition.limit_group = clause.group_bound->Copy();
-		return true;
-	}
-	if (!DirectIsSourceOnlyNumericMayRaise(*clause.rhs, ir.decide_index, ir.source_bindings)) {
-		return false;
-	}
-	condition.limit_value = clause.rhs->Copy();
-	return true;
+	return DirectReadLimit(ir, context, *clause, condition.limit);
 }
 
 //! The box is the default [0, inf), or (-inf, inf) with a lower bound of magnitude 1e20 or more. Any other bound, even
@@ -272,13 +234,8 @@ public:
 	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context),
 	      source_bindings(source_bindings_p), source_types(source_types_p), errors(errors_p) {
 		D_ASSERT(source_bindings.size() == source_types.size());
-		// A limit the rewrite left as a group bound is one already; any other is one value per row, whose tightest
-		// value in the group is the limit.
-		if (condition.limit_group) {
-			limit_bound = condition.limit_group->Copy();
-		} else if (condition.limit_value) {
-			limit_bound = DirectTightestBound(optimizer, ExpressionType::COMPARE_LESSTHANOREQUALTO,
-			                                  condition.limit_value->Copy(), string(), nullptr);
+		if (!condition.limit.constant) {
+			limit_bound = condition.limit.data.GroupBound(optimizer);
 		}
 	}
 
@@ -303,7 +260,7 @@ public:
 			DirectWindowSink sink(*limit_window,
 			                      [&](BoundWindowExpression &aggregate) { PartitionByGroup(carried, aggregate); });
 			limit_values = DirectAddGroupBound(calc, *limit_bound, coefficients.limit_inputs, sink,
-			                                   condition.scoped ? Boolean(carried.eligible) : nullptr);
+			                                   condition.scope.Scoped() ? Boolean(carried.eligible) : nullptr);
 			limit_window->children.push_back(std::move(plan));
 			plan = std::move(limit_window);
 		}
@@ -358,8 +315,8 @@ public:
 			group.still = Boolean(joined.answers[next++]);
 		}
 		// A row is in a ball when the clause keeps it and the group has a limit.
-		auto in_ball = condition.scoped ? Boolean(carried.eligible) : calc.Bool(true);
-		ExprPtr limit = calc.Num(condition.limit);
+		auto in_ball = condition.scope.Scoped() ? Boolean(carried.eligible) : calc.Bool(true);
+		ExprPtr limit = calc.Num(condition.limit.number);
 		if (limit_bound) {
 			limit = Double(joined.answers[next]);
 			in_ball = calc.And(in_ball, calc.Not(calc.IsNull(limit)));
@@ -465,14 +422,14 @@ private:
 	//! The scope of a read of the source: [W0] and the scope projection, which both reads take.
 	DirectScopeState ScopeOf(unique_ptr<LogicalOperator> rows) const {
 		unique_ptr<Expression> instance;
-		if (condition.gated) {
+		if (condition.scope.gated) {
 			ColumnBinding flag;
-			rows =
-			    DirectAddInstanceFlag(optimizer, std::move(rows), condition.when.get(), condition.per_class_keys, flag);
+			rows = DirectAddInstanceFlag(optimizer, std::move(rows), condition.scope.when.get(),
+			                             condition.scope.classes, flag);
 			instance = calc.Out(calc.Col(LogicalType::BOOLEAN, flag));
 		}
-		return DirectProjectScope(binder, std::move(rows), condition.scoped, condition.when.get(), condition.group_keys,
-		                          {}, std::move(instance));
+		return DirectProjectScope(binder, std::move(rows), condition.scope.Scoped(), condition.scope.when.get(),
+		                          condition.scope.keys, {}, std::move(instance));
 	}
 
 	//! A copy of a proved expression read over a projection that carries the source first; `index` is INVALID_INDEX
@@ -487,25 +444,12 @@ private:
 
 	Raw LayoutRawValues(DirectProjectionStage &p1, const DirectCarried &from_scope, idx_t state_index) const {
 		Raw raw;
-		raw.carried = p1.Forward(from_scope, source_types, condition.scoped);
+		raw.carried = p1.Forward(from_scope, source_types, condition.scope.Scoped());
 		if (limit_bound) {
-			auto eligible = condition.scoped ? Boolean(from_scope.eligible) : nullptr;
-			auto inputs = DirectGroupInputs(calc, *limit_bound, eligible,
-			                                [&](const Expression &value) { return Over(value, state_index); });
-			for (auto &input : inputs) {
-				DirectGroupInputColumns columns;
-				if (input.reads) {
-					columns.reads = p1.Add(calc.Out(input.reads));
-				}
-				if (input.argument) {
-					columns.argument = p1.Add(calc.Out(input.argument));
-				}
-				if (input.invalid) {
-					auto message = calc.Col(LogicalType::VARCHAR, p1.Add(calc.Out(input.invalid)));
-					raw.checks.push_back(DirectRaiseMessage(optimizer, calc, message));
-				}
-				raw.limit_inputs.push_back(columns);
-			}
+			auto eligible = condition.scope.Scoped() ? Boolean(from_scope.eligible) : nullptr;
+			raw.limit_inputs = DirectLayoutGroupInputs(
+			    optimizer, calc, p1, *limit_bound, eligible,
+			    [&](const Expression &value) { return Over(value, state_index); }, &raw.checks);
 		}
 		auto over_state = [&](const Expression &value) {
 			return Over(value, state_index);
@@ -523,7 +467,7 @@ private:
 
 	Coefficients ComputeCoefficients(DirectProjectionStage &p2, Raw &raw) const {
 		Coefficients result;
-		result.carried = p2.Forward(raw.carried, source_types, condition.scoped);
+		result.carried = p2.Forward(raw.carried, source_types, condition.scope.Scoped());
 		for (idx_t i = 0; i < raw.limit_inputs.size(); i++) {
 			DirectGroupInputColumns columns;
 			if (raw.limit_inputs[i].reads.table_index != DConstants::INVALID_INDEX) {
@@ -577,11 +521,11 @@ private:
 	Targets ComputeTargets(DirectProjectionStage &p3, const Coefficients &coefficients,
 	                       const DirectGroupValues &limit_values) const {
 		Targets result;
-		result.carried = p3.Forward(coefficients.carried, source_types, condition.scoped);
+		result.carried = p3.Forward(coefficients.carried, source_types, condition.scope.Scoped());
 		auto row = TargetOf(coefficients);
 		// A row is in a ball when the clause keeps it and the group has a limit.
-		auto in_ball = condition.scoped ? Boolean(coefficients.carried.eligible) : calc.Bool(true);
-		ExprPtr limit = calc.Num(condition.limit);
+		auto in_ball = condition.scope.Scoped() ? Boolean(coefficients.carried.eligible) : calc.Bool(true);
+		ExprPtr limit = calc.Num(condition.limit.number);
 		if (limit_bound) {
 			limit = calc.Cast(limit_values.upper, LogicalType::DOUBLE);
 			in_ball = calc.And(in_ball, calc.Not(calc.IsNull(limit)));
@@ -604,7 +548,7 @@ private:
 	//! The second read: the row's value alone. Its checks ran on the first read.
 	Values ComputeValues(DirectProjectionStage &p3, const Coefficients &coefficients) const {
 		Values result;
-		result.carried = p3.Forward(coefficients.carried, source_types, condition.scoped);
+		result.carried = p3.Forward(coefficients.carried, source_types, condition.scope.Scoped());
 		result.value = p3.Add(calc.Out(TargetOf(coefficients).value));
 		return result;
 	}
@@ -615,7 +559,7 @@ private:
 
 	Lengths ComputeLengths(DirectProjectionStage &p4, const Targets &targets) const {
 		Lengths result;
-		result.carried = p4.Forward(targets.carried, source_types, condition.scoped);
+		result.carried = p4.Forward(targets.carried, source_types, condition.scope.Scoped());
 		auto value = Double(targets.value);
 		auto in_ball = Boolean(targets.in_ball);
 		auto limit = Double(targets.limit);

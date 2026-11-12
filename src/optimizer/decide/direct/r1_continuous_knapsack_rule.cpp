@@ -39,14 +39,8 @@ static constexpr idx_t SOURCE_READS = 4;
 struct Condition final : DirectApplicabilityCondition {
 	//! Which rows the budget covers, and in which groups: a row whose `when` holds and whose `by` key has no NULL in a
 	//! NO_GROUP element (D5) belongs to the budget of its group; any other row is outside every budget. Every clause
-	//! of the budget has this scope. Empty without a key: one budget for all the rows it covers.
-	vector<DirectKeyElement> group_keys;
-	//! The clauses are written `per K:` and a NULL in K puts a row in no class: a query whose kept rows all have one
-	//! has no instance (DirectSharedScope::gated).
-	bool gated = false;
-	vector<DirectKeyElement> per_class_keys;
-	unique_ptr<Expression> when;
-	bool scoped = false;
+	//! of the budget has this scope. Without a `by` key: one budget for all the rows it covers.
+	DirectSharedScope scope;
 	//! Each decision's box before any per-row bound (one per decision), and the per-row clauses the plan evaluates;
 	//! a clause names the decision it bounds.
 	vector<DirectDecisionBox> boxes;
@@ -163,16 +157,7 @@ bool SameBudgetTerms(const DirectLinearPart &a, const DirectLinearPart &b) {
 //! on the clause or on the sum: both read as a membership of the budget). Records the scope the plan applies.
 bool Rule::ProveBudgetScope(const DirectIR &ir, const vector<const DirectIRConstraint *> &budgets,
                             Condition &condition) const {
-	DirectSharedScope scope;
-	if (!DirectProveSharedScope(ir, budgets, scope)) {
-		return false;
-	}
-	condition.scoped = scope.Scoped();
-	condition.gated = scope.gated;
-	condition.when = std::move(scope.when);
-	condition.group_keys = std::move(scope.keys);
-	condition.per_class_keys = std::move(scope.classes);
-	return true;
+	return DirectProveSharedScope(ir, budgets, condition.scope);
 }
 
 //! One clause of the budget: `SUM(w*x)`, a plain SUM of linear terms (its scope is proved by ProveBudgetScope), against
@@ -596,7 +581,7 @@ public:
 	//! (DirectSourceReader::Read) and `read_table_index` its table index; the proved expressions are re-pointed at it.
 	unique_ptr<LogicalOperator> Build(unique_ptr<LogicalOperator> read, idx_t read_table_index) {
 		read_index = read_table_index;
-		auto when = condition.when ? OverState(*condition.when) : nullptr;
+		auto when = condition.scope.when ? OverState(*condition.scope.when) : nullptr;
 		// The key is read on the rows of the read projection.
 		auto over_read = [&](const vector<DirectKeyElement> &proved) {
 			vector<DirectKeyElement> elements;
@@ -608,22 +593,22 @@ public:
 			}
 			return elements;
 		};
-		auto keys = over_read(condition.group_keys);
+		auto keys = over_read(condition.scope.keys);
 		unique_ptr<Expression> instance;
-		if (condition.gated) {
-			auto classes = over_read(condition.per_class_keys);
+		if (condition.scope.gated) {
+			auto classes = over_read(condition.scope.classes);
 			ColumnBinding flag;
 			read = DirectAddInstanceFlag(optimizer, std::move(read), when.get(), classes, flag);
 			instance = calc.Out(calc.Col(LogicalType::BOOLEAN, flag));
 		}
-		auto state =
-		    DirectProjectScope(binder, std::move(read), condition.scoped, when.get(), keys, {}, std::move(instance));
+		auto state = DirectProjectScope(binder, std::move(read), condition.scope.Scoped(), when.get(), keys, {},
+		                                std::move(instance));
 		state_index = state.state_index;
 		plan = std::move(state.plan);
 		for (idx_t i = 0; i < proved_bindings.size(); i++) {
 			Declare(SourceName(i), state.input_bindings[i], source_types[i]);
 		}
-		if (condition.scoped) {
+		if (condition.scope.Scoped()) {
 			Declare(ELIGIBLE, state.eligible, LogicalType::BOOLEAN);
 			key_width = state.keys.size();
 			for (idx_t i = 0; i < state.keys.size(); i++) {
@@ -669,7 +654,7 @@ public:
 		for (idx_t j = 0; j < limit_bounds.size(); j++) {
 			items.limits.emplace_back();
 			for (idx_t i = 0; i < limit_bounds[j]->inputs.size(); i++) {
-				auto layout = DirectGroupLayout(limit_bounds[j]->inputs[i], condition.scoped);
+				auto layout = DirectGroupLayout(limit_bounds[j]->inputs[i], condition.scope.Scoped());
 				DirectGroupInputColumns inputs;
 				if (layout.reads) {
 					inputs.reads = binding_of(LimitReadsName(j, i));
@@ -852,7 +837,7 @@ private:
 	//! What the aggregates of each limit read from the data read, on the rows of the budget alone (NULL on the others),
 	//! and the message each raises. Stage 2 computes the aggregates over the group.
 	void AddLimitValues(Named &added) {
-		auto eligible = condition.scoped ? C(ELIGIBLE) : nullptr;
+		auto eligible = condition.scope.Scoped() ? C(ELIGIBLE) : nullptr;
 		auto over_state = [&](const Expression &expression) {
 			return OverState(expression);
 		};
@@ -904,7 +889,7 @@ private:
 		for (idx_t k = 0; k < DecisionCount(); k++) {
 			auto weights = DirectValuesOn(condition.budget, k);
 			auto weight = weights.empty() ? Zero() : calc.Wrap(DirectSumOf(optimizer, weights, over_state));
-			added.emplace_back(Dec("w", k), condition.scoped ? calc.If(C(ELIGIBLE), weight, Zero()) : weight);
+			added.emplace_back(Dec("w", k), condition.scope.Scoped() ? calc.If(C(ELIGIBLE), weight, Zero()) : weight);
 			for (idx_t p = 0; p < condition.objective.size(); p++) {
 				auto values = DirectValuesOn(condition.objective[p], k);
 				if (values.empty()) {
@@ -1052,7 +1037,7 @@ private:
 			auto empty = DirectBoxIsEmpty(calc, l, u);
 			auto anchor = calc.If(empty, Zero(), calc.Min({calc.Max({Zero(), l}), u}));
 			auto free_of_budget = Equal(w, Zero());
-			if (condition.scoped) {
+			if (condition.scope.Scoped()) {
 				free_of_budget = calc.Any({free_of_budget, calc.Not(C(ELIGIBLE))});
 			}
 			// Adding 0.0 turns -0.0 into 0.0, so prices that are equal sort and compare as equal.
@@ -1138,15 +1123,12 @@ public:
 	                     const DirectStateErrors &errors_p)
 	    : ItemAlgebra(optimizer_p), condition(condition_p), binder(optimizer_p.binder), reader(reader_p),
 	      errors(errors_p) {
-		// A limit the rewrite left as a group bound is one already; any other is one value per group, whose group
-		// extremum is the limit.
 		for (auto &limit : condition.data_limits) {
-			limit_bounds.push_back(
-			    limit.group ? limit.group->Copy()
-			                : DirectTightestBound(optimizer, limit.comparison, limit.value->Copy(), string(), nullptr));
+			limit_bounds.push_back(limit.GroupBound(optimizer));
 		}
-		if (condition.scoped) {
-			class_key = DirectClassKeyOf(condition.group_keys, condition.when != nullptr || condition.gated);
+		if (condition.scope.Scoped()) {
+			class_key =
+			    DirectClassKeyOf(condition.scope.keys, condition.scope.when != nullptr || condition.scope.gated);
 		}
 		// Every read computes the items of the row by the same stage: the reader holds it once when it copies the
 		// source, and builds it per read otherwise. The layout is the stage's last build, whose columns every read has.
@@ -1314,7 +1296,7 @@ private:
 		}
 		auto imprecise = aggregate.Add(DirectHashAggregate(optimizer, calc, "bool_or", calc.Any(imprecise_items)));
 		DirectAggregateSink sink(aggregate);
-		auto limit_eligible = condition.scoped ? GroupExists(key) : nullptr;
+		auto limit_eligible = condition.scope.Scoped() ? GroupExists(key) : nullptr;
 		vector<DirectGroupValues> limits;
 		for (idx_t j = 0; j < limit_bounds.size(); j++) {
 			limits.push_back(
@@ -1327,7 +1309,7 @@ private:
 			totals.push_back(DoubleColumn(sum));
 		}
 		auto lower = LimitOf(false, limits), upper = LimitOf(true, limits);
-		auto verdict = VerdictOf(totals, lower, upper, condition.scoped ? GroupExists(key) : nullptr);
+		auto verdict = VerdictOf(totals, lower, upper, condition.scope.Scoped() ? GroupExists(key) : nullptr);
 		auto has_rows = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, calc.Col(LogicalType::BIGINT, rows),
 		                         calc.Constant(Value::BIGINT(0)));
 		// The solver's order: the NaN checks of what the limits read, what the limits give (a NaN limit, an `=` limit

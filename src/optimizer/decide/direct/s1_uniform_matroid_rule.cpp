@@ -67,17 +67,12 @@ struct Condition final : DirectApplicabilityCondition {
 	//! The rows each reducer reads (DirectObjectivePartKept), null for every row: any other row scores 0 in it.
 	vector<unique_ptr<Expression>> part_kept;
 	string objective_written;
-	//! The `by` key every bound shares: the groups whose rows the count bounds, each its own interval. Empty for one
-	//! group of all the rows the bounds cover. A row with a NULL in a NO_GROUP element is in no group (D5).
-	vector<DirectKeyElement> group_keys;
-	//! The bounds are written `per K:` and a NULL in K puts a row in no class: a query whose kept rows all have one has
-	//! no instance (DirectSharedScope::gated).
-	bool gated = false;
-	vector<DirectKeyElement> per_class_keys;
-	unique_ptr<Expression> when_condition;
+	//! The rows and groups every bound counts: the `by` key (the groups, each its own interval; one group of all the
+	//! rows the bounds cover when empty; a row with a NULL in a NO_GROUP element is in no group, D5), the `per` key,
+	//! and the `when` membership.
+	DirectSharedScope scope;
 	DirectFixedValues fixed;
 	vector<SourceBound> source_bounds;
-	bool scoped = false;
 
 	//! Whether some bound is left to the plan to compute from the aggregates of its group.
 	bool HasGroupBound() const {
@@ -212,16 +207,7 @@ private:
 //! scopes by. A row whose `by` key is NULL is in no group (D5): the plan ranks it apart from every group, and a `when`
 //! that drops a row does the same.
 bool Rule::ProveScope(const DirectIR &ir, Condition &condition) const {
-	DirectSharedScope scope;
-	if (!DirectProveSharedScope(ir, condition.bound_factors, scope)) {
-		return false;
-	}
-	condition.scoped = scope.Scoped();
-	condition.gated = scope.gated;
-	condition.when_condition = std::move(scope.when);
-	condition.group_keys = std::move(scope.keys);
-	condition.per_class_keys = std::move(scope.classes);
-	return true;
+	return DirectProveSharedScope(ir, condition.bound_factors, condition.scope);
 }
 
 //! The count bounds: constant ones fold into one inclusive interval, source-valued ones are kept for the plan to
@@ -362,8 +348,8 @@ public:
 		idx_t next_slot = source_bindings.size();
 		score_binding = ColumnBinding(score_index, next_slot++);
 		has_score_message = ScoreCanFail();
-		if (condition.scoped) {
-			class_key = DirectClassKeyOf(condition.group_keys, condition.when_condition || condition.gated);
+		if (condition.scope.Scoped()) {
+			class_key = DirectClassKeyOf(condition.scope.keys, condition.scope.when || condition.scope.gated);
 			eligible_binding = ColumnBinding(score_index, next_slot++);
 			for (idx_t i = 0; i < class_key.types.size(); i++) {
 				key_bindings.push_back(ColumnBinding(score_index, next_slot++));
@@ -377,7 +363,8 @@ public:
 			// A bound of the group's aggregates is computed above the rank window, not per row.
 			bound_bindings.push_back(bound.group ? ColumnBinding() : ColumnBinding(score_index, next_slot++));
 			for (idx_t r = 0; bound.group && r < bound.group->inputs.size(); r++) {
-				limit_message_count += DirectGroupLayout(bound.group->inputs[r], condition.scoped).invalid ? 1 : 0;
+				limit_message_count +=
+				    DirectGroupLayout(bound.group->inputs[r], condition.scope.Scoped()).invalid ? 1 : 0;
 			}
 		}
 		// The checks of the row (HasRowChecks): one column that raises them.
@@ -418,7 +405,7 @@ public:
 		auto into_state = [&](const Expression &expression) {
 			return CopyIntoState(expression, scope);
 		};
-		auto eligible = condition.scoped ? calc.Col(LogicalType::BOOLEAN, scope.eligible_binding) : nullptr;
+		auto eligible = condition.scope.Scoped() ? calc.Col(LogicalType::BOOLEAN, scope.eligible_binding) : nullptr;
 		DirectProjectionStage inputs(binder.GenerateTableIndex());
 		vector<vector<DirectGroupInputColumns>> columns(condition.source_bounds.size());
 		vector<ColumnBinding> key;
@@ -430,16 +417,8 @@ public:
 			if (!bound.group) {
 				continue;
 			}
-			for (auto &input : DirectGroupInputs(calc, *bound.group, eligible, into_state)) {
-				DirectGroupInputColumns column;
-				if (input.reads) {
-					column.reads = inputs.Add(calc.Out(input.reads));
-				}
-				if (input.argument) {
-					column.argument = inputs.Add(calc.Out(input.argument));
-				}
-				columns[i].push_back(column);
-			}
+			// The messages are per row (ProjectScore), not the first read's.
+			columns[i] = DirectLayoutGroupInputs(optimizer, calc, inputs, *bound.group, eligible, into_state, nullptr);
 		}
 		plan = inputs.Finish(std::move(plan));
 
@@ -451,7 +430,7 @@ public:
 			group_columns.push_back(calc.Col(class_key.types[i], groups.back()));
 		}
 		DirectAggregateSink sink(stage);
-		auto in_group = condition.scoped ? DirectClassPresent(calc, class_key, group_columns) : nullptr;
+		auto in_group = condition.scope.Scoped() ? DirectClassPresent(calc, class_key, group_columns) : nullptr;
 		group_values.assign(condition.source_bounds.size(), DirectGroupValues());
 		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
 			auto &bound = condition.source_bounds[i];
@@ -562,14 +541,14 @@ private:
 			fixed_flags.push_back(DirectAnyCondition(calc, condition.fixed.zero_conditions));
 		}
 		unique_ptr<Expression> instance;
-		if (condition.gated) {
+		if (condition.scope.gated) {
 			ColumnBinding flag;
-			source = DirectAddInstanceFlag(optimizer, std::move(source), condition.when_condition.get(),
-			                               condition.per_class_keys, flag);
+			source = DirectAddInstanceFlag(optimizer, std::move(source), condition.scope.when.get(),
+			                               condition.scope.classes, flag);
 			instance = calc.Out(calc.Col(LogicalType::BOOLEAN, flag));
 		}
-		auto state = DirectProjectScope(binder, std::move(source), condition.scoped, condition.when_condition.get(),
-		                                condition.group_keys, std::move(fixed_flags), std::move(instance));
+		auto state = DirectProjectScope(binder, std::move(source), condition.scope.Scoped(), condition.scope.when.get(),
+		                                condition.scope.keys, std::move(fixed_flags), std::move(instance));
 		scope.input_bindings = std::move(state.input_bindings);
 		scope.state_index = state.state_index;
 		scope.eligible_binding = state.eligible;
@@ -657,7 +636,7 @@ private:
 			candidates.push_back(DirectNumberMessage(calc, combined_score, condition.objective_written));
 			score_message = calc.Coalesce(candidates);
 		}
-		if (condition.scoped) {
+		if (condition.scope.Scoped()) {
 			append_at(eligible_binding, calc.Out(calc.Col(LogicalType::BOOLEAN, scope.eligible_binding)));
 			for (idx_t i = 0; i < key_bindings.size(); i++) {
 				append_at(key_bindings[i], calc.Out(calc.Col(KeyType(i), scope.key_bindings[i])));
@@ -669,7 +648,7 @@ private:
 		}
 		// A bound is read on the eligible rows only. On a row its clause's `when` drops, the windows it reads hold NULL
 		// or a count of 0, so computing it there raises nothing.
-		auto eligible = condition.scoped ? calc.Col(LogicalType::BOOLEAN, scope.eligible_binding) : nullptr;
+		auto eligible = condition.scope.Scoped() ? calc.Col(LogicalType::BOOLEAN, scope.eligible_binding) : nullptr;
 		auto into_state = [&](const Expression &expression) {
 			return CopyIntoState(expression, scope);
 		};
@@ -794,7 +773,7 @@ private:
 	//! Partition a rank or count window by class key: a row in no class has a NULL where the key is compared with `=`,
 	//! so it ranks apart from every class.
 	void AddScope(BoundWindowExpression &expression) const {
-		if (!condition.scoped) {
+		if (!condition.scope.Scoped()) {
 			return;
 		}
 		for (idx_t i = 0; i < key_bindings.size(); i++) {
@@ -934,9 +913,9 @@ private:
 		// The checks of the rows of a group apply to eligible rows only.
 		auto in_group = [&](vector<unique_ptr<Expression>> list) {
 			auto group = DirectAllHold(calc, std::move(list));
-			return condition.scoped ? calc.Out(calc.If(calc.Col(LogicalType::BOOLEAN, eligible_binding),
-			                                           calc.Wrap(std::move(group)), calc.Bool(true)))
-			                        : std::move(group);
+			return condition.scope.Scoped() ? calc.Out(calc.If(calc.Col(LogicalType::BOOLEAN, eligible_binding),
+			                                                   calc.Wrap(std::move(group)), calc.Bool(true)))
+			                                : std::move(group);
 		};
 		// What the group bounds give (a NaN limit, an `=` bound that takes two values in a group) comes before the
 		// feasibility check: that one returns false, which stops the chain, and would hide a message after it.
@@ -979,7 +958,7 @@ private:
 			auto within_upper = calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, rank, remaining_upper);
 			choose = calc.If(within_upper, choose, calc.Bool(false));
 		}
-		if (condition.scoped) {
+		if (condition.scope.Scoped()) {
 			choose = calc.If(calc.Col(LogicalType::BOOLEAN, eligible_binding), choose, free_choose);
 		}
 		if (has_fixes) {
