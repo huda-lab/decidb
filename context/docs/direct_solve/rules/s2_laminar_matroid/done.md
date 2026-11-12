@@ -1,7 +1,9 @@
 # S2 (laminar-matroid optimization) — what works today
 
-Verified on 2026-11-12 at `7c73cb8083`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
-serializer, highs) 6,996 passed; C++ `build/release/test/unittest "[decidb]"` 9,328 assertions in 105 cases.
+Verified on 2026-11-12 at `a36bb3ea82`: `test/decide/run_direct_matrix.sh` at `03f4415a50`, each of its four suites
+(auto, off, serializer, highs) 7,038 run, with the one near-miss case S2 takes moved to the forms that apply at
+`a36bb3ea82` (the 168 conformance tests pass in auto and off); C++ `build/release/test/unittest "[decidb]"` 9,514
+assertions in 105 cases.
 
 Code: `src/optimizer/decide/direct/s2_laminar_matroid_rule.cpp`, on the ranked-prefix builder with one level per quota
 scope (`../../framework/done.md`). Class definition: [definition.md](definition.md).
@@ -13,9 +15,12 @@ One row-scoped `BOOL` decision `x` (output `INTEGER` 0/1), a linear objective `M
 different scope:
 
 - **Quotas.** Each coupling clause is `SUM(x) <= k` or `< k` (a body whose constant coefficients add up to 1 or -1,
-  so `SUM(-x) >= -k` is one too) with a constant `k` of magnitude below 1e20, read by the shared count-limit reader
-  and rounded to a whole number of rows. A scope is a clause's `by` key, `when` and `per`; clauses of the same scope
-  form one level, whose cap is the least of theirs. A level with a negative cap can never be met.
+  so `SUM(-x) >= -k` is one too), read by the shared count-limit reader and rounded to a whole number of rows. `k` is
+  a constant of magnitude below 1e20, a value of the source row (the plan reads the tightest one per group), or an
+  aggregate of the group's kept rows (`<= MAX(cap)`, `<= COUNT(*) / 2`, under a `when` of its own), at any level. A
+  scope is a clause's `by` key, `when` and `per`; clauses of the same scope form one level, whose cap per group is the
+  least of theirs. A NULL data cap is no limit, as the solver skips the instance; a NaN one raises the solver's error,
+  and a group with a negative cap can never be met; both raise before the first row leaves.
 - **Nesting proved from the text.** The levels must form a chain, each inside the next: the coarser level's `by` key
   is a subset of the finer one's (compared as sets, `DirectKeyWithin`), the coarser has no `when` or the same one,
   and both have the same `per`. The IR carries no functional dependencies and the rule is chosen once, when the plan
@@ -28,9 +33,8 @@ different scope:
 
 ## What it does not admit (falls back to the solver)
 
-A lower or `=` quota; a single scope (S1's); two scopes that do not nest, differ in `when` or differ in `per`; a cap
-read from the data (`<= MAX(cap)`, a source column): S1's group-bound reading is private to S1 (S2-4); a constant cap
-of magnitude 1e20 or more; any other decision type or objective.
+A lower or `=` quota; a single scope (S1's); two scopes that do not nest, differ in `when` or differ in `per`; a
+constant cap of magnitude 1e20 or more; any other decision type or objective.
 
 ## How it works
 
@@ -43,18 +47,23 @@ objective; a fixed row keeps its value. Where a level can fail (fixed rows, or a
 raised in the held rows before the first row leaves, so an infeasible group raises the solver's error even under
 `LIMIT 1`.
 
-This is the greedy for a laminar matroid: a row rejected by a finer quota takes no place in a coarser one, which
-ranking each level over all its rows would get wrong (a division of cap 2 holding scores 9, 8 and 7, where 9 and 8
-share a department of cap 1, selects 9 and 7). Ties may break differently at each level; the exchange argument of the
-definition allows it. `EXPLAIN` shows `S2_LAMINAR_MATROID` and `min/max SUM(s*x), x in {0,1}, nested SUM(x) <= k
-quotas`.
+This is the greedy for a laminar matroid: a row rejected by a finer quota takes no place in a coarser one, which ranking
+each level over all its rows would get wrong (a division of cap 2 holding scores 9, 8 and 7, where 9 and 8 share a
+department of cap 1, selects 9 and 7). Ties may break differently at each level; the exchange argument of the definition
+allows it. A data cap is a group bound of its level, registered with the builder: its aggregates are computed in the
+level's rank window and its value per group, rounded to whole rows, by the shared group-count-limit fragments S1 reads
+too. Where a cap's input fails in two ways at once (a NaN `cap` under `MAX(cap)`), which of the solver's two messages is
+raised depends on the thread (error order is not owed). `EXPLAIN` shows `S2_LAMINAR_MATROID` and `min/max SUM(s*x), x in
+{0,1}, nested SUM(x) <= k quotas`.
 
 ## Verified by
 
 `test/decide/tests/test_direct_s2_laminar_matroid.py` compares S2 with the independent oracle on Gurobi and HiGHS:
 the definition's example, the counter-example above, two to four levels written in any order, zero caps, caps above a
 group's size, fractional and strict caps, merged clauses, negative caps (infeasible on both paths), fixed rows at each
-level, MINIMIZE, negative scores, ties, `when` on one or every level, and NULL keys. The standard tests
+level, MINIMIZE, negative scores, ties, `when` on one or every level, NULL keys, and caps read from the data at each
+level (per-row values, MAX, COUNT and SUM of the group, NULL, NaN and negative caps, a data cap beside a constant
+one). The standard tests
 (`_direct_rule_fixtures.py`) cover S2 as every rule. `test/common/test_decidb_direct_decline.cpp` holds the forms S2
 takes, one decline per branch of its proof, and its row in the overlap test against every other rule.
 

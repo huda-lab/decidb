@@ -259,7 +259,9 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     plan.
     `DirectInclusiveRows` (a constant, at plan time) and `DirectInclusiveRowsExpr` (a value of the data, per row or per
     group) turn a limit into an inclusive whole number of rows: ceil for a lower side, floor for an upper one, a strict
-    comparison stepped by one, nothing past 2^53, an upper side below 0 impossible and a NULL no limit.
+    comparison stepped by one, nothing past 2^53, an upper side below 0 impossible and a NULL no limit. A count limit
+    left to the plan as a group bound gives its value per group with `DirectGroupCountLimitValue` (the body's sign
+    applied) and its whole rows with `DirectGroupCountLimitRows`; S1 and S2 read their data caps with them.
   - **A count body, a decision and fixed rows.** `DirectReadCountBody` reads a SUM whose constant coefficients add up
     to exactly 1 or -1 (`DirectConstantSlope`) as a count and gives its sign; S1 takes such a body and S3 declines it,
     so the two rules are apart by one test. `DirectIsOneRowDecision` proves one decision of a domain per row (S1, S2,

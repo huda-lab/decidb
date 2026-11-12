@@ -49,7 +49,7 @@ started.
 | [N1](rules/n1_euclidean_ball/) | Euclidean-ball projection and support function | Exact | **Works**, on by default, including per `by` group |
 | [N2](rules/n2_ellipsoid_support/) | Ellipsoid support function | Exact | Not started |
 | [S1](rules/s1_uniform_matroid/) | Uniform-matroid optimization | Exact | **Works**, on by default, including per `by` group |
-| [S2](rules/s2_laminar_matroid/) | Laminar-matroid optimization | Exact | **Works**, on by default, constant caps |
+| [S2](rules/s2_laminar_matroid/) | Laminar-matroid optimization | Exact | **Works**, on by default, including per `by` group |
 | [S3](rules/s3_max_cardinality_knapsack/) | Maximum-cardinality knapsack | Exact | **Works**, on by default, including per `by` group |
 | [S4](rules/s4_bottleneck_knapsack/) | Cardinality-constrained bottleneck knapsack | Exact | Not started |
 | [R1](rules/r1_continuous_knapsack/) | Continuous (fractional) knapsack | Exact | **Works**, on by default, including per `by` group |
