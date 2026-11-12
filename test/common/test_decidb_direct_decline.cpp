@@ -3,6 +3,7 @@
 
 #include <functional>
 #include <limits>
+#include <set>
 
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/aggregate/distributive_functions.hpp"
@@ -983,18 +984,6 @@ TEST_CASE("N1 declines each shape that is not exactly its class", "[decidb]") {
 	ExpectDeclines(MakeN1EuclideanBallRule, con, N1DeclineShapes());
 }
 
-// The rules partition the problems they apply to: no two rules apply to one IR.
-TEST_CASE("N1 and every other rule never apply to the same query", "[decidb]") {
-	DuckDB db(nullptr);
-	Connection con(db);
-	ExpectDeclines(MakeS1UniformMatroidRule, con, N1AppliesShapes());
-	ExpectDeclines(MakeA1SeparableBoxRule, con, N1AppliesShapes());
-	ExpectDeclines(MakeR1ContinuousKnapsackRule, con, N1AppliesShapes());
-	ExpectDeclines(MakeN1EuclideanBallRule, con, S1AppliesShapes());
-	ExpectDeclines(MakeN1EuclideanBallRule, con, A1AppliesShapes());
-	ExpectDeclines(MakeN1EuclideanBallRule, con, R1AppliesShapes());
-}
-
 //===--------------------------------------------------------------------===//
 // A2
 //===--------------------------------------------------------------------===//
@@ -1165,20 +1154,6 @@ TEST_CASE("A2 declines each shape that is not exactly its class", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	ExpectDeclines(MakeA2SingleFacilityLocationRule, con, A2DeclineShapes());
-}
-
-// The rules partition the problems they apply to: no two rules apply to one IR.
-TEST_CASE("A2 and every other rule never apply to the same query", "[decidb]") {
-	DuckDB db(nullptr);
-	Connection con(db);
-	ExpectDeclines(MakeS1UniformMatroidRule, con, A2AppliesShapes());
-	ExpectDeclines(MakeA1SeparableBoxRule, con, A2AppliesShapes());
-	ExpectDeclines(MakeR1ContinuousKnapsackRule, con, A2AppliesShapes());
-	ExpectDeclines(MakeN1EuclideanBallRule, con, A2AppliesShapes());
-	ExpectDeclines(MakeA2SingleFacilityLocationRule, con, S1AppliesShapes());
-	ExpectDeclines(MakeA2SingleFacilityLocationRule, con, A1AppliesShapes());
-	ExpectDeclines(MakeA2SingleFacilityLocationRule, con, R1AppliesShapes());
-	ExpectDeclines(MakeA2SingleFacilityLocationRule, con, N1AppliesShapes());
 }
 
 //===--------------------------------------------------------------------===//
@@ -1393,23 +1368,6 @@ TEST_CASE("O1 declines each shape that is not exactly its class", "[decidb]") {
 	ExpectDeclines(MakeO1MongeAssignmentRule, con, O1DeclineShapes());
 }
 
-// The rules partition the problems they apply to: no two rules apply to one IR.
-TEST_CASE("O1 and every other rule never apply to the same query", "[decidb]") {
-	DuckDB db(nullptr);
-	Connection con(db);
-	CreateO1Tables(con);
-	ExpectDeclines(MakeS1UniformMatroidRule, con, O1AppliesShapes());
-	ExpectDeclines(MakeA1SeparableBoxRule, con, O1AppliesShapes());
-	ExpectDeclines(MakeR1ContinuousKnapsackRule, con, O1AppliesShapes());
-	ExpectDeclines(MakeN1EuclideanBallRule, con, O1AppliesShapes());
-	ExpectDeclines(MakeA2SingleFacilityLocationRule, con, O1AppliesShapes());
-	ExpectDeclines(MakeO1MongeAssignmentRule, con, S1AppliesShapes());
-	ExpectDeclines(MakeO1MongeAssignmentRule, con, A1AppliesShapes());
-	ExpectDeclines(MakeO1MongeAssignmentRule, con, R1AppliesShapes());
-	ExpectDeclines(MakeO1MongeAssignmentRule, con, N1AppliesShapes());
-	ExpectDeclines(MakeO1MongeAssignmentRule, con, A2AppliesShapes());
-}
-
 //===--------------------------------------------------------------------===//
 // S3
 //===--------------------------------------------------------------------===//
@@ -1530,25 +1488,68 @@ TEST_CASE("S3 declines each shape that is not exactly its class", "[decidb]") {
 	ExpectDeclines(MakeS3MaxCardinalityKnapsackRule, con, S3DeclineShapes());
 }
 
-// The rules partition the problems they apply to: no two rules apply to one IR.
-TEST_CASE("S3 and every other rule never apply to the same query", "[decidb]") {
+//===--------------------------------------------------------------------===//
+// No two rules apply to one query
+//===--------------------------------------------------------------------===//
+
+//! One direct-solve rule and every shape it applies to, keyed shapes included. A new rule adds one row.
+struct RuleShapes {
+	MakeRule make_rule;
+	duckdb::vector<Shape> shapes;
+};
+
+duckdb::vector<Shape> Join(duckdb::vector<Shape> first, const duckdb::vector<Shape> &second) {
+	first.insert(first.end(), second.begin(), second.end());
+	return first;
+}
+
+duckdb::vector<RuleShapes> EveryRuleWithItsShapes() {
+	duckdb::vector<RuleShapes> rows;
+	rows.push_back({MakeS1UniformMatroidRule, Join(S1AppliesShapes(), S1KeyedShapes())});
+	rows.push_back({MakeS3MaxCardinalityKnapsackRule, S3AppliesShapes()});
+	rows.push_back({MakeR1ContinuousKnapsackRule, Join(R1AppliesShapes(), R1KeyedShapes())});
+	rows.push_back({MakeA1SeparableBoxRule, A1AppliesShapes()});
+	rows.push_back({MakeA2SingleFacilityLocationRule, A2AppliesShapes()});
+	rows.push_back({MakeN1EuclideanBallRule, N1AppliesShapes()});
+	rows.push_back({MakeO1MongeAssignmentRule, O1AppliesShapes()});
+	return rows;
+}
+
+// The rules partition the problems they apply to: no two rules apply to one IR. Every rule is run against the
+// applying shapes of every other rule, so each ordered pair is checked.
+TEST_CASE("Every rule and every other rule never apply to the same query", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	CreateO1Tables(con);
-	ExpectDeclines(MakeS1UniformMatroidRule, con, S3AppliesShapes());
-	ExpectDeclines(MakeA1SeparableBoxRule, con, S3AppliesShapes());
-	ExpectDeclines(MakeR1ContinuousKnapsackRule, con, S3AppliesShapes());
-	ExpectDeclines(MakeN1EuclideanBallRule, con, S3AppliesShapes());
-	ExpectDeclines(MakeA2SingleFacilityLocationRule, con, S3AppliesShapes());
-	ExpectDeclines(MakeO1MongeAssignmentRule, con, S3AppliesShapes());
-	ExpectDeclines(MakeS3MaxCardinalityKnapsackRule, con, S1AppliesShapes());
-	ExpectDeclines(MakeS3MaxCardinalityKnapsackRule, con, S1KeyedShapes());
-	ExpectDeclines(MakeS3MaxCardinalityKnapsackRule, con, A1AppliesShapes());
-	ExpectDeclines(MakeS3MaxCardinalityKnapsackRule, con, R1AppliesShapes());
-	ExpectDeclines(MakeS3MaxCardinalityKnapsackRule, con, R1KeyedShapes());
-	ExpectDeclines(MakeS3MaxCardinalityKnapsackRule, con, N1AppliesShapes());
-	ExpectDeclines(MakeS3MaxCardinalityKnapsackRule, con, A2AppliesShapes());
-	ExpectDeclines(MakeS3MaxCardinalityKnapsackRule, con, O1AppliesShapes());
+	auto rows = EveryRuleWithItsShapes();
+
+	// The table holds exactly the rules the rule driver registers, so a rule added there and not here fails.
+	std::set<string> table_names;
+	for (auto &row : rows) {
+		table_names.insert(row.make_rule()->Name());
+	}
+	std::set<string> registered_names;
+	for (auto &rule : RegisteredDirectRules()) {
+		registered_names.insert(rule->Name());
+	}
+	REQUIRE(table_names.size() == rows.size());
+	REQUIRE(table_names == registered_names);
+
+	idx_t pairs_checked = 0;
+	for (idx_t rule = 0; rule < rows.size(); rule++) {
+		for (idx_t other = 0; other < rows.size(); other++) {
+			if (rule == other) {
+				continue;
+			}
+			INFO("rule " << rows[rule].make_rule()->Name() << " against the shapes of "
+			             << rows[other].make_rule()->Name());
+			REQUIRE(!rows[other].shapes.empty());
+			ExpectDeclines(rows[rule].make_rule, con, rows[other].shapes);
+			pairs_checked++;
+		}
+	}
+	// Every ordered pair of distinct rules.
+	CHECK(pairs_checked == rows.size() * (rows.size() - 1));
 }
 
 //===--------------------------------------------------------------------===//
