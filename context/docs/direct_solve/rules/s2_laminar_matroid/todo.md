@@ -55,7 +55,8 @@ standard tests are in `../../architecture/rules.md` § The standard tests every 
   `by (c_nationkey)`, inside a global cap), a hand plan in `benchmark/decide/direct_solve/hand/`, and the
   Performance section of `done.md` in the shape of S1's. Time a filtered cascade (each level reads only the rows the
   level below keeps, joined back once) against the one sort over all rows per level; a cascade that wins by more than
-  the noise (§ Small gains) becomes a task of its own.
+  the noise (§ Small gains) becomes a task of its own. Each level's keep flag repeats the group-limit expressions of
+  the finer levels (`Keeps` in the builder); with three levels, check that they cost no more than the noise.
 - **Needs.** S2-2.
 - **Done when.** `python3 benchmark/decide/direct_solve/run.py --compare --sf 1 --queries s2`; `python3
   benchmark/decide/direct_solve/run.py --sf 0.125 0.25 0.5 1 --queries s2 --modes direct gurobi`.

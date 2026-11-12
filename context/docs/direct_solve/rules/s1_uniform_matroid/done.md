@@ -11,11 +11,12 @@ shared fragments in `direct_plan_fragments.{hpp,cpp}`. Class definition: [defini
 One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
 
 - **Count bounds on `SUM(x)`:** `<=`, `<`, `>=`, `>`, `=`, or several combined into one interval. A bound can be a
-  constant, a foldable constant expression, or a numeric source column or deterministic expression over source columns
+  constant or a foldable constant expression of magnitude below 1e20 (from 1e20 the solver reads it, as for every rule
+  that reads a limit with the shared reader), or a numeric source column or deterministic expression over source columns
   that varies per row, including one that can raise (`cap + 1`, a narrowing `CAST`). A data bound reaches S1 as a group
   bound (`../../framework/done.md`): S1 computes its aggregates (the MIN of an upper bound, the MAX of a lower one, an
   `=` bound's MIN and MAX that must agree) once per group, in the rank window over the one read of the source, and
-  raises its NaN and disagreement errors in the verdict window, in the solver's words (a NULL skips the instance). S1
+  raises its NaN and disagreement errors where it holds the rows, in the solver's words (a NULL skips the instance). S1
   reads that value in its score projection, on the rows its clause keeps; nothing is computed on a row the `when` drops
   (syntax reference §6.3). Values are converted to DOUBLE as the solver does; strict and fractional limits become
   inclusive integer counts; limits are exact up to 2^53.
@@ -126,19 +127,21 @@ different `when` membership (S2); `SUM(x) <> k` (not an interval); bounds that a
 
 The plan is the framework's ranked prefix (`DirectRankedPrefix`, [framework](../../framework/done.md)), over one read of
 the source: a scope projection, a score projection (P1), a rank window in order of the score that also computes the
-group bounds' aggregates (W1), the projection of what the group bounds give (PL), the prefix projection (P2), a verdict
-window where a group can fail (W3) and the assignment. S1 reads the size of its prefix off the group's limits in P2, so
-it has no W2.
+group bounds' aggregates (W1), the projection of what the group bounds give (PL), the prefix projection (P2), the held
+rows where a group can fail and the assignment. S1 reads the size of its prefix off the group's limits in P2, so it has
+no W2. Its count limits are read by the shared count-limit reader and rounded to whole rows by the shared fragment, and
+its score by the shared linear score (`../../framework/done.md`).
 
 - **Where the checks stand.** A window holds every row before it gives one, then gives them group by group, so a check
   above it reaches a later group only when the parent reads that far. The checks of a row over the scope's columns (the
   score, the values the row fixes, a row fixed to both values) stand in the score projection, below the rank window.
-  What a group bound reads is checked in P2, and every group bound brings the verdict window above it. The checks of a
-  group (what its bounds give, and whether its rows and fixed values can meet them) read the rank window's counts, so
-  they stand above it, in a window over all the rows (`bool_and`, as S3's W3) that every row reads; the assignment
-  projection raises the infeasible error unless it holds. That window stands only where a group can fail: a lower bound,
-  a source-valued bound, a fixed value beside an upper bound, or an impossible scope. A constant upper bound alone
-  cannot fail and has none. The window runs on one thread, as S3's W3 (§ Performance).
+  What a group bound reads is checked in P2, and every group bound brings the held rows above it. The checks of a group
+  (what its bounds give, and whether its rows and fixed values can meet them) read the rank window's counts, so they
+  stand above it, in the projection of the held rows (`DirectHeldRows`), which every row passes before the first
+  leaves and which raises the infeasible error unless the group's verdict holds. The held rows stand only where a check
+  stands above the rank window: a lower bound, a source-valued bound, a fixed value beside an upper bound, or an
+  impossible scope. A constant upper bound alone cannot fail and has none. Between two groups that fail, which error
+  is raised depends on the thread (error order is not owed, `../../architecture/rules.md`).
 - **Class key.** A scoped problem carries the framework's [class key](../../framework/done.md): the `by` key's
   elements, compared with `=` where a NULL puts a row in no group, and one marker column when a `when` can drop rows
   and no element says so. The rank and count windows partition by it, so a row in no group ranks apart from every
@@ -160,7 +163,7 @@ it has no W2.
 
 ## Performance
 
-Measured on 2026-11-12 at `a0ac2a1175`, on an 11-core Apple M3 Pro at a load of 11 to 16 (other work ran beside it).
+Measured on 2026-11-12 at `ec72e2c6f5`, on an 11-core Apple M3 Pro at a load of 13 to 16 (other work ran beside it).
 
 **Against a hand-written plan.** `benchmark/decide/direct_solve/run.py --compare --sf 1 --queries s1 s1_global` runs the
 direct plan beside a query written by hand for the same answer (`hand/<query>.sql`), with the same checks and the same
@@ -169,14 +172,13 @@ latency is on all threads; the planning DECIDE adds is apart. Both sides gave th
 
 | Query | Direct CPU | Hand CPU | CPU ratio | Direct latency | Hand latency | DECIDE planning |
 |---|---:|---:|---:|---:|---:|---:|
-| `s1` | 160.2 ms | 150.7 ms | 1.06 | 18.7 ms | 16.8 ms | 0.09 ms |
-| `s1_global` | 187.9 ms | 119.7 ms | 1.57 | 93.0 ms | 17.4 ms | 0.13 ms |
+| `s1` | 162.0 ms | 154.8 ms | 1.05 | 19.1 ms | 17.4 ms | 0.09 ms |
+| `s1_global` | 216.1 ms | 125.9 ms | 1.72 | 34.2 ms | 17.9 ms | 0.14 ms |
 
 `s1` is within the noise of the hand plan. `s1_global` (`SUM(pick) <= 0.1 * COUNT(*)`) reads a group bound, which
-brings the verdict window over all the rows: a window with no partition and no order runs on one thread in DuckDB, so
-the rank window's output, the limits and the checks above it run on one thread too. The hand plan has no verdict,
-since it knows the limit is not negative. That is the price of checking every group before the first row leaves, as
-S3 pays for its W3 (`../../framework/todo.md` § Small gains, the owner's ruling of 2026-11-09).
+brings the held rows: every row is stored once, from every thread, before the first leaves. The hand plan holds no
+rows, since it knows the limit is not negative, and counts the rows in an aggregate rather than in the rank window. That
+is the price of checking every group before the first row leaves.
 
 **Against Gurobi.** `run.py --sf 0.125 0.25 0.5 1 --queries s1 s1_global --modes direct gurobi`: a fresh `decidb`
 process per run, median of 3. At every size Gurobi's objective agreed with direct solve's. A speedup divides Gurobi's
@@ -184,14 +186,14 @@ median by direct's median from the same sweep. Times include process start and d
 
 | Query | Rows | Direct | Gurobi | Speedup |
 |---|---:|---:|---:|---:|
-| `s1` | 100,000 | 0.030 s | 0.379 s | 12.8x |
-| `s1` | 200,000 | 0.031 s | 0.751 s | 24.1x |
-| `s1` | 400,000 | 0.037 s | 1.503 s | 40.9x |
-| `s1` | 800,000 | 0.043 s | 2.933 s | 68.5x |
-| `s1_global` | 100,000 | 0.036 s | 0.375 s | 10.4x |
-| `s1_global` | 200,000 | 0.050 s | 0.297 s | 6.0x |
-| `s1_global` | 400,000 | 0.073 s | 0.558 s | 7.7x |
-| `s1_global` | 800,000 | 0.117 s | 0.762 s | 6.5x |
+| `s1` | 100,000 | 0.028 s | 0.380 s | 13.3x |
+| `s1` | 200,000 | 0.032 s | 0.748 s | 23.2x |
+| `s1` | 400,000 | 0.035 s | 1.498 s | 42.2x |
+| `s1` | 800,000 | 0.044 s | 3.046 s | 70.0x |
+| `s1_global` | 100,000 | 0.035 s | 0.375 s | 10.7x |
+| `s1_global` | 200,000 | 0.040 s | 0.283 s | 7.1x |
+| `s1_global` | 400,000 | 0.048 s | 0.489 s | 10.3x |
+| `s1_global` | 800,000 | 0.058 s | 0.840 s | 14.5x |
 
-The solver path builds one binary decision per row. Direct solve is ahead of Gurobi at every size, 6.5 to 68 times its
+The solver path builds one binary decision per row. Direct solve is ahead of Gurobi at every size, 14.5 to 70 times its
 speed at 800,000 rows.

@@ -65,7 +65,8 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
   `COUNT(*)`. A plan that streams gates its rows on a verdict over every row (`DirectAllRowsValid`,
   `DirectSourceReader::Gate`). A window holds every row before it gives one but then gives them group by group, so a
   check above it reaches only the groups a parent reads: a row's checks stand below the window, and a group's checks in
-  a window over all the rows that every row reads (S3's W3, S1's verdict window). Only `LIMIT 0` may skip the read.
+  a stage that holds every row before the first leaves (`DirectHeldRows`, the ranked prefix's held rows). Only
+  `LIMIT 0` may skip the read.
 - **An error on the same inputs.** Where the solver raises, direct solve raises: invalid data-valued bounds and fixed
   values on the rows that read them; invalid objective coefficients (NaN, infinity); infeasibility. A NULL objective
   term is dropped, as `SUM` drops it in SQL (guide § NULL), so the solver answers there and a rule must too. Nothing is

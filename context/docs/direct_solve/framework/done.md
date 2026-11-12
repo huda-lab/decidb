@@ -39,7 +39,10 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   `DirectProjectionStage`, which gives every column its binding as it is added and becomes a `LogicalProjection` over a
   child. S1, R1, N1 and S3 also share `DirectProveSharedScope` (the clauses read together have one `by` key, `per`
   classes and `when`, else the rule declines; each rule's condition holds the `DirectSharedScope` it proves) and
-  `DirectAddInstanceFlag` (a `per K:` clause with no kept class has no instance, D5).
+  `DirectAddInstanceFlag` (a `per K:` clause with no kept class has no instance, D5). The proof is the composition of
+  `DirectReadScope` (one clause's scope) and `DirectSameScope` (two scopes alike); keys compare as sets
+  (`DirectKeyWithin`, every expression of one is in the other, and `DirectSameKey`, within both ways), since the binder
+  keeps one key entry per set of columns (`FindOrCreateDecideKey`).
   - **A separable quadratic objective** (A1, N1 and A2: `a*x^2 + b*x` per decision) takes three fragments, in plan
     order. `DirectLayoutQuadraticPart` (P1) lays out a `DirectQuadraticPart` in the rule's first projection: its mask,
     the sum of its linear coefficients per decision, and for each square its weight `k`, slope `w` and constant `t` of
@@ -74,16 +77,30 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     group's rows ranked by one column builds its plan with it, as a Template Method: the builder fixes the plan and the
     rule gives the steps that differ (the order, its columns, the windows over the order, the prefix columns, the prefix
     size, the group's verdict, whether a row is chosen). S1 ranks by score and keeps the best k, S3 by weight and keeps
-    the longest run within the budget; S2, S4 and R2 take the same shape. The plan is one read: the scope projection, P1
-    (the rule's columns and the checks over the scope's columns), W1 (per group in order of the ranking column, a NULL
-    on a fixed row so it ranks last: the rank, the rule's windows and the group limits through `DirectWindowSink`), PL
-    (what each group bound gives, computed once per row, only with a group bound), P2 (the prefix columns and the checks
-    over P1's or W1's columns), W2 (the prefix size, for a rule that needs a window for it), W3 (a `bool_and` over all
-    the rows, only where a group can fail) and the answer. A check stands in P1 or P2 by what it reads, and a check in
-    P2 needs W2 or W3 above it, so every row is checked before the first leaves. The builder owns the rows a clause
-    fixes (their checks, their place last in the ranking, their value in the answer) and the scope gate on the verdict.
-    Every window of W1 takes the rank's partition and order, with a frame over the whole partition where it aggregates
-    the group, so DuckDB sorts once and W1 runs on every thread: an empty `OVER ()` would run on one.
+    the longest run within the budget; S2, S4 and R2 take the same shape. The builder holds a list of levels, finest
+    first, each with its scope, its key, its rank and its group bounds; S1 and S3 build one. Level k > 0 ranks, over its
+    own partition and the rule's order, only the rows level k-1 keeps (a running count of `Keeps(k-1)`, the AND of the
+    finer levels' `WithinLimit`), which is the exact greedy for nested quotas. The plan is one read: the scope
+    projection (every level's eligible flag and key), P1 (the rule's columns and the checks over the scope's columns),
+    W1 (one window stage per level, per group in order of the ranking column, a NULL on a fixed row so it ranks last:
+    the rank, the rule's windows and the group limits through `DirectWindowSink`), PL (what each group bound gives,
+    computed once per row, only with a group bound), P2 (the prefix columns and the checks over P1's or W1's columns),
+    W2 (the prefix size, for a rule that needs a window for it), the held rows (only where a check stands above the
+    last window) and the answer. A check stands in P1 or P2 by what it reads. A check above the last window reaches a
+    later group only when the parent reads that far, so the builder holds the rows in a materialized stage
+    (`DirectHeldRows`, below) and raises every check and each level's verdict in the stage's own projection, where
+    every row passes before the first leaves; the stage's sink fills from every thread. The hooks return their checks.
+    The builder owns the rows a clause fixes (their checks, their place last in the ranking, their value in the answer)
+    and the scope gate on each level's verdict. Every window of W1 takes the rank's partition and order, with a frame
+    over the whole partition where it aggregates the group, so DuckDB sorts once per level and W1 runs on every thread:
+    an empty `OVER ()` would run on one.
+  - **Held rows** (`DirectHeldRows`): a stage that holds every row before the first leaves, DuckDB's materialized CTE
+    used as a pipeline breaker (an Eager Spool in SQL Server, a Material node in PostgreSQL): a `LogicalMaterializedCTE`
+    with `CTE_MATERIALIZE_ALWAYS` over a naming projection, read by one `LogicalCTERef`, and a `ColumnBindingReplacer`
+    that re-points the consumer at the reference. The CTE's definition runs to its end before any scan of it starts
+    (`PhysicalCTE::BuildPipelines`), whatever a LIMIT above reads. No optimizer pass after DECIDE inlines it, and
+    `CTE_FILTER_PUSHER` acts only on a filter directly on the reference, so none stands there. The ranked prefix holds
+    its rows with it, and `DirectSourceReader` builds its copies of the source and of a shared stage with it.
 - **The class key** (`DirectClassKey`, `DirectClassKeyOf`, `DirectClassPresent` in `direct_plan_fragments.hpp`). The
   columns a scoped rule groups its rows on and joins a class's answer on. A row is in a class when its key names one,
   and the key is built so that a row in no class has a NULL in a column the join compares with `=`. SQL's outer join
@@ -236,7 +253,20 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     on the rows that read it as the solver evaluates it, or the group aggregates the bound-side rewrite left to the
     plan (`DirectGroupBoundIsReadable`). R1, S3 and N1 read their budget's limit with it, and
     `DirectDataLimit::GroupBound` gives a data limit's group bound: the one the rewrite left, or the tightest per-row
-    value (`DirectTightestBound`).
+    value (`DirectTightestBound`). A count limit (S1) is read by `DirectReadCountLimit`, which is `DirectReadLimit` with
+    the body's sign: `SUM(-x) <= B` is `SUM(x) >= -B`, a constant negated when read and a data value negated by the
+    plan.
+    `DirectInclusiveRows` (a constant, at plan time) and `DirectInclusiveRowsExpr` (a value of the data, per row or per
+    group) turn a limit into an inclusive whole number of rows: ceil for a lower side, floor for an upper one, a strict
+    comparison stepped by one, nothing past 2^53, an upper side below 0 impossible and a NULL no limit.
+  - **A count body, a decision and fixed rows.** `DirectReadCountBody` reads a SUM whose constant coefficients add up
+    to exactly 1 or -1 (`DirectConstantSlope`) as a count and gives its sign; S1 takes such a body and S3 declines it,
+    so the two rules are apart by one test. `DirectIsOneRowBool` proves one `BOOL` decision per row, and
+    `DirectSplitFixes` splits the clauses into those that fix a row and the coupling ones.
+  - **A linear score** (`DirectLinearScore`): the objective of a ranked rule read as a signed sum of `SUM(coefficient
+    * x)` terms (`Prove`), and its layout over the rows the rule reads: the score of a row (`Combined`), whether it can
+    fail (`CanFail`) and its message (`Message`), which names a failing reducer before the objective. S1 reads its
+    score with it.
   - **Terms of an objective part or a budget.** `DirectReadLinearPart` reads one linear part into a `DirectLinearPart`:
     its sign and constant factor, and each linear term's decision, sign and proved coefficient; it skips other term
     kinds, so a rule that admits only linear terms checks the list with `DirectOnlyLinearTerms` first.
@@ -539,8 +569,7 @@ rank window or a verified, streamed plan) and run on the same two central files.
     (`!constant_values(inner.constant)`, `!term.value->IsFoldable()`); any non-foldable data in a reducer makes the
     canonicalizer guard every coefficient, so the first operand returns first.
   - **A fold of the user's constant that fails:** S1's `TryEvaluateFoldableDouble(..., FOLD_CATCH_ALL)` over the value
-    and slope of a singleton row, which declines so the solver path raises the user's error, and the `default` arm of
-    the `ExpressionType` switch in S1's `NormalizeCapacity`.
+    and slope of a singleton row, which declines so the solver path raises the user's error.
   - **Late materialization's own operators:** the extension-name check in `VisitForAdapters`, which keeps an operator
     of another extension from being cast to the adapter, and `FindScanOfRowId`'s two raises on a rule's plan that lost
     the row id or the definition of a copy, with the exit of its `while (true)`, which clang counts as an arm
@@ -555,7 +584,7 @@ rank window or a verified, streamed plan) and run on the same two central files.
   C++ test reaches it; a check on a plan, IR or setting the engine builds itself, in the same file, is a `D_ASSERT`,
   which debug builds run; code no query reaches is deleted. Branch coverage shows which branches a test runs, not
   whether its assertion would catch a wrong value there. One change no query can tell apart: `inclusive <= 0.0`
-  against `< 0.0` for a lower bound in S1's `NormalizeCapacity` (a bound of exactly 0 gives capacity 0 either way).
+  against `< 0.0` for a lower bound in `DirectInclusiveRows` (a bound of exactly 0 gives capacity 0 either way).
   `coverage_report.py report --unreached` lists exactly the arms above. A subset run by hand needs `-m` (the
   script passes a marker that matches every test), or `conftest.py` prunes the oracle cache.
 - A1 plan size: each bound clause makes a large expression, but it scales cheaply. At 1,000,000 rows: 1 clause 0.08 s, 3
