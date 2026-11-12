@@ -6,7 +6,8 @@ SQL). DeciDB then runs the query with `decide_direct_solve='off'` (the solver) a
 the rule does not apply to fails instead of quietly using the solver). The case passes when all three agree:
 
 - the oracle finds the problem feasible: both DeciDB runs return an assignment inside every row's box, whole-numbered
-  for INT and BOOL, that reaches the oracle's objective (rows may differ on ties);
+  for INT and BOOL, that reaches the oracle's objective (rows may differ on ties; on the direct path a concave or
+  linear row answers the point the tie rule names, `_ruled_end`);
 - the oracle finds it infeasible or unbounded: both DeciDB runs raise that error.
 
 The solver has one behavior the oracle cannot derive from the SQL, so each bound states it: a constant lower bound
@@ -306,6 +307,22 @@ def _solve_with_oracle(oracle_solver, case_):
     return oracle_solver.solve()
 
 
+def _ruled_end(domain, a, b, lower, upper):
+    """The point the tie rule names for a row that minimizes `a*x^2 + b*x` on [lower, upper] with `a <= 0`, derived by
+    enumeration and not by the plan's formula: the better end, and among equally good points the one nearest 0 (the lower
+    of two as near). A flat objective (`a = b = 0`) takes the point of the box nearest 0. An open end that is best is
+    unbounded, which raises and never reaches this."""
+    if domain != "REAL":
+        lower = lower if math.isinf(lower) else math.ceil(lower)
+        upper = upper if math.isinf(upper) else math.floor(upper)
+    if a == 0 and b == 0:
+        return min(max(0.0, lower), upper)
+    if a == 0:
+        return upper if b < 0 else lower
+    best = min(a * lower * lower + b * lower, a * upper * upper + b * upper)
+    return min((c for c in (lower, upper) if a * c * c + b * c == best), key=lambda c: (abs(c), c))
+
+
 def _check_assignment(case_, rows, columns, oracle, mode):
     names = [name for name, _ in case_.decisions]
     assert columns == ["id", *names], mode
@@ -324,6 +341,10 @@ def _check_assignment(case_, rows, columns, oracle, mode):
             assert lower - 1e-9 <= value <= upper + 1e-9, (mode, source["id"], decision, value, (lower, upper))
             a, b = case_.objective.coefficients(source).get(decision, (0.0, 0.0))
             total += a * value * value + b * value
+            minimum_a, minimum_b = (-a, -b) if case_.objective.maximize else (a, b)
+            if mode == "require" and minimum_a <= 0:
+                ruled = _ruled_end(domain, minimum_a, minimum_b, lower, upper)
+                assert value == ruled, (mode, source["id"], decision, value, ruled, (lower, upper))
     expected = oracle.objective_value
     assert abs(total - expected) <= 1e-4 * max(1.0, abs(expected)), (mode, total, expected)
 
@@ -695,6 +716,38 @@ A1_CASES["real_zero_slope_open_below"] = Case(
     Objective("MAXIMIZE SUM(0*x)", True, lambda r: {"x": (0.0, 0.0)}),
     (("x", "REAL"),),
 )
+
+# A tie takes the point of the box nearest 0. A flat objective: every point of the box is optimal, whether the box lies
+# across 0, below it, or is open above.
+FLAT = Objective("MAXIMIZE SUM(0*x)", True, lambda r: {"x": (0.0, 0.0)})
+for _domain in ("REAL", "INT"):
+    A1_CASES[f"{_domain.lower()}_flat_objective_across_zero"] = Case(
+        (clause("x >= -3", ge, const(-3.0), replaces=True), clause("x <= cap", le, col("cap"))),
+        FLAT,
+        (("x", _domain),),
+    )
+    A1_CASES[f"{_domain.lower()}_flat_objective_below_zero"] = Case(
+        (clause("x >= -9", ge, const(-9.0), replaces=True), clause("x <= -2", le, const(-2.0))),
+        FLAT,
+        (("x", _domain),),
+    )
+    A1_CASES[f"{_domain.lower()}_flat_objective_open_above"] = Case(
+        (clause("x >= -3", ge, const(-3.0), replaces=True),), FLAT, (("x", _domain),)
+    )
+# Two equal ends of a concave objective: -(x - t)^2 on [-4, cap] has f(-4) = f(cap) when t is the middle. Row 1's upper
+# end is the nearer to 0, row 2's lower end is, and row 3's two ends are as near, which takes the lower.
+TIE_ROWS = (
+    _row(1, -1.0, 2.0, 0.0, 1.0, True, 0.0),
+    _row(2, 2.0, 8.0, 0.0, 1.0, True, 0.0),
+    _row(3, 0.0, 4.0, 0.0, 1.0, True, 0.0),
+)
+for _domain in ("REAL", "INT"):
+    A1_CASES[f"{_domain.lower()}_concave_equal_ends"] = Case(
+        (clause("x >= -4", ge, const(-4.0), replaces=True), UPPER_CAP),
+        OBJECTIVES["sq_neg_min"],
+        (("x", _domain),),
+        rows=TIE_ROWS,
+    )
 A1_CASES["real_objective_two_constant_terms"] = Case(
     (LOWER_ZERO_BOX,),
     Objective("MINIMIZE SUM(s*x + 5 + w)", False, lambda r: {"x": (0.0, r["s"])}),

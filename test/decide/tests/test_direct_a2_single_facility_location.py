@@ -1123,6 +1123,10 @@ for _set, _box in (
     ("zero_total_lower", "interior"),
     ("zero_total_upper", "interior"),
     ("zero_total_flat", "interior"),
+    # A flat class takes the point of its interval nearest 0: 0 inside an interval that contains it, the end nearest it
+    # outside.
+    ("zero_total_flat", "negative_lower_replaces_default"),
+    ("zero_total_flat", "negative_interval"),
     ("concave_tie", "interior"),
     ("concave_tie_below_zero", "negative_interval"),
     ("concave_tie_as_near", "negative_lower_replaces_default"),

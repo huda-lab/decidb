@@ -414,20 +414,9 @@ private:
 			// No row holds when the box is empty; the answer is then never read.
 			auto infeasible = DirectBoxIsEmpty(calc, lower, upper);
 
-			// Convex: the turning point, clamped into the box (for whole numbers, the first integer whose next step
-			// no longer improves, which keeps the smaller one on a tie).
-			auto turning = DirectTurningPoint(calc, a, b, whole);
-			auto convex = calc.Min({calc.Max({turning.target, lower}), upper});
-			// Concave: the better endpoint, from the sign of f(upper) - f(lower) = (upper - lower) * s.
-			auto s = calc.Add(calc.Mul(a, calc.Add(upper, lower)), b);
-			auto concave = calc.If(calc.Cmp(ExpressionType::COMPARE_LESSTHAN, s, zero), upper, lower);
-			// Linear: the end the slope points away from. With no slope at all the lowest value allowed, or zero, or
-			// the upper end below it, when the box is open below.
-			auto flat = calc.If(calc.Fn("isfinite", lower), lower, calc.Min({zero, upper}));
-			auto linear = calc.If(calc.Cmp(ExpressionType::COMPARE_LESSTHAN, b, zero), upper,
-			                      calc.If(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, b, zero), lower, flat));
-			auto chosen = calc.If(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, a, zero), convex,
-			                      calc.If(calc.Cmp(ExpressionType::COMPARE_LESSTHAN, a, zero), concave, linear));
+			// The least on the box (DirectMinimizeOnInterval), where a tie takes the point of the box nearest 0.
+			auto minimum = DirectMinimizeOnInterval(calc, a, b, lower, upper, whole);
+			auto chosen = minimum.value;
 			// An end that is not finite means the objective improves without limit. Adding 0.0 turns -0.0 into 0.0.
 			auto value = calc.Add(chosen, zero);
 
@@ -435,7 +424,7 @@ private:
 			answers.a.push_back(p4.Add(calc.Out(calc.Col(LogicalType::DOUBLE, box.a[d]))));
 			answers.b.push_back(p4.Add(calc.Out(calc.Col(LogicalType::DOUBLE, box.b[d]))));
 			answers.value.push_back(p4.Add(calc.Out(value)));
-			answers.loses_precision.push_back(p4.Add(calc.Out(turning.loses_precision)));
+			answers.loses_precision.push_back(p4.Add(calc.Out(minimum.loses_precision)));
 		}
 		answers.valid_data = p4.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, box.valid_data)));
 	}

@@ -147,8 +147,8 @@ struct SquareColumns final : LossColumns {
 
 //! `weight * (w*c + t)^2` summed over the rows: the objective is `a*c^2 + b*c` with `a` the sum of `weight*w^2` and `b`
 //! the sum of `2*weight*w*t`. The weight is a constant, or a value read from the data of either sign. Where `a` is
-//! positive the minimum over the interval is the turning point `-b / (2*a)`; otherwise the objective is concave or
-//! linear and the minimum is at an end of the interval.
+//! positive the minimum over the interval is the turning point `-b / (2*a)`; otherwise DirectMinimizeOnInterval gives
+//! it, an end of the interval or, for a flat objective, the point of the interval nearest 0.
 class SquareLoss final : public Loss {
 public:
 	explicit SquareLoss(DirectQuadraticPart part_p) {
@@ -192,43 +192,24 @@ public:
 		auto &square = columns.Cast<SquareColumns>();
 		auto a = calc.Col(LogicalType::DOUBLE, square.a);
 		auto b = calc.Col(LogicalType::DOUBLE, square.b);
-		auto turning = DirectTurningPoint(calc, a, b, false);
-		Answer answer;
+		auto minimum = DirectMinimizeOnInterval(calc, a, b, lower, upper, false);
 		auto convex = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, a, calc.Num(0.0));
-		auto end = EndOfInterval(calc, a, b, lower, upper);
-		answer.target = calc.If(convex, turning.target, end);
+		Answer answer;
+		answer.target = minimum.value;
 		answer.finite_where = convex;
 		answer.checks.push_back(DirectRaiseTooLarge(tools.optimizer, a, tools.written));
 		answer.checks.push_back(DirectRaiseTooLarge(tools.optimizer, b, tools.written));
 		// A concave or linear objective whose best end is infinite improves without limit. It follows the checks of the
 		// sums, which can themselves be infinite.
-		auto infinite = calc.Any({calc.Cmp(ExpressionType::COMPARE_EQUAL, end, calc.Num(POSITIVE_INFINITY)),
-		                          calc.Cmp(ExpressionType::COMPARE_EQUAL, end, calc.Num(NEGATIVE_INFINITY))});
+		auto infinite = calc.Any({calc.Cmp(ExpressionType::COMPARE_EQUAL, minimum.value, calc.Num(POSITIVE_INFINITY)),
+		                          calc.Cmp(ExpressionType::COMPARE_EQUAL, minimum.value, calc.Num(NEGATIVE_INFINITY))});
 		answer.checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(has_class, calc.And(calc.Not(convex), infinite))),
 		                                      DirectUnboundedErrorPredicate(tools.optimizer, tools.errors)));
-		answer.warnings.push_back(DirectWarnIf(calc, calc.Out(turning.loses_precision)));
+		answer.warnings.push_back(DirectWarnIf(calc, calc.Out(minimum.loses_precision)));
 		return answer;
 	}
 
 private:
-	//! The minimum of `a*c^2 + b*c` over `[lower, upper]` for `a <= 0`, where the objective is concave or linear and
-	//! the minimum is at an end: the upper one when `f(U) - f(L) = (U - L) * (a*(L + U) + b)` is negative, the lower
-	//! one when it is positive (a NaN counts as positive: it comes from two infinite ends, where either is unbounded),
-	//! and on a tie the end nearest 0. With `a = 0` the factor is `b` alone, since `0 * infinity` is not a number, and
-	//! a tie
-	//! (`b = 0`) leaves every point optimal, so the target is 0 for the skeleton's clamp to bring nearest.
-	static ExprPtr EndOfInterval(const ExpressionBuilder &calc, const ExprPtr &a, const ExprPtr &b,
-	                             const ExprPtr &lower, const ExprPtr &upper) {
-		auto zero = calc.Num(0.0);
-		auto flat = calc.Cmp(ExpressionType::COMPARE_EQUAL, a, zero);
-		auto upper_gain = calc.If(flat, b, calc.Add(calc.Mul(a, calc.Add(lower, upper)), b));
-		auto nearer_lower =
-		    calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, calc.Fn("abs", lower), calc.Fn("abs", upper));
-		auto tie = calc.If(flat, zero, calc.If(nearer_lower, lower, upper));
-		return calc.If(calc.Cmp(ExpressionType::COMPARE_LESSTHAN, upper_gain, zero), upper,
-		               calc.If(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, upper_gain, zero), lower, tie));
-	}
-
 	//! The one part of the objective, in a vector because DirectFoldQuadratic reads a list of parts.
 	vector<DirectQuadraticPart> parts;
 };

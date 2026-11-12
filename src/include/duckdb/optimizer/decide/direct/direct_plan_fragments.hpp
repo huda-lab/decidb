@@ -190,6 +190,22 @@ struct DirectSquareTarget {
 };
 DirectSquareTarget DirectTurningPoint(const ExpressionBuilder &calc, const ExprPtr &a, const ExprPtr &b, bool whole);
 
+//! The least of `a*c^2 + b*c` over `[lower, upper]` (`whole` for a whole-numbered decision), and whether the turning
+//! point lost precision (DirectTurningPoint). For `a > 0` it is the turning point clamped into the interval. Otherwise
+//! the objective is concave or linear and the least is at an end: the upper one when `f(upper) - f(lower) =
+//! (upper - lower) * (a*(lower + upper) + b)` is negative, the lower one when it is positive. A tie takes the point of
+//! the interval nearest 0, for both kinds of tie. Two equal ends take the nearer of the two to 0, the lower when they
+//! are as near. A flat objective (`a = 0` and `b = 0`) takes the point of the interval nearest 0, with no fallback for
+//! an open end. With `a = 0` the factor is `b` alone, since `0 * infinity` is not a number. A NaN factor comes from
+//! two infinite ends and counts as a tie, where either end is unbounded. An end that is not finite is the value when
+//! the objective improves without limit toward it.
+struct DirectIntervalMinimum {
+	ExprPtr value;
+	ExprPtr loses_precision;
+};
+DirectIntervalMinimum DirectMinimizeOnInterval(const ExpressionBuilder &calc, const ExprPtr &a, const ExprPtr &b,
+                                               const ExprPtr &lower, const ExprPtr &upper, bool whole);
+
 //! A copy of a value re-pointed at a projection that carries the source (see DirectRemapSourceReferences), for an
 //! operator above that projection to read it.
 unique_ptr<Expression> DirectOverProjection(const Expression &value, const vector<ColumnBinding> &source_bindings,

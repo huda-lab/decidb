@@ -279,6 +279,25 @@ DirectSquareTarget DirectTurningPoint(const ExpressionBuilder &calc, const ExprP
 	return result;
 }
 
+DirectIntervalMinimum DirectMinimizeOnInterval(const ExpressionBuilder &calc, const ExprPtr &a, const ExprPtr &b,
+                                               const ExprPtr &lower, const ExprPtr &upper, bool whole) {
+	auto turning = DirectTurningPoint(calc, a, b, whole);
+	auto zero = calc.Num(0.0);
+	auto nearest_zero = calc.Min({calc.Max({zero, lower}), upper});
+	auto convex = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, a, zero);
+	auto flat = calc.Cmp(ExpressionType::COMPARE_EQUAL, a, zero);
+	auto upper_gain = calc.If(flat, b, calc.Add(calc.Mul(a, calc.Add(lower, upper)), b));
+	auto nearer_lower =
+	    calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, calc.Fn("abs", lower), calc.Fn("abs", upper));
+	auto tie = calc.If(flat, nearest_zero, calc.If(nearer_lower, lower, upper));
+	auto end = calc.If(calc.Cmp(ExpressionType::COMPARE_LESSTHAN, upper_gain, zero), upper,
+	                   calc.If(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, upper_gain, zero), lower, tie));
+	DirectIntervalMinimum result;
+	result.value = calc.If(convex, calc.Min({calc.Max({turning.target, lower}), upper}), end);
+	result.loses_precision = std::move(turning.loses_precision);
+	return result;
+}
+
 DirectAggregateStage::DirectAggregateStage(Binder &binder)
     : group_index(binder.GenerateTableIndex()), aggregate_index(binder.GenerateTableIndex()) {
 }
