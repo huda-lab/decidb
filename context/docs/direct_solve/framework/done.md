@@ -472,7 +472,7 @@ rank window or a verified, streamed plan) and run on the same two central files.
   to no rule, mismatched slot, a shared plan fragment handed an input that does not fit, each way a substitute can
   misfit the adapter (no child, a missing prunable flag, a slot, validated column or row id slot beyond the child), a
   pipelined check and a gated verdict under `LIMIT 1` and `COUNT(*)`), `test_decidb_direct_decline.cpp` (each decline
-  branch of the five rules' `CheckCondition` and of `DirectIRIsReadable`, tested on the IR: a probe rule installed
+  branch of the seven rules' `CheckCondition` and of `DirectIRIsReadable`, tested on the IR: a probe rule installed
   through the rule driver's test seam receives the IR the driver reads from a small query that is only planned, edits it
   for the few shapes SQL cannot write, and asks the rule whether it applies; each case reaches an arm no other case of
   its rule reaches, and each rule has forms that apply). The IR comes from a query rather than from a hand-built struct
