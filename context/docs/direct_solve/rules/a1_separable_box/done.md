@@ -47,7 +47,8 @@ One or more row-scoped `BOOL`, `INT` or `REAL` decisions, each solved on its own
   by the first integer whose next step no longer improves, so a tie goes to the smaller value (as on the solver). Both
   are computed with the halves taken first (`(-0.5 * b) / a`, `ceil((-0.5 * b - 0.5 * a) / a)`), so a square factor up to
   the top of a DOUBLE keeps its turning point, where `2 * a` would pass one: at 1e308 the answer is the factor-1 query's.
-  Maximizing a convex square and minimizing a concave one compare the two endpoints.
+  Maximizing a convex square and minimizing a concave one compare the two endpoints. A2 finds its optimum with the same
+  function (`DirectMinimizeOnInterval`, the framework's plan fragments).
 
 A NULL coefficient or bound skips its instance, as on the solver. It raises an error wherever the solver does: NaN or
 infinite coefficients and NaN bounds on a row that reads them, an empty box on any row (infeasible), an improving direction with no finite limit on any row (unbounded), an
@@ -90,8 +91,10 @@ A query A1 does not apply to keeps its answer: it runs on the solver, and `requi
   rule is the framework's [Number-range warning](../../framework/done.md). `MINIMIZE SUM(1e-322 * POWER(x - 1/3, 2))`
   answers 0.35 and warns. At 1e-300 it answers 1/3 and is silent, where `off` warns and returns 0 (Gurobi) or
   0.33333333331 (HiGHS). With no square the answer reads only the sign of `b`, so A1 is silent there.
-- **Ties.** The smaller value, which matches the solver in every case checked, but nothing promises it.
-- **A decision that appears in no objective term** takes the lowest value its box allows.
+- **Ties.** Between two whole numbers around the turning point, the smaller value, which matches the solver in every
+  case checked, but nothing promises it. Between two equally good ends, and on a flat objective, the point of the box
+  nearest 0 (owner's ruling, as A2): the end nearer 0, the lower one when both are as near.
+- **A decision that appears in no objective term** has a flat objective and takes the point of its box nearest 0.
 
 ## How it works
 

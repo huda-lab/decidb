@@ -9,22 +9,6 @@ An independent proof, behavior tests (the standard tests in `../../architecture/
 does not count timeouts, solver limits or unsupported cases as wins. Finding a relational expression in the catalogue is
 not enough.
 
-## S1-24 — S1 checks every row before the first row leaves
-
-- **Problem.** S1's checks stand in a filter above its rank window (`RankAndFilterFeasibility`, `FeasiblePredicate`).
-  The window holds every row, then releases them group by group, and the filter checks each group's rows on the way
-  out. A parent that reads one row (`SELECT ... FROM (... DECIDE ... SUM(x) by (g) ...) q LIMIT 1`) stops after the
-  first group, so an invalid value or an infeasible bound in a later group raises nothing where the solver path raises
-  it. S1's fixture has no late-error case, so the conformance test misses it (`../../framework/todo.md` § FRM-12).
-  **Ruling (owner, 2026-11-11).** S3's plan, before S1 moves onto the shared builder: the per-row checks stand below a
-  window that holds every row (S3's P2 under W2), and a whole-table window gives the infeasibility verdict (S3's W3)
-  only where a group can fail (S3's `NeedsVerdict`).
-- **Change.** S1's checks take the ruled plan. S1's fixture in `_direct_rule_fixtures.py` gains late errors: one in a
-  single group and one in the last group of a `by` key. The comment on `ProveScope` describes the `by` key S1 reads
-  (it says the front end fills none).
-- **Done when.** The grouped case fails on the plan before the change;
-  `./test/decide/run_tests.sh -n 2 -k "direct_s1 or rule_conformance"`.
-
 ## S1-26 — S1 builds its plan with the ranked-prefix builder
 
 - **Problem.** S1 and S3 build one plan shape twice (`../../framework/todo.md` § FRM-18). S1 computes a group bound's
@@ -35,7 +19,7 @@ not enough.
 - **Change.** S1 ranks, takes its prefix, reads its group limits and checks its rows with the builder of FRM-18; S1's
   own window, filter and group-bound plan (`BuildGroupBounds`, the second read and the join) go. S1's answers, errors
   and goldens stay; its plan cost, measured against Gurobi on S1's benchmark cases, stays within the noise.
-- **Needs.** FRM-18, S1-24.
+- **Needs.** FRM-18.
 - **Done when.** `build/release/test/unittest "[decidb]"`;
   `./test/decide/run_tests.sh -n 2 -k "direct_s1 or rule_conformance"`.
 

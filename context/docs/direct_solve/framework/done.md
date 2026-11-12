@@ -52,7 +52,12 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     seed: `0.0 + x` is `x` except at
     `x = -0.0`, and a seed is one addition more on every row. A sum of no term is `0.0`. `DirectTurningPoint` returns
     the turning point `-b / (2a)`, or for a whole-numbered decision the first integer whose next step no longer improves
-    (the smaller one on a tie), with its precision flag (Number-range warning, below).
+    (the smaller one on a tie), with its precision flag (Number-range warning, below). `DirectMinimizeOnInterval`
+    (A1, A2) returns the least of `a*c^2 + b*c` over `[lower, upper]`: the turning point clamped into the interval for
+    `a > 0`, otherwise an end, the upper one when `a*(lower + upper) + b` (`b` alone when `a = 0`) is below 0 and the
+    lower one when above. A tie takes the point of the interval nearest 0 (owner's ruling): two equal ends take the
+    end nearer 0, the lower when both are as near, and a flat objective (`a = b = 0`) the clamp of 0, with no fallback
+    for an open end. A NaN factor comes from two infinite ends and counts as a tie.
   - **A group's aggregates** take one interface, `DirectGroupSink`. `DirectWindowSink` is its window form: each
     aggregate becomes a window over the whole partition, with the rule's group as the partition (N1's data limit).
     `DirectAggregateSink` is its hash form: each aggregate goes into the rule's hash aggregate through
@@ -123,8 +128,8 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   its own: the value is NULL on a dropped row, and `DirectCheckNumber` and `DirectValidBoundPredicate` pass a NULL.
   A list of checks is joined by `DirectAllHold`, a `CASE` chain in the order given, so an earlier check guards the later
   ones. `DirectWarnIf` and `DirectBelowNormalRange` build the warning, which is always true (Number-range warning,
-  below). A rule raises in the solver's order within a group (scope checks, the bound's NaN, an `=` bound's
-  disagreement, then the least row message); across failing groups the order may differ.
+  below). Error order is not owed (owner's ruling): a rule raises when the solver
+  raises, with the message of the first failing check its plan meets, which may not be the solver's.
   **Message codes.** A rule that takes the least message of a group with an aggregate does not aggregate the texts. It
   aggregates codes of them, as a column store dictionary-encodes a string column and decodes it late (late
   materialization of strings). A message built by `DirectNumberMessage` or `DirectOnKeptRows` is a `CASE` over constant

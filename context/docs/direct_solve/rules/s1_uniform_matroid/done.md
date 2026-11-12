@@ -15,7 +15,7 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
   row, including one that can raise (`cap + 1`, a narrowing `CAST`). A data bound reaches S1 as a group bound
   (`../../framework/done.md`): S1 computes its aggregates (the MIN of an upper bound, the MAX of a lower one, an `=` bound's
   MIN and MAX that must agree) once per group, in a hash aggregate over a first read of the source joined back to the
-  rows before the count filter (group-then-join, as A2), and raises its NaN and disagreement errors under the plan,
+  rows after the rank window (group-then-join, as A2), and raises its NaN and disagreement errors in the verdict window,
   in the solver's words (a NULL skips the instance). S1 reads that value in its score projection, on the rows its clause
   keeps; nothing is computed on a row the `when` drops (syntax reference §6.3). Values are converted to DOUBLE as the
   solver does; strict and fractional limits become inclusive integer counts; limits are exact up to 2^53.
@@ -74,13 +74,15 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
   there, so a NaN or a value that raises on it does not raise; the row still counts toward the bounds. A `when` that
   keeps no row leaves every score 0.
 
-It raises an error wherever the solver does: NaN bounds on a row that reads them, NaN or infinite scores, infeasible counts. Every input row is read, so a late bad value raises under `LIMIT 1`
-or `COUNT(*)`. When a query has several errors, direct may report a different one than the solver. When scores tie it
-may pick different rows than the solver, with the same objective. Without an objective every feasible assignment is
-optimal, so which rows it picks is not specified; Gurobi and HiGHS pick different ones as well. The feasibility check is
-a flat list of independent checks (a fixed-value conflict, a valid interval, enough rows, a fixed count within the upper
-limit, an unrepresentable limit), each true or the infeasible error; which failing one raises is not specified, and all
-of them say the same thing.
+It raises an error wherever the solver does: NaN bounds on a row that reads them, NaN or infinite scores, infeasible
+counts. Every input row is checked before the first row leaves, so a late bad value or an infeasible later group raises
+under `LIMIT 1` or `COUNT(*)`. When a query has several errors, direct may report a different one than the solver: error
+order is not owed (owner's ruling), and the plan raises the first check it meets. When scores tie it may pick different
+rows than the solver, with the same objective. Without an objective every feasible assignment is optimal, so which rows
+it picks is not specified; Gurobi and HiGHS pick different ones as well. A group's feasibility is a flat list of
+independent checks (a valid interval, enough rows, a fixed count within the upper limit, an unrepresentable limit), each
+true or false; a false in any group raises the infeasible error, so which check failed is not said, and all of them say
+the same thing.
 
 **Known difference: values within the solver's tolerance of an integer.** Direct solve reads every
 bound exactly: counts, constants and column values. The solver accepts a violation of about 1e-6, and the two backends
@@ -122,19 +124,29 @@ different `when` membership (S2); `SUM(x) <> k` (not an interval); bounds that a
 
 ## How it works
 
-The plan is a scope projection, a score projection, a rank window with the feasibility filter, and the assignment
-projection. The group bounds' aggregates are computed once per group, by a hash aggregate over a first read of the
-source, and joined to the rows of the window (group-then-join, as A2).
+The plan is a scope projection, a score projection, a rank window, a verdict window where a group can fail, and the
+assignment projection. The group bounds' aggregates are computed once per group, by a hash aggregate over a first read
+of the source, and joined to the rows of the window (group-then-join, as A2).
 
+- **Where the checks stand.** A window holds every row before it gives one, then gives them group by group, so a check
+  above it reaches a later group only when the parent reads that far. The checks of a row (the score, what a group bound
+  reads, the values the row fixes, a row fixed to both values) are one column of the score projection, below the rank
+  window. The checks of a group (what its bounds give, and whether its rows and fixed values can meet them) read the
+  rank window's counts, so they stand above it, in a window over all the rows (`bool_and`, as S3's W3) that every row
+  reads; the assignment projection raises the infeasible error unless it holds. That window stands only where a group
+  can fail: a lower bound, a source-valued bound, a fixed value beside an upper bound, or an impossible scope. A
+  constant upper bound alone cannot fail and has none. The window runs on one thread, as S3's W3: over the 800,000 rows
+  of `partsupp`, `SUM(pick) by (ps_suppkey) BETWEEN 1 AND 2` takes 0.083 s against 0.056 s for `<= 2` (a fresh process,
+  best of 5, 2026-11-12), where Gurobi takes seconds.
 - **Class key.** A scoped problem carries the framework's [class key](../../framework/done.md): the `by` key's
   elements, compared with `=` where a NULL puts a row in no group, and one marker column when a `when` can drop rows
   and no element says so. The rank and count windows partition by it, so a row in no group ranks apart from every
   group, and the group bounds join on it, so that row meets no group's bounds. No BOOLEAN eligibility column is part of
   the key.
-- **The score's message.** The score projection carries a message column, the least of which the plan raises, only for a
-  score that can fail: the sum of the bounds of its terms, with their factors, is not below half the range of a DOUBLE
-  (the framework's [Number messages](../../framework/done.md)). A score made of values of exact types has no message
-  column, and a per-row bound of an exact type is not checked for NaN.
+- **The score's check.** The score projection checks the score only for a score that can fail: the sum of the bounds of
+  its terms, with their factors, is not below half the range of a DOUBLE (the framework's [Number
+  messages](../../framework/done.md)). A score made of values of exact types has no check, and a per-row bound of an
+  exact type is not checked for NaN.
 
 ## Verified by
 

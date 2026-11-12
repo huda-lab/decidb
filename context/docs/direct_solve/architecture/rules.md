@@ -63,7 +63,9 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
 
 - **Every input row is read.** A bad value on the last of 5,000 rows must raise even under `LIMIT 1` or
   `COUNT(*)`. A plan that streams gates its rows on a verdict over every row (`DirectAllRowsValid`,
-  `DirectSourceReader::Gate`); a rank window already reads everything. Only `LIMIT 0` may skip the read.
+  `DirectSourceReader::Gate`). A window holds every row before it gives one but then gives them group by group, so a
+  check above it reaches only the groups a parent reads: a row's checks stand below the window, and a group's checks in
+  a window over all the rows that every row reads (S3's W3, S1's verdict window). Only `LIMIT 0` may skip the read.
 - **An error on the same inputs.** Where the solver raises, direct solve raises: invalid data-valued bounds and fixed
   values on the rows that read them; invalid objective coefficients (NaN, infinity); infeasibility. A NULL objective
   term is dropped, as `SUM` drops it in SQL (guide § NULL), so the solver answers there and a rule must too. Nothing is
@@ -109,8 +111,11 @@ test, adding one is a task in that rule's `todo.md`.
 
 1. **Conformance suite** (`test_direct_rule_conformance.py`): add a `RuleFixture` in `_direct_rule_fixtures.py`. It
    checks schema and rows, the all-rows read, prepared-plan selection, serializer round trip, `EXPLAIN` and profiling,
-   the `require` error, `off`, a forced backend, `DIAGNOSE`, and near misses. Each near miss must decline under
-   `require` and answer under `auto` exactly as it does under `off`; one plain form per rule must apply.
+   the `require` error, `off`, a forced backend, `DIAGNOSE`, and near misses. A rule that takes a `by` or `per` key adds
+   a late error whose bad row sits in the last of many groups (`late_errors`), which fails a plan that checks a group
+   above its blocking window; a few groups can pass by the luck of the hash order, so the cases use about 50. Each near
+   miss must decline under `require` and answer under `auto` exactly as it does under `off`; one plain form per rule
+   must apply.
 2. **Differential oracle test** (`test_direct_<id>_<slug>.py`: `test_direct_s1_uniform_matroid.py`,
    `test_direct_a1_separable_box.py`): the rule adds its own file with its own case table, a function that builds the
    oracle model from the rows, and a function that checks one DeciDB assignment against its constraints. The shared
@@ -124,7 +129,9 @@ test, adding one is a task in that rule's `todo.md`.
    in the boundary table, where direct is compared with the solver only. Add the shape inside parent queries too.
 3. **C++ cases** (`test/common/`) for the rule's applicability condition and for the IR it relies on. Each decline
    branch of `CheckCondition` gets a case in `test_decidb_direct_decline.cpp`, which hands the rule the IR of a small
-   planned query; `make decide-coverage` shows each new case reaching an arm no other case of the rule reaches.
+   planned query; `make decide-coverage` shows each new case reaching an arm no other case of the rule reaches. The
+   rule adds one row to `EveryRuleWithItsShapes` there (its applying shapes, keyed shapes included): one test runs every
+   rule against every other rule's shapes, and fails when a registered rule has no row.
 
 The checks to run after any change are in [../framework/todo.md](../framework/todo.md) § How to work any task;
 `test/decide/run_direct_matrix.sh` runs them all, and its exit code is 0 only when no check fails.
