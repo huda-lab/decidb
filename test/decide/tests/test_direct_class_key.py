@@ -93,14 +93,15 @@ def test_the_join_of_a_class_compares_each_key_column_by_what_a_null_means(decid
     "name, source, key, expected",
     [
         # A bound read from the data is a side table joined to the rows by the key of its `by`, element by element.
-        ("a-written-column", ROWS, "g", [["="], ["="]]),
-        ("a-relation-column", RELATION, "d", [["NDF"], ["NDF"]]),
+        ("a-written-column", ROWS, "g", [["="]]),
+        ("a-relation-column", RELATION, "d", [["NDF"]]),
     ],
 )
 def test_the_join_of_a_bound_compares_each_key_column_by_what_a_null_means(decidb_cli, name, source, key, expected):
     # The side table is built and joined by the source reader, which the solver path uses as well (its plan prints the
     # DECIDE operator's internal columns, so the comparisons are read from a direct plan). The bound's reducer has a key
-    # of its own, so it is not the clause's group: the table is joined once for the bound and once for its check.
+    # of its own, so it is not the clause's group: the table is joined once, and S1 reads the source once (its group
+    # limits are read in its rank window, not by a second read joined back to the rows).
     sql = f"SELECT id, x FROM {source} DECIDE x(BOOL) SUCH THAT SUM(x) <= SUM(v) by ({key}) / 8 MAXIMIZE SUM(v * x)"
     assert _single_join_conditions(decidb_cli, sql) == expected, name
 

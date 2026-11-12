@@ -300,14 +300,14 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //! gives the score, the counts, the limits and what they decide.
 //!
 //!   S    the scope projection: the eligible flag, the group key and the fixed-value flags
-//!   P1   the score; each source-valued bound's value; the checks of the row (the score, the values the row fixes and
-//!        a row fixed to both values)
+//!   P1   the score; each source-valued bound's value; the check of the score; the checks of the fixed values (the
+//!        builder's)
 //!   W1   per group, in order of the score: the rank, the count of the rows fixed to 1 and of the rows free to take
 //!        either value, and the aggregates of the group bounds (what a bound reads is one value per group, computed
 //!        here over the one read)
 //!   P2   the count limits and what remains of them after the fixed rows, and whether the group can meet them
 //!   W3   over all the rows, whether every group can; only where a group can fail (NeedsVerdict)
-//!   A    the 0/1 assignment, the source columns, the hidden rank and the column of the checks
+//!   A    the 0/1 assignment, the source columns and the column of the checks
 //!
 //! The solver reads every row before it answers, so a bad value or an infeasible bound in any group raises even under
 //! an outer LIMIT 1. A window holds every row before it releases one, and releases them group by group, so a check that
@@ -440,8 +440,8 @@ private:
 		return combined_score;
 	}
 
-	//! P1: the score, the value of each source-valued bound, and the checks of the row: each value the row fixes, the
-	//! score, then a row fixed to both values. What a group bound reads is the builder's.
+	//! P1: the score, the value of each source-valued bound, and the check of the score. What a group bound reads and
+	//! the fixed values are the builder's.
 	ColumnBinding LayoutRows(DirectProjectionStage &p1, const DirectScopeState &state) override {
 		vector<ExprPtr> part_scores;
 		auto combined_score = CombinedScore(state, part_scores);
@@ -459,24 +459,11 @@ private:
 			}
 			bound_columns.push_back(p1.Add(calc.Out(calc.Cast(calc.Wrap(std::move(value)), LogicalType::DOUBLE))));
 		}
-		auto over_state = [&](const Expression &value) {
-			return OverState(state, value);
-		};
-		for (auto &fixed_value : condition.fixed.source_values) {
-			checks_below.push_back(DirectRaiseMessage(
-			    optimizer, calc, DirectFixedValueMessage(optimizer.context, calc, fixed_value, over_state)));
-		}
 		if (has_score_message) {
 			checks_below.push_back(
 			    DirectRaiseMessage(optimizer, calc, ScoreMessage(state, combined_score, part_scores)));
 		}
-		if (HasFixes()) {
-			// A row fixed to both values.
-			auto both = calc.If(FixedOne(state), FixedZero(state), calc.Bool(false));
-			checks_below.push_back(
-			    DirectRaiseIf(calc, calc.Out(both), DirectInfeasibleErrorPredicate(optimizer, errors)));
-		}
-		return RankedKey(p1, state, combined_score, score);
+		return score;
 	}
 
 	//! A row with no fixed value, neither to one nor to zero.
@@ -586,9 +573,9 @@ private:
 	}
 
 	//! Whether the group of the row is feasible: a list of checks, each true when it passes and false when it fails.
-	//! The checks on the rows of a group apply to eligible rows only. The verdict window reads it over every row, so
-	//! every group has passed the raising checks (P2: what the group's bounds give) when the first row leaves; a false
-	//! raises DECIDE's infeasible error then.
+	//! The verdict window reads it over every row (the builder takes a row outside every group as feasible), so every
+	//! group has passed the raising checks (P2: what the group's bounds give) when the first row leaves; a false raises
+	//! DECIDE's infeasible error then.
 	ExprPtr GroupsAreFeasible(const DirectRankedColumns &input) const {
 		// `ok` must hold; a NULL `ok` fails.
 		auto must_hold = [&](const ExprPtr &ok) {
@@ -634,9 +621,7 @@ private:
 			}
 		}
 		D_ASSERT(group_checks.empty() != NeedsVerdict());
-		// The checks of the rows of a group apply to eligible rows only.
-		auto group = calc.Wrap(DirectAllHold(calc, std::move(group_checks)));
-		return scoped ? calc.If(Column(LogicalType::BOOLEAN, input.carried.eligible), group, calc.Bool(true)) : group;
+		return calc.Wrap(DirectAllHold(calc, std::move(group_checks)));
 	}
 
 	//! P2: the score, how many rows of the group the limits leave to the free rows, and whether the group is feasible.
@@ -656,12 +641,12 @@ private:
 		}
 	}
 
-	ExprPtr GroupVerdict(const DirectRankedColumns &rows, const ExprPtr &size) override {
+	ExprPtr GroupVerdict(const DirectRankedColumns &rows) override {
 		return NeedsVerdict() ? Column(LogicalType::BOOLEAN, group_ok) : nullptr;
 	}
 
-	//! The 0/1 assignment: fixed values, then scope, then upper and lower rank limits, then score sign.
-	ExprPtr Chosen(const DirectRankedColumns &rows, const ExprPtr &size) override {
+	//! The 0/1 assignment of a row no clause fixes: scope, then upper and lower rank limits, then score sign.
+	ExprPtr Chosen(const DirectRankedColumns &rows) override {
 		auto improving =
 		    calc.Cmp(ExpressionType::COMPARE_LESSTHAN, Column(LogicalType::DOUBLE, score_after), calc.Num(0.0));
 		auto choose = improving;
@@ -678,10 +663,6 @@ private:
 		}
 		if (scoped) {
 			choose = calc.If(Column(LogicalType::BOOLEAN, rows.carried.eligible), choose, improving);
-		}
-		if (HasFixes()) {
-			choose = calc.If(Column(LogicalType::BOOLEAN, rows.fixed_zero), calc.Bool(false), choose);
-			choose = calc.If(Column(LogicalType::BOOLEAN, rows.fixed_one), calc.Bool(true), choose);
 		}
 		return choose;
 	}

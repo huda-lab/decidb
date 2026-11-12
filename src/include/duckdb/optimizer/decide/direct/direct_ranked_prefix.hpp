@@ -26,6 +26,8 @@ struct DirectRankedColumns {
 	//! The checks the rule put above it (`checks_above`); set in the stage after the rank window, and unset when there
 	//! are none.
 	ColumnBinding valid;
+	//! The size of the group's prefix, the column W2 gives; null without a W2 (PrefixSize).
+	ExprPtr size;
 };
 
 //! A plan that ranks the rows of each group by one column, selects a prefix of the ranking and answers 1 inside it
@@ -34,21 +36,23 @@ struct DirectRankedColumns {
 //! the protected virtual members are its steps.
 //!
 //!   S    the scope projection (DirectProjectScope): the eligible flag, the group key and the fixed-value flags
-//!   P1   the rule's columns (LayoutRows), among them the ranking column; the checks below the rank window
+//!   P1   the rule's columns (LayoutRows), among them the ranking column; the checks of the fixed values; the checks
+//!        below the rank window
 //!   W1   per group, in order of the ranking column: the rank, what the rule adds (AddGroupWindows), and the group
 //!        limits (AddGroupBound), over the one read
 //!   P2   the rule's prefix columns (LayoutPrefix); the checks above W1 and what the group limits raise
 //!   W2   per group, the size of the prefix (PrefixSize); only a rule whose prefix size needs a window of its own
 //!   W3   over all the rows, whether every group can be met (GroupVerdict); only where a group can fail
-//!   A    the source columns, x (Chosen), the hidden rank and the column of the checks
+//!   A    the source columns, x (Chosen), the column of the checks
 //!
 //! Every row is checked before the first row leaves (`architecture/rules.md` § What every rule must match). A window
 //! holds every row before it gives one, then gives them group by group, so a check above it reaches a later group only
-//! when the parent reads that far. A check stands below a window that holds every row: a check of the row itself in P1,
-//! below the rank window (`checks_below`, over the state's columns); a check that reads W1's outputs in P2, below W2 or
-//! W3 (`checks_above`). A rule that adds one must have a window over all the rows above P2 (PrefixSize or
-//! GroupVerdict), which the plan has where a group can fail. The group's own checks, in W3, read every row, so every
-//! group has passed them when the first row leaves.
+//! when the parent reads that far. A check stands below a window that holds every row, and what it reads says which
+//! stage: a check over the scope projection's columns stands in P1, below the rank window (`checks_below`); a check
+//! over P1's or W1's columns stands in P2, below W2 or W3 (`checks_above`). A rule that adds one of the second kind
+//! must have a window over all the rows above P2 (PrefixSize or GroupVerdict), which the plan has where a group can
+//! fail. The group's own checks, in W3, read every row, so every group has passed them when the first row leaves. The
+//! builder adds the checks of the fixed values (each value a row fixes, a row fixed to both) to `checks_below`.
 //!
 //! Rows of equal ranking value are ordered as the sort gives them, and the prefix is right only if every window of W1
 //! that reads the order (the rank, a running sum) sees the same one. They have one partition and one order, so DuckDB
@@ -58,8 +62,8 @@ class DirectRankedPrefix {
 public:
 	virtual ~DirectRankedPrefix() = default;
 
-	//! The substitute over the one read `rows`: the source columns, then x (INTEGER 0/1), then the hidden rank and the
-	//! column of the checks (`validated_columns`).
+	//! The substitute over the one read `rows`: the source columns, then x (INTEGER 0/1), then the column of the
+	//! checks when the plan owes any (`validated_columns`).
 	DirectSubstitute Build(unique_ptr<LogicalOperator> rows);
 
 protected:
@@ -72,26 +76,25 @@ protected:
 	//! The direction of the ranking: ascending ranks the smallest ranking value first.
 	virtual OrderType RankOrder() const = 0;
 	//! P1: adds the rule's columns over `state` (its source columns are `state.input_bindings`) and returns the ranking
-	//! column, a DOUBLE that is NULL on a row outside the ranking and ranked last. A rule makes it with RankedKey,
-	//! which takes the rows its clauses fix out of the ranking. It appends the checks it owes below the rank window to
-	//! `checks_below`, over `state`'s columns.
+	//! column, a DOUBLE. The builder ranks a row a clause fixes to 1 or to 0 last (RankKey). It appends the checks it
+	//! owes below the rank window to `checks_below`, over `state`'s columns.
 	virtual ColumnBinding LayoutRows(DirectProjectionStage &p1, const DirectScopeState &state) = 0;
 	//! W1: adds to `w1` the windows of the rule over the group in order of the ranking column (a running sum of it, a
-	//! count), partitioned with PartitionByGroup. `rows` are the columns of P1, `RankKey` the ranking column's.
+	//! count), partitioned with PartitionByGroup. `rows` are the columns of P1, RankKey the ranking column's.
 	virtual void AddGroupWindows(LogicalWindow &w1, const DirectRankedColumns &rows) = 0;
 	//! P2: adds the rule's columns over `input`, the columns W1 gives (P1's columns and the rank), and the group limits
 	//! (GroupValues). It appends the checks it owes above W1 to `checks_above`, over the same columns.
 	virtual void LayoutPrefix(DirectProjectionStage &p2, const DirectRankedColumns &input) = 0;
-	//! W2: the window that gives each group the size of its prefix, the `size` of GroupVerdict and Chosen; null for a
-	//! rule that reads the size off the group's own columns.
+	//! W2: the window that gives each group the size of its prefix, the `size` of DirectRankedColumns; null for a rule
+	//! that reads the size off the group's own columns.
 	virtual unique_ptr<BoundWindowExpression> PrefixSize(const DirectRankedColumns &rows) {
 		return nullptr;
 	}
-	//! W3: whether the row's group can be met, a BOOLEAN over the columns of P2 and `size`; null where no group can
-	//! fail. A false raises the infeasible error before the first row leaves.
-	virtual ExprPtr GroupVerdict(const DirectRankedColumns &rows, const ExprPtr &size) = 0;
-	//! A: whether the row is selected; `size` is the column W2 gives, null without a W2.
-	virtual ExprPtr Chosen(const DirectRankedColumns &rows, const ExprPtr &size) = 0;
+	//! W3: whether the row's group can be met, a BOOLEAN over the columns of P2; null where no group can fail. The
+	//! builder takes a row outside every group as met. A false raises the infeasible error before the first row leaves.
+	virtual ExprPtr GroupVerdict(const DirectRankedColumns &rows) = 0;
+	//! A: whether the row is selected, where no clause fixes it; the builder lets a fixed row keep its value.
+	virtual ExprPtr Chosen(const DirectRankedColumns &rows) = 0;
 
 	//! Registers a group bound whose aggregates W1 reads over the group, and returns its index into GroupValues. A rule
 	//! registers its bounds when it is built.
@@ -99,15 +102,12 @@ protected:
 	//! What the registered bound gives, over the columns of W1; valid in LayoutPrefix and after.
 	const DirectGroupValues &GroupValues(idx_t bound) const;
 
-	//! The ranking column as W1 reads it, an expression.
+	//! The ranking column as W1 reads it, an expression over P1's columns: the rule's column, NULL on a row a clause
+	//! fixes to 1 or to 0, which ranks last and which a sum skips.
 	ExprPtr RankKey() const;
 	//! Makes `window` run over the rows of `carried`'s group. A row outside every group has a NULL where the key is
 	//! compared with `=`, so it is apart from every group.
 	void PartitionByGroup(const DirectCarried &carried, BoundWindowExpression &window) const;
-	//! The ranking column of P1 for the row value `value`, which `column` of `p1` holds already: `column`, or with
-	//! fixed rows a column of `p1` that is NULL on a row a clause fixes to 1 or to 0, which leaves the ranking.
-	ColumnBinding RankedKey(DirectProjectionStage &p1, const DirectScopeState &state, const ExprPtr &value,
-	                        ColumnBinding column) const;
 	//! Whether a clause fixes the row to 1 and to 0, over `state`.
 	ExprPtr FixedOne(const DirectScopeState &state) const;
 	ExprPtr FixedZero(const DirectScopeState &state) const;
@@ -130,8 +130,8 @@ protected:
 	const DirectFixedValues &fixed;
 	//! Whether the rows have a scope: a `by` key, a `when` or a `per` key.
 	const bool scoped;
-	//! The checks of the rule: a check of the row in `checks_below` stands in P1 and one that reads W1's outputs in
-	//! `checks_above` stands in P2.
+	//! The checks of the rule: `checks_below` read the scope projection's columns and stand in P1; `checks_above` read
+	//! P1's or W1's columns and stand in P2.
 	vector<unique_ptr<Expression>> checks_below;
 	vector<unique_ptr<Expression>> checks_above;
 
@@ -145,15 +145,18 @@ private:
 	Stage ProjectRows(unique_ptr<LogicalOperator> rows);
 	void RankRows(Stage &rows);
 	Stage ProjectPrefix(Stage ranked);
-	//! Adds W2 and W3 over `prefix`; `size` and `feasible` are what they give, null for a window the plan lacks.
-	void CloseGroups(Stage &prefix, ExprPtr &size, ExprPtr &feasible);
-	DirectSubstitute Answer(Stage prefix, const ExprPtr &size, const ExprPtr &feasible);
+	//! Adds W2 and W3 over `prefix`; `feasible` is what W3 gives, null for a plan without one.
+	void CloseGroups(Stage &prefix, ExprPtr &feasible);
+	DirectSubstitute Answer(Stage prefix, const ExprPtr &feasible);
 
 	vector<const DecideGroupBound *> bounds;
 	//! Where P1 laid out what each registered bound reads, and what each gives once W1 has computed it.
 	vector<vector<DirectGroupInputColumns>> bound_inputs;
 	vector<DirectGroupValues> bound_values;
+	//! The rule's ranking column in P1, and the columns of P1 that say a clause fixes the row (set with fixed rows).
 	ColumnBinding rank_key;
+	ColumnBinding key_fixed_one;
+	ColumnBinding key_fixed_zero;
 };
 
 } // namespace duckdb

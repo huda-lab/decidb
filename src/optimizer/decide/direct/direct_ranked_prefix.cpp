@@ -25,7 +25,14 @@ const DirectGroupValues &DirectRankedPrefix::GroupValues(idx_t bound) const {
 }
 
 ExprPtr DirectRankedPrefix::RankKey() const {
-	return Column(LogicalType::DOUBLE, rank_key);
+	auto key = Column(LogicalType::DOUBLE, rank_key);
+	if (!HasFixes()) {
+		return key;
+	}
+	// A row a clause fixes to 1 or to 0 leaves the ranking: NULL sorts last, and a sum skips it.
+	auto outside = calc.Constant(Value(LogicalType::DOUBLE));
+	return calc.If(Column(LogicalType::BOOLEAN, key_fixed_one), outside,
+	               calc.If(Column(LogicalType::BOOLEAN, key_fixed_zero), outside, key));
 }
 
 void DirectRankedPrefix::PartitionByGroup(const DirectCarried &carried, BoundWindowExpression &window) const {
@@ -40,15 +47,6 @@ ExprPtr DirectRankedPrefix::FixedOne(const DirectScopeState &state) const {
 
 ExprPtr DirectRankedPrefix::FixedZero(const DirectScopeState &state) const {
 	return Column(LogicalType::BOOLEAN, state.extra[1]);
-}
-
-ColumnBinding DirectRankedPrefix::RankedKey(DirectProjectionStage &p1, const DirectScopeState &state,
-                                            const ExprPtr &value, ColumnBinding column) const {
-	if (!HasFixes()) {
-		return column;
-	}
-	auto outside = calc.Constant(Value(LogicalType::DOUBLE));
-	return p1.Add(calc.If(FixedOne(state), outside, calc.If(FixedZero(state), outside, value)));
 }
 
 unique_ptr<Expression> DirectRankedPrefix::OverState(const DirectScopeState &state, const Expression &value) const {
@@ -90,6 +88,17 @@ DirectRankedPrefix::Stage DirectRankedPrefix::ProjectRows(unique_ptr<LogicalOper
 	for (auto bound : bounds) {
 		bound_inputs.push_back(
 		    DirectLayoutGroupInputs(optimizer, calc, p1, *bound, eligible, over_state, &checks_above));
+	}
+	key_fixed_one = result.columns.fixed_one;
+	key_fixed_zero = result.columns.fixed_zero;
+	// The checks of the rows the clauses fix: each value a row fixes, and a row fixed to both values.
+	for (auto &fixed_value : fixed.source_values) {
+		checks_below.push_back(DirectRaiseMessage(
+		    optimizer, calc, DirectFixedValueMessage(optimizer.context, calc, fixed_value, over_state)));
+	}
+	if (HasFixes()) {
+		auto both = calc.If(FixedOne(state), FixedZero(state), calc.Bool(false));
+		checks_below.push_back(DirectRaiseIf(calc, calc.Out(both), DirectInfeasibleErrorPredicate(optimizer, errors)));
 	}
 	rank_key = LayoutRows(p1, state);
 	if (!checks_below.empty()) {
@@ -149,39 +158,47 @@ DirectRankedPrefix::Stage DirectRankedPrefix::ProjectPrefix(Stage ranked) {
 	return result;
 }
 
-void DirectRankedPrefix::CloseGroups(Stage &prefix, ExprPtr &size, ExprPtr &feasible) {
+void DirectRankedPrefix::CloseGroups(Stage &prefix, ExprPtr &feasible) {
 	auto &columns = prefix.columns;
 	// W2: the size of each group's prefix, where the rule needs a window for it.
 	if (auto size_window = PrefixSize(columns)) {
 		auto w2 = make_uniq<LogicalWindow>(binder.GenerateTableIndex());
 		PartitionByGroup(columns.carried, *size_window);
-		size = Column(size_window->return_type, ColumnBinding(w2->window_index, 0));
+		columns.size = Column(size_window->return_type, ColumnBinding(w2->window_index, 0));
 		w2->expressions.push_back(std::move(size_window));
 		w2->children.push_back(std::move(prefix.plan));
 		prefix.plan = std::move(w2);
 	}
 	// W3: whether every group can be met, over all the rows, where a group can fail.
-	if (auto verdict = GroupVerdict(columns, size)) {
+	if (auto verdict = GroupVerdict(columns)) {
+		// A row outside every group has no group to meet.
+		if (scoped) {
+			verdict = calc.If(Column(LogicalType::BOOLEAN, columns.carried.eligible), verdict, calc.Bool(true));
+		}
 		auto w3 = make_uniq<LogicalWindow>(binder.GenerateTableIndex());
 		w3->expressions.push_back(DirectWindowExtremum(optimizer, "bool_and", calc.Out(verdict)));
 		feasible = Column(LogicalType::BOOLEAN, ColumnBinding(w3->window_index, 0));
 		w3->children.push_back(std::move(prefix.plan));
 		prefix.plan = std::move(w3);
 	}
-	D_ASSERT(columns.valid.table_index == DConstants::INVALID_INDEX || size || feasible);
+	D_ASSERT(columns.valid.table_index == DConstants::INVALID_INDEX || columns.size || feasible);
 }
 
-DirectSubstitute DirectRankedPrefix::Answer(Stage prefix, const ExprPtr &size, const ExprPtr &feasible) {
-	// A: the source columns, x, the hidden rank and the column of the checks. The rank is read by no parent, so the
-	// rank window stays and holds every row before one leaves; the checks keep the checks live.
+DirectSubstitute DirectRankedPrefix::Answer(Stage prefix, const ExprPtr &feasible) {
+	// A: the source columns, x and the column of the checks, which keeps them live (`validated_columns`). DuckDB keeps
+	// a window whose columns no parent reads, so the rank window holds every row before one leaves.
 	auto &columns = prefix.columns;
 	DirectProjectionStage out(binder.GenerateTableIndex());
 	for (idx_t i = 0; i < source_bindings.size(); i++) {
 		out.Add(calc.Out(Column(source_types[i], columns.carried.source[i])));
 	}
-	out.Add(
-	    calc.Out(calc.If(Chosen(columns, size), calc.Constant(Value::INTEGER(1)), calc.Constant(Value::INTEGER(0)))));
-	out.Add(calc.Out(Column(LogicalType::BIGINT, columns.rank)));
+	auto chosen = Chosen(columns);
+	if (HasFixes()) {
+		// A clause that fixes the row decides it.
+		chosen = calc.If(Column(LogicalType::BOOLEAN, columns.fixed_one), calc.Bool(true),
+		                 calc.If(Column(LogicalType::BOOLEAN, columns.fixed_zero), calc.Bool(false), chosen));
+	}
+	out.Add(calc.Out(calc.If(chosen, calc.Constant(Value::INTEGER(1)), calc.Constant(Value::INTEGER(0)))));
 	vector<unique_ptr<Expression>> checks;
 	if (columns.row_valid.table_index != DConstants::INVALID_INDEX) {
 		checks.push_back(calc.Out(Column(LogicalType::BOOLEAN, columns.row_valid)));
@@ -203,9 +220,8 @@ DirectSubstitute DirectRankedPrefix::Answer(Stage prefix, const ExprPtr &size, c
 	for (idx_t i = 0; i < source_bindings.size() + 1; i++) {
 		substitute.slot_map.push_back(i);
 	}
-	substitute.validated_columns.push_back(source_bindings.size() + 1);
 	if (owes_checks) {
-		substitute.validated_columns.push_back(source_bindings.size() + 2);
+		substitute.validated_columns.push_back(source_bindings.size() + 1);
 	}
 	substitute.child = out.Finish(std::move(prefix.plan));
 	return substitute;
@@ -215,10 +231,9 @@ DirectSubstitute DirectRankedPrefix::Build(unique_ptr<LogicalOperator> rows) {
 	auto ranked = ProjectRows(std::move(rows));
 	RankRows(ranked);
 	auto prefix = ProjectPrefix(std::move(ranked));
-	ExprPtr size;
 	ExprPtr feasible;
-	CloseGroups(prefix, size, feasible);
-	return Answer(std::move(prefix), size, feasible);
+	CloseGroups(prefix, feasible);
+	return Answer(std::move(prefix), feasible);
 }
 
 } // namespace duckdb

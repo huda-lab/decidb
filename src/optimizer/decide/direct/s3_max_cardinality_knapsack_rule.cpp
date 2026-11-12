@@ -235,11 +235,12 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //!   [W0]  the source read
 //!   S     the scope projection (DirectProjectScope): the eligible flag and the group key, for a `by` budget or a
 //!         `when`; and whether a clause fixes the row to 1 or to 0
-//!   P1    the rows' weights `w` and what the data limit reads; a fixed row has no weight in the prefix
+//!   P1    the rows' weights `w` and what the data limit reads; a fixed row has no weight in the prefix; the checks of
+//!         the fixed values and of a row fixed to both values (the builder's)
 //!   W1    per group, the free rows in order of `w`: their rank and running sum of `w` (the prefix total); the total
 //!         of the weights of the rows fixed to 1; and the group's limit B (DirectWindowSink)
 //!   P2    whether the row's prefix fits (`fixed total + total <= B`), the rank when it does, and the checks: the
-//!         weight, what the limit reads and what it gives, and a row fixed to both values
+//!         weight, what the limit reads and what it gives, and the prefix total
 //!   W2    per group, k, the largest rank that fits (NULL when none does); for a minimum, the smallest rank that
 //!         reaches B, with the order of W1 reversed
 //!   W3    over all the rows, whether every group fits a prefix; only when a group can fit none (NeedsVerdict)
@@ -251,8 +252,8 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //! released, not when a row of that group is reached.
 //!
 //! The slot map: the source columns in order (the reader's: the source row id and the bounds' values come after the
-//! node's, and the driver drops them), then x (INTEGER 0/1), then the hidden rank and the column of the checks, which
-//! keep the plan live (`validated_columns`). A row outside every budget (a NULL in a NO_GROUP element of the `by` key,
+//! node's, and the driver drops them), then x (INTEGER 0/1), then the column of the checks, which
+//! keeps them live (`validated_columns`). A row outside every budget (a NULL in a NO_GROUP element of the `by` key,
 //! D5, or dropped by the budget's `when`) is in no budget and selecting it costs nothing, so x = 1 there, unless the
 //! objective drops it too (its `when` is the budget's): then it adds nothing and x = 0.
 //!
@@ -323,17 +324,12 @@ private:
 	}
 
 	//! P1: the weight of each row, `sum(sign * coefficient)` of the budget's terms, checked as the solver checks a
-	//! coefficient (a NULL term reads 0: the front end guards it), the checks of the values a clause fixes, and the
-	//! weight of a row fixed to 1. A fixed row leaves the prefix: its ranking weight is NULL, which the sum skips and
-	//! the sort puts last.
+	//! coefficient (a NULL term reads 0: the front end guards it), and the weight of a row fixed to 1. A fixed row
+	//! leaves the prefix: the builder ranks it last and the sum skips it.
 	ColumnBinding LayoutRows(DirectProjectionStage &p1, const DirectScopeState &state) override {
 		auto over_state = [&](const Expression &value) {
 			return OverState(state, value);
 		};
-		for (auto &source : condition.fixed.source_values) {
-			auto message = DirectFixedValueMessage(optimizer.context, calc, source, over_state);
-			checks_above.push_back(DirectRaiseMessage(optimizer, calc, Column(LogicalType::VARCHAR, p1.Add(message))));
-		}
 		auto values = DirectValuesOn(condition.budget, 0);
 		// A row the `when` drops reads no weight: it is NULL there, so the check passes it and no total counts it.
 		ExprPtr kept_when;
@@ -352,18 +348,16 @@ private:
 		        DirectCheckNumber(optimizer, weight, condition.budget.names[0], values, source_bindings, p1.index)) {
 			checks_above.push_back(std::move(check));
 		}
-		return RankedKey(p1, state, weight_value, weight);
+		return weight;
 	}
 
 	//! W1: adds to `w1` the running sum of the weights, per group in order of the weight, and the total of the weights
 	//! of the rows fixed to 1.
 	void AddGroupWindows(LogicalWindow &w1, const DirectRankedColumns &rows) override {
-		vector<ExprPtr> partitions;
-		for (idx_t i = 0; i < rows.carried.keys.size(); i++) {
-			partitions.push_back(Column(rows.carried.key.types[i], rows.carried.keys[i]));
-		}
 		auto key = RankKey();
-		w1.expressions.push_back(DirectRunningSum(optimizer, calc, key, key, RankOrder(), partitions));
+		auto sum = DirectRunningSum(optimizer, calc, key, key, RankOrder(), {});
+		PartitionByGroup(rows.carried, *sum);
+		w1.expressions.push_back(std::move(sum));
 		total = ColumnBinding(w1.window_index, w1.expressions.size() - 1);
 		if (HasFixes()) {
 			auto sum = DirectWindowExtremum(optimizer, "sum", calc.Out(Column(LogicalType::DOUBLE, fixed_weight)));
@@ -393,17 +387,14 @@ private:
 	}
 
 	//! P2: the checks of the rows fixed to 1: their total and its sum with the prefix total are numbers the plan
-	//! computes (a DOUBLE overflow), and a row that allows neither value is fixed to both.
-	void AddFixedChecks(const DirectRankedColumns &input, const ExprPtr &spent) {
+	//! computes (a DOUBLE overflow).
+	void AddFixedChecks(const ExprPtr &spent) {
 		if (!HasFixes()) {
 			return;
 		}
 		checks_above.push_back(
 		    DirectRaiseTooLarge(optimizer, Column(LogicalType::DOUBLE, fixed_total), condition.budget.names[0].clause));
 		checks_above.push_back(DirectRaiseTooLarge(optimizer, spent, condition.budget.names[0].clause));
-		auto both = calc.If(Column(LogicalType::BOOLEAN, input.fixed_one),
-		                    Column(LogicalType::BOOLEAN, input.fixed_zero), calc.Bool(false));
-		checks_above.push_back(DirectRaiseIf(calc, calc.Out(both), DirectInfeasibleErrorPredicate(optimizer, errors)));
 	}
 
 	//! P2: the rank of the row when its prefix total fits the group's limit, whether the empty prefix does, and the
@@ -433,7 +424,7 @@ private:
 		// The weights are numbers by now (the checks above). A prefix total past a DOUBLE, in either direction, is a
 		// number the plan computes, and it names the budget as the solver path names a number it computes.
 		checks_above.push_back(DirectRaiseTooLarge(optimizer, prefix_total, condition.budget.names[0].clause));
-		AddFixedChecks(input, spent);
+		AddFixedChecks(spent);
 	}
 
 	//! The largest rank that fits, not the first that fails: with negative weights the prefix totals fall first. For a
@@ -444,22 +435,20 @@ private:
 	}
 
 	//! Whether the row's group fits a prefix: some rank fits, or the empty prefix does (with the rows fixed to 1). A
-	//! row outside every group has no budget. Null where no group can fit none.
-	ExprPtr GroupVerdict(const DirectRankedColumns &rows, const ExprPtr &size) override {
+	//! row outside every group has no budget (the builder). Null where no group can fit none.
+	ExprPtr GroupVerdict(const DirectRankedColumns &rows) override {
 		if (!NeedsVerdict()) {
 			return nullptr;
 		}
-		auto has_prefix = calc.Any({calc.Not(calc.IsNull(size)), Column(LogicalType::BOOLEAN, empty_fits)});
-		return scoped ? calc.If(Column(LogicalType::BOOLEAN, rows.carried.eligible), has_prefix, calc.Bool(true))
-		              : has_prefix;
+		return calc.Any({calc.Not(calc.IsNull(rows.size)), Column(LogicalType::BOOLEAN, empty_fits)});
 	}
 
-	//! Whether the row is selected: it is in the prefix of the group's size, unless a clause fixes it.
-	ExprPtr Chosen(const DirectRankedColumns &rows, const ExprPtr &size) override {
+	//! Whether the row is selected: it is in the prefix of the group's size.
+	ExprPtr Chosen(const DirectRankedColumns &rows) override {
 		// When no rank fits, k is NULL and the empty prefix, rank 0, is the one selected. For a minimum the empty
 		// prefix is the shortest one, so it is taken whenever it reaches B.
 		auto zero = calc.Constant(Value::BIGINT(0));
-		auto prefix_size = calc.Coalesce({size, zero});
+		auto prefix_size = calc.Coalesce({rows.size, zero});
 		if (condition.at_least) {
 			prefix_size = calc.If(Column(LogicalType::BOOLEAN, empty_fits), zero, prefix_size);
 		}
@@ -473,10 +462,6 @@ private:
 		if (DropsRowsFromObjective()) {
 			// A row the budget's `when` drops adds nothing to the objective and costs nothing: it is not selected.
 			chosen = calc.If(Column(LogicalType::BOOLEAN, kept_after), chosen, calc.Bool(false));
-		}
-		if (HasFixes()) {
-			chosen = calc.If(Column(LogicalType::BOOLEAN, rows.fixed_one), calc.Bool(true),
-			                 calc.If(Column(LogicalType::BOOLEAN, rows.fixed_zero), calc.Bool(false), chosen));
 		}
 		return chosen;
 	}

@@ -1429,9 +1429,9 @@ _LATE_MATERIALIZATION_AROUND_CTES = {
         "direct_bound",
         2,
     ),
-    # S1 computes the group bound `cap` on a read of its own, so the rule reads the source twice and the three reads
-    # (with the row check's) scan a copy: the copy's scan and the payload's.
-    "row_check": ("DECIDE x(BOOL) SUCH THAT per g: SUM(x) <= cap MAXIMIZE SUM(score * x)", "direct_verdict", 2),
+    # S1 reads the group bound `cap` in its rank window, over its one read, so the rule's read and the row check's are
+    # two reads and no copy is made: the scans are the rule's, the row check's and the payload's.
+    "row_check": ("DECIDE x(BOOL) SUCH THAT per g: SUM(x) <= cap MAXIMIZE SUM(score * x)", "direct_verdict", 3),
     "copied_source": (
         "DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND 1 AND SUM(cap * x) <= 5000 MAXIMIZE SUM(score * x)",
         "direct_stage",
