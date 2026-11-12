@@ -1,12 +1,12 @@
 #include "duckdb/optimizer/decide/direct/direct_rules.hpp"
 
 #include <cmath>
-#include <functional>
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
+#include "duckdb/optimizer/decide/direct/direct_ranked_prefix.hpp"
 #include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
 #include "duckdb/optimizer/decide/direct/direct_source_reader.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
@@ -229,19 +229,19 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 	return std::isfinite(total) && (condition.at_least ? total > 0 : total < 0);
 }
 
-//! The plan, over one read of the source, all in windows (no hash aggregate, no join back):
+//! The plan, over one read of the source, all in windows (no hash aggregate, no join back). The shared ranked-prefix
+//! plan (DirectRankedPrefix) fixes its shape; S3 gives the ranking, the prefix test and the answer:
 //!
 //!   [W0]  the source read
 //!   S     the scope projection (DirectProjectScope): the eligible flag and the group key, for a `by` budget or a
 //!         `when`; and whether a clause fixes the row to 1 or to 0
 //!   P1    the rows' weights `w` and what the data limit reads; a fixed row has no weight in the prefix
-//!   W1    per group, the free rows in order of `w`: their running sum of `w` (the prefix total) and their rank; the
-//!         total of the weights of the rows fixed to 1; and the group's limit B (DirectWindowSink)
+//!   W1    per group, the free rows in order of `w`: their rank and running sum of `w` (the prefix total); the total
+//!         of the weights of the rows fixed to 1; and the group's limit B (DirectWindowSink)
 //!   P2    whether the row's prefix fits (`fixed total + total <= B`), the rank when it does, and the checks: the
 //!         weight, what the limit reads and what it gives, and a row fixed to both values
 //!   W2    per group, k, the largest rank that fits (NULL when none does); for a minimum, the smallest rank that
-//!   reaches
-//!         B, with the order of W1 reversed
+//!         reaches B, with the order of W1 reversed
 //!   W3    over all the rows, whether every group fits a prefix; only when a group can fit none (NeedsVerdict)
 //!   P4    the source columns, x = 1 when the rank is at most k, and the column that holds the checks
 //!
@@ -251,140 +251,49 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //! released, not when a row of that group is reached.
 //!
 //! The slot map: the source columns in order (the reader's: the source row id and the bounds' values come after the
-//! node's, and the driver drops them), then x (INTEGER 0/1), then the column of the checks, which keeps them live
-//! (`validated_columns`). A row outside every budget (a NULL in a NO_GROUP element of the `by` key, D5, or dropped by
-//! the budget's `when`) is in no budget and selecting it costs nothing, so x = 1 there, unless the objective drops it
-//! too (its `when` is the budget's): then it adds nothing and x = 0.
+//! node's, and the driver drops them), then x (INTEGER 0/1), then the hidden rank and the column of the checks, which
+//! keep the plan live (`validated_columns`). A row outside every budget (a NULL in a NO_GROUP element of the `by` key,
+//! D5, or dropped by the budget's `when`) is in no budget and selecting it costs nothing, so x = 1 there, unless the
+//! objective drops it too (its `when` is the budget's): then it adds nothing and x = 0.
 //!
 //! Rows of equal weight are ordered as the sort gives them, and the answer is right only if the rank and the running
 //! sum see the same order: with two sorts, tied rows a and b of weight 5 under B = 7 could be ranked a, b by one and
 //! summed b, a by the other, and both would be selected. W1's rank and running sum have one partition and one order,
-//! so DuckDB sorts them once, and the rank of a row is the position its prefix total was summed at. This relies on
-//! PhysicalPlanGenerator::CreatePlan(LogicalWindow) (src/execution/physical_plan/plan_window.cpp), which puts the
-//! windows whose BoundWindowExpression::PartitionsAreEquivalent into one PhysicalWindow and so one sort.
-class PlanBuilder {
+//! so DuckDB sorts them once, and the rank of a row is the position its prefix total was summed at.
+class PlanBuilder final : public DirectRankedPrefix {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
 	            const vector<LogicalType> &source_types_p, const DirectStateErrors &errors_p)
-	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context),
-	      source_bindings(source_bindings_p), source_types(source_types_p), errors(errors_p),
-	      scoped(condition_p.scope.Scoped()) {
-		D_ASSERT(source_bindings.size() == source_types.size());
-		auto &limit = condition.limit;
-		if (limit.constant) {
-			return;
+	    : DirectRankedPrefix(optimizer_p, source_bindings_p, source_types_p, errors_p, condition_p.scope,
+	                         condition_p.fixed),
+	      condition(condition_p) {
+		if (!condition.limit.constant) {
+			limit_bound = condition.limit.data.GroupBound(optimizer);
+			limit_index = AddGroupBound(*limit_bound);
 		}
-		limit_bound = limit.data.GroupBound(optimizer);
-	}
-
-	DirectSubstitute Build(unique_ptr<LogicalOperator> rows) const {
-		// The flags of the rows the clauses fix, over the source, as S1 computes them: in the scope projection.
-		vector<unique_ptr<Expression>> flags;
-		if (HasFixes()) {
-			flags.push_back(DirectAnyCondition(calc, condition.fixed.one_conditions));
-			flags.push_back(DirectAnyCondition(calc, condition.fixed.zero_conditions));
-		}
-		auto state = DirectProjectScope(binder, std::move(rows), scoped, condition.scope.when.get(),
-		                                condition.scope.keys, std::move(flags), nullptr);
-		auto from_scope = DirectCarriedOf(state, source_bindings.size());
-
-		DirectProjectionStage p1(binder.GenerateTableIndex());
-		auto weighted = LayoutWeights(p1, from_scope, state);
-		auto plan = p1.Finish(std::move(state.plan));
-
-		auto w1 = make_uniq<LogicalWindow>(binder.GenerateTableIndex());
-		auto sorted = AddPrefixWindows(*w1, weighted);
-		w1->children.push_back(std::move(plan));
-
-		DirectProjectionStage p2(binder.GenerateTableIndex());
-		auto fitted = ComputeFits(p2, weighted, sorted);
-		plan = p2.Finish(std::move(w1));
-
-		auto w2 = make_uniq<LogicalWindow>(binder.GenerateTableIndex());
-		// The largest rank that fits, not the first that fails: with negative weights the prefix totals fall first. For
-		// a minimum, the smallest rank that reaches B, not the first that falls short of it.
-		auto extreme = DirectWindowExtremum(optimizer, condition.at_least ? "min" : "max",
-		                                    calc.Out(Column(LogicalType::BIGINT, fitted.fit_rank)));
-		PartitionByGroup(fitted.carried, *extreme);
-		w2->expressions.push_back(std::move(extreme));
-		auto k = Column(LogicalType::BIGINT, ColumnBinding(w2->window_index, 0));
-		w2->children.push_back(std::move(plan));
-		plan = std::move(w2);
-
-		ExprPtr feasible;
-		if (NeedsVerdict()) {
-			auto w3 = make_uniq<LogicalWindow>(binder.GenerateTableIndex());
-			w3->expressions.push_back(DirectWindowExtremum(optimizer, "bool_and", calc.Out(GroupHasPrefix(fitted, k))));
-			feasible = Column(LogicalType::BOOLEAN, ColumnBinding(w3->window_index, 0));
-			w3->children.push_back(std::move(plan));
-			plan = std::move(w3);
-		}
-		return Answer(std::move(plan), fitted, k, feasible);
 	}
 
 private:
-	//! Columns of P1.
-	struct Weighted {
-		DirectCarried carried;
-		//! The row's weight; NULL on a row the budget's `when` drops.
-		ColumnBinding weight;
-		//! The weight the prefix sums and sorts: NULL on a row fixed to 0 or to 1, which is not in the prefix. The
-		//! weight itself without fixed rows.
-		ColumnBinding sort_weight;
-		//! The weight of a row fixed to 1, NULL elsewhere; set only with fixed rows.
-		ColumnBinding fixed_weight;
-		//! Whether a clause fixes the row to 1 and to 0; set only with fixed rows.
-		ColumnBinding fixed_one;
-		ColumnBinding fixed_zero;
-		//! Whether the budget's `when` keeps the row; set only when the objective counts the budget's rows only.
-		ColumnBinding kept;
-		//! What the aggregates of the data limit read, one member per input of the limit's group bound.
-		vector<DirectGroupInputColumns> limit_inputs;
-		//! The checks of the weight and of what the limit reads. Each reads P1's columns, so P2 evaluates them.
-		vector<unique_ptr<Expression>> checks;
-	};
-	//! Where W1 puts the row's prefix total and rank, and what the group's limit gives.
-	struct Sorted {
-		ColumnBinding total;
-		ColumnBinding rank;
-		//! The sum of the weights of the group's rows fixed to 1 (NULL for none); set only with fixed rows.
-		ColumnBinding fixed_total;
-		DirectGroupValues limit;
-	};
-	//! Columns of P2.
-	struct Fitted {
-		DirectCarried carried;
-		ColumnBinding rank;
-		//! The rank when the row's prefix fits the limit, else NULL.
-		ColumnBinding fit_rank;
-		//! Whether the budget's `when` keeps the row; set only when the objective counts the budget's rows only.
-		ColumnBinding kept;
-		ColumnBinding fixed_one;
-		ColumnBinding fixed_zero;
-		//! Whether the empty prefix fits the limit; set only when a verdict is needed.
-		ColumnBinding empty_fits;
-		ColumnBinding valid;
-	};
-
 	const Condition &condition;
-	Optimizer &optimizer;
-	Binder &binder;
-	ExpressionBuilder calc;
-	vector<ColumnBinding> source_bindings;
-	vector<LogicalType> source_types;
-	const DirectStateErrors &errors;
-	//! Whether the budget has a `by` key.
-	bool scoped;
 	//! The group bound of the data limit; null for a constant limit.
 	unique_ptr<DecideGroupBound> limit_bound;
-
-	ExprPtr Column(const LogicalType &type, ColumnBinding binding) const {
-		return calc.Col(type, binding);
-	}
-
-	bool HasFixes() const {
-		return condition.fixed.Any();
-	}
+	idx_t limit_index = DConstants::INVALID_INDEX;
+	//! P1: the weight of the row, and what the weight of a row fixed to 1 and the objective's rows add.
+	ColumnBinding weight;
+	//! The weight of a row fixed to 1, NULL elsewhere; set only with fixed rows.
+	ColumnBinding fixed_weight;
+	//! Whether the budget's `when` keeps the row, in P1 and in P2; set only when the objective counts the budget's rows
+	//! only.
+	ColumnBinding kept;
+	ColumnBinding kept_after;
+	//! W1: the prefix total, and the total of the weights of the group's rows fixed to 1 (NULL for none); the second is
+	//! set only with fixed rows.
+	ColumnBinding total;
+	ColumnBinding fixed_total;
+	//! P2: the rank when the row's prefix fits the limit, else NULL; and whether the empty prefix fits the limit, set
+	//! only when a verdict or a minimum needs it.
+	ColumnBinding fit_rank;
+	ColumnBinding empty_fits;
 
 	//! Whether the plan must tell a row the budget's `when` drops from the objective's: a maximum selects such a row
 	//! unless the objective drops it too. A minimum never selects a row outside the budget, so the objective's `when`
@@ -408,251 +317,168 @@ private:
 		return NeedsVerdict() || condition.at_least;
 	}
 
-	//! Makes `window` run over the rows of the row's group. A row outside every group has a NULL where the key is
-	//! compared with `=`, so it is apart from every group.
-	void PartitionByGroup(const DirectCarried &carried, BoundWindowExpression &window) const {
-		for (idx_t i = 0; i < carried.keys.size(); i++) {
-			window.partitions.push_back(calc.Out(Column(carried.key.types[i], carried.keys[i])));
-		}
-	}
-
-	//! P1: what the aggregates of the data limit read, one member per input of the limit's group bound, and the
-	//! check of each (a NaN limit).
-	void LayoutLimitInputs(DirectProjectionStage &p1, const DirectCarried &from_scope,
-	                       const std::function<unique_ptr<Expression>(const Expression &)> &over_state,
-	                       Weighted &result) const {
-		if (!limit_bound) {
-			return;
-		}
-		auto eligible = scoped ? Column(LogicalType::BOOLEAN, from_scope.eligible) : nullptr;
-		result.limit_inputs =
-		    DirectLayoutGroupInputs(optimizer, calc, p1, *limit_bound, eligible, over_state, &result.checks);
-	}
-
-	//! P1: whether a clause fixes the row to 1 and to 0 (the scope projection computed both), the weight of a row fixed
-	//! to 1, and the weight the prefix sums. A fixed row leaves the prefix: its weight is NULL there, which the sum
-	//! skips and the sort puts last.
-	void LayoutFixedRows(DirectProjectionStage &p1, const DirectScopeState &state, const ExprPtr &weight,
-	                     Weighted &result) const {
-		auto no_weight = calc.Constant(Value(LogicalType::DOUBLE));
-		auto fixed_one = Column(LogicalType::BOOLEAN, state.extra[0]);
-		auto fixed_zero = Column(LogicalType::BOOLEAN, state.extra[1]);
-		result.fixed_one = p1.Add(fixed_one);
-		result.fixed_zero = p1.Add(fixed_zero);
-		result.fixed_weight = p1.Add(calc.If(fixed_one, weight, no_weight));
-		result.sort_weight = p1.Add(calc.If(fixed_one, no_weight, calc.If(fixed_zero, no_weight, weight)));
+	//! The smallest weights have the smallest total of any k rows, the largest the largest.
+	OrderType RankOrder() const override {
+		return condition.at_least ? OrderType::DESCENDING : OrderType::ASCENDING;
 	}
 
 	//! P1: the weight of each row, `sum(sign * coefficient)` of the budget's terms, checked as the solver checks a
-	//! coefficient (a NULL term reads 0: the front end guards it), and what the data limit reads.
-	Weighted LayoutWeights(DirectProjectionStage &p1, const DirectCarried &from_scope,
-	                       const DirectScopeState &state) const {
-		auto state_index = state.state_index;
-		Weighted result;
-		result.carried = p1.Forward(from_scope, source_types, scoped);
+	//! coefficient (a NULL term reads 0: the front end guards it), the checks of the values a clause fixes, and the
+	//! weight of a row fixed to 1. A fixed row leaves the prefix: its ranking weight is NULL, which the sum skips and
+	//! the sort puts last.
+	ColumnBinding LayoutRows(DirectProjectionStage &p1, const DirectScopeState &state) override {
 		auto over_state = [&](const Expression &value) {
-			return state_index == DConstants::INVALID_INDEX ? value.Copy()
-			                                                : DirectOverProjection(value, source_bindings, state_index);
+			return OverState(state, value);
 		};
-		auto &checks = result.checks;
-		LayoutLimitInputs(p1, from_scope, over_state, result);
-		for (auto &fixed : condition.fixed.source_values) {
-			auto message = DirectFixedValueMessage(optimizer.context, calc, fixed, over_state);
-			checks.push_back(DirectRaiseMessage(optimizer, calc, Column(LogicalType::VARCHAR, p1.Add(message))));
+		for (auto &source : condition.fixed.source_values) {
+			auto message = DirectFixedValueMessage(optimizer.context, calc, source, over_state);
+			checks_above.push_back(DirectRaiseMessage(optimizer, calc, Column(LogicalType::VARCHAR, p1.Add(message))));
 		}
 		auto values = DirectValuesOn(condition.budget, 0);
 		// A row the `when` drops reads no weight: it is NULL there, so the check passes it and no total counts it.
-		ExprPtr kept;
-		if (condition.scope.when) {
-			kept = calc.Wrap(DirectActiveWhen(calc, over_state(*condition.scope.when).get()));
+		ExprPtr kept_when;
+		if (scope.when) {
+			kept_when = calc.Wrap(DirectActiveWhen(calc, over_state(*scope.when).get()));
 			if (DropsRowsFromObjective()) {
-				result.kept = p1.Add(kept);
+				kept = p1.Add(kept_when);
 			}
 		}
-		auto weight = DirectOnKeptRows(calc, kept, calc.Wrap(DirectSumOf(optimizer, values, over_state)));
-		result.weight = p1.Add(weight);
-		result.sort_weight = result.weight;
+		auto weight_value = DirectOnKeptRows(calc, kept_when, calc.Wrap(DirectSumOf(optimizer, values, over_state)));
+		weight = p1.Add(weight_value);
 		if (HasFixes()) {
-			LayoutFixedRows(p1, state, weight, result);
+			fixed_weight = p1.Add(calc.If(FixedOne(state), weight_value, calc.Constant(Value(LogicalType::DOUBLE))));
 		}
-		if (auto check = DirectCheckNumber(optimizer, result.weight, condition.budget.names[0], values, source_bindings,
-		                                   p1.index)) {
-			checks.push_back(std::move(check));
+		if (auto check =
+		        DirectCheckNumber(optimizer, weight, condition.budget.names[0], values, source_bindings, p1.index)) {
+			checks_above.push_back(std::move(check));
 		}
-		return result;
+		return RankedKey(p1, state, weight_value, weight);
 	}
 
-	//! W1: adds to `window` the running sum of the weights and the rank, per group in order of the weight, and the
-	//! group's limit. The rank is built by hand: the builder (scalar expressions) has no operation for a window.
-	Sorted AddPrefixWindows(LogicalWindow &window, const Weighted &weighted) const {
-		auto &carried = weighted.carried;
-		auto weight = Column(LogicalType::DOUBLE, weighted.sort_weight);
+	//! W1: adds to `w1` the running sum of the weights, per group in order of the weight, and the total of the weights
+	//! of the rows fixed to 1.
+	void AddGroupWindows(LogicalWindow &w1, const DirectRankedColumns &rows) override {
 		vector<ExprPtr> partitions;
-		for (idx_t i = 0; i < carried.keys.size(); i++) {
-			partitions.push_back(Column(carried.key.types[i], carried.keys[i]));
+		for (idx_t i = 0; i < rows.carried.keys.size(); i++) {
+			partitions.push_back(Column(rows.carried.key.types[i], rows.carried.keys[i]));
 		}
-		Sorted result;
-		// The k lightest rows have the smallest total of any k, the k heaviest the largest.
-		auto order = condition.at_least ? OrderType::DESCENDING : OrderType::ASCENDING;
-		window.expressions.push_back(DirectRunningSum(optimizer, calc, weight, weight, order, partitions));
-		result.total = ColumnBinding(window.window_index, 0);
-		auto rank =
-		    make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT, nullptr, nullptr);
-		rank->start = WindowBoundary::UNBOUNDED_PRECEDING;
-		rank->end = WindowBoundary::UNBOUNDED_FOLLOWING;
-		PartitionByGroup(carried, *rank);
-		rank->orders.emplace_back(order, OrderByNullType::NULLS_LAST, calc.Out(weight));
-		window.expressions.push_back(std::move(rank));
-		result.rank = ColumnBinding(window.window_index, 1);
+		auto key = RankKey();
+		w1.expressions.push_back(DirectRunningSum(optimizer, calc, key, key, RankOrder(), partitions));
+		total = ColumnBinding(w1.window_index, w1.expressions.size() - 1);
 		if (HasFixes()) {
-			auto fixed_total =
-			    DirectWindowExtremum(optimizer, "sum", calc.Out(Column(LogicalType::DOUBLE, weighted.fixed_weight)));
-			PartitionByGroup(carried, *fixed_total);
-			window.expressions.push_back(std::move(fixed_total));
-			result.fixed_total = ColumnBinding(window.window_index, window.expressions.size() - 1);
+			auto sum = DirectWindowExtremum(optimizer, "sum", calc.Out(Column(LogicalType::DOUBLE, fixed_weight)));
+			PartitionByGroup(rows.carried, *sum);
+			w1.expressions.push_back(std::move(sum));
+			fixed_total = ColumnBinding(w1.window_index, w1.expressions.size() - 1);
 		}
-		if (limit_bound) {
-			DirectWindowSink sink(window,
-			                      [&](BoundWindowExpression &aggregate) { PartitionByGroup(carried, aggregate); });
-			result.limit = DirectAddGroupBound(calc, *limit_bound, weighted.limit_inputs, sink,
-			                                   scoped ? Column(LogicalType::BOOLEAN, carried.eligible) : nullptr);
-		}
-		return result;
 	}
 
 	//! The group's limit B as a DOUBLE: NULL when the group has no limit (a NULL data limit skips its instance). The
 	//! group's value is the tightest of its rows': the MIN of a maximum, the MAX of a minimum.
-	ExprPtr LimitOf(const Sorted &sorted) const {
-		return condition.limit.constant
-		           ? calc.Num(condition.limit.number)
-		           : calc.Cast(condition.at_least ? sorted.limit.lower : sorted.limit.upper, LogicalType::DOUBLE);
+	ExprPtr LimitOf() const {
+		if (condition.limit.constant) {
+			return calc.Num(condition.limit.number);
+		}
+		auto &limit = GroupValues(limit_index);
+		return calc.Cast(condition.at_least ? limit.lower : limit.upper, LogicalType::DOUBLE);
 	}
 
 	//! Whether `total <= B` (`total >= B` for a minimum); true when the group has no limit.
-	ExprPtr Fits(const Sorted &sorted, const ExprPtr &total) const {
-		auto limit = LimitOf(sorted);
+	ExprPtr Fits(const ExprPtr &spent) const {
+		auto limit = LimitOf();
 		auto side = condition.at_least ? ExpressionType::COMPARE_GREATERTHANOREQUALTO
 		                               : ExpressionType::COMPARE_LESSTHANOREQUALTO;
-		auto fits = calc.Cmp(side, total, limit);
+		auto fits = calc.Cmp(side, spent, limit);
 		return condition.limit.constant ? fits : calc.If(calc.IsNull(limit), calc.Bool(true), fits);
 	}
 
 	//! P2: the checks of the rows fixed to 1: their total and its sum with the prefix total are numbers the plan
 	//! computes (a DOUBLE overflow), and a row that allows neither value is fixed to both.
-	void AddFixedChecks(vector<unique_ptr<Expression>> &checks, const Weighted &weighted, const Sorted &sorted,
-	                    const ExprPtr &spent) const {
+	void AddFixedChecks(const DirectRankedColumns &input, const ExprPtr &spent) {
 		if (!HasFixes()) {
 			return;
 		}
-		checks.push_back(DirectRaiseTooLarge(optimizer, Column(LogicalType::DOUBLE, sorted.fixed_total),
-		                                     condition.budget.names[0].clause));
-		checks.push_back(DirectRaiseTooLarge(optimizer, spent, condition.budget.names[0].clause));
-		auto both = calc.If(Column(LogicalType::BOOLEAN, weighted.fixed_one),
-		                    Column(LogicalType::BOOLEAN, weighted.fixed_zero), calc.Bool(false));
-		checks.push_back(DirectRaiseIf(calc, calc.Out(both), DirectInfeasibleErrorPredicate(optimizer, errors)));
+		checks_above.push_back(
+		    DirectRaiseTooLarge(optimizer, Column(LogicalType::DOUBLE, fixed_total), condition.budget.names[0].clause));
+		checks_above.push_back(DirectRaiseTooLarge(optimizer, spent, condition.budget.names[0].clause));
+		auto both = calc.If(Column(LogicalType::BOOLEAN, input.fixed_one),
+		                    Column(LogicalType::BOOLEAN, input.fixed_zero), calc.Bool(false));
+		checks_above.push_back(DirectRaiseIf(calc, calc.Out(both), DirectInfeasibleErrorPredicate(optimizer, errors)));
 	}
 
 	//! P2: the rank of the row when its prefix total fits the group's limit, whether the empty prefix does, and the
-	//! checks: the weight and what the limit reads (P1), the prefix total (a DOUBLE overflow), then those of the limit
-	//! (a NaN limit, an `=` limit that takes two values in a group).
-	Fitted ComputeFits(DirectProjectionStage &p2, Weighted &weighted, const Sorted &sorted) const {
-		Fitted result;
-		result.carried = p2.Forward(weighted.carried, source_types, scoped);
-		auto rank = Column(LogicalType::BIGINT, sorted.rank);
-		result.rank = p2.Add(calc.Out(rank));
+	//! checks of the prefix total (a DOUBLE overflow); the limit's own are the builder's (a NaN limit, an `=` limit
+	//! that takes two values in a group).
+	void LayoutPrefix(DirectProjectionStage &p2, const DirectRankedColumns &input) override {
+		auto rank = Column(LogicalType::BIGINT, input.rank);
 		// The prefix and the rows fixed to 1 share the budget: `fixed total + prefix total <= B`, in a DOUBLE.
-		auto total = Column(LogicalType::DOUBLE, sorted.total);
-		ExprPtr fixed_total = calc.Num(0.0);
-		ExprPtr spent = total;
+		auto prefix_total = Column(LogicalType::DOUBLE, total);
+		ExprPtr fixed_sum = calc.Num(0.0);
+		ExprPtr spent = prefix_total;
 		if (HasFixes()) {
-			fixed_total = calc.Coalesce({Column(LogicalType::DOUBLE, sorted.fixed_total), fixed_total});
-			spent = calc.Add(total, fixed_total);
-			result.fixed_one = p2.Add(Column(LogicalType::BOOLEAN, weighted.fixed_one));
-			result.fixed_zero = p2.Add(Column(LogicalType::BOOLEAN, weighted.fixed_zero));
+			fixed_sum = calc.Coalesce({Column(LogicalType::DOUBLE, fixed_total), fixed_sum});
+			spent = calc.Add(prefix_total, fixed_sum);
 		}
 		// A fixed row has no weight in the prefix, so it sorts after the free rows and its running total repeats the
 		// full prefix's. It fits only when the full prefix does, and then every free rank is chosen already: it needs
 		// no mark of its own.
-		auto fits = Fits(sorted, spent);
-		result.fit_rank = p2.Add(calc.Out(calc.If(fits, rank, calc.Constant(Value(LogicalType::BIGINT)))));
+		auto fits = Fits(spent);
+		fit_rank = p2.Add(calc.Out(calc.If(fits, rank, calc.Constant(Value(LogicalType::BIGINT)))));
 		if (DropsRowsFromObjective()) {
-			result.kept = p2.Add(Column(LogicalType::BOOLEAN, weighted.kept));
+			kept_after = p2.Add(Column(LogicalType::BOOLEAN, kept));
 		}
 		if (NeedsEmptyFit()) {
-			result.empty_fits = p2.Add(calc.Out(Fits(sorted, fixed_total)));
+			empty_fits = p2.Add(calc.Out(Fits(fixed_sum)));
 		}
-		auto checks = std::move(weighted.checks);
 		// The weights are numbers by now (the checks above). A prefix total past a DOUBLE, in either direction, is a
 		// number the plan computes, and it names the budget as the solver path names a number it computes.
-		checks.push_back(DirectRaiseTooLarge(optimizer, total, condition.budget.names[0].clause));
-		AddFixedChecks(checks, weighted, sorted, spent);
-		for (auto &message : sorted.limit.messages) {
-			checks.push_back(DirectRaiseMessage(optimizer, calc, message));
-		}
-		result.valid = p2.Add(DirectAllHold(calc, std::move(checks)));
-		return result;
+		checks_above.push_back(DirectRaiseTooLarge(optimizer, prefix_total, condition.budget.names[0].clause));
+		AddFixedChecks(input, spent);
+	}
+
+	//! The largest rank that fits, not the first that fails: with negative weights the prefix totals fall first. For a
+	//! minimum, the smallest rank that reaches B, not the first that falls short of it.
+	unique_ptr<BoundWindowExpression> PrefixSize(const DirectRankedColumns &rows) override {
+		return DirectWindowExtremum(optimizer, condition.at_least ? "min" : "max",
+		                            calc.Out(Column(LogicalType::BIGINT, fit_rank)));
 	}
 
 	//! Whether the row's group fits a prefix: some rank fits, or the empty prefix does (with the rows fixed to 1). A
-	//! row outside every group has no budget.
-	ExprPtr GroupHasPrefix(const Fitted &fitted, const ExprPtr &k) const {
-		auto has_prefix = calc.Any({calc.Not(calc.IsNull(k)), Column(LogicalType::BOOLEAN, fitted.empty_fits)});
-		return scoped ? calc.If(Column(LogicalType::BOOLEAN, fitted.carried.eligible), has_prefix, calc.Bool(true))
+	//! row outside every group has no budget. Null where no group can fit none.
+	ExprPtr GroupVerdict(const DirectRankedColumns &rows, const ExprPtr &size) override {
+		if (!NeedsVerdict()) {
+			return nullptr;
+		}
+		auto has_prefix = calc.Any({calc.Not(calc.IsNull(size)), Column(LogicalType::BOOLEAN, empty_fits)});
+		return scoped ? calc.If(Column(LogicalType::BOOLEAN, rows.carried.eligible), has_prefix, calc.Bool(true))
 		              : has_prefix;
 	}
 
 	//! Whether the row is selected: it is in the prefix of the group's size, unless a clause fixes it.
-	ExprPtr Chosen(const Fitted &fitted, const ExprPtr &k) const {
+	ExprPtr Chosen(const DirectRankedColumns &rows, const ExprPtr &size) override {
 		// When no rank fits, k is NULL and the empty prefix, rank 0, is the one selected. For a minimum the empty
 		// prefix is the shortest one, so it is taken whenever it reaches B.
 		auto zero = calc.Constant(Value::BIGINT(0));
-		auto size = calc.Coalesce({k, zero});
+		auto prefix_size = calc.Coalesce({size, zero});
 		if (condition.at_least) {
-			size = calc.If(Column(LogicalType::BOOLEAN, fitted.empty_fits), zero, size);
+			prefix_size = calc.If(Column(LogicalType::BOOLEAN, empty_fits), zero, prefix_size);
 		}
 		auto chosen =
-		    calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, Column(LogicalType::BIGINT, fitted.rank), size);
+		    calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, Column(LogicalType::BIGINT, rows.rank), prefix_size);
 		if (scoped) {
 			// A row outside every budget costs nothing to select: a maximum selects it, a minimum has no use for it.
 			chosen =
-			    calc.If(Column(LogicalType::BOOLEAN, fitted.carried.eligible), chosen, calc.Bool(!condition.at_least));
+			    calc.If(Column(LogicalType::BOOLEAN, rows.carried.eligible), chosen, calc.Bool(!condition.at_least));
 		}
 		if (DropsRowsFromObjective()) {
 			// A row the budget's `when` drops adds nothing to the objective and costs nothing: it is not selected.
-			chosen = calc.If(Column(LogicalType::BOOLEAN, fitted.kept), chosen, calc.Bool(false));
+			chosen = calc.If(Column(LogicalType::BOOLEAN, kept_after), chosen, calc.Bool(false));
 		}
 		if (HasFixes()) {
-			chosen = calc.If(Column(LogicalType::BOOLEAN, fitted.fixed_one), calc.Bool(true),
-			                 calc.If(Column(LogicalType::BOOLEAN, fitted.fixed_zero), calc.Bool(false), chosen));
+			chosen = calc.If(Column(LogicalType::BOOLEAN, rows.fixed_one), calc.Bool(true),
+			                 calc.If(Column(LogicalType::BOOLEAN, rows.fixed_zero), calc.Bool(false), chosen));
 		}
 		return chosen;
-	}
-
-	//! P4: the source columns, x, and the column of the checks.
-	DirectSubstitute Answer(unique_ptr<LogicalOperator> plan, const Fitted &fitted, const ExprPtr &k,
-	                        const ExprPtr &feasible) const {
-		DirectProjectionStage out(binder.GenerateTableIndex());
-		for (idx_t i = 0; i < source_bindings.size(); i++) {
-			out.Add(calc.Out(Column(source_types[i], fitted.carried.source[i])));
-		}
-		auto chosen = Chosen(fitted, k);
-		out.Add(calc.Out(calc.If(chosen, calc.Constant(Value::INTEGER(1)), calc.Constant(Value::INTEGER(0)))));
-		vector<unique_ptr<Expression>> checks;
-		checks.push_back(calc.Out(Column(LogicalType::BOOLEAN, fitted.valid)));
-		if (feasible) {
-			checks.push_back(
-			    DirectRaiseUnless(calc, calc.Out(feasible), DirectInfeasibleErrorPredicate(optimizer, errors)));
-		}
-		out.Add(DirectAllHold(calc, std::move(checks)));
-
-		DirectSubstitute substitute;
-		substitute.prunable_decisions.push_back(1);
-		for (idx_t i = 0; i < source_bindings.size() + 1; i++) {
-			substitute.slot_map.push_back(i);
-		}
-		substitute.validated_columns.push_back(source_bindings.size() + 1);
-		substitute.child = out.Finish(std::move(plan));
-		return substitute;
 	}
 };
 

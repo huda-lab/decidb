@@ -6,6 +6,7 @@ add_library_unity(
   direct_bound_reader.cpp
   direct_bound_tables.cpp
   direct_plan_fragments.cpp
+  direct_ranked_prefix.cpp
   direct_row_checks.cpp
   direct_runtime_checks.cpp
   direct_rule_driver.cpp
