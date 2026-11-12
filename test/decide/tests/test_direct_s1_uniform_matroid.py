@@ -846,8 +846,8 @@ def _solve_with_oracle(oracle_solver, case):
     return constraints, oracle_solver.solve()
 
 
-def _agree(decidb_cli, oracle_solver, case, wrap="plain"):
-    """Runs the case on the oracle, the solver path and the direct path, and checks they agree."""
+def _agree(decidb_cli, oracle_solver, case, wrap="plain", modes=("off", "require")):
+    """Runs the case on the oracle and on each of `modes` (the solver path and the direct path), and checks they agree."""
     sql = _wrapped_sql(case, wrap)
     rows_data = _dataset(case)
     constraints, oracle = _solve_with_oracle(oracle_solver, case)
@@ -869,7 +869,9 @@ def _agree(decidb_cli, oracle_solver, case, wrap="plain"):
             coeff_fn=lambda row: {"x": float(coefficient(rows_data[by_id[row[0]]]))},
         )
 
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, number_range=writes_number_out_of_range(sql))
+    agree_with_oracle(
+        decidb_cli, sql, oracle, check_assignment, modes=modes, number_range=writes_number_out_of_range(sql)
+    )
 
 
 @pytest.mark.var_boolean
@@ -878,6 +880,26 @@ def _agree(decidb_cli, oracle_solver, case, wrap="plain"):
 @pytest.mark.parametrize("name", sorted(S1_CASES))
 def test_s1_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name):
     _agree(decidb_cli, oracle_solver, S1_CASES[name])
+
+
+# A constant count limit of magnitude 1e20 or more stays with the solver, which reads it as infinite (DirectReadLimit,
+# DECIDE_EFFECTIVE_INFINITY): S1 declines it under `require`, and `auto` runs the solver and answers as the oracle does
+# (no bound for `>= -1e30`, infeasible for `<= -1e30`), which the test checks through `off`.
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("op", [">=", "<="])
+def test_s1_leaves_a_constant_count_limit_beyond_1e20_to_the_solver(decidb_cli, oracle_solver, op):
+    case = {"bounds": [(op, -1e30)]}
+    sql = _wrapped_sql(case, "plain")
+    with pytest.raises(DeciDBCliError) as declined:
+        _run(decidb_cli, sql, "require")
+    assert "decide_direct_solve=require" in str(declined.value), declined.value
+    # The solver warns about the 1e30 on both of its runs: `auto` runs it because the rule declined.
+    _agree(decidb_cli, oracle_solver, case, modes=("off",))
+    assert _outcome(decidb_cli, sql, "auto", expect_number_range=True) == _outcome(
+        decidb_cli, sql, "off", expect_number_range=True
+    )
 
 
 # A strict bound against a fraction, with no `when`, is a bound on the variable that the solver shifts to a whole number

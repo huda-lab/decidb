@@ -1,8 +1,6 @@
 #include "duckdb/optimizer/decide/direct/direct_rules.hpp"
 
 #include <algorithm>
-#include <cmath>
-#include <limits>
 
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/exception.hpp"
@@ -31,18 +29,6 @@ namespace direct_s1_uniform_matroid {
 constexpr const char *RULE_NAME = "S1_UNIFORM_MATROID";
 
 struct Condition final : DirectApplicabilityCondition {
-	struct SourceBound {
-		ExpressionType comparison;
-		//! One value on every row the clause keeps already: read per row. Null with a `group`.
-		unique_ptr<Expression> value;
-		//! The count body is `-x`, so `comparison` is already flipped and the value to compare against is `-B`.
-		bool negated = false;
-		//! The bound-side rewrite left the bound to the plan (DecideGroupBound): the plan computes its aggregates in a
-		//! hash aggregate over the group, joined to every row, and makes the checks the rewrite would have made. Null
-		//! when `value` is read.
-		unique_ptr<DecideGroupBound> group;
-	};
-
 	//! The constraints of the IR, which outlives the condition: the count bounds, and the fixed Boolean values.
 	vector<const DirectIRConstraint *> bound_factors;
 	vector<const DirectIRConstraint *> local_fixes;
@@ -58,7 +44,10 @@ struct Condition final : DirectApplicabilityCondition {
 	//! and the `when` membership.
 	DirectSharedScope scope;
 	DirectFixedValues fixed;
-	vector<SourceBound> source_bounds;
+	//! The count limits read from the data, one per bound whose limit is not a constant (the constant ones fold into
+	//! `lower` and `upper`): a value on every row the clause keeps already, or the aggregates of the group
+	//! (DecideGroupBound), which the plan computes in a hash aggregate over the group, joined to every row.
+	vector<DirectCountLimit> source_bounds;
 };
 
 //! What the sum counts: `direction * (number of selected rows)`.
@@ -77,55 +66,6 @@ bool ReadCountBody(ClientContext &context, const vector<DecideSplitTerm> &terms,
 		return false;
 	}
 	body.direction = slope > 0 ? 1 : -1;
-	return true;
-}
-
-//! Turns `SUM(x) <comparison> expr` (`SUM(x) <comparison> -expr` when `negate`) into an inclusive count limit in
-//! [0, 2^53]. A bound below zero on an upper side is infeasible; one at or below zero on a lower side is no bound.
-//! False when `expr` is not an exactly representable finite constant.
-bool NormalizeCapacity(ClientContext &context, const Expression &expr, ExpressionType comparison, idx_t &capacity,
-                       bool &impossible, bool negate) {
-	double as_double;
-	if (!TryEvaluateFoldableDouble(context, expr, as_double, DIRECT_FINITE_CONSTANT)) {
-		return false;
-	}
-	if (negate) {
-		as_double = -as_double;
-	}
-	double inclusive;
-	switch (comparison) {
-	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-		inclusive = std::ceil(as_double);
-		break;
-	case ExpressionType::COMPARE_GREATERTHAN:
-		if (as_double >= DECIDE_MAX_EXACT_INTEGER) {
-			return false;
-		}
-		inclusive = DecideStrictBound(true, as_double);
-		break;
-	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-		inclusive = std::floor(as_double);
-		break;
-	case ExpressionType::COMPARE_LESSTHAN:
-		inclusive = DecideStrictBound(false, as_double);
-		break;
-	default:
-		return false;
-	}
-	if (DirectIsLowerBound(comparison)) {
-		if (inclusive <= 0.0) {
-			capacity = 0;
-			return true;
-		}
-	} else if (inclusive < 0.0) {
-		impossible = true;
-		capacity = 0;
-		return true;
-	}
-	if (!DecideIsWithinExactRange(inclusive)) {
-		return false;
-	}
-	capacity = static_cast<idx_t>(inclusive);
 	return true;
 }
 
@@ -184,54 +124,42 @@ bool Rule::ProveScope(const DirectIR &ir, Condition &condition) const {
 }
 
 //! The count bounds: constant ones fold into one inclusive interval, source-valued ones are kept for the plan to
-//! read per group. Every bound counts `x` once, as `x` or `-x`; `SUM(-x) <op> B` is `SUM(x) <flipped op> -B`. A
-//! constant term in the body (`SUM(x + c)`) is a decline.
+//! read per group. Every bound counts `x` once, as `x` or `-x` (DirectReadCountLimit). A constant term in the body
+//! (`SUM(x + c)`) is a decline.
 bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition) const {
-	auto fold_bound = [&](const Expression &bound, ExpressionType side, idx_t &target, bool negate) {
-		bool impossible = false;
-		if (!NormalizeCapacity(context, bound, side, target, impossible, negate)) {
-			return false;
-		}
-		condition.impossible |= impossible;
-		return true;
-	};
 	for (auto factor : condition.bound_factors) {
 		auto sum = factor->PlainSum();
 		CountBody body;
-		if (!ReadCountBody(context, sum->terms, body)) {
+		DirectCountLimit count;
+		if (!ReadCountBody(context, sum->terms, body) ||
+		    !DirectReadCountLimit(ir, context, *factor, body.direction < 0, count)) {
 			return false;
-		}
-		auto &bound = *factor->rhs;
-		bool negated = body.direction < 0;
-		auto type = negated ? FlipComparisonExpression(factor->comparison) : factor->comparison;
-		if (factor->group_bound) {
-			if (!DirectGroupBoundIsReadable(ir, *factor->group_bound)) {
-				return false;
-			}
-			condition.source_bounds.push_back({type, nullptr, negated, factor->group_bound->Copy()});
-			continue;
 		}
 		// A source-valued bound has one value per group already. The plan evaluates it on the rows of the groups, as
 		// the solver does, so an expression that can raise (an overflow in `COUNT(*) * k` over a window column) raises
 		// on both paths or on neither.
-		if (!bound.IsFoldable() && DirectIsSourceOnlyNumericMayRaise(bound, ir.decide_index, ir.source_bindings)) {
-			condition.source_bounds.push_back({type, bound.Copy(), negated, nullptr});
+		if (!count.limit.constant) {
+			condition.source_bounds.push_back(std::move(count));
 			continue;
 		}
-		if (DirectIsLowerBound(type)) {
+		auto fold_side = [&](bool upper, idx_t &rows) {
+			bool impossible = false;
+			if (!DirectInclusiveRows(count.limit.number, count.comparison, upper, rows, impossible)) {
+				return false;
+			}
+			condition.impossible |= impossible;
+			return true;
+		};
+		if (DirectIsLowerBound(count.comparison)) {
 			idx_t lower;
-			if (!fold_bound(bound,
-			                type == ExpressionType::COMPARE_EQUAL ? ExpressionType::COMPARE_GREATERTHANOREQUALTO : type,
-			                lower, negated)) {
+			if (!fold_side(false, lower)) {
 				return false;
 			}
 			condition.lower = std::max(condition.lower, lower);
 		}
-		if (DirectIsUpperBound(type)) {
+		if (DirectIsUpperBound(count.comparison)) {
 			idx_t upper;
-			if (!fold_bound(bound,
-			                type == ExpressionType::COMPARE_EQUAL ? ExpressionType::COMPARE_LESSTHANOREQUALTO : type,
-			                upper, negated)) {
+			if (!fold_side(true, upper)) {
 				return false;
 			}
 			condition.upper = condition.has_upper ? std::min(condition.upper, upper) : upper;
@@ -277,7 +205,8 @@ public:
 		for (auto &bound : condition.source_bounds) {
 			source_lower |= DirectIsLowerBound(bound.comparison);
 			source_upper |= DirectIsUpperBound(bound.comparison);
-			group_bound.push_back(bound.group ? AddGroupBound(*bound.group) : DConstants::INVALID_INDEX);
+			group_bound.push_back(bound.limit.data.group ? AddGroupBound(*bound.limit.data.group)
+			                                             : DConstants::INVALID_INDEX);
 		}
 		has_lower = condition.lower || source_lower;
 		has_upper = condition.has_upper || source_upper;
@@ -297,7 +226,7 @@ private:
 	//! Each source-valued count bound's index among the builder's group bounds; unset for a bound read per row.
 	vector<idx_t> group_bound;
 	//! P1: the row's score, and each source-valued count bound's value (unset for a bound of the group's aggregates).
-	ColumnBinding score;
+	ColumnBinding score_column;
 	vector<ColumnBinding> bound_columns;
 	//! W1: the count of the group's rows fixed to 1 (set only with fixed rows) and of its rows free to take either
 	//! value, or all of them without fixed rows (set only where a lower bound can fail).
@@ -334,15 +263,15 @@ private:
 			return OverState(state, value);
 		};
 		auto combined_score = condition.score.Combined(calc, optimizer, over_state, part_scores);
-		score = p1.Add(calc.Out(combined_score));
+		score_column = p1.Add(calc.Out(combined_score));
 		for (auto &bound : condition.source_bounds) {
-			if (bound.group) {
+			if (bound.limit.data.group) {
 				bound_columns.emplace_back();
 				continue;
 			}
 			// A bound is read on the eligible rows only. On a row its clause's `when` drops, the windows it reads hold
 			// NULL or a count of 0, so computing it there raises nothing.
-			auto value = OverState(state, *bound.value);
+			auto value = over_state(*bound.limit.data.value);
 			if (bound.negated) {
 				value = DirectScaledTerm(optimizer, std::move(value), -1);
 			}
@@ -352,7 +281,7 @@ private:
 			checks_below.push_back(DirectRaiseMessage(
 			    optimizer, calc, condition.score.Message(calc, optimizer, over_state, combined_score, part_scores)));
 		}
-		return score;
+		return score_column;
 	}
 
 	//! A row with no fixed value, neither to one nor to zero.
@@ -394,7 +323,7 @@ private:
 	//! the limit the bound gives on the other side as written, negated.
 	ExprPtr BoundValue(idx_t index, bool upper) const {
 		auto &bound = condition.source_bounds[index];
-		if (!bound.group) {
+		if (!bound.limit.data.group) {
 			return calc.Col(LogicalType::DOUBLE, bound_columns[index]);
 		}
 		auto &values = GroupValues(group_bound[index]);
@@ -412,26 +341,7 @@ private:
 		auto &bound = condition.source_bounds[index];
 		// Every caller asks for a side the bound has: an upper limit of an upper bound, a lower of a lower bound.
 		D_ASSERT(upper ? DirectIsUpperBound(bound.comparison) : DirectIsLowerBound(bound.comparison));
-		auto cap = [&]() {
-			return BoundValue(index, upper);
-		};
-		bool strict =
-		    bound.comparison == (upper ? ExpressionType::COMPARE_LESSTHAN : ExpressionType::COMPARE_GREATERTHAN);
-		auto inclusive = calc.Cast(calc.Fn(upper == strict ? "ceil" : "floor", cap()), LogicalType::BIGINT);
-		if (strict) {
-			auto one = calc.Constant(Value::BIGINT(1));
-			inclusive = upper ? calc.Sub(inclusive, one) : calc.Add(inclusive, one);
-		}
-		auto beyond_bigint =
-		    calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, cap(), calc.Num(DECIDE_FIRST_DOUBLE_BEYOND_BIGINT));
-		auto bounded =
-		    calc.If(beyond_bigint, calc.Constant(Value::BIGINT(std::numeric_limits<int64_t>::max())), inclusive);
-		auto below_zero =
-		    calc.Cmp(strict == upper ? ExpressionType::COMPARE_LESSTHANOREQUALTO : ExpressionType::COMPARE_LESSTHAN,
-		             cap(), calc.Num(0.0));
-		auto limit = calc.If(below_zero, calc.Constant(Value::BIGINT(upper ? -1 : 0)), bounded);
-		auto open = calc.Constant(Value::BIGINT(upper ? std::numeric_limits<int64_t>::max() : 0));
-		return calc.If(calc.IsNull(cap()), open, limit);
+		return DirectInclusiveRowsExpr(calc, bound.comparison, upper, [&]() { return BoundValue(index, upper); });
 	}
 
 	//! Largest lower limit across the constant and source-valued bounds.
@@ -515,7 +425,7 @@ private:
 
 	//! P2: the score, how many rows of the group the limits leave to the free rows, and whether the group is feasible.
 	void LayoutPrefix(DirectProjectionStage &p2, const DirectRankedColumns &input) override {
-		score_after = p2.Add(Column(LogicalType::DOUBLE, score));
+		score_after = p2.Add(Column(LogicalType::DOUBLE, score_column));
 		auto remaining = [&](const ExprPtr &limit) {
 			return calc.Out(HasFixes() ? calc.Sub(limit, Column(LogicalType::BIGINT, fixed_count)) : limit);
 		};

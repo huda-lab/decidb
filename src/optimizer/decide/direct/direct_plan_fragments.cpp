@@ -1,7 +1,9 @@
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 
 #include <cmath>
+#include <limits>
 
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/enums/cte_materialize.hpp"
 #include "duckdb/common/enums/decide.hpp"
@@ -733,6 +735,44 @@ ExprPtr DirectFixedValueMessage(ClientContext &context, const ExpressionBuilder 
 //===--------------------------------------------------------------------===//
 // Group bounds
 //===--------------------------------------------------------------------===//
+
+bool DirectInclusiveRows(double limit, ExpressionType comparison, bool upper, idx_t &rows, bool &impossible) {
+	bool strict = comparison == (upper ? ExpressionType::COMPARE_LESSTHAN : ExpressionType::COMPARE_GREATERTHAN);
+	// Past 2^53 a whole number cannot step by one: floor(limit) + 1 would round back onto the limit.
+	if (strict && !upper && limit >= DECIDE_MAX_EXACT_INTEGER) {
+		return false;
+	}
+	double inclusive = strict ? DecideStrictBound(!upper, limit) : (upper ? std::floor(limit) : std::ceil(limit));
+	rows = 0;
+	if (upper ? inclusive < 0.0 : inclusive <= 0.0) {
+		impossible |= upper;
+		return true;
+	}
+	if (!DecideIsWithinExactRange(inclusive)) {
+		return false;
+	}
+	rows = static_cast<idx_t>(inclusive);
+	return true;
+}
+
+ExprPtr DirectInclusiveRowsExpr(const ExpressionBuilder &calc, ExpressionType comparison, bool upper,
+                                const std::function<ExprPtr()> &value) {
+	bool strict = comparison == (upper ? ExpressionType::COMPARE_LESSTHAN : ExpressionType::COMPARE_GREATERTHAN);
+	auto inclusive = calc.Cast(calc.Fn(upper == strict ? "ceil" : "floor", value()), LogicalType::BIGINT);
+	if (strict) {
+		auto one = calc.Constant(Value::BIGINT(1));
+		inclusive = upper ? calc.Sub(inclusive, one) : calc.Add(inclusive, one);
+	}
+	auto beyond_bigint =
+	    calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, value(), calc.Num(DECIDE_FIRST_DOUBLE_BEYOND_BIGINT));
+	auto bounded = calc.If(beyond_bigint, calc.Constant(Value::BIGINT(std::numeric_limits<int64_t>::max())), inclusive);
+	auto below_zero =
+	    calc.Cmp(strict == upper ? ExpressionType::COMPARE_LESSTHANOREQUALTO : ExpressionType::COMPARE_LESSTHAN,
+	             value(), calc.Num(0.0));
+	auto limit = calc.If(below_zero, calc.Constant(Value::BIGINT(upper ? -1 : 0)), bounded);
+	auto open = calc.Constant(Value::BIGINT(upper ? std::numeric_limits<int64_t>::max() : 0));
+	return calc.If(calc.IsNull(value()), open, limit);
+}
 
 unique_ptr<DecideGroupBound> DirectTightestBound(Optimizer &optimizer, ExpressionType comparison,
                                                  unique_ptr<Expression> rhs, const string &text,

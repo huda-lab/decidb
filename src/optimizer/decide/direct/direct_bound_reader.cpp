@@ -209,6 +209,19 @@ bool DirectReadLimit(const DirectIR &ir, ClientContext &context, const DirectIRC
 	return true;
 }
 
+bool DirectReadCountLimit(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &constraint,
+                          bool negated, DirectCountLimit &count) {
+	count.negated = negated;
+	count.comparison = negated ? FlipComparisonExpression(constraint.comparison) : constraint.comparison;
+	if (!DirectReadLimit(ir, context, constraint, count.limit)) {
+		return false;
+	}
+	if (negated && count.limit.constant) {
+		count.limit.number = -count.limit.number;
+	}
+	return true;
+}
+
 DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedValue> &values, const string &clause) {
 	DirectNumberNames names;
 	for (auto &value : values) {

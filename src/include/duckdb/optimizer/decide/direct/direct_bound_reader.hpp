@@ -155,6 +155,24 @@ struct DirectLimit {
 bool DirectReadLimit(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &constraint,
                      DirectLimit &limit);
 
+//! The limit of a count constraint `SUM(x) <comparison> B`, or `SUM(-x) <comparison> B`, read as a limit on the count
+//! `SUM(x)` itself: `SUM(-x) <= B` is `SUM(x) >= -B`, so a negated body flips the comparison and negates the limit.
+struct DirectCountLimit {
+	//! The comparison on the count: the constraint's, flipped when `negated`.
+	ExpressionType comparison = ExpressionType::INVALID;
+	//! The count body is `-x`. A constant `limit.number` is already the limit on the count (`-B`); a limit of the data
+	//! holds `B` as written, and the plan negates it.
+	bool negated = false;
+	DirectLimit limit;
+};
+
+//! Reads the right side of a count constraint (DirectReadLimit) as a limit on the count `SUM(x)`; `negated` says the
+//! constraint's body is `SUM(-x)`. A constant is rounded to whole rows by DirectInclusiveRows, a limit of the data by
+//! DirectInclusiveRowsExpr. False when DirectReadLimit reads no limit, which includes a constant of magnitude
+//! DECIDE_EFFECTIVE_INFINITY or more.
+bool DirectReadCountLimit(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &constraint,
+                          bool negated, DirectCountLimit &count);
+
 //===--------------------------------------------------------------------===//
 // Linear terms of a part
 //===--------------------------------------------------------------------===//

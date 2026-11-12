@@ -346,6 +346,25 @@ unique_ptr<BoundWindowExpression> DirectRunningSum(Optimizer &optimizer, const E
                                                    const vector<ExprPtr> &partitions);
 
 //===--------------------------------------------------------------------===//
+// Count limits: a limit as an inclusive whole number of rows
+//===--------------------------------------------------------------------===//
+
+//! A count limit on one side (`upper`: the count is at most the limit; else at least) as the inclusive whole number of
+//! rows it means. A non-strict side rounds inward (floor for an upper side, ceil for a lower one), and a strict one
+//! (`<` on an upper side, `>` on a lower one, whatever the other side's `comparison`) takes the next whole value
+//! (DecideStrictBound). `rows` is in [0, 2^53]: an upper limit below zero holds for no count (`impossible` is set,
+//! rows 0), and a lower limit of zero or less is no limit (rows 0). False when `limit` rounds to a number beyond 2^53,
+//! which a DOUBLE cannot hold exactly. This is the plan-time form of DirectInclusiveRowsExpr, for a constant limit.
+bool DirectInclusiveRows(double limit, ExpressionType comparison, bool upper, idx_t &rows, bool &impossible);
+
+//! The same rounding as an expression of the plan, a BIGINT per row, for a limit that is read on the rows: `value`
+//! builds the limit as a DOUBLE (called once for each place the expression reads it). The result is clamped to the
+//! BIGINT range, is -1 for an upper limit below zero and 0 for a lower limit of zero or less, and is no limit (the
+//! BIGINT maximum on an upper side, 0 on a lower) where the value is NULL, so a NULL skips its instance.
+ExprPtr DirectInclusiveRowsExpr(const ExpressionBuilder &calc, ExpressionType comparison, bool upper,
+                                const std::function<ExprPtr()> &value);
+
+//===--------------------------------------------------------------------===//
 // Group bounds (DecideGroupBound): a bound computed from the aggregates of its group
 //===--------------------------------------------------------------------===//
 
