@@ -421,13 +421,10 @@ ExprPtr DirectBoundDisagreement(const ExpressionBuilder &calc, const string &tex
 static unique_ptr<BoundWindowExpression>
 DirectWindowOfAggregate(const Expression &function, unique_ptr<Expression> argument, unique_ptr<Expression> reads) {
 	auto &aggregate = function.Cast<BoundAggregateExpression>();
-	if (aggregate.bind_info) {
-		throw InternalException("DECIDE: a reducer binds data the direct plan does not copy; the binder promises "
-		                        "SUM, AVG, MIN, MAX and COUNT bind none");
-	}
-	// Hand-built, as in DirectWindowExtremum.
+	// Hand-built, as in DirectWindowExtremum. The aggregate's bind data (the scale of AVG over a DECIMAL) goes with it.
 	auto result = make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_AGGREGATE, aggregate.return_type,
-	                                               make_uniq<AggregateFunction>(aggregate.function), nullptr);
+	                                               make_uniq<AggregateFunction>(aggregate.function),
+	                                               aggregate.bind_info ? aggregate.bind_info->Copy() : nullptr);
 	if (argument) {
 		result->children.push_back(std::move(argument));
 	}

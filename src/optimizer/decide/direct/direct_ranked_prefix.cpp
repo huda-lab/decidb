@@ -64,8 +64,15 @@ DirectRankedPrefix::Stage DirectRankedPrefix::ProjectRows(unique_ptr<LogicalOper
 		flags.push_back(DirectAnyCondition(calc, fixed.one_conditions));
 		flags.push_back(DirectAnyCondition(calc, fixed.zero_conditions));
 	}
-	auto state =
-	    DirectProjectScope(binder, std::move(rows), scoped, scope.when.get(), scope.keys, std::move(flags), nullptr);
+	// A `per K:` clause has no instance when every kept row has a NULL K, which the scope projection reads as a flag.
+	unique_ptr<Expression> instance;
+	if (scope.gated) {
+		ColumnBinding flag;
+		rows = DirectAddInstanceFlag(optimizer, std::move(rows), scope.when.get(), scope.classes, flag);
+		instance = calc.Out(calc.Col(LogicalType::BOOLEAN, flag));
+	}
+	auto state = DirectProjectScope(binder, std::move(rows), scoped, scope.when.get(), scope.keys, std::move(flags),
+	                                std::move(instance));
 	auto from_scope = DirectCarriedOf(state, source_bindings.size());
 	auto over_state = [&](const Expression &value) {
 		return OverState(state, value);
