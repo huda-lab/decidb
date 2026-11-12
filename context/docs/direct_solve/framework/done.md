@@ -70,6 +70,20 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     its class's row has passed them, as the solver reads every row before it answers. A2 takes it; R1's `JoinOnKey` is
     the same join. DuckDB runs the SINGLE join on an integer `=` key as a perfect hash join, the classes on the
     build side (the edits to DuckDB's own code are in [architecture.md](../../pipeline/architecture.md) § 1).
+  - **Ranked prefix** (`DirectRankedPrefix`, `direct_ranked_prefix.hpp`): a rule whose answer is a prefix of each
+    group's rows ranked by one column builds its plan with it, as a Template Method: the builder fixes the plan and the
+    rule gives the steps that differ (the order, its columns, the windows over the order, the prefix columns, the prefix
+    size, the group's verdict, whether a row is chosen). S1 ranks by score and keeps the best k, S3 by weight and keeps
+    the longest run within the budget; S2, S4 and R2 take the same shape. The plan is one read: the scope projection, P1
+    (the rule's columns and the checks over the scope's columns), W1 (per group in order of the ranking column, a NULL
+    on a fixed row so it ranks last: the rank, the rule's windows and the group limits through `DirectWindowSink`), PL
+    (what each group bound gives, computed once per row, only with a group bound), P2 (the prefix columns and the checks
+    over P1's or W1's columns), W2 (the prefix size, for a rule that needs a window for it), W3 (a `bool_and` over all
+    the rows, only where a group can fail) and the answer. A check stands in P1 or P2 by what it reads, and a check in
+    P2 needs W2 or W3 above it, so every row is checked before the first leaves. The builder owns the rows a clause
+    fixes (their checks, their place last in the ranking, their value in the answer) and the scope gate on the verdict.
+    Every window of W1 takes the rank's partition and order, with a frame over the whole partition where it aggregates
+    the group, so DuckDB sorts once and W1 runs on every thread: an empty `OVER ()` would run on one.
 - **The class key** (`DirectClassKey`, `DirectClassKeyOf`, `DirectClassPresent` in `direct_plan_fragments.hpp`). The
   columns a scoped rule groups its rows on and joins a class's answer on. A row is in a class when its key names one,
   and the key is built so that a row in no class has a NULL in a column the join compares with `=`. SQL's outer join

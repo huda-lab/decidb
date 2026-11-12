@@ -51,7 +51,8 @@ lightest rows fit, and the answer is the longest prefix of the rows sorted by we
 `>=` the `k` largest weights have the largest total, and the answer is the shortest prefix of the rows sorted heaviest
 first whose total reaches `B` (`definition.md` § The fewest items that reach a minimum). Fixed rows add a constant to
 every prefix total, so the free rows take the prefix whose total, added to the fixed rows' total, meets `B`. One plan
-serves both directions; it reads the source once and uses windows only, no hash aggregate joined back:
+serves both directions; it reads the source once and uses windows only, no hash aggregate joined back. It is the
+framework's ranked prefix (`DirectRankedPrefix`, [framework](../../framework/done.md)), with W2 for the prefix size:
 
 1. The scope projection (`DirectProjectScope`), then each row's weight (`DirectSumOf` of the budget's terms, NULL on a
    row the budget's `when` drops or a fixed row) and what the data limit reads, on the rows the budget keeps.

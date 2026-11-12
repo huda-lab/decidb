@@ -45,22 +45,6 @@ solver path answers those queries, so none of them is wrong, only slower.
   row and takes 1.8 times the hand plan's CPU for `s3_global`; a shared row stage with an aggregate joined back is a
   second plan shape; DuckDB's one-thread `OVER ()` keeps table order for other queries. **Ruling (owner, 2026-11-11).**
 
-## FRM-18 — Build the ranked-prefix plan builder; S3 uses it
-
-- **Problem.** S1 and S3 build one plan: rank each group's rows by one column (S1 by score, S3 by weight), keep a prefix
-  of the ranking (S1 the best k, S3 the longest run that fits the budget), check every row, answer 1 inside the prefix.
-  Each builds it alone, and the copies differ: S1 reads group limits with a second read and a join, S3 in its rank
-  window (`../rules/s1_uniform_matroid/todo.md` § S1-26). S2, S4 and R2 (`../rules/*/definition.md`) take the same plan
-  shape. **Ruling (owner, 2026-11-11).** One shared ranked-prefix builder (Template Method: the builder fixes the plan,
-  a rule gives the ranking column and the prefix test); S3 uses it first, then S1 (S1-26).
-- **Change.** A ranked-prefix builder in the shared plan fragments: rank within the scope by a given column, a prefix by
-  count or by running sum, the group limits, the checks below the blocking window and the whole-table verdict
-  (`../architecture/rules.md` § What every rule must match). S3 builds its plan with it. S3's answers, errors and
-  goldens stay; its plan cost is measured against Gurobi on S3's benchmark cases and stays within the noise (§ Small
-  gains).
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "direct_s3 or rule_conformance"`;
-  `build/release/test/unittest "[decidb]"`.
-
 ## FRM-20 — The DECIDE canonicalizer reads a sum of constant coefficients as a count
 
 - **Problem.** `SUM(2*x) <= 7 MAXIMIZE SUM(p*x)` over `BOOL` x picks the best three rows, a count bound, and no

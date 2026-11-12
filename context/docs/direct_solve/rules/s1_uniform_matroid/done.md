@@ -10,15 +10,15 @@ shared fragments in `direct_plan_fragments.{hpp,cpp}`. Class definition: [defini
 
 One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
 
-- **Count bounds on `SUM(x)`:** `<=`, `<`, `>=`, `>`, `=`, or several combined into one interval. A bound can be a constant,
-  a foldable constant expression, or a numeric source column or deterministic expression over source columns that varies per
-  row, including one that can raise (`cap + 1`, a narrowing `CAST`). A data bound reaches S1 as a group bound
-  (`../../framework/done.md`): S1 computes its aggregates (the MIN of an upper bound, the MAX of a lower one, an `=` bound's
-  MIN and MAX that must agree) once per group, in a hash aggregate over a first read of the source joined back to the
-  rows after the rank window (group-then-join, as A2), and raises its NaN and disagreement errors in the verdict window,
-  in the solver's words (a NULL skips the instance). S1 reads that value in its score projection, on the rows its clause
-  keeps; nothing is computed on a row the `when` drops (syntax reference §6.3). Values are converted to DOUBLE as the
-  solver does; strict and fractional limits become inclusive integer counts; limits are exact up to 2^53.
+- **Count bounds on `SUM(x)`:** `<=`, `<`, `>=`, `>`, `=`, or several combined into one interval. A bound can be a
+  constant, a foldable constant expression, or a numeric source column or deterministic expression over source columns
+  that varies per row, including one that can raise (`cap + 1`, a narrowing `CAST`). A data bound reaches S1 as a group
+  bound (`../../framework/done.md`): S1 computes its aggregates (the MIN of an upper bound, the MAX of a lower one, an
+  `=` bound's MIN and MAX that must agree) once per group, in the rank window over the one read of the source, and
+  raises its NaN and disagreement errors in the verdict window, in the solver's words (a NULL skips the instance). S1
+  reads that value in its score projection, on the rows its clause keeps; nothing is computed on a row the `when` drops
+  (syntax reference §6.3). Values are converted to DOUBLE as the solver does; strict and fractional limits become
+  inclusive integer counts; limits are exact up to 2^53.
 - **Bounds read from the kept rows:** `COUNT(*)`, `COUNT`, `MIN`, `MAX`, `SUM` and `AVG` of a numeric source expression on
   the right of a count bound, alone or inside `+ - * / //` and other arithmetic (`SUM(x) <= COUNT(*) / 2`,
   `>= COUNT(*) * 0.1`, `<= MIN(cap)`, `>= MAX(lo) / 2`, `<= SUM(cap)`), with or without a `when` of its own
@@ -124,20 +124,21 @@ different `when` membership (S2); `SUM(x) <> k` (not an interval); bounds that a
 
 ## How it works
 
-The plan is a scope projection, a score projection, a rank window, a verdict window where a group can fail, and the
-assignment projection. The group bounds' aggregates are computed once per group, by a hash aggregate over a first read
-of the source, and joined to the rows of the window (group-then-join, as A2).
+The plan is the framework's ranked prefix (`DirectRankedPrefix`, [framework](../../framework/done.md)), over one read of
+the source: a scope projection, a score projection (P1), a rank window in order of the score that also computes the
+group bounds' aggregates (W1), the projection of what the group bounds give (PL), the prefix projection (P2), a verdict
+window where a group can fail (W3) and the assignment. S1 reads the size of its prefix off the group's limits in P2, so
+it has no W2.
 
 - **Where the checks stand.** A window holds every row before it gives one, then gives them group by group, so a check
-  above it reaches a later group only when the parent reads that far. The checks of a row (the score, what a group bound
-  reads, the values the row fixes, a row fixed to both values) are one column of the score projection, below the rank
-  window. The checks of a group (what its bounds give, and whether its rows and fixed values can meet them) read the
-  rank window's counts, so they stand above it, in a window over all the rows (`bool_and`, as S3's W3) that every row
-  reads; the assignment projection raises the infeasible error unless it holds. That window stands only where a group
-  can fail: a lower bound, a source-valued bound, a fixed value beside an upper bound, or an impossible scope. A
-  constant upper bound alone cannot fail and has none. The window runs on one thread, as S3's W3: over the 800,000 rows
-  of `partsupp`, `SUM(pick) by (ps_suppkey) BETWEEN 1 AND 2` takes 0.083 s against 0.056 s for `<= 2` (a fresh process,
-  best of 5, 2026-11-12), where Gurobi takes seconds.
+  above it reaches a later group only when the parent reads that far. The checks of a row over the scope's columns (the
+  score, the values the row fixes, a row fixed to both values) stand in the score projection, below the rank window.
+  What a group bound reads is checked in P2, and every group bound brings the verdict window above it. The checks of a
+  group (what its bounds give, and whether its rows and fixed values can meet them) read the rank window's counts, so
+  they stand above it, in a window over all the rows (`bool_and`, as S3's W3) that every row reads; the assignment
+  projection raises the infeasible error unless it holds. That window stands only where a group can fail: a lower bound,
+  a source-valued bound, a fixed value beside an upper bound, or an impossible scope. A constant upper bound alone
+  cannot fail and has none. The window runs on one thread, as S3's W3 (§ Performance).
 - **Class key.** A scoped problem carries the framework's [class key](../../framework/done.md): the `by` key's
   elements, compared with `=` where a NULL puts a row in no group, and one marker column when a `when` can drop rows
   and no element says so. The rank and count windows partition by it, so a row in no group ranks apart from every
@@ -159,7 +160,7 @@ of the source, and joined to the rows of the window (group-then-join, as A2).
 
 ## Performance
 
-Measured on 2026-11-09 at `0ab6224c60`, on an 11-core Apple M3 Pro at a load of about 3.
+Measured on 2026-11-12 at `a0ac2a1175`, on an 11-core Apple M3 Pro at a load of 11 to 16 (other work ran beside it).
 
 **Against a hand-written plan.** `benchmark/decide/direct_solve/run.py --compare --sf 1 --queries s1 s1_global` runs the
 direct plan beside a query written by hand for the same answer (`hand/<query>.sql`), with the same checks and the same
@@ -168,26 +169,29 @@ latency is on all threads; the planning DECIDE adds is apart. Both sides gave th
 
 | Query | Direct CPU | Hand CPU | CPU ratio | Direct latency | Hand latency | DECIDE planning |
 |---|---:|---:|---:|---:|---:|---:|
-| `s1` | 151.2 ms | 147.3 ms | 1.03 | 17.4 ms | 17.1 ms | 0.07 ms |
-| `s1_global` | 134.9 ms | 126.0 ms | 1.07 | 20.2 ms | 18.1 ms | 0.19 ms |
+| `s1` | 160.2 ms | 150.7 ms | 1.06 | 18.7 ms | 16.8 ms | 0.09 ms |
+| `s1_global` | 187.9 ms | 119.7 ms | 1.57 | 93.0 ms | 17.4 ms | 0.13 ms |
 
-Both are within the measurement's noise of the hand plan: the plan is the hand plan's rank window and the rule's check.
+`s1` is within the noise of the hand plan. `s1_global` (`SUM(pick) <= 0.1 * COUNT(*)`) reads a group bound, which
+brings the verdict window over all the rows: a window with no partition and no order runs on one thread in DuckDB, so
+the rank window's output, the limits and the checks above it run on one thread too. The hand plan has no verdict,
+since it knows the limit is not negative. That is the price of checking every group before the first row leaves, as
+S3 pays for its W3 (`../../framework/todo.md` § Small gains, the owner's ruling of 2026-11-09).
 
-**Against Gurobi.** `run.py --sf 0.125 0.25 0.5 1 --queries s1 s1_global`: a fresh `decidb` process per run, median of
-3, load 3 to 6. At every size Gurobi's objective agreed with direct solve's within 1e-6. A speedup divides Gurobi's
-median by direct's median from the same sweep. Times include process start and database open, about 20 ms, which is most
-of the direct time at these sizes.
+**Against Gurobi.** `run.py --sf 0.125 0.25 0.5 1 --queries s1 s1_global --modes direct gurobi`: a fresh `decidb`
+process per run, median of 3. At every size Gurobi's objective agreed with direct solve's. A speedup divides Gurobi's
+median by direct's median from the same sweep. Times include process start and database open, about 20 ms.
 
-| Query | Rows | Direct | Direct, 1 thread | Direct peak | Gurobi | Gurobi peak | Speedup |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| `s1` | 100,000 | 0.026 s | 0.029 s | 44 MiB | 0.493 s | 100 MiB | 19.0x |
-| `s1` | 200,000 | 0.027 s | 0.038 s | 56 MiB | 0.717 s | 162 MiB | 26.6x |
-| `s1` | 400,000 | 0.032 s | 0.058 s | 80 MiB | 1.437 s | 294 MiB | 44.8x |
-| `s1` | 800,000 | 0.037 s | 0.091 s | 120 MiB | 2.909 s | 563 MiB | 78.2x |
-| `s1_global` | 100,000 | 0.025 s | 0.025 s | 34 MiB | 0.365 s | 103 MiB | 14.6x |
-| `s1_global` | 200,000 | 0.029 s | 0.032 s | 46 MiB | 0.276 s | 142 MiB | 9.5x |
-| `s1_global` | 400,000 | 0.035 s | 0.049 s | 75 MiB | 0.591 s | 249 MiB | 16.8x |
-| `s1_global` | 800,000 | 0.040 s | 0.069 s | 118 MiB | 0.704 s | 465 MiB | 17.7x |
+| Query | Rows | Direct | Gurobi | Speedup |
+|---|---:|---:|---:|---:|
+| `s1` | 100,000 | 0.030 s | 0.379 s | 12.8x |
+| `s1` | 200,000 | 0.031 s | 0.751 s | 24.1x |
+| `s1` | 400,000 | 0.037 s | 1.503 s | 40.9x |
+| `s1` | 800,000 | 0.043 s | 2.933 s | 68.5x |
+| `s1_global` | 100,000 | 0.036 s | 0.375 s | 10.4x |
+| `s1_global` | 200,000 | 0.050 s | 0.297 s | 6.0x |
+| `s1_global` | 400,000 | 0.073 s | 0.558 s | 7.7x |
+| `s1_global` | 800,000 | 0.117 s | 0.762 s | 6.5x |
 
-The solver path builds one binary decision per row. Direct solve is ahead of Gurobi at every size, 18 to 78 times its
-speed at 800,000 rows, in a fourth to a fifth of its peak memory.
+The solver path builds one binary decision per row. Direct solve is ahead of Gurobi at every size, 6.5 to 68 times its
+speed at 800,000 rows.
