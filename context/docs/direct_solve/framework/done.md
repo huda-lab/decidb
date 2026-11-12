@@ -349,13 +349,14 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     bound that reads data only through reducers of exactly the clause's group (`sum(x) by (g) <= sum(cap) by (g)`) is an
     expression over those reducers' aggregates. A rule proves it can compute the bound (`DirectGroupBoundIsReadable`),
     lays out the columns of each input (`DirectGroupLayout`, `DirectGroupInputs`; `DirectLayoutGroupInputs` adds them to
-    a `DirectProjectionStage`, for S1, S3 and N1) and adds the aggregates to the group aggregate it already runs, with
-    no branch per bound (`DirectAddGroupBound` and a rule's `DirectGroupSink`: N1 and S3 a window through
-    `DirectWindowSink`; S1, R1 and A2 their hash aggregate through `DirectAggregateSink`), so a direct plan has no side
-    table for them. Only the solver path records their aggregates (`RecordGroupBound`, from `RecordReducedBounds`), and
-    it returns the checks in the order a rule raises them: every bound's per-row reads, then each bound's NaN limit and
-    `=` agreement. A reducer on another `by` key, a qualified reducer, a column beside a reducer and a sum with its own
-    `when` are recorded on the direct path too (`DirectIR::bounds_to_record`), and read from side tables.
+    a `DirectProjectionStage`, for the ranked prefix, N1 and R1; R1 passes no check list and codes the messages itself)
+    and adds the aggregates to the group aggregate it already runs, with no branch per bound (`DirectAddGroupBound` and
+    a rule's `DirectGroupSink`: N1 and S3 a window through `DirectWindowSink`; S1, R1 and A2 their hash aggregate
+    through `DirectAggregateSink`), so a direct plan has no side table for them. Only the solver path records their
+    aggregates (`RecordGroupBound`, from `RecordReducedBounds`), and it returns the checks in the order a rule raises
+    them: every bound's per-row reads, then each bound's NaN limit and `=` agreement. A reducer on another `by` key, a
+    qualified reducer, a column beside a reducer and a sum with its own `when` are recorded on the direct path too
+    (`DirectIR::bounds_to_record`), and read from side tables.
   - Every value a bound reads is checked first, by VALUE_IS_VALID scope checks appended after the planner's: a
     reducer's argument (or a norm's written body: `SIGN(NaN)` is 0) on the rows the reducer reads, the bound on the
     kept rows, and an `=` bound's agreement in its group. Each check is a per-row message, NULL on a valid row. Both

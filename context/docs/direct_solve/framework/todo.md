@@ -84,11 +84,3 @@ solver path answers those queries, so none of them is wrong, only slower.
   `build/release/test/unittest "[decidb]"`;
   `./test/decide/run_tests.sh -n 2 -k "canonicalize or like_term or direct_s1 or direct_s3"`;
   `DECIDB_FORCE_SOLVER=highs ./test/decide/run_tests.sh -n 2 -k "canonicalize or like_term"`.
-
-## FRM-21 — One forwarding of a group bound's input columns
-
-- **Problem.** N1 (`ComputeCoefficients`) and S3 (its P2) each forward the columns `DirectLayoutGroupInputs` laid out
-  (the reads and the argument of each input) as new columns of a later stage, in the same loop.
-- **Change.** One shared function in the plan fragments forwards them; N1 and S3 call it. Behavior stays as it is
-  (§ Removing bloat).
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "direct_n1 or direct_s3 or rule_conformance"`.
