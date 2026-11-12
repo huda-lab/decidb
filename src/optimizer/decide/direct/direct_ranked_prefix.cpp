@@ -182,18 +182,20 @@ DirectRankedPrefix::Stage DirectRankedPrefix::ProjectRows(unique_ptr<LogicalOper
 }
 
 unique_ptr<BoundWindowExpression> DirectRankedPrefix::RankWindow(idx_t level, const DirectRankedColumns &rows) const {
-	unique_ptr<BoundWindowExpression> rank;
+	auto rank =
+	    make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT, nullptr, nullptr);
+	rank->start = WindowBoundary::UNBOUNDED_PRECEDING;
+	rank->end = WindowBoundary::UNBOUNDED_FOLLOWING;
 	if (level == 0) {
-		rank =
-		    make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT, nullptr, nullptr);
-		rank->start = WindowBoundary::UNBOUNDED_PRECEDING;
-		rank->end = WindowBoundary::UNBOUNDED_FOLLOWING;
-	} else {
-		// The rank among the rows the level before keeps: a row it does not keep adds nothing to the count.
-		rank = DirectWindowMatchingCount(calc, calc.Out(Keeps(level - 1, rows)));
-		rank->end = WindowBoundary::CURRENT_ROW_ROWS;
+		OverRank(rows.levels[0], *rank);
+		return rank;
 	}
-	OverRank(rows.levels[level], *rank);
+	// The rank among the rows the level before keeps: the rows it keeps are a partition of their own, so on a kept row
+	// the row's position in its partition is its position among the kept rows of its group. A row it drops is ranked
+	// among the dropped rows, and its rank is never read, since a level keeps a row only when the levels before it do.
+	PartitionByGroup(rows.levels[level], *rank);
+	rank->partitions.push_back(calc.Out(Keeps(level - 1, rows)));
+	rank->orders.emplace_back(RankOrder(), OrderByNullType::NULLS_LAST, calc.Out(RankKey()));
 	return rank;
 }
 

@@ -59,7 +59,7 @@ struct DirectRowLayout {
 //!
 //! The rows are ranked over a chain of levels, finest first: each level has a scope (a `by` key, a `when`, a `per`
 //! key), group bounds and a rank. The first level ranks every row not fixed. A level after it ranks, in its own
-//! groups and in the rule's order (RankKey), only the rows the level before it keeps, and a row is kept by a level
+//! groups and in the rule's order (RankKey), the rows the level before it keeps, and a row is kept by a level
 //! when the rule says it is within the level's limit (WithinLimit) and the levels before keep it (Keeps). S1 and S3
 //! have one level.
 //!
@@ -69,7 +69,8 @@ struct DirectRowLayout {
 //!        below the rank window
 //!   W1   for each level, per group, in order of the ranking column: the rank, what the rule adds (AddGroupWindows),
 //!        and the group limits (AddGroupBound), over the one read. A level's window stands over the last one's, which
-//!        gives it the keep flag of the level before it as the expression the rule gives (WithinLimit)
+//!        gives it the keep flag of the level before it as the expression the rule gives (WithinLimit); the rank of
+//!        a level after the first has the flag in its partition
 //!   PL   what the group limits give, once per row, as columns (only with a group limit)
 //!   P2   the rule's prefix columns (LayoutPrefix); the checks above W1 and what the group limits raise
 //!   W2   per group, the size of the prefix (PrefixSize); only a rule whose prefix size needs a window of its own
@@ -91,10 +92,13 @@ struct DirectRowLayout {
 //! the fixed values (each value a row fixes, a row fixed to both) to the checks below.
 //!
 //! Rows of equal ranking value are ordered as the sort gives them, and the prefix is right only if every window of W1
-//! that reads the order (the rank, a running sum) sees the same one. They have one partition and one order, so DuckDB
-//! sorts them once (PhysicalPlanGenerator::CreatePlan(LogicalWindow), which puts the windows whose
+//! that reads the order (the rank, a running sum) sees the same one. In the first level they have one partition and one
+//! order, so DuckDB sorts them once (PhysicalPlanGenerator::CreatePlan(LogicalWindow), which puts the windows whose
 //! BoundWindowExpression::PartitionsAreEquivalent into one PhysicalWindow). A level has its own partition, so it has
-//! its own sort, and ties may break differently at each level.
+//! its own sort, and ties may break differently at each level. The rank of a later level is a ROW_NUMBER over the
+//! group and the keep flag of the level before it (instead of a running count of the kept rows, which DuckDB
+//! evaluates frame by frame); the windows over the whole group (the group limits, a rule's counts) must not split the
+//! group by that flag, so they keep the group alone as the partition and sort on their own (OverRank).
 class DirectRankedPrefix {
 public:
 	virtual ~DirectRankedPrefix() = default;
@@ -116,8 +120,8 @@ protected:
 	//! column, a DOUBLE, and the checks it owes. The builder ranks a row a clause fixes to 1 or to 0 last (RankKey).
 	virtual DirectRowLayout LayoutRows(DirectProjectionStage &p1, const DirectScopeState &state) = 0;
 	//! W1: adds to `w1` the windows of the rule over the group of `level` in order of the ranking column (a running sum
-	//! of it, a count), over the rank's partition and order (OverRank). `rows` are the columns of P1 and of the
-	//! levels' windows before this one, RankKey the ranking column's.
+	//! of it, a count), over the group and the ranking column's order (OverRank). `rows` are the columns of P1 and of
+	//! the levels' windows before this one, RankKey the ranking column's.
 	virtual void AddGroupWindows(idx_t level, LogicalWindow &w1, const DirectRankedColumns &rows) = 0;
 	//! Whether the row is within the limit of `level` (a BOOLEAN, never NULL): a row outside the level's groups is,
 	//! and so is a row ranked within the group's room for rows. Over the columns of the level's window and of those
@@ -149,11 +153,13 @@ protected:
 	//! after (and in WithinLimit of the level and the levels after it).
 	const DirectGroupValues &GroupValues(idx_t level, idx_t bound) const;
 
-	//! Makes `window`, an aggregate over the whole group, take the rank's partition and order. DuckDB runs a window
-	//! with no order, or no partition, on one thread and sorts it on its own; with the rank's order it shares the
-	//! rank's sort and stays parallel, and its frame over the whole partition (ROWS BETWEEN UNBOUNDED PRECEDING AND
-	//! UNBOUNDED FOLLOWING) leaves its value the same on every row. The group limits take it, and a rule's own windows
-	//! over the group should too (AddGroupWindows). `level` is the level's columns.
+	//! Makes `window`, an aggregate over the whole group, take the group as its partition and the ranking column as
+	//! its order. DuckDB runs a window with no order, or no partition, on one thread and sorts it on its own; with the
+	//! order it stays parallel, and in the first level it shares the rank's sort. Its frame over the whole partition
+	//! (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) leaves its value the same on every row. The group
+	//! limits take it, and a rule's own windows over the group should too (AddGroupWindows). In a later level the
+	//! rank's partition also has the keep flag, which would split the group, so such a window sorts on its own.
+	//! `level` is the level's columns.
 	void OverRank(const DirectScopeColumns &level, BoundWindowExpression &window) const;
 	//! The ranking column as W1 reads it, an expression over P1's columns: the rule's column, NULL on a row a clause
 	//! fixes to 1 or to 0, which ranks last and which a sum skips.
@@ -229,8 +235,10 @@ private:
 	void AppendGroupMessages(vector<unique_ptr<Expression>> &checks) const;
 	bool HasGroupBounds() const;
 	Stage ProjectRows(unique_ptr<LogicalOperator> rows);
-	//! The rank of the rows of `level`: ROW_NUMBER in the first level, which ranks every row not fixed (a fixed row
-	//! has a NULL ranking value and ranks last), and a running count of the rows the level before keeps in the others.
+	//! The rank of the rows of `level`: ROW_NUMBER over the level's group in the first level, which ranks every row not
+	//! fixed (a fixed row has a NULL ranking value and ranks last), and ROW_NUMBER over the level's group and whether
+	//! the level before keeps the row in the others, which gives a kept row its position among the kept rows of its
+	//! group.
 	unique_ptr<BoundWindowExpression> RankWindow(idx_t level, const DirectRankedColumns &rows) const;
 	void RankRows(Stage &rows);
 	//! Puts what the group bounds give into columns of a projection over W1 (PL), and records in `forwarded` where each
