@@ -42,14 +42,6 @@ struct Condition final : DirectApplicabilityCondition {
 		//! when `value` is read.
 		unique_ptr<DecideGroupBound> group;
 	};
-	struct ObjectivePart {
-		//! The reducer the term is of, an index into `part_names`.
-		idx_t part;
-		int sign;
-		unique_ptr<Expression> coefficient;
-		//! A constant factor the part's objective term is multiplied or divided by.
-		DirectFactor factor;
-	};
 
 	//! The constraints of the IR, which outlives the condition: the count bounds, and the fixed Boolean values.
 	vector<const DirectIRConstraint *> bound_factors;
@@ -59,13 +51,8 @@ struct Condition final : DirectApplicabilityCondition {
 	idx_t upper = 0;
 	bool has_upper = false;
 	bool impossible = false;
-	vector<ObjectivePart> objective_parts;
-	//! What a message names for each reducer's share of the score (DirectNamesOf), and the objective, which the score
-	//! names once every share is fine and their sum is not.
-	vector<DirectNumberNames> part_names;
-	//! The rows each reducer reads (DirectObjectivePartKept), null for every row: any other row scores 0 in it.
-	vector<unique_ptr<Expression>> part_kept;
-	string objective_written;
+	//! The score: what S1 ranks the rows by.
+	DirectLinearScore score;
 	//! The rows and groups every bound counts: the `by` key (the groups, each its own interval; one group of all the
 	//! rows the bounds cover when empty; a row with a NULL in a NO_GROUP element is in no group, D5), the `per` key,
 	//! and the `when` membership.
@@ -171,7 +158,7 @@ public:
 		}
 		if (!ProveScope(ir, *condition) ||
 		    !DirectReadFixedValues(ir, context, condition->local_fixes, condition->fixed) ||
-		    !ProveBounds(ir, context, *condition) || !ProveObjective(ir, context, *condition)) {
+		    !ProveBounds(ir, context, *condition) || !condition->score.Prove(ir, context)) {
 			return nullptr;
 		}
 		return std::move(condition);
@@ -186,7 +173,6 @@ public:
 private:
 	bool ProveScope(const DirectIR &ir, Condition &condition) const;
 	bool ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition) const;
-	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 };
 
 //! Every bound counts the same rows: one `SUM(x)` per bound with the same group keys and the same `when` membership.
@@ -258,42 +244,6 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 	return true;
 }
 
-//! The objective: a signed sum of `SUM(coefficient * x)` terms. Each coefficient must be evaluable per source row.
-bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
-	// Every linear term in x scores separately: `SUM((p + q) * x)` splits into `p * x` and `q * x`, and the score
-	// adds the signed coefficients in order, as the solver's like-term collection does.
-	auto &parts = ir.objective.parts;
-	idx_t term_count = 0;
-	condition.objective_written = ir.objective.written;
-	for (auto &part : parts) {
-		if (!part.IsPlainSum() || !DirectOnlyLinearTerms(part.terms)) {
-			return false;
-		}
-		term_count += part.terms.size();
-	}
-	for (auto &part : parts) {
-		// A query-wide factor on the reducer (`2 * SUM(...)`, `SUM(...) / 2`) scales every term of that part and no
-		// other. It must be a finite constant, and a divisor must not be zero. Anything else stays on the solver.
-		DirectLinearPart read;
-		unique_ptr<Expression> kept;
-		if (!DirectReadLinearPart(ir, context, part, ir.objective.written, read) ||
-		    !DirectObjectivePartKept(ir, part, kept)) {
-			return false;
-		}
-		for (auto &term : read.terms) {
-			if (term_count > 1 && DirectMayThrow(*term.coefficient)) {
-				return false;
-			}
-			condition.objective_parts.push_back(
-			    {condition.part_names.size(), read.sign * term.sign, std::move(term.coefficient), read.factor});
-		}
-		// Every term is in `x`, the one decision.
-		condition.part_names.push_back(std::move(read.names[0]));
-		condition.part_kept.push_back(std::move(kept));
-	}
-	return true;
-}
-
 //! Builds the relational plan for one S1 problem whose condition holds, on the shared ranked-prefix plan
 //! (DirectRankedPrefix): S1 ranks each group's rows by score, best first, and selects the prefix its count bounds
 //! allow. The scope projection, the rank window, the group bounds' aggregates and the answer are the builder's; S1
@@ -331,7 +281,7 @@ public:
 		}
 		has_lower = condition.lower || source_lower;
 		has_upper = condition.has_upper || source_upper;
-		has_score_message = ScoreCanFail();
+		has_score_message = condition.score.CanFail(optimizer);
 	}
 
 private:
@@ -371,81 +321,19 @@ private:
 		       (HasFixes() && has_upper);
 	}
 
-	//! Whether the score of a row can fail: the terms of the parts, with their factors, are bounded by a sum below the
-	//! range of a DOUBLE only if none can.
-	bool ScoreCanFail() const {
-		double total = 0.0;
-		for (auto &term : condition.objective_parts) {
-			total += DirectScaledMagnitude(optimizer, *term.coefficient, term.factor);
-		}
-		return !DirectSumIsFinite(total);
-	}
-
-	//! Whether reducer `part` scores a finite constant on every row, which no row can fail (DirectIsFiniteWhereKept).
-	bool PartIsFiniteConstant(idx_t part) const {
-		vector<DirectSignedValue> values;
-		const Condition::ObjectivePart *scaling = nullptr;
-		for (auto &term : condition.objective_parts) {
-			if (term.part == part) {
-				values.push_back({term.sign, term.coefficient->Copy()});
-				scaling = &term;
-			}
-		}
-		D_ASSERT(scaling);
-		return DirectIsFiniteWhereKept(optimizer, values, scaling->factor);
-	}
-
 	//! The best score is the least: the score is minimized.
 	OrderType RankOrder() const override {
 		return OrderType::ASCENDING;
-	}
-
-	//! The message of a score that fails: a reducer whose coefficient fails is named before the score they make
-	//! together, which names the objective.
-	ExprPtr ScoreMessage(const DirectScopeState &state, const ExprPtr &combined_score,
-	                     const vector<ExprPtr> &part_scores) const {
-		auto into_score = [&](const Expression &input) {
-			return calc.Wrap(OverState(state, input));
-		};
-		vector<ExprPtr> candidates;
-		for (idx_t p = 0; p < part_scores.size(); p++) {
-			// Every part has a term (PartIsFiniteConstant finds it).
-			D_ASSERT(part_scores[p]);
-			if (!PartIsFiniteConstant(p)) {
-				candidates.push_back(DirectNumberMessage(calc, part_scores[p], condition.part_names[p], into_score));
-			}
-		}
-		candidates.push_back(DirectNumberMessage(calc, combined_score, condition.objective_written));
-		return calc.Coalesce(candidates);
-	}
-
-	//! The score of a row: the combined linear score, and each reducer's share of it.
-	ExprPtr CombinedScore(const DirectScopeState &state, vector<ExprPtr> &part_scores) const {
-		ExprPtr combined_score;
-		// Without an objective there are no parts and every row scores 0.
-		if (condition.objective_parts.size() != 1 || condition.objective_parts[0].sign < 0) {
-			combined_score = calc.Num(0.0);
-		}
-		part_scores.resize(condition.part_names.size());
-		for (auto &part : condition.objective_parts) {
-			auto coefficient = OverState(state, *part.coefficient);
-			auto term = calc.Wrap(DirectScaledTerm(optimizer, std::move(coefficient), part.sign, part.factor));
-			if (auto &kept = condition.part_kept[part.part]) {
-				// A row the part drops reads no coefficient, so nothing in it can raise, and scores 0.
-				auto over_state = OverState(state, *kept);
-				term = calc.If(calc.Wrap(DirectActiveWhen(calc, over_state.get())), term, calc.Num(0.0));
-			}
-			combined_score = combined_score ? calc.Add(combined_score, term) : term;
-			part_scores[part.part] = part_scores[part.part] ? calc.Add(part_scores[part.part], term) : term;
-		}
-		return combined_score;
 	}
 
 	//! P1: the score, the value of each source-valued bound, and the check of the score. What a group bound reads and
 	//! the fixed values are the builder's.
 	ColumnBinding LayoutRows(DirectProjectionStage &p1, const DirectScopeState &state) override {
 		vector<ExprPtr> part_scores;
-		auto combined_score = CombinedScore(state, part_scores);
+		auto over_state = [&](const Expression &value) {
+			return OverState(state, value);
+		};
+		auto combined_score = condition.score.Combined(calc, optimizer, over_state, part_scores);
 		score = p1.Add(calc.Out(combined_score));
 		for (auto &bound : condition.source_bounds) {
 			if (bound.group) {
@@ -461,8 +349,8 @@ private:
 			bound_columns.push_back(p1.Add(calc.Out(calc.Cast(calc.Wrap(std::move(value)), LogicalType::DOUBLE))));
 		}
 		if (has_score_message) {
-			checks_below.push_back(
-			    DirectRaiseMessage(optimizer, calc, ScoreMessage(state, combined_score, part_scores)));
+			checks_below.push_back(DirectRaiseMessage(
+			    optimizer, calc, condition.score.Message(calc, optimizer, over_state, combined_score, part_scores)));
 		}
 		return score;
 	}

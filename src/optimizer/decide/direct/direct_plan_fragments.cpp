@@ -895,4 +895,98 @@ DirectGroupValues DirectAddGroupBound(const ExpressionBuilder &calc, const Decid
 	return values;
 }
 
+bool DirectLinearScore::Prove(const DirectIR &ir, ClientContext &context) {
+	// Every linear term in x scores separately: `SUM((p + q) * x)` splits into `p * x` and `q * x`, and the score
+	// adds the signed coefficients in order, as the solver's like-term collection does.
+	auto &parts = ir.objective.parts;
+	idx_t term_count = 0;
+	objective_written = ir.objective.written;
+	for (auto &part : parts) {
+		if (!part.IsPlainSum() || !DirectOnlyLinearTerms(part.terms)) {
+			return false;
+		}
+		term_count += part.terms.size();
+	}
+	for (auto &part : parts) {
+		// A query-wide factor on the reducer (`2 * SUM(...)`, `SUM(...) / 2`) scales every term of that part and no
+		// other. It must be a finite constant, and a divisor must not be zero. Anything else stays on the solver.
+		DirectLinearPart read;
+		unique_ptr<Expression> kept;
+		if (!DirectReadLinearPart(ir, context, part, ir.objective.written, read) ||
+		    !DirectObjectivePartKept(ir, part, kept)) {
+			return false;
+		}
+		for (auto &term : read.terms) {
+			if (term_count > 1 && DirectMayThrow(*term.coefficient)) {
+				return false;
+			}
+			terms.push_back({part_names.size(), read.sign * term.sign, std::move(term.coefficient), read.factor});
+		}
+		// Every term is in `x`, the one decision.
+		part_names.push_back(std::move(read.names[0]));
+		part_kept.push_back(std::move(kept));
+	}
+	return true;
+}
+
+bool DirectLinearScore::CanFail(Optimizer &optimizer) const {
+	double total = 0.0;
+	for (auto &term : terms) {
+		total += DirectScaledMagnitude(optimizer, *term.coefficient, term.factor);
+	}
+	return !DirectSumIsFinite(total);
+}
+
+bool DirectLinearScore::PartIsFiniteConstant(Optimizer &optimizer, idx_t part) const {
+	vector<DirectSignedValue> values;
+	const Term *scaling = nullptr;
+	for (auto &term : terms) {
+		if (term.part == part) {
+			values.push_back({term.sign, term.coefficient->Copy()});
+			scaling = &term;
+		}
+	}
+	D_ASSERT(scaling);
+	return DirectIsFiniteWhereKept(optimizer, values, scaling->factor);
+}
+
+ExprPtr DirectLinearScore::Message(const ExpressionBuilder &calc, Optimizer &optimizer, const Over &over,
+                                   const ExprPtr &combined_score, const vector<ExprPtr> &part_scores) const {
+	auto into_score = [&](const Expression &input) {
+		return calc.Wrap(over(input));
+	};
+	vector<ExprPtr> candidates;
+	for (idx_t p = 0; p < part_scores.size(); p++) {
+		// Every part has a term (PartIsFiniteConstant finds it).
+		D_ASSERT(part_scores[p]);
+		if (!PartIsFiniteConstant(optimizer, p)) {
+			candidates.push_back(DirectNumberMessage(calc, part_scores[p], part_names[p], into_score));
+		}
+	}
+	candidates.push_back(DirectNumberMessage(calc, combined_score, objective_written));
+	return calc.Coalesce(candidates);
+}
+
+ExprPtr DirectLinearScore::Combined(const ExpressionBuilder &calc, Optimizer &optimizer, const Over &over,
+                                    vector<ExprPtr> &part_scores) const {
+	ExprPtr combined_score;
+	// Without an objective there are no parts and every row scores 0.
+	if (terms.size() != 1 || terms[0].sign < 0) {
+		combined_score = calc.Num(0.0);
+	}
+	part_scores.resize(part_names.size());
+	for (auto &part : terms) {
+		auto coefficient = over(*part.coefficient);
+		auto term = calc.Wrap(DirectScaledTerm(optimizer, std::move(coefficient), part.sign, part.factor));
+		if (auto &kept = part_kept[part.part]) {
+			// A row the part drops reads no coefficient, so nothing in it can raise, and scores 0.
+			auto over_state = over(*kept);
+			term = calc.If(calc.Wrap(DirectActiveWhen(calc, over_state.get())), term, calc.Num(0.0));
+		}
+		combined_score = combined_score ? calc.Add(combined_score, term) : term;
+		part_scores[part.part] = part_scores[part.part] ? calc.Add(part_scores[part.part], term) : term;
+	}
+	return combined_score;
+}
+
 } // namespace duckdb

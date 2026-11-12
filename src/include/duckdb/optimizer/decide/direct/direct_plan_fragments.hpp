@@ -554,4 +554,52 @@ ExprPtr DirectFixedValueMessage(ClientContext &context, const ExpressionBuilder 
                                 const DirectSourceFixedValue &fixed,
                                 const std::function<unique_ptr<Expression>(const Expression &)> &over);
 
+//! The linear score of a ranked rule (S1, and S2 after it): an objective of `SUM(coefficient * x)` terms over one
+//! Boolean decision, which each source row scores as the signed sum of its coefficients, the best row having the least
+//! score (the objective is a minimization, so a maximized part carries a negative sign). `Prove` is the condition's
+//! part and fills the score; the rest is the layout of the score column in the rule's row projection, and the message
+//! of a score that fails. Every function that lays the score out takes `over`, which re-points an expression over the
+//! source at the rows the rule reads.
+struct DirectLinearScore {
+	//! One term of the score: `sign * coefficient * factor`, of the reducer `part`.
+	struct Term {
+		//! The reducer the term is of, an index into `part_names`.
+		idx_t part;
+		int sign;
+		unique_ptr<Expression> coefficient;
+		//! A constant factor the part's objective term is multiplied or divided by.
+		DirectFactor factor;
+	};
+	using Over = std::function<unique_ptr<Expression>(const Expression &)>;
+
+	vector<Term> terms;
+	//! What a message names for each reducer's share of the score (DirectNamesOf), and the objective, which the score
+	//! names once every share is fine and their sum is not.
+	vector<DirectNumberNames> part_names;
+	//! The rows each reducer reads (DirectObjectivePartKept), null for every row: any other row scores 0 in it.
+	vector<unique_ptr<Expression>> part_kept;
+	string objective_written;
+
+	//! Reads the objective of `ir` as a signed sum of `SUM(coefficient * x)` terms; false when it is not one. Each
+	//! coefficient must be evaluable per source row.
+	bool Prove(const DirectIR &ir, ClientContext &context);
+
+	//! Whether the score of a row can fail: the terms, with their factors, are bounded by a sum below the range of a
+	//! DOUBLE only if none can.
+	bool CanFail(Optimizer &optimizer) const;
+
+	//! The score of a row: the combined linear score, and each reducer's share of it (`part_scores`).
+	ExprPtr Combined(const ExpressionBuilder &calc, Optimizer &optimizer, const Over &over,
+	                 vector<ExprPtr> &part_scores) const;
+
+	//! The message of a score that fails: a reducer whose coefficient fails is named before the score they make
+	//! together, which names the objective.
+	ExprPtr Message(const ExpressionBuilder &calc, Optimizer &optimizer, const Over &over,
+	                const ExprPtr &combined_score, const vector<ExprPtr> &part_scores) const;
+
+private:
+	//! Whether reducer `part` scores a finite constant on every row, which no row can fail (DirectIsFiniteWhereKept).
+	bool PartIsFiniteConstant(Optimizer &optimizer, idx_t part) const;
+};
+
 } // namespace duckdb
