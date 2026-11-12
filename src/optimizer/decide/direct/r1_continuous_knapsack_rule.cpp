@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <map>
 
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/function/aggregate_function.hpp"
@@ -330,6 +329,12 @@ protected:
 	ExprPtr NullDouble() const {
 		return calc.Constant(Value(LogicalType::DOUBLE));
 	}
+	ExprPtr DoubleColumn(ColumnBinding binding) const {
+		return calc.Col(LogicalType::DOUBLE, binding);
+	}
+	ExprPtr BoolColumn(ColumnBinding binding) const {
+		return calc.Col(LogicalType::BOOLEAN, binding);
+	}
 	ExprPtr Greater(const ExprPtr &a, const ExprPtr &b) const {
 		return calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, a, b);
 	}
@@ -553,8 +558,8 @@ struct ItemColumns {
 //! minus infinity. Items with w = 0, and the items of rows outside every budget, take their best end and do not enter
 //! the ranking: their price is -infinity and their weight enters no sum.
 //!
-//! The stages, each a projection over the columns so far (a row has one item per decision, each decision's values in
-//! columns of its own, suffixed with the decision's index):
+//! The stages, each a projection (DirectProjectionStage) that forwards the columns a later stage reads and adds its
+//! own, in a struct of bindings (a row has one item per decision, each decision's values in columns of its own):
 //!
 //!   P0 scope             whether the row belongs to a budget (scoped budgets only)
 //!   P1 raw values        every coefficient, bound, mask and limit read from the data, on the rows that read it
@@ -603,26 +608,17 @@ public:
 		                                std::move(instance));
 		state_index = state.state_index;
 		plan = std::move(state.plan);
-		for (idx_t i = 0; i < proved_bindings.size(); i++) {
-			Declare(SourceName(i), state.input_bindings[i], source_types[i]);
-		}
-		if (condition.scope.Scoped()) {
-			Declare(ELIGIBLE, state.eligible, LogicalType::BOOLEAN);
-			key_width = state.keys.size();
-			for (idx_t i = 0; i < state.keys.size(); i++) {
-				Declare(KeyName(i), state.keys[i], state.key.types[i]);
-			}
-		}
-		auto checks = LayoutRawValues();
-		AddBoundsAndValue(std::move(checks));
-		AddBox();
-		AddAnchorAndPrice();
-		AddRooms();
+		auto raw = LayoutRawValues(DirectCarriedOf(state, proved_bindings.size()));
+		vector<DirectBoundColumns> clause_bounds;
+		last = AddBoundsAndValue(raw, clause_bounds);
+		last = AddBox(last, clause_bounds);
+		last = AddAnchorAndPrice(last);
+		last = AddRooms(last);
 		top = plan->GetColumnBindings();
 		return std::move(plan);
 	}
 
-	//! The columns of the plan Build returned, in output order. Every column Build declares is among them.
+	//! The columns of the plan Build returned, in output order. Every column Build gives to Columns is among them.
 	const vector<ColumnBinding> &Top() const {
 		return top;
 	}
@@ -630,72 +626,103 @@ public:
 	//! Where Build put the columns the aggregate plan reads, each binding passed through `where`: a read of the stage
 	//! through a CTE (DirectSourceReader::ReadStaged) has the columns of the plan Build returned at other bindings.
 	ItemColumns Columns(const std::function<ColumnBinding(ColumnBinding)> &where) const {
-		auto binding_of = [&](const string &name) {
-			return where(columns.at(name).binding);
-		};
 		ItemColumns items;
-		for (idx_t i = 0; i < proved_bindings.size(); i++) {
-			items.sources.push_back(binding_of(SourceName(i)));
+		for (auto &source : last.carried.source) {
+			items.sources.push_back(where(source));
 		}
-		for (idx_t i = 0; i < key_width; i++) {
-			items.keys.push_back(binding_of(KeyName(i)));
+		for (auto &key : last.carried.keys) {
+			items.keys.push_back(where(key));
 		}
-		for (auto &name : message_names) {
-			items.messages.push_back(binding_of(name));
+		for (auto &message : last.messages) {
+			items.messages.push_back(where(message));
 		}
 		items.message_codes = message_codes;
-		for (auto &name : computed_message_names) {
-			items.computed_messages.push_back(binding_of(name));
+		for (auto &message : last.computed_messages) {
+			items.computed_messages.push_back(where(message));
 		}
 		items.computed_message_codes = computed_message_codes;
-		for (idx_t j = 0; j < limit_bounds.size(); j++) {
+		for (auto &limit : last.limits) {
 			items.limits.emplace_back();
-			for (idx_t i = 0; i < limit_bounds[j]->inputs.size(); i++) {
-				auto layout = DirectGroupLayout(limit_bounds[j]->inputs[i], condition.scope.Scoped());
-				DirectGroupInputColumns inputs;
-				if (layout.reads) {
-					inputs.reads = binding_of(LimitReadsName(j, i));
+			for (auto &input : limit) {
+				DirectGroupInputColumns moved;
+				if (input.reads.table_index != DConstants::INVALID_INDEX) {
+					moved.reads = where(input.reads);
 				}
-				if (layout.argument) {
-					inputs.argument = binding_of(LimitArgumentName(j, i));
+				if (input.argument.table_index != DConstants::INVALID_INDEX) {
+					moved.argument = where(input.argument);
 				}
-				items.limits.back().push_back(inputs);
+				items.limits.back().push_back(moved);
 			}
 		}
-		for (idx_t k = 0; k < DecisionCount(); k++) {
-			auto column = [&](const char *name) {
-				auto &declared = columns.at(Dec(name, k));
-				return calc.Col(declared.type, where(declared.binding));
+		for (auto &bindings : last.items) {
+			auto number = [&](ColumnBinding binding) {
+				return DoubleColumn(where(binding));
+			};
+			auto flag = [&](ColumnBinding binding) {
+				return BoolColumn(where(binding));
 			};
 			ItemExprs item;
-			item.v = column("v");
-			item.w = column("w");
-			item.l = column("l");
-			item.u = column("u");
-			item.a = column("a");
-			item.t = column("t");
-			item.best = column("best");
-			item.empty = column("empty");
-			item.wz = column("wz");
-			item.pos = column("pos");
-			item.up_inf = column("up_inf");
-			item.down_inf = column("down_inf");
-			item.up_fin = column("up_fin");
-			item.down_fin = column("down_fin");
-			item.sterm = column("sterm");
-			item.u1 = column("u1");
-			item.imprecise = column("imprecise");
+			item.v = number(bindings.v);
+			item.w = number(bindings.w);
+			item.l = number(bindings.l);
+			item.u = number(bindings.u);
+			item.a = number(bindings.a);
+			item.t = number(bindings.t);
+			item.best = number(bindings.best);
+			item.empty = flag(bindings.empty);
+			item.wz = flag(bindings.wz);
+			item.pos = flag(bindings.pos);
+			item.up_inf = flag(bindings.up_inf);
+			item.down_inf = flag(bindings.down_inf);
+			item.up_fin = number(bindings.up_fin);
+			item.down_fin = number(bindings.down_fin);
+			item.sterm = number(bindings.sterm);
+			item.u1 = number(bindings.u1);
+			item.imprecise = flag(bindings.imprecise);
 			items.decisions.push_back(item);
 		}
 		return items;
 	}
 
 private:
-	struct Column {
-		ColumnBinding binding;
-		LogicalType type;
+	//! The columns of one item (one decision on a row) that a stage has computed so far; a binding is unset until the
+	//! stage that computes it.
+	struct ItemBindings {
+		//! DOUBLE: the value, the weight, the box, the anchor, the break-even price, the best end, the finite rooms,
+		//! the anchor's spend and the flag of an unbounded item.
+		ColumnBinding v, w, l, u, a, t, best, up_fin, down_fin, sterm, u1;
+		//! BOOLEAN: whether the box is empty, whether the item is outside the ranking, the sign of w, whether each room
+		//! is infinite, and whether the price lost precision.
+		ColumnBinding empty, wz, pos, up_inf, down_inf, imprecise;
 	};
-	using Named = vector<std::pair<string, ExprPtr>>;
+
+	//! The columns a stage hands to the next, which forwards each one that is set.
+	struct RowColumns {
+		DirectCarried carried;
+		//! What the aggregates of each data limit read on the row, per data limit and per input.
+		vector<vector<DirectGroupInputColumns>> limits;
+		//! The message of each check of a raw value or of a limit read from the data (UINTEGER, a code of
+		//! `message_codes`; NULL when it passes).
+		vector<ColumnBinding> messages;
+		//! The message of each item's price past a DOUBLE (a code of `computed_message_codes`).
+		vector<ColumnBinding> computed_messages;
+		vector<ItemBindings> items;
+	};
+
+	//! P1's columns: what the stage forwards, each clause's raw values, and the check of each raw value over them.
+	struct Raw {
+		RowColumns rows;
+		struct Clause {
+			ColumnBinding coefficient, rhs;
+			//! The raw ends and the `when` of the clause (DirectBoundColumns).
+			DirectBoundColumns ends;
+		};
+		vector<Clause> clauses;
+		//! Each decision's value in each objective part; unset where the part does not name the decision.
+		vector<vector<ColumnBinding>> values;
+		//! The message of each check, as an expression over P1 (DirectEncodeMessage's code).
+		vector<ExprPtr> messages;
+	};
 
 	const Condition &condition;
 	//! The group bound of each data limit of the condition (AggregatePlanBuilder::LimitBounds).
@@ -708,22 +735,15 @@ private:
 	idx_t state_index = DConstants::INVALID_INDEX;
 	//! The table index of the projection that carries the source (a read of DirectSourceReader).
 	idx_t read_index = DConstants::INVALID_INDEX;
-	//! The number of columns of the class key (DirectClassKey), set by Build.
-	idx_t key_width = 0;
 
-	//! The plan so far and the columns it carries, in output order. Every stage forwards every column, and unused
-	//! ones are removed with the rest of the unused columns after the DECIDE optimizer has run.
+	//! The plan so far. Every stage forwards the columns of the stages before it that a later one reads.
 	unique_ptr<LogicalOperator> plan;
-	//! The columns of the plan Build returned.
+	//! The columns of the plan Build returned, in output order, and where each is.
 	vector<ColumnBinding> top;
-	vector<string> names;
-	std::map<string, Column> columns;
-	//! The columns of the checks' messages.
-	vector<string> message_names;
-	//! The texts of each message of `message_names`, in the same order, which its column holds as a code.
+	RowColumns last;
+	//! The texts of each message of `RowColumns::messages`, in the same order, which its column holds as a code.
 	vector<DirectMessageCodes> message_codes;
-	//! The columns of the messages of the numbers the plan computes (ItemColumns::computed_messages).
-	vector<string> computed_message_names;
+	//! The texts of each message of `RowColumns::computed_messages`.
 	vector<DirectMessageCodes> computed_message_codes;
 
 	//! A message as the code of its text, with its texts kept in `codes` (DirectEncodeMessage): an aggregate takes the
@@ -733,42 +753,14 @@ private:
 		return DirectEncodeMessage(calc, message, codes.back());
 	}
 
-	//! Adds, beside `value`, the message of it past a DOUBLE: TOO_LARGE, naming the budget. NULL passes.
-	void AddComputed(Named &added, const string &name, const ExprPtr &value) {
-		computed_message_names.push_back("too_large_" + name);
-		added.emplace_back(computed_message_names.back(),
-		                   Coded(DirectNumberMessage(calc, value, condition.budget_written), computed_message_codes));
-	}
-
-	static string SourceName(idx_t i) {
-		return "s" + std::to_string(i);
-	}
-	//! The name of the column that holds element `i` of the group key.
-	static string KeyName(idx_t i) {
-		return "key_" + std::to_string(i);
+	//! A column of the type of a message's code.
+	ExprPtr CodeColumn(ColumnBinding binding) const {
+		return calc.Col(DirectMessageCodes::Type(), binding);
 	}
 
 	idx_t DecisionCount() const {
 		return condition.boxes.size();
 	}
-	//! The name of a per-decision column.
-	static string Dec(const string &base, idx_t decision) {
-		return base + "_" + std::to_string(decision);
-	}
-	//! The names of the columns of input `i` of data limit `j`: whether the row is one its aggregates read, its
-	//! argument there, and its NaN message.
-	static string LimitReadsName(idx_t j, idx_t i) {
-		return "limit_reads_" + std::to_string(j) + "_" + std::to_string(i);
-	}
-	static string LimitArgumentName(idx_t j, idx_t i) {
-		return "limit_argument_" + std::to_string(j) + "_" + std::to_string(i);
-	}
-	static string LimitMessageName(idx_t j, idx_t i) {
-		return "limit_message_" + std::to_string(j) + "_" + std::to_string(i);
-	}
-
-	//! The column that says whether a row belongs to a budget; only a scoped budget has one.
-	static constexpr const char *ELIGIBLE = "elig";
 
 	//! A copy of a proved expression, re-pointed at the scope projection when there is one, else at the read.
 	unique_ptr<Expression> OverState(const Expression &expr) const {
@@ -776,92 +768,96 @@ private:
 		return DirectOverProjection(expr, proved_bindings, carrier);
 	}
 
-	void Declare(const string &name, ColumnBinding binding, const LogicalType &type) {
-		D_ASSERT(columns.find(name) == columns.end());
-		names.push_back(name);
-		columns[name] = {binding, type};
-	}
-
-	//! The column of that name, as a value.
-	ExprPtr C(const string &name) const {
-		auto &column = columns.at(name);
-		return calc.Col(column.type, column.binding);
-	}
-
-	//! A copy of a proved expression re-pointed at the source columns the last projection carries first (SourceName).
-	ExprPtr OverSource(const Expression &expr) const {
-		auto table_index = columns.at(SourceName(0)).binding.table_index;
+	//! A copy of a proved expression re-pointed at the source columns a projection carries first (`carried`).
+	ExprPtr OverSource(const Expression &expr, const DirectCarried &carried) const {
+		auto table_index = carried.source[0].table_index;
 		for (idx_t i = 0; i < proved_bindings.size(); i++) {
-			D_ASSERT(columns.at(SourceName(i)).binding == ColumnBinding(table_index, i));
+			D_ASSERT(carried.source[i] == ColumnBinding(table_index, i));
 		}
 		return calc.Wrap(DirectOverProjection(expr, proved_bindings, table_index));
 	}
 
-	//! One projection that forwards every column and appends the new ones, in order. Returns its table index.
-	idx_t Project(const Named &added) {
-		auto index = binder.GenerateTableIndex();
-		vector<unique_ptr<Expression>> expressions;
-		vector<string> next_names;
-		std::map<string, Column> next_columns;
-		for (auto &name : names) {
-			auto &column = columns.at(name);
-			next_columns[name] = {ColumnBinding(index, expressions.size()), column.type};
-			next_names.push_back(name);
-			expressions.push_back(calc.Out(calc.Col(column.type, column.binding)));
+	//! `from` as the stage carries it on: every column that is set, read as itself.
+	RowColumns Forward(DirectProjectionStage &stage, const RowColumns &from) const {
+		RowColumns to;
+		to.carried = stage.Forward(from.carried, source_types, condition.scope.Scoped());
+		for (idx_t j = 0; j < from.limits.size(); j++) {
+			to.limits.emplace_back();
+			for (idx_t i = 0; i < from.limits[j].size(); i++) {
+				DirectGroupInputColumns moved;
+				if (from.limits[j][i].reads.table_index != DConstants::INVALID_INDEX) {
+					moved.reads = stage.Forward({from.limits[j][i].reads}, {LogicalType::BOOLEAN})[0];
+				}
+				if (from.limits[j][i].argument.table_index != DConstants::INVALID_INDEX) {
+					moved.argument = stage.Forward({from.limits[j][i].argument},
+					                               {limit_bounds[j]->inputs[i].argument->return_type})[0];
+				}
+				to.limits.back().push_back(moved);
+			}
 		}
-		for (auto &entry : added) {
-			D_ASSERT(next_columns.find(entry.first) == next_columns.end());
-			auto expression = calc.Out(entry.second);
-			next_columns[entry.first] = {ColumnBinding(index, expressions.size()), expression->return_type};
-			next_names.push_back(entry.first);
-			expressions.push_back(std::move(expression));
+		to.messages =
+		    stage.Forward(from.messages, vector<LogicalType>(from.messages.size(), DirectMessageCodes::Type()));
+		to.computed_messages = stage.Forward(
+		    from.computed_messages, vector<LogicalType>(from.computed_messages.size(), DirectMessageCodes::Type()));
+		for (auto &item : from.items) {
+			ItemBindings moved;
+			auto forward = [&](ColumnBinding ItemBindings::*column, const LogicalType &type) {
+				if ((item.*column).table_index != DConstants::INVALID_INDEX) {
+					moved.*column = stage.Forward({item.*column}, {type})[0];
+				}
+			};
+			for (auto column : {&ItemBindings::v, &ItemBindings::w, &ItemBindings::l, &ItemBindings::u,
+			                    &ItemBindings::a, &ItemBindings::t, &ItemBindings::best, &ItemBindings::up_fin,
+			                    &ItemBindings::down_fin, &ItemBindings::sterm, &ItemBindings::u1}) {
+				forward(column, LogicalType::DOUBLE);
+			}
+			for (auto column : {&ItemBindings::empty, &ItemBindings::wz, &ItemBindings::pos, &ItemBindings::up_inf,
+			                    &ItemBindings::down_inf, &ItemBindings::imprecise}) {
+				forward(column, LogicalType::BOOLEAN);
+			}
+			to.items.push_back(moved);
 		}
-		auto projection = make_uniq<LogicalProjection>(index, std::move(expressions));
-		projection->children.push_back(std::move(plan));
-		plan = std::move(projection);
-		names = std::move(next_names);
-		columns = std::move(next_columns);
-		return index;
+		return to;
 	}
 
 	//===------------------------------------------------------------------===//
 	// P1 and P2: raw values, limits from the data, per-clause bounds, the objective value
 	//===------------------------------------------------------------------===//
 
-	//! What the aggregates of each limit read from the data read, on the rows of the budget alone (NULL on the others),
-	//! and the message each raises. Stage 2 computes the aggregates over the group.
-	void AddLimitValues(Named &added) {
-		auto eligible = condition.scope.Scoped() ? C(ELIGIBLE) : nullptr;
-		auto over_state = [&](const Expression &expression) {
-			return OverState(expression);
-		};
-		for (idx_t j = 0; j < limit_bounds.size(); j++) {
-			auto inputs = DirectGroupInputs(calc, *limit_bounds[j], eligible, over_state);
-			for (idx_t i = 0; i < inputs.size(); i++) {
-				if (inputs[i].reads) {
-					added.emplace_back(LimitReadsName(j, i), inputs[i].reads);
-				}
-				if (inputs[i].argument) {
-					added.emplace_back(LimitArgumentName(j, i), inputs[i].argument);
-				}
-				if (inputs[i].invalid) {
-					added.emplace_back(LimitMessageName(j, i), Coded(inputs[i].invalid, message_codes));
-				}
-			}
-		}
-	}
-
 	//! P1: every raw value, computed on the rows that read it: a row a `when` drops reads nothing, as on the solver
 	//! path. A clause's values are NULL on the rows its `when` drops, where its bounds are not read; a row outside the
-	//! budget has the weight 0, as an item outside every budget. Returns the check on each, built over P1, which raises
-	//! only where the value is read. A decision the budget does not name has the weight 0, which needs no check; an
-	//! objective part has a raw value for each decision it names. A limit's group aggregates are stage 2's.
-	vector<ExprPtr> LayoutRawValues() {
-		Named added;
+	//! budget has the weight 0, as an item outside every budget. What the aggregates of each limit read from the data
+	//! is read on the rows of the budget alone (NULL on the others), and the aggregates are stage 2's
+	//! (DirectLayoutGroupInputs). The check on each value is built over P1, and raises only where the value is read. A
+	//! decision the budget does not name has the weight 0, which needs no check; an objective part has a raw value for
+	//! each decision it names.
+	Raw LayoutRawValues(const DirectCarried &from_scope) {
+		DirectProjectionStage p1(binder.GenerateTableIndex());
+		Raw raw;
+		auto scoped = condition.scope.Scoped();
+		raw.rows.carried = p1.Forward(from_scope, source_types, scoped);
+		auto eligible = scoped ? BoolColumn(from_scope.eligible) : nullptr;
 		auto over_state = [&](const Expression &value) {
 			return OverState(value);
 		};
-		AddLimitValues(added);
+		// The checks of what a limit reads come first. A message is a column of P1 that holds a code.
+		for (idx_t j = 0; j < limit_bounds.size(); j++) {
+			raw.rows.limits.push_back(
+			    DirectLayoutGroupInputs(optimizer, calc, p1, *limit_bounds[j], eligible, over_state, nullptr));
+			for (auto &input : limit_bounds[j]->inputs) {
+				if (input.invalid) {
+					auto message = p1.Add(calc.Out(Coded(calc.Wrap(OverState(*input.invalid)), message_codes)));
+					raw.messages.push_back(CodeColumn(message));
+				}
+			}
+		}
+		auto coded = [&](const ExprPtr &message) {
+			return Coded(message, message_codes);
+		};
+		auto number = [&](ColumnBinding binding, const DirectNumberNames &names) {
+			return DirectNumberMessage(calc, DoubleColumn(binding), names,
+			                           [&](const Expression &input) { return OverSource(input, raw.rows.carried); });
+		};
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
 			auto &clause = condition.clauses[j];
 			auto on_kept = [&](ExprPtr value) {
@@ -869,24 +865,42 @@ private:
 				                         calc, calc.Wrap(DirectActiveWhen(calc, OverState(*clause.when).get())), value)
 				                   : value;
 			};
-			added.emplace_back("c" + std::to_string(j),
-			                   on_kept(calc.Wrap(DirectSumOf(optimizer, clause.coefficient, over_state))));
-			added.emplace_back("r" + std::to_string(j),
-			                   on_kept(calc.Cast(calc.Of(*OverState(*clause.rhs)), LogicalType::DOUBLE)));
-			added.emplace_back("lo_raw" + std::to_string(j), on_kept(calc.Of(*OverState(*clause.lower))));
-			added.emplace_back("up_raw" + std::to_string(j), on_kept(calc.Of(*OverState(*clause.upper))));
+			Raw::Clause laid;
+			laid.coefficient =
+			    p1.Add(calc.Out(on_kept(calc.Wrap(DirectSumOf(optimizer, clause.coefficient, over_state)))));
+			laid.rhs = p1.Add(calc.Out(on_kept(calc.Cast(calc.Of(*OverState(*clause.rhs)), LogicalType::DOUBLE))));
+			laid.ends.lower = p1.Add(calc.Out(on_kept(calc.Of(*OverState(*clause.lower)))));
+			laid.ends.upper = p1.Add(calc.Out(on_kept(calc.Of(*OverState(*clause.upper)))));
 			if (clause.when) {
-				added.emplace_back("wh" + std::to_string(j),
-				                   calc.Wrap(DirectActiveWhen(calc, OverState(*clause.when).get())));
+				laid.ends.has_when = true;
+				laid.ends.when = p1.Add(calc.Wrap(DirectActiveWhen(calc, OverState(*clause.when).get())));
 			}
+			raw.clauses.push_back(laid);
+			auto read_on = [&](ExprPtr message) {
+				return clause.when ? DirectOnKeptRows(calc, BoolColumn(laid.ends.when), message) : message;
+			};
+			if (!DirectIsFiniteWhereKept(optimizer, clause.coefficient)) {
+				raw.messages.push_back(coded(read_on(number(laid.coefficient, clause.coefficient_names))));
+			}
+			raw.messages.push_back(coded(read_on(
+			    calc.If(calc.Fn("isnan", DoubleColumn(laid.rhs)),
+			            calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::BOUND, clause.rhs_text))),
+			            calc.Constant(Value(LogicalType::VARCHAR))))));
 		}
 		for (idx_t k = 0; k < DecisionCount(); k++) {
+			ItemBindings item;
 			auto weights = DirectValuesOn(condition.budget, k);
 			auto weight = weights.empty() ? Zero() : calc.Wrap(DirectSumOf(optimizer, weights, over_state));
-			added.emplace_back(Dec("w", k), condition.scope.Scoped() ? calc.If(C(ELIGIBLE), weight, Zero()) : weight);
+			item.w = p1.Add(calc.Out(scoped ? calc.If(eligible, weight, Zero()) : weight));
+			raw.rows.items.push_back(item);
+			if (!weights.empty() && !DirectIsFiniteWhereKept(optimizer, weights)) {
+				raw.messages.push_back(coded(number(item.w, condition.budget.names[k])));
+			}
+			raw.values.emplace_back();
 			for (idx_t p = 0; p < condition.objective.size(); p++) {
 				auto values = DirectValuesOn(condition.objective[p], k);
 				if (values.empty()) {
+					raw.values.back().emplace_back();
 					continue;
 				}
 				auto value = calc.Wrap(DirectSumOf(optimizer, values, over_state));
@@ -894,99 +908,58 @@ private:
 				if (auto &kept = condition.objective_kept[p]) {
 					value = calc.If(calc.Wrap(DirectActiveWhen(calc, OverState(*kept).get())), value, Zero());
 				}
-				added.emplace_back(Dec("o" + std::to_string(p), k), value);
-			}
-		}
-		auto p1 = Project(added);
-
-		vector<ExprPtr> messages;
-		// The limits' messages are columns of P1 that hold codes already (AddLimitValues), the first of
-		// `message_codes`; the others are coded here, after them.
-		auto coded = [&](const ExprPtr &message) {
-			return Coded(message, message_codes);
-		};
-		auto number = [&](const string &name, const DirectNumberNames &names) {
-			return DirectNumberMessage(calc, C(name), names,
-			                           [&](const Expression &input) { return OverSource(input); });
-		};
-		// The checks of what a limit reads come first, with their codes.
-		for (idx_t j = 0; j < limit_bounds.size(); j++) {
-			for (idx_t i = 0; i < limit_bounds[j]->inputs.size(); i++) {
-				if (limit_bounds[j]->inputs[i].invalid) {
-					messages.push_back(C(LimitMessageName(j, i)));
+				raw.values.back().push_back(p1.Add(calc.Out(value)));
+				if (!DirectIsFiniteWhereKept(optimizer, values)) {
+					raw.messages.push_back(coded(number(raw.values.back().back(), condition.objective[p].names[k])));
 				}
 			}
 		}
-		for (idx_t j = 0; j < condition.clauses.size(); j++) {
-			auto &clause = condition.clauses[j];
-			auto suffix = std::to_string(j);
-			auto read_on = [&](ExprPtr message) {
-				return clause.when ? DirectOnKeptRows(calc, C("wh" + suffix), message) : message;
-			};
-			if (!DirectIsFiniteWhereKept(optimizer, clause.coefficient)) {
-				messages.push_back(coded(read_on(number("c" + suffix, clause.coefficient_names))));
-			}
-			messages.push_back(coded(read_on(
-			    calc.If(calc.Fn("isnan", C("r" + suffix)),
-			            calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::BOUND, clause.rhs_text))),
-			            calc.Constant(Value(LogicalType::VARCHAR))))));
-		}
-		for (idx_t k = 0; k < DecisionCount(); k++) {
-			auto weights = DirectValuesOn(condition.budget, k);
-			if (!weights.empty() && !DirectIsFiniteWhereKept(optimizer, weights)) {
-				messages.push_back(coded(number(Dec("w", k), condition.budget.names[k])));
-			}
-			for (idx_t p = 0; p < condition.objective.size(); p++) {
-				auto values = DirectValuesOn(condition.objective[p], k);
-				if (!values.empty() && !DirectIsFiniteWhereKept(optimizer, values)) {
-					messages.push_back(coded(number(Dec("o" + std::to_string(p), k), condition.objective[p].names[k])));
-				}
-			}
-		}
-		return messages;
+		plan = p1.Finish(std::move(plan));
+		return raw;
 	}
 
 	//! The value of a decision's items: the objective as a maximum, so the minimization is negated, and zero for no
 	//! objective or for a decision the objective does not name.
-	ExprPtr ValueOf(idx_t decision) const {
+	ExprPtr ValueOf(const Raw &raw, idx_t decision) const {
 		ExprPtr value = Zero();
 		for (idx_t p = 0; p < condition.objective.size(); p++) {
 			auto &part = condition.objective[p];
-			auto name = Dec("o" + std::to_string(p), decision);
-			if (columns.find(name) == columns.end()) {
+			auto binding = raw.values[decision][p];
+			if (binding.table_index == DConstants::INVALID_INDEX) {
 				continue;
 			}
-			auto scaled = calc.Wrap(DirectScaledTerm(optimizer, calc.Out(C(name)), part.sign, part.factor));
+			auto scaled =
+			    calc.Wrap(DirectScaledTerm(optimizer, calc.Out(DoubleColumn(binding)), part.sign, part.factor));
 			value = calc.Add(value, scaled);
 		}
 		return condition.objective.empty() ? value : calc.Neg(value);
 	}
 
-	//! P2: the message of every check of a raw value, each clause's bounds, and each decision's v.
-	void AddBoundsAndValue(vector<ExprPtr> messages) {
-		Named added;
-		for (idx_t i = 0; i < messages.size(); i++) {
-			message_names.push_back("message_" + std::to_string(i));
-			added.emplace_back(message_names.back(), messages[i]);
+	//! P2: the message of every check of a raw value, each clause's bounds (`clause_bounds`, with the clause's `when`
+	//! carried on), and each decision's v.
+	RowColumns AddBoundsAndValue(const Raw &raw, vector<DirectBoundColumns> &clause_bounds) {
+		DirectProjectionStage p2(binder.GenerateTableIndex());
+		auto rows = Forward(p2, raw.rows);
+		for (auto &message : raw.messages) {
+			rows.messages.push_back(p2.Add(calc.Out(message)));
 		}
-		for (idx_t j = 0; j < condition.clauses.size(); j++) {
-			auto suffix = std::to_string(j);
-			DirectBoundColumns raw;
-			raw.lower = columns.at("lo_raw" + suffix).binding;
-			raw.upper = columns.at("up_raw" + suffix).binding;
-			if (condition.clauses[j].when) {
-				raw.has_when = true;
-				raw.when = columns.at("wh" + suffix).binding;
-			}
+		for (auto &clause : raw.clauses) {
 			ExprPtr lower, upper;
-			DirectClauseBounds(calc, raw, lower, upper);
-			added.emplace_back("lo" + suffix, lower);
-			added.emplace_back("up" + suffix, upper);
+			DirectClauseBounds(calc, clause.ends, lower, upper);
+			DirectBoundColumns bounds;
+			bounds.lower = p2.Add(calc.Out(lower));
+			bounds.upper = p2.Add(calc.Out(upper));
+			if (clause.ends.has_when) {
+				bounds.has_when = true;
+				bounds.when = p2.Forward({clause.ends.when}, {LogicalType::BOOLEAN})[0];
+			}
+			clause_bounds.push_back(bounds);
 		}
 		for (idx_t k = 0; k < DecisionCount(); k++) {
-			added.emplace_back(Dec("v", k), ValueOf(k));
+			rows.items[k].v = p2.Add(calc.Out(ValueOf(raw, k)));
 		}
-		Project(added);
+		plan = p2.Finish(std::move(plan));
+		return rows;
 	}
 
 	//===------------------------------------------------------------------===//
@@ -996,64 +969,78 @@ private:
 	//! P3: each decision's box, the static box intersected with the bounds of the clauses on that decision. An end of
 	//! magnitude 1e20 or more is infinite where the shared reader reads it: in the static box, and in a clause's right
 	//! side.
-	void AddBox() {
-		Named added;
+	RowColumns AddBox(const RowColumns &from, const vector<DirectBoundColumns> &clause_bounds) {
+		DirectProjectionStage p3(binder.GenerateTableIndex());
+		auto rows = Forward(p3, from);
 		for (idx_t k = 0; k < DecisionCount(); k++) {
 			vector<ColumnBinding> clause_lowers, clause_uppers, lowering_whens;
 			for (idx_t j = 0; j < condition.clauses.size(); j++) {
 				if (condition.clauses[j].decision == k) {
-					clause_lowers.push_back(columns.at("lo" + std::to_string(j)).binding);
-					clause_uppers.push_back(columns.at("up" + std::to_string(j)).binding);
+					clause_lowers.push_back(clause_bounds[j].lower);
+					clause_uppers.push_back(clause_bounds[j].upper);
 					if (condition.clauses[j].lifts_floor) {
-						lowering_whens.push_back(columns.at("wh" + std::to_string(j)).binding);
+						lowering_whens.push_back(clause_bounds[j].when);
 					}
 				}
 			}
 			ExprPtr lower, upper;
 			DirectRowBox(calc, DirectStaticFloor(calc, condition.boxes[k].lower, lowering_whens),
 			             condition.boxes[k].upper, clause_lowers, clause_uppers, lower, upper);
-			added.emplace_back(Dec("l", k), lower);
-			added.emplace_back(Dec("u", k), upper);
+			rows.items[k].l = p3.Add(calc.Out(lower));
+			rows.items[k].u = p3.Add(calc.Out(upper));
 		}
-		Project(added);
+		plan = p3.Finish(std::move(plan));
+		return rows;
 	}
 
 	//! P4: whether the box is empty, the anchor (0 clamped into the box; 0 on an empty box, where it is never read),
 	//! whether the item is outside the ranking (w = 0, or its row belongs to no budget), and its break-even price.
-	void AddAnchorAndPrice() {
-		Named added;
+	RowColumns AddAnchorAndPrice(const RowColumns &from) {
+		DirectProjectionStage p4(binder.GenerateTableIndex());
+		auto rows = Forward(p4, from);
 		for (idx_t k = 0; k < DecisionCount(); k++) {
-			auto l = C(Dec("l", k)), u = C(Dec("u", k)), w = C(Dec("w", k)), v = C(Dec("v", k));
+			auto &item = rows.items[k];
+			auto l = DoubleColumn(from.items[k].l), u = DoubleColumn(from.items[k].u);
+			auto w = DoubleColumn(from.items[k].w), v = DoubleColumn(from.items[k].v);
 			auto empty = DirectBoxIsEmpty(calc, l, u);
 			auto anchor = calc.If(empty, Zero(), calc.Min({calc.Max({Zero(), l}), u}));
 			auto free_of_budget = Equal(w, Zero());
 			if (condition.scope.Scoped()) {
-				free_of_budget = calc.Any({free_of_budget, calc.Not(C(ELIGIBLE))});
+				free_of_budget = calc.Any({free_of_budget, calc.Not(BoolColumn(from.carried.eligible))});
 			}
 			// Adding 0.0 turns -0.0 into 0.0, so prices that are equal sort and compare as equal.
 			auto price = calc.If(free_of_budget, NegativeInfinity(), calc.Add(calc.Div(v, w), Zero()));
-			// The -infinity of an item outside the ranking is a mark, not a number computed.
-			AddComputed(added, Dec("t", k), calc.If(free_of_budget, NullDouble(), price));
-			added.emplace_back(Dec("empty", k), empty);
-			added.emplace_back(Dec("a", k), anchor);
-			added.emplace_back(Dec("wz", k), free_of_budget);
-			added.emplace_back(Dec("pos", k), Greater(w, Zero()));
-			added.emplace_back(Dec("t", k), price);
+			// The -infinity of an item outside the ranking is a mark, not a number computed: past a DOUBLE, a price
+			// names the budget.
+			auto too_large =
+			    Coded(DirectNumberMessage(calc, calc.If(free_of_budget, NullDouble(), price), condition.budget_written),
+			          computed_message_codes);
+			rows.computed_messages.push_back(p4.Add(calc.Out(too_large)));
+			item.empty = p4.Add(calc.Out(empty));
+			item.a = p4.Add(calc.Out(anchor));
+			item.wz = p4.Add(calc.Out(free_of_budget));
+			item.pos = p4.Add(calc.Out(Greater(w, Zero())));
+			item.t = p4.Add(calc.Out(price));
 			// The -infinity of an item outside the ranking is not below the normal range.
-			added.emplace_back(Dec("imprecise", k),
-			                   calc.And(calc.Not(Equal(v, Zero())), DirectBelowNormalRange(calc, price)));
+			item.imprecise =
+			    p4.Add(calc.Out(calc.And(calc.Not(Equal(v, Zero())), DirectBelowNormalRange(calc, price))));
 		}
-		Project(added);
+		plan = p4.Finish(std::move(plan));
+		return rows;
 	}
 
 	//! P5: each item's room up and room down, in units of budget. A finite room goes in `up_fin` and `down_fin`; an
 	//! infinite one is a flag, counted apart. The spend of the anchors, the best end of an item outside the ranking,
 	//! and whether that item is unbounded.
-	void AddRooms() {
-		Named added;
+	RowColumns AddRooms(const RowColumns &from) {
+		DirectProjectionStage p5(binder.GenerateTableIndex());
+		auto rows = Forward(p5, from);
 		for (idx_t k = 0; k < DecisionCount(); k++) {
-			auto w = C(Dec("w", k)), v = C(Dec("v", k)), l = C(Dec("l", k)), u = C(Dec("u", k)), a = C(Dec("a", k));
-			auto empty = C(Dec("empty", k)), wz = C(Dec("wz", k)), pos = C(Dec("pos", k));
+			auto &item = rows.items[k];
+			auto &was = from.items[k];
+			auto w = DoubleColumn(was.w), v = DoubleColumn(was.v), l = DoubleColumn(was.l), u = DoubleColumn(was.u),
+			     a = DoubleColumn(was.a);
+			auto empty = BoolColumn(was.empty), wz = BoolColumn(was.wz), pos = BoolColumn(was.pos);
 			auto inert = calc.Any({empty, wz});
 			auto high = calc.If(pos, u, l);
 			auto low = calc.If(pos, l, u);
@@ -1066,15 +1053,16 @@ private:
 			auto best_end = calc.If(Greater(v, Zero()), u, calc.If(Less(v, Zero()), l, a));
 			auto unbounded_end = calc.Any({calc.And(Greater(v, Zero()), Equal(u, PositiveInfinity())),
 			                               calc.And(Less(v, Zero()), Equal(l, NegativeInfinity()))});
-			added.emplace_back(Dec("up_inf", k), up_open);
-			added.emplace_back(Dec("down_inf", k), down_open);
-			added.emplace_back(Dec("up_fin", k), up_room);
-			added.emplace_back(Dec("down_fin", k), down_room);
-			added.emplace_back(Dec("sterm", k), calc.Mul(w, a));
-			added.emplace_back(Dec("best", k), best_end);
-			added.emplace_back(Dec("u1", k), Flag(calc.And(calc.And(wz, calc.Not(empty)), unbounded_end)));
+			item.up_inf = p5.Add(calc.Out(up_open));
+			item.down_inf = p5.Add(calc.Out(down_open));
+			item.up_fin = p5.Add(calc.Out(up_room));
+			item.down_fin = p5.Add(calc.Out(down_room));
+			item.sterm = p5.Add(calc.Out(calc.Mul(w, a)));
+			item.best = p5.Add(calc.Out(best_end));
+			item.u1 = p5.Add(calc.Out(Flag(calc.And(calc.And(wz, calc.Not(empty)), unbounded_end))));
 		}
-		Project(added);
+		plan = p5.Finish(std::move(plan));
+		return rows;
 	}
 };
 
@@ -1180,12 +1168,6 @@ private:
 	//! The class key of a group. Empty without a scope.
 	DirectClassKey class_key;
 
-	ExprPtr DoubleColumn(ColumnBinding binding) const {
-		return calc.Col(LogicalType::DOUBLE, binding);
-	}
-	ExprPtr BoolColumn(ColumnBinding binding) const {
-		return calc.Col(LogicalType::BOOLEAN, binding);
-	}
 	ExprPtr KeyColumn(idx_t i, const vector<ColumnBinding> &key) const {
 		return calc.Col(class_key.types[i], key[i]);
 	}
