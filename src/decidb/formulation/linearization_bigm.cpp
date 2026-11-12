@@ -268,21 +268,6 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
             ec.abs_aux_idx != DConstants::INVALID_INDEX) {
             continue;
         }
-        // WHEN-conditional constraints apply to only a subset of rows, but the
-        // bound we derive is shared across ALL of a variable's rows. Deriving it
-        // from the active subset would wrongly bound the excluded (WHEN-false)
-        // rows, which carry no such constraint. Skip any constraint that has
-        // excluded rows.
-        bool has_excluded = false;
-        for (idx_t gid : ec.row_group_ids) {
-            if (gid == DConstants::INVALID_INDEX && !ec.rows_stand_with_their_class) {
-                has_excluded = true;
-                break;
-            }
-        }
-        if (has_excluded) {
-            continue;
-        }
         // Soundness requires every term to be non-negative — both the variable
         // lower bounds (x >= 0) AND the coefficients (a >= 0) — so that dropping
         // the other terms to derive x_t <= K/a_t is valid. Constraints with any
@@ -364,7 +349,8 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
             }
         }
         // The shared bound ub_x applies to EVERY instance of x, so the clause bounds x only when one of its rows
-        // bounds each instance, and then by the loosest of their bounds. With no data rows the loop never runs and
+        // bounds each instance, and then by the loosest of their bounds: an instance a row the clause excludes reads
+        // (a `when` keeps it out) and no kept row bounds leaves x unbounded. With no data rows the loop never runs and
         // the bound stays at its start: harmless, there is no instance of x to bind.
         for (idx_t t = 0; nonneg && t < ec.variable_indices.size(); t++) {
             idx_t v = ec.variable_indices[t];

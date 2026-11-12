@@ -114,16 +114,6 @@ def spans_timelines(rows, scoped) -> bool:
     return False
 
 
-def holds_orphan_group(kept, by, per: str) -> bool:
-    """Whether a ``by`` group of the kept rows has no row in a class of ``per``."""
-    groups: dict = {}
-    for row in kept:
-        key = tuple(row[name] for name in by)
-        if None not in key:
-            groups.setdefault(key, []).append(row[per])
-    return any(all(value is None for value in values) for values in groups.values())
-
-
 def rows_of(rng: random.Random) -> list[dict]:
     count = rng.randint(4, 8)
     orders = rng.sample(range(1, count + 1), count)
@@ -180,10 +170,9 @@ def generate(seed: int, model: type = BoundModel) -> Case:
         lhs_sql, lhs = side(lhs_kind)
     bound = bound_of(At(Position(where), Col("c"), Over("s", within=within)))
     scoped = clause(Cmp(lhs, sense, bound), when=when, per=(per,) if per else PER_ROW)
-    # A `per` steps aside from two shapes. A class over two timelines is an error of the frame alone (D75), which its
-    # column cannot raise; a `by` group none of whose rows is in a class is constrained (Q7 review, older wrong
-    # answers, item 3).
-    if per and (spans_timelines(rows, scoped) or holds_orphan_group(kept, by, per)):
+    # A `per` steps aside from a class over two timelines, an error of the frame alone (D75), which its column cannot
+    # raise.
+    if per and spans_timelines(rows, scoped):
         per = None
         scoped = clause(Cmp(lhs, sense, bound), when=when)
 

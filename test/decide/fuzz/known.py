@@ -20,28 +20,6 @@ DEFECTS: dict[str, tuple[str, dict[tuple[str, str, str], tuple[int, ...]]]] = {
         "its lower bound, and the query is reported infeasible, while DIAGNOSE says feasible.",
         {},
     ),
-    "D5": (
-        "On HiGHS, 'Rewriting MIN/MAX requires a finite bound on x' for a keyed decision that `x = t.v` pins, once a "
-        "row has no instance of it: `per t.p: x(REAL)`, `x = t.v AND max(x) >= 5` over a row with a NULL p refuses, "
-        "frame or not, where Gurobi answers 10, 10. errors.md gives that refusal to an unbounded member; this one is "
-        "bounded.",
-        {("frames", "highs", "false-error"): (104, 124, 376)},
-    ),
-    "Q7-wrong-2": (
-        "A MIN or MAX reads a row whose class key is NULL as a member: `min(per t.g: x) <= 0` over rows (1,'b'), "
-        "(2,'a'), (3,NULL) gives 2,2,0. nests writes `min(per K: ...)` and `max(per K: ...)` only over a key K no "
-        "row holds a NULL in.",
-        {},
-    ),
-    "Q7-wrong-3": (
-        "A clause `per` constrains a `by` group none of whose rows is in a class. nests gives such a clause no `by`, "
-        "and bounds drops its `per`.",
-        {},
-    ),
-    "Q7-internal-abs": (
-        "`sum(abs(sum(abs(x))))` raises INTERNAL 'not linear algebra'. nests puts no `abs` inside an `abs`.",
-        {},
-    ),
     "Q7-ruling-equals": (
         "Needs a ruling: under `=` a column bound raises 'more than one value' on a group with no instance, where a "
         "frame bound says nothing. nests gives `=` a constant bound; bounds writes an `=` clause with no `per t.k:` "

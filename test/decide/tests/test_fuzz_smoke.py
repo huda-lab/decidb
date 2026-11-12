@@ -233,15 +233,6 @@ def test_bounds_refuse_two_values_under_equals():
 
 
 @pytest.mark.parametrize(
-    "ks, orphan",
-    [pytest.param((1, None), False, id="a-class-in-the-group"), pytest.param((None, None), True, id="no-class")],
-)
-def test_bounds_find_a_group_with_no_class(ks, orphan):
-    rows = [dict(g="a", k=k) for k in ks] + [dict(g="b", k=1)]
-    assert bounds.holds_orphan_group(rows, ("g",), "k") is orphan
-
-
-@pytest.mark.parametrize(
     "desc, keys", [pytest.param(False, [None, "a", "B"], id="asc"), pytest.param(True, ["B", "a", None], id="desc")]
 )
 def test_order_keys_place_null(desc, keys):

@@ -262,6 +262,11 @@ void decide_rewrite::TagAbsForBigM(ClientContext &context, LogicalDecide &decide
 	if (decide.decide_objective) {
 		ClassifyAbsObjective(context, *decide.decide_objective, decide.decide_index, decide.decide_sense);
 	}
+	// A helper's body (LiftNestedReducers) is read by whatever reads the helper, whose sign the body does not know:
+	// each ABS in it is pinned exactly, as one inside another ABS is.
+	for (auto &link : decide.reducer_value_links) {
+		TagAbsSubtreeForBigM(*link.inner_expr, decide.decide_index);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -283,6 +288,11 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 		auto objective = std::move(decide.decide_objective);
 		FindAndReplaceAbs(objective, decide, canonicalizer, abs_pairs, OBJECTIVE_ROW_TAG, DecideEnclosingScope());
 		decide.SetObjective(optimizer.context, std::move(objective));
+	}
+	// A helper's body, which belongs to no clause (LiftNestedReducers): its auxiliaries are pinned exactly
+	// (TagAbsForBigM), so they hold on every row.
+	for (auto &link : decide.reducer_value_links) {
+		FindAndReplaceAbs(link.inner_expr, decide, canonicalizer, abs_pairs, string(), DecideEnclosingScope());
 	}
 
 	// Phase 2: Generate linearization constraints for each auxiliary variable.

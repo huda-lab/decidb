@@ -207,7 +207,7 @@ vector<idx_t> DecideKeptGroups(const DecideKeyGroups &groups, idx_t num_rows,
 //! with no value is skipped (D90). Returns the groups of `groups` it keeps, which its names name.
 vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_rows, const vector<bool> &scoped_kept,
                                bool has_local_filters, const vector<bool> &local_row_active,
-                               const DecideKeyGroups *groups, const std::function<bool()> &any_class,
+                               const DecideKeyGroups *groups, const vector<bool> &in_a_class,
                                vector<idx_t> *kept_row_group_ids, EvaluatedConstraint &evaluated,
                                idx_t &grouped_instances);
 

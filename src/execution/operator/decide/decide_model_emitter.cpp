@@ -88,14 +88,16 @@ void DecideModelEmitter::Filter(idx_t site, bool qualified, TermFilterState &fil
 	vector<bool> first;
 	const std::vector<bool> &reads = ReadEntriesOf(site, qualified, first);
 	const std::vector<bool> &tested = columns.Tested(site);
-	const auto entries = descent.Containers()[site].rows.data();
+	auto &container = descent.Containers()[site];
+	const auto entries = container.rows.data();
 	filter.has_filter = qualified;
 	filter.mask.assign(num_rows, false);
 	members.assign(num_rows, false);
 	std::vector<bool> &mask = filter.mask;
 	std::vector<bool> &member = members;
 	DecideEntryRows(tree, descent, site).ForEach([&](idx_t row, idx_t entry) {
-		if (tested[entry]) {
+		// A row in no class of the reducer's own `per` key is no member of it (language/guide.md §5.1).
+		if (tested[entry] && container.groups.InAClass(container.Slot(entry))) {
 			member[row] = true;
 		}
 		if (reads[entry] && (!qualified || entries[entry] == row)) {
@@ -871,18 +873,14 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 	const DecideKeyGroups key_groups {group_of, num_key_groups};
 	idx_t grouped_instances = 0;
 	vector<idx_t> kept_row_group_ids;
-	// A `per K:` that names classes holds once per class, so not at all with every kept row's K NULL.
-	auto &classes = descent.Containers()[root].groups;
+	// A `per K:` that names classes constrains no row in none of them: each kept row's class.
+	auto &root_container = descent.Containers()[root];
+	vector<bool> in_a_class(num_rows, false);
+	std::vector<bool> &classed = in_a_class;
+	rows.ForEach(
+	    [&](idx_t row, idx_t entry) { classed[row] = root_container.groups.InAClass(root_container.Slot(entry)); });
 	const auto kept_groups = GroupRowsByShape(
-	    clause, num_rows, kept, has_local_filters, active, keyed ? &key_groups : nullptr,
-	    [&]() {
-		    for (idx_t slot = 0; slot < classes.size(); slot++) {
-			    if (classes.InAClass(slot)) {
-				    return true;
-			    }
-		    }
-		    return false;
-	    },
+	    clause, num_rows, kept, has_local_filters, active, keyed ? &key_groups : nullptr, in_a_class,
 	    op.diagnose || clause.tightest_frame_bound ? &kept_row_group_ids : nullptr, evaluated, grouped_instances);
 	if (keyed) {
 		Name(by, kept_groups, evaluated);

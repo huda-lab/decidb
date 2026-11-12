@@ -5,6 +5,6 @@
   "warnings": ""
  },
  "values": {
-  "any": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 8\nnum_rows: 7\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=9 int=0 bin=0 obj=1\ncol 1: lb=0 ub=9 int=0 bin=0 obj=1\ncol 2: lb=0 ub=9 int=0 bin=0 obj=1\ncol 3: lb=0 ub=9 int=0 bin=0 obj=1\ncol 4: lb=0 ub=9 int=0 bin=0 obj=2\ncol 5: lb=0 ub=9 int=0 bin=0 obj=1\ncol 6: lb=0 ub=1e+30 int=0 bin=0 obj=0\ncol 7: lb=0 ub=1e+30 int=0 bin=0 obj=0\nrow 0: sense=< rhs=20 nnz=2 | 0:1 6:1\nrow 1: sense=< rhs=20 nnz=2 | 1:1 6:1\nrow 2: sense=< rhs=20 nnz=2 | 2:1 7:1\nrow 3: sense=> rhs=-1 nnz=2 | 4:-1 6:1\nrow 4: sense=> rhs=-1 nnz=2 | 5:-1 7:1\nrow 5: sense=> rhs=1 nnz=2 | 4:1 6:1\nrow 6: sense=> rhs=1 nnz=2 | 5:1 7:1\n=== END MODEL DUMP ===\n"
+  "any": "=== DECIDB MODEL DUMP ===\nsense: maximize\nnum_vars: 8\nnum_rows: 7\nnum_qrows: 0\nnum_genconstrs: 0\nnum_indconstrs: 0\ncol 0: lb=0 ub=9 int=0 bin=0 obj=1\ncol 1: lb=0 ub=9 int=0 bin=0 obj=1\ncol 2: lb=0 ub=9 int=0 bin=0 obj=1\ncol 3: lb=0 ub=9 int=0 bin=0 obj=1\ncol 4: lb=0 ub=9 int=0 bin=0 obj=2\ncol 5: lb=0 ub=9 int=0 bin=0 obj=1\ncol 6: lb=0 ub=20 int=0 bin=0 obj=0\ncol 7: lb=0 ub=20 int=0 bin=0 obj=0\nrow 0: sense=< rhs=20 nnz=2 | 0:1 6:1\nrow 1: sense=< rhs=20 nnz=2 | 1:1 6:1\nrow 2: sense=< rhs=20 nnz=2 | 2:1 7:1\nrow 3: sense=> rhs=-1 nnz=2 | 4:-1 6:1\nrow 4: sense=> rhs=-1 nnz=2 | 5:-1 7:1\nrow 5: sense=> rhs=1 nnz=2 | 4:1 6:1\nrow 6: sense=> rhs=1 nnz=2 | 5:1 7:1\n=== END MODEL DUMP ===\n"
  }
 }

@@ -195,9 +195,6 @@ class Draw:
         #: of the ``per`` holds it once, where a per-row ``x`` is a member of every row whatever the ``per``.
         self.keyed = [name for name in names if DECLARATIONS[name][1] is not PER_ROW] or self.names
 
-    def holds_null(self, key) -> bool:
-        return bool(key) and any(row[name] is None for name in key for row in self.rows)
-
     def scope(self, pers=PERS, when_rate: float = 0.35, per_rate: float = 0.5) -> tuple:
         """A ``when`` and a ``per``, each now and then: the text before the colon, and their readings."""
         when = self.rng.choice(WHENS) if self.rng.random() < when_rate else (None, None)
@@ -208,13 +205,11 @@ class Draw:
     def reducer(self, operand, *, by=True, counts=False) -> Text:
         """A reducer over ``operand(keyed)``, which reads the keyed decisions when the reducer has a ``per``. A ``per``
         is drawn mostly for a SUM or an AVG, whose members it counts: the classes a MIN or a MAX takes its extreme
-        over can change it only by leaving out a row with a NULL key, which it is not given here. One that ``counts``
-        is a SUM under a ``per`` other than ``per row``, which counts a signature once per class."""
+        over can change it only by leaving out a row with a NULL key. One that ``counts`` is a SUM under a ``per``
+        other than ``per row``, which counts a signature once per class."""
         kind = "sum" if counts else self.rng.choice(KINDS)
-        # A MIN or MAX reads a NULL-key row of its `per` as a member (Q7 review, older wrong answers, item 2).
-        pers = [per for per in PERS if kind in ("sum", "avg") or not self.holds_null(per[1])]
         rate = 1.0 if counts else 0.75 if kind in ("sum", "avg") else 0.2
-        prefix, when, per = self.scope(pers[:-1] if counts else pers, per_rate=rate)
+        prefix, when, per = self.scope(PERS[:-1] if counts else PERS, per_rate=rate)
         body = operand(per is not PER_ROW)
         written, key = self.rng.choice(BYS) if by else BYS[0]
         suffix = f" by ({', '.join(written)})" if written else ""
@@ -236,16 +231,15 @@ class Draw:
             return term - self.data_nest(1)
         return term
 
-    def body(self, depth: int, keyed: bool = False, *, under_abs=False) -> Text:
-        """A reducer's operand: a leaf at the bottom; above it a reducer, alone or composed. An ``abs`` holds no other
-        (`sum(abs(sum(abs(x))))`, Q7 review, older INTERNAL errors)."""
+    def body(self, depth: int, keyed: bool = False) -> Text:
+        """A reducer's operand: a leaf at the bottom; above it a reducer, alone or composed."""
         if depth == 0:
             return self.leaf(keyed)
         shape = self.rng.random()
-        if shape >= 0.40 or under_abs:
-            return self.reducer(lambda inner: self.body(depth - 1, inner, under_abs=under_abs))
+        if shape >= 0.40:
+            return self.reducer(lambda inner: self.body(depth - 1, inner))
         if shape < 0.08:
-            nest = self.reducer(lambda inner: self.body(depth - 1, inner, under_abs=True))
+            nest = self.reducer(lambda inner: self.body(depth - 1, inner))
             return Text(f"abs({nest.sql})", Abs(nest.node))
         nest = self.reducer(lambda inner: self.body(depth - 1, inner))
         if shape < 0.23:
@@ -317,10 +311,8 @@ def over_decisions(rng: random.Random, model: type) -> tuple[Case, bool]:
     draw = Draw(rng, rows, names)
 
     prefix, when, per = draw.scope(when_rate=0.25)
-    # A clause's `per` constrains a `by` group all of whose rows have a NULL key (Q7 review, older wrong answers,
-    # item 3).
     depth = rng.randint(0, 2)
-    lhs = draw.reducer(lambda keyed: draw.body(depth, keyed), by=per in (PER_ROW, GLOBAL) or not draw.holds_null(per))
+    lhs = draw.reducer(lambda keyed: draw.body(depth, keyed))
     shape = rng.random()
     if shape < 0.2:
         lhs = decision("x") + lhs
