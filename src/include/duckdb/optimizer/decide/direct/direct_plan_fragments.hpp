@@ -369,6 +369,20 @@ bool DirectInclusiveRows(double limit, ExpressionType comparison, bool upper, id
 ExprPtr DirectInclusiveRowsExpr(const ExpressionBuilder &calc, ExpressionType comparison, bool upper,
                                 const std::function<ExprPtr()> &value);
 
+struct DirectGroupValues;
+
+//! What a count limit that is a group bound (DirectDataLimit::GroupBound) gives for one side of the count, as the
+//! DOUBLE DirectInclusiveRowsExpr rounds: the group's tightest value on that side, over `values` (what the plan's group
+//! computed, DirectAddGroupBound). A negated count body (`SUM(-x) <= B` is `SUM(x) >= -B`) holds B, which is the limit
+//! the bound gives on the other side as written, negated. The side must be one the bound has (`values` has it).
+ExprPtr DirectGroupCountLimitValue(const ExpressionBuilder &calc, Optimizer &optimizer, const DirectCountLimit &count,
+                                   bool upper, const DirectGroupValues &values);
+
+//! DirectGroupCountLimitValue as the inclusive count limit of one side, a BIGINT per row (DirectInclusiveRowsExpr): a
+//! NULL value is no limit, a value below zero is -1 on an upper side, and a value beyond the BIGINT range is clamped.
+ExprPtr DirectGroupCountLimitRows(const ExpressionBuilder &calc, Optimizer &optimizer, const DirectCountLimit &count,
+                                  bool upper, const DirectGroupValues &values);
+
 //===--------------------------------------------------------------------===//
 // Group bounds (DecideGroupBound): a bound computed from the aggregates of its group
 //===--------------------------------------------------------------------===//

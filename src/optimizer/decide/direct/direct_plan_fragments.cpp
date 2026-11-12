@@ -801,6 +801,22 @@ ExprPtr DirectInclusiveRowsExpr(const ExpressionBuilder &calc, ExpressionType co
 	return calc.If(calc.IsNull(value()), open, limit);
 }
 
+ExprPtr DirectGroupCountLimitValue(const ExpressionBuilder &calc, Optimizer &optimizer, const DirectCountLimit &count,
+                                   bool upper, const DirectGroupValues &values) {
+	auto &limit = upper != count.negated ? values.upper : values.lower;
+	D_ASSERT(limit);
+	if (count.negated) {
+		return calc.Wrap(DirectScaledTerm(optimizer, calc.Out(limit), -1));
+	}
+	return calc.Cast(limit, LogicalType::DOUBLE);
+}
+
+ExprPtr DirectGroupCountLimitRows(const ExpressionBuilder &calc, Optimizer &optimizer, const DirectCountLimit &count,
+                                  bool upper, const DirectGroupValues &values) {
+	return DirectInclusiveRowsExpr(calc, count.comparison, upper,
+	                               [&]() { return DirectGroupCountLimitValue(calc, optimizer, count, upper, values); });
+}
+
 unique_ptr<DecideGroupBound> DirectTightestBound(Optimizer &optimizer, ExpressionType comparison,
                                                  unique_ptr<Expression> rhs, const string &text,
                                                  unique_ptr<Expression> invalid) {

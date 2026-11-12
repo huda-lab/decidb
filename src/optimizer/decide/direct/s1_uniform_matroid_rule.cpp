@@ -277,20 +277,13 @@ private:
 	}
 
 	//! The value of source-valued bound `index` on a side, as DOUBLE: the group's value when the plan computes its
-	//! aggregates, else the bound's own column. A negated bound (`SUM(-x) <= B` is `SUM(x) >= -B`) holds B, which is
-	//! the limit the bound gives on the other side as written, negated.
+	//! aggregates (DirectGroupCountLimitValue), else the bound's own column.
 	ExprPtr BoundValue(idx_t index, bool upper) const {
 		auto &bound = condition.source_bounds[index];
 		if (!bound.limit.data.group) {
 			return calc.Col(LogicalType::DOUBLE, bound_columns[index]);
 		}
-		auto &values = GroupValues(0, group_bound[index]);
-		auto &limit = upper != bound.negated ? values.upper : values.lower;
-		D_ASSERT(limit);
-		if (bound.negated) {
-			return calc.Wrap(DirectScaledTerm(optimizer, calc.Out(limit), -1));
-		}
-		return calc.Cast(limit, LogicalType::DOUBLE);
+		return DirectGroupCountLimitValue(calc, optimizer, bound, upper, GroupValues(0, group_bound[index]));
 	}
 
 	//! Inclusive count limit of one source-valued bound, as BIGINT: its value rounded, clamped to the BIGINT range,
