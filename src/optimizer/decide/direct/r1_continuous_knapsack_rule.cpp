@@ -5,6 +5,7 @@
 
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/function/aggregate_function.hpp"
+#include "duckdb/optimizer/column_binding_replacer.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
@@ -623,62 +624,37 @@ public:
 		return top;
 	}
 
-	//! Where Build put the columns the aggregate plan reads, each binding passed through `where`: a read of the stage
-	//! through a CTE (DirectSourceReader::ReadStaged) has the columns of the plan Build returned at other bindings.
-	ItemColumns Columns(const std::function<ColumnBinding(ColumnBinding)> &where) const {
+	//! Where Build put the columns the aggregate plan reads, at the bindings of the plan Build returned. A read of the
+	//! stage through a CTE (DirectSourceReader::ReadStaged) has them at other bindings, which AggregatePlanBuilder
+	//! re-points the plan at (ReadItems).
+	ItemColumns Columns() const {
 		ItemColumns items;
-		for (auto &source : last.carried.source) {
-			items.sources.push_back(where(source));
-		}
-		for (auto &key : last.carried.keys) {
-			items.keys.push_back(where(key));
-		}
-		for (auto &message : last.messages) {
-			items.messages.push_back(where(message));
-		}
+		items.sources = last.carried.source;
+		items.keys = last.carried.keys;
+		items.messages = last.messages;
 		items.message_codes = message_codes;
-		for (auto &message : last.computed_messages) {
-			items.computed_messages.push_back(where(message));
-		}
+		items.computed_messages = last.computed_messages;
 		items.computed_message_codes = computed_message_codes;
-		for (auto &limit : last.limits) {
-			items.limits.emplace_back();
-			for (auto &input : limit) {
-				DirectGroupInputColumns moved;
-				if (input.reads.table_index != DConstants::INVALID_INDEX) {
-					moved.reads = where(input.reads);
-				}
-				if (input.argument.table_index != DConstants::INVALID_INDEX) {
-					moved.argument = where(input.argument);
-				}
-				items.limits.back().push_back(moved);
-			}
-		}
+		items.limits = last.limits;
 		for (auto &bindings : last.items) {
-			auto number = [&](ColumnBinding binding) {
-				return DoubleColumn(where(binding));
-			};
-			auto flag = [&](ColumnBinding binding) {
-				return BoolColumn(where(binding));
-			};
 			ItemExprs item;
-			item.v = number(bindings.v);
-			item.w = number(bindings.w);
-			item.l = number(bindings.l);
-			item.u = number(bindings.u);
-			item.a = number(bindings.a);
-			item.t = number(bindings.t);
-			item.best = number(bindings.best);
-			item.empty = flag(bindings.empty);
-			item.wz = flag(bindings.wz);
-			item.pos = flag(bindings.pos);
-			item.up_inf = flag(bindings.up_inf);
-			item.down_inf = flag(bindings.down_inf);
-			item.up_fin = number(bindings.up_fin);
-			item.down_fin = number(bindings.down_fin);
-			item.sterm = number(bindings.sterm);
-			item.u1 = number(bindings.u1);
-			item.imprecise = flag(bindings.imprecise);
+			item.v = DoubleColumn(bindings.v);
+			item.w = DoubleColumn(bindings.w);
+			item.l = DoubleColumn(bindings.l);
+			item.u = DoubleColumn(bindings.u);
+			item.a = DoubleColumn(bindings.a);
+			item.t = DoubleColumn(bindings.t);
+			item.best = DoubleColumn(bindings.best);
+			item.empty = BoolColumn(bindings.empty);
+			item.wz = BoolColumn(bindings.wz);
+			item.pos = BoolColumn(bindings.pos);
+			item.up_inf = BoolColumn(bindings.up_inf);
+			item.down_inf = BoolColumn(bindings.down_inf);
+			item.up_fin = DoubleColumn(bindings.up_fin);
+			item.down_fin = DoubleColumn(bindings.down_fin);
+			item.sterm = DoubleColumn(bindings.sterm);
+			item.u1 = DoubleColumn(bindings.u1);
+			item.imprecise = BoolColumn(bindings.imprecise);
 			items.decisions.push_back(item);
 		}
 		return items;
@@ -1127,10 +1103,18 @@ public:
 	}
 
 private:
-	//! Stage 1 as one read of the source builds it.
+	//! Stage 1 as one read of the source builds it: the read, and the columns of the stage's plan (ItemStages::Columns),
+	//! which the plan built over the read re-points at the read's own (Repoint).
 	struct Items {
 		unique_ptr<LogicalOperator> plan;
 		ItemColumns columns;
+		ColumnBindingReplacer repointed;
+
+		//! `above`, the plan built over `plan`, with the columns it reads re-pointed at the read's.
+		unique_ptr<LogicalOperator> Repoint(unique_ptr<LogicalOperator> above) {
+			repointed.VisitOperator(*above);
+			return above;
+		}
 	};
 	//! Stage 2: what stage 3 reads of the group's totals (the spend of the anchors, the finite room down, the
 	//! highest price of an infinite room up and the lowest of one down), which limit the budget binds at, and the check
@@ -1196,13 +1180,12 @@ private:
 		auto &top = layout->Top();
 		D_ASSERT(top.size() == staged.columns.size());
 		Items items;
+		for (idx_t i = 0; i < top.size(); i++) {
+			items.repointed.replacement_bindings.emplace_back(top[i], staged.columns[i]);
+		}
+		items.repointed.stop_operator = staged.plan.get();
 		items.plan = std::move(staged.plan);
-		items.columns = layout->Columns([&](ColumnBinding binding) {
-			auto found = std::find(top.begin(), top.end(), binding);
-			// Every column the layout names is one of the stage's.
-			D_ASSERT(found != top.end());
-			return staged.columns[found - top.begin()];
-		});
+		items.columns = layout->Columns();
 		return items;
 	}
 
@@ -1274,7 +1257,7 @@ private:
 			limits.push_back(
 			    DirectAddGroupBound(calc, *limit_bounds[j], items.columns.limits[j], sink, limit_eligible));
 		}
-		auto plan = aggregate.Finish(std::move(items.plan));
+		auto plan = items.Repoint(aggregate.Finish(std::move(items.plan)));
 
 		vector<ExprPtr> totals;
 		for (auto &sum : sums) {
@@ -1364,7 +1347,7 @@ private:
 			narrow.key = item_key;
 			narrow.price = narrowed.Add(prices[0]);
 			narrow.rooms = narrowed.Add(rooms[0]);
-			narrow.plan = narrowed.Finish(std::move(items.plan));
+			narrow.plan = items.Repoint(narrowed.Finish(std::move(items.plan)));
 			return narrow;
 		}
 		// One item per decision: the row's plan is crossed with a constant relation that numbers the decisions, and
@@ -1382,7 +1365,8 @@ private:
 		auto numbers_get = make_uniq<LogicalExpressionGet>(numbers_index, vector<LogicalType> {LogicalType::BIGINT},
 		                                                   std::move(numbers));
 		numbers_get->children.push_back(make_uniq<LogicalDummyScan>(binder.GenerateTableIndex()));
-		auto crossed = LogicalCrossProduct::Create(narrowed.Finish(std::move(items.plan)), std::move(numbers_get));
+		auto crossed =
+		    LogicalCrossProduct::Create(items.Repoint(narrowed.Finish(std::move(items.plan))), std::move(numbers_get));
 		auto number = calc.Col(LogicalType::BIGINT, ColumnBinding(numbers_index, 0));
 		auto pick = [&](const vector<ColumnBinding> &values) {
 			auto chosen = DoubleColumn(values.back());
@@ -1533,7 +1517,7 @@ private:
 		for (auto &limit : group.limits) {
 			limits.push_back(aggregate.Add(DirectHashAggregate(optimizer, calc, "any_value", DoubleColumn(limit))));
 		}
-		auto reduced = aggregate.Finish(std::move(joined));
+		auto reduced = items.Repoint(aggregate.Finish(std::move(joined)));
 
 		auto others = calc.Sub(calc.Add(DoubleColumn(anchors), sums[SUM_ABOVE]), sums[SUM_BELOW]);
 		auto left_over = calc.If(BoolColumn(over), calc.Sub(UpperOf(limits), others),
@@ -1594,7 +1578,7 @@ private:
 		}
 		substitute.validated_columns.push_back(sources + decisions);
 		// The root a materialized source needs sits above every read.
-		substitute.child = reader.Finish(out.Finish(std::move(joined)));
+		substitute.child = reader.Finish(items.Repoint(out.Finish(std::move(joined))));
 		return substitute;
 	}
 };
