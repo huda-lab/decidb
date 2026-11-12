@@ -135,7 +135,7 @@ In `src/execution/operator/decide/` (the tree: `decide_descent.cpp`, `decide_tre
   counts classes without special code. A reducer whose body has a field keeps one row per variant of each class: its own
   keyed scope numbers the rows by key and signature (D71), so every row it keeps stands for rows that read the same
   value. The mask is per term, so `SUM(D: a * open) + sum(b * ship)` de-duplicates only the first.
-- The prepared model (`decide_prepared_model.hpp`) carries a clause's scope as one `DecideClauseScope` — `when`,
+- The tree's term records (`decide_tree_terms.hpp`) carry a clause's scope as one `DecideClauseScope` — `when`,
   `per` (`PerRole`: `NONE`, `ONE_ROW_PER_CLASS`, `NAMES_CLASSES`) and `class_key` — embedded in `DecideConstraint`
   (beside its `group_key`) and `ComposedMinMaxConstraint`, and on `DecideObjective` as `when_condition`; an objective
   AVG read in place divides by the groups of its `avg_group_key`. Each key is an index into `LogicalDecide::keys`.

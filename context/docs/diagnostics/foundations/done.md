@@ -324,7 +324,7 @@ inline branches in `PhysicalDecide::Finalize`.
   widened column box (the elastic transform `BuildElasticModel` then reshapes it) plus an
   injected `solve_model` callback. No user bound is missing from that model: every bound
   the optimizer folded into a column box reaches it through its own clause's rows
-  (`DecidePreparedModel::singleton_row_constraints`, evaluated under `DIAGNOSE` only), one
+  (lowered into its folded root, `DecideNode::folded`, evaluated under `DIAGNOSE` only), one
   row per kept row or class, BOOLEAN pins like `x <= 0` / `x >= 1` / `x = 1` included.
   Only bounds that merely restate a variable's intrinsic domain (a BOOLEAN's `<= 1` or
   `>= 0`) are left unrecorded, by `FoldSingletonRows`. Engine

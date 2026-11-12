@@ -29,7 +29,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `planner/decide/decide_reducer_path.hpp` | 04 | `DecideReducerPath` — the path rule: the rows and key a nested reducer reads, shared by the canonicalizer, the bound-side rewrite and the value rewrite |
 | `planner/decide/decide_source_provenance.hpp` | 03 | Source capture and rendering |
 | `planner/decide/decide_cast_policy.hpp` | 04 | `UnwrapDecideCasts`, `StripCastsForIdentity`, `GetBareDecideColumnRef` |
-| `planner/decide/decide_prepared_model.hpp` | 05/08 | The prepared linear form — stage 05's flattened terms, stage 08's coefficients |
+| `planner/decide/decide_tree_terms.hpp` | 05/08 | The tree's term records — stage 05's lowered terms in the tree's nodes, stage 08's coefficients |
 | `optimizer/decide/decide_optimizer.hpp` | 05 | The rewrite passes |
 | `optimizer/decide/decide_linear_form.hpp` | 05 | Flattening into `decide.prepared`; the last DECIDE optimization pass |
 | `optimizer/decide/decide_solver_gate.hpp` | 05 | Backend choice, the native-construct mask, and the plan-time model-class gate |

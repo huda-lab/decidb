@@ -175,7 +175,7 @@ each `ReducerValueLink` holds the reducer a helper replaced — kind, body, its 
 and `per`, its path key (its `by` key under every enclosing one), its SQL as a label —
 the rows its path keeps, and the sides any reader needs; innermost first, and
 `inner_terms` are flattened with the prepared form),
-`flat_objective_agg` / `flat_objective_is_easy`, the folded variable box, and the prepared linear form.
+`flat_objective_agg` / `flat_objective_is_easy`, and the folded variable box.
 
 `optimized` marks the boundary between the first two groups and the third. It is
 set before the optimizer's first rewrite and is what takes this plan off the wire —

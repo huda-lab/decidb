@@ -141,9 +141,9 @@ stage 1E:  E* = min Σ αᵢ s_edit    subject to D ≤ D*, fixed G
   k, strict, typed_k, source_clause_id, removal_group_id}` (a comparison → one spec, a
   `BETWEEN` → two) and tags its comparison `SINGLETON_ROW_CLAUSE_ROWS_TAG` beside
   `SINGLETON_ROW_BOUND_TAG`. Stage 05's linear form flattens such a clause aside
-  (`DecidePreparedModel::singleton_row_constraints`, one per recorded bound, which it
+  (into its folded root, `DecideNode::folded`, one per recorded bound, which it
   asserts); execution evaluates those clauses under `DIAGNOSE` only, numbered after the
-  prepared clauses, and only the repair model carries their rows: one per kept row, or one
+  lowered clauses, and only the repair model carries their rows: one per kept row, or one
   per class under a `per K:` key, each `USER_PARAMETER` and, for a literal bound,
   `SHARED_SCALAR`. In the `query` scope the rows of one bound share one slack (the knob is
   one literal `K` → report the max overshoot); in the `expanded` scope each
@@ -335,7 +335,7 @@ two clauses sharing an id share a slack — and a slack spanning two unrelated c
 spent on one of them and billed to the other: a repair that does not repair
 (`SUM(y) >= 100` loosened to `>= 81.6` on a query where `y <= 2` caps `SUM(y)` at 8,
 because the slack the engine spent was the bound's). Execution numbers every clause it
-evaluates once: the prepared clauses first, then (under `DIAGNOSE`) the folded bounds'
+evaluates once: the lowered clauses first, then (under `DIAGNOSE`) the folded bounds'
 clauses, then the composed MIN/MAX clauses, each taking its position in that order. No
 count of the model's rows is the id space, since formulation drops rows (a natively
 stated construct, a `<>` moved into indicator rows), so the ids are fixed before

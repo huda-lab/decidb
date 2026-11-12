@@ -399,7 +399,7 @@ see `../05_optimizer/done.md` → "The model-class gate".
 `ConstraintProvenance` (`ilp_model.hpp`) travels with each emitted constraint so
 diagnosis can report at the **user-clause** level rather than at raw matrix rows:
 the source comparison for display, `repair_group_id` for elastic grouping (execution
-numbers every clause it evaluates -- the prepared clauses, then under DIAGNOSE the
+numbers every clause it evaluates -- the lowered clauses, then under DIAGNOSE the
 folded (singleton-row) bounds' clauses, then the composed clauses, whose id
 `LinearizeComposedMinMaxConstraint` takes as given -- so no two clauses share one), the
 group id (a `by` group or a `per` class) and its printable key, `ConstraintKind` (user

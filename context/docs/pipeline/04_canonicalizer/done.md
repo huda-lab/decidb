@@ -153,7 +153,7 @@ a power) is not split, and the binder counts its whole body.
 
 `ReadCanonicalAtoms` reads these atoms back from a canonical side, with each sign
 and any reducer factor, by the same spine walk `Decompose` uses. Readers of
-canonical trees (the solver path's prepared linear form, direct solve's facts) use
+canonical trees (the solver path's lowered terms, direct solve's facts) use
 it instead of walking `+` and `-` themselves.
 
 ### 3.3a One spelling per meaning: `norm`

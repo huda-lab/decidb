@@ -2,7 +2,7 @@
 
 Chooses the **mathematical formulation** for every construct the solver cannot take
 literally: ABS, MIN/MAX, AVG, `<>`, bilinear products, and composed reducers, and
-then **flattens the finished tree into the prepared linear form** that execution
+then **lowers the finished clauses into the tree's terms** (stage 08's `DecideTree`), which execution
 consumes. It assumes canonical input and produces canonical output; it never
 decides shape, parses SQL, executes relations, or calls a solver.
 
@@ -19,8 +19,7 @@ decides shape, parses SQL, executes relations, or calls a solver.
 - `src/include/duckdb/optimizer/decide/decide_optimizer_internal.hpp` — helpers
   shared across the pass files
 - `src/include/duckdb/optimizer/decide/decide_linear_form.hpp`
-- `src/include/duckdb/planner/decide/decide_prepared_model.hpp` — the form itself,
-  owned by stage 03 because `LogicalDecide` is what carries it across the boundary
+- `src/include/duckdb/planner/decide/decide_tree_terms.hpp` — the term records, held in the tree's nodes
 
 Every constraint it emits re-enters through `LogicalDecide::AddConstraint` and
 every objective through `LogicalDecide::SetObjective`, both of which
@@ -104,7 +103,7 @@ backend.
 ### The model-class gate
 
 `RequireDecideSolverSupport` (`decide_solver_gate.cpp`) runs once the prepared linear
-form exists — right after `BuildDecidePreparedModel`, the first point at which every
+form exists — right after `LowerDecideTree`, the first point at which every
 constraint's shape and the objective are settled. It compares what the query demands
 against what the chosen backend declares.
 
@@ -207,13 +206,13 @@ below.
 `RewriteComposedMinMaxObjectiveTop` runs within the composed pass for the
 objective side. Setting `DECIDB_BENCH` prints `optimizer_ms` for the whole block.
 
-A thirteenth pass, `BuildDecidePreparedModel`, belongs to this stage but is
-**triggered later** — see §1a. It also flattens each `ReducerValueLink`'s body into
-`inner_terms`, as it does a composed term's.
+A thirteenth pass, `LowerDecideTree`, belongs to this stage but is
+**triggered later** — see §1a. It also lowers each `ReducerValueLink`'s body into its helper's G or O, as it does a
+composed term's into its G.
 
 ---
 
-## 1a. Linear-form flattening — `BuildDecidePreparedModel`
+## 1a. Linear-form flattening — `LowerDecideTree`
 
 Turns each canonical comparison and the objective into additive terms:
 `sign * coefficient * variable`. This is where DECIDE does its linear algebra —
@@ -222,10 +221,13 @@ chains, pushing a divisor into every produced coefficient, folding unary minus,
 stripping binder casts, and multiplying a peeled reducer scale into everything the
 reducer produced.
 
-The output is `LogicalDecide::prepared`, a `DecidePreparedModel`: a
-`vector<DecideConstraint>` plus an optional `DecideObjective`. It also fills
-`ComposedMinMaxTerm::inner_terms`, so every construct reaches execution as
-prepared terms rather than one path re-deriving its own.
+The output goes into the tree under construction (`DecideTreeConstruction`), not into a model of its own: each
+clause's `DecideConstraint` into the root the tree made of its comparison (`TakeClause`; a folded bound's into its
+folded root), the optional `DecideObjective` into the objective's root, each composed term's and each helper's terms
+into its G or O, and the frame columns they read into `DecideTree::frame_reads`. So every construct reaches execution
+as lowered terms rather than one path re-deriving its own, and the solver gate reads its model class off the same
+records (`RequireDecideSolverSupport`). This is the tree's lowering, one IR: until D1b it wrote a second model
+(`DecidePreparedModel`) that the tree copied into its bodies.
 
 **A coefficient stays an unevaluated `Expression`.** `SUM(x * price)` yields the
 coefficient `price`, which is a number only once a row exists. Everything else
@@ -280,7 +282,7 @@ which is not supported yet"*), since it has no once-only reading in the model.
 `AppendFrameTerms` turns it into the terms the model reads: each payload term `c·x` becomes `f·READ(c)·x`, its decision
 read at the row the frame selects (`DecideTerm::frame_read`), and each term `c'·y` of the `else` becomes
 `f·FALLBACK(c')·y`, read at the row itself. `READ`, `FALLBACK`, `VALUE` and `DEFINED` are columns stage 08 appends to
-the input after its own (`DecidePreparedModel::frame_columns`, from `frame_column_base`), so every evaluator reads a
+the input after its own (`DecideFrameReads::columns`, from `frame_column_base`), so every evaluator reads a
 frame as data and none learns what one is: `READ` is `c` at the selected row, 0 where a missing position has an `else`
 and NULL where it has none; `FALLBACK` is `c'` at a row whose position is missing, 0 elsewhere. NULL is no value
 (D84): a comparison reading it skips that instance, the objective drops the term (`DropNullObjectiveTerms`). The
@@ -331,7 +333,7 @@ golden dump is unchanged by this pass — and why `test_like_term_collection.py`
 pins the *non*-merges, which are the observable direction.
 
 **Why it is triggered from `plan_decide.cpp` rather than inside `OptimizeDecide`.**
-The prepared terms hold *copies* of coefficient subtrees. `RemoveUnusedColumns`,
+The lowered terms hold *copies* of coefficient subtrees. `RemoveUnusedColumns`,
 `ColumnLifetimeAnalyzer` and late materialization all run **after**
 `OptimizerType::DECIDE_OPTIMIZER` and rebind the operator's own expressions;
 copies taken during `OptimizeDecide` keep column bindings that no longer name the
@@ -973,8 +975,8 @@ predicate.
 makes a decision signed, so every form of a bound reaches it. But a clause is one knob
 per kept row or class in an expanded diagnosis (D28), which one column bound cannot say.
 So the comparison of every recorded bound (not a BOOLEAN restatement, below) is also
-tagged `SINGLETON_ROW_CLAUSE_ROWS_TAG`, and the linear form flattens it into
-`DecidePreparedModel::singleton_row_constraints` instead of skipping it, throwing an
+tagged `SINGLETON_ROW_CLAUSE_ROWS_TAG`, and the linear form lowers it into
+its root, a folded one (`DecideNode::folded`), instead of skipping it, throwing an
 `InternalException` if their count differs from `user_singleton_row_bounds` (the repair model
 would open the column with nothing enforcing it). Stage 08 evaluates those under DIAGNOSE
 only and hands them to the repair model alone: they are its only rows for a folded
@@ -1127,7 +1129,7 @@ stage 07.
 | Linear-form flattening | `src/optimizer/decide/decide_linear_form.cpp` |
 | Backend selection and the model-class gate | `src/optimizer/decide/decide_solver_gate.cpp` |
 | Pass inventory and helper contracts | `src/include/duckdb/optimizer/decide/decide_optimizer.hpp` |
-| The prepared form's structures | `src/include/duckdb/planner/decide/decide_prepared_model.hpp` |
+| The prepared form's structures | `src/include/duckdb/planner/decide/decide_tree_terms.hpp` |
 | Where flattening is triggered | `src/execution/physical_plan/plan_decide.cpp` |
 | Metadata the passes write | `src/include/duckdb/planner/operator/decide/logical_decide.hpp` |
 | Canonicalizing entry points | `src/planner/operator/decide/logical_decide.cpp` |

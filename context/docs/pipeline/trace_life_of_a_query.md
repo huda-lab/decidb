@@ -92,8 +92,8 @@ Verification runs once more at physical-plan entry.
 ## Stage 08 — Extraction, then materialization
 
 Before the first row arrives, the physical plan is built: `plan_decide.cpp` calls
-`BuildDecidePreparedModel`, stage 05's linear form (`decide_linear_form.cpp`), whose
-flattening (`AnalyzeConstraint`) produces one
+`LowerDecideTree`, stage 05's linear form (`decide_linear_form.cpp`), whose
+lowering (`AnalyzeConstraint`) writes into the clause's tree root one
 `DecideConstraint` with `lhs_is_aggregate = true` and one `Term`
 `{variable_index: 0, coefficient: weight, sign: +1}`. `AnalyzeObjective` produces
 one term with coefficient `value`.

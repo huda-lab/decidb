@@ -43,7 +43,7 @@ BilinearTerm` (`solver_input.hpp`) is the one bilinear-term struct; there is no 
 
 | # | Where | What |
 |---|---|---|
-| 1 | `GetGlobalSinkState` → `DecideGlobalSinkState` ctor | Read the folded variable box and alias the prepared linear form |
+| 1 | `GetGlobalSinkState` → `DecideGlobalSinkState` ctor | Read the folded variable box and the tree's lowered clauses |
 | 2 | `Sink` → `DecideDescent` | Materialize every surviving tuple into the thread's `ColumnDataCollection`, and read it top-down as it arrives: each node's `when` parts, keys and σ fields on the rows that reach it, into the thread's containers (§1a) |
 | 2a | `Combine` → `DecideDescent::Merge` | Place the thread's rows after those placed before, and merge its descent into the operator's at them |
 | 3 | `Finalize` → `EvaluateTree` | Settle the containers (`DecideDescent::Finish`: ranks, timelines) |
@@ -107,15 +107,17 @@ store recorded before the deletion (`tests/_expected.py`).
 flat did, it names the behaviour the tree keeps from the evaluator it replaced, which the suite pins (its stored
 references, `tests/_expected.py`, were recorded from flat's runs):
 
-- *The tree* (`decide_tree.hpp`, `DecideTreeConstruction`): built at plan time in two halves around stage 05. Its
+- *The tree* (`decide_tree.hpp`, `DecideTreeConstruction`): built at plan time, with stage 05's lowering between its
+  nodes and its programs. Its
   nodes come from the clause list, the link and record tables and the frames, with the deck's three node classes, E
   (`SCOPE`), G (`REDUCER`) and O (`FRAME`). An E's σ is the binder's signature of its clause; a generated NULL test is
   a member test that carries its columns and adds no σ field. A root in the grouped shape (the aggregate shape, an
   easy or a composed extremum) with no `per` is a class of its `by` key, as flat's grouped rows are
-  (`language/guide.md` §6.4). A root's text is its clause as written. Stage 05 then lowers the clauses once, for
-  flat, and names on each reducer's terms the G they range over (`DecideTerm::child`); the second half
-  (`decide_tree_compile.cpp`) binds each clause root to stage 05's clause, copies stage 05's terms into the node's
-  body, finds the node each term is computed on, and compiles each coefficient, bound, admitted end and member test
+  (`language/guide.md` §6.4). A root's text is its clause as written. Stage 05 then lowers each clause into the root
+  the tree made of its comparison, the objective into its root and each composed term's and helper's terms into its G
+  or O (`LowerDecideTree`, one IR: the records stage 08 reads are the ones it writes), naming on each reducer's terms
+  the G they range over (`DecideTerm::child`); the solver gate reads the model class off them; then
+  `decide_tree_compile.cpp` numbers the clause roots, finds the node each term is computed on, and compiles each coefficient, bound, admitted end and member test
   into a program over that node's layout, by flat's own rules (`ToChunkReferences`): its carried columns, then the
   program columns its programs add (which the descent carries on each entry), then an admitted end's inputs a and r. A
   root takes the error rank of the stage-05 list its body comes from, in the order flat evaluates them (a folded
@@ -443,9 +445,9 @@ constructor. Three consumers read them:
 Flattening skips any comparison tagged `SINGLETON_ROW_BOUND_TAG`, so a
 singleton-row bound does not also produce `num_rows` redundant per-row model rows. The
 comparison itself stays in the tree, which is why `EXPLAIN` still renders the bound
-the user wrote. A recorded one is flattened aside into
-`DecidePreparedModel::singleton_row_constraints`: under DIAGNOSE the model emitter
-writes it after every other prepared clause (numbered after them, `REPAIR_ROWS`) into
+the user wrote. A recorded one is lowered into its
+root too, a folded one (`DecideNode::folded`): under DIAGNOSE the model emitter
+writes it after every other lowered clause (numbered after them, `REPAIR_ROWS`) into
 `evaluated_singleton_row_constraints`, and only the elastic input receives it, so the
 repair model loosens it one kept row or class at a time (D28) while the solved model
 keeps the box alone. Those clauses are the repair model's only rows for a folded bound.
@@ -532,17 +534,15 @@ skipped: each row it leaves out stands with its class's first row
 
 ---
 
-## 3. The prepared linear form
+## 3. The lowered terms
 
-Execution does **not** flatten expressions. `LogicalDecide::prepared` arrives
-already decomposed into additive terms by `BuildDecidePreparedModel` (stage 05,
-`src/optimizer/decide/decide_linear_form.cpp`), moved into
-`PhysicalDecide::prepared` at physical planning. `DecideGlobalSinkState` aliases it:
-
-```cpp
-const vector<unique_ptr<DecideConstraint>> &constraints = op.prepared.constraints;
-const unique_ptr<DecideObjective> &objective = op.prepared.objective;
-```
+Execution does **not** flatten expressions. Each clause, the objective, each composed term and each helper's reducer
+arrives in the tree node that holds it already decomposed into additive terms by `LowerDecideTree` (stage 05,
+`src/optimizer/decide/decide_linear_form.cpp`), which writes them into the tree under construction at physical
+planning: a clause's `DecideConstraint` into its root's `DecideBody::clause`, the objective's into the objective
+root's, a composed term's and a helper's members into its G or O (`DecideBody::members`, `fallback`), and the frame
+columns the terms read into `DecideTree::frame_reads`. The tree reads them where they lie: `DecideTree::Constraints()`
+by `clause_index`, `DecideTree::Objective()`.
 
 **What this stage receives.** For every constraint: its terms, each naming a
 variable index, a sign, a still-unevaluated coefficient `Expression`, an optional
@@ -552,8 +552,7 @@ type, the clause's scope (`DecideClauseScope`: `when`, `per`, `class_key`), its 
 linking it to indicators and diagnosis provenance. The
 objective arrives the same way, with its `when`, each AVG term's `avg_group_key` (an index into the key table, set
 for a nested AVG read in place), and `squared_terms` and `bilinear_terms` alongside `terms`.
-`ComposedMinMaxTerm::inner_terms` carries the composed MIN/MAX path's terms, so no
-construct is left re-deriving its own.
+A composed MIN/MAX term's G holds its inner terms, so no construct is left re-deriving its own.
 
 **What this stage does with it.** Evaluates the coefficient expressions against the
 materialized rows (PHASE 2), and nothing else. Which variable a term names and what
@@ -563,7 +562,7 @@ multiplies it were settled upstream, where a binder was in scope.
 non-reducer term in an aggregate LHS, an unrewritten MIN/MAX — each is an internal
 invariant failure raised by the flattening pass at plan time, not something
 execution fixes. The structures themselves are documented in
-`src/include/duckdb/planner/decide/decide_prepared_model.hpp`; the algebra that
+`src/include/duckdb/planner/decide/decide_tree_terms.hpp`; the algebra that
 produces them, and why it cannot live here, is
 [`../05_optimizer/done.md`](../05_optimizer/done.md) §1a.
 
@@ -615,7 +614,7 @@ cyclic, missing past either end. Under a `per` that does not hold the timeline, 
 class that spans two timelines (D75).
 
 `AppendDecideFrameColumns` then adds to the pass's columns, after the input's, each column stage 05 registered
-(`DecidePreparedModel::frame_columns`): a payload is read on the first row of each selected peer only,
+(`DecideFrameReads::columns`): a payload is read on the first row of each selected peer only,
 an `else` on the anchors that reach it only, so an unused one raises nothing (a cast that would fail there does not), and
 the values are gathered onto the anchors. Every later phase reads the frames as data columns, and readback references
 the input's own columns only. Once the keyed mappings exist, `CheckDecideFramePeers` holds each position a frame reads
@@ -1335,7 +1334,7 @@ The slow-solve path is deliberately outside all of this: see `slow_solves.md`.
 | Everything above | `src/execution/operator/decide/physical_decide.cpp` |
 | The one pass: the store and the windows its loops read | `src/execution/operator/decide/decide_row_store.cpp`, `src/include/duckdb/execution/operator/decide/decide_row_store.hpp` |
 | Operator fields | `src/include/duckdb/execution/operator/decide/physical_decide.hpp` |
-| `DecideTerm`, `DecideConstraint`, `DecideObjective` | `src/include/duckdb/planner/decide/decide_prepared_model.hpp` |
+| `DecideTerm`, `DecideConstraint`, `DecideObjective` | `src/include/duckdb/planner/decide/decide_tree_terms.hpp` |
 | The pass that fills them | `src/optimizer/decide/decide_linear_form.cpp` |
 | `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn` | `src/include/duckdb/decidb/formulation/solver_input.hpp` |
 | Logical → physical, entity key indices, input column names | `src/execution/physical_plan/plan_decide.cpp` |
