@@ -14,7 +14,6 @@
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/execution/operator/decide/decide_row_evaluation.hpp"
-#include "duckdb/execution/operator/decide/decide_row_store.hpp"
 #include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
 #include "duckdb/function/create_sort_key.hpp"
 #include "duckdb/main/client_context.hpp"

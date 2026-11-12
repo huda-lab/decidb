@@ -100,8 +100,8 @@ call site checks inline whether an engine exists.
 ### Candidate-assembly helper (operator-side)
 
 The unbounded engine needs categorical groupings to characterize *which* instances
-escape. Assembling them is operator-bound (it reads the executor chunks, the keyed
-decisions' key scopes (`KeyedScopeInfo`), and `BuildGroupIds`), so it cannot live in
+escape. Assembling them is operator-bound (it reads the input's named columns, the keyed
+decisions' key scopes (`KeyedScopeInfo`), and `GroupColumn`), so it cannot live in
 the pure router. It is a stateful functor, `UnboundedCandidateProvider` +
 `BuildUnboundedCandidateProvider(...)` in `physical_decide.cpp` (just above `Finalize`),
 so `Finalize` only calls it. The functor

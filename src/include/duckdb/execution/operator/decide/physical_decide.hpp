@@ -22,16 +22,6 @@ namespace duckdb {
 class DecideGlobalSinkState;
 
 class DecideDescent;
-class DecideRowStore;
-
-//! Per-Finalize cache of TransformToChunkExpression results, keyed by the original
-//! (unlowered) expression pointer. Outlives every ExpressionExecutor built during
-//! Finalize, so it's safe for executors to retain references into cached entries.
-//! While the evaluation runs in one pass, it also carries the pass's store, which every
-//! read of the input consults (decide_row_store.hpp).
-struct ChunkExprCache : public std::unordered_map<const Expression *, unique_ptr<Expression>> {
-	DecideRowStore *store = nullptr;
-};
 
 //! One cached key grouping: the key's row→group assignment, groups numbered by key
 //! value, over the rows the key was computed on. A key computed once (e.g. by a

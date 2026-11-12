@@ -92,9 +92,9 @@ depends on the entire dataset, so the operator must consume all of its input
 before producing a row:
 
 1. **Sink** — buffer every tuple into a `ColumnDataCollection`.
-2. **Finalize** — read the buffer once, the deck's one-pass algorithm: every
-   expression a node of the plan reads on a row is registered, and one scan evaluates
-   them all (`DecideRowStore`, [`08_execution/done.md`](08_execution/done.md) §1a). Then
+2. **Sink, then Finalize** — the deck's one-pass algorithm: each thread's descent reads
+   each row as it arrives, filling the tree's containers, and `Finalize` evaluates the
+   nodes bottom-up with no scan of the buffer ([`08_execution/done.md`](08_execution/done.md) §1a). Then
    build entity mappings, run the scope checks, evaluate every coefficient from that
    pass — over each clause's kept rows (`when`), its classes (`per`) and its reducers'
    groups (`by`) — build the solver-neutral model, solve.

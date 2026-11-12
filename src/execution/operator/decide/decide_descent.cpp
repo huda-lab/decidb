@@ -36,8 +36,7 @@ static bool DescentEqual(const vector<Value> &left, const vector<Value> &right) 
 	return true;
 }
 
-//! A value's place in a key's order: NULL after every value, as ORDER BY places it and flat numbers a key's groups
-//! (NumberGroupsByValue), so a group's rank is flat's group number.
+//! A value's place in a key's order: NULL after every value, as ORDER BY places it.
 static bool DescentLess(const Value &left, const Value &right) {
 	if (left.IsNull() || right.IsNull()) {
 		return !left.IsNull() && right.IsNull();
@@ -225,7 +224,7 @@ const DecideSpelling &DecideNodeGroups::Spelling(idx_t slot) const {
 }
 
 //! Ranks numbering `count` items by their sort keys, `keys` of `count` BLOBs as CreateSortKey writes them, equal keys
-//! in item order: flat's NumberGroupsByValue.
+//! in item order.
 static unsafe_vector<idx_t> DescentRanks(const vector<string_t> &keys) {
 	vector<idx_t> order(keys.size());
 	std::iota(order.begin(), order.end(), 0);
@@ -255,7 +254,7 @@ static void DescentSortKeys(DataChunk &columns, StringHeap &heap, vector<string_
 	}
 }
 
-//! A node's slots by value: of the enclosing slot, then of the key (flat's NumberGroupsByValue).
+//! A node's slots by value: of the enclosing slot, then of the key.
 static unsafe_vector<idx_t> DescentGroupRanks(const DecideNodeGroups &groups) {
 	const auto count = groups.size();
 	StringHeap heap;

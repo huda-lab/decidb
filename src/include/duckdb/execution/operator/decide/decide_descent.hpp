@@ -21,8 +21,7 @@
 
 namespace duckdb {
 
-//! The order of a key's groups, value by value with NULL after every value, as ORDER BY places it and flat numbers a
-//! key's groups (NumberGroupsByValue), so a group's rank is flat's group number.
+//! The order of a key's groups, value by value with NULL after every value, as ORDER BY places it.
 bool DecideDescentKeyLess(const vector<Value> &left, const vector<Value> &right);
 
 //! A group's least spelling of each collated column of its key, as `min` folds a group's values (D69): its label, a
@@ -77,7 +76,7 @@ private:
 struct DecideNodeGroups {
 	unsafe_vector<idx_t> parent_slots;
 	unsafe_vector<idx_t> first_rows;
-	//! Value order, of the enclosing slot and then the key, assigned by Finish (flat's NumberGroupsByValue).
+	//! Value order, of the enclosing slot and then the key, assigned by Finish.
 	unsafe_vector<idx_t> ranks;
 	//! False for a slot of rows in no class of the key: a root's (DecideNode::holds_rows_in_no_class), and a G's, whose
 	//! rows reach its operand alone and hold no entry of it. Empty for a node per row.
@@ -220,7 +219,7 @@ public:
 	//! Entry `entry` of `node`'s signature values (Signature), a decision's instance read off its row where the entry
 	//! holds none.
 	vector<Value> Signature(idx_t node, idx_t entry) const;
-	//! The label a message quotes for group `group` of key `key` (D69; flat's GroupKeyReader): a collated column at its
+	//! The label a message quotes for group `group` of key `key` (D69): a collated column at its
 	//! least spelling over every row the query read the key on, as GROUP BY shows a collated group, and any other
 	//! column as it groups. Complete once every row is appended.
 	vector<Value> Label(idx_t key, const vector<Value> &group) const;

@@ -191,8 +191,8 @@ void SelectDecideFramePeers(ClientContext &context, const DecideFrameSpec &frame
                             DecideFrameMap &map);
 
 //! An expression's values on the rows a frame reads it on, one slot per row and one after them for the caller: NULL on
-//! every other row, and each row's error kept with its value until a reader reaches the row, as the one pass keeps a
-//! row's error (DecideRowStore).
+//! every other row, and each row's error kept with its value until a reader reaches the row, as the descent keeps a
+//! row's error (DecideErrorLedger).
 struct DecideFrameValues {
 	DecideFrameValues(const LogicalType &type, idx_t count) : values(type, count) {
 	}

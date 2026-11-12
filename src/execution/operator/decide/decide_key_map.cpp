@@ -46,8 +46,7 @@ void DecideKeyMap::Probe(DataChunk &keys, const SelectionVector *selection, idx_
 		probe.Slice(keys, *selection, count);
 	}
 	auto &probed = selection ? probe : keys;
-	// The table pins its rows (radix_bits 0), so a register's address holds for the table's lifetime, as flat's
-	// BuildGroupIds relies on.
+	// The table pins its rows (radix_bits 0), so a register's address holds for the table's lifetime.
 	table.FindOrCreateGroups(probed, addresses, created);
 	auto rows = FlatVector::GetData<data_ptr_t>(addresses);
 	for (idx_t k = 0; k < count; k++) {

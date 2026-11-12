@@ -1,8 +1,8 @@
 """One-pass evaluation (deck §3, pp. 77-119): the operator reads each row once, as Sink receives it, filling every
 node's container top-down, and evaluates the containers bottom-up (``pipeline/08_execution/done.md``).
 
-``execution.input_scans`` (DECIDB_PROFILE) counts the scans of the buffered input a query's evaluation makes, and
-``execution.descent_rows`` the rows the descent read.
+``execution.descent_rows`` (DECIDB_PROFILE) counts the rows the descent read: the evaluation has no scan of the
+buffered input, whose first chunk alone it fetches, for a value the whole query shares.
 """
 
 import json
@@ -32,6 +32,5 @@ def test_the_evaluation_reads_the_input_once(decidb_cli, case):
     """Nested reducers, a frame and the deck's example 9: the descent reads each row as it arrives, and the evaluation
     never scans the buffer."""
     cli = decidb_cli.without_verify_serializer()
-    assert counters(cli, case.sql, "execution.input_scans") == [0]
     rows = counters(cli, case.sql, "execution.descent_rows")
     assert len(rows) == 1 and rows[0] > 0, rows

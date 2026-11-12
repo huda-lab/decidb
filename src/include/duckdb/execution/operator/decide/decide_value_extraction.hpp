@@ -63,8 +63,8 @@ bool DecideErrorStopsTheQuery(const ErrorData &error);
 //! Expression `expr_idx` of `*executor` (`lowered`) on `chunk`, whose first row is row `offset` of what it is evaluated
 //! over, into `values` from `offset` on. When a row raises, each row is evaluated alone, a failing one keeping its
 //! error in `errors` and NULL; the executor, whose states the failure may have left half written, is made again by
-//! `remake`. So an error waits for a read that reaches its row (language/guide.md §6.3), and the one pass's rows
-//! (DecideRowStore) and a tree node's entries (DecideTreeColumns) are evaluated alike. `raised`, when given, keeps the
+//! `remake`. So an error waits for a read that reaches its row (language/guide.md §6.3), as a tree node's entries
+//! (DecideTreeColumns) are evaluated. `raised`, when given, keeps the
 //! error the whole window's evaluation raised: the one DuckDB's vectorized evaluation of the window meets first.
 void DecideEvaluateWindow(ClientContext &context, unique_ptr<ExpressionExecutor> &executor, idx_t expr_idx,
                           const std::function<unique_ptr<ExpressionExecutor>()> &remake, const Expression &lowered,

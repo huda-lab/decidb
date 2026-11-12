@@ -81,8 +81,8 @@ reads, so a read of a row the `when` drops raises nothing (`when t.w > 0: x <= l
 that reads it. The least is raised once every phase has run, in the order `language/guide.md` §7.3 gives. An
 interrupt, an out-of-memory error and a fatal error stop the evaluation where they arise.
 
-Each row is read once, as it arrives, and the evaluation scans the buffered input no more (`execution.input_scans` 0,
-`DECIDB_PROFILE`). Each thread reads its rows into a descent of its own, as a hash aggregate builds a table per
+Each row is read once, as it arrives, and the evaluation has no scan of the buffered input: it fetches its first
+chunk alone, for a value the whole query shares (`execution.descent_rows`, `DECIDB_PROFILE`, counts the rows read). Each thread reads its rows into a descent of its own, as a hash aggregate builds a table per
 thread, and `Combine` merges it into the operator's (below). The merges run one after another under the sink's lock
 and copy every entry (`execution.descent_merge`): over 4 million stored rows, the query reached `Finalize` after
 0.23 s on 8 threads, 0.17 s of it merging, against 0.31 s on one, in a query whose model and solve took 3.7 s. A merge in parallel, as a hash aggregate finalizes its partitions, is not built.
@@ -128,8 +128,8 @@ references, `tests/_expected.py`, were recorded from flat's runs):
   range's argument, are programs on its O (`DecideFrameColumnPrograms`), in stage 05's terms. A child a data
   expression reads that has no data value is an internal error.
 - *Top-down* (`decide_descent.hpp`): each thread's descent reads each chunk as `Sink` receives it, and numbers its
-  rows by their places in the thread's buffer; the buffer is never scanned to evaluate a row (`execution.input_scans`
-  0, `execution.descent_rows` the rows read). `Combine` places the thread's buffer after the rows placed before
+  rows by their places in the thread's buffer; the buffer is never scanned to evaluate a row
+  (`execution.descent_rows` the rows read). `Combine` places the thread's buffer after the rows placed before
   (`ColumnDataCollection::Combine`) and merges its descent into the operator's at them (`DecideDescent::Merge`), the
   first thread's descent becoming the operator's: its rows are rebased; its keyed classes are found again by layout
   and sort key, its slots by key -- and enclosing slot, a G's or O's before an E's -- in the operator's dictionaries,
@@ -403,7 +403,7 @@ computed on its entries (`DecideTreeColumns::Dump`), to stderr. `DECIDB_DESCENT_
 `DECIDB_EVALUATOR_INJECT=g1`, where the tree is built, makes stage 05's hook find no node for a reducer, which is
 internal; `DECIDB_TREE_INJECT=node:data:value` replaces a G over data's fold in the columns, so a test can show a parent
 reads the bottom-up values, and refuses a node that computes no data value. Profile counters (`DECIDB_PROFILE`):
-`execution.input_scans` (scans of the input, 1) and `execution.descent_rows`. Tests: `test_tree_emitter.py` (flat's
+`execution.descent_rows` and `execution.descent_merge`. Tests: `test_tree_emitter.py` (flat's
 model and flat's error, the objective's reads, the aggregate shape's rows, the data reducers, the reducers' filters, the
 `by` key's rank, the rows in no group, the rows per class and variant, the classes a diagnosis reports, a qualified
 reducer's split classes and its rows in no class, a variant's names as written, an auxiliary's absence, a definition's
@@ -1332,7 +1332,7 @@ The slow-solve path is deliberately outside all of this: see `slow_solves.md`.
 | Concern | Location |
 |---|---|
 | Everything above | `src/execution/operator/decide/physical_decide.cpp` |
-| The one pass: the store and the windows its loops read | `src/execution/operator/decide/decide_row_store.cpp`, `src/include/duckdb/execution/operator/decide/decide_row_store.hpp` |
+| The one pass: the descent, per thread, and its merge | `src/execution/operator/decide/decide_descent.cpp`, `src/include/duckdb/execution/operator/decide/decide_descent.hpp` |
 | Operator fields | `src/include/duckdb/execution/operator/decide/physical_decide.hpp` |
 | `DecideTerm`, `DecideConstraint`, `DecideObjective` | `src/include/duckdb/planner/decide/decide_tree_terms.hpp` |
 | The pass that fills them | `src/optimizer/decide/decide_linear_form.cpp` |

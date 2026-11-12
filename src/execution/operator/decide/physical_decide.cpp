@@ -4,7 +4,6 @@
 #include "duckdb/execution/operator/decide/decide_tree_columns.hpp"
 #include "duckdb/execution/operator/decide/decide_frame_map.hpp"
 #include "duckdb/execution/operator/decide/decide_row_evaluation.hpp"
-#include "duckdb/execution/operator/decide/decide_row_store.hpp"
 #include "duckdb/execution/operator/decide/decide_descent.hpp"
 #include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
 #include "duckdb/common/decide_numeric_policy.hpp"
@@ -13,7 +12,6 @@
 #include "duckdb/execution/aggregate_hashtable.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
-#include "duckdb/function/create_sort_key.hpp"
 #include "duckdb/common/value_operations/value_operations.hpp"
 #include <algorithm>
 #include <cmath>
@@ -67,288 +65,28 @@
 
 namespace duckdb {
 
-idx_t &DecideInputScans() {
-	static thread_local idx_t scans = 0;
-	return scans;
-}
-
-void InitializeDecideScan(const ColumnDataCollection &data, ColumnDataScanState &scan) {
-	DecideInputScans()++;
-	data.InitializeScan(scan);
-}
-
-//! The order-preserving encoding of a row's key columns: byte strings compare as the rows compare under `ORDER BY`
-//! on the columns, ascending, NULL after every value. `columns` has one vector per column; the result gets one string
-//! per row.
-static void EncodeSortKeys(DataChunk &columns, Vector &result) {
-	const vector<OrderModifiers> modifiers(columns.ColumnCount(),
-	                                       OrderModifiers(OrderType::ASCENDING, OrderByNullType::NULLS_LAST));
-	CreateSortKeyHelpers::CreateSortKey(columns, modifiers, result);
-}
-
-//! Numbers the groups by key value, so no id depends on row order: groups compare by their sort keys (the key columns
-//! in key order, NULL after every value as `ORDER BY` places it). Group g, in creation order, has the sort key
-//! `sort_keys[g]` and is found at `group_address[g]`; row r is in the group at `row_address[r]` (null: in none).
-//! `row_to_group` gets each row's number, INVALID_INDEX for none. Returns the creation-order index of each group in
-//! the new numbering.
-static vector<idx_t> NumberGroupsByValue(const vector<string> &sort_keys, const vector<data_ptr_t> &group_address,
-                                         const vector<data_ptr_t> &row_address, vector<idx_t> &row_to_group) {
-	const idx_t num_groups = group_address.size();
-	vector<idx_t> order(num_groups);
-	std::iota(order.begin(), order.end(), 0);
-	std::sort(order.begin(), order.end(), [&](idx_t a, idx_t b) { return sort_keys[a] < sort_keys[b]; });
-	vector<idx_t> rank(num_groups);
-	for (idx_t position = 0; position < num_groups; position++) {
-		rank[order[position]] = position;
-	}
-	// A row's group is found by its address among the groups' addresses, sorted.
-	vector<idx_t> by_address(num_groups);
-	std::iota(by_address.begin(), by_address.end(), 0);
-	std::sort(by_address.begin(), by_address.end(),
-	          [&](idx_t a, idx_t b) { return group_address[a] < group_address[b]; });
-	for (idx_t row = 0; row < row_address.size(); row++) {
-		if (!row_address[row]) {
-			row_to_group[row] = DConstants::INVALID_INDEX;
-			continue;
-		}
-		auto found = std::lower_bound(by_address.begin(), by_address.end(), row_address[row],
-		                              [&](idx_t group, data_ptr_t address) { return group_address[group] < address; });
-		row_to_group[row] = rank[*found];
-	}
-	return order;
-}
-
-//! The rows that name a key's groups, one entry per group in the groups' numbering: a message quotes a group's
-//! values, which GroupKeyReader reads from these rows when a message needs them, so a group costs a row number and
-//! not a Value per key column.
-struct GroupRows {
-	//! The group's first row, whose value names it in every column that is not collated.
-	vector<idx_t> first;
-	//! Per key column: for a collated column, the row holding the least spelling in the group (the label a message
-	//! quotes, the same in any row order); empty for every other column.
-	vector<vector<idx_t>> label;
-};
-
-//! Reads a key's values at the rows that name its groups, from the one pass (DecideRowStore). `exprs` are the
-//! expressions a message quotes, one per key column: what the key shows, not what its rows group on. A group's rows
-//! are all read rows, so a value read there is one the clause computes.
-class GroupKeyReader {
-public:
-	GroupKeyReader(DecideRowStore &store, const vector<const Expression *> &exprs, GroupRows rows)
-	    : store(store), exprs(exprs), rows(std::move(rows)) {
-	}
-
-	//! The values of `group`'s key columns.
-	vector<Value> Read(idx_t group) {
-		vector<Value> values;
-		for (idx_t column = 0; column < exprs.size(); column++) {
-			auto &label_rows = rows.label[column];
-			idx_t row = label_rows.empty() ? rows.first[group] : label_rows[group];
-			values.push_back(store.ValueAt(*exprs[column], row));
-		}
-		return values;
-	}
-
-private:
-	DecideRowStore &store;
-	const vector<const Expression *> exprs;
-	const GroupRows rows;
-};
-
-//! Groups the rows by their key values as GROUP BY does, in one chunk scan: DuckDB's
-//! aggregate hash table, with no aggregate, finds or creates each row's group, comparing
-//! in place (NULL equals NULL). A group is kept as its first row and its sort key, which
-//! numbering the groups by key value reads (size O(num_groups)); values are read from the
-//! rows when a message needs them (GroupKeyReader).
-//!
-//!   key_exprs       — pre-transformed expressions for chunk evaluation, one per key column
-//!   row_filter      — return true to include row in grouping (empty function = include all)
-//!   null_no_group   — per key column: a NULL there puts the row in no group (a written
-//!                      column, NO_GROUP); else NULL is a value (a relation's column, VALUE)
-//!   out_row_to_group — sized num_rows; INVALID_INDEX for excluded rows, [0..K) otherwise
-//!   out_num_groups   — K, count of distinct groups, numbered in key-value order
-//!   out_rows         — the rows that name the groups, in that numbering (none for a key with
-//!                      no columns, whose one class has no value to name it by)
-//!   read_rows        — the clause's kept rows: the key is computed on these only, and no
-//!                      other row joins a group (null = every row)
-//!   label_exprs      — per key column, the value a label quotes when it differs from the
-//!                      one rows group on (a collated column): `out_rows.label` then holds
-//!                      the row of the group's least value of it, so a label is the same in
-//!                      any row order; null entries quote the grouped value
-//!
-//! A key with no columns (`per ()`, `by ()`) has one class: every row the filter keeps.
-static void BuildGroupIds(const vector<const Expression *> &key_exprs, ChunkExprCache &chunk_expr_cache,
-                          ClientContext &context, idx_t num_rows,
-                          const std::function<bool(idx_t)> &row_filter, vector<idx_t> &out_row_to_group,
-                          idx_t &out_num_groups, GroupRows &out_rows, const vector<bool> *read_rows = nullptr,
-                          const vector<bool> &null_no_group = {}, const vector<const Expression *> &label_exprs = {}) {
-	DecideProfileScope profile("extraction.group_ids");
-	out_row_to_group.assign(num_rows, DConstants::INVALID_INDEX);
-	out_num_groups = 0;
-	out_rows.first.clear();
-	out_rows.label.assign(key_exprs.size(), vector<idx_t>());
-	if (num_rows == 0) {
-		return;
-	}
-	if (key_exprs.empty()) {
-		for (idx_t row = 0; row < num_rows; row++) {
-			if ((!read_rows || (*read_rows)[row]) && (!row_filter || row_filter(row))) {
-				out_row_to_group[row] = 0;
-				out_num_groups = 1;
+//! Input column `column`'s rows grouped by value as GROUP BY groups them, NULL as a value (DecideKeyMap), in a scan of
+//! their own: each row's group, and each group's value, numbered in the order the rows first read them. The diagnosis
+//! orders what it reports itself (by escape rate, column and value), so no group's number reaches a message.
+static void GroupColumn(ClientContext &context, const ColumnDataCollection &data, idx_t column,
+                        vector<idx_t> &row_to_group, vector<Value> &values) {
+	DecideKeyMap map(context, {data.Types()[column]});
+	ColumnDataScanState scan;
+	data.InitializeScan(scan, {column});
+	DataChunk chunk;
+	data.InitializeScanChunk(scan, chunk);
+	row_to_group.assign(data.Count(), DConstants::INVALID_INDEX);
+	values.clear();
+	unsafe_vector<idx_t> slots;
+	idx_t next = 0;
+	for (idx_t row = 0; data.Scan(scan, chunk); row += chunk.size()) {
+		slots.resize(chunk.size());
+		map.FindOrCreate(chunk, slots.data(), next);
+		for (idx_t i = 0; i < chunk.size(); i++) {
+			if (slots[i] == values.size()) {
+				values.push_back(chunk.GetValue(0, i));
 			}
-		}
-		return;
-	}
-
-	const idx_t num_key_cols = key_exprs.size();
-
-	// Build one executor for all key columns; produces a multi-column result chunk per scan.
-	ExpressionExecutor key_executor(context);
-	vector<LogicalType> key_types;
-	key_types.reserve(num_key_cols);
-	for (auto *e : key_exprs) {
-		key_executor.AddExpression(*e);
-		key_types.push_back(e->return_type);
-	}
-	// The label columns follow the key columns in the same chunk; label_column[c] is key
-	// column c's, or c itself.
-	vector<idx_t> label_column(num_key_cols);
-	std::iota(label_column.begin(), label_column.end(), 0);
-	for (idx_t c = 0; c < label_exprs.size(); c++) {
-		if (label_exprs[c]) {
-			label_column[c] = key_types.size();
-			key_executor.AddExpression(*label_exprs[c]);
-			key_types.push_back(label_exprs[c]->return_type);
-		}
-	}
-
-	// Per group in creation order: its first row and its sort key. Size grows with
-	// num_groups, not num_rows.
-	vector<idx_t> first_rows;
-	vector<string> sort_keys;
-	// The table names a group by the address of its row. With radix_bits 0 every row is in
-	// one partition appended with KEEP_EVERYTHING_PINNED (InitializePartitionedData), and a
-	// resize only reinserts the pointers (ReinsertTuples), so the address is fixed for the
-	// table's lifetime.
-	vector<LogicalType> group_types(key_types.begin(), key_types.begin() + NumericCast<int64_t>(num_key_cols));
-	GroupedAggregateHashTable groups(context, BufferAllocator::Get(context), group_types);
-	vector<data_ptr_t> group_address;
-	vector<data_ptr_t> row_address(num_rows, nullptr);
-
-	DecideRowWindows windows(chunk_expr_cache);
-	DataChunk key_results;
-	key_results.Initialize(context, key_types);
-	DataChunk group_chunk;
-	group_chunk.InitializeEmpty(group_types);
-	DataChunk new_group_chunk;
-	new_group_chunk.InitializeEmpty(group_types);
-	Vector new_sort_keys(LogicalType::BLOB);
-	SelectionVector grouped(STANDARD_VECTOR_SIZE);
-	SelectionVector new_groups(STANDARD_VECTOR_SIZE);
-	Vector addresses(LogicalType::POINTER);
-	vector<UnifiedVectorFormat> key_udatas(num_key_cols);
-	idx_t row_offset = 0;
-	while (windows.Next()) {
-		idx_t count = windows.Count();
-		key_results.Reset();
-		windows.Execute(key_executor, read_rows, key_results);
-		for (idx_t c = 0; c < num_key_cols; c++) {
-			key_results.data[c].ToUnifiedFormat(count, key_udatas[c]);
-		}
-		// The rows that join a group: those read and kept, with no NULL in a NO_GROUP column.
-		idx_t grouped_count = 0;
-		for (idx_t i = 0; i < count; i++) {
-			idx_t row = row_offset + i;
-			if ((read_rows && !(*read_rows)[row]) || (row_filter && !row_filter(row))) {
-				continue;
-			}
-			bool no_group = false;
-			for (idx_t c = 0; c < null_no_group.size() && !no_group; c++) {
-				no_group = null_no_group[c] && !key_udatas[c].validity.RowIsValid(key_udatas[c].sel->get_index(i));
-			}
-			if (!no_group) {
-				grouped.set_index(grouped_count++, i);
-			}
-		}
-		if (grouped_count > 0) {
-			for (idx_t c = 0; c < num_key_cols; c++) {
-				group_chunk.data[c].Slice(key_results.data[c], grouped, grouped_count);
-			}
-			group_chunk.SetCardinality(grouped_count);
-			idx_t new_count = groups.FindOrCreateGroups(group_chunk, addresses, new_groups);
-			auto address_data = FlatVector::GetData<data_ptr_t>(addresses);
-			if (new_count > 0) {
-				for (idx_t c = 0; c < num_key_cols; c++) {
-					new_group_chunk.data[c].Slice(group_chunk.data[c], new_groups, new_count);
-				}
-				new_group_chunk.SetCardinality(new_count);
-				EncodeSortKeys(new_group_chunk, new_sort_keys);
-				auto encoded = FlatVector::GetData<string_t>(new_sort_keys);
-				for (idx_t n = 0; n < new_count; n++) {
-					auto slot = new_groups.get_index(n);
-					first_rows.push_back(row_offset + grouped.get_index(slot));
-					sort_keys.push_back(encoded[n].GetString());
-					group_address.push_back(address_data[slot]);
-				}
-			}
-			for (idx_t slot = 0; slot < grouped_count; slot++) {
-				row_address[row_offset + grouped.get_index(slot)] = address_data[slot];
-			}
-		}
-		row_offset += count;
-	}
-
-	if (row_offset != num_rows) {
-		throw InternalException(
-			"DECIDE BuildGroupIds: chunk scan produced %llu rows, expected %llu",
-			row_offset, num_rows);
-	}
-
-	auto order = NumberGroupsByValue(sort_keys, group_address, row_address, out_row_to_group);
-	out_num_groups = group_address.size();
-	out_rows.first.reserve(out_num_groups);
-	for (auto created : order) {
-		out_rows.first.push_back(first_rows[created]);
-	}
-	// A collated column's label is the least spelling among its group's rows, so it is the
-	// same in any row order: a second loop finds, for each group, the row that holds it.
-	// Spellings compare by their sort keys, as the groups do.
-	if (key_types.size() > num_key_cols) {
-		vector<vector<string>> least(num_key_cols);
-		for (idx_t c = 0; c < num_key_cols; c++) {
-			if (label_column[c] != c) {
-				out_rows.label[c].assign(out_num_groups, DConstants::INVALID_INDEX);
-				least[c].resize(out_num_groups);
-			}
-		}
-		Vector label_keys(LogicalType::BLOB);
-		DecideRowWindows labels(chunk_expr_cache);
-		row_offset = 0;
-		while (labels.Next()) {
-			key_results.Reset();
-			labels.Execute(key_executor, read_rows, key_results);
-			for (idx_t c = 0; c < num_key_cols; c++) {
-				if (label_column[c] == c) {
-					continue;
-				}
-				CreateSortKeyHelpers::CreateSortKey(key_results.data[label_column[c]], labels.Count(),
-				                                    OrderModifiers(OrderType::ASCENDING, OrderByNullType::NULLS_LAST),
-				                                    label_keys);
-				auto encoded = FlatVector::GetData<string_t>(label_keys);
-				for (idx_t i = 0; i < labels.Count(); i++) {
-					auto gid = out_row_to_group[row_offset + i];
-					if (gid == DConstants::INVALID_INDEX) {
-						continue;
-					}
-					auto &row = out_rows.label[c][gid];
-					if (row == DConstants::INVALID_INDEX ||
-					    encoded[i] < string_t(least[c][gid].data(), NumericCast<uint32_t>(least[c][gid].size()))) {
-						row = row_offset + i;
-						least[c][gid] = encoded[i].GetString();
-					}
-				}
-			}
-			row_offset += labels.Count();
+			row_to_group[row + i] = slots[i];
 		}
 	}
 }
@@ -664,7 +402,7 @@ SinkCombineResultType PhysicalDecide::Combine(ExecutionContext &context, Operato
 
 //! Builds the categorical-candidate groupings the unbounded engine consumes to
 //! characterize *which* instances of an escaping variable run away. Operator-bound
-//! (it reads the executor chunks, keyed scopes, and BuildGroupIds), so it lives
+//! (it reads the input's named columns, keyed scopes, and GroupColumn), so it lives
 //! here rather than in the pure router/engine units; Finalize just invokes it.
 //!
 //! A stateful functor (not a set of lambdas) so its lazily-built caches — the
@@ -690,32 +428,6 @@ struct UnboundedCandidateProvider {
 	//! Keyed candidates cached per scope.
 	std::map<idx_t, vector<ColumnGrouping>> keyed_candidates;
 
-	//! The named columns, read in a pass of their own when the diagnosis first asks for one: it explains the solved
-	//! model after the evaluation, whose pass did not read them.
-	struct NamedColumns {
-		vector<unique_ptr<Expression>> refs;
-		ChunkExprCache cache;
-		unique_ptr<DecideRowStore> store;
-	};
-	shared_ptr<NamedColumns> named;
-
-	NamedColumns &ReadNamedColumns() {
-		if (!named) {
-			named = make_shared_ptr<NamedColumns>();
-			named->store = make_uniq<DecideRowStore>(context, data);
-			named->refs.resize(types.size());
-			for (idx_t ci = 0; ci < types.size(); ci++) {
-				if (ColumnHasHarvestedName(ci)) {
-					named->refs[ci] = make_uniq<BoundReferenceExpression>(types[ci], ci);
-					named->store->Register(*named->refs[ci]);
-				}
-			}
-			named->store->Build();
-			named->cache.store = named->store.get();
-		}
-		return *named;
-	}
-
 	bool ColumnHasHarvestedName(idx_t ci) const {
 		return ci < input_column_names.size() && !input_column_names[ci].empty();
 	}
@@ -729,24 +441,22 @@ struct UnboundedCandidateProvider {
 		if (!ColumnHasHarvestedName(ci)) {
 			return false;
 		}
-		auto &columns = ReadNamedColumns();
-		vector<const Expression *> keys {columns.refs[ci].get()};
+		// The named columns are read in a scan of their own when the diagnosis first asks for one: it explains the
+		// solved model after the evaluation, whose pass did not read them.
 		vector<idx_t> row_to_group;
-		idx_t num_groups = 0;
-		GroupRows group_rows;
-		BuildGroupIds(keys, columns.cache, context, num_rows, std::function<bool(idx_t)> {}, row_to_group,
-		              num_groups, group_rows);
+		vector<Value> values;
+		GroupColumn(context, data, ci, row_to_group, values);
+		const idx_t num_groups = values.size();
 		idx_t cap = std::max(params.min_categories, (idx_t)(params.categorical_ratio * (double)denom));
 		if (num_groups < 2 || num_groups > cap) {
 			return false;
 		}
-		GroupKeyReader reader(*columns.store, keys, std::move(group_rows));
 		out.column = input_column_names[ci];
 		out.clause_referenced = ci < input_column_in_clause.size() && input_column_in_clause[ci];
 		out.instance_to_group = std::move(row_to_group); // row-indexed
 		out.group_value.resize(num_groups);
 		for (idx_t g = 0; g < num_groups; g++) {
-			auto value = reader.Read(g)[0];
+			auto &value = values[g];
 			out.group_value[g] = value.IsNull() ? "NULL" : value.ToString();
 			if (value.IsNull()) {
 				out.null_group = g;
@@ -1009,11 +719,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     // Evaluate coefficients and build the model (solver provides verbose output)
 
-    // Per-Finalize cache of TransformToChunkExpression results. Outlives every
-    // ExpressionExecutor created below, so it's safe for executors to retain
-    // references into cached entries.
-    ChunkExprCache chunk_expr_cache;
-
     // Per-Finalize cache of unfiltered row→group assignments, shared across
     // every constraint and the objective so a key evaluated once is reused
     // by every other call site that asks for the same expression set.
@@ -1029,7 +734,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     // 3a. Assemble the model input and settle the column box. Nothing below this line
     // touches the data again.
-    DecideProfileScope::Counter("execution.input_scans", static_cast<double>(DecideInputScans()));
 	DecideProfileScope phase("execution.assemble_input");
     ResolveGroupNames(per_group_cache, gstate);
     VarIndexer var_indexer;
@@ -1072,7 +776,6 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
                                   bool silent) const {
 	// Top-down: the descent read every chunk as Sink received it, and the buffer is never scanned to evaluate a row.
 	DecideProfileScope phase("execution.tree_descent");
-	DecideInputScans() = 0;
 	// The input's first chunk, where a value the whole query shares is read (a composed term's or a square's factor).
 	DataChunk first;
 	gstate.data.InitializeScanChunk(first);
