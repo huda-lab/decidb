@@ -12,6 +12,6 @@ checks are in `../../framework/todo.md` § How to work any task. The goal is a p
   build a projection, beside `DirectProjectionStage` and S1's slot layout (`../s1_uniform_matroid/todo.md` § S1-28).
   **Ruling (owner, 2026-11-11).** Every rule builds its projections with `DirectProjectionStage` as it is, keeping
   the bindings in structs (`DirectCarried`), as A1, A2, N1, O1 and S3 do; the stage gains no named columns.
-- **Change.** R1 builds those projections with `DirectProjectionStage`; `Project` and the name map go. Behavior stays
-  as it is.
+- **Change.** R1 builds those projections with `DirectProjectionStage`; `Project` and the name map go. R1 lays out a
+  group bound's inputs with `DirectLayoutGroupInputs`, as S1, S3 and N1 do. Behavior stays as it is.
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "direct_r1"`.

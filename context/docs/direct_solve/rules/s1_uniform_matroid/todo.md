@@ -30,6 +30,7 @@ not enough.
   § R1-20).
   **Ruling (owner, 2026-11-11).** Every rule builds its projections with `DirectProjectionStage` as it is, keeping
   the bindings in structs (`DirectCarried`), as A1, A2, N1, O1 and S3 do; the stage gains no named columns.
-- **Change.** S1 builds its projections with `DirectProjectionStage`; the slot layout and `append_at` go. Behavior
-  stays as it is.
+- **Change.** S1 builds its projections with `DirectProjectionStage`; the slot layout and `append_at` go. The score
+  projection lays out a group bound's inputs with `DirectLayoutGroupInputs`, as S1's first read does. Behavior stays as
+  it is.
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "direct_s1"`.

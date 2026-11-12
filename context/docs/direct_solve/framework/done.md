@@ -34,12 +34,12 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
 - **Plan fragments.** `direct_plan_fragments.hpp` holds free functions that each return one plan fragment (the function
   form of a factory method). None of them knows which problem class it serves: among them `DirectActiveWhen`,
   `DirectWindowMatchingCount`, `DirectAllRowsValid`, `DirectScaledTerm` (sign and constant factor of a coefficient),
-  `DirectSumOf` (the signed sum of proved values, each read as DOUBLE), `DirectOnKeptRows` and `DirectOverProjection`
-  (a copy of a value re-pointed at a projection over the source). A rule assembles each projection of its plan in a
+  `DirectSumOf` (the signed sum of proved values, each read as DOUBLE), `DirectOnKeptRows` and `DirectOverProjection` (a
+  copy of a value re-pointed at a projection over the source). A rule assembles each projection of its plan in a
   `DirectProjectionStage`, which gives every column its binding as it is added and becomes a `LogicalProjection` over a
-  child. S1, R1, N1 and S3 also share `DirectProveSharedScope` (the clauses read together have
-  one `by` key, `per` classes and `when`, else the rule declines) and `DirectAddInstanceFlag` (a `per K:` clause with
-  no kept class has no instance, D5).
+  child. S1, R1, N1 and S3 also share `DirectProveSharedScope` (the clauses read together have one `by` key, `per`
+  classes and `when`, else the rule declines; each rule's condition holds the `DirectSharedScope` it proves) and
+  `DirectAddInstanceFlag` (a `per K:` clause with no kept class has no instance, D5).
   - **A separable quadratic objective** (A1, N1 and A2: `a*x^2 + b*x` per decision) takes three fragments, in plan
     order. `DirectLayoutQuadraticPart` (P1) lays out a `DirectQuadraticPart` in the rule's first projection: its mask,
     the sum of its linear coefficients per decision, and for each square its weight `k`, slope `w` and constant `t` of
@@ -220,7 +220,9 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     constant of magnitude below 1e20 (from 1e20 the solver's reading depends on the rows, so the rule declines), or a
     value of the data (`DirectDataLimit`), either a numeric expression over source columns that may raise, evaluated
     on the rows that read it as the solver evaluates it, or the group aggregates the bound-side rewrite left to the
-    plan (`DirectGroupBoundIsReadable`). R1 and S3 read their budget's limit with it.
+    plan (`DirectGroupBoundIsReadable`). R1, S3 and N1 read their budget's limit with it, and
+    `DirectDataLimit::GroupBound` gives a data limit's group bound: the one the rewrite left, or the tightest per-row
+    value (`DirectTightestBound`).
   - **Terms of an objective part or a budget.** `DirectReadLinearPart` reads one linear part into a `DirectLinearPart`:
     its sign and constant factor, and each linear term's decision, sign and proved coefficient; it skips other term
     kinds, so a rule that admits only linear terms checks the list with `DirectOnlyLinearTerms` first.
@@ -323,23 +325,23 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   table may read the tables added before it. The binder rejects `DISTINCT` and drops an `ORDER BY` inside these
   reducers, so neither reaches the rewrite. A data norm of order 0 is the count of its non-zero rows,
   `SUM(ABS(SIGN(e)))`.
-  - The bound of a clause in the aggregate shape holds when its group's tightest value does: the MIN of an upper
-    bound, the MAX of a lower one, over the kept rows of the comparison's group; a row in no class of the clause's
-    `per K:` (D5) gives no bound. An `=` bound must take one value per group. A constant, a query-wide value, a reducer
-    whose `by` key is coarser than the group's, and a `<>` bound (which excludes each value it takes) are left alone.
-    Every other data bound is one kind, a value computed from its group (`DecideGroupBound`, held by
-    `DecideReducedBound`): the group's aggregates over per-row inputs, an upper and a lower limit over their results,
-    and the checks of what they read and give. A raw bound that varies in its group is the MIN and MAX of its value
-    (`DirectTightestBound`); a bound that reads data only through reducers of exactly the clause's group
-    (`sum(x) by (g) <= sum(cap) by (g)`) is an expression over those reducers' aggregates. A rule proves it can compute
-    the bound (`DirectGroupBoundIsReadable`), lays out the columns of each input (`DirectGroupLayout`,
-    `DirectGroupInputs`) and adds the aggregates to the group aggregate it already runs, with no branch per bound
-    (`DirectAddGroupBound` and a rule's `DirectGroupSink`: N1 and S3 a window through `DirectWindowSink`; S1, R1 and A2
-    their hash aggregate through `DirectAggregateSink`), so a direct plan has no side table for them. Only the
-    solver path records their aggregates (`RecordGroupBound`, from `RecordReducedBounds`), and it returns the checks
-    in the order a rule raises them: every bound's per-row reads, then each bound's NaN limit and `=` agreement. A
-    reducer on another `by` key, a qualified reducer, a column beside a reducer and a sum with its own `when` are
-    recorded on the direct path too (`DirectIR::bounds_to_record`), and read from side tables.
+  - The bound of a clause in the aggregate shape holds when its group's tightest value does: the MIN of an upper bound,
+    the MAX of a lower one, over the kept rows of the comparison's group; a row in no class of the clause's `per K:`
+    (D5) gives no bound. An `=` bound must take one value per group. A constant, a query-wide value, a reducer whose
+    `by` key is coarser than the group's, and a `<>` bound (which excludes each value it takes) are left alone. Every
+    other data bound is one kind, a value computed from its group (`DecideGroupBound`, held by `DecideReducedBound`):
+    the group's aggregates over per-row inputs, an upper and a lower limit over their results, and the checks of what
+    they read and give. A raw bound that varies in its group is the MIN and MAX of its value (`DirectTightestBound`); a
+    bound that reads data only through reducers of exactly the clause's group (`sum(x) by (g) <= sum(cap) by (g)`) is an
+    expression over those reducers' aggregates. A rule proves it can compute the bound (`DirectGroupBoundIsReadable`),
+    lays out the columns of each input (`DirectGroupLayout`, `DirectGroupInputs`; `DirectLayoutGroupInputs` adds them to
+    a `DirectProjectionStage`, for S1, S3 and N1) and adds the aggregates to the group aggregate it already runs, with
+    no branch per bound (`DirectAddGroupBound` and a rule's `DirectGroupSink`: N1 and S3 a window through
+    `DirectWindowSink`; S1, R1 and A2 their hash aggregate through `DirectAggregateSink`), so a direct plan has no side
+    table for them. Only the solver path records their aggregates (`RecordGroupBound`, from `RecordReducedBounds`), and
+    it returns the checks in the order a rule raises them: every bound's per-row reads, then each bound's NaN limit and
+    `=` agreement. A reducer on another `by` key, a qualified reducer, a column beside a reducer and a sum with its own
+    `when` are recorded on the direct path too (`DirectIR::bounds_to_record`), and read from side tables.
   - Every value a bound reads is checked first, by VALUE_IS_VALID scope checks appended after the planner's: a
     reducer's argument (or a norm's written body: `SIGN(NaN)` is 0) on the rows the reducer reads, the bound on the
     kept rows, and an `=` bound's agreement in its group. Each check is a per-row message, NULL on a valid row. Both

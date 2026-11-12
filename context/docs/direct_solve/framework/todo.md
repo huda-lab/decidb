@@ -45,31 +45,6 @@ solver path answers those queries, so none of them is wrong, only slower.
   row and takes 1.8 times the hand plan's CPU for `s3_global`; a shared row stage with an aggregate joined back is a
   second plan shape; DuckDB's one-thread `OVER ()` keeps table order for other queries. **Ruling (owner, 2026-11-11).**
 
-## FRM-13 — One copy of the limit-reading code
-
-- **Problem.** Four pieces of shared work are written per rule:
-  - N1's `ProveLimitValue` repeats `DirectReadLimit` (`direct_bound_reader.cpp`).
-  - The choice between a group bound the rewrite left and the tightest per-row value (`DirectTightestBound`) is
-    written in S3 (`limit_bound`), R1 (`limit_bounds`) and N1.
-  - The loop that lays out a group bound's inputs (`DirectGroupInputs`) as columns of a `DirectProjectionStage` is
-    written five times: S1 twice, S3, R1, N1.
-  - S1, S3, R1 and N1 each copy the fields of the `DirectSharedScope` they prove into their `Condition`.
-- **Change.** N1 calls `DirectReadLimit`. `DirectDataLimit` gives its group bound itself. One shared function lays out
-  a group bound's inputs. Each `Condition` holds its `DirectSharedScope`. Behavior stays as it is (§ Removing bloat).
-- **Done when.** `build/release/test/unittest "[decidb]"`;
-  `./test/decide/run_tests.sh -n 2 -k "direct_s1 or direct_s3 or direct_r1 or direct_n1 or rule_conformance"`.
-
-## FRM-16 — Remove the solver-order code from R1
-
-- **Problem.** R1 orders a group's failing checks as the solver does
-  (`test_r1_raises_the_checks_of_two_clauses_in_the_solvers_order`); no other rule does. The order picks between two
-  true errors, and `../architecture/rules.md` lists error order as something a rule leaves out.
-  **Ruling (owner, 2026-11-11).** Error order is not owed: a rule raises when the solver raises, with any of the
-  failing checks' messages.
-- **Change.** R1 raises a group's checks in the order the plan meets them, as S1 and S3 do. The test that reaches only
-  the ordering goes (`.claude/CLAUDE.md` § Testing). A test that fails another way: stop and report it.
-- **Done when.** `build/release/test/unittest "[decidb]"`; `./test/decide/run_tests.sh -n 2 -k "direct_r1"`.
-
 ## FRM-18 — Build the ranked-prefix plan builder; S3 uses it
 
 - **Problem.** S1 and S3 build one plan: rank each group's rows by one column (S1 by score, S3 by weight), keep a prefix
@@ -103,7 +78,33 @@ solver path answers those queries, so none of them is wrong, only slower.
   texts and its diagnostics are compared with the code before the change on Gurobi and HiGHS. An error text that
   differs, a diagnostic that quotes the rewritten row or a golden diff: stop and report it. A `decidb-architect`
   review of the rewrite comes first (§ How to work any task).
+- **Decision needed.** The `decidb-architect` review (2026-11-12) finds the ruled placement meets every stop condition
+  above. The canonicalizer only respells a clause, and three things rest on that: a rebuilt node takes the location of
+  the node it equals (`decide_source_provenance.hpp`), the repair offset relaxes the canonical and the written row by
+  the same amount (`decide_source_info.hpp`), and the solver's rows stay as they are. Dividing B breaks all three:
+  DIAGNOSE quotes `sum(x) <= 3.5` and measures its slack in counts, a NaN or too-large bound message names `cap / 2`,
+  `BETWEEN` halves with c < 0 stop merging, golden `corpus.sql:84` (`2 * SUM(x) <= 10`) changes its row, and the
+  solver's 1e-6 row tolerance scales by |c| (`SUM(2000000*x) <= 5999999` becomes `S <= 2.9999995`, which accepts 3).
+  Undoing that takes a scale channel in `ConstraintProvenance` read by six renderers.
+  The review recommends the same rewrite in direct solve's front end (`DirectIR::Read`, `direct_ir.cpp`): the
+  constraint keeps B as written and carries `limit_factor` = 1/c, the comparison flipped when c < 0; every rule sees
+  `SUM(x)`; S1's `ReadCountBody`, `SourceBound::negated` and S3's coefficient sum in `ProveWeights` go;
+  `DirectConstantSlope` stays (per-row clauses read it). Degree 1 and SUM only, outer factors (`2*SUM(x)`) included;
+  c = 0, two decisions and a data coefficient leave the constraint alone. The solver path, diagnostics and goldens do
+  not change. Recommendation: that placement, which reaches the ruling's aim (no rule keeps its own coefficient sums).
+  A second call either way: `SUM(0.1*x) <= 0.3` divides to 2.9999999999999996, which S1 reads as 2 while the solver
+  accepts 3 within its tolerance. Recommendation: decline a constant limit whose quotient lies within
+  `DECIDE_INTEGRALITY_TOLERANCE` of an integer and is not one (one check, no case list); the alternative keeps it as
+  S1's known difference (`test_s1_direct_reads_bounds_exactly_near_an_integer`).
 - **Done when.** Oracle tests for `<=`, `>=` and `=` with c > 0 and c < 0 at the edge values, on both paths;
   `build/release/test/unittest "[decidb]"`;
   `./test/decide/run_tests.sh -n 2 -k "canonicalize or like_term or direct_s1 or direct_s3"`;
   `DECIDB_FORCE_SOLVER=highs ./test/decide/run_tests.sh -n 2 -k "canonicalize or like_term"`.
+
+## FRM-21 — One forwarding of a group bound's input columns
+
+- **Problem.** N1 (`ComputeCoefficients`) and S3 (its P2) each forward the columns `DirectLayoutGroupInputs` laid out
+  (the reads and the argument of each input) as new columns of a later stage, in the same loop.
+- **Change.** One shared function in the plan fragments forwards them; N1 and S3 call it. Behavior stays as it is
+  (§ Removing bloat).
+- **Done when.** `./test/decide/run_tests.sh -n 2 -k "direct_n1 or direct_s3 or rule_conformance"`.

@@ -124,14 +124,14 @@ its best end. No BOOLEAN column stands in the key.
    every raw value and `v`, so a NaN raises here, before any verdict; a NULL weight or value leaves its row out of the
    sums, and a NULL limit is no limit. A check's message is a column of stage 1 that holds a code of its text, not the
    text (dictionary encoding, as the framework's [message codes](../../framework/done.md) § Runtime checks): the
-   aggregate takes the `MIN` of the codes, which is the code of the least text because the codes follow the order of
-   the texts, and the projection that raises decodes the least code of each check on the group's row
-   (`DirectDecodeMessage`) and raises it in the solver's order. Two rows of a group that fail the same check in
-   different ways raise the least text, whichever row comes first. The aggregate compares integers per row, and a row
-   that passes carries no text. A data limit is one value on the group's rows, so its MIN (upper) or MAX
-   (lower) carries it. A projection raises the data checks, then infeasible, then unbounded, and gives the stages after
-   it `S`, `L`, `U`, the finite room down, the highest price of an infinite room up and the lowest of one
-   down, and which limit binds.
+   aggregate takes the `MIN` of the codes, which is the code of the least text because the codes follow the order of the
+   texts, and the projection that raises decodes the least code of each check on the group's row (`DirectDecodeMessage`)
+   and raises them in the order the plan meets them (error order is not owed). Two rows of a group that fail the same
+   check in different ways raise the least text, whichever row comes first. The aggregate compares integers per row, and
+   a row that passes carries no text. A data limit is one value on the group's rows, so its MIN (upper) or MAX (lower)
+   carries it. A projection raises the data checks, then infeasible, then unbounded, and gives the stages after it `S`,
+   `L`, `U`, the finite room down, the highest price of an infinite room up and the lowest of one down, and which limit
+   binds.
 3. The price: the narrow items (group key, `t`, finite room up plus finite room down) go through the plan's one window,
    partitioned by group and ordered by `t` highest first, with one running sum of the two rooms: the most the group can
    spend with the items so far at their high end is `(S - down) + run`. Joined to the totals, each item tests whether
