@@ -117,7 +117,8 @@ Lower count requirements are not part of S2. They can force selections that the 
 
 SQL:
 
-> 1\. proves the quota sets form a nested hierarchy;
+> 1\. proves, when the plan is built, that the quota sets form a nested hierarchy (from the clauses' text: the
+> data is not consulted);
 >
 > 2\. subtracts fixed selected items from every applicable quota;
 >

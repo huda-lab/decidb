@@ -79,21 +79,22 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     size, the group's verdict, whether a row is chosen). S1 ranks by score and keeps the best k, S3 by weight and keeps
     the longest run within the budget; S2, S4 and R2 take the same shape. The builder holds a list of levels, finest
     first, each with its scope, its key, its rank and its group bounds; S1 and S3 build one. Level k > 0 ranks, over its
-    own partition and the rule's order, only the rows level k-1 keeps (a running count of `Keeps(k-1)`, the AND of the
-    finer levels' `WithinLimit`), which is the exact greedy for nested quotas. The plan is one read: the scope
-    projection (every level's eligible flag and key), P1 (the rule's columns and the checks over the scope's columns),
-    W1 (one window stage per level, per group in order of the ranking column, a NULL on a fixed row so it ranks last:
-    the rank, the rule's windows and the group limits through `DirectWindowSink`), PL (what each group bound gives,
-    computed once per row, only with a group bound), P2 (the prefix columns and the checks over P1's or W1's columns),
-    W2 (the prefix size, for a rule that needs a window for it), the held rows (only where a check stands above the
-    last window) and the answer. A check stands in P1 or P2 by what it reads. A check above the last window reaches a
-    later group only when the parent reads that far, so the builder holds the rows in a materialized stage
-    (`DirectHeldRows`, below) and raises every check and each level's verdict in the stage's own projection, where
-    every row passes before the first leaves; the stage's sink fills from every thread. The hooks return their checks.
-    The builder owns the rows a clause fixes (their checks, their place last in the ranking, their value in the answer)
-    and the scope gate on each level's verdict. Every window of W1 takes the rank's partition and order, with a frame
-    over the whole partition where it aggregates the group, so DuckDB sorts once per level and W1 runs on every thread:
-    an empty `OVER ()` would run on one.
+    own partition and the rule's order, only the rows level k-1 keeps (`ROW_NUMBER` partitioned by the group and
+    `Keeps(k-1)`, the AND of the finer levels' `WithinLimit`), which is the exact greedy for nested quotas; a window of
+    level k over the whole group (a count of fixed rows, a group bound) keeps the group's partition alone. The plan is
+    one read: the scope projection (every level's eligible flag and key), P1 (the rule's columns and the checks over the
+    scope's columns), W1 (one window stage per level, per group in order of the ranking column, a NULL on a fixed row so
+    it ranks last: the rank, the rule's windows and the group limits through `DirectWindowSink`), PL (what each group
+    bound gives, computed once per row, only with a group bound), P2 (the prefix columns and the checks over P1's or
+    W1's columns), W2 (the prefix size, for a rule that needs a window for it), the held rows (only where a check stands
+    above the last window) and the answer. A check stands in P1 or P2 by what it reads. A check above the last window
+    reaches a later group only when the parent reads that far, so the builder holds the rows in a materialized stage
+    (`DirectHeldRows`, below) and raises every check and each level's verdict in the stage's own projection, where every
+    row passes before the first leaves; the stage's sink fills from every thread. The hooks return their checks. The
+    builder owns the rows a clause fixes (their checks, their place last in the ranking, their value in the answer) and
+    the scope gate on each level's verdict. Every window of W1 takes the rank's partition and order, with a frame over
+    the whole partition where it aggregates the group, so DuckDB sorts once per level and W1 runs on every thread: an
+    empty `OVER ()` would run on one.
   - **Held rows** (`DirectHeldRows`): a stage that holds every row before the first leaves, DuckDB's materialized CTE
     used as a pipeline breaker (an Eager Spool in SQL Server, a Material node in PostgreSQL): a `LogicalMaterializedCTE`
     with `CTE_MATERIALIZE_ALWAYS` over a naming projection, read by one `LogicalCTERef`, and a `ColumnBindingReplacer`
