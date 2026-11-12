@@ -10,6 +10,7 @@
 namespace duckdb {
 
 class Binder;
+class ColumnBindingReplacer;
 class LogicalWindow;
 class Optimizer;
 
@@ -40,6 +41,7 @@ struct DirectRankedColumns {
 //!        below the rank window
 //!   W1   per group, in order of the ranking column: the rank, what the rule adds (AddGroupWindows), and the group
 //!        limits (AddGroupBound), over the one read
+//!   PL   what the group limits give, once per row, as columns (only with a group limit)
 //!   P2   the rule's prefix columns (LayoutPrefix); the checks above W1 and what the group limits raise
 //!   W2   per group, the size of the prefix (PrefixSize); only a rule whose prefix size needs a window of its own
 //!   W3   over all the rows, whether every group can be met (GroupVerdict); only where a group can fail
@@ -151,6 +153,9 @@ private:
 
 	Stage ProjectRows(unique_ptr<LogicalOperator> rows);
 	void RankRows(Stage &rows);
+	//! Puts what the group bounds give into columns of a projection over W1 (PL), and records in `forwarded` where each
+	//! column of W1 goes, for the stage above to be re-pointed.
+	void HoistGroupValues(Stage &ranked, ColumnBindingReplacer &forwarded);
 	Stage ProjectPrefix(Stage ranked);
 	//! Adds W2 and W3 over `prefix`; `feasible` is what W3 gives, null for a plan without one.
 	void CloseGroups(Stage &prefix, ExprPtr &feasible);

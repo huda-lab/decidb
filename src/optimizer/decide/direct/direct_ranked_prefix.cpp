@@ -1,5 +1,6 @@
 #include "duckdb/optimizer/decide/direct/direct_ranked_prefix.hpp"
 
+#include "duckdb/optimizer/column_binding_replacer.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression/bound_window_expression.hpp"
@@ -134,11 +135,44 @@ void DirectRankedPrefix::RankRows(Stage &rows) {
 	rows.plan = std::move(w1);
 }
 
+void DirectRankedPrefix::HoistGroupValues(Stage &ranked, ColumnBindingReplacer &forwarded) {
+	// PL: what each group bound gives (its limits and its messages) is computed once per row, here, and P2 reads the
+	// columns (loop-invariant code motion): the expressions are arithmetic over the group's aggregates, and a rule
+	// reads them at several places, some of them under a CASE, where DuckDB's common subexpression elimination does not
+	// look. P2 reads P1's and W1's columns too, so PL forwards every column W1 has, and P2's expressions are re-pointed
+	// at the forwards (HoistGroupValues's caller).
+	ranked.plan->ResolveOperatorTypes();
+	auto bindings = ranked.plan->GetColumnBindings();
+	DirectProjectionStage pl(binder.GenerateTableIndex());
+	auto moved = pl.Forward(bindings, ranked.plan->types);
+	for (idx_t i = 0; i < bindings.size(); i++) {
+		forwarded.replacement_bindings.emplace_back(bindings[i], moved[i]);
+	}
+	auto hoist = [&](ExprPtr &value) {
+		if (value) {
+			value = Column(value->return_type, pl.Add(calc.Out(value)));
+		}
+	};
+	for (auto &values : bound_values) {
+		hoist(values.upper);
+		hoist(values.lower);
+		for (auto &message : values.messages) {
+			hoist(message);
+		}
+	}
+	ranked.plan = pl.Finish(std::move(ranked.plan));
+}
+
 DirectRankedPrefix::Stage DirectRankedPrefix::ProjectPrefix(Stage ranked) {
 	// P2: the rule's prefix columns, and the checks that read W1's outputs.
 	auto &input = ranked.columns;
 	Stage result;
 	auto &second = result.columns;
+	ColumnBindingReplacer forwarded;
+	if (!bounds.empty()) {
+		HoistGroupValues(ranked, forwarded);
+	}
+	optional_ptr<LogicalOperator> hoisted = bounds.empty() ? nullptr : ranked.plan.get();
 	DirectProjectionStage p2(binder.GenerateTableIndex());
 	second.carried = p2.Forward(input.carried, source_types, scoped);
 	if (HasFixes()) {
@@ -159,6 +193,10 @@ DirectRankedPrefix::Stage DirectRankedPrefix::ProjectPrefix(Stage ranked) {
 		second.valid = p2.Add(DirectAllHold(calc, std::move(checks_above)));
 	}
 	result.plan = p2.Finish(std::move(ranked.plan));
+	if (hoisted) {
+		forwarded.stop_operator = hoisted;
+		forwarded.VisitOperator(*result.plan);
+	}
 	return result;
 }
 
