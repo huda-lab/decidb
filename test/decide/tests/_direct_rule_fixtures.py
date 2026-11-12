@@ -218,10 +218,10 @@ A1 = RuleFixture(
 )
 
 
-def _r1_late_error(decision_sql, w_sql="1.0", cap_sql="10.0"):
-    """A 5,000-row problem whose last row is invalid. Rows 0 to 4998 are ordinary."""
+def _r1_late_error(decision_sql, w_sql="1.0", cap_sql="10.0", g_sql="i % 50"):
+    """A 5,000-row problem whose last row is invalid. Rows 0 to 4998 are ordinary. `g` is a key of fifty groups."""
     return f"""
-        FROM (SELECT i, {w_sql} AS w, 1.0 AS v, {cap_sql} AS cap FROM range(5000) t(i)) s
+        FROM (SELECT i, {w_sql} AS w, 1.0 AS v, {cap_sql} AS cap, {g_sql} AS g FROM range(5000) t(i)) s
         DECIDE {decision_sql}
         """
 
@@ -288,6 +288,22 @@ R1 = RuleFixture(
                 w_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
             ),
             "w is NaN or infinite on some rows",
+        ),
+        # The same in the last of fifty budgets: a NaN weight, and a lower limit that the last group's only row cannot
+        # reach.
+        (
+            _r1_late_error(
+                "x(REAL) SUCH THAT x >= 0 AND x <= cap AND SUM(w*x) by (g) <= 60 MAXIMIZE SUM(v*x)",
+                w_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
+            ),
+            "w is NaN or infinite on some rows",
+        ),
+        (
+            _r1_late_error(
+                "x(REAL) SUCH THAT x >= 0 AND x <= cap AND SUM(w*x) by (g) >= 100 MAXIMIZE SUM(v*x)",
+                g_sql="CASE WHEN i=4999 THEN 77 ELSE i % 50 END",
+            ),
+            "infeasible",
         ),
     ),
     late_column="i",
@@ -385,6 +401,15 @@ N1 = RuleFixture(
                 l_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 9.0 END",
             ),
             "NaN on some rows",
+        ),
+        # A NaN score on the last row of the last of fifty groups.
+        (
+            _n1_late_error(
+                "x(REAL) SUCH THAT SUM(POWER(x,2)) by (k) <= 9 MAXIMIZE SUM(s*x)",
+                s_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
+                k_sql="(i % 50)::VARCHAR",
+            ),
+            "s is NaN or infinite on some rows",
         ),
         # A score past a DOUBLE when squared, in a group of its own: nothing but this row reads its sum.
         (
@@ -610,10 +635,10 @@ O1 = RuleFixture(
 )
 
 
-def _s3_late_error(decision_sql, w_sql="1.0"):
-    """A 5,000-row problem whose last row is invalid. Rows 0 to 4998 are ordinary."""
+def _s3_late_error(decision_sql, w_sql="1.0", cap_sql="3.0"):
+    """A 5,000-row problem whose last row is invalid. Rows 0 to 4998 are ordinary. `g` is a key of fifty groups."""
     return f"""
-        FROM (SELECT i, {w_sql} AS w FROM range(5000) t(i)) s
+        FROM (SELECT i, i % 50 AS g, {w_sql} AS w, {cap_sql} AS cap FROM range(5000) t(i)) s
         DECIDE {decision_sql}
         """
 
@@ -684,6 +709,21 @@ S3 = RuleFixture(
                 w_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
             ),
             "w is NaN or infinite on some rows",
+        ),
+        # The same in the last of fifty budgets, and a limit below zero that only the last group's last row gives.
+        (
+            _s3_late_error(
+                "x(BOOL) SUCH THAT SUM(w*x) by (g) <= 30 MAXIMIZE SUM(x)",
+                w_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
+            ),
+            "w is NaN or infinite on some rows",
+        ),
+        (
+            _s3_late_error(
+                "x(BOOL) SUCH THAT SUM(w*x) by (g) <= cap MAXIMIZE SUM(x)",
+                cap_sql="CASE WHEN i=4999 THEN -1.0 ELSE 3.0 END",
+            ),
+            "infeasible",
         ),
     ),
     late_column="i",
