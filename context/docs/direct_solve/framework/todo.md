@@ -59,17 +59,28 @@ solver path answers those queries, so none of them is wrong, only slower.
   mimics of the plan at TPC-H sf 1 (800,000 rows): by key 52 ms with W3, 19 ms with the check raised per row under a
   `MATERIALIZED` CTE, 18 ms with no check; `s1_global` 75 ms with W3 and 33 ms with the CTE. A late group's error
   still raises under `LIMIT 1` with the CTE.
-- **Change.** The group verdict becomes a per-row check (`DirectRaiseUnless` of the group's verdict) in the stage the
-  verdict reads, and the window over all the rows becomes a materialized row stage above the last stage the checks
-  read: a `LogicalMaterializedCTE` with `CTE_MATERIALIZE_ALWAYS` read by one `LogicalCTERef`, as `DirectSourceReader`
-  builds its copy. The stage stands wherever a check above the rank window needs one (the D_ASSERT in CloseGroups).
-  S3's W2 (`PrefixSize`) computes a value and stays a window; S3's group checks go under the stage above it. The
-  rows leave in the order the stage gives them; a test that reads the order of a direct-solve result is a stop and
-  report. `GroupVerdict` keeps its meaning (whether the row's group can be met); only where the builder raises it
-  moves. A `decidb-architect` review of the stage comes first (§ How to work any task).
+- **Change (reviewed by `decidb-architect`, 2026-11-12).** A shared fragment `DirectHeldRows`
+  (`direct_plan_fragments`), DuckDB's materialized CTE used as a pipeline breaker (an Eager Spool in SQL Server, a
+  Material node in PostgreSQL): `Hold` puts a naming projection over the definition, `Read` gives the `LogicalCTERef`
+  and a `ColumnBindingReplacer` from the definition's bindings to the reference's, and `Close` wraps the consumer in a
+  `LogicalMaterializedCTE` with `CTE_MATERIALIZE_ALWAYS`. `DirectSourceReader::Finish` builds its two copies with it.
+  The builder holds the rows only when a check stands above the last window (the verdict, or P2's `valid` with no W2
+  above it), which replaces the D_ASSERT in CloseGroups. The verdict is raised once, in the hold's naming projection,
+  for S1 and S3 alike, last in one `DirectAllHold` that folds `row_valid`, `valid` and the verdict into one column;
+  W3, the `feasible` parameter and the checks list in A go. A is re-pointed at the reference with the replacer
+  (`stop_operator` the reference), which also reaches the bindings only a rule holds (S1's `score_after` and
+  `remaining_*`, S3's `empty_fits`). The verdict is never raised in A: A runs in the scan's pipeline, which a LIMIT
+  stops. No LogicalFilter goes directly on the reference (CTE_FILTER_PUSHER would push it under the checks). S3's W2
+  stays a window. The rows leave in the order the scan gives them; no test reads that order today, and a test that
+  does is a stop and report. Which group's error wins between two failing groups depends on the thread, which the
+  error-order ruling of 2026-11-11 allows. `test_direct_s1_uniform_matroid.py`'s plan-shape test counts the stage in
+  place of the verdict window, and `_LATE_MATERIALIZATION_AROUND_CTES` (`test_direct_user_facing.py`) takes a plan
+  with a group stage.
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "direct_s1 or direct_s3 or every_input_row_is_read or
-  direct_user_facing or direct_class_key"`; `build/release/test/unittest "[decidb]"`; `python3
-  benchmark/decide/direct_solve/run.py --compare --sf 1 --queries s1 s1_global s3 s3_global` against the S1 and S3
+  direct_user_facing or direct_class_key"`; `DECIDB_VERIFY_SERIALIZER=1 ./test/decide/run_tests.sh -n 2 -k
+  "direct_s1 or direct_s3"`, with a fixture or test whose plan has a group stage; `build/release/test/unittest
+  "[decidb]"`; `python3 benchmark/decide/direct_solve/run.py --compare --sf 1 --queries s1 s1_global s3 s3_global`
+  against the S1 and S3
   `done.md` Performance tables.
 
 ## FRM-23 — One shared linear score for the ranked rules
