@@ -380,7 +380,7 @@ public:
 				limit_message_count += DirectGroupLayout(bound.group->inputs[r], condition.scoped).invalid ? 1 : 0;
 			}
 		}
-		// The checks of the row (HasRowChecks): one column that raises them, in the solver's order.
+		// The checks of the row (HasRowChecks): one column that raises them.
 		if (HasRowChecks()) {
 			checks_binding = ColumnBinding(score_index, next_slot++);
 		}
@@ -636,8 +636,8 @@ private:
 			part_scores[part.part] = part_scores[part.part] ? calc.Add(part_scores[part.part], term) : term;
 		}
 		append_at(score_binding, calc.Out(combined_score));
-		// The checks of the row, in the solver's order: the NaN check of what each group bound reads, each value the
-		// row fixes, the score, then a row fixed to both values.
+		// The checks of the row: the NaN check of what each group bound reads, each value the row fixes, the score, then
+		// a row fixed to both values.
 		vector<unique_ptr<Expression>> row_checks;
 		// A reducer whose coefficient fails is named before the score they make together, which names the objective.
 		auto into_score = [&](const Expression &input) {
@@ -938,8 +938,8 @@ private:
 			                                           calc.Wrap(std::move(group)), calc.Bool(true)))
 			                        : std::move(group);
 		};
-		// The solver's order: what the group bounds give (a NaN limit, an `=` bound that takes two values in a group),
-		// then infeasible.
+		// What the group bounds give (a NaN limit, an `=` bound that takes two values in a group) comes before the
+		// feasibility check: that one returns false, which stops the chain, and would hide a message after it.
 		vector<unique_ptr<Expression>> checks;
 		for (auto &values : group_values) {
 			for (auto &message : values.messages) {
