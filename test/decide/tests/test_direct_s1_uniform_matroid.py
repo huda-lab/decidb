@@ -1803,6 +1803,11 @@ def _window_count(decidb_cli, constraint):
     return len(re.findall(r"│\s+WINDOW\s+│", _bound_plan(decidb_cli, constraint)))
 
 
+# The window over all the rows that reads whether every group is feasible: a group bound can fail in a group, so the
+# plan owes the check of every group before the first row leaves.
+_VERDICT_WINDOW = 1
+
+
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
@@ -1815,7 +1820,9 @@ def _window_count(decidb_cli, constraint):
     ],
 )
 def test_s1_a_bound_of_the_groups_own_reducers_adds_no_window(decidb_cli, constraint):
-    assert _window_count(decidb_cli, constraint) == _window_count(decidb_cli, "SUM(x) <= 2")
+    # No window computes a reducer. The one more window than a constant bound is the verdict window over all the rows
+    # that a group's bound makes necessary (S1-24).
+    assert _window_count(decidb_cli, constraint) == _window_count(decidb_cli, "SUM(x) <= 2") + _VERDICT_WINDOW
     assert "direct_bound" not in _bound_plan(decidb_cli, constraint)
 
 
@@ -1834,7 +1841,7 @@ def test_s1_a_bound_that_is_not_the_groups_own_is_read_from_a_side_table(decidb_
     plan = _bound_plan(decidb_cli, constraint)
     # The reducer is a side table (`direct_bound`) joined back to the rows by its key; no bound is a window.
     assert "direct_bound" in plan and "Join Type: SINGLE" in plan, plan
-    assert _window_count(decidb_cli, constraint) == _window_count(decidb_cli, "SUM(x) <= 2")
+    assert _window_count(decidb_cli, constraint) == _window_count(decidb_cli, "SUM(x) <= 2") + _VERDICT_WINDOW
 
 
 # Every bound above and the bounds that are not the group's own, answered as the solver answers them.

@@ -42,6 +42,17 @@ class RuleFixture:
     forced_backend_cli: str = "decidb_cli_highs"
 
 
+_S1_NAN_LAST = "CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END"
+
+
+def _s1_late_error(decision_sql, score_sql="1.0", g_sql="i % 50", cap_sql="3.0"):
+    """A 5,000-row problem whose last row is invalid, in fifty groups of a hundred rows. Rows 0 to 4998 are ordinary."""
+    return f"""
+        FROM (SELECT i, {g_sql} AS g, {score_sql} AS score, {cap_sql} AS cap FROM range(5000) t(i)) s
+        DECIDE {decision_sql}
+        """
+
+
 S1 = RuleFixture(
     rule="S1_UNIFORM_MATROID",
     condition="min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi",
@@ -92,7 +103,54 @@ S1 = RuleFixture(
     near_miss_applies=(("x(BOOL)", "SUM(x)<=COUNT(*)/0", "MAXIMIZE SUM(p*x)"),),
     near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 1), (2, 10.0::DOUBLE, 1)) t(id,p,cap)",
     near_miss_column="id",
-    late_errors=(),
+    late_errors=(
+        # A NaN score on the last of 5,000 rows, over every row and over the last of fifty groups. The window hands out
+        # one group at a time, so a check that stands above it reaches a late group only when a parent reads that far.
+        (
+            _s1_late_error("x(BOOL) SUCH THAT SUM(x) <= 3 MAXIMIZE SUM(score*x)", score_sql=_S1_NAN_LAST),
+            "score is NaN or infinite on some rows",
+        ),
+        (
+            _s1_late_error("x(BOOL) SUCH THAT per g: SUM(x) by (g) <= 3 MAXIMIZE SUM(score*x)", score_sql=_S1_NAN_LAST),
+            "score is NaN or infinite on some rows",
+        ),
+        # What a group's bound reads: a NaN limit on the last row of the last group.
+        (
+            _s1_late_error(
+                "x(BOOL) SUCH THAT SUM(x) by (g) <= cap MAXIMIZE SUM(score*x)",
+                cap_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 3.0 END",
+            ),
+            "the bound cap is NaN on some rows",
+        ),
+        # What a row fixes: a NaN value on the last row, and a last row that two clauses fix to both values.
+        (
+            _s1_late_error(
+                "x(BOOL) SUCH THAT SUM(x) by (g) <= 3 AND x <= cap MAXIMIZE SUM(score*x)",
+                cap_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
+            ),
+            "the bound cap is NaN on some rows",
+        ),
+        (
+            _s1_late_error("x(BOOL) SUCH THAT SUM(x) by (g) <= 3 AND x >= (i=4999) AND x <= 0 MAXIMIZE SUM(score*x)"),
+            "infeasible",
+        ),
+        # What a group's bound gives: an `=` limit that takes two values in the last group.
+        (
+            _s1_late_error(
+                "x(BOOL) SUCH THAT SUM(x) by (g) = cap MAXIMIZE SUM(score*x)",
+                cap_sql="CASE WHEN i=4999 THEN 2.0 ELSE 3.0 END",
+            ),
+            "takes more than one value",
+        ),
+        # A lower bound the last group cannot reach: its only row is alone in a group of its own.
+        (
+            _s1_late_error(
+                "x(BOOL) SUCH THAT per g: SUM(x) by (g) >= 2 MAXIMIZE SUM(score*x)",
+                g_sql="CASE WHEN i=4999 THEN 77 ELSE i % 50 END",
+            ),
+            "infeasible",
+        ),
+    ),
     late_column="i",
 )
 

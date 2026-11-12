@@ -208,9 +208,9 @@ private:
 };
 
 //! Every bound counts the same rows: one `SUM(x)` per bound with the same group keys and the same `when` membership.
-//! Records the group keys and membership the plan scopes by. The front end fills no group key today (it declines a
-//! `by` key); reading one must make a NULL key a group of its own (D5), where the scope leaves it out as the removed
-//! PER did.
+//! Records the group keys (the `by` key of the `SUM(x)`s, and the `per` key of the clauses) and the membership the plan
+//! scopes by. A row whose `by` key is NULL is in no group (D5): the plan ranks it apart from every group, and a `when`
+//! that drops a row does the same.
 bool Rule::ProveScope(const DirectIR &ir, Condition &condition) const {
 	DirectSharedScope scope;
 	if (!DirectProveSharedScope(ir, condition.bound_factors, scope)) {
@@ -325,12 +325,20 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //! shares; each stage takes the plan built so far and returns it extended. Data a later stage needs travels in explicit
 //! structs.
 //!
-//!   ProjectScopeState -> ProjectScore
-//!     -> RankAndFilterFeasibility -> ProjectAssignment
+//!   ProjectScopeState -> ProjectScore -> RankRows [-> verdict window] -> ProjectAssignment
+//!
+//! The solver reads every row before it answers, so a bad value or an infeasible bound in any group raises even under
+//! an outer LIMIT 1. A window holds every row before it releases one, and releases them group by group, so a check that
+//! stands above it reaches a later group only when the parent reads that far. The checks of the row (the score, what a
+//! group bound reads, the values the row fixes) therefore stand in the score projection, below the rank window, which
+//! holds every row before it gives one. The checks of a group (what its bounds give, and whether its rows and fixed
+//! values can meet them) read the rank window's counts and the group's bounds, so they stand above it. A window over
+//! all the rows (the verdict window, as S3's W3) is read by every row, so every row has passed them when the first
+//! leaves; it stands only where a group can fail (NeedsVerdict).
 //!
 //! The aggregates of the group bounds are not the rank's: they are computed once per group by a hash aggregate over a
-//! first read of the source (BuildGroupBounds), and RankAndFilterFeasibility joins them to every row of the window
-//! (group-then-join, DirectJoinClassAnswers), where the checks that read them stand.
+//! first read of the source (BuildGroupBounds), and RankRows joins them to every row of the window (group-then-join,
+//! DirectJoinClassAnswers), where the checks that read them stand.
 class PlanBuilder {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
@@ -340,6 +348,7 @@ public:
 		D_ASSERT(source_bindings.size() == source_types.size());
 		score_index = binder.GenerateTableIndex();
 		window_index = binder.GenerateTableIndex();
+		verdict_index = binder.GenerateTableIndex();
 		result_index = binder.GenerateTableIndex();
 		has_fixes = condition.fixed.Any();
 		for (auto &bound : condition.source_bounds) {
@@ -353,9 +362,6 @@ public:
 		idx_t next_slot = source_bindings.size();
 		score_binding = ColumnBinding(score_index, next_slot++);
 		has_score_message = ScoreCanFail();
-		if (has_score_message) {
-			score_message_binding = ColumnBinding(score_index, next_slot++);
-		}
 		if (condition.scoped) {
 			class_key = DirectClassKeyOf(condition.group_keys, condition.when_condition || condition.gated);
 			eligible_binding = ColumnBinding(score_index, next_slot++);
@@ -374,10 +380,9 @@ public:
 				limit_message_count += DirectGroupLayout(bound.group->inputs[r], condition.scoped).invalid ? 1 : 0;
 			}
 		}
-		// The messages of the checks the plan owes, in the solver's order: the NaN check of what each group bound
-		// reads, then each value the row fixes.
-		for (idx_t i = 0; i < limit_message_count + condition.fixed.source_values.size(); i++) {
-			message_bindings.push_back(ColumnBinding(score_index, next_slot++));
+		// The checks of the row (HasRowChecks): one column that raises them, in the solver's order.
+		if (HasRowChecks()) {
+			checks_binding = ColumnBinding(score_index, next_slot++);
 		}
 	}
 
@@ -386,13 +391,17 @@ public:
 		ScopeBindings scope;
 		source = ProjectScopeState(std::move(source), scope);
 		source = ProjectScore(std::move(source), scope);
-		auto ranked = RankAndFilterFeasibility(std::move(source), std::move(classes));
+		auto ranked = RankRows(std::move(source), std::move(classes));
 		auto result = ProjectAssignment(std::move(ranked));
 
 		DirectSubstitute substitute;
 		substitute.prunable_decisions.push_back(1); // x is pure once score validation and ranking remain live
 		// The rank window reads every row before it emits one, so the hidden rank is this plan's validation breaker.
+		// The column of the checks follows it, when the plan owes any.
 		substitute.validated_columns.push_back(source_bindings.size() + 1);
+		if (HasRowChecks() || NeedsVerdict()) {
+			substitute.validated_columns.push_back(source_bindings.size() + 2);
+		}
 		for (idx_t i = 0; i < source_bindings.size() + 1; i++) {
 			substitute.slot_map.push_back(i);
 		}
@@ -465,11 +474,13 @@ private:
 		ColumnBinding fixed_zero_binding;
 	};
 
-	//! Ranked, feasibility-checked rows and the window slots the assignment reads.
+	//! Ranked rows and the window slots the assignment reads.
 	struct RankedRows {
 		unique_ptr<LogicalOperator> plan;
 		ColumnBinding rank_binding;
 		idx_t fixed_count_slot = DConstants::INVALID_INDEX;
+		//! Whether every group is feasible, in the verdict window; unset without one (NeedsVerdict).
+		ColumnBinding verdict_binding;
 	};
 
 	const Condition &condition;
@@ -481,6 +492,7 @@ private:
 	const DirectStateErrors &errors;
 	idx_t score_index;
 	idx_t window_index;
+	idx_t verdict_index;
 	idx_t result_index;
 	bool has_fixes = false;
 	bool source_lower = false;
@@ -490,10 +502,8 @@ private:
 	ColumnBinding score_binding;
 	//! Whether a score can fail: be NaN or infinite, or the sum of the parts' scores pass a DOUBLE. A score made of
 	//! values of exact types, whose bounds sum below the range of a DOUBLE (DirectScaledMagnitude), cannot, and the
-	//! plan has no message for it.
+	//! plan has no check for it.
 	bool has_score_message = false;
-	//! The message the score raises on a row, NULL where it is valid. Unset without a score message.
-	ColumnBinding score_message_binding;
 	ColumnBinding eligible_binding;
 	//! The class key of the scope, and its columns in the score projection. Empty without a scope.
 	DirectClassKey class_key;
@@ -505,14 +515,27 @@ private:
 	//! What each group bound gives once the class plan has computed its aggregates (BuildGroupBounds), over its
 	//! columns.
 	mutable vector<DirectGroupValues> group_values;
-	//! The message each check raises on the row (VARCHAR, NULL when it passes), in the score projection: the first
-	//! `limit_message_count` are the NaN checks of what the group bounds read, the rest the values the row fixes.
-	vector<ColumnBinding> message_bindings;
+	//! The checks of the row, in the score projection: true when they all pass, and the error of the first that fails
+	//! otherwise. Set only when the plan owes any (HasRowChecks).
+	ColumnBinding checks_binding;
+	//! How many inputs of the group bounds can raise a NaN limit.
 	idx_t limit_message_count = 0;
-	//! The least of each message in the row's group, and of the score's, in the rank window: the group raises them in
-	//! the order the solver checks them (FeasiblePredicate).
-	mutable vector<ColumnBinding> message_minimum;
-	mutable ColumnBinding score_message_minimum;
+
+	//! Whether a row can fail a check of its own: a NaN in what a group bound reads, a value the row fixes, the score,
+	//! or a row fixed to both values.
+	bool HasRowChecks() const {
+		return limit_message_count > 0 || !condition.fixed.source_values.empty() || has_score_message || has_fixes;
+	}
+
+	//! Whether a group can fail a check of its own. Those checks read the rank window's counts and the group's bounds,
+	//! so they stand above the rank window, and the verdict window must read them before the first row leaves: whether
+	//! the group's rows and fixed values can meet its bounds, and what a group bound gives (a NaN limit, an `=` bound
+	//! that takes two values in a group), which only a source-valued bound has, and which always makes the limits'
+	//! check below necessary.
+	bool NeedsVerdict() const {
+		return condition.impossible || has_lower || ((source_lower || source_upper) && has_upper) ||
+		       (has_fixes && has_upper);
+	}
 
 	//! The type of class key column `i`.
 	const LogicalType &KeyType(idx_t i) const {
@@ -583,8 +606,9 @@ private:
 	}
 
 	//! Stage 3: the score projection. It forwards the source columns, the combined linear score, the scope and
-	//! fixed-value flags, and the source-valued bounds, so every later stage reads one projection. The constructor
-	//! laid out the slots; each is appended here at exactly that position.
+	//! fixed-value flags, the source-valued bounds and the checks of the row, so every later stage reads one
+	//! projection. The checks stand here, below the rank window, which holds every row before it gives one. The
+	//! constructor laid out the slots; each is appended here at exactly that position.
 	unique_ptr<LogicalOperator> ProjectScore(unique_ptr<LogicalOperator> source, const ScopeBindings &scope) const {
 		vector<unique_ptr<Expression>> score_expressions;
 		auto append_at = [&](const ColumnBinding &slot, unique_ptr<Expression> expression) {
@@ -612,10 +636,14 @@ private:
 			part_scores[part.part] = part_scores[part.part] ? calc.Add(part_scores[part.part], term) : term;
 		}
 		append_at(score_binding, calc.Out(combined_score));
+		// The checks of the row, in the solver's order: the NaN check of what each group bound reads, each value the
+		// row fixes, the score, then a row fixed to both values.
+		vector<unique_ptr<Expression>> row_checks;
 		// A reducer whose coefficient fails is named before the score they make together, which names the objective.
 		auto into_score = [&](const Expression &input) {
 			return calc.Wrap(CopyIntoState(input, scope));
 		};
+		ExprPtr score_message;
 		if (has_score_message) {
 			vector<ExprPtr> candidates;
 			for (idx_t p = 0; p < part_scores.size(); p++) {
@@ -627,7 +655,7 @@ private:
 				}
 			}
 			candidates.push_back(DirectNumberMessage(calc, combined_score, condition.objective_written));
-			append_at(score_message_binding, calc.Out(calc.Coalesce(candidates)));
+			score_message = calc.Coalesce(candidates);
 		}
 		if (condition.scoped) {
 			append_at(eligible_binding, calc.Out(calc.Col(LogicalType::BOOLEAN, scope.eligible_binding)));
@@ -660,11 +688,10 @@ private:
 			}
 			append_at(bound_bindings[i], calc.Out(calc.Cast(calc.Wrap(std::move(value)), LogicalType::DOUBLE)));
 		}
-		idx_t message = 0;
 		for (auto &columns : group_columns) {
 			for (auto &input : columns) {
 				if (input.invalid) {
-					append_at(message_bindings[message++], calc.Out(input.invalid));
+					row_checks.push_back(DirectRaiseMessage(optimizer, calc, input.invalid));
 				}
 			}
 		}
@@ -672,8 +699,21 @@ private:
 			auto into_state = [&](const Expression &value) {
 				return CopyIntoState(value, scope);
 			};
-			append_at(message_bindings[message++],
-			          calc.Out(DirectFixedValueMessage(optimizer.context, calc, fixed, into_state)));
+			row_checks.push_back(DirectRaiseMessage(
+			    optimizer, calc, DirectFixedValueMessage(optimizer.context, calc, fixed, into_state)));
+		}
+		if (score_message) {
+			row_checks.push_back(DirectRaiseMessage(optimizer, calc, score_message));
+		}
+		if (has_fixes) {
+			// A row fixed to both values.
+			auto both = calc.If(calc.Col(LogicalType::BOOLEAN, scope.fixed_one_binding),
+			                    calc.Col(LogicalType::BOOLEAN, scope.fixed_zero_binding), calc.Bool(false));
+			row_checks.push_back(
+			    DirectRaiseIf(calc, calc.Out(both), DirectInfeasibleErrorPredicate(optimizer, errors)));
+		}
+		if (HasRowChecks()) {
+			append_at(checks_binding, calc.Out(DirectAllHold(calc, std::move(row_checks))));
 		}
 		auto score = make_uniq<LogicalProjection>(score_index, std::move(score_expressions));
 		score->children.push_back(std::move(source));
@@ -694,23 +734,6 @@ private:
 			return calc.Wrap(DirectScaledTerm(optimizer, calc.Out(limit), -1));
 		}
 		return calc.Cast(limit, LogicalType::DOUBLE);
-	}
-
-	//! Adds to `window`, which is partitioned like the rank, the least message of each check in the row's group.
-	void AddRowMessages(LogicalWindow &window) const {
-		auto add = [&](ExprPtr message) {
-			auto least = DirectWindowExtremum(optimizer, "min", calc.Out(message));
-			AddScope(*least);
-			window.expressions.push_back(std::move(least));
-			return ColumnBinding(window_index, window.expressions.size() - 1);
-		};
-		message_minimum.clear();
-		for (auto &binding : message_bindings) {
-			message_minimum.push_back(add(calc.Col(LogicalType::VARCHAR, binding)));
-		}
-		if (has_score_message) {
-			score_message_minimum = add(calc.Col(LogicalType::VARCHAR, score_message_binding));
-		}
 	}
 
 	//! Inclusive count limit of one source-valued bound, as BIGINT: its value rounded, clamped to the BIGINT range,
@@ -796,10 +819,10 @@ private:
 		                               calc.Out(calc.Col(LogicalType::DOUBLE, score_binding)));
 	}
 
-	//! Stage 4: rank rows within their scope, raise the errors of the checks in the solver's order (what the group
-	//! bounds read and give, the values the row fixes, the score), and the infeasibility error when the bounds, fixed
-	//! values, and row counts cannot all hold.
-	RankedRows RankAndFilterFeasibility(unique_ptr<LogicalOperator> score, unique_ptr<LogicalOperator> classes) const {
+	//! Stage 4: rank rows within their scope and give each row its group's bounds. Where a group can fail a check of
+	//! its own (NeedsVerdict), a window over all the rows reads whether every group is feasible, and the rows leave
+	//! through it.
+	RankedRows RankRows(unique_ptr<LogicalOperator> score, unique_ptr<LogicalOperator> classes) const {
 		// Hand-built: a window is an operator-specific node, which the builder (scalar expressions) has no operation
 		// for.
 		auto rank =
@@ -836,7 +859,6 @@ private:
 			AddScope(*count);
 			window->expressions.push_back(std::move(count));
 		}
-		AddRowMessages(*window);
 		window->children.push_back(std::move(score));
 		result.rank_binding = ColumnBinding(window_index, 0);
 		result.plan = std::move(window);
@@ -846,23 +868,30 @@ private:
 			    DirectJoinClassAnswers(binder, std::move(result.plan), key_bindings, class_key, std::move(classes))
 			        .plan;
 		}
-		auto feasible = make_uniq<LogicalFilter>(FeasiblePredicate(result, free_count_slot));
-		feasible->children.push_back(std::move(result.plan));
-		result.plan = std::move(feasible);
+		if (NeedsVerdict()) {
+			auto verdict = make_uniq<LogicalWindow>(verdict_index);
+			verdict->expressions.push_back(
+			    DirectWindowExtremum(optimizer, "bool_and", calc.Out(GroupsAreFeasible(result, free_count_slot))));
+			verdict->children.push_back(std::move(result.plan));
+			result.verdict_binding = ColumnBinding(verdict_index, 0);
+			result.plan = std::move(verdict);
+		}
 		return result;
 	}
 
-	//! The feasibility predicate of stage 4: a list of checks, each true when it passes and DECIDE's infeasible error
-	//! when it fails. Which failing check raises is not specified, and all of them raise the same error. The checks on
-	//! the rows of a group apply to eligible rows only; a fixed-value conflict applies to every row.
-	unique_ptr<Expression> FeasiblePredicate(const RankedRows &ranked, idx_t free_count_slot) const {
+	//! Whether the group of the row is feasible: a list of checks, each true when it passes and false when it fails,
+	//! after the ones that raise a message of their own (what the group's bounds give: a NaN limit, an `=` bound that
+	//! takes two values in a group). The checks on the rows of a group apply to eligible rows only. The verdict window
+	//! reads it over every row, so every group has passed the raising checks when the first row leaves; a false raises
+	//! DECIDE's infeasible error then.
+	ExprPtr GroupsAreFeasible(const RankedRows &ranked, idx_t free_count_slot) const {
 		// `ok` must hold; a NULL `ok` fails.
 		auto must_hold = [&](const ExprPtr &ok) {
-			return DirectRaiseUnless(calc, calc.Out(ok), DirectInfeasibleErrorPredicate(optimizer, errors));
+			return calc.Out(calc.If(ok, calc.Bool(true), calc.Bool(false)));
 		};
 		// `bad` must not hold; a NULL `bad` passes.
 		auto must_not_hold = [&](const ExprPtr &bad) {
-			return DirectRaiseIf(calc, calc.Out(bad), DirectInfeasibleErrorPredicate(optimizer, errors));
+			return calc.Out(calc.If(bad, calc.Bool(false), calc.Bool(true)));
 		};
 		auto fixed_count = [&]() {
 			return calc.Col(LogicalType::BIGINT, ColumnBinding(window_index, ranked.fixed_count_slot));
@@ -901,6 +930,7 @@ private:
 				    must_hold(calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, fixed_count(), UpperLimit())));
 			}
 		}
+		D_ASSERT(group_checks.empty() != NeedsVerdict());
 		// The checks of the rows of a group apply to eligible rows only.
 		auto in_group = [&](vector<unique_ptr<Expression>> list) {
 			auto group = DirectAllHold(calc, std::move(list));
@@ -908,41 +938,22 @@ private:
 			                                           calc.Wrap(std::move(group)), calc.Bool(true)))
 			                        : std::move(group);
 		};
-		// The solver's order: the NaN checks of what the group bounds read, what the group bounds give (a NaN limit, an
-		// `=` bound that takes two values in a group), the row messages (the values the row fixes, then the score),
+		// The solver's order: what the group bounds give (a NaN limit, an `=` bound that takes two values in a group),
 		// then infeasible.
 		vector<unique_ptr<Expression>> checks;
-		auto raise = [&](const ColumnBinding &least) {
-			checks.push_back(DirectRaiseMessage(optimizer, calc, calc.Col(LogicalType::VARCHAR, least)));
-		};
-		for (idx_t i = 0; i < limit_message_count; i++) {
-			raise(message_minimum[i]);
-		}
 		for (auto &values : group_values) {
 			for (auto &message : values.messages) {
 				checks.push_back(DirectRaiseMessage(optimizer, calc, message));
 			}
 		}
-		for (idx_t i = limit_message_count; i < message_minimum.size(); i++) {
-			raise(message_minimum[i]);
-		}
-		if (has_score_message) {
-			raise(score_message_minimum);
-		}
 		if (!group_checks.empty()) {
 			checks.push_back(in_group(std::move(group_checks)));
 		}
-		if (has_fixes) {
-			// A row fixed to both values.
-			checks.push_back(
-			    must_not_hold(calc.If(calc.Col(LogicalType::BOOLEAN, fixed_one_binding),
-			                          calc.Col(LogicalType::BOOLEAN, fixed_zero_binding), calc.Bool(false))));
-		}
-		return DirectAllHold(calc, std::move(checks));
+		return calc.Wrap(DirectAllHold(calc, std::move(checks)));
 	}
 
 	//! Stage 5: the 0/1 assignment (fixed values, then scope, then upper and lower rank limits, then score sign), the
-	//! source columns, and the hidden rank that keeps score validation live.
+	//! source columns, the hidden rank that keeps the rank window live, and the column of the checks.
 	unique_ptr<LogicalOperator> ProjectAssignment(RankedRows ranked) const {
 		auto &rank_binding = ranked.rank_binding;
 		auto fixed_count_slot = ranked.fixed_count_slot;
@@ -980,6 +991,19 @@ private:
 		// The otherwise unused rank is a blocking dependency. It forces a complete
 		// value read before an outer LIMIT, COUNT, or column-pruning parent can return.
 		result_expressions.push_back(calc.Out(rank));
+		// The checks of the rows, which the score projection raised, and the verdict of the groups. The column keeps
+		// them live (validated_columns).
+		vector<unique_ptr<Expression>> checks;
+		if (HasRowChecks()) {
+			checks.push_back(calc.Out(calc.Col(LogicalType::BOOLEAN, checks_binding)));
+		}
+		if (NeedsVerdict()) {
+			checks.push_back(DirectRaiseUnless(calc, calc.Out(calc.Col(LogicalType::BOOLEAN, ranked.verdict_binding)),
+			                                   DirectInfeasibleErrorPredicate(optimizer, errors)));
+		}
+		if (!checks.empty()) {
+			result_expressions.push_back(DirectAllHold(calc, std::move(checks)));
+		}
 		auto result = make_uniq<LogicalProjection>(result_index, std::move(result_expressions));
 		result->children.push_back(std::move(ranked.plan));
 		return std::move(result);
