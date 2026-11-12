@@ -465,6 +465,8 @@ struct DirectSharedScope {
 	unique_ptr<Expression> when;
 	//! The `by` key: the groups, each its own bound. Empty for one group.
 	vector<DirectKeyElement> keys;
+	//! The clauses are written `per K:`, with K possibly `()`: `classes` is empty then, and the clause is still `per`.
+	bool per = false;
 	//! The clauses are written `per K:` and a NULL in K puts a row in no class, so a query whose kept rows all have a
 	//! NULL K has no instance (the plan owes that: DirectAddInstanceFlag). `classes` is K.
 	bool gated = false;
@@ -475,9 +477,16 @@ struct DirectSharedScope {
 	}
 };
 
-//! Proves that every clause covers the same rows in the same groups and reads the scope: the same plain SUM scope
-//! (`Membership`), `by` key and `per` key, and a `when` and keys a plan can compute for each row (no decision, nothing
-//! volatile, no subquery). False when they differ.
+//! Reads one clause's scope: the same plain SUM scope (`Membership`), `by` key and `per` key, and a `when` and keys a
+//! plan can compute for each row (no decision, nothing volatile, no subquery). False when the clause reads no scope.
+bool DirectReadScope(const DirectIR &ir, const DirectIRConstraint &clause, DirectSharedScope &scope);
+
+//! Whether two scopes cover the same rows in the same groups: an equal `when` or none on both, `by` and `per` keys
+//! that group alike (DirectSameKey), and both written `per` or neither.
+bool DirectSameScope(const DirectSharedScope &a, const DirectSharedScope &b);
+
+//! Proves that every clause covers the same rows in the same groups and reads the scope: each clause's scope
+//! (DirectReadScope), all of them the same (DirectSameScope). False when one is unread or they differ.
 bool DirectProveSharedScope(const DirectIR &ir, const vector<const DirectIRConstraint *> &clauses,
                             DirectSharedScope &scope);
 

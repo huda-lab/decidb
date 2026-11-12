@@ -90,18 +90,25 @@ enum class DirectReducer : uint8_t {
 	MAX
 };
 
-//! Whether two keys group the same rows the same way: the same expressions in the same order. The binder keeps one
-//! entry for the same columns (FindOrCreateDecideKey), so two keys that agree there handle a NULL alike.
-inline bool DirectSameKey(const vector<DirectKeyElement> &a, const vector<DirectKeyElement> &b) {
-	if (a.size() != b.size()) {
-		return false;
-	}
-	for (idx_t i = 0; i < a.size(); i++) {
-		if (!a[i].grouping->Equals(*b[i].grouping)) {
+//! Whether every expression of `a` is one of `b`'s: the groups of `b` are no coarser than `a`'s. A key is a set of
+//! expressions, so its order says nothing (FindOrCreateDecideKey), and the empty key is within every key.
+inline bool DirectKeyWithin(const vector<DirectKeyElement> &a, const vector<DirectKeyElement> &b) {
+	for (auto &element : a) {
+		bool found = false;
+		for (idx_t i = 0; i < b.size() && !found; i++) {
+			found = element.grouping->Equals(*b[i].grouping);
+		}
+		if (!found) {
 			return false;
 		}
 	}
 	return true;
+}
+
+//! Whether two keys group the same rows the same way: the same expressions, in any order. The binder keeps one entry
+//! for the same columns (FindOrCreateDecideKey), so two keys that agree there handle a NULL alike.
+inline bool DirectSameKey(const vector<DirectKeyElement> &a, const vector<DirectKeyElement> &b) {
+	return DirectKeyWithin(a, b) && DirectKeyWithin(b, a);
 }
 
 //! One additive part of a constraint's left side or of the objective: `sign * scale * reducer(terms)`.

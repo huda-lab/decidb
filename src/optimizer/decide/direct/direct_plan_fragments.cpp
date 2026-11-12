@@ -528,42 +528,49 @@ unique_ptr<BoundWindowExpression> DirectRunningSum(Optimizer &optimizer, const E
 	return sum;
 }
 
-bool DirectProveSharedScope(const DirectIR &ir, const vector<const DirectIRConstraint *> &clauses,
-                            DirectSharedScope &scope) {
-	D_ASSERT(!clauses.empty());
-	auto &first = *clauses[0];
+bool DirectReadScope(const DirectIR &ir, const DirectIRConstraint &clause, DirectSharedScope &scope) {
 	bool ok;
-	auto first_when = first.Membership(ok);
+	auto when = clause.Membership(ok);
 	if (!ok) {
 		return false;
 	}
-	for (auto clause : clauses) {
-		auto when = clause->Membership(ok);
-		if (!ok || !DirectSameKey(clause->PlainSum()->by, first.PlainSum()->by) ||
-		    clause->per_class != first.per_class || !DirectSameKey(clause->classes, first.classes) ||
-		    static_cast<bool>(when) != static_cast<bool>(first_when) ||
-		    (when && !Expression::Equals(*when, *first_when))) {
+	if (when) {
+		if (!DirectIsSourceOnlyPredicate(*when, ir.decide_index, ir.source_bindings)) {
 			return false;
 		}
-	}
-	if (first_when) {
-		if (!DirectIsSourceOnlyPredicate(*first_when, ir.decide_index, ir.source_bindings)) {
-			return false;
-		}
-		scope.when = std::move(first_when);
+		scope.when = std::move(when);
 	}
 	// A `by` key holds expressions, which can be volatile. A `per` key holds columns and relations only.
-	for (auto &key : first.PlainSum()->by) {
+	for (auto &key : clause.PlainSum()->by) {
 		if (!DirectIsDecisionFreeDeterministic(*key.grouping, ir.decide_index)) {
 			return false;
 		}
 		scope.keys.push_back(key.Copy());
 	}
-	for (auto &key : first.classes) {
+	scope.per = clause.per_class;
+	for (auto &key : clause.classes) {
 		scope.classes.push_back(key.Copy());
-	}
-	for (auto &key : scope.classes) {
 		scope.gated = scope.gated || key.no_group;
+	}
+	return true;
+}
+
+bool DirectSameScope(const DirectSharedScope &a, const DirectSharedScope &b) {
+	return Expression::Equals(a.when, b.when) && DirectSameKey(a.keys, b.keys) && a.per == b.per &&
+	       DirectSameKey(a.classes, b.classes);
+}
+
+bool DirectProveSharedScope(const DirectIR &ir, const vector<const DirectIRConstraint *> &clauses,
+                            DirectSharedScope &scope) {
+	D_ASSERT(!clauses.empty());
+	if (!DirectReadScope(ir, *clauses[0], scope)) {
+		return false;
+	}
+	for (idx_t i = 1; i < clauses.size(); i++) {
+		DirectSharedScope other;
+		if (!DirectReadScope(ir, *clauses[i], other) || !DirectSameScope(scope, other)) {
+			return false;
+		}
 	}
 	return true;
 }
