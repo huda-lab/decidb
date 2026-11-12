@@ -61,15 +61,18 @@ DirectClassKey DirectClassKeyOf(const vector<DirectKeyElement> &keys, bool drops
 //! expressions of the plan the class is read in. True for a key with no such column, whose rows are all in a class.
 ExprPtr DirectClassPresent(const ExpressionBuilder &calc, const DirectClassKey &key, const vector<ExprPtr> &columns);
 
-//! The columns every stage of a rule forwards: the source columns, the eligible flag and the class key of its scope
-//! (DirectScopeState).
-struct DirectCarried {
-	vector<ColumnBinding> source;
+//! The columns that put a row in a group of one scope: the eligible flag and the class key (DirectScopeState).
+struct DirectScopeColumns {
 	//! Set only for a scoped rule.
 	ColumnBinding eligible;
 	vector<ColumnBinding> keys;
 	//! The shape of `keys`.
 	DirectClassKey key;
+};
+
+//! The columns every stage of a rule forwards: the source columns, and the eligible flag and class key of its scope.
+struct DirectCarried : DirectScopeColumns {
+	vector<ColumnBinding> source;
 };
 
 //! One projection under construction: each column is added as an expression and gets its binding at once, and the
@@ -86,6 +89,8 @@ public:
 	ColumnBinding Add(const ExprPtr &expression);
 	//! Adds a column that reads each of `columns` of the child, whose types are `types`; returns where they are.
 	vector<ColumnBinding> Forward(const vector<ColumnBinding> &columns, const vector<LogicalType> &types);
+	//! The same for the columns of one scope, whose eligible flag is set when the scope is `scoped`.
+	DirectScopeColumns Forward(const DirectScopeColumns &from, bool scoped);
 	//! The same for what a scoped rule carries, in whose scope (`scoped`) the eligible flag is set.
 	DirectCarried Forward(const DirectCarried &from, const vector<LogicalType> &source_types, bool scoped);
 	unique_ptr<LogicalOperator> Finish(unique_ptr<LogicalOperator> child);
@@ -517,26 +522,24 @@ unique_ptr<LogicalOperator> DirectAddInstanceFlag(Optimizer &optimizer, unique_p
                                                   const Expression *when, const vector<DirectKeyElement> &classes,
                                                   ColumnBinding &flag);
 
-//! The per-row state of a scoped aggregate, projected once over the input: every input column, then whether the
-//! row is eligible (its `when` holds and no NO_GROUP key element is NULL), then the group key, then any per-row columns
-//! the rule adds. With no scope and no extra columns the input passes through unchanged.
+//! The per-row state of a scoped aggregate, projected once over the input: every input column, then for each scope
+//! whether the row is eligible (its `when` holds and no NO_GROUP key element is NULL) and the group key, then any
+//! per-row columns the rule adds. With no scope and no extra columns the input passes through unchanged.
 struct DirectScopeState {
 	unique_ptr<LogicalOperator> plan;
 	//! Where each input column lives in `plan`, in input order.
 	vector<ColumnBinding> input_bindings;
 	//! The projection's table index, or INVALID_INDEX when the input passed through.
 	idx_t state_index = DConstants::INVALID_INDEX;
-	//! Set only for a scoped state.
-	ColumnBinding eligible;
-	//! The class key's columns as the state carries them, in key order.
-	vector<ColumnBinding> keys;
-	DirectClassKey key;
+	//! The columns of each scope, in the order given; an unscoped scope has none set. The class key's columns are in
+	//! key order.
+	vector<DirectScopeColumns> scopes;
 	//! The rule's extra columns, in the order given.
 	vector<ColumnBinding> extra;
 };
 
-//! What a rule carries through its stages from the scope: the first `source_width` columns of the state are the
-//! source's.
+//! What a rule with one scope carries through its stages from the scope: the first `source_width` columns of the state
+//! are the source's.
 DirectCarried DirectCarriedOf(const DirectScopeState &state, idx_t source_width);
 
 //! A row whose `when` is false or NULL does not join the clause, and neither does a row with a NULL in a column of a
@@ -549,6 +552,20 @@ DirectCarried DirectCarriedOf(const DirectScopeState &state, idx_t source_width)
 DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> input, bool scoped,
                                     const Expression *when, const vector<DirectKeyElement> &keys,
                                     vector<unique_ptr<Expression>> extra, unique_ptr<Expression> instance = nullptr);
+
+//! One scope of DirectProjectScopes: DirectProjectScope's `scoped`, `when`, `keys` and `instance`.
+struct DirectScopeInput {
+	bool scoped;
+	const Expression *when;
+	const vector<DirectKeyElement> *keys;
+	unique_ptr<Expression> instance;
+};
+
+//! DirectProjectScope for a rule whose rows are in a group of each of several scopes (a chain of nested levels): one
+//! projection carries every scope's eligible flag and class key, over the same input, so each scope's expressions
+//! stay over the input's columns. `scopes` gives one entry per scope, and the state's `scopes` follows their order.
+DirectScopeState DirectProjectScopes(Binder &binder, unique_ptr<LogicalOperator> input, vector<DirectScopeInput> scopes,
+                                     vector<unique_ptr<Expression>> extra);
 
 //! A per-row bound read from the data: it must not be NULL on a row its clause keeps, nor NaN when `reject_nan`.
 struct DirectRowBound {

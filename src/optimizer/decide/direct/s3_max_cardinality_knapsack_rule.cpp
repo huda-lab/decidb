@@ -229,12 +229,12 @@ class PlanBuilder final : public DirectRankedPrefix {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
 	            const vector<LogicalType> &source_types_p, const DirectStateErrors &errors_p)
-	    : DirectRankedPrefix(optimizer_p, source_bindings_p, source_types_p, errors_p, condition_p.scope,
+	    : DirectRankedPrefix(optimizer_p, source_bindings_p, source_types_p, errors_p, {condition_p.scope},
 	                         condition_p.fixed),
 	      condition(condition_p) {
 		if (!condition.limit.constant) {
 			limit_bound = condition.limit.data.GroupBound(optimizer);
-			limit_index = AddGroupBound(*limit_bound);
+			limit_index = AddGroupBound(0, *limit_bound);
 		}
 	}
 
@@ -290,15 +290,17 @@ private:
 	//! P1: the weight of each row, `sum(sign * coefficient)` of the budget's terms, checked as the solver checks a
 	//! coefficient (a NULL term reads 0: the front end guards it), and the weight of a row fixed to 1. A fixed row
 	//! leaves the prefix: the builder ranks it last and the sum skips it.
-	ColumnBinding LayoutRows(DirectProjectionStage &p1, const DirectScopeState &state) override {
+	DirectRowLayout LayoutRows(DirectProjectionStage &p1, const DirectScopeState &state) override {
+		DirectRowLayout layout;
 		auto over_state = [&](const Expression &value) {
 			return OverState(state, value);
 		};
 		auto values = DirectValuesOn(condition.budget, 0);
 		// A row the `when` drops reads no weight: it is NULL there, so the check passes it and no total counts it.
 		ExprPtr kept_when;
-		if (scope.when) {
-			kept_when = calc.Wrap(DirectActiveWhen(calc, over_state(*scope.when).get()));
+		auto &when = levels[0].scope.when;
+		if (when) {
+			kept_when = calc.Wrap(DirectActiveWhen(calc, over_state(*when).get()));
 			if (DropsRowsFromObjective()) {
 				kept = p1.Add(kept_when);
 			}
@@ -310,22 +312,23 @@ private:
 		}
 		if (auto check =
 		        DirectCheckNumber(optimizer, weight, condition.budget.names[0], values, source_bindings, p1.index)) {
-			checks_above.push_back(std::move(check));
+			layout.checks_above.push_back(std::move(check));
 		}
-		return weight;
+		layout.rank_key = weight;
+		return layout;
 	}
 
 	//! W1: adds to `w1` the running sum of the weights, per group in order of the weight, and the total of the weights
 	//! of the rows fixed to 1.
-	void AddGroupWindows(LogicalWindow &w1, const DirectRankedColumns &rows) override {
+	void AddGroupWindows(idx_t level, LogicalWindow &w1, const DirectRankedColumns &rows) override {
 		auto key = RankKey();
 		auto sum = DirectRunningSum(optimizer, calc, key, key, RankOrder(), {});
-		PartitionByGroup(rows.carried, *sum);
+		PartitionByGroup(rows.levels[level], *sum);
 		w1.expressions.push_back(std::move(sum));
 		total = ColumnBinding(w1.window_index, w1.expressions.size() - 1);
 		if (HasFixes()) {
 			auto sum = DirectWindowExtremum(optimizer, "sum", calc.Out(Column(LogicalType::DOUBLE, fixed_weight)));
-			OverRank(rows.carried, *sum);
+			OverRank(rows.levels[level], *sum);
 			w1.expressions.push_back(std::move(sum));
 			fixed_total = ColumnBinding(w1.window_index, w1.expressions.size() - 1);
 		}
@@ -337,7 +340,7 @@ private:
 		if (condition.limit.constant) {
 			return calc.Num(condition.limit.number);
 		}
-		auto &limit = GroupValues(limit_index);
+		auto &limit = GroupValues(0, limit_index);
 		return calc.Cast(condition.at_least ? limit.lower : limit.upper, LogicalType::DOUBLE);
 	}
 
@@ -352,20 +355,20 @@ private:
 
 	//! P2: the checks of the rows fixed to 1: their total and its sum with the prefix total are numbers the plan
 	//! computes (a DOUBLE overflow).
-	void AddFixedChecks(const ExprPtr &spent) {
+	void AddFixedChecks(const ExprPtr &spent, vector<unique_ptr<Expression>> &checks) {
 		if (!HasFixes()) {
 			return;
 		}
-		checks_above.push_back(
+		checks.push_back(
 		    DirectRaiseTooLarge(optimizer, Column(LogicalType::DOUBLE, fixed_total), condition.budget.names[0].clause));
-		checks_above.push_back(DirectRaiseTooLarge(optimizer, spent, condition.budget.names[0].clause));
+		checks.push_back(DirectRaiseTooLarge(optimizer, spent, condition.budget.names[0].clause));
 	}
 
 	//! P2: the rank of the row when its prefix total fits the group's limit, whether the empty prefix does, and the
 	//! checks of the prefix total (a DOUBLE overflow); the limit's own are the builder's (a NaN limit, an `=` limit
 	//! that takes two values in a group).
-	void LayoutPrefix(DirectProjectionStage &p2, const DirectRankedColumns &input) override {
-		auto rank = Column(LogicalType::BIGINT, input.rank);
+	vector<unique_ptr<Expression>> LayoutPrefix(DirectProjectionStage &p2, const DirectRankedColumns &input) override {
+		auto rank = Column(LogicalType::BIGINT, input.levels[0].rank);
 		// The prefix and the rows fixed to 1 share the budget: `fixed total + prefix total <= B`, in a DOUBLE.
 		auto prefix_total = Column(LogicalType::DOUBLE, total);
 		ExprPtr fixed_sum = calc.Num(0.0);
@@ -387,20 +390,24 @@ private:
 		}
 		// The weights are numbers by now (the checks above). A prefix total past a DOUBLE, in either direction, is a
 		// number the plan computes, and it names the budget as the solver path names a number it computes.
-		checks_above.push_back(DirectRaiseTooLarge(optimizer, prefix_total, condition.budget.names[0].clause));
-		AddFixedChecks(spent);
+		vector<unique_ptr<Expression>> checks;
+		checks.push_back(DirectRaiseTooLarge(optimizer, prefix_total, condition.budget.names[0].clause));
+		AddFixedChecks(spent, checks);
+		return checks;
 	}
 
 	//! The largest rank that fits, not the first that fails: with negative weights the prefix totals fall first. For a
 	//! minimum, the smallest rank that reaches B, not the first that falls short of it.
 	unique_ptr<BoundWindowExpression> PrefixSize(const DirectRankedColumns &rows) override {
-		return DirectWindowExtremum(optimizer, condition.at_least ? "min" : "max",
-		                            calc.Out(Column(LogicalType::BIGINT, fit_rank)));
+		auto size = DirectWindowExtremum(optimizer, condition.at_least ? "min" : "max",
+		                                 calc.Out(Column(LogicalType::BIGINT, fit_rank)));
+		PartitionByGroup(rows.levels[0], *size);
+		return size;
 	}
 
 	//! Whether the row's group fits a prefix: some rank fits, or the empty prefix does (with the rows fixed to 1). A
 	//! row outside every group has no budget (the builder). Null where no group can fit none.
-	ExprPtr GroupVerdict(const DirectRankedColumns &rows) override {
+	ExprPtr GroupVerdict(idx_t level, const DirectRankedColumns &rows) override {
 		if (!NeedsVerdict()) {
 			return nullptr;
 		}
@@ -416,12 +423,12 @@ private:
 		if (condition.at_least) {
 			prefix_size = calc.If(Column(LogicalType::BOOLEAN, empty_fits), zero, prefix_size);
 		}
-		auto chosen =
-		    calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, Column(LogicalType::BIGINT, rows.rank), prefix_size);
-		if (scoped) {
+		auto chosen = calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO,
+		                       Column(LogicalType::BIGINT, rows.levels[0].rank), prefix_size);
+		if (levels[0].scoped) {
 			// A row outside every budget costs nothing to select: a maximum selects it, a minimum has no use for it.
 			chosen =
-			    calc.If(Column(LogicalType::BOOLEAN, rows.carried.eligible), chosen, calc.Bool(!condition.at_least));
+			    calc.If(Column(LogicalType::BOOLEAN, rows.levels[0].eligible), chosen, calc.Bool(!condition.at_least));
 		}
 		if (DropsRowsFromObjective()) {
 			// A row the budget's `when` drops adds nothing to the objective and costs nothing: it is not selected.

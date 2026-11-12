@@ -166,13 +166,13 @@ class PlanBuilder final : public DirectRankedPrefix {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
 	            const vector<LogicalType> &source_types_p, const DirectStateErrors &errors_p)
-	    : DirectRankedPrefix(optimizer_p, source_bindings_p, source_types_p, errors_p, condition_p.scope,
+	    : DirectRankedPrefix(optimizer_p, source_bindings_p, source_types_p, errors_p, {condition_p.scope},
 	                         condition_p.fixed),
 	      condition(condition_p) {
 		for (auto &bound : condition.source_bounds) {
 			source_lower |= DirectIsLowerBound(bound.comparison);
 			source_upper |= DirectIsUpperBound(bound.comparison);
-			group_bound.push_back(bound.limit.data.group ? AddGroupBound(*bound.limit.data.group)
+			group_bound.push_back(bound.limit.data.group ? AddGroupBound(0, *bound.limit.data.group)
 			                                             : DConstants::INVALID_INDEX);
 		}
 		has_lower = condition.lower || source_lower;
@@ -224,7 +224,8 @@ private:
 
 	//! P1: the score, the value of each source-valued bound, and the check of the score. What a group bound reads and
 	//! the fixed values are the builder's.
-	ColumnBinding LayoutRows(DirectProjectionStage &p1, const DirectScopeState &state) override {
+	DirectRowLayout LayoutRows(DirectProjectionStage &p1, const DirectScopeState &state) override {
+		DirectRowLayout layout;
 		vector<ExprPtr> part_scores;
 		auto over_state = [&](const Expression &value) {
 			return OverState(state, value);
@@ -245,10 +246,11 @@ private:
 			bound_columns.push_back(p1.Add(calc.Out(calc.Cast(calc.Wrap(std::move(value)), LogicalType::DOUBLE))));
 		}
 		if (has_score_message) {
-			checks_below.push_back(DirectRaiseMessage(
+			layout.checks_below.push_back(DirectRaiseMessage(
 			    optimizer, calc, condition.score.Message(calc, optimizer, over_state, combined_score, part_scores)));
 		}
-		return score_column;
+		layout.rank_key = score_column;
+		return layout;
 	}
 
 	//! A row with no fixed value, neither to one nor to zero.
@@ -259,9 +261,9 @@ private:
 	}
 
 	//! W1: the counts of the group's rows, which the lower bound's feasibility reads.
-	void AddGroupWindows(LogicalWindow &w1, const DirectRankedColumns &rows) override {
+	void AddGroupWindows(idx_t level, LogicalWindow &w1, const DirectRankedColumns &rows) override {
 		auto add = [&](unique_ptr<BoundWindowExpression> count) {
-			OverRank(rows.carried, *count);
+			OverRank(rows.levels[level], *count);
 			w1.expressions.push_back(std::move(count));
 			return ColumnBinding(w1.window_index, w1.expressions.size() - 1);
 		};
@@ -282,7 +284,7 @@ private:
 		if (!bound.limit.data.group) {
 			return calc.Col(LogicalType::DOUBLE, bound_columns[index]);
 		}
-		auto &values = GroupValues(group_bound[index]);
+		auto &values = GroupValues(0, group_bound[index]);
 		auto &limit = upper != bound.negated ? values.upper : values.lower;
 		D_ASSERT(limit);
 		if (bound.negated) {
@@ -346,9 +348,9 @@ private:
 		vector<unique_ptr<Expression>> group_checks;
 		if (condition.impossible) {
 			// No bound can hold, so a group with any row is infeasible.
-			group_checks.push_back(
-			    must_not_hold(calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-			                           Column(LogicalType::BIGINT, input.rank), calc.Constant(Value::BIGINT(1)))));
+			group_checks.push_back(must_not_hold(calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+			                                              Column(LogicalType::BIGINT, input.levels[0].rank),
+			                                              calc.Constant(Value::BIGINT(1)))));
 		} else {
 			if (has_lower) {
 				auto free_rows = Column(LogicalType::BIGINT, row_count);
@@ -380,7 +382,7 @@ private:
 	}
 
 	//! P2: the score, how many rows of the group the limits leave to the free rows, and whether the group is feasible.
-	void LayoutPrefix(DirectProjectionStage &p2, const DirectRankedColumns &input) override {
+	vector<unique_ptr<Expression>> LayoutPrefix(DirectProjectionStage &p2, const DirectRankedColumns &input) override {
 		score_after = p2.Add(Column(LogicalType::DOUBLE, score_column));
 		auto remaining = [&](const ExprPtr &limit) {
 			return calc.Out(HasFixes() ? calc.Sub(limit, Column(LogicalType::BIGINT, fixed_count)) : limit);
@@ -394,9 +396,10 @@ private:
 		if (NeedsVerdict()) {
 			group_ok = p2.Add(calc.Out(GroupsAreFeasible(input)));
 		}
+		return {};
 	}
 
-	ExprPtr GroupVerdict(const DirectRankedColumns &rows) override {
+	ExprPtr GroupVerdict(idx_t level, const DirectRankedColumns &rows) override {
 		return NeedsVerdict() ? Column(LogicalType::BOOLEAN, group_ok) : nullptr;
 	}
 
@@ -405,7 +408,7 @@ private:
 		auto improving =
 		    calc.Cmp(ExpressionType::COMPARE_LESSTHAN, Column(LogicalType::DOUBLE, score_after), calc.Num(0.0));
 		auto choose = improving;
-		auto rank = Column(LogicalType::BIGINT, rows.rank);
+		auto rank = Column(LogicalType::BIGINT, rows.levels[0].rank);
 		if (has_lower) {
 			auto within_lower =
 			    calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, rank, Column(LogicalType::BIGINT, remaining_lower));
@@ -416,8 +419,8 @@ private:
 			    calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, rank, Column(LogicalType::BIGINT, remaining_upper));
 			choose = calc.If(within_upper, choose, calc.Bool(false));
 		}
-		if (scoped) {
-			choose = calc.If(Column(LogicalType::BOOLEAN, rows.carried.eligible), choose, improving);
+		if (levels[0].scoped) {
+			choose = calc.If(Column(LogicalType::BOOLEAN, rows.levels[0].eligible), choose, improving);
 		}
 		return choose;
 	}

@@ -78,15 +78,21 @@ vector<ColumnBinding> DirectProjectionStage::Forward(const vector<ColumnBinding>
 	return forwarded;
 }
 
-DirectCarried DirectProjectionStage::Forward(const DirectCarried &from, const vector<LogicalType> &source_types,
-                                             bool scoped) {
-	DirectCarried to;
-	to.source = Forward(from.source, source_types);
+DirectScopeColumns DirectProjectionStage::Forward(const DirectScopeColumns &from, bool scoped) {
+	DirectScopeColumns to;
 	if (scoped) {
 		to.eligible = Add(ColumnOf(LogicalType::BOOLEAN, from.eligible));
 	}
 	to.keys = Forward(from.keys, from.key.types);
 	to.key = from.key;
+	return to;
+}
+
+DirectCarried DirectProjectionStage::Forward(const DirectCarried &from, const vector<LogicalType> &source_types,
+                                             bool scoped) {
+	DirectCarried to;
+	to.source = Forward(from.source, source_types);
+	static_cast<DirectScopeColumns &>(to) = Forward(static_cast<const DirectScopeColumns &>(from), scoped);
 	return to;
 }
 
@@ -601,9 +607,7 @@ DirectCarried DirectCarriedOf(const DirectScopeState &state, idx_t source_width)
 	DirectCarried carried;
 	carried.source.assign(state.input_bindings.begin(),
 	                      state.input_bindings.begin() + NumericCast<int64_t>(source_width));
-	carried.eligible = state.eligible;
-	carried.keys = state.keys;
-	carried.key = state.key;
+	static_cast<DirectScopeColumns &>(carried) = state.scopes.at(0);
 	return carried;
 }
 
@@ -634,15 +638,57 @@ ExprPtr DirectClassPresent(const ExpressionBuilder &calc, const DirectClassKey &
 	return present ? present : calc.Bool(true);
 }
 
-DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> input, bool scoped,
-                                    const Expression *when, const vector<DirectKeyElement> &keys,
-                                    vector<unique_ptr<Expression>> extra, unique_ptr<Expression> instance) {
+//! The columns of one scope in the scope projection: whether the row is eligible and its class key, added to
+//! `expressions`, the projection `state_index`'s.
+static DirectScopeColumns ProjectOneScope(const ExpressionBuilder &calc, DirectScopeInput &scope, idx_t state_index,
+                                          vector<unique_ptr<Expression>> &expressions) {
+	DirectScopeColumns columns;
+	auto active = calc.Wrap(DirectActiveWhen(calc, scope.when));
+	auto eligible = active;
+	vector<ExprPtr> key_values;
+	for (auto &key : *scope.keys) {
+		auto value = calc.Of(*key.grouping);
+		key_values.push_back(scope.when ? DirectOnKeptRows(calc, active, value) : value);
+		if (key.no_group) {
+			eligible = calc.If(calc.IsNull(key_values.back()), calc.Bool(false), eligible);
+		}
+	}
+	columns.key = DirectClassKeyOf(*scope.keys, scope.when != nullptr || scope.instance != nullptr);
+	if (scope.instance) {
+		eligible = calc.If(calc.Wrap(std::move(scope.instance)), eligible, calc.Bool(false));
+		// The instance is the second reason a row is in no class, after a `when`, which has put NULL in every
+		// column of the key already: it does the same, so no join finds a class for the row.
+		for (auto &value : key_values) {
+			value = calc.If(eligible, value, calc.Constant(Value(value->return_type)));
+		}
+	}
+	if (key_values.size() < columns.key.types.size()) {
+		// No element can say a row is in no class, and a `when` or an instance can: the marker does.
+		key_values.push_back(
+		    calc.If(eligible, calc.Constant(Value::UTINYINT(0)), calc.Constant(Value(LogicalType::UTINYINT))));
+	}
+	columns.eligible = ColumnBinding(state_index, expressions.size());
+	expressions.push_back(calc.Out(eligible));
+	for (auto &value : key_values) {
+		columns.keys.emplace_back(state_index, expressions.size());
+		expressions.push_back(calc.Out(value));
+	}
+	return columns;
+}
+
+DirectScopeState DirectProjectScopes(Binder &binder, unique_ptr<LogicalOperator> input, vector<DirectScopeInput> scopes,
+                                     vector<unique_ptr<Expression>> extra) {
 	ExpressionBuilder calc(binder.context);
 	input->ResolveOperatorTypes();
 	auto bindings = input->GetColumnBindings();
 	auto &types = input->types;
 	DirectScopeState state;
 	state.input_bindings = bindings;
+	state.scopes.resize(scopes.size());
+	bool scoped = false;
+	for (auto &scope : scopes) {
+		scoped = scoped || scope.scoped;
+	}
 	if (!scoped && extra.empty()) {
 		state.plan = std::move(input);
 		return state;
@@ -653,36 +699,9 @@ DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> 
 		expressions.push_back(calc.Out(calc.Col(types[i], bindings[i])));
 		state.input_bindings[i] = ColumnBinding(state.state_index, i);
 	}
-	if (scoped) {
-		auto active = calc.Wrap(DirectActiveWhen(calc, when));
-		auto eligible = active;
-		vector<ExprPtr> key_values;
-		for (auto &key : keys) {
-			auto value = calc.Of(*key.grouping);
-			key_values.push_back(when ? DirectOnKeptRows(calc, active, value) : value);
-			if (key.no_group) {
-				eligible = calc.If(calc.IsNull(key_values.back()), calc.Bool(false), eligible);
-			}
-		}
-		state.key = DirectClassKeyOf(keys, when != nullptr || instance != nullptr);
-		if (instance) {
-			eligible = calc.If(calc.Wrap(std::move(instance)), eligible, calc.Bool(false));
-			// The instance is the second reason a row is in no class, after a `when`, which has put NULL in every
-			// column of the key already: it does the same, so no join finds a class for the row.
-			for (auto &value : key_values) {
-				value = calc.If(eligible, value, calc.Constant(Value(value->return_type)));
-			}
-		}
-		if (key_values.size() < state.key.types.size()) {
-			// No element can say a row is in no class, and a `when` or an instance can: the marker does.
-			key_values.push_back(
-			    calc.If(eligible, calc.Constant(Value::UTINYINT(0)), calc.Constant(Value(LogicalType::UTINYINT))));
-		}
-		state.eligible = ColumnBinding(state.state_index, expressions.size());
-		expressions.push_back(calc.Out(eligible));
-		for (auto &value : key_values) {
-			state.keys.emplace_back(state.state_index, expressions.size());
-			expressions.push_back(calc.Out(value));
+	for (idx_t i = 0; i < scopes.size(); i++) {
+		if (scopes[i].scoped) {
+			state.scopes[i] = ProjectOneScope(calc, scopes[i], state.state_index, expressions);
 		}
 	}
 	for (auto &column : extra) {
@@ -693,6 +712,14 @@ DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> 
 	projection->children.push_back(std::move(input));
 	state.plan = std::move(projection);
 	return state;
+}
+
+DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> input, bool scoped,
+                                    const Expression *when, const vector<DirectKeyElement> &keys,
+                                    vector<unique_ptr<Expression>> extra, unique_ptr<Expression> instance) {
+	vector<DirectScopeInput> scopes;
+	scopes.push_back({scoped, when, &keys, std::move(instance)});
+	return DirectProjectScopes(binder, std::move(input), std::move(scopes), std::move(extra));
 }
 
 ExprPtr DirectRowBoundMessage(ClientContext &context, const ExpressionBuilder &calc, const DirectRowBound &bound) {
