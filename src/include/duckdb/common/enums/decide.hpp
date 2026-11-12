@@ -433,7 +433,7 @@ static constexpr const char *L0_AUTO_BOUND_TAG = "__l0_auto_bound__";
 static constexpr const char *SINGLETON_ROW_BOUND_TAG = "__singleton_row_bound__";
 
 //! Beside SINGLETON_ROW_BOUND_TAG on a recorded bound: a repair model loosens it through the
-//! clause's own rows, one per kept row or class (DecidePreparedModel::singleton_row_constraints,
+//! clause's own rows, one per kept row or class (its folded root's clause, DecideNode::folded,
 //! D28), not one knob per column. Set by DecideOptimizer::FoldSingletonRows.
 static constexpr const char *SINGLETON_ROW_CLAUSE_ROWS_TAG = "__singleton_row_clause_rows__";
 
@@ -605,7 +605,7 @@ inline bool IsQueryWideBoundTag(const string &alias) {
 //! The comparison holds the tag because a comparison's tags survive a rebuild (K5), which a bound's node does not.
 static constexpr const char *FRAME_TIGHTEST_BOUND_TAG = "__frame_tightest_bound__";
 
-//! On a reference to a frame column (DecidePreparedModel::frame_columns): its name is the frame as written, which a
+//! On a reference to a frame column (DecideFrameReads::columns): its name is the frame as written, which a
 //! message prints as it stands, not as an identifier.
 static constexpr const char *FRAME_COLUMN_TAG = "__frame_column__";
 

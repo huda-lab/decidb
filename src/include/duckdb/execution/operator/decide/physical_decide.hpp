@@ -6,7 +6,7 @@
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
-#include "duckdb/planner/decide/decide_prepared_model.hpp"
+#include "duckdb/planner/decide/decide_tree_terms.hpp"
 #include "duckdb/planner/decide/decide_tree.hpp"
 #include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
 #include "duckdb/planner/column_binding_map.hpp"
@@ -167,7 +167,7 @@ public:
     vector<DecideBoundBox> singleton_row_boxes;
     // Every folded user bound, kept so the infeasible diagnosis can open its column box and
     // quote it as written; its clause reaches the repair model through
-    // DecidePreparedModel::singleton_row_constraints. A BETWEEN contributes two entries.
+    // its folded root's clause (DecideNode::folded). A BETWEEN contributes two entries.
     vector<LogicalDecide::UserBoundSpec> user_singleton_row_bounds;
     vector<LogicalDecide::UserBoundSpec> member_singleton_row_bounds;
 
@@ -253,12 +253,6 @@ public:
     //! a fact only it can see, the same way the `<>` range collapse does.
     bool force_native_constructs = false;
 
-    // --- Prepared linear form (decided by BuildDecidePreparedModel, stage 05) ---
-
-    //! Every constraint and the objective, already flattened into additive terms
-    //! whose coefficients are still unevaluated expressions. PHASE 2 evaluates those
-    //! coefficients against the materialized rows; nothing here re-derives the shape.
-    DecidePreparedModel prepared;
 
 public:
     // Source interface

@@ -48,14 +48,14 @@ enum class DecideProgramRole : uint8_t { COEFFICIENT, BOUND, TIGHTEST_BOUND, TES
 
 //! A value a node's programs read from another node (language/guide.md §6.1): a G over data's, a data reducer's, at an
 //! entry the G's fold in the slot the entry's row reads it in, NULL where the row reaches none; or an O's, a column of
-//! its frame (`column`, DecidePreparedModel::frame_columns) at the entry's row, the anchor the frame is read at.
+//! its frame (`column`, DecideFrameReads::columns) at the entry's row, the anchor the frame is read at.
 struct DecideHole {
 	idx_t node;
 	LogicalType type;
 	idx_t column = DConstants::INVALID_INDEX;
 };
 
-//! What an O computes on its anchors for one of its frame's columns (DecidePreparedModel::frame_columns, flat's
+//! What an O computes on its anchors for one of its frame's columns (DecideFrameReads::columns, flat's
 //! blocks ComputeDecideFrameColumns and SkipDecideRangeNullReads read them): programs on the O, its `value`, its
 //! `fallback` and a range's reducer's arguments; INVALID where the column has none. Its own frame's columns are
 //! computed from them before the O's other programs, which may read them.
@@ -90,7 +90,7 @@ struct DecideProgram {
 	vector<idx_t> arguments;
 };
 
-//! f(e1..ep, G1..Gq): stage 05's own records for what a node holds, copied once stage 05 lowered them, so a term keeps
+//! f(e1..ep, G1..Gq): the records stage 05's lowering (LowerDecideTree) writes for what a node holds, so a term keeps
 //! its identity, order, label and inputs; and where each is computed, parallel to its term vectors.
 struct DecideBody {
 	//! A constraint root's clause: its terms, products, squares, bound, admitted ends and facts.
@@ -136,7 +136,7 @@ struct DecideBody {
 //! Composite: E owns entries, G groups an operand E, and O holds ordered positions.
 //! Expressions are owned copies, with source columns resolved to chunk references. The construction borrows the
 //! addresses of the operator's reducers only between building the nodes and stage 05 lowering them
-//! (DecideTreeConstruction); `compiled` holds copies of stage 05's terms.
+//! (DecideTreeConstruction); `compiled` holds the terms stage 05 lowered into the node.
 struct DecideNode {
 	explicit DecideNode(DecideNodeKind kind) : kind(kind) {
 	}
@@ -235,6 +235,16 @@ struct DecideTree {
 	idx_t decide_index = DConstants::INVALID_INDEX;
 	idx_t input_column_count = 0;
 	vector<unique_ptr<DecideNode>> nodes;
+	//! The clause roots holding a clause, numbered in leaf order (DecideBody::clause_index): the constraints first,
+	//! then the folded bounds whose repair rows come from their clause.
+	idx_t constraint_count = 0;
+	idx_t singleton_row_count = 0;
+	//! The frame columns the clauses' terms read (LowerDecideTree).
+	DecideFrameReads frame_reads;
+	//! The constraints' records, by clause_index; a folded bound's is none of them.
+	vector<const DecideConstraint *> Constraints() const;
+	//! The objective's records, null for none.
+	const DecideObjective *Objective() const;
 	vector<idx_t> roots;
 	//! Deterministic children-first order, including shared and definition edges.
 	vector<idx_t> eval_order;
@@ -258,7 +268,7 @@ struct DecideTree {
 	//! (LogicalDecide::frame_aggregates), its G.
 	vector<idx_t> frame_nodes;
 	vector<idx_t> frame_aggregate_nodes;
-	//! Per frame column (DecidePreparedModel::frame_columns), what its O computes for it; a reducer's over frames
+	//! Per frame column (DecideFrameReads::columns), what its O computes for it; a reducer's over frames
 	//! (AGGREGATE) is its G's fold.
 	vector<DecideFrameColumnPrograms> frame_columns;
 
@@ -275,8 +285,9 @@ struct DecideTree {
 struct DecideTreeSources {
 	//! The operator's own reducer -> its G (DecideTreeConstruction's Lower).
 	std::unordered_map<const Expression *, idx_t> reducer_nodes;
-	//! The clause roots in constraint-leaf order, the order stage 05 lowers the clauses in.
+	//! The clause roots in constraint-leaf order, and the root each comparison became.
 	vector<idx_t> clause_roots;
+	std::unordered_map<const Expression *, idx_t> root_of;
 	idx_t objective_root = DConstants::INVALID_INDEX;
 	//! [spec][term] -> the composed term's G; the objective's composed terms last.
 	vector<vector<idx_t>> composed_reducers;
@@ -288,16 +299,31 @@ struct DecideTreeSources {
 	vector<idx_t> record_nodes;
 };
 
-//! Builder with a director (plan_decide.cpp): the nodes come from the final clauses before stage 05 lowers them, the
-//! bodies from what stage 05 lowered (language/guide.md §6.4). Between the two, ReducerChild is stage 05's hook.
+//! Builder with a director (plan_decide.cpp): the nodes come from the final clauses, then stage 05's lowering
+//! (LowerDecideTree) writes each clause's records into its root, then the bodies are compiled (language/guide.md
+//! §6.4).
 class DecideTreeConstruction {
 public:
 	//! Builds the nodes, their edges, sigma, gates and definitions.
 	DecideTreeConstruction(ClientContext &context, const LogicalDecide &op);
 	~DecideTreeConstruction();
-	//! The node whose operand entries a reducer stage 05 lowers ranges over (DecideReducerChild).
+	//! The node whose operand entries a reducer the lowering reads ranges over.
 	idx_t ReducerChild(const BoundAggregateExpression &reducer) const;
-	//! Copies stage 05's terms into the bodies, orders the nodes and ranks their errors, and validates the tree.
+	//! The records the lowering made of the clause whose comparison is `leaf`, into the root it became; a folded
+	//! bound's, which the repair model alone reads, into its root too.
+	void TakeClause(const Expression &leaf, unique_ptr<DecideConstraint> clause, bool singleton_row);
+	//! The objective's records, into the objective's root.
+	void TakeObjective(unique_ptr<DecideObjective> objective);
+	//! Composed term `term` of composed clause `spec` -- the objective's composed terms last -- its inner terms, into
+	//! its G (DecideTreeSources::composed_reducers).
+	void TakeComposedTerms(idx_t spec, idx_t term, vector<DecideTerm> terms);
+	//! A helper's member terms and its frame's `else` terms, into its G or O (DecideTreeSources::link_nodes).
+	void TakeLinkTerms(idx_t link, vector<DecideTerm> members, vector<DecideTerm> fallback);
+	//! The frame columns the lowered terms read.
+	void TakeFrameReads(DecideFrameReads frame_reads);
+	//! The tree so far, which the solver gate reads once the clauses are lowered.
+	const DecideTree &Tree() const;
+	//! Numbers the clauses and compiles the bodies, orders the nodes and ranks their errors, and validates the tree.
 	unique_ptr<DecideTree> Finish();
 
 private:
@@ -305,9 +331,8 @@ private:
 	unique_ptr<Builder> builder;
 };
 
-//! Binds the clause roots to stage 05's clauses in leaf order, copies stage 05's terms into each node's body, finds
-//! where each is computed and compiles its coefficient, bounds and member tests into programs there; a binding that
-//! does not match is an internal error.
+//! Numbers the clause roots in leaf order, finds where each term is computed and compiles its coefficient, bounds and
+//! member tests into programs there.
 void CompileDecideTree(ClientContext &context, const LogicalDecide &op, DecideTree &tree,
                        const DecideTreeSources &sources);
 

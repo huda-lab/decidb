@@ -345,6 +345,39 @@ public:
 		return DecideTreeMembersOf(*tree, found->second);
 	}
 
+	//! DecideTreeConstruction::TakeClause.
+	void TakeClause(const Expression &leaf, unique_ptr<DecideConstraint> clause, bool singleton_row) {
+		auto root = sources.root_of.find(&leaf);
+		D_ASSERT(root != sources.root_of.end());
+		auto &node = *tree->nodes[root->second];
+		D_ASSERT(node.folded == singleton_row && !node.compiled.clause);
+		(void)singleton_row;
+		node.compiled.clause = std::move(clause);
+	}
+
+	void TakeObjective(unique_ptr<DecideObjective> objective) {
+		D_ASSERT(sources.objective_root != DConstants::INVALID_INDEX);
+		tree->nodes[sources.objective_root]->compiled.objective = std::move(objective);
+	}
+
+	void TakeComposedTerms(idx_t spec, idx_t term, vector<DecideTerm> terms) {
+		tree->nodes[sources.composed_reducers[spec][term]]->compiled.members = std::move(terms);
+	}
+
+	void TakeLinkTerms(idx_t link, vector<DecideTerm> members, vector<DecideTerm> fallback) {
+		auto &body = tree->nodes[link_nodes[link]]->compiled;
+		body.members = std::move(members);
+		body.fallback = std::move(fallback);
+	}
+
+	void TakeFrameReads(DecideFrameReads frame_reads) {
+		tree->frame_reads = std::move(frame_reads);
+	}
+
+	const DecideTree &Tree() const {
+		return *tree;
+	}
+
 private:
 	ClientContext &context;
 	const LogicalDecide &op;
@@ -365,15 +398,16 @@ private:
 	//! nested helper before its reader, and from a definition into what it reads, since the rewrites number a nested
 	//! auxiliary first. Per scope and per clause, its place.
 	void KeyedMappingOrder(vector<idx_t> &scope_order, vector<idx_t> &definition_order) const {
-		auto &constraints = op.prepared.constraints;
 		vector<vector<idx_t>> definitions(op.decide_variables.size());
-		for (idx_t c = 0; c < constraints.size(); c++) {
-			if (constraints[c]->defined_var < definitions.size()) {
-				definitions[constraints[c]->defined_var].push_back(c);
+		for (auto root : sources.clause_roots) {
+			auto &body = tree->nodes[root]->compiled;
+			if (body.clause && body.clause_index < tree->constraint_count &&
+			    body.clause->defined_var < definitions.size()) {
+				definitions[body.clause->defined_var].push_back(body.clause_index);
 			}
 		}
 		scope_order.assign(op.keyed_scopes.size(), DConstants::INVALID_INDEX);
-		definition_order.assign(constraints.size(), DConstants::INVALID_INDEX);
+		definition_order.assign(tree->constraint_count, DConstants::INVALID_INDEX);
 		vector<bool> reached(definitions.size(), false);
 		idx_t next = 0;
 		auto read = [&](idx_t variable) {
@@ -388,7 +422,7 @@ private:
 		for (idx_t scope = 0; scope < op.keyed_scopes.size(); scope++) {
 			const auto link = op.keyed_scopes[scope].value_link;
 			if (link != DConstants::INVALID_INDEX) {
-				for (auto &term : op.reducer_value_links[link].inner_terms) {
+				for (auto &term : tree->nodes[link_nodes[link]]->compiled.members) {
 					read(term.variable_index);
 				}
 			}
@@ -692,6 +726,7 @@ private:
 			node.per = node.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
 			TryParseSignatureTag(scope.per_wrapper->GetAlias(), signature);
 		}
+		sources.root_of[&comparison] = index;
 		node.body = Lower(index, *comparison.left);
 		node.rhs = Lower(index, *comparison.right);
 		node.facts->rhs_expr = node.rhs->Copy();
@@ -1263,6 +1298,31 @@ DecideTreeConstruction::~DecideTreeConstruction() {
 
 idx_t DecideTreeConstruction::ReducerChild(const BoundAggregateExpression &reducer) const {
 	return builder->ReducerChild(reducer);
+}
+
+void DecideTreeConstruction::TakeClause(const Expression &leaf, unique_ptr<DecideConstraint> clause,
+                                        bool singleton_row) {
+	builder->TakeClause(leaf, std::move(clause), singleton_row);
+}
+
+void DecideTreeConstruction::TakeObjective(unique_ptr<DecideObjective> objective) {
+	builder->TakeObjective(std::move(objective));
+}
+
+void DecideTreeConstruction::TakeComposedTerms(idx_t spec, idx_t term, vector<DecideTerm> terms) {
+	builder->TakeComposedTerms(spec, term, std::move(terms));
+}
+
+void DecideTreeConstruction::TakeLinkTerms(idx_t link, vector<DecideTerm> members, vector<DecideTerm> fallback) {
+	builder->TakeLinkTerms(link, std::move(members), std::move(fallback));
+}
+
+void DecideTreeConstruction::TakeFrameReads(DecideFrameReads frame_reads) {
+	builder->TakeFrameReads(std::move(frame_reads));
+}
+
+const DecideTree &DecideTreeConstruction::Tree() const {
+	return builder->Tree();
 }
 
 unique_ptr<DecideTree> DecideTreeConstruction::Finish() {

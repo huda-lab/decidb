@@ -6,6 +6,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/decidb/solver/ilp_solver.hpp"
 #include "duckdb/decidb/solver/solver_registry.hpp"
+#include "duckdb/planner/decide/decide_tree.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 namespace duckdb {
@@ -99,13 +100,23 @@ struct RefusalText {
 	string remedy;
 };
 
-RefusalText DescribeGap(const LogicalDecide &op, SolverModelClassGap gap) {
+//! The objective lowered into `tree`, null for none.
+const DecideObjective *LoweredObjective(const DecideTree &tree) {
+	for (auto &node : tree.nodes) {
+		if (node->compiled.objective) {
+			return node->compiled.objective.get();
+		}
+	}
+	return nullptr;
+}
+
+RefusalText DescribeGap(const LogicalDecide &op, const DecideObjective *objective, SolverModelClassGap gap) {
 	switch (gap) {
 	case SolverModelClassGap::QUADRATIC_CONSTRAINTS:
 		return {"a SUCH THAT clause squares or multiplies decision variables",
 		        "rewrite that constraint so each term holds at most one decision variable"};
 	case SolverModelClassGap::NONCONVEX_QUADRATIC:
-		if (op.prepared.objective && op.prepared.objective->has_bilinear) {
+		if (objective && objective->has_bilinear) {
 			return {"the objective multiplies two decision variables",
 			        "use an objective that is linear in the decisions"};
 		}
@@ -132,20 +143,21 @@ RefusalText DescribeGap(const LogicalDecide &op, SolverModelClassGap gap) {
 
 } // namespace
 
-SolverModelClass DeriveDecideModelClass(const LogicalDecide &op) {
+SolverModelClass DeriveDecideModelClass(const LogicalDecide &op, const DecideTree &tree) {
 	SolverModelClass needed;
 
 	// A constraint carrying a squared or bilinear term becomes a quadratic row: the
 	// model builder emits one per data row or per group, and never folds it back
-	// into the linear matrix.
-	for (auto &constraint : op.prepared.constraints) {
-		if (constraint->has_quadratic || constraint->has_bilinear) {
+	// into the linear matrix. A folded bound's clause is read by the repair model alone.
+	for (auto &node : tree.nodes) {
+		auto &constraint = node->compiled.clause;
+		if (constraint && !node->folded && (constraint->has_quadratic || constraint->has_bilinear)) {
 			needed.quadratic_constraints = true;
 			break;
 		}
 	}
 
-	auto &objective = op.prepared.objective;
+	auto objective = LoweredObjective(tree);
 	if (objective && (objective->has_quadratic || objective->has_bilinear)) {
 		// A product of two decisions is indefinite whatever the sense, so a bilinear
 		// objective is unconditionally non-convex. A sum of squares is non-convex only
@@ -167,19 +179,19 @@ SolverModelClass DeriveDecideModelClass(const LogicalDecide &op) {
 	return needed;
 }
 
-void RequireDecideSolverSupport(const LogicalDecide &op) {
+void RequireDecideSolverSupport(const LogicalDecide &op, const DecideTree &tree) {
 	// The name was recorded by ChooseDecideSolver; resolving it back to a registry entry
 	// is a table lookup, not a session, so the model-class question can still be asked
 	// here without the plan itself holding a live backend.
 	SolverBackend backend = SolverRegistry::Find(op.solver_backend_name);
 	D_ASSERT(backend.IsValid());
-	SolverModelClass needed = DeriveDecideModelClass(op);
+	SolverModelClass needed = DeriveDecideModelClass(op, tree);
 	SolverModelClassGap gap = FindModelClassGap(needed, backend.Capabilities().model_classes);
 	if (gap == SolverModelClassGap::NONE) {
 		return;
 	}
 
-	RefusalText text = DescribeGap(op, gap);
+	RefusalText text = DescribeGap(op, LoweredObjective(tree), gap);
 	ThrowDecideSolverGap(needed, text.cause, text.remedy);
 }
 

@@ -83,7 +83,7 @@ public:
 				       (read < op.variable_scopes.size() && op.variable_scopes[read].IsKeyed()) ||
 				       may_lack_value(read, depth + 1);
 			};
-			for (const auto &constraint : op.prepared.constraints) {
+			for (auto constraint : op.tree->Constraints()) {
 				if (constraint->defined_var != var) {
 					continue;
 				}
@@ -131,7 +131,7 @@ public:
             }
             // A floor under a `when` replaces the default on the rows it keeps (AddLowered counts it only when
             // negative). The solve says whether the clauses on the other rows leave a value.
-            for (const auto &constraint : op.prepared.constraints) {
+            for (auto constraint : op.tree->Constraints()) {
                 if (constraint->lifted_floor == var) {
                     written.AddLowered('>', constraint->lifted_floor_k);
                 }
@@ -198,12 +198,6 @@ public:
     const PhysicalDecide &op;
     DecideCanonicalizer canonicalizer;
 
-    //! The flattened constraints and objective, decided by BuildDecidePreparedModel
-    //! (stage 05). Aliases rather than copies: this state evaluates their
-    //! coefficients against the data, it does not derive or alter their shape.
-    const vector<unique_ptr<DecideConstraint>> &constraints = op.prepared.constraints;
-    const vector<unique_ptr<DecideConstraint>> &singleton_row_constraints = op.prepared.singleton_row_constraints;
-    const unique_ptr<DecideObjective> &objective = op.prepared.objective;
 
     //! Local copies of the decision column box and the singleton-row-bound records that
     //! DecideOptimizer::FoldSingletonRows resolved. Finalize copies the box into
@@ -249,7 +243,7 @@ public:
 	//! The decisions a frame reads at another row (SolverInput::frame_reads): each pair of
 	//! a decision and a frame once, the variable after the plan's decisions.
 	vector<std::pair<idx_t, idx_t>> frame_reads;
-	//! A reference to each column the frames computed (DecidePreparedModel::frame_columns), held for the
+	//! A reference to each column the frames computed (DecideFrameReads::columns), held for the
 	//! query so the chunk expression cache, keyed by node, never meets a freed one.
 	vector<unique_ptr<Expression>> frame_column_refs;
 	//! Per decision, the rows whose instance of it has no value beyond its keyed scope's absent class: an auxiliary

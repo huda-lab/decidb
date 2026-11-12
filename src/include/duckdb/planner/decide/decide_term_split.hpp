@@ -14,7 +14,7 @@
 // beside the canonicalizer and reads what canonicalization produced: the additive
 // atoms come from ReadCanonicalAtoms, and this splits one atom's body.
 //
-// WHO READS IT. The solver path's prepared linear form (stage 05) and direct
+// WHO READS IT. The solver path's lowering into the tree (stage 05) and direct
 // solve's semantic facts. Both see the same terms, so a shape one of them admits
 // cannot mean something else to the other.
 //

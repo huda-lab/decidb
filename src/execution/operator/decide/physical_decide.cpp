@@ -359,15 +359,6 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ChunkExpr
 //! value, so every call site reading the key sees the same ids and takes its kept
 //! groups as a subsequence. Lifetime: one PerGroupCache per Finalize invocation.
 
-//! What a signature's FRAME field is keyed by (D82): the frames, their maps over the input, the columns
-//! they appended to it and a reference to each (DecideGlobalSinkState::frame_column_refs).
-struct SignatureFrames {
-	const vector<DecideFrameSpec> &frames;
-	const vector<DecideFrameMap> &maps;
-	const DecidePreparedModel &prepared;
-	const vector<unique_ptr<Expression>> &column_refs;
-};
-
 //===--------------------------------------------------------------------===//
 // Phase 2 shared evaluation helpers
 //===--------------------------------------------------------------------===//
@@ -1107,7 +1098,7 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	DecideTreeColumns columns(
 	    *tree, *descent, context, names, [&](idx_t clause) { return WrittenClause(clause); }, errors);
 	// The frames' timelines and the columns they read, before any program reads one (language/guide.md §5.6).
-	columns.ReadFrames(frames, prepared, reducer_value_links, num_rows, gstate.frame_maps);
+	columns.ReadFrames(frames, reducer_value_links, num_rows, gstate.frame_maps);
 	// What the data checks and the data reducers no clause reads raise, at their ranks, before any clause is read.
 	columns.CheckData();
 	DecideModelEmitter emitter(*this, context, *tree, *descent, columns, gstate, per_group_cache, names, num_rows,
@@ -1348,8 +1339,7 @@ void PhysicalDecide::FinishComposedClause(DecideGlobalSinkState &gstate, idx_t n
                                           EvaluatedClauses &evaluated) const {
 	// A NULL factor makes the clause's one instance NULL, which is skipped (deck p. 50), as does a reducer over no row.
 	clause.skipped = null_factor || std::any_of(clause.terms.begin(), clause.terms.end(), DecideComposedTermReadsNoRow);
-	clause.repair_group_id =
-	    gstate.constraints.size() + gstate.singleton_row_constraints.size() + evaluated.composed_constraints.size();
+	clause.repair_group_id = tree->constraint_count + tree->singleton_row_count + evaluated.composed_constraints.size();
 	vector<bool> kept(num_rows, true);
 	if (spec.scope.when && (diagnose || clause.skipped)) {
 		kept = kept_rows();
@@ -1536,8 +1526,8 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
     solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
 #ifdef DEBUG
-    if (gstate.objective) {
-        VerifyCountedOnce(gstate.objective->terms, solver_input.objective_coefficients, vector<idx_t>());
+    if (auto objective = tree->Objective()) {
+        VerifyCountedOnce(objective->terms, solver_input.objective_coefficients, vector<idx_t>());
     }
 #endif
     solver_input.sense = decide_sense;

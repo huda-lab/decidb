@@ -91,12 +91,12 @@ struct ExprVarRef {
 //! It never reads a data row.
 class DecideLinearFormBuilder {
 public:
-	DecideLinearFormBuilder(ClientContext &context, LogicalDecide &op, const DecideReducerChild &child)
-	    : context(context), op(op), child(child), decide_index(op.decide_index),
+	DecideLinearFormBuilder(ClientContext &context, LogicalDecide &op, DecideTreeConstruction &tree)
+	    : context(context), op(op), tree(tree), decide_index(op.decide_index),
 	      canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.keys, op.is_boolean_var),
 	      splitter(context, op.decide_index, op.decide_variables) {
 		// A frame's values are columns after the input's (DecideFrameColumn).
-		op.prepared.frame_column_base = op.children.empty() ? 0 : op.children[0]->types.size();
+		frame_reads.column_base = op.children.empty() ? 0 : op.children[0]->types.size();
 	}
 
 	void Build() {
@@ -109,45 +109,48 @@ public:
 			AnalyzeObjective(op.decide_objective);
 		}
 		// The composed MIN/MAX terms are emitted by RewriteComposedMinMax as bare
-		// inner expressions. Flatten them here too, so stage 08 reads prepared terms
+		// inner expressions. Lower them here too, so stage 08 reads lowered terms
 		// for every construct rather than for all but one.
-		for (auto &spec : op.composed_minmax_constraints) {
-			for (auto &term : spec.terms) {
-				ExtractLinearTerms(*term.inner_expr, term.inner_terms);
+		// Per composed clause and then the objective's composed terms, each term's inner terms.
+		auto compose = [&](const vector<LogicalDecide::ComposedMinMaxTerm> &terms) {
+			composed_terms.emplace_back(terms.size());
+			for (idx_t t = 0; t < terms.size(); t++) {
+				ExtractLinearTerms(*terms[t].inner_expr, composed_terms.back()[t]);
 			}
+		};
+		for (auto &spec : op.composed_minmax_constraints) {
+			compose(spec.terms);
 		}
-		for (auto &term : op.composed_minmax_objective_terms) {
-			ExtractLinearTerms(*term.inner_expr, term.inner_terms);
-		}
+		compose(op.composed_minmax_objective_terms);
 		// The reducers the value rewrite lifted into helper decisions, the same way; a range frame's helper also reads
 		// its `else`, at the window's anchor.
 		const BoundConstantExpression one(Value::INTEGER(1));
-		for (auto &link : op.reducer_value_links) {
-			ExtractLinearTerms(*link.inner_expr, link.inner_terms);
+		link_terms.resize(op.reducer_value_links.size());
+		link_fallbacks.resize(op.reducer_value_links.size());
+		for (idx_t l = 0; l < op.reducer_value_links.size(); l++) {
+			auto &link = op.reducer_value_links[l];
+			ExtractLinearTerms(*link.inner_expr, link_terms[l]);
 			if (link.frame != DConstants::INVALID_INDEX) {
-				AppendFallbackTerms(link.frame, one, 1, link.fallback_terms);
+				AppendFallbackTerms(link.frame, one, 1, link_fallbacks[l]);
 			}
 		}
 
 		// Group like terms, once, over every list that becomes a linear solver row.
-		for (auto &constraint : op.prepared.constraints) {
-			CollectLikeTerms(constraint->lhs_terms);
+		for (auto &clause : lowered_clauses) {
+			CollectLikeTerms(clause.second->lhs_terms);
 		}
-		if (op.prepared.objective) {
-			DropNullObjectiveTerms(*op.prepared.objective);
-			CollectLikeTerms(op.prepared.objective->terms);
+		if (lowered_objective) {
+			DropNullObjectiveTerms(*lowered_objective);
+			CollectLikeTerms(lowered_objective->terms);
 		}
-		for (auto &spec : op.composed_minmax_constraints) {
-			for (auto &term : spec.terms) {
-				CollectLikeTerms(term.inner_terms);
+		for (auto &spec : composed_terms) {
+			for (auto &terms : spec) {
+				CollectLikeTerms(terms);
 			}
 		}
-		for (auto &term : op.composed_minmax_objective_terms) {
-			CollectLikeTerms(term.inner_terms);
-		}
-		for (auto &link : op.reducer_value_links) {
-			CollectLikeTerms(link.inner_terms);
-			CollectLikeTerms(link.fallback_terms);
+		for (idx_t l = 0; l < link_terms.size(); l++) {
+			CollectLikeTerms(link_terms[l]);
+			CollectLikeTerms(link_fallbacks[l]);
 		}
 
 		// Every frame left in an expression execution evaluates is over data -- a frame over
@@ -157,11 +160,31 @@ public:
 
 		// A recorded bound's repair rows come from its clause, so the repair model would
 		// open its column with nothing enforcing it were its clause not flattened above.
-		if (op.user_singleton_row_bounds.size() != op.prepared.singleton_row_constraints.size()) {
+		idx_t singleton_rows = 0;
+		for (auto &clause : lowered_clauses) {
+			singleton_rows += clause.first.singleton_row;
+		}
+		if (op.user_singleton_row_bounds.size() != singleton_rows) {
 			throw InternalException("DECIDE: %llu singleton-row bounds take their repair rows from their clause, but "
 			                        "%llu such clauses were flattened",
-			                        op.user_singleton_row_bounds.size(), op.prepared.singleton_row_constraints.size());
+			                        op.user_singleton_row_bounds.size(), singleton_rows);
 		}
+		// Each clause's records in the root the tree made of its comparison, the objective's in the objective's root.
+		for (auto &clause : lowered_clauses) {
+			tree.TakeClause(*clause.first.leaf, std::move(clause.second), clause.first.singleton_row);
+		}
+		if (lowered_objective) {
+			tree.TakeObjective(std::move(lowered_objective));
+		}
+		for (idx_t spec = 0; spec < composed_terms.size(); spec++) {
+			for (idx_t t = 0; t < composed_terms[spec].size(); t++) {
+				tree.TakeComposedTerms(spec, t, std::move(composed_terms[spec][t]));
+			}
+		}
+		for (idx_t l = 0; l < link_terms.size(); l++) {
+			tree.TakeLinkTerms(l, std::move(link_terms[l]), std::move(link_fallbacks[l]));
+		}
+		tree.TakeFrameReads(std::move(frame_reads));
 	}
 
 private:
@@ -179,7 +202,7 @@ private:
 		AppendLinearTerms(split, out);
 	}
 
-	//! Terms of an expression that must be linear, as prepared terms; a frame over decisions as the terms it reads.
+	//! Terms of an expression that must be linear, as lowered terms; a frame over decisions as the terms it reads.
 	void AppendLinearTerms(vector<DecideSplitTerm> &split, vector<DecideTerm> &out) {
 		for (auto &term : split) {
 			if (term.kind == DecideTermKind::UNKNOWN) {
@@ -263,7 +286,7 @@ private:
 	//! (DecideFrameColumn), registered once per distinct value; its index. A VALUE column
 	//! also reads the frame's `else`.
 	idx_t FrameColumnSlot(DecideFrameColumn::Kind kind, idx_t frame, const Expression *value) {
-		auto &columns = op.prepared.frame_columns;
+		auto &columns = frame_reads.columns;
 		for (idx_t i = 0; i < columns.size(); i++) {
 			auto &column = columns[i];
 			if (column.kind == kind && column.frame == frame &&
@@ -300,8 +323,8 @@ private:
 		auto slot = FrameColumnSlot(kind, frame, value);
 		auto name = op.frames[frame].text;
 		AddDecideTag(name, FRAME_COLUMN_TAG);
-		return make_uniq<BoundReferenceExpression>(std::move(name), op.prepared.frame_columns[slot].type,
-		                                           op.prepared.frame_column_base + slot);
+		return make_uniq<BoundReferenceExpression>(std::move(name), frame_reads.columns[slot].type,
+		                                           frame_reads.column_base + slot);
 	}
 
 	//! `factor * column`, the factor a frame term stands under (1 for a bare frame).
@@ -332,18 +355,10 @@ private:
 			throw InternalException("DECIDE: a range frame over decisions reached term extraction: %s",
 			                        op.frames[frame].text);
 		}
-		auto &payload_terms = op.prepared.frame_payload_terms;
-		payload_terms.resize(op.frames.size());
-		// Every read of the frame extracts the same terms: the payload is recorded once.
-		const bool record = payload_terms[frame].empty();
 		for (auto &inner : term.inner) {
-			auto slot =
-			    AppendFrameColumnTerm(frame, DecideFrameColumn::Kind::READ, inner, *term.coefficient, term.sign, out);
+			AppendFrameColumnTerm(frame, DecideFrameColumn::Kind::READ, inner, *term.coefficient, term.sign, out);
 			if (inner.var_a != DConstants::INVALID_INDEX) {
 				out.back().frame_read = frame;
-			}
-			if (record) {
-				payload_terms[frame].push_back(DecideFramePayloadTerm {inner.var_a, slot, inner.sign});
 			}
 		}
 		AppendFallbackTerms(frame, *term.coefficient, term.sign, out);
@@ -366,10 +381,10 @@ private:
 	}
 
 	//! A frame's `else` as its terms, each read at the anchor -- its coefficient a FALLBACK column, 0 where no position
-	//! is missing -- each times `factor`, and its decisions recorded (DecidePreparedModel::frame_fallback_decisions).
+	//! is missing -- each times `factor`, and its decisions recorded (DecideFrameReads::fallback_decisions).
 	//! Nothing for a frame with none.
 	void AppendFallbackTerms(idx_t frame, const Expression &factor, int sign, vector<DecideTerm> &out) {
-		auto &fallback_decisions = op.prepared.frame_fallback_decisions;
+		auto &fallback_decisions = frame_reads.fallback_decisions;
 		fallback_decisions.resize(op.frames.size());
 		auto &spec = op.frames[frame];
 		if (!spec.fallback) {
@@ -387,20 +402,20 @@ private:
 		}
 	}
 
-	//! What a signature keys each frame's reached `else` by (DecidePreparedModel::frame_fallback_columns): the
+	//! What a signature keys each frame's reached `else` by (DecideFrameReads::fallback_columns): the
 	//! FALLBACK column of each of its terms, which the frame's own reading may already have registered
 	//! (FrameColumnSlot keeps each once).
 	void RecordFallbackColumns() {
-		auto &columns = op.prepared.frame_fallback_columns;
+		auto &columns = frame_reads.fallback_columns;
 		columns.assign(op.frames.size(), vector<idx_t>());
-		op.prepared.frame_fallback_decisions.resize(op.frames.size());
+		frame_reads.fallback_decisions.resize(op.frames.size());
 		const BoundConstantExpression one(Value::INTEGER(1));
 		for (idx_t f = 0; f < op.frames.size(); f++) {
 			vector<DecideTerm> terms;
 			AppendFallbackTerms(f, one, 1, terms);
 			for (auto &term : terms) {
 				auto &ref = term.coefficient->Cast<BoundReferenceExpression>();
-				columns[f].push_back(ref.index - op.prepared.frame_column_base);
+				columns[f].push_back(ref.index - frame_reads.column_base);
 			}
 		}
 	}
@@ -492,7 +507,7 @@ private:
 	//! The column of frame aggregate `index` (made when new, after every frame column), as the reducer `marker`'s
 	//! parent reads it: of its type, and named by the reducer as written.
 	unique_ptr<Expression> FrameAggregateRef(idx_t index, const Expression &marker) {
-		auto &columns = op.prepared.frame_columns;
+		auto &columns = frame_reads.columns;
 		auto slot = frame_aggregate_slots.find(index);
 		if (slot == frame_aggregate_slots.end()) {
 			auto &record = op.frame_aggregates[index];
@@ -511,7 +526,7 @@ private:
 		AddDecideTag(name, BOUND_REDUCER_TAG);
 		AddDecideTag(name, FRAME_COLUMN_TAG);
 		return make_uniq<BoundReferenceExpression>(std::move(name), marker.return_type,
-		                                           op.prepared.frame_column_base + slot->second);
+		                                           frame_reads.column_base + slot->second);
 	}
 
 	void LowerFramesInPreparedModel() {
@@ -525,22 +540,18 @@ private:
 			lower_aggregates = true;
 			LowerFramesOnce();
 		}
-		op.prepared.frame_payload_terms.resize(op.frames.size());
 		RecordFallbackColumns();
 	}
 
 	void LowerFramesOnce() {
-		for (auto *constraints : {&op.prepared.constraints, &op.prepared.singleton_row_constraints}) {
-			for (auto &constraint : *constraints) {
-				LowerFrames(*constraint);
-			}
+		for (auto &clause : lowered_clauses) {
+			LowerFrames(*clause.second);
 		}
-		if (op.prepared.objective) {
-			auto &objective = *op.prepared.objective;
-			LowerFrames(objective.when_condition);
-			LowerFrames(objective.terms);
-			LowerFrames(objective.squared_terms);
-			for (auto &term : objective.bilinear_terms) {
+		if (lowered_objective) {
+			LowerFrames(lowered_objective->when_condition);
+			LowerFrames(lowered_objective->terms);
+			LowerFrames(lowered_objective->squared_terms);
+			for (auto &term : lowered_objective->bilinear_terms) {
 				LowerFrames(term.coefficient);
 				LowerFrames(term.filter);
 				LowerFrames(term.inputs);
@@ -548,7 +559,6 @@ private:
 		}
 		for (auto &spec : op.composed_minmax_constraints) {
 			for (auto &term : spec.terms) {
-				LowerFrames(term.inner_terms);
 				LowerFrames(term.filter);
 				LowerFrames(term.scale);
 			}
@@ -556,15 +566,19 @@ private:
 			LowerFrames(spec.scope.when);
 		}
 		for (auto &term : op.composed_minmax_objective_terms) {
-			LowerFrames(term.inner_terms);
 			LowerFrames(term.filter);
 			LowerFrames(term.scale);
 		}
-		for (auto &link : op.reducer_value_links) {
-			LowerFrames(link.inner_terms);
-			LowerFrames(link.fallback_terms);
-			LowerFrames(link.filter);
-			LowerFrames(link.when);
+		for (auto &spec : composed_terms) {
+			for (auto &terms : spec) {
+				LowerFrames(terms);
+			}
+		}
+		for (idx_t l = 0; l < link_terms.size(); l++) {
+			LowerFrames(link_terms[l]);
+			LowerFrames(link_fallbacks[l]);
+			LowerFrames(op.reducer_value_links[l].filter);
+			LowerFrames(op.reducer_value_links[l].when);
 		}
 	}
 
@@ -859,10 +873,7 @@ private:
 	//! Names, on every term `agg`'s body produced since the marks, the tree node it ranges over (DecideTerm::child).
 	void Stamp(const BoundAggregateExpression &agg, DecideConstraint &constraint, idx_t linear, idx_t bilinear,
 	           idx_t quadratic) const {
-		if (!child) {
-			return;
-		}
-		const auto node = child(agg);
+		const auto node = tree.ReducerChild(agg);
 		for (idx_t i = linear; i < constraint.lhs_terms.size(); i++) {
 			constraint.lhs_terms[i].child = node;
 		}
@@ -880,10 +891,7 @@ private:
 	//! The same for the objective's terms, products and squared terms.
 	void Stamp(const BoundAggregateExpression &agg, DecideObjective &objective, idx_t linear, idx_t bilinear,
 	           idx_t squared) const {
-		if (!child) {
-			return;
-		}
-		const auto node = child(agg);
+		const auto node = tree.ReducerChild(agg);
 		for (idx_t i = linear; i < objective.terms.size(); i++) {
 			objective.terms[i].child = node;
 		}
@@ -1097,7 +1105,7 @@ private:
 				}
 			}
 
-			(folded ? op.prepared.singleton_row_constraints : op.prepared.constraints).push_back(std::move(constraint));
+			lowered_clauses.emplace_back(LoweredClause {&expr, folded}, std::move(constraint));
 			break;
 		}
 
@@ -1282,11 +1290,11 @@ private:
 			}
 		}
 
-		auto &objective = op.prepared.objective;
 		if (IsReducer(*expr)) {
 			auto &agg = expr->Cast<BoundAggregateExpression>();
 
-			objective = make_uniq<DecideObjective>();
+			lowered_objective = make_uniq<DecideObjective>();
+			auto &objective = lowered_objective;
 
 			// Walk the SUM argument. ExtractLinearAndBilinearTerms recognises
 			// quadratic patterns (POWER/(expr)*(expr)/negated/K*POWER) at any
@@ -1323,28 +1331,43 @@ private:
 		} else if (BoundExpressionContainsAggregate(*expr) || FindDecideVariable(*expr) != DConstants::INVALID_INDEX) {
 			// The second arm covers an objective with no aggregate at all: decisions
 			// outside every reducer (e.g. `minimize max_shortfall`), read once.
-			objective = make_uniq<DecideObjective>();
-			ExtractAggregateObjectiveTerms(*expr, *objective);
-			objective->when_condition = std::move(when_cond);
+			lowered_objective = make_uniq<DecideObjective>();
+			ExtractAggregateObjectiveTerms(*expr, *lowered_objective);
+			lowered_objective->when_condition = std::move(when_cond);
 		}
 	}
 
 private:
 	ClientContext &context;
 	LogicalDecide &op;
-	//! The tree's hook, null when no tree is built (BuildDecidePreparedModel).
-	const DecideReducerChild &child;
+	//! The tree under construction, which names the G each reducer ranges over and takes each clause's records.
+	DecideTreeConstruction &tree;
+	//! A clause's comparison, and whether it is a folded bound's, which the repair model alone reads.
+	struct LoweredClause {
+		const Expression *leaf;
+		bool singleton_row;
+	};
+	//! The clauses in leaf order and the objective, lowered, until Build hands them to the tree.
+	vector<pair<LoweredClause, unique_ptr<DecideConstraint>>> lowered_clauses;
+	unique_ptr<DecideObjective> lowered_objective;
+	//! [spec][term]: a composed term's inner terms, each composed clause's and then the objective's
+	//! (DecideTreeSources::composed_reducers); [link]: a helper's member terms and its frame's `else` terms.
+	vector<vector<vector<DecideTerm>>> composed_terms;
+	vector<vector<DecideTerm>> link_terms;
+	vector<vector<DecideTerm>> link_fallbacks;
+	//! The frame columns the lowering reads (DecideTree::frame_reads).
+	DecideFrameReads frame_reads;
 	idx_t decide_index;
 	DecideTermSplitter splitter;
 	DecideCanonicalizer canonicalizer;
 	//! LowerFramesInPreparedModel's second pass: each reducer over data reading a frame becomes its column.
 	bool lower_aggregates = false;
-	//! Frame aggregate (LogicalDecide::frame_aggregates) -> its column (into DecidePreparedModel::frame_columns).
+	//! Frame aggregate (LogicalDecide::frame_aggregates) -> its column (into DecideFrameReads::columns).
 	unordered_map<idx_t, idx_t> frame_aggregate_slots;
 };
 
-void BuildDecidePreparedModel(ClientContext &context, LogicalDecide &decide, const DecideReducerChild &child) {
-	DecideLinearFormBuilder builder(context, decide, child);
+void LowerDecideTree(ClientContext &context, LogicalDecide &decide, DecideTreeConstruction &tree) {
+	DecideLinearFormBuilder builder(context, decide, tree);
 	builder.Build();
 }
 

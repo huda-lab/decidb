@@ -78,7 +78,7 @@ inline bool IsConstraintChild(const BoundConjunctionExpression &conjunction, idx
 //! AND: above every wrapper it is the empty scope, and below one there is none. A rewrite that replaces nodes keeps
 //! its own recursion and takes each step with EnterDecideScope; a pass that only reads the clauses takes
 //! ForEachScopedConstraintLeaf. A clause that leaves the tree owns its scope as a DecideClauseScope
-//! (decide_prepared_model.hpp).
+//! (decide_tree_terms.hpp).
 struct DecideEnclosingScope {
 	const BoundConjunctionExpression *when_wrapper = nullptr;
 	const BoundConjunctionExpression *per_wrapper = nullptr;

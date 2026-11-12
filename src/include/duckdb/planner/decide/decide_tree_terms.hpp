@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DeciDB
 //
-// duckdb/planner/decide/decide_prepared_model.hpp
+// duckdb/planner/decide/decide_tree_terms.hpp
 //
 //
 //===----------------------------------------------------------------------===//
@@ -15,23 +15,18 @@
 namespace duckdb {
 
 //===--------------------------------------------------------------------===//
-// The prepared linear form
+// The tree's term records
 //===--------------------------------------------------------------------===//
 //
-// The contract between DECIDE optimization (stage 05) and physical execution
-// (stage 08). Stage 05 flattens each canonical constraint and the objective into
-// additive terms; stage 08 evaluates each term's coefficient against the
-// relational input and never re-derives the shape.
+// What stage 05's lowering (LowerDecideTree) makes of each clause, the objective, a composed term and a helper's
+// reducer, held in the node that holds it (DecideBody): additive terms, which stage 08 evaluates against the
+// relational input without re-deriving their shape.
 //
 // A coefficient stays an unevaluated `Expression` because it may reference data
 // columns -- `SUM(x * price)` yields the coefficient `price`, which is a number
 // only once a row exists. Everything ELSE about a term (which variable it names,
 // its sign, which reducer produced it, which filter applies) is a fact about
 // types and structure, and is decided here.
-//
-// These structures live at stage 03 rather than 05 because `LogicalDecide` is
-// what carries them across the plan boundary, the same way it carries the
-// folded variable box and the composed MIN/MAX terms.
 
 //! A single additive term: `sign * coefficient * variable`.
 //! `variable_index` is DConstants::INVALID_INDEX for a constant (variable-free)
@@ -255,7 +250,7 @@ struct DecideObjective {
 
 //! A value a frame selector reads, which stage 08 computes as a column beside the input's:
 //! every expression that reads a frame reads it as chunk column
-//! `DecidePreparedModel::frame_column_base + j` for entry j, so no evaluator learns a new
+//! `DecideFrameReads::column_base + j` for entry j, so no evaluator learns a new
 //! node. `value` is evaluated on the rows `kind` names only, which is what makes an unused
 //! fallback never evaluated (language/guide.md §5.6). A frame with nothing to read at a row
 //! reads NULL there, which is no value (D84): the comparison's instance is skipped, the
@@ -300,43 +295,17 @@ struct DecideFrameColumn {
 	string norm_order;
 };
 
-//! One term of a frame's payload over decisions: `sign * coefficient * decision`, its
-//! coefficient the READ column `column` (into DecidePreparedModel::frame_columns);
-//! `decision` is INVALID_INDEX for a constant term.
-struct DecideFramePayloadTerm {
-	idx_t decision = DConstants::INVALID_INDEX;
-	idx_t column = DConstants::INVALID_INDEX;
-	int sign = 1;
-};
-
-//! Everything DecideLinearFormBuilder (stage 05) produces, carried on
-//! LogicalDecide and moved into PhysicalDecide at physical planning.
-//!
-//! `objective` is null when the query has no objective, or when the objective
-//! is neither an aggregate nor a query-wide decision -- the same two cases in
-//! which physical analysis used to leave its `objective` pointer unset.
-struct DecidePreparedModel {
-	vector<unique_ptr<DecideConstraint>> constraints;
-	//! Scoped bounds the optimizer folded into a column box (SINGLETON_ROW_BOUND_TAG). The box
-	//! enforces them, so the solved model has no row for them; a repair model emits their
-	//! rows, one per kept row or per class of a `per` key, so an expanded diagnosis loosens
-	//! one the way its clause scopes it (D28). Evaluated under DIAGNOSE only.
-	vector<unique_ptr<DecideConstraint>> singleton_row_constraints;
-	unique_ptr<DecideObjective> objective;
-	//! The values the frame selectors read, as columns after the input's: the first is
-	//! chunk column `frame_column_base`, the number of columns the input has.
-	vector<DecideFrameColumn> frame_columns;
-	idx_t frame_column_base = 0;
-	//! Per frame (LogicalDecide::frames) over decisions, its payload's terms. The rows of a
-	//! selected peer must hold one signature -- each column the payload reads by value, each
-	//! decision by instance (deck p. 110) -- or the position is ambiguous (D73). Empty for a
-	//! frame over data, whose one VALUE column is its whole payload.
-	vector<vector<DecideFramePayloadTerm>> frame_payload_terms;
+//! The values the frame selectors read, as columns after the input's, which stage 05's lowering makes of every frame
+//! read (LowerDecideTree) and the tree holds (DecideTree::frame_reads).
+struct DecideFrameReads {
+	//! The columns: the first is chunk column `column_base`, the number of columns the input has.
+	vector<DecideFrameColumn> columns;
+	idx_t column_base = 0;
 	//! Per frame, its `else` as a signature keys it where an anchor reaches it (D82): the
-	//! FALLBACK columns of its terms (into frame_columns), and the decisions it reads at the
+	//! FALLBACK columns of its terms (into `columns`), and the decisions it reads at the
 	//! row itself. Both empty for a frame with no `else`.
-	vector<vector<idx_t>> frame_fallback_columns;
-	vector<vector<idx_t>> frame_fallback_decisions;
+	vector<vector<idx_t>> fallback_columns;
+	vector<vector<idx_t>> fallback_decisions;
 };
 
 } // namespace duckdb

@@ -15,7 +15,7 @@
 #include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/decide_solver_capabilities.hpp"
 #include "duckdb/common/decide_numeric_policy.hpp"
-#include "duckdb/planner/decide/decide_prepared_model.hpp"
+#include "duckdb/planner/decide/decide_tree_terms.hpp"
 
 namespace duckdb {
 
@@ -512,10 +512,6 @@ public:
         //! physical layer folds the matching de-duplication mask into `filter`'s mask so a
         //! qualified reducer keeps its identity semantics inside a composed clause.
         idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
-        //! `inner_expr` flattened into additive terms by BuildDecidePreparedModel, so
-        //! the composed emitter reads prepared terms like every other construct rather
-        //! than re-deriving them once the rows are in.
-        vector<DecideTerm> inner_terms;
     };
     struct ComposedMinMaxConstraint {
         vector<ComposedMinMaxTerm> terms;
@@ -564,15 +560,12 @@ public:
         //! (`need_envelope`) and `value <= members` (`need_closing`), the equality when both.
         bool need_envelope = false;
         bool need_closing = false;
-        //! `inner_expr` flattened by BuildDecidePreparedModel, like a composed term's.
-        vector<DecideTerm> inner_terms;
 		//! A range frame over decisions (index into `frames`; DecideOptimizer::RewriteFrameRanges): the helper has
 		//! one instance per window of the frame, its members the payload `inner_expr` at the rows the window reads
-		//! and, with an `else`, `fallback_terms` at the window's anchor once per missing position. INVALID_INDEX for
-		//! a reducer, whose groups are its path key's.
+		//! and, with an `else`, its `else` at the window's anchor once per missing position (the O's
+		//! DecideBody::members and fallback, LowerDecideTree). INVALID_INDEX for a reducer, whose groups are its path
+		//! key's.
 		idx_t frame = DConstants::INVALID_INDEX;
-		//! The frame's `else` flattened, each coefficient its FALLBACK column (stage 05).
-		vector<DecideTerm> fallback_terms;
 	};
 	//! Innermost first: a link reads only helpers of links before it -- a range's, made first, and the reducers
 	//! nested in it -- which stage 06's inlining relies on.
@@ -770,14 +763,6 @@ public:
     //! answers that question. It does not re-decide the policy: it applies this one to
     //! a fact only it can see, the same way the `<>` range collapse does.
     bool force_native_constructs = false;
-
-    // --- Prepared linear form (built by BuildDecidePreparedModel, stage 05) ---
-
-    //! Every constraint and the objective, already flattened into additive terms.
-    //! Physical execution evaluates each term's coefficient against the relational
-    //! input; it does not re-derive the shape. Empty until the DECIDE optimizer's
-    //! final pass fills it, and moved into PhysicalDecide at physical planning.
-    DecidePreparedModel prepared;
 
 	//! True once the solver formulation has begun (ChooseDecideSolver): the rewrites after it express the query for the
 	//! backend chosen. The bound-side rewrite (RewriteRhsAggregates) and the direct-solve rules run before it.

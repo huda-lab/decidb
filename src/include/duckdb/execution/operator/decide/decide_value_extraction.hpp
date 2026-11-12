@@ -14,7 +14,7 @@
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
 #include "duckdb/decidb/formulation/solver_input.hpp"
 #include "duckdb/execution/expression_executor.hpp"
-#include "duckdb/planner/decide/decide_prepared_model.hpp"
+#include "duckdb/planner/decide/decide_tree_terms.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 #include <functional>

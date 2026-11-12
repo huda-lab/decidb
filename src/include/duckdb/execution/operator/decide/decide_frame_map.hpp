@@ -11,7 +11,7 @@
 // timeline; a range `agg(from F1 to F2 [every d] [else v | all]: e)` reads it at every row
 // of every position from F1 to F2 (language/guide.md §5.6). Execution builds one
 // DecideFrameMap per frame before any clause is evaluated, then adds the values the
-// frames read as columns beside the one pass's (DecidePreparedModel::frame_columns), so
+// frames read as columns beside the one pass's (DecideFrameReads::columns), so
 // every evaluator downstream reads them as data and none learns what a frame is; a range
 // over decisions is a helper decision instead, defined per window from the map. Defined in
 // physical_decide_frames.cpp.
@@ -24,7 +24,7 @@
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/decidb/formulation/solver_input.hpp"
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
-#include "duckdb/planner/decide/decide_prepared_model.hpp"
+#include "duckdb/planner/decide/decide_tree_terms.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 #include <functional>
@@ -232,10 +232,11 @@ void SkipDecideRangeNullReads(const vector<const Expression *> &payload, const v
                               const vector<bool> &absent_payload = {});
 
 //! The values the frames' windows skip as NULL, read through `read` before any window is numbered or listed
-//! (SkipDecideRangeNullReads): a range over decisions' payload coefficients and `else`s (its helper's, `links`), and a
+//! (SkipDecideRangeNullReads): a range over decisions' payload coefficients and `else`s (its helper's members on the
+//! frame's O in `tree`, for each of `links`), and a
 //! range over data's `else`, which reads no value at an anchor where it is NULL (D86). `absent` says whether a decision
 //! has no instance at a row, which a payload term reading it there reads no value of (D84, language/guide.md §5.6).
-void SkipDecideFrameNullReads(const DecidePreparedModel &prepared, const vector<LogicalDecide::ReducerValueLink> &links,
+void SkipDecideFrameNullReads(const DecideTree &tree, const vector<LogicalDecide::ReducerValueLink> &links,
                               vector<DecideFrameMap> &maps, idx_t num_rows, const DecideFrameRead &read,
                               const std::function<bool(idx_t variable, idx_t row)> &absent);
 
@@ -246,9 +247,8 @@ struct DecideFrameColumnValues {
 	vector<std::map<idx_t, ErrorData>> errors;
 };
 DecideFrameColumnValues ComputeDecideFrameColumns(ClientContext &context, const vector<DecideFrameSpec> &frames,
-                                                  const vector<DecideFrameMap> &maps,
-                                                  const DecidePreparedModel &prepared, idx_t num_rows,
-                                                  const DecideFrameRead &read);
+                                                  const vector<DecideFrameMap> &maps, const DecideFrameReads &reads,
+                                                  idx_t num_rows, const DecideFrameRead &read);
 
 //! A range frame's helper's classes (DecideOptimizer::RewriteFrameRanges): one per window of its frame, read by the
 //! window's anchors; an anchor whose window reads nothing is in none.
@@ -281,13 +281,5 @@ bool DecideFrameReadsAbsent(const DecideFrameMap &map, idx_t row, ABSENT &&absen
 void DecideCountFrames(const vector<DecideFrameMap> &maps);
 
 
-
-//! What a frame reads at each row of a position it reads, as D73 compares the rows (deck p. 110): each column `values`
-//! read, by value, and the instance of each decision of `terms` -- term `i` the coefficient `values[terms[i].column]`
-//! on decision `terms[i].decision` --, whatever its coefficient.
-struct DecideFramePayload {
-	vector<const Expression *> values;
-	vector<DecideFramePayloadTerm> terms;
-};
 
 } // namespace duckdb

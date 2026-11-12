@@ -3,10 +3,10 @@
 //
 // src/planner/decide/decide_tree_compile.cpp
 //
-// The tree's bodies from stage 05's product (language/guide.md §6.4): the second half of the tree's construction
-// (DecideTreeConstruction, a Builder with a director in plan_decide.cpp). Stage 05 lowers the clauses once, for flat,
-// and names on each reducer's terms the G they range over; this binds the clause roots to stage 05's clauses, copies
-// the records, and finds the node each term is computed on.
+// The tree's bodies (language/guide.md §6.4): the last step of the tree's construction (DecideTreeConstruction, a
+// Builder with a director in plan_decide.cpp). Stage 05 has lowered each clause into its root and each reducer's terms
+// into its G, naming on each term the G it ranges over; this numbers the clause roots, finds the node each term is
+// computed on and compiles it into programs there.
 //===----------------------------------------------------------------------===//
 
 #include "duckdb/planner/decide/decide_tree.hpp"
@@ -31,136 +31,6 @@ namespace decide_tree_compile {
 //! Where a hole's index starts while a node's programs are compiled, above any column of its layout: its program
 //! columns grow until the last program is compiled.
 static constexpr idx_t DECIDE_HOLE_BASE = idx_t(1) << 48;
-
-static unique_ptr<Expression> CopyOrNull(const unique_ptr<Expression> &expression) {
-	return expression ? expression->Copy() : nullptr;
-}
-
-static vector<unique_ptr<Expression>> CopyAll(const vector<unique_ptr<Expression>> &expressions) {
-	vector<unique_ptr<Expression>> result;
-	for (auto &expression : expressions) {
-		result.push_back(CopyOrNull(expression));
-	}
-	return result;
-}
-
-static DecideTerm CopyTerm(const DecideTerm &term) {
-	DecideTerm result(term.variable_index, CopyOrNull(term.coefficient), term.sign);
-	result.filter = CopyOrNull(term.filter);
-	result.avg_scale = term.avg_scale;
-	result.avg_group_key = term.avg_group_key;
-	result.reduction = term.reduction;
-	result.qualifier_scope_idx = term.qualifier_scope_idx;
-	result.inputs = CopyAll(term.inputs);
-	result.frame_read = term.frame_read;
-	result.child = term.child;
-	return result;
-}
-
-static vector<DecideTerm> CopyTerms(const vector<DecideTerm> &terms) {
-	vector<DecideTerm> result;
-	for (auto &term : terms) {
-		result.push_back(CopyTerm(term));
-	}
-	return result;
-}
-
-static BilinearConstraintTerm CopyBilinear(const BilinearConstraintTerm &term) {
-	BilinearConstraintTerm result;
-	result.var_a = term.var_a;
-	result.var_b = term.var_b;
-	result.coefficient = CopyOrNull(term.coefficient);
-	result.sign = term.sign;
-	result.filter = CopyOrNull(term.filter);
-	result.avg_scale = term.avg_scale;
-	result.qualifier_scope_idx = term.qualifier_scope_idx;
-	result.inputs = CopyAll(term.inputs);
-	result.child = term.child;
-	return result;
-}
-
-static DecideObjective::BilinearTerm CopyObjectiveBilinear(const DecideObjective::BilinearTerm &term) {
-	DecideObjective::BilinearTerm result;
-	result.var_a = term.var_a;
-	result.var_b = term.var_b;
-	result.coefficient = CopyOrNull(term.coefficient);
-	result.sign = term.sign;
-	result.filter = CopyOrNull(term.filter);
-	result.avg_scale = term.avg_scale;
-	result.avg_group_key = term.avg_group_key;
-	result.qualifier_scope_idx = term.qualifier_scope_idx;
-	result.reduction = term.reduction;
-	result.inputs = CopyAll(term.inputs);
-	result.child = term.child;
-	return result;
-}
-
-static DecideConstraint::QuadraticGroup CopyQuadraticGroup(const DecideConstraint::QuadraticGroup &group) {
-	DecideConstraint::QuadraticGroup result;
-	result.inner_terms = CopyTerms(group.inner_terms);
-	result.sign = group.sign;
-	result.scale = CopyOrNull(group.scale);
-	result.scale_divides = group.scale_divides;
-	result.filter = CopyOrNull(group.filter);
-	result.avg_scale = group.avg_scale;
-	result.qualifier_scope_idx = group.qualifier_scope_idx;
-	result.child = group.child;
-	return result;
-}
-
-static unique_ptr<DecideConstraint> CopyConstraint(const DecideConstraint &clause) {
-	auto result = make_uniq<DecideConstraint>();
-	result->lhs_terms = CopyTerms(clause.lhs_terms);
-	result->rhs_expr = CopyOrNull(clause.rhs_expr);
-	result->tightest_frame_bound = clause.tightest_frame_bound;
-	result->comparison_type = clause.comparison_type;
-	result->lhs_is_aggregate = clause.lhs_is_aggregate;
-	result->was_minmax_easy = clause.was_minmax_easy;
-	result->minmax_clause_idx = clause.minmax_clause_idx;
-	result->minmax_agg_type = clause.minmax_agg_type;
-	result->ne_clause_idx = clause.ne_clause_idx;
-	result->abs_aux_idx = clause.abs_aux_idx;
-	result->abs_is_pos_bound = clause.abs_is_pos_bound;
-	result->defined_var = clause.defined_var;
-	result->scope.when = CopyOrNull(clause.scope.when);
-	result->scope.per = clause.scope.per;
-	result->scope.class_key = clause.scope.class_key;
-	result->scope.signature = clause.scope.signature;
-	result->group_key = clause.group_key;
-	result->kind = clause.kind;
-	result->source_clause_id = clause.source_clause_id;
-	result->removal_group_id = clause.removal_group_id;
-	result->admitted_lower = CopyOrNull(clause.admitted_lower);
-	result->admitted_upper = CopyOrNull(clause.admitted_upper);
-	result->admitted_a = CopyOrNull(clause.admitted_a);
-	result->admitted_r = CopyOrNull(clause.admitted_r);
-	result->admitted_member = CopyOrNull(clause.admitted_member);
-	result->lifted_floor = clause.lifted_floor;
-	result->lifted_floor_k = clause.lifted_floor_k;
-	for (auto &term : clause.bilinear_terms) {
-		result->bilinear_terms.push_back(CopyBilinear(term));
-	}
-	result->has_bilinear = clause.has_bilinear;
-	for (auto &group : clause.quadratic_groups) {
-		result->quadratic_groups.push_back(CopyQuadraticGroup(group));
-	}
-	result->has_quadratic = clause.has_quadratic;
-	return result;
-}
-
-static unique_ptr<DecideObjective> CopyObjective(const DecideObjective &objective) {
-	auto result = make_uniq<DecideObjective>();
-	result->terms = CopyTerms(objective.terms);
-	result->when_condition = CopyOrNull(objective.when_condition);
-	result->squared_terms = CopyTerms(objective.squared_terms);
-	result->has_quadratic = objective.has_quadratic;
-	result->quadratic_sign = objective.quadratic_sign;
-	for (auto &term : objective.bilinear_terms) {
-		result->bilinear_terms.push_back(CopyObjectiveBilinear(term));
-	}
-	result->has_bilinear = objective.has_bilinear;
-	return result;
-}
 
 } // namespace decide_tree_compile
 
@@ -242,49 +112,37 @@ static void SiteMembers(const DecideTree &tree, idx_t holder, DecideBody &body) 
 	body.fallback_sites.assign(body.fallback.size(), DecideTermSite {site});
 }
 
-//! The clause roots in the order stage 05 lowers the clauses: a folded bound with no repair rows has no clause, one
-//! with them is a singleton row, every other root is a constraint.
-static void BindClauses(const DecidePreparedModel &prepared, DecideTree &tree, const vector<idx_t> &roots) {
-	idx_t constraint = 0;
-	idx_t singleton = 0;
+//! The clause roots holding a clause, numbered in leaf order: the constraints, then the folded bounds whose repair
+//! rows come from their clause (a folded bound with none holds no clause), as flat's repair_group_id numbers them.
+static void NumberClauses(DecideTree &tree, const vector<idx_t> &roots) {
 	for (auto root : roots) {
 		auto &node = *tree.nodes[root];
-		if (node.folded && !node.repair_rows) {
+		tree.constraint_count += node.compiled.clause && !node.folded;
+	}
+	idx_t constraint = 0;
+	for (auto root : roots) {
+		auto &node = *tree.nodes[root];
+		auto &body = node.compiled;
+		if (!body.clause) {
 			continue;
 		}
-		const bool folded = node.folded;
-		auto &list = folded ? prepared.singleton_row_constraints : prepared.constraints;
-		const auto index = folded ? singleton++ : constraint++;
-		if (index >= list.size() || list[index]->source_clause_id != node.source_clause_id ||
-		    list[index]->comparison_type != node.comparison_type) {
-			throw InternalException("DECIDE tree: root %llu is not stage 05's clause %llu", root, index);
-		}
-		auto &body = node.compiled;
-		body.clause = CopyConstraint(*list[index]);
-		body.clause_index = folded ? prepared.constraints.size() + index : index;
+		body.clause_index = node.folded ? tree.constraint_count + tree.singleton_row_count++ : constraint++;
 		body.phase = DecideErrorPhase::CONSTRAINTS;
 		body.order = body.clause_index;
 		SiteClause(tree, root, body);
 	}
-	if (constraint != prepared.constraints.size() || singleton != prepared.singleton_row_constraints.size()) {
-		throw InternalException("DECIDE tree: %llu clause roots bound to %llu clauses and %llu singleton rows",
-		                        roots.size(), prepared.constraints.size(), prepared.singleton_row_constraints.size());
-	}
 }
 
 //! The composed clauses, which flat evaluates after the objective, then the objective's composed terms (the last
-//! slot): each term's G holds its inner terms, and the root holding them each term's G.
-static void CopyComposed(const LogicalDecide &op, DecideTree &tree, const DecideTreeSources &sources) {
+//! slot): each term's G holds its inner terms (LowerDecideTree), and the root holding them each term's G.
+static void ComposedBodies(DecideTree &tree, const DecideTreeSources &sources) {
 	for (idx_t spec = 0; spec < sources.composed_reducers.size(); spec++) {
-		auto &terms = spec < op.composed_minmax_constraints.size() ? op.composed_minmax_constraints[spec].terms
-		                                                           : op.composed_minmax_objective_terms;
 		auto &reducers = sources.composed_reducers[spec];
 		const auto holder =
 		    spec < sources.composed_roots.size() ? sources.composed_roots[spec] : sources.objective_root;
 		tree.nodes[holder]->compiled.composed = reducers;
 		for (idx_t t = 0; t < reducers.size(); t++) {
 			auto &body = tree.nodes[reducers[t]]->compiled;
-			body.members = CopyTerms(terms[t].inner_terms);
 			body.phase = DecideErrorPhase::COMPOSED;
 			body.order = spec;
 			SiteMembers(tree, reducers[t], body);
@@ -297,13 +155,10 @@ static void CopyComposed(const LogicalDecide &op, DecideTree &tree, const Decide
 	}
 }
 
-//! Each helper's G or O holds its reducer's members and a frame's else terms.
-static void CopyLinks(const LogicalDecide &op, DecideTree &tree, const vector<idx_t> &link_nodes) {
+//! Each helper's G or O holds its reducer's members and a frame's else terms (LowerDecideTree).
+static void LinkBodies(DecideTree &tree, const vector<idx_t> &link_nodes) {
 	for (idx_t link = 0; link < link_nodes.size(); link++) {
-		auto &spec = op.reducer_value_links[link];
 		auto &body = tree.nodes[link_nodes[link]]->compiled;
-		body.members = CopyTerms(spec.inner_terms);
-		body.fallback = CopyTerms(spec.fallback_terms);
 		body.phase = DecideErrorPhase::VALUE_LINKS;
 		body.order = link;
 		SiteMembers(tree, link_nodes[link], body);
@@ -536,8 +391,8 @@ private:
 			}
 			if (kind == ExpressionClass::BOUND_REF) {
 				const auto column = leaf_expression.Cast<BoundReferenceExpression>().index;
-				if (column >= op.prepared.frame_column_base) {
-					return FrameColumn(site, column - op.prepared.frame_column_base, type);
+				if (column >= tree.frame_reads.column_base) {
+					return FrameColumn(site, column - tree.frame_reads.column_base, type);
 				}
 				return make_uniq<BoundReferenceExpression>(type, Column(site, type, column));
 			}
@@ -570,10 +425,10 @@ private:
 		return make_uniq<BoundReferenceExpression>(type, DECIDE_HOLE_BASE + hole);
 	}
 
-	//! Frame column `j` (DecidePreparedModel::frame_columns) as `site` reads it, of type `type`: the column of its
+	//! Frame column `j` (DecideFrameReads::columns) as `site` reads it, of type `type`: the column of its
 	//! frame's O at the entry's row (language/guide.md §5.6), or a reducer's over frames, its G's fold.
 	unique_ptr<Expression> FrameColumn(idx_t site, idx_t j, const LogicalType &type) {
-		auto &column = op.prepared.frame_columns[j];
+		auto &column = tree.frame_reads.columns[j];
 		if (column.kind == DecideFrameColumn::Kind::AGGREGATE) {
 			idx_t aggregate = DConstants::INVALID_INDEX;
 			if (!TryParseFrameAggregateTag(column.value->GetAlias(), aggregate) ||
@@ -593,7 +448,7 @@ private:
 	//! point's VALUE or a range's REDUCED column), of the read's type; over decisions, a reducer's NULL test of it, its
 	//! DEFINED column, as stage 05 reads both (DecideFrameColumn).
 	unique_ptr<Expression> FrameRead(idx_t site, const DecideNode &frame, const LogicalType &type) {
-		auto &columns = op.prepared.frame_columns;
+		auto &columns = tree.frame_reads.columns;
 		for (idx_t j = 0; j < columns.size(); j++) {
 			auto kind = columns[j].kind;
 			const bool read = frame.decision_value
@@ -612,7 +467,7 @@ public:
 	//! What each frame column's O computes on its anchors (DecideFrameColumnPrograms), in stage 05's terms: its value,
 	//! a range's reducer's arguments, and its `else`.
 	void AddFrameColumns() {
-		auto &columns = op.prepared.frame_columns;
+		auto &columns = tree.frame_reads.columns;
 		tree.frame_columns.resize(columns.size());
 		for (idx_t j = 0; j < columns.size(); j++) {
 			auto &column = columns[j];
@@ -824,16 +679,15 @@ static void BindLayout(DecideTree &tree) {
 
 void CompileDecideTree(ClientContext &context, const LogicalDecide &op, DecideTree &tree,
                        const DecideTreeSources &sources) {
-	decide_tree_compile::BindClauses(op.prepared, tree, sources.clause_roots);
-	if (op.prepared.objective) {
+	decide_tree_compile::NumberClauses(tree, sources.clause_roots);
+	if (sources.objective_root != DConstants::INVALID_INDEX && tree.nodes[sources.objective_root]->compiled.objective) {
 		auto &body = tree.nodes[sources.objective_root]->compiled;
-		body.objective = decide_tree_compile::CopyObjective(*op.prepared.objective);
 		body.phase = DecideErrorPhase::OBJECTIVE;
 		body.order = 0;
 		decide_tree_compile::SiteObjective(tree, sources.objective_root, body);
 	}
-	decide_tree_compile::CopyComposed(op, tree, sources);
-	decide_tree_compile::CopyLinks(op, tree, sources.link_nodes);
+	decide_tree_compile::ComposedBodies(tree, sources);
+	decide_tree_compile::LinkBodies(tree, sources.link_nodes);
 	decide_tree_compile::CompilePrograms(context, op, tree, sources.record_nodes);
 	decide_tree_compile::BindLayout(tree);
 }
@@ -970,6 +824,26 @@ static void ProgramLines(std::ostringstream &out, const DecideNode &node) {
 }
 
 } // namespace decide_tree_compile
+
+vector<const DecideConstraint *> DecideTree::Constraints() const {
+	vector<const DecideConstraint *> result(constraint_count);
+	for (auto root : roots) {
+		auto &body = nodes[root]->compiled;
+		if (body.clause && body.clause_index < constraint_count) {
+			result[body.clause_index] = body.clause.get();
+		}
+	}
+	return result;
+}
+
+const DecideObjective *DecideTree::Objective() const {
+	for (auto root : roots) {
+		if (nodes[root]->compiled.objective) {
+			return nodes[root]->compiled.objective.get();
+		}
+	}
+	return nullptr;
+}
 
 string DecideTree::BodiesToString() const {
 	std::ostringstream out;

@@ -590,10 +590,9 @@ vector<bool> DecideReadPeers(const DecideFrameMap &map) {
 }
 
 DecideFrameColumnValues ComputeDecideFrameColumns(ClientContext &context, const vector<DecideFrameSpec> &frames,
-                                                  const vector<DecideFrameMap> &maps,
-                                                  const DecidePreparedModel &prepared, idx_t num_rows,
-                                                  const DecideFrameRead &read) {
-	auto &columns = prepared.frame_columns;
+                                                  const vector<DecideFrameMap> &maps, const DecideFrameReads &reads,
+                                                  idx_t num_rows, const DecideFrameRead &read) {
+	auto &columns = reads.columns;
 	DecideFrameColumnValues computed;
 	auto &values_of = computed.values;
 	auto &errors_of = computed.errors;
@@ -724,7 +723,7 @@ static void AppendPayloadLeaves(const Expression &expr, vector<const Expression 
 	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { AppendPayloadLeaves(child, leaves); });
 }
 
-void SkipDecideFrameNullReads(const DecidePreparedModel &prepared, const vector<LogicalDecide::ReducerValueLink> &links,
+void SkipDecideFrameNullReads(const DecideTree &tree, const vector<LogicalDecide::ReducerValueLink> &links,
                               vector<DecideFrameMap> &maps, idx_t num_rows, const DecideFrameRead &read,
                               const std::function<bool(idx_t variable, idx_t row)> &absent) {
 	// A range over decisions is a helper (RewriteFrameRanges) whose members skip the values its windows read as NULL,
@@ -735,7 +734,7 @@ void SkipDecideFrameNullReads(const DecidePreparedModel &prepared, const vector<
 		}
 		vector<const Expression *> payload, fallback;
 		vector<bool> absent_payload;
-		for (auto &term : link.inner_terms) {
+		for (auto &term : tree.nodes[tree.frame_nodes[link.frame]]->compiled.members) {
 			payload.push_back(term.coefficient.get());
 			for (idx_t row = 0; row < num_rows; row++) {
 				if (absent(term.variable_index, row)) {
@@ -744,7 +743,7 @@ void SkipDecideFrameNullReads(const DecidePreparedModel &prepared, const vector<
 				}
 			}
 		}
-		for (auto &column : prepared.frame_columns) {
+		for (auto &column : tree.frame_reads.columns) {
 			if (column.frame == link.frame && column.kind == DecideFrameColumn::Kind::FALLBACK) {
 				fallback.push_back(column.value.get());
 			}
@@ -753,7 +752,7 @@ void SkipDecideFrameNullReads(const DecidePreparedModel &prepared, const vector<
 	}
 	// A range over data reads an `else` that is NULL at its anchor as no `else` there (D86, deck p. 50): a window
 	// left with nothing to read has no value, `count`'s too. A NULL its payload reads is a value its aggregate skips.
-	for (auto &column : prepared.frame_columns) {
+	for (auto &column : tree.frame_reads.columns) {
 		if (column.kind == DecideFrameColumn::Kind::REDUCED && column.fallback) {
 			SkipDecideRangeNullReads({}, {column.fallback.get()}, maps[column.frame], num_rows, read);
 		}

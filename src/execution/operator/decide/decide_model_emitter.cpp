@@ -154,10 +154,10 @@ vector<Value> DecideModelEmitter::Fallback(idx_t frame, idx_t row) const {
 	if (!reaches) {
 		return read;
 	}
-	for (auto j : op.prepared.frame_fallback_columns[frame]) {
+	for (auto j : tree.frame_reads.fallback_columns[frame]) {
 		read.push_back(columns.FrameValue(j, row));
 	}
-	for (auto decision : op.prepared.frame_fallback_decisions[frame]) {
+	for (auto decision : tree.frame_reads.fallback_decisions[frame]) {
 		auto &scope = tree.variable_scopes[decision];
 		if (!scope.IsGlobal()) {
 			read.push_back(Value::UBIGINT(scope.IsKeyed() ? descent.DecisionRows()[scope.keyed_scope_idx][row] : row));
@@ -330,7 +330,7 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 		position[tree.eval_order[i]] = i;
 	}
 	auto definitions = ClauseRoots();
-	definitions.resize(op.prepared.constraints.size());
+	definitions.resize(tree.constraint_count);
 	link_members.assign(op.reducer_value_links.size(), LinkMembers());
 	for (auto &link : op.reducer_value_links) {
 		definitions.push_back(tree.value_nodes[link.value_var]);
@@ -416,8 +416,7 @@ void DecideModelEmitter::DefinitionAbsence(idx_t root) {
 }
 
 vector<idx_t> DecideModelEmitter::ClauseRoots() const {
-	vector<idx_t> roots(op.prepared.constraints.size() + op.prepared.singleton_row_constraints.size(),
-	                    DConstants::INVALID_INDEX);
+	vector<idx_t> roots(tree.constraint_count + tree.singleton_row_count, DConstants::INVALID_INDEX);
 	for (auto root : tree.roots) {
 		auto &body = tree.nodes[root]->compiled;
 		if (body.clause) {
@@ -428,10 +427,10 @@ vector<idx_t> DecideModelEmitter::ClauseRoots() const {
 }
 
 void DecideModelEmitter::Constraints() {
-	const idx_t num_constraints = op.prepared.constraints.size();
+	const idx_t num_constraints = tree.constraint_count;
 	const auto roots = ClauseRoots();
 	// The folded bounds follow under DIAGNOSE, numbered after every other clause: only the repair model emits them.
-	const idx_t num_evaluated = num_constraints + (op.diagnose ? op.prepared.singleton_row_constraints.size() : 0);
+	const idx_t num_evaluated = num_constraints + (op.diagnose ? tree.singleton_row_count : 0);
 	for (idx_t c = 0; c < num_evaluated; c++) {
 		auto &clause = *tree.nodes[roots[c]]->compiled.clause;
 		auto evaluated = clause.lhs_is_aggregate || clause.was_minmax_easy ? Groups(roots[c], c < num_constraints)

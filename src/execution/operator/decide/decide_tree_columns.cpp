@@ -762,7 +762,7 @@ void DecideTreeColumns::CheckPartition(const DecideFrameSpec &frame, idx_t node)
 	}
 }
 
-void DecideTreeColumns::ReadFrames(const vector<DecideFrameSpec> &frames, const DecidePreparedModel &prepared,
+void DecideTreeColumns::ReadFrames(const vector<DecideFrameSpec> &frames,
                                    const vector<LogicalDecide::ReducerValueLink> &links, idx_t num_rows,
                                    vector<DecideFrameMap> &maps) {
 	frame_maps = &maps;
@@ -796,7 +796,7 @@ void DecideTreeColumns::ReadFrames(const vector<DecideFrameSpec> &frames, const 
 		CheckPartition(frames[f], node);
 	}
 	// What each frame reads, through flat's blocks, each expression a program on the frame's O.
-	const auto programs = FrameExpressions(prepared, links);
+	const auto programs = FrameExpressions(links);
 	const DecideFrameRead read = [&](const Expression &expression, const vector<bool> &rows) {
 		auto found = programs.find(&expression);
 		if (found == programs.end()) {
@@ -813,18 +813,17 @@ void DecideTreeColumns::ReadFrames(const vector<DecideFrameSpec> &frames, const 
 		}
 		return descent.DecisionRows()[tree.variable_scopes[variable].keyed_scope_idx][row] == DConstants::INVALID_INDEX;
 	};
-	SkipDecideFrameNullReads(prepared, links, maps, num_rows, read, absent);
-	frame_values = ComputeDecideFrameColumns(context, frames, maps, prepared, num_rows, read);
+	SkipDecideFrameNullReads(tree, links, maps, num_rows, read, absent);
+	frame_values = ComputeDecideFrameColumns(context, frames, maps, tree.frame_reads, num_rows, read);
 	CheckPositions(frames);
 	DecideCountFrames(maps);
 }
 
 std::unordered_map<const Expression *, pair<idx_t, idx_t>>
-DecideTreeColumns::FrameExpressions(const DecidePreparedModel &prepared,
-                                    const vector<LogicalDecide::ReducerValueLink> &links) const {
+DecideTreeColumns::FrameExpressions(const vector<LogicalDecide::ReducerValueLink> &links) const {
 	std::unordered_map<const Expression *, pair<idx_t, idx_t>> programs;
 	for (idx_t j = 0; j < tree.frame_columns.size(); j++) {
-		auto &column = prepared.frame_columns[j];
+		auto &column = tree.frame_reads.columns[j];
 		auto &computed = tree.frame_columns[j];
 		if (computed.value != DConstants::INVALID_INDEX) {
 			programs[column.value.get()] = {computed.node, computed.value};
@@ -843,9 +842,9 @@ DecideTreeColumns::FrameExpressions(const DecidePreparedModel &prepared,
 			continue;
 		}
 		const auto node = tree.frame_nodes[link.frame];
-		auto &sites = tree.nodes[node]->compiled.linear;
-		for (idx_t t = 0; t < link.inner_terms.size(); t++) {
-			programs[link.inner_terms[t].coefficient.get()] = {node, sites[t].program};
+		auto &body = tree.nodes[node]->compiled;
+		for (idx_t t = 0; t < body.members.size(); t++) {
+			programs[body.members[t].coefficient.get()] = {node, body.linear[t].program};
 		}
 	}
 	return programs;

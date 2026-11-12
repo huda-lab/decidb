@@ -23,7 +23,7 @@
 
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
-#include "duckdb/planner/decide/decide_prepared_model.hpp"
+#include "duckdb/planner/decide/decide_tree_terms.hpp"
 
 #include <cmath>
 #include <functional>

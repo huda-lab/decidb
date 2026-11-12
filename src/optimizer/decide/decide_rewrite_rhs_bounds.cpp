@@ -24,7 +24,7 @@
 // path records their aggregates (RecordGroupBounds) as it does for every other bound.
 //
 // A frame selector's values are columns execution computes from the rows it selects
-// (DecidePreparedModel::frame_columns), so no side table can read one: a row-wise bound reads a frame as it reads a
+// (DecideFrameReads::columns), so no side table can read one: a row-wise bound reads a frame as it reads a
 // column, as does a bound over groups that has one value per group, which execution checks as it reads it; one that
 // takes its group's tightest value execution takes too (FRAME_TIGHTEST_BOUND_TAG, D85), and a reducer over data whose
 // argument reads one execution computes (MakeFrameAggregate, LogicalDecide::frame_aggregates).

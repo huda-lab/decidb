@@ -52,26 +52,23 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
             canonicalizer.VerifyCanonicalObjective(*op.decide_objective);
         }
     }
-    // Flatten the verified tree into the prepared linear form. The pass itself is
+    // Lower the verified clauses into the tree's terms. The pass itself is
     // owned by stage 05 (src/optimizer/decide/decide_linear_form.cpp); it is TRIGGERED
     // here because this is the first point at which column bindings are final. The
-    // prepared terms hold copies of the coefficient subtrees, and RemoveUnusedColumns,
+    // lowered terms hold copies of the coefficient subtrees, and RemoveUnusedColumns,
     // ColumnLifetimeAnalyzer and late materialization all rebind the operator's own
     // expressions after the DECIDE optimizer runs -- copies taken earlier would keep
     // bindings that no longer name the right input columns.
-    // The tree is built in two halves around stage 05 (DecideTreeConstruction): its nodes from the final clauses, its
-    // bodies from what stage 05 lowers, whose reducers name the tree's G each ranges over.
+    // The tree's nodes come from the final clauses (DecideTreeConstruction), then stage 05's lowering writes each
+    // clause's records into its root, each reducer's terms naming the G they range over.
     auto construction = make_uniq<DecideTreeConstruction>(context, op);
-    DecideReducerChild child = [&](const BoundAggregateExpression &reducer) {
-        return construction->ReducerChild(reducer);
-    };
-    BuildDecidePreparedModel(context, op, child);
+    LowerDecideTree(context, op, *construction);
     // With the shape of every constraint and the objective settled, check the model
     // class this query needs against the backend chosen for it. A model class is a
     // gate, not an optimization -- nothing lowers a quadratic constraint into linear
     // rows -- so an unsupported one is refused here, before the query reads a row,
     // and the message blames the host rather than the query.
-    RequireDecideSolverSupport(op);
+    RequireDecideSolverSupport(op, construction->Tree());
     // After the refusal, so a query the backend cannot answer is refused in SQL terms first.
     auto tree = construction->Finish();
     // Capture child column bindings BEFORE CreatePlan: several logical operators
@@ -153,9 +150,6 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     decide_op->member_singleton_row_bounds = std::move(op.member_singleton_row_bounds);
     decide_op->flat_objective_agg = op.flat_objective_agg;
     decide_op->flat_objective_is_easy = op.flat_objective_is_easy;
-    // The flattened constraints and objective, produced by the DECIDE optimizer's
-    // final pass. Execution evaluates their coefficients; it does not re-derive them.
-    decide_op->prepared = std::move(op.prepared);
 
     decide_op->keyed_scopes = std::move(op.keyed_scopes);
     decide_op->variable_scopes = std::move(op.variable_scopes);
