@@ -306,7 +306,8 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //!        either value, and the aggregates of the group bounds (what a bound reads is one value per group, computed
 //!        here over the one read)
 //!   P2   the count limits and what remains of them after the fixed rows, and whether the group can meet them
-//!   W3   over all the rows, whether every group can; only where a group can fail (NeedsVerdict)
+//!   H    the rows held in a materialized CTE, and whether every group can be met, raised in the hold; only where a
+//!        group can fail (NeedsVerdict)
 //!   A    the 0/1 assignment, the source columns and the column of the checks
 //!
 //! The solver reads every row before it answers, so a bad value or an infeasible bound in any group raises even under
@@ -314,8 +315,8 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //! stands above it reaches a later group only when the parent reads that far. The checks of the row therefore stand in
 //! P1, below the rank window. The checks of a group (what its bounds give, and whether its rows and fixed values can
 //! meet them) read the rank window's counts and the group's bounds, so they stand above it: what a bound gives raises
-//! in P2, and the verdict window over all the rows reads whether each group is feasible, so every row has passed them
-//! when the first leaves. The verdict window stands only where a group can fail.
+//! in P2, and the hold raises whether each group is feasible over all the rows, so every row has passed them when the
+//! first leaves. The hold stands only where a group can fail.
 class PlanBuilder final : public DirectRankedPrefix {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
@@ -361,7 +362,7 @@ private:
 	ColumnBinding group_ok;
 
 	//! Whether a group can fail a check of its own. Those checks read the rank window's counts and the group's bounds,
-	//! so they stand above the rank window, and the verdict window must read them before the first row leaves: whether
+	//! so they stand above the rank window, and the hold must raise them before the first row leaves: whether
 	//! the group's rows and fixed values can meet its bounds, and what a group bound gives (a NaN limit, an `=` bound
 	//! that takes two values in a group), which only a source-valued bound has, and which always makes the limits'
 	//! check below necessary.
@@ -573,7 +574,7 @@ private:
 	}
 
 	//! Whether the group of the row is feasible: a list of checks, each true when it passes and false when it fails.
-	//! The verdict window reads it over every row (the builder takes a row outside every group as feasible), so every
+	//! The hold reads it over every row (the builder takes a row outside every group as feasible), so every
 	//! group has passed the raising checks (P2: what the group's bounds give) when the first row leaves; a false raises
 	//! DECIDE's infeasible error then.
 	ExprPtr GroupsAreFeasible(const DirectRankedColumns &input) const {

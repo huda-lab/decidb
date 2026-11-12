@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "duckdb/common/decide_value_messages.hpp"
+#include "duckdb/common/enums/cte_materialize.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/aggregate/distributive_functions.hpp"
@@ -18,7 +19,9 @@
 #include "duckdb/planner/operator/logical_aggregate.hpp"
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
 #include "duckdb/planner/operator/logical_cross_product.hpp"
+#include "duckdb/planner/operator/logical_cteref.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
+#include "duckdb/planner/operator/logical_materialized_cte.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/operator/logical_window.hpp"
 
@@ -392,6 +395,43 @@ unique_ptr<Expression> DirectOverProjection(const Expression &value, const vecto
 		throw InternalException("Direct solve could not re-point a value at the projection that carries the source");
 	}
 	return copy;
+}
+
+DirectHeldRows::DirectHeldRows(Binder &binder_p, string name_p, const vector<ColumnBinding> &columns_p,
+                               const vector<LogicalType> &types)
+    : binder(binder_p), name(std::move(name_p)), cte_index(binder_p.GenerateTableIndex()), columns(columns_p),
+      held_types(types), names(binder_p.GenerateTableIndex()) {
+	D_ASSERT(columns.size() == types.size());
+	names.Forward(columns, types);
+}
+
+ColumnBinding DirectHeldRows::Add(unique_ptr<Expression> expression) {
+	held_types.push_back(expression->return_type);
+	return names.Add(std::move(expression));
+}
+
+DirectHeldRows::Reference DirectHeldRows::Read() const {
+	// A CTE's columns are named by position.
+	vector<string> column_names;
+	for (idx_t i = 0; i < held_types.size(); i++) {
+		column_names.push_back("c" + std::to_string(i));
+	}
+	auto index = binder.GenerateTableIndex();
+	Reference reference;
+	reference.plan = make_uniq<LogicalCTERef>(index, cte_index, held_types, std::move(column_names),
+	                                          CTEMaterialize::CTE_MATERIALIZE_ALWAYS);
+	for (idx_t i = 0; i < held_types.size(); i++) {
+		auto held = i < columns.size() ? columns[i] : ColumnBinding(names.index, i);
+		reference.replacer.replacement_bindings.emplace_back(held, ColumnBinding(index, i));
+	}
+	reference.replacer.stop_operator = reference.plan.get();
+	return reference;
+}
+
+unique_ptr<LogicalOperator> DirectHeldRows::Close(unique_ptr<LogicalOperator> definition,
+                                                  unique_ptr<LogicalOperator> consumer) {
+	return make_uniq<LogicalMaterializedCTE>(name, cte_index, held_types.size(), names.Finish(std::move(definition)),
+	                                         std::move(consumer));
 }
 
 //===--------------------------------------------------------------------===//

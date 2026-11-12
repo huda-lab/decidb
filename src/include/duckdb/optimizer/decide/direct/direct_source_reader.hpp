@@ -9,6 +9,7 @@
 
 namespace duckdb {
 
+class DirectHeldRows;
 class LogicalGet;
 class Optimizer;
 
@@ -64,6 +65,7 @@ public:
 	//! them again by row id, so a copy's width is the other columns' and the row id's.
 	DirectSourceReader(Optimizer &optimizer, unique_ptr<LogicalOperator> source, idx_t reads,
 	                   const vector<idx_t> &stored_columns);
+	~DirectSourceReader();
 
 	//! The bindings of the source columns, then the placeholder of every side table added so far, which the proved
 	//! expressions refer to. These are the columns a read has. The DECIDE node's own outputs are the source columns
@@ -77,7 +79,7 @@ public:
 	//! Whether the source is materialized once. The copy holds every row the plan reads, so a plan over it holds rows
 	//! even when the rule's own plan streams.
 	bool Materialized() const {
-		return materialized || stage_cte_index != DConstants::INVALID_INDEX;
+		return materialized || stage_shared;
 	}
 	//! The source, until TakeRecomputedSource or Finish takes it.
 	LogicalOperator &Source() {
@@ -167,16 +169,16 @@ private:
 	optional_ptr<LogicalGet> chain_scan;
 	//! The number of reads ReadSource has made.
 	idx_t source_reads_taken = 0;
-	//! Whether the source is materialized, and the table index of its CTE.
+	//! Whether the source is materialized, and the rows held in its copy (DirectHeldRows); the source is the copy's
+	//! definition until Finish takes it.
 	bool materialized = false;
-	idx_t cte_index = DConstants::INVALID_INDEX;
-	//! The row stage, and when it is shared: the table index of its CTE, its definition until Finish takes it, and the
-	//! columns and types of the definition. The index is invalid when each read builds the stage.
+	unique_ptr<DirectHeldRows> source_held;
+	//! The row stage, and whether it is shared: the rows held in its copy, which the first ReadStaged makes, and its
+	//! definition until Finish takes it. Each read builds the stage when it is not shared.
 	RowStage row_stage;
-	idx_t stage_cte_index = DConstants::INVALID_INDEX;
+	bool stage_shared = false;
+	unique_ptr<DirectHeldRows> stage_held;
 	unique_ptr<LogicalOperator> stage_definition;
-	vector<ColumnBinding> stage_bindings;
-	vector<LogicalType> stage_types;
 	//! A gate's verdict until Finish takes it, and the table index of its CTE.
 	struct Verdict {
 		unique_ptr<LogicalOperator> definition;

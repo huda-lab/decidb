@@ -44,17 +44,22 @@ struct DirectRankedColumns {
 //!   PL   what the group limits give, once per row, as columns (only with a group limit)
 //!   P2   the rule's prefix columns (LayoutPrefix); the checks above W1 and what the group limits raise
 //!   W2   per group, the size of the prefix (PrefixSize); only a rule whose prefix size needs a window of its own
-//!   W3   over all the rows, whether every group can be met (GroupVerdict); only where a group can fail
-//!   A    the source columns, x (Chosen), the column of the checks
+//!   H    the rows held in a materialized CTE (DirectHeldRows) over everything above, and the verdict, whether every
+//!        group can be met (GroupVerdict), raised in the hold's naming projection with the checks the plan owes; only
+//!        where a check stands above the last window
+//!   A    the source columns, x (Chosen), the column of the checks, over a reference to the held rows
 //!
 //! Every row is checked before the first row leaves (`architecture/rules.md` § What every rule must match). A window
 //! holds every row before it gives one, then gives them group by group, so a check above it reaches a later group only
 //! when the parent reads that far. A check stands below a window that holds every row, and what it reads says which
 //! stage: a check over the scope projection's columns stands in P1, below the rank window (`checks_below`); a check
-//! over P1's or W1's columns stands in P2, below W2 or W3 (`checks_above`). A rule that adds one of the second kind
-//! must have a window over all the rows above P2 (PrefixSize or GroupVerdict), which the plan has where a group can
-//! fail. The group's own checks, in W3, read every row, so every group has passed them when the first row leaves. The
-//! builder adds the checks of the fixed values (each value a row fixes, a row fixed to both) to `checks_below`.
+//! over P1's or W1's columns stands in P2, below W2 when the rule has one (`checks_above`). Where no window stands
+//! above P2, or a verdict stands above W2, the plan holds the rows in H instead of in a window over all the rows (which
+//! DuckDB runs on one thread, and which keeps the rows above it on one thread): the CTE's definition runs to its end
+//! before A reads a row, and the verdict, raised in its naming projection, is read on every row, so every group has
+//! passed its checks when the first row leaves. A never raises the verdict itself: A runs in the scan's pipeline, which
+//! a LIMIT stops. The builder adds the checks of the fixed values (each value a row fixes, a row fixed to both) to
+//! `checks_below`.
 //!
 //! Rows of equal ranking value are ordered as the sort gives them, and the prefix is right only if every window of W1
 //! that reads the order (the rank, a running sum) sees the same one. They have one partition and one order, so DuckDB
@@ -93,8 +98,9 @@ protected:
 	virtual unique_ptr<BoundWindowExpression> PrefixSize(const DirectRankedColumns &rows) {
 		return nullptr;
 	}
-	//! W3: whether the row's group can be met, a BOOLEAN over the columns of P2; null where no group can fail. The
-	//! builder takes a row outside every group as met. A false raises the infeasible error before the first row leaves.
+	//! H: whether the row's group can be met, a BOOLEAN over the columns of P2 and W2; null where no group can fail.
+	//! The builder takes a row outside every group as met. A false raises the infeasible error before the first row
+	//! leaves.
 	virtual ExprPtr GroupVerdict(const DirectRankedColumns &rows) = 0;
 	//! A: whether the row is selected, where no clause fixes it; the builder lets a fixed row keep its value.
 	virtual ExprPtr Chosen(const DirectRankedColumns &rows) = 0;
@@ -145,10 +151,21 @@ protected:
 	vector<unique_ptr<Expression>> checks_above;
 
 private:
+	//! The rows of a stage held in a materialized CTE, set by CloseGroups; `rows` is null when they are not.
+	struct Hold {
+		unique_ptr<DirectHeldRows> rows;
+		//! The plan that is held, and the reference the stage reads in its place; `reference.plan` is moved into the
+		//! stage's plan.
+		unique_ptr<LogicalOperator> definition;
+		DirectHeldRows::Reference reference;
+		//! The column of the checks the rows are held with: every check the stage owes, and the verdict.
+		ColumnBinding checks;
+	};
 	//! A plan and the columns that stage carries.
 	struct Stage {
 		unique_ptr<LogicalOperator> plan;
 		DirectRankedColumns columns;
+		Hold hold;
 	};
 
 	Stage ProjectRows(unique_ptr<LogicalOperator> rows);
@@ -157,9 +174,12 @@ private:
 	//! column of W1 goes, for the stage above to be re-pointed.
 	void HoistGroupValues(Stage &ranked, ColumnBindingReplacer &forwarded);
 	Stage ProjectPrefix(Stage ranked);
-	//! Adds W2 and W3 over `prefix`; `feasible` is what W3 gives, null for a plan without one.
-	void CloseGroups(Stage &prefix, ExprPtr &feasible);
-	DirectSubstitute Answer(Stage prefix, const ExprPtr &feasible);
+	//! Adds W2 over `prefix`, and holds its rows (DirectHeldRows) where a check stands above the last window.
+	void CloseGroups(Stage &prefix);
+	//! The checks the stage owes, folded in the order they run (`row_valid`, `valid`, then `verdict`, when there is
+	//! one): true when every one holds, and otherwise the error of the first that raises. Null when there are none.
+	unique_ptr<Expression> OwedChecks(const DirectRankedColumns &columns, unique_ptr<Expression> verdict) const;
+	DirectSubstitute Answer(Stage prefix);
 
 	vector<const DecideGroupBound *> bounds;
 	//! Where P1 laid out what each registered bound reads, and what each gives once W1 has computed it.

@@ -1419,10 +1419,10 @@ def test_second_read_moves_only_variable_width_columns(decidb_cli, rule):
         _same_answers(direct, solver)
 
 
-# The side table of a bound, the verdict of a row check and the copy of a source's row stage (R1 reads it four times) are
-# materialized CTEs around the rule's plan. The row id and the payload pass through them like any source column, so the
-# payload still comes from a scan of its own whatever the plan holds. The scans: the rule's read (or the copy), the row
-# check's read, and the payload.
+# The side table of a bound, the verdict of a row check, the copy of a source's row stage (R1 reads it four times) and
+# the group stage of a ranked prefix are materialized CTEs around the rule's plan. The row id and the payload pass
+# through them like any source column, so the payload still comes from a scan of its own whatever the plan holds. The
+# scans: the rule's read (or the copy), the row check's read, and the payload.
 _LATE_MATERIALIZATION_AROUND_CTES = {
     "side_table": (
         "DECIDE x(BOOL) SUCH THAT SUM(x) <= SUM(cap) by (g) / 100 MAXIMIZE SUM(score * x)",
@@ -1432,6 +1432,13 @@ _LATE_MATERIALIZATION_AROUND_CTES = {
     # S1 reads the group bound `cap` in its rank window, over its one read, so the rule's read and the row check's are
     # two reads and no copy is made: the scans are the rule's, the row check's and the payload's.
     "row_check": ("DECIDE x(BOOL) SUCH THAT per g: SUM(x) <= cap MAXIMIZE SUM(score * x)", "direct_verdict", 3),
+    # A group bound can fail in a group, so S1 holds every row in a group stage (`direct_group`) and raises the
+    # verdict there. The rule's read is the only scan the stage's definition makes, and the payload's is the other.
+    "group_stage": (
+        "DECIDE x(BOOL) SUCH THAT SUM(x) by (g) <= SUM(cap) by (g) / 2 MAXIMIZE SUM(score * x)",
+        "direct_group",
+        2,
+    ),
     "copied_source": (
         "DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND 1 AND SUM(cap * x) <= 5000 MAXIMIZE SUM(score * x)",
         "direct_stage",

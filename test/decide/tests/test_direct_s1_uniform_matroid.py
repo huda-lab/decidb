@@ -1803,9 +1803,14 @@ def _window_count(decidb_cli, constraint):
     return len(re.findall(r"│\s+WINDOW\s+│", _bound_plan(decidb_cli, constraint)))
 
 
-# The window over all the rows that reads whether every group is feasible: a group bound can fail in a group, so the
-# plan owes the check of every group before the first row leaves.
-_VERDICT_WINDOW = 1
+def _group_stage_count(decidb_cli, constraint):
+    return len(re.findall(r"\bdirect_group\b", _bound_plan(decidb_cli, constraint)))
+
+
+# A group bound can fail in a group, so the plan owes the check of every group before the first row leaves: it holds
+# every row in one materialized CTE (`direct_group`) and raises the verdict there, in no window. A plan whose groups
+# cannot fail holds nothing.
+_GROUP_STAGE = 1
 
 
 @pytest.mark.var_boolean
@@ -1820,9 +1825,11 @@ _VERDICT_WINDOW = 1
     ],
 )
 def test_s1_a_bound_of_the_groups_own_reducers_adds_no_window(decidb_cli, constraint):
-    # No window computes a reducer. The one more window than a constant bound is the verdict window over all the rows
-    # that a group's bound makes necessary (S1-24).
-    assert _window_count(decidb_cli, constraint) == _window_count(decidb_cli, "SUM(x) <= 2") + _VERDICT_WINDOW
+    # No window computes a reducer, and the check of every group is a group stage, not a window over all the rows
+    # (S1-24, FRM-22): the plan has the windows of a constant bound, and one group stage more.
+    assert _window_count(decidb_cli, constraint) == _window_count(decidb_cli, "SUM(x) <= 2")
+    assert _group_stage_count(decidb_cli, "SUM(x) <= 2") == 0
+    assert _group_stage_count(decidb_cli, constraint) == _GROUP_STAGE
     assert "direct_bound" not in _bound_plan(decidb_cli, constraint)
 
 
@@ -1841,7 +1848,8 @@ def test_s1_a_bound_that_is_not_the_groups_own_is_read_from_a_side_table(decidb_
     plan = _bound_plan(decidb_cli, constraint)
     # The reducer is a side table (`direct_bound`) joined back to the rows by its key; no bound is a window.
     assert "direct_bound" in plan and "Join Type: SINGLE" in plan, plan
-    assert _window_count(decidb_cli, constraint) == _window_count(decidb_cli, "SUM(x) <= 2") + _VERDICT_WINDOW
+    assert _window_count(decidb_cli, constraint) == _window_count(decidb_cli, "SUM(x) <= 2")
+    assert _group_stage_count(decidb_cli, constraint) == _GROUP_STAGE
 
 
 # Every bound above and the bounds that are not the group's own, answered as the solver answers them.

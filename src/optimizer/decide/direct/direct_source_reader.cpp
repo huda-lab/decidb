@@ -73,9 +73,11 @@ DirectSourceReader::DirectSourceReader(Optimizer &optimizer_p, unique_ptr<Logica
 	// A source read once is read as itself, as DuckDB inlines a CTE referenced once.
 	materialized = !chain_scan && reads > 1;
 	if (materialized) {
-		cte_index = optimizer.binder.GenerateTableIndex();
+		source_held = make_uniq<DirectHeldRows>(optimizer.binder, "direct_source", bindings, types);
 	}
 }
+
+DirectSourceReader::~DirectSourceReader() = default;
 
 //! A fresh scan of the same table: the same columns and filters under a new table index, as the second scan of late
 //! materialization is built.
@@ -223,9 +225,7 @@ DirectSourceReader::Read DirectSourceReader::ReadSource() {
 	} else {
 		// A source read once has only the read TakeRecomputedSource makes.
 		D_ASSERT(materialized);
-		vector<LogicalType> source_types(types.begin(), types.begin() + NumericCast<int64_t>(source_width));
-		rows = make_uniq<LogicalCTERef>(optimizer.binder.GenerateTableIndex(), cte_index, std::move(source_types),
-		                                PositionalNames(source_width), CTEMaterialize::CTE_MATERIALIZE_ALWAYS);
+		rows = std::move(source_held->Read().plan);
 	}
 	vector<ColumnBinding> side_values;
 	rows = Gated(JoinSideTables(std::move(rows), false, side_values));
@@ -237,12 +237,12 @@ void DirectSourceReader::SetRowStage(RowStage stage) {
 	row_stage = std::move(stage);
 	// A copy of the source is the case the plan holds rows for anyway: the stage is held with it.
 	if (materialized) {
-		stage_cte_index = optimizer.binder.GenerateTableIndex();
+		stage_shared = true;
 		if (source_reads_taken == 0) {
 			// No other read takes the source, so a copy of it would be read once, by the stage: the stage reads the
 			// source as itself, as a CTE referenced once is inlined.
 			materialized = false;
-			cte_index = DConstants::INVALID_INDEX;
+			source_held.reset();
 		}
 	}
 }
@@ -250,7 +250,7 @@ void DirectSourceReader::SetRowStage(RowStage stage) {
 DirectSourceReader::StagedRead DirectSourceReader::ReadStaged() {
 	D_ASSERT(row_stage);
 	StagedRead staged;
-	if (stage_cte_index == DConstants::INVALID_INDEX) {
+	if (!stage_shared) {
 		staged.plan = row_stage(ReadSource());
 		staged.plan->ResolveOperatorTypes();
 		staged.columns = staged.plan->GetColumnBindings();
@@ -260,14 +260,12 @@ DirectSourceReader::StagedRead DirectSourceReader::ReadStaged() {
 		// The source as itself when no copy of it is shared (SetRowStage).
 		stage_definition = row_stage(materialized ? ReadSource() : ReadSourceAsItself());
 		stage_definition->ResolveOperatorTypes();
-		stage_bindings = stage_definition->GetColumnBindings();
-		stage_types = stage_definition->types;
+		stage_held = make_uniq<DirectHeldRows>(optimizer.binder, "direct_stage", stage_definition->GetColumnBindings(),
+		                                       stage_definition->types);
 	}
-	auto reference =
-	    make_uniq<LogicalCTERef>(optimizer.binder.GenerateTableIndex(), stage_cte_index, stage_types,
-	                             PositionalNames(stage_types.size()), CTEMaterialize::CTE_MATERIALIZE_ALWAYS);
-	staged.columns = reference->GetColumnBindings();
-	staged.plan = std::move(reference);
+	auto reference = stage_held->Read();
+	staged.columns = reference.plan->GetColumnBindings();
+	staged.plan = std::move(reference.plan);
 	return staged;
 }
 
@@ -314,16 +312,7 @@ unique_ptr<LogicalOperator> DirectSourceReader::Gated(unique_ptr<LogicalOperator
 unique_ptr<LogicalOperator> DirectSourceReader::Finish(unique_ptr<LogicalOperator> plan) {
 	// The shared stage is innermost: its definition reads the verdicts and side tables, which wrap it, and the source.
 	if (stage_definition) {
-		// A reference reads the columns by position, as for the source below.
-		ExpressionBuilder calc(optimizer.context);
-		vector<unique_ptr<Expression>> columns;
-		for (idx_t i = 0; i < stage_bindings.size(); i++) {
-			columns.push_back(calc.Out(calc.Col(stage_types[i], stage_bindings[i])));
-		}
-		auto definition = make_uniq<LogicalProjection>(optimizer.binder.GenerateTableIndex(), std::move(columns));
-		definition->children.push_back(std::move(stage_definition));
-		plan = make_uniq<LogicalMaterializedCTE>("direct_stage", stage_cte_index, stage_bindings.size(),
-		                                         std::move(definition), std::move(plan));
+		plan = stage_held->Close(std::move(stage_definition), std::move(plan));
 	}
 	// The first verdict is the outermost, because a later one's definition reads it.
 	for (idx_t i = verdicts.size(); i > 0; i--) {
@@ -340,18 +329,7 @@ unique_ptr<LogicalOperator> DirectSourceReader::Finish(unique_ptr<LogicalOperato
 	if (!materialized) {
 		return plan;
 	}
-	// A reference reads the materialized columns by position, but a join's output order can change in the optimizer
-	// passes after this one (a pass that swaps its sides), so the definition names its columns in a projection, as the
-	// binder does for the query of every CTE.
-	ExpressionBuilder calc(optimizer.context);
-	vector<unique_ptr<Expression>> columns;
-	for (idx_t i = 0; i < source_width; i++) {
-		columns.push_back(calc.Out(calc.Col(types[i], bindings[i])));
-	}
-	auto definition = make_uniq<LogicalProjection>(optimizer.binder.GenerateTableIndex(), std::move(columns));
-	definition->children.push_back(std::move(source));
-	return make_uniq<LogicalMaterializedCTE>("direct_source", cte_index, source_width, std::move(definition),
-	                                         std::move(plan));
+	return source_held->Close(std::move(source), std::move(plan));
 }
 
 } // namespace duckdb

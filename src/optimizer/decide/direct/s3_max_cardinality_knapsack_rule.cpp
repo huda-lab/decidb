@@ -243,13 +243,14 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //!         weight, what the limit reads and what it gives, and the prefix total
 //!   W2    per group, k, the largest rank that fits (NULL when none does); for a minimum, the smallest rank that
 //!         reaches B, with the order of W1 reversed
-//!   W3    over all the rows, whether every group fits a prefix; only when a group can fit none (NeedsVerdict)
+//!   H     the rows held in a materialized CTE, and whether every group fits a prefix, raised in the hold; only when a
+//!         group can fit none (NeedsVerdict)
 //!   P4    the source columns, x = 1 when the rank is at most k, and the column that holds the checks
 //!
 //! The solver reads every row before it answers, so a bad value on the last row raises even under an outer LIMIT 1.
 //! W2 holds every row before it gives one, and the checks of P2 stand below it, so every row has passed them when the
-//! first leaves. W3 does the same for infeasibility: a group that fits no prefix raises when the first row is
-//! released, not when a row of that group is reached.
+//! first leaves. The hold does the same for infeasibility: it raises a group that fits no prefix while the rows are
+//! held, not when a row of that group is reached.
 //!
 //! The slot map: the source columns in order (the reader's: the source row id and the bounds' values come after the
 //! node's, and the driver drops them), then x (INTEGER 0/1), then the column of the checks, which

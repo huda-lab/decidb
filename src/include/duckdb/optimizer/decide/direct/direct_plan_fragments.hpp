@@ -3,6 +3,7 @@
 #include <functional>
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/optimizer/column_binding_replacer.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/planner/column_binding.hpp"
@@ -258,6 +259,52 @@ DirectJoinedAnswers DirectJoinClassAnswers(Binder &binder, unique_ptr<LogicalOpe
 //! obligation by gating them on this.
 unique_ptr<LogicalOperator> DirectAllRowsValid(Optimizer &optimizer, unique_ptr<LogicalOperator> rows,
                                                unique_ptr<Expression> valid);
+
+//! Rows held in a materialized CTE: DuckDB's materialized CTE used as a pipeline breaker (an Eager Spool in SQL Server,
+//! a Material node in PostgreSQL). The definition runs to its end before the consumer reads a row, so every row of it
+//! has been computed, and checked, before the first row leaves. A plan holds rows here instead of in a window with no
+//! partition and no order, which DuckDB runs on one thread and which keeps the rows above it on one thread.
+//!
+//! The CTE's definition names its columns in a projection over the plan, as the binder does for the query of every CTE:
+//! a reference reads them by position, and a join's output order can change in the optimizer passes after the direct
+//! solve pass. The rows are held with `columns`, then with the columns added by Add, which are computed in that
+//! projection, so a check there is raised once per row at the moment the rows are held.
+//!
+//! The hold is built in three steps: the object declares the definition's columns and Add puts checks into the
+//! naming projection; Read gives a reference to the CTE and the replacer that re-points what was written over the
+//! definition's columns at the reference's; Close puts the CTE around the consumer, with the definition. A hold may be
+//! read any number of times, and a read may come before the definition exists.
+class DirectHeldRows {
+public:
+	//! A reference to the held rows. `plan` is the LogicalCTERef; `replacer` re-points a binding of the definition's
+	//! columns (and of the columns Add returned) at the reference's, and stops at `plan`, so it is applied to the
+	//! consumer built over the reference.
+	struct Reference {
+		unique_ptr<LogicalOperator> plan;
+		ColumnBindingReplacer replacer;
+	};
+
+	//! The CTE is `name` in a plan. `columns` and `types` are the definition's output.
+	DirectHeldRows(Binder &binder, string name, const vector<ColumnBinding> &columns, const vector<LogicalType> &types);
+	//! Holds one more column, computed over the definition's columns. Returns its binding as the replacer of a
+	//! Reference knows it.
+	ColumnBinding Add(unique_ptr<Expression> expression);
+	//! A reference to the held rows: a new table index each time. No filter may stand directly on it
+	//! (CTE_FILTER_PUSHER would push the filter into the definition, under the checks the hold raises).
+	Reference Read() const;
+	//! The CTE around `consumer`, with the definition `definition`, which has the declared columns.
+	unique_ptr<LogicalOperator> Close(unique_ptr<LogicalOperator> definition, unique_ptr<LogicalOperator> consumer);
+
+private:
+	Binder &binder;
+	string name;
+	idx_t cte_index;
+	vector<ColumnBinding> columns;
+	//! The types of the held columns: the definition's, then the added ones.
+	vector<LogicalType> held_types;
+	//! The naming projection, which holds the definition's columns first and the added ones after them.
+	DirectProjectionStage names;
+};
 
 //===--------------------------------------------------------------------===//
 // DECIDE semantics every aggregate rule shares

@@ -200,7 +200,23 @@ DirectRankedPrefix::Stage DirectRankedPrefix::ProjectPrefix(Stage ranked) {
 	return result;
 }
 
-void DirectRankedPrefix::CloseGroups(Stage &prefix, ExprPtr &feasible) {
+unique_ptr<Expression> DirectRankedPrefix::OwedChecks(const DirectRankedColumns &columns,
+                                                      unique_ptr<Expression> verdict) const {
+	// The row's checks, then the group's, then the verdict: an earlier check guards the later ones.
+	vector<unique_ptr<Expression>> checks;
+	if (columns.row_valid.table_index != DConstants::INVALID_INDEX) {
+		checks.push_back(calc.Out(Column(LogicalType::BOOLEAN, columns.row_valid)));
+	}
+	if (columns.valid.table_index != DConstants::INVALID_INDEX) {
+		checks.push_back(calc.Out(Column(LogicalType::BOOLEAN, columns.valid)));
+	}
+	if (verdict) {
+		checks.push_back(std::move(verdict));
+	}
+	return checks.empty() ? nullptr : DirectAllHold(calc, std::move(checks));
+}
+
+void DirectRankedPrefix::CloseGroups(Stage &prefix) {
 	auto &columns = prefix.columns;
 	// W2: the size of each group's prefix, where the rule needs a window for it.
 	if (auto size_window = PrefixSize(columns)) {
@@ -211,22 +227,32 @@ void DirectRankedPrefix::CloseGroups(Stage &prefix, ExprPtr &feasible) {
 		w2->children.push_back(std::move(prefix.plan));
 		prefix.plan = std::move(w2);
 	}
-	// W3: whether every group can be met, over all the rows, where a group can fail.
-	if (auto verdict = GroupVerdict(columns)) {
+	// Whether every group can be met, where a group can fail.
+	auto verdict = GroupVerdict(columns);
+	// A check above the last window reaches a later group only when the parent reads that far: the rows are held, and
+	// the check is raised when they are. P2's checks stand below W2 when there is one, and so are held by it.
+	bool owes_above = verdict || (columns.valid.table_index != DConstants::INVALID_INDEX && !columns.size);
+	if (!owes_above) {
+		return;
+	}
+	unique_ptr<Expression> raise;
+	if (verdict) {
 		// A row outside every group has no group to meet.
 		if (scoped) {
 			verdict = calc.If(Column(LogicalType::BOOLEAN, columns.carried.eligible), verdict, calc.Bool(true));
 		}
-		auto w3 = make_uniq<LogicalWindow>(binder.GenerateTableIndex());
-		w3->expressions.push_back(DirectWindowExtremum(optimizer, "bool_and", calc.Out(verdict)));
-		feasible = Column(LogicalType::BOOLEAN, ColumnBinding(w3->window_index, 0));
-		w3->children.push_back(std::move(prefix.plan));
-		prefix.plan = std::move(w3);
+		raise = DirectRaiseUnless(calc, calc.Out(verdict), DirectInfeasibleErrorPredicate(optimizer, errors));
 	}
-	D_ASSERT(columns.valid.table_index == DConstants::INVALID_INDEX || columns.size || feasible);
+	prefix.plan->ResolveOperatorTypes();
+	auto &hold = prefix.hold;
+	hold.rows = make_uniq<DirectHeldRows>(binder, "direct_group", prefix.plan->GetColumnBindings(), prefix.plan->types);
+	hold.checks = hold.rows->Add(OwedChecks(columns, std::move(raise)));
+	hold.reference = hold.rows->Read();
+	hold.definition = std::move(prefix.plan);
+	prefix.plan = std::move(hold.reference.plan);
 }
 
-DirectSubstitute DirectRankedPrefix::Answer(Stage prefix, const ExprPtr &feasible) {
+DirectSubstitute DirectRankedPrefix::Answer(Stage prefix) {
 	// A: the source columns, x and the column of the checks, which keeps them live (`validated_columns`). DuckDB keeps
 	// a window whose columns no parent reads, so the rank window holds every row before one leaves.
 	auto &columns = prefix.columns;
@@ -241,20 +267,12 @@ DirectSubstitute DirectRankedPrefix::Answer(Stage prefix, const ExprPtr &feasibl
 		                 calc.If(Column(LogicalType::BOOLEAN, columns.fixed_zero), calc.Bool(false), chosen));
 	}
 	out.Add(calc.Out(calc.If(chosen, calc.Constant(Value::INTEGER(1)), calc.Constant(Value::INTEGER(0)))));
-	vector<unique_ptr<Expression>> checks;
-	if (columns.row_valid.table_index != DConstants::INVALID_INDEX) {
-		checks.push_back(calc.Out(Column(LogicalType::BOOLEAN, columns.row_valid)));
-	}
-	if (columns.valid.table_index != DConstants::INVALID_INDEX) {
-		checks.push_back(calc.Out(Column(LogicalType::BOOLEAN, columns.valid)));
-	}
-	if (feasible) {
-		checks.push_back(
-		    DirectRaiseUnless(calc, calc.Out(feasible), DirectInfeasibleErrorPredicate(optimizer, errors)));
-	}
-	bool owes_checks = !checks.empty();
+	// The held rows have raised every check already, so A reads the column that holds them.
+	auto &hold = prefix.hold;
+	auto checks = hold.rows ? calc.Out(Column(LogicalType::BOOLEAN, hold.checks)) : OwedChecks(columns, nullptr);
+	bool owes_checks = checks != nullptr;
 	if (owes_checks) {
-		out.Add(DirectAllHold(calc, std::move(checks)));
+		out.Add(std::move(checks));
 	}
 
 	DirectSubstitute substitute;
@@ -266,6 +284,11 @@ DirectSubstitute DirectRankedPrefix::Answer(Stage prefix, const ExprPtr &feasibl
 		substitute.validated_columns.push_back(source_bindings.size() + 1);
 	}
 	substitute.child = out.Finish(std::move(prefix.plan));
+	if (hold.rows) {
+		// A reads the definition's columns and the hold's, which the reference has under bindings of its own.
+		hold.reference.replacer.VisitOperator(*substitute.child);
+		substitute.child = hold.rows->Close(std::move(hold.definition), std::move(substitute.child));
+	}
 	return substitute;
 }
 
@@ -273,9 +296,8 @@ DirectSubstitute DirectRankedPrefix::Build(unique_ptr<LogicalOperator> rows) {
 	auto ranked = ProjectRows(std::move(rows));
 	RankRows(ranked);
 	auto prefix = ProjectPrefix(std::move(ranked));
-	ExprPtr feasible;
-	CloseGroups(prefix, feasible);
-	return Answer(std::move(prefix), feasible);
+	CloseGroups(prefix);
+	return Answer(std::move(prefix));
 }
 
 } // namespace duckdb
