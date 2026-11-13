@@ -6,10 +6,5 @@ this file when it is empty.
 Read first: direct_solve/rules/n1_euclidean_ball/definition.md, direct_solve/rules/n1_euclidean_ball/done.md,
 direct_solve/architecture/rules.md. Checks: direct_solve/framework/todo.md § How to work any task.
 
-## 1. Recognition, plan and tests (one lane; N1-8 and N1-9 one commit)
-- [ ] N1-8 Recognition: a row-valued slope inside the square — direct_solve/rules/n1_euclidean_ball/todo.md § N1-8
-- [ ] N1-9 Plan: the factor per row in N1's two reads — direct_solve/rules/n1_euclidean_ball/todo.md § N1-9
-- [ ] N1-10 Standard suites and numeric boundaries for the weighted form — direct_solve/rules/n1_euclidean_ball/todo.md § N1-10 (needs: N1-9)
-
-## 2. Measurement (one lane) (needs: 1)
-- [ ] N1-11 Measure the weighted form against the hand plan and Gurobi — direct_solve/rules/n1_euclidean_ball/todo.md § N1-11 (needs: N1-9)
+## 1. Measurement (one lane)
+- [ ] N1-11 Measure the weighted form against the hand plan and Gurobi — direct_solve/rules/n1_euclidean_ball/todo.md § N1-11

@@ -1,17 +1,20 @@
 # N1 (Euclidean ball) — what works today
 
-Verified on 2026-11-08 at `73b52ab1d1`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
-serializer, highs) 7,020 passed; C++ `build/release/test/unittest "[decidb]"` 4,635 assertions in 85 cases. Code:
+Verified on 2026-11-13 at `855e01cf98`: `test/decide/run_direct_matrix.sh` at `116972c7a9`, each of its four suites (auto,
+off, serializer, highs) 7,141 passed; C++ `build/release/test/unittest "[decidb]"` 9,649 assertions in 105 cases; the
+tests that reach N1 again at `855e01cf98`, which changes only how the plan computes a row's share. Code:
 `src/optimizer/decide/direct/n1_euclidean_ball_rule.cpp`. Class definition: [definition.md](definition.md).
 
 ## What it admits
 
 One row-scoped `REAL` decision, with:
 
-- **One limit.** One aggregate clause `SUM(q * x^2) <= B`, whose factor `q` folds to one positive constant. `POWER(x, 2)`,
-  `x ** 2`, `x * x`, `norm(x, 2)`, `SUM(2 * POWER(x, 2))` and `SUM(POWER(2 * x, 2))` all read this way, with no case list:
-  a square term whose inner expression is one linear term on the decision, with no constant. The ball is
-  `SUM(x^2) <= B / q`.
+- **One limit.** One aggregate clause `SUM(c * (s * x)^2) <= B`, read as the canonical square (`DirectWeightedForm`):
+  the coefficient `c` folds to one positive constant, and the slope `s` inside the square is a constant or a value of the
+  row. Each row's factor is `q = c * s^2`, never negative by form. `POWER(x, 2)`, `x ** 2`, `x * x`, `norm(x, 2)`,
+  `SUM(2 * POWER(x, 2))`, `SUM(POWER(2 * x, 2))`, `SUM(POWER(SQRT(w) * x, 2))` and `SUM(POWER(w * x, 2))` all read this
+  way, with no case list: a square term whose inner expression is one linear term on the decision, with no constant. A
+  constant slope gives a finite `q > 0`. A slope from the data is read and checked on the rows the clause keeps.
 - **Scope.** The clause's `when`, the sum's own `when`, a `by` key and a `per K:`, through `DirectProveSharedScope`. A row
   is in a ball when the scope keeps it and its key has no NULL in an element that does not group NULLs.
 - **The limit's value.** A constant of magnitude below 1e20, or a value of the source row
@@ -26,23 +29,27 @@ One row-scoped `REAL` decision, with:
   most one square `k * (w * x + t)^2` with a constant `w` and a row-valued `t`, convex in the minimization: `k` is
   positive once the part's sign and factor are applied. A square under a `when`, or under the NULL guard of a nullable
   `t`, leaves some rows without it, so every linear term must be in its part: K is then one constant on every row with
-  a linear term.
+  a linear term. With a slope that differs between rows the objective has no square: the limit is then an ellipsoid,
+  whose nearest point to a target is not a scaling of the target.
 
 **The answer.** Each row orients as minimize `K*x^2 + b*x`. Let the row's value be `y = -b / (2*K)` with a square and
-`d = -b` without one, after `GREATEST(., 0)` in `[0, inf)`, let `h` be the sum of the squared values over the ball, and
-let `r = SQRT(B) / SQRT(q)` be its radius.
+`d = -b` without one, after `GREATEST(., 0)` in `[0, inf)`. The row's point `p` is its answer before scaling: `y` with a
+square, `d / q` without one (a direction becomes a point through its row's factor, the substitution `z = SQRT(q) * x`
+of the [definition](definition.md)). Let `h` be the sum over the ball of the limit's own term at the point, `q * p^2`,
+and `r = SQRT(B)` the radius.
 
 | Row | Answer |
 |---|---|
-| Linear objective | 0 when `h` = 0, otherwise `(d / SQRT(h)) * r` |
-| A square | `y` when `SQRT(h) <= r`, otherwise `(y / SQRT(h)) * r` |
+| Linear objective | 0 when `h` = 0, otherwise `(p / SQRT(h)) * r` |
+| A square | `y` when `SQRT(h) <= r`, otherwise `(p / SQRT(h)) * r` |
 | No objective | 0 |
 | Outside every ball, with a square | `y` |
-| Outside every ball, without one | 0 when `d` = 0, otherwise unbounded |
+| Outside every ball, or with `q` 0 or NULL (a weight of 0 or NULL), without a square | 0 when `d` = 0, otherwise unbounded |
 
 `B < 0` on a row in a ball is infeasible. A NULL coefficient reads as 0 on that row. It raises an error wherever the
-solver does: NaN or infinite coefficients and NaN limits on a row that reads them, and any expression that raises on a
-row that computes it. Nothing is computed on a row a `when` drops. Every input row is read before one is released, so a
+solver does: NaN or infinite coefficients, slopes and NaN limits on a row that reads them, a factor `q` past a DOUBLE
+(with the solver's message, naming the limit's clause), and any expression that raises on a row that computes it, such as
+`SQRT(w)` of a negative weight. Nothing is computed on a row a `when` drops. Every input row is read before one is released, so a
 late bad row raises under `LIMIT 1`, `COUNT(*)` or a filter; only `LIMIT 0` skips it. An empty source returns no rows,
 whatever the limit says.
 
@@ -58,7 +65,8 @@ A query N1 does not apply to keeps its answer: it runs on the solver, and `requi
 | Shape | Why |
 |---|---|
 | Any other bound, even one that does not bind (`x <= 2`, `x <= 50`, `x >= -2`, `x >= 1`, `when f: x >= 0`) | The answer is then the projection onto a clipped ball, which a single scale does not give. |
-| A row-valued factor (`SUM(POWER(w * x, 2))`, `SUM(w * POWER(x, 2))`) | The factor differs between rows, so the limit is not one ball. |
+| A coefficient from the data (`SUM(w * POWER(x, 2))`, `SUM(w * x * x)`) | A negative `w` makes the limit not convex. A weight from the data goes inside the square: `SUM(POWER(SQRT(w) * x, 2))`. |
+| A slope from the data in the limit with a square in the objective | The nearest point of an ellipsoid is not a scaling of the target. |
 | A ball off center (`SUM(POWER(x - 1, 2)) <= 9`), a constant or a linear term in the limit | Not a ball around zero. |
 | `=`, `>=`, `BETWEEN`, two limit clauses, `2 * SUM(...)`, `-SUM(...) >= -25`, `AVG(...)` | Not one plain `<=`. |
 | A per-row `POWER(x, 2) <= 9` | Not a sum. |
@@ -92,9 +100,13 @@ A query N1 does not apply to keeps its answer: it runs on the solver, and `requi
   stops with "Gurobi could not solve this model (numerical trouble)".
 - **A target from about 1e30.** Gurobi stops with numerical trouble. N1 answers up to the range of the squares, then
   raises the too-large error above.
-- **A subnormal factor under a huge limit.** A constant `q` below the normal range of a DOUBLE with a limit near the top
-  of one gives a radius past a DOUBLE, and the answer reads `inf` or NaN, as DuckDB's own arithmetic does. Every
-  realistic factor keeps the radius in range.
+- **The limit's term past a DOUBLE.** A row's share of `h` is the limit's own term at the row's point, `q * p^2`, so it
+  passes a DOUBLE where the user's clause evaluated at that point would, and N1 raises the too-large error. A factor of
+  1e-310 under a score of 3 gives a point `3 / q` past a DOUBLE; the solver answers unbounded. A factor of 1e200 with
+  targets of 3e60 and 4e60 (`MINIMIZE SUM(POWER(x - s, 2))`) gives a share past a DOUBLE; the solver answers 0.
+- **Weights from 1e-150 to 1e150.** N1 gives the unit problem's answer, scaled by `z = SQRT(q) * x`. The solver agrees to
+  1e-3 for `SQRT(w) * x` with weights from 1e-3 to 1e3 and `w * x` from 1e-3 to 1. Past that `w * x` at 1e3 warns and is
+  0.3% off, and below 1e-10 and above 1e50 the solver answers unbounded or 0.
 - **Ties.** With every direction 0, any point in the ball is optimal: N1 returns 0. So does no objective.
 
 ## How it works
@@ -110,11 +122,13 @@ The first read:
 2. The scope projection: the row's eligibility and its class key (`DirectProjectScope`; the framework's [class
    key](../../framework/done.md)). A row in no ball has a NULL in each column of the key compared with `=`, and no flag
    column stands in the key.
-3. `P1`, raw values: every coefficient, constant and limit, each on the rows that read it (`DirectOnKeptRows`).
-4. `P2`: K and b of the row, oriented as a minimum, and the check on every raw value.
+3. `P1`, raw values: every coefficient, constant and limit, and the slope of the limit's square, each on the rows that
+   read it (`DirectOnKeptRows`).
+4. `P2`: K and b of the row, oriented as a minimum, the row's factor `q = c * s^2`, and the check on every raw value.
 5. `[W1]`, for a limit from the data: the tightest limit of the group.
-6. `P3`: the target or direction in the domain, whether the row is in a ball, and the ball's limit.
-7. `P4`: the row's squared length, masked to NULL outside a ball, and the checks: the target and its square past a DOUBLE,
+6. `P3`: the target or direction in the domain and the row's point `p`, whether the row is in a ball and whether its
+   term is in the ball's sum (`q > 0`), the ball's limit, and the check of `q` past a DOUBLE.
+7. `P4`: the row's share `(q * p) * p`, masked to NULL outside the ball's sum, and the checks: the target and its square past a DOUBLE,
    infeasible, unbounded, and with a square the target's precision warning.
 8. `H`: a hash aggregate on the group key (`DirectHashAggregate`), one row per group: `h`, the sum of the squared
    lengths; whether every row's checks held (`bool_and`); and the group's limit, for a limit from the data.
@@ -125,7 +139,7 @@ The first read:
    the checks of the rows come first and `h` past a DOUBLE next (`DirectRaiseTooLarge`), so `h`'s own error is raised
    only for a group whose rows passed.
 
-The second read takes `[W0]`, the scope, `P1` and `P2` again and the row's value in the domain, joins the group's row
+The second read takes `[W0]`, the scope, `P1` and `P2` again and the row's value and point, joins the group's row
 from `C` on the class key (a SINGLE join, each column compared by what a NULL means in it, so a row in no ball matches
 no group), and ends in `P5`: the source columns, the answer, and the validation column that keeps the verdict and the
 warning live. `P5` reads the length, the two flags and the limit from the group's row and computes no `sqrt`,
@@ -148,9 +162,10 @@ column the parent reads and the rule does not use.
 
 This departs from the standard construction in two ways. A limit read from the data adds `W1`, so that an all-NULL group's
 checks can stand below `H`, where the aggregate would have to read its own output. The answer is
-`(value / SQRT(h)) * (SQRT(B) / SQRT(q))` and not `SQRT(B / (q * h)) * value`: the first factor is at most 1 and the
-radius stays in range where `B / q` or `B / h` passes a DOUBLE (a limit of 1e300 over a factor of 1e-10, or a subnormal
-`h`). The unbounded check reads the user's `B`, so a finite `B` over a small `q` is a ball. The radius is taken in `P5`
+`(p / SQRT(h)) * SQRT(B)` and not `SQRT(B / h) * p`: the radius stays in range where `B / h` passes a DOUBLE (a subnormal
+`h`). One form serves a constant factor and one per row: `q` is in each row's point and share, not in the radius. The
+share is `(q * p) * p`, so `q * p` (about `d` for a direction) is computed first. The unbounded check reads the user's
+`B`. The radius is taken in `P5`
 only, where every row with `B < 0` has raised. A square's target is `(-0.5 * b) / K`, which stays finite where `2 * K`
 does not.
 
@@ -158,11 +173,11 @@ does not.
 
 | Check | What it covers |
 |---|---|
-| `test_direct_n1_euclidean_ball.py` (143 tests) | The answers. 83 cases run on the independent oracle (`oracle_solver`, through `add_quadratic_constraint`, built from the raw rows and the groups, limits and coefficients each case states in Python), on the solver path (`off`) and on the direct path (`require`): mixed, nonpositive and zero scores, `B` = 0 and `B` < 0, both domains, projection inside and outside the ball, every limit and objective spelling, `by`, `per K:`, `when`, NULL keys, NULL targets, column limits. 4 parent-query contexts. 9 empty-source cases. 13 error cases that must fail on both paths in one class. The boundary table against the solver alone: scores from 1e-200 to 1e154, limits to 1e25, infinite limits. Past the scales the solver answers (a limit of 1e300 over a factor of 1e-10, a subnormal `h`, a square factor of 1e308), the oracle solves the same scores at scale 1 and the direct answer, scaled back, must match it. The warning: `h` in and below the normal range, zero scores, a target in and out of the ball, a row outside every ball, once for many rows, again for each query. A group whose `h` is past a DOUBLE raises under `LIMIT 1` and `COUNT(*)` though no streamed row is in it (5,000 rows, a `LIMIT 1` met by the first vector). Without Gurobi, in a subprocess with an invalid license. |
-| `test_direct_rule_conformance.py` | The checks every rule owes, with N1's fixture: schema and rows, all-rows read for 5 kinds of late bad row, serializer, prepared plans, `EXPLAIN` and profiling, `off`, a forced backend (Gurobi, since HiGHS has no quadratic limit), `DIAGNOSE`, 7 near misses that must decline under `require` and answer under `auto` as under `off`, and 4 forms that apply |
-| `test_direct_user_facing.py` | Every infeasible, unbounded, NaN and infinity error compared in full with the solver's, on 9 shapes; the too-large text |
-| `test_direct_source_values.py` | Each place N1 reads a value a `when` drops, with infinite, NaN and NULL values and with an expression that raises |
-| C++ `[decidb]` | N1's applicability condition: 28 forms that apply, and a case for each decline branch; no two rules apply to one N1, S1, A1 or R1 shape |
+| `test_direct_n1_euclidean_ball.py` (226 tests) | The answers. 108 cases run on the independent oracle (`oracle_solver`, through `add_quadratic_constraint`, built from the raw rows and the groups, limits and coefficients each case states in Python), on the solver path (`off`) and on the direct path (`require`): mixed, nonpositive and zero scores, `B` = 0 and `B` < 0, both domains, projection inside and outside the ball, every limit and objective spelling, `by`, `per K:`, `when`, NULL keys, NULL targets, column limits; a weight inside the square in both spellings, with unequal weights, weights of 0 and NULL, and a constant factor other than 1 beside a square. 5 parent-query contexts. 9 empty-source cases. 17 error cases that must fail on both paths in one class. The boundary table against the solver alone: scores from 1e-200 to 1e154, limits to 1e25, infinite limits, each again under a factor of 2; weights the solver answers. Weights from 1e-150 to 1e150 against the oracle's unit problem, scaled by `z = SQRT(q) * x`. A factor or a share past a DOUBLE. Past the scales the solver answers (a limit of 1e300 over a factor of 1e-10, a subnormal `h`, a square factor of 1e308), the oracle solves the same scores at scale 1 and the direct answer, scaled back, must match it. The warning: `h` in and below the normal range, zero scores, a target in and out of the ball, a row outside every ball, once for many rows, again for each query. A group whose `h` is past a DOUBLE raises under `LIMIT 1` and `COUNT(*)` though no streamed row is in it (5,000 rows, a `LIMIT 1` met by the first vector). Without Gurobi, in a subprocess with an invalid license. |
+| `test_direct_rule_conformance.py` | The checks every rule owes, with N1's fixture: schema and rows, all-rows read for 5 kinds of late bad row, serializer, prepared plans, `EXPLAIN` and profiling, `off`, a forced backend (Gurobi, since HiGHS has no quadratic limit), `DIAGNOSE`, 8 near misses that must decline under `require` and answer under `auto` as under `off` (among them a coefficient from the data and a weight beside a square objective), and 7 forms that apply (among them both weighted spellings) |
+| `test_direct_user_facing.py` | Every infeasible, unbounded, NaN and infinity error compared in full with the solver's, on 9 shapes, a weighted one among them; the too-large text |
+| `test_direct_source_values.py` | Each place N1 reads a value a `when` drops, with infinite, NaN and NULL values and with an expression that raises, the weight inside the square among them |
+| C++ `[decidb]` | N1's applicability condition: 36 forms that apply, and a case for each decline branch; no two rules apply to one N1, S1, A1 or R1 shape |
 
 Branch coverage at `73b52ab1d1` (`make decide-coverage`): the tests reach 161 of the rule's 164 arms. The three left are
 a limit input with no argument (`COUNT(*)`, two arms) and a square on some rows beside a part with no linear term
