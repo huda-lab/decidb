@@ -190,20 +190,30 @@ cases and stated in the test file. They are that file's own.
 
 ## Performance
 
-Measured on 2026-11-09 at `0ab6224c60`, on an 11-core Apple M3 Pro at a load of about 3.
+Measured on an 11-core Apple M3 Pro: the hand-plan comparison on 2026-11-13 at `035a0a2787` at a load of about 3.7, the
+sweeps against Gurobi on 2026-11-09 at `0ab6224c60` (`n1`, `n1_groups`) and on 2026-11-13 at `035a0a2787` (the weighted
+queries).
 
-**Against a hand-written plan.** `benchmark/decide/direct_solve/run.py --compare --sf 1 --queries n1 n1_groups` runs the
+**Against a hand-written plan.** `benchmark/decide/direct_solve/run.py --compare --sf 1 --queries n1 n1_groups
+n1_weighted n1_weighted_groups` runs the
 direct plan beside a query written by hand for the same answer (`hand/<query>.sql`), with the same checks and the same
 DOUBLE arithmetic, in one process, best of 5, over the 800,000 rows of `partsupp`. CPU is every operator's time summed;
 latency is on all threads; the planning DECIDE adds is apart. Both sides gave the same answer.
 
 | Query | Direct CPU | Hand CPU | CPU ratio | Direct latency | Hand latency | DECIDE planning |
 |---|---:|---:|---:|---:|---:|---:|
-| `n1` | 34.2 ms | 27.5 ms | 1.25 | 7.6 ms | 5.9 ms | 0.24 ms |
-| `n1_groups` | 49.9 ms | 41.9 ms | 1.19 | 11.0 ms | 9.3 ms | 0.26 ms |
+| `n1` | 44.7 ms | 29.2 ms | 1.53 | 9.9 ms | 6.3 ms | 0.30 ms |
+| `n1_groups` | 61.5 ms | 43.1 ms | 1.43 | 13.3 ms | 9.4 ms | 0.30 ms |
+| `n1_weighted` | 69.6 ms | 49.9 ms | 1.39 | 14.3 ms | 10.6 ms | 0.36 ms |
+| `n1_weighted_groups` | 85.5 ms | 62.7 ms | 1.36 | 18.0 ms | 13.5 ms | 0.38 ms |
 
-The hand plans carry the rule's checks; the 19 to 25% more CPU is the rule's general plan against one written for the
-query.
+The hand plans carry the rule's checks. The weighted queries weight each offer's square by its stock,
+`SUM(POWER(SQRT(ps_availqty) * ship, 2))`, with `ps_availqty` from 1 to 9,999. The 36 to 53% more CPU is the rule's
+general plan against one written for the query. Most of it on `n1` and `n1_groups` is the factor `q`: the plan carries
+it as a column and computes the slope, `q`, its check, `p = d / q` and `(q * p) * p` on every row of both reads, where
+`q` is the constant 1. With `q` in the radius instead, `n1` measures 35.3 ms against the same hand plan's 29.3 (1.21)
+and `n1_groups` 1.16. The plan's expressions are built after DuckDB's constant folding runs, so nothing folds them
+([todo.md](todo.md) § N1-12).
 
 **Against Gurobi.** `run.py --sf 0.125 0.25 0.5 1 --queries n1 n1_groups`: a fresh `decidb` process per run, median of
 3, load 3 to 6. At every size Gurobi's objective agreed with direct solve's within 1e-6. A speedup divides Gurobi's
@@ -221,5 +231,19 @@ of the direct time at these sizes.
 | `n1_groups` | 400,000 | 0.033 s | 0.042 s | 48 MiB | 1.774 s | 419 MiB | 54.4x |
 | `n1_groups` | 800,000 | 0.035 s | 0.059 s | 54 MiB | 3.339 s | 803 MiB | 94.1x |
 
-Direct time stays near the process's start-up cost up to 800,000 rows, 14 to 102 times Gurobi's speed, in a fifteenth to
+| Query | Rows | Direct | Direct peak | Gurobi | Gurobi peak | Speedup |
+|---|---:|---:|---:|---:|---:|---:|
+| `n1_weighted` | 100,000 | 0.034 s | 34 MiB | 0.581 s | 115 MiB | 17.2x |
+| `n1_weighted` | 200,000 | 0.036 s | 36 MiB | 0.957 s | 206 MiB | 26.5x |
+| `n1_weighted` | 400,000 | 0.037 s | 40 MiB | 1.890 s | 371 MiB | 51.3x |
+| `n1_weighted` | 800,000 | 0.041 s | 47 MiB | 3.788 s | 736 MiB | 91.8x |
+| `n1_weighted_groups` | 100,000 | 0.035 s | 35 MiB | 1.012 s | 123 MiB | 28.9x |
+| `n1_weighted_groups` | 200,000 | 0.036 s | 38 MiB | 1.786 s | 215 MiB | 50.0x |
+| `n1_weighted_groups` | 400,000 | 0.039 s | 51 MiB | 3.906 s | 423 MiB | 98.9x |
+| `n1_weighted_groups` | 800,000 | 0.046 s | 63 MiB | 8.037 s | 812 MiB | 176x |
+
+The weighted rows: `run.py --sf 0.125 0.25 0.5 1 --queries n1_weighted n1_weighted_groups --modes direct gurobi`, median
+of 3, load 4.2 at the start; Gurobi's objective agreed with direct solve's within 1e-6 at every size.
+
+Direct time stays near the process's start-up cost up to 800,000 rows, 14 to 176 times Gurobi's speed, in a twelfth to
 an eighteenth of its peak memory at 800,000 rows. Direct solve also answers where no Gurobi licence is present.
