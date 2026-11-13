@@ -212,8 +212,8 @@ The hand plans carry the rule's checks. The weighted queries weight each offer's
 general plan against one written for the query. Most of it on `n1` and `n1_groups` is the factor `q`: the plan carries
 it as a column and computes the slope, `q`, its check, `p = d / q` and `(q * p) * p` on every row of both reads, where
 `q` is the constant 1. With `q` in the radius instead, `n1` measures 35.3 ms against the same hand plan's 29.3 (1.21)
-and `n1_groups` 1.16. The plan's expressions are built after DuckDB's constant folding runs, so nothing folds them
-([todo.md](todo.md) § N1-12).
+and `n1_groups` 1.16. DuckDB's rewriter, which the driver runs over the plan, folds constants within one expression, and a
+constant carried as a column reaches the next projection as a column reference ([todo.md](todo.md) § N1-12).
 
 **Against Gurobi.** `run.py --sf 0.125 0.25 0.5 1 --queries n1 n1_groups`: a fresh `decidb` process per run, median of
 3, load 3 to 6. At every size Gurobi's objective agreed with direct solve's within 1e-6. A speedup divides Gurobi's

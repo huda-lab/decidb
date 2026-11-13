@@ -6,5 +6,5 @@ this file when it is empty.
 Read first: direct_solve/rules/n1_euclidean_ball/definition.md, direct_solve/rules/n1_euclidean_ball/done.md,
 direct_solve/architecture/rules.md. Checks: direct_solve/framework/todo.md § How to work any task.
 
-## 1. Owner decision, then one lane
+## 1. One lane
 - [ ] N1-12 A constant factor costs per-row work — direct_solve/rules/n1_euclidean_ball/todo.md § N1-12

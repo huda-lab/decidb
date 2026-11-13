@@ -9,14 +9,15 @@ support function: its plan has N1's operator tree (owner, 2026-11-13).
 
 ## N1-12 — A constant factor costs per-row work
 
-- **Problem.** The plan carries the factor `q` as a column on every row (`ComputeCoefficients`), so a constant `q`
-  (every query with no weight) still computes the slope, `q`, its check, `q > 0`, `p = d / q` and `(q * p) * p` per row
-  in both reads. `n1` at SF 1 takes 44.7 ms CPU against 35.3 ms with `q` in the radius (`done.md` § Performance). The
-  plan's expressions are built in the DECIDE optimizer, after DuckDB's `ExpressionRewriter` (constant folding, CASE
-  simplification) has run, and `ExpressionBuilder` folds nothing.
-- **Decision needed.** Where constants fold, with the plan kept in one form. (a) `ExpressionBuilder` folds an operation
-  whose operands are all constants, as LLVM's IRBuilder does, and the plan takes a constant slope as a literal leaf
-  instead of a column. (b) The rule runs DuckDB's `ExpressionRewriter` over the projections it builds, with the
-  constant slope as a literal leaf. Either way the leaf is the one choice: a constant is not a row value.
+- **Problem.** The plan carries the factor `q` as a column on every row (`LayoutRawValues`, `ComputeCoefficients`), so a
+  constant `q` (every query with no weight) still computes the slope, `q`, its check, `q > 0`, `p = d / q` and
+  `(q * p) * p` per row in both reads. `n1` at SF 1 takes 44.7 ms CPU against 35.3 ms with `q` in the radius (`done.md`
+  § Performance). The driver runs DuckDB's `ExpressionRewriter` (constant folding, arithmetic and CASE simplification)
+  over the rule's plan (`direct_rule_driver.cpp`), but it folds within one expression: a constant laid out as a column is
+  a column reference to every projection above it.
+- **Ruling (owner, 2026-11-13).** Constants fold in DuckDB's rewriter, which the driver already runs; no folding code of
+  the rule's own. The plan stays one form: a slope that folds to a constant is a literal leaf, not a column, and every
+  expression over `q` is built the same way from that leaf or from the column.
 - **Done when.** `n1` and `n1_groups` measure within noise of the plan with `q` in the radius
-  (`run.py --compare --sf 1 --queries n1 n1_groups`); `./test/decide/run_tests.sh -n 2 -k "direct_n1"`.
+  (`python3 benchmark/decide/direct_solve/run.py --compare --sf 1 --queries n1 n1_groups`);
+  `./test/decide/run_tests.sh -n 2 -k "direct_n1"`; `build/release/test/unittest "N1 applies to the forms of its class"`.
