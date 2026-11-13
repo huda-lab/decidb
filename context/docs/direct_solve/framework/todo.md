@@ -48,50 +48,11 @@ solver path answers those queries, so none of them is wrong, only slower.
   count `SUM(x) op B/c` (FRM-20). The solver path answers it correctly, a user who means a count writes `SUM(x)`, and
   the rules' checks for 1 or -1 are a fixed list (the sign). Dividing by c brings a rounding edge (`SUM(0.1*x) <= 0.3`
   gives 2.9999999999999996) that needs a decline of its own; in the shared canonicalizer the division also moves the
-  solver's rows, tolerance and diagnostics. **Ruling (owner, 2026-11-12).**
-
-## FRM-23 — Constants a rule lays out as columns fold through the plan
-
-- **Problem.** A rule builds its plan from projection stages, so a constant it lays out as a column (N1's `q` of a
-  constant slope, a `true` flag such as `in_ball` with no `when`, A1's floor) reaches every projection above it as a
-  column reference. The driver runs DuckDB's `ExpressionRewriter` over the installed plan (`direct_rule_driver.cpp`),
-  which folds within one expression only. Statistics propagation substitutes a projection's constant columns later
-  (`SubstituteConstantColumns`), but folds a node only when all its children are constants, so `x / 1.0`, `x * 1` and
-  `CASE WHEN true` stay, and it runs after unused columns are removed. N1 worked around it on its own: `Factor()` and
-  `Condition::constant_factor` in `n1_euclidean_ball_rule.cpp` build a literal `q` and four `constant_slope` guards skip
-  the columns (`n1` at SF 1: 44.7 ms CPU with `q` a column, 35.3 ms with the literal).
-- **Ruling (owner, 2026-11-13).** Design (A), reviewed by `decidb-architect`: one bottom-up pass over the rule's
-  installed subtree, `DirectConstantPropagation` (a `LogicalOperatorVisitor` in `src/optimizer/decide/direct/`), in
-  place of the driver's rewriter call. At each operator, children first: substitute every column reference that reads
-  a known constant column and is not the whole expression; apply the optimizer's own rewriter to the operator; then a
-  projection records its constant columns (a constant, or a whole-expression reference to a known one), and a join that
-  pads a side with NULL (SINGLE, LEFT, RIGHT, FULL; DuckDB's precedent in `propagate_join.cpp`) forgets that side's.
-  Every other operator passes bindings through. This is constant propagation with peephole simplification in one pass
-  (SCCP then InstSimplify); a tree's bottom-up order reaches the fixpoint. Calls: `ExpressionRewriter::VisitOperator`
-  splits into `VisitOperatorChildren` and a public `RewriteOperator` (no behavior change); the statistics propagator's
-  constant-column record and the new pass share one helper; statistics propagation keeps its constant columns (they
-  fold constants only statistics find). A constant slope under a `when` is masked to NULL on dropped rows and does not
-  fold: accepted, and measured.
-- **Change.** Add the pass and its unit tests; delete N1's `Factor()`, `constant_factor`, the `constant_slope` guards in
-  the plan and the `in_sum` ternary (N1 lays out `q` the same way in every case; `constant_slope` stays where
-  `ProveLimitClause` declines a non-positive or non-finite factor); delete A1's
-  `lowering_whens.empty() ? floor : Col(p2.Add(floor))` special case (`a1_separable_box_rule.cpp`).
-- **Done when.** A `[decidb]` C++ test on a hand-built plan with a case for each decision point of the pass (a
-  projection records; a constant passes a filter and a window; the padded side of a SINGLE and a LEFT join is
-  forgotten; a whole-expression reference stays a column), each failing if its branch is removed; a raising check that
-  folds to `error()` raises nothing over an empty source and the same message over one row;
-  `build/release/test/unittest "[decidb]"`; `./test/decide/run_tests.sh -n 2 -k "direct"`;
-  `python3 benchmark/decide/direct_solve/run.py --compare --sf 1 --queries n1 n1_groups n1_weighted
-  n1_weighted_groups a1 a2` within noise of the figures in each class's `done.md`, and one `n1` variant with a `when`
-  measured and reported.
-
-## FRM-24 — Every rule carries `eligible`, true when unscoped
-
-- **Problem.** `DirectCarried` carries the eligible flag only for a scoped rule, so N1 (10 places) and R1 (7) write
-  `condition.scope.Scoped() ? Boolean(carried.eligible) : calc.Bool(true)`. With FRM-23 a `true` column folds, so the
-  flag can always be carried and the ternaries go.
-- **Change.** `DirectProjectScope` and `DirectProjectionStage::Forward` always lay out `eligible` (`true` when
-  unscoped); delete the ternaries in every rule.
-- **Needs.** FRM-23.
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "direct_n1 or direct_r1"`; the `--compare` figures of `n1` and
-  `r1` within noise.
+  solver's rows, tolerance and diagnostics. **Ruling (owner, 2026-11-12).** Not done either: a pass after the rules that propagates
+  the constants a rule lays out as columns and simplifies the expressions over them (FRM-23, built and measured). Every
+  figure stayed within noise (`n1` 1.22 against 1.21, `a1` 1.12 against 1.08, `a2` 1.15 against 1.14), and it cannot
+  replace a literal the rule builds with: a scoped rule (a `when`, a `by` key or a `per`) masks each raw value to NULL
+  on the rows outside a ball (`DirectOnKeptRows`), so a constant becomes a CASE over a column that no pass folds;
+  `n1_groups` went from 1.14 to 1.38 with N1's literal `q` deleted. A constant that decides the plan's shape, such as
+  whether a value needs a mask or a check (N1's `q`, A1's floor), is a literal the rule builds with. **Ruling (owner,
+  2026-11-13).**

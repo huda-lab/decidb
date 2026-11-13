@@ -127,7 +127,9 @@ The first read:
 4. `P2`: K and b of the row, oriented as a minimum, the row's factor `q = c * s^2`, and the check on every raw value. A
    slope that folds to a constant lays out no slope or `q` column: `q` is a literal in every expression that reads it
    (`Factor`), and DuckDB's rewriter, which the driver runs over the plan, folds those expressions. A constant laid out
-   as a column would reach the next projection as a column reference, which the rewriter cannot fold.
+   as a column would reach the next projection as a column reference, which the rewriter cannot fold, and with a
+   `when`, a `by` key or a `per` the plan masks each raw value to NULL on the rows outside a ball, a CASE over a column
+   that no later pass folds. A constant slope cannot raise, so it needs neither the mask nor the check.
 5. `[W1]`, for a limit from the data: the tightest limit of the group.
 6. `P3`: the target or direction in the domain and the row's point `p`, whether the row is in a ball and whether its
    term is in the ball's sum (`q > 0`), the ball's limit, and the check of `q` past a DOUBLE.
