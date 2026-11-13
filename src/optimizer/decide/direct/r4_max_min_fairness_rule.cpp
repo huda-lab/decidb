@@ -8,6 +8,7 @@
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/operator/logical_aggregate.hpp"
+#include "duckdb/planner/operator/logical_window.hpp"
 
 namespace duckdb {
 
@@ -18,22 +19,24 @@ namespace direct_r4_max_min_fairness {
 constexpr const char *RULE_NAME = "R4_MAX_MIN_FAIRNESS";
 
 //! What CheckCondition proved: one row-scoped REAL decision `x` in the box [0, cap], where the capacity is a constant,
-//! a value of the row or absent; one budget `SUM(w*x) <= B` with a weight `w` of any sign and a constant `B`; and an
-//! objective `MAXIMIZE MIN(c*x)` over one term whose coefficient `c` is a value of the row. The objective is the
-//! canonical form of `MAXIMIZE MIN(x / demand)`: `c = 1 / demand`.
+//! a value of the row or absent; one budget `SUM(w*x) <= B` with a weight `w` of any sign, and a limit `B` that is a
+//! constant or read from the data, over the groups of a `by` key and the rows of a `when`; and an objective
+//! `MAXIMIZE MIN(c*x)` over one term whose coefficient `c` is a value of the row. The objective is the canonical form
+//! of `MAXIMIZE MIN(x / demand)`: `c = 1 / demand`.
 struct Condition final : DirectApplicabilityCondition {
 	//! The box's upper end before any per-row bound, and the per-row clauses the plan evaluates: each an upper end.
 	double upper = POSITIVE_INFINITY;
 	vector<DirectBoundClause> clauses;
 	//! The MIN's one term `c*x`, and the rows it reads (`kept`).
 	DirectQuadraticPart objective;
-	//! The budget `SUM(w*x) <= B`: the limit `B`, and the weight of a row. A weight that folds to a constant is the
-	//! literal `weight`, which the plan builds with (every expression over it folds); otherwise it is the sum of the
-	//! terms in `weights.linear`, a value of the row.
-	double budget = 0.0;
+	//! The budget `SUM(w*x) <= B`: the rows and groups it covers, its limit, and the weight of a row. A weight that
+	//! folds to a constant is the literal `weight`, which the plan builds with (every expression over it folds);
+	//! otherwise it is the sum of the terms of `weights` on the decision, a value of the row.
+	DirectSharedScope scope;
+	DirectLimit limit;
 	bool constant_weight = true;
 	double weight = 0.0;
-	DirectQuadraticPart weights;
+	DirectLinearPart weights;
 };
 
 class Rule final : public DirectSolveRule {
@@ -70,49 +73,38 @@ private:
 	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 };
 
-//! The one aggregate clause, a `SUM <= B` over every row: the others are per-row bounds on the decision, which ProveBox
-//! reads. Null when there is not exactly one.
-static const DirectIRConstraint *FindBudget(const DirectIR &ir) {
+//! The budget `SUM(w*x) <= B`, the one aggregate clause, over the rows of its `when` and the groups of its `by` key,
+//! with a weight of any sign and a limit that is a constant or read from the data. The other constraints are per-row
+//! bounds on the decision, which ProveBox reads. A clause `per K:` repeats the whole total for each class, which is
+//! another class of problem.
+bool Rule::ProveBudget(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	const DirectIRConstraint *budget = nullptr;
 	for (auto &ir_node : ir.constraints) {
 		if (!ir_node.aggregate) {
 			if (!ir_node.singleton_row) {
-				return nullptr;
+				return false;
 			}
 			continue;
 		}
 		if (budget) {
-			return nullptr;
+			return false;
 		}
 		budget = &ir_node;
 	}
 	if (!budget || budget->comparison != ExpressionType::COMPARE_LESSTHANOREQUALTO) {
-		return nullptr;
-	}
-	DirectSharedScope scope;
-	if (!DirectProveSharedScope(ir, {budget}, scope) || scope.Scoped() || scope.per) {
-		return nullptr;
-	}
-	return budget;
-}
-
-//! The budget `SUM(w*x) <= B` has a weight of any sign, a constant or read from the data, and a constant limit.
-bool Rule::ProveBudget(const DirectIR &ir, ClientContext &context, Condition &condition) const {
-	auto budget = FindBudget(ir);
-	if (!budget) {
 		return false;
 	}
-	// FindBudget has proved that the clause is a plain SUM.
+	if (!DirectProveSharedScope(ir, {budget}, condition.scope) || condition.scope.per) {
+		return false;
+	}
+	// DirectProveSharedScope has proved that the clause is a plain SUM.
 	auto &sum = *budget->PlainSum();
-	DirectLimit limit;
 	if (!DirectOnlyLinearTerms(sum.terms) ||
-	    !DirectReadLinearPart(ir, context, sum, budget->written, condition.weights.linear) ||
-	    !DirectReadLimit(ir, context, *budget, limit) || !limit.constant) {
+	    !DirectReadLinearPart(ir, context, sum, budget->written, condition.weights) ||
+	    !DirectReadLimit(ir, context, *budget, condition.limit)) {
 		return false;
 	}
-	condition.budget = limit.number;
-	condition.constant_weight =
-	    DirectFoldConstantSum(context, DirectValuesOn(condition.weights.linear, 0), condition.weight);
+	condition.constant_weight = DirectFoldConstantSum(context, DirectValuesOn(condition.weights, 0), condition.weight);
 	return true;
 }
 
@@ -162,40 +154,52 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //===--------------------------------------------------------------------===//
 
 //! Builds the relational plan for one R4 problem whose condition holds, as group-then-join (DirectJoinClassAnswers)
-//! over two reads of the source, with one class, the whole table. A row the MIN reads has the coefficient `c`; at level
-//! `s` it must hold `x >= s/c`, and `x <= cap` gives `s <= cap*c`. A row with `c <= 0` caps the level at 0, since
-//! `c*x <= 0`. Each row takes the end of its range that uses the least budget, which its weight `w` decides:
+//! over two reads of the source, with one class for each group of the budget. A row the MIN reads has the coefficient
+//! `c`; at level `s` it must hold `x >= s/c`, and `x <= cap` gives `s <= cap*c`. A row with `c <= 0` caps the level at
+//! 0, since `c*x <= 0`. Each row takes the end of its range that uses the least budget, which its weight `w` decides:
 //!
 //!  - `w >= 0`: the low end, `s/c` for a row the MIN reads and 0 for any other. A weight of 0 is no case of its own,
 //!    since `w*x` adds nothing.
 //!  - `w < 0`: its capacity `cap`, which frees the budget `-w*cap`. A row with no capacity (NULL, or 1e20 or more)
 //!    frees as much as it is asked to: the budget is then unlimited, and the level is the least `cap*c` alone.
 //!
-//! With `N` the sum of `w/c` over the rows the MIN reads with `w > 0` and `c > 0`, `F` the freed budget of the capped
-//! rows with `w < 0`, and `W` the sum of `-w` over the uncapped rows with `w < 0`, the level is `s = least(B+F over N,
-//! U)` (just `U` when `W > 0`), `U` being the least `cap*c`. The budget is infeasible when `B+F < 0` and `W = 0`: every
-//! other row needs at least 0. An uncapped row with `w < 0` takes its low end, or more when the other rows need
-//! budget it must free: `max(lo, max(0, N*s - (B+F)) / W)`; taking more than the deficit over `W` only frees more.
-//! A level that is infinite (no row bounds it) is unbounded. A row the MIN does not read has no `c`.
+//! Each group `g` of the budget has its own level. With `N` the sum of `w/c` over the rows the MIN reads with `w > 0`
+//! and `c > 0`, `F` the freed budget of the capped rows with `w < 0`, and `W` the sum of `-w` over the uncapped rows
+//! with `w < 0`, the level is `s_g = least((B+F)/N, U)` (just `U` when `W > 0`), `U` being the least `cap*c`. The
+//! budget is infeasible when `B+F < 0` and `W = 0`: every other row needs at least 0. A group with no limit (a NULL
+//! one, or none of its rows kept) is no budget, and the rows outside every budget are one group of rows with no
+//! budget, whose level is `U` alone.
+//!
+//! The objective is the least `c*x` over all the rows, so the level of the answer is `s* = min_g s_g`. A group whose
+//! level is infinite (nothing bounds it) and every row outside every budget take `s*`; when `s*` is infinite too, the
+//! query is unbounded. An uncapped row with `w < 0` takes its low end, or more when the other rows of its group need
+//! budget it must free: `max(lo, max(0, N*s - (B+F)) / W)`; taking more than the deficit over `W` only frees more. A
+//! row the MIN does not read has no `c`.
 //!
 //! The first read, on each row:
 //!
-//!   P1  raw values: the capacity clauses' right sides, the budget's weight and the MIN's coefficient `c`, each on the
-//!       rows that read it, and the check of every value that can fail
-//!   P2  the row's capacity (the least upper end of the box on it) and the verdict of the raw checks
-//!   P3  `w/c`, the freed budget, the unlimited weight and `cap*c` (0 for `c <= 0`), each NULL where the row does not
-//!       count, and every other check the row can raise
-//!   H   a hash aggregate with no key, one row: the sums N, F and W, the least U, and whether the checks held
-//!   C   the level, the deficit's share of one unit of `W`, and the checks of the class (infeasible, unbounded)
-//!       together with the rows' verdict, computed once
+//!   [W0] the row's membership in the budget and its group key (DirectProjectScope)
+//!   P1   raw values: the capacity clauses' right sides, the budget's weight and limit inputs and the MIN's
+//!        coefficient `c`, each on the rows that read it, and the check of every value that can fail
+//!   P2   the row's capacity (the least upper end of the box on it) and the verdict of the raw checks
+//!   P3   `w/c`, the freed budget, the unlimited weight and `cap*c` (0 for `c <= 0`), each NULL where the row does not
+//!        count, and every other check the row can raise
+//!   H    a hash aggregate on the group key, one row for each group and one for the rows outside every budget: the
+//!        sums N, F and W, the least U, the group's limit and whether the checks of the rows held
+//!   C1   the level of each group
+//!   [W1] `s*`, the least level over the groups, on every group's row (a window with no partition, over the groups)
+//!   C2   what the rows read of their group: its level, the deficit's share of one unit of `W`, whether it has a
+//!        budget and `s*`, with the checks of the group (infeasible, unbounded) and of the rows together
 //!
-//! The second read computes P1 to P3 again for its `c`, `w` and `cap`, joined with the class's row, then
+//! The second read computes [W0] and P1 to P3 again for its `c`, `w` and `cap`, joined with the group's row, then
 //!
-//!   P4  the answer, and the column that keeps the checks live
+//!   P4   the answer, and the column that keeps the checks live
 //!
-//! The solver reads every row before it returns, so a bad value on the last row raises even under an outer LIMIT 1. H
-//! holds every row of the first read before it gives one, and each check stands below it, so no joined row exists
-//! before every row has passed its checks. The second read raises nothing: the first has raised on any value it would.
+//! A row outside every budget has a NULL in the key's columns that say so, and the join compares them with IS NOT
+//! DISTINCT FROM: it finds the row of the rows outside every budget, which is how it reads `s*`. The solver reads every
+//! row before it returns, so a bad value on the last row raises even under an outer LIMIT 1. H holds every row of the
+//! first read before it gives one, and each check stands below it, so no joined row exists before every row has passed
+//! its checks. The second read raises nothing: the first has raised on any value it would.
 class PlanBuilder {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
@@ -203,98 +207,165 @@ public:
 	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context),
 	      source_bindings(source_bindings_p), source_types(source_types_p), errors(errors_p) {
 		D_ASSERT(source_bindings.size() == source_types.size());
+		if (!condition.limit.constant) {
+			limit_bound = condition.limit.data.GroupBound(optimizer);
+		}
 	}
 
-	//! The class's plan over the first read `rows`: one row, the level, the deficit's share and whether the checks
-	//! held.
-	unique_ptr<LogicalOperator> BuildLevel(unique_ptr<LogicalOperator> rows) const {
+	//! The class plan over the first read `rows`: the group key's columns, then what a row reads of its group (C2), one
+	//! row for each group.
+	unique_ptr<LogicalOperator> BuildGroups(unique_ptr<LogicalOperator> rows) const {
 		auto row = RowStages(std::move(rows));
+		auto &carried = row.carried;
 		DirectAggregateStage aggregate(binder);
+		vector<ColumnBinding> keys;
+		for (idx_t i = 0; i < carried.keys.size(); i++) {
+			keys.push_back(aggregate.Group(calc.Out(calc.Col(carried.key.types[i], carried.keys[i]))));
+		}
 		auto need = aggregate.Add(DirectHashAggregate(optimizer, calc, "sum", Double(row.need)));
 		auto freed = aggregate.Add(DirectHashAggregate(optimizer, calc, "sum", Double(row.freed)));
 		auto unlimited = aggregate.Add(DirectHashAggregate(optimizer, calc, "sum", Double(row.unlimited)));
 		auto allowed = aggregate.Add(DirectHashAggregate(optimizer, calc, "min", Double(row.allowed)));
 		auto valid = aggregate.Add(DirectHashAggregate(optimizer, calc, "bool_and", Boolean(row.valid)));
-		auto plan = aggregate.Finish(std::move(row.plan));
+		DirectGroupValues limit_values;
+		if (limit_bound) {
+			DirectAggregateSink sink(aggregate);
+			limit_values = DirectAddGroupBound(calc, *limit_bound, row.limit_inputs, sink, nullptr);
+		}
+		unique_ptr<LogicalOperator> plan = aggregate.Finish(std::move(row.plan));
 
-		// With no row the MIN reads, `need` and `allowed` are NULL, the level is NULL and no row reads it. Adding 0.0
-		// turns a -0.0 level (a limit of -0.0) into 0.0. An unlimited budget has no level of its own, and NULL is what
-		// LEAST skips.
+		// C1. With no row the MIN reads, `need` and `allowed` are NULL, the level is NULL and no row reads it. Adding
+		// 0.0 turns a -0.0 level (a limit of -0.0) into 0.0. An unlimited budget has no level of its own, and NULL is
+		// what LEAST skips. The rows outside every budget have no limit: their group is not present.
 		auto zero = calc.Num(0.0);
 		auto no_value = calc.Constant(Value(LogicalType::DOUBLE));
+		vector<ExprPtr> key_values;
+		for (idx_t i = 0; i < keys.size(); i++) {
+			key_values.push_back(calc.Col(carried.key.types[i], keys[i]));
+		}
+		auto limit =
+		    limit_bound ? calc.Cast(limit_values.upper, LogicalType::DOUBLE) : calc.Num(condition.limit.number);
+		auto present = DirectClassPresent(calc, carried.key, key_values);
 		auto unlimited_weight = calc.Coalesce({Double(unlimited), zero});
 		auto is_unlimited = Positive(unlimited_weight);
-		auto budget = calc.Add(calc.Num(condition.budget), calc.Coalesce({Double(freed), zero}));
+		auto budget = calc.Add(calc.If(present, limit, no_value), calc.Coalesce({Double(freed), zero}));
 		auto from_budget = calc.If(is_unlimited, no_value, calc.Div(budget, Double(need)));
-		auto level_value = calc.Add(calc.Min({from_budget, Double(allowed)}), zero);
-		DirectProjectionStage level(binder.GenerateTableIndex());
-		level.Add(level_value);
-		// An uncapped row with `w < 0` frees the budget the others' low ends need beyond B+F.
-		auto deficit = calc.Max({zero, calc.Sub(calc.Mul(Double(need), level_value), budget)});
-		level.Add(calc.If(is_unlimited, calc.Div(deficit, unlimited_weight), no_value));
-		// The class's checks follow the rows': no budget is left for rows that need at least 0 when B+F is negative and
-		// nothing frees more, and a level nothing bounds improves without limit. Both read the class's row, so an empty
-		// source, which has no row to raise on, raises nothing.
+		DirectProjectionStage c1(binder.GenerateTableIndex());
+		c1.Forward(keys, carried.key.types);
+		auto level = c1.Add(calc.Add(calc.Min({from_budget, Double(allowed)}), zero));
+		auto budget_column = c1.Add(budget);
+		auto need_column = c1.Add(Double(need));
+		auto unlimited_column = c1.Add(unlimited_weight);
+		auto valid_column = c1.Add(Boolean(valid));
+		// The group's limit can fail as a value (a NaN limit, which the solver names); its message is a column of the
+		// group's row.
+		vector<ColumnBinding> messages;
+		for (auto &message : limit_values.messages) {
+			messages.push_back(c1.Add(message));
+		}
+		vector<ColumnBinding> keys1;
+		for (idx_t i = 0; i < keys.size(); i++) {
+			keys1.emplace_back(c1.index, i);
+		}
+		plan = c1.Finish(std::move(plan));
+
+		// W1: the objective is the least level of any group, and a group that nothing bounds takes it.
+		ColumnBinding star = level;
+		if (condition.scope.Scoped()) {
+			auto window = make_uniq<LogicalWindow>(binder.GenerateTableIndex());
+			window->expressions.push_back(DirectWindowExtremum(optimizer, "min", calc.Out(Double(level))));
+			star = ColumnBinding(window->window_index, 0);
+			window->children.push_back(std::move(plan));
+			plan = std::move(window);
+		}
+
+		// C2. The group's checks follow the rows': no budget is left for rows that need at least 0 when B+F is negative
+		// and nothing frees more, and a level nothing bounds improves without limit. Both read the group's row, so an
+		// empty source, which has no row to raise on, raises nothing.
+		DirectProjectionStage c2(binder.GenerateTableIndex());
+		c2.Forward(keys1, carried.key.types);
+		auto own_level = calc.If(calc.Cmp(ExpressionType::COMPARE_EQUAL, Double(level), calc.Num(POSITIVE_INFINITY)),
+		                         Double(star), Double(level));
+		// A deficit is what the rows that take their low end need beyond the budget; a group with no row the MIN reads
+		// needs none.
+		auto need_total = calc.Coalesce({calc.Mul(Double(need_column), own_level), zero});
+		auto deficit = calc.Max({zero, calc.Sub(need_total, Double(budget_column))});
+		auto group_unlimited = Positive(Double(unlimited_column));
+		c2.Add(own_level);
+		c2.Add(calc.If(group_unlimited, calc.Div(deficit, Double(unlimited_column)), no_value));
+		c2.Add(calc.Not(calc.IsNull(Double(budget_column))));
+		c2.Add(Double(star));
 		vector<unique_ptr<Expression>> checks;
-		checks.push_back(calc.Out(Boolean(valid)));
-		auto has_rows = calc.Not(calc.IsNull(Boolean(valid)));
-		auto no_budget = calc.And(
-		    has_rows, calc.And(calc.Not(is_unlimited), calc.Cmp(ExpressionType::COMPARE_LESSTHAN, budget, zero)));
+		checks.push_back(calc.Out(Boolean(valid_column)));
+		for (auto &message : messages) {
+			checks.push_back(DirectRaiseMessage(optimizer, calc, calc.Col(LogicalType::VARCHAR, message)));
+		}
+		auto has_rows = calc.Not(calc.IsNull(Boolean(valid_column)));
+		auto no_budget =
+		    calc.And(has_rows, calc.And(calc.Not(group_unlimited),
+		                                calc.Cmp(ExpressionType::COMPARE_LESSTHAN, Double(budget_column), zero)));
 		checks.push_back(DirectRaiseIf(calc, calc.Out(no_budget), DirectInfeasibleErrorPredicate(optimizer, errors)));
-		auto no_bound = calc.Cmp(ExpressionType::COMPARE_EQUAL, level_value, calc.Num(POSITIVE_INFINITY));
+		auto no_bound = calc.Cmp(ExpressionType::COMPARE_EQUAL, Double(star), calc.Num(POSITIVE_INFINITY));
 		checks.push_back(DirectRaiseIf(calc, calc.Out(no_bound), DirectUnboundedErrorPredicate(optimizer, errors)));
-		level.Add(DirectAllHold(calc, std::move(checks)));
-		return level.Finish(std::move(plan));
+		c2.Add(DirectAllHold(calc, std::move(checks)));
+		return c2.Finish(std::move(plan));
 	}
 
 	//! The substitute over the second read `rows`: its source columns, then each row's answer, and the column that
-	//! keeps the level plan's checks live (P4).
-	DirectSubstitute JoinAnswers(unique_ptr<LogicalOperator> rows, unique_ptr<LogicalOperator> level) const {
+	//! keeps the class plan's checks live (P4).
+	DirectSubstitute JoinAnswers(unique_ptr<LogicalOperator> rows, unique_ptr<LogicalOperator> groups) const {
 		auto row = RowStages(std::move(rows));
-		auto joined =
-		    DirectJoinClassAnswers(binder, std::move(row.plan), {}, DirectClassKeyOf({}, false), std::move(level));
-		D_ASSERT(joined.answers.size() == 3);
+		auto &carried = row.carried;
+		auto key = carried.key;
+		key.equal.assign(key.equal.size(), false);
+		auto joined = DirectJoinClassAnswers(binder, std::move(row.plan), carried.keys, key, std::move(groups));
+		D_ASSERT(joined.answers.size() == 5);
 
 		DirectProjectionStage p4(binder.GenerateTableIndex());
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
-			p4.Add(calc.Out(calc.Col(source_types[i], row.source[i])));
+			p4.Add(calc.Out(calc.Col(source_types[i], carried.source[i])));
 		}
-		// The end of the row's range that uses the least budget.
+		// The end of the row's range that uses the least budget. A row with no budget takes the level of the objective.
+		auto in_budget = Boolean(joined.answers[2]);
 		auto coefficient = Double(row.coefficient);
-		auto low = calc.If(Positive(coefficient), calc.Div(Double(joined.answers[0]), coefficient), calc.Num(0.0));
+		auto level = calc.If(in_budget, Double(joined.answers[0]), Double(joined.answers[3]));
+		auto low = calc.If(Positive(coefficient), calc.Div(level, coefficient), calc.Num(0.0));
 		auto capacity = Double(row.capacity);
 		auto uncapped = calc.Cmp(ExpressionType::COMPARE_EQUAL, capacity, calc.Num(POSITIVE_INFINITY));
 		auto freeing = calc.If(uncapped, calc.Max({low, Double(joined.answers[1])}), capacity);
-		auto amount = calc.If(Negative(Weight(row.weight)), freeing, low);
+		auto amount = calc.If(calc.And(in_budget, Negative(Weight(row.weight))), freeing, low);
 		p4.Add(calc.Out(amount));
 		vector<unique_ptr<Expression>> checks;
-		checks.push_back(calc.Out(Boolean(joined.answers[2])));
+		checks.push_back(calc.Out(Boolean(joined.answers[4])));
 		p4.Add(DirectAllHold(calc, std::move(checks)));
 
 		DirectSubstitute substitute;
 		substitute.prunable_decisions.push_back(1);
-		// The source columns, then x. The level plan's checks are read by the column after them.
+		// The source columns, then x. The class plan's checks are read by the column after them.
 		for (idx_t i = 0; i < source_bindings.size() + 1; i++) {
 			substitute.slot_map.push_back(i);
 		}
 		substitute.validated_columns.push_back(source_bindings.size() + 1);
-		// The rows are probed against the level plan and held by nothing.
+		// The rows are probed against the class plan and held by nothing.
 		substitute.pipelined = true;
 		substitute.child = p4.Finish(std::move(joined.plan));
 		return substitute;
 	}
 
 private:
-	//! P1 to P3 over a read: the plan, where its columns are.
+	//! [W0] to P3 over a read: the plan, where its columns are.
 	struct Row {
 		unique_ptr<LogicalOperator> plan;
-		vector<ColumnBinding> source;
+		//! The source's columns, and the row's scope: whether it is in the budget's rows and its group key.
+		DirectCarried carried;
+		//! What the limit's aggregates read, one member per input of the limit's group bound.
+		vector<DirectGroupInputColumns> limit_inputs;
 		//! The MIN's coefficient `c`: NULL on a row the MIN does not read.
 		ColumnBinding coefficient;
 		//! The row's weight `w`, a column only for a weight read from the data (Weight), and its capacity.
 		ColumnBinding weight;
 		ColumnBinding capacity;
-		//! What the row adds to each sum of the class (BuildLevel): `w/c`, the freed budget, the unlimited weight and
+		//! What the row adds to each sum of its group (BuildGroups): `w/c`, the freed budget, the unlimited weight and
 		//! `cap*c`, NULL where the row does not count; and whether the row's checks held.
 		ColumnBinding need;
 		ColumnBinding freed;
@@ -310,6 +381,8 @@ private:
 	vector<ColumnBinding> source_bindings;
 	vector<LogicalType> source_types;
 	const DirectStateErrors &errors;
+	//! The group bound of a limit read from the data; null for a constant limit.
+	unique_ptr<DecideGroupBound> limit_bound;
 
 	ExprPtr Double(ColumnBinding binding) const {
 		return calc.Col(LogicalType::DOUBLE, binding);
@@ -329,32 +402,68 @@ private:
 		return condition.constant_weight ? calc.Num(condition.weight) : Double(weight);
 	}
 
+	//! Forwards the columns the limit's aggregates read through `stage`.
+	void ForwardLimitInputs(DirectProjectionStage &stage, vector<DirectGroupInputColumns> &inputs) const {
+		for (idx_t i = 0; i < inputs.size(); i++) {
+			if (inputs[i].reads.table_index != DConstants::INVALID_INDEX) {
+				inputs[i].reads = stage.Add(calc.Out(Boolean(inputs[i].reads)));
+			}
+			if (inputs[i].argument.table_index != DConstants::INVALID_INDEX) {
+				auto type = limit_bound->inputs[i].argument->return_type;
+				inputs[i].argument = stage.Add(calc.Out(calc.Col(type, inputs[i].argument)));
+			}
+		}
+	}
+
 	Row RowStages(unique_ptr<LogicalOperator> rows) const {
 		Row result;
 		vector<unique_ptr<Expression>> checks;
+		bool scoped = condition.scope.Scoped();
 
-		// P1
+		// W0
+		auto state =
+		    DirectProjectScope(binder, std::move(rows), scoped, condition.scope.when.get(), condition.scope.keys, {});
+		auto from_scope = DirectCarriedOf(state, source_bindings.size());
+		auto over = [&](const Expression &value) {
+			return state.state_index == DConstants::INVALID_INDEX
+			           ? value.Copy()
+			           : DirectOverProjection(value, source_bindings, state.state_index);
+		};
+		auto eligible = scoped ? Boolean(from_scope.eligible) : nullptr;
+
+		// P1: a value is read and checked on the rows the budget covers alone, nothing is computed on any other.
 		DirectProjectionStage p1(binder.GenerateTableIndex());
-		auto source = p1.Forward(source_bindings, source_types);
-		auto clauses =
-		    DirectLayoutBoundClauses(optimizer, calc, p1, condition.clauses, source_bindings, nullptr, checks);
+		auto carried1 = p1.Forward(from_scope, source_types, scoped);
+		auto clauses = DirectLayoutBoundClauses(optimizer, calc, p1, condition.clauses, source_bindings, over, checks);
 		auto laid =
-		    DirectLayoutQuadraticPart(optimizer, calc, p1, condition.objective, 1, source_bindings, nullptr, checks);
-		DirectQuadraticColumns laid_weights;
+		    DirectLayoutQuadraticPart(optimizer, calc, p1, condition.objective, 1, source_bindings, over, checks);
+		ColumnBinding raw_weight;
 		if (!condition.constant_weight) {
-			laid_weights =
-			    DirectLayoutQuadraticPart(optimizer, calc, p1, condition.weights, 1, source_bindings, nullptr, checks);
+			auto values = DirectValuesOn(condition.weights, 0);
+			// The solver reads a weight on every row the clause's `when` keeps, a row with a NULL key included.
+			auto kept =
+			    condition.scope.when ? calc.Wrap(DirectActiveWhen(calc, over(*condition.scope.when).get())) : nullptr;
+			raw_weight =
+			    p1.Add(calc.Out(DirectOnKeptRows(calc, kept, calc.Wrap(DirectSumOf(optimizer, values, over)))));
+			if (auto check = DirectCheckNumber(optimizer, raw_weight, condition.weights.names[0], values,
+			                                   source_bindings, p1.index)) {
+				checks.push_back(std::move(check));
+			}
 		}
-		auto plan = p1.Finish(std::move(rows));
+		if (limit_bound) {
+			result.limit_inputs = DirectLayoutGroupInputs(optimizer, calc, p1, *limit_bound, eligible, over, &checks);
+		}
+		auto plan = p1.Finish(std::move(state.plan));
 
 		// P2: a clause's upper end is +infinity where its `when` drops the row or its right side is NULL.
 		DirectProjectionStage p2(binder.GenerateTableIndex());
-		auto source2 = p2.Forward(source, source_types);
+		auto carried2 = p2.Forward(carried1, source_types, scoped);
 		auto coefficient = p2.Add(calc.Out(Double(laid.linear[0])));
 		ColumnBinding weight;
 		if (!condition.constant_weight) {
-			weight = p2.Add(calc.Out(Double(laid_weights.linear[0])));
+			weight = p2.Add(calc.Out(Double(raw_weight)));
 		}
+		ForwardLimitInputs(p2, result.limit_inputs);
 		vector<ExprPtr> uppers;
 		if (condition.upper != POSITIVE_INFINITY) {
 			uppers.push_back(calc.Num(condition.upper));
@@ -370,7 +479,8 @@ private:
 
 		// P3: a row the MIN does not read has no `c`, and every CASE on it gives NULL there.
 		DirectProjectionStage p3(binder.GenerateTableIndex());
-		result.source = p3.Forward(source2, source_types);
+		result.carried = p3.Forward(carried2, source_types, scoped);
+		ForwardLimitInputs(p3, result.limit_inputs);
 		result.coefficient = p3.Add(calc.Out(Double(coefficient)));
 		if (!condition.constant_weight) {
 			result.weight = p3.Add(calc.Out(Double(weight)));
@@ -391,9 +501,8 @@ private:
 		// The checks of the raw values hold first, then the box: a negative capacity leaves no value.
 		vector<unique_ptr<Expression>> row_checks;
 		row_checks.push_back(calc.Out(Boolean(raw_valid)));
-		auto negative_capacity = Negative(cap);
 		row_checks.push_back(
-		    DirectRaiseIf(calc, calc.Out(negative_capacity), DirectInfeasibleErrorPredicate(optimizer, errors)));
+		    DirectRaiseIf(calc, calc.Out(Negative(cap)), DirectInfeasibleErrorPredicate(optimizer, errors)));
 		result.valid = p3.Add(DirectAllHold(calc, std::move(row_checks)));
 		result.plan = p3.Finish(std::move(plan));
 		return result;
@@ -404,11 +513,11 @@ DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
                              const DirectApplicabilityCondition &candidate, const DirectStateErrors &errors) const {
 	auto &condition = static_cast<const Condition &>(candidate);
 	PlanBuilder plan_builder(condition, optimizer, reader.SourceBindings(), reader.SourceTypes(), errors);
-	auto level = DirectBuildOverRead(reader, reader.ReadSource(), [&](unique_ptr<LogicalOperator> rows) {
-		return plan_builder.BuildLevel(std::move(rows));
+	auto groups = DirectBuildOverRead(reader, reader.ReadSource(), [&](unique_ptr<LogicalOperator> rows) {
+		return plan_builder.BuildGroups(std::move(rows));
 	});
 	return DirectBuildOverOneRead(reader, [&](unique_ptr<LogicalOperator> rows) {
-		return plan_builder.JoinAnswers(std::move(rows), std::move(level));
+		return plan_builder.JoinAnswers(std::move(rows), std::move(groups));
 	});
 }
 

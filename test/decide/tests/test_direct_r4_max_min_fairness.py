@@ -46,12 +46,14 @@ COLUMNS = (
     ("f", "BOOLEAN"),  # `when` membership
     ("r", "DOUBLE"),  # a coefficient read as it is: the ratio of a row's share to its amount
     ("w", "DOUBLE"),  # the weight of a row in the budget
+    ("k", "VARCHAR"),  # a budget group
+    ("l", "DOUBLE"),  # a budget limit read from the data
 )
 NAMES = [name for name, _ in COLUMNS]
 
 
-def _row(id, d=2.0, cap=4.0, f=True, r=1.0, w=1.0):
-    return dict(id=id, d=d, cap=cap, f=f, r=r, w=w)
+def _row(id, d=2.0, cap=4.0, f=True, r=1.0, w=1.0, k="a", l=9.0):
+    return dict(id=id, d=d, cap=cap, f=f, r=r, w=w, k=k, l=l)
 
 
 # The worked example of the class: demands 2 and 4, capacities 4 and 8.
@@ -102,6 +104,65 @@ UNBOUNDED_ALL_NEGATIVE = (_row(1, 2.0, None, w=-1.0), _row(2, 4.0, None, w=1.0))
 NEGATIVE_NOT_ENOUGH = (_row(1, 2.0, 4.0, w=1.0), _row(2, 4.0, 1.0, w=-1.0))
 
 
+# Groups of the budget. Each has a level of its own, and the objective is the least of them: group `a` has 1.5 and group
+# `b` 4.5, so the rows of `b` take more than the objective needs.
+TWO_GROUPS = (
+    _row(1, 2.0, 10.0, k="a"),
+    _row(2, 4.0, 20.0, k="a"),
+    _row(3, 1.0, 10.0, k="b"),
+    _row(4, 1.0, 10.0, k="b"),
+)
+# The capacities of group `b` bind its level before its budget does.
+GROUP_CAPACITY_BINDS = (
+    _row(1, 2.0, 10.0, k="a"),
+    _row(2, 4.0, 20.0, k="a"),
+    _row(3, 1.0, 2.0, k="b"),
+    _row(4, 1.0, 2.0, k="b"),
+)
+# Group `b` has no finite level: its rows weigh nothing and have no capacity.
+GROUP_NO_FINITE_LEVEL = (
+    _row(1, 2.0, 10.0, k="a"),
+    _row(2, 4.0, 20.0, k="a"),
+    _row(3, 1.0, None, w=0.0, k="b"),
+    _row(4, 2.0, None, w=0.0, k="b"),
+)
+# Rows outside every budget: a NULL key, and a `when` that is false. Their capacities bound the objective too.
+OUTSIDE_NULL_KEY = (_row(1, 2.0, 10.0, k="a"), _row(2, 1.0, 0.5, k=None), _row(3, 4.0, 20.0, k=None))
+OUTSIDE_WHEN = (_row(1, 2.0, 10.0, f=True), _row(2, 1.0, 0.5, f=False), _row(3, 4.0, 20.0, f=False))
+OUTSIDE_UNBOUNDED_ROW = (_row(1, 2.0, 10.0, k="a"), _row(2, 1.0, None, k=None))
+# A `when` and a key together: the rows it drops are outside every budget, whatever their key.
+WHEN_AND_KEYS = (
+    _row(1, 2.0, 10.0, f=True, k="a"),
+    _row(2, 4.0, 20.0, f=True, k="b"),
+    _row(3, 1.0, 3.0, f=False, k="a"),
+    _row(4, 1.0, 10.0, f=True, k=None),
+)
+# No group has a finite level.
+ALL_GROUPS_UNBOUNDED = (_row(1, 2.0, None, w=0.0, k="a"), _row(2, 4.0, None, w=0.0, k="b"))
+# A negative weight in a group: an uncapped row absorbs what the group's other rows need, and the other group is plain.
+GROUP_NEGATIVE_UNCAPPED = (
+    _row(1, 2.0, 4.0, w=1.0, k="a"),
+    _row(2, None, None, w=-1.0, k="a"),
+    _row(3, 2.0, 10.0, w=1.0, k="b"),
+)
+# A NULL key row with a negative weight is in no budget: it frees nothing and takes the end of no budget.
+NULL_KEY_NEGATIVE = (_row(1, 2.0, 4.0, w=1.0, k="a"), _row(2, 4.0, 3.0, w=-1.0, k=None))
+# Limits read from the data: the tightest of a group applies, a NULL is no limit and a group of NULLs has no budget.
+DATA_LIMITS = (
+    _row(1, 2.0, 10.0, k="a", l=9.0),
+    _row(2, 4.0, 20.0, k="a", l=12.0),
+    _row(3, 1.0, 5.0, k="b", l=None),
+    _row(4, 1.0, 6.0, k="b", l=None),
+    _row(5, 2.0, 10.0, k="c", l=None),
+    _row(6, 4.0, 20.0, k="c", l=6.0),
+)
+DATA_LIMIT_NEGATIVE_IN_ONE_GROUP = (_row(1, 2.0, 10.0, k="a", l=9.0), _row(2, 1.0, 10.0, k="b", l=-1.0))
+# The group of the first row has a NULL limit, so its row takes the objective's level.
+DATA_LIMIT_NULL_GROUP = (_row(1, 2.0, 10.0, k="a", l=None), _row(2, 4.0, 20.0, k="b", l=9.0))
+# A negative budget that a freed budget makes feasible, with no row the MIN reads: the uncapped row takes what is needed.
+NOTHING_READ_FREED = (_row(1, None, 4.0, w=1.0), _row(2, None, None, w=-1.0))
+
+
 def _values(rows):
     return values_clause(rows, NAMES, dict(COLUMNS), sql_literal)
 
@@ -116,7 +177,10 @@ class Budget:
     sql: str
     #: row -> the weight of the row in the budget.
     weight: object
-    limit: float
+    #: (the rows of a group, all rows) -> the group's limit, or None for no limit.
+    limit: object
+    #: row -> the key of the group whose budget holds the row, or None when no budget holds it.
+    group: object = lambda row: ()
 
 
 @dataclass(frozen=True)
@@ -154,27 +218,70 @@ def _constant(number):
     return lambda row: number
 
 
+def _limit(number):
+    return lambda members, rows: number
+
+
+def _group_rows(members, rows):
+    return members
+
+
+def _all_rows(members, rows):
+    return rows
+
+
+def _tightest(rows_of):
+    """The smallest limit `l` among the rows whose limit the group takes; a NULL is no limit."""
+
+    def limit(members, rows):
+        limits = [row["l"] for row in rows_of(members, rows) if row["l"] is not None]
+        return min(limits) if limits else None
+
+    return limit
+
+
+def _by_k(row):
+    return None if row["k"] is None else (row["k"],)
+
+
+def _everyone(row):
+    return ()
+
+
+def _where_f(group):
+    return lambda row: group(row) if row["f"] else None
+
+
 def _column(row):
     return 0.0 if row["w"] is None else row["w"]
 
 
 BUDGETS = {
-    "b9": Budget("SUM(amount) <= 9", _constant(1.0), 9.0),
-    "b100": Budget("SUM(amount) <= 100", _constant(1.0), 100.0),
-    "b0": Budget("SUM(amount) <= 0", _constant(1.0), 0.0),
-    "negative": Budget("SUM(amount) <= -1", _constant(1.0), -1.0),
+    "b9": Budget("SUM(amount) <= 9", _constant(1.0), _limit(9.0)),
+    "b100": Budget("SUM(amount) <= 100", _constant(1.0), _limit(100.0)),
+    "b0": Budget("SUM(amount) <= 0", _constant(1.0), _limit(0.0)),
+    "negative": Budget("SUM(amount) <= -1", _constant(1.0), _limit(-1.0)),
     # The spellings of one budget: each read the same way.
-    "weight_2": Budget("SUM(2 * amount) <= 18", _constant(2.0), 18.0),
-    "weight_half": Budget("SUM(amount / 2) <= 4.5", _constant(0.5), 4.5),
-    "like_terms": Budget("SUM(amount + 2 * amount) <= 18", _constant(3.0), 18.0),
-    "literal_on_left": Budget("9 >= SUM(amount)", _constant(1.0), 9.0),
+    "weight_2": Budget("SUM(2 * amount) <= 18", _constant(2.0), _limit(18.0)),
+    "weight_half": Budget("SUM(amount / 2) <= 4.5", _constant(0.5), _limit(4.5)),
+    "like_terms": Budget("SUM(amount + 2 * amount) <= 18", _constant(3.0), _limit(18.0)),
+    "literal_on_left": Budget("9 >= SUM(amount)", _constant(1.0), _limit(9.0)),
     # A negative constant weight: every row takes its capacity.
-    "weight_negative": Budget("SUM(-amount) <= -2", _constant(-1.0), -2.0),
+    "weight_negative": Budget("SUM(-amount) <= -2", _constant(-1.0), _limit(-2.0)),
     # A weight read from the data.
-    "column": Budget("SUM(w * amount) <= 9", _column, 9.0),
-    "column_b0": Budget("SUM(w * amount) <= 0", _column, 0.0),
-    "column_negative": Budget("SUM(w * amount) <= -3", _column, -3.0),
-    "column_like_terms": Budget("SUM(w * amount + 2 * w * amount) <= 18", lambda row: 3.0 * _column(row), 18.0),
+    "column": Budget("SUM(w * amount) <= 9", _column, _limit(9.0)),
+    "column_b0": Budget("SUM(w * amount) <= 0", _column, _limit(0.0)),
+    "column_negative": Budget("SUM(w * amount) <= -3", _column, _limit(-3.0)),
+    "column_like_terms": Budget("SUM(w * amount + 2 * w * amount) <= 18", lambda row: 3.0 * _column(row), _limit(18.0)),
+    # Groups and a `when`: each group has a budget of its own, and a row outside them has none.
+    "by": Budget("SUM(amount) by (k) <= 9", _constant(1.0), _limit(9.0), _by_k),
+    "by_column": Budget("SUM(w * amount) by (k) <= 9", _column, _limit(9.0), _by_k),
+    "by_data_limit": Budget("SUM(w * amount) by (k) <= l", _column, _tightest(_group_rows), _by_k),
+    "data_limit": Budget("SUM(w * amount) <= l", _column, _tightest(_all_rows)),
+    "when": Budget("when f: SUM(w * amount) <= 9", _column, _limit(9.0), _where_f(_everyone)),
+    "sum_when": Budget("SUM(when f: w * amount) <= 9", _column, _limit(9.0), _where_f(_everyone)),
+    "when_by": Budget("when f: SUM(w * amount) by (k) <= 9", _column, _limit(9.0), _where_f(_by_k)),
+    "when_data_limit": Budget("when f: SUM(w * amount) <= l", _column, _tightest(_group_rows), _where_f(_everyone)),
 }
 
 BOXES = {
@@ -268,6 +375,25 @@ add("budget_negative_made_feasible_by_a_freed_budget", NEGATIVE_CAPPED, budget="
 add("budget_negative_not_made_feasible_is_infeasible", NEGATIVE_NOT_ENOUGH, budget="column_negative")
 add("level_unbounded_by_a_read_row_of_weight_zero_and_no_capacity", UNBOUNDED_ZERO_WEIGHT, budget="column")
 add("level_unbounded_when_a_negative_weight_frees_unlimited_budget", UNBOUNDED_ALL_NEGATIVE, budget="column")
+add("budget_negative_with_no_row_read_the_uncapped_row_frees_it", NOTHING_READ_FREED, budget="column_negative")
+# A budget per group, and a `when` on it.
+add("groups_each_have_a_level", TWO_GROUPS, budget="by")
+add("groups_a_capacity_binds_one_level", GROUP_CAPACITY_BINDS, budget="by")
+add("groups_a_group_with_no_finite_level_takes_the_objective", GROUP_NO_FINITE_LEVEL, budget="by_column")
+add("groups_null_key_row_is_outside_every_budget", OUTSIDE_NULL_KEY, budget="by")
+add("groups_outside_row_without_capacity_takes_the_objective", OUTSIDE_UNBOUNDED_ROW, budget="by")
+add("groups_no_group_has_a_finite_level_is_unbounded", ALL_GROUPS_UNBOUNDED, budget="by_column")
+add("groups_negative_uncapped_row_absorbs_its_groups_deficit", GROUP_NEGATIVE_UNCAPPED, budget="by_column")
+add("groups_null_key_row_with_a_negative_weight_frees_nothing", NULL_KEY_NEGATIVE, budget="by_column")
+add("when_rows_it_drops_are_outside_every_budget", OUTSIDE_WHEN, budget="when")
+add("when_inside_the_sum", OUTSIDE_WHEN, budget="sum_when")
+add("when_and_a_key", WHEN_AND_KEYS, budget="when_by")
+# A limit read from the data.
+add("data_limit_one_budget_takes_the_tightest", DATA_LIMITS, budget="data_limit")
+add("data_limit_per_group_takes_the_tightest", DATA_LIMITS, budget="by_data_limit")
+add("data_limit_null_group_is_no_budget", DATA_LIMIT_NULL_GROUP, budget="by_data_limit")
+add("data_limit_negative_in_one_group_is_infeasible", DATA_LIMIT_NEGATIVE_IN_ONE_GROUP, budget="by_data_limit")
+add("data_limit_under_a_when", WHEN_AND_KEYS, budget="when_data_limit")
 
 
 def _sql_body(case_):
@@ -297,6 +423,18 @@ def _sql(case_, wrap="plain"):
     return f"SELECT id, amount FROM (SELECT id, amount FROM (FROM {_source(case_)} {body}) q) p ORDER BY id"
 
 
+def _groups(case_):
+    """The budgets that exist: {key: (rows, limit)}. A group with no limit has no budget."""
+    budget = BUDGETS[case_.budget]
+    members = {}
+    for row in case_.rows:
+        key = budget.group(row)
+        if key is not None:
+            members.setdefault(key, []).append(row)
+    groups = {key: (rows, budget.limit(rows, case_.rows)) for key, rows in members.items()}
+    return {key: group for key, group in groups.items() if group[1] is not None}
+
+
 def _solve_with_oracle(oracle_solver, case_):
     oracle_solver.create_model("direct_r4_max_min_fairness")
     box, budget, objective = BOXES[case_.box], BUDGETS[case_.budget], OBJECTIVES[case_.objective]
@@ -305,9 +443,10 @@ def _solve_with_oracle(oracle_solver, case_):
         names[row["id"]] = f"x_{row['id']}"
         upper = box.upper(row)
         oracle_solver.add_variable(names[row["id"]], VarType.CONTINUOUS, 0.0, BIG if upper is None else upper)
-    oracle_solver.add_constraint(
-        {names[row["id"]]: budget.weight(row) for row in case_.rows}, "<=", budget.limit, name="budget"
-    )
+    for index, (members, limit) in enumerate(_groups(case_).values()):
+        oracle_solver.add_constraint(
+            {names[row["id"]]: budget.weight(row) for row in members}, "<=", limit, name=f"budget_{index}"
+        )
     read = [(row, objective.coefficient(row)) for row in case_.rows]
     read = [(row, c) for row, c in read if c is not None]
     if read:
@@ -337,8 +476,9 @@ def _check_assignment(case_, rows, columns, oracle, mode):
             value,
             upper,
         )
-    spent = sum(budget.weight(source) * values[source["id"]] for source in case_.rows)
-    assert spent <= budget.limit + _FEASIBILITY_TOLERANCE * max(1.0, abs(budget.limit)), (mode, spent, budget.limit)
+    for key, (members, limit) in _groups(case_).items():
+        spent = sum(budget.weight(source) * values[source["id"]] for source in members)
+        assert spent <= limit + _FEASIBILITY_TOLERANCE * max(1.0, abs(limit)), (mode, key, spent, limit)
     shares = [objective.coefficient(source) for source in case_.rows]
     level = [c * values[source["id"]] for source, c in zip(case_.rows, shares) if c is not None]
     if not level:
@@ -421,8 +561,9 @@ def test_r4_empty_source_returns_no_rows_whatever_the_budget_says(decidb_cli, bu
 _RATIO = "amount <= cap AND SUM(amount) <= 9 MAXIMIZE MIN(amount / d)"
 _RATE = "amount <= cap AND SUM(amount) <= 9 MAXIMIZE MIN(r * amount)"
 _WEIGHT = "amount <= cap AND SUM(w * amount) <= 9 MAXIMIZE MIN(amount / d)"
+_LIMIT = "amount <= cap AND SUM(w * amount) <= l MAXIMIZE MIN(amount / d)"
 
-# (the class of the error, the text it has, the bad row's d, cap, r and w, the clauses). Row 0 is ordinary.
+# (the class of the error, the text it has, the bad row's d, cap, r and w, the clauses, and its l). Row 0 is ordinary.
 ERROR_CASES = {
     "demand_zero": ("invalid_value", "1 / d is NaN or infinite on some rows", "0.0", "4.0", "1.0", "1.0", _RATIO),
     "demand_nan": ("invalid_value", "1 / d is NaN or infinite on some rows", "'NaN'", "4.0", "1.0", "1.0", _RATIO),
@@ -438,12 +579,13 @@ ERROR_CASES = {
         "'-Infinity'",
         _WEIGHT,
     ),
+    "limit_nan": ("null_bound", "the bound l is NaN on some rows", "2.0", "4.0", "1.0", "1.0", _LIMIT, "'NaN'"),
     "capacity_nan": ("null_bound", "the bound cap is NaN on some rows", "2.0", "'NaN'", "1.0", "1.0", _RATIO),
     "capacity_minus_infinite": ("infeasible", "infeasible", "2.0", "'-Infinity'", "1.0", "1.0", _RATIO),
 }
 
 
-def _error_sql(demand, capacity, rate, weight, decide):
+def _error_sql(demand, capacity, rate, weight, decide, limit="9.0"):
     def typed(value):
         return f"CAST({value} AS DOUBLE)"
 
@@ -451,7 +593,8 @@ def _error_sql(demand, capacity, rate, weight, decide):
         f"SELECT i AS id, CASE WHEN i = 0 THEN 2.0 ELSE {typed(demand)} END AS d, "
         f"CASE WHEN i = 0 THEN 4.0 ELSE {typed(capacity)} END AS cap, "
         f"CASE WHEN i = 0 THEN 1.0 ELSE {typed(rate)} END AS r, "
-        f"CASE WHEN i = 0 THEN 1.0 ELSE {typed(weight)} END AS w FROM range(2) t(i)"
+        f"CASE WHEN i = 0 THEN 1.0 ELSE {typed(weight)} END AS w, "
+        f"CASE WHEN i = 0 THEN 9.0 ELSE {typed(limit)} END AS l FROM range(2) t(i)"
     )
     return f"SELECT id, amount FROM ({source}) DECIDE amount(REAL) SUCH THAT {decide}"
 

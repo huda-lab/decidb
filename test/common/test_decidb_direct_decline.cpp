@@ -1673,6 +1673,11 @@ duckdb::vector<Shape> R4AppliesShapes() {
 	shapes.push_back(R4("a constant weight", "x <= cap AND SUM(2 * x) <= 9"));
 	shapes.push_back(R4("a negative constant weight", "x <= cap AND SUM(-x) <= 9"));
 	shapes.push_back(R4("a weight read from a column", "x <= cap AND SUM(f * x) <= 9"));
+	shapes.push_back(R4("a budget by a key", "x <= cap AND SUM(x) by (name) <= 9"));
+	shapes.push_back(R4("a budget under a WHEN", "x <= cap AND when flag: SUM(x) <= 9"));
+	shapes.push_back(R4("a WHEN inside the sum", "x <= cap AND SUM(when flag: x) <= 9"));
+	shapes.push_back(R4("a budget read from a column", "x <= cap AND SUM(x) <= f"));
+	shapes.push_back(R4("a budget by a key read from a column", "x <= cap AND SUM(x) by (name) <= f"));
 	shapes.push_back(R4("like terms in the budget", "x <= cap AND SUM(x + x) <= 9"));
 	shapes.push_back(R4("a budget of zero", "x <= cap AND SUM(x) <= 0"));
 	shapes.push_back(R4("a negative budget", "x <= cap AND SUM(x) <= -1"));
@@ -1697,12 +1702,10 @@ duckdb::vector<Shape> R4DeclineShapes() {
 	shapes.push_back(R4("an equal budget", "x <= cap AND SUM(x) = 9"));
 	shapes.push_back(
 	    R4("a scope that reads more than the source", "x <= cap AND when txid_current() >= 0: SUM(x) <= 9"));
-	shapes.push_back(R4("a budget by a key", "x <= cap AND SUM(x) by (name) <= 9"));
 	shapes.push_back(R4("a budget per no class", "x <= cap AND per (): SUM(x) <= 9"));
 	// ProveBudget: the weight and the limit.
 	shapes.push_back(R4("a square in the budget", "x <= cap AND SUM(POWER(x, 2)) <= 9"));
 	shapes.push_back(R4("a weight fixed only within the query", "x <= cap AND SUM(txid_current() * x) <= 9"));
-	shapes.push_back(R4("a budget read from a column", "x <= cap AND SUM(x) <= f"));
 	shapes.push_back(R4("a budget of 1e20", "x <= cap AND SUM(x) <= 1e20"));
 	// ProveBox.
 	shapes.push_back(R4("a bound that DirectReadBounds cannot read", R4_CONSTRAINTS, [](DirectIR &ir) {

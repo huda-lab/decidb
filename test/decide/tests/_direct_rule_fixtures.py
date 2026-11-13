@@ -856,10 +856,11 @@ S3 = RuleFixture(
 )
 
 
-def _r4_late_error(decision_sql, d_sql="2.0", cap_sql="4.0", w_sql="1.0"):
-    """A 5,000-row problem whose last row is invalid. Rows 0 to 4998 are ordinary."""
+def _r4_late_error(decision_sql, d_sql="2.0", cap_sql="4.0", w_sql="1.0", g_sql="i % 50", l_sql="9.0"):
+    """A 5,000-row problem whose last row is invalid. Rows 0 to 4998 are ordinary. `g` is a key of fifty groups."""
     return f"""
-        FROM (SELECT i, {d_sql} AS d, {cap_sql} AS cap, {w_sql} AS w FROM range(5000) t(i)) s
+        FROM (SELECT i, {d_sql} AS d, {cap_sql} AS cap, {w_sql} AS w, {g_sql} AS g, {l_sql} AS l
+              FROM range(5000) t(i)) s
         DECIDE {decision_sql}
         """
 
@@ -896,12 +897,13 @@ R4 = RuleFixture(
         ) q
     """,
     table_change="ALTER TABLE direct_r4_life ADD COLUMN extra INTEGER;",
-    # Each is the plain form with one condition changed: an INT decision, a budget
-    # from below, a second budget clause, a lower bound on the decision, a per-row constant inside the MIN, a second
-    # part of the objective, a constant factor on the MIN and a minimized MIN.
+    # Each is the plain form with one condition changed: an INT decision, a budget from below, a budget per class, a
+    # second budget clause, a lower bound on the decision, a per-row constant inside the MIN, a second part of the
+    # objective, a constant factor on the MIN and a minimized MIN.
     near_misses=(
         ("x(INT)", "x <= cap AND SUM(x) <= 9", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "x <= cap AND SUM(x) >= 1", "MAXIMIZE MIN(x / d)"),
+        ("x(REAL)", "x <= cap AND per id: SUM(x) <= 9", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "x <= cap AND SUM(x) <= 9 AND SUM(2 * x) <= 20", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "x >= 1 AND x <= cap AND SUM(x) <= 9", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "x <= cap AND SUM(x) <= 9", "MAXIMIZE MIN(x / d + w)"),
@@ -910,14 +912,17 @@ R4 = RuleFixture(
         ("x(REAL)", "x <= cap AND SUM(x) <= 9", "MINIMIZE MIN(x / d)"),
     ),
     # Forms that look like near misses and apply: the floor written out, a constant weight other than 1, a negative one
-    # and one read from the data, no capacity, a constant capacity, and a literal constant inside the MIN
-    # (canonicalization moves it out of the MIN).
+    # and one read from the data, a budget per group, under a `when` and read from the data, no capacity, a constant
+    # capacity, and a literal constant inside the MIN (canonicalization moves it out of the MIN).
     near_miss_applies=(
         ("x(REAL)", "x >= 0 AND x <= cap AND SUM(x) <= 9", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "x <= cap AND SUM(2 * x) <= 9", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "x <= cap AND SUM(-x) <= 9", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "x <= cap AND SUM(w * x) <= 9", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "SUM(x) <= 9", "MAXIMIZE MIN(x / d)"),
+        ("x(REAL)", "x <= cap AND SUM(x) by (id) <= 9", "MAXIMIZE MIN(x / d)"),
+        ("x(REAL)", "x <= cap AND when w > 1: SUM(x) <= 9", "MAXIMIZE MIN(x / d)"),
+        ("x(REAL)", "x <= cap AND SUM(x) <= cap", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "x <= 3 AND SUM(x) <= 9", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "x <= cap AND SUM(x) <= 9", "MAXIMIZE MIN(x / d + 1)"),
     ),
@@ -940,6 +945,28 @@ R4 = RuleFixture(
                 w_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
             ),
             "w is NaN or infinite on some rows",
+        ),
+        # The last of fifty budgets: a NaN weight, a NaN limit and a negative one.
+        (
+            _r4_late_error(
+                "x(REAL) SUCH THAT x <= cap AND SUM(w * x) by (g) <= 9 MAXIMIZE MIN(x / d)",
+                w_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
+            ),
+            "w is NaN or infinite on some rows",
+        ),
+        (
+            _r4_late_error(
+                "x(REAL) SUCH THAT x <= cap AND SUM(x) by (g) <= l MAXIMIZE MIN(x / d)",
+                l_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 9.0 END",
+            ),
+            "the bound l is NaN on some rows",
+        ),
+        (
+            _r4_late_error(
+                "x(REAL) SUCH THAT x <= cap AND SUM(x) by (g) <= l MAXIMIZE MIN(x / d)",
+                l_sql="CASE WHEN i=4999 THEN -1.0 ELSE 9.0 END",
+            ),
+            "infeasible",
         ),
         (
             _r4_late_error(
