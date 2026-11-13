@@ -124,7 +124,10 @@ The first read:
    column stands in the key.
 3. `P1`, raw values: every coefficient, constant and limit, and the slope of the limit's square, each on the rows that
    read it (`DirectOnKeptRows`).
-4. `P2`: K and b of the row, oriented as a minimum, the row's factor `q = c * s^2`, and the check on every raw value.
+4. `P2`: K and b of the row, oriented as a minimum, the row's factor `q = c * s^2`, and the check on every raw value. A
+   slope that folds to a constant lays out no slope or `q` column: `q` is a literal in every expression that reads it
+   (`Factor`), and DuckDB's rewriter, which the driver runs over the plan, folds those expressions. A constant laid out
+   as a column would reach the next projection as a column reference, which the rewriter cannot fold.
 5. `[W1]`, for a limit from the data: the tightest limit of the group.
 6. `P3`: the target or direction in the domain and the row's point `p`, whether the row is in a ball and whether its
    term is in the ball's sum (`q > 0`), the ball's limit, and the check of `q` past a DOUBLE.
@@ -190,7 +193,7 @@ cases and stated in the test file. They are that file's own.
 
 ## Performance
 
-Measured on an 11-core Apple M3 Pro: the hand-plan comparison on 2026-11-13 at `035a0a2787` at a load of about 3.7, the
+Measured on an 11-core Apple M3 Pro: the hand-plan comparison on 2026-11-13 at `2855b9b17f` at a load of about 4.5, the
 sweeps against Gurobi on 2026-11-09 at `0ab6224c60` (`n1`, `n1_groups`) and on 2026-11-13 at `035a0a2787` (the weighted
 queries).
 
@@ -202,18 +205,15 @@ latency is on all threads; the planning DECIDE adds is apart. Both sides gave th
 
 | Query | Direct CPU | Hand CPU | CPU ratio | Direct latency | Hand latency | DECIDE planning |
 |---|---:|---:|---:|---:|---:|---:|
-| `n1` | 44.7 ms | 29.2 ms | 1.53 | 9.9 ms | 6.3 ms | 0.30 ms |
-| `n1_groups` | 61.5 ms | 43.1 ms | 1.43 | 13.3 ms | 9.4 ms | 0.30 ms |
-| `n1_weighted` | 69.6 ms | 49.9 ms | 1.39 | 14.3 ms | 10.6 ms | 0.36 ms |
-| `n1_weighted_groups` | 85.5 ms | 62.7 ms | 1.36 | 18.0 ms | 13.5 ms | 0.38 ms |
+| `n1` | 37.1 ms | 28.8 ms | 1.29 | 8.4 ms | 5.8 ms | 0.32 ms |
+| `n1_groups` | 49.2 ms | 41.5 ms | 1.19 | 11.4 ms | 9.2 ms | 0.34 ms |
+| `n1_weighted` | 67.0 ms | 49.3 ms | 1.36 | 14.2 ms | 10.2 ms | 0.37 ms |
+| `n1_weighted_groups` | 87.2 ms | 62.9 ms | 1.39 | 18.2 ms | 13.6 ms | 0.38 ms |
 
 The hand plans carry the rule's checks. The weighted queries weight each offer's square by its stock,
-`SUM(POWER(SQRT(ps_availqty) * ship, 2))`, with `ps_availqty` from 1 to 9,999. The 36 to 53% more CPU is the rule's
-general plan against one written for the query. Most of it on `n1` and `n1_groups` is the factor `q`: the plan carries
-it as a column and computes the slope, `q`, its check, `p = d / q` and `(q * p) * p` on every row of both reads, where
-`q` is the constant 1. With `q` in the radius instead, `n1` measures 35.3 ms against the same hand plan's 29.3 (1.21)
-and `n1_groups` 1.16. DuckDB's rewriter, which the driver runs over the plan, folds constants within one expression, and a
-constant carried as a column reaches the next projection as a column reference ([todo.md](todo.md) § N1-12).
+`SUM(POWER(SQRT(ps_availqty) * ship, 2))`, with `ps_availqty` from 1 to 9,999. The 19 to 39% more CPU is the rule's
+general plan against one written for the query. A weighted query computes its factor `q` on every row; a constant slope
+makes `q` a literal (`Factor`), which DuckDB's rewriter folds, so `n1` computes no `q`, no `d / q` and no check of `q`.
 
 **Against Gurobi.** `run.py --sf 0.125 0.25 0.5 1 --queries n1 n1_groups`: a fresh `decidb` process per run, median of
 3, load 3 to 6. At every size Gurobi's objective agreed with direct solve's within 1e-6. A speedup divides Gurobi's
