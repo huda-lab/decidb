@@ -44,6 +44,9 @@ struct Condition final : DirectApplicabilityCondition {
 	double weight = 1.0;
 	DirectLinearForm slope;
 	bool constant_slope = true;
+	//! The factor `q = weight * slope^2` itself, when the slope is a constant: one positive, finite number, the
+	//! plan's literal for every row's q.
+	double constant_factor = 0.0;
 	vector<DirectQuadraticPart> parts;
 	bool has_square = false;
 };
@@ -136,8 +139,8 @@ bool Rule::ProveLimitClause(const DirectIR &ir, ClientContext &context, Conditio
 	double slope;
 	condition.constant_slope = DirectFoldConstantSum(context, square.inner.linear, slope);
 	if (condition.constant_slope) {
-		auto factor = condition.weight * (slope * slope);
-		if (!std::isfinite(factor) || factor <= 0.0) {
+		condition.constant_factor = condition.weight * (slope * slope);
+		if (!std::isfinite(condition.constant_factor) || condition.constant_factor <= 0.0) {
 			return false;
 		}
 	}
@@ -351,7 +354,7 @@ public:
 			limit = Double(joined.answers[next]);
 			in_ball = calc.And(in_ball, calc.Not(calc.IsNull(limit)));
 		}
-		auto in_sum = calc.And(in_ball, Boolean(values.positive));
+		auto in_sum = calc.And(in_ball, condition.constant_slope ? Positive(Factor({})) : Boolean(values.positive));
 
 		DirectProjectionStage p5(binder.GenerateTableIndex());
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
@@ -380,7 +383,8 @@ public:
 private:
 	struct Raw {
 		DirectCarried carried;
-		//! The slope `s` inside the limit's square, on the rows the clause keeps.
+		//! The slope `s` inside the limit's square, on the rows the clause keeps: a column only for a slope that is a
+		//! value of the row.
 		ColumnBinding slope;
 		//! What the aggregates of the limit read, one member per input of the limit's group bound.
 		vector<DirectGroupInputColumns> limit_inputs;
@@ -394,7 +398,8 @@ private:
 		ColumnBinding a;
 		//! The linear coefficient oriented as a minimum; the direction -b of a row with no square.
 		ColumnBinding b;
-		//! The factor of the row's square in the limit, `q = weight * s^2`: NULL on a row the clause drops.
+		//! The factor of the row's square in the limit, `q = weight * s^2`: NULL on a row the clause drops. A column
+		//! only for a slope that is a value of the row (Factor).
 		ColumnBinding q;
 		ColumnBinding valid;
 	};
@@ -404,7 +409,7 @@ private:
 		ColumnBinding limit;
 		ColumnBinding target;
 		ColumnBinding value;
-		//! The row's point (RowTarget) and its factor q.
+		//! The row's point (RowTarget) and its factor q (a column only for a slope that is a value of the row).
 		ColumnBinding point;
 		ColumnBinding q;
 		//! Whether a ball holds the row: the clause keeps it and the group has a limit.
@@ -434,7 +439,7 @@ private:
 		DirectCarried carried;
 		ColumnBinding value;
 		ColumnBinding point;
-		//! Whether the row's factor q is positive.
+		//! Whether the row's factor q is positive: a column only for a slope that is a value of the row (Positive).
 		ColumnBinding positive;
 	};
 
@@ -455,8 +460,13 @@ private:
 		return calc.Col(LogicalType::BOOLEAN, binding);
 	}
 
-	//! Whether the factor q is positive. A constant slope makes q a constant column, which the rule driver's constant
-	//! propagation (DirectConstantPropagation) carries into every expression that reads it and folds this to true.
+	//! The row's factor q: the literal of a constant slope, which DuckDB's rewriter folds into every expression over
+	//! it, or the column `q` of a slope that is a value of the row.
+	ExprPtr Factor(ColumnBinding q) const {
+		return condition.constant_slope ? calc.Num(condition.constant_factor) : Double(q);
+	}
+
+	//! Whether the factor q is positive, built from the factor in both cases: a constant slope folds it to true.
 	ExprPtr Positive(const ExprPtr &q) const {
 		return calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, q, calc.Num(0.0));
 	}
@@ -504,13 +514,17 @@ private:
 		auto over_state = [&](const Expression &value) {
 			return Over(value, state_index);
 		};
-		// The slope of the limit's square is read and checked on the rows the clause keeps, as the limit's inputs are.
-		auto slope =
-		    DirectOnKeptRows(calc, eligible, calc.Wrap(DirectSumOf(optimizer, condition.slope.linear, over_state)));
-		raw.slope = p1.Add(calc.Out(slope));
-		if (auto check = DirectCheckNumber(optimizer, raw.slope, condition.slope.linear_names, condition.slope.linear,
-		                                   source_bindings, p1.index)) {
-			raw.checks.push_back(std::move(check));
+		// A constant slope is the plan's literal (Factor): no column and no check.
+		if (!condition.constant_slope) {
+			// The slope of the limit's square is read and checked on the rows the clause keeps, as the limit's inputs
+			// are.
+			auto slope =
+			    DirectOnKeptRows(calc, eligible, calc.Wrap(DirectSumOf(optimizer, condition.slope.linear, over_state)));
+			raw.slope = p1.Add(calc.Out(slope));
+			if (auto check = DirectCheckNumber(optimizer, raw.slope, condition.slope.linear_names,
+			                                   condition.slope.linear, source_bindings, p1.index)) {
+				raw.checks.push_back(std::move(check));
+			}
 		}
 		for (auto &part : condition.parts) {
 			raw.parts.push_back(
@@ -542,8 +556,10 @@ private:
 		// Without a square the row's target is the direction -b (TargetOf), so b is oriented that way here, and no
 		// column is negated again above it.
 		result.b = p2.Add(calc.Out(condition.has_square ? sum.b : calc.Mul(calc.Num(-1.0), sum.b)));
-		auto slope_value = Double(raw.slope);
-		result.q = p2.Add(calc.Out(calc.Mul(calc.Num(condition.weight), calc.Mul(slope_value, slope_value))));
+		if (!condition.constant_slope) {
+			auto slope = Double(raw.slope);
+			result.q = p2.Add(calc.Out(calc.Mul(calc.Num(condition.weight), calc.Mul(slope, slope))));
+		}
 		// Every check is true or raises; a row passes when all of them do.
 		result.valid = p2.Add(DirectAllHold(calc, std::move(raw.checks)));
 		return result;
@@ -572,7 +588,7 @@ private:
 	RowTarget TargetOf(const Coefficients &coefficients) const {
 		auto a = Double(coefficients.a);
 		auto b = Double(coefficients.b);
-		auto q = Double(coefficients.q);
+		auto q = Factor(coefficients.q);
 		auto zero = calc.Num(0.0);
 		// With a square the target -b / (2*K) (DirectTurningPoint). A row with no square has no objective at all.
 		// Without one the direction, which ComputeCoefficients has stored as b.
@@ -607,7 +623,9 @@ private:
 		result.target = p3.Add(calc.Out(row.target));
 		result.value = p3.Add(calc.Out(row.value));
 		result.point = p3.Add(calc.Out(row.point));
-		result.q = p3.Add(calc.Out(Double(coefficients.q)));
+		if (!condition.constant_slope) {
+			result.q = p3.Add(calc.Out(Double(coefficients.q)));
+		}
 		result.in_ball = p3.Add(calc.Out(in_ball));
 		result.in_sum = p3.Add(calc.Out(calc.And(in_ball, row.positive)));
 		result.loses_precision = p3.Add(calc.Out(row.loses_precision));
@@ -615,7 +633,7 @@ private:
 		// group's NaN limit.
 		vector<unique_ptr<Expression>> checks;
 		checks.push_back(calc.Out(Boolean(coefficients.valid)));
-		checks.push_back(DirectRaiseTooLarge(optimizer, Double(coefficients.q), condition.limit_written));
+		checks.push_back(DirectRaiseTooLarge(optimizer, Factor(coefficients.q), condition.limit_written));
 		for (auto &message : limit_values.messages) {
 			checks.push_back(DirectRaiseMessage(optimizer, calc, message));
 		}
@@ -630,7 +648,9 @@ private:
 		auto row = TargetOf(coefficients);
 		result.value = p3.Add(calc.Out(row.value));
 		result.point = p3.Add(calc.Out(row.point));
-		result.positive = p3.Add(calc.Out(row.positive));
+		if (!condition.constant_slope) {
+			result.positive = p3.Add(calc.Out(row.positive));
+		}
 		return result;
 	}
 
@@ -649,7 +669,7 @@ private:
 		// The row's share of h: the limit's term q * p^2 at the row's point. A point past a DOUBLE (d / q) makes the
 		// share infinite, and the check below raises.
 		auto point = Double(targets.point);
-		auto squared_length = calc.If(in_sum, calc.Mul(calc.Mul(Double(targets.q), point), point),
+		auto squared_length = calc.If(in_sum, calc.Mul(calc.Mul(Factor(targets.q), point), point),
 		                              calc.Constant(Value(LogicalType::DOUBLE)));
 		result.limit = p4.Add(calc.Out(limit));
 		result.squared_length = p4.Add(calc.Out(squared_length));

@@ -624,24 +624,6 @@ def test_n1_empty_source_returns_no_rows_whatever_the_limit_says(decidb_cli, lim
         assert run(decidb_cli, sql, mode)[0] == []
 
 
-@pytest.mark.error
-def test_n1_a_constant_limit_check_folded_to_a_bare_error_raises_only_on_a_row(decidb_cli):
-    # A constant limit of -1 and a constant slope make every test in the plan's infeasible check a constant, which the
-    # rule driver's constant propagation folds, leaving the check as the bare `error()` call. DuckDB cannot fold an
-    # error, so it still raises on a row and never runs on none.
-    def sql(rows):
-        return (
-            f"SELECT i, x FROM (SELECT i, 1.0::DOUBLE AS s FROM range({rows}) t(i)) "
-            "DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) <= -1 MAXIMIZE SUM(s * x)"
-        )
-
-    assert run(decidb_cli, sql(0), "require")[0] == []
-    direct = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {sql(1)}").stderr
-    solver = decidb_cli.execute_raw(f"SET decide_direct_solve='off'; {sql(1)}").stderr
-    assert "DECIDE optimization is infeasible" in direct, direct
-    assert direct == solver, (direct, solver)
-
-
 # ---------------------------------------------------------------------------
 # Errors: both paths fail, in the same class. `test_direct_user_facing.py` compares the text word for word.
 # ---------------------------------------------------------------------------

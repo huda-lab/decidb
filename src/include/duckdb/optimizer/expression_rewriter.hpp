@@ -29,8 +29,6 @@ public:
 
 public:
 	void VisitOperator(LogicalOperator &op) override;
-	//! Apply the rules to the expressions of one operator, leaving its children as they are
-	void RewriteOperator(LogicalOperator &op);
 	void VisitExpression(unique_ptr<Expression> *expression) override;
 
 	// Generates either a constant_or_null(child) expression

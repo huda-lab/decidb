@@ -62,10 +62,6 @@ unique_ptr<Expression> ExpressionRewriter::ConstantOrNull(vector<unique_ptr<Expr
 
 void ExpressionRewriter::VisitOperator(LogicalOperator &op) {
 	VisitOperatorChildren(op);
-	RewriteOperator(op);
-}
-
-void ExpressionRewriter::RewriteOperator(LogicalOperator &op) {
 	this->op = &op;
 
 	to_apply_rules.clear();
