@@ -406,10 +406,10 @@ R1 = RuleFixture(
 )
 
 
-def _n1_late_error(decision_sql, s_sql="1.0", k_sql="'a'", l_sql="9.0"):
+def _n1_late_error(decision_sql, s_sql="1.0", k_sql="'a'", l_sql="9.0", w_sql="1.0"):
     """A 5,000-row problem whose last row is invalid. Rows 0 to 4998 are ordinary."""
     return f"""
-        FROM (SELECT i, {s_sql} AS s, {k_sql} AS k, {l_sql} AS l FROM range(5000) t(i)) t
+        FROM (SELECT i, {s_sql} AS s, {k_sql} AS k, {l_sql} AS l, {w_sql} AS w FROM range(5000) t(i)) t
         DECIDE {decision_sql}
         """
 
@@ -444,20 +444,26 @@ N1 = RuleFixture(
         ) q
     """,
     table_change="ALTER TABLE direct_n1_life ADD COLUMN extra INTEGER;",
-    # Each is the plain form with one condition changed: an INT decision, a limit whose coefficient reads the row, a ball
-    # off center, a box the projection onto the ball does not hold for, and a limit from below.
+    # Each is the plain form with one condition changed: an INT decision, a limit whose coefficient reads the row (a
+    # negative one makes the limit not convex), a row-valued slope beside a square in the objective, a ball off center, a
+    # box the projection onto the ball does not hold for, and a limit from below.
     near_misses=(
         ("x(INT)", "SUM(POWER(x, 2)) <= 25", "MAXIMIZE SUM(p*x)"),
-        ("x(REAL)", "SUM(POWER(w*x, 2)) <= 25", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "SUM(w*POWER(x, 2)) <= 25", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "SUM(w*x*x) <= 25", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "SUM(POWER(w*x, 2)) <= 25", "MINIMIZE SUM(POWER(x - p, 2))"),
         ("x(REAL)", "SUM(POWER(x - w, 2)) <= 25", "MAXIMIZE SUM(p*x)"),
         ("x(REAL)", "x <= 50 AND SUM(POWER(x, 2)) <= 25", "MINIMIZE SUM(POWER(x, 2))"),
         ("x(REAL)", "x >= 1 AND SUM(POWER(x, 2)) <= 25", "MINIMIZE SUM(p*x)"),
         ("x(REAL)", "SUM(POWER(x, 2)) >= 1 AND SUM(POWER(x, 2)) <= 25", "MINIMIZE SUM(p*x)"),
     ),
     # Forms that look like near misses and apply: a limit read from the data or left as an aggregate of the rows, a box
-    # written out, a free domain, and a `by` key with a square.
+    # written out, a free domain, a `by` key with a square, and a weight inside the square (the factor q of each row is
+    # the weight times its slope squared, never negative).
     near_miss_applies=(
         ("x(REAL)", "SUM(POWER(x, 2)) <= lim", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "SUM(POWER(SQRT(w) * x, 2)) <= 25", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "SUM(POWER(w * x, 2)) <= 25", "MAXIMIZE SUM(p*x)"),
         ("x(REAL)", "SUM(x*x) <= 0.5 * SUM(cap)", "MAXIMIZE SUM(p*x)"),
         ("x(REAL)", "x >= 0 AND SUM(POWER(x, 2)) <= 25", "MAXIMIZE SUM(p*x)"),
         ("x(REAL)", "x >= -1e30 AND SUM(POWER(x, 2)) <= 25", "MAXIMIZE SUM(p*x)"),
@@ -512,6 +518,30 @@ N1 = RuleFixture(
             _n1_late_error(
                 "x(REAL) SUCH THAT SUM(POWER(x,2)) by (k) <= 9 MAXIMIZE SUM(s*x)",
                 s_sql="CASE WHEN i=4999 THEN 1e200 ELSE 1.0 END",
+                k_sql="i::VARCHAR",
+            ),
+            "too large for a DOUBLE",
+        ),
+        # A weight inside the square on the last row: a negative one under SQRT, a NaN one, and one whose square is past a
+        # DOUBLE.
+        (
+            _n1_late_error(
+                "x(REAL) SUCH THAT SUM(POWER(SQRT(w) * x, 2)) <= 9 MAXIMIZE SUM(s*x)",
+                w_sql="CASE WHEN i=4999 THEN -1.0 ELSE 1.0 END",
+            ),
+            "cannot take square root of a negative number",
+        ),
+        (
+            _n1_late_error(
+                "x(REAL) SUCH THAT SUM(POWER(SQRT(w) * x, 2)) <= 9 MAXIMIZE SUM(s*x)",
+                w_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
+            ),
+            "SQRT(w) is NaN or infinite on some rows",
+        ),
+        (
+            _n1_late_error(
+                "x(REAL) SUCH THAT SUM(POWER(w * x, 2)) by (k) <= 9 MAXIMIZE SUM(s*x)",
+                w_sql="CASE WHEN i=4999 THEN 1e200 ELSE 1.0 END",
                 k_sql="i::VARCHAR",
             ),
             "too large for a DOUBLE",

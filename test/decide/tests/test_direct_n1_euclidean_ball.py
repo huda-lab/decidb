@@ -630,6 +630,7 @@ def test_n1_empty_source_returns_no_rows_whatever_the_limit_says(decidb_cli, lim
 
 _LINEAR = "SUM(POWER(x, 2)) <= 25 MAXIMIZE SUM(s * x)"
 _SQUARE = "SUM(POWER(x, 2)) <= 25 MINIMIZE SUM(POWER(x - y, 2))"
+_WEIGHTED = "SUM(POWER(SQRT(w) * x, 2)) <= 25 MAXIMIZE SUM(s * x)"
 
 ERROR_CASES = {
     "score_nan": ("invalid_value", "'NaN'", "2.0", "25.0", "'a'", _LINEAR),
@@ -691,16 +692,46 @@ ERROR_CASES = {
         "NULL",
         "x >= -1e30 AND SUM(POWER(x, 2)) by (k) <= 25 MAXIMIZE SUM(s * x)",
     ),
+    # A weight is read on every row the clause keeps: a negative one under SQRT raises DuckDB's own error, and a NaN one
+    # the number check of the slope, naming the expression.
+    "weight_negative_under_sqrt": (
+        "cannot take square root",
+        "2.0",
+        "2.0",
+        "25.0",
+        "'a'",
+        _WEIGHTED,
+        "CASE WHEN i = 1 THEN '-4.0' ELSE '1.0' END",
+    ),
+    "weight_nan_under_sqrt": ("invalid_value", "2.0", "2.0", "25.0", "'a'", _WEIGHTED, "'NaN'"),
+    "weight_nan_as_the_slope": (
+        "invalid_value",
+        "2.0",
+        "2.0",
+        "25.0",
+        "'a'",
+        "SUM(POWER(w * x, 2)) <= 25 MAXIMIZE SUM(s * x)",
+        "'NaN'",
+    ),
+    "weight_infinite_as_the_slope": (
+        "invalid_value",
+        "2.0",
+        "2.0",
+        "25.0",
+        "'a'",
+        "SUM(POWER(w * x, 2)) <= 25 MAXIMIZE SUM(s * x)",
+        "'Infinity'",
+    ),
 }
 
 
-def _error_sql(score, target, limit, key, decide):
+def _error_sql(score, target, limit, key, decide, weight="1.0"):
     def typed(value):
         return f"CAST({value} AS DOUBLE)" if value != "NULL" else "CAST(NULL AS DOUBLE)"
 
     source = (
-        f"SELECT i AS id, {typed(score)} AS s, {typed(target)} AS y, {typed(limit)} AS l, {key}::VARCHAR AS k "
-        "FROM range(3) t(i)"
+        f"SELECT i AS id, {typed(score)} AS s, {typed(target)} AS y, {typed(limit)} AS l, {key}::VARCHAR AS k, "
+        f"{typed(weight)} AS w FROM range(3) t(i)"
     )
     return f"SELECT id, x FROM ({source}) DECIDE x(REAL) SUCH THAT {decide}"
 
@@ -754,31 +785,48 @@ def _solver_values(cli, sql, number_range=False):
     return [float(number) for number in re.findall(r"-?\d+\.\d+(?:e[-+]?\d+)?", raw.stdout)]
 
 
-_MAX_25 = "SUM(POWER(x, 2)) <= 25 MAXIMIZE SUM(s * x)"
+# The boundary rows run with the factor on the square that the limit is written with, 1 and then a constant other than 1
+# (`SUM(2 * POWER(x, 2))`): the factor q is in each row's point d / q and in its share d * (d / q) of h, so the radius
+# of the ball is sqrt(B) whatever q is. A row whose numbers sit on the edge of a DOUBLE at q = 1 sits on another at
+# q = 2, so those rows name their own scores for each factor.
+FACTORS = pytest.mark.parametrize("factor,q", [("", 1.0), ("2 * ", 2.0)], ids=["q1", "q2"])
+
+
+def _max_25(factor):
+    return f"SUM({factor}POWER(x, 2)) <= 25 MAXIMIZE SUM(s * x)"
 
 
 @pytest.mark.correctness
+@FACTORS
 @pytest.mark.parametrize("scale", ["1e153", "1e-150"])
-def test_n1_formula_stays_in_range_where_the_squares_do(decidb_cli, scale):
-    # The sum of squares stays inside the DOUBLE range, so scores this size give the answer of scores 3 and 4. Gurobi
-    # returns x = 0 on each (done.md § Differences from the solver), so this is not a comparison with the solver.
-    sql = _two_rows(f"3 * {scale}", f"4 * {scale}", _MAX_25)
-    assert _direct_values(decidb_cli, sql) == pytest.approx([3.0, 4.0], rel=1e-12)
+def test_n1_formula_stays_in_range_where_the_squares_do(decidb_cli, scale, factor, q):
+    # The sum of squares stays inside the DOUBLE range, so scores this size give the answer of scores 3 and 4 on the
+    # ball of radius 5 / sqrt(q). Gurobi returns x = 0 on each (done.md § Differences from the solver), so this is not
+    # a comparison with the solver.
+    sql = _two_rows(f"3 * {scale}", f"4 * {scale}", _max_25(factor))
+    assert _direct_values(decidb_cli, sql) == pytest.approx([3.0 / math.sqrt(q), 4.0 / math.sqrt(q)], rel=1e-12)
 
 
 @pytest.mark.correctness
-def test_n1_scores_past_the_range_of_their_squares_raise_rather_than_answer_zero(decidb_cli):
+@FACTORS
+def test_n1_scores_past_the_range_of_their_squares_raise_rather_than_answer_zero(decidb_cli, factor, q):
     # h is past a DOUBLE from finite inputs: the direct path raises, where Gurobi returns x = 0 with a warning.
-    sql = _two_rows("3e154", "4e154", _MAX_25)
+    sql = _two_rows("3e154", "4e154", _max_25(factor))
     direct = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {sql}").stderr
     assert "MAXIMIZE SUM(s * x) computes a number too large for a DOUBLE" in direct
     assert _solver_values(decidb_cli, sql, number_range=True) == [0.0, 0.0]
 
 
+# Scores whose shares d * (d / q) are each in range and whose sum h is past a DOUBLE: 1.2e154 squared is 1.44e308, and
+# 1.7e154 times its half is 1.445e308.
+_SHARES_IN_RANGE = [pytest.param("", "1.2e154", id="q1"), pytest.param("2 * ", "1.7e154", id="q2")]
+
+
 @pytest.mark.correctness
-def test_n1_a_sum_of_squares_past_a_double_raises_though_each_square_is_in_range(decidb_cli):
-    # Each square is 1.44e308; only h is past a DOUBLE, a check above the window.
-    sql = _two_rows("1.2e154", "1.2e154", _MAX_25)
+@pytest.mark.parametrize("factor,score", _SHARES_IN_RANGE)
+def test_n1_a_sum_of_squares_past_a_double_raises_though_each_square_is_in_range(decidb_cli, factor, score):
+    # Each share is in range; only h is past a DOUBLE, a check above the window.
+    sql = _two_rows(score, score, _max_25(factor))
     direct = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {sql}").stderr
     assert "MAXIMIZE SUM(s * x) computes a number too large for a DOUBLE" in direct
 
@@ -786,19 +834,24 @@ def test_n1_a_sum_of_squares_past_a_double_raises_though_each_square_is_in_range
 # 5,000 rows: the first 4,998 are in group `a`, whose h passes; the last two are in group `b`, whose h is past a DOUBLE
 # though each square is in range. A vector holds 2,048 rows, so a `LIMIT 1` is met by the first vector, which holds no row
 # of `b`.
-_ONE_GROUP_OVERFLOWS = (
-    "FROM (SELECT i, CASE WHEN i < 4998 THEN 'a' ELSE 'b' END AS k, "
-    "(CASE WHEN i < 4998 THEN 1.0 ELSE 1.2e154 END)::DOUBLE AS s FROM range(5000) t(i)) DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) by (k) <= 25 MAXIMIZE SUM(s * x)"
-)
+def _one_group_overflows(factor, score):
+    return (
+        "FROM (SELECT i, CASE WHEN i < 4998 THEN 'a' ELSE 'b' END AS k, "
+        f"(CASE WHEN i < 4998 THEN 1.0 ELSE {score} END)::DOUBLE AS s FROM range(5000) t(i)) "
+        f"DECIDE x(REAL) SUCH THAT SUM({factor}POWER(x, 2)) by (k) <= 25 MAXIMIZE SUM(s * x)"
+    )
 
 
 @pytest.mark.correctness
+@pytest.mark.parametrize("factor,score", _SHARES_IN_RANGE)
 @pytest.mark.parametrize("read", ["SELECT count(*) FROM (", "SELECT x FROM ("])
 @pytest.mark.parametrize("tail", ["", " LIMIT 1"])
-def test_n1_a_group_whose_h_passes_a_double_raises_though_no_streamed_row_reads_it(decidb_cli, read, tail):
+def test_n1_a_group_whose_h_passes_a_double_raises_though_no_streamed_row_reads_it(
+    decidb_cli, read, tail, factor, score
+):
     # h is checked when the groups are built (the group's row, above the aggregate), so the group raises whether or not
     # a row of it is among the rows read: the solver reads every row, and raises for the one group of several.
-    sql = f"{read}{_ONE_GROUP_OVERFLOWS}) q{tail}"
+    sql = f"{read}{_one_group_overflows(factor, score)}) q{tail}"
     direct = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {sql}").stderr
     assert "MAXIMIZE SUM(s * x) computes a number too large for a DOUBLE" in direct
 
@@ -815,12 +868,13 @@ def test_n1_a_target_past_a_double_raises_on_a_row_outside_every_ball(decidb_cli
 
 
 @pytest.mark.correctness
-def test_n1_a_zero_answer_has_no_sign(decidb_cli):
+@FACTORS
+def test_n1_a_zero_answer_has_no_sign(decidb_cli, factor, q):
     # A free domain keeps the direction as it is, and -0 is what `MINIMIZE` makes of a score of 0. DeciDB's solver path
     # returns 0, and the difference would show in the printed row.
     sql = (
         "SELECT x FROM (FROM (VALUES (1, 0.0::DOUBLE), (2, 1.0::DOUBLE)) t(id, s) DECIDE x(REAL) "
-        "SUCH THAT x >= -1e30 AND SUM(POWER(x, 2)) <= 25 MINIMIZE SUM(s * x)) q ORDER BY id"
+        f"SUCH THAT x >= -1e30 AND SUM({factor}POWER(x, 2)) <= 25 MINIMIZE SUM(s * x)) q ORDER BY id"
     )
     assert math.copysign(1.0, _direct_values(decidb_cli, sql)[0]) == 1.0
 
@@ -914,40 +968,98 @@ def test_n1_a_square_factor_of_1e308_has_the_target_of_the_factor_one_problem(de
     _check_assignment(unit, result, columns, oracle, "require")
 
 
+# A weight on every row, from 1e-150 to 1e150. Both the oracle's Gurobi and the solver path stop answering at the ends of
+# the range (unbounded below 1e-10, x = 0 above 1e50), so the direct answer is checked on the unit problem: rows of weight
+# W and 4W (the worked example) are the unit rows on the scale z = SQRT(W) * x. Written as `SQRT(w) * x` the slope is
+# SQRT(W) and q = W; written as `w * x` with weights W and 2W the slope scales by W and q = W^2.
+_WEIGHT_SCALES = ["1e-150", "1e-100", "1e-50", "1e-10", "1e-3", "1", "1e3", "1e10", "1e50", "1e100", "1e150"]
+_WEIGHT_SPELLINGS = {
+    # spelling -> (the limit, the second row's weight over the first's, q of the first row, x scales by this over z)
+    "root": ("SUM(POWER(SQRT(w) * x, 2)) <= 5", 4.0, lambda weight: weight, lambda weight: math.sqrt(weight)),
+    "slope": ("SUM(POWER(w * x, 2)) <= 5", 2.0, lambda weight: weight**2, lambda weight: weight),
+}
+
+
+def _weighted_pair(scale, ratio, limit):
+    return (
+        f"SELECT x FROM (FROM (VALUES (1, 1.0::DOUBLE, {scale}::DOUBLE), (2, 4.0::DOUBLE, {ratio} * {scale}::DOUBLE)) "
+        f"t(id, s, w) DECIDE x(REAL) SUCH THAT {limit} MAXIMIZE SUM(s * x)) q ORDER BY id"
+    )
+
+
+@pytest.mark.quadratic
 @pytest.mark.correctness
-def test_n1_scores_whose_squares_vanish_stay_at_zero(decidb_cli):
+@pytest.mark.parametrize("spelling", sorted(_WEIGHT_SPELLINGS))
+@pytest.mark.parametrize("scale", _WEIGHT_SCALES)
+def test_n1_weights_from_1e_150_to_1e150_are_the_unit_problem_scaled(decidb_cli, oracle_solver, spelling, scale):
+    limit, ratio, q_of, unscale = _WEIGHT_SPELLINGS[spelling]
+    oracle = _solve_with_oracle(oracle_solver, Case(WORKED, "root_b5", "max"))
+    values = _direct_values(decidb_cli, _weighted_pair(scale, ratio, limit))
+    weight = float(scale)
+    # The objective on the scale z = unscale * x is the unit problem's.
+    assert _objective((1.0, 4.0), values) * unscale(weight) == pytest.approx(
+        oracle.objective_value, rel=_OBJECTIVE_TOLERANCE
+    )
+    # Both rows sit on the ball: the sum of q * x^2 is the limit, written as a norm so that no square leaves the range.
+    q = (q_of(weight), q_of(weight * ratio))
+    assert math.hypot(*(math.sqrt(factor) * value for factor, value in zip(q, values))) == pytest.approx(
+        math.sqrt(5.0), rel=1e-12
+    ), values
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "spelling,scale",
+    # The weights the solver answers to 1e-3 and without a warning. Past them it stops: `w * x` at 1e3 warns and is 0.3%
+    # off, and below 1e-10 and above 1e50 it answers unbounded or x = 0.
+    [("root", "1e-3"), ("root", "1"), ("root", "1e3"), ("slope", "1e-3"), ("slope", "1")],
+)
+def test_n1_weights_the_solver_answers_agree_with_it(decidb_cli, spelling, scale):
+    limit, ratio, _, _ = _WEIGHT_SPELLINGS[spelling]
+    sql = _weighted_pair(scale, ratio, limit)
+    assert _direct_values(decidb_cli, sql) == pytest.approx(_solver_values(decidb_cli, sql), rel=1e-3)
+
+
+@pytest.mark.correctness
+@FACTORS
+def test_n1_scores_whose_squares_vanish_stay_at_zero(decidb_cli, factor, q):
     # h underflows to 0 from nonzero scores: the formula's case h = 0 is x = 0, the point the solver also returns. Both
     # paths warn.
-    sql = _two_rows("3e-200", "4e-200", _MAX_25)
+    sql = _two_rows("3e-200", "4e-200", _max_25(factor))
     assert _direct_values(decidb_cli, sql, number_range=True) == [0.0, 0.0]
     assert _solver_values(decidb_cli, sql, number_range=True) == [0.0, 0.0]
 
 
 # The warning a direct plan prints: h below the normal range of a DOUBLE, on a row that reads it. Scores 3 and 4 times the
 # scale make h 25 * scale^2, so 1e-153 stays in the normal range and 1e-155 does not.
-_TINY_LIMIT = "SUM(POWER(x, 2)) <= 1e-320 MINIMIZE SUM(POWER(x - s, 2))"
+def _tiny_limit(factor):
+    return f"SUM({factor}POWER(x, 2)) <= 1e-320 MINIMIZE SUM(POWER(x - s, 2))"
 
 
 @pytest.mark.correctness
+@FACTORS
 @pytest.mark.parametrize("scale,warns", [("1e-153", False), ("1e-155", True)])
-def test_n1_warns_when_h_leaves_the_normal_range(decidb_cli, scale, warns):
-    _direct_values(decidb_cli, _two_rows(f"3 * {scale}", f"4 * {scale}", _MAX_25), number_range=warns)
+def test_n1_warns_when_h_leaves_the_normal_range(decidb_cli, scale, warns, factor, q):
+    _direct_values(decidb_cli, _two_rows(f"3 * {scale}", f"4 * {scale}", _max_25(factor)), number_range=warns)
 
 
 @pytest.mark.correctness
-def test_n1_scores_of_zero_read_no_h_and_are_silent(decidb_cli):
-    assert _direct_values(decidb_cli, _two_rows("0", "0", _MAX_25)) == [0.0, 0.0]
+@FACTORS
+def test_n1_scores_of_zero_read_no_h_and_are_silent(decidb_cli, factor, q):
+    assert _direct_values(decidb_cli, _two_rows("0", "0", _max_25(factor))) == [0.0, 0.0]
 
 
 @pytest.mark.correctness
-def test_n1_a_target_inside_the_ball_reads_no_scale_and_is_silent(decidb_cli):
-    sql = _two_rows("3e-162", "4e-162", "SUM(POWER(x, 2)) <= 25 MINIMIZE SUM(POWER(x - s, 2))")
+@FACTORS
+def test_n1_a_target_inside_the_ball_reads_no_scale_and_is_silent(decidb_cli, factor, q):
+    sql = _two_rows("3e-162", "4e-162", f"SUM({factor}POWER(x, 2)) <= 25 MINIMIZE SUM(POWER(x - s, 2))")
     assert _direct_values(decidb_cli, sql) == [3e-162, 4e-162]
 
 
 @pytest.mark.correctness
-def test_n1_a_target_outside_a_tiny_ball_reads_the_scale_and_warns(decidb_cli):
-    _direct_values(decidb_cli, _two_rows("3e-160", "4e-160", _TINY_LIMIT), number_range=True)
+@FACTORS
+def test_n1_a_target_outside_a_tiny_ball_reads_the_scale_and_warns(decidb_cli, factor, q):
+    _direct_values(decidb_cli, _two_rows("3e-160", "4e-160", _tiny_limit(factor)), number_range=True)
 
 
 # A square's turning point warns from one expression under every rule (DirectTurningPoint): a square factor, or a nonzero
@@ -999,7 +1111,7 @@ def test_n1_a_row_outside_every_ball_reads_no_h_and_is_silent(decidb_cli):
 def test_n1_warns_once_however_many_rows_read_h(decidb_cli):
     sql = (
         "SELECT count(*) FROM (FROM (SELECT i, 1e-170::DOUBLE AS s FROM range(200000) t(i)) "
-        f"DECIDE x(REAL) SUCH THAT {_MAX_25}) q"
+        f"DECIDE x(REAL) SUCH THAT {_max_25('')}) q"
     )
     assert run(decidb_cli, sql, "require", expect_number_range=True)[0] == [(200000,)]
 
@@ -1007,34 +1119,37 @@ def test_n1_warns_once_however_many_rows_read_h(decidb_cli):
 @pytest.mark.correctness
 def test_n1_warns_again_on_each_query(decidb_exe_path):
     # One process and session, so the second query finds the first's state: QueryBegin must clear it.
-    sql = _two_rows("3e-162", "4e-162", _MAX_25)
+    sql = _two_rows("3e-162", "4e-162", _max_25(""))
     script = f"SET decide_direct_solve='require'; {sql}; {sql}; PREPARE p AS {sql}; EXECUTE p; EXECUTE p;"
     done = subprocess.run([decidb_exe_path, "-noheader", "-list", "-c", script], capture_output=True, text=True)
     assert done.stderr.count("a very large or very small number may make this answer inaccurate") == 4, done.stderr
 
 
 @pytest.mark.correctness
+@FACTORS
 @pytest.mark.parametrize("limit", ["1e6", "1e18", "1e19"])
-def test_n1_large_limit_answers_as_the_solver_does(decidb_cli, limit):
-    sql = _two_rows("3", "4", f"SUM(POWER(x, 2)) <= {limit} MAXIMIZE SUM(s * x)")
+def test_n1_large_limit_answers_as_the_solver_does(decidb_cli, limit, factor, q):
+    sql = _two_rows("3", "4", f"SUM({factor}POWER(x, 2)) <= {limit} MAXIMIZE SUM(s * x)")
     direct = _direct_values(decidb_cli, sql)
     assert direct == pytest.approx(_solver_values(decidb_cli, sql, float(limit) >= 4.5e9), rel=1e-3)
-    assert sum(value**2 for value in direct) == pytest.approx(float(limit), rel=1e-12)
+    assert sum(q * value**2 for value in direct) == pytest.approx(float(limit), rel=1e-12)
 
 
 @pytest.mark.correctness
-def test_n1_scale_stays_in_range_where_the_limit_over_h_does_not(decidb_cli):
+@FACTORS
+def test_n1_scale_stays_in_range_where_the_limit_over_h_does_not(decidb_cli, factor, q):
     # B / h is 1e319 here: the scale is computed as sqrt(B) / sqrt(h), which is 3e159.
-    sql = _two_rows("6e-151", "8e-151", "SUM(POWER(x, 2)) <= 1e19 MAXIMIZE SUM(s * x)")
-    assert sum(value**2 for value in _direct_values(decidb_cli, sql)) == pytest.approx(1e19, rel=1e-12)
+    sql = _two_rows("6e-151", "8e-151", f"SUM({factor}POWER(x, 2)) <= 1e19 MAXIMIZE SUM(s * x)")
+    assert sum(q * value**2 for value in _direct_values(decidb_cli, sql)) == pytest.approx(1e19, rel=1e-12)
 
 
 @pytest.mark.correctness
-def test_n1_data_limit_past_the_solvers_infinity_is_a_number_to_both_paths(decidb_cli):
+@FACTORS
+def test_n1_data_limit_past_the_solvers_infinity_is_a_number_to_both_paths(decidb_cli, factor, q):
     # A limit read from the data is not folded into an "effective infinity" on either path.
     sql = (
         "SELECT x FROM (FROM (VALUES (1, 3.0::DOUBLE, 1e25::DOUBLE), (2, 4.0::DOUBLE, 1e25::DOUBLE)) t(id, s, l) "
-        "DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) <= l MAXIMIZE SUM(s * x)) q ORDER BY id"
+        f"DECIDE x(REAL) SUCH THAT SUM({factor}POWER(x, 2)) <= l MAXIMIZE SUM(s * x)) q ORDER BY id"
     )
     assert _direct_values(decidb_cli, sql) == pytest.approx(_solver_values(decidb_cli, sql, True), rel=1e-3)
 

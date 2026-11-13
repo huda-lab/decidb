@@ -386,6 +386,7 @@ def test_s1_a_finite_literal_score_adds_no_too_large_check(decidb_cli):
             "s(REAL), t(REAL) SUCH THAT s BETWEEN 0 AND q AND t BETWEEN 0 AND q MINIMIZE SUM(POWER(s - p, 2)) + SUM(q * t)",
         ),
         ("N1_EUCLIDEAN_BALL", "s(REAL) SUCH THAT SUM(POWER(s, 2)) <= 4 MAXIMIZE SUM(p * s)"),
+        ("N1_EUCLIDEAN_BALL", "s(REAL) SUCH THAT SUM(POWER(SQRT(q) * s, 2)) <= 4 MAXIMIZE SUM(p * s)"),
         ("A2_SINGLE_FACILITY_LOCATION", "per (): s(REAL) SUCH THAT s BETWEEN 0 AND 9 MINIMIZE SUM(POWER(s - p, 2))"),
     ],
 )
@@ -678,6 +679,36 @@ _N1_MAX = "SUM(POWER(x, 2)) <= l MAXIMIZE SUM(s * x)"
 def test_n1_errors_are_the_solvers_word_for_word(decidb_cli, s, y, l, k, decide, message):
     rows = _N1_ROWS.format(s=s, y=y, l=l, k=k)
     sql = f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, s, y, l, k) DECIDE x(REAL) SUCH THAT {decide}) q"
+    direct = _raw(decidb_cli, sql, mode="require").stderr
+    assert message in direct, direct
+    assert direct == _raw(decidb_cli, sql, mode="off").stderr
+
+
+_N1_WEIGHT_ROWS = "(1, 3.0::DOUBLE, 1.0::DOUBLE), (2, 4.0::DOUBLE, {w}::DOUBLE)"
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "w,limit,message",
+    [
+        # A weight inside the square is read on every row the clause keeps. A negative one under SQRT is DuckDB's own error,
+        # a NaN or infinite one names the slope as written, and one whose square is past a DOUBLE names the clause.
+        ("-4.0", "SUM(POWER(SQRT(w) * x, 2)) <= 25", "cannot take square root of a negative number"),
+        ("'NaN'", "SUM(POWER(SQRT(w) * x, 2)) <= 25", "SQRT(w) is NaN or infinite on some rows"),
+        ("'Infinity'", "SUM(POWER(w * x, 2)) <= 25", "w is NaN or infinite on some rows"),
+        (
+            "1e200",
+            "SUM(POWER(w * x, 2)) <= 25",
+            "SUM(POWER(w * x, 2)) <= 25 computes a number too large for a DOUBLE. Scale its data down.",
+        ),
+        # A row of weight 0 or a NULL weight improves without end.
+        ("0.0", "SUM(POWER(SQRT(w) * x, 2)) <= 25", "unbounded"),
+        ("NULL", "SUM(POWER(w * x, 2)) <= 25", "unbounded"),
+    ],
+)
+def test_n1_a_weight_errors_are_the_solvers_word_for_word(decidb_cli, w, limit, message):
+    rows = _N1_WEIGHT_ROWS.format(w=w)
+    sql = f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, s, w) DECIDE x(REAL) SUCH THAT {limit} MAXIMIZE SUM(s * x)) q"
     direct = _raw(decidb_cli, sql, mode="require").stderr
     assert message in direct, direct
     assert direct == _raw(decidb_cli, sql, mode="off").stderr

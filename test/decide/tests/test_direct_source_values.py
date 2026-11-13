@@ -141,6 +141,23 @@ N1_SLOTS = {
     "n1_constant_part_when_excludes_row": _slot(
         "t", "x(REAL)", _BALL, "MAXIMIZE SUM(when f: (id + 1) * x + t)", ("-inf", "inf", "null"), when_holds=False
     ),
+    # A weight inside the square, on the row a `when` drops: the objective drops that row too, so it has no direction.
+    "n1_weight_clause_when_excludes_row": _slot(
+        "fixed_value",
+        "x(REAL)",
+        "when f: SUM(POWER(SQRT(fixed_value) * x, 2)) <= 4",
+        "MAXIMIZE SUM(when f: (id + 1) * x)",
+        ("-inf", "inf", "null"),
+        when_holds=False,
+    ),
+    "n1_weight_local_when_excludes_row": _slot(
+        "fixed_value",
+        "x(REAL)",
+        "SUM(when f: POWER(fixed_value * x, 2)) <= 4",
+        "MAXIMIZE SUM(when f: (id + 1) * x)",
+        ("-inf", "inf", "null"),
+        when_holds=False,
+    ),
 }
 N1_CASES = [pytest.param(slot, value, id=f"{slot}-{value}") for slot, spec in N1_SLOTS.items() for value in spec[4]]
 
@@ -212,6 +229,7 @@ RAISING_CASES = {
     "n1_score": "x(REAL) SUCH THAT SUM(POWER(x, 2)) <= 4 MAXIMIZE SUM(when f: ln(w) * x)",
     "n1_target": "x(REAL) SUCH THAT SUM(POWER(x, 2)) <= 4 MINIMIZE SUM(when f: POWER(x - ln(w), 2))",
     "n1_constant": "x(REAL) SUCH THAT SUM(POWER(x, 2)) <= 4 MAXIMIZE SUM(when f: v * x + ln(w))",
+    "n1_weight": "x(REAL) SUCH THAT when f: SUM(POWER(SQRT(ln(w)) * x, 2)) <= 4 MAXIMIZE SUM(when f: v * x)",
 }
 
 
