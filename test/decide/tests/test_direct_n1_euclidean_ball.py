@@ -762,6 +762,18 @@ def test_n1_a_factor_past_a_double_raises_the_solvers_error(decidb_cli):
     assert direct == solver, (direct, solver)
 
 
+@pytest.mark.error
+def test_n1_a_huge_constant_factor_on_a_square_objective_raises_the_too_large_error(decidb_cli):
+    # The share of h is the limit's term q * y^2 at the target y: 1e200 * (3e60)^2 passes a DOUBLE, so the direct path
+    # raises, naming the objective. The solver path answers 0 here, so the two are not compared.
+    sql = (
+        "SELECT id, x FROM (FROM (VALUES (1, 3e60::DOUBLE), (2, 4e60::DOUBLE)) t(id, s) "
+        "DECIDE x(REAL) SUCH THAT SUM(1e200 * POWER(x, 2)) <= 25 MINIMIZE SUM(POWER(x - s, 2))) ORDER BY id"
+    )
+    direct = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {sql}").stderr
+    assert "MINIMIZE SUM(POWER(x - s, 2)) computes a number too large for a DOUBLE" in direct, direct
+
+
 # ---------------------------------------------------------------------------
 # The numeric boundary: the direct path against the solver alone, since the oracle is the solver's own engine.
 # ---------------------------------------------------------------------------

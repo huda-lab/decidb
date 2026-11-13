@@ -234,7 +234,8 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //!   [W1]  the group's tightest limit, for a limit read from the data
 //!   P3    the row's target (or direction) in the domain and its point (the direction over q), whether it lost
 //!         precision, whether it is in a ball and whether its square is in the ball's sum (q > 0), and the ball's limit
-//!   P4    the row's share of h, every other check a row can raise, and the target's warning
+//!   P4    the row's share of h (the limit's term q * p^2 at its point p), every other check a row can raise, and
+//!         the target's warning
 //!   H     a hash aggregate on the group key, one row per group (one row for a single ball): h, the sum of the shares;
 //!         whether the checks of the rows held; and the group's limit, for a limit read from the data
 //!   C     the group's values, computed once on its row (loop-invariant code motion: they depend on the group alone):
@@ -403,9 +404,9 @@ private:
 		ColumnBinding limit;
 		ColumnBinding target;
 		ColumnBinding value;
-		//! The row's point and its dual (RowTarget).
+		//! The row's point (RowTarget) and its factor q.
 		ColumnBinding point;
-		ColumnBinding dual;
+		ColumnBinding q;
 		//! Whether a ball holds the row: the clause keeps it and the group has a limit.
 		ColumnBinding in_ball;
 		//! Whether the row's square is in the ball's sum: it is in the ball, and its factor q is positive.
@@ -547,16 +548,15 @@ private:
 	//===------------------------------------------------------------------===//
 
 	//! The row's target (or direction) and its value in the domain, from K and b of the row; and the row's part of the
-	//! ball's sum, from its factor q. With the direction d, the row's point is d / q and its dual is d: the row's share
-	//! of h is dual * point = d^2 / q, and x is the point scaled to the ball. With a square the factor q is one
-	//! constant and the row's own value y is its point, whose dual is q * y: the share is q * y^2, the limit read on y.
+	//! ball's sum, from its factor q. The row's point p is what x is proportional to: the direction over q for a
+	//! direction d, the row's own value y with a square (where q is one constant). The row's share of h is the limit's
+	//! term q * p^2 at the point, computed as (q * p) * p so that q * p, about d for a direction over a tiny q, comes
+	//! first.
 	struct RowTarget {
 		ExprPtr target;
 		ExprPtr value;
-		//! The point and its dual. The point is NULL on a row whose factor q is not positive: its square is not in the
-		//! sum.
+		//! The point. It is NULL on a row whose factor q is not positive: its square is not in the sum.
 		ExprPtr point;
-		ExprPtr dual;
 		//! Whether the row's factor q is positive.
 		ExprPtr positive;
 		//! Whether computing the target lost precision (DirectTurningPoint): false on a row with no square.
@@ -580,7 +580,6 @@ private:
 		// A row whose q is 0 or NULL has no square in the sum, and no point.
 		auto null = calc.Constant(Value(LogicalType::DOUBLE));
 		result.point = condition.has_square ? result.value : calc.If(result.positive, calc.Div(result.value, q), null);
-		result.dual = condition.has_square ? calc.Mul(q, result.value) : result.value;
 		result.loses_precision = turning.loses_precision;
 		return result;
 	}
@@ -602,7 +601,7 @@ private:
 		result.target = p3.Add(calc.Out(row.target));
 		result.value = p3.Add(calc.Out(row.value));
 		result.point = p3.Add(calc.Out(row.point));
-		result.dual = p3.Add(calc.Out(row.dual));
+		result.q = p3.Add(calc.Out(Double(coefficients.q)));
 		result.in_ball = p3.Add(calc.Out(in_ball));
 		result.in_sum = p3.Add(calc.Out(calc.And(in_ball, row.positive)));
 		result.loses_precision = p3.Add(calc.Out(row.loses_precision));
@@ -641,8 +640,10 @@ private:
 		auto in_sum = Boolean(targets.in_sum);
 		auto limit = Double(targets.limit);
 		auto zero = calc.Num(0.0);
-		// The row's share of h. A point past a DOUBLE (d / q) makes the share infinite, and the check below raises.
-		auto squared_length = calc.If(in_sum, calc.Mul(Double(targets.dual), Double(targets.point)),
+		// The row's share of h: the limit's term q * p^2 at the row's point. A point past a DOUBLE (d / q) makes the
+		// share infinite, and the check below raises.
+		auto point = Double(targets.point);
+		auto squared_length = calc.If(in_sum, calc.Mul(calc.Mul(Double(targets.q), point), point),
 		                              calc.Constant(Value(LogicalType::DOUBLE)));
 		result.limit = p4.Add(calc.Out(limit));
 		result.squared_length = p4.Add(calc.Out(squared_length));
