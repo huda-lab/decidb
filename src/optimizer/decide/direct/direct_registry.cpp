@@ -13,6 +13,7 @@ vector<unique_ptr<DirectSolveRule>> RegisteredDirectRules() {
 	rules.push_back(MakeA2SingleFacilityLocationRule());
 	rules.push_back(MakeO1MongeAssignmentRule());
 	rules.push_back(MakeS3MaxCardinalityKnapsackRule());
+	rules.push_back(MakeR4MaxMinFairnessRule());
 	return rules;
 }
 

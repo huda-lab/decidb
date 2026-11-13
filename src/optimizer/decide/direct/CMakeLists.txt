@@ -19,6 +19,7 @@ add_library_unity(
   n1_euclidean_ball_rule.cpp
   o1_monge_assignment_rule.cpp
   r1_continuous_knapsack_rule.cpp
+  r4_max_min_fairness_rule.cpp
   s1_uniform_matroid_rule.cpp
   s2_laminar_matroid_rule.cpp
   s3_max_cardinality_knapsack_rule.cpp)

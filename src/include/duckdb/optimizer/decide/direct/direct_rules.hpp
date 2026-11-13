@@ -41,4 +41,9 @@ unique_ptr<DirectSolveRule> MakeS3MaxCardinalityKnapsackRule();
 //! the coarsest (S2, the laminar matroid).
 unique_ptr<DirectSolveRule> MakeS2LaminarMatroidRule();
 
+//! The ninth direct-solve rule: one row-scoped REAL decision in a box [0, cap] under one budget `SUM(w*x) <= B`,
+//! maximizing the smallest `x / demand`, answered by one common level for every row (R4, weighted max-min fair
+//! allocation).
+unique_ptr<DirectSolveRule> MakeR4MaxMinFairnessRule();
+
 } // namespace duckdb

@@ -1646,6 +1646,102 @@ TEST_CASE("S2 declines each shape that is not exactly its class", "[decidb]") {
 }
 
 //===--------------------------------------------------------------------===//
+// R4
+//===--------------------------------------------------------------------===//
+
+const char *R4_CONSTRAINTS = "x <= cap AND SUM(x) <= 9";
+const char *R4_OBJECTIVE = "MAXIMIZE MIN(x / w)";
+
+Shape R4(const string &branch, const string &constraints, Edit edit = nullptr, const string &objective = R4_OBJECTIVE,
+         const string &declaration = "x(REAL)") {
+	return {branch, declaration, constraints, objective, std::move(edit)};
+}
+
+//! A shape whose constraints are the plain ones and whose objective is the one the case is about.
+Shape R4Objective(const string &branch, const string &objective, Edit edit = nullptr) {
+	return R4(branch, R4_CONSTRAINTS, std::move(edit), objective);
+}
+
+duckdb::vector<Shape> R4AppliesShapes() {
+	duckdb::vector<Shape> shapes;
+	shapes.push_back(R4("the plain form", R4_CONSTRAINTS));
+	shapes.push_back(R4("no capacity", "SUM(x) <= 9"));
+	shapes.push_back(R4("the floor written out", "x >= 0 AND x <= cap AND SUM(x) <= 9"));
+	shapes.push_back(R4("a constant capacity", "x <= 3 AND SUM(x) <= 9"));
+	shapes.push_back(R4("a capacity under a WHEN", "when flag: x <= cap AND SUM(x) <= 9"));
+	shapes.push_back(R4("a coefficient on the decision in the capacity", "2 * x <= cap AND SUM(x) <= 9"));
+	shapes.push_back(R4("a constant weight", "x <= cap AND SUM(2 * x) <= 9"));
+	shapes.push_back(R4("like terms in the budget", "x <= cap AND SUM(x + x) <= 9"));
+	shapes.push_back(R4("a budget of zero", "x <= cap AND SUM(x) <= 0"));
+	shapes.push_back(R4("a negative budget", "x <= cap AND SUM(x) <= -1"));
+	shapes.push_back(R4Objective("a MIN under a part WHEN", "MAXIMIZE MIN(when flag: x / w)"));
+	shapes.push_back(R4Objective("a MIN under an objective WHEN", "MAXIMIZE when flag: MIN(x / w)"));
+	shapes.push_back(R4Objective("a coefficient read from a column", "MAXIMIZE MIN(f * x)"));
+	shapes.push_back(
+	    R4Objective("a literal constant in the MIN, which canonicalization moves out", "MAXIMIZE MIN(x / w + 1)"));
+	shapes.push_back(R4Objective("a constant beside the MIN", "MAXIMIZE MIN(x / w) + 2"));
+	return shapes;
+}
+
+duckdb::vector<Shape> R4DeclineShapes() {
+	duckdb::vector<Shape> shapes;
+	// The decision.
+	shapes.push_back(R4("an INT decision", R4_CONSTRAINTS, nullptr, R4_OBJECTIVE, "x(INT)"));
+	// ProveBudget: the clause.
+	shapes.push_back(R4("no budget clause", "x <= cap"));
+	shapes.push_back(R4("a per-row clause that is not one row's bound", "x IN (1, 2) AND SUM(x) <= 9"));
+	shapes.push_back(R4("two budget clauses", "x <= cap AND SUM(x) <= 9 AND SUM(2 * x) <= 20"));
+	shapes.push_back(R4("a budget from below", "x <= cap AND SUM(x) >= 1"));
+	shapes.push_back(R4("an equal budget", "x <= cap AND SUM(x) = 9"));
+	shapes.push_back(
+	    R4("a scope that reads more than the source", "x <= cap AND when txid_current() >= 0: SUM(x) <= 9"));
+	shapes.push_back(R4("a budget by a key", "x <= cap AND SUM(x) by (name) <= 9"));
+	shapes.push_back(R4("a budget per no class", "x <= cap AND per (): SUM(x) <= 9"));
+	// ProveBudget: the weight and the limit.
+	shapes.push_back(R4("a square in the budget", "x <= cap AND SUM(POWER(x, 2)) <= 9"));
+	shapes.push_back(R4("a weight fixed only within the query", "x <= cap AND SUM(txid_current() * x) <= 9"));
+	shapes.push_back(R4("a weight read from a column", "x <= cap AND SUM(f * x) <= 9"));
+	shapes.push_back(R4("a negative weight", "x <= cap AND SUM(-x) <= 9"));
+	shapes.push_back(R4("a budget read from a column", "x <= cap AND SUM(x) <= f"));
+	shapes.push_back(R4("a budget of 1e20", "x <= cap AND SUM(x) <= 1e20"));
+	// ProveBox.
+	shapes.push_back(R4("a bound that DirectReadBounds cannot read", R4_CONSTRAINTS, [](DirectIR &ir) {
+		ir.constraints[0].rhs = make_uniq<BoundSubqueryExpression>(LogicalType::DOUBLE);
+	}));
+	shapes.push_back(R4("a lower bound below zero", "x >= -1 AND x <= cap AND SUM(x) <= 9"));
+	shapes.push_back(R4("a lower bound read from a column", "x >= f AND x <= cap AND SUM(x) <= 9"));
+	shapes.push_back(R4("a capacity with a negative coefficient on the decision", "-x <= cap AND SUM(x) <= 9"));
+	shapes.push_back(R4("a capacity with a coefficient read from a column", "w * x <= cap AND SUM(x) <= 9"));
+	// ProveObjective: the part.
+	shapes.push_back(R4Objective("no objective", ""));
+	shapes.push_back(R4Objective("a maximum", "MINIMIZE MAX(x / w)"));
+	shapes.push_back(
+	    R4Objective("a qualified MIN", R4_OBJECTIVE, [](DirectIR &ir) { ir.objective.parts[0].qualifier = 0; }));
+	shapes.push_back(R4Objective("a MIN by a key", "MAXIMIZE MIN(x / w) by (flag)"));
+	shapes.push_back(R4Objective("a minimized MIN", "MINIMIZE MIN(x / w)"));
+	// ProveObjective: the terms and the factor.
+	shapes.push_back(R4Objective("a column beside the term in the MIN", "MAXIMIZE MIN(x / w + f)"));
+	shapes.push_back(R4Objective("a square in the MIN", "MAXIMIZE MIN(POWER(x, 2))"));
+	shapes.push_back(R4Objective("a coefficient fixed only within the query", "MAXIMIZE MIN(txid_current() * x)"));
+	shapes.push_back(
+	    R4Objective("a MIN WHEN that reads more than the source", "MAXIMIZE MIN(when txid_current() >= 0: x / w)"));
+	shapes.push_back(R4Objective("a constant factor on the MIN", "MAXIMIZE 2 * MIN(x / w)"));
+	return shapes;
+}
+
+TEST_CASE("R4 applies to the forms of its class", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	ExpectApplies(MakeR4MaxMinFairnessRule, con, R4AppliesShapes());
+}
+
+TEST_CASE("R4 declines each shape that is not exactly its class", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	ExpectDeclines(MakeR4MaxMinFairnessRule, con, R4DeclineShapes());
+}
+
+//===--------------------------------------------------------------------===//
 // No two rules apply to one query
 //===--------------------------------------------------------------------===//
 
@@ -1670,6 +1766,7 @@ duckdb::vector<RuleShapes> EveryRuleWithItsShapes() {
 	rows.push_back({MakeA2SingleFacilityLocationRule, A2AppliesShapes()});
 	rows.push_back({MakeN1EuclideanBallRule, N1AppliesShapes()});
 	rows.push_back({MakeO1MongeAssignmentRule, O1AppliesShapes()});
+	rows.push_back({MakeR4MaxMinFairnessRule, R4AppliesShapes()});
 	return rows;
 }
 

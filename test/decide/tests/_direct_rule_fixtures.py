@@ -856,7 +856,98 @@ S3 = RuleFixture(
 )
 
 
-RULE_FIXTURES = (S1, S2, A1, R1, N1, A2, O1, S3)
+def _r4_late_error(decision_sql, d_sql="2.0", cap_sql="4.0"):
+    """A 5,000-row problem whose last row is invalid. Rows 0 to 4998 are ordinary."""
+    return f"""
+        FROM (SELECT i, {d_sql} AS d, {cap_sql} AS cap FROM range(5000) t(i)) s
+        DECIDE {decision_sql}
+        """
+
+
+_R4_PLAIN = "x <= cap AND SUM(x) <= 9 MAXIMIZE MIN(x / d)"
+
+R4 = RuleFixture(
+    rule="R4_MAX_MIN_FAIRNESS",
+    condition="max MIN(c*x), 0 <= x <= cap, SUM(w*x) <= B",
+    # The worked example of the rule's definition: demands 2 and 4 under a budget of 9 and capacities 4 and 8 give the
+    # level 1.5 and the amounts 3 and 6. The optimum is unique, so the rows equal the solver's exactly after rounding
+    # (its answers carry the solver's tolerance); the query also runs on forced HiGHS.
+    applies=f"""
+        SELECT id, d, ROUND(x, 4) AS x FROM (
+            FROM (VALUES (1, 2.0::DOUBLE, 4.0::DOUBLE), (2, 4.0::DOUBLE, 8.0::DOUBLE)) t(id, d, cap)
+            DECIDE x(REAL) SUCH THAT {_R4_PLAIN}
+        ) q ORDER BY id
+    """,
+    empty_applies=f"""
+        SELECT id, d, x FROM (
+            FROM (SELECT * FROM (VALUES (1, 2.0::DOUBLE, 4.0::DOUBLE), (2, 4.0::DOUBLE, 8.0::DOUBLE)) t(id, d, cap)
+                  WHERE false) t
+            DECIDE x(REAL) SUCH THAT {_R4_PLAIN}
+        ) q ORDER BY id
+    """,
+    table_setup="""
+        CREATE TEMP TABLE direct_r4_life(id INTEGER, d DOUBLE, cap DOUBLE);
+        INSERT INTO direct_r4_life VALUES (1,2,4),(2,4,8);
+    """,
+    table_applies=f"""
+        SELECT id,x FROM (
+            FROM direct_r4_life DECIDE x(REAL)
+            SUCH THAT {_R4_PLAIN}
+        ) q
+    """,
+    table_change="ALTER TABLE direct_r4_life ADD COLUMN extra INTEGER;",
+    # Each is the plain form with one condition changed: an INT decision, a budget weight read from the data, a budget
+    # from below, a second budget clause, a lower bound on the decision, a per-row constant inside the MIN, a second
+    # part of the objective, a constant factor on the MIN and a minimized MIN.
+    near_misses=(
+        ("x(INT)", "x <= cap AND SUM(x) <= 9", "MAXIMIZE MIN(x / d)"),
+        ("x(REAL)", "x <= cap AND SUM(w * x) <= 9", "MAXIMIZE MIN(x / d)"),
+        ("x(REAL)", "x <= cap AND SUM(x) >= 1", "MAXIMIZE MIN(x / d)"),
+        ("x(REAL)", "x <= cap AND SUM(x) <= 9 AND SUM(2 * x) <= 20", "MAXIMIZE MIN(x / d)"),
+        ("x(REAL)", "x >= 1 AND x <= cap AND SUM(x) <= 9", "MAXIMIZE MIN(x / d)"),
+        ("x(REAL)", "x <= cap AND SUM(x) <= 9", "MAXIMIZE MIN(x / d + w)"),
+        ("x(REAL)", "x <= cap AND SUM(x) <= 9", "MAXIMIZE MIN(x / d) + MIN(x / w)"),
+        ("x(REAL)", "x <= cap AND SUM(x) <= 9", "MAXIMIZE 2 * MIN(x / d)"),
+        ("x(REAL)", "x <= cap AND SUM(x) <= 9", "MINIMIZE MIN(x / d)"),
+    ),
+    # Forms that look like near misses and apply: the floor written out, a constant weight other than 1, no capacity,
+    # a constant capacity, and a literal constant inside the MIN (canonicalization moves it out of the MIN).
+    near_miss_applies=(
+        ("x(REAL)", "x >= 0 AND x <= cap AND SUM(x) <= 9", "MAXIMIZE MIN(x / d)"),
+        ("x(REAL)", "x <= cap AND SUM(2 * x) <= 9", "MAXIMIZE MIN(x / d)"),
+        ("x(REAL)", "SUM(x) <= 9", "MAXIMIZE MIN(x / d)"),
+        ("x(REAL)", "x <= 3 AND SUM(x) <= 9", "MAXIMIZE MIN(x / d)"),
+        ("x(REAL)", "x <= cap AND SUM(x) <= 9", "MAXIMIZE MIN(x / d + 1)"),
+    ),
+    near_miss_source="FROM (VALUES (1, 2.0::DOUBLE, 1.0::DOUBLE, 4.0::DOUBLE), "
+    "(2, 4.0::DOUBLE, 2.0::DOUBLE, 8.0::DOUBLE)) t(id,d,w,cap)",
+    near_miss_column="id",
+    late_errors=(
+        # Errors R4 raises, on the last of 5,000 rows: a zero demand, a NaN demand, a NaN capacity and a negative one.
+        (
+            _r4_late_error(f"x(REAL) SUCH THAT {_R4_PLAIN}", d_sql="CASE WHEN i=4999 THEN 0.0 ELSE 2.0 END"),
+            "1 / d is NaN or infinite on some rows",
+        ),
+        (
+            _r4_late_error(f"x(REAL) SUCH THAT {_R4_PLAIN}", d_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 2.0 END"),
+            "1 / d is NaN or infinite on some rows",
+        ),
+        (
+            _r4_late_error(
+                f"x(REAL) SUCH THAT {_R4_PLAIN}", cap_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 4.0 END"
+            ),
+            "the bound cap is NaN on some rows",
+        ),
+        (
+            _r4_late_error(f"x(REAL) SUCH THAT {_R4_PLAIN}", cap_sql="CASE WHEN i=4999 THEN -1.0 ELSE 4.0 END"),
+            "infeasible",
+        ),
+    ),
+    late_column="i",
+)
+
+
+RULE_FIXTURES = (S1, S2, A1, R1, N1, A2, O1, S3, R4)
 
 
 # Bounds S1 applies that the oracle checks, as (constraint, the bound's value over the source
