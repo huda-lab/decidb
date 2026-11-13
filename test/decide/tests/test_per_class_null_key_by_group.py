@@ -2,7 +2,8 @@
 
 `per k: SUM(x) by (g) <= b` is generated once per class of `k`, and each class's sum reads the kept rows of its `g`
 group. A row whose `k` is NULL is in no class, so a group whose rows all have a NULL `k` has no constraint. A row in no
-class still counts in a group another row's class reaches.
+class still counts in a group another row's class reaches. A clause with no `by` key is one group, all the kept
+rows (D6): a composed MIN/MAX (`per k: max(x) + min(x) <= b`) has its one row only when some kept row has a class.
 
 Each test builds the oracle model from the raw rows, as the language reads the clause: one constraint per class, over
 every row of that class's group. The solver path (`off`) and the direct rules (`require`: S1 for BOOL, R1 for REAL)
@@ -84,3 +85,46 @@ def _agree(cli, oracle_solver, rows, shape):
 def test_a_group_no_class_reaches_is_free(decidb_cli, oracle_solver, shape):
     """Group a's rows all have a NULL k, so it has no row; group c's NULL-k row still counts in c's sum."""
     _agree(decidb_cli, oracle_solver, ROWS, shape)
+
+
+# id, k, v. The composed clause reads every row; only the classes decide whether it holds.
+COMPOSED_ROWS = [(1, 9.0), (2, 8.0), (3, 7.0), (4, 6.0)]
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("class_row", [None, 3], ids=["every_k_null", "one_class"])
+def test_a_composed_min_max_holds_only_with_a_class(decidb_cli, oracle_solver, class_row):
+    """`per k: max(x) + min(x) <= 1` over x in 0..3: with every k NULL there is no class and no constraint, so every x
+    takes 3; with row 3 in a class the clause holds once over all four rows. No direct rule takes it."""
+    rows = [(i, 1 if i == class_row else None, v) for i, v in COMPOSED_ROWS]
+    values = ", ".join(f"({i}, {sql_literal(k, 'INTEGER')}, {v})" for i, k, v in rows)
+    sql = (
+        f"SELECT id, x FROM (FROM (VALUES {values}) t(id, k, v) DECIDE x(INT) "
+        "SUCH THAT x BETWEEN 0 AND 3 AND per k: max(x) + min(x) <= 1 MAXIMIZE SUM(v*x)) q ORDER BY id"
+    )
+    oracle_solver.create_model("per_class_null_key_composed")
+    for i, _, _ in rows:
+        oracle_solver.add_variable(f"x_{i}", VarType.INTEGER, 0.0, 3.0)
+    if class_row is not None:
+        # max + min <= 1 holds when some row j has x_i + x_j <= 1 for every i: z_j picks that row, and a z_j of 0
+        # relaxes its rows by 6, the most two x in 0..3 can add.
+        for j, _, _ in rows:
+            oracle_solver.add_variable(f"z_{j}", VarType.BINARY)
+        oracle_solver.add_constraint({f"z_{j}": 1.0 for j, _, _ in rows}, "=", 1.0)
+        for j, _, _ in rows:
+            for i, _, _ in rows:
+                coefficients = {f"x_{i}": 1.0, f"z_{j}": 6.0}
+                coefficients[f"x_{j}"] = coefficients.get(f"x_{j}", 0.0) + 1.0
+                oracle_solver.add_constraint(coefficients, "<=", 7.0)
+    oracle_solver.set_objective({f"x_{i}": v for i, _, v in rows}, ObjSense.MAXIMIZE)
+    oracle = oracle_solver.solve()
+
+    def check_assignment(result, columns, mode):
+        chosen = {row[0]: row[1] for row in result}
+        if class_row is not None:
+            assert max(chosen.values()) + min(chosen.values()) <= 1, (mode, chosen)
+        value = sum(v * chosen[i] for i, _, v in rows)
+        assert math.isclose(value, oracle.objective_value, abs_tol=1e-6), (mode, value, oracle.objective_value)
+
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, modes=("off",))

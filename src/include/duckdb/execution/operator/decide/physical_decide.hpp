@@ -329,7 +329,8 @@ private:
 			//! The classes its one row stands for (SolverInput::class_sets), under
 			//! DIAGNOSE; INVALID_INDEX for none.
 			idx_t class_set = DConstants::INVALID_INDEX;
-			//! A NULL factor made its one instance NULL: no row is emitted.
+			//! A NULL factor made its one instance NULL, or its `per K:` has no class among
+			//! the kept rows: no row is emitted.
 			bool skipped = false;
 		};
 		vector<ComposedConstraint> composed_constraints;

@@ -3015,16 +3015,31 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 		bool null_factor = false;
 		clause.terms =
 		    EvaluateComposedTerms(spec.terms, "constraint", WrittenClause(spec.source_clause_id), null_factor);
-		clause.skipped = null_factor || std::any_of(clause.terms.begin(), clause.terms.end(), reads_no_row);
+		const bool names_classes = spec.scope.per == DecideClauseScope::PerRole::NAMES_CLASSES;
+		vector<bool> kept_rows;
+		if (names_classes || diagnose) {
+			kept_rows.assign(num_rows, true);
+			if (spec.scope.when) {
+				kept_rows = KeptRows(*spec.scope.when, chunk_expr_cache, context, gstate.data, num_rows);
+			}
+		}
+		// A `per K:` holds once per class: with every kept row's K NULL there is none, so no instance (D5).
+		bool has_class = true;
+		if (names_classes) {
+			auto &classes = CachedKeyGroups(per_group_cache, keys, spec.scope.class_key, chunk_expr_cache, context,
+			                                gstate.data, num_rows, &kept_rows);
+			has_class = false;
+			for (idx_t row = 0; row < num_rows && !has_class; row++) {
+				has_class = kept_rows[row] && classes.unfiltered_row_group_ids[row] != DConstants::INVALID_INDEX;
+			}
+		}
+		clause.skipped =
+		    !has_class || null_factor || std::any_of(clause.terms.begin(), clause.terms.end(), reads_no_row);
 		clause.repair_group_id =
 		    gstate.constraints.size() + gstate.singleton_row_constraints.size() + evaluated.composed_constraints.size();
 		// The classes its one row stands for (D28), under DIAGNOSE: its `per` key's values
 		// among the rows its `when` keeps, or those rows with no `per`.
 		if (diagnose) {
-			vector<bool> kept_rows(num_rows, true);
-			if (spec.scope.when) {
-				kept_rows = KeptRows(*spec.scope.when, chunk_expr_cache, context, gstate.data, num_rows);
-			}
 			clause.class_set = CollectGroupClasses(spec.scope, keys, per_group_cache, chunk_expr_cache, context,
 			                                       gstate.data, num_rows, kept_rows, {}, 1, gstate.class_sets)[0];
 		}
