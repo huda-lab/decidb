@@ -1,7 +1,9 @@
 """N1 (Euclidean ball), checked three ways: the independent oracle, the solver path, the direct path.
 
 Every case is one DECIDE query with one `REAL` decision on each row, in the box [0, inf) or (-inf, inf), under one
-`SUM(q * x^2) <= B` per group, with a linear objective or one convex square. The oracle builds its own model from the raw
+`SUM(q * x^2) <= B` per group, with a linear objective or one convex square. The factor q is one constant, or differs
+between rows (`SUM(POWER(SQRT(w) * x, 2)) <= B`, q = w), and a factor that differs between rows takes a linear objective
+only. The oracle builds its own model from the raw
 rows, from the groups, limits and per-row coefficients each case states in Python (never from DeciDB's reading of the
 SQL), through `add_quadratic_constraint`. DeciDB then runs the query with `decide_direct_solve='off'` (the solver) and
 `'require'` (direct solve; a query the rule does not apply to fails instead of quietly using the solver). The case passes
@@ -56,12 +58,13 @@ COLUMNS = (
     ("k", "VARCHAR"),  # a group key
     ("f", "BOOLEAN"),  # `when` membership
     ("l", "DOUBLE"),  # a limit read from the data
+    ("w", "DOUBLE"),  # a per-row weight, the factor of the row's square in the limit of the weighted cases
 )
 NAMES = [name for name, _ in COLUMNS]
 
 
-def _row(id, s=0.0, y=0.0, k="a", f=True, l=25.0):
-    return dict(id=id, s=s, y=y, k=k, f=f, l=l)
+def _row(id, s=0.0, y=0.0, k="a", f=True, l=25.0, w=1.0):
+    return dict(id=id, s=s, y=y, k=k, f=f, l=l, w=w)
 
 
 MIXED = (
@@ -98,6 +101,38 @@ NEGATIVE_IN_ONE_GROUP = (_row(1, 3.0, 1.0, "a", l=25.0), _row(2, 4.0, 2.0, "b", 
 WHEN_STILL = (_row(1, 3.0, 1.0, "a", True), _row(2, 4.0, 3.0, "a", True), _row(3, -1.0, 2.0, "b", False))
 WHEN_IMPROVING = (_row(1, 3.0, 1.0, "a", True), _row(2, 4.0, 3.0, "a", False))
 WHEN_NULL = (_row(1, 3.0, 1.0, "a", True), _row(2, -1.0, 3.0, "a", None))
+
+# A weight on every row: the factor of the row's square in the limit. The worked example of the class definition.
+WORKED = (_row(1, 1.0, w=1.0), _row(2, 4.0, w=4.0))
+# MIXED with a weight per row, unequal and below and above 1.
+WEIGHTED = tuple(dict(row, w=w) for row, w in zip(MIXED, (1.0, 4.0, 0.25, 2.0, 9.0)))
+# A row of weight 0 has no square in the sum: it stays at 0 when its direction is 0, and is unbounded otherwise.
+WEIGHT_ZERO_STILL = (_row(1, 3.0, w=1.0), _row(2, 0.0, w=0.0), _row(3, 4.0, w=4.0))
+WEIGHT_ZERO_IMPROVING = (_row(1, 3.0, w=1.0), _row(2, 2.0, w=0.0), _row(3, 4.0, w=4.0))
+# A NULL weight reads as 0, as a NULL coefficient does.
+WEIGHT_NULL_STILL = (_row(1, 3.0, w=1.0), _row(2, 0.0, w=None), _row(3, 4.0, w=4.0))
+WEIGHT_NULL_IMPROVING = (_row(1, 3.0, w=1.0), _row(2, 2.0, w=None), _row(3, 4.0, w=4.0))
+# A weight on a row a `when` drops is not read: a negative one under SQRT raises nothing.
+WEIGHT_NEGATIVE_WHEN_DROPS = (
+    _row(1, 3.0, k="a", f=True, w=1.0),
+    _row(2, 4.0, k="a", f=True, w=4.0),
+    _row(3, 5.0, k="b", f=False, w=-4.0),
+)
+# Weights and keys: a NULL key puts the improving row outside every ball.
+WEIGHTED_KEYS = (
+    _row(1, 3.0, k="a", w=1.0),
+    _row(2, 4.0, k="a", w=4.0),
+    _row(3, 2.0, k="b", w=0.25),
+    _row(4, 1.0, k="b", w=9.0),
+)
+WEIGHTED_NULL_KEY = (_row(1, 3.0, k="a", w=1.0), _row(2, 4.0, k="a", w=4.0), _row(3, 2.0, k=None, w=2.0))
+# Limits that differ by group, with a weight per row.
+WEIGHTED_LIMITS = (
+    _row(1, 3.0, k="a", l=9.0, w=1.0),
+    _row(2, 4.0, k="a", l=16.0, w=4.0),
+    _row(3, 2.0, k="b", l=4.0, w=0.25),
+    _row(4, -1.0, k="b", l=25.0, w=9.0),
+)
 
 
 def _values(rows):
@@ -154,14 +189,17 @@ def any_key(rows):
 @dataclass(frozen=True)
 class Ball:
     sql: str
-    #: The factor of the sum of squares: `SUM(q * x^2)`.
-    q: float = 1.0
+    #: The factor of the sum of squares: `SUM(q * x^2)`, one number, or a function of the row.
+    q: object = 1.0
     #: row -> the key of the group whose sum holds it, or None when no sum holds it.
     group: object = everyone
     #: (rows of the group, all rows) -> the group's limit, or None for no limit.
     limit: object = constant(25.0)
     #: rows -> whether the clause has an instance at all.
     instance: object = lambda rows: True
+
+    def factor(self, row):
+        return self.q(row) if callable(self.q) else self.q
 
 
 BALLS = {
@@ -203,6 +241,32 @@ BALLS = {
         "SUM(when f: POWER(x, 2)) <= 0.25 * SUM(l)",
         group=where_f(everyone),
         limit=lambda members, rows: 0.25 * sum(row["l"] for row in rows),
+    ),
+    # A factor that differs between rows: the slope inside the square is a value of the row, q = c * s^2. A NULL weight
+    # makes the slope 0, so its row has no square in the sum.
+    "root_b5": Ball("SUM(POWER(SQRT(w) * x, 2)) <= 5", q=lambda r: r["w"] or 0.0, limit=constant(5.0)),
+    "root": Ball("SUM(POWER(SQRT(w) * x, 2)) <= 25", q=lambda r: r["w"] or 0.0),
+    "root_b0": Ball("SUM(POWER(SQRT(w) * x, 2)) <= 0", q=lambda r: r["w"] or 0.0, limit=constant(0.0)),
+    "root_negative": Ball("SUM(POWER(SQRT(w) * x, 2)) <= -1", q=lambda r: r["w"] or 0.0, limit=constant(-1.0)),
+    "slope": Ball("SUM(POWER(w * x, 2)) <= 25", q=lambda r: (r["w"] or 0.0) ** 2),
+    "slope_scaled": Ball("SUM(3 * POWER(w * x, 2)) <= 25", q=lambda r: 3.0 * (r["w"] or 0.0) ** 2),
+    "root_by": Ball(
+        "SUM(POWER(SQRT(w) * x, 2)) by (k) <= 9", q=lambda r: r["w"] or 0.0, group=by_k, limit=constant(9.0)
+    ),
+    "root_per": Ball(
+        "per k: SUM(POWER(SQRT(w) * x, 2)) <= 9",
+        q=lambda r: r["w"] or 0.0,
+        limit=constant(9.0),
+        instance=any_key,
+    ),
+    "root_when": Ball(
+        "when f: SUM(POWER(SQRT(w) * x, 2)) <= 9",
+        q=lambda r: r["w"] or 0.0,
+        group=where_f(everyone),
+        limit=constant(9.0),
+    ),
+    "root_column_by": Ball(
+        "SUM(POWER(SQRT(w) * x, 2)) by (k) <= l", q=lambda r: r["w"] or 0.0, group=by_k, limit=tightest_of_group
     ),
 }
 
@@ -386,6 +450,36 @@ add("aggregate_limit_of_all_rows", MIXED, "half_sum", "max")
 # A limit input with no argument (COUNT(*)): the plan lays out no argument column, in P1 and in P2.
 add("aggregate_limit_count_star_has_no_argument", MIXED, "count_all", "max")
 
+# A constant factor other than 1 with a square: the ball is SUM(x^2) <= B / q, and a target inside it stays.
+add("projection_inside_a_scaled_ball", NEAR, "scaled_square", "square")
+add("projection_outside_a_scaled_ball", MIXED, "scaled_square", "square")
+add("projection_outside_a_scaled_ball_free", MIXED, "scaled_square", "square", free=True)
+add("projection_outside_a_sloped_ball", MIXED, "inner_slope", "square")
+
+# A factor per row. The first row of the worked example, and unequal weights in both domains.
+add("weighted_worked_example", WORKED, "root_b5", "max")
+add("weighted_unequal_weights", WEIGHTED, "root", "max")
+add("weighted_unequal_weights_free", WEIGHTED, "root", "max", free=True)
+add("weighted_slope_spelling", WEIGHTED, "slope", "max")
+add("weighted_slope_with_a_constant_coefficient", WEIGHTED, "slope_scaled", "max")
+add("weighted_minimize_is_the_negated_direction", WEIGHTED, "root", "min")
+add("weighted_minimize_free", WEIGHTED, "root", "min", free=True)
+add("weighted_no_objective", WEIGHTED, "root", "none")
+add("weighted_limit_zero", WEIGHTED, "root_b0", "max")
+add("weighted_limit_negative", WEIGHTED, "root_negative", "max")
+# A row whose weight is 0 or NULL has no square in the sum.
+add("weighted_zero_weight_with_zero_direction_stays_at_zero", WEIGHT_ZERO_STILL, "root", "max")
+add("weighted_zero_weight_with_a_direction_is_unbounded", WEIGHT_ZERO_IMPROVING, "root", "max")
+add("weighted_null_weight_with_zero_direction_stays_at_zero", WEIGHT_NULL_STILL, "root", "max")
+add("weighted_null_weight_with_a_direction_is_unbounded", WEIGHT_NULL_IMPROVING, "root", "max")
+# Groups, a `when`, a NULL key and a limit from the data.
+add("weighted_by_key", WEIGHTED_KEYS, "root_by", "max")
+add("weighted_per_key", WEIGHTED_KEYS, "root_per", "max")
+add("weighted_clause_when", WEIGHTED, "root_when", "max")
+add("weighted_negative_weight_on_a_row_the_when_drops", WEIGHT_NEGATIVE_WHEN_DROPS, "root_when", "max")
+add("weighted_null_key_improving_row_is_unbounded", WEIGHTED_NULL_KEY, "root_by", "max")
+add("weighted_column_limit_per_group", WEIGHTED_LIMITS, "root_column_by", "max")
+
 
 def _sql_body(case_):
     ball = BALLS[case_.ball]
@@ -436,9 +530,9 @@ def _solve_with_oracle(oracle_solver, case_):
     for row in case_.rows:
         names[row["id"]] = f"x_{row['id']}"
         oracle_solver.add_variable(names[row["id"]], VarType.CONTINUOUS, -BIG if case_.free else 0.0, BIG)
-    q = BALLS[case_.ball].q
+    ball = BALLS[case_.ball]
     for index, (rows, limit) in enumerate(_groups(case_).values()):
-        quadratic = {(names[row["id"]], names[row["id"]]): q for row in rows}
+        quadratic = {(names[row["id"]], names[row["id"]]): ball.factor(row) for row in rows if ball.factor(row) != 0.0}
         oracle_solver.add_quadratic_constraint(
             linear={}, quadratic=quadratic, sense="<=", rhs=limit, name=f"ball_{index}"
         )
@@ -462,10 +556,10 @@ def _check_assignment(case_, rows, columns, oracle, mode):
         value = values[source["id"]]
         assert isinstance(value, float), (mode, source["id"], value)
         assert case_.free or value >= -_BOX_TOLERANCE, (mode, source["id"], value)
-    q = BALLS[case_.ball].q
+    ball = BALLS[case_.ball]
     tolerance = _DIRECT_BALL_TOLERANCE if mode == "require" else _BALL_TOLERANCE
     for key, (members, limit) in _groups(case_).items():
-        length = sum(q * values[row["id"]] ** 2 for row in members)
+        length = sum(ball.factor(row) * values[row["id"]] ** 2 for row in members)
         assert length <= limit + tolerance * max(1.0, abs(limit)), (mode, key, length, limit)
     objective = OBJECTIVES[case_.objective]
     if objective.coefficients is None:
@@ -506,6 +600,7 @@ CONTEXT_CASES = [
     ("by_key_square", "joined_source"),
     ("column_limit_per_group", "cte"),
     ("projection_outside", "aggregate_above"),
+    ("weighted_unequal_weights", "joined_source"),
 ]
 
 
@@ -620,6 +715,20 @@ def test_n1_both_paths_raise_the_same_error(decidb_cli, name):
     assert direct[0] == "error", direct
     assert direct == solver, (direct, solver)
     assert expected in direct[1], direct
+
+
+@pytest.mark.error
+def test_n1_a_factor_past_a_double_raises_the_solvers_error(decidb_cli):
+    # The check of q in P3: w = 1e200 squares to 1e400, a number the solver names too. The row's own slope is a finite
+    # number, so only the factor q = w^2 is past a DOUBLE.
+    sql = (
+        "SELECT id, x FROM (FROM (VALUES (1, 3.0::DOUBLE, 1e200::DOUBLE), (2, 4.0::DOUBLE, 1.0::DOUBLE)) t(id, s, w) "
+        "DECIDE x(REAL) SUCH THAT SUM(POWER(w * x, 2)) <= 25 MAXIMIZE SUM(s * x)) ORDER BY id"
+    )
+    direct = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {sql}").stderr
+    solver = decidb_cli.execute_raw(f"SET decide_direct_solve='off'; {sql}").stderr
+    assert "SUM(POWER(w * x, 2)) <= 25 computes a number too large for a DOUBLE" in direct, direct
+    assert direct == solver, (direct, solver)
 
 
 # ---------------------------------------------------------------------------

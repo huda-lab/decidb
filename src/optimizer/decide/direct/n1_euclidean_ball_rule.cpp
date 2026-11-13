@@ -23,9 +23,10 @@ namespace direct_n1_euclidean_ball {
 
 constexpr const char *RULE_NAME = "N1_EUCLIDEAN_BALL";
 
-//! What CheckCondition proved: one row-scoped REAL decision in a box [0, inf) or (-inf, inf), one `SUM(q * x^2) <= B`
-//! per group over the rows the clause covers, and an objective that orients on every row as minimize `K*x^2 + b*x`.
-//! K is one constant on every row with a linear term, and positive.
+//! What CheckCondition proved: one row-scoped REAL decision in a box [0, inf) or (-inf, inf), one
+//! `SUM(c * (s*x)^2) <= B` per group over the rows the clause covers, and an objective that orients on every row as
+//! minimize `K*x^2 + b*x`. The coefficient c is one positive constant, so each row's factor `q = c * s^2` is never
+//! negative; K is one constant on every row with a linear term, and positive.
 struct Condition final : DirectApplicabilityCondition {
 	//! The box is [0, inf), rather than (-inf, inf).
 	bool nonnegative = true;
@@ -33,16 +34,23 @@ struct Condition final : DirectApplicabilityCondition {
 	string objective_written;
 	//! The clause's scope.
 	DirectSharedScope scope;
-	//! The limit B and the factor q of the sum of squares, so the ball is `SUM(x^2) <= B / q`. B is a constant, or a
-	//! limit read from the data, whose NULL skips the instance.
+	//! The limit B of the sum of squares. B is a constant, or a limit read from the data, whose NULL skips the
+	//! instance.
 	DirectLimit limit;
-	double square_factor = 1.0;
+	//! The limit's clause as a message names it.
+	string limit_written;
+	//! The factor of a row's square, `q = weight * slope^2`: the coefficient `weight`, one positive constant, and the
+	//! slope `s` inside the square, a constant or a value of the row (`constant_slope` says which).
+	double weight = 1.0;
+	DirectLinearForm slope;
+	bool constant_slope = true;
 	vector<DirectQuadraticPart> parts;
 	bool has_square = false;
 };
 
 //! `weight * w^2` of a square, where its weight and its inner slope `w` fold to constants; false otherwise. A weight
-//! read from the data is not one: the rule declines it here.
+//! read from the data is not one: the rule declines it here. The objective's square takes this factor; the limit's does
+//! not (ProveLimitClause).
 bool FoldSquareFactor(ClientContext &context, const DirectWeightedForm &square, double &factor) {
 	double weight, slope;
 	if (!DirectFoldConstantSum(context, square.weight, weight) ||
@@ -115,10 +123,26 @@ bool Rule::ProveLimitClause(const DirectIR &ir, ClientContext &context, Conditio
 		return false;
 	}
 	DirectWeightedForm square;
-	if (!DirectReadSquareTerm(ir, terms[0], clause->written, square) || !square.inner.constant.empty() ||
-	    !FoldSquareFactor(context, square, condition.square_factor) || condition.square_factor <= 0.0) {
+	if (!DirectReadSquareTerm(ir, terms[0], clause->written, square) || !square.inner.constant.empty()) {
 		return false;
 	}
+	// The coefficient is one positive constant. A coefficient read from the data (`SUM(w * POWER(x, 2))`) can be
+	// negative, which makes the limit not convex. The slope inside the square may be a value of the row: q is then
+	// never negative, whatever the slope's sign.
+	if (!DirectFoldConstantSum(context, square.weight, condition.weight) || condition.weight <= 0.0) {
+		return false;
+	}
+	// A constant slope makes q one constant, which must be a positive number.
+	double slope;
+	condition.constant_slope = DirectFoldConstantSum(context, square.inner.linear, slope);
+	if (condition.constant_slope) {
+		double factor = condition.weight * (slope * slope);
+		if (!std::isfinite(factor) || factor <= 0.0) {
+			return false;
+		}
+	}
+	condition.limit_written = clause->written;
+	condition.slope = std::move(square.inner);
 	return DirectReadLimit(ir, context, *clause, condition.limit);
 }
 
@@ -184,6 +208,11 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 		}
 		condition.parts.push_back(std::move(read));
 	}
+	// A factor that differs between rows makes the ball an ellipsoid, whose nearest point to a target is not a scaling
+	// of the target: it takes a linear objective only.
+	if (condition.has_square && !condition.constant_slope) {
+		return false;
+	}
 	return SquareCoversEveryLinearTerm(condition.parts);
 }
 
@@ -200,20 +229,20 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //!
 //!   [W0]  whether a `per K:` clause has an instance, when a NULL in K can leave it none (DirectAddInstanceFlag)
 //!   scope the row's membership and group key (DirectProjectScope)
-//!   P1    raw values: every coefficient, constant and limit, each on the rows that read it
-//!   P2    K and b of the row, and the check on every raw value
+//!   P1    raw values: every coefficient, constant, limit and the limit's slope, each on the rows that read it
+//!   P2    K and b of the row, the factor q of its square in the limit, and the check on every raw value
 //!   [W1]  the group's tightest limit, for a limit read from the data
-//!   P3    the row's target (or direction) in the domain, whether it lost precision, whether it is in a ball, and the
-//!         ball's limit
-//!   P4    the row's squared length in the ball, every other check a row can raise, and the target's warning
-//!   H     a hash aggregate on the group key, one row per group (one row for a single ball): h, the sum of the squared
-//!         lengths; whether the checks of the rows held; and the group's limit, for a limit read from the data
+//!   P3    the row's target (or direction) in the domain and its point (the direction over q), whether it lost
+//!         precision, whether it is in a ball and whether its square is in the ball's sum (q > 0), and the ball's limit
+//!   P4    the row's share of h, every other check a row can raise, and the target's warning
+//!   H     a hash aggregate on the group key, one row per group (one row for a single ball): h, the sum of the shares;
+//!         whether the checks of the rows held; and the group's limit, for a limit read from the data
 //!   C     the group's values, computed once on its row (loop-invariant code motion: they depend on the group alone):
 //!         the length sqrt(h), whether h is below the normal range of a DOUBLE, whether h is 0, and the checks of the
 //!         rows together with h's own: h past a DOUBLE (the solver has no such number, and every row that would read h
 //!         raises)
 //!
-//! The second read is [W0], the scope, P1 and P2 again and the row's target and value (P3), joined with the group's row
+//! The second read is [W0], the scope, P1 and P2 again and the row's value and point (P3), joined with the group's row
 //! on the key, then
 //!
 //!   P5    the answer, the warning of the scale, and the column that keeps the checks live
@@ -313,19 +342,21 @@ public:
 		if (!condition.has_square) {
 			group.still = Boolean(joined.answers[next++]);
 		}
-		// A row is in a ball when the clause keeps it and the group has a limit.
+		// A row is in a ball when the clause keeps it and the group has a limit; its square is in the ball's sum when
+		// its factor q is positive.
 		auto in_ball = condition.scope.Scoped() ? Boolean(carried.eligible) : calc.Bool(true);
 		ExprPtr limit = calc.Num(condition.limit.number);
 		if (limit_bound) {
 			limit = Double(joined.answers[next]);
 			in_ball = calc.And(in_ball, calc.Not(calc.IsNull(limit)));
 		}
+		auto in_sum = calc.And(in_ball, Boolean(values.positive));
 
 		DirectProjectionStage p5(binder.GenerateTableIndex());
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
 			p5.Add(calc.Out(calc.Col(source_types[i], carried.source[i])));
 		}
-		auto scale = Scale(Double(values.value), limit, in_ball, group);
+		auto scale = Scale(Double(values.value), Double(values.point), limit, in_sum, group);
 		p5.Add(scale.answer);
 		vector<unique_ptr<Expression>> checks;
 		checks.push_back(calc.Out(Boolean(joined.answers[2])));
@@ -348,6 +379,8 @@ public:
 private:
 	struct Raw {
 		DirectCarried carried;
+		//! The slope `s` inside the limit's square, on the rows the clause keeps.
+		ColumnBinding slope;
 		//! What the aggregates of the limit read, one member per input of the limit's group bound.
 		vector<DirectGroupInputColumns> limit_inputs;
 		vector<DirectQuadraticColumns> parts;
@@ -360,6 +393,8 @@ private:
 		ColumnBinding a;
 		//! The linear coefficient oriented as a minimum; the direction -b of a row with no square.
 		ColumnBinding b;
+		//! The factor of the row's square in the limit, `q = weight * s^2`: NULL on a row the clause drops.
+		ColumnBinding q;
 		ColumnBinding valid;
 	};
 	//! Columns of P3.
@@ -368,7 +403,13 @@ private:
 		ColumnBinding limit;
 		ColumnBinding target;
 		ColumnBinding value;
+		//! The row's point and its dual (RowTarget).
+		ColumnBinding point;
+		ColumnBinding dual;
+		//! Whether a ball holds the row: the clause keeps it and the group has a limit.
 		ColumnBinding in_ball;
+		//! Whether the row's square is in the ball's sum: it is in the ball, and its factor q is positive.
+		ColumnBinding in_sum;
 		//! Whether the target lost precision (DirectTurningPoint): false on a row with no square.
 		ColumnBinding loses_precision;
 		ColumnBinding valid;
@@ -391,6 +432,9 @@ private:
 	struct Values {
 		DirectCarried carried;
 		ColumnBinding value;
+		ColumnBinding point;
+		//! Whether the row's factor q is positive.
+		ColumnBinding positive;
 	};
 
 	const Condition &condition;
@@ -444,8 +488,8 @@ private:
 	Raw LayoutRawValues(DirectProjectionStage &p1, const DirectCarried &from_scope, idx_t state_index) const {
 		Raw raw;
 		raw.carried = p1.Forward(from_scope, source_types, condition.scope.Scoped());
+		auto eligible = condition.scope.Scoped() ? Boolean(from_scope.eligible) : nullptr;
 		if (limit_bound) {
-			auto eligible = condition.scope.Scoped() ? Boolean(from_scope.eligible) : nullptr;
 			raw.limit_inputs = DirectLayoutGroupInputs(
 			    optimizer, calc, p1, *limit_bound, eligible,
 			    [&](const Expression &value) { return Over(value, state_index); }, &raw.checks);
@@ -453,6 +497,14 @@ private:
 		auto over_state = [&](const Expression &value) {
 			return Over(value, state_index);
 		};
+		// The slope of the limit's square is read and checked on the rows the clause keeps, as the limit's inputs are.
+		auto slope =
+		    DirectOnKeptRows(calc, eligible, calc.Wrap(DirectSumOf(optimizer, condition.slope.linear, over_state)));
+		raw.slope = p1.Add(calc.Out(slope));
+		if (auto check = DirectCheckNumber(optimizer, raw.slope, condition.slope.linear_names, condition.slope.linear,
+		                                   source_bindings, p1.index)) {
+			raw.checks.push_back(std::move(check));
+		}
 		for (auto &part : condition.parts) {
 			raw.parts.push_back(
 			    DirectLayoutQuadraticPart(optimizer, calc, p1, part, 1, source_bindings, over_state, raw.checks));
@@ -483,6 +535,8 @@ private:
 		// Without a square the row's target is the direction -b (TargetOf), so b is oriented that way here, and no
 		// column is negated again above it.
 		result.b = p2.Add(calc.Out(condition.has_square ? sum.b : calc.Mul(calc.Num(-1.0), sum.b)));
+		auto slope = Double(raw.slope);
+		result.q = p2.Add(calc.Out(calc.Mul(calc.Num(condition.weight), calc.Mul(slope, slope))));
 		// Every check is true or raises; a row passes when all of them do.
 		result.valid = p2.Add(DirectAllHold(calc, std::move(raw.checks)));
 		return result;
@@ -492,10 +546,19 @@ private:
 	// P3: the row's target or direction, and its ball
 	//===------------------------------------------------------------------===//
 
-	//! The row's target (or direction) and its value in the domain, from K and b of the row.
+	//! The row's target (or direction) and its value in the domain, from K and b of the row; and the row's part of the
+	//! ball's sum, from its factor q. With the direction d, the row's point is d / q and its dual is d: the row's share
+	//! of h is dual * point = d^2 / q, and x is the point scaled to the ball. With a square the factor q is one
+	//! constant and the row's own value y is its point, whose dual is q * y: the share is q * y^2, the limit read on y.
 	struct RowTarget {
 		ExprPtr target;
 		ExprPtr value;
+		//! The point and its dual. The point is NULL on a row whose factor q is not positive: its square is not in the
+		//! sum.
+		ExprPtr point;
+		ExprPtr dual;
+		//! Whether the row's factor q is positive.
+		ExprPtr positive;
 		//! Whether computing the target lost precision (DirectTurningPoint): false on a row with no square.
 		ExprPtr loses_precision;
 	};
@@ -503,6 +566,7 @@ private:
 	RowTarget TargetOf(const Coefficients &coefficients) const {
 		auto a = Double(coefficients.a);
 		auto b = Double(coefficients.b);
+		auto q = Double(coefficients.q);
 		auto zero = calc.Num(0.0);
 		// With a square the target -b / (2*K) (DirectTurningPoint). A row with no square has no objective at all.
 		// Without one the direction, which ComputeCoefficients has stored as b.
@@ -512,6 +576,11 @@ private:
 		                    ? calc.If(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, a, zero), turning.target, zero)
 		                    : b;
 		result.value = condition.nonnegative ? calc.Max({result.target, zero}) : result.target;
+		result.positive = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, q, zero);
+		// A row whose q is 0 or NULL has no square in the sum, and no point.
+		auto null = calc.Constant(Value(LogicalType::DOUBLE));
+		result.point = condition.has_square ? result.value : calc.If(result.positive, calc.Div(result.value, q), null);
+		result.dual = condition.has_square ? calc.Mul(q, result.value) : result.value;
 		result.loses_precision = turning.loses_precision;
 		return result;
 	}
@@ -532,11 +601,16 @@ private:
 		result.limit = p3.Add(calc.Out(limit));
 		result.target = p3.Add(calc.Out(row.target));
 		result.value = p3.Add(calc.Out(row.value));
+		result.point = p3.Add(calc.Out(row.point));
+		result.dual = p3.Add(calc.Out(row.dual));
 		result.in_ball = p3.Add(calc.Out(in_ball));
+		result.in_sum = p3.Add(calc.Out(calc.And(in_ball, row.positive)));
 		result.loses_precision = p3.Add(calc.Out(row.loses_precision));
-		// The checks of the row's values hold first, then what the limit gives: a group's NaN limit.
+		// The checks of the row's values hold first, then the factor q of its square, then what the limit gives: a
+		// group's NaN limit.
 		vector<unique_ptr<Expression>> checks;
 		checks.push_back(calc.Out(Boolean(coefficients.valid)));
+		checks.push_back(DirectRaiseTooLarge(optimizer, Double(coefficients.q), condition.limit_written));
 		for (auto &message : limit_values.messages) {
 			checks.push_back(DirectRaiseMessage(optimizer, calc, message));
 		}
@@ -548,7 +622,10 @@ private:
 	Values ComputeValues(DirectProjectionStage &p3, const Coefficients &coefficients) const {
 		Values result;
 		result.carried = p3.Forward(coefficients.carried, source_types, condition.scope.Scoped());
-		result.value = p3.Add(calc.Out(TargetOf(coefficients).value));
+		auto row = TargetOf(coefficients);
+		result.value = p3.Add(calc.Out(row.value));
+		result.point = p3.Add(calc.Out(row.point));
+		result.positive = p3.Add(calc.Out(row.positive));
 		return result;
 	}
 
@@ -561,9 +638,12 @@ private:
 		result.carried = p4.Forward(targets.carried, source_types, condition.scope.Scoped());
 		auto value = Double(targets.value);
 		auto in_ball = Boolean(targets.in_ball);
+		auto in_sum = Boolean(targets.in_sum);
 		auto limit = Double(targets.limit);
 		auto zero = calc.Num(0.0);
-		auto squared_length = calc.If(in_ball, calc.Mul(value, value), calc.Constant(Value(LogicalType::DOUBLE)));
+		// The row's share of h. A point past a DOUBLE (d / q) makes the share infinite, and the check below raises.
+		auto squared_length = calc.If(in_sum, calc.Mul(Double(targets.dual), Double(targets.point)),
+		                              calc.Constant(Value(LogicalType::DOUBLE)));
 		result.limit = p4.Add(calc.Out(limit));
 		result.squared_length = p4.Add(calc.Out(squared_length));
 
@@ -574,10 +654,11 @@ private:
 		auto negative = calc.And(in_ball, calc.Cmp(ExpressionType::COMPARE_LESSTHAN, limit, zero));
 		checks.push_back(DirectRaiseIf(calc, calc.Out(negative), DirectInfeasibleErrorPredicate(optimizer, errors)));
 		if (!condition.has_square) {
-			// A direction with no limit improves without end: outside every ball, or in a ball whose limit B the user
-			// wrote as infinite. B itself is tested: B / q can pass a DOUBLE where B does not.
-			auto no_limit = calc.If(
-			    in_ball, calc.Cmp(ExpressionType::COMPARE_EQUAL, limit, calc.Num(POSITIVE_INFINITY)), calc.Bool(true));
+			// A direction with no limit improves without end: on a row with no square in a ball's sum (outside every
+			// ball, or with a factor q of 0), or in a ball whose limit B the user wrote as infinite. B itself is
+			// tested: B / q can pass a DOUBLE where B does not.
+			auto no_limit = calc.If(in_sum, calc.Cmp(ExpressionType::COMPARE_EQUAL, limit, calc.Num(POSITIVE_INFINITY)),
+			                        calc.Bool(true));
 			auto moves = calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, value, zero);
 			checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(no_limit, moves)),
 			                               DirectUnboundedErrorPredicate(optimizer, errors)));
@@ -629,10 +710,10 @@ private:
 	// P5: the answer
 	//===------------------------------------------------------------------===//
 
-	//! The ball's radius is sqrt(B / q), computed as sqrt(B) / sqrt(q): B / q passes a DOUBLE where B does not when q
-	//! is below 1. B is negative only on a row that P4 has raised for, so no square root is taken of a negative number.
+	//! The ball's radius is sqrt(B): each row's factor q is in its point and in h. B is negative only on a row that P4
+	//! has raised for, so no square root is taken of a negative number.
 	ExprPtr Radius(const ExprPtr &limit) const {
-		return calc.Div(calc.Fn("sqrt", limit), calc.Num(std::sqrt(condition.square_factor)));
+		return calc.Fn("sqrt", limit);
 	}
 
 	//! A row's answer and whether it lost precision (DirectWarnIf).
@@ -641,18 +722,20 @@ private:
 		ExprPtr loses_precision;
 	};
 
-	//! The scale is the radius over the length sqrt(h), computed as (value / sqrt(h)) * radius: the first factor is at
-	//! most 1, where sqrt(B) / sqrt(h) passes a DOUBLE when h is subnormal. A row outside every ball keeps its target,
-	//! and with no square its direction is 0 (P4 raised otherwise).
+	//! The scale is the radius over the length sqrt(h), computed as (point / sqrt(h)) * radius: the first factor is at
+	//! most 1 / sqrt(q), where sqrt(B) / sqrt(h) passes a DOUBLE when h is subnormal. A row with no square in a ball's
+	//! sum (outside every ball, or with a factor q of 0) keeps its target, and with no square its direction is 0 (P4
+	//! raised otherwise).
 	//!
-	//! A row reads the scale when a ball holds it and, with a square, its target lies outside that ball. A row with a
-	//! square inside the ball returns its own value and reads no scale. h below the normal range of a DOUBLE has lost
-	//! precision, so a row that reads the scale with a value of its own, or finds h 0 with one, warns.
-	Scaled Scale(const ExprPtr &value, const ExprPtr &limit, const ExprPtr &in_ball, const ClassValues &group) const {
+	//! A row reads the scale when its square is in a ball's sum and, with a square, its target lies outside that ball.
+	//! A row with a square inside the ball returns its own value and reads no scale. h below the normal range of a
+	//! DOUBLE has lost precision, so a row that reads the scale with a value of its own, or finds h 0 with one, warns.
+	Scaled Scale(const ExprPtr &value, const ExprPtr &point, const ExprPtr &limit, const ExprPtr &in_sum,
+	             const ClassValues &group) const {
 		auto zero = calc.Num(0.0);
 		auto radius = Radius(limit);
-		auto scaled = calc.Mul(calc.Div(value, group.length), radius);
-		auto reads = in_ball;
+		auto scaled = calc.Mul(calc.Div(point, group.length), radius);
+		auto reads = in_sum;
 		ExprPtr answer;
 		if (condition.has_square) {
 			reads = calc.And(reads, calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, group.length, radius));

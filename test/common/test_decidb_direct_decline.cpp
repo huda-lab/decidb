@@ -818,6 +818,11 @@ duckdb::vector<Shape> N1AppliesShapes() {
 	shapes.push_back(N1("a norm", "norm(x, 2) <= 25"));
 	shapes.push_back(N1("a factor on the square", "SUM(2 * POWER(x, 2)) <= 50"));
 	shapes.push_back(N1("a slope in the square", "SUM(POWER(2 * x, 2)) <= 100"));
+	// A slope read from the data: q is the coefficient times the slope squared, never negative.
+	shapes.push_back(N1("a row-valued slope in the square", "SUM(POWER(w * x, 2)) <= 25"));
+	shapes.push_back(N1("the root of a column as the slope", "SUM(POWER(SQRT(w) * x, 2)) <= 25"));
+	shapes.push_back(N1("a constant coefficient on a row-valued slope", "SUM(2 * POWER(w * x, 2)) <= 50"));
+	shapes.push_back(N1("a row-valued slope under a key and a column limit", "SUM(POWER(w * x, 2)) by (name) <= cap"));
 	// The box.
 	shapes.push_back(N1("the default box written out", "x >= 0 AND SUM(POWER(x, 2)) <= 25"));
 	shapes.push_back(N1("a free domain", "x >= -1e30 AND SUM(POWER(x, 2)) <= 25"));
@@ -884,8 +889,12 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	shapes.push_back(N1("a square and a constant term in the limit", "SUM(POWER(x, 2) + 1) <= 25"));
 	shapes.push_back(N1("a ball off center by a constant", "SUM(POWER(x - 1, 2)) <= 25"));
 	shapes.push_back(N1("a ball off center by a column", "SUM(POWER(x - w, 2)) <= 25"));
-	shapes.push_back(N1("a row-valued slope in the limit", "SUM(POWER(w * x, 2)) <= 25"));
+	// The coefficient of the square folds to one positive constant; only the slope inside it may be a row's value.
 	shapes.push_back(N1("a row-valued weight on the square in the limit", "SUM(w * POWER(x, 2)) <= 25"));
+	shapes.push_back(N1("a row-valued weight written as a product in the limit", "SUM(w * x * x) <= 25"));
+	shapes.push_back(N1("a negative weight on a row-valued slope in the limit", "SUM(-POWER(w * x, 2)) <= 25"));
+	shapes.push_back(N1("a row-valued slope in the limit and a square in the objective", "SUM(POWER(w * x, 2)) <= 25",
+	                    nullptr, "MINIMIZE SUM(POWER(x - w, 2))"));
 	shapes.push_back(N1("a slope in the limit fixed only within the query", "SUM(POWER(txid_current() * x, 2)) <= 25"));
 	// The read of the square stops at this term, with the slope already read: only the read's own answer declines it.
 	shapes.push_back(
