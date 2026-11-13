@@ -1,9 +1,7 @@
 # S2 (laminar-matroid optimization) — what works today
 
-Verified on 2026-11-12 at `a36bb3ea82`: `test/decide/run_direct_matrix.sh` at `03f4415a50`, each of its four suites
-(auto, off, serializer, highs) 7,038 run, with the one near-miss case S2 takes moved to the forms that apply at
-`a36bb3ea82` (the 168 conformance tests pass in auto and off); C++ `build/release/test/unittest "[decidb]"` 9,514
-assertions in 105 cases.
+Verified on 2026-11-13 at `86ccc227ec`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
+serializer, highs) 7,037 run; C++ `build/release/test/unittest "[decidb]"` 9,547 assertions in 105 cases.
 
 Code: `src/optimizer/decide/direct/s2_laminar_matroid_rule.cpp`, on the ranked-prefix builder with one level per quota
 scope (`../../framework/done.md`). Class definition: [definition.md](definition.md).
@@ -22,10 +20,13 @@ different scope:
   least of theirs. A NULL data cap is no limit, as the solver skips the instance; a NaN one raises the solver's error,
   and a group with a negative cap can never be met; both raise before the first row leaves.
 - **Nesting proved from the text.** The levels must form a chain, each inside the next: the coarser level's `by` key
-  is a subset of the finer one's (compared as sets, `DirectKeyWithin`), the coarser has no `when` or the same one,
-  and both have the same `per`. The IR carries no functional dependencies and the rule is chosen once, when the plan
-  is built, so the data is never consulted: `by (department)` beside `by (division)` declines even when every
-  department lies in one division.
+  is a subset of the finer one's (compared as sets, `DirectKeyWithin`), and the coarser has no `when` or the same one.
+  The IR carries no functional dependencies and the rule is chosen once, when the plan is built, so the data is never
+  consulted: `by (department)` beside `by (division)` declines even when every department lies in one division.
+- **`per` on any level.** The levels need not share a `per`, so the definition's example runs as written (`per` on
+  the two finer clauses, none on the global one). A `per` does not group the sum (D6); it only decides whether the
+  clause has an instance, and each level reads that flag on its own. A level with no instance leaves a chain that
+  still nests.
 - **Fixed rows.** Clauses that fix rows (`x = 1`, `x = 0`, under a `when`) are read as S1 reads them; a row fixed to
   1 takes a place in every level's group it belongs to.
 - **NULL keys and `when`.** A row with a NULL key, or one a level's `when` drops, is in no group of that level, so
@@ -33,8 +34,8 @@ different scope:
 
 ## What it does not admit (falls back to the solver)
 
-A lower or `=` quota; a single scope (S1's); two scopes that do not nest, differ in `when` or differ in `per`; a
-constant cap of magnitude 1e20 or more; any other decision type or objective.
+A lower or `=` quota; a single scope (S1's); two scopes that do not nest or differ in `when`; a constant cap of
+magnitude 1e20 or more; any other decision type or objective.
 
 ## How it works
 
