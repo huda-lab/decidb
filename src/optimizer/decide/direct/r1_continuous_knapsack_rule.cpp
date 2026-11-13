@@ -602,7 +602,7 @@ public:
 		if (condition.scope.gated) {
 			auto classes = over_read(condition.scope.classes);
 			ColumnBinding flag;
-			read = DirectAddInstanceFlag(optimizer, std::move(read), when.get(), classes, flag);
+			read = DirectAddInstanceFlag(optimizer, std::move(read), when.get(), classes, keys, flag);
 			instance = calc.Out(calc.Col(LogicalType::BOOLEAN, flag));
 		}
 		auto state = DirectProjectScope(binder, std::move(read), condition.scope.Scoped(), when.get(), keys, {},

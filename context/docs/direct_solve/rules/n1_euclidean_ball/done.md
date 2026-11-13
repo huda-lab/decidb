@@ -105,7 +105,8 @@ row its target and joins its group's row on the key.
 
 The first read:
 
-1. `[W0]`, for a `per K:` a NULL in K can leave with no instance: whether the clause has one (`DirectAddInstanceFlag`).
+1. `[W0]`, for a `per K:` a NULL in K can leave with no instance: whether the row's group has one
+   (`DirectAddInstanceFlag`).
 2. The scope projection: the row's eligibility and its class key (`DirectProjectScope`; the framework's [class
    key](../../framework/done.md)). A row in no ball has a NULL in each column of the key compared with `=`, and no flag
    column stands in the key.

@@ -508,8 +508,8 @@ Tuple terms and reducers mix freely on either side. Each comparison takes one of
 - **Rows** — no reducer on the decision side: one model row per class, from its first kept row.
 - **Grouped** — decision reducers sharing one `by` key, under whole-query factors, beside terms that are one value per
   group (query-wide, or keyed by the `by` key: `per D: sum(ship) by (D) <= cap * open` with `open` declared
-  `per D:`): one model row per `by` group, under the group's tightest bound (`=` refuses differing bounds; `<>`
-  excludes each). A term beside the reducers counts once in its group's row.
+  `per D:`): one model row per `by` group that a class reaches, under the group's tightest bound (`=` refuses
+  differing bounds; `<>` excludes each). A term beside the reducers counts once in its group's row.
 - **Helper decision** — anything else: a term beside a reducer that varies within a group (`ship <= 0.20 * sum(ship)`,
   a decision keyed by another key), a row-varying factor, reducers with different `by`
   keys, a reducer inside another expression (`abs(sum(ship) by (g) - 40) <= 5`). Each reducer becomes a **helper

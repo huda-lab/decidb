@@ -39,7 +39,7 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   `DirectProjectionStage`, which gives every column its binding as it is added and becomes a `LogicalProjection` over a
   child. S1, R1, N1 and S3 also share `DirectProveSharedScope` (the clauses read together have one `by` key, `per`
   classes and `when`, else the rule declines; each rule's condition holds the `DirectSharedScope` it proves) and
-  `DirectAddInstanceFlag` (a `per K:` clause with no kept class has no instance, D5). The proof is the composition of
+  `DirectAddInstanceFlag` (a `per K:` clause has no instance in a `by` group that no kept class reaches, D5). The proof is the composition of
   `DirectReadScope` (one clause's scope) and `DirectSameScope` (two scopes alike); keys compare as sets
   (`DirectKeyWithin`, every expression of one is in the other, and `DirectSameKey`, within both ways), since the binder
   keeps one key entry per set of columns (`FindOrCreateDecideKey`).

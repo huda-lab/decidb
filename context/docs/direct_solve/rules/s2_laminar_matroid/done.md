@@ -24,9 +24,9 @@ different scope:
   The IR carries no functional dependencies and the rule is chosen once, when the plan is built, so the data is never
   consulted: `by (department)` beside `by (division)` declines even when every department lies in one division.
 - **`per` on any level.** The levels need not share a `per`, so the definition's example runs as written (`per` on
-  the two finer clauses, none on the global one). A `per` does not group the sum (D6); it only decides whether the
-  clause has an instance, and each level reads that flag on its own. A level with no instance leaves a chain that
-  still nests.
+  the two finer clauses, none on the global one). A `per` does not group the sum (D6); it only decides which groups
+  have an instance (those a class reaches), and each level reads that flag on its own. A level with no instance in a
+  group leaves a chain that still nests.
 - **Fixed rows.** Clauses that fix rows (`x = 1`, `x = 0`, under a `when`) are read as S1 reads them; a row fixed to
   1 takes a place in every level's group it belongs to.
 - **NULL keys and `when`.** A row with a NULL key, or one a level's `when` drops, is in no group of that level, so

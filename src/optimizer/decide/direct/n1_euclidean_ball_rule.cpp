@@ -424,7 +424,7 @@ private:
 		if (condition.scope.gated) {
 			ColumnBinding flag;
 			rows = DirectAddInstanceFlag(optimizer, std::move(rows), condition.scope.when.get(),
-			                             condition.scope.classes, flag);
+			                             condition.scope.classes, condition.scope.keys, flag);
 			instance = calc.Out(calc.Col(LogicalType::BOOLEAN, flag));
 		}
 		return DirectProjectScope(binder, std::move(rows), condition.scope.Scoped(), condition.scope.when.get(),

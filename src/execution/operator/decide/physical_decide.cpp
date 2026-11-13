@@ -2267,7 +2267,32 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				// them as members -- while every kept row of a group bounds it. A `<>`
 				// emits every kept row, since each one's bound is excluded.
 				bool every_kept_row = constraint->comparison_type == ExpressionType::COMPARE_NOTEQUAL;
+				// A `per K:` that names classes holds once per class, and a class's reducers read its `by`
+				// group (deck p. 30): a group that no kept row's class reaches has no row. A row in no class
+				// still counts in a group that another row's class reaches.
+				const PerGroupCacheEntry *by_groups = nullptr;
+				vector<bool> class_reaches;
+				if (constraint->scope.per == DecideClauseScope::PerRole::NAMES_CLASSES) {
+					auto &classes = CachedKeyGroups(per_group_cache, keys, constraint->scope.class_key,
+					                                chunk_expr_cache, context, gstate.data, num_rows, &scoped_kept);
+					by_groups = &CachedKeyGroups(per_group_cache, keys, constraint->group_key, chunk_expr_cache,
+					                             context, gstate.data, num_rows, &scoped_kept);
+					class_reaches.assign(by_groups->unfiltered_num_groups, false);
+					for (idx_t row = 0; row < num_rows; row++) {
+						auto group = by_groups->unfiltered_row_group_ids[row];
+						if (scoped_kept[row] && group != DConstants::INVALID_INDEX &&
+						    classes.unfiltered_row_group_ids[row] != DConstants::INVALID_INDEX) {
+							class_reaches[group] = true;
+						}
+					}
+				}
 				std::function<bool(idx_t)> emitted = [&](idx_t row) {
+					if (by_groups) {
+						auto group = by_groups->unfiltered_row_group_ids[row];
+						if (group == DConstants::INVALID_INDEX || !class_reaches[group]) {
+							return false;
+						}
+					}
 					return scoped_kept[row] && (every_kept_row || !has_local_filters || local_row_active[row]);
 				};
 				if (constraint->group_key != DConstants::INVALID_INDEX) {
@@ -2283,20 +2308,12 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					}
 					eval_const.num_groups = 1;
 				}
-				// A `per K:` that names classes holds once per class; with every kept row's K
-				// NULL there is no class, so no instance. The first kept row in a class settles it.
-				if (constraint->scope.per == DecideClauseScope::PerRole::NAMES_CLASSES) {
-					auto &classes = CachedKeyGroups(per_group_cache, keys, constraint->scope.class_key,
-					                                chunk_expr_cache, context, gstate.data, num_rows, &scoped_kept);
-					bool any_class = false;
-					for (idx_t row = 0; row < num_rows && !any_class; row++) {
-						any_class =
-						    scoped_kept[row] && classes.unfiltered_row_group_ids[row] != DConstants::INVALID_INDEX;
-					}
-					if (!any_class) {
-						eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
-						eval_const.num_groups = 0;
-					}
+				// With no `by` key the clause is one group, the empty key's: no class reaches it when
+				// every kept row's K is NULL, so there is no instance.
+				if (constraint->group_key == DConstants::INVALID_INDEX && by_groups &&
+				    std::find(class_reaches.begin(), class_reaches.end(), true) == class_reaches.end()) {
+					eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
+					eval_const.num_groups = 0;
 				}
 				// The classes each group's rows stand for -- the aggregate row of a group,
 				// or the easy MIN/MAX's member rows -- which an expanded diagnosis reports

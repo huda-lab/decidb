@@ -585,7 +585,7 @@ bool DirectProveSharedScope(const DirectIR &ir, const vector<const DirectIRConst
 
 unique_ptr<LogicalOperator> DirectAddInstanceFlag(Optimizer &optimizer, unique_ptr<LogicalOperator> input,
                                                   const Expression *when, const vector<DirectKeyElement> &classes,
-                                                  ColumnBinding &flag) {
+                                                  const vector<DirectKeyElement> &groups, ColumnBinding &flag) {
 	ExpressionBuilder calc(optimizer.context);
 	auto active = calc.Wrap(DirectActiveWhen(calc, when));
 	auto in_class = active;
@@ -595,9 +595,14 @@ unique_ptr<LogicalOperator> DirectAddInstanceFlag(Optimizer &optimizer, unique_p
 			in_class = calc.If(calc.IsNull(value), calc.Bool(false), in_class);
 		}
 	}
+	// One flag per `by` group: a class's reducers read its group, so a group no class reaches has no instance.
+	auto any_class = DirectWindowExtremum(optimizer, "bool_or", calc.Out(in_class));
+	for (auto &group : groups) {
+		any_class->partitions.push_back(calc.Out(DirectOnKeptRows(calc, active, calc.Of(*group.grouping))));
+	}
 	auto index = optimizer.binder.GenerateTableIndex();
 	auto window = make_uniq<LogicalWindow>(index);
-	window->expressions.push_back(DirectWindowExtremum(optimizer, "bool_or", calc.Out(in_class)));
+	window->expressions.push_back(std::move(any_class));
 	window->children.push_back(std::move(input));
 	flag = ColumnBinding(index, 0);
 	return std::move(window);

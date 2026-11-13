@@ -505,7 +505,7 @@ struct DirectSharedScope {
 	vector<DirectKeyElement> keys;
 	//! The clauses are written `per K:`, with K possibly `()`: `classes` is empty then, and the clause is still `per`.
 	bool per = false;
-	//! The clauses are written `per K:` and a NULL in K puts a row in no class, so a query whose kept rows all have a
+	//! The clauses are written `per K:` and a NULL in K puts a row in no class, so a group whose kept rows all have a
 	//! NULL K has no instance (the plan owes that: DirectAddInstanceFlag). `classes` is K.
 	bool gated = false;
 	vector<DirectKeyElement> classes;
@@ -528,13 +528,13 @@ bool DirectSameScope(const DirectSharedScope &a, const DirectSharedScope &b);
 bool DirectProveSharedScope(const DirectIR &ir, const vector<const DirectIRConstraint *> &clauses,
                             DirectSharedScope &scope);
 
-//! Appends to `input` a column that is true when some row `when` keeps has a class of `classes` (no NULL in a NO_GROUP
-//! element), and returns its binding in `flag`. The rows are the same on every row. A clause `per K: C` has no
-//! instance without one (D5: a NULL key is in no class); `when` and `classes` are over `input`'s columns, which keep
-//! their bindings.
+//! Appends to `input` a column that is true when some row `when` keeps in the row's group of `groups` has a class of
+//! `classes` (no NULL in a NO_GROUP element), and returns its binding in `flag`. The flag is the same on every row of
+//! a group. A clause `per K: C` reads each class's `by` group, so a group no class reaches has no instance (D5: a
+//! NULL key is in no class); `when`, `classes` and `groups` are over `input`'s columns, which keep their bindings.
 unique_ptr<LogicalOperator> DirectAddInstanceFlag(Optimizer &optimizer, unique_ptr<LogicalOperator> input,
                                                   const Expression *when, const vector<DirectKeyElement> &classes,
-                                                  ColumnBinding &flag);
+                                                  const vector<DirectKeyElement> &groups, ColumnBinding &flag);
 
 //! The per-row state of a scoped aggregate, projected once over the input: every input column, then for each scope
 //! whether the row is eligible (its `when` holds and no NO_GROUP key element is NULL) and the group key, then any

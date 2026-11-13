@@ -90,12 +90,13 @@ DirectScopeState DirectRankedPrefix::ProjectScopes(unique_ptr<LogicalOperator> r
 	}
 	vector<DirectScopeInput> scopes;
 	for (auto &level : levels) {
-		// A `per K:` clause has no instance when every kept row has a NULL K, which the scope projection reads as a
-		// flag.
+		// A `per K:` clause has no instance in a group whose kept rows all have a NULL K, which the scope projection
+		// reads as a flag.
 		unique_ptr<Expression> instance;
 		if (level.scope.gated) {
 			ColumnBinding flag;
-			rows = DirectAddInstanceFlag(optimizer, std::move(rows), level.scope.when.get(), level.scope.classes, flag);
+			rows = DirectAddInstanceFlag(optimizer, std::move(rows), level.scope.when.get(), level.scope.classes,
+			                             level.scope.keys, flag);
 			instance = calc.Out(calc.Col(LogicalType::BOOLEAN, flag));
 		}
 		scopes.push_back({level.scoped, level.scope.when.get(), &level.scope.keys, std::move(instance)});
