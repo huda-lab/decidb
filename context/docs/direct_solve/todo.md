@@ -15,5 +15,4 @@ checklist and the standard tests). Remove its row here when its `todo.md` exists
 | O2 | [Monge transportation problem](rules/o2_monge_transportation/definition.md) |
 | R2 | [Discrete separable convex resource allocation](rules/r2_discrete_resource_allocation/definition.md) |
 | R3 | [Continuous quadratic knapsack](rules/r3_quadratic_knapsack/definition.md) |
-| R4 | [Weighted max-min fair allocation](rules/r4_max_min_fairness/definition.md) |
 | S4 | [Cardinality-constrained bottleneck knapsack](rules/s4_bottleneck_knapsack/definition.md) |
