@@ -100,6 +100,11 @@ A rule exists to be a light shortcut. Before adding code to a rule or to the sha
 - **Is the proof short?** If admitting a shape needs a long proof, a new range argument or a parity check against
   solver quirks, decline the shape. The solver handles it correctly, only more slowly. A decline is cheap and a bug
   in a proof is a wrong answer.
+- **Does a value's sign decide the plan?** Recognition reads only the IR, never the data, so a declined query pays
+  about 0.14 ms whatever its size. A sign read from the data that could change the kind of problem (a negative factor
+  on a square makes it non-convex) declines at plan time. One that only changes values in the same pass is handled in
+  the plan, every sign exactly: the plan cannot hand a query back to the solver once it runs. R4's weights are the
+  second kind.
 - **Does a second rule need it?** Keep helpers inside the rule until a second rule uses them, then move them to the
   shared files (plan fragments, runtime checks, bound reader).
 - **Is the test proportionate?** One test per behavior. Do not pin an incidental detail, such as which of two errors
