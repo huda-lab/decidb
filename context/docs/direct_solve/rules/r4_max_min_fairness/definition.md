@@ -49,11 +49,11 @@ After normalization:
 
 > • every decision is REAL with 0 \<= amount \<= capacity;
 >
-> • every demand is strictly positive;
+> • every demand is finite and nonzero; a demand of 0 or less on a row the MIN reads makes the level 0;
 >
 > • the objective is exactly MAXIMIZE MIN(amount/demand);
 >
-> • there is exactly one resource upper bound with strictly positive coefficients;
+> • there is exactly one resource upper bound, whose coefficients may have any sign;
 >
 > • there is no secondary objective or other coupling constraint.
 
@@ -104,7 +104,7 @@ The SQL formula chooses the smaller upper bound and assigns every recipient exac
 
 > • Every decision is REAL with the exact box 0 \<= amount \<= capacity.
 >
-> • Demands and resource coefficients are finite and strictly positive.
+> • Demands and resource coefficients are finite. A row with a negative resource coefficient takes its capacity, which frees budget for the others; with no capacity it frees as much as the others need, and the budget no longer limits the level.
 >
 > • Capacities and the budget are finite and nonnegative.
 >
@@ -114,6 +114,6 @@ The SQL formula chooses the smaller upper bound and assigns every recipient exac
 >
 > • Repeated identities and component membership are resolved exactly before computing the level.
 >
-> • Negative budgets or inconsistent boxes produce DECIDE infeasibility, while zero budgets and zero capacities produce level zero.
+> • A budget below what the rows with a negative resource coefficient free, or an inconsistent box, produces DECIDE infeasibility, while zero budgets and zero capacities produce level zero.
 >
 > • Empty input, `when`, `per`, `by`, NULL, numeric, decision-identity, and output-mapping semantics are preserved.

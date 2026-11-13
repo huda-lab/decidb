@@ -54,7 +54,7 @@ started.
 | [R1](rules/r1_continuous_knapsack/) | Continuous (fractional) knapsack | Exact | **Works**, on by default, including per `by` group |
 | [R2](rules/r2_discrete_resource_allocation/) | Discrete separable convex resource allocation | Exact | Not started |
 | [R3](rules/r3_quadratic_knapsack/) | Continuous quadratic knapsack | Prototype | Not started |
-| [R4](rules/r4_max_min_fairness/) | Weighted max-min fair allocation | Exact | Not started |
+| [R4](rules/r4_max_min_fairness/) | Weighted max-min fair allocation | Exact | **Works**, on by default, including per `by` group |
 | [O1](rules/o1_monge_assignment/) | Monge assignment | Exact | **Works**, on by default |
 | [O2](rules/o2_monge_transportation/) | Monge transportation problem | Prototype | Not started |
 | [D1](rules/d1_block_decomposition/) | Block-diagonal decomposition | Exact | Not started |
