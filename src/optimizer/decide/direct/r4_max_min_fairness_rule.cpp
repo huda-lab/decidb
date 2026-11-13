@@ -18,11 +18,11 @@ namespace direct_r4_max_min_fairness {
 
 constexpr const char *RULE_NAME = "R4_MAX_MIN_FAIRNESS";
 
-//! What CheckCondition proved: one row-scoped REAL decision `x` in the box [0, cap], where the capacity is a constant,
-//! a value of the row or absent; one budget `SUM(w*x) <= B` with a weight `w` of any sign, and a limit `B` that is a
-//! constant or read from the data, over the groups of a `by` key and the rows of a `when`; and an objective
-//! `MAXIMIZE MIN(c*x)` over one term whose coefficient `c` is a value of the row. The objective is the canonical form
-//! of `MAXIMIZE MIN(x / demand)`: `c = 1 / demand`.
+//! What CheckCondition proved: one REAL decision `x`, one for each row or one shared by the rows of a key (`per K:`),
+//! in the box [0, cap], where the capacity is a constant, a value of the row or absent; one budget `SUM(w*x) <= B` with
+//! a weight `w` of any sign, and a limit `B` that is a constant or read from the data, over the groups of a `by` key
+//! and the rows of a `when`; and an objective `MAXIMIZE MIN(c*x)` over one term whose coefficient `c` is a value of the
+//! row. The objective is the canonical form of `MAXIMIZE MIN(x / demand)`: `c = 1 / demand`.
 struct Condition final : DirectApplicabilityCondition {
 	//! The box's upper end before any per-row bound, and the per-row clauses the plan evaluates: each an upper end.
 	double upper = POSITIVE_INFINITY;
@@ -34,6 +34,11 @@ struct Condition final : DirectApplicabilityCondition {
 	//! otherwise it is the sum of the terms of `weights` on the decision, a value of the row.
 	DirectSharedScope scope;
 	DirectLimit limit;
+	//! The key of a decision shared by the rows of a key, empty for one decision on each row; and whether a row has a
+	//! decision, a predicate over the source (null when every row has one): a row with a NULL in an element that puts
+	//! it in no class has none, so nothing is read on it.
+	vector<DirectKeyElement> keys;
+	unique_ptr<Expression> present;
 	bool constant_weight = true;
 	double weight = 0.0;
 	DirectLinearPart weights;
@@ -46,16 +51,14 @@ public:
 	}
 
 	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
-		if (!DirectIsOneRowDecision(ir, DirectDomain::REAL)) {
-			return nullptr;
-		}
 		auto condition = make_uniq<Condition>();
-		// The level plan reads the source, and the rows read it again to be given the level.
+		// The class plan reads the source, and the rows read it again to be given their answer.
 		condition->source_reads = 2;
-		if (!ProveBudget(ir, context, *condition) || !ProveBox(ir, context, *condition) ||
-		    !ProveObjective(ir, context, *condition)) {
+		if (!ProveDecision(ir, *condition) || !ProveBudget(ir, context, *condition) ||
+		    !ProveBox(ir, context, *condition) || !ProveObjective(ir, context, *condition)) {
 			return nullptr;
 		}
+		ReadOnRowsWithADecision(context, *condition);
 		return std::move(condition);
 	}
 
@@ -68,10 +71,57 @@ public:
 	                       const DirectStateErrors &errors) const override;
 
 private:
+	bool ProveDecision(const DirectIR &ir, Condition &condition) const;
+	void ReadOnRowsWithADecision(ClientContext &context, Condition &condition) const;
 	bool ProveBudget(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 	bool ProveBox(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 };
+
+//! One REAL decision, on each row or shared by the rows of a key. A decision of the whole query is another class.
+bool Rule::ProveDecision(const DirectIR &ir, Condition &condition) const {
+	if (ir.decisions.size() != 1 || ir.decisions[0].domain != DirectDomain::REAL ||
+	    ir.decisions[0].scope == DecideVarScope::GLOBAL) {
+		return false;
+	}
+	bool keyed = ir.decisions[0].scope == DecideVarScope::KEYED;
+	if (ir.keyed_scopes.size() != (keyed ? 1 : 0)) {
+		return false;
+	}
+	if (keyed) {
+		// A key's columns are columns of the source (the IR reads them as a row check would), so a copy is all it
+		// takes.
+		for (auto &element : ir.keyed_scopes[ir.decisions[0].keyed_scope].key) {
+			condition.keys.push_back(element.Copy());
+		}
+	}
+	return true;
+}
+
+//! A row with a NULL in an element of the decision's key that puts it in no class has no decision (D5), and nothing is
+//! read on it, as on the solver path: not its capacity, its weight or its coefficient. The predicate that says so joins
+//! the `when` of every clause that reads the row.
+void Rule::ReadOnRowsWithADecision(ClientContext &context, Condition &condition) const {
+	ExpressionBuilder calc(context);
+	ExprPtr present;
+	for (auto &element : condition.keys) {
+		if (element.no_group) {
+			auto has_value = calc.Not(calc.IsNull(calc.Of(*element.grouping)));
+			present = present ? calc.And(present, has_value) : has_value;
+		}
+	}
+	if (!present) {
+		return;
+	}
+	condition.present = calc.Out(present);
+	auto both = [&](unique_ptr<Expression> &when) {
+		when = when ? calc.Out(calc.And(calc.Wrap(std::move(when)), present)) : calc.Out(present);
+	};
+	both(condition.objective.kept);
+	for (auto &clause : condition.clauses) {
+		both(clause.when);
+	}
+}
 
 //! The budget `SUM(w*x) <= B`, the one aggregate clause, over the rows of its `when` and the groups of its `by` key,
 //! with a weight of any sign and a limit that is a constant or read from the data. The other constraints are per-row
@@ -95,6 +145,11 @@ bool Rule::ProveBudget(const DirectIR &ir, ClientContext &context, Condition &co
 		return false;
 	}
 	if (!DirectProveSharedScope(ir, {budget}, condition.scope) || condition.scope.per) {
+		return false;
+	}
+	// The rows of a key are one decision, so the budgets of two of them are one budget only when the key says which:
+	// the groups are within the key, and no `when` keeps some rows of a key and drops others.
+	if (!condition.keys.empty() && (condition.scope.when || !DirectKeyWithin(condition.scope.keys, condition.keys))) {
 		return false;
 	}
 	// DirectProveSharedScope has proved that the clause is a plain SUM.
@@ -176,12 +231,21 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //! budget it must free: `max(lo, max(0, N*s - (B+F)) / W)`; taking more than the deficit over `W` only frees more. A
 //! row the MIN does not read has no `c`.
 //!
+//! A decision shared by the rows of a key is one variable `x_K`. Its weight is the sum of its rows' weights, its
+//! capacity the least of their capacities (`x <= cap` for each) and the MIN reads its least coefficient (`min(c*x) =
+//! min(c)*x` for `x >= 0`, so any `c <= 0` gives level 0): one row for each key, which a window gives every row of the
+//! key (WK). The first row of a key stands for it in the sums of its group, so a key counts once; the budgets are those
+//! of groups within the key (ProveBudget), which makes the group of a key the same on all its rows. A row whose key has
+//! a NULL where that puts it in no class has no decision: nothing is read on it, it counts nowhere and its amount is
+//! NULL.
+//!
 //! The first read, on each row:
 //!
-//!   [W0] the row's membership in the budget and its group key (DirectProjectScope)
+//!   [W0] the row's membership in the budget and its group key, and its decision's key (DirectProjectScopes)
 //!   P1   raw values: the capacity clauses' right sides, the budget's weight and limit inputs and the MIN's
 //!        coefficient `c`, each on the rows that read it, and the check of every value that can fail
 //!   P2   the row's capacity (the least upper end of the box on it) and the verdict of the raw checks
+//!   [WK] for a decision shared by the rows of a key: its weight, capacity and coefficient on every row of the key
 //!   P3   `w/c`, the freed budget, the unlimited weight and `cap*c` (0 for `c <= 0`), each NULL where the row does not
 //!        count, and every other check the row can raise
 //!   H    a hash aggregate on the group key, one row for each group and one for the rows outside every budget: the
@@ -334,6 +398,10 @@ public:
 		auto uncapped = calc.Cmp(ExpressionType::COMPARE_EQUAL, capacity, calc.Num(POSITIVE_INFINITY));
 		auto freeing = calc.If(uncapped, calc.Max({low, Double(joined.answers[1])}), capacity);
 		auto amount = calc.If(calc.And(in_budget, Negative(Weight(row.weight))), freeing, low);
+		// A row with no decision has no amount.
+		if (IsKeyed()) {
+			amount = calc.If(Boolean(row.present), amount, calc.Constant(Value(LogicalType::DOUBLE)));
+		}
 		p4.Add(calc.Out(amount));
 		vector<unique_ptr<Expression>> checks;
 		checks.push_back(calc.Out(Boolean(joined.answers[4])));
@@ -362,9 +430,12 @@ private:
 		vector<DirectGroupInputColumns> limit_inputs;
 		//! The MIN's coefficient `c`: NULL on a row the MIN does not read.
 		ColumnBinding coefficient;
-		//! The row's weight `w`, a column only for a weight read from the data (Weight), and its capacity.
+		//! The weight `w`, the capacity and the coefficient `c` of the row's decision: its own, or its key's. The
+		//! weight is a column only when HasWeightColumn.
 		ColumnBinding weight;
 		ColumnBinding capacity;
+		//! Whether the row has a decision: a column only for a decision shared by the rows of a key.
+		ColumnBinding present;
 		//! What the row adds to each sum of its group (BuildGroups): `w/c`, the freed budget, the unlimited weight and
 		//! `cap*c`, NULL where the row does not count; and whether the row's checks held.
 		ColumnBinding need;
@@ -396,10 +467,10 @@ private:
 	ExprPtr Negative(const ExprPtr &value) const {
 		return calc.Cmp(ExpressionType::COMPARE_LESSTHAN, value, calc.Num(0.0));
 	}
-	//! The row's weight: the literal of a constant weight, which DuckDB's rewriter folds into every expression over it,
-	//! or the column `weight`.
+	//! The weight of the row's decision: the literal of a constant weight, which DuckDB's rewriter folds into every
+	//! expression over it, or the column `weight`.
 	ExprPtr Weight(ColumnBinding weight) const {
-		return condition.constant_weight ? calc.Num(condition.weight) : Double(weight);
+		return HasWeightColumn() ? Double(weight) : calc.Num(condition.weight);
 	}
 
 	//! Forwards the columns the limit's aggregates read through `stage`.
@@ -415,55 +486,9 @@ private:
 		}
 	}
 
-	Row RowStages(unique_ptr<LogicalOperator> rows) const {
-		Row result;
-		vector<unique_ptr<Expression>> checks;
-		bool scoped = condition.scope.Scoped();
-
-		// W0
-		auto state =
-		    DirectProjectScope(binder, std::move(rows), scoped, condition.scope.when.get(), condition.scope.keys, {});
-		auto from_scope = DirectCarriedOf(state, source_bindings.size());
-		auto over = [&](const Expression &value) {
-			return state.state_index == DConstants::INVALID_INDEX
-			           ? value.Copy()
-			           : DirectOverProjection(value, source_bindings, state.state_index);
-		};
-		auto eligible = scoped ? Boolean(from_scope.eligible) : nullptr;
-
-		// P1: a value is read and checked on the rows the budget covers alone, nothing is computed on any other.
-		DirectProjectionStage p1(binder.GenerateTableIndex());
-		auto carried1 = p1.Forward(from_scope, source_types, scoped);
-		auto clauses = DirectLayoutBoundClauses(optimizer, calc, p1, condition.clauses, source_bindings, over, checks);
-		auto laid =
-		    DirectLayoutQuadraticPart(optimizer, calc, p1, condition.objective, 1, source_bindings, over, checks);
-		ColumnBinding raw_weight;
-		if (!condition.constant_weight) {
-			auto values = DirectValuesOn(condition.weights, 0);
-			// The solver reads a weight on every row the clause's `when` keeps, a row with a NULL key included.
-			auto kept =
-			    condition.scope.when ? calc.Wrap(DirectActiveWhen(calc, over(*condition.scope.when).get())) : nullptr;
-			raw_weight =
-			    p1.Add(calc.Out(DirectOnKeptRows(calc, kept, calc.Wrap(DirectSumOf(optimizer, values, over)))));
-			if (auto check = DirectCheckNumber(optimizer, raw_weight, condition.weights.names[0], values,
-			                                   source_bindings, p1.index)) {
-				checks.push_back(std::move(check));
-			}
-		}
-		if (limit_bound) {
-			result.limit_inputs = DirectLayoutGroupInputs(optimizer, calc, p1, *limit_bound, eligible, over, &checks);
-		}
-		auto plan = p1.Finish(std::move(state.plan));
-
-		// P2: a clause's upper end is +infinity where its `when` drops the row or its right side is NULL.
-		DirectProjectionStage p2(binder.GenerateTableIndex());
-		auto carried2 = p2.Forward(carried1, source_types, scoped);
-		auto coefficient = p2.Add(calc.Out(Double(laid.linear[0])));
-		ColumnBinding weight;
-		if (!condition.constant_weight) {
-			weight = p2.Add(calc.Out(Double(raw_weight)));
-		}
-		ForwardLimitInputs(p2, result.limit_inputs);
+	//! The row's capacity: the least upper end of the box on it. A clause's end is +infinity where its `when` drops the
+	//! row or its right side is NULL.
+	ExprPtr RowCapacity(const vector<DirectBoundColumns> &clauses) const {
 		vector<ExprPtr> uppers;
 		if (condition.upper != POSITIVE_INFINITY) {
 			uppers.push_back(calc.Num(condition.upper));
@@ -473,36 +498,168 @@ private:
 			DirectClauseBounds(calc, clause, lower, upper);
 			uppers.push_back(upper);
 		}
-		auto capacity = p2.Add(calc.Out(uppers.empty() ? calc.Num(POSITIVE_INFINITY) : calc.Min(uppers)));
+		return uppers.empty() ? calc.Num(POSITIVE_INFINITY) : calc.Min(uppers);
+	}
+
+	bool IsKeyed() const {
+		return !condition.keys.empty();
+	}
+	//! Whether the weight of a row is a column: one read from the data, or the sum of a key's.
+	bool HasWeightColumn() const {
+		return !condition.constant_weight || IsKeyed();
+	}
+
+	//! The columns WK adds: what a row reads of its key.
+	struct KeyValues {
+		ColumnBinding weight;
+		ColumnBinding capacity;
+		ColumnBinding coefficient;
+		ColumnBinding rank;
+	};
+
+	//! WK: a window over the rows of each key, which gives every row of the key its weights' sum, its least capacity
+	//! and its least coefficient, and the row's place in the key. `weight` is null for a constant weight, which each
+	//! row adds.
+	KeyValues AddKeyWindow(unique_ptr<LogicalOperator> &plan, const DirectScopeColumns &decision,
+	                       const ColumnBinding *weight, ColumnBinding capacity, ColumnBinding coefficient) const {
+		auto window = make_uniq<LogicalWindow>(binder.GenerateTableIndex());
+		auto add = [&](unique_ptr<BoundWindowExpression> function) {
+			for (idx_t i = 0; i < decision.keys.size(); i++) {
+				function->partitions.push_back(calc.Out(calc.Col(decision.key.types[i], decision.keys[i])));
+			}
+			window->expressions.push_back(std::move(function));
+			return ColumnBinding(window->window_index, window->expressions.size() - 1);
+		};
+		KeyValues result;
+		result.weight = add(
+		    DirectWindowExtremum(optimizer, "sum", calc.Out(weight ? Double(*weight) : calc.Num(condition.weight))));
+		result.capacity = add(DirectWindowExtremum(optimizer, "min", calc.Out(Double(capacity))));
+		result.coefficient = add(DirectWindowExtremum(optimizer, "min", calc.Out(Double(coefficient))));
+		// Hand-built: a window is an operator-specific node, which the builder has no operation for.
+		auto rank =
+		    make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT, nullptr, nullptr);
+		rank->start = WindowBoundary::UNBOUNDED_PRECEDING;
+		rank->end = WindowBoundary::UNBOUNDED_FOLLOWING;
+		result.rank = add(std::move(rank));
+		window->children.push_back(std::move(plan));
+		plan = std::move(window);
+		return result;
+	}
+
+	//! The weight of a row read from the data, in the projection `p1` (it is the column returned), and its check. The
+	//! solver reads a weight on every row the clause's `when` keeps, a row with a NULL key included, and on a row that
+	//! has a decision. No `when` is kept for a decision of a key, so the rows read are the latter.
+	ColumnBinding LayoutWeight(DirectProjectionStage &p1,
+	                           const std::function<unique_ptr<Expression>(const Expression &)> &over,
+	                           vector<unique_ptr<Expression>> &checks) const {
+		if (condition.constant_weight) {
+			return ColumnBinding();
+		}
+		auto values = DirectValuesOn(condition.weights, 0);
+		auto &read = condition.scope.when ? condition.scope.when : condition.present;
+		auto kept = read ? calc.Wrap(DirectActiveWhen(calc, over(*read).get())) : nullptr;
+		auto weight = p1.Add(calc.Out(DirectOnKeptRows(calc, kept, calc.Wrap(DirectSumOf(optimizer, values, over)))));
+		if (auto check =
+		        DirectCheckNumber(optimizer, weight, condition.weights.names[0], values, source_bindings, p1.index)) {
+			checks.push_back(std::move(check));
+		}
+		return weight;
+	}
+
+	Row RowStages(unique_ptr<LogicalOperator> rows) const {
+		Row result;
+		vector<unique_ptr<Expression>> checks;
+		bool scoped = condition.scope.Scoped();
+		bool keyed = IsKeyed();
+
+		// W0: the budget's scope, and the decision's key for a decision shared by the rows of a key.
+		vector<DirectScopeInput> scopes;
+		scopes.push_back({scoped, condition.scope.when.get(), &condition.scope.keys, nullptr});
+		scopes.push_back({keyed, nullptr, &condition.keys, nullptr});
+		auto state = DirectProjectScopes(binder, std::move(rows), std::move(scopes), {});
+		auto from_scope = DirectCarriedOf(state, source_bindings.size());
+		auto over = [&](const Expression &value) {
+			return state.state_index == DConstants::INVALID_INDEX
+			           ? value.Copy()
+			           : DirectOverProjection(value, source_bindings, state.state_index);
+		};
+		auto eligible = scoped ? Boolean(from_scope.eligible) : nullptr;
+		auto &decision = state.scopes[1];
+
+		// P1: a value is read and checked on the rows the budget covers alone, nothing is computed on any other.
+		DirectProjectionStage p1(binder.GenerateTableIndex());
+		auto carried1 = p1.Forward(from_scope, source_types, scoped);
+		auto decision1 = p1.Forward(decision, keyed);
+		auto clauses = DirectLayoutBoundClauses(optimizer, calc, p1, condition.clauses, source_bindings, over, checks);
+		auto laid =
+		    DirectLayoutQuadraticPart(optimizer, calc, p1, condition.objective, 1, source_bindings, over, checks);
+		auto raw_weight = LayoutWeight(p1, over, checks);
+		if (limit_bound) {
+			result.limit_inputs = DirectLayoutGroupInputs(optimizer, calc, p1, *limit_bound, eligible, over, &checks);
+		}
+		auto plan = p1.Finish(std::move(state.plan));
+
+		// P2: a clause's upper end is +infinity where its `when` drops the row or its right side is NULL.
+		DirectProjectionStage p2(binder.GenerateTableIndex());
+		auto carried2 = p2.Forward(carried1, source_types, scoped);
+		auto decision2 = p2.Forward(decision1, keyed);
+		auto coefficient = p2.Add(calc.Out(Double(laid.linear[0])));
+		ColumnBinding weight;
+		if (!condition.constant_weight) {
+			weight = p2.Add(calc.Out(Double(raw_weight)));
+		}
+		ForwardLimitInputs(p2, result.limit_inputs);
+		auto capacity = p2.Add(calc.Out(RowCapacity(clauses)));
 		auto raw_valid = p2.Add(DirectAllHold(calc, std::move(checks)));
 		plan = p2.Finish(std::move(plan));
 
-		// P3: a row the MIN does not read has no `c`, and every CASE on it gives NULL there.
+		// WK: the decision of a key is read once for the rows of the key: the weights add, the capacity and the
+		// coefficient are the least, since `x <= cap` for every row and `min(c*x) = min(c)*x` for `x >= 0`. The first
+		// row of each key stands for it in the sums of its group.
+		KeyValues key_values;
+		if (keyed) {
+			key_values =
+			    AddKeyWindow(plan, decision2, condition.constant_weight ? nullptr : &weight, capacity, coefficient);
+		}
+
+		// P3: a row the MIN does not read has no `c`, and every CASE on it gives NULL there. A decision of a key counts
+		// once in the sums, on the first row of its key that has a decision.
 		DirectProjectionStage p3(binder.GenerateTableIndex());
 		result.carried = p3.Forward(carried2, source_types, scoped);
 		ForwardLimitInputs(p3, result.limit_inputs);
-		result.coefficient = p3.Add(calc.Out(Double(coefficient)));
-		if (!condition.constant_weight) {
-			result.weight = p3.Add(calc.Out(Double(weight)));
+		p3.Forward(decision2, keyed);
+		auto c = Double(keyed ? key_values.coefficient : coefficient);
+		auto cap = Double(keyed ? key_values.capacity : capacity);
+		auto w = keyed ? Double(key_values.weight) : Weight(weight);
+		result.coefficient = p3.Add(calc.Out(c));
+		if (HasWeightColumn()) {
+			result.weight = p3.Add(calc.Out(w));
 		}
-		result.capacity = p3.Add(calc.Out(Double(capacity)));
-		auto c = Double(coefficient);
-		auto w = Weight(weight);
-		auto cap = Double(capacity);
+		result.capacity = p3.Add(calc.Out(cap));
+		ExprPtr counts = calc.Bool(true);
+		if (keyed) {
+			result.present = p3.Add(calc.Out(Boolean(decision2.eligible)));
+			counts = calc.And(Boolean(decision2.eligible),
+			                  calc.Cmp(ExpressionType::COMPARE_EQUAL, calc.Col(LogicalType::BIGINT, key_values.rank),
+			                           calc.Constant(Value::BIGINT(1))));
+		}
 		auto no_value = calc.Constant(Value(LogicalType::DOUBLE));
 		auto uncapped = calc.Cmp(ExpressionType::COMPARE_EQUAL, cap, calc.Num(POSITIVE_INFINITY));
 		auto frees = Negative(w);
-		result.need = p3.Add(calc.Out(calc.If(calc.And(Positive(w), Positive(c)), calc.Div(w, c), no_value)));
-		result.freed =
-		    p3.Add(calc.Out(calc.If(calc.And(frees, calc.Not(uncapped)), calc.Mul(calc.Neg(w), cap), no_value)));
-		result.unlimited = p3.Add(calc.Out(calc.If(calc.And(frees, uncapped), calc.Neg(w), no_value)));
+		auto counted = [&](const ExprPtr &condition_value, const ExprPtr &value) {
+			return p3.Add(calc.Out(calc.If(calc.And(counts, condition_value), value, no_value)));
+		};
+		result.need = counted(calc.And(Positive(w), Positive(c)), calc.Div(w, c));
+		result.freed = counted(calc.And(frees, calc.Not(uncapped)), calc.Mul(calc.Neg(w), cap));
+		result.unlimited = counted(calc.And(frees, uncapped), calc.Neg(w));
 		auto no_level = calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, c, calc.Num(0.0));
-		result.allowed = p3.Add(calc.Out(calc.If(no_level, calc.Num(0.0), calc.Mul(cap, c))));
-		// The checks of the raw values hold first, then the box: a negative capacity leaves no value.
+		result.allowed = counted(calc.Bool(true), calc.If(no_level, calc.Num(0.0), calc.Mul(cap, c)));
+		// The checks of the raw values hold first, then the box: a negative capacity leaves no value, on a row that has
+		// a decision (the capacity is infinite where it has none).
 		vector<unique_ptr<Expression>> row_checks;
 		row_checks.push_back(calc.Out(Boolean(raw_valid)));
-		row_checks.push_back(
-		    DirectRaiseIf(calc, calc.Out(Negative(cap)), DirectInfeasibleErrorPredicate(optimizer, errors)));
+		row_checks.push_back(DirectRaiseIf(calc, calc.Out(Negative(Double(capacity))),
+		                                   DirectInfeasibleErrorPredicate(optimizer, errors)));
 		result.valid = p3.Add(DirectAllHold(calc, std::move(row_checks)));
 		result.plan = p3.Finish(std::move(plan));
 		return result;

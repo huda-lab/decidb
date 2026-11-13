@@ -1681,6 +1681,11 @@ duckdb::vector<Shape> R4AppliesShapes() {
 	shapes.push_back(R4("like terms in the budget", "x <= cap AND SUM(x + x) <= 9"));
 	shapes.push_back(R4("a budget of zero", "x <= cap AND SUM(x) <= 0"));
 	shapes.push_back(R4("a negative budget", "x <= cap AND SUM(x) <= -1"));
+	shapes.push_back(R4("a decision shared by a key", R4_CONSTRAINTS, nullptr, R4_OBJECTIVE, "per name: x(REAL)"));
+	shapes.push_back(R4("a decision shared by a key under a budget by that key", "x <= cap AND SUM(x) by (name) <= 9",
+	                    nullptr, R4_OBJECTIVE, "per name: x(REAL)"));
+	shapes.push_back(R4("a decision shared by a key under a budget by a coarser key",
+	                    "x <= cap AND SUM(x) by (name) <= 9", nullptr, R4_OBJECTIVE, "per name, flag: x(REAL)"));
 	shapes.push_back(R4Objective("a MIN under a part WHEN", "MAXIMIZE MIN(when flag: x / w)"));
 	shapes.push_back(R4Objective("a MIN under an objective WHEN", "MAXIMIZE when flag: MIN(x / w)"));
 	shapes.push_back(R4Objective("a coefficient read from a column", "MAXIMIZE MIN(f * x)"));
@@ -1693,7 +1698,16 @@ duckdb::vector<Shape> R4AppliesShapes() {
 duckdb::vector<Shape> R4DeclineShapes() {
 	duckdb::vector<Shape> shapes;
 	// The decision.
+	shapes.push_back(
+	    R4("two decisions", "x <= cap AND SUM(x) <= 9 AND y <= 1", nullptr, R4_OBJECTIVE, "x(REAL), y(REAL)"));
 	shapes.push_back(R4("an INT decision", R4_CONSTRAINTS, nullptr, R4_OBJECTIVE, "x(INT)"));
+	shapes.push_back(R4("a decision of the whole query", "x <= 9", nullptr, R4_OBJECTIVE, "per (): x(REAL)"));
+	shapes.push_back(R4("a keyed scope beside a decision on each row", R4_CONSTRAINTS,
+	                    [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));
+	shapes.push_back(R4("a decision shared by a key under a budget with a WHEN", "x <= cap AND when flag: SUM(x) <= 9",
+	                    nullptr, R4_OBJECTIVE, "per name: x(REAL)"));
+	shapes.push_back(R4("a decision shared by a key under a budget by a finer key",
+	                    "x <= cap AND SUM(x) by (name) <= 9", nullptr, R4_OBJECTIVE, "per flag: x(REAL)"));
 	// ProveBudget: the clause.
 	shapes.push_back(R4("no budget clause", "x <= cap"));
 	shapes.push_back(R4("a per-row clause that is not one row's bound", "x IN (1, 2) AND SUM(x) <= 9"));

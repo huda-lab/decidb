@@ -163,6 +163,51 @@ DATA_LIMIT_NULL_GROUP = (_row(1, 2.0, 10.0, k="a", l=None), _row(2, 4.0, 20.0, k
 NOTHING_READ_FREED = (_row(1, None, 4.0, w=1.0), _row(2, None, None, w=-1.0))
 
 
+# A decision shared by the rows of a key. Its weight is the sum of the rows' weights, its capacity the least of their
+# capacities, and the MIN reads the least of their coefficients.
+KEYED_SEVERAL = (
+    _row(1, 2.0, 4.0, w=1.0, k="a"),
+    _row(2, 4.0, 8.0, w=1.0, k="a"),
+    _row(3, 1.0, 10.0, w=2.0, k="b"),
+    _row(4, 1.0, 10.0, w=1.0, k="b"),
+    _row(5, 3.0, 6.0, w=1.0, k="c"),
+)
+KEYED_CAPACITIES_DIFFER = (_row(1, 2.0, 6.0, k="a"), _row(2, 2.0, 1.5, k="a"), _row(3, 2.0, 9.0, k="b"))
+KEYED_MIXED_WEIGHTS = (
+    _row(1, 2.0, 4.0, w=3.0, k="a"),
+    _row(2, 2.0, 4.0, w=-1.0, k="a"),
+    _row(3, 1.0, 5.0, w=-2.0, k="b"),
+    _row(4, 1.0, 5.0, w=1.0, k="b"),
+    _row(5, 2.0, 6.0, w=1.0, k="c"),
+)
+# One row of a key is outside the MIN: it still weighs on the budget, and its capacity still bounds the key.
+KEYED_ROW_NOT_READ = (
+    _row(1, 2.0, 4.0, w=1.0, k="a"),
+    _row(2, None, 3.0, w=2.0, k="a"),
+    _row(3, 4.0, 8.0, w=1.0, k="b"),
+)
+# A row with a NULL key has no decision: its capacity, weight and demand are read nowhere.
+KEYED_NULL_KEY = (
+    _row(1, 2.0, 4.0, w=1.0, k="a"),
+    _row(2, 0.0, -1.0, w=float("nan"), k=None),
+    _row(3, 4.0, 8.0, w=1.0, k="b"),
+    _row(4, 1.0, 0.5, w=1.0, k=None),
+)
+KEYED_NEGATIVE_UNCAPPED = (
+    _row(1, 2.0, 4.0, w=1.0, k="a"),
+    _row(2, 3.0, None, w=-1.0, k="b"),
+    _row(3, None, None, w=-1.0, k="b"),
+)
+KEYED_UNBOUNDED = (_row(1, 2.0, None, w=0.0, k="a"), _row(2, 4.0, None, w=0.0, k="b"))
+KEYED_NEGATIVE_CAPACITY = (_row(1, 2.0, 4.0, k="a"), _row(2, 4.0, -1.0, k="a"))
+KEYED_DATA_LIMITS = (
+    _row(1, 2.0, 4.0, k="a", l=9.0),
+    _row(2, 4.0, 8.0, k="a", l=12.0),
+    _row(3, 1.0, 10.0, k="b", l=5.0),
+    _row(4, 1.0, 10.0, k=None, l=3.0),
+)
+
+
 def _values(rows):
     return values_clause(rows, NAMES, dict(COLUMNS), sql_literal)
 
@@ -312,6 +357,8 @@ class Case:
     budget: str = "b9"
     box: str = "column"
     objective: str = "ratio"
+    #: `DECIDE per k:`: one amount for the rows of a key, none for a row whose key is NULL.
+    keyed: bool = False
 
 
 R4_CASES = {}
@@ -376,6 +423,19 @@ add("budget_negative_not_made_feasible_is_infeasible", NEGATIVE_NOT_ENOUGH, budg
 add("level_unbounded_by_a_read_row_of_weight_zero_and_no_capacity", UNBOUNDED_ZERO_WEIGHT, budget="column")
 add("level_unbounded_when_a_negative_weight_frees_unlimited_budget", UNBOUNDED_ALL_NEGATIVE, budget="column")
 add("budget_negative_with_no_row_read_the_uncapped_row_frees_it", NOTHING_READ_FREED, budget="column_negative")
+# A decision shared by the rows of a key.
+add("keys_several", KEYED_SEVERAL, budget="column", keyed=True)
+add("keys_the_least_capacity_binds", KEYED_CAPACITIES_DIFFER, budget="b100", keyed=True)
+add("keys_weights_of_mixed_signs_add", KEYED_MIXED_WEIGHTS, budget="column", keyed=True)
+add("keys_a_row_outside_the_min_still_weighs", KEYED_ROW_NOT_READ, budget="column", keyed=True)
+add("keys_null_key_row_has_no_decision", KEYED_NULL_KEY, budget="column", keyed=True)
+add("keys_negative_weight_without_capacity", KEYED_NEGATIVE_UNCAPPED, budget="column_b0", keyed=True)
+add("keys_level_unbounded", KEYED_UNBOUNDED, budget="column", keyed=True)
+add("keys_negative_capacity_is_infeasible", KEYED_NEGATIVE_CAPACITY, budget="b9", keyed=True)
+add("keys_under_a_budget_per_key", KEYED_SEVERAL, budget="by_column", keyed=True)
+add("keys_under_a_budget_per_key_and_a_null_key", KEYED_NULL_KEY, budget="by", keyed=True)
+add("keys_under_a_data_limit_the_null_key_row_limits_too", KEYED_DATA_LIMITS, budget="data_limit", keyed=True)
+add("keys_under_a_data_limit_per_key", KEYED_DATA_LIMITS, budget="by_data_limit", keyed=True)
 # A budget per group, and a `when` on it.
 add("groups_each_have_a_level", TWO_GROUPS, budget="by")
 add("groups_a_capacity_binds_one_level", GROUP_CAPACITY_BINDS, budget="by")
@@ -400,7 +460,8 @@ def _sql_body(case_):
     box = BOXES[case_.box]
     budget = BUDGETS[case_.budget]
     objective = OBJECTIVES[case_.objective]
-    return f"DECIDE amount(REAL) SUCH THAT {box.sql} AND {budget.sql} {objective.sql}"
+    declaration = "per k: amount(REAL)" if case_.keyed else "amount(REAL)"
+    return f"DECIDE {declaration} SUCH THAT {box.sql} AND {budget.sql} {objective.sql}"
 
 
 def _source(case_):
@@ -435,24 +496,39 @@ def _groups(case_):
     return {key: group for key, group in groups.items() if group[1] is not None}
 
 
+def _variable(case_, row):
+    """The name of the row's decision, or None for a row that has none."""
+    if not case_.keyed:
+        return f"x_{row['id']}"
+    return None if row["k"] is None else f"x_{row['k']}"
+
+
 def _solve_with_oracle(oracle_solver, case_):
     oracle_solver.create_model("direct_r4_max_min_fairness")
     box, budget, objective = BOXES[case_.box], BUDGETS[case_.budget], OBJECTIVES[case_.objective]
-    names = {}
+    uppers = {}
     for row in case_.rows:
-        names[row["id"]] = f"x_{row['id']}"
-        upper = box.upper(row)
-        oracle_solver.add_variable(names[row["id"]], VarType.CONTINUOUS, 0.0, BIG if upper is None else upper)
+        name = _variable(case_, row)
+        if name is not None:
+            end = box.upper(row)
+            uppers[name] = min(uppers.get(name, BIG), BIG if end is None else end)
+    for name, upper in uppers.items():
+        oracle_solver.add_variable(name, VarType.CONTINUOUS, 0.0, upper)
     for index, (members, limit) in enumerate(_groups(case_).values()):
-        oracle_solver.add_constraint(
-            {names[row["id"]]: budget.weight(row) for row in members}, "<=", limit, name=f"budget_{index}"
-        )
-    read = [(row, objective.coefficient(row)) for row in case_.rows]
+        weights = {}
+        for row in members:
+            name = _variable(case_, row)
+            if name is not None:
+                weights[name] = weights.get(name, 0.0) + budget.weight(row)
+        oracle_solver.add_constraint(weights, "<=", limit, name=f"budget_{index}")
+    read = [(row, objective.coefficient(row)) for row in case_.rows if _variable(case_, row) is not None]
     read = [(row, c) for row, c in read if c is not None]
     if read:
         oracle_solver.add_variable("level", VarType.CONTINUOUS, -BIG, BIG)
         for row, c in read:
-            oracle_solver.add_constraint({"level": 1.0, names[row["id"]]: -c}, "<=", 0.0, name=f"level_{row['id']}")
+            oracle_solver.add_constraint(
+                {"level": 1.0, _variable(case_, row): -c}, "<=", 0.0, name=f"level_{row['id']}_{_variable(case_, row)}"
+            )
         oracle_solver.set_objective({"level": 1.0}, ObjSense.MAXIMIZE)
     else:
         # A MIN over no row leaves no objective, and any feasible assignment is optimal.
@@ -465,9 +541,15 @@ def _check_assignment(case_, rows, columns, oracle, mode):
     assert [row[0] for row in rows] == [row["id"] for row in case_.rows], mode
     values = {row[0]: row[1] for row in rows}
     box, budget, objective = BOXES[case_.box], BUDGETS[case_.budget], OBJECTIVES[case_.objective]
+    chosen = {}
     for source in case_.rows:
         value = values[source["id"]]
+        name = _variable(case_, source)
+        if name is None:
+            assert value is None, (mode, source["id"], value)
+            continue
         assert isinstance(value, float), (mode, source["id"], value)
+        assert chosen.setdefault(name, value) == value, (mode, source["id"], value, chosen[name])
         upper = box.upper(source)
         assert value >= -_FEASIBILITY_TOLERANCE, (mode, source["id"], value)
         assert upper is None or value <= upper + _FEASIBILITY_TOLERANCE * max(1.0, abs(upper)), (
@@ -477,10 +559,15 @@ def _check_assignment(case_, rows, columns, oracle, mode):
             upper,
         )
     for key, (members, limit) in _groups(case_).items():
-        spent = sum(budget.weight(source) * values[source["id"]] for source in members)
+        spent = sum(
+            budget.weight(source) * values[source["id"]] for source in members if values[source["id"]] is not None
+        )
         assert spent <= limit + _FEASIBILITY_TOLERANCE * max(1.0, abs(limit)), (mode, key, spent, limit)
-    shares = [objective.coefficient(source) for source in case_.rows]
-    level = [c * values[source["id"]] for source, c in zip(case_.rows, shares) if c is not None]
+    level = [
+        c * values[source["id"]]
+        for source in case_.rows
+        if values[source["id"]] is not None and (c := objective.coefficient(source)) is not None
+    ]
     if not level:
         return
     expected = oracle.objective_value
