@@ -1527,6 +1527,10 @@ duckdb::vector<Shape> S2AppliesShapes() {
 	                    "per flag: SUM(x) by (flag) <= 1 AND per flag: SUM(x) by (flag) <= 2"
 	                    " AND per flag: SUM(x) <= 3"));
 	shapes.push_back(S2("the empty class on both scopes", "per (): SUM(x) by (flag) <= 1 AND per (): SUM(x) <= 2"));
+	// The `per` of each clause gates its own level, so the clauses need not share it.
+	shapes.push_back(S2("a `per` on the finer scope only", "per flag: SUM(x) by (flag) <= 1 AND SUM(x) <= 2"));
+	shapes.push_back(S2("a `per` of another class on the coarser scope",
+	                    "per flag: SUM(x) by (name, flag) <= 1 AND per name: SUM(x) by (flag) <= 2"));
 	shapes.push_back(S2("rows fixed beside the scopes", S2_CHAIN + string(" AND x = 1 AND x >= flag AND x <= cap")));
 	// A cap read from the data (S2-4), at each level and written each way the group bound reads it.
 	shapes.push_back(S2("a cap read from the data at the finer scope", "SUM(x) by (flag) <= cap AND SUM(x) <= 3"));
@@ -1617,15 +1621,6 @@ duckdb::vector<Shape> S2DeclineShapes() {
 	shapes.push_back(S2("a WHEN on the coarser scope only", "SUM(x) by (name) <= 1 AND when flag: SUM(x) <= 2"));
 	shapes.push_back(S2("another WHEN inside the sum of the coarser scope",
 	                    "when flag: SUM(x) by (name) <= 1 AND SUM(when cap > 1: x) <= 2"));
-	// Contains: the `per` of the clauses.
-	shapes.push_back(S2("a `per` on the finer scope only", "per flag: SUM(x) by (flag) <= 1 AND SUM(x) <= 2"));
-	shapes.push_back(S2("a `per` on the coarser scope only", "SUM(x) by (flag) <= 1 AND per (): SUM(x) <= 2"));
-	shapes.push_back(S2("the same key and a `per` on one of two clauses",
-	                    "per flag: SUM(x) by (flag) <= 1 AND SUM(x) by (flag) <= 2"));
-	shapes.push_back(
-	    S2("a `per` of a class on each scope", "per flag: SUM(x) by (flag) <= 1 AND per name: SUM(x) <= 2"));
-	shapes.push_back(S2("a `per` of another class on the coarser scope",
-	                    "per flag: SUM(x) by (name, flag) <= 1 AND per name: SUM(x) by (flag) <= 2"));
 	return shapes;
 }
 

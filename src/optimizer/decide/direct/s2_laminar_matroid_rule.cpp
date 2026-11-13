@@ -61,11 +61,12 @@ struct Condition final : DirectApplicabilityCondition {
 
 //! Whether `coarse` contains `fine`: every group of `fine` lies in one group of `coarse`, proved from the text of the
 //! two clauses (the IR carries no functional dependencies, so the data is not consulted). The `by` key of `coarse` is
-//! a subset of `fine`'s, `coarse` keeps every row `fine` keeps (it has no `when`, or the same one), and both are
-//! gated by the same `per`.
+//! a subset of `fine`'s, and `coarse` keeps every row `fine` keeps (it has no `when`, or the same one). The `per` of
+//! either clause is not compared: it does not group the sum (D6), only decides whether the clause has an instance, and
+//! each level reads that flag on its own (DirectRankedPrefix::ProjectScopes); a level with no instance leaves a chain
+//! that still nests.
 bool Contains(const DirectSharedScope &coarse, const DirectSharedScope &fine) {
-	return DirectKeyWithin(coarse.keys, fine.keys) && (!coarse.when || Expression::Equals(coarse.when, fine.when)) &&
-	       coarse.per == fine.per && DirectSameKey(coarse.classes, fine.classes);
+	return DirectKeyWithin(coarse.keys, fine.keys) && (!coarse.when || Expression::Equals(coarse.when, fine.when));
 }
 
 class Rule final : public DirectSolveRule {

@@ -205,21 +205,19 @@ S2 = RuleFixture(
     """,
     table_change="ALTER TABLE direct_s2_life ADD COLUMN extra INTEGER;",
     # The plain form with one condition changed, so the rule has to decline it: scopes that do not nest, a lower
-    # limit, a `per` on one scope only (the form of the definition's example, which writes `per` on the finer
-    # clauses), and a `when` on the coarser scope only. The other declines are
-    # `test_decidb_direct_decline.cpp`'s.
+    # limit, and a `when` on the coarser scope only. The other declines are `test_decidb_direct_decline.cpp`'s.
     near_misses=(
         ("x(BOOL)", "SUM(x) by (g) <= 1 AND SUM(x) by (h) <= 2", "MAXIMIZE SUM(p*x)"),
         ("x(BOOL)", "SUM(x) by (g) <= 1 AND SUM(x) >= 1", "MAXIMIZE SUM(p*x)"),
-        ("x(BOOL)", "per g: SUM(x) by (g) <= 1 AND SUM(x) <= 2", "MAXIMIZE SUM(p*x)"),
         ("x(BOOL)", "SUM(x) by (g, h) <= 1 AND when p > 9: SUM(x) by (g) <= 2", "MAXIMIZE SUM(p*x)"),
     ),
-    # Forms that look like near misses and apply: a `when` on the finer scope only, a zero limit, the same `per` on
-    # both scopes, and a limit read from the data.
+    # Forms that look like near misses and apply: a `when` on the finer scope only, a zero limit, a `per` on one scope
+    # only (the form of the definition's example, which writes `per` on the finer clauses), and a limit read from the
+    # data.
     near_miss_applies=(
         ("x(BOOL)", "when p > 9: SUM(x) by (g, h) <= 1 AND SUM(x) by (g) <= 2", "MAXIMIZE SUM(p*x)"),
         ("x(BOOL)", "SUM(x) by (g, h) <= 0 AND SUM(x) by (g) <= 2", "MAXIMIZE SUM(p*x)"),
-        ("x(BOOL)", "per g: SUM(x) by (g) <= 1 AND per g: SUM(x) <= 2", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "per g: SUM(x) by (g) <= 1 AND SUM(x) <= 2", "MAXIMIZE SUM(p*x)"),
         ("x(BOOL)", "SUM(x) by (g) <= 1 AND SUM(x) <= cap", "MAXIMIZE SUM(p*x)"),
     ),
     near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 'a', 'x', 2), (2, 10.0::DOUBLE, 'a', 'y', 1), "

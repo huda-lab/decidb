@@ -150,15 +150,17 @@ DEPT = ("div", "dept")
 TEAM = ("div", "dept", "team")
 
 
-def Q(keys, cap, op="<=", when=None, body="x", cap_of=None):
-    """One quota clause: `SUM(body) by (keys) op cap`, under `when` (None, "flag" in front, "local" inside the sum).
+def Q(keys, cap, op="<=", when=None, body="x", cap_of=None, per=None):
+    """One quota clause: `SUM(body) by (keys) op cap`, under `when` (None, "flag" in front, "local" inside the sum),
+    written `per K:` when `per` is K. K lists columns of `keys`: a NULL in K is then a NULL in the key too, so the `per`
+    gates no group the key does not, and the solver's rows are the same as without it.
 
     `cap` is the SQL text of the limit. A limit read from the data also gives `cap_of(members, whole)`, the limit the
     solver reads for one group as Python computes it from the raw rows: `members` are the rows of the group (the rows
     the clause's `when` keeps with no NULL key) and `whole` all rows with the same key, which a reducer reads when the
     `when` stands inside the sum. None means NULL, which skips the group's instance.
     """
-    return dict(keys=keys, cap=cap, op=op, when=when, body=body, cap_of=cap_of)
+    return dict(keys=keys, cap=cap, op=op, when=when, body=body, cap_of=cap_of, per=per)
 
 
 # A case is a dict with these keys:
@@ -169,6 +171,11 @@ def Q(keys, cap, op="<=", when=None, body="x", cap_of=None):
 S2_CASES = {
     # --- the cascade ---
     "definition_example": {"data": "example", "quotas": [Q(DEPT, 1), Q(DIV, 1), Q((), 2)]},
+    # As the definition writes it: a `per` on the two finer clauses and none on the global one.
+    "definition_example_as_written": {
+        "data": "example",
+        "quotas": [Q(DEPT, 1, per=DEPT), Q(DIV, 1, per=DIV), Q((), 2)],
+    },
     "independent_ranks_are_wrong": {"data": "counter", "quotas": [Q(DEPT, 1), Q(DIV, 2)]},
     "independent_ranks_are_wrong_written_coarse_first": {"data": "counter", "quotas": [Q(DIV, 2), Q(DEPT, 1)]},
     "two_levels_department_and_global": {"quotas": [Q(DEPT, 1), Q((), 3)]},
@@ -472,7 +479,10 @@ def _values(case, records=None):
 def _clause_sql(quota):
     keys = f" by ({', '.join(quota['keys'])})" if quota["keys"] else ""
     inner = {"local": "when flag: "}.get(quota["when"], "")
-    prefix = "when flag: " if quota["when"] == "flag" else ""
+    scope = (["when flag"] if quota["when"] == "flag" else []) + (
+        [f"per {', '.join(quota['per'])}"] if quota["per"] is not None else []
+    )
+    prefix = f"{' '.join(scope)}: " if scope else ""
     return f"{prefix}SUM({inner}{quota['body']}){keys} {quota['op']} {quota['cap']}"
 
 
@@ -663,11 +673,12 @@ def _selected(decidb_cli, case):
 @pytest.mark.correctness
 def test_s2_applies_to_the_definitions_example_and_the_counter_example(decidb_cli):
     """The cases below the oracle checks apply S2 itself, not the solver, and give the answers the definition names."""
-    for name in ("definition_example", "independent_ranks_are_wrong"):
+    for name in ("definition_example", "definition_example_as_written", "independent_ranks_are_wrong"):
         plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {_wrapped_sql(S2_CASES[name])}")
         assert "S2_LAMINAR_MATROID" in plan.stdout, (name, plan.stdout, plan.stderr)
     # A (id 0) and D (id 3) are selected.
     assert _selected(decidb_cli, S2_CASES["definition_example"]) == {0, 3}
+    assert _selected(decidb_cli, S2_CASES["definition_example_as_written"]) == {0, 3}
     # a and c: b is refused by the department, which leaves the division's second place to c.
     assert _selected(decidb_cli, S2_CASES["independent_ranks_are_wrong"]) == {0, 2}
 
@@ -784,7 +795,6 @@ DECLINED = {
     "a_lower_limit_from_the_data": "SUM(x) by (div) <= 2 AND SUM(x) >= flag_cap",
     "a_when_on_the_coarser_scope_only": "SUM(x) by (div, dept) <= 1 AND when flag: SUM(x) by (div) <= 2",
     "another_when_on_each_scope": "when flag: SUM(x) by (div, dept) <= 1 AND when NOT flag: SUM(x) by (div) <= 2",
-    "a_per_on_one_scope_only": "per div, dept: SUM(x) by (div, dept) <= 1 AND per div: SUM(x) by (div) <= 2 AND SUM(x) <= 3",
 }
 
 
