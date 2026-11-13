@@ -64,10 +64,11 @@ unique_ptr<Expression> DirectActiveWhen(const ExpressionBuilder &calc, const Exp
 ExprPtr DirectOnKeptRows(const ExpressionBuilder &calc, const ExprPtr &kept, const ExprPtr &value);
 
 //! The error of an `=` bound that takes two values in one group, on a row of the group: its smallest (`low`) and
-//! largest (`high`) value, and NULL where they agree. `text` is the bound as written. The bound-side rewrite and a rule
-//! that reduces the bound itself both raise it.
+//! largest (`high`) value, and NULL where they agree or where one of `held` is not true -- a group whose reducers do
+//! not each read a row holds no instance (DecideGroupBound::held). `text` is the bound as written. The bound-side
+//! rewrite and a rule that reduces the bound itself both raise it.
 ExprPtr DirectBoundDisagreement(const ExpressionBuilder &calc, const string &text, const ExprPtr &low,
-                                const ExprPtr &high);
+                                const ExprPtr &high, const vector<ExprPtr> &held);
 
 //===--------------------------------------------------------------------===//
 // Scope projection and data-valued bounds
@@ -82,11 +83,13 @@ unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, con
 //===--------------------------------------------------------------------===//
 
 //! The group bound of a raw `rhs`, which may differ between the rows of a group: the group's tightest value. `<=` reads
-//! the MIN of `rhs`, `>=` its MAX, `=` both and owes the check that they agree. `invalid` is the message a row raises
-//! for a NaN `rhs` (null for none), `text` the bound as written.
+//! the MIN of `rhs`, `>=` its MAX, `=` both and owes the check that they agree, in a group where each of `reads` -- the
+//! own `when` of each reducer of the clause that has one -- keeps a row (DecideGroupBound::held). `invalid` is the
+//! message a row raises for a NaN `rhs` (null for none), `text` the bound as written.
 unique_ptr<DecideGroupBound> DirectTightestBound(Optimizer &optimizer, ExpressionType comparison,
                                                  unique_ptr<Expression> rhs, const string &text,
-                                                 unique_ptr<Expression> invalid);
+                                                 unique_ptr<Expression> invalid,
+                                                 const vector<const Expression *> &reads = {});
 
 //! Whether a rule can compute the bound: its inputs and the filters of its aggregates are deterministic values of the
 //! source row, and the limits it gives are numbers.

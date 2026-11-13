@@ -80,3 +80,27 @@ def test_a_crossed_box_leaves_every_helper_bounded_on_highs(decidb_cli):
         ORDER BY t.id"""
     result = decidb_cli.with_env({"DECIDB_FORCE_SOLVER": "highs"}).execute_raw(SETUP + sql)
     assert "DECIDE optimization is infeasible" in result.stderr, result.stderr
+
+
+#: Group b's rows fail the reducer's own `when`, so it holds no instance and constrains nothing: its bound, 4 and 5, is
+#: not read (owner's ruling on Q7-ruling-equals; DecideGroupBound::held).
+EQUAL_ROWS = "(VALUES (1, 'a', true, 3), (2, 'b', false, 4), (3, 'b', false, 5)) t(id, g, p, c)"
+
+
+@pytest.mark.parametrize("direct", ["off", "auto"])
+@pytest.mark.parametrize("bound", ["t.c", "at(last: t.c) over (t.id within t.g)"], ids=["column", "frame"])
+def test_an_equal_bound_of_a_group_with_no_instance_is_not_read(decidb_cli, direct, bound):
+    sql = f"""SET decide_direct_solve = '{direct}';
+        SELECT id, x FROM {EQUAL_ROWS} DECIDE x(INT)
+        SUCH THAT x <= 9 AND sum(when t.p: x) by (t.g) = {bound} MAXIMIZE sum(x) ORDER BY id"""
+    assert [row["x"] for row in answer(decidb_cli, sql)] == [3, 9, 9]
+
+
+@pytest.mark.parametrize("direct", ["off", "auto"])
+def test_an_equal_bound_of_a_group_with_an_instance_takes_one_value(decidb_cli, direct):
+    """Every row of group b passes the `when` now: b holds an instance, whose bound takes 4 and 5."""
+    sql = f"""SET decide_direct_solve = '{direct}';
+        SELECT id, x FROM (VALUES (1, 'a', true, 3), (2, 'b', true, 4), (3, 'b', true, 5)) t(id, g, p, c) DECIDE x(INT)
+        SUCH THAT x <= 9 AND sum(when t.p: x) by (t.g) = t.c MAXIMIZE sum(x) ORDER BY id"""
+    result = decidb_cli.execute_raw(sql)
+    assert "takes more than one value here (4 and 5)" in result.stderr, result.stderr

@@ -265,6 +265,10 @@ struct DecideGroupBound {
 	//! INVALID_INDEX for any other bound.
 	idx_t low = DConstants::INVALID_INDEX;
 	idx_t high = DConstants::INVALID_INDEX;
+	//! Of an `=` bound, per reducer of its clause with a `when` of its own, the aggregate saying whether that `when`
+	//! keeps a row of the group: only a group in which each does holds an instance, and a group with none constrains
+	//! nothing, so the check speaks there alone (language/guide.md §7.4).
+	vector<idx_t> held;
 	//! The bound as the user wrote it, for a message.
 	string text;
 
@@ -281,6 +285,7 @@ struct DecideGroupBound {
 		copy->invalid = CopyOrNull(invalid);
 		copy->low = low;
 		copy->high = high;
+		copy->held = held;
 		copy->text = text;
 		return copy;
 	}

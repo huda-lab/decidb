@@ -206,8 +206,8 @@ private:
 		}
 		auto invalid = InvalidValueMessage(*comparison.right, text, Kept());
 		if (reduces) {
-			Record(comparison,
-			       DirectTightestBound(optimizer, comparison.type, comparison.right->Copy(), text, std::move(invalid)));
+			Record(comparison, DirectTightestBound(optimizer, comparison.type, comparison.right->Copy(), text,
+			                                       std::move(invalid), OwnWhens(*comparison.left)));
 			return;
 		}
 		AddValueCheck(std::move(invalid));
@@ -301,6 +301,24 @@ private:
 		    {ColumnBinding(table_index, group.aggregates.size()), std::move(expr), group.inputs.size()});
 		group.inputs.push_back(std::move(input));
 		expr = std::move(placeholder);
+	}
+
+	//! The own `when` of each reducer of the clause's left side that has one: a group holds an instance only where each
+	//! keeps a row (DecideGroupBound::held). A reducer with none reads every kept row of its group.
+	static vector<const Expression *> OwnWhens(const Expression &left) {
+		vector<const Expression *> whens;
+		std::function<void(const Expression &)> walk = [&](const Expression &expr) {
+			if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+				auto &reducer = expr.Cast<BoundAggregateExpression>();
+				if (reducer.filter) {
+					whens.push_back(reducer.filter.get());
+				}
+				return;
+			}
+			ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { walk(child); });
+		};
+		walk(left);
+		return whens;
 	}
 
 	//! A row whose written `per` column is NULL is in no class (D5), so it has no instance and its bound is read by
@@ -527,8 +545,13 @@ private:
 			messages.push_back(calc.Out(DirectOnKeptRows(calc, Kept(), calc.Wrap(std::move(group.invalid)))));
 		}
 		if (group.low != DConstants::INVALID_INDEX) {
+			vector<ExprPtr> held;
+			for (auto aggregate : group.held) {
+				held.push_back(columns[aggregate]);
+			}
 			messages.push_back(calc.Out(DirectOnKeptRows(
-			    calc, Kept(), DirectBoundDisagreement(calc, group.text, columns[group.low], columns[group.high]))));
+			    calc, Kept(),
+			    DirectBoundDisagreement(calc, group.text, columns[group.low], columns[group.high], held))));
 		}
 		comparison.right = std::move(DirectIsUpperBound(comparison.type) ? group.upper : group.lower);
 		DirectReplaceColumns(comparison.right, placeholders, values);

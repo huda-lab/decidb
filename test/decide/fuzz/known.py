@@ -20,12 +20,6 @@ DEFECTS: dict[str, tuple[str, dict[tuple[str, str, str], tuple[int, ...]]]] = {
         "its lower bound, and the query is reported infeasible, while DIAGNOSE says feasible.",
         {},
     ),
-    "Q7-ruling-equals": (
-        "Needs a ruling: under `=` a column bound raises 'more than one value' on a group with no instance, where a "
-        "frame bound says nothing. nests gives `=` a constant bound; bounds writes an `=` clause with no `per t.k:` "
-        "and no `when c:` inside its reducer, over `by` keys no row holds a NULL in.",
-        {},
-    ),
 }
 
 

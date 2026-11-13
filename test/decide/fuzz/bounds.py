@@ -7,6 +7,7 @@ own: a frame bound must answer as a column bound does.
 
 from __future__ import annotations
 
+import dataclasses
 import random
 
 from solver.types import ObjSense, VarType
@@ -14,12 +15,12 @@ from tests._anr_oracle import (
     ABSENT,
     CONSTANT,
     PER_ROW,
+    Agg,
     AnrModel,
     At,
     Cmp,
     Col,
     Decision,
-    Extremum,
     Objective,
     Over,
     Position,
@@ -73,19 +74,36 @@ class TwoValues(ScopeError):
         self.kind, self.phrase = "two_values", TWO_VALUES
 
 
+def holds_extremum(expr) -> bool:
+    """Whether ``expr`` holds a MIN or a MAX reducer."""
+    if isinstance(expr, Agg) and expr.kind in ("min", "max"):
+        return True
+    if isinstance(expr, tuple):
+        return any(holds_extremum(item) for item in expr)
+    if dataclasses.is_dataclass(expr):
+        return any(holds_extremum(getattr(expr, field.name)) for field in dataclasses.fields(expr))
+    return False
+
+
 class BoundModel(AnrModel):
     """``_anr_oracle``'s reading, where ``=`` refuses a group bound by two values (D85). A MIN or MAX under ``=`` says
     infeasible instead, as its rewrite splits ``=`` in two (Q7 review, older false errors, finding 12)."""
 
     def generate(self, clauses):
-        instances = super().generate(clauses)
-        bounds: dict = {}
-        for instance in instances:
-            terms = frozenset((atom, c) for atom, c in instance.form.items() if atom != CONSTANT)
-            if instance.sense != "=" or any(isinstance(atom, Extremum) for atom, _ in terms):
+        instances = []
+        for scoped in clauses:
+            found = self.instances(scoped)
+            instances += found
+            # A MIN or MAX is read as written, whatever its members: one whose `when` keeps a single row still splits.
+            if holds_extremum(scoped.body.lhs):
                 continue
-            if bounds.setdefault(terms, instance.form.get(CONSTANT, 0.0)) != instance.form.get(CONSTANT, 0.0):
-                raise TwoValues()
+            bounds: dict = {}
+            for instance in found:
+                terms = frozenset((atom, c) for atom, c in instance.form.items() if atom != CONSTANT)
+                if instance.sense != "=":
+                    continue
+                if bounds.setdefault(terms, instance.form.get(CONSTANT, 0.0)) != instance.form.get(CONSTANT, 0.0):
+                    raise TwoValues()
         return instances
 
     @staticmethod
@@ -142,11 +160,9 @@ def generate(seed: int, model: type = BoundModel) -> Case:
     if lhs_kind == "avg" and sense in ("<", ">"):
         sense = "<="
     integral = sense in ("<", ">") or rng.random() < 0.25
-    # Under `=` a column bound raises on a group with no instance, a frame bound does not (Q7 review, needs a
-    # ruling): every row is in a group, which keeps its members and its readers.
-    by = rng.choice([key for key in KEYS if sense != "=" or all(row[name] is not None for name in key for row in rows)])
-    member_when = rng.choice(MEMBER_WHENS) if sense != "=" else None
-    per = rng.choice((None, None, "k")) if sense != "=" else None
+    by = rng.choice(KEYS)
+    member_when = rng.choice(MEMBER_WHENS)
+    per = rng.choice((None, None, "k"))
     clause_when = rng.choice(CLAUSE_WHENS)
     bound_sql, bound_of = rng.choice(BOUNDS)
     maximize = rng.random() < 0.5

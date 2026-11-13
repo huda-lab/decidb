@@ -333,10 +333,8 @@ def over_decisions(rng: random.Random, model: type) -> tuple[Case, bool]:
     objective = Objective(ObjSense.MAXIMIZE if maximize else ObjSense.MINIMIZE, goal.node)
 
     sense = rng.choice(SENSES)
-    # Under `=` a bound that varies over a group with no instance raises "more than one value" (Q7 review, needs a
-    # ruling), so `=` takes a constant.
     rhs = number(0)
-    if sense != "=" and rng.random() < 0.5:
+    if rng.random() < 0.5:
         rhs = rng.choice((column("cap"), column("cap") - draw.data_nest(rng.randint(1, 2))))
     true_model = AnrModel(rows, decisions)
     count_sql, counted = counting(rng, rows, upper, count)
