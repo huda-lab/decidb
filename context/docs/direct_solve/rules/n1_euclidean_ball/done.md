@@ -58,7 +58,7 @@ A query N1 does not apply to keeps its answer: it runs on the solver, and `requi
 | Shape | Why |
 |---|---|
 | Any other bound, even one that does not bind (`x <= 2`, `x <= 50`, `x >= -2`, `x >= 1`, `when f: x >= 0`) | The answer is then the projection onto a clipped ball, which a single scale does not give. |
-| A row-valued factor (`SUM(POWER(w * x, 2))`) | Not a ball. This is N2. |
+| A row-valued factor (`SUM(POWER(w * x, 2))`, `SUM(w * POWER(x, 2))`) | The factor differs between rows, so the limit is not one ball. |
 | A ball off center (`SUM(POWER(x - 1, 2)) <= 9`), a constant or a linear term in the limit | Not a ball around zero. |
 | `=`, `>=`, `BETWEEN`, two limit clauses, `2 * SUM(...)`, `-SUM(...) >= -25`, `AVG(...)` | Not one plain `<=`. |
 | A per-row `POWER(x, 2) <= 9` | Not a sum. |
@@ -66,7 +66,7 @@ A query N1 does not apply to keeps its answer: it runs on the solver, and `requi
 | `MAXIMIZE` of a convex square, `MINIMIZE` of a concave one, a row-valued slope in the objective's square | Not one K, or not convex. |
 | A square on some rows with a linear term elsewhere (`SUM(when f: POWER(x, 2)) + SUM(s * x)`, `SUM(POWER(x - t, 2)) + SUM(s * x)` over a nullable `t`) | K differs between rows with a linear term. |
 | `INT`, `BOOL`, a query-wide or entity-scoped decision, two decisions | Not one `REAL` per row. |
-| `SUM(weight * POWER(x, 2))`, two squares in an objective | The solver rejects these itself, on both paths. |
+| Two squares in an objective | The solver rejects these itself, on both paths. |
 
 ## Where it differs from the solver
 
