@@ -13,6 +13,7 @@
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_tables.hpp"
+#include "duckdb/optimizer/decide/direct/direct_constant_propagation.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/decide/direct/direct_result_adapter.hpp"
@@ -310,8 +311,9 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	auto &installed = *adapter;
 	StripTagsAbove(installed, source);
 	// The rules build their expressions generally, and DuckDB's rewriter has run before the DECIDE optimizer, so
-	// nothing has simplified them. Run it over the adapter's child as DuckDB does.
-	optimizer.rewriter.VisitOperator(*installed.children[0]);
+	// nothing has simplified them, and a constant a rule lays out as a column has not reached the expressions that read
+	// it. Propagate the constants and run it over the adapter's child.
+	DirectConstantPropagation(optimizer.rewriter).VisitOperator(*installed.children[0]);
 	op = std::move(adapter);
 	// The operators above read the DECIDE node's bindings; from here they read the adapter's own.
 	RebindAboveAdapter(*root, installed, output_bindings);

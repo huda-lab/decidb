@@ -93,6 +93,12 @@ private:
 	void SubstituteConstantColumns(Expression &expr);
 	//! The value a column holds on every row, when the propagation proves one (see constant_columns)
 	bool TryGetConstantColumn(ColumnBinding binding, Value &value);
+	//! TryGetConstantColumn as the callable the shared constant-column functions (constant_columns.hpp) take
+	auto ConstantColumnLookup() {
+		return [this](ColumnBinding binding, Value &value) {
+			return TryGetConstantColumn(binding, value);
+		};
+	}
 	//! Record the column `binding` as constant when `expr`, the expression that computes it, is a constant or a
 	//! reference to a constant column
 	void RecordConstantColumn(ColumnBinding binding, const Expression &expr);
