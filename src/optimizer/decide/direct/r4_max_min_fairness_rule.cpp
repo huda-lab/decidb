@@ -74,6 +74,7 @@ private:
 	bool ProveDecision(const DirectIR &ir, Condition &condition) const;
 	void ReadOnRowsWithADecision(ClientContext &context, Condition &condition) const;
 	bool ProveBudget(const DirectIR &ir, ClientContext &context, Condition &condition) const;
+	bool BudgetFitsKeys(const Condition &condition) const;
 	bool ProveBox(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 };
@@ -147,11 +148,6 @@ bool Rule::ProveBudget(const DirectIR &ir, ClientContext &context, Condition &co
 	if (!DirectProveSharedScope(ir, {budget}, condition.scope) || condition.scope.per) {
 		return false;
 	}
-	// The rows of a key are one decision, so the budgets of two of them are one budget only when the key says which:
-	// the groups are within the key, and no `when` keeps some rows of a key and drops others.
-	if (!condition.keys.empty() && (condition.scope.when || !DirectKeyWithin(condition.scope.keys, condition.keys))) {
-		return false;
-	}
 	// DirectProveSharedScope has proved that the clause is a plain SUM.
 	auto &sum = *budget->PlainSum();
 	if (!DirectOnlyLinearTerms(sum.terms) ||
@@ -160,7 +156,15 @@ bool Rule::ProveBudget(const DirectIR &ir, ClientContext &context, Condition &co
 		return false;
 	}
 	condition.constant_weight = DirectFoldConstantSum(context, DirectValuesOn(condition.weights, 0), condition.weight);
-	return true;
+	return condition.keys.empty() || BudgetFitsKeys(condition);
+}
+
+//! The rows of a key are one decision, so the budgets of two of them are one budget only when the key says which: the
+//! groups are within the key, and no `when` keeps some rows of a key and drops others. The key's one row carries the
+//! limit, a constant: a limit read from the data is reduced over the rows of a group, and the aggregates of a limit (a
+//! sum, a count) do not split by key.
+bool Rule::BudgetFitsKeys(const Condition &condition) const {
+	return !condition.scope.when && DirectKeyWithin(condition.scope.keys, condition.keys) && condition.limit.constant;
 }
 
 //! The box is [0, cap]: the lower end is the default 0 or a written 0, and every per-row clause bounds the decision
@@ -233,21 +237,20 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //!
 //! A decision shared by the rows of a key is one variable `x_K`. Its weight is the sum of its rows' weights, its
 //! capacity the least of their capacities (`x <= cap` for each) and the MIN reads its least coefficient (`min(c*x) =
-//! min(c)*x` for `x >= 0`, so any `c <= 0` gives level 0): one row for each key, which a window gives every row of the
-//! key (WK). The first row of a key stands for it in the sums of its group, so a key counts once; the budgets are those
-//! of groups within the key (ProveBudget), which makes the group of a key the same on all its rows. A row whose key has
-//! a NULL where that puts it in no class has no decision: nothing is read on it, it counts nowhere and its amount is
-//! NULL.
+//! min(c)*x` for `x >= 0`, so any `c <= 0` gives level 0). The plan reduces the rows to one row for each key first, and
+//! then runs the plan below over those rows as if each were a row with a decision of its own: late materialization,
+//! the shape of A2 for a decision per key. The budgets are those of groups within the key (ProveBudget), so the key
+//! fixes the group, and the key's row carries the group's key. A row whose key has a NULL where that puts it in no
+//! class has no decision: nothing is read on it, it counts nowhere and its amount is NULL.
 //!
-//! The first read, on each row:
+//! For a decision on each row, on each row of the first read:
 //!
-//!   [W0] the row's membership in the budget and its group key, and its decision's key (DirectProjectScopes)
+//!   [W0] the row's membership in the budget and its group key (DirectProjectScopes)
 //!   P1   raw values: the capacity clauses' right sides, the budget's weight and limit inputs and the MIN's
 //!        coefficient `c`, each on the rows that read it, and the check of every value that can fail
 //!   P2   the row's capacity (the least upper end of the box on it) and the verdict of the raw checks
-//!   [WK] for a decision shared by the rows of a key: its weight, capacity and coefficient on every row of the key
-//!   P3   `w/c`, the freed budget, the unlimited weight and `cap*c` (0 for `c <= 0`), each NULL where the row does not
-//!        count, and every other check the row can raise
+//!   P3   the verdict of the row, with its box check, and `w/c`, the freed budget, the unlimited weight and `cap*c` (0
+//!        for `c <= 0`), each NULL where the row does not count
 //!   H    a hash aggregate on the group key, one row for each group and one for the rows outside every budget: the
 //!        sums N, F and W, the least U, the group's limit and whether the checks of the rows held
 //!   C1   the level of each group
@@ -259,13 +262,62 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //!
 //!   P4   the answer, and the column that keeps the checks live
 //!
+//! For a decision shared by the rows of a key, H is preceded by K and the second read is a join by the key:
+//!
+//!   K    a hash aggregate on the decision's key and the group's key, over P1 to P3 of the first read, one row for each
+//!        key: the sum of the weights, the least capacity and coefficient, and whether the checks of the rows held. It
+//!        is held (DirectHeldRows), as a CTE the plan reads twice, so it runs once
+//!   H, C1, [W1], C2   over the key rows, each counting where its key has a decision (P3's expressions on the key's
+//!        row, over the held columns)
+//!   P4   the key's answer, over the key rows joined with the group's row, one row for each key
+//!   J    the rows of the second read, joined with the key's answer by the decision's key: a row whose key is NULL
+//!   where
+//!        that puts it in no class matches none, and has no amount
+//!
 //! A row outside every budget has a NULL in the key's columns that say so, and the join compares them with IS NOT
 //! DISTINCT FROM: it finds the row of the rows outside every budget, which is how it reads `s*`. The solver reads every
-//! row before it returns, so a bad value on the last row raises even under an outer LIMIT 1. H holds every row of the
-//! first read before it gives one, and each check stands below it, so no joined row exists before every row has passed
-//! its checks. The second read raises nothing: the first has raised on any value it would.
+//! row before it returns, so a bad value on the last row raises even under an outer LIMIT 1. H (and K, which the plan
+//! holds in a CTE whose definition runs to its end before any read of it) holds every row of the first read before it
+//! gives one, and each check stands below it, so no joined row exists before every row has passed its checks. The
+//! second read raises nothing: the first has raised on any value it would.
 class PlanBuilder {
 public:
+	//! [W0] to P3 over a read: the plan, where its columns are.
+	struct Row {
+		unique_ptr<LogicalOperator> plan;
+		//! The source's columns, and the row's scope: whether it is in the budget's rows and its group key.
+		DirectCarried carried;
+		//! The decision's key, for a decision shared by the rows of a key.
+		DirectScopeColumns decision;
+		//! What the limit's aggregates read, one member per input of the limit's group bound.
+		vector<DirectGroupInputColumns> limit_inputs;
+		//! The MIN's coefficient `c`, NULL on a row the MIN does not read, the weight (a column only for one read from
+		//! the data, Weight) and the capacity of the row.
+		ColumnBinding coefficient;
+		ColumnBinding weight;
+		ColumnBinding capacity;
+		//! What the row adds to each sum of its group (BuildGroups): `w/c`, the freed budget, the unlimited weight and
+		//! `cap*c`, NULL where the row does not count; and whether the row's checks held.
+		ColumnBinding need;
+		ColumnBinding freed;
+		ColumnBinding unlimited;
+		ColumnBinding allowed;
+		ColumnBinding valid;
+	};
+
+	//! The columns of the rows of the keys (BuildKeys), as the held plan names them: the decision's key, the group's
+	//! key, and the weight, capacity and coefficient of the key and whether the checks of its rows held.
+	struct Keys {
+		vector<ColumnBinding> decision;
+		DirectClassKey decision_key;
+		vector<ColumnBinding> budget;
+		DirectClassKey budget_key;
+		ColumnBinding weight;
+		ColumnBinding capacity;
+		ColumnBinding coefficient;
+		ColumnBinding valid;
+	};
+
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
 	            const vector<LogicalType> &source_types_p, const DirectStateErrors &errors_p)
 	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context),
@@ -276,10 +328,9 @@ public:
 		}
 	}
 
-	//! The class plan over the first read `rows`: the group key's columns, then what a row reads of its group (C2), one
-	//! row for each group.
-	unique_ptr<LogicalOperator> BuildGroups(unique_ptr<LogicalOperator> rows) const {
-		auto row = RowStages(std::move(rows));
+	//! The class plan over `row`, the rows of the first read or the rows of their keys: the group key's columns, then
+	//! what a row reads of its group (C2), one row for each group.
+	unique_ptr<LogicalOperator> BuildGroups(Row row) const {
 		auto &carried = row.carried;
 		DirectAggregateStage aggregate(binder);
 		vector<ColumnBinding> keys;
@@ -375,74 +426,116 @@ public:
 		return c2.Finish(std::move(plan));
 	}
 
-	//! The substitute over the second read `rows`: its source columns, then each row's answer, and the column that
-	//! keeps the class plan's checks live (P4).
-	DirectSubstitute JoinAnswers(unique_ptr<LogicalOperator> rows, unique_ptr<LogicalOperator> groups) const {
-		auto row = RowStages(std::move(rows));
-		auto &carried = row.carried;
-		auto key = carried.key;
-		key.equal.assign(key.equal.size(), false);
-		auto joined = DirectJoinClassAnswers(binder, std::move(row.plan), carried.keys, key, std::move(groups));
-		D_ASSERT(joined.answers.size() == 5);
+	//! The rows of the first read, the plan of a decision on each row: their values and their contribution to their
+	//! group's sums.
+	Row BuildRows(unique_ptr<LogicalOperator> rows) const {
+		return RowStages(std::move(rows), false);
+	}
 
+	//! K: the rows of the first read reduced to one row for each key: the definition of the held rows. `keys` says
+	//! where its columns are.
+	unique_ptr<LogicalOperator> BuildKeys(unique_ptr<LogicalOperator> rows, Keys &keys) const {
+		auto row = RowStages(std::move(rows), true);
+		DirectAggregateStage aggregate(binder);
+		auto group = [&](const DirectScopeColumns &scope, vector<ColumnBinding> &columns) {
+			for (idx_t i = 0; i < scope.keys.size(); i++) {
+				columns.push_back(aggregate.Group(calc.Out(calc.Col(scope.key.types[i], scope.keys[i]))));
+			}
+		};
+		group(row.decision, keys.decision);
+		group(row.carried, keys.budget);
+		keys.decision_key = row.decision.key;
+		keys.budget_key = row.carried.key;
+		keys.weight = aggregate.Add(DirectHashAggregate(optimizer, calc, "sum", Weight(row.weight)));
+		keys.capacity = aggregate.Add(DirectHashAggregate(optimizer, calc, "min", Double(row.capacity)));
+		keys.coefficient = aggregate.Add(DirectHashAggregate(optimizer, calc, "min", Double(row.coefficient)));
+		keys.valid = aggregate.Add(DirectHashAggregate(optimizer, calc, "bool_and", Boolean(row.valid)));
+		return aggregate.Finish(std::move(row.plan));
+	}
+
+	//! The rows of the keys as rows with a decision of their own, for BuildGroups: each key counts where it has a
+	//! decision.
+	Row KeyRows(DirectHeldRows &held, const Keys &keys) const {
+		auto reference = held.Read();
+		Row row;
+		DirectProjectionStage p3(binder.GenerateTableIndex());
+		row.carried.keys = p3.Forward(keys.budget, keys.budget_key.types);
+		row.carried.key = keys.budget_key;
+		auto contributions = AddContributions(p3, Double(keys.coefficient), Double(keys.weight), Double(keys.capacity),
+		                                      HasDecision(keys));
+		row.need = contributions.need;
+		row.freed = contributions.freed;
+		row.unlimited = contributions.unlimited;
+		row.allowed = contributions.allowed;
+		row.valid = p3.Add(calc.Out(Boolean(keys.valid)));
+		row.plan = p3.Finish(std::move(reference.plan));
+		reference.replacer.VisitOperator(*row.plan);
+		return row;
+	}
+
+	//! P4 for the keys: the answer of each key, joined from the group's row, one row for each key: the decision's key,
+	//! then the amount and the verdict.
+	unique_ptr<LogicalOperator> BuildKeyAnswers(DirectHeldRows &held, const Keys &keys,
+	                                            unique_ptr<LogicalOperator> groups) const {
+		auto reference = held.Read();
+		DirectProjectionStage p3(binder.GenerateTableIndex());
+		auto decision = p3.Forward(keys.decision, keys.decision_key.types);
+		auto budget = p3.Forward(keys.budget, keys.budget_key.types);
+		auto coefficient = p3.Add(calc.Out(Double(keys.coefficient)));
+		auto weight = p3.Add(calc.Out(Double(keys.weight)));
+		auto capacity = p3.Add(calc.Out(Double(keys.capacity)));
+		auto present = p3.Add(calc.Out(HasDecision(keys)));
+		auto plan = p3.Finish(std::move(reference.plan));
+		reference.replacer.VisitOperator(*plan);
+
+		auto answered = JoinGroups(std::move(plan), budget, keys.budget_key, Double(coefficient), Double(weight),
+		                           Double(capacity), Boolean(present), std::move(groups));
+		DirectProjectionStage p4(binder.GenerateTableIndex());
+		p4.Forward(decision, keys.decision_key.types);
+		p4.Add(calc.Out(answered.amount));
+		p4.Add(std::move(answered.verdict));
+		return p4.Finish(std::move(answered.plan));
+	}
+
+	//! The substitute over the second read `rows` for a decision shared by the rows of a key (J): each row is joined
+	//! with its key's answer. `answers` is BuildKeyAnswers' plan.
+	DirectSubstitute JoinKeyAnswers(unique_ptr<LogicalOperator> rows, unique_ptr<LogicalOperator> answers) const {
+		auto state = DirectProjectScope(binder, std::move(rows), true, nullptr, condition.keys, {});
+		auto carried = DirectCarriedOf(state, source_bindings.size());
+		auto joined =
+		    DirectJoinClassAnswers(binder, std::move(state.plan), carried.keys, carried.key, std::move(answers));
+		D_ASSERT(joined.answers.size() == 2);
+		DirectProjectionStage p5(binder.GenerateTableIndex());
+		p5.Forward(carried.source, source_types);
+		p5.Add(calc.Out(Double(joined.answers[0])));
+		vector<unique_ptr<Expression>> checks;
+		checks.push_back(calc.Out(Boolean(joined.answers[1])));
+		p5.Add(DirectAllHold(calc, std::move(checks)));
+		return Substitute(p5.Finish(std::move(joined.plan)));
+	}
+
+	//! The substitute over the second read `rows` for a decision on each row: its source columns, then each row's
+	//! answer, and the column that keeps the class plan's checks live (P4).
+	DirectSubstitute JoinAnswers(unique_ptr<LogicalOperator> rows, unique_ptr<LogicalOperator> groups) const {
+		auto row = RowStages(std::move(rows), false);
+		auto answered = JoinGroups(std::move(row.plan), row.carried.keys, row.carried.key, Double(row.coefficient),
+		                           Weight(row.weight), Double(row.capacity), nullptr, std::move(groups));
 		DirectProjectionStage p4(binder.GenerateTableIndex());
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
-			p4.Add(calc.Out(calc.Col(source_types[i], carried.source[i])));
+			p4.Add(calc.Out(calc.Col(source_types[i], row.carried.source[i])));
 		}
-		// The end of the row's range that uses the least budget. A row with no budget takes the level of the objective.
-		auto in_budget = Boolean(joined.answers[2]);
-		auto coefficient = Double(row.coefficient);
-		auto level = calc.If(in_budget, Double(joined.answers[0]), Double(joined.answers[3]));
-		auto low = calc.If(Positive(coefficient), calc.Div(level, coefficient), calc.Num(0.0));
-		auto capacity = Double(row.capacity);
-		auto uncapped = calc.Cmp(ExpressionType::COMPARE_EQUAL, capacity, calc.Num(POSITIVE_INFINITY));
-		auto freeing = calc.If(uncapped, calc.Max({low, Double(joined.answers[1])}), capacity);
-		auto amount = calc.If(calc.And(in_budget, Negative(Weight(row.weight))), freeing, low);
-		// A row with no decision has no amount.
-		if (IsKeyed()) {
-			amount = calc.If(Boolean(row.present), amount, calc.Constant(Value(LogicalType::DOUBLE)));
-		}
-		p4.Add(calc.Out(amount));
-		vector<unique_ptr<Expression>> checks;
-		checks.push_back(calc.Out(Boolean(joined.answers[4])));
-		p4.Add(DirectAllHold(calc, std::move(checks)));
-
-		DirectSubstitute substitute;
-		substitute.prunable_decisions.push_back(1);
-		// The source columns, then x. The class plan's checks are read by the column after them.
-		for (idx_t i = 0; i < source_bindings.size() + 1; i++) {
-			substitute.slot_map.push_back(i);
-		}
-		substitute.validated_columns.push_back(source_bindings.size() + 1);
-		// The rows are probed against the class plan and held by nothing.
-		substitute.pipelined = true;
-		substitute.child = p4.Finish(std::move(joined.plan));
-		return substitute;
+		p4.Add(calc.Out(answered.amount));
+		p4.Add(std::move(answered.verdict));
+		return Substitute(p4.Finish(std::move(answered.plan)));
 	}
 
 private:
-	//! [W0] to P3 over a read: the plan, where its columns are.
-	struct Row {
+	//! A plan joined with the rows of the groups: the plan, the amount of each of its rows and the verdict of the
+	//! checks.
+	struct Answered {
 		unique_ptr<LogicalOperator> plan;
-		//! The source's columns, and the row's scope: whether it is in the budget's rows and its group key.
-		DirectCarried carried;
-		//! What the limit's aggregates read, one member per input of the limit's group bound.
-		vector<DirectGroupInputColumns> limit_inputs;
-		//! The MIN's coefficient `c`: NULL on a row the MIN does not read.
-		ColumnBinding coefficient;
-		//! The weight `w`, the capacity and the coefficient `c` of the row's decision: its own, or its key's. The
-		//! weight is a column only when HasWeightColumn.
-		ColumnBinding weight;
-		ColumnBinding capacity;
-		//! Whether the row has a decision: a column only for a decision shared by the rows of a key.
-		ColumnBinding present;
-		//! What the row adds to each sum of its group (BuildGroups): `w/c`, the freed budget, the unlimited weight and
-		//! `cap*c`, NULL where the row does not count; and whether the row's checks held.
-		ColumnBinding need;
-		ColumnBinding freed;
-		ColumnBinding unlimited;
-		ColumnBinding allowed;
-		ColumnBinding valid;
+		ExprPtr amount;
+		unique_ptr<Expression> verdict;
 	};
 
 	const Condition &condition;
@@ -467,10 +560,10 @@ private:
 	ExprPtr Negative(const ExprPtr &value) const {
 		return calc.Cmp(ExpressionType::COMPARE_LESSTHAN, value, calc.Num(0.0));
 	}
-	//! The weight of the row's decision: the literal of a constant weight, which DuckDB's rewriter folds into every
-	//! expression over it, or the column `weight`.
+	//! The weight of a decision: the literal of a constant weight, which DuckDB's rewriter folds into every expression
+	//! over it, or the column `weight`.
 	ExprPtr Weight(ColumnBinding weight) const {
-		return HasWeightColumn() ? Double(weight) : calc.Num(condition.weight);
+		return condition.constant_weight ? calc.Num(condition.weight) : Double(weight);
 	}
 
 	//! Forwards the columns the limit's aggregates read through `stage`.
@@ -501,48 +594,79 @@ private:
 		return uppers.empty() ? calc.Num(POSITIVE_INFINITY) : calc.Min(uppers);
 	}
 
-	bool IsKeyed() const {
-		return !condition.keys.empty();
-	}
-	//! Whether the weight of a row is a column: one read from the data, or the sum of a key's.
-	bool HasWeightColumn() const {
-		return !condition.constant_weight || IsKeyed();
+	//! The substitute of a plan whose columns are the source's, then x, and the column that keeps the checks live.
+	DirectSubstitute Substitute(unique_ptr<LogicalOperator> plan) const {
+		DirectSubstitute substitute;
+		substitute.prunable_decisions.push_back(1);
+		for (idx_t i = 0; i < source_bindings.size() + 1; i++) {
+			substitute.slot_map.push_back(i);
+		}
+		substitute.validated_columns.push_back(source_bindings.size() + 1);
+		// The rows are probed against the class plan and held by nothing.
+		substitute.pipelined = true;
+		substitute.child = std::move(plan);
+		return substitute;
 	}
 
-	//! The columns WK adds: what a row reads of its key.
-	struct KeyValues {
-		ColumnBinding weight;
-		ColumnBinding capacity;
-		ColumnBinding coefficient;
-		ColumnBinding rank;
+	//! Whether the key's row has a decision: no element of the key that puts a row in no class is NULL.
+	ExprPtr HasDecision(const Keys &keys) const {
+		vector<ExprPtr> columns;
+		for (idx_t i = 0; i < keys.decision.size(); i++) {
+			columns.push_back(calc.Col(keys.decision_key.types[i], keys.decision[i]));
+		}
+		return DirectClassPresent(calc, keys.decision_key, columns);
+	}
+
+	//! What a row (or a key) with the coefficient `c`, weight `w` and capacity `cap` adds to the sums of its group, in
+	//! `stage`: NULL where it does not count (`counts`), and where its term is not in the sum.
+	struct Contributions {
+		ColumnBinding need;
+		ColumnBinding freed;
+		ColumnBinding unlimited;
+		ColumnBinding allowed;
 	};
-
-	//! WK: a window over the rows of each key, which gives every row of the key its weights' sum, its least capacity
-	//! and its least coefficient, and the row's place in the key. `weight` is null for a constant weight, which each
-	//! row adds.
-	KeyValues AddKeyWindow(unique_ptr<LogicalOperator> &plan, const DirectScopeColumns &decision,
-	                       const ColumnBinding *weight, ColumnBinding capacity, ColumnBinding coefficient) const {
-		auto window = make_uniq<LogicalWindow>(binder.GenerateTableIndex());
-		auto add = [&](unique_ptr<BoundWindowExpression> function) {
-			for (idx_t i = 0; i < decision.keys.size(); i++) {
-				function->partitions.push_back(calc.Out(calc.Col(decision.key.types[i], decision.keys[i])));
-			}
-			window->expressions.push_back(std::move(function));
-			return ColumnBinding(window->window_index, window->expressions.size() - 1);
+	Contributions AddContributions(DirectProjectionStage &stage, const ExprPtr &c, const ExprPtr &w, const ExprPtr &cap,
+	                               const ExprPtr &counts) const {
+		auto no_value = calc.Constant(Value(LogicalType::DOUBLE));
+		auto uncapped = calc.Cmp(ExpressionType::COMPARE_EQUAL, cap, calc.Num(POSITIVE_INFINITY));
+		auto frees = Negative(w);
+		auto counted = [&](const ExprPtr &condition_value, const ExprPtr &value) {
+			return stage.Add(calc.Out(calc.If(calc.And(counts, condition_value), value, no_value)));
 		};
-		KeyValues result;
-		result.weight = add(
-		    DirectWindowExtremum(optimizer, "sum", calc.Out(weight ? Double(*weight) : calc.Num(condition.weight))));
-		result.capacity = add(DirectWindowExtremum(optimizer, "min", calc.Out(Double(capacity))));
-		result.coefficient = add(DirectWindowExtremum(optimizer, "min", calc.Out(Double(coefficient))));
-		// Hand-built: a window is an operator-specific node, which the builder has no operation for.
-		auto rank =
-		    make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT, nullptr, nullptr);
-		rank->start = WindowBoundary::UNBOUNDED_PRECEDING;
-		rank->end = WindowBoundary::UNBOUNDED_FOLLOWING;
-		result.rank = add(std::move(rank));
-		window->children.push_back(std::move(plan));
-		plan = std::move(window);
+		Contributions result;
+		result.need = counted(calc.And(Positive(w), Positive(c)), calc.Div(w, c));
+		result.freed = counted(calc.And(frees, calc.Not(uncapped)), calc.Mul(calc.Neg(w), cap));
+		result.unlimited = counted(calc.And(frees, uncapped), calc.Neg(w));
+		auto no_level = calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, c, calc.Num(0.0));
+		result.allowed = counted(calc.Bool(true), calc.If(no_level, calc.Num(0.0), calc.Mul(cap, c)));
+		return result;
+	}
+
+	//! The end of the range of each of the rows of `plan` that uses the least budget, joined with its group's row
+	//! (`budget_keys` are its group key's columns). `present` says whether the row has a decision (null: always).
+	Answered JoinGroups(unique_ptr<LogicalOperator> plan, const vector<ColumnBinding> &budget_keys,
+	                    const DirectClassKey &budget_key, const ExprPtr &c, const ExprPtr &w, const ExprPtr &cap,
+	                    const ExprPtr &present, unique_ptr<LogicalOperator> groups) const {
+		auto key = budget_key;
+		key.equal.assign(key.equal.size(), false);
+		auto joined = DirectJoinClassAnswers(binder, std::move(plan), budget_keys, key, std::move(groups));
+		D_ASSERT(joined.answers.size() == 5);
+		Answered result;
+		result.plan = std::move(joined.plan);
+		// A row with no budget takes the level of the objective.
+		auto in_budget = Boolean(joined.answers[2]);
+		auto level = calc.If(in_budget, Double(joined.answers[0]), Double(joined.answers[3]));
+		auto low = calc.If(Positive(c), calc.Div(level, c), calc.Num(0.0));
+		auto uncapped = calc.Cmp(ExpressionType::COMPARE_EQUAL, cap, calc.Num(POSITIVE_INFINITY));
+		auto freeing = calc.If(uncapped, calc.Max({low, Double(joined.answers[1])}), cap);
+		result.amount = calc.If(calc.And(in_budget, Negative(w)), freeing, low);
+		// A row with no decision has no amount.
+		if (present) {
+			result.amount = calc.If(present, result.amount, calc.Constant(Value(LogicalType::DOUBLE)));
+		}
+		vector<unique_ptr<Expression>> checks;
+		checks.push_back(calc.Out(Boolean(joined.answers[4])));
+		result.verdict = DirectAllHold(calc, std::move(checks));
 		return result;
 	}
 
@@ -566,11 +690,13 @@ private:
 		return weight;
 	}
 
-	Row RowStages(unique_ptr<LogicalOperator> rows) const {
+	//! [W0] to P3 over a read. `reduced` says the rows are reduced to their keys (BuildKeys), which reads each key's
+	//! sums in the columns of its row, so a row adds nothing to its group's sums here.
+	Row RowStages(unique_ptr<LogicalOperator> rows, bool reduced) const {
 		Row result;
 		vector<unique_ptr<Expression>> checks;
 		bool scoped = condition.scope.Scoped();
-		bool keyed = IsKeyed();
+		bool keyed = !condition.keys.empty();
 
 		// W0: the budget's scope, and the decision's key for a decision shared by the rows of a key.
 		vector<DirectScopeInput> scopes;
@@ -613,47 +739,24 @@ private:
 		auto raw_valid = p2.Add(DirectAllHold(calc, std::move(checks)));
 		plan = p2.Finish(std::move(plan));
 
-		// WK: the decision of a key is read once for the rows of the key: the weights add, the capacity and the
-		// coefficient are the least, since `x <= cap` for every row and `min(c*x) = min(c)*x` for `x >= 0`. The first
-		// row of each key stands for it in the sums of its group.
-		KeyValues key_values;
-		if (keyed) {
-			key_values =
-			    AddKeyWindow(plan, decision2, condition.constant_weight ? nullptr : &weight, capacity, coefficient);
-		}
-
-		// P3: a row the MIN does not read has no `c`, and every CASE on it gives NULL there. A decision of a key counts
-		// once in the sums, on the first row of its key that has a decision.
+		// P3: a row the MIN does not read has no `c`, and every CASE on it gives NULL there.
 		DirectProjectionStage p3(binder.GenerateTableIndex());
 		result.carried = p3.Forward(carried2, source_types, scoped);
+		result.decision = p3.Forward(decision2, keyed);
 		ForwardLimitInputs(p3, result.limit_inputs);
-		p3.Forward(decision2, keyed);
-		auto c = Double(keyed ? key_values.coefficient : coefficient);
-		auto cap = Double(keyed ? key_values.capacity : capacity);
-		auto w = keyed ? Double(key_values.weight) : Weight(weight);
-		result.coefficient = p3.Add(calc.Out(c));
-		if (HasWeightColumn()) {
-			result.weight = p3.Add(calc.Out(w));
+		result.coefficient = p3.Add(calc.Out(Double(coefficient)));
+		if (!condition.constant_weight) {
+			result.weight = p3.Add(calc.Out(Double(weight)));
 		}
-		result.capacity = p3.Add(calc.Out(cap));
-		ExprPtr counts = calc.Bool(true);
-		if (keyed) {
-			result.present = p3.Add(calc.Out(Boolean(decision2.eligible)));
-			counts = calc.And(Boolean(decision2.eligible),
-			                  calc.Cmp(ExpressionType::COMPARE_EQUAL, calc.Col(LogicalType::BIGINT, key_values.rank),
-			                           calc.Constant(Value::BIGINT(1))));
+		result.capacity = p3.Add(calc.Out(Double(capacity)));
+		if (!reduced) {
+			auto contributions =
+			    AddContributions(p3, Double(coefficient), Weight(weight), Double(capacity), calc.Bool(true));
+			result.need = contributions.need;
+			result.freed = contributions.freed;
+			result.unlimited = contributions.unlimited;
+			result.allowed = contributions.allowed;
 		}
-		auto no_value = calc.Constant(Value(LogicalType::DOUBLE));
-		auto uncapped = calc.Cmp(ExpressionType::COMPARE_EQUAL, cap, calc.Num(POSITIVE_INFINITY));
-		auto frees = Negative(w);
-		auto counted = [&](const ExprPtr &condition_value, const ExprPtr &value) {
-			return p3.Add(calc.Out(calc.If(calc.And(counts, condition_value), value, no_value)));
-		};
-		result.need = counted(calc.And(Positive(w), Positive(c)), calc.Div(w, c));
-		result.freed = counted(calc.And(frees, calc.Not(uncapped)), calc.Mul(calc.Neg(w), cap));
-		result.unlimited = counted(calc.And(frees, uncapped), calc.Neg(w));
-		auto no_level = calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, c, calc.Num(0.0));
-		result.allowed = counted(calc.Bool(true), calc.If(no_level, calc.Num(0.0), calc.Mul(cap, c)));
 		// The checks of the raw values hold first, then the box: a negative capacity leaves no value, on a row that has
 		// a decision (the capacity is infinite where it has none).
 		vector<unique_ptr<Expression>> row_checks;
@@ -670,11 +773,27 @@ DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
                              const DirectApplicabilityCondition &candidate, const DirectStateErrors &errors) const {
 	auto &condition = static_cast<const Condition &>(candidate);
 	PlanBuilder plan_builder(condition, optimizer, reader.SourceBindings(), reader.SourceTypes(), errors);
-	auto groups = DirectBuildOverRead(reader, reader.ReadSource(), [&](unique_ptr<LogicalOperator> rows) {
-		return plan_builder.BuildGroups(std::move(rows));
+	if (condition.keys.empty()) {
+		auto groups = DirectBuildOverRead(reader, reader.ReadSource(), [&](unique_ptr<LogicalOperator> rows) {
+			return plan_builder.BuildGroups(plan_builder.BuildRows(std::move(rows)));
+		});
+		return DirectBuildOverOneRead(reader, [&](unique_ptr<LogicalOperator> rows) {
+			return plan_builder.JoinAnswers(std::move(rows), std::move(groups));
+		});
+	}
+	// The rows of each key are held: the groups and the answer of each key both read them.
+	PlanBuilder::Keys keys;
+	auto definition = DirectBuildOverRead(reader, reader.ReadSource(), [&](unique_ptr<LogicalOperator> rows) {
+		return plan_builder.BuildKeys(std::move(rows), keys);
 	});
+	definition->ResolveOperatorTypes();
+	DirectHeldRows held(optimizer.binder, "direct_r4_keys", definition->GetColumnBindings(), definition->types);
+	auto groups = plan_builder.BuildGroups(plan_builder.KeyRows(held, keys));
+	auto answers = plan_builder.BuildKeyAnswers(held, keys, std::move(groups));
 	return DirectBuildOverOneRead(reader, [&](unique_ptr<LogicalOperator> rows) {
-		return plan_builder.JoinAnswers(std::move(rows), std::move(groups));
+		auto substitute = plan_builder.JoinKeyAnswers(std::move(rows), std::move(answers));
+		substitute.child = held.Close(std::move(definition), std::move(substitute.child));
+		return substitute;
 	});
 }
 

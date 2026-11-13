@@ -898,9 +898,9 @@ R4 = RuleFixture(
     """,
     table_change="ALTER TABLE direct_r4_life ADD COLUMN extra INTEGER;",
     # Each is the plain form with one condition changed: an INT decision, a budget from below, a budget per class, a
-    # decision shared by a key under a budget of finer groups or under a `when`, a decision of the whole query, a second
-    # budget clause, a lower bound on the decision, a per-row constant inside the MIN, a second part of the objective, a
-    # constant factor on the MIN and a minimized MIN.
+    # decision shared by a key under a budget of finer groups, under a `when` or with a limit read from the data, a
+    # decision of the whole query, a second budget clause, a lower bound on the decision, a per-row constant inside the
+    # MIN, a second part of the objective, a constant factor on the MIN and a minimized MIN.
     near_misses=(
         ("x(INT)", "x <= cap AND SUM(x) <= 9", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "x <= cap AND SUM(x) >= 1", "MAXIMIZE MIN(x / d)"),
@@ -908,6 +908,7 @@ R4 = RuleFixture(
         ("per w: x(REAL)", "x <= cap AND SUM(x) by (id) <= 9", "MAXIMIZE MIN(x / d)"),
         ("per w: x(REAL)", "x <= cap AND when cap > 1: SUM(x) <= 9", "MAXIMIZE MIN(x / d)"),
         ("per (): x(REAL)", "x <= 9", "MAXIMIZE MIN(x / d)"),
+        ("per w: x(REAL)", "x <= cap AND SUM(x) <= cap", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "x <= cap AND SUM(x) <= 9 AND SUM(2 * x) <= 20", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "x >= 1 AND x <= cap AND SUM(x) <= 9", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "x <= cap AND SUM(x) <= 9", "MAXIMIZE MIN(x / d + w)"),

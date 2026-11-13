@@ -1701,6 +1701,8 @@ duckdb::vector<Shape> R4DeclineShapes() {
 	shapes.push_back(
 	    R4("two decisions", "x <= cap AND SUM(x) <= 9 AND y <= 1", nullptr, R4_OBJECTIVE, "x(REAL), y(REAL)"));
 	shapes.push_back(R4("an INT decision", R4_CONSTRAINTS, nullptr, R4_OBJECTIVE, "x(INT)"));
+	shapes.push_back(R4("a decision shared by a key under a limit read from a column", "x <= cap AND SUM(x) <= f",
+	                    nullptr, R4_OBJECTIVE, "per name: x(REAL)"));
 	shapes.push_back(R4("a decision of the whole query", "x <= 9", nullptr, R4_OBJECTIVE, "per (): x(REAL)"));
 	shapes.push_back(R4("a keyed scope beside a decision on each row", R4_CONSTRAINTS,
 	                    [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));

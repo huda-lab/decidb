@@ -200,12 +200,6 @@ KEYED_NEGATIVE_UNCAPPED = (
 )
 KEYED_UNBOUNDED = (_row(1, 2.0, None, w=0.0, k="a"), _row(2, 4.0, None, w=0.0, k="b"))
 KEYED_NEGATIVE_CAPACITY = (_row(1, 2.0, 4.0, k="a"), _row(2, 4.0, -1.0, k="a"))
-KEYED_DATA_LIMITS = (
-    _row(1, 2.0, 4.0, k="a", l=9.0),
-    _row(2, 4.0, 8.0, k="a", l=12.0),
-    _row(3, 1.0, 10.0, k="b", l=5.0),
-    _row(4, 1.0, 10.0, k=None, l=3.0),
-)
 
 
 def _values(rows):
@@ -434,8 +428,6 @@ add("keys_level_unbounded", KEYED_UNBOUNDED, budget="column", keyed=True)
 add("keys_negative_capacity_is_infeasible", KEYED_NEGATIVE_CAPACITY, budget="b9", keyed=True)
 add("keys_under_a_budget_per_key", KEYED_SEVERAL, budget="by_column", keyed=True)
 add("keys_under_a_budget_per_key_and_a_null_key", KEYED_NULL_KEY, budget="by", keyed=True)
-add("keys_under_a_data_limit_the_null_key_row_limits_too", KEYED_DATA_LIMITS, budget="data_limit", keyed=True)
-add("keys_under_a_data_limit_per_key", KEYED_DATA_LIMITS, budget="by_data_limit", keyed=True)
 # A budget per group, and a `when` on it.
 add("groups_each_have_a_level", TWO_GROUPS, budget="by")
 add("groups_a_capacity_binds_one_level", GROUP_CAPACITY_BINDS, budget="by")
