@@ -326,7 +326,8 @@ public:
     }
 };
 
-//! A thread's rows placed after those already placed, and its descent merged into the operator's at them.
+//! A thread's rows placed after those already placed, and its descent kept with the row they start at, which
+//! Finalize merges (DecideDescent::MergeAll).
 static void MergeDecideDescent(DecideGlobalSinkState &gstate, DecideLocalSinkState &lstate) {
 	const auto count = lstate.data.Count();
 	if (count == 0) {
@@ -336,13 +337,7 @@ static void MergeDecideDescent(DecideGlobalSinkState &gstate, DecideLocalSinkSta
 	const auto offset = gstate.data.Count();
 	gstate.data.Combine(lstate.data);
 	lstate.data.InitializeAppend(lstate.append_state);
-	if (!gstate.descent) {
-		gstate.descent = std::move(lstate.descent);
-	} else {
-		DecideProfileScope merge_scope("execution.descent_merge");
-		gstate.descent->Merge(*lstate.descent, offset);
-		lstate.descent.reset();
-	}
+	gstate.descent_parts.emplace_back(std::move(lstate.descent), offset);
 	gstate.descent_rows += count;
 }
 
@@ -709,6 +704,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     if (num_rows == 0) {
         return SinkFinalizeType::READY;
     }
+	// The threads' descents, merged in the order their rows were placed.
+	{
+		DecideProfileScope merge_scope("execution.descent_merge");
+		gstate.descent = DecideDescent::MergeAll(std::move(gstate.descent_parts), context);
+	}
 
     idx_t num_decide_vars = decide_variables.size();
     if (num_decide_vars == 0) {

@@ -7,6 +7,7 @@
 #include "duckdb/function/create_sort_key.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/config.hpp"
+#include "duckdb/parallel/task_executor.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 
@@ -197,6 +198,41 @@ void DecideColumns::Append(DataChunk &source, const SelectionVector &selection, 
 		}
 		target.SetCardinality(offset + take);
 		count += take;
+		done += take;
+	}
+}
+
+void DecideColumns::Resize(idx_t new_count) {
+	D_ASSERT(new_count >= count);
+	if (types.empty()) {
+		count = new_count;
+		return;
+	}
+	for (idx_t window = 0; window * STANDARD_VECTOR_SIZE < new_count; window++) {
+		if (window == chunks.size()) {
+			chunks.push_back(make_uniq<DataChunk>());
+			chunks.back()->Initialize(*allocator, types);
+		}
+		chunks[window]->SetCardinality(
+		    MinValue<idx_t>(STANDARD_VECTOR_SIZE, new_count - window * STANDARD_VECTOR_SIZE));
+	}
+	count = new_count;
+}
+
+void DecideColumns::CopyRows(idx_t target_row, const DecideColumns &source, idx_t source_row, idx_t rows) {
+	if (types.empty()) {
+		return;
+	}
+	auto &target = *chunks[target_row / STANDARD_VECTOR_SIZE];
+	D_ASSERT((target_row + rows - 1) / STANDARD_VECTOR_SIZE == target_row / STANDARD_VECTOR_SIZE);
+	for (idx_t done = 0; done < rows;) {
+		const auto window = (source_row + done) / STANDARD_VECTOR_SIZE;
+		const auto at = (source_row + done) % STANDARD_VECTOR_SIZE;
+		const auto take = MinValue<idx_t>(rows - done, STANDARD_VECTOR_SIZE - at);
+		for (idx_t c = 0; c < types.size(); c++) {
+			VectorOperations::Copy(source.chunks[window]->data[c], target.data[c], at + take, at,
+			                       (target_row + done) % STANDARD_VECTOR_SIZE);
+		}
 		done += take;
 	}
 }
@@ -1657,7 +1693,9 @@ void DecideSpelling::Fold(const DecideSpelling &other) {
 	}
 }
 
-void DecideDescent::Merge(DecideDescent &other, idx_t offset) {
+void DecideDescent::Merge(MergedPart &part) {
+	auto &other = *part.source;
+	const auto offset = part.offset;
 	if (finished || other.finished || &tree != &other.tree) {
 		throw InternalException("DECIDE tree: a descent merges another of its tree before either finishes");
 	}
@@ -1707,14 +1745,13 @@ void DecideDescent::Merge(DecideDescent &other, idx_t offset) {
 	}
 	// Each node's slots, a G's or O's before an E's, whose enclosing slot is a G's or an O's: found by their key -- and
 	// enclosing slot -- as a row of theirs would find them.
-	vector<unsafe_vector<idx_t>> slot_map(tree.nodes.size());
+	auto &slot_map = part.slot_map;
+	slot_map.assign(tree.nodes.size(), unsafe_vector<idx_t>());
+	part.entry_map.assign(tree.nodes.size(), unsafe_vector<idx_t>());
+	part.target.assign(tree.nodes.size(), 0);
+	part.routed_target.assign(tree.nodes.size(), 0);
 	auto parent_of = [&](idx_t node, idx_t slot) {
-		if (slot == DConstants::INVALID_INDEX) {
-			return slot;
-		}
-		// A node in two nodes' slots keeps none (Store).
-		D_ASSERT(enclosing[node] != DConstants::INVALID_INDEX && enclosing[node] != MIXED_ENCLOSING);
-		return slot_map[enclosing[node]][slot];
+		return PartParent(part, node, slot);
 	};
 	auto merge_slots = [&](idx_t n) {
 		auto &node = *tree.nodes[n];
@@ -1820,26 +1857,10 @@ void DecideDescent::Merge(DecideDescent &other, idx_t offset) {
 		container.rows_out += theirs.rows_out;
 		auto &slots = slot_map[n];
 		if (!container.shares_instances) {
-			// Each entry is an instance of its own: its arrays rebased in place, its values appended a window at a
-			// time.
-			const auto base = container.Count();
-			const auto count = theirs.Count();
-			container.rows.resize(base + count);
-			container.parent_slots.resize(base + count);
-			for (idx_t e = 0; e < count; e++) {
-				container.rows[base + e] = theirs.rows[e] + offset;
-				container.parent_slots[base + e] = parent_of(n, theirs.parent_slots[e]);
-			}
-			if (!container.groups.per_row) {
-				container.slots.resize(base + count);
-				for (idx_t e = 0; e < count; e++) {
-					container.slots[base + e] = slots[theirs.slots[e]];
-				}
-			}
-			for (idx_t window = 0; window < theirs.values.Windows(); window++) {
-				auto &chunk = theirs.values.Window(window);
-				container.values.Append(chunk, *FlatVector::IncrementalSelectionVector(), chunk.size());
-			}
+			// Each entry is an instance of its own: copied after the entries held and those of the parts before
+			// (CopyMergedParts).
+			part.target[n] = container.Count() + planned_entries[n];
+			planned_entries[n] += theirs.Count();
 			continue;
 		}
 		const auto signature_columns = signature_types[n].size();
@@ -1869,7 +1890,8 @@ void DecideDescent::Merge(DecideDescent &other, idx_t offset) {
 		vector<LogicalType> probe_types {LogicalType::UBIGINT};
 		probe_types.insert(probe_types.end(), types.begin(), types.begin() + value_columns);
 		probe_types.insert(probe_types.end(), reads, LogicalType::UBIGINT);
-		unsafe_vector<idx_t> entry_map(theirs.Count());
+		auto &entry_map = part.entry_map[n];
+		entry_map.resize(theirs.Count());
 		for (idx_t begin = 0; begin < theirs.Count(); begin += STANDARD_VECTOR_SIZE) {
 			const auto count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, theirs.Count() - begin);
 			DataChunk values;
@@ -1955,12 +1977,8 @@ void DecideDescent::Merge(DecideDescent &other, idx_t offset) {
 			}
 			container.values.Append(values, selection, created.size());
 		}
-		const auto routed_base = container.routed.size();
-		container.routed.resize(routed_base + theirs.routed.size());
-		for (idx_t i = 0; i < theirs.routed.size(); i++) {
-			auto &routed = theirs.routed[i];
-			container.routed[routed_base + i] = {routed.first + offset, entry_map[routed.second]};
-		}
+		part.routed_target[n] = container.routed.size() + planned_routed[n];
+		planned_routed[n] += theirs.routed.size();
 	}
 	// The groups each key's reads spelled, and what the rows raised, at their rows here. What a visit reads of the
 	// rows a read failed on is not merged: no row is visited after a merge.
@@ -1981,6 +1999,116 @@ void DecideDescent::Merge(DecideDescent &other, idx_t offset) {
 	}
 	other.errors.Rebase(offset);
 	errors.Append(other.errors);
+}
+
+idx_t DecideDescent::PartParent(const MergedPart &part, idx_t node, idx_t slot) const {
+	if (slot == DConstants::INVALID_INDEX) {
+		return slot;
+	}
+	// A node in two nodes' slots keeps none (Store).
+	D_ASSERT(enclosing[node] != DConstants::INVALID_INDEX && enclosing[node] != MIXED_ENCLOSING);
+	return part.slot_map[enclosing[node]][slot];
+}
+
+namespace {
+
+//! One of MergeAll's copies, run by DuckDB's scheduler.
+class DescentCopyTask : public BaseExecutorTask {
+public:
+	DescentCopyTask(TaskExecutor &executor, std::function<void()> copy)
+	    : BaseExecutorTask(executor), copy(std::move(copy)) {
+	}
+
+	void ExecuteTask() override {
+		copy();
+	}
+
+private:
+	std::function<void()> copy;
+};
+
+} // namespace
+
+void DecideDescent::CopyMergedParts(vector<MergedPart> &parts, ClientContext &context) {
+	// Each node's containers take their merged size first, a task per node, so the copies only write: a window of a
+	// node's entries, and a part's routed rows of a set E, each by one task.
+	vector<idx_t> held(tree.nodes.size());
+	vector<idx_t> routed_held(tree.nodes.size());
+	{
+		TaskExecutor sizing(context);
+		for (idx_t n = 0; n < tree.nodes.size(); n++) {
+			auto &container = containers[n];
+			held[n] = container.Count();
+			routed_held[n] = container.routed.size();
+			sizing.ScheduleTask(make_uniq<DescentCopyTask>(sizing, [&, n]() {
+				const auto total = held[n] + planned_entries[n];
+				container.rows.resize(total);
+				container.parent_slots.resize(total);
+				if (!container.groups.per_row) {
+					container.slots.resize(total);
+				}
+				container.values.Resize(total);
+				container.routed.resize(routed_held[n] + planned_routed[n]);
+			}));
+		}
+		sizing.WorkOnTasks();
+	}
+	TaskExecutor executor(context);
+	for (idx_t n = 0; n < tree.nodes.size(); n++) {
+		auto &container = containers[n];
+		const auto total = held[n] + planned_entries[n];
+		for (idx_t window = held[n] / STANDARD_VECTOR_SIZE; window * STANDARD_VECTOR_SIZE < total; window++) {
+			executor.ScheduleTask(make_uniq<DescentCopyTask>(executor, [&, n, window, total]() {
+				const auto low = MaxValue<idx_t>(window * STANDARD_VECTOR_SIZE, held[n]);
+				const auto high = MinValue<idx_t>((window + 1) * STANDARD_VECTOR_SIZE, total);
+				for (auto &part : parts) {
+					auto &theirs = part.source->containers[n];
+					const auto begin = MaxValue<idx_t>(low, part.target[n]);
+					const auto end = MinValue<idx_t>(high, part.target[n] + theirs.Count());
+					for (idx_t e = begin; e < end; e++) {
+						const auto source = e - part.target[n];
+						container.rows[e] = theirs.rows[source] + part.offset;
+						container.parent_slots[e] = PartParent(part, n, theirs.parent_slots[source]);
+						if (!container.groups.per_row) {
+							container.slots[e] = part.slot_map[n][theirs.slots[source]];
+						}
+					}
+					if (begin < end) {
+						container.values.CopyRows(begin, theirs.values, begin - part.target[n], end - begin);
+					}
+				}
+			}));
+		}
+		for (auto &part : parts) {
+			auto &theirs = part.source->containers[n].routed;
+			executor.ScheduleTask(make_uniq<DescentCopyTask>(executor, [&, n]() {
+				auto &map = part.entry_map[n];
+				for (idx_t i = 0; i < theirs.size(); i++) {
+					container.routed[part.routed_target[n] + i] = {theirs[i].first + part.offset,
+					                                               map[theirs[i].second]};
+				}
+			}));
+		}
+	}
+	executor.WorkOnTasks();
+	planned_entries.assign(tree.nodes.size(), 0);
+	planned_routed.assign(tree.nodes.size(), 0);
+}
+
+unique_ptr<DecideDescent> DecideDescent::MergeAll(vector<pair<unique_ptr<DecideDescent>, idx_t>> parts,
+                                                  ClientContext &context) {
+	D_ASSERT(!parts.empty() && parts[0].second == 0);
+	auto merged = std::move(parts[0].first);
+	merged->planned_entries.assign(merged->tree.nodes.size(), 0);
+	merged->planned_routed.assign(merged->tree.nodes.size(), 0);
+	vector<MergedPart> planned(parts.size() - 1);
+	for (idx_t p = 1; p < parts.size(); p++) {
+		planned[p - 1].source = parts[p].first.get();
+		planned[p - 1].offset = parts[p].second;
+		merged->Merge(planned[p - 1]);
+	}
+	merged->CopyMergedParts(planned, context);
+	return merged;
 }
 
 void DecideDescent::Timelines(idx_t node_index) {

@@ -45,7 +45,8 @@ BilinearTerm` (`solver_input.hpp`) is the one bilinear-term struct; there is no 
 |---|---|---|
 | 1 | `GetGlobalSinkState` → `DecideGlobalSinkState` ctor | Read the folded variable box and the tree's lowered clauses |
 | 2 | `Sink` → `DecideDescent` | Materialize every surviving tuple into the thread's `ColumnDataCollection`, and read it top-down as it arrives: each node's `when` parts, keys and σ fields on the rows that reach it, into the thread's containers (§1a) |
-| 2a | `Combine` → `DecideDescent::Merge` | Place the thread's rows after those placed before, and merge its descent into the operator's at them |
+| 2a | `Combine` | Place the thread's rows after those placed before, and keep its descent with the row they start at |
+| 2b | `Finalize` → `DecideDescent::MergeAll` | Merge the threads' descents: their maps in order, their entries in parallel |
 | 3 | `Finalize` → `EvaluateTree` | Settle the containers (`DecideDescent::Finish`: ranks, timelines) |
 | 4 | `EvaluateTree` → `DecideTreeColumns` | Bottom-up: the frames' timelines and columns (§4b), the data checks, each node's programs over its entries, the data reducers' folds |
 | 5 | `EvaluateTree` → `DecideModelEmitter` | The key scopes' classes (§4), the objective produced once (§4a), then the clauses, the objective, the composed clauses and the helper decisions' members (§5) |
@@ -83,10 +84,12 @@ interrupt, an out-of-memory error and a fatal error stop the evaluation where th
 
 Each row is read once, as it arrives, and the evaluation has no scan of the buffered input: it fetches its first
 chunk alone, for a value the whole query shares (`execution.descent_rows`, `DECIDB_PROFILE`, counts the rows read). Each thread reads its rows into a descent of its own, as a hash aggregate builds a table per
-thread, and `Combine` merges it into the operator's (below). The merges run one after another under the sink's lock
-and copy every entry (`execution.descent_merge`): over 4 million stored rows, the query reached `Finalize` after
-0.23 s on 8 threads, 0.17 s of it merging, against 0.31 s on one, in a query whose model and solve took 3.7 s. A merge in parallel, as a hash aggregate finalizes its partitions, is not built.
-The unbounded
+thread, and `Finalize` merges them (below). `Combine` places the thread's rows after those placed before and keeps its
+descent; `Finalize` merges every part's maps one after another, a few thousand slots and classes, and then copies each
+node's entries and routed rows in parallel, a task per window of the merged containers (`DecideDescent::MergeAll`,
+`execution.descent_merge`). Over 4 million stored rows the query reached its evaluation after 0.14 s on 8 threads
+(0.08 s reading, 0.06 s merging) against 0.31 s on one, in a query whose model and solve took 3.7 s. Until the merge,
+every thread's descent is held, so the peak holds the threads' containers and the merged ones at once. The unbounded
 diagnosis's column groupings (§7b) explain the solved model after the evaluation, and read the named input columns in
 a scan of their own.
 
@@ -130,8 +133,8 @@ references, `tests/_expected.py`, were recorded from flat's runs):
 - *Top-down* (`decide_descent.hpp`): each thread's descent reads each chunk as `Sink` receives it, and numbers its
   rows by their places in the thread's buffer; the buffer is never scanned to evaluate a row
   (`execution.descent_rows` the rows read). `Combine` places the thread's buffer after the rows placed before
-  (`ColumnDataCollection::Combine`) and merges its descent into the operator's at them (`DecideDescent::Merge`), the
-  first thread's descent becoming the operator's: its rows are rebased; its keyed classes are found again by layout
+  (`ColumnDataCollection::Combine`), and `Finalize` merges the threads' descents at those rows
+  (`DecideDescent::MergeAll`), the first thread's becoming the operator's: its rows are rebased; its keyed classes are found again by layout
   and sort key, its slots by key -- and enclosing slot, a G's or O's before an E's -- in the operator's dictionaries,
   a set E's entries by slot, signature, carried columns and reads (`DecideNodeContainer::reads`), with a decision's
   instance and a read rebased as the classes, slots and rows are; a collated key's spellings fold into the least; and

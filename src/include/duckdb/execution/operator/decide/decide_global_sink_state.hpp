@@ -187,6 +187,8 @@ public:
 	//! The tree's descent, the threads' merged (language/guide.md §6.1): the rows are read once, as they arrive, and
 	//! the buffer below is never scanned to evaluate them.
 	unique_ptr<DecideDescent> descent;
+	//! Each thread's descent and the row its rows start at, until Finalize merges them into `descent`.
+	vector<pair<unique_ptr<DecideDescent>, idx_t>> descent_parts;
 	idx_t descent_rows = 0;
     // This collection will hold all the data from the child operator, each thread's rows in the order its descent read
     // them, placed as the descents merge

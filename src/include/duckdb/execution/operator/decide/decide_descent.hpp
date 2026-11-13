@@ -52,6 +52,11 @@ public:
 	//! Copies rows `selection[0, count)` of `source`'s first Types().size() columns after the last row, a string into
 	//! the chunk's own heap: no row refers to `source` afterwards.
 	void Append(DataChunk &source, const SelectionVector &selection, idx_t count);
+	//! Holds `count` rows, those past the last written until CopyRows writes them.
+	void Resize(idx_t count);
+	//! Rows [source_row, source_row + count) of `source` into rows from `target_row`, which lie in one window of this:
+	//! each window is written by one writer at a time.
+	void CopyRows(idx_t target_row, const DecideColumns &source, idx_t source_row, idx_t count);
 	Value GetValue(idx_t column, idx_t row) const;
 	//! The values of row `row`'s columns `begin` to `end`.
 	vector<Value> GetValues(idx_t row, idx_t begin, idx_t end) const;
@@ -197,12 +202,14 @@ public:
 	DecideDescent(const DecideTree &tree, ClientContext &context);
 	~DecideDescent();
 	void Append(DataChunk &chunk, idx_t row_base);
-	//! Takes in `other`, a descent of the same tree that read rows `offset` onward, every one after the rows this one
-	//! read: a descent per thread, each over the rows its thread received, merged in the order the rows were placed.
-	//! Its rows are rebased; its slots, classes, entries and instances are found again in this descent's maps, in the
-	//! order `other` made them, which is its rows' order, so they number as one descent over every row would; and its
-	//! errors take their ranks at their rows here.
-	void Merge(DecideDescent &other, idx_t offset);
+	//! The descents of `parts`, each of the same tree with the row its rows start at, in the order the rows were
+	//! placed (a descent per thread, each over the rows its thread received), merged into the first: a part's rows are
+	//! rebased; its slots, classes, entries and instances are found again in the merged maps, in the order the part
+	//! made them, which is its rows' order, so they number as one descent over every row would; and its errors take
+	//! their ranks at their rows. The maps merge one part after another; then each node's entries and routed rows are
+	//! copied in parallel, a task per window of the merged containers.
+	static unique_ptr<DecideDescent> MergeAll(vector<pair<unique_ptr<DecideDescent>, idx_t>> parts,
+	                                          ClientContext &context);
 	void Finish();
 	const vector<DecideNodeContainer> &Containers() const {
 		return containers;
@@ -384,6 +391,26 @@ private:
 	}
 	//! A set E's entries of the current window, inserted once every root has descended (DecideNodeContainer::routed).
 	vector<unique_ptr<Pending>> pending;
+	//! What MergeAll copies of a part once every part's maps are merged: where each node's entries and routed rows go,
+	//! and the slots and entries they are found again as.
+	struct MergedPart {
+		DecideDescent *source = nullptr;
+		idx_t offset = 0;
+		vector<unsafe_vector<idx_t>> slot_map;
+		vector<unsafe_vector<idx_t>> entry_map;
+		vector<idx_t> target;
+		vector<idx_t> routed_target;
+	};
+	//! Per node, the entries and routed rows merged parts add after those held.
+	vector<idx_t> planned_entries;
+	vector<idx_t> planned_routed;
+
+	//! Merges `part`'s maps into this one's and plans its copies (MergeAll).
+	void Merge(MergedPart &part);
+	//! The slot `slot` of the G or O `node`'s rows arrive in, in `part`, found again here.
+	idx_t PartParent(const MergedPart &part, idx_t node, idx_t slot) const;
+	//! Copies every merged part's entries and routed rows, in parallel (MergeAll).
+	void CopyMergedParts(vector<MergedPart> &parts, ClientContext &context);
 
 	void Visit(idx_t node, DataChunk &chunk, idx_t row_base, const Reach &incoming);
 	//! The rows of `reaching` each `when` part of `node` keeps, in `own` unless none is written: null once none is
