@@ -16,7 +16,7 @@ decision, maximizing the count, or the fewest rows that reach `SUM(w*x) >= B`, p
 "the best rows under nested quotas" (upper count quotas on one `BOOL` variable whose groups nest, such as departments
 inside divisions inside one overall cap). Each class's
 `done.md` gives its speed against Gurobi; every class is faster than Gurobi at every size measured. N1 also answers
-without a Gurobi license, where the solver path refuses a quadratic limit. The other 12 classes in the catalogue are not
+without a Gurobi license, where the solver path refuses a quadratic limit. The other 11 classes in the catalogue are not
 started.
 
 ## Where to look
@@ -46,8 +46,7 @@ started.
 | [A4](rules/a4_bounded_least_squares/) | Bounded-variable least squares | Prototype | Not started |
 | [A5](rules/a5_monotone/) | Monotone optimization | Exact | Not started |
 | [A6](rules/a6_rank_one_least_squares/) | Rank-one bounded least squares | Exact | Not started |
-| [N1](rules/n1_euclidean_ball/) | Euclidean-ball projection and support function | Exact | **Works**, on by default, including per `by` group |
-| [N2](rules/n2_ellipsoid_support/) | Ellipsoid support function | Exact | Not started |
+| [N1](rules/n1_euclidean_ball/) | Euclidean-ball projection and ellipsoid support function | Exact | **Works**, on by default, including per `by` group |
 | [S1](rules/s1_uniform_matroid/) | Uniform-matroid optimization | Exact | **Works**, on by default, including per `by` group |
 | [S2](rules/s2_laminar_matroid/) | Laminar-matroid optimization | Exact | **Works**, on by default, including per `by` group |
 | [S3](rules/s3_max_cardinality_knapsack/) | Maximum-cardinality knapsack | Exact | **Works**, on by default, including per `by` group |

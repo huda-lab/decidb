@@ -85,8 +85,7 @@ value. Classes without code take the name in docs only until their code exists.
 | A4 | bounded-variable least squares | `bounded_least_squares` | `A4_BOUNDED_LEAST_SQUARES` | Stark and Parker 1995 (BVLS) |
 | A5 | monotone optimization | `monotone` | `A5_MONOTONE` | Tuy 2000 |
 | A6 | rank-one bounded least squares | `rank_one_least_squares` | `A6_RANK_ONE_LEAST_SQUARES` | Descriptive; no single textbook name |
-| N1 | Euclidean-ball projection and support function | `euclidean_ball` | `N1_EUCLIDEAN_BALL` | Convex analysis |
-| N2 | ellipsoid support function | `ellipsoid_support` | `N2_ELLIPSOID_SUPPORT` | Convex analysis |
+| N1 | Euclidean-ball projection and ellipsoid support function | `euclidean_ball` | `N1_EUCLIDEAN_BALL` | Convex analysis |
 | S1 | uniform-matroid optimization | `uniform_matroid` | `S1_UNIFORM_MATROID` | Matroid theory |
 | S2 | laminar-matroid optimization | `laminar_matroid` | `S2_LAMINAR_MATROID` | Matroid theory |
 | S3 | maximum-cardinality knapsack | `max_cardinality_knapsack` | `S3_MAX_CARDINALITY_KNAPSACK` | Knapsack texts |

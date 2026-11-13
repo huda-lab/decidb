@@ -7,19 +7,6 @@ checks are in `../../framework/todo.md` § How to work any task.
 The tasks below widen N1 to a factor that differs between rows, `SUM(POWER(SQRT(w) * x, 2)) <= B`, the catalogue's
 ellipsoid support function. Its plan has N1's operator tree, so it is N1's class (owner, 2026-11-13).
 
-## N1-7 — Fold the ellipsoid support function into N1's class
-
-- **Problem.** The catalogue keeps the weighted form as a class of its own, N2 (`../n2_ellipsoid_support/`), although
-  its rewrite is N1's: a per-row projection, one sum per ball, a join back, and an answer projection; only the scalar
-  expressions differ.
-- **Change.** In `definition.md`, take N2's worked example, the substitution `z = SQRT(w) * x` that reduces it to the
-  ball, and its weight conditions, and state that a row-valued factor takes no square in the objective (projection
-  onto an ellipsoid is not a scaling); drop "belongs to N2 rather than N1". Delete `../n2_ellipsoid_support/`. In
-  `../../../glossary.md` § Problem classes, drop the N2 row and name N1 "Euclidean-ball projection and ellipsoid support
-  function"; the id, slug and `EXPLAIN` value stay. In `../../README.md`, drop the N2 status row and count 11 classes
-  not started. The N2 id stays unused.
-- **Done when.** `grep -rn -e "N2\b" -e "n2_ellipsoid" context/docs` finds nothing. Doc-only: no test run.
-
 ## N1-8 — Recognition: a row-valued slope inside the square
 
 - **Problem.** N1 takes `SUM(q * x^2) <= B` only when `q` folds to one positive constant (`FoldSquareFactor`), so
@@ -32,6 +19,8 @@ ellipsoid support function. Its plan has N1's operator tree, so it is N1's class
   convex, and the solver answers it. A row-valued slope with a square in the objective declines. The objective's own
   square keeps a constant factor (`SquareIsConvex`). No canonicalizer change: folding the form to one `q` would lose
   the sign proof and the `SQRT` error.
+- **Ruling (owner, 2026-11-13).** N1-8 and N1-9 land as one commit: the plan reads q as one constant, so recognition
+  alone would apply the rule to forms it cannot compute.
 - **Done when.** `build/release/test/unittest "N1 applies to the forms of its class"` with the weighted forms;
   `build/release/test/unittest "N1 declines each shape that is not exactly its class"` with a case for each new
   decline branch; `build/release/test/unittest "Every rule and every other rule never apply to the same query"` with
@@ -46,7 +35,7 @@ ellipsoid support function. Its plan has N1's operator tree, so it is N1's class
   operations, `(value / SQRT(h)) * radius`. A row whose `q` is 0 or NULL adds nothing to `h` and takes N1's branch for
   a row with no square in the ball's sum: 0 when its direction is 0, otherwise unbounded, as the solver answers. `d / q`
   past a DOUBLE raises the rule's too-large error. Update `done.md` § What it admits and § How it works.
-- **Needs.** N1-7, N1-8.
+- **Needs.** N1-8, in the same commit.
 - **Done when.** Oracle cases in `test_direct_n1_euclidean_ball.py`, built from the raw rows with each row's `q`: the
   worked example (1 and 1), unequal weights in both domains, MINIMIZE, a weight 0 with direction 0 and with a nonzero
   direction (unbounded), a NULL weight, `B = 0`, `by`, `per K:`, `when`, a NULL key; then
