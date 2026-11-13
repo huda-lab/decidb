@@ -1671,6 +1671,8 @@ duckdb::vector<Shape> R4AppliesShapes() {
 	shapes.push_back(R4("a capacity under a WHEN", "when flag: x <= cap AND SUM(x) <= 9"));
 	shapes.push_back(R4("a coefficient on the decision in the capacity", "2 * x <= cap AND SUM(x) <= 9"));
 	shapes.push_back(R4("a constant weight", "x <= cap AND SUM(2 * x) <= 9"));
+	shapes.push_back(R4("a negative constant weight", "x <= cap AND SUM(-x) <= 9"));
+	shapes.push_back(R4("a weight read from a column", "x <= cap AND SUM(f * x) <= 9"));
 	shapes.push_back(R4("like terms in the budget", "x <= cap AND SUM(x + x) <= 9"));
 	shapes.push_back(R4("a budget of zero", "x <= cap AND SUM(x) <= 0"));
 	shapes.push_back(R4("a negative budget", "x <= cap AND SUM(x) <= -1"));
@@ -1700,8 +1702,6 @@ duckdb::vector<Shape> R4DeclineShapes() {
 	// ProveBudget: the weight and the limit.
 	shapes.push_back(R4("a square in the budget", "x <= cap AND SUM(POWER(x, 2)) <= 9"));
 	shapes.push_back(R4("a weight fixed only within the query", "x <= cap AND SUM(txid_current() * x) <= 9"));
-	shapes.push_back(R4("a weight read from a column", "x <= cap AND SUM(f * x) <= 9"));
-	shapes.push_back(R4("a negative weight", "x <= cap AND SUM(-x) <= 9"));
 	shapes.push_back(R4("a budget read from a column", "x <= cap AND SUM(x) <= f"));
 	shapes.push_back(R4("a budget of 1e20", "x <= cap AND SUM(x) <= 1e20"));
 	// ProveBox.

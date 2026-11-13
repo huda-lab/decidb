@@ -856,10 +856,10 @@ S3 = RuleFixture(
 )
 
 
-def _r4_late_error(decision_sql, d_sql="2.0", cap_sql="4.0"):
+def _r4_late_error(decision_sql, d_sql="2.0", cap_sql="4.0", w_sql="1.0"):
     """A 5,000-row problem whose last row is invalid. Rows 0 to 4998 are ordinary."""
     return f"""
-        FROM (SELECT i, {d_sql} AS d, {cap_sql} AS cap FROM range(5000) t(i)) s
+        FROM (SELECT i, {d_sql} AS d, {cap_sql} AS cap, {w_sql} AS w FROM range(5000) t(i)) s
         DECIDE {decision_sql}
         """
 
@@ -896,12 +896,11 @@ R4 = RuleFixture(
         ) q
     """,
     table_change="ALTER TABLE direct_r4_life ADD COLUMN extra INTEGER;",
-    # Each is the plain form with one condition changed: an INT decision, a budget weight read from the data, a budget
+    # Each is the plain form with one condition changed: an INT decision, a budget
     # from below, a second budget clause, a lower bound on the decision, a per-row constant inside the MIN, a second
     # part of the objective, a constant factor on the MIN and a minimized MIN.
     near_misses=(
         ("x(INT)", "x <= cap AND SUM(x) <= 9", "MAXIMIZE MIN(x / d)"),
-        ("x(REAL)", "x <= cap AND SUM(w * x) <= 9", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "x <= cap AND SUM(x) >= 1", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "x <= cap AND SUM(x) <= 9 AND SUM(2 * x) <= 20", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "x >= 1 AND x <= cap AND SUM(x) <= 9", "MAXIMIZE MIN(x / d)"),
@@ -910,11 +909,14 @@ R4 = RuleFixture(
         ("x(REAL)", "x <= cap AND SUM(x) <= 9", "MAXIMIZE 2 * MIN(x / d)"),
         ("x(REAL)", "x <= cap AND SUM(x) <= 9", "MINIMIZE MIN(x / d)"),
     ),
-    # Forms that look like near misses and apply: the floor written out, a constant weight other than 1, no capacity,
-    # a constant capacity, and a literal constant inside the MIN (canonicalization moves it out of the MIN).
+    # Forms that look like near misses and apply: the floor written out, a constant weight other than 1, a negative one
+    # and one read from the data, no capacity, a constant capacity, and a literal constant inside the MIN
+    # (canonicalization moves it out of the MIN).
     near_miss_applies=(
         ("x(REAL)", "x >= 0 AND x <= cap AND SUM(x) <= 9", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "x <= cap AND SUM(2 * x) <= 9", "MAXIMIZE MIN(x / d)"),
+        ("x(REAL)", "x <= cap AND SUM(-x) <= 9", "MAXIMIZE MIN(x / d)"),
+        ("x(REAL)", "x <= cap AND SUM(w * x) <= 9", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "SUM(x) <= 9", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "x <= 3 AND SUM(x) <= 9", "MAXIMIZE MIN(x / d)"),
         ("x(REAL)", "x <= cap AND SUM(x) <= 9", "MAXIMIZE MIN(x / d + 1)"),
@@ -923,7 +925,7 @@ R4 = RuleFixture(
     "(2, 4.0::DOUBLE, 2.0::DOUBLE, 8.0::DOUBLE)) t(id,d,w,cap)",
     near_miss_column="id",
     late_errors=(
-        # Errors R4 raises, on the last of 5,000 rows: a zero demand, a NaN demand, a NaN capacity and a negative one.
+        # Errors R4 raises, on the last of 5,000 rows: a zero demand, a NaN demand, a NaN weight, a NaN capacity and a negative one.
         (
             _r4_late_error(f"x(REAL) SUCH THAT {_R4_PLAIN}", d_sql="CASE WHEN i=4999 THEN 0.0 ELSE 2.0 END"),
             "1 / d is NaN or infinite on some rows",
@@ -931,6 +933,13 @@ R4 = RuleFixture(
         (
             _r4_late_error(f"x(REAL) SUCH THAT {_R4_PLAIN}", d_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 2.0 END"),
             "1 / d is NaN or infinite on some rows",
+        ),
+        (
+            _r4_late_error(
+                "x(REAL) SUCH THAT x <= cap AND SUM(w * x) <= 9 MAXIMIZE MIN(x / d)",
+                w_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
+            ),
+            "w is NaN or infinite on some rows",
         ),
         (
             _r4_late_error(

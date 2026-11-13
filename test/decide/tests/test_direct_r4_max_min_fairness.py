@@ -1,7 +1,7 @@
 """R4 (weighted max-min fair allocation), checked three ways: the independent oracle, the solver path, the direct path.
 
 Every case is one DECIDE query with one `REAL` decision `amount` on each row, in the box [0, cap], under one budget
-`SUM(w * amount) <= B` with a constant weight `w > 0`, maximizing the smallest ratio `amount / d` over the rows the
+`SUM(w * amount) <= B` with a weight `w` of any sign (a constant or read from the data), maximizing the smallest ratio `amount / d` over the rows the
 objective reads. The oracle builds its own model from the raw rows, from the capacities, coefficients and weight each
 case states in Python (never from DeciDB's reading of the SQL): one variable per row, a free level `t` and one row
 `t <= c * amount` for each row the objective reads, maximizing `t`. DeciDB then runs the query with
@@ -45,12 +45,13 @@ COLUMNS = (
     ("cap", "DOUBLE"),  # a capacity
     ("f", "BOOLEAN"),  # `when` membership
     ("r", "DOUBLE"),  # a coefficient read as it is: the ratio of a row's share to its amount
+    ("w", "DOUBLE"),  # the weight of a row in the budget
 )
 NAMES = [name for name, _ in COLUMNS]
 
 
-def _row(id, d=2.0, cap=4.0, f=True, r=1.0):
-    return dict(id=id, d=d, cap=cap, f=f, r=r)
+def _row(id, d=2.0, cap=4.0, f=True, r=1.0, w=1.0):
+    return dict(id=id, d=d, cap=cap, f=f, r=r, w=w)
 
 
 # The worked example of the class: demands 2 and 4, capacities 4 and 8.
@@ -79,6 +80,28 @@ RATES_NEGATIVE = (_row(1, r=0.5), _row(2, r=-2.0), _row(3, r=4.0))
 RATES_ZERO = (_row(1, r=0.5), _row(2, r=0.0), _row(3, r=4.0))
 
 
+# Weights of any sign. A NULL weight adds nothing to the budget, as a NULL term does to a SUM.
+MIXED_WEIGHTS = (
+    _row(1, 2.0, 4.0, w=1.0),
+    _row(2, 4.0, 8.0, w=-1.0),
+    _row(3, 1.0, 5.0, w=0.5),
+    _row(4, 3.0, 6.0, w=0.0),
+)
+NULL_WEIGHT = (_row(1, 2.0, 4.0, w=None), _row(2, 4.0, 8.0, w=1.0))
+# A negative weight with a capacity frees budget, and one with none frees as much as it is asked to.
+NEGATIVE_CAPPED = (_row(1, 2.0, 4.0, w=1.0), _row(2, 4.0, 8.0, w=-1.0))
+NEGATIVE_UNCAPPED = (_row(1, 2.0, 4.0, w=1.0), _row(2, 4.0, None, w=-1.0))
+# The uncapped row is not read, so only the deficit makes it take anything.
+NEGATIVE_UNCAPPED_NOT_READ = (_row(1, 2.0, 4.0, w=1.0), _row(2, None, None, w=-1.0))
+# The uncapped row is read and its own low end is more than the deficit it must free.
+NEGATIVE_UNCAPPED_READ_LOW = (_row(1, 2.0, 4.0, w=1.0), _row(2, 4.0, None, w=-3.0))
+NEGATIVE_UNCAPPED_TWO = (_row(1, 2.0, 4.0, w=2.0), _row(2, None, None, w=-1.0), _row(3, None, 1e25, w=-3.0))
+# No row bounds the level: a row read with weight 0 and no capacity, or only negative weights with none.
+UNBOUNDED_ZERO_WEIGHT = (_row(1, 2.0, None, w=0.0), _row(2, 4.0, 8.0, w=1.0))
+UNBOUNDED_ALL_NEGATIVE = (_row(1, 2.0, None, w=-1.0), _row(2, 4.0, None, w=1.0))
+NEGATIVE_NOT_ENOUGH = (_row(1, 2.0, 4.0, w=1.0), _row(2, 4.0, 1.0, w=-1.0))
+
+
 def _values(rows):
     return values_clause(rows, NAMES, dict(COLUMNS), sql_literal)
 
@@ -91,7 +114,8 @@ def _values(rows):
 @dataclass(frozen=True)
 class Budget:
     sql: str
-    weight: float
+    #: row -> the weight of the row in the budget.
+    weight: object
     limit: float
 
 
@@ -126,16 +150,31 @@ def _cap(row):
     return row["cap"]
 
 
+def _constant(number):
+    return lambda row: number
+
+
+def _column(row):
+    return 0.0 if row["w"] is None else row["w"]
+
+
 BUDGETS = {
-    "b9": Budget("SUM(amount) <= 9", 1.0, 9.0),
-    "b100": Budget("SUM(amount) <= 100", 1.0, 100.0),
-    "b0": Budget("SUM(amount) <= 0", 1.0, 0.0),
-    "negative": Budget("SUM(amount) <= -1", 1.0, -1.0),
+    "b9": Budget("SUM(amount) <= 9", _constant(1.0), 9.0),
+    "b100": Budget("SUM(amount) <= 100", _constant(1.0), 100.0),
+    "b0": Budget("SUM(amount) <= 0", _constant(1.0), 0.0),
+    "negative": Budget("SUM(amount) <= -1", _constant(1.0), -1.0),
     # The spellings of one budget: each read the same way.
-    "weight_2": Budget("SUM(2 * amount) <= 18", 2.0, 18.0),
-    "weight_half": Budget("SUM(amount / 2) <= 4.5", 0.5, 4.5),
-    "like_terms": Budget("SUM(amount + 2 * amount) <= 18", 3.0, 18.0),
-    "literal_on_left": Budget("9 >= SUM(amount)", 1.0, 9.0),
+    "weight_2": Budget("SUM(2 * amount) <= 18", _constant(2.0), 18.0),
+    "weight_half": Budget("SUM(amount / 2) <= 4.5", _constant(0.5), 4.5),
+    "like_terms": Budget("SUM(amount + 2 * amount) <= 18", _constant(3.0), 18.0),
+    "literal_on_left": Budget("9 >= SUM(amount)", _constant(1.0), 9.0),
+    # A negative constant weight: every row takes its capacity.
+    "weight_negative": Budget("SUM(-amount) <= -2", _constant(-1.0), -2.0),
+    # A weight read from the data.
+    "column": Budget("SUM(w * amount) <= 9", _column, 9.0),
+    "column_b0": Budget("SUM(w * amount) <= 0", _column, 0.0),
+    "column_negative": Budget("SUM(w * amount) <= -3", _column, -3.0),
+    "column_like_terms": Budget("SUM(w * amount + 2 * w * amount) <= 18", lambda row: 3.0 * _column(row), 18.0),
 }
 
 BOXES = {
@@ -214,6 +253,21 @@ add("coefficient_from_a_column", RATES, objective="rate")
 add("coefficient_negative_gives_level_zero", RATES_NEGATIVE, objective="rate")
 add("coefficient_zero_gives_level_zero", RATES_ZERO, objective="rate")
 add("offset_outside_the_min", WORKED, objective="offset")
+# A weight of any sign. The worked example read from a column, and the sign decides the end of each row's range.
+add("worked_example_weight_from_a_column", WORKED, budget="column")
+add("weights_of_mixed_signs_and_zero", MIXED_WEIGHTS, budget="column")
+add("weights_like_terms_add", MIXED_WEIGHTS, budget="column_like_terms")
+add("weight_null_adds_nothing", NULL_WEIGHT, budget="column")
+add("weight_negative_constant_takes_every_capacity", THREE, budget="weight_negative")
+add("weight_negative_takes_its_capacity_and_frees_budget", NEGATIVE_CAPPED, budget="column_b0")
+add("weight_negative_without_capacity_is_read", NEGATIVE_UNCAPPED, budget="column_b0")
+add("weight_negative_without_capacity_not_read_absorbs_the_deficit", NEGATIVE_UNCAPPED_NOT_READ, budget="column_b0")
+add("weight_negative_without_capacity_low_end_beats_the_deficit", NEGATIVE_UNCAPPED_READ_LOW, budget="column_b0")
+add("weight_negative_without_capacity_two_rows_share_the_deficit", NEGATIVE_UNCAPPED_TWO, budget="column_b0")
+add("budget_negative_made_feasible_by_a_freed_budget", NEGATIVE_CAPPED, budget="column_negative")
+add("budget_negative_not_made_feasible_is_infeasible", NEGATIVE_NOT_ENOUGH, budget="column_negative")
+add("level_unbounded_by_a_read_row_of_weight_zero_and_no_capacity", UNBOUNDED_ZERO_WEIGHT, budget="column")
+add("level_unbounded_when_a_negative_weight_frees_unlimited_budget", UNBOUNDED_ALL_NEGATIVE, budget="column")
 
 
 def _sql_body(case_):
@@ -252,7 +306,7 @@ def _solve_with_oracle(oracle_solver, case_):
         upper = box.upper(row)
         oracle_solver.add_variable(names[row["id"]], VarType.CONTINUOUS, 0.0, BIG if upper is None else upper)
     oracle_solver.add_constraint(
-        {names[row["id"]]: budget.weight for row in case_.rows}, "<=", budget.limit, name="budget"
+        {names[row["id"]]: budget.weight(row) for row in case_.rows}, "<=", budget.limit, name="budget"
     )
     read = [(row, objective.coefficient(row)) for row in case_.rows]
     read = [(row, c) for row, c in read if c is not None]
@@ -283,7 +337,7 @@ def _check_assignment(case_, rows, columns, oracle, mode):
             value,
             upper,
         )
-    spent = budget.weight * sum(values[source["id"]] for source in case_.rows)
+    spent = sum(budget.weight(source) * values[source["id"]] for source in case_.rows)
     assert spent <= budget.limit + _FEASIBILITY_TOLERANCE * max(1.0, abs(budget.limit)), (mode, spent, budget.limit)
     shares = [objective.coefficient(source) for source in case_.rows]
     level = [c * values[source["id"]] for source, c in zip(case_.rows, shares) if c is not None]
@@ -348,11 +402,13 @@ def test_r4_a_min_that_reads_no_row_gives_zero_to_every_row(decidb_cli, name):
 
 @pytest.mark.correctness
 @pytest.mark.parametrize("budget", ["-1", "25"])
-def test_r4_empty_source_returns_no_rows_whatever_the_budget_says(decidb_cli, budget):
-    # The checks run on rows, and there are none: a negative budget has no row to make infeasible.
+@pytest.mark.parametrize("weight", ["amount", "w * amount"])
+def test_r4_empty_source_returns_no_rows_whatever_the_budget_says(decidb_cli, budget, weight):
+    # The checks run on rows, and there are none: a negative budget has no row to make infeasible, nor has the class
+    # of an empty source, whose budget B + F is still negative.
     sql = (
-        "SELECT id, amount FROM (SELECT 1 AS id, 2.0::DOUBLE AS d, -1.0::DOUBLE AS cap WHERE false) "
-        f"DECIDE amount(REAL) SUCH THAT amount <= cap AND SUM(amount) <= {budget} MAXIMIZE MIN(amount / d)"
+        "SELECT id, amount FROM (SELECT 1 AS id, 2.0::DOUBLE AS d, -1.0::DOUBLE AS cap, 1.0::DOUBLE AS w WHERE false) "
+        f"DECIDE amount(REAL) SUCH THAT amount <= cap AND SUM({weight}) <= {budget} MAXIMIZE MIN(amount / d)"
     )
     for mode in ("off", "require"):
         assert run(decidb_cli, sql, mode)[0] == []
@@ -364,26 +420,38 @@ def test_r4_empty_source_returns_no_rows_whatever_the_budget_says(decidb_cli, bu
 
 _RATIO = "amount <= cap AND SUM(amount) <= 9 MAXIMIZE MIN(amount / d)"
 _RATE = "amount <= cap AND SUM(amount) <= 9 MAXIMIZE MIN(r * amount)"
+_WEIGHT = "amount <= cap AND SUM(w * amount) <= 9 MAXIMIZE MIN(amount / d)"
 
-# (the class of the error, the text it has, the bad row's d, cap and r, the clauses). Row 0 is ordinary.
+# (the class of the error, the text it has, the bad row's d, cap, r and w, the clauses). Row 0 is ordinary.
 ERROR_CASES = {
-    "demand_zero": ("invalid_value", "1 / d is NaN or infinite on some rows", "0.0", "4.0", "1.0", _RATIO),
-    "demand_nan": ("invalid_value", "1 / d is NaN or infinite on some rows", "'NaN'", "4.0", "1.0", _RATIO),
-    "rate_nan": ("invalid_value", "r is NaN or infinite on some rows", "2.0", "4.0", "'NaN'", _RATE),
-    "rate_infinite": ("invalid_value", "r is NaN or infinite on some rows", "2.0", "4.0", "'Infinity'", _RATE),
-    "capacity_nan": ("null_bound", "the bound cap is NaN on some rows", "2.0", "'NaN'", "1.0", _RATIO),
-    "capacity_minus_infinite": ("infeasible", "infeasible", "2.0", "'-Infinity'", "1.0", _RATIO),
+    "demand_zero": ("invalid_value", "1 / d is NaN or infinite on some rows", "0.0", "4.0", "1.0", "1.0", _RATIO),
+    "demand_nan": ("invalid_value", "1 / d is NaN or infinite on some rows", "'NaN'", "4.0", "1.0", "1.0", _RATIO),
+    "rate_nan": ("invalid_value", "r is NaN or infinite on some rows", "2.0", "4.0", "'NaN'", "1.0", _RATE),
+    "rate_infinite": ("invalid_value", "r is NaN or infinite on some rows", "2.0", "4.0", "'Infinity'", "1.0", _RATE),
+    "weight_nan": ("invalid_value", "w is NaN or infinite on some rows", "2.0", "4.0", "1.0", "'NaN'", _WEIGHT),
+    "weight_infinite": (
+        "invalid_value",
+        "w is NaN or infinite on some rows",
+        "2.0",
+        "4.0",
+        "1.0",
+        "'-Infinity'",
+        _WEIGHT,
+    ),
+    "capacity_nan": ("null_bound", "the bound cap is NaN on some rows", "2.0", "'NaN'", "1.0", "1.0", _RATIO),
+    "capacity_minus_infinite": ("infeasible", "infeasible", "2.0", "'-Infinity'", "1.0", "1.0", _RATIO),
 }
 
 
-def _error_sql(demand, capacity, rate, decide):
+def _error_sql(demand, capacity, rate, weight, decide):
     def typed(value):
         return f"CAST({value} AS DOUBLE)"
 
     source = (
         f"SELECT i AS id, CASE WHEN i = 0 THEN 2.0 ELSE {typed(demand)} END AS d, "
         f"CASE WHEN i = 0 THEN 4.0 ELSE {typed(capacity)} END AS cap, "
-        f"CASE WHEN i = 0 THEN 1.0 ELSE {typed(rate)} END AS r FROM range(2) t(i)"
+        f"CASE WHEN i = 0 THEN 1.0 ELSE {typed(rate)} END AS r, "
+        f"CASE WHEN i = 0 THEN 1.0 ELSE {typed(weight)} END AS w FROM range(2) t(i)"
     )
     return f"SELECT id, amount FROM ({source}) DECIDE amount(REAL) SUCH THAT {decide}"
 
