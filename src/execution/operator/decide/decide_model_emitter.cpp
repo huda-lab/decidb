@@ -57,6 +57,16 @@ static ExpressionType ClauseComparison(const DecideNode &node) {
 	return node.algebra->expression_type;
 }
 
+static idx_t ClauseRhsProgram(const DecideNode &node, idx_t root) {
+	ClauseLhsFormula(node);
+	const auto &rhs = *node.algebra->children[1];
+	if (rhs.kind != DecideAlgebraKind::PROGRAM || rhs.program_node != root ||
+	    rhs.program == DConstants::INVALID_INDEX) {
+		throw InternalException("DECIDE model emitter: E node %llu has no compiled RHS program", root);
+	}
+	return rhs.program;
+}
+
 static string FunctionAlgebraName(const DecideNode &node) {
 	switch (node.function_kind) {
 	case DecideFunctionKind::ABS:
@@ -630,7 +640,7 @@ void DecideModelEmitter::DefinitionAbsence(idx_t root, idx_t variable) {
 			}
 		});
 	};
-	null_rows(root, body.rhs);
+	null_rows(root, ClauseRhsProgram(*tree.nodes[root], root));
 	for (idx_t t = 0; t < clause.lhs_terms.size(); t++) {
 		null_rows(body.linear[t].node, body.linear[t].program);
 	}
@@ -754,12 +764,7 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 	}
 	const auto instances = CountInstances(evaluated.row_group_ids, evaluated.num_groups, num_rows, false);
 	if (DescribeBound(clause, num_rows, names, op.source_fragments, op.keyed_scopes, op.keys, evaluated)) {
-		const auto &rhs_formula = *node.algebra->children[1];
-		if (rhs_formula.kind != DecideAlgebraKind::PROGRAM || rhs_formula.program_node != root ||
-		    rhs_formula.program == DConstants::INVALID_INDEX) {
-			throw InternalException("DECIDE model emitter: E node %llu has no compiled RHS program", root);
-		}
-		scatter(columns.Numbers(root, rhs_formula.program, tested, &nulls), evaluated.rhs_values);
+		scatter(columns.Numbers(root, ClauseRhsProgram(node, root), tested, &nulls), evaluated.rhs_values);
 	}
 	// A term reading a decision with no instance at the row has no value there (D84), nor has an auxiliary where what
 	// defines it has none (D88).
@@ -1213,7 +1218,7 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 		// Taken once every rule that drops an instance has run but the next, which reads `null_rows`, after every part
 		// of the clause.
 		try {
-			TakeTightestFrameBound(clause.comparison_type, evaluated.rhs_written, kept, bound_null, kept_row_group_ids,
+			TakeTightestFrameBound(evaluated.comparison_type, evaluated.rhs_written, kept, bound_null, kept_row_group_ids,
 			                       evaluated.row_group_ids, evaluated.num_groups, true,
 			                       evaluated.rhs_values.MutableDense(), null_rows);
 		} catch (std::exception &ex) {
@@ -1248,14 +1253,14 @@ vector<bool> DecideModelEmitter::GroupBound(idx_t root, const DecideEntryRows &r
 		reads[e] = reads[e] && container.groups.InAClass(container.Slot(e));
 	}
 	vector<bool> nulls(container.Count(), false);
-	auto bound = columns.Numbers(root, body.rhs, reads, &nulls);
+	auto bound = columns.Numbers(root, ClauseRhsProgram(*tree.nodes[root], root), reads, &nulls);
 	evaluated.rhs_values.AssignDense(num_rows);
 	const auto values = evaluated.rhs_values.MutableDense().data();
 	const auto computed = bound.data();
 	// A grouped `<>` excludes each value its rows' bounds take (language/guide.md §6.4): a NULL one excludes none, and
 	// its row stays a member of the group's sum. Every `<>` here is one (a MIN or MAX under `<>` is refused), and keeps
 	// every value of its bound rather than a tightest one.
-	const auto excludes = clause.comparison_type == ExpressionType::COMPARE_NOTEQUAL;
+	const auto excludes = evaluated.comparison_type == ExpressionType::COMPARE_NOTEQUAL;
 	D_ASSERT(!excludes || (clause.lhs_is_aggregate && !tightest));
 	std::vector<bool> &marked = tightest ? bound_null : excludes ? evaluated.no_exclusion : null_rows;
 	if (excludes) {
