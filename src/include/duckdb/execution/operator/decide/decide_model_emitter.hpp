@@ -215,7 +215,7 @@ private:
 	//! relation-qualified one's first of each class, which flat computes it on once it has left the repeats out
 	//! (language/guide.md §5.1): a NULL coefficient there, or a decision of `variables` with no instance there, leaves
 	//! the row's instance no value (`null_rows`, D84).
-	void ReadPart(const DecideTermSite &site, idx_t program, bool qualified, int sign,
+	void ReadPart(const DecideTermSite &site, idx_t program, idx_t qualifier_scope, int sign,
 	              const vector<unique_ptr<Expression>> &inputs,
 	              const vector<idx_t> &variables, CoefficientColumn &column, vector<bool> &null_rows);
 	//! The sign of `root`'s square `g`, its factor applied (ScaleSquaredGroup), read as flat reads it on the input's
@@ -245,13 +245,25 @@ private:
 	template <class F>
 	void ForEachRead(idx_t site, const vector<bool> &reads, bool qualified, F &&read) const;
 	//! The entries of `site` a term in a reducer is read on: those its member tests keep, a relation-qualified
-	//! reducer's first of each class (language/guide.md §5.1), which `first` then holds.
-	const vector<bool> &ReadEntriesOf(idx_t site, bool qualified, vector<bool> &first);
+	//! reducer's first of each class (language/guide.md §5.1), which `first` then holds. `qualifier_scope` identifies
+	//! which reducer's classes are read, even when `site` is nested below that reducer's operand.
+	const vector<bool> &ReadEntriesOf(idx_t site, idx_t qualifier_scope, const vector<bool> &candidates,
+	                                 vector<bool> &first, vector<bool> &selected_rows);
+	//! The input rows chosen by a relation-qualified reducer's own operand, shared by terms whose sites are nested
+	//! beneath it.
+	vector<bool> QualifiedRows(idx_t qualifier_scope) const;
+	//! Read the selected entries only at rows chosen by the relation-qualified reducer's operand.
+	template <class F>
+	void ForEachTermRead(idx_t site, const vector<bool> &reads, idx_t qualifier_scope,
+	                     const vector<bool> &selected_rows, F &&read) const;
 	//! A reducer's filter of a part of a grouped clause (a term, a product, a square), its site `site`: the rows the
 	//! part is read on (ReadRows, ReadEntriesOf), each passed to `read(row, entry)`, and every row its members stand
 	//! for (`members`), which decide whether the filter keeps fewer than the clause.
 	template <class F>
-	void Filter(idx_t site, bool qualified, TermFilterState &filter, vector<bool> &members, F &&read);
+	void Filter(idx_t site, idx_t qualifier_scope, const vector<bool> &reads, const vector<bool> &selected_rows,
+	            TermFilterState &filter, vector<bool> &members, F &&read);
+	//! Read entries when the qualified scope is the site's own node, as for a composed reducer's members.
+	const vector<bool> &ReadEntriesOf(idx_t site, bool qualified, vector<bool> &first);
 	//! A term beside a grouped clause's reducers, on each of `rows` (the kept rows and their root's entries), a NULL
 	//! coefficient marking its row (`null_rows`).
 	void ReadBesideReducers(idx_t root, const DecideTerm &term, const DecideTermSite &site, idx_t program,

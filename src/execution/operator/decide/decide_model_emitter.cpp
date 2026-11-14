@@ -353,14 +353,65 @@ const vector<bool> &DecideModelEmitter::ReadEntriesOf(idx_t site, bool qualified
 	return first;
 }
 
+vector<bool> DecideModelEmitter::QualifiedRows(idx_t qualifier_scope) const {
+	if (qualifier_scope >= tree.qualified_operands.size()) {
+		throw InternalException("DECIDE model emitter: invalid relation-qualified scope %llu", qualifier_scope);
+	}
+	const auto operand = tree.qualified_operands[qualifier_scope];
+	if (operand == DConstants::INVALID_INDEX) {
+		throw InternalException("DECIDE model emitter: relation-qualified scope %llu has no operand", qualifier_scope);
+	}
+	const auto &tested = columns.Tested(operand);
+	const auto first = columns.FirstOfEachInstance(operand, tested);
+	vector<bool> rows(num_rows, false);
+	for (auto read : ReadRows(operand, first, true)) {
+		rows[read.first] = true;
+	}
+	return rows;
+}
+
+const vector<bool> &DecideModelEmitter::ReadEntriesOf(idx_t site, idx_t qualifier_scope,
+                                                       const vector<bool> &candidates, vector<bool> &first,
+                                                       vector<bool> &selected_rows) {
+	if (qualifier_scope == DConstants::INVALID_INDEX) {
+		return candidates;
+	}
+	selected_rows = QualifiedRows(qualifier_scope);
+	first.assign(candidates.size(), false);
+	const std::vector<bool> &marked = candidates;
+	const std::vector<bool> &chosen_rows = selected_rows;
+	std::vector<bool> &selected_entries = first;
+	DecideEntryRows(tree, descent, site).ForEach([&](idx_t row, idx_t entry) {
+		if (chosen_rows[row] && marked[entry]) {
+			selected_entries[entry] = true;
+		}
+	});
+	return first;
+}
+
 template <class F>
-void DecideModelEmitter::Filter(idx_t site, bool qualified, TermFilterState &filter, vector<bool> &members, F &&read) {
-	vector<bool> first;
-	const std::vector<bool> &reads = ReadEntriesOf(site, qualified, first);
-	const std::vector<bool> &tested = columns.Tested(site);
+void DecideModelEmitter::ForEachTermRead(idx_t site, const vector<bool> &reads, idx_t qualifier_scope,
+                                         const vector<bool> &selected_rows, F &&read) const {
+	if (qualifier_scope == DConstants::INVALID_INDEX) {
+		ForEachRead(site, reads, false, std::forward<F>(read));
+		return;
+	}
+	const std::vector<bool> &marked = reads;
+	const std::vector<bool> &chosen_rows = selected_rows;
+	DecideEntryRows(tree, descent, site).ForEach([&](idx_t row, idx_t entry) {
+		if (marked[entry] && chosen_rows[row]) {
+			read(row, entry);
+		}
+	});
+}
+
+template <class F>
+void DecideModelEmitter::Filter(idx_t site, idx_t qualifier_scope, const vector<bool> &reads,
+                                const vector<bool> &selected_rows, TermFilterState &filter, vector<bool> &members,
+                                F &&read) {
+	const auto &tested = columns.Tested(site);
 	auto &container = descent.Containers()[site];
-	const auto entries = container.rows.data();
-	filter.has_filter = qualified;
+	filter.has_filter = qualifier_scope != DConstants::INVALID_INDEX;
 	filter.mask.assign(num_rows, false);
 	members.assign(num_rows, false);
 	std::vector<bool> &mask = filter.mask;
@@ -370,7 +421,8 @@ void DecideModelEmitter::Filter(idx_t site, bool qualified, TermFilterState &fil
 		if (tested[entry] && container.groups.InAClass(container.Slot(entry))) {
 			member[row] = true;
 		}
-		if (reads[entry] && (!qualified || entries[entry] == row)) {
+		if (reads[entry] &&
+		    (qualifier_scope == DConstants::INVALID_INDEX || selected_rows[row])) {
 			mask[row] = true;
 			read(row, entry);
 		}
@@ -1189,7 +1241,10 @@ vector<bool> DecideModelEmitter::ReadInReducer(const DecideTerm &term, const Dec
 	// shares, which no test reads, and leaves the member's group no value. Flat computes it on every member, and
 	// leaves a relation-qualified one's repeats out afterwards.
 	vector<bool> nulls(descent.Containers()[site.node].Count(), false);
-	auto numbers = columns.Numbers(site.node, program, columns.Tested(site.node), &nulls, &site, &term.inputs);
+	vector<bool> first, selected_rows;
+	const auto &tested = columns.Tested(site.node);
+	const auto &reads = ReadEntriesOf(site.node, term.qualifier_scope_idx, tested, first, selected_rows);
+	auto numbers = columns.Numbers(site.node, program, reads, &nulls, &site, &term.inputs);
 	filter.avg_scale = term.avg_scale;
 	vector<bool> members;
 	column.AssignDense(num_rows);
@@ -1197,7 +1252,7 @@ vector<bool> DecideModelEmitter::ReadInReducer(const DecideTerm &term, const Dec
 	const auto values = numbers.data();
 	const std::vector<bool> &null_entries = nulls;
 	std::vector<bool> &nulled = null_rows;
-	Filter(site.node, term.qualifier_scope_idx != DConstants::INVALID_INDEX, filter, members,
+		Filter(site.node, term.qualifier_scope_idx, reads, selected_rows, filter, members,
 	       [&](idx_t row, idx_t entry) {
 		       coefficients[row] = values[entry];
 		       if (null_entries[entry]) {
@@ -1269,7 +1324,11 @@ bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const DecideEntryRows &row
 		const auto i = ClauseTermSource(*lhs_formula.children[terms.size() + position],
 		                                clause.bilinear_terms.size(), "bilinear");
 		auto &filter = filters[terms.size() + i];
-		Filter(body.products[i].node, clause.bilinear_terms[i].qualifier_scope_idx != DConstants::INVALID_INDEX, filter,
+		const auto site = body.products[i].node;
+		vector<bool> first, selected_rows;
+		const auto &reads = ReadEntriesOf(site, clause.bilinear_terms[i].qualifier_scope_idx,
+		                                  columns.Tested(site), first, selected_rows);
+		Filter(site, clause.bilinear_terms[i].qualifier_scope_idx, reads, selected_rows, filter,
 		       members, [](idx_t, idx_t) {});
 		read_filter(members, filter);
 	}
@@ -1281,8 +1340,11 @@ bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const DecideEntryRows &row
 		}
 		const auto g = square.source_term;
 		auto &filter = filters[terms.size() + clause.bilinear_terms.size() + g];
-		Filter(body.squares[g].front().node,
-		       clause.quadratic_groups[g].qualifier_scope_idx != DConstants::INVALID_INDEX, filter, members,
+		const auto site = body.squares[g].front().node;
+		vector<bool> first, selected_rows;
+		const auto &reads = ReadEntriesOf(site, clause.quadratic_groups[g].qualifier_scope_idx,
+		                                  columns.Tested(site), first, selected_rows);
+		Filter(site, clause.quadratic_groups[g].qualifier_scope_idx, reads, selected_rows, filter, members,
 		       [](idx_t, idx_t) {});
 		read_filter(members, filter);
 	}
@@ -1487,11 +1549,12 @@ Value DecideModelEmitter::FirstRowValue(const Expression &factor) {
 	return value.data[0].GetValue(0);
 }
 
-void DecideModelEmitter::ReadPart(const DecideTermSite &site, idx_t program, bool qualified, int sign,
+void DecideModelEmitter::ReadPart(const DecideTermSite &site, idx_t program, idx_t qualifier_scope, int sign,
                                   const vector<unique_ptr<Expression>> &inputs, const vector<idx_t> &variables,
                                   CoefficientColumn &column, vector<bool> &null_rows) {
-	vector<bool> first;
-	const auto &reads = ReadEntriesOf(site.node, qualified, first);
+	vector<bool> first, selected_rows;
+	const auto &tested = columns.Tested(site.node);
+	const auto &reads = ReadEntriesOf(site.node, qualifier_scope, tested, first, selected_rows);
 	vector<bool> nulls(reads.size(), false);
 	// Stage 05 leaves a coefficient of 1 out.
 	auto numbers = program == DConstants::INVALID_INDEX
@@ -1505,7 +1568,7 @@ void DecideModelEmitter::ReadPart(const DecideTermSite &site, idx_t program, boo
 	}
 	column.AssignDense(num_rows);
 	const auto coefficients = column.MutableDense().data();
-	ForEachRead(site.node, reads, qualified, [&](idx_t row, idx_t entry) {
+	ForEachTermRead(site.node, reads, qualifier_scope, selected_rows, [&](idx_t row, idx_t entry) {
 		coefficients[row] = numbers[entry];
 		null_rows[row] = null_rows[row] || nulls[entry];
 		for (auto variable : absent) {
@@ -1558,7 +1621,7 @@ void DecideModelEmitter::Polynomial(idx_t root, const vector<TermFilterState> &f
 		const auto program = AlgebraProductProgram(tree, algebra_term, product.var_a, product.var_b,
 		                                          product.coefficient != nullptr, product.sign, site, i, &var_a, &var_b);
 		EvaluatedConstraint::BilinearTerm column {var_a, var_b, CoefficientColumn()};
-		ReadPart(site, program, product.qualifier_scope_idx != DConstants::INVALID_INDEX, algebra_term.sign,
+		ReadPart(site, program, product.qualifier_scope_idx, algebra_term.sign,
 		         product.inputs, {var_a, var_b}, column.row_coefficients, null_rows);
 		auto &filter = filters[clause.lhs_terms.size() + i];
 		if (product.avg_scale) {
@@ -1592,7 +1655,7 @@ void DecideModelEmitter::Polynomial(idx_t root, const vector<TermFilterState> &f
 			const auto program = AlgebraTermProgram(tree, algebra_term, inner, site, t, "E square", &variable);
 			square.variable_indices.push_back(gstate.ReadVariable(variable, inner.frame_read));
 			square.row_coefficients.emplace_back();
-			ReadPart(site, program, group.qualifier_scope_idx != DConstants::INVALID_INDEX, algebra_term.sign,
+			ReadPart(site, program, group.qualifier_scope_idx, algebra_term.sign,
 			         inner.inputs, {variable}, square.row_coefficients.back(), null_rows);
 			if (group.avg_scale) {
 				ScaleAvgRows(square.row_coefficients.back(), filter.has_filter, filter.mask, true, num_rows,
@@ -1703,21 +1766,21 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 		auto &site = body.products[i];
 		auto &filter = evaluated.bilinear_filters[i];
 		const auto &tested = columns.Tested(site.node);
+		vector<bool> first, selected_rows;
+		const auto &reads = ReadEntriesOf(site.node, product.qualifier_scope_idx, tested, first, selected_rows);
 		idx_t var_a, var_b;
 		const auto program = AlgebraProductProgram(tree, algebra_term, product.var_a, product.var_b,
 		                                          product.coefficient != nullptr, product.sign, site, i, &var_a, &var_b);
 		// Stage 05 leaves a coefficient of 1 out.
 		auto numbers = program == DConstants::INVALID_INDEX
-		                   ? vector<double>(tested.size(), double(algebra_term.sign))
-		                   : columns.Numbers(site.node, program, tested, nullptr, &site, &product.inputs);
+		                   ? vector<double>(reads.size(), double(algebra_term.sign))
+		                   : columns.Numbers(site.node, program, reads, nullptr, &site, &product.inputs);
 		EvaluatedConstraint::BilinearTerm column {var_a, var_b, CoefficientColumn()};
 		column.row_coefficients.AssignDense(num_rows);
-		const auto qualified = product.qualifier_scope_idx != DConstants::INVALID_INDEX;
 		filter.avg_scale = product.avg_scale;
 		filter.has_filter = true;
 		filter.mask.assign(num_rows, false);
-		vector<bool> first;
-		ForEachRead(site.node, ReadEntriesOf(site.node, qualified, first), qualified, [&](idx_t row, idx_t entry) {
+		ForEachTermRead(site.node, reads, product.qualifier_scope_idx, selected_rows, [&](idx_t row, idx_t entry) {
 			filter.mask[row] = true;
 			column.row_coefficients.Set(row, numbers[entry]);
 		});
@@ -1756,15 +1819,13 @@ vector<TermFilterState> DecideModelEmitter::ObjectiveTerms(idx_t root, const Dec
 		coefficients[t].AssignDense(num_rows);
 		// Stage 05 read a NULL coefficient as 0 (DropNullObjectiveTerms), so none is read here. An entry that reads no
 		// instance of the term's decision gives it no value, so the term is dropped there and its coefficient never
-		// read (D84). A relation-qualified reducer reads each class once, at its first row (language/guide.md §5.1).
+		// read (D84). A relation-qualified reducer reads each class once at its operand's first row, including when the
+		// term's site is nested below that operand.
 		vector<bool> absent, first;
 		const auto &present = columns.ReadEntries(site.node, term, absent);
-		auto numbers = columns.Numbers(site.node, program, present, nullptr, &site, &term.inputs);
-		const auto qualified = term.qualifier_scope_idx != DConstants::INVALID_INDEX;
-		if (qualified) {
-			first = columns.FirstOfEachInstance(site.node, present);
-		}
-		const vector<bool> &reads = qualified ? first : present;
+		vector<bool> selected_rows;
+		const auto &reads = ReadEntriesOf(site.node, term.qualifier_scope_idx, present, first, selected_rows);
+		auto numbers = columns.Numbers(site.node, program, reads, nullptr, &site, &term.inputs);
 		const std::vector<bool> &marked = reads;
 		std::vector<bool> &mask = filter.mask;
 		const auto values = coefficients[t].MutableDense().data();
@@ -1779,13 +1840,15 @@ vector<TermFilterState> DecideModelEmitter::ObjectiveTerms(idx_t root, const Dec
 			// A term outside every reducer is read on each row the objective keeps, at its variant's entry, and
 			// counted once there (Objective).
 			for (auto &routed : container.routed) {
-				read(routed.first, routed.second);
+				if (term.qualifier_scope_idx == DConstants::INVALID_INDEX || selected_rows[routed.first]) {
+					read(routed.first, routed.second);
+				}
 			}
 		} else {
 			// A term in a reducer is read on each member of the G it ranges over: an entry of its operand, which
 			// the reducer's `when` routed and its member tests keep. A reducer that keeps none reads nothing, so its
 			// terms are dropped (D84).
-			ForEachRead(site.node, reads, qualified, read);
+			ForEachTermRead(site.node, reads, term.qualifier_scope_idx, selected_rows, read);
 		}
 		AvgGroups(term.avg_scale, term.avg_group_key, term.child, site.node, filter);
 	}
