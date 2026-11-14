@@ -1547,9 +1547,9 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 	auto &node = *tree.nodes[root];
 	auto &body = node.compiled;
 	auto &objective = *body.objective;
-	const auto expected_sense = op.decide_sense == DecideSense::MINIMIZE ? "minimize" : "maximize";
 	if (!node.algebra || node.algebra->kind != DecideAlgebraKind::OPERATOR ||
-	    node.algebra->operation != expected_sense || node.algebra->children.size() != 1 ||
+	    (node.algebra->operation != "minimize" && node.algebra->operation != "maximize") ||
+	    node.algebra->children.size() != 1 ||
 	    !node.algebra->children[0] || node.algebra->children[0]->kind != DecideAlgebraKind::OPERATOR) {
 		throw InternalException("DECIDE model emitter: objective E node has no direction algebra");
 	}
