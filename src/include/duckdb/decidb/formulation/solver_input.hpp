@@ -248,6 +248,9 @@ struct EmittedRows {
 //! Represents an evaluated constraint ready for the solver
 struct EvaluatedConstraint {
     vector<idx_t> variable_indices;           // Which variable for each term
+    //! The G/O/F node that produces a term's value, when its E formula reads a tree value; INVALID for a decision leaf.
+    //! Kept parallel to `variable_indices` so stage 06 can follow an E-to-node edge directly.
+    vector<idx_t> value_nodes;
     vector<CoefficientColumn> row_coefficients;  // [term_idx] = coefficient column for that term
     //! Printable symbolic label of each term's coefficient expression (parallel to
     //! variable_indices). For a data-weighted aggregate term like `SUM(buy * l_extendedprice)`

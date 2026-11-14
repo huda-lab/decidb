@@ -1301,6 +1301,7 @@ bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const DecideEntryRows &row
 	auto &clause = *body.clause;
 	auto &terms = clause.lhs_terms;
 	const auto &lhs_formula = ClauseLhsFormula(node);
+	evaluated.value_nodes.assign(evaluated.variable_indices.size(), DConstants::INVALID_INDEX);
 	bool has_local_filters = false;
 	bool unfiltered = false;
 	// A filter that keeps every kept row filters nothing, as flat reads it.
@@ -1329,6 +1330,9 @@ bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const DecideEntryRows &row
 		const auto t = ClauseTermSource(term_formula, terms.size(), "linear");
 		auto &site = body.linear[t];
 		const auto program = AlgebraTermProgram(tree, term_formula, terms[t], site, t, "E node");
+		if (terms[t].frame_read == DConstants::INVALID_INDEX) {
+			evaluated.value_nodes[t] = AlgebraTermValueNode(tree, term_formula);
+		}
 		if (site.node == root) {
 			// A term beside the reducers is read on each kept row, and counted once in its group.
 			ReadBesideReducers(root, terms[t], site, program, rows, evaluated.row_coefficients[t], null_rows);

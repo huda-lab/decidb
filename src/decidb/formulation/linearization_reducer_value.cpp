@@ -208,8 +208,7 @@ vector<HelperPlace> PlaceHelpers(const SolverInput &input, const vector<idx_t> &
 		}
 		return var < link_of.size() ? link_of[var] : DConstants::INVALID_INDEX;
 	};
-	auto read = [&](idx_t var, bool takes_members) {
-		const idx_t i = link(var);
+	auto mark_read = [&](idx_t i, bool takes_members) {
 		if (i == DConstants::INVALID_INDEX) {
 			return;
 		}
@@ -218,6 +217,10 @@ vector<HelperPlace> PlaceHelpers(const SolverInput &input, const vector<idx_t> &
 		} else {
 			place[i].held = true;
 		}
+	};
+	auto read = [&](idx_t var, bool takes_members) { mark_read(link(var), takes_members); };
+	auto read_value = [&](idx_t var, idx_t value_node, bool takes_members) {
+		mark_read(link(var, value_node), takes_members);
 	};
 	for (auto var : held) {
 		read(var, false);
@@ -232,8 +235,9 @@ vector<HelperPlace> PlaceHelpers(const SolverInput &input, const vector<idx_t> &
 	}
 	for (auto &ec : input.constraints) {
 		const bool plain = IsPlainLinearRow(input, ec);
-		for (auto var : ec.variable_indices) {
-			read(var, plain);
+		for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
+			const auto value_node = t < ec.value_nodes.size() ? ec.value_nodes[t] : DConstants::INVALID_INDEX;
+			read_value(ec.variable_indices[t], value_node, plain);
 		}
 		for (auto &term : ec.bilinear_terms) {
 			read(term.var_a, false);
@@ -376,7 +380,8 @@ bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, cons
 		const bool grouped = !ec.row_group_ids.empty();
 		for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
 			const idx_t var = ec.variable_indices[t];
-			const idx_t link = candidate(var);
+			const auto value_node = t < ec.value_nodes.size() ? ec.value_nodes[t] : DConstants::INVALID_INDEX;
+			const idx_t link = candidate(var, value_node);
 			if (link == DConstants::INVALID_INDEX) {
 				continue;
 			}
