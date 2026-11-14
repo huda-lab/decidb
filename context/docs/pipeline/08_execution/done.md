@@ -392,13 +392,14 @@ optimizer-owned MIN/MAX forms need it. Tree construction owns the definition E r
 plan-time indices and registers F-node specs before later optimizer consumers need them. The P9.4 regression gate
 passes.
 
-**Node-owned algebra transition.** Each tree node now retains an operator tree: comparison operators and terms on E,
-reducer operators and member terms on G, frame operators and members on O, and the lowered body on F. Its leaves
-identify decision variables, child-node values and compiled data programs. The E emitter reads the comparison and
-term order from that algebra; the G/O emitter walks nodes in children-first order and uses their algebra plus
-node-owned helper direction and labels to build stage 06's member records. The numeric model path still emits
-flattened rows and stage 06 still inlines eligible helper columns; recursive formulation of those operator trees at
-E/G/O/F nodes remains open.
+**Node-owned algebra transition.** Each tree node now retains an operator tree: comparisons, objectives and terms on
+E, reducer operators and member terms on G, frame operators and members on O, and output-to-body relations on F. Its
+leaves identify decision variables, child-node values and compiled data programs. The E emitter reads comparison,
+objective direction and term order from that algebra; the G/O emitter walks nodes in children-first order and uses
+their algebra plus node-owned helper direction and labels to build stage 06's member records. F output links and
+Boolean-product factors are read from their function algebra. The numeric model path still emits flattened rows and
+stage 06 still inlines eligible helper columns; recursive formulation of those operator trees at E/G/O/F nodes
+remains open.
 
 **Cost**, measured before flat was deleted, against flat on one binary (`benchmark/decide/anr_scaling.py --against` a
 flat run): the tree's own time at 10^5 rows is 0.84x to 1.33x flat's on every workload (`flat-sum` the most), and its

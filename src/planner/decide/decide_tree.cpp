@@ -794,6 +794,14 @@ public:
 		return result;
 	}
 
+	unique_ptr<DecideAlgebraNode> AlgebraDecision(idx_t owner, idx_t variable) const {
+		auto result = make_uniq<DecideAlgebraNode>();
+		result->kind = DecideAlgebraKind::DECISION;
+		result->owner = owner;
+		result->decision_var = variable;
+		return result;
+	}
+
 	unique_ptr<DecideAlgebraNode> AlgebraTerm(idx_t owner, const DecideTerm &term, const DecideTermSite &site,
 	                                           idx_t source_term) const {
 		auto result = make_uniq<DecideAlgebraNode>();
@@ -970,6 +978,46 @@ public:
 					                                     body.members.size() + term));
 				}
 				node.algebra = std::move(frame);
+				continue;
+			}
+			if (node.kind == DecideNodeKind::FUNCTION) {
+				auto function = make_uniq<DecideAlgebraNode>();
+				function->kind = DecideAlgebraKind::OPERATOR;
+				function->owner = index;
+				switch (node.function_kind) {
+				case DecideFunctionKind::ABS:
+					function->operation = "define_abs";
+					function->sign = node.abs_needs_bigm ? 1 : 0;
+					break;
+				case DecideFunctionKind::BOOLEAN_PRODUCT:
+					function->operation = "define_boolean_product";
+					break;
+				case DecideFunctionKind::L0_INDICATOR:
+					function->operation = "define_l0_indicator";
+					function->scale = node.l0_m;
+					break;
+				case DecideFunctionKind::DEFINITION:
+					function->operation = node.definition_relation == DecideDefinitionRelation::EQUAL
+					                          ? "define_equal"
+					                      : node.definition_relation == DecideDefinitionRelation::AT_LEAST
+					                          ? "define_at_least"
+					                      : node.definition_relation == DecideDefinitionRelation::AT_MOST
+					                          ? "define_at_most"
+					                          : "define_invalid";
+					break;
+				case DecideFunctionKind::INVALID:
+					throw InternalException("DECIDE tree: function node %llu has no function kind", index);
+				}
+				function->children.push_back(AlgebraDecision(index, node.value_var));
+				if (!node.body) {
+					throw InternalException("DECIDE tree: function node %llu has no algebra body", index);
+				}
+				function->children.push_back(AlgebraExpression(index, *node.body));
+				if (node.function_kind == DecideFunctionKind::ABS &&
+				    node.abs_indicator_var != DConstants::INVALID_INDEX) {
+					function->children.push_back(AlgebraDecision(index, node.abs_indicator_var));
+				}
+				node.algebra = std::move(function);
 				continue;
 			}
 			if (node.body) {
@@ -2386,6 +2434,51 @@ void DecideTree::Validate() const {
 			                                node.definition_relation == DecideDefinitionRelation::INVALID);
 			if (common_invalid || abs_invalid || product_invalid || l0_invalid || definition_invalid) {
 				throw InternalException("DECIDE tree has an invalid function node %llu", i);
+			}
+			const auto function_operation = node.function_kind == DecideFunctionKind::ABS
+			                                    ? "define_abs"
+			                                : node.function_kind == DecideFunctionKind::BOOLEAN_PRODUCT
+			                                    ? "define_boolean_product"
+			                                : node.function_kind == DecideFunctionKind::L0_INDICATOR
+			                                    ? "define_l0_indicator"
+			                                : node.definition_relation == DecideDefinitionRelation::EQUAL
+			                                    ? "define_equal"
+			                                : node.definition_relation == DecideDefinitionRelation::AT_LEAST
+			                                    ? "define_at_least"
+			                                : "define_at_most";
+			const auto expected_children =
+			    2 + (node.function_kind == DecideFunctionKind::ABS &&
+			         node.abs_indicator_var != DConstants::INVALID_INDEX ? 1 : 0);
+			if (!node.algebra || node.algebra->kind != DecideAlgebraKind::OPERATOR ||
+			    node.algebra->operation != function_operation || node.algebra->children.size() != expected_children ||
+			    node.algebra->children[0]->kind != DecideAlgebraKind::DECISION ||
+			    node.algebra->children[0]->decision_var != node.value_var ||
+			    (node.function_kind == DecideFunctionKind::L0_INDICATOR && node.algebra->scale != node.l0_m) ||
+			    (node.function_kind == DecideFunctionKind::ABS &&
+			     node.algebra->sign != (node.abs_needs_bigm ? 1 : 0))) {
+				throw InternalException("DECIDE tree function node %llu has invalid function algebra", i);
+			}
+			if (node.function_kind == DecideFunctionKind::ABS && expected_children == 3 &&
+			    (node.algebra->children[2]->kind != DecideAlgebraKind::DECISION ||
+			     node.algebra->children[2]->decision_var != node.abs_indicator_var)) {
+				throw InternalException("DECIDE tree ABS function node %llu has invalid indicator algebra", i);
+			}
+			if (node.function_kind == DecideFunctionKind::BOOLEAN_PRODUCT) {
+				vector<idx_t> factors;
+				std::function<void(const DecideAlgebraNode &)> collect = [&](const DecideAlgebraNode &algebra) {
+					if (algebra.kind == DecideAlgebraKind::DECISION) {
+						factors.push_back(algebra.decision_var);
+					}
+					for (auto &child : algebra.children) {
+						collect(*child);
+					}
+				};
+				collect(*node.algebra->children[1]);
+				if (factors.size() != 2 ||
+				    std::count(factors.begin(), factors.end(), node.product_bool_var) != 1 ||
+				    std::count(factors.begin(), factors.end(), node.product_other_var) != 1) {
+					throw InternalException("DECIDE tree Boolean-product node %llu has invalid factor algebra", i);
+				}
 			}
 		}
 		if (node.kind == DecideNodeKind::FUNCTION && node.function_kind == DecideFunctionKind::ABS) {

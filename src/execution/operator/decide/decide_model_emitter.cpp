@@ -57,6 +57,60 @@ static ExpressionType ClauseComparison(const DecideNode &node) {
 	return node.algebra->expression_type;
 }
 
+static string FunctionAlgebraName(const DecideNode &node) {
+	switch (node.function_kind) {
+	case DecideFunctionKind::ABS:
+		return "define_abs";
+	case DecideFunctionKind::BOOLEAN_PRODUCT:
+		return "define_boolean_product";
+	case DecideFunctionKind::L0_INDICATOR:
+		return "define_l0_indicator";
+	case DecideFunctionKind::DEFINITION:
+		return node.definition_relation == DecideDefinitionRelation::EQUAL
+		           ? "define_equal"
+		       : node.definition_relation == DecideDefinitionRelation::AT_LEAST
+		           ? "define_at_least"
+	       : node.definition_relation == DecideDefinitionRelation::AT_MOST ? "define_at_most" : "define_invalid";
+	case DecideFunctionKind::INVALID:
+		break;
+	}
+	throw InternalException("DECIDE model emitter: F node has no function algebra kind");
+}
+
+static idx_t FunctionAlgebraOutput(const DecideNode &node) {
+	if (node.kind != DecideNodeKind::FUNCTION || !node.algebra ||
+	    node.algebra->kind != DecideAlgebraKind::OPERATOR ||
+	    node.algebra->operation != FunctionAlgebraName(node) ||
+	    node.algebra->children.size() != 2 +
+	        (node.function_kind == DecideFunctionKind::ABS && node.abs_indicator_var != DConstants::INVALID_INDEX)) {
+		throw InternalException("DECIDE model emitter: F node has no output algebra");
+	}
+	const auto &output = *node.algebra->children[0];
+	if (output.kind != DecideAlgebraKind::DECISION || output.decision_var != node.value_var) {
+		throw InternalException("DECIDE model emitter: F node output algebra names the wrong decision");
+	}
+	if (node.function_kind == DecideFunctionKind::ABS && node.algebra->children.size() == 3 &&
+	    (node.algebra->children[2]->kind != DecideAlgebraKind::DECISION ||
+	     node.algebra->children[2]->decision_var != node.abs_indicator_var)) {
+		throw InternalException("DECIDE model emitter: ABS F node has the wrong indicator algebra");
+	}
+	return output.decision_var;
+}
+
+static vector<idx_t> AlgebraDecisionLeaves(const DecideAlgebraNode &root) {
+	vector<idx_t> result;
+	std::function<void(const DecideAlgebraNode &)> walk = [&](const DecideAlgebraNode &node) {
+		if (node.kind == DecideAlgebraKind::DECISION) {
+			result.push_back(node.decision_var);
+		}
+		for (auto &child : node.children) {
+			walk(*child);
+		}
+	};
+	walk(root);
+	return result;
+}
+
 DecideModelEmitter::DecideModelEmitter(const PhysicalDecide &op, ClientContext &context, const DecideTree &tree,
                                        const DecideDescent &descent, DecideTreeColumns &columns,
                                        DecideGlobalSinkState &gstate, PerGroupCache &groups,
@@ -362,10 +416,16 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 		if (node.function_kind != DecideFunctionKind::BOOLEAN_PRODUCT) {
 			continue;
 		}
+		const auto output = FunctionAlgebraOutput(node);
+		const auto factors = AlgebraDecisionLeaves(*node.algebra->children[1]);
+		if (factors.size() != 2 || std::count(factors.begin(), factors.end(), node.product_bool_var) != 1 ||
+		    std::count(factors.begin(), factors.end(), node.product_other_var) != 1) {
+			throw InternalException("DECIDE model emitter: Boolean-product F node has malformed factor algebra");
+		}
 		LogicalDecide::BilinearLink link;
-		link.aux_idx = node.value_var;
-		link.bool_var_idx = node.product_bool_var;
-		link.other_var_idx = node.product_other_var;
+		link.aux_idx = output;
+		link.bool_var_idx = factors[0] == node.product_bool_var ? factors[0] : factors[1];
+		link.other_var_idx = factors[0] == node.product_other_var ? factors[0] : factors[1];
 		link.source_clause_id = node.source_clause_id;
 		link.removal_group_id = node.removal_group_id;
 		gstate.evaluated_bilinear_links.push_back(link);
@@ -390,17 +450,18 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 		auto &node = *tree.nodes[root];
 		if (node.kind == DecideNodeKind::FUNCTION) {
 			FunctionAbsence(root);
+			const auto variable = FunctionAlgebraOutput(node);
 			if (node.function_kind == DecideFunctionKind::ABS) {
 				for (auto envelope : node.abs_envelope_roots) {
-					DefinitionAbsence(envelope, node.value_var);
+					DefinitionAbsence(envelope, variable);
 				}
 			} else if (node.function_kind == DecideFunctionKind::L0_INDICATOR) {
 				for (auto link : node.l0_link_roots) {
-					DefinitionAbsence(link, node.value_var);
+					DefinitionAbsence(link, variable);
 				}
 			} else if (node.function_kind == DecideFunctionKind::DEFINITION) {
 				for (auto definition : node.definition_roots) {
-					DefinitionAbsence(definition, node.value_var);
+					DefinitionAbsence(definition, variable);
 				}
 			}
 		} else if (node.l0_function_owner != DConstants::INVALID_INDEX ||
@@ -430,13 +491,14 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 
 void DecideModelEmitter::FunctionAbsence(idx_t function) {
 	const auto &node = *tree.nodes[function];
-	if (node.kind != DecideNodeKind::FUNCTION || node.value_var >= gstate.absent_reads.size()) {
+	const auto variable = FunctionAlgebraOutput(node);
+	if (variable >= gstate.absent_reads.size()) {
 		throw InternalException("DECIDE model emitter: invalid function absence source");
 	}
-	if (node.value_var < tree.variable_scopes.size() && tree.variable_scopes[node.value_var].IsGlobal()) {
+	if (variable < tree.variable_scopes.size() && tree.variable_scopes[variable].IsGlobal()) {
 		return;
 	}
-	auto &absent = gstate.absent_reads[node.value_var];
+	auto &absent = gstate.absent_reads[variable];
 	vector<bool> present(num_rows, false);
 	const auto &container = descent.Containers()[function];
 	for (idx_t entry = 0; entry < container.Count(); entry++) {
@@ -581,12 +643,13 @@ EvaluatedConstraint DecideModelEmitter::AbsEnvelope(idx_t function, idx_t root, 
 	    tree.nodes[function]->function_kind != DecideFunctionKind::ABS) {
 		throw InternalException("DECIDE model emitter: invalid ABS F envelope ownership");
 	}
+	const auto value_var = FunctionAlgebraOutput(*tree.nodes[function]);
 	const auto &envelopes = tree.nodes[function]->abs_envelope_roots;
 	if (root >= tree.nodes.size() || std::find(envelopes.begin(), envelopes.end(), root) == envelopes.end()) {
 		throw InternalException("DECIDE model emitter: invalid ABS F envelope ownership");
 	}
 	auto &clause = *tree.nodes[root]->compiled.clause;
-	if (clause.abs_aux_idx != tree.nodes[function]->value_var) {
+	if (clause.abs_aux_idx != value_var) {
 		throw InternalException("DECIDE model emitter: ABS F envelope belongs to a different auxiliary");
 	}
 	// Preserve the lower row's written algebra: reducers contribute all of their members, while terms beside
