@@ -2,6 +2,7 @@
 
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
@@ -11,8 +12,10 @@
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 
 #include <algorithm>
@@ -726,12 +729,193 @@ public:
 		return index;
 	}
 
+	string AlgebraOperation(const Expression &expression) const {
+		switch (expression.GetExpressionClass()) {
+		case ExpressionClass::BOUND_FUNCTION:
+			return expression.Cast<BoundFunctionExpression>().function.name;
+		case ExpressionClass::BOUND_AGGREGATE:
+			return DecideTreeReducerName(expression.Cast<BoundAggregateExpression>());
+		case ExpressionClass::BOUND_COMPARISON:
+		case ExpressionClass::BOUND_OPERATOR:
+		case ExpressionClass::BOUND_CONJUNCTION:
+			return ExpressionTypeToString(expression.GetExpressionType());
+		case ExpressionClass::BOUND_CAST:
+			return "cast";
+		case ExpressionClass::BOUND_CASE:
+			return "case";
+		default:
+			return expression.ToString();
+		}
+	}
+
+	unique_ptr<DecideAlgebraNode> AlgebraExpression(idx_t owner, const Expression &expression) const {
+		auto result = make_uniq<DecideAlgebraNode>();
+		result->owner = owner;
+		result->expression_class = expression.GetExpressionClass();
+		result->expression_type = expression.GetExpressionType();
+		if (expression.GetExpressionClass() == ExpressionClass::BOUND_REF) {
+			const auto column = expression.Cast<BoundReferenceExpression>().index;
+			if (column >= tree->input_column_count) {
+				result->kind = DecideAlgebraKind::TREE_VALUE;
+				result->tree_value_node = column - tree->input_column_count;
+				return result;
+			}
+		}
+		if (expression.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+			auto &reference = expression.Cast<BoundColumnRefExpression>();
+			if (reference.binding.table_index == op.decide_index) {
+				result->kind = DecideAlgebraKind::DECISION;
+				result->decision_var = reference.binding.column_index;
+				return result;
+			}
+		}
+		vector<const Expression *> children;
+		ExpressionIterator::EnumerateChildren(expression, [&](const Expression &child) { children.push_back(&child); });
+		if (children.empty()) {
+			result->kind = DecideAlgebraKind::VALUE;
+			result->value = expression.Copy();
+			return result;
+		}
+		result->kind = DecideAlgebraKind::OPERATOR;
+		result->operation = AlgebraOperation(expression);
+		for (auto child : children) {
+			result->children.push_back(AlgebraExpression(owner, *child));
+		}
+		return result;
+	}
+
+	unique_ptr<DecideAlgebraNode> AlgebraProgram(idx_t owner, idx_t site, idx_t program) const {
+		auto result = make_uniq<DecideAlgebraNode>();
+		result->kind = DecideAlgebraKind::PROGRAM;
+		result->owner = owner;
+		result->program_node = site;
+		result->program = program;
+		return result;
+	}
+
+	unique_ptr<DecideAlgebraNode> AlgebraTerm(idx_t owner, const DecideTerm &term, const DecideTermSite &site,
+	                                           idx_t source_term) const {
+		auto result = make_uniq<DecideAlgebraNode>();
+		result->kind = DecideAlgebraKind::OPERATOR;
+		result->owner = owner;
+		result->operation = "*";
+		result->sign = term.sign;
+		result->scale = static_cast<double>(term.sign);
+		result->source_term = source_term;
+		if (term.variable_index != DConstants::INVALID_INDEX) {
+			auto variable = make_uniq<DecideAlgebraNode>();
+			variable->kind = DecideAlgebraKind::DECISION;
+			variable->owner = owner;
+			variable->decision_var = term.variable_index;
+			result->children.push_back(std::move(variable));
+		}
+		result->children.push_back(AlgebraProgram(owner, site.node, site.program));
+		return result;
+	}
+
+	void BuildAlgebra() {
+		for (idx_t index = 0; index < tree->nodes.size(); index++) {
+			auto &node = *tree->nodes[index];
+			auto &body = node.compiled;
+			if (body.clause) {
+				auto clause = make_uniq<DecideAlgebraNode>();
+				clause->kind = DecideAlgebraKind::OPERATOR;
+				clause->owner = index;
+				clause->expression_class = ExpressionClass::BOUND_COMPARISON;
+				clause->expression_type = body.clause->comparison_type;
+				clause->operation = ExpressionTypeToString(body.clause->comparison_type);
+				auto lhs = make_uniq<DecideAlgebraNode>();
+				lhs->kind = DecideAlgebraKind::OPERATOR;
+				lhs->owner = index;
+				lhs->operation = "+";
+				for (idx_t term = 0; term < body.clause->lhs_terms.size(); term++) {
+					lhs->children.push_back(AlgebraTerm(index, body.clause->lhs_terms[term], body.linear[term], term));
+				}
+				for (idx_t product = 0; product < body.clause->bilinear_terms.size(); product++) {
+					auto &term = body.clause->bilinear_terms[product];
+					auto expression = make_uniq<DecideAlgebraNode>();
+					expression->kind = DecideAlgebraKind::OPERATOR;
+					expression->owner = index;
+					expression->operation = "*";
+					expression->sign = term.sign;
+					expression->scale = static_cast<double>(term.sign);
+					expression->source_term = product;
+					auto left = make_uniq<DecideAlgebraNode>();
+					left->kind = DecideAlgebraKind::DECISION;
+					left->owner = index;
+					left->decision_var = term.var_a;
+					auto right = make_uniq<DecideAlgebraNode>();
+					right->kind = DecideAlgebraKind::DECISION;
+					right->owner = index;
+					right->decision_var = term.var_b;
+					expression->children.push_back(std::move(left));
+					expression->children.push_back(std::move(right));
+					if (term.coefficient) {
+						expression->children.push_back(AlgebraProgram(index, body.products[product].node,
+						                                                 body.products[product].program));
+					}
+					lhs->children.push_back(std::move(expression));
+				}
+				for (idx_t group = 0; group < body.clause->quadratic_groups.size(); group++) {
+					auto square = make_uniq<DecideAlgebraNode>();
+					square->kind = DecideAlgebraKind::OPERATOR;
+					square->owner = index;
+					square->operation = "square";
+					square->scale = body.clause->quadratic_groups[group].sign;
+					square->source_term = group;
+					for (idx_t term = 0; term < body.clause->quadratic_groups[group].inner_terms.size(); term++) {
+						square->children.push_back(AlgebraTerm(
+						    index, body.clause->quadratic_groups[group].inner_terms[term], body.squares[group][term], term));
+					}
+					lhs->children.push_back(std::move(square));
+				}
+				clause->children.push_back(std::move(lhs));
+				clause->children.push_back(AlgebraProgram(index, index, body.rhs));
+				node.algebra = std::move(clause);
+				continue;
+			}
+			if (node.kind == DecideNodeKind::REDUCER && node.function) {
+				auto reducer = make_uniq<DecideAlgebraNode>();
+				reducer->kind = DecideAlgebraKind::OPERATOR;
+				reducer->owner = index;
+				reducer->expression_class = ExpressionClass::BOUND_AGGREGATE;
+				reducer->operation = node.aggregate;
+				const auto operand = DecideTreeOperand(*tree, index);
+				for (auto &argument : tree->nodes[operand]->arguments) {
+					reducer->children.push_back(AlgebraExpression(operand, *argument));
+				}
+				node.algebra = std::move(reducer);
+				continue;
+			}
+			if ((node.kind == DecideNodeKind::REDUCER || node.kind == DecideNodeKind::FRAME) &&
+			    !body.members.empty()) {
+				auto reducer = make_uniq<DecideAlgebraNode>();
+				reducer->kind = DecideAlgebraKind::OPERATOR;
+				reducer->owner = index;
+				reducer->operation = node.kind == DecideNodeKind::FRAME ? "frame" : node.aggregate;
+				for (idx_t term = 0; term < body.members.size(); term++) {
+					reducer->children.push_back(AlgebraTerm(index, body.members[term], body.linear[term], term));
+				}
+				for (idx_t term = 0; term < body.fallback.size(); term++) {
+					reducer->children.push_back(
+					    AlgebraTerm(index, body.fallback[term], body.fallback_sites[term], term));
+				}
+				node.algebra = std::move(reducer);
+				continue;
+			}
+			if (node.body) {
+				node.algebra = AlgebraExpression(index, *node.body);
+			}
+		}
+	}
+
 	//! The bodies from what stage 05 lowered, then the order and ranks they read.
 	unique_ptr<DecideTree> Finish() {
 		sources.link_nodes = link_nodes;
 		sources.record_nodes = record_nodes;
 		tree->frame_nodes = frame_nodes;
 		CompileDecideTree(context, op, *tree, sources);
+		BuildAlgebra();
 		PostOrder();
 		ErrorRanks();
 		tree->Validate();
@@ -1940,6 +2124,63 @@ void DecideTree::Validate() const {
 	}
 	for (idx_t i = 0; i < nodes.size(); i++) {
 		auto &node = *nodes[i];
+		if (node.algebra) {
+			std::function<void(const DecideAlgebraNode &)> validate_algebra = [&](const DecideAlgebraNode &algebra) {
+				if (algebra.owner >= nodes.size()) {
+					throw InternalException("DECIDE tree node %llu has algebra with an invalid owner", i);
+				}
+				switch (algebra.kind) {
+				case DecideAlgebraKind::OPERATOR:
+					if (algebra.operation.empty() || algebra.value ||
+					    (algebra.children.empty() && algebra.operation != "+")) {
+						throw InternalException("DECIDE tree node %llu has a malformed algebra operator", i);
+					}
+					break;
+				case DecideAlgebraKind::VALUE:
+					if (!algebra.value || !algebra.children.empty()) {
+						throw InternalException("DECIDE tree node %llu has a malformed algebra value", i);
+					}
+					break;
+				case DecideAlgebraKind::TREE_VALUE:
+					if (algebra.tree_value_node >= nodes.size() || !algebra.children.empty()) {
+						throw InternalException("DECIDE tree node %llu has an invalid algebra tree-value read", i);
+					}
+					break;
+				case DecideAlgebraKind::DECISION:
+					if (algebra.decision_var >= value_nodes.size() || !algebra.children.empty()) {
+						throw InternalException("DECIDE tree node %llu has an invalid algebra decision read", i);
+					}
+					break;
+				case DecideAlgebraKind::PROGRAM:
+					if (algebra.program_node >= nodes.size() || !algebra.children.empty() ||
+					    (algebra.program != DConstants::INVALID_INDEX &&
+					     algebra.program >= nodes[algebra.program_node]->programs.size())) {
+						throw InternalException("DECIDE tree node %llu has an invalid algebra program read", i);
+					}
+					break;
+				}
+				for (auto &child : algebra.children) {
+					if (!child) {
+						throw InternalException("DECIDE tree node %llu has a null algebra child", i);
+					}
+					validate_algebra(*child);
+				}
+			};
+			validate_algebra(*node.algebra);
+			if (node.compiled.clause &&
+			    (node.algebra->kind != DecideAlgebraKind::OPERATOR ||
+			     node.algebra->expression_class != ExpressionClass::BOUND_COMPARISON ||
+			     node.algebra->expression_type != node.compiled.clause->comparison_type ||
+			     node.algebra->children.size() != 2)) {
+				throw InternalException("DECIDE tree clause node %llu has no comparison algebra", i);
+			}
+			if (node.link != DConstants::INVALID_INDEX && node.frame == DConstants::INVALID_INDEX &&
+			    node.kind == DecideNodeKind::REDUCER &&
+			    (node.algebra->kind != DecideAlgebraKind::OPERATOR || node.algebra->operation != node.aggregate ||
+			     node.algebra->children.size() != node.compiled.members.size())) {
+				throw InternalException("DECIDE tree reducer node %llu has no aligned value algebra", i);
+			}
+		}
 		if (node.kind == DecideNodeKind::FUNCTION) {
 			const bool common_invalid =
 			    (node.function_kind != DecideFunctionKind::ABS &&
@@ -2035,6 +2276,12 @@ void DecideTree::Validate() const {
 		if (node.key != DConstants::INVALID_INDEX && node.key >= keys.size()) {
 			throw InternalException("DECIDE tree node %llu has an invalid key", i);
 		}
+		if (node.compiled.clause && !node.algebra) {
+			throw InternalException("DECIDE tree clause node %llu has no algebra", i);
+		}
+		if (node.kind == DecideNodeKind::FUNCTION && node.body && !node.algebra) {
+			throw InternalException("DECIDE tree function node %llu has no algebra", i);
+		}
 		for (auto child : node.children) {
 			if (child >= nodes.size() ||
 			    std::find(node.dependencies.begin(), node.dependencies.end(), child) == node.dependencies.end()) {
@@ -2119,6 +2366,35 @@ void DecideTree::Validate() const {
 
 string DecideTree::ToString() const {
 	std::ostringstream result;
+	std::function<void(const DecideAlgebraNode &, std::ostringstream &)> write_algebra =
+	    [&](const DecideAlgebraNode &algebra, std::ostringstream &out) {
+		    switch (algebra.kind) {
+		    case DecideAlgebraKind::OPERATOR:
+			    out << algebra.operation << "(";
+			    for (idx_t child = 0; child < algebra.children.size(); child++) {
+				    out << (child ? ", " : "");
+				    write_algebra(*algebra.children[child], out);
+			    }
+			    out << ")";
+			    break;
+		    case DecideAlgebraKind::VALUE:
+			    out << (algebra.value ? algebra.value->ToString() : "<missing-value>");
+			    break;
+		    case DecideAlgebraKind::TREE_VALUE:
+			    out << "node-value(" << algebra.tree_value_node << ")";
+			    break;
+		    case DecideAlgebraKind::DECISION:
+			    out << "x" << algebra.decision_var;
+			    break;
+		    case DecideAlgebraKind::PROGRAM:
+			    if (algebra.program == DConstants::INVALID_INDEX) {
+				    out << "1";
+			    } else {
+				    out << "program(" << algebra.program_node << "," << algebra.program << ")";
+			    }
+			    break;
+		    }
+	    };
 	for (idx_t i = 0; i < nodes.size(); i++) {
 		auto &node = *nodes[i];
 		result << i << " "
@@ -2168,7 +2444,12 @@ string DecideTree::ToString() const {
 		for (idx_t d = 0; d < node.dependencies.size(); d++) {
 			result << (d ? "," : "") << node.dependencies[d];
 		}
-		result << "] columns=" << node.columns.size() << " : " << node.text << "\n";
+		result << "] columns=" << node.columns.size();
+		if (node.algebra) {
+			result << " formula=";
+			write_algebra(*node.algebra, result);
+		}
+		result << " : " << node.text << "\n";
 	}
 	result << "postorder=[";
 	for (idx_t i = 0; i < eval_order.size(); i++) {

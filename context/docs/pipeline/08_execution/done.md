@@ -2,9 +2,9 @@
 
 Runs the relational input, evaluates every prepared coefficient and grouping
 against the materialized data, invokes the solver contract, and projects the
-solution back onto rows. It implements no rewrites, no backend-specific
-formulation, and no algebra: the constraints and objective arrive already
-flattened into terms.
+solution back onto rows. It implements no rewrites or backend-specific
+formulation. The tree records each node's operator structure, while the model
+emitter evaluates its compiled terms into solver-neutral row records.
 
 `PhysicalDecide` is a **blocking** operator: the optimal value of any one decision
 depends on the whole dataset, so it must consume its entire input before it can
@@ -391,6 +391,12 @@ lowering wires that read to the child F value, and term splitting uses the reser
 optimizer-owned MIN/MAX forms need it. Tree construction owns the definition E row. Its early preparation reserves
 plan-time indices and registers F-node specs before later optimizer consumers need them. The P9.4 regression gate
 passes.
+
+**Node-owned algebra transition.** Each tree node now retains an operator tree: comparison operators and terms on E,
+reducer operators and member terms on G, and the lowered body on F. Its leaves identify decision variables, child-node
+values and compiled data programs. The nested value-link emitter walks G nodes in children-first order and uses each
+G's algebra to select its member terms. The numeric model path still emits flattened rows and stage 06 still inlines
+eligible helper columns; recursive formulation of those operator trees at E/G/F nodes remains open.
 
 **Cost**, measured before flat was deleted, against flat on one binary (`benchmark/decide/anr_scaling.py --against` a
 flat run): the tree's own time at 10^5 rows is 0.84x to 1.33x flat's on every workload (`flat-sum` the most), and its

@@ -25,6 +25,27 @@ enum class DecideFunctionKind : uint8_t { INVALID, ABS, BOOLEAN_PRODUCT, L0_INDI
 enum class DecideDefinitionRelation : uint8_t { INVALID, AT_LEAST, AT_MOST, EQUAL };
 enum class DecideTreePer : uint8_t { ROW, KEY, ONE };
 
+//! The algebra a tree node owns. Operators keep their children as nodes; data values, decision values and compiled
+//! programs are leaves. This is the formula tree in ANR's E/G/O drawing, with F and decision reads as extensions.
+enum class DecideAlgebraKind : uint8_t { OPERATOR, VALUE, TREE_VALUE, DECISION, PROGRAM };
+
+struct DecideAlgebraNode {
+	DecideAlgebraKind kind = DecideAlgebraKind::VALUE;
+	idx_t owner = DConstants::INVALID_INDEX;
+	ExpressionClass expression_class = ExpressionClass::INVALID;
+	ExpressionType expression_type = ExpressionType::INVALID;
+	string operation;
+	idx_t tree_value_node = DConstants::INVALID_INDEX;
+	idx_t decision_var = DConstants::INVALID_INDEX;
+	idx_t program_node = DConstants::INVALID_INDEX;
+	idx_t program = DConstants::INVALID_INDEX;
+	idx_t source_term = DConstants::INVALID_INDEX;
+	int sign = 1;
+	double scale = 1.0;
+	unique_ptr<Expression> value;
+	vector<unique_ptr<DecideAlgebraNode>> children;
+};
+
 //! A scalar body's reference to a child's result. The physical column is outside
 //! the input's columns: input_column_count + node. Decision-valued results are
 //! symbolic forms; a scalar evaluator must not interpret them as SQL values.
@@ -175,6 +196,8 @@ struct DecideNode {
 	vector<unique_ptr<Expression>> columns;
 	//! Scalar algebra with child results replaced by child_reads' physical columns.
 	unique_ptr<Expression> body;
+	//! The operator tree this E/G/F formulates: comparison, reducer expression, or function body.
+	unique_ptr<DecideAlgebraNode> algebra;
 	unique_ptr<Expression> rhs;
 	unique_ptr<Expression> fallback;
 	//! The generated helper equation wrapped in its owning condition and per-instance key; a child E owns its row.

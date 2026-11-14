@@ -1536,14 +1536,31 @@ void DecideModelEmitter::FrameMembers(idx_t node, const LogicalDecide::ReducerVa
 }
 
 void DecideModelEmitter::ValueLinks() {
-	for (auto &link : op.reducer_value_links) {
-		const auto node = tree.value_nodes[link.value_var];
-		auto &body = tree.nodes[node]->compiled;
+	// Reducer definitions are emitted from their G/O nodes, children first. The tree's algebra records the operator and
+	// each member term's place; optimizer link metadata supplies only the helper's formulation sides and label.
+	for (auto node : tree.eval_order) {
+		auto &tree_node = *tree.nodes[node];
+		if (tree_node.link == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		if (tree_node.link >= op.reducer_value_links.size()) {
+			throw InternalException("DECIDE model emitter: tree node %llu has an invalid value-link index", node);
+		}
+		auto &link = op.reducer_value_links[tree_node.link];
+		if (link.value_var >= tree.value_nodes.size() || tree.value_nodes[link.value_var] != node) {
+			throw InternalException("DECIDE model emitter: value-link %llu is not owned by its G/O node", tree_node.link);
+		}
+		auto &body = tree_node.compiled;
 		if (link.frame != DConstants::INVALID_INDEX) {
 			auto spec = DecideValueLinkSpec(link);
 			FrameMembers(node, link, spec.members);
 			gstate.evaluated_value_links.push_back(std::move(spec));
 			continue;
+		}
+		if (!tree_node.algebra || tree_node.algebra->kind != DecideAlgebraKind::OPERATOR ||
+		    tree_node.algebra->operation != tree_node.aggregate ||
+		    tree_node.algebra->children.size() != body.members.size()) {
+			throw InternalException("DECIDE model emitter: G node %llu has no aligned reducer algebra", node);
 		}
 		const auto site = DecideTreeOperand(tree, node);
 		auto &entries = descent.Containers()[site].parent_slots;
@@ -1559,7 +1576,15 @@ void DecideModelEmitter::ValueLinks() {
 		}
 		// Each term's coefficient on every row it is computed on, a row in no group among them, which flat reads, and
 		// an AVG's divided by its group's members.
-		for (idx_t t = 0; t < body.members.size(); t++) {
+		vector<bool> emitted_terms(body.members.size(), false);
+		for (auto &algebra_term : tree_node.algebra->children) {
+			if (!algebra_term || algebra_term->kind != DecideAlgebraKind::OPERATOR ||
+			    algebra_term->operation != "*" || algebra_term->source_term >= body.members.size() ||
+			    emitted_terms[algebra_term->source_term]) {
+				throw InternalException("DECIDE model emitter: G node %llu has a malformed member term", node);
+			}
+			const auto t = algebra_term->source_term;
+			emitted_terms[t] = true;
 			auto &term = body.members[t];
 			auto &site_t = body.linear[t];
 			auto numbers = columns.Numbers(site, site_t.program, members.reads, nullptr, &site_t, &term.inputs);
@@ -1573,6 +1598,9 @@ void DecideModelEmitter::ValueLinks() {
 			if (link.agg_name == "avg") {
 				ScaleAvgRows(column, true, listed_rows, false, num_rows, listed.row_group_ids, listed.num_groups);
 			}
+		}
+		if (std::find(emitted_terms.begin(), emitted_terms.end(), false) != emitted_terms.end()) {
+			throw InternalException("DECIDE model emitter: G node %llu omitted a reducer member term", node);
 		}
 		auto spec = DecideValueLinkSpec(link);
 		DecideListRowMembers(listed, num_rows, link.label, spec.members);
