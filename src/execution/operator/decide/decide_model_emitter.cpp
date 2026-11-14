@@ -1241,10 +1241,13 @@ vector<bool> DecideModelEmitter::ReadInReducer(const DecideTerm &term, const Dec
 	// shares, which no test reads, and leaves the member's group no value. Flat computes it on every member, and
 	// leaves a relation-qualified one's repeats out afterwards.
 	vector<bool> nulls(descent.Containers()[site.node].Count(), false);
-	vector<bool> first, selected_rows;
-	const auto &tested = columns.Tested(site.node);
-	const auto &reads = ReadEntriesOf(site.node, term.qualifier_scope_idx, tested, first, selected_rows);
-	auto numbers = columns.Numbers(site.node, program, reads, &nulls, &site, &term.inputs);
+	vector<bool> first, selected_rows, candidates;
+	const auto &present = columns.ReadEntries(site.node, term, candidates);
+	const auto &reads = ReadEntriesOf(site.node, term.qualifier_scope_idx, present, first, selected_rows);
+	// Evaluate the coefficient before the relation qualifier removes rows outside its classes. The old lowering reads
+	// these values on the reducer's kept rows, then applies the qualifier to the members; a NaN on a row in no class
+	// still raises here.
+	auto numbers = columns.Numbers(site.node, program, present, &nulls, &site, &term.inputs);
 	filter.avg_scale = term.avg_scale;
 	vector<bool> members;
 	column.AssignDense(num_rows);
@@ -1252,12 +1255,16 @@ vector<bool> DecideModelEmitter::ReadInReducer(const DecideTerm &term, const Dec
 	const auto values = numbers.data();
 	const std::vector<bool> &null_entries = nulls;
 	std::vector<bool> &nulled = null_rows;
-		Filter(site.node, term.qualifier_scope_idx, reads, selected_rows, filter, members,
+	Filter(site.node, term.qualifier_scope_idx, reads, selected_rows, filter, members,
 	       [&](idx_t row, idx_t entry) {
-		       coefficients[row] = values[entry];
-		       if (null_entries[entry]) {
-			       nulled[row] = true;
-		       }
+			if (columns.TermAbsentAt(term, row)) {
+				nulled[row] = true;
+				return;
+			}
+			coefficients[row] = values[entry];
+			if (null_entries[entry]) {
+				nulled[row] = true;
+			}
 	       });
 	return members;
 }
@@ -1819,19 +1826,21 @@ vector<TermFilterState> DecideModelEmitter::ObjectiveTerms(idx_t root, const Dec
 		coefficients[t].AssignDense(num_rows);
 		// Stage 05 read a NULL coefficient as 0 (DropNullObjectiveTerms), so none is read here. An entry that reads no
 		// instance of the term's decision gives it no value, so the term is dropped there and its coefficient never
-		// read (D84). A relation-qualified reducer reads each class once at its operand's first row, including when the
-		// term's site is nested below that operand.
+		// read (D84). The coefficient is still evaluated on the rows the term's own scope keeps before the relation
+		// qualifier selects members; this preserves errors from a coefficient on a row in no qualified class.
 		vector<bool> absent, first;
 		const auto &present = columns.ReadEntries(site.node, term, absent);
 		vector<bool> selected_rows;
 		const auto &reads = ReadEntriesOf(site.node, term.qualifier_scope_idx, present, first, selected_rows);
-		auto numbers = columns.Numbers(site.node, program, reads, nullptr, &site, &term.inputs);
+		auto numbers = columns.Numbers(site.node, program, present, nullptr, &site, &term.inputs);
 		const std::vector<bool> &marked = reads;
 		std::vector<bool> &mask = filter.mask;
 		const auto values = coefficients[t].MutableDense().data();
 		const auto computed = numbers.data();
 		auto read = [&](idx_t row, idx_t entry) {
-			if (marked[entry]) {
+			// A keyed E entry may represent rows where this auxiliary alternates between present and absent. Its
+			// coefficient is shared by the entry, but the objective term is present only on rows with a value.
+			if (marked[entry] && !columns.TermAbsentAt(term, row)) {
 				mask[row] = true;
 				values[row] = computed[entry];
 			}

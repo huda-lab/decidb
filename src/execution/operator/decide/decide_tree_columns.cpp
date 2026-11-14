@@ -371,10 +371,20 @@ const vector<bool> &DecideTreeColumns::ReadEntries(idx_t node, const DecideTerm 
 	if (!MayBeAbsent(term)) {
 		return tested;
 	}
-	present = tested;
-	auto &rows = descent.Containers()[node].rows;
-	for (idx_t e = 0; e < present.size(); e++) {
-		present[e] = present[e] && !TermAbsentAt(term, rows[e]);
+	// A non-row E entry can stand for several input rows. An auxiliary that is absent on the entry's first row must
+	// not hide a value it has on another row. Keep the entry when any represented row can read the term; the emitter
+	// checks absence again for each row.
+	auto &container = descent.Containers()[node];
+	present.assign(tested.size(), false);
+	if (tree.nodes[node]->per == DecideTreePer::ROW) {
+		for (idx_t entry = 0; entry < present.size(); entry++) {
+			present[entry] = tested[entry] && !TermAbsentAt(term, container.rows[entry]);
+		}
+	} else {
+		for (auto &read : container.routed) {
+			present[read.second] = present[read.second] ||
+			                       (tested[read.second] && !TermAbsentAt(term, read.first));
+		}
 	}
 	return present;
 }
