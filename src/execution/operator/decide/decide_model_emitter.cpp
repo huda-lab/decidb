@@ -468,11 +468,11 @@ KeyedMapping DecideModelEmitter::SignatureMapping(idx_t scope) {
 	return mapping;
 }
 
-DecideModelEmitter::LinkMembers DecideModelEmitter::Members(idx_t link) {
-	auto &body = tree.nodes[link]->compiled;
-	const auto site = DecideTreeOperand(tree, link);
+DecideModelEmitter::LinkMembers DecideModelEmitter::Members(idx_t node) {
+	auto &body = tree.nodes[node]->compiled;
+	const auto site = DecideTreeOperand(tree, node);
 	auto &entries = descent.Containers()[site];
-	auto &slots = descent.Containers()[link].groups;
+	auto &slots = descent.Containers()[node].groups;
 	// Flat computes the members on the rows its reducer's `when` and NULL tests keep where every decision they read
 	// has an instance, a row in no group of its `by` key among them, and a
 	// relation-qualified reducer lists each class once in its group, at its first row (language/guide.md §5.1).
@@ -486,7 +486,7 @@ DecideModelEmitter::LinkMembers DecideModelEmitter::Members(idx_t link) {
 			members.reads[e] = members.reads[e] && !columns.TermAbsentAt(term, entries.rows[e]);
 		}
 	}
-	const auto qualified = tree.nodes[link]->value_link_qualifier_scope != DConstants::INVALID_INDEX;
+	const auto qualified = tree.nodes[node]->value_link_qualifier_scope != DConstants::INVALID_INDEX;
 	vector<bool> held(slots.size(), false);
 	for (auto &read :
 	     ReadRows(site, qualified ? columns.FirstOfEachInstance(site, members.reads) : members.reads, qualified)) {
@@ -510,22 +510,22 @@ DecideModelEmitter::LinkMembers DecideModelEmitter::Members(idx_t link) {
 	return members;
 }
 
-KeyedMapping DecideModelEmitter::HelperMapping(idx_t link) {
-	auto &node = *tree.nodes[link];
+KeyedMapping DecideModelEmitter::HelperMapping(idx_t node_index) {
+	auto &node = *tree.nodes[node_index];
 	if (node.kind == DecideNodeKind::FRAME) {
 		// A range frame's helper: a class per window of its frame.
 		auto mapping = DecideFrameWindowMapping(gstate.frame_maps[node.frame]);
 		DecideMapRowsInNoClass(mapping);
 		return mapping;
 	}
-	auto &members = link_members[node.link];
-	members = Members(link);
+	auto &members = link_members[node_index];
+	members = Members(node_index);
 	KeyedMapping mapping;
 	mapping.num_classes = members.groups;
 	mapping.row_to_class.assign(num_rows, DConstants::INVALID_INDEX);
 	// A group with no member has no helper, so a row of it reads none.
-	auto &reducer = descent.Containers()[link];
-	for (auto read : DecideEntryRows(tree, descent, link)) {
+	auto &reducer = descent.Containers()[node_index];
+	for (auto read : DecideEntryRows(tree, descent, node_index)) {
 		mapping.row_to_class[read.first] = members.group_of_slot[reducer.Slot(read.second)];
 	}
 	DecideMapRowsInNoClass(mapping);
@@ -565,9 +565,11 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 	auto definitions = ClauseRoots();
 	definitions.resize(tree.constraint_count);
 	definitions.insert(definitions.end(), tree.function_nodes.begin(), tree.function_nodes.end());
-	link_members.assign(op.reducer_value_links.size(), LinkMembers());
-	for (auto &link : op.reducer_value_links) {
-		definitions.push_back(tree.value_nodes[link.value_var]);
+	link_members.assign(tree.nodes.size(), LinkMembers());
+	for (auto node : tree.eval_order) {
+		if (tree.nodes[node]->link != DConstants::INVALID_INDEX) {
+			definitions.push_back(node);
+		}
 	}
 	std::sort(definitions.begin(), definitions.end(),
 	          [&](idx_t left, idx_t right) { return position[left] < position[right]; });
@@ -1998,7 +2000,7 @@ void DecideModelEmitter::ValueLinks() {
 		}
 		const auto site = DecideTreeOperand(tree, node);
 		auto &entries = descent.Containers()[site].parent_slots;
-		auto &members = link_members[tree.nodes[node]->link];
+			auto &members = link_members[node];
 		// Its members' rows, each in its group, as flat's reducer partitions them by its `by` key.
 		EvaluatedConstraint listed;
 		listed.num_groups = members.groups;

@@ -132,7 +132,7 @@ private:
 	DecideErrorLedger &errors;
 	//! The input's first chunk, where a value the whole query shares is read (FirstRowValue).
 	DataChunk &first;
-	//! Per link, its helper's members, read once where its classes are (HelperMapping), which ValueLinks lists.
+	//! Per value-link node, its helper's members, read once where its classes are (HelperMapping), which ValueLinks lists.
 	vector<LinkMembers> link_members;
 
 	//! Each clause's root by its place in stage 05's lists (DecideBody::clause_index).
@@ -176,10 +176,10 @@ private:
 	//! The rows at which the auxiliary `root`'s clause defines has no value.
 	void DefinitionAbsence(idx_t root, idx_t variable);
 	void FunctionAbsence(idx_t function);
-	LinkMembers Members(idx_t link);
+	LinkMembers Members(idx_t node);
 	//! A helper's classes: the groups of its `by` key that hold a member, each read by the rows of its group the
 	//! clause keeps; its members kept for ValueLinks (link_members).
-	KeyedMapping HelperMapping(idx_t link);
+	KeyedMapping HelperMapping(idx_t node);
 	//! A range frame's helper's members (language/guide.md §5.6), per window of its frame (DecideListFrameMembers): its
 	//! payload's terms on the rows the windows read, its `else`'s at the anchors that reach it, each a program on the
 	//! frame's O `node`, as flat lists them.
