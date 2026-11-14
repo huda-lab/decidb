@@ -125,16 +125,46 @@ static idx_t AlgebraTermProgram(const DecideTree &tree, const DecideAlgebraNode 
 	return coefficient.program;
 }
 
-static idx_t AlgebraProductProgram(const DecideAlgebraNode &formula, idx_t var_a, idx_t var_b,
-                                   bool has_coefficient, int sign, const DecideTermSite &site,
-                                   idx_t source_term) {
+static idx_t AlgebraProductVariable(const DecideTree &tree, const DecideAlgebraNode &formula, idx_t child,
+                                    idx_t expected, idx_t source_term, const char *side) {
+	if (child >= formula.children.size() || !formula.children[child]) {
+		throw InternalException("DECIDE model emitter: product %llu has no %s factor", source_term, side);
+	}
+	const auto &read = *formula.children[child];
+	idx_t variable = DConstants::INVALID_INDEX;
+	if (read.kind == DecideAlgebraKind::DECISION) {
+		variable = read.decision_var;
+	} else if (read.kind == DecideAlgebraKind::TREE_VALUE && read.tree_value_node < tree.nodes.size()) {
+		const auto &producer = *tree.nodes[read.tree_value_node];
+		const bool is_own_definition = producer.kind == DecideNodeKind::FUNCTION && formula.owner < tree.nodes.size() &&
+		                               tree.nodes[formula.owner]->parent == read.tree_value_node;
+		if (producer.decision_value && !is_own_definition) {
+			variable = producer.value_var;
+		}
+	}
+	if (variable != expected) {
+		throw InternalException("DECIDE model emitter: product %llu %s factor disagrees with its algebra", source_term,
+		                        side);
+	}
+	return variable;
+}
+
+static idx_t AlgebraProductProgram(const DecideTree &tree, const DecideAlgebraNode &formula, idx_t var_a, idx_t var_b,
+                                   bool has_coefficient, int sign, const DecideTermSite &site, idx_t source_term,
+                                   idx_t *read_a = nullptr, idx_t *read_b = nullptr) {
 	const auto expected_children = has_coefficient ? 3 : 2;
 	if (formula.kind != DecideAlgebraKind::OPERATOR || formula.operation != "*" ||
 	    formula.source_term != source_term || formula.sign != sign || formula.children.size() != expected_children ||
-	    !formula.children[0] || formula.children[0]->kind != DecideAlgebraKind::DECISION ||
-	    formula.children[0]->decision_var != var_a || !formula.children[1] ||
-	    formula.children[1]->kind != DecideAlgebraKind::DECISION || formula.children[1]->decision_var != var_b) {
+	    !formula.children[0] || !formula.children[1]) {
 		throw InternalException("DECIDE model emitter: product %llu disagrees with its algebra", source_term);
+	}
+	const auto left = AlgebraProductVariable(tree, formula, 0, var_a, source_term, "left");
+	const auto right = AlgebraProductVariable(tree, formula, 1, var_b, source_term, "right");
+	if (read_a) {
+		*read_a = left;
+	}
+	if (read_b) {
+		*read_b = right;
 	}
 	if (!has_coefficient) {
 		return DConstants::INVALID_INDEX;
@@ -1524,11 +1554,12 @@ void DecideModelEmitter::Polynomial(idx_t root, const vector<TermFilterState> &f
 		auto &algebra_term = *lhs_formula.children[clause.lhs_terms.size() + position];
 		auto &product = products[i];
 		auto &site = body.products[i];
-		const auto program = AlgebraProductProgram(algebra_term, product.var_a, product.var_b,
-		                                          product.coefficient != nullptr, product.sign, site, i);
-		EvaluatedConstraint::BilinearTerm column {product.var_a, product.var_b, CoefficientColumn()};
+		idx_t var_a, var_b;
+		const auto program = AlgebraProductProgram(tree, algebra_term, product.var_a, product.var_b,
+		                                          product.coefficient != nullptr, product.sign, site, i, &var_a, &var_b);
+		EvaluatedConstraint::BilinearTerm column {var_a, var_b, CoefficientColumn()};
 		ReadPart(site, program, product.qualifier_scope_idx != DConstants::INVALID_INDEX, algebra_term.sign,
-		         product.inputs, {product.var_a, product.var_b}, column.row_coefficients, null_rows);
+		         product.inputs, {var_a, var_b}, column.row_coefficients, null_rows);
 		auto &filter = filters[clause.lhs_terms.size() + i];
 		if (product.avg_scale) {
 			ScaleAvgRows(column.row_coefficients, filter.has_filter, filter.mask, false, num_rows,
@@ -1672,13 +1703,14 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 		auto &site = body.products[i];
 		auto &filter = evaluated.bilinear_filters[i];
 		const auto &tested = columns.Tested(site.node);
-		const auto program = AlgebraProductProgram(algebra_term, product.var_a, product.var_b,
-		                                          product.coefficient != nullptr, product.sign, site, i);
+		idx_t var_a, var_b;
+		const auto program = AlgebraProductProgram(tree, algebra_term, product.var_a, product.var_b,
+		                                          product.coefficient != nullptr, product.sign, site, i, &var_a, &var_b);
 		// Stage 05 leaves a coefficient of 1 out.
 		auto numbers = program == DConstants::INVALID_INDEX
 		                   ? vector<double>(tested.size(), double(algebra_term.sign))
 		                   : columns.Numbers(site.node, program, tested, nullptr, &site, &product.inputs);
-		EvaluatedConstraint::BilinearTerm column {product.var_a, product.var_b, CoefficientColumn()};
+		EvaluatedConstraint::BilinearTerm column {var_a, var_b, CoefficientColumn()};
 		column.row_coefficients.AssignDense(num_rows);
 		const auto qualified = product.qualifier_scope_idx != DConstants::INVALID_INDEX;
 		filter.avg_scale = product.avg_scale;

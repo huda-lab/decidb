@@ -936,14 +936,8 @@ public:
 					expression->sign = term.sign;
 					expression->scale = static_cast<double>(term.sign);
 					expression->source_term = product;
-					auto left = make_uniq<DecideAlgebraNode>();
-					left->kind = DecideAlgebraKind::DECISION;
-					left->owner = index;
-					left->decision_var = term.var_a;
-					auto right = make_uniq<DecideAlgebraNode>();
-					right->kind = DecideAlgebraKind::DECISION;
-					right->owner = index;
-					right->decision_var = term.var_b;
+					auto left = AlgebraRead(index, term.var_a);
+					auto right = AlgebraRead(index, term.var_b);
 					expression->children.push_back(std::move(left));
 					expression->children.push_back(std::move(right));
 					if (term.coefficient) {
@@ -992,8 +986,8 @@ public:
 						expression->sign = term.sign;
 						expression->scale = static_cast<double>(term.sign);
 						expression->source_term = product;
-						auto left = AlgebraDecision(index, term.var_a);
-						auto right = AlgebraDecision(index, term.var_b);
+						auto left = AlgebraRead(index, term.var_a);
+						auto right = AlgebraRead(index, term.var_b);
 						expression->children.push_back(std::move(left));
 						expression->children.push_back(std::move(right));
 						if (term.coefficient) {
@@ -2378,6 +2372,12 @@ void DecideTree::Validate() const {
 		}
 		return producer;
 	};
+	auto matches_read = [&](idx_t owner, const DecideAlgebraNode &read, idx_t variable) {
+		const auto producer = read_node(owner, variable);
+		return producer == DConstants::INVALID_INDEX
+		           ? read.kind == DecideAlgebraKind::DECISION && read.decision_var == variable
+		           : read.kind == DecideAlgebraKind::TREE_VALUE && read.tree_value_node == producer;
+	};
 	if (eval_order.size() != nodes.size()) {
 		throw InternalException("DECIDE tree post-order does not cover every node");
 	}
@@ -2468,14 +2468,7 @@ void DecideTree::Validate() const {
 					}
 					idx_t child = 0;
 					if (variables) {
-						const auto &variable = *formula.children[child];
-						const auto producer = read_node(i, term.variable_index);
-						const bool matches = producer == DConstants::INVALID_INDEX
-						                         ? variable.kind == DecideAlgebraKind::DECISION &&
-						                               variable.decision_var == term.variable_index
-						                         : variable.kind == DecideAlgebraKind::TREE_VALUE &&
-						                               variable.tree_value_node == producer;
-						if (!matches) {
+						if (!matches_read(i, *formula.children[child], term.variable_index)) {
 							return false;
 						}
 						child++;
@@ -2496,10 +2489,8 @@ void DecideTree::Validate() const {
 					if (formula.kind != DecideAlgebraKind::OPERATOR || formula.operation != "*" ||
 					    formula.source_term != product || formula.sign != term.sign ||
 					    formula.children.size() != expected_children ||
-					    formula.children[0]->kind != DecideAlgebraKind::DECISION ||
-					    formula.children[0]->decision_var != term.var_a ||
-					    formula.children[1]->kind != DecideAlgebraKind::DECISION ||
-					    formula.children[1]->decision_var != term.var_b ||
+					    !matches_read(i, *formula.children[0], term.var_a) ||
+					    !matches_read(i, *formula.children[1], term.var_b) ||
 					    (term.coefficient &&
 					     (formula.children[2]->kind != DecideAlgebraKind::PROGRAM ||
 					      formula.children[2]->program_node != node.compiled.products[product].node ||
@@ -2561,6 +2552,22 @@ void DecideTree::Validate() const {
 					const auto &objective = *node.compiled.objective;
 					if (objective.has_quadratic != !objective.squared_terms.empty()) {
 						throw InternalException("DECIDE tree objective node %llu has inconsistent quadratic terms", i);
+					}
+					for (idx_t product = 0; product < objective.bilinear_terms.size(); product++) {
+						auto &term = objective.bilinear_terms[product];
+						auto &formula = *sum->children[objective.terms.size() + product];
+						const auto expected_children = 2 + (term.coefficient ? 1 : 0);
+						if (formula.kind != DecideAlgebraKind::OPERATOR || formula.operation != "*" ||
+						    formula.source_term != product || formula.sign != term.sign ||
+						    formula.children.size() != expected_children ||
+						    !matches_read(i, *formula.children[0], term.var_a) ||
+						    !matches_read(i, *formula.children[1], term.var_b) ||
+						    (term.coefficient &&
+						     (formula.children[2]->kind != DecideAlgebraKind::PROGRAM ||
+						      formula.children[2]->program_node != node.compiled.products[product].node ||
+						      formula.children[2]->program != node.compiled.products[product].program))) {
+							throw InternalException("DECIDE tree objective node %llu has malformed bilinear algebra", i);
+						}
 					}
 					if (objective.has_quadratic) {
 						auto &squares = *sum->children[objective.terms.size() + objective.bilinear_terms.size()];

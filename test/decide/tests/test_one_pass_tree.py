@@ -241,3 +241,18 @@ def test_function_values_are_tree_reads_without_cyclic_envelopes(decidb_cli):
     envelope_rows = [line for line in lines if f"formula=GREATERTHANOREQUALTO(+(*(x{output_var}," in line]
     assert len(envelope_rows) == 2
     assert all(f"node-value({function_id})" not in line for line in envelope_rows)
+
+
+def test_bilinear_factors_follow_their_function_and_reducer_nodes(decidb_cli):
+    sql = """SELECT t.id FROM (VALUES (1, 'a', 3.0, true), (2, 'a', 5.0, false),
+        (3, 'b', 1.0, false), (4, NULL, 2.0, true), (5, 'c', 4.0, true)) t(id, g, c, p)
+        DECIDE x(INT), b(BOOL) SUCH THAT x <= 9 AND x + b * sum(when t.p: x) by (t.g) <= 5
+        MAXIMIZE sum(x)"""
+    tree, _ = construction(decidb_cli, sql)
+    lines = tree.splitlines()
+    function = next(line for line in lines if " F definition " in line and "function=boolean_product" in line)
+    function_id = int(function.split()[0])
+    reducer = next(line for line in lines if " G key=t.g agg=sum " in line)
+    reducer_id = int(reducer.split()[0])
+    assert f"node-value({reducer_id})" in function
+    assert any(f"node-value({function_id})" in line and ": x + b * sum(" in line for line in lines)
