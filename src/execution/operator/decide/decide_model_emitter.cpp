@@ -67,6 +67,20 @@ static idx_t ClauseRhsProgram(const DecideNode &node, idx_t root) {
 	return rhs.program;
 }
 
+static string ValueLinkAggregate(const DecideNode &node) {
+	if (!node.algebra || node.algebra->kind != DecideAlgebraKind::OPERATOR) {
+		throw InternalException("DECIDE model emitter: value-link node has no reducer algebra");
+	}
+	if (node.kind == DecideNodeKind::FRAME) {
+		const auto prefix = string("frame:");
+		if (node.algebra->operation.find(prefix) != 0 || node.algebra->operation.size() <= prefix.size()) {
+			throw InternalException("DECIDE model emitter: O node has no frame aggregate operator");
+		}
+		return node.algebra->operation.substr(prefix.size());
+	}
+	return node.algebra->operation;
+}
+
 static string FunctionAlgebraName(const DecideNode &node) {
 	switch (node.function_kind) {
 	case DecideFunctionKind::ABS:
@@ -1726,7 +1740,9 @@ vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(
 			throw InternalException("DECIDE model emitter: composed term has an invalid G node");
 		}
 		const bool is_minmax = agg_name == "min" || agg_name == "max";
-		if (is_minmax != (term.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) ||
+		if (!tree.nodes[reducer_node]->algebra ||
+		    tree.nodes[reducer_node]->algebra->operation != agg_name ||
+		    is_minmax != (term.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) ||
 		    term_formula.is_easy != term.is_easy) {
 			throw InternalException("DECIDE model emitter: composed E operator disagrees with its G reducer");
 		}
@@ -1810,8 +1826,9 @@ void DecideModelEmitter::FrameMembers(idx_t node, ReducerValueMembers &out) {
 	for (auto &term : body.fallback) {
 		fallback_vars.push_back(gstate.ReadVariable(term));
 	}
-	DecideListFrameMembers(map, tree_node.aggregate, tree_node.value_link_label, tree_node.text, payload, payload_vars,
-	                       fallback, fallback_vars, out);
+	const auto aggregate = ValueLinkAggregate(tree_node);
+	DecideListFrameMembers(map, aggregate, tree_node.value_link_label, tree_node.text, payload, payload_vars, fallback,
+	                       fallback_vars, out);
 }
 
 void DecideModelEmitter::ValueLinks() {
@@ -1836,10 +1853,14 @@ void DecideModelEmitter::ValueLinks() {
 		    tree_node.frame != link.frame) {
 			throw InternalException("DECIDE model emitter: G/O node %llu disagrees with its value-link source", node);
 		}
+		const auto aggregate = ValueLinkAggregate(tree_node);
+		if (aggregate != link.agg_name) {
+			throw InternalException("DECIDE model emitter: G/O algebra disagrees with its value-link operator");
+		}
 		auto &body = tree_node.compiled;
 		auto spec = ReducerValueLinkSpec();
 		spec.value_var = tree_node.value_var;
-		spec.agg_name = tree_node.aggregate;
+		spec.agg_name = aggregate;
 		spec.need_envelope = tree_node.value_link_needs_envelope;
 		spec.need_closing = tree_node.value_link_needs_closing;
 		spec.label = tree_node.value_link_label;
