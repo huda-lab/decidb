@@ -1343,7 +1343,11 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 		held.insert(held.end(), solver_input.objective_variable_indices.begin(),
 		            solver_input.objective_variable_indices.end());
 	}
-	if (InlineReducerValueLinks(solver_input, held)) {
+	vector<idx_t> node_values;
+	for (auto &link : solver_input.reducer_value_links) {
+		node_values.push_back(link.value_var);
+	}
+	if (InlineReducerValueLinks(solver_input, held, node_values)) {
 		ReportInlinedHelpers(solver_input);
 		out_var_indexer = VarIndexer::Build(solver_input);
 		for (auto &ec : solver_input.constraints) {

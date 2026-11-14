@@ -273,9 +273,15 @@ vector<HelperPlace> PlaceHelpers(const SolverInput &input, const vector<idx_t> &
 
 } // namespace
 
-bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held) {
+bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, const vector<idx_t> &node_values) {
 	auto &links = input.reducer_value_links;
 	vector<idx_t> link_of(input.num_decide_vars, DConstants::INVALID_INDEX);
+	vector<bool> stays_explicit(input.num_decide_vars, false);
+	for (auto var : node_values) {
+		if (var < stays_explicit.size()) {
+			stays_explicit[var] = true;
+		}
+	}
 	for (idx_t i = 0; i < links.size(); i++) {
 		if (links[i].value_var < link_of.size()) {
 			link_of[links[i].value_var] = i;
@@ -513,6 +519,31 @@ bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held) {
 			inlined_any = true;
 			if (into_outer) {
 				write_into_outer(i, single);
+			}
+			continue;
+		}
+		if (link.value_var < stays_explicit.size() && stays_explicit[link.value_var]) {
+			// Preserve this G/O's value column. A singleton MIN/MAX is just its member and can remain a direct read;
+			// every other group is formulated against the helper at this node.
+			if (IsExtremum(link) && any_single) {
+				inlined_any = true;
+				if (input.variable_scopes[link.value_var].scope == DecideVarScope::GLOBAL) {
+					// A global helper has one column rather than per-group slots, so write its sole singleton instance
+					// through using the whole-helper path.
+					input.variable_scopes[link.value_var].scope = DecideVarScope::INLINED;
+					if (into_outer) {
+						write_into_outer(i, single);
+						folded[i] = true;
+					} else {
+						link.inlined = true;
+					}
+				} else {
+					input.written_in.resize(input.num_decide_vars);
+					input.written_in[link.value_var] = single;
+					if (into_outer) {
+						write_into_outer(i, single);
+					}
+				}
 			}
 			continue;
 		}

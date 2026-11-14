@@ -400,10 +400,10 @@ a reducer operator on its objective E node; assembly derives the solver sense an
 from the objective algebra. Composed MIN/MAX E nodes also own their
 comparison, bound expression, ordered reducer references and query-wide scales; the emitter follows those references
 to the corresponding G nodes. The G/O emitter walks nodes in children-first order and uses their algebra plus
-node-owned helper direction, qualification scope and labels to build stage 06's member records. F output links and
-Boolean-product factors are read from their function algebra. The numeric model path still emits flattened rows, and
-stage 06 still inlines eligible helper columns; recursive formulation of those operator trees at E/G/O/F nodes
-remains open.
+node-owned helper direction, qualification scope and labels to build stage 06's member formulas. Each G/O result keeps
+its value column so stage 06 formulates the result at that node; a singleton MIN/MAX group remains a direct member read,
+as on deck p. 112. F output links and Boolean-product factors are read from their function algebra. The numeric model
+path still lowers formulas into flat solver rows; recursive lowering of the full E/G/O/F operator trees remains open.
 
 **Cost**, measured before flat was deleted, against flat on one binary (`benchmark/decide/anr_scaling.py --against` a
 flat run): the tree's own time at 10^5 rows is 0.84x to 1.33x flat's on every workload (`flat-sum` the most), and its
@@ -818,13 +818,12 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   clause folds into its box stands, and the static domain check skips it: a helper holds a
   reducer's value, negative wherever its terms are. A refusal in formulation names a helper
   by its reducer. The end of assembly runs stage 06's `InlineReducerValueLinks` on the final
-  rows and objective (`assembly.inline_helpers`, D89), passing the decisions read where only a
-  column stands and `SolverInput` does not show it -- a composed MIN/MAX term's, a folded
-  bound's, a flat MIN/MAX objective's -- and where it inlines a helper the column space is laid out
-  again and every clause's emitted rows, built against the old one for the implied bounds, are
-  dropped to be built anew. The floors and implied bounds keep only what holds of a decision or
-  an instance, so they stand. Everything above -- the members, the absent instances, the skipped
-  rows -- is computed for an inlined helper as for any.
+  rows and objective (`assembly.inline_helpers`, D89). A node-owned G/O output keeps a value
+  column for each group with more than one MIN/MAX member and for every SUM/AVG group; a
+  singleton MIN/MAX group is written directly at its readers because its value is its member
+  (deck p. 112). That aliasing can change the column space, so the indexer is laid out again and
+  emitted clause rows are rebuilt. The floors and implied bounds keep only what holds of a
+  decision or an instance, so they stand.
 - **Counters** (`DECIDB_PROFILE`): `anr.frames`, `anr.frame_windows` and
   `anr.frame_positions` (one per point anchor, each value a range's windows list) once the
   frames are built; `anr.helpers`, `anr.helper_instances` (groups), `anr.members` and
