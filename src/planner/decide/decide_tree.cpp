@@ -2196,6 +2196,76 @@ void DecideTree::Validate() const {
 			     node.algebra->children.size() != 2)) {
 				throw InternalException("DECIDE tree clause node %llu has no comparison algebra", i);
 			}
+			if (node.compiled.clause) {
+				auto &clause = *node.compiled.clause;
+				auto &lhs = *node.algebra->children[0];
+				auto &rhs = *node.algebra->children[1];
+				const auto expected_parts = clause.lhs_terms.size() + clause.bilinear_terms.size() +
+				                            clause.quadratic_groups.size();
+				if (lhs.kind != DecideAlgebraKind::OPERATOR || lhs.operation != "+" ||
+				    lhs.children.size() != expected_parts || rhs.kind != DecideAlgebraKind::PROGRAM ||
+				    rhs.program_node != i || rhs.program != node.compiled.rhs) {
+					throw InternalException("DECIDE tree clause node %llu has an invalid algebra shape", i);
+				}
+				auto check_term = [&](const DecideAlgebraNode &formula, const DecideTerm &term,
+				                      const DecideTermSite &site, idx_t source) {
+					const auto variables = term.variable_index == DConstants::INVALID_INDEX ? 0 : 1;
+					if (formula.kind != DecideAlgebraKind::OPERATOR || formula.operation != "*" ||
+					    formula.source_term != source || formula.sign != term.sign ||
+					    formula.children.size() != variables + 1) {
+						return false;
+					}
+					idx_t child = 0;
+					if (variables) {
+						if (formula.children[child]->kind != DecideAlgebraKind::DECISION ||
+						    formula.children[child]->decision_var != term.variable_index) {
+							return false;
+						}
+						child++;
+					}
+					return formula.children[child]->kind == DecideAlgebraKind::PROGRAM &&
+					       formula.children[child]->program_node == site.node &&
+					       formula.children[child]->program == site.program;
+				};
+				for (idx_t term = 0; term < clause.lhs_terms.size(); term++) {
+					if (!check_term(*lhs.children[term], clause.lhs_terms[term], node.compiled.linear[term], term)) {
+						throw InternalException("DECIDE tree clause node %llu has a malformed linear term", i);
+					}
+				}
+				for (idx_t product = 0; product < clause.bilinear_terms.size(); product++) {
+					auto &term = clause.bilinear_terms[product];
+					auto &formula = *lhs.children[clause.lhs_terms.size() + product];
+					const auto expected_children = 2 + (term.coefficient ? 1 : 0);
+					if (formula.kind != DecideAlgebraKind::OPERATOR || formula.operation != "*" ||
+					    formula.source_term != product || formula.sign != term.sign ||
+					    formula.children.size() != expected_children ||
+					    formula.children[0]->kind != DecideAlgebraKind::DECISION ||
+					    formula.children[0]->decision_var != term.var_a ||
+					    formula.children[1]->kind != DecideAlgebraKind::DECISION ||
+					    formula.children[1]->decision_var != term.var_b ||
+					    (term.coefficient &&
+					     (formula.children[2]->kind != DecideAlgebraKind::PROGRAM ||
+					      formula.children[2]->program_node != node.compiled.products[product].node ||
+					      formula.children[2]->program != node.compiled.products[product].program))) {
+						throw InternalException("DECIDE tree clause node %llu has a malformed bilinear term", i);
+					}
+				}
+			for (idx_t group = 0; group < clause.quadratic_groups.size(); group++) {
+				auto &quadratic = clause.quadratic_groups[group];
+				auto &formula = *lhs.children[clause.lhs_terms.size() + clause.bilinear_terms.size() + group];
+				if (formula.kind != DecideAlgebraKind::OPERATOR || formula.operation != "square" ||
+				    formula.source_term != group || formula.scale != quadratic.sign ||
+				    formula.children.size() != quadratic.inner_terms.size()) {
+					throw InternalException("DECIDE tree clause node %llu has a malformed square group", i);
+				}
+				for (idx_t term = 0; term < quadratic.inner_terms.size(); term++) {
+					if (!check_term(*formula.children[term], quadratic.inner_terms[term], node.compiled.squares[group][term],
+					                term)) {
+						throw InternalException("DECIDE tree clause node %llu has a malformed square term", i);
+					}
+				}
+			}
+			}
 			if (node.link != DConstants::INVALID_INDEX && node.frame == DConstants::INVALID_INDEX &&
 			    node.kind == DecideNodeKind::REDUCER &&
 			    (node.algebra->kind != DecideAlgebraKind::OPERATOR || node.algebra->operation != node.aggregate ||

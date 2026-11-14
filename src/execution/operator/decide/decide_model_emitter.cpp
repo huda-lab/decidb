@@ -25,6 +25,38 @@ static idx_t Parts(const DecideConstraint &clause) {
 	return clause.lhs_terms.size() + clause.bilinear_terms.size() + clause.quadratic_groups.size();
 }
 
+//! The E node's comparison's left-hand operator. Its children are ordered as linear terms, products, then squares.
+static const DecideAlgebraNode &ClauseLhsFormula(const DecideNode &node) {
+	if (!node.algebra || node.algebra->kind != DecideAlgebraKind::OPERATOR ||
+	    node.algebra->expression_class != ExpressionClass::BOUND_COMPARISON || node.algebra->children.size() != 2 ||
+	    !node.algebra->children[0] || node.algebra->children[0]->kind != DecideAlgebraKind::OPERATOR ||
+	    node.algebra->children[0]->operation != "+") {
+		throw InternalException("DECIDE model emitter: E node has no left-hand algebra");
+	}
+	if (!node.compiled.clause ||
+	    node.algebra->children[0]->children.size() != node.compiled.clause->lhs_terms.size() +
+	                                                 node.compiled.clause->bilinear_terms.size() +
+	                                                 node.compiled.clause->quadratic_groups.size()) {
+		throw InternalException("DECIDE model emitter: E node's left-hand algebra is incomplete");
+	}
+	return *node.algebra->children[0];
+}
+
+static idx_t ClauseTermSource(const DecideAlgebraNode &term, idx_t count, const char *what) {
+	if (term.kind != DecideAlgebraKind::OPERATOR || term.operation != "*" || term.source_term >= count) {
+		throw InternalException("DECIDE model emitter: malformed %s algebra term", what);
+	}
+	return term.source_term;
+}
+
+static ExpressionType ClauseComparison(const DecideNode &node) {
+	ClauseLhsFormula(node);
+	if (node.algebra->expression_type != node.compiled.clause->comparison_type) {
+		throw InternalException("DECIDE model emitter: E node comparison algebra disagrees with its clause");
+	}
+	return node.algebra->expression_type;
+}
+
 DecideModelEmitter::DecideModelEmitter(const PhysicalDecide &op, ClientContext &context, const DecideTree &tree,
                                        const DecideDescent &descent, DecideTreeColumns &columns,
                                        DecideGlobalSinkState &gstate, PerGroupCache &groups,
@@ -570,6 +602,7 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 	const auto entries = descent.Containers()[root].Count();
 	auto evaluated = InitializeEvaluatedConstraint(clause, body.clause_index,
 	                                               [&](const DecideTerm &term) { return gstate.ReadVariable(term); });
+	evaluated.comparison_type = ClauseComparison(node);
 	// The rows the clause keeps, which its `when` routed and its NULL tests keep (DecideNode::member_tests: a helper's
 	// row reads a reducer's body on the reducer's members), with the entry standing for each: one model row stands on
 	// each, or under `per K:` on one row of each variant of a class.
@@ -587,13 +620,15 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 		}
 	}
 	vector<bool> nulls(entries, false);
+	const auto &lhs_formula = ClauseLhsFormula(node);
 	auto scatter = [&](const vector<double> &numbers, CoefficientColumn &column) {
 		column.AssignDense(num_rows);
 		const auto values = column.MutableDense().data();
 		const auto computed = numbers.data();
 		ForEachRead(root, tested, false, [&](idx_t row, idx_t entry) { values[row] = computed[entry]; });
 	};
-	for (idx_t t = 0; t < clause.lhs_terms.size(); t++) {
+	for (idx_t position = 0; position < clause.lhs_terms.size(); position++) {
+		const auto t = ClauseTermSource(*lhs_formula.children[position], clause.lhs_terms.size(), "linear");
 		auto &site = body.linear[t];
 		D_ASSERT(site.node == root);
 		scatter(columns.Numbers(root, site.program, tested, &nulls, &site, &clause.lhs_terms[t].inputs),
@@ -609,7 +644,12 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 	}
 	const auto instances = CountInstances(evaluated.row_group_ids, evaluated.num_groups, num_rows, false);
 	if (DescribeBound(clause, num_rows, names, op.source_fragments, op.keyed_scopes, op.keys, evaluated)) {
-		scatter(columns.Numbers(root, body.rhs, tested, &nulls), evaluated.rhs_values);
+		const auto &rhs_formula = *node.algebra->children[1];
+		if (rhs_formula.kind != DecideAlgebraKind::PROGRAM || rhs_formula.program_node != root ||
+		    rhs_formula.program == DConstants::INVALID_INDEX) {
+			throw InternalException("DECIDE model emitter: E node %llu has no compiled RHS program", root);
+		}
+		scatter(columns.Numbers(root, rhs_formula.program, tested, &nulls), evaluated.rhs_values);
 	}
 	// A term reading a decision with no instance at the row has no value there (D84), nor has an auxiliary where what
 	// defines it has none (D88).
@@ -915,9 +955,11 @@ idx_t DecideModelEmitter::ByReducer(idx_t root) const {
 bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const DecideEntryRows &rows, const vector<bool> &kept,
                                           EvaluatedConstraint &evaluated, vector<TermFilterState> &filters,
                                           vector<bool> &active, vector<bool> &null_rows) {
-	auto &body = tree.nodes[root]->compiled;
+	auto &node = *tree.nodes[root];
+	auto &body = node.compiled;
 	auto &clause = *body.clause;
 	auto &terms = clause.lhs_terms;
+	const auto &lhs_formula = ClauseLhsFormula(node);
 	bool has_local_filters = false;
 	bool unfiltered = false;
 	// A filter that keeps every kept row filters nothing, as flat reads it.
@@ -941,7 +983,8 @@ bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const DecideEntryRows &row
 			}
 		}
 	};
-	for (idx_t t = 0; t < terms.size(); t++) {
+	for (idx_t position = 0; position < terms.size(); position++) {
+		const auto t = ClauseTermSource(*lhs_formula.children[position], terms.size(), "linear");
 		auto &site = body.linear[t];
 		if (site.node == root) {
 			// A term beside the reducers is read on each kept row, and counted once in its group.
@@ -954,13 +997,21 @@ bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const DecideEntryRows &row
 	// A product's and a square's filter, on the members of its reducer, which flat reads with the terms'; their
 	// coefficients follow once the rows are grouped (Polynomial).
 	vector<bool> members;
-	for (idx_t i = 0; i < clause.bilinear_terms.size(); i++) {
+	for (idx_t position = 0; position < clause.bilinear_terms.size(); position++) {
+		const auto i = ClauseTermSource(*lhs_formula.children[terms.size() + position],
+		                                clause.bilinear_terms.size(), "bilinear");
 		auto &filter = filters[terms.size() + i];
 		Filter(body.products[i].node, clause.bilinear_terms[i].qualifier_scope_idx != DConstants::INVALID_INDEX, filter,
 		       members, [](idx_t, idx_t) {});
 		read_filter(members, filter);
 	}
-	for (idx_t g = 0; g < clause.quadratic_groups.size(); g++) {
+	for (idx_t position = 0; position < clause.quadratic_groups.size(); position++) {
+		auto &square = *lhs_formula.children[terms.size() + clause.bilinear_terms.size() + position];
+		if (square.kind != DecideAlgebraKind::OPERATOR || square.operation != "square" ||
+		    square.source_term >= clause.quadratic_groups.size()) {
+			throw InternalException("DECIDE model emitter: malformed quadratic-group algebra");
+		}
+		const auto g = square.source_term;
 		auto &filter = filters[terms.size() + clause.bilinear_terms.size() + g];
 		Filter(body.squares[g].front().node,
 		       clause.quadratic_groups[g].qualifier_scope_idx != DConstants::INVALID_INDEX, filter, members,
@@ -974,10 +1025,12 @@ bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const DecideEntryRows &row
 }
 
 EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
-	auto &body = tree.nodes[root]->compiled;
+	auto &node = *tree.nodes[root];
+	auto &body = node.compiled;
 	auto &clause = *body.clause;
 	auto evaluated = InitializeEvaluatedConstraint(clause, body.clause_index,
 	                                               [&](const DecideTerm &term) { return gstate.ReadVariable(term); });
+	evaluated.comparison_type = ClauseComparison(node);
 	// The rows the clause keeps: every row its root holds, which its `when` routed, with the entry standing for each.
 	const auto rows = DecideEntryRows(tree, descent, root);
 	vector<bool> kept(num_rows, false);
@@ -1212,13 +1265,18 @@ double DecideModelEmitter::SquareSign(idx_t root, idx_t g, vector<bool> &null_ro
 
 void DecideModelEmitter::Polynomial(idx_t root, const vector<TermFilterState> &filters, vector<bool> &null_rows,
                                     EvaluatedConstraint &evaluated) {
-	auto &body = tree.nodes[root]->compiled;
+	auto &node = *tree.nodes[root];
+	auto &body = node.compiled;
 	auto &clause = *body.clause;
 	auto &products = clause.bilinear_terms;
-	for (idx_t i = 0; i < products.size(); i++) {
+	const auto &lhs_formula = ClauseLhsFormula(node);
+	for (idx_t position = 0; position < products.size(); position++) {
+		const auto i = ClauseTermSource(*lhs_formula.children[clause.lhs_terms.size() + position], products.size(),
+		                                "bilinear");
+		auto &algebra_term = *lhs_formula.children[clause.lhs_terms.size() + position];
 		auto &product = products[i];
 		EvaluatedConstraint::BilinearTerm column {product.var_a, product.var_b, CoefficientColumn()};
-		ReadPart(body.products[i], product.qualifier_scope_idx != DConstants::INVALID_INDEX, product.sign,
+		ReadPart(body.products[i], product.qualifier_scope_idx != DConstants::INVALID_INDEX, algebra_term.sign,
 		         product.inputs, {product.var_a, product.var_b}, column.row_coefficients, null_rows);
 		auto &filter = filters[clause.lhs_terms.size() + i];
 		if (product.avg_scale) {
@@ -1228,16 +1286,28 @@ void DecideModelEmitter::Polynomial(idx_t root, const vector<TermFilterState> &f
 		evaluated.bilinear_terms.push_back(std::move(column));
 	}
 	evaluated.has_quadratic = clause.has_quadratic;
-	for (idx_t g = 0; g < clause.quadratic_groups.size(); g++) {
+	for (idx_t position = 0; position < clause.quadratic_groups.size(); position++) {
+		auto &algebra_group = *lhs_formula.children[clause.lhs_terms.size() + products.size() + position];
+		if (algebra_group.kind != DecideAlgebraKind::OPERATOR || algebra_group.operation != "square" ||
+		    algebra_group.source_term >= clause.quadratic_groups.size() ||
+		    algebra_group.children.size() != clause.quadratic_groups[algebra_group.source_term].inner_terms.size()) {
+			throw InternalException("DECIDE model emitter: malformed square algebra");
+		}
+		const auto g = algebra_group.source_term;
 		auto &group = clause.quadratic_groups[g];
+		if (algebra_group.scale != group.sign) {
+			throw InternalException("DECIDE model emitter: square algebra sign disagrees with its compiled group");
+		}
 		auto &filter = filters[clause.lhs_terms.size() + products.size() + g];
 		EvaluatedConstraint::QuadraticGroup square;
-		square.sign = SquareSign(root, g, null_rows);
-		for (idx_t t = 0; t < group.inner_terms.size(); t++) {
+		square.sign = group.scale ? SquareSign(root, g, null_rows) : algebra_group.scale;
+		for (idx_t position = 0; position < group.inner_terms.size(); position++) {
+			const auto t = ClauseTermSource(*algebra_group.children[position], group.inner_terms.size(), "square");
+			auto &algebra_term = *algebra_group.children[position];
 			auto &inner = group.inner_terms[t];
 			square.variable_indices.push_back(gstate.ReadVariable(inner));
 			square.row_coefficients.emplace_back();
-			ReadPart(body.squares[g][t], group.qualifier_scope_idx != DConstants::INVALID_INDEX, inner.sign,
+			ReadPart(body.squares[g][t], group.qualifier_scope_idx != DConstants::INVALID_INDEX, algebra_term.sign,
 			         inner.inputs, {inner.variable_index}, square.row_coefficients.back(), null_rows);
 			if (group.avg_scale) {
 				ScaleAvgRows(square.row_coefficients.back(), filter.has_filter, filter.mask, true, num_rows,
