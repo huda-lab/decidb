@@ -1779,11 +1779,41 @@ vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(
 		for (auto read : rows) {
 			evaluated.filter_mask[read.first] = true;
 		}
-		for (idx_t i = 0; i < members.members.size(); i++) {
+		const auto &g_node = *tree.nodes[reducer_node];
+		if (!g_node.algebra || g_node.algebra->kind != DecideAlgebraKind::OPERATOR ||
+		    g_node.algebra->operation != agg_name || g_node.algebra->children.size() != members.members.size()) {
+			throw InternalException("DECIDE model emitter: G node %llu has no aligned member algebra", reducer_node);
+		}
+		vector<bool> emitted_members(members.members.size(), false);
+		for (auto &member_pointer : g_node.algebra->children) {
+			if (!member_pointer || member_pointer->kind != DecideAlgebraKind::OPERATOR ||
+			    member_pointer->operation != "*" || member_pointer->source_term >= members.members.size() ||
+			    emitted_members[member_pointer->source_term]) {
+				throw InternalException("DECIDE model emitter: G node %llu has a malformed member operator", reducer_node);
+			}
+			const auto i = member_pointer->source_term;
+			emitted_members[i] = true;
+			auto &member_formula = *member_pointer;
 			auto &inner = members.members[i];
+			auto &site_info = members.linear[i];
+			const auto has_variable = inner.variable_index != DConstants::INVALID_INDEX;
+			const auto expected_children = (has_variable ? 1 : 0) + 1;
+			if (member_formula.sign != inner.sign || member_formula.children.size() != expected_children ||
+			    !member_formula.children.back() ||
+			    (has_variable && (!member_formula.children[0] ||
+			                     member_formula.children[0]->kind != DecideAlgebraKind::DECISION ||
+			                     member_formula.children[0]->decision_var != inner.variable_index))) {
+				throw InternalException("DECIDE model emitter: G node %llu member %llu disagrees with its algebra",
+				                        reducer_node, i);
+			}
+			auto &coefficient = *member_formula.children.back();
+			if (coefficient.kind != DecideAlgebraKind::PROGRAM || coefficient.program_node != site_info.node ||
+			    coefficient.program != site_info.program || site_info.program == DConstants::INVALID_INDEX) {
+				throw InternalException("DECIDE model emitter: G node %llu member %llu has no coefficient program",
+				                        reducer_node, i);
+			}
 			evaluated.variables.push_back(gstate.ReadVariable(inner));
-			auto numbers =
-			    columns.Numbers(site, members.linear[i].program, reads, nullptr, &members.linear[i], &inner.inputs);
+			auto numbers = columns.Numbers(site, coefficient.program, reads, nullptr, &site_info, &inner.inputs);
 			evaluated.per_term_coefs.emplace_back(num_rows, 0.0);
 			for (auto read : rows) {
 				evaluated.per_term_coefs.back()[read.first] = numbers[read.second];
