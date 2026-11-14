@@ -180,8 +180,8 @@ PINNED_DUMPS = {
         "x(INT) SUCH THAT x <= 100 AND per t.g: sum(when t.p per t.k: max(x) by (t.k)) by (t.r) "
         "+ 0.10 * sum(t.d) by (t.r) <= t.c MAXIMIZE sum(x)",
         """0 E root key=() per=row when=[] sigma=[x] reads=[] columns=0 formula=LESSTHANOREQUALTO(+(*(x0, program(0,0,1))), program(0,1,CAST(100 AS BIGINT))) : x <= 100
-1 E root key=t.g per=key when=[] sigma=[by (t.r), t.c] reads=[2,6] columns=2 formula=LESSTHANOREQUALTO(+(*(x2, program(1,0,1))), program(1,1,"+"("-"((CAST(0.10 AS DECIMAL(38,2)) * CASE  WHEN ((r IS NULL)) THEN (NULL) ELSE #[16.1] END)), CAST(c AS DECIMAL(38,2))))) : per t.g: sum(when t.p per t.k: max(x) by (t.k)) by (t.r) + 0.10 * sum(t.d) by (t.r) <= t.c
-2 G key=t.r agg=sum per=row when=[] sigma=[] reads=[3] columns=0 formula=sum(*(x1, program(3,0,1))) : sum(when t.p per t.k: max(x) by (t.k)) by (t.r)
+1 E root key=t.g per=key when=[] sigma=[by (t.r), t.c] reads=[2,6] columns=2 formula=LESSTHANOREQUALTO(+(*(node-value(2), program(1,0,1))), program(1,1,"+"("-"((CAST(0.10 AS DECIMAL(38,2)) * CASE  WHEN ((r IS NULL)) THEN (NULL) ELSE #[16.1] END)), CAST(c AS DECIMAL(38,2))))) : per t.g: sum(when t.p per t.k: max(x) by (t.k)) by (t.r) + 0.10 * sum(t.d) by (t.r) <= t.c
+2 G key=t.r agg=sum per=row when=[] sigma=[] reads=[3] columns=0 formula=sum(*(node-value(4), program(3,0,1))) : sum(when t.p per t.k: max(x) by (t.k)) by (t.r)
 3 E key=t.k per=key when=[p] sigma=[max(x) by (t.k)] reads=[4] columns=0 formula=cast(node-value(4)) : sum(when t.p per t.k: max(x) by (t.k)) by (t.r) operand
 4 G key=t.r, t.k agg=max per=row when=[] sigma=[] reads=[5] columns=0 formula=max(*(x0, program(5,0,1))) : max(x) by (t.k)
 5 E key=() per=row when=[] sigma=[x] reads=[] columns=0 formula=x0 : max(x) by (t.k) operand
@@ -227,3 +227,17 @@ def test_the_construction_writes_the_tree_it_wrote(decidb_cli, case):
     decide, expected = PINNED_DUMPS[case]
     tree, _ = construction(decidb_cli, f"SELECT id FROM {_PINNED_ROWS} DECIDE {decide}")
     assert tree == expected
+
+
+def test_function_values_are_tree_reads_without_cyclic_envelopes(decidb_cli):
+    sql = """SELECT id FROM (VALUES (1, 1), (2, -1)) t(id, v)
+        DECIDE x(REAL), y(REAL) SUCH THAT x <= 9 AND x >= abs(y) MAXIMIZE sum(x)"""
+    tree, _ = construction(decidb_cli, sql)
+    lines = tree.splitlines()
+    function = next(line for line in lines if " F definition " in line and "function=abs" in line)
+    function_id = int(function.split()[0])
+    output_var = re.search(r"value=x(\d+)", function).group(1)
+    assert any(f"node-value({function_id})" in line and ": x >= abs(y)" in line for line in lines)
+    envelope_rows = [line for line in lines if f"formula=GREATERTHANOREQUALTO(+(*(x{output_var}," in line]
+    assert len(envelope_rows) == 2
+    assert all(f"node-value({function_id})" not in line for line in envelope_rows)

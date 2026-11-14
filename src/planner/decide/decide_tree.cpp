@@ -749,6 +749,23 @@ public:
 		}
 	}
 
+	//! The producer node for a generated value, except a function node's own defining rows, which must name its
+	//! output decision while defining it. This keeps the tree's read edge recursive without making an F node read itself.
+	idx_t AlgebraValueNode(idx_t owner, idx_t variable) const {
+		if (variable >= algebra_value_nodes.size()) {
+			return DConstants::INVALID_INDEX;
+		}
+		const auto producer = algebra_value_nodes[variable];
+		if (producer != DConstants::INVALID_INDEX && producer >= tree->nodes.size()) {
+			throw InternalException("DECIDE tree: variable %llu has an invalid algebra value node", variable);
+		}
+		if (producer != DConstants::INVALID_INDEX && tree->nodes[producer]->kind == DecideNodeKind::FUNCTION &&
+		    owner < tree->nodes.size() && tree->nodes[owner]->parent == producer) {
+			return DConstants::INVALID_INDEX;
+		}
+		return producer;
+	}
+
 	unique_ptr<DecideAlgebraNode> AlgebraExpression(idx_t owner, const Expression &expression) const {
 		auto result = make_uniq<DecideAlgebraNode>();
 		result->owner = owner;
@@ -765,8 +782,15 @@ public:
 		if (expression.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 			auto &reference = expression.Cast<BoundColumnRefExpression>();
 			if (reference.binding.table_index == op.decide_index) {
-				result->kind = DecideAlgebraKind::DECISION;
-				result->decision_var = reference.binding.column_index;
+				const auto variable = reference.binding.column_index;
+				const auto producer = AlgebraValueNode(owner, variable);
+				if (producer != DConstants::INVALID_INDEX) {
+					result->kind = DecideAlgebraKind::TREE_VALUE;
+					result->tree_value_node = producer;
+				} else {
+					result->kind = DecideAlgebraKind::DECISION;
+					result->decision_var = variable;
+				}
 				return result;
 			}
 		}
@@ -809,6 +833,18 @@ public:
 		return result;
 	}
 
+	unique_ptr<DecideAlgebraNode> AlgebraRead(idx_t owner, idx_t variable) const {
+		const auto producer = AlgebraValueNode(owner, variable);
+		if (producer == DConstants::INVALID_INDEX) {
+			return AlgebraDecision(owner, variable);
+		}
+		auto result = make_uniq<DecideAlgebraNode>();
+		result->kind = DecideAlgebraKind::TREE_VALUE;
+		result->owner = owner;
+		result->tree_value_node = producer;
+		return result;
+	}
+
 	unique_ptr<DecideAlgebraNode> AlgebraTerm(idx_t owner, const DecideTerm &term, const DecideTermSite &site,
 	                                           idx_t source_term) const {
 		auto result = make_uniq<DecideAlgebraNode>();
@@ -819,11 +855,7 @@ public:
 		result->scale = static_cast<double>(term.sign);
 		result->source_term = source_term;
 		if (term.variable_index != DConstants::INVALID_INDEX) {
-			auto variable = make_uniq<DecideAlgebraNode>();
-			variable->kind = DecideAlgebraKind::DECISION;
-			variable->owner = owner;
-			variable->decision_var = term.variable_index;
-			result->children.push_back(std::move(variable));
+			result->children.push_back(AlgebraRead(owner, term.variable_index));
 		}
 		result->children.push_back(AlgebraProgram(owner, site.node, site.program));
 		return result;
@@ -866,6 +898,18 @@ public:
 	}
 
 	void BuildAlgebra() {
+		algebra_value_nodes = tree->value_nodes;
+		for (auto function : tree->function_nodes) {
+			if (function >= tree->nodes.size() || tree->nodes[function]->value_var >= algebra_value_nodes.size()) {
+				throw InternalException("DECIDE tree: function node %llu has an invalid algebra value", function);
+			}
+			auto &producer = algebra_value_nodes[tree->nodes[function]->value_var];
+			if (producer != DConstants::INVALID_INDEX && producer != function) {
+				throw InternalException("DECIDE tree: variable %llu has two value nodes",
+				                        tree->nodes[function]->value_var);
+			}
+			producer = function;
+		}
 		for (idx_t index = 0; index < tree->nodes.size(); index++) {
 			auto &node = *tree->nodes[index];
 			auto &body = node.compiled;
@@ -1177,6 +1221,7 @@ private:
 	vector<idx_t> link_nodes;
 	vector<idx_t> frame_nodes;
 	vector<idx_t> record_nodes;
+	vector<idx_t> algebra_value_nodes;
 	DecideTreeSources sources;
 	//! Canonical function-link roots live in `sources.reducer_nodes` by expression address. Keep their ASTs alive until
 	//! the linear form builder has resolved those reducers; otherwise the address map holds pointers into freed copies.
@@ -2310,6 +2355,29 @@ unique_ptr<DecideTree> DecideTreeConstruction::Finish() {
 
 void DecideTree::Validate() const {
 	vector<idx_t> position(nodes.size(), DConstants::INVALID_INDEX);
+	vector<idx_t> algebra_value_nodes = value_nodes;
+	for (auto function : function_nodes) {
+		if (function >= nodes.size() || nodes[function]->value_var >= algebra_value_nodes.size()) {
+			throw InternalException("DECIDE tree: function node %llu has an invalid algebra value", function);
+		}
+		auto &producer = algebra_value_nodes[nodes[function]->value_var];
+		if (producer != DConstants::INVALID_INDEX && producer != function) {
+			throw InternalException("DECIDE tree: variable %llu has two algebra value nodes", nodes[function]->value_var);
+		}
+		producer = function;
+	}
+	auto read_node = [&](idx_t owner, idx_t variable) {
+		if (variable >= algebra_value_nodes.size()) {
+			return DConstants::INVALID_INDEX;
+		}
+		const auto producer = algebra_value_nodes[variable];
+		if (producer != DConstants::INVALID_INDEX && producer < nodes.size() &&
+		    nodes[producer]->kind == DecideNodeKind::FUNCTION && owner < nodes.size() &&
+		    nodes[owner]->parent == producer) {
+			return DConstants::INVALID_INDEX;
+		}
+		return producer;
+	};
 	if (eval_order.size() != nodes.size()) {
 		throw InternalException("DECIDE tree post-order does not cover every node");
 	}
@@ -2400,8 +2468,14 @@ void DecideTree::Validate() const {
 					}
 					idx_t child = 0;
 					if (variables) {
-						if (formula.children[child]->kind != DecideAlgebraKind::DECISION ||
-						    formula.children[child]->decision_var != term.variable_index) {
+						const auto &variable = *formula.children[child];
+						const auto producer = read_node(i, term.variable_index);
+						const bool matches = producer == DConstants::INVALID_INDEX
+						                         ? variable.kind == DecideAlgebraKind::DECISION &&
+						                               variable.decision_var == term.variable_index
+						                         : variable.kind == DecideAlgebraKind::TREE_VALUE &&
+						                               variable.tree_value_node == producer;
+						if (!matches) {
 							return false;
 						}
 						child++;
@@ -2614,6 +2688,11 @@ void DecideTree::Validate() const {
 				std::function<void(const DecideAlgebraNode &)> collect = [&](const DecideAlgebraNode &algebra) {
 					if (algebra.kind == DecideAlgebraKind::DECISION) {
 						factors.push_back(algebra.decision_var);
+					} else if (algebra.kind == DecideAlgebraKind::TREE_VALUE) {
+						if (algebra.tree_value_node >= nodes.size()) {
+							throw InternalException("DECIDE tree: Boolean-product factor has an invalid value node");
+						}
+						factors.push_back(nodes[algebra.tree_value_node]->value_var);
 					}
 					for (auto &child : algebra.children) {
 						collect(*child);
