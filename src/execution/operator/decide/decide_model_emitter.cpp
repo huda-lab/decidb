@@ -486,7 +486,7 @@ DecideModelEmitter::LinkMembers DecideModelEmitter::Members(idx_t node) {
 			members.reads[e] = members.reads[e] && !columns.TermAbsentAt(term, entries.rows[e]);
 		}
 	}
-	const auto qualified = tree.nodes[node]->value_link_qualifier_scope != DConstants::INVALID_INDEX;
+	const auto qualified = tree.nodes[node]->qualifier_scope != DConstants::INVALID_INDEX;
 	vector<bool> held(slots.size(), false);
 	for (auto &read :
 	     ReadRows(site, qualified ? columns.FirstOfEachInstance(site, members.reads) : members.reads, qualified)) {
@@ -1819,6 +1819,9 @@ vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(
 		if (reducer_node >= tree.nodes.size()) {
 			throw InternalException("DECIDE model emitter: composed term has an invalid G node");
 		}
+		if (tree.nodes[reducer_node]->qualifier_scope != term.qualifier_scope_idx) {
+			throw InternalException("DECIDE model emitter: composed reducer scope disagrees with its G node");
+		}
 		const bool is_minmax = agg_name == "min" || agg_name == "max";
 		if (!tree.nodes[reducer_node]->algebra ||
 		    tree.nodes[reducer_node]->algebra->operation != agg_name ||
@@ -1851,7 +1854,7 @@ vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(
 		// first of each class (language/guide.md §5.1). Every other row reads 0.
 		auto &members = tree.nodes[reducer_node]->compiled;
 		const auto site = DecideTreeOperand(tree, reducer_node);
-		const auto qualified = term.qualifier_scope_idx != DConstants::INVALID_INDEX;
+		const auto qualified = tree.nodes[reducer_node]->qualifier_scope != DConstants::INVALID_INDEX;
 		vector<bool> first;
 		const auto &reads = ReadEntriesOf(site, qualified, first);
 		const auto rows = ReadRows(site, reads, qualified);
@@ -1957,7 +1960,7 @@ void DecideModelEmitter::ValueLinks() {
 		    tree_node.value_link_label != link.label ||
 		    tree_node.value_link_needs_envelope != link.need_envelope ||
 		    tree_node.value_link_needs_closing != link.need_closing ||
-		    tree_node.value_link_qualifier_scope != link.qualifier_scope_idx ||
+		    tree_node.qualifier_scope != link.qualifier_scope_idx ||
 		    tree_node.frame != link.frame) {
 			throw InternalException("DECIDE model emitter: G/O node %llu disagrees with its value-link source", node);
 		}

@@ -1920,7 +1920,7 @@ private:
 			node.value_link_label = link.label;
 			node.value_link_needs_envelope = link.need_envelope;
 			node.value_link_needs_closing = link.need_closing;
-			node.value_link_qualifier_scope = link.qualifier_scope_idx;
+			node.qualifier_scope = link.qualifier_scope_idx;
 			node.decision_value = true;
 			if (link.value_var < tree->value_nodes.size()) {
 				tree->value_nodes[link.value_var] = index;
@@ -1936,7 +1936,7 @@ private:
 		node.value_link_label = link.label;
 		node.value_link_needs_envelope = link.need_envelope;
 		node.value_link_needs_closing = link.need_closing;
-		node.value_link_qualifier_scope = link.qualifier_scope_idx;
+		node.qualifier_scope = link.qualifier_scope_idx;
 		node.key = link.group_key;
 		node.text = link.label;
 		node.decision_value = true;
@@ -2058,6 +2058,7 @@ private:
 		// Its message names its clause, as its root's does.
 		node.source_clause_id = tree->nodes[owner]->source_clause_id;
 		node.aggregate = term.agg_name;
+		node.qualifier_scope = term.qualifier_scope_idx;
 		node.text = term.inner_expr ? term.agg_name + "(" + Text(*term.inner_expr) + ")" : term.agg_name;
 		node.decision_value = true;
 		auto operand = NewNode(DecideNodeKind::SCOPE);
@@ -2671,19 +2672,19 @@ void DecideTree::Validate() const {
 			throw InternalException("DECIDE tree node %llu has an invalid key", i);
 		}
 		if (node.link == DConstants::INVALID_INDEX) {
-			if (!node.value_link_label.empty() || node.value_link_needs_envelope || node.value_link_needs_closing ||
-			    node.value_link_qualifier_scope != DConstants::INVALID_INDEX) {
+			if (!node.value_link_label.empty() || node.value_link_needs_envelope || node.value_link_needs_closing) {
 				throw InternalException("DECIDE tree node %llu has detached value-link metadata", i);
 			}
 		} else if (node.value_var >= value_nodes.size() || value_nodes[node.value_var] != i ||
 		           node.value_link_label.empty() ||
 		           (node.kind != DecideNodeKind::REDUCER && node.kind != DecideNodeKind::FRAME) ||
 		           (node.kind == DecideNodeKind::FRAME) != (node.frame != DConstants::INVALID_INDEX) ||
-		           (node.value_link_qualifier_scope != DConstants::INVALID_INDEX &&
-		            node.value_link_qualifier_scope >= keyed_scopes.size()) ||
-		           (node.kind == DecideNodeKind::FRAME &&
-		            node.value_link_qualifier_scope != DConstants::INVALID_INDEX)) {
+		           (node.kind == DecideNodeKind::FRAME && node.qualifier_scope != DConstants::INVALID_INDEX)) {
 			throw InternalException("DECIDE tree node %llu has invalid value-link ownership", i);
+		}
+		if (node.qualifier_scope != DConstants::INVALID_INDEX &&
+		    (node.kind != DecideNodeKind::REDUCER || node.qualifier_scope >= keyed_scopes.size())) {
+			throw InternalException("DECIDE tree node %llu has an invalid reducer qualifier", i);
 		}
 		if (node.compiled.clause && !node.algebra) {
 			throw InternalException("DECIDE tree clause node %llu has no algebra", i);

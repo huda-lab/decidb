@@ -238,8 +238,8 @@ struct DecideNode {
 	string value_link_label;
 	bool value_link_needs_envelope = false;
 	bool value_link_needs_closing = false;
-	//! The keyed scope a reducer value link counts once per class, or INVALID_INDEX when it is unqualified.
-	idx_t value_link_qualifier_scope = DConstants::INVALID_INDEX;
+	//! A G node's relation-qualified scope, whose classes it reads at most once; INVALID_INDEX when unqualified.
+	idx_t qualifier_scope = DConstants::INVALID_INDEX;
 	idx_t source_clause_id = DConstants::INVALID_INDEX;
 	idx_t removal_group_id = DConstants::INVALID_INDEX;
 	idx_t defined_var = DConstants::INVALID_INDEX;
