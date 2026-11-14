@@ -100,6 +100,31 @@ static idx_t AlgebraTermProgram(const DecideAlgebraNode &formula, const DecideTe
 	return coefficient.program;
 }
 
+static idx_t AlgebraProductProgram(const DecideAlgebraNode &formula, idx_t var_a, idx_t var_b,
+                                   bool has_coefficient, int sign, const DecideTermSite &site,
+                                   idx_t source_term) {
+	const auto expected_children = has_coefficient ? 3 : 2;
+	if (formula.kind != DecideAlgebraKind::OPERATOR || formula.operation != "*" ||
+	    formula.source_term != source_term || formula.sign != sign || formula.children.size() != expected_children ||
+	    !formula.children[0] || formula.children[0]->kind != DecideAlgebraKind::DECISION ||
+	    formula.children[0]->decision_var != var_a || !formula.children[1] ||
+	    formula.children[1]->kind != DecideAlgebraKind::DECISION || formula.children[1]->decision_var != var_b) {
+		throw InternalException("DECIDE model emitter: product %llu disagrees with its algebra", source_term);
+	}
+	if (!has_coefficient) {
+		return DConstants::INVALID_INDEX;
+	}
+	if (!formula.children[2]) {
+		throw InternalException("DECIDE model emitter: product %llu has no coefficient formula", source_term);
+	}
+	const auto &coefficient = *formula.children[2];
+	if (coefficient.kind != DecideAlgebraKind::PROGRAM || coefficient.program_node != site.node ||
+	    coefficient.program != site.program || site.program == DConstants::INVALID_INDEX) {
+		throw InternalException("DECIDE model emitter: product %llu has no coefficient program", source_term);
+	}
+	return coefficient.program;
+}
+
 static string FunctionAlgebraName(const DecideNode &node) {
 	switch (node.function_kind) {
 	case DecideFunctionKind::ABS:
@@ -781,10 +806,13 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 		ForEachRead(root, tested, false, [&](idx_t row, idx_t entry) { values[row] = computed[entry]; });
 	};
 	for (idx_t position = 0; position < clause.lhs_terms.size(); position++) {
-		const auto t = ClauseTermSource(*lhs_formula.children[position], clause.lhs_terms.size(), "linear");
+		auto &term_formula = *lhs_formula.children[position];
+		const auto t = ClauseTermSource(term_formula, clause.lhs_terms.size(), "linear");
+		auto &term = clause.lhs_terms[t];
 		auto &site = body.linear[t];
 		D_ASSERT(site.node == root);
-		scatter(columns.Numbers(root, site.program, tested, &nulls, &site, &clause.lhs_terms[t].inputs),
+		const auto program = AlgebraTermProgram(term_formula, term, site, t, "E node");
+		scatter(columns.Numbers(root, program, tested, &nulls, &site, &term.inputs),
 		        evaluated.row_coefficients[t]);
 	}
 	if (clause.scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
@@ -1047,10 +1075,10 @@ void DecideModelEmitter::KeyClasses(idx_t root, vector<idx_t> &class_ids, vector
 }
 
 void DecideModelEmitter::ReadBesideReducers(idx_t root, const DecideTerm &term, const DecideTermSite &site,
-                                            const DecideEntryRows &rows, CoefficientColumn &column,
-                                            vector<bool> &null_rows) {
+	                                            idx_t program, const DecideEntryRows &rows, CoefficientColumn &column,
+	                                            vector<bool> &null_rows) {
 	vector<bool> nulls(descent.Containers()[root].Count(), false);
-	auto numbers = columns.Numbers(root, site.program, columns.Tested(root), &nulls, &site, &term.inputs);
+	auto numbers = columns.Numbers(root, program, columns.Tested(root), &nulls, &site, &term.inputs);
 	column.AssignDense(num_rows);
 	for (auto read : rows) {
 		column.Set(read.first, numbers[read.second]);
@@ -1064,7 +1092,7 @@ vector<pair<idx_t, idx_t>> DecideModelEmitter::ReadRows(idx_t site, const vector
 	return rows;
 }
 
-vector<bool> DecideModelEmitter::ReadInReducer(const DecideTerm &term, const DecideTermSite &site,
+vector<bool> DecideModelEmitter::ReadInReducer(const DecideTerm &term, const DecideTermSite &site, idx_t program,
                                                CoefficientColumn &column, TermFilterState &filter,
                                                vector<bool> &null_rows) {
 	// Its member tests are its filter's NULL tests of what its body reads and of its decisions' keys, so every
@@ -1072,7 +1100,7 @@ vector<bool> DecideModelEmitter::ReadInReducer(const DecideTerm &term, const Dec
 	// shares, which no test reads, and leaves the member's group no value. Flat computes it on every member, and
 	// leaves a relation-qualified one's repeats out afterwards.
 	vector<bool> nulls(descent.Containers()[site.node].Count(), false);
-	auto numbers = columns.Numbers(site.node, site.program, columns.Tested(site.node), &nulls, &site, &term.inputs);
+	auto numbers = columns.Numbers(site.node, program, columns.Tested(site.node), &nulls, &site, &term.inputs);
 	filter.avg_scale = term.avg_scale;
 	vector<bool> members;
 	column.AssignDense(num_rows);
@@ -1132,15 +1160,18 @@ bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const DecideEntryRows &row
 		}
 	};
 	for (idx_t position = 0; position < terms.size(); position++) {
-		const auto t = ClauseTermSource(*lhs_formula.children[position], terms.size(), "linear");
+		auto &term_formula = *lhs_formula.children[position];
+		const auto t = ClauseTermSource(term_formula, terms.size(), "linear");
 		auto &site = body.linear[t];
+		const auto program = AlgebraTermProgram(term_formula, terms[t], site, t, "E node");
 		if (site.node == root) {
 			// A term beside the reducers is read on each kept row, and counted once in its group.
-			ReadBesideReducers(root, terms[t], site, rows, evaluated.row_coefficients[t], null_rows);
+			ReadBesideReducers(root, terms[t], site, program, rows, evaluated.row_coefficients[t], null_rows);
 			unfiltered = true;
 			continue;
 		}
-		read_filter(ReadInReducer(terms[t], site, evaluated.row_coefficients[t], filters[t], null_rows), filters[t]);
+		read_filter(ReadInReducer(terms[t], site, program, evaluated.row_coefficients[t], filters[t], null_rows),
+		            filters[t]);
 	}
 	// A product's and a square's filter, on the members of its reducer, which flat reads with the terms'; their
 	// coefficients follow once the rows are grouped (Polynomial).
@@ -1357,16 +1388,16 @@ Value DecideModelEmitter::FirstRowValue(const Expression &factor) {
 	return value.data[0].GetValue(0);
 }
 
-void DecideModelEmitter::ReadPart(const DecideTermSite &site, bool qualified, int sign,
+void DecideModelEmitter::ReadPart(const DecideTermSite &site, idx_t program, bool qualified, int sign,
                                   const vector<unique_ptr<Expression>> &inputs, const vector<idx_t> &variables,
                                   CoefficientColumn &column, vector<bool> &null_rows) {
 	vector<bool> first;
 	const auto &reads = ReadEntriesOf(site.node, qualified, first);
 	vector<bool> nulls(reads.size(), false);
 	// Stage 05 leaves a coefficient of 1 out.
-	auto numbers = site.program == DConstants::INVALID_INDEX
+	auto numbers = program == DConstants::INVALID_INDEX
 	                   ? vector<double>(reads.size(), double(sign))
-	                   : columns.Numbers(site.node, site.program, reads, &nulls, &site, &inputs);
+	                   : columns.Numbers(site.node, program, reads, &nulls, &site, &inputs);
 	vector<idx_t> absent;
 	for (auto variable : variables) {
 		if (columns.MayBeAbsent(variable)) {
@@ -1423,8 +1454,11 @@ void DecideModelEmitter::Polynomial(idx_t root, const vector<TermFilterState> &f
 		                                "bilinear");
 		auto &algebra_term = *lhs_formula.children[clause.lhs_terms.size() + position];
 		auto &product = products[i];
+		auto &site = body.products[i];
+		const auto program = AlgebraProductProgram(algebra_term, product.var_a, product.var_b,
+		                                          product.coefficient != nullptr, product.sign, site, i);
 		EvaluatedConstraint::BilinearTerm column {product.var_a, product.var_b, CoefficientColumn()};
-		ReadPart(body.products[i], product.qualifier_scope_idx != DConstants::INVALID_INDEX, algebra_term.sign,
+		ReadPart(site, program, product.qualifier_scope_idx != DConstants::INVALID_INDEX, algebra_term.sign,
 		         product.inputs, {product.var_a, product.var_b}, column.row_coefficients, null_rows);
 		auto &filter = filters[clause.lhs_terms.size() + i];
 		if (product.avg_scale) {
@@ -1450,12 +1484,14 @@ void DecideModelEmitter::Polynomial(idx_t root, const vector<TermFilterState> &f
 		EvaluatedConstraint::QuadraticGroup square;
 		square.sign = group.scale ? SquareSign(root, g, null_rows) : algebra_group.scale;
 		for (idx_t position = 0; position < group.inner_terms.size(); position++) {
-			const auto t = ClauseTermSource(*algebra_group.children[position], group.inner_terms.size(), "square");
 			auto &algebra_term = *algebra_group.children[position];
+			const auto t = ClauseTermSource(algebra_term, group.inner_terms.size(), "square");
 			auto &inner = group.inner_terms[t];
+			auto &site = body.squares[g][t];
+			const auto program = AlgebraTermProgram(algebra_term, inner, site, t, "E square");
 			square.variable_indices.push_back(gstate.ReadVariable(inner));
 			square.row_coefficients.emplace_back();
-			ReadPart(body.squares[g][t], group.qualifier_scope_idx != DConstants::INVALID_INDEX, algebra_term.sign,
+			ReadPart(site, program, group.qualifier_scope_idx != DConstants::INVALID_INDEX, algebra_term.sign,
 			         inner.inputs, {inner.variable_index}, square.row_coefficients.back(), null_rows);
 			if (group.avg_scale) {
 				ScaleAvgRows(square.row_coefficients.back(), filter.has_filter, filter.mask, true, num_rows,
@@ -1567,10 +1603,12 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 		auto &site = body.products[i];
 		auto &filter = evaluated.bilinear_filters[i];
 		const auto &tested = columns.Tested(site.node);
+		const auto program = AlgebraProductProgram(algebra_term, product.var_a, product.var_b,
+		                                          product.coefficient != nullptr, product.sign, site, i);
 		// Stage 05 leaves a coefficient of 1 out.
-		auto numbers = site.program == DConstants::INVALID_INDEX
+		auto numbers = program == DConstants::INVALID_INDEX
 		                   ? vector<double>(tested.size(), double(algebra_term.sign))
-		                   : columns.Numbers(site.node, site.program, tested, nullptr, &site, &product.inputs);
+		                   : columns.Numbers(site.node, program, tested, nullptr, &site, &product.inputs);
 		EvaluatedConstraint::BilinearTerm column {product.var_a, product.var_b, CoefficientColumn()};
 		column.row_coefficients.AssignDense(num_rows);
 		const auto qualified = product.qualifier_scope_idx != DConstants::INVALID_INDEX;
@@ -1600,12 +1638,14 @@ vector<TermFilterState> DecideModelEmitter::ObjectiveTerms(idx_t root, const Dec
 	vector<TermFilterState> filters(terms.size());
 	coefficients.resize(terms.size());
 	for (idx_t position = 0; position < terms.size(); position++) {
-		const auto t = ClauseTermSource(*formula.children[formula_offset + position], terms.size(), "objective");
+		auto &term_formula = *formula.children[formula_offset + position];
+		const auto t = ClauseTermSource(term_formula, terms.size(), "objective");
 		if (t != position) {
 			throw InternalException("DECIDE model emitter: objective term ordering differs from its algebra");
 		}
 		auto &term = terms[t];
 		auto &site = sites[t];
+		const auto program = AlgebraTermProgram(term_formula, term, site, t, "objective E node");
 		auto &filter = filters[t];
 		variables.push_back(gstate.ReadVariable(term));
 		filter.avg_scale = term.avg_scale;
@@ -1617,7 +1657,7 @@ vector<TermFilterState> DecideModelEmitter::ObjectiveTerms(idx_t root, const Dec
 		// read (D84). A relation-qualified reducer reads each class once, at its first row (language/guide.md §5.1).
 		vector<bool> absent, first;
 		const auto &present = columns.ReadEntries(site.node, term, absent);
-		auto numbers = columns.Numbers(site.node, site.program, present, nullptr, &site, &term.inputs);
+		auto numbers = columns.Numbers(site.node, program, present, nullptr, &site, &term.inputs);
 		const auto qualified = term.qualifier_scope_idx != DConstants::INVALID_INDEX;
 		if (qualified) {
 			first = columns.FirstOfEachInstance(site.node, present);

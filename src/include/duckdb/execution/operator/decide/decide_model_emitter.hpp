@@ -215,7 +215,8 @@ private:
 	//! relation-qualified one's first of each class, which flat computes it on once it has left the repeats out
 	//! (language/guide.md §5.1): a NULL coefficient there, or a decision of `variables` with no instance there, leaves
 	//! the row's instance no value (`null_rows`, D84).
-	void ReadPart(const DecideTermSite &site, bool qualified, int sign, const vector<unique_ptr<Expression>> &inputs,
+	void ReadPart(const DecideTermSite &site, idx_t program, bool qualified, int sign,
+	              const vector<unique_ptr<Expression>> &inputs,
 	              const vector<idx_t> &variables, CoefficientColumn &column, vector<bool> &null_rows);
 	//! The sign of `root`'s square `g`, its factor applied (ScaleSquaredGroup), read as flat reads it on the input's
 	//! first row, whatever the clause keeps, first in the square's part (DecideErrorRank::part); a NULL factor leaves
@@ -253,13 +254,13 @@ private:
 	void Filter(idx_t site, bool qualified, TermFilterState &filter, vector<bool> &members, F &&read);
 	//! A term beside a grouped clause's reducers, on each of `rows` (the kept rows and their root's entries), a NULL
 	//! coefficient marking its row (`null_rows`).
-	void ReadBesideReducers(idx_t root, const DecideTerm &term, const DecideTermSite &site, const DecideEntryRows &rows,
-	                        CoefficientColumn &column, vector<bool> &null_rows);
+	void ReadBesideReducers(idx_t root, const DecideTerm &term, const DecideTermSite &site, idx_t program,
+	                        const DecideEntryRows &rows, CoefficientColumn &column, vector<bool> &null_rows);
 	//! A term in a reducer, on each member of the G it ranges over: an entry of its operand, which the reducer's `when`
 	//! routed and its member tests keep, a kept row in no group among them, since flat computes the term on every kept
 	//! row; a NULL coefficient marks its row (`null_rows`). Returns the rows its filter keeps.
-	vector<bool> ReadInReducer(const DecideTerm &term, const DecideTermSite &site, CoefficientColumn &column,
-	                           TermFilterState &filter, vector<bool> &null_rows);
+	vector<bool> ReadInReducer(const DecideTerm &term, const DecideTermSite &site, idx_t program,
+	                           CoefficientColumn &column, TermFilterState &filter, vector<bool> &null_rows);
 	//! The grouped root's G of its `by` key.
 	idx_t ByReducer(idx_t root) const;
 	//! Each of `kept_groups`, groups of the G `by`, named by its key's values.
