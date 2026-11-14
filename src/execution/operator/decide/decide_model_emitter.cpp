@@ -629,6 +629,7 @@ void DecideModelEmitter::FunctionAbsence(idx_t function) {
 }
 
 void DecideModelEmitter::DefinitionAbsence(idx_t root, idx_t variable) {
+	auto &node = *tree.nodes[root];
 	auto &body = tree.nodes[root]->compiled;
 	auto &clause = *body.clause;
 	auto &absent = gstate.absent_reads[variable];
@@ -698,13 +699,22 @@ void DecideModelEmitter::DefinitionAbsence(idx_t root, idx_t variable) {
 			}
 		});
 	};
-	null_rows(root, ClauseRhsProgram(*tree.nodes[root], root));
-	for (idx_t t = 0; t < clause.lhs_terms.size(); t++) {
-		null_rows(body.linear[t].node, body.linear[t].program);
+	null_rows(root, ClauseRhsProgram(node, root));
+	const auto &lhs_formula = ClauseLhsFormula(node);
+	for (idx_t position = 0; position < clause.lhs_terms.size(); position++) {
+		auto &formula = *lhs_formula.children[position];
+		const auto t = ClauseTermSource(formula, clause.lhs_terms.size(), "definition linear");
+		null_rows(body.linear[t].node,
+		          AlgebraTermProgram(formula, clause.lhs_terms[t], body.linear[t], t, "definition E node"));
 	}
 	for (idx_t g = 0; g < clause.quadratic_groups.size(); g++) {
-		for (idx_t t = 0; t < body.squares[g].size(); t++) {
-			null_rows(body.squares[g][t].node, body.squares[g][t].program);
+		auto &square = *lhs_formula.children[clause.lhs_terms.size() + clause.bilinear_terms.size() + g];
+		auto &group = clause.quadratic_groups[g];
+		for (idx_t position = 0; position < group.inner_terms.size(); position++) {
+			auto &formula = *square.children[position];
+			const auto t = ClauseTermSource(formula, group.inner_terms.size(), "definition square");
+			null_rows(body.squares[g][t].node,
+			          AlgebraTermProgram(formula, group.inner_terms[t], body.squares[g][t], t, "definition E node"));
 		}
 	}
 }
