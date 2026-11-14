@@ -791,6 +791,13 @@ public:
 		result->owner = owner;
 		result->program_node = site;
 		result->program = program;
+		if (program != DConstants::INVALID_INDEX) {
+			auto &programs = tree->nodes[site]->programs;
+			if (program >= programs.size() || !programs[program].written) {
+				throw InternalException("DECIDE tree: node %llu has no source for algebra program %llu", site, program);
+			}
+			result->source_expression = programs[program].written->Copy();
+		}
 		return result;
 	}
 
@@ -2812,7 +2819,9 @@ string DecideTree::ToString() const {
 			    if (algebra.program == DConstants::INVALID_INDEX) {
 				    out << "1";
 			    } else {
-				    out << "program(" << algebra.program_node << "," << algebra.program << ")";
+				    out << "program(" << algebra.program_node << "," << algebra.program << ","
+				        << (algebra.source_expression ? algebra.source_expression->ToString() : "<missing-source>")
+				        << ")";
 			    }
 			    break;
 		    }
