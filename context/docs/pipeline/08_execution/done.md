@@ -400,10 +400,11 @@ a reducer operator on its objective E node; assembly derives the solver sense an
 from the objective algebra. Composed MIN/MAX E nodes also own their
 comparison, bound expression, ordered reducer references and query-wide scales; the emitter follows those references
 to the corresponding G nodes. The G/O emitter walks nodes in children-first order and uses their algebra plus
-node-owned helper direction, qualification scope and labels to build stage 06's member formulas. Each G/O result keeps
-its value column so stage 06 formulates the result at that node; a singleton MIN/MAX group remains a direct member read,
-as on deck p. 112. F output links and Boolean-product factors are read from their function algebra. The numeric model
-path still lowers formulas into flat solver rows; recursive lowering of the full E/G/O/F operator trees remains open.
+node-owned helper direction, qualification scope and labels to build stage 06's member formulas. Multi-member MIN/MAX
+results keep value columns, while SUM/AVG formulas can expand into their parent expressions; a singleton MIN/MAX group
+remains a direct member read, as on deck p. 112. F output links and Boolean-product factors are read from their function
+algebra. The numeric model path still lowers formulas into flat solver rows; recursive lowering of the full E/G/O/F
+operator trees remains open.
 
 **Cost**, measured before flat was deleted, against flat on one binary (`benchmark/decide/anr_scaling.py --against` a
 flat run): the tree's own time at 10^5 rows is 0.84x to 1.33x flat's on every workload (`flat-sum` the most), and its

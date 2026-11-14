@@ -259,10 +259,11 @@ void LinearizeAbsMaximize(SolverInput &input);
 //! `inlined`, for the model builder to write its members where they read it. Either way its variable becomes
 //! DecideVarScope::INLINED, with no column. A MIN or MAX group of one member is that member, written in group by
 //! group (SolverInput::written_in); an outer MIN or MAX that may close natively takes only instances read once.
-//! `node_values` are G/O outputs whose formulas stay explicit: only a singleton MIN/MAX group may still be written
-//! directly at its readers, since its reducer value is that one member (deck p. 112). Returns whether a helper was
-//! inlined or written through: the column space must then be laid out again.
-bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, const vector<idx_t> &node_values);
+//! `minmax_values` are G/O MIN/MAX outputs whose non-singleton formulas stay explicit. SUM/AVG values remain eligible
+//! for recursive expansion into their readers. A singleton MIN/MAX group may be written directly at its readers,
+//! since its reducer value is that one member (deck p. 112). Returns whether a helper was inlined or written through:
+//! the column space must then be laid out again.
+bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, const vector<idx_t> &minmax_values);
 
 //! The value rewrite's helper decisions (SolverInput::reducer_value_links), phase 1: box
 //! each helper instance by the reach of its own group's members -- the sum of their brackets
