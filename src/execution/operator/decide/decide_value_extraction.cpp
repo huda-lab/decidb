@@ -948,17 +948,6 @@ void DecideMapRowsInNoClass(KeyedMapping &mapping) {
 	}
 }
 
-ReducerValueLinkSpec DecideValueLinkSpec(const LogicalDecide::ReducerValueLink &link) {
-	ReducerValueLinkSpec spec;
-	spec.value_var = link.value_var;
-	spec.agg_name = link.agg_name;
-	spec.need_envelope = link.need_envelope;
-	spec.need_closing = link.need_closing;
-	spec.label = link.label;
-	spec.frame = link.frame != DConstants::INVALID_INDEX;
-	return spec;
-}
-
 void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx_t> &variables, idx_t row, double scale,
                       const string &label, ReducerValueMembers &out) {
 	double constant = 0.0;

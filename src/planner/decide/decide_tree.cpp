@@ -887,20 +887,35 @@ public:
 				node.algebra = std::move(reducer);
 				continue;
 			}
-			if ((node.kind == DecideNodeKind::REDUCER || node.kind == DecideNodeKind::FRAME) &&
-			    !body.members.empty()) {
+			if (node.kind == DecideNodeKind::REDUCER && !body.members.empty()) {
 				auto reducer = make_uniq<DecideAlgebraNode>();
 				reducer->kind = DecideAlgebraKind::OPERATOR;
 				reducer->owner = index;
-				reducer->operation = node.kind == DecideNodeKind::FRAME ? "frame" : node.aggregate;
+				reducer->operation = node.aggregate;
 				for (idx_t term = 0; term < body.members.size(); term++) {
 					reducer->children.push_back(AlgebraTerm(index, body.members[term], body.linear[term], term));
 				}
 				for (idx_t term = 0; term < body.fallback.size(); term++) {
-					reducer->children.push_back(
-					    AlgebraTerm(index, body.fallback[term], body.fallback_sites[term], term));
+					reducer->children.push_back(AlgebraTerm(index, body.fallback[term], body.fallback_sites[term],
+					                                             body.members.size() + term));
 				}
 				node.algebra = std::move(reducer);
+				continue;
+			}
+			if (node.kind == DecideNodeKind::FRAME &&
+			    (node.link != DConstants::INVALID_INDEX || !body.members.empty() || !body.fallback.empty())) {
+				auto frame = make_uniq<DecideAlgebraNode>();
+				frame->kind = DecideAlgebraKind::OPERATOR;
+				frame->owner = index;
+				frame->operation = "frame:" + node.aggregate;
+				for (idx_t term = 0; term < body.members.size(); term++) {
+					frame->children.push_back(AlgebraTerm(index, body.members[term], body.linear[term], term));
+				}
+				for (idx_t term = 0; term < body.fallback.size(); term++) {
+					frame->children.push_back(AlgebraTerm(index, body.fallback[term], body.fallback_sites[term],
+					                                     body.members.size() + term));
+				}
+				node.algebra = std::move(frame);
 				continue;
 			}
 			if (node.body) {
@@ -1735,6 +1750,9 @@ private:
 			auto &node = *tree->nodes[index];
 			node.link = link_index;
 			node.value_var = link.value_var;
+			node.value_link_label = link.label;
+			node.value_link_needs_envelope = link.need_envelope;
+			node.value_link_needs_closing = link.need_closing;
 			node.decision_value = true;
 			if (link.value_var < tree->value_nodes.size()) {
 				tree->value_nodes[link.value_var] = index;
@@ -1747,6 +1765,9 @@ private:
 		node.link = link_index;
 		node.value_var = link.value_var;
 		node.aggregate = link.agg_name;
+		node.value_link_label = link.label;
+		node.value_link_needs_envelope = link.need_envelope;
+		node.value_link_needs_closing = link.need_closing;
 		node.key = link.group_key;
 		node.text = link.label;
 		node.decision_value = true;
@@ -2132,7 +2153,8 @@ void DecideTree::Validate() const {
 				switch (algebra.kind) {
 				case DecideAlgebraKind::OPERATOR:
 					if (algebra.operation.empty() || algebra.value ||
-					    (algebra.children.empty() && algebra.operation != "+")) {
+					    (algebra.children.empty() && algebra.operation != "+" &&
+					     algebra.operation.find("frame:") != 0)) {
 						throw InternalException("DECIDE tree node %llu has a malformed algebra operator", i);
 					}
 					break;
@@ -2275,6 +2297,16 @@ void DecideTree::Validate() const {
 		}
 		if (node.key != DConstants::INVALID_INDEX && node.key >= keys.size()) {
 			throw InternalException("DECIDE tree node %llu has an invalid key", i);
+		}
+		if (node.link == DConstants::INVALID_INDEX) {
+			if (!node.value_link_label.empty() || node.value_link_needs_envelope || node.value_link_needs_closing) {
+				throw InternalException("DECIDE tree node %llu has detached value-link metadata", i);
+			}
+		} else if (node.value_var >= value_nodes.size() || value_nodes[node.value_var] != i ||
+		           node.value_link_label.empty() ||
+		           (node.kind != DecideNodeKind::REDUCER && node.kind != DecideNodeKind::FRAME) ||
+		           (node.kind == DecideNodeKind::FRAME) != (node.frame != DConstants::INVALID_INDEX)) {
+			throw InternalException("DECIDE tree node %llu has invalid value-link ownership", i);
 		}
 		if (node.compiled.clause && !node.algebra) {
 			throw InternalException("DECIDE tree clause node %llu has no algebra", i);

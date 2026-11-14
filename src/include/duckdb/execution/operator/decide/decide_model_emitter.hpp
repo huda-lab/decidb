@@ -183,7 +183,7 @@ private:
 	//! A range frame's helper's members (language/guide.md §5.6), per window of its frame (DecideListFrameMembers): its
 	//! payload's terms on the rows the windows read, its `else`'s at the anchors that reach it, each a program on the
 	//! frame's O `node`, as flat lists them.
-	void FrameMembers(idx_t node, const LogicalDecide::ReducerValueLink &link, ReducerValueMembers &out);
+	void FrameMembers(idx_t node, ReducerValueMembers &out);
 	//! A grouped clause's bound on each of `rows` (its kept rows and their root's entries), a NULL one marking its row
 	//! in `null_rows`; for a tightest frame bound (D85) the rows where it bounds nothing instead, which are returned
 	//! (TakeTightestFrameBound): empty for any other bound, and for one the whole clause shares (DescribeBound).

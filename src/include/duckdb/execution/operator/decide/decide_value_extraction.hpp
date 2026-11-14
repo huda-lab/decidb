@@ -326,9 +326,6 @@ void DecideNameVariants(const vector<DecideSignatureField> &fields, idx_t class_
 //! decision: it maps to one spare class, so that every row has an id (KeyedMapping::absent_class).
 void DecideMapRowsInNoClass(KeyedMapping &mapping);
 
-//! What stage 06 reads of a helper decision besides its members (ReducerValueLinkSpec), as the value rewrite made it.
-ReducerValueLinkSpec DecideValueLinkSpec(const LogicalDecide::ReducerValueLink &link);
-
 //! One member: the terms whose coefficients `columns` and variables `variables` are read at `row`, each coefficient
 //! times `scale`, those of no decision its constant. A constant past a DOUBLE names `label`, the helper as written.
 void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx_t> &variables, idx_t row, double scale,

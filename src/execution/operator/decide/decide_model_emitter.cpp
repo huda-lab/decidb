@@ -1500,9 +1500,9 @@ vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(idx_t root,
 	return result;
 }
 
-void DecideModelEmitter::FrameMembers(idx_t node, const LogicalDecide::ReducerValueLink &link,
-                                      ReducerValueMembers &out) {
-	auto &map = gstate.frame_maps[link.frame];
+void DecideModelEmitter::FrameMembers(idx_t node, ReducerValueMembers &out) {
+	auto &tree_node = *tree.nodes[node];
+	auto &map = gstate.frame_maps[tree_node.frame];
 	auto &body = tree.nodes[node]->compiled;
 	auto &entries = descent.Containers()[node].rows;
 	// Each term's coefficient on the rows `rows` marks, its anchors there, each an entry of the O.
@@ -1532,7 +1532,8 @@ void DecideModelEmitter::FrameMembers(idx_t node, const LogicalDecide::ReducerVa
 	for (auto &term : body.fallback) {
 		fallback_vars.push_back(gstate.ReadVariable(term));
 	}
-	DecideListFrameMembers(map, link, tree.nodes[node]->text, payload, payload_vars, fallback, fallback_vars, out);
+	DecideListFrameMembers(map, tree_node.aggregate, tree_node.value_link_label, tree_node.text, payload, payload_vars,
+	                       fallback, fallback_vars, out);
 }
 
 void DecideModelEmitter::ValueLinks() {
@@ -1550,10 +1551,38 @@ void DecideModelEmitter::ValueLinks() {
 		if (link.value_var >= tree.value_nodes.size() || tree.value_nodes[link.value_var] != node) {
 			throw InternalException("DECIDE model emitter: value-link %llu is not owned by its G/O node", tree_node.link);
 		}
+		if (tree_node.value_var != link.value_var || tree_node.aggregate != link.agg_name ||
+		    tree_node.value_link_label != link.label ||
+		    tree_node.value_link_needs_envelope != link.need_envelope ||
+		    tree_node.value_link_needs_closing != link.need_closing ||
+		    tree_node.frame != link.frame) {
+			throw InternalException("DECIDE model emitter: G/O node %llu disagrees with its value-link source", node);
+		}
 		auto &body = tree_node.compiled;
-		if (link.frame != DConstants::INVALID_INDEX) {
-			auto spec = DecideValueLinkSpec(link);
-			FrameMembers(node, link, spec.members);
+		auto spec = ReducerValueLinkSpec();
+		spec.value_var = tree_node.value_var;
+		spec.agg_name = tree_node.aggregate;
+		spec.need_envelope = tree_node.value_link_needs_envelope;
+		spec.need_closing = tree_node.value_link_needs_closing;
+		spec.label = tree_node.value_link_label;
+		spec.frame = tree_node.frame != DConstants::INVALID_INDEX;
+		if (tree_node.frame != DConstants::INVALID_INDEX) {
+			const auto expected_terms = body.members.size() + body.fallback.size();
+			if (!tree_node.algebra || tree_node.algebra->kind != DecideAlgebraKind::OPERATOR ||
+			    tree_node.algebra->operation != "frame:" + tree_node.aggregate ||
+			    tree_node.algebra->children.size() != expected_terms) {
+				throw InternalException("DECIDE model emitter: O node %llu has no aligned frame algebra", node);
+			}
+			vector<bool> emitted_terms(expected_terms, false);
+			for (auto &algebra_term : tree_node.algebra->children) {
+				if (!algebra_term || algebra_term->kind != DecideAlgebraKind::OPERATOR ||
+				    algebra_term->operation != "*" || algebra_term->source_term >= expected_terms ||
+				    emitted_terms[algebra_term->source_term]) {
+					throw InternalException("DECIDE model emitter: O node %llu has a malformed frame member", node);
+				}
+				emitted_terms[algebra_term->source_term] = true;
+			}
+			FrameMembers(node, spec.members);
 			gstate.evaluated_value_links.push_back(std::move(spec));
 			continue;
 		}
@@ -1602,8 +1631,7 @@ void DecideModelEmitter::ValueLinks() {
 		if (std::find(emitted_terms.begin(), emitted_terms.end(), false) != emitted_terms.end()) {
 			throw InternalException("DECIDE model emitter: G node %llu omitted a reducer member term", node);
 		}
-		auto spec = DecideValueLinkSpec(link);
-		DecideListRowMembers(listed, num_rows, link.label, spec.members);
+		DecideListRowMembers(listed, num_rows, tree_node.value_link_label, spec.members);
 		gstate.evaluated_value_links.push_back(std::move(spec));
 	}
 	DecideCountValueLinks(gstate.evaluated_value_links);

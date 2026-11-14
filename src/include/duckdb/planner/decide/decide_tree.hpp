@@ -231,6 +231,10 @@ struct DecideNode {
 	idx_t link = DConstants::INVALID_INDEX;
 	idx_t frame = DConstants::INVALID_INDEX;
 	idx_t value_var = DConstants::INVALID_INDEX;
+	//! A linked G/O's output contract, copied onto the owning node for formulation.
+	string value_link_label;
+	bool value_link_needs_envelope = false;
+	bool value_link_needs_closing = false;
 	idx_t source_clause_id = DConstants::INVALID_INDEX;
 	idx_t removal_group_id = DConstants::INVALID_INDEX;
 	idx_t defined_var = DConstants::INVALID_INDEX;
