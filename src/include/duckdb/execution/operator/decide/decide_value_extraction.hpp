@@ -222,6 +222,7 @@ void SkipGroupsWithAnEmptyReducer(const vector<const TermFilterState *> &filters
 //! whether its direction is easy, and a MIN's or a MAX's name as the plan prints the reducer, so a diagnosis over its
 //! extremum column reads `max(ship)`.
 ComposedMinMaxTermData DecideComposedTerm(const LogicalDecide::ComposedMinMaxTerm &term,
+                                          const string &agg_name, int sign, bool is_easy,
                                           const vector<string> &source_fragments,
                                           const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> &keys);
 
@@ -244,11 +245,10 @@ double ScaleSquaredGroup(const Value &value, const DecideConstraint::QuadraticGr
 //! objective term dropped.
 bool DecideComposedTermReadsNoRow(const ComposedMinMaxTermData &term);
 
-//! A composed clause's bound (LogicalDecide::ComposedMinMaxConstraint::rhs_expr): one constant by construction, which
-//! the optimizer asserts (AssertComposable) and the value rewrite leaves no other shape for. Decided by foldability,
-//! since canonicalization rebuilds the bound side as an additive chain, so a constant arrives as `(0 - 3) + 0` just as
-//! legitimately as `-3`.
-double DecideComposedBound(ClientContext &context, const LogicalDecide::ComposedMinMaxConstraint &spec);
+//! A composed clause's E-owned bound: one constant by construction, which the optimizer asserts (AssertComposable)
+//! and the value rewrite leaves no other shape for. Decided by foldability, since canonicalization rebuilds the bound
+//! side as an additive chain, so a constant arrives as `(0 - 3) + 0` just as legitimately as `-3`.
+double DecideComposedBound(ClientContext &context, const Expression &rhs);
 
 //! AVG denominator scaling, shared by the constraint and objective sides and by the linear/bilinear (single-column)
 //! and quadratic-inner (sqrt-scaled) cases. The rows a term reads are its filter: a clause's `when` is folded into it

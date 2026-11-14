@@ -199,7 +199,8 @@ private:
 	//! The composed terms `terms` that `root`, a composed clause's or the objective's, holds: each read on the members
 	//! of its G, its factor on the input's `first` chunk (`what` names the clause or the objective); `null_factor` set
 	//! by a NULL one.
-	vector<ComposedMinMaxTermData> ComposedTerms(idx_t root, const vector<LogicalDecide::ComposedMinMaxTerm> &terms,
+	vector<ComposedMinMaxTermData> ComposedTerms(idx_t root, const DecideAlgebraNode &formula,
+	                                             const vector<LogicalDecide::ComposedMinMaxTerm> &terms,
 	                                             const char *what, bool &null_factor);
 	//! A factor the whole query shares (a composed term's, a square's), as flat reads it: on the input's first row,
 	//! whatever a clause keeps.

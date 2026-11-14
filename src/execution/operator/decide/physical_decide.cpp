@@ -1535,7 +1535,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 		if (clause.skipped) {
 			continue;
 		}
-		LinearizeComposedMinMaxConstraint(solver_input, var_indexer, terms, clause.rhs, spec.outer_cmp,
+		LinearizeComposedMinMaxConstraint(solver_input, var_indexer, terms, clause.rhs, clause.comparison,
 		                                  spec.source_clause_id, spec.removal_group_id, clause.repair_group_id,
 		                                  clause.class_set, decide_var_names, native_min_max);
 	}

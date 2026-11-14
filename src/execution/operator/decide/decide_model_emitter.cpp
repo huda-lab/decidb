@@ -111,6 +111,53 @@ static vector<idx_t> AlgebraDecisionLeaves(const DecideAlgebraNode &root) {
 	return result;
 }
 
+static const DecideAlgebraNode &ComposedTermsFormula(const DecideNode &node) {
+	const DecideAlgebraNode *formula = nullptr;
+	if (node.objective) {
+		if (!node.algebra || node.algebra->kind != DecideAlgebraKind::OPERATOR ||
+		    (node.algebra->operation != "minimize" && node.algebra->operation != "maximize") ||
+		    node.algebra->children.size() != 1 || !node.algebra->children[0] ||
+		    node.algebra->children[0]->kind != DecideAlgebraKind::OPERATOR ||
+		    node.algebra->children[0]->operation != "+") {
+			throw InternalException("DECIDE model emitter: composed objective has no E algebra");
+		}
+		const auto &sum = *node.algebra->children[0];
+		const auto direct_parts = node.compiled.objective
+		                              ? node.compiled.objective->terms.size() +
+		                                    node.compiled.objective->bilinear_terms.size() +
+		                                    (!node.compiled.objective->squared_terms.empty() ? 1 : 0)
+		                              : 0;
+		if (sum.children.size() != direct_parts + 1) {
+			throw InternalException("DECIDE model emitter: composed objective is missing its formula branch");
+		}
+		formula = sum.children.back().get();
+	} else {
+		if (!node.algebra || node.algebra->kind != DecideAlgebraKind::OPERATOR ||
+		    node.algebra->expression_class != ExpressionClass::BOUND_COMPARISON ||
+		    node.algebra->children.size() != 2 || !node.algebra->children[0] || !node.algebra->children[1]) {
+			throw InternalException("DECIDE model emitter: composed clause has no E algebra");
+		}
+		formula = node.algebra->children[0].get();
+	}
+	if (!formula || formula->kind != DecideAlgebraKind::OPERATOR || formula->operation != "composed_sum" ||
+	    formula->children.size() != node.compiled.composed.size()) {
+		throw InternalException("DECIDE model emitter: E node has no aligned composed-term algebra");
+	}
+	for (idx_t term = 0; term < formula->children.size(); term++) {
+		auto &value = *formula->children[term];
+		if (value.kind != DecideAlgebraKind::OPERATOR || value.source_term != term ||
+		    value.operation.find("composed_") != 0 ||
+		    value.children.size() < 1 || value.children.size() > 2 ||
+		    !value.children[0] ||
+		    value.children[0]->kind != DecideAlgebraKind::TREE_VALUE ||
+		    value.children[0]->tree_value_node != node.compiled.composed[term] ||
+		    (value.children.size() == 2 && (!value.children[1] || !value.children[1]->source_expression))) {
+			throw InternalException("DECIDE model emitter: E node has a malformed composed term");
+		}
+	}
+	return *formula;
+}
+
 DecideModelEmitter::DecideModelEmitter(const PhysicalDecide &op, ClientContext &context, const DecideTree &tree,
                                        const DecideDescent &descent, DecideTreeColumns &columns,
                                        DecideGlobalSinkState &gstate, PerGroupCache &groups,
@@ -1414,7 +1461,7 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 	}
 	auto &sum_formula = *node.algebra->children[0];
 	const auto expected_parts = objective.terms.size() + objective.bilinear_terms.size() +
-	                            (!objective.squared_terms.empty() ? 1 : 0);
+	                            (!objective.squared_terms.empty() ? 1 : 0) + (!node.compiled.composed.empty() ? 1 : 0);
 	if (sum_formula.children.size() != expected_parts) {
 		throw InternalException("DECIDE model emitter: objective E node has an incomplete sum algebra");
 	}
@@ -1590,11 +1637,23 @@ void DecideModelEmitter::Composed(PhysicalDecide::EvaluatedClauses &evaluated) {
 		}
 	}
 	for (idx_t c = 0; c < clauses.size(); c++) {
+		if (clauses[c] >= tree.nodes.size()) {
+			throw InternalException("DECIDE model emitter: composed clause has no E node");
+		}
+		auto &node = *tree.nodes[clauses[c]];
+		const auto &formula = ComposedTermsFormula(node);
 		auto &spec = op.composed_minmax_constraints[c];
 		PhysicalDecide::EvaluatedClauses::ComposedConstraint clause;
-		clause.rhs = DecideComposedBound(context, spec);
+		const auto &bound_formula = *node.algebra->children[1];
+		if (!bound_formula.source_expression &&
+		    (bound_formula.kind != DecideAlgebraKind::VALUE || !bound_formula.value)) {
+			throw InternalException("DECIDE model emitter: composed E node has no source for its bound expression");
+		}
+		const auto &rhs = bound_formula.source_expression ? *bound_formula.source_expression : *bound_formula.value;
+		clause.comparison = node.algebra->expression_type;
+		clause.rhs = DecideComposedBound(context, rhs);
 		bool null_factor = false;
-		clause.terms = ComposedTerms(clauses[c], spec.terms, "constraint", null_factor);
+		clause.terms = ComposedTerms(clauses[c], formula, spec.terms, "constraint", null_factor);
 		// The rows its `when` keeps are the rows its root holds, and their classes those of its `per K:`.
 		auto kept_rows = [&]() {
 			vector<bool> kept(num_rows, false);
@@ -1614,31 +1673,73 @@ void DecideModelEmitter::Composed(PhysicalDecide::EvaluatedClauses &evaluated) {
 	}
 	if (objective != DConstants::INVALID_INDEX) {
 		bool null_factor = false;
-		auto terms = ComposedTerms(objective, op.composed_minmax_objective_terms, "objective", null_factor);
+		const auto &formula = ComposedTermsFormula(*tree.nodes[objective]);
+		auto terms = ComposedTerms(objective, formula, op.composed_minmax_objective_terms, "objective", null_factor);
 		// A term with a NULL factor reads 0; one that reads no row is dropped.
 		terms.erase(std::remove_if(terms.begin(), terms.end(), DecideComposedTermReadsNoRow), terms.end());
 		evaluated.composed_objective_terms = std::move(terms);
 	}
 }
 
-vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(idx_t root,
-                                                                 const vector<LogicalDecide::ComposedMinMaxTerm> &terms,
-                                                                 const char *what, bool &null_factor) {
+vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(
+    idx_t root, const DecideAlgebraNode &formula, const vector<LogicalDecide::ComposedMinMaxTerm> &terms,
+    const char *what, bool &null_factor) {
 	auto &body = tree.nodes[root]->compiled;
 	const auto clause = op.WrittenClause(tree.nodes[root]->source_clause_id);
+	if (formula.children.size() != terms.size()) {
+		throw InternalException("DECIDE model emitter: composed formula has the wrong number of terms");
+	}
 	vector<ComposedMinMaxTermData> result;
-	for (idx_t t = 0; t < terms.size(); t++) {
+	for (idx_t position = 0; position < terms.size(); position++) {
+		auto &term_formula = *formula.children[position];
+		const auto t = term_formula.source_term;
+		if (t >= terms.size()) {
+			throw InternalException("DECIDE model emitter: composed term has an invalid source index");
+		}
 		auto &term = terms[t];
-		auto evaluated = DecideComposedTerm(term, op.source_fragments, op.keyed_scopes, op.keys);
-		if (term.scale) {
+		const auto prefix = string("composed_");
+		if (term_formula.operation.find(prefix) != 0 || term_formula.operation.size() <= prefix.size()) {
+			throw InternalException("DECIDE model emitter: composed E term has no reducer operator");
+		}
+		auto agg_name = term_formula.operation.substr(prefix.size());
+		const auto divided_suffix = string("_divided_by");
+		const auto scaled_suffix = string("_scaled_by");
+		const bool scale_divides = StringUtil::EndsWith(agg_name, divided_suffix);
+		const bool has_scale = scale_divides || StringUtil::EndsWith(agg_name, scaled_suffix);
+		if (has_scale) {
+			agg_name.resize(agg_name.size() - (scale_divides ? divided_suffix.size() : scaled_suffix.size()));
+		}
+		if (agg_name != term.agg_name || has_scale != (term.scale != nullptr) ||
+		    scale_divides != term.scale_divides || term_formula.sign != term.sign ||
+		    term_formula.children.size() != (has_scale ? 2 : 1) ||
+		    term_formula.children[0]->kind != DecideAlgebraKind::TREE_VALUE ||
+		    term_formula.children[0]->tree_value_node != body.composed[t]) {
+			throw InternalException("DECIDE model emitter: composed term disagrees with its E algebra");
+		}
+		const auto reducer_node = term_formula.children[0]->tree_value_node;
+		if (reducer_node >= tree.nodes.size()) {
+			throw InternalException("DECIDE model emitter: composed term has an invalid G node");
+		}
+		const bool is_minmax = agg_name == "min" || agg_name == "max";
+		if (is_minmax != (term.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) ||
+		    term_formula.is_easy != term.is_easy) {
+			throw InternalException("DECIDE model emitter: composed E operator disagrees with its G reducer");
+		}
+		auto evaluated = DecideComposedTerm(term, agg_name, term_formula.sign, term_formula.is_easy,
+		                                   op.source_fragments, op.keyed_scopes, op.keys);
+		if (has_scale) {
+			const auto &scale_formula = *term_formula.children[1];
+			if (!scale_formula.source_expression) {
+				throw InternalException("DECIDE model emitter: composed E term has no scale expression");
+			}
 			// A value the whole query shares, read as flat reads it, on the input's first rows, whatever the clause
 			// keeps: before the term's members, which follow its predecessor's (DecideErrorRank::part).
 			try {
-				evaluated.scale =
-				    DecideQueryWideScale(FirstRowValue(*term.scale), term.scale_divides, what,
-				                         {DecideValueRole::COEFFICIENT, *term.scale, names, clause}, null_factor);
+				evaluated.scale = DecideQueryWideScale(
+				    FirstRowValue(*scale_formula.source_expression), scale_divides, what,
+				    {DecideValueRole::COEFFICIENT, *scale_formula.source_expression, names, clause}, null_factor);
 			} catch (std::exception &ex) {
-				auto rank = tree.nodes[body.composed[t]]->clause_rank;
+				auto rank = tree.nodes[reducer_node]->clause_rank;
 				rank.part = t;
 				rank.expression = DecideBlockExpression(DecideBlock::TERMS, 0, false);
 				rank.row = 0;
@@ -1647,8 +1748,8 @@ vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(idx_t root,
 		}
 		// Its members are its G's: the entries of its operand its member tests keep, and a relation-qualified one's
 		// first of each class (language/guide.md §5.1). Every other row reads 0.
-		auto &members = tree.nodes[body.composed[t]]->compiled;
-		const auto site = DecideTreeOperand(tree, body.composed[t]);
+		auto &members = tree.nodes[reducer_node]->compiled;
+		const auto site = DecideTreeOperand(tree, reducer_node);
 		const auto qualified = term.qualifier_scope_idx != DConstants::INVALID_INDEX;
 		vector<bool> first;
 		const auto &reads = ReadEntriesOf(site, qualified, first);

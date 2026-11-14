@@ -822,6 +822,42 @@ public:
 		return result;
 	}
 
+	unique_ptr<DecideAlgebraNode> AlgebraComposed(idx_t owner,
+	                                              const vector<LogicalDecide::ComposedMinMaxTerm> &terms,
+	                                              const vector<idx_t> &reducers) const {
+		if (terms.size() != reducers.size()) {
+			throw InternalException("DECIDE tree: a composed operator has no aligned reducer nodes");
+		}
+		auto result = make_uniq<DecideAlgebraNode>();
+		result->kind = DecideAlgebraKind::OPERATOR;
+		result->owner = owner;
+		result->operation = "composed_sum";
+		for (idx_t term = 0; term < terms.size(); term++) {
+			auto value = make_uniq<DecideAlgebraNode>();
+			value->kind = DecideAlgebraKind::OPERATOR;
+			value->owner = owner;
+			value->operation = "composed_" + terms[term].agg_name;
+			if (terms[term].scale) {
+				value->operation += terms[term].scale_divides ? "_divided_by" : "_scaled_by";
+			}
+			value->source_term = term;
+			value->sign = terms[term].sign;
+			value->is_easy = terms[term].is_easy;
+			auto reducer = make_uniq<DecideAlgebraNode>();
+			reducer->kind = DecideAlgebraKind::TREE_VALUE;
+			reducer->owner = owner;
+			reducer->tree_value_node = reducers[term];
+			value->children.push_back(std::move(reducer));
+			if (terms[term].scale) {
+				auto scale = AlgebraExpression(owner, *terms[term].scale);
+				scale->source_expression = terms[term].scale->Copy();
+				value->children.push_back(std::move(scale));
+			}
+			result->children.push_back(std::move(value));
+		}
+		return result;
+	}
+
 	void BuildAlgebra() {
 		for (idx_t index = 0; index < tree->nodes.size(); index++) {
 			auto &node = *tree->nodes[index];
@@ -883,7 +919,7 @@ public:
 				node.algebra = std::move(clause);
 				continue;
 			}
-			if (body.objective) {
+			if (body.objective || (node.objective && !body.composed.empty())) {
 				auto objective = make_uniq<DecideAlgebraNode>();
 				objective->kind = DecideAlgebraKind::OPERATOR;
 				objective->owner = index;
@@ -892,48 +928,66 @@ public:
 				sum->kind = DecideAlgebraKind::OPERATOR;
 				sum->owner = index;
 				sum->operation = "+";
-				for (idx_t term = 0; term < body.objective->terms.size(); term++) {
-					sum->children.push_back(AlgebraTerm(index, body.objective->terms[term], body.linear[term], term));
-				}
-				for (idx_t product = 0; product < body.objective->bilinear_terms.size(); product++) {
-					auto &term = body.objective->bilinear_terms[product];
-					auto expression = make_uniq<DecideAlgebraNode>();
-					expression->kind = DecideAlgebraKind::OPERATOR;
-					expression->owner = index;
-					expression->operation = "*";
-					expression->sign = term.sign;
-					expression->scale = static_cast<double>(term.sign);
-					expression->source_term = product;
-					auto left = make_uniq<DecideAlgebraNode>();
-					left->kind = DecideAlgebraKind::DECISION;
-					left->owner = index;
-					left->decision_var = term.var_a;
-					auto right = make_uniq<DecideAlgebraNode>();
-					right->kind = DecideAlgebraKind::DECISION;
-					right->owner = index;
-					right->decision_var = term.var_b;
-					expression->children.push_back(std::move(left));
-					expression->children.push_back(std::move(right));
-					if (term.coefficient) {
-						expression->children.push_back(AlgebraProgram(index, body.products[product].node,
-						                                                 body.products[product].program));
+				if (body.objective) {
+					for (idx_t term = 0; term < body.objective->terms.size(); term++) {
+						sum->children.push_back(AlgebraTerm(index, body.objective->terms[term], body.linear[term], term));
 					}
-					sum->children.push_back(std::move(expression));
-				}
-				if (!body.objective->squared_terms.empty()) {
-					auto squares = make_uniq<DecideAlgebraNode>();
-					squares->kind = DecideAlgebraKind::OPERATOR;
-					squares->owner = index;
-					squares->operation = "square_sum";
-					squares->scale = body.objective->quadratic_sign;
-					for (idx_t term = 0; term < body.objective->squared_terms.size(); term++) {
-						squares->children.push_back(
-						    AlgebraTerm(index, body.objective->squared_terms[term], body.squares[0][term], term));
+					for (idx_t product = 0; product < body.objective->bilinear_terms.size(); product++) {
+						auto &term = body.objective->bilinear_terms[product];
+						auto expression = make_uniq<DecideAlgebraNode>();
+						expression->kind = DecideAlgebraKind::OPERATOR;
+						expression->owner = index;
+						expression->operation = "*";
+						expression->sign = term.sign;
+						expression->scale = static_cast<double>(term.sign);
+						expression->source_term = product;
+						auto left = AlgebraDecision(index, term.var_a);
+						auto right = AlgebraDecision(index, term.var_b);
+						expression->children.push_back(std::move(left));
+						expression->children.push_back(std::move(right));
+						if (term.coefficient) {
+							expression->children.push_back(AlgebraProgram(index, body.products[product].node,
+							                                                 body.products[product].program));
+						}
+						sum->children.push_back(std::move(expression));
 					}
-					sum->children.push_back(std::move(squares));
+					if (!body.objective->squared_terms.empty()) {
+						auto squares = make_uniq<DecideAlgebraNode>();
+						squares->kind = DecideAlgebraKind::OPERATOR;
+						squares->owner = index;
+						squares->operation = "square_sum";
+						squares->scale = body.objective->quadratic_sign;
+						for (idx_t term = 0; term < body.objective->squared_terms.size(); term++) {
+							squares->children.push_back(
+							    AlgebraTerm(index, body.objective->squared_terms[term], body.squares[0][term], term));
+						}
+						sum->children.push_back(std::move(squares));
+					}
+				}
+				if (!body.composed.empty()) {
+					sum->children.push_back(
+					    AlgebraComposed(index, op.composed_minmax_objective_terms, body.composed));
 				}
 				objective->children.push_back(std::move(sum));
 				node.algebra = std::move(objective);
+				continue;
+			}
+			if (!body.composed.empty() && node.facts) {
+				if (body.order >= op.composed_minmax_constraints.size() || !node.rhs) {
+					throw InternalException("DECIDE tree composed clause %llu has no source or bound", index);
+				}
+				auto comparison = make_uniq<DecideAlgebraNode>();
+				comparison->kind = DecideAlgebraKind::OPERATOR;
+				comparison->owner = index;
+				comparison->expression_class = ExpressionClass::BOUND_COMPARISON;
+				comparison->expression_type = node.facts->comparison_type;
+				comparison->operation = ExpressionTypeToString(node.facts->comparison_type);
+				comparison->children.push_back(AlgebraComposed(
+				    index, op.composed_minmax_constraints[body.order].terms, body.composed));
+				auto rhs = AlgebraExpression(index, *node.rhs);
+				rhs->source_expression = node.rhs->Copy();
+				comparison->children.push_back(std::move(rhs));
+				node.algebra = std::move(comparison);
 				continue;
 			}
 			if (node.kind == DecideNodeKind::REDUCER && node.function) {
@@ -2368,26 +2422,73 @@ void DecideTree::Validate() const {
 				}
 			}
 			}
-			if (node.compiled.objective) {
+			if (node.objective) {
 				const auto expected_sense = objective_sense == DecideSense::MINIMIZE ? "minimize" : "maximize";
-				const auto &objective = *node.compiled.objective;
-				const auto expected_parts = objective.terms.size() + objective.bilinear_terms.size() +
-				                            (!objective.squared_terms.empty() ? 1 : 0);
+				const auto direct_parts = node.compiled.objective
+				                              ? node.compiled.objective->terms.size() +
+				                                    node.compiled.objective->bilinear_terms.size() +
+				                                    (!node.compiled.objective->squared_terms.empty() ? 1 : 0)
+				                              : 0;
+				const auto expected_parts = direct_parts + (!node.compiled.composed.empty() ? 1 : 0);
 				if (objective_sense == DecideSense::FEASIBILITY || node.algebra->kind != DecideAlgebraKind::OPERATOR ||
 				    node.algebra->operation != expected_sense || node.algebra->children.size() != 1 ||
 				    !node.algebra->children[0] || node.algebra->children[0]->kind != DecideAlgebraKind::OPERATOR ||
 				    node.algebra->children[0]->operation != "+" ||
-				    node.algebra->children[0]->children.size() != expected_parts ||
-				    objective.has_quadratic != !objective.squared_terms.empty()) {
+				    node.algebra->children[0]->children.size() != expected_parts) {
 					throw InternalException("DECIDE tree objective node %llu has an invalid algebra", i);
 				}
-				if (objective.has_quadratic) {
-					auto &squares = *node.algebra->children[0]->children[objective.terms.size() +
-					                                                        objective.bilinear_terms.size()];
-					if (squares.kind != DecideAlgebraKind::OPERATOR || squares.operation != "square_sum" ||
-					    squares.scale != objective.quadratic_sign ||
-					    squares.children.size() != objective.squared_terms.size()) {
-						throw InternalException("DECIDE tree objective node %llu has invalid square algebra", i);
+				if (node.compiled.objective) {
+					const auto &objective = *node.compiled.objective;
+					if (objective.has_quadratic != !objective.squared_terms.empty()) {
+						throw InternalException("DECIDE tree objective node %llu has inconsistent quadratic terms", i);
+					}
+					if (objective.has_quadratic) {
+						auto &squares = *node.algebra->children[0]->children[objective.terms.size() +
+						                                                        objective.bilinear_terms.size()];
+						if (squares.kind != DecideAlgebraKind::OPERATOR || squares.operation != "square_sum" ||
+						    squares.scale != objective.quadratic_sign ||
+						    squares.children.size() != objective.squared_terms.size()) {
+							throw InternalException("DECIDE tree objective node %llu has invalid square algebra", i);
+						}
+					}
+				}
+				if (!node.compiled.composed.empty()) {
+					auto &composed = *node.algebra->children[0]->children.back();
+					if (composed.kind != DecideAlgebraKind::OPERATOR || composed.operation != "composed_sum" ||
+					    composed.children.size() != node.compiled.composed.size()) {
+						throw InternalException("DECIDE tree objective node %llu has invalid composed algebra", i);
+					}
+					for (idx_t term = 0; term < composed.children.size(); term++) {
+						auto &value = *composed.children[term];
+						if (value.kind != DecideAlgebraKind::OPERATOR || value.source_term != term ||
+						    value.operation.find("composed_") != 0 || value.children.empty() ||
+						    value.children[0]->kind != DecideAlgebraKind::TREE_VALUE ||
+						    value.children[0]->tree_value_node != node.compiled.composed[term]) {
+							throw InternalException("DECIDE tree objective node %llu has a malformed composed term", i);
+						}
+					}
+				}
+			}
+			if (!node.objective && node.facts && !node.compiled.composed.empty()) {
+				if (node.algebra->kind != DecideAlgebraKind::OPERATOR ||
+				    node.algebra->expression_class != ExpressionClass::BOUND_COMPARISON ||
+				    node.algebra->expression_type != node.facts->comparison_type || node.algebra->children.size() != 2 ||
+				    node.algebra->children[0]->kind != DecideAlgebraKind::OPERATOR ||
+				    !node.algebra->children[1] ||
+				    (!node.algebra->children[1]->source_expression &&
+				     (node.algebra->children[1]->kind != DecideAlgebraKind::VALUE ||
+				      !node.algebra->children[1]->value)) ||
+				    node.algebra->children[0]->operation != "composed_sum" ||
+				    node.algebra->children[0]->children.size() != node.compiled.composed.size()) {
+					throw InternalException("DECIDE tree composed clause node %llu has invalid algebra", i);
+				}
+				for (idx_t term = 0; term < node.compiled.composed.size(); term++) {
+					auto &value = *node.algebra->children[0]->children[term];
+					if (value.kind != DecideAlgebraKind::OPERATOR || value.source_term != term ||
+					    value.operation.find("composed_") != 0 || value.children.empty() ||
+					    value.children[0]->kind != DecideAlgebraKind::TREE_VALUE ||
+					    value.children[0]->tree_value_node != node.compiled.composed[term]) {
+						throw InternalException("DECIDE tree composed clause node %llu has a malformed term", i);
 					}
 				}
 			}
@@ -2551,8 +2652,11 @@ void DecideTree::Validate() const {
 		if (node.compiled.clause && !node.algebra) {
 			throw InternalException("DECIDE tree clause node %llu has no algebra", i);
 		}
-		if (node.compiled.objective && !node.algebra) {
+		if (node.objective && !node.algebra) {
 			throw InternalException("DECIDE tree objective node %llu has no algebra", i);
+		}
+		if (!node.objective && node.facts && !node.compiled.composed.empty() && !node.algebra) {
+			throw InternalException("DECIDE tree composed clause node %llu has no algebra", i);
 		}
 		if (node.kind == DecideNodeKind::FUNCTION && node.body && !node.algebra) {
 			throw InternalException("DECIDE tree function node %llu has no algebra", i);

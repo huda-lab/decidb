@@ -41,7 +41,10 @@ struct DecideAlgebraNode {
 	idx_t program = DConstants::INVALID_INDEX;
 	idx_t source_term = DConstants::INVALID_INDEX;
 	int sign = 1;
+	bool is_easy = true;
 	double scale = 1.0;
+	//! Exact source for an expression subtree that must be evaluated as a whole (for example a composed term's scale).
+	unique_ptr<Expression> source_expression;
 	unique_ptr<Expression> value;
 	vector<unique_ptr<DecideAlgebraNode>> children;
 };

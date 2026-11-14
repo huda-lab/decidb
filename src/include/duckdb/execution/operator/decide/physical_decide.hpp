@@ -306,10 +306,12 @@ private:
         vector<TermFilterState> linear_filters, quadratic_filters, bilinear_filters;
 
         //! One composed MIN/MAX *constraint*, evaluated. Parallel to
-        //! `composed_minmax_constraints`; the comparison and clause id stay on the plan.
+        //! `composed_minmax_constraints`; source identity and repair metadata stay on the plan.
         struct ComposedConstraint {
             vector<ComposedMinMaxTermData> terms;
             double rhs = 0.0;
+            //! Comparison owned by the composed clause's E algebra.
+            ExpressionType comparison = ExpressionType::INVALID;
             //! Its repair group, numbered after every clause of `constraints` and
             //! `singleton_row_constraints`, so its slack is shared with no other clause.
             idx_t repair_group_id = DConstants::INVALID_INDEX;
