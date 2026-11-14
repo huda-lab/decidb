@@ -7,10 +7,12 @@
 // rewrite"). A scoped comparison in the VALUE shape -- a decision reducer beside a
 // per-row or keyed decision, under a factor that varies by row, next to a reducer with
 // another `by` key, or inside another expression -- is not one model row per `by` group.
-// Each of its decision reducers becomes a helper decision with one instance per `by`
-// group, defined once (LogicalDecide::reducer_value_links; stage 06 emits the
-// definition), and the comparison is then an ordinary row per class. Deck example 1,
-// `ship <= 0.20 * sum(ship)`, costs N rows and one helper rather than N rows of N terms.
+// Its decision reducers become helper decisions with one instance per `by` group,
+// defined once (LogicalDecide::reducer_value_links; stage 06 emits the definition),
+// except a direct, unfiltered nested SUM whose scope matches its clause. That shape
+// keeps the outer G in the clause and lets its parent read the nested G value directly.
+// Deck example 1, `ship <= 0.20 * sum(ship)`, costs N rows and one helper rather than
+// N rows of N terms.
 //
 // A range frame over decisions (language/guide.md §5.6) is a reducer whose groups are the frame's windows, and becomes
 // a helper through the same door (AddValueHelper, DecideHelperSides; RewriteFrameRanges in decide_rewrite_frames.cpp).
@@ -547,10 +549,11 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		// Canonicalization put every decision reducer on the left.
 		vector<ReducerSite> sites;
 		CollectReducerSites(cmp.left, 1, optimizer.context, decide.decide_index, booleans, sites);
-		// When a direct outer reducer holds nested reducers, keep that outer aggregate in the clause. The tree's G
-		// nodes represent the nested values, while the ordinary reducer term splitter can emit the outer SUM's
-		// bilinear or quadratic row. Replacing both levels here would turn that row into a reducer-value link, whose
-		// member program is intentionally linear.
+		// When a direct outer SUM holds a simple, unfiltered nest in the same clause scope, keep the outer aggregate
+		// in the clause. Its G node then reads the nested G values directly, instead of introducing a second helper
+		// whose members merely copy the outer SUM. This also lets the ordinary term splitter emit the outer SUM's
+		// bilinear or quadratic row. Filtered and deeper nests keep the value-link path until their node-owned
+		// formulation can preserve each path's bounds and scope semantics.
 		auto *direct_outer = UnwrapDecideCasts(*cmp.left, decide.decide_index);
 		vector<ReducerSite> nested_outer_sites;
 		if (direct_outer->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
@@ -574,16 +577,12 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 			                                                              !DecideCanonicalizer::ContainsReducer(
 			                                                                  *nested.children[0]);
 		                                               });
-		const bool nested_outer_needs_quadratic_row =
-		    direct_outer->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
-		    !direct_outer->Cast<BoundAggregateExpression>().children.empty() &&
-		    !DecideExpressionDegree(*direct_outer->Cast<BoundAggregateExpression>().children[0], decide.decide_index)
-		         .IsLinear();
-		// Keep the direct SUM only when its own operand needs a quadratic row. A linear nest such as
-		// SUM(MAX(x)) must keep the value-link path so its inner helper stays connected to outer bounds and scopes.
+		// The clause's row is already the outer G's value in this shape. A direct, unfiltered nest with the same
+		// clause and outer keys therefore needs no outer value-link column: the inner helper's G is read once per
+		// instance by the outer G, and the comparison's push still reaches that inner helper. Keep this deliberately
+		// narrow while filtered/deeper cases are handled by the established path-aware links.
 		const bool has_nested_outer =
-		    direct_outer_is_sum && nested_outer_needs_quadratic_row && nested_outer_has_unfiltered_reducers &&
-		    !scope.Condition() &&
+		    direct_outer_is_sum && nested_outer_has_unfiltered_reducers && !scope.Condition() &&
 		    scope.PerKey() == DecideReducerGroupKey(direct_outer->Cast<BoundAggregateExpression>());
 		DecideReducerPath path;
 		if (scope.Condition()) {

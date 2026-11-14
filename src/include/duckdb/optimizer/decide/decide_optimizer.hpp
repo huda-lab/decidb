@@ -130,15 +130,16 @@ private:
 	//! objective), under which each rewritten AVG's account is recorded.
 	void RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide, const string &clause_alias);
 
-	//! The value rewrite (language/guide.md §6.4): every decision reducer of a
-	//! comparison in the VALUE shape (VALUE_REWRITE_TAG) becomes a helper decision defined
-	//! once per `by` group (LogicalDecide::reducer_value_links), and the comparison is then
-	//! one row per class. A reducer nested in it becomes one too, innermost first, keyed by
-	//! its path (language/guide.md §5.5); so does every objective reducer the canonicalizer
-	//! tagged for holding one, which the objective then reads once (D81). Runs after ABS and
-	//! bilinear, whose auxiliaries may stand inside a reducer's body, and before the MIN/MAX
-	//! passes, which never see these reducers. A product of decisions left inside such a
-	//! reducer is refused (language/errors.md §2).
+	//! The value rewrite (language/guide.md §6.4): a decision reducer of a comparison in
+	//! the VALUE shape (VALUE_REWRITE_TAG) becomes a helper decision defined once per `by`
+	//! group (LogicalDecide::reducer_value_links), and the comparison is then one row per
+	//! class. A direct, unfiltered outer SUM with the same key as its clause stays in the
+	//! tree; its nested reducers still become helpers, innermost first, keyed by their path
+	//! (language/guide.md §5.5). Objective reducers tagged for holding one become helpers,
+	//! except the group-sum rewrite (D81). Runs after ABS and bilinear, whose auxiliaries may
+	//! stand inside a reducer's body, and before the MIN/MAX passes, which never see these
+	//! reducers. A product of decisions left inside such a reducer is refused
+	//! (language/errors.md §2).
 	void RewriteScopedReducers(LogicalDecide &decide);
 
 	//! The objective's `sum(inner(e) by (G))`, the outer sum with no `per` and `e` not linear, summed in the other

@@ -383,12 +383,14 @@ reader, so its errors are not raised (open: no query is known to make one).
 and their rows follow the same instance scopes as the rest of the tree. Helper columns remain allocated at plan time
 because stage 06 addresses decisions by their plan-time indices. P9.1–P9.3 move ABS envelopes, Boolean-product links
 and L0 indicator links under F nodes. P9.4 removes `LiftNestedReducers` and the standalone
-`DefineNonlinearReducerBodies` rewrite. Compatible outer SUM clauses retain nested G readers when their own rows
-need quadratic terms; linear nests keep the value-link path so its bounds and scope semantics remain available. A
-nonlinear reducer body stays at its written site with a tagged read of its definition F node; tree lowering wires that
-read to the child F value, and term splitting uses the reserved helper column where optimizer-owned MIN/MAX forms
-need it. Tree construction owns the definition E row. Its early preparation reserves plan-time indices and registers
-F-node specs before later optimizer consumers need them. The P9.4 regression gate passes.
+`DefineNonlinearReducerBodies` rewrite. A direct, unfiltered outer SUM whose clause has the same key retains nested G
+readers, including linear bodies; compatible outer SUM clauses also retain nested G readers when their own rows need
+quadratic terms. Filtered or deeper linear nests keep the value-link path so their bounds and scope semantics remain
+available. A nonlinear reducer body stays at its written site with a tagged read of its definition F node; tree
+lowering wires that read to the child F value, and term splitting uses the reserved helper column where
+optimizer-owned MIN/MAX forms need it. Tree construction owns the definition E row. Its early preparation reserves
+plan-time indices and registers F-node specs before later optimizer consumers need them. The P9.4 regression gate
+passes.
 
 **Cost**, measured before flat was deleted, against flat on one binary (`benchmark/decide/anr_scaling.py --against` a
 flat run): the tree's own time at 10^5 rows is 0.84x to 1.33x flat's on every workload (`flat-sum` the most), and its
