@@ -457,6 +457,10 @@ struct ReducerValueMembers {
 	vector<double> constants;
 	vector<idx_t> member_begin {0};
 	vector<idx_t> variables;
+	//! The G/O/F node that produces a term's value, when it is a tree value; INVALID for a decision leaf. Kept parallel
+	//! to `variables` so a parent reducer can resolve a child result through the executable tree instead of only through
+	//! the plan-time helper index.
+	vector<idx_t> value_nodes;
 	vector<idx_t> rows;
 	vector<double> coefficients;
 
@@ -475,8 +479,10 @@ struct ReducerValueMembers {
 		group_begin.back()++;
 	}
 	//! A term of the last member.
-	void AddTerm(idx_t variable, idx_t row, double coefficient) {
+	void AddTerm(idx_t variable, idx_t row, double coefficient,
+	              idx_t value_node = DConstants::INVALID_INDEX) {
 		variables.push_back(variable);
+		value_nodes.push_back(value_node);
 		rows.push_back(row);
 		coefficients.push_back(coefficient);
 		member_begin.back()++;
@@ -491,6 +497,8 @@ struct ReducerValueMembers {
 //! (ExtremumLinkSpec), on the same two sides. A group with no member defines nothing.
 struct ReducerValueLinkSpec {
     idx_t value_var = DConstants::INVALID_INDEX;
+	//! The G or O node whose formula this link defines; INVALID for records produced outside the tree.
+	idx_t value_node = DConstants::INVALID_INDEX;
     string agg_name;
     bool need_envelope = false;
     bool need_closing = false;

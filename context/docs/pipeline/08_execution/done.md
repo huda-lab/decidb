@@ -412,7 +412,10 @@ MAX-inside-SUM example therefore records the E → SUM G → MAX G path directly
 decision read of that F's output so its formula does not point back to itself. The E/G/O emitter takes each term's
 variable from its DECISION or TREE_VALUE leaf, then resolves a node read to the same plan-time helper column while
 filling the row-indexed solver input; its coefficient program comes from the adjacent PROGRAM leaf. This is the first
-recursive algebra slice; it does not yet replace the flat formulation path.
+recursive algebra slice; it does not yet replace the flat formulation path. A reducer link's members now retain the
+producer node beside the plan-time helper index, and the stage 06 inliner resolves nested G references by that node
+identity first, checking that it names the same helper column. Parent reducer formulas can therefore follow their
+child G edges directly through the executable tree while the solver still receives its established column records.
 
 **Cost**, measured before flat was deleted, against flat on one binary (`benchmark/decide/anr_scaling.py --against` a
 flat run): the tree's own time at 10^5 rows is 0.84x to 1.33x flat's on every workload (`flat-sum` the most), and its

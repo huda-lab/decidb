@@ -125,6 +125,20 @@ static idx_t AlgebraTermProgram(const DecideTree &tree, const DecideAlgebraNode 
 	return coefficient.program;
 }
 
+//! The producer of a term's decision value, when the formula names one. Preserve this edge beside its plan-time
+//! variable index so a parent G can consume its child G/O/F node directly.
+static idx_t AlgebraTermValueNode(const DecideTree &tree, const DecideAlgebraNode &formula) {
+	if (formula.children.empty() || !formula.children[0] ||
+	    formula.children[0]->kind != DecideAlgebraKind::TREE_VALUE) {
+		return DConstants::INVALID_INDEX;
+	}
+	const auto node = formula.children[0]->tree_value_node;
+	if (node >= tree.nodes.size() || !tree.nodes[node]->decision_value) {
+		throw InternalException("DECIDE model emitter: term references a non-decision tree value");
+	}
+	return node;
+}
+
 static idx_t AlgebraProductVariable(const DecideTree &tree, const DecideAlgebraNode &formula, idx_t child,
                                     idx_t expected, idx_t source_term, const char *side) {
 	if (child >= formula.children.size() || !formula.children[child]) {
@@ -2123,6 +2137,7 @@ void DecideModelEmitter::ValueLinks() {
 		auto &body = tree_node.compiled;
 		auto spec = ReducerValueLinkSpec();
 		spec.value_var = tree_node.value_var;
+		spec.value_node = node;
 		spec.agg_name = aggregate;
 		spec.need_envelope = tree_node.value_link_needs_envelope;
 		spec.need_closing = tree_node.value_link_needs_closing;
@@ -2175,6 +2190,7 @@ void DecideModelEmitter::ValueLinks() {
 		// those terms before dropping rows without a helper value, so their errors keep the same rank and message.
 		vector<bool> emitted_terms(body.members.size(), false);
 		vector<idx_t> variables(body.members.size(), DConstants::INVALID_INDEX);
+		vector<idx_t> value_nodes(body.members.size(), DConstants::INVALID_INDEX);
 		vector<vector<double>> coefficients(body.members.size());
 		for (auto &algebra_term : tree_node.algebra->children) {
 			if (!algebra_term || algebra_term->kind != DecideAlgebraKind::OPERATOR ||
@@ -2188,6 +2204,9 @@ void DecideModelEmitter::ValueLinks() {
 			auto &site_t = body.linear[t];
 			idx_t variable;
 			const auto program = AlgebraTermProgram(tree, *algebra_term, term, site_t, t, "G node", &variable);
+			value_nodes[t] = term.frame_read == DConstants::INVALID_INDEX
+			                      ? AlgebraTermValueNode(tree, *algebra_term)
+			                      : DConstants::INVALID_INDEX;
 			coefficients[t] = columns.Numbers(site, program, members.reads, nullptr, &site_t, &term.inputs);
 			variables[t] = gstate.ReadVariable(variable, term.frame_read);
 		}
@@ -2219,7 +2238,7 @@ void DecideModelEmitter::ValueLinks() {
 					}
 					const auto coefficient = coefficients[term][entry] * avg_scale;
 					if (coefficient != 0.0) {
-						spec.members.AddTerm(variables[term], row, coefficient);
+						spec.members.AddTerm(variables[term], row, coefficient, value_nodes[term]);
 					}
 				}
 			}

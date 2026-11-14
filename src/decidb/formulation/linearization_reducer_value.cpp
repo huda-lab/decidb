@@ -193,10 +193,19 @@ struct HelperPlace {
 //! elsewhere. A linear row of a plain clause and the linear objective can read a helper's members, and so can the
 //! members of one other link, pinned on one side if a MIN or MAX; every other reader -- a product, a square, a frame
 //! read, a bilinear or ABS link, a row of a hard MIN/MAX, `<>` or ABS -- reads its column.
-vector<HelperPlace> PlaceHelpers(const SolverInput &input, const vector<idx_t> &held, const vector<idx_t> &link_of) {
+vector<HelperPlace> PlaceHelpers(const SolverInput &input, const vector<idx_t> &held, const vector<idx_t> &link_of,
+                                 const vector<idx_t> &link_of_node) {
 	auto &links = input.reducer_value_links;
 	vector<HelperPlace> place(links.size());
-	auto link = [&](idx_t var) {
+	auto link = [&](idx_t var, idx_t value_node = DConstants::INVALID_INDEX) {
+		if (value_node != DConstants::INVALID_INDEX && value_node < link_of_node.size() &&
+		    link_of_node[value_node] != DConstants::INVALID_INDEX) {
+			const auto result = link_of_node[value_node];
+			if (links[result].value_var != var) {
+				throw InternalException("DECIDE: tree value node %llu disagrees with its helper column", value_node);
+			}
+			return result;
+		}
 		return var < link_of.size() ? link_of[var] : DConstants::INVALID_INDEX;
 	};
 	auto read = [&](idx_t var, bool takes_members) {
@@ -247,8 +256,10 @@ vector<HelperPlace> PlaceHelpers(const SolverInput &input, const vector<idx_t> &
 		read(term.var_b, false);
 	}
 	for (idx_t k = 0; k < links.size(); k++) {
-		for (auto var : links[k].members.variables) {
-			const idx_t i = link(var);
+		const auto &members = links[k].members;
+		for (idx_t t = 0; t < members.variables.size(); t++) {
+			const auto value_node = t < members.value_nodes.size() ? members.value_nodes[t] : DConstants::INVALID_INDEX;
+			const idx_t i = link(members.variables[t], value_node);
 			if (i == DConstants::INVALID_INDEX) {
 				continue;
 			}
@@ -276,6 +287,13 @@ vector<HelperPlace> PlaceHelpers(const SolverInput &input, const vector<idx_t> &
 bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, const vector<idx_t> &minmax_values) {
 	auto &links = input.reducer_value_links;
 	vector<idx_t> link_of(input.num_decide_vars, DConstants::INVALID_INDEX);
+	idx_t tree_nodes = 0;
+	for (auto &link : links) {
+		if (link.value_node != DConstants::INVALID_INDEX) {
+			tree_nodes = MaxValue(tree_nodes, link.value_node + 1);
+		}
+	}
+	vector<idx_t> link_of_node(tree_nodes, DConstants::INVALID_INDEX);
 	vector<bool> stays_explicit(input.num_decide_vars, false);
 	for (auto var : minmax_values) {
 		if (var < stays_explicit.size()) {
@@ -286,13 +304,22 @@ bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, cons
 		if (links[i].value_var < link_of.size()) {
 			link_of[links[i].value_var] = i;
 		}
+		if (links[i].value_node != DConstants::INVALID_INDEX) {
+			if (link_of_node[links[i].value_node] != DConstants::INVALID_INDEX) {
+				throw InternalException("DECIDE: tree node %llu defines more than one reducer value", links[i].value_node);
+			}
+			link_of_node[links[i].value_node] = i;
+		}
 	}
-	auto place = PlaceHelpers(input, held, link_of);
+	auto place = PlaceHelpers(input, held, link_of, link_of_node);
 	bool any = false;
 	for (idx_t i = 0; i < links.size(); i++) {
 		if (!place[i].Inlinable()) {
 			if (links[i].value_var < link_of.size()) {
 				link_of[links[i].value_var] = DConstants::INVALID_INDEX;
+			}
+			if (links[i].value_node < link_of_node.size()) {
+				link_of_node[links[i].value_node] = DConstants::INVALID_INDEX;
 			}
 			continue;
 		}
@@ -301,7 +328,15 @@ bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, cons
 	if (!any) {
 		return false;
 	}
-	auto candidate = [&](idx_t var) {
+	auto candidate = [&](idx_t var, idx_t value_node = DConstants::INVALID_INDEX) {
+		if (value_node != DConstants::INVALID_INDEX && value_node < link_of_node.size() &&
+		    link_of_node[value_node] != DConstants::INVALID_INDEX) {
+			const auto result = link_of_node[value_node];
+			if (links[result].value_var != var) {
+				throw InternalException("DECIDE: tree value node %llu disagrees with its helper column", value_node);
+			}
+			return result;
+		}
 		return var < link_of.size() ? link_of[var] : DConstants::INVALID_INDEX;
 	};
 	// A helper's instances: its scope's classes, or one. A helper inlined below keeps the scope that names them.
@@ -405,7 +440,9 @@ bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, cons
 					seen.clear();
 				}
 				for (idx_t t = members.member_begin[m]; t < members.member_begin[m + 1]; t++) {
-					const idx_t link = candidate(members.variables[t]);
+					const auto value_node = t < members.value_nodes.size() ? members.value_nodes[t]
+					                                                     : DConstants::INVALID_INDEX;
+					const idx_t link = candidate(members.variables[t], value_node);
 					if (link == DConstants::INVALID_INDEX) {
 						continue;
 					}
@@ -430,10 +467,12 @@ bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, cons
 			for (idx_t m = span.first; m < span.last; m++) {
 				expanded.AddMember(outer.constants[m]);
 				for (idx_t t = outer.member_begin[m]; t < outer.member_begin[m + 1]; t++) {
-					const idx_t instance =
-					    outer.variables[t] == link.value_var ? instance_of(link.value_var, outer.rows[t]) : 0;
-					if (outer.variables[t] != link.value_var || !written[instance]) {
-						expanded.AddTerm(outer.variables[t], outer.rows[t], outer.coefficients[t]);
+					const auto outer_value_node = t < outer.value_nodes.size() ? outer.value_nodes[t]
+					                                                           : DConstants::INVALID_INDEX;
+					const bool reads_link = candidate(outer.variables[t], outer_value_node) == i;
+					const idx_t instance = reads_link ? instance_of(link.value_var, outer.rows[t]) : 0;
+					if (!reads_link || !written[instance]) {
+						expanded.AddTerm(outer.variables[t], outer.rows[t], outer.coefficients[t], outer_value_node);
 						continue;
 					}
 					const double c = outer.coefficients[t];
@@ -447,7 +486,9 @@ bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, cons
 						expanded.constants.back() += c * link.members.constants[n];
 						for (idx_t u = link.members.member_begin[n]; u < link.members.member_begin[n + 1]; u++) {
 							expanded.AddTerm(link.members.variables[u], link.members.rows[u],
-							                 c * link.members.coefficients[u]);
+							                 c * link.members.coefficients[u],
+							                 u < link.members.value_nodes.size() ? link.members.value_nodes[u]
+							                                              : DConstants::INVALID_INDEX);
 						}
 					}
 				}
