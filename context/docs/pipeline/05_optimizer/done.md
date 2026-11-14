@@ -189,30 +189,35 @@ one query. Neither changes the answer's optimum. Tests that compare models run o
 ordinary operators (`../../direct_solve/README.md`); a node they leave takes the passes
 below.
 
-`DecideOptimizer::OptimizeDecide` runs thirteen passes, and the order is load-bearing:
+`DecideOptimizer::OptimizeDecide` runs the solver-path operations below in order. The
+table includes the tree's early definition-function preparation, which reserves helper
+indices before later MIN/MAX and term consumers use them:
 
 | # | Pass | Why here |
 |---|---|---|
-| 0 | `RewriteFrameRanges` | Each range frame over decisions becomes a helper decision per window before any rewrite copies the clause (below), so every later pass reads an ordinary keyed decision. |
-| 1 | `RewriteNorm` | Lowers L0 NORM markers to their indicator links and drops the display tag canonicalization left on desugared L1/L2/infinity norms, before later passes see them. |
-| 2 | `RewriteInDomain` | Lowers bound DECIDE-variable IN markers to their indicator formulation. |
-| 3 | `TagAbsForBigM` | Marks the ABS nodes, in the constraints and the objective, that will need a Big-M envelope. Must precede `RewriteAbs`, which replaces the nodes. |
-| 4 | `RewriteAbs` | Creates auxiliaries replacing ABS nodes; must be first of the remaining rewrites so later passes see plain variables. |
-| 5 | `RewriteBilinear` | McCormick linearization for Boolean × anything. |
-| 6 | `DefineNonlinearReducerBodies` | Names each non-linear body a MIN/MAX formulation reads by a helper decision per row. After bilinear, whose Boolean products are then linear; before the value and MIN/MAX rewrites, which read members as linear. |
-| 7 | `RewriteScopedReducers` | The value rewrite: a VALUE-shape comparison's reducers become helper decisions. After ABS and bilinear, whose auxiliaries may stand in a reducer's body; before the MIN/MAX passes, which never see these reducers. |
-| 8 | `RewriteComposedMinMax` | Detects composed (additive, mixed-reducer) MIN/MAX **before** single-term MIN/MAX handling. |
-| 9 | `RewriteMinMax` | Classifies and rewrites single top-level MIN/MAX in constraints and objectives. |
-| 10 | `RewriteNotEqual` | Creates `<>` indicators. |
-| 11 | `RewriteAvgToSum` | Last of the rewrites, so every reducer that reaches it is settled. |
-| 12 | `FoldSingletonRows` | Must be last of all — see below. |
+| 0 | `RewriteFrameRanges` | Each range frame over decisions becomes a helper decision per window before later rewrites copy clauses, so they read an ordinary keyed decision. |
+| 1 | `TagAbsForBigM` (written expressions) | Records the polarity of ABS nodes before rewrites move them into function bodies. |
+| 2 | `RewriteNorm` | Lowers the NORM marker, including L0 indicator metadata, and removes display tags from desugared L1/L2/infinity norms. |
+| 3 | `RewriteInDomain` | Lowers bound DECIDE-variable IN markers to indicator metadata. |
+| 4 | `TagAbsForBigM` (normalized expressions) | Classifies ABS nodes introduced by normalization before their F-node metadata is collected. |
+| 5 | `RewriteBilinear` | Retains Boolean products and records their expansions and product F-node specs. |
+| 6 | `DecideTreeConstruction::PrepareDefinitionFunctions` | Registers definition F-node specs and reserves scoped helper columns before value and MIN/MAX rewrites consume their reads. |
+| 7 | `RewriteScopedReducers` | The value rewrite: a VALUE-shape comparison's reducers become helper decisions. |
+| 8 | `RewriteBilinear` (nested values) | Records products exposed after nested reducer values become decisions. |
+| 9 | `RewriteComposedMinMax` | Detects composed (additive, mixed-reducer) MIN/MAX before single-term MIN/MAX handling. |
+| 10 | `RewriteMinMax` | Classifies and rewrites single top-level MIN/MAX in constraints and objectives. |
+| 11 | `RewriteNotEqual` | Creates `<>` indicators. |
+| 12 | `RewriteAvgToSum` | Scales AVG values into SUM terms after value and extremum rewrites. |
+| 13 | `RewriteAbs` | Allocates ABS helpers and stores the written function and lower-envelope metadata for F nodes. |
+| 14 | `RewriteBilinear` (ABS factors) | Records products involving the newly allocated ABS helpers. |
+| 15 | `FoldSingletonRows` | Must be last of all — see below. |
 
 `RewriteComposedMinMaxObjectiveTop` runs within the composed pass for the
 objective side. Setting `DECIDB_BENCH` prints `optimizer_ms` for the whole block.
 
-A thirteenth pass, `LowerDecideTree`, belongs to this stage but is
-**triggered later** — see §1a. It also lowers each `ReducerValueLink`'s body into its helper's G or O, as it does a
-composed term's into its G.
+A later stage-05 lowering, `LowerDecideTree`, belongs to this stage but is
+**triggered during physical planning** — see §1a. It lowers each `ReducerValueLink`'s body
+into its helper's G or O, as it does a composed term's into its G.
 
 ---
 
@@ -517,15 +522,17 @@ one auxiliary and one row set, not one per row. The ABS Big-M and the L0 auto bo
 (`InstanceBox`), which holds for a shared column. `AddAuxiliaryDecision` registers a keyed auxiliary in
 `keyed_scopes[..].scoped_variable_indices` itself, so no rewrite does.
 
-### Non-linear reducer bodies — `DefineNonlinearReducerBodies`
+### Non-linear reducer bodies — definition F-node preparation
 
 Every extremum the later passes build reads its members as linear: the hard rows, the
 composed terms, the flat objective, and the value rewrite's links. A body
 that squares or multiplies decisions (`max(power(x, 2))`, `min(x * y)`) would lose its
-square there. This pass names such a body first (`decide_rewrite_define.cpp`): one helper
-decision `t` per row (`__body_<n>__`, labelled by the body) and one quadratic row defining
-it by the body `q`; the reducer then reads the bare column `t`. It is the auxiliary-variable
-reformulation `RewriteAbs` applies to ABS, done once, before any pass that reads members.
+square there. `DecideTreeConstruction::PrepareDefinitionFunctions`
+(`decide_tree_definition.cpp`) registers one helper decision `t` per row (`__body_<n>__`,
+labelled by the body) and stores its definition F-node spec. The source reducer stays in
+place and reads that F value; tree construction emits the quadratic E row defining `t` by
+the body `q` once its instances are known. The plan-time helper column is reserved before
+later optimizer consumers need a stable index.
 
 **The row is one-sided where the clause pushes the reducer one way**, as the
 Plaisted–Greenbaum encoding (the polarity-aware Tseitin transformation) states a
@@ -541,7 +548,7 @@ body is whole-numbered by declared types (`DecideValueIsWholeNumbered`), so a st
 **One reducer is defined once** (structural sharing, as the encoding names one subterm
 once). An earlier rewrite may have copied a reducer into several rows of one clause:
 `RewriteAbs` writes `abs(max(power(x, 2)) - 4) >= 1` as two envelope rows, one pushing the
-MAX up and one down. The copies must keep reading one value, so the pass collects every
+MAX up and one down. The copies must keep reading one value, so tree preparation collects every
 site first and groups the readers of one reducer (an equal reducer and alias, an equal
 `when`), across clauses and the objective; a group shares one helper whose row is the union
 of the readers' sides, `t = q` when they are pushed both ways. A helper per copy, each
@@ -573,7 +580,8 @@ row nothing reads.
 `FoldSingletonRows` gives no floor of 0, and nothing derives a ceiling. With no box there is no Big-M for an extremum over `t`, so
 only a backend that states MIN/MAX natively takes it: stage 08 takes the native arm for a
 family with no box (`../06_model_formulation/done.md`). When the backend chosen in §0
-states no MIN/MAX (HiGHS, or Gurobi under `DECIDB_NATIVE_CONSTRUCTS=off`), the pass refuses
+states no MIN/MAX (HiGHS, or Gurobi under `DECIDB_NATIVE_CONSTRUCTS=off`), tree function
+preparation refuses
 before a row is read, through the same sentence the model-class gate raises
 (`ThrowDecideSolverGap`): `'max(power(x, 2))' takes the maximum of a squared or multiplied
 expression, which needs Gurobi — not available on this machine. Install Gurobi, or replace
@@ -594,7 +602,7 @@ reducer, instead of claiming indicator rows it never has.
 internal error when any member an extremum reads is not linear: a composed term, a MIN/MAX
 value link, a hard MIN/MAX row (`MINMAX_CLAUSE_TAG_PREFIX`) or a MIN/MAX objective. The
 cheap half (`MINMAX_EASY_REWRITE_TAG`) bounds each member in its own quadratic row and is
-exempt. A body this pass misses fails there by name instead of losing its square. Tests:
+exempt. A body tree preparation misses fails there by name instead of losing its square. Tests:
 `test_minmax_body_definition.py`.
 
 ### The value rewrite — `RewriteScopedReducers`
@@ -650,13 +658,12 @@ in helpers, decisions and data, and links are stored innermost first. A member o
 AVG, a MIN or a MAX is pushed as its helper is, through the sign it carries in the
 argument: a MIN or MAX does not decrease when a member grows, so it passes its push on
 (D79). A body that would still square or multiply decisions there is refused (D80):
-`DefineNonlinearReducerBodies` has defined every such body a constraint, or a MIN or MAX
+definition F-node preparation has registered every such body a constraint, or a MIN or MAX
 of the objective, reads, so what is left is a nest of sums in the objective not read in
 place. A nested reducer the passes before this one would rewrite out of its path -- one an
 ABS, a POWER or a product with a decision reads, any node but `+`, `-`, a cast or a data
-factor -- is a helper already: `LiftNestedReducers` runs right after `RewriteFrameRanges`,
-through the same `ReplaceReducer`, pinned on both sides, so the ABS and bilinear passes
-read a keyed decision (deck p. 51). The binder refuses a norm around one (stage 02).
+factor -- is represented by its reducer G node beneath the enclosing F node (deck p. 51).
+The binder refuses a norm around one (stage 02).
 
 **The objective's sums of group sums of squares** (`SwapObjectiveSummation`, the first pass, before
 `RewriteRhsAggregates`): `sum([when c]: inner([when c'] e) by (G))` with no `per` on the outer sum and `e` not
@@ -713,8 +720,8 @@ multiplies and none nests in stays in the objective. A factor declared per row i
 refused by the objective's scope check.
 
 A body that multiplies decisions (a square, a product of two non-Booleans) is defined per row
-first by `DefineNonlinearReducerBodies`, so the helper's members are linear; the model
-class decides whether a backend takes the rows.
+by its definition F node, so the helper's members are linear; the model class decides whether
+a backend takes the rows.
 
 Every auxiliary decision column the passes allocate — an ABS auxiliary and its sign
 indicator, a McCormick product, an L0 and an `IN` indicator, a value helper — goes
@@ -1128,7 +1135,7 @@ stage 07.
 | MIN/MAX, plain and composed | `src/optimizer/decide/decide_rewrite_minmax.cpp` |
 | The value rewrite (VALUE-shape reducers to helper decisions) | `src/optimizer/decide/decide_rewrite_scoped.cpp` |
 | Bilinear McCormick | `src/optimizer/decide/decide_rewrite_bilinear.cpp` |
-| Non-linear reducer bodies (the definition) | `src/optimizer/decide/decide_rewrite_define.cpp` |
+| Non-linear reducer body F-node preparation | `src/optimizer/decide/decide_tree_definition.cpp` |
 | Singleton-row folding | `src/optimizer/decide/decide_singleton_row_folding.cpp` |
 | Linear-form flattening | `src/optimizer/decide/decide_linear_form.cpp` |
 | Backend selection and the model-class gate | `src/optimizer/decide/decide_solver_gate.cpp` |

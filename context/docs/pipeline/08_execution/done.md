@@ -111,9 +111,12 @@ flat did, it names the behaviour the tree keeps from the evaluator it replaced, 
 references, `tests/_expected.py`, were recorded from flat's runs):
 
 - *The tree* (`decide_tree.hpp`, `DecideTreeConstruction`): built at plan time, with stage 05's lowering between its
-  nodes and its programs. Its
-  nodes come from the clause list, the link and record tables and the frames, with the deck's three node classes, E
-  (`SCOPE`), G (`REDUCER`) and O (`FRAME`). An E's σ is the binder's signature of its clause; a generated NULL test is
+  nodes and its programs. Its nodes come from the clause list, the link and record tables, frames, and function
+  metadata. It keeps the deck's E (`SCOPE`), G (`REDUCER`) and O (`FRAME`) nodes and adds F (`FUNCTION`) for values
+  whose structural rows need their own execution scope. An F represents ABS, a Boolean product, an L0 indicator, or a
+  nonlinear reducer-body definition. The emitter reads its instances from the top-down tree and attaches its
+  structural rows beneath it; the existing stage-06 linearizers still consume the evaluated rows and links. An E's σ
+  is the binder's signature of its clause; a generated NULL test is
   a member test that carries its columns and adds no σ field. A root in the grouped shape (the aggregate shape, an
   easy or a composed extremum) with no `per` is a class of its `by` key, as flat's grouped rows are
   (`language/guide.md` §6.4). A root's text is its clause as written. Stage 05 then lowers each clause into the root
@@ -370,11 +373,22 @@ references, `tests/_expected.py`, were recorded from flat's runs):
   which differs where the absence varies inside an entry; and a variant whose first row D88 moves to a later row of its
   entry is named by the entry's first row.
 
-No side plan is planned: the tree folds the data reducers in the descent. Flat's side plan read a clause's `when` on
-every row, with the data reducer's arguments it gates, before the query's other reads; the tree reads the `when` at the
-clause's rank and the arguments only on the rows it keeps, so an argument's error ranks before an error of the `when`
-that the side plan met first (open). A record no clause reads, an orphan's hidden root, is folded by no reader, so its
-errors are not raised (open: no query is known to make one).
+No side plan is planned: the tree folds the data reducers in the bottom-up pass. Flat's side plan read a clause's
+`when` on every row, with the data reducer's arguments it gates, before the query's other reads; the tree reads the
+`when` at the clause's rank and the arguments only on the rows it keeps, so an argument's error ranks before an error
+of the `when` that the side plan met first (open). A record no clause reads, an orphan's hidden root, is folded by no
+reader, so its errors are not raised (open: no query is known to make one).
+
+**P9 departure from the deck.** The deck draws E, G and O; this implementation adds F so structural function values
+and their rows follow the same instance scopes as the rest of the tree. Helper columns remain allocated at plan time
+because stage 06 addresses decisions by their plan-time indices. P9.1–P9.3 move ABS envelopes, Boolean-product links
+and L0 indicator links under F nodes. P9.4 removes `LiftNestedReducers` and the standalone
+`DefineNonlinearReducerBodies` rewrite. Compatible outer SUM clauses retain nested G readers when their own rows
+need quadratic terms; linear nests keep the value-link path so its bounds and scope semantics remain available. A
+nonlinear reducer body stays at its written site with a tagged read of its definition F node; tree lowering wires that
+read to the child F value, and term splitting uses the reserved helper column where optimizer-owned MIN/MAX forms
+need it. Tree construction owns the definition E row. Its early preparation reserves plan-time indices and registers
+F-node specs before later optimizer consumers need them. The P9.4 regression gate passes.
 
 **Cost**, measured before flat was deleted, against flat on one binary (`benchmark/decide/anr_scaling.py --against` a
 flat run): the tree's own time at 10^5 rows is 0.84x to 1.33x flat's on every workload (`flat-sum` the most), and its

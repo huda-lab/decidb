@@ -511,8 +511,8 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
   (D80), a norm rewritten before the value rewrite reads the path, so the inner reducer
   would lose the enclosing `when` and `by`: *"DECIDE: norm inside a reducer is not supported
   yet"* and *"DECIDE: a reducer inside norm is not supported yet"*. An ABS, a square or a
-  product with a decision around a nested reducer binds: stage 05 makes that reducer a helper
-  first (`LiftNestedReducers`). A reducer over data alone added
+  product with a decision around a nested reducer binds: the tree keeps the inner reducer as
+  its own G node and the enclosing function reads that value. A reducer over data alone added
   inside one over decisions binds as data (`ValidateSumArgumentInternal`), a value of its
   path's group that stage 05 computes (`RewriteRhsAggregates`), under a `*` or `/` that holds a
   decision too (`sum(avg(cap) * x)`), a coefficient; outside every reducer over decisions

@@ -108,7 +108,7 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   there is one code path.
 - **Quadratic inner in a nested objective**: `sum(per g: sum(power(x - t, 2)) by (g))` is read in place as the
   objective's own sum (D81), so it reaches the QP extractor intact. A `MIN`/`MAX` over a squared body reads a helper
-  per row defined by it (`DefineNonlinearReducerBodies`), Gurobi only.
+  per row defined by its function F node; the model-class gate admits this on Gurobi only.
 - **Linear objectives** become the `c` vector; a `when` in front zeroes other rows' coefficients, a reducer's own
   `when` zeroes only its term's. Additive constants accumulate on `LogicalDecide::objective_constant_offset`.
 - Code: `decide_objective_binder.cpp` (`BindScopedObjective`); `AnalyzeObjective` and
