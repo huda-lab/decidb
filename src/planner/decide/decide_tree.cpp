@@ -2321,13 +2321,19 @@ void DecideTree::Validate() const {
 					throw InternalException("DECIDE tree node %llu has algebra with an invalid owner", i);
 				}
 				switch (algebra.kind) {
-				case DecideAlgebraKind::OPERATOR:
+				case DecideAlgebraKind::OPERATOR: {
+					// COUNT(*) has no argument expression: its G value is the number of
+					// member entries. Keep this zero-child aggregate in the same algebra
+					// tree as the reducers whose bodies have explicit children.
+					const bool count_star = algebra.expression_class == ExpressionClass::BOUND_AGGREGATE &&
+					                        algebra.operation == "count_star";
 					if (algebra.operation.empty() || algebra.value ||
 					    (algebra.children.empty() && algebra.operation != "+" &&
-					     algebra.operation.find("frame:") != 0)) {
+					     algebra.operation.find("frame:") != 0 && !count_star)) {
 						throw InternalException("DECIDE tree node %llu has a malformed algebra operator", i);
 					}
 					break;
+				}
 				case DecideAlgebraKind::VALUE:
 					if (!algebra.value || !algebra.children.empty()) {
 						throw InternalException("DECIDE tree node %llu has a malformed algebra value", i);
