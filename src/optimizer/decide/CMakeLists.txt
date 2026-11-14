@@ -7,7 +7,7 @@ add_library_unity(
   decide_optimizer.cpp
   decide_rewrite_abs.cpp
   decide_rewrite_bilinear.cpp
-  decide_rewrite_define.cpp
+  decide_tree_definition.cpp
   decide_rewrite_frames.cpp
   decide_rewrite_minmax.cpp
   decide_rewrite_norm_in.cpp

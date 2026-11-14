@@ -85,6 +85,65 @@ def test_a_query_is_formulated_as_flat_formulates_it(decidb_cli, tmp_path):
     assert tree == stored
 
 
+def test_a_boolean_product_is_a_function_node(decidb_cli):
+    """A Boolean product stays written through optimization, then the tree owns its helper as an F node."""
+    sql = """SELECT id, b, x FROM (VALUES (1), (2)) t(id)
+        DECIDE b(BOOL), x(INT) SUCH THAT x <= 3 AND b * x <= 2 MAXIMIZE sum(x)"""
+    result = run(decidb_cli, sql, DECIDB_DUMP_TREE="1")
+    assert result.returncode == 0, result.stderr
+    tree = result.stderr.split("DECIDB_TREE_BEGIN\n", 1)[1].split("DECIDB_TREE_END", 1)[0]
+    match = re.search(r"(?m)^(\d+) F .*function=boolean_product value=x\d+ body=", tree)
+    assert match, tree
+    product_node = match.group(1)
+    assert re.search(rf"(?m)^\d+ E root .*reads=\[{product_node}\]", tree), tree
+
+
+def test_an_l0_norm_is_a_function_node(decidb_cli):
+    """The indicator and its three structural links belong to an L0 F node."""
+    sql = """SELECT id, base, x FROM (VALUES (1, 0), (2, 0)) t(id, base)
+        DECIDE x(REAL) SUCH THAT x >= 0 AND SUM(x) = 1 MINIMIZE norm(x - base, 0)"""
+    result = run(decidb_cli, sql, DECIDB_DUMP_TREE="1")
+    assert result.returncode == 0, result.stderr
+    tree = result.stderr.split("DECIDB_TREE_BEGIN\n", 1)[1].split("DECIDB_TREE_END", 1)[0]
+    match = re.search(r"(?m)^(\d+) F .*function=l0_indicator value=x\d+ body=", tree)
+    assert match, tree
+    indicator_node = match.group(1)
+    assert re.search(rf"(?m)^\d+ E .*reads=\[{indicator_node}\]", tree), tree
+    assert re.search(r"function=abs value=x\d+ body=.*exact=big-m", tree), tree
+
+
+def test_a_nonlinear_reducer_body_is_a_function_node(decidb_cli):
+    """The written reducer reads an F value whose child E owns the helper's definition row."""
+    sql = """DIAGNOSE SELECT id, x FROM (VALUES (1), (2)) t(id)
+        DECIDE x(INT) SUCH THAT x >= 0 AND x <= 3 MAXIMIZE max(power(x, 2))"""
+    result = run(decidb_cli, sql, DECIDB_DUMP_TREE="1")
+    assert result.returncode == 0, result.stderr
+    tree = result.stderr.split("DECIDB_TREE_BEGIN\n", 1)[1].split("DECIDB_TREE_END", 1)[0]
+    match = re.search(r"(?m)^(\d+) F definition .*function=definition value=x\d+ relation=at-most body=\(.*power", tree)
+    assert match, tree
+    function = match.group(1)
+    definition = re.search(r"(?m)^(\d+) E definition .*: definition of power", tree)
+    assert definition, tree
+    assert re.search(rf"(?m)^{function} F definition .*reads=\[{definition.group(1)}\]", tree), tree
+    assert ": max(power(x, 2))" in tree, tree
+    assert re.search(rf"(?m)^\d+ E .*reads=\[{function}\].*: sum\(power\(x, 2\)\) operand", tree), tree
+
+
+def test_abs_reads_a_nonlinear_reducer_function(decidb_cli):
+    """F bodies can read another F node through the tree without exposing a helper-column alias."""
+    sql = """DIAGNOSE SELECT id, x FROM (VALUES (1), (2)) t(id)
+        DECIDE x(INT) SUCH THAT x <= 2 AND abs(max(power(x, 2)) - 4) >= 1 MAXIMIZE sum(x)"""
+    result = run(decidb_cli, sql, DECIDB_DUMP_TREE="1")
+    assert result.returncode == 0, result.stderr
+    tree = result.stderr.split("DECIDB_TREE_BEGIN\n", 1)[1].split("DECIDB_TREE_END", 1)[0]
+    abs_function = re.search(r"(?m)^(\d+) F .*function=abs .*reads=\[([^]]*)\].*: abs\(max\(power\(x, 2\)\) - 4\)", tree)
+    assert abs_function, tree
+    reducer = re.search(r"(?m)^(\d+) G .*agg=max .*: max\(power\(x, 2\)\)", tree)
+    assert reducer, tree
+    assert reducer.group(1) in abs_function.group(2).split(","), tree
+    assert "__value_" not in tree, tree
+
+
 def test_a_null_coefficient_skips_its_row(decidb_cli, tmp_path):
     """A NULL coefficient on a kept row leaves its instance with no value (D67): row 2 has no model row, y's term
     included."""
@@ -1419,13 +1478,18 @@ def test_a_helper_over_every_row_is_one_column(decidb_cli, tmp_path):
 
 
 def test_a_helper_read_once_is_written_where_it_is_read(decidb_cli):
-    """D89: stage 06 writes the helper's members where its one reader, the auxiliary of `abs`, reads it, and EXPLAIN
-    ANALYZE accounts for it (PhysicalDecide::ReportInlinedHelpers), as under flat."""
+    """D89: stage 06 writes the helper's members where its one reader, the ABS F node, reads them.
+
+    EXPLAIN ANALYZE reports the inlined helper, the written ABS expression and its account, while keeping the F
+    envelope rows internal.
+    """
     sql = f"""EXPLAIN ANALYZE SELECT id FROM {ROWS} DECIDE x(REAL)
         SUCH THAT x <= t.c AND sum(abs(x - avg(x) by (t.g))) <= 1 MAXIMIZE sum(x)"""
     accounts = [re.sub(r"[│\s]+", " ", result.stdout) for result in (reference(decidb_cli, sql), run(decidb_cli, sql))]
     assert "avg(x) by (t.g) is written where it is read, with no column" in accounts[1], accounts[1]
-    assert re.sub(r"\d+\.\d+s", "", accounts[1]) == re.sub(r"\d+\.\d+s", "", accounts[0])
+    packed = re.sub(r"\s+", "", accounts[1])
+    assert "abs(x-avg(x)by(t.g))becomesanauxiliaryvariable" in packed, accounts[1]
+    assert "abs(x-avg(x)by(t.g))-x+avg(x)by(t.g)" not in packed, accounts[1]
 
 
 LINK_FAULTS = "(VALUES (1, 'a', 4.0, 1.0), (2, NULL, -1.0, 2.0), (3, 'b', 9.0, 3.0)) t(id, g, s, c)"

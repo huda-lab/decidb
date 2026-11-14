@@ -30,9 +30,9 @@ CASES = {
         SUCH THAT x <= 5 AND per t.k: sum(x) <= 1 MAXIMIZE sum(x) ORDER BY id""",
         [5, 5],
     ),
-    # Q7-internal-abs. The inner sum is lifted into a helper before the ABS rewrite (LiftNestedReducers); its body's
-    # ABS is lowered too (RewriteAbs over the helpers' bodies): 2 * (|x1| + |x2|) <= 4, so x1 + x2 <= 2, all on x2.
-    "an-abs-in-a-lifted-reducer": (
+    # Q7-internal-abs. The nested SUM stays a G node; its ABS operand is an F read, so the outer SUM sees
+    # 2 * (|x1| + |x2|) <= 4, hence x1 + x2 <= 2, all on x2.
+    "an-abs-in-a-nested-reducer": (
         """SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(INT)
         SUCH THAT x <= 3 AND sum(abs(sum(abs(x)))) <= 4 MAXIMIZE sum(t.id * x) ORDER BY id""",
         [0, 2],

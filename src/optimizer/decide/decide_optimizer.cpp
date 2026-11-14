@@ -25,7 +25,10 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
+#include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
+#include "duckdb/planner/decide/decide_tree.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
@@ -46,7 +49,7 @@ ObjectiveAggregateType decide_rewrite::StrToAggType(const string &name) {
 
 //! Defined below with the other NORM marker helpers; called at the end of OptimizeDecide.
 static void VerifyNormMarkersLowered(LogicalDecide &decide);
-static void VerifyExtremumBodiesLinear(LogicalDecide &decide);
+static void VerifyExtremumBodiesLinear(ClientContext &context, LogicalDecide &decide);
 
 DecideOptimizer::DecideOptimizer(Optimizer &optimizer) : optimizer(optimizer) {
 }
@@ -121,29 +124,37 @@ void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &r
 	RunPass("optimizer.tag_groups", [&] { TagAtomicRemovalGroups(decide); });
 	// A range over decisions becomes a helper before any rewrite copies it.
 	RunPass("optimizer.frame_ranges", [&] { RewriteFrameRanges(decide); });
-	// A reducer nested under an ABS, a POWER or a decision product becomes a helper before those are rewritten.
-	RunPass("optimizer.nested_lift", [&] { LiftNestedReducers(decide); });
+	// Preserve the polarity of ABS nodes in the written expression before the other rewrites move them into helper
+	// bodies. The later pass classifies ABS introduced by those rewrites.
+	RunPass("optimizer.tag_abs_source", [&] { TagAbsForBigM(optimizer.context, decide); });
+	// Nested reducers remain in their written positions; the tree lowers them as G nodes beneath their readers.
 	RunPass("optimizer.norm", [&] { RewriteNorm(decide); });
 	RunPass("optimizer.in_domain", [&] { RewriteInDomain(decide); });
-	// Must run before RewriteAbs: marks ABS nodes that need Big-M
+	// Classify ABS while the written reducer and clause context are still intact; later rewrites may move the function
+	// into a helper body or a composed MIN/MAX term.
 	RunPass("optimizer.tag_abs", [&] { TagAbsForBigM(optimizer.context, decide); });
-	// Creates aux vars replacing ABS nodes
-	RunPass("optimizer.abs", [&] { RewriteAbs(decide); });
 	// McCormick linearization for Boolean × anything bilinear products
 	RunPass("optimizer.bilinear", [&] { RewriteBilinear(decide); });
-	// A non-linear reducer body a MIN/MAX reads becomes a helper per row
-	RunPass("optimizer.define_bodies", [&] { DefineNonlinearReducerBodies(decide); });
+	// Reserve the plan-time columns and F-node specs before later MIN/MAX rewrites and term splitting consume them.
+	// The tree owns the definition functions and emits their E rows when its instances are known.
+	DecideTreeConstruction::PrepareDefinitionFunctions(optimizer.context, decide);
 	// The value rewrite: a VALUE-shape clause's reducers become helper decisions
 	RunPass("optimizer.scoped_reducers", [&] { RewriteScopedReducers(decide); });
+	// Reducers now nested in retained G bodies are decision variables; tag any products those substitutions exposed.
+	RunPass("optimizer.bilinear_nested_values", [&] { RewriteBilinear(decide); });
 	// Detect composed MIN/MAX before single-term MIN/MAX rewrite
 	RunPass("optimizer.composed_minmax", [&] { RewriteComposedMinMax(decide); });
 	// Classify + rewrite min/max (creates indicators and SUM nodes)
 	RunPass("optimizer.minmax", [&] {
 		RewriteMinMax(decide);
-		VerifyExtremumBodiesLinear(decide);
+		VerifyExtremumBodiesLinear(optimizer.context, decide);
 	});
 	RunPass("optimizer.not_equal", [&] { RewriteNotEqual(decide); });
 	RunPass("optimizer.avg", [&] { RewriteAvgToSum(decide); });
+	RunPass("optimizer.abs", [&] { RewriteAbs(decide); });
+	// Products outside ABS need the helper it just allocated; the first bilinear pass has already handled products
+	// inside ABS's operand and everywhere else.
+	RunPass("optimizer.bilinear_abs_factors", [&] { RewriteBilinear(decide); });
 	// Must stay last among the rewrites: RewriteInDomain emits a floor-lowering bound
 	// that is itself a singleton-row bound, and every auxiliary variable must exist before the
 	// box is sized.
@@ -233,16 +244,47 @@ DecideVarScopeInfo decide_rewrite::ScopeOf(const LogicalDecide &decide, const De
 		auto &ref = expr.Cast<BoundColumnRefExpression>();
 		if (ref.binding.table_index == decide.decide_index) {
 			auto var_idx = ref.binding.column_index;
+			// A reducer value helper keeps its source reducer's scope: an unqualified, ungrouped reducer is
+			// query-wide, while a reducer with its own grouping or qualifier has no declared DECIDE scope and reads
+			// per row.
+			for (auto &link : decide.reducer_value_links) {
+				if (link.value_var == var_idx) {
+					// A frame link has a keyed scope for its windows; unlike a reducer's own `by`, that scope names
+					// exactly the instances the function must share.
+					if (link.frame != DConstants::INVALID_INDEX) {
+						return var_idx < decide.variable_scopes.size() ? decide.variable_scopes[var_idx]
+						                                       : DecideVarScopeInfo::Row();
+					}
+					return link.group_key != DConstants::INVALID_INDEX ||
+					               link.qualifier_scope_idx != DConstants::INVALID_INDEX
+					           ? DecideVarScopeInfo::Row()
+					           : DecideVarScopeInfo::Global();
+				}
+			}
 			return var_idx < decide.variable_scopes.size() ? decide.variable_scopes[var_idx]
 			                                               : DecideVarScopeInfo::Row();
 		}
 	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		idx_t frame;
+		if (TryGetDecideFrame(expr, frame)) {
+			// Point frames are anchored at a row. Their value is one per anchor, even when the underlying order
+			// or timeline key is not a declared DECIDE scope.
+			return DecideVarScopeInfo::Row();
+		}
+		// An ungrouped reducer has one query-wide value. A reducer with a `by` or relation qualifier has multiple
+		// values whose groups are not a declared DECIDE scope, so its ABS helper must retain row identity.
+		idx_t qualifier;
+		if (TryParseQualifiedReducerTag(expr.GetAlias(), qualifier) ||
+		    DecideReducerGroupKey(expr.Cast<BoundAggregateExpression>()) != DConstants::INVALID_INDEX) {
+			return DecideVarScopeInfo::Row();
+		}
+		return DecideVarScopeInfo::Global();
+	}
 	if (canonicalizer.IsQueryWideConstant(expr)) {
 		return DecideVarScopeInfo::Global();
 	}
-	// A reducer is one value per group of its own `by`, which no declared scope names (ScopeKeyOf reads it the same).
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
-	    expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		return DecideVarScopeInfo::Row();
 	}
 	bool saw_child = false;
@@ -347,13 +389,15 @@ static void VerifyNormMarkersLowered(LogicalDecide &decide) {
 //!
 //! The hard rows, the composed terms, the value links and the MIN/MAX objectives all read a
 //! member as a linear form; a square there is dropped without a word and the extremum is of
-//! something else. DefineNonlinearReducerBodies names every such body before they run, so
-//! a non-linear member here is a body that pass missed. The cheap half of a MIN/MAX
+//! something else. Definition F-node preparation registers every such body before they run, so
+//! a non-linear member here is a body the tree preparation missed. The cheap half of a MIN/MAX
 //! (MINMAX_EASY_REWRITE_TAG) bounds each member in its own quadratic row and is exempt.
-static void VerifyExtremumBodiesLinear(LogicalDecide &decide) {
+static void VerifyExtremumBodiesLinear(ClientContext &context, LogicalDecide &decide) {
 	const idx_t decide_index = decide.decide_index;
+	DecideTermSplitter splitter(context, decide_index, decide.decide_variables,
+	                            &decide.bilinear_function_groups);
 	auto check = [&](const Expression &body) {
-		if (!DecideExpressionDegree(body, decide_index).IsLinear()) {
+		if (!splitter.IsLinear(body)) {
 			throw InternalException("DECIDE MIN/MAX member '%s' is not linear", body.ToString());
 		}
 	};

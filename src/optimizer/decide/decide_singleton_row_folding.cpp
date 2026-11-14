@@ -149,10 +149,55 @@ static void AdmittedInterval(const ExpressionBuilder &calc, ExpressionType compa
 //! reads (its `when`, the reducer's filter, chooses them), and the extremum of one member is that member: the clause is
 //! read with the member in the reducer's place (`2 * max(c * x) <= K` reads as `2 * (c * x) <= K`), and `filter` is
 //! set to the reducer's filter. The reducer stays in the tree, so EXPLAIN and DIAGNOSE read the clause as written.
+static void ReplaceTaggedFunctionsForSingletonRead(unique_ptr<Expression> &expression, const LogicalDecide &decide) {
+	idx_t aux;
+	const bool abs_function = expression->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
+	                          TryParseDecideIndexTag(expression->GetAlias(), ABS_FUNCTION_TAG_PREFIX, aux);
+	const bool definition_function =
+	    TryParseDecideIndexTag(expression->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, aux);
+	if (abs_function || definition_function) {
+		if (aux >= decide.decide_variables.size()) {
+			throw InternalException("DECIDE singleton-row folding: function references invalid helper %llu", aux);
+		}
+		expression = decide.decide_variables[aux]->Copy();
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(*expression, [&](unique_ptr<Expression> &child) {
+		ReplaceTaggedFunctionsForSingletonRead(child, decide);
+	});
+}
+
+//! A frame inside a tagged F body determines that helper's value, not the row on which the surrounding bound is
+//! read. After the function value is replaced by its helper, the bound can still be folded into that helper's box.
+//! Other frame reads remain row-dependent and keep the conservative refusal below.
+static bool ContainsFrameOutsideTaggedFunction(const Expression &expression) {
+	idx_t aux;
+	if (TryParseDecideIndexTag(expression.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, aux) ||
+	    (expression.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
+	     TryParseDecideIndexTag(expression.GetAlias(), ABS_FUNCTION_TAG_PREFIX, aux))) {
+		return false;
+	}
+	idx_t frame;
+	if (TryGetDecideFrame(expression, frame)) {
+		return true;
+	}
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(
+	    expression, [&](const Expression &child) { found = found || ContainsFrameOutsideTaggedFunction(child); });
+	return found;
+}
+
 static unique_ptr<Expression> ReadAsRow(const ExpressionBuilder &calc, const LogicalDecide &decide,
+                                        const DecideTermSplitter &splitter,
                                         const BoundComparisonExpression &comparison, unique_ptr<Expression> &filter,
                                         bool &by_key_only) {
-	auto row = calc.Out(calc.Of(*comparison.left));
+	auto source_row = comparison.left->Copy();
+	unique_ptr<Expression> expanded;
+	if (splitter.ExpandBilinearGroups(*source_row, expanded)) {
+		source_row = std::move(expanded);
+	}
+	ReplaceTaggedFunctionsForSingletonRead(source_row, decide);
+	auto row = calc.Out(calc.Of(*source_row));
 	if (HasDecideTag(comparison.GetAlias(), MINMAX_EASY_REWRITE_TAG)) {
 		// The reducer's `by` key is on the written reducer: the copy above keeps no alias.
 		idx_t key = DConstants::INVALID_INDEX;
@@ -245,15 +290,17 @@ bool DecideReadSingletonRow(ClientContext &context, const LogicalDecide &decide,
 	    type != ExpressionType::COMPARE_EQUAL) {
 		return false;
 	}
-	// A frame selector reads another row, or nothing, which no admitted interval over the row says.
-	if (ContainsDecideFrame(comparison)) {
+	// A frame selector reads another row, or nothing, which no admitted interval over the row says. A tagged ABS
+	// helper is its own decision, so a frame inside that F node's operand does not make a bound on its value vary.
+	if (ContainsFrameOutsideTaggedFunction(comparison)) {
 		return false;
 	}
 	ExpressionBuilder calc(context);
-	DecideTermSplitter splitter(context, decide.decide_index, decide.decide_variables);
+	DecideTermSplitter splitter(context, decide.decide_index, decide.decide_variables,
+	                            &decide.bilinear_function_groups);
 	unique_ptr<Expression> member_filter;
 	bool by_key_only = false;
-	auto row = ReadAsRow(calc, decide, comparison, member_filter, by_key_only);
+	auto row = ReadAsRow(calc, decide, splitter, comparison, member_filter, by_key_only);
 	out.members_by_key_only = by_key_only;
 	ExprPtr a, b;
 	if (!ReadAffine(calc, splitter, *row, out.var_idx, a, b) || out.var_idx >= decide.decide_variables.size()) {

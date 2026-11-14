@@ -1,22 +1,22 @@
 //===----------------------------------------------------------------------===//
 //                         DeciDB
 //
-// src/optimizer/decide/decide_rewrite_define.cpp
+// src/optimizer/decide/decide_tree_definition.cpp
 //
-// DECIDE definition of a non-linear reducer body by helper decisions. See decide_optimizer.cpp.
+// Prepare the logical metadata for definition F nodes before later formulation passes read their values.
 //
 //===----------------------------------------------------------------------===//
-#include "duckdb/optimizer/decide/decide_optimizer.hpp"
 
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/unordered_map.hpp"
 #include "duckdb/optimizer/decide/decide_optimizer_internal.hpp"
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
-#include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/decide/decide_term_split.hpp"
+#include "duckdb/planner/decide/decide_tree.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
@@ -37,7 +37,7 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 // Every extremum the later passes build reads its members as linear: the hard rows, the
 // composed terms, the objective's and the value rewrite's helpers. A body that squares or multiplies
 // decisions (`max(power(x, 2))`, once RewriteBilinear has taken the Boolean products)
-// would lose its square there. This pass names such a body first: one helper decision `t`
+// would lose its square there. Tree preparation names such a body first: one helper decision `t`
 // per instance of the scopes the body reads (ScopeOf: per row once it reads a data column)
 // and one quadratic row defining it by the body `q` per instance, so the reducer reads the
 // bare column `t` and every later pass keeps reading linear members. RewriteAbs does the
@@ -138,12 +138,13 @@ void CollectReducerSigns(ClientContext &context, Expression &side, int sign, idx
 //! The reducers under `expr` whose body is not linear and holds no reducer. A SUM or AVG qualifies with `sums`
 //! (a constraint that holds a MIN or MAX) or `under_extremum` (a reducer inside a MIN or MAX). A reducer
 //! the polarity walk did not reach (`signs`) is pushed neither way.
-void CollectBodySites(Expression &expr, idx_t decide_index, bool sums, bool extremum_clause, bool under_extremum,
+void CollectBodySites(Expression &expr, idx_t decide_index, const DecideTermSplitter &splitter, bool sums,
+                      bool extremum_clause, bool under_extremum,
                       ExtremumPush outer, const unordered_map<const Expression *, int> &signs,
                       const string &source_alias, const DecideEnclosingScope &scope, vector<BodySite> &sites) {
 	if (!AsDecisionReducer(expr, decide_index)) {
 		ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) {
-			CollectBodySites(child, decide_index, sums, extremum_clause, under_extremum, outer, signs, source_alias,
+			CollectBodySites(child, decide_index, splitter, sums, extremum_clause, under_extremum, outer, signs, source_alias,
 			                 scope, sites);
 		});
 		return;
@@ -152,11 +153,11 @@ void CollectBodySites(Expression &expr, idx_t decide_index, bool sums, bool extr
 	const bool is_extremum = IsExtremumName(StringUtil::Lower(reducer.function.name));
 	auto &body = *reducer.children[0];
 	if (HoldsReducer(body, decide_index, false)) {
-		CollectBodySites(body, decide_index, sums, extremum_clause, is_extremum, outer, signs, source_alias, scope,
+		CollectBodySites(body, decide_index, splitter, sums, extremum_clause, is_extremum, outer, signs, source_alias, scope,
 		                 sites);
 		return;
 	}
-	if (DecideExpressionDegree(body, decide_index).IsLinear() || (!is_extremum && !sums && !under_extremum)) {
+	if (splitter.IsLinear(body) || (!is_extremum && !sums && !under_extremum)) {
 		return;
 	}
 	auto sign = signs.find(&expr);
@@ -224,9 +225,9 @@ unique_ptr<Expression> HelperCondition(const BodySite &site) {
 
 } // namespace
 
-void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
-	auto &context = optimizer.context;
+void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, LogicalDecide &decide) {
 	const idx_t decide_index = decide.decide_index;
+	DecideTermSplitter splitter(context, decide_index, decide.decide_variables, &decide.bilinear_function_groups);
 	vector<BodySite> sites;
 
 	if (decide.decide_constraints) {
@@ -262,9 +263,9 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 			CollectReducerSigns(context, *comparison.left, 1, decide_index, signs);
 			CollectReducerSigns(context, *comparison.right, -1, decide_index, signs);
 			const auto outer = ExtremumPushOf(comparison.type);
-			CollectBodySites(*comparison.left, decide_index, true, extremum_clause, false, outer, signs, source_alias,
+			CollectBodySites(*comparison.left, decide_index, splitter, true, extremum_clause, false, outer, signs, source_alias,
 			                 scope, sites);
-			CollectBodySites(*comparison.right, decide_index, true, extremum_clause, false, outer, signs, source_alias,
+			CollectBodySites(*comparison.right, decide_index, splitter, true, extremum_clause, false, outer, signs, source_alias,
 			                 scope, sites);
 		};
 		walk(*decide.decide_constraints, string(), DecideEnclosingScope());
@@ -289,7 +290,8 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 		unordered_map<const Expression *, int> signs;
 		CollectReducerSigns(context, *body, 1, decide_index, signs);
 		const auto outer = decide.decide_sense == DecideSense::MINIMIZE ? ExtremumPush::DOWN : ExtremumPush::UP;
-		CollectBodySites(*body, decide_index, false, false, false, outer, signs, OBJECTIVE_ROW_TAG, scope, sites);
+		CollectBodySites(*body, decide_index, splitter, false, false, false, outer, signs, OBJECTIVE_ROW_TAG, scope,
+		                 sites);
 	}
 
 	if (!decide.use_native_constructs.min_max) {
@@ -316,7 +318,7 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 	using Kind = LogicalDecide::RewriteAccount::Kind;
 	DecideCanonicalizer canonicalizer(context, decide_index, decide.variable_scopes, decide.keyed_scopes, decide.keys,
 	                                  decide.is_boolean_var);
-	// The rows are appended after both walks, so neither walks a row this pass added.
+	// The placeholders are appended after both walks, so neither walk sees the structural rows registered here.
 	vector<unique_ptr<Expression>> rows;
 	for (idx_t family = 0; family < families.size(); family++) {
 		auto &members = families[family];
@@ -356,19 +358,30 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 		const auto relation = equal  ? ExpressionType::COMPARE_EQUAL
 		                      : down ? ExpressionType::COMPARE_GREATERTHANOREQUALTO
 		                             : ExpressionType::COMPARE_LESSTHANOREQUALTO;
-		auto row = make_uniq<BoundComparisonExpression>(
-		    relation, BoundCastExpression::AddCastToType(context, MakeDecisionRef(decide, helper), body->return_type),
-		    body->Copy());
-		MarkFormulationConstraint(*row, string(), helper);
-		auto alias = row->GetAlias();
-		AddDecideTag(alias, BODY_DEFINITION_TAG);
-		row->SetAlias(std::move(alias));
 		auto condition = HelperCondition(first);
-		rows.push_back(ScopeRowPerInstance(decide, ScopeHelperRow(std::move(row), condition.get()), scope));
+		LogicalDecide::DefinitionFunction definition;
+		definition.value_var = helper;
+		definition.relation = relation;
+		definition.body = body->Copy();
+		definition.condition = condition ? condition->Copy() : nullptr;
+		decide.definition_functions.push_back(std::move(definition));
+		// Tree construction owns the function's row. This placeholder keeps its former clause-list position for
+		// EXPLAIN and source ordering until that tree attaches the row below the F node.
+		auto placeholder = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
+		auto alias = placeholder->GetAlias();
+		AddDecideTag(alias, STRUCTURAL_CONSTRAINT_TAG);
+		AddDecideTag(alias, MakeDefinesTag(helper));
+		AddDecideTag(alias, BODY_DEFINITION_TAG);
+		placeholder->SetAlias(std::move(alias));
+		rows.push_back(std::move(placeholder));
 
 		for (auto member : members) {
 			auto &reducer = *sites[member].reducer;
-			ReplaceWithDecision(context, decide, helper, reducer.children[0]);
+			// Keep the nonlinear expression where it was written. The tree lowers this marker as a read of the
+			// definition F node, while the term splitter reads the same helper column in optimizer-owned formulations
+			// such as hard MIN/MAX. The F node's retained body above stays untagged, so its own equation compiles the
+			// source expression instead of recursively reading itself.
+			AddDecideTag(reducer.children[0]->alias, MakeDefinitionFunctionTag(helper));
 			AddDecideTag(reducer.alias, BODY_DEFINITION_TAG);
 		}
 	}
@@ -381,7 +394,7 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 		}
 	}
 	for (auto &row : rows) {
-		AppendConstraint(decide, std::move(row));
+		decide.AddConstraint(context, std::move(row));
 	}
 }
 

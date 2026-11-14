@@ -74,6 +74,23 @@ static bool IsReducer(const Expression &expr) {
 	return expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && !TryGetDecideFrame(expr, frame);
 }
 
+//! An ABS F read inside another function (notably ABS over a reducer) is one model term. The term splitter resolves
+//! the tagged call to its preallocated helper without changing the reducer nodes the tree compiled from the source.
+static bool ContainsTaggedAbs(const Expression &expression) {
+	idx_t aux;
+	if (expression.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
+	    TryParseDecideIndexTag(expression.GetAlias(), ABS_FUNCTION_TAG_PREFIX, aux)) {
+		return true;
+	}
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(expression, [&](const Expression &child) {
+		if (!found) {
+			found = ContainsTaggedAbs(child);
+		}
+	});
+	return found;
+}
+
 //! Collect DECIDE variable references from a bound expression, tracking sign
 //! through subtraction operators. Used for multi-variable per-row constraints.
 struct ExprVarRef {
@@ -94,7 +111,7 @@ public:
 	DecideLinearFormBuilder(ClientContext &context, LogicalDecide &op, DecideTreeConstruction &tree)
 	    : context(context), op(op), tree(tree), decide_index(op.decide_index),
 	      canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.keys, op.is_boolean_var),
-	      splitter(context, op.decide_index, op.decide_variables) {
+	      splitter(context, op.decide_index, op.decide_variables, &op.bilinear_function_groups) {
 		// A frame's values are columns after the input's (DecideFrameColumn).
 		frame_reads.column_base = op.children.empty() ? 0 : op.children[0]->types.size();
 	}
@@ -104,6 +121,36 @@ public:
 			ForEachScopedConstraintLeaf(
 			    *op.decide_constraints,
 			    [&](const Expression &leaf, const DecideEnclosingScope &scope) { AnalyzeConstraint(leaf, scope); });
+		}
+		// Tree-owned nonlinear definition rows are built beneath their F nodes, while their placeholders preserve the
+		// clause-list position. Lower the retained rows through the same compiler as ordinary clauses.
+		for (auto function : tree.Tree().function_nodes) {
+			auto &node = *tree.Tree().nodes[function];
+			if (node.function_kind == DecideFunctionKind::DEFINITION && node.definition_expression) {
+				ForEachScopedConstraintLeaf(*node.definition_expression, [&](const Expression &leaf,
+				                                                       const DecideEnclosingScope &scope) {
+					AnalyzeConstraint(leaf, scope);
+				});
+			}
+		}
+		// The L0 indicator's formulation rows remain outside the written constraint list. Prepare them in the same
+		// position they had when RewriteNorm appended them, while their tree F node owns their execution scopes.
+		for (auto &indicator : op.l0_indicator_functions) {
+			for (auto &link : indicator.links) {
+				ForEachScopedConstraintLeaf(*link, [&](const Expression &leaf, const DecideEnclosingScope &scope) {
+					AnalyzeConstraint(leaf, scope);
+				});
+			}
+		}
+		for (auto &envelope : op.abs_function_envelopes) {
+			for (auto *expression : {&envelope.positive, &envelope.negative}) {
+				if (!*expression) {
+					continue;
+				}
+				ForEachScopedConstraintLeaf(**expression, [&](const Expression &leaf, const DecideEnclosingScope &scope) {
+					AnalyzeConstraint(leaf, scope);
+				});
+			}
 		}
 		if (op.decide_objective) {
 			AnalyzeObjective(op.decide_objective);
@@ -1036,7 +1083,20 @@ private:
 	void AnalyzeConstraint(const Expression &expr, const DecideEnclosingScope &scope) {
 		switch (expr.GetExpressionClass()) {
 		case ExpressionClass::BOUND_COMPARISON: {
-			auto &comp = expr.Cast<BoundComparisonExpression>();
+			auto &written_comp = expr.Cast<BoundComparisonExpression>();
+			unique_ptr<Expression> canonical_envelope;
+			const BoundComparisonExpression *comp = &written_comp;
+			idx_t abs_aux = DConstants::INVALID_INDEX;
+			idx_t l0_value = DConstants::INVALID_INDEX;
+			if (TryParseAbsFunctionEnvelopeTag(written_comp.GetAlias(), abs_aux) ||
+			    TryParseDecideIndexTag(written_comp.GetAlias(), L0_INDICATOR_FUNCTION_TAG_PREFIX, l0_value) ||
+			    HasDecideTag(written_comp.GetAlias(), BODY_DEFINITION_TAG)) {
+				// Function-owned links are generated in their natural form and can put decision terms on both sides.
+				// Canonicalize their linear form like an ordinary constraint, but keep `expr` as the clause identity so
+				// it still joins the root built from the optimizer metadata.
+				canonical_envelope = canonicalizer.CanonicalizeComparison(written_comp);
+				comp = &canonical_envelope->Cast<BoundComparisonExpression>();
+			}
 
 			// Skip comparisons the optimizer already folded into the column box.
 			// Emitting a DecideConstraint here would add num_rows redundant model
@@ -1044,13 +1104,13 @@ private:
 			// tag is the decision, and it was made by FoldSingletonRows. One whose
 			// repair rows come from its clause is flattened aside, for the repair model
 			// alone (singleton_row_constraints).
-			const bool folded = HasDecideTag(comp.alias, SINGLETON_ROW_BOUND_TAG);
-			if (folded && !HasDecideTag(comp.alias, SINGLETON_ROW_CLAUSE_ROWS_TAG)) {
+			const bool folded = HasDecideTag(written_comp.GetAlias(), SINGLETON_ROW_BOUND_TAG);
+			if (folded && !HasDecideTag(written_comp.GetAlias(), SINGLETON_ROW_CLAUSE_ROWS_TAG)) {
 				break;
 			}
 
-			auto constraint = ReadDecideClauseFacts(context, op, comp, scope);
-			Expression *lhs = UnwrapDecideCasts(*comp.left, decide_index);
+			auto constraint = ReadDecideClauseFacts(context, op, *comp, scope);
+			Expression *lhs = UnwrapDecideCasts(*comp->left, decide_index);
 
 			if (constraint->was_minmax_easy) {
 				// The easy direction of a MIN/MAX (`max(when c: e) by (g) <= cap`)
@@ -1081,13 +1141,13 @@ private:
 				// before being replaced by the check, so a wrong answer here would
 				// otherwise be silent.
 				vector<ExprVarRef> rhs_refs;
-				CollectDecideVarRefs(*comp.right, +1, rhs_refs);
+				CollectDecideVarRefs(*comp->right, +1, rhs_refs);
 				if (!rhs_refs.empty()) {
 					throw InternalException(
 					    "DECIDE constraint is not canonical: decision variable on the right-hand "
 					    "side of '%s'. Constraints must be canonicalized by DecideCanonicalizer "
 					    "before reaching term extraction.",
-					    comp.right->ToString());
+					    comp->right->ToString());
 				}
 
 				if (lhs->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
@@ -1189,6 +1249,9 @@ private:
 			// A factor left outside a reducer (`2 * SUM(x*p)`): extract the reducer, then
 			// multiply the factor into everything it produced.
 			if (atom.scaled) {
+				if (ScaleVanishesAtPlanTime(context, atom.scale.scale, atom.scale.divides)) {
+					continue;
+				}
 				auto obj_scale = atom.scale.scale;
 				// A decision on both sides of the `*` is a product of two decisions
 				// (bilinear), not a scaled reducer; treating it as a coefficient reads a
@@ -1209,6 +1272,12 @@ private:
 			}
 			if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST &&
 			    FindDecideVariable(expr) == DConstants::INVALID_INDEX) {
+				ExtractLinearAndBilinearTerms(expr, obj, atom.sign);
+				continue;
+			}
+			// ABS around a reducer is represented by its F helper, whose envelope already reads the reducer. Do not
+			// reject the function as a non-aggregate objective term or copy its nested reducer out of the tree.
+			if (!IsReducer(expr) && ContainsTaggedAbs(expr)) {
 				ExtractLinearAndBilinearTerms(expr, obj, atom.sign);
 				continue;
 			}

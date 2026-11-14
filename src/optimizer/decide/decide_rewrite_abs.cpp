@@ -259,44 +259,127 @@ void decide_rewrite::TagAbsForBigM(ClientContext &context, LogicalDecide &decide
 	if (decide.decide_constraints) {
 		ClassifyAbsConstraints(context, *decide.decide_constraints, decide.decide_index);
 	}
+	// L0 indicator rows live as function metadata rather than in the main clause tree, but their reverse links still
+	// need the same exactness classification as ordinary constraints.
+	for (auto &indicator : decide.l0_indicator_functions) {
+		for (auto &link : indicator.links) {
+			ClassifyAbsConstraints(context, *link, decide.decide_index);
+		}
+	}
 	if (decide.decide_objective) {
 		ClassifyAbsObjective(context, *decide.decide_objective, decide.decide_index, decide.decide_sense);
 	}
-	// A helper's body (LiftNestedReducers) is read by whatever reads the helper, whose sign the body does not know:
-	// each ABS in it is pinned exactly, as one inside another ABS is.
-	for (auto &link : decide.reducer_value_links) {
-		TagAbsSubtreeForBigM(*link.inner_expr, decide.decide_index);
+	// Composed MIN/MAX has already lifted its aggregate bodies out of the clause and objective trees. Apply the
+	// same polarity rule to those retained bodies: an easy extremum passes the outer sign to its members, while a
+	// hard extremum needs every ABS member boxed for its indicator formulation.
+	auto classify_composed = [&](LogicalDecide::ComposedMinMaxTerm &term, int pinning_sign) {
+		if (!term.inner_expr || ScaleVanishesAtPlanTime(context, term.scale.get(), term.scale_divides)) {
+			return;
+		}
+		const int sign = term.sign * ScaleSignAtPlanTime(context, term.scale.get(), term.scale_divides);
+		if (term.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND && !term.is_easy) {
+			pinning_sign = 0;
+		}
+		vector<std::pair<Expression *, int>> signed_abs;
+		CollectAbsWithSign(context, *term.inner_expr, sign, decide.decide_index, signed_abs, pinning_sign);
+		for (auto &entry : signed_abs) {
+			if (pinning_sign == 0 || entry.second != pinning_sign) {
+				TagAbsSubtreeForBigM(*entry.first, decide.decide_index);
+			}
+		}
+	};
+	for (auto &constraint : decide.composed_minmax_constraints) {
+		int pinning_sign = constraint.outer_cmp == ExpressionType::COMPARE_LESSTHAN ||
+		                           constraint.outer_cmp == ExpressionType::COMPARE_LESSTHANOREQUALTO
+		                       ? 1
+		                       : constraint.outer_cmp == ExpressionType::COMPARE_GREATERTHAN ||
+		                                 constraint.outer_cmp == ExpressionType::COMPARE_GREATERTHANOREQUALTO
+		                             ? -1
+		                             : 0;
+		for (auto &term : constraint.terms) {
+			classify_composed(term, pinning_sign);
+		}
+	}
+	const int objective_pinning_sign = decide.decide_sense == DecideSense::MINIMIZE ? 1 : -1;
+	for (auto &term : decide.composed_minmax_objective_terms) {
+		classify_composed(term, objective_pinning_sign);
 	}
 }
 
 // ---------------------------------------------------------------------------
-// ABS linearization (self-contained: detect, replace, and generate constraints)
+// ABS linearization (allocate helpers, retain their function nodes, and generate envelope metadata)
 // ---------------------------------------------------------------------------
 
 void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
-	// Phase 1: Find ABS(expr) nodes over decide vars, replace with auxiliary variables.
+	// Phase 1: Find ABS(expr) nodes over decide vars and allocate their helper variables. Keep the
+	// function expressions in the user's clauses; the tree owns their value through an F node, and
+	// term extraction resolves the tagged function to the already allocated helper column.
 	// Each entry records the aux index, a copy of the inner expression, and the clause
 	// the ABS node was written in (the objective's rows carry OBJECTIVE_ROW_TAG).
 	vector<AbsPairInfo> abs_pairs;
 	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.variable_scopes,
 	                                  decide.keyed_scopes, decide.keys, decide.is_boolean_var);
 	if (decide.decide_constraints) {
-		FindAndReplaceAbs(decide.decide_constraints, decide, canonicalizer, abs_pairs, string(),
-		                  DecideEnclosingScope());
+		FindAbsAndAllocateAux(decide.decide_constraints, decide, canonicalizer, abs_pairs, string(),
+		                      DecideEnclosingScope());
+	}
+	// A definition body has left the ordinary clause list; its F node still needs the same ABS helpers and envelopes.
+	for (auto &definition : decide.definition_functions) {
+		if (!definition.body) {
+			continue;
+		}
+		auto scoped = ScopeHelperRow(definition.body->Copy(), definition.condition.get());
+		auto scope = EnterDecideScope(*scoped, DecideEnclosingScope());
+		string alias = MakeDefinesTag(definition.value_var);
+		AddDecideTag(alias, BODY_DEFINITION_TAG);
+		FindAbsAndAllocateAux(definition.body, decide, canonicalizer, abs_pairs, alias, scope);
 	}
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
-		FindAndReplaceAbs(objective, decide, canonicalizer, abs_pairs, OBJECTIVE_ROW_TAG, DecideEnclosingScope());
+		FindAbsAndAllocateAux(objective, decide, canonicalizer, abs_pairs, OBJECTIVE_ROW_TAG, DecideEnclosingScope());
 		decide.SetObjective(optimizer.context, std::move(objective));
 	}
-	// A helper's body, which belongs to no clause (LiftNestedReducers): its auxiliaries are pinned exactly
+	// Composed MIN/MAX owns the reducer bodies after its rewrite, so visit those copies as well. Their filters are
+	// carried as the F node's `when`, and their source clause survives in the composed record for plan provenance.
+	auto collect_composed = [&](LogicalDecide::ComposedMinMaxTerm &term, const string &source_alias) {
+		if (!term.inner_expr) {
+			return;
+		}
+		auto scoped = ScopeHelperRow(term.inner_expr->Copy(), term.filter.get());
+		auto scope = EnterDecideScope(*scoped, DecideEnclosingScope());
+		FindAbsAndAllocateAux(term.inner_expr, decide, canonicalizer, abs_pairs, source_alias, scope);
+	};
+	for (auto &constraint : decide.composed_minmax_constraints) {
+		string source_alias;
+		if (constraint.source_clause_id != DConstants::INVALID_INDEX) {
+			AddDecideTag(source_alias, MakeSourceClauseTag(constraint.source_clause_id));
+		}
+		if (constraint.removal_group_id != DConstants::INVALID_INDEX) {
+			AddDecideTag(source_alias, MakeRemovalGroupTag(constraint.removal_group_id));
+		}
+		for (auto &term : constraint.terms) {
+			collect_composed(term, source_alias);
+		}
+	}
+	for (auto &term : decide.composed_minmax_objective_terms) {
+		collect_composed(term, OBJECTIVE_ROW_TAG);
+	}
+	// A reducer value helper's body, which belongs to no clause, has auxiliaries pinned exactly
 	// (TagAbsForBigM), so they hold on every row.
 	for (auto &link : decide.reducer_value_links) {
-		FindAndReplaceAbs(link.inner_expr, decide, canonicalizer, abs_pairs, string(), DecideEnclosingScope());
+		FindAbsAndAllocateAux(link.inner_expr, decide, canonicalizer, abs_pairs, string(), DecideEnclosingScope());
+	}
+	// `norm(e, 0)` owns its forward and reverse indicator links as tree metadata. The reverse link's `ABS(e)` still
+	// needs the same plan-time helper allocation as an ABS written in a clause; its envelope is then another F node.
+	for (auto &indicator : decide.l0_indicator_functions) {
+		for (auto &link : indicator.links) {
+			FindAbsAndAllocateAux(link, decide, canonicalizer, abs_pairs, string(), DecideEnclosingScope());
+		}
 	}
 
-	// Phase 2: Generate linearization constraints for each auxiliary variable.
-	// Always emit the lower-bound envelope:
+	// Phase 2: Build each helper's lower-envelope expressions and retain them as F-node metadata.
+	// The emitter routes the two rows through the function node's child scopes.
+	// Always retain the lower-bound envelope:
 	//   aux >= inner  and  aux >= -inner
 	// (forces aux >= |inner|). Then, for auxes that are NOT pinned to |inner|
 	// by natural solver pressure or constraint shape, allocate a binary sign
@@ -371,10 +454,12 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 				                             pair.scope, "(" + RenderForPlan(*pair.inner_expr, decide) + " >= 0)");
 			}
 
-			// Tag C1 and C2 so the linearizer can find them at finalization. Keyed by the
+			// Tag both envelope rows so the tree can build F's two child scopes and the
+			// linearizer can find them at finalization. Keyed by the
 			// AUXILIARY, which both arms have, rather than by y, which only the lowering
 			// arm allocates.
-			c1->alias = string(ABS_UB_POS_TAG_PREFIX) + to_string(pair.aux_idx) + "__" + MakeDefinesTag(pair.aux_idx);
+			c1->alias = string(ABS_UB_POS_TAG_PREFIX) + to_string(pair.aux_idx) + "__" +
+			            MakeAbsFunctionTag(pair.aux_idx) + MakeDefinesTag(pair.aux_idx);
 			c2->alias = string(ABS_UB_NEG_TAG_PREFIX) + to_string(pair.aux_idx) + "__" + MakeDefinesTag(pair.aux_idx);
 			// The linearizer finds these by substring, so the clause id rides alongside
 			// rather than replacing the marker.
@@ -383,25 +468,33 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 
 			decide.abs_maximize_links.push_back({pair.aux_idx, y_idx});
 		} else {
+			AddDecideTag(c1->alias, MakeAbsFunctionTag(pair.aux_idx));
 			MarkFormulationConstraint(*c1, pair.source_alias, pair.aux_idx);
 			MarkFormulationConstraint(*c2, pair.source_alias, pair.aux_idx);
 		}
+		AddDecideTag(c2->alias, MakeAbsFunctionNegTag(pair.aux_idx));
 
-		AppendConstraint(decide,
-		                 ScopeRowPerInstance(decide, ScopeHelperRow(std::move(c1), pair.when.get()), pair.scope));
-		AppendConstraint(decide,
-		                 ScopeRowPerInstance(decide, ScopeHelperRow(std::move(c2), pair.when.get()), pair.scope));
+		LogicalDecide::AbsFunctionEnvelope envelope;
+		envelope.operand = pair.inner_expr->Copy();
+		envelope.positive = ScopeRowPerInstance(decide, ScopeHelperRow(std::move(c1), pair.when.get()), pair.scope);
+		envelope.negative = ScopeRowPerInstance(decide, ScopeHelperRow(std::move(c2), pair.when.get()), pair.scope);
+		decide.abs_function_envelopes.push_back(std::move(envelope));
 	}
 }
 
-void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,
-                                        const DecideCanonicalizer &canonicalizer, vector<AbsPairInfo> &abs_pairs,
-                                        const string &source_alias, DecideEnclosingScope scope) {
+void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, LogicalDecide &decide,
+	                                           const DecideCanonicalizer &canonicalizer,
+	                                           vector<AbsPairInfo> &abs_pairs, const string &source_alias,
+	                                           DecideEnclosingScope scope) {
 	if (!expr) {
 		return;
 	}
 	auto clause_alias = DescendSourceAlias(*expr, source_alias);
 	scope = EnterDecideScope(*expr, scope);
+	idx_t definition_aux;
+	if (TryParseDecideIndexTag(expr->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
+		return; // its body is visited through DefinitionFunction metadata below
+	}
 
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &func = expr->Cast<BoundFunctionExpression>();
@@ -412,23 +505,21 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 				// strict-inequality rewrites (`SUM(|...|) < K → <= K-1`) stay sound.
 				// Without this, all ABS auxes are DOUBLE and the LHS-integer check
 				// in ilp_model_builder would reject valid integer-valued strict cases.
-				// A copy: the argument is rewritten below, and the node it was may go.
+				// Nested ABS functions will be tagged as helpers, but this function node remains in the source tree.
 				const LogicalType inner_type = func.children[0]->return_type;
 				bool inner_is_integer = inner_type.IsIntegral() ||
 				                        inner_type.id() == LogicalTypeId::BOOLEAN;
 				LogicalType aux_type =
 				    inner_is_integer ? LogicalType::INTEGER : LogicalType::DOUBLE;
 
-				// F6: a diagnosis, and a plan, name the auxiliary by the user's ABS(inner) --
-				// rendered before the argument is rewritten, so a nested ABS keeps its text.
+				// F6: a diagnosis and a plan name the helper by the user's ABS(inner), rendered before
+				// nested ABS nodes receive their helper tags.
 				string label = "abs(" + RenderForPlan(*func.children[0], decide) + ")";
 
-				// Innermost first: an ABS inside this one becomes its own auxiliary now, so
-				// the inner expression copied below refers to it rather than carrying an
-				// ABS no later pass would lower (term extraction read `abs(h)` as `h`). Its
-				// pair is appended before this one, which is the order the auxiliary-bound
-				// derivation boxes them in: the outer range needs the inner box.
-				FindAndReplaceAbs(func.children[0], decide, canonicalizer, abs_pairs, clause_alias, scope);
+				// Innermost first: an ABS inside this one gets its helper first. The copied
+				// operand retains that tagged function, which term extraction resolves to the
+				// inner helper before building this function's envelope rows.
+				FindAbsAndAllocateAux(func.children[0], decide, canonicalizer, abs_pairs, clause_alias, scope);
 
 				// A column defined by its argument: one per instance of the scopes the argument reads.
 				auto aux_scope = ScopeOf(decide, canonicalizer, *func.children[0]);
@@ -441,13 +532,14 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 				// collects as unknown sign) and for a dead one (which it leaves untagged).
 				const bool needs_bigm = HasDecideTag(func.alias, ABS_NEEDS_BIGM_TAG);
 
-				// Stash the bound inner expression for constraint generation
+				// Retain the bound operand for the F node's envelope rows.
 				abs_pairs.push_back({aux_idx, func.children[0]->Copy(), clause_alias, needs_bigm,
 				                     scope.Condition() ? scope.Condition()->Copy() : nullptr, std::move(label),
-				                     aux_scope});
+			                     aux_scope});
 
-				// Replace ABS(inner) with aux var reference
-				ReplaceWithDecision(optimizer.context, decide, aux_idx, expr);
+				// Preserve ABS(inner) in the clause tree and tag its value-helper mapping for
+				// the F-aware term splitter.
+				AddDecideTag(func.alias, MakeAbsFunctionTag(aux_idx));
 				return;
 			}
 		}
@@ -455,7 +547,7 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 
 	// Recurse into children
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		FindAndReplaceAbs(child, decide, canonicalizer, abs_pairs, clause_alias, scope);
+		FindAbsAndAllocateAux(child, decide, canonicalizer, abs_pairs, clause_alias, scope);
 	});
 }
 

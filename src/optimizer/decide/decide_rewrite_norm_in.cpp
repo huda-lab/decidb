@@ -38,7 +38,6 @@ namespace duckdb {
 using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 
 void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
-	vector<unique_ptr<Expression>> links;
 	idx_t l0_counter = 0;
 	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.variable_scopes,
 	                                  decide.keyed_scopes, decide.keys, decide.is_boolean_var);
@@ -118,6 +117,11 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		auto z_scope = ScopeOf(decide, canonicalizer, *aggregate.children[0]);
 		const idx_t z_idx = AddAuxiliaryDecision(decide, z_name, LogicalType::INTEGER, true, z_scope,
 		                                         "(" + RenderForPlan(*aggregate.children[0], decide) + " <> 0)");
+		LogicalDecide::L0IndicatorFunction indicator;
+		indicator.value_var = z_idx;
+		indicator.auto_m = auto_m;
+		indicator.m = m;
+		indicator.label = RenderForPlan(aggregate, decide);
 		auto z = MakeDecisionRef(decide, z_idx);
 		AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::L0_INDICATORS,
 		                  RenderForPlan(aggregate, decide));
@@ -132,7 +136,11 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 			auto link = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 			                                                  std::move(lhs), std::move(rhs));
 			MarkFormulationConstraint(*link, clause_alias, z_idx);
-			links.push_back(ScopeRowPerInstance(decide, ScopeHelperRow(std::move(link), scope.Condition()), z_scope));
+			auto alias = link->GetAlias();
+			AddDecideTag(alias, MakeL0IndicatorFunctionTag(z_idx));
+			link->SetAlias(std::move(alias));
+			indicator.links.push_back(
+			    ScopeRowPerInstance(decide, ScopeHelperRow(std::move(link), scope.Condition()), z_scope));
 		};
 		add_link(make_mz(), aggregate.children[0]->Copy());
 		add_link(make_mz(), optimizer.BindScalarFunction("-", make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0)),
@@ -140,6 +148,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		add_link(optimizer.BindScalarFunction("abs", aggregate.children[0]->Copy()),
 		         optimizer.BindScalarFunction("*", make_uniq<BoundConstantExpression>(Value::DOUBLE(GetDecideL0Tolerance(optimizer.context))), z->Copy()));
 		expr = make_aggregate("sum", std::move(z));
+		decide.l0_indicator_functions.push_back(std::move(indicator));
 	};
 
 	// Lowering swaps a marker for a `SUM` of indicators under the factor the canonicalizer peeled, so each clause is
@@ -150,7 +159,6 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 	auto constraints = std::move(decide.decide_constraints);
 	rewrite(constraints, string(), DecideEnclosingScope());
 	if (constraints) AppendConstraint(decide, std::move(constraints));
-	for (auto &link : links) AppendConstraint(decide, std::move(link));
 }
 
 void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
@@ -244,6 +252,11 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 		expr = MakeTrueExpression(clause_alias);
 	};
 	rewrite(decide.decide_constraints, DecideEnclosingScope(), string());
+	for (auto &indicator : decide.l0_indicator_functions) {
+		for (auto &link : indicator.links) {
+			rewrite(link, DecideEnclosingScope(), string());
+		}
+	}
 	for (auto &constraint : generated) AppendConstraint(decide, std::move(constraint));
 }
 

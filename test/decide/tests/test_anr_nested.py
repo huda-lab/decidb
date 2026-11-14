@@ -869,8 +869,8 @@ def test_refused_nests(decidb_cli, clause_sql, message):
 )
 def test_abs_over_a_nested_reducer(request, scope_solver, cli_fixture, clause_sql, body, optimum):
     """The deck's grammar composes any function over nested reducers (p. 51): the inner
-    reducer is a helper first, keyed by its path (DecideOptimizer::LiftNestedReducers),
-    which the ABS then reads as a decision. Worked by hand: group a reads
+    reducer remains a G node keyed by its path, which the ABS F node reads as a decision.
+    Worked by hand: group a reads
     2 |max(x1, x2) - 4| + |x3 - 4| <= 5, at best 17, and b |x4 - 4| <= 5, 9: 26. With the
     inner `when`, (a, p) and (b, p) keep no row, so their members are dropped and group b
     has none, no instance (D68, D88): |x3 - 4| <= 1, and 9 + 9 + 5 + 9 = 32."""
@@ -909,8 +909,8 @@ def _largest(x, ids):
     ],
 )
 def test_a_product_or_square_over_a_nested_reducer(decidb_cli_gurobi, decidb_cli_highs, clause_sql, holds, optimum):
-    """A product with a decision and a square over a nested reducer read its helper
-    (LiftNestedReducers), a quadratic row Gurobi states and HiGHS refuses by name. Worked by
+    """A product with a decision and a square over a nested reducer read its G-node value,
+    a quadratic row Gurobi states and HiGHS refuses by name. Worked by
     hand over (a, p), (a, p), (a, q), (b, p): every x at most 9 and whole, the product
     `(S_a - 3) * max_a + (x4 - 1) * x4 <= 50` is best at x = (4, 4, 4, 4), 16; the squares
     `2 * max(x1, x2)^2 + x3^2 <= 30` and `x4^2 <= 30` at (3, 3, 3, 5), 14."""
@@ -928,7 +928,7 @@ def test_a_product_or_square_over_a_nested_reducer(decidb_cli_gurobi, decidb_cli
 def test_a_square_inside_a_nest_is_defined_where_a_max_reads_it(decidb_cli_gurobi, decidb_cli_highs):
     """`sum(max(x * x) by (t.g)) <= 5`: each row reads its group's largest square, so
     3 * max_a + max_b <= 5 holds every x at 1. The square is a helper at least its value per
-    row (DefineNonlinearReducerBodies), which a MAX reads natively: Gurobi answers, and
+    row (the definition F node), which a MAX reads natively: Gurobi answers, and
     HiGHS, which states no MIN/MAX, is refused by name."""
     sql = _bound_query("x <= 9 AND sum(max(x * x) by (t.g)) <= 5")
     assert [row["x"] for row in answer(decidb_cli_gurobi, sql)] == [1, 1, 1, 1]

@@ -35,8 +35,6 @@ class Optimizer;
 //!   - RewriteAbs: detects ABS(expr) over decide vars, creates auxiliary REAL vars,
 //!     replaces ABS nodes with aux var refs, generates linearization constraints
 //!   - RewriteBilinear: McCormick linearization for Boolean × anything products
-//!   - DefineNonlinearReducerBodies: names each non-linear body a MIN/MAX formulation would read by a helper decision
-//!     per instance of its scope, defined on the side its clause pushes it (decide_rewrite_define.cpp)
 //!   - RewriteScopedReducers: the value rewrite of a scoped comparison -- each decision
 //!     reducer of a VALUE-shape comparison becomes a helper decision defined per group
 //!   - RewriteComposedMinMax: detects composed MIN/MAX before the single-term pass
@@ -151,13 +149,6 @@ private:
 	//! definition. Runs first, so the bound-side rewrite computes the weights.
 	void SwapObjectiveSummation(LogicalDecide &decide);
 
-	//! A reducer inside another that is read through anything but an affine map of that one's argument -- an ABS, a
-	//! POWER, a product with a decision, a CASE -- becomes its helper decision first, keyed by its path
-	//! (language/guide.md §5.5) and pinned on both sides (D79). Those readers are rewritten before the value rewrite
-	//! reads the path, which would move the reducer out of the enclosing `when` and `by`; as RewriteFrameRanges does
-	//! for a range, every later rewrite then reads a keyed decision. Runs right after RewriteFrameRanges.
-	void LiftNestedReducers(LogicalDecide &decide);
-
 	//! Range frames over decisions (language/guide.md §5.6, D78): each becomes a helper decision with one instance per
 	//! window of the frame -- a timeline, or a position on one -- defined once per window
 	//! (LogicalDecide::reducer_value_links, with its frame), so every later rewrite reads it as an ordinary keyed
@@ -206,31 +197,23 @@ private:
 	//! walks INTO the tree past `per`/`when` wrappers and casts, and it has early returns.
 	void RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_ptr<Expression> &objective);
 
-	//! Detect ABS(expr) over decide variables, create auxiliary REAL variables,
-	//! replace ABS nodes with aux var references, and generate linearization constraints.
-	//! For each ABS(inner): aux >= inner AND aux >= -inner.
+	//! Detect ABS(expr) over decide variables, allocate the plan-time helper, and retain the written function plus its
+	//! lower-envelope metadata for the tree's ABS F node.
 	void RewriteAbs(LogicalDecide &decide);
 
-	//! Rewrite bilinear products (x * y) where at least one factor is Boolean.
+	//! Annotate bilinear products (x * y) where at least one factor is Boolean, retaining the written expression for the
+	//! tree and the shared term splitter while allocating helper columns.
 	//! Boolean × Boolean: w = b1 * b2, AND-linearization (w <= b1, w <= b2, w >= b1+b2-1).
 	//! Boolean × Other: w = b * x, partial McCormick (w <= x at plan time,
 	//!   w <= U*b and w >= x-U*(1-b) at execution time via BilinearLink).
 	//! Non-Boolean × Non-Boolean: left in place for Q matrix handling in physical operator.
 	void RewriteBilinear(LogicalDecide &decide);
 
-	//! Give each non-linear reducer body a MIN/MAX formulation would read as linear a helper decision `t` per row and
-	//! one quadratic row: `t >= body` where the clause pushes the reducer down, `t <= body` up, `t = body` neither
-	//! way (WalkPolarity). The reducer then reads the bare `t`, so every later pass sees linear members. Refuses on a
-	//! backend that states no MIN/MAX natively: a helper has no box, so no Big-M exists for an extremum over it. Runs
-	//! after RewriteBilinear, whose Boolean products are linear, and before the value and MIN/MAX rewrites.
-	void DefineNonlinearReducerBodies(LogicalDecide &decide);
-
-	//! Helper: recursively find bilinear products in expression tree, replace Boolean cases
-	//! with auxiliary variable references, and collect metadata.
+	//! Helper: find affine bilinear products, collect their distributive expansion and product F specs, and leave the
+	//! source expression intact.
 	//! `source_alias` is the alias of the enclosing user comparison, so the rows this
 	//! emits can point back at the clause that produced them.
-	void FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide,
-	                            vector<LogicalDecide::BilinearLink> &links, const string &source_alias);
+	void FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide, const string &source_alias);
 
 	//! Carries per-ABS-node metadata through the two phases of RewriteAbs.
 	struct AbsPairInfo {
@@ -255,12 +238,12 @@ private:
 	};
 
 	//! Helper: recursively find BoundFunctionExpression for ABS over decide vars,
-	//! replace with auxiliary variable references, and collect AbsPairInfo entries,
-	//! innermost first. Whether an auxiliary is pinned exactly is read off the tag
-	//! TagAbsForBigM left on the node; this pass decides nothing about it.
-	void FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,
-	                       const DecideCanonicalizer &canonicalizer, vector<AbsPairInfo> &abs_pairs,
-	                       const string &source_alias, DecideEnclosingScope scope);
+	//! allocate a helper and tag the retained function expression, and collect
+	//! AbsPairInfo entries innermost first. Whether an auxiliary is pinned exactly is
+	//! read off the tag TagAbsForBigM left on the node; this pass decides nothing about it.
+	void FindAbsAndAllocateAux(unique_ptr<Expression> &expr, LogicalDecide &decide,
+	                            const DecideCanonicalizer &canonicalizer, vector<AbsPairInfo> &abs_pairs,
+	                            const string &source_alias, DecideEnclosingScope scope);
 
 	//! Helper: register a hard MIN/MAX clause and produce the corresponding SUM(inner)
 	//! aggregate tagged with MINMAX_CLAUSE_TAG_PREFIX. Records the clause's diagnosis

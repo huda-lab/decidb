@@ -66,7 +66,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
             "ship(INT)",
             "when S.priority: abs(ship - 20) <= 3",
             "abs(ship-20)becomesanauxiliaryvariable",
-            "whenS.priority:abs(ship-20)-ship>=-20",
+            None,
             "__abs_aux",
             id="abs",
         ),
@@ -238,13 +238,17 @@ def test_explain_a_nested_objective_accounts_for_each_helper(decidb_cli):
 
 @pytest.mark.explain
 def test_explain_accounts_for_the_objectives_rewrites_too(decidb_cli):
-    """An ABS, a product or an AVG in the objective gets its account under the objective,
-    and the rows a rewrite added for it are printed there too, not as rows no clause owns."""
+    """An ABS, a product or an AVG in the objective gets its account under the objective.
+
+    The ABS node keeps its generated envelope rows inside the DECIDE formulation; EXPLAIN
+    leaves the objective in its written form and does not print those implementation rows.
+    """
     text = _plan(decidb_cli, _ship_query("ship(INT)", "ship >= 1", "MINIMIZE when S.priority: sum(abs(ship - 10))"))
     assert (
         "Objective:MINIMIZEwhenS.priority:sum(abs(ship-10))↳abs(ship-10)becomesanauxiliaryvariable"
-        "↳whenS.priority:abs(ship-10)-ship>=-10"
     ) in text, text
+    assert "abs(ship-10)-ship>=-10" not in text, text
+    assert "abs(ship-10)+ship<=10" not in text, text
     assert "addedbyformulation" not in text, text
     text = _plan(decidb_cli, _ship_query("ship(INT), per D: open(BOOL)", "ship >= 1", "MAXIMIZE sum(open * ship)"))
     assert "↳(open*ship)becomesanauxiliaryvariablelinearizedbyMcCormickrows" in text, text

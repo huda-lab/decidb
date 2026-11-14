@@ -1,7 +1,7 @@
 """A MIN/MAX over a squared or multiplied body: the body is defined by a helper decision.
 
-Every extremum DeciDB builds reads its members as linear. Stage 05 therefore names a
-non-linear body first (``DefineNonlinearReducerBodies``): one helper decision ``t`` per
+Every extremum DeciDB builds reads its members as linear. Tree preparation therefore names a
+non-linear body first (``DecideTreeConstruction::PrepareDefinitionFunctions``): one helper decision ``t`` per
 instance of the body's scope (per row once it reads a data column) and one quadratic row per
 instance defining it by the body ``q``, on the side the clause pushes the
 reducer (pushed down ``t >= q``, up ``t <= q``, neither ``t = q``). Every reader of one

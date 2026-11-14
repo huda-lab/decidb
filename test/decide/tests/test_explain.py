@@ -692,13 +692,11 @@ def test_untouched_clause_stays_one_line(decidb_cli):
 
 @pytest.mark.explain
 @pytest.mark.cons_aggregate
-def test_abs_clause_shows_the_rows_it_became(decidb_cli):
-    """One written clause, an account line and its solver rows, all grouped under it.
+def test_abs_clause_shows_its_source_and_account(decidb_cli):
+    """EXPLAIN keeps the written ABS clause and accounts for its hidden helper.
 
-    ``ABS`` linearizes into an auxiliary variable plus a lower envelope. Before
-    the layers those rows were loose lines naming ``__abs_aux_0__`` with no
-    account of where the auxiliary came from; the auxiliary now prints as the
-    ``abs(...)`` it stands for and the rewrite states what it did.
+    The F node owns the generated lower envelope, so those solver rows stay out of the
+    displayed plan. The account explains the auxiliary without exposing its internal name.
     """
     sql = """
         SELECT l_orderkey, l_quantity, x FROM lineitem WHERE l_orderkey < 100
@@ -710,12 +708,12 @@ def test_abs_clause_shows_the_rows_it_became(decidb_cli):
     packed = _packed(out)
     # The clause the user wrote heads the group.
     assert "ABS(x-20)<=5" in packed, _plan_text(out)
-    # Every generated row is subordinated, and the auxiliary never floats free: it
-    # prints as the ABS it stands for, in the account line and in each envelope row.
+    # The auxiliary never floats free and generated envelope rows stay internal.
     assert "__abs_aux_0__" not in packed, _plan_text(out)
     assert "abs(x-20)becomesanauxiliaryvariable" in packed, _plan_text(out)
-    assert packed.count("abs(x-20)") + packed.count("ABS(x-20)") >= 4, _plan_text(out)
-    assert packed.count(_REWRITTEN_MARK) >= 3, _plan_text(out)
+    assert "abs(x-20)-x" not in packed, _plan_text(out)
+    assert "abs(x-20)+x" not in packed, _plan_text(out)
+    assert packed.count(_REWRITTEN_MARK) == 1, _plan_text(out)
     # Nothing was attributed to no clause at all.
     assert "addedbyformulation" not in packed, _plan_text(out)
 

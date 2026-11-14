@@ -49,6 +49,10 @@ static bool IsDecisionColumn(const Expression &expr, idx_t decide_index, idx_t &
 }
 
 static bool ContainsDecision(const Expression &expr, idx_t decide_index) {
+	idx_t function_aux;
+	if (TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, function_aux)) {
+		return true;
+	}
 	idx_t column;
 	if (IsDecisionColumn(expr, decide_index, column)) {
 		return true;
@@ -128,6 +132,12 @@ static DegreeWalk WalkMultiplication(const BoundFunctionExpression &func, idx_t 
 
 static DegreeWalk WalkDegree(const Expression &expr, idx_t decide_index) {
 	DegreeWalk result;
+	idx_t function_aux;
+	if (TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, function_aux)) {
+		result.degree = 1;
+	result.vars.insert(function_aux);
+		return result;
+	}
 	idx_t column;
 	if (IsDecisionColumn(expr, decide_index, column)) {
 		result.degree = 1;

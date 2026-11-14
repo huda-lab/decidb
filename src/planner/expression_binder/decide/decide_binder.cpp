@@ -444,9 +444,8 @@ static void ValidateScopePlacement(const ParsedExpression &expr, ScopePlacement 
 		                            "in front of the constraint or inside a reducer");
 	}
 	bool reducer = TakesReducerBy(func);
-	// A reducer over decisions may not stand inside a norm (D80), which is rewritten before the value rewrite reads
-	// the path. Under an ABS, a POWER or a product with a decision it may: it becomes a helper first
-	// (DecideOptimizer::LiftNestedReducers).
+	// A reducer over decisions may not stand inside a norm (D80), which has no tree lowering yet. Under an ABS, a
+	// POWER or a product with a decision it stays at its written position and the tree lowers it beneath its reader.
 	if (!func.is_operator && !func.children.empty() && ContainsDecideAggregate(*func.children[0]) &&
 	    ExpressionContainsDecideVariable(*func.children[0], placement.variables) &&
 	    StringUtil::CIEquals(func.function_name, "norm")) {

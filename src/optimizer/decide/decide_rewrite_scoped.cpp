@@ -28,6 +28,7 @@
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
+#include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_case_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
@@ -48,7 +49,7 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 void decide_rewrite::DecideHelperSides(const string &agg_name, ExtremumPush push, bool &need_envelope,
                                        bool &need_closing) {
 	// Which side pins the helper is the one the row would otherwise let it escape through (the epigraph form; the
-	// Plaisted-Greenbaum polarity of DefineNonlinearReducerBodies). Under `<=` a positive term is pushed down, so a
+	// Plaisted-Greenbaum polarity of definition F-node preparation). Under `<=` a positive term is pushed down, so a
 	// MAX needs its envelope (`value >= member`) and a MIN its closing side (`value >= some member`, with indicators);
 	// a SUM or AVG, which like a MAX never decreases when a member grows, needs `value >= sum`, its envelope. The
 	// mirror holds for `>=` and for a negative term. An unknown sign, `=` and `<>` need both.
@@ -251,9 +252,9 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 		D_ASSERT(!inner.under_decision);
 		ReplaceReducer(helpers, names, booleans, below, push, source_clause_id, inner);
 	}
-	// Among nested reducers every one is a helper, so none is summed in place: a square or product of decisions in
-	// its body would make the helper's definition quadratic (D80). DefineNonlinearReducerBodies has named such a
-	// body by now wherever a constraint, or a MIN or MAX of the objective, reads it.
+	// A reducer value link's member program is linear. A quadratic outer SUM whose direct G can emit the Q row stays
+	// in the clause (RewriteScopedReducers does that for the compatible path shape); other nested helper definitions
+	// retain the established refusal instead of reaching linear term extraction with unsupported Q terms.
 	if ((!path.keys.empty() || !nested.empty()) &&
 	    !DecideExpressionDegree(*agg.children[0], decide.decide_index).IsLinear()) {
 		throw BinderException("DECIDE: '%s' squares or multiplies decisions inside nested reducers, which is not "
@@ -388,6 +389,8 @@ void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
 		return;
 	}
 	const idx_t decide_index = decide.decide_index;
+	DecideTermSplitter splitter(optimizer.context, decide_index, decide.decide_variables,
+	                            &decide.bilinear_function_groups);
 	auto real = [&](unique_ptr<Expression> expr) {
 		return BoundCastExpression::AddCastToType(optimizer.context, std::move(expr), LogicalType::DOUBLE);
 	};
@@ -414,8 +417,7 @@ void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
 		if ((!avg && !StringUtil::CIEquals(inner.function.name, "sum")) || inner.children.size() != 1 ||
 		    TryGetDecideFrame(inner, frame) || TryParseQualifiedReducerTag(inner.GetAlias(), scope) ||
 		    DecideCanonicalizer::ContainsReducer(*inner.children[0]) || ContainsDecideFrame(*inner.children[0]) ||
-		    (inner.filter && ContainsDecideFrame(*inner.filter)) ||
-		    DecideExpressionDegree(*inner.children[0], decide_index).IsLinear()) {
+		    (inner.filter && ContainsDecideFrame(*inner.filter)) || splitter.IsLinear(*inner.children[0])) {
 			return; // a linear nest is read through helpers, which the model writes in (D89)
 		}
 		const idx_t group_key = DecideReducerGroupKey(inner);
@@ -477,7 +479,7 @@ void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
 				} else if (name == "*" && func.children.size() == 2 && func.children[0]->Equals(*func.children[1])) {
 					square = func.children[0].get();
 				}
-				if (square && DecideExpressionDegree(*square, decide_index).IsLinear()) {
+				if (square && splitter.IsLinear(*square)) {
 					auto root = optimizer.BindScalarFunction("sqrt", w.Copy());
 					auto scaled = optimizer.BindScalarFunction("*", std::move(root), real(square->Copy()));
 					return optimizer.BindScalarFunction("power", std::move(scaled), number(2.0));
@@ -507,104 +509,6 @@ void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
 	visit(decide.decide_objective);
 }
 
-void DecideOptimizer::LiftNestedReducers(LogicalDecide &decide) {
-	if (!decide.decide_constraints && !decide.decide_objective) {
-		return;
-	}
-	const BooleanDecisions booleans {decide.decide_index, decide.is_boolean_var};
-	auto names = DecidePlanNames(decide.source_fragments, decide.keyed_scopes, decide.keys, decide.decide_index,
-	                             decide.aux_var_expressions);
-	Helpers helpers {optimizer.context, decide, {}, {}};
-	auto reads_decision = [&](const Expression &expr) {
-		return BoundExpressionReferencesDecide(expr, decide.decide_index);
-	};
-	// `expr` stands in the argument of a reducer read along `path` when `nested`; `affine` while every node between
-	// them is `+`, `-`, a cast or a data factor.
-	std::function<void(unique_ptr<Expression> &, const DecideReducerPath &, bool, bool, idx_t)> walk =
-	    [&](unique_ptr<Expression> &expr, const DecideReducerPath &path, bool nested, bool affine, idx_t clause) {
-		    if (!reads_decision(*expr)) {
-			    return;
-		    }
-		    if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			    idx_t frame;
-			    if (TryGetDecideFrame(*expr, frame)) {
-				    return; // a frame is a tuple term of the row
-			    }
-			    if (nested && !affine) {
-				    ReducerSite site {&expr, 0, false};
-				    ReplaceReducer(helpers, names, booleans, path, ExtremumPush::NONE, clause, site);
-				    return;
-			    }
-			    auto &agg = expr->Cast<BoundAggregateExpression>();
-			    auto below = path.Below(agg);
-			    for (auto &child : agg.children) {
-				    walk(child, below, true, true, clause);
-			    }
-			    return;
-		    }
-		    bool keeps = expr->GetExpressionClass() == ExpressionClass::BOUND_CAST;
-		    if (expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-			    auto &func = expr->Cast<BoundFunctionExpression>();
-			    auto &name = func.function.name;
-			    if (name == "+" || name == "-") {
-				    keeps = true;
-			    } else if ((name == "*" || name == "/") && func.children.size() == 2) {
-				    // A data factor scales what it multiplies; a decision on both sides, or in a divisor, does not.
-				    keeps = !(reads_decision(*func.children[0]) && reads_decision(*func.children[1])) &&
-				            !(name == "/" && reads_decision(*func.children[1]));
-			    }
-		    }
-		    ExpressionIterator::EnumerateChildren(
-		        *expr, [&](unique_ptr<Expression> &child) { walk(child, path, nested, affine && keeps, clause); });
-	    };
-
-	std::function<void(unique_ptr<Expression> &, DecideEnclosingScope)> clauses = [&](unique_ptr<Expression> &expr,
-	                                                                                  DecideEnclosingScope scope) {
-		scope = EnterDecideScope(*expr, scope);
-		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			auto &conj = expr->Cast<BoundConjunctionExpression>();
-			for (idx_t i = 0; i < conj.children.size(); i++) {
-				if (IsConstraintChild(conj, i)) {
-					clauses(conj.children[i], scope);
-				}
-			}
-			return;
-		}
-		if (expr->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
-			return;
-		}
-		auto &cmp = expr->Cast<BoundComparisonExpression>();
-		idx_t source_clause_id = DConstants::INVALID_INDEX;
-		TryParseSourceClauseTag(cmp.GetAlias(), source_clause_id);
-		DecideReducerPath path;
-		if (scope.Condition()) {
-			path.conditions.push_back(scope.Condition());
-		}
-		walk(cmp.left, path, false, true, source_clause_id);
-		walk(cmp.right, path, false, true, source_clause_id);
-	};
-	if (decide.decide_constraints) {
-		clauses(decide.decide_constraints, DecideEnclosingScope());
-	}
-	if (decide.decide_objective) {
-		auto *body = &decide.decide_objective;
-		DecideEnclosingScope scope;
-		while ((*body)->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			auto &conjunction = (*body)->Cast<BoundConjunctionExpression>();
-			if (!IsConstraintWrapper(conjunction) || conjunction.children.empty()) {
-				break;
-			}
-			scope = EnterDecideScope(conjunction, scope);
-			body = &conjunction.children[0];
-		}
-		DecideReducerPath path;
-		if (scope.Condition()) {
-			path.conditions.push_back(scope.Condition());
-		}
-		walk(*body, path, false, true, DConstants::INVALID_INDEX);
-	}
-}
-
 void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	if (!decide.decide_constraints && !decide.decide_objective) {
 		return;
@@ -615,14 +519,10 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	Helpers helpers {optimizer.context, decide, {}, {}};
 
 	// A Boolean factor on a reducer (`b * sum(x)`, canonicalization admits no other decision) is now a product with
-	// the helper. The bilinear rewrite ran before this pass, so it never saw the product: hand it to its one-product
-	// linearization, the same McCormick column any Boolean product gets.
+	// the helper. The bilinear rewrite ran before this pass, so it never saw the product: annotate it for the same
+	// tree-owned product F node used by ordinary Boolean products.
 	auto HandProductsToBilinear = [&](unique_ptr<Expression> &expr, const string &source_alias) {
-		vector<LogicalDecide::BilinearLink> products;
-		FindAndReplaceBilinear(expr, decide, products, source_alias);
-		for (auto &product : products) {
-			decide.bilinear_links.push_back(product);
-		}
+		FindAndReplaceBilinear(expr, decide, source_alias);
 	};
 
 	std::function<void(unique_ptr<Expression> &, DecideEnclosingScope)> rewrite = [&](unique_ptr<Expression> &expr,
@@ -647,11 +547,59 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		// Canonicalization put every decision reducer on the left.
 		vector<ReducerSite> sites;
 		CollectReducerSites(cmp.left, 1, optimizer.context, decide.decide_index, booleans, sites);
+		// When a direct outer reducer holds nested reducers, keep that outer aggregate in the clause. The tree's G
+		// nodes represent the nested values, while the ordinary reducer term splitter can emit the outer SUM's
+		// bilinear or quadratic row. Replacing both levels here would turn that row into a reducer-value link, whose
+		// member program is intentionally linear.
+		auto *direct_outer = UnwrapDecideCasts(*cmp.left, decide.decide_index);
+		vector<ReducerSite> nested_outer_sites;
+		if (direct_outer->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+		    !direct_outer->Cast<BoundAggregateExpression>().children.empty()) {
+			CollectReducerSites(direct_outer->Cast<BoundAggregateExpression>().children[0], 1, optimizer.context,
+			                   decide.decide_index, booleans, nested_outer_sites);
+		}
+		const bool direct_outer_is_sum = direct_outer->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+		                                  StringUtil::CIEquals(
+		                                      direct_outer->Cast<BoundAggregateExpression>().function.name, "sum");
+		const bool nested_outer_has_unfiltered_reducers =
+		    !nested_outer_sites.empty() && std::all_of(nested_outer_sites.begin(), nested_outer_sites.end(),
+		                                               [](const ReducerSite &site) {
+			                                                       if (site.slot->get()->GetExpressionClass() !=
+			                                                           ExpressionClass::BOUND_AGGREGATE) {
+			                                                       return false;
+			                                                       }
+			                                                       auto &nested =
+			                                                           site.slot->get()->Cast<BoundAggregateExpression>();
+			                                                       return !nested.filter && !nested.children.empty() &&
+			                                                              !DecideCanonicalizer::ContainsReducer(
+			                                                                  *nested.children[0]);
+		                                               });
+		const bool nested_outer_needs_quadratic_row =
+		    direct_outer->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+		    !direct_outer->Cast<BoundAggregateExpression>().children.empty() &&
+		    !DecideExpressionDegree(*direct_outer->Cast<BoundAggregateExpression>().children[0], decide.decide_index)
+		         .IsLinear();
+		// Keep the direct SUM only when its own operand needs a quadratic row. A linear nest such as
+		// SUM(MAX(x)) must keep the value-link path so its inner helper stays connected to outer bounds and scopes.
+		const bool has_nested_outer =
+		    direct_outer_is_sum && nested_outer_needs_quadratic_row && nested_outer_has_unfiltered_reducers &&
+		    !scope.Condition() &&
+		    scope.PerKey() == DecideReducerGroupKey(direct_outer->Cast<BoundAggregateExpression>());
 		DecideReducerPath path;
 		if (scope.Condition()) {
 			path.conditions.push_back(scope.Condition());
 		}
 		for (auto &site : sites) {
+			if (has_nested_outer && UnwrapDecideCasts(*site.slot->get(), decide.decide_index) == direct_outer) {
+				auto &outer = direct_outer->Cast<BoundAggregateExpression>();
+				auto below = path.Below(outer);
+				for (auto &nested : nested_outer_sites) {
+					D_ASSERT(!nested.under_decision);
+					ReplaceReducer(helpers, names, booleans, below, ExtremumPushOf(cmp.type), source_clause_id,
+					              nested);
+				}
+				continue;
+			}
 			RefuseFractionalStep(site.slot->get()->Cast<BoundAggregateExpression>(), names, decide.decide_index,
 			                     cmp.type);
 			ReplaceReducer(helpers, names, booleans, path, ExtremumPushOf(cmp.type), source_clause_id, site);

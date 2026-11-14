@@ -28,6 +28,7 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
@@ -48,6 +49,8 @@ void DecideOptimizer::RewriteNotEqual(LogicalDecide &decide) {
 }
 
 void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &decide) {
+	DecideTermSplitter splitter(optimizer.context, decide.decide_index, decide.decide_variables,
+	                            &decide.bilinear_function_groups);
 	ForEachConstraintLeaf(expr, [&](Expression &node) {
 		if (node.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
 			return;
@@ -56,11 +59,9 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 		if (comp.type != ExpressionType::COMPARE_NOTEQUAL) {
 			return;
 		}
-		// The two rows a `<>` becomes hold a linear left side only. A product with a BOOL
-		// decision is linear by now (RewriteBilinear runs before this pass); a product or a
-		// power of decisions still here has no formulation, and dropping its terms would
-		// change the answer.
-		if (!DecideExpressionDegree(*comp.left, decide.decide_index).IsLinear()) {
+		// The two rows a `<>` becomes hold a linear left side only. A tagged Boolean product is linear through its F
+		// helper; a remaining quadratic product or power has no formulation here.
+		if (!splitter.IsLinear(*comp.left)) {
 			throw BinderException(comp, "DECIDE: <> over a product or a power of decisions is not supported yet: %s",
 			                      QuoteWrittenClause(decide.constraint_sources[SourceClauseOf(comp, decide)]));
 		}
@@ -106,6 +107,10 @@ void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, Logic
                                              const string &source_alias) {
 	if (!expr) {
 		return;
+	}
+	idx_t definition_aux;
+	if (TryParseDecideIndexTag(expr->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
+		return; // AVG syntax inside this body belongs to the tree F node's definition expression
 	}
 	const idx_t decide_index = decide.decide_index;
 	auto clause_alias = DescendSourceAlias(*expr, source_alias);

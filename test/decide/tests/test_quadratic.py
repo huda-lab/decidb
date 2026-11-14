@@ -1473,8 +1473,8 @@ def test_qp_mixed_negated_quadratic(
 # inner avg weights each row by 1/n_g (group size). The value rewrite writes it so --
 # the objective's own sum, each group once (D81) -- which keeps the square a convex
 # quadratic objective instead of a helper it could not define linearly. An inner
-# min/max of a square reads a helper per row at least its value
-# (DefineNonlinearReducerBodies), which a MIN or MAX takes natively.
+# min/max of a square reads a definition F value per row at least its body,
+# which a MIN or MAX takes natively.
 
 
 @pytest.mark.quadratic

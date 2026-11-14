@@ -342,6 +342,10 @@ void DecideCanonicalizer::SkipNullData(Expression &expr, const vector<KeyedScope
 }
 
 bool DecideCanonicalizer::ContainsReducer(const Expression &expr) {
+	idx_t definition_aux;
+	if (TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
+		return false; // the F node owns this body; callers see its scalar value, not its source reducers
+	}
 	idx_t frame;
 	if (TryGetDecideFrame(expr, frame)) {
 		return false; // a tuple term read at another row, whose payload holds no reducer (D80)
