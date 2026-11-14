@@ -65,6 +65,34 @@
 
 namespace duckdb {
 
+//! The solver-facing sense comes from the objective E node, alongside its term algebra.
+static DecideSense TreeObjectiveSense(const DecideTree &tree) {
+	const DecideNode *objective = nullptr;
+	for (auto root : tree.roots) {
+		if (!tree.nodes[root]->objective) {
+			continue;
+		}
+		if (objective) {
+			throw InternalException("DECIDE tree has more than one objective E node");
+		}
+		objective = tree.nodes[root].get();
+	}
+	if (!objective) {
+		return DecideSense::FEASIBILITY;
+	}
+	if (!objective->algebra || objective->algebra->kind != DecideAlgebraKind::OPERATOR ||
+	    objective->algebra->children.size() != 1 || !objective->algebra->children[0]) {
+		throw InternalException("DECIDE objective E node has no algebraic direction");
+	}
+	if (objective->algebra->operation == "minimize") {
+		return DecideSense::MINIMIZE;
+	}
+	if (objective->algebra->operation == "maximize") {
+		return DecideSense::MAXIMIZE;
+	}
+	throw InternalException("DECIDE objective E node has an unknown direction: %s", objective->algebra->operation);
+}
+
 //! Input column `column`'s rows grouped by value as GROUP BY groups them, NULL as a value (DecideKeyMap), in a scan of
 //! their own: each row's group, and each group's value, numbered in the order the rows first read them. The diagnosis
 //! orders what it reports itself (by escape rate, column and value), so no group's number reaches a message.
@@ -938,7 +966,7 @@ void PhysicalDecide::ReportSkippedInstances(const DecideGlobalSinkState &gstate,
 }
 
 void PhysicalDecide::ReportAnEmptyObjective(const SolverInput &input) const {
-	if (decide_sense == DecideSense::FEASIBILITY) {
+	if (input.sense == DecideSense::FEASIBILITY) {
 		return;
 	}
 	auto reads = [&](const CoefficientColumn &column) {
@@ -1233,7 +1261,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
         VerifyCountedOnce(objective->terms, solver_input.objective_coefficients, vector<idx_t>());
     }
 #endif
-    solver_input.sense = decide_sense;
+    solver_input.sense = TreeObjectiveSense(*tree);
     solver_input.objective_constant = objective_constant_offset;
 
     // Quadratic objective (if present)
