@@ -408,9 +408,10 @@ operator trees remains open.
 
 Generated decision values now appear in E/G/O formula trees as reads of the G/O/F node that produces them. The nested
 MAX-inside-SUM example therefore records the E → SUM G → MAX G path directly; an F node's own definition rows keep a
-decision read of that F's output so its formula does not point back to itself. The current emitter still resolves these
-tree reads to the same plan-time helper columns while filling the row-indexed solver input. This is the first recursive
-algebra slice; it does not yet replace the flat formulation path.
+decision read of that F's output so its formula does not point back to itself. The E/G/O emitter takes each term's
+variable from its DECISION or TREE_VALUE leaf, then resolves a node read to the same plan-time helper column while
+filling the row-indexed solver input; its coefficient program comes from the adjacent PROGRAM leaf. This is the first
+recursive algebra slice; it does not yet replace the flat formulation path.
 
 **Cost**, measured before flat was deleted, against flat on one binary (`benchmark/decide/anr_scaling.py --against` a
 flat run): the tree's own time at 10^5 rows is 0.84x to 1.33x flat's on every workload (`flat-sum` the most), and its

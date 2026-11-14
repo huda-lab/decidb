@@ -274,14 +274,16 @@ public:
 	//! the read of it at the row the frame selects. A query-wide decision has one column,
 	//! which every row reads, so it is its own read.
 	idx_t ReadVariable(const DecideTerm &term) {
-		if (term.frame_read == DConstants::INVALID_INDEX) {
-			return term.variable_index;
+		return ReadVariable(term.variable_index, term.frame_read);
+	}
+	idx_t ReadVariable(idx_t variable, idx_t frame_read) {
+		if (frame_read == DConstants::INVALID_INDEX) {
+			return variable;
 		}
-		auto var = term.variable_index;
-		if (var < op.variable_scopes.size() && op.variable_scopes[var].IsGlobal()) {
-			return var;
+		if (variable < op.variable_scopes.size() && op.variable_scopes[variable].IsGlobal()) {
+			return variable;
 		}
-		auto read = std::make_pair(var, term.frame_read);
+		auto read = std::make_pair(variable, frame_read);
 		auto it = std::find(frame_reads.begin(), frame_reads.end(), read);
 		if (it == frame_reads.end()) {
 			frame_reads.push_back(read);
