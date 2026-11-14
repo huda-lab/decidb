@@ -2003,19 +2003,27 @@ void DecideModelEmitter::ValueLinks() {
 		}
 		const auto site = DecideTreeOperand(tree, node);
 		auto &entries = descent.Containers()[site].parent_slots;
-			auto &members = link_members[node];
-		// Its members' rows, each in its group, as flat's reducer partitions them by its `by` key.
-		EvaluatedConstraint listed;
-		listed.num_groups = members.groups;
-		listed.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
-		vector<bool> listed_rows(num_rows, false);
+		auto &members = link_members[node];
+		// Form each G's member expressions from its operand entries. Stage 06 still owns helper
+		// decisions and their lowering, but it no longer needs a dense coefficient column for every
+		// input row to recover the G's groups and members.
+		vector<idx_t> member_entry(num_rows, DConstants::INVALID_INDEX);
+		vector<idx_t> member_group(num_rows, DConstants::INVALID_INDEX);
 		for (auto &read : members.rows) {
-			listed.row_group_ids[read.first] = members.group_of_slot[entries[read.second]];
-			listed_rows[read.first] = true;
+			member_entry[read.first] = read.second;
+			member_group[read.first] = members.group_of_slot[entries[read.second]];
 		}
-		// Each term's coefficient on every row it is computed on, a row in no group among them, which flat reads, and
-		// an AVG's divided by its group's members.
+		vector<vector<idx_t>> rows_by_group(members.groups);
+		for (idx_t row = 0; row < num_rows; row++) {
+			if (member_group[row] != DConstants::INVALID_INDEX) {
+				rows_by_group[member_group[row]].push_back(row);
+			}
+		}
+		// Read a term over the entries its own filter keeps, including entries that have no group. Flat evaluates
+		// those terms before dropping rows without a helper value, so their errors keep the same rank and message.
 		vector<bool> emitted_terms(body.members.size(), false);
+		vector<idx_t> variables(body.members.size(), DConstants::INVALID_INDEX);
+		vector<vector<double>> coefficients(body.members.size());
 		for (auto &algebra_term : tree_node.algebra->children) {
 			if (!algebra_term || algebra_term->kind != DecideAlgebraKind::OPERATOR ||
 			    algebra_term->operation != "*" || algebra_term->source_term >= body.members.size() ||
@@ -2027,22 +2035,42 @@ void DecideModelEmitter::ValueLinks() {
 			auto &term = body.members[t];
 			auto &site_t = body.linear[t];
 			const auto program = AlgebraTermProgram(*algebra_term, term, site_t, t, "G node");
-			auto numbers = columns.Numbers(site, program, members.reads, nullptr, &site_t, &term.inputs);
-			listed.row_coefficients.emplace_back();
-			auto &column = listed.row_coefficients.back();
-			column.AssignDense(num_rows);
-			for (auto &read : members.rows) {
-				column.Set(read.first, numbers[read.second]);
-			}
-			listed.variable_indices.push_back(gstate.ReadVariable(term));
-			if (aggregate == "avg") {
-				ScaleAvgRows(column, true, listed_rows, false, num_rows, listed.row_group_ids, listed.num_groups);
-			}
+			coefficients[t] = columns.Numbers(site, program, members.reads, nullptr, &site_t, &term.inputs);
+			variables[t] = gstate.ReadVariable(term);
 		}
 		if (std::find(emitted_terms.begin(), emitted_terms.end(), false) != emitted_terms.end()) {
 			throw InternalException("DECIDE model emitter: G node %llu omitted a reducer member term", node);
 		}
-		DecideListRowMembers(listed, num_rows, tree_node.value_link_label, spec.members);
+		for (auto &group_rows : rows_by_group) {
+			if (group_rows.empty()) {
+				continue;
+			}
+			spec.members.AddGroup(group_rows.front());
+			const auto avg_scale = aggregate == "avg" ? 1.0 / static_cast<double>(group_rows.size()) : 1.0;
+			for (auto row : group_rows) {
+				const auto entry = member_entry[row];
+				double constant = 0.0;
+				for (idx_t term = 0; term < variables.size(); term++) {
+					if (variables[term] == DConstants::INVALID_INDEX) {
+						constant += coefficients[term][entry] * avg_scale;
+					}
+				}
+				if (!std::isfinite(constant)) {
+					throw InvalidInputException(
+					    DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, tree_node.value_link_label));
+				}
+				spec.members.AddMember(constant);
+				for (idx_t term = 0; term < variables.size(); term++) {
+					if (variables[term] == DConstants::INVALID_INDEX) {
+						continue;
+					}
+					const auto coefficient = coefficients[term][entry] * avg_scale;
+					if (coefficient != 0.0) {
+						spec.members.AddTerm(variables[term], row, coefficient);
+					}
+				}
+			}
+		}
 		gstate.evaluated_value_links.push_back(std::move(spec));
 	}
 	DecideCountValueLinks(gstate.evaluated_value_links);
