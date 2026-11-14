@@ -20,7 +20,9 @@ class ClientContext;
 class BoundComparisonExpression;
 struct DecideEnclosingScope;
 
-enum class DecideNodeKind : uint8_t { SCOPE, REDUCER, FRAME };
+enum class DecideNodeKind : uint8_t { SCOPE, REDUCER, FRAME, FUNCTION };
+enum class DecideFunctionKind : uint8_t { INVALID, ABS, BOOLEAN_PRODUCT, L0_INDICATOR, DEFINITION };
+enum class DecideDefinitionRelation : uint8_t { INVALID, AT_LEAST, AT_MOST, EQUAL };
 enum class DecideTreePer : uint8_t { ROW, KEY, ONE };
 
 //! A scalar body's reference to a child's result. The physical column is outside
@@ -175,10 +177,32 @@ struct DecideNode {
 	unique_ptr<Expression> body;
 	unique_ptr<Expression> rhs;
 	unique_ptr<Expression> fallback;
+	//! The generated helper equation wrapped in its owning condition and per-instance key; a child E owns its row.
+	unique_ptr<Expression> definition_expression;
 	unique_ptr<Expression> over;
 	//! Every argument is retained: collated extrema have a value and comparison key.
 	vector<unique_ptr<Expression>> arguments;
 	unique_ptr<BoundAggregateExpression> function;
+	DecideFunctionKind function_kind = DecideFunctionKind::INVALID;
+	//! BOOLEAN_PRODUCT: factors whose product this F node defines; the emitter turns them into a BilinearLink.
+	idx_t product_bool_var = DConstants::INVALID_INDEX;
+	idx_t product_other_var = DConstants::INVALID_INDEX;
+	//! L0_INDICATOR: rows which define the indicator from its operand and the reverse ABS link.
+	vector<idx_t> l0_link_roots;
+	bool l0_auto_m = false;
+	double l0_m = 1.0;
+	//! Set on a child clause root owned by an L0 indicator F node.
+	idx_t l0_function_owner = DConstants::INVALID_INDEX;
+	//! Definition F nodes own the structural row defining their helper value.
+	vector<idx_t> definition_roots;
+	DecideDefinitionRelation definition_relation = DecideDefinitionRelation::INVALID;
+	//! Set on the structural clause root owned by a definition F node.
+	idx_t definition_function_owner = DConstants::INVALID_INDEX;
+	//! P9's ABS shadow metadata. The auxiliary remains allocated at plan time until its formulation moves here.
+	bool abs_needs_bigm = false;
+	idx_t abs_indicator_var = DConstants::INVALID_INDEX;
+	//! The two lower-envelope rows handed to this F node by the transition from RewriteAbs to model emission.
+	vector<idx_t> abs_envelope_roots;
 	unique_ptr<DecideFrameSpec> frame_spec;
 	string aggregate;
 	idx_t link = DConstants::INVALID_INDEX;
@@ -246,6 +270,8 @@ struct DecideTree {
 	//! The objective's records, null for none.
 	const DecideObjective *Objective() const;
 	vector<idx_t> roots;
+	//! F nodes shadowing the current plan-time ABS rewrites; P9 lowers these nodes in the model emitter.
+	vector<idx_t> function_nodes;
 	//! Deterministic children-first order, including shared and definition edges.
 	vector<idx_t> eval_order;
 	vector<string> source_fragments;
@@ -254,12 +280,11 @@ struct DecideTree {
 	vector<DecideVarScopeInfo> variable_scopes;
 	//! The G/O defining each helper decision, INVALID for a user decision.
 	vector<idx_t> value_nodes;
-	//! Roots defining an ABS/body/indicator helper, in written order.
+	//! Nodes defining ABS/body/indicator helpers, in written order; P9 F nodes join the existing clause roots here.
 	vector<vector<idx_t>> definition_nodes;
 	//! Per keyed scope, the operand of the reducer or link it qualifies, whose instances are its classes split by what
 	//! its body reads (KeyedScopeInfo::signature); INVALID for a scope that qualifies none.
 	vector<idx_t> qualified_operands;
-	vector<LogicalDecide::BilinearLink> bilinear_links;
 	vector<LogicalDecide::AbsMaximizeLink> abs_maximize_links;
 	vector<DecideBoundBox> singleton_row_boxes;
 	vector<LogicalDecide::UserBoundSpec> user_singleton_row_bounds;
@@ -304,6 +329,9 @@ struct DecideTreeSources {
 //! §6.4).
 class DecideTreeConstruction {
 public:
+	//! Prepare the plan-time metadata needed to number definition F nodes before MIN/MAX rewrites and term splitting
+	//! read them. The full nodes and their instances are built by the constructor once the optimizer has settled clauses.
+	static void PrepareDefinitionFunctions(ClientContext &context, LogicalDecide &op);
 	//! Builds the nodes, their edges, sigma, gates and definitions.
 	DecideTreeConstruction(ClientContext &context, const LogicalDecide &op);
 	~DecideTreeConstruction();

@@ -35,6 +35,23 @@ namespace duckdb {
 
 class ClientContext;
 
+//! One Boolean product helper allocated while the optimizer annotates a written product. The tree turns this
+//! specification into a BOOLEAN_PRODUCT F node and owns the executable BilinearLink record.
+struct DecideBilinearFunctionProduct {
+	idx_t aux_idx = DConstants::INVALID_INDEX;
+	idx_t first_var_idx = DConstants::INVALID_INDEX;
+	idx_t second_var_idx = DConstants::INVALID_INDEX;
+	idx_t source_clause_id = DConstants::INVALID_INDEX;
+	idx_t removal_group_id = DConstants::INVALID_INDEX;
+};
+
+//! An intact written product plus the expression the term splitter reads. `expansion` replaces Boolean products by
+//! their plan-time helper columns while leaving non-Boolean products as quadratic terms.
+struct DecideBilinearFunctionGroup {
+	unique_ptr<Expression> expansion;
+	vector<DecideBilinearFunctionProduct> products;
+};
+
 enum class DecideTermKind : uint8_t {
 	//! A decision-free term: `coefficient` is the whole term.
 	CONSTANT,
@@ -44,8 +61,8 @@ enum class DecideTermKind : uint8_t {
 	PRODUCT,
 	//! `square_scale * (inner)^2`, from POWER(e, 2), `e ** 2` or `(e) * (e)`. `inner` is linear.
 	SQUARE,
-	//! `coefficient * |inner|`. `inner` is linear; a null coefficient means 1. Only a tree that has not been
-	//! lowered holds one: RewriteAbs replaces every ABS before the solver path reads terms.
+	//! `coefficient * |inner|`. `inner` is linear; a null coefficient means 1. Used for ABS expressions not associated
+	//! with an optimizer-created helper, such as expressions inspected by direct-solve analysis.
 	ABS,
 	//! `coefficient * at(F: payload) over (...)`, a frame selector over decisions (language/guide.md §5.6): `inner`
 	//! holds its payload's terms, linear, each read at the row the frame `frame` selects; `marker` is the frame's
@@ -86,13 +103,18 @@ unique_ptr<Expression> DecideMergeLikeCoefficients(ClientContext &context, int f
 class DecideTermSplitter {
 public:
 	DecideTermSplitter(ClientContext &context, idx_t decide_index,
-	                   const vector<unique_ptr<Expression>> &decide_variables);
+	                   const vector<unique_ptr<Expression>> &decide_variables,
+	                   const vector<DecideBilinearFunctionGroup> *bilinear_groups = nullptr);
 
 	//! Split a reducer body or a row-level decision expression into constant, linear, product, square and
 	//! absolute-value terms, appending to `out` in reading order with `sign` applied.
 	void Split(const Expression &expr, int sign, vector<DecideSplitTerm> &out) const;
 	//! Split an expression that must be linear: every term is CONSTANT or LINEAR, or UNKNOWN when it is not.
 	void SplitLinear(const Expression &expr, vector<DecideSplitTerm> &out) const;
+	//! Whether the expression becomes linear after optimizer-annotated product groups and ABS helpers are read.
+	bool IsLinear(const Expression &expr) const;
+	//! Copy and expand any optimizer-annotated product groups in an expression; false leaves `expanded` unset.
+	bool ExpandBilinearGroups(const Expression &expr, unique_ptr<Expression> &expanded) const;
 	//! The index of the first decision variable referenced anywhere in `expr`, or INVALID_INDEX.
 	idx_t FindVariable(const Expression &expr) const;
 
@@ -116,7 +138,6 @@ private:
 	bool ClassifyProduct(const Expression &expr, ProductFactors &result, DecideSplitTerm &failure) const;
 	unique_ptr<Expression> ExtractCoefficientWithoutVariable(const Expression &expr, idx_t var_idx) const;
 	QuadraticPattern DetectQuadraticPattern(const Expression &expr) const;
-	bool IsLinear(const Expression &expr) const;
 	void AddAbs(const Expression &abs_function, unique_ptr<Expression> coefficient, int sign,
 	            vector<DecideSplitTerm> &out) const;
 
@@ -124,6 +145,7 @@ private:
 	idx_t decide_index;
 	column_binding_map_t<idx_t> variable_indexes;
 	const vector<unique_ptr<Expression>> &decide_variables;
+	const vector<DecideBilinearFunctionGroup> *bilinear_groups;
 };
 
 } // namespace duckdb

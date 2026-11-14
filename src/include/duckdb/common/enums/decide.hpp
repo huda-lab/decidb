@@ -392,9 +392,10 @@ static constexpr const char *NE_CLAUSE_TAG_PREFIX = "__ne_clause_tag_";
 //! BoundComparisonExpression.alias during RewriteMinMax.
 static constexpr const char *MINMAX_EASY_REWRITE_TAG = "__minmax_easy__";
 
-//! Tag marking a reducer whose members DecideOptimizer::DefineNonlinearReducerBodies replaced by helper decisions. A
-//! helper has no box, so stage 08 states a MIN/MAX over it natively, and the MIN/MAX rewrites say so in the plan.
-//! Set on the BoundAggregateExpression.alias, and on the BoundComparisonExpression.alias of the row defining the
+//! Tag marking a reducer with a nonlinear body held by a tree-owned definition F node. The source body remains at its
+//! written site as a DEFINITION_FUNCTION_TAG_PREFIX read, while this aggregate marker tells MIN/MAX planning that its
+//! members are helper columns. A helper has no box, so stage 08 states a MIN/MAX over it natively.
+//! Set on the BoundAggregateExpression.alias and on the BoundComparisonExpression.alias of the row defining the
 //! helper, which EXPLAIN leaves out: it restates the body, and the clause's account line says how it is held.
 static constexpr const char *BODY_DEFINITION_TAG = "__body_definition__";
 
@@ -643,9 +644,52 @@ inline bool TryParseFrameAggregateTag(const string &alias, idx_t &index) {
 static constexpr const char *ABS_UB_POS_TAG_PREFIX = "__abs_ub_pos_";
 static constexpr const char *ABS_UB_NEG_TAG_PREFIX = "__abs_ub_neg_";
 
+//! Tag on an ABS auxiliary's positive lower-envelope row (aux >= inner), including the solver-pressure arm that has
+//! no ABS_UB_POS tag. The tree uses this row to build the shadow F node while the plan-time formulation still exists.
+static constexpr const char *ABS_FUNCTION_TAG_PREFIX = "__abs_function_";
+//! Matching marker on the negative lower-envelope row (aux >= -inner), including the solver-pressure arm.
+static constexpr const char *ABS_FUNCTION_NEG_TAG_PREFIX = "__abs_function_neg_";
+
+//! Tag on a written Boolean product that the optimizer has described as an F-node group. The expression remains
+//! intact in the plan; term extraction and tree lowering read the group's expansion from LogicalDecide metadata.
+static constexpr const char *BILINEAR_FUNCTION_GROUP_TAG_PREFIX = "__bilinear_function_group_";
+//! Tag on an optimizer-generated L0 indicator link, identifying the L0 F node that owns the row.
+static constexpr const char *L0_INDICATOR_FUNCTION_TAG_PREFIX = "__l0_indicator_function_";
+//! Tag on a nonlinear reducer body left intact in the clause tree. The F node owns its value and definition row.
+static constexpr const char *DEFINITION_FUNCTION_TAG_PREFIX = "__definition_function_";
+
+inline string MakeBilinearFunctionGroupTag(idx_t group_idx) {
+	return string(BILINEAR_FUNCTION_GROUP_TAG_PREFIX) + to_string(group_idx) + "__";
+}
+
+inline string MakeL0IndicatorFunctionTag(idx_t var_idx) {
+	return string(L0_INDICATOR_FUNCTION_TAG_PREFIX) + to_string(var_idx) + "__";
+}
+
+inline string MakeDefinitionFunctionTag(idx_t var_idx) {
+	return string(DEFINITION_FUNCTION_TAG_PREFIX) + to_string(var_idx) + "__";
+}
+
+inline string MakeAbsFunctionTag(idx_t var_idx) {
+	return string(ABS_FUNCTION_TAG_PREFIX) + to_string(var_idx) + "__";
+}
+
+inline string MakeAbsFunctionNegTag(idx_t var_idx) {
+	return string(ABS_FUNCTION_NEG_TAG_PREFIX) + to_string(var_idx) + "__";
+}
+
+//! ABS envelope rows are optimizer metadata rather than written constraints. Both the Big-M arm and the exact
+//! lower-envelope arm mark the row with one of these tags; return the helper they define.
+inline bool TryParseAbsFunctionEnvelopeTag(const string &alias, idx_t &var_idx) {
+	return TryParseDecideIndexTag(alias, ABS_UB_POS_TAG_PREFIX, var_idx) ||
+	       TryParseDecideIndexTag(alias, ABS_UB_NEG_TAG_PREFIX, var_idx) ||
+	       TryParseDecideIndexTag(alias, ABS_FUNCTION_TAG_PREFIX, var_idx) ||
+	       TryParseDecideIndexTag(alias, ABS_FUNCTION_NEG_TAG_PREFIX, var_idx);
+}
+
 //! Tag set on BoundFunctionExpression.alias for ABS occurrences inside a
 //! constraint shape that does not naturally upper-bound the auxiliary
-//! (i.e. hard-direction ABS). Read by FindAndReplaceAbs, propagated to
+//! (i.e. hard-direction ABS). Read by FindAbsAndAllocateAux, propagated to
 //! AbsPairInfo::needs_bigm so RewriteAbs pins the auxiliary's upper side too --
 //! with a sign-indicator y and a Big-M envelope on the lowering arm, or with a
 //! native `aux = |t|` on a backend that states ABS itself. The tag is set by

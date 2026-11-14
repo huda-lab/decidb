@@ -827,8 +827,8 @@ static void ProgramLines(std::ostringstream &out, const DecideNode &node) {
 
 vector<const DecideConstraint *> DecideTree::Constraints() const {
 	vector<const DecideConstraint *> result(constraint_count);
-	for (auto root : roots) {
-		auto &body = nodes[root]->compiled;
+	for (auto &node : nodes) {
+		auto &body = node->compiled;
 		if (body.clause && body.clause_index < constraint_count) {
 			result[body.clause_index] = body.clause.get();
 		}

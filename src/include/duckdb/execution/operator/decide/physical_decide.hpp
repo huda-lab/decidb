@@ -120,9 +120,6 @@ public:
     // Links from MIN/MAX indicator variables: (agg_name "min"/"max", indicator_idx)
     vector<string> minmax_clause_labels;
 
-    // Links from bilinear McCormick auxiliary variables: w = b * x
-    // (aux_idx, bool_var_idx, other_var_idx) — for execution-time Big-M constraint generation
-    vector<LogicalDecide::BilinearLink> bilinear_links;
     vector<LogicalDecide::AbsMaximizeLink> abs_maximize_links;
 
     // F6: auxiliary variable index -> user's original source expression string

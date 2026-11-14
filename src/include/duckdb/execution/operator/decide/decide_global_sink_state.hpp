@@ -214,6 +214,8 @@ public:
     //===--------------------------------------------------------------------===//
 
     vector<EvaluatedConstraint> evaluated_constraints;
+    //! The stage-06 records the emitter materializes from BOOLEAN_PRODUCT F nodes for the unchanged linearizer.
+    vector<LogicalDecide::BilinearLink> evaluated_bilinear_links;
     //! `singleton_row_constraints`, evaluated under DIAGNOSE for the repair model alone.
     vector<EvaluatedConstraint> evaluated_singleton_row_constraints;
     //! The classes each aggregate-shape row's group stands for (D28), referenced from the

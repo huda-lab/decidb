@@ -140,6 +140,8 @@ private:
 	//! A clause in the per-row shape: one model row per kept row of its root, or under `per K:` one per variant of
 	//! each class among them (Classes).
 	EvaluatedConstraint Rows(idx_t root, bool counted);
+	//! An ABS envelope row owned by its F node; the existing row/group evaluator supplies the scoped instances.
+	EvaluatedConstraint AbsEnvelope(idx_t function, idx_t root, bool counted);
 	//! The model rows of a clause in the per-row shape under `per K:` (DecideClauseScope::ONE_ROW_PER_CLASS), its
 	//! kept rows those its entries `tested` marks stand for: one per variant of each class of K, at its first row with
 	//! a value (D88), numbered and named as flat numbers and names them, and the classes each stands for under
@@ -172,7 +174,8 @@ private:
 	//! in the order the definitions read each other.
 	void ReadAbsence(vector<KeyedMapping> &mappings);
 	//! The rows at which the auxiliary `root`'s clause defines has no value.
-	void DefinitionAbsence(idx_t root);
+	void DefinitionAbsence(idx_t root, idx_t variable);
+	void FunctionAbsence(idx_t function);
 	LinkMembers Members(idx_t link);
 	//! A helper's classes: the groups of its `by` key that hold a member, each read by the rows of its group the
 	//! clause keeps; its members kept for ValueLinks (link_members).

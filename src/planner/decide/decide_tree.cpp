@@ -59,6 +59,12 @@ unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const
 		facts->abs_aux_idx = std::stoull(payload);
 		facts->kind = ConstraintKind::STRUCTURAL;
 	}
+	if (TryParseDecideIndexTag(comparison.alias, ABS_FUNCTION_NEG_TAG_PREFIX, facts->abs_aux_idx)) {
+		facts->kind = ConstraintKind::STRUCTURAL;
+	} else if (TryParseDecideIndexTag(comparison.alias, ABS_FUNCTION_TAG_PREFIX, facts->abs_aux_idx)) {
+		facts->abs_is_pos_bound = true;
+		facts->kind = ConstraintKind::STRUCTURAL;
+	}
 	facts->was_minmax_easy = HasDecideTag(comparison.alias, MINMAX_EASY_REWRITE_TAG);
 	facts->scope = DecideClauseScope(scope);
 	TryParseGroupKeyTag(comparison.alias, facts->group_key);
@@ -172,7 +178,6 @@ public:
 		tree->value_nodes.assign(op.decide_variables.size(), DConstants::INVALID_INDEX);
 		tree->definition_nodes.resize(op.decide_variables.size());
 		tree->qualified_operands.assign(op.keyed_scopes.size(), DConstants::INVALID_INDEX);
-		tree->bilinear_links = op.bilinear_links;
 		tree->abs_maximize_links = op.abs_maximize_links;
 		tree->singleton_row_boxes = op.singleton_row_boxes;
 		tree->user_singleton_row_bounds = op.user_singleton_row_bounds;
@@ -203,6 +208,14 @@ public:
 
 	//! The nodes, their edges, sigma, gates and definitions, before stage 05 lowers the clauses.
 	void Structure() {
+		// Register definition F nodes before lowering any other function body: an ABS or product written inside a
+		// nonlinear reducer body reads that F node. Its own body is lowered only after ABS, product and L0 nodes have
+		// been registered, so the reverse dependency resolves too.
+		RegisterDefinitionFunctions();
+		PrepareBilinearFunctions();
+		PrepareAbsFunctions();
+		PrepareL0IndicatorFunctions();
+		LowerDefinitionFunctionBodies();
 		for (auto &check : op.retained_row_checks) {
 			auto index = NewNode(DecideNodeKind::SCOPE);
 			auto &node = *tree->nodes[index];
@@ -212,12 +225,57 @@ public:
 			tree->roots.push_back(index);
 		}
 		if (op.decide_constraints) {
-			ForEachScopedConstraintLeaf(*op.decide_constraints,
-			                            [&](const Expression &expression, const DecideEnclosingScope &scope) {
-				                            if (expression.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-					                            Root(expression.Cast<BoundComparisonExpression>(), scope);
-				                            }
-			                            });
+			ForEachScopedConstraintLeaf(
+			    *op.decide_constraints, [&](const Expression &expression, const DecideEnclosingScope &scope) {
+				    if (expression.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+					    Root(expression.Cast<BoundComparisonExpression>(), scope);
+				    } else if (expression.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
+				               HasDecideTag(expression.GetAlias(), BODY_DEFINITION_TAG)) {
+					    idx_t value_var = DConstants::INVALID_INDEX;
+					    if (!TryParseDecideIndexTag(expression.GetAlias(), DEFINES_TAG_PREFIX, value_var)) {
+						    throw InternalException("DECIDE tree: body-definition placeholder has no helper");
+					    }
+					    auto function = std::find_if(
+					        tree->function_nodes.begin(), tree->function_nodes.end(), [&](idx_t candidate) {
+						        return tree->nodes[candidate]->function_kind == DecideFunctionKind::DEFINITION &&
+						               tree->nodes[candidate]->value_var == value_var;
+					        });
+					    if (function == tree->function_nodes.end() ||
+					        !tree->nodes[*function]->definition_expression) {
+						    throw InternalException("DECIDE tree: body-definition placeholder has no F node");
+					    }
+					    ForEachScopedConstraintLeaf(
+					        *tree->nodes[*function]->definition_expression,
+					        [&](const Expression &row, const DecideEnclosingScope &row_scope) {
+						        if (row.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+							        Root(row.Cast<BoundComparisonExpression>(), row_scope);
+						        }
+				        });
+				    }
+			    });
+		}
+		// RewriteNorm used to append these structural link rows after every written constraint. Preserve that order
+		// while keeping the rows as children of their L0 indicator F nodes in the tree.
+		for (auto &indicator : op.l0_indicator_functions) {
+			for (auto &expression : indicator.links) {
+				ForEachScopedConstraintLeaf(*expression, [&](const Expression &leaf, const DecideEnclosingScope &scope) {
+					if (leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+						Root(leaf.Cast<BoundComparisonExpression>(), scope);
+					}
+				});
+			}
+		}
+		for (auto &envelope : op.abs_function_envelopes) {
+			for (auto *expression : {&envelope.positive, &envelope.negative}) {
+				if (!*expression) {
+					continue;
+				}
+				ForEachScopedConstraintLeaf(**expression, [&](const Expression &leaf, const DecideEnclosingScope &scope) {
+					if (leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+						Root(leaf.Cast<BoundComparisonExpression>(), scope);
+					}
+				});
+			}
 		}
 		idx_t objective_root = DConstants::INVALID_INDEX;
 		if (op.decide_objective) {
@@ -319,6 +377,355 @@ public:
 		Definitions();
 	}
 
+	//! Create ABS F nodes before lowering clauses, so retained function expressions can read their nodes even when
+	//! the envelope roots occur later in source order.
+	void PrepareAbsFunctions() {
+		struct AbsFunctionSpec {
+			idx_t aux;
+			unique_ptr<Expression> condition;
+			// Keep the LogicalDecide-owned operand alive: Lower records reducer addresses in sources.reducer_nodes.
+			const Expression *operand = nullptr;
+			idx_t source_clause;
+		};
+		vector<AbsFunctionSpec> specs;
+		for (auto &envelope : op.abs_function_envelopes) {
+			if (!envelope.positive) {
+				continue;
+			}
+			ForEachScopedConstraintLeaf(*envelope.positive,
+			                            [&](const Expression &leaf, const DecideEnclosingScope &scope) {
+				if (leaf.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+					return;
+				}
+				auto &comparison = leaf.Cast<BoundComparisonExpression>();
+				idx_t aux;
+				if (!TryParseDecideIndexTag(comparison.GetAlias(), ABS_FUNCTION_TAG_PREFIX, aux)) {
+					return;
+				}
+				idx_t source = DConstants::INVALID_INDEX;
+				TryParseSourceClauseTag(comparison.GetAlias(), source);
+				AbsFunctionSpec spec;
+				spec.aux = aux;
+				spec.condition = scope.Condition() ? scope.Condition()->Copy() : nullptr;
+				spec.operand = envelope.operand.get();
+				spec.source_clause = source;
+				specs.push_back(std::move(spec));
+			});
+		}
+		for (auto &spec : specs) {
+			AbsFunctionNode(spec.aux, spec.source_clause);
+		}
+		for (auto &spec : specs) {
+			auto function = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(), [&](idx_t index) {
+				return tree->nodes[index]->value_var == spec.aux;
+			});
+			if (function == tree->function_nodes.end() || !spec.operand) {
+				throw InternalException("DECIDE tree: ABS helper %llu has no function operand", spec.aux);
+			}
+			auto &node = *tree->nodes[*function];
+			if (!node.body) {
+				node.body = Lower(*function, *spec.operand);
+			}
+		}
+		// All F nodes exist now, so gates can themselves resolve nested ABS function reads.
+		for (auto &spec : specs) {
+			auto function = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(), [&](idx_t index) {
+				return tree->nodes[index]->value_var == spec.aux;
+			});
+			if (function != tree->function_nodes.end()) {
+				Gates(*function, spec.condition.get());
+			}
+		}
+	}
+
+	//! Each optimizer-allocated Boolean product becomes a rooted F node. The function's body names its two decision
+	//! factors; tree-owned BilinearLink records are handed to stage 06 by way of these nodes.
+	void PrepareBilinearFunctions() {
+		for (auto &group : op.bilinear_function_groups) {
+			for (auto &product : group.products) {
+				if (product.aux_idx >= op.decide_variables.size() ||
+				    product.first_var_idx >= op.decide_variables.size() ||
+				    product.second_var_idx >= op.decide_variables.size()) {
+					throw InternalException("DECIDE tree: bilinear function references an invalid decision");
+				}
+				const auto is_boolean = [&](idx_t var) {
+					return var < op.is_boolean_var.size() && op.is_boolean_var[var];
+				};
+				const auto bool_var = is_boolean(product.first_var_idx) ? product.first_var_idx
+				                                                     : product.second_var_idx;
+				const auto other_var = bool_var == product.first_var_idx ? product.second_var_idx
+				                                                     : product.first_var_idx;
+
+				auto index = NewNode(DecideNodeKind::FUNCTION);
+				auto &node = *tree->nodes[index];
+				node.function_kind = DecideFunctionKind::BOOLEAN_PRODUCT;
+				node.product_bool_var = bool_var;
+				node.product_other_var = other_var;
+				node.root = node.hidden = node.decision_value = true;
+				node.value_var = node.defined_var = product.aux_idx;
+				node.source_clause_id = product.source_clause_id;
+				node.removal_group_id = product.removal_group_id;
+				auto label = std::find_if(op.aux_var_expressions.begin(), op.aux_var_expressions.end(),
+				                          [&](const auto &entry) { return entry.first == product.aux_idx; });
+				node.text = label == op.aux_var_expressions.end()
+				                ? "Boolean product helper " + std::to_string(product.aux_idx)
+				                : label->second;
+				if (product.aux_idx < tree->variable_scopes.size()) {
+					auto &variable_scope = tree->variable_scopes[product.aux_idx];
+					if (variable_scope.IsKeyed() || variable_scope.scope == DecideVarScope::INLINED) {
+						if (variable_scope.keyed_scope_idx >= op.keyed_scopes.size()) {
+							if (variable_scope.scope != DecideVarScope::INLINED ||
+							    variable_scope.keyed_scope_idx != DConstants::INVALID_INDEX) {
+								throw InternalException("DECIDE tree: product helper %llu has an invalid keyed scope",
+							                        product.aux_idx);
+							}
+						} else {
+							node.per = DecideTreePer::KEY;
+							node.key = op.keyed_scopes[variable_scope.keyed_scope_idx].key;
+						}
+					} else if (variable_scope.IsGlobal()) {
+						node.per = DecideTreePer::ONE;
+					}
+				}
+				tree->function_nodes.push_back(index);
+				tree->roots.push_back(index);
+			}
+		}
+
+		// Register every product F before lowering any product body, so a nested helper can be read if a later rewrite
+		// made one product's factor another product's auxiliary.
+		for (auto function : tree->function_nodes) {
+			auto &node = *tree->nodes[function];
+			if (node.function_kind != DecideFunctionKind::BOOLEAN_PRODUCT) {
+				continue;
+			}
+			vector<unique_ptr<Expression>> children;
+			children.push_back(op.decide_variables[node.product_bool_var]->Copy());
+			children.push_back(op.decide_variables[node.product_other_var]->Copy());
+			auto body = DecideRebindOperator(context, "*", std::move(children));
+			node.body = Lower(function, *body);
+		}
+	}
+
+	//! Each L0 indicator's three structural links are owned by its F node. The links remain optimizer metadata so
+	//! stage-05 rewrites can prepare nested ABS and product functions; stage 06 evaluates them as child roots.
+	void PrepareL0IndicatorFunctions() {
+		for (auto &indicator : op.l0_indicator_functions) {
+			if (indicator.value_var >= op.decide_variables.size() || indicator.links.size() != 3) {
+				throw InternalException("DECIDE tree: malformed L0 indicator function");
+			}
+			auto index = NewNode(DecideNodeKind::FUNCTION);
+			auto &node = *tree->nodes[index];
+			node.function_kind = DecideFunctionKind::L0_INDICATOR;
+			node.root = node.hidden = node.decision_value = true;
+			node.value_var = node.defined_var = indicator.value_var;
+			node.l0_auto_m = indicator.auto_m;
+			node.l0_m = indicator.m;
+			node.text = indicator.label;
+			if (indicator.value_var < tree->variable_scopes.size()) {
+				auto &variable_scope = tree->variable_scopes[indicator.value_var];
+				if (variable_scope.IsKeyed() || variable_scope.scope == DecideVarScope::INLINED) {
+					if (variable_scope.keyed_scope_idx >= op.keyed_scopes.size()) {
+						if (variable_scope.scope != DecideVarScope::INLINED ||
+						    variable_scope.keyed_scope_idx != DConstants::INVALID_INDEX) {
+							throw InternalException("DECIDE tree: L0 indicator %llu has an invalid keyed scope",
+							                        indicator.value_var);
+						}
+					} else {
+						node.per = DecideTreePer::KEY;
+						node.key = op.keyed_scopes[variable_scope.keyed_scope_idx].key;
+					}
+				} else if (variable_scope.IsGlobal()) {
+					node.per = DecideTreePer::ONE;
+				}
+			}
+			ForEachScopedConstraintLeaf(*indicator.links[0], [&](const Expression &leaf, const DecideEnclosingScope &) {
+				if (leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+					TryParseSourceClauseTag(leaf.GetAlias(), node.source_clause_id);
+					TryParseRemovalGroupTag(leaf.GetAlias(), node.removal_group_id);
+				}
+			});
+			tree->function_nodes.push_back(index);
+			tree->roots.push_back(index);
+		}
+
+		// Register every indicator before lowering its operand, so nested ABS/product references can resolve.
+		for (auto &indicator : op.l0_indicator_functions) {
+			auto function = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(), [&](idx_t index) {
+				return tree->nodes[index]->function_kind == DecideFunctionKind::L0_INDICATOR &&
+				       tree->nodes[index]->value_var == indicator.value_var;
+			});
+			if (function == tree->function_nodes.end()) {
+				throw InternalException("DECIDE tree: L0 indicator %llu has no function node", indicator.value_var);
+			}
+			const Expression *operand = nullptr;
+			const Expression *condition = nullptr;
+			ForEachScopedConstraintLeaf(*indicator.links[0], [&](const Expression &leaf, const DecideEnclosingScope &scope) {
+				if (leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+					operand = leaf.Cast<BoundComparisonExpression>().right.get();
+					condition = scope.Condition();
+				}
+			});
+			if (!operand) {
+				throw InternalException("DECIDE tree: L0 indicator %llu has no counted operand", indicator.value_var);
+			}
+			auto &node = *tree->nodes[*function];
+			Gates(*function, condition);
+			node.body = Lower(*function, *operand);
+		}
+	}
+
+	//! A nonlinear reducer body's helper and structural definition row form an F node. The optimizer retains the body
+	//! and relation; this tree constructs the row beneath the F node at the placeholder's original clause position.
+	void RegisterDefinitionFunctions() {
+		for (auto &definition : op.definition_functions) {
+			const auto value_var = definition.value_var;
+			if (value_var >= op.decide_variables.size() || !definition.body) {
+				throw InternalException("DECIDE tree: nonlinear body definition has no valid helper or source body");
+			}
+			auto index = NewNode(DecideNodeKind::FUNCTION);
+			auto &node = *tree->nodes[index];
+			node.function_kind = DecideFunctionKind::DEFINITION;
+			node.root = node.hidden = node.decision_value = true;
+			node.value_var = node.defined_var = value_var;
+			auto label = std::find_if(op.aux_var_expressions.begin(), op.aux_var_expressions.end(),
+			                          [&](const auto &entry) { return entry.first == value_var; });
+			node.text = label == op.aux_var_expressions.end() ? "nonlinear body helper " + std::to_string(value_var)
+			                                                  : label->second;
+			node.definition_relation = definition.relation == ExpressionType::COMPARE_EQUAL
+			                               ? DecideDefinitionRelation::EQUAL
+			                           : definition.relation == ExpressionType::COMPARE_GREATERTHANOREQUALTO
+			                               ? DecideDefinitionRelation::AT_LEAST
+			                           : definition.relation == ExpressionType::COMPARE_LESSTHANOREQUALTO
+			                                   ? DecideDefinitionRelation::AT_MOST
+			                                   : DecideDefinitionRelation::INVALID;
+			if (node.definition_relation == DecideDefinitionRelation::INVALID) {
+				throw InternalException("DECIDE tree: nonlinear body definition has an unsupported comparison");
+			}
+			if (value_var < tree->variable_scopes.size()) {
+				auto &variable_scope = tree->variable_scopes[value_var];
+				if (variable_scope.IsKeyed() || variable_scope.scope == DecideVarScope::INLINED) {
+					if (variable_scope.keyed_scope_idx >= op.keyed_scopes.size()) {
+						if (variable_scope.scope != DecideVarScope::INLINED ||
+						    variable_scope.keyed_scope_idx != DConstants::INVALID_INDEX) {
+							throw InternalException("DECIDE tree: body helper %llu has an invalid keyed scope", value_var);
+						}
+					} else {
+						node.per = DecideTreePer::KEY;
+						node.key = op.keyed_scopes[variable_scope.keyed_scope_idx].key;
+					}
+				} else if (variable_scope.IsGlobal()) {
+					node.per = DecideTreePer::ONE;
+				}
+			}
+			Gates(index, definition.condition.get());
+			node.definition_expression = MakeDefinitionExpression(definition);
+			tree->function_nodes.push_back(index);
+			tree->roots.push_back(index);
+		}
+
+	}
+
+	//! Lower definition bodies after all F nodes exist, allowing definitions to read nested ABS, product, L0 and
+	//! definition values through the tree.
+	void LowerDefinitionFunctionBodies() {
+		for (auto &definition : op.definition_functions) {
+			auto function = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(), [&](idx_t index) {
+				return tree->nodes[index]->function_kind == DecideFunctionKind::DEFINITION &&
+			       tree->nodes[index]->value_var == definition.value_var;
+			});
+			if (function == tree->function_nodes.end()) {
+				throw InternalException("DECIDE tree: nonlinear body helper %llu has no function node", definition.value_var);
+			}
+			auto &node = *tree->nodes[*function];
+			node.body = Lower(*function, *definition.body);
+		}
+	}
+
+	unique_ptr<Expression> MakeDefinitionExpression(const LogicalDecide::DefinitionFunction &definition) const {
+		const auto &body = *definition.body;
+		auto left = BoundCastExpression::AddCastToType(context, op.decide_variables[definition.value_var]->Copy(),
+		                                              body.return_type);
+		auto row = make_uniq<BoundComparisonExpression>(definition.relation, std::move(left), body.Copy());
+		auto alias = row->GetAlias();
+		AddDecideTag(alias, STRUCTURAL_CONSTRAINT_TAG);
+		AddDecideTag(alias, MakeDefinesTag(definition.value_var));
+		AddDecideTag(alias, BODY_DEFINITION_TAG);
+		row->SetAlias(std::move(alias));
+		unique_ptr<Expression> result = std::move(row);
+		if (definition.condition) {
+			auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+			wrapper->children.push_back(std::move(result));
+			wrapper->children.push_back(definition.condition->Copy());
+			wrapper->alias = WHEN_FILTER_TAG;
+			result = std::move(wrapper);
+		}
+		if (definition.value_var < op.variable_scopes.size()) {
+			auto &scope = op.variable_scopes[definition.value_var];
+			if (scope.IsGlobal() || scope.IsKeyed()) {
+				auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+				wrapper->children.push_back(std::move(result));
+				wrapper->alias = PER_CLASS_TAG;
+				if (scope.IsKeyed()) {
+					AddDecideTag(wrapper->alias, MakePerKeyTag(op.keyed_scopes[scope.keyed_scope_idx].key));
+				}
+				result = std::move(wrapper);
+			}
+		}
+		return result;
+	}
+
+	//! The ABS F node owns the helper's scope and both transitional envelope roots. Its operand stays as an expression
+	//! until the function lowering compiles it; the envelope roots already carry executable row programs.
+	idx_t AbsFunctionNode(idx_t aux, idx_t source_clause) {
+		for (auto existing : tree->function_nodes) {
+			if (tree->nodes[existing]->value_var == aux) {
+				return existing;
+			}
+		}
+		if (!tree->variable_scopes.empty() && aux >= tree->variable_scopes.size()) {
+			throw InternalException("DECIDE tree: ABS helper %llu has no variable scope", aux);
+		}
+		auto index = NewNode(DecideNodeKind::FUNCTION);
+		auto &node = *tree->nodes[index];
+		node.function_kind = DecideFunctionKind::ABS;
+		node.root = true;
+		node.value_var = aux;
+		node.defined_var = aux;
+		node.hidden = true;
+		node.decision_value = true;
+		node.source_clause_id = source_clause;
+		auto label = std::find_if(op.aux_var_expressions.begin(), op.aux_var_expressions.end(),
+		                          [&](const auto &entry) { return entry.first == aux; });
+		node.text = label == op.aux_var_expressions.end() ? "abs helper " + std::to_string(aux) : label->second;
+		if (aux < tree->variable_scopes.size()) {
+			auto &variable_scope = tree->variable_scopes[aux];
+			if (variable_scope.IsKeyed() || variable_scope.scope == DecideVarScope::INLINED) {
+				if (variable_scope.keyed_scope_idx >= op.keyed_scopes.size()) {
+					if (variable_scope.scope != DecideVarScope::INLINED ||
+					    variable_scope.keyed_scope_idx != DConstants::INVALID_INDEX) {
+						throw InternalException("DECIDE tree: ABS helper %llu has an invalid keyed scope", aux);
+					}
+				} else {
+					node.per = DecideTreePer::KEY;
+					node.key = op.keyed_scopes[variable_scope.keyed_scope_idx].key;
+				}
+			} else if (variable_scope.IsGlobal()) {
+				node.per = DecideTreePer::ONE;
+			}
+		}
+		for (auto &link : op.abs_maximize_links) {
+			if (link.aux_idx == aux) {
+				node.abs_needs_bigm = true;
+				node.abs_indicator_var = link.y_idx;
+				break;
+			}
+		}
+		tree->function_nodes.push_back(index);
+		tree->roots.push_back(index);
+		return index;
+	}
+
 	//! The bodies from what stage 05 lowered, then the order and ranks they read.
 	unique_ptr<DecideTree> Finish() {
 		sources.link_nodes = link_nodes;
@@ -338,11 +745,22 @@ public:
 			return setting && string(setting) == "g1";
 		}();
 		auto found = inject ? sources.reducer_nodes.end() : sources.reducer_nodes.find(&reducer);
-		if (found == sources.reducer_nodes.end()) {
-			throw InternalException("DECIDE tree: stage 05 lowers a reducer the tree has no node for: %s",
-			                        reducer.ToString());
+		if (found != sources.reducer_nodes.end()) {
+			return DecideTreeMembersOf(*tree, found->second);
 		}
-		return DecideTreeMembersOf(*tree, found->second);
+		// ABS envelope metadata is lowered independently from the retained source expression, so its canonicalized
+		// reducer nodes are equal copies rather than the same addresses. Reuse the corresponding G when the reducer's
+		// full expression and semantic tags match; otherwise keep the pointer-identity invariant strict.
+		if (!inject) {
+			for (auto &entry : sources.reducer_nodes) {
+				if (entry.first && entry.first->GetAlias() == reducer.GetAlias() &&
+				    DecideExpressionsEqual(*entry.first, reducer)) {
+					return DecideTreeMembersOf(*tree, entry.second);
+				}
+			}
+		}
+		throw InternalException("DECIDE tree: stage 05 lowers a reducer the tree has no node for: %s",
+		                        reducer.ToString());
 	}
 
 	//! DecideTreeConstruction::TakeClause.
@@ -387,6 +805,9 @@ private:
 	vector<idx_t> frame_nodes;
 	vector<idx_t> record_nodes;
 	DecideTreeSources sources;
+	//! Canonical function-link roots live in `sources.reducer_nodes` by expression address. Keep their ASTs alive until
+	//! the linear form builder has resolved those reducers; otherwise the address map holds pointers into freed copies.
+	vector<unique_ptr<Expression>> retained_function_links;
 	//! Each gate a helper's G or a frame's O inherits from the nodes above it (RemoveInheritedPathGates): the node
 	//! holding it, then the node inheriting it.
 	vector<pair<idx_t, idx_t>> inherited_gates;
@@ -461,6 +882,9 @@ private:
 				// A reducer over data reading frames is computed once every frame's columns are, in its column's
 				// order, before any keyed mapping.
 				rank = {DecideErrorPhase::FRAMES, 1, op.frames.size() + aggregate, 0};
+			} else if (node.kind == DecideNodeKind::FUNCTION) {
+				// F's route and its `when` are the first reads of an ABS instance; its envelope bodies
+				// keep their own clause ranks below it.
 			} else if (node.defined_var != DConstants::INVALID_INDEX) {
 				// Flat resolves each auxiliary's absence in turn, reading its definitions in their order (D88), then
 				// evaluates each definition again at its place among the clauses.
@@ -709,8 +1133,33 @@ private:
 		auto index = NewNode(DecideNodeKind::SCOPE);
 		auto &node = *tree->nodes[index];
 		node.root = true;
-		node.facts = ReadDecideClauseFacts(context, op, comparison, scope);
-		node.comparison_type = comparison.type;
+		// ABS envelopes are optimizer metadata rather than user clauses. They are built in their natural form
+		// (`aux >= inner` / `aux >= -inner`), which can leave decisions on both sides of the comparison. Bring
+		// these internal rows through the same canonical boundary as ordinary clauses before term extraction.
+		// PrepareAbsFunctions has already read the uncanonicalized operand from the envelope metadata, so this
+		// rewrite only changes the row's linear form, not the F node's definition.
+		idx_t abs_aux = DConstants::INVALID_INDEX;
+		const bool is_abs_envelope = TryParseAbsFunctionEnvelopeTag(comparison.GetAlias(), abs_aux);
+		idx_t l0_value = DConstants::INVALID_INDEX;
+		const bool is_l0_link = TryParseDecideIndexTag(comparison.GetAlias(), L0_INDICATOR_FUNCTION_TAG_PREFIX, l0_value);
+		const bool is_definition = HasDecideTag(comparison.GetAlias(), BODY_DEFINITION_TAG);
+		idx_t definition_value = DConstants::INVALID_INDEX;
+		if (is_definition && (!TryParseDecideIndexTag(comparison.GetAlias(), DEFINES_TAG_PREFIX, definition_value) ||
+		                      definition_value >= op.decide_variables.size())) {
+			throw InternalException("DECIDE tree: nonlinear body definition has no valid helper variable");
+		}
+		idx_t l0_function = DConstants::INVALID_INDEX;
+		idx_t definition_function = DConstants::INVALID_INDEX;
+		unique_ptr<Expression> canonical_envelope;
+		const BoundComparisonExpression *row = &comparison;
+		if (is_abs_envelope || is_l0_link || is_definition) {
+			DecideCanonicalizer canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.keys,
+			                                  op.is_boolean_var);
+			canonical_envelope = canonicalizer.CanonicalizeComparison(comparison);
+			row = &canonical_envelope->Cast<BoundComparisonExpression>();
+		}
+		node.facts = ReadDecideClauseFacts(context, op, *row, scope);
+		node.comparison_type = row->type;
 		node.folded = HasDecideTag(comparison.GetAlias(), SINGLETON_ROW_BOUND_TAG);
 		node.repair_rows = HasDecideTag(comparison.GetAlias(), SINGLETON_ROW_CLAUSE_ROWS_TAG);
 		node.minmax_easy = HasDecideTag(comparison.GetAlias(), MINMAX_EASY_REWRITE_TAG);
@@ -719,7 +1168,42 @@ private:
 		node.text = RootText(node.source_clause_id);
 		TryParseRemovalGroupTag(comparison.GetAlias(), node.removal_group_id);
 		TryParseDecideIndexTag(comparison.GetAlias(), DEFINES_TAG_PREFIX, node.defined_var);
-		Gates(index, scope.Condition());
+		if (is_l0_link) {
+			auto function = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(), [&](idx_t candidate) {
+				return tree->nodes[candidate]->function_kind == DecideFunctionKind::L0_INDICATOR &&
+				       tree->nodes[candidate]->value_var == l0_value;
+			});
+			if (function == tree->function_nodes.end()) {
+				throw InternalException("DECIDE tree: L0 link has no indicator function for helper %llu", l0_value);
+			}
+			l0_function = *function;
+			node.l0_function_owner = l0_function;
+			if (node.defined_var != DConstants::INVALID_INDEX && node.defined_var != l0_value) {
+				throw InternalException("DECIDE tree: L0 link defines a different indicator than its F node");
+			}
+			node.defined_var = l0_value;
+			node.facts->defined_var = l0_value;
+			node.facts->kind = ConstraintKind::STRUCTURAL;
+		}
+		if (is_definition) {
+			auto function = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(), [&](idx_t candidate) {
+				return tree->nodes[candidate]->function_kind == DecideFunctionKind::DEFINITION &&
+				       tree->nodes[candidate]->value_var == definition_value;
+			});
+			if (function == tree->function_nodes.end()) {
+				throw InternalException("DECIDE tree: body definition has no function node for helper %llu", definition_value);
+			}
+			definition_function = *function;
+			node.definition_function_owner = definition_function;
+			node.hidden = true;
+			node.text = "definition of " + tree->nodes[definition_function]->text;
+			if (node.defined_var != DConstants::INVALID_INDEX && node.defined_var != definition_value) {
+				throw InternalException("DECIDE tree: body definition names a different helper than its F node");
+			}
+			node.defined_var = definition_value;
+			node.facts->defined_var = definition_value;
+			node.facts->kind = ConstraintKind::STRUCTURAL;
+		}
 		idx_t signature = DConstants::INVALID_INDEX;
 		if (scope.per_wrapper) {
 			node.key = scope.PerKey();
@@ -727,9 +1211,37 @@ private:
 			TryParseSignatureTag(scope.per_wrapper->GetAlias(), signature);
 		}
 		sources.root_of[&comparison] = index;
-		node.body = Lower(index, *comparison.left);
-		node.rhs = Lower(index, *comparison.right);
+		if (!is_abs_envelope && !is_l0_link && !is_definition) {
+			Gates(index, scope.Condition());
+		}
+		node.body = Lower(index, *row->left);
+		node.rhs = Lower(index, *row->right);
 		node.facts->rhs_expr = node.rhs->Copy();
+		idx_t abs_function = DConstants::INVALID_INDEX;
+		if (is_abs_envelope) {
+			if (node.facts->abs_is_pos_bound) {
+				abs_function = AbsFunctionNode(node.facts->abs_aux_idx, node.source_clause_id);
+			} else {
+				for (auto function : tree->function_nodes) {
+					if (tree->nodes[function]->value_var == node.facts->abs_aux_idx) {
+						abs_function = function;
+						break;
+					}
+				}
+				if (abs_function == DConstants::INVALID_INDEX) {
+					throw InternalException("DECIDE tree: ABS lower-envelope row has no positive row for helper %llu",
+					                        node.facts->abs_aux_idx);
+				}
+			}
+			tree->nodes[abs_function]->abs_envelope_roots.push_back(index);
+			tree->nodes[abs_function]->signature.clear();
+		} else if (is_l0_link) {
+			auto &l0 = *tree->nodes[l0_function];
+			l0.l0_link_roots.push_back(index);
+			if (l0.l0_link_roots.size() == 1) {
+				l0.signature.clear();
+			}
+		}
 		UseSignature(node, signature);
 		sources.clause_roots.push_back(index);
 		auto end = std::remove_if(node.signature.begin(), node.signature.end(), [&](const DecideSignatureField &field) {
@@ -737,7 +1249,33 @@ private:
 		});
 		node.signature.erase(end, node.signature.end());
 		GroupClass(node);
-		tree->roots.push_back(index);
+		if (is_abs_envelope || is_l0_link || is_definition) {
+			node.facts->defined_var = node.defined_var;
+			if (is_abs_envelope) {
+				Edge(abs_function, index);
+			} else if (is_l0_link) {
+				Edge(l0_function, index);
+			} else {
+				auto &function = *tree->nodes[definition_function];
+				function.definition_roots.push_back(index);
+				Edge(definition_function, index);
+			}
+			// A function's link scope may carry a class signature that splits its instances.
+			for (auto &field : node.signature) {
+				if (is_abs_envelope) {
+					Signature(*tree->nodes[abs_function], CopyField(field));
+				} else if (is_l0_link) {
+					Signature(*tree->nodes[l0_function], CopyField(field));
+				} else {
+					Signature(*tree->nodes[definition_function], CopyField(field));
+				}
+			}
+		} else {
+			tree->roots.push_back(index);
+		}
+		if (canonical_envelope) {
+			retained_function_links.push_back(std::move(canonical_envelope));
+		}
 	}
 
 	//! A clause in the grouped shape (the aggregate shape, an easy or a composed extremum) is one model row per group
@@ -783,7 +1321,10 @@ private:
 		node.child_reads.push_back({child, column, tree->nodes[child]->decision_value});
 		node.decision_value = node.decision_value || tree->nodes[child]->decision_value;
 		DecideSignatureField field;
-		if (tree->nodes[child]->kind == DecideNodeKind::FRAME) {
+		if (tree->nodes[child]->kind == DecideNodeKind::FUNCTION) {
+			field.kind = DecideSignatureFieldKind::DECISION;
+			field.decision = tree->nodes[child]->value_var;
+		} else if (tree->nodes[child]->kind == DecideNodeKind::FRAME) {
 			field.kind = DecideSignatureFieldKind::FRAME;
 			field.frame = tree->nodes[child]->frame;
 		} else {
@@ -810,6 +1351,26 @@ private:
 	//! A child read adds its key field either way.
 	unique_ptr<Expression> Lower(idx_t owner, const Expression &expression, bool carried = false) {
 		auto &node = *tree->nodes[owner];
+		idx_t definition_value;
+		if (TryParseDecideIndexTag(expression.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_value)) {
+			auto function = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(), [&](idx_t index) {
+				auto &candidate = *tree->nodes[index];
+				return candidate.function_kind == DecideFunctionKind::DEFINITION &&
+				       candidate.value_var == definition_value;
+			});
+			if (function == tree->function_nodes.end()) {
+				throw InternalException("DECIDE tree: nonlinear body helper %llu has no function node", definition_value);
+			}
+			return Read(owner, *function, expression.return_type, expression.GetAlias());
+		}
+		idx_t product_group;
+		if (TryParseDecideIndexTag(expression.GetAlias(), BILINEAR_FUNCTION_GROUP_TAG_PREFIX, product_group)) {
+			if (product_group >= op.bilinear_function_groups.size() ||
+			    !op.bilinear_function_groups[product_group].expansion) {
+				throw InternalException("DECIDE tree: bilinear function group %llu has no expansion", product_group);
+			}
+			return Lower(owner, *op.bilinear_function_groups[product_group].expansion, carried);
+		}
 		idx_t retained;
 		if (TryParseDecideIndexTag(expression.GetAlias(), TREE_RETAINED_EXPRESSION_TAG_PREFIX, retained)) {
 			if (retained >= op.retained_expressions.size()) {
@@ -844,9 +1405,24 @@ private:
 			auto &reference = expression.Cast<BoundColumnRefExpression>();
 			if (reference.binding.table_index == op.decide_index) {
 				auto variable = reference.binding.column_index;
+				for (auto function : tree->function_nodes) {
+					auto &function_node = *tree->nodes[function];
+					const bool l0_reader = function_node.function_kind == DecideFunctionKind::L0_INDICATOR &&
+					                       node.l0_function_owner == DConstants::INVALID_INDEX;
+					const bool definition_reader = function_node.function_kind == DecideFunctionKind::DEFINITION &&
+					                               node.definition_function_owner == DConstants::INVALID_INDEX;
+					if ((function_node.function_kind == DecideFunctionKind::BOOLEAN_PRODUCT || l0_reader ||
+					     definition_reader) &&
+					    function_node.value_var == variable) {
+						return Read(owner, function, expression.return_type, expression.GetAlias());
+					}
+				}
 				for (idx_t link = 0; link < op.reducer_value_links.size(); link++) {
 					if (op.reducer_value_links[link].value_var == variable) {
-						return Read(owner, Link(link), expression.return_type, expression.GetAlias());
+						auto child = Link(link);
+						const auto &read_text = tree->nodes[child]->text;
+						return Read(owner, child, expression.return_type,
+						            read_text.empty() ? expression.GetAlias() : read_text);
 					}
 				}
 				node.decision_value = true;
@@ -866,6 +1442,29 @@ private:
 		if (expression.GetExpressionClass() == ExpressionClass::BOUND_REF) {
 			Column(node, expression, !carried);
 			return expression.Copy();
+		}
+		if (expression.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+			idx_t abs_aux_idx;
+			if (TryParseDecideIndexTag(expression.GetAlias(), ABS_FUNCTION_TAG_PREFIX, abs_aux_idx)) {
+				auto function = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(), [&](idx_t index) {
+					return tree->nodes[index]->value_var == abs_aux_idx;
+				});
+				if (function == tree->function_nodes.end()) {
+					throw InternalException("DECIDE tree: ABS helper %llu has no function node", abs_aux_idx);
+				}
+				// The F node is registered before its readers so nested ABS references can resolve in gates. Lower its
+				// operand on the first source-tree read: reducers and nested helpers then join the same tree as their
+				// written occurrence, instead of leaving an unresolved aggregate expression in F metadata.
+				auto &abs_node = *tree->nodes[*function];
+				if (!abs_node.body) {
+					auto &abs = expression.Cast<BoundFunctionExpression>();
+					if (abs.children.size() != 1) {
+						throw InternalException("DECIDE tree: ABS function helper %llu has no operand", abs_aux_idx);
+					}
+					abs_node.body = Lower(*function, *abs.children[0]);
+				}
+				return Read(owner, *function, expression.return_type, expression.GetAlias());
+			}
 		}
 		// The children are lowered from the operator's own expressions, so a reducer's address is the one stage 05
 		// lowers (reducer_nodes); the copy only holds the results.
@@ -1209,8 +1808,12 @@ private:
 	void Definitions() {
 		auto &definitions = tree->definition_nodes;
 		for (idx_t i = 0; i < tree->nodes.size(); i++) {
-			auto variable = tree->nodes[i]->defined_var;
-			if (variable < definitions.size()) {
+			auto &node = *tree->nodes[i];
+			auto variable = node.defined_var;
+			const bool abs_envelope = node.facts && node.facts->abs_aux_idx != DConstants::INVALID_INDEX;
+			const bool function_link = node.l0_function_owner != DConstants::INVALID_INDEX ||
+			                           node.definition_function_owner != DConstants::INVALID_INDEX;
+			if (variable < definitions.size() && !abs_envelope && !function_link) {
 				definitions[variable].push_back(i);
 			}
 		}
@@ -1248,12 +1851,6 @@ private:
 		const auto value = tree->value_nodes[variable];
 		if (value != DConstants::INVALID_INDEX) {
 			AddIndex(dependencies, value);
-		}
-		for (auto &product : op.bilinear_links) {
-			if (product.aux_idx == variable) {
-				Sources(product.bool_var_idx, reader);
-				Sources(product.other_var_idx, reader);
-			}
 		}
 	}
 
@@ -1343,6 +1940,98 @@ void DecideTree::Validate() const {
 	}
 	for (idx_t i = 0; i < nodes.size(); i++) {
 		auto &node = *nodes[i];
+		if (node.kind == DecideNodeKind::FUNCTION) {
+			const bool common_invalid =
+			    (node.function_kind != DecideFunctionKind::ABS &&
+			     node.function_kind != DecideFunctionKind::BOOLEAN_PRODUCT &&
+			     node.function_kind != DecideFunctionKind::L0_INDICATOR &&
+			     node.function_kind != DecideFunctionKind::DEFINITION) ||
+			    node.value_var >= value_nodes.size() ||
+			    (!variable_scopes.empty() && node.value_var >= variable_scopes.size()) ||
+			    node.defined_var != node.value_var || !node.body;
+			const bool abs_invalid = node.function_kind == DecideFunctionKind::ABS &&
+			                         (node.product_bool_var != DConstants::INVALID_INDEX ||
+			                          node.product_other_var != DConstants::INVALID_INDEX ||
+			                          (node.abs_indicator_var != DConstants::INVALID_INDEX &&
+			                           node.abs_indicator_var >= value_nodes.size()) ||
+			                          (node.abs_indicator_var != DConstants::INVALID_INDEX && !node.abs_needs_bigm));
+			const bool product_invalid = node.function_kind == DecideFunctionKind::BOOLEAN_PRODUCT &&
+			                             (node.product_bool_var >= value_nodes.size() ||
+			                              node.product_other_var >= value_nodes.size() ||
+			                              node.abs_needs_bigm ||
+			                              node.abs_indicator_var != DConstants::INVALID_INDEX ||
+			                              !node.abs_envelope_roots.empty());
+			const bool l0_invalid = node.function_kind == DecideFunctionKind::L0_INDICATOR &&
+			                        (node.product_bool_var != DConstants::INVALID_INDEX ||
+			                         node.product_other_var != DConstants::INVALID_INDEX || node.abs_needs_bigm ||
+			                         node.abs_indicator_var != DConstants::INVALID_INDEX ||
+			                         !node.abs_envelope_roots.empty() || node.l0_link_roots.size() != 3 ||
+			                         !(node.l0_m > 0.0));
+			const bool definition_invalid = node.function_kind == DecideFunctionKind::DEFINITION &&
+			                               (node.product_bool_var != DConstants::INVALID_INDEX ||
+			                                node.product_other_var != DConstants::INVALID_INDEX || node.abs_needs_bigm ||
+			                                node.abs_indicator_var != DConstants::INVALID_INDEX ||
+			                                !node.abs_envelope_roots.empty() || !node.l0_link_roots.empty() ||
+			                                node.definition_roots.size() != 1 ||
+			                                node.definition_relation == DecideDefinitionRelation::INVALID);
+			if (common_invalid || abs_invalid || product_invalid || l0_invalid || definition_invalid) {
+				throw InternalException("DECIDE tree has an invalid function node %llu", i);
+			}
+		}
+		if (node.kind == DecideNodeKind::FUNCTION && node.function_kind == DecideFunctionKind::ABS) {
+			bool positive = false;
+			bool negative = false;
+			for (auto root : node.abs_envelope_roots) {
+				if (root >= nodes.size() || !nodes[root]->compiled.clause ||
+				    nodes[root]->compiled.clause->abs_aux_idx != node.value_var || nodes[root]->parent != i ||
+				    std::find(node.children.begin(), node.children.end(), root) == node.children.end()) {
+					throw InternalException("DECIDE tree ABS function node %llu has an invalid envelope row", i);
+				}
+				if (nodes[root]->compiled.clause->abs_is_pos_bound) {
+					positive = true;
+				} else {
+					negative = true;
+				}
+			}
+			if (!positive || !negative) {
+				throw InternalException("DECIDE tree ABS function node %llu does not own both envelope rows", i);
+			}
+		}
+		if (node.kind == DecideNodeKind::FUNCTION && node.function_kind == DecideFunctionKind::L0_INDICATOR) {
+			for (auto root : node.l0_link_roots) {
+				if (root >= nodes.size() || !nodes[root]->compiled.clause ||
+				    nodes[root]->compiled.clause->defined_var != node.value_var ||
+				    nodes[root]->l0_function_owner != i || nodes[root]->parent != i ||
+				    std::find(node.children.begin(), node.children.end(), root) == node.children.end()) {
+					throw InternalException("DECIDE tree L0 indicator function node %llu has an invalid link row", i);
+				}
+			}
+		}
+		if (node.kind == DecideNodeKind::FUNCTION && node.function_kind == DecideFunctionKind::DEFINITION) {
+			for (auto root : node.definition_roots) {
+				if (root >= nodes.size() || !nodes[root]->compiled.clause ||
+				    nodes[root]->compiled.clause->defined_var != node.value_var ||
+				    nodes[root]->definition_function_owner != i || nodes[root]->parent != i ||
+				    std::find(node.children.begin(), node.children.end(), root) == node.children.end()) {
+					throw InternalException("DECIDE tree definition function node %llu has an invalid definition row", i);
+				}
+			}
+		}
+		if (node.kind == DecideNodeKind::FUNCTION) {
+			DecideVarScopeInfo scope;
+			if (!variable_scopes.empty()) {
+				scope = variable_scopes[node.value_var];
+			}
+			const bool keyed = scope.IsKeyed() ||
+			                   (scope.scope == DecideVarScope::INLINED && scope.keyed_scope_idx < keyed_scopes.size());
+			const auto expected_per = scope.IsGlobal() ? DecideTreePer::ONE
+			                         : keyed             ? DecideTreePer::KEY
+			                                            : DecideTreePer::ROW;
+			const auto expected_key = keyed ? keyed_scopes[scope.keyed_scope_idx].key : DConstants::INVALID_INDEX;
+			if (node.per != expected_per || node.key != expected_key) {
+				throw InternalException("DECIDE tree function node %llu does not match its helper's scope", i);
+			}
+		}
 		if (node.key != DConstants::INVALID_INDEX && node.key >= keys.size()) {
 			throw InternalException("DECIDE tree node %llu has an invalid key", i);
 		}
@@ -1408,8 +2097,21 @@ void DecideTree::Validate() const {
 			check(*program.expression);
 		}
 	}
+	vector<bool> listed_functions(nodes.size(), false);
+	for (auto function : function_nodes) {
+		if (function >= nodes.size() || nodes[function]->kind != DecideNodeKind::FUNCTION || listed_functions[function]) {
+			throw InternalException("DECIDE tree has an invalid or repeated function node");
+		}
+		listed_functions[function] = true;
+	}
+	for (idx_t i = 0; i < nodes.size(); i++) {
+		if ((nodes[i]->kind == DecideNodeKind::FUNCTION) != listed_functions[i]) {
+			throw InternalException("DECIDE tree function-node index is incomplete");
+		}
+	}
 	for (auto root : roots) {
-		if (root >= nodes.size() || !nodes[root]->root || nodes[root]->kind != DecideNodeKind::SCOPE) {
+		if (root >= nodes.size() || !nodes[root]->root ||
+		    (nodes[root]->kind != DecideNodeKind::SCOPE && nodes[root]->kind != DecideNodeKind::FUNCTION)) {
 			throw InternalException("DECIDE tree has an invalid root");
 		}
 	}
@@ -1420,15 +2122,38 @@ string DecideTree::ToString() const {
 	for (idx_t i = 0; i < nodes.size(); i++) {
 		auto &node = *nodes[i];
 		result << i << " "
-		       << (node.kind == DecideNodeKind::SCOPE     ? "E"
-		           : node.kind == DecideNodeKind::REDUCER ? "G"
-		                                                  : "O");
+		       << (node.kind == DecideNodeKind::SCOPE       ? "E"
+		           : node.kind == DecideNodeKind::REDUCER   ? "G"
+		           : node.kind == DecideNodeKind::FRAME     ? "O"
+		                                                   : "F");
 		if (node.root) {
 			result << (node.objective ? " objective" : node.hidden ? " definition" : " root");
 		}
 		result << " key=" << DecideKeyText(keys, node.key);
 		if (!node.aggregate.empty()) {
 			result << " agg=" << node.aggregate;
+		}
+		if (node.kind == DecideNodeKind::FUNCTION) {
+			if (node.function_kind == DecideFunctionKind::ABS) {
+				result << " function=abs value=x" << node.value_var << " body=(" << node.body->ToString() << ")"
+				       << (node.abs_needs_bigm ? " exact=big-m" : " exact=pressure-or-bound");
+				if (node.abs_indicator_var != DConstants::INVALID_INDEX) {
+					result << " indicator=x" << node.abs_indicator_var;
+				}
+			} else if (node.function_kind == DecideFunctionKind::BOOLEAN_PRODUCT) {
+				result << " function=boolean_product value=x" << node.value_var << " body=("
+				       << node.body->ToString() << ")";
+			} else if (node.function_kind == DecideFunctionKind::L0_INDICATOR) {
+				result << " function=l0_indicator value=x" << node.value_var << " body=(" << node.body->ToString() << ")"
+				       << (node.l0_auto_m ? " M=auto" : " M=" + std::to_string(node.l0_m));
+			} else if (node.function_kind == DecideFunctionKind::DEFINITION) {
+				const auto relation = node.definition_relation == DecideDefinitionRelation::AT_LEAST ? "at-least"
+				                     : node.definition_relation == DecideDefinitionRelation::AT_MOST ? "at-most"
+				                     : node.definition_relation == DecideDefinitionRelation::EQUAL ? "equal"
+				                                                                            : "invalid";
+				result << " function=definition value=x" << node.value_var << " relation=" << relation << " body=("
+				       << node.body->ToString() << ")";
+			}
 		}
 		result << " per=" << (node.per == DecideTreePer::ROW ? "row" : node.per == DecideTreePer::KEY ? "key" : "one");
 		result << " when=[";

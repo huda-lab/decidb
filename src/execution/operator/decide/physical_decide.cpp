@@ -1179,7 +1179,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	solver_input.key_values = std::move(key_values);
 	solver_input.minmax_clause_labels = minmax_clause_labels;
 	solver_input.ne_clause_sources = ne_clause_sources;
-	for (auto &link : bilinear_links) {
+	for (auto &link : gstate.evaluated_bilinear_links) {
         solver_input.bilinear_links.push_back(BilinearLinkSpec {
             link.aux_idx, link.bool_var_idx, link.other_var_idx,
             link.source_clause_id, link.removal_group_id});

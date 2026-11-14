@@ -290,6 +290,14 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 			}
 		}
 	}
+	// Nonlinear reducer bodies are tree-owned F definitions, retained after their clause-list placeholders are made.
+	for (auto &definition : definition_functions) {
+		for (auto *expr : {&definition.body, &definition.condition}) {
+			if (*expr) {
+				callback(expr);
+			}
+		}
+	}
 	// A key's columns are live even where no clause reads them: a decision keyed by a
 	// column the query never mentions still needs it in the scan.
 	for (auto &key : keys) {
@@ -345,6 +353,26 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 	}
 	for (auto &expression : retained_expressions) {
 		callback(&expression);
+	}
+	for (auto &envelope : abs_function_envelopes) {
+		if (envelope.positive) {
+			callback(&envelope.positive);
+		}
+		if (envelope.negative) {
+			callback(&envelope.negative);
+		}
+	}
+	for (auto &group : bilinear_function_groups) {
+		if (group.expansion) {
+			callback(&group.expansion);
+		}
+	}
+	for (auto &function : l0_indicator_functions) {
+		for (auto &link : function.links) {
+			if (link) {
+				callback(&link);
+			}
+		}
 	}
 	// A bound left to a direct-solve rule reads the source, and the reducers other bounds record, through these.
 	for (auto &bound : reduced_bounds) {

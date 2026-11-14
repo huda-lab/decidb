@@ -397,7 +397,9 @@ void LinearizeAbsMaximize(SolverInput &input) {
         ec_ub1.row_coefficients.push_back(CoefficientColumn::MakeScalar(relax_neg, num_rows));
         ec_ub1.rhs_values = ShiftRhs(c1.rhs_values, relax_neg);
         ec_ub1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
-        ec_ub1.lhs_is_aggregate = false;
+		// Preserve the lower row's aggregation shape. An F node may read a reducer (`ABS(SUM(x))`): its
+		// envelope is one row per helper instance over that reducer's members, not one row per input row.
+		ec_ub1.lhs_is_aggregate = c1.lhs_is_aggregate;
         ec_ub1.row_group_ids = c1.row_group_ids;
         ec_ub1.num_groups = c1.num_groups;
         ec_ub1.group_names = c1.group_names;
@@ -415,7 +417,7 @@ void LinearizeAbsMaximize(SolverInput &input) {
         ec_ub2.row_coefficients.push_back(CoefficientColumn::MakeScalar(-relax_pos, num_rows));
         ec_ub2.rhs_values = c2.rhs_values;
         ec_ub2.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
-        ec_ub2.lhs_is_aggregate = false;
+		ec_ub2.lhs_is_aggregate = c2.lhs_is_aggregate;
         ec_ub2.row_group_ids = c2.row_group_ids;
         ec_ub2.num_groups = c2.num_groups;
         ec_ub2.group_names = c2.group_names;

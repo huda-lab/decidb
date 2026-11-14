@@ -133,7 +133,6 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     decide_op->is_boolean_var = op.is_boolean_var;
     decide_op->ne_clause_sources = std::move(op.ne_clause_sources);
     decide_op->minmax_clause_labels = std::move(op.minmax_clause_labels);
-    decide_op->bilinear_links = std::move(op.bilinear_links);
     decide_op->abs_maximize_links = std::move(op.abs_maximize_links);
     decide_op->aux_var_expressions = std::move(op.aux_var_expressions);
     decide_op->constraint_sources = std::move(op.constraint_sources);

@@ -17,6 +17,10 @@
 
 namespace duckdb {
 
+static bool IsScopeNode(const DecideNode &node) {
+	return node.kind == DecideNodeKind::SCOPE || node.kind == DecideNodeKind::FUNCTION;
+}
+
 static hash_t DescentHash(idx_t parent, const vector<Value> &values) {
 	hash_t result = Hash<uint64_t>(parent);
 	for (auto &value : values) {
@@ -351,7 +355,11 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 			                      ? arriving
 			                      : MIXED_ENCLOSING;
 		}
-		const auto own = tree.nodes[node]->kind == DecideNodeKind::SCOPE ? arriving : node;
+		const auto &parent_node = *tree.nodes[node];
+		const auto own = (parent_node.kind == DecideNodeKind::SCOPE ||
+		                  (parent_node.kind == DecideNodeKind::FUNCTION && parent_node.per == DecideTreePer::ROW))
+		                     ? arriving
+		                     : node;
 		for (auto child : tree.nodes[node]->children) {
 			enclose(child, own);
 		}
@@ -362,7 +370,9 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 	// An E no node routes rows to is reached as a root alone, so its rows lie in no enclosing slot.
 	for (auto &node : tree.nodes) {
 		for (auto child : node->children) {
-			enclosed[child] = tree.nodes[child]->kind == DecideNodeKind::SCOPE;
+			const auto &parent = *node;
+			enclosed[child] = IsScopeNode(*tree.nodes[child]) &&
+			                  !(parent.kind == DecideNodeKind::FUNCTION && parent.per == DecideTreePer::ROW);
 		}
 	}
 	auto &allocator = Allocator::Get(context);
@@ -373,7 +383,7 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 		signature_types[n] = DescentSignatureTypes(tree, node);
 		// An entry's values: its signature's, its carried and program columns, and an O's order key and partition. An
 		// entry standing for its row alone holds no decision's instance, which the row gives.
-		const auto set = node.kind == DecideNodeKind::SCOPE && node.per != DecideTreePer::ROW;
+		const auto set = IsScopeNode(node) && node.per != DecideTreePer::ROW;
 		auto &layout = container.layout;
 		vector<LogicalType> types;
 		idx_t value = 0;
@@ -408,7 +418,7 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 		}
 		layout.end = types.size();
 		container.values.Initialize(allocator, types);
-		const auto scope = node.kind == DecideNodeKind::SCOPE;
+		const auto scope = IsScopeNode(node);
 		// A node per row has no key (DecideTreePer): each row is a slot of its own.
 		D_ASSERT(!scope || node.per != DecideTreePer::ROW || node.key == DConstants::INVALID_INDEX);
 		if (scope && node.per == DecideTreePer::ROW) {
@@ -886,7 +896,7 @@ void DecideDescent::FindGroups(idx_t node_index, const Reach &rows, const unsafe
                                unsafe_vector<idx_t> &slots) {
 	auto &node = *tree.nodes[node_index];
 	auto &groups = containers[node_index].groups;
-	const auto scope = node.kind == DecideNodeKind::SCOPE;
+	const auto scope = IsScopeNode(node);
 	// A slot made by row `i`, keyed by its row of `keys`, whose values the caller appends.
 	auto create = [&](idx_t i) {
 		groups.parent_slots.push_back(scope ? rows.parents[i] : DConstants::INVALID_INDEX);
@@ -1461,7 +1471,7 @@ const DecideDescent::Reach &DecideDescent::HoldKeyed(idx_t node_index, DataChunk
 	Key(node.key, chunk, rows, keys, present, &spelled);
 	read_block = DecideBlock::ROUTE;
 	current_rank.position = 0;
-	const auto scope = node.kind == DecideNodeKind::SCOPE;
+	const auto scope = IsScopeNode(node);
 	// Flat reads a reducer's operand on every row its G reads, except the objective's, which it reads in place, on the
 	// rows of each group alone (D81).
 	const auto reducer = node.kind == DecideNodeKind::REDUCER && node.value_rank.phase != DecideErrorPhase::OBJECTIVE;
@@ -1533,7 +1543,7 @@ const DecideDescent::Reach &DecideDescent::HoldKeyed(idx_t node_index, DataChunk
 	Store(node_index, chunk, *stored, *stored_slots, row_base);
 	// An E's rows reach its children in the slots they arrived in, every row it reads, as `per` never gates them; a
 	// G's or O's in its own, those that took one.
-	if (scope) {
+	if (node.kind == DecideNodeKind::SCOPE) {
 		return rows;
 	}
 	own_children.rows.resize(grouped.size());
@@ -1587,7 +1597,8 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base, co
 		// as `per` never gates them.
 		current_rank.position = 0;
 		Reach unfailed;
-		Store(node_index, chunk, Unfailed(rows, unfailed), {}, row_base);
+		auto &stored = Unfailed(rows, unfailed);
+		Store(node_index, chunk, stored, {}, row_base);
 	} else {
 		children = &HoldKeyed(node_index, chunk, rows, row_base, own_children);
 	}
@@ -1646,7 +1657,7 @@ void DecideDescent::Append(DataChunk &chunk, idx_t row_base) {
 	// Seen and landed are window-local: containers retain values, not an input-sized visited set.
 	for (idx_t n = 0; n < tree.nodes.size(); n++) {
 		seen[n].clear();
-		if (tree.nodes[n]->kind != DecideNodeKind::SCOPE) {
+		if (!IsScopeNode(*tree.nodes[n])) {
 			landed[n].assign(chunk.size(), DConstants::INVALID_INDEX);
 		}
 	}
@@ -1842,7 +1853,7 @@ void DecideDescent::Merge(MergedPart &part) {
 	};
 	for (auto scopes : {false, true}) {
 		for (idx_t n = 0; n < tree.nodes.size(); n++) {
-			if ((tree.nodes[n]->kind == DecideNodeKind::SCOPE) == scopes) {
+			if (IsScopeNode(*tree.nodes[n]) == scopes) {
 				merge_slots(n);
 			}
 		}
@@ -2215,7 +2226,10 @@ string DecideDescent::Dump() const {
 		auto &container = containers[n];
 		auto &node = *tree.nodes[n];
 		auto &groups = container.groups;
-		const auto kind = node.kind == DecideNodeKind::SCOPE ? "E" : node.kind == DecideNodeKind::REDUCER ? "G" : "O";
+		const auto kind = node.kind == DecideNodeKind::SCOPE       ? "E"
+		                  : node.kind == DecideNodeKind::REDUCER   ? "G"
+		                  : node.kind == DecideNodeKind::FRAME     ? "O"
+		                                                           : "F";
 		out << "node " << n << " " << kind << " rows " << container.rows_in << " -> " << container.rows_out
 		    << " groups=" << groups.size() << " entries=" << container.Count() << " instances=" << container.Instances()
 		    << " text=" << node.text << "\n";

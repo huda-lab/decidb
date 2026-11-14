@@ -324,6 +324,20 @@ KeyedMapping DecideModelEmitter::HelperMapping(idx_t link) {
 void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 	gstate.absent_reads.assign(op.decide_variables.size(), vector<bool>());
 	columns.ReadAbsence(mappings, gstate.absent_reads);
+	gstate.evaluated_bilinear_links.clear();
+	for (auto function : tree.function_nodes) {
+		const auto &node = *tree.nodes[function];
+		if (node.function_kind != DecideFunctionKind::BOOLEAN_PRODUCT) {
+			continue;
+		}
+		LogicalDecide::BilinearLink link;
+		link.aux_idx = node.value_var;
+		link.bool_var_idx = node.product_bool_var;
+		link.other_var_idx = node.product_other_var;
+		link.source_clause_id = node.source_clause_id;
+		link.removal_group_id = node.removal_group_id;
+		gstate.evaluated_bilinear_links.push_back(link);
+	}
 	// The rows defining each auxiliary (DecideConstraint::defined_var) and each helper's G, in the tree's order, which
 	// puts what defines a decision before what reads it (D88): an auxiliary or a helper a definition or a helper's
 	// member reads has its absence by then, whatever order the rewrites numbered them in.
@@ -333,6 +347,7 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 	}
 	auto definitions = ClauseRoots();
 	definitions.resize(tree.constraint_count);
+	definitions.insert(definitions.end(), tree.function_nodes.begin(), tree.function_nodes.end());
 	link_members.assign(op.reducer_value_links.size(), LinkMembers());
 	for (auto &link : op.reducer_value_links) {
 		definitions.push_back(tree.value_nodes[link.value_var]);
@@ -341,14 +356,33 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 	          [&](idx_t left, idx_t right) { return position[left] < position[right]; });
 	for (auto root : definitions) {
 		auto &node = *tree.nodes[root];
-		if (node.link != DConstants::INVALID_INDEX) {
+		if (node.kind == DecideNodeKind::FUNCTION) {
+			FunctionAbsence(root);
+			if (node.function_kind == DecideFunctionKind::ABS) {
+				for (auto envelope : node.abs_envelope_roots) {
+					DefinitionAbsence(envelope, node.value_var);
+				}
+			} else if (node.function_kind == DecideFunctionKind::L0_INDICATOR) {
+				for (auto link : node.l0_link_roots) {
+					DefinitionAbsence(link, node.value_var);
+				}
+			} else if (node.function_kind == DecideFunctionKind::DEFINITION) {
+				for (auto definition : node.definition_roots) {
+					DefinitionAbsence(definition, node.value_var);
+				}
+			}
+		} else if (node.l0_function_owner != DConstants::INVALID_INDEX ||
+		           node.definition_function_owner != DConstants::INVALID_INDEX) {
+			// The owning F node resolves absence from its linked rows.
+		} else if (node.link != DConstants::INVALID_INDEX) {
 			mappings[tree.variable_scopes[node.value_var].keyed_scope_idx] = HelperMapping(root);
-		} else if (node.compiled.clause->defined_var != DConstants::INVALID_INDEX) {
-			DefinitionAbsence(root);
+		} else if (node.compiled.clause && node.compiled.clause->defined_var != DConstants::INVALID_INDEX &&
+		           node.compiled.clause->abs_aux_idx == DConstants::INVALID_INDEX) {
+			DefinitionAbsence(root, node.compiled.clause->defined_var);
 		}
 	}
 	// A product's auxiliary has none where a factor has none (DecideTreeColumns::AbsentAt), which stage 06 reads too.
-	for (auto &product : op.bilinear_links) {
+	for (auto &product : gstate.evaluated_bilinear_links) {
 		auto &absent = gstate.absent_reads[product.aux_idx];
 		if (!columns.MayBeAbsent(product.aux_idx)) {
 			continue;
@@ -362,14 +396,72 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 	}
 }
 
-void DecideModelEmitter::DefinitionAbsence(idx_t root) {
+void DecideModelEmitter::FunctionAbsence(idx_t function) {
+	const auto &node = *tree.nodes[function];
+	if (node.kind != DecideNodeKind::FUNCTION || node.value_var >= gstate.absent_reads.size()) {
+		throw InternalException("DECIDE model emitter: invalid function absence source");
+	}
+	if (node.value_var < tree.variable_scopes.size() && tree.variable_scopes[node.value_var].IsGlobal()) {
+		return;
+	}
+	auto &absent = gstate.absent_reads[node.value_var];
+	vector<bool> present(num_rows, false);
+	const auto &container = descent.Containers()[function];
+	for (idx_t entry = 0; entry < container.Count(); entry++) {
+		const auto row = container.rows[entry];
+		if (row < num_rows && container.groups.InAClass(container.Slot(entry))) {
+			present[row] = true;
+		}
+	}
+	absent.assign(num_rows, false);
+	for (idx_t row = 0; row < num_rows; row++) {
+		absent[row] = !present[row];
+	}
+}
+
+void DecideModelEmitter::DefinitionAbsence(idx_t root, idx_t variable) {
 	auto &body = tree.nodes[root]->compiled;
 	auto &clause = *body.clause;
-	auto &absent = gstate.absent_reads[clause.defined_var];
+	auto &absent = gstate.absent_reads[variable];
+	const bool reducer_definition = tree.nodes[root]->definition_function_owner != DConstants::INVALID_INDEX;
 	auto mark = [&](idx_t row) {
 		absent.resize(num_rows, false);
 		absent[row] = true;
 	};
+	// A definition has no value where a decision it reads has no instance. That also means it does not read the
+	// definition's data expressions there: a cast or arithmetic error in a row the helper drops must stay dropped.
+	// Compute the full decision mask first, before reading its bound or coefficients.
+	vector<DecideTerm> product_factors;
+	product_factors.reserve(clause.bilinear_terms.size() * 2);
+	vector<const DecideTerm *> dependencies;
+	for (auto &term : clause.lhs_terms) {
+		dependencies.push_back(&term);
+	}
+	for (auto &product : clause.bilinear_terms) {
+		product_factors.emplace_back(product.var_a, nullptr);
+		dependencies.push_back(&product_factors.back());
+		product_factors.emplace_back(product.var_b, nullptr);
+		dependencies.push_back(&product_factors.back());
+	}
+	for (auto &group : clause.quadratic_groups) {
+		for (auto &term : group.inner_terms) {
+			dependencies.push_back(&term);
+		}
+	}
+	vector<bool> dependency_absent(num_rows, false);
+	for (auto term : dependencies) {
+		if (!columns.MayBeAbsent(*term)) {
+			continue;
+		}
+		for (idx_t row = 0; row < num_rows; row++) {
+			dependency_absent[row] = dependency_absent[row] || columns.TermAbsentAt(*term, row);
+		}
+	}
+	for (idx_t row = 0; row < num_rows; row++) {
+		if (dependency_absent[row]) {
+			mark(row);
+		}
+	}
 	// What it reads unreduced is NULL on a row it keeps, which its NULL tests keep too (DecideNode::member_tests):
 	// its bound, then each term's coefficient, then each square's terms', which flat reads in that order, so what
 	// one raises ranks there (DecideNode::value_rank). It reads no product's coefficient.
@@ -377,49 +469,40 @@ void DecideModelEmitter::DefinitionAbsence(idx_t root) {
 	idx_t position = 0;
 	auto null_rows = [&](idx_t node, idx_t program) {
 		rank.position = position++;
-		const auto nulls = columns.NullEntries(node, program, columns.Tested(node), rank);
+		auto reads = columns.Tested(node);
+		const auto &rows = descent.Containers()[node].rows;
+		for (idx_t entry = 0; entry < reads.size(); entry++) {
+			if (dependency_absent[rows[entry]]) {
+				reads[entry] = false;
+			}
+		}
+		const auto nulls = columns.NullEntries(node, program, reads, rank);
 		if (nulls.empty()) {
 			return;
 		}
 		const std::vector<bool> &null_entries = nulls;
 		DecideEntryRows(tree, descent, node).ForEach([&](idx_t row, idx_t entry) {
-			if (null_entries[entry]) {
+			// A NULL body excludes this row from its reducer's members. The signed helper can remain an unconstrained
+			// value there, as flat leaves it; only a missing decision input makes the function value absent.
+			if (null_entries[entry] && !reducer_definition) {
 				mark(row);
 			}
 		});
 	};
-	// A decision it reads has no instance on a row, wherever the row lies: a term's, a product's factors, a
-	// square's terms'.
-	auto absent_rows = [&](const DecideTerm &term) {
-		if (!columns.MayBeAbsent(term)) {
-			return;
-		}
-		for (idx_t row = 0; row < num_rows; row++) {
-			if (columns.TermAbsentAt(term, row)) {
-				mark(row);
-			}
-		}
-	};
 	null_rows(root, body.rhs);
 	for (idx_t t = 0; t < clause.lhs_terms.size(); t++) {
 		null_rows(body.linear[t].node, body.linear[t].program);
-		absent_rows(clause.lhs_terms[t]);
-	}
-	for (auto &product : clause.bilinear_terms) {
-		absent_rows(DecideTerm(product.var_a, nullptr));
-		absent_rows(DecideTerm(product.var_b, nullptr));
 	}
 	for (idx_t g = 0; g < clause.quadratic_groups.size(); g++) {
 		for (idx_t t = 0; t < body.squares[g].size(); t++) {
 			null_rows(body.squares[g][t].node, body.squares[g][t].program);
-			absent_rows(clause.quadratic_groups[g].inner_terms[t]);
 		}
 	}
 }
 
 vector<idx_t> DecideModelEmitter::ClauseRoots() const {
 	vector<idx_t> roots(tree.constraint_count + tree.singleton_row_count, DConstants::INVALID_INDEX);
-	for (auto root : tree.roots) {
+	for (idx_t root = 0; root < tree.nodes.size(); root++) {
 		auto &body = tree.nodes[root]->compiled;
 		if (body.clause) {
 			roots[body.clause_index] = root;
@@ -431,27 +514,78 @@ vector<idx_t> DecideModelEmitter::ClauseRoots() const {
 void DecideModelEmitter::Constraints() {
 	const idx_t num_constraints = tree.constraint_count;
 	const auto roots = ClauseRoots();
+	vector<idx_t> abs_function_of_clause(roots.size(), DConstants::INVALID_INDEX);
+	for (auto function : tree.function_nodes) {
+		const auto &node = *tree.nodes[function];
+		for (auto root : node.abs_envelope_roots) {
+			if (root >= tree.nodes.size()) {
+				throw InternalException("DECIDE model emitter: ABS F node has an invalid envelope root");
+			}
+			const auto clause_index = tree.nodes[root]->compiled.clause_index;
+			if (clause_index >= roots.size() || roots[clause_index] != root ||
+			    abs_function_of_clause[clause_index] != DConstants::INVALID_INDEX) {
+				throw InternalException("DECIDE model emitter: ABS envelope row is not uniquely indexed");
+			}
+			abs_function_of_clause[clause_index] = function;
+		}
+	}
 	// The folded bounds follow under DIAGNOSE, numbered after every other clause: only the repair model emits them.
 	const idx_t num_evaluated = num_constraints + (op.diagnose ? tree.singleton_row_count : 0);
 	for (idx_t c = 0; c < num_evaluated; c++) {
-		auto &clause = *tree.nodes[roots[c]]->compiled.clause;
-		auto evaluated = clause.lhs_is_aggregate || clause.was_minmax_easy ? Groups(roots[c], c < num_constraints)
-		                                                                   : Rows(roots[c], c < num_constraints);
+		const auto root = roots[c];
+		auto &clause = *tree.nodes[root]->compiled.clause;
+		auto evaluated = abs_function_of_clause[c] != DConstants::INVALID_INDEX
+		                     ? AbsEnvelope(abs_function_of_clause[c], root, c < num_constraints)
+		                     : clause.lhs_is_aggregate || clause.was_minmax_easy
+		                           ? Groups(root, c < num_constraints)
+		                           : Rows(root, c < num_constraints);
 		(c < num_constraints ? gstate.evaluated_constraints : gstate.evaluated_singleton_row_constraints)
 		    .push_back(std::move(evaluated));
 	}
 }
 
+EvaluatedConstraint DecideModelEmitter::AbsEnvelope(idx_t function, idx_t root, bool counted) {
+	if (function >= tree.nodes.size() || tree.nodes[function]->kind != DecideNodeKind::FUNCTION ||
+	    tree.nodes[function]->function_kind != DecideFunctionKind::ABS) {
+		throw InternalException("DECIDE model emitter: invalid ABS F envelope ownership");
+	}
+	const auto &envelopes = tree.nodes[function]->abs_envelope_roots;
+	if (root >= tree.nodes.size() || std::find(envelopes.begin(), envelopes.end(), root) == envelopes.end()) {
+		throw InternalException("DECIDE model emitter: invalid ABS F envelope ownership");
+	}
+	auto &clause = *tree.nodes[root]->compiled.clause;
+	if (clause.abs_aux_idx != tree.nodes[function]->value_var) {
+		throw InternalException("DECIDE model emitter: ABS F envelope belongs to a different auxiliary");
+	}
+	// Preserve the lower row's written algebra: reducers contribute all of their members, while terms beside
+	// them contribute once per group. The F edge supplies the instance scope to the root; this row-shape decision
+	// only decides how its expression is evaluated over those routed rows.
+	return clause.lhs_is_aggregate || clause.was_minmax_easy ? Groups(root, counted) : Rows(root, counted);
+}
+
 EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 	auto &body = tree.nodes[root]->compiled;
 	auto &clause = *body.clause;
+	auto &node = *tree.nodes[root];
 	const auto entries = descent.Containers()[root].Count();
 	auto evaluated = InitializeEvaluatedConstraint(clause, body.clause_index,
 	                                               [&](const DecideTerm &term) { return gstate.ReadVariable(term); });
 	// The rows the clause keeps, which its `when` routed and its NULL tests keep (DecideNode::member_tests: a helper's
 	// row reads a reducer's body on the reducer's members), with the entry standing for each: one model row stands on
 	// each, or under `per K:` on one row of each variant of a class.
-	auto &tested = columns.Tested(root);
+	vector<bool> tested = columns.Tested(root);
+	vector<bool> definition_absent(num_rows, false);
+	if (node.definition_function_owner != DConstants::INVALID_INDEX && clause.defined_var < gstate.absent_reads.size()) {
+		const auto &absent = gstate.absent_reads[clause.defined_var];
+		const auto &rows = descent.Containers()[root].rows;
+		for (idx_t entry = 0; entry < tested.size(); entry++) {
+			const auto row = rows[entry];
+			if (row < absent.size() && absent[row]) {
+				tested[entry] = false;
+				definition_absent[row] = true;
+			}
+		}
+	}
 	vector<bool> nulls(entries, false);
 	auto scatter = [&](const vector<double> &numbers, CoefficientColumn &column) {
 		column.AssignDense(num_rows);
@@ -485,7 +619,7 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 			absent_terms.push_back(&term);
 		}
 	}
-	vector<bool> null_rows(num_rows, false);
+	vector<bool> null_rows = std::move(definition_absent);
 	std::vector<bool> &nulled = null_rows;
 	const std::vector<bool> &null_entries = nulls;
 	ForEachRead(root, tested, false, [&](idx_t row, idx_t entry) {

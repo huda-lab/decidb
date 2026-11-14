@@ -16,6 +16,7 @@
 #include "duckdb/common/decide_solver_capabilities.hpp"
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/planner/decide/decide_tree_terms.hpp"
+#include "duckdb/planner/decide/decide_term_split.hpp"
 
 namespace duckdb {
 
@@ -451,8 +452,7 @@ public:
     // Links from MIN/MAX indicator variables: (agg_name "min"/"max", indicator_idx)
     vector<string> minmax_clause_labels;
 
-    // Links from bilinear McCormick auxiliary variables: w = b * x
-    // (aux_idx, bool_var_idx, other_var_idx) — for execution-time Big-M constraint generation
+    // The stage-06 McCormick/AND formulation record materialized from a Boolean-product F node.
     struct BilinearLink {
         idx_t aux_idx;        // Index of auxiliary variable w
         idx_t bool_var_idx;   // Index of the Boolean variable b
@@ -460,7 +460,32 @@ public:
         idx_t source_clause_id = DConstants::INVALID_INDEX;
         idx_t removal_group_id = DConstants::INVALID_INDEX;
     };
-    vector<BilinearLink> bilinear_links;
+    //! The intact Boolean-product expressions and the plan-time helper allocation needed by stage 05. Executable
+    //! bilinear links are materialized from these specs as BOOLEAN_PRODUCT F nodes in DecideTree.
+    vector<DecideBilinearFunctionGroup> bilinear_function_groups;
+
+    //! The three formulation rows for each L0 indicator, retained as function-owned tree input rather than ordinary
+    //! DECIDE clauses. They stay as expressions through the remaining optimizer passes so nested ABS/products receive
+    //! their usual helpers; stage 06 evaluates the rows from the indicator F node's child scopes.
+    struct L0IndicatorFunction {
+        idx_t value_var = DConstants::INVALID_INDEX;
+        bool auto_m = false;
+        double m = 1.0;
+        string label;
+        vector<unique_ptr<Expression>> links;
+    };
+    vector<L0IndicatorFunction> l0_indicator_functions;
+
+    //! The plan-time helper index, source body and relation for a nonlinear reducer definition. Written reducer bodies
+    //! carry a tag that makes the tree read this F value at their original site; tree construction synthesizes the
+    //! helper's definition row from this untagged source body.
+    struct DefinitionFunction {
+        idx_t value_var = DConstants::INVALID_INDEX;
+        ExpressionType relation = ExpressionType::INVALID;
+        unique_ptr<Expression> body;
+        unique_ptr<Expression> condition;
+    };
+    vector<DefinitionFunction> definition_functions;
 
     // Links for MAXIMIZE+ABS Big-M upper-bound constraints.
     // Produced by RewriteAbs when sense==MAXIMIZE and ABS is in the objective.
@@ -473,8 +498,20 @@ public:
     };
     vector<AbsMaximizeLink> abs_maximize_links;
 
+    //! The two ABS lower-envelope expressions retained for the executable F node. Optimizer-only metadata: the
+    //! expressions are enumerated for binding liveness, but do not become ordinary DECIDE constraint-tree clauses.
+    struct AbsFunctionEnvelope {
+        //! The source operand for the F node. User expressions can be rewritten away before tree construction (for
+        //! example, when ABS is a factor of a Boolean product), so the function cannot rely on finding itself while
+        //! lowering a retained clause.
+        unique_ptr<Expression> operand;
+        unique_ptr<Expression> positive;
+        unique_ptr<Expression> negative;
+    };
+    vector<AbsFunctionEnvelope> abs_function_envelopes;
+
     //! The helper decisions that hold a value of either sign: a value rewrite's reducer (RewriteScopedReducers) and a
-    //! defined non-linear body (DefineNonlinearReducerBodies). FoldSingletonRows gives them no default floor of 0; a
+    //! definition function's output. FoldSingletonRows gives them no default floor of 0; a
     //! value helper is boxed later by its members' reach, and a body helper stays unboxed, so stage 08 states the
     //! extremum over it natively.
     vector<idx_t> signed_helper_vars;

@@ -484,11 +484,12 @@ bool DecideTreeColumns::AbsentAt(idx_t variable, idx_t row) const {
 	if (absent_reads && !(*absent_reads)[variable].empty() && (*absent_reads)[variable][row]) {
 		return true;
 	}
-	// A product's auxiliary has none where a factor has none (LogicalDecide::BilinearLink), whose absence is read
-	// first, as what defines it.
-	for (auto &product : tree.bilinear_links) {
-		if (product.aux_idx == variable &&
-		    (AbsentAt(product.bool_var_idx, row) || AbsentAt(product.other_var_idx, row))) {
+	// A product F's auxiliary has none where either factor has none. The emitter materializes the link record from
+	// this same node after bottom-up column reads.
+	for (auto function : tree.function_nodes) {
+		const auto &product = *tree.nodes[function];
+		if (product.function_kind == DecideFunctionKind::BOOLEAN_PRODUCT && product.value_var == variable &&
+		    (AbsentAt(product.product_bool_var, row) || AbsentAt(product.product_other_var, row))) {
 			return true;
 		}
 	}
@@ -503,8 +504,10 @@ bool DecideTreeColumns::MayBeAbsent(idx_t variable) const {
 	if (absent_reads && !(*absent_reads)[variable].empty()) {
 		return true;
 	}
-	for (auto &product : tree.bilinear_links) {
-		if (product.aux_idx == variable && (MayBeAbsent(product.bool_var_idx) || MayBeAbsent(product.other_var_idx))) {
+	for (auto function : tree.function_nodes) {
+		const auto &product = *tree.nodes[function];
+		if (product.function_kind == DecideFunctionKind::BOOLEAN_PRODUCT && product.value_var == variable &&
+		    (MayBeAbsent(product.product_bool_var) || MayBeAbsent(product.product_other_var))) {
 			return true;
 		}
 	}
