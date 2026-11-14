@@ -285,6 +285,7 @@ struct DecideNode {
 struct DecideTree {
 	idx_t decide_index = DConstants::INVALID_INDEX;
 	idx_t input_column_count = 0;
+	DecideSense objective_sense = DecideSense::FEASIBILITY;
 	vector<unique_ptr<DecideNode>> nodes;
 	//! The clause roots holding a clause, numbered in leaf order (DecideBody::clause_index): the constraints first,
 	//! then the folded bounds whose repair rows come from their clause.

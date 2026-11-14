@@ -222,9 +222,9 @@ private:
 	double SquareSign(idx_t root, idx_t g, vector<bool> &null_rows);
 	//! The objective's terms `terms` (its linear or its squared terms) at their sites `sites`: each its decision as a
 	//! row reads it, its column and its filter, the rows it is read on (D84).
-	vector<TermFilterState> ObjectiveTerms(idx_t root, const vector<DecideTerm> &terms,
-	                                       const vector<DecideTermSite> &sites, vector<CoefficientColumn> &coefficients,
-	                                       vector<idx_t> &variables);
+	vector<TermFilterState> ObjectiveTerms(idx_t root, const DecideAlgebraNode &formula, idx_t formula_offset,
+	                                       const vector<DecideTerm> &terms, const vector<DecideTermSite> &sites,
+	                                       vector<CoefficientColumn> &coefficients, vector<idx_t> &variables);
 	//! An objective AVG of a `by` key (`avg_group_key`, D81), in the G `child`, its site `site`: each member's group
 	//! there, which its 1/n divides by (TermFilterState::avg_group_ids).
 	void AvgGroups(bool avg_scale, idx_t avg_group_key, idx_t child, idx_t site, TermFilterState &filter);

@@ -175,6 +175,7 @@ public:
 	DecideTreeBuilder(ClientContext &context, const LogicalDecide &op) : context(context), op(op) {
 		tree = make_uniq<DecideTree>();
 		tree->decide_index = op.decide_index;
+		tree->objective_sense = op.decide_sense;
 		tree->source_fragments = op.source_fragments;
 		tree->variable_scopes = op.variable_scopes;
 		tree->keyed_scopes = op.keyed_scopes;
@@ -872,6 +873,59 @@ public:
 				clause->children.push_back(std::move(lhs));
 				clause->children.push_back(AlgebraProgram(index, index, body.rhs));
 				node.algebra = std::move(clause);
+				continue;
+			}
+			if (body.objective) {
+				auto objective = make_uniq<DecideAlgebraNode>();
+				objective->kind = DecideAlgebraKind::OPERATOR;
+				objective->owner = index;
+				objective->operation = tree->objective_sense == DecideSense::MINIMIZE ? "minimize" : "maximize";
+				auto sum = make_uniq<DecideAlgebraNode>();
+				sum->kind = DecideAlgebraKind::OPERATOR;
+				sum->owner = index;
+				sum->operation = "+";
+				for (idx_t term = 0; term < body.objective->terms.size(); term++) {
+					sum->children.push_back(AlgebraTerm(index, body.objective->terms[term], body.linear[term], term));
+				}
+				for (idx_t product = 0; product < body.objective->bilinear_terms.size(); product++) {
+					auto &term = body.objective->bilinear_terms[product];
+					auto expression = make_uniq<DecideAlgebraNode>();
+					expression->kind = DecideAlgebraKind::OPERATOR;
+					expression->owner = index;
+					expression->operation = "*";
+					expression->sign = term.sign;
+					expression->scale = static_cast<double>(term.sign);
+					expression->source_term = product;
+					auto left = make_uniq<DecideAlgebraNode>();
+					left->kind = DecideAlgebraKind::DECISION;
+					left->owner = index;
+					left->decision_var = term.var_a;
+					auto right = make_uniq<DecideAlgebraNode>();
+					right->kind = DecideAlgebraKind::DECISION;
+					right->owner = index;
+					right->decision_var = term.var_b;
+					expression->children.push_back(std::move(left));
+					expression->children.push_back(std::move(right));
+					if (term.coefficient) {
+						expression->children.push_back(AlgebraProgram(index, body.products[product].node,
+						                                                 body.products[product].program));
+					}
+					sum->children.push_back(std::move(expression));
+				}
+				if (!body.objective->squared_terms.empty()) {
+					auto squares = make_uniq<DecideAlgebraNode>();
+					squares->kind = DecideAlgebraKind::OPERATOR;
+					squares->owner = index;
+					squares->operation = "square_sum";
+					squares->scale = body.objective->quadratic_sign;
+					for (idx_t term = 0; term < body.objective->squared_terms.size(); term++) {
+						squares->children.push_back(
+						    AlgebraTerm(index, body.objective->squared_terms[term], body.squares[0][term], term));
+					}
+					sum->children.push_back(std::move(squares));
+				}
+				objective->children.push_back(std::move(sum));
+				node.algebra = std::move(objective);
 				continue;
 			}
 			if (node.kind == DecideNodeKind::REDUCER && node.function) {
@@ -2266,6 +2320,29 @@ void DecideTree::Validate() const {
 				}
 			}
 			}
+			if (node.compiled.objective) {
+				const auto expected_sense = objective_sense == DecideSense::MINIMIZE ? "minimize" : "maximize";
+				const auto &objective = *node.compiled.objective;
+				const auto expected_parts = objective.terms.size() + objective.bilinear_terms.size() +
+				                            (!objective.squared_terms.empty() ? 1 : 0);
+				if (objective_sense == DecideSense::FEASIBILITY || node.algebra->kind != DecideAlgebraKind::OPERATOR ||
+				    node.algebra->operation != expected_sense || node.algebra->children.size() != 1 ||
+				    !node.algebra->children[0] || node.algebra->children[0]->kind != DecideAlgebraKind::OPERATOR ||
+				    node.algebra->children[0]->operation != "+" ||
+				    node.algebra->children[0]->children.size() != expected_parts ||
+				    objective.has_quadratic != !objective.squared_terms.empty()) {
+					throw InternalException("DECIDE tree objective node %llu has an invalid algebra", i);
+				}
+				if (objective.has_quadratic) {
+					auto &squares = *node.algebra->children[0]->children[objective.terms.size() +
+					                                                        objective.bilinear_terms.size()];
+					if (squares.kind != DecideAlgebraKind::OPERATOR || squares.operation != "square_sum" ||
+					    squares.scale != objective.quadratic_sign ||
+					    squares.children.size() != objective.squared_terms.size()) {
+						throw InternalException("DECIDE tree objective node %llu has invalid square algebra", i);
+					}
+				}
+			}
 			if (node.link != DConstants::INVALID_INDEX && node.frame == DConstants::INVALID_INDEX &&
 			    node.kind == DecideNodeKind::REDUCER &&
 			    (node.algebra->kind != DecideAlgebraKind::OPERATOR || node.algebra->operation != node.aggregate ||
@@ -2380,6 +2457,9 @@ void DecideTree::Validate() const {
 		}
 		if (node.compiled.clause && !node.algebra) {
 			throw InternalException("DECIDE tree clause node %llu has no algebra", i);
+		}
+		if (node.compiled.objective && !node.algebra) {
+			throw InternalException("DECIDE tree objective node %llu has no algebra", i);
 		}
 		if (node.kind == DecideNodeKind::FUNCTION && node.body && !node.algebra) {
 			throw InternalException("DECIDE tree function node %llu has no algebra", i);

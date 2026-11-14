@@ -1339,8 +1339,22 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 		return;
 	}
 	const auto root = *found;
-	auto &body = tree.nodes[root]->compiled;
+	auto &node = *tree.nodes[root];
+	auto &body = node.compiled;
 	auto &objective = *body.objective;
+	const auto expected_sense = op.decide_sense == DecideSense::MINIMIZE ? "minimize" : "maximize";
+	if (!node.algebra || node.algebra->kind != DecideAlgebraKind::OPERATOR ||
+	    node.algebra->operation != expected_sense || node.algebra->children.size() != 1 ||
+	    !node.algebra->children[0] || node.algebra->children[0]->kind != DecideAlgebraKind::OPERATOR ||
+	    node.algebra->children[0]->operation != "+") {
+		throw InternalException("DECIDE model emitter: objective E node has no direction and sum algebra");
+	}
+	auto &sum_formula = *node.algebra->children[0];
+	const auto expected_parts = objective.terms.size() + objective.bilinear_terms.size() +
+	                            (!objective.squared_terms.empty() ? 1 : 0);
+	if (sum_formula.children.size() != expected_parts) {
+		throw InternalException("DECIDE model emitter: objective E node has an incomplete sum algebra");
+	}
 	auto &container = descent.Containers()[root];
 	// The objective is produced once (D72): a second variant over its kept rows would be a second objective, which
 	// flat checks before it reads any clause.
@@ -1366,31 +1380,48 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 	for (auto &read : container.routed) {
 		marked[read.first] = true;
 	}
-	evaluated.linear_filters = ObjectiveTerms(
-	    root, objective.terms, body.linear, gstate.evaluated_objective_coefficients, gstate.objective_variable_indices);
+	evaluated.linear_filters = ObjectiveTerms(root, sum_formula, 0, objective.terms, body.linear,
+	                                          gstate.evaluated_objective_coefficients,
+	                                          gstate.objective_variable_indices);
 	// A term outside every reducer counts once, on the first row the objective keeps.
 	CountTupleTermsOnce(objective.terms, gstate.evaluated_objective_coefficients, &kept, num_rows);
 	// Each squared term lies in a reducer, and is read as a term there is.
 	if (objective.has_quadratic) {
+		if (objective.squared_terms.empty() || sum_formula.children[objective.terms.size() +
+		                                                        objective.bilinear_terms.size()]->operation !=
+		                                            "square_sum") {
+			throw InternalException("DECIDE model emitter: objective E node has no square-sum operator");
+		}
+		auto &square_formula = *sum_formula.children[objective.terms.size() + objective.bilinear_terms.size()];
+		if (square_formula.scale != objective.quadratic_sign ||
+		    square_formula.children.size() != objective.squared_terms.size()) {
+			throw InternalException("DECIDE model emitter: objective square algebra disagrees with its terms");
+		}
 		gstate.has_quadratic_objective = true;
-		gstate.quadratic_sign = objective.quadratic_sign;
-		evaluated.quadratic_filters =
-		    ObjectiveTerms(root, objective.squared_terms, body.squares[0], gstate.evaluated_quadratic_coefficients,
-		                   gstate.quadratic_variable_indices);
+		gstate.quadratic_sign = square_formula.scale;
+		evaluated.quadratic_filters = ObjectiveTerms(root, square_formula, 0, objective.squared_terms,
+	                                              body.squares[0], gstate.evaluated_quadratic_coefficients,
+	                                              gstate.quadratic_variable_indices);
 	}
 	// A product is read as a term is, on the members of the G it ranges over or on each row the objective keeps, but
 	// stage 05 dropped none of its rows for a decision with no instance (DropNullObjectiveTerms), so none is dropped
 	// here; one outside every reducer counts once.
 	auto &products = objective.bilinear_terms;
 	evaluated.bilinear_filters.resize(products.size());
-	for (idx_t i = 0; i < products.size(); i++) {
+	for (idx_t position = 0; position < products.size(); position++) {
+		const auto i = ClauseTermSource(*sum_formula.children[objective.terms.size() + position], products.size(),
+		                                "objective bilinear");
+		auto &algebra_term = *sum_formula.children[objective.terms.size() + position];
+		if (i != position) {
+			throw InternalException("DECIDE model emitter: objective product ordering differs from its algebra");
+		}
 		auto &product = products[i];
 		auto &site = body.products[i];
 		auto &filter = evaluated.bilinear_filters[i];
 		const auto &tested = columns.Tested(site.node);
 		// Stage 05 leaves a coefficient of 1 out.
 		auto numbers = site.program == DConstants::INVALID_INDEX
-		                   ? vector<double>(tested.size(), double(product.sign))
+		                   ? vector<double>(tested.size(), double(algebra_term.sign))
 		                   : columns.Numbers(site.node, site.program, tested, nullptr, &site, &product.inputs);
 		EvaluatedConstraint::BilinearTerm column {product.var_a, product.var_b, CoefficientColumn()};
 		column.row_coefficients.AssignDense(num_rows);
@@ -1409,14 +1440,22 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 	CountProductsOnce(products, gstate.evaluated_bilinear_terms, &kept, num_rows);
 }
 
-vector<TermFilterState> DecideModelEmitter::ObjectiveTerms(idx_t root, const vector<DecideTerm> &terms,
-                                                           const vector<DecideTermSite> &sites,
-                                                           vector<CoefficientColumn> &coefficients,
-                                                           vector<idx_t> &variables) {
+vector<TermFilterState> DecideModelEmitter::ObjectiveTerms(idx_t root, const DecideAlgebraNode &formula,
+	                                                       idx_t formula_offset, const vector<DecideTerm> &terms,
+	                                                       const vector<DecideTermSite> &sites,
+	                                                       vector<CoefficientColumn> &coefficients,
+	                                                       vector<idx_t> &variables) {
+	if (formula.kind != DecideAlgebraKind::OPERATOR || formula_offset + terms.size() > formula.children.size()) {
+		throw InternalException("DECIDE model emitter: objective term list has no aligned algebra");
+	}
 	auto &container = descent.Containers()[root];
 	vector<TermFilterState> filters(terms.size());
 	coefficients.resize(terms.size());
-	for (idx_t t = 0; t < terms.size(); t++) {
+	for (idx_t position = 0; position < terms.size(); position++) {
+		const auto t = ClauseTermSource(*formula.children[formula_offset + position], terms.size(), "objective");
+		if (t != position) {
+			throw InternalException("DECIDE model emitter: objective term ordering differs from its algebra");
+		}
 		auto &term = terms[t];
 		auto &site = sites[t];
 		auto &filter = filters[t];
