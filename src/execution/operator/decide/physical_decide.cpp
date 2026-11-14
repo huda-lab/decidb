@@ -1285,6 +1285,11 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     // otherwise-unbounded variables from non-negative `<=`/`=` constraints (the
     // knapsack/budget pattern), so the downstream Big-M can be finite and tight.
     // Only provably-implied bounds are applied; the feasible region is unchanged.
+	// Seed reducer-value bounds first: a SUM/MAX helper over nonnegative decisions is itself nonnegative, which lets
+	// this pass safely propagate a root equality's finite upper bound back through nested helpers.
+	if (!solver_input.reducer_value_links.empty()) {
+		DeriveReducerValueBounds(solver_input, out_var_indexer);
+	}
     DecidePropagateImpliedBounds(solver_input, out_var_indexer, num_rows);
 	SyncFrameReadBoxes(solver_input);
 	phase.Next("assembly.objective_and_avg");
