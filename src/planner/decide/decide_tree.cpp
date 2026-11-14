@@ -1920,6 +1920,7 @@ private:
 			node.value_link_label = link.label;
 			node.value_link_needs_envelope = link.need_envelope;
 			node.value_link_needs_closing = link.need_closing;
+			node.value_link_qualifier_scope = link.qualifier_scope_idx;
 			node.decision_value = true;
 			if (link.value_var < tree->value_nodes.size()) {
 				tree->value_nodes[link.value_var] = index;
@@ -1935,6 +1936,7 @@ private:
 		node.value_link_label = link.label;
 		node.value_link_needs_envelope = link.need_envelope;
 		node.value_link_needs_closing = link.need_closing;
+		node.value_link_qualifier_scope = link.qualifier_scope_idx;
 		node.key = link.group_key;
 		node.text = link.label;
 		node.decision_value = true;
@@ -2669,13 +2671,18 @@ void DecideTree::Validate() const {
 			throw InternalException("DECIDE tree node %llu has an invalid key", i);
 		}
 		if (node.link == DConstants::INVALID_INDEX) {
-			if (!node.value_link_label.empty() || node.value_link_needs_envelope || node.value_link_needs_closing) {
+			if (!node.value_link_label.empty() || node.value_link_needs_envelope || node.value_link_needs_closing ||
+			    node.value_link_qualifier_scope != DConstants::INVALID_INDEX) {
 				throw InternalException("DECIDE tree node %llu has detached value-link metadata", i);
 			}
 		} else if (node.value_var >= value_nodes.size() || value_nodes[node.value_var] != i ||
 		           node.value_link_label.empty() ||
 		           (node.kind != DecideNodeKind::REDUCER && node.kind != DecideNodeKind::FRAME) ||
-		           (node.kind == DecideNodeKind::FRAME) != (node.frame != DConstants::INVALID_INDEX)) {
+		           (node.kind == DecideNodeKind::FRAME) != (node.frame != DConstants::INVALID_INDEX) ||
+		           (node.value_link_qualifier_scope != DConstants::INVALID_INDEX &&
+		            node.value_link_qualifier_scope >= keyed_scopes.size()) ||
+		           (node.kind == DecideNodeKind::FRAME &&
+		            node.value_link_qualifier_scope != DConstants::INVALID_INDEX)) {
 			throw InternalException("DECIDE tree node %llu has invalid value-link ownership", i);
 		}
 		if (node.compiled.clause && !node.algebra) {

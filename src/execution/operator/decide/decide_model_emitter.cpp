@@ -486,8 +486,7 @@ DecideModelEmitter::LinkMembers DecideModelEmitter::Members(idx_t link) {
 			members.reads[e] = members.reads[e] && !columns.TermAbsentAt(term, entries.rows[e]);
 		}
 	}
-	const auto qualified =
-	    op.reducer_value_links[tree.nodes[link]->link].qualifier_scope_idx != DConstants::INVALID_INDEX;
+	const auto qualified = tree.nodes[link]->value_link_qualifier_scope != DConstants::INVALID_INDEX;
 	vector<bool> held(slots.size(), false);
 	for (auto &read :
 	     ReadRows(site, qualified ? columns.FirstOfEachInstance(site, members.reads) : members.reads, qualified)) {
@@ -1956,6 +1955,7 @@ void DecideModelEmitter::ValueLinks() {
 		    tree_node.value_link_label != link.label ||
 		    tree_node.value_link_needs_envelope != link.need_envelope ||
 		    tree_node.value_link_needs_closing != link.need_closing ||
+		    tree_node.value_link_qualifier_scope != link.qualifier_scope_idx ||
 		    tree_node.frame != link.frame) {
 			throw InternalException("DECIDE model emitter: G/O node %llu disagrees with its value-link source", node);
 		}
