@@ -367,11 +367,12 @@ references, `tests/_expected.py`, were recorded from flat's runs):
   has no arm, since no query reaches it: its leaving out of a hard MIN's or MAX's group a row its terms' filters all
   drop (its terms share one reducer's members, so no row the tree emits is one). A reducer's member reading an
   auxiliary with no value, which flat skipped the group of a clause in the aggregate shape for, is a helper's member in
-  every probe, which the helper leaves out. Two differences are
-  open, each where no query is known to reach it: an objective term
-  reads an auxiliary's absence at its entry's first row rather than on each row the entry stands for (`ReadEntries`),
-  which differs where the absence varies inside an entry; and a variant whose first row D88 moves to a later row of its
-  entry is named by the entry's first row.
+  every probe, which the helper leaves out. Objective terms check an auxiliary's value on each row an E entry stands
+  for, so absence on the entry's first row no longer masks a value on another row (`ReadEntries`). Their coefficient
+  programs are read on the term site's rows before a relation-qualified reducer selects its classes; an invalid
+  coefficient on a row in no class still raises, as flat's does (`ObjectiveTerms`, `ReadInReducer`). One difference
+  remains open, where no query is known to reach it: a variant whose first row D88 moves to a later row of its entry
+  is named by the entry's first row.
 
 No side plan is planned: the tree folds the data reducers in the bottom-up pass. Flat's side plan read a clause's
 `when` on every row, with the data reducer's arguments it gates, before the query's other reads; the tree reads the
