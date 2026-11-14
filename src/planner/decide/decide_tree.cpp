@@ -968,7 +968,18 @@ public:
 					sum->children.push_back(
 					    AlgebraComposed(index, op.composed_minmax_objective_terms, body.composed));
 				}
-				objective->children.push_back(std::move(sum));
+				if (op.flat_objective_agg == ObjectiveAggregateType::MIN_AGG ||
+				    op.flat_objective_agg == ObjectiveAggregateType::MAX_AGG) {
+					auto extremum = make_uniq<DecideAlgebraNode>();
+					extremum->kind = DecideAlgebraKind::OPERATOR;
+					extremum->owner = index;
+					extremum->operation = op.flat_objective_agg == ObjectiveAggregateType::MIN_AGG ? "min" : "max";
+					extremum->is_easy = op.flat_objective_is_easy;
+					extremum->children.push_back(std::move(sum));
+					objective->children.push_back(std::move(extremum));
+				} else {
+					objective->children.push_back(std::move(sum));
+				}
 				node.algebra = std::move(objective);
 				continue;
 			}
@@ -2432,10 +2443,29 @@ void DecideTree::Validate() const {
 				const auto expected_parts = direct_parts + (!node.compiled.composed.empty() ? 1 : 0);
 				if (objective_sense == DecideSense::FEASIBILITY || node.algebra->kind != DecideAlgebraKind::OPERATOR ||
 				    node.algebra->operation != expected_sense || node.algebra->children.size() != 1 ||
-				    !node.algebra->children[0] || node.algebra->children[0]->kind != DecideAlgebraKind::OPERATOR ||
-				    node.algebra->children[0]->operation != "+" ||
-				    node.algebra->children[0]->children.size() != expected_parts) {
+				    !node.algebra->children[0] || node.algebra->children[0]->kind != DecideAlgebraKind::OPERATOR) {
 					throw InternalException("DECIDE tree objective node %llu has an invalid algebra", i);
+				}
+				const auto &objective_value = *node.algebra->children[0];
+				const DecideAlgebraNode *sum = nullptr;
+				if (objective_value.operation == "+") {
+					sum = &objective_value;
+				} else if ((objective_value.operation == "min" || objective_value.operation == "max") &&
+				           objective_value.children.size() == 1 && objective_value.children[0] &&
+				           objective_value.children[0]->kind == DecideAlgebraKind::OPERATOR &&
+				           objective_value.children[0]->operation == "+") {
+					const bool expected_easy =
+					    (objective_value.operation == "max" && objective_sense == DecideSense::MINIMIZE) ||
+					    (objective_value.operation == "min" && objective_sense == DecideSense::MAXIMIZE);
+					if (objective_value.is_easy != expected_easy) {
+						throw InternalException("DECIDE tree objective node %llu has an invalid extremum direction", i);
+					}
+					sum = objective_value.children[0].get();
+				} else {
+					throw InternalException("DECIDE tree objective node %llu has an invalid value operator", i);
+				}
+				if (sum->children.size() != expected_parts) {
+					throw InternalException("DECIDE tree objective node %llu has an invalid sum algebra", i);
 				}
 				if (node.compiled.objective) {
 					const auto &objective = *node.compiled.objective;
@@ -2443,8 +2473,7 @@ void DecideTree::Validate() const {
 						throw InternalException("DECIDE tree objective node %llu has inconsistent quadratic terms", i);
 					}
 					if (objective.has_quadratic) {
-						auto &squares = *node.algebra->children[0]->children[objective.terms.size() +
-						                                                        objective.bilinear_terms.size()];
+						auto &squares = *sum->children[objective.terms.size() + objective.bilinear_terms.size()];
 						if (squares.kind != DecideAlgebraKind::OPERATOR || squares.operation != "square_sum" ||
 						    squares.scale != objective.quadratic_sign ||
 						    squares.children.size() != objective.squared_terms.size()) {
@@ -2453,7 +2482,7 @@ void DecideTree::Validate() const {
 					}
 				}
 				if (!node.compiled.composed.empty()) {
-					auto &composed = *node.algebra->children[0]->children.back();
+					auto &composed = *sum->children.back();
 					if (composed.kind != DecideAlgebraKind::OPERATOR || composed.operation != "composed_sum" ||
 					    composed.children.size() != node.compiled.composed.size()) {
 						throw InternalException("DECIDE tree objective node %llu has invalid composed algebra", i);

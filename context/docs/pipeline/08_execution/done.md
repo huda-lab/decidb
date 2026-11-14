@@ -395,8 +395,9 @@ passes.
 **Node-owned algebra transition.** Each tree node now retains an operator tree: comparisons, objectives and terms on
 E, reducer operators and member terms on G, frame operators and members on O, and output-to-body relations on F. Its
 leaves identify decision variables, child-node values and compiled data programs. The E emitter reads clause
-comparisons, RHS programs, term order and coefficient programs from that algebra; assembly sets the solver's objective
-sense from the objective E node. Composed MIN/MAX E nodes also own their
+comparisons, RHS programs, term order and coefficient programs from that algebra. A flat MIN/MAX objective appears as
+a reducer operator on its objective E node; assembly derives the solver sense and stage 06's MIN/MAX objective spec
+from the objective algebra. Composed MIN/MAX E nodes also own their
 comparison, bound expression, ordered reducer references and query-wide scales; the emitter follows those references
 to the corresponding G nodes. The G/O emitter walks nodes in children-first order and uses their algebra plus
 node-owned helper direction and labels to build stage 06's member records. F output links and Boolean-product factors

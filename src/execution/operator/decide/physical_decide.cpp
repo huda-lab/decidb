@@ -93,6 +93,41 @@ static DecideSense TreeObjectiveSense(const DecideTree &tree) {
 	throw InternalException("DECIDE objective E node has an unknown direction: %s", objective->algebra->operation);
 }
 
+static const DecideAlgebraNode *TreeObjectiveReducer(const DecideTree &tree) {
+	const DecideNode *objective = nullptr;
+	for (auto root : tree.roots) {
+		if (tree.nodes[root]->objective) {
+			objective = tree.nodes[root].get();
+			break;
+		}
+	}
+	if (!objective) {
+		return nullptr;
+	}
+	if (!objective->algebra || objective->algebra->kind != DecideAlgebraKind::OPERATOR ||
+	    objective->algebra->children.size() != 1 || !objective->algebra->children[0] ||
+	    objective->algebra->children[0]->kind != DecideAlgebraKind::OPERATOR) {
+		throw InternalException("DECIDE objective E node has no aggregate algebra");
+	}
+	const auto &value = *objective->algebra->children[0];
+	if (value.operation == "+") {
+		return nullptr;
+	}
+	if ((value.operation == "min" || value.operation == "max") && value.children.size() == 1 &&
+	    value.children[0] && value.children[0]->kind == DecideAlgebraKind::OPERATOR &&
+	    value.children[0]->operation == "+") {
+		return &value;
+	}
+	throw InternalException("DECIDE objective E node has an unknown aggregate operator: %s", value.operation);
+}
+
+static ObjectiveAggregateType TreeFlatObjectiveAggregate(const DecideTree &tree) {
+	const auto *reducer = TreeObjectiveReducer(tree);
+	return !reducer ? ObjectiveAggregateType::NONE
+	       : reducer->operation == "min" ? ObjectiveAggregateType::MIN_AGG
+	                                      : ObjectiveAggregateType::MAX_AGG;
+}
+
 //! Input column `column`'s rows grouped by value as GROUP BY groups them, NULL as a value (DecideKeyMap), in a scan of
 //! their own: each row's group, and each group's value, numbered in the order the rows first read them. The diagnosis
 //! orders what it reports itself (by escape rate, column and value), so no group's number reaches a message.
@@ -1304,7 +1339,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	for (auto &bound : gstate.user_singleton_row_bounds) {
 		held.push_back(bound.decide_var_idx);
 	}
-	if (flat_objective_agg != ObjectiveAggregateType::NONE) {
+	if (TreeFlatObjectiveAggregate(*tree) != ObjectiveAggregateType::NONE) {
 		held.insert(held.end(), solver_input.objective_variable_indices.begin(),
 		            solver_input.objective_variable_indices.end());
 	}
@@ -1534,8 +1569,9 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
     // evaluated plus the flat column space, and needs no row of its own.
     phase.Next("formulation.minmax_objective");
     MinMaxObjectiveSpec minmax_objective_spec;
-    minmax_objective_spec.flat_agg = flat_objective_agg;
-    minmax_objective_spec.flat_is_easy = flat_objective_is_easy;
+	const auto *objective_reducer = TreeObjectiveReducer(*tree);
+	minmax_objective_spec.flat_agg = TreeFlatObjectiveAggregate(*tree);
+	minmax_objective_spec.flat_is_easy = objective_reducer ? objective_reducer->is_easy : false;
 	{
 		// The rows the objective's reducer reads -- its terms' filters, the objective's
 		// `when` folded in -- are its members, whatever their coefficients.

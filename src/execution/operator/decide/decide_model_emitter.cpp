@@ -179,17 +179,28 @@ static vector<idx_t> AlgebraDecisionLeaves(const DecideAlgebraNode &root) {
 	return result;
 }
 
+static const DecideAlgebraNode &ObjectiveSumFormula(const DecideNode &node) {
+	if (!node.objective || !node.algebra || node.algebra->kind != DecideAlgebraKind::OPERATOR ||
+	    (node.algebra->operation != "minimize" && node.algebra->operation != "maximize") ||
+	    node.algebra->children.size() != 1 || !node.algebra->children[0] ||
+	    node.algebra->children[0]->kind != DecideAlgebraKind::OPERATOR) {
+		throw InternalException("DECIDE model emitter: objective E node has no value algebra");
+	}
+	const auto &value = *node.algebra->children[0];
+	if (value.operation == "+") {
+		return value;
+	}
+	if ((value.operation == "min" || value.operation == "max") && value.children.size() == 1 && value.children[0] &&
+	    value.children[0]->kind == DecideAlgebraKind::OPERATOR && value.children[0]->operation == "+") {
+		return *value.children[0];
+	}
+	throw InternalException("DECIDE model emitter: objective E node has an invalid value operator");
+}
+
 static const DecideAlgebraNode &ComposedTermsFormula(const DecideNode &node) {
 	const DecideAlgebraNode *formula = nullptr;
 	if (node.objective) {
-		if (!node.algebra || node.algebra->kind != DecideAlgebraKind::OPERATOR ||
-		    (node.algebra->operation != "minimize" && node.algebra->operation != "maximize") ||
-		    node.algebra->children.size() != 1 || !node.algebra->children[0] ||
-		    node.algebra->children[0]->kind != DecideAlgebraKind::OPERATOR ||
-		    node.algebra->children[0]->operation != "+") {
-			throw InternalException("DECIDE model emitter: composed objective has no E algebra");
-		}
-		const auto &sum = *node.algebra->children[0];
+		const auto &sum = ObjectiveSumFormula(node);
 		const auto direct_parts = node.compiled.objective
 		                              ? node.compiled.objective->terms.size() +
 		                                    node.compiled.objective->bilinear_terms.size() +
@@ -1539,11 +1550,10 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 	const auto expected_sense = op.decide_sense == DecideSense::MINIMIZE ? "minimize" : "maximize";
 	if (!node.algebra || node.algebra->kind != DecideAlgebraKind::OPERATOR ||
 	    node.algebra->operation != expected_sense || node.algebra->children.size() != 1 ||
-	    !node.algebra->children[0] || node.algebra->children[0]->kind != DecideAlgebraKind::OPERATOR ||
-	    node.algebra->children[0]->operation != "+") {
-		throw InternalException("DECIDE model emitter: objective E node has no direction and sum algebra");
+	    !node.algebra->children[0] || node.algebra->children[0]->kind != DecideAlgebraKind::OPERATOR) {
+		throw InternalException("DECIDE model emitter: objective E node has no direction algebra");
 	}
-	auto &sum_formula = *node.algebra->children[0];
+	const auto &sum_formula = ObjectiveSumFormula(node);
 	const auto expected_parts = objective.terms.size() + objective.bilinear_terms.size() +
 	                            (!objective.squared_terms.empty() ? 1 : 0) + (!node.compiled.composed.empty() ? 1 : 0);
 	if (sum_formula.children.size() != expected_parts) {
