@@ -388,6 +388,7 @@ public:
 
     explicit DecideLocalSinkState(ClientContext &context, const PhysicalDecide &op)
 	    : data(context, op.children[0]->GetTypes()) {
+		first_input_row.Initialize(context, op.children[0]->GetTypes(), 1);
 		data.InitializeAppend(append_state);
 		if (auto setting = std::getenv("DECIDB_DESCENT_SPLIT")) {
 			char *end = nullptr;
@@ -397,6 +398,8 @@ public:
 			}
 		}
     }
+	DataChunk first_input_row;
+	bool has_first_input_row = false;
 };
 
 //! A thread's rows placed after those already placed, and its descent kept with the row they start at, which
@@ -407,6 +410,10 @@ static void MergeDecideDescent(DecideGlobalSinkState &gstate, DecideLocalSinkSta
 		return;
 	}
 	lock_guard<mutex> guard(gstate.lock);
+	if (!gstate.has_first_input_row && lstate.has_first_input_row) {
+		lstate.first_input_row.Copy(gstate.first_input_row);
+		gstate.has_first_input_row = true;
+	}
 	const auto offset = gstate.data.Count();
 	gstate.data.Combine(lstate.data);
 	lstate.data.InitializeAppend(lstate.append_state);
@@ -427,6 +434,12 @@ unique_ptr<LocalSinkState> PhysicalDecide::GetLocalSinkState(ExecutionContext &c
 static void SinkDecideRows(const DecideTree &tree, ClientContext &context, DecideGlobalSinkState &gstate,
                            DecideLocalSinkState &lstate, DataChunk &chunk) {
 	const auto row_base = lstate.data.Count();
+	if (chunk.size() > 0 && !lstate.has_first_input_row) {
+		SelectionVector first_row(1);
+		first_row.set_index(0, 0);
+		chunk.Copy(lstate.first_input_row, first_row, 1);
+		lstate.has_first_input_row = true;
+	}
 	lstate.data.Append(lstate.append_state, chunk);
 	if (!lstate.descent) {
 		lstate.descent = make_uniq<DecideDescent>(tree, context);
@@ -441,17 +454,6 @@ SinkResultType PhysicalDecide::Sink(ExecutionContext &context, DataChunk &chunk,
     auto &lstate = input.local_state.Cast<DecideLocalSinkState>();
     auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
     DecideProfileSample profile(lstate.profile_sink);
-	// Query-wide factors are invariant across the input by construction. Keep one source row while it is already in
-	// hand, so Finalize need not fetch it again from the materialized relation after the descent has read the chunk.
-	if (chunk.size() > 0) {
-		lock_guard<mutex> guard(gstate.lock);
-		if (!gstate.has_first_input_row) {
-			SelectionVector first_row(1);
-			first_row.set_index(0, 0);
-			chunk.Copy(gstate.first_input_row, first_row, 1);
-			gstate.has_first_input_row = true;
-		}
-	}
 	// Top-down (language/guide.md §6.1): the thread's descent reads each chunk as it arrives; one split finer than
 	// the chunk reads it a piece at a time, each merged as a thread of its own would be.
 	if (chunk.size() <= lstate.split) {
