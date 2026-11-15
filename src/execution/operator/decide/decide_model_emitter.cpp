@@ -2437,8 +2437,8 @@ void DecideModelEmitter::ExpandClauseValues() {
 
 void DecideModelEmitter::ExpandClauseValue(idx_t root, EvaluatedConstraint &clause,
                                            const vector<idx_t> &link_by_node) {
-	// First migrate the deck's pure linear E rows. The nonlinear row families keep their established lowering until
-	// their node-owned formulations have their own records.
+	// Migrate aggregate E rows with G children. SUM/AVG values compose into their parent terms; MIN/MAX stay as explicit
+	// G-value terms. Other nonlinear row families keep their established lowering until node-owned records exist.
 	if (!clause.lhs_is_aggregate || !clause.bilinear_terms.empty() || clause.has_quadratic ||
 	    !clause.minmax_agg_type.empty() ||
 	    clause.ne_clause_idx != DConstants::INVALID_INDEX || clause.abs_aux_idx != DConstants::INVALID_INDEX ||
@@ -2453,18 +2453,23 @@ void DecideModelEmitter::ExpandClauseValue(idx_t root, EvaluatedConstraint &clau
 	const auto is_linear = [](const ReducerValueLinkSpec &link) {
 		return !link.frame && (link.agg_name == "sum" || link.agg_name == "avg");
 	};
-	bool has_linear_child = false;
+	const auto is_reducer_value = [](const ReducerValueLinkSpec &link) {
+		return !link.frame && (link.agg_name == "sum" || link.agg_name == "avg" || link.agg_name == "min" ||
+		                      link.agg_name == "max");
+	};
+	bool has_child_reducer = false;
 	for (idx_t term = 0; term < clause.variable_indices.size(); term++) {
 		const auto node = clause.value_nodes[term];
 		if (node < link_by_node.size()) {
 			const auto link = link_by_node[node];
-			if (link < links.size() && is_linear(links[link]) && clause.variable_indices[term] == links[link].value_var) {
-				has_linear_child = true;
+			if (link < links.size() && is_reducer_value(links[link]) &&
+			    clause.variable_indices[term] == links[link].value_var) {
+				has_child_reducer = true;
 				break;
 			}
 		}
 	}
-	if (!has_linear_child) {
+	if (!has_child_reducer) {
 		return;
 	}
 	if (!keyed_mappings) {
@@ -2596,7 +2601,7 @@ void DecideModelEmitter::ExpandClauseValue(idx_t root, EvaluatedConstraint &clau
 					const auto link_index = value_node < link_by_node.size() ? link_by_node[value_node]
 					                                                    : DConstants::INVALID_INDEX;
 					if (link_index == DConstants::INVALID_INDEX || link_index >= links.size() ||
-					    !is_linear(links[link_index])) {
+					    !is_reducer_value(links[link_index])) {
 						node_rows.terms.push_back(NodeLinearRowTerm {variable, row, coefficient, value_node});
 						continue;
 					}
@@ -2604,7 +2609,11 @@ void DecideModelEmitter::ExpandClauseValue(idx_t root, EvaluatedConstraint &clau
 						throw InternalException("DECIDE model emitter: E node %llu has a mismatched child value", root);
 					}
 					expanded = true;
-					append_link(link_index, row, coefficient, 0);
+					if (is_linear(links[link_index])) {
+						append_link(link_index, row, coefficient, 0);
+					} else {
+						node_rows.terms.push_back(NodeLinearRowTerm {variable, row, coefficient, value_node});
+					}
 				}
 			}
 		}
