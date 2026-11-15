@@ -321,8 +321,17 @@ static void AppendDecideDescent(DecideDescent &descent, DataChunk &chunk, idx_t 
 		}
 		chunk_size = size;
 	}
+	// DECIDB_DUMP_STEPS: the containers after each piece, the deck's animation at chunk size 1 (DecideDescent::Step).
+	const bool steps = std::getenv("DECIDB_DUMP_STEPS") != nullptr;
+	auto append = [&](DataChunk &piece, idx_t base) {
+		descent.Append(piece, base);
+		if (steps) {
+			fprintf(stderr, "DECIDB_STEP_BEGIN %llu\n%sDECIDB_STEP_END\n", (unsigned long long)(base + piece.size()),
+			        descent.Step().c_str());
+		}
+	};
 	if (chunk.size() <= chunk_size) {
-		descent.Append(chunk, row_base);
+		append(chunk, row_base);
 		return;
 	}
 	for (idx_t first = 0; first < chunk.size(); first += chunk_size) {
@@ -334,7 +343,7 @@ static void AppendDecideDescent(DecideDescent &descent, DataChunk &chunk, idx_t 
 			selected.set_index(row, first + row);
 		}
 		slice.Slice(chunk, selected, count);
-		descent.Append(slice, row_base + first);
+		append(slice, row_base + first);
 	}
 }
 

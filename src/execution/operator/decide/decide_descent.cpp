@@ -2269,6 +2269,63 @@ void DecideDescent::Finish() {
 	finished = true;
 }
 
+string DecideDescent::Step() const {
+	std::ostringstream out;
+	auto print = [&](const vector<Value> &values) {
+		out << "(";
+		for (idx_t i = 0; i < values.size(); i++) {
+			out << (i ? ", " : "") << values[i].ToString();
+		}
+		out << ")";
+	};
+	for (idx_t n = 0; n < containers.size(); n++) {
+		auto &container = containers[n];
+		auto &node = *tree.nodes[n];
+		auto &groups = container.groups;
+		const auto kind = node.kind == DecideNodeKind::SCOPE       ? "E"
+		                  : node.kind == DecideNodeKind::REDUCER   ? "G"
+		                  : node.kind == DecideNodeKind::FRAME     ? "O"
+		                                                           : "F";
+		out << "node " << n << " " << kind << ":";
+		if (groups.per_row) {
+			// An E per row: its entries, each its row and signature (p. 91's `(1, x1)`).
+			for (idx_t e = 0; e < container.Count(); e++) {
+				out << " " << container.rows[e] << ":";
+				print(Signature(n, e));
+			}
+			out << "\n";
+			continue;
+		}
+		for (idx_t slot = 0; slot < groups.size(); slot++) {
+			out << " ";
+			const auto parent = groups.parent_slots[slot];
+			if (parent != DConstants::INVALID_INDEX && node.parent != DConstants::INVALID_INDEX) {
+				print(containers[node.parent].groups.Key(parent));
+				out << "/";
+			}
+			print(groups.Key(slot));
+			out << " -> {";
+			bool first = true;
+			for (idx_t e = 0; e < container.Count(); e++) {
+				if (container.Slot(e) != slot) {
+					continue;
+				}
+				out << (first ? "" : ", ") << container.rows[e];
+				if (node.kind == DecideNodeKind::FRAME) {
+					out << "@" << container.Order(e).ToString();
+				} else if (IsScopeNode(node)) {
+					out << ":";
+					print(Signature(n, e));
+				}
+				first = false;
+			}
+			out << "}";
+		}
+		out << "\n";
+	}
+	return out.str();
+}
+
 string DecideDescent::Dump() const {
 	std::ostringstream out;
 	for (idx_t n = 0; n < containers.size(); n++) {

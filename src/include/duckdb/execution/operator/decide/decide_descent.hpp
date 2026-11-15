@@ -238,6 +238,10 @@ public:
 	//! column as it groups. Complete once every row is appended.
 	vector<Value> Label(idx_t key, const vector<Value> &group) const;
 	string Dump() const;
+	//! The containers as the rows appended so far left them, in the deck's notation (pp. 83-91, 100-105), before Finish
+	//! numbers anything: per node each slot, under its enclosing slot, with the rows its entries hold, or a node per
+	//! row's entries with their signatures. At chunk size 1 a step per row is the deck's animation (DECIDB_DUMP_STEPS).
+	string Step() const;
 	const DecideErrorLedger &Errors() const {
 		return errors;
 	}

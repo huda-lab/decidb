@@ -467,7 +467,10 @@ the plan's L6 over every deck case at chunk sizes 1 and 2048: a root reads every
 exactly what its parent passed on, and one more paths reach reads each (row, enclosing slot) once. Before the first row,
 `DecideDescent::RequireRowReads` checks L2: every expression the descent reads (`when` parts, carried and program
 columns, signature values, a frame's order, each key's elements) reads only the row, no aggregate, window or subquery
-and no column past the input's. `DECIDB_DESCENT_CHUNK` sets the descent's chunk size;
+and no column past the input's. `DECIDB_DUMP_STEPS` prints the containers after each piece the descent reads
+(`DecideDescent::Step`: per node its slots under their enclosing slot, with the rows each holds), so at
+`DECIDB_DESCENT_CHUNK=1` a step per row is the deck's animation: `test_one_pass_literal.py` pins pp. 86-91 for both
+running examples and pp. 100-105 for the frame. `DECIDB_DESCENT_CHUNK` sets the descent's chunk size;
 `DECIDB_EVALUATOR_INJECT=g1`, where the tree is built, makes stage 05's hook find no node for a reducer, which is
 internal; `DECIDB_TREE_INJECT=node:data:value` replaces a G over data's fold in the columns, so a test can show a parent
 reads the bottom-up values, and refuses a node that computes no data value. Profile counters (`DECIDB_PROFILE`):
