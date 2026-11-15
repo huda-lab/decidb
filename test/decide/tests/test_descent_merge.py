@@ -53,6 +53,13 @@ MODEL_CASES = {
     # spelled in a later piece (DecideSpelling::Fold).
     "a-collated-group": f"""SELECT id, x {COLLATED} DECIDE x(BOOL)
         SUCH THAT per t.g: sum(x) by (t.g) <= 1 MAXIMIZE sum(x) ORDER BY id""",
+    # An F node per class, ABS of a group's sum: an entry per row, each an instance of its own, merged as a G's
+    # entries are (IsSetNode). It was merged as a set E's, whose reads it never recorded, and crashed.
+    "an-f-node-per-class": f"""SELECT id, x {SOURCE} DECIDE x(INT)
+        SUCH THAT x <= 3 AND abs(sum(x) by (t.g) - 3) <= 2 MAXIMIZE sum(x) ORDER BY id""",
+    # A query-wide Boolean times a query-wide sum: an F node of one instance.
+    "a-query-wide-product": f"""SELECT id, x {SOURCE} DECIDE x(INT), per (): b(BOOL)
+        SUCH THAT x <= 3 AND b * sum(x) <= 10 MAXIMIZE sum(x) + 5 * b ORDER BY id""",
     # A query-wide factor, a scalar subquery's value, read on the input's first row: the first piece's
     # (MergeDecideDescent).
     "a-query-wide-factor": f"""SELECT id, x {SOURCE} DECIDE x(INT), per (): c(INT)
@@ -81,6 +88,25 @@ def test_merged_descents_fill_the_containers_one_descent_fills(decidb_cli, tmp_p
     for rows in (1, 2):
         assert _containers(_split(cli, rows), sql) == whole, rows
         assert _split(cli, rows).dump_model(SETUP + sql, tmp_path / f"split{rows}.dump") == model, rows
+
+
+#: An F node holding its definition roots in its own slots, which hold another F: an L0 indicator per class over an
+#: ABS per class. Its slots are merged after those of the node they lie in (merge_after_enclosing); merged first, the
+#: inner F read the outer's slots before they were found, and crashed.
+F_ENCLOSES_F = f"""SELECT id, x, y {SOURCE} DECIDE x(INT), per t.k: y(INT)
+    SUCH THAT x <= 3 AND y <= 3 AND norm(y - 1, 0) <= 1 MAXIMIZE sum(x) + sum(per t.k: y) ORDER BY id"""
+
+
+def test_an_f_node_in_an_f_nodes_slots_merges_as_its_pieces_were_read(decidb_cli, tmp_path):
+    """The inner F is reached along several paths within the outer's slots, so one descent numbers its slots path by
+    path within a piece of rows: merged pieces number them as one descent reading the same pieces does, and the
+    model is the one every row read at once gives."""
+    cli = decidb_cli.without_verify_serializer()
+    model = cli.dump_model(SETUP + F_ENCLOSES_F, tmp_path / "whole.dump")
+    for rows in (1, 2):
+        pieces = cli.with_env({"DECIDB_DESCENT_CHUNK": str(rows)})
+        assert _containers(_split(cli, rows), F_ENCLOSES_F) == _containers(pieces, F_ENCLOSES_F), rows
+        assert _split(cli, rows).dump_model(SETUP + F_ENCLOSES_F, tmp_path / f"split{rows}.dump") == model, rows
 
 
 def test_a_collated_group_is_spelled_by_its_least_spelling_in_any_piece(decidb_cli):

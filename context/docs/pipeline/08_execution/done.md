@@ -138,13 +138,21 @@ references, `tests/_expected.py`, were recorded from flat's runs):
   (`execution.descent_rows` the rows read). `Combine` places the thread's buffer after the rows placed before
   (`ColumnDataCollection::Combine`), and `Finalize` merges the threads' descents at those rows
   (`DecideDescent::MergeAll`), the first thread's becoming the operator's: its rows are rebased; its keyed classes are found again by layout
-  and sort key, its slots by key -- and enclosing slot, a G's or O's before an E's -- in the operator's dictionaries,
+  and sort key, its slots by key -- and enclosing slot, each node's after those of the node its rows arrive in (a G's,
+  an O's, or an F's, which holds its definition roots in its own slots) -- in the operator's dictionaries,
   a set E's entries by slot, signature, carried columns and reads (`DecideNodeContainer::reads`), with a decision's
   instance and a read rebased as the classes, slots and rows are; a collated key's spellings fold into the least; and
   its errors take their ranks at their rebased rows (`DecideErrorLedger::Rebase`). Each is found again in the order
   the thread made it, which is its rows', so the merged containers number as one descent over every row would. An O
   two reducers' operands read takes its rows in the slots of both, which no enclosing slot tells apart: its entries
-  keep none once merged, which no reader reads. `DECIDB_DESCENT_SPLIT=n` merges every `n` rows as a thread of its own
+  keep none once merged, which no reader reads. A set E is an E per K or per () alone (`IsSetNode`): every other node,
+  an F among them, keeps an entry per row it holds, each an instance of its own, and merges as a G's entries do. An F
+  reached along several paths within another F's slots (an L0 indicator over an ABS, each per class) numbers its slots
+  path by path within each piece of rows, so its numbering follows how the rows were cut, at chunk size 1 or merged
+  one row at a time alike; the model does not. Before 2026-11-15 an F per class was laid out as a set E, which Store
+  never filled, and the inner F of that pair merged before the outer's slots: either crashed the merge of a table
+  scanned on two threads or more (`abs(sum(x) by (t.g)) <= 5` over 130,000 rows).
+  `DECIDB_DESCENT_SPLIT=n` merges every `n` rows as a thread of its own
   would (`test_descent_merge.py`; the whole suite passes under it, but for the inputs of tens of thousands of rows a
   descent per row cannot read within their time limits). It is a Composite traversal vectorized by selection, as
   DuckDB's filters hand a selection vector on: a window of the input at a time, a node's `when` parts, keys and σ fields

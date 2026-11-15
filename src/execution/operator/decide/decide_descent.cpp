@@ -23,6 +23,15 @@ static bool IsScopeNode(const DecideNode &node) {
 	return node.kind == DecideNodeKind::SCOPE || node.kind == DecideNodeKind::FUNCTION;
 }
 
+//! A set E (p. 110): an E per K or per (), whose entries are its distinct signatures under each slot, numbered as
+//! its instances, with the rows routed to them (InsertDistinct). Every other node -- an E per row, a G, an O, an F --
+//! keeps an entry per row it holds, each an instance of its own; an F's value is read row by row (FunctionAbsence),
+//! as a reducer's or a frame's is. The constructor's maps, Store and Merge all ask this, so a node's entries are laid
+//! out, stored and merged one way.
+static bool IsSetNode(const DecideNode &node) {
+	return node.kind == DecideNodeKind::SCOPE && node.per != DecideTreePer::ROW;
+}
+
 static hash_t DescentHash(idx_t parent, const vector<Value> &values) {
 	hash_t result = Hash<uint64_t>(parent);
 	for (auto &value : values) {
@@ -386,7 +395,7 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 		signature_types[n] = DescentSignatureTypes(tree, node);
 		// An entry's values: its signature's, its carried and program columns, and an O's order key and partition. An
 		// entry standing for its row alone holds no decision's instance, which the row gives.
-		const auto set = IsScopeNode(node) && node.per != DecideTreePer::ROW;
+		const auto set = IsSetNode(node);
 		auto &layout = container.layout;
 		vector<LogicalType> types;
 		idx_t value = 0;
@@ -440,7 +449,7 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 			dictionaries[node.key] = make_uniq<SharedDictionary>();
 			dictionaries[node.key]->map = make_uniq<DecideKeyMap>(context, key);
 		}
-		if (!scope) {
+		if (!IsSetNode(node)) {
 			continue;
 		}
 		// A set E: its instances by (slot, signature), its entries by those, its carried columns and its reads. A key
@@ -1416,7 +1425,7 @@ void DecideDescent::Store(idx_t node_index, DataChunk &chunk, const Reach &store
 	if (kept_count == 0) {
 		return;
 	}
-	if (node.kind == DecideNodeKind::SCOPE && node.per != DecideTreePer::ROW) {
+	if (IsSetNode(node)) {
 		// A set E's row reads the G and O nodes it depends on, its children and the helpers its decisions stand for,
 		// which another root may route later in the window. So its entries wait for every root.
 		pending.push_back(make_uniq<Pending>());
@@ -1897,10 +1906,24 @@ void DecideDescent::Merge(MergedPart &part) {
 			}
 		}
 	};
+	// A node's slots are found after those of the node its rows arrive in (enclosing), whose slots its parents name: a
+	// G's or an O's, merged first, or an F's, which holds its definition roots in its own slots.
+	vector<bool> slots_merged(tree.nodes.size(), false);
+	std::function<void(idx_t)> merge_after_enclosing = [&](idx_t n) {
+		if (slots_merged[n]) {
+			return;
+		}
+		slots_merged[n] = true;
+		const auto arriving = enclosing[n];
+		if (arriving != DConstants::INVALID_INDEX && arriving != MIXED_ENCLOSING) {
+			merge_after_enclosing(arriving);
+		}
+		merge_slots(n);
+	};
 	for (auto scopes : {false, true}) {
 		for (idx_t n = 0; n < tree.nodes.size(); n++) {
 			if (IsScopeNode(*tree.nodes[n]) == scopes) {
-				merge_slots(n);
+				merge_after_enclosing(n);
 			}
 		}
 	}
