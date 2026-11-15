@@ -529,9 +529,9 @@ channels, read off `ConstraintProvenance` and the source registry (no change to 
   nothing formats nothing). The descent keeps each group's key values and, for a collated column,
   its least spelling (`DecideDescent::Label`); the model emitter names each group by them
   (`DecideGroupKeyValues`).
-  During extraction a name holds one row of its group; `ResolveGroupNames`, once at
-  `execution.assemble_input`, maps that row to its group in the key's final grouping, over every
-  name (evaluated constraints, value links, class sets). So a group is spelled one way in every
+  A name holds its group's rank in the tree node's dictionary, which the one pass fills from every
+  row that reads the key, so every name (evaluated constraints, value links, class sets) reads
+  one numbering. So a group is spelled one way in every
   finding of a query, its least spelling over every row any clause read the key on (D69),
   whichever clause names it and in whatever order, and no row a `when` drops is evaluated to spell
   it. `Build` moves them onto `SolverModel::key_values`; every finding is written while the

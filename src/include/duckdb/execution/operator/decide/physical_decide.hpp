@@ -23,30 +23,8 @@ class DecideGlobalSinkState;
 
 class DecideDescent;
 
-//! One cached key grouping: the key's row→group assignment, groups numbered by key
-//! value, over the rows the key was computed on. A key computed once (e.g. by a
-//! constraint) is reused by every other call site that reads it (e.g. the objective,
-//! a later constraint, or a decision the key declares).
-struct PerGroupCacheEntry {
-    //! The rows the key was computed on; empty: every row.
-    vector<bool> evaluated_rows;
-    vector<idx_t> unfiltered_row_group_ids;
-    idx_t unfiltered_num_groups;
-    //! A row of each group, which a GroupName holds until assembly resolves it (ResolveGroupNames).
-    vector<idx_t> group_rows;
-    //! The key's representative values (PerGroupCache::key_values), which a message names a group by.
-    idx_t key_values = DConstants::INVALID_INDEX;
-};
 //! The time-limit report's closeness figure: `gap`, a fraction, as a percentage with two significant digits.
 string FormatDecideGapPercent(double gap);
-
-struct PerGroupCache {
-    //! Keyed by the key's index in PhysicalDecide::keys (INVALID_INDEX: the empty key).
-    std::unordered_map<idx_t, PerGroupCacheEntry> entries;
-    //! Each key's representative values, of its grouping as it stands: a rebuilt entry
-    //! replaces its key's. Moved into SolverInput::key_values once extraction is done.
-    vector<SolverInput::KeyValues> key_values;
-};
 
 //===--------------------------------------------------------------------===//
 // PhysicalDecide Operator
@@ -317,9 +295,9 @@ private:
 
     //! The evaluation (language/guide.md §6.4): the tree's descent over the input (into `descent`), each node's
     //! programs over its entries, and the model emitter, filling gstate's evaluation fields and the arguments after
-    //! `descent`, with the values its groups are named by in `per_group_cache`. It prints only when not `silent`.
+    //! `descent`, with the values its groups are named by in `key_values`. It prints only when not `silent`.
     void EvaluateTree(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                      unique_ptr<DecideDescent> &descent, PerGroupCache &per_group_cache,
+                      unique_ptr<DecideDescent> &descent, vector<SolverInput::KeyValues> &key_values,
                       vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated, bool silent) const;
 
     //! Then each AVG term is divided by the rows it reads, or by those of its own group (D81).

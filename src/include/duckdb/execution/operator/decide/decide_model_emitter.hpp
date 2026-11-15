@@ -89,7 +89,7 @@ class DecideModelEmitter {
 public:
 	DecideModelEmitter(const PhysicalDecide &op, ClientContext &context, const DecideTree &tree,
 	                   const DecideDescent &descent, DecideTreeColumns &columns, DecideGlobalSinkState &gstate,
-	                   PerGroupCache &groups, const DecideSourceNames &names, idx_t num_rows, DecideErrorLedger &errors,
+	                   vector<SolverInput::KeyValues> &key_values, const DecideSourceNames &names, idx_t num_rows, DecideErrorLedger &errors,
 	                   DataChunk &first);
 
 	//! Each declared decision's classes, numbered by its key's values, each relation-qualified reducer's, its classes
@@ -126,7 +126,7 @@ private:
 	DecideTreeColumns &columns;
 	DecideGlobalSinkState &gstate;
 	//! The names' key values, which stage 06 reads a group's name by (SolverInput::key_values).
-	PerGroupCache &groups;
+	vector<SolverInput::KeyValues> &key_values;
 	const DecideSourceNames &names;
 	idx_t num_rows;
 	DecideErrorLedger &errors;

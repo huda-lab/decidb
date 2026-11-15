@@ -164,12 +164,6 @@ static void GroupColumn(ClientContext &context, const ColumnDataCollection &data
 	}
 }
 
-//! PerGroupCacheEntry/PerGroupCache are declared in physical_decide.hpp (Finalize's
-//! private phase methods need PerGroupCache in their signatures). One entry per key
-//! table entry: the key's groups over the rows it was computed on, numbered by key
-//! value, so every call site reading the key sees the same ids and takes its kept
-//! groups as a subsequence. Lifetime: one PerGroupCache per Finalize invocation.
-
 //===--------------------------------------------------------------------===//
 // Phase 2 shared evaluation helpers
 //===--------------------------------------------------------------------===//
@@ -341,36 +335,6 @@ static void AppendDecideDescent(DecideDescent &descent, DataChunk &chunk, idx_t 
 		}
 		slice.Slice(chunk, selected, count);
 		descent.Append(slice, row_base + first);
-	}
-}
-
-//! Late materialization of the group names extraction made: each names its group by a row, which falls in one group
-//! of its key's final grouping, computed over every row a clause read the key on. So a group is spelled one way in
-//! every message of a query, whichever clause names it and in whatever order (D69).
-static void ResolveGroupNames(const PerGroupCache &cache, DecideGlobalSinkState &gstate) {
-	vector<const vector<idx_t> *> group_of_row(cache.key_values.size());
-	for (auto &entry : cache.entries) {
-		if (entry.second.key_values != DConstants::INVALID_INDEX) {
-			group_of_row[entry.second.key_values] = &entry.second.unfiltered_row_group_ids;
-		}
-	}
-	// A name whose values no key's entry holds (a variant's, NameVariants) keeps the numbering it was given.
-	auto resolve = [&](vector<GroupName> &names) {
-		for (auto &name : names) {
-			if (!group_of_row[name.key_values]) {
-				continue;
-			}
-			name.group = (*group_of_row[name.key_values])[name.row];
-			D_ASSERT(name.group != DConstants::INVALID_INDEX);
-		}
-	};
-	for (auto *constraints : {&gstate.evaluated_constraints, &gstate.evaluated_singleton_row_constraints}) {
-		for (auto &ec : *constraints) {
-			resolve(ec.group_names);
-		}
-	}
-	for (auto &set : gstate.class_sets) {
-		resolve(set.classes);
 	}
 }
 
@@ -805,14 +769,12 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     // Evaluate coefficients and build the model (solver provides verbose output)
 
-    // Per-Finalize cache of unfiltered row→group assignments, shared across
-    // every constraint and the objective so a key evaluated once is reused
-    // by every other call site that asks for the same expression set.
-    PerGroupCache per_group_cache;
+    // The values each key's groups are named by in messages (D69), one table per naming site.
+    vector<SolverInput::KeyValues> key_values;
 
 	vector<KeyedMapping> keyed_mappings;
 	EvaluatedClauses evaluated;
-	EvaluateTree(context, gstate, num_rows, gstate.descent, per_group_cache, keyed_mappings, evaluated, false);
+	EvaluateTree(context, gstate, num_rows, gstate.descent, key_values, keyed_mappings, evaluated, false);
 
     //===--------------------------------------------------------------------===//
     // PHASE 3: Build and Solve ILP
@@ -821,10 +783,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // 3a. Assemble the model input and settle the column box. Nothing below this line
     // touches the data again.
 	DecideProfileScope phase("execution.assemble_input");
-    ResolveGroupNames(per_group_cache, gstate);
     VarIndexer var_indexer;
     SolverInput solver_input =
-        BuildSolverInput(gstate, num_rows, std::move(keyed_mappings), std::move(per_group_cache.key_values),
+        BuildSolverInput(gstate, num_rows, std::move(keyed_mappings), std::move(key_values),
                          evaluated, var_indexer);
 
     // Under DIAGNOSE, keep the model input and column space as assembly left them —
@@ -857,7 +818,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 }
 
 void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                                  unique_ptr<DecideDescent> &descent, PerGroupCache &per_group_cache,
+                                  unique_ptr<DecideDescent> &descent, vector<SolverInput::KeyValues> &key_values,
                                   vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated,
                                   bool silent) const {
 	// Top-down: the descent read every chunk as Sink received it, and the buffer is never scanned to evaluate a row.
@@ -896,7 +857,7 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	columns.ReadFrames(frames, num_rows, gstate.frame_maps);
 	// What the data checks and the data reducers no clause reads raise, at their ranks, before any clause is read.
 	columns.CheckData();
-	DecideModelEmitter emitter(*this, context, *tree, *descent, columns, gstate, per_group_cache, names, num_rows,
+	DecideModelEmitter emitter(*this, context, *tree, *descent, columns, gstate, key_values, names, num_rows,
 	                           errors, first);
 	emitter.KeyedMappings(keyed_mappings);
 	emitter.Constraints();

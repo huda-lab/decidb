@@ -183,7 +183,7 @@ struct TermFilterState {
 };
 
 //! A key's groups over the rows a clause reads it on, numbered by the key's values: each row's group, INVALID_INDEX
-//! for a row in none (flat's PerGroupCacheEntry; the tree's G slots by rank).
+//! for a row in none (the tree's G slots by rank).
 struct DecideKeyGroups {
 	const vector<idx_t> &row_group_ids;
 	idx_t num_groups;

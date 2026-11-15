@@ -762,8 +762,8 @@ and every row of a per-row one, splits its group again. Three readers:
   class, at the variant's first row, which stands for the variant's rows: they agree on every field. Where a class holds
   more than one variant the clause records an EXPLAIN ANALYZE line (`RecordVariants`, `Kind::VARIANTS`, printed by
   `ParamsToString` from `variant_accounts`, which a plain EXPLAIN never fills) and names each variant for a diagnosis by
-  its class's key values followed by its own field values (`DecideModelEmitter::NameVariants`: a key-values entry no key
-  owns, so `ResolveGroupNames` keeps its numbering; a collated key column quotes the class's least spelling, D69). Under
+  its class's key values followed by its own field values (`DecideModelEmitter::NameVariants`: a key-values entry of its
+  own, numbered by variant; a collated key column quotes the class's least spelling, D69). Under
   DIAGNOSE such a variant's row stands for its own class set.
 - A reducer's variant scope (`KeyedScopeInfo::signature`) takes the signature's numbering
   over the rows the reducer reads, so its operand holds one entry per variant of each class
@@ -965,12 +965,11 @@ bilinear or square term reads a decision on its absent entity (§4) is marked
 it skips one with a NULL coefficient. So `sum(x) by (g) <= 0.5 * sum(x)` gives a NULL-`g`
 row no limit (its `by (g)` helper is absent there) while the total still counts it.
 
-The ids a key takes over every row are cached (`PerGroupCache`) across every constraint,
-check and the objective, so one key is evaluated once however many clauses use it. A
-lookup returns the groups its rows keep (`kept_groups`, each one's index in the key's own
-numbering); a caller that names a group reads that group's values at its row
-(`DecideDescent::Label`) and formats that one label, so no label is built for a group no
-message quotes.
+A key's groups are the tree node's dictionary, filled once by the pass, so one key is
+read once however many clauses use it. A clause takes the groups its rows keep
+(`kept_groups`, each one's rank in the node's dictionary); a caller that names a group
+reads that group's values (`DecideDescent::Label`) and formats that one label, so no label
+is built for a group no message quotes.
 
 ### A reducer's own `when`
 

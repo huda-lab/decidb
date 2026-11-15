@@ -311,10 +311,10 @@ static const DecideAlgebraNode &ComposedTermsFormula(const DecideNode &node) {
 
 DecideModelEmitter::DecideModelEmitter(const PhysicalDecide &op, ClientContext &context, const DecideTree &tree,
                                        const DecideDescent &descent, DecideTreeColumns &columns,
-                                       DecideGlobalSinkState &gstate, PerGroupCache &groups,
+                                       DecideGlobalSinkState &gstate, vector<SolverInput::KeyValues> &key_values,
                                        const DecideSourceNames &names, idx_t num_rows, DecideErrorLedger &errors,
                                        DataChunk &first)
-    : op(op), context(context), tree(tree), descent(descent), columns(columns), gstate(gstate), groups(groups),
+    : op(op), context(context), tree(tree), descent(descent), columns(columns), gstate(gstate), key_values(key_values),
       names(names), num_rows(num_rows), errors(errors), first(first) {
 }
 
@@ -1190,19 +1190,19 @@ vector<GroupName> DecideModelEmitter::NameVariants(idx_t root, const DecideSigna
 	DecideNameVariants(
 	    signature.fields, elements.size(), [values](idx_t variant) { return values[variant]; }, class_of,
 	    variants_per_class, first_rows, key_values);
-	const auto named = groups.key_values.size();
-	groups.key_values.push_back(std::move(key_values));
+	const auto named = this->key_values.size();
+	this->key_values.push_back(std::move(key_values));
 	vector<GroupName> result;
 	for (idx_t variant = 0; variant < first_rows.size(); variant++) {
-		result.push_back({named, variant, first_rows[variant]});
+		result.push_back({named, variant});
 	}
 	return result;
 }
 
 void DecideModelEmitter::KeyClasses(idx_t root, vector<idx_t> &class_ids, vector<GroupName> &class_names) {
 	auto &container = descent.Containers()[root];
-	const auto named = groups.key_values.size();
-	groups.key_values.push_back(DecideGroupKeyValues(tree, descent, root));
+	const auto named = key_values.size();
+	key_values.push_back(DecideGroupKeyValues(tree, descent, root));
 	// The root's slots by K's values; a grouped root holds its kept rows in no class of K in a slot of its own.
 	auto &slots = container.groups;
 	vector<idx_t> by_rank(slots.size());
@@ -1214,7 +1214,7 @@ void DecideModelEmitter::KeyClasses(idx_t root, vector<idx_t> &class_ids, vector
 		const auto slot = by_rank[rank];
 		if (slots.InAClass(slot)) {
 			class_of_slot[slot] = class_names.size();
-			class_names.push_back({named, rank, slots.first_rows[slot]});
+			class_names.push_back({named, rank});
 		}
 	}
 	class_ids.assign(num_rows, DConstants::INVALID_INDEX);
@@ -1687,15 +1687,10 @@ void DecideModelEmitter::Polynomial(idx_t root, const vector<TermFilterState> &f
 
 void DecideModelEmitter::Name(idx_t by, const vector<idx_t> &kept_groups, EvaluatedConstraint &evaluated) {
 	// Each group is named by its key's values, which the solver input reads by its rank.
-	auto &slots = descent.Containers()[by].groups;
-	vector<idx_t> first_rows(slots.size());
-	for (idx_t slot = 0; slot < slots.size(); slot++) {
-		first_rows[slots.ranks[slot]] = slots.first_rows[slot];
-	}
-	const auto values = groups.key_values.size();
-	groups.key_values.push_back(DecideGroupKeyValues(tree, descent, by));
+	const auto values = key_values.size();
+	key_values.push_back(DecideGroupKeyValues(tree, descent, by));
 	for (auto group : kept_groups) {
-		evaluated.group_names.push_back({values, group, first_rows[group]});
+		evaluated.group_names.push_back({values, group});
 	}
 }
 

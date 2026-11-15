@@ -213,13 +213,11 @@ struct CoefficientColumn {
 
 //! What names a group in a message (`'a'`, or `EU, 2024` for a composite key): the representative values of its key
 //! (SolverInput::key_values) and the group's number among them. Its text is formatted only where a message prints it;
-//! a group of no key (the empty key, a `when` alone) has no name. Extraction holds a row of the group instead of its
-//! number, since a later clause that reads the key on more rows regroups it; assembly resolves `group` from `row`
-//! against the key's final grouping, so every name of a key reads one table.
+//! a group of no key (the empty key, a `when` alone) has no name. The number is the group's rank in the tree node's
+//! dictionary, which the one pass fills from every row that reads the key, so a key's groups are numbered once.
 struct GroupName {
     idx_t key_values = DConstants::INVALID_INDEX;
     idx_t group = DConstants::INVALID_INDEX;
-    idx_t row = DConstants::INVALID_INDEX;
 };
 
 //! The rows a clause emits, in compressed sparse row form: row e's decision terms are the solver columns
