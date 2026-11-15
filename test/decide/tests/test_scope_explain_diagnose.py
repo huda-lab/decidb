@@ -171,7 +171,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
             "ship(INT)",
             "when S.priority: norm(ship, 0) <= 2",
             "norm(ship,0)becomesoneindicatorperrow",
-            "whenS.priority:M*(ship<>0)-ship>=0.0",
+            None,
             "1.0*",
             id="l0-bound-is-derived",
         ),
@@ -191,8 +191,8 @@ def test_explain_accounts_for_each_rewrite(decidb_cli, decide, clause, account, 
     an auxiliary made by an earlier rewrite included. A row that repeats the clause
     (the hard MIN/MAX carrier, printed as its reducer) is not shown again. A scoped `IN`
     keeps its front; `per row:` and an empty `by ()`, the defaults, print as a bare clause
-    (D32). An automatic L0 link's bound, which stage 06 derives from the box, prints as
-    `M`."""
+    (D32). EXPLAIN is plan-time only, so an automatic L0 link's data-derived bound and its
+    raw placeholder coefficient are not printed."""
     text = _plan(decidb_cli, _ship_query(decide, clause))
     assert account in text, text
     if row:
