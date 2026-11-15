@@ -460,7 +460,14 @@ ways, each with its cause:
 
 Switches for the tree: `DECIDB_DUMP_TREE`, `DECIDB_DUMP_CONTAINERS`, `DECIDB_DUMP_BODIES` and `DECIDB_DUMP_VALUES` print
 the tree, the containers, the bodies and their programs, and the columns' values, each node's programs the evaluation
-computed on its entries (`DecideTreeColumns::Dump`), to stderr. `DECIDB_DESCENT_CHUNK` sets the descent's chunk size;
+computed on its entries (`DecideTreeColumns::Dump`), to stderr. The containers dump gives each node its rows in and
+out and a `reach` line: whether it is a root, its children, and the rows each `when` part was read on (the first part
+every row reaching the node, each later one the rows the parts before it kept). `test_one_pass_literal.py` reads them for
+the plan's L6 over every deck case at chunk sizes 1 and 2048: a root reads every row, a node one path reaches reads
+exactly what its parent passed on, and one more paths reach reads each (row, enclosing slot) once. Before the first row,
+`DecideDescent::RequireRowReads` checks L2: every expression the descent reads (`when` parts, carried and program
+columns, signature values, a frame's order, each key's elements) reads only the row, no aggregate, window or subquery
+and no column past the input's. `DECIDB_DESCENT_CHUNK` sets the descent's chunk size;
 `DECIDB_EVALUATOR_INJECT=g1`, where the tree is built, makes stage 05's hook find no node for a reducer, which is
 internal; `DECIDB_TREE_INJECT=node:data:value` replaces a G over data's fold in the columns, so a test can show a parent
 reads the bottom-up values, and refuses a node that computes no data value. Profile counters (`DECIDB_PROFILE`):

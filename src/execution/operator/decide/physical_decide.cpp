@@ -386,6 +386,8 @@ static void MergeDecideDescent(DecideGlobalSinkState &gstate, DecideLocalSinkSta
 }
 
 unique_ptr<GlobalSinkState> PhysicalDecide::GetGlobalSinkState(ClientContext &context) const {
+	// The descent reads only the rows reaching each node (plan L2): checked once, before the first row.
+	DecideDescent::RequireRowReads(*tree, children[0]->GetTypes().size());
     return make_uniq_base<GlobalSinkState, DecideGlobalSinkState>(context, *this);
 }
 

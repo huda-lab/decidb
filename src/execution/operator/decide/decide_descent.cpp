@@ -10,6 +10,8 @@
 #include "duckdb/parallel/task_executor.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 
 #include <algorithm>
 #include <numeric>
@@ -379,6 +381,7 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 	for (idx_t n = 0; n < tree.nodes.size(); n++) {
 		auto &node = *tree.nodes[n];
 		auto &container = containers[n];
+		container.when_rows.assign(node.when.size(), 0);
 		shared[n] = paths[n] > 1;
 		signature_types[n] = DescentSignatureTypes(tree, node);
 		// An entry's values: its signature's, its carried and program columns, and an O's order key and partition. An
@@ -460,6 +463,48 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 }
 
 DecideDescent::~DecideDescent() {
+}
+
+void DecideDescent::RequireRowReads(const DecideTree &tree, idx_t width) {
+	std::function<void(const Expression &, const string &)> require = [&](const Expression &read, const string &what) {
+		const auto kind = read.GetExpressionClass();
+		if (kind == ExpressionClass::BOUND_AGGREGATE || kind == ExpressionClass::BOUND_WINDOW ||
+		    kind == ExpressionClass::BOUND_SUBQUERY) {
+			throw InternalException("DECIDE tree: %s computes over rows in the descent (%s)", what,
+			                        ExpressionClassToString(kind));
+		}
+		if (kind == ExpressionClass::BOUND_REF && read.Cast<BoundReferenceExpression>().index >= width) {
+			throw InternalException("DECIDE tree: %s reads column %llu of a row of %llu in the descent", what,
+			                        read.Cast<BoundReferenceExpression>().index, width);
+		}
+		ExpressionIterator::EnumerateChildren(read, [&](const Expression &child) { require(child, what); });
+	};
+	for (idx_t n = 0; n < tree.nodes.size(); n++) {
+		auto &node = *tree.nodes[n];
+		const auto what = StringUtil::Format("node %llu", n);
+		for (auto *list : {&node.when, &node.columns, &node.program_columns}) {
+			for (auto &expression : *list) {
+				require(*expression, what);
+			}
+		}
+		for (auto &field : node.signature) {
+			if (field.value) {
+				require(*field.value, what);
+			}
+		}
+		if (node.over) {
+			require(*node.over, what);
+		}
+	}
+	for (idx_t key = 0; key < tree.keys.size(); key++) {
+		for (auto &element : tree.keys[key].elements) {
+			for (auto *expression : {element.expression.get(), element.collated.get()}) {
+				if (expression) {
+					require(*expression, StringUtil::Format("key %llu", key));
+				}
+			}
+		}
+	}
 }
 
 void DecideDescent::Evaluate(const Expression &expression, DataChunk &chunk, const Reach &rows, Vector &result) {
@@ -1440,6 +1485,7 @@ const DecideDescent::Reach *DecideDescent::Gate(const DecideNode &node, DataChun
 		current_rank.part = node.filter_part;
 		current_rank.group = filter ? node.filter_group : 0;
 		current_rank.position = filter ? k : 0;
+		containers[active_node].when_rows[k] += reaching->size();
 		auto truth = Truth(*node.when[k], chunk, *reaching);
 		read_block = DecideBlock::ROUTE;
 		current_rank.part = current_rank.group = current_rank.position = 0;
@@ -1866,6 +1912,9 @@ void DecideDescent::Merge(MergedPart &part) {
 		auto &theirs = other.containers[n];
 		container.rows_in += theirs.rows_in;
 		container.rows_out += theirs.rows_out;
+		for (idx_t k = 0; k < container.when_rows.size(); k++) {
+			container.when_rows[k] += theirs.when_rows[k];
+		}
 		auto &slots = slot_map[n];
 		if (!container.shares_instances) {
 			// Each entry is an instance of its own: copied after the entries held and those of the parts before
@@ -2233,6 +2282,16 @@ string DecideDescent::Dump() const {
 		out << "node " << n << " " << kind << " rows " << container.rows_in << " -> " << container.rows_out
 		    << " groups=" << groups.size() << " entries=" << container.Count() << " instances=" << container.Instances()
 		    << " text=" << node.text << "\n";
+		const auto root = std::find(tree.roots.begin(), tree.roots.end(), n) != tree.roots.end();
+		out << "  reach root=" << (root ? 1 : 0) << " children=[";
+		for (idx_t c = 0; c < node.children.size(); c++) {
+			out << (c ? "," : "") << node.children[c];
+		}
+		out << "] when=[";
+		for (idx_t k = 0; k < container.when_rows.size(); k++) {
+			out << (k ? "," : "") << container.when_rows[k];
+		}
+		out << "]\n";
 		auto print = [&](const vector<Value> &values) {
 			for (idx_t i = 0; i < values.size(); i++) {
 				out << (i ? ", " : "") << values[i].ToString();

@@ -173,6 +173,9 @@ struct DecideNodeContainer {
 	DecideNodeTimelines timelines;
 	idx_t rows_in = 0;
 	idx_t rows_out = 0;
+	//! Per `when` part, the rows it was read on: the first part reads every row reaching the node, each later one the
+	//! rows the parts before it kept (language/guide.md §6.1, plan L6).
+	unsafe_vector<idx_t> when_rows;
 
 	idx_t Count() const {
 		return rows.size();
@@ -201,6 +204,10 @@ class DecideDescent {
 public:
 	DecideDescent(const DecideTree &tree, ClientContext &context);
 	~DecideDescent();
+	//! Raises an internal error unless every expression the descent reads -- a node's `when` parts, carried and
+	//! program columns, signature values and frame order, and each key's elements -- reads only the row: no aggregate,
+	//! window or subquery, and no column beyond the input's `width` (plan L2). Run once per query, before any row.
+	static void RequireRowReads(const DecideTree &tree, idx_t width);
 	void Append(DataChunk &chunk, idx_t row_base);
 	//! The descents of `parts`, each of the same tree with the row its rows start at, in the order the rows were
 	//! placed (a descent per thread, each over the rows its thread received), merged into the first: a part's rows are
