@@ -108,6 +108,8 @@ public:
 	//! Each helper's members (DecideGlobalSinkState::evaluated_value_links), per group of its `by` key that holds
 	//! one, as flat lists them after the composed clauses.
 	void ValueLinks();
+	//! Compose a root E row with any child G SUM/AVG formulas, after ValueLinks has emitted those formulas.
+	void ExpandClauseValues();
 
 private:
 	//! A helper's members (language/guide.md §7.2): the entries of its G's operand it reads, every decision they read
@@ -191,6 +193,8 @@ private:
 	void ExpandNestedLinearMembers(idx_t node, ReducerValueLinkSpec &link, const vector<idx_t> &link_by_node,
 	                               vector<vector<idx_t>> &group_by_instance,
 	                               vector<bool> &group_by_instance_ready);
+	//! Compose child G SUM/AVG members into the row formula of a root E clause.
+	void ExpandClauseValue(idx_t root, EvaluatedConstraint &clause, const vector<idx_t> &link_by_node);
 	//! A grouped clause's bound on each of `rows` (its kept rows and their root's entries), a NULL one marking its row
 	//! in `null_rows`; for a tightest frame bound (D85) the rows where it bounds nothing instead, which are returned
 	//! (TakeTightestFrameBound): empty for any other bound, and for one the whole clause shares (DescribeBound).

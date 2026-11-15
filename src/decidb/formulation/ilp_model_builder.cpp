@@ -327,6 +327,31 @@ const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const Solver
     if (!out.offsets.empty()) {
         return out;
     }
+	if (!ec.node_rows.offsets.empty()) {
+		if (ec.node_rows.offsets.size() != ec.node_rows.constants.size() + 1 ||
+		    ec.node_rows.offsets.front() != 0 || ec.node_rows.offsets.back() != ec.node_rows.terms.size()) {
+			throw InternalException("DECIDE: a tree-composed E row formula is malformed");
+		}
+		SparseCoeffAccumulator accum;
+		accum.BeginForDecisions(indexer, ec.node_rows.terms.size(), written);
+		out.offsets.reserve(ec.node_rows.constants.size() + 1);
+		out.constants.assign(ec.node_rows.constants.size(), 0.0);
+		out.offsets.push_back(0);
+		for (idx_t row = 0; row < ec.node_rows.constants.size(); row++) {
+			double constant = ec.node_rows.constants[row];
+			for (idx_t term = ec.node_rows.offsets[row]; term < ec.node_rows.offsets[row + 1]; term++) {
+				const auto &node_term = ec.node_rows.terms[term];
+				constant += ForEachTermColumn(input, indexer, node_term.variable, node_term.row, node_term.coefficient,
+				                             false, [&](int column, double coefficient) {
+					                             accum.Add(column, coefficient);
+				                             });
+			}
+			accum.Flush(out.columns, out.values);
+			out.constants[row] = constant;
+			out.offsets.push_back(out.columns.size());
+		}
+		return out;
+	}
     const idx_t num_rows = indexer.num_rows;
     // The data rows of each emitted row: a grouped aggregate's group (ClauseRows), all rows for an ungrouped one, the
     // row itself for a per-row clause.

@@ -222,6 +222,22 @@ struct GroupName {
     idx_t row = DConstants::INVALID_INDEX;
 };
 
+//! One decision term in an E node's row formula after it composes a child G node. The explicit source row is needed
+//! because a reducer value stands for a group of input rows, not necessarily the row that reads it.
+struct NodeLinearRowTerm {
+    idx_t variable = DConstants::INVALID_INDEX;
+    idx_t row = DConstants::INVALID_INDEX;
+    double coefficient = 0.0;
+    idx_t value_node = DConstants::INVALID_INDEX;
+};
+
+//! The linear formula for each emitted row, composed from E and child G nodes before stage 06 lowers it to columns.
+struct NodeLinearRows {
+    vector<idx_t> offsets;
+    vector<NodeLinearRowTerm> terms;
+    vector<double> constants;
+};
+
 //! The rows a clause emits, in compressed sparse row form: row e's decision terms are the solver columns
 //! columns[offsets[e], offsets[e + 1]) with the coefficients at the same positions of `values`. An aggregate clause
 //! emits one row per group (one in all when it has no groups), a per-row clause one per data row, empty where the row
@@ -390,6 +406,9 @@ struct EvaluatedConstraint {
     //! The decision terms of each row the clause emits, as solver columns and coefficients (ClauseEmittedRows): built
     //! once, by the first pass to read them, and taken by the model builder, the last. Empty until then.
     mutable EmittedRows emitted_rows;
+    //! An E node's tree-composed linear row formula, when it has been lowered from a child G SUM/AVG. Stage 06 maps
+    //! these terms to columns but does not rediscover reducer membership or substitute the child formula.
+    NodeLinearRows node_rows;
 
     //! The name of group `group` (INVALID_INDEX: none), none for a group of no key.
     GroupName NameOf(idx_t group) const {

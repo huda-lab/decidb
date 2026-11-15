@@ -432,10 +432,17 @@ indicator for the stage-06 exactness link; the physical operator does not retain
 The nested G-to-G composition builds each expanded parent formula in time proportional to its emitted member terms. It
 reuses the finalized keyed mappings to map a parent member row to its child instance, and caches each child's
 instance-to-group map for the duration of the
-value-link pass. F1's SUM-inside-SUM dump now has six decision columns and three root rows; MAX-inside-SUM retains the
-two MAX columns; a three-level SUM/AVG/SUM fixture emits the expected 0.5 and 1.0 coefficients directly on its two
-root rows. A targeted run of `test_anr_nested.py`, `test_tree_emitter.py`, and `test_anr_inlining.py` passed 241 tests;
-1,249 tests skipped because Gurobi/gurobipy is unavailable on the host. The release target built successfully.
+value-link pass. Root aggregate E rows now compose child G SUM/AVG members too, retaining each member's source row;
+stage 06 maps those explicit terms to solver columns. MIN/MAX and frame values stay as E-to-node terms. This path is
+limited to aggregate E rows: a regression test showed that expanding a query-wide SUM into each per-row clause could
+turn a compact helper into millions of row terms, so those rows continue to use the shared helper column.
+
+The F1 SUM-inside-SUM dump has exactly the three deck rows: `ship1 + ship2 <= 22.5`, `ship3 + ship5 + ship6 <=
+48.5`, and `ship3 + ship5 + ship6 <= 37.5`, with six decision columns. MAX-inside-SUM has the three root rows and
+four lower-envelope rows for its two multi-member MAX helpers, matching pp. 112–115. A three-level SUM/AVG/SUM
+fixture emits the expected 0.5 and 1.0 coefficients directly on its two root rows. The targeted
+`test_anr_nested.py`, `test_tree_emitter.py`, and `test_anr_inlining.py` run passed 241 tests; 1,249 tests skipped
+because Gurobi/gurobipy is unavailable on the host. The release target built successfully.
 
 **Cost**, measured before flat was deleted, against flat on one binary (`benchmark/decide/anr_scaling.py --against` a
 flat run): the tree's own time at 10^5 rows is 0.84x to 1.33x flat's on every workload (`flat-sum` the most), and its

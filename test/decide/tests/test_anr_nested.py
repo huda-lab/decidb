@@ -82,13 +82,35 @@ def test_the_engine_answers_each_fixture(request, scope_solver, cli_fixture, cas
 
 @pytest.mark.correctness
 @pytest.mark.parametrize(
-    "case, counts",
+    "case, counts, rows",
     [
-        pytest.param(F1_SUM, {"num_vars": 6, "num_rows": 3}, id="F1_sum"),
-        pytest.param(F1_MAX, {"num_vars": 8, "num_rows": 7}, id="F1_max"),
+        pytest.param(
+            F1_SUM,
+            {"num_vars": 6, "num_rows": 3},
+            [
+                "row 0: sense=< rhs=22.5 nnz=2 | 0:1 1:1",
+                "row 1: sense=< rhs=48.5 nnz=3 | 2:1 4:1 5:1",
+                "row 2: sense=< rhs=37.5 nnz=3 | 2:1 4:1 5:1",
+            ],
+            id="F1_sum",
+        ),
+        pytest.param(
+            F1_MAX,
+            {"num_vars": 8, "num_rows": 7},
+            [
+                "row 0: sense=< rhs=22.5 nnz=1 | 6:1",
+                "row 1: sense=< rhs=48.5 nnz=2 | 2:1 7:1",
+                "row 2: sense=< rhs=37.5 nnz=2 | 2:1 7:1",
+                "row 3: sense=> rhs=0 nnz=2 | 0:-1 6:1",
+                "row 4: sense=> rhs=0 nnz=2 | 1:-1 6:1",
+                "row 5: sense=> rhs=0 nnz=2 | 4:-1 7:1",
+                "row 6: sense=> rhs=0 nnz=2 | 5:-1 7:1",
+            ],
+            id="F1_max",
+        ),
     ],
 )
-def test_the_running_example_is_a_helper_per_path_group(decidb_cli, tmp_path, case, counts):
+def test_the_running_example_is_a_helper_per_path_group(decidb_cli, tmp_path, case, counts, rows):
     """F1 is the deck's model (pp. 111-119). Each region's sum is written into the three
     clause rows that read it -- East once, West twice -- as each costs no more nonzeros there
     than defined (D89), the bound a row on it rather than its box. For F1_sum the inner sums
@@ -99,6 +121,7 @@ def test_the_running_example_is_a_helper_per_path_group(decidb_cli, tmp_path, ca
     three clause rows (p. 115)."""
     dump = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"}).dump_model(case.sql, tmp_path / "f1.dump")
     assert dump_counts(dump) == counts
+    assert [line for line in dump.splitlines() if line.startswith("row ")] == rows, dump
     # A MAX pushed down needs only its envelope: no indicator, no Big-M (D79).
     assert "bin=1" not in dump, dump
 

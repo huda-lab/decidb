@@ -10,6 +10,7 @@
 
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/execution/operator/decide/decide_global_sink_state.hpp"
 #include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
 
@@ -932,6 +933,15 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 		return gstate.ReadVariable(variable, term.frame_read);
 	});
 	evaluated.comparison_type = ClauseComparison(node);
+	evaluated.value_nodes.assign(evaluated.variable_indices.size(), DConstants::INVALID_INDEX);
+	for (idx_t position = 0; position < clause.lhs_terms.size(); position++) {
+		auto &term_formula = *lhs_formula.children[position];
+		const auto term_index = ClauseTermSource(term_formula, clause.lhs_terms.size(), "linear");
+		auto &term = clause.lhs_terms[term_index];
+		if (term.frame_read == DConstants::INVALID_INDEX) {
+			evaluated.value_nodes[term_index] = AlgebraTermValueNode(tree, term_formula);
+		}
+	}
 	// The rows the clause keeps, which its `when` routed and its NULL tests keep (DecideNode::member_tests: a helper's
 	// row reads a reducer's body on the reducer's members), with the entry standing for each: one model row stands on
 	// each, or under `per K:` on one row of each variant of a class.
@@ -2397,6 +2407,212 @@ void DecideModelEmitter::ValueLinks() {
 		gstate.evaluated_value_links.push_back(std::move(spec));
 	}
 	DecideCountValueLinks(gstate.evaluated_value_links);
+}
+
+void DecideModelEmitter::ExpandClauseValues() {
+	// A prior expression error can leave a reducer without the groups later node formulas expect. The ledger will raise
+	// that user-facing error after all phases, so leave the solver-row fallback untouched in that case.
+	if (errors.HasErrorBefore(DecideErrorPhase::INVALID)) {
+		return;
+	}
+	vector<idx_t> link_by_node(tree.nodes.size(), DConstants::INVALID_INDEX);
+	for (idx_t link = 0; link < gstate.evaluated_value_links.size(); link++) {
+		const auto node = gstate.evaluated_value_links[link].value_node;
+		if (node == DConstants::INVALID_INDEX || node >= link_by_node.size()) {
+			continue;
+		}
+		if (link_by_node[node] != DConstants::INVALID_INDEX) {
+			throw InternalException("DECIDE model emitter: tree node %llu defines more than one value link", node);
+		}
+		link_by_node[node] = link;
+	}
+	const auto roots = ClauseRoots();
+	if (gstate.evaluated_constraints.size() != tree.constraint_count) {
+		throw InternalException("DECIDE model emitter: E clauses are not aligned with the tree roots");
+	}
+	for (idx_t clause = 0; clause < tree.constraint_count; clause++) {
+		ExpandClauseValue(roots[clause], gstate.evaluated_constraints[clause], link_by_node);
+	}
+}
+
+void DecideModelEmitter::ExpandClauseValue(idx_t root, EvaluatedConstraint &clause,
+                                           const vector<idx_t> &link_by_node) {
+	// First migrate the deck's pure linear E rows. The nonlinear row families keep their established lowering until
+	// their node-owned formulations have their own records.
+	if (!clause.lhs_is_aggregate || !clause.bilinear_terms.empty() || clause.has_quadratic ||
+	    !clause.minmax_agg_type.empty() ||
+	    clause.ne_clause_idx != DConstants::INVALID_INDEX || clause.abs_aux_idx != DConstants::INVALID_INDEX ||
+	    !clause.admitted_lower.Empty()) {
+		return;
+	}
+	if (clause.value_nodes.size() != clause.variable_indices.size() ||
+	    clause.row_coefficients.size() != clause.variable_indices.size()) {
+		throw InternalException("DECIDE model emitter: E node %llu has misaligned value terms", root);
+	}
+	const auto &links = gstate.evaluated_value_links;
+	const auto is_linear = [](const ReducerValueLinkSpec &link) {
+		return !link.frame && (link.agg_name == "sum" || link.agg_name == "avg");
+	};
+	bool has_linear_child = false;
+	for (idx_t term = 0; term < clause.variable_indices.size(); term++) {
+		const auto node = clause.value_nodes[term];
+		if (node < link_by_node.size()) {
+			const auto link = link_by_node[node];
+			if (link < links.size() && is_linear(links[link]) && clause.variable_indices[term] == links[link].value_var) {
+				has_linear_child = true;
+				break;
+			}
+		}
+	}
+	if (!has_linear_child) {
+		return;
+	}
+	if (!keyed_mappings) {
+		throw InternalException("DECIDE model emitter: E node %llu has no finalized keyed mappings", root);
+	}
+
+	vector<vector<idx_t>> group_by_instance(links.size());
+	vector<bool> group_by_instance_ready(links.size(), false);
+	auto group_for_read = [&](idx_t link_index, idx_t row) {
+		if (link_index >= links.size()) {
+			throw InternalException("DECIDE model emitter: E node %llu has an invalid child link", root);
+		}
+		const auto &link = links[link_index];
+		if (!is_linear(link) || link.value_node >= tree.nodes.size() || link.value_var >= tree.variable_scopes.size()) {
+			throw InternalException("DECIDE model emitter: E node %llu has a non-linear child value", root);
+		}
+		const auto &scope = tree.variable_scopes[link.value_var];
+		const KeyedMapping *mapping = nullptr;
+		idx_t instances = 1;
+		if (scope.scope == DecideVarScope::KEYED) {
+			if (scope.keyed_scope_idx >= keyed_mappings->size()) {
+				throw InternalException("DECIDE model emitter: child G node %llu has no keyed mapping", link.value_node);
+			}
+			mapping = &(*keyed_mappings)[scope.keyed_scope_idx];
+			instances = mapping->num_classes;
+		} else if (scope.scope != DecideVarScope::GLOBAL) {
+			throw InternalException("DECIDE model emitter: child G node %llu has an unsupported helper scope",
+			                        link.value_node);
+		}
+		auto &by_instance = group_by_instance[link_index];
+		if (!group_by_instance_ready[link_index]) {
+			by_instance.assign(instances, DConstants::INVALID_INDEX);
+			for (idx_t group = 0; group < link.members.GroupCount(); group++) {
+				const auto group_row = link.members.group_rows[group];
+				if (group_row >= num_rows || (mapping && group_row >= mapping->row_to_class.size())) {
+					throw InternalException("DECIDE model emitter: child G node %llu has an invalid group row",
+					                        link.value_node);
+				}
+				const auto instance = mapping ? mapping->row_to_class[group_row] : idx_t(0);
+				if (instance >= by_instance.size() || by_instance[instance] != DConstants::INVALID_INDEX) {
+					throw InternalException("DECIDE model emitter: child G node %llu has inconsistent group instances",
+					                        link.value_node);
+				}
+				by_instance[instance] = group;
+			}
+			group_by_instance_ready[link_index] = true;
+		}
+		if (row >= num_rows || (mapping && row >= mapping->row_to_class.size())) {
+			throw InternalException("DECIDE model emitter: E node %llu reads a child outside the input", root);
+		}
+		const auto instance = mapping ? mapping->row_to_class[row] : idx_t(0);
+		if (instance >= by_instance.size() || by_instance[instance] == DConstants::INVALID_INDEX) {
+			throw InternalException("DECIDE model emitter: E node %llu reads %s where it has no value", root,
+			                        link.label);
+		}
+		return by_instance[instance];
+	};
+
+	NodeLinearRows node_rows;
+	const auto written = op.WrittenClause(clause.source_clause_id);
+	const vector<idx_t> *group_rows = nullptr;
+	idx_t num_emitted = num_rows;
+	if (clause.lhs_is_aggregate && !clause.row_group_ids.empty()) {
+		group_rows = &ClauseRows(clause);
+		num_emitted = clause.num_groups;
+	} else if (clause.lhs_is_aggregate) {
+		num_emitted = 1;
+	}
+	node_rows.offsets.reserve(num_emitted + 1);
+	node_rows.constants.assign(num_emitted, 0.0);
+	node_rows.offsets.push_back(0);
+	bool expanded = false;
+	idx_t output_row = 0;
+	std::function<void(idx_t, idx_t, double, idx_t, idx_t)> append_term;
+	std::function<void(idx_t, idx_t, double, idx_t)> append_link;
+	append_link = [&](idx_t link_index, idx_t row, double scale, idx_t depth) {
+		if (depth > tree.nodes.size()) {
+			throw InternalException("DECIDE model emitter: E node %llu has a cyclic value formula", root);
+		}
+		const auto group = group_for_read(link_index, row);
+		const auto &members = links[link_index].members;
+		for (idx_t member = members.group_begin[group]; member < members.group_begin[group + 1]; member++) {
+			AddCoefficient(node_rows.constants[output_row], scale * members.constants[member], written);
+			for (idx_t inner = members.member_begin[member]; inner < members.member_begin[member + 1]; inner++) {
+				append_term(members.variables[inner], members.rows[inner], scale * members.coefficients[inner],
+				            inner < members.value_nodes.size() ? members.value_nodes[inner] : DConstants::INVALID_INDEX,
+				            depth + 1);
+			}
+		}
+	};
+	append_term = [&](idx_t variable, idx_t row, double coefficient, idx_t value_node, idx_t depth) {
+		if (coefficient == 0.0 || variable == DConstants::INVALID_INDEX) {
+			return;
+		}
+		if (depth > tree.nodes.size()) {
+			throw InternalException("DECIDE model emitter: E node %llu has a cyclic value formula", root);
+		}
+		const auto link_index = value_node < link_by_node.size() ? link_by_node[value_node]
+		                                                        : DConstants::INVALID_INDEX;
+		if (link_index == DConstants::INVALID_INDEX || link_index >= links.size() || !is_linear(links[link_index])) {
+			node_rows.terms.push_back(NodeLinearRowTerm {variable, row, coefficient, value_node});
+			return;
+		}
+		if (links[link_index].value_var != variable) {
+			throw InternalException("DECIDE model emitter: E node %llu has a mismatched nested value", root);
+		}
+		append_link(link_index, row, coefficient, depth + 1);
+	};
+	for (idx_t output = 0; output < num_emitted; output++) {
+		output_row = output;
+		const idx_t begin = group_rows ? clause.group_offsets[output] : (clause.lhs_is_aggregate ? 0 : output);
+		const idx_t end = group_rows ? clause.group_offsets[output + 1]
+		                            : (clause.lhs_is_aggregate ? num_rows : output + 1);
+		const bool excluded = !clause.lhs_is_aggregate && !clause.row_group_ids.empty() &&
+		                      clause.row_group_ids[output] == DConstants::INVALID_INDEX;
+		if (!excluded) {
+			for (idx_t position = begin; position < end; position++) {
+				const idx_t row = group_rows ? (*group_rows)[position] : position;
+				for (idx_t term = 0; term < clause.variable_indices.size(); term++) {
+					const auto variable = clause.variable_indices[term];
+					if (variable == DConstants::INVALID_INDEX) {
+						continue;
+					}
+					const auto coefficient = clause.row_coefficients[term].Get(row);
+					if (coefficient == 0.0) {
+						continue;
+					}
+					const auto value_node = clause.value_nodes[term];
+					const auto link_index = value_node < link_by_node.size() ? link_by_node[value_node]
+					                                                    : DConstants::INVALID_INDEX;
+					if (link_index == DConstants::INVALID_INDEX || link_index >= links.size() ||
+					    !is_linear(links[link_index])) {
+						node_rows.terms.push_back(NodeLinearRowTerm {variable, row, coefficient, value_node});
+						continue;
+					}
+					if (links[link_index].value_var != variable) {
+						throw InternalException("DECIDE model emitter: E node %llu has a mismatched child value", root);
+					}
+					expanded = true;
+					append_link(link_index, row, coefficient, 0);
+				}
+			}
+		}
+		node_rows.offsets.push_back(node_rows.terms.size());
+	}
+	if (expanded) {
+		clause.node_rows = std::move(node_rows);
+	}
 }
 
 } // namespace duckdb

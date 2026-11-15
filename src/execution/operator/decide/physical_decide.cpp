@@ -911,6 +911,8 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 		ReportSkippedInstances(gstate, silent);
 	}
 	emitter.ValueLinks();
+	// The root E rows consume child G SUM/AVG formulas directly before the flat solver-row assembly.
+	emitter.ExpandClauseValues();
 	// The bottom-up values the evaluation computed, each node's programs on its entries.
 	if (!silent && std::getenv("DECIDB_DUMP_VALUES")) {
 		fprintf(stderr, "DECIDB_VALUES_BEGIN\n%sDECIDB_VALUES_END\n", columns.Dump().c_str());
