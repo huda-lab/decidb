@@ -645,8 +645,8 @@ private:
 	//!   name one column over two row sets; merging them would apply one mask to both.
 	//! - `avg_scale` divides by the group's row count, so an AVG term and a SUM term
 	//!   are not summable before that scaling happens.
-	//! - `qualifier_scope_idx` selects a de-duplication mask (`sum(D: ...)`), which is
-	//!   again a statement about which rows contribute.
+	//! - `qualifier_scope_idx` selects a de-duplication mask (`sum(D: ...)`), and
+	//!   `qualifier_reducer` distinguishes occurrences that reuse that scope.
 	//!
 	//! Constants (`INVALID_INDEX`) are deliberately left alone: they are a fixed
 	//! offset folded into the RHS, not a repeated column, and they are not what any
@@ -659,7 +659,8 @@ private:
 		// group's size, another AVG of the same decision by the whole relation's.
 		// `frame_read` too: `x - at(previous: x)` names one decision at two rows.
 		if (a.reduction != b.reduction || a.avg_scale != b.avg_scale ||
-		    a.qualifier_scope_idx != b.qualifier_scope_idx || a.avg_group_key != b.avg_group_key ||
+		    a.qualifier_scope_idx != b.qualifier_scope_idx || a.qualifier_reducer != b.qualifier_reducer ||
+		    a.avg_group_key != b.avg_group_key ||
 		    a.frame_read != b.frame_read) {
 			return false;
 		}
