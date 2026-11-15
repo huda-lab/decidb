@@ -508,11 +508,9 @@ bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, cons
 
 	// The SUM and AVG reducers of a nest -- one nested in a SUM or AVG, and one a nested reducer stands in -- are
 	// written where they are read whatever that costs, as the deck draws a nest's model (pp. 115, 119; owner,
-	// 2026-11-05); every other helper, a range frame's among them, only where that adds no nonzero (D89). An outer
-	// link whose G already wrote its nested SUM or AVG in reads no inner link, so it says so itself.
+	// 2026-11-05); every other helper, a range frame's among them, only where that adds no nonzero (D89).
 	vector<bool> flattened(links.size(), false);
 	for (idx_t i = 0; i < links.size(); i++) {
-		flattened[i] = flattened[i] || links[i].composed_nest;
 		const idx_t outer = place[i].outer;
 		if (outer == DConstants::INVALID_INDEX || links[i].frame || links[outer].frame || IsExtremum(links[outer])) {
 			continue;

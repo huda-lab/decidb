@@ -406,13 +406,17 @@ from the evaluated E clause. The G/O emitter walks nodes in children-first order
 node-owned helper direction, qualification scope and labels to build stage 06's member formulas. Multi-member MIN/MAX
 results keep value columns, while SUM/AVG formulas can expand into their parent expressions; a singleton MIN/MAX group
 remains a direct member read, as on deck p. 112. F output links and Boolean-product factors are read from their function
-algebra. The numeric model path still lowers formulas into flat solver rows; recursive lowering of the full E/G/O/F
-operator trees remains open. The first numeric formulation move is now in place for nested linear G values: during the
-children-first G walk, `DecideModelEmitter::ValueLinks` resolves a nested SUM/AVG child to its exact keyed instance and
-composes that child's member expression into its enclosing SUM/AVG node. This moves the SUM-inside-SUM composition
-shown on pp. 116–119 from stage 06 to the tree formulation pass. The outer E row and MAX/MIN and frame helper values
-still use the existing lowering path: the composed link is marked `composed_nest`, so stage 06 still writes it into the
-rows that read it whatever that costs (D89), as it writes an outer link whose members read a nested helper.
+algebra. The numeric model path still lowers formulas into flat solver rows.
+
+**Departure from the deck: formulation is stage 06's (plan Q0.4, accepted 2026-11-07).** The deck formulates node by
+node (pp. 111-119); here the emitter hands stage 06 one record per row and per value link, and stage 06
+(`InlineReducerValueLinks`, `EmitExtremumLink`, `LinearizeMinMaxConstraints`) writes the rows. The reason is D89:
+whether a helper is written into its readers depends on every reader and on the implied bounds, so no single node can
+decide it. The models are the deck's: SUM inside SUM is the three rows of p. 119 over the six declared columns,
+MAX inside SUM the three rows and four envelope rows of p. 115 (`test_anr_nested.py` pins both), the frame the four
+rows of p. 108. Composing SUM and AVG children at G and E nodes was
+built on 2026-11-15 and removed the same day: it changed no model, removed no stage 06 code, and hid a nest from
+D89, which then kept a nest's helper column it must write in.
 
 Generated decision values now appear in E/G/O formula trees as reads of the G/O/F node that produces them. The nested
 MAX-inside-SUM example therefore records the E → SUM G → MAX G path directly; an F node's own definition rows keep a
@@ -429,29 +433,6 @@ optimizer reducer-link records, so the frame reader gets its producer and compil
 The runtime EXPLAIN report for inlined helpers now reads each G/O node's helper variable and label; the physical
 operator no longer carries a duplicate copy of optimizer link records. ABS F nodes likewise provide the auxiliary and
 indicator for the stage-06 exactness link; the physical operator does not retain the plan-time ABS link list.
-
-The nested G-to-G composition builds each expanded parent formula in time proportional to its emitted member terms. It
-reuses the finalized keyed mappings to map a parent member row to its child instance, and caches each child's
-instance-to-group map for the duration of the
-value-link pass. Root aggregate E rows now compose child G SUM/AVG members too, retaining each member's source row;
-stage 06 maps those explicit terms to solver columns. MIN/MAX and frame values stay as E-to-node terms. This path is
-limited to aggregate E rows: a regression test showed that expanding a query-wide SUM into each per-row clause could
-turn a compact helper into millions of row terms, so those rows continue to use the shared helper column.
-Linear objective E terms also compose child SUM/AVG members, with the objective's data coefficients applied to each
-member and any fixed member values carried into the objective constant. Child MIN/MAX values remain explicit node terms
-in that objective formula. Linear terms are composed even when the same additive objective also has a quadratic
-component; the quadratic matrix keeps its existing formulation. Flat outer MIN/MAX objectives and nonlinear terms still
-use their existing formulation.
-
-The F1 SUM-inside-SUM dump has exactly the three deck rows: `ship1 + ship2 <= 22.5`, `ship3 + ship5 + ship6 <=
-48.5`, and `ship3 + ship5 + ship6 <= 37.5`, with six decision columns. MAX-inside-SUM has the three root rows and
-four lower-envelope rows for its two multi-member MAX helpers, matching pp. 112–115. A three-level SUM/AVG/SUM
-fixture emits the expected 0.5 and 1.0 coefficients directly on its two root rows. SUM/AVG-of-group objective fixtures
-emit the expected weighted per-decision coefficients and preserve absent-group skipping; a grouped MAX objective keeps
-its helper rows and objective coefficients unchanged, a quadratic sibling keeps the same Q matrix, and a composed MAX
-sibling keeps its seven rows. The targeted `test_anr_nested.py`, `test_tree_emitter.py`, and `test_anr_inlining.py` run
-passed 246 tests; 1,249 tests skipped
-because Gurobi/gurobipy is unavailable on the host. The release target built successfully.
 
 **Cost**, measured before flat was deleted, against flat on one binary (`benchmark/decide/anr_scaling.py --against` a
 flat run): the tree's own time at 10^5 rows is 0.84x to 1.33x flat's on every workload (`flat-sum` the most), and its

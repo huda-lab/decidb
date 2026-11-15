@@ -1,41 +1,15 @@
 # Stage 08 — Execution: open work
 
-## Recursive formulation is underway
+## Formulation stays in stage 06
 
-The top-down descent, per-node containers, bottom-up data evaluation, and frame pass match the deck's execution tree.
-P9's F nodes also own ABS envelopes, Boolean products, L0 indicators, and nonlinear reducer definitions. The remaining
-architecture gap is the deck's formulation at E/G/O/F nodes (ANR.pdf, pp. 111–119):
-
-- The tree keeps node-owned operator algebra, but `DecideModelEmitter` converts it to row-indexed
-  `EvaluatedConstraint` and `ReducerValueLinkSpec` records.
-- `BuildSolverInput`, `FormulateModel`, `InlineReducerValueLinks`, and `SolverModel::Build` still perform the numeric
-  formulation over flattened solver rows and columns.
-- The output models for the three worked examples match the deck. Root E formulas and the remaining formula families
-  are not yet recursively lowered from the tree nodes themselves.
-
-The first recursive formulation slice composes a nested linear child at its enclosing G node. While walking the tree
-children-first, `DecideModelEmitter::ValueLinks` writes a child SUM/AVG group's member formula into its parent's
-member formula, using the child's exact keyed instance for each row. Nested MIN/MAX and frame values remain explicit.
-This implements the G-to-G composition in the SUM-inside-SUM slides before the value links enter stage 06. The same
-pass now composes child G SUM/AVG formulas into an aggregate E row. It carries each resulting decision's source row, so
-stage 06 maps terms to columns without rediscovering reducer membership. MIN/MAX and frame children remain explicit.
-Additive objective E nodes compose their linear child SUM/AVG formulas, carrying source rows and constants into the
-objective record; child MIN/MAX values remain explicit node terms. This also applies when a quadratic sibling stays on
-the existing Q-matrix path or a composed MAX sibling stays on its stage-06 path. The solver builder maps the terms to
-columns, retaining grouped MAX helper rows. Flat outer MIN/MAX objectives and nonlinear terms still use the established
-lowering.
-The F1 SUM-inside-SUM rows now match pp. 116–119 exactly with only the six declared decision columns; MAX-inside-SUM
-matches pp. 112–115 with two MAX helper columns and the same three root rows. Three-level SUM/AVG/SUM coefficients
-also match the node-by-node formula.
-
-This clause E slice applies to aggregate rows. Per-row clauses are not composed here: stage 06 writes a helper into them
-where D89 lets it, which keeps a plain query-wide SUM's column (written into every row it could multiply a compact
-formula into millions of terms) and writes a SUM or AVG nest in whatever that costs. Next, extend formulation records for
-quadratic, composed and function-node expressions, then cover the remaining objective shapes. Keep the established
-solver model as the backend boundary. Retain the old lowering only for shapes not yet migrated, compare exact model
-dumps at each stage, then remove it after the full DECIDE suite covers the migrated forms.
+The top-down descent, per-node containers, bottom-up evaluation and frame pass are the deck's (pp. 81-110), and P9's F
+nodes own ABS envelopes, Boolean products, L0 indicators and nonlinear reducer definitions. The deck's step 5,
+formulation at the nodes (pp. 111-119), is not built, by ruling Q0.4: stage 06 writes the rows, because D89 needs
+every reader and the implied bounds (done.md, "Departure from the deck"). Building it means re-ruling D89 so a G can
+decide at its node, and replacing `InlineReducerValueLinks`, `EmitExtremumLink` and `LinearizeMinMaxConstraints`
+rather than composing records beside them.
 
 Other documented edge differences remain in `done.md` §1a: collated frame error naming (D12), the D88 variant-name
 edge, side-plan versus tree error order for a gated reducer argument, and unreferenced hidden records. Direct-solve
 rules and DIAGNOSE's separate named-column scan also bypass or revisit parts of the normal tree execution; their scope
-should be decided as the formulation work proceeds.
+is open.

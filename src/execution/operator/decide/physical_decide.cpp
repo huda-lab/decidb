@@ -911,8 +911,6 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 		ReportSkippedInstances(gstate, silent);
 	}
 	emitter.ValueLinks();
-	// The root E rows consume child G SUM/AVG formulas directly before the flat solver-row assembly.
-	emitter.ExpandClauseValues();
 	// The bottom-up values the evaluation computed, each node's programs on its entries.
 	if (!silent && std::getenv("DECIDB_DUMP_VALUES")) {
 		fprintf(stderr, "DECIDB_VALUES_BEGIN\n%sDECIDB_VALUES_END\n", columns.Dump().c_str());
@@ -929,9 +927,6 @@ struct DecideEvaluationFields {
 	vector<CoefficientColumn> objective_coefficients;
 	vector<idx_t> objective_variable_indices;
 	vector<idx_t> objective_value_nodes;
-	vector<NodeLinearRowTerm> objective_node_terms;
-	vector<bool> objective_node_expanded;
-	double objective_node_constant = 0.0;
 	vector<CoefficientColumn> quadratic_coefficients;
 	vector<idx_t> quadratic_variable_indices;
 	bool has_quadratic_objective = false;
@@ -951,9 +946,6 @@ struct DecideEvaluationFields {
 		std::swap(objective_coefficients, gstate.evaluated_objective_coefficients);
 		std::swap(objective_variable_indices, gstate.objective_variable_indices);
 		std::swap(objective_value_nodes, gstate.objective_value_nodes);
-		std::swap(objective_node_terms, gstate.evaluated_objective_node_terms);
-		std::swap(objective_node_expanded, gstate.evaluated_objective_node_expanded);
-		std::swap(objective_node_constant, gstate.evaluated_objective_node_constant);
 		std::swap(quadratic_coefficients, gstate.evaluated_quadratic_coefficients);
 		std::swap(quadratic_variable_indices, gstate.quadratic_variable_indices);
 		std::swap(has_quadratic_objective, gstate.has_quadratic_objective);
@@ -1355,9 +1347,6 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
     solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
 	solver_input.objective_value_nodes = std::move(gstate.objective_value_nodes);
-	solver_input.objective_node_terms = std::move(gstate.evaluated_objective_node_terms);
-	solver_input.objective_node_expanded = std::move(gstate.evaluated_objective_node_expanded);
-	solver_input.objective_node_constant = gstate.evaluated_objective_node_constant;
 #ifdef DEBUG
     if (auto objective = tree->Objective()) {
         VerifyCountedOnce(objective->terms, solver_input.objective_coefficients, vector<idx_t>());

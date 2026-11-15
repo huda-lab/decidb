@@ -327,31 +327,6 @@ const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const Solver
     if (!out.offsets.empty()) {
         return out;
     }
-	if (!ec.node_rows.offsets.empty()) {
-		if (ec.node_rows.offsets.size() != ec.node_rows.constants.size() + 1 ||
-		    ec.node_rows.offsets.front() != 0 || ec.node_rows.offsets.back() != ec.node_rows.terms.size()) {
-			throw InternalException("DECIDE: a tree-composed E row formula is malformed");
-		}
-		SparseCoeffAccumulator accum;
-		accum.BeginForDecisions(indexer, ec.node_rows.terms.size(), written);
-		out.offsets.reserve(ec.node_rows.constants.size() + 1);
-		out.constants.assign(ec.node_rows.constants.size(), 0.0);
-		out.offsets.push_back(0);
-		for (idx_t row = 0; row < ec.node_rows.constants.size(); row++) {
-			double constant = ec.node_rows.constants[row];
-			for (idx_t term = ec.node_rows.offsets[row]; term < ec.node_rows.offsets[row + 1]; term++) {
-				const auto &node_term = ec.node_rows.terms[term];
-				constant += ForEachTermColumn(input, indexer, node_term.variable, node_term.row, node_term.coefficient,
-				                             false, [&](int column, double coefficient) {
-					                             accum.Add(column, coefficient);
-				                             });
-			}
-			accum.Flush(out.columns, out.values);
-			out.constants[row] = constant;
-			out.offsets.push_back(out.columns.size());
-		}
-		return out;
-	}
     const idx_t num_rows = indexer.num_rows;
     // The data rows of each emitted row: a grouped aggregate's group (ClauseRows), all rows for an ungrouped one, the
     // row itself for a per-row clause.
@@ -682,13 +657,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     }
     model.maximize = (input.sense == DecideSense::MAXIMIZE);
     model.obj_constant = input.objective_constant;
-	model.obj_constant += input.objective_node_constant;
 
     if (!input.objective_variable_indices.empty()) {
         for (idx_t term_idx = 0; term_idx < input.objective_variable_indices.size(); term_idx++) {
-			if (term_idx < input.objective_node_expanded.size() && input.objective_node_expanded[term_idx]) {
-				continue;
-			}
             idx_t decide_var_idx = input.objective_variable_indices[term_idx];
             if (term_idx >= input.objective_coefficients.size()) {
                 continue;
@@ -716,13 +687,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 			}
         }
     }
-	for (const auto &node_term : input.objective_node_terms) {
-		model.obj_constant += ForEachTermColumn(input, indexer, node_term.variable, node_term.row,
-		                                      node_term.coefficient, true, [&](int column, double coefficient) {
-			                                      AddCoefficient(model.obj_coeffs[column], coefficient,
-			                                                     input.objective_written);
-		                                      });
-	}
 
     //===--------------------------------------------------------------------===//
     // 2b. Build quadratic objective (Q matrix) if present

@@ -233,10 +233,6 @@ public:
     vector<idx_t> objective_variable_indices;
 	//! Producer G/O/F node per objective term, INVALID for a decision leaf; aligned with objective_variable_indices.
 	vector<idx_t> objective_value_nodes;
-	//! Tree-composed nested SUM/AVG objective members, plus the original term slots they replace.
-	vector<NodeLinearRowTerm> evaluated_objective_node_terms;
-	vector<bool> evaluated_objective_node_expanded;
-	double evaluated_objective_node_constant = 0.0;
 
     // Quadratic objective: evaluated inner linear expression coefficients
     vector<CoefficientColumn> evaluated_quadratic_coefficients;  // [term_idx]

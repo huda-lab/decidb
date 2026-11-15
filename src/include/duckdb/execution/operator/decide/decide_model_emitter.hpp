@@ -108,8 +108,6 @@ public:
 	//! Each helper's members (DecideGlobalSinkState::evaluated_value_links), per group of its `by` key that holds
 	//! one, as flat lists them after the composed clauses.
 	void ValueLinks();
-	//! Compose a root E row with any child G SUM/AVG formulas, after ValueLinks has emitted those formulas.
-	void ExpandClauseValues();
 
 private:
 	//! A helper's members (language/guide.md §7.2): the entries of its G's operand it reads, every decision they read
@@ -132,8 +130,6 @@ private:
 	const DecideSourceNames &names;
 	idx_t num_rows;
 	DecideErrorLedger &errors;
-	//! Finalized row-to-class maps, retained while the tree's G nodes compose nested reducer values.
-	const vector<KeyedMapping> *keyed_mappings = nullptr;
 	//! The input's first chunk, where a value the whole query shares is read (FirstRowValue).
 	DataChunk &first;
 	//! Per value-link node, its helper's members, read once where its classes are (HelperMapping), which ValueLinks lists.
@@ -188,15 +184,6 @@ private:
 	//! payload's terms on the rows the windows read, its `else`'s at the anchors that reach it, each a program on the
 	//! frame's O `node`, as flat lists them.
 	void FrameMembers(idx_t node, ReducerValueMembers &out);
-	//! Compose a nested SUM/AVG child's formula into its enclosing SUM/AVG G node, as the deck's node-by-node
-	//! formulation does. Extremum and frame values stay explicit for their own lowering.
-	void ExpandNestedLinearMembers(idx_t node, ReducerValueLinkSpec &link, const vector<idx_t> &link_by_node,
-	                               vector<vector<idx_t>> &group_by_instance,
-	                               vector<bool> &group_by_instance_ready);
-	//! Compose child G SUM/AVG members into the row formula of a root E clause.
-	void ExpandClauseValue(idx_t root, EvaluatedConstraint &clause, const vector<idx_t> &link_by_node);
-	//! Compose child G SUM/AVG members in a linear objective E term.
-	void ExpandObjectiveValues(const vector<idx_t> &link_by_node);
 	//! A grouped clause's bound on each of `rows` (its kept rows and their root's entries), a NULL one marking its row
 	//! in `null_rows`; for a tightest frame bound (D85) the rows where it bounds nothing instead, which are returned
 	//! (TakeTightestFrameBound): empty for any other bound, and for one the whole clause shares (DescribeBound).

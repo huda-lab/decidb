@@ -172,8 +172,10 @@ class TestIntoMembers:
             pytest.param("avg", [1.0, 1.5, 4.0], id="sum-of-group-averages"),
         ],
     )
-    def test_objective_E_composes_nested_linear_reducers(self, decidb_cli, tmp_path, inner, objective_coefficients):
-        """A linear objective E composes each child's members, retaining its coefficient and source row."""
+    def test_an_objective_of_group_reducers_weighs_each_decision(
+        self, decidb_cli, tmp_path, inner, objective_coefficients
+    ):
+        """A sum of group SUMs or AVGs in the objective is one coefficient per decision, with no helper column."""
         sql = f"""
             SELECT id, x FROM (VALUES (1, 'a', 2.0), (2, 'a', 3.0), (3, 'b', 4.0)) t(id, g, w)
             DECIDE x(REAL)
@@ -186,8 +188,8 @@ class TestIntoMembers:
         coefficients = [float(line.split(" obj=", 1)[1]) for line in columns]
         assert coefficients == objective_coefficients, dump
 
-    def test_objective_E_keeps_nested_extrema_as_node_terms(self, decidb_cli, tmp_path):
-        """An objective E preserves each child MAX value while composing its own row formula."""
+    def test_an_objective_of_group_maxima_keeps_a_helper_per_group(self, decidb_cli, tmp_path):
+        """A sum of group MAXes in the objective keeps one MAX helper per group of two or more members."""
         sql = """
             SELECT id, x FROM (VALUES (1, 'a', 2.0), (2, 'a', 3.0), (3, 'b', 4.0)) t(id, g, w)
             DECIDE x(REAL)
@@ -205,15 +207,15 @@ class TestIntoMembers:
             (">", 1.0, frozenset({(4, 1.0), (5, 1.0)})),
         }
 
-    def test_objective_E_composes_linear_terms_beside_a_quadratic_sibling(self, decidb_cli, tmp_path):
-        """A quadratic objective sibling does not prevent E from composing its linear SUM terms."""
+    def test_a_quadratic_objective_term_leaves_the_group_sums_linear(self, decidb_cli_gurobi, tmp_path):
+        """A square beside the sum of group SUMs keeps their linear coefficients; HiGHS cannot maximize the square."""
         sql = """
             SELECT id, x FROM (VALUES (1, 'a', 2.0), (2, 'a', 3.0), (3, 'b', 4.0)) t(id, g, w)
             DECIDE x(REAL)
             SUCH THAT x <= 10
             MAXIMIZE sum(per t.g: sum(t.w * x) by (t.g)) + sum(power(x, 2))
             ORDER BY id"""
-        dump = decidb_cli.dump_model(sql, tmp_path / "objective-quadratic.dump")
+        dump = decidb_cli_gurobi.dump_model(sql, tmp_path / "objective-quadratic.dump")
         assert dump_counts(dump) == {"num_vars": 3, "num_rows": 0}
         columns = [line for line in dump.splitlines() if line.startswith("col ")]
         coefficients = [float(line.split(" obj=", 1)[1]) for line in columns]
@@ -221,8 +223,8 @@ class TestIntoMembers:
         q_terms = [line.strip() for line in dump.splitlines() if line.startswith("  q ")]
         assert q_terms == ["q 0,0:1", "q 1,1:1", "q 2,2:1"], dump
 
-    def test_objective_E_composes_linear_terms_beside_a_composed_extremum(self, decidb_cli, tmp_path):
-        """A composed MAX sibling leaves the additive E's nested SUM terms available for composition."""
+    def test_a_composed_max_objective_term_leaves_the_group_sums_linear(self, decidb_cli, tmp_path):
+        """A composed MAX beside the sum of group SUMs keeps their linear coefficients and its own seven rows."""
         sql = """
             SELECT id, x FROM (VALUES (1, 'a', 2.0), (2, 'a', 3.0), (3, 'b', 4.0)) t(id, g, w)
             DECIDE x(REAL)
