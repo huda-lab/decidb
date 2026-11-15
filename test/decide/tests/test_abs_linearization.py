@@ -1958,8 +1958,11 @@ _SCOPE_W = (2, 3, 4)
             {"d": range(4)},
             lambda a: a["d"] <= 3 and abs(2 * a["d"] - 4) >= 1 and abs(a["d"] - 4) >= 1,
             lambda a: sum(_SCOPE_W) * a["d"],
-            {"decidb_cli_gurobi": (9, 11), "decidb_cli_highs": (9, 14)},
-            id="abs-over-a-reducer-is-per-row",
+            # The reducer's helper per group of k and an auxiliary per group, with its native argument column on
+            # Gurobi and its sign on HiGHS, and d: 7. Two envelope rows per auxiliary and a definition per helper,
+            # with Gurobi's two argument rows or HiGHS's four sign rows; `>= 1` bounds each auxiliary's box.
+            {"decidb_cli_gurobi": (7, 8), "decidb_cli_highs": (7, 10)},
+            id="abs-over-a-reducer-is-one-auxiliary-per-group",
         ),
     ],
 )
@@ -1968,9 +1971,9 @@ def test_abs_auxiliary_takes_the_scope_its_argument_reads(
 ):
     """ABS's auxiliary, and on the lowering arm its sign indicator, is a column defined by its
     argument: one for a query-wide argument and one per key for a keyed one, with its envelope
-    rows once per instance. A reducer is one value per group of its own `by`, which no
-    declared scope names, so an argument holding one keeps a column per row: one shared column
-    would have to equal both groups' |SUM(d) - 4|. Gurobi states the ABS natively and HiGHS
+    rows once per instance. A reducer is one value per group of its own `by`, which its helper's
+    scope names, so an argument holding one has a column per group: one shared column would have
+    to equal both groups' |SUM(d) - 4|, one per row repeats a group's. Gurobi states the ABS natively and HiGHS
     lowers it by its sign. Judged against every assignment on both solvers."""
     cli = request.getfixturevalue(cli_fixture)
     sql = f"""

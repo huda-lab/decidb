@@ -244,23 +244,10 @@ DecideVarScopeInfo decide_rewrite::ScopeOf(const LogicalDecide &decide, const De
 		auto &ref = expr.Cast<BoundColumnRefExpression>();
 		if (ref.binding.table_index == decide.decide_index) {
 			auto var_idx = ref.binding.column_index;
-			// A reducer value helper keeps its source reducer's scope: an unqualified, ungrouped reducer is
-			// query-wide, while a reducer with its own grouping or qualifier has no declared DECIDE scope and reads
-			// per row.
-			for (auto &link : decide.reducer_value_links) {
-				if (link.value_var == var_idx) {
-					// A frame link has a keyed scope for its windows; unlike a reducer's own `by`, that scope names
-					// exactly the instances the function must share.
-					if (link.frame != DConstants::INVALID_INDEX) {
-						return var_idx < decide.variable_scopes.size() ? decide.variable_scopes[var_idx]
-						                                       : DecideVarScopeInfo::Row();
-					}
-					return link.group_key != DConstants::INVALID_INDEX ||
-					               link.qualifier_scope_idx != DConstants::INVALID_INDEX
-					           ? DecideVarScopeInfo::Row()
-					           : DecideVarScopeInfo::Global();
-				}
-			}
+			// A decision brings its declared scope. A reducer value helper's is a scope of its own, one class per
+			// group of its path key or per window of its frame (AddValueHelper), so what is computed from its value
+			// has an instance per group, not per row: a row's instance would make each row a variant of a scope
+			// reading it (`sum(per t.g: abs(avg(...)))`).
 			return var_idx < decide.variable_scopes.size() ? decide.variable_scopes[var_idx]
 			                                               : DecideVarScopeInfo::Row();
 		}

@@ -515,7 +515,9 @@ product back (`FindAndReplaceBilinear`).
 operator's type: Global < Keyed < Row. Two query-wide factors give one query-wide column; a query-wide factor and a
 keyed one, or two alike keyed factors, a column per key; anything else a column per row. Every other auxiliary takes
 its scope the same way, from the leaves its expression reads (`ScopeOf`: a decision brings its scope, a query-wide value
-is query-wide, any other column and any reducer is row data, since a reducer's value differs between groups): the ABS
+is query-wide, any other column and any reducer is row data, since a reducer's value differs between groups; a reducer
+the value rewrite holds in a helper brings the helper's own scope, one class per group, so
+`sum(per t.g: abs(sum(x) by (t.g) - 4))` reads one ABS per class of g, where one per row made each row a variant): the ABS
 auxiliary and its sign indicator, the `__body_` helper, the L0 norm's and the IN's indicators. Their defining rows are
 emitted once per instance (`ScopeRowPerInstance`, outside the clause's `when`), so `ABS(s - 4)` over a query-wide `s` is
 one auxiliary and one row set, not one per row. The ABS Big-M and the L0 auto bound take their maximum over the rows

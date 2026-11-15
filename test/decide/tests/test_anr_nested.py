@@ -908,6 +908,68 @@ def test_abs_over_a_nested_reducer(request, scope_solver, cli_fixture, clause_sq
     assert model.judge(answer(cli, sql), clauses, MAXIMIZE_X) == pytest.approx(optimum, abs=1e-6)
 
 
+#: Each class of g holds two rows, so a value read once per row of a class, not once per class, counts twice.
+CLASS_COLUMNS = ("id", "g", "p", "k", "h", "n")
+CLASS_ROWS = (
+    (1, "a", True, 0, "q", 1),
+    (2, "a", False, 1, "q", 1),
+    (3, "b", True, 0, "q", 2),
+    (4, "b", True, 1, "q", 2),
+)
+S, Y = Var("s"), Var("y")
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+def test_abs_over_a_nested_reducer_is_one_value_per_class(request, scope_solver, cli_fixture):
+    """`sum(per t.g: abs(e))` adds one value per class of g (deck p. 30): the ABS of a nested reducer's helper is one
+    instance per group of the helper (decide_optimizer.cpp, ScopeOf), so it splits no class into its rows. Worked by
+    hand: |s_a - 4| + |s_b - 4| <= 2 reaches 10; a helper per row read twice per class reached 9."""
+    cli = request.getfixturevalue(cli_fixture)
+    sql = f"""
+        SELECT id, x {table('t', CLASS_COLUMNS, CLASS_ROWS)}
+        DECIDE x(INT)
+        SUCH THAT x <= 9 AND sum(per t.g: abs(sum(x) by (t.g) - 4)) <= 2
+        MAXIMIZE SUM(x)
+        ORDER BY id"""
+    body = le(reduce("sum", Abs(reduce("sum", X, by=("g",)) - 4), per=("g",)), 2)
+    reached = _judged(
+        cli, scope_solver, sql, table_rows(CLASS_COLUMNS, CLASS_ROWS), [Decision("x")], [clause(le(X, 9)), clause(body)]
+    )
+    assert reached == pytest.approx(10)
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+def test_abs_over_a_nested_mean_inside_a_grouped_value(request, scope_solver, cli_fixture):
+    """fuzz nests seed 5261: a helper's members `per t.g: abs(avg(...))` inside `by (t.h)` read each class once. The
+    mean ranges over the one h group (deck p. 30): k = 0 sums y_a + y_b = 3 and k = 1 sums y_b = 2, so it is 2.5, read
+    once per class: s = 5 on every row, 20 in all. A helper per row made each row a variant, s = 10."""
+    cli = request.getfixturevalue(cli_fixture)
+    inner = "sum(when t.p per (): y) by (t.k)"
+    sql = f"""
+        SELECT id, s, y {table('t', CLASS_COLUMNS, CLASS_ROWS)}
+        DECIDE s(REAL), per t.g: y(INT)
+        SUCH THAT s >= -1000 AND s <= 1000 AND y <= 3 AND y = t.n
+            AND s = sum(per t.g: abs(avg(per row: {inner}))) by (t.h)
+        MINIMIZE SUM(s)
+        ORDER BY id"""
+    nested = reduce("sum", Y, when=lambda r: r["p"], per=GLOBAL, by=("k",))
+    value = reduce("sum", Abs(reduce("avg", nested)), per=("g",), by=("h",))
+    clauses = [
+        clause(ge(S, -1000)),
+        clause(le(S, 1000)),
+        clause(le(Y, 3)),
+        clause(eq(Y, Col("n"))),
+        clause(eq(S, value)),
+    ]
+    decisions = [Decision("s", var_type=VarType.CONTINUOUS, lb=-1000.0), Decision("y", key=("g",))]
+    objective = Objective(ObjSense.MINIMIZE, reduce("sum", S))
+    rows = table_rows(CLASS_COLUMNS, CLASS_ROWS)
+    reached = _judged(cli, scope_solver, sql, rows, decisions, clauses, objective)
+    assert reached == pytest.approx(20)
+
+
 def _largest(x, ids):
     return max(x[i] for i in ids)
 
