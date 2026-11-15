@@ -166,6 +166,27 @@ class TestIntoMembers:
         assert _rows(dump) == {("<", 22.5, east), ("<", 48.5, west), ("<", 37.5, west)}
 
     @pytest.mark.parametrize(
+        "inner, objective_coefficients",
+        [
+            pytest.param("sum", [2.0, 3.0, 4.0], id="sum-of-group-sums"),
+            pytest.param("avg", [1.0, 1.5, 4.0], id="sum-of-group-averages"),
+        ],
+    )
+    def test_objective_E_composes_nested_linear_reducers(self, decidb_cli, tmp_path, inner, objective_coefficients):
+        """A linear objective E composes each child's members, retaining its coefficient and source row."""
+        sql = f"""
+            SELECT id, x FROM (VALUES (1, 'a', 2.0), (2, 'a', 3.0), (3, 'b', 4.0)) t(id, g, w)
+            DECIDE x(REAL)
+            SUCH THAT x <= 10
+            MAXIMIZE sum(per t.g: {inner}(t.w * x) by (t.g))
+            ORDER BY id"""
+        dump = decidb_cli.dump_model(sql, tmp_path / f"objective-{inner}.dump")
+        assert dump_counts(dump) == {"num_vars": 3, "num_rows": 0}
+        columns = [line for line in dump.splitlines() if line.startswith("col ")]
+        coefficients = [float(line.split(" obj=", 1)[1]) for line in columns]
+        assert coefficients == objective_coefficients, dump
+
+    @pytest.mark.parametrize(
         "inner, extra, counts, west",
         [
             pytest.param(

@@ -682,9 +682,13 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     }
     model.maximize = (input.sense == DecideSense::MAXIMIZE);
     model.obj_constant = input.objective_constant;
+	model.obj_constant += input.objective_node_constant;
 
     if (!input.objective_variable_indices.empty()) {
         for (idx_t term_idx = 0; term_idx < input.objective_variable_indices.size(); term_idx++) {
+			if (term_idx < input.objective_node_expanded.size() && input.objective_node_expanded[term_idx]) {
+				continue;
+			}
             idx_t decide_var_idx = input.objective_variable_indices[term_idx];
             if (term_idx >= input.objective_coefficients.size()) {
                 continue;
@@ -712,6 +716,13 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 			}
         }
     }
+	for (const auto &node_term : input.objective_node_terms) {
+		model.obj_constant += ForEachTermColumn(input, indexer, node_term.variable, node_term.row,
+		                                      node_term.coefficient, true, [&](int column, double coefficient) {
+			                                      AddCoefficient(model.obj_coeffs[column], coefficient,
+			                                                     input.objective_written);
+		                                      });
+	}
 
     //===--------------------------------------------------------------------===//
     // 2b. Build quadratic objective (Q matrix) if present

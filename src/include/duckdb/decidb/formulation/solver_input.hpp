@@ -725,6 +725,11 @@ struct SolverInput {
     vector<idx_t> objective_variable_indices;          // [term_idx]
 	//! Producer G/O/F node per term, INVALID for a decision leaf; aligned with objective_variable_indices.
 	vector<idx_t> objective_value_nodes;
+	//! Per-tree-produced objective terms after an E-to-G SUM/AVG composition. The original objective arrays remain
+	//! alongside them for stage-06 helper placement; the expanded flag says which original term these replace.
+	vector<NodeLinearRowTerm> objective_node_terms;
+	vector<bool> objective_node_expanded;
+	double objective_node_constant = 0.0;
     DecideSense sense;
     //! The constant canonicalization peeled off the objective (LogicalDecide::objective_constant_offset). The model
     //! builder adds the constants it meets in the terms to it (SolverModel::obj_constant).

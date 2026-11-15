@@ -2433,6 +2433,7 @@ void DecideModelEmitter::ExpandClauseValues() {
 	for (idx_t clause = 0; clause < tree.constraint_count; clause++) {
 		ExpandClauseValue(roots[clause], gstate.evaluated_constraints[clause], link_by_node);
 	}
+	ExpandObjectiveValues(link_by_node);
 }
 
 void DecideModelEmitter::ExpandClauseValue(idx_t root, EvaluatedConstraint &clause,
@@ -2621,6 +2622,68 @@ void DecideModelEmitter::ExpandClauseValue(idx_t root, EvaluatedConstraint &clau
 	}
 	if (expanded) {
 		clause.node_rows = std::move(node_rows);
+	}
+}
+
+void DecideModelEmitter::ExpandObjectiveValues(const vector<idx_t> &link_by_node) {
+	gstate.evaluated_objective_node_terms.clear();
+	gstate.evaluated_objective_node_expanded.assign(gstate.objective_variable_indices.size(), false);
+	gstate.evaluated_objective_node_constant = 0.0;
+	if (gstate.objective_variable_indices.empty()) {
+		return;
+	}
+	const auto found = std::find_if(tree.roots.begin(), tree.roots.end(),
+	                               [&](idx_t root) { return tree.nodes[root]->compiled.objective != nullptr; });
+	if (found == tree.roots.end()) {
+		throw InternalException("DECIDE model emitter: evaluated objective has no E node");
+	}
+	const auto root = *found;
+	const auto &node = *tree.nodes[root];
+	const auto &objective = *node.compiled.objective;
+	// The stage-06 MIN/MAX objective spec, and nonlinear objectives, keep their existing formulation until their
+	// objective-node records are migrated as well.
+	if (!node.algebra || node.algebra->kind != DecideAlgebraKind::OPERATOR || node.algebra->children.size() != 1 ||
+	    !node.algebra->children[0] || node.algebra->children[0]->operation != "+" || objective.has_quadratic ||
+	    !objective.bilinear_terms.empty() || !node.compiled.composed.empty()) {
+		return;
+	}
+	if (gstate.objective_value_nodes.size() != gstate.objective_variable_indices.size() ||
+	    gstate.evaluated_objective_coefficients.size() != gstate.objective_variable_indices.size()) {
+		throw InternalException("DECIDE model emitter: objective E terms are misaligned");
+	}
+	const auto &links = gstate.evaluated_value_links;
+	for (idx_t term = 0; term < gstate.objective_variable_indices.size(); term++) {
+		const auto node_value = gstate.objective_value_nodes[term];
+		const auto link_index = node_value < link_by_node.size() ? link_by_node[node_value]
+		                                                        : DConstants::INVALID_INDEX;
+		if (link_index == DConstants::INVALID_INDEX || link_index >= links.size()) {
+			continue;
+		}
+		const auto &link = links[link_index];
+		if (link.frame || (link.agg_name != "sum" && link.agg_name != "avg") ||
+		    link.value_var != gstate.objective_variable_indices[term]) {
+			continue;
+		}
+		// Reuse E's row composer with one objective term as a single ungrouped aggregate row. Its row indices identify
+		// the original G members, while its constants travel separately to the objective's constant offset.
+		EvaluatedConstraint term_formula;
+		term_formula.lhs_is_aggregate = true;
+		term_formula.variable_indices.push_back(gstate.objective_variable_indices[term]);
+		term_formula.value_nodes.push_back(node_value);
+		term_formula.row_coefficients.push_back(gstate.evaluated_objective_coefficients[term]);
+		ExpandClauseValue(root, term_formula, link_by_node);
+		gstate.evaluated_objective_node_expanded[term] = true;
+		if (term_formula.node_rows.offsets.empty()) {
+			continue;
+		}
+		if (term_formula.node_rows.offsets.size() != 2 || term_formula.node_rows.constants.size() != 1) {
+			throw InternalException("DECIDE model emitter: objective E term has a malformed expanded formula");
+		}
+		gstate.evaluated_objective_node_terms.insert(gstate.evaluated_objective_node_terms.end(),
+		                                             term_formula.node_rows.terms.begin(),
+		                                             term_formula.node_rows.terms.end());
+		AddCoefficient(gstate.evaluated_objective_node_constant, term_formula.node_rows.constants[0],
+		               op.WrittenClause(DConstants::INVALID_INDEX));
 	}
 }
 

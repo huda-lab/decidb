@@ -195,6 +195,8 @@ private:
 	                               vector<bool> &group_by_instance_ready);
 	//! Compose child G SUM/AVG members into the row formula of a root E clause.
 	void ExpandClauseValue(idx_t root, EvaluatedConstraint &clause, const vector<idx_t> &link_by_node);
+	//! Compose child G SUM/AVG members in a linear objective E term.
+	void ExpandObjectiveValues(const vector<idx_t> &link_by_node);
 	//! A grouped clause's bound on each of `rows` (its kept rows and their root's entries), a NULL one marking its row
 	//! in `null_rows`; for a tightest frame bound (D85) the rows where it bounds nothing instead, which are returned
 	//! (TakeTightestFrameBound): empty for any other bound, and for one the whole clause shares (DescribeBound).
