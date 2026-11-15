@@ -69,24 +69,35 @@ idx_t DecideTreeMembersOf(const DecideTree &tree, idx_t reducer) {
 namespace decide_tree_compile {
 
 //! Where a term of `holder`'s body is computed: on the operand of the G it ranges over, else on the holder itself.
-static DecideTermSite Site(const DecideTree &tree, idx_t holder, idx_t child) {
+static DecideTermSite Site(const DecideTree &tree, idx_t holder, idx_t child, idx_t qualifier_scope,
+                           idx_t qualifier_reducer) {
 	DecideTermSite site;
 	site.node = child == DConstants::INVALID_INDEX ? holder : DecideTreeOperand(tree, child);
+	if (qualifier_scope != DConstants::INVALID_INDEX) {
+		if (qualifier_reducer >= tree.nodes.size() ||
+		    tree.nodes[qualifier_reducer]->qualifier_scope != qualifier_scope ||
+		    tree.nodes[qualifier_reducer]->kind != DecideNodeKind::REDUCER) {
+			throw InternalException("DECIDE tree: a relation-qualified term has no matching reducer occurrence");
+		}
+		site.qualifier_operand = DecideTreeOperand(tree, qualifier_reducer);
+	}
 	return site;
 }
 
 static void SiteClause(const DecideTree &tree, idx_t holder, DecideBody &body) {
 	auto &clause = *body.clause;
 	for (auto &term : clause.lhs_terms) {
-		body.linear.push_back(Site(tree, holder, term.child));
+		body.linear.push_back(Site(tree, holder, term.child, term.qualifier_scope_idx, term.qualifier_reducer));
 	}
 	for (auto &term : clause.bilinear_terms) {
-		body.products.push_back(Site(tree, holder, term.child));
+		body.products.push_back(
+		    Site(tree, holder, term.child, term.qualifier_scope_idx, term.qualifier_reducer));
 	}
 	for (auto &group : clause.quadratic_groups) {
 		body.squares.emplace_back();
 		for (idx_t t = 0; t < group.inner_terms.size(); t++) {
-			body.squares.back().push_back(Site(tree, holder, group.child));
+			body.squares.back().push_back(
+			    Site(tree, holder, group.child, group.qualifier_scope_idx, group.qualifier_reducer));
 		}
 	}
 }
@@ -94,14 +105,16 @@ static void SiteClause(const DecideTree &tree, idx_t holder, DecideBody &body) {
 static void SiteObjective(const DecideTree &tree, idx_t holder, DecideBody &body) {
 	auto &objective = *body.objective;
 	for (auto &term : objective.terms) {
-		body.linear.push_back(Site(tree, holder, term.child));
+		body.linear.push_back(Site(tree, holder, term.child, term.qualifier_scope_idx, term.qualifier_reducer));
 	}
 	for (auto &term : objective.bilinear_terms) {
-		body.products.push_back(Site(tree, holder, term.child));
+		body.products.push_back(
+		    Site(tree, holder, term.child, term.qualifier_scope_idx, term.qualifier_reducer));
 	}
 	body.squares.emplace_back();
 	for (auto &term : objective.squared_terms) {
-		body.squares.back().push_back(Site(tree, holder, term.child));
+		body.squares.back().push_back(
+		    Site(tree, holder, term.child, term.qualifier_scope_idx, term.qualifier_reducer));
 	}
 }
 

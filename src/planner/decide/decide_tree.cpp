@@ -1148,15 +1148,15 @@ public:
 		return std::move(tree);
 	}
 
-	//! The G a reducer stage 05 lowers ranges over (DecideTreeConstruction::ReducerChild).
-	idx_t ReducerChild(const BoundAggregateExpression &reducer) const {
+	//! The exact G created for this reducer occurrence, before following nested reducer bodies.
+	idx_t ReducerNode(const BoundAggregateExpression &reducer) const {
 		static const bool inject = [] {
 			const char *setting = std::getenv("DECIDB_EVALUATOR_INJECT");
 			return setting && string(setting) == "g1";
 		}();
 		auto found = inject ? sources.reducer_nodes.end() : sources.reducer_nodes.find(&reducer);
 		if (found != sources.reducer_nodes.end()) {
-			return DecideTreeMembersOf(*tree, found->second);
+			return found->second;
 		}
 		// ABS envelope metadata is lowered independently from the retained source expression, so its canonicalized
 		// reducer nodes are equal copies rather than the same addresses. Reuse the corresponding G when the reducer's
@@ -1165,12 +1165,17 @@ public:
 			for (auto &entry : sources.reducer_nodes) {
 				if (entry.first && entry.first->GetAlias() == reducer.GetAlias() &&
 				    DecideExpressionsEqual(*entry.first, reducer)) {
-					return DecideTreeMembersOf(*tree, entry.second);
+					return entry.second;
 				}
 			}
 		}
 		throw InternalException("DECIDE tree: stage 05 lowers a reducer the tree has no node for: %s",
 		                        reducer.ToString());
+	}
+
+	//! The G a reducer stage 05 lowers ranges over (DecideTreeConstruction::ReducerChild).
+	idx_t ReducerChild(const BoundAggregateExpression &reducer) const {
+		return DecideTreeMembersOf(*tree, ReducerNode(reducer));
 	}
 
 	//! DecideTreeConstruction::TakeClause.
@@ -1916,6 +1921,7 @@ private:
 		const bool qualified = TryParseQualifiedReducerTag(aggregate.GetAlias(), qualifier) ||
 		                       TryParseDecideIndexTag(aggregate.GetAlias(), TREE_REDUCER_SCOPE_TAG_PREFIX, qualifier);
 		if (qualified && qualifier < op.keyed_scopes.size()) {
+			node.qualifier_scope = qualifier;
 			entry.key = op.keyed_scopes[qualifier].key;
 			entry.per = entry.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
 			// Flat reads the reducer's terms on every row its `when` keeps, and its qualifier keeps no value of a row
@@ -2315,6 +2321,10 @@ DecideTreeConstruction::~DecideTreeConstruction() {
 
 idx_t DecideTreeConstruction::ReducerChild(const BoundAggregateExpression &reducer) const {
 	return builder->ReducerChild(reducer);
+}
+
+idx_t DecideTreeConstruction::ReducerNode(const BoundAggregateExpression &reducer) const {
+	return builder->ReducerNode(reducer);
 }
 
 void DecideTreeConstruction::TakeClause(const Expression &leaf, unique_ptr<DecideConstraint> clause,

@@ -62,6 +62,8 @@ struct DecideTreeRead {
 //! coefficient's program there, and the programs of the values it is computed from, which only a message reads.
 struct DecideTermSite {
 	idx_t node = DConstants::INVALID_INDEX;
+	//! Operand of the exact relation-qualified reducer occurrence, when one qualifies this term.
+	idx_t qualifier_operand = DConstants::INVALID_INDEX;
 	//! Into the site's programs; INVALID for a coefficient of 1 that stage 05 left out (a product's).
 	idx_t program = DConstants::INVALID_INDEX;
 	vector<idx_t> inputs;
@@ -369,6 +371,8 @@ public:
 	~DecideTreeConstruction();
 	//! The node whose operand entries a reducer the lowering reads ranges over.
 	idx_t ReducerChild(const BoundAggregateExpression &reducer) const;
+	//! The exact G created for a reducer occurrence, before following nested reducer bodies.
+	idx_t ReducerNode(const BoundAggregateExpression &reducer) const;
 	//! The records the lowering made of the clause whose comparison is `leaf`, into the root it became; a folded
 	//! bound's, which the repair model alone reads, into its root too.
 	void TakeClause(const Expression &leaf, unique_ptr<DecideConstraint> clause, bool singleton_row);

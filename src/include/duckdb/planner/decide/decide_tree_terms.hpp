@@ -48,6 +48,8 @@ struct DecideTerm {
 	//! keyed_mappings; coefficient evaluation keeps one row per tuple identity
 	//! of that relation and zeroes the duplicates the join introduced.
 	idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
+	//! The exact G whose `per` qualifies this term. Scope indexes may be reused by several reducer occurrences.
+	idx_t qualifier_reducer = DConstants::INVALID_INDEX;
 	//! The values the user wrote that `coefficient` is computed from when DeciDB computed it (like terms merged, a
 	//! reducer's factor applied), in reading order; empty when `coefficient` is as written. A coefficient that is not
 	//! finite names the first of them a column holds that is not finite, and its clause when there is none: DeciDB's
@@ -81,6 +83,8 @@ struct BilinearConstraintTerm {
 	//! keyed_mappings; coefficient evaluation keeps one row per tuple identity
 	//! of that relation and zeroes the duplicates the join introduced.
 	idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
+	//! As DecideTerm::qualifier_reducer.
+	idx_t qualifier_reducer = DConstants::INVALID_INDEX;
 	//! The values `coefficient` is computed from (DecideTerm::inputs).
 	vector<unique_ptr<Expression>> inputs;
 	//! As DecideTerm::child.
@@ -192,6 +196,8 @@ struct DecideConstraint {
 		//! keyed_mappings; coefficient evaluation keeps one row per tuple identity
 		//! of that relation and zeroes the duplicates the join introduced.
 		idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
+		//! As DecideTerm::qualifier_reducer.
+		idx_t qualifier_reducer = DConstants::INVALID_INDEX;
 		//! As DecideTerm::child, for the group's scale; its inner terms carry it too.
 		idx_t child = DConstants::INVALID_INDEX;
 
@@ -235,6 +241,8 @@ struct DecideObjective {
 		//! keyed_mappings; coefficient evaluation keeps one row per tuple identity
 		//! of that relation and zeroes the duplicates the join introduced.
 		idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
+		//! As DecideTerm::qualifier_reducer.
+		idx_t qualifier_reducer = DConstants::INVALID_INDEX;
 		//! SUM inside a reducer, NONE outside every reducer (counted once), as for DecideTerm.
 		LinearTermReduction reduction = LinearTermReduction::NONE;
 		//! The values `coefficient` is computed from (DecideTerm::inputs).

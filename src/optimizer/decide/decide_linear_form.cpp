@@ -921,16 +921,31 @@ private:
 	void Stamp(const BoundAggregateExpression &agg, DecideConstraint &constraint, idx_t linear, idx_t bilinear,
 	           idx_t quadratic) const {
 		const auto node = tree.ReducerChild(agg);
+		const auto qualifier_reducer = QualifierScopeOf(agg) == DConstants::INVALID_INDEX
+		                                  ? DConstants::INVALID_INDEX
+		                                  : tree.ReducerNode(agg);
 		for (idx_t i = linear; i < constraint.lhs_terms.size(); i++) {
 			constraint.lhs_terms[i].child = node;
+			if (qualifier_reducer != DConstants::INVALID_INDEX) {
+				constraint.lhs_terms[i].qualifier_reducer = qualifier_reducer;
+			}
 		}
 		for (idx_t i = bilinear; i < constraint.bilinear_terms.size(); i++) {
 			constraint.bilinear_terms[i].child = node;
+			if (qualifier_reducer != DConstants::INVALID_INDEX) {
+				constraint.bilinear_terms[i].qualifier_reducer = qualifier_reducer;
+			}
 		}
 		for (idx_t i = quadratic; i < constraint.quadratic_groups.size(); i++) {
 			constraint.quadratic_groups[i].child = node;
+			if (qualifier_reducer != DConstants::INVALID_INDEX) {
+				constraint.quadratic_groups[i].qualifier_reducer = qualifier_reducer;
+			}
 			for (auto &inner : constraint.quadratic_groups[i].inner_terms) {
 				inner.child = node;
+				if (qualifier_reducer != DConstants::INVALID_INDEX) {
+					inner.qualifier_reducer = qualifier_reducer;
+				}
 			}
 		}
 	}
@@ -939,14 +954,26 @@ private:
 	void Stamp(const BoundAggregateExpression &agg, DecideObjective &objective, idx_t linear, idx_t bilinear,
 	           idx_t squared) const {
 		const auto node = tree.ReducerChild(agg);
+		const auto qualifier_reducer = QualifierScopeOf(agg) == DConstants::INVALID_INDEX
+		                                  ? DConstants::INVALID_INDEX
+		                                  : tree.ReducerNode(agg);
 		for (idx_t i = linear; i < objective.terms.size(); i++) {
 			objective.terms[i].child = node;
+			if (qualifier_reducer != DConstants::INVALID_INDEX) {
+				objective.terms[i].qualifier_reducer = qualifier_reducer;
+			}
 		}
 		for (idx_t i = bilinear; i < objective.bilinear_terms.size(); i++) {
 			objective.bilinear_terms[i].child = node;
+			if (qualifier_reducer != DConstants::INVALID_INDEX) {
+				objective.bilinear_terms[i].qualifier_reducer = qualifier_reducer;
+			}
 		}
 		for (idx_t i = squared; i < objective.squared_terms.size(); i++) {
 			objective.squared_terms[i].child = node;
+			if (qualifier_reducer != DConstants::INVALID_INDEX) {
+				objective.squared_terms[i].qualifier_reducer = qualifier_reducer;
+			}
 		}
 	}
 
