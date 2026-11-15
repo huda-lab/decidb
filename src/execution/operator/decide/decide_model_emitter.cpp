@@ -2639,7 +2639,6 @@ void DecideModelEmitter::ExpandObjectiveValues(const vector<idx_t> &link_by_node
 	}
 	const auto root = *found;
 	const auto &node = *tree.nodes[root];
-	const auto &objective = *node.compiled.objective;
 	// Compose the linear terms owned by an additive objective E. Root MIN/MAX terms, quadratic siblings, bilinear
 	// siblings and composed MIN/MAX terms keep their stage-06 formulation while the linear terms are recorded here.
 	if (!node.algebra || node.algebra->kind != DecideAlgebraKind::OPERATOR || node.algebra->children.size() != 1 ||

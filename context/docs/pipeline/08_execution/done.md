@@ -447,8 +447,9 @@ The F1 SUM-inside-SUM dump has exactly the three deck rows: `ship1 + ship2 <= 22
 four lower-envelope rows for its two multi-member MAX helpers, matching pp. 112–115. A three-level SUM/AVG/SUM
 fixture emits the expected 0.5 and 1.0 coefficients directly on its two root rows. SUM/AVG-of-group objective fixtures
 emit the expected weighted per-decision coefficients and preserve absent-group skipping; a grouped MAX objective keeps
-its helper rows and objective coefficients unchanged, and a quadratic sibling keeps the same Q matrix. The targeted
-`test_anr_nested.py`, `test_tree_emitter.py`, and `test_anr_inlining.py` run passed 245 tests; 1,249 tests skipped
+its helper rows and objective coefficients unchanged, a quadratic sibling keeps the same Q matrix, and a composed MAX
+sibling keeps its seven rows. The targeted `test_anr_nested.py`, `test_tree_emitter.py`, and `test_anr_inlining.py` run
+passed 246 tests; 1,249 tests skipped
 because Gurobi/gurobipy is unavailable on the host. The release target built successfully.
 
 **Cost**, measured before flat was deleted, against flat on one binary (`benchmark/decide/anr_scaling.py --against` a

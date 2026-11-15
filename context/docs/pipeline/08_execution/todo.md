@@ -21,8 +21,9 @@ pass now composes child G SUM/AVG formulas into an aggregate E row. It carries e
 stage 06 maps terms to columns without rediscovering reducer membership. MIN/MAX and frame children remain explicit.
 Additive objective E nodes compose their linear child SUM/AVG formulas, carrying source rows and constants into the
 objective record; child MIN/MAX values remain explicit node terms. This also applies when a quadratic sibling stays on
-the existing Q-matrix path. The solver builder maps the terms to columns, retaining grouped MAX helper rows. Flat outer
-MIN/MAX objectives and nonlinear terms still use the established lowering.
+the existing Q-matrix path or a composed MAX sibling stays on its stage-06 path. The solver builder maps the terms to
+columns, retaining grouped MAX helper rows. Flat outer MIN/MAX objectives and nonlinear terms still use the established
+lowering.
 The F1 SUM-inside-SUM rows now match pp. 116–119 exactly with only the six declared decision columns; MAX-inside-SUM
 matches pp. 112–115 with two MAX helper columns and the same three root rows. Three-level SUM/AVG/SUM coefficients
 also match the node-by-node formula.
