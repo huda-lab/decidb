@@ -205,6 +205,22 @@ class TestIntoMembers:
             (">", 1.0, frozenset({(4, 1.0), (5, 1.0)})),
         }
 
+    def test_objective_E_composes_linear_terms_beside_a_quadratic_sibling(self, decidb_cli, tmp_path):
+        """A quadratic objective sibling does not prevent E from composing its linear SUM terms."""
+        sql = """
+            SELECT id, x FROM (VALUES (1, 'a', 2.0), (2, 'a', 3.0), (3, 'b', 4.0)) t(id, g, w)
+            DECIDE x(REAL)
+            SUCH THAT x <= 10
+            MAXIMIZE sum(per t.g: sum(t.w * x) by (t.g)) + sum(power(x, 2))
+            ORDER BY id"""
+        dump = decidb_cli.dump_model(sql, tmp_path / "objective-quadratic.dump")
+        assert dump_counts(dump) == {"num_vars": 3, "num_rows": 0}
+        columns = [line for line in dump.splitlines() if line.startswith("col ")]
+        coefficients = [float(line.split(" obj=", 1)[1]) for line in columns]
+        assert coefficients == [2.0, 3.0, 4.0], dump
+        q_terms = [line.strip() for line in dump.splitlines() if line.startswith("  q ")]
+        assert q_terms == ["q 0,0:1", "q 1,1:1", "q 2,2:1"], dump
+
     @pytest.mark.parametrize(
         "inner, extra, counts, west",
         [

@@ -2640,11 +2640,10 @@ void DecideModelEmitter::ExpandObjectiveValues(const vector<idx_t> &link_by_node
 	const auto root = *found;
 	const auto &node = *tree.nodes[root];
 	const auto &objective = *node.compiled.objective;
-	// The stage-06 MIN/MAX objective spec, and nonlinear objectives, keep their existing formulation until their
-	// objective-node records are migrated as well.
+	// Compose the linear terms owned by an additive objective E. Root MIN/MAX terms, quadratic siblings, bilinear
+	// siblings and composed MIN/MAX terms keep their stage-06 formulation while the linear terms are recorded here.
 	if (!node.algebra || node.algebra->kind != DecideAlgebraKind::OPERATOR || node.algebra->children.size() != 1 ||
-	    !node.algebra->children[0] || node.algebra->children[0]->operation != "+" || objective.has_quadratic ||
-	    !objective.bilinear_terms.empty() || !node.compiled.composed.empty()) {
+	    !node.algebra->children[0] || node.algebra->children[0]->operation != "+") {
 		return;
 	}
 	if (gstate.objective_value_nodes.size() != gstate.objective_variable_indices.size() ||
