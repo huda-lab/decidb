@@ -139,8 +139,6 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     decide_op->canonical_objective = std::move(op.canonical_objective);
     decide_op->objective_constant_offset = op.objective_constant_offset;
     decide_op->source_fragments = std::move(op.source_fragments);
-    decide_op->composed_minmax_constraints = std::move(op.composed_minmax_constraints);
-    decide_op->composed_minmax_objective_terms = std::move(op.composed_minmax_objective_terms);
     decide_op->rewrite_accounts = std::move(op.rewrite_accounts);
     decide_op->singleton_row_boxes = std::move(op.singleton_row_boxes);
     decide_op->user_singleton_row_bounds = std::move(op.user_singleton_row_bounds);
@@ -257,7 +255,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
             }
         }
     };
-    for (auto &spec : decide_op->composed_minmax_constraints) {
+    for (auto &spec : op.composed_minmax_constraints) {
         for (auto &term : spec.terms) {
             harvest_composed_term(term);
         }
@@ -269,7 +267,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         }
         harvest_key(spec.scope.class_key);
     }
-    for (auto &term : decide_op->composed_minmax_objective_terms) {
+    for (auto &term : op.composed_minmax_objective_terms) {
         harvest_composed_term(term);
     }
     for (auto &link : op.reducer_value_links) {

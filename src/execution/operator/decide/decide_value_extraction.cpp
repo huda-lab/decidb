@@ -648,18 +648,14 @@ void SkipGroupsWithAnEmptyReducer(const vector<const TermFilterState *> &filters
 	}
 }
 
-ComposedMinMaxTermData DecideComposedTerm(const LogicalDecide::ComposedMinMaxTerm &term,
-                                          const string &agg_name, int sign, bool is_easy,
-                                          const vector<string> &source_fragments,
-                                          const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> &keys) {
+ComposedMinMaxTermData DecideComposedTerm(const string &agg_name, int sign, bool is_easy, const string &label) {
 	ComposedMinMaxTermData evaluated;
 	evaluated.is_minmax = agg_name == "min" || agg_name == "max";
 	evaluated.agg_name = agg_name;
 	evaluated.sign = sign;
 	evaluated.is_easy = is_easy;
 	if (evaluated.is_minmax) {
-		evaluated.label =
-		    agg_name + "(" + RenderDecideSource(*term.inner_expr, source_fragments, keyed_scopes, &keys) + ")";
+		evaluated.label = label;
 	}
 	return evaluated;
 }

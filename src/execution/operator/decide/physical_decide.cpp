@@ -128,6 +128,16 @@ static ObjectiveAggregateType TreeFlatObjectiveAggregate(const DecideTree &tree)
 	                                      : ObjectiveAggregateType::MAX_AGG;
 }
 
+//! A composed objective is represented by an objective E whose composed algebra retains its G terms.
+static bool TreeHasComposedObjective(const DecideTree &tree) {
+	for (auto root : tree.roots) {
+		if (tree.nodes[root]->objective && !tree.nodes[root]->compiled.composed.empty()) {
+			return true;
+		}
+	}
+	return false;
+}
+
 //! Input column `column`'s rows grouped by value as GROUP BY groups them, NULL as a value (DecideKeyMap), in a scan of
 //! their own: each row's group, and each group's value, numbered in the order the rows first read them. The diagnosis
 //! orders what it reports itself (by escape rate, column and value), so no group's number reaches a message.
@@ -281,7 +291,7 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 		// extremum, or what the composed objective keeps (its 0.0 placeholder or the terms
 		// beside its reducers) -- that its accounts describe and a row would misread. An AVG's sum stays, under its
 		// account, as in a constraint.
-		if (flat_objective_agg != ObjectiveAggregateType::NONE || !composed_minmax_objective_terms.empty()) {
+		if (flat_objective_agg != ObjectiveAggregateType::NONE || TreeHasComposedObjective(*tree)) {
 			objective_strs.clear();
 		}
 		result["Objective"] = RenderDecideObjectiveLayers(sense_prefix, written_objective, canonical_objective,
@@ -1113,7 +1123,7 @@ void PhysicalDecide::ScaleObjectiveAvg(DecideGlobalSinkState &gstate, idx_t num_
 //===--------------------------------------------------------------------===//
 
 void PhysicalDecide::FinishComposedClause(DecideGlobalSinkState &gstate, idx_t num_rows,
-                                          const LogicalDecide::ComposedMinMaxConstraint &spec, bool null_factor,
+                                          const DecideNode &node, bool null_factor,
                                           const std::function<vector<bool>()> &kept_rows,
                                           const std::function<idx_t(const vector<bool> &)> &class_set,
                                           EvaluatedClauses::ComposedConstraint clause,
@@ -1121,13 +1131,15 @@ void PhysicalDecide::FinishComposedClause(DecideGlobalSinkState &gstate, idx_t n
 	// A NULL factor makes the clause's one instance NULL, which is skipped (deck p. 50), as does a reducer over no row.
 	clause.skipped = null_factor || std::any_of(clause.terms.begin(), clause.terms.end(), DecideComposedTermReadsNoRow);
 	clause.repair_group_id = tree->constraint_count + tree->singleton_row_count + evaluated.composed_constraints.size();
+	clause.source_clause_id = node.source_clause_id;
+	clause.removal_group_id = node.removal_group_id;
 	vector<bool> kept(num_rows, true);
-	if (spec.scope.when && (diagnose || clause.skipped)) {
+	if (node.facts && node.facts->scope.when && (diagnose || clause.skipped)) {
 		kept = kept_rows();
 	}
 	// Its one instance, where its `when` keeps a row.
 	const idx_t instances = std::find(kept.begin(), kept.end(), true) != kept.end() ? 1 : 0;
-	gstate.CountInstances(spec.source_clause_id, instances, clause.skipped ? 0 : instances);
+	gstate.CountInstances(node.source_clause_id, instances, clause.skipped ? 0 : instances);
 	// The classes its one row stands for (D28), under DIAGNOSE.
 	if (diagnose) {
 		clause.class_set = class_set(kept);
@@ -1621,17 +1633,14 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 	// so it is handed a mutable copy — the evaluated clauses stay reusable for a second
 	// formulation against a different box.
 	phase.Next("formulation.composed_minmax");
-    for (idx_t i = 0; i < evaluated.composed_constraints.size() &&
-                      i < composed_minmax_constraints.size();
-         i++) {
-        auto &spec = composed_minmax_constraints[i];
+    for (idx_t i = 0; i < evaluated.composed_constraints.size(); i++) {
         auto terms = evaluated.composed_constraints[i].terms;
 		auto &clause = evaluated.composed_constraints[i];
 		if (clause.skipped) {
 			continue;
 		}
 		LinearizeComposedMinMaxConstraint(solver_input, var_indexer, terms, clause.rhs, clause.comparison,
-		                                  spec.source_clause_id, spec.removal_group_id, clause.repair_group_id,
+		                                  clause.source_clause_id, clause.removal_group_id, clause.repair_group_id,
 		                                  clause.class_set, decide_var_names, native_min_max);
 	}
 	if (!evaluated.composed_objective_terms.empty()) {

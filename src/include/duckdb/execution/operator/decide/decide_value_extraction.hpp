@@ -218,13 +218,9 @@ vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_row
 void SkipGroupsWithAnEmptyReducer(const vector<const TermFilterState *> &filters, idx_t num_rows,
                                   vector<idx_t> &row_group_ids, idx_t &num_groups);
 
-//! A composed MIN/MAX term's evaluation before its rows are read (ComposedMinMaxTermData): what it reduces, its sign,
-//! whether its direction is easy, and a MIN's or a MAX's name as the plan prints the reducer, so a diagnosis over its
-//! extremum column reads `max(ship)`.
-ComposedMinMaxTermData DecideComposedTerm(const LogicalDecide::ComposedMinMaxTerm &term,
-                                          const string &agg_name, int sign, bool is_easy,
-                                          const vector<string> &source_fragments,
-                                          const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> &keys);
+//! A composed MIN/MAX term's evaluation before its rows are read (ComposedMinMaxTermData): the algebra's reducer,
+//! sign and direction, and the reducer node's source label, so a diagnosis over its extremum column reads `max(ship)`.
+ComposedMinMaxTermData DecideComposedTerm(const string &agg_name, int sign, bool is_easy, const string &label);
 
 //! A composed term's factor (LogicalDecide::ComposedMinMaxTerm::scale), one value for the whole query by construction
 //! (the canonicalizer refuses one that varies by row), as read on a row: a NULL one makes its clause's instance NULL,

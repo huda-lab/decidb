@@ -400,7 +400,9 @@ comparisons, RHS programs, term order and coefficient programs from that algebra
 a reducer operator on its objective E node; assembly derives the solver sense and stage 06's MIN/MAX objective spec
 from the objective algebra. Composed MIN/MAX E nodes also own their
 comparison, bound expression, ordered reducer references and query-wide scales; the emitter follows those references
-to the corresponding G nodes. The G/O emitter walks nodes in children-first order and uses their algebra plus
+to the corresponding G nodes. The physical plan retains no second copy of composed logical specs: evaluation gets
+term order, scales, scope, source identity and labels from the E/G nodes, and stage 06 gets source and removal groups
+from the evaluated E clause. The G/O emitter walks nodes in children-first order and uses their algebra plus
 node-owned helper direction, qualification scope and labels to build stage 06's member formulas. Multi-member MIN/MAX
 results keep value columns, while SUM/AVG formulas can expand into their parent expressions; a singleton MIN/MAX group
 remains a direct member read, as on deck p. 112. F output links and Boolean-product factors are read from their function

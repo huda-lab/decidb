@@ -125,14 +125,6 @@ public:
     // in the unbounded diagnosis. Sparse; only auxiliary variables appear.
     vector<pair<idx_t, string>> aux_var_expressions;
 
-    // Composed MIN/MAX constraints (additive LHS with MIN/MAX terms mixed in).
-    // Each is emitted as a block of RawConstraints in global_constraints at sink finalize.
-    vector<LogicalDecide::ComposedMinMaxConstraint> composed_minmax_constraints;
-
-    // Composed MIN/MAX objective: additive sum of SUM/AVG/MIN/MAX terms.
-    // Empty when the objective is not composed.
-    vector<LogicalDecide::ComposedMinMaxTerm> composed_minmax_objective_terms;
-
     //! What each rewrite made of a clause, for EXPLAIN (LogicalDecide::rewrite_accounts).
     vector<LogicalDecide::RewriteAccount> rewrite_accounts;
     //! What the data made of each clause (Kind::RUN_TIME): the variants of its classes (D70, D71), the instances it
@@ -300,13 +292,15 @@ private:
         //! Per-term filter state for the objective's linear / squared / bilinear terms.
         vector<TermFilterState> linear_filters, quadratic_filters, bilinear_filters;
 
-        //! One composed MIN/MAX *constraint*, evaluated. Parallel to
-        //! `composed_minmax_constraints`; source identity and repair metadata stay on the plan.
+        //! One composed MIN/MAX *constraint*, evaluated. Source identity and repair metadata came from its E node.
         struct ComposedConstraint {
             vector<ComposedMinMaxTermData> terms;
             double rhs = 0.0;
             //! Comparison owned by the composed clause's E algebra.
             ExpressionType comparison = ExpressionType::INVALID;
+            //! Source and removal groups owned by the composed clause's E node.
+            idx_t source_clause_id = DConstants::INVALID_INDEX;
+            idx_t removal_group_id = DConstants::INVALID_INDEX;
             //! Its repair group, numbered after every clause of `constraints` and
             //! `singleton_row_constraints`, so its slack is shared with no other clause.
             idx_t repair_group_id = DConstants::INVALID_INDEX;
@@ -336,8 +330,8 @@ private:
 	//! a group after every other clause, and held where its `when` keeps a row, counted unless skipped. The rows its
 	//! `when` keeps (`kept_rows`) are read only under DIAGNOSE or once it is skipped; under DIAGNOSE `class_set` gives
 	//! the classes its one row stands for among them (D28). Appends the clause to `evaluated`.
-	void FinishComposedClause(DecideGlobalSinkState &gstate, idx_t num_rows,
-	                          const LogicalDecide::ComposedMinMaxConstraint &spec, bool null_factor,
+	void FinishComposedClause(DecideGlobalSinkState &gstate, idx_t num_rows, const DecideNode &node,
+	                          bool null_factor,
 	                          const std::function<vector<bool>()> &kept_rows,
 	                          const std::function<idx_t(const vector<bool> &)> &class_set,
 	                          EvaluatedClauses::ComposedConstraint clause, EvaluatedClauses &evaluated) const;
