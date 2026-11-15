@@ -441,6 +441,17 @@ SinkResultType PhysicalDecide::Sink(ExecutionContext &context, DataChunk &chunk,
     auto &lstate = input.local_state.Cast<DecideLocalSinkState>();
     auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
     DecideProfileSample profile(lstate.profile_sink);
+	// Query-wide factors are invariant across the input by construction. Keep one source row while it is already in
+	// hand, so Finalize need not fetch it again from the materialized relation after the descent has read the chunk.
+	if (chunk.size() > 0) {
+		lock_guard<mutex> guard(gstate.lock);
+		if (!gstate.has_first_input_row) {
+			SelectionVector first_row(1);
+			first_row.set_index(0, 0);
+			chunk.Copy(gstate.first_input_row, first_row, 1);
+			gstate.has_first_input_row = true;
+		}
+	}
 	// Top-down (language/guide.md §6.1): the thread's descent reads each chunk as it arrives; one split finer than
 	// the chunk reads it a piece at a time, each merged as a thread of its own would be.
 	if (chunk.size() <= lstate.split) {
@@ -849,10 +860,16 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
                                   bool silent) const {
 	// Top-down: the descent read every chunk as Sink received it, and the buffer is never scanned to evaluate a row.
 	DecideProfileScope phase("execution.tree_descent");
-	// The input's first chunk, where a value the whole query shares is read (a composed term's or a square's factor).
+	// A value the whole query shares is read (a composed term's or a square's factor) against the retained input row.
 	DataChunk first;
-	gstate.data.InitializeScanChunk(first);
-	gstate.data.FetchChunk(0, first);
+	if (gstate.has_first_input_row) {
+		first.Initialize(context, gstate.first_input_row.GetTypes(), 1);
+		first.Reference(gstate.first_input_row);
+	} else {
+		// Preserve the empty-input path: no row was available to retain during Sink.
+		gstate.data.InitializeScanChunk(first);
+		gstate.data.FetchChunk(0, first);
+	}
 	descent->Finish();
 	DecideProfileScope::Counter("execution.descent_rows", static_cast<double>(gstate.descent_rows));
 	// One ledger for the evaluation: what the descent's routing raised, then what the programs raise where a read

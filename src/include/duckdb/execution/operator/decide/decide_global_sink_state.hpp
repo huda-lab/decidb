@@ -34,6 +34,7 @@ public:
 	explicit DecideGlobalSinkState(ClientContext &context, const PhysicalDecide &op)
 	    : data(context, op.children[0]->GetTypes()), context(context), op(op),
 	      canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.keys, op.is_boolean_var) {
+		first_input_row.Initialize(context, op.children[0]->GetTypes(), 1);
         // The decision column box was resolved by DecideOptimizer::FoldSingletonRows.
         // A variable whose box never had a lower bound written is one the query never
         // lowered, and Finalize resolves it to the default 0 floor.
@@ -190,6 +191,10 @@ public:
 	//! Each thread's descent and the row its rows start at, until Finalize merges them into `descent`.
 	vector<pair<unique_ptr<DecideDescent>, idx_t>> descent_parts;
 	idx_t descent_rows = 0;
+	//! One input row retained by Sink for query-wide factors. Finalize can evaluate those factors without fetching row 1
+	//! back from the materialized relation after the descent has already read it.
+	DataChunk first_input_row;
+	bool has_first_input_row = false;
     // This collection will hold all the data from the child operator, each thread's rows in the order its descent read
     // them, placed as the descents merge
     ColumnDataCollection data;

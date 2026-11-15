@@ -304,7 +304,7 @@ references, `tests/_expected.py`, were recorded from flat's runs):
   relation-qualified one's first row of each class, with flat's name and label (`DecideComposedTerm`). A qualified
   term's operand is the one its scope's keyed mapping reads, as a written reducer's and a helper's are
   (`DecideTreeBuilder::Qualified`), so a scope whose classes its values split (D70) has them. A term's factor is one
-  value for the whole query, read as flat reads it, on the buffer's first chunk, fetched once,
+  value for the whole query, read as flat reads it, from one representative row retained as its input chunk arrives,
   whatever the clause keeps (`DecideQueryWideScale`). A NULL factor or a reducer over no row skips the clause
   (`DecideComposedTermReadsNoRow`); its one instance holds where its `when` keeps a row, the rows its root holds, and
   under DIAGNOSE it stands for the classes of its `per K:` among those rows, by flat's own tail
