@@ -130,6 +130,8 @@ private:
 	const DecideSourceNames &names;
 	idx_t num_rows;
 	DecideErrorLedger &errors;
+	//! Finalized row-to-class maps, retained while the tree's G nodes compose nested reducer values.
+	const vector<KeyedMapping> *keyed_mappings = nullptr;
 	//! The input's first chunk, where a value the whole query shares is read (FirstRowValue).
 	DataChunk &first;
 	//! Per value-link node, its helper's members, read once where its classes are (HelperMapping), which ValueLinks lists.
@@ -184,6 +186,11 @@ private:
 	//! payload's terms on the rows the windows read, its `else`'s at the anchors that reach it, each a program on the
 	//! frame's O `node`, as flat lists them.
 	void FrameMembers(idx_t node, ReducerValueMembers &out);
+	//! Compose a nested SUM/AVG child's formula into its enclosing SUM/AVG G node, as the deck's node-by-node
+	//! formulation does. Extremum and frame values stay explicit for their own lowering.
+	void ExpandNestedLinearMembers(idx_t node, ReducerValueLinkSpec &link, const vector<idx_t> &link_by_node,
+	                               vector<vector<idx_t>> &group_by_instance,
+	                               vector<bool> &group_by_instance_ready);
 	//! A grouped clause's bound on each of `rows` (its kept rows and their root's entries), a NULL one marking its row
 	//! in `null_rows`; for a tightest frame bound (D85) the rows where it bounds nothing instead, which are returned
 	//! (TakeTightestFrameBound): empty for any other bound, and for one the whole clause shares (DescribeBound).

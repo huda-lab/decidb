@@ -407,7 +407,11 @@ node-owned helper direction, qualification scope and labels to build stage 06's 
 results keep value columns, while SUM/AVG formulas can expand into their parent expressions; a singleton MIN/MAX group
 remains a direct member read, as on deck p. 112. F output links and Boolean-product factors are read from their function
 algebra. The numeric model path still lowers formulas into flat solver rows; recursive lowering of the full E/G/O/F
-operator trees remains open.
+operator trees remains open. The first numeric formulation move is now in place for nested linear G values: during the
+children-first G walk, `DecideModelEmitter::ValueLinks` resolves a nested SUM/AVG child to its exact keyed instance and
+composes that child's member expression into its enclosing SUM/AVG node. This moves the SUM-inside-SUM composition
+shown on pp. 116–119 from stage 06 to the tree formulation pass. The outer E row and MAX/MIN and frame helper values
+still use the existing lowering path.
 
 Generated decision values now appear in E/G/O formula trees as reads of the G/O/F node that produces them. The nested
 MAX-inside-SUM example therefore records the E → SUM G → MAX G path directly; an F node's own definition rows keep a
@@ -424,6 +428,14 @@ optimizer reducer-link records, so the frame reader gets its producer and compil
 The runtime EXPLAIN report for inlined helpers now reads each G/O node's helper variable and label; the physical
 operator no longer carries a duplicate copy of optimizer link records. ABS F nodes likewise provide the auxiliary and
 indicator for the stage-06 exactness link; the physical operator does not retain the plan-time ABS link list.
+
+The nested G-to-G composition builds each expanded parent formula in time proportional to its emitted member terms. It
+reuses the finalized keyed mappings to map a parent member row to its child instance, and caches each child's
+instance-to-group map for the duration of the
+value-link pass. F1's SUM-inside-SUM dump now has six decision columns and three root rows; MAX-inside-SUM retains the
+two MAX columns; a three-level SUM/AVG/SUM fixture emits the expected 0.5 and 1.0 coefficients directly on its two
+root rows. A targeted run of `test_anr_nested.py`, `test_tree_emitter.py`, and `test_anr_inlining.py` passed 241 tests;
+1,249 tests skipped because Gurobi/gurobipy is unavailable on the host. The release target built successfully.
 
 **Cost**, measured before flat was deleted, against flat on one binary (`benchmark/decide/anr_scaling.py --against` a
 flat run): the tree's own time at 10^5 rows is 0.84x to 1.33x flat's on every workload (`flat-sum` the most), and its

@@ -564,6 +564,7 @@ void DecideModelEmitter::KeyedMappings(vector<KeyedMapping> &mappings) {
 		}
 	}
 	ReadAbsence(mappings);
+	keyed_mappings = &mappings;
 }
 
 KeyedMapping DecideModelEmitter::SignatureMapping(idx_t scope) {
@@ -2120,9 +2121,156 @@ void DecideModelEmitter::FrameMembers(idx_t node, ReducerValueMembers &out) {
 	                       payload_value_nodes, fallback, fallback_vars, fallback_value_nodes, out);
 }
 
+void DecideModelEmitter::ExpandNestedLinearMembers(idx_t node_index, ReducerValueLinkSpec &link,
+                                                   const vector<idx_t> &link_by_node,
+                                                   vector<vector<idx_t>> &group_by_instance,
+                                                   vector<bool> &group_by_instance_ready) {
+	const auto is_linear_aggregate = [](const string &name) { return name == "sum" || name == "avg"; };
+	if (link.frame || !is_linear_aggregate(link.agg_name)) {
+		return;
+	}
+	if (!keyed_mappings) {
+		throw InternalException("DECIDE model emitter: G node %llu has no finalized helper mappings", node_index);
+	}
+
+	const auto &members = link.members;
+	if (members.value_nodes.size() != members.variables.size() || members.rows.size() != members.variables.size() ||
+	    members.coefficients.size() != members.variables.size()) {
+		throw InternalException("DECIDE model emitter: G node %llu has misaligned member terms", node_index);
+	}
+	bool has_nested_linear_value = false;
+	for (idx_t term = 0; term < members.variables.size(); term++) {
+		const auto child_node = term < members.value_nodes.size() ? members.value_nodes[term]
+		                                                       : DConstants::INVALID_INDEX;
+		const auto child_link_index = child_node < link_by_node.size() ? link_by_node[child_node]
+		                                                         : DConstants::INVALID_INDEX;
+		if (child_link_index == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		if (child_link_index >= gstate.evaluated_value_links.size()) {
+			throw InternalException("DECIDE model emitter: G node %llu has an invalid child link", node_index);
+		}
+		const auto &child = gstate.evaluated_value_links[child_link_index];
+		has_nested_linear_value = has_nested_linear_value ||
+		                          (!child.frame && is_linear_aggregate(child.agg_name));
+	}
+	if (!has_nested_linear_value) {
+		return;
+	}
+	ReducerValueMembers expanded;
+	auto span = [](const ReducerValueMembers &source, idx_t group) {
+		return pair<idx_t, idx_t> {source.group_begin[group], source.group_begin[group + 1]};
+	};
+	for (idx_t group = 0; group < members.GroupCount(); group++) {
+		expanded.AddGroup(members.group_rows[group]);
+		const auto group_members = span(members, group);
+		for (idx_t member = group_members.first; member < group_members.second; member++) {
+			expanded.AddMember(members.constants[member]);
+			for (idx_t term = members.member_begin[member]; term < members.member_begin[member + 1]; term++) {
+				const auto child_node = term < members.value_nodes.size() ? members.value_nodes[term]
+				                                                       : DConstants::INVALID_INDEX;
+				const auto child_link_index = child_node < link_by_node.size() ? link_by_node[child_node]
+				                                                         : DConstants::INVALID_INDEX;
+				if (child_link_index == DConstants::INVALID_INDEX) {
+					expanded.AddTerm(members.variables[term], members.rows[term], members.coefficients[term], child_node);
+					continue;
+				}
+				if (child_link_index >= gstate.evaluated_value_links.size()) {
+					throw InternalException("DECIDE model emitter: G node %llu has an invalid child link", node_index);
+				}
+				const auto &child = gstate.evaluated_value_links[child_link_index];
+				if (child.value_node != child_node || child.value_var != members.variables[term]) {
+					throw InternalException("DECIDE model emitter: G node %llu has a mismatched child value", node_index);
+				}
+				if (child.frame || !is_linear_aggregate(child.agg_name)) {
+					expanded.AddTerm(members.variables[term], members.rows[term], members.coefficients[term], child_node);
+					continue;
+				}
+				if (child.members.value_nodes.size() != child.members.variables.size() ||
+				    child.members.rows.size() != child.members.variables.size() ||
+				    child.members.coefficients.size() != child.members.variables.size()) {
+					throw InternalException("DECIDE model emitter: child G node %llu has misaligned member terms", child_node);
+				}
+
+				// A nested linear reducer's groups are its helper instances. Resolve the enclosing member's row to
+				// that instance, then write the child's group formula into this G node with the member coefficient.
+				const auto child_var = child.value_var;
+				if (child_var >= tree.variable_scopes.size()) {
+					throw InternalException("DECIDE model emitter: child G node %llu has an invalid value variable", child_node);
+				}
+				const auto &scope = tree.variable_scopes[child_var];
+				const KeyedMapping *mapping = nullptr;
+				idx_t instance_count = 1;
+				if (scope.scope == DecideVarScope::KEYED) {
+					if (scope.keyed_scope_idx >= keyed_mappings->size()) {
+						throw InternalException("DECIDE model emitter: child G node %llu has no keyed mapping", child_node);
+					}
+					mapping = &(*keyed_mappings)[scope.keyed_scope_idx];
+					instance_count = mapping->num_classes;
+				} else if (scope.scope != DecideVarScope::GLOBAL) {
+					throw InternalException("DECIDE model emitter: child G node %llu has a non-helper scope", child_node);
+				}
+				auto &child_group_by_instance = group_by_instance[child_node];
+				if (!group_by_instance_ready[child_node]) {
+					child_group_by_instance.assign(instance_count, DConstants::INVALID_INDEX);
+					for (idx_t child_group = 0; child_group < child.members.GroupCount(); child_group++) {
+						const auto child_row = child.members.group_rows[child_group];
+						if (child_row >= num_rows) {
+							throw InternalException("DECIDE model emitter: child G node %llu has an invalid group row",
+							                        child_node);
+						}
+						if (mapping && child_row >= mapping->row_to_class.size()) {
+							throw InternalException("DECIDE model emitter: child G node %llu has an incomplete mapping",
+							                        child_node);
+						}
+						const auto instance = mapping ? mapping->row_to_class[child_row] : idx_t(0);
+						if (instance >= child_group_by_instance.size() ||
+						    child_group_by_instance[instance] != DConstants::INVALID_INDEX) {
+							throw InternalException("DECIDE model emitter: child G node %llu has inconsistent group instances",
+							                        child_node);
+						}
+						child_group_by_instance[instance] = child_group;
+					}
+					group_by_instance_ready[child_node] = true;
+				}
+				const auto row = members.rows[term];
+				if (row >= num_rows) {
+					throw InternalException("DECIDE model emitter: G node %llu reads its child outside the input", node_index);
+				}
+				if (mapping && row >= mapping->row_to_class.size()) {
+					throw InternalException("DECIDE model emitter: child G node %llu has an incomplete mapping", child_node);
+				}
+				const auto instance = mapping ? mapping->row_to_class[row] : idx_t(0);
+				if (instance >= child_group_by_instance.size() ||
+				    child_group_by_instance[instance] == DConstants::INVALID_INDEX) {
+					throw InternalException("DECIDE model emitter: G node %llu reads child G node %llu where it has no value",
+					                        node_index, child_node);
+				}
+				const auto child_members = span(child.members, child_group_by_instance[instance]);
+				const auto coefficient = members.coefficients[term];
+				for (idx_t child_member = child_members.first; child_member < child_members.second; child_member++) {
+					expanded.constants.back() += coefficient * child.members.constants[child_member];
+					for (idx_t child_term = child.members.member_begin[child_member];
+					     child_term < child.members.member_begin[child_member + 1]; child_term++) {
+						expanded.AddTerm(child.members.variables[child_term], child.members.rows[child_term],
+						                coefficient * child.members.coefficients[child_term],
+						                child_term < child.members.value_nodes.size()
+						                    ? child.members.value_nodes[child_term]
+						                    : DConstants::INVALID_INDEX);
+					}
+				}
+			}
+		}
+	}
+	link.members = std::move(expanded);
+}
+
 void DecideModelEmitter::ValueLinks() {
 	// Reducer definitions are emitted from their G/O nodes, children first. The tree's algebra records the operator and
 	// each member term's place; node-owned metadata supplies the helper's formulation sides, qualifier and label.
+	vector<idx_t> link_by_node(tree.nodes.size(), DConstants::INVALID_INDEX);
+	vector<vector<idx_t>> group_by_instance(tree.nodes.size());
+	vector<bool> group_by_instance_ready(tree.nodes.size(), false);
 	for (auto node : tree.eval_order) {
 		auto &tree_node = *tree.nodes[node];
 		if (tree_node.link == DConstants::INVALID_INDEX) {
@@ -2160,6 +2308,7 @@ void DecideModelEmitter::ValueLinks() {
 				emitted_terms[algebra_term->source_term] = true;
 			}
 			FrameMembers(node, spec.members);
+			link_by_node[node] = gstate.evaluated_value_links.size();
 			gstate.evaluated_value_links.push_back(std::move(spec));
 			continue;
 		}
@@ -2243,6 +2392,8 @@ void DecideModelEmitter::ValueLinks() {
 				}
 			}
 		}
+		ExpandNestedLinearMembers(node, spec, link_by_node, group_by_instance, group_by_instance_ready);
+		link_by_node[node] = gstate.evaluated_value_links.size();
 		gstate.evaluated_value_links.push_back(std::move(spec));
 	}
 	DecideCountValueLinks(gstate.evaluated_value_links);
