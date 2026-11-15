@@ -528,6 +528,10 @@ struct ReducerValueLinkSpec {
     string label;
 	//! A range frame's helper, one instance per window (D78), rather than a reducer's.
 	bool frame = false;
+	//! A SUM or AVG whose G wrote a nested SUM or AVG's members into its own (DecideModelEmitter::
+	//! ExpandNestedLinearMembers): the outer link of a nest, though its members no longer read the inner helper, so
+	//! InlineReducerValueLinks writes it in whatever that costs (D89).
+	bool composed_nest = false;
 	ReducerValueMembers members;
 	//! Set by InlineReducerValueLinks for one written into its rows and the objective (D89): they read an instance's
 	//! members in place of its column. Its bounds are still derived (a bound flows through it to the helpers among

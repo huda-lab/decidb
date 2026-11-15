@@ -28,8 +28,9 @@ The F1 SUM-inside-SUM rows now match pp. 116–119 exactly with only the six dec
 matches pp. 112–115 with two MAX helper columns and the same three root rows. Three-level SUM/AVG/SUM coefficients
 also match the node-by-node formula.
 
-This clause E slice applies to aggregate rows. Per-row clauses keep shared helper columns, since writing one query-wide
-SUM into every row can multiply a compact formula into millions of terms. Next, extend formulation records for
+This clause E slice applies to aggregate rows. Per-row clauses are not composed here: stage 06 writes a helper into them
+where D89 lets it, which keeps a plain query-wide SUM's column (written into every row it could multiply a compact
+formula into millions of terms) and writes a SUM or AVG nest in whatever that costs. Next, extend formulation records for
 quadratic, composed and function-node expressions, then cover the remaining objective shapes. Keep the established
 solver model as the backend boundary. Retain the old lowering only for shapes not yet migrated, compare exact model
 dumps at each stage, then remove it after the full DECIDE suite covers the migrated forms.

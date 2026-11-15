@@ -2273,6 +2273,7 @@ void DecideModelEmitter::ExpandNestedLinearMembers(idx_t node_index, ReducerValu
 		}
 	}
 	link.members = std::move(expanded);
+	link.composed_nest = true;
 }
 
 void DecideModelEmitter::ValueLinks() {

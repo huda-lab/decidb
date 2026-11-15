@@ -411,7 +411,8 @@ operator trees remains open. The first numeric formulation move is now in place 
 children-first G walk, `DecideModelEmitter::ValueLinks` resolves a nested SUM/AVG child to its exact keyed instance and
 composes that child's member expression into its enclosing SUM/AVG node. This moves the SUM-inside-SUM composition
 shown on pp. 116–119 from stage 06 to the tree formulation pass. The outer E row and MAX/MIN and frame helper values
-still use the existing lowering path.
+still use the existing lowering path: the composed link is marked `composed_nest`, so stage 06 still writes it into the
+rows that read it whatever that costs (D89), as it writes an outer link whose members read a nested helper.
 
 Generated decision values now appear in E/G/O formula trees as reads of the G/O/F node that produces them. The nested
 MAX-inside-SUM example therefore records the E → SUM G → MAX G path directly; an F node's own definition rows keep a
