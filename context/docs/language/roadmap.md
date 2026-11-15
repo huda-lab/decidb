@@ -10,8 +10,8 @@ Already implemented from the deck: keyed declarations (`per K: x(TYPE)`, pp. 6�
 postfix `by` with their defaults (p. 16), variant signatures (pp. 34–40), deck examples 1–9 (pp. 17–25), NULL keys
 and empty groups (pp. 30, 50, 56), reducers nested to any depth (pp. 25, 28–32), the two-level objective
 `outer(per k: inner(e) by (k))` among them, frame selectors, points and ranges (pp. 42–56), each with the limits
-listed below (D80), and the one-pass algorithm (pp. 77–119, D91): execution registers what every node of the
-annotated tree reads on a row, reads its input once, and evaluates the nodes from that pass
+listed below (D80), and the one-pass algorithm (pp. 77–119, D91): execution reads each row once, routes it
+top-down through the annotated tree into each node's container, and computes the nodes bottom-up from them
 (`../pipeline/08_execution/done.md` §1a); `MAX` inside `SUM` becomes helpers and `SUM` inside `SUM` flattens, as the
 deck builds its model (pp. 115, 119; D89).
 
