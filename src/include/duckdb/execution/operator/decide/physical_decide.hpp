@@ -120,8 +120,6 @@ public:
     // Links from MIN/MAX indicator variables: (agg_name "min"/"max", indicator_idx)
     vector<string> minmax_clause_labels;
 
-    vector<LogicalDecide::AbsMaximizeLink> abs_maximize_links;
-
     // F6: auxiliary variable index -> user's original source expression string
     // (ABS(...) / MIN/MAX(...) / product / <>), for naming an escaping aux column
     // in the unbounded diagnosis. Sparse; only auxiliary variables appear.

@@ -182,7 +182,6 @@ public:
 		tree->value_nodes.assign(op.decide_variables.size(), DConstants::INVALID_INDEX);
 		tree->definition_nodes.resize(op.decide_variables.size());
 		tree->qualified_operands.assign(op.keyed_scopes.size(), DConstants::INVALID_INDEX);
-		tree->abs_maximize_links = op.abs_maximize_links;
 		tree->singleton_row_boxes = op.singleton_row_boxes;
 		tree->user_singleton_row_bounds = op.user_singleton_row_bounds;
 		tree->signed_helper_vars = op.signed_helper_vars;

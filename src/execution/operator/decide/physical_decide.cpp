@@ -1262,8 +1262,12 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
             link.aux_idx, link.bool_var_idx, link.other_var_idx,
             link.source_clause_id, link.removal_group_id});
     }
-    for (auto &link : abs_maximize_links) {
-        solver_input.abs_maximize_links.push_back(AbsMaximizeLinkSpec {link.aux_idx, link.y_idx});
+    for (auto function : tree->function_nodes) {
+        const auto &node = *tree->nodes[function];
+        if (node.function_kind != DecideFunctionKind::ABS || !node.abs_needs_bigm) {
+            continue;
+        }
+        solver_input.abs_maximize_links.push_back(AbsMaximizeLinkSpec {node.value_var, node.abs_indicator_var});
     }
     solver_input.reducer_value_links = std::move(gstate.evaluated_value_links);
 

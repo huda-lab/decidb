@@ -420,7 +420,8 @@ therefore name the producer node beside every tree-value read, while the solver 
 records. Frame helper expressions and NULL-read skipping also select linked O nodes from tree metadata rather than
 optimizer reducer-link records, so the frame reader gets its producer and compiled programs from the same node graph.
 The runtime EXPLAIN report for inlined helpers now reads each G/O node's helper variable and label; the physical
-operator no longer carries a duplicate copy of optimizer link records.
+operator no longer carries a duplicate copy of optimizer link records. ABS F nodes likewise provide the auxiliary and
+indicator for the stage-06 exactness link; the physical operator does not retain the plan-time ABS link list.
 
 **Cost**, measured before flat was deleted, against flat on one binary (`benchmark/decide/anr_scaling.py --against` a
 flat run): the tree's own time at 10^5 rows is 0.84x to 1.33x flat's on every workload (`flat-sum` the most), and its

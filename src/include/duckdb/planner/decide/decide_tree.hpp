@@ -318,7 +318,6 @@ struct DecideTree {
 	//! Per keyed scope, the operand of the reducer or link it qualifies, whose instances are its classes split by what
 	//! its body reads (KeyedScopeInfo::signature); INVALID for a scope that qualifies none.
 	vector<idx_t> qualified_operands;
-	vector<LogicalDecide::AbsMaximizeLink> abs_maximize_links;
 	vector<DecideBoundBox> singleton_row_boxes;
 	vector<LogicalDecide::UserBoundSpec> user_singleton_row_bounds;
 	vector<idx_t> signed_helper_vars;
