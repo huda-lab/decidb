@@ -19,9 +19,10 @@ member formula, using the child's exact keyed instance for each row. Nested MIN/
 This implements the G-to-G composition in the SUM-inside-SUM slides before the value links enter stage 06. The same
 pass now composes child G SUM/AVG formulas into an aggregate E row. It carries each resulting decision's source row, so
 stage 06 maps terms to columns without rediscovering reducer membership. MIN/MAX and frame children remain explicit.
-Linear objective E terms also compose child SUM/AVG formulas, carrying source rows and constants into the objective
-record; the solver builder maps the remaining terms to columns. Flat MIN/MAX objectives and nonlinear objective
-families still use the established lowering.
+Linear objective E terms compose child SUM/AVG formulas, carrying source rows and constants into the objective record;
+child MIN/MAX values remain explicit node terms. The solver builder maps those terms to columns, retaining the same
+grouped MAX helper rows. Flat outer MIN/MAX objectives and nonlinear objective families still use the established
+lowering.
 The F1 SUM-inside-SUM rows now match pp. 116–119 exactly with only the six declared decision columns; MAX-inside-SUM
 matches pp. 112–115 with two MAX helper columns and the same three root rows. Three-level SUM/AVG/SUM coefficients
 also match the node-by-node formula.

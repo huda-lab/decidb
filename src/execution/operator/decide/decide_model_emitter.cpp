@@ -2660,12 +2660,14 @@ void DecideModelEmitter::ExpandObjectiveValues(const vector<idx_t> &link_by_node
 			continue;
 		}
 		const auto &link = links[link_index];
-		if (link.frame || (link.agg_name != "sum" && link.agg_name != "avg") ||
+		if (link.frame || (link.agg_name != "sum" && link.agg_name != "avg" && link.agg_name != "min" &&
+		                   link.agg_name != "max") ||
 		    link.value_var != gstate.objective_variable_indices[term]) {
 			continue;
 		}
-		// Reuse E's row composer with one objective term as a single ungrouped aggregate row. Its row indices identify
-		// the original G members, while its constants travel separately to the objective's constant offset.
+		// Reuse E's row composer with one objective term as a single ungrouped aggregate row. SUM/AVG child members
+		// compose into it; MIN/MAX children stay as explicit node terms. Source rows identify the original members,
+		// while fixed member values travel separately to the objective's constant offset.
 		EvaluatedConstraint term_formula;
 		term_formula.lhs_is_aggregate = true;
 		term_formula.variable_indices.push_back(gstate.objective_variable_indices[term]);

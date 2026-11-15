@@ -186,6 +186,25 @@ class TestIntoMembers:
         coefficients = [float(line.split(" obj=", 1)[1]) for line in columns]
         assert coefficients == objective_coefficients, dump
 
+    def test_objective_E_keeps_nested_extrema_as_node_terms(self, decidb_cli, tmp_path):
+        """An objective E preserves each child MAX value while composing its own row formula."""
+        sql = """
+            SELECT id, x FROM (VALUES (1, 'a', 2.0), (2, 'a', 3.0), (3, 'b', 4.0)) t(id, g, w)
+            DECIDE x(REAL)
+            SUCH THAT x <= 10
+            MAXIMIZE sum(per t.g: max(t.w * x) by (t.g))
+            ORDER BY id"""
+        dump = decidb_cli.dump_model(sql, tmp_path / "objective-max.dump")
+        assert dump_counts(dump) == {"num_vars": 6, "num_rows": 3}
+        columns = [line for line in dump.splitlines() if line.startswith("col ")]
+        coefficients = [float(line.split(" obj=", 1)[1]) for line in columns]
+        assert coefficients == [0.0, 0.0, 4.0, 1.0, 0.0, 0.0], dump
+        assert _rows(dump) == {
+            ("<", 30.0, frozenset({(0, -2.0), (3, 1.0), (4, 30.0)})),
+            ("<", 30.0, frozenset({(1, -3.0), (3, 1.0), (5, 30.0)})),
+            (">", 1.0, frozenset({(4, 1.0), (5, 1.0)})),
+        }
+
     @pytest.mark.parametrize(
         "inner, extra, counts, west",
         [

@@ -437,15 +437,17 @@ stage 06 maps those explicit terms to solver columns. MIN/MAX and frame values s
 limited to aggregate E rows: a regression test showed that expanding a query-wide SUM into each per-row clause could
 turn a compact helper into millions of row terms, so those rows continue to use the shared helper column.
 Linear objective E terms also compose child SUM/AVG members, with the objective's data coefficients applied to each
-member and any fixed member values carried into the objective constant. Flat MIN/MAX objectives and nonlinear objective
-families still use their existing formulation.
+member and any fixed member values carried into the objective constant. Child MIN/MAX values remain explicit node terms
+in that objective formula. Flat outer MIN/MAX objectives and nonlinear objective families still use their existing
+formulation.
 
 The F1 SUM-inside-SUM dump has exactly the three deck rows: `ship1 + ship2 <= 22.5`, `ship3 + ship5 + ship6 <=
 48.5`, and `ship3 + ship5 + ship6 <= 37.5`, with six decision columns. MAX-inside-SUM has the three root rows and
 four lower-envelope rows for its two multi-member MAX helpers, matching pp. 112–115. A three-level SUM/AVG/SUM
 fixture emits the expected 0.5 and 1.0 coefficients directly on its two root rows. SUM/AVG-of-group objective fixtures
-emit the expected weighted per-decision coefficients and preserve absent-group skipping. The targeted
-`test_anr_nested.py`, `test_tree_emitter.py`, and `test_anr_inlining.py` run passed 243 tests; 1,249 tests skipped
+emit the expected weighted per-decision coefficients and preserve absent-group skipping; a grouped MAX objective keeps
+its helper rows and objective coefficients unchanged. The targeted
+`test_anr_nested.py`, `test_tree_emitter.py`, and `test_anr_inlining.py` run passed 244 tests; 1,249 tests skipped
 because Gurobi/gurobipy is unavailable on the host. The release target built successfully.
 
 **Cost**, measured before flat was deleted, against flat on one binary (`benchmark/decide/anr_scaling.py --against` a
