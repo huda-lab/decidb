@@ -2083,7 +2083,7 @@ void DecideModelEmitter::FrameMembers(idx_t node, ReducerValueMembers &out) {
 	}
 	// Each term's coefficient on the rows `rows` marks, its anchors there, each an entry of the O.
 	auto read = [&](const vector<DecideTerm> &terms, const vector<DecideTermSite> &sites, const vector<bool> &rows,
-	                idx_t formula_offset, vector<idx_t> &variable_ids) {
+	                idx_t formula_offset, vector<idx_t> &variable_ids, vector<idx_t> &value_nodes) {
 		vector<bool> reads(entries.size());
 		for (idx_t e = 0; e < entries.size(); e++) {
 			reads[e] = rows[entries[e]];
@@ -2099,6 +2099,9 @@ void DecideModelEmitter::FrameMembers(idx_t node, ReducerValueMembers &out) {
 			const auto program = AlgebraTermProgram(tree, *member_formula, terms[t], sites[t], source_term, "O node",
 			                                        &variable);
 			variable_ids.push_back(gstate.ReadVariable(variable, terms[t].frame_read));
+			value_nodes.push_back(terms[t].frame_read == DConstants::INVALID_INDEX
+			                          ? AlgebraTermValueNode(tree, *member_formula)
+			                          : DConstants::INVALID_INDEX);
 			auto numbers = columns.Numbers(node, program, reads, nullptr, &sites[t], &terms[t].inputs);
 			coefficients[t].AssignDense(num_rows);
 			for (idx_t e = 0; e < entries.size(); e++) {
@@ -2109,13 +2112,13 @@ void DecideModelEmitter::FrameMembers(idx_t node, ReducerValueMembers &out) {
 		}
 		return coefficients;
 	};
-	vector<idx_t> payload_vars, fallback_vars;
-	const auto payload = read(body.members, body.linear, map.ReadRows(), 0, payload_vars);
+	vector<idx_t> payload_vars, payload_value_nodes, fallback_vars, fallback_value_nodes;
+	const auto payload = read(body.members, body.linear, map.ReadRows(), 0, payload_vars, payload_value_nodes);
 	const auto fallback = read(body.fallback, body.fallback_sites, map.FallbackAnchors(), body.members.size(),
-	                            fallback_vars);
+	                            fallback_vars, fallback_value_nodes);
 	const auto aggregate = ValueLinkAggregate(tree_node);
-	DecideListFrameMembers(map, aggregate, tree_node.value_link_label, tree_node.text, payload, payload_vars, fallback,
-	                       fallback_vars, out);
+	DecideListFrameMembers(map, aggregate, tree_node.value_link_label, tree_node.text, payload, payload_vars,
+	                       payload_value_nodes, fallback, fallback_vars, fallback_value_nodes, out);
 }
 
 void DecideModelEmitter::ValueLinks() {

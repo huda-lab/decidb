@@ -135,9 +135,6 @@ public:
     // Empty when the objective is not composed.
     vector<LogicalDecide::ComposedMinMaxTerm> composed_minmax_objective_terms;
 
-    //! The helper decisions of the value rewrite and the reducers they hold
-    //! (LogicalDecide::reducer_value_links); PHASE 2 evaluates each one's members.
-    vector<LogicalDecide::ReducerValueLink> reducer_value_links;
     //! What each rewrite made of a clause, for EXPLAIN (LogicalDecide::rewrite_accounts).
     vector<LogicalDecide::RewriteAccount> rewrite_accounts;
     //! What the data made of each clause (Kind::RUN_TIME): the variants of its classes (D70, D71), the instances it

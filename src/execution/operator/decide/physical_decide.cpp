@@ -1029,21 +1029,34 @@ void PhysicalDecide::ReportAnEmptyObjective(const SolverInput &input) const {
 }
 
 void PhysicalDecide::ReportInlinedHelpers(const SolverInput &input) const {
-	for (auto &link : reducer_value_links) {
+	vector<idx_t> linked_nodes;
+	for (idx_t node = 0; node < tree->nodes.size(); node++) {
+		if (tree->nodes[node]->link != DConstants::INVALID_INDEX) {
+			linked_nodes.push_back(node);
+		}
+	}
+	std::sort(linked_nodes.begin(), linked_nodes.end(), [&](idx_t left, idx_t right) {
+		return tree->nodes[left]->link < tree->nodes[right]->link;
+	});
+	for (auto node_index : linked_nodes) {
+		const auto &node = *tree->nodes[node_index];
+		if (!node.decision_value || node.value_var >= input.variable_scopes.size() || node.value_link_label.empty()) {
+			throw InternalException("DECIDE: linked node %llu has incomplete runtime reporting metadata", node_index);
+		}
 		string line;
-		if (input.variable_scopes[link.value_var].scope == DecideVarScope::INLINED) {
-			line = link.label + " is written where it is read, with no column";
-		} else if (link.value_var < input.written_in.size() &&
-		           std::find(input.written_in[link.value_var].begin(), input.written_in[link.value_var].end(), true) !=
-		               input.written_in[link.value_var].end()) {
-			line = link.label + ": each group of one member is written where it is read, with no column";
+		if (input.variable_scopes[node.value_var].scope == DecideVarScope::INLINED) {
+			line = node.value_link_label + " is written where it is read, with no column";
+		} else if (node.value_var < input.written_in.size() &&
+		           std::find(input.written_in[node.value_var].begin(), input.written_in[node.value_var].end(), true) !=
+		               input.written_in[node.value_var].end()) {
+			line = node.value_link_label + ": each group of one member is written where it is read, with no column";
 		}
 		if (line.empty()) {
 			continue;
 		}
 		// Each clause whose plan names the helper: an account of it is one of the helper (AddValueHelper).
 		for (auto &account : rewrite_accounts) {
-			if (account.subject == link.label) {
+			if (account.subject == node.value_link_label) {
 				RecordRunTimeAccount(account.source_clause_id, line);
 			}
 		}

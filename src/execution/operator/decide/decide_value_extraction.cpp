@@ -950,7 +950,7 @@ void DecideMapRowsInNoClass(KeyedMapping &mapping) {
 }
 
 void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx_t> &variables, idx_t row, double scale,
-                      const string &label, ReducerValueMembers &out) {
+                      const string &label, ReducerValueMembers &out, const vector<idx_t> *value_nodes) {
 	double constant = 0.0;
 	for (idx_t t = 0; t < variables.size(); t++) {
 		if (variables[t] == DConstants::INVALID_INDEX) {
@@ -964,7 +964,9 @@ void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx
 	for (idx_t t = 0; t < variables.size(); t++) {
 		const double c = columns[t].Get(row) * scale;
 		if (variables[t] != DConstants::INVALID_INDEX && c != 0.0) {
-			out.AddTerm(variables[t], row, c);
+			const auto value_node = value_nodes && t < value_nodes->size() ? (*value_nodes)[t]
+			                                                                : DConstants::INVALID_INDEX;
+			out.AddTerm(variables[t], row, c, value_node);
 		}
 	}
 }

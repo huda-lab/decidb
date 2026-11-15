@@ -329,7 +329,8 @@ void DecideMapRowsInNoClass(KeyedMapping &mapping);
 //! One member: the terms whose coefficients `columns` and variables `variables` are read at `row`, each coefficient
 //! times `scale`, those of no decision its constant. A constant past a DOUBLE names `label`, the helper as written.
 void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx_t> &variables, idx_t row, double scale,
-                      const string &label, ReducerValueMembers &out);
+                      const string &label, ReducerValueMembers &out,
+                      const vector<idx_t> *value_nodes = nullptr);
 
 //! `ec`'s members -- its rows, each in the group `row_group_ids` names, a reducer's `by` groups partitioning them --
 //! listed per group (ReducerValueMembers), each group read at its first member row; a group with no member is left

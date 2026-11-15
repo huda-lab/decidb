@@ -59,9 +59,9 @@ public:
         // reducer's value, `sum(w * x)` negative wherever `w` is, so no bound on it
         // contradicts a type (its floor is free, DecideOptimizer::FoldSingletonRows).
         vector<bool> is_helper(num_decide_vars, false);
-        for (auto &link : op.reducer_value_links) {
-            if (link.value_var < num_decide_vars) {
-                is_helper[link.value_var] = true;
+        for (auto &node : op.tree->nodes) {
+            if (node->link != DConstants::INVALID_INDEX && node->value_var < num_decide_vars) {
+                is_helper[node->value_var] = true;
             }
         }
 		// An auxiliary whose definition may read no value -- a data value (NULL), a frame, a keyed decision (a row in
