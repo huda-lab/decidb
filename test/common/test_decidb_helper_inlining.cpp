@@ -106,7 +106,7 @@ TEST_CASE("DeciDB helper inlining", "[decidb][formulation][inlining]") {
 		input.reducer_value_links.push_back(SumOfX());
 		input.constraints.push_back(XLessH());
 
-		CHECK(InlineReducerValueLinks(input, {}));
+		CHECK(InlineReducerValueLinks(input, {}, {}));
 		REQUIRE(input.variable_scopes[1].scope == DecideVarScope::INLINED);
 		REQUIRE(input.reducer_value_links.size() == 1);
 		CHECK(input.reducer_value_links[0].inlined);
@@ -145,7 +145,7 @@ TEST_CASE("DeciDB helper inlining", "[decidb][formulation][inlining]") {
 		input.objective_variable_indices = {1};
 		input.objective_coefficients.push_back(CoefficientColumn::MakeScalar(2.0, ROWS));
 
-		InlineReducerValueLinks(input, {});
+		InlineReducerValueLinks(input, {}, {});
 		REQUIRE(input.variable_scopes[1].scope == DecideVarScope::INLINED);
 		VarIndexer indexer = VarIndexer::Build(input);
 		LinearizeReducerValueLinks(input, indexer, names, lowering);
@@ -159,7 +159,7 @@ TEST_CASE("DeciDB helper inlining", "[decidb][formulation][inlining]") {
 		input.reducer_value_links.push_back(SumOfX());
 		input.constraints.push_back(XLessH());
 
-		CHECK_FALSE(InlineReducerValueLinks(input, {1}));
+		CHECK_FALSE(InlineReducerValueLinks(input, {1}, {}));
 		CHECK(input.variable_scopes[1].scope == DecideVarScope::KEYED);
 		VarIndexer indexer = VarIndexer::Build(input);
 		CHECK(indexer.total_vars == ROWS + 2);
@@ -256,13 +256,13 @@ TEST_CASE("DeciDB helper inlining", "[decidb][formulation][inlining]") {
 			SolverInput input = MakeInput(reader.num_vars);
 			input.reducer_value_links.push_back(SumOfX());
 			reader.add(input);
-			InlineReducerValueLinks(input, {});
+			InlineReducerValueLinks(input, {}, {});
 			CHECK(input.variable_scopes[1].scope == DecideVarScope::KEYED);
 		}
 		// Read by nothing, it is written into nothing.
 		SolverInput unread = MakeInput(2);
 		unread.reducer_value_links.push_back(SumOfX());
-		CHECK(InlineReducerValueLinks(unread, {}));
+		CHECK(InlineReducerValueLinks(unread, {}, {}));
 		CHECK(unread.variable_scopes[1].scope == DecideVarScope::INLINED);
 	}
 
@@ -284,7 +284,7 @@ TEST_CASE("DeciDB helper inlining", "[decidb][formulation][inlining]") {
 		ec.num_groups = 3;
 		input.constraints.push_back(std::move(ec));
 
-		CHECK_FALSE(InlineReducerValueLinks(input, {}));
+		CHECK_FALSE(InlineReducerValueLinks(input, {}, {}));
 		CHECK(input.variable_scopes[1].scope == DecideVarScope::GLOBAL);
 		CHECK_FALSE(input.reducer_value_links[0].inlined);
 	}
@@ -304,7 +304,7 @@ TEST_CASE("DeciDB helper inlining", "[decidb][formulation][inlining]") {
 		outer.members.AddTerm(1, 2, 3.0);
 		input.reducer_value_links.push_back(std::move(outer));
 
-		InlineReducerValueLinks(input, {});
+		InlineReducerValueLinks(input, {}, {});
 		REQUIRE(input.reducer_value_links.size() == 1);
 		CHECK(input.variable_scopes[1].scope == DecideVarScope::INLINED);
 		auto &members = input.reducer_value_links[0].members;
@@ -324,7 +324,7 @@ TEST_CASE("DeciDB helper inlining", "[decidb][formulation][inlining]") {
 		SolverInput input = MakeInput(3);
 		input.reducer_value_links.push_back(SumOfX());
 		input.reducer_value_links.push_back(ClosingMaxOfH({0, 1}));
-		InlineReducerValueLinks(input, {});
+		InlineReducerValueLinks(input, {}, {});
 		CHECK(input.reducer_value_links.size() == 2);
 		CHECK(input.variable_scopes[1].scope == DecideVarScope::KEYED);
 
@@ -332,7 +332,7 @@ TEST_CASE("DeciDB helper inlining", "[decidb][formulation][inlining]") {
 		SolverInput once = MakeInput(3);
 		once.reducer_value_links.push_back(SumOfX());
 		once.reducer_value_links.push_back(ClosingMaxOfH({0, 2}));
-		InlineReducerValueLinks(once, {});
+		InlineReducerValueLinks(once, {}, {});
 		CHECK(once.reducer_value_links.size() == 1);
 	}
 
@@ -353,7 +353,7 @@ TEST_CASE("DeciDB helper inlining", "[decidb][formulation][inlining]") {
 		link.members.AddTerm(0, 3, 1.0);
 		input.reducer_value_links.push_back(std::move(link));
 
-		InlineReducerValueLinks(input, {1});
+		InlineReducerValueLinks(input, {1}, {});
 		VarIndexer indexer = VarIndexer::Build(input);
 		LinearizeReducerValueLinks(input, indexer, names, lowering);
 		// h_0 - x0 = 0, then h_1's envelope: h_1 - x2 >= 0, h_1 - x3 >= 0.
