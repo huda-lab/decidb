@@ -510,10 +510,10 @@ public:
     };
     vector<AbsFunctionEnvelope> abs_function_envelopes;
 
-    //! The helper decisions that hold a value of either sign: a value rewrite's reducer (RewriteScopedReducers) and a
-    //! definition function's output. FoldSingletonRows gives them no default floor of 0; a
-    //! value helper is boxed later by its members' reach, and a body helper stays unboxed, so stage 08 states the
-    //! extremum over it natively.
+    //! The helper decisions that hold a value of either sign: a value rewrite's reducer (RewriteScopedReducers), a
+    //! definition function's output, and a product with a non-Boolean factor (AddBooleanProduct). FoldSingletonRows
+    //! gives them no default floor of 0; a value helper is boxed later by its members' reach, a product by its
+    //! factor's box, and a body helper stays unboxed, so stage 08 states the extremum over it natively.
     vector<idx_t> signed_helper_vars;
 
     //! Maps an auxiliary variable's index in decide_variables to a human-readable

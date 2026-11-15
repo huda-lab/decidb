@@ -204,11 +204,17 @@ void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer,
                            const vector<string> &var_names,
                            const SolverConstructSupport &constructs);
 
-//! Emit the McCormick envelope for every `w = b * x` link. For `x >= 0` the lower
-//! corner is implied by `w`'s own non-negative bound and the upper corner collapses
-//! to the plain structural `w <= x`, so three rows suffice; for `x < 0` all four
-//! corners are emitted and `w`'s lower bound is widened so the product can reach the
-//! negative value. Requires a finite upper bound on `x` and names it if missing.
+//! Floor each product's column at its range's, min(0, its non-Boolean factor's floor), raised by a floor written on
+//! it (`b * x >= -4`): a product has no default floor of 0 (AddBooleanProduct). Stage 08 runs it before implied-bound
+//! propagation, which then reads `b * x` over x >= 0 as a non-negative term.
+void FloorBilinearAuxiliaries(SolverInput &input);
+
+//! Emit the McCormick envelope for every `w = b * x` link. `w` has no default floor of 0 (AddBooleanProduct): its
+//! column is floored at the product's range, min(0, the lowest L of the instances of `x` in `box`), raised by a floor
+//! written on it (`b * x >= -4`). Where that floor is 0 or more it implies the lower corner
+//! and the upper corner collapses to the plain structural `w <= x`, so three rows suffice; where it is negative all
+//! four corners are emitted, so the product reaches the negative value. Requires a finite upper bound on `x` and
+//! names it if missing.
 //!
 //! The rows are emitted per INSTANCE of `w`, in flat columns, each from the box of the instance of `x` it reads: a
 //! query-wide product is one block, a keyed one a block per key, a row-scoped one a block per row.
@@ -217,7 +223,7 @@ void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer,
 //! constant: on a box wider than `box` it cuts valid points, and on a narrower one it is
 //! slack. So unlike a Big-M it is wrong in both directions once the box moves, which is
 //! why the box is named rather than read from `input`. `input` is still written (the
-//! auxiliary's own column is widened for a negative `x`), and that write is a column
+//! auxiliary's own column is floored at the product's range), and that write is a column
 //! declaration rather than a derived constant.
 void LinearizeBilinear(SolverInput &input, const VarIndexer &indexer, const FormulationBox &box);
 

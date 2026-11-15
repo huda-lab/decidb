@@ -289,6 +289,10 @@ idx_t AddBooleanProduct(LogicalDecide &decide, DecideBilinearFunctionGroup &grou
 	};
 	auto scope = JoinScopes(scope_of(first), scope_of(second));
 	idx_t aux_idx = AddAuxiliaryDecision(decide, aux_name, aux_type, both_bool, scope, label);
+	// A product takes its factor's sign (`b * x` is x where b = 1, -5 for x >= -5): no default floor of 0. Its
+	// column is floored at the product's range, min(0, the factor's floor) (LinearizeBilinear). An AND of two
+	// Booleans keeps its BOOL box.
+	decide.signed_helper_vars.push_back(aux_idx);
 	AddRewriteAccount(decide, clause_alias,
 	                  both_bool ? LogicalDecide::RewriteAccount::Kind::PRODUCT_AND
 	                            : LogicalDecide::RewriteAccount::Kind::PRODUCT_MCCORMICK,

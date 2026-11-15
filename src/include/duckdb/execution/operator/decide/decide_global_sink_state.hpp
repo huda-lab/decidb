@@ -106,14 +106,9 @@ public:
 			}
 			return false;
 		};
-        for (idx_t var = 0; var < num_decide_vars; var++) {
-            if (is_helper[var] || may_lack_value(var, 0)) {
-                continue;
-            }
-            bool is_bool = var < op.is_boolean_var.size() && op.is_boolean_var[var];
-            // The box of the bounds as written. The folded box holds the admitted ends instead
-            // (`x = -0.5` admits no INT, which the solve reports as infeasible), so it is not the
-            // box the user wrote.
+        // The box of the bounds written on one decision. The folded box holds the admitted ends instead (`x = -0.5`
+        // admits no INT, which the solve reports as infeasible), so it is not the box the user wrote.
+        auto written_box = [&](idx_t var) {
             DecideWrittenBox written;
             for (const auto &bound : op.member_singleton_row_bounds) {
                 if (bound.decide_var_idx == var) {
@@ -136,6 +131,32 @@ public:
                 if (constraint->lifted_floor == var) {
                     written.AddLowered('>', constraint->lifted_floor_k);
                 }
+            }
+            return written;
+        };
+        vector<bool> is_signed(num_decide_vars, false);
+        for (auto var : op.tree->signed_helper_vars) {
+            if (var < num_decide_vars) {
+                is_signed[var] = true;
+            }
+        }
+        for (idx_t var = 0; var < num_decide_vars; var++) {
+            if (is_helper[var] || may_lack_value(var, 0)) {
+                continue;
+            }
+            bool is_bool = var < op.is_boolean_var.size() && op.is_boolean_var[var];
+            DecideWrittenBox written = written_box(var);
+            // A product takes its factor's sign (`b * x` with x >= -5 reaches -5, AddBooleanProduct): its floor is
+            // the factor's where that is negative, and none where the factor holds a value of either sign.
+            for (auto function : op.tree->function_nodes) {
+                const auto &node = *op.tree->nodes[function];
+                if (node.function_kind != DecideFunctionKind::BOOLEAN_PRODUCT || node.value_var != var ||
+                    node.product_other_var >= num_decide_vars) {
+                    continue;
+                }
+                const auto other = node.product_other_var;
+                written.AddLowered('>', is_signed[other] ? -DECIDE_SOLVER_INFINITY
+                                                         : written_box(other).Box().EffectiveLower());
             }
             if (!written.ContradictsDomain(is_bool)) {
                 continue;

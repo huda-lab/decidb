@@ -51,26 +51,49 @@ void DeriveBilinearAuxiliaryBounds(SolverInput &input, const FormulationBox &box
     }
 }
 
+void FloorBilinearAuxiliaries(SolverInput &input) {
+	for (const auto &link : input.bilinear_links) {
+		auto &floor = input.lower_bounds[link.aux_idx];
+		floor = std::max(floor, std::min(0.0, input.lower_bounds[link.other_var_idx]));
+	}
+}
+
 void LinearizeBilinear(SolverInput &input, const VarIndexer &indexer, const FormulationBox &box) {
 	// For (w = b * x) with b Boolean and x in [L, U] the exact linearization is:
 	//   w <= U*b                  (1)
 	//   w >= x - U*(1-b)          (2)
 	//   w <= x - L*(1-b)          (3, upper corner)
 	//   w >= L*b                  (4, lower corner)
-	// For L >= 0 the lower corner is implied by w's own non-negative bound, and (3)
-	// simplifies to the plain structural `w <= x` (w=0 at b=0 is enforced by (1)).
-	// We emit exactly those two-plus-one rows in that case. For L < 0 we emit the
-	// full four corners and widen w's own lower bound so the product can take the
-	// negative value of x when b=1.
+	// w's column is floored at the product's range, min(0, L) over the instances, raised by a floor written on the
+	// product (it has no default floor of 0: AddBooleanProduct). Where that floor is 0 or more, it implies the lower
+	// corner, and (3) simplifies to the plain structural `w <= x` (w=0 at b=0 is enforced by (1)): two-plus-one
+	// rows. Where it is negative, all four corners are emitted, an instance whose own L >= 0 included, so the product
+	// can take the negative value of x when b=1 and is 0 when b=0.
 	//
 	// One block per INSTANCE of w, in flat columns, from the box of the instance of x it reads (the way a helper
 	// decision of the value rewrite is defined): a query-wide product is one block, a keyed one a block per key,
 	// a row-scoped one a block per row. A product of two Booleans is the AND, the same block of three rows.
+	struct ProductInstance {
+		int w, b, x;
+		double U, L;
+	};
 	for (auto &link : input.bilinear_links) {
 		const auto &mapping_scope = indexer.var_scope[link.aux_idx];
 		const idx_t absent = mapping_scope == DecideVarScope::KEYED
 		                         ? indexer.keyed_mappings[indexer.var_keyed_mapping_idx[link.aux_idx]].absent_class
 		                         : DConstants::INVALID_INDEX;
+		auto emit = [&](vector<int> indices, vector<double> coefficients, char sense, double rhs) {
+			SolverInput::RawConstraint row;
+			row.indices = std::move(indices);
+			row.coefficients = std::move(coefficients);
+			row.sense = sense;
+			row.rhs = rhs;
+			row.kind = ConstraintKind::STRUCTURAL;
+			row.source_clause_id = link.source_clause_id;
+			row.removal_group_id = link.removal_group_id;
+			input.global_constraints.push_back(std::move(row));
+		};
+		vector<ProductInstance> products;
 		for (idx_t instance = 0; instance < indexer.NumInstances(link.aux_idx); instance++) {
 			if (instance == absent) {
 				continue; // the instance of a row that reads no key is fixed at 0
@@ -85,18 +108,6 @@ void LinearizeBilinear(SolverInput &input, const VarIndexer &indexer, const Form
 			const int w = static_cast<int>(indexer.InstanceColumn(link.aux_idx, instance));
 			const int b = static_cast<int>(indexer.InstanceColumn(link.bool_var_idx, bool_instance));
 			const int x = static_cast<int>(indexer.InstanceColumn(link.other_var_idx, other_instance));
-
-			auto emit = [&](vector<int> indices, vector<double> coefficients, char sense, double rhs) {
-				SolverInput::RawConstraint row;
-				row.indices = std::move(indices);
-				row.coefficients = std::move(coefficients);
-				row.sense = sense;
-				row.rhs = rhs;
-				row.kind = ConstraintKind::STRUCTURAL;
-				row.source_clause_id = link.source_clause_id;
-				row.removal_group_id = link.removal_group_id;
-				input.global_constraints.push_back(std::move(row));
-			};
 			if (input.variable_types[link.other_var_idx] == LogicalType::BOOLEAN) {
 				// Two Booleans: the AND, w <= b, w <= x, w >= b + x - 1.
 				emit({w, b}, {1.0, -1.0}, '<', 0.0);
@@ -107,17 +118,26 @@ void LinearizeBilinear(SolverInput &input, const VarIndexer &indexer, const Form
 			const double U = box.InstanceUpper(link.other_var_idx, other_instance);
 			const double L = box.InstanceLower(input, link.other_var_idx, other_instance);
 			D_ASSERT(U < DECIDE_EFFECTIVE_INFINITY); // derived and validated before ABS descendants read the aux box
+			products.push_back({w, b, x, U, L});
+		}
+		// A write to the box, not a read of it: this DECLARES the auxiliary's column, so it belongs on `input`
+		// rather than on the derived-constant box above. The two coincide today because `box` is the solved model's
+		// own box; they stop coinciding as soon as a second formulation runs against a widened box, and the floor
+		// must still land on the column the model declares.
+		double range_floor = 0.0;
+		for (const auto &product : products) {
+			range_floor = std::min(range_floor, product.L);
+		}
+		auto &floor = input.lower_bounds[link.aux_idx];
+		floor = std::max(floor, range_floor);
+		for (const auto &product : products) {
+			const int w = product.w, b = product.b, x = product.x;
+			const double U = product.U, L = product.L;
 			emit({w, b}, {1.0, -U}, '<', 0.0);        // (1) w - U*b <= 0
 			emit({w, x, b}, {1.0, -1.0, -U}, '>', -U); // (2) w - x - U*b >= -U
-			if (L < 0.0) {
+			if (floor < 0.0) {
 				emit({w, x, b}, {1.0, -1.0, -L}, '<', -L); // (3) w - x - L*b <= -L
-				// (4) w >= L*b. A write to the box, not a read of it: this DECLARES the auxiliary's column (w
-				// must be able to hold a negative x), so it belongs on `input` rather than on the derived-constant
-				// box above. The two coincide today because `box` is the solved model's own box; they stop
-				// coinciding as soon as a second formulation runs against a widened box, and this line must still
-				// land on the column the model declares.
-				input.lower_bounds[link.aux_idx] = std::min(input.lower_bounds[link.aux_idx], L);
-				emit({w, b}, {1.0, -L}, '>', 0.0);
+				emit({w, b}, {1.0, -L}, '>', 0.0);         // (4) w >= L*b
 			} else {
 				emit({w, x}, {1.0, -1.0}, '<', 0.0); // (3) w - x <= 0
 			}

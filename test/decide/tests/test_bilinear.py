@@ -2236,3 +2236,104 @@ def test_a_bool_times_a_shifted_decision_distributes(decidb_cli, clause, objecti
         "SELECT b, y FROM (VALUES (1)) t(id) DECIDE b(BOOL), y(INT) "
         f"SUCH THAT y <= 5 AND {clause} {objective}")
     assert rows == expected
+
+
+#: A Boolean times a decision that may be negative is negative where the decision is, so the product's floor is the
+#: decision's, min(0, x's floor), raised by a floor written on it, never the default floor of 0 a decision takes.
+#: `holds` reads one row: its b, its x and its id.
+PRODUCT_FLOOR_CASES = [
+    pytest.param("b * x >= -4", lambda b, x, row: b * x >= -4, id="a-floor-written-below-0-is-kept"),
+    pytest.param("b * x >= 0", lambda b, x, row: b * x >= 0, id="a-floor-of-0-written-is-kept"),
+    pytest.param(
+        "when t.id = 1: b * x >= -4",
+        lambda b, x, row: row != 1 or b * x >= -4,
+        id="a-floor-under-a-when-leaves-the-other-rows-free",
+    ),
+    pytest.param("b * x + 3 <= 1", lambda b, x, row: b * x + 3 <= 1, id="a-ceiling-below-0-can-hold"),
+]
+
+
+@pytest.mark.correctness
+@pytest.mark.bilinear
+@pytest.mark.parametrize("constraint, holds", PRODUCT_FLOOR_CASES)
+def test_a_product_takes_the_floor_of_its_factor(decidb_cli_gurobi, decidb_cli_highs, constraint, holds):
+    """With x >= -5, `b * x` reaches -5. The product took a decision's default floor of 0, which formulation then
+    widened to x's floor: a floor written on the product was lost (`b * x >= -4` answered x = -5, b = 1), the rows a
+    `when` does not reach kept the floor of 0, and `b * x + 3 <= 1` was refused as never negative. Judged against
+    every assignment of two rows."""
+    sql = f"""
+        SELECT id, x, b FROM (VALUES (1), (2)) t(id)
+        DECIDE x(INT), b(BOOL)
+        SUCH THAT x >= -5 AND x <= 3 AND {constraint}
+        MINIMIZE SUM(x) - 10 * SUM(b)
+        ORDER BY id"""
+    domains = {**{f"x{i}": range(-5, 4) for i in range(2)}, **{f"b{i}": range(2) for i in range(2)}}
+
+    def feasible(a):
+        return all(holds(a[f"b{i}"], a[f"x{i}"], i + 1) for i in range(2))
+
+    def value(a):
+        return sum(a[f"x{i}"] - 10 * a[f"b{i}"] for i in range(2))
+
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        rows, columns = cli.execute(sql)
+        judge_rows([dict(zip(columns, row)) for row in rows], domains, feasible, value, maximize=False)
+
+
+@pytest.mark.correctness
+@pytest.mark.bilinear
+def test_a_product_takes_the_lowest_floor_of_its_rows(decidb_cli_gurobi, decidb_cli_highs):
+    """x >= -5 on row 1 only, so the product's column is floored at -5 for both rows, and row 2's product (x >= 0
+    there) still needs its lower corner: without it `b * x` took -3 at b = 0 on row 2, and y = 0 looked feasible."""
+    sql = """
+        SELECT id, x, b, y FROM (VALUES (1), (2)) t(id)
+        DECIDE x(INT), b(BOOL), per (): y(BOOL)
+        SUCH THAT x <= 3 AND when t.id = 1: x >= -5 AND sum(b * x) <= 2 * y - 6
+        MINIMIZE 10 * y + SUM(x)
+        ORDER BY id"""
+    domains = {"x0": range(-5, 4), "x1": range(4), "b0": range(2), "b1": range(2), "y": range(2)}
+
+    def feasible(a):
+        return a["b0"] * a["x0"] + a["b1"] * a["x1"] <= 2 * a["y"] - 6
+
+    def value(a):
+        return 10 * a["y"] + a["x0"] + a["x1"]
+
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        rows, columns = cli.execute(sql)
+        judge_rows([dict(zip(columns, row)) for row in rows], domains, feasible, value, maximize=False)
+
+
+@pytest.mark.correctness
+@pytest.mark.bilinear
+def test_a_product_of_a_reducer_takes_the_reducers_floor(decidb_cli_gurobi, decidb_cli_highs):
+    """`sum(x)` over x >= -5 reaches -10, so `b * sum(x) + 3 <= 1` can hold: the bound check before solving read the
+    product as never negative."""
+    sql = """
+        SELECT id, x, b FROM (VALUES (1), (2)) t(id)
+        DECIDE x(INT), per (): b(BOOL)
+        SUCH THAT x >= -5 AND x <= 3 AND b * sum(x) + 3 <= 1
+        MINIMIZE SUM(x) - 10 * b
+        ORDER BY id"""
+    domains = {"x0": range(-5, 4), "x1": range(-5, 4), "b": range(2)}
+
+    def feasible(a):
+        return a["b"] * (a["x0"] + a["x1"]) + 3 <= 1
+
+    def value(a):
+        return a["x0"] + a["x1"] - 10 * a["b"]
+
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        rows, columns = cli.execute(sql)
+        judge_rows([dict(zip(columns, row)) for row in rows], domains, feasible, value, maximize=False)
+
+
+def test_a_product_of_a_non_negative_decision_is_never_negative(decidb_cli):
+    """x has the default floor of 0, so `b * x` does too, and a ceiling below 0 is refused before solving."""
+    sql = """
+        SELECT id, x, b FROM (VALUES (1), (2)) t(id)
+        DECIDE x(INT), b(BOOL)
+        SUCH THAT x <= 3 AND b * x + 3 <= 1
+        MINIMIZE SUM(x)"""
+    stderr = decidb_cli.execute_raw(sql).stderr
+    assert "b * x + 3 <= 1 cannot hold because (b * x) is never negative" in stderr, stderr

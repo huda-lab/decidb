@@ -145,7 +145,7 @@ Storing "default or follow" per instance, rather than each instance's value, kee
 refinement valid when a later pass moves the decision's box: `DeriveReducerValueBounds`
 raises a helper's floor after this runs, and `OpenElasticColumnBox` widens it for a
 diagnosis. A decision with a lower bound written (an unconditional floor, a BOOL, a signed
-helper) never takes the default, so a conditional floor only intersects with it and the
+helper or a product) never takes the default, so a conditional floor only intersects with it and the
 pass skips it. The Big-M sizings (`FlatColumnBox`, `DecideTightPerRowBigM`) and the `<>`
 range collapse read each instance's floor through the same accessor, so a default
 instance is sized and collapsed from 0.
@@ -540,7 +540,7 @@ Three cases, kept distinct:
 | --- | --- | --- |
 | `rigid_*` | `ClassifyNEConstraint`, `DecideRowSignedRange` | decides *structure* (is a disjunct dead), so the verdict must not turn on a bound a repair may lift |
 | `FormulationBox` | the three constant-deriving sites above | a constant belongs to the box it was derived from |
-| `lower_bounds` / `upper_bounds` | column declarations (e.g. widening a bilinear auxiliary for a negative `x`) | a write to the box, not a reading of it |
+| `lower_bounds` / `upper_bounds` | column declarations (e.g. a bilinear auxiliary floored at its product's range) | a write to the box, not a reading of it |
 
 A constant may **not** read `rigid_*`. That box is open wherever the user supplied the
 only finite bound, and these sites refuse rather than guess when a box is open, so the
@@ -1008,12 +1008,22 @@ McCormick envelope is:
 |---|---|
 | `w <= U*b` | always |
 | `w >= x - U*(1-b)` | always |
-| `w <= x - L*(1-b)` | `L < 0`; collapses to `w <= x` when `L >= 0` |
-| `w >= L*b` | `L < 0` only |
+| `w <= x - L*(1-b)` | `w`'s floor `< 0`; collapses to `w <= x` otherwise |
+| `w >= L*b` | `w`'s floor `< 0` only |
 
-For `L >= 0` the lower corner is implied by `w`'s own non-negative bound, so three
-rows suffice. For `L < 0` all four are emitted and `w`'s own lower bound is widened
-so the product can reach the negative value of `x` at `b = 1`. A missing finite
+**A product has no default floor of 0.** It takes its factor's sign (`b * x` is `x` where `b = 1`), so stage 05
+lists it with the signed helpers (`AddBooleanProduct`, `signed_helper_vars`): no decision's default floor is applied
+to it, `ResolveLiftedFloors` leaves it alone, and the bound check before solving gives it its factor's floor. Its
+column's floor is the product's range, `min(0, L)` over the lowest `L` of the instances, raised by a floor written on
+it (`b * x >= -4`, or `>= 0`). `FloorBilinearAuxiliaries` sets it from the factors' boxes before implied-bound
+propagation, once the lifted floors have lowered them, so `b * x` over x >= 0 is a non-negative term of a budget row
+(the goldens' product columns take their ceiling of 8 that way); `LinearizeBilinear` raises it to the range over the
+final box, which a helper factor (`b * sum(x)`) only has after its members are derived. Where that floor is 0 or
+more it implies the lower corner, so three rows suffice; where it is negative all four are emitted for every
+instance, one whose own `L >= 0` included, so the product reaches the negative value of `x` at `b = 1` and is 0 at
+`b = 0`. Before 2026-11-15 the product took the default floor of 0 and formulation widened it to `L`: a floor written
+on the product was lost, a `when` floor left the other rows at 0, and `b * x + 3 <= 1` was refused as never
+negative. A missing finite
 upper bound on `x` is refused by name — there is no envelope without it. A factor that is a
 helper has no box until its members' are derived, so the refusal waits for them and names the
 member.

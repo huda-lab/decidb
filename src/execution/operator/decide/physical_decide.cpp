@@ -1336,7 +1336,10 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     // knapsack/budget pattern), so the downstream Big-M can be finite and tight.
     // Only provably-implied bounds are applied; the feasible region is unchanged.
 	// Seed reducer-value bounds first: a SUM/MAX helper over nonnegative decisions is itself nonnegative, which lets
-	// this pass safely propagate a root equality's finite upper bound back through nested helpers.
+	// this pass safely propagate a root equality's finite upper bound back through nested helpers. A product has no
+	// default floor (AddBooleanProduct), so it is floored at its factor's first, once the lifted floors have lowered
+	// the factors: `b * x` over x >= 0 is a non-negative term of a budget row.
+	FloorBilinearAuxiliaries(solver_input);
 	if (!solver_input.reducer_value_links.empty()) {
 		DeriveReducerValueBounds(solver_input, out_var_indexer);
 	}
