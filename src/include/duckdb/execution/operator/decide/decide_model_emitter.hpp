@@ -245,14 +245,11 @@ private:
 	template <class F>
 	void ForEachRead(idx_t site, const vector<bool> &reads, bool qualified, F &&read) const;
 	//! The entries of `site` a term in a reducer is read on: those its member tests keep, a relation-qualified
-	//! reducer's first of each class (language/guide.md §5.1), which `first` then holds. `qualifier_scope` identifies
-	//! which reducer's classes are read, even when `site` is nested below that reducer's operand.
+	//! reducer's first of each class (language/guide.md §5.1), which `first` then holds. The site is the reducer
+	//! operand in its own enclosing relation context, including any outer `when` and `by` filters.
 	const vector<bool> &ReadEntriesOf(idx_t site, idx_t qualifier_scope, const vector<bool> &candidates,
 	                                 vector<bool> &first, vector<bool> &selected_rows);
-	//! The input rows chosen by a relation-qualified reducer's own operand, shared by terms whose sites are nested
-	//! beneath it.
-	vector<bool> QualifiedRows(idx_t qualifier_scope) const;
-	//! Read the selected entries only at rows chosen by the relation-qualified reducer's operand.
+	//! Read the selected entries only at rows chosen by the relation-qualified reducer's operand at `site`.
 	template <class F>
 	void ForEachTermRead(idx_t site, const vector<bool> &reads, idx_t qualifier_scope,
 	                     const vector<bool> &selected_rows, F &&read) const;

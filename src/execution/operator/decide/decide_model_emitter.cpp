@@ -367,39 +367,24 @@ const vector<bool> &DecideModelEmitter::ReadEntriesOf(idx_t site, bool qualified
 	return first;
 }
 
-vector<bool> DecideModelEmitter::QualifiedRows(idx_t qualifier_scope) const {
-	if (qualifier_scope >= tree.qualified_operands.size()) {
-		throw InternalException("DECIDE model emitter: invalid relation-qualified scope %llu", qualifier_scope);
-	}
-	const auto operand = tree.qualified_operands[qualifier_scope];
-	if (operand == DConstants::INVALID_INDEX) {
-		throw InternalException("DECIDE model emitter: relation-qualified scope %llu has no operand", qualifier_scope);
-	}
-	const auto &tested = columns.Tested(operand);
-	const auto first = columns.FirstOfEachInstance(operand, tested);
-	vector<bool> rows(num_rows, false);
-	for (auto read : ReadRows(operand, first, true)) {
-		rows[read.first] = true;
-	}
-	return rows;
-}
-
 const vector<bool> &DecideModelEmitter::ReadEntriesOf(idx_t site, idx_t qualifier_scope,
                                                        const vector<bool> &candidates, vector<bool> &first,
                                                        vector<bool> &selected_rows) {
 	if (qualifier_scope == DConstants::INVALID_INDEX) {
 		return candidates;
 	}
-	selected_rows = QualifiedRows(qualifier_scope);
-	first.assign(candidates.size(), false);
-	const std::vector<bool> &marked = candidates;
-	const std::vector<bool> &chosen_rows = selected_rows;
-	std::vector<bool> &selected_entries = first;
-	DecideEntryRows(tree, descent, site).ForEach([&](idx_t row, idx_t entry) {
-		if (chosen_rows[row] && marked[entry]) {
-			selected_entries[entry] = true;
-		}
-	});
+	if (qualifier_scope >= op.keyed_scopes.size() || site >= tree.nodes.size()) {
+		throw InternalException("DECIDE model emitter: invalid relation-qualified term site");
+	}
+	// Use this reducer's operand, not the tree's scope-wide representative. The same keyed scope can occur in
+	// several nested reducers, each below a different `when` or `by`; a global operand map can then select a row
+	// from a sibling use and drop every member of this reducer. `site` is compiled from this exact reducer's child G.
+	first = columns.FirstOfEachInstance(site, candidates);
+	selected_rows.assign(num_rows, false);
+	std::vector<bool> &marked_rows = selected_rows;
+	for (auto read : ReadRows(site, first, true)) {
+		marked_rows[read.first] = true;
+	}
 	return first;
 }
 
