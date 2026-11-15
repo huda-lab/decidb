@@ -249,8 +249,10 @@ vector<HelperPlace> PlaceHelpers(const SolverInput &input, const vector<idx_t> &
 			}
 		}
 	}
-	for (auto var : input.objective_variable_indices) {
-		read(var, true);
+	for (idx_t t = 0; t < input.objective_variable_indices.size(); t++) {
+		const auto value_node = t < input.objective_value_nodes.size() ? input.objective_value_nodes[t]
+		                                                              : DConstants::INVALID_INDEX;
+		read_value(input.objective_variable_indices[t], value_node, true);
 	}
 	for (auto var : input.quadratic_inner_variable_indices) {
 		read(var, false);
@@ -410,7 +412,9 @@ bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, cons
 		vector<std::unordered_set<idx_t>> read_by_objective(links.size());
 		for (idx_t t = 0; t < input.objective_variable_indices.size(); t++) {
 			const idx_t var = input.objective_variable_indices[t];
-			const idx_t link = candidate(var);
+			const auto value_node = t < input.objective_value_nodes.size() ? input.objective_value_nodes[t]
+			                                                              : DConstants::INVALID_INDEX;
+			const idx_t link = candidate(var, value_node);
 			if (link == DConstants::INVALID_INDEX || t >= input.objective_coefficients.size()) {
 				continue;
 			}

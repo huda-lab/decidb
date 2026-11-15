@@ -1754,7 +1754,8 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 	}
 	evaluated.linear_filters = ObjectiveTerms(root, sum_formula, 0, objective.terms, body.linear,
 	                                          gstate.evaluated_objective_coefficients,
-	                                          gstate.objective_variable_indices);
+	                                          gstate.objective_variable_indices,
+	                                          &gstate.objective_value_nodes);
 	// A term outside every reducer counts once, on the first row the objective keeps.
 	CountTupleTermsOnce(objective.terms, gstate.evaluated_objective_coefficients, &kept, num_rows);
 	// Each squared term lies in a reducer, and is read as a term there is.
@@ -1819,7 +1820,8 @@ vector<TermFilterState> DecideModelEmitter::ObjectiveTerms(idx_t root, const Dec
 	                                                       idx_t formula_offset, const vector<DecideTerm> &terms,
 	                                                       const vector<DecideTermSite> &sites,
 	                                                       vector<CoefficientColumn> &coefficients,
-	                                                       vector<idx_t> &variables) {
+	                                                       vector<idx_t> &variables,
+	                                                       vector<idx_t> *value_nodes) {
 	if (formula.kind != DecideAlgebraKind::OPERATOR || formula_offset + terms.size() > formula.children.size()) {
 		throw InternalException("DECIDE model emitter: objective term list has no aligned algebra");
 	}
@@ -1836,6 +1838,11 @@ vector<TermFilterState> DecideModelEmitter::ObjectiveTerms(idx_t root, const Dec
 		auto &site = sites[t];
 		idx_t variable;
 		const auto program = AlgebraTermProgram(tree, term_formula, term, site, t, "objective E node", &variable);
+		if (value_nodes) {
+			value_nodes->push_back(term.frame_read == DConstants::INVALID_INDEX
+			                           ? AlgebraTermValueNode(tree, term_formula)
+			                           : DConstants::INVALID_INDEX);
+		}
 		auto &filter = filters[t];
 		variables.push_back(gstate.ReadVariable(variable, term.frame_read));
 		filter.avg_scale = term.avg_scale;

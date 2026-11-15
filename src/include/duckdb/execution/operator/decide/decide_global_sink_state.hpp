@@ -226,6 +226,8 @@ public:
     vector<ReducerValueLinkSpec> evaluated_value_links;
     vector<CoefficientColumn> evaluated_objective_coefficients; // [term_idx]
     vector<idx_t> objective_variable_indices;
+	//! Producer G/O/F node per objective term, INVALID for a decision leaf; aligned with objective_variable_indices.
+	vector<idx_t> objective_value_nodes;
 
     // Quadratic objective: evaluated inner linear expression coefficients
     vector<CoefficientColumn> evaluated_quadratic_coefficients;  // [term_idx]

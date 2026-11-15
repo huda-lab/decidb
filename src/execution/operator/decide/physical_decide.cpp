@@ -897,6 +897,7 @@ struct DecideEvaluationFields {
 	vector<ReducerValueLinkSpec> value_links;
 	vector<CoefficientColumn> objective_coefficients;
 	vector<idx_t> objective_variable_indices;
+	vector<idx_t> objective_value_nodes;
 	vector<CoefficientColumn> quadratic_coefficients;
 	vector<idx_t> quadratic_variable_indices;
 	bool has_quadratic_objective = false;
@@ -915,6 +916,7 @@ struct DecideEvaluationFields {
 		std::swap(value_links, gstate.evaluated_value_links);
 		std::swap(objective_coefficients, gstate.evaluated_objective_coefficients);
 		std::swap(objective_variable_indices, gstate.objective_variable_indices);
+		std::swap(objective_value_nodes, gstate.objective_value_nodes);
 		std::swap(quadratic_coefficients, gstate.evaluated_quadratic_coefficients);
 		std::swap(quadratic_variable_indices, gstate.quadratic_variable_indices);
 		std::swap(has_quadratic_objective, gstate.has_quadratic_objective);
@@ -1296,6 +1298,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     // Objective (linear part)
     solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
     solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
+	solver_input.objective_value_nodes = std::move(gstate.objective_value_nodes);
 #ifdef DEBUG
     if (auto objective = tree->Objective()) {
         VerifyCountedOnce(objective->terms, solver_input.objective_coefficients, vector<idx_t>());

@@ -415,8 +415,9 @@ filling the row-indexed solver input; its coefficient program comes from the adj
 recursive algebra slice; it does not yet replace the flat formulation path. A reducer link's members now retain the
 producer node beside the plan-time helper index, and the stage 06 inliner resolves nested G references by that node
 identity first, checking that it names the same helper column. Grouped E terms retain the same producer-node reference,
-so stage 06 follows E-to-G reads directly too. Parent reducer formulas can therefore follow their child G edges through
-the executable tree while the solver still receives its established column records.
+so stage 06 follows E-to-G reads directly too. Linear objective terms retain the same edge. E clauses and objectives
+therefore name the producer node beside every tree-value read, while the solver still receives its established column
+records.
 
 **Cost**, measured before flat was deleted, against flat on one binary (`benchmark/decide/anr_scaling.py --against` a
 flat run): the tree's own time at 10^5 rows is 0.84x to 1.33x flat's on every workload (`flat-sum` the most), and its
