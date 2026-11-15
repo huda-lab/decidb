@@ -2120,30 +2120,17 @@ void DecideModelEmitter::FrameMembers(idx_t node, ReducerValueMembers &out) {
 
 void DecideModelEmitter::ValueLinks() {
 	// Reducer definitions are emitted from their G/O nodes, children first. The tree's algebra records the operator and
-	// each member term's place; optimizer link metadata supplies only the helper's formulation sides and label.
+	// each member term's place; node-owned metadata supplies the helper's formulation sides, qualifier and label.
 	for (auto node : tree.eval_order) {
 		auto &tree_node = *tree.nodes[node];
 		if (tree_node.link == DConstants::INVALID_INDEX) {
 			continue;
 		}
-		if (tree_node.link >= op.reducer_value_links.size()) {
-			throw InternalException("DECIDE model emitter: tree node %llu has an invalid value-link index", node);
-		}
-		auto &link = op.reducer_value_links[tree_node.link];
-		if (link.value_var >= tree.value_nodes.size() || tree.value_nodes[link.value_var] != node) {
-			throw InternalException("DECIDE model emitter: value-link %llu is not owned by its G/O node", tree_node.link);
-		}
-		if (tree_node.value_var != link.value_var || tree_node.aggregate != link.agg_name ||
-		    tree_node.value_link_label != link.label ||
-		    tree_node.value_link_needs_envelope != link.need_envelope ||
-		    tree_node.value_link_needs_closing != link.need_closing ||
-		    tree_node.qualifier_scope != link.qualifier_scope_idx ||
-		    tree_node.frame != link.frame) {
-			throw InternalException("DECIDE model emitter: G/O node %llu disagrees with its value-link source", node);
-		}
 		const auto aggregate = ValueLinkAggregate(tree_node);
-		if (aggregate != link.agg_name) {
-			throw InternalException("DECIDE model emitter: G/O algebra disagrees with its value-link operator");
+		if (tree_node.value_var >= tree.value_nodes.size() || tree.value_nodes[tree_node.value_var] != node ||
+		    !tree_node.decision_value || tree_node.aggregate != aggregate || tree_node.value_link_label.empty()) {
+			throw InternalException("DECIDE model emitter: G/O node %llu has incomplete node-owned value-link metadata",
+			                        node);
 		}
 		auto &body = tree_node.compiled;
 		auto spec = ReducerValueLinkSpec();
