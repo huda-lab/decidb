@@ -775,8 +775,7 @@ void DecideTreeColumns::CheckPartition(const DecideFrameSpec &frame, idx_t node)
 	}
 }
 
-void DecideTreeColumns::ReadFrames(const vector<DecideFrameSpec> &frames,
-                                   const vector<LogicalDecide::ReducerValueLink> &links, idx_t num_rows,
+void DecideTreeColumns::ReadFrames(const vector<DecideFrameSpec> &frames, idx_t num_rows,
                                    vector<DecideFrameMap> &maps) {
 	frame_maps = &maps;
 	frame_rows = num_rows;
@@ -809,7 +808,7 @@ void DecideTreeColumns::ReadFrames(const vector<DecideFrameSpec> &frames,
 		CheckPartition(frames[f], node);
 	}
 	// What each frame reads, through flat's blocks, each expression a program on the frame's O.
-	const auto programs = FrameExpressions(links);
+	const auto programs = FrameExpressions();
 	const DecideFrameRead read = [&](const Expression &expression, const vector<bool> &rows) {
 		auto found = programs.find(&expression);
 		if (found == programs.end()) {
@@ -826,14 +825,14 @@ void DecideTreeColumns::ReadFrames(const vector<DecideFrameSpec> &frames,
 		}
 		return descent.DecisionRows()[tree.variable_scopes[variable].keyed_scope_idx][row] == DConstants::INVALID_INDEX;
 	};
-	SkipDecideFrameNullReads(tree, links, maps, num_rows, read, absent);
+	SkipDecideFrameNullReads(tree, maps, num_rows, read, absent);
 	frame_values = ComputeDecideFrameColumns(context, frames, maps, tree.frame_reads, num_rows, read);
 	CheckPositions(frames);
 	DecideCountFrames(maps);
 }
 
 std::unordered_map<const Expression *, pair<idx_t, idx_t>>
-DecideTreeColumns::FrameExpressions(const vector<LogicalDecide::ReducerValueLink> &links) const {
+DecideTreeColumns::FrameExpressions() const {
 	std::unordered_map<const Expression *, pair<idx_t, idx_t>> programs;
 	for (idx_t j = 0; j < tree.frame_columns.size(); j++) {
 		auto &column = tree.frame_reads.columns[j];
@@ -849,15 +848,19 @@ DecideTreeColumns::FrameExpressions(const vector<LogicalDecide::ReducerValueLink
 			                                                                              computed.arguments[a]};
 		}
 	}
-	// A range over decisions' payload: its helper's member terms, on the frame's O.
-	for (auto &link : links) {
-		if (link.frame == DConstants::INVALID_INDEX) {
+	// A range over decisions' payload: its helper's member terms, on the frame O that owns the value link.
+	for (idx_t frame = 0; frame < tree.frame_nodes.size(); frame++) {
+		const auto node_index = tree.frame_nodes[frame];
+		const auto &node = *tree.nodes[node_index];
+		if (node.link == DConstants::INVALID_INDEX) {
 			continue;
 		}
-		const auto node = tree.frame_nodes[link.frame];
-		auto &body = tree.nodes[node]->compiled;
+		if (node.kind != DecideNodeKind::FRAME || node.frame != frame || !node.decision_value) {
+			throw InternalException("DECIDE tree: frame node %llu has an invalid helper value", node_index);
+		}
+		auto &body = node.compiled;
 		for (idx_t t = 0; t < body.members.size(); t++) {
-			programs[body.members[t].coefficient.get()] = {node, body.linear[t].program};
+			programs[body.members[t].coefficient.get()] = {node_index, body.linear[t].program};
 		}
 	}
 	return programs;

@@ -113,8 +113,7 @@ public:
 	//! (DecideFrameColumnPrograms): read once the descent is finished, before any program that reads a frame. What a
 	//! frame refuses is held at its rank: its range's limit and its partition (D75) where its rows are routed, a
 	//! position of two payloads it reads (D73) once the decisions' classes are known.
-	void ReadFrames(const vector<DecideFrameSpec> &frames, const vector<LogicalDecide::ReducerValueLink> &links,
-	                idx_t num_rows, vector<DecideFrameMap> &maps);
+	void ReadFrames(const vector<DecideFrameSpec> &frames, idx_t num_rows, vector<DecideFrameMap> &maps);
 	//! Frame column `column`'s value at `row` (DecideFrameReads::columns), as ReadFrames computed it.
 	Value FrameValue(idx_t column, idx_t row) const;
 	//! The name of the position frame `frame` holds `row` at: its order key's least spelling over its rows (D69).
@@ -187,9 +186,8 @@ private:
 	//! D75 over the anchors of the O `node`: each class of its partition key lies in one timeline.
 	void CheckPartition(const DecideFrameSpec &frame, idx_t node);
 	//! The program on a frame's O that computes each expression its columns read (DecideFrameColumnPrograms) and each
-	//! payload term's coefficient of a range over decisions, its helper's (`links`): the O and the program.
-	std::unordered_map<const Expression *, pair<idx_t, idx_t>>
-	FrameExpressions(const vector<LogicalDecide::ReducerValueLink> &links) const;
+	//! payload term's coefficient of a range over decisions, its helper: the linked O and the program.
+	std::unordered_map<const Expression *, pair<idx_t, idx_t>> FrameExpressions() const;
 	//! `program` of the O `node` on the rows `rows` marks, its anchors there, as a frame's block reads it
 	//! (DecideFrameRead).
 	DecideFrameValues FrameRows(idx_t node, idx_t program, const vector<bool> &rows);

@@ -864,7 +864,7 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	DecideTreeColumns columns(
 	    *tree, *descent, context, names, [&](idx_t clause) { return WrittenClause(clause); }, errors);
 	// The frames' timelines and the columns they read, before any program reads one (language/guide.md §5.6).
-	columns.ReadFrames(frames, reducer_value_links, num_rows, gstate.frame_maps);
+	columns.ReadFrames(frames, num_rows, gstate.frame_maps);
 	// What the data checks and the data reducers no clause reads raise, at their ranks, before any clause is read.
 	columns.CheckData();
 	DecideModelEmitter emitter(*this, context, *tree, *descent, columns, gstate, per_group_cache, names, num_rows,

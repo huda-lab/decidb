@@ -417,7 +417,8 @@ producer node beside the plan-time helper index, and the stage 06 inliner resolv
 identity first, checking that it names the same helper column. Grouped E terms retain the same producer-node reference,
 so stage 06 follows E-to-G reads directly too. Linear objective terms retain the same edge. E clauses and objectives
 therefore name the producer node beside every tree-value read, while the solver still receives its established column
-records.
+records. Frame helper expressions and NULL-read skipping also select linked O nodes from tree metadata rather than
+optimizer reducer-link records, so the frame reader gets its producer and compiled programs from the same node graph.
 
 **Cost**, measured before flat was deleted, against flat on one binary (`benchmark/decide/anr_scaling.py --against` a
 flat run): the tree's own time at 10^5 rows is 0.84x to 1.33x flat's on every workload (`flat-sum` the most), and its

@@ -233,11 +233,11 @@ void SkipDecideRangeNullReads(const vector<const Expression *> &payload, const v
 
 //! The values the frames' windows skip as NULL, read through `read` before any window is numbered or listed
 //! (SkipDecideRangeNullReads): a range over decisions' payload coefficients and `else`s (its helper's members on the
-//! frame's O in `tree`, for each of `links`), and a
+//! linked frame's O in `tree`), and a
 //! range over data's `else`, which reads no value at an anchor where it is NULL (D86). `absent` says whether a decision
 //! has no instance at a row, which a payload term reading it there reads no value of (D84, language/guide.md §5.6).
-void SkipDecideFrameNullReads(const DecideTree &tree, const vector<LogicalDecide::ReducerValueLink> &links,
-                              vector<DecideFrameMap> &maps, idx_t num_rows, const DecideFrameRead &read,
+void SkipDecideFrameNullReads(const DecideTree &tree, vector<DecideFrameMap> &maps, idx_t num_rows,
+                              const DecideFrameRead &read,
                               const std::function<bool(idx_t variable, idx_t row)> &absent);
 
 //! A frame's columns, each with its rows' errors: every one before the first reducer over data reading frames
