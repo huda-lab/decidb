@@ -150,13 +150,6 @@ void CountTupleTermsOncePerGroup(const vector<DecideTerm> &terms, idx_t num_rows
 //! Empty is every row in one group.
 idx_t CountInstances(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t num_rows, bool grouped);
 
-//! A NULL that reaches a comparison unreduced makes that instance NULL, and a NULL instance
-//! is skipped (deck p. 50): in the aggregate shape the group the row is in (its bound and its
-//! terms beside the reducers are one value per group), else the row. `row_group_ids` empty
-//! is every row in one group.
-void SkipNullInstances(const vector<bool> &null_rows, bool grouped, idx_t num_rows, vector<idx_t> &row_group_ids,
-                       idx_t &num_groups);
-
 //! A clause's evaluation before its rows are read (EvaluatedConstraint): its facts, its repair group, and each term's
 //! decision as a row reads it (`read_variable`, DecideGlobalSinkState::ReadVariable) and coefficient as written, which
 //! a diagnosis renders a data-weighted clause with.
@@ -210,13 +203,6 @@ vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_row
                                const DecideKeyGroups *groups, const vector<bool> &in_a_class,
                                vector<idx_t> *kept_row_group_ids, EvaluatedConstraint &evaluated,
                                idx_t &grouped_instances);
-
-//! A reducer over no rows is NULL, and a NULL instance is skipped (deck p. 56): in the aggregate shape, a group in
-//! which some reducer reads no row has no instance. Only a reducer's term carries a filter (its own `when`, its
-//! NULL-data and absent-decision tests, its de-duplication), so a term with none reads every row of its group.
-//! `row_group_ids` empty is every row in one group.
-void SkipGroupsWithAnEmptyReducer(const vector<const TermFilterState *> &filters, idx_t num_rows,
-                                  vector<idx_t> &row_group_ids, idx_t &num_groups);
 
 //! A composed MIN/MAX term's evaluation before its rows are read (ComposedMinMaxTermData): the algebra's reducer,
 //! sign and direction, and the reducer node's source label, so a diagnosis over its extremum column reads `max(ship)`.
@@ -273,7 +259,7 @@ void HoistAvgIntoNotEqualBound(const DecideConstraint &constraint, vector<TermFi
 //! (`null_rows`). `kept_groups` numbers each kept row's group, empty for every kept row in one; `instances` is what
 //! remains of those groups once a clause's rules have dropped some (empty: all of one group), and a group it no longer
 //! holds has no instance, so no bound to read (D68). So does a `grouped` clause's group holding a row of `null_rows`, a
-//! NULL its left side reads, which SkipNullInstances drops next.
+//! NULL its left side reads, which DecideAbsence::SkipNullInstances drops next.
 void TakeTightestFrameBound(ExpressionType comparison, const string &written, const vector<bool> &kept,
                             const vector<bool> &bound_null, const vector<idx_t> &kept_groups,
                             const vector<idx_t> &instances, idx_t num_groups, bool grouped, vector<double> &rhs,

@@ -251,10 +251,10 @@ references, `tests/_expected.py`, were recorded from flat's runs):
   first (D72). A value error is found by reading its window entry by entry.
 - *Formulation* (`decide_model_emitter.hpp`): the model emitter, an Adapter onto stage 06, writes what
   `PhysicalDecide::Evaluate` writes for the model, gstate's evaluated clauses and the keyed mappings, in flat's order,
-  through flat's own blocks (`InitializeEvaluatedConstraint`, `DescribeBound`, `SkipNullInstances`, `CountInstances`),
+  through flat's own blocks (`InitializeEvaluatedConstraint`, `DescribeBound`, `DecideAbsence::SkipNullInstances`, `CountInstances`),
   so the tree and flat formulate through one code path. A clause in the aggregate shape keeps the rows its root holds,
   groups them by the slots of its G of the `by` key, numbered by value, and emits, skips and counts them through flat's
-  own blocks (`GroupRowsByShape`, `SkipGroupsWithAnEmptyReducer`, `CountTupleTermsOncePerGroup`, `ScaleAvgTerms`): a
+  own blocks (`GroupRowsByShape`, `DecideAbsence::SkipEmptyReducers`, `CountTupleTermsOncePerGroup`, `ScaleAvgTerms`): a
   reducer's term is read on the members of its G, a kept row in no group among them, where a NULL or a decision with no
   instance leaves its group no value, and a term beside the reducers on every kept row. Its groups are named by their
   least spelling (`DecideGroupKeyValues`). A keyed decision with no class at a row, or a NULL coefficient or bound,
@@ -319,7 +319,7 @@ references, `tests/_expected.py`, were recorded from flat's runs):
   division-by-zero and too-large messages). The objective's squared terms are read as its terms are; its products on
   the rows they are read on, with no row dropped for a decision with no instance, as flat's evaluation drops none, and
   one outside every reducer is counted once on the first row the objective keeps (`CountProductsOnce`, which flat
-  shares). A product's auxiliary has no value where a factor has none (`DecideTreeColumns::AbsentAt`), which the
+  shares). A product's auxiliary has no value where a factor has none (`DecideAbsence::At`), which the
   definitions reading it see and stage 06 reads (`absent_reads`). A row defining an auxiliary reads its products'
   factors and its squares' terms as it reads its terms' decisions, and its squares' coefficients as its terms', but no
   product's coefficient, as flat read none; no part of a definition lies in a reducer,
@@ -349,7 +349,7 @@ references, `tests/_expected.py`, were recorded from flat's runs):
   their coefficients rank after the composed clauses. Stage 06 then writes a helper
   read once where it is read (D89) and accounts for it as flat does. A frame's term reads its decision at the row the
   frame selects, and has no value where the frame reads nothing or the decision has no instance there
-  (`DecideTreeColumns::TermAbsentAt`, flat's `DecideFrameReadsAbsent`), wherever a term's absence is read: a clause's
+  (`DecideAbsence::TermAt`, flat's `DecideFrameReadsAbsent`), wherever a term's absence is read: a clause's
   rows, the objective's entries, a definition's absence, a helper's members. A range over decisions' helper has a class
   per window (`DecideFrameWindowMapping`) and lists its members per window through flat's block
   (`DecideListFrameMembers`), its payload's and its `else`'s coefficients programs on its O, read on the rows its
@@ -697,15 +697,20 @@ frame's decision terms read `gstate.ReadVariable`: a frame read numbered once pe
 (`SolverInput::frame_reads`, stage 06), its rows the selected ones; a query-wide decision is its own read.
 
 Where a frame has nothing to read, every column of it holds NULL, which is no value (D84) as any NULL a clause reads:
-the instance is skipped (`SkipNullInstances`), a reducer's member is out of its filter, an objective term is dropped. An
+the instance is skipped (`DecideAbsence::SkipNullInstances`), a reducer's member is out of its filter, an objective term is dropped. An
 anchor in no timeline is such an anchor whatever its `else` (`DecideFrameMap::Untimed`): it misses no position, so no
 `else` stands in, and it is absent (D75). A frame over data is that column alone, so a scalar function around it reads
 the NULL as SQL does -- `coalesce(at(previous: t.d) over (...), 1)` is 1 there -- and only a NULL that reaches the
 comparison skips it (deck p. 56). A frame over decisions is its payload's terms, each read at the selected row
-(`DecideTreeColumns::AbsentAt`): where the frame has no value, or the decision has none at the selected row, the term
+(`DecideAbsence::At`): where the frame has no value, or the decision has none at the selected row, the term
 reads an instance with no value, as below.
 
-**No value is one mark per decision instance** (D84, D87, D88): `DecideTreeColumns::AbsentAt` answers whether the
+**No value is one rule** (literal plan §6.3; D67, D68, D84, D87, D88, D90): `DecideAbsence`
+(`decide_absence.hpp`) holds its table, from a read up and never down -- a keyed decision's row in no class, a helper's
+group with no member, an auxiliary whose definition reads a decision with none, a product either of whose factors has
+none, a frame's term where its frame selects nothing -- and the two steps that skip a clause's instance, a group one
+of whose reducers reads no row (p. 56, before the group's bound is read) and an instance a NULL reaches (p. 50).
+Everything that reads absence asks it. `DecideAbsence::At` answers whether the
 instance a row reads of a decision has a value. A keyed decision has none on a row in no class of its scope (its
 mapping's absent class), and so has a helper's group with no member. An auxiliary -- an ABS's, a body helper, an L0
 indicator, a product -- has none where the rows defining it (`DecideConstraint::defined_var`, the `DEFINES_TAG_PREFIX`
@@ -728,7 +733,7 @@ row as any bound, its NULLs apart, and then each group's kept rows, a row a redu
 the group's tightest value among those where it has one (`TakeTightestFrameBound`): the least under `<=`, the greatest under `>=`, the one value under `=`, whose second is
 the `=` message a side table raises for a column; a group with none is marked in `null_rows`, so its instance is
 skipped. A row in no class of the clause's `per` key is not read at all, as `InClassOnly` keeps a column's from being
-read (D5). The value is taken last, just before `SkipNullInstances`, and only for a group the clause still holds: a group
+read (D5). The value is taken last, just before `DecideAbsence::SkipNullInstances`, and only for a group the clause still holds: a group
 some rule dropped, or a NULL on its left side will, has no instance, so no bound and no `=` check (D68). Its frame
 columns print as the frame is written (`FRAME_COLUMN_TAG`).
 
@@ -971,7 +976,7 @@ NULL), the clause has no instance.
 
 **An absent decision reads like a NULL.** After the terms are read, each row where a linear,
 bilinear or square term reads a decision on its absent entity (§4) is marked
-(`DecideTreeColumns::AbsentAt`), and `SkipNullInstances` skips that row's instance as
+(`DecideAbsence::At`), and `DecideAbsence::SkipNullInstances` skips that row's instance as
 it skips one with a NULL coefficient. So `sum(x) by (g) <= 0.5 * sum(x)` gives a NULL-`g`
 row no limit (its `by (g)` helper is absent there) while the total still counts it.
 
@@ -991,14 +996,14 @@ Term-level filters are carried on individual terms, not on the whole constraint:
    filter excludes — **for that term only**.
 3. A row joins a group when the clause's `when` keeps it and some reducer's own `when`
    keeps it (a reducer with no `when` keeps every kept row).
-4. A reducer over no rows is NULL (D68): `SkipGroupsWithAnEmptyReducer` cuts every group
+4. A reducer over no rows is NULL (D68): `DecideAbsence::SkipEmptyReducers` cuts every group
    in which some term's mask keeps no row, after the de-duplication masks are folded in.
    Only a reducer's term carries a mask (its own `when`, its NULL-data and absent-decision
    tests, its de-duplication), so a term with none reads every row of its group.
 5. What the skips left is counted (D90, guide §7.4): each clause's instances once grouped
    -- in the aggregate shape every group of its kept rows by its key, from the key's
    cached grouping, whether or not a reducer reads a row of it -- and those left after
-   `SkipNullInstances`, the most any of its rows holds (`ClauseInstances`). A composed
+   `DecideAbsence::SkipNullInstances`, the most any of its rows holds (`ClauseInstances`). A composed
    clause is one instance where its `when` keeps a row. `ReportSkippedInstances` turns the
    counts into an EXPLAIN ANALYZE line under the clause and, for a clause left with none,
    a warning on stderr; `ReportAnEmptyObjective` reads the formulated objective (its linear,
@@ -1056,7 +1061,7 @@ resulting outer product is scaled by `1/N`.
 Every coefficient and RHS value is checked after evaluation:
 
 - **NULL** → the value is skipped (deck p. 50). In a constraint, `ExtractDoubleColumn`
-  marks the row in `null_rows` and `SkipNullInstances` cuts the instance the row
+  marks the row in `null_rows` and `DecideAbsence::SkipNullInstances` cuts the instance the row
   reaches: the row of a row constraint, the group of a grouped one (`INVALID_INDEX` in
   `row_group_ids`, which the model builder already skips). A reducer never meets a NULL
   summand: `SkipNullData` tested it in the reducer's filter. The objective never meets

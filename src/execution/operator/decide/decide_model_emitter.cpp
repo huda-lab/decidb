@@ -597,11 +597,11 @@ DecideModelEmitter::LinkMembers DecideModelEmitter::Members(idx_t node) {
 	LinkMembers members;
 	members.reads = columns.Tested(site);
 	for (auto &term : body.members) {
-		if (!columns.MayBeAbsent(term)) {
+		if (!columns.Absence().MayBe(term)) {
 			continue;
 		}
 		for (idx_t e = 0; e < entries.Count(); e++) {
-			members.reads[e] = members.reads[e] && !columns.TermAbsentAt(term, entries.rows[e]);
+			members.reads[e] = members.reads[e] && !columns.Absence().TermAt(term, entries.rows[e]);
 		}
 	}
 	const auto qualified = tree.nodes[node]->qualifier_scope != DConstants::INVALID_INDEX;
@@ -652,7 +652,7 @@ KeyedMapping DecideModelEmitter::HelperMapping(idx_t node_index) {
 
 void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 	gstate.absent_reads.assign(op.decide_variables.size(), vector<bool>());
-	columns.ReadAbsence(mappings, gstate.absent_reads);
+	columns.Absence().ReadClasses(mappings, gstate.absent_reads);
 	gstate.evaluated_bilinear_links.clear();
 	for (auto function : tree.function_nodes) {
 		const auto &node = *tree.nodes[function];
@@ -719,14 +719,14 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 			DefinitionAbsence(root, node.compiled.clause->defined_var);
 		}
 	}
-	// A product's auxiliary has none where a factor has none (DecideTreeColumns::AbsentAt), which stage 06 reads too.
+	// A product's auxiliary has none where a factor has none (DecideAbsence::At), which stage 06 reads too.
 	for (auto &product : gstate.evaluated_bilinear_links) {
 		auto &absent = gstate.absent_reads[product.aux_idx];
-		if (!columns.MayBeAbsent(product.aux_idx)) {
+		if (!columns.Absence().MayBe(product.aux_idx)) {
 			continue;
 		}
 		for (idx_t row = 0; row < num_rows; row++) {
-			if (columns.AbsentAt(product.aux_idx, row)) {
+			if (columns.Absence().At(product.aux_idx, row)) {
 				absent.resize(num_rows, false);
 				absent[row] = true;
 			}
@@ -790,11 +790,11 @@ void DecideModelEmitter::DefinitionAbsence(idx_t root, idx_t variable) {
 	}
 	vector<bool> dependency_absent(num_rows, false);
 	for (auto term : dependencies) {
-		if (!columns.MayBeAbsent(*term)) {
+		if (!columns.Absence().MayBe(*term)) {
 			continue;
 		}
 		for (idx_t row = 0; row < num_rows; row++) {
-			dependency_absent[row] = dependency_absent[row] || columns.TermAbsentAt(*term, row);
+			dependency_absent[row] = dependency_absent[row] || columns.Absence().TermAt(*term, row);
 		}
 	}
 	for (idx_t row = 0; row < num_rows; row++) {
@@ -980,7 +980,7 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 	// defines it has none (D88).
 	vector<const DecideTerm *> absent_terms;
 	for (auto &term : clause.lhs_terms) {
-		if (columns.MayBeAbsent(term)) {
+		if (columns.Absence().MayBe(term)) {
 			absent_terms.push_back(&term);
 		}
 	}
@@ -990,7 +990,7 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 	ForEachRead(root, tested, false, [&](idx_t row, idx_t entry) {
 		bool null = null_entries[entry];
 		for (auto term : absent_terms) {
-			null = null || columns.TermAbsentAt(*term, row);
+			null = null || columns.Absence().TermAt(*term, row);
 		}
 		nulled[row] = null;
 	});
@@ -999,7 +999,7 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 	}
 	// Its products and squares, which no reducer filters.
 	Polynomial(root, vector<TermFilterState>(Parts(clause)), null_rows, evaluated);
-	SkipNullInstances(null_rows, false, num_rows, evaluated.row_group_ids, evaluated.num_groups);
+	DecideAbsence::SkipNullInstances(null_rows, false, num_rows, evaluated.row_group_ids, evaluated.num_groups);
 	if (counted) {
 		gstate.CountInstances(evaluated.source_clause_id, instances,
 		                      CountInstances(evaluated.row_group_ids, evaluated.num_groups, num_rows, false));
@@ -1263,17 +1263,16 @@ vector<bool> DecideModelEmitter::ReadInReducer(const DecideTerm &term, const Dec
 	const auto values = numbers.data();
 	const std::vector<bool> &null_entries = nulls;
 	std::vector<bool> &nulled = null_rows;
-	Filter(site.node, term.qualifier_scope_idx, reads, selected_rows, filter, members,
-	       [&](idx_t row, idx_t entry) {
-			if (columns.TermAbsentAt(term, row)) {
-				nulled[row] = true;
-				return;
-			}
-			coefficients[row] = values[entry];
-			if (null_entries[entry]) {
-				nulled[row] = true;
-			}
-	       });
+	Filter(site.node, term.qualifier_scope_idx, reads, selected_rows, filter, members, [&](idx_t row, idx_t entry) {
+		if (columns.Absence().TermAt(term, row)) {
+			nulled[row] = true;
+			return;
+		}
+		coefficients[row] = values[entry];
+		if (null_entries[entry]) {
+			nulled[row] = true;
+		}
+	});
 	return members;
 }
 
@@ -1445,7 +1444,7 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 	for (auto &filter : filters) {
 		reducers.push_back(&filter);
 	}
-	SkipGroupsWithAnEmptyReducer(reducers, num_rows, evaluated.row_group_ids, evaluated.num_groups);
+	DecideAbsence::SkipEmptyReducers(reducers, num_rows, evaluated.row_group_ids, evaluated.num_groups);
 	// A decision beside the reducers counts once in each group's row; an easy MIN's or MAX's rows are its members',
 	// whose terms stage 05 reads as written on each.
 	if (clause.lhs_is_aggregate) {
@@ -1471,7 +1470,7 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 			errors.Add(rank, ErrorData(ex));
 		}
 	}
-	SkipNullInstances(null_rows, true, num_rows, evaluated.row_group_ids, evaluated.num_groups);
+	DecideAbsence::SkipNullInstances(null_rows, true, num_rows, evaluated.row_group_ids, evaluated.num_groups);
 	if (counted) {
 		gstate.CountInstances(evaluated.source_clause_id, grouped_instances,
 		                      CountInstances(evaluated.row_group_ids, evaluated.num_groups, num_rows, true));
@@ -1581,7 +1580,7 @@ void DecideModelEmitter::ReadPart(const DecideTermSite &site, idx_t program, idx
 	                   : columns.Numbers(site.node, program, reads, &nulls, &site, &inputs);
 	vector<idx_t> absent;
 	for (auto variable : variables) {
-		if (columns.MayBeAbsent(variable)) {
+		if (columns.Absence().MayBe(variable)) {
 			absent.push_back(variable);
 		}
 	}
@@ -1591,7 +1590,7 @@ void DecideModelEmitter::ReadPart(const DecideTermSite &site, idx_t program, idx
 		coefficients[row] = numbers[entry];
 		null_rows[row] = null_rows[row] || nulls[entry];
 		for (auto variable : absent) {
-			null_rows[row] = null_rows[row] || columns.AbsentAt(variable, row);
+			null_rows[row] = null_rows[row] || columns.Absence().At(variable, row);
 		}
 	});
 }
@@ -1854,7 +1853,7 @@ vector<TermFilterState> DecideModelEmitter::ObjectiveTerms(idx_t root, const Dec
 		auto read = [&](idx_t row, idx_t entry) {
 			// A keyed E entry may represent rows where this auxiliary alternates between present and absent. Its
 			// coefficient is shared by the entry, but the objective term is present only on rows with a value.
-			if (marked[entry] && !columns.TermAbsentAt(term, row)) {
+			if (marked[entry] && !columns.Absence().TermAt(term, row)) {
 				mask[row] = true;
 				values[row] = computed[entry];
 			}

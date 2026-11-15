@@ -389,32 +389,6 @@ idx_t CountInstances(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t
 	return count;
 }
 
-void SkipNullInstances(const vector<bool> &null_rows, bool grouped, idx_t num_rows, vector<idx_t> &row_group_ids,
-                       idx_t &num_groups) {
-	if (std::find(null_rows.begin(), null_rows.end(), true) == null_rows.end()) {
-		return;
-	}
-	if (row_group_ids.empty()) {
-		row_group_ids.assign(num_rows, 0);
-		num_groups = 1;
-	}
-	vector<bool> skipped(num_groups, false);
-	for (idx_t row = 0; row < num_rows; row++) {
-		if (null_rows[row] && row_group_ids[row] != DConstants::INVALID_INDEX) {
-			if (grouped) {
-				skipped[row_group_ids[row]] = true;
-			} else {
-				row_group_ids[row] = DConstants::INVALID_INDEX;
-			}
-		}
-	}
-	for (auto &group : row_group_ids) {
-		if (group != DConstants::INVALID_INDEX && skipped[group]) {
-			group = DConstants::INVALID_INDEX;
-		}
-	}
-}
-
 //! True when a bound contains a flattened scalar-subquery value. Its bound alias is
 //! internal planning metadata (`SUBQUERY` plus a DECIDE tag), not SQL the user can edit.
 //! Mixed data/subquery bounds therefore use the evaluated numeric fallback instead of
@@ -612,40 +586,6 @@ vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_row
 		}
 	}
 	return kept_groups;
-}
-
-void SkipGroupsWithAnEmptyReducer(const vector<const TermFilterState *> &filters, idx_t num_rows,
-                                  vector<idx_t> &row_group_ids, idx_t &num_groups) {
-	auto filtered = [](const TermFilterState *filter) {
-		return filter->has_filter;
-	};
-	if (std::none_of(filters.begin(), filters.end(), filtered)) {
-		return;
-	}
-	if (row_group_ids.empty()) {
-		row_group_ids.assign(num_rows, 0);
-		num_groups = 1;
-	}
-	vector<bool> skipped(num_groups, false);
-	for (auto filter : filters) {
-		if (!filter->has_filter) {
-			continue;
-		}
-		vector<bool> read(num_groups, false);
-		for (idx_t row = 0; row < num_rows; row++) {
-			if (row_group_ids[row] != DConstants::INVALID_INDEX && filter->mask[row]) {
-				read[row_group_ids[row]] = true;
-			}
-		}
-		for (idx_t group = 0; group < num_groups; group++) {
-			skipped[group] = skipped[group] || !read[group];
-		}
-	}
-	for (auto &group : row_group_ids) {
-		if (group != DConstants::INVALID_INDEX && skipped[group]) {
-			group = DConstants::INVALID_INDEX;
-		}
-	}
 }
 
 ComposedMinMaxTermData DecideComposedTerm(const string &agg_name, int sign, bool is_easy, const string &label) {

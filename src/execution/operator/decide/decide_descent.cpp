@@ -2282,10 +2282,10 @@ string DecideDescent::Step() const {
 		auto &container = containers[n];
 		auto &node = *tree.nodes[n];
 		auto &groups = container.groups;
-		const auto kind = node.kind == DecideNodeKind::SCOPE       ? "E"
-		                  : node.kind == DecideNodeKind::REDUCER   ? "G"
-		                  : node.kind == DecideNodeKind::FRAME     ? "O"
-		                                                           : "F";
+		const auto kind = node.kind == DecideNodeKind::SCOPE     ? "E"
+		                  : node.kind == DecideNodeKind::REDUCER ? "G"
+		                  : node.kind == DecideNodeKind::FRAME   ? "O"
+		                                                         : "F";
 		out << "node " << n << " " << kind << ":";
 		if (groups.per_row) {
 			// An E per row: its entries, each its row and signature (p. 91's `(1, x1)`).

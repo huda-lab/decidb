@@ -82,7 +82,7 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   filter's `IS NOT NULL`); the folded constant keeps its tag, and stage 08 reads no filter for it. A reducer over data
   whose
   every value is NULL is NULL. A NULL that reaches a constraint unreduced (a bound, an unreduced coefficient, a factor
-  on an aggregate) marks its row in `ExtractDoubleColumn`'s `null_rows`, and `SkipNullInstances` cuts the instance
+  on an aggregate) marks its row in `ExtractDoubleColumn`'s `null_rows`, and `DecideAbsence::SkipNullInstances` cuts the instance
   that row reaches: one row of a row constraint, the whole group of a grouped one. A composed MIN/MAX clause with a
   NULL factor is skipped (`clause.skipped`). In the objective, `DropNullObjectiveTerms` (stage 05) reads a NULL
   coefficient as 0 before like terms merge, so `NULL*SUM(x) + SUM(x)` keeps the second term; objective extraction

@@ -148,7 +148,7 @@ DecideTreeColumns::DecideTreeColumns(const DecideTree &tree, const DecideDescent
                                      const DecideSourceNames &names, std::function<string(idx_t)> written_clause,
                                      DecideErrorLedger &errors)
     : tree(tree), descent(descent), context(context), names(names), written_clause(std::move(written_clause)),
-      errors(errors), nodes(tree.nodes.size()), injection(ReadDecideTreeInjection(tree)) {
+      errors(errors), nodes(tree.nodes.size()), absence(tree), injection(ReadDecideTreeInjection(tree)) {
 }
 
 DecideTreeColumns::~DecideTreeColumns() {
@@ -368,7 +368,7 @@ const vector<bool> &DecideTreeColumns::Tested(idx_t node) {
 
 const vector<bool> &DecideTreeColumns::ReadEntries(idx_t node, const DecideTerm &term, vector<bool> &present) {
 	auto &tested = Tested(node);
-	if (!MayBeAbsent(term)) {
+	if (!absence.MayBe(term)) {
 		return tested;
 	}
 	// A non-row E entry can stand for several input rows. An auxiliary that is absent on the entry's first row must
@@ -378,12 +378,11 @@ const vector<bool> &DecideTreeColumns::ReadEntries(idx_t node, const DecideTerm 
 	present.assign(tested.size(), false);
 	if (tree.nodes[node]->per == DecideTreePer::ROW) {
 		for (idx_t entry = 0; entry < present.size(); entry++) {
-			present[entry] = tested[entry] && !TermAbsentAt(term, container.rows[entry]);
+			present[entry] = tested[entry] && !absence.TermAt(term, container.rows[entry]);
 		}
 	} else {
 		for (auto &read : container.routed) {
-			present[read.second] = present[read.second] ||
-			                       (tested[read.second] && !TermAbsentAt(term, read.first));
+			present[read.second] = present[read.second] || (tested[read.second] && !absence.TermAt(term, read.first));
 		}
 	}
 	return present;
@@ -484,63 +483,6 @@ vector<bool> DecideTreeColumns::NullEntries(idx_t node, idx_t program, const vec
 
 Value DecideTreeColumns::ValueAt(idx_t node, idx_t program, idx_t entry) {
 	return Computed(node).programs[program].values->GetValue(entry);
-}
-
-bool DecideTreeColumns::AbsentAt(idx_t variable, idx_t row) const {
-	// A term of no decision, a constant term of the objective, reads none.
-	if (variable == DConstants::INVALID_INDEX) {
-		return false;
-	}
-	if (absent_reads && !(*absent_reads)[variable].empty() && (*absent_reads)[variable][row]) {
-		return true;
-	}
-	// A product F's auxiliary has none where either factor has none. The emitter materializes the link record from
-	// this same node after bottom-up column reads.
-	for (auto function : tree.function_nodes) {
-		const auto &product = *tree.nodes[function];
-		if (product.function_kind == DecideFunctionKind::BOOLEAN_PRODUCT && product.value_var == variable &&
-		    (AbsentAt(product.product_bool_var, row) || AbsentAt(product.product_other_var, row))) {
-			return true;
-		}
-	}
-	auto &scope = tree.variable_scopes[variable];
-	return scope.IsKeyed() && (*mappings)[scope.keyed_scope_idx].IsAbsent(row);
-}
-
-bool DecideTreeColumns::MayBeAbsent(idx_t variable) const {
-	if (variable == DConstants::INVALID_INDEX) {
-		return false;
-	}
-	if (absent_reads && !(*absent_reads)[variable].empty()) {
-		return true;
-	}
-	for (auto function : tree.function_nodes) {
-		const auto &product = *tree.nodes[function];
-		if (product.function_kind == DecideFunctionKind::BOOLEAN_PRODUCT && product.value_var == variable &&
-		    (MayBeAbsent(product.product_bool_var) || MayBeAbsent(product.product_other_var))) {
-			return true;
-		}
-	}
-	return tree.variable_scopes[variable].IsKeyed();
-}
-
-bool DecideTreeColumns::MayBeAbsent(const DecideTerm &term) const {
-	// A frame reads nothing at an anchor with no position, whatever its decision.
-	return term.variable_index != DConstants::INVALID_INDEX &&
-	       (term.frame_read != DConstants::INVALID_INDEX || MayBeAbsent(term.variable_index));
-}
-
-bool DecideTreeColumns::TermAbsentAt(const DecideTerm &term, idx_t row) const {
-	if (term.variable_index == DConstants::INVALID_INDEX || term.frame_read == DConstants::INVALID_INDEX) {
-		return AbsentAt(term.variable_index, row);
-	}
-	return DecideFrameReadsAbsent((*frame_maps)[term.frame_read], row,
-	                              [&](idx_t at) { return AbsentAt(term.variable_index, at); });
-}
-
-void DecideTreeColumns::ReadAbsence(const vector<KeyedMapping> &classes, const vector<vector<bool>> &reads) {
-	mappings = &classes;
-	absent_reads = &reads;
 }
 
 //! `source`'s values at `selected` (INVALID for none, NULL) as `type`, a vector of `selected.size()` values.
@@ -778,6 +720,7 @@ void DecideTreeColumns::CheckPartition(const DecideFrameSpec &frame, idx_t node)
 void DecideTreeColumns::ReadFrames(const vector<DecideFrameSpec> &frames, idx_t num_rows,
                                    vector<DecideFrameMap> &maps) {
 	frame_maps = &maps;
+	absence.ReadFrames(maps);
 	frame_rows = num_rows;
 	// Each frame's timelines, frame after frame, where its rows are routed: its range's limit as its windows are
 	// listed, after every read of its rows, then its partition (D75).

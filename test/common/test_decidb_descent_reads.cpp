@@ -32,8 +32,8 @@ TEST_CASE("DECIDE descent reads only the row (plan L2)", "[decidb]") {
 		                    Catch::Contains("reads column 3 of a row of 3 in the descent"));
 	}
 	SECTION("a value computed over rows is refused") {
-		auto window = make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT, nullptr,
-		                                               nullptr);
+		auto window =
+		    make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT, nullptr, nullptr);
 		auto tree = TreeReading(std::move(window));
 		REQUIRE_THROWS_WITH(DecideDescent::RequireRowReads(*tree, 3),
 		                    Catch::Contains("computes over rows in the descent"));

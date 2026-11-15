@@ -10,6 +10,7 @@
 #pragma once
 
 #include "duckdb/common/decide_error_ledger.hpp"
+#include "duckdb/execution/operator/decide/decide_absence.hpp"
 #include "duckdb/execution/operator/decide/decide_descent.hpp"
 #include "duckdb/execution/operator/decide/decide_frame_map.hpp"
 #include "duckdb/function/aggregate_function.hpp"
@@ -95,18 +96,13 @@ public:
 	//! represented by one entry may differ in whether the term has a value; callers still apply absence per row when
 	//! they emit the term's value (D84).
 	const vector<bool> &ReadEntries(idx_t node, const DecideTerm &term, vector<bool> &present);
-	//! Whether decision `variable` has no instance to read at `row` (D84, D88): a keyed decision's row in no class of
-	//! its scope, a helper's where its group holds no member, or an auxiliary's row where what defines it has no value
-	//! (`absent_reads`, or a factor of its product). None for no decision (INVALID_INDEX).
-	bool AbsentAt(idx_t variable, idx_t row) const;
-	//! Whether AbsentAt can hold at some row: a keyed decision, an auxiliary some row of its definition leaves with
-	//! none (so far), a product's whose factor may have none. A decision that cannot is read at every row.
-	bool MayBeAbsent(idx_t variable) const;
-	//! Whether TermAbsentAt can hold at some row: a term of such a decision, or of a frame.
-	bool MayBeAbsent(const DecideTerm &term) const;
-	//! Whether `term` reads, at `row`, an instance with no value: its decision's at the row (AbsentAt), or, for a term
-	//! of a frame, where the frame reads nothing or at the row it selects (DecideFrameReadsAbsent).
-	bool TermAbsentAt(const DecideTerm &term, idx_t row) const;
+	//! The one "no value" rule over this pass's reads (DecideAbsence).
+	const DecideAbsence &Absence() const {
+		return absence;
+	}
+	DecideAbsence &Absence() {
+		return absence;
+	}
 	//! The frames' maps over the input's `num_rows` rows (language/guide.md §5.6), each from its O's timelines and
 	//! positions (SelectDecideFramePeers), and each frame's columns, through flat's own blocks
 	//! (SkipDecideFrameNullReads, ComputeDecideFrameColumns), every expression they read a program on the frame's O
@@ -118,10 +114,6 @@ public:
 	Value FrameValue(idx_t column, idx_t row) const;
 	//! The name of the position frame `frame` holds `row` at: its order key's least spelling over its rows (D69).
 	Value PositionName(idx_t frame, idx_t row) const;
-	//! The keyed scopes' classes and the rows at which each auxiliary has no value
-	//! (DecideGlobalSinkState::absent_reads), which AbsentAt reads: each complete once what defines it is read, before
-	//! what reads it.
-	void ReadAbsence(const vector<KeyedMapping> &classes, const vector<vector<bool>> &reads);
 	//! Of the entries `reads` marks, the first of each instance of `node` in a class of its key, in row order: a
 	//! reducer per K reads each variant of a class once in each group, at its first row (language/guide.md §5.1, §7.1),
 	//! however many entries the variant holds, and nothing of a row in no class.
@@ -148,8 +140,7 @@ private:
 	std::function<string(idx_t)> written_clause;
 	DecideErrorLedger &errors;
 	vector<unique_ptr<NodeColumns>> nodes;
-	const vector<KeyedMapping> *mappings = nullptr;
-	const vector<vector<bool>> *absent_reads = nullptr;
+	DecideAbsence absence;
 	const vector<DecideFrameMap> *frame_maps = nullptr;
 	//! Each frame column's value on every row, of `frame_rows`, and the error a row carries, read where a reader
 	//! reaches the row.
