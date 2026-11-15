@@ -112,11 +112,12 @@ def test_an_l0_norm_is_a_function_node(decidb_cli):
     assert re.search(r"function=abs value=x\d+ body=.*exact=big-m", tree), tree
 
 
-def test_a_nonlinear_reducer_body_is_a_function_node(decidb_cli):
-    """The written reducer reads an F value whose child E owns the helper's definition row."""
+def test_a_nonlinear_reducer_body_is_a_function_node(decidb_cli_gurobi):
+    """The written reducer reads an F value whose child E owns the helper's definition row. DIAGNOSE solves too, and
+    a MAX of a square needs Gurobi."""
     sql = """DIAGNOSE SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT) SUCH THAT x >= 0 AND x <= 3 MAXIMIZE max(power(x, 2))"""
-    result = run(decidb_cli, sql, DECIDB_DUMP_TREE="1")
+    result = run(decidb_cli_gurobi, sql, DECIDB_DUMP_TREE="1")
     assert result.returncode == 0, result.stderr
     tree = result.stderr.split("DECIDB_TREE_BEGIN\n", 1)[1].split("DECIDB_TREE_END", 1)[0]
     match = re.search(r"(?m)^(\d+) F definition .*function=definition value=x\d+ relation=at-most body=\(.*power", tree)
@@ -129,11 +130,12 @@ def test_a_nonlinear_reducer_body_is_a_function_node(decidb_cli):
     assert re.search(rf"(?m)^\d+ E .*reads=\[{function}\].*: sum\(power\(x, 2\)\) operand", tree), tree
 
 
-def test_abs_reads_a_nonlinear_reducer_function(decidb_cli):
-    """F bodies can read another F node through the tree without exposing a helper-column alias."""
+def test_abs_reads_a_nonlinear_reducer_function(decidb_cli_gurobi):
+    """F bodies can read another F node through the tree without exposing a helper-column alias. Its MAX of a square
+    needs Gurobi, as above."""
     sql = """DIAGNOSE SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT) SUCH THAT x <= 2 AND abs(max(power(x, 2)) - 4) >= 1 MAXIMIZE sum(x)"""
-    result = run(decidb_cli, sql, DECIDB_DUMP_TREE="1")
+    result = run(decidb_cli_gurobi, sql, DECIDB_DUMP_TREE="1")
     assert result.returncode == 0, result.stderr
     tree = result.stderr.split("DECIDB_TREE_BEGIN\n", 1)[1].split("DECIDB_TREE_END", 1)[0]
     abs_function = re.search(r"(?m)^(\d+) F .*function=abs .*reads=\[([^]]*)\].*: abs\(max\(power\(x, 2\)\) - 4\)", tree)
