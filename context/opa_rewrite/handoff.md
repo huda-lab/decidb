@@ -100,7 +100,7 @@ Each finding in Part B carries a label saying how far to trust it:
 | Deck pages 77–119 as text | `.claude/worktrees/sami_review_files/deck/deck_pages_77_119.txt`. Local only, not in git |
 | Language reference | `context/docs/language/guide.md` on `OPA-rewrites`. Where it and the binary disagree, trust the binary |
 | Project rules | `.claude/CLAUDE.md`. They bind all work here |
-| Built worktrees | `.claude/worktrees/sami-opa` (on `Sami-OPA` at `f56845f560`: the OPA parent of the merge, for comparisons), `sami-opa-nov13`, `sami-anr`. About 5 GB each. Local only |
+| Built worktree | `.claude/worktrees/sami-opa` (on `Sami-OPA` at `f56845f560`: the OPA parent of the merge, for comparisons). Local only |
 | Raw review output | `.claude/worktrees/sami_review_files/`: fuzz logs, the suite-output comparison, a large set of test queries. Local only; all can be regenerated |
 
 Everything under `.claude/worktrees/` is git-ignored and exists only on the machine where the review ran.
@@ -399,7 +399,8 @@ then be replaced. Deleting the algebra first (Phase 0, done) reduced that cost.
 ## A6. Open decisions for the owner
 
 1. **Order of work.** ✅ Decided (owner, 2026-11-16): join mainline before Phases 2 and 3, after a short
-   preparation on `Sami-OPA`.
+   preparation on `Sami-OPA`. ✅ Decided (owner, 2026-11-17): Phase 2 waits until the merged branch has no loose
+   ends; they are queued in `context/docs/todo.md`, and item 11 holds the rulings that shape them.
 2. **Direct solve and the tree.** Does direct solve read the tree, or keep its own IR? And on the solver path, do row
    checks and bound side tables live in the plan (mainline) or in the tree (OPA)?
    - *Direction (owner, 2026-11-16):* direct solve works from the central tree (A1).
@@ -414,25 +415,37 @@ then be replaced. Deleting the algebra first (Phase 0, done) reduced that cost.
    - *When:* before Phase 2 starts. Phase 2 rewrites the binder, which raises most of those errors.
 4. **`EXPLAIN`.** Restore the rows an ABS or L0 rewrite adds, which the guide's section 9 promises, or approve OPA's
    shorter text?
-   - *Recommendation:* restore, until step 5 changes what there is to print.
+   - ✅ Decided (owner, 2026-11-17): restore them, and restore the four tests OPA weakened to match. This is R4 of
+     merge_notes.md.
 5. **Constructs the deck omits** (problem 9). What is the node rule for each?
    - *Recommendation:* design them, then present them as departures.
 6. **Variant signatures.** ✅ Decided (owner, 2026-11-16): variants (D70) replace mainline's "determination" error.
    About ten mainline test files expect the error; the merge deletes or rewrites them.
 7. **`per g: x <= 2` on a NULL key.** It constrains the NULL-key row, against the guide. Wrong on OPA, ANR and
    mainline.
-   - *Recommendation:* fix the code. The guide's rule is the consistent one.
+   - ✅ Decided (owner, 2026-11-17): fix the code to follow the guide.
 8. **"Constrains nothing" warning.** Should a clause that has classes but produces no model row warn? OPA is silent
    in one case where ANR warned.
-   - *Recommendation:* warn.
-9. **The `minmax_values` branch** in `InlineReducerValueLinks`. It changes the inlining policy and has no test.
-   - *Recommendation:* drop it if the goldens allow. Step 5 replaces the function anyway.
+   - ✅ Decided (owner, 2026-11-17): warn.
+9. **The `minmax_values` branch** in `InlineReducerValueLinks`. It changes the inlining policy.
+   - No longer open: on the merge, suite tests reach both sides of the branch (coverage run of 2026-11-16). It stays
+     until step 5 replaces the function.
 10. **Order of work inside Phase 2.** Building the tree from bound clauses first, as this plan once said, writes a
     builder the parser-first target then throws away.
     - *Recommendation:* work front to back: parser, then binder, then canonicalizer, then the rewrites. While later
       stages are unconverted, a temporary adapter lowers the new bound tree to today's tagged expressions for them.
       The adapter's boundary moves back one stage at a time and the adapter is deleted at the end (the "strangler
       fig" pattern). The branch stays runnable and testable throughout.
+11. **Loose ends before Phase 2.** ✅ Decided (owner, 2026-11-17):
+    - D-3 (ABS over a reducer in the objective, read per row) is fixed now, by porting mainline's handling into OPA's
+      lowering under R2. A fix that needs more than a port goes back to the owner first.
+    - Every message or plan line that breaks a promise of `context/docs/language/guide.md` is fixed. Row errors with no
+      clause or caret (review 09, S6) stay parked as a feature.
+    - The debug dumps stay as a debugging tool behind one setting read once per query; dead code goes.
+    - The dump-format tests go, except the two that check the deck's pictures (p. 81's tree, p. 91's containers), with
+      a coverage check that no branch loses its only test.
+    - `close_rounded_box` gets a test if some query's answer depends on it, and is deleted otherwise.
+    - The suite runs once on a debug build after the fixes, for the assertions a release build drops.
 
 ## A7. Known defects
 

@@ -62,7 +62,7 @@ Resolve these before touching the conflicts they govern. Do not pick one silentl
 | R1 | Do variant signatures (OPA) replace the "determination" error (mainline)? | About ten mainline test files, `DecideScopeCheck` fields, `InKeyOrder`, BUG-54's code | **Decided (owner, 2026-11-16): yes.** Variants replace the determination error |
 | R2 | On the solver path, do row checks and bound side tables run as plan operators (mainline) or inside the tree (OPA)? | `direct_row_checks.cpp`, `decide_optimizer.cpp` pass order, traps 7–9 | **Decided for the merge (owner, 2026-11-16):** keep OPA's tree evaluation and port mainline's fixes into it. The lasting choice is the rewrite's (handoff A6, item 2) |
 | R3 | May the stored-output tests be deleted when the merge makes them stale? | `test_tree_emitter.py`, `tests/_expected.py`, `tests/expected/` (259 files) | **Decided (owner, during the merge): yes.** The three are deleted (section 10) |
-| R4 | Should `EXPLAIN` print the rows an ABS or L0 rewrite adds? | Four tests OPA changed; can wait until after the merge | **open**. The merge prints OPA's form, without them (section 10, section 8.5 kinds (3)) |
+| R4 | Should `EXPLAIN` print the rows an ABS or L0 rewrite adds? | Four tests OPA changed; can wait until after the merge | **Decided (owner, 2026-11-17): yes.** The merge prints OPA's form, without them (section 10, section 8.5 kinds (3)); restoring them is queued in `context/docs/todo.md` |
 
 What R1 means in practice: the variant signature is the deck's σ. Mainline's determination tests are deleted or
 rewritten to expect variants, each one logged in section 10.
@@ -538,8 +538,9 @@ Expected: nothing beyond the failures recorded in section 4.
       *Section 4.1.*
 - [x] List what the merge left deliberately rough, for the rewrite to replace: the emitter's port to product groups,
       and whatever R2's stop-gap left in two implementations. *Section 10, the rows marked Rough.*
-- [ ] Remove the three review worktrees under `.claude/worktrees/` once nothing needs their binaries. *Open:
-      `sami-opa` holds the OPA parent's binary, which the rewrite compares against. The owner decides when.*
+- [ ] Remove the three review worktrees under `.claude/worktrees/` once nothing needs their binaries. *`sami-anr`
+      and `sami-opa-nov13` are removed (owner, 2026-11-17). Open: `sami-opa` holds the OPA parent's binary, which the
+      rewrite compares against.*
 
 ## 10. Decisions and deviations
 
