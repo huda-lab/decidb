@@ -12,7 +12,6 @@ from ._scope_cases import (  # noqa: F401
     aligned,
     answer,
     const,
-    dump_counts,
     scope_solver,
     table,
     table_rows,
@@ -199,7 +198,7 @@ def test_a_null_key_row_takes_no_constant_bound_under_per_minimized(request, sco
 
 @_BOUND_SOLVERS
 @pytest.mark.correctness
-def test_a_relation_null_key_keeps_its_constant_bound_in_the_box(request, scope_solver, cli_fixture, tmp_path):
+def test_a_relation_null_key_keeps_its_constant_bound_in_the_box(request, scope_solver, cli_fixture):
     """`per D: x <= 2` with D2's region NULL: D2 is a class (a relation's columns compare NULL as a value), so every
     row has the bound and it still folds into the column's box, which a written column's NULL does not allow."""
     cli = request.getfixturevalue(cli_fixture)
@@ -220,4 +219,7 @@ def test_a_relation_null_key_keeps_its_constant_bound_in_the_box(request, scope_
         model.solve_scoped(scope_solver, clauses, objective)
     )
     assert [row["x"] for row in result] == [2] * len(rows)
-    assert dump_counts(cli.dump_model(sql, tmp_path / "model.dump"))["num_rows"] == 0
+    # Folded into the box, the clause makes no constraints, which EXPLAIN ANALYZE counts under a clause that does
+    # (`per d: 3 constraints from 2 classes`); a clause left to its rows would show that line.
+    profile = cli.execute_raw("EXPLAIN ANALYZE " + sql).stdout
+    assert "constraints" not in "".join(line.strip("│ ") for line in profile.splitlines()).split("Constraints:")[-1]
