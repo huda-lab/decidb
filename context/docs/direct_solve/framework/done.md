@@ -501,8 +501,13 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   suite imports the autouse fixture by name from the scaffold (pytest applies an autouse fixture only in a file that can
   see it). A new rule's suite imports the scaffold (`../architecture/rules.md`, item 2).
 - **Matrix script.** `test/decide/run_direct_matrix.sh` runs the five checks and prints one summary line each, for
-  example `auto: 3089 passed, 0 xfailed, 0 failed (3089 outcomes)`; the outcome totals of the modes should agree. Logs
-  stay in `test/decide/results/matrix_<time>/` (gitignored), or `$MATRIX_LOG_DIR`, and the last line prints the path.
+  example `auto: exit 0; 3089 passed, 0 xfailed, 0 failed (3089 outcomes)`; the outcome totals of the modes should
+  agree. The script clears `DECIDB_FORCE_SOLVER`, `DECIDB_VERIFY_SERIALIZER` and `DECIDB_TEST_DIRECT_SOLVE` for every
+  check, and each pytest mode sets only its own switch, so a check runs what its name says whatever the caller's shell
+  exports; any other `DECIDB_` variable stays on. A check passes when its command exits 0, whatever its log prints.
+  The script exits 0 only when every check does; its second-to-last line names the failed checks (`failed: highs
+  C++`, or `failed: none`). Logs stay in `test/decide/results/matrix_<time>/` (gitignored), or `$MATRIX_LOG_DIR`, and
+  the last line prints the path.
   The golden capture (`test/decide/golden/capture.sh`, also run by `check.sh`) is single-threaded: with several threads
   a source's rows arrive in a thread-dependent order, and the model dump follows the order the DECIDE operator reads.
 
