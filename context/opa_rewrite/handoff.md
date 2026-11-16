@@ -325,6 +325,8 @@ then be replaced. Deleting the algebra first (Phase 0, done) reduced that cost.
 2. **Direct solve and the tree.** Does direct solve read the tree, or keep its own IR? And on the solver path, do row
    checks and bound side tables live in the plan (mainline) or in the tree (OPA)?
    - *Recommendation:* one mechanism on both paths. Which one needs its own study.
+   - *For the merge only* (owner, 2026-11-16): the solver path keeps OPA's tree evaluation, with mainline's fixes
+     ported into it. The lasting choice is still open.
 3. **Error order.** Write down the inherited order as the rule, or adopt a simple one (clause order, then row) and
    let about 1,300 pinned error pairs change?
    - *Recommendation:* a simple written rule. It removes a case list.
@@ -333,9 +335,8 @@ then be replaced. Deleting the algebra first (Phase 0, done) reduced that cost.
    - *Recommendation:* restore, until step 5 changes what there is to print.
 5. **Constructs the deck omits** (problem 9). What is the node rule for each?
    - *Recommendation:* design them, then present them as departures.
-6. **Variant signatures.** Both Sami branches replace mainline's "determination" error with variants (D70). About ten
-   mainline test files expect the error.
-   - *Recommendation:* none; this is a language ruling.
+6. **Variant signatures.** ✅ Decided (owner, 2026-11-16): variants (D70) replace mainline's "determination" error.
+   About ten mainline test files expect the error; the merge deletes or rewrites them.
 7. **`per g: x <= 2` on a NULL key.** It constrains the NULL-key row, against the guide. Wrong on OPA, ANR and
    mainline.
    - *Recommendation:* fix the code. The guide's rule is the consistent one.

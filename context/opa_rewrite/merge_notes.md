@@ -56,16 +56,15 @@ Resolve these before touching the conflicts they govern. Do not pick one silentl
 
 | # | Question | Governs | Status |
 |---|---|---|---|
-| R1 | Do variant signatures (OPA) replace the "determination" error (mainline)? | About ten mainline test files, `DecideScopeCheck` fields, `InKeyOrder`, BUG-54's code | **open** |
-| R2 | On the solver path, do row checks and bound side tables run as plan operators (mainline) or inside the tree (OPA)? | `direct_row_checks.cpp`, `decide_optimizer.cpp` pass order, traps 7–9 | **open** |
+| R1 | Do variant signatures (OPA) replace the "determination" error (mainline)? | About ten mainline test files, `DecideScopeCheck` fields, `InKeyOrder`, BUG-54's code | **Decided (owner, 2026-11-16): yes.** Variants replace the determination error |
+| R2 | On the solver path, do row checks and bound side tables run as plan operators (mainline) or inside the tree (OPA)? | `direct_row_checks.cpp`, `decide_optimizer.cpp` pass order, traps 7–9 | **Decided for the merge (owner, 2026-11-16):** keep OPA's tree evaluation and port mainline's fixes into it. The lasting choice is the rewrite's (handoff A6, item 2) |
 | R3 | May the stored-output tests be deleted when the merge makes them stale? | `test_tree_emitter.py`, `tests/_expected.py`, `tests/expected/` (259 files) | **open**; reviewer recommends yes |
 | R4 | Should `EXPLAIN` print the rows an ABS or L0 rewrite adds? | Four tests OPA changed; can wait until after the merge | **open** |
 
-Reviewer's suggestion for R1: yes, variants replace the determination error. The owner chose OPA, and the variant
-signature is the deck's σ. Mainline's determination tests are then deleted or rewritten to expect variants, each
-logged in section 10. This is still a language ruling, so the owner confirms it.
+What R1 means in practice: the variant signature is the deck's σ. Mainline's determination tests are deleted or
+rewritten to expect variants, each one logged in section 10.
 
-Reviewer's suggestion for R2, for the merge only: keep OPA's tree evaluation on the solver path, port mainline's
+What R2 means in practice: keep OPA's tree evaluation on the solver path, port mainline's
 fixes into it (traps 7–9), and leave the real decision to the rewrite. That is the smaller change, but it keeps two
 implementations for now, which mainline's own comment argues against.
 
@@ -131,7 +130,7 @@ Performance baseline for the tree evaluator: `tools/results/` (method in handoff
 - [ ] `git status` is clean on `OPA-rewrites`; `git rev-parse Sami-OPA` matches the hash recorded in section 4.
 - [ ] `git fetch origin` shows no new commits on `origin/Sami-OPA` or `origin/direct-solve-prototype`. If either
       moved, stop and tell the owner.
-- [ ] Rulings R1 and R2 are answered.
+- [x] Rulings R1 and R2 are answered (section 3).
 - [ ] Capture every suite query's output on both parents, for the comparison in section 8.5:
       `test/decide/capture_suite_log.sh capture --modes auto --out <dir>` (the script exists on `Sami-OPA`).
 - [ ] Turn on helpers for a long merge: `git config merge.conflictStyle zdiff3` and `git config rerere.enabled true`.
@@ -425,4 +424,6 @@ Append one line per decision made during the merge, per test deleted, and per un
 | 2026-11-16 | Preparation: two tests in `test_one_pass_tree.py` read a node's reads from the dump's `reads=` field instead of the deleted `formula=` text | Same queries and same property (a function's definition rows do not read it back; a product's function reads its reducer). Only the probe changed | Reviewer; owner to confirm |
 | 2026-11-16 | Preparation: five defensive checks went with the node algebra (one producer per helper variable; decision index in range; Boolean-product body matches its fields; ease agrees with sense; empty helper link) | They checked the records through the algebra. An independent review found none reachable by today's tree construction. The rewrite replaces `Validate` | Reviewer |
 | 2026-11-16 | Preparation: a product or square over a nested reducer, under a bound that reads the rows, is now refused by name ("squares or multiplies decisions inside nested reducers") | It answered wrongly at `7837e300be`. It answered correctly at `36f12dd089`, by a path later commits removed. Restoring that path is rewrite work | Reviewer; owner to confirm |
+| 2026-11-16 | R1: variant signatures replace the determination error | The owner chose OPA; variants are the deck's signature mechanism | Owner |
+| 2026-11-16 | R2, for the merge only: the solver path keeps OPA's tree evaluation, with mainline's fixes ported into it | The smaller change. The lasting choice belongs to the rewrite | Owner |
 | | | | |
