@@ -1229,6 +1229,9 @@ class TestBinderRefusalBranches:
         [
             # A COUNT over a decision inside a nest.
             ("sum(per k: count(x) by (k))", r"COUNT over a DECIDE variable is degenerate"),
+            # A nested reducer with no argument: ValidateSumArgumentInternal's one-child guard keeps it from reading
+            # children[0], and it reads as a reducer over data.
+            ("sum(per k: max() by (k))", r"SUM expression must reference at least one DECIDE variable"),
             # An aggregate with arguments no function takes.
             ("SUM(w * x, 2)", r"SUM needs one argument, found 'SUM\(w \* x, 2\)'"),
             # MAX(x, n) is DuckDB's top-n aggregate, a list: the objective refuses it as a constraint does.
