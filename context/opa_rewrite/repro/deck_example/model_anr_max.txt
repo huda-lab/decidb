@@ -1,0 +1,23 @@
+=== DECIDB MODEL DUMP ===
+sense: maximize
+num_vars: 8
+num_rows: 7
+num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
+col 0: lb=0 ub=100 int=1 bin=0 obj=1
+col 1: lb=0 ub=100 int=1 bin=0 obj=1
+col 2: lb=0 ub=100 int=1 bin=0 obj=1
+col 3: lb=0 ub=100 int=1 bin=0 obj=1
+col 4: lb=0 ub=100 int=1 bin=0 obj=1
+col 5: lb=0 ub=100 int=1 bin=0 obj=1
+col 6: lb=0 ub=37.5 int=1 bin=0 obj=0
+col 7: lb=0 ub=37.5 int=1 bin=0 obj=0
+row 0: sense=< rhs=22.5 nnz=1 | 6:1
+row 1: sense=< rhs=48.5 nnz=2 | 2:1 7:1
+row 2: sense=< rhs=37.5 nnz=2 | 2:1 7:1
+row 3: sense=> rhs=0 nnz=2 | 0:-1 6:1
+row 4: sense=> rhs=0 nnz=2 | 1:-1 6:1
+row 5: sense=> rhs=0 nnz=2 | 4:-1 7:1
+row 6: sense=> rhs=0 nnz=2 | 5:-1 7:1
+=== END MODEL DUMP ===

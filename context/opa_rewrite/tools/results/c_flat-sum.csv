@@ -1,0 +1,4 @@
+binary,workload,rows,status,runs,wall_ms,nonsolver_ms,optimizer_ms,model_ms,solver_ms,peak_rss_mb,model.variables,model.linear_rows,model.linear_nonzeros,anr.helpers,anr.inlined_helpers,error
+anr,flat-sum,1000000,ok,3,862.66,154.32,5.64,65.54,708.34,685.92,1000000,10,1000000,,,
+opa,flat-sum,1000000,ok,3,857.52,183.13,5.83,80.88,674.39,869.16,1000000,10,1000000,,,
+opa13,flat-sum,1000000,ok,3,810.93,171.8,5.55,70.53,641.87,860.41,1000000,10,1000000,,,
