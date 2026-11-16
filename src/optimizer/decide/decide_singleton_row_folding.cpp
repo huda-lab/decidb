@@ -18,6 +18,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <algorithm>
 #include <functional>
 #include <limits>
 #include "duckdb/common/enums/decide.hpp"
@@ -444,6 +445,17 @@ void DecideOptimizer::FoldSingletonRowsInExpression(Expression &expr, LogicalDec
 		// predicate what a wrapper is, then deliberately answers differently.
 		if (IsWhenFilterWrapper(conj)) {
 			break;
+		}
+		// `per K:` with a column the user wrote in K: a row whose K is NULL there is in no class and takes no instance
+		// of the clause (language/guide.md §6.2), which a box on the whole column would give it. The clause stays a
+		// row, which the row's class decides.
+		if (IsPerClassWrapper(conj)) {
+			auto &elements = DecideKeyElements(decide.keys, PerWrapperKey(conj));
+			if (std::any_of(elements.begin(), elements.end(), [](const DecideKeyElement &element) {
+				    return element.null_mode == DecideKeyNullMode::NO_GROUP;
+			    })) {
+				break;
+			}
 		}
 		for (auto &child : conj.children) {
 			FoldSingletonRowsInExpression(*child, decide);

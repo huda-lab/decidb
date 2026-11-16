@@ -8,7 +8,16 @@ independently.
 
 import pytest
 
-from ._scope_cases import aligned, answer, scope_solver, table, table_rows, values  # noqa: F401
+from ._scope_cases import (  # noqa: F401
+    aligned,
+    answer,
+    const,
+    dump_counts,
+    scope_solver,
+    table,
+    table_rows,
+    values,
+)
 from ._scope_oracle import (
     CONSTANT,
     Decision,
@@ -126,3 +135,89 @@ def test_a_relation_key_compares_null_as_a_value_beside_a_written_column(decidb_
     assert model.judge(result, clauses, objective) == pytest.approx(model.solve(scope_solver, clauses, objective))
     assert model.class_count("y") == 2
     assert [row["y"] for row in result if row["id"] in (4, 5)] == [None, None]
+
+
+# A bound known before the query runs, under `per K:`: a row whose written key column is NULL is in no class, so the
+# clause gives it no bound (guide §6.2). Folded into the column's box, the bound was the whole column's and capped
+# that row too (FoldSingletonRowsInExpression). Row 2's `g` and row 3's `h` are NULL; the rows are judged on both
+# backends against the scope oracle, which splits the rows into classes and drops a row in none.
+BOUND_COLUMNS = ("id", "g", "h", "v")
+BOUND_ROWS = ((1, "a", "p", 3.0), (2, None, "p", 5.0), (3, "b", None, 6.0))
+_X = lambda r: {"x": 1}  # noqa: E731
+_BOUND_SOLVERS = pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+_BOUND_CASES = [
+    pytest.param("per t.g: x <= 2", [Scoped((_X,), "<=", (const(2),), per=("g",))], id="constant"),
+    pytest.param("per t.g, t.h: x <= 2", [Scoped((_X,), "<=", (const(2),), per=("g", "h"))], id="two-columns"),
+    pytest.param(
+        "per t.g: 2 * x <= 4", [Scoped((lambda r: {"x": 2},), "<=", (const(4),), per=("g",))], id="scaled-coefficient"
+    ),
+    pytest.param("per t.g: x = 2", [Scoped((_X,), "=", (const(2),), per=("g",))], id="equality"),
+    pytest.param(
+        "per t.g: x BETWEEN 1 AND 2",
+        [Scoped((_X,), ">=", (const(1),), per=("g",)), Scoped((_X,), "<=", (const(2),), per=("g",))],
+        id="between",
+    ),
+]
+
+
+def _judge_bound(cli, solver, clause, clauses, sense, sign):
+    sign_text = "-" if sign < 0 else ""
+    sql = f"""
+        SELECT id, x {table('t', BOUND_COLUMNS, BOUND_ROWS)}
+        DECIDE x(INT) SUCH THAT x <= 10 AND {clause} {sense} SUM({sign_text}t.v * x) ORDER BY id"""
+    model = ScopedModel(table_rows(BOUND_COLUMNS, BOUND_ROWS), [Decision("x")])
+    clauses = [Scoped((_X,), "<=", (const(10),))] + clauses
+    objective = ScopedObjective(
+        ObjSense.MAXIMIZE if sign > 0 else ObjSense.MINIMIZE, (Reduce("sum", lambda r: {"x": sign * r["v"]}),)
+    )
+    return _judged(cli, solver, sql, model, clauses, objective)
+
+
+@_BOUND_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize("clause, clauses", _BOUND_CASES)
+def test_a_null_key_row_takes_no_constant_bound_under_per(request, scope_solver, cli_fixture, clause, clauses):
+    result = _judge_bound(request.getfixturevalue(cli_fixture), scope_solver, clause, clauses, "MAXIMIZE", 1)
+    # The row with a NULL key is bounded by `x <= 10` alone.
+    assert result[1]["x"] == 10
+
+
+@_BOUND_SOLVERS
+@pytest.mark.correctness
+def test_a_null_key_row_takes_no_constant_bound_under_per_minimized(request, scope_solver, cli_fixture):
+    """The MINIMIZE twin: `MINIMIZE SUM(-v * x)` is the same optimum, reached from the other sense."""
+    result = _judge_bound(
+        request.getfixturevalue(cli_fixture),
+        scope_solver,
+        "per t.g: x <= 2",
+        [Scoped((_X,), "<=", (const(2),), per=("g",))],
+        "MINIMIZE",
+        -1,
+    )
+    assert result[1]["x"] == 10
+
+
+@_BOUND_SOLVERS
+@pytest.mark.correctness
+def test_a_relation_null_key_keeps_its_constant_bound_in_the_box(request, scope_solver, cli_fixture, tmp_path):
+    """`per D: x <= 2` with D2's region NULL: D2 is a class (a relation's columns compare NULL as a value), so every
+    row has the bound and it still folds into the column's box, which a written column's NULL does not allow."""
+    cli = request.getfixturevalue(cli_fixture)
+    sql = f"""
+        SELECT S.id, x FROM {values(DEPOT_ROWS, 'D', DEPOT_COLUMNS)} JOIN {values(SHIP_ROWS, 'S', SHIP_COLUMNS)}
+        ON D.dk = S.dk
+        DECIDE x(INT) SUCH THAT x <= 10 AND per D: x <= 2 MAXIMIZE SUM(S.p * x) ORDER BY S.id"""
+    depots = dict(DEPOT_ROWS)
+    rows = [dict(zip(SHIP_COLUMNS, row), region=depots[row[1]]) for row in SHIP_ROWS]
+    model = ScopedModel(rows, [Decision("x")])
+    clauses = [
+        Scoped((_X,), "<=", (const(10),)),
+        Scoped((_X,), "<=", (const(2),), per=(RelationColumns(("dk", "region")),)),
+    ]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"x": r["p"]}),))
+    result = aligned(answer(cli, sql), model, "id")
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective)
+    )
+    assert [row["x"] for row in result] == [2] * len(rows)
+    assert dump_counts(cli.dump_model(sql, tmp_path / "model.dump"))["num_rows"] == 0
