@@ -1063,12 +1063,16 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 	vector<idx_t> kept_row_group_ids;
 	// A `per K:` that names classes constrains no row in none of them: each kept row's class.
 	auto &root_container = descent.Containers()[root];
-	vector<bool> in_a_class(num_rows, false);
-	std::vector<bool> &classed = in_a_class;
-	rows.ForEach(
-	    [&](idx_t row, idx_t entry) { classed[row] = root_container.groups.InAClass(root_container.Slot(entry)); });
+	vector<idx_t> class_of_row(num_rows, DConstants::INVALID_INDEX);
+	std::vector<idx_t> &classes = class_of_row;
+	rows.ForEach([&](idx_t row, idx_t entry) {
+		const auto slot = root_container.Slot(entry);
+		if (root_container.groups.InAClass(slot)) {
+			classes[row] = slot;
+		}
+	});
 	const auto kept_groups = GroupRowsByShape(
-	    clause, num_rows, kept, has_local_filters, active, keyed ? &key_groups : nullptr, in_a_class,
+	    clause, num_rows, kept, has_local_filters, active, keyed ? &key_groups : nullptr, class_of_row,
 	    op.diagnose || clause.tightest_frame_bound ? &kept_row_group_ids : nullptr, evaluated, grouped_instances);
 	if (keyed) {
 		Name(by, kept_groups, evaluated);

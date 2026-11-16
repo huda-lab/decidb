@@ -121,6 +121,31 @@ def test_a_per_key_null_on_every_row_is_no_warning(decidb_cli):
     assert not _run(decidb_cli, sql).stderr.strip()
 
 
+# `per t.k: sum(x) by (t.g) >= t.cap`: one class (k = 1), whose rows' `by` key g is NULL where it reaches no group. The
+# class holds one instance, which has no value (guide §7.4), as one whose bound is NULL does.
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "rows",
+    [
+        # The class's only row has a NULL g: no group, and a NULL k row beside it reads group 'a' for no class.
+        pytest.param(((1, None, 1, 5), (2, "a", None, None)), id="class-reaches-no-group"),
+        # The class reads group 'a' too, so its instance is that group's and the NULL-g row adds none.
+        pytest.param(((1, "a", 1, None), (2, None, 1, 5)), id="class-reaches-a-group"),
+    ],
+)
+def test_a_class_whose_by_key_is_null_holds_one_instance_with_no_value(decidb_cli, rows):
+    sql = f"""SELECT id, x {table('t', ('id', 'g', 'k', 'cap'), rows)} DECIDE x(INT)
+        SUCH THAT x <= 100 AND per t.k: sum(x) by (t.g) >= t.cap MINIMIZE sum(x) ORDER BY id"""
+    result = _run(decidb_cli, sql)
+    warnings, rest = decidb_cli.warnings(result.stderr)
+    assert (
+        warnings
+        == ["'per t.k: sum(x) by (t.g) >= t.cap' constrains nothing: its one instance has no value, so it is skipped."]
+        and not rest.strip()
+    ), result.stderr
+    assert "↳itsoneinstancehasnovalueandisskipped" in _profile(decidb_cli, sql)
+
+
 @pytest.mark.correctness
 def test_an_objective_that_is_zero_warns(decidb_cli):
     """Every term of the objective has no value, so it is 0 whatever the decisions: any

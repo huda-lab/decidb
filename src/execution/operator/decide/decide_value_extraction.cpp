@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <set>
 #include <unordered_map>
 
 namespace duckdb {
@@ -498,7 +499,7 @@ vector<idx_t> DecideKeptGroups(const DecideKeyGroups &groups, idx_t num_rows,
 
 vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_rows, const vector<bool> &scoped_kept,
                                bool has_local_filters, const vector<bool> &local_row_active,
-                               const DecideKeyGroups *groups, const vector<bool> &in_a_class,
+                               const DecideKeyGroups *groups, const vector<idx_t> &class_of_row,
                                vector<idx_t> *kept_row_group_ids, EvaluatedConstraint &evaluated,
                                idx_t &grouped_instances) {
 	// A reducer's members are the rows its own `when` keeps -- a MIN/MAX reads them as members -- while every kept row
@@ -535,18 +536,26 @@ vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_row
 	}
 	// A `per K:` that names classes holds once per class, and a row in none gets no constraint from the clause
 	// (language/guide.md §6.3, D5): a group of the kept rows none of which is in a class holds no instance, and with
-	// every kept row's K NULL the clause holds none. With no `by` key the kept rows are one group.
+	// every kept row's K NULL the clause holds none. With no `by` key the kept rows are one group. A class none of
+	// whose rows is in a group (their `by` key is NULL) still holds one instance, which has no value.
 	if (constraint.scope.per == DecideClauseScope::PerRole::NAMES_CLASSES) {
 		auto group_of = [&](idx_t row) {
 			return groups ? groups->row_group_ids[row] : 0;
 		};
 		vector<bool> classed(groups ? groups->num_groups : 1, false);
+		std::set<idx_t> classes, reaching_a_group;
 		for (idx_t row = 0; row < num_rows; row++) {
-			if (scoped_kept[row] && in_a_class[row] && group_of(row) != DConstants::INVALID_INDEX) {
+			if (!scoped_kept[row] || class_of_row[row] == DConstants::INVALID_INDEX) {
+				continue;
+			}
+			classes.insert(class_of_row[row]);
+			if (group_of(row) != DConstants::INVALID_INDEX) {
 				classed[group_of(row)] = true;
+				reaching_a_group.insert(class_of_row[row]);
 			}
 		}
-		grouped_instances = std::count(classed.begin(), classed.end(), true);
+		grouped_instances = NumericCast<idx_t>(std::count(classed.begin(), classed.end(), true)) + classes.size() -
+		                    reaching_a_group.size();
 		if (evaluated.row_group_ids.empty() && !classed[0]) {
 			evaluated.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
 			evaluated.num_groups = 0;

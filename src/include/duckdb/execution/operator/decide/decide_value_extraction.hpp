@@ -196,12 +196,14 @@ vector<idx_t> DecideKeptGroups(const DecideKeyGroups &groups, idx_t num_rows,
 //! The rows of a clause in the grouped shape (the aggregate shape, an easy MIN/MAX; language/guide.md §6.4): its kept
 //! rows `scoped_kept` grouped by its `by` key's `groups` (null with no key), a group emitting the rows a reducer reads
 //! (`local_row_active`, with `has_local_filters`), or, under `<>`, every kept row. A `per K:` that names classes holds
-//! once per class, so with no kept row in a class (`any_class`) there is none. Writes `evaluated`'s row groups,
-//! `kept_row_group_ids` (when given: every kept row of an emitted group) and the instances the clause holds before any
-//! with no value is skipped (D90). Returns the groups of `groups` it keeps, which its names name.
+//! once per class (`class_of_row`: a row's class, INVALID_INDEX for a row in none), so with no kept row in a class
+//! there is none. Writes `evaluated`'s row groups, `kept_row_group_ids` (when given: every kept row of an emitted
+//! group) and the instances the clause holds before any with no value is skipped (D90): the groups a class reaches,
+//! and one for each class whose rows reach none (a NULL `by` key), which has no value. Returns the groups of `groups`
+//! it keeps, which its names name.
 vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_rows, const vector<bool> &scoped_kept,
                                bool has_local_filters, const vector<bool> &local_row_active,
-                               const DecideKeyGroups *groups, const vector<bool> &in_a_class,
+                               const DecideKeyGroups *groups, const vector<idx_t> &class_of_row,
                                vector<idx_t> *kept_row_group_ids, EvaluatedConstraint &evaluated,
                                idx_t &grouped_instances);
 
