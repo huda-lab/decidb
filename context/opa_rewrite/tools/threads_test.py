@@ -1,9 +1,11 @@
 """Same query at 1 and 8 threads over a stored table spanning several row groups, on both binaries.
 
 The objective value at the optimum is unique even when the optimal assignment is not, so it is what is compared.
-A crash, an INTERNAL error or a different objective between thread counts is a failure of the merge.
+A shape fails when a run crashes, errors or times out, when the objective differs between thread counts, or when a run
+at 8 threads combined fewer than two thread-local states (it then proved nothing about the merge). The exit code is 1 when any shape
+fails on any binary, so the script can stand as a gate.
 
-Usage: threads_test.py [rows]
+Usage: threads_test.py [rows]     (ONLY=<substring> runs the shapes whose name holds it)
 """
 
 import os
@@ -14,7 +16,9 @@ import time
 from pathlib import Path
 
 WORKTREES = Path("/Users/hatim/Code/decidb/.claude/worktrees")
-BINARIES = {"anr": WORKTREES / "sami-anr/build/release/decidb", "opa": WORKTREES / "sami-opa/build/release/decidb"}
+# Tree-evaluator binaries only: the merge evidence below is the operator's `execution.sink_combine` profile span. Add
+# the merged branch's binary (the main checkout's build/release/decidb) beside the prepared parent's.
+BINARIES = {"opa": WORKTREES / "sami-opa/build/release/decidb"}
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 500_000
 
 SRC = f"""CREATE TABLE src AS SELECT i AS id, i % 100 AS part, i // 100 AS p, (i * 7919) % 13 AS w,
@@ -94,22 +98,43 @@ def run(binary: Path, name: str, threads: int) -> str:
         errors = [line for line in (done.stderr + done.stdout).splitlines() if "Error" in line or "INTERNAL" in line]
         message = errors[0][:150] if errors else f"exit {done.returncode}, no result"
         return f"FAIL({done.returncode}) {message}"
-    merge = "merge" if "descent_merge" in done.stderr else "-"
-    return f"{result.group(1)} [{took:.1f}s {merge}]"
+    # One `sink_combine` span opens per thread-local state the operator combines; the `descent_merge` span opens on
+    # every run, one state or many, and says nothing.
+    states = len(re.findall(r'"event":"begin"[^\n]*"name":"execution\.sink_combine"', done.stderr))
+    return f"{result.group(1)} [{took:.1f}s states={states}]"
 
 
-def main() -> None:
+def verdict_of(one: str, eight: list[str]) -> str:
+    """`same`, or why the shape fails."""
+    runs = (one, *eight)
+    if any(text.startswith(("FAIL", "TIMEOUT")) for text in runs):
+        return "FAIL"
+    if len({text.split(" [")[0] for text in runs}) != 1:
+        return "DIFFERENT"
+    if any(int(re.search(r"states=(\d+)\]$", text).group(1)) < 2 for text in eight):
+        return "NO MERGE"
+    return "same"
+
+
+def main() -> int:
     only = os.environ.get("ONLY", "")
+    failed = 0
     for name in QUERIES:
         if only and only not in name:
             continue
         for label, binary in BINARIES.items():
             one = run(binary, name, 1)
             eight = [run(binary, name, 8) for _ in range(2)]
-            values = {text.split(" [")[0] for text in (one, *eight)}
-            verdict = "same" if len(values) == 1 and not one.startswith(("FAIL", "TIMEOUT")) else "DIFFERENT/FAIL"
+            verdict = verdict_of(one, eight)
+            failed += verdict != "same"
             print(f"{name:24} {label}  {verdict}\n    t=1: {one}\n    t=8: {eight[0]}\n    t=8: {eight[1]}", flush=True)
+    print(
+        f"{failed} failed"
+        if failed
+        else "all shapes agree at 1 and 8 threads, and every 8-thread run combined several states"
+    )
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

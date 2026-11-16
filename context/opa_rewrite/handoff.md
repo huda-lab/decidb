@@ -32,6 +32,7 @@ Files beside this one, in `context/opa_rewrite/`:
 | File or folder | Contents |
 |---|---|
 | [merge_notes.md](merge_notes.md) | What to check while merging `Sami-OPA` into `OPA-rewrites` |
+| `codex_suggestions.md` | A second review, by Codex with the owner (2026-11-16). Its points were checked against the code and are folded into A1, A4, A5, A6 and the merge notes |
 | `review/` | Nine full review reports, with the `file:line` evidence this document summarises |
 | `repro/` | Reproducing queries for known defects, and the deck's running example |
 | `tools/` | Benchmark and thread-test scripts, with baseline results in `tools/results/` |
@@ -69,6 +70,10 @@ Each finding in Part B carries a label saying how far to trust it:
 
 - **Decision (owner, 2026-11-16):** continue with `Sami-OPA`. `Sami-ANR` is dropped.
 - **Goal:** the deck's one-pass algorithm, all five steps.
+- **Architecture (owner, 2026-11-16):** the parser builds the DECIDE tree, and that tree is the one central
+  representation. Binding, canonicalization, optimizer rewrites, direct solve and evaluation all work from it.
+  Building it only after binding, or after the rewrites, falls short of this. The deck calls the structure the
+  "Abstract Syntax Tree" (its section 3.1), which is what a parser produces. Detail: A5, Phase 2.
 - **Departing from the deck** is allowed only for a clearly better design, which the owner presents to his supervisor
   first.
 - **We finish it ourselves.** The documentation on the branch is not trusted. Judge from code.
@@ -160,7 +165,12 @@ Problems 1–3 are the owner's. Problems 4–9 are the reviewer's additions.
 
 ### 1. The tree is not the central representation
 
-- It is rebuilt from the plan after the optimizer has already flattened nested reducers.
+- It is built last, at physical planning, from a plan in which the optimizer has already flattened nested reducers.
+  The owner's intent is that the parser builds it (A1).
+- Until it exists, structure travels as text. The parser writes scopes and reducers as function markers
+  (`decide_parsed_markers.cpp`). After binding, scopes and clause shapes are tags on expression aliases:
+  `enums/decide.hpp` defines 52 tag constants, read or written at 293 places [measured, prepared branch]. Any pass
+  can drop a tag without the compiler noticing; problem 4 was one pass removing a tag another pass had relied on.
 - It sits beside five other forms of the same clause (A3).
 - Its results are converted back to per-row columns. That converter is 23% of the tree evaluator's code.
 - Evidence: B3, B7; `review/01`, `review/02`.
@@ -196,7 +206,9 @@ Problems 1–3 are the owner's. Problems 4–9 are the reviewer's additions.
 - **What the fix costs.** A product or square over a nest, under a bound that reads the rows, is now refused by name.
   It answered correctly at Nov 13 by a path later commits removed (A7, item 10).
 - **For the rewrite.** A rewrite must not change a clause's shape after passes that depend on the shape have run.
-  With the tree built before the rewrites (Phase 2), the shape is a property of the node and this cannot happen.
+  Building the tree earlier does not prevent this by itself: a rewrite can still change a node after another pass
+  computed something from its old form. Each rewrite needs a stated rule for what it invalidates (A5, Phase 2,
+  contract 4).
 - Evidence: B4; `merge_notes.md` section 4. Reproducer: A7 item 1.
 
 ### 5. The thread merge is unverified
@@ -224,7 +236,8 @@ Problems 1–3 are the owner's. Problems 4–9 are the reviewer's additions.
 
 - It has its own IR, and runs row checks and bound side tables as plan operators.
 - OPA moved the solver path's copies of those into the tree, so one mechanism became two.
-- "The tree is the only representation" needs a ruling: does direct solve read the tree too?
+- The owner's architecture (A1) has direct solve choose its plan from the central tree. How `DirectIR` gets there is
+  not designed.
 - Evidence: B11. Decision: A6 item 2.
 
 ### 9. The deck does not cover most constructs
@@ -284,16 +297,76 @@ that do not gain from being done first, and are done on the merged branch.
 
 ### Phase 2. Make the tree the representation (problem 1)
 
-- Build the tree from the bound, canonical clauses, **before** the helper rewrite.
-- Turn rewrites into transformations of the tree, or rules at a node.
+**Target (owner).** The tree starts in the parser and every later stage works on it:
+
+```text
+Parser / transformer:  build the DECIDE structure (E, G, O nodes)
+            |
+Binder:                resolve names and types in that structure; derive signatures
+            |
+Canonicalizer, optimizer:  analyse and transform it
+            |
+     choose an implementation
+        /              \
+direct relational plan    compiled tree execution
+                                  |
+                       model generation at the nodes (Phase 3)
+```
+
+**What each stage does**
+
+- **Parser.** The transformer creates explicit scope, reducer and frame nodes. The grammar itself builds no
+  execution objects, and ordinary SQL expressions inside the nodes stay DuckDB expressions. A parsed node for
+  frames already exists (`decide_frame_expression.hpp`), so the pattern is in the code.
+- **Binder.** Resolves names, types, keys, aggregate overloads and collations in that structure, and derives each
+  node's signature. That names are unresolved in the parser is how every compiler works, not an obstacle.
+- **Canonicalizer and optimizer.** Transform the bound tree, or apply rules at a node. No stage rediscovers the
+  structure from alias tags or flattened helper records.
 - Keep one record of a clause body per node. Delete forms 2 and 3 of A3 as their readers move.
-- Give error order its own written rule (A6 item 3).
-- Split `DecideNode` by kind, as DuckDB's `Expression` does.
+- Split `DecideNode` by kind, as DuckDB's `Expression` does. Do not carry one struct with fields for every phase.
+
+**Pattern.** A typed intermediate representation with explicit lowering; the nodes are a Composite, and passes
+traverse and rewrite them. DuckDB's own form of this is one structure in two typed phases, a parsed class and a
+bound class, as `ParsedExpression` and `Expression` are. Use that unless there is a reason not to. Whether a bound
+node is a new object or the parsed one filled in is an implementation choice.
+
+**Contracts the design must state** (Codex's review; the reviewer agrees with each)
+
+1. **Meaning apart from execution state.** Scopes, decision identity, expressions and source origins belong to the
+   tree. Compiled programs, column positions, per-thread containers, hash tables, solver indices and sparse rows are
+   derived from it at a named boundary. Derived structures are fine; independently maintained copies of the same
+   meaning are the problem.
+2. **DuckDB can see every expression.** Column binding, column pruning and the generic optimizer visitors must reach
+   each SQL expression the tree owns. Today `LogicalDecide::EnumerateExpressions` is the one list they use, and
+   Sami's tree avoids the question by being built after DuckDB's optimizer has run. **This is the largest technical
+   risk of an early tree.**
+3. **Copy, equality and serialization** at each supported phase boundary, covering prepared statements and repeated
+   execution (`DECIDB_VERIFY_SERIALIZER=1`).
+4. **What each rewrite invalidates.** A rewrite can make signatures, degree, bounds, frame placement or dependencies
+   stale. State which analyses it preserves and which are recomputed. Problem 4 is what happens without this.
+5. **Source origins survive rewrites,** so messages still quote the query (mainline's source spans).
+
+**Size** [measured, prepared branch]: parser about 1,200 lines, binder 3,900, canonicalizer 2,100, optimizer 7,300.
+The binder owns most of the roughly 1,300 pinned error pairs, so the error-order rule (A6 item 3) must be decided
+before this phase starts.
+
+**Order inside the phase** is open (A6 item 10).
+
+**Accepted when**
+
+- scopes, reducers and frames originate in parsing;
+- binding and every rewrite use them;
+- evaluation and model generation do not reconstruct them from helper lists or alias tags;
+- behaviour tests exist at each boundary: parser and binder, rewrites, serialization, direct solve against its
+  fallback, and parallel execution.
 
 ### Phase 3. Build step 5 (problem 2)
 
 - Write the model at the nodes, bottom-up: a SUM passes its members up; a MAX allocates one variable per group that
   has more than one member.
+- A MIN or MAX's model depends on how it is used, not only on its member count. The direction its clause or the
+  objective pushes it (`ExtremumPush`) decides whether it needs indicator variables (`is_easy`). Keep whole-tree
+  reader analysis wherever formulation needs it.
 - Delete the plan-time helper allocation, `InlineReducerValueLinks`, `PlaceHelpers`, the helper mappings, and the
   emitter's per-row scatter.
 - Constraints the design must meet (`review/01`):
@@ -310,7 +383,8 @@ Done alongside each phase. See A9.
 
 ### Phase 5. Rewrite the docs
 
-Rewrite `context/docs` for stages 05, 06 and 08 in the present tense, with no reference to flat.
+Rewrite `context/docs` for every stage the tree now touches: parser (01), binder (02), planning and canonicalization
+(03, 04), optimizer (05), formulation (06), execution (08) and direct solve. Present tense, no reference to flat.
 
 ### Why Phase 1 comes before Phases 2 and 3
 
@@ -324,12 +398,16 @@ then be replaced. Deleting the algebra first (Phase 0, done) reduced that cost.
    preparation on `Sami-OPA`.
 2. **Direct solve and the tree.** Does direct solve read the tree, or keep its own IR? And on the solver path, do row
    checks and bound side tables live in the plan (mainline) or in the tree (OPA)?
-   - *Recommendation:* one mechanism on both paths. Which one needs its own study.
+   - *Direction (owner, 2026-11-16):* direct solve works from the central tree (A1).
+   - *Still open:* how. Codex's recommendation, which the reviewer shares: a rule analyses the bound tree, directly or
+     through a view derived from it; a rule that fires may lower to ordinary relational operators; a miss leaves the
+     solver path's meaning unchanged. The `DirectIR` migration is not designed.
    - *For the merge only* (owner, 2026-11-16): the solver path keeps OPA's tree evaluation, with mainline's fixes
      ported into it. The lasting choice is still open.
 3. **Error order.** Write down the inherited order as the rule, or adopt a simple one (clause order, then row) and
    let about 1,300 pinned error pairs change?
    - *Recommendation:* a simple written rule. It removes a case list.
+   - *When:* before Phase 2 starts. Phase 2 rewrites the binder, which raises most of those errors.
 4. **`EXPLAIN`.** Restore the rows an ABS or L0 rewrite adds, which the guide's section 9 promises, or approve OPA's
    shorter text?
    - *Recommendation:* restore, until step 5 changes what there is to print.
@@ -345,6 +423,12 @@ then be replaced. Deleting the algebra first (Phase 0, done) reduced that cost.
    - *Recommendation:* warn.
 9. **The `minmax_values` branch** in `InlineReducerValueLinks`. It changes the inlining policy and has no test.
    - *Recommendation:* drop it if the goldens allow. Step 5 replaces the function anyway.
+10. **Order of work inside Phase 2.** Building the tree from bound clauses first, as this plan once said, writes a
+    builder the parser-first target then throws away.
+    - *Recommendation:* work front to back: parser, then binder, then canonicalizer, then the rewrites. While later
+      stages are unconverted, a temporary adapter lowers the new bound tree to today's tagged expressions for them.
+      The adapter's boundary moves back one stage at a time and the adapter is deleted at the end (the "strangler
+      fig" pattern). The branch stays runnable and testable throughout.
 
 ## A7. Known defects
 
@@ -438,7 +522,9 @@ test/decide/suite_log.py OLD_DIR NEW_DIR --limit 400
 - `tools/ab_bench.py` runs the repository's 12 scaling workloads on several binaries, with runs interleaved. It
   reports whole-process time minus solver time.
 - Do not use `benchmark/decide/anr_scaling.py` for comparisons. Its timer leaves out the row pass in `Sink`.
-- `tools/threads_test.py` runs eight query shapes at 1 and 8 threads over a stored table.
+- `tools/threads_test.py` runs eight query shapes at 1 and 8 threads over a stored table. It exits 1 when a shape
+  errors, when the objective differs, or when an 8-thread run combined fewer than two thread-local states. It is a
+  smoke test: passing it does not settle A7 items 6 and 7.
 - Both scripts hold absolute paths to the review worktrees. Edit `BINARIES` at the top.
 
 ## A9. Tests: keep, cut, add
@@ -468,8 +554,9 @@ Notes on each row:
   threads.
 - **Weakened tests** are listed in B9.
 
-**To add:** an oracle test for each confirmed defect in A7; real-thread tests; and for step 5, a model comparison
-between old and new model building while both exist.
+**To add:** an oracle test for each confirmed defect in A7; real-thread tests; for step 5, a model comparison
+between old and new model building while both exist; and for Phase 2, behaviour tests at each boundary the tree
+crosses (parser and binder, rewrites, serialization, direct solve against its fallback, parallel execution).
 
 **The rule to apply**, from `.claude/CLAUDE.md`: each decision point gets a test that reaches it and fails if the
 branch is removed. When code is deleted, the tests that only reached it go in the same change.
@@ -602,7 +689,8 @@ Eight query shapes over 500,000 stored rows, once at 1 thread and twice at 8 thr
   execution review suspected (ABS of a keyed decision inside a class; a per-class ABS under two reducers with
   different `by` keys).
 - Every shape gives the same objective at 1 and 8 threads, and the same value on ANR and OPA. No crash.
-- OPA's profile confirms a real multi-part merge at 8 threads: 3.7 ms, against 0.01 ms at 1 thread.
+- OPA's profile confirms a real multi-part merge at 8 threads: 3.7 ms, against 0.01 ms at 1 thread. Re-run on the
+  prepared branch with the corrected script: every 8-thread run combined five thread-local states.
 - This does not disprove the two suspected merge defects (B12). It shows these queries do not trigger them.
 
 ### Fuzzing [measured]

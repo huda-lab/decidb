@@ -127,12 +127,24 @@ Performance baseline for the tree evaluator: `tools/results/` (method in handoff
 
 ### 5.1 Before starting
 
-- [ ] `git status` is clean on `OPA-rewrites`; `git rev-parse Sami-OPA` matches the hash recorded in section 4.
+- [ ] `git status` shows no change to a tracked file on `OPA-rewrites`; `git rev-parse Sami-OPA` matches the hash
+      recorded in section 1. An untracked `AGENTS.md` at the repository root is the owner's and may stay: neither
+      parent has that path.
 - [ ] `git fetch origin` shows no new commits on `origin/Sami-OPA` or `origin/direct-solve-prototype`. If either
       moved, stop and tell the owner.
 - [x] Rulings R1 and R2 are answered (section 3).
-- [ ] Capture every suite query's output on both parents, for the comparison in section 8.5:
-      `test/decide/capture_suite_log.sh capture --modes auto --out <dir>` (the script exists on `Sami-OPA`).
+- [ ] Capture every suite query's output on **both parents**, each from its own tests and its own binary, for the
+      comparison in section 8.5. Write the captures to a folder outside the repository.
+  - **`Sami-OPA`:** in `.claude/worktrees/sami-opa`, run
+    `test/decide/capture_suite_log.sh capture --modes auto --out <dir>/opa`.
+  - **Mainline has neither the script nor the hook it needs** ✓. The log is written by `_log_query` in
+    `test/decide/decidb_cli.py`, which mainline's file lacks, so copying the script alone captures nothing. Before
+    the merge, in the main checkout: add the hook by hand (the constant `_SUITE_LOG_ENV`, the function `_log_query`
+    and its one call after the query runs; read them with `git show Sami-OPA:test/decide/decidb_cli.py`), copy
+    `capture_suite_log.sh` and `suite_log.py` from `Sami-OPA`, and capture to `<dir>/mainline`. Both sides changed
+    `decidb_cli.py`, so the hunk will not apply as a patch.
+  - Then restore `decidb_cli.py`, delete the two copied files, and confirm `git status` is clean again.
+  - Check each capture's `manifest.txt`: it names the commit and the binary's checksum.
 - [ ] Turn on helpers for a long merge: `git config merge.conflictStyle zdiff3` and `git config rerere.enabled true`.
 
 ### 5.2 The merge itself
@@ -225,8 +237,11 @@ Each trap has a check. Tick it only when the check has been run.
 - **What:** mainline moved `install_row_checks` to run **after** the ABS rewrite, because the rewrite now adds a
   scope check (`AddAbsValueCheck`). OPA runs its replacement, `retain_row_checks`, **before** the ABS rewrite. After
   a plain merge that check sits in `scope_checks` and nothing consumes it.
-- [ ] **Check:** find mainline's test for `AddAbsValueCheck` (`git log -S AddAbsValueCheck -- test`) and show it
-      passes with direct solve off.
+- [ ] **Check:** mainline's tests for this check pass with direct solve on **and off**. The producer came in
+      `a100f25d98`; its tests are the ABS cases in `test_invalid_value_message.py` (a NaN or infinite value under
+      ABS, pressed by the objective, under Big-M, and in a constraint) and the edits to
+      `test_direct_a2_single_facility_location.py`. `AddAbsValueCheck` appears in no test file, so search `src`
+      for the producer and read that commit's test changes.
 
 ### Trap 8. Mainline's side-table fixes do not reach OPA's solver path (R2)
 
@@ -361,7 +376,13 @@ grep -rn -E "DecideAlgebra|BuildAlgebra" src
 - [ ] `build/release/test/unittest "[decidb]"`
 - [ ] `DECIDB_FORCE_SOLVER=highs make decide-test`
 - [ ] `DECIDB_VERIFY_SERIALIZER=1 make decide-test`
-- [ ] `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`, or `test/decide/run_direct_matrix.sh` for all four at once
+- [ ] `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`
+
+Run each mode as its own command and check its exit status. `test/decide/run_direct_matrix.sh` runs all four, but
+do not treat it as the gate ✓: it passes the caller's `DECIDB_*` switches into every mode (a shell with
+`DECIDB_FORCE_SOLVER` set makes its `auto` run a HiGHS run), and it judges a mode by the printed pytest summary, not
+by the command's exit status. If you use it, clear the three mode switches first and read each log's last lines.
+Fixing the script is its own commit, after the merge.
 
 The merged suite should hold every test of both parents, less the ones deleted under R1 and R3.
 
@@ -395,7 +416,11 @@ Expected: nothing beyond the failures recorded in section 4.
 
 ### 8.7 Threads and performance
 
-- [ ] `tools/threads_test.py 500000`: every shape gives the same objective at 1 and 8 threads.
+- [ ] `tools/threads_test.py 500000` exits 0, with the merged binary added to its `BINARIES`. The script fails a
+      shape when a run errors, when the objective differs between 1 and 8 threads, or when an 8-thread run combined
+      fewer than two thread-local states. On the prepared `Sami-OPA` binary all eight shapes pass with five states.
+- This is a smoke test, not proof. Handoff A7 items 6 and 7 (invariants I5 and I6) and the 23
+  `DECIDB_DESCENT_SPLIT=1` failures stay open after it passes; they are rewrite work (handoff A5, Phase 0, item 4).
 - [ ] `tools/ab_bench.py` against the prepared `Sami-OPA` binary: no workload moves outside noise (about 10%).
       Edit `BINARIES` at the top of both scripts first.
 
@@ -426,4 +451,5 @@ Append one line per decision made during the merge, per test deleted, and per un
 | 2026-11-16 | Preparation: a product or square over a nested reducer, under a bound that reads the rows, is now refused by name ("squares or multiplies decisions inside nested reducers") | It answered wrongly at `7837e300be`. It answered correctly at `36f12dd089`, by a path later commits removed. Restoring that path is rewrite work | Reviewer; owner to confirm |
 | 2026-11-16 | R1: variant signatures replace the determination error | The owner chose OPA; variants are the deck's signature mechanism | Owner |
 | 2026-11-16 | R2, for the merge only: the solver path keeps OPA's tree evaluation, with mainline's fixes ported into it | The smaller change. The lasting choice belongs to the rewrite | Owner |
+| 2026-11-16 | Checklist corrected after Codex's review: the mainline capture needs the `_log_query` hook; the matrix runner is not a gate; `threads_test.py` now fails properly; trap 7's lookup command was wrong | Each point was checked against the code and held | Reviewer |
 | | | | |
