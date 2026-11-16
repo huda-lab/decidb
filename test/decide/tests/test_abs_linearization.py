@@ -1875,6 +1875,58 @@ def test_abs_objective_sign_under_sense(request, cli_fixture, objective, value, 
     judge_rows(answer(cli, _signed_objective(objective)), _SIGNED_DOMAINS, lambda a: True, value, maximize)
 
 
+# `abs(sum(x) - 2)` in the objective holds a total, one number for the query. Beside a term that keeps the objective
+# a sum (`0 * sum(x) +`, which the outermost-function check admits) it was read once per row: the envelope rows
+# were aggregate rows the model builder read row by row, and the optimum, a total of 8, answered 0. A reducer a
+# function reads is a helper decision of its own (RewriteScopedReducers, `under_function`).
+@_NESTED_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "sense, objective, maximize",
+    [
+        pytest.param("MAXIMIZE", "0 * sum(x) + abs(sum(x) - 2)", True, id="maximize"),
+        pytest.param("MINIMIZE", "0 * sum(x) - abs(sum(x) - 2)", False, id="minimize-twin"),
+    ],
+)
+def test_abs_of_a_total_in_the_objective(request, cli_fixture, sense, objective, maximize):
+    cli = request.getfixturevalue(cli_fixture)
+    sign = 1 if maximize else -1
+    judge_rows(
+        answer(cli, _signed_objective(f"{sense} {objective}")),
+        _SIGNED_DOMAINS,
+        lambda a: True,
+        lambda a: sign * abs(_total(a) - 2),
+        maximize,
+    )
+
+
+# The same total grouped by a key: `by (k)` over one group, and over two groups under a `when` that keeps one, so
+# the other group's row stays free and no group's total is read for the whole table.
+@_NESTED_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "keys, objective, kept",
+    [
+        pytest.param(("a", "a", "a"), "0 * sum(x) + abs(sum(x) by (k) - 2)", 3, id="one-group"),
+        pytest.param(
+            ("a", "a", "b"), "when k = 'a': 0 * sum(x) + abs(sum(x) by (k) - 2)", 2, id="when-keeps-one-group"
+        ),
+    ],
+)
+def test_abs_of_a_keyed_total_in_the_objective(request, cli_fixture, keys, objective, kept):
+    cli = request.getfixturevalue(cli_fixture)
+    rows = ", ".join(f"({i + 1}, '{k}', {cap})" for i, (k, cap) in enumerate(zip(keys, (3, 3, 2))))
+    sql = f"""SELECT id, k, x FROM (VALUES {rows}) t(id, k, cap)
+        DECIDE x(INT) SUCH THAT x <= cap AND x >= 0 MAXIMIZE {objective} ORDER BY id"""
+    judge_rows(
+        answer(cli, sql),
+        _SIGNED_DOMAINS,
+        lambda a: True,
+        lambda a: abs(sum(a[f"x{i}"] for i in range(kept)) - 2),
+        True,
+    )
+
+
 # A data weight is a column, so its sign is unknown at plan time whatever it holds (PlanTimeSignOf, WalkPolarity in
 # decide_optimizer.cpp) and every case gets the one exact envelope; the cases differ in the data only: one negative
 # weight (the query once called unbounded) and a zero weight beside a negative one.

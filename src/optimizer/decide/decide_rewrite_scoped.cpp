@@ -93,10 +93,14 @@ struct ReducerSite {
 	int sign;
 	//! A decision multiplies the reducer (`b * sum(x)`): its product with the helper is the Boolean product.
 	bool under_decision;
+	//! A function that is no sum or product holds the reducer (`abs(sum(x) - 2)`): the function reads its value, so
+	//! the value has to be a column of its own.
+	bool under_function;
 };
 
 void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &context, idx_t decide_index,
-                         const BooleanDecisions &booleans, vector<ReducerSite> &out, bool under_decision = false) {
+                         const BooleanDecisions &booleans, vector<ReducerSite> &out, bool under_decision = false,
+                         bool under_function = false) {
 	if (!BoundExpressionReferencesDecide(*expr, decide_index)) {
 		return; // data holds no decision reducer
 	}
@@ -104,30 +108,33 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 	case ExpressionClass::BOUND_AGGREGATE: {
 		idx_t frame;
 		if (!TryGetDecideFrame(*expr, frame)) {
-			out.push_back({&expr, sign, under_decision}); // a frame is a tuple term of the row, no reducer
+			out.push_back({&expr, sign, under_decision, under_function}); // a frame is a tuple term of the row
 		}
 		return;
 	}
 	case ExpressionClass::BOUND_CAST:
 		CollectReducerSites(expr->Cast<BoundCastExpression>().child, sign, context, decide_index, booleans, out,
-		                    under_decision);
+		                    under_decision, under_function);
 		return;
 	case ExpressionClass::BOUND_FUNCTION: {
 		auto &func = expr->Cast<BoundFunctionExpression>();
 		auto &name = func.function.name;
 		if (name == "+") {
 			for (auto &child : func.children) {
-				CollectReducerSites(child, sign, context, decide_index, booleans, out, under_decision);
+				CollectReducerSites(child, sign, context, decide_index, booleans, out, under_decision, under_function);
 			}
 			return;
 		}
 		if (name == "-" && func.children.size() == 2) {
-			CollectReducerSites(func.children[0], sign, context, decide_index, booleans, out, under_decision);
-			CollectReducerSites(func.children[1], -sign, context, decide_index, booleans, out, under_decision);
+			CollectReducerSites(func.children[0], sign, context, decide_index, booleans, out, under_decision,
+			                    under_function);
+			CollectReducerSites(func.children[1], -sign, context, decide_index, booleans, out, under_decision,
+			                    under_function);
 			return;
 		}
 		if (name == "-") {
-			CollectReducerSites(func.children[0], -sign, context, decide_index, booleans, out, under_decision);
+			CollectReducerSites(func.children[0], -sign, context, decide_index, booleans, out, under_decision,
+			                    under_function);
 			return;
 		}
 		if (name == "*" || name == "/") {
@@ -143,7 +150,8 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 				// A BOOL decision is never negative, so it keeps the direction of the reducer it scales.
 				const int factor_sign = ScaleSignAtPlanTime(context, other.get(), name == "/", &booleans);
 				CollectReducerSites(term, sign * factor_sign, context, decide_index, booleans, out,
-				                    under_decision || BoundExpressionReferencesDecide(*other, decide_index));
+				                    under_decision || BoundExpressionReferencesDecide(*other, decide_index),
+				                    under_function);
 			}
 			return;
 		}
@@ -154,7 +162,7 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 	}
 	// Any other node (ABS, POWER, CASE, ...): the sign of what it holds is not known.
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		CollectReducerSites(child, 0, context, decide_index, booleans, out, under_decision);
+		CollectReducerSites(child, 0, context, decide_index, booleans, out, under_decision, true);
 	});
 }
 
@@ -619,10 +627,12 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 
 	// The objective is one expression under its sense (`MAXIMIZE b * sum(x)`): a reducer under a Boolean decision
 	// takes a helper decision the same way, and so does a reducer that holds a reducer, the canonicalizer's tag on it
-	// (D81), unless it is a sum of group sums read in place; every reducer inside it takes one keyed by its path. The
-	// objective is a minimization (the canonicalizer folded a MAXIMIZE into the term signs), so the push is down times
-	// the term's sign, as for the body definitions. A reducer no decision multiplies and none nests in stays in the
-	// objective as it is.
+	// (D81), unless it is a sum of group sums read in place; every reducer inside it takes one keyed by its path. So
+	// does a reducer a function reads (`0 * sum(x) + abs(sum(x) - 2)`), as in a comparison (a reducer inside another
+	// expression is the VALUE shape): the function's value is of one number, which an aggregate row of its envelope
+	// would leave per row. The objective is a minimization (the canonicalizer folded a MAXIMIZE into the term signs),
+	// so the push is down times the term's sign, as for the body definitions. A reducer no decision multiplies, no
+	// function reads and none nests in stays in the objective as it is.
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
 		auto *body = &objective;
@@ -644,7 +654,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 			if (nest && !site.under_decision && InlineSumOfGroupSums(decide, optimizer.context, *site.slot)) {
 				continue;
 			}
-			if (nest || (products && site.under_decision)) {
+			if (nest || site.under_function || (products && site.under_decision)) {
 				ReplaceReducer(helpers, names, booleans, path, Helpers::ClassKeyOf(scope), ExtremumPush::DOWN,
 				               DConstants::INVALID_INDEX, site);
 			}
