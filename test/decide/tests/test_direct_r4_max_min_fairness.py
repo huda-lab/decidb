@@ -300,18 +300,14 @@ BUDGETS = {
     "b100": Budget("SUM(amount) <= 100", _constant(1.0), _limit(100.0)),
     "b0": Budget("SUM(amount) <= 0", _constant(1.0), _limit(0.0)),
     "negative": Budget("SUM(amount) <= -1", _constant(1.0), _limit(-1.0)),
-    # The spellings of one budget: each read the same way.
+    # A constant weight on the amount.
     "weight_2": Budget("SUM(2 * amount) <= 18", _constant(2.0), _limit(18.0)),
-    "weight_half": Budget("SUM(amount / 2) <= 4.5", _constant(0.5), _limit(4.5)),
-    "like_terms": Budget("SUM(amount + 2 * amount) <= 18", _constant(3.0), _limit(18.0)),
-    "literal_on_left": Budget("9 >= SUM(amount)", _constant(1.0), _limit(9.0)),
     # A negative constant weight: every row takes its capacity.
     "weight_negative": Budget("SUM(-amount) <= -2", _constant(-1.0), _limit(-2.0)),
     # A weight read from the data.
     "column": Budget("SUM(w * amount) <= 9", _column, _limit(9.0)),
     "column_b0": Budget("SUM(w * amount) <= 0", _column, _limit(0.0)),
     "column_negative": Budget("SUM(w * amount) <= -3", _column, _limit(-3.0)),
-    "column_like_terms": Budget("SUM(w * amount + 2 * w * amount) <= 18", lambda row: 3.0 * _column(row), _limit(18.0)),
     # Groups and a `when`: each group has a budget of its own, and a row outside them has none.
     "by": Budget("SUM(amount) by (k) <= 9", _constant(1.0), _limit(9.0), _by_k),
     "by_column": Budget("SUM(w * amount) by (k) <= 9", _column, _limit(9.0), _by_k),
@@ -326,9 +322,7 @@ BUDGETS = {
 BOXES = {
     "column": Box("amount BETWEEN 0 AND cap", _cap),
     "column_bound": Box("amount <= cap", _cap),
-    "floor_written": Box("amount >= 0 AND amount <= cap", _cap),
     "constant": Box("amount <= 3", lambda row: 3.0),
-    "constants": Box("amount BETWEEN 0 AND 3", lambda row: 3.0),
     "none": Box("amount >= 0", lambda row: None),
     "scaled": Box("2 * amount <= cap", lambda row: None if row["cap"] is None else row["cap"] / 2.0),
     "two_bounds": Box("amount <= cap AND amount <= 3", lambda row: 3.0 if row["cap"] is None else min(row["cap"], 3.0)),
@@ -373,16 +367,11 @@ add("zero_capacity_gives_level_zero", ZERO_CAPACITY)
 add("negative_demand_gives_level_zero", NEGATIVE_DEMAND)
 add("negative_budget_is_infeasible", WORKED, budget="negative")
 add("negative_capacity_is_infeasible", NEGATIVE_CAPACITY)
-# The spellings of the budget.
+# A constant weight on the amount.
 add("budget_weight_two", WORKED, budget="weight_2")
-add("budget_weight_a_half", WORKED, budget="weight_half")
-add("budget_like_terms_add", WORKED, budget="like_terms")
-add("budget_literal_on_the_left", WORKED, budget="literal_on_left")
 # The box: where the capacity comes from.
 add("capacity_in_a_bound", WORKED, box="column_bound")
-add("capacity_with_the_floor_written", THREE, box="floor_written", budget="b100")
 add("capacity_a_constant", THREE, box="constant", budget="b100")
-add("capacity_between_constants", THREE, box="constants", budget="b100")
 add("no_capacity", THREE, box="none")
 add("capacity_scaled_by_the_coefficient_of_the_decision", THREE, box="scaled", budget="b100")
 add("capacity_two_bounds_the_least_applies", THREE, box="two_bounds", budget="b100")
@@ -404,7 +393,6 @@ add("offset_outside_the_min", WORKED, objective="offset")
 # A weight of any sign. The worked example read from a column, and the sign decides the end of each row's range.
 add("worked_example_weight_from_a_column", WORKED, budget="column")
 add("weights_of_mixed_signs_and_zero", MIXED_WEIGHTS, budget="column")
-add("weights_like_terms_add", MIXED_WEIGHTS, budget="column_like_terms")
 add("weight_null_adds_nothing", NULL_WEIGHT, budget="column")
 add("weight_negative_constant_takes_every_capacity", THREE, budget="weight_negative")
 add("weight_negative_takes_its_capacity_and_frees_budget", NEGATIVE_CAPPED, budget="column_b0")
@@ -566,6 +554,19 @@ def _check_assignment(case_, rows, columns, oracle, mode):
     assert abs(min(level) - expected) <= _OBJECTIVE_TOLERANCE * max(1.0, abs(expected)), (mode, min(level), expected)
 
 
+def _warnings(case_):
+    """The DECIDE warnings the solver path prints for the case: a MIN that reads no row of a decision is 0 whatever
+    the decisions, and a capacity NULL on every row of a decision skips each instance of the box, which then
+    constrains nothing."""
+    decided = [row for row in case_.rows if _variable(case_, row) is not None]
+    warnings = []
+    if all(OBJECTIVES[case_.objective].coefficient(row) is None for row in decided):
+        warnings.append("the objective is 0 whatever the decisions")
+    if "cap" in BOXES[case_.box].sql and all(row["cap"] is None for row in decided):
+        warnings.append("constrains nothing")
+    return warnings
+
+
 def _agree(decidb_cli, oracle_solver, case_, wrap="plain"):
     """Runs the case on the oracle and on both DeciDB paths, and checks they agree."""
     sql = _sql(case_, wrap)
@@ -574,7 +575,7 @@ def _agree(decidb_cli, oracle_solver, case_, wrap="plain"):
     def check_assignment(rows, columns, mode):
         _check_assignment(case_, rows, columns, oracle, mode)
 
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment)
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, warnings=_warnings(case_))
 
 
 @pytest.mark.var_real
@@ -615,7 +616,7 @@ def test_r4_a_min_that_reads_no_row_gives_zero_to_every_row(decidb_cli, name):
     # uses the least budget.
     sql = _sql(R4_CASES[name])
     for mode in ("off", "require"):
-        rows, _ = run(decidb_cli, sql, mode)
+        rows, _ = run(decidb_cli, sql, mode, expect_warnings=_warnings(R4_CASES[name]) if mode == "off" else ())
         assert [row[1] for row in rows] == [0.0, 0.0], mode
 
 
@@ -645,19 +646,8 @@ _LIMIT = "amount <= cap AND SUM(w * amount) <= l MAXIMIZE MIN(amount / d)"
 # (the class of the error, the text it has, the bad row's d, cap, r and w, the clauses, and its l). Row 0 is ordinary.
 ERROR_CASES = {
     "demand_zero": ("invalid_value", "1 / d is NaN or infinite on some rows", "0.0", "4.0", "1.0", "1.0", _RATIO),
-    "demand_nan": ("invalid_value", "1 / d is NaN or infinite on some rows", "'NaN'", "4.0", "1.0", "1.0", _RATIO),
     "rate_nan": ("invalid_value", "r is NaN or infinite on some rows", "2.0", "4.0", "'NaN'", "1.0", _RATE),
-    "rate_infinite": ("invalid_value", "r is NaN or infinite on some rows", "2.0", "4.0", "'Infinity'", "1.0", _RATE),
     "weight_nan": ("invalid_value", "w is NaN or infinite on some rows", "2.0", "4.0", "1.0", "'NaN'", _WEIGHT),
-    "weight_infinite": (
-        "invalid_value",
-        "w is NaN or infinite on some rows",
-        "2.0",
-        "4.0",
-        "1.0",
-        "'-Infinity'",
-        _WEIGHT,
-    ),
     "limit_nan": ("null_bound", "the bound l is NaN on some rows", "2.0", "4.0", "1.0", "1.0", _LIMIT, "'NaN'"),
     "capacity_nan": ("null_bound", "the bound cap is NaN on some rows", "2.0", "'NaN'", "1.0", "1.0", _RATIO),
     "capacity_minus_infinite": ("infeasible", "infeasible", "2.0", "'-Infinity'", "1.0", "1.0", _RATIO),

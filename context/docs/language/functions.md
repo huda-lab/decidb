@@ -80,7 +80,7 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   prove the factor never NULL, `StatisticsPropagator` folds the test to TRUE (its LOGICAL_DECIDE case, as it folds a
   filter's `IS NOT NULL`); the folded constant keeps its tag, and stage 08 reads no filter for it. A reducer over data
   whose every value is NULL is NULL. A NULL that reaches a constraint unreduced (a bound, an unreduced coefficient, a factor
-  on an aggregate) marks its row in `ExtractDoubleColumn`'s `null_rows`, and `SkipNullInstances` cuts the instance
+  on an aggregate) marks its row in `ExtractDoubleColumn`'s `null_rows`, and `DecideAbsence::SkipNullInstances` cuts the instance
   that row reaches: one row of a row constraint, the whole group of a grouped one. A composed MIN/MAX clause with a
   NULL factor is skipped (`clause.skipped`). In the objective, `DropNullObjectiveTerms` (stage 05) reads a NULL
   coefficient as 0 before like terms merge, so `NULL*SUM(x) + SUM(x)` keeps the second term; objective extraction
@@ -104,12 +104,12 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   auxiliary and walker as composed constraints; the sense plays the comparison's role. A keyed reducer inside keeps
   its de-duplication (`ComposedMinMaxTerm::qualifier_scope_idx`); for `MIN`/`MAX` that is a no-op, applied anyway so
   there is one code path.
-- **Quadratic inner in the two-level form**: `sum(per g: sum(power(x - t, 2)) by (g))` reaches the QP extractor intact,
-  since the canonicalizer never multiplies out a square. A `MIN`/`MAX` over a squared body is modelled as a sum of
-  squares — a known wrong answer (`../issues/bugs.md`).
+- **Quadratic inner in a nested objective**: `sum(per g: sum(power(x - t, 2)) by (g))` is read in place as the
+  objective's own sum (D81), so it reaches the QP extractor intact. A `MIN`/`MAX` over a squared body reads a helper
+  per row defined by its function F node; the model-class gate admits this on Gurobi only.
 - **Linear objectives** become the `c` vector; a `when` in front zeroes other rows' coefficients, a reducer's own
   `when` zeroes only its term's. Additive constants accumulate on `LogicalDecide::objective_constant_offset`.
-- Code: `decide_objective_binder.cpp` (`BindScopedObjective`, `BindTwoLevelObjective`); `AnalyzeObjective` and
+- Code: `decide_objective_binder.cpp` (`BindScopedObjective`); `AnalyzeObjective` and
   `ExtractAggregateObjectiveTerms` (`decide_linear_form.cpp`).
 
 ## Reducers
@@ -127,8 +127,8 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   fractional value: the AVG→SUM rewrite skips an `AVG` with no decision. Tests: `test_cons_rhs_aggregate.py`.
 - **`AVG`.** Binding keeps `AVG` (and its `DOUBLE` type, so a fractional bound survives coercion). The optimizer
   rewrites it to `SUM` tagged `AVG_REWRITE_TAG`; execution scales linear coefficients and the weight of each product
-  group (a square or a product of decisions) by `1/n`. In the two-level objective, `avg` inside scales each row by
-  `1/n_g`. Flat `MAXIMIZE AVG(e)` has the same argmax as `SUM(e)`, but mixed terms keep their own scaling, so
+  group (a square or a product of decisions) by `1/n`. In a nested objective read in place, `avg` inside scales each
+  row by `1/n_g`. Flat `MAXIMIZE AVG(e)` has the same argmax as `SUM(e)`, but mixed terms keep their own scaling, so
   `AVG(a) + SUM(b)` is not `SUM(a) + SUM(b)`. Tests: `test_avg.py`.
 - **`MIN`/`MAX`.** The inner expression is any linear combination plus a constant (`max((cost + 1) * x)`,
   `max(cost * x + 5)`). Each link row is summed per solver column before emission (the model builder's
@@ -139,7 +139,7 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   no Big-M; the choice is made once at execution from the backend's capability table, and both paths reach the same
   optimum. Classification and scaffolding: `RewriteMinMaxConstraints` (`decide_rewrite_minmax.cpp`).
 - **The colon form.** `SUM(D: e)` binds onto the exact key scope `sum(per D: e)` uses, so the two share one
-  `KeyedMapping`, one de-duplication mask and one `DETERMINES` check. A composite qualifier's key is every named
+  `KeyedMapping` and one de-duplication mask, and read one value per variant of each tuple alike (D71). A composite qualifier's key is every named
   relation's stored columns, sorted by binding, so order does not matter. The grammar reads the qualifier as an
   argument list and checks its shape in the C action, because `sum(D, T: e)` and `sum(a, b)` share a prefix LALR(1)
   cannot split at the comma. Parse node `PG_AEXPR_QUALIFIED_REDUCER` → `QUALIFIED_REDUCER_TAG`

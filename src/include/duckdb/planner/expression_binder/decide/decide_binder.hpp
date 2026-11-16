@@ -19,6 +19,7 @@ namespace duckdb {
 class Binder;
 class BindContext;
 class ColumnRefExpression;
+class DecideFrameExpression;
 class FunctionExpression;
 struct DecideSourceNames;
 
@@ -67,6 +68,8 @@ struct DecideQualifierContext {
 	vector<KeyedScopeInfo> *keyed_scopes = nullptr;
 	//! Every key bound so far; a reducer's GROUP_KEY_TAG_PREFIX tag names its `by` key.
 	vector<DecideKey> *keys = nullptr;
+	//! Every frame selector bound so far; a frame's FRAME_TAG_PREFIX tag indexes it.
+	vector<DecideFrameSpec> *frames = nullptr;
 	//! The text the user wrote for the DECIDE tail (SelectNode::decide_text), which a node's query location indexes.
 	const DecideSourceText *source_text = nullptr;
 
@@ -102,21 +105,12 @@ void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr, const c
 //! Where `when`, `per` and `by` may stand, checked on the parsed constraints (`objective`
 //! false) or objective before binding. `[when c] [per K]:` stands in front of a clause or
 //! of a SUM/AVG/MIN/MAX argument, `by (key)` right after a SUM/AVG/MIN/MAX, `norm` or
-//! `count`; a condition, a key and a `by` key take data only, and a reducer may not hold a
-//! reducer (the objective's two-level form aside). Anything else -- a scope inside a
-//! condition, a key or an ordinary subquery -- answers "not supported yet".
+//! `count`; a condition, a key and a `by` key take data only. A reducer may hold reducers
+//! to any depth (§5.5), but not a norm, and one over decisions not one over data alone
+//! (D80). Anything else -- a scope inside a condition, a key or an ordinary subquery --
+//! answers "not supported yet".
 void ValidateDecideScopeSpellings(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
                                   bool objective, const DecideSourceText *text);
-
-//! The child an objective's unary minus or factor applies to: `-e`, `c * e`, `e * c` and `e / c`, where
-//! only `e` reads a decision. Invalid for any other expression.
-optional_idx ObjectiveFactorOperand(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
-
-//! Whether an objective (its `[when c] [per ()]:` peeled), under any unary minus and factor
-//! (ObjectiveFactorOperand), has the two-level form `outer(per k: inner(e) by (k'))`: an
-//! outer reducer, optionally `by ()`, over a `per` whose body is one inner reducer with a
-//! `by`. Whether k and k' are the same key is the binder's question.
-bool IsTwoLevelObjective(const ParsedExpression &body, const case_insensitive_map_t<idx_t> &variables);
 
 bool ContainsDecideAggregate(const ParsedExpression &expr);
 
@@ -252,6 +246,20 @@ protected:
 	//! Binds `agg(...) BY (key)`: the reducer, then the key into LogicalDecide::keys,
 	//! named on the aggregate by a GROUP_KEY_TAG_PREFIX tag (none for `BY ()`).
 	BindResult BindReducerBy(FunctionExpression &by, idx_t depth);
+	//! Binds a frame selector (language/guide.md §5.6) to an aggregate over its payload
+	//! -- `first(e)` for a point frame, its reducer for a range -- tagged by
+	//! FRAME_TAG_PREFIX with the frame's entry in LogicalDecide::frames, which holds the
+	//! order key, the `within` key's columns, the positions and the fallback.
+	BindResult BindDecideFrame(DecideFrameExpression &frame, idx_t depth);
+	//! A frame's `else`, bound into `out`: a number, and none when it is NULL before the
+	//! query runs (D86).
+	ErrorData BindFrameFallback(DecideFrameExpression &frame, const DecideFrameSpec &spec, const string &fallback_text,
+	                            idx_t depth, unique_ptr<Expression> &out);
+	//! The catalog aggregate `name` (a range's reducer, or a point's `first`) over a bound payload, aliased `alias`;
+	//! null, with `error` set, when none takes its type.
+	unique_ptr<Expression> BindFrameAggregate(const string &name, unique_ptr<Expression> payload,
+	                                          const DecideFrameExpression &frame, const string &alias,
+	                                          ErrorData &error);
 	BindResult BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
 	BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
 	                          bool root_expression = false) override;

@@ -51,8 +51,8 @@ the clause the user wrote.
   composable (`AddDecideTag`, `HasDecideTag`), because a keyed `AVG` is tagged by the binder and again by the AVG→SUM
   rewrite.
 - **Objective.** `DecideObjectiveBinder::BindScopedObjective` wraps a front `when` the same way; `per ()` adds
-  nothing. `BindTwoLevelObjective` binds `outer(per k: inner(e) by (k))` as `outer(inner(e))` under a
-  `TWO_LEVEL_OBJECTIVE_TAG` wrapper (child 0 the objective) tagged with the key's entry.
+  nothing. `outer(per k: inner(e) by (k))` binds as any nested reducer (D81): `outer` qualified by `k`, `inner`
+  tagged with its `by` key.
 - A `CASE WHEN` that reads no decision is data wherever it stands, a per-row coefficient as `COALESCE` over data is; a
   `when` condition, a key and a `by` key are SQL over the rows and accept one. A `CASE` over a decision is refused by
   the shape check after canonicalization, with one message that quotes the clause
@@ -95,50 +95,59 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
   side: `max(-x) <= 2` is `x >= -2`. With a `when` or a filter, an easy `min(m) >= K` is not absorbed; it replaces
   the default floor of 0 on the members it reads (D41). The reducer stays in the tree so EXPLAIN and DIAGNOSE quote
   the clause as written.
-- **Scope checks.** `BuildConstraintScopeChecks`, `BuildClauseScopeChecks`, `BuildReducerScopeChecks` and
-  `BuildObjectiveScopeChecks` build `DETERMINES` checks on `LogicalDecide::scope_checks`, from the clauses as bound.
-  The bound-side rewrite adds `VALUE_IS_VALID` checks for the data values bounds read.
-  `PhysicalDecide::RunScopeChecks` runs them all before any clause is evaluated. An empty group is no check: execution
-  skips its instance (D68, `SkipGroupsWithAnEmptyReducer`). They are run on the data rather than proved statically because whether a key determines a
-  column is a property of the rows, and a static rule would refuse queries that are fine on their data.
+- **Variant signatures** (D70). `BuildConstraintSignatures` and `BuildObjectiveSignatures`
+  (`decide_canonicalizer.cpp`) record, right after canonicalization, the signature of every scoped expression with a
+  field (`LogicalDecide::signatures`): each `per K:` clause, tagged on its wrapper (`__signature_<i>__`), each
+  relation-qualified reducer over decisions, given a keyed scope of its own (`KeyedScopeInfo::signature`), and the
+  objective (`objective_signature`). A field is a data value (the data terms of one additive context summed into one,
+  D83), a decision by instance, or a reducer's `by` key; one the key holds by construction (`KeyHoldsField`) is none.
+  Execution numbers the rows by key and fields (a set E's instances in the descent), so a class splits only where the
+  data differs.
+  The bound-side rewrite adds `VALUE_IS_VALID` checks for the data values bounds read; an empty group is no check:
+  execution skips its instance (D68, `DecideAbsence::SkipEmptyReducers`).
 
 ## Optimizer
 
-- `RewriteScopedReducers` (VALUE shape, above), after `RewriteBilinear` and before the MIN/MAX passes.
-- `RewriteMinMaxObjective` (`decide_rewrite_minmax.cpp`) reads the two-level wrapper into `per_inner_*` /
-  `per_outer_*` (reducer kinds, easy or hard); execution groups by `DecideObjective::two_level_key`. An inner
-  `MIN`/`MAX` emits linking rows only for rows with a nonzero coefficient; a group with none has its auxiliary pinned
-  to 0.
+- `RewriteScopedReducers` (VALUE shape, above), after `RewriteBilinear` and before the MIN/MAX passes. It also takes
+  nested reducers (guide §5.5): the canonicalizer gives a clause that holds a nest the VALUE shape, and tags the
+  outermost reducer of each nest in the objective (`TagNestedObjectiveReducers`, D81). Every reducer of a nest becomes
+  a helper decision keyed by its path key (`DecideReducerPath`, `FindOrCreateDecidePathKey`), innermost first, over
+  the rows its path keeps; a member is pinned on the side its readers push it, through `MIN` and `MAX` as through
+  `SUM` and `AVG` (D79). The objective's `sum(per K:
+  inner(e) by (G))` with `K` in `G` is read in place instead (`InlineSumOfGroupSums`).
 - `RewriteRhsAggregates` (`decide_rewrite_rhs_bounds.cpp`) turns every reducer on a bound into a side-table column of
   the source, grouped by its `by` key over the rows the clause keeps, and reduces a varying bound to its group's
-  tightest value (keeping every value for `<>`).
+  tightest value (keeping every value for `<>`). A reducer nested in a bound's reducer is recorded first, grouped by
+  its path key over the rows its path keeps, and the reducer around it reads its column.
 - Rows a rewrite adds for a clause (`IN`, `ABS`, `norm` L0) keep the clause's `when`.
 
 ## Execution
 
-In `src/execution/operator/decide/physical_decide.cpp`:
+In `src/execution/operator/decide/` (the tree: `decide_descent.cpp`, `decide_tree_columns.cpp`,
+`decide_model_emitter.cpp`):
 
-- `RunScopeChecks` first. Then each clause reads only its kept rows: `KeptRows` evaluates a condition
-  (the `and`/`or` order of guide §6.3), and `ExecuteOnReadRows` runs every other expression only on the rows a mask
-  marks, NULL elsewhere.
-- `BuildGroupIds` partitions rows by a key, NULL a class; `LookupOrBuildPerGroupIds` caches one partition per key so
+- The descent reads each node's `when` first, on the rows that reach it (`DecideDescent::Gate`, the `and`/`or` order
+  of guide §6.3), and passes on only the rows it keeps, so every other expression runs only on those rows.
+- A key's dictionary (`DecideKeyMap`) partitions rows by the key, NULL a class; the nodes of one key share it, so
   every clause and check on the same key shares the numbering. An empty or constant key is one group.
-  `CollectGroupClasses` lists the classes a model row stands for (DIAGNOSE's `group` column).
-- `BuildKeyedMappings` gives every row its class's solver column, for keyed decisions and for helpers.
-- `BuildQualifierKeepMask` keeps one row per class of an inner `per` (or colon form) in each group, among the rows
-  the reducer reads; `ApplyQualifierToFilter` ANDs it into the term's filter. AVG's denominator then counts classes
-  without special code. Which row survives cannot matter, because `DETERMINES` has checked every row of a class
-  carries the same value. The mask is per term, so `SUM(D: a * open) + sum(b * ship)` de-duplicates only the first.
-- The prepared model (`decide_prepared_model.hpp`) carries a clause's scope as one `DecideClauseScope` — `when`,
+  `DecideGroupClassSets` lists the classes a model row stands for (DIAGNOSE's `group` column).
+- The model emitter's keyed mappings give every row its class's solver column, for keyed decisions and for helpers;
+  the objective's signature must have one variant (D72).
+- An inner `per` (or colon form) keeps one row per class in each group, among the rows the reducer reads: its operand
+  holds one entry per class, and the reducer reads each one's first row (`FirstOfEachInstance`). AVG's denominator then
+  counts classes without special code. A reducer whose body has a field keeps one row per variant of each class: its own
+  keyed scope numbers the rows by key and signature (D71), so every row it keeps stands for rows that read the same
+  value. The mask is per term, so `SUM(D: a * open) + sum(b * ship)` de-duplicates only the first.
+- The tree's term records (`decide_tree_terms.hpp`) carry a clause's scope as one `DecideClauseScope` — `when`,
   `per` (`PerRole`: `NONE`, `ONE_ROW_PER_CLASS`, `NAMES_CLASSES`) and `class_key` — embedded in `DecideConstraint`
-  (beside its `group_key`) and `ComposedMinMaxConstraint`, and on `DecideObjective` as `when_condition` and
-  `two_level_key`. Each key is an index into `LogicalDecide::keys`.
+  (beside its `group_key`) and `ComposedMinMaxConstraint`, and on `DecideObjective` as `when_condition`; an objective
+  AVG read in place divides by the groups of its `avg_group_key`. Each key is an index into `LogicalDecide::keys`.
 
 ## Rendering
 
 `CollectDecideExpressionStrings` (`decide_source_provenance.cpp`) walks the wrappers, building the front qualifier
-from `WhenQualifier` and `PerClassQualifier` (`FrontQualifier`), which read the cut text. `RenderTwoLevelObjective`
-prints the two-level form; `RenderReducer` prints a reducer's own scope and `by`. See [explain.md](explain.md).
+from `WhenQualifier` and `PerClassQualifier` (`FrontQualifier`), which read the cut text. `RenderReducer` prints a
+reducer's own scope and `by`, at every level of a nest. See [explain.md](explain.md).
 
 ## Scale
 

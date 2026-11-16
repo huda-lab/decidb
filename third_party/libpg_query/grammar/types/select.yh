@@ -13,6 +13,10 @@
 %type <node> decide_objective_when_condition
 %type <node> decide_when decide_per decide_scope
 %type <list> decide_by
+%type <list> decide_frame_point opt_decide_frame_within
+%type <node> decide_frame_over
+%type <ival> opt_decide_frame_every
+%type <boolean> opt_decide_frame_cyclic
 
 %type <node>	select_no_parens select_with_parens select_clause
 				simple_select values_clause values_clause_opt_comma

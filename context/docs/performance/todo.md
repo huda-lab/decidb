@@ -20,3 +20,17 @@ Run scale ladders and repetitions on both backends. Use separate native-log/stac
 ## PERF-8 — Memory and scaling
 
 Find the point where each workload and backend stops fitting comfortably, and which stage holds the memory when it does. Relate peak RSS to model size — variables, rows and nonzeros are recorded alongside it in the same CSV row. The large-tier sweep (`benchmark/decide/results/pipeline_profile_large.csv`, 2026-10-30, 90 rows with `peak_rss_mib`; PERF-1) is not yet analysed here.
+
+## PERF-23 — Variant numbering
+
+Measure the descent's variant numbering (`execution.tree_descent`: a set E's entries and instances) on d1, a 1M-row
+join with `per l.l_orderkey: assign <= o.o_shippriority + 1`, where every class has one variant, and on a variant of it
+where some classes hold several. Compare with the same clause without `per`.
+
+## PERF-24 — A nested objective's helpers
+
+Measure Q4 (`max(per l_returnflag: sum(keep * l_extendedprice) by (l_returnflag))`) at `execution.value_links` and
+`formulation.value_links` against `cec0e42f99`, where the two-level path fed the group sums to the extremum directly:
+each group sum is a helper decision, defined by one row per group assembled through `BuildMinMaxGroups`, three
+columns and three rows more on a million-row model. Inlining a SUM helper into the one reader that sums it is the
+expected remedy if the cost shows.

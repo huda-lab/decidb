@@ -1,7 +1,7 @@
 """Every auxiliary column stage 05 introduces must carry a derived box.
 
 An auxiliary stands for a known expression — the extremum of a MIN/MAX reducer over
-rows, over per-group values, or over group sums — so the range it can reach is always
+rows, or a nested reducer's value per group — so the range it can reach is always
 computable at the moment it is created. Leaving one declared `[-1e30, 1e30]` is not a
 wrong answer, which is exactly why it went unnoticed: it is a performance cliff. A free
 continuous column gives the root simplex no box to start from, so it walks to the answer
@@ -22,9 +22,8 @@ is derivable") is asserted without a count in
 
 Covers one query per auxiliary-creation site:
   - test_flat_minmax_objective_auxiliary_is_boxed: flat `z`, both directions
-  - test_per_inner_minmax_auxiliaries_are_boxed: per-group `z_g`
-  - test_per_outer_minmax_over_group_values_is_boxed: `w` over the `z_g`s
-  - test_per_outer_minmax_over_group_sums_is_boxed: `w` over group sums
+  - test_a_nested_objectives_helpers_are_boxed: a nested objective's helper per group, and
+    the outer helper over them (D81)
   - test_composed_minmax_term_auxiliaries_are_boxed: composed `z_k` per term
   - test_unbounded_variable_keeps_whichever_end_it_can: per end, including the one
     legitimate fully-free case
@@ -106,75 +105,49 @@ def test_flat_minmax_objective_auxiliary_is_boxed(decidb_cli, tmp_path, sense, e
     ], f"flat MIN/MAX auxiliary is not boxed by the per-row range:\n{dump}"
 
 
-@pytest.mark.min_max
-@pytest.mark.per_clause
-@pytest.mark.correctness
-def test_per_inner_minmax_auxiliaries_are_boxed(decidb_cli, tmp_path):
-    """One `z_g` per group, each an extremum over its group's rows.
-
-    Every `z_g` shares the per-row family's box: a group's extremum cannot leave the range
-    any single row can reach, whichever rows the group holds. The model minimizes, so a
-    MAXIMIZE query holds the extremum of the negated rows: the box is the mirror, [-20, 0].
-    """
-    dump = _lowering(decidb_cli).dump_model(
-        f"""
-            SELECT id, x FROM {_GROUPED_ROWS}
-            DECIDE x(INT) SUCH THAT x <= 4
-            MAXIMIZE sum(per g: max(x * c) by (g))
-        """,
-        tmp_path / "per_inner.dump",
-    )
-    aux = _assert_all_boxed(dump, 2)
-    assert [(lb, ub) for _, lb, ub in aux] == [
-        (-20.0, 0.0),
-        (-20.0, 0.0),
-    ], f"per-group z_g auxiliaries are not boxed by the per-row range:\n{dump}"
+def _helper_columns(dump: str, decisions: int) -> list[tuple[float, float]]:
+    """`(lb, ub)` of every column past the first `decisions` that is not a binary: the
+    helper decisions of a nested reducer (D81), whole-numbered here, so integer columns."""
+    out = []
+    for m in re.finditer(r"^col (\d+): lb=(\S+) ub=(\S+) int=\d bin=0", dump, re.M):
+        if int(m[1]) >= decisions:
+            out.append((float(m[2]), float(m[3])))
+    return out
 
 
 @pytest.mark.min_max
 @pytest.mark.per_clause
 @pytest.mark.correctness
-def test_per_outer_minmax_over_group_values_is_boxed(decidb_cli, tmp_path):
-    """`w` reducing over the `z_g`s inherits their box, since each one lives inside it (the mirror of the per-row range,
-    as a MAXIMIZE query is minimized as its negation)."""
+@pytest.mark.parametrize(
+    "objective, boxes",
+    [
+        # Group 'a''s extremum stays in its own rows' range, 5*4 = 20; 'b' has one member, which is its
+        # extremum (deck p. 112) and has no column; their sum, read by the objective alone, is written
+        # into it (D89) and has no column either.
+        pytest.param("MAXIMIZE sum(per g: max(x * c) by (g))", [(0.0, 20.0)], id="sum-over-group-extrema"),
+        # The outer extremum over the groups' stays in the per-row range too.
+        pytest.param(
+            "MAXIMIZE max(per g: max(x * c) by (g))", [(0.0, 20.0), (0.0, 20.0)], id="extremum-over-group-extrema"
+        ),
+        # Group 'a' reaches 3*4 + 5*4 = 32 and 'b' 2*4 = 8. The group sums are written into the
+        # minimum's members (D89), whose box covers them both: [0, 32].
+        pytest.param("MAXIMIZE min(per g: sum(x * c) by (g))", [(0.0, 32.0)], id="extremum-over-group-sums"),
+    ],
+)
+def test_a_nested_objectives_helpers_are_boxed(decidb_cli, tmp_path, objective, boxes):
+    """A nested objective is a helper per group for the inner reducer and one for the outer
+    (D81), each instance boxed by its own group's reach (DeriveReducerValueBounds), so the
+    outer one's box is read off the inner ones' -- or off their members, where an inner sum
+    is written into the outer reducer's members and an outer sum into the objective (D89)."""
     dump = _lowering(decidb_cli).dump_model(
         f"""
             SELECT id, x FROM {_GROUPED_ROWS}
             DECIDE x(INT) SUCH THAT x <= 4
-            MAXIMIZE max(per g: max(x * c) by (g))
+            {objective}
         """,
-        tmp_path / "per_outer_values.dump",
+        tmp_path / "nested.dump",
     )
-    aux = _assert_all_boxed(dump, 3)  # two z_g plus the outer w
-    assert [(lb, ub) for _, lb, ub in aux] == [
-        (-20.0, 0.0)
-    ] * 3, f"outer w over z_g is not boxed by the per-row range:\n{dump}"
-
-
-@pytest.mark.min_max
-@pytest.mark.per_clause
-@pytest.mark.correctness
-def test_per_outer_minmax_over_group_sums_is_boxed(decidb_cli, tmp_path):
-    """`w` reducing over group SUMS needs its own derivation, not the per-row family's.
-
-    A group sum leaves any single row's range the moment the group holds more than one
-    row, so this auxiliary is boxed by the actual per-group sums: group 'a' reaches
-    3*4 + 5*4 = 32, group 'b' reaches 2*4 = 8, so w lives in [0, 32], or [-32, 0] as the negation a MAXIMIZE query
-    minimizes. Widening the per-row
-    range (20) by the row count (3) would also be correct but nearly twice as loose at 60,
-    and the looseness grows with the relation — which is the whole reason to derive it.
-    """
-    dump = _lowering(decidb_cli).dump_model(
-        f"""
-            SELECT id, x FROM {_GROUPED_ROWS}
-            DECIDE x(INT) SUCH THAT x <= 4
-            MAXIMIZE min(per g: sum(x * c) by (g))
-        """,
-        tmp_path / "per_outer_sums.dump",
-    )
-    assert _assert_all_boxed(dump, 1) == [
-        (3, -32.0, 0.0)
-    ], f"outer w over group sums is not boxed by the group-sum range:\n{dump}"
+    assert _helper_columns(dump, 3) == boxes, dump
 
 
 @pytest.mark.min_max
@@ -357,9 +330,11 @@ def test_composed_minmax_term_keeps_the_end_its_decision_can_derive(decidb_cli, 
     ],
 )
 def test_a_family_on_one_side_of_zero_is_not_stretched_to_zero(decidb_cli, tmp_path, decide, box, big_m):
-    """The extremum column is boxed by the family and the closing row's Big-M is the family's span, neither reaching 0."""
+    """The extremum column is boxed by the family and the closing row's Big-M is the family's span, neither reaching 0.
+    Two rows: a family of one member is that member, an equality with no Big-M (deck p. 112)."""
     dump = _lowering(decidb_cli).dump_model(
-        f"SELECT x FROM (SELECT 1 AS id) t DECIDE x(INT) SUCH THAT {decide} MINIMIZE SUM(x)", tmp_path / "family.dump"
+        f"SELECT x FROM (VALUES (1), (2)) t(id) DECIDE x(INT) SUCH THAT {decide} MINIMIZE SUM(x)",
+        tmp_path / "family.dump",
     )
     assert [(lb, ub) for _, lb, ub in _assert_all_boxed(dump, 1)] == [box], dump
     binary = int(re.search(r"^col (\d+): .* bin=1", dump, re.M)[1])

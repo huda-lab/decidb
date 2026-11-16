@@ -5,8 +5,11 @@ add_library_unity(
   decide_cast_policy.cpp
   decide_product_form.cpp
   decide_shape_check.cpp
+  decide_reducer_path.cpp
   decide_source_provenance.cpp
-  decide_term_split.cpp)
+  decide_term_split.cpp
+  decide_tree.cpp
+  decide_tree_compile.cpp)
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:duckdb_planner_decide>
     PARENT_SCOPE)

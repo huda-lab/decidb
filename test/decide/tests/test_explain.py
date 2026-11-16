@@ -581,13 +581,11 @@ def test_a_respelled_product_prints_its_canonical_line(decidb_cli):
 
 @pytest.mark.explain
 @pytest.mark.cons_aggregate
-def test_abs_clause_shows_the_rows_it_became(decidb_cli):
-    """One written clause, an account line and its solver rows, all grouped under it.
+def test_abs_clause_shows_its_source_and_account(decidb_cli):
+    """EXPLAIN keeps the written ABS clause and accounts for its hidden helper.
 
-    ``ABS`` linearizes into an auxiliary variable plus a lower envelope. Before
-    the layers those rows were loose lines naming ``__abs_aux_0__`` with no
-    account of where the auxiliary came from; the auxiliary now prints as the
-    ``abs(...)`` it stands for and the rewrite states what it did.
+    The F node owns the generated lower envelope, so those solver rows stay out of the
+    displayed plan. The account explains the auxiliary without exposing its internal name.
     """
     sql = """
         SELECT l_orderkey, l_quantity, x FROM lineitem WHERE l_orderkey < 100
@@ -599,12 +597,12 @@ def test_abs_clause_shows_the_rows_it_became(decidb_cli):
     packed = _packed(out)
     # The clause the user wrote heads the group.
     assert "ABS(x-20)<=5" in packed, _plan_text(out)
-    # Every generated row is subordinated, and the auxiliary never floats free: it
-    # prints as the ABS it stands for, in the account line and in each envelope row.
+    # The auxiliary never floats free and generated envelope rows stay internal.
     assert "__abs_aux_0__" not in packed, _plan_text(out)
     assert "abs(x-20)becomesanauxiliaryvariable" in packed, _plan_text(out)
-    assert packed.count("abs(x-20)") + packed.count("ABS(x-20)") >= 4, _plan_text(out)
-    assert packed.count(_REWRITTEN_MARK) >= 3, _plan_text(out)
+    assert "abs(x-20)-x" not in packed, _plan_text(out)
+    assert "abs(x-20)+x" not in packed, _plan_text(out)
+    assert packed.count(_REWRITTEN_MARK) == 1, _plan_text(out)
     # Nothing was attributed to no clause at all.
     assert "addedbyformulation" not in packed, _plan_text(out)
 
@@ -817,32 +815,9 @@ def test_a_maximize_objective_whose_like_terms_merge_reads_as_written(decidb_cli
     assert _objective_block(out).startswith("MAXIMIZESUM(x)+SUM(x)-3*SUM(x)≡-1*sum(x)"), _plan_text(out)
 
 
-@pytest.mark.explain
-@pytest.mark.parametrize(
-    "objective, shown",
-    [
-        # A MINIMIZE objective's negation is the user's own, and prints in its layer.
-        pytest.param(
-            "MINIMIZE -MAX(per g: SUM(x * w) by (g))",
-            "MINIMIZE-MAX(perg:SUM(x*w)by(g))≡-max(perg:sum(w*x)by(g))",
-            id="minimize-minus",
-        ),
-        # A MAXIMIZE objective's layer reads in the written sense, with the factor in place.
-        pytest.param(
-            "MAXIMIZE 2 * MAX(per g: SUM(x * w) by (g))",
-            "MAXIMIZE2*MAX(perg:SUM(x*w)by(g))≡2*max(perg:sum(w*x)by(g))",
-            id="maximize-factor",
-        ),
-    ],
-)
-def test_a_two_level_objective_prints_its_sign_and_factor(decidb_cli, objective, shown):
-    """The outer reducer prints as the two-level form where it stands in its term, so the sign and the factor around
-    it print too."""
-    sql = f"""
-        SELECT id, x FROM (VALUES (1, 'a', 2.0), (2, 'a', 3.0), (3, 'b', 4.0)) t(id, g, w)
-        DECIDE x(BOOL)
-        SUCH THAT per g: sum(x) by (g) >= 1
-        {objective}
-    """
-    out = _explain(decidb_cli, sql)
-    assert _objective_block(out).startswith(shown), _plan_text(out)
+def test_a_product_on_a_side_of_a_comparison_prints_bare(decidb_cli):
+    """A helper's label holds its own parentheses for arithmetic, which a whole side of a comparison does not need."""
+    sql = """SELECT id, x, y FROM (VALUES (1, 3.0::DOUBLE), (2, 4.0::DOUBLE)) t(id, c) DECIDE x(BOOL), y(INT)
+        SUCH THAT y <= 3 AND x * y <= 2 MAXIMIZE sum(x + y)"""
+    plan = _plan_text(_explain(decidb_cli, sql))
+    assert "x * y <= 2" in plan and "(x * y) <= 2" not in plan, plan

@@ -1197,7 +1197,12 @@ def test_r1_scoped_budget_oracle_solver_and_direct_agree(decidb_cli, oracle_solv
     def check_assignment(rows, columns, mode):
         _check_scoped_assignment(case_, rows, columns, oracle, mode)
 
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment)
+    # An objective whose value is 0 on every row, as one whose `when` keeps no row, is 0 whatever the decisions, which
+    # the solver path warns of.
+    objective = OBJECTIVES[case_.objective]
+    zero = objective.maximize is not None and all(objective.value(row) == 0 for row in case_.rows)
+    warnings = ["the objective is 0 whatever the decisions"] if zero else ()
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, warnings=warnings)
 
 
 @pytest.mark.cons_aggregate
@@ -1597,7 +1602,10 @@ def test_r1_data_budget_oracle_solver_and_direct_agree(decidb_cli, oracle_solver
         _check_data_budget_assignment(case_, rows, columns, oracle, mode)
 
     sql = _data_sql(case_)
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment)
+    # A limit NULL on every row skips every instance: the budget constrains nothing, which the solver path warns of.
+    rows = list(case_.rows)
+    emptied = any(all(limit(row, rows) is None for row in rows) for _, limit in case_.clauses)
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, warnings=["constrains nothing"] if emptied else ())
 
 
 # ---------------------------------------------------------------------------
@@ -2309,15 +2317,16 @@ def test_r1_copy_leaves_out_the_stored_strings_it_reads_back_by_row_id(decidb_cl
     # The copy's scan and the strings' scan; the stages read the copy.
     assert _count(plan, "CTE_SCAN") == 4 and _count(plan, "SEQ_SCAN") == 2, plan
     # The solver path carries no row id, so nothing is read back and its copy would hold the strings: it re-scans.
+    # It plans no side plan to read the source again either: the tree folds the data reducers in its descent.
     solver_query = (
         "SELECT id, x FROM (FROM r1_wide DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap AND SUM(w*x) <= SUM(w) by (g) / 2 "
         "AND SUM(w*x) <= SUM(cap) by (g) AND SUM(w*x) >= -SUM(v) by (g) MAXIMIZE SUM(v*x)) q"
     )
-    for limit, copied in (("32MB", False), ("4GB", True)):
+    for limit in ("32MB", "4GB"):
         solver_plan = decidb_cli.execute_raw(
             f"SET decide_direct_solve='off'; {VARCHAR_WIDE_SETUP} SET memory_limit='{limit}'; EXPLAIN {solver_query}"
         ).stdout
-        assert ("direct_source" in solver_plan) == copied, solver_plan
+        assert "direct_source" not in solver_plan, solver_plan
     answer = f"SELECT COUNT(*), ROUND(SUM(v * x), 6), SUM(length(pad_0)) FROM ({query})"
     assert decidb_cli.execute(f"{prefix} {answer}") == decidb_cli.execute(
         f"SET decide_direct_solve='off'; {VARCHAR_WIDE_SETUP} {answer}"
@@ -2478,8 +2487,10 @@ def test_r1_a_source_with_a_correlated_subquery_agrees_with_the_solver(decidb_cl
 def test_r1_a_volatile_source_is_read_once(decidb_cli):
     # random() changes on every evaluation, so the plan must not evaluate it once per stage: the rows it returns are one
     # set of rows, and the answer is an optimum for them. The check is independent of the solver: a greedy fill of the
-    # returned rows by v / w.
+    # returned rows by v / w. Seeded on one thread, so two runs print the same rows and a captured log compares; the
+    # seed is set through a table, which prints nothing.
     sql = (
+        "SET threads=1; CREATE TEMP TABLE _seed AS SELECT setseed(0.42); "
         "SELECT i, w, v, x FROM (FROM (SELECT i, 1.0 + floor(random() * 4) AS w, 1.0 + floor(random() * 9) AS v, 3.0 AS cap "
         "FROM range(300) t(i)) DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap AND SUM(w*x) <= 400 MAXIMIZE SUM(v*x)) q"
     )
@@ -3219,22 +3230,19 @@ def test_r1_leaves_clauses_of_different_scope_to_the_solver(decidb_cli):
 
 
 @pytest.mark.var_real
-@pytest.mark.error
 @pytest.mark.correctness
-def test_r1_a_limit_the_class_does_not_determine_raises_the_same_message_on_both_paths(decidb_cli):
+def test_r1_a_limit_that_varies_in_a_class_is_its_tightest_on_both_paths(decidb_cli):
+    # Classes a and c read several caps: one instance per variant (D70), each over the whole budget, so the budget is
+    # the tightest cap of all, 3, on both paths: 2 of the best value and 1 of the next.
     rows = "(1, 'c', 1.0, 1.0, 8), (2, 'c', 1.0, 2.0, 7), (3, 'a', 1.0, 3.0, 6), (4, 'a', 1.0, 4.0, 4), (5, 'b', 1.0, 5.0, 3)"
     sql = (
         f"SELECT id, amount FROM (FROM (VALUES {rows}) t(id, g, w, v, cap) "
         "DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND 2 AND per g: SUM(w*amount) <= cap "
-        "MAXIMIZE SUM(v*amount)) q"
+        "MAXIMIZE SUM(v*amount)) q ORDER BY id"
     )
-    messages = []
-    for mode in ("off", "require"):
-        with pytest.raises(DeciDBCliError) as error:
-            _run(decidb_cli, sql, mode)
-        messages.append(str(error.value))
-    assert "per g does not determine cap. g = 'a' has more than one value: 4.0, 6.0." in messages[0], messages[0]
-    assert messages[0] == messages[1]
+    answers = [_run(decidb_cli, sql, mode)[0] for mode in ("off", "require")]
+    for answer in answers:
+        assert [amount for _, amount in answer] == pytest.approx([0.0, 0.0, 0.0, 1.0, 2.0])
 
 
 # ---------------------------------------------------------------------------

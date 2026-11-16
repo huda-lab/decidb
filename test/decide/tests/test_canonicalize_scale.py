@@ -827,8 +827,10 @@ def test_only_the_reducer_under_a_boolean_gets_a_helper_in_the_objective(decidb_
     dump = decidb_cli_highs.dump_model(sql, tmp_path / "model.dump")
     assert re.search(r"^num_vars: 6$", dump, re.M), dump  # x, b, the helper and the product
     # The model minimizes, so the MAXIMIZE objective is its negation.
-    assert re.findall(r"^col [0-2]: .* obj=(\S+)$", dump, re.M) == ["-1", "-1", "-1"], dump
-    assert re.findall(r"^col 5: .* obj=(\S+)$", dump, re.M) == ["-1"], dump
+    objective = dict(re.findall(r"^col (\d+): .* obj=(\S+)$", dump, re.M))
+    assert [objective[col] for col in "012"] == ["-1", "-1", "-1"], dump
+    # b, the helper and the product, in the order their scopes lay them out: the product alone is read.
+    assert sorted(objective[col] for col in "345") == ["-1", "0", "0"], dump
 
 
 #: A BOOL is in {0, 1}, never negative, so it keeps the direction of the term it scales: the helper that holds the
@@ -873,7 +875,8 @@ def test_bool_decision_factor_per_row_in_the_objective_is_refused(decidb_cli):
         SUCH THAT x <= 3
         MAXIMIZE c * SUM(x)
     """,
-        match=r"does not determine the decision c",
+        match=r"the decision 'c' \(declared per row\) has more than one instance over the kept rows, so the objective "
+        r"would be produced more than once",
     )
 
 
@@ -1565,7 +1568,6 @@ def _canonical_reading(cli, clause):
     "clause, canonical",
     [
         pytest.param("((SUM(x) - 1) / 3) / 2 <= 0.5", "≡sum(x)/(2*3)<=1/(2*3)+0.5", id="two-quotients"),
-        pytest.param("(((SUM(x) - 1) / 3) / 2) / 5 <= 0.5", "≡sum(x)/(5*2*3)<=1/(5*2*3)+0.5", id="three-quotients"),
         pytest.param("((SUM(x) + 4) * 3) * 2 <= 90", "≡3*2*sum(x)<=-(3*2*4)+90", id="two-products"),
         pytest.param("((SUM(x) - 1) * 3) / 2 <= 4.5", "≡3/2*sum(x)<=3/2*1+4.5", id="product-then-quotient"),
     ],

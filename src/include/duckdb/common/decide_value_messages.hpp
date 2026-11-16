@@ -66,6 +66,12 @@ inline string DecideUnboundedMessage(bool diagnose_runs) {
 	                     : "DECIDE optimization is unbounded.";
 }
 
+//! The error for a NaN a frame's reducer reads (`written`, the reducer or range as written): an error wherever its
+//! aggregate would pass over it, as SQL's MIN does. A frame cannot stand in a `when`, so the edit names the column.
+inline string DecideFrameNanMessage(const string &written) {
+	return "DECIDE: " + written + " reads a NaN on some rows. Skip those rows with a 'when' on the column it reads.";
+}
+
 //! The objective as a TOO_LARGE message names it: the sense, then the objective as EXPLAIN prints it
 //! (`MAXIMIZE sum(a * x)`). Empty with no objective. The solver path and the direct-solve plans both build it here.
 inline string DecideWrittenObjective(DecideSense sense, const string &objective) {
@@ -74,52 +80,6 @@ inline string DecideWrittenObjective(DecideSense sense, const string &objective)
 	}
 	return (sense == DecideSense::MAXIMIZE ? "MAXIMIZE " : "MINIMIZE ") + objective;
 }
-
-//! The error of a scope check that finds a class showing more than one value or decision (language/guide.md §7.3).
-//! The solver path (PhysicalDecide::RunScopeChecks) and the direct-solve plans both raise it from this one text. A
-//! message names the least failing group of the check's key and quotes the group's least and greatest value, NULL
-//! after every value as ORDER BY places it, so it never depends on the order rows arrive in.
-struct DecideDeterminesText {
-	//! The key as written (`D.region`, `()`), what it must determine (`D.capacity`, a decision's name), and where the
-	//! check stands (`in by (D.region)`, `declared per row`); the context is empty for none.
-	string subject;
-	string object;
-	string context;
-	//! The order the clause wrote the key in, as indices into the key's elements; empty for the elements' order. The
-	//! values of a class are listed in it, as the subject names the key.
-	vector<idx_t> key_order;
-	//! The empty key: one class, so no group is named.
-	bool one_class = false;
-	//! The check is on a decision rather than on a value.
-	bool decision = false;
-
-	//! `items`, one per element of the key, in the order the clause wrote the key.
-	template <class T>
-	vector<T> InKeyOrder(const vector<T> &items) const {
-		if (key_order.size() != items.size()) {
-			return items;
-		}
-		vector<T> ordered;
-		for (auto index : key_order) {
-			ordered.push_back(items[index]);
-		}
-		return ordered;
-	}
-
-	//! A printf format: `%s` for the group (none for one class), then for a value check `%s, %s` for the least and the
-	//! greatest value.
-	string Format() const {
-		auto escaped = [](const string &text) {
-			return StringUtil::Replace(text, "%", "%%");
-		};
-		string head = "DECIDE: per " + escaped(subject) + " does not determine " + (decision ? "the decision " : "") +
-		              escaped(object) + (context.empty() ? "" : " (" + escaped(context) + ")") + ". ";
-		if (decision) {
-			return head + (one_class ? "The kept rows cover" : "%s covers") + " more than one " + escaped(object) + ".";
-		}
-		return head + (one_class ? "The kept rows have" : "%s has") + " more than one value: %s, %s.";
-	}
-};
 
 //! A value as SQL writes it in a message: 'East', 10, NULL. A number or a Boolean is bare, any other type is quoted.
 inline bool DecideLiteralIsBare(const LogicalType &type) {

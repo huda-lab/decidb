@@ -49,6 +49,9 @@ def _outcome(cli, sql, mode):
 
 
 _RULES = pytest.mark.parametrize("fixture", RULE_FIXTURES, ids=lambda fixture: fixture.rule)
+#: One rule's fixture, for a gate that ChooseDecideAnswer passes before it tries any rule (`off`, a forced backend,
+#: DIAGNOSE): no rule can change what it does.
+_ONE_RULE = pytest.mark.parametrize("fixture", RULE_FIXTURES[:1], ids=lambda fixture: fixture.rule)
 
 
 def _case_ids(cases):
@@ -206,7 +209,7 @@ def test_plain_forms_of_the_near_misses_apply(decidb_cli, fixture, case):
 
 
 @pytest.mark.correctness
-@_RULES
+@_ONE_RULE
 def test_off_and_a_forced_backend_keep_the_solver_path(request, decidb_cli, fixture):
     off = _raw(decidb_cli, f"EXPLAIN {fixture.applies}", mode="off").stdout
     assert _has_decide_operator(off) and "Direct solve" not in off
@@ -220,7 +223,7 @@ def test_off_and_a_forced_backend_keep_the_solver_path(request, decidb_cli, fixt
 
 
 @pytest.mark.correctness
-@_RULES
+@_ONE_RULE
 def test_diagnose_keeps_the_solver_path(decidb_cli, fixture):
     assert "conflicts with DIAGNOSE" in _raw(decidb_cli, f"DIAGNOSE {fixture.applies}").stderr
     diagnose_plan = _raw(decidb_cli, f"EXPLAIN DIAGNOSE {fixture.applies}", mode="auto").stdout

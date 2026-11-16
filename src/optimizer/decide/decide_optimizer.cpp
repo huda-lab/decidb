@@ -25,8 +25,10 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
+#include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
-#include "duckdb/planner/decide/decide_product_form.hpp"
+#include "duckdb/planner/decide/decide_tree.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
@@ -42,12 +44,9 @@ ObjectiveAggregateType decide_rewrite::StrToAggType(const string &name) {
 		return ObjectiveAggregateType::SUM;
 	if (name == "min")
 		return ObjectiveAggregateType::MIN_AGG;
-	if (name != "max") {
-		throw InternalException("DECIDE: aggregate '%s' reached the objective rewrite; the binder promises sum, min or "
-		                        "max there",
-		                        name);
-	}
-	return ObjectiveAggregateType::MAX_AGG;
+	if (name == "max")
+		return ObjectiveAggregateType::MAX_AGG;
+	return ObjectiveAggregateType::NONE;
 }
 
 //! Defined below with the other NORM marker helpers; called at the end of OptimizeDecide.
@@ -92,6 +91,9 @@ void DecideOptimizer::OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr
 	}
 	auto &decide = op->Cast<LogicalDecide>();
 
+	// The objective's sums of group sums of squares, summed in the other order: their weights are reducers over data
+	// the bound-side evaluator computes.
+	RunPass("optimizer.objective_summation", [&] { SwapObjectiveSummation(decide); });
 	// Pass 0, on every path: the bound-side evaluator, whose output both the direct-solve rules and the solver read.
 	RunPass("optimizer.rhs_aggregates", [&] { RewriteRhsAggregates(decide); });
 
@@ -112,28 +114,33 @@ void DecideOptimizer::OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr
 	}
 }
 
-void DecideOptimizer::InstallRowChecks(LogicalDecide &decide, LogicalOperator &root) {
-	auto checks = DirectTakeRowChecks(optimizer.context, decide);
-	DirectInstallRowChecks(optimizer, root, checks, decide);
+void DecideOptimizer::RetainRowChecks(LogicalDecide &decide) {
+	DirectRetainRowChecks(decide, DirectTakeRowChecks(optimizer.context, decide));
 }
 
 void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &root) {
 	RunPass("optimizer.record_bounds", [&] { RecordReducedBounds(optimizer, decide); });
 	RunPass("optimizer.tag_groups", [&] { TagAtomicRemovalGroups(decide); });
+	// A range over decisions becomes a helper before any rewrite copies it.
+	RunPass("optimizer.frame_ranges", [&] { RewriteFrameRanges(decide); });
+	// Preserve the polarity of ABS nodes in the written expression before the other rewrites move them into helper
+	// bodies. The later pass classifies ABS introduced by those rewrites.
+	RunPass("optimizer.tag_abs_source", [&] { TagAbsForBigM(optimizer.context, decide); });
+	// Nested reducers remain in their written positions; the tree lowers them as G nodes beneath their readers.
 	RunPass("optimizer.norm", [&] { RewriteNorm(decide); });
 	RunPass("optimizer.in_domain", [&] { RewriteInDomain(decide); });
-	// Must run before RewriteAbs: marks ABS nodes that need Big-M
+	// Classify ABS while the written reducer and clause context are still intact; later rewrites may move the function
+	// into a helper body or a composed MIN/MAX term.
 	RunPass("optimizer.tag_abs", [&] { TagAbsForBigM(optimizer.context, decide); });
-	// Creates aux vars replacing ABS nodes
-	RunPass("optimizer.abs", [&] { RewriteAbs(decide); });
-	// After every pass that adds a check: RewriteAbs refuses a bad value of an ABS term where it is read.
-	RunPass("optimizer.install_row_checks", [&] { InstallRowChecks(decide, root); });
 	// McCormick linearization for Boolean × anything bilinear products
 	RunPass("optimizer.bilinear", [&] { RewriteBilinear(decide); });
-	// A non-linear reducer body a MIN/MAX reads becomes a helper per row
-	RunPass("optimizer.define_bodies", [&] { DefineNonlinearReducerBodies(decide); });
+	// Reserve the plan-time columns and F-node specs before later MIN/MAX rewrites and term splitting consume them.
+	// The tree owns the definition functions and emits their E rows when its instances are known.
+	DecideTreeConstruction::PrepareDefinitionFunctions(optimizer.context, decide);
 	// The value rewrite: a VALUE-shape clause's reducers become helper decisions
 	RunPass("optimizer.scoped_reducers", [&] { RewriteScopedReducers(decide); });
+	// Reducers now nested in retained G bodies are decision variables; tag any products those substitutions exposed.
+	RunPass("optimizer.bilinear_nested_values", [&] { RewriteBilinear(decide); });
 	// Detect composed MIN/MAX before single-term MIN/MAX rewrite
 	RunPass("optimizer.composed_minmax", [&] { RewriteComposedMinMax(decide); });
 	// Classify + rewrite min/max (creates indicators and SUM nodes)
@@ -143,6 +150,12 @@ void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &r
 	});
 	RunPass("optimizer.not_equal", [&] { RewriteNotEqual(decide); });
 	RunPass("optimizer.avg", [&] { RewriteAvgToSum(decide); });
+	RunPass("optimizer.abs", [&] { RewriteAbs(decide); });
+	// Products outside ABS need the helper it just allocated; the first bilinear pass has already handled products
+	// inside ABS's operand and everywhere else.
+	RunPass("optimizer.bilinear_abs_factors", [&] { RewriteBilinear(decide); });
+	// After every pass that adds a check: RewriteAbs refuses a bad value of an ABS term where it is read.
+	RunPass("optimizer.retain_row_checks", [&] { RetainRowChecks(decide); });
 	// Must stay last among the rewrites: RewriteInDomain emits a floor-lowering bound
 	// that is itself a singleton-row bound, and every auxiliary variable must exist before the
 	// box is sized.
@@ -203,9 +216,12 @@ void decide_rewrite::CopyClauseProvenanceTags(const string &from_alias, Expressi
 	to.SetAlias(std::move(alias));
 }
 
-void decide_rewrite::MarkFormulationConstraint(Expression &expr, const string &source_alias) {
+void decide_rewrite::MarkFormulationConstraint(Expression &expr, const string &source_alias, idx_t defined) {
 	auto alias = expr.GetAlias();
 	AddDecideTag(alias, STRUCTURAL_CONSTRAINT_TAG);
+	if (defined != DConstants::INVALID_INDEX) {
+		AddDecideTag(alias, MakeDefinesTag(defined));
+	}
 	expr.SetAlias(std::move(alias));
 	CopyClauseProvenanceTags(source_alias, expr);
 }
@@ -246,16 +262,34 @@ DecideVarScopeInfo decide_rewrite::ScopeOf(const LogicalDecide &decide, const De
 		auto &ref = expr.Cast<BoundColumnRefExpression>();
 		if (ref.binding.table_index == decide.decide_index) {
 			auto var_idx = ref.binding.column_index;
-			return decide.variable_scopes[var_idx];
+			// A decision brings its declared scope. A reducer value helper's is a scope of its own, one class per
+			// group of its path key or per window of its frame (AddValueHelper), so what is computed from its value
+			// has an instance per group, not per row: a row's instance would make each row a variant of a scope
+			// reading it (`sum(per t.g: abs(avg(...)))`).
+			return var_idx < decide.variable_scopes.size() ? decide.variable_scopes[var_idx]
+			                                               : DecideVarScopeInfo::Row();
 		}
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		idx_t frame;
+		if (TryGetDecideFrame(expr, frame)) {
+			// Point frames are anchored at a row. Their value is one per anchor, even when the underlying order
+			// or timeline key is not a declared DECIDE scope.
+			return DecideVarScopeInfo::Row();
+		}
+		// An ungrouped reducer has one query-wide value. A reducer with a `by` or relation qualifier has multiple
+		// values whose groups are not a declared DECIDE scope, so its ABS helper must retain row identity.
+		idx_t qualifier;
+		if (TryParseQualifiedReducerTag(expr.GetAlias(), qualifier) ||
+		    DecideReducerGroupKey(expr.Cast<BoundAggregateExpression>()) != DConstants::INVALID_INDEX) {
+			return DecideVarScopeInfo::Row();
+		}
+		return DecideVarScopeInfo::Global();
 	}
 	if (canonicalizer.IsQueryWideConstant(expr)) {
 		return DecideVarScopeInfo::Global();
 	}
-	// A reducer is one value per group of its own `by`, which no declared scope names (ClassifyScoped reads it as a
-	// reducer term).
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
-	    expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		return DecideVarScopeInfo::Row();
 	}
 	auto scope = DecideVarScopeInfo::Global();
@@ -279,7 +313,7 @@ string decide_rewrite::RenderForPlan(const Expression &expr, const LogicalDecide
 	// The labels of the auxiliaries earlier passes made, so a construct over one prints
 	// it as what it stands for rather than by its internal name.
 	return RenderDecideSource(expr, DecidePlanNames(decide.source_text, decide.keyed_scopes, decide.keys,
-	                                                decide.decide_index, decide.aux_var_expressions));
+	                                                decide.decide_index, decide.aux_var_expressions, decide.frames));
 }
 
 idx_t decide_rewrite::SourceClauseOf(const Expression &comparison, const LogicalDecide &decide) {
@@ -354,13 +388,14 @@ static void VerifyNormMarkersLowered(LogicalDecide &decide) {
 //!
 //! The hard rows, the composed terms, the value links and the MIN/MAX objectives all read a
 //! member as a linear form; a square there is dropped without a word and the extremum is of
-//! something else. DefineNonlinearReducerBodies names every such body before they run, so
-//! a non-linear member here is a body that pass missed. The cheap half of a MIN/MAX
+//! something else. Definition F-node preparation registers every such body before they run, so
+//! a non-linear member here is a body the tree preparation missed. The cheap half of a MIN/MAX
 //! (MINMAX_EASY_REWRITE_TAG) bounds each member in its own quadratic row and is exempt.
 static void VerifyExtremumBodiesLinear(ClientContext &context, LogicalDecide &decide) {
 	const idx_t decide_index = decide.decide_index;
+	DecideTermSplitter splitter(context, decide);
 	auto check = [&](const Expression &body) {
-		if (!DecideDegreeOf(context, body, decide_index).IsLinear()) {
+		if (!splitter.IsLinear(body)) {
 			throw InternalException("DECIDE MIN/MAX member '%s' is not linear", body.ToString());
 		}
 	};
@@ -394,8 +429,7 @@ static void VerifyExtremumBodiesLinear(ClientContext &context, LogicalDecide &de
 	auto is_extremum_agg = [](ObjectiveAggregateType agg) {
 		return agg == ObjectiveAggregateType::MIN_AGG || agg == ObjectiveAggregateType::MAX_AGG;
 	};
-	if (decide.decide_objective && (is_extremum_agg(decide.flat_objective_agg) ||
-	                                is_extremum_agg(decide.per_inner_agg) || is_extremum_agg(decide.per_outer_agg))) {
+	if (decide.decide_objective && is_extremum_agg(decide.flat_objective_agg)) {
 		std::function<void(const Expression &)> bodies = [&](const Expression &expr) {
 			if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 				for (auto &child : expr.Cast<BoundAggregateExpression>().children) {
@@ -480,6 +514,15 @@ unique_ptr<Expression> decide_rewrite::ScopeRowPerInstance(const LogicalDecide &
                                                            const DecideVarScopeInfo &scope) {
 	if (!scope.IsGlobal() && !scope.IsKeyed()) {
 		return row;
+	}
+	// A range frame's helper has one instance per window of its frame, which no key's classes name
+	// (RewriteFrameRanges): a row of it stays one per row, each reading its window's instance, and the rows of one
+	// window say the same.
+	if (scope.IsKeyed()) {
+		auto link = decide.keyed_scopes[scope.keyed_scope_idx].value_link;
+		if (link != DConstants::INVALID_INDEX && decide.reducer_value_links[link].frame != DConstants::INVALID_INDEX) {
+			return row;
+		}
 	}
 	auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 	wrapper->children.push_back(std::move(row));

@@ -12,6 +12,7 @@ quote mode, possibly preceded by solver-license preamble lines (e.g. Gurobi).
 from __future__ import annotations
 
 import atexit
+import json
 import math
 import os
 import re
@@ -36,6 +37,15 @@ _STATUS_MARKER_PREFIX = "DECIDB_STATUS:"
 _NUMBER_RANGE_WARNING = (
     "DECIDE: a very large or very small number may make this answer inaccurate. Scale its data toward 1."
 )
+
+#: The prefix of a line DECIDE prints on stderr about a query it still answers: a clause left with no instance, an
+#: objective that is 0 whatever the decisions (language/guide.md §7.4). Only the solver path prints one.
+DECIDE_WARNING_PREFIX = "DECIDE warning: "
+
+
+class DecideWarningMismatch(Exception):
+    """A DECIDE warning the test did not declare, or a declared one not printed once per query run. Not a
+    ``DeciDBCliError`` or an ``AssertionError``, for the reason ``NumberRangeWarningMismatch`` is not."""
 
 
 class NumberRangeWarningMismatch(Exception):
@@ -99,6 +109,20 @@ _VERIFY_SERIALIZER_ENV = "DECIDB_VERIFY_SERIALIZER"
 #: as ``DECIDB_FORCE_SOLVER`` runs it against one backend. A test that sets the mode itself wins.
 _DIRECT_SOLVE_ENV = "DECIDB_TEST_DIRECT_SOLVE"
 
+#: Names a directory to turn the suite log on (see ``_log_query``). Unset, nothing is written.
+_SUITE_LOG_ENV = "DECIDB_SUITE_LOG"
+
+#: This run's mode of ``run_direct_matrix.sh``: a log compares with another log of the same mode. Read here and not per
+#: query, because a test may unset a switch for itself (``monkeypatch.delenv``) and the run stays the mode it was.
+_SUITE_MODE = (
+    ",".join(
+        f"{name}={os.environ[name]}"
+        for name in (_DIRECT_SOLVE_ENV, _VERIFY_SERIALIZER_ENV, "DECIDB_FORCE_SOLVER")
+        if os.environ.get(name)
+    )
+    or "auto"
+)
+
 _MODEL_DUMP_BEGIN = "=== DECIDB MODEL DUMP ==="
 _MODEL_DUMP_END = "=== END MODEL DUMP ==="
 
@@ -142,10 +166,39 @@ def assert_no_removed_spelling(result: subprocess.CompletedProcess, sql: str) ->
     )
 
 
-def _check(result: subprocess.CompletedProcess, sql: str, removed_spelling: bool) -> subprocess.CompletedProcess:
+def _log_query(result: subprocess.CompletedProcess, sql: str, env: dict[str, str] | None) -> None:
+    """Append what ``sql`` printed to the suite log, when ``DECIDB_SUITE_LOG`` names a directory.
+
+    One JSON line per query, written as the CLI printed it: what may legally vary is settled when two logs are
+    compared (``suite_log.py``), so a rule can change without capturing again. Each pytest-xdist worker
+    appends to a file of its own, so no two processes share one. ``env`` keeps only what this wrapper set beside the
+    run's environment, since the same SQL under another overlay is another query.
+    """
+    directory = os.environ.get(_SUITE_LOG_ENV)
+    if not directory:
+        return
+    record = {
+        "mode": _SUITE_MODE,
+        "test": os.environ.get("PYTEST_CURRENT_TEST", ""),
+        "env": {k: v for k, v in (env or {}).items() if os.environ.get(k) != v and k not in _PER_TEST_ENV},
+        "sql": sql,
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
+    Path(directory).mkdir(parents=True, exist_ok=True)
+    with (Path(directory) / f"{os.environ.get('PYTEST_XDIST_WORKER', 'main')}.jsonl").open("a") as log:
+        log.write(json.dumps(record) + "\n")
+
+
+def _check(
+    result: subprocess.CompletedProcess, sql: str, removed_spelling: bool, env: dict[str, str] | None
+) -> subprocess.CompletedProcess:
     """Fail the calling test if the query showed the user an internal error or an internal
     tag: no query, accepted or refused, may do either. Unless ``removed_spelling`` says the
-    test is about one, a removed-spelling error fails it too."""
+    test is about one, a removed-spelling error fails it too. Every query this wrapper runs
+    comes through here, so this is where the suite log hears of it, before a failure can end the test."""
+    _log_query(result, sql, env)
     assert_no_internal_leak(result, f"the query {sql[:300]!r}", sql)
     if not removed_spelling:
         assert_no_removed_spelling(result, sql)
@@ -158,7 +211,7 @@ def _run(argv: list[str], sql: str, *, removed_spelling: bool = False, **kwargs)
     proc = subprocess.run(argv, capture_output=True, text=True, **kwargs)
     if _ERROR_HEADER.search(proc.stderr):
         proc = subprocess.CompletedProcess(proc.args, proc.returncode or 1, proc.stdout, proc.stderr)
-    return _check(proc, sql, removed_spelling)
+    return _check(proc, sql, removed_spelling, kwargs.get("env"))
 
 
 #: Set to ``0`` to start a new process for every query, as the wrapper did before sessions.
@@ -295,7 +348,7 @@ def _run_in_session(
     if not session.alive():
         session.close()
         del _SESSIONS[key]
-    return _check(result, sql, removed_spelling)
+    return _check(result, sql, removed_spelling, env)
 
 
 #: The shell mode ``execute`` reads results in. JSON would do, but it writes a NaN as ``null``, the same as a
@@ -467,8 +520,46 @@ class DeciDBCli:
             return None
         return {**os.environ, **overlay}
 
+    def warnings(self, stderr: str) -> tuple[list[str], str]:
+        """The DECIDE warnings ``stderr`` holds, each once and without its prefix, and the rest of ``stderr``. Under
+        ``verify_serializer`` the harness runs a query twice, and each run prints its warnings."""
+        lines = stderr.splitlines(keepends=True)
+        printed = [
+            line.strip()[len(DECIDE_WARNING_PREFIX) :] for line in lines if line.startswith(DECIDE_WARNING_PREFIX)
+        ]
+        runs = 2 if self.verify_serializer else 1
+        once = printed[: len(printed) // runs]
+        if once * runs != printed:
+            raise DecideWarningMismatch(f"the {runs} runs of the query printed other warnings: {printed}")
+        return once, "".join(line for line in lines if not line.startswith(DECIDE_WARNING_PREFIX))
+
+    def settle_warnings(self, stderr: str, expected=()) -> str:
+        """``stderr`` without its DECIDE warnings, after checking each is one the test declared -- a text it holds --
+        and each declared one is printed once; ``expected`` may instead be how many, for a test whose oracle counts
+        them. The warning is part of the output, as the number-range one is."""
+        warnings, rest = self.warnings(stderr)
+        if isinstance(expected, int):
+            if len(warnings) != expected:
+                raise DecideWarningMismatch(
+                    f"expected {expected} DECIDE warning(s), printed {warnings}\nstderr: {stderr[:500]}"
+                )
+            return rest
+        undeclared = [warning for warning in warnings if not any(text in warning for text in expected)]
+        missing = [text for text in expected if sum(text in warning for warning in warnings) != 1]
+        if undeclared or missing:
+            raise DecideWarningMismatch(
+                f"undeclared DECIDE warnings {undeclared}, declared ones not printed once {missing}\n"
+                f"stderr: {stderr[:500]}"
+            )
+        return rest
+
     def execute(
-        self, sql: str, *, timeout: float = 120, expect_number_range: bool | dict[str, bool] = False
+        self,
+        sql: str,
+        *,
+        timeout: float = 120,
+        expect_number_range: bool | dict[str, bool] = False,
+        expect_warnings=(),
     ) -> tuple[list[tuple], list[str]]:
         """Run a SQL query and return ``(rows, column_names)``.
 
@@ -480,13 +571,18 @@ class DeciDBCli:
         DeciDBCliError
             If the CLI writes anything to stderr (error messages), including the number-range warning
             when the test did not declare it with ``expect_number_range``; a declared one must be printed.
+        DecideWarningMismatch
+            If a DECIDE warning is printed the test did not declare in ``expect_warnings`` (a text each holds), or a
+            declared one is not printed.
         """
         env = self._subprocess_env(status_markers=True)
         proc = _run_in_session(self._argv(), sql, env, mode=_RESULT_MODE, timeout=timeout) or _run(
             self._argv("-cmd", f".mode {_RESULT_MODE}", "-c", sql), sql, timeout=timeout, env=env
         )
 
-        stderr = self._settle_number_range_warning(proc.stderr, expect_number_range).strip()
+        stderr = self.settle_warnings(
+            self._settle_number_range_warning(proc.stderr, expect_number_range), expect_warnings
+        ).strip()
         # Filter known solver warnings (not errors), and lift out any DECIDB_STATUS
         # marker so the terminal is available structurally instead of by grepping the
         # user-facing message.
@@ -510,7 +606,13 @@ class DeciDBCli:
         return [tuple(values[i] for i in last.values()) for values in table[1:]], list(last)
 
     def dump_model(
-        self, sql: str, path, *, timeout: float = 120, expect_number_range: bool | dict[str, bool] = False
+        self,
+        sql: str,
+        path,
+        *,
+        timeout: float = 120,
+        expect_number_range: bool | dict[str, bool] = False,
+        expect_warnings=(),
     ) -> str:
         """Run a query with ``DECIDB_DUMP_MODEL`` on and return the dumped model text.
 
@@ -531,8 +633,9 @@ class DeciDBCli:
         proc = _run(cli._argv("-c", sql), sql, timeout=timeout, env=env)
         errors = [
             line
-            for line in self._settle_number_range_warning(
-                proc.stderr, expect_number_range, direct_solve=False
+            for line in self.settle_warnings(
+                self._settle_number_range_warning(proc.stderr, expect_number_range, direct_solve=False),
+                expect_warnings,
             ).splitlines()
             if line and not line.startswith("Warning:")
         ]
@@ -596,13 +699,14 @@ class DeciDBCli:
             # the controlling terminal. Other non-interactive tests exercise the same
             # plan fields under the suite-wide serializer guard.
             argv = [self.exe, self.db, "-readonly"]
+            env = self._subprocess_env()
             proc = subprocess.Popen(
                 argv + ["-c", sql],
                 stdin=slave_fd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                env=self._subprocess_env(),
+                env=env,
             )
             os.close(slave_fd)  # parent keeps only the master end
             slave_fd = -1
@@ -613,10 +717,7 @@ class DeciDBCli:
             os.close(master_fd)
             if slave_fd >= 0:
                 os.close(slave_fd)
-        result = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
-        assert_no_internal_leak(result, f"the query {sql[:300]!r}", sql)
-        assert_no_removed_spelling(result, sql)
-        return result
+        return _check(subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr), sql, False, env)
 
     def execute_interrupted(
         self, sql: str, *, after: float, timeout: float = 30
@@ -627,12 +728,13 @@ class DeciDBCli:
         Like ``execute_interactive``, it skips the serializer self-check: that wrapper
         re-runs the query, so the interrupt would not land on the first solve.
         """
+        env = self._subprocess_env()
         proc = subprocess.Popen(
             [self.exe, self.db, "-readonly", "-c", sql],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=self._subprocess_env(),
+            env=env,
         )
         time.sleep(after)
         signalled = time.time()
@@ -643,10 +745,7 @@ class DeciDBCli:
             proc.kill()
             stdout, stderr = proc.communicate()
         latency = time.time() - signalled
-        result = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
-        assert_no_internal_leak(result, f"the query {sql[:300]!r}", sql)
-        assert_no_removed_spelling(result, sql)
-        return result, latency
+        return _check(subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr), sql, False, env), latency
 
     def execute_counting_cpu(self, sql: str, *, timeout: float = 120) -> tuple[subprocess.CompletedProcess, float]:
         """Run *sql* in a process of its own and return ``(result, cpu)``, where cpu is the CPU seconds the process
@@ -660,13 +759,14 @@ class DeciDBCli:
         if direct_mode:
             argv += ["-cmd", f"SET decide_direct_solve='{direct_mode}';"]
         before = resource.getrusage(resource.RUSAGE_CHILDREN)
+        env = self._subprocess_env()
         proc = subprocess.Popen(
             argv + ["-c", sql],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=self._subprocess_env(),
+            env=env,
         )
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
@@ -675,10 +775,7 @@ class DeciDBCli:
             stdout, stderr = proc.communicate()
         after = resource.getrusage(resource.RUSAGE_CHILDREN)
         cpu = (after.ru_utime - before.ru_utime) + (after.ru_stime - before.ru_stime)
-        result = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
-        assert_no_internal_leak(result, f"the query {sql[:300]!r}", sql)
-        assert_no_removed_spelling(result, sql)
-        return result, cpu
+        return _check(subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr), sql, False, env), cpu
 
     def assert_error(
         self,

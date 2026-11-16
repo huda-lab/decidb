@@ -16,7 +16,7 @@ from solver.types import ObjSense
 
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
 from ._direct_oracle_common import agree_with_oracle
-from .test_direct_o1_monge_assignment import _abs, _case, _check_assignment, _oracle_model, _sql, _squared
+from .test_direct_o1_monge_assignment import _abs, _case, _check_assignment, _oracle_model, _sql
 
 _T = "(VALUES (1, 1.5, 3), (2, 2.5, 5), (3, 3.5, 4), (4, 4.5, 6)) t(id, v, w)"
 
@@ -41,21 +41,10 @@ def _plan(cli, sql):
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-@pytest.mark.parametrize(
-    "objective,cost",
-    [
-        ("MINIMIZE SUM((l.lpos - r.rpos) ** 2 * x)", _squared),
-        ("MINIMIZE SUM((l.lpos - r.rpos) ^ 2 * x)", _squared),
-        ("MINIMIZE SUM(pow(l.lpos - r.rpos, 2) * x)", _squared),
-        ("MINIMIZE SUM((@(l.lpos - r.rpos)) * x)", _abs),
-    ],
-    ids=["double_star", "caret", "pow", "at_sign"],
-)
-def test_alias_o1_monge_reads_a_square_or_an_absolute_value_under_any_spelling(
-    decidb_cli, oracle_solver, objective, cost
-):
-    """O1 answers a cost written with any name of its function, on `require` as on the solver path."""
-    case = _case(objective, cost)
+def test_alias_o1_monge_reads_an_absolute_value_under_another_name(decidb_cli, oracle_solver):
+    """O1 answers a cost written under another name of its function, on `require` as on the solver path. Its own suite
+    writes POWER, an alias of `**`, and ABS; this one writes `@`."""
+    case = _case("MINIMIZE SUM((@(l.lpos - r.rpos)) * x)", _abs)
     oracle = _oracle_model(oracle_solver, case)
     agree_with_oracle(
         decidb_cli,
@@ -69,10 +58,9 @@ def test_alias_o1_monge_reads_a_square_or_an_absolute_value_under_any_spelling(
 @pytest.mark.var_real
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-@pytest.mark.parametrize("alias", ["@", "abs", "ABS"])
-def test_alias_abs_over_a_decision_builds_the_model_of_abs(decidb_cli, tmp_path, alias):
-    """`@(x - w)` and `abs(x - w)` are accepted over a decision and build what `ABS(x - w)` builds."""
-    sql = f"SELECT id, x FROM {_T} DECIDE x(REAL) SUCH THAT x <= 4 MINIMIZE SUM({alias}(x - w))"
+def test_alias_abs_over_a_decision_builds_the_model_of_abs(decidb_cli, tmp_path):
+    """`@(x - w)` is accepted over a decision and builds what `ABS(x - w)` builds."""
+    sql = f"SELECT id, x FROM {_T} DECIDE x(REAL) SUCH THAT x <= 4 MINIMIZE SUM(@(x - w))"
     reference = f"SELECT id, x FROM {_T} DECIDE x(REAL) SUCH THAT x <= 4 MINIMIZE SUM(ABS(x - w))"
     assert _rows(decidb_cli, f"{sql} ORDER BY id") == _rows(decidb_cli, f"{reference} ORDER BY id")
     assert _model(decidb_cli, sql, tmp_path) == _model(decidb_cli, reference, tmp_path)
@@ -81,16 +69,8 @@ def test_alias_abs_over_a_decision_builds_the_model_of_abs(decidb_cli, tmp_path,
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-@pytest.mark.parametrize(
-    "written,primary",
-    [
-        ("multiply(x, w)", "x * w"),
-        ("add(x * w, 1)", "x * w + 1"),
-        ("subtract(x * w, 1)", "x * w - 1"),
-    ],
-    ids=["multiply", "add", "subtract"],
-)
-def test_alias_arithmetic_over_a_decision_builds_the_model_of_its_operator(decidb_cli, tmp_path, written, primary):
+def test_alias_arithmetic_over_a_decision_builds_the_model_of_its_operator(decidb_cli, tmp_path):
+    written, primary = "multiply(x, w)", "x * w"
     sql = "SELECT id, x FROM {t} DECIDE x(BOOL) SUCH THAT SUM({e}) <= 7 MAXIMIZE SUM(x * v)"
     assert _rows(decidb_cli, sql.format(t=_T, e=written) + " ORDER BY id") == _rows(
         decidb_cli, sql.format(t=_T, e=primary) + " ORDER BY id"
@@ -116,8 +96,8 @@ def test_alias_pow_and_power_in_one_product_are_a_square(decidb_cli_highs, tmp_p
 @pytest.mark.correctness
 @pytest.mark.parametrize(
     "written,primary",
-    [("add(x, 0.5) < 3", "x + 0.5 < 3"), ("subtract(x, 0.5) > 1", "x - 0.5 > 1"), ("pow(x, 2) < 10", "x ** 2 < 10")],
-    ids=["add", "subtract", "pow"],
+    [("add(x, 0.5) < 3", "x + 0.5 < 3"), ("pow(x, 2) < 10", "x ** 2 < 10")],
+    ids=["add", "pow"],
 )
 def test_alias_whole_number_check_of_a_strict_comparison_reads_the_primary(decidb_cli, written, primary):
     """The binder's whole-number check for `<` and `>` reads `add(x, 0.5)` as `x + 0.5`."""
@@ -157,12 +137,13 @@ def test_alias_objective_composition_of_a_reducer_reads_the_primary(decidb_cli, 
 @pytest.mark.error
 @pytest.mark.correctness
 def test_alias_data_aggregate_factor_is_refused_as_its_operator_is(decidb_cli):
-    """`multiply(avg(v), x)` is refused as `avg(v) * x` is: the data aggregate would be spread over the rows."""
-    sql = "SELECT id, x FROM {t} DECIDE x(INT) SUCH THAT x <= 4 MAXIMIZE SUM({e})"
+    """`multiply(avg(v), SUM(x))` is refused as `avg(v) * SUM(x)` is: a data aggregate does not multiply a reducer.
+    (Inside a reducer, `SUM(avg(v) * x)`, it is a coefficient.)"""
+    sql = "SELECT id, x FROM {t} DECIDE x(INT) SUCH THAT x <= 4 MAXIMIZE {e}"
     with pytest.raises(DeciDBCliError) as primary:
-        decidb_cli.execute(sql.format(t=_T, e="avg(v) * x"))
+        decidb_cli.execute(sql.format(t=_T, e="avg(v) * SUM(x)"))
     with pytest.raises(DeciDBCliError) as alias:
-        decidb_cli.execute(sql.format(t=_T, e="multiply(avg(v), x)"))
+        decidb_cli.execute(sql.format(t=_T, e="multiply(avg(v), SUM(x))"))
     assert "cannot multiply a decision variable" in str(primary.value)
     assert str(alias.value) == str(primary.value)
 
@@ -187,7 +168,7 @@ def test_alias_mean_answers_as_avg(decidb_cli, tmp_path):
 @pytest.mark.correctness
 @pytest.mark.parametrize(
     "written,reprinted",
-    [("abs(x - v)", "↳abs(x-v)becomes"), ("ABS(x - v)", "↳abs(x-v)becomes"), ("@(x - v)", "↳@(x-v)becomes")],
+    [("abs(x - v)", "↳abs(x-v)becomes"), ("@(x - v)", "↳@(x-v)becomes")],
 )
 def test_alias_explain_shows_the_name_as_written(decidb_cli, written, reprinted):
     """The plan reprints the decision structure of `abs(x - v)` from the bound tree, under the name written."""
@@ -199,19 +180,16 @@ def test_alias_explain_shows_the_name_as_written(decidb_cli, written, reprinted)
 @pytest.mark.explain
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-@pytest.mark.parametrize("written", ["abs", "ABS"])
-def test_alias_explain_canonical_form_reprints_a_call_as_written(decidb_cli, written):
+def test_alias_explain_canonical_form_reprints_a_call_as_written(decidb_cli):
     """The canonical objective moves the coefficient left and reprints the call from the bound tree."""
-    plan = _plan(
-        decidb_cli, f"SELECT id, x FROM {_T} DECIDE x(REAL) SUCH THAT x <= 10 MINIMIZE SUM({written}(x - v) * w)"
-    )
+    plan = _plan(decidb_cli, f"SELECT id, x FROM {_T} DECIDE x(REAL) SUCH THAT x <= 10 MINIMIZE SUM(abs(x - v) * w)")
     assert "≡sum(w*abs(x-v))" in plan and "@" not in plan, plan
 
 
 @pytest.mark.explain
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-@pytest.mark.parametrize("written", ["pow(x - v, 2)", "power(x - v, 2)", "(x - v) ^ 2", "(x - v) ** 2"])
+@pytest.mark.parametrize("written", ["pow(x - v, 2)", "(x - v) ** 2"])
 def test_alias_explain_shows_a_power_as_written(decidb_cli, written):
     plan = _plan(decidb_cli, f"SELECT id, x FROM {_T} DECIDE x(REAL) SUCH THAT x <= 10 MINIMIZE SUM({written} * w)")
     assert "MINIMIZESUM(" + "".join(written.split()) + "*w)" in plan, plan
@@ -234,20 +212,11 @@ def test_alias_explain_shows_a_name_in_data_and_a_reducer_as_written(decidb_cli)
 
 @pytest.mark.error
 @pytest.mark.correctness
-@pytest.mark.parametrize(
-    "written,fragment",
-    [
-        ("mod(x, 2) <= 1", "function 'mod' cannot take a DECIDE variable"),
-        ("x % 2 <= 1", "operator '%' cannot take a DECIDE variable"),
-        ("ceiling(x) <= 3", "function 'ceiling' cannot take a DECIDE variable"),
-        ("SUM(divide(x * w, 2)) <= 3", "function 'divide' cannot take a DECIDE variable"),
-    ],
-    ids=["mod", "percent", "ceiling", "divide_in_a_reducer"],
-)
-def test_alias_a_refusal_names_the_function_as_written(decidb_cli, written, fragment):
+def test_alias_a_refusal_names_the_function_as_written(decidb_cli):
+    """`mod` is an alias of `%`: the refusal names the call as written."""
     with pytest.raises(DeciDBCliError) as error:
-        decidb_cli.execute(f"SELECT id, x FROM {_T} DECIDE x(INT) SUCH THAT {written} MAXIMIZE SUM(x)")
-    assert fragment in str(error.value)
+        decidb_cli.execute(f"SELECT id, x FROM {_T} DECIDE x(INT) SUCH THAT mod(x, 2) <= 1 MAXIMIZE SUM(x)")
+    assert "function 'mod' cannot take a DECIDE variable" in str(error.value)
 
 
 @pytest.mark.error
@@ -295,11 +264,10 @@ def test_alias_mean_and_avg_of_one_body_share_a_helper(decidb_cli, tmp_path):
 @pytest.mark.explain
 @pytest.mark.var_real
 @pytest.mark.correctness
-@pytest.mark.parametrize("second", ["@(x - v)", "ABS(x - v)", "abs(x - v)"])
-def test_alias_two_names_of_one_call_over_a_decision_are_one_square(decidb_cli, second):
+def test_alias_two_names_of_one_call_over_a_decision_are_one_square(decidb_cli):
     """`abs(x - v) * @(x - v)` is the square of one factor: the names the two calls were written under are display."""
     plan = _plan(
-        decidb_cli, f"SELECT id, x FROM {_T} DECIDE x(REAL) SUCH THAT x <= 10 MINIMIZE SUM(abs(x - v) * {second})"
+        decidb_cli, f"SELECT id, x FROM {_T} DECIDE x(REAL) SUCH THAT x <= 10 MINIMIZE SUM(abs(x - v) * @(x - v))"
     )
     assert "≡sum(power(abs(x-v),2))" in plan, plan
 

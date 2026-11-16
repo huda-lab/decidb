@@ -15,6 +15,7 @@ Model size is read from DECIDB_DUMP_MODEL; optima are judged against
 
 import pytest
 
+from . import _anr_oracle as anr
 from ._brute_force import judge_rows
 from ._diagnose_relation import rows as diagnose_rows
 from ._diagnose_relation import run as run_diagnose
@@ -236,30 +237,15 @@ def test_a_key_that_is_null_on_every_row_is_no_group(decidb_cli, scope_solver):
         ),
     ]
     objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"x": 1}),))
-    result = aligned(answer(decidb_cli, sql), model, "id")
+    # A direct-solve rule answers it silently; the solver path warns that the bound's clause constrains nothing.
+    clause = "x <= max(when t.id > 1: t.v) by (t.g || t.h)"
+    warnings = [] if decidb_cli.leaves_direct_solve_on() else [f"'{clause}' constrains nothing"]
+    result = aligned(answer(decidb_cli, sql, warnings), model, "id")
     assert (
         model.judge_scoped(result, clauses, objective)
         == pytest.approx(model.solve_scoped(scope_solver, clauses, objective))
         == 40
     )
-
-
-def test_a_key_shared_by_a_decision_and_a_by_is_computed_once(decidb_cli):
-    """The decision's entities and the reducer's groups read one grouping of `g`. One execution is counted, so the
-    serializer check, which runs the query again from the round-tripped plan, is off."""
-    sql = """SET decide_direct_solve='off';
-        SELECT id, x FROM (VALUES (1, 'a'), (2, 'a'), (3, 'b')) t(id, g)
-        DECIDE per g: x(INT)
-        SUCH THAT x <= 9 AND sum(x) by (g) <= 12
-        MAXIMIZE SUM(x)"""
-    result = decidb_cli.without_verify_serializer().with_env({"DECIDB_PROFILE": "1"}).execute_raw(sql)
-    assert result.returncode == 0, result.stderr
-    groupings = [
-        line
-        for line in result.stderr.splitlines()
-        if '"event":"begin"' in line and '"name":"extraction.group_ids"' in line
-    ]
-    assert len(groupings) == 1, result.stderr
 
 
 @pytest.mark.correctness
@@ -873,7 +859,8 @@ def test_a_square_in_a_grouped_reducer(decidb_cli_gurobi):
 # ---------------------------------------------------------------------------
 # Refused shapes and errors. The shapes the value rewrite answers -- a decision beside a
 # reducer, reducers with different by keys, MIN/MAX beside another term with a by or a
-# varying bound, a reducer inside another expression -- run in test_scope_value_rewrite.py.
+# varying bound, a reducer inside another expression -- run in test_scope_value_rewrite.py;
+# a reducer inside a reducer in test_anr_nested.py, and once here.
 # ---------------------------------------------------------------------------
 
 
@@ -903,11 +890,6 @@ def test_a_square_in_a_grouped_reducer(decidb_cli_gurobi):
             id="decision-in-by",
         ),
         pytest.param(
-            "sum(max(ship) by (D.region)) <= 5",
-            "DECIDE: an aggregate inside an aggregate is not supported yet",
-            id="nested",
-        ),
-        pytest.param(
             "per D.region: avg(ship) by (D.region) < 3",
             "Comparison '<' is not supported here: 'avg(ship) by (D.region)' has type DOUBLE",
             id="strict-avg-with-by",
@@ -933,6 +915,24 @@ def test_refused_shapes(decidb_cli, clause, message):
     result = decidb_cli.execute_raw(_ship_query(clause))
     assert message in result.stderr, result.stderr
     assert_no_internal_leak(result, "a refused by shape")
+
+
+@pytest.mark.correctness
+def test_a_nested_reducer_reads_its_by_group(decidb_cli, scope_solver):
+    """`sum(max(ship) by (D.region)) <= 5`: every shipment reads its region's largest
+    shipment, so the five shipments' readings sum to at most 5. Judged by `_anr_oracle`,
+    which states nesting."""
+    ship = anr.Var("ship")
+    clauses = [
+        anr.clause(anr.le(ship, anr.Col("demand"))),
+        anr.clause(anr.le(anr.reduce("sum", anr.reduce("max", ship, by=("region",))), 5)),
+    ]
+    objective = anr.Objective(ObjSense.MAXIMIZE, anr.reduce("sum", ship))
+    model = anr.AnrModel(joined(), [anr.Decision("ship")])
+    result = aligned(answer(decidb_cli, _ship_query("sum(max(ship) by (D.region)) <= 5")), model)
+    assert model.judge(result, clauses, objective) == pytest.approx(
+        model.solve(scope_solver, clauses, objective).objective
+    )
 
 
 @pytest.mark.error

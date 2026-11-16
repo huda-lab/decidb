@@ -510,12 +510,13 @@ def test_unqualified_using_column_is_the_kept_side(decidb_cli, tmp_path):
     right = dump("depotID", more_depots, "RIGHT JOIN", "right")
     assert right == dump("D.depotID", more_depots, "RIGHT JOIN", "right_depot")
     assert _num_vars(right) == 5
-    assert _num_vars(dump("S.depotID", more_depots, "RIGHT JOIN", "right_shipment")) == 4
+    # The NULL shipment side is in no class of S.depotID: no decision, and no column.
+    assert _num_vars(dump("S.depotID", more_depots, "RIGHT JOIN", "right_shipment")) == 3
     # Only D1 exists: LEFT JOIN keeps every shipment with a NULL depot side.
     left = dump("depotID", DEPOTS[:1], "LEFT JOIN", "left")
     assert left == dump("S.depotID", DEPOTS[:1], "LEFT JOIN", "left_shipment")
     assert _num_vars(left) == 3
-    assert _num_vars(dump("D.depotID", DEPOTS[:1], "LEFT JOIN", "left_depot")) == 2
+    assert _num_vars(dump("D.depotID", DEPOTS[:1], "LEFT JOIN", "left_depot")) == 1
 
 
 # ---------------------------------------------------------------------------

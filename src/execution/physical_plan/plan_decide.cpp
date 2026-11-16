@@ -6,6 +6,7 @@
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/decide/decide_tree.hpp"
 #include "duckdb/decidb/solver/ilp_solver.hpp"
 #include "duckdb/optimizer/decide/decide_linear_form.hpp"
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
@@ -42,7 +43,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	// re-enters through LogicalDecide::SetObjective, so a rewrite that breaks the
 	// canonical form should fail loudly rather than reach the extractor.
 	if (op.decide_constraints || op.decide_objective) {
-		DecideCanonicalizer canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes,
+		DecideCanonicalizer canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.keys,
 		                                  op.is_boolean_var);
 		if (op.decide_constraints) {
 			canonicalizer.VerifyCanonical(*op.decide_constraints);
@@ -51,20 +52,25 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 			canonicalizer.VerifyCanonicalObjective(*op.decide_objective);
 		}
 	}
-	// Flatten the verified tree into the prepared linear form. The pass itself is
+	// Lower the verified clauses into the tree's terms. The pass itself is
 	// owned by stage 05 (src/optimizer/decide/decide_linear_form.cpp); it is TRIGGERED
 	// here because this is the first point at which column bindings are final. The
-	// prepared terms hold copies of the coefficient subtrees, and RemoveUnusedColumns,
+	// lowered terms hold copies of the coefficient subtrees, and RemoveUnusedColumns,
 	// ColumnLifetimeAnalyzer and late materialization all rebind the operator's own
 	// expressions after the DECIDE optimizer runs -- copies taken earlier would keep
 	// bindings that no longer name the right input columns.
-	BuildDecidePreparedModel(context, op);
+	// The tree's nodes come from the final clauses (DecideTreeConstruction), then stage 05's lowering writes each
+	// clause's records into its root, each reducer's terms naming the G they range over.
+	auto construction = make_uniq<DecideTreeConstruction>(context, op);
+	LowerDecideTree(context, op, *construction);
 	// With the shape of every constraint and the objective settled, check the model
 	// class this query needs against the backend chosen for it. A model class is a
 	// gate, not an optimization -- nothing lowers a quadratic constraint into linear
 	// rows -- so an unsupported one is refused here, before the query reads a row,
 	// and the message blames the host rather than the query.
-	RequireDecideSolverSupport(op);
+	RequireDecideSolverSupport(op, construction->Tree());
+	// After the refusal, so a query the backend cannot answer is refused in SQL terms first.
+	auto tree = construction->Finish();
 	// Capture child column bindings BEFORE CreatePlan: several logical operators
 	// (notably LogicalProjection) move their `expressions` vector into the physical
 	// op during CreatePlan, which leaves GetColumnBindings() returning an empty
@@ -116,6 +122,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	auto decide_op = make_uniq<PhysicalDecide>(
 	    op.types, op.estimated_cardinality, std::move(child_plan), op.decide_index, std::move(op.decide_variables),
 	    std::move(op.decide_constraints), op.written_sense, std::move(op.decide_objective));
+	decide_op->tree = std::move(tree);
 	// The DIAGNOSE prefix, carried the last leg of parser → binder → plan → stage 08.
 	decide_op->diagnose = op.diagnose;
 	decide_op->solver_backend_name = op.solver_backend_name;
@@ -125,8 +132,6 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	decide_op->is_boolean_var = op.is_boolean_var;
 	decide_op->ne_clause_sources = std::move(op.ne_clause_sources);
 	decide_op->minmax_clause_labels = std::move(op.minmax_clause_labels);
-	decide_op->bilinear_links = std::move(op.bilinear_links);
-	decide_op->abs_maximize_links = std::move(op.abs_maximize_links);
 	decide_op->aux_var_expressions = std::move(op.aux_var_expressions);
 	decide_op->constraint_sources = std::move(op.constraint_sources);
 	decide_op->written_objective = std::move(op.written_objective);
@@ -134,28 +139,21 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	decide_op->objective_canonical_differs = op.objective_canonical_differs;
 	decide_op->objective_constant_offset = op.objective_constant_offset;
 	decide_op->source_text = std::move(op.source_text);
-	decide_op->composed_minmax_constraints = std::move(op.composed_minmax_constraints);
-	decide_op->composed_minmax_objective_terms = std::move(op.composed_minmax_objective_terms);
-	decide_op->reducer_value_links = std::move(op.reducer_value_links);
 	decide_op->rewrite_accounts = std::move(op.rewrite_accounts);
 	decide_op->singleton_row_boxes = std::move(op.singleton_row_boxes);
 	decide_op->user_singleton_row_bounds = std::move(op.user_singleton_row_bounds);
+	decide_op->member_singleton_row_bounds = std::move(op.member_singleton_row_bounds);
 	decide_op->flat_objective_agg = op.flat_objective_agg;
 	decide_op->flat_objective_is_easy = op.flat_objective_is_easy;
-	decide_op->per_inner_agg = op.per_inner_agg;
-	decide_op->per_outer_agg = op.per_outer_agg;
-	decide_op->per_inner_is_easy = op.per_inner_is_easy;
-	decide_op->per_outer_is_easy = op.per_outer_is_easy;
-	decide_op->per_inner_was_avg = op.per_inner_was_avg;
-	// The flattened constraints and objective, produced by the DECIDE optimizer's
-	// final pass. Execution evaluates their coefficients; it does not re-derive them.
-	decide_op->prepared = std::move(op.prepared);
 
 	decide_op->keyed_scopes = std::move(op.keyed_scopes);
 	decide_op->variable_scopes = std::move(op.variable_scopes);
 	// Resolved like every other expression the operator owns (EnumerateExpressions).
 	decide_op->keys = std::move(op.keys);
+	decide_op->frames = std::move(op.frames);
 	decide_op->scope_checks = std::move(op.scope_checks);
+	decide_op->signatures = std::move(op.signatures);
+	decide_op->objective_signature = op.objective_signature;
 
 	// Resolve source column names for the surviving (post-pruning) child columns,
 	// positionally aligned with the materialized data chunk. Used by the unbounded
@@ -211,7 +209,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 		// A `per K:` names its key after its clause, as written.
 		if (e.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conjunction = e.Cast<BoundConjunctionExpression>();
-			if (IsPerClassWrapper(conjunction) || IsTwoLevelObjectiveWrapper(conjunction)) {
+			if (IsPerClassWrapper(conjunction)) {
 				harvest_key(PerWrapperKey(conjunction));
 			}
 		}
@@ -232,12 +230,21 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 		}
 	}
 	for (auto &check : decide_op->scope_checks) {
-		for (auto *expr : {check.rows.get(), check.value.get(), check.filter.get()}) {
-			if (expr) {
-				harvest(*expr);
-			}
+		if (check.value) {
+			harvest(*check.value);
 		}
-		harvest_key(check.key);
+	}
+	for (auto &signature : decide_op->signatures) {
+		if (signature.rows) {
+			harvest(*signature.rows);
+		}
+		harvest_key(signature.key);
+		for (auto &field : signature.fields) {
+			if (field.value) {
+				harvest(*field.value);
+			}
+			harvest_key(field.key);
+		}
 	}
 	// A lifted reducer's expressions live beside the tree: a composed term's and a helper
 	// decision's (reducer_value_links). The columns they read explain the answer too.
@@ -248,7 +255,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 			}
 		}
 	};
-	for (auto &spec : decide_op->composed_minmax_constraints) {
+	for (auto &spec : op.composed_minmax_constraints) {
 		for (auto &term : spec.terms) {
 			harvest_composed_term(term);
 		}
@@ -260,10 +267,10 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 		}
 		harvest_key(spec.scope.class_key);
 	}
-	for (auto &term : decide_op->composed_minmax_objective_terms) {
+	for (auto &term : op.composed_minmax_objective_terms) {
 		harvest_composed_term(term);
 	}
-	for (auto &link : decide_op->reducer_value_links) {
+	for (auto &link : op.reducer_value_links) {
 		for (auto *expr : {link.inner_expr.get(), link.filter.get(), link.when.get()}) {
 			if (expr) {
 				harvest(*expr);

@@ -117,29 +117,30 @@ CASES = [pytest.param(slot, value, id=f"{slot}-{value}") for slot, spec in SLOTS
 _BALL = "SUM(POWER(x, 2)) <= 4"
 
 # N1: the places it reads a value of a row a `when` drops, and the limit of a group. HiGHS refuses a quadratic limit, so
-# these compare the direct path with Gurobi alone.
+# these compare the direct path with Gurobi alone. A value no reader reads, on a row a `when` drops or with a NULL key,
+# is the infinity that would raise if it were read; a local `when` leaves the row's limit read, so it takes all three.
 N1_SLOTS = {
     "n1_limit_tightest_of_group": _slot("cap", "x(REAL)", "SUM(POWER(x, 2)) by (g) <= cap", _PICK, ("inf", "null")),
     "n1_limit_per_key_is_null": _slot(
-        "cap", "x(REAL)", "SUM(POWER(x, 2)) by (g) <= cap", _PULL, ("-inf", "inf", "null"), key_is_null=True
+        "cap", "x(REAL)", "SUM(POWER(x, 2)) by (g) <= cap", _PULL, ("inf",), key_is_null=True
     ),
     "n1_limit_clause_when_excludes_row": _slot(
-        "cap", "x(REAL)", "when f: SUM(POWER(x, 2)) <= cap", _PULL, ("-inf", "inf", "null"), when_holds=False
+        "cap", "x(REAL)", "when f: SUM(POWER(x, 2)) <= cap", _PULL, ("inf",), when_holds=False
     ),
     "n1_limit_local_when_excludes_row": _slot(
         "cap", "x(REAL)", "SUM(when f: POWER(x, 2)) <= cap", _PULL, ("-inf", "inf", "null"), when_holds=False
     ),
     "n1_score_part_when_excludes_row": _slot(
-        "t", "x(REAL)", _BALL, "MAXIMIZE SUM(when f: t * x)", ("-inf", "inf", "null"), when_holds=False
+        "t", "x(REAL)", _BALL, "MAXIMIZE SUM(when f: t * x)", ("inf",), when_holds=False
     ),
     "n1_score_objective_when_excludes_row": _slot(
-        "t", "x(REAL)", _BALL, "MAXIMIZE when f: SUM(t * x)", ("-inf", "inf", "null"), when_holds=False
+        "t", "x(REAL)", _BALL, "MAXIMIZE when f: SUM(t * x)", ("inf",), when_holds=False
     ),
     "n1_target_part_when_excludes_row": _slot(
-        "t", "x(REAL)", _BALL, "MINIMIZE SUM(when f: POWER(x - t, 2))", ("-inf", "inf", "null"), when_holds=False
+        "t", "x(REAL)", _BALL, "MINIMIZE SUM(when f: POWER(x - t, 2))", ("inf",), when_holds=False
     ),
     "n1_constant_part_when_excludes_row": _slot(
-        "t", "x(REAL)", _BALL, "MAXIMIZE SUM(when f: (id + 1) * x + t)", ("-inf", "inf", "null"), when_holds=False
+        "t", "x(REAL)", _BALL, "MAXIMIZE SUM(when f: (id + 1) * x + t)", ("inf",), when_holds=False
     ),
     # A weight inside the square, on the row a `when` drops: the objective drops that row too, so it has no direction.
     "n1_weight_clause_when_excludes_row": _slot(
@@ -147,7 +148,7 @@ N1_SLOTS = {
         "x(REAL)",
         "when f: SUM(POWER(SQRT(fixed_value) * x, 2)) <= 4",
         "MAXIMIZE SUM(when f: (id + 1) * x)",
-        ("-inf", "inf", "null"),
+        ("inf",),
         when_holds=False,
     ),
     "n1_weight_local_when_excludes_row": _slot(
@@ -155,7 +156,7 @@ N1_SLOTS = {
         "x(REAL)",
         "SUM(when f: POWER(fixed_value * x, 2)) <= 4",
         "MAXIMIZE SUM(when f: (id + 1) * x)",
-        ("-inf", "inf", "null"),
+        ("inf",),
         when_holds=False,
     ),
 }

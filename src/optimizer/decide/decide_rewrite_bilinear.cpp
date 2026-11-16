@@ -43,16 +43,41 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 // ---------------------------------------------------------------------------
 
 void DecideOptimizer::RewriteBilinear(LogicalDecide &decide) {
+	// The second visit after ABS allocation can find products that include the newly tagged ABS helper. Products
+	// already annotated by the first visit remain intact and are skipped by FindAndReplaceBilinear.
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
 		FindAndReplaceBilinear(objective, decide, OBJECTIVE_ROW_TAG);
 		decide.SetObjective(optimizer.context, std::move(objective));
 	}
 	FindAndReplaceBilinear(decide.decide_constraints, decide, string());
+	// L0's three structural links stay outside the written clause tree, but their operands have the same bilinear
+	// semantics as any other constraint row. They remain owned by the indicator F node and are lowered there later.
+	for (auto &indicator : decide.l0_indicator_functions) {
+		for (auto &link : indicator.links) {
+			FindAndReplaceBilinear(link, decide, string());
+		}
+	}
+	// Definition bodies survive outside the clause list and receive the post-ABS product pass here too.
+	for (auto &definition : decide.definition_functions) {
+		FindAndReplaceBilinear(definition.body, decide, string());
+	}
+	// A retained reducer's body can acquire products of decisions when RewriteScopedReducers replaces the reducers
+	// nested in it with value helpers. Visit those bodies on the same post-rewrite pass as the definition F bodies.
+	for (auto &link : decide.reducer_value_links) {
+		if (link.frame == DConstants::INVALID_INDEX) {
+			FindAndReplaceBilinear(link.inner_expr, decide, string());
+		}
+	}
 }
 
 //! Recursively find all DECIDE variable indices referenced in an expression
 static void CollectDecideVarIndices(const Expression &expr, idx_t decide_index, vector<idx_t> &out) {
+	idx_t definition_aux;
+	if (TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
+		out.push_back(definition_aux);
+		return;
+	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto &colref = expr.Cast<BoundColumnRefExpression>();
 		if (colref.binding.table_index == decide_index) {
@@ -138,19 +163,34 @@ void ScaleAffine(Optimizer &optimizer, Affine &affine, const Expression &factor,
 //! Read `expr` as an affine expression in the decisions. A side of a degree-2 product always is one: the shape check
 //! refuses a degree above two before the optimizer runs, ProductReader splits every `*` of decision-bearing factors
 //! into factors, the binder refuses a decision in a divisor, and BuildDecideProductForm spells a product with its data
-//! factors first. A shape outside that is a broken promise of those stages.
-void ReadAffine(Optimizer &optimizer, const Expression &expr, idx_t decide_index, Affine &out) {
+//! factors first. A shape outside that is a broken promise of those stages. A function the optimizer gave a helper
+//! decision (a definition, an ABS once RewriteAbs tagged it) reads as that decision. An ABS over decisions that is not
+//! tagged yet is the one side that is not affine: the pass after RewriteAbs reads it (false until then).
+bool ReadAffine(Optimizer &optimizer, const Expression &expr, idx_t decide_index, Affine &out) {
+	idx_t function_aux;
+	if (TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, function_aux)) {
+		out.terms.push_back({function_aux, nullptr});
+		return true;
+	}
 	vector<idx_t> vars;
 	CollectDecideVarIndices(expr, decide_index, vars);
 	if (vars.empty()) {
 		out.constant = expr.Copy();
-		return;
+		return true;
 	}
 	if (auto *colref = GetBareDecideColumnRef(expr, decide_index)) {
 		out.terms.push_back({colref->binding.column_index, nullptr});
-		return;
+		return true;
 	}
 	auto *cur = UnwrapDecideCasts(expr, decide_index);
+	if (TryParseDecideIndexTag(cur->GetAlias(), ABS_FUNCTION_TAG_PREFIX, function_aux)) {
+		out.terms.push_back({function_aux, nullptr});
+		return true;
+	}
+	if (cur->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
+	    cur->Cast<BoundFunctionExpression>().function.name == "@") {
+		return false;
+	}
 	if (cur->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
 		throw InternalException("DECIDE bilinear factor '%s' is not affine in the decisions", expr.ToString());
 	}
@@ -163,41 +203,51 @@ void ReadAffine(Optimizer &optimizer, const Expression &expr, idx_t decide_index
 	};
 	if ((name == "+" || name == "-") && func.children.size() == 2) {
 		Affine left, right;
-		ReadAffine(optimizer, *func.children[0], decide_index, left);
-		ReadAffine(optimizer, *func.children[1], decide_index, right);
+		if (!ReadAffine(optimizer, *func.children[0], decide_index, left) ||
+		    !ReadAffine(optimizer, *func.children[1], decide_index, right)) {
+			return false;
+		}
 		if (name == "-") {
 			ScaleAffine(optimizer, right, BoundConstantExpression(Value::INTEGER(-1)), false);
 		}
 		AddAffine(optimizer, out, std::move(left));
 		AddAffine(optimizer, out, std::move(right));
-		return;
+		return true;
 	}
 	if (name == "-") {
-		ReadAffine(optimizer, *func.children[0], decide_index, out);
+		if (!ReadAffine(optimizer, *func.children[0], decide_index, out)) {
+			return false;
+		}
 		ScaleAffine(optimizer, out, BoundConstantExpression(Value::INTEGER(-1)), false);
-		return;
+		return true;
 	}
 	if (name == "*") {
 		if (bears_decision(0) || !bears_decision(1)) {
 			throw InternalException("DECIDE bilinear factor '%s' is not a data factor times a form", expr.ToString());
 		}
-		ReadAffine(optimizer, *func.children[1], decide_index, out);
+		if (!ReadAffine(optimizer, *func.children[1], decide_index, out)) {
+			return false;
+		}
 		ScaleAffine(optimizer, out, *func.children[0], false);
-		return;
+		return true;
 	}
 	if (name != "/" || bears_decision(1)) {
 		throw InternalException("DECIDE: bilinear factor '%s' is not a division by data; the shape check and the "
 		                        "binder promise a factor of +, -, *, / with no decision in a divisor",
 		                        expr.ToString());
 	}
-	ReadAffine(optimizer, *func.children[0], decide_index, out);
+	if (!ReadAffine(optimizer, *func.children[0], decide_index, out)) {
+		return false;
+	}
 	ScaleAffine(optimizer, out, *func.children[1], true);
+	return true;
 }
 
 //! The auxiliary `w = first * second` for two decisions, one of them Boolean (`first` and `second` are in the order
 //! the user wrote them): AND for two Booleans, else the McCormick link whose rows stage 06 emits against the other
 //! factor's box. Returns the auxiliary's decision index.
-idx_t AddBooleanProduct(LogicalDecide &decide, const string &clause_alias, idx_t first, idx_t second) {
+idx_t AddBooleanProduct(LogicalDecide &decide, DecideBilinearFunctionGroup &group, const string &clause_alias,
+                        idx_t first, idx_t second) {
 	auto is_bool = [&](idx_t var) {
 		return decide.is_boolean_var[var];
 	};
@@ -226,6 +276,10 @@ idx_t AddBooleanProduct(LogicalDecide &decide, const string &clause_alias, idx_t
 	// query-wide product is one column and a keyed one a column per key, not a copy per row.
 	auto scope = JoinScopes(decide.variable_scopes[first], decide.variable_scopes[second]);
 	idx_t aux_idx = AddAuxiliaryDecision(decide, aux_name, aux_type, both_bool, scope, label);
+	// A product takes its factor's sign (`b * x` is x where b = 1, -5 for x >= -5): no default floor of 0. Its
+	// column is floored at the product's range, min(0, the factor's floor) (LinearizeBilinear). An AND of two
+	// Booleans keeps its BOOL box.
+	decide.signed_helper_vars.push_back(aux_idx);
 	AddRewriteAccount(decide, clause_alias,
 	                  both_bool ? LogicalDecide::RewriteAccount::Kind::PRODUCT_AND
 	                            : LogicalDecide::RewriteAccount::Kind::PRODUCT_MCCORMICK,
@@ -235,13 +289,13 @@ idx_t AddBooleanProduct(LogicalDecide &decide, const string &clause_alias, idx_t
 	// there: the McCormick rows against the other factor's box (the structural `w <= x` is not emitted here, being
 	// wrong for a negative-domain x: it would force x >= 0 when b = 0), and for two Booleans the AND (`w <= b1`,
 	// `w <= b2`, `w >= b1 + b2 - 1`).
-	LogicalDecide::BilinearLink link;
-	link.aux_idx = aux_idx;
-	link.bool_var_idx = bool_var_idx;
-	link.other_var_idx = other_var_idx;
-	TryParseSourceClauseTag(clause_alias, link.source_clause_id);
-	TryParseRemovalGroupTag(clause_alias, link.removal_group_id);
-	decide.bilinear_links.push_back(link);
+	DecideBilinearFunctionProduct product;
+	product.aux_idx = aux_idx;
+	product.first_var_idx = first;
+	product.second_var_idx = second;
+	TryParseSourceClauseTag(clause_alias, product.source_clause_id);
+	TryParseRemovalGroupTag(clause_alias, product.removal_group_id);
+	group.products.push_back(product);
 	return aux_idx;
 }
 
@@ -249,7 +303,21 @@ idx_t AddBooleanProduct(LogicalDecide &decide, const string &clause_alias, idx_t
 
 void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                              const string &source_alias) {
+	if (!expr) {
+		return;
+	}
+	idx_t definition_aux;
+	if (TryParseDecideIndexTag(expr->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
+		return; // its source body is compiled from DefinitionFunction metadata, exactly once
+	}
 	auto clause_alias = DescendSourceAlias(*expr, source_alias);
+	idx_t existing_group;
+	if (TryParseDecideIndexTag(expr->GetAlias(), BILINEAR_FUNCTION_GROUP_TAG_PREFIX, existing_group)) {
+		if (existing_group >= decide.bilinear_function_groups.size()) {
+			throw InternalException("DECIDE bilinear function group %llu is missing", existing_group);
+		}
+		return;
+	}
 
 	if (IsDecideProductNode(optimizer.context, *expr, decide.decide_index)) {
 		// A product of degree 2 in the canonical spelling: `coefficient * l * r`, or `coefficient * POWER(l, 2)`,
@@ -274,9 +342,8 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 				return std::any_of(affine.terms.begin(), affine.terms.end(),
 				                   [&](const AffineTerm &term) { return is_bool(term.var); });
 			};
-			ReadAffine(optimizer, *sides[0], decide.decide_index, left);
-			ReadAffine(optimizer, *sides[1], decide.decide_index, right);
-			if (has_bool(left) || has_bool(right)) {
+			if (ReadAffine(optimizer, *sides[0], decide.decide_index, left) &&
+			    ReadAffine(optimizer, *sides[1], decide.decide_index, right) && (has_bool(left) || has_bool(right))) {
 				// The terms of the product: `coefficient * first * second` for a pair of decisions (`second` is
 				// INVALID for one decision, both INVALID for the constant), merged by the pair.
 				struct ProductTerm {
@@ -342,6 +409,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					scale = MultiplyCoefficients(optimizer, std::move(scale), factor.base->Copy());
 				}
 				unique_ptr<Expression> sum;
+				DecideBilinearFunctionGroup group;
 				for (auto &term : product) {
 					unique_ptr<Expression> factor;
 					if (term.first == DConstants::INVALID_INDEX) {
@@ -349,7 +417,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					} else if (term.second == DConstants::INVALID_INDEX) {
 						factor = column(term.first);
 					} else if (is_bool(term.first) || is_bool(term.second)) {
-						factor = column(AddBooleanProduct(decide, clause_alias, term.first, term.second));
+						factor = column(AddBooleanProduct(decide, group, clause_alias, term.first, term.second));
 					} else {
 						// Two decisions, neither Boolean: the Q matrix's.
 						factor = optimizer.BindScalarFunction("*", column(term.first), column(term.second));
@@ -359,7 +427,15 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					    std::move(factor));
 					sum = sum ? optimizer.BindScalarFunction("+", std::move(sum), std::move(value)) : std::move(value);
 				}
-				expr = std::move(sum);
+				// Keep the product the user wrote. The copied expansion is the term splitter's recipe; every
+				// Boolean cross term in it names a helper that tree lowering turns into a BOOLEAN_PRODUCT F read.
+				// If there is no Boolean cross term, the expansion still exposes the distributed quadratic terms.
+				group.expansion = std::move(sum);
+				const auto group_idx = decide.bilinear_function_groups.size();
+				auto alias = expr->GetAlias();
+				AddDecideTag(alias, MakeBilinearFunctionGroupTag(group_idx));
+				expr->SetAlias(std::move(alias));
+				decide.bilinear_function_groups.push_back(std::move(group));
 				return;
 			}
 		}

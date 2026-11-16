@@ -288,10 +288,12 @@ TOO_LARGE = [
         "ABS(x - b - b) >= 1",
         "1e308",
     ),
+    # A nested objective's group sums are a helper decision (D81), each read by one member of the maximum, so written into
+    # it (D89): the maximum's member computes the sum, and it names the reducer holding it as written.
     (
-        "group_sums_of_a_two_level_objective",
+        "group_sums_of_a_nested_objective",
         "x(REAL), per (): y(REAL) SUCH THAT x <= 5 AND y <= 1 MINIMIZE max(per g: sum(b * y) by (g))",
-        "MINIMIZE max(per g: sum(b * y) by (g))",
+        "max(per g: sum(b * y) by (g))",
         "1e308",
     ),
 ]
@@ -304,6 +306,33 @@ TOO_LARGE = [
 def test_a_sum_past_a_double_names_its_clause(request, cli_fixture, mode, name, decide, written, big):
     cli = request.getfixturevalue(cli_fixture)
     assert _too_large(written) in _stderr(cli, _big_query(decide, big), mode)
+
+
+# The tree evaluator names a root as flat names its row (DecideWrittenClause): a composed clause by its qualifier with
+# it, and a row a rewrite added for the objective, which no clause claims, by the objective. A clause is named as
+# written in test_a_sum_past_a_double_names_its_clause.
+TREE_WRITTEN = [
+    (
+        "composed_extremum_under_a_when",
+        "x(REAL), per (): y(REAL) SUCH THAT x <= 5 AND y <= 1 AND when a > 0: SUM(b * y) + MAX(x) <= 10 "
+        "MAXIMIZE SUM(a * x)",
+        "when a > 0: SUM(b * y) + MAX(x) <= 10",
+        "1e308",
+    ),
+    (
+        "row_of_an_abs_in_the_objective",
+        "per (): y(REAL) SUCH THAT y <= 5 AND y >= -5 MAXIMIZE SUM(ABS(b * y + b * y))",
+        "MAXIMIZE SUM(ABS(b * y + b * y))",
+        "1e308",
+    ),
+]
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("name,decide,written,big", TREE_WRITTEN, ids=[case[0] for case in TREE_WRITTEN])
+def test_the_tree_names_a_root_as_flat_names_its_row(decidb_cli, name, decide, written, big):
+    cli = decidb_cli
+    assert _too_large(written) in _stderr(cli, _big_query(decide, big), "off")
 
 
 @pytest.mark.error
@@ -336,12 +365,6 @@ DERIVED_TOO_LARGE = [
         "reach_of_an_extremum_in_the_objective",
         "y(REAL) SUCH THAT y <= 5 MINIMIZE MAX(b * y)",
         "MINIMIZE MAX(b * y)",
-    ),
-    # The two-level form's outer MIN/MAX reduces over group sums: the sum of an overflowed member overflows.
-    (
-        "reach_of_a_group_sum_extremum",
-        "y(REAL) SUCH THAT y <= 5 MINIMIZE MAX(per id: SUM(b * y) BY (id))",
-        "MINIMIZE MAX(per id: SUM(b * y) BY (id))",
     ),
     # Members of either sign near the limit: the span of the MIN/MAX link is no Big-M (EmitExtremumLink).
     ("span_of_an_extremum", "y(REAL) SUCH THAT y <= 5 AND MAX(y + c) >= 0 MAXIMIZE SUM(y)", "MAX(y + c) >= 0"),

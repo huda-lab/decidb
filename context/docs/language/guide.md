@@ -50,7 +50,8 @@ Terms:
 - **Key / class**: a key lists columns and relations (for `by`, also expressions); rows with equal key values form one
   class.
 - **Kept rows**: the result rows (after joins and `WHERE`) that pass the enclosing `when`.
-- **Determines**: `K` determines a value when every row of each `K`-class carries the same value (§7.1).
+- **Variant**: the rows of a `K`-class that agree on everything the body reads once per class; a class is generated
+  once per variant (§7.1).
 
 ```
 decide_list ::= declarator (',' declarator)*
@@ -147,8 +148,8 @@ MINIMIZE max_shortfall
 
 - **Output**: the value repeats on every row.
 - **In constraints**: compared against row data (`ship <= max_shortfall`) it makes one row per kept row, all
-  referencing the same column. It is determined by every key (§7.1), so it may stand beside a reducer or be its bound
-  under any `per`, and it counts once.
+  referencing the same column. It is one instance under every key (§7.1), so it may stand beside a reducer or be its
+  bound under any `per`, and it counts once.
 - **Inside a reducer**: a body of query-wide decisions only (`sum(cap)`, `sum(cap1 + cap2)`) is refused as a
   constraint's whole decision side. There is one column and nothing to reduce, and the two plausible readings
   (coefficient 1 or `n`) are different problems, so neither is chosen silently; write `cap`. A body mixing it with row
@@ -276,7 +277,7 @@ backends take doubles, so every value ends up there.
 MAXIMIZE sum(ship)                                         -- produced once: per () implied
 MAXIMIZE when S.priority: sum(ship)                        -- over the priority rows
 MINIMIZE sum(S.unit_cost * ship) + sum(per D: D.opening_cost * open)
-MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))      -- two-level form
+MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))      -- a nested reducer (§5.5)
 ```
 
 - **Produced once.** No `per` means `per ()`; any other `per` is a parse error.
@@ -285,17 +286,21 @@ MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))      -- two-level form
   decision.
   - A decision outside the reducers is legal when it has one instance over the kept rows, and counts once: any
     `per ()` decision, or a per-row or keyed one when the `when` keeps one row or class (`MAXIMIZE when id = 3: x`).
-    Otherwise it is the determination error. Not beside a `MIN` or `MAX`.
+    Otherwise the objective would be produced more than once, an error (§7.3). Not beside a `MIN` or `MAX`.
   - A product of two query-wide decisions counts once (Gurobi). Any other product of two decisions outside a reducer
     is refused unless one is `BOOL`, which is linearized first.
   - A factor on a reducer must be one value over the kept rows (§5).
 - **`by` on a top-level reducer** must be one group over the kept rows: `by ()`, or a `Γ` with one value there
   (`MAXIMIZE when g = 'A': sum(x) by (g)`).
-- **Two-level form** `outer(per k: inner(e) by (k))`, the objective's one term: `inner` once per class of `k` (NULL a
-  class), then `outer` over those values. All nine `SUM`/`MIN`/`MAX` pairs; `k` may list several columns. It takes a
-  unary minus or a constant factor (`MINIMIZE -max(per k: ...)`, `2 * max(per k: ...)`, `max(per k: ...) / 2`) and a
-  `when` in front, not inside; the inner reducer takes no `per`; the `by` key must be the `per` key; an outer `AVG` is
-  refused, since `sum` over the classes ranks solutions the same way.
+- **Nested reducers** (§5.5) work in the objective as in a constraint. The two-level form `outer(per k: inner(e) by
+  (k))` (D2) is one of them (D81): `inner` once per class of `k` (a row whose `k` is NULL is in none, D5), then
+  `outer` over those values. Any kind at either level, a `when` inside either, another `by` key, more levels, other
+  terms beside it and a factor on it all work. A `sum(per K: inner(e) by (G))` whose `K` lies in `G`, `inner` a `SUM`
+  or `AVG`, is the objective's own sum over the groups of `G`, so a square inside it stays a quadratic objective
+  (`MINIMIZE sum(per g: sum(power(x - t, 2)) by (g))` is a convex QP). So is a `sum(inner(e) by (G))` with no `per`,
+  `e` not linear, summed in the other order: each row of `e` weighted by the rows of its `G` group the outer sum reads
+  (divided by the group's own members for an `AVG`), so `MINIMIZE sum(sum(x * x) by (t.h))` is `sum(n_h * x * x)`
+  over the groups' sizes `n_h`, a convex QP on both solvers.
 - **Quadratic objectives**: `MINIMIZE SUM(POWER(linear, 2))` is convex QP on both solvers (HiGHS only when continuous
   and the Q matrix is non-singular). `-POWER(...)` under `MAXIMIZE` is concave QP on both. `MAXIMIZE SUM(POWER(...))`
   is non-convex, Gurobi only. Integer variables with a quadratic objective (MIQP) need Gurobi. An objective may hold
@@ -328,8 +333,8 @@ Tests: `test/decide/tests/test_scope_objective.py`. Problem classes and solver s
   `SUM(x) + 2 * MAX(x*v)`. A negative factor reverses the relation the reducer faces (`-2 * MAX(e) >= -8` is
   `MAX(e) <= 4`), and `-2 * max(e)` is `min(-2 * e)`.
   - In a **constraint** the factor may be any decision-free term: a literal, an uncorrelated subquery, a column or a
-    correlated subquery. It is a tuple term: under `per` the key must determine it, and a row-varying one gives the
-    helper-decision shape (§6.4).
+    correlated subquery. It is a tuple term: under `per`, each of its values in a class is a variant (§7.1), and a
+    row-varying one gives the helper-decision shape (§6.4).
   - In the **objective** it must be one value over the kept rows; a row-varying one is refused with a pointer to
     `SUM(x * weight)`.
   - A **`BOOL` decision** as the factor answers, in a constraint and in the objective: `b * sum(x) <= 4`,
@@ -345,8 +350,9 @@ Tests: `test/decide/tests/test_scope_objective.py`. Problem classes and solver s
 - **The bound rule.** A side with no decision must give one value per generated constraint. With no `per`, a value
   that varies by row reduces to its tightest value within each `by` group of the kept rows (MIN for `<=`/`<`, MAX for
   `>=`/`>`) — a bare column as well as a subquery (`sum(ship) by (depotID) <= stock`, the paper's Figure 1). Under
-  `per` the key must determine it instead (§7.1). `=` refuses a bound that genuinely varies, since two different
-  numbers cannot both be *the* sum. `<>` keeps every value as its own exclusion.
+  `per`, each value in a class is a variant of its own (§7.1), so a group bound by several takes the tightest the same
+  way. `=` refuses a bound that genuinely varies, since two different numbers cannot both be *the* sum. `<>` keeps
+  every value as its own exclusion.
 - **`norm(e, p)`** is an L_p term with a user-supplied weight (`MINIMIZE SUM(cost*x) + 0.5 * norm(x - base, 1)`). It
   takes a `when`/`per` in front of its clause and a `by`, but no scope inside and no colon form:
 
@@ -382,8 +388,9 @@ MINIMIZE SUM(unit_cost * ship) + SUM(D: opening_cost * open);   -- each depot's 
 
 - **Identity is the tuple, not the value**: two depots with equal cost are two terms (this is not `SUM(DISTINCT …)`).
 - **Scope is the surviving rows**: join, `WHERE` and `when` decide which tuples contribute.
-- **The named relations must determine the body**, checked on the data every run (§7.1). A column of an unnamed
-  relation stops the query rather than picking an arbitrary row.
+- **One value per variant of each tuple** (D71, §7.1): a body that reads only the named relations' columns and
+  decisions keyed by them is one value per tuple. A column of an unnamed relation, or a per-row decision, takes several
+  values in a tuple, and each is a value of its own: `SUM(D: T.unit_cost * ship)` reads every route of a depot.
 - **`AVG(D: e)`** divides by the number of classes. **`MIN`/`MAX`** are unaffected.
 - **Several relations** (`SUM(D, T: e)`): the identity is the concatenation of their keys. Naming a relation removes
   its fan-out; an unnamed one keeps its fan-out. Naming every joined relation is a no-op. Order does not matter.
@@ -401,7 +408,8 @@ sum(ship) by (D.depotID, S.dispatchDay + S.transitDays)   -- an expression in th
   `by ()`.
 - Reads every kept row whose `Γ` equals the current row's, including rows outside the current class (§6.1).
 - A row whose `Γ` is NULL is in no group of it (D5): that reducer has no value there, and the NULL skips the instance;
-  the clause's other reducers still read the row. `Γ` must be determined by the enclosing `per` key (§7.1).
+  the clause's other reducers still read the row. A class whose rows read several `Γ` groups is one instance per group
+  (§7.1).
 - `by` belongs to the call right before it. A data-only reducer on the bound side reads its own groups:
   `count(*) by (g)` counts the current row's group.
 - A factor holds the reducer's value: `-2 * max(e) by (g)` is `min(-2 * e) by (g)`.
@@ -417,11 +425,14 @@ sum(per D: D.opening_cost * open)                   -- each D tuple once
 sum(when S.priority per D: D.opening_cost * open)   -- filter, then each remaining tuple once
 ```
 
-- **Order**: the rows `by` selects → the inner `when` → one value per class of the inner `per` (read at its first
-  kept row) → the aggregate.
+- **Order**: the rows `by` selects → the inner `when` → one value per variant of each class of the inner `per` (read
+  at its first kept row) → the aggregate.
 - **Inner `when`** filters this reducer only. A `when` in front of the clause applies first.
-- **Inner `per K'`** hands the reducer one value per class, so a tuple repeated by a join counts once. `K'` must
-  determine the body.
+- **Inner `per K'`** hands the reducer one value per variant of each class (D71), so a tuple repeated by a join counts
+  once while its body reads nothing that varies inside it. One that does is the **inner `per` trap**:
+  `sum(per D: D.opening_cost + T.unit_cost * ship)` over a depot with two routes reads two values — the opening cost
+  twice — because each route's `unit_cost` and per-row `ship` are a variant. `EXPLAIN ANALYZE` prints the count under
+  the clause (§9): *"↳ sum(per D: ...): 3 values from 2 classes, one per distinct (T.unit_cost, ship) within a class"*.
 - **A reducer with no row in a group is NULL** (D68), so that group's constraint is skipped; the other reducers of
   the clause do not save it. Written in front, the condition leaves the same depots out:
 
@@ -442,6 +453,172 @@ Tests: `test/decide/tests/test_scope_reducer_inner.py`.
 | `per D.depotID: sum(ship) by (D.depotID) <= D.capacity` | one per depot | that depot's rows |
 | `ship <= D.maxShare * sum(ship) by (D.depotID)` | one per row | that row's depot |
 
+### 5.5 Reducers inside reducers — the path rule
+
+```sql
+-- each depot's largest shipment, summed over the depots
+sum(per D.depotID: max(ship) by (D.depotID)) <= 50
+-- the running example (deck pp. 111-119): per depot, the regional sum of each customer's
+-- largest shipment, plus 10% of the mode's demand
+per t.id: sum(when t.p per t.cid: max(ship) by (t.cid)) by (t.rid) + 0.10 * sum(t.d) by (t.m) <= t.c
+-- three levels
+per t.g: sum(per t.h: max(per t.k: sum(x) by (t.g, t.h, t.k)) by (t.g, t.h)) by (t.g) <= t.cap
+```
+
+- **Any depth, any kind**: `SUM`, `AVG`, `MIN` and `MAX` nest to any depth, with `when`, `per` and `by` at every
+  level, on either side of a constraint and in the objective. `count` nests over data only.
+- **The path rule.** A nested reducer reads, at the row it stands for, the kept rows that every enclosing reducer's
+  own `when` keeps and that agree with that row on every enclosing `by` key and on its own. In `sum(max(x) by (g)) by
+  (h)` the inner maximum is one per `(h, g)` pair, not one per `g` across the `h` groups. Those keys together are the
+  reducer's **path key**. A row whose path key holds a NULL is in no group (D5): the reducer has no value there.
+- **Members.** An enclosing reducer receives one value per row it reads, or one per class and variant of its own
+  `per` (§5.3, §7.1); `AVG` divides by the values it receives. A group of the path key that the inner `when` keeps no
+  row of has no value, and the reducer around it skips that member (D68).
+- **Over data alone** a nest is a value, computed innermost first on the bound side as any data reducer:
+  `x <= avg(per t.h: max(t.v) by (t.g, t.h)) by (t.g)`. So is a reducer over data alone inside one over decisions,
+  over its path: in `per t.g: sum(x - avg(t.v) by (t.h)) by (t.g) <= 0` each row reads the mean of its `(t.g, t.h)`
+  group among the rows the path keeps; where that group has no value (a NULL key, a `when` that keeps none of its
+  rows) the member is skipped, as any NULL a reducer reads. It is read as a coefficient, so what it reads must be
+  finite (*"DECIDE: t.v / 0.0 is NaN or infinite on some rows. Skip those rows with 'when isfinite(t.v / 0.0):'"*);
+  on a bound, infinity is a value.
+- **How it is solved.** Every reducer of a nest over decisions is a helper decision (§6.4) keyed by its path, one
+  instance per path group, defined once per group, innermost first, and read by the reducers around it. A helper is
+  pinned on the side its readers push it, through `SUM`, `AVG`, `MIN` and `MAX` levels -- a `MIN` or `MAX` does not
+  decrease when a member grows, so it passes its push on --, and on both sides under `=`, `<>`, `abs`, a norm or a
+  factor of unknown sign (D79). So the running example needs no Big-M: each inner `MAX` is pushed down, and its
+  envelope alone holds it; and so does `MINIMIZE max(per t.rid: sum(per t.cid: max(ship) by (t.cid)) by (t.rid))`,
+  an LP whatever bounds the shipments have. A bound
+  written only at the root reaches an inner `MIN`/`MAX` that needs its closing side: in `per t.g: sum(max(x) by (t.g,
+  t.h)) by (t.g) = 10`, with no other bound on `x`, the inner helper's Big-M is read off the outer one's box.
+- **A square or product of decisions** inside a nest is defined first, where a constraint or a `MIN`/`MAX` of the
+  objective reads it: a helper per row at least (or at most) its value, the way the clause pushes it, which needs a
+  backend that states `MIN`/`MAX` natively when one reads it (Gurobi). Refused where a helper would have to hold it
+  with no such definition (D80): a nest of sums in the objective neither read in place nor summed in the other order
+  (§4) -- one under a `per` its inner `by` does not hold, an outer `AVG`, or a deeper nest.
+- **Any function over a nested reducer** (deck p. 51): one read through anything but `+`, `-` and data factors --
+  `abs`, a square, a product with a decision -- is its helper decision first, keyed by its path and pinned on both
+  sides, so `per t.g: sum(abs(max(x) by (t.h) - 4)) by (t.g) <= 5` reads each `(t.g, t.h)` group's maximum; a square or
+  product of decisions it then makes is a quadratic row (Gurobi).
+- **Refused** (D80): `norm` inside a reducer and a reducer inside `norm`; a square in a nest the objective would have
+  a helper hold (*"... squares or multiplies decisions inside nested reducers ..."*).
+- **A reducer over data alone scaling a decision** inside a reducer over decisions is a value of its path's group, a
+  coefficient as any data is: `sum(avg(t.p) * x) <= 25` over p = 10, 30 is `20 (x1 + x2) <= 25`, and `x / max(t.v) by
+  (t.h)` divides by each group's largest value. Outside every reducer over decisions the rule of §5 refuses it with
+  its remedy (*"An aggregate over table columns ... cannot multiply a decision variable"*). A factor on a reducer over decisions scales that reducer, not a reducer over data in its operand,
+  which is a term of the operand's own scope: `2 * sum(x - avg(t.v) by (t.h)) by (t.g)` is linear, as `sum(2 * x - 2 *
+  avg(t.v) by (t.h)) by (t.g)` is.
+
+Tests: `test/decide/tests/test_anr_nested.py` (the fixtures, the deck's example 9 as written among them, a grid of
+nests at depth 2 and 3, the bounds through a nest), `test_scope_objective.py` (the objective).
+
+### 5.6 Frame selectors — `at(...) over (...)`
+
+A frame reads a value at another row of the anchor row's **timeline**: the rows that share its `within` key, ordered
+by `S`.
+
+```sql
+at(F [else v]: e) over (S [asc | desc] [cyclic] [within K])
+agg(from F1 to F2 [every d] [else v | all]: e) over (S [asc | desc] [cyclic] [within K])
+F ::= first | last | [k] previous | [k] next
+
+-- inventory carries over from the previous period of the same product
+inventory = at(previous else 0: inventory) over (t.period within t.product) + produce - t.demand
+-- deliveries from the contract's first day through two days ahead
+sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
+```
+
+- **Defaults**: `asc`, not cyclic, `within ()` (one timeline over the rows), `k` = 1, `every 1`, no `else`. A message
+  names a frame without them: `sum(from 1 previous to 1 next every 1: x) over (t.period asc within ())` is
+  `sum(from previous to next: x) over (t.period)`.
+- **Positions** count peers (rows with equal `S`), not distances: `first` and `last` are the timeline's ends,
+  `k previous` / `k next` the k-th peer before or after the anchor's. A range takes every `d`-th position from `F1` to
+  `F2`, inclusive. `cyclic` wraps a position around the timeline (D76).
+- **The parts**: `agg` is `sum`, `avg`, `min`, `max` or `count` (over data). `k` and `d` are positive whole numbers
+  (D77). `S` takes data and no reducer, and orders peers as `ORDER BY` does (D74); `K` lists columns and relations, as a
+  `per` key does, and a row whose written `within` column is NULL is in no timeline (D5, D75). `e` is read at the
+  selected row, `v` at the anchor row; `v` is a number (`else true`, `else 0.5`, `else c` all are), and keeps its own
+  type.
+- **A frame's payload is linear**: it and the fallback square or multiply no decision, and take no `abs` of one. A
+  data factor on a frame over decisions is linear: `t.w * at(previous: x) over (t.period)`. A decision times a frame
+  over decisions, or a frame over decisions squared, is a quadratic term (deck p. 51): the frame is the range of its
+  one position first, a helper per position, so `y * at(previous: x) over (t.period) <= 4` is a bilinear row and
+  `sum(power(x - at(previous else 0: x) over (t.period), 2))` a square of the objective (Gurobi).
+- **A missing position** (before the first row, after the last): `else v` supplies `v` -- a range reads it once per
+  missing position; `all` makes the whole range select nothing; otherwise a range keeps the positions that exist. A
+  point frame that selects nothing, a NULL read at its selected row and a NULL fallback are no value (D84), and so is a
+  range that reads nothing -- a reversed one (`from next to previous`), `all` meeting a missing position, or every
+  position missing with no `else`, `count` too (deck p. 50) -- and a frame at a row in no timeline, whatever its `else`
+  (D75): its comparison skips that instance, a reducer drops that member, and an objective term holding it is dropped. A
+  frame over data is a NULL there, which a function may consume as SQL does: `x <= coalesce(at(previous: t.d) over
+  (t.period), 1)` reads 1 at the first period (deck p. 56).
+- **A range** reads one value per position it visits, as a point does (D73), and reduces them as SQL's aggregate does: a
+  NULL among them is skipped, `count` counts the rest and reads 0 where every value is NULL, and a cyclic range keeps
+  every repeated visit (D76; on three positions, `from 4 previous to 4 next` reads nine). Over data it is one value per
+  anchor of the reducer's own type (`max` of a DATE is a DATE). Over decisions it is a helper decision per window (D78)
+  -- the range several anchors share: one per timeline when neither end depends on the anchor, one per position
+  otherwise -- defined once, so `x <= sum(from first to last: x) over (t.period)` over n rows is one definition of n
+  terms. `count` over decisions is refused, as `count(x)` is. One frame may read at most `decide_frame_limit` values
+  over its ranges (default 10,000,000; `SET decide_frame_limit = n`), else *"DECIDE: sum(from first to last: t.v) over
+  (t.period) reads more than 4 values over its ranges, above decide_frame_limit (4). Narrow the range, or raise the
+  setting."*
+- **One row per position** (D73): the rows of a position a frame reads -- a point's selected one, each one a range
+  visits -- must hold one signature of the payload, as the deck's frame container holds one per position (p. 110):
+  each column it reads by value, each decision by instance, whatever its coefficient. So `at(previous: t.a + t.b)`
+  over rows (1, 2) and (2, 1) at one position is two, though both read 3, and so is `t.w * x` over two rows with `t.w
+  = 0`; a NULL and a value are two, whichever row comes first. Else
+  *"DECIDE: at(previous: x) over (t.period within t.product) finds 2 rows at t.product = 'A', t.period = 1; a position
+  must hold one row."*
+- **Under `per K`** (D75): each class of `K` lies in one timeline of every frame its body reads directly, else an
+  error naming the class and the timelines. A frame is a field of the clause's signature by its keys (D82, deck p.
+  99), as a reducer is by its `by` key: its timeline, the anchor's position there when it reads relative to the
+  anchor, and its fallback where the anchor reaches it -- not the value it reads. So `per t.product: x <=
+  at(previous: t.v) over (t.period within t.product)` is one instance per period of a product but its first, and
+  `sum(per t.product: at(previous: y) over (...))` reads a product's one `y` once per period it is read from.
+- **Inside a reducer over decisions** (D87) a frame that selects nothing drops its member, decisions and all: the
+  reducer's NULL test of the frame keeps the member out (D84), so `sum(at(previous: x) over (t.period within
+  t.product)) by (t.product)` reads each product's periods but its first, and an AVG divides by the members left. A
+  reducer left with no member is NULL (D68): its comparison skips that instance, a reducer around it drops the member
+  reading it -- as it does a nested reducer whose `when` keeps no row --, and an objective term holding it is dropped.
+  A frame over decisions in a `MIN`/`MAX` of several terms (`max(at(first: x) over (...)) + sum(x) <= 20`) is read at
+  its selected row too. A row a rewrite adds for a construct in a member -- an `abs`'s envelope, an L0 indicator's
+  links -- defines an auxiliary and is no instance of its clause: it stays where the clause's instance is skipped
+  (D88), so `sum(abs(x - 3)) + at(previous: x) over (t.period) <= 4` keeps `abs(x1 - 3)` in the sum the other
+  periods read. The auxiliary has no value where what it reads has none, so `sum(abs(x - max(at(previous: x) over
+  (t.period within t.product)) by (t.product)))` drops the member of a product with one period, whose inner `max`
+  has no member.
+- **On the bound of a clause over groups** a frame that reads more than one value in a group bounds the group's
+  instance by its tightest one among the anchors where it has one (D85): `sum(x) by (t.g) <= at(previous: t.cap)
+  over (t.period within t.g)` is the least previous cap of each group, `>=` the greatest, `=` its one value (two are
+  an error, as for a column); a group none of whose anchors reads a value has no instance.
+- **The objective** is produced once, `per ()` (D72, D75): a root frame whose kept rows span two timelines is the
+  `per ()` error above (*"DECIDE: the objective (per ()) does not determine the timeline t.product of at(first: x) over
+  (t.period within t.product). Its rows span t.product = 'A', 'B'."*), whatever the timelines read; one read from more
+  than one position or fallback of one timeline is an error saying the objective would be produced more than once.
+- **Refused** (D80): a frame in a `when`, a `per`, a `by`, a `within` or an order key; a reducer or another frame
+  inside a frame's payload or fallback. A frame over data is a coefficient read
+  at another row: `x * at(previous: t.v) over (...)`, `x / at(previous else 1: t.w) over (...)`, and a data factor on
+  a frame over decisions are linear.
+
+**Status.** Points and ranges are formulated, over data or decisions, in constraints and the objective, inside a
+reducer over decisions too, under `abs`, `norm` and a `MIN`/`MAX` of several terms: a point reads a decision at the
+selected row's own column, with no helper decision; a range over decisions is its helper per window
+([roadmap.md](roadmap.md)). A reducer over data whose argument reads a frame, on a bound or inside a reducer over
+decisions, is computed once the frames are, over the rows its path keeps, each class of its own `per` once per
+signature (the frame by its keys, D82): `sum(per t.product: at(first: t.v) over (t.period within t.product))` reads
+each product's first value once. Not supported yet ([errors.md §2](errors.md#2-not-supported-yet)): an `else` that reads
+a decision while the payload reads none; an AVG range under `<>`, which is fractional (*"Comparison '<>' is not supported here: 'avg(from
+first to last: x) over (t.period)' has type DOUBLE and can take fractional values ..."*).
+
+Tests: `test/decidb/test_frame_parser.test` (answers, parse and bind errors, ordinary SQL windows unchanged),
+`test/decide/tests/test_anr_frames.py` (`TestSyntax`; `TestPoint` and `TestRange`: every frame fixture of
+`_anr_cases`, every pair of ends under both steps, each policy, open and cyclic, judged by the oracle; the deck's
+examples 1, 3, 4 and 5 and the clauses of pp. 50, 52 and 53 as written, 2 and 6 with a decision added to their bound
+(the deck writes them over data alone, which a clause refuses), and the DeQL comparison with its declarations adapted;
+shapes and errors), `test/decide/tests/test_anr_composition.py`
+(members dropped, under `abs` and `norm`, the objective, composed `MIN`/`MAX`, both solvers),
+`test/decide/tests/test_anr_diagnostics.py` (DIAGNOSE and EXPLAIN over variants, nests and frames),
+`test/common/test_decidb_plan_serialization.cpp` (a placed point and range round-trip).
+
 ## 6. Scoped constraints — `[when c] [per K]: C`
 
 ```sql
@@ -457,10 +634,10 @@ reducer's argument. Tests: `test_scope_generation.py`, `test_scope_combinations.
 ### 6.1 Evaluation
 
 1. **Filter.** Keep the rows where `c` is true.
-2. **Generate.** Split the kept rows into classes by `K`; the body is produced once per class.
-3. **Aggregate.** A reducer `agg(...) by (Γ)` reads all kept rows whose `Γ` equals the class's, not only the class's
-   own rows.
-4. **Well-defined.** `K` must determine every tuple term and every `Γ` (§7.1).
+2. **Generate.** Split the kept rows into classes by `K`; the body is produced once per variant of each class: once
+   per distinct value of its tuple terms, its decisions' instances and its reducers' `Γ` (§7.1).
+3. **Aggregate.** A reducer `agg(...) by (Γ)` reads all kept rows whose `Γ` equals the variant's, not only the
+   class's own rows.
 
 ```sql
 --   shipment  depot  region  ship  capacity
@@ -485,8 +662,9 @@ per D.depotID: sum(ship) by (D.region) <= D.capacity
   compares case-sensitively.
 - **`per` does not group reducers** (D6): `per g: sum(x) <= 10` bounds the total over all kept rows, once per `g`
   (identical rows collapse to one). Write `per g: sum(x) by (g) <= 10` for each group's own total.
-- **An explicit `per` must determine the body**; no `per` always does. So `sum(x) <= cap` takes the tightest `cap`
-  (the bound rule, §5), while under `per g:` the same clause requires `g` to determine `cap`.
+- **A class is one instance per variant** (§7.1). So `sum(x) <= cap` takes the tightest `cap` (the bound rule, §5),
+  and under `per g:` the same clause bounds the total once per distinct `cap` of each class, which is the tightest
+  again.
 
 ### 6.3 `when c` — which rows
 
@@ -494,10 +672,10 @@ per D.depotID: sum(ship) by (D.region) <= D.capacity
   parentheses are needed. It may not mention a decision, a reducer or a window function.
 - NULL counts as false.
 - **Filtering comes first**: classes form from kept rows only, and every reducer in the body reads kept rows only.
-- **Nothing is computed on a dropped row**: a NULL there is no error, and an expression that would fail there
-  (`ln(0)`, a bad cast) is never evaluated — in the clause, its keys, bounds, checks, or rows a rewrite adds. The
+- **Nothing fails on a dropped row**: a NULL there is no error, and an expression that would fail there
+  (`ln(0)`, a bad cast) raises no error — in the clause, its keys, bounds, checks, or rows a rewrite adds. The
   parts of an `and`/`or` are read left to right, each only on rows the earlier parts leave undecided, so
-  `when s <> '' and CAST(s AS INT) > 3:` casts no empty text.
+  `when s <> '' and CAST(s AS INT) > 3:` raises nothing on an empty text.
 - Dropped rows keep their decisions; the clause just does not constrain them.
 - **A `when` that keeps no row yields no constraint** (D68). An input with no rows at all gives an empty result.
 
@@ -505,68 +683,103 @@ per D.depotID: sum(ship) by (D.region) <= D.capacity
 
 Tuple terms and reducers mix freely on either side. Each comparison takes one of three shapes:
 
-- **Rows** — no reducer on the decision side: one model row per class, from its first kept row.
+- **Rows** — no reducer on the decision side: one model row per variant of each class, from its first kept row.
 - **Grouped** — decision reducers sharing one `by` key, under whole-query factors, beside terms that are one value per
-  group (query-wide, or keyed by the `by` key: `per D: sum(ship) by (D) <= cap * open` with `open` declared
-  `per D:`): one model row per `by` group that a class reaches, under the group's tightest bound (`=` refuses
-  differing bounds; `<>` excludes each). A term beside the reducers counts once in its group's row.
+  group (query-wide, or keyed by the `by` key and held by it: a decision declared on the key, data that is one of the
+  key's own columns): one model row per `by` group that a class reaches, under the group's tightest bound (`=`
+  refuses differing bounds; `<>` excludes each). A term beside the reducers counts once in its group's row. Data the
+  key does not hold may take several values in a class, each a variant (§7.1), so beside a reducer it takes the
+  helper-decision shape.
 - **Helper decision** — anything else: a term beside a reducer that varies within a group (`ship <= 0.20 * sum(ship)`,
   a decision keyed by another key), a row-varying factor, reducers with different `by`
   keys, a reducer inside another expression (`abs(sum(ship) by (g) - 40) <= 5`). Each reducer becomes a **helper
   decision** with one instance per `by` group, defined once (a row for `SUM`/`AVG` on the side the clause pushes it, an
   extremum link for `MIN`/`MAX`), and the clause is one row per class.
   Example 1 costs N rows of two entries plus one definition row,
-  not N rows of N entries. Clauses holding the same reducer over the same rows share one helper and one definition,
+  not N rows of N entries. Where writing a helper's members into the rows that read it adds no nonzero -- an instance
+  of `m` terms read `k` times costs `m·k` written in, `m + 1 + k` defined -- the helper is written in and has no
+  column (D89): example 5's depot sums, two shipments read by two rows, and a range frame's window read by its anchor
+  alone. A bound on a `SUM` or `AVG` helper alone is such a row, not its box, so the running example's region sums are
+  written into its three clause rows (deck pp. 115, 119). The `SUM` and `AVG` reducers of a nest are written in
+  whatever that costs, as the deck flattens them: each region's sum, whatever its size, into every row that reads it.
+  So is a nested reducer written into the one around it; a
+  `MIN`/`MAX` group of one member is that member, written in group by group (deck p. 112); and a group with no member
+  has no column. Clauses holding the same reducer over the same rows share one helper and one definition,
   which belongs to none of them: a `DIAGNOSE` that drops one leaves the definition the others read. The helper is whole-numbered when the reducer's value is, so `<`, `>`, `<>` follow §3. A
   product or square of decisions inside such a reducer is defined per row first, so `sum(power(x, 2)) + gcap * s <= 30`
   answers on Gurobi and is refused on HiGHS, which has no quadratic constraints (§3.1). A `BOOL` factor on a reducer
   (`b * sum(x)`) leaves the product `b * helper`, which is linearized as any `BOOL` product (§4).
 
 `EXPLAIN` names a helper by its reducer; `DIAGNOSE` names the clause and never a definition row. Tests:
-`test/decide/tests/test_scope_value_rewrite.py`.
+`test/decide/tests/test_scope_value_rewrite.py`, `test/decide/tests/test_anr_inlining.py` (a helper written in or
+kept, model sizes pinned) and `test/common/test_decidb_helper_inlining.cpp`.
 
 ### 6.5 Deck examples 1–8
 
 From the language proposal ([`context/New_syntax.pdf`](../../New_syntax.pdf), pp. 17–24). All run as written and fully
 explicit, over `FROM Shipment S JOIN Depot D USING (depotID)` with `DECIDE ship(INT), per D.depotID: reserve(REAL)`:
 
-| # | As written | Constraints | Reducer reads | Must be determined |
+| # | As written | Constraints | Reducer reads | A variant per distinct |
 |---|---|---|---|---|
 | 1 | `ship <= 0.20 * sum(ship)` | one per shipment | all rows | — |
-| 2 | `per (): sum(ship) <= networkCapacity` | one | all rows | `networkCapacity` |
-| 3 | `per D.depotID: reserve >= D.networkReserveShare * sum(S.demand)` | one per depot | all rows | `reserve`, the share |
+| 2 | `per (): sum(ship) <= networkCapacity` | one per value | all rows | `networkCapacity` |
+| 3 | `per D.depotID: reserve >= D.networkReserveShare * sum(S.demand)` | one per depot | all rows | the share |
 | 4 | `per D.depotID: sum(ship) by (D.depotID) <= D.capacity` | one per depot | the depot's rows | `D.capacity` |
 | 5 | `ship <= D.maxShipmentShare * sum(ship) by (D.depotID)` | one per shipment | its depot's rows | — |
-| 6 | `per D.depotID: reserve >= 0.10 * sum(S.demand) by (D.region) + 0.02 * sum(S.demand) by (D.country)` | one per depot | region; country | `reserve`, region, country |
+| 6 | `per D.depotID: reserve >= 0.10 * sum(S.demand) by (D.region) + 0.02 * sum(S.demand) by (D.country)` | one per depot | region; country | region, country |
 | 7 | `per D.depotID: sum(when S.priority: ship) by (D.depotID) <= D.priorityCapacity` | one per depot | its priority rows | `D.priorityCapacity` |
-| 8 | `per S.shipmentID: ship <= 0.25 * sum(ship) by (D.depotID, S.dispatchDay + S.transitDays)` | one per shipment | same depot and arrival day | `ship`, the key |
+| 8 | `per S.shipmentID: ship <= 0.25 * sum(ship) by (D.depotID, S.dispatchDay + S.transitDays)` | one per shipment | same depot and arrival day | the key |
 
-On data where a depot has no priority shipment, example 7 has no constraint for that depot (§5.3). Example 9 (nested reducers) is not in the
-language yet ([roadmap.md](roadmap.md)). Tests: `test/decide/tests/test_scope_deck_examples.py`.
+Example 7 has no constraint for a depot with no priority shipment (§5.3). Example 9 (nested reducers) is in §5.5.
+Tests: `test/decide/tests/test_scope_deck_examples.py`.
 
-## 7. Determination, NULL and empty sets
+## 7. Variants, NULL and empty sets
 
-### 7.1 The determination rule
+### 7.1 Variant signatures
 
-A term must have one value per generated constraint, so a `per` key must determine everything its body reads once per
-class: every tuple term (the bound and any factor included), every decision outside reducers, and every reducer's `by`
-key. An inner `per` key and a colon form's relations must likewise determine their reducer's body.
+A `per` key splits the kept rows into classes, and each class is generated once per **variant** (D70, deck pp.
+34–40): once per distinct combination of what the body reads once per class — its **signature**:
 
-- A **keyed** decision is determined when each `K`-class lies in one class of its own key; a **per-row** one only when
-  each `K`-class is one row; a **query-wide** one always.
-- Literals, uncorrelated subqueries and anything under `per row` are always determined.
-- `per ()`, and the objective, need each tuple term to have one value over all kept rows.
-- **Checked on the data**, every run, before solving, over kept rows only — so one query can pass on one dataset and
-  fail on another. A static check would have to refuse queries that are fine on the data they run on.
-- NULL counts as one value here.
+- every **column** the data outside reducers reads, by value, the bound and any factor on a reducer included (D83, deck
+  pp. 81, 110): `per g: x <= a + b` over rows with `(a, b)` = `(1, 2)` and `(2, 1)` is two variants, although both
+  bounds are 3, and so are `x - a <= b` and `x <= a + sum(y) + b`. A literal or a query-wide value is no field;
+- every **frame**, by its keys: its timeline, and the anchor's position there when it reads relative to it (D82,
+  §5.6);
+- every **decision** outside reducers, by instance: a per-row decision splits the class into its rows, a keyed one into
+  its classes, and a `per ()` decision splits nothing;
+- every reducer's **`by` key**, by value: each group a class reads is a variant.
+
+Each variant is generated at its first kept row, which stands for the variant's rows: they agree on everything the
+body reads. An inner `per` key, and the relations of a colon form, hand their reducer one value per variant of each of
+its classes the same way (D71, §5.3).
+
+- **Where the key fixes every one of them**, each class has one variant and the model is one constraint per class
+  (deck p. 39). A value the key's own columns hold (one of them, or a function of them), a decision keyed on them and a
+  `by` key inside the key never split a class.
+- **`per row`**, or no `per`, has one row per class, so one instance per kept row.
+- **NULL** is one value of a field. The variant that reads a NULL bound or coefficient skips its instance (§3).
+- **Equal bodies in two classes** stay two instances, two identical model rows.
+- **The objective is produced once** (§4, D72): its one class must hold one variant, else the query stops (§7.3).
 
 ```sql
-per D.depotID: sum(ship) by (D.region) <= 500    -- holds: each depot has one region
-per D.depotID: sum(ship) by (S.region) <= 500    -- fails if a depot ships to two regions
-per D.depotID: ship <= 10                        -- fails: ship is per row, a depot has several rows
+-- one constraint per depot: every depot has one region
+per D.depotID: sum(ship) by (D.region) <= 500
+
+-- a depot with shipments in two S.region values: one constraint per region it ships to
+per D.depotID: sum(ship) by (S.region) <= 500
+
+-- ship is per row: one constraint per row of the depot
+per D.depotID: ship <= 10
+
+-- one constraint per value of networkCapacity: the smallest binds
+per (): sum(ship) <= networkCapacity
 ```
 
-Tests: `test/decide/tests/test_scope_determination.py`.
+`EXPLAIN ANALYZE` prints, under a clause whose classes held more than one variant, how many instances they made
+(§9): *"↳ per t.g: 2 constraints from 1 class, one per distinct (t.a) within a class"*. A plain `EXPLAIN` reads no data,
+so it cannot count them. Tests: `test/decide/tests/test_scope_variants.py`, `test_anr_variants.py` (the deck's pp.
+26, 27 and 34-36 as written among its fixtures), `test_scope_variant_paths.py` and the scope grid
+(`test_scope_combinations.py`).
 
 ### 7.2 NULL and empty sets
 
@@ -577,6 +790,7 @@ Tests: `test/decide/tests/test_scope_determination.py`.
 | NULL `when` condition | row dropped |
 | NULL in a reducer's summand | the row is skipped, as in SQL; AVG divides by the rows kept (§3) |
 | NULL bound, unreduced coefficient or factor on an aggregate | the instance is skipped (§3) |
+| NULL, or a value that has none, inside `abs`, a square or a Boolean product (`abs(x - t.d)`) | the expression has no value there either (D88): unreduced, the instance is skipped; in a reducer, the member is dropped |
 | NULL in an objective term | the term is dropped (§3) |
 | NULL or NaN written in the query beside a decision; NaN in data; an infinite coefficient | error (§3) |
 | a `when` keeps no row | no constraint (D68) |
@@ -592,9 +806,29 @@ Run before solving, on every run, also under `DIAGNOSE`:
 
 | Check | Message |
 |---|---|
-| A `per` key determines what it must (§7.1) | `DECIDE: per D.depotID does not determine D.capacity. D.depotID = 'D1' has more than one value: 25, 40.` · for a decision: `... covers more than one ship.` · context: `(in by (S.region))`, `(in sum(D: ...))` · for `per ()`: `The kept rows have more than one value: 3, 5.` |
+| The objective is produced once (§4, D72) | `DECIDE objective: 'D.capacity' takes more than one value over the kept rows (20, 40), so the objective would be produced more than once; move it inside a reducer or fix it with when.` · for a decision: `the decision 'ship' (declared per row) has more than one instance over the kept rows, ...` · for a `by` key: `'D.region' in by (D.region) takes more than one value over the kept rows ('East', 'West'), ...` |
 
-The phrase `does not determine` is fixed; names and values come from the query and the data. Over a join a column is named with its relation.
+The phrase `would be produced more than once` is fixed; names and values come from the query and the data, the least
+and the greatest value as `ORDER BY` places them (NULL last), so the message does not depend on row order. A frame's two
+positions read first and last in the frame's own order. Over a join a column is named with its relation.
+
+### 7.4 What the data left of a clause
+
+An instance with no value is skipped (§7.2), which can leave a clause constraining nothing, or the objective 0, with
+no error. The query is still answered as written, and DeciDB says so (D90):
+
+- **A clause left with no instance** -- each it held has no value -- is one line on stderr: *"DECIDE warning: 'x <=
+  at(5 previous: x) over (t.period within t.product)' constrains nothing: each of its 6 instances has no value, so
+  each is skipped."* An instance is a kept row, or in the aggregate shape a group of the kept rows, whether or not a
+  reducer reads a row of it. A clause whose `when` keeps no row, or whose `per` key is NULL on every row, holds no
+  instance to skip, and says nothing.
+- **An objective that is 0 whatever the decisions** -- each term has no value or a zero factor on every row -- is
+  one line too: *"DECIDE warning: the objective is 0 whatever the decisions: each of its terms has no value or a zero
+  factor on every row, so any feasible answer is optimal."*
+- **EXPLAIN ANALYZE** counts, under a clause, the instances it skipped (`↳ 3 of 6 instances have no value and are
+  skipped`), and under the objective the line above (`↳ is 0 whatever the decisions ...`).
+
+As with the large-number warning (§3), a query answered by direct solve (§10) prints nothing.
 
 ## 8. `DIAGNOSE`
 
@@ -671,7 +905,9 @@ when the model differs: `≡` for the canonical form, `↳` for what each rewrit
 (`abs(ship - 20) becomes an auxiliary variable`, `sum(ship) by (D.region) becomes a helper decision per group`) and
 the rows the solver receives. An auxiliary prints as the expression it stands for, never an internal name; a bound
 derived from data prints as `M`. `EXPLAIN` plans without solving; `EXPLAIN ANALYZE` solves and adds actual rows and
-timing.
+timing, and under a clause what the data made of it: a `↳` line counting the variants of its classes (§7.1, D71),
+one counting the instances it skipped for having no value (§7.4), and one for each helper decision written where it
+is read, with no column (`↳ sum(t.w * x) by (t.product) is written where it is read, with no column`; §6.4, D89).
 
 **Echo.** EXPLAIN, DIAGNOSE and messages quote a clause as typed (case, spacing and comments as written), with the
 `when c per K:` qualifier in front and the defaults `per row:` and `by ()` left out. Text DeciDB reprints itself (a

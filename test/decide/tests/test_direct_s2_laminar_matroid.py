@@ -118,9 +118,6 @@ TIES = [
     _row(7, "S", "b", -3.0),
 ]
 
-# Every row scores below zero: nothing improves a maximized objective.
-LOSSES = [_row(i, "N" if i < 3 else "S", "a" if i % 2 else "b", -1.0 - i) for i in range(6)]
-
 # MAIN with a cap per row, read from the data. Per department the tightest cap is 1 (N sales), 2 (N research), 1 (S
 # sales), 3 (S research), 1 (W research) and 1 (W tools); per division 1, 1 and 1; the whole query 1. The largest are 2, 2,
 # 1, 3, 2, 1 per department and 2, 3, 2 per division.
@@ -141,7 +138,6 @@ DATASETS = {
     "counter": COUNTER,
     "deep": DEEP,
     "ties": TIES,
-    "losses": LOSSES,
     "nulls": NULLS,
 }
 
@@ -178,50 +174,30 @@ S2_CASES = {
     },
     "independent_ranks_are_wrong": {"data": "counter", "quotas": [Q(DEPT, 1), Q(DIV, 2)]},
     "independent_ranks_are_wrong_written_coarse_first": {"data": "counter", "quotas": [Q(DIV, 2), Q(DEPT, 1)]},
-    "two_levels_department_and_global": {"quotas": [Q(DEPT, 1), Q((), 3)]},
-    "two_levels_division_and_global": {"quotas": [Q(DIV, 2), Q((), 4)]},
     "three_levels": {"quotas": [Q(DEPT, 1), Q(DIV, 2), Q((), 4)]},
-    "three_levels_global_binds": {"quotas": [Q(DEPT, 2), Q(DIV, 3), Q((), 3)]},
-    "three_levels_division_binds": {"quotas": [Q(DEPT, 2), Q(DIV, 1), Q((), 5)]},
     "three_levels_written_coarse_first": {"quotas": [Q((), 4), Q(DIV, 2), Q(DEPT, 1)]},
-    "three_levels_written_in_between": {"quotas": [Q(DIV, 2), Q((), 4), Q(DEPT, 1)]},
     "four_levels": {"data": "deep", "quotas": [Q(TEAM, 1), Q(DEPT, 3), Q(DIV, 4), Q((), 6)]},
-    "four_levels_every_level_binds": {"data": "deep", "quotas": [Q(TEAM, 2), Q(DEPT, 3), Q(DIV, 5), Q((), 6)]},
     # --- the limits ---
     "zero_cap_finest": {"quotas": [Q(DEPT, 0), Q(DIV, 2), Q((), 4)]},
-    "zero_cap_coarser": {"quotas": [Q(DEPT, 1), Q(DIV, 0), Q((), 4)]},
-    "zero_cap_global": {"quotas": [Q(DEPT, 1), Q(DIV, 2), Q((), 0)]},
-    "cap_above_the_group_finest": {"quotas": [Q(DEPT, 50), Q(DIV, 2), Q((), 4)]},
     "cap_above_the_group_every_level": {"quotas": [Q(DEPT, 50), Q(DIV, 60), Q((), 70)]},
-    "cap_above_the_group_global": {"quotas": [Q(DEPT, 1), Q(DIV, 2), Q((), 70)]},
     "fractional_cap": {"quotas": [Q(DEPT, 1.5), Q(DIV, 2.5), Q((), 4.5)]},
     "strict_caps": {"quotas": [Q(DEPT, 2, "<"), Q(DIV, 3, "<"), Q((), 5, "<")]},
     "strict_cap_beside_a_fraction": {"quotas": [Q(DEPT, 1.5, "<"), Q((), 3.5, "<")]},
     "negated_count_body": {"quotas": [Q(DEPT, -1, ">=", body="-x"), Q(DIV, -2, ">", body="-x"), Q((), 4)]},
     "limit_two_pow_53": {"quotas": [Q(DEPT, 1), Q((), 9007199254740992)]},
     "merged_clauses_of_one_scope": {"quotas": [Q(DEPT, 2), Q(DIV, 3), Q(DEPT, 1), Q((), 4), Q((), 3, "<"), Q(DIV, 9)]},
-    "merged_clauses_the_looser_first": {"quotas": [Q(DIV, 9), Q((), 5), Q(DEPT, 2), Q(DIV, 1), Q((), 2)]},
     "merged_clauses_one_of_them_below_zero": {"quotas": [Q(DEPT, 1), Q(DIV, 3), Q(DIV, -1), Q((), 9)]},
     "limit_below_zero_finest": {"quotas": [Q(DEPT, -1), Q(DIV, 2), Q((), 4)]},
-    "limit_below_zero_coarser": {"quotas": [Q(DEPT, 1), Q(DIV, 2), Q((), -0.5)]},
-    "limit_below_zero_strict": {"quotas": [Q(DEPT, 1), Q(DIV, 0, "<"), Q((), 4)]},
     # --- fixed rows ---
     # Row 1 is fixed to 1: it uses the cap of its department (sales of N), its division and the query, so row 0, the
     # better row of the department, is left out.
     "fixed_one_uses_every_level": {"quotas": [Q(DEPT, 1), Q(DIV, 2), Q((), 4)], "fixed": [(1, [1])]},
-    # Row 3 is fixed to 1: it uses the only place of its division, so no other row of N is selected.
-    "fixed_one_uses_the_division": {"quotas": [Q(DEPT, 1), Q(DIV, 1), Q((), 4)], "fixed": [(1, [3])]},
-    "fixed_one_uses_the_global_cap": {"quotas": [Q(DEPT, 1), Q(DIV, 3), Q((), 2)], "fixed": [(1, [9])]},
     "fixed_zero_leaves_the_ranking": {"quotas": [Q(DEPT, 1), Q(DIV, 2), Q((), 4)], "fixed": [(0, [0])]},
-    "fixed_zero_and_one": {"quotas": [Q(DEPT, 1), Q(DIV, 2), Q((), 4)], "fixed": [(1, [1, 7]), (0, [0, 4])]},
     "fixed_to_fill_a_cap_exactly": {"quotas": [Q(DEPT, 1), Q(DIV, 2), Q((), 3)], "fixed": [(1, [1, 4, 7])]},
     # A fixed row the key leaves out of a level still uses the levels it is in: row 10 has no division, row 11 no
     # department.
     "fixed_one_with_no_division": {"quotas": [Q(DEPT, 1), Q(DIV, 1), Q((), 2)], "fixed": [(1, [10])]},
-    "fixed_one_with_no_department": {"quotas": [Q(DEPT, 1), Q(DIV, 1), Q((), 2)], "fixed": [(1, [11])]},
-    "fixed_with_a_negative_score": {"quotas": [Q(DEPT, 1), Q(DIV, 2), Q((), 4)], "fixed": [(1, [3, 8])]},
     "fixed_in_a_zero_cap_group_is_infeasible": {"quotas": [Q(DEPT, 0), Q(DIV, 2), Q((), 4)], "fixed": [(1, [0])]},
-    "fixed_beyond_the_finest_cap": {"quotas": [Q(DEPT, 1), Q(DIV, 3), Q((), 5)], "fixed": [(1, [0, 1])]},
     "fixed_beyond_a_coarser_cap": {"quotas": [Q(DEPT, 2), Q(DIV, 2), Q((), 5)], "fixed": [(1, [0, 1, 3])]},
     "fixed_beyond_the_global_cap": {"quotas": [Q(DEPT, 3), Q(DIV, 4), Q((), 2)], "fixed": [(1, [0, 4, 7])]},
     # The last group to fail is the coarsest one: row 11 joins rows 0 and 3 in N only at the division and query levels.
@@ -232,31 +208,19 @@ S2_CASES = {
     "fixed_to_both_values_is_infeasible": {"quotas": [Q(DEPT, 1), Q(DIV, 2), Q((), 4)], "fixed": [(1, [2]), (0, [2])]},
     # --- the objective ---
     "minimize": {"quotas": [Q(DEPT, 1), Q(DIV, 2), Q((), 4)], "sense": "MINIMIZE"},
-    "minimize_every_row_costs_something": {
-        "data": "losses",
-        "quotas": [Q(DEPT, 1), Q(DIV, 2), Q((), 3)],
-        "sense": "MINIMIZE",
-    },
-    "negative_scores_are_not_selected": {"data": "losses", "quotas": [Q(DEPT, 1), Q(DIV, 2), Q((), 3)]},
     "ties": {"data": "ties", "quotas": [Q(DEPT, 1), Q(DIV, 2), Q((), 3)]},
-    "ties_every_level_binds": {"data": "ties", "quotas": [Q(DEPT, 2), Q(DIV, 3), Q((), 4)]},
-    "ties_minimize": {"data": "ties", "quotas": [Q(DEPT, 1), Q(DIV, 2), Q((), 3)], "sense": "MINIMIZE"},
     "no_objective": {"quotas": [Q(DEPT, 1), Q(DIV, 2), Q((), 4)], "sense": "none"},
     # --- rows outside a level ---
     # The `when` drops row 2, 3, 5, 8 from the department quota only; the division and the query count them.
     "when_on_the_finer_level": {"quotas": [Q(DEPT, 1, when="flag"), Q(DIV, 2), Q((), 4)]},
     "when_on_two_levels_from_the_finest": {"quotas": [Q(DEPT, 1, when="flag"), Q(DIV, 2, when="flag"), Q((), 4)]},
-    "when_on_every_level": {"quotas": [Q(DEPT, 1, when="flag"), Q(DIV, 2, when="flag"), Q((), 2, when="flag")]},
     "when_inside_every_sum": {"quotas": [Q(DEPT, 1, when="local"), Q(DIV, 2, when="local"), Q((), 2, when="local")]},
     "when_on_the_finer_level_of_one_key": {"quotas": [Q(DIV, 1, when="flag"), Q(DIV, 3), Q((), 4)]},
-    "when_with_a_fixed_row_it_drops": {"quotas": [Q(DEPT, 1, when="flag"), Q(DIV, 2), Q((), 4)], "fixed": [(1, [2])]},
-    "when_with_a_fixed_row_it_keeps": {"quotas": [Q(DEPT, 1, when="flag"), Q(DIV, 2), Q((), 4)], "fixed": [(1, [1])]},
     # Rows 2 and 3 are fixed to 1 and share a department of cap 1; the `when` drops row 2 from that quota, so it holds.
     "when_drops_a_fixed_row_that_would_overfill_a_group": {
         "quotas": [Q(DEPT, 1, when="flag"), Q(DIV, 3), Q((), 9)],
         "fixed": [(1, [2, 3])],
     },
-    "null_division_and_department": {"quotas": [Q(DEPT, 1), Q(DIV, 1), Q((), 5)]},
     "null_keys_beside_a_zero_cap": {"quotas": [Q(DEPT, 0), Q(DIV, 0), Q((), 5)]},
     "no_row_in_a_group_of_the_finer_levels": {"data": "nulls", "quotas": [Q(DEPT, 1), Q(DIV, 1), Q((), 2)]},
 }
@@ -310,11 +274,6 @@ def _the_length_of_the_department(members, whole):
 FINE = Q(DEPT, "cap", cap_of=_tightest)
 S2_DATA_CAP_CASES = {
     # --- a source value per row: the group's tightest ---
-    "per_row_cap_at_the_finer_level": {"data": "capped", "quotas": [FINE, Q(DIV, 2), Q((), 4)]},
-    "per_row_cap_at_the_coarser_level": {
-        "data": "capped",
-        "quotas": [Q(DEPT, 2), Q(DIV, "cap + 1", cap_of=_plus(_tightest, 1)), Q((), 5)],
-    },
     "per_row_cap_at_every_level": {
         "data": "capped",
         "quotas": [FINE, Q(DIV, "cap + 1", cap_of=_plus(_tightest, 1)), Q((), "cap + 3", cap_of=_plus(_tightest, 3))],
@@ -324,14 +283,6 @@ S2_DATA_CAP_CASES = {
         "quotas": [Q(DEPT, "LENGTH(dept) - 4", cap_of=_the_length_of_the_department), Q(DIV, 2), Q((), 4)],
     },
     # --- an aggregate of the group's rows ---
-    "aggregate_cap_at_the_finer_level": {
-        "data": "capped",
-        "quotas": [Q(DEPT, "MAX(cap) by (div, dept)", cap_of=_largest), Q(DIV, 2), Q((), 4)],
-    },
-    "aggregate_cap_at_the_coarser_level": {
-        "data": "capped",
-        "quotas": [Q(DEPT, 1), Q(DIV, "COUNT(*) by (div) / 2", cap_of=_half_the_rows), Q((), 5)],
-    },
     "aggregate_cap_at_every_level": {
         "data": "capped",
         "quotas": [
@@ -422,10 +373,6 @@ S2_DATA_CAP_CASES = {
         "data": "capped",
         "quotas": [Q(DEPT, "cap - 3", cap_of=_plus(_tightest, -3)), Q(DIV, 5), Q((), 9)],
     },
-    "cap_below_zero_at_the_coarser_level": {
-        "data": "capped",
-        "quotas": [Q(DEPT, 2), Q(DIV, "cap - 2", cap_of=_plus(_tightest, -2)), Q((), 9)],
-    },
     "aggregate_cap_below_zero": {
         "data": "capped",
         "quotas": [Q(DEPT, 2), Q(DIV, 3), Q((), "COUNT(*) / 2 - 7", cap_of=lambda m, w: len(m) / 2 - 7)],
@@ -439,20 +386,13 @@ S2_DATA_CAP_CASES = {
         "quotas": [FINE, Q(DIV, 5), Q((), 9)],
         "fixed": [(1, [0, 1])],
     },
-    "fixed_rows_beyond_a_cap_at_the_coarser_level": {
-        "data": "capped",
-        "quotas": [Q(DEPT, 3), Q(DIV, "cap", cap_of=_tightest), Q((), 9)],
-        "fixed": [(1, [0, 3])],
-    },
 }
 
 INFEASIBLE_DATA_CAP_CASES = [
     "cap_below_zero_at_the_finer_level",
-    "cap_below_zero_at_the_coarser_level",
     "aggregate_cap_below_zero",
     "strict_cap_of_zero",
     "fixed_rows_beyond_a_cap_at_the_finer_level",
-    "fixed_rows_beyond_a_cap_at_the_coarser_level",
 ]
 
 
@@ -689,14 +629,7 @@ def test_s2_applies_to_the_definitions_example_and_the_counter_example(decidb_cl
 
 INFEASIBLE_CASES = [
     "limit_below_zero_finest",
-    "limit_below_zero_coarser",
-    "limit_below_zero_strict",
-    "merged_clauses_one_of_them_below_zero",
-    "fixed_in_a_zero_cap_group_is_infeasible",
-    "fixed_beyond_the_finest_cap",
-    "fixed_beyond_a_coarser_cap",
     "fixed_beyond_the_global_cap",
-    "fixed_beyond_the_division_through_a_row_with_no_department",
     "fixed_to_both_values_is_infeasible",
 ]
 

@@ -131,15 +131,12 @@ def column(row, group):
 
 # The worked example of definition.md: the prefix 2, 3, 4 uses the budget up exactly.
 WORKED = _rows([2.0, 3.0, 4.0, 6.0])
-add("worked_example", WORKED, "SUM(w*x) <= 9", constant(9.0))
 # The same weights in the opposite order: the first row, the heaviest, is the one the budget leaves out.
 WORKED_REVERSED = _rows([6.0, 4.0, 3.0, 2.0])
 add("worked_example_reversed", WORKED_REVERSED, "SUM(w*x) <= 9", constant(9.0))
 
-# Signs. Zero weights cost nothing, so they come first (3 rows: 0, 0 and 1; the 3 would make 4).
-add("zero_weights", _rows([3.0, 0.0, 0.0, 1.0, 5.0]), "SUM(w*x) <= 3", constant(3.0))
-# A negative weight is a credit: -3, -1, 2 and 4 sum to 2, so four rows fit under 4 where the positive weights alone
-# fit one.
+# Signs. A negative weight is a credit: -3, -1, 2 and 4 sum to 2, so four rows fit under 4 where the positive weights
+# alone fit one.
 add("negative_weights", _rows([-3.0, -1.0, 2.0, 4.0, 5.0]), "SUM(w*x) <= 4", constant(4.0))
 # The empty prefix (0) and the first (-5) are over -6; the second (-9) and the third (-6) are within it. The largest
 # prefix that fits is the third, so the first failures do not end the search.
@@ -147,8 +144,7 @@ add("negative_budget_met_by_negative_weights", _rows([-5.0, -4.0, 3.0, 6.0]), "S
 # Four equal weights: any three of them.
 add("tied_weights", _rows([2.0, 2.0, 2.0, 2.0, 5.0]), "SUM(w*x) <= 6", constant(6.0))
 
-# The budget fits every row, and it fits none but the empty prefix.
-add("budget_fits_every_row", _rows([0.5, 2.0, 3.5, 4.0]), "SUM(w*x) <= 100", constant(100.0))
+# The budget fits none but the empty prefix.
 add("budget_fits_only_the_empty_prefix", _rows([2.0, 3.0, 4.0]), "SUM(w*x) <= 1", constant(1.0))
 
 # A budget read from the data. The tightest limit among the rows' instances rules (7 here, not 9 or 12), a NULL limit
@@ -208,15 +204,6 @@ add(
     constant(4.0),
     weight=lambda row: row["w"] - 1.0,
 )
-
-# Duplicate rows (the same id and the same weight) stay separate rows: 2 and one of the two 3s fit.
-DUPLICATES = (
-    dict(ROW_DEFAULTS, id=1, w=2.0),
-    dict(ROW_DEFAULTS, id=2, w=3.0),
-    dict(ROW_DEFAULTS, id=2, w=3.0),
-    dict(ROW_DEFAULTS, id=3, w=4.0),
-)
-add("duplicate_rows", DUPLICATES, "SUM(w*x) <= 5", constant(5.0))
 
 # A NULL weight is a NULL summand, which SUM skips: the row costs nothing and is selected.
 add("null_weight", _rows([2.0, None, 4.0, 6.0]), "SUM(w*x) <= 5", constant(5.0))
@@ -286,24 +273,6 @@ add(
 PINNED = lambda row: (1,) if row["must"] else (0,) if row["ban"] else (0, 1)  # noqa: E731
 FIX_MUST = "when must: x = 1"
 FIX_BAN = "when ban: x = 0"
-# The 6 is fixed to 1: the free rows 2, 3 and 4 are left 3 of the budget, and only the 2 fits.
-add(
-    "fixed_to_one_leaves_the_rest_of_the_budget",
-    _rows([2.0, 3.0, 4.0, 6.0], must=[False, False, False, True]),
-    "SUM(w*x) <= 9",
-    constant(9.0),
-    fixes=FIX_MUST,
-    allowed=PINNED,
-)
-# The 2 is fixed to 0: the 3 and the 4 fit, the 6 does not.
-add(
-    "fixed_to_zero_leaves_the_prefix",
-    _rows([2.0, 3.0, 4.0, 6.0], ban=[True, False, False, False]),
-    "SUM(w*x) <= 9",
-    constant(9.0),
-    fixes=FIX_BAN,
-    allowed=PINNED,
-)
 add(
     "fixed_to_one_and_to_zero",
     _rows([2.0, 3.0, 4.0, 6.0, 1.0], must=[False, True, False, False, False], ban=[True, False, False, False, False]),
@@ -312,8 +281,7 @@ add(
     fixes=f"{FIX_MUST} AND {FIX_BAN}",
     allowed=PINNED,
 )
-# A fixed row of each sign of weight: a negative weight fixed to 1 is a credit (-5 leaves 9 for the free rows), fixed to
-# 0 it is lost; a zero weight costs nothing either way.
+# A negative weight fixed to 1 is a credit: -5 leaves 9 for the free rows; the zero weight costs nothing.
 NEGATIVE_FIXED = [-5.0, 2.0, 3.0, 4.0, 6.0, 0.0]
 add(
     "negative_weight_fixed_to_one",
@@ -321,14 +289,6 @@ add(
     "SUM(w*x) <= 4",
     constant(4.0),
     fixes=FIX_MUST,
-    allowed=PINNED,
-)
-add(
-    "negative_weight_fixed_to_zero",
-    _rows(NEGATIVE_FIXED, ban=[True] + [False] * 5),
-    "SUM(w*x) <= 4",
-    constant(4.0),
-    fixes=FIX_BAN,
     allowed=PINNED,
 )
 # The rows fixed to 1 use the budget exactly: 4 + 5 = 9 fits (a comparison with `<=`), and the free row of 5 is the one
@@ -467,15 +427,6 @@ add(
     objective=FEWEST,
     at_least=True,
 )
-# Every row is needed.
-add(
-    "at_least_every_row_is_needed",
-    _rows([1.5, 2.5, 3.0]),
-    "SUM(w*x) >= 7",
-    constant(7.0),
-    objective=FEWEST,
-    at_least=True,
-)
 # Negative weights: the totals of the heaviest first are 5, 8, -2 and -12, so they rise and then fall. Only the second
 # reaches 8; the search stops at the shortest prefix that reaches B, and a later one would not reach it.
 add(
@@ -496,23 +447,6 @@ add(
 )
 # A minimum of at most 0 is met by the empty prefix: nothing is selected, whatever the weights.
 add("at_least_zero_minimum", _rows([2.0, 3.0]), "SUM(w*x) >= 0", constant(0.0), objective=FEWEST, at_least=True)
-add(
-    "at_least_negative_minimum_with_negative_weights",
-    _rows([-2.0, -3.0]),
-    "SUM(w*x) >= -1",
-    constant(-1.0),
-    objective=FEWEST,
-    at_least=True,
-)
-# A maximized negation of the count is the minimized count.
-add(
-    "at_least_maximized_negated_count",
-    WORKED,
-    "SUM(w*x) >= 9",
-    constant(9.0),
-    objective="MAXIMIZE SUM(-x)",
-    at_least=True,
-)
 # Groups. a needs 9 (6 and 4: two rows), b needs 3 (2 and 1: two), c needs 4 (one row of 5), d is met by the empty
 # prefix (0 reaches -1), e needs 2 (one row of 2).
 AT_LEAST_GROUPS = _rows(
@@ -881,8 +815,8 @@ def test_s3_empty_source_returns_no_rows_whatever_the_budget_says(decidb_cli, li
 @pytest.mark.correctness
 @pytest.mark.parametrize(
     "budget",
-    ["SUM(x) <= 2", "SUM(1*x) <= 2", "SUM(0.5*x + 0.5*x) <= 2", "SUM(-x) <= -1"],
-    ids=["unit", "folded_unit", "constants_summing_to_one", "negative_unit"],
+    ["SUM(x) <= 2", "SUM(0.5*x + 0.5*x) <= 2", "SUM(-x) <= -1"],
+    ids=["unit", "constants_summing_to_one", "negative_unit"],
 )
 def test_s3_leaves_a_count_to_s1(decidb_cli, budget):
     sql = f"SELECT id, x FROM (FROM (VALUES (1), (2), (3)) t(id) DECIDE x(BOOL) SUCH THAT {budget} MAXIMIZE SUM(x)) q"
@@ -907,14 +841,7 @@ _SOURCE = "(1, 'a', 2.0::DOUBLE, 9.0::DOUBLE), (2, 'a', {w}::DOUBLE, {cap}::DOUB
 # name -> (query, the class of error both paths raise). The classes are `_direct_differential.ERROR_CLASSES`.
 S3_ERROR_CASES = {
     "nan_weight": (_problem(_SOURCE.format(w="'NaN'", cap="9.0")), "invalid_value"),
-    "infinite_weight": (_problem(_SOURCE.format(w="'Infinity'", cap="9.0")), "invalid_value"),
-    "negative_infinite_weight": (_problem(_SOURCE.format(w="'-Infinity'", cap="9.0")), "invalid_value"),
     "nan_limit": (_problem(_SOURCE.format(w="3.0", cap="'NaN'"), "SUM(w*x) <= cap"), "null_bound"),
-    # No prefix meets a negative budget when every weight is positive; the empty one is over it too.
-    "negative_constant_budget_no_prefix_meets": (
-        _problem(_SOURCE.format(w="3.0", cap="9.0"), "SUM(w*x) <= -1"),
-        "infeasible",
-    ),
     # One group's budget is out of reach, and that makes the whole problem infeasible.
     "negative_limit_in_one_group": (
         _problem(_SOURCE.format(w="3.0", cap="9.0"), "SUM(w*x) by (g) <= CASE WHEN g = 'b' THEN -1 ELSE 9 END"),

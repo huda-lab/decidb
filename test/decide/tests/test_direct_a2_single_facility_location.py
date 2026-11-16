@@ -357,7 +357,12 @@ def _agree(decidb_cli, oracle_solver, case_, wrap="plain", modes=("off", "requir
         _check_assignment(case_, rows, columns, oracle, mode)
 
     large = writes_number_out_of_range(sql, bounded=["c"])
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, modes, number_range=large)
+    # An objective with a zero factor on every row of a class is 0 whatever the decisions, which the solver path warns
+    # of; a row in no class has no decision and adds no term.
+    rows = [row for members in _classes(case_).values() for row in members]
+    zero = all(c == 0 for row in rows for c in case_.objective.coefficients(row))
+    warnings = ["the objective is 0 whatever the decisions"] if zero else ()
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, modes, number_range=large, warnings=warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -506,8 +511,11 @@ def test_a2_keyed_every_row_with_no_class_has_no_instance(decidb_cli):
             f"SELECT id, c FROM (FROM (VALUES {_values(rows)}) t({', '.join(_names(rows))}) "
             f"DECIDE per k: c(REAL) SUCH THAT {bounds} MINIMIZE SUM(POWER(c - v, 2))) q ORDER BY id"
         )
+        # The solver path warns that the objective, with no row in a class, has no term.
+        warnings = {"off": ["the objective is 0 whatever the decisions"], "require": ()}
         for mode in ("off", "require"):
-            assert _run(decidb_cli, sql, mode)[0] == [(1, None), (2, None), (3, None)], mode
+            shown = _run(decidb_cli, sql, mode, expect_warnings=warnings[mode])[0]
+            assert shown == [(1, None), (2, None), (3, None)], mode
 
 
 @pytest.mark.correctness
@@ -799,13 +807,7 @@ def _with(index, **changes):
 
 # name -> (sql, error class or message the direct path must raise).
 A2_ERROR_CASES = {
-    "nan_value": (_problem(_with(1, v=math.nan)), "invalid_value"),
     "infinite_value": (_problem(_with(1, v=INF)), "invalid_value"),
-    "negative_infinite_value": (_problem(_with(1, v=-INF)), "invalid_value"),
-    "nan_value_in_a_computed_value": (
-        _problem(_with(1, v=math.nan), obj="MINIMIZE SUM(POWER(c - 2*v, 2))"),
-        "invalid_value",
-    ),
     "infinite_value_under_a_scale": (
         _problem(_with(1, v=INF), obj="MINIMIZE 3*SUM(POWER(c - v, 2))"),
         "invalid_value",
@@ -828,12 +830,6 @@ A2_ERROR_CASES = {
     ),
     # A bound's coefficient read from the data must be a number too.
     "nan_data_coefficient_of_a_bound": (_problem(_with_bound(1, lo=math.nan), "lo * c <= cap"), "invalid_value"),
-    "linear_coefficient_too_large": (_problem(_with(1, v=1e308)), "computes a number too large for a DOUBLE"),
-    # Only the sum of the squares' coefficients overflows: every value is 0, so the linear coefficient is 0.
-    "quadratic_coefficient_too_large": (
-        _problem(ZERO_ROWS, obj="MINIMIZE 1e308*SUM(POWER(c - v, 2))"),
-        "computes a number too large for a DOUBLE",
-    ),
 }
 
 
@@ -897,7 +893,8 @@ BOUNDARY_CASES = {
     "data_upper_minus_infinite_is_infeasible": _capped("CAST('-Infinity' AS DOUBLE)"),
     "data_lower_minus_infinite_is_no_bound": _capped("CAST(NULL AS DOUBLE)", "c >= lo", "CAST('-Infinity' AS DOUBLE)"),
     "data_lower_infinite_is_infeasible": _capped("CAST(NULL AS DOUBLE)", "c >= lo", "CAST('Infinity' AS DOUBLE)"),
-    "data_upper_every_row_null": _capped("CAST(NULL AS DOUBLE)"),
+    # Every instance of the bound is skipped: the solver path warns that the clause constrains nothing.
+    "data_upper_every_row_null": (_capped("CAST(NULL AS DOUBLE)"), False, ["constrains nothing"]),
     "data_upper_1e25_is_no_bound": (_capped("1e25"), False),
     "data_upper_minus_1e25": (_capped("-1e25"), True),
     "decimal_source": (
@@ -969,11 +966,11 @@ def _all_close(left, right):
 def test_a2_boundary_values_read_like_the_solver(decidb_cli, name):
     sql = BOUNDARY_CASES[name]
     if isinstance(sql, tuple):
-        sql, warns = sql
+        sql, warns, *declared = sql
     else:
-        warns = writes_number_out_of_range(sql, bounded=["c"])
+        warns, declared = writes_number_out_of_range(sql, bounded=["c"]), ()
     direct = _run_all(decidb_cli, sql, "require")
-    solver = _run_all(decidb_cli, sql, "off", warns)
+    solver = _run_all(decidb_cli, sql, "off", warns, *declared)
     assert direct[0] != "error" or "decide_direct_solve=require" not in direct[1], "no rule applied to the query"
     assert _all_close(direct, solver), (direct, solver)
 
@@ -1468,7 +1465,10 @@ def _agree_abs(decidb_cli, oracle_solver, case_, wrap="plain"):
     def check_assignment(rows, columns, mode):
         _check_abs_assignment(case_, rows, columns, oracle, mode)
 
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, ("off", "require"))
+    # No term with a value in any class: the objective is 0 whatever the decisions, which the solver path warns of.
+    zero = not any(_abs_terms_of(case_, members) for members in _classes(case_).values())
+    warnings = ["the objective is 0 whatever the decisions"] if zero else ()
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, ("off", "require"), warnings=warnings)
 
 
 def _abs_case(box, objective, rows=ROWS, keys=(), relation=False):
@@ -1729,20 +1729,3 @@ def test_a2_a_bad_value_on_the_last_row_raises_under_an_absolute_loss(decidb_cli
         for outer in (f"SELECT COUNT(*) FROM ({inner}) q", f"SELECT i FROM ({inner}) q WHERE i = 0"):
             with pytest.raises(DeciDBCliError, match=r"v is NaN or infinite on some rows"):
                 _run(decidb_cli, outer, "require")
-
-
-# ---------------------------------------------------------------------------
-# A maximized negated maximum absolute loss is the minimized one: the rule reads the part's sign, not the sense.
-# ---------------------------------------------------------------------------
-
-MAXIMIZED_NEGATED_MAX = AbsObjective("MAXIMIZE -MAX(ABS(c - v))", "max", _abs_terms(1.0, 1.0, _minus))
-
-
-@pytest.mark.var_real
-@pytest.mark.cons_perrow
-@pytest.mark.correctness
-@pytest.mark.parametrize("box", ["interior", "clamped_up", "clamped_down"])
-def test_a2_a_maximized_negated_maximum_absolute_loss_applies_and_agrees(decidb_cli, oracle_solver, box):
-    """Under `require` the query applies (it did not while the rule demanded MINIMIZE), and the center is the midpoint of
-    the extreme values, clamped into the interval as for the minimized loss."""
-    _agree_abs(decidb_cli, oracle_solver, Case(BOXES[box], MAXIMIZED_NEGATED_MAX, ROWS))

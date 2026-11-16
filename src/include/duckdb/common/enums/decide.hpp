@@ -24,19 +24,26 @@ enum class DecideSense : uint8_t { MAXIMIZE = 0, MINIMIZE = 1, FEASIBILITY = 2 }
 enum class DecideExpression : uint8_t { INVALID = 0, VARIABLE, SUM };
 
 //! How one DECIDE declaration maps onto solver columns.
-//!   ROW    — `x(INT)`, `per row: x(INT)` one column per result row
-//!   KEYED  — `per K: x(INT)`             one column per distinct value of the key
-//!   GLOBAL — `per (): x(INT)`            one column for the whole query
+//!   ROW        — `x(INT)`, `per row: x(INT)` one column per result row
+//!   KEYED      — `per K: x(INT)`             one column per distinct value of the key
+//!   GLOBAL     — `per (): x(INT)`            one column for the whole query
+//!   FRAME_READ — never declared: a decision read at the row a frame selector selects for
+//!                each row (SolverInput::frame_reads). It owns no column; at a row it is
+//!                its base decision's column at the selected row. Execution creates it.
+//!   INLINED    — never declared: a helper decision stage 06 wrote where it is read
+//!                (SolverInput::inlined_helpers, D89). It owns no column; a row reading it
+//!                reads its members. `keyed_scope_idx` stays the scope that names its
+//!                instances.
 //! The values are serialized, so a stored plan reads under any rename.
-enum class DecideVarScope : uint8_t { ROW = 0, KEYED = 1, GLOBAL = 2 };
+enum class DecideVarScope : uint8_t { ROW = 0, KEYED = 1, GLOBAL = 2, FRAME_READ = 3, INLINED = 4 };
 
 //! Per-variable scope assignment. Kept as one struct rather than parallel
 //! arrays so the optimizer's auxiliary-variable appends cannot desync the
 //! scope from its keyed scope index.
 struct DecideVarScopeInfo {
 	DecideVarScope scope = DecideVarScope::ROW;
-	//! Index into keyed_scopes / keyed_mappings. Meaningful only when
-	//! scope == KEYED; INVALID_INDEX otherwise.
+	//! Index into keyed_scopes / keyed_mappings. Meaningful when scope == KEYED, and for an
+	//! INLINED helper that was keyed (the scope naming its instances); INVALID_INDEX otherwise.
 	idx_t keyed_scope_idx = DConstants::INVALID_INDEX;
 	//! The key written after `per`, as written (`D.depotID, S.customerID`), so a message
 	//! can name the decision the way it was declared. Empty for every other spelling.
@@ -95,10 +102,19 @@ inline idx_t JoinDecideKeys(idx_t a, idx_t b) {
 }
 
 //! What a run-time scope check (LogicalDecide::scope_checks) asks of the rows.
-//!   DETERMINES     — every class of a key shows one value, or one instance of a decision
 //!   VALUE_IS_VALID — every row holds a value the model can read: a computed message, NULL on a valid row
-//! An empty group is no check: it skips its constraint (deck p. 56).
-enum class DecideScopeCheckKind : uint8_t { DETERMINES = 1, VALUE_IS_VALID = 3 };
+//! An empty group is no check: it skips its constraint (deck p. 56). A value that varies within a class is a variant,
+//! not an error (D70, LogicalDecide::signatures); 1 was the retired determination check.
+enum class DecideScopeCheckKind : uint8_t { VALUE_IS_VALID = 3 };
+
+//! What one field of a variant signature (LogicalDecide::signatures) compares, at a row:
+//!   VALUE    — a data expression, by value (NULL a value)
+//!   DECISION — a decision, by instance: a per-row one by its row, a keyed one by its class
+//!   BY_KEY   — a reducer's `by` key, by the value of each of its elements
+//!   FRAME    — a frame selector, by its keys (D82): its timeline, the anchor's order key
+//!              when its position is relative to the anchor, and its fallback where the
+//!              anchor reaches it
+enum class DecideSignatureFieldKind : uint8_t { VALUE = 0, DECISION = 1, BY_KEY = 2, FRAME = 3 };
 
 //! How one column of a key (LogicalDecide::keys) compares NULL.
 //!   NO_GROUP — a column the user wrote: rows group as SQL's `=` compares them, so a NULL
@@ -106,6 +122,9 @@ enum class DecideScopeCheckKind : uint8_t { DETERMINES = 1, VALUE_IS_VALID = 3 }
 //!   VALUE    — a column a relation element stands for (`per D`, `by (D)`): NULL is a value,
 //!              so every row of D is one class whatever its NULLs
 enum class DecideKeyNullMode : uint8_t { NO_GROUP = 0, VALUE = 1 };
+//! A frame selector's position on the anchor row's timeline (language/guide.md §5.6):
+//! the first or last peer, or k peers before or after the anchor's.
+enum class DecideFrameAnchor : uint8_t { FIRST = 0, LAST = 1, PREVIOUS = 2, NEXT = 3 };
 
 //! Type of aggregate used in MIN/MAX objective linearization
 enum class ObjectiveAggregateType : uint8_t {
@@ -252,16 +271,9 @@ static constexpr const char *POSTFIX_WHEN_TAG = "__when_constraint__";
 static constexpr const char *POSTFIX_PER_TAG = "__per_constraint__";
 
 //! The bound form of a `when c:` in front of a constraint or the objective: a conjunction whose child 0 is the body
-//! and child 1 the condition. The body reads only the rows where the condition is true.
+//! and child 1 the condition. The body reads only the rows where the condition is true. A nested objective is a nested
+//! reducer (D81).
 static constexpr const char *WHEN_FILTER_TAG = "__when_filter__";
-
-//! The bound form of the two-level objective, `outer(per k: inner(e) by (k))`: a conjunction whose child 0 is the
-//! objective `outer(inner(e))`, keyed on k (PER_KEY_TAG_PREFIX). A constraint's `per K:` is PER_CLASS_TAG.
-static constexpr const char *TWO_LEVEL_OBJECTIVE_TAG = "__two_level_objective__";
-
-inline bool IsTwoLevelObjectiveTag(const string &alias) {
-	return HasDecideTag(alias, TWO_LEVEL_OBJECTIVE_TAG);
-}
 
 //! Tag used by the parser to mark the colon form, `sum(D: expr)`: children[0] is the
 //! aggregate, children[1..] the relation names before the colon. The binder consumes
@@ -320,6 +332,15 @@ static constexpr const char *REDUCER_BY_TAG = "__reducer_by__";
 //! reducer, and NULL is a class.
 static constexpr const char *PER_CLASS_TAG = "__per_class__";
 
+//! Tag prefix naming the variant signature of a `per K:` clause (on its PER_CLASS_TAG wrapper):
+//! "__signature_<i>__" indexes LogicalDecide::signatures. The clause is one instance per class of K and value of the
+//! signature's fields (D70); no tag means it has no field, so one instance per class.
+static constexpr const char *SIGNATURE_TAG_PREFIX = "__signature_";
+
+inline string MakeSignatureTag(idx_t signature_idx) {
+	return string(SIGNATURE_TAG_PREFIX) + to_string(signature_idx) + "__";
+}
+
 //! Tag on a scoped comparison in the VALUE shape (CanonicalConstraintClass::VALUE): the
 //! canonicalizer stamps it once, and DecideOptimizer::RewriteScopedReducers replaces each
 //! decision reducer under it by a helper decision (LogicalDecide::reducer_value_links),
@@ -336,7 +357,7 @@ inline string MakeGroupKeyTag(idx_t group_key_idx, const vector<idx_t> &written_
 	return string(GROUP_KEY_TAG_PREFIX) + to_string(group_key_idx) + MakeWrittenOrderSuffix(written_order) + "__";
 }
 
-//! Tag prefix naming the key of a `per K:` wrapper (PER_CLASS_TAG, TWO_LEVEL_OBJECTIVE_TAG):
+//! Tag prefix naming the key of a `per K:` wrapper (PER_CLASS_TAG):
 //! "__per_key_<i>__" indexes LogicalDecide::keys. No tag means `per ()`: one class.
 static constexpr const char *PER_KEY_TAG_PREFIX = "__per_key_";
 
@@ -345,8 +366,24 @@ inline string MakePerKeyTag(idx_t key_idx, const vector<idx_t> &written_order = 
 	return string(PER_KEY_TAG_PREFIX) + to_string(key_idx) + MakeWrittenOrderSuffix(written_order) + "__";
 }
 
+//! Tag prefix naming a frame selector: "__frame_<i>__" indexes LogicalDecide::frames. It
+//! stands on the aggregate a frame binds to -- `first(e)` for a point frame, its reducer
+//! for a range -- whose rows at an anchor row are the ones the frame selects there
+//! (language/guide.md §5.6).
+static constexpr const char *FRAME_TAG_PREFIX = "__frame_";
+
+inline string MakeFrameTag(idx_t frame_idx) {
+	return string(FRAME_TAG_PREFIX) + to_string(frame_idx) + "__";
+}
+
 //! Tag used to identify AVG→SUM rewritten aggregates (terms need coefficient scaling at execution)
 static constexpr const char *AVG_REWRITE_TAG = "__avg_rewrite__";
+
+//! Metadata for the executable tree when a flat MIN/MAX carrier deliberately
+//! drops its qualifier. Flat term extraction and rendering do not read these.
+static constexpr const char *TREE_RETAINED_EXPRESSION_TAG_PREFIX = "__tree_retained_expression_";
+static constexpr const char *TREE_REDUCER_SCOPE_TAG_PREFIX = "__tree_reducer_scope_";
+static constexpr const char *TREE_REDUCER_KEY_TAG_PREFIX = "__tree_reducer_key_";
 
 //! Tag prefix marking a SUM(...) that really means a hard MIN/MAX (on
 //! BoundAggregateExpression.alias).
@@ -368,15 +405,25 @@ static constexpr const char *NE_CLAUSE_TAG_PREFIX = "__ne_clause_tag_";
 //! BoundComparisonExpression.alias during RewriteMinMax.
 static constexpr const char *MINMAX_EASY_REWRITE_TAG = "__minmax_easy__";
 
-//! Tag marking a reducer whose members DecideOptimizer::DefineNonlinearReducerBodies replaced by helper decisions. A
-//! helper has no box, so stage 08 states a MIN/MAX over it natively, and the MIN/MAX rewrites say so in the plan.
-//! Set on the BoundAggregateExpression.alias, and on the BoundComparisonExpression.alias of the row defining the
+//! Tag marking a reducer with a nonlinear body held by a tree-owned definition F node. The source body remains at its
+//! written site as a DEFINITION_FUNCTION_TAG_PREFIX read, while this aggregate marker tells MIN/MAX planning that its
+//! members are helper columns. A helper has no box, so stage 08 states a MIN/MAX over it natively.
+//! Set on the BoundAggregateExpression.alias and on the BoundComparisonExpression.alias of the row defining the
 //! helper, which EXPLAIN leaves out: it restates the body, and the clause's account line says how it is held.
 static constexpr const char *BODY_DEFINITION_TAG = "__body_definition__";
 
 //! Tag marking optimizer-generated helper constraints that define auxiliaries or
 //! link rewrite machinery. These rows are rigid and must not be elastic-relaxed.
 static constexpr const char *STRUCTURAL_CONSTRAINT_TAG = "__decide_structural_constraint__";
+
+//! On a row that defines an auxiliary decision standing for a value its readers read -- an ABS's envelope, a body
+//! helper's definition, an L0 indicator's links -- the auxiliary's index (DecideConstraint::defined_var). The
+//! auxiliary has no value where what its definition reads has none (D88).
+static constexpr const char *DEFINES_TAG_PREFIX = "__defines_";
+
+inline string MakeDefinesTag(idx_t var_idx) {
+	return string(DEFINES_TAG_PREFIX) + to_string(var_idx) + "__";
+}
 
 //! Tag marking a row a rewrite added for the objective (an ABS envelope, a product's
 //! corner rows, an L0 link), which no clause owns: the rewrites start the objective's
@@ -400,7 +447,7 @@ static constexpr const char *L0_AUTO_BOUND_TAG = "__l0_auto_bound__";
 static constexpr const char *SINGLETON_ROW_BOUND_TAG = "__singleton_row_bound__";
 
 //! Beside SINGLETON_ROW_BOUND_TAG on a recorded bound: a repair model loosens it through the
-//! clause's own rows, one per kept row or class (DecidePreparedModel::singleton_row_constraints,
+//! clause's own rows, one per kept row or class (its folded root's clause, DecideNode::folded,
 //! D28), not one knob per column. Set by DecideOptimizer::FoldSingletonRows.
 static constexpr const char *SINGLETON_ROW_CLAUSE_ROWS_TAG = "__singleton_row_clause_rows__";
 
@@ -448,6 +495,12 @@ static constexpr const char *QUERY_WIDE_VALUE_TAG = "__query_wide_value__";
 //! row-varying; the tag exists so downstream diagnostics never quote DuckDB's internal
 //! `SUBQUERY` placeholder as if it were user SQL.
 static constexpr const char *ROW_VARYING_SUBQUERY_TAG = "__row_varying_subquery__";
+
+//! Semantic provenance stamped on what stands for a reducer the bound-side rewrite recorded (its placeholder column, or
+//! the guard over one that is NULL outside the reducer's groups): a computed value, read whole. A signature counts it
+//! as the reducer's key alone (DirectBoundTables), and the tree carries it as a value no decision reads. Messages quote
+//! it by its query location (DecideReplaces), not by this tag.
+static constexpr const char *BOUND_REDUCER_TAG = "__bound_reducer__";
 
 //! On the `IS NOT NULL` test a reducer's own `when` gains for a value its body reads
 //! (DecideCanonicalizer::SkipNullData): the query never wrote it, so no render prints it.
@@ -533,6 +586,15 @@ inline bool TryParsePerKeyOrder(const string &alias, vector<idx_t> &order) {
 	return TryParseWrittenOrder(alias, PER_KEY_TAG_PREFIX, order);
 }
 
+//! Reads back the signature index from an alias written by MakeSignatureTag.
+inline bool TryParseSignatureTag(const string &alias, idx_t &signature_idx) {
+	return TryParseDecideIndexTag(alias, SIGNATURE_TAG_PREFIX, signature_idx);
+}
+
+inline bool TryParseFrameTag(const string &alias, idx_t &frame_idx) {
+	return TryParseDecideIndexTag(alias, FRAME_TAG_PREFIX, frame_idx);
+}
+
 //! Classification stamped by DecideCanonicalizer on the complete canonical RHS when
 //! every component is query-wide. Physical evaluation consumes this fact and does not
 //! re-decide the RHS shape.
@@ -548,6 +610,33 @@ inline bool IsRowVaryingSubqueryTag(const string &alias) {
 
 inline bool IsQueryWideBoundTag(const string &alias) {
 	return HasDecideTag(alias, QUERY_WIDE_BOUND_TAG);
+}
+
+//! On the comparison of a clause over groups: its bound reads a frame and may differ within a group, so it takes the
+//! group's tightest value among the rows where it has one (D85). No side table can read a frame, so execution takes it.
+//! The comparison holds the tag because a comparison's tags survive a rebuild (K5), which a bound's node does not.
+static constexpr const char *FRAME_TIGHTEST_BOUND_TAG = "__frame_tightest_bound__";
+
+//! On a reference to a frame column (DecideFrameReads::columns): its name is the frame as written, which a
+//! message prints as it stands, not as an identifier.
+static constexpr const char *FRAME_COLUMN_TAG = "__frame_column__";
+
+//! On a reducer over data whose argument reads a frame: "__frame_aggregate_<i>__" indexes
+//! LogicalDecide::frame_aggregates. No side table can read a frame, so execution computes it after the frames.
+static constexpr const char *FRAME_AGGREGATE_TAG_PREFIX = "__frame_aggregate_";
+
+inline string MakeFrameAggregateTag(idx_t index) {
+	return string(FRAME_AGGREGATE_TAG_PREFIX) + to_string(index) + "__";
+}
+
+inline bool TryParseFrameAggregateTag(const string &alias, idx_t &index) {
+	string payload;
+	if (!ExtractDecideTagPayload(alias, FRAME_AGGREGATE_TAG_PREFIX, payload) || payload.empty() ||
+	    payload.find_first_not_of("0123456789") != string::npos) {
+		return false;
+	}
+	index = static_cast<idx_t>(std::stoull(payload));
+	return true;
 }
 
 //! Tag prefix for ABS envelope constraint linking.
@@ -566,9 +655,52 @@ inline bool IsQueryWideBoundTag(const string &alias) {
 static constexpr const char *ABS_UB_POS_TAG_PREFIX = "__abs_ub_pos_";
 static constexpr const char *ABS_UB_NEG_TAG_PREFIX = "__abs_ub_neg_";
 
+//! Tag on an ABS auxiliary's positive lower-envelope row (aux >= inner), including the solver-pressure arm that has
+//! no ABS_UB_POS tag. The tree uses this row to build the shadow F node while the plan-time formulation still exists.
+static constexpr const char *ABS_FUNCTION_TAG_PREFIX = "__abs_function_";
+//! Matching marker on the negative lower-envelope row (aux >= -inner), including the solver-pressure arm.
+static constexpr const char *ABS_FUNCTION_NEG_TAG_PREFIX = "__abs_function_neg_";
+
+//! Tag on a written Boolean product that the optimizer has described as an F-node group. The expression remains
+//! intact in the plan; term extraction and tree lowering read the group's expansion from LogicalDecide metadata.
+static constexpr const char *BILINEAR_FUNCTION_GROUP_TAG_PREFIX = "__bilinear_function_group_";
+//! Tag on an optimizer-generated L0 indicator link, identifying the L0 F node that owns the row.
+static constexpr const char *L0_INDICATOR_FUNCTION_TAG_PREFIX = "__l0_indicator_function_";
+//! Tag on a nonlinear reducer body left intact in the clause tree. The F node owns its value and definition row.
+static constexpr const char *DEFINITION_FUNCTION_TAG_PREFIX = "__definition_function_";
+
+inline string MakeBilinearFunctionGroupTag(idx_t group_idx) {
+	return string(BILINEAR_FUNCTION_GROUP_TAG_PREFIX) + to_string(group_idx) + "__";
+}
+
+inline string MakeL0IndicatorFunctionTag(idx_t var_idx) {
+	return string(L0_INDICATOR_FUNCTION_TAG_PREFIX) + to_string(var_idx) + "__";
+}
+
+inline string MakeDefinitionFunctionTag(idx_t var_idx) {
+	return string(DEFINITION_FUNCTION_TAG_PREFIX) + to_string(var_idx) + "__";
+}
+
+inline string MakeAbsFunctionTag(idx_t var_idx) {
+	return string(ABS_FUNCTION_TAG_PREFIX) + to_string(var_idx) + "__";
+}
+
+inline string MakeAbsFunctionNegTag(idx_t var_idx) {
+	return string(ABS_FUNCTION_NEG_TAG_PREFIX) + to_string(var_idx) + "__";
+}
+
+//! ABS envelope rows are optimizer metadata rather than written constraints. Both the Big-M arm and the exact
+//! lower-envelope arm mark the row with one of these tags; return the helper they define.
+inline bool TryParseAbsFunctionEnvelopeTag(const string &alias, idx_t &var_idx) {
+	return TryParseDecideIndexTag(alias, ABS_UB_POS_TAG_PREFIX, var_idx) ||
+	       TryParseDecideIndexTag(alias, ABS_UB_NEG_TAG_PREFIX, var_idx) ||
+	       TryParseDecideIndexTag(alias, ABS_FUNCTION_TAG_PREFIX, var_idx) ||
+	       TryParseDecideIndexTag(alias, ABS_FUNCTION_NEG_TAG_PREFIX, var_idx);
+}
+
 //! Tag set on BoundFunctionExpression.alias for ABS occurrences inside a
 //! constraint shape that does not naturally upper-bound the auxiliary
-//! (i.e. hard-direction ABS). Read by FindAndReplaceAbs, propagated to
+//! (i.e. hard-direction ABS). Read by FindAbsAndAllocateAux, propagated to
 //! AbsPairInfo::needs_bigm so RewriteAbs pins the auxiliary's upper side too --
 //! with a sign-indicator y and a Big-M envelope on the lowering arm, or with a
 //! native `aux = |t|` on a backend that states ABS itself. The tag is set by

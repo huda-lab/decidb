@@ -34,20 +34,25 @@ def _allow_direct_path(monkeypatch):
     monkeypatch.delenv("DECIDB_FORCE_SOLVER", raising=False)
 
 
-def run(cli, sql, mode, expect_number_range=False):
+def run(cli, sql, mode, expect_number_range=False, expect_warnings=()):
     """Runs `sql` with `decide_direct_solve` set to `mode`; returns `(rows, columns)`.
 
-    `expect_number_range` declares the number-range warning, as `DeciDBCli.execute` takes it. Only a query the solver
-    answers builds a model, so `off` warns when the model holds a number out of range, and `auto` does when the rule
-    declines the query. `require` warns only where a rule's own arithmetic loses precision.
+    `expect_number_range` declares the number-range warning, and `expect_warnings` the DECIDE warnings, as
+    `DeciDBCli.execute` takes them. Only a query the solver answers builds a model, so `off` warns when the model holds
+    a number out of range, and `auto` does when the rule declines the query. `require` warns of a number only where a
+    rule's own arithmetic loses precision, and never prints a DECIDE warning, which only the solver path prints.
     """
-    return cli.execute(f"SET decide_direct_solve='{mode}'; {sql}", expect_number_range=expect_number_range)
+    return cli.execute(
+        f"SET decide_direct_solve='{mode}'; {sql}",
+        expect_number_range=expect_number_range,
+        expect_warnings=expect_warnings,
+    )
 
 
-def outcome(cli, sql, mode, expect_number_range=False):
+def outcome(cli, sql, mode, expect_number_range=False, expect_warnings=()):
     """`("ok", rows)` or `("error", error class)`, so two paths can be compared as values."""
     try:
-        return "ok", run(cli, sql, mode, expect_number_range)[0]
+        return "ok", run(cli, sql, mode, expect_number_range, expect_warnings)[0]
     except DeciDBCliError as error:
         return "error", error_class(str(error))
 
@@ -86,7 +91,7 @@ def sql_literal(value, sql_type):
     return f"CAST({value!r} AS {sql_type})"
 
 
-def agree_with_oracle(cli, sql, oracle, check_assignment, modes=("off", "require"), number_range=False):
+def agree_with_oracle(cli, sql, oracle, check_assignment, modes=("off", "require"), number_range=False, warnings=()):
     """Checks that DeciDB, on each of `modes`, gives the answer the oracle's result says it should.
 
     `oracle` is the solved oracle model. When it is infeasible or unbounded, every mode must raise that error. Otherwise
@@ -94,16 +99,18 @@ def agree_with_oracle(cli, sql, oracle, check_assignment, modes=("off", "require
     callback owns what a valid assignment is for the rule (row layout, boxes, constraints, objective value).
     `number_range` says the query's model holds a number of 1e6
     or more: the solver path (`off`) warns, and the direct path (`require`) builds no model and prints nothing.
+    `warnings` are the DECIDE warnings the solver path prints (a clause that constrains nothing, an objective that is
+    0), before its answer or its error; the direct path prints none.
     """
     if oracle.status in (SolverStatus.INFEASIBLE, SolverStatus.UNBOUNDED):
         pattern = r"(?i)infeasible" if oracle.status == SolverStatus.INFEASIBLE else r"(?i)unbounded"
         for mode in modes:
             with pytest.raises(DeciDBCliError, match=pattern):
-                run(cli, sql, mode, number_range and mode == "off")
+                run(cli, sql, mode, number_range and mode == "off", warnings if mode == "off" else ())
         return
     assert oracle.status == SolverStatus.OPTIMAL, oracle.status
     for mode in modes:
-        rows, columns = run(cli, sql, mode, number_range and mode == "off")
+        rows, columns = run(cli, sql, mode, number_range and mode == "off", warnings if mode == "off" else ())
         try:
             check_assignment(rows, columns, mode)
         except AssertionError as error:

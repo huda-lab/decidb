@@ -221,6 +221,14 @@ static void noteDecideReducerKey(PGNode *scope, int anchor, core_yyscan_t yyscan
 static void noteDecideCall(YYLTYPE call_end, YYLTYPE by, core_yyscan_t yyscanner, YYLTYPE call_start = YYLTYPE());
 static PGNode *noteDecideBetween(PGNode *between, YYLTYPE op, YYLTYPE input, YYLTYPE lower, YYLTYPE upper,
 								 core_yyscan_t yyscanner);
+static PGList *makeDecideFramePrevious(char *word, int k, int location, core_yyscan_t yyscanner);
+static void decideFrameWord(char *word, const char *expected, const char *what, int location,
+							core_yyscan_t yyscanner);
+static PGNode *makeDecideFrameOver(PGNode *order, bool descending, bool cyclic, PGList *within, int location,
+								   core_yyscan_t yyscanner);
+static PGNode *makeDecideFramePoint(PGList *point, PGNode *fallback, PGNode *payload, PGNode *over, int location);
+static PGNode *makeDecideFrameRange(PGList *funcname, PGList *from, PGList *to, int every, PGNode *fallback,
+									bool all, PGList *args, PGNode *over, int location);
 static PGNode *makeQualifiedReducer(PGList *funcname, PGList *qualifier, PGList *args,
 									int location, int qualifier_location,
 									int colon_location, core_yyscan_t yyscanner);

@@ -1,0 +1,511 @@
+"""Helpers written where they are read (D89; ``pipeline/06_model_formulation/done.md``,
+"Inlining a helper").
+
+The value rewrite makes a reducer -- or a range frame -- over decisions a helper decision,
+defined once per instance (a `by` group, a window) and read where the clause reads the
+reducer. Stage 06 writes a helper's members into the rows, the objective or the other
+helper that read it when that adds no nonzero to the model (an instance of ``m`` terms read
+``k`` times costs ``m * k`` inlined, ``m + 1 + k`` defined), so the helper has no column and
+no definition. A MIN or MAX helper is its member where every group has one (deck p. 112).
+
+Each case pins the model's size, worked out by hand in its docstring, and the answer,
+judged by ``_anr_oracle`` (which reads no SQL). The table is ``test_anr_composition``'s:
+products A (three periods), B (two) and C (one), so `previous` misses at each timeline's start.
+"""
+
+import re
+
+import pytest
+
+from ._anr_cases import F1_COLUMNS, F1_DATA
+from ._anr_oracle import (
+    FIRST,
+    LAST,
+    AnrModel,
+    At,
+    Col,
+    Const,
+    Decision,
+    Objective,
+    Over,
+    Range,
+    Var,
+    clause,
+    ge,
+    le,
+    ne,
+    next_,
+    previous,
+    reduce,
+)
+from ._diagnose_relation import rows as diagnose_rows
+from ._diagnose_relation import run as run_diagnose
+from ._output_helpers import assert_no_internal_leak
+from ._scope_cases import answer, dump_bounds, dump_counts, scope_solver, table, table_rows  # noqa: F401 -- fixture
+from .test_anr_composition import CAP, EDGE, EDGE_ROWS, MAXIMIZE_X, MINIMIZE_X, TIMELINE, TL, X, _edge, _judged
+from solver.types import ObjSense, VarType
+
+Y = Var("y")
+ROWS = table_rows(EDGE, EDGE_ROWS)
+BOTH_SOLVERS = pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+_ROW = re.compile(r"^row \d+: sense=(\S) rhs=(\S+) nnz=\d+ \|(.*)$", re.M)
+
+
+def _rows(dump: str) -> set:
+    """The dump's linear rows, each `(sense, rhs, {(column, coefficient)})`, in no order."""
+    rows = set()
+    for sense, rhs, terms in _ROW.findall(dump):
+        pairs = frozenset((int(c), float(v)) for c, v in (term.split(":") for term in terms.split()))
+        rows.add((sense, float(rhs), pairs))
+    return rows
+
+
+def _model(cli, sql, tmp_path):
+    return dump_counts(cli.dump_model(sql, tmp_path / "model.dump"))
+
+
+# ---------------------------------------------------------------------------
+# Into rows: a range read by its anchor's row
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.correctness
+class TestRangeIntoRows:
+    @pytest.mark.parametrize(
+        "clause_sql, body, counts",
+        [
+            # Each window read by its anchor alone: six rows of x and the two before, no helper.
+            pytest.param(
+                f"x >= sum(from 2 previous to previous else 0: x) {TL} - t.w",
+                clause(ge(X, Range("sum", previous(2), previous(), X, TIMELINE, fallback=Const(0)) - Col("w"))),
+                {"num_vars": 6, "num_rows": 6},
+                id="sum-with-else",
+            ),
+            # No `else`: the window at each timeline's first period reads nothing, absent, and
+            # its anchor's instance is skipped -- A, B and C each lose one: three rows.
+            pytest.param(
+                f"x >= sum(from 2 previous to previous: x) {TL} - t.w",
+                clause(ge(X, Range("sum", previous(2), previous(), X, TIMELINE) - Col("w"))),
+                {"num_vars": 6, "num_rows": 3},
+                id="sum-absent-skips",
+            ),
+            # The window holds its anchor, so it is never empty: an AVG's 1/n is in its terms.
+            # C's window is C itself, so its row is `x - x <= w`, no row at all: five rows.
+            pytest.param(
+                f"x <= avg(from previous to next: x) {TL} + t.w",
+                clause(le(X, Range("avg", previous(), next_(), X, TIMELINE) + Col("w"))),
+                {"num_vars": 6, "num_rows": 5},
+                id="avg",
+            ),
+            # An `else` constant moves to the row's bound with the rest of its data.
+            pytest.param(
+                f"x <= sum(from previous to previous else 2.5: x) {TL} + 1",
+                clause(le(X, Range("sum", previous(), previous(), X, TIMELINE, fallback=Const(2.5)) + 1)),
+                {"num_vars": 6, "num_rows": 6},
+                id="else-constant",
+            ),
+        ],
+    )
+    def test_a_window_read_once_has_no_column(self, decidb_cli, scope_solver, tmp_path, clause_sql, body, counts):
+        sql = _edge(clause_sql)
+        assert _model(decidb_cli, sql, tmp_path) == counts
+        _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP, body], MAXIMIZE_X)
+
+    def test_a_window_every_row_reads_keeps_its_column(self, decidb_cli, scope_solver, tmp_path):
+        """One timeline, one window for every anchor (`from first to last`): six terms read by
+        six rows would cost 36 nonzeros inlined against 13 defined, so the helper stays --
+        one column and its definition beside the six rows."""
+        sql = _edge("x <= sum(from first to last: x) over (t.id) - t.w")
+        assert _model(decidb_cli, sql, tmp_path) == {"num_vars": 6 + 1, "num_rows": 6 + 1}
+        body = clause(le(X, Range("sum", FIRST, LAST, X, Over("id")) - Col("w")))
+        _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP, body], MAXIMIZE_X)
+
+    def test_windows_shared_by_a_few_rows_are_inlined(self, decidb_cli, scope_solver, tmp_path):
+        """`from first to last within product`: A's window (three terms, three rows) alone
+        would grow, but B's (two, two) and C's (one, one) shrink more -- 14 nonzeros inlined
+        against 15 defined -- and a helper is inlined whole: the rows of x alone, five, as
+        C's is `x >= x - 10`, no row."""
+        sql = _edge(f"x >= sum(from first to last: x) {TL} - 10")
+        assert _model(decidb_cli, sql, tmp_path) == {"num_vars": 6, "num_rows": 5}
+        body = clause(ge(X, Range("sum", FIRST, LAST, X, TIMELINE) - 10))
+        _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP, body], MAXIMIZE_X)
+
+    def test_in_the_objective(self, decidb_cli, scope_solver, tmp_path):
+        """The objective reads each window once: written into it, the model has the six
+        decisions and no row (their caps are a box)."""
+        objective_sql = f"MAXIMIZE sum(x) - sum(sum(from previous to previous else 0: x) {TL})"
+        sql = _edge("x >= 0", objective=objective_sql)
+        assert _model(decidb_cli, sql, tmp_path) == {"num_vars": 6, "num_rows": 0}
+        window = Range("sum", previous(), previous(), X, TIMELINE, fallback=Const(0))
+        objective = Objective(ObjSense.MAXIMIZE, reduce("sum", X) - reduce("sum", window))
+        _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP], objective)
+
+
+# ---------------------------------------------------------------------------
+# Into another helper's members
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.correctness
+class TestIntoMembers:
+    @pytest.mark.parametrize(
+        "inner, objective_coefficients",
+        [
+            pytest.param("sum", [-2.0, -3.0, -4.0], id="sum-of-group-sums"),
+            pytest.param("avg", [-1.0, -1.5, -4.0], id="sum-of-group-averages"),
+        ],
+    )
+    def test_an_objective_of_group_reducers_weighs_each_decision(
+        self, decidb_cli, tmp_path, inner, objective_coefficients
+    ):
+        """A sum of group SUMs or AVGs in the objective is one coefficient per decision, with no helper column. The model
+        minimizes, so a MAXIMIZE objective's coefficients are negated."""
+        sql = f"""
+            SELECT id, x FROM (VALUES (1, 'a', 2.0), (2, 'a', 3.0), (3, 'b', 4.0)) t(id, g, w)
+            DECIDE x(REAL)
+            SUCH THAT x <= 10
+            MAXIMIZE sum(per t.g: {inner}(t.w * x) by (t.g))
+            ORDER BY id"""
+        dump = decidb_cli.dump_model(sql, tmp_path / f"objective-{inner}.dump")
+        assert dump_counts(dump) == {"num_vars": 3, "num_rows": 0}
+        columns = [line for line in dump.splitlines() if line.startswith("col ")]
+        coefficients = [float(line.split(" obj=", 1)[1]) for line in columns]
+        assert coefficients == objective_coefficients, dump
+
+    def test_an_objective_of_group_maxima_keeps_a_helper_per_group(self, decidb_cli, tmp_path):
+        """A sum of group MAXes in the objective keeps one MAX helper per group of two or more members."""
+        sql = """
+            SELECT id, x FROM (VALUES (1, 'a', 2.0), (2, 'a', 3.0), (3, 'b', 4.0)) t(id, g, w)
+            DECIDE x(REAL)
+            SUCH THAT x <= 10
+            MAXIMIZE sum(per t.g: max(t.w * x) by (t.g))
+            ORDER BY id"""
+        dump = decidb_cli.dump_model(sql, tmp_path / "objective-max.dump")
+        assert dump_counts(dump) == {"num_vars": 6, "num_rows": 3}
+        columns = [line for line in dump.splitlines() if line.startswith("col ")]
+        coefficients = [float(line.split(" obj=", 1)[1]) for line in columns]
+        assert coefficients == [0.0, 0.0, -4.0, -1.0, 0.0, 0.0], dump
+        assert _rows(dump) == {
+            ("<", 30.0, frozenset({(0, -2.0), (3, 1.0), (4, 30.0)})),
+            ("<", 30.0, frozenset({(1, -3.0), (3, 1.0), (5, 30.0)})),
+            (">", 1.0, frozenset({(4, 1.0), (5, 1.0)})),
+        }
+
+    def test_a_quadratic_objective_term_leaves_the_group_sums_linear(self, decidb_cli_gurobi, tmp_path):
+        """A square beside the sum of group SUMs keeps their linear coefficients; HiGHS cannot maximize the square."""
+        sql = """
+            SELECT id, x FROM (VALUES (1, 'a', 2.0), (2, 'a', 3.0), (3, 'b', 4.0)) t(id, g, w)
+            DECIDE x(REAL)
+            SUCH THAT x <= 10
+            MAXIMIZE sum(per t.g: sum(t.w * x) by (t.g)) + sum(power(x, 2))
+            ORDER BY id"""
+        dump = decidb_cli_gurobi.dump_model(sql, tmp_path / "objective-quadratic.dump")
+        assert dump_counts(dump) == {"num_vars": 3, "num_rows": 0}
+        columns = [line for line in dump.splitlines() if line.startswith("col ")]
+        coefficients = [float(line.split(" obj=", 1)[1]) for line in columns]
+        assert coefficients == [-2.0, -3.0, -4.0], dump
+        q_terms = [line.strip() for line in dump.splitlines() if line.startswith("  q ")]
+        assert q_terms == ["q 0,0:-1", "q 1,1:-1", "q 2,2:-1"], dump
+
+    def test_a_composed_max_objective_term_leaves_the_group_sums_linear(self, decidb_cli, tmp_path):
+        """A composed MAX beside the sum of group SUMs keeps their linear coefficients and its own seven rows."""
+        sql = """
+            SELECT id, x FROM (VALUES (1, 'a', 2.0), (2, 'a', 3.0), (3, 'b', 4.0)) t(id, g, w)
+            DECIDE x(REAL)
+            SUCH THAT x <= 10
+            MAXIMIZE sum(per t.g: sum(t.w * x) by (t.g)) + max(per t.g: x)
+            ORDER BY id"""
+        dump = decidb_cli.dump_model(sql, tmp_path / "objective-composed.dump")
+        assert dump_counts(dump) == {"num_vars": 7, "num_rows": 7}
+        columns = [line for line in dump.splitlines() if line.startswith("col ")]
+        coefficients = [float(line.split(" obj=", 1)[1]) for line in columns]
+        assert coefficients == [-2.0, -3.0, -4.0, -1.0, 0.0, 0.0, 0.0], dump
+        assert _rows(dump) == {
+            (">", 0.0, frozenset({(0, -1.0), (3, 1.0)})),
+            (">", 0.0, frozenset({(1, -1.0), (3, 1.0)})),
+            (">", 0.0, frozenset({(2, -1.0), (3, 1.0)})),
+            ("<", 10.0, frozenset({(0, -1.0), (3, 1.0), (4, 10.0)})),
+            ("<", 10.0, frozenset({(1, -1.0), (3, 1.0), (5, 10.0)})),
+            ("<", 10.0, frozenset({(2, -1.0), (3, 1.0), (6, 10.0)})),
+            (">", 1.0, frozenset({(4, 1.0), (5, 1.0), (6, 1.0)})),
+        }
+
+    @pytest.mark.parametrize(
+        "inner, extra, counts, west",
+        [
+            pytest.param(
+                "sum",
+                tuple((tid, "d2", "West", "Air", "c4", True, 0, 45) for tid in (7, 8, 9)),
+                {"num_vars": 9, "num_rows": 3},
+                frozenset((column, 1.0) for column in (2, 4, 5, 6, 7, 8)),
+                id="sum-in-sum",
+            ),
+            pytest.param(
+                "max",
+                tuple((tid, "d2", "West", "Air", f"c{tid - 2}", True, 0, 45) for tid in (7, 8, 9, 10)),
+                {"num_vars": 10 + 2, "num_rows": 3 + 4},
+                None,
+                id="max-in-sum",
+            ),
+        ],
+    )
+    def test_a_nest_of_sums_is_written_in_however_large(
+        self, decidb_cli, scope_solver, tmp_path, inner, extra, counts, west
+    ):
+        """The deck writes a nest's sums into the rows that read them, whatever that costs
+        (pp. 115, 119): F1 with West grown, read by two clause rows. With an inner SUM, c4's
+        five shipments make West a sum of six, written into both West rows: the nine
+        shipments and the three rows, where D89 alone kept West's column. With an inner MAX,
+        four more customers of one shipment each make West six terms -- ship3, c4's MAX and
+        the four shipments -- written into both rows: the ten shipments, c1's and c4's MAX,
+        their four envelope rows and the three clause rows."""
+        data = F1_DATA + extra
+        sql = f"""
+            SELECT tid, ship {table('t', F1_COLUMNS, data)}
+            DECIDE ship(INT)
+            SUCH THAT ship <= 100 AND
+                per t.id: sum(when t.p per t.cid: {inner}(ship) by (t.cid)) by (t.rid)
+                          + 0.10 * sum(t.d) by (t.m) <= t.c
+            MAXIMIZE sum(ship)
+            ORDER BY tid"""
+        dump = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"}).dump_model(sql, tmp_path / "nest.dump")
+        assert dump_counts(dump) == counts
+        if west is not None:
+            east = frozenset({(0, 1.0), (1, 1.0)})
+            assert _rows(dump) == {("<", 22.5, east), ("<", 48.5, west), ("<", 37.5, west)}
+        ship = Var("ship")
+        regional = reduce("sum", reduce(inner, ship, by=("cid",)), when=lambda r: r["p"], per=("cid",), by=("rid",))
+        clauses = [
+            clause(le(ship, 100)),
+            clause(le(regional + 0.10 * reduce("sum", Col("d"), by=("m",)), Col("c")), per=("id",)),
+        ]
+        _judged(
+            decidb_cli,
+            scope_solver,
+            sql,
+            table_rows(F1_COLUMNS, data),
+            [Decision("ship")],
+            clauses,
+            Objective(ObjSense.MAXIMIZE, reduce("sum", ship)),
+        )
+
+    def test_group_sums_into_the_objectives_maximum(self, decidb_cli, scope_solver, tmp_path):
+        """Q4's shape: `MINIMIZE max(per product: sum(x * v) by (product))`. The MAX, pushed
+        down, needs its envelope alone, so each product's sum is written into its envelope
+        row: the six decisions and the MAX's column; three envelope rows and three rows of
+        the clause (whose sums stay in place, the aggregate shape)."""
+        sql = _edge(
+            "per t.product: sum(x) by (t.product) >= 2",
+            objective="MINIMIZE max(per t.product: sum(x * t.v) by (t.product))",
+        )
+        assert _model(decidb_cli, sql, tmp_path) == {"num_vars": 6 + 1, "num_rows": 3 + 3}
+        body = clause(ge(reduce("sum", X, by=("product",)), 2), per=("product",))
+        objective = Objective(
+            ObjSense.MINIMIZE, reduce("max", reduce("sum", X * Col("v"), by=("product",)), per=("product",))
+        )
+        _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP, body], objective)
+
+    def test_a_range_into_the_reducer_around_it(self, decidb_cli, scope_solver, tmp_path):
+        """`sum(x - sum(from previous to previous else 0: x) over ...) <= 6`: each window is
+        written into the outer sum's member at its anchor, and the outer sum, read by its
+        one row, into that row -- one row over the six decisions."""
+        sql = _edge(f"sum(x - sum(from previous to previous else 0: x) {TL}) <= 6")
+        assert _model(decidb_cli, sql, tmp_path) == {"num_vars": 6, "num_rows": 1}
+        window = Range("sum", previous(), previous(), X, TIMELINE, fallback=Const(0))
+        body = clause(le(reduce("sum", X - window), 6))
+        _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP, body], MAXIMIZE_X)
+
+
+# ---------------------------------------------------------------------------
+# A MIN or MAX of one member
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.correctness
+class TestSingleton:
+    def test_a_window_of_one_position_is_its_member(self, decidb_cli, scope_solver, tmp_path):
+        """`max(from previous to previous else 0: x)` reads one position or its `else`: every
+        window is one member, so the MAX is linear and written into its anchor's row --
+        no binary, no Big-M, six rows."""
+        sql = _edge(f"x <= max(from previous to previous else 0: x) {TL} + t.w")
+        dump = decidb_cli.dump_model(sql, tmp_path / "model.dump")
+        assert dump_counts(dump) == {"num_vars": 6, "num_rows": 6}
+        assert "bin=1" not in dump, dump
+        body = clause(le(X, Range("max", previous(), previous(), X, TIMELINE, fallback=Const(0)) + Col("w")))
+        _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP, body], MAXIMIZE_X)
+
+    def test_one_member_needs_no_bound_to_close(self, decidb_cli_highs, scope_solver):
+        """`x <= max(... : y)` pushes the MAX up, so it must be pinned to a member from above,
+        which a Big-M over `y`'s box does -- and `y` has none. A window of one member is that
+        member: no Big-M is asked for, and HiGHS (which lowers every MIN/MAX) answers."""
+        sql = f"""SELECT id, x, y {table('t', EDGE, EDGE_ROWS)} DECIDE x(INT), y(INT)
+            SUCH THAT x <= 9 AND x <= max(from previous to previous: y) {TL}
+            MAXIMIZE sum(x) - sum(y) ORDER BY id"""
+        body = clause(le(X, Range("max", previous(), previous(), Y, TIMELINE)))
+        objective = Objective(ObjSense.MAXIMIZE, reduce("sum", X) - reduce("sum", Y))
+        _judged(decidb_cli_highs, scope_solver, sql, ROWS, [Decision("x"), Decision("y")], [CAP, body], objective)
+
+
+# ---------------------------------------------------------------------------
+# What keeps a helper's column
+# ---------------------------------------------------------------------------
+
+
+_WINDOW_SQL = f"sum(from previous to previous else 0: x) {TL}"
+_WINDOW = Range("sum", previous(), previous(), X, TIMELINE, fallback=Const(0))
+
+
+@pytest.mark.correctness
+class TestKept:
+    @pytest.mark.parametrize(
+        "clause_sql, body, objective_sql, objective",
+        [
+            # `<>` states each instance in two rows of its disjunction.
+            pytest.param(
+                f"x <> {_WINDOW_SQL}",
+                clause(ne(X, _WINDOW)),
+                "MAXIMIZE sum(x)",
+                MAXIMIZE_X,
+                id="not-equal",
+            ),
+            # A composed MIN/MAX term pins its auxiliary to each member's column.
+            pytest.param(
+                f"sum(x) + max({_WINDOW_SQL}) <= 30",
+                clause(le(reduce("sum", X) + reduce("max", _WINDOW), 30)),
+                "MAXIMIZE sum(x)",
+                MAXIMIZE_X,
+                id="composed-clause",
+            ),
+            pytest.param(
+                "x >= 0",
+                clause(ge(X, 0)),
+                f"MAXIMIZE sum(x) - max({_WINDOW_SQL})",
+                Objective(ObjSense.MAXIMIZE, reduce("sum", X) - reduce("max", _WINDOW)),
+                id="composed-objective",
+            ),
+            # So does a MIN/MAX objective, flat.
+            pytest.param(
+                "sum(x) >= 20",
+                clause(ge(reduce("sum", X), 20)),
+                f"MINIMIZE max({_WINDOW_SQL})",
+                Objective(ObjSense.MINIMIZE, reduce("max", _WINDOW)),
+                id="flat-objective",
+            ),
+        ],
+    )
+    def test_a_reader_that_needs_the_column(
+        self, decidb_cli, scope_solver, tmp_path, clause_sql, body, objective_sql, objective
+    ):
+        """Each window is read once, which would write it in, but its reader states it as a
+        column: the helper keeps its column per window, beside the six decisions."""
+        sql = _edge(clause_sql, objective=objective_sql)
+        assert _model(decidb_cli, sql, tmp_path)["num_vars"] > 6
+        _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP, body], objective)
+
+    def test_a_bound_on_a_sum_is_a_row_it_is_written_into(self, decidb_cli, scope_solver, tmp_path):
+        """A bound on a SUM helper alone is a row reading it, not its box (deck p. 115): each
+        window, read by one such row, is written into it, and the model has the six
+        decisions alone."""
+        body = clause(le(Range("sum", previous(), previous(), X, TIMELINE, fallback=Const(0)), 5))
+        sql = _edge(f"sum(from previous to previous else 0: x) {TL} <= 5")
+        assert _model(decidb_cli, sql, tmp_path)["num_vars"] == 6
+        _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP, body], MAXIMIZE_X)
+
+    def test_a_maximum_closing_on_a_sum_two_members_read(self, decidb_cli_gurobi, scope_solver, tmp_path):
+        """`max(sum(x + 1) by (t.product)) >= 15` with `x` unbounded: the MAX is pinned from
+        above with no Big-M to read, so Gurobi states it natively, over columns. A's sum is
+        read by both of A's rows, and written into each it would be a column and a row twice
+        where the helper is one: the helpers stay -- six columns, their two definitions. (With
+        native constructs off there is no Big-M to lower it with, and the query is refused.)"""
+        cli = decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "on"})
+        rows = ((1, "A", 1, 4, 2), (2, "A", 2, 6, 1), (3, "B", 1, 7, 2))
+        sql = f"""SELECT id, x {table('t', EDGE, rows)} DECIDE x(INT)
+            SUCH THAT max(sum(x + 1) by (t.product)) >= 15 MINIMIZE sum(x) ORDER BY id"""
+        assert _model(cli, sql, tmp_path) == {"num_vars": 6, "num_rows": 2}
+        body = clause(ge(reduce("max", reduce("sum", X + 1, by=("product",))), 15))
+        _judged(cli, scope_solver, sql, table_rows(EDGE, rows), [Decision("x")], [body], MINIMIZE_X)
+
+    def test_a_maximum_of_several_members(self, decidb_cli, scope_solver, tmp_path):
+        """`max(from previous to next: x)`: most windows hold two or three members, so the
+        MAX keeps its columns, a window of one among them defined by an equality."""
+        sql = _edge(f"x >= max(from previous to next: x) {TL} - 1")
+        assert _model(decidb_cli, sql, tmp_path)["num_vars"] > 6
+        body = clause(ge(X, Range("max", previous(), next_(), X, TIMELINE) - 1))
+        _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP, body], MAXIMIZE_X)
+
+
+# ---------------------------------------------------------------------------
+# DIAGNOSE through an inlined helper
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.diagnose
+@pytest.mark.parametrize("scope", ["query", "expanded"])
+def test_a_diagnosis_reads_the_rows_as_written(decidb_cli, scope):
+    """`x >= 3` beside `x + sum(from previous to previous else 0: x) <= 4`: every row with a
+    previous one reads 3 + 3. The window of one position is written into its anchor's row,
+    so the repair model is the one the point frame builds (`at(previous else 0: x)`, which
+    has no helper): the same findings, no definition among them."""
+    ranged, point = "sum(from previous to previous else 0: x)", "at(previous else 0: x)"
+
+    def findings(frame):
+        sql = _edge(f"x >= 3 AND x + {frame} {TL} <= 4")
+        result = run_diagnose(decidb_cli, sql, scope=scope)
+        assert result.returncode == 0, result.stderr
+        assert_no_internal_leak(result, "a diagnosis", sql)
+        # Each quotes its own clause: read in one spelling.
+        return [{key: value.replace(point, ranged) for key, value in row.items()} for row in diagnose_rows(result)]
+
+    written = findings(ranged)
+    assert written and {row["state"] for row in written} == {"infeasible"}, written
+    assert written == findings(point)
+
+
+@pytest.mark.diagnose
+@BOTH_SOLVERS
+def test_the_achievable_objective_counts_an_inlined_helpers_constants(request, cli_fixture, scope_solver):
+    """The objective sums each window's previous `x`, or its `else 2.5` at a timeline's first
+    period -- A's, B's and C's, 7.5 in all. Written into the objective, the windows' constants
+    are its offset, as a helper's definition carried them: the achievable objective of the
+    repair (`x >= 3` loosened until six rows fit `sum(x) <= 10`) is the oracle's, 7.5 included."""
+    cli = request.getfixturevalue(cli_fixture)
+    window = Range("sum", previous(), previous(), X, TIMELINE, fallback=Const(2.5))
+    sql = _edge(
+        "x >= 3 AND sum(x) <= 10",
+        decide="x(REAL)",
+        objective=f"MINIMIZE sum(sum(from previous to previous else 2.5: x) {TL})",
+    )
+    result = run_diagnose(cli, sql)
+    assert result.returncode == 0, result.stderr
+    assert_no_internal_leak(result, "a diagnosis", sql)
+    findings = diagnose_rows(result)
+    repairs = [row for row in findings if row["clause"] == "x >= 3"]
+    assert len(repairs) == 1, findings
+    loosened = 3 - float(repairs[0]["amount"])
+    model = AnrModel(ROWS, [Decision("x", var_type=VarType.CONTINUOUS)])
+    expected = model.solve(
+        scope_solver,
+        [CAP, clause(ge(X, loosened)), clause(le(reduce("sum", X), 10))],
+        Objective(ObjSense.MINIMIZE, reduce("sum", window)),
+    )
+    achieved = float(next(row["amount"] for row in findings if row["edit_source"] == "achievable_objective"))
+    # The repair's amount is read as displayed (1.33333), so the oracle's optimum is too.
+    assert achieved == pytest.approx(expected.objective, abs=1e-3)
+    assert achieved == pytest.approx(12.5, abs=1e-6)  # 7.5 of it the windows' constants
+
+
+@pytest.mark.correctness
+@BOTH_SOLVERS
+def test_a_written_in_group_keeps_its_own_bound(request, cli_fixture):
+    """`per t.g: max(t.w * max(max(x) by (t.k))) by (t.g) <= t.cap`: group a reads 2 * max(x0,
+    x1) <= 4, group b reads 1 * x2 <= 21. Group b's middle `max` has one member, so it is that
+    member, with no column (deck p. 112), and the helper's box -- 10.5, from group a's column
+    alone -- bounds no member of it: x2 reaches 21. Applying the box to every group had held
+    x2 to 10."""
+    sql = f"""
+        SELECT id, x {table('t', ('id', 'g', 'k', 'cap', 'w'), ((0, 'a', 'u', 4, 2), (1, 'a', 'v', 4, 2), (2, 'b', 'u', 21, 1)))}
+        DECIDE x(INT)
+        SUCH THAT x <= 100 AND per t.g: max(t.w * max(max(x) by (t.k))) by (t.g) <= t.cap
+        MAXIMIZE sum(x)
+        ORDER BY id"""
+    assert [row["x"] for row in answer(request.getfixturevalue(cli_fixture), sql)] == [2, 2, 21]

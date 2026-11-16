@@ -427,22 +427,6 @@ def test_min_out_of_reach_is_infeasible_natively_and_lowered(decidb_cli_gurobi, 
     _refused(decidb_cli_highs, sql, _INFEASIBLE)
 
 
-def test_objective_group_sums_over_two_open_decisions_name_the_first(decidb_cli_gurobi, decidb_cli_highs):
-    """`MAXIMIZE max(per g: sum(x + y) by (g))` with `x` and `y` open: each row's range is open below by two
-    decisions, and the first one met is the one named (SavedRowRange keeps the first `unbounded_var`).
-    """
-    sql = """
-        SELECT g, id, x, y FROM (VALUES (1, 1), (1, 2), (2, 3)) t(g, id) DECIDE x(REAL), y(REAL)
-        SUCH THAT x >= -1e30 AND y >= -1e30
-        MAXIMIZE max(per g: sum(x + y) by (g))"""
-    for cli in (decidb_cli_gurobi, decidb_cli_highs):
-        _refused(
-            _lowered(cli),
-            sql,
-            r"Rewriting MIN/MAX requires a finite bound on 'x'\. Add constraints 'x >= <lower>' and",
-        )
-
-
 # ---------------------------------------------------------------------------
 # Composed MIN / MAX (`SUM(a) + MAX(b) <= K`)
 # ---------------------------------------------------------------------------

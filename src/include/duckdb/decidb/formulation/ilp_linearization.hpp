@@ -23,7 +23,7 @@
 
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
-#include "duckdb/planner/decide/decide_prepared_model.hpp"
+#include "duckdb/planner/decide/decide_tree_terms.hpp"
 
 #include <cmath>
 #include <functional>
@@ -191,11 +191,17 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer, const vect
 void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer, const FormulationBox &box,
                            const vector<string> &var_names, const SolverConstructSupport &constructs);
 
-//! Emit the McCormick envelope for every `w = b * x` link. For `x >= 0` the lower
-//! corner is implied by `w`'s own non-negative bound and the upper corner collapses
-//! to the plain structural `w <= x`, so three rows suffice; for `x < 0` all four
-//! corners are emitted and `w`'s lower bound is widened so the product can reach the
-//! negative value. Requires a finite upper bound on `x` and names it if missing.
+//! Floor each product's column at its range's, min(0, its non-Boolean factor's floor), raised by a floor written on
+//! it (`b * x >= -4`): a product has no default floor of 0 (AddBooleanProduct). Stage 08 runs it before implied-bound
+//! propagation, which then reads `b * x` over x >= 0 as a non-negative term.
+void FloorBilinearAuxiliaries(SolverInput &input);
+
+//! Emit the McCormick envelope for every `w = b * x` link. `w` has no default floor of 0 (AddBooleanProduct): its
+//! column is floored at the product's range, min(0, the lowest L of the instances of `x` in `box`), raised by a floor
+//! written on it (`b * x >= -4`). Where that floor is 0 or more it implies the lower corner
+//! and the upper corner collapses to the plain structural `w <= x`, so three rows suffice; where it is negative all
+//! four corners are emitted, so the product reaches the negative value. Requires a finite upper bound on `x` and
+//! names it if missing.
 //!
 //! The rows are emitted per INSTANCE of `w`, in flat columns, each from the box of the instance of `x` it reads: a
 //! query-wide product is one block, a keyed one a block per key, a row-scoped one a block per row.
@@ -204,7 +210,7 @@ void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer, const 
 //! constant: on a box wider than `box` it cuts valid points, and on a narrower one it is
 //! slack. So unlike a Big-M it is wrong in both directions once the box moves, which is
 //! why the box is named rather than read from `input`. `input` is still written (the
-//! auxiliary's own column is widened for a negative `x`), and that write is a column
+//! auxiliary's own column is floored at the product's range), and that write is a column
 //! declaration rather than a derived constant.
 void LinearizeBilinear(SolverInput &input, const VarIndexer &indexer, const FormulationBox &box);
 
@@ -235,6 +241,23 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
 //! Reads the range DeriveAbsAuxiliaryBounds already derived; never recomputes it.
 void LinearizeAbsMaximize(SolverInput &input);
 
+//! The value rewrite's helper decisions (SolverInput::reducer_value_links), phase 0, at the end of assembly, once the
+//! rows and the objective are final: inline each helper whose every reader can read its members in place of its
+//! column -- linear rows of plain clauses and the linear objective, or the members of one outer helper -- where doing
+//! so adds no nonzero to the model (D89), counted on the data: an instance of `m` terms read `k` times costs `m * k`
+//! written in, against `m + 1` for its definition and `k` for its reads. `held` lists the decisions read where only a
+//! column can stand and SolverInput does not show it: a composed MIN/MAX term, a bound folded into its column's box,
+//! a flat MIN/MAX objective's terms. One read by an outer helper's members -- a nested reducer -- is written into
+//! them, each term reading an instance becoming that instance's terms; one read by rows and the objective is marked
+//! `inlined`, for the model builder to write its members where they read it. Either way its variable becomes
+//! DecideVarScope::INLINED, with no column. A MIN or MAX group of one member is that member, written in group by
+//! group (SolverInput::written_in); an outer MIN or MAX that may close natively takes only instances read once.
+//! `minmax_values` are G/O MIN/MAX outputs whose non-singleton formulas stay explicit. SUM/AVG values remain eligible
+//! for recursive expansion into their readers. A singleton MIN/MAX group may be written directly at its readers,
+//! since its reducer value is that one member (deck p. 112). Returns whether a helper was inlined or written through:
+//! the column space must then be laid out again.
+bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, const vector<idx_t> &minmax_values);
+
 //! The value rewrite's helper decisions (SolverInput::reducer_value_links), phase 1: box
 //! each helper instance by the reach of its own group's members -- the sum of their brackets
 //! for SUM/AVG, their cover for MIN/MAX -- so a Big-M over it has a span and the root LP
@@ -246,12 +269,24 @@ void LinearizeAbsMaximize(SolverInput &input);
 //! is derived like its ceiling, never defaulted to 0; an end no member bounds is left open.
 void DeriveReducerValueBounds(SolverInput &input, const VarIndexer &indexer);
 
+//! Its backward half (language/guide.md §5.5): a helper's box flows to the helpers it is defined from --
+//! through the definition of a SUM or AVG, each term is at most the helper's top less every
+//! other term's floor where it states `value >= members`, and at least its floor less every
+//! other's top where it states `value <= members`; through a MAX's
+//! envelope every member is at or under its top, a MIN's at or over its floor. So a nested
+//! MIN/MAX whose closing side needs a Big-M finds one in a bound written only at the root
+//! (`sum(max(x) by (g, h)) by (g) = 10`). One box covers every instance of a helper, so it
+//! is tightened only when every instance it defines is bounded, by the loosest bound.
+//! Only tightens; FormulateModel runs it in the same fixed point.
+void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer);
+
 //! Phase 2: emit each helper's definition, one row per group of its members. SUM/AVG:
 //! the flat equality `value - members = constants` (an AVG's members carry their 1/n).
 //! MIN/MAX: an extremum link (EmitExtremumLink) on the sides the clause needs, its
 //! closing Big-M sized off the helper's box against the family's far end, and refused
-//! naming a column to bound where no such constant exists on the lowering arm. The
-//! evaluated member rows are consumed here; none reaches `input.constraints`.
+//! naming a column to bound where no such constant exists on the lowering arm; an extremum group of one member is that
+//! member, an equality (deck p. 112). The evaluated member rows are consumed here; none reaches `input.constraints`.
+//! An inlined helper has no definition: its members move to SolverInput::inlined_helpers.
 void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names,
                                 NativeConstructPolicy policy);
 
@@ -526,21 +561,14 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
                       NativeConstructPolicy policy);
 
 //! How stage 05 classified the objective's MIN/MAX shape, as `LinearizeMinMaxObjective`
-//! needs it. `flat_*` describes an unqualified `MIN(expr)` / `MAX(expr)` objective;
-//! `per_*` describes the two-level `outer(per k: inner(e) by (k))` form, whose group
-//! ids arrive on `SolverInput::objective_row_group_ids`. The objective is a minimization, and
+//! needs it: `flat_*` describes a `MIN(expr)` / `MAX(expr)` objective. (A nested one is a
+//! helper decision, defined by LinearizeReducerValueLinks, D81.) The objective is a minimization, and
 //! it is *easy* when that already drives the auxiliary to the extreme (a minimized MAX:
 //! `MINIMIZE MAX(e)`, or `MAXIMIZE MIN(e)` written as `MINIMIZE MAX(-e)`) and one envelope
 //! row per row suffices; the hard direction additionally needs the per-row indicator layer.
 struct MinMaxObjectiveSpec {
 	ObjectiveAggregateType flat_agg = ObjectiveAggregateType::NONE;
 	bool flat_is_easy = false;
-	ObjectiveAggregateType per_inner_agg = ObjectiveAggregateType::NONE;
-	ObjectiveAggregateType per_outer_agg = ObjectiveAggregateType::NONE;
-	bool per_inner_is_easy = false;
-	bool per_outer_is_easy = false;
-	//! Inner reducer was AVG, rewritten to SUM with a per-group 1/n_g scale.
-	bool per_inner_was_avg = false;
 	//! Exactly the rows the objective's reducer reads (its terms' filters, the
 	//! objective's `when` folded in), each a member whatever its coefficients. Sized
 	//! to the input's rows.
@@ -549,8 +577,7 @@ struct MinMaxObjectiveSpec {
 
 //! Encode a MIN/MAX *objective* — the counterpart of `LinearizeMinMaxConstraints`, which
 //! encodes a MIN/MAX *constraint*. The per-row objective is replaced by a global
-//! auxiliary (`z` flat, `z_g` per group plus an outer `w` for the two-level form),
-//! pinned by envelope rows against the evaluated objective coefficients; the hard
+//! auxiliary `z`, pinned by envelope rows against the evaluated objective coefficients; the hard
 //! direction adds one indicator binary per active row and a `SUM(y) >= 1` pin.
 //!
 //! Runs after the flat column space exists, so it emits into `input.global_constraints`
@@ -561,9 +588,8 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer, con
 
 //! One reducer term of a *composed* (additive) MIN/MAX clause — `SUM(a) + MAX(b) <= K`
 //! or the objective spelling — with everything data-dependent already evaluated by the
-//! physical layer. `inner_terms` is non-owning: the flattened terms live on the logical
-//! operator's `ComposedMinMaxTerm`, prepared at stage 05, and `per_term_coefs[t][row]`
-//! is that term's evaluated coefficient. `z_idx` is filled in by the linearizer.
+//! physical layer: inner term t reads `variables[t]` (INVALID_INDEX for a constant) with
+//! coefficient `per_term_coefs[t][row]` at each row. `z_idx` is filled in by the linearizer.
 struct ComposedMinMaxTermData {
 	//! MIN/MAX reducer (gets a global auxiliary) vs SUM/AVG (folds into the outer row).
 	bool is_minmax = false;
@@ -581,8 +607,10 @@ struct ComposedMinMaxTermData {
 	//! Rows this term reduces over: the term's `WHEN` mask, folded with the relation
 	//! qualifier's de-duplication mask. Sized `SolverInput::num_rows`.
 	vector<bool> filter_mask;
-	//! Non-owning; the flattened inner terms live on the logical operator.
-	const vector<DecideTerm> *inner_terms = nullptr;
+	//! The variable each inner term reads, as execution numbers it: a decision, or the read
+	//! of one at the row a frame selects (SolverInput::frame_reads), which the indexer
+	//! resolves at each row. INVALID_INDEX for a constant term.
+	vector<idx_t> variables;
 	//! Evaluated per-row coefficient of each inner term, already scaled by its sign.
 	vector<vector<double>> per_term_coefs;
 	//! Flat column of this term's global auxiliary; assigned by the linearizer.

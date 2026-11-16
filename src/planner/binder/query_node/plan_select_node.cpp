@@ -79,6 +79,15 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 			if (statement.decide_objective) {
 				collect_subqueries(statement.decide_objective);
 			}
+			// A frame's order key and its fallback are data expressions read beside the
+			// clause, so a subquery in one carries the same evidence.
+			for (auto &frame : statement.decide_frames) {
+				for (auto *expr : {&frame.order, &frame.fallback}) {
+					if (*expr) {
+						collect_subqueries(*expr);
+					}
+				}
+			}
 		}
 
 		// Flatten now, even when this select node is itself being planned inside an
@@ -99,6 +108,14 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 		for (auto &key : statement.decide_keys) {
 			for (auto &element : key.elements) {
 				PlanSubqueries(element.expression, root);
+			}
+		}
+		// So is a frame's order key and its fallback.
+		for (auto &frame : statement.decide_frames) {
+			for (auto *expr : {&frame.order, &frame.fallback}) {
+				if (*expr) {
+					PlanSubqueries(*expr, root);
+				}
 			}
 		}
 		is_outside_flattened = outer_flatten_state;
@@ -152,25 +169,30 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 		string written_objective;
 		string canonical_objective;
 		bool objective_canonical_differs = false;
-		// The run-time checks of the clauses, built by the
-		// canonicalizer from each clause as bound, before it is canonicalized.
-		DecideScopeChecks scope_checks {statement.decide_keys, statement.keyed_scopes, statement.decide_text};
-		DecideSourceNames message_names {scope_checks.source_text, scope_checks.keyed_scopes, scope_checks.keys};
+		DecideSourceNames message_names {statement.decide_text, statement.keyed_scopes, statement.decide_keys};
+		// The variant signatures (D70), from the canonical clauses: one instance per class and distinct value of each
+		// scoped expression's fields.
+		DecideSignatures signatures {statement.keyed_scopes, {}};
+		// Where each frame stands, from the canonical clauses: the rows its timelines read.
+		DecideFramePlacement frame_placement {
+		    statement.decide_frames, statement.decide_keys, statement.keyed_scopes, {}};
 		{
 			DecideCanonicalizer canonicalizer(context, statement.decide_index, statement.variable_scopes,
-			                                  statement.keyed_scopes, statement.is_boolean_var,
+			                                  statement.keyed_scopes, statement.decide_keys, statement.is_boolean_var,
 			                                  std::move(query_wide_table_indexes),
 			                                  std::move(correlated_subquery_table_indexes));
 			canonicalizer.QuoteMessagesWith(message_names);
+			canonicalizer.frames = &statement.decide_frames;
 			// The algebra of every clause, judged once on the one spelling canonicalization wrote.
 			DecideShapeCheck shape_check(context, statement.decide_index, message_names);
 			if (statement.decide_constraints) {
-				canonicalizer.BuildConstraintScopeChecks(*statement.decide_constraints, scope_checks);
 				statement.decide_constraints = canonicalizer.CanonicalizeTree(*statement.decide_constraints);
+				canonicalizer.PlaceFrames(*statement.decide_constraints, frame_placement);
+				canonicalizer.BuildConstraintSignatures(*statement.decide_constraints, signatures);
 				canonicalizer.VerifyCanonical(*statement.decide_constraints);
 				FinalizeConstraintSourceInfo(*statement.decide_constraints, statement.decide_constraint_sources,
 				                             statement.decide_text, statement.keyed_scopes, statement.decide_index,
-				                             &statement.decide_keys);
+				                             &statement.decide_keys, statement.decide_frames);
 				shape_check.CheckConstraints(*statement.decide_constraints, statement.decide_constraint_sources);
 				canonicalizer.SkipNullData(*statement.decide_constraints, statement.keyed_scopes,
 				                           statement.decide_keys);
@@ -188,6 +210,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 				objective_names.decide_index = statement.decide_index;
 				// Both renderings are the plan's layers: the objective as bound and as canonicalized.
 				objective_names.written = false;
+				objective_names.frames = &statement.decide_frames;
 				// As for a clause: the text the user wrote, cut at the parser's OBJECTIVE span, and DeciDB's
 				// renderings before and after canonicalization to tell whether it changed. The rendering stands in
 				// for the text only for a statement built without the parser's text.
@@ -196,9 +219,10 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 				                               written_objective)) {
 					written_objective = rendered_objective;
 				}
-				canonicalizer.BuildObjectiveScopeChecks(*statement.decide_objective, scope_checks);
 				statement.decide_objective = canonicalizer.CanonicalizeObjective(
 				    *statement.decide_objective, statement.objective_constant_offset, statement.decide_sense);
+				canonicalizer.PlaceObjectiveFrames(*statement.decide_objective, frame_placement);
+				canonicalizer.BuildObjectiveSignatures(*statement.decide_objective, signatures);
 				canonicalizer.VerifyCanonicalObjective(*statement.decide_objective);
 				// The canonical objective is a minimization; its layer reads in the sense the user wrote, so the flip
 				// alone is no difference to show.
@@ -207,6 +231,14 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 				shape_check.CheckObjective(*statement.decide_objective, written_objective);
 				objective_canonical_differs = canonical_objective != rendered_objective;
 				canonicalizer.SkipNullData(*statement.decide_objective, statement.keyed_scopes, statement.decide_keys);
+			}
+			// A frame stands in one clause or in the objective, never nowhere: one the walks above missed would read
+			// every row as its timeline.
+			frame_placement.placed.resize(statement.decide_frames.size(), false);
+			for (idx_t i = 0; i < statement.decide_frames.size(); i++) {
+				if (!frame_placement.placed[i]) {
+					throw InternalException("DECIDE: frame %s is in no clause", statement.decide_frames[i].text);
+				}
 			}
 		}
 
@@ -234,8 +266,10 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 				decide_op->source_columns.push_back({ColumnBinding(binding->index, i), binding->names[i]});
 			}
 		}
-		decide_op->scope_checks = std::move(scope_checks.checks);
+		decide_op->signatures = std::move(signatures.signatures);
+		decide_op->objective_signature = signatures.objective;
 		decide_op->keys = std::move(statement.decide_keys);
+		decide_op->frames = std::move(statement.decide_frames);
 		// ne_clause_sources, ABS aux vars, and MIN/MAX indicator links +
 		// objective types are created by DecideOptimizer (runs after plan creation)
 		decide_op->AddChild(std::move(root));

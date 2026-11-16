@@ -475,7 +475,7 @@ TEST_CASE("Direct-solve IR reads the model class a backend would be asked to run
 	REQUIRE(!shape_of("x(REAL)", "x <= 3", "MINIMIZE MAX(POWER(x - cap, 2))").quadratic_objective);
 }
 
-TEST_CASE("Direct-solve IR models products and squares, and declines a two-level objective", "[decidb]") {
+TEST_CASE("Direct-solve IR models products and squares, and declines a nested objective", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	QueryIR products(con,
@@ -489,7 +489,7 @@ TEST_CASE("Direct-solve IR models products and squares, and declines a two-level
 	QueryIR product_in_abs(con, IRQuery("x(INT), y(INT)", "x <= 3", "MINIMIZE SUM(ABS(x*y - 1))"));
 	REQUIRE(product_in_abs.ir.objective.status == DirectAnalysisStatus::NOT_PROVED);
 
-	// No rule models `outer(per k: inner(e) by (k))` yet.
+	// No rule models the helper decision a nested reducer becomes (D81), `outer(per k: inner(e) by (k))` included.
 	QueryIR nested(con, IRQuery("x(INT)", "x <= 3", "MINIMIZE SUM(per id: MAX(w*x) by (id))"));
 	REQUIRE(nested.ir.objective.status == DirectAnalysisStatus::NOT_PROVED);
 	REQUIRE(nested.ir.objective.parts.empty());
@@ -499,22 +499,28 @@ TEST_CASE("Direct-solve IR reads an aggregate clause per class and leaves a per-
           "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	// `per K: C` is one constraint per class; an aggregate clause bounds the total in each, so it reads as the clause,
-	// beside the scope check that the key determines the bound.
+	// `per K: C` is one constraint per class and variant (D70); an aggregate clause bounds the total of each group, and
+	// its instances differ only in their bound, which the group's tightest bound covers: it reads as the clause.
 	QueryIR aggregate(con, IRQuery("x(BOOL)", "per flag: SUM(x) <= cap", "MAXIMIZE SUM(w*x)"));
 	REQUIRE(aggregate.ir.status == DirectAnalysisStatus::PROVED);
 	REQUIRE(aggregate.ir.constraints.size() == 1);
 	REQUIRE(aggregate.ir.constraints[0].status == DirectAnalysisStatus::PROVED);
 	REQUIRE(aggregate.ir.constraints[0].aggregate);
-	REQUIRE(aggregate.ir.row_checks.size() == 1);
-	REQUIRE(aggregate.ir.row_checks[0].kind == DirectRowCheckKind::DETERMINES);
-	REQUIRE(aggregate.ir.row_checks[0].text.object == "cap");
+	REQUIRE(aggregate.ir.row_checks.empty());
 
 	// A clause per row would hold in a class alone: no rule models it.
 	QueryIR per_row(con, IRQuery("x(BOOL)", "SUM(x) <= 2 AND per flag: x <= 1", "MAXIMIZE SUM(w*x)"));
 	REQUIRE(per_row.ir.constraints.size() == 2);
 	REQUIRE(per_row.ir.constraints[0].status == DirectAnalysisStatus::PROVED);
 	REQUIRE(per_row.ir.constraints[1].status == DirectAnalysisStatus::NOT_PROVED);
+
+	// A reducer's own `per` over a body with variants reads the key's classes split by the body's values (D71), which
+	// the operator numbers and no rule's plan reads.
+	QueryIR variants(con, IRQuery("x(BOOL)", "sum(per flag: x) <= 1", "MAXIMIZE SUM(w*x)"));
+	REQUIRE(variants.ir.status == DirectAnalysisStatus::NOT_PROVED);
+	// An objective with a field is produced once (D72), which the operator checks and no rule's plan does.
+	QueryIR once(con, IRQuery("x(BOOL), per (): s(INT)", "x <= 1 AND s <= 3", "MAXIMIZE SUM(w*x) + cap * s"));
+	REQUIRE(once.ir.objective.status == DirectAnalysisStatus::NOT_PROVED);
 }
 
 TEST_CASE("Direct-solve IR reports what it cannot model as not proved", "[decidb]") {
@@ -526,6 +532,20 @@ TEST_CASE("Direct-solve IR reports what it cannot model as not proved", "[decidb
 	REQUIRE(ir.constraints.size() == 2);
 	REQUIRE(ir.constraints[0].status == DirectAnalysisStatus::PROVED);
 	REQUIRE(ir.constraints[1].status == DirectAnalysisStatus::NOT_PROVED);
+}
+
+TEST_CASE("Direct-solve IR declines a frame selector", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	// A frame reads the row its position selects on a timeline, which the operator computes and no rule's plan reads:
+	// the IR is not read. Its marker, an aggregate `first`, is never taken for a reducer.
+	QueryIR root(con, IRQuery("x(INT)", "x <= at(previous else 3: cap) over (id)", "MAXIMIZE SUM(x)"));
+	REQUIRE(root.ir.status == DirectAnalysisStatus::NOT_PROVED);
+	REQUIRE_FALSE(DirectIRIsReadable(root.ir));
+	QueryIR reduced(con, IRQuery("x(INT)", "x <= 3 AND SUM(at(first: x) over (id)) <= 4", "MAXIMIZE SUM(x)"));
+	REQUIRE_FALSE(DirectIRIsReadable(reduced.ir));
+	REQUIRE(reduced.ir.constraints.size() == 2);
+	REQUIRE(reduced.ir.constraints[1].status == DirectAnalysisStatus::NOT_PROVED);
 }
 
 TEST_CASE("Direct-solve IR says which bounds the solver folds into a variable's box", "[decidb]") {

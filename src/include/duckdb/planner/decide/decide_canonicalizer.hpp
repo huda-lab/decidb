@@ -106,6 +106,7 @@
 
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/unordered_set.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/common/unordered_map.hpp"
@@ -167,18 +168,39 @@ ExtremumBody SplitExtremumBody(const Expression &body, idx_t decide_index);
 //! the shape.
 enum class CanonicalConstraintClass : uint8_t { PER_ROW, AGGREGATE, VALUE, INVALID };
 
-//! What building the scope checks of the user's clauses reads besides the bound tree,
-//! and the checks it builds (LogicalDecide::scope_checks), in clause order.
-struct DecideScopeChecks {
-	//! A check keyed by a scope's key and a `by` key together adds their union.
+//! What building the variant signatures of the user's clauses writes (LogicalDecide::signatures).
+struct DecideSignatures {
+	//! A relation-qualified reducer over decisions whose body has a field gets a scope of its own, appended here
+	//! (KeyedScopeInfo::signature), and its tag names it.
+	vector<KeyedScopeInfo> &keyed_scopes;
+	vector<DecideSignature> signatures;
+	//! The objective's, or INVALID_INDEX.
+	idx_t objective = DConstants::INVALID_INDEX;
+};
+
+//! What placing the frame selectors of the user's clauses writes (PlaceFrames): each frame's
+//! place (DecideFrameSpec::rows, timeline_key, its D75 partition key), the keys its timelines
+//! and partitions are split by appended to the key table when new.
+struct DecideFramePlacement {
+	vector<DecideFrameSpec> &frames;
+	//! The key table, which placing appends the frames' timeline and partition keys to when new; the canonicalizer
+	//! reads the same vector (its `keys`).
 	vector<DecideKey> &keys;
 	const vector<KeyedScopeInfo> &keyed_scopes;
-	const DecideSourceText &source_text;
-	vector<DecideScopeCheck> checks;
+	//! Which frames are placed: each stands in exactly one place.
+	vector<bool> placed;
 };
+
+//! What a norm of `body` and order `order` stands for (language/guide.md §5): 1 `SUM(ABS(e))`, 2 `SUM(POWER(e, 2))`,
+//! 'inf' `MAX(ABS(e))`, and 0 of data the count of its nonzero rows. Its type is the norm's: the binder gives it to the
+//! marker, which parses as `SUM(e)`, so what reads the norm reads the value it holds.
+unique_ptr<Expression> DecideNormDefinition(ClientContext &context, unique_ptr<Expression> body, const string &order);
 
 class DecideCanonicalizer {
 public:
+	//! Whether `expr` holds a reducer anywhere, itself included.
+	static bool ContainsReducer(const Expression &expr);
+
 	//! Provenance-only form: no table-index evidence is available, so arbitrary column
 	//! refs are never promoted to query-wide. Explicit QUERY_WIDE_VALUE_TAG metadata is
 	//! still honored. Variable scopes remain available for homogeneity validation.
@@ -189,9 +211,12 @@ public:
 	//! is required by every constructor: a canonicalizer built without it would refuse `b * SUM(x)` as a product of
 	//! decisions, wherever it classifies a user's clause.
 	//! `keyed_scopes` gives each keyed decision's key (KeyedScopeInfo::key), which decides whether a keyed decision
-	//! beside a reducer is one value per group (ClassifyScoped).
+	//! beside a reducer is one value per group (ClassifyScoped). `keys` (LogicalDecide::keys) gives each key's
+	//! elements, which decide whether a `per` key holds a value by construction (ScopeKeyOf, the signatures); the
+	//! canonicalizer reads the vector as it is when it asks, so keys added later are seen.
 	DecideCanonicalizer(ClientContext &context, idx_t decide_index, vector<DecideVarScopeInfo> variable_scopes,
-	                    const vector<KeyedScopeInfo> &keyed_scopes, const vector<bool> &is_boolean);
+	                    const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> &keys,
+	                    const vector<bool> &is_boolean);
 
 	//! Strict form: `query_wide_table_indexes` are the table indexes that UNCORRELATED
 	//! scalar subqueries flattened into, collected in plan_select_node.cpp at the only
@@ -209,8 +234,8 @@ public:
 	//! named "SUBQUERY", and reporting that -- or suggesting `SUM(x * SUBQUERY)` --
 	//! would name an object the user never typed.
 	DecideCanonicalizer(ClientContext &context, idx_t decide_index, vector<DecideVarScopeInfo> variable_scopes,
-	                    const vector<KeyedScopeInfo> &keyed_scopes, const vector<bool> &is_boolean,
-	                    unordered_set<idx_t> query_wide_table_indexes,
+	                    const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> &keys,
+	                    const vector<bool> &is_boolean, unordered_set<idx_t> query_wide_table_indexes,
 	                    unordered_set<idx_t> correlated_subquery_table_indexes = {});
 
 	//! Canonicalize a whole SUCH THAT tree: AND-conjunctions plus the `when` and `per K:`
@@ -218,19 +243,36 @@ public:
 	//! condition or key columns. Pure -- `constraints` is untouched.
 	unique_ptr<Expression> CanonicalizeTree(const Expression &constraints) const;
 
-	//! The scope checks of every clause of the user's SUCH THAT tree, appended to `scope`
-	//! in clause order. Read-only, from the clauses as bound: before CanonicalizeTree,
-	//! which drops the `per K:` of a clause in the aggregate shape -- one model row per
-	//! `by` group already is one per class there -- while the checks are what that key
-	//! still requires of the data. Called once, by the planner; a rewrite's clause
-	//! (AddConstraint) never builds any.
-	void BuildConstraintScopeChecks(const Expression &constraints, DecideScopeChecks &scope) const;
+	//! Canonicalize one comparison a function made after the tree was canonicalized (an ABS envelope, an L0 link, a
+	//! body definition row): the same spelling as a clause, without the shape the tree stamps on a written clause.
+	//! Pure -- `comparison` is untouched.
+	unique_ptr<Expression> CanonicalizeComparison(const Expression &comparison) const;
 
-	//! The scope checks of the objective, built from
-	//! the bound objective before CanonicalizeObjective: its `when` keeps a row, it is
-	//! one value over the kept rows (`per ()`), and each reducer reads a row and is
-	//! determined by its own `per`.
-	void BuildObjectiveScopeChecks(const Expression &objective, DecideScopeChecks &scope) const;
+	//! The variant signature of every scoped expression of the canonical SUCH THAT tree with a field
+	//! (language/guide.md §7.1; D70): each `per K:` clause, its wrapper tagged with it (SIGNATURE_TAG_PREFIX), and
+	//! each relation-qualified reducer over decisions, given a scope of its own (KeyedScopeInfo::signature). Its
+	//! fields are the columns its tuple terms read (D83), its frames (D82) and decisions outside reducers, and the
+	//! reducers' `by` keys; a field the key holds by construction is none. Called once, by the planner, right after
+	//! CanonicalizeTree.
+	void BuildConstraintSignatures(Expression &constraints, DecideSignatures &out) const;
+
+	//! The objective's signature, `out.objective` -- it is produced once (D72), so execution refuses a field with a
+	//! second value -- and its qualified reducers', after CanonicalizeObjective.
+	void BuildObjectiveSignatures(Expression &objective, DecideSignatures &out) const;
+	//! Where every frame selector of the canonical SUCH THAT tree stands (language/guide.md §5.6): the rows its
+	//! timelines read, which are its scoped expression's path rows (§5.5); the key they are grouped by, the path's
+	//! `by` keys then `within`; the comparison it is written in; and whether it is inside a reducer
+	//! (DecideFrameSpec::rows, timeline_key, source_clause_id, reduced). Records the partition check (D75) of each
+	//! frame a `per` key reads directly -- a clause's `per K:`, or a reducer's own `per` -- unless the key determines
+	//! its timeline already (DecideFrameSpec::partition_key). Refuses a reducer that may read no member under `abs`
+	//! inside another reducer over decisions (D88). Called once, by the planner, after CanonicalizeTree.
+	void PlaceFrames(const Expression &constraints, DecideFramePlacement &placement) const;
+	//! The same for the objective, after CanonicalizeObjective. Its root has one class (D72), whose fields the
+	//! objective's signature checks, so only a reducer's own `per` gets a partition check there.
+	void PlaceObjectiveFrames(const Expression &objective, DecideFramePlacement &placement) const;
+	//! The frames a signature field may name (LogicalDecide::frames); null when the plan has none. Set by the
+	//! planner before it builds the signatures.
+	const vector<DecideFrameSpec> *frames = nullptr;
 
 	//! Quote expressions in the scope refusals as the query writes them, from
 	//! these names, rather than through the bound tree's own names. Set by the planner,
@@ -416,8 +458,9 @@ private:
 	//! runs: `b`, `2 * b`. A reducer under such a factor takes the VALUE shape.
 	bool IsBooleanFactor(const Expression &expr) const;
 	//! The scope of a tuple term, as a key of the key lattice (JoinDecideKeys): the join of its factors' scopes. A
-	//! decision has its own key (decision_keys), data `data_key` -- the enclosing `per` key, whose scope check makes
-	//! it one value per class, or DECIDE_ROW_KEY with no `per` -- and a value known for the whole query the empty key.
+	//! decision has its own key (decision_keys); data `data_key` -- the enclosing `per` key -- where that key holds it
+	//! by construction (one of its elements), else DECIDE_ROW_KEY, since a value the key does not hold may take several
+	//! values in a class (D70); and a value known for the whole query the empty key.
 	idx_t ScopeKeyOf(const Expression &expr, idx_t data_key) const;
 
 	//! Recompute semantic provenance for the complete canonical bound. A stale root
@@ -433,7 +476,6 @@ private:
 	Placement Classify(const Expression &expr) const;
 
 	bool ReferencesDecideVar(const Expression &expr) const;
-	static bool ContainsReducer(const Expression &expr);
 	void ValidateCanonicalTree(const Expression &constraints) const;
 	void ValidateCanonicalComparison(const BoundComparisonExpression &comparison) const;
 	void VerifyCanonicalTree(const Expression &constraints) const;
@@ -472,14 +514,36 @@ private:
 	//! term, or alone under a factor whose sign is not known before the query runs.
 	bool TakesComposedMinMax(const vector<Atom> &atoms) const;
 
-	//! The scope checks of one clause, `leaf` its
-	//! comparison (or other constraint) as bound.
-	void BuildClauseScopeChecks(const Expression &leaf, const DecideEnclosingScope &enclosing,
-	                            DecideScopeChecks &scope) const;
-	//! The checks of one reducer: a row in every `by` group (D8), and its own `per`
-	//! determining its body. `rows` is the clause's `when`, null for every row.
-	void BuildReducerScopeChecks(const BoundAggregateExpression &reducer, const Expression *rows,
-	                             DecideScopeChecks &scope) const;
+	//! The signature fields `expr` reads (D70, D82, D83), appended to `fields` unless there or held by `key` already: a
+	//! decision by instance, a reducer's `by` key, a frame by its keys, and data by each column it reads.
+	void CollectSignatureFields(const Expression &expr, idx_t key, vector<DecideSignatureField> &fields) const;
+	//! Whether the key `key` holds `field` by construction: one class shows one value of it.
+	bool KeyHoldsField(idx_t key, const DecideSignatureField &field) const;
+	//! Gives every relation-qualified reducer over decisions in `expr` whose body has a field its signature and a
+	//! scope of its own, counted over the rows its path keeps (language/guide.md §5.5).
+	void SignQualifiedReducers(Expression &expr, const DecideReducerPath &path, Clause clause, idx_t source_clause_id,
+	                           DecideSignatures &out) const;
+	void BuildConstraintSignatures(Expression &expr, const Expression *when, DecideSignatures &out) const;
+
+	//! The `per` key a scoped expression is read under, for its frames' partition check (D75):
+	//! its key and the key as written.
+	struct FramePerKey {
+		//! Into `keys`; INVALID_INDEX for `per ()`, one class.
+		idx_t key = DConstants::INVALID_INDEX;
+		//! The scope as a message names it: `per D.depotID`, `the objective (per ())`.
+		string text;
+	};
+	void PlaceClauseFrames(const Expression &expr, DecideEnclosingScope enclosing,
+	                       DecideFramePlacement &placement) const;
+	//! The frames of `expr` along `path`: one outside every reducer of its comparison
+	//! stands at the comparison's root, one in a reducer's argument reads that reducer's
+	//! members. `per` is the key of the scoped expression `expr` is the body of; null for
+	//! `per row`, which no frame's timeline can span.
+	void PlaceFramesIn(const Expression &expr, const DecideReducerPath &path, const FramePerKey *per,
+	                   DecideFramePlacement &placement) const;
+	//! The key of a reducer's own `per` (or of the colon form), when it has one.
+	bool ReducerPerKey(const BoundAggregateExpression &reducer, const vector<KeyedScopeInfo> &keyed_scopes,
+	                   FramePerKey &out) const;
 
 	//! Rebuild an additive chain from terms.
 	unique_ptr<Expression> BuildAdditive(const vector<Atom> &atoms) const;
@@ -516,6 +580,9 @@ private:
 	optional_ptr<const DecideSourceNames> message_names;
 	//! Which decision columns are declared BOOL, indexed by decide-column index.
 	vector<bool> boolean_decisions;
+	//! The keyed scopes and keys (LogicalDecide::keyed_scopes, LogicalDecide::keys), read where they are.
+	const vector<KeyedScopeInfo> &keyed_scopes;
+	const vector<DecideKey> &keys;
 
 	//! `expr` as a scope refusal quotes it: the text the user wrote for it, parenthesized where it binds looser than
 	//! the operator it is an operand of (`parent_precedence`, as in RenderDecideSource).

@@ -113,6 +113,12 @@ struct CoefficientColumn {
 		// Drop any prior dense allocation
 		vector<double>().swap(dense_values);
 	}
+	//! Bulk replace with a dense column, all entries = init.
+	void AssignDense(idx_t n, double init = 0.0) {
+		kind = Kind::Dense;
+		dense_values.assign(n, init);
+		logical_size = n;
+	}
 	//! Reserve dense capacity for upcoming fills.
 	void Reserve(idx_t n) {
 		EnsureDense();
@@ -133,13 +139,11 @@ struct CoefficientColumn {
 
 //! What names a group in a message (`'a'`, or `EU, 2024` for a composite key): the representative values of its key
 //! (SolverInput::key_values) and the group's number among them. Its text is formatted only where a message prints it;
-//! a group of no key (the empty key, a `when` alone) has no name. Extraction holds a row of the group instead of its
-//! number, since a later clause that reads the key on more rows regroups it; assembly resolves `group` from `row`
-//! against the key's final grouping, so every name of a key reads one table.
+//! a group of no key (the empty key, a `when` alone) has no name. The number is the group's rank in the tree node's
+//! dictionary, which the one pass fills from every row that reads the key, so a key's groups are numbered once.
 struct GroupName {
 	idx_t key_values = DConstants::INVALID_INDEX;
 	idx_t group = DConstants::INVALID_INDEX;
-	idx_t row = DConstants::INVALID_INDEX;
 };
 
 //! The rows a clause emits, in compressed sparse row form: row e's decision terms are the solver columns
@@ -150,6 +154,9 @@ struct EmittedRows {
 	vector<idx_t> offsets;
 	vector<int> columns;
 	vector<double> values;
+	//! Per emitted row, the constant its terms carry: the members' constants of the inlined helpers it reads (D89),
+	//! which go to its bound with the clause's own; 0 where it reads none.
+	vector<double> constants;
 
 	EmittedRows() = default;
 	EmittedRows(const EmittedRows &) {
@@ -187,6 +194,9 @@ struct EvaluatedConstraint {
 	//! coefficients / non-aggregate rows) fall back to the numeric reconstruction.
 	vector<string> coefficient_labels;
 	CoefficientColumn rhs_values; // RHS column (logical size = num_rows)
+	//! A grouped `<>` row whose bound is NULL: still a member of its group's sum, it excludes no value
+	//! (language/guide.md §6.4). Empty for any other clause.
+	vector<bool> no_exclusion;
 	//! A per-row bound on one decision: the values it admits on each row (DecideConstraint::admitted_lower and
 	//! admitted_upper), ±infinity on an open side. Logical size 0 for any other constraint.
 	CoefficientColumn admitted_lower;
@@ -353,13 +363,49 @@ struct AbsMaximizeLinkSpec {
 	bool range_unbounded = false;
 };
 
-//! A helper decision of the value rewrite (LogicalDecide::ReducerValueLink), evaluated.
-//! `rows` holds the reducer's members: the inner terms' coefficients on the rows the
-//! clause and the reducer keep (every other row 0), grouped by the `by` key over the kept
-//! rows. A SUM or AVG helper is defined by one row per group over the members and the helper's own
-//! term, on the sides the clauses push it against: `value >= members` (`need_envelope`), `value <=
-//! members` (`need_closing`), the equality when both; a MIN/MAX helper is pinned by an extremum link
-//! per group instead (ExtremumLinkSpec), on the same two sides.
+//! The members a helper decision is defined from, listed per group -- one group per instance of the helper -- in flat
+//! arrays: group `g` is read at `group_rows[g]` and holds members [group_begin[g], group_begin[g + 1]); member `m` is
+//! `constants[m]` plus the terms [member_begin[m], member_begin[m + 1]), each `coefficients[t]` times decision
+//! `variables[t]` read at `rows[t]`. Listed rather than given as rows with a group each, because the groups may share
+//! rows: a range frame's windows (language/guide.md §5.6) overlap where a `by` key's groups partition.
+struct ReducerValueMembers {
+	vector<idx_t> group_rows;
+	vector<idx_t> group_begin {0};
+	vector<double> constants;
+	vector<idx_t> member_begin {0};
+	vector<idx_t> variables;
+	vector<idx_t> rows;
+	vector<double> coefficients;
+
+	idx_t GroupCount() const {
+		return group_rows.size();
+	}
+	//! Open group `g`, read at `row`: the members added next are its.
+	void AddGroup(idx_t row) {
+		group_rows.push_back(row);
+		group_begin.push_back(group_begin.back());
+	}
+	//! Open a member of the last group, with `constant`: the terms added next are its.
+	void AddMember(double constant) {
+		constants.push_back(constant);
+		member_begin.push_back(member_begin.back());
+		group_begin.back()++;
+	}
+	//! A term of the last member.
+	void AddTerm(idx_t variable, idx_t row, double coefficient) {
+		variables.push_back(variable);
+		rows.push_back(row);
+		coefficients.push_back(coefficient);
+		member_begin.back()++;
+	}
+};
+
+//! A helper decision of the value rewrite (LogicalDecide::ReducerValueLink), evaluated: its members per group, each a
+//! linear expression over decisions read at rows (an AVG's carry its 1/n) -- a `by` group's rows, or what a range
+//! frame's window reads. A SUM or AVG helper is defined by one row per group over the members and the helper's own
+//! term, on the sides the clauses push it against: `value >= members` (`need_envelope`), `value <= members`
+//! (`need_closing`), the equality when both; a MIN/MAX helper is pinned by an extremum link per group instead
+//! (ExtremumLinkSpec), on the same two sides. A group with no member defines nothing.
 struct ReducerValueLinkSpec {
 	idx_t value_var = DConstants::INVALID_INDEX;
 	string agg_name;
@@ -367,7 +413,13 @@ struct ReducerValueLinkSpec {
 	bool need_closing = false;
 	//! The reducer as written, for the rows and columns a diagnosis names.
 	string label;
-	EvaluatedConstraint rows;
+	//! A range frame's helper, one instance per window (D78), rather than a reducer's.
+	bool frame = false;
+	ReducerValueMembers members;
+	//! Set by InlineReducerValueLinks for one written into its rows and the objective (D89): they read an instance's
+	//! members in place of its column. Its bounds are still derived (a bound flows through it to the helpers among
+	//! its members); no definition is emitted, and its members move to SolverInput::inlined_helpers.
+	bool inlined = false;
 };
 
 //! A construct handed to the backend whole, instead of being lowered into rows.
@@ -542,6 +594,18 @@ struct SolverInput {
 	//! The value rewrite's helper decisions, each with its evaluated definition. Consumed
 	//! (moved into `constraints` or emitted as extremum links) by the formulation pass.
 	vector<ReducerValueLinkSpec> reducer_value_links;
+	//! The helpers stage 06 inlined into rows and the objective, moved here once their bounds are derived
+	//! (LinearizeReducerValueLinks): the model builder writes an instance's members wherever a row or the objective
+	//! reads it (ForEachInlinedColumn). `inlined_helper_of[v]` is decision v's entry, INVALID_INDEX for every other.
+	struct InlinedHelper {
+		ReducerValueMembers members;
+		//! Per instance of the helper, its group in `members`; INVALID_INDEX for an instance with no member, which no
+		//! reader reads (it is absent), and for one that keeps its column (`written_in` false).
+		vector<idx_t> group_of_instance;
+		string label;
+	};
+	vector<InlinedHelper> inlined_helpers;
+	vector<idx_t> inlined_helper_of;
 
 	// Linear objective
 	vector<CoefficientColumn> objective_coefficients; // [term_idx] = column of length num_rows
@@ -552,13 +616,6 @@ struct SolverInput {
 
 	//! The objective's terms of degree 2, summed into the objective's Q.
 	vector<EvaluatedProductGroup> objective_product_groups;
-
-	// The two-level objective's grouping (mirrors constraint row_group_ids pattern)
-	vector<idx_t> objective_row_group_ids; // per-row group assignment
-	idx_t objective_num_groups = 0;        // 0 = ungrouped
-	//! CSR-style group→rows index for objectives (mirrors EvaluatedConstraint).
-	vector<idx_t> objective_group_offsets;
-	vector<idx_t> objective_group_row_ids;
 
 	// Global auxiliary variables (exist once, not replicated per row)
 	// Appended after the per-row grid at indices num_rows * num_decide_vars + i
@@ -691,10 +748,38 @@ struct SolverInput {
 	//! Keyed mappings: one per KeyedScopeInfo (a `per K:` decision's key, a reducer's
 	//! `per K:` or colon-form qualifier, a helper decision's `by` key)
 	vector<KeyedMapping> keyed_mappings;
+	//! Per decision, the rows whose instance of it has no value beyond its keyed scope's absent class: an auxiliary
+	//! whose definition reads an instance with none, or a NULL (D88); empty where none. An instance every row of
+	//! which reads none is a column fixed at 0, which no row reads, as an absent class is.
+	vector<vector<bool>> absent_reads;
+	//! Per keyed helper, the instances written into their readers as their one member (InlineReducerValueLinks: a MIN
+	//! or MAX group of one member is that member, deck p. 112), which own no column (VarIndexer::instance_slot);
+	//! empty for a helper none of which is.
+	vector<vector<bool>> written_in;
 
-	//! Per-variable scope (row / keyed / query-wide).
+	//! Per-variable scope (row / keyed / query-wide / frame read).
 	//! For a keyed variable, keyed_scope_idx indexes keyed_mappings.
 	vector<DecideVarScopeInfo> variable_scopes;
+
+	//! A decision read at the row a frame selector selects (language/guide.md §5.6):
+	//! variable `first_frame_read + i` is decision `base` read, at each row, at `rows[row]`
+	//! -- the selected row, or the row itself where the frame selects none, where every term
+	//! reading it has coefficient 0. It owns no column (DecideVarScope::FRAME_READ); its
+	//! type and box are its base's, so a pass reading a term's box reads a sound one.
+	struct FrameRead {
+		idx_t base = DConstants::INVALID_INDEX;
+		vector<idx_t> rows;
+	};
+	vector<FrameRead> frame_reads;
+	//! The first frame read's variable index: the plan's decisions come first.
+	idx_t first_frame_read = 0;
+	//! The plan's decision variable `var` reads: itself, or a frame read's base. What a
+	//! table of the plan's decisions (a name, a domain) is looked up by.
+	idx_t BaseVariable(idx_t var) const {
+		return var >= first_frame_read && var - first_frame_read < frame_reads.size()
+		           ? frame_reads[var - first_frame_read].base
+		           : var;
+	}
 
 	//! When set (infeasible diagnosis armed), SolverModel::Build keeps each data-valued bound on one
 	//! decision as a row instead of folding it into the column box, so the elastic engine can relax

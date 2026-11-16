@@ -120,7 +120,7 @@ def _scoped(scope, bound):
     return constraint.format(bound=bound + right_by), clause
 
 
-def _agree(cli, oracle_solver, rows, constraint, limits):
+def _agree(cli, oracle_solver, rows, constraint, limits, warnings=()):
     oracle_solver.create_model("rhs_aggregate_window")
     names = {row[0]: f"x_{row[0]}" for row in rows}
     for name in names.values():
@@ -149,7 +149,9 @@ def _agree(cli, oracle_solver, rows, constraint, limits):
 
     # A limit of 1e6 or more is a right-hand side of the model the solver is handed.
     large = any(limit is not None and abs(limit) >= 1e6 for _, limit in limits)
-    agree_with_oracle(cli, _sql(rows, constraint), oracle, check_assignment, modes=("off",), number_range=large)
+    agree_with_oracle(
+        cli, _sql(rows, constraint), oracle, check_assignment, modes=("off",), number_range=large, warnings=warnings
+    )
 
 
 # The aggregate and the scope reach the rewrite by separate code: MakeReducerColumn (decide_rewrite_rhs_bounds.cpp)
@@ -291,8 +293,10 @@ def test_rhs_l0_norm_reads_a_nan_body_as_invalid(decidb_cli, mode):
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_a_bound_reducer_that_reads_no_row_skips_the_instance(decidb_cli, oracle_solver):
-    """`SUM(when id > 100: w)` reads no row, so the bound is NULL on every row and no instance is left."""
-    _agree(decidb_cli, oracle_solver, PLAIN, "SUM(x * w) <= cap + SUM(when id > 100: w)", [])
+    """`SUM(when id > 100: w)` reads no row, so the bound is NULL on every row and no instance is left: the clause
+    constrains nothing, which stderr says."""
+    clause = "SUM(x * w) <= cap + SUM(when id > 100: w)"
+    _agree(decidb_cli, oracle_solver, PLAIN, clause, [], warnings=[f"'{clause}' constrains nothing"])
 
 
 @pytest.mark.cons_aggregate
@@ -316,7 +320,9 @@ def test_rhs_subquery_that_is_null_skips_the_bound_on_both_paths(decidb_cli, ora
         value = sum(profits[row[0]] * row[1] for row in result)
         assert math.isclose(value, oracle.objective_value, abs_tol=1e-6), (mode, value, oracle.objective_value)
 
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, modes=("off", "require"))
+    # The solver path alone says the clause constrains nothing.
+    warnings = [f"'SUM(x) {op} (SELECT NULL::INTEGER)' constrains nothing"]
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, modes=("off", "require"), warnings=warnings)
 
 
 @pytest.mark.query_diagnostics

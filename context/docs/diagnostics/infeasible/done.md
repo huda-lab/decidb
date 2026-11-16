@@ -138,9 +138,9 @@ stage 1E:  E* = min Σ αᵢ s_edit    subject to D ≤ D*, fixed G
   k, strict, typed_k, source_clause_id, removal_group_id}` (a comparison → one spec, a
   `BETWEEN` → two) and tags its comparison `SINGLETON_ROW_CLAUSE_ROWS_TAG` beside
   `SINGLETON_ROW_BOUND_TAG`. Stage 05's linear form flattens such a clause aside
-  (`DecidePreparedModel::singleton_row_constraints`, one per recorded bound, which it
+  (into its folded root, `DecideNode::folded`, one per recorded bound, which it
   asserts); execution evaluates those clauses under `DIAGNOSE` only, numbered after the
-  prepared clauses, and only the repair model carries their rows: one per kept row, or one
+  lowered clauses, and only the repair model carries their rows: one per kept row, or one
   per class under a `per K:` key, each `USER_PARAMETER` and, for a literal bound,
   `SHARED_SCALAR`. In the `query` scope the rows of one bound share one slack (the knob is
   one literal `K` → report the max overshoot); in the `expanded` scope each
@@ -335,7 +335,7 @@ two clauses sharing an id share a slack — and a slack spanning two unrelated c
 spent on one of them and billed to the other: a repair that does not repair
 (`SUM(y) >= 100` loosened to `>= 81.6` on a query where `y <= 2` caps `SUM(y)` at 8,
 because the slack the engine spent was the bound's). Execution numbers every clause it
-evaluates once: the prepared clauses first, then (under `DIAGNOSE`) the folded bounds'
+evaluates once: the lowered clauses first, then (under `DIAGNOSE`) the folded bounds'
 clauses, then the composed MIN/MAX clauses, each taking its position in that order. No
 count of the model's rows is the id space, since formulation drops rows (a natively
 stated construct, a `<>` moved into indicator rows), so the ids are fixed before
@@ -520,20 +520,19 @@ channels, read off `ConstraintProvenance` and the source registry (no change to 
 - **`group_name`** — which group of which key the row belongs to, from which the group's
   printable key value (`a`, or `EU, 2024` for the composite key of `per r, y:`) is formatted when
   a finding prints it, never when the model is built (late materialization: a query that prints
-  nothing formats nothing). `BuildGroupIds` returns each group's row (for a collated column, the row
-  of its least spelling); `CachedKeyGroups` (`physical_decide.cpp`) keeps one `KeyValues` per key,
-  whose `values_of` reads a group's values at that row from the source, replaced when a later
-  clause reads the key on more rows and the key is recomputed over the union of the rows read.
-  During extraction a name holds one row of its group; `ResolveGroupNames`, once at
-  `execution.assemble_input`, maps that row to its group in the key's final grouping, over every
-  name (evaluated constraints, value links, class sets). So a group is spelled one way in every
+  nothing formats nothing). The descent keeps each group's key values and, for a collated column,
+  its least spelling (`DecideDescent::Label`); the model emitter names each group by them
+  (`DecideGroupKeyValues`).
+  A name holds its group's rank in the tree node's dictionary, which the one pass fills from every
+  row that reads the key, so every name (evaluated constraints, value links, class sets) reads
+  one numbering. So a group is spelled one way in every
   finding of a query, its least spelling over every row any clause read the key on (D69),
   whichever clause names it and in whatever order, and no row a `when` drops is evaluated to spell
   it. `Build` moves them onto `SolverModel::key_values`; every finding is written while the
   execution that holds the source runs, so a reader never outlives the data it reads. `FormatPerGroupKey`
   (`decide_diagnostic_render.cpp`) is the one formatter: it joins composite columns with `, `; a
   relation key (`per D`, which compares NULL as a value) writes each value as an SQL literal, as
-  the determination messages do (`DecideSqlLiteral`: `'NULL'` quoted, NULL bare); a written key
+  DeciDB's messages do (`DecideSqlLiteral`: `'NULL'` quoted, NULL bare); a written key
   keeps its spelling, where an empty-string key renders `''` so it is not confused with
   "ungrouped". `StampConstraintProvenance` derives the name from the group key it stamps, so no
   emission site stamps a group without its name. A hard MIN/MAX whose bound no row in a group can
@@ -560,8 +559,8 @@ channels, read off `ConstraintProvenance` and the source registry (no change to 
   the clause are the text cut from the query, so a clause reads identically wherever it
   is quoted back (`../../language/explain.md`, Rendering).
 
-The two-level objective's `per` key passes a throwaway labels vector (objective groups
-are not diagnosed by clause key). A composite key is written as a comma list
+A nested objective's groups are its helper decisions' (D81), whose definitions are part
+of the fixed model and are not diagnosed by clause key. A composite key is written as a comma list
 (`per region, year:`); parentheses are only for `per ()`, and `per (region, year):` is a
 parse error that names the comma spelling. An easy `max(x) <= K` is a column bound, not a
 grouped clause — see "An easy MIN/MAX over one decision is a column bound" above.

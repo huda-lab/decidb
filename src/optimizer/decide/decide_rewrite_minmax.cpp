@@ -28,6 +28,7 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
@@ -37,6 +38,17 @@
 namespace duckdb {
 
 using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
+
+//! Retain tree semantics without changing the flat carrier's term extraction.
+static void KeepTreeReducerScope(Expression &carrier, const BoundAggregateExpression &original) {
+	idx_t index;
+	if (TryParseQualifiedReducerTag(original.GetAlias(), index)) {
+		AddDecideTag(carrier.alias, string(TREE_REDUCER_SCOPE_TAG_PREFIX) + to_string(index) + "__");
+	}
+	if (TryParseGroupKeyTag(original.GetAlias(), index)) {
+		AddDecideTag(carrier.alias, string(TREE_REDUCER_KEY_TAG_PREFIX) + to_string(index) + "__");
+	}
+}
 
 // ---------------------------------------------------------------------------
 // A factor sitting on a reducer
@@ -197,6 +209,7 @@ static void WalkComposedLhs(ClientContext &context, LogicalDecide &decide, idx_t
 	                                            ? &u.Cast<BoundAggregateExpression>()
 	                                            : nullptr;
 	auto name = found ? StringUtil::Lower(found->function.name) : string();
+	// The objective's path takes every other term, a frame's among them.
 	if (beside && !IsExtremumName(name)) {
 		beside->emplace_back(sign, &e);
 		return;
@@ -352,7 +365,7 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 	const ExtremumPush outer_push = ExtremumPushOf(cmp_type);
 
 	auto names = DecidePlanNames(decide.source_text, decide.keyed_scopes, decide.keys, decide.decide_index,
-	                             decide.aux_var_expressions);
+	                             decide.aux_var_expressions, decide.frames);
 	AssertComposable(comp);
 	LogicalDecide::ComposedMinMaxConstraint spec;
 	spec.outer_cmp = cmp_type;
@@ -380,9 +393,7 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 	}
 	auto &obj = *decide.decide_objective;
 
-	// `MAXIMIZE when c:` folds into the terms. The two-level form's PER wrapper never holds
-	// a composed body (its child is `outer(inner(e))`), so it declines below as a
-	// conjunction.
+	// `MAXIMIZE when c:` folds into the terms.
 	const Expression *body = &obj;
 	const Expression *scoped_when = nullptr;
 	if (obj.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
@@ -422,7 +433,7 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 	vector<pair<int, const Expression *>> beside;
 	// An objective always has a direction, so no term needs the both-sides pin here.
 	auto names = DecidePlanNames(decide.source_text, decide.keyed_scopes, decide.keys, decide.decide_index,
-	                             decide.aux_var_expressions);
+	                             decide.aux_var_expressions, decide.frames);
 	WalkComposedLhs(optimizer.context, decide, DConstants::INVALID_INDEX, *body, /*sign=*/1, decide.decide_index,
 	                ExtremumPush::DOWN, terms, names, beside);
 	ScopeComposedTerms(terms, scoped_when);
@@ -440,15 +451,22 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 			rest = optimizer.BindScalarFunction(term.first > 0 ? "+" : "-", std::move(rest), std::move(copy));
 		}
 	}
+	const bool has_rest = rest != nullptr;
 	if (!rest) {
 		rest = make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
-	} else if (scoped_when) {
+	}
+	if (scoped_when && has_rest) {
 		auto &conj = obj.Cast<BoundConjunctionExpression>();
 		auto wrapper = make_uniq<BoundConjunctionExpression>(conj.type);
 		wrapper->children.push_back(std::move(rest));
 		wrapper->children.push_back(scoped_when->Copy());
 		wrapper->SetAlias(conj.GetAlias());
 		rest = std::move(wrapper);
+	} else if (scoped_when) {
+		// The terms carry the `when` (ScopeComposedTerms) and the objective has none left; the tree's objective root
+		// still reaches only its rows, so it keeps a copy of the `when` and the objective stays as flat reads it.
+		decide.retained_objective_when = decide.retained_expressions.size();
+		decide.retained_expressions.push_back(scoped_when->Copy());
 	}
 	decide.SetObjective(optimizer.context, std::move(rest));
 }
@@ -564,6 +582,7 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		if (TryParseGroupKeyTag(agg.alias, group_key)) {
 			AddDecideTag(hard_lhs->alias, MakeGroupKeyTag(group_key));
 		}
+		KeepTreeReducerScope(*hard_lhs, agg);
 		return hard_lhs;
 	};
 	// The hard side. Stage 06 takes the extremum the tag names over the members'
@@ -680,37 +699,25 @@ void DecideOptimizer::RewriteMinMaxObjective(LogicalDecide &decide) {
 }
 
 void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_ptr<Expression> &objective) {
-	// Navigate through the two-level form's PER wrapper and the `when` wrapper to find the actual aggregate
+	// Navigate through the `when` wrapper to find the actual aggregate. A nested reducer is a helper decision by now
+	// (RewriteScopedReducers, D81), so nothing else wraps it.
 	unique_ptr<Expression> *obj_owner = &objective;
 	Expression *obj_expr = objective.get();
-	bool has_per = false;
-	const BoundConjunctionExpression *per_wrapper = nullptr;
-
-	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = obj_expr->Cast<BoundConjunctionExpression>();
-		if (IsTwoLevelObjectiveWrapper(conj)) {
-			has_per = true;
-			per_wrapper = &conj;
-			obj_owner = &conj.children[0];
-			obj_expr = conj.children[0].get();
-		}
-	}
 
 	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = obj_expr->Cast<BoundConjunctionExpression>();
 		if (!IsWhenFilterWrapper(conj)) {
 			throw InternalException("DECIDE: objective wrapper '%s' is not a `when`; BindObjective promises that only "
-			                        "a `when` stands under the two-level `per`",
+			                        "a `when` wraps the objective",
 			                        conj.ToString());
 		}
 		obj_owner = &conj.children[0];
 		obj_expr = conj.children[0].get();
 	}
 
-	// The objective is one term, `[-] [factor *] outer(...)`: the canonicalizer carries a MAXIMIZE objective's flip by
-	// the sign of the term, and keeps the user's factor beside the reducer. Both stay on the term, where extraction
-	// reads them into every coefficient below, so the term's direction is its sign times its factor's, and each
-	// extremum under a negative one is the other one over the negated terms: `-max(e)` is `min(-e)`.
+	// The objective is one term, `[-] outer(...)`: the canonicalizer carries a MAXIMIZE objective's flip by the sign of
+	// the term. The sign stays on the term, where extraction reads it into every coefficient below, and each extremum
+	// under a negative one is the other one over the negated terms: `-max(e)` is `min(-e)`.
 	int sign = 1;
 	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &negation = obj_expr->Cast<BoundFunctionExpression>();
@@ -718,24 +725,6 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 			sign = -1;
 			obj_owner = &negation.children[0];
 			obj_expr = negation.children[0].get();
-		}
-	}
-	// A factor is read on the two-level form only: a factor on the flat form is the composed rewrite's (below).
-	ScaledAggregateMatch factor;
-	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-		if (!has_per || !TryMatchScaledAggregate(*obj_expr, decide.decide_index, factor)) {
-			return;
-		}
-		sign *= ScaleSignAtPlanTime(optimizer.context, factor.scale, factor.divides);
-		if (sign == 0) {
-			throw BinderException("DECIDE: an aggregate inside an aggregate is not supported yet");
-		}
-		obj_owner = &obj_expr->Cast<BoundFunctionExpression>().children[factor.divides ? 0 : 1];
-		obj_expr = obj_owner->get();
-		// The cast that brings the reducer to the factor's type stays around whatever replaces the reducer.
-		while (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-			obj_owner = &obj_expr->Cast<BoundCastExpression>().child;
-			obj_expr = obj_owner->get();
 		}
 	}
 
@@ -751,72 +740,7 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 		return sign < 0 && IsExtremumName(written) ? (written == "max" ? "min" : "max") : written;
 	};
 
-	// The two-level form: OUTER(per k: INNER(expr) by (k)). The binder builds it with a single-argument INNER over
-	// decisions (BindTwoLevelObjective).
-	if (has_per) {
-		auto &inner_agg = outer_agg.children[0]->Cast<BoundAggregateExpression>();
-		auto inner_name = StringUtil::Lower(inner_agg.function.name);
-
-		// Found the two-level pattern: set metadata. (The binder refuses an outer
-		// avg: BindTwoLevelObjective.)
-		decide.per_outer_agg = StrToAggType(minimized(outer_name));
-		if (inner_name == "avg") {
-			decide.per_inner_agg = ObjectiveAggregateType::SUM;
-			decide.per_inner_was_avg = true;
-		} else {
-			decide.per_inner_agg = StrToAggType(minimized(inner_name));
-		}
-
-		if (IsExtremumName(inner_name)) {
-			decide.per_inner_is_easy = IsEasyExtremum(minimized(inner_name) == "max", ExtremumPush::DOWN);
-		}
-		if (IsExtremumName(outer_name)) {
-			decide.per_outer_is_easy = IsEasyExtremum(minimized(outer_name) == "max", ExtremumPush::DOWN);
-		}
-		// What the plan says the two levels became, read before the inner is rebuilt.
-		// The `by` of the inner reducer is the `per` key, which the wrapper holds, so the
-		// subjects spell it out as written.
-		{
-			using Kind = LogicalDecide::RewriteAccount::Kind;
-			const string key =
-			    SplitDecideTwoLevel(*per_wrapper, DecidePlanNames(decide.source_text, decide.keyed_scopes, decide.keys,
-			                                                      decide.decide_index, decide.aux_var_expressions))
-			        .key;
-			auto inner_text = RenderDecideTwoLevelInner(RenderForPlan(inner_agg, decide), key);
-			// Defined members have no box, so every extremum over them, the outer one's
-			// included, is stated natively.
-			const bool defined = HasDecideTag(inner_agg.alias, BODY_DEFINITION_TAG);
-			if (IsExtremumName(inner_name)) {
-				AddRewriteAccount(decide, DConstants::INVALID_INDEX,
-				                  decide.per_inner_is_easy ? Kind::EXTREMUM_PER_GROUP
-				                  : defined                ? Kind::EXTREMUM_PER_GROUP_NATIVE
-				                                           : Kind::EXTREMUM_PER_GROUP_PINNED,
-				                  inner_text);
-			}
-			if (inner_name == "avg") {
-				AddRewriteAccount(decide, DConstants::INVALID_INDEX, Kind::AVG_SUM, inner_text);
-			}
-			if (IsExtremumName(outer_name)) {
-				AddRewriteAccount(decide, DConstants::INVALID_INDEX,
-				                  decide.per_outer_is_easy ? Kind::EXTREMUM
-				                  : defined                ? Kind::EXTREMUM_NATIVE
-				                                           : Kind::EXTREMUM_PINNED,
-				                  RenderDecideTwoLevelOuter(outer_name, key, inner_text));
-			}
-		}
-
-		if (IsExtremumName(inner_name) || inner_name == "avg") {
-			auto new_sum = BindSumOver(optimizer, inner_agg.children[0]->Copy(), inner_agg.filter.get());
-			// The inner reducer's tags (its `by` key) stay on the sum that stands in
-			// for it, so a plan still prints it as written.
-			new_sum->alias = inner_agg.alias;
-			outer_agg.children[0] = std::move(new_sum);
-		}
-		*obj_owner = std::move(outer_agg.children[0]);
-		return;
-	}
-
-	// Flat MIN/MAX objective (not the two-level form).
+	// Flat MIN/MAX objective.
 	//
 	// A FACTOR on it never reaches here: this path replaces the whole objective with
 	// its auxiliary at coefficient 1.0, so there is nowhere to put one.
@@ -828,7 +752,9 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 		decide.flat_objective_is_easy = IsEasyExtremum(minimized(outer_name) == "max", ExtremumPush::DOWN);
 		AddRewriteAccount(decide, DConstants::INVALID_INDEX, ExtremumAccount(decide.flat_objective_is_easy, outer_agg),
 		                  RenderForPlan(outer_agg, decide));
-		*obj_owner = BindSumOver(optimizer, outer_agg.children[0]->Copy(), outer_agg.filter.get());
+		auto new_sum = BindSumOver(optimizer, outer_agg.children[0]->Copy(), outer_agg.filter.get());
+		KeepTreeReducerScope(*new_sum, outer_agg);
+		*obj_owner = std::move(new_sum);
 	}
 }
 

@@ -455,15 +455,18 @@ ExprPtr DirectOnKeptRows(const ExpressionBuilder &calc, const ExprPtr &kept, con
 }
 
 ExprPtr DirectBoundDisagreement(const ExpressionBuilder &calc, const string &text, const ExprPtr &low,
-                                const ExprPtr &high) {
+                                const ExprPtr &high, const vector<ExprPtr> &held) {
 	// `text` is the bound as written (RenderDecideSource quotes a subquery from its source fragment).
 	auto format = StringUtil::Replace("`" + text + "`", "%", "%%") +
 	              " takes more than one value here (%g and %g) — an `=` bound cannot hold two different values "
 	              "at once, so this DECIDE query is infeasible.";
 	auto message = calc.Fn("printf", {calc.Constant(Value(format)), calc.Cast(low, LogicalType::DOUBLE),
 	                                  calc.Cast(high, LogicalType::DOUBLE)});
-	return calc.If(calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, low, high), message,
-	               calc.Constant(Value(LogicalType::VARCHAR)));
+	auto disagree = calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, low, high);
+	for (auto &read : held) {
+		disagree = calc.If(calc.Cmp(ExpressionType::COMPARE_EQUAL, read, calc.Bool(true)), disagree, calc.Bool(false));
+	}
+	return calc.If(disagree, message, calc.Constant(Value(LogicalType::VARCHAR)));
 }
 
 static unique_ptr<BoundWindowExpression>
@@ -482,16 +485,14 @@ DirectWindowOfAggregate(const Expression &function, unique_ptr<Expression> argum
 	return result;
 }
 
-unique_ptr<Expression> DirectAggregateOf(const Expression &function, unique_ptr<Expression> argument,
+unique_ptr<Expression> DirectAggregateOf(const Expression &function, vector<unique_ptr<Expression>> arguments,
                                          unique_ptr<Expression> reads) {
 	auto result = function.Copy();
 	auto &aggregate = result->Cast<BoundAggregateExpression>();
 	D_ASSERT(aggregate.children.empty() && !aggregate.filter);
 	// `function` is a copy of the reducer, whose alias carries its tags; a plan node shows none.
 	aggregate.ClearAlias();
-	if (argument) {
-		aggregate.children.push_back(std::move(argument));
-	}
+	aggregate.children = std::move(arguments);
 	aggregate.filter = std::move(reads);
 	return result;
 }
@@ -824,7 +825,8 @@ ExprPtr DirectGroupCountLimitRows(const ExpressionBuilder &calc, Optimizer &opti
 
 unique_ptr<DecideGroupBound> DirectTightestBound(Optimizer &optimizer, ExpressionType comparison,
                                                  unique_ptr<Expression> rhs, const string &text,
-                                                 unique_ptr<Expression> invalid) {
+                                                 unique_ptr<Expression> invalid,
+                                                 const vector<const Expression *> &reads) {
 	ExpressionBuilder calc(optimizer.context);
 	auto bound = make_uniq<DecideGroupBound>();
 	bound->text = text;
@@ -847,11 +849,21 @@ unique_ptr<DecideGroupBound> DirectTightestBound(Optimizer &optimizer, Expressio
 		largest = add("max");
 		bound->lower = calc.Out(calc.Col(type, bound->aggregates[largest].column));
 	}
+	bound->inputs.push_back({std::move(rhs), nullptr, std::move(invalid)});
 	if (comparison == ExpressionType::COMPARE_EQUAL) {
 		bound->low = smallest;
 		bound->high = largest;
+		for (auto read : reads) {
+			vector<unique_ptr<Expression>> children;
+			children.push_back(read->Copy());
+			auto function = optimizer.BindAggregateFunction("bool_or", std::move(children));
+			function->Cast<BoundAggregateExpression>().children.clear();
+			bound->held.push_back(bound->aggregates.size());
+			bound->aggregates.push_back(
+			    {ColumnBinding(table_index, bound->aggregates.size()), std::move(function), bound->inputs.size()});
+			bound->inputs.push_back({read->Copy(), nullptr, nullptr});
+		}
 	}
-	bound->inputs.push_back({std::move(rhs), nullptr, std::move(invalid)});
 	return bound;
 }
 
@@ -887,7 +899,11 @@ ColumnBinding DirectWindowSink::Add(const Expression &function, unique_ptr<Expre
 
 ColumnBinding DirectAggregateSink::Add(const Expression &function, unique_ptr<Expression> argument,
                                        unique_ptr<Expression> reads) {
-	return aggregate.Add(DirectAggregateOf(function, std::move(argument), std::move(reads)));
+	vector<unique_ptr<Expression>> arguments;
+	if (argument) {
+		arguments.push_back(std::move(argument));
+	}
+	return aggregate.Add(DirectAggregateOf(function, std::move(arguments), std::move(reads)));
 }
 
 DirectGroupInputLayout DirectGroupLayout(const DecideGroupBound::Input &input, bool scoped) {
@@ -977,8 +993,12 @@ DirectGroupValues DirectAddGroupBound(const ExpressionBuilder &calc, const Decid
 		values.messages.push_back(over_results(*bound.invalid));
 	}
 	if (bound.low != DConstants::INVALID_INDEX) {
-		values.messages.push_back(in_group(
-		    DirectBoundDisagreement(calc, bound.text, calc.Of(*results[bound.low]), calc.Of(*results[bound.high]))));
+		vector<ExprPtr> held;
+		for (auto aggregate : bound.held) {
+			held.push_back(calc.Of(*results[aggregate]));
+		}
+		values.messages.push_back(in_group(DirectBoundDisagreement(calc, bound.text, calc.Of(*results[bound.low]),
+		                                                           calc.Of(*results[bound.high]), held)));
 	}
 	return values;
 }

@@ -7,8 +7,17 @@ either refuses a query with a message or answers it correctly. None is scheduled
 todo of the area that owns it.
 
 Already implemented from the deck: keyed declarations (`per K: x(TYPE)`, pp. 6–7), the prefix `when`/`per` and the
-postfix `by` with their defaults (p. 16), the determination rule (pp. 26–31), deck examples 1–8 (pp. 17–24), NULL keys
-and empty groups (pp. 30, 50, 56), and one nested shape, the two-level objective `outer(per k: inner(e) by (k))`.
+postfix `by` with their defaults (p. 16), variant signatures (pp. 34–40), deck examples 1–9 (pp. 17–25), NULL keys
+and empty groups (pp. 30, 50, 56), reducers nested to any depth (pp. 25, 28–32), the two-level objective
+`outer(per k: inner(e) by (k))` among them, frame selectors, points and ranges (pp. 42–56), each with the limits
+listed below (D80), and the one-pass algorithm (pp. 77–119, D91): execution reads each row once, routes it
+top-down through the annotated tree into each node's container, and computes the nodes bottom-up from them
+(`../pipeline/08_execution/done.md` §1a); `MAX` inside `SUM` becomes helpers and `SUM` inside `SUM` flattens, as the
+deck builds its model (pp. 115, 119; D89).
+
+The rulings for variant signatures, nesting and frame selectors are settled ([decisions.md](decisions.md) D70–D89) and
+encoded by the test oracle `test/decide/tests/_anr_oracle.py` ([../testing/scope_suite.md](../testing/scope_suite.md));
+the sections below say how far the engine builds them.
 
 ## Current behavior the deck changes
 
@@ -24,42 +33,6 @@ which replaces it.
 - **Deck:** "Reason 3": a qualifier keeps its SQL role and only resolves the name; with the same scope, `T.ship(INT)`
   and `ship(INT)` differ only in name resolution.
 
-## Nested reducers (ANR, pp. 25, 28–32)
-
-The grammar `B ::= f(e…, G…)`, `E ::= [when θ][per K]: B`, `G ::= agg(E)[by (Γ)]` lets a reducer's argument hold
-reducers to any depth. Example 9: `sum(max(ship) by (S.customerID)) by (D.depotID) <= D.priorityCapacity`.
-
-- **Today:** one gate refuses it, *"DECIDE: an aggregate inside an aggregate is not supported yet"*
-  (`ValidateScopePlacement`, `decide_binder.cpp`), except for the two-level objective.
-- **What is ready:** the grammar is already recursive, and a reducer's scope lives as tags on its own bound aggregate
-  (`filter`, `__qualified_by_<i>__`, `__group_key_<i>__`), so depth is encoded nowhere else in the binder.
-- **The two-level objective's open restrictions.** It is the one nested shape built, and each of these is refused
-  with "not supported yet" ([errors.md §2](errors.md#2-not-supported-yet)):
-  - a `when` inside either reducer: needs a per-class filter in the two-level rewrite (stage 05) and in the per-class
-    grouping at execution;
-  - a `per` inside the inner reducer: needs the inner reducer's own key scope inside each class, and its determination
-    check within the class;
-  - a `by` key other than the `per` key: needs inner groups that differ from the outer classes in the two-level
-    rewrite;
-  - `avg` as the outer reducer: needs an average over classes, whose count is data;
-  - the two-level objective beside another term, and with it a factor whose sign is known only when the query runs:
-    both need the outer extremum pinned in both directions, as the composed pass pins a flat one.
-- **What admitting a shape takes:** lift the gate for it, and let the value rewrite (`RewriteScopedReducers`) recurse:
-  one inner helper per class of the inner `by`, inside the outer group, defined before the outer reducer that reads
-  it.
-- **Open questions:** which shapes enter first (example 9 first); whether an inner helper's definition belongs to the
-  outer clause's provenance.
-- **Test when built:** example 9 and `sum(x - avg(x) by (g)) <= 5`, one nested shape per reducer kind, judged against
-  `test/decide/tests/_brute_force.py` on both solvers; the gate's message kept for every shape not admitted.
-
-## Variant signatures (pp. 34–40)
-
-When a `per` key does not determine a body expression or a `by` key, the deck makes one constraint per distinct
-combination (the class's *variant signatures*) instead of an error. Where every class has one signature, the result
-equals the current semantics, so it is a conservative extension. DeciDB raises the determination error instead
-([guide.md §7.1](guide.md#71-the-determination-rule)). `LogicalDecide::scope_checks` already lists the parts a
-signature is built from.
-
 ## Frame selectors (pp. 42–56, 66–69)
 
 Ordered navigation inside a constraint, independent of SQL windows:
@@ -72,6 +45,22 @@ Defaults: `k = 1`, `asc`, `within ()`, `every 1`, `else NULL`. A NULL a reducer 
 reaching the comparison skips that constraint instance (p. 50). Well-definedness adds `R_θ ⊨ κ → π` for every frame
 partition `π`. The deck's reasons for not reusing SQL windows: windows run after `GROUP BY`, and SQL has no cyclic
 order, no stepped range and no fill or complete-frame boundary policy.
+
+- **Today:** every spelling parses, binds and is formulated (`DecideFrameExpression`, `LogicalDecide::frames`, guide
+  §5.6): a point is read in place, a range over data is a value of the row, and a range over decisions a helper
+  decision per window (D78). They compose with variants (D82), nesting, `abs`, `norm` and a `MIN`/`MAX` of several
+  terms, and a frame that selects nothing inside a reducer over decisions drops its member (D87, D88).
+- **What is left:** nothing the deck defines. A frame's payload is a tuple-level expression (p. 51), so a reducer or
+  frame inside one is no deck feature (D80).
+
+## Reducers nested in reducers (pp. 25, 28–32, 51)
+
+The deck composes any function over nested reducers (p. 51).
+
+- **Today:** `SUM`, `AVG`, `MIN` and `MAX` nest to any depth over decisions, each a helper decision keyed by its path
+  (guide §5.5); a reducer over data alone inside one is a value of its path's group.
+- **What is left** (D80): `norm` inside a reducer and a reducer inside `norm`, which is rewritten before the value
+  rewrite reads the path. `abs`, a square or a product with a decision over a nested reducer is a helper first.
 
 ## Conditional generation with `if` (pp. 58–59)
 
@@ -96,14 +85,6 @@ data; `if` guards with an unknown. Requires `R_θ ⊨ κ → b`. Example: enforc
 - An objective's omitted `per` is `per ()`; no other outer `per` is allowed. DeciDB already treats the objective as
   produced once.
 
-## The one-pass algorithm (pp. 79–119)
-
-The deck's evaluation strategy for nested ANR: build an annotated AST whose scoped expressions carry their signature
-(per key, direct tuple terms, direct `by` keys), fill it top-down in one pass over the joined rows, then evaluate
-bottom-up into constraints. Runtime containers follow the node role: a reducer is a map from `by` key to operand; a
-scoped expression is a vector for `per row`, otherwise a set of distinct signatures. Frames are built the same way
-over partition and order. `MAX` inside `SUM` becomes helper variables (`x₁,₂ = max(x₁, x₂)`); `SUM` inside `SUM`
-flattens. DeciDB evaluates through DuckDB plans and window columns instead.
 
 ## Beyond the deck (pp. 2, 76)
 

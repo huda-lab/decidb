@@ -242,7 +242,7 @@ string LogicalDecide::GetName() const {
 }
 
 void LogicalDecide::AddConstraint(ClientContext &context, unique_ptr<Expression> constraint) {
-	DecideCanonicalizer canonicalizer(context, decide_index, variable_scopes, keyed_scopes, is_boolean_var);
+	DecideCanonicalizer canonicalizer(context, decide_index, variable_scopes, keyed_scopes, keys, is_boolean_var);
 	auto canonical = canonicalizer.CanonicalizeTree(*constraint);
 	canonicalizer.VerifyCanonical(*canonical);
 
@@ -261,7 +261,7 @@ void LogicalDecide::SetObjective(ClientContext &context, unique_ptr<Expression> 
 		decide_objective = nullptr;
 		return;
 	}
-	DecideCanonicalizer canonicalizer(context, decide_index, variable_scopes, keyed_scopes, is_boolean_var);
+	DecideCanonicalizer canonicalizer(context, decide_index, variable_scopes, keyed_scopes, keys, is_boolean_var);
 	decide_objective = canonicalizer.CanonicalizeObjective(*objective, objective_constant_offset);
 	canonicalizer.VerifyCanonicalObjective(*decide_objective);
 }
@@ -311,6 +311,14 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 			}
 		}
 	}
+	// Nonlinear reducer bodies are tree-owned F definitions, retained after their clause-list placeholders are made.
+	for (auto &definition : definition_functions) {
+		for (auto *expr : {&definition.body, &definition.condition}) {
+			if (*expr) {
+				callback(expr);
+			}
+		}
+	}
 	// A key's columns are live even where no clause reads them: a decision keyed by a
 	// column the query never mentions still needs it in the scan.
 	for (auto &key : keys) {
@@ -321,17 +329,69 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 			}
 		}
 	}
-	for (auto &check : scope_checks) {
-		for (auto *expr : {&check.rows, &check.value, &check.filter}) {
+	// A frame's `within` key is an entry of `keys`, enumerated with them.
+	for (auto &frame : frames) {
+		for (auto *expr : {&frame.fallback, &frame.order, &frame.rows}) {
 			if (*expr) {
 				callback(expr);
 			}
 		}
 	}
+	for (auto &check : scope_checks) {
+		if (check.value) {
+			callback(&check.value);
+		}
+	}
+	for (auto &signature : signatures) {
+		if (signature.rows) {
+			callback(&signature.rows);
+		}
+		for (auto &field : signature.fields) {
+			if (field.value) {
+				callback(&field.value);
+			}
+		}
+	}
 	for (auto &aggregate : bound_aggregates) {
-		for (auto *expr : {&aggregate.argument, &aggregate.reads}) {
-			if (*expr) {
-				callback(expr);
+		for (auto &argument : aggregate.arguments) {
+			callback(&argument);
+		}
+		if (aggregate.reads) {
+			callback(&aggregate.reads);
+		}
+	}
+	for (auto &retained : retained_bound_aggregates) {
+		callback(&retained.placeholder);
+		for (auto &argument : retained.aggregate.arguments) {
+			callback(&argument);
+		}
+		if (retained.aggregate.reads) {
+			callback(&retained.aggregate.reads);
+		}
+	}
+	for (auto &check : retained_row_checks) {
+		callback(&check);
+	}
+	for (auto &expression : retained_expressions) {
+		callback(&expression);
+	}
+	for (auto &envelope : abs_function_envelopes) {
+		if (envelope.positive) {
+			callback(&envelope.positive);
+		}
+		if (envelope.negative) {
+			callback(&envelope.negative);
+		}
+	}
+	for (auto &group : bilinear_function_groups) {
+		if (group.expansion) {
+			callback(&group.expansion);
+		}
+	}
+	for (auto &function : l0_indicator_functions) {
+		for (auto &link : function.links) {
+			if (link) {
+				callback(&link);
 			}
 		}
 	}
@@ -360,25 +420,8 @@ vector<ColumnBinding> LogicalDecide::SourceBindings() {
 	return result;
 }
 
-void LogicalDecide::RepointSourceColumns(LogicalOperator &old_source, const vector<ColumnBinding> &new_bindings) {
-	auto old_bindings = old_source.GetColumnBindings();
-	D_ASSERT(old_bindings.size() == new_bindings.size());
-	vector<ColumnBinding> keys;
-	for (auto &binding : old_bindings) {
-		keys.push_back(DecideSourceColumnKey(old_source, binding));
-	}
-	for (auto &column : source_columns) {
-		for (idx_t i = 0; i < keys.size(); i++) {
-			if (column.binding == keys[i]) {
-				column.binding = new_bindings[i];
-				break;
-			}
-		}
-	}
-}
-
 InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
-	auto result = RenderDecideParams(*this);
+	auto result = RenderDecideParams(*this, rewrite_accounts, !composed_minmax_objective_terms.empty());
 	SetParamsEstimatedCardinality(result);
 	return result;
 }

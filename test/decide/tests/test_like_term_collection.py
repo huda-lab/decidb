@@ -1,4 +1,4 @@
-"""Tests for like-term collection (BuildDecidePreparedModel, stage 05).
+"""Tests for like-term collection (LowerDecideTree, stage 05).
 
 `2*ship + 3*ship` used to reach the solver as two terms naming one column.
 Collection sums them into one, so no consumer has to remember that a variable

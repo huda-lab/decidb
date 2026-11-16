@@ -10,7 +10,9 @@
 //   - each reducer on a bound (`sum(cap)`, `sum(per D: cap) by (g)`) is recorded (LogicalDecide::bound_aggregates), and
 //     the bound reads a placeholder column where its value goes. The path builds the aggregate as a side table of
 //     the DECIDE source, one row per group, joined back to the rows by the group key (DirectAddBoundTables), so the
-//     surrounding arithmetic (`COUNT(*) * k`) is evaluated in DuckDB's own types;
+//     surrounding arithmetic (`COUNT(*) * k`) is evaluated in DuckDB's own types. A reducer inside a reducer's
+//     argument is recorded first, grouped by its path key over the rows its path keeps (language/guide.md §5.5), so
+//     the one around it reads its value as a column of an earlier table;
 //   - the tightest bound of a clause in the aggregate shape: such a clause is one constraint per group, and the
 //     constraint on each kept row of the group holds when the tightest one does (paper §3.2.1), so `<=` takes the
 //     group's MIN and `>=` its MAX; `=` must have one value per group.
@@ -20,6 +22,12 @@
 // and/or MAX of a raw value, or an expression of reducers that read exactly the clause's group (`sum(x) by (g) <=
 // sum(cap) by (g)`). A direct-solve rule computes its aggregates in the group aggregate it already runs; the solver
 // path records their aggregates (RecordGroupBounds) as it does for every other bound.
+//
+// A frame selector's values are columns execution computes from the rows it selects
+// (DecideFrameReads::columns), so no side table can read one: a row-wise bound reads a frame as it reads a
+// column, as does a bound over groups that has one value per group, which execution checks as it reads it; one that
+// takes its group's tightest value execution takes too (FRAME_TIGHTEST_BOUND_TAG, D85), and a reducer over data whose
+// argument reads one execution computes (MakeFrameAggregate, LogicalDecide::frame_aggregates).
 //
 // The values the side tables hold are checked by VALUE_IS_VALID checks appended to the DECIDE node's scope checks, so a
 // NaN, or an `=` bound with two values in a group, is reported after the scope checks, as the bound's reader would
@@ -33,6 +41,7 @@
 
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/common/exception/binder_exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
@@ -40,7 +49,9 @@
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
+#include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
@@ -68,13 +79,16 @@ public:
 	RhsBoundRewriter(Optimizer &optimizer_p, LogicalDecide &decide_p)
 	    : optimizer(optimizer_p), decide(decide_p), calc(optimizer_p.context),
 	      canonicalizer(optimizer_p.context, decide_p.decide_index, decide_p.variable_scopes, decide_p.keyed_scopes,
-	                    decide_p.is_boolean_var) {
+	                    decide_p.keys, decide_p.is_boolean_var) {
 	}
 
 	void Run() {
 		// The parser requires a SUCH THAT clause with at least one constraint.
 		D_ASSERT(decide.decide_constraints);
 		Walk(*decide.decide_constraints, DecideEnclosingScope());
+		if (decide.decide_objective) {
+			WalkObjective(decide.decide_objective);
+		}
 	}
 
 	//! Records the aggregates of the group bounds `Run` left to a rule, and puts their checks where they would have
@@ -118,7 +132,48 @@ private:
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 			when = scope.Condition();
 			class_key = scope.PerKey();
-			RewriteBound(expr.Cast<BoundComparisonExpression>());
+			auto &comparison = expr.Cast<BoundComparisonExpression>();
+			read_as = DecideValueRole::BOUND;
+			RewriteBound(comparison);
+			read_as = DecideValueRole::COEFFICIENT;
+			ReplaceDataUnderDecisions(comparison.left, nullptr);
+		}
+	}
+
+	//! The objective, under its `when c:`: an objective is produced once, so it has no `per` key. Its condition holds
+	//! no reducer.
+	void WalkObjective(unique_ptr<Expression> &expr) {
+		when = EnterDecideScope(*expr, DecideEnclosingScope()).Condition();
+		class_key = DConstants::INVALID_INDEX;
+		read_as = DecideValueRole::COEFFICIENT;
+		ReplaceDataUnderDecisions(expr, nullptr);
+	}
+
+	//! A reducer over data alone inside one over decisions is a value of its path's group (language/guide.md §5.5), as
+	//! it is inside one on a bound: its column, read as a coefficient, which must be finite. `path` holds the reducers
+	//! over decisions around `expr`; null outside every one, where canonicalization left no reducer over data.
+	void ReplaceDataUnderDecisions(unique_ptr<Expression> &expr, const DecideReducerPath *path) {
+		idx_t frame;
+		if (TryGetDecideFrame(*expr, frame)) {
+			return;
+		}
+		if (expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+			ExpressionIterator::EnumerateChildren(
+			    *expr, [&](unique_ptr<Expression> &child) { ReplaceDataUnderDecisions(child, path); });
+			return;
+		}
+		auto &reducer = expr->Cast<BoundAggregateExpression>();
+		if (reducer.children.empty() || !BoundExpressionReferencesDecide(*reducer.children[0], decide.decide_index)) {
+			if (path) {
+				expr = MakeReducerColumn(reducer, *path);
+			}
+			return;
+		}
+		auto below = path ? path->Below(reducer) : DecideReducerPath().Below(reducer);
+		ReplaceDataUnderDecisions(reducer.children[0], &below);
+		// Its filter tests its argument's data for NULL (DecideCanonicalizer::SkipNullData), a reducer among it.
+		if (reducer.filter) {
+			ReplaceDataUnderDecisions(reducer.filter, &below);
 		}
 	}
 
@@ -135,6 +190,7 @@ private:
 		bool query_wide = IsQueryWideBoundTag(comparison.right->GetAlias());
 		auto text = Written(*comparison.right);
 		auto location = comparison.right->GetQueryLocation();
+		auto frame = FrameText(*comparison.right);
 		if (aggregate_data_bound && IsGroupBound(comparison)) {
 			RecordReducers(comparison, text, location);
 			return;
@@ -145,13 +201,21 @@ private:
 		}
 		bool reduces = comparison.type != ExpressionType::COMPARE_NOTEQUAL && !query_wide &&
 		               !OneValuePerGroup(*comparison.right, GroupKeyOf(comparison));
+		if (!frame.empty()) {
+			// Execution reads the bound, and its NaN, as it reads a row-wise one; one that may differ within a group
+			// it reads as the group's tightest value (D85).
+			if (reduces) {
+				AddDecideTag(comparison.alias, FRAME_TIGHTEST_BOUND_TAG);
+			}
+			return;
+		}
 		if (reduces) {
 			InClassOnly(comparison.right);
 		}
 		auto invalid = InvalidValueMessage(*comparison.right, text, Kept());
 		if (reduces) {
-			auto group =
-			    DirectTightestBound(optimizer, comparison.type, comparison.right->Copy(), text, std::move(invalid));
+			auto group = DirectTightestBound(optimizer, comparison.type, comparison.right->Copy(), text,
+			                                 std::move(invalid), OwnWhens(*comparison.left));
 			group->location = location;
 			Record(comparison, std::move(group));
 			return;
@@ -171,9 +235,24 @@ private:
 	}
 
 	bool ReadsOnlyGroupReducers(const Expression &expr, const vector<const Expression *> &keys) const {
+		idx_t frame;
+		if (TryGetDecideFrame(expr, frame)) {
+			return false;
+		}
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 			idx_t scope_idx;
 			auto own = GroupKeyOf(expr);
+			// A reducer holding a reducer reads its inner one per group of a path key: a side table. One holding a
+			// frame is refused there (MakeReducerColumn). A rule's group aggregate reads one argument, so one that
+			// reads more -- a collated MIN or MAX -- takes a side table too.
+			auto &reducer = expr.Cast<BoundAggregateExpression>();
+			if (reducer.children.size() > 1) {
+				return false;
+			}
+			if (!reducer.children.empty() && (DecideCanonicalizer::ContainsReducer(*reducer.children[0]) ||
+			                                  ContainsDecideFrame(*reducer.children[0]))) {
+				return false;
+			}
 			return !TryParseQualifiedReducerTag(expr.GetAlias(), scope_idx) && own.size() == keys.size() &&
 			       KeysWithin(own, keys);
 		}
@@ -213,7 +292,9 @@ private:
 		}
 		auto &reducer = expr->Cast<BoundAggregateExpression>();
 		DecideGroupBound::Input input;
-		input.invalid = ArgumentMessage(reducer);
+		// A group bound holds no nested reducer (ReadsOnlyGroupReducers): its argument is data.
+		input.invalid = ArgumentMessage(reducer, reducer.children.empty() ? nullptr : reducer.children[0].get(),
+		                                Reads(reducer.filter.get()), DecideReducerPath());
 		if (!reducer.children.empty()) {
 			input.argument = std::move(reducer.children[0]);
 			reducer.children.clear();
@@ -221,10 +302,29 @@ private:
 		input.filter = std::move(reducer.filter);
 		auto placeholder = calc.Out(calc.Col(reducer.return_type, ColumnBinding(table_index, group.aggregates.size())));
 		NameAsWritten(*placeholder, reducer);
+		MarkReducerValue(*placeholder);
 		group.aggregates.push_back(
 		    {ColumnBinding(table_index, group.aggregates.size()), std::move(expr), group.inputs.size()});
 		group.inputs.push_back(std::move(input));
 		expr = std::move(placeholder);
+	}
+
+	//! The own `when` of each reducer of the clause's left side that has one: a group holds an instance only where each
+	//! keeps a row (DecideGroupBound::held). A reducer with none reads every kept row of its group.
+	static vector<const Expression *> OwnWhens(const Expression &left) {
+		vector<const Expression *> whens;
+		std::function<void(const Expression &)> walk = [&](const Expression &expr) {
+			if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+				auto &reducer = expr.Cast<BoundAggregateExpression>();
+				if (reducer.filter) {
+					whens.push_back(reducer.filter.get());
+				}
+				return;
+			}
+			ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { walk(child); });
+		};
+		walk(left);
+		return whens;
 	}
 
 	//! A row whose written `per` column is NULL is in no class (D5), so it has no instance and its bound is read by
@@ -255,29 +355,44 @@ private:
 		decide.reduced_bounds.push_back(std::move(bound));
 	}
 
-	void ReplaceReducers(unique_ptr<Expression> &expr) {
+	//! `path` holds the reducers around `expr`: their own `when`s and `by` keys (the clause's `when` is `when`).
+	void ReplaceReducers(unique_ptr<Expression> &expr, const DecideReducerPath &path = DecideReducerPath()) {
+		idx_t frame;
+		if (TryGetDecideFrame(*expr, frame)) {
+			return; // a row-wise value execution computes, whose payload holds no reducer
+		}
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			expr = MakeReducerColumn(expr->Cast<BoundAggregateExpression>());
+			expr = MakeReducerColumn(expr->Cast<BoundAggregateExpression>(), path);
 			return;
 		}
-		ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) { ReplaceReducers(child); });
+		ExpressionIterator::EnumerateChildren(*expr,
+		                                      [&](unique_ptr<Expression> &child) { ReplaceReducers(child, path); });
 	}
 
 	//! The reducer's value on each row: the aggregate over the rows of the row's group that it reads (the clause's
 	//! kept rows of its `by` group that pass its own `when`), counting each class of its `per` key once. Recorded, not
-	//! computed: the value is the record's placeholder column.
-	unique_ptr<Expression> MakeReducerColumn(const BoundAggregateExpression &reducer) {
-		AddValueCheck(ArgumentMessage(reducer));
+	//! computed: the value is the record's placeholder column. Under other reducers (`path`), its group is one of its
+	//! path key and the rows it reads pass every enclosing `when` too; the reducers in its argument are recorded
+	//! first, and its argument reads their columns.
+	unique_ptr<Expression> MakeReducerColumn(const BoundAggregateExpression &reducer, const DecideReducerPath &path) {
+		if (!reducer.children.empty() && !FrameText(*reducer.children[0]).empty()) {
+			return MakeFrameAggregate(reducer, path);
+		}
+		vector<unique_ptr<Expression>> arguments;
+		for (auto &child : reducer.children) {
+			arguments.push_back(child->Copy());
+			ReplaceReducers(arguments.back(), path.Below(reducer));
+		}
+		auto reads = Reads(path, reducer.filter.get());
+		AddValueCheck(ArgumentMessage(reducer, arguments.empty() ? nullptr : arguments[0].get(), reads, path));
 		auto function = reducer.Copy();
 		auto &aggregate = function->Cast<BoundAggregateExpression>();
 		aggregate.children.clear();
 		aggregate.filter = nullptr;
 		DecideBoundAggregate record;
 		record.function = std::move(function);
-		if (!reducer.children.empty()) {
-			record.argument = reducer.children[0]->Copy();
-		}
-		record.key = GroupKeyIndex(reducer);
+		record.arguments = std::move(arguments);
+		record.key = PathKeyOf(reducer, path);
 		idx_t scope_idx;
 		if (TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx)) {
 			D_ASSERT(scope_idx < decide.keyed_scopes.size());
@@ -286,10 +401,44 @@ private:
 			record.counts_classes = true;
 			record.class_key = decide.keyed_scopes[scope_idx].key;
 		}
-		auto keys = GroupKeyOf(reducer);
-		auto column = RecordAggregate(std::move(record), Reads(reducer.filter.get()));
+		vector<const Expression *> keys;
+		for (auto &element : DecideKeyElements(decide.keys, record.key)) {
+			keys.push_back(&element.Grouping());
+		}
+		const auto key = record.key;
+		auto column = RecordAggregate(std::move(record), reads);
 		reducer_columns.push_back({column, std::move(keys)});
-		return NamedReducerValue(reducer, calc.Col(reducer.return_type, column));
+		return NamedReducerValue(reducer, key, calc.Col(reducer.return_type, column));
+	}
+
+	//! A reducer over data whose argument reads a frame: no side table can compute it, since a frame's values are
+	//! columns execution computes. It stays a reducer over the rows it reads (`Reads`, its new filter), tagged with its
+	//! entry of LogicalDecide::frame_aggregates -- its path key and its `per` key --, which stage 05 makes a frame
+	//! column execution computes after the frames (DecideFrameColumn::Kind::AGGREGATE). The reducers inside its
+	//! argument are columns first, as for any reducer.
+	unique_ptr<Expression> MakeFrameAggregate(const BoundAggregateExpression &reducer, const DecideReducerPath &path) {
+		auto marker = reducer.Copy();
+		auto &aggregate = marker->Cast<BoundAggregateExpression>();
+		for (auto &child : aggregate.children) {
+			ReplaceReducers(child, path.Below(reducer));
+		}
+		auto reads = Reads(path, reducer.filter.get());
+		aggregate.filter = reads ? calc.Out(reads) : nullptr;
+		LogicalDecide::FrameAggregate record;
+		record.key = PathKeyOf(reducer, path);
+		idx_t scope_idx;
+		if (TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx)) {
+			record.class_key = decide.keyed_scopes[scope_idx].key;
+		}
+		record.text = Written(reducer);
+		ExtractDecideTagPayload(reducer.GetAlias(), WRITTEN_NORM_TAG_PREFIX, record.norm_order);
+		auto alias = MakeFrameAggregateTag(decide.frame_aggregates.size());
+		if (TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx)) {
+			AddDecideTag(alias, string(TREE_REDUCER_SCOPE_TAG_PREFIX) + to_string(scope_idx) + "__");
+		}
+		aggregate.SetAlias(alias);
+		decide.frame_aggregates.push_back(std::move(record));
+		return marker;
 	}
 
 	//! Adds `record` to the node's bound aggregates, reading the rows `reads` (null for every row) of the clause being
@@ -312,34 +461,48 @@ private:
 
 	//! The message a row raises for a NaN in what a reducer reads: its argument (or a norm's written body: `SIGN(NaN)`
 	//! is 0) on the rows it reads. A reducer reads its argument as the same SQL aggregate does: it skips a NULL. A NaN
-	//! is an error, except to COUNT, which counts it. Null when there is none to raise.
-	unique_ptr<Expression> ArgumentMessage(const BoundAggregateExpression &reducer) {
+	//! is an error, except to COUNT, which counts it, and so is an infinity where the value is read as a coefficient
+	//! (`read_as`). Null when there is none to raise. `argument` is the argument with
+	//! the reducers inside it replaced by their columns, `reads` the rows it reads and `path` the reducers around it.
+	unique_ptr<Expression> ArgumentMessage(const BoundAggregateExpression &reducer, const Expression *argument,
+	                                       const ExprPtr &reads, const DecideReducerPath &path) {
 		auto name = StringUtil::Lower(reducer.function.name);
-		D_ASSERT(name == "count" || name == "count_star" || name == "min" || name == "max" || name == "sum" ||
-		         name == "avg");
+		D_ASSERT(name == "count" || name == "count_star" || name == "min" || name == "max" || name == "arg_min" ||
+		         name == "arg_max" || name == "sum" || name == "avg");
 		// The binder rejects DISTINCT and drops an ORDER BY these functions ignore, canonicalization gave every norm of
 		// data its definition, and the AVG rewrite of `<>` runs after this pass.
 		string payload;
 		D_ASSERT(!reducer.IsDistinct() && !reducer.order_bys && !HasDecideTag(reducer.GetAlias(), AVG_REWRITE_TAG) &&
 		         !ExtractDecideTagPayload(reducer.GetAlias(), NORM_MARKER_TAG_PREFIX, payload));
-		if (reducer.children.empty() || name == "count") {
+		if (!argument || name == "count") {
 			return nullptr;
 		}
 		// A norm's definition can hide a NaN (an L0 count's SIGN reads it as 0), so the value checked is the body.
 		auto body = DecideWrittenNormBody(reducer);
-		auto argument = body ? body : reducer.children[0].get();
-		auto nan = NanMessage(*argument, Written(*argument));
-		return nan ? calc.Out(DirectOnKeptRows(calc, Reads(reducer.filter.get()), InGroup(reducer, nan))) : nullptr;
+		auto checked = body ? body : argument;
+		auto nan = NanMessage(*checked, Written(body ? *body : *reducer.children[0]), read_as);
+		if (!nan) {
+			return nullptr;
+		}
+		return calc.Out(DirectOnKeptRows(calc, reads, InKey(PathKeyOf(reducer, path), nan)));
 	}
 
 	//! The reducer's value on a row, given the column that holds its aggregate: NULL on a row whose written `by` column
 	//! is NULL, which is in no group, so the NULL bound skips the row's instance (deck p. 50). The value carries the
 	//! reducer's written text as its name, so every place that quotes a bound still reads `sum(cap) by (g)`; the tag
 	//! keeps a NULL message from naming it as a column.
-	unique_ptr<Expression> NamedReducerValue(const BoundAggregateExpression &reducer, ExprPtr column) const {
-		auto result = calc.Out(InGroup(reducer, column));
+	unique_ptr<Expression> NamedReducerValue(const BoundAggregateExpression &reducer, idx_t key, ExprPtr column) const {
+		auto result = calc.Out(InKey(key, column));
 		NameAsWritten(*result, reducer);
+		MarkReducerValue(*result);
 		return result;
+	}
+
+	//! `value` stands for a recorded reducer and is read whole (BOUND_REDUCER_TAG).
+	static void MarkReducerValue(Expression &value) {
+		auto alias = value.GetAlias();
+		AddDecideTag(alias, BOUND_REDUCER_TAG);
+		value.SetAlias(std::move(alias));
 	}
 
 	//! `value` stands in for `written`, equal to it for the rows it is read on, so it is quoted as `written` is: it
@@ -356,11 +519,12 @@ private:
 	//! `value` on a row in a group of the reducer's `by` key, NULL on a row whose written key column is NULL, which is
 	//! in no group. A relation's columns compare NULL as a value.
 	ExprPtr InGroup(const Expression &tagged, ExprPtr value) const {
-		idx_t key_index;
-		if (!TryParseGroupKeyTag(tagged.GetAlias(), key_index)) {
-			return value;
-		}
-		for (auto &element : decide.keys[key_index].elements) {
+		return InKey(GroupKeyIndex(tagged), std::move(value));
+	}
+
+	//! `value` on a row in a group of the key `key_index`, NULL on a row in none; `value` for the whole query.
+	ExprPtr InKey(idx_t key_index, ExprPtr value) const {
+		for (auto &element : DecideKeyElements(decide.keys, key_index)) {
 			if (element.null_mode == DecideKeyNullMode::NO_GROUP) {
 				value =
 				    calc.If(calc.IsNull(calc.Of(*element.expression)), calc.Constant(Value(value->return_type)), value);
@@ -381,7 +545,7 @@ private:
 			DecideBoundAggregate record;
 			record.function = aggregate.function->Copy();
 			if (input.argument) {
-				record.argument = input.argument->Copy();
+				record.arguments.push_back(input.argument->Copy());
 			}
 			record.key = GroupKeyIndex(comparison);
 			placeholders.push_back(aggregate.column);
@@ -400,8 +564,13 @@ private:
 			messages.push_back(calc.Out(DirectOnKeptRows(calc, Kept(), calc.Wrap(std::move(group.invalid)))));
 		}
 		if (group.low != DConstants::INVALID_INDEX) {
+			vector<ExprPtr> held;
+			for (auto aggregate : group.held) {
+				held.push_back(columns[aggregate]);
+			}
 			messages.push_back(calc.Out(DirectOnKeptRows(
-			    calc, Kept(), DirectBoundDisagreement(calc, group.text, columns[group.low], columns[group.high]))));
+			    calc, Kept(),
+			    DirectBoundDisagreement(calc, group.text, columns[group.low], columns[group.high], held))));
 		}
 		comparison.right = std::move(DirectIsUpperBound(comparison.type) ? group.upper : group.lower);
 		DirectReplaceColumns(comparison.right, placeholders, values);
@@ -417,6 +586,22 @@ private:
 	//! Whether `bound` has one value in each group of `keys` among the kept rows: it reads data only through reducers
 	//! whose `by` key is part of `keys`.
 	bool OneValuePerGroup(const Expression &bound, const vector<const Expression *> &keys) const {
+		idx_t frame;
+		if (TryGetDecideFrame(bound, frame)) {
+			// `first` or `last` reads one row of each timeline, so one value in a group that lies in one timeline:
+			// every element of the timeline key is part of the group key.
+			auto &spec = decide.frames[frame];
+			if (spec.Relative()) {
+				return false;
+			}
+			for (auto &element : DecideKeyElements(decide.keys, spec.timeline_key)) {
+				if (std::none_of(keys.begin(), keys.end(),
+				                 [&](const Expression *key) { return key->Equals(element.Grouping()); })) {
+					return false;
+				}
+			}
+			return true;
+		}
 		// A column of the group key is one value in each group.
 		if (std::any_of(keys.begin(), keys.end(), [&](const Expression *key) { return key->Equals(bound); })) {
 			return true;
@@ -425,7 +610,10 @@ private:
 			auto &binding = bound.Cast<BoundColumnRefExpression>().binding;
 			for (auto &reducer : reducer_columns) {
 				if (reducer.binding == binding) {
-					return KeysWithin(reducer.keys, keys);
+					return std::all_of(reducer.keys.begin(), reducer.keys.end(), [&](const Expression *key) {
+						return std::any_of(keys.begin(), keys.end(),
+						                   [&](const Expression *group) { return group->Equals(*key); });
+					});
 				}
 			}
 			return false;
@@ -448,13 +636,19 @@ private:
 		return calc.Out(DirectOnKeptRows(calc, rows, nan));
 	}
 
-	//! The message a row raises for a NaN `value`, and NULL elsewhere; null when `value` cannot be NaN.
-	ExprPtr NanMessage(const Expression &value, const string &written) const {
+	//! The message a row raises for a `value` its `role` refuses -- a NaN bound, a coefficient that is not finite --
+	//! and NULL elsewhere; null when `value` cannot be either.
+	ExprPtr NanMessage(const Expression &value, const string &written,
+	                   DecideValueRole role = DecideValueRole::BOUND) const {
 		if (value.return_type != LogicalType::FLOAT && value.return_type != LogicalType::DOUBLE) {
 			return nullptr;
 		}
-		return calc.If(calc.Fn("isnan", calc.Cast(calc.Of(value), LogicalType::DOUBLE)),
-		               calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::BOUND, written))),
+		auto number = calc.Cast(calc.Of(value), LogicalType::DOUBLE);
+		// A NULL is no value: neither test holds of it.
+		auto refused = role == DecideValueRole::BOUND
+		                   ? calc.Fn("isnan", number)
+		                   : calc.Cmp(ExpressionType::COMPARE_EQUAL, calc.Fn("isfinite", number), calc.Bool(false));
+		return calc.If(std::move(refused), calc.Constant(Value(DecideInvalidValueMessage(role, written))),
 		               calc.Constant(Value(LogicalType::VARCHAR)));
 	}
 
@@ -471,6 +665,13 @@ private:
 		check.kind = DecideScopeCheckKind::VALUE_IS_VALID;
 		check.value = std::move(message);
 		decide.scope_checks.push_back(std::move(check));
+	}
+
+	//! The key a reducer under the reducers of `path` groups by: its `by` key under every enclosing one, an index
+	//! into `keys` (FindOrCreateDecidePathKey); INVALID_INDEX for the whole query.
+	idx_t PathKeyOf(const BoundAggregateExpression &reducer, const DecideReducerPath &path) const {
+		const auto own = GroupKeyIndex(reducer);
+		return path.keys.empty() ? own : FindOrCreateDecidePathKey(path.KeysOf(own), decide.keys);
 	}
 
 	//! The key a reducer or bound groups by (an index into `keys`); INVALID_INDEX for the whole query.
@@ -504,8 +705,34 @@ private:
 		return when ? calc.If(Kept(), own, calc.Bool(false)) : own;
 	}
 
+	//! The rows a reducer under the reducers of `path` reads: those its own `filter` keeps among those every enclosing
+	//! `when` keeps (path.conditions) among the clause's kept rows; null for every row.
+	ExprPtr Reads(const DecideReducerPath &path, const Expression *filter) const {
+		auto rows = Reads(filter);
+		for (auto *condition : path.conditions) {
+			auto enclosing = calc.Wrap(DirectActiveWhen(calc, condition));
+			rows = rows ? calc.If(rows, enclosing, calc.Bool(false)) : enclosing;
+		}
+		return rows;
+	}
+
 	string Written(const Expression &expr) const {
 		return RenderDecideSource(expr, decide.source_text, decide.keyed_scopes, &decide.keys);
+	}
+
+	//! The first frame selector `expr` holds, as written; empty for none.
+	string FrameText(const Expression &expr) const {
+		idx_t frame;
+		if (TryGetDecideFrame(expr, frame)) {
+			return frame < decide.frames.size() ? decide.frames[frame].text : Written(expr);
+		}
+		string text;
+		ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+			if (text.empty()) {
+				text = FrameText(child);
+			}
+		});
+		return text;
 	}
 
 	Optimizer &optimizer;
@@ -516,6 +743,9 @@ private:
 	//! none or `per ()`.
 	const Expression *when = nullptr;
 	idx_t class_key = DConstants::INVALID_INDEX;
+	//! What the reducers being rewritten are read as: a bound's value, or a coefficient's inside a reducer over
+	//! decisions.
+	DecideValueRole read_as = DecideValueRole::BOUND;
 	vector<ReducerColumn> reducer_columns;
 };
 

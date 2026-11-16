@@ -25,8 +25,8 @@ def _source_query(scores, capacity, sense="MAXIMIZE"):
     """
 
 
-def _run(cli, sql, mode="require"):
-    return cli.execute(f"SET decide_direct_solve='{mode}'; {sql}")
+def _run(cli, sql, mode="require", expect_warnings=()):
+    return cli.execute(f"SET decide_direct_solve='{mode}'; {sql}", expect_warnings=expect_warnings)
 
 
 def _raw(cli, sql, mode="require", expect_number_range=False):
@@ -974,27 +974,31 @@ def test_s1_source_bound_error_for_a_column_is_the_solvers(decidb_cli):
 @pytest.mark.correctness
 @pytest.mark.parametrize("cap_type", ["INTEGER", "DOUBLE"])
 def test_s1_null_source_bound_is_no_bound_on_both_paths(decidb_cli, cap_type):
-    """A NULL bound skips its instance (B1): S1 applies and answers like the solver."""
+    """A NULL bound skips its instance (B1): S1 applies and answers like the solver, which
+    alone warns that the clause constrains nothing."""
     sql = f"""
         SELECT x FROM (
             FROM (VALUES (1,NULL::{cap_type},9.0)) t(id,cap,score)
             DECIDE x(BOOL) SUCH THAT SUM(x)<=cap MAXIMIZE SUM(score*x)
         ) q
     """
-    assert _run(decidb_cli, sql, mode="require") == _run(decidb_cli, sql, mode="off")
+    solver = _run(decidb_cli, sql, mode="off", expect_warnings=["'SUM(x) <= cap' constrains nothing"])
+    assert _run(decidb_cli, sql, mode="require") == solver
 
 
 @pytest.mark.correctness
 @pytest.mark.parametrize("bound", ["TRY_CAST(c AS INTEGER)", "b"], ids=["computed", "column"])
 def test_s1_null_per_row_bound_is_no_bound_on_both_paths(decidb_cli, bound):
-    """A per-row bound that is NULL skips its instance (B1): S1 applies and answers like the solver."""
+    """A per-row bound that is NULL skips its instance (B1): S1 applies and answers like the
+    solver, which alone warns that the clause constrains nothing."""
     sql = f"""
         SELECT id, x FROM (
             FROM (VALUES (0, 'bad', NULL::BOOLEAN, 5.0)) t(id, c, b, p)
             DECIDE x(BOOL) SUCH THAT x <= {bound} AND SUM(x) <= 1 MAXIMIZE SUM(p*x)
         ) q
     """
-    assert _run(decidb_cli, sql, mode="require") == _run(decidb_cli, sql, mode="off")
+    solver = _run(decidb_cli, sql, mode="off", expect_warnings=[f"'x <= {bound}' constrains nothing"])
+    assert _run(decidb_cli, sql, mode="require") == solver
 
 
 @pytest.mark.correctness
@@ -1450,19 +1454,16 @@ def test_second_read_moves_only_variable_width_columns(decidb_cli, rule):
         _same_answers(direct, solver)
 
 
-# The side table of a bound, the verdict of a row check, the copy of a source's row stage (R1 reads it four times) and
-# the group stage of a ranked prefix are materialized CTEs around the rule's plan. The row id and the payload pass
-# through them like any source column, so the payload still comes from a scan of its own whatever the plan holds. The
-# scans: the rule's read (or the copy), the row check's read, and the payload.
+# The side table of a bound, with the verdict of its NaN check, the copy of a source (R1 reads it four times) and the
+# group stage of a ranked prefix are materialized CTEs around the rule's plan. The row id and the payload pass through
+# them like any source column, so the payload still comes from a scan of its own whatever the plan holds. The scans:
+# the rule's read (or the copy) and the payload.
 _LATE_MATERIALIZATION_AROUND_CTES = {
     "side_table": (
         "DECIDE x(BOOL) SUCH THAT SUM(x) <= SUM(cap) by (g) / 100 MAXIMIZE SUM(score * x)",
         "direct_bound",
         2,
     ),
-    # S1 reads the group bound `cap` in its rank window, over its one read, so the rule's read and the row check's are
-    # two reads and no copy is made: the scans are the rule's, the row check's and the payload's.
-    "row_check": ("DECIDE x(BOOL) SUCH THAT per g: SUM(x) <= cap MAXIMIZE SUM(score * x)", "direct_verdict", 3),
     # A group bound can fail in a group, so S1 holds every row in a group stage (`direct_group`) and raises the
     # verdict there. The rule's read is the only scan the stage's definition makes, and the payload's is the other.
     "group_stage": (
@@ -1536,15 +1537,15 @@ def test_a1_verifies_then_streams_without_holding_rows(decidb_cli):
 
 @pytest.mark.correctness
 def test_a_scan_below_a_row_check_reads_only_the_columns_the_plan_needs(decidb_cli):
-    # The row check on cap (per g) gates every read of the source. A parent that reads no source column still leaves
-    # the payload out of the scans.
+    # The NaN check of the bound's side table (a sum of a DOUBLE by another key) gates every read of the source. A
+    # parent that reads no source column still leaves the payload out of the scans.
     setup = """
         CREATE TEMP TABLE gated_src AS
-        SELECT i AS id, ((i * 37) % 5000)::DOUBLE AS score, (5 + i % 5) AS cap, i % 5 AS g,
+        SELECT i AS id, ((i * 37) % 5000)::DOUBLE AS score, (5 + i % 5)::DOUBLE AS cap, i % 5 AS g,
                repeat('p', 200) AS payload
         FROM range(5000) t(i);
     """
-    decide = "FROM gated_src DECIDE x(BOOL) SUCH THAT per g: SUM(x) <= cap MAXIMIZE SUM(score * x)"
+    decide = "FROM gated_src DECIDE x(BOOL) SUCH THAT SUM(x) <= SUM(cap) by (g) / 4 MAXIMIZE SUM(score * x)"
     plan = _raw(decidb_cli, setup + f"EXPLAIN SELECT COUNT(*), SUM(x) FROM ({decide}) q").stdout
     assert "S1_UNIFORM_MATROID" in plan and "direct_verdict" in plan, plan
     assert "payload" not in plan, plan
@@ -1559,14 +1560,14 @@ def test_a_copy_of_a_joined_source_holds_only_the_columns_the_plan_reads(decidb_
     # materialized CTE: it keeps the columns its reads use, and the payload only when the parent reads it.
     setup = """
         CREATE TEMP TABLE joined_src AS
-        SELECT i AS id, ((i * 37) % 5000)::DOUBLE AS score, (5 + i % 5) AS cap, i % 5 AS g,
+        SELECT i AS id, ((i * 37) % 5000)::DOUBLE AS score, (5 + i % 5)::DOUBLE AS cap, i % 5 AS g,
                repeat('p', 200) AS payload
         FROM range(5000) t(i);
         CREATE TEMP TABLE joined_one AS SELECT i AS k FROM range(5) t(i);
     """
     decide = (
         "FROM (SELECT s.* FROM joined_src s JOIN joined_one o ON o.k = s.g) s "
-        "DECIDE x(BOOL) SUCH THAT per g: SUM(x) <= cap MAXIMIZE SUM(score * x)"
+        "DECIDE x(BOOL) SUCH THAT SUM(x) <= SUM(cap) by (g) / 4 MAXIMIZE SUM(score * x)"
     )
     plan = _raw(decidb_cli, setup + f"EXPLAIN SELECT COUNT(*), SUM(x) FROM ({decide}) q").stdout
     assert "S1_UNIFORM_MATROID" in plan and "direct_source" in plan, plan

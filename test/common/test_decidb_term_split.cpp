@@ -44,7 +44,7 @@ duckdb::vector<DecideSplitTerm> SplitObjectiveBody(Connection &con, CanonicalObj
 	REQUIRE(atoms.size() == 1);
 	REQUIRE(atoms[0].term->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE);
 	auto &aggregate = atoms[0].term->Cast<BoundAggregateExpression>();
-	DecideTermSplitter splitter(*con.context, objective.decide->decide_index, objective.decide->decide_variables);
+	DecideTermSplitter splitter(*con.context, *objective.decide);
 	duckdb::vector<DecideSplitTerm> terms;
 	// The reader binds the products it builds, which reads the catalog, as the optimizer does inside its transaction.
 	con.context->RunFunctionInTransaction([&]() { splitter.Split(*aggregate.children[0], atoms[0].sign, terms); });

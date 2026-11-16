@@ -1,8 +1,8 @@
 """Objective scope (language/guide.md §4): an objective is produced once -- an
 omitted `per` is `per ()` -- `when` in front filters the rows for the whole objective,
-`when` and `per` inside reducers work as in §5.3, and the two-level form
-`outer(per k: inner(e) by (k))` evaluates `inner` once per class of `k` (NULL a class)
-and `outer` over those values.
+`when` and `per` inside reducers work as in §5.3, and a reducer nests in another as in a
+constraint (D81): `outer(per k: inner(e) by (k))` evaluates `inner` once per class of `k`
+(a row whose `k` is NULL in none, D5) and `outer` over those values.
 
 A tuple term must be determined by the empty key: a decision outside the reducers counts
 once, which needs a single instance over the kept rows, and a data value beside it must
@@ -13,6 +13,7 @@ import itertools
 
 import pytest
 
+from . import _anr_oracle as anr
 from ._output_helpers import assert_no_internal_leak
 from ._scope_cases import (
     SHIP,
@@ -145,19 +146,20 @@ def test_a_keyed_decision_with_one_instance_counts_once(decidb_cli, scope_solver
     [
         pytest.param(
             "MAXIMIZE when S.priority: sum(ship) + D.capacity * s",
-            "DECIDE: per () does not determine D.capacity. The kept rows have more than one value: 20, 40.",
+            "DECIDE objective: 'D.capacity' takes more than one value over the kept rows (20, 40), so the objective "
+            "would be produced more than once",
             id="data-value",
         ),
         pytest.param(
             "MAXIMIZE when S.priority: ship",
-            "DECIDE: per () does not determine the decision ship (declared per row). The kept rows cover more "
-            "than one ship.",
+            "DECIDE objective: the decision 'ship' (declared per row) has more than one instance over the kept rows, "
+            "so the objective would be produced more than once",
             id="per-row-decision",
         ),
         pytest.param(
             "MAXIMIZE sum(ship) by (D.region)",
-            "DECIDE: per () does not determine D.region (in by (D.region)). The kept rows have more than one "
-            "value: 'East', 'West'.",
+            "DECIDE objective: 'D.region' in by (D.region) takes more than one value over the kept rows ('East', "
+            "'West'), so the objective would be produced more than once",
             id="top-level-by",
         ),
         pytest.param(
@@ -278,61 +280,89 @@ def test_two_level_form_under_when(decidb_cli, scope_solver):
         )
 
 
+#: The forms the two-level objective refused before D81, each a nested reducer now.
+C = lambda r: r["c"]  # noqa: E731
+FORMER_REFUSALS = [
+    pytest.param(
+        "MAXIMIZE max(per t.g: sum(x) by (t.id))",
+        anr.reduce("max", anr.reduce("sum", anr.Var("x"), by=("id",)), per=("g",)),
+        id="different-keys",
+    ),
+    pytest.param(
+        "MAXIMIZE max(per t.g: sum(when t.c: x) by (t.g))",
+        anr.reduce("max", anr.reduce("sum", anr.Var("x"), when=C, by=("g",)), per=("g",)),
+        id="inner-when",
+    ),
+    pytest.param(
+        "MAXIMIZE max(when t.c per t.g: sum(x) by (t.g))",
+        anr.reduce("max", anr.reduce("sum", anr.Var("x"), by=("g",)), when=C, per=("g",)),
+        id="outer-when",
+    ),
+    pytest.param(
+        "MINIMIZE avg(per t.g: sum(t.w * x) by (t.g))",
+        anr.reduce("avg", anr.reduce("sum", anr.Col("w") * anr.Var("x"), by=("g",)), per=("g",)),
+        id="outer-avg",
+    ),
+    pytest.param(
+        "MAXIMIZE sum(per t.g: max(per t.id: sum(x) by (t.id)) by (t.g))",
+        anr.reduce(
+            "sum", anr.reduce("max", anr.reduce("sum", anr.Var("x"), by=("id",)), per=("id",), by=("g",)), per=("g",)
+        ),
+        id="three-levels",
+    ),
+]
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("objective_sql, objective", FORMER_REFUSALS)
+def test_a_former_two_level_refusal_answers(decidb_cli, scope_solver, objective_sql, objective):
+    """A `when` in either reducer, a `by` other than the `per` key, an outer `avg` and a
+    third level: nested reducers like any other (D81), judged by `_anr_oracle`."""
+    sql = f"""
+        SELECT id, x {table('t', GROUPS, GROUP_ROWS)}
+        DECIDE x(INT)
+        SUCH THAT x <= t.cap AND sum(x) >= 6
+        {objective_sql}
+        ORDER BY id"""
+    clauses = [anr.clause(anr.le(anr.Var("x"), anr.Col("cap"))), anr.clause(anr.ge(anr.reduce("sum", anr.Var("x")), 6))]
+    sense = ObjSense.MAXIMIZE if objective_sql.startswith("MAXIMIZE") else ObjSense.MINIMIZE
+    goal = anr.Objective(sense, objective)
+    model = anr.AnrModel(table_rows(GROUPS, GROUP_ROWS), [anr.Decision("x")])
+    assert model.judge(answer(decidb_cli, sql), clauses, goal) == pytest.approx(
+        model.solve(scope_solver, clauses, goal).objective
+    )
+
+
 @pytest.mark.error
 @pytest.mark.error_binder
-@pytest.mark.parametrize(
-    "objective, message",
-    [
-        pytest.param(
-            "MAXIMIZE max(per t.g: sum(x) by (t.id))",
-            "DECIDE: in max(per t.g: sum(...) by (t.id)) the by key must be the per key; any other is not "
-            "supported yet",
-            id="different-keys",
-        ),
-        pytest.param(
-            "MAXIMIZE max(per t.g: sum(when t.c: x) by (t.g))",
-            "DECIDE: when inside the inner reducer of max(per t.g: sum(...) by (t.g)) is not supported yet; "
-            "write it in front of the objective",
-            id="inner-when",
-        ),
-        pytest.param(
-            "MAXIMIZE max(when t.c per t.g: sum(x) by (t.g))",
-            "DECIDE: when inside the outer reducer of max(per t.g: ...) is not supported yet; write it in "
-            "front of the objective",
-            id="outer-when",
-        ),
-        pytest.param(
-            "MAXIMIZE sum(per t.g: max(per t.id: sum(x) by (t.id)) by (t.g))",
-            "DECIDE: an aggregate inside an aggregate is not supported yet",
-            id="three-levels",
-        ),
-        pytest.param(
-            "MAXIMIZE per t.g: sum(x)",
-            "an objective is produced once: write per (): or leave per out",
-            id="keyed-objective",
-        ),
-    ],
-)
-def test_two_level_refusals(decidb_cli, objective, message):
+def test_a_keyed_objective_is_refused(decidb_cli):
     result = decidb_cli.execute_raw(
         f"""
         SELECT id, x {table('t', GROUPS, GROUP_ROWS)}
         DECIDE x(INT)
         SUCH THAT x <= t.cap
-        {objective}"""
+        MAXIMIZE per t.g: sum(x)"""
     )
-    assert message in result.stderr, result.stderr
-    assert_no_internal_leak(result, "a two-level objective refusal")
+    assert "an objective is produced once: write per (): or leave per out" in result.stderr, result.stderr
+    assert_no_internal_leak(result, "a keyed objective")
 
 
-@pytest.mark.error
-@pytest.mark.error_binder
-def test_a_nested_reducer_in_a_constraint_is_refused(decidb_cli):
-    """Deck example 9: nesting is the objective's two-level form only (§10.2)."""
-    result = decidb_cli.execute_raw(
-        _query("MAXIMIZE SUM(ship)", "ship <= S.demand AND sum(per D.depotID: max(ship) by (D.depotID)) <= 50")
+@pytest.mark.correctness
+def test_a_nested_reducer_in_a_constraint(decidb_cli, scope_solver):
+    """A nest in a constraint, refused before ANR phase 2: each depot's largest shipment,
+    once per depot, sums to at most 50."""
+    sql = _query("MAXIMIZE SUM(ship)", "ship <= S.demand AND sum(per D.depotID: max(ship) by (D.depotID)) <= 50")
+    ship = anr.Var("ship")
+    clauses = [
+        anr.clause(anr.le(ship, anr.Col("demand"))),
+        anr.clause(anr.le(anr.reduce("sum", anr.reduce("max", ship, by=("depotID",)), per=("depotID",)), 50)),
+    ]
+    objective = anr.Objective(ObjSense.MAXIMIZE, anr.reduce("sum", ship))
+    model = anr.AnrModel(joined(), [anr.Decision("ship")])
+    result = aligned(answer(decidb_cli, sql), model)
+    assert model.judge(result, clauses, objective) == pytest.approx(
+        model.solve(scope_solver, clauses, objective).objective
     )
-    assert "DECIDE: an aggregate inside an aggregate is not supported yet" in result.stderr, result.stderr
 
 
 _NO_ROW_COLUMNS = ("id", "g", "cap", "w", "c")
@@ -341,13 +371,14 @@ _NO_ROW_ROWS = ((1, "a", 5, 1, True), (2, "a", 4, 5, False), (3, "b", 3, 2, True
 
 @pytest.mark.correctness
 @pytest.mark.parametrize(
-    "objective_sql, objective",
+    "objective_sql, objective, warnings",
     [
         pytest.param(
             "MAXIMIZE when t.id > 99: max(per t.g: sum(t.w * x) by (t.g))",
             ScopedObjective(
                 ObjSense.MAXIMIZE, (Nested("max", ("g",), "sum", lambda r: {"x": r["w"]}),), when=lambda r: r["id"] > 99
             ),
+            ["the objective is 0 whatever the decisions"],
             id="two-level-when-keeps-no-row",
         ),
         pytest.param(
@@ -359,12 +390,14 @@ _NO_ROW_ROWS = ((1, "a", 5, 1, True), (2, "a", 4, 5, False), (3, "b", 3, 2, True
                     Reduce("sum", lambda r: {"x": -1}, when=lambda r: r["id"] > 99),
                 ),
             ),
+            [],
             id="reducer-reads-no-row",
         ),
     ],
 )
-def test_an_objective_part_that_reads_no_row_is_dropped(decidb_cli, scope_solver, objective_sql, objective):
-    """A reducer over no rows is NULL, and a NULL objective term is dropped: the other terms still count."""
+def test_an_objective_part_that_reads_no_row_is_dropped(decidb_cli, scope_solver, objective_sql, objective, warnings):
+    """A reducer over no rows is NULL, and a NULL objective term is dropped: the other terms still count. An objective
+    with none left is 0 whatever the decisions, which stderr says."""
     sql = f"""
         SELECT id, x {table('t', _NO_ROW_COLUMNS, _NO_ROW_ROWS)}
         DECIDE x(INT)
@@ -376,7 +409,7 @@ def test_an_objective_part_that_reads_no_row_is_dropped(decidb_cli, scope_solver
         Scoped((lambda r: {"x": 1},), "<=", (lambda r: {CONSTANT: r["cap"]},)),
         Scoped((Reduce("sum", lambda r: {"x": 1}),), "<=", (lambda r: {CONSTANT: 5},), per=()),
     ]
-    result = aligned(answer(decidb_cli, sql), model, "id")
+    result = aligned(answer(decidb_cli, sql, warnings), model, "id")
     assert model.judge_scoped(result, clauses, objective) == pytest.approx(
         model.solve_scoped(scope_solver, clauses, objective)
     )

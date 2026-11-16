@@ -67,7 +67,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
             "ship(INT)",
             "when S.priority: abs(ship - 20) <= 3",
             "abs(ship-20)becomesanauxiliaryvariable",
-            "whenS.priority:abs(ship-20)-ship>=-20",
+            None,
             "__abs_aux",
             id="abs",
         ),
@@ -180,7 +180,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
             "ship(INT)",
             "when S.priority: norm(ship, 0) <= 2",
             "norm(ship,0)becomesoneindicatorperrow",
-            "whenS.priority:M*(ship<>0)-ship>=0.0",
+            None,
             "1.0*",
             id="l0-bound-is-derived",
         ),
@@ -200,8 +200,8 @@ def test_explain_accounts_for_each_rewrite(decidb_cli, decide, clause, account, 
     an auxiliary made by an earlier rewrite included. A row that repeats the clause
     (the hard MIN/MAX carrier, printed as its reducer) is not shown again. A scoped `IN`
     keeps its front; `per row:` and an empty `by ()`, the defaults, print as a bare clause
-    (D32). An automatic L0 link's bound, which stage 06 derives from the box, prints as
-    `M`."""
+    (D32). EXPLAIN is plan-time only, so an automatic L0 link's data-derived bound and its
+    raw placeholder coefficient are not printed."""
     text = _plan(decidb_cli, _ship_query(decide, clause))
     assert account in text, text
     if row:
@@ -228,55 +228,21 @@ def test_explain_names_functions_as_the_scope_spellings_write_them(decidb_cli):
 
 
 @pytest.mark.explain
-def test_explain_two_level_objective_rows_are_written_in_front(decidb_cli):
-    """The two-level objective's inner reducer, once per class, prints with its `per` in
-    front and its `by`, with no upper-case `PER`; the outer extremum has its account."""
+def test_explain_a_nested_objective_accounts_for_each_helper(decidb_cli):
+    """A nested objective (D81) prints as written, with no upper-case `PER`, and each of its
+    reducers has its account: the inner one a helper per `by` group, the outer one a helper
+    the objective reads once."""
     text = _plan(
         decidb_cli, _ship_query("ship(INT)", "ship >= 1", "MINIMIZE max(per D.region: sum(ship) by (D.region))")
     )
     assert "MINIMIZEmax(perD.region:sum(ship)by(D.region))" in text, text
-    assert "↳max(perD.region:sum(ship)by(D.region))becomesanextremumcolumn" in text, text
-    assert "↳perD.region:sum(ship)by(D.region)" in text, text
+    assert "↳sum(ship)by(D.region)becomesahelperdecisionpergroup" in text, text
+    assert "↳max(perD.region:sum(ship)by(D.region))becomesahelperdecision" in text, text
     assert "PER" not in text, text
-    # An inner MIN/MAX leaves a SUM carrier per group; the account tells it, no row misreads it.
     text = _plan(
         decidb_cli, _ship_query("ship(INT)", "ship >= 1", "MINIMIZE sum(per D.region: max(ship) by (D.region))")
     )
-    assert "↳max(ship)by(D.region)becomesanextremumcolumnpergroup" in text, text
-    assert "↳perD.region:sum(ship)" not in text, text
-
-
-@pytest.mark.explain
-def test_explain_accounts_for_an_inner_extremum_pinned_by_indicator_rows(decidb_cli):
-    """A MAX under a maximized SUM is the hard direction: the extremum column per group is pinned."""
-    text = _plan(
-        decidb_cli, _ship_query("ship(INT)", "ship >= 1", "MAXIMIZE sum(per D.region: max(ship) by (D.region))")
-    )
-    assert "↳max(ship)by(D.region)becomesanextremumcolumnpergrouppinnedbyindicatorrows" in text, text
-
-
-@pytest.mark.explain
-@pytest.mark.quadratic
-def test_explain_accounts_for_an_inner_extremum_over_a_defined_body_stated_natively(decidb_cli_gurobi):
-    """An extremum over a squared member has no box to pin it with, so the solver is told it natively."""
-    text = _plan(
-        decidb_cli_gurobi,
-        _ship_query("ship(INT)", "ship >= 1", "MAXIMIZE sum(per D.region: max(power(ship, 2)) by (D.region))"),
-    )
-    assert "↳power(ship,2)becomesahelperdecisionperrow,atmostitsvalue" in text, text
-    assert "↳max(power(ship,2))by(D.region)becomesanextremumcolumnpergroupstatedtothesolvernatively" in text, text
-
-
-@pytest.mark.explain
-def test_explain_prints_the_when_of_a_two_level_objective_in_front_of_its_rows(decidb_cli):
-    """The `when` in front of the two-level objective is written once in front of the objective and once in front of
-    the inner reducer, once per class, that the solver receives."""
-    text = _plan(
-        decidb_cli,
-        _ship_query("ship(INT)", "ship >= 1", "MAXIMIZE when S.priority: sum(per D.region: sum(ship) by (D.region))"),
-    )
-    assert "MAXIMIZEwhenS.priority:sum(perD.region:sum(ship)by(D.region))" in text, text
-    assert "↳whenS.priorityperD.region:sum(ship)by(D.region)" in text, text
+    assert "↳max(ship)by(D.region)becomesahelperdecisionpergroup" in text, text
 
 
 @pytest.mark.explain
@@ -300,13 +266,15 @@ def test_explain_prints_a_unary_plus_as_a_call(decidb_cli):
 
 @pytest.mark.explain
 def test_explain_accounts_for_the_objectives_rewrites_too(decidb_cli):
-    """An ABS, a product or an AVG in the objective gets its account under the objective,
-    and the rows a rewrite added for it are printed there too, not as rows no clause owns."""
+    """An ABS, a product or an AVG in the objective gets its account under the objective.
+
+    The ABS node keeps its generated envelope rows inside the DECIDE formulation; EXPLAIN
+    leaves the objective in its written form and does not print those implementation rows.
+    """
     text = _plan(decidb_cli, _ship_query("ship(INT)", "ship >= 1", "MINIMIZE when S.priority: sum(abs(ship - 10))"))
-    assert (
-        "Objective:MINIMIZEwhenS.priority:sum(abs(ship-10))↳abs(ship-10)becomesanauxiliaryvariable"
-        "↳whenS.priority:abs(ship-10)-ship>=-10"
-    ) in text, text
+    assert ("Objective:MINIMIZEwhenS.priority:sum(abs(ship-10))↳abs(ship-10)becomesanauxiliaryvariable") in text, text
+    assert "abs(ship-10)-ship>=-10" not in text, text
+    assert "abs(ship-10)+ship<=10" not in text, text
     assert "addedbyformulation" not in text, text
     text = _plan(decidb_cli, _ship_query("ship(INT), per D: open(BOOL)", "ship >= 1", "MAXIMIZE sum(open * ship)"))
     assert "↳(open*ship)becomesanauxiliaryvariablelinearizedbyMcCormickrows" in text, text
@@ -316,18 +284,6 @@ def test_explain_accounts_for_the_objectives_rewrites_too(decidb_cli):
         decidb_cli, _ship_query("ship(INT)", "ship >= 1", "MINIMIZE sum(per D.region: avg(ship) by (D.region))")
     )
     assert "↳avg(ship)by(D.region)becomesasumdividedbyitsrowcount" in text, text
-
-
-@pytest.mark.error
-@pytest.mark.error_binder
-def test_an_outer_avg_over_the_classes_is_refused(decidb_cli):
-    """language/guide.md §4 admits sum, min and max over the classes; an outer avg would
-    be formulated as a sum and is refused instead."""
-    result = decidb_cli.execute_raw(
-        _ship_query("ship(INT)", "ship >= 1", "MINIMIZE avg(per D.region: sum(ship) by (D.region))")
-    )
-    assert "avg over the classes of avg(per D.region: sum(...) by (D.region)) is not supported yet" in result.stderr
-    assert_no_internal_leak(result, "an outer avg")
 
 
 @pytest.mark.explain
@@ -348,9 +304,9 @@ def test_explain_prints_no_row_that_repeats_a_per_row_clause(decidb_cli):
 
 @pytest.mark.explain
 @pytest.mark.parametrize("key", ["t.region, t.depot", "t"])
-def test_explain_prints_a_two_level_key_as_written(decidb_cli, key):
-    """The two-level objective's key prints as written -- not its columns in binding order,
-    nor a relation spelled out column by column."""
+def test_explain_prints_a_nested_objective_key_as_written(decidb_cli, key):
+    """A nested objective's key prints as written -- not its columns in binding order, nor a
+    relation spelled out column by column."""
     text = _plan(
         decidb_cli,
         f"""
@@ -361,7 +317,7 @@ def test_explain_prints_a_two_level_key_as_written(decidb_cli, key):
     )
     written = key.replace(" ", "")
     assert f"MINIMIZEmax(per{written}:sum(x)by({written}))" in text, text
-    assert f"↳max(per{written}:sum(x)by({written}))becomesanextremumcolumn" in text, text
+    assert f"↳max(per{written}:sum(x)by({written}))becomesahelperdecision" in text, text
 
 
 # ---------------------------------------------------------------------------
@@ -642,6 +598,16 @@ def test_an_easy_max_below_the_floor_is_refused_as_written(decidb_cli, clause):
     message = f"DECIDE optimization is infeasible: {clause} cannot hold because x is non-negative (>= 0)."
     assert message in decidb_cli.execute_raw(sql).stderr
     assert message in decidb_cli.execute_raw(f"DIAGNOSE {sql}").stderr
+
+
+def test_an_easy_max_with_its_own_when_is_refused_only_through_its_members(decidb_cli):
+    """An easy max whose own `when` keeps no row bounds no member: it is no refusal before solving, as a bound over
+    the rows of its `by` groups alone is, and its instances have no value."""
+    sql = """SELECT id, x FROM (VALUES (1, 'q', false), (2, 'r', false)) t(id, h, p)
+        DECIDE x(INT) SUCH THAT x <= 5 AND max(when t.p: x) by (t.h) <= -5 MAXIMIZE sum(x) ORDER BY id"""
+    result = decidb_cli.execute_raw(sql)
+    assert "constrains nothing" in result.stderr and "infeasible" not in result.stderr, result.stderr
+    assert result.stdout.count("│     5 │") == 2, result.stdout
 
 
 @pytest.mark.diagnose

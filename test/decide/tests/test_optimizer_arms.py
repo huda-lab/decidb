@@ -159,16 +159,15 @@ def test_a_query_wide_decision_beside_its_own_sum(decidb_cli_gurobi, decidb_cli_
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("backend", ["gurobi", "highs"])
-def test_a_strict_bound_on_a_fractional_reducer_is_refused_for_less_than(request, backend):
-    """RefuseFractionalStep: the `<` message, beside the `>` and `<>` ones the suite pins."""
-    cli = request.getfixturevalue(f"decidb_cli_{backend}")
+def test_a_strict_bound_on_a_fractional_reducer_is_refused_for_less_than(decidb_cli):
+    """RefuseFractionalStep: the `<` message, beside the `>` and `<>` ones the suite pins. It refuses before a backend
+    runs."""
     sql = f"""
         SELECT id, y FROM {_ROWS}
         DECIDE y(INT)
         SUCH THAT y <= 6 AND y < sum(y + 0.5) by (id)
         MAXIMIZE SUM(y)"""
-    cli.assert_error(sql, match=re.escape("Comparison '<' is not supported here") + r".*Compare with '<='")
+    decidb_cli.assert_error(sql, match=re.escape("Comparison '<' is not supported here") + r".*Compare with '<='")
 
 
 @pytest.mark.parametrize("backend", ["gurobi", "highs"])
@@ -440,24 +439,6 @@ def test_reducers_over_squared_bodies_under_other_scopes(decidb_cli_gurobi, clau
         _per_row("y", 3),
         lambda a: holds([a[f"y{i}"] for i in range(3)]),
         lambda a: sum(a[f"y{i}"] for i in range(3)),
-    )
-
-
-@pytest.mark.correctness
-def test_a_two_level_max_over_a_squared_body_is_stated_natively(decidb_cli_gurobi):
-    """RewriteMinMaxObjectiveTree: the outer MAX is hard and its inner members are a defined body, which has no box."""
-    sql = f"""
-        SELECT id, y FROM {_GROUPED}
-        DECIDE y(INT)
-        SUCH THAT y <= 4
-        MAXIMIZE MAX(per g: MAX(POWER(y - 1, 2)) by (g))
-        ORDER BY id"""
-    _judge(
-        decidb_cli_gurobi,
-        sql,
-        _per_row("y", 4),
-        lambda a: True,
-        lambda a: max((a[f"y{i}"] - 1) ** 2 for i in range(3)),
     )
 
 

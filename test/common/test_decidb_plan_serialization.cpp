@@ -275,6 +275,198 @@ TEST_CASE("Parsed DECIDE scope spellings survive ToString and binary round trips
 	rejects("SELECT SUM(when a: x) FROM t", "syntax error at or near", "when");
 }
 
+TEST_CASE("Parsed frame selectors survive ToString and binary round trips", "[decidb]") {
+	// Every spelling of language/guide.md §5.6, in a clause, a reducer and the objective.
+	const duckdb::vector<string> queries = {
+	    "SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(previous: x) over (t.period within t.product) "
+	    "AND at(first: t.cap) over (t.period desc) >= x AND x <= at(2 next else 0: x) over (t.period cyclic) "
+	    "MINIMIZE sum(abs(x - at(last else x: x) over (t.period within t, t.product)))",
+	    "SELECT a FROM t DECIDE x(INT) SUCH THAT sum(from 3 previous to previous every 2: x) over (t.period) <= 5 "
+	    "AND avg(from first to last else 1: x) over (t.period desc cyclic within t.product) >= 1 "
+	    "AND sum(when t.a > 0: count(from previous to next all: t.cap) over (t.period)) <= 9",
+	};
+	for (auto &query : queries) {
+		INFO(query);
+		auto original = ParseSelect(query);
+		auto rendered = original->ToString();
+		INFO(rendered);
+
+		auto reparsed = ParseSelect(rendered);
+		REQUIRE(original->Equals(*reparsed));
+		REQUIRE(reparsed->ToString() == rendered);
+
+		auto deserialized = RoundTripStatement(*original);
+		REQUIRE(original->Equals(*deserialized));
+		REQUIRE(deserialized->ToString() == rendered);
+	}
+
+	// The clause prints as typed; a frame with its defaults written (asc, k = 1, every 1, one timeline) is the frame
+	// without them.
+	REQUIRE(ParseSelect("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= sum(from 1 previous to 1 next every 1: x) "
+	                    "over (t.period asc within ())")
+	            ->Equals(*ParseSelect("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= sum(from previous to next: x) "
+	                                  "over (t.period)")));
+	// Frames that differ in one setting are different expressions.
+	auto frame_of = [](const string &frame) {
+		return ParseSelect("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= " + frame);
+	};
+	const string base = "sum(from previous to next: x) over (t.period)";
+	for (auto &other :
+	     {"sum(from 2 previous to next: x) over (t.period)", "sum(from previous to last: x) over (t.period)",
+	      "sum(from previous to next every 2: x) over (t.period)", "sum(from previous to next all: x) over (t.period)",
+	      "sum(from previous to next else 0: x) over (t.period)", "avg(from previous to next: x) over (t.period)",
+	      "sum(from previous to next: x) over (t.period desc)", "sum(from previous to next: x) over (t.period cyclic)",
+	      "sum(from previous to next: x) over (t.period within t.a)", "sum(from previous to next: x) over (t.other)"}) {
+		INFO(other);
+		REQUIRE(!frame_of(base)->Equals(*frame_of(other)));
+	}
+	REQUIRE(frame_of(base)->Equals(*frame_of(base)));
+
+	// Outside a frame nothing changed: a window in a subquery of the clause, a window, AT TIME
+	// ZONE and an ordered-set aggregate in the clause, a function named "at", and OVER in SQL.
+	for (auto &sql : {"SELECT a FROM t DECIDE x(INT) SUCH THAT x <= (SELECT sum(v) OVER (ORDER BY v) FROM s LIMIT 1)",
+	                  "SELECT a FROM t DECIDE x(INT) SUCH THAT when row_number() OVER () > 1: x <= 1",
+	                  "SELECT a FROM t DECIDE x(INT) SUCH THAT when t.ts AT TIME ZONE 'UTC' > t.ts: x <= 1",
+	                  "SELECT a FROM t DECIDE x(INT) SUCH THAT x <= (SELECT percentile_cont(0.5) WITHIN GROUP "
+	                  "(ORDER BY v) FROM s)",
+	                  "SELECT a FROM t DECIDE x(INT) SUCH THAT x <= \"at\"(t.a)",
+	                  "SELECT sum(v) OVER (PARTITION BY a ORDER BY b), t.ts AT TIME ZONE 'UTC' FROM t"}) {
+		INFO(sql);
+		auto parsed = ParseSelect(sql);
+		REQUIRE(ParseSelect(parsed->ToString())->Equals(*parsed));
+	}
+
+	auto rejects = [](const string &sql, const string &message, const string &token = "") {
+		INFO(sql);
+		Parser parser;
+		REQUIRE_THROWS_WITH(parser.ParseQuery(sql), Catch::Contains(message) && Catch::Contains(token));
+	};
+	const string positive = "must be a positive whole number";
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(0 previous: x) over (t.p)", positive);
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= sum(from 0 next to last: x) over (t.p)", positive);
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= sum(from first to last every 0: x) over (t.p)", positive);
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(prev: x) over (t.p)",
+	        "a frame position is first, last, [k] previous or [k] next, found prev");
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= sum(from first to last evry 2: x) over (t.p)",
+	        "expected every d in a frame selector, found evry");
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(first: x) over (t.p cyclc)",
+	        "expected cyclic or within in a frame selector, found cyclc");
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(first: x) over (t.p within t.a + 1)",
+	        "within lists columns or relations, as a per key does");
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= sum(from first to last: x, x) over (t.p)",
+	        "sum(from first to last: e) reduces one expression, found 2");
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(3 first: x) over (t.p)", "syntax error at or near",
+	        "first");
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(previous else 0 else 1: x) over (t.p)",
+	        "syntax error at or near", "else");
+	// A frame is DECIDE syntax: outside a clause at(...) over (...) is no frame.
+	rejects("SELECT at(previous: a) over (b) FROM t", "syntax error at or near");
+}
+
+TEST_CASE("A placed frame survives a serialization round trip", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	SetUp(con);
+
+	// The canonicalizer places each frame (DecideFrameSpec::rows, timeline_key, the names its messages use, its D75
+	// partition key) and builds its signature field; execution reads all of it, so none may be lost on the wire. The
+	// first frame stands under a `when` and a `per` its `within` does not hold; the second inside a reducer with a `by`
+	// key, over decisions.
+	auto plan = con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) DECIDE x(INT) "
+	                            "SUCH THAT x <= 9 AND when site.cap > 10 per region.r_name: "
+	                            "x >= at(2 previous else 1: x) over (site.cap desc within site.s_key) "
+	                            "AND sum(at(first: x) over (site.s_key cyclic within region)) by (region.r_name) <= 9 "
+	                            "MAXIMIZE sum(x)");
+	auto *before = FindDecide(*plan);
+	REQUIRE(before != nullptr);
+	REQUIRE(before->frames.size() == 2);
+	auto &point = before->frames[0];
+	REQUIRE(point.rows != nullptr);
+	REQUIRE(point.timeline_names == duckdb::vector<string> {"site.s_key"});
+	REQUIRE(point.order_name == "site.cap");
+	REQUIRE(point.partition_key != DConstants::INVALID_INDEX);
+	REQUIRE_FALSE(point.partition_subject.empty());
+	auto &reduced = before->frames[1];
+	REQUIRE(reduced.timeline_key != DConstants::INVALID_INDEX);
+	bool frame_field = false;
+	for (auto &signature : before->signatures) {
+		for (auto &field : signature.fields) {
+			frame_field = frame_field || (field.kind == DecideSignatureFieldKind::FRAME && field.frame == 0);
+		}
+	}
+	REQUIRE(frame_field);
+
+	auto copied = RoundTrip(con, *plan);
+	auto *after = FindDecide(*copied);
+	REQUIRE(after != nullptr);
+	REQUIRE(after->frames.size() == before->frames.size());
+	for (idx_t i = 0; i < before->frames.size(); i++) {
+		auto &b = before->frames[i];
+		auto &a = after->frames[i];
+		REQUIRE(a.from == b.from);
+		REQUIRE(a.from_k == b.from_k);
+		REQUIRE(a.descending == b.descending);
+		REQUIRE(a.cyclic == b.cyclic);
+		REQUIRE((a.fallback != nullptr) == (b.fallback != nullptr));
+		REQUIRE(a.within_key == b.within_key);
+		REQUIRE(a.text == b.text);
+		REQUIRE((a.rows != nullptr) == (b.rows != nullptr));
+		REQUIRE(a.timeline_key == b.timeline_key);
+		REQUIRE(a.timeline_names == b.timeline_names);
+		REQUIRE(a.order_name == b.order_name);
+		REQUIRE(a.partition_key == b.partition_key);
+		REQUIRE(a.partition_subject == b.partition_subject);
+	}
+	REQUIRE(after->signatures.size() == before->signatures.size());
+	for (idx_t i = 0; i < before->signatures.size(); i++) {
+		REQUIRE(after->signatures[i].fields.size() == before->signatures[i].fields.size());
+		for (idx_t j = 0; j < before->signatures[i].fields.size(); j++) {
+			REQUIRE(after->signatures[i].fields[j].kind == before->signatures[i].fields[j].kind);
+			REQUIRE(after->signatures[i].fields[j].frame == before->signatures[i].fields[j].frame);
+		}
+	}
+}
+
+TEST_CASE("A placed range frame survives a serialization round trip", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	SetUp(con);
+
+	// A range carries its reducer, both ends with their k, its step and its policy beside a point's fields; execution
+	// reads each.
+	auto plan = con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) DECIDE x(INT) "
+	                            "SUCH THAT x <= 9 AND sum(from 2 previous to 3 next every 2 all: x) "
+	                            "over (site.cap within region) <= 9 "
+	                            "AND x <= avg(from first to last else 0.5: site.cap) over (site.s_key cyclic) "
+	                            "MAXIMIZE sum(x)");
+	auto *before = FindDecide(*plan);
+	REQUIRE(before != nullptr);
+	REQUIRE(before->frames.size() == 2);
+	REQUIRE(before->frames[0].range);
+	REQUIRE(before->frames[0].reducer == "sum");
+	REQUIRE(before->frames[1].reducer == "avg");
+	REQUIRE(before->frames[1].fallback != nullptr);
+
+	auto copied = RoundTrip(con, *plan);
+	auto *after = FindDecide(*copied);
+	REQUIRE(after != nullptr);
+	REQUIRE(after->frames.size() == before->frames.size());
+	for (idx_t i = 0; i < before->frames.size(); i++) {
+		auto &b = before->frames[i];
+		auto &a = after->frames[i];
+		REQUIRE(a.range == b.range);
+		REQUIRE(a.reducer == b.reducer);
+		REQUIRE(a.from == b.from);
+		REQUIRE(a.from_k == b.from_k);
+		REQUIRE(a.to == b.to);
+		REQUIRE(a.to_k == b.to_k);
+		REQUIRE(a.every == b.every);
+		REQUIRE(a.all == b.all);
+		REQUIRE((a.fallback != nullptr) == (b.fallback != nullptr));
+		REQUIRE(a.text == b.text);
+	}
+}
+
 TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
@@ -559,15 +751,15 @@ TEST_CASE("An optimized DECIDE plan refuses to be copied", "[decidb]") {
 	REQUIRE_THROWS_AS(plan->Copy(*con.context), NotImplementedException);
 }
 
-TEST_CASE("Scoped clauses keep their by keys, scope checks and objective mark through a serialization round trip",
+TEST_CASE("Scoped clauses keep their by keys, signatures and objective mark through a serialization round trip",
           "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	SetUp(con);
 
-	// Two `by` keys, the determination checks of a `per` key and of a reducer's own `per`
-	// under its own `when`, and an objective written with a scope. The reducer's body is a
-	// decision per row, which its key must determine (a decision `per region` it would hold).
+	// Two `by` keys, the variant signature of a `per` key and of a reducer's own `per` under its own `when`, and an
+	// objective written with a scope. The clause's signature holds its bound (`cap`, which `per r_name` does not hold);
+	// the reducer's holds its body's decision per row, which gives the reducer a scope of its own.
 	auto plan = con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) "
 	                            "DECIDE x(INT), per region: open(BOOL) "
 	                            "SUCH THAT when cap > 10 per r_name: sum(x) by (r_name) <= cap "
@@ -575,74 +767,118 @@ TEST_CASE("Scoped clauses keep their by keys, scope checks and objective mark th
 	                            "MAXIMIZE when cap > 0: sum(x)");
 	auto *before = FindDecide(*plan);
 	REQUIRE(before != nullptr);
-	// The clause's `per r_name` and its `by (r_name)` are one key; the reducer's own
-	// `per region` within its `by (site.r_key)` groups adds their union for its check.
-	REQUIRE(before->keys.size() == 4);
-	REQUIRE(before->scope_checks[1].key == KeyWritten(*before, "region, site.r_key"));
+	// The clause's `per r_name` and its `by (r_name)` are one key.
+	REQUIRE(before->keys.size() == 3);
 	REQUIRE(KeyWritten(*before, "region") == before->keyed_scopes[0].key);
 	REQUIRE(before->keys[KeyWritten(*before, "site.r_key")].Names() == duckdb::vector<string> {"site.r_key"});
-	duckdb::vector<DecideScopeCheckKind> kinds;
-	for (auto &check : before->scope_checks) {
-		kinds.push_back(check.kind);
-	}
-	// The clause's per key over its bound (it holds its own `by` key by construction), then the reducer's own per key
-	// over the reducer's body.
-	REQUIRE(kinds ==
-	        duckdb::vector<DecideScopeCheckKind> {DecideScopeCheckKind::DETERMINES, DecideScopeCheckKind::DETERMINES});
-	REQUIRE(before->scope_checks[0].subject == "r_name");
-	REQUIRE(before->scope_checks[0].object == "cap");
-	REQUIRE(before->scope_checks[1].decision != DConstants::INVALID_INDEX);
+	REQUIRE(before->signatures.size() == 2);
+	auto &clause = before->signatures[0];
+	REQUIRE(clause.key == KeyWritten(*before, "r_name"));
+	REQUIRE(clause.text == "per r_name");
+	REQUIRE(clause.rows);
+	REQUIRE(clause.fields.size() == 1);
+	REQUIRE(clause.fields[0].kind == DecideSignatureFieldKind::VALUE);
+	REQUIRE(clause.fields[0].text == "cap");
+	auto &reducer = before->signatures[1];
+	REQUIRE(reducer.key == before->keyed_scopes[0].key);
+	REQUIRE(reducer.fields.size() == 1);
+	REQUIRE(reducer.fields[0].kind == DecideSignatureFieldKind::DECISION);
+	REQUIRE(before->keyed_scopes.size() == 2);
+	REQUIRE(before->keyed_scopes[1].key == before->keyed_scopes[0].key);
+	REQUIRE(before->keyed_scopes[1].signature == 1);
+	REQUIRE(before->objective_signature == DConstants::INVALID_INDEX);
 
 	auto copied = RoundTrip(con, *plan);
 	auto *after = FindDecide(*copied);
 	REQUIRE(after != nullptr);
 	RequireSameKeys(*after, *before);
-	REQUIRE(after->scope_checks.size() == before->scope_checks.size());
 	auto same = [](const duckdb::unique_ptr<Expression> &a, const duckdb::unique_ptr<Expression> &b) {
 		return a ? (b && a->Equals(*b)) : !b;
 	};
-	for (idx_t i = 0; i < before->scope_checks.size(); i++) {
-		auto &check = before->scope_checks[i];
-		auto &copy = after->scope_checks[i];
-		REQUIRE(copy.kind == check.kind);
-		REQUIRE(same(copy.rows, check.rows));
-		REQUIRE(same(copy.value, check.value));
-		REQUIRE(same(copy.filter, check.filter));
-		REQUIRE(copy.key == check.key);
-		REQUIRE(copy.decision == check.decision);
-		REQUIRE(copy.subject == check.subject);
-		REQUIRE(copy.object == check.object);
-		REQUIRE(copy.context == check.context);
+	REQUIRE(after->signatures.size() == before->signatures.size());
+	for (idx_t i = 0; i < before->signatures.size(); i++) {
+		auto &signature = before->signatures[i];
+		auto &copy = after->signatures[i];
+		REQUIRE(same(copy.rows, signature.rows));
+		REQUIRE(copy.key == signature.key);
+		REQUIRE(copy.text == signature.text);
+		REQUIRE(copy.source_clause_id == signature.source_clause_id);
+		REQUIRE(copy.fields.size() == signature.fields.size());
+		for (idx_t f = 0; f < signature.fields.size(); f++) {
+			REQUIRE(copy.fields[f].kind == signature.fields[f].kind);
+			REQUIRE(same(copy.fields[f].value, signature.fields[f].value));
+			REQUIRE(copy.fields[f].decision == signature.fields[f].decision);
+			REQUIRE(copy.fields[f].key == signature.fields[f].key);
+			REQUIRE(copy.fields[f].text == signature.fields[f].text);
+		}
 	}
+	REQUIRE(after->objective_signature == before->objective_signature);
 	REQUIRE(after->keyed_scopes.size() == before->keyed_scopes.size());
 	for (idx_t i = 0; i < before->keyed_scopes.size(); i++) {
 		REQUIRE(after->keyed_scopes[i].key == before->keyed_scopes[i].key);
+		REQUIRE(after->keyed_scopes[i].signature == before->keyed_scopes[i].signature);
 	}
 }
 
-TEST_CASE("A key that holds a keyed decision's own key plans no check that it determines the decision", "[decidb]") {
+TEST_CASE("A key that holds a keyed decision's own key gives the decision no signature field", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	SetUp(con);
-	// Whether the plan checks that a key determines a decision; `open` is declared per region.
-	auto checks_a_decision = [&](const string &clause) {
+	// Whether some signature compares a decision by instance; `open` is declared per region.
+	auto signs_a_decision = [&](const string &clause) {
 		auto plan = con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) "
 		                            "DECIDE x(INT), per region: open(BOOL) SUCH THAT " +
 		                            clause + " MAXIMIZE sum(x)");
 		auto *decide = FindDecide(*plan);
 		REQUIRE(decide != nullptr);
-		for (auto &check : decide->scope_checks) {
-			if (check.decision != DConstants::INVALID_INDEX) {
-				return true;
+		for (auto &signature : decide->signatures) {
+			for (auto &field : signature.fields) {
+				if (field.kind == DecideSignatureFieldKind::DECISION) {
+					return true;
+				}
 			}
 		}
 		return false;
 	};
 	// The decision's own key, a key holding it, and a reducer's own key within its `by` groups.
-	REQUIRE_FALSE(checks_a_decision("per region: open <= 1"));
-	REQUIRE_FALSE(checks_a_decision("per region, site.s_key: open <= 1"));
-	REQUIRE_FALSE(checks_a_decision("sum(when cap > 30 per region: open) by (site.r_key) <= 1"));
+	REQUIRE_FALSE(signs_a_decision("per region: open <= 1"));
+	REQUIRE_FALSE(signs_a_decision("per region, site.s_key: open <= 1"));
+	REQUIRE_FALSE(signs_a_decision("sum(when cap > 30 per region: open) by (site.r_key) <= 1"));
 	// A key holding part of the decision's key, and a decision per row, which no key of columns holds.
-	REQUIRE(checks_a_decision("per r_name: open <= 1"));
-	REQUIRE(checks_a_decision("per region: x <= 1"));
+	REQUIRE(signs_a_decision("per r_name: open <= 1"));
+	REQUIRE(signs_a_decision("per region: x <= 1"));
+}
+
+TEST_CASE("A key gives no signature field to a value or a by key it holds by construction", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	SetUp(con);
+	// The kinds of field the clause's signatures compare.
+	auto fields = [&](const string &clause) {
+		auto plan = con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) DECIDE x(INT) SUCH THAT " +
+		                            clause + " MAXIMIZE sum(x)");
+		auto *decide = FindDecide(*plan);
+		REQUIRE(decide != nullptr);
+		duckdb::vector<DecideSignatureFieldKind> kinds;
+		for (auto &signature : decide->signatures) {
+			for (auto &field : signature.fields) {
+				kinds.push_back(field.kind);
+			}
+		}
+		return kinds;
+	};
+	using Kinds = duckdb::vector<DecideSignatureFieldKind>;
+	// Reflexivity (KeyHolds): a bound that is the key, a `by` key that is it, a relation's own column; the same
+	// expression under another key is a field.
+	REQUIRE(fields("per cap: sum(x) <= cap").empty());
+	REQUIRE(fields("per r_name: sum(x) <= cap") == Kinds {DecideSignatureFieldKind::VALUE});
+	REQUIRE(fields("per r_name: sum(x) by (r_name) <= 50").empty());
+	REQUIRE(fields("per s_key: sum(x) by (r_name) <= 50") == Kinds {DecideSignatureFieldKind::BY_KEY});
+	REQUIRE(fields("per site: sum(x) <= cap").empty());
+	// A reducer's own key: its body's decision per row is a field either way, its data only where the key does not
+	// hold it.
+	REQUIRE(fields("sum(per cap: cap * x) <= 60") == Kinds {DecideSignatureFieldKind::DECISION});
+	REQUIRE(fields("sum(site: cap * x) <= 60") == Kinds {DecideSignatureFieldKind::DECISION});
+	REQUIRE(fields("sum(per r_name: cap * x) <= 60") ==
+	        Kinds {DecideSignatureFieldKind::VALUE, DecideSignatureFieldKind::DECISION});
 }

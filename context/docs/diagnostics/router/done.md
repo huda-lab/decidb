@@ -75,8 +75,8 @@ statement's answer. It is only reached under the prefix; an unprefixed failure a
 raises. No call site checks inline whether an engine exists.
 
 **Candidate provider.** The unbounded engine needs categorical groupings to characterize *which* instances escape.
-Assembling them reads the executor chunks, the keyed decisions' key scopes (`KeyedScopeInfo`) and `BuildGroupIds`, so
-it cannot live in the pure router. It is a stateful functor, `UnboundedCandidateProvider` (`physical_decide.cpp`),
+Assembling them reads the input's named columns, the keyed decisions' key scopes (`KeyedScopeInfo`) and `GroupColumn`,
+so it cannot live in the pure router. It is a stateful functor, `UnboundedCandidateProvider` (`physical_decide.cpp`),
 constructed in the `UNBOUNDED` arm as the engine's `get_candidates`. It caches its per-row candidates and each key
 scope's class candidates across the engine's per-variable calls.
 

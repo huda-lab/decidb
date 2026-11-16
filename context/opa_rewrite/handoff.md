@@ -84,9 +84,9 @@ Each finding in Part B carries a label saying how far to trust it:
 
 | What | Where |
 |---|---|
-| Working branch | `OPA-rewrites`, cut from mainline at `7865506c62`. The merge and the rewrite happen here |
+| Working branch | `OPA-rewrites`, cut from mainline at `7865506c62`. It holds the merge of `Sami-OPA` (commit `decide: merge Sami-OPA into OPA-rewrites`); the rewrite happens here. Its baseline is [merge_notes.md](merge_notes.md), section 4 |
 | OPA, as Sami left it | `origin/Sami-OPA`, tip `7837e300be` (Nov 15) |
-| OPA, prepared for the merge | local branch `Sami-OPA`, tip `f56845f560`: Sami's tip plus three preparation commits (format `9e3b0f9c82`, node algebra deleted `d88e1fe66d`, wrong answer fixed `f56845f560`). Details in [merge_notes.md](merge_notes.md), section 4. Not pushed |
+| OPA, prepared for the merge | local branch `Sami-OPA`, tip `f56845f560`: Sami's tip plus three preparation commits (format `9e3b0f9c82`, node algebra deleted `d88e1fe66d`, wrong answer fixed `f56845f560`). Details in [merge_notes.md](merge_notes.md), section 4. Merged into `OPA-rewrites`. Not pushed |
 | OPA before the Nov 14–15 work | `36f12dd089` (Nov 13) |
 | Dropped branch | `origin/Sami-ANR`, `300e387bb1`. It is an ancestor of OPA |
 | Mainline | `direct-solve-prototype`, `7865506c62` |
@@ -98,9 +98,9 @@ Each finding in Part B carries a label saying how far to trust it:
 |---|---|
 | The deck | `context/New_syntax.pdf` in the main checkout. 119 pages, dated 2026-09-22. **Not in git** |
 | Deck pages 77–119 as text | `.claude/worktrees/sami_review_files/deck/deck_pages_77_119.txt`. Local only, not in git |
-| Language reference | `context/docs/language/guide.md` on `Sami-OPA`. Where it and the binary disagree, trust the binary |
+| Language reference | `context/docs/language/guide.md` on `OPA-rewrites`. Where it and the binary disagree, trust the binary |
 | Project rules | `.claude/CLAUDE.md`. They bind all work here |
-| Built worktrees | `.claude/worktrees/sami-opa` (on `Sami-OPA`), `sami-opa-nov13`, `sami-anr`. About 5 GB each. Local only |
+| Built worktrees | `.claude/worktrees/sami-opa` (on `Sami-OPA` at `f56845f560`: the OPA parent of the merge, for comparisons), `sami-opa-nov13`, `sami-anr`. About 5 GB each. Local only |
 | Raw review output | `.claude/worktrees/sami_review_files/`: fuzz logs, the suite-output comparison, a large set of test queries. Local only; all can be regenerated |
 
 Everything under `.claude/worktrees/` is git-ignored and exists only on the machine where the review ran.
@@ -113,27 +113,27 @@ Everything under `.claude/worktrees/` is git-ignored and exists only on the mach
 A DECIDE query on the solver path goes through these steps:
 
 1. **Parse, bind, canonicalize** (stages 01–04). The binder computes each clause's signature.
-   - Code: `src/planner/expression_binder/decide/`, `src/planner/decide/decide_canonicalizer.cpp:1802`
+   - Code: `src/planner/expression_binder/decide/`, `CollectSignatureFields` in `src/planner/decide/decide_canonicalizer.cpp:1783`
 2. **Optimizer rewrites** (stage 05). They run on the bound clauses and fill side tables on `LogicalDecide`.
    **Every nested decision reducer becomes a helper variable here.**
-   - Code: `src/optimizer/decide/decide_optimizer.cpp:98-157`; `AddValueHelper` in `decide_rewrite_scoped.cpp:63`
+   - Code: `src/optimizer/decide/decide_optimizer.cpp:98-162`; `AddValueHelper` in `decide_rewrite_scoped.cpp:63`
 3. **The tree is built**, at physical planning, **after every rewrite**. Stage 05 then lowers each clause's terms into
    its node, and a program is compiled per node.
    - Code: `src/execution/physical_plan/plan_decide.cpp:62-73`; `src/planner/decide/decide_tree.cpp`;
-     `LowerDecideTree` in `src/optimizer/decide/decide_linear_form.cpp:1466`; `decide_tree_compile.cpp:693`
+     `LowerDecideTree` in `src/optimizer/decide/decide_linear_form.cpp:1205`; `CompileDecideTree` in `decide_tree_compile.cpp:697`
 4. **Rows are routed top-down** through the tree into per-node containers, one pass per thread (deck step 2).
-   - Code: `Sink` in `physical_decide.cpp:409-450`; `DecideDescent::Append` in `decide_descent.cpp:1668`
+   - Code: `Sink` in `physical_decide.cpp:291-332`; `DecideDescent::Append` in `decide_descent.cpp:1668`
 5. **Threads are merged**, then nodes are computed **bottom-up** (deck step 3, data values only) and frames are built
    (deck step 4).
    - Code: `MergeAll` in `decide_descent.cpp:2181`; `decide_tree_columns.cpp`
 6. **The emitter converts node results back to per-row columns** for the old model-building code.
-   - Code: `decide_model_emitter.cpp`; called from `physical_decide.cpp:831-890`
+   - Code: `decide_model_emitter.cpp`; called from `EvaluateTree`, `physical_decide.cpp:667-727`
 7. **The model is built** (stage 06), unchanged from before the tree. It removes the helper variables it can.
-   - Code: `BuildSolverInput` in `physical_decide.cpp:1166`; `InlineReducerValueLinks` in
-     `src/decidb/formulation/linearization_reducer_value.cpp:293`; `FormulateModel` in `physical_decide.cpp:1397`
+   - Code: `BuildSolverInput` in `physical_decide.cpp:976`; `InlineReducerValueLinks` in
+     `src/decidb/formulation/linearization_reducer_value.cpp:244`; `FormulateModel` in `physical_decide.cpp:1179`
 
 **Direct solve** sits outside this. A rule may answer the query before step 4 runs. It reads its own `DirectIR`
-(`src/optimizer/decide/direct/direct_rule.hpp:183`) and never the tree.
+(`src/include/duckdb/optimizer/decide/direct/direct_rule.hpp:209`) and never the tree.
 
 ### One clause exists in six forms [read]
 
@@ -222,7 +222,7 @@ Problems 1–3 are the owner's. Problems 4–9 are the reviewer's additions.
 ### 6. Error order has no specification
 
 - Which error a query reports is defined as "what flat did", through a case list per node kind
-  (`ErrorRanks`, `decide_tree.cpp:1277`).
+  (`ErrorRanks`, `decide_tree.cpp:870`).
 - Flat is deleted, so the rule exists nowhere. Every new construct must invent a rank.
 - Evidence: B7, B10.
 
@@ -261,7 +261,8 @@ Problems 1–3 are the owner's. Problems 4–9 are the reviewer's additions.
 ## A5. Work plan
 
 **Order (owner, 2026-11-16):** a short preparation on `Sami-OPA`, then the merge, then the rewrite on the merged
-branch. The preparation is done. Every phase ends with the gate in A8.
+branch. The preparation and the merge are done; the rewrite starts from `OPA-rewrites`. Every phase ends with the
+gate in A8.
 
 ### Phase 0. Stabilise the tip
 
@@ -283,11 +284,14 @@ that do not gain from being done first, and are done on the merged branch.
 
 ### Phase 1. Join mainline
 
+✅ Done. One three-way merge of `Sami-OPA` into `OPA-rewrites`, under the owner's rulings R1, R2, R3 and A3; every
+decision, deleted test and unexpected difference is in [merge_notes.md](merge_notes.md), section 10, and the merged
+branch's baseline in its section 4.
+
 - ✅ OPA's tip is formatted like mainline (`9e3b0f9c82`).
-- Do **one three-way merge** of `Sami-OPA` into `OPA-rewrites`. Do not rebase. Follow
-  [merge_notes.md](merge_notes.md).
-- Regenerate the grammar with `make grammar-build`.
-- Traps, all detailed in `review/05`:
+- ✅ One three-way merge of `Sami-OPA` into `OPA-rewrites`, no rebase, following [merge_notes.md](merge_notes.md).
+- ✅ The grammar and serialization code regenerated from their sources.
+- ✅ Traps, all detailed in `review/05` and checked in merge_notes.md, section 6:
   - **Objective sense.** OPA reads `decide_sense`; mainline renamed it `written_sense` and already folded the flip
     into term signs. A plain rename flips twice, with no error.
   - **Serialization ids 221–223 collide** with mainline's new fields.
@@ -438,10 +442,10 @@ Reproducers are in `repro/`. Fuzz commands run from `test/decide/`.
 
 | # | Defect | Where it occurs | Reproduce |
 |---|---|---|---|
-| 1 | **Fixed in `f56845f560`.** An outer `sum` over a nest, under a bound that reads the rows (`... >= t.cap - 1`), under `per row:` or `per ():`, kept one row's bound and answered an infeasible query | `7837e300be` only | `opa_wrong_answer_nested_per_row.sql`; `python -m fuzz nests --seed 669 --count 1`. Guarded by `test_a_bound_that_reads_the_rows_holds_on_each_under_a_whole_table_nest` |
-| 2 | False "takes more than one value" on the direct-solve path; the solver path answers | OPA tip, OPA Nov 13 | `python -m fuzz bounds --seed 195 --count 1` |
-| 3 | `per g: x <= 2` constrains the row whose `g` is NULL | OPA, ANR, mainline | `null_key_and_anr_defects.sql`, query S1 |
-| 4 | An answer violates its constraint: Boolean product over a signed decision | **Mainline** and ANR. OPA fixed it in `e19ed66d5a` | `null_key_and_anr_defects.sql`, query D5 |
+| 1 | **Fixed in `f56845f560`; still fixed on the merge.** An outer `sum` over a nest, under a bound that reads the rows (`... >= t.cap - 1`), under `per row:` or `per ():`, kept one row's bound and answered an infeasible query | `7837e300be` only | `opa_wrong_answer_nested_per_row.sql`; `python -m fuzz nests --seed 669 --count 1`. Guarded by `test_a_bound_that_reads_the_rows_holds_on_each_under_a_whole_table_nest` |
+| 2 | **Fixed on the merge**, by mainline's direct front end: under `require` it answers 0, where the prepared `Sami-OPA` still raises it. False "takes more than one value" on the direct-solve path; the solver path answers | OPA tip, OPA Nov 13, prepared `Sami-OPA` | `python -m fuzz bounds --seed 195 --count 1` |
+| 3 | `per g: x <= 2` constrains the row whose `g` is NULL | OPA, ANR, mainline, the merge | `null_key_and_anr_defects.sql`, query S1 |
+| 4 | An answer violates its constraint: Boolean product over a signed decision. **Right on the merge** | **Mainline** and ANR. OPA fixed it in `e19ed66d5a`, and the merge keeps the fix | `null_key_and_anr_defects.sql`, query D5 |
 | 5 | An AVG whose coefficients sum to 6.999999999999999 is reported infeasible | recorded as D3 in `test/decide/fuzz/known.py`; no seed | none |
 
 **Suspected, not reproduced**
@@ -459,7 +463,7 @@ Items 6 and 7 did not show at 1 and 8 threads over 500,000 rows (B4). That does 
 
 | # | Limitation | Where | Reproduce |
 |---|---|---|---|
-| 10 | `sum((x - 1) * max(x) by (t.h)) >= t.cap - 1`: a product or square over a nested reducer, under a bound that reads the rows, is refused ("squares or multiplies decisions inside nested reducers, which is not supported yet"). With a constant bound it answers | Prepared `Sami-OPA`. Answered correctly at `36f12dd089`; answered wrongly at `7837e300be` | `refused_quadratic_nest_row_bound.sql` |
+| 10 | Unchanged on the merge. `sum((x - 1) * max(x) by (t.h)) >= t.cap - 1`: a product or square over a nested reducer, under a bound that reads the rows, is refused ("squares or multiplies decisions inside nested reducers, which is not supported yet"). With a constant bound it answers | Prepared `Sami-OPA` and the merge. Answered correctly at `36f12dd089`; answered wrongly at `7837e300be` | `refused_quadratic_nest_row_bound.sql` |
 
 More oddities common to every branch: `review/09`, items S1 to S7.
 
@@ -834,8 +838,8 @@ Estimate (not measured): 60–70% of OPA's evaluator survives step 5.
 - **Error ordering reproduces the deleted flat evaluator** through a per-node-kind case list (`DecideErrorRank`,
   8 fields; four ranks per node).
 - `DecideNode` is one struct with 66 members, many valid for one node kind only.
-- Test hooks in production code [agent ✓]: `DECIDB_EVALUATOR_INJECT` in `decide_tree.cpp:1153`; two `getenv` calls
-  per chunk in `Sink` (`physical_decide.cpp:316, 325`).
+- Test hooks in production code [agent ✓]: `DECIDB_EVALUATOR_INJECT` in `decide_tree.cpp:748`; two `getenv` calls
+  per chunk in `Sink` (`AppendDecideDescent`, `physical_decide.cpp:198, 207`).
 - Likely bug: a collation error in a frame's order key is attributed to the wrong row
   (`decide_descent.cpp:1361`). Not yet confirmed.
 - A step-5 attempt was built and removed on Nov 15 (`a4263883ff`): composing at nodes *beside* stage 06 changed no
@@ -889,7 +893,8 @@ three times with no test added.
 **User-visible change accepted without a recorded decision [agent ✓]:** `EXPLAIN` no longer prints the rows an ABS
 or L0 rewrite adds. Four existing tests were changed to match: `test_explain.py` (was "shows the rows it became",
 now asserts they are absent), `test_scope_explain_diagnose.py` (two expectations became `None`, one inverted),
-`test_tree_emitter.py:1482` (full-output equality became three substring checks). Owner call: restore or approve.
+`test_tree_emitter.py:1482` (full-output equality became three substring checks; the file is deleted under R3).
+Owner call: restore or approve.
 
 Tip commit message [read]: under `DECIDB_DESCENT_SPLIT=1` (merge after every row) 23 tests still fail, described as
 large-input and step-dump tests. Not yet checked whether those are time limits or real failures.
@@ -920,8 +925,9 @@ OPA's 141 added test functions, by what they check:
 Expectations weakened or flipped on OPA with no stated reason:
 1. `EXPLAIN` rewrite rows: 4 tests (see B8) [agent ✓].
 2. `test_one_pass.py:35`: "exactly one scan" became "greater than 0"; the docstring still claims one pass.
-3. `test_direct_r1_continuous_knapsack.py:2226`: a loop over two memory limits now asserts the same outcome twice.
-4. `_old_spellings.py:183`: the removed-syntax scanner got an exemption so pinned tree dumps pass it.
+3. `test_direct_r1_continuous_knapsack.py:2325`: a loop over two memory limits now asserts the same outcome twice.
+4. `_old_spellings.py`: the removed-syntax scanner got an exemption so pinned tree dumps pass it. The
+   preparation removed it with the `formula=` text (`d88e1fe66d`).
 5. `test_scope_reducer_by.py`: a "key is computed once" test was deleted with no tree equivalent.
 
 Fuzz regression tests exist on OPA for D1, D2, D4, D5. D3 (an AVG rounding case reported infeasible) is open on both.

@@ -15,7 +15,8 @@
 #include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/decide_solver_capabilities.hpp"
 #include "duckdb/common/decide_numeric_policy.hpp"
-#include "duckdb/planner/decide/decide_prepared_model.hpp"
+#include "duckdb/planner/decide/decide_tree_terms.hpp"
+#include "duckdb/planner/decide/decide_term_split.hpp"
 
 namespace duckdb {
 
@@ -50,8 +51,8 @@ struct DecideKeyElement {
 
 //! A grouping key: the expressions whose values decide which rows share a class. Every
 //! key the clause writes is one entry of LogicalDecide::keys -- a declaration's `per K:`,
-//! a reducer's own `per K'` and the colon form `SUM(D: e)`, a reducer's `by (key)`, and a
-//! constraint's or the two-level objective's `per K:` -- and keys with the same columns
+//! a reducer's own `per K'` and the colon form `SUM(D: e)`, a reducer's `by (key)`, a
+//! constraint's `per K:` and a nested reducer's path key -- and keys with the same columns
 //! share it, whichever spelling wrote them. A relation element (`per D`) stands for every
 //! column D stores. The empty key (`per ()`, `by ()`) is no entry: INVALID_INDEX, one
 //! class.
@@ -101,54 +102,131 @@ struct KeyedScopeInfo {
 	//! binder creates. Deliberately absent from the serialization: the optimizer creates
 	//! these scopes, and an optimized plan is never serialized.
 	idx_t value_link = DConstants::INVALID_INDEX;
+	//! A relation-qualified reducer's scope of its own (DecideCanonicalizer::BuildConstraintSignatures): the classes
+	//! of `key` among the rows the reducer reads, each split by the values of its body's signature (D70, D71), an
+	//! index into LogicalDecide::signatures, so the reducer reads one value per instance, not per class. Execution
+	//! builds its mapping from the signature. INVALID_INDEX for every other scope.
+	idx_t signature = DConstants::INVALID_INDEX;
 
 	//! Generated from `storage/serialization/nodes.json`.
 	void Serialize(Serializer &serializer) const;
 	static KeyedScopeInfo Deserialize(Deserializer &deserializer);
 };
 
-//! One run-time requirement of a clause
-//! (language/guide.md §7.3): built by DecideCanonicalizer from the user's
-//! clause, before any rewrite, and run by PhysicalDecide before any model is built.
-struct DecideScopeCheck {
-	DecideScopeCheckKind kind = DecideScopeCheckKind::DETERMINES;
-	//! The rows considered: those `rows` keeps, NULL dropping a row; null for every row.
+//! A frame selector (language/guide.md §5.6), named by a FRAME_TAG_PREFIX tag on the aggregate it binds to:
+//! `first(e)` for a point frame, the frame's reducer for a range. At an anchor row it reads the anchor's timeline --
+//! the rows sharing its `within` key, ordered by `order` -- at the positions it selects.
+struct DecideFrameSpec {
+	//! A range, agg(from F1 to F2 ...: e); else a point, at(F: e)
+	bool range = false;
+	//! A range's reducer, lower case: sum, avg, min, max or count; empty for a point
+	string reducer;
+	//! The point, or the range's first end, and its k
+	DecideFrameAnchor from = DecideFrameAnchor::FIRST;
+	int64_t from_k = 1;
+	//! The range's last end
+	DecideFrameAnchor to = DecideFrameAnchor::FIRST;
+	int64_t to_k = 1;
+	int64_t every = 1;
+	//! `all`: a range with a missing position selects nothing
+	bool all = false;
+	//! `else v`, read at the anchor row for a missing position, a number; null when unwritten
+	unique_ptr<Expression> fallback;
+	//! The timeline's order key, and its direction
+	unique_ptr<Expression> order;
+	//! What positions compare: the key's value (reference 0 of what the pass read, which messages quote) under the
+	//! collation binding settled, as a bound ORDER BY's (D74), so a prepared plan or a plan's round trip compares as it
+	//! was bound. Null when the key compares as it is.
+	unique_ptr<Expression> order_collation;
+	bool descending = false;
+	bool cyclic = false;
+	//! The timeline's partition, the `within` key: an index into LogicalDecide::keys, INVALID_INDEX for one timeline.
+	//! A row whose written `within` column is NULL is in no timeline (D5, D75).
+	idx_t within_key = DConstants::INVALID_INDEX;
+	//! The frame as written, for messages
+	string text;
+	//! The frame in DeciDB's own spelling, lower case with its defaults left out (`at(previous: x) over (t.period)`):
+	//! a plan's layers, a helper's label and the frame's column print it, as they reprint every node that reads a
+	//! decision (DecideSourceNames::written).
+	string spelling;
+
+	//! Where the frame stands, set by DecideCanonicalizer (PlaceFrames). Its timelines are read over the rows its
+	//! scoped expression reads -- its path's (language/guide.md §5.5), `rows` keeps them, null for every row -- grouped
+	//! by `timeline_key` (into LogicalDecide::keys): the path's `by` keys, then `within`; INVALID_INDEX for one
+	//! timeline.
 	unique_ptr<Expression> rows;
-	//! DETERMINES: the classes. An index into LogicalDecide::keys; INVALID_INDEX for one
-	//! class.
-	idx_t key = DConstants::INVALID_INDEX;
-	//! DETERMINES: the data value each class shows once; null when it is `decision`.
+	idx_t timeline_key = DConstants::INVALID_INDEX;
+	//! How a message names each element its timelines are split by (`T.productID`) and its order key (`T.period`).
+	vector<string> timeline_names;
+	string order_name;
+	//! D75: the key whose every class among `rows` lies in one timeline -- the path's `by` keys and the `per` key
+	//! of the scoped expression it stands in, an index into LogicalDecide::keys; INVALID_INDEX, one class, for
+	//! `per ()` along no `by` -- and the message's subject, empty when that key determines the timeline already.
+	idx_t partition_key = DConstants::INVALID_INDEX;
+	string partition_subject;
+
+	//! Whether its position is read relative to the anchor's: `previous` or `next`.
+	bool Relative() const {
+		return from == DecideFrameAnchor::PREVIOUS || from == DecideFrameAnchor::NEXT ||
+		       (range && (to == DecideFrameAnchor::PREVIOUS || to == DecideFrameAnchor::NEXT));
+	}
+	//! Generated from `storage/serialization/nodes.json`.
+	void Serialize(Serializer &serializer) const;
+	static DecideFrameSpec Deserialize(Deserializer &deserializer);
+};
+
+//! One run-time requirement of a value a bound reads (language/guide.md §7.3), appended by the bound-side rewrite
+//! (DecideOptimizer::RewriteRhsAggregates) and made under the DECIDE node before any model is built.
+struct DecideScopeCheck {
+	DecideScopeCheckKind kind = DecideScopeCheckKind::VALUE_IS_VALID;
 	//! VALUE_IS_VALID: the message a row raises, NULL on a row whose value is valid.
 	unique_ptr<Expression> value;
-	//! DETERMINES: the decision (index into decide_variables) each class holds once.
-	idx_t decision = DConstants::INVALID_INDEX;
-	//! DETERMINES inside a reducer's `per`: the reducer's own `when`.
-	unique_ptr<Expression> filter;
-	//! What the message quotes, as written. DETERMINES: `subject` the key (`D.depotID`,
-	//! `()`), `object` the value or the decision, `context` where it stands (`in by
-	//! (S.region)`, `declared per row`).
-	string subject;
-	string object;
-	string context;
-	//! DETERMINES: the order the clause wrote `key` in, as indices into the key's elements (`subject` is the key in
-	//! that order); empty for the elements' order. A message lists the class's values in it.
-	vector<idx_t> key_order;
-
-	//! The text of the error this check raises, as the solver path and the direct-solve plans both write it.
-	DecideDeterminesText DeterminesText() const {
-		DecideDeterminesText text;
-		text.subject = subject;
-		text.object = object;
-		text.context = context;
-		text.key_order = key_order;
-		text.one_class = key == DConstants::INVALID_INDEX;
-		text.decision = decision != DConstants::INVALID_INDEX;
-		return text;
-	}
 
 	//! Generated from `storage/serialization/nodes.json`.
 	void Serialize(Serializer &serializer) const;
 	static DecideScopeCheck Deserialize(Deserializer &deserializer);
+};
+
+//! One field of a variant signature: a value the scoped expression's body reads once per instance
+//! (language/guide.md §7.1; D70, D83).
+struct DecideSignatureField {
+	DecideSignatureFieldKind kind = DecideSignatureFieldKind::VALUE;
+	//! VALUE: a column the body's data reads (D83), or data that reads no column, whole.
+	unique_ptr<Expression> value;
+	//! DECISION: the decision (index into decide_variables), per row or keyed.
+	idx_t decision = DConstants::INVALID_INDEX;
+	//! BY_KEY: the reducer's `by` key (index into LogicalDecide::keys).
+	idx_t key = DConstants::INVALID_INDEX;
+	//! FRAME: the frame (index into LogicalDecide::frames), compared by its keys (D82).
+	idx_t frame = DConstants::INVALID_INDEX;
+	//! The field as a message names it: `P.lim`, `ship`, `by (P.region)`, a frame as written.
+	string text;
+
+	//! Generated from `storage/serialization/nodes.json`.
+	void Serialize(Serializer &serializer) const;
+	static DecideSignatureField Deserialize(Deserializer &deserializer);
+};
+
+//! The variant signature of one scoped expression -- a `per K:` clause, a reducer with its own `per` (or the colon
+//! form), or the objective (language/guide.md §7.1; D70): its rows split into classes by `key`, and each class into
+//! one instance per distinct value of `fields` over its rows. Built once by DecideCanonicalizer from the canonical
+//! clauses; only an expression with a field has one.
+struct DecideSignature {
+	//! The rows it reads: its `when`, and a reducer's own; null for every row. A field is never computed anywhere else.
+	unique_ptr<Expression> rows;
+	//! The `per` key (index into LogicalDecide::keys); INVALID_INDEX for `per ()`. A row in no class of it (a NULL
+	//! written key) is no instance.
+	idx_t key = DConstants::INVALID_INDEX;
+	vector<DecideSignatureField> fields;
+	//! How a plan names the scoped expression: a clause's key as written (`per P.depotID`), a reducer as written
+	//! (`sum(per D: ...)`), `the objective`.
+	string text;
+	//! The clause it belongs to (LogicalDecide::constraint_sources); INVALID_INDEX for the objective's.
+	idx_t source_clause_id = DConstants::INVALID_INDEX;
+
+	//! Generated from `storage/serialization/nodes.json`.
+	void Serialize(Serializer &serializer) const;
+	static DecideSignature Deserialize(Deserializer &deserializer);
 };
 
 //! A bound computed from the aggregates of its group: the group's aggregates, an expression over their results, and the
@@ -196,6 +274,10 @@ struct DecideGroupBound {
 	//! INVALID_INDEX for any other bound.
 	idx_t low = DConstants::INVALID_INDEX;
 	idx_t high = DConstants::INVALID_INDEX;
+	//! Of an `=` bound, per reducer of its clause with a `when` of its own, the aggregate saying whether that `when`
+	//! keeps a row of the group: only a group in which each does holds an instance, and a group with none constrains
+	//! nothing, so the check speaks there alone (language/guide.md §7.4).
+	vector<idx_t> held;
 	//! The bound as the user wrote it, for a message, and where it was written: the column that stands for the bound
 	//! takes that location, so a render quotes it as the bound.
 	string text;
@@ -214,6 +296,7 @@ struct DecideGroupBound {
 		copy->invalid = CopyOrNull(invalid);
 		copy->low = low;
 		copy->high = high;
+		copy->held = held;
 		copy->text = text;
 		copy->location = location;
 		return copy;
@@ -249,11 +332,12 @@ struct DecideReducedBound {
 struct DecideBoundAggregate {
 	//! The placeholder the bound reads: its own table index, and the column after the group key's.
 	ColumnBinding column;
-	//! The BoundAggregateExpression with its function and result type bound; its argument and filter are the members
+	//! The BoundAggregateExpression with its function and result type bound; its arguments and filter are the members
 	//! below.
 	unique_ptr<Expression> function;
-	//! The value aggregated; null for COUNT(*).
-	unique_ptr<Expression> argument;
+	//! What the function reads, in its order: none for COUNT(*), and for a collated MIN or MAX the value and the key it
+	//! compares (BindMinMax).
+	vector<unique_ptr<Expression>> arguments;
 	//! The rows the reducer reads: the clause's kept rows that pass its own `when`; null for every row.
 	unique_ptr<Expression> reads;
 	//! The reducer's `by` key (an index into `keys`), INVALID_INDEX for the whole query.
@@ -265,7 +349,7 @@ struct DecideBoundAggregate {
 
 	bool Equals(const DecideBoundAggregate &other) const {
 		return key == other.key && counts_classes == other.counts_classes && class_key == other.class_key &&
-		       Expression::Equals(function, other.function) && Expression::Equals(argument, other.argument) &&
+		       Expression::Equals(function, other.function) && Expression::ListEquals(arguments, other.arguments) &&
 		       Expression::Equals(reads, other.reads);
 	}
 };
@@ -386,8 +470,7 @@ public:
 	// Links from MIN/MAX indicator variables: (agg_name "min"/"max", indicator_idx)
 	vector<string> minmax_clause_labels;
 
-	// Links from bilinear McCormick auxiliary variables: w = b * x
-	// (aux_idx, bool_var_idx, other_var_idx) — for execution-time Big-M constraint generation
+	// The stage-06 McCormick/AND formulation record materialized from a Boolean-product F node.
 	struct BilinearLink {
 		idx_t aux_idx;       // Index of auxiliary variable w
 		idx_t bool_var_idx;  // Index of the Boolean variable b
@@ -395,7 +478,34 @@ public:
 		idx_t source_clause_id = DConstants::INVALID_INDEX;
 		idx_t removal_group_id = DConstants::INVALID_INDEX;
 	};
-	vector<BilinearLink> bilinear_links;
+	//! The intact Boolean-product expressions and the plan-time helper allocation needed by stage 05. Executable
+	//! bilinear links are materialized from these specs as BOOLEAN_PRODUCT F nodes in DecideTree.
+	vector<DecideBilinearFunctionGroup> bilinear_function_groups;
+
+	//! The three formulation rows for each L0 indicator, retained as function-owned tree input rather than ordinary
+	//! DECIDE clauses. They stay as expressions through the remaining optimizer passes so nested ABS/products receive
+	//! their usual helpers; stage 06 evaluates the rows from the indicator F node's child scopes.
+	struct L0IndicatorFunction {
+		idx_t value_var = DConstants::INVALID_INDEX;
+		bool auto_m = false;
+		double m = 1.0;
+		string label;
+		vector<unique_ptr<Expression>> links;
+	};
+	vector<L0IndicatorFunction> l0_indicator_functions;
+
+	//! The plan-time helper index, source body and relation for a nonlinear reducer definition. Written reducer bodies
+	//! carry a tag that makes the tree read this F value at their original site; tree construction synthesizes the
+	//! helper's definition row from this untagged source body.
+	struct DefinitionFunction {
+		idx_t value_var = DConstants::INVALID_INDEX;
+		ExpressionType relation = ExpressionType::INVALID;
+		unique_ptr<Expression> body;
+		unique_ptr<Expression> condition;
+		//! The first clause that reads the helper, which a message about its row quotes; INVALID_INDEX for none.
+		idx_t source_clause_id = DConstants::INVALID_INDEX;
+	};
+	vector<DefinitionFunction> definition_functions;
 
 	// Links for MAXIMIZE+ABS Big-M upper-bound constraints.
 	// Produced by RewriteAbs when sense==MAXIMIZE and ABS is in the objective.
@@ -408,10 +518,22 @@ public:
 	};
 	vector<AbsMaximizeLink> abs_maximize_links;
 
-	//! The helper decisions that hold a value of either sign: a value rewrite's reducer (RewriteScopedReducers) and a
-	//! defined non-linear body (DefineNonlinearReducerBodies). FoldSingletonRows gives them no default floor of 0; a
-	//! value helper is boxed later by its members' reach, and a body helper stays unboxed, so stage 08 states the
-	//! extremum over it natively.
+	//! The two ABS lower-envelope expressions retained for the executable F node. Optimizer-only metadata: the
+	//! expressions are enumerated for binding liveness, but do not become ordinary DECIDE constraint-tree clauses.
+	struct AbsFunctionEnvelope {
+		//! The source operand for the F node. User expressions can be rewritten away before tree construction (for
+		//! example, when ABS is a factor of a Boolean product), so the function cannot rely on finding itself while
+		//! lowering a retained clause.
+		unique_ptr<Expression> operand;
+		unique_ptr<Expression> positive;
+		unique_ptr<Expression> negative;
+	};
+	vector<AbsFunctionEnvelope> abs_function_envelopes;
+
+	//! The helper decisions that hold a value of either sign: a value rewrite's reducer (RewriteScopedReducers), a
+	//! definition function's output, and a product with a non-Boolean factor (AddBooleanProduct). FoldSingletonRows
+	//! gives them no default floor of 0; a value helper is boxed later by its members' reach, a product by its
+	//! factor's box, and a body helper stays unboxed, so stage 08 states the extremum over it natively.
 	vector<idx_t> signed_helper_vars;
 
 	//! Maps an auxiliary variable's index in decide_variables to a human-readable
@@ -452,10 +574,6 @@ public:
 		//! physical layer folds the matching de-duplication mask into `filter`'s mask so a
 		//! qualified reducer keeps its identity semantics inside a composed clause.
 		idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
-		//! `inner_expr` flattened into additive terms by BuildDecidePreparedModel, so
-		//! the composed emitter reads prepared terms like every other construct rather
-		//! than re-deriving them once the rows are in.
-		vector<DecideTerm> inner_terms;
 	};
 	struct ComposedMinMaxConstraint {
 		vector<ComposedMinMaxTerm> terms;
@@ -487,26 +605,34 @@ public:
 	struct ReducerValueLink {
 		idx_t value_var = DConstants::INVALID_INDEX;
 		string agg_name;                   //!< "sum", "avg", "min" or "max"
-		string label;                      //!< the reducer as the user wrote it, for messages
+		string label;                      //!< the reducer as the user wrote it, `by` included, for messages
 		unique_ptr<Expression> inner_expr; //!< e, as bound; the ABS and bilinear rewrites applied
 		unique_ptr<Expression> filter;     //!< the reducer's own `when`, or null
 		//! Its own `per K'`: the key scope whose classes it counts once; INVALID_INDEX
 		//! for per row.
 		idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
-		//! Γ, into `keys`; INVALID_INDEX for `by ()`, every kept row.
+		//! Its path key (language/guide.md §5.5), into `keys`: every enclosing reducer's `by`
+		//! key and its own; INVALID_INDEX for `by ()` throughout, every kept row.
 		idx_t group_key = DConstants::INVALID_INDEX;
-		unique_ptr<Expression> when; //!< the clause's `when`, or null
-		//! The clause's `per` key (into `keys`, INVALID_INDEX for `per ()`), DECIDE_ROW_KEY for a clause with none.
-		idx_t class_key = DECIDE_ROW_KEY;
+		//! The rows its path keeps: the clause's `when`, then each enclosing reducer's own; null for every row.
+		unique_ptr<Expression> when;
 		//! The sides that pin the helper, read from the way the clause pushes it; both when the sign of its
 		//! factor is not known before the query runs or the comparison is `=` or `<>`. MIN/MAX: the
 		//! extremum link's envelope and closing sides (ExtremumLinkSpec). SUM/AVG: `value >= members`
 		//! (`need_envelope`) and `value <= members` (`need_closing`), the equality when both.
 		bool need_envelope = false;
 		bool need_closing = false;
-		//! `inner_expr` flattened by BuildDecidePreparedModel, like a composed term's.
-		vector<DecideTerm> inner_terms;
+		//! The clause's `per` key (into `keys`, INVALID_INDEX for `per ()`), DECIDE_ROW_KEY for a clause with none.
+		idx_t class_key = DECIDE_ROW_KEY;
+		//! A range frame over decisions (index into `frames`; DecideOptimizer::RewriteFrameRanges): the helper has
+		//! one instance per window of the frame, its members the payload `inner_expr` at the rows the window reads
+		//! and, with an `else`, its `else` at the window's anchor once per missing position (the O's
+		//! DecideBody::members and fallback, LowerDecideTree). INVALID_INDEX for a reducer, whose groups are its path
+		//! key's.
+		idx_t frame = DConstants::INVALID_INDEX;
 	};
+	//! Innermost first: a link reads only helpers of links before it -- a range's, made first, and the reducers
+	//! nested in it -- which stage 06's inlining relies on.
 	vector<ReducerValueLink> reducer_value_links;
 
 	//! What a rewrite made of a construct, for EXPLAIN: the construct as a plan prints it
@@ -530,16 +656,19 @@ public:
 			L0_INDICATORS,                //!< `norm(e, 0)`, one indicator per row
 			VALUE_HELPER,                 //!< a reducer held by one helper decision
 			VALUE_HELPER_PER_GROUP,       //!< a reducer held by a helper decision per `by` group
+			FRAME_HELPER_PER_TIMELINE,    //!< a range frame held by a helper decision per timeline
+			FRAME_HELPER_PER_POSITION,    //!< a range frame held by a helper decision per position
 			EXTREMUM,                     //!< a MIN/MAX held by its envelope
 			EXTREMUM_PINNED,              //!< a MIN/MAX pinned by indicator rows
-			EXTREMUM_PER_GROUP,           //!< a two-level objective's inner MIN/MAX, per group
-			EXTREMUM_PER_GROUP_PINNED,    //!< the same, pinned by indicator rows
 			NOT_EQUAL,                    //!< `<>`, two conditional rows with an indicator
 			BODY_AT_LEAST,                //!< a reducer's non-linear body, a helper per row at least its value
 			BODY_AT_MOST,                 //!< the same, at most its value
 			BODY_EQUAL,                   //!< the same, equal to its value
 			EXTREMUM_NATIVE,              //!< a MIN/MAX over defined bodies, stated to the solver as one
-			EXTREMUM_PER_GROUP_NATIVE,    //!< a two-level objective's inner MIN/MAX over defined bodies, the same
+			//! What the data made of a clause: a scoped expression's classes holding more than one variant (D70, D71),
+			//! instances skipped for having no value (deck pp. 50, 56). Recorded by execution, so only EXPLAIN ANALYZE
+			//! prints it, and `subject` is the whole line.
+			RUN_TIME,
 		};
 		idx_t source_clause_id = DConstants::INVALID_INDEX;
 		Kind kind = Kind::ABS_AUXILIARY;
@@ -575,22 +704,17 @@ public:
 	vector<DecideBoundBox> singleton_row_boxes;
 	//! Every folded user bound, in folding order. A BETWEEN contributes two specs.
 	vector<UserBoundSpec> user_singleton_row_bounds;
+	//! A bound on the members of an easy extremum's `by` groups, a constant on each (`max(x) by (g) <= -5`): no box
+	//! takes it, since a row in no group is no member, but the domain check reads it as written.
+	vector<UserBoundSpec> member_singleton_row_bounds;
 
 	// --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
 
-	// Flat (not two-level) objective: original aggregate type before rewrite to SUM
+	// A MIN/MAX objective: original aggregate type before rewrite to SUM. A nested one is
+	// a helper decision instead (RewriteScopedReducers, D81).
 	ObjectiveAggregateType flat_objective_agg = ObjectiveAggregateType::NONE;
 	// Pre-computed: true if easy formulation (MAXIMIZE+MIN or MINIMIZE+MAX)
 	bool flat_objective_is_easy = false;
-
-	// The two-level objective, outer(per k: inner(e) by (k))
-	ObjectiveAggregateType per_inner_agg = ObjectiveAggregateType::NONE;
-	ObjectiveAggregateType per_outer_agg = ObjectiveAggregateType::NONE;
-	// Pre-computed easy/hard at each level (only meaningful when agg is MIN_AGG or MAX_AGG)
-	bool per_inner_is_easy = false;
-	bool per_outer_is_easy = false;
-	// True if inner aggregate was originally AVG (coefficients need 1/n_g scaling)
-	bool per_inner_was_avg = false;
 
 	// --- Key scopes ---
 
@@ -606,13 +730,20 @@ public:
 	//! Defaults to row-scoped; keyed_scope_idx indexes keyed_scopes.
 	vector<DecideVarScopeInfo> variable_scopes;
 
-	//! The run-time requirements of every clause, in
-	//! clause order; PhysicalDecide runs them before it formulates anything.
-	//! The planner builds the scope checks (DETERMINES); the
-	//! optimizer's right-hand-side rewrite appends the VALUE_IS_VALID checks of the
-	//! bounds it computes, after them, so a bad value is reported only once every scope
-	//! check has passed, as when the bound was read in the operator.
+	//! Every frame selector written in the clause, indexed by FRAME_TAG_PREFIX tags.
+	vector<DecideFrameSpec> frames;
+
+	//! The run-time requirements of the values the bounds read: the optimizer's right-hand-side rewrite appends the
+	//! VALUE_IS_VALID checks of the bounds it computes, which a plan under the node makes before any model is built.
 	vector<DecideScopeCheck> scope_checks;
+
+	//! The variant signature of every scoped expression with a field (D70), indexed by SIGNATURE_TAG_PREFIX on a
+	//! `per K:` wrapper and by KeyedScopeInfo::signature for a reducer's own `per`. Built by the planner, right after
+	//! canonicalization.
+	vector<DecideSignature> signatures;
+	//! The objective's signature: it is produced once, so execution refuses a second instance (D72). INVALID_INDEX when
+	//! the objective has no field.
+	idx_t objective_signature = DConstants::INVALID_INDEX;
 
 	//! The bounds RewriteRhsAggregates left to a rule, in clause order; see DecideReducedBound. Empty once the solver
 	//! path has built their side tables (DirectSourceReader::AddSideTable).
@@ -621,6 +752,41 @@ public:
 	//! The reducers the bounds read from the data, in the order the bound-side rewrite met them. Empty once the path
 	//! has built their side tables (DirectSourceReader::AddSideTable).
 	vector<DecideBoundAggregate> bound_aggregates;
+
+	//! During the tree evaluator's transition, side tables still serve the flat
+	//! oracle. Keep the data reducer's semantics and its resolved result reference
+	//! so the executable graph can compute it independently. Enumerated with the
+	//! operator's live expressions; never serialized (the optimizer creates it).
+	struct RetainedBoundAggregate {
+		DecideBoundAggregate aggregate;
+		unique_ptr<Expression> placeholder;
+	};
+	vector<RetainedBoundAggregate> retained_bound_aggregates;
+	//! The checks side plans execute during the transition, retained for tree execution.
+	vector<unique_ptr<Expression>> retained_row_checks;
+	//! Semantic expressions before a destructive algebraic rewrite. Enumerated so their source bindings stay live.
+	vector<unique_ptr<Expression>> retained_expressions;
+	//! The objective's `when` when RewriteComposedMinMaxObjectiveTop left no term beside its MIN/MAX terms, for the
+	//! tree's objective root (language/guide.md §4): an index into retained_expressions, which keeps its bindings live;
+	//! INVALID otherwise. Never serialized (the optimizer creates it).
+	idx_t retained_objective_when = DConstants::INVALID_INDEX;
+
+	//! A reducer over data whose argument reads a frame (language/guide.md §5.6): no side table can read a frame, whose
+	//! values execution computes, so the reducer stays in the tree, tagged with its entry (FRAME_AGGREGATE_TAG_PREFIX)
+	//! over the rows it reads (its filter), and stage 05 makes it a frame column execution computes after the frames
+	//! (DecideFrameColumn::Kind::AGGREGATE). Made by the bound-side rewrite; not serialized (an optimized plan never
+	//! is).
+	struct FrameAggregate {
+		//! Its path key: it has one value per group (FindOrCreateDecidePathKey); INVALID_INDEX for the whole query.
+		idx_t key = DConstants::INVALID_INDEX;
+		//! Its own `per` key, whose classes it counts once per signature; INVALID_INDEX for `per row`.
+		idx_t class_key = DConstants::INVALID_INDEX;
+		//! The reducer as written.
+		string text;
+		//! The order of the norm it was written as, whose body execution reads a NaN in; empty for any other reducer.
+		string norm_order;
+	};
+	vector<FrameAggregate> frame_aggregates;
 
 	//! The registered name ("gurobi", "highs") of the solver this query will run on,
 	//! chosen ONCE by ChooseDecideSolver before any rewrite pass and carried from here
@@ -657,14 +823,6 @@ public:
 	//! answers that question. It does not re-decide the policy: it applies this one to
 	//! a fact only it can see, the same way the `<>` range collapse does.
 	bool force_native_constructs = false;
-
-	// --- Prepared linear form (built by BuildDecidePreparedModel, stage 05) ---
-
-	//! Every constraint and the objective, already flattened into additive terms.
-	//! Physical execution evaluates each term's coefficient against the relational
-	//! input; it does not re-derive the shape. Empty until the DECIDE optimizer's
-	//! final pass fills it, and moved into PhysicalDecide at physical planning.
-	DecidePreparedModel prepared;
 
 	//! True once the solver formulation has begun (ChooseDecideSolver): the rewrites after it express the query for the
 	//! backend chosen. The bound-side rewrite (RewriteRhsAggregates) and the direct-solve rules run before it.
@@ -715,11 +873,6 @@ public:
 	//! The columns the node's expressions read from its input: the child's, then the placeholders of the bound
 	//! aggregates the path has not built yet (bound_aggregates).
 	vector<ColumnBinding> SourceBindings();
-
-	//! Re-points the user's names of the source columns (source_columns) once the source `old_source` is read under
-	//! `new_bindings`, one per column of it. They are keyed by DecideSourceColumnKey, not by binding, so
-	//! ColumnBindingReplacer, which re-points the expressions, leaves them.
-	void RepointSourceColumns(LogicalOperator &old_source, const vector<ColumnBinding> &new_bindings);
 
 	// --- Implement virtual functions ---
 

@@ -182,7 +182,7 @@ the one place that refuses on it.
 over the whole bound constraint tree, the objective and every `by` key: *"DECIDE:
 random() is not supported in a constraint"*. The check reads each function's own
 stability, since `IsVolatile()` is also true for every expression above a volatile one.
-Every later stage reads a clause more than once (the scope checks, the rows, the
+Every later stage reads a clause more than once (the signatures, the rows, the
 bound-side window, direct solve's plan), so one volatile value would select different
 rows each time; refusing it here is what lets those stages evaluate a clause freely.
 A value computed once per row in a subquery or CTE before DECIDE is data and stays
@@ -267,9 +267,9 @@ reducer counts once. `per row` adds nothing. A `by` after the reducer is
 (`AddRelationColumns`), and `FindOrCreateScope` — shared with `FindOrCreateKeyScope` — finds or creates the key's scope,
 so `SUM(D: e)` and `sum(per D: e)` share one scope and one tag (`__qualified_by_<i>__`, appended to the aggregate's
 alias). A message quotes the colon form as written; EXPLAIN reprints the reducer, so it shows `sum(per D: e)` (D38).
-Nothing is checked against the body at bind time: that `D` determines it — every column, per-row and keyed decision in
-it — is the DETERMINES check of stage 04, on the data, as for `per` (*"DECIDE: per D does not determine the decision y
-(in sum(D: ...))"*). Refused at bind time: a qualifier that is not a relation name, a relation not in the FROM clause, a
+Nothing is checked against the body at bind time: a body that reads more than `D` holds -- a column of another
+relation, a per-row decision -- is one value per variant of each tuple (D71), which the signature of stage 04 records,
+as for `per`. Refused at bind time: a qualifier that is not a relation name, a relation not in the FROM clause, a
 qualifier on anything but `SUM`, `AVG`, `MIN`, `MAX` or `norm`, and on the decision side a body of query-wide decisions
 alone (`ClassifyReducerCall`, as for any reducer). `norm` binds as a `SUM` marker, so `norm(D: e, p)` carries the tag
 like `SUM(D: e)`; stage 04's definition of orders 1, 2 and `'inf'` and stage 05's L0 lowering keep the alias, so every
@@ -329,8 +329,8 @@ is the bound, and `IsAllowedDecisionFreeBoundExpression` decides which shapes it
 take: constants, data columns, operators and functions over allowed operands, casts,
 scalar subqueries, and data-only reducers with their own `when`, `per` and `by`. A data
 column is a bound like any other: a clause with no `per` is generated once per kept
-row, so the tightest row's value binds; under `per K:` the key must determine it, which
-is a run-time check (stage 04, "Scope checks"). Arithmetic composes freely, `-`
+row, so the tightest row's value binds; under `per K:` each of its values in a class is a
+variant (D70, stage 04, "Variant signatures"), so the tightest binds again. Arithmetic composes freely, `-`
 included: a bound is evaluated as an expression over the row, so subtraction is no
 different from addition, and `-5.0::DOUBLE` is a negative bound like any other. A colon-form or `by` marker recurses
 into child 0 only: its relations or key are not values on that side. A data-only
@@ -537,13 +537,18 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
   supported in when, per or by"*. Each reads rows the scope has not chosen yet, so
   `ValidateScopeData` refuses them with a caret, in that order, before execution sees the
   query. A `per` key cannot hold one: the grammar takes only columns and relations there;
-- a reducer inside a reducer: *"DECIDE: an aggregate inside an aggregate is not supported
-  yet"*, except the objective's two-level form, alone or under a unary minus or a factor
-  that reads no decision (`IsTwoLevelObjective`, through `ObjectiveFactorOperand`; the
-  factor binds with the rest of the term, and a factor that varies per row keeps the
-  objective's own refusal), and except a
-  reducer over data alone under a `*` or `/` that holds a decision (`sum(avg(cap) * x)`):
-  that is a coefficient, refused by `ValidateDecideNoDataAggregateFactor` with its remedy.
+- a reducer nests in another to any depth (D79-D81, guide §5.5), and its body is held to
+  the rule of any reducer's (`ValidateSumArgumentInternal` reads through a nested
+  reducer's `by` and qualifier). `ValidateScopePlacement` refuses what a nest may not hold
+  (D80), a norm rewritten before the value rewrite reads the path, so the inner reducer
+  would lose the enclosing `when` and `by`: *"DECIDE: norm inside a reducer is not supported
+  yet"* and *"DECIDE: a reducer inside norm is not supported yet"*. An ABS, a square or a
+  product with a decision around a nested reducer binds: the tree keeps the inner reducer as
+  its own G node and the enclosing function reads that value. A reducer over data alone added
+  inside one over decisions binds as data (`ValidateSumArgumentInternal`), a value of its
+  path's group that stage 05 computes (`RewriteRhsAggregates`), under a `*` or `/` that holds a
+  decision too (`sum(avg(cap) * x)`), a coefficient; outside every reducer over decisions
+  (`x * avg(cap) <= 3`) `ValidateDecideNoDataAggregateFactor` refuses it with its remedy.
 
 | Written | Bound |
 |---|---|
@@ -555,7 +560,7 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 | `agg(when c: e)` | the aggregate's `filter` (§3) |
 | `agg(per K': e)`, `SUM(D: e)` | a `__qualified_by_<i>__` tag on an exact key scope; the colon form shares the scope of `per D` (§3) |
 | `MAXIMIZE when c: E` | a WHEN wrapper over the objective |
-| `outer(per k: inner(e) by (k))` | `PER{outer(inner(e))}` (`TWO_LEVEL_OBJECTIVE_TAG`), tagged with k's entry, located at its `per`; a `when` in front sits inside it, `PER{WHEN{outer(inner(e)), c}}` |
+| `outer(per k: inner(e) by (k))` | a nested reducer like any other (D81): `outer` qualified by k, `inner` tagged with its `by` |
 
 - `BindScopedConstraint` binds the body, the condition as data, the key through
   `BindKey` (a declaration key's resolution into the key table; a column element keeps
@@ -570,11 +575,8 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
   holding a subquery, written alike — a bound subquery equals nothing, not even itself.
 - `BindScopedReducer` peels the inner `per`/`when` (§3); `SUM(D: e)` is `sum(per D: e)`
   (`BindQualifiedReducer`, §3) and may take a `by`.
-- `BindScopedObjective`: `per ()` adds nothing; a `when` wraps the body, inside the
-  two-level form's `TWO_LEVEL_OBJECTIVE_TAG` wrapper. `BindTwoLevelObjective` refuses a `when` inside either
-  reducer, a `per` inside the inner one, a `by` key that is not the `per` key, and an
-  outer `avg` (*"DECIDE: avg over the classes of avg(per g: sum(...) by (g)) is not
-  supported yet; write sum, min or max over them"*). A decision outside the objective's
+- `BindScopedObjective`: `per ()` adds nothing; a `when` wraps the body. A nested reducer
+  binds as in a constraint. A decision outside the objective's
   reducers binds: a query-wide one is one column, and any other must have one instance
   over the kept rows, a run-time check. The objective's
   expressions are located like a constraint's.
@@ -599,13 +601,54 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 
 ---
 
+## 4b. Frame selectors
+
+`ValidateDecideScopeSpellings` reads a frame before it binds (`ValidateFrame`, `decide_binder.cpp`; D80): its order
+key and `within` key take data only (*"DECIDE: x is a decision; a frame's order key and within may only use data"*),
+no window, no reducer and no frame; its payload and fallback hold no reducer and no other frame and square or
+multiply no decision (*"... squares or multiplies decisions inside at(...)"*); a frame over decisions a decision
+multiplies, or squared, binds: stage 05 makes it the range of its one position, a helper per position
+(`RewriteFrameRanges`); a frame over data is a coefficient read at another row, as a column is one read at the row. A payload or fallback not linear in the decisions otherwise -- `abs(x - 3)`, a decision
+divisor -- is refused too (`FindNonlinearDecisionUse`: *"... inside at(...) is not linear in the decisions, which is
+not supported yet; write it outside the frame"*): the rewrite rows of an `abs` would stand at the anchor while the
+frame reads another row. So is an `else` that reads a decision beside a payload that reads none, which no layer below
+would see: the marker's children are the payload's (*"... else s reads a decision while the payload reads none, which
+is not supported yet"*). `ValidateScopeData` refuses a frame in a `when`, a key or a `by`
+(`ValidateNoFrame`: *"DECIDE: a frame selector is not allowed in when, per, by, within or an order key"*).
+
+`DecideBinder::BindDecideFrame` binds the frame onto the aggregate that reads its payload at the selected rows: the
+range's reducer (`sum`, `avg`, `min`, `max` or `count`), else `first`, which reads the one row a point selects. It
+records a `DecideFrameSpec` (`logical_decide.hpp`) on the clause's frame list, the aggregate tagged
+`__frame_<i>__` and with the frame as written (its defaults left out) as a source fragment of its own: the anchors and
+their `k`, `every`, `all`, the fallback (a number, *"in at(...), else 'a' is not a number"*; `else NULL` written, or one
+that folds to NULL, is none, D86), the order key bound as
+plain SQL, `desc`, `cyclic`, and the `within` key, resolved as a `per` key is into the one key table
+(`within_key`), so a row whose written `within` column is NULL is in no timeline (D5, D75). A frame over data is data
+on a bound's side (`IsDataOperand` sends it to the DECIDE binder all the same); alone at a clause's top it is
+refused as a bare decision is. A point's marker takes the common type of payload and fallback (`else 0.5` over a
+whole payload), so a frame over data reads one value of that type, a DATE or a BOOLEAN as much as a number. No other
+binder sees one: the parser builds a frame only inside a DECIDE clause, and an outer column in its order key, `within` or
+payload is refused as in any clause (*"'o.id' refers to an outer query"*) before an outer query could bind the clause;
+`ExpressionBinder` treats a frame as an internal error.
+
+Planning (`Binder::CreatePlan`, `plan_select_node.cpp`) plans the subqueries of every frame's order key and fallback
+with the clause's; the canonicalizer then places every frame after canonicalizing the tree (`PlaceFrames`,
+`PlaceObjectiveFrames`), and a frame no walk placed is an internal error.
+
+A range's `else` is one of the values its reducer reads, so payload and `else` take one type, as a point's do, and the
+reducer is bound again over it (`BindFrameAggregate`, the catalog aggregate over a bound payload, a point's `first`
+too): `else 0.5` over a whole payload sums decimals, and the `else` takes the type the bound reducer reads, which its
+overload may widen (`sum` of a FLOAT reads a DOUBLE). The range's reducer name is recorded
+(`DecideFrameSpec::reducer`). A frame is a value of the row to the strict-comparison check
+(`DecideSideIsWholeNumbered`): whole when the type its payload and `else` share is, an AVG range never; and an AVG
+range is no AVG the `<>` hoist multiplies through (`IsBoundAvgAggregate`), so under `<>` it is refused as fractional.
+
 ## 5. Objective
 
 `DecideObjectiveBinder` binds `MAXIMIZE` / `MINIMIZE` bodies through the same
 `DecideBinder` rules. It knows the sense the user wrote (`decide_sense`), which its
 messages quote; stage 04 writes every objective as a minimization
-(`../04_canonicalizer/done.md` §3.9). A scope in front (`BindScopedObjective`) and the two-level form
-(`BindTwoLevelObjective`) are bound as §4a describes. It performs no algebraic
+(`../04_canonicalizer/done.md` §3.9). A scope in front (`BindScopedObjective`) is bound as §4a describes. It performs no algebraic
 rewriting: the objective's shape — its additive spine, its reducer scales, its
 constant offset — is decided once by `DecideCanonicalizer::CanonicalizeObjective` on
 the bound tree, alongside constraints.
@@ -647,7 +690,7 @@ the select list is bound before any exists, so an auxiliary never appears in
 | Shared DECIDE expression rules (`IsDataOperand`), reducers, key scopes (`FindOrCreateKeyScope`, `FindOrCreateScope`, `BindKey`), where scopes may stand (`ValidateDecideScopeSpellings`) | `src/planner/expression_binder/decide/decide_binder.cpp` |
 | Degree, and the check that refuses on it (stage 04) | `src/planner/decide/decide_product_form.cpp`, `decide_shape_check.cpp` |
 | `SUCH THAT` binding and a constraint's scope (`BindScopedConstraint`) | `src/planner/expression_binder/decide/decide_constraints_binder.cpp` |
-| Objective binding, its scope and the two-level form | `src/planner/expression_binder/decide/decide_objective_binder.cpp` |
+| Objective binding and its scope | `src/planner/expression_binder/decide/decide_objective_binder.cpp` |
 | Refusing a DECIDE that reads an outer query (`ThrowIfOuterColumn`; the `WHERE` backstop in `BindSelectNode`) | `src/planner/expression_binder/decide/decide_binder.cpp`, `src/planner/binder/query_node/bind_select_node.cpp` |
 | Which parts of a query a walk visits (`decide_clauses`) | `src/parser/parsed_expression_iterator.cpp` |
 | Key scope struct | `src/include/duckdb/planner/operator/decide/logical_decide.hpp` |

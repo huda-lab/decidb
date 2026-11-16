@@ -415,6 +415,9 @@ static int ExtremumArgumentColumn(SolverInput &input, const VarIndexer &indexer,
 void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const ExtremumLinkSpec &spec,
                       const ExtremumMemberSource &members, const vector<string> &var_names,
                       NativeConstructPolicy policy) {
+	if (members.count == 0) {
+		return;
+	}
 	int result_col = (int)spec.result_column;
 	// One scratch row serves every member: each is built into it, copied into the row the model receives, and
 	// overwritten by the next.
@@ -426,6 +429,24 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
 		members.fill_link(i, link);
 		return link;
 	};
+
+	// A family of one member is that member (deck p. 112): one equality pins `result` from both sides, with no
+	// indicator and no Big-M -- so a side no box bounds needs none. It takes the kind of the side the site needs,
+	// where that side is mechanism a diagnosis never loosens; a composed clause's closing rows are its user's clause,
+	// loosened one way, which an equality would not be.
+	const auto one_kind = spec.need_closing ? spec.closing_kind : spec.envelope_kind;
+	const bool kinds_agree = !(spec.need_envelope && spec.need_closing && spec.envelope_kind != spec.closing_kind);
+	if (members.count == 1 && kinds_agree && !IsRelaxableForElastic(one_kind)) {
+		auto &member = fill_member(0);
+		auto rc = member.LeftHandSide(result_col);
+		rc.sense = '=';
+		rc.rhs = member.constant;
+		rc.kind = one_kind;
+		rc.source_clause_id = spec.source_clause_id;
+		rc.removal_group_id = spec.removal_group_id;
+		input.global_constraints.push_back(std::move(rc));
+		return;
+	}
 
 	// The envelope, on both arms. It is one row per member with no constant to dominate,
 	// and on the native arm it is implied by the general constraint rather than
@@ -511,14 +532,11 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer, con
                               const vector<string> &var_names, NativeConstructPolicy native_min_max) {
 	idx_t num_rows = input.num_rows;
 
-	// Save objective data (needed for constraint generation in the two-level MIN/MAX
-	// and flat aggregate paths). The coefficients — num_terms columns of num_rows — move rather
-	// than copy: each of those paths clears the objective from `input` before it reads anything
-	// else of it, and the one that keeps it (inner SUM, outer SUM) moves it back.
+	// Save objective data (needed for constraint generation in the flat aggregate path).
+	// The coefficients — num_terms columns of num_rows — move rather than copy: that path
+	// clears the objective from `input` before it reads anything else of it.
 	auto saved_obj_var_indices = input.objective_variable_indices;
-	bool need_saved_obj = !saved_obj_var_indices.empty() &&
-	                      ((spec.per_inner_agg != ObjectiveAggregateType::NONE && input.objective_num_groups > 0) ||
-	                       spec.flat_agg != ObjectiveAggregateType::NONE);
+	bool need_saved_obj = !saved_obj_var_indices.empty() && spec.flat_agg != ObjectiveAggregateType::NONE;
 	vector<CoefficientColumn> saved_obj_coefficients;
 	if (need_saved_obj) {
 		saved_obj_coefficients = std::move(input.objective_coefficients);
@@ -576,10 +594,9 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer, con
 	//! direction supplies the envelope — so these are always complementary here, unlike
 	//! at a composed site where the clause sits in a constraint and neither is supplied.
 	//!
-	//! `family` is the range the MEMBERS of this link reduce over, and it is a parameter
-	//! rather than `row_family()` because the two-level form's outer link reduces over group SUMS, not
-	//! over rows. Both the Big-M and the blame column come from it, so a link can never
-	//! be scaled off one family while its members live in another.
+	//! `family` is the range the MEMBERS of this link reduce over. Both the Big-M and the
+	//! blame column come from it, so a link can never be scaled off one family while its
+	//! members live in another.
 	auto objective_link = [&](idx_t result_column, bool is_max, bool is_easy, const AuxRange &family) {
 		ExtremumLinkSpec link_spec;
 		link_spec.result_column = result_column;
@@ -596,11 +613,10 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer, con
 	// Accumulate one row of the saved objective expression, negated: the linking row is
 	// `z - expr op bound`, so the expression's coefficients enter with the opposite sign
 	// and its constant part lands on the bound. The columns collect in `row_terms` until
-	// a member's rows are all in; `link` takes them there. `scale` carries the
-	// inner-AVG 1/n_g factor at the two-level sites; 1.0 elsewhere.
-	auto AddObjectiveRowTerms = [&](MinMaxLinkRow &link, idx_t row, double scale) {
+	// a member's rows are all in; `link` takes them there.
+	auto AddObjectiveRowTerms = [&](MinMaxLinkRow &link, idx_t row) {
 		for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
-			double coeff = saved_obj_coefficients[t].Get(row) * scale;
+			double coeff = saved_obj_coefficients[t].Get(row);
 			if (std::abs(coeff) < 1e-15) {
 				continue;
 			}
@@ -613,171 +629,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer, con
 		}
 	};
 
-	if (spec.per_inner_agg != ObjectiveAggregateType::NONE && !saved_obj_var_indices.empty() &&
-	    input.objective_num_groups > 0) {
-		// ================================================================
-		// PATH B: two-level objective outer(per k: inner(e) by (k))
-		// ================================================================
-		idx_t K = input.objective_num_groups;
-		auto &row_groups = input.objective_row_group_ids;
-
-		// Build group→rows CSR index once, reuse across phases.
-		BuildGroupCSR(row_groups, K, input.objective_group_offsets, input.objective_group_row_ids);
-		auto &obj_offsets = input.objective_group_offsets;
-		auto &obj_flat_rows = input.objective_group_row_ids;
-		auto group_size = [&](idx_t g) {
-			return obj_offsets[g + 1] - obj_offsets[g];
-		};
-
-		// Clear per-row objective (auxiliaries become the objective)
-		input.objective_coefficients.clear();
-		input.objective_variable_indices.clear();
-
-		// Phase A: Inner aggregate — produces K per-group values
-		// These are either group sums (no aux) or z_g auxiliaries (inner MIN/MAX)
-		bool inner_is_minmax = (spec.per_inner_agg == ObjectiveAggregateType::MIN_AGG ||
-		                        spec.per_inner_agg == ObjectiveAggregateType::MAX_AGG);
-		bool inner_is_min = (spec.per_inner_agg == ObjectiveAggregateType::MIN_AGG);
-
-		// group_value_indices[g] = solver variable index for group g's value
-		// For inner SUM: not used (group sums go directly to outer as coefficients)
-		// For inner MIN/MAX: index of z_g global variable
-		vector<idx_t> group_value_indices(K);
-
-		if (inner_is_minmax) {
-			// Inner MIN/MAX: create z_g auxiliary per group
-			bool inner_easy = spec.per_inner_is_easy;
-
-			// Each z_g is an extremum over rows of its group, so every one of them is
-			// boxed by the same per-row family.
-			for (idx_t g = 0; g < K; g++) {
-				group_value_indices[g] =
-				    AddGlobalContinuousAux(input, indexer, row_family(), 0.0); // obj set by outer phase
-			}
-
-			// The members of group g are its rows (obj_flat_rows): the objective's grouping holds only the rows the
-			// reducer reads, whatever their coefficients, so every group has one.
-			for (idx_t g = 0; g < K; g++) {
-				ExtremumMemberSource members;
-				members.count = group_size(g);
-				members.fill_link = [&, g](idx_t i, MinMaxLinkRow &link) {
-					AddObjectiveRowTerms(link, obj_flat_rows[obj_offsets[g] + i], 1.0);
-					row_terms.Flush(link.indices, link.coefficients);
-				};
-				members.range = [&, g](idx_t i) {
-					return row_range_for(obj_flat_rows[obj_offsets[g] + i]);
-				};
-				EmitExtremumLink(input, indexer,
-				                 objective_link(group_value_indices[g], !inner_is_min, inner_easy, row_family()),
-				                 members, var_names, native_min_max);
-			}
-		}
-
-		// Phase B: Outer aggregate — combines K group values into scalar objective
-		bool outer_is_sum = (spec.per_outer_agg == ObjectiveAggregateType::SUM);
-		bool outer_is_min = (spec.per_outer_agg == ObjectiveAggregateType::MIN_AGG);
-
-		if (inner_is_minmax && outer_is_sum) {
-			// Outer SUM: objective = sum of z_g's
-			for (idx_t g = 0; g < K; g++) {
-				input.global_obj_coeffs[group_value_indices[g] - indexer.global_block_start] = 1.0;
-			}
-		} else if (inner_is_minmax) {
-			// Outer MIN/MAX over z_g's: create global w auxiliary
-			bool outer_easy = spec.per_outer_is_easy;
-
-			// w is an extremum over the z_g's, and every z_g is boxed by the per-row
-			// family, so w inherits that same box.
-			idx_t w_idx = AddGlobalContinuousAux(input, indexer, row_family(), 1.0); // objective = w
-
-			// The members are the group values themselves — already columns, so a
-			// native arm needs no pinning rows at all and the envelope reads
-			// `w - z_g <op> 0`.
-			ExtremumMemberSource members;
-			members.count = K;
-			members.fill_link = [&](idx_t g, MinMaxLinkRow &link) {
-				link.indices.push_back((int)group_value_indices[g]);
-				link.coefficients.push_back(-1.0);
-			};
-			members.range = [&](idx_t) {
-				return row_family();
-			};
-			// Outer Big-M: the family range is the global span of the objective
-			// expression (max_r exprmax - min_r exprmin), which bounds the span of
-			// (w - z_g) since every z_g is boxed by that same range.
-			EmitExtremumLink(input, indexer, objective_link(w_idx, !outer_is_min, outer_easy, row_family()), members,
-			                 var_names, native_min_max);
-		} else if (outer_is_sum) {
-			if (spec.per_inner_was_avg) {
-				// Inner AVG + Outer SUM: scale each row's coefficient by 1/n_g
-				// SUM over groups of AVG(expr) = Σ_g (Σ_{r∈g} c_r * x_r) / n_g
-				for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
-					auto &col = saved_obj_coefficients[t].MutableDense();
-					for (idx_t row = 0; row < num_rows; row++) {
-						if (row_groups[row] != DConstants::INVALID_INDEX) {
-							idx_t g = row_groups[row];
-							col[row] /= static_cast<double>(group_size(g));
-						}
-					}
-				}
-			}
-			// Restore (possibly scaled) objective coefficients
-			input.objective_coefficients = std::move(saved_obj_coefficients);
-			input.objective_variable_indices = std::move(saved_obj_var_indices);
-		} else {
-			// Inner SUM + Outer MIN/MAX: compute per-group sums, then optimize over them
-			// Create w auxiliary for outer MIN/MAX over group sums
-			bool outer_easy = spec.per_outer_is_easy;
-
-			// This w reduces over group SUMS, not over rows, so it does NOT share the
-			// per-row family's box: a group sum leaves any single row's range as soon
-			// as the group holds more than one row. Derive the box from the actual
-			// per-group sums — each group's rows added up under the same inner-AVG
-			// scale the pinning rows below use — which is both correct and tighter than
-			// widening the per-row family by num_rows.
-			// `scale` is positive, so a member's floor stays the sum's floor, and a sum is open
-			// at an end exactly when some member is.
-			AuxRange group_sum_family;
-			for (idx_t g = 0; g < K; g++) {
-				double scale = spec.per_inner_was_avg ? 1.0 / static_cast<double>(group_size(g)) : 1.0;
-				SignedRowRange group_sum;
-				for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
-					auto rr = saved_row_range(obj_flat_rows[k]);
-					group_sum.lo += rr.lo * scale;
-					group_sum.hi += rr.hi * scale;
-					group_sum.lo_open |= rr.lo_open;
-					group_sum.hi_open |= rr.hi_open;
-					if (group_sum.unbounded_var == DConstants::INVALID_INDEX) {
-						group_sum.unbounded_var = rr.unbounded_var;
-					}
-				}
-				group_sum.CoverInto(group_sum_family);
-			}
-			idx_t w_idx = AddGlobalContinuousAux(input, indexer, group_sum_family, 1.0); // objective = w
-
-			// Each member is one group's sum: sum_g = Σ_{r ∈ group_g} Σ_t coeff_t_r * x.
-			ExtremumMemberSource members;
-			members.count = K;
-			members.fill_link = [&](idx_t g, MinMaxLinkRow &link) {
-				double scale = spec.per_inner_was_avg ? 1.0 / static_cast<double>(group_size(g)) : 1.0;
-				for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
-					AddObjectiveRowTerms(link, obj_flat_rows[k], scale);
-				}
-				row_terms.Flush(link.indices, link.coefficients);
-			};
-			// Boxed by the family over group sums — looser than a per-group bracket,
-			// but sound (it covers every group) and finite whenever any of them is.
-			// The same range `w` itself was boxed by, so the two cannot drift.
-			members.range = [&](idx_t) {
-				return group_sum_family;
-			};
-			// Every group is a member, whatever its coefficients. The members ARE the
-			// group sums, so the Big-M comes from the family over group sums — the same
-			// range `w` and every member is boxed by.
-			EmitExtremumLink(input, indexer, objective_link(w_idx, !outer_is_min, outer_easy, group_sum_family),
-			                 members, var_names, native_min_max);
-		}
-	} else if (spec.flat_agg != ObjectiveAggregateType::NONE) {
+	if (spec.flat_agg != ObjectiveAggregateType::NONE) {
 		// ================================================================
 		// PATH A: flat MIN/MAX objective
 		// ================================================================
@@ -811,7 +663,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer, con
 		ExtremumMemberSource members;
 		members.count = active_rows.size();
 		members.fill_link = [&](idx_t i, MinMaxLinkRow &link) {
-			AddObjectiveRowTerms(link, active_rows[i], 1.0);
+			AddObjectiveRowTerms(link, active_rows[i]);
 			row_terms.Flush(link.indices, link.coefficients);
 		};
 		members.range = [&](idx_t i) {
@@ -833,11 +685,11 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer, con
 //! the pinning row is `z - expr op bound`, so the expression's coefficients enter
 //! with the opposite sign and its constant part lands on the bound.
 static void AddComposedRowTerms(const VarIndexer &indexer, SparseCoeffAccumulator &row_terms, MinMaxLinkRow &link,
-                                const vector<DecideTerm> &inner_terms, const vector<vector<double>> &per_term_coefs,
-                                idx_t row, const string &written) {
-	for (idx_t it = 0; it < inner_terms.size(); it++) {
+                                const vector<idx_t> &variables, const vector<vector<double>> &per_term_coefs, idx_t row,
+                                const string &written) {
+	for (idx_t it = 0; it < variables.size(); it++) {
 		double coeff = per_term_coefs[it][row];
-		idx_t v = inner_terms[it].variable_index;
+		idx_t v = variables[it];
 		if (v == DConstants::INVALID_INDEX) {
 			link.AddConstant(coeff, written);
 		} else {
@@ -852,9 +704,8 @@ static void AddComposedRowTerms(const VarIndexer &indexer, SparseCoeffAccumulato
 //! so the two can never disagree about the term's reach.
 //!
 //! A term admitting no rows yields the seeded [0,0], which pins its auxiliary at 0 —
-//! the same settlement the two-level sites give a group with no active rows, and better than
-//! letting an auxiliary with no pinning rows float on the outer pressure.
-static AuxRange ComposedTermRange(const SolverInput &input, const vector<DecideTerm> &inner_terms,
+//! better than letting an auxiliary with no pinning rows float on the outer pressure.
+static AuxRange ComposedTermRange(const SolverInput &input, const vector<idx_t> &variables,
                                   const vector<vector<double>> &per_term_coefs, const vector<bool> &filter_mask) {
 	AuxRange range;
 	for (idx_t row = 0; row < input.num_rows; row++) {
@@ -862,7 +713,7 @@ static AuxRange ComposedTermRange(const SolverInput &input, const vector<DecideT
 			continue;
 		}
 		auto rr = SignedRowRange::Of(
-		    inner_terms.size(), [&](idx_t it) { return inner_terms[it].variable_index; },
+		    variables.size(), [&](idx_t it) { return variables[it]; },
 		    [&](idx_t it) { return per_term_coefs[it][row]; }, [&](idx_t v) { return input.lower_bounds[v]; },
 		    [&](idx_t v) { return input.upper_bounds[v]; });
 		rr.CoverInto(range);
@@ -897,6 +748,9 @@ static void EmitComposedMinMaxAuxiliaries(SolverInput &input, const VarIndexer &
                                           NativeConstructPolicy native_min_max) {
 	idx_t num_rows = input.num_rows;
 
+	// A term reads its variable through the indexer at each row, so a frame's payload term
+	// -- a read of its decision at the row the frame selects -- lands on that row's column,
+	// and its box is its base decision's (SolverInput::frame_reads).
 	// Every `z_k` first, so one clause's auxiliaries occupy a contiguous run of the
 	// global block whatever formulation each term then turns out to need. The range is
 	// computed once here and reused as the closing Big-M and as the box of any column a
@@ -908,7 +762,7 @@ static void EmitComposedMinMaxAuxiliaries(SolverInput &input, const VarIndexer &
 		if (!ta.is_minmax) {
 			continue;
 		}
-		term_range[i] = ComposedTermRange(input, (*ta.inner_terms), ta.per_term_coefs, ta.filter_mask);
+		term_range[i] = ComposedTermRange(input, ta.variables, ta.per_term_coefs, ta.filter_mask);
 		// The label names the z through the global label channel, so a diagnosis
 		// renders `MAX(x)` rather than an internal column name.
 		ta.z_idx = AddGlobalContinuousAux(input, indexer, term_range[i], 0.0, ta.label);
@@ -927,11 +781,11 @@ static void EmitComposedMinMaxAuxiliaries(SolverInput &input, const VarIndexer &
 			}
 		}
 		SparseCoeffAccumulator row_terms;
-		row_terms.BeginForDecisions(indexer, ta.inner_terms->size(), written);
+		row_terms.BeginForDecisions(indexer, ta.variables.size(), written);
 		ExtremumMemberSource members;
 		members.count = rows.size();
 		members.fill_link = [&](idx_t k, MinMaxLinkRow &link) {
-			AddComposedRowTerms(indexer, row_terms, link, (*ta.inner_terms), ta.per_term_coefs, rows[k], written);
+			AddComposedRowTerms(indexer, row_terms, link, ta.variables, ta.per_term_coefs, rows[k], written);
 		};
 		// The TERM's range, not the row's: looser than a per-row bracket, but it is
 		// the one the auxiliary itself is boxed by and the one the Big-M comes from,
@@ -998,22 +852,26 @@ void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &ind
 			}
 			continue;
 		}
-		// SUM/AVG term. For AVG, divide by filtered row count; a term that reads no row skips its whole clause
-		// (PhysicalDecide, `reads_no_row`), so the count is not 0.
+		// SUM/AVG term. For AVG, divide by filtered row count.
 		double avg_divisor = 1.0;
 		if (ta.agg_name == "avg") {
-			avg_divisor = static_cast<double>(ComposedTermRows(ta, num_rows));
+			idx_t cnt = ComposedTermRows(ta, num_rows);
+			if (cnt == 0) {
+				// Empty aggregate — contributes 0; skip.
+				continue;
+			}
+			avg_divisor = static_cast<double>(cnt);
 		}
-		for (idx_t it = 0; it < (*ta.inner_terms).size(); it++) {
-			auto &inner_t = (*ta.inner_terms)[it];
+		for (idx_t it = 0; it < ta.variables.size(); it++) {
+			const idx_t variable = ta.variables[it];
 			for (idx_t row = 0; row < num_rows; row++) {
 				if (!ta.filter_mask[row])
 					continue;
 				double coef = ta.per_term_coefs[it][row] * (double)ta.sign * ta.scale / avg_divisor;
-				if (inner_t.variable_index == DConstants::INVALID_INDEX) {
+				if (variable == DConstants::INVALID_INDEX) {
 					AddCoefficient(outer_fixed, coef, written);
 				} else {
-					outer_terms.Add((int)indexer.Get(inner_t.variable_index, row), coef);
+					outer_terms.Add((int)indexer.Get(variable, row), coef);
 				}
 			}
 		}

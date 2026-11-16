@@ -1061,6 +1061,22 @@
         "id": 222,
         "name": "source_text",
         "type": "DecideSourceText"
+      },
+      {
+        "id": 223,
+        "name": "signatures",
+        "type": "vector<DecideSignature>"
+      },
+      {
+        "id": 224,
+        "name": "objective_signature",
+        "type": "idx_t",
+        "default": "DConstants::INVALID_INDEX"
+      },
+      {
+        "id": 225,
+        "name": "frames",
+        "type": "vector<DecideFrameSpec>"
       }
     ]
   },

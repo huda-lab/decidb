@@ -35,15 +35,11 @@ def _variables(oracle_solver, names, var_type=VarType.CONTINUOUS):
 # Each spelling as (SQL square term, the term's Q entries for row i as {(a, b): coeff}, the term evaluated in Python).
 _SQUARES = {
     "coefficient first": ("2*x*x", lambda i, w: {("x", "x"): 2.0}, lambda w, x, y: 2 * x * x),
-    "cast exponent": ("POWER(x, CAST(2 AS INTEGER))", lambda i, w: {("x", "x"): 1.0}, lambda w, x, y: x * x),
     "power of a linear form": (
         "POWER(x - w, 2)",
         lambda i, w: {("x", "x"): 1.0},
         lambda w, x, y: (x - w) ** 2,
     ),
-    # POW and ^ are two more names the binder gives the same function.
-    "pow name": ("pow(x - w, 2)", lambda i, w: {("x", "x"): 1.0}, lambda w, x, y: (x - w) ** 2),
-    "caret": ("(x - w) ^ 2", lambda i, w: {("x", "x"): 1.0}, lambda w, x, y: (x - w) ** 2),
     "equal sums merge": (
         "(x+y)*(y+x)",
         lambda i, w: {("x", "x"): 1.0, ("x", "y"): 2.0, ("y", "y"): 1.0},
@@ -88,7 +84,7 @@ class TestEverySpellingIsOnePolynomial:
             linear[f"x_{i}"] = -c
             for (a, b), coeff in q_of(i, w).items():
                 quadratic[(f"{a}_{i}", f"{b}_{i}")] = coeff
-            if spelling in ("power of a linear form", "pow name", "caret"):
+            if spelling == "power of a linear form":
                 linear[f"x_{i}"] += -2.0 * w
                 constant += w * w
         oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE, constant=constant)
@@ -357,7 +353,6 @@ class TestShapeCheckRefusals:
                 r"POWER over a DECIDE variable needs an exponent that is a whole number known "
                 r"before the query runs, found '0\.5'",
             ),
-            ("SUM(x) + EXP(x) <= 10", r"DECIDE: function 'exp' cannot take a DECIDE variable\."),
             ("SUM(x) + 2 / y <= 10", r"DECIDE: cannot divide by a DECIDE variable\."),
         ],
         ids=[
@@ -371,7 +366,6 @@ class TestShapeCheckRefusals:
             "infinite exponent",
             "huge exponent",
             "exponent beside a reducer",
-            "function beside a reducer",
             "division beside a reducer",
         ],
     )

@@ -5,6 +5,8 @@
 #include "duckdb/optimizer/decide/direct/direct_source_reader.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_aggregate.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
@@ -59,19 +61,93 @@ private:
 	//! The reducer's function over the rows it reads, in each group of its key.
 	unique_ptr<LogicalOperator> Plain(const DecideBoundAggregate &record, const vector<ExprPtr> &keys) {
 		ExprPtr reads = record.reads ? Over(*record.reads) : nullptr;
-		ExprPtr argument = record.argument ? DirectOnKeptRows(calc, reads, Over(*record.argument)) : nullptr;
+		vector<unique_ptr<Expression>> arguments;
+		for (auto &argument : record.arguments) {
+			arguments.push_back(calc.Out(DirectOnKeptRows(calc, reads, Over(*argument))));
+		}
 		vector<unique_ptr<Expression>> aggregates;
-		aggregates.push_back(DirectAggregateOf(*record.function, argument ? calc.Out(argument) : nullptr,
-		                                       reads ? calc.Out(reads) : nullptr));
+		aggregates.push_back(
+		    DirectAggregateOf(*record.function, std::move(arguments), reads ? calc.Out(reads) : nullptr));
 		return DirectAggregateOver(optimizer, std::move(read.plan), keys, std::move(aggregates));
 	}
 
-	//! The reducer's function over the classes of its `per` key that its group has: the rows it reads, with a class
-	//! (no NULL in a NO_GROUP element), are grouped by key and class to read the class's body, and the function runs
-	//! over the classes of each group. Only SUM, AVG, MIN and MAX take a `per`, so a group with no class gives NULL
-	//! whether its row is in the table or not.
+	//! Whether `expr` reads the placeholder column of a reducer recorded before this one.
+	bool ReadsRecordedReducer(const Expression &expr) const {
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+			auto table = expr.Cast<BoundColumnRefExpression>().binding.table_index;
+			for (auto &known : decide.bound_aggregates) {
+				if (known.column.table_index == table) {
+					return true;
+				}
+			}
+			return false;
+		}
+		bool reads = false;
+		ExpressionIterator::EnumerateChildren(
+		    expr, [&](const Expression &child) { reads = reads || ReadsRecordedReducer(child); });
+		return reads;
+	}
+
+	//! The fields of a body's signature (D70, D83), over the read: the key of each reducer recorded inside it, whose
+	//! placeholder column it reads, and each column its data reads -- data that reads no column, whole. A nested
+	//! reducer's value (its placeholder, NULL on a row in none of its groups) is its key alone (deck p. 81), so the
+	//! columns of its NULL test are no fields of their own.
+	void AddSignatureFields(const Expression &expr, vector<ExprPtr> &fields) {
+		if (HasDecideTag(expr.GetAlias(), BOUND_REDUCER_TAG)) {
+			AddRecordedKeys(expr, fields);
+			return;
+		}
+		if (!ReadsRecordedReducer(expr)) {
+			if (expr.IsFoldable()) {
+				return;
+			}
+			bool leaves = false;
+			std::function<void(const Expression &)> read_leaves = [&](const Expression &part) {
+				if (part.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+					leaves = true;
+					fields.push_back(Over(part));
+					return;
+				}
+				ExpressionIterator::EnumerateChildren(part, read_leaves);
+			};
+			read_leaves(expr);
+			if (!leaves) {
+				fields.push_back(Over(expr));
+			}
+			return;
+		}
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+			AddRecordedKeys(expr, fields);
+			return;
+		}
+		ExpressionIterator::EnumerateChildren(expr,
+		                                      [&](const Expression &child) { AddSignatureFields(child, fields); });
+	}
+
+	//! The key elements of each recorded reducer whose placeholder column `expr` reads.
+	void AddRecordedKeys(const Expression &expr, vector<ExprPtr> &fields) {
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+			auto table = expr.Cast<BoundColumnRefExpression>().binding.table_index;
+			for (auto &known : decide.bound_aggregates) {
+				if (known.column.table_index != table) {
+					continue;
+				}
+				for (auto &element : DecideKeyElements(decide.keys, known.key)) {
+					fields.push_back(Over(element.Grouping()));
+				}
+			}
+			return;
+		}
+		ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { AddRecordedKeys(child, fields); });
+	}
+
+	//! The reducer's function over the instances of its `per` key that its group has: the rows it reads, with a class
+	//! (no NULL in a NO_GROUP element), are grouped by key, class and the body's signature fields -- a nested
+	//! reducer by its key, data by each column it reads -- so each variant in a class is one instance, two groups whose
+	//! reducers hold one value included (D70, D71, D83), and the function runs over the instances of each group. Only
+	//! SUM, AVG, MIN and MAX take a `per`, so a group with no class gives NULL whether its row is in the table or not.
 	unique_ptr<LogicalOperator> CountedByClass(const DecideBoundAggregate &record, const vector<ExprPtr> &keys) {
-		D_ASSERT(record.argument);
+		D_ASSERT(!record.arguments.empty());
 		ExprPtr counted = record.reads ? Over(*record.reads) : nullptr;
 		vector<ExprPtr> classes = keys;
 		for (auto &element : DecideKeyElements(decide.keys, record.class_key)) {
@@ -88,18 +164,25 @@ private:
 			filter->children.push_back(std::move(rows));
 			rows = std::move(filter);
 		}
-		// The key determines the body (a scope check), so any row of a class reads it.
+		// Every row of an instance reads the same body. Its fields are the columns of the value, which every other
+		// argument is computed from (a collated MIN or MAX's key).
+		AddSignatureFields(*record.arguments[0], classes);
 		vector<unique_ptr<Expression>> body;
-		body.push_back(Arbitrary(Over(*record.argument)));
+		for (auto &argument : record.arguments) {
+			body.push_back(Arbitrary(Over(*argument)));
+		}
 		auto per_class = DirectAggregateOver(optimizer, std::move(rows), classes, std::move(body));
-		auto value_type = per_class->expressions[0]->return_type;
 		vector<ExprPtr> by_key;
 		for (idx_t i = 0; i < keys.size(); i++) {
 			by_key.push_back(calc.Col(keys[i]->return_type, ColumnBinding(per_class->group_index, i)));
 		}
-		auto class_value = calc.Col(value_type, ColumnBinding(per_class->aggregate_index, 0));
+		vector<unique_ptr<Expression>> class_values;
+		for (idx_t i = 0; i < per_class->expressions.size(); i++) {
+			class_values.push_back(calc.Out(
+			    calc.Col(per_class->expressions[i]->return_type, ColumnBinding(per_class->aggregate_index, i))));
+		}
 		vector<unique_ptr<Expression>> aggregates;
-		aggregates.push_back(DirectAggregateOf(*record.function, calc.Out(class_value), nullptr));
+		aggregates.push_back(DirectAggregateOf(*record.function, std::move(class_values), nullptr));
 		return DirectAggregateOver(optimizer, std::move(per_class), by_key, std::move(aggregates));
 	}
 };

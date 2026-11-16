@@ -20,8 +20,11 @@ prefix is implemented. The engines that compute the findings are in `../diagnost
   ([explain.md](explain.md#rendering)). `group` holds the `per` key value of an expanded finding, one row per class
   (`edit_source = expanded_group`); a NULL key value prints as `NULL`. `scope` is `row`, or `keyed` for a keyed
   decision's escape count; a query-wide decision has one instance and reports no count.
-- **Data checks still raise.** A key that does not determine its clause fails before solving, under DIAGNOSE as
-  without it ([guide.md §7](guide.md#7-determination-null-and-empty-sets)). An empty set skips its instance (D68).
+- **Data checks still raise.** An objective that would be produced more than once fails before solving, under DIAGNOSE
+  as without it ([guide.md §7.3](guide.md#73-data-checks)). An empty set skips its instance (D68). A variant is a
+  finding of its own: its `group` is its class's key value and, where its class holds more than one, its own values
+  (`a, 2`), and the row it is read at where two variants of a class differ only by the decision instance they read
+  (`a, -2, row 1`).
 
 ## Implementation
 

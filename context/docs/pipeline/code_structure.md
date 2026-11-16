@@ -16,6 +16,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `common/decide_solver_capabilities.hpp` | 07 answers, 03/05/06/08 read | `SolverConstructSupport`, `SolverModelClass`, `DecideModelShape` and `ClassifyDecideModel` (the one classifier of a model's shape), `IsNonconvexProductGroup` — the backend differences upstream stages branch on. In `common/` because stage 07 answers it but four stages above read it |
 | `parser/decide/decide_parsed_markers.hpp` | 01, 02 read | Predicates over the parsed DECIDE markers: `IsDecideMarker`, `IsDecideScopeMarker`, `IsDecideAggregateName`, `IsScopedReducerCall`, `TakesReducerBy`, `UnwrapReducerMarkers`, `ReducerArgumentBody` |
 | `parser/decide/decide_removed_spellings.hpp` | 01 | `RefuseRemovedDecideSpellings` |
+| `parser/expression/decide_frame_expression.hpp` | 01 | `DecideFrameExpression` — a parsed frame selector, a point or a range (guide §5.6) |
 | `planner/expression_binder/decide/decide_binder.hpp` | 02 | Base decision binder; `ValidateSumArgument`, `ValidateDecideScopeSpellings`, `FindOrCreateKeyScope`, `ValidateDecideNoExplicitDecisionCasts`, `ValidateDecideNoDataAggregateFactor`, the integrality gate and `DecideValueIsWholeNumbered` |
 | `planner/expression_binder/decide/decide_constraints_binder.hpp` | 02 | `SUCH THAT` |
 | `planner/expression_binder/decide/decide_objective_binder.hpp` | 02 | `MAXIMIZE` / `MINIMIZE` |
@@ -26,15 +27,17 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `planner/decide/decide_product_form.hpp` | 04 | The one spelling of a product of decisions: `NormalizeProducts`, `ReadDecideProduct`, `BuildDecideProduct`, `DecideDegreeOf` — the one definition of polynomial degree |
 | `planner/decide/decide_shape_check.hpp` | 04 | `DecideShapeCheck` — the one place the algebra of a clause is judged |
 | `planner/decide/decide_term_split.hpp` | 04/05 | `DecideTermSplitter` — reads one atom's body in the one spelling as terms; never refuses |
-| `planner/decide/decide_constraint_walk.hpp` | 04 | Which children of a node are constraints: the predicates for the `when`, `per K:` and two-level objective wrappers, and the constraint-position walk every stage shares |
+| `planner/decide/decide_constraint_walk.hpp` | 04 | Which children of a node are constraints: the predicates for the `when` and `per K:` wrappers, and the constraint-position walk every stage shares |
+| `planner/decide/decide_reducer_path.hpp` | 04 | `DecideReducerPath` — the path rule: the rows and key a nested reducer reads, shared by the canonicalizer, the bound-side rewrite and the value rewrite |
 | `planner/decide/decide_source_provenance.hpp` | 03 | Source capture and rendering |
 | `planner/decide/decide_cast_policy.hpp` | 04 | `UnwrapDecideCasts`, `StripCastsForIdentity`, `GetBareDecideColumnRef` |
-| `planner/decide/decide_prepared_model.hpp` | 05/08 | The prepared linear form — stage 05's flattened terms and `DecideProductGroup`s, stage 08's coefficients |
+| `planner/decide/decide_tree_terms.hpp` | 05/08 | The tree's term records — stage 05's lowered terms and `DecideProductGroup`s in the tree's nodes, stage 08's coefficients |
 | `optimizer/decide/decide_optimizer.hpp` | 05 | The rewrite passes |
 | `optimizer/decide/decide_linear_form.hpp` | 05 | Flattening into `decide.prepared`; the last DECIDE optimization pass |
 | `optimizer/decide/decide_solver_gate.hpp` | 05 | Backend choice, the native-construct mask, and the plan-time model-class gate |
 | `optimizer/decide/decide_optimizer_internal.hpp` | 05 | Helpers shared by the `decide_rewrite_*.cpp` passes; internal to `src/optimizer/decide/` |
 | `execution/operator/decide/physical_decide.hpp` | 08 | `PhysicalDecide`, `Term`, `DecideConstraint`, `Objective` |
+| `execution/operator/decide/decide_frame_map.hpp` | 08 | `DecideFrameMap` — a frame's timelines, the row each anchor selects, a range's windows |
 | `decidb/formulation/solver_input.hpp` | 06/08 | `SolverInput`, `EvaluatedConstraint`, `EvaluatedProductGroup`, `CoefficientColumn`, `KeyedMapping` |
 | `decidb/formulation/ilp_model.hpp` | 06 | `VarIndexer`, `SolverModel`, `ModelConstraint`, `ConstraintProvenance`, `SparseCoeffAccumulator` |
 | `decidb/formulation/ilp_linearization.hpp` | 06 | `LowerDecideConstructs` and the Big-M derivations: a tagged constraint becomes solver rows |
@@ -55,9 +58,10 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 |---|---|---|
 | `parser/decide/decide_parsed_markers.cpp` | 01 | The parsed-marker predicates, shared by the removed-spelling refusal and the binder |
 | `parser/decide/decide_removed_spellings.cpp` | 01 | Refuses the removed DECIDE spellings, naming the new spelling from the user's own text; called by the transformer and, for a stored parse tree, by `BindDeclarations` |
+| `parser/expression/decide_frame_expression.cpp` | 01 | A frame selector's parsed form: equality, copy, its text and serialization |
 | `planner/expression_binder/decide/decide_binder.cpp` | 02 | Shared DECIDE expression rules, reducers, the colon form, a reducer's own scope and `by`, key scopes, where `when` / `per` / `by` may stand, the integrality gate |
 | `planner/expression_binder/decide/decide_constraints_binder.cpp` | 02 | `SUCH THAT` |
-| `planner/expression_binder/decide/decide_objective_binder.cpp` | 02 | Objective, its scope and the two-level form |
+| `planner/expression_binder/decide/decide_objective_binder.cpp` | 02 | Objective and its scope |
 | `planner/expression_binder/decide/decide_declarations_binder.cpp` | 02 | DECIDE declarations and their scopes, the parsed-tree validators (`RefuseQualifiedDecisionReferences` among them), and the `SUCH THAT` / objective binds |
 | `planner/binder/query_node/bind_select_node.cpp` | 02 | Generic SELECT binding. Its DECIDE branch is one `DecideDeclarationsBinder::BindDeclarations()` call |
 | `planner/binder/query_node/plan_select_node.cpp` | 03/04 | Subquery flattening, correlation provenance, the user canonicalization call and the shape check |
@@ -67,6 +71,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `planner/decide/decide_product_form.cpp` | 04 | `NormalizeProducts` and the readers of the product spelling, `DecideDegreeOf` |
 | `planner/decide/decide_shape_check.cpp` | 04 | `DecideShapeCheck`: vocabulary, exponents, divisors, `CASE` and degree, run once in `plan_select_node.cpp` |
 | `planner/decide/decide_term_split.cpp` | 04/05 | `DecideTermSplitter` |
+| `planner/decide/decide_reducer_path.cpp` | 04 | The path rule (`DecideReducerPath`, `FindOrCreateDecidePathKey`) |
 | `planner/decide/decide_source_provenance.cpp` | 03 | Source display capture and rendering |
 | `planner/decide/decide_cast_policy.cpp` | 04 | Cast unwrapping |
 | `optimizer/decide/decide_optimizer.cpp` | 05 | The pass dispatcher and the helpers the passes share |
@@ -79,6 +84,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `optimizer/decide/decide_rewrite_bilinear.cpp` | 05 | Bilinear McCormick |
 | `optimizer/decide/decide_rewrite_define.cpp` | 05 | `DefineNonlinearReducerBodies`: a helper decision per row for each non-linear body a MIN/MAX formulation reads |
 | `optimizer/decide/decide_rewrite_scoped.cpp` | 05 | The value rewrite (`RewriteScopedReducers`): each decision reducer of a VALUE-shape comparison becomes a helper decision per `by` group |
+| `optimizer/decide/decide_rewrite_frames.cpp` | 05 | `RewriteFrameRanges`: a range frame over decisions becomes a helper decision per window, before any rewrite copies it |
 | `optimizer/decide/decide_singleton_row_folding.cpp` | 05 | Literal bounds folded into column boxes |
 | `optimizer/decide/decide_linear_form.cpp` | 05 | Flattens every constraint and the objective into `decide.prepared`; must run last |
 | `optimizer/decide/decide_answer_choice.cpp` | 05 | `ChooseDecideAnswer`: tries the direct-solve rules; when none applies, records the backend for the formulation passes (`ChooseDecideSolver`) |
@@ -91,12 +97,14 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `execution/operator/join/perfect_hash_join_executor.cpp` | 08 | The perfect hash join takes the LEFT and SINGLE joins, with one NULL slot past the build range; `architecture.md` § 1 |
 | `execution/physical_plan/plan_decide.cpp` | 03/08 | Logical → physical, entity key indices, verification |
 | `execution/operator/decide/physical_decide.cpp` | 08 | Extraction, materialization, evaluation, emission, readback |
+| `execution/operator/decide/physical_decide_frames.cpp` | 08 | The frame maps: each frame's timelines and the values it reads |
 | `decidb/formulation/ilp_model_builder.cpp` | 06 | `SolverModel::Build` |
 | `decidb/formulation/ilp_linearization.cpp` | 06 | `LowerDecideConstructs`, global-auxiliary allocation |
 | `decidb/formulation/linearization_bigm.cpp` | 06 | Big-M sizing and the per-row range walks |
 | `decidb/formulation/linearization_minmax.cpp` | 06 | MIN/MAX: constraints, links, objectives, composed |
 | `decidb/formulation/linearization_not_equal.cpp` | 06 | `<>` collapse and Big-M disjunction |
 | `decidb/formulation/linearization_bilinear_abs.cpp` | 06 | McCormick and ABS rows |
+| `decidb/formulation/linearization_reducer_value.cpp` | 06 | The value rewrite's helpers: where each is written in (`PlaceHelpers`, `InlineReducerValueLinks`, D89), their boxes and definitions |
 | `decidb/solver/ilp_solver.cpp` | 07 | Dispatch, INF_OR_UNBD probe, ray attachment |
 | `decidb/solver/solver_registry.cpp` | 07 | `REGISTERED_BACKENDS` — the one table naming every backend |
 | `decidb/solver/probe_models.cpp` | 07 | Probe models for the diagnostic re-solve and ray-extraction paths |
@@ -143,7 +151,6 @@ classDiagram
     class DecideObjectiveBinder {
         +BindExpression()
         +BindScopedObjective()
-        +BindTwoLevelObjective()
         +GetExpressionType()
     }
 
@@ -244,16 +251,15 @@ classDiagram
 
 ### `src/include/duckdb/planner/decide/decide_constraint_walk.hpp` — stage 04
 Header-only, and the one place that answers "which children of this node are
-constraints". A bound constraint tree is AND-conjunctions plus wrappers — `when c:`,
-`per K:` and the two-level objective's `TWO_LEVEL_OBJECTIVE_TAG` — and a wrapper's trailing children are
+constraints". A bound constraint tree is AND-conjunctions plus wrappers — `when c:` and
+`per K:` — and a wrapper's trailing children are
 metadata — the `when` condition, the key columns — so descending into them would read
 a condition as another constraint.
-- **`IsWhenFilterWrapper()` / `IsPerClassWrapper()` / `IsTwoLevelObjectiveWrapper()`
-  (the two-level objective's) / `IsConstraintWrapper()` / `IsConstraintChild()`** —
-  the predicates. Every site that walks a bound constraint tree asks these, including
-  the few that deliberately act differently on the answer: singleton-row folding refuses to
-  descend into a `when`, and the MIN/MAX objective rewrite unwraps the two-level wrapper as
-  it goes. They bring their own descent, not their own definition of a wrapper, so a
+- **`IsWhenFilterWrapper()` / `IsPerClassWrapper()` / `IsConstraintWrapper()` /
+  `IsConstraintChild()`** — the predicates. Every site that walks a bound constraint tree
+  asks these, including the few that deliberately act differently on the answer:
+  singleton-row folding refuses to descend into a `when`. They bring their own descent,
+  not their own definition of a wrapper, so a
   new wrapper kind is a one-line change here.
 - **`VisitConstraintTree()`** — parents before children, skipping metadata, with a
   visitor that can stop the walk. Const and mutating overloads. Neither hands out

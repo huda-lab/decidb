@@ -77,7 +77,9 @@ public:
 	vector<DecideVarScopeInfo> variable_scopes;
 	//! Every key of the clause; transferred to LogicalDecide::keys.
 	vector<DecideKey> decide_keys;
-	//! MIN/MAX indicator links, objective type, and the two-level objective's types are populated by
+	//! Every frame selector of the clause; transferred to LogicalDecide::frames.
+	vector<DecideFrameSpec> decide_frames;
+	//! MIN/MAX indicator links and the objective type are populated by
 	//! DecideOptimizer::RewriteMinMax directly on LogicalDecide (post-binding)
 	//! list of groups
 	BoundGroupByNode groups;

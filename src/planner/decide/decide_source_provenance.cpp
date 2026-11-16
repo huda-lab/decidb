@@ -16,6 +16,7 @@
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression/bound_subquery_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
@@ -48,14 +49,14 @@ struct RenderContext {
 	//! which print as that expression; null prints a column's name.
 	idx_t decide_index = DConstants::INVALID_INDEX;
 	const vector<pair<idx_t, string>> *aux_labels = nullptr;
-	//! False when the caller writes the `by` itself.
-	bool print_by = true;
+	//! The one reducer whose `by` is left out, for a message that names its group apart
+	//! (RenderDecideReducer); the reducers inside it keep theirs.
+	const BoundAggregateExpression *without_by = nullptr;
 	//! True quotes every located node as written, as a message and a diagnosis do. False quotes the data-only ones and
 	//! reprints the decision structure, which canonicalization and the rewrites reshape, as a plan's layers do.
 	bool written = false;
-	//! A node that prints as `substitute_text` instead of itself (the two-level objective's outer reducer).
-	const Expression *substitute = nullptr;
-	string substitute_text;
+	//! The frames (DecideSourceNames::frames); null prints a frame marker's aggregate.
+	const vector<DecideFrameSpec> *frames = nullptr;
 };
 } // namespace
 
@@ -65,10 +66,32 @@ static RenderContext ContextOf(const DecideSourceNames &names) {
 	ctx.decide_index = names.decide_index;
 	ctx.aux_labels = names.aux_labels;
 	ctx.written = names.written;
+	ctx.frames = names.frames;
 	return ctx;
 }
 
 static string RenderSource(const Expression &expr, const RenderContext &ctx, int parent_precedence = 0);
+
+//! The precedence of an operand of a node with no arithmetic of its own (`NOT`, `IS NULL`, `IN`, a CASE): the level of
+//! a loose operator (DecideBinding::LOOSE), so an arithmetic operand needs no parentheses there.
+static constexpr int OPERAND_PRECEDENCE = 5;
+
+//! A child standing aside for its text while its parent prints (RenderSource): the text as it is, whatever it holds.
+class WrittenOperand : public BoundReferenceExpression {
+public:
+	WrittenOperand(string text_p, LogicalType type)
+	    : BoundReferenceExpression(std::move(type), 0U), text(std::move(text_p)) {
+	}
+	string ToString() const override {
+		return text;
+	}
+	string GetName() const override {
+		return text;
+	}
+
+private:
+	string text;
+};
 
 bool DecideIsGuarded(const Expression &expr) {
 	return HasDecideTag(expr.GetAlias(), NULL_GUARD_TAG);
@@ -246,7 +269,7 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 	if (carrier.empty() && order.empty() && agg.children.empty()) {
 		// `count(*)` binds as `count_star()`; it takes no scope inside it.
 		idx_t group_key;
-		bool has_by = ctx.print_by && ctx.keys && TryParseGroupKeyTag(agg.GetAlias(), group_key);
+		bool has_by = ctx.keys && &agg != ctx.without_by && TryParseGroupKeyTag(agg.GetAlias(), group_key);
 		return "count(*)" + (has_by ? " by (" + ByText(agg, ctx, group_key) + ")" : string());
 	}
 	string result = (!carrier.empty() ? carrier
@@ -264,13 +287,18 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 	}
 	result += (scope.empty() ? "" : scope + ": ") + body + (order.empty() ? "" : ", " + order) + ")";
 	idx_t group_key;
-	if (ctx.print_by && ctx.keys && TryParseGroupKeyTag(agg.GetAlias(), group_key)) {
+	if (ctx.keys && &agg != ctx.without_by && TryParseGroupKeyTag(agg.GetAlias(), group_key)) {
 		result += " by (" + ByText(agg, ctx, group_key) + ")";
 	}
 	return result;
 }
 
 static string RenderAggregate(const BoundAggregateExpression &agg, const RenderContext &ctx) {
+	// A frame marker is `first(e)` or the range's reducer, which no one wrote: it prints as the frame.
+	idx_t frame;
+	if (ctx.frames && TryParseFrameTag(agg.GetAlias(), frame) && frame < ctx.frames->size()) {
+		return (*ctx.frames)[frame].spelling;
+	}
 	string body = agg.children.empty() ? string() : RenderSource(*agg.children[0], ctx);
 	// A norm's definition reads as written, `norm(e, p)`.
 	if (auto written_body = DecideWrittenNormBody(agg)) {
@@ -281,7 +309,12 @@ static string RenderAggregate(const BoundAggregateExpression &agg, const RenderC
 
 const Expression *DecideWrittenNormBody(const BoundAggregateExpression &reducer) {
 	string order;
-	if (!ExtractDecideTagPayload(reducer.GetAlias(), WRITTEN_NORM_TAG_PREFIX, order)) {
+	ExtractDecideTagPayload(reducer.GetAlias(), WRITTEN_NORM_TAG_PREFIX, order);
+	return DecideNormBody(reducer, order);
+}
+
+const Expression *DecideNormBody(const BoundAggregateExpression &reducer, const string &order) {
+	if (order.empty()) {
 		return nullptr;
 	}
 	// ABS(e) for 1 and 'inf', POWER(e, 2) for 2, ABS(SIGN(e)) for a data-only 0: the body is the first argument of
@@ -337,8 +370,7 @@ static bool QuoteSpan(const Expression &expr, const RenderContext &ctx, string &
 	if (!ctx.written && BoundExpressionReferencesDecide(expr, ctx.decide_index)) {
 		return false;
 	}
-	if (!ctx.print_by && expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
-	    ctx.text.Cut(expr.GetQueryLocation(), DecideSpanRole::CALL, text)) {
+	if (&expr == ctx.without_by && ctx.text.Cut(expr.GetQueryLocation(), DecideSpanRole::CALL, text)) {
 		binding = NumericCast<int>(DecideBinding::WHOLE);
 		return true;
 	}
@@ -346,9 +378,6 @@ static bool QuoteSpan(const Expression &expr, const RenderContext &ctx, string &
 }
 
 static string RenderSource(const Expression &expr, const RenderContext &ctx, int parent_precedence) {
-	if (&expr == ctx.substitute) {
-		return ctx.substitute_text;
-	}
 	if (HasDecideTag(expr.GetAlias(), NULL_GUARD_TAG)) {
 		return RenderSource(DecideUnguarded(expr), ctx, parent_precedence);
 	}
@@ -374,7 +403,8 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 				if (labelled.first == colref.binding.column_index) {
 					// A label is parenthesized for arithmetic (`(b * x)`); as a whole operand
 					// -- a reducer's body, a side of a comparison -- it needs none.
-					return parent_precedence == 0 ? WithoutEnclosingParentheses(labelled.second) : labelled.second;
+					return parent_precedence <= OPERAND_PRECEDENCE ? WithoutEnclosingParentheses(labelled.second)
+					                                               : labelled.second;
 				}
 			}
 		}
@@ -385,10 +415,11 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 		break;
 	}
 	case ExpressionClass::BOUND_REF: {
-		// A column the physical plan resolved to a chunk position keeps its name as alias.
+		// A column the physical plan resolved to a chunk position keeps its name as alias; a frame column's name is
+		// the frame as written.
 		auto name = StripDecideTags(expr.GetAlias());
 		if (!name.empty()) {
-			return KeywordHelper::WriteOptionallyQuoted(name);
+			return HasDecideTag(expr.GetAlias(), FRAME_COLUMN_TAG) ? name : KeywordHelper::WriteOptionallyQuoted(name);
 		}
 		break;
 	}
@@ -424,7 +455,7 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 			break;
 		}
 		auto &in = expr.Cast<BoundOperatorExpression>();
-		string result = RenderSource(*in.children[0], ctx) + " IN (";
+		string result = RenderSource(*in.children[0], ctx, OPERAND_PRECEDENCE) + " IN (";
 		for (idx_t i = 1; i < in.children.size(); i++) {
 			if (i > 1) {
 				result += ", ";
@@ -440,7 +471,24 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 	default:
 		break;
 	}
-	return expr.ToString();
+	// Any other node prints in its own syntax over its children as written: its ToString would print a cast's child by
+	// its alias, which may be nothing but tags. Each child stands aside for its text while it prints, since a child
+	// holding a bound subquery cannot be copied. Rendered first, so nothing can throw with a child aside.
+	vector<string> written;
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](const Expression &child) { written.push_back(RenderSource(child, ctx, OPERAND_PRECEDENCE)); });
+	auto &node = const_cast<Expression &>(expr);
+	vector<unique_ptr<Expression>> aside;
+	ExpressionIterator::EnumerateChildren(node, [&](unique_ptr<Expression> &child) {
+		auto type = child->return_type;
+		aside.push_back(std::move(child));
+		child = make_uniq<WrittenOperand>(written[aside.size() - 1], std::move(type));
+	});
+	auto result = node.ToString();
+	idx_t restored = 0;
+	ExpressionIterator::EnumerateChildren(node,
+	                                      [&](unique_ptr<Expression> &child) { child = std::move(aside[restored++]); });
+	return result;
 }
 
 static string AppendQualifier(string prefix, const string &suffix) {
@@ -579,11 +627,13 @@ static void LinkBetweenHalves(ConstraintSourceInfo &lower, ConstraintSourceInfo 
 
 vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constraints, const DecideSourceText &text,
                                                             const vector<KeyedScopeInfo> &keyed_scopes,
-                                                            idx_t decide_index, const vector<DecideKey> *keys) {
+                                                            idx_t decide_index, const vector<DecideKey> *keys,
+                                                            const vector<DecideFrameSpec> &frames) {
 	vector<ConstraintSourceInfo> result;
 	// DeciDB's own rendering of a side, and the clause as the user wrote it: a message quotes every located node.
 	RenderContext ctx {text, keyed_scopes, keys};
 	ctx.decide_index = decide_index;
+	ctx.frames = &frames;
 	auto written_ctx = ctx;
 	written_ctx.written = true;
 	// The `>=` half of the BETWEEN being visited: its `<=` half is the next comparison the walk reaches.
@@ -687,10 +737,12 @@ static bool ContainsSubquerySource(const Expression &expr) {
 
 void FinalizeConstraintSourceInfo(const Expression &constraints, vector<ConstraintSourceInfo> &sources,
                                   const DecideSourceText &text, const vector<KeyedScopeInfo> &keyed_scopes,
-                                  idx_t decide_index, const vector<DecideKey> *keys) {
+                                  idx_t decide_index, const vector<DecideKey> *keys,
+                                  const vector<DecideFrameSpec> &frames) {
 	auto &mutable_constraints = const_cast<Expression &>(constraints);
 	RenderContext ctx {text, keyed_scopes, keys};
 	ctx.decide_index = decide_index;
+	ctx.frames = &frames;
 	auto written_ctx = ctx;
 	written_ctx.written = true;
 	VisitSourceComparisons(
@@ -731,17 +783,19 @@ string RenderDecideSource(const Expression &expr, const DecideSourceNames &names
 
 DecideSourceNames DecidePlanNames(const DecideSourceText &text, const vector<KeyedScopeInfo> &keyed_scopes,
                                   const vector<DecideKey> &keys, idx_t decide_index,
-                                  const vector<pair<idx_t, string>> &aux_labels) {
+                                  const vector<pair<idx_t, string>> &aux_labels,
+                                  const vector<DecideFrameSpec> &frames) {
 	DecideSourceNames names {text, keyed_scopes, keys};
 	names.decide_index = decide_index;
 	names.aux_labels = &aux_labels;
 	names.written = false;
+	names.frames = &frames;
 	return names;
 }
 
 string RenderDecideReducer(const BoundAggregateExpression &reducer, const DecideSourceNames &names) {
 	auto ctx = ContextOf(names);
-	ctx.print_by = false;
+	ctx.without_by = &reducer;
 	return RenderSource(reducer, ctx);
 }
 
@@ -769,45 +823,6 @@ static bool IsTruePlaceholder(const Expression &expr) {
 	return value.type().id() == LogicalTypeId::BOOLEAN && !value.IsNull() && value.GetValue<bool>();
 }
 
-//! The reducer of an objective that is one term, whatever stands around it: the negation a MAXIMIZE objective carries,
-//! a factor, a cast. It lies on the one path of children that reads a decision.
-static const Expression &TermReducer(const Expression &expr, idx_t decide_index) {
-	const Expression *term = &expr;
-	while (term->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-		const Expression *next = nullptr;
-		ExpressionIterator::EnumerateChildren(*term, [&](const Expression &child) {
-			if (!next && BoundExpressionReferencesDecide(child, decide_index)) {
-				next = &child;
-			}
-		});
-		D_ASSERT(next);
-		term = next;
-	}
-	return *term;
-}
-
-DecideTwoLevelParts SplitDecideTwoLevel(const BoundConjunctionExpression &per, const DecideSourceNames &names) {
-	DecideTwoLevelParts parts;
-	parts.body = per.children[0].get();
-	if (parts.body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &wrapper = parts.body->Cast<BoundConjunctionExpression>();
-		parts.when = WrittenWhen(wrapper, ContextOf(names));
-		parts.body = wrapper.children[0].get();
-	}
-	parts.term = parts.body;
-	parts.body = &TermReducer(*parts.term, names.decide_index);
-	parts.key = RenderDecidePerKey(per, names.text, &names.keys);
-	return parts;
-}
-
-string RenderDecideTwoLevelInner(const string &inner, const string &key) {
-	return inner + " by (" + key + ")";
-}
-
-string RenderDecideTwoLevelOuter(const string &outer_name, const string &key, const string &inner) {
-	return outer_name + "(per " + key + ": " + inner + ")";
-}
-
 //! An objective tree rendered in the direction it was written: the terms of its additive spine, each with its sign
 //! reversed (only the sign: a factor on a term is the user's number and stays). The text is the one the same objective
 //! written as a minimization renders to (RenderFunction): a leading negative term takes the unary minus, the others
@@ -826,63 +841,11 @@ static string RenderWrittenSense(const Expression &expr, const RenderContext &ct
 	return result;
 }
 
-//! The two-level objective `outer(per k: inner(e) by (k))`, which binds to the nested
-//! `outer(inner(e))` under a TWO_LEVEL_OBJECTIVE_TAG wrapper keyed on k: rendered as written
-//! when the wrapper still holds the nested reducer, else null. The form stands where the outer reducer stands in
-//! its term, so the term's sign and factor print around it.
-static unique_ptr<string> RenderTwoLevelObjective(const BoundConjunctionExpression &per, const DecideSourceNames &names,
-                                                  bool written_sense) {
-	auto parts = SplitDecideTwoLevel(per, names);
-	auto &outer = parts.body->Cast<BoundAggregateExpression>();
-	if (outer.children[0]->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-		return nullptr;
-	}
-	auto &inner = outer.children[0]->Cast<BoundAggregateExpression>();
-	string inner_body = RenderSource(*inner.children[0], ContextOf(names));
-	auto inner_text = RenderDecideTwoLevelInner(
-	    StringUtil::Lower(DecideWrittenName(inner.GetAlias(), inner.function.name)) + "(" + inner_body + ")",
-	    parts.key);
-	auto ctx = ContextOf(names);
-	ctx.substitute = &outer;
-	ctx.substitute_text = RenderDecideTwoLevelOuter(
-	    StringUtil::Lower(DecideWrittenName(outer.GetAlias(), outer.function.name)), parts.key, inner_text);
-	return make_uniq<string>((parts.when.empty() ? string() : "when " + parts.when + ": ") +
-	                         (written_sense ? RenderWrittenSense(*parts.term, ctx) : RenderSource(*parts.term, ctx)));
-}
-
-//! The same wrapper once the objective rewrite has replaced `outer(inner(e))` by the inner
-//! reducer alone: `[when c ]per k: inner(e) by (k)`, the rows the solver receives (one
-//! inner value per class).
-static string RenderTwoLevelInner(const BoundConjunctionExpression &per, const DecideSourceNames &names) {
-	auto parts = SplitDecideTwoLevel(per, names);
-	auto &inner = parts.body->Cast<BoundAggregateExpression>();
-	auto ctx = ContextOf(names);
-	ctx.print_by = false; // the `by` is the per key, written once below
-	string inner_body = RenderSource(*inner.children[0], ctx);
-	return (parts.when.empty() ? string() : "when " + parts.when + " ") + "per " + parts.key + ": " +
-	       RenderDecideTwoLevelInner(StringUtil::Lower(DecideWrittenName(inner.GetAlias(), inner.function.name)) + "(" +
-	                                     inner_body + ")",
-	                                 parts.key);
-}
-
 //! `CollectDecideExpressionStrings` with the pending `when c per K:` front qualifier.
 static void CollectExpressionStrings(const Expression &expr, const DecideSourceNames &names, vector<string> &out,
                                      vector<idx_t> *out_source_ids, DecideEnclosingScope scope, bool written_sense) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		if (IsTwoLevelObjectiveWrapper(conj)) {
-			const auto front = ScopeQualifier(scope, ContextOf(names));
-			auto two_level = RenderTwoLevelObjective(conj, names, written_sense);
-			if (two_level) {
-				PushClause(out, out_source_ids, *two_level, DConstants::INVALID_INDEX);
-				return;
-			}
-			// The two-level objective after its rewrite: the inner reducer, once per class,
-			// written in front, with the `by` the form fixes to its `per` key.
-			PushClause(out, out_source_ids, AppendQualifier(FrontQualifier(front), RenderTwoLevelInner(conj, names)),
-			           DConstants::INVALID_INDEX);
-			return;
-		}
 		// A clause's `when c per K:` prints in front. A plain AND is the constraint list itself, so each child is its
 		// own clause.
 		auto inner = EnterDecideScope(conj, scope);
@@ -1101,17 +1064,17 @@ string RenderDecideRewriteAccount(const LogicalDecide::RewriteAccount &account) 
 	case Kind::VALUE_HELPER_PER_GROUP:
 		became = "a helper decision per group";
 		break;
+	case Kind::FRAME_HELPER_PER_TIMELINE:
+		became = "a helper decision per timeline";
+		break;
+	case Kind::FRAME_HELPER_PER_POSITION:
+		became = "a helper decision per position";
+		break;
 	case Kind::EXTREMUM:
 		became = "an extremum column";
 		break;
 	case Kind::EXTREMUM_PINNED:
 		became = "an extremum column pinned by indicator rows";
-		break;
-	case Kind::EXTREMUM_PER_GROUP:
-		became = "an extremum column per group";
-		break;
-	case Kind::EXTREMUM_PER_GROUP_PINNED:
-		became = "an extremum column per group pinned by indicator rows";
 		break;
 	case Kind::NOT_EQUAL:
 		became = "two conditional rows with an indicator";
@@ -1128,9 +1091,8 @@ string RenderDecideRewriteAccount(const LogicalDecide::RewriteAccount &account) 
 	case Kind::EXTREMUM_NATIVE:
 		became = "an extremum column stated to the solver natively";
 		break;
-	case Kind::EXTREMUM_PER_GROUP_NATIVE:
-		became = "an extremum column per group stated to the solver natively";
-		break;
+	case Kind::RUN_TIME:
+		return account.subject;
 	}
 	return account.subject + " becomes " + became;
 }

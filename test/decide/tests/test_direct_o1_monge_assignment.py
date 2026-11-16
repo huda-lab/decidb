@@ -221,11 +221,14 @@ def _check_assignment(case, oracle, rows, columns, mode):
 def _agree(decidb_cli, oracle_solver, name, wrap="plain"):
     case = ORACLE_CASES[name]
     oracle = _oracle_model(oracle_solver, case)
+    # A zero cost on every pair leaves an objective that is 0 whatever the decisions, which the solver path warns of.
+    zero = all(_coefficient(case, a, b) == 0 for _, a in case["left"] for _, b in case["right"])
     agree_with_oracle(
         decidb_cli,
         _sql(case, wrap=wrap),
         oracle,
         lambda rows, columns, mode: _check_assignment(case, oracle, rows, columns, mode),
+        warnings=["the objective is 0 whatever the decisions"] if zero else (),
     )
 
 
@@ -523,9 +526,7 @@ def test_o1_monge_a_decimal_product_that_overflows_raises_on_both_paths_though_n
 # whatever the sense and the sign are written as.
 NEGATED_DISTANCE_CASES = {
     "abs_negated": _case(f"MAXIMIZE SUM(-{ABS} * x)", lambda a, b: -abs(a - b), "MAXIMIZE"),
-    "abs_negated_outside": _case(f"MAXIMIZE -SUM({ABS} * x)", lambda a, b: -abs(a - b), "MAXIMIZE"),
     "abs_negative_factor": _case(f"MAXIMIZE -2.5 * SUM({ABS} * x)", lambda a, b: -2.5 * abs(a - b), "MAXIMIZE"),
-    "squared_negated": _case(f"MAXIMIZE SUM(-{SQUARED} * x)", lambda a, b: -((a - b) ** 2), "MAXIMIZE"),
 }
 
 

@@ -119,20 +119,19 @@ def test_a_between_in_a_macro_tail_with_an_argument_is_written_from_its_halves(d
     assert "xBETWEEN1AND3≡x>=1≡x<=3" in plan, plan
 
 
-@pytest.mark.explain
+@pytest.mark.error
 def test_a_reducer_in_a_macro_body_keeps_its_name_in_the_bound_check(decidb_cli):
     """The reducer inside `ts` has no location in the query (its body was parsed from the macro's definition), so the
-    column that stands for its value in a group bound carries the text it prints as. Without it the check of the bound
-    reads `2 * #0`; the message names the call, `ts(cap)`."""
+    value that stands for it in a group bound carries the text it prints as: the check of the bound names the call,
+    `ts(cap)`, never an internal column. Group `a` sums to `inf + -inf`, a NaN its rows do not hold."""
     create = "CREATE TEMP MACRO ts(c) AS 2 * SUM(c)"
     query = (
-        "EXPLAIN SELECT id, x FROM (VALUES (1, 'a', 5.0), (2, 'a', 6.0), (3, 'b', 7.0)) t(id, g, cap) "
-        "DECIDE x(REAL) SUCH THAT x <= 3 AND SUM(x) by (g) <= ts(cap) MAXIMIZE SUM(x)"
+        "SELECT id, x FROM (VALUES (1, 'a', 'inf'::DOUBLE), (2, 'a', '-inf'::DOUBLE), (3, 'b', 7.0::DOUBLE)) "
+        "t(id, g, cap) DECIDE x(REAL) SUCH THAT x <= 3 AND SUM(x) by (g) <= ts(cap) MAXIMIZE SUM(x)"
     )
     cli = decidb_cli.without_verify_serializer()
-    plan = re.sub(r"[│\s]", "", cli.execute_raw(f"{_OFF}{create}; {query}").stdout)
-    assert "*sum(cap))ASDOUBLE)" in plan, plan
-    assert "THEN('DECIDE:theboundts(cap)isNaNonsome" in plan, plan
+    result = cli.execute_raw(f"{_OFF}{create}; {query}")
+    assert "DECIDE: the bound ts(cap) is NaN on some rows." in result.stderr, result.stderr
 
 
 @pytest.mark.explain

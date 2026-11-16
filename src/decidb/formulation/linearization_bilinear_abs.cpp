@@ -37,7 +37,8 @@ void DeriveBilinearAuxiliaryBounds(SolverInput &input, const FormulationBox &box
 			idx_t blame = link.other_var_idx;
 			for (const auto &helper : input.reducer_value_links) {
 				if (helper.value_var == link.other_var_idx) {
-					blame = FindUnboundedContributor(helper.rows, box.lower, box.upper);
+					idx_t member = FirstUnboundedMemberVariable(helper.members, box.lower, box.upper);
+					blame = member == DConstants::INVALID_INDEX ? blame : member;
 				}
 			}
 			throw InvalidInputException("Bilinear term requires a finite upper bound on variable '%s'. "
@@ -49,47 +50,63 @@ void DeriveBilinearAuxiliaryBounds(SolverInput &input, const FormulationBox &box
 	}
 }
 
+void FloorBilinearAuxiliaries(SolverInput &input) {
+	for (const auto &link : input.bilinear_links) {
+		auto &floor = input.lower_bounds[link.aux_idx];
+		floor = std::max(floor, std::min(0.0, input.lower_bounds[link.other_var_idx]));
+	}
+}
+
 void LinearizeBilinear(SolverInput &input, const VarIndexer &indexer, const FormulationBox &box) {
 	// For (w = b * x) with b Boolean and x in [L, U] the exact linearization is:
 	//   w <= U*b                  (1)
 	//   w >= x - U*(1-b)          (2)
 	//   w <= x - L*(1-b)          (3, upper corner)
 	//   w >= L*b                  (4, lower corner)
-	// For L >= 0 the lower corner is implied by w's own non-negative bound, and (3)
-	// simplifies to the plain structural `w <= x` (w=0 at b=0 is enforced by (1)).
-	// We emit exactly those two-plus-one rows in that case. For L < 0 we emit the
-	// full four corners and widen w's own lower bound so the product can take the
-	// negative value of x when b=1.
+	// w's column is floored at the product's range, min(0, L) over the instances, raised by a floor written on the
+	// product (it has no default floor of 0: AddBooleanProduct). Where that floor is 0 or more, it implies the lower
+	// corner, and (3) simplifies to the plain structural `w <= x` (w=0 at b=0 is enforced by (1)): two-plus-one
+	// rows. Where it is negative, all four corners are emitted, an instance whose own L >= 0 included, so the product
+	// can take the negative value of x when b=1 and is 0 when b=0.
 	//
 	// One block per INSTANCE of w, in flat columns, from the box of the instance of x it reads (the way a helper
 	// decision of the value rewrite is defined): a query-wide product is one block, a keyed one a block per key,
 	// a row-scoped one a block per row. A product of two Booleans is the AND, the same block of three rows.
+	struct ProductInstance {
+		int w, b, x;
+		double U, L;
+	};
 	for (auto &link : input.bilinear_links) {
 		const auto &mapping_scope = indexer.var_scope[link.aux_idx];
 		const idx_t absent = mapping_scope == DecideVarScope::KEYED
 		                         ? indexer.keyed_mappings[indexer.var_keyed_mapping_idx[link.aux_idx]].absent_class
 		                         : DConstants::INVALID_INDEX;
+		auto emit = [&](vector<int> indices, vector<double> coefficients, char sense, double rhs) {
+			SolverInput::RawConstraint row;
+			row.indices = std::move(indices);
+			row.coefficients = std::move(coefficients);
+			row.sense = sense;
+			row.rhs = rhs;
+			row.kind = ConstraintKind::STRUCTURAL;
+			row.source_clause_id = link.source_clause_id;
+			row.removal_group_id = link.removal_group_id;
+			input.global_constraints.push_back(std::move(row));
+		};
+		vector<ProductInstance> products;
 		for (idx_t instance = 0; instance < indexer.NumInstances(link.aux_idx); instance++) {
 			if (instance == absent) {
 				continue; // the instance of a row that reads no key is fixed at 0
 			}
 			const idx_t bool_instance = indexer.InstanceUnder(link.bool_var_idx, link.aux_idx, instance);
 			const idx_t other_instance = indexer.InstanceUnder(link.other_var_idx, link.aux_idx, instance);
+			// A factor with no value there leaves the product none (D88): no corner reads it.
+			if (!indexer.HasColumn(link.aux_idx, instance) || !indexer.HasColumn(link.bool_var_idx, bool_instance) ||
+			    !indexer.HasColumn(link.other_var_idx, other_instance)) {
+				continue;
+			}
 			const int w = static_cast<int>(indexer.InstanceColumn(link.aux_idx, instance));
 			const int b = static_cast<int>(indexer.InstanceColumn(link.bool_var_idx, bool_instance));
 			const int x = static_cast<int>(indexer.InstanceColumn(link.other_var_idx, other_instance));
-
-			auto emit = [&](vector<int> indices, vector<double> coefficients, char sense, double rhs) {
-				SolverInput::RawConstraint row;
-				row.indices = std::move(indices);
-				row.coefficients = std::move(coefficients);
-				row.sense = sense;
-				row.rhs = rhs;
-				row.kind = ConstraintKind::STRUCTURAL;
-				row.source_clause_id = link.source_clause_id;
-				row.removal_group_id = link.removal_group_id;
-				input.global_constraints.push_back(std::move(row));
-			};
 			if (input.variable_types[link.other_var_idx] == LogicalType::BOOLEAN) {
 				// Two Booleans: the AND, w <= b, w <= x, w >= b + x - 1.
 				emit({w, b}, {1.0, -1.0}, '<', 0.0);
@@ -99,18 +116,27 @@ void LinearizeBilinear(SolverInput &input, const VarIndexer &indexer, const Form
 			}
 			const double U = box.InstanceUpper(link.other_var_idx, other_instance);
 			const double L = box.InstanceLower(input, link.other_var_idx, other_instance);
-			D_ASSERT(U < DECIDE_EFFECTIVE_INFINITY);   // derived and validated before ABS descendants read the aux box
+			D_ASSERT(U < DECIDE_EFFECTIVE_INFINITY); // derived and validated before ABS descendants read the aux box
+			products.push_back({w, b, x, U, L});
+		}
+		// A write to the box, not a read of it: this DECLARES the auxiliary's column, so it belongs on `input`
+		// rather than on the derived-constant box above. The two coincide today because `box` is the solved model's
+		// own box; they stop coinciding as soon as a second formulation runs against a widened box, and the floor
+		// must still land on the column the model declares.
+		double range_floor = 0.0;
+		for (const auto &product : products) {
+			range_floor = std::min(range_floor, product.L);
+		}
+		auto &floor = input.lower_bounds[link.aux_idx];
+		floor = std::max(floor, range_floor);
+		for (const auto &product : products) {
+			const int w = product.w, b = product.b, x = product.x;
+			const double U = product.U, L = product.L;
 			emit({w, b}, {1.0, -U}, '<', 0.0);         // (1) w - U*b <= 0
 			emit({w, x, b}, {1.0, -1.0, -U}, '>', -U); // (2) w - x - U*b >= -U
-			if (L < 0.0) {
+			if (floor < 0.0) {
 				emit({w, x, b}, {1.0, -1.0, -L}, '<', -L); // (3) w - x - L*b <= -L
-				// (4) w >= L*b. A write to the box, not a read of it: this DECLARES the auxiliary's column (w
-				// must be able to hold a negative x), so it belongs on `input` rather than on the derived-constant
-				// box above. The two coincide today because `box` is the solved model's own box; they stop
-				// coinciding as soon as a second formulation runs against a widened box, and this line must still
-				// land on the column the model declares.
-				input.lower_bounds[link.aux_idx] = std::min(input.lower_bounds[link.aux_idx], L);
-				emit({w, b}, {1.0, -L}, '>', 0.0);
+				emit({w, b}, {1.0, -L}, '>', 0.0);         // (4) w >= L*b
 			} else {
 				emit({w, x}, {1.0, -1.0}, '<', 0.0); // (3) w - x <= 0
 			}
@@ -249,11 +275,14 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
 		double lo = 0.0;
 		double hi = 0.0;
 		bool seen_row = false;
+		const string written = DecideWrittenClause(input, c1.source_clause_id);
 		for (idx_t r = 0; r < num_rows; r++) {
-			// The link's bound carries the constant part of the expression the user wrote inside ABS. It is
-			// finite: an infinity there is a data problem, which defeats the native path too (|inf| is still inf),
-			// and RewriteAbs refuses it where it reads the argument, whichever path follows.
-			double link_rhs = c1.rhs_values.Get(r);
+			// The link's bound carries the constant part of the expression the user wrote inside ABS, with C1's
+			// constant terms moved across, where a frame's `else` read as data stands. It is finite: an infinity there
+			// is a data problem, which defeats the native path too (|inf| is still inf), and RewriteAbs refuses it
+			// where it reads the argument, whichever path follows; a constant term past a DOUBLE is refused as it is
+			// moved (AddCoefficient).
+			double link_rhs = DecideRowEffectiveBound(c1, r, written);
 			D_ASSERT(std::isfinite(link_rhs));
 			auto vars = DecideRowSignedRange(c1, r, input.lower_bounds, input.upper_bounds, link.aux_idx, &instances);
 			if (vars.lo_open || vars.hi_open) {
@@ -372,10 +401,15 @@ void LinearizeAbsMaximize(SolverInput &input) {
 		ec_ub1.variable_indices = c1.variable_indices;
 		ec_ub1.row_coefficients = c1.row_coefficients;
 		ec_ub1.variable_indices.push_back(link.y_idx);
+		// One label per entry (the builder reads them by position); the link's own term has none.
+		ec_ub1.coefficient_labels = c1.coefficient_labels;
+		ec_ub1.coefficient_labels.emplace_back();
 		ec_ub1.row_coefficients.push_back(CoefficientColumn::MakeScalar(relax_neg, num_rows));
 		ec_ub1.rhs_values = ShiftRhs(c1.rhs_values, relax_neg);
 		ec_ub1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
-		ec_ub1.lhs_is_aggregate = false;
+		// Preserve the lower row's aggregation shape. An F node may read a reducer (`ABS(SUM(x))`): its
+		// envelope is one row per helper instance over that reducer's members, not one row per input row.
+		ec_ub1.lhs_is_aggregate = c1.lhs_is_aggregate;
 		ec_ub1.row_group_ids = c1.row_group_ids;
 		ec_ub1.num_groups = c1.num_groups;
 		ec_ub1.group_names = c1.group_names;
@@ -390,10 +424,12 @@ void LinearizeAbsMaximize(SolverInput &input) {
 		ec_ub2.variable_indices = c2.variable_indices;
 		ec_ub2.row_coefficients = c2.row_coefficients;
 		ec_ub2.variable_indices.push_back(link.y_idx);
+		ec_ub2.coefficient_labels = c2.coefficient_labels;
+		ec_ub2.coefficient_labels.emplace_back();
 		ec_ub2.row_coefficients.push_back(CoefficientColumn::MakeScalar(-relax_pos, num_rows));
 		ec_ub2.rhs_values = c2.rhs_values;
 		ec_ub2.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
-		ec_ub2.lhs_is_aggregate = false;
+		ec_ub2.lhs_is_aggregate = c2.lhs_is_aggregate;
 		ec_ub2.row_group_ids = c2.row_group_ids;
 		ec_ub2.num_groups = c2.num_groups;
 		ec_ub2.group_names = c2.group_names;
@@ -432,6 +468,8 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
 		// C1 and C2 stay. They are exact (`aux >= inner`, `aux >= -inner`), implied by
 		// `aux = |t|`, and they carry the clause provenance the elastic engine reads.
 		// Dropping them would be a separate optimization that costs diagnosis.
+		const string written = DecideWrittenClause(input, c1.source_clause_id);
+		SparseCoeffAccumulator argument;
 		for (idx_t r = 0; r < num_rows; r++) {
 			if (!c1.row_group_ids.empty() && c1.row_group_ids[r] == DConstants::INVALID_INDEX) {
 				continue; // row excluded by `when` or its group: no ABS to express here
@@ -449,7 +487,9 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
 			// and negating the variable walk swaps its two ends. Skipping the auxiliary
 			// is what makes this the range of the expression rather than of the row.
 			auto vars = DecideRowSignedRange(c1, r, input.lower_bounds, input.upper_bounds, link.aux_idx, &instances);
-			double k = c1.rhs_values.Get(r);
+			// The bound with C1's constant terms moved across: a frame's `else` read as data
+			// (`abs(x - at(previous else t.w: y) over (...))`) is a term of no decision.
+			double k = DecideRowEffectiveBound(c1, r, written);
 			// Each end on its own. A row open on one side still contributes its closed
 			// side, and a row whose contributors are all bounded gets a real box even
 			// when some other row's are not — which the one interval could not express, being
@@ -458,54 +498,45 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
 			// that earns a free column. The bracket carries the constant, as `k` here.
 			AuxRange inner_range;
 			inner_range.CoverRowEnds(k - vars.hi, k - vars.lo, vars.hi_open, vars.lo_open, DConstants::INVALID_INDEX);
-			// `ABS(x)` is the common shape, and there `t = x`: one column and one
-			// equality row per data row to restate a column that already exists. C1
-			// spells the argument as `inner = k - sum c_t x_t`, so a renaming is one
-			// non-auxiliary term with coefficient -1 and a zero bound. Anything else —
-			// `ABS(x - target)`, `ABS(2 * x)` — is a genuine expression, and a general
-			// constraint relates columns, so it still earns one.
-			idx_t sole_var = DConstants::INVALID_INDEX;
-			double sole_coef = 0.0;
-			idx_t term_count = 0;
+			// The argument's columns, each once: two terms may land on one column -- a frame
+			// read selecting the row itself (`abs(x - at(last: x) over (...))` at the last
+			// period) -- and a row states a column once, or the solver refuses it.
+			argument.BeginSparse(c1.variable_indices.size(), written);
 			for (idx_t t = 0; t < c1.variable_indices.size(); t++) {
 				idx_t v = c1.variable_indices[t];
-				if (v == link.aux_idx) {
+				if (v == DConstants::INVALID_INDEX || v == link.aux_idx) {
 					continue;
 				}
 				double coef = c1.row_coefficients[t].Get(r);
-				if (coef == 0.0) {
-					continue;
+				if (coef != 0.0) {
+					argument.Add(static_cast<int>(indexer.Get(v, r)), coef);
 				}
-				term_count++;
-				sole_var = v;
-				sole_coef = coef;
 			}
-			bool renaming = (term_count == 1 && sole_coef == -1.0 && k == 0.0);
+			vector<int> columns;
+			vector<double> coefficients;
+			argument.Flush(columns, coefficients);
+			// `ABS(x)` is the common shape, and there `t = x`: one column and one
+			// equality row per data row to restate a column that already exists. C1
+			// spells the argument as `inner = k - sum c_t x_t`, so a renaming is one
+			// non-auxiliary column with coefficient -1 and a zero bound. Anything else —
+			// `ABS(x - target)`, `ABS(2 * x)` — is a genuine expression, and a general
+			// constraint relates columns, so it still earns one.
+			bool renaming = columns.size() == 1 && coefficients[0] == -1.0 && k == 0.0;
 
 			idx_t t_idx = DConstants::INVALID_INDEX;
 			if (renaming) {
-				t_idx = indexer.Get(sole_var, r);
+				t_idx = static_cast<idx_t>(columns[0]);
 			} else {
 				t_idx = AddGlobalContinuousAux(input, indexer, inner_range, 0.0);
 
+				// `t - inner = 0` with `inner = k - sum c_t x_t` is `t + sum c_t x_t = k`.
 				SolverInput::RawConstraint link_row;
 				link_row.indices.push_back(static_cast<int>(t_idx));
 				link_row.coefficients.push_back(1.0);
-				for (idx_t t = 0; t < c1.variable_indices.size(); t++) {
-					idx_t v = c1.variable_indices[t];
-					if (v == link.aux_idx) {
-						continue;
-					}
-					double coef = c1.row_coefficients[t].Get(r);
-					if (coef == 0.0) {
-						continue;
-					}
-					// `t - inner = 0` with `inner = k - sum c_t x_t` is `t + sum c_t x_t = k`.
-					link_row.indices.push_back(static_cast<int>(indexer.Get(v, r)));
-					link_row.coefficients.push_back(coef);
-				}
+				link_row.indices.insert(link_row.indices.end(), columns.begin(), columns.end());
+				link_row.coefficients.insert(link_row.coefficients.end(), coefficients.begin(), coefficients.end());
 				link_row.sense = '=';
-				link_row.rhs = c1.rhs_values.Get(r);
+				link_row.rhs = k;
 				link_row.kind = ConstraintKind::STRUCTURAL;
 				link_row.source_clause_id = c1.source_clause_id;
 				link_row.repair_group_id = c1.repair_group_id;

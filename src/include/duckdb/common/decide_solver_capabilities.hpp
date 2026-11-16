@@ -91,7 +91,7 @@ struct SolverConstructSupport {
 //!
 //! The demand side is derived twice, deliberately:
 //!
-//!   - at PLAN time from the prepared model, by stage 05, which is what produces the
+//!   - at PLAN time from the clauses lowered into the tree, by stage 05, which is what produces the
 //!     user-facing refusal early enough that no row is ever read;
 //!   - from the BUILT model, by stage 06, which `SolveModel` checks against the
 //!     chosen backend as an internal invariant.

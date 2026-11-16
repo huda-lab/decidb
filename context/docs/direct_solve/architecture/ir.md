@@ -21,8 +21,9 @@ rewrite cannot follow from a gap in the front end. A decline carries no reason: 
 
 Not proved covers what the binder admits and no rule models: a per-row term the splitter cannot read, an order-0 norm (it needs indicator
 variables), a norm tag the front end does not expect, a `per K:` in front of a per-row clause, a clause whose reducer value became a helper decision
-(`VALUE_REWRITE_TAG`) and the two-level objective. The determination of an entity-scoped decision, which only the
-DECIDE operator checks, makes the whole IR not proved; every other scope check is a row check the plan makes.
+(`VALUE_REWRITE_TAG`), an objective holding a nested reducer (D81) and an objective with a variant signature (produced once, D72, which
+the DECIDE operator checks). A reducer's own `per` whose body has variants (`KeyedScopeInfo::signature`, D71) makes the
+whole IR not proved; every scope check the bound-side rewrite appends is a row check the plan makes.
 The reader trusts the invariants of the bound tree for everything else (one source child, the four reducers, comparison
 and `IN` leaves, a `SUCH THAT` that is an `AND` of clauses (the binder rejects `OR` between constraints), at most one
 `when` in front of a clause, a `SUCH THAT` clause) and states them as `D_ASSERT`s, because no query can break them
@@ -54,9 +55,9 @@ mark it not proved.
   (`DecideSingletonRow::LiftsDefaultFloor`); every other bound only intersects with it. Direct rules run before the MIN/MAX rewrite tags
   an easy extremum, so only a per-row bound reads here. The classifier is the solver's, so the two cannot disagree.
 - `row_checks` are the bound-side rewrite's `VALUE_IS_VALID` checks, each a per-row message, NULL on a valid row. The
-  rule driver puts them under every rule's plan, as the solver path does under its own (`DirectAddRowChecks`,
-  [framework/done.md](../framework/done.md) § Row checks), so a rule does not see them. A `DETERMINES` check is not one of them yet: it
-  makes the IR not proved. An empty group needs no check: a rule reads no row there, as the solver path skips its
+  rule driver puts them under every rule's plan (`DirectAddRowChecks`, [framework/done.md](../framework/done.md) § Row
+  checks), so a rule does not see them; the solver path keeps them on the DECIDE operator, which runs them before it
+  reads a value (`DecideTreeColumns::CheckData`). An empty group needs no check: a rule reads no row there, as the solver path skips its
   instance (D68).
 - The term splitter that breaks `SUM(2*x - x)` into linear terms is shared with the solver path
   (`src/planner/decide/decide_term_split.cpp`), so the two paths cannot read one term differently.

@@ -4,12 +4,15 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
+#include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/decide/decide_product_form.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 namespace duckdb {
 
@@ -72,6 +75,30 @@ bool DecideSplitTerm::IsAbs() const {
 	return opaque && IsAbsFunction(*opaque);
 }
 
+//! A function the optimizer gave a helper decision of its own: an ABS (ABS_FUNCTION_TAG_PREFIX) or a definition
+//! (DEFINITION_FUNCTION_TAG_PREFIX). It reads as that decision.
+static bool TryGetFunctionAuxIndex(const Expression &expr, idx_t &var_idx) {
+	return (IsAbsFunction(expr) && TryParseDecideIndexTag(expr.GetAlias(), ABS_FUNCTION_TAG_PREFIX, var_idx)) ||
+	       TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, var_idx);
+}
+
+static void ReplaceTaggedFunctionsWithAux(unique_ptr<Expression> &expression,
+                                          const vector<unique_ptr<Expression>> &decide_variables) {
+	if (!expression) {
+		return;
+	}
+	idx_t aux_idx;
+	if (TryGetFunctionAuxIndex(*expression, aux_idx)) {
+		if (aux_idx >= decide_variables.size()) {
+			throw InternalException("DECIDE term splitter: function references invalid helper %llu", aux_idx);
+		}
+		expression = decide_variables[aux_idx]->Copy();
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(
+	    *expression, [&](unique_ptr<Expression> &child) { ReplaceTaggedFunctionsWithAux(child, decide_variables); });
+}
+
 //! `left * right` for two coefficients, `right` null for 1. A bare decision's literal 1 stays out of the product, so
 //! `w * x` reads `w`: a product of a coefficient and 1 could overflow where the coefficient cannot.
 static unique_ptr<Expression> MultiplyCoefficients(ClientContext &context, const Expression &left,
@@ -87,15 +114,72 @@ static unique_ptr<Expression> MultiplyCoefficients(ClientContext &context, const
 // DecideTermSplitter
 //===--------------------------------------------------------------------===//
 
-DecideTermSplitter::DecideTermSplitter(ClientContext &context, idx_t decide_index,
-                                       const vector<unique_ptr<Expression>> &decide_variables)
-    : context(context), decide_index(decide_index), decide_variables(decide_variables) {
+DecideTermSplitter::DecideTermSplitter(ClientContext &context, const LogicalDecide &decide)
+    : context(context), decide_index(decide.decide_index), decide_variables(decide.decide_variables),
+      bilinear_groups(decide.bilinear_function_groups) {
 	for (idx_t i = 0; i < decide_variables.size(); i++) {
 		variable_indexes[decide_variables[i]->Cast<BoundColumnRefExpression>().binding] = i;
 	}
 }
 
+bool DecideTermSplitter::ExpandBilinearGroups(const Expression &expr, unique_ptr<Expression> &expanded) const {
+	idx_t definition_aux;
+	if (TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
+		if (definition_aux >= decide_variables.size()) {
+			throw InternalException("DECIDE term splitter: definition function references invalid helper %llu",
+			                        definition_aux);
+		}
+		return false;
+	}
+	idx_t group_idx;
+	if (TryParseDecideIndexTag(expr.GetAlias(), BILINEAR_FUNCTION_GROUP_TAG_PREFIX, group_idx)) {
+		if (group_idx >= bilinear_groups.size() || !bilinear_groups[group_idx].expansion) {
+			throw InternalException("DECIDE term splitter: bilinear function group %llu is missing", group_idx);
+		}
+		expanded = bilinear_groups[group_idx].expansion->Copy();
+		unique_ptr<Expression> nested;
+		if (ExpandBilinearGroups(*expanded, nested)) {
+			expanded = std::move(nested);
+		}
+		return true;
+	}
+
+	vector<const Expression *> originals;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { originals.push_back(&child); });
+	if (originals.empty()) {
+		return false;
+	}
+	auto copy = expr.Copy();
+	idx_t next = 0;
+	bool changed = false;
+	ExpressionIterator::EnumerateChildren(*copy, [&](unique_ptr<Expression> &child) {
+		unique_ptr<Expression> child_expanded;
+		if (ExpandBilinearGroups(*originals[next], child_expanded)) {
+			child = std::move(child_expanded);
+			changed = true;
+		}
+		next++;
+	});
+	if (changed) {
+		expanded = std::move(copy);
+	}
+	return changed;
+}
+
+bool DecideTermSplitter::IsLinear(const Expression &expr) const {
+	unique_ptr<Expression> lowered;
+	if (!ExpandBilinearGroups(expr, lowered)) {
+		lowered = expr.Copy();
+	}
+	ReplaceTaggedFunctionsWithAux(lowered, decide_variables);
+	return DecideDegreeOf(context, *lowered, decide_index).IsLinear();
+}
+
 idx_t DecideTermSplitter::FindVariable(const Expression &expr) const {
+	idx_t aux_idx;
+	if (TryGetFunctionAuxIndex(expr, aux_idx)) {
+		return aux_idx;
+	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto entry = variable_indexes.find(expr.Cast<BoundColumnRefExpression>().binding);
 		if (entry != variable_indexes.end()) {
@@ -189,6 +273,38 @@ void DecideTermSplitter::Split(const Expression &expr, int sign, vector<DecideSp
 		DecideSplitTerm term;
 		term.sign = sign;
 		term.coefficient = expr.Copy();
+		out.push_back(std::move(term));
+		return;
+	}
+	idx_t aux_idx;
+	if (TryGetFunctionAuxIndex(expr, aux_idx)) {
+		if (aux_idx >= decide_variables.size()) {
+			throw InternalException("DECIDE term splitter: function references invalid helper %llu", aux_idx);
+		}
+		DecideSplitTerm term;
+		term.sign = sign;
+		term.degree = 1;
+		term.var_a = aux_idx;
+		term.coefficient = make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1));
+		out.push_back(std::move(term));
+		return;
+	}
+	unique_ptr<Expression> expanded;
+	if (ExpandBilinearGroups(expr, expanded)) {
+		Split(*expanded, sign, out);
+		return;
+	}
+	idx_t frame;
+	if (TryGetDecideFrame(expr, frame) && expr.Cast<BoundAggregateExpression>().children.size() == 1) {
+		// A frame selector over decisions: an opaque term whose payload's terms are read at the selected row.
+		DecideSplitTerm term;
+		term.sign = sign;
+		term.degree = 1;
+		term.frame = frame;
+		term.marker = &expr;
+		term.opaque = expr.Copy();
+		term.coefficient = make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1));
+		Split(*expr.Cast<BoundAggregateExpression>().children[0], 1, term.inner);
 		out.push_back(std::move(term));
 		return;
 	}

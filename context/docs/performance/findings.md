@@ -82,18 +82,9 @@ Finalize spans separate the keyed-decision mapping (`execution.keyed_mapping`), 
 
 The Q4 and Q8 rows are older than the changes in § Measured design choices, which give their current numbers.
 
-**Scope checks against constraint evaluation.** A join of `lineitem` and `orders` (1M rows), `DECIDE per o:
-assign(BOOL)`, one varying clause plus `per o.o_orderpriority: sum(assign) by (o.o_orderpriority) >= 20`, MAXIMIZE
-`sum(assign * l.l_extendedprice)`; Gurobi; operator times from DuckDB's JSON profile in separate runs; span times in
-ms. Load 1.9-2.1.
-
-| Clause | Checks | Query (ms) | Peak (MiB) | `scope_checks` | constraints | Window ops (CPU ms) |
-|---|---|---|---|---|---|---|
-| `per o: assign <= o.o_shippriority` | none needed | 571 | 838 | 15.5 | 97 | — |
-| `per l.l_orderkey: assign <= 1` | the operator's keyed check | 589 | 807 | 109 | 46 | — |
-
-The operator's keyed check costs about twice constraint evaluation (109 against 46 ms). A planned determination check
-is a side aggregate; its cost is in § Measured design choices.
+**Variant numbering.** The determination checks are gone (D70): a `per K:` clause in the per-row shape numbers its
+rows by key and signature (`BuildSignatureIds`) where its signature has a field, and nothing runs where it has none.
+Its cost on a 1M-row join is not yet measured ([todo.md § PERF-23](todo.md#perf-23--variant-numbering)).
 
 ## Model construction
 
@@ -255,13 +246,6 @@ interleaved runs beside other work (load 8-18, single spans swing up to 3x).
   the whole buffer each time: quadratic in the clause's rows. d1 (1M-row join, `per l.l_orderkey` over 250k kept rows)
   passing, three runs each (load 6-10): 6.2 s with that reserve (5 s in `assembly.implied_bounds`), 0.98 s without.
   Q1, Q4 and P4 are too small to show it.
-- **Planned determination checks are side aggregates.** Each check is a grouped aggregate over the columns it reads
-  on its own read of the source, and the verdict a one-row CTE that gates every read (DuckDB's uncorrelated scalar
-  subquery). Against three window operators over the DECIDE source, each holding every row with every column
-  (per-class counts and extremes, a dense rank of every row to pick the least failing class, a global min for the
-  message), d1 (`per l.l_orderkey: assign <= o.o_shippriority + 1`), three runs each: passing 0.98 → 0.56 s and
-  1,543 → 817 MiB; failing 0.42 → 0.07 s and 1,476 → 436 MiB, same message. A key that holds a decision's own key
-  plans no check of it (FD reflexivity).
 - **Folding a constant subtree alone saves nothing on a direct plan (PERF-16).** DuckDB folds constants before the
   DECIDE optimizer runs, so the trees a direct rule builds start unfolded. A fold over the finished direct plan
   (`ExpressionRewriter` with `ConstantFoldingRule`, after `Apply`) folds them (`CAST(100 AS DOUBLE)` → `100.0`) and

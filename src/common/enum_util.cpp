@@ -1213,21 +1213,61 @@ DecideKeyNullMode EnumUtil::FromString<DecideKeyNullMode>(const char *value) {
 
 const StringUtil::EnumStringLiteral *GetDecideScopeCheckKindValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
-	    {static_cast<uint32_t>(DecideScopeCheckKind::DETERMINES), "DETERMINES"},
 	    {static_cast<uint32_t>(DecideScopeCheckKind::VALUE_IS_VALID), "VALUE_IS_VALID"}};
 	return values;
 }
 
 template <>
 const char *EnumUtil::ToChars<DecideScopeCheckKind>(DecideScopeCheckKind value) {
-	return StringUtil::EnumToString(GetDecideScopeCheckKindValues(), 2, "DecideScopeCheckKind",
+	return StringUtil::EnumToString(GetDecideScopeCheckKindValues(), 1, "DecideScopeCheckKind",
 	                                static_cast<uint32_t>(value));
 }
 
 template <>
 DecideScopeCheckKind EnumUtil::FromString<DecideScopeCheckKind>(const char *value) {
 	return static_cast<DecideScopeCheckKind>(
-	    StringUtil::StringToEnum(GetDecideScopeCheckKindValues(), 2, "DecideScopeCheckKind", value));
+	    StringUtil::StringToEnum(GetDecideScopeCheckKindValues(), 1, "DecideScopeCheckKind", value));
+}
+
+const StringUtil::EnumStringLiteral *GetDecideFrameAnchorValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+		{ static_cast<uint32_t>(DecideFrameAnchor::FIRST), "FIRST" },
+		{ static_cast<uint32_t>(DecideFrameAnchor::LAST), "LAST" },
+		{ static_cast<uint32_t>(DecideFrameAnchor::PREVIOUS), "PREVIOUS" },
+		{ static_cast<uint32_t>(DecideFrameAnchor::NEXT), "NEXT" }
+	};
+	return values;
+}
+
+template<>
+const char* EnumUtil::ToChars<DecideFrameAnchor>(DecideFrameAnchor value) {
+	return StringUtil::EnumToString(GetDecideFrameAnchorValues(), 4, "DecideFrameAnchor", static_cast<uint32_t>(value));
+}
+
+template<>
+DecideFrameAnchor EnumUtil::FromString<DecideFrameAnchor>(const char *value) {
+	return static_cast<DecideFrameAnchor>(StringUtil::StringToEnum(GetDecideFrameAnchorValues(), 4, "DecideFrameAnchor", value));
+}
+
+const StringUtil::EnumStringLiteral *GetDecideSignatureFieldKindValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+	    {static_cast<uint32_t>(DecideSignatureFieldKind::VALUE), "VALUE"},
+	    {static_cast<uint32_t>(DecideSignatureFieldKind::DECISION), "DECISION"},
+	    {static_cast<uint32_t>(DecideSignatureFieldKind::BY_KEY), "BY_KEY"},
+	    {static_cast<uint32_t>(DecideSignatureFieldKind::FRAME), "FRAME"}};
+	return values;
+}
+
+template <>
+const char *EnumUtil::ToChars<DecideSignatureFieldKind>(DecideSignatureFieldKind value) {
+	return StringUtil::EnumToString(GetDecideSignatureFieldKindValues(), 4, "DecideSignatureFieldKind",
+	                                static_cast<uint32_t>(value));
+}
+
+template <>
+DecideSignatureFieldKind EnumUtil::FromString<DecideSignatureFieldKind>(const char *value) {
+	return static_cast<DecideSignatureFieldKind>(
+	    StringUtil::StringToEnum(GetDecideSignatureFieldKindValues(), 4, "DecideSignatureFieldKind", value));
 }
 
 const StringUtil::EnumStringLiteral *GetDecideSenseValues() {
@@ -1251,21 +1291,22 @@ DecideSense EnumUtil::FromString<DecideSense>(const char *value) {
 
 const StringUtil::EnumStringLiteral *GetDecideVarScopeValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
-		{ static_cast<uint32_t>(DecideVarScope::ROW), "ROW" },
-		{ static_cast<uint32_t>(DecideVarScope::KEYED), "KEYED" },
-		{ static_cast<uint32_t>(DecideVarScope::GLOBAL), "GLOBAL" }
-	};
+	    {static_cast<uint32_t>(DecideVarScope::ROW), "ROW"},
+	    {static_cast<uint32_t>(DecideVarScope::KEYED), "KEYED"},
+	    {static_cast<uint32_t>(DecideVarScope::GLOBAL), "GLOBAL"},
+	    {static_cast<uint32_t>(DecideVarScope::FRAME_READ), "FRAME_READ"},
+	    {static_cast<uint32_t>(DecideVarScope::INLINED), "INLINED"}};
 	return values;
 }
 
 template<>
 const char* EnumUtil::ToChars<DecideVarScope>(DecideVarScope value) {
-	return StringUtil::EnumToString(GetDecideVarScopeValues(), 3, "DecideVarScope", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetDecideVarScopeValues(), 5, "DecideVarScope", static_cast<uint32_t>(value));
 }
 
 template<>
 DecideVarScope EnumUtil::FromString<DecideVarScope>(const char *value) {
-	return static_cast<DecideVarScope>(StringUtil::StringToEnum(GetDecideVarScopeValues(), 3, "DecideVarScope", value));
+	return static_cast<DecideVarScope>(StringUtil::StringToEnum(GetDecideVarScopeValues(), 5, "DecideVarScope", value));
 }
 
 const StringUtil::EnumStringLiteral *GetDefaultOrderByNullTypeValues() {
@@ -1598,6 +1639,7 @@ const StringUtil::EnumStringLiteral *GetExpressionClassValues() {
 		{ static_cast<uint32_t>(ExpressionClass::POSITIONAL_REFERENCE), "POSITIONAL_REFERENCE" },
 		{ static_cast<uint32_t>(ExpressionClass::BETWEEN), "BETWEEN" },
 		{ static_cast<uint32_t>(ExpressionClass::LAMBDA_REF), "LAMBDA_REF" },
+		{ static_cast<uint32_t>(ExpressionClass::DECIDE_FRAME), "DECIDE_FRAME" },
 		{ static_cast<uint32_t>(ExpressionClass::BOUND_AGGREGATE), "BOUND_AGGREGATE" },
 		{ static_cast<uint32_t>(ExpressionClass::BOUND_CASE), "BOUND_CASE" },
 		{ static_cast<uint32_t>(ExpressionClass::BOUND_CAST), "BOUND_CAST" },
@@ -1624,12 +1666,12 @@ const StringUtil::EnumStringLiteral *GetExpressionClassValues() {
 
 template<>
 const char* EnumUtil::ToChars<ExpressionClass>(ExpressionClass value) {
-	return StringUtil::EnumToString(GetExpressionClassValues(), 40, "ExpressionClass", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetExpressionClassValues(), 41, "ExpressionClass", static_cast<uint32_t>(value));
 }
 
 template<>
 ExpressionClass EnumUtil::FromString<ExpressionClass>(const char *value) {
-	return static_cast<ExpressionClass>(StringUtil::StringToEnum(GetExpressionClassValues(), 40, "ExpressionClass", value));
+	return static_cast<ExpressionClass>(StringUtil::StringToEnum(GetExpressionClassValues(), 41, "ExpressionClass", value));
 }
 
 const StringUtil::EnumStringLiteral *GetExpressionTypeValues() {
@@ -1694,6 +1736,7 @@ const StringUtil::EnumStringLiteral *GetExpressionTypeValues() {
 		{ static_cast<uint32_t>(ExpressionType::FUNCTION_REF), "FUNCTION_REF" },
 		{ static_cast<uint32_t>(ExpressionType::TABLE_REF), "TABLE_REF" },
 		{ static_cast<uint32_t>(ExpressionType::LAMBDA_REF), "LAMBDA_REF" },
+		{ static_cast<uint32_t>(ExpressionType::DECIDE_FRAME), "DECIDE_FRAME" },
 		{ static_cast<uint32_t>(ExpressionType::CAST), "CAST" },
 		{ static_cast<uint32_t>(ExpressionType::BOUND_REF), "BOUND_REF" },
 		{ static_cast<uint32_t>(ExpressionType::BOUND_COLUMN_REF), "BOUND_COLUMN_REF" },
@@ -1709,12 +1752,12 @@ const StringUtil::EnumStringLiteral *GetExpressionTypeValues() {
 
 template<>
 const char* EnumUtil::ToChars<ExpressionType>(ExpressionType value) {
-	return StringUtil::EnumToString(GetExpressionTypeValues(), 69, "ExpressionType", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetExpressionTypeValues(), 70, "ExpressionType", static_cast<uint32_t>(value));
 }
 
 template<>
 ExpressionType EnumUtil::FromString<ExpressionType>(const char *value) {
-	return static_cast<ExpressionType>(StringUtil::StringToEnum(GetExpressionTypeValues(), 69, "ExpressionType", value));
+	return static_cast<ExpressionType>(StringUtil::StringToEnum(GetExpressionTypeValues(), 70, "ExpressionType", value));
 }
 
 const StringUtil::EnumStringLiteral *GetExtensionABITypeValues() {

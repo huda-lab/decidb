@@ -50,7 +50,7 @@ from S1, which counts `BOOL` decisions.
 
 | Shape | Why |
 |---|---|
-| An objective with a `per` or a two-level reducer | Not a separable value per row. |
+| An objective with a `per` or a nested reducer | Not a separable value per row. |
 | An objective `when` that is volatile or can raise | Not a predicate the plan can read on every read of the source. |
 | Budget clauses with different `when`s | Two budgets have no single price per unit. |
 | A decision that is not `REAL`, or not row-scoped | `BOOL` and `INT` cannot fill part of an item. |

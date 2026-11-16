@@ -136,7 +136,11 @@ enum class DecideKeyNullMode : uint8_t;
 
 enum class DecideScopeCheckKind : uint8_t;
 
+enum class DecideSignatureFieldKind : uint8_t;
+
 enum class DecideSense : uint8_t;
+
+enum class DecideFrameAnchor : uint8_t;
 
 enum class DecideVarScope : uint8_t;
 
@@ -577,8 +581,14 @@ const char *EnumUtil::ToChars<DecideKeyNullMode>(DecideKeyNullMode value);
 template <>
 const char *EnumUtil::ToChars<DecideScopeCheckKind>(DecideScopeCheckKind value);
 
+template <>
+const char *EnumUtil::ToChars<DecideSignatureFieldKind>(DecideSignatureFieldKind value);
+
 template<>
 const char* EnumUtil::ToChars<DecideSense>(DecideSense value);
+
+template<>
+const char* EnumUtil::ToChars<DecideFrameAnchor>(DecideFrameAnchor value);
 
 template<>
 const char* EnumUtil::ToChars<DecideVarScope>(DecideVarScope value);
@@ -1160,8 +1170,14 @@ DecideKeyNullMode EnumUtil::FromString<DecideKeyNullMode>(const char *value);
 template <>
 DecideScopeCheckKind EnumUtil::FromString<DecideScopeCheckKind>(const char *value);
 
+template <>
+DecideSignatureFieldKind EnumUtil::FromString<DecideSignatureFieldKind>(const char *value);
+
 template<>
 DecideSense EnumUtil::FromString<DecideSense>(const char *value);
+
+template<>
+DecideFrameAnchor EnumUtil::FromString<DecideFrameAnchor>(const char *value);
 
 template<>
 DecideVarScope EnumUtil::FromString<DecideVarScope>(const char *value);

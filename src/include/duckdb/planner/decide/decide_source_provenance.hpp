@@ -32,15 +32,19 @@ inline void DecideReplaces(Expression &replacement, const Expression &replaced) 
 //! `keys` lets a reducer print its
 //! `per K` and `by (...)`; every renderer below takes it for the same reason.
 //! `text` is the query's text: each comparison's two sides are cut from it as the user wrote them.
+//! `frames` gives each frame over decisions its spelling (DecideFrameSpec::spelling).
 vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constraints, const DecideSourceText &text,
                                                             const vector<KeyedScopeInfo> &keyed_scopes,
-                                                            idx_t decide_index, const vector<DecideKey> *keys);
+                                                            idx_t decide_index, const vector<DecideKey> *keys,
+                                                            const vector<DecideFrameSpec> &frames);
 
 //! Rebuild canonical display templates after PlanSubqueries and canonicalization. `decide_index` tells a decision
 //! from data: the plan layer reprints the decision structure and quotes the data.
+//! `frames` gives each frame over decisions its spelling (DecideFrameSpec::spelling).
 void FinalizeConstraintSourceInfo(const Expression &constraints, vector<ConstraintSourceInfo> &sources,
                                   const DecideSourceText &text, const vector<KeyedScopeInfo> &keyed_scopes,
-                                  idx_t decide_index, const vector<DecideKey> *keys = nullptr);
+                                  idx_t decide_index, const vector<DecideKey> *keys,
+                                  const vector<DecideFrameSpec> &frames);
 
 //! Render one bound expression as the user wrote it.
 //!
@@ -81,13 +85,16 @@ struct DecideSourceNames {
 	//! located nodes that read no decision and reprints the decision structure, which canonicalization and the
 	//! rewrites reshape. DecidePlanNames makes the second kind.
 	bool written = true;
+	//! The frame selectors (LogicalDecide::frames): a frame marker the render does not quote prints its spelling
+	//! (DecideFrameSpec::spelling). Null prints the marker's aggregate.
+	const vector<DecideFrameSpec> *frames = nullptr;
 };
 
-//! The names a plan and the rewrites render with: the clause registries and the auxiliary labels. They render as a
-//! plan's layers do (DecideSourceNames::written is false).
+//! The names a plan and the rewrites render with: the clause registries, the auxiliary labels and the frames. They
+//! render as a plan's layers do (DecideSourceNames::written is false).
 DecideSourceNames DecidePlanNames(const DecideSourceText &text, const vector<KeyedScopeInfo> &keyed_scopes,
                                   const vector<DecideKey> &keys, idx_t decide_index,
-                                  const vector<pair<idx_t, string>> &aux_labels);
+                                  const vector<pair<idx_t, string>> &aux_labels, const vector<DecideFrameSpec> &frames);
 
 //! An expression as the query writes it (lower-case names, a reducer's `when`,
 //! `per` and `by`), every column qualified by its relation when `relations` lists any. `parent_precedence` is how
@@ -95,8 +102,9 @@ DecideSourceNames DecidePlanNames(const DecideSourceText &text, const vector<Key
 //! parenthesized.
 string RenderDecideSource(const Expression &expr, const DecideSourceNames &names, int parent_precedence = 0);
 
-//! A reducer as the query writes it, without its `by`: `sum(when S.priority:
-//! ship)`, for a message that names its `by` group separately.
+//! A reducer as the query writes it, without its own `by`: `sum(when S.priority:
+//! ship)`, for a message that names its `by` group separately. A reducer nested in it
+//! keeps its `by`: `sum(when c: max(x) by (t.h))`.
 string RenderDecideReducer(const BoundAggregateExpression &reducer, const DecideSourceNames &names);
 
 //! The body `e` of a reducer canonicalization built from `norm(e, p)` (WRITTEN_NORM_TAG_PREFIX), read back out of
@@ -104,32 +112,17 @@ string RenderDecideReducer(const BoundAggregateExpression &reducer, const Decide
 //! norm's body goes through here, so a new definition changes one function.
 const Expression *DecideWrittenNormBody(const BoundAggregateExpression &reducer);
 
+//! The body of the definition `reducer` holds of a norm of order `order`, or nullptr with no order.
+const Expression *DecideNormBody(const BoundAggregateExpression &reducer, const string &order);
+
 //! The key of a `per` wrapper, as written (`D.region`, `()`): cut from the query where the wrapper is located, else the
 //! key as it was first written (`keys`).
 string RenderDecidePerKey(const BoundConjunctionExpression &per, const DecideSourceText &text,
                           const vector<DecideKey> *keys);
 
-//! The two-level objective `outer(per k: inner(e) by (k))` (language/guide.md), which binds to the nested
-//! `outer(inner(e))` under a TWO_LEVEL_OBJECTIVE_TAG wrapper keyed on k, taken apart: the `when` in front of the body
-//! (empty for none), the key as the query writes it, the objective's one term under both, and the reducer in that term
-//! (its sign and factor aside). Every text of the form is built from these parts by the two formatters below: the
-//! written objective, the rows the solver receives after the rewrite (`per k: inner(e) by (k)`) and the rewrite's
-//! accounts.
-struct DecideTwoLevelParts {
-	string when; //!< the condition as written, empty for none
-	string key;
-	const Expression *term = nullptr;
-	const Expression *body = nullptr;
-};
-DecideTwoLevelParts SplitDecideTwoLevel(const BoundConjunctionExpression &per, const DecideSourceNames &names);
-//! The inner level, `inner(e) by (k)`, from the inner reducer as rendered (`inner(e)`).
-string RenderDecideTwoLevelInner(const string &inner, const string &key);
-//! The whole form, `outer(per k: inner(e) by (k))`, from the inner level as RenderDecideTwoLevelInner renders it.
-string RenderDecideTwoLevelOuter(const string &outer_name, const string &key, const string &inner);
-
 //! Split a DECIDE constraint or objective tree into one rendered string per clause,
 //! turning the wrappers the binder stamps back into the syntax the user wrote: `when c
-//! per K:` in front, and the two-level objective. Leaves are rendered by
+//! per K:` in front. Leaves are rendered by
 //! RenderDecideSource. Used by the logical and
 //! physical EXPLAIN paths, which see the tree AFTER the optimizer, so the output
 //! includes the rows linearization emitted as well as the ones the user wrote.
@@ -206,10 +199,14 @@ string RenderDecideObjectiveLayers(const string &sense_prefix, const string &wri
 //! constraints through the clause walker, so `when`/`per` wrappers print as written rather than as a generic
 //! conjunction. LogicalDecide::ParamsToString and PhysicalDecide::ParamsToString both call it and add their own
 //! cardinality. Extract Method as a function template: the two operators carry these fields under the same names, so it
-//! needs no parameter list and moves no field. It lives here, beside the renderers it calls, because this header is
-//! already included by both operators and the body adds no include.
+//! moves no field. Two facts each operator knows its own way are its parameters: the rewrite `accounts` (the physical
+//! operator's add what the data made of each clause, which EXPLAIN ANALYZE prints), and whether the objective is
+//! composed (`composed_objective`: the logical operator's composed terms, the physical operator's tree). It lives here,
+//! beside the renderers it calls, because this header is already included by both operators and the body adds no
+//! include.
 template <class OP>
-InsertionOrderPreservingMap<string> RenderDecideParams(const OP &op) {
+InsertionOrderPreservingMap<string>
+RenderDecideParams(const OP &op, const vector<LogicalDecide::RewriteAccount> &accounts, bool composed_objective) {
 	InsertionOrderPreservingMap<string> result;
 
 	// Variables (exclude auxiliary variables)
@@ -225,9 +222,10 @@ InsertionOrderPreservingMap<string> RenderDecideParams(const OP &op) {
 
 	// What the optimizer made of the clauses: a column that stands for an expression prints it, and each rewrite's
 	// account follows its clause, the objective's its own.
-	auto names = DecidePlanNames(op.source_text, op.keyed_scopes, op.keys, op.decide_index, op.aux_var_expressions);
+	auto names =
+	    DecidePlanNames(op.source_text, op.keyed_scopes, op.keys, op.decide_index, op.aux_var_expressions, op.frames);
 	vector<string> objective_accounts;
-	for (auto &account : op.rewrite_accounts) {
+	for (auto &account : accounts) {
 		if (account.source_clause_id == DConstants::INVALID_INDEX) {
 			objective_accounts.push_back(RenderDecideRewriteAccount(account));
 		}
@@ -237,7 +235,7 @@ InsertionOrderPreservingMap<string> RenderDecideParams(const OP &op) {
 	vector<string> objective_rows;
 	// The parser requires a SUCH THAT clause, so a plan always has constraints (transform_select_node.cpp).
 	auto layers = CollectDecideClauseLayers(*op.decide_constraints, names, op.constraint_sources, unattributed,
-	                                        objective_rows, op.rewrite_accounts);
+	                                        objective_rows, accounts);
 	string constraints_text = RenderDecideClauseLayers(layers, unattributed);
 	if (op.decide_objective) {
 		const bool maximize = op.written_sense == DecideSense::MAXIMIZE;
@@ -248,9 +246,7 @@ InsertionOrderPreservingMap<string> RenderDecideParams(const OP &op) {
 		// extremum, or what the composed objective keeps (its 0.0 placeholder or the terms
 		// beside its reducers) -- that its accounts describe and a row would misread. An AVG's sum stays, under its
 		// account, as in a constraint.
-		if (op.flat_objective_agg != ObjectiveAggregateType::NONE || !op.composed_minmax_objective_terms.empty() ||
-		    op.per_inner_agg == ObjectiveAggregateType::MIN_AGG ||
-		    op.per_inner_agg == ObjectiveAggregateType::MAX_AGG) {
+		if (op.flat_objective_agg != ObjectiveAggregateType::NONE || composed_objective) {
 			objective_strs.clear();
 		}
 		result["Objective"] = RenderDecideObjectiveLayers(sense_prefix, op.written_objective, op.canonical_objective,

@@ -9,6 +9,7 @@ add_library_unity(
   transform_coalesce.cpp
   transform_columnref.cpp
   transform_constant.cpp
+  transform_decide_frame.cpp
   transform_expression.cpp
   transform_function.cpp
   transform_grouping_function.cpp

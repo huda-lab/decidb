@@ -7,8 +7,12 @@ spelling, so `x <= 0.5 * sum(x) AND x >= 0.1 * sum(x)` built two helpers where `
 
 import pytest
 
-#: Three rows, so the model has three columns of x before it has any helper.
-_DATA = "(VALUES (1, 'F', 2.5, 1, 'a'), (2, 'G', 3.5, 2, 'a'), (3, 'F', 4.5, 3, 'b')) t(id, s, w, b, g)"
+#: Six rows, so the model has six columns of x before it has any helper. On fewer rows a helper the rows read costs
+#: more than writing its sum into them, which the plan then does (D89), and the clauses share no helper to count.
+_DATA = (
+    "(VALUES (1, 'F', 2.5, 1, 'a'), (2, 'G', 3.5, 2, 'a'), (3, 'F', 4.5, 3, 'b'), (4, 'G', 1.5, 4, 'b'), "
+    "(5, 'F', 5.5, 5, 'a'), (6, 'G', 6.5, 6, 'b')) t(id, s, w, b, g)"
+)
 
 
 def _columns(cli, sql, tmp_path):
@@ -17,7 +21,7 @@ def _columns(cli, sql, tmp_path):
     return int(next(line for line in dump.splitlines() if line.startswith("num_vars:")).split(":")[1])
 
 
-_COLUMNS = 3  # x on each of the three rows of _DATA
+_COLUMNS = 6  # x on each of the six rows of _DATA
 
 
 @pytest.mark.parametrize(

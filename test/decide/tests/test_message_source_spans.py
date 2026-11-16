@@ -52,14 +52,6 @@ def test_a_case_is_still_refused_as_a_case(decidb_cli):
 
 
 @pytest.mark.error
-def test_a_by_key_that_is_a_case_is_quoted_as_written(decidb_cli):
-    """`by (CASE WHEN ...)` is the user's CASE, not the parser's expansion of it, in the determination message."""
-    stderr = _stderr(decidb_cli, _query("per g: SUM(x) by (CASE WHEN b > 1 THEN 1 ELSE 2 END) <= 3"))
-    assert "(in by (CASE WHEN b > 1 THEN 1 ELSE 2 END))" in stderr, stderr
-    assert "does not determine CASE WHEN b > 1 THEN 1 ELSE 2 END" in stderr, stderr
-
-
-@pytest.mark.error
 def test_a_product_term_is_named_by_its_operator_over_the_written_factors(decidb_cli):
     """`SUM(x) * (w * x)` is refused naming the term `w * SUM(x)`: canonicalization built the product, so it prints
     its operator over its factors, each as written; the casts around `w` (a DECIMAL) do not appear."""

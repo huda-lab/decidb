@@ -554,9 +554,12 @@
      PER_DECIDE_PAREN = 770,
      PER_DECIDE_ROW = 771,
      BY_DECIDE = 772,
-     DECIDE_ITEM = 773,
-     POSTFIXOP = 774,
-     UMINUS = 775
+     AT_DECIDE = 773,
+     OVER_DECIDE = 774,
+     WITHIN_DECIDE = 775,
+     DECIDE_ITEM = 776,
+     POSTFIXOP = 777,
+     UMINUS = 778
    };
 #endif
 /* Tokens.  */
@@ -1075,9 +1078,12 @@
 #define PER_DECIDE_PAREN 770
 #define PER_DECIDE_ROW 771
 #define BY_DECIDE 772
-#define DECIDE_ITEM 773
-#define POSTFIXOP 774
-#define UMINUS 775
+#define AT_DECIDE 773
+#define OVER_DECIDE 774
+#define WITHIN_DECIDE 775
+#define DECIDE_ITEM 776
+#define POSTFIXOP 777
+#define UMINUS 778
 
 
 
@@ -1136,7 +1142,7 @@ typedef union YYSTYPE
 	PGTransactionStmtType transactiontype;
 }
 /* Line 1529 of yacc.c.  */
-#line 1140 "third_party/libpg_query/grammar/grammar_out.hpp"
+#line 1146 "third_party/libpg_query/grammar/grammar_out.hpp"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

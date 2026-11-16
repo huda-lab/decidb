@@ -67,38 +67,18 @@ class TestBinderErrors:
             match=r"does not support",
         )
 
-    # `IsAggregateFunctionName` asks the catalog for an aggregate, so avg, min and max take one branch (avg stands for
-    # them); sum also meets the nested-SUM refusal, the cryptic message the regression names.
-    @pytest.mark.parametrize("agg", ["avg", "sum"])
-    def test_data_only_aggregate_coefficient_rejected(self, decidb_cli, agg):
-        """A data-only aggregate (`AVG(p)`, `MIN(p)`, … over columns only) used as a
-        coefficient on a decision variable is rejected before symbolic normalization.
-
-        Regression: `SUM(avg(p) * x)` used to slip through — the SymEngine round-trip
-        distributed the variable into the aggregate (`avg(p)*x` -> `avg(p*x)`), a
-        different constraint, and returned a silently wrong optimum. `sum` was already
-        rejected (with a cryptic nested-SUM message); now all four reject uniformly.
-        """
+    @pytest.mark.parametrize("clause", ["x * avg(p) <= 25", "avg(p) * sum(x) <= 25", "sum(x) * max(p) <= 25"])
+    def test_data_only_aggregate_coefficient_rejected(self, decidb_cli, clause):
+        """A data-only aggregate (`AVG(p)`, `MAX(p)`, ... over columns only) scaling a
+        decision outside every reducer over decisions is rejected: the bound side holds it
+        (S10). Inside one it is a value of its path's group, a coefficient
+        (test_anr_nested.py)."""
         decidb_cli.assert_error(
             f"""
                 SELECT id, p, x FROM (VALUES (1,10.0),(2,20.0)) t(id, p)
-                DECIDE x(BOOL)
-                SUCH THAT SUM({agg}(p) * x) <= 3
+                DECIDE x(REAL)
+                SUCH THAT x <= 1 AND {clause}
                 MAXIMIZE SUM(x)
-            """,
-            match=r"aggregate over table columns .* cannot multiply a decision variable",
-        )
-
-    def test_data_only_aggregate_coefficient_rejected_in_objective(self, decidb_cli):
-        """The same rejection applies in an objective (`ValidateDecideNoNonLinearScalar`
-        runs on both constraints and objectives), and the message stays context-neutral
-        (no 'move it to the RHS' — an objective has no RHS)."""
-        decidb_cli.assert_error(
-            """
-                SELECT id, p, x FROM (VALUES (1,10.0),(2,20.0)) t(id, p)
-                DECIDE x(BOOL)
-                SUCH THAT SUM(x) <= 1
-                MAXIMIZE SUM(avg(p) * x)
             """,
             match=r"aggregate over table columns .* cannot multiply a decision variable",
         )
@@ -178,6 +158,21 @@ class TestBinderErrors:
             """,
             match=r"must reference at least one DECIDE variable",
         )
+
+    @pytest.mark.parametrize("lhs", ["SUM(l_quantity) + 1", "2 * MAX(l_quantity)", "ABS(SUM(l_quantity) - 3)"])
+    def test_no_decide_variable_under_arithmetic(self, decidb_cli, lhs):
+        """A reducer under arithmetic reads no decision either: refused by name, where it
+        reached term extraction as an internal error."""
+        result = decidb_cli.execute_raw(
+            f"""
+                SELECT l_quantity FROM lineitem
+                DECIDE x(INT)
+                SUCH THAT x <= 1 AND {lhs} <= 500
+                MAXIMIZE SUM(x*l_quantity) LIMIT 1
+            """
+        )
+        assert "reads no DECIDE variable; compare a decision with it" in result.stderr, result.stderr
+        assert_no_internal_leak(result, "a comparison with no decision")
 
     def test_multiple_decide_variables_in_sum(self, decidb_cli):
         """Cubic (x*x*x) in SUM is not supported — must reject."""
@@ -993,6 +988,67 @@ class TestRefusalsInEverySpelling:
         ), result.stderr
         assert_no_internal_leak(result, "a decision-free objective term")
 
+    @pytest.mark.parametrize(
+        "term, quoted",
+        [
+            # The left of an IN and an operator function's operands have nothing around them to delimit them.
+            pytest.param("sum(when (t.p AND t.q) IN (false): t.cap)", "(t.p AND t.q) IN (", id="an-and-left-of-an-in"),
+            pytest.param(
+                "sum(when ((t.p = t.q) || 'x') = 'truex': t.cap)",
+                "((t.p = t.q) || 'x')",
+                id="a-comparison-under-an-operator",
+            ),
+        ],
+    )
+    def test_a_printed_operand_reads_as_written(self, decidb_cli, term, quoted):
+        result = decidb_cli.execute_raw(
+            f"""SELECT id, x FROM (VALUES (1, 3, true, false), (2, 4, false, true)) t(id, cap, p, q)
+            DECIDE x(REAL) SUCH THAT x <= 7 MAXIMIZE sum(x) - {term}"""
+        )
+        assert quoted in result.stderr, result.stderr
+
+    def test_a_string_that_reads_as_a_tag_is_left_as_written(self, decidb_cli):
+        """Only an alias holds a tag: the same text in a literal is what the query says, a name's mark included."""
+        term = "CAST(sum(t.cap + length('__source_fragment_0__ := abc')) AS INTEGER)"
+        result = decidb_cli.execute_raw(
+            f"SELECT id, x FROM (VALUES (1, 3)) t(id, cap) DECIDE x(REAL) SUCH THAT x <= 7 MAXIMIZE sum(x) - {term}"
+        )
+        assert "length('__source_fragment_0__ := abc')" in result.stderr, result.stderr
+
+    @pytest.mark.parametrize(
+        "term",
+        [
+            "0.5 * norm(t.cap, 'inf')",
+            "norm(t.cap, 'inf') / 2",
+            "0.5 * sum(t.cap)",
+            "sum(t.cap) by (t.id)",
+            "sum((SELECT 1))",
+            "norm(CAST(t.cap AS DOUBLE), 2)",
+            "sum(CAST(abs(CAST(t.cap AS DOUBLE)) AS INTEGER))",
+            "CAST(sum(q := CAST(t.cap AS DOUBLE)) AS INTEGER)",
+            'CAST(sum("my q" := CAST(t.cap AS DOUBLE)) AS INTEGER)',
+        ],
+        ids=[
+            "a-norm-under-a-factor",
+            "a-norm-under-a-divisor",
+            "a-reducer-under-a-factor",
+            "a-reducer-with-its-by",
+            "a-subquery-as-a-reducers-argument",
+            "a-cast-as-a-norms-body",
+            "a-cast-under-a-function-under-a-cast",
+            "a-written-argument-name-stays",
+            "a-quoted-argument-name-stays",
+        ],
+    )
+    def test_a_decision_free_term_is_quoted_as_written(self, decidb_cli, term):
+        """Binding casts a factor's operand, and a cast prints its child by its alias, so the bound name held the tag
+        `__written_norm_inf__`; the term's own spelling holds no internal name (D40)."""
+        result = decidb_cli.execute_raw(
+            f"SELECT id, x FROM (VALUES (1, 3), (2, 4)) t(id, cap) DECIDE x(REAL) SUCH THAT x <= 7 MAXIMIZE sum(x) - {term}"
+        )
+        assert f"'{term}' does not reference a decision" in result.stderr, result.stderr
+        assert_no_internal_leak(result, "a decision-free objective term")
+
 
 _REFUSAL_ROWS = "SELECT id, x FROM (VALUES (1, 3), (2, 4)) t(id, cap) "
 
@@ -1171,21 +1227,8 @@ class TestBinderRefusalBranches:
     @pytest.mark.parametrize(
         "objective, message",
         [
-            # Two-level forms the binder refuses; each reaches a different test of the form.
-            ("sum(per (): max(w * x) by ())", r"an aggregate inside an aggregate is not supported yet"),
+            # A COUNT over a decision inside a nest.
             ("sum(per k: count(x) by (k))", r"COUNT over a DECIDE variable is degenerate"),
-            ("sum(per k: max(w) by (k))", r"Nested MAX\(\) inside DECIDE expression must reference a DECIDE variable"),
-            ("sum(per k: max() by (k))", r"Nested MAX\(\) inside DECIDE expression must reference a DECIDE variable"),
-            ("sum(per k: max(per k: w * x) by (k))", r"per inside the inner reducer of sum\(per k: max\(\.\.\.\)"),
-            ("sum(per k: max(w * x) by (k + 1))", r"the by key must be the per key"),
-            # A reducer in a reducer under a product with a decision.
-            ("SUM(2 * SUM(x))", r"an aggregate inside an aggregate is not supported yet"),
-            # A factor on the two-level form that is no constant: its sign is unknown before the query runs, and the
-            # rewrite that reads it (RewriteMinMaxObjectiveTree) has nowhere to put the other extremum.
-            (
-                "(SELECT sum(c) FROM (VALUES (1), (-1)) s(c)) * max(per k: sum(w * x) by (k))",
-                r"an aggregate inside an aggregate is not supported yet",
-            ),
             # An aggregate with arguments no function takes.
             ("SUM(w * x, 2)", r"SUM needs one argument, found 'SUM\(w \* x, 2\)'"),
             # MAX(x, n) is DuckDB's top-n aggregate, a list: the objective refuses it as a constraint does.

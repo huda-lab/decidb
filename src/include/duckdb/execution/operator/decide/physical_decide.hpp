@@ -6,7 +6,9 @@
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
-#include "duckdb/planner/decide/decide_prepared_model.hpp"
+#include "duckdb/planner/decide/decide_tree_terms.hpp"
+#include "duckdb/planner/decide/decide_tree.hpp"
+#include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
 #include "duckdb/decidb/solver/solver_registry.hpp"
@@ -18,43 +20,10 @@ namespace duckdb {
 //! physical_decide.cpp. Finalize's private phase methods take it by reference.
 class DecideGlobalSinkState;
 
-//! Per-Finalize cache of TransformToChunkExpression results, keyed by the original
-//! (unlowered) expression pointer. Outlives every ExpressionExecutor built during
-//! Finalize, so it's safe for executors to retain references into cached entries.
-using ChunkExprCache = std::unordered_map<const Expression *, unique_ptr<Expression>>;
+class DecideDescent;
 
-//! One cached key grouping: the key's row→group assignment, groups numbered by key
-//! value, over the rows the key was computed on. A key computed once (e.g. by a
-//! constraint) is reused by every other call site that reads it (e.g. the objective,
-//! a later constraint, or a decision the key declares).
-struct PerGroupCacheEntry {
-	//! The rows the key was computed on; empty: every row.
-	vector<bool> evaluated_rows;
-	vector<idx_t> unfiltered_row_group_ids;
-	idx_t unfiltered_num_groups;
-	//! A row of each group, which a GroupName holds until assembly resolves it (ResolveGroupNames).
-	vector<idx_t> group_rows;
-	//! The key's representative values (PerGroupCache::key_values), which a message names a group by.
-	idx_t key_values = DConstants::INVALID_INDEX;
-};
 //! The time-limit report's closeness figure: `gap`, a fraction, as a percentage with two significant digits.
 string FormatDecideGapPercent(double gap);
-
-struct PerGroupCache {
-	//! Keyed by the key's index in PhysicalDecide::keys (INVALID_INDEX: the empty key).
-	std::unordered_map<idx_t, PerGroupCacheEntry> entries;
-	//! Each key's representative values, of its grouping as it stands: a rebuilt entry
-	//! replaces its key's. Moved into SolverInput::key_values once extraction is done.
-	vector<SolverInput::KeyValues> key_values;
-};
-
-//! Per-term filter state for a reducer's own `when` (constraint terms, bilinear terms,
-//! quadratic groups, and their objective-side equivalents all share this shape).
-struct TermFilterState {
-	vector<bool> mask;
-	bool has_filter = false;
-	bool avg_scale = false;
-};
 
 //===--------------------------------------------------------------------===//
 // PhysicalDecide Operator
@@ -64,7 +33,11 @@ struct TermFilterState {
 //! entire input before producing output.
 class PhysicalDecide : public PhysicalOperator {
 public:
+	//! Semantic E/G/O graph, captured before flat frame lowering during migration.
+	unique_ptr<DecideTree> tree;
 	static constexpr const PhysicalOperatorType TYPE = PhysicalOperatorType::DECIDE;
+	//! The tree's back end, which records the variants it numbers as flat records them (RecordVariants).
+	friend class DecideModelEmitter;
 
 public:
 	PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardinality, unique_ptr<PhysicalOperator> child,
@@ -120,29 +93,18 @@ public:
 	// Links from MIN/MAX indicator variables: (agg_name "min"/"max", indicator_idx)
 	vector<string> minmax_clause_labels;
 
-	// Links from bilinear McCormick auxiliary variables: w = b * x
-	// (aux_idx, bool_var_idx, other_var_idx) — for execution-time Big-M constraint generation
-	vector<LogicalDecide::BilinearLink> bilinear_links;
-	vector<LogicalDecide::AbsMaximizeLink> abs_maximize_links;
-
 	// F6: auxiliary variable index -> user's original source expression string
 	// (ABS(...) / MIN/MAX(...) / product / <>), for naming an escaping aux column
 	// in the unbounded diagnosis. Sparse; only auxiliary variables appear.
 	vector<pair<idx_t, string>> aux_var_expressions;
 
-	// Composed MIN/MAX constraints (additive LHS with MIN/MAX terms mixed in).
-	// Each is emitted as a block of RawConstraints in global_constraints at sink finalize.
-	vector<LogicalDecide::ComposedMinMaxConstraint> composed_minmax_constraints;
-
-	// Composed MIN/MAX objective: additive sum of SUM/AVG/MIN/MAX terms.
-	// Empty when the objective is not composed.
-	vector<LogicalDecide::ComposedMinMaxTerm> composed_minmax_objective_terms;
-
-	//! The helper decisions of the value rewrite and the reducers they hold
-	//! (LogicalDecide::reducer_value_links); PHASE 2 evaluates each one's members.
-	vector<LogicalDecide::ReducerValueLink> reducer_value_links;
 	//! What each rewrite made of a clause, for EXPLAIN (LogicalDecide::rewrite_accounts).
 	vector<LogicalDecide::RewriteAccount> rewrite_accounts;
+	//! What the data made of each clause (Kind::RUN_TIME): the variants of its classes (D70, D71), the instances it
+	//! skipped for having no value (deck pp. 50, 56). Written by Finalize, read by ParamsToString, which the profiler
+	//! calls again once the result is read -- so EXPLAIN ANALYZE prints it, and a plain EXPLAIN, which runs nothing,
+	//! does not. Run-time facts of the one execution, hence mutable.
+	mutable vector<LogicalDecide::RewriteAccount> run_time_accounts;
 
 	// --- Singleton-row variable bounds (decided by DecideOptimizer::FoldSingletonRows) ---
 	//
@@ -152,24 +114,16 @@ public:
 	vector<DecideBoundBox> singleton_row_boxes;
 	// Every folded user bound, kept so the infeasible diagnosis can open its column box and
 	// quote it as written; its clause reaches the repair model through
-	// DecidePreparedModel::singleton_row_constraints. A BETWEEN contributes two entries.
+	// its folded root's clause (DecideNode::folded). A BETWEEN contributes two entries.
 	vector<LogicalDecide::UserBoundSpec> user_singleton_row_bounds;
+	vector<LogicalDecide::UserBoundSpec> member_singleton_row_bounds;
 
 	// --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
 
-	// Flat (not two-level) objective: original aggregate type before rewrite to SUM
+	// A MIN/MAX objective: original aggregate type before rewrite to SUM
 	ObjectiveAggregateType flat_objective_agg = ObjectiveAggregateType::NONE;
 	// Pre-computed: true if easy formulation (MAXIMIZE+MIN or MINIMIZE+MAX)
 	bool flat_objective_is_easy = false;
-
-	// The two-level objective, outer(per k: inner(e) by (k))
-	ObjectiveAggregateType per_inner_agg = ObjectiveAggregateType::NONE;
-	ObjectiveAggregateType per_outer_agg = ObjectiveAggregateType::NONE;
-	// Pre-computed easy/hard at each level (only meaningful when agg is MIN_AGG or MAX_AGG)
-	bool per_inner_is_easy = false;
-	bool per_outer_is_easy = false;
-	// True if inner aggregate was originally AVG (coefficients need 1/n_g scaling)
-	bool per_inner_was_avg = false;
 
 	// --- Key scopes ---
 
@@ -185,8 +139,16 @@ public:
 	//! input chunk.
 	vector<DecideKey> keys;
 
-	//! The run-time checks of the clauses, run first.
+	//! The frame selectors (LogicalDecide::frames), their expressions resolved against the
+	//! input chunk.
+	vector<DecideFrameSpec> frames;
+
+	//! The run-time checks of the values the bounds read, which a plan under the node has made by now.
 	vector<DecideScopeCheck> scope_checks;
+	//! The variant signatures (LogicalDecide::signatures), their expressions resolved against the input chunk, and the
+	//! objective's, INVALID_INDEX for none.
+	vector<DecideSignature> signatures;
+	idx_t objective_signature = DConstants::INVALID_INDEX;
 
 	//! Source column name per physical child-output column (positionally aligned
 	//! with gstate.data columns), resolved post-pruning in plan_decide.cpp. Each name
@@ -238,13 +200,6 @@ public:
 	//! a fact only it can see, the same way the `<>` range collapse does.
 	bool force_native_constructs = false;
 
-	// --- Prepared linear form (decided by BuildDecidePreparedModel, stage 05) ---
-
-	//! Every constraint and the objective, already flattened into additive terms
-	//! whose coefficients are still unevaluated expressions. PHASE 2 evaluates those
-	//! coefficients against the materialized rows; nothing here re-derives the shape.
-	DecidePreparedModel prepared;
-
 public:
 	// Source interface
 	unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const override;
@@ -285,25 +240,19 @@ private:
 	//! Layer 8 never re-selects: it looks up the name stage 05 recorded.
 	SolverBackend PlannedSolverBackend() const;
 
-	//! PHASE 1.5: one row→class mapping per key scope -- a keyed decision's key columns,
-	//! or a helper decision's `by` key over the rows its clause keeps
-	//! (KeyedScopeInfo::value_link).
-	vector<KeyedMapping> BuildKeyedMappings(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-	                                        ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache) const;
-
-	//! PHASE 1.6: the scope checks (language/guide.md §7.3), before any clause is
-	//! evaluated, so every later phase may assume a well-defined clause. Raises the first
-	//! one the data fails: a `when` that keeps no row, a key that does not determine a
-	//! value or a decision, a reducer with no row in some `by` group.
-	void RunScopeChecks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-	                    ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-	                    const vector<KeyedMapping> &keyed_mappings) const;
-
-	//! PHASE 2, sub-phase 1: evaluate every constraint's coefficients and append the
-	//! result to gstate.evaluated_constraints.
-	void EvaluateConstraints(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-	                         ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-	                         const vector<KeyedMapping> &keyed_mappings) const;
+	//! Records an EXPLAIN ANALYZE line (run_time_accounts) for a scoped expression that generated `variants`
+	//! instances -- `unit`: constraints, or a reducer's values -- from `classes` classes.
+	void RecordVariants(const DecideSignature &signature, const char *unit, idx_t variants, idx_t classes) const;
+	void RecordRunTimeAccount(idx_t source_clause_id, string subject) const;
+	//! What the data left of each clause (deck pp. 50, 56): the instances it skipped for having no value, an EXPLAIN
+	//! ANALYZE line under it, and a clause left with none, which constrains nothing, a warning on stderr.
+	void ReportSkippedInstances(const DecideGlobalSinkState &gstate, bool silent) const;
+	//! An objective that is 0 whatever the decisions -- every term with no value or a zero factor on every row -- is
+	//! a warning on stderr and an EXPLAIN ANALYZE line: any feasible answer is optimal.
+	void ReportAnEmptyObjective(const SolverInput &input) const;
+	//! What stage 06 made of each helper the plan names (D89): written where it is read, with no column, or its groups
+	//! of one member written in -- an EXPLAIN ANALYZE line under each clause whose plan line names the helper.
+	void ReportInlinedHelpers(const SolverInput &input) const;
 
 	//! Everything PHASE 2 reads off the data that a later phase still needs. It carries
 	//! objective terms *and* composed-MIN/MAX constraint clauses, so it is named for the
@@ -313,16 +262,16 @@ private:
 	struct EvaluatedClauses {
 		//! Filter state for the objective's linear terms and its product groups.
 		vector<TermFilterState> linear_filters, group_filters;
-		//! The two-level objective's grouping, keyed by the filters above. Copied into
-		//! `SolverInput` during assembly.
-		vector<idx_t> objective_row_group_ids;
-		idx_t objective_num_groups = 0;
 
-		//! One composed MIN/MAX *constraint*, evaluated. Parallel to
-		//! `composed_minmax_constraints`; the comparison and clause id stay on the plan.
+		//! One composed MIN/MAX *constraint*, evaluated. Source identity and repair metadata came from its E node.
 		struct ComposedConstraint {
 			vector<ComposedMinMaxTermData> terms;
 			double rhs = 0.0;
+			//! Comparison owned by the composed clause's E node.
+			ExpressionType comparison = ExpressionType::INVALID;
+			//! Source and removal groups owned by the composed clause's E node.
+			idx_t source_clause_id = DConstants::INVALID_INDEX;
+			idx_t removal_group_id = DConstants::INVALID_INDEX;
 			//! Its repair group, numbered after every clause of `constraints` and
 			//! `singleton_row_constraints`, so its slack is shared with no other clause.
 			idx_t repair_group_id = DConstants::INVALID_INDEX;
@@ -338,36 +287,31 @@ private:
 		vector<ComposedMinMaxTermData> composed_objective_terms;
 	};
 
-	//! PHASE 2, sub-phase 2: evaluate the objective's coefficients onto gstate's
-	//! objective-evaluation fields, then settle the two-level objective's grouping.
-	EvaluatedClauses EvaluateObjective(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-	                                   ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-	                                   const vector<KeyedMapping> &keyed_mappings) const;
+	//! The evaluation (language/guide.md §6.4): the tree's descent over the input (into `descent`), each node's
+	//! programs over its entries, and the model emitter, filling gstate's evaluation fields and the arguments after
+	//! `descent`, with the values its groups are named by in `key_values`. It prints only when not `silent`.
+	void EvaluateTree(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+	                  unique_ptr<DecideDescent> &descent, vector<SolverInput::KeyValues> &key_values,
+	                  vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated, bool silent) const;
 
-	//! PHASE 2, sub-phase 3: evaluate every composed MIN/MAX clause — each inner term's
-	//! per-row coefficient, the factor peeled off a reducer, the term's WHEN mask, the
-	//! constant RHS. The rows these become are emitted later, by the formulation pass.
-	void EvaluateComposedClauses(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-	                             ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-	                             const vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated) const;
+	//! Then each AVG term is divided by the rows it reads, or by those of its own group (D81).
+	static void ScaleObjectiveAvg(DecideGlobalSinkState &gstate, idx_t num_rows, EvaluatedClauses &evaluated);
 
-	//! PHASE 2, sub-phase 4: evaluate every helper decision's members -- the rows of the
-	//! reducer it holds, among those the clause and the reducer keep, grouped by its `by`
-	//! key -- onto gstate.evaluated_value_links. The formulation pass states the
-	//! definition over them.
-	void EvaluateReducerValueLinks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-	                               ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-	                               const vector<KeyedMapping> &keyed_mappings) const;
+	//! The tail of a composed clause's evaluation once its bound and terms are in `clause`: its one
+	//! instance is skipped where a factor is NULL (`null_factor`) or a term reads no row (deck pp. 50, 56), repaired in
+	//! a group after every other clause, and held where its `when` keeps a row, counted unless skipped. The rows its
+	//! `when` keeps (`kept_rows`) are read only under DIAGNOSE or once it is skipped; under DIAGNOSE `class_set` gives
+	//! the classes its one row stands for among them (D28). Appends the clause to `evaluated`.
+	void FinishComposedClause(DecideGlobalSinkState &gstate, idx_t num_rows, const DecideNode &node, bool null_factor,
+	                          const std::function<vector<bool>()> &kept_rows,
+	                          const std::function<idx_t(const vector<bool> &)> &class_set,
+	                          EvaluatedClauses::ComposedConstraint clause, EvaluatedClauses &evaluated) const;
 
 	//! PHASE 3a, assembly: build `SolverInput` out of what PHASE 2 evaluated — variable
-	//! types and the column box, implied-bound propagation, the objective transfer with
-	//! its qualifier de-duplication and AVG scaling, and the flat column space. Runs
-	//! once per query: it moves the evaluated data off `gstate`, and the box it settles
-	//! is the one the formulation pass below is then handed.
-	//! `evaluated` is taken mutably because this is where the objective's per-term
-	//! filter masks are *finalized*: the relation qualifier's de-duplication is folded
-	//! into them before AVG scaling reads the surviving-row counts. The formulation pass
-	//! below does not read those masks, so a second formulation is unaffected.
+	//! types and the column box, implied-bound propagation, the objective transfer, and
+	//! the flat column space. Runs once per query: it moves the evaluated data off
+	//! `gstate`, and the box it settles is the one the formulation pass below is then
+	//! handed.
 	SolverInput BuildSolverInput(DecideGlobalSinkState &gstate, idx_t num_rows, vector<KeyedMapping> keyed_mappings,
 	                             vector<SolverInput::KeyValues> key_values, EvaluatedClauses &evaluated,
 	                             VarIndexer &out_var_indexer) const;

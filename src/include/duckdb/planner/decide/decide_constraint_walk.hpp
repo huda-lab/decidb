@@ -9,10 +9,9 @@
 // A bound DECIDE constraint tree is AND-conjunctions plus WRAPPERS. A wrapper is a
 // conjunction carrying a tag: `when c:` holds the constraint in child 0 and its
 // condition in child 1; `per K:` holds the constraint in child 0 and names its key K by a
-// tag (PerWrapperKey); the two-level objective's PER wrapper holds the objective body in
-// child 0 and names its key the same way. The condition is METADATA -- walking into it
-// treats `when c` as though the user had written another constraint, which is silently
-// wrong rather than loudly wrong.
+// tag (PerWrapperKey). The condition is METADATA -- walking into it treats `when c` as
+// though the user had written another constraint, which is silently wrong rather than
+// loudly wrong.
 //
 // So every pass over the tree has to know the same rule: at a wrapper, descend only
 // into child 0. The rule is stated once, here, so that a third wrapper kind is added in
@@ -44,20 +43,14 @@ inline bool IsWhenFilterWrapper(const BoundConjunctionExpression &conjunction) {
 	return HasDecideTag(conjunction.GetAlias(), WHEN_FILTER_TAG);
 }
 
-//! The two-level objective `outer(per k: inner(e) by (k))`: child 0 is the objective
-//! body; the tag names the key. Only the objective carries it.
-inline bool IsTwoLevelObjectiveWrapper(const BoundConjunctionExpression &conjunction) {
-	return IsTwoLevelObjectiveTag(conjunction.GetAlias());
-}
-
 //! `per K: <constraint>`: child 0 is the constraint; the tag names the key, none for
 //! `per ()`. One constraint per class of the key; it groups no reducer.
 inline bool IsPerClassWrapper(const BoundConjunctionExpression &conjunction) {
 	return HasDecideTag(conjunction.GetAlias(), PER_CLASS_TAG);
 }
 
-//! The key a `per K:` wrapper or the two-level objective's PER wrapper names: an index
-//! into LogicalDecide::keys, INVALID_INDEX for `per ()`.
+//! The key a `per K:` wrapper names: an index into LogicalDecide::keys, INVALID_INDEX
+//! for `per ()`.
 inline idx_t PerWrapperKey(const BoundConjunctionExpression &wrapper) {
 	idx_t key = DConstants::INVALID_INDEX;
 	TryParsePerKeyTag(wrapper.GetAlias(), key);
@@ -67,8 +60,7 @@ inline idx_t PerWrapperKey(const BoundConjunctionExpression &wrapper) {
 //! True for any wrapper. An untagged conjunction is a plain AND, every child of which
 //! is a constraint in its own right.
 inline bool IsConstraintWrapper(const BoundConjunctionExpression &conjunction) {
-	return IsTwoLevelObjectiveWrapper(conjunction) || IsWhenFilterWrapper(conjunction) ||
-	       IsPerClassWrapper(conjunction);
+	return IsWhenFilterWrapper(conjunction) || IsPerClassWrapper(conjunction);
 }
 
 //! Whether child `child_index` is a constraint rather than wrapper metadata.
@@ -82,7 +74,7 @@ inline bool IsConstraintChild(const BoundConjunctionExpression &conjunction, idx
 //! AND: above every wrapper it is the empty scope, and below one there is none. A rewrite that replaces nodes keeps
 //! its own recursion and takes each step with EnterDecideScope; a pass that only reads the clauses takes
 //! ForEachScopedConstraintLeaf. A clause that leaves the tree owns its scope as a DecideClauseScope
-//! (decide_prepared_model.hpp).
+//! (decide_tree_terms.hpp).
 struct DecideEnclosingScope {
 	const BoundConjunctionExpression *when_wrapper = nullptr;
 	const BoundConjunctionExpression *per_wrapper = nullptr;
@@ -98,8 +90,7 @@ struct DecideEnclosingScope {
 };
 
 //! The scope in force below `node`, given the one above it: a `when c:` wrapper supplies the condition, a `per K:`
-//! wrapper the key, and any other node passes `scope` on. The two-level objective's PER wrapper is not a clause's
-//! `per`: it passes the scope on.
+//! wrapper the key, and any other node passes `scope` on.
 inline DecideEnclosingScope EnterDecideScope(const Expression &node, DecideEnclosingScope scope) {
 	if (node.GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
 		return scope;

@@ -16,11 +16,13 @@ namespace duckdb {
 
 class LogicalDecide;
 class SolverBackend;
+struct DecideTree;
 
-//! What model class this query will demand of its solver: the prepared model's product groups, filled into a
-//! DecideModelShape and classified (ClassifyDecideModel). A *prediction* of what `SolverModel::ModelClass()` will
-//! report once the rows are in, and it must never predict less — see SolverModelClass.
-SolverModelClass DeriveDecideModelClass(const LogicalDecide &op);
+//! What model class this query will demand of its solver: the product groups of the clauses and objective lowered into
+//! `tree` (LowerDecideTree), filled into a DecideModelShape and classified (ClassifyDecideModel). A *prediction* of
+//! what `SolverModel::ModelClass()` will report once the rows are in, and it must never predict less — see
+//! SolverModelClass.
+SolverModelClass DeriveDecideModelClass(const LogicalDecide &op, const DecideTree &tree);
 
 //! Throw if the backend chosen for this query cannot take the model class it needs.
 //!
@@ -31,9 +33,9 @@ SolverModelClass DeriveDecideModelClass(const LogicalDecide &op);
 //! machine. What differs is whether this machine has a solver that can run it, so
 //! the refusal blames the host and names the solver to install.
 //!
-//! Called once, right after BuildDecidePreparedModel, which is the first point at
+//! Called once, right after LowerDecideTree, which is the first point at
 //! which the shape of every constraint and the objective is settled.
-void RequireDecideSolverSupport(const LogicalDecide &op);
+void RequireDecideSolverSupport(const LogicalDecide &op, const DecideTree &tree);
 
 //! The demand of `needed` that `backend` fails to meet, NONE when it can take the model. The one place a backend's
 //! capabilities are read against a query's demand: the gate throws on a gap, and DecideSolverRuns asks whether there is

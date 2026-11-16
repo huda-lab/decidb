@@ -3,15 +3,24 @@
 A clause with no `when`, `per` or `by` means its fully explicit form: `per row:` in front,
 `by ()` on each reducer, and an objective produced once (`per ()`) --
 language/guide.md §1.1. Each test here states a query whose answer or refusal follows
-from that reading, judged by the scope oracle (`_scope_oracle.ScopedModel`) or, for a
-shape the oracle cannot state, by enumerating every assignment (`_brute_force`). A test
+from that reading, judged by the scope oracle (`_scope_oracle.ScopedModel`), by
+`_anr_oracle` where reducers nest, or, for a shape no oracle states, by enumerating every
+assignment (`_brute_force`). A test
 runs on both solvers; where one cannot load the model, its refusal is asserted instead.
 """
 
 import pytest
 
+from . import _anr_oracle as anr
 from ._brute_force import judge_rows
-from ._scope_cases import answer, const, scope_solver, table, table_rows  # noqa: F401 -- scope_solver is a fixture
+from ._scope_cases import (
+    answer,
+    const,
+    scope_solver,
+    table,
+    table_rows,
+    on_highs_too,
+)  # noqa: F401 -- scope_solver is a fixture
 from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 from solver.types import ObjSense
 
@@ -331,24 +340,32 @@ def test_max_of_a_decision_bounded_by_max_of_data(request, scope_solver, cli_fix
     "decisions, objective, message",
     [
         pytest.param(
-            "x(INT), per (): s(INT)", "MAXIMIZE SUM(x) - w * s", "per () does not determine w.", id="row-varying-data"
+            "x(INT), per (): s(INT)",
+            "MAXIMIZE SUM(x) - w * s",
+            "'w' takes more than one value over the kept rows",
+            id="row-varying-data",
         ),  # not read off row 0's w
         pytest.param(
-            "x(INT)", "MAXIMIZE x", "per () does not determine the decision x", id="per-row-decision"
+            "x(INT)",
+            "MAXIMIZE x",
+            "the decision 'x' (declared per row) has more than one instance",
+            id="per-row-decision",
         ),  # not "does not support 'x'(ExpressionClass::COLUMN_REF)"
         pytest.param(
             "x(INT), y(INT)",
             "MAXIMIZE SUM(x) + y",
-            "per () does not determine the decision y",
+            "the decision 'y' (declared per row) has more than one instance",
             id="per-row-decision-beside-a-reducer",
         ),  # not "contains a non-aggregate term: y"
     ],
 )
 def test_objective_term_must_be_one_value(decidb_cli, decisions, objective, message):
+    """The objective is produced once (D72)."""
     result = decidb_cli.execute_raw(
         _query(decisions, "x <= cap AND s <= 4" if "s(" in decisions else "x <= cap", objective)
     )
     assert message in result.stderr, result.stderr
+    assert "would be produced more than once" in result.stderr, result.stderr
 
 
 def test_a_per_row_objective_decision_on_one_row(decidb_cli, scope_solver):
@@ -362,10 +379,20 @@ def test_a_per_row_objective_decision_on_one_row(decidb_cli, scope_solver):
     )
 
 
-def test_reducer_inside_a_reducer_is_refused(decidb_cli):
-    """`SUM(MAX(x))` is refused, never modelled as one reducer."""
-    result = decidb_cli.execute_raw(_query("x(INT)", "x <= cap AND SUM(MAX(x)) <= 5", "MAXIMIZE SUM(x)"))
-    assert "an aggregate inside an aggregate is not supported yet" in result.stderr, result.stderr
+def test_a_reducer_inside_a_reducer_is_read_at_every_row(decidb_cli, scope_solver):
+    """`SUM(MAX(x)) <= 5` is `sum(per row: max(x) by ()) by ()` (language/guide.md §5.5): each of the three
+    rows reads the one maximum, so 3 * max(x) <= 5 and no x exceeds 1. Judged by
+    `_anr_oracle`, which states nesting."""
+    x = anr.Var("x")
+    clauses = [anr.clause(anr.le(x, anr.Col("cap"))), anr.clause(anr.le(anr.reduce("sum", anr.reduce("max", x)), 5))]
+    objective = anr.Objective(ObjSense.MAXIMIZE, anr.reduce("sum", x))
+    model = anr.AnrModel(table_rows(COLUMNS, ROWS), [anr.Decision("x")])
+    sql = _query("x(INT)", "x <= cap AND SUM(MAX(x)) <= 5", "MAXIMIZE SUM(x)")
+    assert (
+        model.judge(answer(decidb_cli, sql), clauses, objective)
+        == pytest.approx(model.solve(scope_solver, clauses, objective).objective)
+        == 3
+    )
 
 
 @pytest.mark.parametrize(
@@ -757,25 +784,6 @@ def test_count_star_by_group(request, scope_solver, cli_fixture):
 # ---------------------------------------------------------------------------
 
 
-# spelling: the three fronts a bare clause can be written under; clause: the three operator shapes the message names
-# with a verb (multiply, divide, divide a sum).
-@pytest.mark.parametrize("spelling", ["", "per row: ", "per (): "])
-@pytest.mark.parametrize(
-    "clause, verb",
-    [
-        ("sum(avg(cap) * x) <= 3", "multiply"),
-        ("sum(x / avg(cap)) <= 3", "divide"),
-        ("sum((x + avg(cap)) / 2) <= 3", "be divided together with"),
-    ],
-)
-def test_data_reducer_scaling_a_decision_inside_a_reducer(decidb_cli, spelling, clause, verb):
-    """A reducer over data alone that scales a decision inside a reducer is a coefficient,
-    refused with the remedy (pre-compute it) whatever the spelling -- not as a reducer
-    inside a reducer."""
-    stderr = decidb_cli.execute_raw(_query("x(INT)", f"x <= cap AND {spelling}{clause}", "MAXIMIZE SUM(x)")).stderr
-    assert f"cannot {verb} a decision variable. Pre-compute it as a scalar" in stderr, stderr
-
-
 @pytest.mark.parametrize(
     "clause",
     [
@@ -816,3 +824,16 @@ def test_a_negative_bound_on_an_absolute_value_names_it(decidb_cli):
     """The bound check before solving names an auxiliary decision by what it stands for."""
     stderr = decidb_cli.execute_raw(_query("x(INT)", "abs(x) <= -1", "MAXIMIZE SUM(x)")).stderr
     assert "abs(x) <= -1 cannot hold because abs(x) is never negative" in stderr, stderr
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "cli_fixture, bound",
+    on_highs_too([pytest.param(b, id=b) for b in ("x >= -1", "min(x) >= -1", "x BETWEEN -1 AND 5")], {"x >= -1"}),
+)
+def test_a_negative_floor_does_not_widen_a_bool(request, cli_fixture, bound):
+    """A BOOLEAN is 0 or 1 whatever is written on it: D41 lowers a numeric decision's
+    floor, not a BOOLEAN's. `x >= -1` was once sent as an integer in [-1, 1], answering -1."""
+    cli = request.getfixturevalue(cli_fixture)
+    rows = answer(cli, _query("x(BOOL)", bound, "MINIMIZE SUM(x)"))
+    assert {row["x"] for row in rows} == {0}, rows

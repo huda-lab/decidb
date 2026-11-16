@@ -293,7 +293,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 		const string written = DecideWrittenClause(input, ec.source_clause_id);
 		// The group's LHS, one row the clause emits (ClauseEmittedRows): a group of a grouped clause, the whole
 		// clause for an ungrouped one.
-		auto &emitted = ClauseEmittedRows(ec, var_indexer, written);
+		auto &emitted = ClauseEmittedRows(ec, input, var_indexer, written);
 
 		// I4 (aggregate `<>`): clause text used to name a dropped aggregate `<>`, carried
 		// onto every global z this `ec` allocates so the removal dial can label the edit.
@@ -341,6 +341,9 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 			// runs once, identically to before this supported more than one.
 			vector<double> distinct_rhs;
 			for (idx_t k = g_begin; k < g_end; k++) {
+				if (!ec.no_exclusion.empty() && ec.no_exclusion[flat_rows[k]]) {
+					continue;
+				}
 				double raw = ec.rhs_values.Get(flat_rows[k]);
 				if (std::find(distinct_rhs.begin(), distinct_rhs.end(), raw) == distinct_rhs.end()) {
 					distinct_rhs.push_back(raw);

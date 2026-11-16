@@ -7,6 +7,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/decidb/solver/ilp_solver.hpp"
 #include "duckdb/decidb/solver/solver_registry.hpp"
+#include "duckdb/planner/decide/decide_tree.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 namespace duckdb {
@@ -54,37 +55,52 @@ bool MayHaveIntegralColumn(const LogicalDecide &op) {
 	auto is_minmax = [](ObjectiveAggregateType agg) {
 		return agg == ObjectiveAggregateType::MIN_AGG || agg == ObjectiveAggregateType::MAX_AGG;
 	};
-	return is_minmax(op.flat_objective_agg) || is_minmax(op.per_inner_agg) || is_minmax(op.per_outer_agg);
+	return is_minmax(op.flat_objective_agg);
 }
 
-//! How many distinct decisions a product group's forms read; a constant term carries INVALID_INDEX.
+//! How many distinct columns a product group's forms read; a constant term carries INVALID_INDEX. A decision read
+//! through a frame (`x - at(previous: x)`) is the decision at another row: another column.
 idx_t CountGroupDecisions(const DecideProductGroup &group) {
-	vector<idx_t> seen;
+	vector<pair<idx_t, idx_t>> seen;
 	for (auto *form : {&group.left, &group.right}) {
 		for (auto &term : *form) {
+			const auto column = std::make_pair(term.variable_index, term.frame_read);
 			if (term.variable_index != DConstants::INVALID_INDEX &&
-			    std::find(seen.begin(), seen.end(), term.variable_index) == seen.end()) {
-				seen.push_back(term.variable_index);
+			    std::find(seen.begin(), seen.end(), column) == seen.end()) {
+				seen.push_back(column);
 			}
 		}
 	}
 	return seen.size();
 }
 
-//! The prepared model's shape, one AddTerm per product group. Read off the groups stage 05 already built, so it needs
+//! The clauses the model holds, in the tree's order: every clause stage 05 lowered into a node but a folded bound's,
+//! which the repair model alone reads. Read off the nodes: the gate runs before DecideTreeConstruction::Finish numbers
+//! them (DecideTree::Constraints).
+vector<const DecideConstraint *> HeldClauses(const DecideTree &tree) {
+	vector<const DecideConstraint *> clauses;
+	for (auto &node : tree.nodes) {
+		if (node->compiled.clause && !node->folded) {
+			clauses.push_back(node->compiled.clause.get());
+		}
+	}
+	return clauses;
+}
+
+//! The lowered model's shape, one AddTerm per product group. Read off the groups stage 05 already built, so it needs
 //! no data, which is what lets the refusal land before a row is read. Each fact errs toward demanding more than the
 //! built model will (SolverModelClass): an integral column the rewrites may add counts, and a square of a form over
 //! two decisions counts as coupled whatever its coefficients turn out to be.
-DecideModelShape ReadPreparedModelShape(const LogicalDecide &op) {
+DecideModelShape ReadPreparedModelShape(const LogicalDecide &op, const DecideTree &tree) {
 	DecideModelShape shape;
 	shape.integral_column = MayHaveIntegralColumn(op);
-	for (auto &constraint : op.prepared.constraints) {
+	for (auto *constraint : HeldClauses(tree)) {
 		for (auto &group : constraint->product_groups) {
 			shape.AddTerm(false, group.square, group.weight_sign, CountGroupDecisions(group));
 		}
 	}
-	if (op.prepared.objective) {
-		for (auto &group : op.prepared.objective->product_groups) {
+	if (auto objective = tree.Objective()) {
+		for (auto &group : objective->product_groups) {
 			shape.AddTerm(true, group.square, group.weight_sign, CountGroupDecisions(group));
 		}
 	}
@@ -93,8 +109,8 @@ DecideModelShape ReadPreparedModelShape(const LogicalDecide &op) {
 
 //! The objective's first product group that is non-convex (IsNonconvexProductGroup), which the refusal names. The gate
 //! asks only for a non-convex class, which an objective's group makes.
-const DecideProductGroup &FirstNonconvexGroup(const LogicalDecide &op) {
-	for (auto &group : op.prepared.objective->product_groups) {
+const DecideProductGroup &FirstNonconvexGroup(const DecideTree &tree) {
+	for (auto &group : tree.Objective()->product_groups) {
 		if (IsNonconvexProductGroup(group.square, group.weight_sign)) {
 			return group;
 		}
@@ -113,8 +129,8 @@ struct RefusalText {
 //! The first SUCH THAT clause that squares or multiplies decisions, as the user wrote it. DeriveDecideModelClass reads
 //! the same constraints, so a query refused for quadratic constraints has one. A row a rewrite defines (a reducer's
 //! non-linear body held by a helper) records the clause that reads the helper.
-string FirstQuadraticClause(const LogicalDecide &op) {
-	for (auto &constraint : op.prepared.constraints) {
+string FirstQuadraticClause(const LogicalDecide &op, const DecideTree &tree) {
+	for (auto *constraint : HeldClauses(tree)) {
 		if (!constraint->product_groups.empty()) {
 			// A quadratic row without a source clause is an engine bug, not a query to refuse.
 			D_ASSERT(constraint->source_clause_id < op.constraint_sources.size());
@@ -124,13 +140,14 @@ string FirstQuadraticClause(const LogicalDecide &op) {
 	throw InternalException("DECIDE solver gate found no quadratic clause to name");
 }
 
-RefusalText DescribeGap(const LogicalDecide &op, SolverModelClassGap gap) {
+RefusalText DescribeGap(const LogicalDecide &op, const DecideTree &tree, SolverModelClassGap gap) {
 	switch (gap) {
 	case SolverModelClassGap::QUADRATIC_CONSTRAINTS:
-		return {"the SUCH THAT clause `" + FirstQuadraticClause(op) + "` squares or multiplies decision variables",
+		return {"the SUCH THAT clause `" + FirstQuadraticClause(op, tree) +
+		            "` squares or multiplies decision variables",
 		        "rewrite that constraint so each term holds at most one decision variable"};
 	case SolverModelClassGap::NONCONVEX_QUADRATIC: {
-		auto &group = FirstNonconvexGroup(op);
+		auto &group = FirstNonconvexGroup(tree);
 		if (!group.square) {
 			return {"the objective multiplies two decision variables",
 			        "use an objective that is linear in the decisions"};
@@ -170,8 +187,8 @@ bool AnyAvailable(const SolverModelClass &needed) {
 
 } // namespace
 
-SolverModelClass DeriveDecideModelClass(const LogicalDecide &op) {
-	return ClassifyDecideModel(ReadPreparedModelShape(op));
+SolverModelClass DeriveDecideModelClass(const LogicalDecide &op, const DecideTree &tree) {
+	return ClassifyDecideModel(ReadPreparedModelShape(op, tree));
 }
 
 SolverModelClassGap FindDecideSolverGap(const SolverModelClass &needed, const SolverBackend &backend) {
@@ -190,19 +207,19 @@ bool DecideSolverRuns(const SolverModelClass &needed) {
 	return FindDecideSolverGap(needed, SelectSolverBackend()) == SolverModelClassGap::NONE;
 }
 
-void RequireDecideSolverSupport(const LogicalDecide &op) {
+void RequireDecideSolverSupport(const LogicalDecide &op, const DecideTree &tree) {
 	// The name was recorded by ChooseDecideSolver; resolving it back to a registry entry
 	// is a table lookup, not a session, so the model-class question can still be asked
 	// here without the plan itself holding a live backend.
 	SolverBackend backend = SolverRegistry::Find(op.solver_backend_name);
 	D_ASSERT(backend.IsValid());
-	SolverModelClass needed = DeriveDecideModelClass(op);
+	SolverModelClass needed = DeriveDecideModelClass(op, tree);
 	SolverModelClassGap gap = FindDecideSolverGap(needed, backend);
 	if (gap == SolverModelClassGap::NONE) {
 		return;
 	}
 
-	RefusalText text = DescribeGap(op, gap);
+	RefusalText text = DescribeGap(op, tree, gap);
 	ThrowDecideSolverGap(needed, text.cause, text.remedy);
 }
 

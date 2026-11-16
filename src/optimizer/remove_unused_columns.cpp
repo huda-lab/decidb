@@ -115,13 +115,41 @@ void RemoveUnusedColumns::NarrowMaterializedCTE(LogicalOperator &op, CTEReads &r
 
 void RemoveUnusedColumns::NarrowCTEReferences(LogicalOperator &plan) {
 	ColumnBindingReplacer replacer;
-	// A filter's projection map (the IN clause rewriter's, the dependent join's) is positional over its child's output,
-	// so it is stale once a reference below the filter has fewer columns. The filter keeps the columns it passed on.
-	vector<pair<reference<LogicalFilter>, vector<ColumnBinding>>> mapped_filters;
+	// A projection map is positional over its child's output (a filter's, an order's, either side of a join's: the maps
+	// ColumnLifetimeAnalyzer generates), so it is stale once a reference below it has fewer columns. Each map keeps the
+	// columns it passed on.
+	struct MappedChild {
+		reference<vector<idx_t>> map;
+		reference<LogicalOperator> child;
+		vector<ColumnBinding> passed;
+	};
+	vector<MappedChild> mapped;
+	auto record = [&](vector<idx_t> &map, LogicalOperator &child) {
+		if (!map.empty()) {
+			mapped.push_back({map, child, LogicalOperator::MapBindings(child.GetColumnBindings(), map)});
+		}
+	};
 	column_binding_set_t dropped;
 	std::function<void(LogicalOperator &)> narrow = [&](LogicalOperator &op) {
-		if (op.type == LogicalOperatorType::LOGICAL_FILTER && op.Cast<LogicalFilter>().HasProjectionMap()) {
-			mapped_filters.emplace_back(op.Cast<LogicalFilter>(), op.GetColumnBindings());
+		switch (op.type) {
+		case LogicalOperatorType::LOGICAL_FILTER:
+			record(op.Cast<LogicalFilter>().projection_map, *op.children[0]);
+			break;
+		case LogicalOperatorType::LOGICAL_ORDER_BY:
+			record(op.Cast<LogicalOrder>().projection_map, *op.children[0]);
+			break;
+		case LogicalOperatorType::LOGICAL_ANY_JOIN:
+		case LogicalOperatorType::LOGICAL_ASOF_JOIN:
+		case LogicalOperatorType::LOGICAL_COMPARISON_JOIN:
+		case LogicalOperatorType::LOGICAL_DELIM_JOIN:
+		case LogicalOperatorType::LOGICAL_DEPENDENT_JOIN: {
+			auto &join = op.Cast<LogicalJoin>();
+			record(join.left_projection_map, *op.children[0]);
+			record(join.right_projection_map, *op.children[1]);
+			break;
+		}
+		default:
+			break;
 		}
 		if (op.type == LogicalOperatorType::LOGICAL_CTE_REF) {
 			auto &ref = op.Cast<LogicalCTERef>();
@@ -156,11 +184,13 @@ void RemoveUnusedColumns::NarrowCTEReferences(LogicalOperator &plan) {
 		return;
 	}
 	replacer.VisitOperator(plan);
-	for (auto &entry : mapped_filters) {
-		auto &filter = entry.first.get();
-		auto child_bindings = filter.children[0]->GetColumnBindings();
-		filter.projection_map.clear();
-		for (auto binding : entry.second) {
+	// Children first: a map reads its child's output, which a map below the child shapes (`mapped` is in pre-order).
+	for (auto it = mapped.rbegin(); it != mapped.rend(); ++it) {
+		auto &entry = *it;
+		auto &map = entry.map.get();
+		auto child_bindings = entry.child.get().GetColumnBindings();
+		map.clear();
+		for (auto binding : entry.passed) {
 			if (dropped.find(binding) != dropped.end()) {
 				continue;
 			}
@@ -172,7 +202,7 @@ void RemoveUnusedColumns::NarrowCTEReferences(LogicalOperator &plan) {
 			}
 			auto position = std::find(child_bindings.begin(), child_bindings.end(), binding);
 			D_ASSERT(position != child_bindings.end());
-			filter.projection_map.push_back(NumericCast<idx_t>(position - child_bindings.begin()));
+			map.push_back(NumericCast<idx_t>(position - child_bindings.begin()));
 		}
 	}
 }

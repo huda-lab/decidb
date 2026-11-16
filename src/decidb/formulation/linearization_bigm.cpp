@@ -198,21 +198,6 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
 		if (!ec.minmax_agg_type.empty()) {
 			continue;
 		}
-		// WHEN-conditional constraints apply to only a subset of rows, but the
-		// bound we derive is shared across ALL of a variable's rows. Deriving it
-		// from the active subset would wrongly bound the excluded (WHEN-false)
-		// rows, which carry no such constraint. Skip any constraint that has
-		// excluded rows.
-		bool has_excluded = false;
-		for (idx_t gid : ec.row_group_ids) {
-			if (gid == DConstants::INVALID_INDEX && !ec.rows_stand_with_their_class) {
-				has_excluded = true;
-				break;
-			}
-		}
-		if (has_excluded) {
-			continue;
-		}
 		// Soundness requires every term to be non-negative — both the variable
 		// lower bounds (x >= 0) AND the coefficients (a >= 0) — so that dropping
 		// the other terms to derive x_t <= K/a_t is valid. Constraints with any
@@ -248,7 +233,7 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
 		// the row's data rows, so a decision that stands in several rows of a group, or one counted once beside the
 		// reducers, is bounded by what the row says about its instance. The row's bound is the clause's less its fixed
 		// terms, as the builder states it.
-		auto &emitted = ClauseEmittedRows(ec, indexer, written);
+		auto &emitted = ClauseEmittedRows(ec, input, indexer, written);
 		auto bound_row = [&](idx_t e, const vector<idx_t> *rows, idx_t begin, idx_t end) {
 			if (begin == end) {
 				return; // an empty group, or no data rows
@@ -293,7 +278,8 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
 			}
 		}
 		// The shared bound ub_x applies to EVERY instance of x, so the clause bounds x only when one of its rows
-		// bounds each instance, and then by the loosest of their bounds. With no data rows the loop never runs and
+		// bounds each instance, and then by the loosest of their bounds: an instance a row the clause excludes reads
+		// (a `when` keeps it out) and no kept row bounds leaves x unbounded. With no data rows the loop never runs and
 		// the bound stays at its start: harmless, there is no instance of x to bind.
 		for (idx_t t = 0; nonneg && t < ec.variable_indices.size(); t++) {
 			idx_t v = ec.variable_indices[t];
@@ -310,11 +296,23 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
 			double bound = single_variable ? -std::numeric_limits<double>::infinity() : 0.0;
 			bool every_instance_bounded = true;
 			for (idx_t r = 0; r < num_rows && every_instance_bounded; r++) {
-				double instance_bound = column_bound[indexer.Get(v, r)];
+				// A row in no class reads no instance, and has none to bound.
+				const idx_t column = indexer.ColumnOrNone(v, r);
+				if (column == DConstants::INVALID_INDEX) {
+					continue;
+				}
+				double instance_bound = column_bound[column];
 				every_instance_bounded = !std::isnan(instance_bound);
 				bound = std::max(bound, instance_bound);
 			}
-			if (every_instance_bounded && bound < upper_bounds[v] && bound >= lower_bounds[v]) {
+			// A bound below the column's floor is kept too: the box is empty, which proves
+			// the model infeasible, and the solver says so. Dropping it instead left the
+			// column open, and a Big-M over it refused for a want of bounds the clauses had.
+			// (One under the floor by rounding alone is not empty: the model builder
+			// closes it onto the floor.) An end of -inf admits no value and is no box: the row stays, and the builder
+			// proves it infeasible (ProvesInfeasible), as FoldKnownBound leaves such a row.
+			if (every_instance_bounded && bound < upper_bounds[v] &&
+			    bound != -std::numeric_limits<double>::infinity()) {
 				upper_bounds[v] = bound;
 			}
 		}

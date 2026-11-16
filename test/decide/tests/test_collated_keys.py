@@ -5,11 +5,10 @@ decision; a message quotes the group's least spelling ('A'). The oracle states N
 lowercased key `gk`.
 """
 
-import re
-
 import pytest
 
 from . import _diagnose_relation
+from ._output_helpers import assert_no_internal_leak
 from ._scope_cases import aligned, answer, scope_solver, values  # noqa: F401
 from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 from solver.types import ObjSense, VarType
@@ -37,13 +36,6 @@ def _judged(cli, solver, sql, decisions, clauses, objective):
     return result
 
 
-def _assert_no_check_planned(cli, explain_sql):
-    """The solver path's plan of `explain_sql` holds no determination check."""
-    plan = cli.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"}).execute_raw(explain_sql)
-    assert plan.returncode == 0, plan.stderr
-    assert "notdetermine" not in re.sub(r"[│┌┐└┘├┤┬┴┼─\s]", "", plan.stdout)  # the box wraps text mid-token
-
-
 @pytest.mark.correctness
 def test_a_by_group_groups_its_key_under_the_collation(decidb_cli, scope_solver):
     """`sum(x) by (g) <= 1`: 'a' and 'A' are one group, so one of rows 1 and 2 is picked, and one of rows 3-5."""
@@ -55,34 +47,36 @@ def test_a_by_group_groups_its_key_under_the_collation(decidb_cli, scope_solver)
 
 @pytest.mark.correctness
 def test_a_collated_per_key_determines_its_own_by_group(decidb_cli, scope_solver):
-    """`per g: sum(x) by (g) <= 1`: the class and the `by` group both group under NOCASE, so the key determines its
-    own `by` element by construction and no check is planned (KeyHolds); 'a' and 'A' are still one class."""
+    """`per g: sum(x) by (g) <= 1`: the class and the `by` group both group under NOCASE, so the key holds its own
+    `by` element by construction (KeyHoldsField); 'a' and 'A' are still one class."""
     sql = f"""
         SELECT id, x {_source()}
         DECIDE x(BOOL) SUCH THAT per t.g: sum(x) by (t.g) <= 1 MAXIMIZE SUM(t.p * x) ORDER BY id"""
-    _assert_no_check_planned(decidb_cli, f"EXPLAIN {sql}")
     clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}, by=("gk",)),), "<=", (lambda r: {CONSTANT: 1},), per=("gk",))]
     result = _judged(decidb_cli, scope_solver, sql, [X], clauses, MAXIMIZE_PX)
     assert sum(row["x"] for row in result) == 2
 
 
-def test_a_by_key_under_another_collation_is_another_key(decidb_cli):
+@pytest.mark.correctness
+def test_a_by_key_under_another_collation_is_another_key(decidb_cli, scope_solver):
     """`per g: sum(x) by (g COLLATE noaccent) <= 1` over a NOCASE g: the two collations group differently, so they are
-    two keys (DecideGroupsAlike: the collations differ) and the class {a, A} holds two `by` groups."""
+    two keys (DecideGroupsAlike: the collations differ) and the class {a, A} holds two `by` groups, one variant each
+    (D70): 'a', 'A', 'b' (rows 3 and 5) and 'B' each take one row."""
     sql = f"""
         SELECT id, x {_source()}
-        DECIDE x(BOOL) SUCH THAT per t.g: sum(x) by (t.g COLLATE noaccent) <= 1 MAXIMIZE SUM(t.p * x)"""
-    decidb_cli.assert_error(sql, match=r"per t\.g does not determine t\.g COLLATE noaccent")
+        DECIDE x(BOOL) SUCH THAT per t.g: sum(x) by (t.g COLLATE noaccent) <= 1 MAXIMIZE SUM(t.p * x) ORDER BY id"""
+    clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}, by=("g",)),), "<=", (lambda r: {CONSTANT: 1},), per=("gk",))]
+    result = _judged(decidb_cli, scope_solver, sql, [X], clauses, MAXIMIZE_PX)
+    assert [row["x"] for row in sorted(result, key=lambda row: row["id"])] == [1, 1, 1, 1, 0]
 
 
 @pytest.mark.correctness
 def test_a_by_key_written_under_the_columns_collation_is_the_same_key(decidb_cli, scope_solver):
     """`per g: sum(x) by (g COLLATE nocase) <= 1` over a NOCASE g: one collation, so one key (DecideGroupsAlike: the
-    collations are equal) and no check is planned."""
+    collations are equal), which holds the `by` key."""
     sql = f"""
         SELECT id, x {_source()}
         DECIDE x(BOOL) SUCH THAT per t.g: sum(x) by (t.g COLLATE nocase) <= 1 MAXIMIZE SUM(t.p * x) ORDER BY id"""
-    _assert_no_check_planned(decidb_cli, f"EXPLAIN {sql}")
     clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}, by=("gk",)),), "<=", (lambda r: {CONSTANT: 1},), per=("gk",))]
     _judged(decidb_cli, scope_solver, sql, [X], clauses, MAXIMIZE_PX)
 
@@ -90,12 +84,11 @@ def test_a_by_key_written_under_the_columns_collation_is_the_same_key(decidb_cli
 @pytest.mark.correctness
 def test_the_default_collation_and_the_same_written_collation_are_one_key(decidb_cli, scope_solver):
     """Under `default_collation='nocase'`, a plain g and `g COLLATE NOCASE` group under one collation function, though
-    their types name different collations, so they are one key (Grouping: equal) and no check is planned."""
+    their types name different collations, so they are one key (Grouping: equal), which holds the `by` key."""
     sql = f"""
         SET default_collation='nocase';
         SELECT id, x {_source(collation="")}
         DECIDE x(BOOL) SUCH THAT per t.g: sum(x) by (t.g COLLATE NOCASE) <= 1 MAXIMIZE SUM(t.p * x) ORDER BY id"""
-    _assert_no_check_planned(decidb_cli, sql.replace("SELECT", "EXPLAIN SELECT", 1))
     clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}, by=("gk",)),), "<=", (lambda r: {CONSTANT: 1},), per=("gk",))]
     _judged(decidb_cli, scope_solver, sql, [X], clauses, MAXIMIZE_PX)
 
@@ -128,90 +121,17 @@ def test_a_keyed_decision_has_one_value_per_collated_key(decidb_cli, scope_solve
     assert [row["y"] for row in result[:2]] == [1, 1]
 
 
-def test_a_message_quotes_the_least_spelling_of_the_group(decidb_cli):
-    """`per g` does not determine `cap` once 'a' (cap 1) and 'A' (cap 3) are one class; the message names 'A'."""
+@pytest.mark.diagnose
+@pytest.mark.parametrize("order", [(0, 1), (1, 0)], ids=["a-first", "A-first"])
+def test_a_variant_is_named_by_its_class_s_least_spelling(decidb_cli, order):
+    """'a' (cap 1) and 'A' (cap 3) are one class with two variants of `t.cap`, the column `t.cap - 2` reads (D83); the
+    one that cannot hold is named by the class's least spelling, 'A', and its own value, whichever row comes first
+    (D69, D70)."""
     rows = ((1, "a", 1, 5.0), (2, "A", 3, 4.0))
-    sql = f"SELECT id, x {_source(rows)} DECIDE x(BOOL) SUCH THAT per t.g: sum(x) <= t.cap MAXIMIZE SUM(t.p * x)"
-    decidb_cli.assert_error(sql, match=r"t\.g = 'A' has more than one value")
-
-
-def _written_order_source(cap_of_a, lo_of_a):
-    """Rows 1 and 2 are one class of (g NOCASE, k): `a` and `A`, and `cap` / `lo` hold the given values on row 2."""
-    rows = ((1, 1, "a", 5, 0, 5.0), (2, 1, "A", cap_of_a, lo_of_a, 4.0))
-    columns = ("id", "k", "g", "cap", "lo", "p")
-    return f"FROM (SELECT id, k, g COLLATE NOCASE AS g, cap, lo, p FROM {values(rows, 'v', columns)}) t"
-
-
-#: The class of rows 1 and 2, named by the least spelling of g, then the value of k.
-_CLASS_GK = "t.g = 'A', t.k = 1"
-_CLASS_KG = "t.k = 1, t.g = 'A'"
-
-
-@pytest.mark.parametrize(
-    "clauses, cap, lo, subject, cls, body, values_text",
-    [
-        # Only the first clause fails; it wrote `t.g, t.k`, which is not the order the key keeps its elements in.
-        pytest.param(
-            "per t.g, t.k: sum(x) <= t.cap AND per t.k, t.g: sum(x) >= t.lo",
-            9,
-            0,
-            "t.g, t.k",
-            _CLASS_GK,
-            "t.cap",
-            "5, 9",
-            id="first-clause-fails",
-        ),
-        # Only the second fails, and it writes the key in another order than the first clause: its own words.
-        pytest.param(
-            "per t.k, t.g: sum(x) <= t.cap AND per t.g, t.k: sum(x) >= t.lo",
-            5,
-            9,
-            "t.g, t.k",
-            _CLASS_GK,
-            "t.lo",
-            "0, 9",
-            id="second-clause-fails",
-        ),
-        pytest.param(
-            "per t.k, t.g: sum(x) <= t.cap AND per t.g, t.k: sum(x) >= t.lo",
-            9,
-            0,
-            "t.k, t.g",
-            _CLASS_KG,
-            "t.cap",
-            "5, 9",
-            id="first-clause-fails-in-the-keys-order",
-        ),
-    ],
-)
-def test_a_message_quotes_its_clauses_key_and_lists_the_values_in_that_order(
-    decidb_cli, clauses, cap, lo, subject, cls, body, values_text
-):
-    """Two clauses write one key in two orders. The message that names a clause quotes that clause's key as it wrote it
-    and lists the class's values in the same order, on the direct path and on the solver path alike."""
-    sql = f"""
-        SELECT id, x {_written_order_source(cap, lo)}
-        DECIDE x(BOOL) SUCH THAT {clauses} MAXIMIZE SUM(t.p * x)"""
-    message = f"DECIDE: per {subject} does not determine {body}. {cls} has more than one value: {values_text}."
-    decidb_cli.assert_error(sql, match=re.escape(message))
-    decidb_cli.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"}).assert_error(sql, match=re.escape(message))
-
-
-@pytest.mark.parametrize("direct", ["auto", "off"])
-def test_a_reducers_message_quotes_the_key_that_reducer_wrote(decidb_cli, direct):
-    """Two reducers qualify by the same columns written in two orders; they share one key, and each message quotes its own
-    reducer's `per` and lists the class's values in that order, not in the first reducer's."""
-    sql = f"""
-        SET decide_direct_solve='{direct}';
-        SELECT id, x {_written_order_source(5, 9)}
-        DECIDE per t.g, t.k: x(BOOL)
-        SUCH THAT sum(per t.k, t.g: t.cap * x) <= 100 AND sum(per t.g, t.k: t.lo * x) >= 0
-        MAXIMIZE SUM(x)"""
-    message = (
-        "DECIDE: per t.g, t.k does not determine t.lo (in sum(per t.g, t.k: t.lo * x)). "
-        f"{_CLASS_GK} has more than one value: 0, 9."
-    )
-    decidb_cli.assert_error(sql, match=re.escape(message))
+    rows = tuple(rows[i] for i in order)
+    sql = f"SELECT id, y {_source(rows)} DECIDE per t.g: y(INT) SUCH THAT per t.g: y <= t.cap - 2 MAXIMIZE SUM(y)"
+    found = _diagnose_relation.rows(_diagnose_relation.run(decidb_cli, sql, scope="expanded"))
+    assert [row["group"] for row in found if row["edit_source"] == "expanded_group"] == ["A, 1"], found
 
 
 KEYED_COLUMNS = ("id", "k", "g", "cap", "p")
@@ -289,17 +209,21 @@ NARROW = "when t.id >= 4 per t.g: sum(x) by (t.g) >= 3"
 WIDE = "per t.g: sum(x) by (t.g) <= 1"
 
 
+def _assert_every_finding_names_b(cli, clauses):
+    sql = f"""
+        SELECT id, x FROM (SELECT id, g COLLATE NOCASE AS g FROM {values(SPELLING_ROWS, 'v', ('id', 'g'))}) t
+        DECIDE x(BOOL) SUCH THAT {clauses[0]} AND {clauses[1]} MAXIMIZE SUM(x)"""
+    rows = _diagnose_relation.rows(_diagnose_relation.run(cli, sql, scope="expanded"))
+    groups = sorted((row["clause"], row["group"]) for row in rows if row["edit_source"] == "expanded_group")
+    assert groups == sorted([(NARROW, "B"), (WIDE, "B")]), rows
+
+
 @pytest.mark.diagnose
 @pytest.mark.parametrize("clauses", [(NARROW, WIDE), (WIDE, NARROW)], ids=["narrow-first", "wide-first"])
 def test_every_finding_spells_a_group_by_its_least_spelling_over_the_rows_read(decidb_cli, clauses):
     """The `when` clause alone reads only 'b'; the other clause reads 'B' too. Each finding on the group names it 'B',
     the least spelling over every row the query read the key on, whichever clause reads it first (ResolveGroupNames)."""
-    sql = f"""
-        SELECT id, x FROM (SELECT id, g COLLATE NOCASE AS g FROM {values(SPELLING_ROWS, 'v', ('id', 'g'))}) t
-        DECIDE x(BOOL) SUCH THAT {clauses[0]} AND {clauses[1]} MAXIMIZE SUM(x)"""
-    rows = _diagnose_relation.rows(_diagnose_relation.run(decidb_cli, sql, scope="expanded"))
-    groups = sorted((row["clause"], row["group"]) for row in rows if row["edit_source"] == "expanded_group")
-    assert groups == sorted([(NARROW, "B"), (WIDE, "B")]), rows
+    _assert_every_finding_names_b(decidb_cli, clauses)
 
 
 @pytest.mark.diagnose
@@ -328,3 +252,212 @@ def test_an_inner_per_within_a_collated_by_group(decidb_cli, scope_solver):
         )
     ]
     _keyed_judged(decidb_cli, scope_solver, sql, clauses, MAXIMIZE_PX)
+
+
+# Under NOCASE 'C' is the greatest and 'aaa' the least of group `a`, though the bytes order them the other way.
+TEXT_ROWS = ((1, "a", 1, "aaa"), (2, "a", 2, "C"), (3, "b", 3, "bb"))
+TEXT_SOURCE = f"FROM (SELECT id, g, k, n COLLATE NOCASE AS n FROM {values(TEXT_ROWS, 'v', ('id', 'g', 'k', 'n'))}) t"
+TIMELINE = "over (t.id within t.g)"
+DIRECT_MODES = pytest.mark.parametrize("mode", ["off", "auto"])
+
+
+def _bounded(cli, mode, clause):
+    sql = f"""SET decide_direct_solve='{mode}';
+        SELECT id, x {TEXT_SOURCE} DECIDE x(REAL) SUCH THAT x <= 9 AND {clause} MAXIMIZE sum(x) ORDER BY id"""
+    return [row["x"] for row in answer(cli, sql)]
+
+
+@pytest.mark.correctness
+class TestACollatedReducerOverData:
+    """A collated MIN or MAX reads two arguments, its value and the key it compares (BindMinMax), and every reducer
+    route keeps both: the value is the spelling the collation picks. Each bound is worked out by hand from TEXT_ROWS."""
+
+    @DIRECT_MODES
+    @pytest.mark.parametrize(
+        "bound, expected",
+        [
+            pytest.param("length(max(t.n))", [1, 1, 1], id="side-table-max"),
+            pytest.param("length(min(t.n))", [3, 3, 3], id="side-table-min"),
+            pytest.param("length(max(when t.id <> 2: t.n))", [2, 2, 2], id="reads-a-when"),
+            pytest.param("length(max(t.n) by (t.g))", [1, 1, 2], id="by-key"),
+            pytest.param("length(max(per t.k: t.n) by (t.g))", [1, 1, 2], id="counted-by-class"),
+            pytest.param("length(min(max(t.n) by (t.g)))", [2, 2, 2], id="nested"),
+        ],
+    )
+    def test_a_bound_reads_the_spelling_the_collation_picks(self, decidb_cli, mode, bound, expected):
+        assert _bounded(decidb_cli, mode, f"x <= {bound}") == expected
+
+    @DIRECT_MODES
+    def test_a_group_bound_takes_a_side_table(self, decidb_cli, mode):
+        """A rule's group aggregate reads one argument, so a collated reducer is no group bound
+        (ReadsOnlyGroupReducers): group `a` sums to 1 and group `b` to 2, through a side table."""
+        sums = _bounded(decidb_cli, mode, "sum(x) by (t.g) <= length(max(t.n) by (t.g))")
+        assert sums[0] + sums[1] == pytest.approx(1) and sums[2] == pytest.approx(2), sums
+
+    @DIRECT_MODES
+    def test_a_coefficient_reads_it_too(self, decidb_cli, mode):
+        """`length(max(n))` is 1 here, so the three decisions share a budget of 5 at weight 1."""
+        assert sum(_bounded(decidb_cli, mode, "sum(x * length(max(t.n))) <= 5")) == pytest.approx(5)
+
+    def test_the_default_collation_makes_a_plain_column_collated(self, decidb_cli):
+        sql = f"""SET default_collation='nocase';
+            SELECT id, x FROM {values(TEXT_ROWS, 't', ('id', 'g', 'k', 'n'))}
+            DECIDE x(REAL) SUCH THAT x <= length(max(t.n)) MAXIMIZE sum(x) ORDER BY id"""
+        assert [row["x"] for row in answer(decidb_cli, sql)] == [1, 1, 1]
+
+    @pytest.mark.parametrize(
+        "bound, expected",
+        [
+            # `at(first)` reads aaa, aaa, bb: its one frame stands once, though the reducer reads it twice.
+            pytest.param(f"length(max(at(first: t.n) {TIMELINE}))", [2, 2, 2], id="reducer-over-a-point"),
+            pytest.param(f"length(min(at(first: t.n) {TIMELINE}) by (t.g))", [3, 3, 2], id="reducer-by-key"),
+            # The range's own reducer compares under the collation, in each timeline.
+            pytest.param(f"length(max(from first to last: t.n) {TIMELINE})", [1, 1, 2], id="range-max"),
+            pytest.param(f"length(min(from first to last: t.n) {TIMELINE})", [3, 3, 2], id="range-min"),
+            pytest.param(f"length(min(max(from first to last: t.n) {TIMELINE}))", [2, 2, 2], id="reducer-over-a-range"),
+        ],
+    )
+    def test_a_frame_reads_it_too(self, decidb_cli, bound, expected):
+        assert _bounded(decidb_cli, "off", f"x <= {bound}") == expected
+
+    def test_a_range_over_collated_text_takes_no_number_else(self, decidb_cli):
+        """A missing position's `else` would need a key under the collation, and a number has none."""
+        clause = f"x <= length(max(from previous to next else 0: t.n) {TIMELINE})"
+        sql = f"SELECT id, x {TEXT_SOURCE} DECIDE x(REAL) SUCH THAT {clause} MAXIMIZE sum(x)"
+        result = decidb_cli.execute_raw(sql)
+        assert "else 0 stands in a collated payload" in result.stderr, result.stderr
+        assert_no_internal_leak(result, "an else over a collated payload")
+
+
+ORDER_ROWS = ((1, "a", 10.0), (2, "A", 10.0), (3, "b", 30.0))
+TWO_VALUES_ROW_ORDERS = (
+    ((1, "a", 10.0), (2, "A", 20.0), (3, "b", 30.0)),
+    ((2, "A", 20.0), (1, "a", 10.0), (3, "b", 30.0)),
+)
+
+
+def _ordered(clause, rows=ORDER_ROWS, over="t.k", collation="COLLATE NOCASE"):
+    source = f"(SELECT id, k {collation} AS k, v FROM {values(rows, 'r', ('id', 'k', 'v'))}) t"
+    return f"""SELECT id, x FROM {source} DECIDE x(REAL)
+        SUCH THAT x <= 50 AND x <= {clause.format(over=f"over ({over})")} MAXIMIZE sum(x) ORDER BY id"""
+
+
+@pytest.mark.correctness
+class TestACollatedOrderKey:
+    """A frame's order key compares as ORDER BY does (D74): under NOCASE 'a' and 'A' are one position, so `dense_rank`
+    and a range count 2 positions, and neither reads the other as its `previous`."""
+
+    def test_a_range_counts_positions_as_dense_rank_does(self, decidb_cli):
+        sql = _ordered("count(from first to last: t.v) {over}")
+        assert [row["x"] for row in answer(decidb_cli, sql)] == [2, 2, 2]
+
+    def test_one_position_reads_no_previous_inside_itself(self, decidb_cli):
+        """Rows 1 and 2 are the first position and read the `else`; row 3 reads their one value."""
+        sql = _ordered("at(previous else 0: t.v) {over}")
+        assert [row["x"] for row in answer(decidb_cli, sql)] == [0, 0, 10]
+
+    def test_a_key_written_under_a_collation_compares_under_it(self, decidb_cli):
+        """The column is plain text; the `COLLATE` in the order key alone makes 'a' and 'A' one position."""
+        sql = _ordered("at(previous else 0: t.v) {over}", over="t.k COLLATE NOCASE", collation="")
+        assert [row["x"] for row in answer(decidb_cli, sql)] == [0, 0, 10]
+
+    def test_plain_text_keeps_its_three_positions(self, decidb_cli):
+        """With no collation 'A', 'a' and 'b' are three positions."""
+        sql = _ordered("count(from first to last: t.v) {over}", collation="")
+        assert [row["x"] for row in answer(decidb_cli, sql)] == [3, 3, 3]
+
+    @pytest.mark.parametrize(
+        "bound_under, run_under, expected",
+        [("''", "'nocase'", [3, 3, 3]), ("'nocase'", "''", [2, 2, 2])],
+        ids=["bound-binary", "bound-nocase"],
+    )
+    def test_a_prepared_frame_compares_as_it_was_bound(self, decidb_cli, bound_under, run_under, expected):
+        """A prepared ORDER BY keeps the collation binding settled, so a later `SET` moves neither it nor a frame."""
+        prepared = _ordered("count(from first to last: t.v) {over}", collation="")
+        sql = f"""SET default_collation={bound_under}; PREPARE f AS {prepared};
+            SET default_collation={run_under}; EXECUTE f;"""
+        assert [row["x"] for row in answer(decidb_cli, sql)] == expected
+
+    def test_a_plan_round_trip_keeps_a_computed_keys_collation(self, decidb_cli):
+        """A function's result loses its collated type in a round trip, so the plan holds the collation itself: 'az'
+        and 'Az' stay one position, as `dense_rank` keeps them."""
+        counted = _ordered("count(from first to last: t.v) {over}", over="(t.k || 'z') COLLATE NOCASE", collation="")
+        assert [row["x"] for row in answer(decidb_cli, f"PRAGMA verify_serializer; {counted}")] == [2, 2, 2]
+
+    @pytest.mark.parametrize("rows", [ORDER_ROWS, ORDER_ROWS[1::-1] + ORDER_ROWS[2:]], ids=["a-first", "A-first"])
+    def test_a_message_names_two_positions_not_two_spellings(self, decidb_cli, rows):
+        """'a' and 'A' are one position, so a pair of them proves nothing: the objective reads 'A' and 'b'."""
+        source = f"(SELECT id, k COLLATE NOCASE AS k, v FROM {values(rows, 'r', ('id', 'k', 'v'))}) t"
+        sql = f"SELECT id, y FROM {source} DECIDE per (): y(REAL) SUCH THAT y <= 3 MAXIMIZE at(previous else 0: y) over (t.k)"
+        result = decidb_cli.execute_raw(sql)
+        assert "reads more than one position over the kept rows (t.k = 'A', 'b')" in result.stderr, result.stderr
+
+    @pytest.mark.parametrize("rows", TWO_VALUES_ROW_ORDERS, ids=["a-first", "A-first"])
+    def test_a_position_is_named_by_its_least_spelling(self, decidb_cli, rows):
+        """D69: the label of a position with two spellings does not depend on which arrives first."""
+        result = decidb_cli.execute_raw(_ordered("at(previous else 0: t.v) {over}", rows))
+        assert "finds 2 rows at t.k = 'A'" in result.stderr, result.stderr
+
+    @pytest.mark.parametrize("rows", [ORDER_ROWS, ORDER_ROWS[1::-1] + ORDER_ROWS[2:]], ids=["a-first", "A-first"])
+    def test_a_variant_is_named_by_its_positions_least_spelling(self, decidb_cli, rows):
+        """Each position is its own variant of the class, and DIAGNOSE names it `g, A` in either row order."""
+        source = f"""(SELECT id, 'g' AS g, k COLLATE NOCASE AS k, v FROM {values(rows, 'r', ('id', 'k', 'v'))}) t"""
+        sql = f"""PRAGMA diagnose_decide_infeasible_slack_scope='expanded';
+            DIAGNOSE SELECT id, y FROM {source} DECIDE per t.g: y(INT)
+            SUCH THAT per t.g: y = at(previous else 5: t.v) over (t.k) MAXIMIZE sum(y)"""
+        result = decidb_cli.execute_raw(sql)
+        assert "g, A" in result.stdout + result.stderr, result.stdout + result.stderr
+        assert "g, a" not in result.stdout + result.stderr, result.stdout + result.stderr
+
+    @pytest.mark.parametrize("first", ["1 month", "30 days"])
+    def test_every_message_gives_a_position_one_name(self, decidb_cli, first):
+        """'1 month' and '30 days' are one interval, and `Value` comparison ties them, so the least is the sort key's, as
+        DIAGNOSE reads it: raw order puts 30 days first."""
+        spellings = [first, "30 days" if first == "1 month" else "1 month", "2 months"]
+        rows = values(tuple((i + 1, k, 10.0 * (i + 1)) for i, k in enumerate(spellings)), "r", ("id", "k", "v"))
+        source = f"(SELECT id, CAST(k AS INTERVAL) AS k, v FROM {rows}) t"
+        result = decidb_cli.execute_raw(
+            f"SELECT id, x FROM {source} DECIDE x(REAL) SUCH THAT x <= at(previous else 0: t.v) over (t.k) MAXIMIZE sum(x)"
+        )
+        assert "finds 2 rows at t.k = '30 days'" in result.stderr, result.stderr
+        result = decidb_cli.execute_raw(
+            f"SELECT id, y FROM {source} DECIDE per (): y(REAL) SUCH THAT y <= 3 MAXIMIZE at(previous else 0: y) over (t.k)"
+        )
+        assert "(t.k = '30 days', '2 months')" in result.stderr, result.stderr
+
+    def test_one_position_holds_one_value(self, decidb_cli):
+        """D73: 'a' and 'A' are one position, whose two rows read 10 and 20."""
+        rows = ((1, "a", 10.0), (2, "A", 20.0), (3, "b", 30.0))
+        result = decidb_cli.execute_raw(_ordered("at(previous else 0: t.v) {over}", rows))
+        assert "a position must hold one row" in result.stderr, result.stderr
+        assert_no_internal_leak(result, "two rows at one collated position")
+
+
+# A frame's timeline key is a key: a message names its timeline as the key is spelled (D69). Each group below has one
+# spelling, which flat prints too.
+def test_the_tree_names_a_position_within_its_timeline_as_the_key_is_spelled(decidb_cli):
+    """A position is named within its timeline by the timeline key's columns in written order, a collated one by its
+    spelling, 'B', not its collation's 'b' (DecideDescent::Label)."""
+    rows = ((1, "B", 1, 1, 10.0), (2, "B", 1, 1, 20.0), (3, "B", 1, 2, 30.0))
+    source = f"(SELECT id, g COLLATE NOCASE AS g, h, k, v FROM {values(rows, 'r', ('id', 'g', 'h', 'k', 'v'))}) t"
+    sql = f"""SELECT id, x FROM {source} DECIDE x(REAL)
+        SUCH THAT x <= 50 AND x <= at(previous else 0: t.v) over (t.k within t.g, t.h) MAXIMIZE sum(x)"""
+    result = decidb_cli.execute_raw(sql)
+    assert "finds 2 rows at t.g = 'B', t.h = 1, t.k = 1;" in result.stderr, result.stderr
+
+
+@pytest.mark.parametrize(
+    "category, product",
+    [("category COLLATE NOCASE", "p"), ("category", "p COLLATE NOCASE")],
+    ids=["collated-class", "collated-timeline"],
+)
+def test_the_tree_names_a_class_spanning_timelines_as_its_keys_are_spelled(decidb_cli, category, product):
+    """D75: the class `Food` spans the timelines of products 'A' and 'B'. Each key is named as it is spelled, a collated
+    one by its spelling and a plain one by its value (DecideDescent::Label), whichever of the two is collated."""
+    rows = ((1, "Food", "A", 1, 4), (2, "Food", "B", 1, 6), (3, "Food", "A", 2, 9))
+    columns = ("id", "category", "p", "period", "v")
+    source = f"(SELECT id, {category} AS category, {product} AS product, period, v FROM {values(rows, 'r', columns)}) t"
+    sql = f"""SELECT id, x FROM {source} DECIDE x(INT)
+        SUCH THAT x <= 10 AND per t.category: x >= at(first: t.v) over (t.period within t.product) MINIMIZE sum(x)"""
+    result = decidb_cli.execute_raw(sql)
+    assert "t.category = 'Food' spans t.product = 'A', 'B'." in result.stderr, result.stderr

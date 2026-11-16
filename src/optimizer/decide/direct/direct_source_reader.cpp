@@ -7,6 +7,7 @@
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
+#include "duckdb/planner/operator/logical_comparison_join.hpp"
 #include "duckdb/planner/operator/logical_cross_product.hpp"
 #include "duckdb/planner/operator/logical_cteref.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
@@ -189,6 +190,11 @@ unique_ptr<LogicalOperator> DirectSourceReader::JoinSideTables(unique_ptr<Logica
 		}
 		top = DirectJoinGroupRow(std::move(top), std::move(reference), std::move(row_keys), std::move(table_keys),
 		                         table.equal);
+		// Only the value joins the row, so the columns are the source's, then each table's value: SourceBindings'. A
+		// table with no key is its value alone.
+		if (!table.keys.empty()) {
+			top->Cast<LogicalComparisonJoin>().right_projection_map.push_back(table.keys.size());
+		}
 	}
 	return top;
 }

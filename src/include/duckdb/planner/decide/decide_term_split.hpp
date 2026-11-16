@@ -32,6 +32,24 @@ namespace duckdb {
 
 class ClientContext;
 class BoundFunctionExpression;
+class LogicalDecide;
+
+//! One Boolean product helper allocated while the optimizer annotates a written product. The tree turns this
+//! specification into a BOOLEAN_PRODUCT F node and owns the executable BilinearLink record.
+struct DecideBilinearFunctionProduct {
+	idx_t aux_idx = DConstants::INVALID_INDEX;
+	idx_t first_var_idx = DConstants::INVALID_INDEX;
+	idx_t second_var_idx = DConstants::INVALID_INDEX;
+	idx_t source_clause_id = DConstants::INVALID_INDEX;
+	idx_t removal_group_id = DConstants::INVALID_INDEX;
+};
+
+//! An intact written product plus the expression the term splitter reads. `expansion` replaces Boolean products by
+//! their plan-time helper columns while leaving non-Boolean products as terms of degree 2.
+struct DecideBilinearFunctionGroup {
+	unique_ptr<Expression> expansion;
+	vector<DecideBilinearFunctionProduct> products;
+};
 
 struct DecideSplitFactor;
 
@@ -51,11 +69,21 @@ struct DecideSplitTerm {
 	unique_ptr<Expression> opaque;
 	vector<DecideSplitTerm> inner;
 
+	//! A frame selector over decisions (language/guide.md §5.6): `coefficient * at(F: payload) over (...)`. The term is
+	//! opaque (its marker), so a reader that does not read frames declines it; `inner` holds the payload's terms, each
+	//! read at the row the frame `frame` selects. INVALID_INDEX for every other term. Only the solver path reads one
+	//! (it reads the frame's fallback off LogicalDecide::frames).
+	idx_t frame = DConstants::INVALID_INDEX;
+	const Expression *marker = nullptr;
+
 	bool IsConstant() const {
 		return degree == 0 && !opaque;
 	}
 	bool IsLinear() const {
 		return degree == 1 && !opaque;
+	}
+	bool IsFrame() const {
+		return frame != DConstants::INVALID_INDEX;
 	}
 	bool IsAbs() const;
 	bool IsSquare() const;
@@ -91,12 +119,17 @@ unique_ptr<Expression> DecideMergeLikeCoefficients(ClientContext &context, int f
 
 class DecideTermSplitter {
 public:
-	DecideTermSplitter(ClientContext &context, idx_t decide_index,
-	                   const vector<unique_ptr<Expression>> &decide_variables);
+	//! Reads the node's decisions and the product groups its optimizer annotated, so no caller can read a group's
+	//! function as opaque.
+	DecideTermSplitter(ClientContext &context, const LogicalDecide &decide);
 
 	//! Read a reducer body or a row-level decision expression into terms, appending to `out` in reading order with
 	//! `sign` applied.
 	void Split(const Expression &expr, int sign, vector<DecideSplitTerm> &out) const;
+	//! Whether the expression becomes linear after optimizer-annotated product groups and function helpers are read.
+	bool IsLinear(const Expression &expr) const;
+	//! Copy and expand any optimizer-annotated product groups in an expression; false leaves `expanded` unset.
+	bool ExpandBilinearGroups(const Expression &expr, unique_ptr<Expression> &expanded) const;
 	//! The index of the first decision variable referenced anywhere in `expr`, or INVALID_INDEX.
 	idx_t FindVariable(const Expression &expr) const;
 
@@ -109,6 +142,7 @@ private:
 	idx_t decide_index;
 	column_binding_map_t<idx_t> variable_indexes;
 	const vector<unique_ptr<Expression>> &decide_variables;
+	const vector<DecideBilinearFunctionGroup> &bilinear_groups;
 };
 
 } // namespace duckdb

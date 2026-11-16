@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DeciDB
 //
-// duckdb/planner/decide/decide_prepared_model.hpp
+// duckdb/planner/decide/decide_tree_terms.hpp
 //
 //
 //===----------------------------------------------------------------------===//
@@ -15,23 +15,18 @@
 namespace duckdb {
 
 //===--------------------------------------------------------------------===//
-// The prepared linear form
+// The tree's term records
 //===--------------------------------------------------------------------===//
 //
-// The contract between DECIDE optimization (stage 05) and physical execution
-// (stage 08). Stage 05 flattens each canonical constraint and the objective into
-// additive terms; stage 08 evaluates each term's coefficient against the
-// relational input and never re-derives the shape.
+// What stage 05's lowering (LowerDecideTree) makes of each clause, the objective, a composed term and a helper's
+// reducer, held in the node that holds it (DecideBody): additive terms, which stage 08 evaluates against the
+// relational input without re-deriving their shape.
 //
 // A coefficient stays an unevaluated `Expression` because it may reference data
 // columns -- `SUM(x * price)` yields the coefficient `price`, which is a number
 // only once a row exists. Everything ELSE about a term (which variable it names,
 // its sign, which reducer produced it, which filter applies) is a fact about
 // types and structure, and is decided here.
-//
-// These structures live at stage 03 rather than 05 because `LogicalDecide` is
-// what carries them across the plan boundary, the same way it carries the
-// folded variable box and the composed MIN/MAX terms.
 
 //! A single additive term: `sign * coefficient * variable`.
 //! `variable_index` is DConstants::INVALID_INDEX for a constant (variable-free)
@@ -43,17 +38,32 @@ struct DecideTerm {
 	int sign = 1;                       // +1 or -1, applied at coefficient evaluation time
 	unique_ptr<Expression> filter;      // Optional filter: the reducer's own `when`
 	bool avg_scale = false;             // True when this term came from AVG and needs 1/N scaling
+	//! An objective AVG's `by` key, into LogicalDecide::keys: it divides each row by
+	//! its group's count, not the objective's (a nested `sum(per k: avg(e) by (k))`, D81).
+	//! INVALID_INDEX for one group.
+	idx_t avg_group_key = DConstants::INVALID_INDEX;
 	LinearTermReduction reduction = LinearTermReduction::NONE;
 	//! Keyed scope this term's reducer is qualified by (`sum(D: ...)`), or
 	//! INVALID_INDEX for an unqualified reducer. Indexes keyed_scopes /
 	//! keyed_mappings; coefficient evaluation keeps one row per tuple identity
 	//! of that relation and zeroes the duplicates the join introduced.
 	idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
+	//! The exact G whose `per` qualifies this term. Scope indexes may be reused by several reducer occurrences.
+	idx_t qualifier_reducer = DConstants::INVALID_INDEX;
 	//! The values the user wrote that `coefficient` is computed from when DeciDB computed it (like terms merged, a
 	//! reducer's factor applied), in reading order; empty when `coefficient` is as written. A coefficient that is not
 	//! finite names the first of them a column holds that is not finite, and its clause when there is none: DeciDB's
 	//! own arithmetic left the DOUBLE range (DecideInvalidValueMessage). Only a row where it fails reads them.
 	vector<unique_ptr<Expression>> inputs;
+	//! A frame selector's payload term (language/guide.md §5.6): the variable is read at
+	//! the row frame `frame_read` (into LogicalDecide::frames) selects for each row, not at
+	//! the row itself. Its coefficient reads a READ frame column (DecideFrameColumn).
+	//! INVALID_INDEX for every other term.
+	idx_t frame_read = DConstants::INVALID_INDEX;
+	//! The tree's G whose operand entries this term ranges over (DecideTreeConstruction::ReducerChild): written by
+	//! stage 05 on the terms a reducer produced, INVALID for a term outside every reducer and whenever no tree is
+	//! built. Neither stage 05 nor the flat evaluator reads it.
+	idx_t child = DConstants::INVALID_INDEX;
 
 	DecideTerm(idx_t var_idx, unique_ptr<Expression> coef, int s = 1)
 	    : variable_index(var_idx), coefficient(std::move(coef)), sign(s) {
@@ -83,10 +93,16 @@ struct DecideProductGroup {
 	bool avg_scale = false;        // the group came from AVG and needs 1/N scaling
 	//! Keyed scope the group's reducer is qualified by (`sum(D: ...)`), or INVALID_INDEX, as for DecideTerm.
 	idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
+	//! As DecideTerm::qualifier_reducer.
+	idx_t qualifier_reducer = DConstants::INVALID_INDEX;
+	//! As DecideTerm::avg_group_key, for the group's AVG.
+	idx_t avg_group_key = DConstants::INVALID_INDEX;
 	//! SUM inside a reducer, NONE outside every reducer (counted once), as for DecideTerm. Read by the objective only.
 	LinearTermReduction reduction = LinearTermReduction::NONE;
 	//! The values `weight` is computed from (DecideTerm::inputs).
 	vector<unique_ptr<Expression>> inputs;
+	//! As DecideTerm::child.
+	idx_t child = DConstants::INVALID_INDEX;
 };
 
 //! The scope of a clause that has left the constraint tree, owned: the rows its `when` keeps and what its `per K:`
@@ -98,14 +114,17 @@ struct DecideClauseScope {
 	//! The clause's `when`, or null for every row.
 	unique_ptr<Expression> when;
 	//! What the clause's `per K:` / `per ()` does. ONE_ROW_PER_CLASS: the per-row shape emits one row per class of
-	//! `class_key` among the kept rows, the class's first (`per ()` is one class). NAMES_CLASSES: the aggregate shape,
-	//! the scoped easy MIN/MAX and the composed MIN/MAX emit their own rows, and the key only names the classes each
-	//! row stands for, which a diagnosis reports one by one (D28). NONE: no `per` written, so every kept row of a
-	//! group is a class of its own.
+	//! `class_key` and variant of `signature` among the kept rows, the variant's first (`per ()` is one class).
+	//! NAMES_CLASSES: the aggregate shape, the scoped easy MIN/MAX and the composed MIN/MAX emit their own rows, and
+	//! the key only names the classes each row stands for, which a diagnosis reports one by one (D28). NONE: no `per`
+	//! written, so every kept row of a group is a class of its own.
 	enum class PerRole : uint8_t { NONE, ONE_ROW_PER_CLASS, NAMES_CLASSES };
 	PerRole per = PerRole::NONE;
 	//! The `per` key (index into LogicalDecide::keys); INVALID_INDEX with NONE and for `per ()`.
 	idx_t class_key = DConstants::INVALID_INDEX;
+	//! The clause's variant signature (LogicalDecide::signatures), which splits each class into one instance per
+	//! distinct value of its fields (D70); INVALID_INDEX when it has none, so one instance per class.
+	idx_t signature = DConstants::INVALID_INDEX;
 
 	DecideClauseScope() = default;
 	//! The scope of a clause under `enclosing`: its `when`, and its `per` naming the classes its rows stand for.
@@ -116,6 +135,7 @@ struct DecideClauseScope {
 		if (enclosing.per_wrapper) {
 			per = PerRole::NAMES_CLASSES;
 			class_key = enclosing.PerKey();
+			TryParseSignatureTag(enclosing.per_wrapper->GetAlias(), signature);
 		}
 	}
 };
@@ -124,15 +144,22 @@ struct DecideClauseScope {
 struct DecideConstraint {
 	vector<DecideTerm> lhs_terms;    // All additive terms from LHS
 	unique_ptr<Expression> rhs_expr; // RHS expression (may contain aggregates)
-	ExpressionType comparison_type;  // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
-	bool lhs_is_aggregate = false;   // True if original LHS was an aggregate (e.g., SUM(...))
-	bool was_minmax_easy = false; // An easy-direction MIN/MAX kept its reducer (MINMAX_EASY_REWRITE_TAG): one row per
-	                              // member, the bound reduced over each `by` group.
+	//! The bound reads a frame and may differ within a group, so each group's instance takes its tightest value (D85).
+	//! The comparison carries FRAME_TIGHTEST_BOUND_TAG; a rewrite rebuilds its bound, and lowering replaces a bare
+	//! frame.
+	bool tightest_frame_bound = false;
+	ExpressionType comparison_type; // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
+	bool lhs_is_aggregate = false;  // True if original LHS was an aggregate (e.g., SUM(...))
+	bool was_minmax_easy = false;   // An easy-direction MIN/MAX kept its reducer (MINMAX_EASY_REWRITE_TAG): one row per
+	                                // member, the bound reduced over each `by` group.
 	idx_t minmax_clause_idx = DConstants::INVALID_INDEX; // index into LogicalDecide::minmax_clause_labels
 	string minmax_agg_type;                              // "min" or "max" (empty if not minmax)
 	idx_t ne_clause_idx = DConstants::INVALID_INDEX;     // index into LogicalDecide::ne_clause_sources
 	idx_t abs_aux_idx = DConstants::INVALID_INDEX;       // ABS auxiliary this envelope row bounds
 	bool abs_is_pos_bound = false;                       // true=C1 (aux >= inner), false=C2 (aux >= -inner)
+	//! The auxiliary this row defines (DEFINES_TAG_PREFIX): it has no value on a row where the decisions the row reads
+	//! beside it have none (D88). INVALID_INDEX for every other row.
+	idx_t defined_var = DConstants::INVALID_INDEX;
 	//! The clause's `when` and `per`.
 	DecideClauseScope scope;
 	//! Aggregate shape: the `by` key its decision reducers share, which groups its rows (index into
@@ -172,11 +199,8 @@ struct DecideConstraint {
 struct DecideObjective {
 	vector<DecideTerm> terms;              // Linear objective terms
 	unique_ptr<Expression> when_condition; // the objective's `when` (nullptr = every row)
-	//! The two-level form's key (index into LogicalDecide::keys); INVALID_INDEX for none.
-	idx_t two_level_key = DConstants::INVALID_INDEX;
-	//! The objective reads only the rows its `when` keeps, its two-level form's key puts
-	//! a row whose written key is NULL in no class, and a term beside its reducers counts once, read on the first
-	//! kept row.
+	//! The objective reads only the rows its `when` keeps, and a term beside its reducers
+	//! counts once, read on the first kept row.
 
 	//! The objective's terms of degree 2 (DecideProductGroup), summed into one Q.
 	vector<DecideProductGroup> product_groups;
@@ -184,19 +208,64 @@ struct DecideObjective {
 	DecideObjective() = default;
 };
 
-//! Everything DecideLinearFormBuilder (stage 05) produces, carried on
-//! LogicalDecide and moved into PhysicalDecide at physical planning.
-//!
-//! `objective` is null when the query has no objective, or when the objective
-//! is neither an aggregate nor a query-wide decision.
-struct DecidePreparedModel {
-	vector<unique_ptr<DecideConstraint>> constraints;
-	//! Scoped bounds the optimizer folded into a column box (SINGLETON_ROW_BOUND_TAG). The box
-	//! enforces them, so the solved model has no row for them; a repair model emits their
-	//! rows, one per kept row or per class of a `per` key, so an expanded diagnosis loosens
-	//! one the way its clause scopes it (D28). Evaluated under DIAGNOSE only.
-	vector<unique_ptr<DecideConstraint>> singleton_row_constraints;
-	unique_ptr<DecideObjective> objective;
+//! A value a frame selector reads, which stage 08 computes as a column beside the input's:
+//! every expression that reads a frame reads it as chunk column
+//! `DecideFrameReads::column_base + j` for entry j, so no evaluator learns a new
+//! node. `value` is evaluated on the rows `kind` names only, which is what makes an unused
+//! fallback never evaluated (language/guide.md §5.6). A frame with nothing to read at a row
+//! reads NULL there, which is no value (D84): the comparison's instance is skipped, the
+//! reducer's member dropped, the objective's term dropped -- as for a NULL the row holds.
+//! A frame over data reads one value:
+//!   VALUE    — a point: `value`, its payload, at the row the frame selects for the row;
+//!              `fallback`, its `else`, at the row itself where it selects none; NULL where
+//!              neither stands
+//!   REDUCED  — a range: `value`, its marker -- the frame's reducer over its payload -- over
+//!              the values the row's range reads, `fallback` read at the row once per missing
+//!              position; a NULL among them skipped, as SQL's aggregate skips it; NULL where it
+//!              reads nothing
+//! A frame over decisions reads its terms' coefficients:
+//!   READ     — `value` at the row the frame selects for the row; where it selects none, 0
+//!              when the frame has an `else` (which stands in), else NULL
+//!   FALLBACK — `value` at the row itself where a position the frame requests is missing and
+//!              it has an `else`; 0 everywhere else. A range has these too, over data or
+//!              decisions: its helper's definition and its signature field read them
+//!   DEFINED  — TRUE where the frame has a value: a point's every READ and FALLBACK column
+//!              holds one, a range's window reads something; NULL elsewhere (BOOLEAN; `value`
+//!              is null): what a reducer's NULL test reads for a frame over decisions in its
+//!              argument (DecideCanonicalizer::SkipNullData)
+//! A reducer over data whose argument reads a frame (LogicalDecide::frame_aggregates) is one column of its own, after
+//! every frame's, computed once they are:
+//!   AGGREGATE — `value`, the reducer over the rows its filter keeps, its argument reading frame columns: on each row
+//!              its group's value of `key`, in the reducer's type, each class of `class_key` counted once per
+//!              signature; NULL on a row in no group, and where the group has none to reduce (`count`: 0). `frame` is
+//!              INVALID_INDEX
+struct DecideFrameColumn {
+	enum class Kind : uint8_t { VALUE, READ, FALLBACK, DEFINED, REDUCED, AGGREGATE };
+	Kind kind = Kind::READ;
+	idx_t frame = DConstants::INVALID_INDEX;
+	unique_ptr<Expression> value;
+	//! VALUE, REDUCED: the frame's `else`, of the payload's type; null when it has none.
+	unique_ptr<Expression> fallback;
+	LogicalType type;
+	//! AGGREGATE: its path key and its own `per` key, into LogicalDecide::keys, the reducer as written, and the order
+	//! of the norm it was written as (LogicalDecide::FrameAggregate).
+	idx_t key = DConstants::INVALID_INDEX;
+	idx_t class_key = DConstants::INVALID_INDEX;
+	string text;
+	string norm_order;
+};
+
+//! The values the frame selectors read, as columns after the input's, which stage 05's lowering makes of every frame
+//! read (LowerDecideTree) and the tree holds (DecideTree::frame_reads).
+struct DecideFrameReads {
+	//! The columns: the first is chunk column `column_base`, the number of columns the input has.
+	vector<DecideFrameColumn> columns;
+	idx_t column_base = 0;
+	//! Per frame, its `else` as a signature keys it where an anchor reaches it (D82): the
+	//! FALLBACK columns of its terms (into `columns`), and the decisions it reads at the
+	//! row itself. Both empty for a frame with no `else`.
+	vector<vector<idx_t>> fallback_columns;
+	vector<vector<idx_t>> fallback_decisions;
 };
 
 } // namespace duckdb

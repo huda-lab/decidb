@@ -13,6 +13,7 @@
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 
 #include <cmath>
@@ -148,16 +149,80 @@ static void AdmittedInterval(const ExpressionBuilder &calc, ExpressionType compa
 //! reads (its `when`, the reducer's filter, chooses them), and the extremum of one member is that member: the clause is
 //! read with the member in the reducer's place (`2 * max(c * x) <= K` reads as `2 * (c * x) <= K`), and `filter` is
 //! set to the reducer's filter. The reducer stays in the tree, so EXPLAIN and DIAGNOSE read the clause as written.
-static unique_ptr<Expression> ReadAsRow(const ExpressionBuilder &calc, const BoundComparisonExpression &comparison,
-                                        unique_ptr<Expression> &filter) {
-	auto row = calc.Out(calc.Of(*comparison.left));
+static void ReplaceTaggedFunctionsForSingletonRead(unique_ptr<Expression> &expression, const LogicalDecide &decide) {
+	idx_t aux;
+	const bool abs_function = expression->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
+	                          TryParseDecideIndexTag(expression->GetAlias(), ABS_FUNCTION_TAG_PREFIX, aux);
+	const bool definition_function =
+	    TryParseDecideIndexTag(expression->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, aux);
+	if (abs_function || definition_function) {
+		if (aux >= decide.decide_variables.size()) {
+			throw InternalException("DECIDE singleton-row folding: function references invalid helper %llu", aux);
+		}
+		expression = decide.decide_variables[aux]->Copy();
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(
+	    *expression, [&](unique_ptr<Expression> &child) { ReplaceTaggedFunctionsForSingletonRead(child, decide); });
+}
+
+//! A frame inside a tagged F body determines that helper's value, not the row on which the surrounding bound is
+//! read. After the function value is replaced by its helper, the bound can still be folded into that helper's box.
+//! Other frame reads remain row-dependent and keep the conservative refusal below.
+static bool ContainsFrameOutsideTaggedFunction(const Expression &expression) {
+	idx_t aux;
+	if (TryParseDecideIndexTag(expression.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, aux) ||
+	    (expression.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
+	     TryParseDecideIndexTag(expression.GetAlias(), ABS_FUNCTION_TAG_PREFIX, aux))) {
+		return false;
+	}
+	idx_t frame;
+	if (TryGetDecideFrame(expression, frame)) {
+		return true;
+	}
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(
+	    expression, [&](const Expression &child) { found = found || ContainsFrameOutsideTaggedFunction(child); });
+	return found;
+}
+
+static unique_ptr<Expression> ReadAsRow(const ExpressionBuilder &calc, const LogicalDecide &decide,
+                                        const DecideTermSplitter &splitter, const BoundComparisonExpression &comparison,
+                                        unique_ptr<Expression> &filter, bool &by_key_only) {
+	auto source_row = comparison.left->Copy();
+	unique_ptr<Expression> expanded;
+	if (splitter.ExpandBilinearGroups(*source_row, expanded)) {
+		source_row = std::move(expanded);
+	}
+	ReplaceTaggedFunctionsForSingletonRead(source_row, decide);
+	auto row = calc.Out(calc.Of(*source_row));
 	if (HasDecideTag(comparison.GetAlias(), MINMAX_EASY_REWRITE_TAG)) {
+		// The reducer's `by` key is on the written reducer: the copy above keeps no alias.
+		idx_t key = DConstants::INVALID_INDEX;
+		std::function<void(const Expression &)> find = [&](const Expression &node) {
+			if (node.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+				key = DecideReducerGroupKey(node.Cast<BoundAggregateExpression>());
+				return;
+			}
+			ExpressionIterator::EnumerateChildren(node, find);
+		};
+		find(*comparison.left);
 		ReplaceDecisionTerm(
 		    row, [](const Expression &node) { return node.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE; },
 		    [&](const Expression &node) {
 			    auto &reducer = node.Cast<BoundAggregateExpression>();
 			    D_ASSERT(reducer.children.size() == 1);
 			    filter = reducer.filter ? reducer.filter->Copy() : nullptr;
+			    by_key_only = !filter;
+			    // A row in no group of the reducer's `by` key, a NULL in a column the user wrote (language/guide.md
+			    // §5.2), is no member, as a row its filter leaves out is none.
+			    for (auto &element : DecideKeyElements(decide.keys, key)) {
+				    if (element.null_mode == DecideKeyNullMode::NO_GROUP) {
+					    auto member = filter ? calc.Of(*filter) : calc.Bool(true);
+					    filter = calc.Out(calc.If(calc.IsNull(calc.Of(element.Grouping())), calc.Bool(false), member));
+				    }
+			    }
+			    by_key_only = by_key_only && filter;
 			    return calc.Out(calc.Cast(calc.Of(*reducer.children[0]), reducer.return_type));
 		    });
 	}
@@ -228,13 +293,27 @@ bool DecideReadSingletonRow(ClientContext &context, const LogicalDecide &decide,
 	    type != ExpressionType::COMPARE_EQUAL) {
 		return false;
 	}
+	// A frame selector reads another row, or nothing, which no admitted interval over the row says. A tagged ABS
+	// helper is its own decision, so a frame inside that F node's operand does not make a bound on its value vary.
+	if (ContainsFrameOutsideTaggedFunction(comparison)) {
+		return false;
+	}
 	ExpressionBuilder calc(context);
-	DecideTermSplitter splitter(context, decide.decide_index, decide.decide_variables);
+	DecideTermSplitter splitter(context, decide);
 	unique_ptr<Expression> member_filter;
-	auto row = ReadAsRow(calc, comparison, member_filter);
+	bool by_key_only = false;
+	auto row = ReadAsRow(calc, decide, splitter, comparison, member_filter, by_key_only);
+	out.members_by_key_only = by_key_only;
 	ExprPtr a, b;
 	if (!ReadAffine(calc, splitter, *row, out.var_idx, a, b)) {
 		return false;
+	}
+	// A SUM or AVG helper stands for the sum of its members, which a row may read in their place (D89, deck pp. 115,
+	// 119): a bound on it is a row that reads it, not its box.
+	for (auto &link : decide.reducer_value_links) {
+		if (link.value_var == out.var_idx && (link.agg_name == "sum" || link.agg_name == "avg")) {
+			return false;
+		}
 	}
 	auto type_id = decide.decide_variables[out.var_idx]->return_type.id();
 	bool whole = type_id == LogicalTypeId::INTEGER || type_id == LogicalTypeId::BIGINT;
@@ -380,7 +459,16 @@ void DecideOptimizer::FoldSingletonRowsInExpression(Expression &expr, LogicalDec
 		TryParseRemovalGroupTag(comp.GetAlias(), removal_group_id);
 
 		DecideSingletonRow bound;
-		if (!DecideReadSingletonRow(optimizer.context, decide, comp, bound) || !bound.folds) {
+		if (!DecideReadSingletonRow(optimizer.context, decide, comp, bound)) {
+			break;
+		}
+		if (!bound.folds) {
+			// A bound on the members of an easy extremum's `by` groups bounds each by a constant: no box takes it,
+			// since a row in no group is no member, but the domain check reads it as written.
+			if (bound.members_by_key_only && bound.constant_on_read_rows) {
+				decide.member_singleton_row_bounds.push_back(
+				    {bound.var_idx, bound.sense, bound.written_k, source_clause_id, removal_group_id});
+			}
 			break;
 		}
 		// The comparison stays in the tree so EXPLAIN keeps rendering what the user
@@ -425,6 +513,7 @@ void DecideOptimizer::FoldSingletonRows(LogicalDecide &decide) {
 	idx_t num_decide_vars = decide.decide_variables.size();
 	decide.singleton_row_boxes.assign(num_decide_vars, DecideBoundBox());
 	decide.user_singleton_row_bounds.clear();
+	decide.member_singleton_row_bounds.clear();
 
 	// Seed a BOOLEAN's intrinsic ceiling here rather than leaving every variable at
 	// 1e30 and repairing it at model-build time. The box travels to stage 06 as

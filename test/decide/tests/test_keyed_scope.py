@@ -2695,3 +2695,25 @@ def test_keyed_perrow_linear_lhs(decidb_cli, duckdb_conn, oracle_solver):
     assert (
         abs(decidb_obj - result.objective_value) < 1e-4
     ), f"Entity-scoped per-row linear LHS: DeciDB={decidb_obj}, oracle={result.objective_value}"
+
+
+@pytest.mark.correctness
+def test_a_row_in_no_class_of_a_keyed_decision_is_not_compared(decidb_cli, oracle_solver):
+    """The second row's depot is NULL, so it has no decision (`r` is NULL there) and `sum(per t.cap: r)` reads nothing
+    there. The other two rows stand alone: r takes each row's cap."""
+    sql = """
+        SELECT id, r FROM (VALUES (1, 'D1', 5), (2, NULL, 6), (3, 'D2', 7)) t(id, depot, cap)
+        DECIDE per t.depot: r(INT)
+        SUCH THAT r <= t.cap AND sum(per t.cap: r) <= 100
+        MAXIMIZE sum(r)
+        ORDER BY id"""
+    oracle_solver.create_model("absent_class_is_not_compared")
+    for name in ("r_1", "r_3"):
+        oracle_solver.add_variable(name, VarType.INTEGER, lb=0.0)
+    oracle_solver.add_constraint({"r_1": 1.0}, "<=", 5.0, name="cap_1")
+    oracle_solver.add_constraint({"r_3": 1.0}, "<=", 7.0, name="cap_3")
+    oracle_solver.add_constraint({"r_1": 1.0, "r_3": 1.0}, "<=", 100.0, name="classes")
+    oracle_solver.set_objective({"r_1": 1.0, "r_3": 1.0}, ObjSense.MAXIMIZE)
+    result = oracle_solver.solve()
+    rows, _ = decidb_cli.execute(sql)
+    assert rows == [(1, round(result.variable_values["r_1"])), (2, None), (3, round(result.variable_values["r_3"]))]

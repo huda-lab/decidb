@@ -9,10 +9,12 @@ add_library_unity(
   test_decidb_direct_decline.cpp
   test_decidb_direct_rule_driver.cpp
   test_decidb_direct_ir.cpp
+  test_decidb_descent_reads.cpp
   test_decidb_numeric_policy.cpp
   test_decidb_probe_models.cpp
   test_decidb_escape_characterization.cpp
   test_decidb_perfect_hash_join.cpp
+  test_decidb_helper_inlining.cpp
   test_decidb_plan_serialization.cpp
   test_decidb_router.cpp
   test_decidb_solver_registry.cpp

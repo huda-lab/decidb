@@ -88,7 +88,8 @@ prints functions in call form, and keeps pipeline tags in aliases that `GetName(
 **The style** (D32): quoted text as typed, in the user's case; a reprinted node (a rewritten row, the decision structure
 of a layer) with reducers, `norm` and keywords in lower case; the `when c per K:` qualifier in front; a
 reducer's own scope inside it and its `by (G)` after it; keys as written (`per D.depotID`), never as binding indexes;
-the defaults `per row:` and `by ()` not printed; the two-level objective printed whole.
+the defaults `per row:` and `by ()` not printed; the colon form kept as `sum(D: e)` (D38); a nested reducer printed
+as written, its own scope and `by` at every level.
 
 **Casts by location.** A cast the user wrote has its own span, so it is quoted with the expression around it:
 `SUM(x * CAST(q AS INTEGER))` keeps its cast. A cast the binder added takes its child's location and quotes as the
@@ -101,7 +102,6 @@ child, so reconciliation casts never appear.
 |---|---|
 | `PER_CLASS_TAG` (`per K:`) | add `per K`, key as written (`PerClassQualifier`); recurse |
 | `WHEN_FILTER_TAG` (`when c:`) | add `when c` in front (`WhenQualifier`); recurse |
-| `TWO_LEVEL_OBJECTIVE_TAG` (two-level objective) | print it whole where its outer reducer stands in the term, so a sign or factor prints around it: `-max(per k: ...)`, `2 * max(per k: ...)` (`RenderTwoLevelObjective`) |
 | `AND` | recurse into each child |
 | `COMPARE_IN` marker | `<target> IN (v1, …)` |
 | leaf | `RenderDecideSource`: the cut text of a located node, else the reprint; quoted with its qualifier by `QuoteWrittenClause` |
@@ -131,6 +131,11 @@ sort to the end.
 - **ANALYZE** needs no instrumentation: DuckDB times each operator's `Sink` (materialization), `Finalize` (model
   build and solve) and `Source` (readback). Row counts are actual. On small inputs per-operator times can round to
   `(0.00s)`; use `Total Time`.
+- **Run-time accounts.** Execution records what the data made of each clause (`RewriteAccount::Kind::RUN_TIME`,
+  `PhysicalDecide::run_time_accounts`): the variants of its classes (`RecordVariants`, D71), the instances it skipped
+  for having no value (`ReportSkippedInstances`, D90), a helper written where it is read (`ReportInlinedHelpers`,
+  D89) and an objective that is 0 (`ReportAnEmptyObjective`). `ParamsToString` prints them after the plan's accounts,
+  so EXPLAIN ANALYZE shows them and a plain EXPLAIN, which runs nothing, does not.
 - **JSON** uses the same `GetName()`/`ParamsToString()`, not `Serialize` (which exists for prepared statements).
   DuckDB splits a multi-line value into an array, one entry per line, markers included.
 - **Cardinality.** DECIDE does not override `EstimateCardinality`; it emits every input row, so the child's estimate

@@ -137,6 +137,9 @@ static bool IsAllowedDecisionFreeBoundExpression(const ParsedExpression &expr,
 		});
 		return allowed;
 	}
+	case ExpressionClass::DECIDE_FRAME:
+		// A frame over data is a value read at another row of the timeline.
+		return !ExpressionContainsDecideVariable(expr, variables);
 	default:
 		return false;
 	}
@@ -447,6 +450,14 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
 			return ExpressionBinder::BindExpression(expr_ptr, depth);
 		}
 		break;
+	case ExpressionClass::DECIDE_FRAME:
+		if (!is_top_expression) {
+			return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
+		}
+		// A frame alone, like a bare decision, says nothing to hold.
+		return BindResult(BinderException::Unsupported(
+		    expr, StringUtil::Format("'%s' is not a valid SUCH THAT constraint on its own; compare it with a value",
+		                             DecideWrittenSql(expr, qualifier_context->source_text))));
 	default:
 		break;
 	}
@@ -473,6 +484,14 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
 			return reducer_result;
 		}
 		if (ContainsDecideAggregate(expr)) {
+			// A reducer under arithmetic decides nothing unless something in it reads a
+			// decision: `sum(t.v) by (t.g) + 1` is data, as a bare column is.
+			if (!ExpressionContainsDecideVariable(expr, variables)) {
+				error_msg =
+				    StringUtil::Format("SUCH THAT clause: '%s' reads no DECIDE variable; compare a decision with it",
+				                       DecideWrittenSql(expr, qualifier_context->source_text));
+				return DecideExpression::INVALID;
+			}
 			return DecideExpression::SUM;
 		} else if (ExpressionContainsDecideVariable(expr, variables)) {
 			// Operator/function expressions containing DECIDE variables
@@ -492,6 +511,15 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
 		// exact-cast classifier or atomic preimage lowering can consume it.
 		auto &cast = expr.Cast<CastExpression>();
 		return GetExpressionType(*cast.child, error_msg);
+	}
+	case ExpressionClass::DECIDE_FRAME: {
+		// A frame term is one value per anchor row: its payload read at the rows it selects.
+		if (ExpressionContainsDecideVariable(expr, variables)) {
+			return DecideExpression::VARIABLE;
+		}
+		error_msg = StringUtil::Format("SUCH THAT clause: '%s' reads no DECIDE variable; compare a decision with it",
+		                               DecideWrittenSql(expr, qualifier_context->source_text));
+		return DecideExpression::INVALID;
 	}
 	default: {
 		error_msg =

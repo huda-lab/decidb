@@ -6,6 +6,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
@@ -49,7 +50,10 @@ DecideTermDegree DecideDegreeOf(ClientContext &context, const Expression &expr, 
 		return result;
 	}
 	auto &node = *UnwrapDecideCasts(expr, decide_index);
-	if (node.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+	idx_t function_aux;
+	// A function the optimizer gave a helper decision (DEFINITION_FUNCTION_TAG_PREFIX) reads as that decision.
+	if (node.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
+	    TryParseDecideIndexTag(node.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, function_aux)) {
 		result.degree = 1;
 		return result;
 	}
@@ -123,7 +127,7 @@ static bool DecisionAliasesEqual(const Expression &left, const Expression &right
 }
 
 bool DecideTermsEqual(const Expression &left, const Expression &right, idx_t decide_index) {
-	return Expression::Equals(left, right) && DecisionAliasesEqual(left, right, decide_index);
+	return DecideExpressionsEqual(left, right) && DecisionAliasesEqual(left, right, decide_index);
 }
 
 bool DecideFactorsEqual(const Expression &left, const Expression &right, idx_t decide_index) {
@@ -389,6 +393,13 @@ static unique_ptr<Expression> RewriteProduct(ClientContext &context, idx_t decid
 		return nullptr;
 	}
 	auto alias = RebuiltAlias(rebuilt->GetAlias(), node.GetAlias());
+	if (spelled != rebuilt.get()) {
+		// A cast back is type reconciliation, which every reader looks through (UnwrapDecideCasts) before it reads a
+		// tag, so the node's tags go on the product under it and the cast keeps the name alone.
+		auto name = StripDecideTags(alias);
+		spelled->SetAlias(spelled->GetAlias() + alias.substr(name.size()));
+		alias = std::move(name);
+	}
 	rebuilt->SetAlias(std::move(alias));
 	// The product is the written term respelled, equal to it for every input, so it points where the term was
 	// written, as the cast back does.

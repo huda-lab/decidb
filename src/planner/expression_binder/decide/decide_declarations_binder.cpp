@@ -303,6 +303,8 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 	qualifier_context.keyed_scopes = &keyed_scopes;
 	qualifier_context.keys = &keys;
 	qualifier_context.source_text = &statement.decide_text;
+	vector<DecideFrameSpec> frames;
+	qualifier_context.frames = &frames;
 	// Isolate with brackets to avoid multiple active binders.
 	{
 		DecideConstraintsBinder decide_constraints_binder(binder, context, decide_variable_names, scalar_variable_names,
@@ -318,7 +320,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 			DecideSourceNames names {statement.decide_text, keyed_scopes, keys};
 			ValidateDecideIntegralComparisonOperands(*result.decide_constraints, result.decide_index, names);
 			result.decide_constraint_sources = InitializeConstraintSourceInfo(
-			    *result.decide_constraints, statement.decide_text, keyed_scopes, result.decide_index, &keys);
+			    *result.decide_constraints, statement.decide_text, keyed_scopes, result.decide_index, &keys, frames);
 		}
 	}
 	if (statement.decide_objective) {
@@ -348,6 +350,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 	result.is_boolean_var = is_boolean_var;
 
 	result.decide_keys = std::move(keys);
+	result.decide_frames = std::move(frames);
 
 	result.keyed_scopes = std::move(keyed_scopes);
 	result.variable_scopes = variable_scopes;

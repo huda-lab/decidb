@@ -155,7 +155,7 @@ a rendering job rather than a re-plumbing job.
 
 | ID | Rule |
 |---|---|
-| **C0** | Ordinary `AND` conjunctions recurse into every child. A `when` wrapper, a `per K:` wrapper (`PER_CLASS_TAG`) or the two-level objective's wrapper (`TWO_LEVEL_OBJECTIVE_TAG`) recurses into child 0 only; a `when` condition is copied unchanged. A wrapper holds one clause: a plain `AND` or a `when` inside a `when` under a wrapper is an `InternalException` in every build, since nothing builds either shape and each walker would read it differently. Non-comparison leaves are copied unchanged. The predicates and the walk live in `planner/decide/decide_constraint_walk.hpp` and are shared with every other stage that reads a bound constraint tree, so a new wrapper kind is defined once. |
+| **C0** | Ordinary `AND` conjunctions recurse into every child. A `when` wrapper or a `per K:` wrapper (`PER_CLASS_TAG`) recurses into child 0 only; a `when` condition is copied unchanged. A wrapper holds one clause: a plain `AND` or a `when` inside a `when` under a wrapper is an `InternalException` in every build, since nothing builds either shape and each walker would read it differently. Non-comparison leaves are copied unchanged. The predicates and the walk live in `planner/decide/decide_constraint_walk.hpp` and are shared with every other stage that reads a bound constraint tree, so a new wrapper kind is defined once. |
 | **C1** | Each DECIDE comparison has at least one decision-bearing term. |
 | **C2** | The right side contains no decision-variable reference. |
 | **C3** | Every top-level decision-bearing additive term is on the left; every top-level decision-free additive term is on the right. Data inside a reducer body stays inside that reducer. |
@@ -192,7 +192,7 @@ a power) is not split, and the binder counts its whole body.
 
 `ReadCanonicalAtoms` reads these atoms back from a canonical side, with each sign
 and any reducer factor, by the same spine walk `Decompose` uses. Readers of
-canonical trees (the solver path's prepared linear form, direct solve's facts) use
+canonical trees (the solver path's lowered terms, direct solve's facts) use
 it instead of walking `+` and `-` themselves.
 
 ### 3.3a One spelling per meaning: `norm`
@@ -504,7 +504,7 @@ reason objectives get a boundary instead of their own normalizer.
 
 | ID | Rule | Shared with |
 |---|---|---|
-| **O0** | A `when` wrapper or the two-level objective's wrapper (`TWO_LEVEL_OBJECTIVE_TAG`) recurses into child 0 only. | C0, same predicate |
+| **O0** | A `when` wrapper recurses into child 0 only. | C0, same predicate |
 | **O1** | The body is an additive spine whose every term references a decision. | — |
 | **O2** | A decision-free additive term is folded into `objective_constant_offset`. It shifts the objective without moving `argmax`/`argmin`. One that does not fold to a constant is rejected here. | — |
 | **O3** | The spine contains only `+`, binary `-`, unary `-`, and binder casts over decision algebra. Data casts are atoms. | C4, verbatim |
@@ -550,8 +550,12 @@ escape for `AGG * factor`: every consumer sees `factor * AGG` or `AGG / factor`.
 |---|---|---|
 | no reducer (a data-only reducer may sit on the bound side) | `ROWS` | one per kept row, or per class of an enclosing `per K:` |
 | decision reducers sharing one `by` key, under whole-query factors, beside terms that are one value per group | `AGGREGATE` | one per `by` group of the kept rows |
-| anything else: a term beside a reducer finer than the `by` key, a factor that varies by row or is a `BOOL` decision, a second `by` key, a reducer inside another expression, a product of decisions beside a reducer with a query-wide decision in the clause (`sum(x) + b * s`) | `VALUE` | the value rewrite (stage 05): each decision reducer becomes a helper decision per `by` group, then one row per class |
+| anything else: a term beside a reducer finer than the `by` key, a factor that varies by row or is a `BOOL` decision, a second `by` key, a reducer inside another expression, a reducer holding a reducer (guide §5.5), a product of decisions beside a reducer with a query-wide decision in the clause (`sum(x) + b * s`) | `VALUE` | the value rewrite (stage 05): each decision reducer becomes a helper decision per `by` group (a nested one per group of its path key), then one row per class |
 | `AVG` under `<>` unless every term is a plain `AVG` | refused | *"DECIDE: AVG in a <> constraint is not supported yet beside another term or with its own when or per"* |
+
+In the objective, which has no shape, `CanonicalizeObjective` tags the outermost reducer
+of each nest `VALUE_REWRITE_TAG` (`TagNestedObjectiveReducers`, D81): the shape of a nest
+is decided here, once, and the value rewrite reads the tag.
 
 The refusal: an `AVG`'s exclusion under `<>` scales the bound by the group's row count,
 exact only when every term is a plain `AVG` over all of them. Neither way around it pays
@@ -579,10 +583,12 @@ is an internal error (the rewrite did not run).
 A term beside the reducers is one value per group when its scope, the join of its
 factors' scopes on the key lattice (`JoinDecideKeys`: query-wide < a key < per row), is the
 `by` key or query-wide. A decision brings its own key; data brings the enclosing `per`
-key, whose scope check makes it one value per class, or per row with no `per`. So the
-facility link `per D: sum(ship) by (D) <= cap * open`, with `open` declared `per D:`, is
-AGGREGATE: one row per depot with that depot's `open` column, with no helper per group.
-Execution counts the term once in each group's row (`CountOnce`, stage
+key where that key holds it by construction (`KeyHolds`: one of its elements, or a
+deterministic function of them), and per row otherwise, since a value the key does not
+hold may take several values in a class, each a variant (D70). So `per D: sum(ship) by
+(D) <= D.cap * open`, with `open` declared `per D:`, is AGGREGATE: one row per depot with
+that depot's `open` column. Under `per D.depotID`, `D.cap` is not one of the key's
+elements, so the same link takes a helper per group and one row per variant. Execution counts the term once in each group's row (`CountOnce`, stage
 08). Only `CanonicalizeTree` sees the enclosing scope, so it decides the shape once and
 stamps it; the linear form, direct solve and the window rewrite read the stamp
 (`VALUE_REWRITE_TAG`, else AGGREGATE for a reducer on the decision side and PER_ROW for
@@ -592,8 +598,8 @@ none) instead of classifying the bare comparison again.
 (`__group_key_<i>__`) — the one grouping carrier after this stage, since later rewrites
 rebuild the reducers. A `per K:` wrapper over it stays, as over every shape
 (`IsPerClassWrapper`, a wrapper for every walker): one row per `by` group already stands
-for every class, whose constraints differ only in a bound the class determines, so the
-wrapper adds no row; it names the classes each group's row stands for, which the linear
+for every class and variant, whose constraints differ only in their bound, which the
+group's tightest bound covers (`=` refuses two), so the wrapper adds no row; it names the classes each group's row stands for, which the linear
 form reads as the clause's class key and a diagnosis reports one by one (D28). A
 VALUE comparison is stamped `VALUE_REWRITE_TAG`, which the rewrite reads and removes.
 
@@ -679,36 +685,63 @@ function and are **not** gated — those stay in release. Build `debug` or
 pins both the debug-mode throwing behavior and the release-mode no-op via a
 `REQUIRE_VERIFY_THROWS` macro that switches on `DEBUG`.
 
-### Scope checks
+### Variant signatures
 
-`BuildConstraintScopeChecks` and `BuildObjectiveScopeChecks` are read-only passes over
-the clauses and objective as bound, called once by `Binder::CreatePlan`, after
-`PlanSubqueries` (a check's expressions must be copyable) and before `CanonicalizeTree`.
-A rewrite's clause entering through
-`AddConstraint` builds none. Per clause, in this order: its `per` key determines each
-maximal decision- and reducer-free subexpression, each decision outside reducers and each
-`by` key (`DETERMINES`); then each reducer in turn: its own `per` key determines its body
-within its `by` group (`DETERMINES`). An empty set is no check: execution skips its
-instance (D68). The objective: `per ()` over its values and decisions,
-then each top-level reducer in turn, its `by` key (`DETERMINES`) before its own checks.
-A `by` key's check reads the key as its rows group (`DecideKeyElement::Grouping()`, D69): over
-a NOCASE column, 'a' and 'A' are one value.
-The first check to fail stops the query, so this order picks the message. Literals and query-wide values need no check.
-Nor does one of the key's own elements as rows group on it (`KeyHolds`, reflexivity): a key determines its
-grouping expression by construction, so `per a: sum(x) by (a)` builds no check for `a`. The same rule covers a
-decision: a key determines a decision whose own key's elements are all among its own, so `per (a, b)` over a decision
-`per a` builds no check, and a query-wide decision (the empty key) never gets one. A per-row decision always does.
-A function of a key column
-still gets one, since rows that group together can differ under it (0.0 and -0.0 under `atan2(a, -1)`, '1 month'
-and '30 days' under `date_part('day', a)`). Key elements compare as rows group on them, collation included: a key
-element is bound as GROUP BY binds a group (`DecideKeyElement::Bind`, `PushCollation` at binding, so
-`default_collation` applies), and `FindOrCreateDecideKey` and `KeyHolds` compare `Grouping()`. `per t.g` over a NOCASE
-column and `by (t.g COLLATE noaccent)` are two keys, so the check runs and stops the query when 'a' and 'A' differ
-under `noaccent`; `by (t.g COLLATE NOCASE)` over that column is the same key. Collation names are never compared:
-`nocase.noaccent` and `noaccent.nocase` lower to different expressions and are two keys, as GROUP BY's duplicate-group
-removal sees them. The message texts are rendered
-here, through `RenderDecideSource`, from the query's text (`DecideSourceText`, carried by `DecideScopeChecks`) and
-relation aliases, since only planning still knows them.
+`BuildConstraintSignatures` and `BuildObjectiveSignatures` read the canonical tree, called
+once by `Binder::CreatePlan` right after `CanonicalizeTree` and `CanonicalizeObjective` (a
+rewrite's clause entering through `AddConstraint` builds none). They record what each
+scoped expression reads once per class (D70, [`../../language/guide.md`](../../language/guide.md)
+§7.1): a `per K:` clause (its wrapper tagged `__signature_<i>__`), a relation-qualified
+reducer over decisions (given a keyed scope of its own on the same key, its tag retargeted
+to it, `KeyedScopeInfo::signature`), and the objective. `CollectSignatureFields` walks the
+expression: a reducer is its `by` key (`BY_KEY`) and its body a scoped expression of its
+own; a decision is a field by instance (`DECISION`); data is a field per column it reads, by
+value (`VALUE`, D83), and data that reads no column a field whole, so written associativity
+never changes the count. Literals and query-wide values are no field. Neither is anything the key holds by construction
+(`KeyHoldsField`): one of its elements as rows group on it (`DecideKeyElement::Grouping()`,
+collation included, D69), a deterministic function of them and of constants
+(`CAST(cap AS DOUBLE)`), a decision whose own key's elements it all holds, a query-wide
+decision, a `by` key all of whose elements it holds. An expression with no field has no
+signature: one instance per class, as the key alone gives. A data-only qualified reducer
+needs no scope of its own: its side table groups on the body's signature fields too, a
+nested reducer by its key and data by each column it reads (stage 05). A
+qualified reducer nested in another is counted over the rows its path keeps
+(`DecideReducerPath`, `decide_reducer_path.hpp`: the clause's `when` and every enclosing
+reducer's own -- not the NULL tests `SkipNullData` adds to an enclosing reducer's filter,
+which drop that reducer's own members only; `SignQualifiedReducers` signs the inner
+reducers first, along the path).
+A frame selector is a field by its keys (`FRAME`, D82, deck p. 99), which stage 08 reads
+off its map; a `first` or `last` frame whose `within` the key holds reads one value per class
+and is no field.
+
+### Frame selectors
+
+A frame's marker -- the aggregate the binder bound it to, tagged `__frame_<i>__` -- is a
+tuple term read at another row, never a reducer (`ContainsReducer`,
+`TryMatchScaledAggregate`): a frame over decisions sits left as any
+decision term does, one over data right, and it decides no shape. `PlaceFrames` and
+`PlaceObjectiveFrames`, run right after canonicalization, place each frame on the
+`DecideFrameSpec` the binder recorded: its timelines read the rows its path keeps (`rows`,
+the path rule, `../../language/guide.md` §5.5), split by its path's `by` keys and its
+`within` (`timeline_key`, a key-table entry made when new). Under a `per K` -- the
+objective's root is `per ()` (deck p. 62) -- whose key, with the path's, does not hold the
+frame's `within`, the frame records the D75 check execution runs (`partition_key`,
+`partition_subject`). Whether a frame has a value at an anchor is the data's to say: stage 08
+reads it per instance (D84, D88). `SkipNullData`
+tests a frame inside a reducer over decisions whole (`marker IS NOT NULL`), as it tests a
+column: the frame reads another row, or nothing, so no column of the row itself says whether
+it has a value (D84), and the member goes where it reads nothing (D87); stage 05 makes the
+test a column. A marker names its frame by its tag alone, which `Expression::Equals`
+ignores, so every DECIDE comparison of trees that may hold a frame -- the NULL tests
+`SkipNullData` collects, a filter like terms share, a helper's reducer and rows -- reads
+`DecideExpressionsEqual` (`decide_reducer_path.hpp`), which holds two markers the same only
+when they name one frame: `at(previous: x)` and `at(next: x)` are two values. It tests a
+reducer over data alone inside one over decisions whole as well (`avg(t.v) by (t.h) IS NOT
+NULL`): it has no value where its path group has none, and the member goes; stage 05 makes it,
+and the test, a column (`RewriteRhsAggregates`). A nested reducer over decisions is not
+looked into: its absence is its helper's.
+
+---
 
 ---
 
@@ -718,7 +751,7 @@ relation aliases, since only planning still knows them.
 - fold constants;
 - rewrite AVG, ABS, MIN/MAX, `<>`, bilinear products, L0 `norm()` or `IN`;
 - open `ABS`, `MIN`/`MAX` or a subquery, or look inside reducer bodies beyond respelling their products (§3.3b)
-  and reading them, otherwise unchanged, for the scope checks. Splitting a body into `coefficient * variable`
+  and reading them, otherwise unchanged, for the signatures. Splitting a body into `coefficient * variable`
   terms lives beside this stage in `DecideTermSplitter` (`decide_term_split.cpp`), which reads the one spelling and
   never refuses;
 - refuse a term for its algebra: that is the shape check (§3.11);

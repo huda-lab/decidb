@@ -122,7 +122,7 @@ Grouped by who writes it:
 `variable_scopes`, `keys`, `keyed_scopes`, `constraint_sources`. `keys` is the one
 key table (`DecideKey`): every key the clauses write -- a declaration's `per K:`, a
 reducer's own `per K'` and the colon form `SUM(D: …)`, a reducer's `by (G)`, a
-constraint's `per K:` and the two-level objective's key -- is one entry, and keys with
+constraint's `per K:` and a nested reducer's path key -- is one entry, and keys with
 the same elements share it, whichever spelling wrote them (`FindOrCreateDecideKey`
 compares elements as a set). An entry holds the key as first written and its elements
 (`DecideKeyElement`: the bound expression, its name as a message prints it, and its
@@ -131,8 +131,8 @@ for one written on its own, which the written one keeps when both name it), sort
 by binding, then other expressions by text), and `written_as_by` when a `by` names it. The
 empty key (`per ()`, `by ()`) has no entry: it is `INVALID_INDEX`. A key holding
 a subquery is recognised by its text instead, since bound subqueries do not compare. Tags
-name entries: a reducer's `__group_key_<i>__` its `by` key, and a `PER_CLASS_TAG` or
-`TWO_LEVEL_OBJECTIVE_TAG` wrapper's `__per_key_<i>__` its `per` key (`PerWrapperKey`; no tag is
+name entries: a reducer's `__group_key_<i>__` its `by` key, and a `PER_CLASS_TAG`
+wrapper's `__per_key_<i>__` its `per` key (`PerWrapperKey`; no tag is
 `per ()`). The two tags differ so a walker that reads `by` keys never reads a `per` key.
 `keyed_scopes` holds the key scopes, one per key that keys decisions or a reducer's own
 `per` (`KeyedScopeInfo`: the key, the decisions it keys). `variable_scopes` points each
@@ -142,13 +142,26 @@ link (`KeyedScopeInfo::value_link`, deliberately absent from the serialization: 
 optimized plan is never serialized); its entities are the link's `by` groups among the
 rows the link's clause keeps, so it shares no scope with a binder scope on the same key.
 
-**From the canonicalizer** — `objective_constant_offset`, and `scope_checks`: the
-run-time checks of every clause and of the objective (`DecideScopeCheck`: kind, the
-rows it looks at, the key, the value or decision, a reducer's own `when`, and the texts
-its message quotes; the key is an index into `keys`, its union with a `by` key for a
-check within groups). `PlanSubqueries` runs on the key elements as on the trees, and
-`EnumerateExpressions` visits the key table and the checks, so binding resolution and
-column pruning see their columns.
+**From the canonicalizer** — `objective_constant_offset`, and the variant signatures
+(D70): `signatures`, one `DecideSignature` per scoped expression with a field (the rows
+it reads, its `per` key as an index into `keys`, its fields, the text a plan names it by,
+its clause), indexed by a `per K:` wrapper's `__signature_<i>__` tag and by a reducer's
+own scope (`KeyedScopeInfo::signature`, a scope the canonicalizer appends for a
+relation-qualified reducer over decisions whose body has a field), and
+`objective_signature`, the objective's or `INVALID_INDEX`. A `DecideSignatureField` is a
+data `value`, a `decision` (an index into `decide_variables`), a `by` key (an index
+into `keys`) or a `frame` (an index into `frames`, D82), with its text. `frames` holds one
+`DecideFrameSpec` per frame selector (`../../language/guide.md` §5.6, property 223),
+indexed by the `__frame_<i>__` tag on the aggregate it binds to: its anchors and their
+`k`, `every`, `all`, its fallback and order key, `desc`, `cyclic`, and its `within` key as
+an index into `keys`, and a range's reducer (id 121); then where the canonicalizer placed it (stage 04, ids
+113-120): `rows`, the rows its timelines read (its path's, null for every row), `timeline_key`, the names its
+messages use, and `partition_key` with `partition_subject`, its D75 check. Whether it has a value at an anchor is the
+data's to say (stage 08). `scope_checks`
+holds only the `VALUE_IS_VALID` checks the bound-side rewrite appends (stage 05).
+`PlanSubqueries` runs on the key elements, the frames' order keys and fallbacks as on
+the trees, and `EnumerateExpressions` visits the key table, the frames, the signatures
+and the checks, so binding resolution and column pruning see their columns.
 
 **From the optimizer** — `num_auxiliary_vars` (the decisions it appends after the declared
 ones), `solver_backend_name`, `use_native_constructs`,
@@ -159,12 +172,12 @@ replaced -- the construct as a plan prints it and what it became, `RewriteAccoun
 -- under the clause it came from, INVALID_INDEX for the objective; worded by the renderer;
 never serialized),
 `reducer_value_links` (the value rewrite's helper
-decisions, one per occurrence of a reducer in a clause: each `ReducerValueLink` holds
-the reducer a helper replaced — kind, body, its own `when` and `per`, its `by` key, its
-SQL as a label — the clause's `when`, the MIN/MAX sides any row of the clause needs, the
-clause id and removal group; `inner_terms` are flattened with the prepared form),
-`flat_objective_agg` / `flat_objective_is_easy`, the five `per_*` fields of the
-two-level objective, the folded variable box, and the prepared linear form.
+decisions, one per reducer over one set of rows, shared by every clause that reads it:
+each `ReducerValueLink` holds the reducer a helper replaced — kind, body, its own `when`
+and `per`, its path key (its `by` key under every enclosing one), its SQL as a label —
+the rows its path keeps, and the sides any reader needs; innermost first, and
+`inner_terms` are flattened with the prepared form),
+`flat_objective_agg` / `flat_objective_is_easy`, and the folded variable box.
 
 `optimized` marks the boundary between the first two groups and the third. It is
 set before the optimizer's first rewrite and is what takes this plan off the wire —
@@ -218,7 +231,7 @@ resolution via `ignored_bindings`; it visits every field through
 `LogicalDecide::EnumerateExpressions`, the one list of them: `decide_variables`,
 `decide_constraints`, `decide_objective`, `composed_minmax_objective_terms`,
 `composed_minmax_constraints`, `reducer_value_links` (body, own `when`, clause `when`),
-`keys`, `scope_checks`.
+`keys`, `frames` (order key, fallback, rows), `scope_checks`, `signatures` (rows, fields' values).
 
 **Any new field holding expressions that execution will evaluate must be added to
 `EnumerateExpressions`.** An optimizer rewrite that moves subexpressions out of
@@ -316,7 +329,8 @@ exactly — which is why they are generated from one list, and why an id may be
 renumbered freely: a serialized logical plan lives for microseconds inside one
 process and is never persisted, so there is no older layout to stay readable for. A
 retired field stays in the list as a `"deleted": true` entry, for which the generated
-serializer writes nothing and the deserializer reads past (`ReadDeletedProperty`).
+serializer writes nothing and the deserializer reads past (`ReadDeletedProperty`). `LogicalDecide` writes `signatures`
+at 223, `objective_signature` at 224 and `frames` at 225, `KeyedScopeInfo` its `signature` at 108.
 
 ### What exercises it
 
@@ -344,8 +358,8 @@ assertions select one complete build when verifier paths append equivalent copie
 output, using `CollectDecideExpressionStrings` to print every clause in one style
 (D32): each clause as typed, the `when` and `per` wrappers as one qualifier in front (`when c per K:`), and the
 defaults `per row:` and `by ()` not printed (`../../language/explain.md`, Rendering). The colon form prints as
-`sum(per D: x)` in the canonical and rewritten layers (D38). The two-level objective prints as
-`outer(per k: inner(e) by (k))`, a `when` in front of it, its key as written: `RenderDecidePerKey` cuts the key from
+`sum(per D: x)` in the canonical and rewritten layers (D38). A nested reducer prints as written,
+`outer(per k: inner(e) by (k))`, a `when` in front of it, each key as written: `RenderDecidePerKey` cuts the key from
 `DecideSourceText` at the `per` wrapper's location. A row the solver receives is left out where it reads as
 the clause above it. The renderers read the clause
 registries and the auxiliary labels (`aux_var_expressions`, with `decide_index`), so a decision

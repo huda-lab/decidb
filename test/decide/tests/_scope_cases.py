@@ -94,9 +94,26 @@ def table_rows(columns, rows) -> list[dict]:
     return [dict(zip(columns, row)) for row in rows]
 
 
-def answer(cli, sql: str) -> list[dict]:
-    rows, columns = cli.execute(sql)
+def answer(cli, sql: str, warnings=()) -> list[dict]:
+    """The rows DeciDB answers, as dicts; ``warnings`` declares the DECIDE warnings it prints (texts, or how many)."""
+    rows, columns = cli.execute(sql, expect_warnings=warnings)
     return [dict(zip(columns, row)) for row in rows]
+
+
+def on_highs_too(cases, highs: set[str]) -> list:
+    """``cases`` (each a ``pytest.param`` with an id) with ``cli_fixture`` first: every case on ``decidb_cli``, the
+    suite's backend, and the ones ``highs`` names on HiGHS as well, so the default run judges HiGHS's formulation of
+    them too."""
+    unknown = highs - {case.id for case in cases}
+    assert not unknown, unknown
+    params = []
+    for case in cases:
+        params.append(pytest.param("decidb_cli", *case.values, marks=case.marks, id=case.id))
+        if case.id in highs:
+            params.append(
+                pytest.param("decidb_cli_highs", *case.values, marks=case.marks, id=f"{case.id}-decidb_cli_highs")
+            )
+    return params
 
 
 def aligned(result: list[dict], model, id_column: str = "shipmentID") -> list[dict]:

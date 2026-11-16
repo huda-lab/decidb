@@ -121,6 +121,33 @@ completed list, which is conflict-free. Every element must be a bare relation na
 the whole list travels as one `PGList`; the binder resolves what it means
 (`../02_binder/done.md`, "Relation-qualified reducers").
 
+### Frame selectors
+
+`at(F [else v]: e) over (S ...)` and `agg(from F1 to F2 [every d] [else v | all]: e) over (S ...)`
+(`../../language/guide.md` §5.6) are `c_expr` alternatives beside the scoped reducers:
+
+```
+c_expr              += AT_DECIDE '(' decide_frame_point [ELSE a_expr] ':' a_expr ')' decide_frame_over
+                     | func_name '(' FROM decide_frame_point TO decide_frame_point
+                       opt_decide_frame_every [ELSE a_expr | ALL] ':' func_arg_list ')' decide_frame_over
+decide_frame_point  ::= FIRST_P | LAST_P | NEXT | IDENT | Iconst NEXT | Iconst IDENT
+decide_frame_over   ::= OVER_DECIDE '(' a_expr opt_asc_desc [IDENT] [WITHIN_DECIDE ( '(' ')' | expr_list )] ')'
+```
+
+- `previous`, `every` and `cyclic` are `IDENT`s whose text the grammar checks whatever its case, as a keyword's
+  (`makeDecideFramePrevious`, `decideFrameWord`), so they become no keyword and no column anywhere loses the name:
+  *"DECIDE: a frame position is first, last, [k] previous or [k] next, found prev"*, *"DECIDE: expected every d in a
+  frame selector, found evry"*, *"... expected cyclic or within ..."*. A misspelling that is itself a keyword
+  (`each`, `cycle`) is a plain syntax error.
+- A `within` element must be a column or relation name (`makeDecideFrameOver`): *"DECIDE: within lists columns or
+  relations, as a per key does"*.
+- The frame travels as a `PGDecideFrame` (`parsenodes.hpp`): the anchors and their `k`, `every`, `all`, the
+  fallback, the body (the payload, or for a range the call `agg(args)`), the order key, `desc`, `cyclic`, the
+  `within` list.
+- A SQL window written at the clause's level arrives with `OVER_DECIDE` (§2), so `over_clause` takes `OVER_DECIDE
+  window_specification` and `OVER_DECIDE ColId` too: `when row_number() over () > 1: ...` parses as before and the
+  binder refuses it where it did.
+
 ### Productions kept for the removed spellings
 
 The forms ../../language/errors.md §3 lists as removed — a `WHEN` or `PER` written after
@@ -157,7 +184,9 @@ The `WHEN_DECIDE` conflicts — the empty `within_group_clause` and the plain co
 form — are resolved explicitly by `DECIDE_ITEM` precedence, below both DECIDE `WHEN`
 tokens, so the parser shifts `WHEN`; they are keyed on tokens `base_yylex` emits only
 inside DECIDE. `PER` and a reducer's `BY` reach the grammar as DECIDE-only tokens, so
-neither can be read as an identifier there.
+neither can be read as an identifier there. The frame selector productions add no
+conflict: `AT_DECIDE`, `OVER_DECIDE` and `WITHIN_DECIDE` are DECIDE-only tokens too, and
+a range is told from a call by the `FROM` after its `(`.
 
 Grammar changes require `make grammar-build` (bison 2.3).
 
@@ -218,6 +247,22 @@ the lexer emits DECIDE-only tokens inside the clause:
   before `ROW`, otherwise `PER_DECIDE`. `per ()`, `per row` and `per <key>` are
   not LALR(1)-separable without it, since `(` also opens an expression and `ROW`
   is also a column name.
+- **Frame selectors** take three more tokens, emitted only at the clause's own level: `AT` before `(` becomes
+  `AT_DECIDE` (the `PER` lookahead; `AT TIME ZONE` keeps `AT`), `OVER` directly after `)` becomes `OVER_DECIDE`, and
+  `WITHIN` directly inside that `OVER (...)` becomes `WITHIN_DECIDE` (so `WITHIN GROUP` elsewhere is untouched). "The
+  clause's own level" is the body after `SUCH THAT` only (`decide_in_body`, so a decision may be declared
+  `at(REAL)`), outside every SQL subquery written there. `decide_paren_depth` counts parentheses over the whole
+  statement; a subquery opens at `decide_subquery_depth` and lasts until the parenthesis holding it closes. It opens at
+  a `SELECT`, or at a `WITH`, `VALUES`, `TABLE`, `PIVOT` or `UNPIVOT` directly after `(`, or at a `FROM` there unless a
+  name comes before the `(` (`sum(from first ...)` is a range frame, `(FROM t ...)` a query). `decide_over_parens`
+  has bit d set while the parenthesis at depth d is a frame's `OVER_DECIDE` one, so a window or frame inside an order
+  key leaves the outer `within` its own. A clause nested in a subquery saves and restores its subquery depth and
+  `decide_in_body` with the rest of its state. A declaration with no `FROM` after it (`FROM t DECIDE x(INT) SUCH
+  THAT ...`, `SELECT x DECIDE x(INT) SUCH THAT ...`) reduces only once `SUCH` is read as its lookahead, which has
+  opened the body already: its action drops the state it saved instead of restoring it (`PGDecideDropLexState`), or
+  the body would lex as the declaration list and read no frame. So a window, a named window or a `WITHIN GROUP` inside a subquery
+  written in the clause keeps its SQL meaning, and so does a function called `at` there; at the clause's level it is
+  written quoted, `"at"(...)`.
 
 Inside a DECIDE clause, subqueries written there included, these words are
 therefore keywords in those positions, never names: a column called `per`, a `by`
@@ -233,6 +278,19 @@ clause onto the `SelectNode`: `decide_variables` (via `TransformExpressionList`)
 `decide_constraints`, `decide_sense` (`MAXIMIZE` / `MINIMIZE` / `FEASIBILITY`
 when no objective was written), and `decide_objective`. It then calls
 `RefuseRemovedDecideSpellings` on the node.
+
+A frame selector is not a tagged function but a parsed expression class of its own, `DecideFrameExpression`
+(`ExpressionClass::DECIDE_FRAME`, `src/include/duckdb/parser/expression/decide_frame_expression.hpp`), the way
+`WindowExpression` is: `reducer` (empty for a point frame), `from`/`from_k`, `to`/`to_k`, `every`, `all`, `payload`,
+`fallback`, `order`, `descending`, `cyclic`, `within`. `Transformer::TransformDecideFrame`
+(`transform_decide_frame.cpp`) builds it. A range's reducer is read from the call as a name and one argument, never
+through `TransformFuncCall`, which turns some names (`construct_array`, `if`) into other kinds of expression:
+*"DECIDE: sum(from first to last: e) reduces one expression, found 2"*, *"... takes its expression without a name"*
+for `a := e`. It refuses a `k` or `d` of 0, as DuckDB refuses `#0`: *"DECIDE: in at(0 previous: x) over (t.p), 0 must
+be a positive whole number"*. Its children (payload, fallback, order key, `within` elements) are visited by
+`ParsedExpressionIterator`, so every parsed-tree walk sees inside a frame. `DecideFrameExpression::ToString()` prints a
+frame in lower case with its defaults left out (`asc`, `k` = 1, `every 1`, `within ()`), the text a message quotes;
+the statement itself prints the clause as typed, and a frame with its defaults written equals one without.
 
 `src/parser/transform/statement/transform_show_select.cpp` turns the `DIAGNOSE` prefix
 into a `ShowRef` with `ShowType::DIAGNOSE` wrapping the inner query node — the same
@@ -307,11 +365,11 @@ removed condition to the reducer's own `when`:
   becomes `sum(when c: 1)`, and `norm` (which takes no `when` inside it) is pointed at the
   scope in front;
 - `RefuseObjective` and `RefuseObjectivePer`, after the objective: the `when` in
-  front, the two-level form `outer(per g: inner(e) by (g))` for a reducer over a reducer
-  (an outer `avg` is pointed at `sum`, which ranks solutions the same way; a `WHEN` inside
-  the inner reducer goes in front; an inner colon form or a term beside the form has no
-  spelling yet), and *"an objective is produced once"* for a flat reducer (a flat `avg` is
-  pointed at the sum of one average per class, or at one average over all rows);
+  front, the nested form `outer(per g: inner(e) by (g))` for a reducer over a reducer
+  (a `WHEN` inside the inner reducer goes in front and an inner colon form stays; one beside
+  another term or under a factor is pointed at the nested reducer where it stands), and *"an
+  objective is produced once"* for a flat reducer (a flat `avg` is pointed at the sum of one
+  average per class, or at one average over all rows);
 - `RefuseDeclaration`, for a declaration in a parse tree stored before the removal (a
   view or a macro): a qualified name or a `scalar_` type marker. A fresh query never
   reaches it; the grammar refuses both (§1).
@@ -383,7 +441,7 @@ serialization. The regression matrix in
 `test/common/test_decidb_plan_serialization.cpp` covers every variable type and
 declaration scope, both clause orders, a constraint's `when` with a multi-column `per`
 and a `by`, a reducer's own `when` and `per`, the one- and many-relation colon forms,
-the objective's `when` and two-level form, `NORM`, `IN`, scalar subqueries, quoted
+the objective's `when` and nested form, `NORM`, `IN`, scalar subqueries, quoted
 identifiers and `DIAGNOSE`. It checks reparsed equality, stable rendering, and binary
 `SelectStatement` round trips; a second case does the same for the scope grammar in
 depth (deck examples 1–8 as written and fully explicit, words that are keywords inside
@@ -423,7 +481,9 @@ Non-DECIDE queries retain DuckDB's existing parsed-result comparison.
 | `DIAGNOSE` prefix production | `third_party/libpg_query/grammar/statements/variable_show.y` |
 | Conflict budget and rationale | `third_party/libpg_query/grammar/grammar.y` (header comment) |
 | Reserved keywords | `third_party/libpg_query/grammar/keywords/reserved_keywords.list` |
-| DECIDE `WHEN`, `PER` and `BY` lexer gating | `third_party/libpg_query/src_backend_parser_parser.cpp` (`base_yylex`) |
+| DECIDE `WHEN`, `PER`, `BY`, `AT`, `OVER` and `WITHIN` lexer gating | `third_party/libpg_query/src_backend_parser_parser.cpp` (`base_yylex`), state in `include/parser/gramparse.hpp` |
+| Frame carrier and helpers | `parsenodes.hpp` (`PGDecideFrame`), `grammar/grammar.cpp` (`makeDecideFrameOver`, `makeDecideFramePoint`, `makeDecideFrameRange`) |
+| Frame parsed expression and its transform | `src/parser/expression/decide_frame_expression.cpp`, `src/parser/transform/expression/transform_decide_frame.cpp` |
 | Scope carrier and helpers | `third_party/libpg_query/include/nodes/parsenodes.hpp` (`PGDecideScope`), `grammar/grammar.cpp` (`makeDecideScope`, `applyDecideScope`, `makeQualifiedReducer`, `absorbRemovedPerKey`) |
 | Source spans (one per expression of the tail, a `per`/`by` key, a reducer's call, a BETWEEN's halves, the objective) | `grammar/grammar.cpp` (`noteDecideExpr`, `noteDecideParen`, `noteDecideCall`, `noteDecideReducerKey`, `noteDecideSpan`), called from the `a_expr` and `b_expr` decorator reductions in `select.y`; the roles are `PGDecideSpanRole` and `DecideSpanRole`, and `language/explain.md` describes how they are used |
 | Span keyed by query location, with its `DecideBinding` | `src/parser/transform/expression/transform_expression.cpp` (the interceptor `Transformer::TransformExpression`), `transform_select_node.cpp` (assembles `DecideSourceText`) |

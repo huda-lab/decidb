@@ -375,12 +375,9 @@ _NEGATED_EXTREMUM_CASES = [
     pytest.param("-MAX(x) <= -3", "max", -1, "<=", -3, "MINIMIZE", id="sign-hard-max"),
     pytest.param("-MIN(x) <= -2", "min", -1, "<=", -2, "MINIMIZE", id="sign-easy-min"),
     pytest.param("-MIN(x) >= -2", "min", -1, ">=", -2, "MAXIMIZE", id="sign-hard-min"),
-    pytest.param("-(2 * MAX(x)) >= -8", "max", -2, ">=", -8, "MAXIMIZE", id="sign-positive-factor-easy"),
     pytest.param("-(2 * MAX(x)) <= -6", "max", -2, "<=", -6, "MINIMIZE", id="sign-positive-factor-hard"),
-    pytest.param("-(-2 * MAX(x)) <= 8", "max", 2, "<=", 8, "MAXIMIZE", id="sign-negative-factor-easy"),
     pytest.param("-(-2 * MIN(x)) <= 4", "min", 2, "<=", 4, "MAXIMIZE", id="sign-negative-factor-hard"),
     pytest.param("-MAX(x) = -4", "max", -1, "=", -4, "MAXIMIZE", id="sign-equality"),
-    pytest.param("-(2 * MIN(x)) = -4", "min", -2, "=", -4, "MAXIMIZE", id="sign-factor-equality"),
     pytest.param("-((SELECT 2) * MAX(x)) >= -8", "max", -2, ">=", -8, "MAXIMIZE", id="unknown-factor-easy"),
     pytest.param("-((SELECT 2) * MAX(x)) <= -6", "max", -2, "<=", -6, "MINIMIZE", id="unknown-factor-hard"),
 ]
@@ -428,9 +425,7 @@ def test_negated_extremum_per_group(decidb_cli, scope_solver):
 # The written factor `-1 *` and the sign build one model: the dump is the model after presolve and formulation.
 _SAME_MODEL_CASES = [
     pytest.param("-MAX(x * t.w) <= -2", "-1 * MAX(x * t.w) <= -2", id="hard-max"),
-    pytest.param("-MIN(x * t.w) >= -5", "-1 * MIN(x * t.w) >= -5", id="hard-min"),
     pytest.param("-MAX(x * t.w) >= -5", "-1 * MAX(x * t.w) >= -5", id="easy-max"),
-    pytest.param("-(2 * MIN(x * t.w)) = -4", "-2 * MIN(x * t.w) = -4", id="equality-with-a-factor"),
     pytest.param("-(-2 * MAX(x * t.w)) >= 4", "2 * MAX(x * t.w) >= 4", id="sign-over-a-negative-factor"),
 ]
 

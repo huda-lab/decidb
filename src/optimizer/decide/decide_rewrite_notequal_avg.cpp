@@ -28,7 +28,7 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
-#include "duckdb/planner/decide/decide_product_form.hpp"
+#include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
@@ -45,6 +45,7 @@ void DecideOptimizer::RewriteNotEqual(LogicalDecide &decide) {
 }
 
 void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &decide) {
+	DecideTermSplitter splitter(optimizer.context, decide);
 	ForEachConstraintLeaf(expr, [&](Expression &node) {
 		if (node.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
 			return;
@@ -53,11 +54,10 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 		if (comp.type != ExpressionType::COMPARE_NOTEQUAL) {
 			return;
 		}
-		// The two rows a `<>` becomes hold a linear left side only. A product with a BOOL
-		// decision is linear by now (RewriteBilinear runs before this pass); a product or a
-		// power of decisions still here has no formulation, and dropping its terms would
-		// change the answer.
-		if (!DecideDegreeOf(optimizer.context, *comp.left, decide.decide_index).IsLinear()) {
+		// The two rows a `<>` becomes hold a linear left side only. A product with a BOOL decision is linear through
+		// its F helper (RewriteBilinear tags it before this pass); a product or a power of decisions still here has no
+		// formulation, and dropping its terms would change the answer.
+		if (!splitter.IsLinear(*comp.left)) {
 			throw BinderException(comp, "DECIDE: <> over a product or a power of decisions is not supported yet: %s",
 			                      QuoteWrittenClause(decide.constraint_sources[SourceClauseOf(comp, decide)]));
 		}
@@ -99,13 +99,19 @@ void DecideOptimizer::RewriteAvgToSum(LogicalDecide &decide) {
 
 void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                              const string &source_alias) {
+	idx_t definition_aux;
+	if (TryParseDecideIndexTag(expr->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
+		return; // AVG syntax inside this body belongs to the tree F node's definition expression
+	}
 	auto clause_alias = DescendSourceAlias(*expr, source_alias);
 
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		auto &agg = expr->Cast<BoundAggregateExpression>();
-		// Only an AVG over decisions reaches this pass: a data-only one is the bound's, already a placeholder column
-		// (RewriteRhsAggregates), and the binder admits no cast over a decision.
-		if (StringUtil::CIEquals(agg.function.name, "avg")) {
+		// The rewrite linearizes an AVG over decisions. One over data is a value execution computes: the bound's is a
+		// placeholder column already (RewriteRhsAggregates), and a frame's marker or a reducer reading a frame stays an
+		// aggregate until the frames are lowered (MakeFrameAggregate).
+		if (StringUtil::CIEquals(agg.function.name, "avg") &&
+		    BoundExpressionReferencesDecide(agg, decide.decide_index)) {
 			AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::AVG_SUM,
 			                  RenderForPlan(agg, decide));
 			auto new_sum = BindSumOver(optimizer, agg.children[0]->Copy(), agg.filter.get());

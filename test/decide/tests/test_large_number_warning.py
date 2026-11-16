@@ -60,9 +60,9 @@ def _cli(request, fixture):
     return request.getfixturevalue(fixture)
 
 
-def _values(cli, sql, expect_number_range):
+def _values(cli, sql, expect_number_range, expect_warnings=()):
     """The decision `x` per row, in row order, after declaring whether the query warns."""
-    rows, columns = cli.execute(sql, expect_number_range=expect_number_range)
+    rows, columns = cli.execute(sql, expect_number_range=expect_number_range, expect_warnings=expect_warnings)
     ordered = sorted(rows, key=lambda row: row[columns.index("id")])
     return [row[columns.index("x")] for row in ordered]
 
@@ -145,26 +145,27 @@ def test_a_number_in_a_linear_position_warns_from_its_threshold(
 _SMALL_OBJECTIVE_CASES = [("0.000001", True), ("-0.000001", True), ("0.0000011", False), ("0", False)]
 
 
+# A small number is checked on the built model before a backend reads it (ModelHoldsNumberOutOfRange), so one backend
+# checks it. A forced backend keeps direct solve off, so the model is built.
 @pytest.mark.correctness
-@pytest.mark.parametrize("cli_fixture", _BACKENDS)
 @pytest.mark.parametrize("n,warns", _SMALL_OBJECTIVE_CASES, ids=[n for n, _ in _SMALL_OBJECTIVE_CASES])
-def test_a_small_objective_coefficient_warns_from_its_threshold(request, n, warns, cli_fixture):
+def test_a_small_objective_coefficient_warns_from_its_threshold(decidb_cli_gurobi, n, warns):
     sql = f"SELECT id, x FROM {_TWO_ROWS} DECIDE x(REAL) SUCH THAT x <= 1 MAXIMIZE SUM({n} * x)"
-    _values(_cli(request, cli_fixture), sql, expect_number_range=warns)
+    # A zero factor leaves an objective that is 0 whatever the decisions, which DeciDB warns of.
+    zero = ["the objective is 0 whatever the decisions"] if float(n) == 0 else ()
+    _values(decidb_cli_gurobi, sql, expect_number_range=warns, expect_warnings=zero)
 
 
 @pytest.mark.correctness
-@pytest.mark.parametrize("cli_fixture", _BACKENDS)
-def test_a_small_quadratic_objective_coefficient_warns(request, cli_fixture):
+def test_a_small_quadratic_objective_coefficient_warns(decidb_cli_gurobi):
     sql = f"SELECT id, x FROM {_TWO_ROWS} DECIDE x(REAL) SUCH THAT x >= 1 MINIMIZE SUM(0.0000001 * POWER(x, 2))"
-    _values(_cli(request, cli_fixture), sql, expect_number_range=True)
+    _values(decidb_cli_gurobi, sql, expect_number_range=True)
 
 
 @pytest.mark.correctness
-@pytest.mark.parametrize("cli_fixture", _BACKENDS)
-def test_a_small_constraint_coefficient_is_silent(request, cli_fixture):
+def test_a_small_constraint_coefficient_is_silent(decidb_cli_gurobi):
     sql = f"SELECT id, x FROM {_TWO_ROWS} DECIDE x(REAL) SUCH THAT x <= 100 AND SUM(0.0000001 * x) <= 1 MAXIMIZE SUM(x)"
-    assert _values(_cli(request, cli_fixture), sql, expect_number_range=False) == pytest.approx([100.0, 100.0])
+    assert _values(decidb_cli_gurobi, sql, expect_number_range=False) == pytest.approx([100.0, 100.0])
 
 
 @pytest.mark.correctness

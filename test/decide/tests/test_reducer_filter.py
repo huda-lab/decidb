@@ -1979,7 +1979,7 @@ def test_when_with_data_column_moved_inside(decidb_cli, duckdb_conn, oracle_solv
 #
 # `min(when p: x + 2) >= 3` is `x + 2 >= 3` on every member row -- the rows `p`
 # keeps -- and says nothing about the others. A row the reducer's own `when`
-# drops is never sent to the model and its body is never evaluated, whatever the
+# drops is never sent to the model and its body is never read, whatever the
 # body holds: a constant, a data column, a `by` key or a `per` in front. Judged
 # by the scope oracle on both solvers.
 
@@ -2149,7 +2149,9 @@ def test_a_reducers_when_known_before_the_rows_are_read(decidb_cli, oracle_solve
     oracle_solver.add_constraint({name: 1.0 for name in names}, "<=", 20.0, name="when_true")
     oracle_solver.set_objective({name: 1.0 for name in names}, ObjSense.MAXIMIZE)
     result = oracle_solver.solve()
-    rows, _ = decidb_cli.execute(sql)
+    # The two clauses with no instance constrain nothing, which DeciDB warns of.
+    skipped = ["'sum(when false: x) <= 12' constrains nothing", "'sum(when NULL: x) <= 3' constrains nothing"]
+    rows, _ = decidb_cli.execute(sql, expect_warnings=skipped)
     assert sum(row[1] for row in rows) == pytest.approx(result.objective_value)
     assert all(0 <= row[1] <= 10 for row in rows)
 

@@ -100,6 +100,10 @@ BindResult ExpressionBinder::BindExpression(unique_ptr<ParsedExpression> &expr, 
 		return BindPositionalReference(expr, depth, root_expression);
 	case ExpressionClass::STAR:
 		return BindResult(BinderException::Unsupported(expr_ref, "STAR expression is not supported here"));
+	case ExpressionClass::DECIDE_FRAME:
+		// DeciDB: only a DECIDE clause's own binders read a frame selector. The parser builds one only inside a DECIDE
+		// clause, and the DECIDE binder refuses an outer column before an outer query could bind the clause.
+		throw InternalException("DECIDE: a frame selector reached a binder outside its DECIDE clause");
 	default:
 		throw NotImplementedException("Unimplemented expression class");
 	}
@@ -372,9 +376,13 @@ ErrorData ExpressionBinder::Bind(unique_ptr<ParsedExpression> &expr, idx_t depth
 	auto &be = expr->Cast<BoundExpression>();
 	be.SetAlias(alias);
 	if (!alias.empty()) {
-		be.expr->SetAlias(alias);
+		be.expr->SetAlias(BoundAlias(*be.expr, alias));
 	}
 	return ErrorData();
+}
+
+string ExpressionBinder::BoundAlias(const Expression &bound, const string &parsed) {
+	return parsed;
 }
 
 BindResult ExpressionBinder::BindUnsupportedExpression(ParsedExpression &expr, idx_t depth, const string &message) {
