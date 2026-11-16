@@ -392,8 +392,10 @@ reader, so its errors are not raised (open: no query is known to make one).
 and their rows follow the same instance scopes as the rest of the tree. Helper columns remain allocated at plan time
 because stage 06 addresses decisions by their plan-time indices. P9.1–P9.3 move ABS envelopes, Boolean-product links
 and L0 indicator links under F nodes. P9.4 removes `LiftNestedReducers` and the standalone
-`DefineNonlinearReducerBodies` rewrite. A direct, unfiltered outer SUM whose clause has the same key retains nested G
-readers, including linear bodies; compatible outer SUM clauses also retain nested G readers when their own rows need
+`DefineNonlinearReducerBodies` rewrite. A direct, unfiltered outer SUM whose clause has the same key, and whose bound
+is one value for the whole query, retains nested G readers, including linear bodies: kept, the sum makes the clause
+one row per group, and a bound that reads the rows needs a row for each value it takes, which the value-link path
+writes; compatible outer SUM clauses also retain nested G readers when their own rows need
 quadratic terms. Filtered or deeper linear nests keep the value-link path so their bounds and scope semantics remain
 available. A nonlinear reducer body stays at its written site with a tagged read of its definition F node; tree
 lowering wires that read to the child F value, and term splitting uses the reserved helper column where

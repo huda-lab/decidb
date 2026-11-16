@@ -286,6 +286,31 @@ def test_a_data_reducer_inside_a_nest(decidb_cli, scope_solver, nest):
     assert model.judge(answer(decidb_cli, sql), clauses, MAXIMIZE_X) == pytest.approx(expected.objective, abs=1e-4)
 
 
+ROW_CLAUSE_COLUMNS = ("id", "h", "wv", "cap")
+ROW_CLAUSE_ROWS = ((1, "q", 3, 7), (2, "p", 6, 12), (3, "p", 5, 5), (4, "p", 5, 5))
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("spelling, per", [("per row: ", PER_ROW), ("per (): ", GLOBAL)])
+def test_a_bound_that_reads_the_rows_holds_on_each_under_a_whole_table_nest(decidb_cli, scope_solver, spelling, per):
+    """`sum(per (): max(x) by (t.h, t.wv)) >= t.cap - 1` is one value against a bound each row
+    holds: under `per row:` a row per row, under `per ():` a variant per value of the bound, and
+    either way row 2's bound, 11, holds. The outer sum stays in the clause only where the bound
+    is one value for the whole query; kept with this one, the clause was once a single row with
+    the first row's bound, 6."""
+    sql = f"""
+        SELECT id, x {table('t', ROW_CLAUSE_COLUMNS, ROW_CLAUSE_ROWS)}
+        DECIDE x(INT)
+        SUCH THAT x <= 5 AND {spelling}sum(per (): max(x) by (t.h, t.wv)) >= t.cap - 1
+        MINIMIZE SUM(x)
+        ORDER BY id"""
+    nest = reduce("sum", reduce("max", X, by=("h", "wv")), per=GLOBAL)
+    clauses = [clause(le(X, 5)), clause(ge(nest, Col("cap") - 1), per=per)]
+    objective = Objective(ObjSense.MINIMIZE, reduce("sum", X))
+    rows = table_rows(ROW_CLAUSE_COLUMNS, ROW_CLAUSE_ROWS)
+    assert _judged(decidb_cli, scope_solver, sql, rows, [Decision("x")], clauses, objective) == 11
+
+
 SCALE_COLUMNS = ("id", "p")
 SCALE_ROWS = ((1, 10), (2, 30))
 

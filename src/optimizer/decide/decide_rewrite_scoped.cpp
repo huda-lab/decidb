@@ -578,8 +578,15 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		// clause and outer keys therefore needs no outer value-link column: the inner helper's G is read once per
 		// instance by the outer G, and the comparison's push still reaches that inner helper. Keep this deliberately
 		// narrow while filtered/deeper cases are handled by the established path-aware links.
+		//
+		// Kept in the clause, the outer sum makes this the aggregate shape, one row per group, after the bound's
+		// rewrite (RewriteRhsAggregates) read the clause in the VALUE shape and left the bound as each row holds it.
+		// The two shapes are the same clause only where the bound is one value for the whole query: every row of a
+		// clause under no `per` then states the same row, and no class shows a second value. A bound that reads the
+		// rows keeps the value-link path, where each row and each variant holds its own.
+		const bool bound_is_query_wide = cmp.right->IsFoldable() || IsQueryWideBoundTag(cmp.right->GetAlias());
 		const bool has_nested_outer =
-		    direct_outer_is_sum && nested_outer_has_unfiltered_reducers && !scope.Condition() &&
+		    direct_outer_is_sum && nested_outer_has_unfiltered_reducers && !scope.Condition() && bound_is_query_wide &&
 		    scope.PerKey() == DecideReducerGroupKey(direct_outer->Cast<BoundAggregateExpression>());
 		DecideReducerPath path;
 		if (scope.Condition()) {
