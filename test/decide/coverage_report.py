@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import fnmatch
 import functools
 import json
 import re
@@ -127,9 +128,11 @@ def cmd_slice(args) -> int:
 
 @functools.cache
 def _scope() -> list[Path]:
-    """The instrumented ``.cpp`` files: each ``src:*/<pattern>`` line of the build's profile list, globbed."""
+    """The instrumented ``.cpp`` files: each ``src:*/<pattern>`` line of the build's profile list, matched as Clang
+    matches it, where ``*`` crosses ``/`` (``decidb/*`` holds every file under ``src/decidb``)."""
     patterns = re.findall(r"^src:\*/(.+)$", PROFILE_LIST.read_text(), re.MULTILINE)
-    return sorted({path for pattern in patterns for path in REPO.glob(pattern) if path.suffix == ".cpp"})
+    sources = [path.relative_to(REPO).as_posix() for path in (REPO / "src").rglob("*.cpp")]
+    return sorted(REPO / source for source in sources if any(fnmatch.fnmatchcase(source, p) for p in patterns))
 
 
 def _short(path: str) -> str:

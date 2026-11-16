@@ -75,10 +75,12 @@ def test_cpp_profile_reads_the_shared_library_of_either_platform(tmp_path, monke
 
 
 def test_the_report_reads_the_files_the_profile_list_instruments(tmp_path, monkeypatch):
-    # `_scope` globs each `src:*/` pattern of the build's profile list and keeps the .cpp files.
+    # `_scope` matches each `src:*/` pattern of the build's profile list as Clang does, `*` crossing `/`, and keeps the
+    # .cpp files.
     profile_list = tmp_path / "profile_list.txt"
     profile_list.write_text(
         "[clang]\nsrc:*/src/optimizer/decide/direct/s1_*\nsrc:*/src/planner/decide/decide_cast_policy.cpp\n"
+        "src:*/src/decidb/*\n"
     )
     monkeypatch.setattr(REPORT, "PROFILE_LIST", profile_list)
     REPORT._scope.cache_clear()
@@ -87,6 +89,7 @@ def test_the_report_reads_the_files_the_profile_list_instruments(tmp_path, monke
             [
                 *(REPO / "src/optimizer/decide/direct").glob("s1_*.cpp"),
                 REPO / "src/planner/decide/decide_cast_policy.cpp",
+                *(REPO / "src/decidb").rglob("*.cpp"),
             ]
         )
     finally:
