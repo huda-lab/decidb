@@ -685,17 +685,14 @@ static idx_t FindOrCreateScope(idx_t key, vector<KeyedScopeInfo> &keyed_scopes) 
 
 idx_t FindOrCreateKeyScope(ClientContext &context, Binder &binder, const FunctionExpression &per,
                            const case_insensitive_set_t &decision_names, const string &key_text,
-                           vector<DecideKey> &keys, vector<KeyedScopeInfo> &keyed_scopes,
-                           vector<idx_t> *written_order) {
-	auto key = BindKey(context, binder, per, decision_names, key_text, keys, written_order);
+                           vector<DecideKey> &keys, vector<KeyedScopeInfo> &keyed_scopes) {
+	auto key = BindKey(context, binder, per, decision_names, key_text, keys);
 	return FindOrCreateScope(key, keyed_scopes);
 }
 
 idx_t BindKey(ClientContext &context, Binder &binder, const FunctionExpression &per,
-              const case_insensitive_set_t &decision_names, const string &key_text, vector<DecideKey> &keys,
-              vector<idx_t> *written_order) {
-	return FindOrCreateDecideKey(KeyElements(context, ResolveKey(binder, per, decision_names)), key_text, keys,
-	                             written_order);
+              const case_insensitive_set_t &decision_names, const string &key_text, vector<DecideKey> &keys) {
+	return FindOrCreateDecideKey(KeyElements(context, ResolveKey(binder, per, decision_names)), key_text, keys);
 }
 
 //! The relation `element` names when it names no column of the FROM clause: `by (D)`
@@ -1616,9 +1613,8 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 	}
 	// `SUM(D, T: e)` is `sum(per D, T: e)` (language/guide.md §5.1): the same exact scope, so the same
 	// classes and the same variant signature (D70).
-	vector<idx_t> written_order;
-	auto scope_idx = FindOrCreateScope(
-	    FindOrCreateDecideKey(KeyElements(context, key), relation_list, *ctx.keys, &written_order), *ctx.keyed_scopes);
+	auto scope_idx = FindOrCreateScope(FindOrCreateDecideKey(KeyElements(context, key), relation_list, *ctx.keys),
+	                                   *ctx.keyed_scopes);
 
 	auto aggregate_result = BindExpression(qualified_expr.children[0], depth);
 	if (aggregate_result.HasError()) {
@@ -1640,7 +1636,7 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 		    StringUtil::Format("'%s' cannot be qualified by a relation; only SUM, AVG, MIN and MAX can.",
 		                       StringUtil::Upper(agg_name))));
 	}
-	AddDecideTag(aggregate->alias, MakeQualifiedReducerTag(scope_idx, written_order));
+	AddDecideTag(aggregate->alias, MakeQualifiedReducerTag(scope_idx));
 	return BindResult(std::move(aggregate_expr));
 }
 
@@ -1695,11 +1691,10 @@ BindResult DecideBinder::BindScopedReducer(unique_ptr<ParsedExpression> &expr_pt
 	}
 	if (per) {
 		auto &marker = per->Cast<FunctionExpression>();
-		vector<idx_t> written_order;
 		auto scope_idx =
 		    FindOrCreateKeyScope(context, binder, marker, DecisionNames(variables), DecideKeyToString(marker),
-		                         *qualifier_context->keys, *qualifier_context->keyed_scopes, &written_order);
-		AddDecideTag(aggregate->alias, MakeQualifiedReducerTag(scope_idx, written_order));
+		                         *qualifier_context->keys, *qualifier_context->keyed_scopes);
+		AddDecideTag(aggregate->alias, MakeQualifiedReducerTag(scope_idx));
 	}
 	return result;
 }
@@ -1745,11 +1740,10 @@ BindResult DecideBinder::BindReducerBy(FunctionExpression &by, idx_t depth) {
 		key_text = std::move(written_key);
 	}
 	// Every relation stores a column, so a `by` that lists anything is a key (not INVALID_INDEX).
-	vector<idx_t> written_order;
-	auto group_key = FindOrCreateDecideKey(std::move(key), key_text, *qualifier_context->keys, &written_order);
+	auto group_key = FindOrCreateDecideKey(std::move(key), key_text, *qualifier_context->keys);
 	D_ASSERT(group_key != DConstants::INVALID_INDEX);
 	(*qualifier_context->keys)[group_key].written_as_by = true;
-	AddDecideTag(aggregate->alias, MakeGroupKeyTag(group_key, written_order));
+	AddDecideTag(aggregate->alias, MakeGroupKeyTag(group_key));
 	return result;
 }
 

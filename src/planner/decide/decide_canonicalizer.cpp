@@ -1922,10 +1922,8 @@ void DecideCanonicalizer::SignQualifiedReducers(Expression &expr, const DecideRe
 	variant_scope.signature = signature;
 	out.keyed_scopes.push_back(std::move(variant_scope));
 	auto alias = reducer.GetAlias();
-	vector<idx_t> written_order;
-	TryParseQualifiedReducerOrder(alias, written_order);
-	RemoveDecideTag(alias, MakeQualifiedReducerTag(scope_idx, written_order));
-	AddDecideTag(alias, MakeQualifiedReducerTag(out.keyed_scopes.size() - 1, written_order));
+	RemoveDecideTag(alias, MakeQualifiedReducerTag(scope_idx));
+	AddDecideTag(alias, MakeQualifiedReducerTag(out.keyed_scopes.size() - 1));
 	reducer.SetAlias(std::move(alias));
 }
 

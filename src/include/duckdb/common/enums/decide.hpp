@@ -10,7 +10,6 @@
 
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/to_string.hpp"
-#include "duckdb/common/vector.hpp"
 
 #include <cstring>
 
@@ -229,37 +228,13 @@ inline bool ExtractDecideTagPayload(const string &alias, const string &prefix, s
 	return !payload.empty();
 }
 
-//! A key's tag ends with the key's order as one clause wrote it ("_o<p0>.<p1>..."): the index in the key's `elements`
-//! of each element, in the order written. The elements stay in one order (FindOrCreateDecideKey); a message lists a
-//! clause's key in the clause's own order. No order means the elements' order.
-inline string MakeWrittenOrderSuffix(const vector<idx_t> &order) {
-	string suffix;
-	for (idx_t i = 0; i < order.size(); i++) {
-		suffix += (i == 0 ? "_o" : ".") + to_string(order[i]);
-	}
-	return suffix;
-}
-
-//! The order a tag with the given prefix carries; false when it carries none.
-inline bool TryParseWrittenOrder(const string &alias, const string &prefix, vector<idx_t> &order) {
-	string payload;
-	if (!ExtractDecideTagPayload(alias, prefix, payload)) {
+//! The index a tag "<prefix><i>__" carries; false (leaving `value` untouched) when the alias carries no such tag.
+inline bool TryParseDecideIndexTag(const string &alias, const string &prefix, idx_t &value) {
+	string digits;
+	if (!ExtractDecideTagPayload(alias, prefix, digits) || digits.find_first_not_of("0123456789") != string::npos) {
 		return false;
 	}
-	auto at = payload.find("_o");
-	if (at == string::npos) {
-		return false;
-	}
-	order.clear();
-	idx_t begin = at + 2;
-	while (begin <= payload.size()) {
-		auto end = payload.find('.', begin);
-		order.push_back(static_cast<idx_t>(std::stoull(payload.substr(begin, end - begin))));
-		if (end == string::npos) {
-			break;
-		}
-		begin = end + 1;
-	}
+	value = static_cast<idx_t>(std::stoull(digits));
 	return true;
 }
 
@@ -286,30 +261,15 @@ static constexpr const char *QUALIFIED_REDUCER_TAG = "__qualified_reducer__";
 //! the reducer takes one value from. The scope may have no variable declared on it.
 static constexpr const char *QUALIFIED_REDUCER_SCOPE_TAG_PREFIX = "__qualified_by_";
 
-//! Builds the alias tag naming the keyed scope a reducer is qualified by ("__qualified_by_<i>[_o<order>]__").
-inline string MakeQualifiedReducerTag(idx_t keyed_scope_idx, const vector<idx_t> &written_order = vector<idx_t>()) {
-	return string(QUALIFIED_REDUCER_SCOPE_TAG_PREFIX) + to_string(keyed_scope_idx) +
-	       MakeWrittenOrderSuffix(written_order) + "__";
+//! Builds the alias tag naming the keyed scope a reducer is qualified by ("__qualified_by_<i>__").
+inline string MakeQualifiedReducerTag(idx_t keyed_scope_idx) {
+	return string(QUALIFIED_REDUCER_SCOPE_TAG_PREFIX) + to_string(keyed_scope_idx) + "__";
 }
 
 //! Reads back the keyed scope index from an alias written by MakeQualifiedReducerTag.
 //! Returns false (leaving `scope_idx` untouched) when the alias carries no such tag.
 inline bool TryParseQualifiedReducerTag(const string &alias, idx_t &scope_idx) {
-	string digits;
-	if (!ExtractDecideTagPayload(alias, QUALIFIED_REDUCER_SCOPE_TAG_PREFIX, digits)) {
-		return false;
-	}
-	digits = digits.substr(0, digits.find('_'));
-	if (digits.empty() || digits.find_first_not_of("0123456789") != string::npos) {
-		return false;
-	}
-	scope_idx = static_cast<idx_t>(std::stoull(digits));
-	return true;
-}
-
-//! The order the reducer wrote its qualifying key in, when its tag carries one.
-inline bool TryParseQualifiedReducerOrder(const string &alias, vector<idx_t> &order) {
-	return TryParseWrittenOrder(alias, QUALIFIED_REDUCER_SCOPE_TAG_PREFIX, order);
+	return TryParseDecideIndexTag(alias, QUALIFIED_REDUCER_SCOPE_TAG_PREFIX, scope_idx);
 }
 
 //! Tags the parser uses for the scope written in front of a constraint, an objective, a
@@ -353,17 +313,16 @@ static constexpr const char *VALUE_REWRITE_TAG = "__value_rewrite__";
 //! is the comparison's grouping. No tag means `BY ()`: every kept row.
 static constexpr const char *GROUP_KEY_TAG_PREFIX = "__group_key_";
 
-inline string MakeGroupKeyTag(idx_t group_key_idx, const vector<idx_t> &written_order = vector<idx_t>()) {
-	return string(GROUP_KEY_TAG_PREFIX) + to_string(group_key_idx) + MakeWrittenOrderSuffix(written_order) + "__";
+inline string MakeGroupKeyTag(idx_t group_key_idx) {
+	return string(GROUP_KEY_TAG_PREFIX) + to_string(group_key_idx) + "__";
 }
 
 //! Tag prefix naming the key of a `per K:` wrapper (PER_CLASS_TAG):
 //! "__per_key_<i>__" indexes LogicalDecide::keys. No tag means `per ()`: one class.
 static constexpr const char *PER_KEY_TAG_PREFIX = "__per_key_";
 
-//! A `per` wrapper's tag also carries the order its clause wrote the key in ("__per_key_<i>_o<order>__").
-inline string MakePerKeyTag(idx_t key_idx, const vector<idx_t> &written_order = vector<idx_t>()) {
-	return string(PER_KEY_TAG_PREFIX) + to_string(key_idx) + MakeWrittenOrderSuffix(written_order) + "__";
+inline string MakePerKeyTag(idx_t key_idx) {
+	return string(PER_KEY_TAG_PREFIX) + to_string(key_idx) + "__";
 }
 
 //! Tag prefix naming a frame selector: "__frame_<i>__" indexes LogicalDecide::frames. It
@@ -533,15 +492,6 @@ inline string MakeRemovalGroupTag(idx_t removal_group_id) {
 	return string(REMOVAL_GROUP_TAG_PREFIX) + to_string(removal_group_id) + "__";
 }
 
-inline bool TryParseDecideIndexTag(const string &alias, const string &prefix, idx_t &value) {
-	string digits;
-	if (!ExtractDecideTagPayload(alias, prefix, digits) || digits.find_first_not_of("0123456789") != string::npos) {
-		return false;
-	}
-	value = static_cast<idx_t>(std::stoull(digits));
-	return true;
-}
-
 inline bool TryParseSourceClauseTag(const string &alias, idx_t &source_clause_id) {
 	return TryParseDecideIndexTag(alias, SOURCE_CLAUSE_TAG_PREFIX, source_clause_id);
 }
@@ -551,39 +501,11 @@ inline bool TryParseRemovalGroupTag(const string &alias, idx_t &removal_group_id
 }
 
 inline bool TryParseGroupKeyTag(const string &alias, idx_t &group_key_idx) {
-	string payload;
-	if (!ExtractDecideTagPayload(alias, GROUP_KEY_TAG_PREFIX, payload)) {
-		return false;
-	}
-	auto digits = payload.substr(0, payload.find('_'));
-	if (digits.empty() || digits.find_first_not_of("0123456789") != string::npos) {
-		return false;
-	}
-	group_key_idx = static_cast<idx_t>(std::stoull(digits));
-	return true;
-}
-
-//! The order the reducer wrote its `by` key in, when its tag carries one.
-inline bool TryParseGroupKeyOrder(const string &alias, vector<idx_t> &order) {
-	return TryParseWrittenOrder(alias, GROUP_KEY_TAG_PREFIX, order);
+	return TryParseDecideIndexTag(alias, GROUP_KEY_TAG_PREFIX, group_key_idx);
 }
 
 inline bool TryParsePerKeyTag(const string &alias, idx_t &key_idx) {
-	string payload;
-	if (!ExtractDecideTagPayload(alias, PER_KEY_TAG_PREFIX, payload)) {
-		return false;
-	}
-	auto digits = payload.substr(0, payload.find('_'));
-	if (digits.empty() || digits.find_first_not_of("0123456789") != string::npos) {
-		return false;
-	}
-	key_idx = static_cast<idx_t>(std::stoull(digits));
-	return true;
-}
-
-//! The order a `per` wrapper's clause wrote its key in, when its tag carries one.
-inline bool TryParsePerKeyOrder(const string &alias, vector<idx_t> &order) {
-	return TryParseWrittenOrder(alias, PER_KEY_TAG_PREFIX, order);
+	return TryParseDecideIndexTag(alias, PER_KEY_TAG_PREFIX, key_idx);
 }
 
 //! Reads back the signature index from an alias written by MakeSignatureTag.

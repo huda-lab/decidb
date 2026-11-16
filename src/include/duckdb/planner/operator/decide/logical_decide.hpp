@@ -77,11 +77,7 @@ struct DecideKey {
 //! compared as rows group on them (Grouping) -- appending it, as written, when no key so
 //! far holds them; INVALID_INDEX for no elements. An element written on its own and
 //! through its relation is the written one.
-//! `written_order`, when given, gets the index in the key's `elements` of each element in the order they were written
-//! (each once); empty when an element cannot be found again (a subquery). A clause that names the key keeps it, so its
-//! message lists the key as the clause wrote it.
-idx_t FindOrCreateDecideKey(vector<DecideKeyElement> elements, const string &text, vector<DecideKey> &keys,
-                            vector<idx_t> *written_order = nullptr);
+idx_t FindOrCreateDecideKey(vector<DecideKeyElement> elements, const string &text, vector<DecideKey> &keys);
 //! The elements of `keys[key]`; none for INVALID_INDEX, the empty key.
 const vector<DecideKeyElement> &DecideKeyElements(const vector<DecideKey> &keys, idx_t key);
 //! The key as first written; `()` for the empty key.

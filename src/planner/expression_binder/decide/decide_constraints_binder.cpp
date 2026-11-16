@@ -329,12 +329,11 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 		}
 	}
 	idx_t key = DConstants::INVALID_INDEX;
-	vector<idx_t> key_order;
 	if (per) {
 		// The key as written (`per D`), read before its elements bind. It cannot ride on
 		// the marker's alias: the expression binder gives the bound wrapper that alias.
 		auto key_text = DecideKeyToString(*per);
-		key = BindKey(context, binder, *per, DecisionNames(variables), key_text, *qualifier_context->keys, &key_order);
+		key = BindKey(context, binder, *per, DecisionNames(variables), key_text, *qualifier_context->keys);
 	}
 
 	// One scope per constraint: a BETWEEN bound to the conjunction of its two halves, and
@@ -360,7 +359,7 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 			wrapper->children.push_back(std::move(constraint));
 			wrapper->alias = PER_CLASS_TAG;
 			if (key != DConstants::INVALID_INDEX) {
-				AddDecideTag(wrapper->alias, MakePerKeyTag(key, key_order));
+				AddDecideTag(wrapper->alias, MakePerKeyTag(key));
 			}
 			// The wrapper stands at its `per`, where the parser kept the key as written.
 			wrapper->SetQueryLocation(per->GetQueryLocation());
