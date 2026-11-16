@@ -1,458 +1,356 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <script>
-  (function(){var t=localStorage.getItem('decidb-theme')||'light';
-  document.documentElement.setAttribute('data-theme',t)})();
-  </script>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="DeciDB - Optimization-enabled SQL queries for DuckDB. Express optimization problems directly in SQL with the DECIDE clause.">
-  <meta name="keywords" content="DeciDB, DuckDB, SQL, constrained optimization, mathematical optimization, operations research, linear programming, mixed-integer programming, quadratic programming, solver, database, HUDA Lab, NYU Abu Dhabi, UMass Amherst">
-  <title>DeciDB - Optimization, Native in SQL</title>
-
-  <!-- Favicon -->
-  <link rel="icon" type="image/svg+xml" href="assets/images/logo.svg">
-
-  <!-- Tailwind config (before CDN) -->
-  <script src="assets/js/tw-config.js"></script>
-
-  <!-- Tailwind CSS -->
-  <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- DM Serif Display + DM Sans -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&amp;family=DM+Serif+Display&amp;display=swap" rel="stylesheet">
-
-  <!-- JetBrains Mono for code -->
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
-
-  <!-- Prism.js for syntax highlighting -->
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js"></script>
-
-  <!-- Lucide Icons -->
-  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-
-  <!-- Custom CSS -->
-  <link rel="stylesheet" href="assets/css/custom.css">
-
-  <!-- Custom JS -->
-  <script src="assets/js/main.js" defer></script>
-
-  <style>
-    body {
-      font-family: 'DM Sans', system-ui, sans-serif;
-    }
-    code, pre {
-      font-family: 'JetBrains Mono', monospace;
-    }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeciDB · Constrained optimization, native in SQL</title>
+<meta name="description" content="DeciDB extends DuckDB with a DECIDE clause: declare decisions over your rows, state constraints and an objective, and get the optimal rows back in one SQL query.">
+<meta name="keywords" content="DeciDB, DuckDB, SQL, constrained optimization, linear programming, mixed-integer programming, quadratic programming, DECIDE, solver, HUDA Lab">
+<link rel="icon" type="image/svg+xml" href="assets/images/mark.svg">
+<script>(function(){try{var t=localStorage.getItem('decidb-theme');if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/site.css">
+<script>window.Prism = window.Prism || {}; window.Prism.manual = true;</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js" defer></script>
+<script src="assets/js/site.js" defer></script>
 </head>
-<body class="min-h-screen">
-
-  <!-- Skip Link for Accessibility -->
-  <a href="#main-content" class="skip-link">Skip to main content</a>
-
-  <!-- ============================================
-       HEADER / NAVIGATION
-       ============================================ -->
-  <header class="fixed top-0 w-full header-bg backdrop-blur-sm border-b border-bdcolor z-50">
-    <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
-      <!-- Logo -->
-      <a href="index.html" class="flex items-center space-x-2">
-        <img src="assets/images/logo.svg" alt="DeciDB" class="h-8 logo-img">
-        <div class="hidden sm:block">
-          <div class="text-xs text-fg-subtle">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
-        </div>
-      </a>
-
-      <!-- Desktop Navigation -->
-      <div class="hidden md:flex items-center space-x-6">
-        <a href="index.html" class="nav-link active">Home</a>
-        <a href="getting-started.html" class="nav-link">Getting Started</a>
-        <a href="documentation.html" class="nav-link">Docs</a>
-        <a href="examples.html" class="nav-link">Examples</a>
-        <a href="about.html" class="nav-link">About</a>
-      </div>
-
-      <!-- CTA Buttons -->
-      <div class="hidden md:flex items-center space-x-3">
-        <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"
-           class="btn btn-secondary text-sm">
-          <i data-lucide="github" class="w-4 h-4"></i>
-          GitHub
-        </a>
-        <a href="getting-started.html" class="btn btn-primary text-sm">
-          Get Started
-          <i data-lucide="arrow-right" class="w-4 h-4"></i>
-        </a>
-        <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">
-          <svg class="icon-sun" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
-          <svg class="icon-moon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-        </button>
-      </div>
-
-      <!-- Mobile Menu Button -->
-      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-canvas-inset text-fg"
-              aria-label="Toggle menu" aria-expanded="false">
-        <i data-lucide="menu" id="menu-open-icon" class="w-6 h-6"></i>
-        <i data-lucide="x" id="menu-close-icon" class="w-6 h-6 hidden"></i>
-      </button>
-    </nav>
-
-    <!-- Mobile Menu -->
-    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-bdcolor bg-canvas" aria-hidden="true">
-      <div class="container mx-auto px-4 py-4 space-y-4">
-        <a href="index.html" class="block py-2 nav-link active">Home</a>
-        <a href="getting-started.html" class="block py-2 nav-link">Getting Started</a>
-        <a href="documentation.html" class="block py-2 nav-link">Docs</a>
-        <a href="examples.html" class="block py-2 nav-link">Examples</a>
-        <a href="about.html" class="block py-2 nav-link">About</a>
-        <hr class="border-bdcolor">
-        <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"
-           class="flex items-center gap-2 py-2 text-fg-muted hover:text-accent">
-          <i data-lucide="github" class="w-5 h-5"></i>
-          GitHub
-        </a>
-        <a href="getting-started.html" class="btn btn-primary w-full justify-center">
-          Get Started
-          <i data-lucide="arrow-right" class="w-4 h-4"></i>
-        </a>
-      </div>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="container">
+    <a class="brand" href="index.html" aria-label="DeciDB home">
+      <img class="logo-light" src="assets/images/logo.svg" alt="DeciDB" width="100" height="30">
+      <img class="logo-dark" src="assets/images/logo-dark.svg" alt="DeciDB" width="100" height="30">
+      <span class="by">HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</span>
+    </a>
+    <nav class="nav" aria-label="Main"><a href="documentation.html">Docs</a><a href="problems.html">Problems</a><a href="examples.html">Examples</a><a href="getting-started.html">Get started</a><a href="about.html">About</a></nav>
+    <div class="header-actions">
+      <a class="btn btn-ghost btn-sm" href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.56-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.78 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg> GitHub</a>
+      <button class="icon-btn theme-toggle" type="button" aria-label="Switch light or dark theme"><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg></button>
+      <button class="icon-btn menu-btn" type="button" aria-label="Open menu" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
     </div>
-  </header>
-
-  <!-- ============================================
-       MAIN CONTENT
-       ============================================ -->
-  <main id="main-content">
-
-    <!-- ============================================
-         SECTION 1: HERO
-         ============================================ -->
-    <section class="pt-28 pb-20 md:pt-36 md:pb-28">
-      <div class="container mx-auto px-4">
-        <div class="max-w-3xl mx-auto text-center">
-          <h1 class="text-4xl md:text-5xl lg:text-6xl text-fg mb-6 leading-tight">
-            Optimization, Native in <span class="text-accent">SQL</span>
-          </h1>
-
-          <p class="text-lg md:text-xl text-fg-muted mb-10 max-w-2xl mx-auto leading-relaxed">
-            DeciDB extends DuckDB with declarative optimization.
-            Assign optimal decisions over data with constraints and objectives &mdash; no external solver code required.
-          </p>
-
-          <!-- CTA Buttons -->
-          <div class="flex flex-col sm:flex-row gap-4 justify-center mb-14">
-            <a href="getting-started.html" class="btn btn-primary text-base px-8 py-3">
-              Get Started
-              <i data-lucide="arrow-right" class="w-5 h-5"></i>
-            </a>
-            <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"
-               class="btn btn-secondary text-base px-8 py-3">
-              <i data-lucide="github" class="w-5 h-5"></i>
-              View on GitHub
-            </a>
-          </div>
-
-          <!-- Hero code example -->
-          <div class="hero-code text-left">
-            <div class="code-block">
-              <div class="code-header">
-                <span class="language-label">SQL</span>
-                <button class="copy-button">
-                  <i data-lucide="copy" class="w-4 h-4"></i>
-                  Copy
-                </button>
-              </div>
-              <pre class="language-sql"><code>SELECT item, value, weight, x AS selected
+  </div>
+  <nav class="mobile-nav" aria-label="Mobile"><a href="documentation.html">Docs</a><a href="problems.html">Problems</a><a href="examples.html">Examples</a><a href="getting-started.html">Get started</a><a href="about.html">About</a><a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer">GitHub</a></nav>
+</header>
+<main id="main">
+<section class="hero">
+  <div class="container hero-grid">
+    <div>
+      <a class="pill" href="documentation.html#migrating"><span class="tag">New</span> per, when and by: the new DECIDE language</a>
+      <h1>Constrained optimization, <span class="accent">native in SQL</span></h1>
+      <p class="lede">DeciDB extends DuckDB with a <code>DECIDE</code> clause. Declare the decisions to make over your rows,
+        state the rules they must follow and what to optimize, and get the optimal rows back from one query.
+        No export, no solver code.</p>
+      <div class="actions">
+        <a class="btn btn-primary" href="getting-started.html">Get started <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+        <a class="btn btn-ghost" href="examples.html">See 20 worked examples</a>
+      </div>
+      <p class="install">Python: <code>pip install decidb</code> &middot; or download the CLI for macOS, Linux and Windows</p>
+    </div>
+    <div data-tabs>
+      <div class="tabs" role="tablist" aria-label="Example queries">
+        <button class="tab" role="tab" aria-selected="true" type="button">Knapsack</button>
+        <button class="tab" role="tab" aria-selected="false" tabindex="-1" type="button">Open depots</button>
+        <button class="tab" role="tab" aria-selected="false" tabindex="-1" type="button">Fair split</button>
+      </div>
+      <div class="tab-panel" role="tabpanel">
+<div class="query-result"><div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>Choose items under a weight limit</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SELECT item, value, weight, x AS take
 FROM Items
 DECIDE x(BOOL)
-SUCH THAT
-    SUM(x * weight) <= 50
-MAXIMIZE SUM(x * value);</code></pre>
-            </div>
-            <p class="text-sm text-fg-subtle mt-3 text-center">
-              One query. No data export. No solver code. Just SQL.
-            </p>
-          </div>
-        </div>
+SUCH THAT SUM(x * weight) &lt;= 50
+MAXIMIZE SUM(x * value);</code></pre></div><div class="result"><div class="result-head"><b>Result</b><span>5 rows</span></div><div class="result-scroll"><table><thead><tr><th class="">item</th><th class="num">value</th><th class="num">weight</th><th class="dec num">take</th></tr></thead><tbody><tr class="on"><td>Laptop</td><td class="num">100</td><td class="num">20</td><td class="num dec">1</td></tr><tr class="on"><td>Camera</td><td class="num">60</td><td class="num">10</td><td class="num dec">1</td></tr><tr><td>Drone</td><td class="num">120</td><td class="num">30</td><td class="num dec">0</td></tr><tr><td>Tripod</td><td class="num">40</td><td class="num">15</td><td class="num dec">0</td></tr><tr class="on"><td>Lens</td><td class="num">75</td><td class="num">12</td><td class="num dec">1</td></tr></tbody></table></div></div></div>
       </div>
-    </section>
+      <div class="tab-panel" role="tabpanel" hidden>
+<div class="query-result"><div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>One decision per depot, one per route</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SELECT D.depotID, C.customerID, open, ship
+FROM Routes R
+JOIN Depots D USING (depotID)
+JOIN Customers C USING (customerID)
+DECIDE per D: open(BOOL), ship(INT)
+SUCH THAT per C: SUM(ship) by (C) &gt;= C.demand
+      AND per D: SUM(ship) by (D) &lt;= D.capacity * open
+MINIMIZE SUM(R.unit_cost * ship) + SUM(D: D.opening_cost * open);</code></pre></div><div class="result"><div class="result-head"><b>Result</b><span>9 rows</span></div><div class="result-scroll"><table><thead><tr><th class="">depotID</th><th class="">customerID</th><th class="dec num">open</th><th class="dec num">ship</th></tr></thead><tbody><tr><td>D1</td><td>C1</td><td class="num dec">0</td><td class="num dec">0</td></tr><tr><td>D1</td><td>C2</td><td class="num dec">0</td><td class="num dec">0</td></tr><tr><td>D1</td><td>C3</td><td class="num dec">0</td><td class="num dec">0</td></tr><tr class="on"><td>D2</td><td>C1</td><td class="num dec">1</td><td class="num dec">40</td></tr><tr class="on"><td>D2</td><td>C2</td><td class="num dec">1</td><td class="num dec">40</td></tr><tr><td>D2</td><td>C4</td><td class="num dec">1</td><td class="num dec">0</td></tr><tr class="on"><td>D3</td><td>C2</td><td class="num dec">1</td><td class="num dec">15</td></tr><tr class="on"><td>D3</td><td>C3</td><td class="num dec">1</td><td class="num dec">30</td></tr><tr class="on"><td>D3</td><td>C4</td><td class="num dec">1</td><td class="num dec">45</td></tr></tbody></table></div></div></div>
+      </div>
+      <div class="tab-panel" role="tabpanel" hidden>
+<div class="query-result"><div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>Max-min fairness, answered without a solver</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SELECT program, need, ROUND(alloc, 2) AS alloc
+FROM Programs
+DECIDE alloc(REAL)
+SUCH THAT alloc &lt;= max_alloc AND SUM(alloc) &lt;= 100
+MAXIMIZE MIN(alloc / need);</code></pre></div><div class="result"><div class="result-head"><b>Result</b><span>4 rows</span></div><div class="result-scroll"><table><thead><tr><th class="">program</th><th class="num">need</th><th class="dec num">alloc</th></tr></thead><tbody><tr><td>Clinic</td><td class="num">20.0</td><td class="num dec">16.67</td></tr><tr><td>Shelter</td><td class="num">30.0</td><td class="num dec">25.0</td></tr><tr><td>School</td><td class="num">50.0</td><td class="num dec">41.67</td></tr><tr><td>Pantry</td><td class="num">10.0</td><td class="num dec">8.33</td></tr></tbody></table></div></div></div>
+      </div>
+    </div>
+  </div>
+</section>
 
-    <hr class="section-divider max-w-5xl mx-auto">
+<section class="section alt">
+  <div class="container">
+    <div class="section-head">
+      <span class="eyebrow">Why in the database</span>
+      <h2>The decision is a query, not a pipeline</h2>
+      <p>Choosing which products to stock, how much to ship or whom to schedule usually means exporting rows, writing a
+        model in Python and copying the answer back. With DeciDB the model is the query: the rows are already there,
+        and the answer comes back as rows.</p>
+    </div>
+    <div class="compare">
+<div class="code"><div class="code-head"><span class="code-title">Without DeciDB: export, model, solve, write back</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-python">import duckdb, pulp
 
-    <!-- ============================================
-         SECTION 2: THE PROBLEM + CODE COMPARISON
-         ============================================ -->
-    <section class="py-20 md:py-28">
-      <div class="container mx-auto px-4">
-        <div class="max-w-5xl mx-auto">
+rows = duckdb.connect(&quot;shop.db&quot;).execute(
+    &quot;SELECT item, value, weight FROM Items&quot;).fetchall()
 
-          <!-- Intro text -->
-          <div class="max-w-3xl mx-auto text-center mb-16">
-            <h2 class="text-3xl md:text-4xl text-fg mb-5">
-              Why Optimization Belongs in the Database
-            </h2>
-            <p class="text-lg text-fg-muted leading-relaxed">
-              Many real-world decisions require choosing or allocating over rows in a table &mdash; which products to stock, which patients to schedule, how much to ship.
-              Today, solving these <em>decision problems</em> means exporting data, writing solver code in Python, and mapping results back.
-              DeciDB collapses that entire pipeline into a single SQL statement.
-            </p>
-          </div>
-
-          <!-- Code Comparison -->
-          <div class="grid md:grid-cols-2 gap-6 mb-12">
-            <!-- Traditional Approach -->
-            <div class="code-block">
-              <div class="code-header bg-danger-tint">
-                <span class="language-label flex items-center gap-2">
-                  <span class="w-1.5 h-1.5 rounded-full bg-danger"></span>
-                  Traditional Approach
-                </span>
-                <button class="copy-button">
-                  <i data-lucide="copy" class="w-4 h-4"></i>
-                  Copy
-                </button>
-              </div>
-              <pre class="language-python text-sm"><code># Step 1: Export data from database
-import duckdb, pulp
-
-conn = duckdb.connect('db.duckdb')
-items = conn.execute("""
-    SELECT id, value, weight FROM Items
-    WHERE category = 'electronics'
-""").fetchall()
-
-# Step 2: Build optimization model
-prob = pulp.LpProblem("knapsack", pulp.LpMaximize)
-x = [pulp.LpVariable(f"x_{i}", cat='Binary')
-     for i in range(len(items))]
-
-# Step 3: Add constraints + solve
-prob += pulp.lpSum(
-    x[i] * items[i][2] for i in range(len(items))
-) <= 50
-prob += pulp.lpSum(
-    x[i] * items[i][1] for i in range(len(items))
-)
+prob = pulp.LpProblem(&quot;bag&quot;, pulp.LpMaximize)
+x = {r[0]: pulp.LpVariable(f&quot;x_{r[0]}&quot;, cat=&quot;Binary&quot;) for r in rows}
+prob += pulp.lpSum(x[r[0]] * r[1] for r in rows)
+prob += pulp.lpSum(x[r[0]] * r[2] for r in rows) &lt;= 50
 prob.solve()
 
-# Step 4: Map results back to database...</code></pre>
-            </div>
-
-            <!-- DeciDB Approach -->
-            <div class="code-block">
-              <div class="code-header bg-success-tint">
-                <span class="language-label flex items-center gap-2">
-                  <span class="w-1.5 h-1.5 rounded-full bg-success"></span>
-                  With DeciDB
-                </span>
-                <button class="copy-button">
-                  <i data-lucide="copy" class="w-4 h-4"></i>
-                  Copy
-                </button>
-              </div>
-              <pre class="language-sql text-sm"><code>-- One query does it all
-SELECT id, value, weight, x
+chosen = [r[0] for r in rows if x[r[0]].value() == 1]
+# ... and now write `chosen` back to the database</code></pre></div>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>With DeciDB: one statement</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SELECT item, value, weight, x AS take
 FROM Items
-WHERE category = 'electronics'
 DECIDE x(BOOL)
-SUCH THAT
-    SUM(x * weight) <= 50
-MAXIMIZE SUM(x * value);</code></pre>
-            </div>
-          </div>
+SUCH THAT SUM(x * weight) &lt;= 50
+MAXIMIZE SUM(x * value);</code></pre></div>
+    </div>
+    <div class="stats" style="margin-top:36px">
+      <div class="stat"><div class="v">3</div><div class="l">decision types: <code>BOOL</code>, <code>INT</code>, <code>REAL</code></div></div>
+      <div class="stat"><div class="v">LP → QCQP</div><div class="l">linear, integer, quadratic and bilinear models</div></div>
+      <div class="stat"><div class="v">9</div><div class="l">problem classes answered with no solver at all</div></div>
+      <div class="stat"><div class="v">2</div><div class="l">solvers: Gurobi when available, HiGHS bundled</div></div>
+    </div>
+  </div>
+</section>
 
-          <p class="text-center text-fg-muted">
-            <span class="text-accent font-medium">Same result</span>, a fraction of the code. No context switching between languages.
-          </p>
-
-          <!-- Use case mentions -->
-          <div class="mt-20 pt-16 border-t border-bdcolor-muted">
-            <h3 class="text-2xl md:text-3xl text-fg text-center mb-4">
-              Built for Complex Selection Problems
-            </h3>
-            <p class="text-center text-fg-muted mb-10 max-w-2xl mx-auto">
-              Selection, assignment and allocation problems can all be expressed with typed decision variables and collective constraints.
-            </p>
-            <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
-              <a href="examples/basic-knapsack.html" class="card p-5 block group">
-                <i data-lucide="package" class="w-5 h-5 text-accent mb-3"></i>
-                <h4 class="text-sm font-semibold text-fg mb-1 group-hover:text-accent transition-colors">Knapsack / Packing</h4>
-                <p class="text-xs text-fg-subtle leading-relaxed">Maximize value within a weight or budget limit.</p>
-              </a>
-              <a href="examples/intermediate-diet.html" class="card p-5 block group">
-                <i data-lucide="utensils" class="w-5 h-5 text-accent mb-3"></i>
-                <h4 class="text-sm font-semibold text-fg mb-1 group-hover:text-accent transition-colors">Diet / Nutrition</h4>
-                <p class="text-xs text-fg-subtle leading-relaxed">Meet nutritional targets while minimizing cost.</p>
-              </a>
-              <a href="examples/advanced-portfolio.html" class="card p-5 block group">
-                <i data-lucide="trending-up" class="w-5 h-5 text-accent mb-3"></i>
-                <h4 class="text-sm font-semibold text-fg mb-1 group-hover:text-accent transition-colors">Portfolio Selection</h4>
-                <p class="text-xs text-fg-subtle leading-relaxed">Maximize return under risk and diversification constraints.</p>
-              </a>
-              <a href="examples/basic-production.html" class="card p-5 block group">
-                <i data-lucide="factory" class="w-5 h-5 text-accent mb-3"></i>
-                <h4 class="text-sm font-semibold text-fg mb-1 group-hover:text-accent transition-colors">Resource Allocation</h4>
-                <p class="text-xs text-fg-subtle leading-relaxed">Assign limited resources to maximize output.</p>
-              </a>
-            </div>
-            <div class="text-center mt-8">
-              <a href="examples.html" class="text-sm text-accent hover:text-accent">
-                View all examples &rarr;
-              </a>
-            </div>
-          </div>
-        </div>
+<section class="section">
+  <div class="container">
+    <div class="section-head">
+      <span class="eyebrow">The language</span>
+      <h2>Three words say which rows a rule covers</h2>
+      <p>Most real constraints are about groups: each depot's capacity, each customer's demand, each sector's limit.
+        DeciDB writes them with three keywords that each do one job.</p>
+    </div>
+    <div class="scope-words">
+      <div class="scope-word">
+        <span class="kw">per</span>
+        <div class="q">How many?</div>
+        <p>One decision or one constraint per distinct value of a key. <code>per ()</code> means exactly one.</p>
+        <pre>DECIDE per D: open(BOOL)
+per D: SUM(ship) by (D) &lt;= D.capacity</pre>
       </div>
-    </section>
-
-    <hr class="section-divider max-w-5xl mx-auto">
-
-    <!-- ============================================
-         SECTION 3: WHY DeciDB (feature strip)
-         ============================================ -->
-    <section class="py-20 md:py-28">
-      <div class="container mx-auto px-4">
-        <div class="max-w-5xl mx-auto">
-          <h2 class="text-3xl md:text-4xl text-fg text-center mb-14">
-            Why DeciDB?
-          </h2>
-
-          <div class="feature-strip">
-            <div class="feature-item">
-              <i data-lucide="database" class="w-5 h-5 text-accent mb-3"></i>
-              <h4 class="text-fg">Native SQL</h4>
-              <p>Express optimization as a SQL extension. No context switching.</p>
-            </div>
-            <div class="feature-item">
-              <i data-lucide="zap" class="w-5 h-5 text-accent mb-3"></i>
-              <h4 class="text-fg">Zero Data Movement</h4>
-              <p>Solve directly on database buffers. No export/import overhead.</p>
-            </div>
-            <div class="feature-item">
-              <i data-lucide="file-code" class="w-5 h-5 text-accent mb-3"></i>
-              <h4 class="text-fg">Declarative</h4>
-              <p>Define what to optimize, not how. The system handles formulation.</p>
-            </div>
-            <div class="feature-item">
-              <i data-lucide="cpu" class="w-5 h-5 text-accent mb-3"></i>
-              <h4 class="text-fg">Built on DuckDB</h4>
-              <p>Columnar storage, vectorized execution, and runtime selection between Gurobi and bundled HiGHS.</p>
-            </div>
-          </div>
-        </div>
+      <div class="scope-word">
+        <span class="kw">when</span>
+        <div class="q">Which rows?</div>
+        <p>Only the rows where a condition holds, in front of a constraint, the objective or inside one sum.</p>
+        <pre>when S.priority: ship &gt;= 1
+SUM(when S.priority: ship) &lt;= 40</pre>
       </div>
-    </section>
-
-    <hr class="section-divider max-w-5xl mx-auto">
-
-    <!-- ============================================
-         SECTION 4: CTA
-         ============================================ -->
-    <section class="py-20 md:py-28">
-      <div class="container mx-auto px-4">
-        <div class="max-w-3xl mx-auto text-center">
-          <h2 class="text-3xl md:text-4xl text-fg mb-5">
-            Ready to Try It?
-          </h2>
-          <p class="text-lg text-fg-muted mb-10 max-w-xl mx-auto">
-            Install DeciDB and run your first optimization query in minutes.
-          </p>
-          <a href="getting-started.html" class="btn btn-primary text-base px-8 py-3">
-            Get Started
-            <i data-lucide="arrow-right" class="w-5 h-5"></i>
-          </a>
-        </div>
-      </div>
-    </section>
-
-  </main>
-
-  <!-- ============================================
-       FOOTER
-       ============================================ -->
-  <footer class="bg-canvas-inset text-fg-muted border-t border-bdcolor">
-    <div class="container mx-auto px-4 py-12">
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
-
-        <!-- Col 1: Branding -->
-        <div>
-          <img src="assets/images/logo.svg" alt="DeciDB" class="h-8 mb-4 logo-img">
-          <p class="text-sm text-fg-subtle mb-4">
-            Optimization-enabled SQL queries for DuckDB
-          </p>
-          <p class="text-xs text-fg-subtle">
-            &copy; 2026 HUDA Lab<br>
-            NYU Abu Dhabi &amp; UMass Amherst
-          </p>
-        </div>
-
-        <!-- Col 2: Documentation -->
-        <div>
-          <h4 class="font-semibold text-fg mb-3 text-sm">Documentation</h4>
-          <ul class="space-y-2 text-sm">
-            <li><a href="getting-started.html" class="text-fg-subtle hover:text-accent transition-colors">Getting Started</a></li>
-            <li><a href="documentation.html" class="text-fg-subtle hover:text-accent transition-colors">Syntax Reference</a></li>
-            <li><a href="examples.html" class="text-fg-subtle hover:text-accent transition-colors">Examples</a></li>
-          </ul>
-        </div>
-
-        <!-- Col 3: Resources -->
-        <div>
-          <h4 class="font-semibold text-fg mb-3 text-sm">Resources</h4>
-          <ul class="space-y-2 text-sm">
-            <li>
-              <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"
-                 class="text-fg-subtle hover:text-accent transition-colors flex items-center gap-1">
-                <i data-lucide="github" class="w-4 h-4"></i>
-                GitHub Repository
-              </a>
-            </li>
-            <li>
-              <a href="https://github.com/huda-lab/decidb/issues" target="_blank" rel="noopener noreferrer"
-                 class="text-fg-subtle hover:text-accent transition-colors">Issue Tracker</a>
-            </li>
-            <li><a href="about.html#research" class="text-fg-subtle hover:text-accent transition-colors">Research Papers</a></li>
-            <li>
-              <a href="https://huda-lab.github.io/" target="_blank" rel="noopener noreferrer"
-                 class="text-fg-subtle hover:text-accent transition-colors">HUDA Lab</a>
-            </li>
-          </ul>
-        </div>
-
-        <!-- Col 4: Contact -->
-        <div>
-          <h4 class="font-semibold text-fg mb-3 text-sm">Contact</h4>
-          <ul class="space-y-2 text-sm text-fg-subtle">
-            <li>NYU Abu Dhabi &amp; UMass Amherst</li>
-            <li>
-              <a href="mailto:support@decidb.com" class="text-accent hover:text-accent transition-colors">
-                support@decidb.com
-              </a>
-            </li>
-          </ul>
-        </div>
-
-      </div>
-
-      <!-- Bottom Bar -->
-      <div class="mt-8 pt-8 border-t border-bdcolor-muted text-center text-xs text-fg-subtle">
-        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled)</p>
+      <div class="scope-word">
+        <span class="kw">by</span>
+        <div class="q">Which rows does this sum read?</div>
+        <p>After a reducer: read only the rows that share the current row's value of a key.</p>
+        <pre>SUM(ship) by (D.region)
+ship &lt;= 0.25 * SUM(ship) by (D.depotID)</pre>
       </div>
     </div>
-  </footer>
 
-  <!-- Initialize Lucide Icons -->
-  <script>
-    lucide.createIcons();
-  </script>
+    <div class="scope-demo">
+      <div>
+        <p class="muted" style="font-size:15px">One constraint per depot, each comparing the depot's capacity with
+          the shipments of its whole <em>region</em>. <code>per</code> and <code>by</code> name different keys, so the
+          rule generates per depot but reads per region:</p>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>per depot, read by region</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">per D.depotID: SUM(ship) by (D.region) &lt;= D.capacity</code></pre></div>
+        <table class="demo-table" aria-label="Rows of the example">
+          <thead><tr><th>shipment</th><th>depot</th><th>region</th><th>ship</th><th>capacity</th></tr></thead>
+          <tbody>
+            <tr class="r-north"><td>S1</td><td>D1</td><td>North</td><td>x1</td><td>100</td></tr>
+            <tr class="r-north"><td>S2</td><td>D1</td><td>North</td><td>x2</td><td>100</td></tr>
+            <tr class="r-north"><td>S3</td><td>D2</td><td>North</td><td>x3</td><td>80</td></tr>
+            <tr class="r-south"><td>S4</td><td>D3</td><td>South</td><td>x4</td><td>50</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="demo-out">
+        <p class="muted" style="font-size:15px;margin:0">The three constraints it writes:</p>
+        <div class="demo-row"><span class="who">D1</span><span><span class="n">x1 + x2 + x3</span> &le; 100</span></div>
+        <div class="demo-row"><span class="who">D2</span><span><span class="n">x1 + x2 + x3</span> &le; 80</span></div>
+        <div class="demo-row"><span class="who">D3</span><span><span class="s">x4</span> &le; 50</span></div>
+        <p class="subtle" style="font-size:14px;margin-top:6px">D1 and D2 are both in the North, so both read all North
+          shipments. A <code>per</code> key must determine every value the rule reads once per class, here
+          <code>D.capacity</code> and <code>D.region</code>. DeciDB checks this on the data before solving.</p>
+        <a href="documentation.html#scopes" style="font-size:14.5px;font-weight:550">Read about scopes <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+      </div>
+    </div>
+  </div>
+</section>
 
+<section class="section alt">
+  <div class="container">
+    <div class="section-head">
+      <span class="eyebrow">What you can express</span>
+      <h2>From a knapsack to a fair split</h2>
+      <p>You never name the problem class. DeciDB reads it from the decision types and the shape of the terms, and
+        picks a formulation the solver can take.</p>
+    </div>
+    <div class="grid grid-3">
+      <a class="card" href="examples/facility-location.html">
+        <div class="icon-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/></svg></div>
+        <h3>Keyed decisions</h3>
+        <p>One decision per depot, per customer or per anything, shared by every joined row of that key.</p>
+        <div class="card-code">DECIDE per D: open(BOOL), ship(INT)</div>
+      </a>
+      <a class="card" href="examples/min-max-shortfall.html">
+        <div class="icon-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg></div>
+        <h3>Query-wide decisions</h3>
+        <p>A single value for the whole query: a threshold, a shared ceiling, the worst-case shortfall.</p>
+        <div class="card-code">DECIDE ship(INT), per (): worst(INT)</div>
+      </a>
+      <a class="card" href="examples/makespan.html">
+        <div class="icon-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/></svg></div>
+        <h3>Min-max objectives</h3>
+        <p>An inner sum per group and an outer max over the groups: balance load, minimize the busiest machine.</p>
+        <div class="card-code">MINIMIZE max(per m: sum(h * x) by (m))</div>
+      </a>
+      <a class="card" href="examples/fair-allocation.html">
+        <div class="icon-box green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg></div>
+        <h3>Max-min fairness</h3>
+        <p>Make the worst-off row as well off as possible with <code>MIN</code> or <code>MAX</code> in the objective.</p>
+        <div class="card-code">MAXIMIZE MIN(alloc / need)</div>
+      </a>
+      <a class="card" href="examples/price-changes.html">
+        <div class="icon-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></div>
+        <h3>Norms and sparsity</h3>
+        <p>L1, squared L2, L∞ and the L0 count of nonzeros, as a constraint or in the objective.</p>
+        <div class="card-code">norm(new - old, 0) &lt;= 2</div>
+      </a>
+      <a class="card" href="examples/rebalancing.html">
+        <div class="icon-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg></div>
+        <h3>Quadratic and bilinear</h3>
+        <p>Least squares, convex QP, quadratic constraints and products of two decisions.</p>
+        <div class="card-code">MINIMIZE SUM(POWER(w - target, 2))</div>
+      </a>
+    </div>
+    <p style="margin-top:28px"><a href="problems.html" style="font-weight:550">All problem classes and which solver takes each <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a></p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container">
+    <div class="grid grid-2" style="gap:48px;align-items:center">
+      <div>
+        <span class="eyebrow">Direct solve</span>
+        <h2>Some problems never reach a solver</h2>
+        <p class="muted" style="font-size:1.08rem">Many everyday problems have an exact answer that ordinary relational
+          operators can compute: take the top <em>k</em> per group, fill a budget by value per unit, match two sorted
+          lists. DeciDB proves when a query has one of these shapes and answers it with DuckDB's sort, window and
+          aggregate operators. Nothing in the query changes.</p>
+        <ul class="muted" style="padding-left:1.2rem">
+          <li>Nine problem classes today, each faster than Gurobi at every size measured.</li>
+          <li>Exact answers, without the solver's tolerance.</li>
+          <li><code>EXPLAIN</code> names the rule; <code>SET decide_direct_solve = 'off'</code> turns it off.</li>
+        </ul>
+        <a class="btn btn-ghost" href="problems.html#direct-solve">See the nine classes <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+      </div>
+      <div>
+<div class="query-result"><div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>Top two per genre: answered by ranking rows</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SELECT title, genre, rating, pick
+FROM Films
+DECIDE pick(BOOL)
+SUCH THAT per genre: SUM(pick) by (genre) &lt;= 2
+MAXIMIZE SUM(rating * pick)
+ORDER BY genre, rating DESC;</code></pre></div><div class="result"><div class="result-head"><b>Result</b><span>10 rows</span></div><div class="result-scroll"><table><thead><tr><th class="">title</th><th class="">genre</th><th class="num">rating</th><th class="dec num">pick</th></tr></thead><tbody><tr class="on"><td>Second Helping</td><td>Comedy</td><td class="num">8.0</td><td class="num dec">1</td></tr><tr class="on"><td>Laugh Track</td><td>Comedy</td><td class="num">7.4</td><td class="num dec">1</td></tr><tr><td>Odd Couples</td><td>Comedy</td><td class="num">6.9</td><td class="num dec">0</td></tr><tr class="on"><td>Northern Lights</td><td>Drama</td><td class="num">8.6</td><td class="num dec">1</td></tr><tr class="on"><td>The Long Field</td><td>Drama</td><td class="num">8.1</td><td class="num dec">1</td></tr><tr><td>Paper Boats</td><td>Drama</td><td class="num">7.9</td><td class="num dec">0</td></tr><tr><td>Quiet Harbor</td><td>Drama</td><td class="num">7.2</td><td class="num dec">0</td></tr><tr class="on"><td>Deep Orbit</td><td>Sci-fi</td><td class="num">8.8</td><td class="num dec">1</td></tr><tr class="on"><td>Signal</td><td>Sci-fi</td><td class="num">8.3</td><td class="num dec">1</td></tr><tr><td>Red Dust</td><td>Sci-fi</td><td class="num">7.7</td><td class="num dec">0</td></tr></tbody></table></div></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section alt">
+  <div class="container">
+    <div class="grid grid-2" style="gap:48px;align-items:center">
+      <div>
+<div class="query-result"><div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>No answer? Ask which clause to change</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">DIAGNOSE
+SELECT item, x FROM Items
+DECIDE x(BOOL)
+SUCH THAT SUM(x * weight) &lt;= 40 AND SUM(x) &gt;= 4
+MAXIMIZE SUM(x * value);</code></pre></div><div class="result"><div class="result-head"><b>Result</b><span>2 rows</span></div><div class="result-scroll"><table><thead><tr><th class="">state</th><th class="">clause</th><th class="dec ">suggested_change</th><th class="dec num">amount</th><th class="">total</th><th class="">scope</th><th class="">edit_source</th><th class="">group</th><th class="">row</th></tr></thead><tbody><tr><td>infeasible</td><td>SUM(x * weight) &lt;= 40</td><td class="dec">SUM(x * weight) &lt;= 57</td><td class="num dec">17.0</td><td class="null">NULL</td><td class="null">NULL</td><td>source_literal</td><td class="null">NULL</td><td class="null">NULL</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">275.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
+      </div>
+      <div>
+        <span class="eyebrow">DIAGNOSE</span>
+        <h2>When the rules can't all hold, DeciDB says which one to move</h2>
+        <p class="muted" style="font-size:1.08rem">Prefix an infeasible or unbounded query with <code>DIAGNOSE</code>. It
+          returns the smallest edit to the clauses you wrote, quoted as you wrote them, and the objective you would get
+          after the edit. The answer is a relation, so you can filter and join it like any other.</p>
+        <a class="btn btn-ghost" href="examples/diagnose.html">Walk through it <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container">
+    <div class="section-head center center">
+      <span class="eyebrow">Built on DuckDB</span>
+      <h2>Everything else is still DuckDB</h2>
+      <p>Joins, subqueries, views, Parquet and CSV files, prepared statements and the Python API work as they do in
+        DuckDB. A DECIDE query composes with all of it.</p>
+    </div>
+    <div class="grid grid-4">
+      <div class="card"><div class="icon-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></div><h3>No data movement</h3><p>The model is built from the
+        query's own rows, in the same process.</p></div>
+      <div class="card"><div class="icon-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/></svg></div><h3>Declarative</h3><p>Say what to optimize; DeciDB
+        chooses the formulation, from LP to non-convex QP.</p></div>
+      <div class="card"><div class="icon-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></div><h3>EXPLAIN</h3><p>See every clause as written,
+        what each rewrite made of it, and the rows the solver receives.</p></div>
+      <div class="card"><div class="icon-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg></div><h3>Two solvers</h3><p>Gurobi when its library and
+        license are present; HiGHS, bundled, otherwise.</p></div>
+    </div>
+    <div class="center" style="margin-top:56px">
+      <a class="btn btn-primary" href="getting-started.html">Run your first query <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+    </div>
+  </div>
+</section>
+
+</main>
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <img class="logo-light" src="assets/images/logo.svg" alt="DeciDB" width="94" height="28">
+        <img class="logo-dark" src="assets/images/logo-dark.svg" alt="DeciDB" width="94" height="28">
+        <p>Constrained optimization, native in SQL. Built on DuckDB by the HUDA Lab at NYU Abu Dhabi and UMass Amherst.</p>
+      </div>
+      <div>
+        <h4>Learn</h4>
+        <ul>
+          <li><a href="getting-started.html">Get started</a></li>
+          <li><a href="documentation.html">Language reference</a></li>
+          <li><a href="problems.html">Problems you can express</a></li>
+          <li><a href="examples.html">Examples</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Project</h4>
+        <ul>
+          <li><a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer">GitHub repository</a></li>
+          <li><a href="https://github.com/huda-lab/decidb/issues" target="_blank" rel="noopener noreferrer">Issue tracker</a></li>
+          <li><a href="about.html#research">Research papers</a></li>
+          <li><a href="https://huda-lab.github.io/" target="_blank" rel="noopener noreferrer">HUDA Lab</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Contact</h4>
+        <ul>
+          <li><a href="mailto:support@decidb.com">support@decidb.com</a></li>
+          <li class="subtle">NYU Abu Dhabi &amp; UMass Amherst</li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</span>
+      <span>Built on DuckDB &middot; Solvers: Gurobi when available, HiGHS bundled</span>
+    </div>
+  </div>
+</footer>
 </body>
 </html>

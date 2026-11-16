@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Problems you can express · DeciDB</title>
+<meta name="description" content="The problem classes DeciDB solves in SQL: LP, MILP, QP, QCQP, bilinear, min-max and max-min, norms, and the classes answered by direct solve without a solver.">
+<meta name="keywords" content="DeciDB, DuckDB, SQL, constrained optimization, linear programming, mixed-integer programming, quadratic programming, DECIDE, solver, HUDA Lab">
+<link rel="icon" type="image/svg+xml" href="assets/images/mark.svg">
+<script>(function(){try{var t=localStorage.getItem('decidb-theme');if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/site.css">
+<script>window.Prism = window.Prism || {}; window.Prism.manual = true;</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js" defer></script>
+<script src="assets/js/site.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="container">
+    <a class="brand" href="index.html" aria-label="DeciDB home">
+      <img class="logo-light" src="assets/images/logo.svg" alt="DeciDB" width="100" height="30">
+      <img class="logo-dark" src="assets/images/logo-dark.svg" alt="DeciDB" width="100" height="30">
+      <span class="by">HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</span>
+    </a>
+    <nav class="nav" aria-label="Main"><a href="documentation.html">Docs</a><a href="problems.html" aria-current="page">Problems</a><a href="examples.html">Examples</a><a href="getting-started.html">Get started</a><a href="about.html">About</a></nav>
+    <div class="header-actions">
+      <a class="btn btn-ghost btn-sm" href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.56-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.78 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg> GitHub</a>
+      <button class="icon-btn theme-toggle" type="button" aria-label="Switch light or dark theme"><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg></button>
+      <button class="icon-btn menu-btn" type="button" aria-label="Open menu" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    </div>
+  </div>
+  <nav class="mobile-nav" aria-label="Mobile"><a href="documentation.html">Docs</a><a href="problems.html">Problems</a><a href="examples.html">Examples</a><a href="getting-started.html">Get started</a><a href="about.html">About</a><a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer">GitHub</a></nav>
+</header>
+<main id="main">
+<section class="page-head">
+  <div class="container">
+    <div class="crumbs"><a href="index.html">Home</a><span>/</span>Problems</div>
+    <h1>Problems you can express</h1>
+    <p>You never name the problem class. DeciDB reads it from the decision types and the shape of each term, picks a
+      formulation, and either answers the query directly or hands it to a solver that can take it.</p>
+  </div>
+</section>
+
+<div class="container">
+  <div class="doc-layout">
+    <nav class="toc" aria-label="On this page">
+      <div class="toc-title">On this page</div>
+      <ul>
+        <li><a href="#patterns">Modeling patterns</a></li>
+        <li><a href="#classes">Problem classes and solvers</a></li>
+        <li><a href="#direct-solve">Answered without a solver</a></li>
+        <li><a href="#rewrites">What DeciDB adds for you</a></li>
+      </ul>
+    </nav>
+
+    <article class="prose">
+      <section id="patterns">
+        <h2>Modeling patterns <a class="anchor" href="#patterns">#</a></h2>
+        <p class="lead">The shapes below cover most decision problems over tables. Each links to a complete example with
+          data and the answer DeciDB returns.</p>
+        <div class="grid grid-2">
+          <a class="card" href="examples/knapsack.html"><h3>Selection under a budget</h3>
+            <p>Pick rows; a weighted sum stays within a limit.</p>
+            <div class="card-code">DECIDE x(BOOL)
+SUCH THAT SUM(x * weight) &lt;= 50
+MAXIMIZE SUM(x * value)</div></a>
+          <a class="card" href="examples/production.html"><h3>Quantities and capacities</h3>
+            <p>Decide an amount per row, bounded per row, meeting a total.</p>
+            <div class="card-code">DECIDE units(INT)
+SUCH THAT units &lt;= capacity
+  AND SUM(units) &gt;= 500</div></a>
+          <a class="card" href="examples/assignment.html"><h3>Assignment and matching</h3>
+            <p>Every task gets one person, nobody gets two.</p>
+            <div class="card-code">per worker: SUM(a) by (worker) &lt;= 1
+per task: SUM(a) by (task) = 1</div></a>
+          <a class="card" href="examples/diversification.html"><h3>Limits per group</h3>
+            <p>One constraint for every group in the data, with no list of groups in the query.</p>
+            <div class="card-code">per sector: SUM(pick) by (sector) &lt;= 2</div></a>
+          <a class="card" href="examples/facility-location.html"><h3>Fixed cost plus variable cost</h3>
+            <p>Open a facility before using it; pay its fixed cost once.</p>
+            <div class="card-code">DECIDE per D: open(BOOL), ship(INT)
+... SUM(ship) by (D) &lt;= D.capacity * open
+MINIMIZE ... + SUM(D: D.opening_cost * open)</div></a>
+          <a class="card" href="examples/min-max-shortfall.html"><h3>Worst case (min-max)</h3>
+            <p>One shared decision bounds every group; minimize it.</p>
+            <div class="card-code">DECIDE ship(INT), per (): worst(INT)
+... per g: g.demand - SUM(ship) by (g) &lt;= worst
+MINIMIZE worst</div></a>
+          <a class="card" href="examples/makespan.html"><h3>Load balancing</h3>
+            <p>The two-level objective: a max over groups of a sum within each.</p>
+            <div class="card-code">MINIMIZE max(per m: SUM(run * hours) by (m))</div></a>
+          <a class="card" href="examples/fair-allocation.html"><h3>Fairness (max-min)</h3>
+            <p>Raise the worst-off row as far as the budget allows.</p>
+            <div class="card-code">MAXIMIZE MIN(alloc / need)</div></a>
+          <a class="card" href="examples/price-changes.html"><h3>Sparse and robust changes</h3>
+            <p>Count changes with L0, bound the largest with L∞, total them with L1.</p>
+            <div class="card-code">norm(new - old, 0) &lt;= 2
+MINIMIZE norm(new - old, 'inf')</div></a>
+          <a class="card" href="examples/rebalancing.html"><h3>Closest to a target</h3>
+            <p>Least squares over a feasible region: a convex QP.</p>
+            <div class="card-code">MINIMIZE SUM(POWER(w - target, 2))</div></a>
+          <a class="card" href="examples/shift-coverage.html"><h3>Feasibility</h3>
+            <p>No objective: any assignment that satisfies the rules.</p>
+            <div class="card-code">SUCH THAT per shift: SUM(on) by (shift) = 1</div></a>
+          <a class="card" href="examples/diagnose.html"><h3>Explaining infeasibility</h3>
+            <p>Which clause to change, and by how much.</p>
+            <div class="card-code">DIAGNOSE SELECT ... DECIDE ...</div></a>
+        </div>
+      </section>
+
+      <section id="classes">
+        <h2>Problem classes and solvers <a class="anchor" href="#classes">#</a></h2>
+        <p>DeciDB uses Gurobi when its library and a license are present, and the bundled HiGHS otherwise. A model that
+          the available solver cannot take is refused at plan time, before reading a row, with a message that names
+          what the query does and which solver it needs. The same SQL runs on a machine with Gurobi.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Decisions</th><th>Objective or constraints</th><th>Class</th><th>Gurobi</th><th>HiGHS</th></tr></thead>
+          <tbody>
+            <tr><td>all <code>REAL</code></td><td>linear</td><td>LP</td><td class="yes">yes</td><td class="yes">yes</td></tr>
+            <tr><td>all <code>INT</code>/<code>BOOL</code></td><td>linear</td><td>ILP</td><td class="yes">yes</td><td class="yes">yes</td></tr>
+            <tr><td>mixed</td><td>linear</td><td>MILP</td><td class="yes">yes</td><td class="yes">yes</td></tr>
+            <tr><td>all <code>REAL</code></td><td>convex quadratic objective</td><td>QP</td><td class="yes">yes</td><td class="yes">if the matrix is non-singular</td></tr>
+            <tr><td>any</td><td><code>MAXIMIZE</code> a sum of squares</td><td>non-convex QP</td><td class="yes">yes</td><td class="no">refused</td></tr>
+            <tr><td>any</td><td>a square with a data weight (<code>w * POWER(e, 2)</code>)</td><td>non-convex QP</td><td class="yes">yes</td><td class="no">refused</td></tr>
+            <tr><td>mixed</td><td>quadratic objective</td><td>MIQP</td><td class="yes">yes</td><td class="no">refused</td></tr>
+            <tr><td>any, one factor <code>BOOL</code></td><td><code>b * x</code></td><td>MILP (linearized exactly)</td><td class="yes">yes</td><td class="yes">yes</td></tr>
+            <tr><td>any, no <code>BOOL</code> factor</td><td><code>x * y</code></td><td>non-convex QP</td><td class="yes">yes</td><td class="no">refused</td></tr>
+            <tr><td>any</td><td><code>POWER(e, 2)</code> or <code>x * y</code> in <code>SUCH THAT</code></td><td>QCQP</td><td class="yes">yes</td><td class="no">refused</td></tr>
+            <tr><td>any</td><td>no objective</td><td>feasibility</td><td class="yes">yes</td><td class="yes">yes</td></tr>
+          </tbody>
+        </table></div>
+        <p>A bilinear term with a <code>BOOL</code> factor is exact on both solvers:</p>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SUM(b * x * weight) &lt;= 60 AND SUM(b) &lt;= 2</code></pre></div>
+      </section>
+
+      <section id="direct-solve">
+        <h2>Answered without a solver <a class="anchor" href="#direct-solve">#</a></h2>
+        <p class="lead">Nine problem classes have an exact answer that DuckDB's own operators compute. When DeciDB proves a
+          query belongs to one, it replaces the solve with sorting, ranking, window and aggregate operators. The query is
+          unchanged; <code>EXPLAIN</code> names the rule.</p>
+        <div class="callout green"><strong>Faster and exact</strong>
+          <p>Every class is faster than Gurobi at every size measured, by up to several orders of magnitude once the
+            input reaches hundreds of thousands of decisions. The answer is exact, without the solver's tolerance, and a
+            quadratic class needs no Gurobi license. <code>SET decide_direct_solve = 'off'</code> sends every query to the
+            solver.</p></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Class</th><th>Problem</th><th>Shape it recognizes</th></tr></thead>
+          <tbody>
+            <tr><td><span class="badge green">S1</span></td><td>Choose rows by score</td><td>one per-row <code>BOOL</code>, count limits on <code>SUM(x)</code>, a linear score; per group too</td></tr>
+            <tr><td><span class="badge green">S2</span></td><td>The best rows under nested quotas</td><td>count limits whose groups nest (teams in divisions in a total)</td></tr>
+            <tr><td><span class="badge green">S3</span></td><td>As many rows as fit a budget</td><td><code>MAXIMIZE SUM(x)</code> under one <code>SUM(w * x) &lt;= B</code>, or the fewest rows that reach <code>&gt;= B</code></td></tr>
+            <tr><td><span class="badge green">A1</span></td><td>Each row on its own</td><td>per-row bounds and nothing linking rows; a linear objective or one square</td></tr>
+            <tr><td><span class="badge green">A2</span></td><td>One shared value closest to every row</td><td>a query-wide or keyed <code>REAL</code>, a squared, absolute or largest-absolute loss</td></tr>
+            <tr><td><span class="badge green">R1</span></td><td>Fill one budget by value per unit</td><td>per-row <code>REAL</code> with bounds, one budget <code>SUM(w * x)</code>, a linear objective</td></tr>
+            <tr><td><span class="badge green">R4</span></td><td>Max-min fair allocation</td><td><code>MAXIMIZE MIN(c * x)</code>, per-row caps, one budget; per group too</td></tr>
+            <tr><td><span class="badge green">N1</span></td><td>Stay inside one sum of squares</td><td>one <code>SUM(POWER(x, 2)) &lt;= B</code>, a linear objective or the nearest point to a target</td></tr>
+            <tr><td><span class="badge green">O1</span></td><td>Match two tables one to one</td><td>a <code>BOOL</code> per pair of a cross join, one per side, a distance or product cost</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Examples of each</h3>
+        <p>S1, S2, S3, R4, O1 and A2 each have a full example: <a href="examples/shortlist.html">shortlist</a>,
+          <a href="examples/nested-quotas.html">nested quotas</a>, <a href="examples/sprint-planning.html">sprint planning</a>,
+          <a href="examples/fair-allocation.html">fair allocation</a>, <a href="examples/matching.html">matching</a> and
+          <a href="examples/depot-placement.html">depot placement</a>. The other three:</p>
+<div class="query-result"><div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>R1: fill a truck by value per kg</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SELECT good, value_per_kg, available_kg, ROUND(kg, 1) AS kg
+FROM Cargo
+DECIDE kg(REAL)
+SUCH THAT kg &lt;= available_kg AND SUM(kg) &lt;= 1000
+MAXIMIZE SUM(value_per_kg * kg);</code></pre></div><div class="result"><div class="result-head"><b>Result</b><span>5 rows</span></div><div class="result-scroll"><table><thead><tr><th class="">good</th><th class="num">value_per_kg</th><th class="num">available_kg</th><th class="dec num">kg</th></tr></thead><tbody><tr><td>Saffron</td><td class="num">90.0</td><td class="num">2.0</td><td class="num dec">2.0</td></tr><tr><td>Coffee</td><td class="num">12.0</td><td class="num">300.0</td><td class="num dec">300.0</td></tr><tr><td>Tea</td><td class="num">9.0</td><td class="num">200.0</td><td class="num dec">200.0</td></tr><tr><td>Rice</td><td class="num">1.5</td><td class="num">900.0</td><td class="num dec">498.0</td></tr><tr><td>Sugar</td><td class="num">1.1</td><td class="num">800.0</td><td class="num dec">0.0</td></tr></tbody></table></div></div></div>
+<div class="query-result"><div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>A1: each row picks its best value in its own range</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SELECT sku, margin, min_qty, max_qty, qty
+FROM Orders
+DECIDE qty(INT)
+SUCH THAT qty BETWEEN min_qty AND max_qty
+MAXIMIZE SUM(margin * qty);</code></pre></div><div class="result"><div class="result-head"><b>Result</b><span>4 rows</span></div><div class="result-scroll"><table><thead><tr><th class="">sku</th><th class="num">margin</th><th class="num">min_qty</th><th class="num">max_qty</th><th class="dec num">qty</th></tr></thead><tbody><tr><td>A-100</td><td class="num">4.0</td><td class="num">10</td><td class="num">50</td><td class="num dec">50</td></tr><tr><td>B-200</td><td class="num">-1.5</td><td class="num">5</td><td class="num">20</td><td class="num dec">5</td></tr><tr><td>C-300</td><td class="num">2.5</td><td class="num">0</td><td class="num">30</td><td class="num dec">30</td></tr><tr><td>D-400</td><td class="num">-0.5</td><td class="num">3</td><td class="num">8</td><td class="num dec">3</td></tr></tbody></table></div></div></div>
+<div class="query-result"><div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>N1: the best direction within a sum of squares</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SELECT name, score, ROUND(x, 3) AS x
+FROM Signals
+DECIDE x(REAL)
+SUCH THAT SUM(POWER(x, 2)) &lt;= 25
+MAXIMIZE SUM(score * x);</code></pre></div><div class="result"><div class="result-head"><b>Result</b><span>3 rows</span></div><div class="result-scroll"><table><thead><tr><th class="">name</th><th class="num">score</th><th class="dec num">x</th></tr></thead><tbody><tr><td>alpha</td><td class="num">3.0</td><td class="num dec">3.0</td></tr><tr><td>beta</td><td class="num">4.0</td><td class="num dec">4.0</td></tr><tr><td>gamma</td><td class="num">0.0</td><td class="num dec">0.0</td></tr></tbody></table></div></div></div>
+        <p>The R1 answer fills the truck with the most valuable goods per kilogram first. The A1 answer puts each
+          quantity at whichever end of its range its margin favors. N1 points <code>x</code> along the scores, scaled to
+          the limit: with scores 3, 4 and 0 and a limit of 25, it answers 3, 4 and 0.</p>
+      </section>
+
+      <section id="rewrites">
+        <h2>What DeciDB adds for you <a class="anchor" href="#rewrites">#</a></h2>
+        <p>Several shapes are not linear as written. DeciDB rewrites them into a form the solver takes, and
+          <code>EXPLAIN</code> shows each rewrite under the clause it came from.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>You write</th><th>DeciDB adds</th></tr></thead>
+          <tbody>
+            <tr><td><code>ABS(e)</code> in a constraint or objective</td><td>an auxiliary variable and two rows; a binary when the direction needs one</td></tr>
+            <tr><td>the hard direction of <code>MIN</code>/<code>MAX</code></td><td>an extremum variable per group, tied by indicator rows (native on Gurobi)</td></tr>
+            <tr><td><code>&lt;&gt;</code></td><td>one binary and two rows, or a single inequality when one side is out of reach</td></tr>
+            <tr><td><code>x IN (a, b, c)</code></td><td>one binary per value</td></tr>
+            <tr><td><code>norm(e, 0)</code></td><td>one indicator per row, pinned both ways</td></tr>
+            <tr><td><code>b * x</code> with <code>b</code> a <code>BOOL</code></td><td>a McCormick envelope: exact, no Big-M on the binary side</td></tr>
+            <tr><td>a reducer inside another expression, or beside a row-varying term</td><td>a helper decision per group, defined once and shared by every clause that reads it</td></tr>
+          </tbody>
+        </table></div>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SELECT item, x
+FROM Items
+DECIDE x(INT)
+SUCH THAT x &lt;= 3
+      AND ABS(SUM(x * weight) - 60) &lt;= 10
+      AND SUM(x) &lt;&gt; 4
+MAXIMIZE SUM(x * value);</code></pre></div><div class="code"><div class="code-head"><span class="code-title">EXPLAIN: the DECIDE node</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-none">DECIDE
+  Variables: x
+  Objective: [&#x27;MAXIMIZE SUM(x * value)&#x27;, &#x27;  ≡ sum(value * x)&#x27;]
+  Constraints:
+    x &lt;= 3
+    ABS(SUM(x * weight) - 60) &lt;= 10
+      ≡ abs(sum(weight * x) - 60) &lt;= 10
+      ↳ abs(sum(weight * x) - 60) becomes an auxiliary variable
+      ↳ sum(weight * x) becomes a helper decision
+      ↳ abs(sum(weight * x) - 60) - sum(weight * x) &gt;= -60
+      ↳ abs(sum(weight * x) - 60) + sum(weight * x) &gt;= 0 + 60
+    SUM(x) &lt;&gt; 4
+      ↳ sum(x) &lt;&gt; 4 becomes two conditional rows with an indicator</code></pre></div>
+      </section>
+    </article>
+  </div>
+</div>
+
+</main>
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <img class="logo-light" src="assets/images/logo.svg" alt="DeciDB" width="94" height="28">
+        <img class="logo-dark" src="assets/images/logo-dark.svg" alt="DeciDB" width="94" height="28">
+        <p>Constrained optimization, native in SQL. Built on DuckDB by the HUDA Lab at NYU Abu Dhabi and UMass Amherst.</p>
+      </div>
+      <div>
+        <h4>Learn</h4>
+        <ul>
+          <li><a href="getting-started.html">Get started</a></li>
+          <li><a href="documentation.html">Language reference</a></li>
+          <li><a href="problems.html">Problems you can express</a></li>
+          <li><a href="examples.html">Examples</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Project</h4>
+        <ul>
+          <li><a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer">GitHub repository</a></li>
+          <li><a href="https://github.com/huda-lab/decidb/issues" target="_blank" rel="noopener noreferrer">Issue tracker</a></li>
+          <li><a href="about.html#research">Research papers</a></li>
+          <li><a href="https://huda-lab.github.io/" target="_blank" rel="noopener noreferrer">HUDA Lab</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Contact</h4>
+        <ul>
+          <li><a href="mailto:support@decidb.com">support@decidb.com</a></li>
+          <li class="subtle">NYU Abu Dhabi &amp; UMass Amherst</li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</span>
+      <span>Built on DuckDB &middot; Solvers: Gurobi when available, HiGHS bundled</span>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

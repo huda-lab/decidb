@@ -1,1744 +1,716 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <script>
-  (function(){var t=localStorage.getItem('decidb-theme')||'light';
-  document.documentElement.setAttribute('data-theme',t)})();
-  </script>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="DeciDB Documentation - Complete syntax reference for the DECIDE clause, constraints, objectives, and best practices.">
-  <meta name="keywords" content="DeciDB, DuckDB, SQL, documentation, syntax, DECIDE, constraints, optimization">
-  <title>Documentation - DeciDB</title>
-
-  <!-- Favicon -->
-  <link rel="icon" type="image/svg+xml" href="assets/images/logo.svg">
-
-  <!-- Tailwind CSS -->
-  <script src="assets/js/tw-config.js"></script>
-  <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- DM Serif Display + DM Sans -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&amp;family=DM+Serif+Display&amp;display=swap" rel="stylesheet">
-
-  <!-- JetBrains Mono for code -->
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
-
-  <!-- Prism.js for syntax highlighting -->
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js"></script>
-
-  <!-- Lucide Icons -->
-  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-
-  <!-- Custom CSS -->
-  <link rel="stylesheet" href="assets/css/custom.css">
-
-  <!-- Custom JS -->
-  <script src="assets/js/main.js" defer></script>
-
-  <style>
-    body {
-      font-family: 'DM Sans', system-ui, sans-serif;
-    }
-    code, pre {
-      font-family: 'JetBrains Mono', monospace;
-    }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Language reference · DeciDB</title>
+<meta name="description" content="The DECIDE language reference: decisions, keyed and query-wide declarations, per/when/by scopes, reducers, objectives, NULL rules, EXPLAIN and DIAGNOSE.">
+<meta name="keywords" content="DeciDB, DuckDB, SQL, constrained optimization, linear programming, mixed-integer programming, quadratic programming, DECIDE, solver, HUDA Lab">
+<link rel="icon" type="image/svg+xml" href="assets/images/mark.svg">
+<script>(function(){try{var t=localStorage.getItem('decidb-theme');if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/site.css">
+<script>window.Prism = window.Prism || {}; window.Prism.manual = true;</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js" defer></script>
+<script src="assets/js/site.js" defer></script>
 </head>
-<body class="min-h-screen">
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="container">
+    <a class="brand" href="index.html" aria-label="DeciDB home">
+      <img class="logo-light" src="assets/images/logo.svg" alt="DeciDB" width="100" height="30">
+      <img class="logo-dark" src="assets/images/logo-dark.svg" alt="DeciDB" width="100" height="30">
+      <span class="by">HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</span>
+    </a>
+    <nav class="nav" aria-label="Main"><a href="documentation.html" aria-current="page">Docs</a><a href="problems.html">Problems</a><a href="examples.html">Examples</a><a href="getting-started.html">Get started</a><a href="about.html">About</a></nav>
+    <div class="header-actions">
+      <a class="btn btn-ghost btn-sm" href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.56-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.78 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg> GitHub</a>
+      <button class="icon-btn theme-toggle" type="button" aria-label="Switch light or dark theme"><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg></button>
+      <button class="icon-btn menu-btn" type="button" aria-label="Open menu" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    </div>
+  </div>
+  <nav class="mobile-nav" aria-label="Mobile"><a href="documentation.html">Docs</a><a href="problems.html">Problems</a><a href="examples.html">Examples</a><a href="getting-started.html">Get started</a><a href="about.html">About</a><a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer">GitHub</a></nav>
+</header>
+<main id="main">
+<section class="page-head">
+  <div class="container">
+    <div class="crumbs"><a href="index.html">Home</a><span>/</span>Docs</div>
+    <h1>The DECIDE language</h1>
+    <p>Everything a DECIDE query can say and exactly what it means. Every example in this reference runs on DeciDB as
+      written; a green dot on a code block marks one that was executed when the site was built.</p>
+  </div>
+</section>
 
-  <!-- Skip Link for Accessibility -->
-  <a href="#main-content" class="skip-link">Skip to main content</a>
-
-  <!-- ============================================
-       HEADER / NAVIGATION
-       ============================================ -->
-  <header class="fixed top-0 w-full header-bg backdrop-blur-sm border-b border-bdcolor z-50">
-    <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
-      <!-- Logo -->
-      <a href="index.html" class="flex items-center space-x-2">
-        <img src="assets/images/logo.svg" alt="DeciDB" class="h-8 logo-img">
-        <div class="hidden sm:block">
-          <div class="text-xs text-fg-subtle">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
-        </div>
-      </a>
-
-      <!-- Desktop Navigation -->
-      <div class="hidden md:flex items-center space-x-6">
-        <a href="index.html" class="nav-link">Home</a>
-        <a href="getting-started.html" class="nav-link">Getting Started</a>
-        <a href="documentation.html" class="nav-link active">Docs</a>
-        <a href="examples.html" class="nav-link">Examples</a>
-        <a href="about.html" class="nav-link">About</a>
-      </div>
-
-      <!-- CTA Buttons -->
-      <div class="hidden md:flex items-center space-x-3">
-        <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"
-           class="btn btn-secondary text-sm">
-          <i data-lucide="github" class="w-4 h-4"></i>
-          GitHub
-        </a>
-        <a href="getting-started.html" class="btn btn-primary text-sm">
-          Get Started
-          <i data-lucide="arrow-right" class="w-4 h-4"></i>
-        </a>
-        <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">
-          <svg class="icon-sun" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
-          <svg class="icon-moon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-        </button>
-      </div>
-
-      <!-- Mobile Menu Button -->
-      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-canvas-inset"
-              aria-label="Toggle menu" aria-expanded="false">
-        <i data-lucide="menu" id="menu-open-icon" class="w-6 h-6"></i>
-        <i data-lucide="x" id="menu-close-icon" class="w-6 h-6 hidden"></i>
-      </button>
+<div class="container">
+  <div class="doc-layout">
+    <nav class="toc" aria-label="Reference contents">
+      <div class="toc-title">Reference</div>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#decisions">Decisions</a></li>
+        <li class="sub"><a href="#keyed">Keyed decisions</a></li>
+        <li class="sub"><a href="#query-wide">Query-wide decisions</a></li>
+        <li><a href="#constraints">Constraints</a></li>
+        <li><a href="#scopes">Scopes: per, when, by</a></li>
+        <li class="sub"><a href="#scope-order">How a scope is evaluated</a></li>
+        <li class="sub"><a href="#determination">The determination rule</a></li>
+        <li><a href="#reducers">Reducers</a></li>
+        <li class="sub"><a href="#colon-form">The colon form</a></li>
+        <li class="sub"><a href="#min-max">MIN and MAX</a></li>
+        <li class="sub"><a href="#norm">norm()</a></li>
+        <li><a href="#objective">Objective</a></li>
+        <li class="sub"><a href="#two-level">Two-level objective</a></li>
+        <li class="sub"><a href="#quadratic">Quadratic and bilinear</a></li>
+        <li><a href="#nulls">NULL and empty groups</a></li>
+        <li><a href="#numbers">Numbers and casts</a></li>
+        <li><a href="#explain">EXPLAIN</a></li>
+        <li><a href="#diagnose">DIAGNOSE</a></li>
+        <li><a href="#direct-solve">Direct solve</a></li>
+        <li><a href="#settings">Settings</a></li>
+        <li><a href="#migrating">Migrating from 0.2</a></li>
+        <li><a href="#roadmap">Not supported yet</a></li>
+      </ul>
     </nav>
 
-    <!-- Mobile Menu -->
-    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-bdcolor bg-canvas" aria-hidden="true">
-      <div class="container mx-auto px-4 py-4 space-y-4">
-        <a href="index.html" class="block py-2 nav-link">Home</a>
-        <a href="getting-started.html" class="block py-2 nav-link">Getting Started</a>
-        <a href="documentation.html" class="block py-2 nav-link active">Docs</a>
-        <a href="examples.html" class="block py-2 nav-link">Examples</a>
-        <a href="about.html" class="block py-2 nav-link">About</a>
-        <hr class="border-bdcolor">
-        <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"
-           class="flex items-center gap-2 py-2 text-fg-muted hover:text-accent">
-          <i data-lucide="github" class="w-5 h-5"></i>
-          GitHub
-        </a>
-        <a href="getting-started.html" class="btn btn-primary w-full justify-center">
-          Get Started
-          <i data-lucide="arrow-right" class="w-4 h-4"></i>
-        </a>
-      </div>
-    </div>
-  </header>
-
-  <!-- ============================================
-       MAIN CONTENT
-       ============================================ -->
-  <main id="main-content" class="pt-20">
-
-    <!-- ============================================
-         HERO SECTION
-         ============================================ -->
-    <section class="py-12 bg-canvas">
-      <div class="container mx-auto px-4">
-        <!-- Breadcrumb -->
-        <nav class="breadcrumb mb-8" aria-label="Breadcrumb">
-          <a href="index.html">Home</a>
-          <span class="separator"><i data-lucide="chevron-right" class="w-4 h-4"></i></span>
-          <span class="text-fg font-medium">Documentation</span>
-        </nav>
-
-        <div class="max-w-4xl">
-          <h1 class="text-4xl md:text-5xl text-fg mb-4">
-            DeciDB Documentation
-          </h1>
-          <p class="text-xl text-fg-muted">
-            Complete reference for writing optimization queries with the DECIDE clause.
-          </p>
-        </div>
-      </div>
-    </section>
-
-    <!-- ============================================
-         CONTENT WITH SIDEBAR
-         ============================================ -->
-    <section class="py-16">
-      <div class="container mx-auto px-4">
-        <div class="flex flex-col lg:flex-row gap-12">
-
-          <!-- Sidebar Navigation -->
-          <aside class="lg:w-64 flex-shrink-0">
-            <nav class="sidebar-nav lg:sticky lg:top-24">
-              <h3 class="text-sm font-semibold text-fg uppercase tracking-wider mb-4">Reference</h3>
-              <ul class="space-y-1">
-                <li><a href="#syntax" class="sidebar-link active">Syntax Overview</a></li>
-                <li><a href="#decide" class="sidebar-link">The DECIDE Clause</a></li>
-                <li><a href="#such-that" class="sidebar-link">The SUCH THAT Clause</a></li>
-                <li><a href="#objective" class="sidebar-link">The Objective Clause</a></li>
-                <li><a href="#reducers" class="sidebar-link">Reducers</a></li>
-                <li><a href="#solver-selection" class="sidebar-link">Solver Selection</a></li>
-                <li><a href="#solver-outcomes" class="sidebar-link">Solver Outcomes</a></li>
-                <li><a href="#explain" class="sidebar-link">EXPLAIN</a></li>
-                <li><a href="#diagnose" class="sidebar-link">DIAGNOSE</a></li>
-                <li><a href="#best-practices" class="sidebar-link">Best Practices</a></li>
-              </ul>
-            </nav>
-          </aside>
-
-          <!-- Main Content -->
-          <div class="flex-1 max-w-3xl">
-
-            <!-- ============================================
-                 SYNTAX OVERVIEW
-                 ============================================ -->
-            <section id="syntax" class="mb-20">
-              <h2 class="text-3xl text-fg mb-6">Syntax Overview</h2>
-
-              <p class="text-fg-muted mb-6">
-                DeciDB adds a <code>DECIDE</code> clause to standard SQL. You declare decision variables, define constraints with <code>SUCH THAT</code>, and optionally set an objective with <code>MAXIMIZE</code> or <code>MINIMIZE</code>. DeciDB solves the optimization problem and returns every candidate row with the optimal variable values filled in.
-              </p>
-
-              <h3 class="text-xl font-semibold text-fg mb-4">Complete Syntax</h3>
-              <div class="code-block mb-8">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- Single-block order: the whole clause sits after WHERE
-SELECT select_list
-FROM table_expression
-[WHERE filter_conditions]
-DECIDE [scalar] [Table.]variable(INT | BOOL | REAL) [, ...]
-SUCH THAT
-    constraint [AND constraint ...]   -- constraints may use WHEN, PER
-[MAXIMIZE | MINIMIZE] objective        -- reducers / POWER / bilinear / bare scalar
-
--- Split order: the declaration sits between SELECT and FROM
-SELECT select_list
-DECIDE [scalar] [Table.]variable(INT | BOOL | REAL) [, ...]
-FROM table_expression
-[JOIN ...]
-[WHERE filter_conditions]
-SUCH THAT
-    constraint [AND constraint ...]
-[MAXIMIZE | MINIMIZE] objective</code></pre>
-              </div>
-
-              <p class="text-fg-muted mb-8">
-                Both orders parse to the same plan. Put the declaration in one position or the other, never both. A <code>DECIDE</code> with no <code>SUCH THAT</code>, or a <code>SUCH THAT</code> with no <code>DECIDE</code>, is a parser error.
-              </p>
-
-              <h3 class="text-xl font-semibold text-fg mb-4">Execution Order</h3>
-              <p class="text-fg-muted mb-4">
-                DeciDB processes your query in this order:
-              </p>
-              <ol class="space-y-3 mb-6">
-                <li class="flex gap-4">
-                  <span class="flex-shrink-0 w-7 h-7 bg-canvas-inset text-fg rounded-md flex items-center justify-center font-bold text-sm">1</span>
-                  <div>
-                    <span class="font-semibold text-fg">FROM + WHERE</span>
-                    <span class="text-fg-muted"> &mdash; Standard SQL filtering produces candidate rows</span>
-                  </div>
-                </li>
-                <li class="flex gap-4">
-                  <span class="flex-shrink-0 w-7 h-7 bg-canvas-inset text-fg rounded-md flex items-center justify-center font-bold text-sm">2</span>
-                  <div>
-                    <span class="font-semibold text-fg">DECIDE</span>
-                    <span class="text-fg-muted"> &mdash; Creates the decision variables, one per candidate row unless the declaration says otherwise</span>
-                  </div>
-                </li>
-                <li class="flex gap-4">
-                  <span class="flex-shrink-0 w-7 h-7 bg-canvas-inset text-fg rounded-md flex items-center justify-center font-bold text-sm">3</span>
-                  <div>
-                    <span class="font-semibold text-fg">SUCH THAT + Objective</span>
-                    <span class="text-fg-muted"> &mdash; Constraints and objective are sent to the solver</span>
-                  </div>
-                </li>
-                <li class="flex gap-4">
-                  <span class="flex-shrink-0 w-7 h-7 bg-canvas-inset text-fg rounded-md flex items-center justify-center font-bold text-sm">4</span>
-                  <div>
-                    <span class="font-semibold text-fg">SELECT</span>
-                    <span class="text-fg-muted"> &mdash; Returns all candidate rows with their optimal variable values</span>
-                  </div>
-                </li>
-              </ol>
-
-              <p class="text-fg-muted text-sm">
-                Decision variables are available in <code>SUCH THAT</code>, <code>MAXIMIZE</code>/<code>MINIMIZE</code>, and <code>SELECT</code>.
-              </p>
-            </section>
-
-            <!-- ============================================
-                 THE DECIDE CLAUSE
-                 ============================================ -->
-            <section id="decide" class="mb-20">
-              <h2 class="text-3xl text-fg mb-6">The DECIDE Clause</h2>
-
-              <p class="text-fg-muted mb-6">
-                Use <code>DECIDE</code> to declare one or more decision variables. An unqualified declaration creates one instance per candidate row; table-qualified and <code>scalar</code> declarations use the other scopes described below. The solver assigns optimal values to these variables.
-              </p>
-
-              <div class="code-block mb-8">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>DECIDE variable_name(TYPE) [, variable_name2(TYPE) ...]</code></pre>
-              </div>
-
-              <h3 class="text-xl font-semibold text-fg mb-4">Variable Types</h3>
-
-              <p class="text-fg-muted mb-4">
-                The type is required and goes in parentheses after the variable name. There are exactly three: <code>x(BOOL)</code>, <code>x(INT)</code>, and <code>x(REAL)</code>. Omitting it is a parser error:
-              </p>
-
-              <div class="code-block mb-8">
-                <div class="code-header"><span class="language-label">Error</span></div>
-                <pre class="text-sm"><code>DECIDE variable "x" needs a type; write x(INT), x(BOOL) or x(REAL)</code></pre>
-              </div>
-
-              <div class="space-y-6 mb-8">
-                <div>
-                  <h4 class="font-semibold text-fg mb-2">BOOLEAN &mdash; select or skip</h4>
-                  <p class="text-fg-muted text-sm mb-3">
-                    The variable takes the value 0 or 1. Use this when each row is either included or excluded.
-                  </p>
-                  <div class="code-block">
-                    <div class="code-header">
-                      <span class="language-label">SQL</span>
-                      <button class="copy-button">
-                        <i data-lucide="copy" class="w-4 h-4"></i>
-                        Copy
-                      </button>
-                    </div>
-                    <pre class="language-sql"><code>DECIDE x(BOOL)</code></pre>
-                  </div>
-                </div>
-
-                <div>
-                  <h4 class="font-semibold text-fg mb-2">INTEGER &mdash; choose a quantity</h4>
-                  <p class="text-fg-muted text-sm mb-3">
-                    The variable starts with a non-negative integer domain (0, 1, 2, 3, ...), but an explicit negative lower bound makes it signed. Use this when you need to decide a whole-numbered quantity.
-                  </p>
-                  <div class="code-block">
-                    <div class="code-header">
-                      <span class="language-label">SQL</span>
-                      <button class="copy-button">
-                        <i data-lucide="copy" class="w-4 h-4"></i>
-                        Copy
-                      </button>
-                    </div>
-                    <pre class="language-sql"><code>DECIDE quantity(INT)</code></pre>
-                  </div>
-                </div>
-
-                <div>
-                  <h4 class="font-semibold text-fg mb-2">REAL &mdash; continuous quantity</h4>
-                  <p class="text-fg-muted text-sm mb-3">
-                    The variable starts with a non-negative continuous domain, but an explicit negative lower bound makes it signed. Use this for decisions like dollar amounts, percentages, or flows. Note that <code>&lt;</code>, <code>&gt;</code>, and <code>&lt;&gt;</code> on REAL variables are rejected &mdash; use <code>&lt;=</code> / <code>&gt;=</code> instead.
-                  </p>
-                  <div class="code-block">
-                    <div class="code-header">
-                      <span class="language-label">SQL</span>
-                      <button class="copy-button">
-                        <i data-lucide="copy" class="w-4 h-4"></i>
-                        Copy
-                      </button>
-                    </div>
-                    <pre class="language-sql"><code>DECIDE amount(REAL)</code></pre>
-                  </div>
-                </div>
-              </div>
-
-              <h3 class="text-xl font-semibold text-fg mb-4">Signed Variables</h3>
-              <p class="text-fg-muted mb-4">
-                <code>INT</code> and <code>REAL</code> decisions start at 0. That is a default, not a floor. A variable becomes signed as soon as the query gives it an explicit negative lower bound: <code>x &gt;= -K</code>, <code>x BETWEEN -K AND K</code>, or a negative value in an <code>IN</code> domain. A variable the query never lowers stays non-negative.
-              </p>
-              <div class="code-block mb-4">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>DECIDE adj(REAL) ... SUCH THAT adj BETWEEN -10 AND 10   -- adj ranges over -10 .. 10
-DECIDE d(INT)    ... SUCH THAT d >= -5                  -- d is at least -5
-DECIDE s(INT)    ... SUCH THAT s IN (-5, 0, 5)          -- s is one of -5, 0, 5</code></pre>
-              </div>
-              <p class="text-fg-muted text-sm mb-8">
-                There is no fully unbounded domain. A signed variable always has a finite lower bound.
-              </p>
-
-              <h3 class="text-xl font-semibold text-fg mb-4">Multiple Variables</h3>
-              <p class="text-fg-muted mb-4">
-                Declare multiple variables separated by commas. In the unqualified form below, each row gets its own instance of every variable; scopes may also be mixed in one declaration list.
-              </p>
-              <div class="code-block mb-8">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- Two variables per row: include or not, and how many
-DECIDE x(BOOL), quantity(INT)</code></pre>
-              </div>
-
-              <h3 class="text-xl font-semibold text-fg mb-4">Variable Scopes</h3>
-              <p class="text-fg-muted mb-4">
-                How you spell the declaration decides how many values the solver assigns.
-              </p>
-              <div class="table-wrapper rounded-lg border border-bdcolor overflow-hidden mb-8">
-                <table class="w-full">
-                  <thead>
-                    <tr class="bg-canvas-inset">
-                      <th class="text-left px-4 py-3 text-fg">Spelling</th>
-                      <th class="text-left px-4 py-3 text-fg">Scope</th>
-                      <th class="text-left px-4 py-3 text-fg">How many values</th>
-                    </tr>
-                  </thead>
-                  <tbody class="text-fg-muted">
-                    <tr>
-                      <td class="px-4 py-3"><code>x(INT)</code></td>
-                      <td class="px-4 py-3">row-scoped (default)</td>
-                      <td class="px-4 py-3">one per result row</td>
-                    </tr>
-                    <tr>
-                      <td class="px-4 py-3"><code>T.x(INT)</code></td>
-                      <td class="px-4 py-3">table-scoped</td>
-                      <td class="px-4 py-3">one per distinct row of <code>T</code></td>
-                    </tr>
-                    <tr>
-                      <td class="px-4 py-3"><code>scalar x(INT)</code></td>
-                      <td class="px-4 py-3">query-wide</td>
-                      <td class="px-4 py-3">exactly one, for the whole query</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-
-              <h3 class="text-xl font-semibold text-fg mb-4">Table-Scoped Variables</h3>
-              <p class="text-fg-muted mb-4">
-                By default, decision variables are <em>row-scoped</em> &mdash; one variable per result row. Prefix the variable with a table alias to make it <em>table-scoped</em>: one variable per unique entity in the source table, shared across every result row originating from that entity. This reduces the solver variable count from the size of the join result to the number of distinct entities.
-              </p>
-              <div class="code-block mb-4">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- One decision per nurse, even though each nurse appears in many shift rows
-SELECT n.name, s.shift_date, keepN
-FROM nurses n
-JOIN shifts s ON n.id = s.nurse_id
-DECIDE n.keepN(BOOL)
-SUCH THAT SUM(keepN * s.hours) <= 100
-MAXIMIZE SUM(keepN * n.skill_score);</code></pre>
-              </div>
-              <p class="text-fg-muted text-sm mb-4">
-                The qualifier (<code>n.</code>) must match a table or alias in the <code>FROM</code> clause. <code>SUM</code> still sums over result rows, so an entity that appears in <em>k</em> joined rows contributes its variable <em>k</em> times. To count each entity once instead, qualify the reducer &mdash; see <a href="#reducers" class="text-accent hover:text-accent">Reducers</a>.
-              </p>
-              <p class="text-fg-muted text-sm mb-8">
-                The entity is identified by <strong>all columns</strong> of the source table. Two rows of <code>nurses</code> share a variable only when every column matches. There is no syntax for picking a subset of columns as the key.
-              </p>
-
-              <h3 class="text-xl font-semibold text-fg mb-4">Query-Wide Variables (scalar)</h3>
-              <p class="text-fg-muted mb-4">
-                Write <code>scalar</code> before the name to declare one decision shared by the entire query, however many rows the query returns. Use it when the thing you are deciding is not attached to any row &mdash; a single threshold, a shared ceiling, a fleet-wide budget.
-              </p>
-              <div class="code-block mb-4">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- Spread the shipments so the busiest route is as light as possible
-SELECT r.regionID, ship, max_load
-FROM routes r
-DECIDE ship(INT), scalar max_load(INT)
-SUCH THAT SUM(ship) >= 12 AND ship <= max_load
-MINIMIZE max_load;</code></pre>
-              </div>
-              <ul class="space-y-2 text-fg-muted text-sm mb-4">
-                <li>&bull; The assigned value repeats on every output row.</li>
-                <li>&bull; A query-wide decision may be the bound of an aggregate: <code>SUM(ship) &lt;= max_load</code>.</li>
-                <li>&bull; It may not be table-qualified.</li>
-              </ul>
-              <div class="code-block mb-8">
-                <div class="code-header"><span class="language-label">Error &mdash; <code>DECIDE scalar t.m(INT)</code></span></div>
-                <pre class="text-sm"><code>scalar DECIDE variable "m" cannot name a table; write scalar m(INT),
-or drop scalar for one decision per t row</code></pre>
-              </div>
-
-              <h3 class="text-xl font-semibold text-fg mb-4">Using Variables in SELECT</h3>
-              <p class="text-fg-muted mb-4">
-                Reference decision variables in <code>SELECT</code> to see their optimal values in the output. You can also use them in expressions.
-              </p>
-              <div class="code-block mb-6">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>SELECT id, price, x, (x * price) AS cost
-FROM Products
-DECIDE x(BOOL)
-SUCH THAT SUM(x * price) <= 1000
-MAXIMIZE SUM(x * profit);</code></pre>
-              </div>
-              <p class="text-fg-muted text-sm">
-                This returns every product row. The <code>x</code> column shows 1 for selected products and 0 for skipped ones. The <code>cost</code> column shows the price for selected items and 0 otherwise.
-              </p>
-            </section>
-
-            <!-- ============================================
-                 THE SUCH THAT CLAUSE
-                 ============================================ -->
-            <section id="such-that" class="mb-20">
-              <h2 class="text-3xl text-fg mb-6">The SUCH THAT Clause</h2>
-
-              <p class="text-fg-muted mb-6">
-                Use <code>SUCH THAT</code> to define constraints that the solution must satisfy. Constraints are separated by <code>AND</code>. Linear and supported degree-two quadratic or bilinear constraints are accepted; solver-specific limits are listed below.
-              </p>
-
-              <!-- Row-Level vs Aggregate -->
-              <h3 class="text-xl font-semibold text-fg mb-4">Row-Level Constraints</h3>
-              <p class="text-fg-muted mb-4">
-                A constraint without <code>SUM()</code> applies independently to each row. Use this to bound individual variable values.
-              </p>
-              <div class="code-block mb-8">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>SUCH THAT
-    x >= 0
-    AND x <= 5</code></pre>
-              </div>
-              <p class="text-fg-muted text-sm mb-8">
-                Each row's <code>x</code> is independently constrained between 0 and 5.
-              </p>
-
-              <h3 class="text-xl font-semibold text-fg mb-4">Aggregate Constraints</h3>
-              <p class="text-fg-muted mb-4">
-                Wrap an expression in <code>SUM()</code> to constrain the total across all rows. This is how you express global limits like total weight or budget.
-              </p>
-              <div class="code-block mb-8">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>DECIDE x(BOOL)
-SUCH THAT
-    SUM(x * weight) <= 100
-    AND SUM(x * volume) <= 50
-    AND SUM(x) >= 5</code></pre>
-              </div>
-              <p class="text-fg-muted text-sm mb-8">
-                The total weight of selected items must be at most 100, total volume at most 50, and at least 5 items must be selected.
-              </p>
-
-              <!-- Comparison Operators -->
-              <h3 class="text-xl font-semibold text-fg mb-4">Comparison Operators</h3>
-              <div class="table-wrapper rounded-lg border border-bdcolor overflow-hidden mb-4">
-                <table class="w-full">
-                  <thead>
-                    <tr class="bg-canvas-inset">
-                      <th class="text-left px-4 py-3 text-fg">Operator</th>
-                      <th class="text-left px-4 py-3 text-fg">Example</th>
-                      <th class="text-left px-4 py-3 text-fg">Result</th>
-                    </tr>
-                  </thead>
-                  <tbody class="text-fg-muted">
-                    <tr>
-                      <td class="px-4 py-3"><code>=</code></td>
-                      <td class="px-4 py-3"><code class="text-sm">SUM(x) = 3</code></td>
-                      <td class="px-4 py-3">Exactly 3 items selected</td>
-                    </tr>
-                    <tr>
-                      <td class="px-4 py-3"><code>&lt;&gt;</code></td>
-                      <td class="px-4 py-3"><code class="text-sm">x &lt;&gt; 0</code></td>
-                      <td class="px-4 py-3">Variable is not zero</td>
-                    </tr>
-                    <tr>
-                      <td class="px-4 py-3"><code>&lt;</code>, <code>&lt;=</code></td>
-                      <td class="px-4 py-3"><code class="text-sm">SUM(x * weight) &lt;= 50</code></td>
-                      <td class="px-4 py-3">Total weight at most 50</td>
-                    </tr>
-                    <tr>
-                      <td class="px-4 py-3"><code>&gt;</code>, <code>&gt;=</code></td>
-                      <td class="px-4 py-3"><code class="text-sm">SUM(x) &gt;= 3</code></td>
-                      <td class="px-4 py-3">At least 3 items selected</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-              <p class="text-fg-muted text-sm mb-8">
-                The strict operators (<code>&lt;</code>, <code>&gt;</code>, <code>&lt;&gt;</code>) require the left-hand side to be integer-valued &mdash; every term must involve only <code>INT</code> / <code>BOOL</code> variables with integer coefficients. Constraints involving <code>REAL</code> variables must use <code>&lt;=</code> or <code>&gt;=</code> instead.
-              </p>
-
-              <h3 class="text-xl font-semibold text-fg mb-4">Which Side the Decision Goes On</h3>
-              <p class="text-fg-muted mb-4">
-                Either side of the comparison may carry the decision. <code>SUM(x) &lt;= 10</code> and <code>10 &gt;= SUM(x)</code> are the same constraint, and a reducer may appear on both sides at once.
-              </p>
-              <div class="code-block mb-4">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- The bound may be written first
-SUCH THAT 5 >= x AND 10 >= SUM(x)
-
--- Reducers on both sides
-SUCH THAT SUM(x * v) <= SUM(y * v)
-
--- A plain data column as the bound of a grouped constraint
-SUCH THAT SUM(ship) <= stock PER depotID
-
--- A data-only aggregate as the bound
-SUCH THAT SUM(x * val) <= SUM(val)</code></pre>
-              </div>
-              <p class="text-fg-muted text-sm mb-8">
-                A side carrying no decision must still come down to one value per group. For <code>&lt;=</code> and <code>&lt;</code> that is the smallest value it takes in the group; for <code>&gt;=</code> and <code>&gt;</code>, the largest. <code>=</code> rejects a bound that varies within a group. <code>&lt;&gt;</code> keeps every value the bound takes as its own exclusion.
-              </p>
-
-              <!-- BETWEEN and IN -->
-              <h3 class="text-xl font-semibold text-fg mb-4">BETWEEN and IN</h3>
-              <p class="text-fg-muted mb-4">
-                Use <code>BETWEEN</code> to constrain a variable to a range, or <code>IN</code> to restrict it to specific discrete values. <code>IN</code> on an aggregate, such as <code>SUM(x) IN (...)</code>, is not supported.
-              </p>
-              <div class="code-block mb-8">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- x must be between 1 and 10 (inclusive)
-SUCH THAT x BETWEEN 1 AND 10
-
--- x must be one of these values
-SUCH THAT x IN (1, 2, 3)</code></pre>
-              </div>
-
-              <!-- Conditional constraints (WHEN) -->
-              <h3 class="text-xl font-semibold text-fg mb-4">Conditional Constraints (WHEN)</h3>
-              <p class="text-fg-muted mb-4">
-                Append <code>WHEN condition</code> to make a constraint apply only to rows (or groups) for which the condition holds. <code>WHEN</code> works as a postfix on both per-row and aggregate constraints, and the condition may reference table columns or constants (but not decision variables).
-              </p>
-              <div class="code-block mb-8">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- Per-row: x must be at most 1 only for premium items
-SUCH THAT x <= 1 WHEN tier = 'premium'
-
--- Aggregate: sum only over rows where category = 'A'
-SUCH THAT SUM(x * weight) <= 50 WHEN category = 'A'</code></pre>
-              </div>
-
-              <h3 class="text-xl font-semibold text-fg mb-4">Aggregate-Local WHEN</h3>
-              <p class="text-fg-muted mb-4">
-                A <code>WHEN</code> can attach to a single aggregate inside a larger expression. It filters only that aggregate; the other terms keep their own rows.
-              </p>
-              <div class="code-block mb-4">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- Morning hours and evening hours together at most 40
-SUCH THAT
-    SUM(x * h) WHEN (shift = 'morning') + SUM(x * h) WHEN (shift = 'evening') <= 40
-
--- In an objective, a single simple comparison needs no parentheses
-MAXIMIZE SUM(x * profit) WHEN category = 'electronics'</code></pre>
-              </div>
-              <p class="text-fg-muted text-sm mb-4">
-                In a constraint the condition must be parenthesised, so that the trailing comparison stays the bound. An objective has no trailing bound, so a single simple comparison may omit them. Parenthesise any condition containing <code>AND</code>, <code>OR</code>, <code>NOT</code>, or arithmetic.
-              </p>
-              <div class="code-block mb-4">
-                <div class="code-header"><span class="language-label">Error &mdash; unparenthesised condition in a constraint</span></div>
-                <pre class="text-sm"><code>syntax error at or near "="
-Hint: wrap the WHEN condition in parentheses &mdash; e.g. WHEN (a = b),
-WHEN (NOT flag), or WHEN (a + b > 5).</code></pre>
-              </div>
-              <p class="text-fg-muted text-sm mb-8">
-                Do not mix an aggregate-local <code>WHEN</code> with a <code>WHEN</code> on the whole constraint or objective. Use one or the other.
-              </p>
-
-              <!-- Grouped constraints (PER) -->
-              <h3 class="text-xl font-semibold text-fg mb-4">Grouped Constraints (PER)</h3>
-              <p class="text-fg-muted mb-4">
-                Append <code>PER column</code> (or <code>PER (col1, col2, ...)</code>) to an aggregate constraint to emit one constraint per distinct value (or combination) of those columns. Empty groups (filtered out by <code>WHEN</code>) are skipped.
-              </p>
-              <p class="text-fg-muted mb-4">
-                A <code>PER</code> column may be written bare or qualified &mdash; <code>PER empID</code>, <code>PER e.empID</code> and <code>PER employees.empID</code> all mean the same thing. Use the qualifier when a join makes the bare name ambiguous. Mixed forms such as <code>PER (empID, dept.id)</code> are accepted. Rows where a <code>PER</code> column is NULL are left out of every group.
-              </p>
-              <div class="code-block mb-8">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- One assignment per worker
-SUCH THAT SUM(x) <= 1 PER worker_id
-
--- At most 2 items per (sector, region) pair
-SUCH THAT SUM(x) <= 2 PER (sector, region)</code></pre>
-              </div>
-
-              <!-- MIN / MAX -->
-              <h3 class="text-xl font-semibold text-fg mb-4">MIN and MAX in Constraints</h3>
-              <p class="text-fg-muted mb-4">
-                <code>MIN(expr)</code> and <code>MAX(expr)</code> over a linear expression are supported, in both directions and with <code>=</code>.
-              </p>
-              <p class="text-fg-muted mb-4">
-                A <code>MIN</code> or <code>MAX</code> term may also sit inside a larger sum, as in <code>SUM(x) + MAX(x * v) &lt;= 40</code>. In that composed form the outer comparison may be <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code> or <code>BETWEEN low AND high</code> for a genuine range. Direct equality on the composed expression is not supported in the current implementation.
-              </p>
-              <div class="code-block mb-8">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- No row exceeds capacity
-SUCH THAT MAX(x * weight) <= 50
-
--- At least one row must reach the target
-SUCH THAT MAX(x * value) >= 100</code></pre>
-              </div>
-
-              <!-- AVG and ABS -->
-              <h3 class="text-xl font-semibold text-fg mb-4">AVG and ABS</h3>
-              <p class="text-fg-muted mb-4">
-                <code>AVG(expr)</code> and <code>ABS(linear_expr)</code> are both supported in constraints. <code>AVG</code> averages over the rows the constraint covers, which under <code>WHEN</code> or <code>PER</code> is the rows left in the group.
-              </p>
-              <div class="code-block mb-8">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- Average cost across selected items at most 25
-SUCH THAT AVG(x * cost) <= 25
-
--- Deviation from target within tolerance
-SUCH THAT ABS(x - target) <= 5</code></pre>
-              </div>
-
-              <!-- Scalar Subqueries -->
-              <h3 class="text-xl font-semibold text-fg mb-4">Scalar Subqueries</h3>
-              <p class="text-fg-muted mb-4">
-                A subquery on the right-hand side of a constraint can compute a bound from another table. Both uncorrelated and correlated subqueries are accepted: correlated subqueries are decorrelated into joins so they produce a per-row value. An ordinary RHS subquery cannot reference a decision variable declared by the enclosing query.
-              </p>
-              <div class="code-block mb-4">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- Uncorrelated: a single scalar bound shared by all rows
-SUCH THAT
-    SUM(x) <= (SELECT COUNT(*) FROM Drivers)
-
--- Correlated: per-row bound pulled from another table
-SUCH THAT
-    x <= (SELECT budget FROM Depts WHERE Depts.id = Items.dept_id)</code></pre>
-              </div>
-
-              <p class="text-fg-muted text-sm mb-8">
-                For aggregate constraints, the subquery RHS must evaluate to the same scalar for all rows in the aggregate. A scalar RHS subquery may contain its own <code>DECIDE</code> clause; that inner decision query is solved first and supplies the outer bound. It cannot reference decision variables declared by the enclosing query.
-              </p>
-
-              <!-- Casts -->
-              <h3 class="text-xl font-semibold text-fg mb-4">Casts</h3>
-              <p class="text-fg-muted mb-4">
-                A cast over a decision is rejected inside <code>SUCH THAT</code> and the objective. This covers <code>CAST</code>, <code>TRY_CAST</code> and <code>::</code>, whatever the target type. Cast the data or the bound instead.
-              </p>
-              <div class="code-block mb-4">
-                <div class="code-header"><span class="language-label">Error &mdash; <code>SUCH THAT CAST(x AS INTEGER) &lt;= 3</code></span></div>
-                <pre class="text-sm"><code>DECIDE does not allow casts over decision expressions: 'CAST(x AS INTEGER)'.
-Decision values are modeled directly as DOUBLE. Remove the cast; casts over
-data-only expressions are allowed.</code></pre>
-              </div>
-              <div class="code-block mb-4">
-                <div class="code-header">
-                  <span class="language-label">SQL &mdash; the accepted forms</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- Cast the bound
-SUCH THAT x <= CAST(3.7 AS INTEGER)
-
--- Cast the data
-MAXIMIZE SUM(x * CAST(price AS BIGINT))
-
--- Ordinary SQL casts in the SELECT list work as usual
-SELECT id, CAST(x AS INTEGER) AS chosen FROM ...</code></pre>
-              </div>
-              <p class="text-fg-muted text-sm mb-8">
-                A cast DuckDB inserts on its own, to reconcile SQL types, is not affected by this rule.
-              </p>
-
-              <!-- NULLs -->
-              <h3 class="text-xl font-semibold text-fg mb-4">NULLs</h3>
-              <p class="text-fg-muted mb-4">
-                A NULL in any number the solver reads &mdash; a coefficient, a bound, anything inside a <code>SUM</code> &mdash; stops the query. It is never treated as zero, because a missing weight and a weight of zero are different problems and only you know which one you meant.
-              </p>
-              <div class="code-block mb-4">
-                <div class="code-header"><span class="language-label">Error</span></div>
-                <pre class="text-sm"><code>DECIDE: column "weight" is NULL. Impute it with COALESCE(weight, 0)
-or filter those rows out with a WHERE clause.</code></pre>
-              </div>
-              <p class="text-fg-muted mb-4">
-                Both fixes work, and the <code>COALESCE</code> can go inside the <code>SUM</code>:
-              </p>
-              <div class="code-block mb-4">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- Treat a missing weight as zero
-SUCH THAT SUM(x * COALESCE(weight, 0)) <= 50
-
--- Or drop those rows before deciding
-WHERE weight IS NOT NULL</code></pre>
-              </div>
-              <p class="text-fg-muted text-sm mb-8">
-                A NULL in a <code>WHEN</code> condition or <code>PER</code> key excludes that row from the filter or group. A NULL coefficient or bound still raises an error even when the clause also uses <code>WHEN</code> or <code>PER</code>.
-              </p>
-
-              <!-- Expression shapes -->
-              <h3 class="text-xl font-semibold text-fg mb-4">Expression Shapes</h3>
-              <p class="text-fg-muted mb-6">
-                Terms in constraints (and objectives) can be linear, quadratic, or bilinear. Total degree must be at most 2 &mdash; products of three or more decision variables are rejected.
-              </p>
-
-              <div class="grid md:grid-cols-2 gap-6 mb-4">
-                <!-- Linear -->
-                <div>
-                  <h4 class="font-semibold text-fg mb-3 flex items-center gap-2">
-                    <i data-lucide="check-circle" class="w-4 h-4 text-success"></i>
-                    Always linear
-                  </h4>
-                  <div class="code-block">
-                    <div class="code-header">
-                      <span class="language-label">SQL</span>
-                    </div>
-                    <pre class="language-sql"><code>x * 5
-x * price
-SUM(x * price + y * cost)</code></pre>
-                  </div>
-                </div>
-
-                <!-- Quadratic / bilinear -->
-                <div>
-                  <h4 class="font-semibold text-fg mb-3 flex items-center gap-2">
-                    <i data-lucide="check-circle" class="w-4 h-4 text-success"></i>
-                    Quadratic / bilinear
-                  </h4>
-                  <div class="code-block">
-                    <div class="code-header">
-                      <span class="language-label">SQL</span>
-                    </div>
-                    <pre class="language-sql"><code>POWER(x - target, 2)
-(x - target) ** 2
-x * y</code></pre>
-                  </div>
-                </div>
-              </div>
-
-              <p class="text-fg-muted text-sm mb-4">
-                <strong>Solver coverage.</strong> Both Gurobi and HiGHS support continuous convex quadratic objectives with a non-singular quadratic matrix, and both handle bilinear products where one factor is <code>BOOL</code> through linearization. Coupled or rank-deficient quadratic groups, non-convex quadratic objectives (<code>MAXIMIZE SUM(POWER(expr, 2))</code>), mixed-integer quadratic objectives, general bilinear products of non-Boolean variables, and quadratic constraints are <strong>Gurobi only</strong>.
-              </p>
-
-              <div class="mb-8">
-                <h4 class="font-semibold text-fg mb-3 flex items-center gap-2">
-                  <i data-lucide="x-circle" class="w-4 h-4 text-danger"></i>
-                  Still invalid
-                </h4>
-                <div class="code-block">
-                  <div class="code-header">
-                    <span class="language-label">SQL</span>
-                  </div>
-                  <pre class="language-sql"><code>SIN(x)              -- non-polynomial functions
-x * x * x           -- total degree > 2
-POWER(x, 3)         -- only exponent 2 is supported</code></pre>
-                </div>
-              </div>
-
-              <!-- Quadratic constraints (QCQP) -->
-              <h3 class="text-xl font-semibold text-fg mb-4">Quadratic Constraints (QCQP)</h3>
-              <p class="text-fg-muted mb-4">
-                Constraints whose left-hand side contains a <code>POWER(linear_expr, 2)</code>, <code>expr ** 2</code>, or <code>(expr)*(expr)</code> term &mdash; or a bilinear product of non-Boolean variables &mdash; are supported with Gurobi via <code>GRBaddqconstr</code>. HiGHS rejects these with a clear error.
-              </p>
-              <div class="code-block mb-8">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- Per-row: distance from target within a radius
-SUCH THAT POWER(x - target, 2) <= 9
-
--- Aggregate: total variance budget
-SUCH THAT SUM(POWER(x - target, 2)) <= 1000</code></pre>
-              </div>
-
-              <!-- Combining Constraints -->
-              <h3 class="text-xl font-semibold text-fg mb-4">Full Example</h3>
-              <div class="code-block">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>SELECT id, value, weight, x
+    <article class="prose">
+
+      <!-- ============================================================ OVERVIEW -->
+      <section id="overview">
+        <h2>Overview <a class="anchor" href="#overview">#</a></h2>
+        <p class="lead">A DECIDE query is a <code>SELECT</code> that also declares decisions, the constraints they must
+          satisfy and, optionally, what to optimize. DeciDB builds a model from the query's rows, solves it, and returns
+          the rows with the decisions filled in.</p>
+        <p>Two clause orders parse to the same plan. Write the declaration in one place, never both:</p>
+<div class="code"><div class="code-head"><span class="code-title">SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">-- The paper&#x27;s order: the declaration between SELECT and FROM
+SELECT ...
+DECIDE [per key:] name(type) [, ...]
+FROM ... [JOIN ...] [WHERE ...]
+SUCH THAT [scope:] constraint [AND [scope:] constraint ...]
+[MAXIMIZE | MINIMIZE [when condition:] objective]
+
+-- Single-block order: everything after WHERE
+SELECT ... FROM ... [WHERE ...]
+DECIDE [per key:] name(type) [, ...]
+SUCH THAT ...
+[MAXIMIZE | MINIMIZE ...]</code></pre></div>
+        <ul>
+          <li><code>FROM</code>, joins and <code>WHERE</code> run first. Their result rows are the rows decisions are made over.</li>
+          <li><code>SUCH THAT</code> is required. Constraints are joined by <code>AND</code>; a comma between them is an error.</li>
+          <li>No objective means a feasibility problem: any assignment that satisfies every constraint.</li>
+          <li><code>SELECT</code>, <code>ORDER BY</code> and any outer query run after the solve and see decisions as
+            ordinary columns.</li>
+        </ul>
+        <h3>Grammar</h3>
+<div class="code"><div class="code-head"><span class="code-title">Grammar</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-none">decide_list ::= declarator (&#x27;,&#x27; declarator)*
+declarator  ::= [&#x27;per&#x27; key &#x27;:&#x27;] name &#x27;(&#x27; INT | BOOL | REAL &#x27;)&#x27;
+constraint  ::= [scope &#x27;:&#x27;] comparison
+objective   ::= (MAXIMIZE | MINIMIZE) [scope &#x27;:&#x27;] expression     -- the objective takes no per but ()
+scope       ::= [&#x27;when&#x27; condition] [&#x27;per&#x27; key]                    -- at least one of the two
+reducer     ::= agg &#x27;(&#x27; [scope &#x27;:&#x27;] expression &#x27;)&#x27; [&#x27;by&#x27; &#x27;(&#x27; [expression, ...] &#x27;)&#x27;]
+              | agg &#x27;(&#x27; relation, ... &#x27;:&#x27; expression &#x27;)&#x27; [&#x27;by&#x27; ...]
+agg         ::= SUM | AVG | MIN | MAX                             -- norm(e, p) and count(*) take a by
+key         ::= &#x27;(&#x27; &#x27;)&#x27;  |  &#x27;row&#x27;  |  element (&#x27;,&#x27; element)*
+element     ::= column | relation                                 -- a relation stands for all its columns</code></pre></div>
+        <p>Inside a DECIDE clause, <code>when</code>, <code>per</code>, a <code>by</code> right after <code>)</code> and a
+          <code>row</code> right after <code>per</code> are keywords. Quote a column with one of those names there:
+          <code>x &lt;= "per"</code>. Outside the clause nothing changes; <code>GROUP BY</code> and
+          <code>ORDER BY</code> in a subquery are untouched.</p>
+      </section>
+
+      <!-- ============================================================ DECISIONS -->
+      <section id="decisions">
+        <h2>Decisions <a class="anchor" href="#decisions">#</a></h2>
+        <p>Each declarator has a name and a mandatory type. Reference a decision by its bare name in
+          <code>SUCH THAT</code>, the objective, <code>SELECT</code> and <code>ORDER BY</code>.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Type</th><th>Domain</th><th>Result type</th></tr></thead>
+          <tbody>
+            <tr><td><code>x(BOOL)</code></td><td>{0, 1}</td><td><code>INTEGER</code></td></tr>
+            <tr><td><code>x(INT)</code></td><td>0, 1, 2, … by default</td><td><code>BIGINT</code></td></tr>
+            <tr><td><code>x(REAL)</code></td><td>[0, ∞) by default</td><td><code>DOUBLE</code></td></tr>
+          </tbody>
+        </table></div>
+        <h3>Signed decisions</h3>
+        <p>Zero is a default lower bound for <code>INT</code> and <code>REAL</code>, not a floor. A decision becomes
+          signed when the query bounds it alone below zero: <code>x &gt;= -K</code> in any affine spelling,
+          <code>x BETWEEN -K AND K</code>, an easy <code>MIN(x) &gt;= -K</code>, or a negative value in an
+          <code>IN</code> list. Under a <code>when</code>, only the rows it keeps take the negative floor.</p>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">x BETWEEN -2 AND 2 AND SUM(x * weight) &lt;= 40</code></pre></div>
+        <p>There is no fully free domain: a signed decision always has a finite lower bound, unless the query writes
+          <code>-1e30</code> or below.</p>
+        <h3>How many decisions</h3>
+        <p>The declaration's key sets how many decisions a declarator makes. Each declarator has its own key.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Spelling</th><th>Scope</th><th>Decisions</th></tr></thead>
+          <tbody>
+            <tr><td><code>x(INT)</code>, <code>per row: x(INT)</code></td><td>per row (default)</td><td>one per result row</td></tr>
+            <tr><td><code>per K: x(INT)</code></td><td>keyed</td><td>one per distinct value of <code>K</code> among the result rows</td></tr>
+            <tr><td><code>per (): x(INT)</code></td><td>query-wide</td><td>exactly one</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3 id="keyed">Keyed decisions: <code>per K: x(TYPE)</code> <a class="anchor" href="#keyed">#</a></h3>
+<div class="code"><div class="code-head"><span class="code-title">SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">DECIDE per D.depotID: reserve(REAL)              -- one per distinct depotID
+DECIDE per D: open(BOOL)                         -- one per distinct row of D
+DECIDE per D.region, S.shipmentID: alloc(INT)    -- one per distinct pair, across relations
+DECIDE ship(INT), per D: open(BOOL), per (): cap(INT)   -- each declarator has its own key</code></pre></div>
+        <ul>
+          <li>Key elements are columns and relations of the <code>FROM</code> clause, spelled as anywhere in the query.
+            A relation stands for all its stored columns. Expressions belong in <code>by</code>, not in a key.</li>
+          <li>A key is a set: <code>per a, b</code> and <code>per b, a</code> are the same key.</li>
+          <li>Every row shows its class's value. A row whose key column is NULL is in no class and has no decision; it
+            shows NULL.</li>
+        </ul>
+        <div class="callout"><strong>Sums count result rows</strong>
+          <p>Over a join, a keyed decision appears on every row of its key, and an unscoped <code>SUM</code> reads it once
+            per row, as SQL would. To count each class once, give the reducer its own <code>per</code>
+            (<code>SUM(per n: keep * skill)</code>) or use the <a href="#colon-form">colon form</a>. See
+            <a href="examples/keyed-decisions.html">the nurse example</a>.</p></div>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SELECT n.name, s.shift_date, keep
+FROM nurses n JOIN shifts s ON n.id = s.nurse_id
+DECIDE per n: keep(BOOL)
+SUCH THAT SUM(keep * s.hours) &lt;= 60            -- one term per shift row
+MAXIMIZE SUM(per n: keep * n.skill_score);     -- each nurse&#x27;s skill once</code></pre></div>
+
+        <h3 id="query-wide">Query-wide decisions: <code>per (): x(TYPE)</code> <a class="anchor" href="#query-wide">#</a></h3>
+        <p>One decision for the whole query, whatever the input size: a threshold, a shared ceiling, a worst case. Its
+          value repeats on every row. It may stand beside a reducer or be its bound under any <code>per</code>, and it
+          counts once.</p>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">-- The DeciDB paper&#x27;s Example 1: no region falls short by more than max_shortfall
+SELECT r.routeID, r.regionID, ship, max_shortfall
+FROM routes r JOIN regions g USING (regionID)
+DECIDE ship(INT), per (): max_shortfall(INT)
+SUCH THAT ship &lt;= r.capacity AND SUM(ship) &lt;= 40
+      AND per g: g.demand - SUM(ship) by (g) &lt;= max_shortfall
+MINIMIZE max_shortfall;</code></pre></div>
+        <p>A sum over query-wide decisions alone (<code>SUM(cap)</code>) is refused as a constraint's whole decision
+          side: there is one value and nothing to add up, so write <code>cap</code>. Mixed with row data it is ordinary
+          scaling: <code>SUM(cost * cap)</code> is <code>(Σ cost) · cap</code>.</p>
+      </section>
+
+      <!-- ============================================================ CONSTRAINTS -->
+      <section id="constraints">
+        <h2>Constraints <a class="anchor" href="#constraints">#</a></h2>
+        <p>Every constraint must hold. Join them with <code>AND</code>; <code>OR</code> between constraints is refused,
+          because a choice between alternatives is a <code>BOOL</code> decision. <code>OR</code> inside a
+          <code>when</code> or a subquery is data and unaffected.</p>
+        <p>A constraint with no reducer holds on every row (<code>units &lt;= capacity</code>). One with a reducer holds
+          over the rows the reducer reads (<code>SUM(units) &gt;= 500</code>). Either side may carry decisions:
+          <code>5 &gt;= x</code> and <code>x &lt;= 5</code> are the same constraint, and a reducer may sit on both
+          sides.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Operator</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>=</code> <code>&lt;=</code> <code>&gt;=</code></td><td>Any decisions.</td></tr>
+            <tr><td><code>&lt;</code> <code>&gt;</code> <code>&lt;&gt;</code></td><td>Exact only on whole numbers, so each
+              side must have an integer type: <code>INT</code>/<code>BOOL</code> decisions and integer or
+              <code>DECIMAL(p, 0)</code> data. Checked on declared types, so one fractional row can never break a working
+              query. <code>SUM(x) &lt;&gt; 0</code> over non-negative decisions becomes <code>SUM(x) &gt;= 1</code>.</td></tr>
+            <tr><td><code>BETWEEN</code></td><td>Two constraints under one scope.</td></tr>
+            <tr><td><code>IN</code></td><td>On a decision, restricts its domain: <code>x IN (0, 2, 3)</code>. On a column, a filter.</td></tr>
+          </tbody>
+        </table></div>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">x IN (0, 2, 3) AND SUM(x * weight) &lt;= 80 AND SUM(x) &lt;&gt; 4</code></pre></div>
+<div class="query-result"><div class="code"><div class="code-head"><span class="code-title">SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SUM(x * weight) &gt; 40</code></pre></div><div class="result"><div class="result-head"><b>Error</b><span>refused before solving</span></div><pre class="err">Binder Error: Strict inequality &#x27;&gt;&#x27; is not supported over the REAL decision &#x27;x&#x27;: &#x27;SUM(x * weight) &gt; 40&#x27;. A REAL decision takes any value up to the bound, so there is no next value to stop at. Use &#x27;&gt;=&#x27; instead, and move the bound by one step if the compared quantity is a count or other whole number.</pre></div></div>
+        <h3>What a term may hold</h3>
+        <ul>
+          <li><strong>Data.</strong> Any operand that reads no decision is data, evaluated per row exactly as SQL would:
+            arithmetic, functions, <code>CASE</code>, comparisons as 0/1, lambdas, prepared-statement parameters.</li>
+          <li><strong>Decisions.</strong> Linear terms, products of two decisions and squares
+            (<code>POWER(e, 2)</code>, <code>e ** 2</code>, <code>e * e</code>). <code>ABS</code> and
+            <code>POWER</code> with a whole exponent are the only functions that take a decision. A term of degree 3 or
+            more, a division by a decision, a cast of a decision or a <code>CASE</code> over a decision is refused, with
+            a message that quotes the clause.</li>
+          <li><strong>Subqueries.</strong> Scalar subqueries, correlated or not, may be bounds or factors. A subquery
+            cannot read the enclosing query's decisions.</li>
+        </ul>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SUM(x * weight) &lt;= (SELECT MAX(weight) * 2 FROM Items)
+      AND x &lt;= CASE WHEN category = &#x27;tech&#x27; THEN 1 ELSE 0 END + 1</code></pre></div>
+        <h3>A DECIDE inside a bound</h3>
+        <p>A scalar subquery that bounds a constraint may hold its own <code>DECIDE</code>. It solves first and its
+          one-row result becomes the bound. Here: the lightest bag worth at least as much as the best 30 kg bag.</p>
+<div class="query-result"><div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SELECT item, value, weight, x
 FROM Items
 DECIDE x(BOOL)
-SUCH THAT
-    SUM(x * weight) <= 100
-    AND SUM(x * volume) <= 50
-    AND SUM(x) >= 5
-    AND SUM(x) <= (SELECT capacity FROM Config WHERE name = 'max_items')
-MAXIMIZE SUM(x * value);</code></pre>
-              </div>
-              <p class="text-fg-muted text-sm mt-3">
-                Select at least 5 items without exceeding weight, volume, or capacity limits. Maximize total value.
-              </p>
-            </section>
+SUCH THAT SUM(x * value) &gt;= (
+    SELECT SUM(y * value) FROM (
+        SELECT value, y FROM Items
+        DECIDE y(BOOL)
+        SUCH THAT SUM(y * weight) &lt;= 30
+        MAXIMIZE SUM(y * value)))
+MINIMIZE SUM(x * weight);</code></pre></div><div class="result"><div class="result-head"><b>Result</b><span>5 rows</span></div><div class="result-scroll"><table><thead><tr><th class="">item</th><th class="num">value</th><th class="num">weight</th><th class="dec num">x</th></tr></thead><tbody><tr class="on"><td>Laptop</td><td class="num">100</td><td class="num">20</td><td class="num dec">1</td></tr><tr class="on"><td>Camera</td><td class="num">60</td><td class="num">10</td><td class="num dec">1</td></tr><tr><td>Drone</td><td class="num">120</td><td class="num">30</td><td class="num dec">0</td></tr><tr><td>Tripod</td><td class="num">40</td><td class="num">15</td><td class="num dec">0</td></tr><tr><td>Lens</td><td class="num">75</td><td class="num">12</td><td class="num dec">0</td></tr></tbody></table></div></div></div>
+      </section>
 
-            <!-- ============================================
-                 THE OBJECTIVE CLAUSE
-                 ============================================ -->
-            <section id="objective" class="mb-20">
-              <h2 class="text-3xl text-fg mb-6">The Objective Clause</h2>
+      <!-- ============================================================ SCOPES -->
+      <section id="scopes">
+        <h2>Scopes: <code>per</code>, <code>when</code>, <code>by</code> <a class="anchor" href="#scopes">#</a></h2>
+        <p class="lead">Three keywords, three separate jobs.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Keyword</th><th>Where</th><th>Job</th></tr></thead>
+          <tbody>
+            <tr><td><code>per K</code></td><td>in front of a declarator, a constraint, the objective, or a reducer's argument</td><td>how many: one decision, constraint or reducer input per class of <code>K</code></td></tr>
+            <tr><td><code>when c</code></td><td>in front of a constraint, the objective, or a reducer's argument</td><td>which rows are looked at: those where <code>c</code> is true</td></tr>
+            <tr><td><code>by (Γ)</code></td><td>right after a reducer</td><td>which rows that one reducer reads: the kept rows sharing the current value of <code>Γ</code></td></tr>
+          </tbody>
+        </table></div>
+        <p><code>when</code> comes before <code>per</code>, and a colon follows the scope. A scope covers one constraint:
+          in <code>per g: A AND B</code>, only <code>A</code> is scoped.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Omitted</th><th>Means</th></tr></thead>
+          <tbody>
+            <tr><td><code>per</code> on a declarator, a constraint or inside a reducer</td><td><code>per row</code></td></tr>
+            <tr><td><code>per</code> on the objective</td><td><code>per ()</code>: the objective is produced once</td></tr>
+            <tr><td><code>by</code></td><td><code>by ()</code>: all kept rows</td></tr>
+            <tr><td><code>when</code></td><td>every row</td></tr>
+          </tbody>
+        </table></div>
+        <p><code>per</code> never selects the rows a reducer reads, and <code>by</code> never changes how many
+          constraints exist. One constraint often needs both:</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Written</th><th>Constraints</th><th>Each reducer reads</th></tr></thead>
+          <tbody>
+            <tr><td><code>ship &lt;= 0.20 * SUM(ship)</code></td><td>one per row</td><td>all rows</td></tr>
+            <tr><td><code>per (): SUM(ship) &lt;= networkCapacity</code></td><td>one</td><td>all rows</td></tr>
+            <tr><td><code>per D.depotID: SUM(ship) by (D.depotID) &lt;= D.capacity</code></td><td>one per depot</td><td>that depot's rows</td></tr>
+            <tr><td><code>ship &lt;= D.maxShipmentShare * SUM(ship) by (D.depotID)</code></td><td>one per row</td><td>that row's depot</td></tr>
+            <tr><td><code>per D.depotID: SUM(ship) by (D.region) &lt;= D.capacity</code></td><td>one per depot</td><td>the depot's region</td></tr>
+          </tbody>
+        </table></div>
+        <p>These come from the language proposal's worked examples, over shipments joined to depots
+          (<code>FROM Shipment S JOIN Depot D USING (depotID)</code>, with <code>DECIDE ship(INT), per D.depotID: reserve(REAL)</code>).
+          All of them run:</p>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>Examples 1–4</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">ship &lt;= 0.20 * SUM(ship)
+AND per (): SUM(ship) &lt;= networkCapacity
+AND per D.depotID: reserve &gt;= D.networkReserveShare * SUM(S.demand)
+AND per D.depotID: SUM(ship) by (D.depotID) &lt;= D.capacity</code></pre></div>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>Examples 5–8</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">ship &lt;= D.maxShipmentShare * SUM(ship) by (D.depotID)
+AND per D.depotID: reserve &gt;= 0.10 * SUM(S.demand) by (D.region) + 0.02 * SUM(S.demand) by (D.country)
+AND per D.depotID: SUM(when S.priority: ship) by (D.depotID) &lt;= D.priorityCapacity
+AND per S.shipmentID: ship &lt;= 0.25 * SUM(ship) by (D.depotID, S.dispatchDay + S.transitDays)</code></pre></div>
+        <ul>
+          <li><strong><code>per K</code></strong> lists columns and relations without parentheses (<code>per a, b:</code>);
+            <code>per ():</code> is exactly one; <code>per row:</code> is the default.</li>
+          <li><strong><code>when c</code></strong> is any boolean over data, ended by <code>per</code> or the colon, so
+            <code>when a and b:</code> needs no parentheses. NULL counts as false. It may not mention a decision, a
+            reducer or a window function. Nothing is computed on a row it drops, so <code>when s &lt;&gt; '' and
+            CAST(s AS INT) &gt; 3:</code> never casts an empty string.</li>
+          <li><strong><code>by (Γ)</code></strong> applies to <code>SUM</code>, <code>AVG</code>, <code>MIN</code>,
+            <code>MAX</code>, <code>norm</code> and <code>count(*)</code>, on either side, with or without a decision
+            inside. <code>Γ</code> lists columns, relations and data expressions, never a decision.</li>
+        </ul>
 
-              <p class="text-fg-muted mb-6">
-                Use <code>MAXIMIZE</code> or <code>MINIMIZE</code> to tell the solver what to optimize. Row- and table-scoped decisions belong inside supported reducers; a query-wide <code>scalar</code> decision may also appear as a bare term. <code>SUM</code>, <code>AVG</code>, <code>MIN</code>, and <code>MAX</code> are supported, along with quadratic (<code>POWER</code>) and bilinear (<code>x * y</code>) shapes.
-              </p>
+        <h3 id="scope-order">How a scope is evaluated <a class="anchor" href="#scope-order">#</a></h3>
+        <ol>
+          <li><strong>Filter.</strong> Keep the rows where the <code>when</code> condition is true.</li>
+          <li><strong>Generate.</strong> Split the kept rows into classes by the <code>per</code> key; write the
+            constraint once per class.</li>
+          <li><strong>Aggregate.</strong> A reducer <code>agg(...) by (Γ)</code> reads every kept row whose
+            <code>Γ</code> equals the class's, including rows outside the class.</li>
+          <li><strong>Check.</strong> The key must determine every value the constraint reads once per class
+            (<a href="#determination">below</a>).</li>
+        </ol>
+<div class="code"><div class="code-head"><span class="code-title">per D.depotID: SUM(ship) by (D.region) &lt;= D.capacity</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-none">  shipment  depot  region  ship  capacity
+  S1        D1     North   x1    100
+  S2        D1     North   x2    100
+  S3        D2     North   x3     80
+  S4        D3     South   x4     50
 
-              <div class="code-block mb-8">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- Maximize total value of selected items
-MAXIMIZE SUM(x * value)
+  D1: x1 + x2 + x3 &lt;= 100    D2: x1 + x2 + x3 &lt;= 80    D3: x4 &lt;= 50</code></pre></div>
+        <p>A reducer inside a scope can have its own <code>when</code> and <code>per</code>, written
+          <code>agg(when c per K: e)</code>. The order is: the rows <code>by</code> selects, then the inner
+          <code>when</code>, then one value per class of the inner <code>per</code>, then the aggregate.</p>
+<div class="code"><div class="code-head"><span class="code-title">SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SUM(when S.priority: ship)                          -- only priority rows
+SUM(per D: D.opening_cost * open)                   -- each depot once
+SUM(when S.priority per D: D.opening_cost * open)   -- filter, then each remaining depot once</code></pre></div>
 
--- Minimize total cost
-MINIMIZE SUM(x * cost)
+        <h3 id="determination">The determination rule <a class="anchor" href="#determination">#</a></h3>
+        <p>A constraint written once per class must read one value per class. So a <code>per</code> key must
+          <em>determine</em> everything its body reads outside reducers (bounds, factors, decisions) and every
+          <code>by</code> key: every row of a class must carry the same value.</p>
+        <ul>
+          <li>A keyed decision is determined when each class lies inside one class of its own key; a per-row decision
+            only when each class is one row; a query-wide decision always.</li>
+          <li>Literals and uncorrelated subqueries are always determined. <code>per ()</code> and the objective need one
+            value over all kept rows.</li>
+          <li><strong>It is checked on the data</strong>, every run, before solving, on kept rows only. A query can pass on
+            one dataset and fail on another; a static check would have to refuse queries that are fine on their data.</li>
+        </ul>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">per D.depotID: SUM(ship) by (D.region) &lt;= 500   -- holds: each depot has one region</code></pre></div>
+<div class="query-result"><div class="code"><div class="code-head"><span class="code-title">SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">per D.depotID: ship &lt;= 10    -- fails: ship is per row, a depot has several rows</code></pre></div><div class="result"><div class="result-head"><b>Error</b><span>refused before solving</span></div><pre class="err">Invalid Input Error: DECIDE: per D.depotID does not determine the decision ship (declared per row). D.depotID = &#x27;D1&#x27; covers more than one ship.</pre></div></div>
+        <p>Without a <code>per</code>, a value that varies by row is reduced to its tightest value within each
+          <code>by</code> group instead: <code>SUM(ship) by (depotID) &lt;= stock</code> uses the smallest
+          <code>stock</code> for <code>&lt;=</code>, the largest for <code>&gt;=</code>. <code>=</code> refuses a bound
+          that varies.</p>
+      </section>
 
--- Complex coefficients work too
-MAXIMIZE SUM(x * (revenue - cost) * discount_factor)
+      <!-- ============================================================ REDUCERS -->
+      <section id="reducers">
+        <h2>Reducers <a class="anchor" href="#reducers">#</a></h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Reducer</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>SUM(e)</code></td><td>The primary reducer. Data-only terms inside it move to the bound.</td></tr>
+            <tr><td><code>AVG(e)</code></td><td><code>SUM(e) / n</code>, where <code>n</code> is the number of values it reads.</td></tr>
+            <tr><td><code>MIN(e)</code>, <code>MAX(e)</code></td><td>See <a href="#min-max">MIN and MAX</a>.</td></tr>
+            <tr><td><code>norm(e, p)</code></td><td>L1, squared L2, L∞ or L0. See <a href="#norm">norm()</a>.</td></tr>
+            <tr><td><code>count(*)</code></td><td>Data only: the number of kept rows; takes a <code>by</code>.</td></tr>
+          </tbody>
+        </table></div>
+        <p><code>COUNT(x)</code> over a decision is refused; count chosen rows with <code>SUM(x)</code>. A factor may
+          scale any reducer, on either side: <code>2 * SUM(x * p)</code>, <code>SUM(x) / 2</code>, <code>-MAX(e)</code>.
+          In a constraint the factor may be any data; in the objective it must be one value over the kept rows. A
+          <code>BOOL</code> decision may scale a bare reducer (<code>b * SUM(x) &lt;= 4</code>).</p>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">AVG(x * value) &gt;= 20 AND SUM(x * weight) &lt;= 2 * count(*) * 5</code></pre></div>
 
--- Multiple variables in one objective
-MAXIMIZE SUM(x * profit_a + y * profit_b)
+        <h3 id="colon-form">The colon form: <code>SUM(D: e)</code> <a class="anchor" href="#colon-form">#</a></h3>
+        <p><code>agg(Rel: e)</code> means <code>agg(per Rel: e)</code>: one term per tuple of the named relation instead of
+          one per result row. Use it for a fixed cost that a join repeats.</p>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SELECT S.shipmentID, D.depotID, open, ship
+FROM Shipment S JOIN Depot D USING (depotID)
+DECIDE per D: open(BOOL), ship(INT)
+SUCH THAT ship &lt;= S.demand * open AND SUM(ship) &gt;= 120
+MINIMIZE SUM(S.unit_cost * ship) + SUM(D: D.opening_cost * open);  -- each depot&#x27;s cost once</code></pre></div>
+        <ul>
+          <li>Identity is the tuple, not the value: two depots with equal cost are two terms. This is not
+            <code>SUM(DISTINCT ...)</code>.</li>
+          <li>The named relations must determine the body; this is checked on the data.</li>
+          <li><code>AVG(D: e)</code> divides by the number of depots. Naming several relations (<code>SUM(D, T: e)</code>)
+            removes the fan-out of each.</li>
+        </ul>
 
--- A query-wide decision contributes once, without a reducer
-MINIMIZE max_load - SUM(ship)</code></pre>
-              </div>
+        <h3 id="min-max">MIN and MAX <a class="anchor" href="#min-max">#</a></h3>
+        <p>The <em>easy</em> direction, <code>MAX(e) &lt;= K</code> or <code>MIN(e) &gt;= K</code>, bounds every member
+          and adds nothing to the model. The <em>hard</em> direction (the opposite, or <code>=</code>) adds an extremum
+          variable per group, tied to the members by indicator constraints, so every member needs a finite bound. In the
+          objective, <code>MINIMIZE MAX</code> and <code>MAXIMIZE MIN</code> are cheap; the other two directions add
+          indicators.</p>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">MAX(x * weight) &lt;= 40 AND MAX(x * weight) &gt;= 30 AND SUM(x) &lt;= 4</code></pre></div>
 
-              <h3 class="text-xl font-semibold text-fg mb-4">Requirements</h3>
-              <ul class="space-y-2 text-fg-muted mb-8">
-                <li class="flex items-start gap-2">
-                  <span class="text-fg mt-0.5">&bull;</span>
-                  <span>The objective must use a supported aggregate (<code>SUM</code>, <code>AVG</code>, <code>MIN</code>, <code>MAX</code>), a bare query-wide <code>scalar</code> decision, or an additive combination of those terms. A bare row- or table-scoped decision is ambiguous across rows and is rejected. <code>COUNT</code> is rejected: <em>"[MAXIMIZE|MINIMIZE] clause does not support function 'count', only SUM, AVG, MIN, or MAX is allowed."</em></span>
-                </li>
-                <li class="flex items-start gap-2">
-                  <span class="text-fg mt-0.5">&bull;</span>
-                  <span>Must involve at least one decision variable.</span>
-                </li>
-                <li class="flex items-start gap-2">
-                  <span class="text-fg mt-0.5">&bull;</span>
-                  <span>Each term has total degree at most 2 in decision variables (linear, quadratic via <code>POWER(expr, 2)</code>, or bilinear via <code>x * y</code>).</span>
-                </li>
-                <li class="flex items-start gap-2">
-                  <span class="text-fg mt-0.5">&bull;</span>
-                  <span>Constant terms are ignored (they don't affect which solution is optimal).</span>
-                </li>
-              </ul>
+        <h3 id="norm">norm(e, p) <a class="anchor" href="#norm">#</a></h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th><code>p</code></th><th>Means</th><th>Class</th></tr></thead>
+          <tbody>
+            <tr><td><code>1</code></td><td><code>SUM(ABS(e))</code></td><td>LP</td></tr>
+            <tr><td><code>2</code></td><td><code>SUM(POWER(e, 2))</code>, the squared L2 norm</td><td>convex QP</td></tr>
+            <tr><td><code>'inf'</code></td><td><code>MAX(ABS(e))</code></td><td>LP</td></tr>
+            <tr><td><code>0</code> or <code>0, M</code></td><td>the number of rows where <code>|e| ≥</code> a tolerance (1e-4)</td><td>MILP</td></tr>
+          </tbody>
+        </table></div>
+        <p>The L0 count is exact in every direction (cap, floor, <code>=</code>, <code>MAXIMIZE</code>); <code>e</code>
+          needs finite bounds. A <code>norm</code> takes a <code>when</code> or <code>per</code> in front of its clause and a
+          <code>by</code> after it, but no scope inside.</p>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SELECT item, price, new_price
+FROM Menu
+DECIDE new_price(REAL)
+SUCH THAT new_price BETWEEN floor AND ceiling
+      AND SUM(new_price * weekly_qty) &gt;= 16500
+      AND norm(new_price - price, 0) &lt;= 2       -- at most two prices change
+MINIMIZE norm(new_price - price, 1);            -- smallest total change</code></pre></div>
+      </section>
 
-              <!-- Quadratic objectives (QP) -->
-              <h3 class="text-xl font-semibold text-fg mb-4">Quadratic Objectives (QP)</h3>
-              <p class="text-fg-muted mb-4">
-                <code>SUM(POWER(linear_expr, 2))</code> turns the objective into a quadratic program. <code>MINIMIZE</code> with a positive coefficient is convex; HiGHS handles it when all decisions are continuous and the quadratic matrix is non-singular, while Gurobi also handles mixed-integer and coupled/rank-deficient forms. <code>MAXIMIZE</code> with a positive coefficient is non-convex and requires Gurobi (which handles it via <code>NonConvex=2</code>). Three equivalent syntactic forms are accepted:
-              </p>
-              <div class="code-block mb-8">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- Least-squares-style: pull every x toward a target
-MINIMIZE SUM(POWER(x - target, 2))
-MINIMIZE SUM((x - target) ** 2)
-MINIMIZE SUM((x - target) * (x - target))
+      <!-- ============================================================ OBJECTIVE -->
+      <section id="objective">
+        <h2>Objective <a class="anchor" href="#objective">#</a></h2>
+<div class="code"><div class="code-head"><span class="code-title">SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">MAXIMIZE SUM(ship)                                     -- produced once: per () implied
+MAXIMIZE when S.priority: SUM(ship)                    -- over the priority rows only
+MINIMIZE SUM(S.unit_cost * ship) + SUM(D: D.opening_cost * open)
+MINIMIZE max(per D.depotID: SUM(ship) by (D.depotID))  -- two-level form</code></pre></div>
+        <ul>
+          <li>The objective is produced once: no <code>per</code> means <code>per ()</code>, and any other
+            <code>per</code> is an error.</li>
+          <li>Its body is reducers, decisions outside them, and sums of those, with at least one decision.</li>
+          <li>A decision outside a reducer must have one instance over the kept rows: any <code>per ()</code> decision,
+            or a per-row or keyed one when the <code>when</code> keeps one row or class
+            (<code>MAXIMIZE when id = 3: x</code>).</li>
+          <li><code>when c</code> filters the rows for the whole objective. A term that reads no row is dropped.</li>
+        </ul>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">MINIMIZE when S.priority: SUM(S.unit_cost * ship) + SUM(D: D.opening_cost * open) + cap</code></pre></div>
 
--- Negation gives a concave QP (same backend limits under MAXIMIZE)
-MAXIMIZE SUM(-POWER(x - target, 2))</code></pre>
-              </div>
+        <h3 id="two-level">Two-level objective <a class="anchor" href="#two-level">#</a></h3>
+        <p><code>outer(per k: inner(e) by (k))</code> computes <code>inner</code> once per class of <code>k</code>, then
+          <code>outer</code> over those values. All nine <code>SUM</code>/<code>MIN</code>/<code>MAX</code> pairs work;
+          <code>k</code> may list several columns. It takes a minus sign or a constant factor and a <code>when</code> in
+          front. The <code>by</code> key must be the <code>per</code> key.</p>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SELECT M.machine, J.job, run
+FROM Jobs J CROSS JOIN Machines M
+DECIDE run(BOOL)
+SUCH THAT per J: SUM(run) by (J) = 1
+MINIMIZE max(per M.machine: SUM(run * J.hours) by (M.machine));   -- the busiest machine</code></pre></div>
 
-              <!-- Bilinear objectives -->
-              <h3 class="text-xl font-semibold text-fg mb-4">Bilinear Objectives</h3>
-              <p class="text-fg-muted mb-4">
-                Products of two different decision variables (<code>x * y</code>) are allowed in objectives. When one factor is <code>BOOL</code>, both solvers handle the product, provided the other factor has a finite upper bound &mdash; either one you write (<code>x &lt;= K</code>) or one implied by a constraint such as <code>SUM(x) &lt;= K</code>. General bilinear products between non-Boolean variables are Gurobi only.
-              </p>
-              <div class="code-block mb-8">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- Boolean * Integer: maximize selected-revenue, where x is binary
-MAXIMIZE SUM(x * quantity * unit_price)</code></pre>
-              </div>
+        <h3 id="quadratic">Quadratic and bilinear terms <a class="anchor" href="#quadratic">#</a></h3>
+        <ul>
+          <li><strong>Squares.</strong> <code>MINIMIZE SUM(POWER(linear, 2))</code> is a convex QP on both solvers (on
+            HiGHS when continuous and the matrix is non-singular). <code>-POWER(...)</code> under <code>MAXIMIZE</code>
+            is concave and also fine. <code>MAXIMIZE SUM(POWER(...))</code> is non-convex: Gurobi only. Any number of
+            squares may be added together.</li>
+          <li><strong>Quadratic constraints</strong>, such as <code>SUM(POWER(x - target, 2)) &lt;= 9</code>, need
+            Gurobi.</li>
+          <li><strong>Products of two decisions.</strong> With one <code>BOOL</code> factor, <code>b * x</code> is
+            linearized exactly and runs on both solvers (the other factor needs a finite upper bound). Otherwise it is
+            non-convex and Gurobi only. Three decision factors are refused.</li>
+          <li>Integer decisions with a quadratic objective (MIQP) need Gurobi.</li>
+        </ul>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SELECT asset, w
+FROM Holdings
+DECIDE w(REAL)
+SUCH THAT w &lt;= max_weight AND SUM(w) = 1
+      AND SUM(POWER(w - target, 2)) &lt;= 0.02             -- a quadratic constraint (Gurobi)
+MINIMIZE SUM(POWER(w - target, 2)) + 0.1 * norm(w - target, 1);</code></pre></div>
+        <p>A query whose class the available solver cannot take is refused at plan time, before any row is read, with a
+          message naming the clause and the solver it needs. See <a href="problems.html#classes">problem classes</a>.</p>
+      </section>
 
-              <!-- PER on objectives -->
-              <h3 class="text-xl font-semibold text-fg mb-4">PER on Objectives</h3>
-              <p class="text-fg-muted mb-4">
-                The objective can carry a <code>PER</code> grouping by nesting an inner aggregate inside an outer one. The inner aggregate runs per group; the outer aggregates the per-group values into a single scalar to optimize.
-              </p>
-              <div class="code-block mb-8">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- Minimize the worst region's loss (maximin over regions)
-MAXIMIZE MIN(SUM(x * profit)) PER region</code></pre>
-              </div>
+      <!-- ============================================================ NULLS -->
+      <section id="nulls">
+        <h2>NULL and empty groups <a class="anchor" href="#nulls">#</a></h2>
+        <p>A NULL data value is skipped where it is read, never read as zero.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Situation</th><th>Outcome</th></tr></thead>
+          <tbody>
+            <tr><td>NULL in a declaration, <code>per</code> or <code>by</code> key column</td><td>no class or group for that row (a relation key compares NULL as a value)</td></tr>
+            <tr><td>a keyed decision on a NULL-key row</td><td>no decision: the row shows NULL</td></tr>
+            <tr><td>NULL <code>when</code> condition</td><td>the row is dropped</td></tr>
+            <tr><td>NULL in a reducer's summand</td><td>the row is skipped, as in SQL; <code>AVG</code> divides by the rows kept</td></tr>
+            <tr><td>NULL bound or coefficient outside a reducer</td><td>that instance of the constraint is skipped</td></tr>
+            <tr><td>NULL in an objective term</td><td>the term is dropped</td></tr>
+            <tr><td>a <code>when</code> that keeps no row, or a group a reducer reads nothing from</td><td>no constraint there</td></tr>
+            <tr><td><code>count(*)</code> over no rows</td><td>0, as in SQL</td></tr>
+            <tr><td>NULL written beside a decision (<code>SUM(x + NULL)</code>), NaN in data, an infinite coefficient</td><td>an error that names the value</td></tr>
+          </tbody>
+        </table></div>
+        <p>To impute instead of skip, write it: <code>SUM(x * COALESCE(w, 0))</code>.</p>
+      </section>
 
-              <!-- Mixed QP + linear -->
-              <h3 class="text-xl font-semibold text-fg mb-4">Mixed Quadratic + Linear</h3>
-              <p class="text-fg-muted mb-4">
-                Linear terms and a single quadratic group can sit in the same objective. The two forms below are equivalent:
-              </p>
-              <div class="code-block mb-8">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>MINIMIZE SUM(POWER(x - target, 2) + c * x)
-MINIMIZE SUM(POWER(x - target, 2)) + SUM(c * x)</code></pre>
-              </div>
+      <!-- ============================================================ NUMBERS -->
+      <section id="numbers">
+        <h2>Numbers and casts <a class="anchor" href="#numbers">#</a></h2>
+        <ul>
+          <li>A model carries one numeric type, <code>DOUBLE</code>, as both solvers do.</li>
+          <li>A cast over a decision is refused in <code>SUCH THAT</code> and the objective; cast the data instead.
+            Data casts keep DuckDB's meaning: <code>x &lt;= CAST(1.6 AS INTEGER)</code> has bound 2.</li>
+          <li>A whole-number answer beyond 2<sup>53</sup> is refused rather than rounded.</li>
+          <li>When the model holds a coefficient of 1e6 or more, a bound of about 4.5e9 or more, or an objective
+            coefficient of 1e-6 or less, DeciDB prints one warning to scale the data toward 1, then solves.</li>
+        </ul>
+      </section>
 
-              <h3 class="text-xl font-semibold text-fg mb-4">COUNT Workaround</h3>
-              <p class="text-fg-muted mb-4">
-                To maximize the number of selected items, use <code>SUM(x)</code> with a boolean variable instead of <code>COUNT</code>. The same applies in <code>SUCH THAT</code>:
-              </p>
-              <div class="code-block mb-4">
-                <div class="code-header"><span class="language-label">Error &mdash; <code>SUCH THAT COUNT(x) &lt;= 2</code></span></div>
-                <pre class="text-sm"><code>COUNT over a DECIDE variable is degenerate: decision variables are never
-null, so COUNT(x) always equals the row count. Did you mean SUM(x)?</code></pre>
-              </div>
-              <div class="code-block mb-4">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- Want to select as many items as possible?
+      <!-- ============================================================ EXPLAIN -->
+      <section id="explain">
+        <h2>EXPLAIN <a class="anchor" href="#explain">#</a></h2>
+        <p><code>EXPLAIN</code>, <code>EXPLAIN ANALYZE</code> and <code>EXPLAIN (FORMAT JSON)</code> work on a DECIDE
+          query. The DECIDE node lists the decisions, the objective and the constraints, each as you wrote it. Indented
+          lines follow only where the model differs: <code>↳</code> for what a rewrite made of a clause, such as an
+          auxiliary variable or a helper decision. <code>EXPLAIN</code> plans without solving.</p>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SELECT S.shipmentID, ship
+FROM Shipment S JOIN Depot D USING (depotID)
+DECIDE ship(INT)
+SUCH THAT ship &lt;= S.demand
+      AND per D.depotID: SUM(ship) by (D.region) &lt;= D.capacity
+      AND abs(SUM(ship) by (D.region) - 40) &lt;= 30
+MAXIMIZE SUM(ship);</code></pre></div><div class="code"><div class="code-head"><span class="code-title">EXPLAIN: the DECIDE node</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-none">DECIDE
+  Variables: ship
+  Objective: MAXIMIZE SUM(ship)
+  Constraints:
+    ship &lt;= S.demand
+    per D.depotID: SUM(ship) by (D.region) &lt;= D.capacity
+    abs(SUM(ship) by (D.region) - 40) &lt;= 30
+      ↳ abs(sum(ship) by (D.region) - 40) becomes an auxiliary variable
+      ↳ sum(ship) by (D.region) becomes a helper decision per group
+      ↳ abs(sum(ship) by (D.region) - 40) - sum(ship) by (D.region) &gt;= -40
+      ↳ abs(sum(ship) by (D.region) - 40) + sum(ship) by (D.region) &gt;= 0 + 40</code></pre></div>
+        <p>A query answered by <a href="#direct-solve">direct solve</a> shows <code>Direct solve rule</code> and the
+          problem class in its plan instead.</p>
+      </section>
+
+      <!-- ============================================================ DIAGNOSE -->
+      <section id="diagnose">
+        <h2>DIAGNOSE <a class="anchor" href="#diagnose">#</a></h2>
+        <p>When no assignment satisfies every constraint, a query stops with an error that says what to do next:</p>
+<div class="query-result"><div class="code"><div class="code-head"><span class="code-title">SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SELECT item, x FROM Items
 DECIDE x(BOOL)
-SUCH THAT SUM(x * weight) <= 100
-MAXIMIZE SUM(x);</code></pre>
-              </div>
-              <p class="text-fg-muted text-sm">
-                Since <code>x</code> is 0 or 1, <code>SUM(x)</code> counts how many rows are selected.
-              </p>
-
-              <h3 class="text-xl font-semibold text-fg mt-8 mb-4">Feasibility Queries (No Objective)</h3>
-              <p class="text-fg-muted mb-4">
-                You can omit the objective entirely. In that case, the solver finds any feasible assignment that satisfies all constraints.
-              </p>
-              <div class="code-block">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>SELECT id, x
-FROM Items
+SUCH THAT SUM(x * weight) &lt;= 40 AND SUM(x) &gt;= 4
+MAXIMIZE SUM(x * value);</code></pre></div><div class="result"><div class="result-head"><b>Error</b><span>refused before solving</span></div><pre class="err">Invalid Input Error: DECIDE optimization is infeasible. Prefix the query with DIAGNOSE to see which clause to change.</pre></div></div>
+        <p>Prefix it with <code>DIAGNOSE</code>. The query runs, and instead of its rows you get one row per finding: the
+          clause as you wrote it, the smallest change that fixes it, and the objective you would get after the change.
+          <code>DIAGNOSE</code> is the only thing that starts the diagnosis engine, so a query without it never pays for
+          one.</p>
+<div class="query-result"><div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">DIAGNOSE
+SELECT item, x FROM Items
 DECIDE x(BOOL)
-SUCH THAT
-    SUM(x * weight) <= 50
-    AND SUM(x) = 3;</code></pre>
-              </div>
-              <p class="text-fg-muted text-sm mt-3">
-                Returns any combination of exactly 3 items whose total weight is at most 50.
-              </p>
-            </section>
+SUCH THAT SUM(x * weight) &lt;= 40 AND SUM(x) &gt;= 4
+MAXIMIZE SUM(x * value);</code></pre></div><div class="result"><div class="result-head"><b>Result</b><span>2 rows</span></div><div class="result-scroll"><table><thead><tr><th class="">state</th><th class="">clause</th><th class="dec ">suggested_change</th><th class="dec num">amount</th><th class="">total</th><th class="">scope</th><th class="">edit_source</th><th class="">group</th><th class="">row</th></tr></thead><tbody><tr><td>infeasible</td><td>SUM(x * weight) &lt;= 40</td><td class="dec">SUM(x * weight) &lt;= 57</td><td class="num dec">17.0</td><td class="null">NULL</td><td class="null">NULL</td><td>source_literal</td><td class="null">NULL</td><td class="null">NULL</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">275.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Column</th><th>Holds</th></tr></thead>
+          <tbody>
+            <tr><td><code>state</code></td><td><code>infeasible</code>, <code>unbounded</code> or <code>feasible</code></td></tr>
+            <tr><td><code>clause</code></td><td>the clause as written, or the decision that grows without bound</td></tr>
+            <tr><td><code>suggested_change</code></td><td>the smallest edit that addresses the finding</td></tr>
+            <tr><td><code>amount</code></td><td>how far a bound moves, how many instances escape, or the achievable objective</td></tr>
+            <tr><td><code>total</code>, <code>scope</code></td><td>for an unbounded query: out of how many instances, per row or keyed</td></tr>
+            <tr><td><code>edit_source</code></td><td>the kind of finding: <code>source_literal</code>, <code>virtual_offset</code>, <code>remove_only</code>, <code>runaway_+inf</code>, <code>achievable_objective</code>, …</td></tr>
+            <tr><td><code>group</code>, <code>row</code></td><td>the class or row a finding covers, in expanded mode</td></tr>
+          </tbody>
+        </table></div>
+        <p>A query that solves returns one row, <code>state = 'feasible'</code>. A bound read from data
+          (<code>x &lt;= col</code>) is reported as an offset, <code>x &lt;= col + delta</code>.
+          <code>SET diagnose_decide_infeasible_slack_scope = 'expanded'</code> reports one edit per row or per class
+          instead of per clause. <code>DIAGNOSE</code> always uses a solver.</p>
+        <h3>A slow solve</h3>
+        <p>If a solve hits its time limit or you press Ctrl-C, the query prints a checkpoint report. At a terminal it
+          offers to keep solving (Enter) or stop with the best answer so far (<code>s</code>); in a script it errors;
+          after Ctrl-C it returns the best answer found, marked as not proven best. <code>SET decide_mip_gap = 1e-4</code>
+          accepts an answer within 0.01% of the optimum.</p>
+      </section>
 
+      <!-- ============================================================ DIRECT SOLVE -->
+      <section id="direct-solve">
+        <h2>Direct solve <a class="anchor" href="#direct-solve">#</a></h2>
+        <p>Some queries have a closed-form answer that DuckDB's own operators compute: sort and take the top
+          <em>k</em>, fill a budget greedily, match two sorted lists. When DeciDB can prove a query has one of these shapes,
+          it answers that way instead of calling a solver. A query it cannot prove takes the solver path unchanged. There is
+          no syntax for it: the same SQL simply gets faster and exact.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Setting</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>SET decide_direct_solve = 'auto'</code></td><td>default: answer directly when proved</td></tr>
+            <tr><td><code>SET decide_direct_solve = 'off'</code></td><td>always use the solver</td></tr>
+            <tr><td><code>SET decide_direct_solve = 'require'</code></td><td>raise an error when no rule applies</td></tr>
+          </tbody>
+        </table></div>
+        <p>When several assignments are optimal, direct solve may return a different one than the solver; the objective
+          is the same. The classes it covers are listed on <a href="problems.html#direct-solve">Problems</a>.</p>
+      </section>
 
-            <!-- ============================================
-                 REDUCERS
-                 ============================================ -->
-            <section id="reducers" class="mb-20">
-              <h2 class="text-3xl text-fg mb-6">Reducers</h2>
+      <!-- ============================================================ SETTINGS -->
+      <section id="settings">
+        <h2>Settings <a class="anchor" href="#settings">#</a></h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Setting</th><th>Default</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>decide_direct_solve</code></td><td><code>auto</code></td><td><code>auto</code>, <code>off</code> or <code>require</code></td></tr>
+            <tr><td><code>decide_mip_gap</code></td><td><code>0</code></td><td>accept an answer within this relative gap of the optimum</td></tr>
+            <tr><td><code>decide_l0_tolerance</code></td><td><code>1e-4</code></td><td>the size at which <code>norm(e, 0)</code> counts a row as nonzero</td></tr>
+            <tr><td><code>diagnose_decide_infeasible_slack_scope</code></td><td><code>query</code></td><td><code>query</code>: one edit per clause; <code>expanded</code>: one per row or class</td></tr>
+            <tr><td><code>diagnose_decide_escape_rate</code></td><td><code>0.8</code></td><td>report a category of an unbounded query at this escape rate or above</td></tr>
+            <tr><td><code>diagnose_decide_categorical_ratio</code></td><td><code>0.1</code></td><td>a column is categorical when its distinct values are at most this share of rows</td></tr>
+            <tr><td><code>diagnose_decide_min_categories</code></td><td><code>20</code></td><td>floor on that cap for small tables</td></tr>
+          </tbody>
+        </table></div>
+      </section>
 
-              <p class="text-fg-muted mb-6">
-                A reducer is an aggregate over decisions &mdash; <code>SUM</code>, <code>AVG</code>, <code>MIN</code> or <code>MAX</code>. Everything in this section applies in both <code>SUCH THAT</code> and the objective.
-              </p>
+      <!-- ============================================================ MIGRATING -->
+      <section id="migrating">
+        <h2>Migrating from 0.2 <a class="anchor" href="#migrating">#</a></h2>
+        <p class="lead">DeciDB 0.2 wrote scopes after a constraint (<code>SUM(x) &lt;= 2 PER sector</code>) and
+          qualified declarations with a table (<code>T.x(INT)</code>, <code>scalar x(INT)</code>). The language now
+          follows the DECIDE language proposal: scopes go in front, and a reducer says which rows it reads with
+          <code>by</code>.</p>
+        <p>Each old spelling is refused with a message that names the new one, built from your own query so you can paste
+          it back:</p>
+<div class="query-result"><div class="code"><div class="code-head"><span class="code-title">SQL</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SELECT ticker, pick FROM Stocks
+DECIDE pick(BOOL)
+SUCH THAT SUM(pick) &lt;= 2 PER sector
+MAXIMIZE SUM(pick * expected_return);</code></pre></div><div class="result"><div class="result-head"><b>Error</b><span>refused before solving</span></div><pre class="err">Parser Error: DECIDE: the postfix PER is removed; write per sector: in front of the constraint and by (sector) after each of its reducers</pre></div></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Old spelling</th><th>Write instead</th></tr></thead>
+          <tbody>
+            <tr><td><code>DECIDE T.x(INT)</code></td><td><code>DECIDE per T: x(INT)</code>, or <code>per T.k: x(INT)</code> to key on one column</td></tr>
+            <tr><td><code>DECIDE scalar x(INT)</code></td><td><code>DECIDE per (): x(INT)</code></td></tr>
+            <tr><td><code>SUM(x) &lt;= 2 PER g</code></td><td><code>per g: SUM(x) by (g) &lt;= 2</code></td></tr>
+            <tr><td><code>x &lt;= cap PER g</code> (no reducer)</td><td><code>x &lt;= cap</code>: a constraint without a reducer already holds on every row</td></tr>
+            <tr><td><code>SUM(x) &gt;= 2 WHEN c</code></td><td><code>when c: SUM(x) &gt;= 2</code></td></tr>
+            <tr><td><code>SUM(x) &gt;= d WHEN c PER g</code></td><td><code>when c per g: SUM(x) by (g) &gt;= d</code></td></tr>
+            <tr><td><code>SUM(x * h) WHEN c</code> inside an expression</td><td><code>SUM(when c: x * h)</code></td></tr>
+            <tr><td><code>COUNT(*) WHEN c</code></td><td><code>SUM(when c: 1)</code></td></tr>
+            <tr><td><code>SUM(D: e) WHEN c</code></td><td><code>SUM(when c per D: e)</code></td></tr>
+            <tr><td><code>MAXIMIZE SUM(e) WHEN c</code></td><td><code>MAXIMIZE when c: SUM(e)</code></td></tr>
+            <tr><td><code>MINIMIZE MAX(SUM(e)) PER g</code></td><td><code>MINIMIZE max(per g: SUM(e) by (g))</code></td></tr>
+            <tr><td><code>D.x</code> to reference a decision</td><td><code>x</code>: decisions are referenced by their bare name</td></tr>
+          </tbody>
+        </table></div>
+<div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>The same query, new spelling</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SELECT ticker, pick FROM Stocks
+DECIDE pick(BOOL)
+SUCH THAT per sector: SUM(pick) by (sector) &lt;= 2
+MAXIMIZE SUM(pick * expected_return);</code></pre></div>
+        <p>Two meanings changed as well. A <code>per</code> without a <code>by</code> does not group the sum:
+          <code>per g: SUM(x) &lt;= 10</code> bounds the total over all kept rows, once per <code>g</code>; write
+          <code>by (g)</code> for each group's own total. And a NULL in the data no longer stops the query: it is skipped
+          where it is read, as SQL's aggregates skip it (<a href="#nulls">details</a>).</p>
+      </section>
 
-              <h3 class="text-xl font-semibold text-fg mb-4">Relation-Qualified Reducers</h3>
-              <p class="text-fg-muted mb-4">
-                A join repeats a table's rows once per match, so a plain <code>SUM</code> over a table-scoped decision counts that decision once per joined row. Name a relation in front of the body to count it once per row of that relation instead.
-              </p>
-              <div class="code-block mb-4">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>agg(Rel[, Rel, ...]: expr)   -- agg is SUM, AVG, MIN or MAX</code></pre>
-              </div>
-              <p class="text-fg-muted mb-4">
-                A depot serving three routes is charged its opening cost once, not three times:
-              </p>
-              <div class="code-block mb-4">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>SELECT routeID, D.depotID, open, ship
-FROM Depots D JOIN Routes T USING (depotID)
-DECIDE D.open(BOOL), T.ship(INT)
-SUCH THAT ship <= capacity * open AND SUM(ship) >= 100
-MINIMIZE SUM(unit_cost * ship) + SUM(D: opening_cost * open)
-ORDER BY routeID;</code></pre>
-              </div>
-              <ul class="space-y-2 text-fg-muted text-sm mb-4">
-                <li>&bull; <strong>Identity is the row, not the value.</strong> Two depots with the same opening cost are still two terms. This is not <code>SUM(DISTINCT ...)</code>.</li>
-                <li>&bull; <strong>Only surviving rows count.</strong> The join and <code>WHERE</code> decide which rows contribute; a depot filtered out contributes nothing.</li>
-                <li>&bull; <strong>Everything inside must come from a named relation.</strong> A query-wide (<code>scalar</code>) decision is the one exception.</li>
-                <li>&bull; <code>AVG(D: ...)</code> divides by the number of distinct <code>D</code> rows, not the number of result rows.</li>
-                <li>&bull; <code>MIN</code> and <code>MAX</code> are unaffected: the qualifier is accepted and changes nothing.</li>
-                <li>&bull; <strong>Naming several relations widens the identity to their combination</strong> &mdash; <code>SUM(D, T: ...)</code> collapses a row only when it repeats on both. The order of the names does not matter.</li>
-              </ul>
-              <div class="code-block mb-8">
-                <div class="code-header"><span class="language-label">Error &mdash; a column from outside the qualifier</span></div>
-                <pre class="text-sm"><code>'unit_cost' does not come from D, so SUM(D: ...) cannot use it; keep only
-those relations' columns inside the qualified reducer and sum the rest
-separately</code></pre>
-              </div>
+      <!-- ============================================================ ROADMAP -->
+      <section id="roadmap">
+        <h2>Not supported yet <a class="anchor" href="#roadmap">#</a></h2>
+        <p>The DECIDE language proposal goes further than DeciDB does today. These parts of it are planned, and a query
+          that uses one is refused with a message rather than answered differently:</p>
+        <ul>
+          <li><strong>Nested reducers</strong> to any depth, such as <code>SUM(MAX(ship) by (customer)) by (depot)</code>.
+            Today the <a href="#two-level">two-level objective</a> is the one nested shape.</li>
+          <li><strong>Variant signatures</strong>: one constraint per distinct combination where a key does not
+            determine a value. Today that is the determination error.</li>
+          <li><strong>Frame selectors</strong> for ordered data: <code>at(previous: e)</code>,
+            <code>SUM(from first to last: e) over (day)</code>, cyclic orders.</li>
+          <li><strong>Conditional constraints on decisions</strong> with <code>if</code>: enforce a capacity only if a
+            depot is decided open.</li>
+          <li><strong>Declaration bounds and domains</strong>: <code>between</code> at the declaration, semi-continuous
+            <code>SEMIREAL</code>/<code>SEMIINT</code>, finite text domains.</li>
+          <li><strong>Lexicographic objectives</strong> (<code>minimize e1 then maximize e2</code>) and an explicit
+            <code>satisfy</code>.</li>
+          <li><strong>A qualified decision name</strong> (<code>D.open</code>) as a plain name lookup.</li>
+          <li><strong>Second-order cone constraints</strong>. The squared form <code>norm(e, 2) &lt;= R * R</code>
+            already covers the common case.</li>
+        </ul>
+      </section>
+    </article>
+  </div>
+</div>
 
-              <h3 class="text-xl font-semibold text-fg mb-4">Scaling a Reducer</h3>
-              <p class="text-fg-muted mb-4">
-                A reducer may be multiplied or divided by a factor, on either side. The factor must be one value for the whole query: a literal, an expression over literals, or an uncorrelated scalar subquery.
-              </p>
-              <div class="code-block mb-4">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>SUCH THAT 2 * SUM(x * p) <= 40
-SUCH THAT 2 * MAX(x * v) <= 12
-MINIMIZE SUM(x * p) / 2</code></pre>
-              </div>
-              <p class="text-fg-muted mb-4">
-                A per-row column is not a valid factor. Move it inside the aggregate:
-              </p>
-              <div class="code-block mb-8">
-                <div class="code-header"><span class="language-label">Error &mdash; <code>SUCH THAT w * SUM(x) &lt;= 10</code></span></div>
-                <pre class="text-sm"><code>DECIDE constraint: 'w' varies per row, so it cannot multiply SUM(x).
-Move it inside the aggregate, e.g. SUM(x * w).</code></pre>
-              </div>
-
-              <h3 class="text-xl font-semibold text-fg mb-4">norm(expr, p)</h3>
-              <p class="text-fg-muted mb-4">
-                <code>norm</code> reduces a decision expression to a single penalty term, for regularized objectives such as lasso and ridge. It works in objectives and in constraints, and composes with <code>WHEN</code> and <code>PER</code>. You supply the weight.
-              </p>
-              <div class="table-wrapper rounded-lg border border-bdcolor overflow-hidden mb-4">
-                <table class="w-full">
-                  <thead>
-                    <tr class="bg-canvas-inset">
-                      <th class="text-left px-4 py-3 text-fg">Form</th>
-                      <th class="text-left px-4 py-3 text-fg">Means</th>
-                    </tr>
-                  </thead>
-                  <tbody class="text-fg-muted">
-                    <tr>
-                      <td class="px-4 py-3"><code>norm(e, 1)</code></td>
-                      <td class="px-4 py-3"><code>SUM(ABS(e))</code> &mdash; L1, leans toward sparse answers</td>
-                    </tr>
-                    <tr>
-                      <td class="px-4 py-3"><code>norm(e, 2)</code></td>
-                      <td class="px-4 py-3"><code>SUM(POWER(e, 2))</code> &mdash; squared L2, or ridge</td>
-                    </tr>
-                    <tr>
-                      <td class="px-4 py-3"><code>norm(e, 'inf')</code></td>
-                      <td class="px-4 py-3"><code>MAX(ABS(e))</code> &mdash; the worst single deviation</td>
-                    </tr>
-                    <tr>
-                      <td class="px-4 py-3"><code>norm(e, 0[, M])</code></td>
-                      <td class="px-4 py-3">the exact count of nonzeros</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-              <div class="code-block mb-4">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>-- Stay close to a baseline while keeping cost down
-MINIMIZE SUM(cost * x) + 0.5 * norm(x - base, 1)
-
--- Touch at most two rows
-SUCH THAT norm(x, 0) <= 2</code></pre>
-              </div>
-              <p class="text-fg-muted text-sm mb-4">
-                <code>norm(e, 0)</code> counts a value as nonzero once it reaches a tolerance, <code>1e-4</code> by default. Lower it for small-magnitude data, raise it to treat larger residuals as zero. The floor is <code>1e-5</code>, below which the solver's own tolerance would swallow it.
-              </p>
-              <div class="code-block">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>SET decide_l0_tolerance = 1e-5;</code></pre>
-              </div>
-            </section>
-
-            <!-- ============================================
-                 SOLVER SELECTION
-                 ============================================ -->
-            <section id="solver-selection" class="mb-20">
-              <h2 class="text-3xl text-fg mb-6">Solver Selection</h2>
-              <p class="text-fg-muted mb-6">
-                DeciDB ships with two solvers and picks one at runtime. <strong>Gurobi</strong> is used automatically when its runtime library and license are usable; it is faster on these workloads and covers more of the table below. <strong>HiGHS</strong> is bundled, needs no setup, and handles the model classes it supports when Gurobi is unavailable. A Gurobi-only query is rejected if Gurobi cannot be loaded.
-              </p>
-
-              <div class="table-wrapper rounded-lg border border-bdcolor overflow-hidden mb-8">
-                <table class="w-full">
-                  <thead>
-                    <tr class="bg-canvas-inset">
-                      <th class="text-left px-4 py-3 text-fg">Feature</th>
-                      <th class="text-left px-4 py-3 text-fg">Gurobi</th>
-                      <th class="text-left px-4 py-3 text-fg">HiGHS</th>
-                    </tr>
-                  </thead>
-                  <tbody class="text-fg-muted">
-                    <tr>
-                      <td class="px-4 py-3">LP / MILP (linear)</td>
-                      <td class="px-4 py-3">Yes</td>
-                      <td class="px-4 py-3">Yes</td>
-                    </tr>
-                    <tr>
-                      <td class="px-4 py-3">Convex QP (<code>MINIMIZE SUM(POWER(...))</code>)</td>
-                      <td class="px-4 py-3">Yes (incl. MIQP)</td>
-                      <td class="px-4 py-3">Yes (continuous, non-singular Q only)</td>
-                    </tr>
-                    <tr>
-                      <td class="px-4 py-3">Non-convex QP (<code>MAXIMIZE SUM(POWER(...))</code>)</td>
-                      <td class="px-4 py-3">Yes</td>
-                      <td class="px-4 py-3">Rejected</td>
-                    </tr>
-                    <tr>
-                      <td class="px-4 py-3">Bilinear, Boolean &times; anything</td>
-                      <td class="px-4 py-3">Yes</td>
-                      <td class="px-4 py-3">Yes</td>
-                    </tr>
-                    <tr>
-                      <td class="px-4 py-3">Bilinear, general (Real&times;Real, Int&times;Int)</td>
-                      <td class="px-4 py-3">Yes</td>
-                      <td class="px-4 py-3">Rejected</td>
-                    </tr>
-                    <tr>
-                      <td class="px-4 py-3">Quadratic constraints (QCQP)</td>
-                      <td class="px-4 py-3">Yes</td>
-                      <td class="px-4 py-3">Rejected</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </section>
-
-            <!-- ============================================
-                 SOLVER OUTCOMES
-                 ============================================ -->
-            <section id="solver-outcomes" class="mb-20">
-              <h2 class="text-3xl text-fg mb-6">Solver Outcomes</h2>
-              <p class="text-fg-muted mb-8">
-                A solve ends in one of four ways:
-              </p>
-
-              <div class="space-y-6 mb-6">
-                <div>
-                  <h3 class="text-lg font-semibold text-fg mb-2 flex items-center gap-2">
-                    <i data-lucide="check-circle" class="w-5 h-5 text-success"></i>
-                    Optimal
-                  </h3>
-                  <p class="text-fg-muted">
-                    A solution was found. The query returns all candidate rows with optimal variable values.
-                  </p>
-                </div>
-
-                <div>
-                  <h3 class="text-lg font-semibold text-fg mb-2 flex items-center gap-2">
-                    <i data-lucide="x-circle" class="w-5 h-5 text-danger"></i>
-                    Infeasible
-                  </h3>
-                  <p class="text-fg-muted mb-3">
-                    No assignment satisfies every constraint. The query returns an error:
-                  </p>
-                  <div class="code-block">
-                    <div class="code-header"><span class="language-label">Error</span></div>
-                    <pre class="text-sm"><code>DECIDE optimization is infeasible. Prefix the query with DIAGNOSE
-to see which clause to change.</code></pre>
-                  </div>
-                  <p class="text-fg-muted text-sm mt-3">
-                    See <a href="#diagnose" class="text-accent hover:text-accent">DIAGNOSE</a> for which clause to change and by how much.
-                  </p>
-                </div>
-
-                <div>
-                  <h3 class="text-lg font-semibold text-fg mb-2 flex items-center gap-2">
-                    <i data-lucide="alert-circle" class="w-5 h-5 text-warning"></i>
-                    Unbounded
-                  </h3>
-                  <p class="text-fg-muted mb-3">
-                    The objective can grow without limit, because nothing bounds it. The query returns an error:
-                  </p>
-                  <div class="code-block">
-                    <div class="code-header"><span class="language-label">Error</span></div>
-                    <pre class="text-sm"><code>DECIDE optimization is unbounded. Prefix the query with DIAGNOSE
-to see which decision needs a bound.</code></pre>
-                  </div>
-                  <p class="text-fg-muted text-sm mt-3">
-                    See <a href="#diagnose" class="text-accent hover:text-accent">DIAGNOSE</a> for which decision needs a bound.
-                  </p>
-                </div>
-
-                <div>
-                  <h3 class="text-lg font-semibold text-fg mb-2 flex items-center gap-2">
-                    <i data-lucide="clock" class="w-5 h-5 text-warning"></i>
-                    Out of time, or interrupted
-                  </h3>
-                  <p class="text-fg-muted mb-3">
-                    The solve can hit its time limit, or you can stop it with Ctrl-C. Either way the query prints a checkpoint report: the best answer found so far and how much better the answer could still get.
-                  </p>
-                  <ul class="space-y-2 text-fg-muted text-sm">
-                    <li>&bull; At a terminal, after the time limit, it offers to keep going. Press Enter to continue solving, or <code>s</code> to stop and take the best answer so far.</li>
-                    <li>&bull; In a script or a pipe there is nobody to answer that offer, so the query returns an error instead.</li>
-                    <li>&bull; After Ctrl-C you get the best answer found so far, marked as not proven best.</li>
-                  </ul>
-                </div>
-              </div>
-            </section>
-
-            <!-- ============================================
-                 EXPLAIN
-                 ============================================ -->
-            <section id="explain" class="mb-20">
-              <h2 class="text-3xl text-fg mb-6">EXPLAIN</h2>
-
-              <p class="text-fg-muted mb-6">
-                Prefix a decision query with <code>EXPLAIN</code> to inspect its plan without solving it. The DECIDE node shows the declared variables, objective and constraints. When rewriting changes a constraint, the plan groups the written clause with its canonical and solver-ready forms.
-              </p>
-
-              <div class="code-block mb-6">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>EXPLAIN SELECT id, x
-FROM (VALUES (1, 2), (2, 3)) AS items(id, weight)
-DECIDE x(BOOL)
-SUCH THAT SUM(x * weight) &lt;= 3
-MAXIMIZE SUM(x);</code></pre>
-              </div>
-
-              <ul class="space-y-2 text-fg-muted mb-4">
-                <li>&bull; <code>EXPLAIN</code> renders the logical or physical plan selected by DuckDB's <code>explain_output</code> setting and does not run the solver.</li>
-                <li>&bull; <code>EXPLAIN ANALYZE</code> executes the decision query and adds actual row counts and timing.</li>
-                <li>&bull; <code>EXPLAIN (FORMAT JSON)</code> returns the same DECIDE structure as JSON.</li>
-              </ul>
-            </section>
-
-            <!-- ============================================
-                 DIAGNOSE
-                 ============================================ -->
-            <section id="diagnose" class="mb-20">
-              <h2 class="text-3xl text-fg mb-6">DIAGNOSE</h2>
-
-              <p class="text-fg-muted mb-6">
-                <code>DIAGNOSE</code> is a prefix on a <code>SELECT</code> whose complete plan contains exactly one <code>DECIDE</code> operator. It runs the query and reports on the run instead of returning the query's rows &mdash; the same relationship <code>EXPLAIN ANALYZE</code> has to an ordinary query. Diagnostics run only under the prefix.
-              </p>
-
-              <div class="code-block mb-8">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>DIAGNOSE SELECT id, x FROM t
-DECIDE x(INT)
-SUCH THAT x <= 5 AND x >= 8
-MAXIMIZE SUM(x);</code></pre>
-              </div>
-
-              <h3 class="text-xl font-semibold text-fg mb-4">The Result Is a Relation</h3>
-              <p class="text-fg-muted mb-4">
-                <code>DIAGNOSE</code> returns nine columns, one row per finding.
-              </p>
-              <div class="table-wrapper rounded-lg border border-bdcolor overflow-hidden mb-6">
-                <table class="w-full">
-                  <thead>
-                    <tr class="bg-canvas-inset">
-                      <th class="text-left px-4 py-3 text-fg">Column</th>
-                      <th class="text-left px-4 py-3 text-fg">Type</th>
-                      <th class="text-left px-4 py-3 text-fg">What it holds</th>
-                    </tr>
-                  </thead>
-                  <tbody class="text-fg-muted text-sm">
-                    <tr><td class="px-4 py-3"><code>state</code></td><td class="px-4 py-3">VARCHAR</td><td class="px-4 py-3"><code>infeasible</code>, <code>unbounded</code>, or <code>feasible</code></td></tr>
-                    <tr><td class="px-4 py-3"><code>clause</code></td><td class="px-4 py-3">VARCHAR</td><td class="px-4 py-3">the clause as you wrote it, or the runaway decision's name</td></tr>
-                    <tr><td class="px-4 py-3"><code>suggested_change</code></td><td class="px-4 py-3">VARCHAR</td><td class="px-4 py-3">the smallest edit that addresses this finding</td></tr>
-                    <tr><td class="px-4 py-3"><code>amount</code></td><td class="px-4 py-3">DOUBLE</td><td class="px-4 py-3">how far a bound moves, escaping instances, or the achievable objective</td></tr>
-                    <tr><td class="px-4 py-3"><code>total</code></td><td class="px-4 py-3">BIGINT</td><td class="px-4 py-3">denominator for an unbounded escape count; otherwise NULL</td></tr>
-                    <tr><td class="px-4 py-3"><code>scope</code></td><td class="px-4 py-3">VARCHAR</td><td class="px-4 py-3"><code>row</code> or <code>entity</code> for an unbounded escape count; otherwise NULL</td></tr>
-                    <tr><td class="px-4 py-3"><code>edit_source</code></td><td class="px-4 py-3">VARCHAR</td><td class="px-4 py-3">what kind of finding this row is (below)</td></tr>
-                    <tr><td class="px-4 py-3"><code>group</code></td><td class="px-4 py-3">VARCHAR</td><td class="px-4 py-3">the <code>PER</code> key, or the categorical slice a decision escapes on</td></tr>
-                    <tr><td class="px-4 py-3"><code>row</code></td><td class="px-4 py-3">BIGINT</td><td class="px-4 py-3">the emitted row this finding covers, under the <code>expanded</code> slack scope</td></tr>
-                  </tbody>
-                </table>
-              </div>
-
-              <p class="text-fg-muted mb-4">
-                <code>edit_source</code> is the finding's kind, and the column to filter on.
-              </p>
-              <div class="table-wrapper rounded-lg border border-bdcolor overflow-hidden mb-6">
-                <table class="w-full">
-                  <thead>
-                    <tr class="bg-canvas-inset">
-                      <th class="text-left px-4 py-3 text-fg">Value</th>
-                      <th class="text-left px-4 py-3 text-fg">Meaning</th>
-                    </tr>
-                  </thead>
-                  <tbody class="text-fg-muted text-sm">
-                    <tr><td class="px-4 py-3"><code>source_literal</code></td><td class="px-4 py-3">a literal you wrote, loosened in place</td></tr>
-                    <tr><td class="px-4 py-3"><code>virtual_offset</code></td><td class="px-4 py-3">a synthetic offset over a data-backed bound (<code>x &lt;= col + delta</code>)</td></tr>
-                    <tr><td class="px-4 py-3"><code>expanded_row</code></td><td class="px-4 py-3">one emitted row's own overshoot</td></tr>
-                    <tr><td class="px-4 py-3"><code>expanded_group</code></td><td class="px-4 py-3">one <code>PER</code> group's own overshoot</td></tr>
-                    <tr><td class="px-4 py-3"><code>remove_only</code></td><td class="px-4 py-3">a <code>&lt;&gt;</code> that cannot be loosened, only deleted</td></tr>
-                    <tr><td class="px-4 py-3"><code>unreachable_bound</code></td><td class="px-4 py-3">a bound no assignment can reach</td></tr>
-                    <tr><td class="px-4 py-3"><code>rigid_conflict</code></td><td class="px-4 py-3">loosening the clauses you wrote cannot restore feasibility</td></tr>
-                    <tr><td class="px-4 py-3"><code>runaway_+inf</code> / <code>runaway_-inf</code></td><td class="px-4 py-3">a decision growing without bound, and which way</td></tr>
-                    <tr><td class="px-4 py-3"><code>achievable_objective</code></td><td class="px-4 py-3">what the objective reaches once the edits are applied</td></tr>
-                    <tr><td class="px-4 py-3"><code>unbounded_after_fix</code></td><td class="px-4 py-3">the repaired problem has no finite optimum</td></tr>
-                    <tr><td class="px-4 py-3"><code>undiagnosed</code></td><td class="px-4 py-3">the state is known but no cause could be named</td></tr>
-                  </tbody>
-                </table>
-              </div>
-
-              <p class="text-fg-muted mb-4">
-                Because it is a relation, you can select from it and filter it:
-              </p>
-              <div class="code-block mb-8">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>SELECT clause, suggested_change
-FROM (DIAGNOSE SELECT ... DECIDE ...)
-WHERE amount > 1000;</code></pre>
-              </div>
-
-              <h3 class="text-xl font-semibold text-fg mb-4">A Query That Worked</h3>
-              <p class="text-fg-muted mb-4">
-                One row, everything but <code>state</code> NULL. There is no separate output for a query that succeeded.
-              </p>
-              <div class="code-block mb-8">
-                <div class="code-header"><span class="language-label">Output</span></div>
-                <pre class="text-sm"><code>&#9484;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9516;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9516;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9516;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9516;&#9472;&#9472;&#9472;&#9516;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9516;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9516;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9488;
-&#9474;  state   &#9474; clause  &#9474; suggested_change &#9474; amount &#9474; &#8230; &#9474; edit_source &#9474;  group  &#9474;  row  &#9474;
-&#9500;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9532;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9532;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9532;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9532;&#9472;&#9472;&#9472;&#9532;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9532;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9532;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9508;
-&#9474; feasible &#9474; NULL    &#9474; NULL             &#9474;   NULL &#9474; &#8230; &#9474; NULL        &#9474; NULL    &#9474;  NULL &#9474;
-&#9492;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9524;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9524;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9524;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9524;&#9472;&#9472;&#9472;&#9524;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9524;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9524;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9496;</code></pre>
-              </div>
-
-              <h3 class="text-xl font-semibold text-fg mb-4">A Query That Could Not Be Satisfied</h3>
-              <div class="code-block mb-4">
-                <div class="code-header">
-                  <span class="language-label">SQL</span>
-                  <button class="copy-button">
-                    <i data-lucide="copy" class="w-4 h-4"></i>
-                    Copy
-                  </button>
-                </div>
-                <pre class="language-sql"><code>DIAGNOSE SELECT id, x FROM t
-DECIDE x(INT)
-SUCH THAT SUM(x) <= 3 AND SUM(x) >= 10
-MAXIMIZE SUM(x);</code></pre>
-              </div>
-              <div class="code-block mb-4">
-                <div class="code-header"><span class="language-label">Output</span></div>
-                <pre class="text-sm"><code>&#9474; infeasible &#9474; SUM(x) &lt;= 3 &#9474; SUM(x) &lt;= 10 &#9474;  7.0 &#9474; source_literal       &#9474;
-&#9474; infeasible &#9474; NULL        &#9474; NULL         &#9474; 10.0 &#9474; achievable_objective &#9474;</code></pre>
-              </div>
-              <p class="text-fg-muted text-sm mb-8">
-                Change <code>SUM(x) &lt;= 3</code> to <code>SUM(x) &lt;= 10</code> &mdash; a move of 7 &mdash; and the objective reaches 10.
-              </p>
-
-              <h3 class="text-xl font-semibold text-fg mb-4">Restrictions</h3>
-              <ul class="space-y-2 text-fg-muted mb-4">
-                <li>&bull; The plan must contain exactly one <code>DECIDE</code> operator. It may be the outer query's clause or the sole operator inside an ordinary subquery.</li>
-                <li>&bull; A plan containing no <code>DECIDE</code> operator, or several outer, nested or sibling operators, is rejected with the number found.</li>
-                <li>&bull; There are no options. <code>DIAGNOSE (VERBOSE) ...</code> is a syntax error.</li>
-                <li>&bull; A query that fails before it can be solved &mdash; a syntax error, a semantic error, a model the host's solver refuses &mdash; still raises under the prefix. <code>DIAGNOSE</code> explains the outcome of a solve.</li>
-              </ul>
-              <div class="code-block mb-8">
-                <div class="code-header"><span class="language-label">Error &mdash; <code>DIAGNOSE SELECT id FROM t</code></span></div>
-                <pre class="text-sm"><code>DIAGNOSE needs a query with a DECIDE clause &mdash; it reports on an optimization
-run, and this query has no optimization to run. Use EXPLAIN ANALYZE for a
-plain SQL query.</code></pre>
-              </div>
-
-              <h3 class="text-xl font-semibold text-fg mb-4">Settings</h3>
-              <p class="text-fg-muted mb-4">
-                These tune the engine once <code>DIAGNOSE</code> has started it. None of them starts or suppresses it.
-              </p>
-              <div class="table-wrapper rounded-lg border border-bdcolor overflow-hidden">
-                <table class="w-full">
-                  <thead>
-                    <tr class="bg-canvas-inset">
-                      <th class="text-left px-4 py-3 text-fg">Setting</th>
-                      <th class="text-left px-4 py-3 text-fg">Default</th>
-                      <th class="text-left px-4 py-3 text-fg">What it changes</th>
-                    </tr>
-                  </thead>
-                  <tbody class="text-fg-muted text-sm">
-                    <tr><td class="px-4 py-3"><code>diagnose_decide_infeasible_slack_scope</code></td><td class="px-4 py-3"><code>query</code></td><td class="px-4 py-3">one edit per clause you wrote; <code>expanded</code> gives one per emitted row or group, and fills <code>group</code> and <code>row</code></td></tr>
-                    <tr><td class="px-4 py-3"><code>diagnose_decide_escape_rate</code></td><td class="px-4 py-3"><code>0.8</code></td><td class="px-4 py-3">report a category once this share of its rows run away</td></tr>
-                    <tr><td class="px-4 py-3"><code>diagnose_decide_categorical_ratio</code></td><td class="px-4 py-3"><code>0.1</code></td><td class="px-4 py-3">treat a column as a category when its distinct values are at most this share of the rows</td></tr>
-                    <tr><td class="px-4 py-3"><code>diagnose_decide_min_categories</code></td><td class="px-4 py-3"><code>20</code></td><td class="px-4 py-3">a floor on that cap, so small tables still qualify</td></tr>
-                  </tbody>
-                </table>
-              </div>
-            </section>
-
-            <!-- ============================================
-                 BEST PRACTICES
-                 ============================================ -->
-            <section id="best-practices" class="mb-16">
-              <h2 class="text-3xl text-fg mb-6">Best Practices</h2>
-
-              <div class="space-y-10">
-                <!-- Practice 1 -->
-                <div>
-                  <h3 class="text-lg font-semibold text-fg mb-3">Filter with WHERE first</h3>
-                  <p class="text-fg-muted mb-4">
-                    The solver runs on every candidate row. Fewer rows means faster solving. Use <code>WHERE</code> to exclude rows that can't possibly be in the optimal solution.
-                  </p>
-                  <div class="grid md:grid-cols-2 gap-4">
-                    <div>
-                      <p class="text-fg-muted text-sm mb-2 flex items-center gap-1">
-                        <i data-lucide="x" class="w-4 h-4 text-danger"></i> Slow &mdash; all rows
-                      </p>
-                      <div class="code-block">
-                        <div class="code-header"><span class="language-label">SQL</span></div>
-                        <pre class="language-sql text-xs"><code>SELECT * FROM Products
-DECIDE x(BOOL)
-SUCH THAT SUM(x * weight) <= 50
-MAXIMIZE SUM(x * value);</code></pre>
-                      </div>
-                    </div>
-                    <div>
-                      <p class="text-fg-muted text-sm mb-2 flex items-center gap-1">
-                        <i data-lucide="check" class="w-4 h-4 text-success"></i> Better &mdash; filtered
-                      </p>
-                      <div class="code-block">
-                        <div class="code-header"><span class="language-label">SQL</span></div>
-                        <pre class="language-sql text-xs"><code>SELECT * FROM Products
-WHERE category = 'electronics'
-  AND in_stock = true
-DECIDE x(BOOL)
-SUCH THAT SUM(x * weight) <= 50
-MAXIMIZE SUM(x * value);</code></pre>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Practice 2 -->
-                <div>
-                  <h3 class="text-lg font-semibold text-fg mb-3">Prefer BOOLEAN over INTEGER</h3>
-                  <p class="text-fg-muted mb-4">
-                    Boolean variables (0/1) solve faster than integer variables. Use <code>BOOL</code> whenever your decision is "include or not." Only use <code>INT</code> when you need quantities.
-                  </p>
-                </div>
-
-                <!-- Practice 3 -->
-                <div>
-                  <h3 class="text-lg font-semibold text-fg mb-3">Build incrementally</h3>
-                  <p class="text-fg-muted mb-4">
-                    Start with one constraint and verify the result makes sense. Add constraints one at a time. If the query returns an error, the most recently added constraint may be making the problem infeasible &mdash; try relaxing it.
-                  </p>
-                  <div class="code-block">
-                    <div class="code-header"><span class="language-label">SQL &mdash; debugging infeasibility</span></div>
-                    <pre class="language-sql text-sm"><code>DECIDE x(BOOL)
-SUCH THAT
-    SUM(x * weight) <= 50  -- try increasing this
-    AND SUM(x) >= 10       -- or lowering this</code></pre>
-                  </div>
-                </div>
-
-                <!-- Practice 4 -->
-                <div>
-                  <h3 class="text-lg font-semibold text-fg mb-3">JOINs work normally</h3>
-                  <p class="text-fg-muted mb-4">
-                    You can use <code>JOIN</code> before <code>DECIDE</code>. The decision variables operate on the joined result set.
-                  </p>
-                  <div class="code-block">
-                    <div class="code-header">
-                      <span class="language-label">SQL</span>
-                      <button class="copy-button">
-                        <i data-lucide="copy" class="w-4 h-4"></i>
-                        Copy
-                      </button>
-                    </div>
-                    <pre class="language-sql text-sm"><code>SELECT o.id, p.name, x
-FROM Orders o
-JOIN Products p ON o.product_id = p.id
-DECIDE x(BOOL)
-SUCH THAT SUM(x * p.weight) <= 100
-MAXIMIZE SUM(x * p.profit);</code></pre>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-          </div>
-        </div>
+</main>
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <img class="logo-light" src="assets/images/logo.svg" alt="DeciDB" width="94" height="28">
+        <img class="logo-dark" src="assets/images/logo-dark.svg" alt="DeciDB" width="94" height="28">
+        <p>Constrained optimization, native in SQL. Built on DuckDB by the HUDA Lab at NYU Abu Dhabi and UMass Amherst.</p>
       </div>
-    </section>
-
-  </main>
-
-  <!-- ============================================
-       FOOTER
-       ============================================ -->
-  <footer class="bg-canvas-inset text-fg-muted border-t border-bdcolor">
-    <div class="container mx-auto px-4 py-12">
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
-        <div>
-          <img src="assets/images/logo.svg" alt="DeciDB" class="h-8 mb-4 logo-img">
-          <p class="text-sm text-fg-subtle mb-4">Optimization-enabled SQL queries for DuckDB</p>
-          <p class="text-xs text-fg-subtle">&copy; 2026 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
-        </div>
-        <div>
-          <h4 class="font-semibold text-fg mb-3 text-sm">Documentation</h4>
-          <ul class="space-y-2 text-sm">
-            <li><a href="getting-started.html" class="text-fg-subtle hover:text-accent">Getting Started</a></li>
-            <li><a href="documentation.html" class="text-fg-subtle hover:text-accent">Syntax Reference</a></li>
-            <li><a href="examples.html" class="text-fg-subtle hover:text-accent">Examples</a></li>
-          </ul>
-        </div>
-        <div>
-          <h4 class="font-semibold text-fg mb-3 text-sm">Resources</h4>
-          <ul class="space-y-2 text-sm">
-            <li><a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">GitHub Repository</a></li>
-            <li><a href="https://github.com/huda-lab/decidb/issues" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">Issue Tracker</a></li>
-            <li><a href="about.html#research" class="text-fg-subtle hover:text-accent">Research Papers</a></li>
-          </ul>
-        </div>
-        <div>
-          <h4 class="font-semibold text-fg mb-3 text-sm">Contact</h4>
-          <ul class="space-y-2 text-sm text-fg-subtle">
-            <li>NYU Abu Dhabi &amp; UMass Amherst</li>
-            <li><a href="mailto:support@decidb.com" class="text-accent hover:text-accent">support@decidb.com</a></li>
-          </ul>
-        </div>
+      <div>
+        <h4>Learn</h4>
+        <ul>
+          <li><a href="getting-started.html">Get started</a></li>
+          <li><a href="documentation.html">Language reference</a></li>
+          <li><a href="problems.html">Problems you can express</a></li>
+          <li><a href="examples.html">Examples</a></li>
+        </ul>
       </div>
-      <div class="mt-8 pt-8 border-t border-bdcolor-muted text-center text-xs text-fg-subtle">
-        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled)</p>
+      <div>
+        <h4>Project</h4>
+        <ul>
+          <li><a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer">GitHub repository</a></li>
+          <li><a href="https://github.com/huda-lab/decidb/issues" target="_blank" rel="noopener noreferrer">Issue tracker</a></li>
+          <li><a href="about.html#research">Research papers</a></li>
+          <li><a href="https://huda-lab.github.io/" target="_blank" rel="noopener noreferrer">HUDA Lab</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Contact</h4>
+        <ul>
+          <li><a href="mailto:support@decidb.com">support@decidb.com</a></li>
+          <li class="subtle">NYU Abu Dhabi &amp; UMass Amherst</li>
+        </ul>
       </div>
     </div>
-  </footer>
-
-  <!-- Initialize Lucide Icons -->
-  <script>
-    lucide.createIcons();
-  </script>
-
+    <div class="footer-bottom">
+      <span>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</span>
+      <span>Built on DuckDB &middot; Solvers: Gurobi when available, HiGHS bundled</span>
+    </div>
+  </div>
+</footer>
 </body>
 </html>

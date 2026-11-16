@@ -1,0 +1,622 @@
+<section class="page-head">
+  <div class="container">
+    <div class="crumbs"><a href="index.html">Home</a><span>/</span>Docs</div>
+    <h1>The DECIDE language</h1>
+    <p>Everything a DECIDE query can say and exactly what it means. Every example in this reference runs on DeciDB as
+      written; a green dot on a code block marks one that was executed when the site was built.</p>
+  </div>
+</section>
+
+<div class="container">
+  <div class="doc-layout">
+    <nav class="toc" aria-label="Reference contents">
+      <div class="toc-title">Reference</div>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#decisions">Decisions</a></li>
+        <li class="sub"><a href="#keyed">Keyed decisions</a></li>
+        <li class="sub"><a href="#query-wide">Query-wide decisions</a></li>
+        <li><a href="#constraints">Constraints</a></li>
+        <li><a href="#scopes">Scopes: per, when, by</a></li>
+        <li class="sub"><a href="#scope-order">How a scope is evaluated</a></li>
+        <li class="sub"><a href="#determination">The determination rule</a></li>
+        <li><a href="#reducers">Reducers</a></li>
+        <li class="sub"><a href="#colon-form">The colon form</a></li>
+        <li class="sub"><a href="#min-max">MIN and MAX</a></li>
+        <li class="sub"><a href="#norm">norm()</a></li>
+        <li><a href="#objective">Objective</a></li>
+        <li class="sub"><a href="#two-level">Two-level objective</a></li>
+        <li class="sub"><a href="#quadratic">Quadratic and bilinear</a></li>
+        <li><a href="#nulls">NULL and empty groups</a></li>
+        <li><a href="#numbers">Numbers and casts</a></li>
+        <li><a href="#explain">EXPLAIN</a></li>
+        <li><a href="#diagnose">DIAGNOSE</a></li>
+        <li><a href="#direct-solve">Direct solve</a></li>
+        <li><a href="#settings">Settings</a></li>
+        <li><a href="#migrating">Migrating from 0.2</a></li>
+        <li><a href="#roadmap">Not supported yet</a></li>
+      </ul>
+    </nav>
+
+    <article class="prose">
+
+      <!-- ============================================================ OVERVIEW -->
+      <section id="overview">
+        <h2>Overview <a class="anchor" href="#overview">#</a></h2>
+        <p class="lead">A DECIDE query is a <code>SELECT</code> that also declares decisions, the constraints they must
+          satisfy and, optionally, what to optimize. DeciDB builds a model from the query's rows, solves it, and returns
+          the rows with the decisions filled in.</p>
+        <p>Two clause orders parse to the same plan. Write the declaration in one place, never both:</p>
+<!--sql-->-- The paper's order: the declaration between SELECT and FROM
+SELECT ...
+DECIDE [per key:] name(type) [, ...]
+FROM ... [JOIN ...] [WHERE ...]
+SUCH THAT [scope:] constraint [AND [scope:] constraint ...]
+[MAXIMIZE | MINIMIZE [when condition:] objective]
+
+-- Single-block order: everything after WHERE
+SELECT ... FROM ... [WHERE ...]
+DECIDE [per key:] name(type) [, ...]
+SUCH THAT ...
+[MAXIMIZE | MINIMIZE ...]<!--/sql-->
+        <ul>
+          <li><code>FROM</code>, joins and <code>WHERE</code> run first. Their result rows are the rows decisions are made over.</li>
+          <li><code>SUCH THAT</code> is required. Constraints are joined by <code>AND</code>; a comma between them is an error.</li>
+          <li>No objective means a feasibility problem: any assignment that satisfies every constraint.</li>
+          <li><code>SELECT</code>, <code>ORDER BY</code> and any outer query run after the solve and see decisions as
+            ordinary columns.</li>
+        </ul>
+        <h3>Grammar</h3>
+<!--text title="Grammar"-->decide_list ::= declarator (',' declarator)*
+declarator  ::= ['per' key ':'] name '(' INT | BOOL | REAL ')'
+constraint  ::= [scope ':'] comparison
+objective   ::= (MAXIMIZE | MINIMIZE) [scope ':'] expression     -- the objective takes no per but ()
+scope       ::= ['when' condition] ['per' key]                    -- at least one of the two
+reducer     ::= agg '(' [scope ':'] expression ')' ['by' '(' [expression, ...] ')']
+              | agg '(' relation, ... ':' expression ')' ['by' ...]
+agg         ::= SUM | AVG | MIN | MAX                             -- norm(e, p) and count(*) take a by
+key         ::= '(' ')'  |  'row'  |  element (',' element)*
+element     ::= column | relation                                 -- a relation stands for all its columns<!--/text-->
+        <p>Inside a DECIDE clause, <code>when</code>, <code>per</code>, a <code>by</code> right after <code>)</code> and a
+          <code>row</code> right after <code>per</code> are keywords. Quote a column with one of those names there:
+          <code>x &lt;= "per"</code>. Outside the clause nothing changes; <code>GROUP BY</code> and
+          <code>ORDER BY</code> in a subquery are untouched.</p>
+      </section>
+
+      <!-- ============================================================ DECISIONS -->
+      <section id="decisions">
+        <h2>Decisions <a class="anchor" href="#decisions">#</a></h2>
+        <p>Each declarator has a name and a mandatory type. Reference a decision by its bare name in
+          <code>SUCH THAT</code>, the objective, <code>SELECT</code> and <code>ORDER BY</code>.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Type</th><th>Domain</th><th>Result type</th></tr></thead>
+          <tbody>
+            <tr><td><code>x(BOOL)</code></td><td>{0, 1}</td><td><code>INTEGER</code></td></tr>
+            <tr><td><code>x(INT)</code></td><td>0, 1, 2, … by default</td><td><code>BIGINT</code></td></tr>
+            <tr><td><code>x(REAL)</code></td><td>[0, ∞) by default</td><td><code>DOUBLE</code></td></tr>
+          </tbody>
+        </table></div>
+        <h3>Signed decisions</h3>
+        <p>Zero is a default lower bound for <code>INT</code> and <code>REAL</code>, not a floor. A decision becomes
+          signed when the query bounds it alone below zero: <code>x &gt;= -K</code> in any affine spelling,
+          <code>x BETWEEN -K AND K</code>, an easy <code>MIN(x) &gt;= -K</code>, or a negative value in an
+          <code>IN</code> list. Under a <code>when</code>, only the rows it keeps take the negative floor.</p>
+<!--sql check="items-real" frag-->x BETWEEN -2 AND 2 AND SUM(x * weight) <= 40<!--/sql-->
+        <p>There is no fully free domain: a signed decision always has a finite lower bound, unless the query writes
+          <code>-1e30</code> or below.</p>
+        <h3>How many decisions</h3>
+        <p>The declaration's key sets how many decisions a declarator makes. Each declarator has its own key.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Spelling</th><th>Scope</th><th>Decisions</th></tr></thead>
+          <tbody>
+            <tr><td><code>x(INT)</code>, <code>per row: x(INT)</code></td><td>per row (default)</td><td>one per result row</td></tr>
+            <tr><td><code>per K: x(INT)</code></td><td>keyed</td><td>one per distinct value of <code>K</code> among the result rows</td></tr>
+            <tr><td><code>per (): x(INT)</code></td><td>query-wide</td><td>exactly one</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3 id="keyed">Keyed decisions: <code>per K: x(TYPE)</code> <a class="anchor" href="#keyed">#</a></h3>
+<!--sql-->DECIDE per D.depotID: reserve(REAL)              -- one per distinct depotID
+DECIDE per D: open(BOOL)                         -- one per distinct row of D
+DECIDE per D.region, S.shipmentID: alloc(INT)    -- one per distinct pair, across relations
+DECIDE ship(INT), per D: open(BOOL), per (): cap(INT)   -- each declarator has its own key<!--/sql-->
+        <ul>
+          <li>Key elements are columns and relations of the <code>FROM</code> clause, spelled as anywhere in the query.
+            A relation stands for all its stored columns. Expressions belong in <code>by</code>, not in a key.</li>
+          <li>A key is a set: <code>per a, b</code> and <code>per b, a</code> are the same key.</li>
+          <li>Every row shows its class's value. A row whose key column is NULL is in no class and has no decision; it
+            shows NULL.</li>
+        </ul>
+        <div class="callout"><strong>Sums count result rows</strong>
+          <p>Over a join, a keyed decision appears on every row of its key, and an unscoped <code>SUM</code> reads it once
+            per row, as SQL would. To count each class once, give the reducer its own <code>per</code>
+            (<code>SUM(per n: keep * skill)</code>) or use the <a href="#colon-form">colon form</a>. See
+            <a href="examples/keyed-decisions.html">the nurse example</a>.</p></div>
+<!--sql check="keyed-decisions"-->SELECT n.name, s.shift_date, keep
+FROM nurses n JOIN shifts s ON n.id = s.nurse_id
+DECIDE per n: keep(BOOL)
+SUCH THAT SUM(keep * s.hours) <= 60            -- one term per shift row
+MAXIMIZE SUM(per n: keep * n.skill_score);     -- each nurse's skill once<!--/sql-->
+
+        <h3 id="query-wide">Query-wide decisions: <code>per (): x(TYPE)</code> <a class="anchor" href="#query-wide">#</a></h3>
+        <p>One decision for the whole query, whatever the input size: a threshold, a shared ceiling, a worst case. Its
+          value repeats on every row. It may stand beside a reducer or be its bound under any <code>per</code>, and it
+          counts once.</p>
+<!--sql check="min-max-shortfall"-->-- The DeciDB paper's Example 1: no region falls short by more than max_shortfall
+SELECT r.routeID, r.regionID, ship, max_shortfall
+FROM routes r JOIN regions g USING (regionID)
+DECIDE ship(INT), per (): max_shortfall(INT)
+SUCH THAT ship <= r.capacity AND SUM(ship) <= 40
+      AND per g: g.demand - SUM(ship) by (g) <= max_shortfall
+MINIMIZE max_shortfall;<!--/sql-->
+        <p>A sum over query-wide decisions alone (<code>SUM(cap)</code>) is refused as a constraint's whole decision
+          side: there is one value and nothing to add up, so write <code>cap</code>. Mixed with row data it is ordinary
+          scaling: <code>SUM(cost * cap)</code> is <code>(Σ cost) · cap</code>.</p>
+      </section>
+
+      <!-- ============================================================ CONSTRAINTS -->
+      <section id="constraints">
+        <h2>Constraints <a class="anchor" href="#constraints">#</a></h2>
+        <p>Every constraint must hold. Join them with <code>AND</code>; <code>OR</code> between constraints is refused,
+          because a choice between alternatives is a <code>BOOL</code> decision. <code>OR</code> inside a
+          <code>when</code> or a subquery is data and unaffected.</p>
+        <p>A constraint with no reducer holds on every row (<code>units &lt;= capacity</code>). One with a reducer holds
+          over the rows the reducer reads (<code>SUM(units) &gt;= 500</code>). Either side may carry decisions:
+          <code>5 &gt;= x</code> and <code>x &lt;= 5</code> are the same constraint, and a reducer may sit on both
+          sides.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Operator</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>=</code> <code>&lt;=</code> <code>&gt;=</code></td><td>Any decisions.</td></tr>
+            <tr><td><code>&lt;</code> <code>&gt;</code> <code>&lt;&gt;</code></td><td>Exact only on whole numbers, so each
+              side must have an integer type: <code>INT</code>/<code>BOOL</code> decisions and integer or
+              <code>DECIMAL(p, 0)</code> data. Checked on declared types, so one fractional row can never break a working
+              query. <code>SUM(x) &lt;&gt; 0</code> over non-negative decisions becomes <code>SUM(x) &gt;= 1</code>.</td></tr>
+            <tr><td><code>BETWEEN</code></td><td>Two constraints under one scope.</td></tr>
+            <tr><td><code>IN</code></td><td>On a decision, restricts its domain: <code>x IN (0, 2, 3)</code>. On a column, a filter.</td></tr>
+          </tbody>
+        </table></div>
+<!--sql check="items-int" frag-->x IN (0, 2, 3) AND SUM(x * weight) <= 80 AND SUM(x) <> 4<!--/sql-->
+<!--sql check="items-real" frag expect="is not supported over the REAL decision" show-->SUM(x * weight) > 40<!--/sql-->
+        <h3>What a term may hold</h3>
+        <ul>
+          <li><strong>Data.</strong> Any operand that reads no decision is data, evaluated per row exactly as SQL would:
+            arithmetic, functions, <code>CASE</code>, comparisons as 0/1, lambdas, prepared-statement parameters.</li>
+          <li><strong>Decisions.</strong> Linear terms, products of two decisions and squares
+            (<code>POWER(e, 2)</code>, <code>e ** 2</code>, <code>e * e</code>). <code>ABS</code> and
+            <code>POWER</code> with a whole exponent are the only functions that take a decision. A term of degree 3 or
+            more, a division by a decision, a cast of a decision or a <code>CASE</code> over a decision is refused, with
+            a message that quotes the clause.</li>
+          <li><strong>Subqueries.</strong> Scalar subqueries, correlated or not, may be bounds or factors. A subquery
+            cannot read the enclosing query's decisions.</li>
+        </ul>
+<!--sql check="items" frag-->SUM(x * weight) <= (SELECT MAX(weight) * 2 FROM Items)
+      AND x <= CASE WHEN category = 'tech' THEN 1 ELSE 0 END + 1<!--/sql-->
+        <h3>A DECIDE inside a bound</h3>
+        <p>A scalar subquery that bounds a constraint may hold its own <code>DECIDE</code>. It solves first and its
+          one-row result becomes the bound. Here: the lightest bag worth at least as much as the best 30 kg bag.</p>
+<!--sql run="items" dec="x" on="x"-->SELECT item, value, weight, x
+FROM Items
+DECIDE x(BOOL)
+SUCH THAT SUM(x * value) >= (
+    SELECT SUM(y * value) FROM (
+        SELECT value, y FROM Items
+        DECIDE y(BOOL)
+        SUCH THAT SUM(y * weight) <= 30
+        MAXIMIZE SUM(y * value)))
+MINIMIZE SUM(x * weight);<!--/sql-->
+      </section>
+
+      <!-- ============================================================ SCOPES -->
+      <section id="scopes">
+        <h2>Scopes: <code>per</code>, <code>when</code>, <code>by</code> <a class="anchor" href="#scopes">#</a></h2>
+        <p class="lead">Three keywords, three separate jobs.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Keyword</th><th>Where</th><th>Job</th></tr></thead>
+          <tbody>
+            <tr><td><code>per K</code></td><td>in front of a declarator, a constraint, the objective, or a reducer's argument</td><td>how many: one decision, constraint or reducer input per class of <code>K</code></td></tr>
+            <tr><td><code>when c</code></td><td>in front of a constraint, the objective, or a reducer's argument</td><td>which rows are looked at: those where <code>c</code> is true</td></tr>
+            <tr><td><code>by (Γ)</code></td><td>right after a reducer</td><td>which rows that one reducer reads: the kept rows sharing the current value of <code>Γ</code></td></tr>
+          </tbody>
+        </table></div>
+        <p><code>when</code> comes before <code>per</code>, and a colon follows the scope. A scope covers one constraint:
+          in <code>per g: A AND B</code>, only <code>A</code> is scoped.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Omitted</th><th>Means</th></tr></thead>
+          <tbody>
+            <tr><td><code>per</code> on a declarator, a constraint or inside a reducer</td><td><code>per row</code></td></tr>
+            <tr><td><code>per</code> on the objective</td><td><code>per ()</code>: the objective is produced once</td></tr>
+            <tr><td><code>by</code></td><td><code>by ()</code>: all kept rows</td></tr>
+            <tr><td><code>when</code></td><td>every row</td></tr>
+          </tbody>
+        </table></div>
+        <p><code>per</code> never selects the rows a reducer reads, and <code>by</code> never changes how many
+          constraints exist. One constraint often needs both:</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Written</th><th>Constraints</th><th>Each reducer reads</th></tr></thead>
+          <tbody>
+            <tr><td><code>ship &lt;= 0.20 * SUM(ship)</code></td><td>one per row</td><td>all rows</td></tr>
+            <tr><td><code>per (): SUM(ship) &lt;= networkCapacity</code></td><td>one</td><td>all rows</td></tr>
+            <tr><td><code>per D.depotID: SUM(ship) by (D.depotID) &lt;= D.capacity</code></td><td>one per depot</td><td>that depot's rows</td></tr>
+            <tr><td><code>ship &lt;= D.maxShipmentShare * SUM(ship) by (D.depotID)</code></td><td>one per row</td><td>that row's depot</td></tr>
+            <tr><td><code>per D.depotID: SUM(ship) by (D.region) &lt;= D.capacity</code></td><td>one per depot</td><td>the depot's region</td></tr>
+          </tbody>
+        </table></div>
+        <p>These come from the language proposal's worked examples, over shipments joined to depots
+          (<code>FROM Shipment S JOIN Depot D USING (depotID)</code>, with <code>DECIDE ship(INT), per D.depotID: reserve(REAL)</code>).
+          All of them run:</p>
+<!--sql check="deck" frag title="Examples 1–4"-->ship <= 0.20 * SUM(ship)
+AND per (): SUM(ship) <= networkCapacity
+AND per D.depotID: reserve >= D.networkReserveShare * SUM(S.demand)
+AND per D.depotID: SUM(ship) by (D.depotID) <= D.capacity<!--/sql-->
+<!--sql check="deck" frag title="Examples 5–8"-->ship <= D.maxShipmentShare * SUM(ship) by (D.depotID)
+AND per D.depotID: reserve >= 0.10 * SUM(S.demand) by (D.region) + 0.02 * SUM(S.demand) by (D.country)
+AND per D.depotID: SUM(when S.priority: ship) by (D.depotID) <= D.priorityCapacity
+AND per S.shipmentID: ship <= 0.25 * SUM(ship) by (D.depotID, S.dispatchDay + S.transitDays)<!--/sql-->
+        <ul>
+          <li><strong><code>per K</code></strong> lists columns and relations without parentheses (<code>per a, b:</code>);
+            <code>per ():</code> is exactly one; <code>per row:</code> is the default.</li>
+          <li><strong><code>when c</code></strong> is any boolean over data, ended by <code>per</code> or the colon, so
+            <code>when a and b:</code> needs no parentheses. NULL counts as false. It may not mention a decision, a
+            reducer or a window function. Nothing is computed on a row it drops, so <code>when s &lt;&gt; '' and
+            CAST(s AS INT) &gt; 3:</code> never casts an empty string.</li>
+          <li><strong><code>by (Γ)</code></strong> applies to <code>SUM</code>, <code>AVG</code>, <code>MIN</code>,
+            <code>MAX</code>, <code>norm</code> and <code>count(*)</code>, on either side, with or without a decision
+            inside. <code>Γ</code> lists columns, relations and data expressions, never a decision.</li>
+        </ul>
+
+        <h3 id="scope-order">How a scope is evaluated <a class="anchor" href="#scope-order">#</a></h3>
+        <ol>
+          <li><strong>Filter.</strong> Keep the rows where the <code>when</code> condition is true.</li>
+          <li><strong>Generate.</strong> Split the kept rows into classes by the <code>per</code> key; write the
+            constraint once per class.</li>
+          <li><strong>Aggregate.</strong> A reducer <code>agg(...) by (Γ)</code> reads every kept row whose
+            <code>Γ</code> equals the class's, including rows outside the class.</li>
+          <li><strong>Check.</strong> The key must determine every value the constraint reads once per class
+            (<a href="#determination">below</a>).</li>
+        </ol>
+<!--text title="per D.depotID: SUM(ship) by (D.region) <= D.capacity"-->  shipment  depot  region  ship  capacity
+  S1        D1     North   x1    100
+  S2        D1     North   x2    100
+  S3        D2     North   x3     80
+  S4        D3     South   x4     50
+
+  D1: x1 + x2 + x3 <= 100    D2: x1 + x2 + x3 <= 80    D3: x4 <= 50<!--/text-->
+        <p>A reducer inside a scope can have its own <code>when</code> and <code>per</code>, written
+          <code>agg(when c per K: e)</code>. The order is: the rows <code>by</code> selects, then the inner
+          <code>when</code>, then one value per class of the inner <code>per</code>, then the aggregate.</p>
+<!--sql-->SUM(when S.priority: ship)                          -- only priority rows
+SUM(per D: D.opening_cost * open)                   -- each depot once
+SUM(when S.priority per D: D.opening_cost * open)   -- filter, then each remaining depot once<!--/sql-->
+
+        <h3 id="determination">The determination rule <a class="anchor" href="#determination">#</a></h3>
+        <p>A constraint written once per class must read one value per class. So a <code>per</code> key must
+          <em>determine</em> everything its body reads outside reducers (bounds, factors, decisions) and every
+          <code>by</code> key: every row of a class must carry the same value.</p>
+        <ul>
+          <li>A keyed decision is determined when each class lies inside one class of its own key; a per-row decision
+            only when each class is one row; a query-wide decision always.</li>
+          <li>Literals and uncorrelated subqueries are always determined. <code>per ()</code> and the objective need one
+            value over all kept rows.</li>
+          <li><strong>It is checked on the data</strong>, every run, before solving, on kept rows only. A query can pass on
+            one dataset and fail on another; a static check would have to refuse queries that are fine on their data.</li>
+        </ul>
+<!--sql check="deck" frag-->per D.depotID: SUM(ship) by (D.region) <= 500   -- holds: each depot has one region<!--/sql-->
+<!--sql check="deck" frag expect="does not determine" show-->per D.depotID: ship <= 10    -- fails: ship is per row, a depot has several rows<!--/sql-->
+        <p>Without a <code>per</code>, a value that varies by row is reduced to its tightest value within each
+          <code>by</code> group instead: <code>SUM(ship) by (depotID) &lt;= stock</code> uses the smallest
+          <code>stock</code> for <code>&lt;=</code>, the largest for <code>&gt;=</code>. <code>=</code> refuses a bound
+          that varies.</p>
+      </section>
+
+      <!-- ============================================================ REDUCERS -->
+      <section id="reducers">
+        <h2>Reducers <a class="anchor" href="#reducers">#</a></h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Reducer</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>SUM(e)</code></td><td>The primary reducer. Data-only terms inside it move to the bound.</td></tr>
+            <tr><td><code>AVG(e)</code></td><td><code>SUM(e) / n</code>, where <code>n</code> is the number of values it reads.</td></tr>
+            <tr><td><code>MIN(e)</code>, <code>MAX(e)</code></td><td>See <a href="#min-max">MIN and MAX</a>.</td></tr>
+            <tr><td><code>norm(e, p)</code></td><td>L1, squared L2, L∞ or L0. See <a href="#norm">norm()</a>.</td></tr>
+            <tr><td><code>count(*)</code></td><td>Data only: the number of kept rows; takes a <code>by</code>.</td></tr>
+          </tbody>
+        </table></div>
+        <p><code>COUNT(x)</code> over a decision is refused; count chosen rows with <code>SUM(x)</code>. A factor may
+          scale any reducer, on either side: <code>2 * SUM(x * p)</code>, <code>SUM(x) / 2</code>, <code>-MAX(e)</code>.
+          In a constraint the factor may be any data; in the objective it must be one value over the kept rows. A
+          <code>BOOL</code> decision may scale a bare reducer (<code>b * SUM(x) &lt;= 4</code>).</p>
+<!--sql check="items" frag-->AVG(x * value) >= 20 AND SUM(x * weight) <= 2 * count(*) * 5<!--/sql-->
+
+        <h3 id="colon-form">The colon form: <code>SUM(D: e)</code> <a class="anchor" href="#colon-form">#</a></h3>
+        <p><code>agg(Rel: e)</code> means <code>agg(per Rel: e)</code>: one term per tuple of the named relation instead of
+          one per result row. Use it for a fixed cost that a join repeats.</p>
+<!--sql check="deck"-->SELECT S.shipmentID, D.depotID, open, ship
+FROM Shipment S JOIN Depot D USING (depotID)
+DECIDE per D: open(BOOL), ship(INT)
+SUCH THAT ship <= S.demand * open AND SUM(ship) >= 120
+MINIMIZE SUM(S.unit_cost * ship) + SUM(D: D.opening_cost * open);  -- each depot's cost once<!--/sql-->
+        <ul>
+          <li>Identity is the tuple, not the value: two depots with equal cost are two terms. This is not
+            <code>SUM(DISTINCT ...)</code>.</li>
+          <li>The named relations must determine the body; this is checked on the data.</li>
+          <li><code>AVG(D: e)</code> divides by the number of depots. Naming several relations (<code>SUM(D, T: e)</code>)
+            removes the fan-out of each.</li>
+        </ul>
+
+        <h3 id="min-max">MIN and MAX <a class="anchor" href="#min-max">#</a></h3>
+        <p>The <em>easy</em> direction, <code>MAX(e) &lt;= K</code> or <code>MIN(e) &gt;= K</code>, bounds every member
+          and adds nothing to the model. The <em>hard</em> direction (the opposite, or <code>=</code>) adds an extremum
+          variable per group, tied to the members by indicator constraints, so every member needs a finite bound. In the
+          objective, <code>MINIMIZE MAX</code> and <code>MAXIMIZE MIN</code> are cheap; the other two directions add
+          indicators.</p>
+<!--sql check="items-int" frag-->MAX(x * weight) <= 40 AND MAX(x * weight) >= 30 AND SUM(x) <= 4<!--/sql-->
+
+        <h3 id="norm">norm(e, p) <a class="anchor" href="#norm">#</a></h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th><code>p</code></th><th>Means</th><th>Class</th></tr></thead>
+          <tbody>
+            <tr><td><code>1</code></td><td><code>SUM(ABS(e))</code></td><td>LP</td></tr>
+            <tr><td><code>2</code></td><td><code>SUM(POWER(e, 2))</code>, the squared L2 norm</td><td>convex QP</td></tr>
+            <tr><td><code>'inf'</code></td><td><code>MAX(ABS(e))</code></td><td>LP</td></tr>
+            <tr><td><code>0</code> or <code>0, M</code></td><td>the number of rows where <code>|e| ≥</code> a tolerance (1e-4)</td><td>MILP</td></tr>
+          </tbody>
+        </table></div>
+        <p>The L0 count is exact in every direction (cap, floor, <code>=</code>, <code>MAXIMIZE</code>); <code>e</code>
+          needs finite bounds. A <code>norm</code> takes a <code>when</code> or <code>per</code> in front of its clause and a
+          <code>by</code> after it, but no scope inside.</p>
+<!--sql check="price-changes"-->SELECT item, price, new_price
+FROM Menu
+DECIDE new_price(REAL)
+SUCH THAT new_price BETWEEN floor AND ceiling
+      AND SUM(new_price * weekly_qty) >= 16500
+      AND norm(new_price - price, 0) <= 2       -- at most two prices change
+MINIMIZE norm(new_price - price, 1);            -- smallest total change<!--/sql-->
+      </section>
+
+      <!-- ============================================================ OBJECTIVE -->
+      <section id="objective">
+        <h2>Objective <a class="anchor" href="#objective">#</a></h2>
+<!--sql-->MAXIMIZE SUM(ship)                                     -- produced once: per () implied
+MAXIMIZE when S.priority: SUM(ship)                    -- over the priority rows only
+MINIMIZE SUM(S.unit_cost * ship) + SUM(D: D.opening_cost * open)
+MINIMIZE max(per D.depotID: SUM(ship) by (D.depotID))  -- two-level form<!--/sql-->
+        <ul>
+          <li>The objective is produced once: no <code>per</code> means <code>per ()</code>, and any other
+            <code>per</code> is an error.</li>
+          <li>Its body is reducers, decisions outside them, and sums of those, with at least one decision.</li>
+          <li>A decision outside a reducer must have one instance over the kept rows: any <code>per ()</code> decision,
+            or a per-row or keyed one when the <code>when</code> keeps one row or class
+            (<code>MAXIMIZE when id = 3: x</code>).</li>
+          <li><code>when c</code> filters the rows for the whole objective. A term that reads no row is dropped.</li>
+        </ul>
+<!--sql check="deck-obj" frag-->MINIMIZE when S.priority: SUM(S.unit_cost * ship) + SUM(D: D.opening_cost * open) + cap<!--/sql-->
+
+        <h3 id="two-level">Two-level objective <a class="anchor" href="#two-level">#</a></h3>
+        <p><code>outer(per k: inner(e) by (k))</code> computes <code>inner</code> once per class of <code>k</code>, then
+          <code>outer</code> over those values. All nine <code>SUM</code>/<code>MIN</code>/<code>MAX</code> pairs work;
+          <code>k</code> may list several columns. It takes a minus sign or a constant factor and a <code>when</code> in
+          front. The <code>by</code> key must be the <code>per</code> key.</p>
+<!--sql check="makespan"-->SELECT M.machine, J.job, run
+FROM Jobs J CROSS JOIN Machines M
+DECIDE run(BOOL)
+SUCH THAT per J: SUM(run) by (J) = 1
+MINIMIZE max(per M.machine: SUM(run * J.hours) by (M.machine));   -- the busiest machine<!--/sql-->
+
+        <h3 id="quadratic">Quadratic and bilinear terms <a class="anchor" href="#quadratic">#</a></h3>
+        <ul>
+          <li><strong>Squares.</strong> <code>MINIMIZE SUM(POWER(linear, 2))</code> is a convex QP on both solvers (on
+            HiGHS when continuous and the matrix is non-singular). <code>-POWER(...)</code> under <code>MAXIMIZE</code>
+            is concave and also fine. <code>MAXIMIZE SUM(POWER(...))</code> is non-convex: Gurobi only. Any number of
+            squares may be added together.</li>
+          <li><strong>Quadratic constraints</strong>, such as <code>SUM(POWER(x - target, 2)) &lt;= 9</code>, need
+            Gurobi.</li>
+          <li><strong>Products of two decisions.</strong> With one <code>BOOL</code> factor, <code>b * x</code> is
+            linearized exactly and runs on both solvers (the other factor needs a finite upper bound). Otherwise it is
+            non-convex and Gurobi only. Three decision factors are refused.</li>
+          <li>Integer decisions with a quadratic objective (MIQP) need Gurobi.</li>
+        </ul>
+<!--sql check="rebalancing"-->SELECT asset, w
+FROM Holdings
+DECIDE w(REAL)
+SUCH THAT w <= max_weight AND SUM(w) = 1
+      AND SUM(POWER(w - target, 2)) <= 0.02             -- a quadratic constraint (Gurobi)
+MINIMIZE SUM(POWER(w - target, 2)) + 0.1 * norm(w - target, 1);<!--/sql-->
+        <p>A query whose class the available solver cannot take is refused at plan time, before any row is read, with a
+          message naming the clause and the solver it needs. See <a href="problems.html#classes">problem classes</a>.</p>
+      </section>
+
+      <!-- ============================================================ NULLS -->
+      <section id="nulls">
+        <h2>NULL and empty groups <a class="anchor" href="#nulls">#</a></h2>
+        <p>A NULL data value is skipped where it is read, never read as zero.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Situation</th><th>Outcome</th></tr></thead>
+          <tbody>
+            <tr><td>NULL in a declaration, <code>per</code> or <code>by</code> key column</td><td>no class or group for that row (a relation key compares NULL as a value)</td></tr>
+            <tr><td>a keyed decision on a NULL-key row</td><td>no decision: the row shows NULL</td></tr>
+            <tr><td>NULL <code>when</code> condition</td><td>the row is dropped</td></tr>
+            <tr><td>NULL in a reducer's summand</td><td>the row is skipped, as in SQL; <code>AVG</code> divides by the rows kept</td></tr>
+            <tr><td>NULL bound or coefficient outside a reducer</td><td>that instance of the constraint is skipped</td></tr>
+            <tr><td>NULL in an objective term</td><td>the term is dropped</td></tr>
+            <tr><td>a <code>when</code> that keeps no row, or a group a reducer reads nothing from</td><td>no constraint there</td></tr>
+            <tr><td><code>count(*)</code> over no rows</td><td>0, as in SQL</td></tr>
+            <tr><td>NULL written beside a decision (<code>SUM(x + NULL)</code>), NaN in data, an infinite coefficient</td><td>an error that names the value</td></tr>
+          </tbody>
+        </table></div>
+        <p>To impute instead of skip, write it: <code>SUM(x * COALESCE(w, 0))</code>.</p>
+      </section>
+
+      <!-- ============================================================ NUMBERS -->
+      <section id="numbers">
+        <h2>Numbers and casts <a class="anchor" href="#numbers">#</a></h2>
+        <ul>
+          <li>A model carries one numeric type, <code>DOUBLE</code>, as both solvers do.</li>
+          <li>A cast over a decision is refused in <code>SUCH THAT</code> and the objective; cast the data instead.
+            Data casts keep DuckDB's meaning: <code>x &lt;= CAST(1.6 AS INTEGER)</code> has bound 2.</li>
+          <li>A whole-number answer beyond 2<sup>53</sup> is refused rather than rounded.</li>
+          <li>When the model holds a coefficient of 1e6 or more, a bound of about 4.5e9 or more, or an objective
+            coefficient of 1e-6 or less, DeciDB prints one warning to scale the data toward 1, then solves.</li>
+        </ul>
+      </section>
+
+      <!-- ============================================================ EXPLAIN -->
+      <section id="explain">
+        <h2>EXPLAIN <a class="anchor" href="#explain">#</a></h2>
+        <p><code>EXPLAIN</code>, <code>EXPLAIN ANALYZE</code> and <code>EXPLAIN (FORMAT JSON)</code> work on a DECIDE
+          query. The DECIDE node lists the decisions, the objective and the constraints, each as you wrote it. Indented
+          lines follow only where the model differs: <code>↳</code> for what a rewrite made of a clause, such as an
+          auxiliary variable or a helper decision. <code>EXPLAIN</code> plans without solving.</p>
+<!--explain check="deck"-->SELECT S.shipmentID, ship
+FROM Shipment S JOIN Depot D USING (depotID)
+DECIDE ship(INT)
+SUCH THAT ship <= S.demand
+      AND per D.depotID: SUM(ship) by (D.region) <= D.capacity
+      AND abs(SUM(ship) by (D.region) - 40) <= 30
+MAXIMIZE SUM(ship);<!--/explain-->
+        <p>A query answered by <a href="#direct-solve">direct solve</a> shows <code>Direct solve rule</code> and the
+          problem class in its plan instead.</p>
+      </section>
+
+      <!-- ============================================================ DIAGNOSE -->
+      <section id="diagnose">
+        <h2>DIAGNOSE <a class="anchor" href="#diagnose">#</a></h2>
+        <p>When no assignment satisfies every constraint, a query stops with an error that says what to do next:</p>
+<!--sql check="knapsack" expect="Prefix the query with DIAGNOSE" show-->SELECT item, x FROM Items
+DECIDE x(BOOL)
+SUCH THAT SUM(x * weight) <= 40 AND SUM(x) >= 4
+MAXIMIZE SUM(x * value);<!--/sql-->
+        <p>Prefix it with <code>DIAGNOSE</code>. The query runs, and instead of its rows you get one row per finding: the
+          clause as you wrote it, the smallest change that fixes it, and the objective you would get after the change.
+          <code>DIAGNOSE</code> is the only thing that starts the diagnosis engine, so a query without it never pays for
+          one.</p>
+<!--sql run="knapsack" dec="suggested_change,amount"-->DIAGNOSE
+SELECT item, x FROM Items
+DECIDE x(BOOL)
+SUCH THAT SUM(x * weight) <= 40 AND SUM(x) >= 4
+MAXIMIZE SUM(x * value);<!--/sql-->
+        <div class="table-wrap"><table>
+          <thead><tr><th>Column</th><th>Holds</th></tr></thead>
+          <tbody>
+            <tr><td><code>state</code></td><td><code>infeasible</code>, <code>unbounded</code> or <code>feasible</code></td></tr>
+            <tr><td><code>clause</code></td><td>the clause as written, or the decision that grows without bound</td></tr>
+            <tr><td><code>suggested_change</code></td><td>the smallest edit that addresses the finding</td></tr>
+            <tr><td><code>amount</code></td><td>how far a bound moves, how many instances escape, or the achievable objective</td></tr>
+            <tr><td><code>total</code>, <code>scope</code></td><td>for an unbounded query: out of how many instances, per row or keyed</td></tr>
+            <tr><td><code>edit_source</code></td><td>the kind of finding: <code>source_literal</code>, <code>virtual_offset</code>, <code>remove_only</code>, <code>runaway_+inf</code>, <code>achievable_objective</code>, …</td></tr>
+            <tr><td><code>group</code>, <code>row</code></td><td>the class or row a finding covers, in expanded mode</td></tr>
+          </tbody>
+        </table></div>
+        <p>A query that solves returns one row, <code>state = 'feasible'</code>. A bound read from data
+          (<code>x &lt;= col</code>) is reported as an offset, <code>x &lt;= col + delta</code>.
+          <code>SET diagnose_decide_infeasible_slack_scope = 'expanded'</code> reports one edit per row or per class
+          instead of per clause. <code>DIAGNOSE</code> always uses a solver.</p>
+        <h3>A slow solve</h3>
+        <p>If a solve hits its time limit or you press Ctrl-C, the query prints a checkpoint report. At a terminal it
+          offers to keep solving (Enter) or stop with the best answer so far (<code>s</code>); in a script it errors;
+          after Ctrl-C it returns the best answer found, marked as not proven best. <code>SET decide_mip_gap = 1e-4</code>
+          accepts an answer within 0.01% of the optimum.</p>
+      </section>
+
+      <!-- ============================================================ DIRECT SOLVE -->
+      <section id="direct-solve">
+        <h2>Direct solve <a class="anchor" href="#direct-solve">#</a></h2>
+        <p>Some queries have a closed-form answer that DuckDB's own operators compute: sort and take the top
+          <em>k</em>, fill a budget greedily, match two sorted lists. When DeciDB can prove a query has one of these shapes,
+          it answers that way instead of calling a solver. A query it cannot prove takes the solver path unchanged. There is
+          no syntax for it: the same SQL simply gets faster and exact.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Setting</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>SET decide_direct_solve = 'auto'</code></td><td>default: answer directly when proved</td></tr>
+            <tr><td><code>SET decide_direct_solve = 'off'</code></td><td>always use the solver</td></tr>
+            <tr><td><code>SET decide_direct_solve = 'require'</code></td><td>raise an error when no rule applies</td></tr>
+          </tbody>
+        </table></div>
+        <p>When several assignments are optimal, direct solve may return a different one than the solver; the objective
+          is the same. The classes it covers are listed on <a href="problems.html#direct-solve">Problems</a>.</p>
+      </section>
+
+      <!-- ============================================================ SETTINGS -->
+      <section id="settings">
+        <h2>Settings <a class="anchor" href="#settings">#</a></h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Setting</th><th>Default</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>decide_direct_solve</code></td><td><code>auto</code></td><td><code>auto</code>, <code>off</code> or <code>require</code></td></tr>
+            <tr><td><code>decide_mip_gap</code></td><td><code>0</code></td><td>accept an answer within this relative gap of the optimum</td></tr>
+            <tr><td><code>decide_l0_tolerance</code></td><td><code>1e-4</code></td><td>the size at which <code>norm(e, 0)</code> counts a row as nonzero</td></tr>
+            <tr><td><code>diagnose_decide_infeasible_slack_scope</code></td><td><code>query</code></td><td><code>query</code>: one edit per clause; <code>expanded</code>: one per row or class</td></tr>
+            <tr><td><code>diagnose_decide_escape_rate</code></td><td><code>0.8</code></td><td>report a category of an unbounded query at this escape rate or above</td></tr>
+            <tr><td><code>diagnose_decide_categorical_ratio</code></td><td><code>0.1</code></td><td>a column is categorical when its distinct values are at most this share of rows</td></tr>
+            <tr><td><code>diagnose_decide_min_categories</code></td><td><code>20</code></td><td>floor on that cap for small tables</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <!-- ============================================================ MIGRATING -->
+      <section id="migrating">
+        <h2>Migrating from 0.2 <a class="anchor" href="#migrating">#</a></h2>
+        <p class="lead">DeciDB 0.2 wrote scopes after a constraint (<code>SUM(x) &lt;= 2 PER sector</code>) and
+          qualified declarations with a table (<code>T.x(INT)</code>, <code>scalar x(INT)</code>). The language now
+          follows the DECIDE language proposal: scopes go in front, and a reducer says which rows it reads with
+          <code>by</code>.</p>
+        <p>Each old spelling is refused with a message that names the new one, built from your own query so you can paste
+          it back:</p>
+<!--sql check="diversification" expect="is removed" show-->SELECT ticker, pick FROM Stocks
+DECIDE pick(BOOL)
+SUCH THAT SUM(pick) <= 2 PER sector
+MAXIMIZE SUM(pick * expected_return);<!--/sql-->
+        <div class="table-wrap"><table>
+          <thead><tr><th>Old spelling</th><th>Write instead</th></tr></thead>
+          <tbody>
+            <tr><td><code>DECIDE T.x(INT)</code></td><td><code>DECIDE per T: x(INT)</code>, or <code>per T.k: x(INT)</code> to key on one column</td></tr>
+            <tr><td><code>DECIDE scalar x(INT)</code></td><td><code>DECIDE per (): x(INT)</code></td></tr>
+            <tr><td><code>SUM(x) &lt;= 2 PER g</code></td><td><code>per g: SUM(x) by (g) &lt;= 2</code></td></tr>
+            <tr><td><code>x &lt;= cap PER g</code> (no reducer)</td><td><code>x &lt;= cap</code>: a constraint without a reducer already holds on every row</td></tr>
+            <tr><td><code>SUM(x) &gt;= 2 WHEN c</code></td><td><code>when c: SUM(x) &gt;= 2</code></td></tr>
+            <tr><td><code>SUM(x) &gt;= d WHEN c PER g</code></td><td><code>when c per g: SUM(x) by (g) &gt;= d</code></td></tr>
+            <tr><td><code>SUM(x * h) WHEN c</code> inside an expression</td><td><code>SUM(when c: x * h)</code></td></tr>
+            <tr><td><code>COUNT(*) WHEN c</code></td><td><code>SUM(when c: 1)</code></td></tr>
+            <tr><td><code>SUM(D: e) WHEN c</code></td><td><code>SUM(when c per D: e)</code></td></tr>
+            <tr><td><code>MAXIMIZE SUM(e) WHEN c</code></td><td><code>MAXIMIZE when c: SUM(e)</code></td></tr>
+            <tr><td><code>MINIMIZE MAX(SUM(e)) PER g</code></td><td><code>MINIMIZE max(per g: SUM(e) by (g))</code></td></tr>
+            <tr><td><code>D.x</code> to reference a decision</td><td><code>x</code>: decisions are referenced by their bare name</td></tr>
+          </tbody>
+        </table></div>
+<!--sql check="diversification" title="The same query, new spelling"-->SELECT ticker, pick FROM Stocks
+DECIDE pick(BOOL)
+SUCH THAT per sector: SUM(pick) by (sector) <= 2
+MAXIMIZE SUM(pick * expected_return);<!--/sql-->
+        <p>Two meanings changed as well. A <code>per</code> without a <code>by</code> does not group the sum:
+          <code>per g: SUM(x) &lt;= 10</code> bounds the total over all kept rows, once per <code>g</code>; write
+          <code>by (g)</code> for each group's own total. And a NULL in the data no longer stops the query: it is skipped
+          where it is read, as SQL's aggregates skip it (<a href="#nulls">details</a>).</p>
+      </section>
+
+      <!-- ============================================================ ROADMAP -->
+      <section id="roadmap">
+        <h2>Not supported yet <a class="anchor" href="#roadmap">#</a></h2>
+        <p>The DECIDE language proposal goes further than DeciDB does today. These parts of it are planned, and a query
+          that uses one is refused with a message rather than answered differently:</p>
+        <ul>
+          <li><strong>Nested reducers</strong> to any depth, such as <code>SUM(MAX(ship) by (customer)) by (depot)</code>.
+            Today the <a href="#two-level">two-level objective</a> is the one nested shape.</li>
+          <li><strong>Variant signatures</strong>: one constraint per distinct combination where a key does not
+            determine a value. Today that is the determination error.</li>
+          <li><strong>Frame selectors</strong> for ordered data: <code>at(previous: e)</code>,
+            <code>SUM(from first to last: e) over (day)</code>, cyclic orders.</li>
+          <li><strong>Conditional constraints on decisions</strong> with <code>if</code>: enforce a capacity only if a
+            depot is decided open.</li>
+          <li><strong>Declaration bounds and domains</strong>: <code>between</code> at the declaration, semi-continuous
+            <code>SEMIREAL</code>/<code>SEMIINT</code>, finite text domains.</li>
+          <li><strong>Lexicographic objectives</strong> (<code>minimize e1 then maximize e2</code>) and an explicit
+            <code>satisfy</code>.</li>
+          <li><strong>A qualified decision name</strong> (<code>D.open</code>) as a plain name lookup.</li>
+          <li><strong>Second-order cone constraints</strong>. The squared form <code>norm(e, 2) &lt;= R * R</code>
+            already covers the common case.</li>
+        </ul>
+      </section>
+    </article>
+  </div>
+</div>

@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A cheap diet that meets nutrition targets · DeciDB example</title>
+<meta name="description" content="The diet problem in DeciDB: several nutrient constraints, minimum cost.">
+<meta name="keywords" content="DeciDB, DuckDB, SQL, constrained optimization, linear programming, mixed-integer programming, quadratic programming, DECIDE, solver, HUDA Lab">
+<link rel="icon" type="image/svg+xml" href="../assets/images/mark.svg">
+<script>(function(){try{var t=localStorage.getItem('decidb-theme');if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script>window.Prism = window.Prism || {}; window.Prism.manual = true;</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="container">
+    <a class="brand" href="../index.html" aria-label="DeciDB home">
+      <img class="logo-light" src="../assets/images/logo.svg" alt="DeciDB" width="100" height="30">
+      <img class="logo-dark" src="../assets/images/logo-dark.svg" alt="DeciDB" width="100" height="30">
+      <span class="by">HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</span>
+    </a>
+    <nav class="nav" aria-label="Main"><a href="../documentation.html">Docs</a><a href="../problems.html">Problems</a><a href="../examples.html" aria-current="page">Examples</a><a href="../getting-started.html">Get started</a><a href="../about.html">About</a></nav>
+    <div class="header-actions">
+      <a class="btn btn-ghost btn-sm" href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.56-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.78 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg> GitHub</a>
+      <button class="icon-btn theme-toggle" type="button" aria-label="Switch light or dark theme"><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg></button>
+      <button class="icon-btn menu-btn" type="button" aria-label="Open menu" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    </div>
+  </div>
+  <nav class="mobile-nav" aria-label="Mobile"><a href="../documentation.html">Docs</a><a href="../problems.html">Problems</a><a href="../examples.html">Examples</a><a href="../getting-started.html">Get started</a><a href="../about.html">About</a><a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer">GitHub</a></nav>
+</header>
+<main id="main">
+
+<section class="page-head"><div class="container"><div class="crumbs"><a href="../index.html">Home</a><span>/</span><a href="../examples.html">Examples</a><span>/</span>First problems</div><h1>A cheap diet that meets nutrition targets</h1><p>Pick servings of each food so protein, calories and fat land within their targets at the lowest cost.</p></div></section>
+<div class="container">
+  <div class="ex-layout">
+    <div class="prose" style="max-width:none">
+      <div class="meta" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:22px"><span class="badge">INT decision</span><span class="badge">BETWEEN</span><span class="badge">several targets</span></div>
+      <h2 style="font-size:1.35rem">The problem</h2>
+      <p>The classic diet problem: at most three servings of any food, at least 90 g of protein, between 1,800 and 2,200 calories, and no more than 50 g of fat.</p>
+      <h2 style="font-size:1.35rem;margin-top:36px">The data</h2>
+      <div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>Setup</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">CREATE TABLE Foods (food VARCHAR, cost DOUBLE, protein INT, calories INT, fat INT);
+INSERT INTO Foods VALUES
+    (&#x27;Oatmeal&#x27;, 0.60, 5, 150, 3), (&#x27;Chicken&#x27;, 2.40, 31, 240, 6),
+    (&#x27;Eggs&#x27;, 0.90, 12, 155, 10), (&#x27;Rice&#x27;, 0.40, 4, 205, 0),
+    (&#x27;Lentils&#x27;, 0.70, 18, 230, 1), (&#x27;Yogurt&#x27;, 1.10, 10, 150, 4),
+    (&#x27;Peanut butter&#x27;, 0.50, 8, 190, 16);</code></pre></div>
+      <h2 style="font-size:1.35rem;margin-top:36px">The query</h2>
+      <div class="query-result"><div class="code"><div class="code-head"><span class="code-title"><span class="dot ok" title="Runs on DeciDB as written"></span>DECIDE query</span><button class="copy-btn" type="button">Copy</button></div><pre><code class="language-sql">SELECT food, cost, servings
+FROM Foods
+DECIDE servings(INT)
+SUCH THAT servings &lt;= 3
+      AND SUM(servings * protein) &gt;= 90
+      AND SUM(servings * calories) BETWEEN 1800 AND 2200
+      AND SUM(servings * fat) &lt;= 50
+MINIMIZE SUM(servings * cost);</code></pre></div><div class="result"><div class="result-head"><b>Result</b><span>7 rows</span></div><div class="result-scroll"><table><thead><tr><th class="">food</th><th class="num">cost</th><th class="dec num">servings</th></tr></thead><tbody><tr><td>Oatmeal</td><td class="num">0.6</td><td class="num dec">0</td></tr><tr><td>Chicken</td><td class="num">2.4</td><td class="num dec">0</td></tr><tr class="on"><td>Eggs</td><td class="num">0.9</td><td class="num dec">1</td></tr><tr class="on"><td>Rice</td><td class="num">0.4</td><td class="num dec">3</td></tr><tr class="on"><td>Lentils</td><td class="num">0.7</td><td class="num dec">3</td></tr><tr><td>Yogurt</td><td class="num">1.1</td><td class="num dec">0</td></tr><tr class="on"><td>Peanut butter</td><td class="num">0.5</td><td class="num dec">2</td></tr></tbody></table></div></div></div>
+      <p class="muted" style="font-size:14.5px">Problem class: <strong>ILP</strong>.</p>
+      <h2 style="font-size:1.35rem;margin-top:36px">How it reads</h2>
+      <ul class="explain-list"><li><code>servings &lt;= 3</code><div>Per row: no food more than three times.</div></li><li><code>SUM(servings * protein) &gt;= 90</code><div>A total over all foods.</div></li><li><code>BETWEEN 1800 AND 2200</code><div><code>BETWEEN</code> is two constraints, a floor and a ceiling, on the same sum.</div></li><li><code>MINIMIZE SUM(servings * cost)</code><div>The cheapest plan that meets every target.</div></li></ul>
+      <h2 style="font-size:1.35rem;margin-top:36px">The answer</h2>
+      <p>Three servings each of rice and lentils, two of peanut butter and one egg: 94 g of protein, 1,840 calories and 45 g of fat for 5.20. Chicken has the most protein per serving but costs too much per gram.</p>
+
+      <div class="ex-nav"><a href="production.html"><small>Previous</small>Meet demand at the lowest cost</a><a href="category-rules.html" style="text-align:right"><small>Next</small>Category rules and a budget from a table</a></div>
+    </div>
+    <aside class="ex-aside">
+      <div class="card">
+        <h4>Shows</h4>
+        <ul><li>INT decision</li><li>BETWEEN</li><li>several targets</li></ul>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h4>Try it</h4>
+        <p style="font-size:14px">Paste the setup, then the query, into <code>decidb</code>. The result table above is the output of this exact SQL.</p>
+        <a class="btn btn-ghost btn-sm" href="../getting-started.html">Install DeciDB <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+      </div>
+    </aside>
+  </div>
+</div>
+
+</main>
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <img class="logo-light" src="../assets/images/logo.svg" alt="DeciDB" width="94" height="28">
+        <img class="logo-dark" src="../assets/images/logo-dark.svg" alt="DeciDB" width="94" height="28">
+        <p>Constrained optimization, native in SQL. Built on DuckDB by the HUDA Lab at NYU Abu Dhabi and UMass Amherst.</p>
+      </div>
+      <div>
+        <h4>Learn</h4>
+        <ul>
+          <li><a href="../getting-started.html">Get started</a></li>
+          <li><a href="../documentation.html">Language reference</a></li>
+          <li><a href="../problems.html">Problems you can express</a></li>
+          <li><a href="../examples.html">Examples</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Project</h4>
+        <ul>
+          <li><a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer">GitHub repository</a></li>
+          <li><a href="https://github.com/huda-lab/decidb/issues" target="_blank" rel="noopener noreferrer">Issue tracker</a></li>
+          <li><a href="../about.html#research">Research papers</a></li>
+          <li><a href="https://huda-lab.github.io/" target="_blank" rel="noopener noreferrer">HUDA Lab</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Contact</h4>
+        <ul>
+          <li><a href="mailto:support@decidb.com">support@decidb.com</a></li>
+          <li class="subtle">NYU Abu Dhabi &amp; UMass Amherst</li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</span>
+      <span>Built on DuckDB &middot; Solvers: Gurobi when available, HiGHS bundled</span>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

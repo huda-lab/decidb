@@ -1,0 +1,128 @@
+<section class="page-head">
+  <div class="container">
+    <div class="crumbs"><a href="index.html">Home</a><span>/</span>About</div>
+    <h1>About DeciDB</h1>
+    <p>A research collaboration between the HUDA Lab at NYU Abu Dhabi and UMass Amherst on bringing constrained
+      optimization into the database.</p>
+  </div>
+</section>
+
+<div class="container">
+  <div class="doc-layout">
+    <nav class="toc" aria-label="On this page">
+      <div class="toc-title">On this page</div>
+      <ul>
+        <li><a href="#idea">The idea</a></li>
+        <li><a href="#research">Research</a></li>
+        <li><a href="#team">Team</a></li>
+        <li><a href="#how">How it is built</a></li>
+        <li><a href="#next">What comes next</a></li>
+      </ul>
+    </nav>
+
+    <article class="prose">
+      <section id="idea">
+        <h2>The idea <a class="anchor" href="#idea">#</a></h2>
+        <p class="lead"><code>WHERE</code> filters one row at a time. <code>DECIDE</code> constrains the whole set of
+          decisions at once.</p>
+        <p>Package queries asked a database for a <em>set</em> of rows that satisfies constraints over the set: a meal
+          plan under a calorie budget, a portfolio within a risk limit. DeciDB generalizes them from choosing rows to
+          deciding values of any type (yes or no, whole quantities, continuous amounts), shared per row, per key or for
+          the whole query, and from linear rules to quadratic and bilinear ones.</p>
+        <p>The DECIDE language follows the language proposal developed with the project: three scope words
+          (<code>per</code>, <code>when</code>, <code>by</code>) that each answer one question about a rule, and a
+          determination rule that keeps every constraint well defined on the data it runs on.</p>
+      </section>
+
+      <section id="research">
+        <h2>Research <a class="anchor" href="#research">#</a></h2>
+        <div class="paper">
+          <div>
+            <h4>DeciDB: In-Database Processing of Decision Queries</h4>
+            <p>Anh L. Mai, Filip Milisov, Hatim Rehmanjee, Azza Abouzied, Peter J. Haas, Alexandra Meliou</p>
+            <p>Submitted to CIDR 2027</p>
+          </div>
+          <a class="btn btn-ghost btn-sm" href="assets/DeciDB_Paper.pdf" target="_blank" rel="noopener noreferrer">Read paper</a>
+        </div>
+        <div class="paper">
+          <div>
+            <h4>Scaling Package Queries to a Billion Tuples</h4>
+            <p>Anh L. Mai, Pengyu Wang, Azza Abouzied, Matteo Brucato, Peter J. Haas, Alexandra Meliou</p>
+            <p>VLDB 2024</p>
+          </div>
+          <a class="btn btn-ghost btn-sm" href="https://doi.org/10.14778/3641204.3641222" target="_blank" rel="noopener noreferrer">Read paper</a>
+        </div>
+        <div class="paper">
+          <div>
+            <h4>Scalable Computation of High-Order Optimization Queries</h4>
+            <p>Matteo Brucato, Azza Abouzied, Alexandra Meliou</p>
+            <p>ACM, 2019</p>
+          </div>
+          <a class="btn btn-ghost btn-sm" href="https://doi.org/10.1145/3299881" target="_blank" rel="noopener noreferrer">Read paper</a>
+        </div>
+        <div class="paper">
+          <div>
+            <h4>Scalable Package Queries in Relational Database Systems</h4>
+            <p>Matteo Brucato, Azza Abouzied, Alexandra Meliou</p>
+            <p>VLDB 2016</p>
+          </div>
+          <a class="btn btn-ghost btn-sm" href="https://doi.org/10.14778/2904483.2904489" target="_blank" rel="noopener noreferrer">Read paper</a>
+        </div>
+      </section>
+
+      <section id="team">
+        <h2>Team <a class="anchor" href="#team">#</a></h2>
+        <h3>NYU Abu Dhabi</h3>
+        <div class="people">
+          <div class="person"><b><a href="https://azza.azurewebsites.net/" target="_blank" rel="noopener noreferrer">Prof. Azza Abouzied</a></b><span>Professor of Computer Science</span></div>
+          <div class="person"><b>Anh Mai</b><span>PhD Student</span></div>
+          <div class="person"><b>Filip Milisov</b><span>Research Scientist</span></div>
+          <div class="person"><b>Hatim Rehmanjee</b><span>Research Scientist</span></div>
+        </div>
+        <h3>UMass Amherst</h3>
+        <div class="people">
+          <div class="person"><b><a href="https://people.cs.umass.edu/~ameli/" target="_blank" rel="noopener noreferrer">Prof. Alexandra Meliou</a></b><span>Professor of Information and Computer Sciences</span></div>
+          <div class="person"><b><a href="https://people.cs.umass.edu/~phaas/" target="_blank" rel="noopener noreferrer">Prof. Peter J. Haas</a></b><span>Professor of Information and Computer Sciences</span></div>
+        </div>
+        <h3>HUDA Lab</h3>
+        <p>The Human Data Interaction Lab works on making data systems more accessible, interactive and intelligent:
+          query interfaces for non-experts, visual data exploration, automated data analysis, and optimization in
+          databases. <a href="https://huda-lab.github.io/" target="_blank" rel="noopener noreferrer">Visit the HUDA Lab website</a>.</p>
+      </section>
+
+      <section id="how">
+        <h2>How it is built <a class="anchor" href="#how">#</a></h2>
+        <dl class="kv">
+          <dt><a href="https://duckdb.org" target="_blank" rel="noopener noreferrer">DuckDB</a></dt>
+          <dd>The embeddable analytical engine DeciDB extends: parser, binder, optimizer and execution each own one part
+            of a DECIDE query.</dd>
+          <dt><a href="https://www.gurobi.com/" target="_blank" rel="noopener noreferrer">Gurobi</a></dt>
+          <dd>Used when its library and license are present: every model class, and the fastest on these workloads.</dd>
+          <dt><a href="https://highs.dev/" target="_blank" rel="noopener noreferrer">HiGHS</a></dt>
+          <dd>Bundled and open source: LP, MILP and convex QP, with no setup.</dd>
+          <dt>Direct solve</dt>
+          <dd>Rules that recognize nine problem classes with an exact relational answer and compute it with DuckDB
+            operators, skipping the solver.</dd>
+          <dt>Testing</dt>
+          <dd>More than 7,000 Python cases, each comparing DeciDB's answer with an independent Gurobi model, run with
+            each solver and with direct solve on and off.</dd>
+          <dt>Distribution</dt>
+          <dd>Tagged releases ship command-line binaries for macOS, Linux and Windows, and Python wheels.</dd>
+        </dl>
+      </section>
+
+      <section id="next">
+        <h2>What comes next <a class="anchor" href="#next">#</a></h2>
+        <ul>
+          <li><strong>The rest of the language proposal:</strong> nested reducers at any depth, frame selectors for ordered
+            data, <code>if</code> on decisions, declaration bounds and lexicographic objectives
+            (<a href="documentation.html#roadmap">details</a>).</li>
+          <li><strong>More direct-solve classes:</strong> the catalogue lists further classes with exact relational answers,
+            such as discrete resource allocation and transportation on sorted costs.</li>
+          <li><strong>Sketch-Refine:</strong> scale past exact solving to very large inputs with a bounded approximation
+            error.</li>
+        </ul>
+      </section>
+    </article>
+  </div>
+</div>
