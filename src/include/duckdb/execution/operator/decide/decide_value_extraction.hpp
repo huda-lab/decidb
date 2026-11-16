@@ -204,8 +204,8 @@ vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_row
                                vector<idx_t> *kept_row_group_ids, EvaluatedConstraint &evaluated,
                                idx_t &grouped_instances);
 
-//! A composed MIN/MAX term's evaluation before its rows are read (ComposedMinMaxTermData): the algebra's reducer,
-//! sign and direction, and the reducer node's source label, so a diagnosis over its extremum column reads `max(ship)`.
+//! A composed MIN/MAX term's evaluation before its rows are read (ComposedMinMaxTermData): its reducer, sign and
+//! direction, and the reducer node's source label, so a diagnosis over its extremum column reads `max(ship)`.
 ComposedMinMaxTermData DecideComposedTerm(const string &agg_name, int sign, bool is_easy, const string &label);
 
 //! A composed term's factor (LogicalDecide::ComposedMinMaxTerm::scale), one value for the whole query by construction
@@ -311,7 +311,7 @@ void DecideMapRowsInNoClass(KeyedMapping &mapping);
 //! One member: the terms whose coefficients `columns` and variables `variables` are read at `row`, each coefficient
 //! times `scale`, those of no decision its constant. A constant past a DOUBLE names `label`, the helper as written.
 void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx_t> &variables, idx_t row, double scale,
-                      const string &label, ReducerValueMembers &out, const vector<idx_t> *value_nodes = nullptr);
+                      const string &label, ReducerValueMembers &out);
 
 //! `ec`'s members -- its rows, each in the group `row_group_ids` names, a reducer's `by` groups partitioning them --
 //! listed per group (ReducerValueMembers), each group read at its first member row; a group with no member is left

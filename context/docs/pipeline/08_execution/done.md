@@ -401,20 +401,20 @@ optimizer-owned MIN/MAX forms need it. Tree construction owns the definition E r
 plan-time indices and registers F-node specs before later optimizer consumers need them. The P9.4 regression gate
 passes.
 
-**Node-owned algebra transition.** Each tree node now retains an operator tree: comparisons, objectives and terms on
-E, reducer operators and member terms on G, frame operators and members on O, and output-to-body relations on F. Its
-leaves identify decision variables, child-node values and compiled data programs. The E emitter reads clause
-comparisons, RHS programs, term order and coefficient programs from that algebra. A flat MIN/MAX objective appears as
-a reducer operator on its objective E node; assembly derives the solver sense and stage 06's MIN/MAX objective spec
-from the objective algebra. Composed MIN/MAX E nodes also own their
-comparison, bound expression, ordered reducer references and query-wide scales; the emitter follows those references
-to the corresponding G nodes. The physical plan retains no second copy of composed logical specs: evaluation gets
-term order, scales, scope, source identity and labels from the E/G nodes, and stage 06 gets source and removal groups
-from the evaluated E clause. The G/O emitter walks nodes in children-first order and uses their algebra plus
-node-owned helper direction, qualification scope and labels to build stage 06's member formulas. Multi-member MIN/MAX
+**What the emitter reads.** A node's body is its compiled term records (`DecideBody`, `DecideTerm`,
+`DecideTermSite`); the tree holds no second form of a clause. The E emitter takes a clause's comparison from the
+clause, its right-hand side from the body's RHS program, and each term's variable and coefficient program from the
+term and its site. A flat MIN/MAX objective keeps its reducer and its ease on the operator (`flat_objective_agg`,
+`flat_objective_is_easy`); assembly passes them, with the objective's sense, to stage 06's MIN/MAX objective spec. A
+composed MIN/MAX E node holds its comparison and bound expression, and its body holds, for each reducer reference, the
+G node and a `DecideComposedSpec` (sign, ease, query-wide scale); the G's `aggregate` names the reducer. Evaluation
+gets term order, scales, scope, source identity and labels from the E/G nodes, and stage 06 gets source and removal
+groups from the evaluated E clause. The G/O emitter walks nodes in children-first order and builds stage 06's member
+formulas from their term records, node-owned helper direction, qualification scope and labels. Multi-member MIN/MAX
 results keep value columns, while SUM/AVG formulas can expand into their parent expressions; a singleton MIN/MAX group
-remains a direct member read, as on deck p. 112. F output links and Boolean-product factors are read from their function
-algebra. The numeric model path still lowers formulas into flat solver rows.
+remains a direct member read, as on deck p. 112. F output links and Boolean-product factors are the F node's own
+fields (`value_var`, `product_bool_var`, `product_other_var`). The numeric model path still lowers formulas into flat
+solver rows.
 
 **Departure from the deck: formulation is stage 06's (plan Q0.4, accepted 2026-11-07).** The deck formulates node by
 node (pp. 111-119); here the emitter hands stage 06 one record per row and per value link, and stage 06
@@ -426,21 +426,15 @@ rows of p. 108. Composing SUM and AVG children at G and E nodes was
 built on 2026-11-15 and removed the same day: it changed no model, removed no stage 06 code, and hid a nest from
 D89, which then kept a nest's helper column it must write in.
 
-Generated decision values now appear in E/G/O formula trees as reads of the G/O/F node that produces them. The nested
-MAX-inside-SUM example therefore records the E → SUM G → MAX G path directly; an F node's own definition rows keep a
-decision read of that F's output so its formula does not point back to itself. The E/G/O emitter takes each term's
-variable from its DECISION or TREE_VALUE leaf, then resolves a node read to the same plan-time helper column while
-filling the row-indexed solver input; its coefficient program comes from the adjacent PROGRAM leaf. This is the first
-recursive algebra slice; it does not yet replace the flat formulation path. A reducer link's members now retain the
-producer node beside the plan-time helper index, and the stage 06 inliner resolves nested G references by that node
-identity first, checking that it names the same helper column. Grouped E terms retain the same producer-node reference,
-so stage 06 follows E-to-G reads directly too. Linear objective terms retain the same edge. E clauses and objectives
-therefore name the producer node beside every tree-value read, while the solver still receives its established column
-records. Frame helper expressions and NULL-read skipping also select linked O nodes from tree metadata rather than
-optimizer reducer-link records, so the frame reader gets its producer and compiled programs from the same node graph.
-The runtime EXPLAIN report for inlined helpers now reads each G/O node's helper variable and label; the physical
-operator no longer carries a duplicate copy of optimizer link records. ABS F nodes likewise provide the auxiliary and
-indicator for the stage-06 exactness link; the physical operator does not retain the plan-time ABS link list.
+A term that reads a generated decision value names that value's plan-time helper column, and the tree's `reads`
+edges name the G, O or F node that produces it. The nested MAX-inside-SUM example therefore records the E → SUM G →
+MAX G path; an F node's own definition rows are read by the F and do not read it back. Each value link has its own
+helper column, so the stage 06 inliner resolves a nested G reference by that column. Frame helper expressions and
+NULL-read skipping select linked O nodes from tree metadata rather than optimizer reducer-link records, so the frame
+reader gets its producer and compiled programs from the same node graph. The runtime EXPLAIN report for inlined
+helpers reads each G/O node's helper variable and label; the physical operator carries no copy of optimizer link
+records. ABS F nodes likewise provide the auxiliary and indicator for the stage-06 exactness link; the physical
+operator does not retain the plan-time ABS link list.
 
 **Cost**, measured before flat was deleted, against flat on one binary (`benchmark/decide/anr_scaling.py --against` a
 flat run): the tree's own time at 10^5 rows is 0.84x to 1.33x flat's on every workload (`flat-sum` the most), and its

@@ -778,9 +778,8 @@ KeyedMapping DecideFrameWindowMapping(const DecideFrameMap &map) {
 
 void DecideListFrameMembers(const DecideFrameMap &map, const string &aggregate, const string &label,
                             const string &frame_text, const vector<CoefficientColumn> &payload,
-                            const vector<idx_t> &payload_vars, const vector<idx_t> &payload_value_nodes,
-                            const vector<CoefficientColumn> &fallback, const vector<idx_t> &fallback_vars,
-                            const vector<idx_t> &fallback_value_nodes, ReducerValueMembers &out) {
+                            const vector<idx_t> &payload_vars, const vector<CoefficientColumn> &fallback,
+                            const vector<idx_t> &fallback_vars, ReducerValueMembers &out) {
 	const bool extremum = aggregate == "min" || aggregate == "max";
 	const bool is_avg = aggregate == "avg";
 	for (idx_t w = 0; w < map.WindowCount(); w++) {
@@ -795,13 +794,12 @@ void DecideListFrameMembers(const DecideFrameMap &map, const string &aggregate, 
 		out.AddGroup(map.window_anchor[w]);
 		map.ForEachRead(w, [&](idx_t row, idx_t times) {
 			DecideListMember(payload, payload_vars, row, (extremum ? 1.0 : static_cast<double>(times)) * share, label,
-			                 out, &payload_value_nodes);
+			                 out);
 		});
 		const idx_t fallbacks = map.WindowFallbacks(w);
 		if (fallbacks > 0) {
 			DecideListMember(fallback, fallback_vars, map.window_anchor[w],
-			                 (extremum ? 1.0 : static_cast<double>(fallbacks)) * share, label, out,
-			                 &fallback_value_nodes);
+			                 (extremum ? 1.0 : static_cast<double>(fallbacks)) * share, label, out);
 		}
 	}
 }

@@ -25,30 +25,6 @@ enum class DecideFunctionKind : uint8_t { INVALID, ABS, BOOLEAN_PRODUCT, L0_INDI
 enum class DecideDefinitionRelation : uint8_t { INVALID, AT_LEAST, AT_MOST, EQUAL };
 enum class DecideTreePer : uint8_t { ROW, KEY, ONE };
 
-//! The algebra a tree node owns. Operators keep their children as nodes; data values, decision values and compiled
-//! programs are leaves. This is the formula tree in ANR's E/G/O drawing, with F and decision reads as extensions.
-enum class DecideAlgebraKind : uint8_t { OPERATOR, VALUE, TREE_VALUE, DECISION, PROGRAM };
-
-struct DecideAlgebraNode {
-	DecideAlgebraKind kind = DecideAlgebraKind::VALUE;
-	idx_t owner = DConstants::INVALID_INDEX;
-	ExpressionClass expression_class = ExpressionClass::INVALID;
-	ExpressionType expression_type = ExpressionType::INVALID;
-	string operation;
-	idx_t tree_value_node = DConstants::INVALID_INDEX;
-	idx_t decision_var = DConstants::INVALID_INDEX;
-	idx_t program_node = DConstants::INVALID_INDEX;
-	idx_t program = DConstants::INVALID_INDEX;
-	idx_t source_term = DConstants::INVALID_INDEX;
-	int sign = 1;
-	bool is_easy = true;
-	double scale = 1.0;
-	//! Exact source for an expression subtree that must be evaluated as a whole (for example a composed term's scale).
-	unique_ptr<Expression> source_expression;
-	unique_ptr<Expression> value;
-	vector<unique_ptr<DecideAlgebraNode>> children;
-};
-
 //! A scalar body's reference to a child's result. The physical column is outside
 //! the input's columns: input_column_count + node. Decision-valued results are
 //! symbolic forms; a scalar evaluator must not interpret them as SQL values.
@@ -118,6 +94,16 @@ struct DecideProgram {
 	vector<idx_t> arguments;
 };
 
+//! What a composed root reads of one of its terms beside the term's G, whose `aggregate` names its reducer
+//! (LogicalDecide::ComposedMinMaxTerm): its sign, whether a MIN or MAX of it needs no indicator, and the query-wide
+//! factor outside its reducer, which multiplies it or divides it.
+struct DecideComposedSpec {
+	int sign = 1;
+	bool is_easy = true;
+	unique_ptr<Expression> scale;
+	bool scale_divides = false;
+};
+
 //! f(e1..ep, G1..Gq): the records stage 05's lowering (LowerDecideTree) writes for what a node holds, so a term keeps
 //! its identity, order, label and inputs; and where each is computed, parallel to its term vectors.
 struct DecideBody {
@@ -132,6 +118,8 @@ struct DecideBody {
 	//! A composed clause's root, or the objective's with composed terms: each term's G, in the order of its terms
 	//! (LogicalDecide::ComposedMinMaxTerm).
 	vector<idx_t> composed;
+	//! Parallel to `composed`: each term's sign, ease and scale.
+	vector<DecideComposedSpec> composed_specs;
 	vector<DecideTerm> fallback;
 	vector<DecideTermSite> linear, products, fallback_sites;
 	//! Per quadratic group (the objective has one, its squared terms), its inner terms' sites.
@@ -201,8 +189,6 @@ struct DecideNode {
 	vector<unique_ptr<Expression>> columns;
 	//! Scalar algebra with child results replaced by child_reads' physical columns.
 	unique_ptr<Expression> body;
-	//! The operator tree this E/G/F formulates: comparison, reducer expression, or function body.
-	unique_ptr<DecideAlgebraNode> algebra;
 	unique_ptr<Expression> rhs;
 	unique_ptr<Expression> fallback;
 	//! The generated helper equation wrapped in its owning condition and per-instance key; a child E owns its row.

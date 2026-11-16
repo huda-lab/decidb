@@ -180,11 +180,6 @@ CLAUSE_RX = re.compile(r"(<=|>=|<>|!=|[^-<>=!]=|<|>)|^\s*(MAXIMIZE|MINIMIZE)\b",
 
 def scan_fragment(text):
     """A clause or declaration fragment spliced into a template (no DECIDE keyword)."""
-    # A pinned `DECIDB_DUMP_TREE` fixture is serialized node metadata, not SQL. In
-    # particular, its `per=row when=[]` fields are compact enum/list diagnostics and
-    # must not be interpreted as removed postfix DECIDE syntax.
-    if re.match(r"\s*\d+\s+[EGOF]\s+", text) and " formula=" in text:
-        return set()
     text = BACKTICK.sub(" ", text)
     if re.search(r"\bDECIDE\b", text, re.I) or len(text) > 2000:
         return set()

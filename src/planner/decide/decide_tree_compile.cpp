@@ -144,13 +144,24 @@ static void NumberClauses(DecideTree &tree, const vector<idx_t> &roots) {
 }
 
 //! The composed clauses, which flat evaluates after the objective, then the objective's composed terms (the last
-//! slot): each term's G holds its inner terms (LowerDecideTree), and the root holding them each term's G.
-static void ComposedBodies(DecideTree &tree, const DecideTreeSources &sources) {
+//! slot): each term's G holds its inner terms (LowerDecideTree), and the root holding them each term's G and spec.
+static void ComposedBodies(const LogicalDecide &op, DecideTree &tree, const DecideTreeSources &sources) {
 	for (idx_t spec = 0; spec < sources.composed_reducers.size(); spec++) {
 		auto &reducers = sources.composed_reducers[spec];
 		const auto holder =
 		    spec < sources.composed_roots.size() ? sources.composed_roots[spec] : sources.objective_root;
-		tree.nodes[holder]->compiled.composed = reducers;
+		auto &terms = spec < sources.composed_roots.size() ? op.composed_minmax_constraints[spec].terms
+		                                                   : op.composed_minmax_objective_terms;
+		auto &holder_body = tree.nodes[holder]->compiled;
+		holder_body.composed = reducers;
+		for (auto &term : terms) {
+			DecideComposedSpec read;
+			read.sign = term.sign;
+			read.is_easy = term.is_easy;
+			read.scale = term.scale ? term.scale->Copy() : nullptr;
+			read.scale_divides = term.scale_divides;
+			holder_body.composed_specs.push_back(std::move(read));
+		}
 		for (idx_t t = 0; t < reducers.size(); t++) {
 			auto &body = tree.nodes[reducers[t]]->compiled;
 			body.phase = DecideErrorPhase::COMPOSED;
@@ -696,7 +707,7 @@ void CompileDecideTree(ClientContext &context, const LogicalDecide &op, DecideTr
 		body.order = 0;
 		decide_tree_compile::SiteObjective(tree, sources.objective_root, body);
 	}
-	decide_tree_compile::ComposedBodies(tree, sources);
+	decide_tree_compile::ComposedBodies(op, tree, sources);
 	decide_tree_compile::LinkBodies(tree, sources.link_nodes);
 	decide_tree_compile::CompilePrograms(context, op, tree, sources.record_nodes);
 	decide_tree_compile::BindLayout(tree);

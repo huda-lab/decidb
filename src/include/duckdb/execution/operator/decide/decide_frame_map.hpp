@@ -252,14 +252,13 @@ KeyedMapping DecideFrameWindowMapping(const DecideFrameMap &map);
 
 //! A range frame's helper's members (language/guide.md §5.6), one group per window that reads something, read at its
 //! anchor: a member per row the window reads, and one for its `else`, the payload's coefficients `payload` of the
-//! decisions `payload_vars` and producer nodes `payload_value_nodes` at those rows and the `else`'s `fallback` of
-//! `fallback_vars` and `fallback_value_nodes` at the anchor. A SUM or AVG counts each value -- a row once per visit,
-//! the `else` once per missing position -- and an AVG divides by their number; a MIN or MAX reads each once.
+//! decisions `payload_vars` at those rows and the `else`'s `fallback` of `fallback_vars` at the anchor. A SUM or AVG
+//! counts each value -- a row once per visit, the `else` once per missing position -- and an AVG divides by their
+//! number; a MIN or MAX reads each once.
 void DecideListFrameMembers(const DecideFrameMap &map, const string &aggregate, const string &label,
                             const string &frame_text, const vector<CoefficientColumn> &payload,
-                            const vector<idx_t> &payload_vars, const vector<idx_t> &payload_value_nodes,
-                            const vector<CoefficientColumn> &fallback, const vector<idx_t> &fallback_vars,
-                            const vector<idx_t> &fallback_value_nodes, ReducerValueMembers &out);
+                            const vector<idx_t> &payload_vars, const vector<CoefficientColumn> &fallback,
+                            const vector<idx_t> &fallback_vars, ReducerValueMembers &out);
 
 //! Whether a term reading its decision through `map` (DecideTerm::frame_read) reads, at `row`, an instance with no
 //! value (D84): where the frame reads nothing, or at the row it selects where `absent` says the decision has none. A

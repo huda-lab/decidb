@@ -271,7 +271,7 @@ private:
 		struct ComposedConstraint {
 			vector<ComposedMinMaxTermData> terms;
 			double rhs = 0.0;
-			//! Comparison owned by the composed clause's E algebra.
+			//! Comparison owned by the composed clause's E node.
 			ExpressionType comparison = ExpressionType::INVALID;
 			//! Source and removal groups owned by the composed clause's E node.
 			idx_t source_clause_id = DConstants::INVALID_INDEX;

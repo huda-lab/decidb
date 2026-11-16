@@ -200,8 +200,7 @@ private:
 	//! The composed terms `terms` that `root`, a composed clause's or the objective's, holds: each read on the members
 	//! of its G, its factor on the input's `first` chunk (`what` names the clause or the objective); `null_factor` set
 	//! by a NULL one.
-	vector<ComposedMinMaxTermData> ComposedTerms(idx_t root, const DecideAlgebraNode &formula, const char *what,
-	                                             bool &null_factor);
+	vector<ComposedMinMaxTermData> ComposedTerms(idx_t root, const char *what, bool &null_factor);
 	//! A factor the whole query shares (a composed term's, a square's), as flat reads it: on the input's first row,
 	//! whatever a clause keeps.
 	Value FirstRowValue(const Expression &factor);
@@ -224,10 +223,9 @@ private:
 	double SquareSign(idx_t root, idx_t g, vector<bool> &null_rows);
 	//! The objective's terms `terms` (its linear or its squared terms) at their sites `sites`: each its decision as a
 	//! row reads it, its column and its filter, the rows it is read on (D84).
-	vector<TermFilterState> ObjectiveTerms(idx_t root, const DecideAlgebraNode &formula, idx_t formula_offset,
-	                                       const vector<DecideTerm> &terms, const vector<DecideTermSite> &sites,
-	                                       vector<CoefficientColumn> &coefficients, vector<idx_t> &variables,
-	                                       vector<idx_t> *value_nodes = nullptr);
+	vector<TermFilterState> ObjectiveTerms(idx_t root, const vector<DecideTerm> &terms,
+	                                       const vector<DecideTermSite> &sites, vector<CoefficientColumn> &coefficients,
+	                                       vector<idx_t> &variables);
 	//! An objective AVG of a `by` key (`avg_group_key`, D81), in the G `child`, its site `site`: each member's group
 	//! there, which its 1/n divides by (TermFilterState::avg_group_ids).
 	void AvgGroups(bool avg_scale, idx_t avg_group_key, idx_t child, idx_t site, TermFilterState &filter);

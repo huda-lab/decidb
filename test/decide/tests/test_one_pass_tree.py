@@ -173,49 +173,48 @@ _PINNED_ROWS = (
     "(3, 'a', 'West', 'c2', FALSE, 10, 50), (4, 'b', 'West', 'c3', TRUE, 25, 45)) t(id, g, r, k, p, d, c)"
 )
 
-#: Three pinned dumps verify that tree construction preserves each node's operator formula as well as its routing and
-#: signature structure.
+#: Three pinned dumps verify that tree construction preserves each node's routing and signature structure.
 PINNED_DUMPS = {
     "a-nest-under-an-operator": (
         "x(INT) SUCH THAT x <= 100 AND per t.g: sum(when t.p per t.k: max(x) by (t.k)) by (t.r) "
         "+ 0.10 * sum(t.d) by (t.r) <= t.c MAXIMIZE sum(x)",
-        """0 E root key=() per=row when=[] sigma=[x] reads=[] columns=0 formula=LESSTHANOREQUALTO(+(*(x0, program(0,0,1))), program(0,1,CAST(100 AS BIGINT))) : x <= 100
-1 E root key=t.g per=key when=[] sigma=[by (t.r), t.c] reads=[2,6] columns=2 formula=LESSTHANOREQUALTO(+(*(node-value(2), program(1,0,1))), program(1,1,"+"("-"((CAST(0.10 AS DECIMAL(38,2)) * CASE  WHEN ((r IS NULL)) THEN (NULL) ELSE #[16.1] END)), CAST(c AS DECIMAL(38,2))))) : per t.g: sum(when t.p per t.k: max(x) by (t.k)) by (t.r) + 0.10 * sum(t.d) by (t.r) <= t.c
-2 G key=t.r agg=sum per=row when=[] sigma=[] reads=[3] columns=0 formula=sum(*(node-value(4), program(3,0,1))) : sum(when t.p per t.k: max(x) by (t.k)) by (t.r)
-3 E key=t.k per=key when=[p] sigma=[max(x) by (t.k)] reads=[4] columns=0 formula=cast(node-value(4)) : sum(when t.p per t.k: max(x) by (t.k)) by (t.r) operand
-4 G key=t.r, t.k agg=max per=row when=[] sigma=[] reads=[5] columns=0 formula=max(*(x0, program(5,0,1))) : max(x) by (t.k)
-5 E key=() per=row when=[] sigma=[x] reads=[] columns=0 formula=x0 : max(x) by (t.k) operand
-6 G key=t.r agg=sum per=row when=[] sigma=[] reads=[7] columns=0 formula=sum(d) : sum(t.d) by (t.r)
-7 E key=() per=row when=[] sigma=[t.d] reads=[] columns=1 formula=d : sum(t.d) by (t.r) operand
-8 E objective key=() per=one when=[] sigma=[] reads=[9] columns=0 formula=maximize(+(*(x0, program(10,0,1)))) : sum(x)
-9 G key=() agg=sum per=row when=[] sigma=[] reads=[10] columns=0 formula=sum(x0) : sum(x)
-10 E key=() per=row when=[] sigma=[x] reads=[] columns=0 formula=x0 : sum(x) operand
+        """0 E root key=() per=row when=[] sigma=[x] reads=[] columns=0 : x <= 100
+1 E root key=t.g per=key when=[] sigma=[by (t.r), t.c] reads=[2,6] columns=2 : per t.g: sum(when t.p per t.k: max(x) by (t.k)) by (t.r) + 0.10 * sum(t.d) by (t.r) <= t.c
+2 G key=t.r agg=sum per=row when=[] sigma=[] reads=[3] columns=0 : sum(when t.p per t.k: max(x) by (t.k)) by (t.r)
+3 E key=t.k per=key when=[p] sigma=[max(x) by (t.k)] reads=[4] columns=0 : sum(when t.p per t.k: max(x) by (t.k)) by (t.r) operand
+4 G key=t.r, t.k agg=max per=row when=[] sigma=[] reads=[5] columns=0 : max(x) by (t.k)
+5 E key=() per=row when=[] sigma=[x] reads=[] columns=0 : max(x) by (t.k) operand
+6 G key=t.r agg=sum per=row when=[] sigma=[] reads=[7] columns=0 : sum(t.d) by (t.r)
+7 E key=() per=row when=[] sigma=[t.d] reads=[] columns=1 : sum(t.d) by (t.r) operand
+8 E objective key=() per=one when=[] sigma=[] reads=[9] columns=0 : sum(x)
+9 G key=() agg=sum per=row when=[] sigma=[] reads=[10] columns=0 : sum(x)
+10 E key=() per=row when=[] sigma=[x] reads=[] columns=0 : sum(x) operand
 postorder=[0,5,4,3,2,7,6,1,10,9,8]
 """,
     ),
     "a-keyed-term-beside-a-reducer": (
         "x(REAL), per t.g: y(REAL) SUCH THAT x <= 9 AND y <= 3 AND sum(x) by (t.g) + y <= 5 MAXIMIZE sum(x) + sum(y)",
-        """0 E root key=() per=row when=[] sigma=[x] reads=[] columns=0 formula=LESSTHANOREQUALTO(+(*(x0, program(0,0,1))), program(0,1,CAST(9 AS DOUBLE))) : x <= 9
-1 E root key=() per=row when=[] sigma=[y] reads=[] columns=0 formula=LESSTHANOREQUALTO(+(*(x1, program(1,0,1))), program(1,1,CAST(3 AS DOUBLE))) : y <= 3
-2 E root key=t.g per=key when=[] sigma=[sum(x) by (t.g), y] reads=[3] columns=0 formula=LESSTHANOREQUALTO(+(*(x0, program(4,0,1)), *(x1, program(2,0,1))), program(2,1,CAST(5 AS DOUBLE))) : sum(x) by (t.g) + y <= 5
-3 G key=t.g agg=sum per=row when=[] sigma=[] reads=[4] columns=0 formula=sum(x0) : sum(x) by (t.g)
-4 E key=() per=row when=[] sigma=[x] reads=[] columns=0 formula=x0 : sum(x) by (t.g) operand
-5 E objective key=() per=one when=[] sigma=[] reads=[6,8] columns=0 formula=maximize(+(*(x0, program(7,0,1)), *(x1, program(9,0,1)))) : sum(x) + sum(y)
-6 G key=() agg=sum per=row when=[] sigma=[] reads=[7] columns=0 formula=sum(x0) : sum(x)
-7 E key=() per=row when=[] sigma=[x] reads=[] columns=0 formula=x0 : sum(x) operand
-8 G key=() agg=sum per=row when=[] sigma=[] reads=[9] columns=0 formula=sum(x1) : sum(y)
-9 E key=() per=row when=[] sigma=[y] reads=[] columns=1 formula=x1 : sum(y) operand
+        """0 E root key=() per=row when=[] sigma=[x] reads=[] columns=0 : x <= 9
+1 E root key=() per=row when=[] sigma=[y] reads=[] columns=0 : y <= 3
+2 E root key=t.g per=key when=[] sigma=[sum(x) by (t.g), y] reads=[3] columns=0 : sum(x) by (t.g) + y <= 5
+3 G key=t.g agg=sum per=row when=[] sigma=[] reads=[4] columns=0 : sum(x) by (t.g)
+4 E key=() per=row when=[] sigma=[x] reads=[] columns=0 : sum(x) by (t.g) operand
+5 E objective key=() per=one when=[] sigma=[] reads=[6,8] columns=0 : sum(x) + sum(y)
+6 G key=() agg=sum per=row when=[] sigma=[] reads=[7] columns=0 : sum(x)
+7 E key=() per=row when=[] sigma=[x] reads=[] columns=0 : sum(x) operand
+8 G key=() agg=sum per=row when=[] sigma=[] reads=[9] columns=0 : sum(y)
+9 E key=() per=row when=[] sigma=[y] reads=[] columns=1 : sum(y) operand
 postorder=[0,1,4,3,2,7,6,9,8,5]
 """,
     ),
     "a-frame-over-decisions": (
         "x(INT) SUCH THAT x <= t.c AND x >= at(previous: x) over (t.id within t.g) MAXIMIZE sum(x)",
-        """0 E root key=() per=row when=[] sigma=[x, t.c] reads=[] columns=1 formula=LESSTHANOREQUALTO(+(*(x0, program(0,0,1))), program(0,1,CAST(c AS BIGINT))) : x <= t.c
-1 E root key=() per=row when=[] sigma=[x, at(previous: x) over (t.id within t.g)] reads=[2] columns=0 formula=GREATERTHANOREQUALTO(+(*(x0, program(1,0,1)), *(x0, program(1,1,at(previous: x) over (t.id within t.g)__frame_column__))), program(1,2,0.0)) : x >= at(previous: x) over (t.id within t.g)
-2 O key=t.g per=row when=[] sigma=[x] reads=[] columns=0 formula=x0 : at(previous: x) over (t.id within t.g)
-3 E objective key=() per=one when=[] sigma=[] reads=[4] columns=0 formula=maximize(+(*(x0, program(5,0,1)))) : sum(x)
-4 G key=() agg=sum per=row when=[] sigma=[] reads=[5] columns=0 formula=sum(x0) : sum(x)
-5 E key=() per=row when=[] sigma=[x] reads=[] columns=0 formula=x0 : sum(x) operand
+        """0 E root key=() per=row when=[] sigma=[x, t.c] reads=[] columns=1 : x <= t.c
+1 E root key=() per=row when=[] sigma=[x, at(previous: x) over (t.id within t.g)] reads=[2] columns=0 : x >= at(previous: x) over (t.id within t.g)
+2 O key=t.g per=row when=[] sigma=[x] reads=[] columns=0 : at(previous: x) over (t.id within t.g)
+3 E objective key=() per=one when=[] sigma=[] reads=[4] columns=0 : sum(x)
+4 G key=() agg=sum per=row when=[] sigma=[] reads=[5] columns=0 : sum(x)
+5 E key=() per=row when=[] sigma=[x] reads=[] columns=0 : sum(x) operand
 postorder=[0,2,1,5,4,3]
 """,
     ),
@@ -229,6 +228,12 @@ def test_the_construction_writes_the_tree_it_wrote(decidb_cli, case):
     assert tree == expected
 
 
+def _reads(line):
+    """The node ids one dumped tree line reads."""
+    listed = re.search(r" reads=\[([0-9,]*)\]", line).group(1)
+    return [int(node) for node in listed.split(",") if node]
+
+
 def test_function_values_are_tree_reads_without_cyclic_envelopes(decidb_cli):
     sql = """SELECT id FROM (VALUES (1, 1), (2, -1)) t(id, v)
         DECIDE x(REAL), y(REAL) SUCH THAT x <= 9 AND x >= abs(y) MAXIMIZE sum(x)"""
@@ -236,11 +241,11 @@ def test_function_values_are_tree_reads_without_cyclic_envelopes(decidb_cli):
     lines = tree.splitlines()
     function = next(line for line in lines if " F definition " in line and "function=abs" in line)
     function_id = int(function.split()[0])
-    output_var = re.search(r"value=x(\d+)", function).group(1)
-    assert any(f"node-value({function_id})" in line and ": x >= abs(y)" in line for line in lines)
-    envelope_rows = [line for line in lines if f"formula=GREATERTHANOREQUALTO(+(*(x{output_var}," in line]
+    by_id = {int(line.split()[0]): line for line in lines if line.split()[0].isdigit()}
+    assert any(function_id in _reads(line) for line in lines if " sigma=[x, abs(y)] " in line)
+    envelope_rows = [by_id[node] for node in _reads(function)]
     assert len(envelope_rows) == 2
-    assert all(f"node-value({function_id})" not in line for line in envelope_rows)
+    assert all(function_id not in _reads(line) for line in envelope_rows)
 
 
 def test_bilinear_factors_follow_their_function_and_reducer_nodes(decidb_cli):
@@ -254,5 +259,5 @@ def test_bilinear_factors_follow_their_function_and_reducer_nodes(decidb_cli):
     function_id = int(function.split()[0])
     reducer = next(line for line in lines if " G key=t.g agg=sum " in line)
     reducer_id = int(reducer.split()[0])
-    assert f"node-value({reducer_id})" in function
-    assert any(f"node-value({function_id})" in line and ": x + b * sum(" in line for line in lines)
+    assert reducer_id in _reads(function)
+    assert any(function_id in _reads(line) for line in lines if ": x + b * sum(" in line)

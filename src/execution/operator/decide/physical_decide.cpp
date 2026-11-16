@@ -65,69 +65,7 @@
 
 namespace duckdb {
 
-//! The solver-facing sense comes from the objective E node, alongside its term algebra.
-static DecideSense TreeObjectiveSense(const DecideTree &tree) {
-	const DecideNode *objective = nullptr;
-	for (auto root : tree.roots) {
-		if (!tree.nodes[root]->objective) {
-			continue;
-		}
-		if (objective) {
-			throw InternalException("DECIDE tree has more than one objective E node");
-		}
-		objective = tree.nodes[root].get();
-	}
-	if (!objective) {
-		return DecideSense::FEASIBILITY;
-	}
-	if (!objective->algebra || objective->algebra->kind != DecideAlgebraKind::OPERATOR ||
-	    objective->algebra->children.size() != 1 || !objective->algebra->children[0]) {
-		throw InternalException("DECIDE objective E node has no algebraic direction");
-	}
-	if (objective->algebra->operation == "minimize") {
-		return DecideSense::MINIMIZE;
-	}
-	if (objective->algebra->operation == "maximize") {
-		return DecideSense::MAXIMIZE;
-	}
-	throw InternalException("DECIDE objective E node has an unknown direction: %s", objective->algebra->operation);
-}
-
-static const DecideAlgebraNode *TreeObjectiveReducer(const DecideTree &tree) {
-	const DecideNode *objective = nullptr;
-	for (auto root : tree.roots) {
-		if (tree.nodes[root]->objective) {
-			objective = tree.nodes[root].get();
-			break;
-		}
-	}
-	if (!objective) {
-		return nullptr;
-	}
-	if (!objective->algebra || objective->algebra->kind != DecideAlgebraKind::OPERATOR ||
-	    objective->algebra->children.size() != 1 || !objective->algebra->children[0] ||
-	    objective->algebra->children[0]->kind != DecideAlgebraKind::OPERATOR) {
-		throw InternalException("DECIDE objective E node has no aggregate algebra");
-	}
-	const auto &value = *objective->algebra->children[0];
-	if (value.operation == "+") {
-		return nullptr;
-	}
-	if ((value.operation == "min" || value.operation == "max") && value.children.size() == 1 && value.children[0] &&
-	    value.children[0]->kind == DecideAlgebraKind::OPERATOR && value.children[0]->operation == "+") {
-		return &value;
-	}
-	throw InternalException("DECIDE objective E node has an unknown aggregate operator: %s", value.operation);
-}
-
-static ObjectiveAggregateType TreeFlatObjectiveAggregate(const DecideTree &tree) {
-	const auto *reducer = TreeObjectiveReducer(tree);
-	return !reducer                      ? ObjectiveAggregateType::NONE
-	       : reducer->operation == "min" ? ObjectiveAggregateType::MIN_AGG
-	                                     : ObjectiveAggregateType::MAX_AGG;
-}
-
-//! A composed objective is represented by an objective E whose composed algebra retains its G terms.
+//! A composed objective is an objective E whose body holds its composed terms' G nodes.
 static bool TreeHasComposedObjective(const DecideTree &tree) {
 	for (auto root : tree.roots) {
 		if (tree.nodes[root]->objective && !tree.nodes[root]->compiled.composed.empty()) {
@@ -889,7 +827,6 @@ struct DecideEvaluationFields {
 	vector<ReducerValueLinkSpec> value_links;
 	vector<CoefficientColumn> objective_coefficients;
 	vector<idx_t> objective_variable_indices;
-	vector<idx_t> objective_value_nodes;
 	vector<CoefficientColumn> quadratic_coefficients;
 	vector<idx_t> quadratic_variable_indices;
 	bool has_quadratic_objective = false;
@@ -908,7 +845,6 @@ struct DecideEvaluationFields {
 		std::swap(value_links, gstate.evaluated_value_links);
 		std::swap(objective_coefficients, gstate.evaluated_objective_coefficients);
 		std::swap(objective_variable_indices, gstate.objective_variable_indices);
-		std::swap(objective_value_nodes, gstate.objective_value_nodes);
 		std::swap(quadratic_coefficients, gstate.evaluated_quadratic_coefficients);
 		std::swap(quadratic_variable_indices, gstate.quadratic_variable_indices);
 		std::swap(has_quadratic_objective, gstate.has_quadratic_objective);
@@ -1307,13 +1243,12 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// Objective (linear part)
 	solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
 	solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
-	solver_input.objective_value_nodes = std::move(gstate.objective_value_nodes);
 #ifdef DEBUG
 	if (auto objective = tree->Objective()) {
 		VerifyCountedOnce(objective->terms, solver_input.objective_coefficients, vector<idx_t>());
 	}
 #endif
-	solver_input.sense = TreeObjectiveSense(*tree);
+	solver_input.sense = decide_sense;
 	solver_input.objective_constant = objective_constant_offset;
 
 	// Quadratic objective (if present)
@@ -1356,7 +1291,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	for (auto &bound : gstate.user_singleton_row_bounds) {
 		held.push_back(bound.decide_var_idx);
 	}
-	if (TreeFlatObjectiveAggregate(*tree) != ObjectiveAggregateType::NONE) {
+	if (flat_objective_agg != ObjectiveAggregateType::NONE) {
 		held.insert(held.end(), solver_input.objective_variable_indices.begin(),
 		            solver_input.objective_variable_indices.end());
 	}
@@ -1589,9 +1524,8 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 	// evaluated plus the flat column space, and needs no row of its own.
 	phase.Next("formulation.minmax_objective");
 	MinMaxObjectiveSpec minmax_objective_spec;
-	const auto *objective_reducer = TreeObjectiveReducer(*tree);
-	minmax_objective_spec.flat_agg = TreeFlatObjectiveAggregate(*tree);
-	minmax_objective_spec.flat_is_easy = objective_reducer ? objective_reducer->is_easy : false;
+	minmax_objective_spec.flat_agg = flat_objective_agg;
+	minmax_objective_spec.flat_is_easy = flat_objective_is_easy;
 	{
 		// The rows the objective's reducer reads -- its terms' filters, the objective's
 		// `when` folded in -- are its members, whatever their coefficients.
