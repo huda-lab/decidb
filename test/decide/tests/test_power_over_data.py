@@ -47,12 +47,8 @@ def _solve_oracle(oracle_solver, name, coeffs, cap):
     names = [f"x_{i}" for i in range(len(_ROWS))]
     for n in names:
         oracle_solver.add_variable(n, VarType.BINARY, lb=0.0, ub=1.0)
-    oracle_solver.add_constraint(
-        {names[i]: c for i, c in enumerate(coeffs)}, "<=", cap, name="budget"
-    )
-    oracle_solver.set_objective(
-        {names[i]: w for i, (_, _, w) in enumerate(_ROWS)}, ObjSense.MAXIMIZE
-    )
+    oracle_solver.add_constraint({names[i]: c for i, c in enumerate(coeffs)}, "<=", cap, name="budget")
+    oracle_solver.set_objective({names[i]: w for i, (_, _, w) in enumerate(_ROWS)}, ObjSense.MAXIMIZE)
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
     return result
@@ -64,37 +60,45 @@ def _solve_oracle(oracle_solver, name, coeffs, cap):
 def test_power_over_data_is_a_coefficient(decidb_cli, oracle_solver, perf_tracker):
     """``SUM(x * POWER(qty, 2)) <= 10`` — linear in x, coefficients are qty squared."""
     t0 = time.perf_counter()
-    rows, cols = decidb_cli.execute(f"""
+    rows, cols = decidb_cli.execute(
+        f"""
         SELECT id, w, x FROM {_TABLE}
         DECIDE x(BOOL)
         SUCH THAT SUM(x * POWER(qty, 2)) <= {_CAP}
         MAXIMIZE SUM(x * w)
-    """)
+    """
+    )
     decidb_time = time.perf_counter() - t0
 
     t_build = time.perf_counter()
     result = _solve_oracle(
-        oracle_solver, "power_over_data",
-        [qty ** 2 for _, qty, _ in _ROWS], _CAP,
+        oracle_solver,
+        "power_over_data",
+        [qty**2 for _, qty, _ in _ROWS],
+        _CAP,
     )
     build_time = time.perf_counter() - t_build
 
     ci = {c: i for i, c in enumerate(cols)}
     decidb_obj = sum(int(r[ci["x"]]) * float(r[ci["w"]]) for r in rows)
-    assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
     # The constraint as written actually holds, with POWER applied.
-    lhs = sum(
-        int(r[ci["x"]]) * (qty ** 2)
-        for r, (_, qty, _) in zip(rows, _ROWS)
-    )
+    lhs = sum(int(r[ci["x"]]) * (qty**2) for r, (_, qty, _) in zip(rows, _ROWS))
     assert lhs <= _CAP + 1e-6, f"user-written constraint violated: {lhs} > {_CAP}"
 
     perf_tracker.record(
-        "power_over_data", decidb_time, build_time, result.solve_time_seconds,
-        len(_ROWS), len(_ROWS), 1, result.objective_value,
-        oracle_solver.solver_name(), comparison_status="optimal",
+        "power_over_data",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(_ROWS),
+        len(_ROWS),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status="optimal",
     )
 
 
@@ -108,13 +112,16 @@ def test_power_over_data_matches_explicit_product(decidb_cli):
     is a bug whichever one is right. This is what the deleted simplifier used to
     guarantee by rewriting the first spelling into the second.
     """
+
     def solve(coeff):
-        rows, cols = decidb_cli.execute(f"""
+        rows, cols = decidb_cli.execute(
+            f"""
             SELECT id, x FROM {_TABLE}
             DECIDE x(BOOL)
             SUCH THAT SUM(x * {coeff}) <= {_CAP}
             MAXIMIZE SUM(x * w)
-        """)
+        """
+        )
         ci = {c: i for i, c in enumerate(cols)}
         return sorted(int(r[ci["id"]]) for r in rows if int(r[ci["x"]]) == 1)
 
@@ -132,21 +139,25 @@ def test_power_over_data_exponent_three(decidb_cli, oracle_solver):
     oracle agree, using coefficients that differ sharply from both qty and qty^2.
     """
     cap = 30.0
-    rows, cols = decidb_cli.execute(f"""
+    rows, cols = decidb_cli.execute(
+        f"""
         SELECT id, w, x FROM {_TABLE}
         DECIDE x(BOOL)
         SUCH THAT SUM(x * POWER(qty, 3)) <= {cap}
         MAXIMIZE SUM(x * w)
-    """)
+    """
+    )
     result = _solve_oracle(
-        oracle_solver, "power_over_data_cubed",
-        [qty ** 3 for _, qty, _ in _ROWS], cap,
+        oracle_solver,
+        "power_over_data_cubed",
+        [qty**3 for _, qty, _ in _ROWS],
+        cap,
     )
     ci = {c: i for i, c in enumerate(cols)}
     decidb_obj = sum(int(r[ci["x"]]) * float(r[ci["w"]]) for r in rows)
-    assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
 
 
 @pytest.mark.cons_aggregate
@@ -163,16 +174,16 @@ def test_power_over_decide_variable_still_gated_in_constraint(decidb_cli_gurobi)
     needs a backend that can accept a quadratic constraint at all. HiGHS declares it
     cannot and the plan-time gate refuses the query before a model exists.
     """
-    rows, cols = decidb_cli_gurobi.execute(f"""
+    rows, cols = decidb_cli_gurobi.execute(
+        f"""
         SELECT id, x FROM {_TABLE}
         DECIDE x(REAL)
         SUCH THAT SUM(POWER(x - 2, 2)) <= 4 AND x <= 9
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     # Four rows, each x within 2 +/- of 2 with the squared deviations summing to <= 4:
     # the symmetric optimum is x_i = 3 for every row.
     for r in rows:
-        assert float(r[ci["x"]]) <= 3.0 + 1e-4, (
-            f"quadratic constraint not enforced: x={r[ci['x']]}"
-        )
+        assert float(r[ci["x"]]) <= 3.0 + 1e-4, f"quadratic constraint not enforced: x={r[ci['x']]}"

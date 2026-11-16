@@ -132,273 +132,269 @@ DecideDeclarationsBinder::DecideDeclarationsBinder(Binder &binder, ClientContext
 void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSelectNode &result) {
 	auto &bind_context = binder.bind_context;
 
-        case_insensitive_map_t<idx_t> decide_variable_names;
-        vector<string> var_names;
-        vector<LogicalType> var_types;
-        vector<bool> is_boolean_var;  // Track which variables are BOOLEAN for generating bounds
-        vector<string> decide_source_fragments;
+	case_insensitive_map_t<idx_t> decide_variable_names;
+	vector<string> var_names;
+	vector<LogicalType> var_types;
+	vector<bool> is_boolean_var; // Track which variables are BOOLEAN for generating bounds
+	vector<string> decide_source_fragments;
 
-        // Key scopes: one per distinct key, shared by the declarations and reducers on it.
-	    vector<DecideKey> keys;
-	    vector<KeyedScopeInfo> keyed_scopes;
-        vector<DecideVarScopeInfo> variable_scopes; // per variable: row / keyed / query-wide
+	// Key scopes: one per distinct key, shared by the declarations and reducers on it.
+	vector<DecideKey> keys;
+	vector<KeyedScopeInfo> keyed_scopes;
+	vector<DecideVarScopeInfo> variable_scopes; // per variable: row / keyed / query-wide
 
-        // A parse tree stored by an earlier version (a view, a macro) may still carry a
-        // removed spelling (D54, language/errors.md §3); a fresh query never does, the
-        // transformer refuses them.
-        RefuseRemovedDecideSpellings(statement);
+	// A parse tree stored by an earlier version (a view, a macro) may still carry a
+	// removed spelling (D54, language/errors.md §3); a fresh query never does, the
+	// transformer refuses them.
+	RefuseRemovedDecideSpellings(statement);
 
-        // Every declared name, checked and collected before any key resolves, so a key
-        // element can be told from a decision declared before or after it.
-        case_insensitive_set_t declared_names;
-        for (const auto &expr_ptr : statement.decide_variables) {
-            auto &name = SplitDeclaration(*expr_ptr).name->GetColumnName();
-		    // GetMatchingBinding skips a USING column (its binding is the join's merged column), so a
-		    // decision named like one has to be asked for separately.
-		    if (bind_context.GetMatchingBinding(name) || bind_context.GetUsingBinding(name)) {
-			    throw BinderException(*expr_ptr, "DECIDE variable '%s' conflicts with an existing column name.", name);
-		    }
-		    if (!declared_names.insert(name).second) {
-                throw BinderException(*expr_ptr, "Duplicate DECIDE variable name '%s'.", name);
-            }
-        }
+	// Every declared name, checked and collected before any key resolves, so a key
+	// element can be told from a decision declared before or after it.
+	case_insensitive_set_t declared_names;
+	for (const auto &expr_ptr : statement.decide_variables) {
+		auto &name = SplitDeclaration(*expr_ptr).name->GetColumnName();
+		// GetMatchingBinding skips a USING column (its binding is the join's merged column), so a
+		// decision named like one has to be asked for separately.
+		if (bind_context.GetMatchingBinding(name) || bind_context.GetUsingBinding(name)) {
+			throw BinderException(*expr_ptr, "DECIDE variable '%s' conflicts with an existing column name.", name);
+		}
+		if (!declared_names.insert(name).second) {
+			throw BinderException(*expr_ptr, "Duplicate DECIDE variable name '%s'.", name);
+		}
+	}
 
-        for (const auto &expr_ptr : statement.decide_variables) {
-            auto declaration = SplitDeclaration(*expr_ptr);
-            string name = declaration.name->GetColumnName();
-            string type_marker = declaration.type_marker;
-            idx_t var_idx = var_names.size();
-            decide_variable_names.emplace(name, var_idx);
+	for (const auto &expr_ptr : statement.decide_variables) {
+		auto declaration = SplitDeclaration(*expr_ptr);
+		string name = declaration.name->GetColumnName();
+		string type_marker = declaration.type_marker;
+		idx_t var_idx = var_names.size();
+		decide_variable_names.emplace(name, var_idx);
 
-            // `per (): x` is one decision for the query and carries no key scope; `per K: x`
-            // is one per class of K; no `per` is one per result row.
-            if (declaration.per && declaration.per->children.size() == 1) {
-                variable_scopes.push_back(DecideVarScopeInfo::Global());
-            } else if (declaration.per) {
-                auto key_text = DecideKeyToString(*declaration.per);
-			    auto scope_idx = FindOrCreateKeyScope(context, bind_context, *declaration.per, declared_names, key_text,
-			                                          keys, keyed_scopes);
-			    keyed_scopes[scope_idx].scoped_variable_indices.push_back(var_idx);
-                variable_scopes.push_back(DecideVarScopeInfo::Keyed(scope_idx, key_text));
-            } else {
-                variable_scopes.push_back(DecideVarScopeInfo::Row());
-            }
-            var_names.push_back(name);
-            // An `INT` decision is BIGINT, not INTEGER. Nothing bounds a decision to
-            // int32: the solver works in doubles, and an optimum driven by an aggregate
-            // row (`SUM(x) <= 5000000000`) has no per-variable bound to inspect here.
-            // A narrower column would truncate that answer on readback and hand back a
-            // number violating the query's own constraints. BIGINT also matches what
-            // DuckDB itself returns for generated integers (`range()`). `BOOL` stays
-            // INTEGER — its domain is 0/1, so it cannot overflow, and widening it would
-            // change an output column type for no gain.
-            var_types.push_back(type_marker == "real_variable"   ? LogicalType::DOUBLE
-                                : type_marker == "bool_variable" ? LogicalType::INTEGER
-                                                                 : LogicalType::BIGINT);
-            is_boolean_var.push_back(type_marker == "bool_variable");
-        }
+		// `per (): x` is one decision for the query and carries no key scope; `per K: x`
+		// is one per class of K; no `per` is one per result row.
+		if (declaration.per && declaration.per->children.size() == 1) {
+			variable_scopes.push_back(DecideVarScopeInfo::Global());
+		} else if (declaration.per) {
+			auto key_text = DecideKeyToString(*declaration.per);
+			auto scope_idx = FindOrCreateKeyScope(context, bind_context, *declaration.per, declared_names, key_text,
+			                                      keys, keyed_scopes);
+			keyed_scopes[scope_idx].scoped_variable_indices.push_back(var_idx);
+			variable_scopes.push_back(DecideVarScopeInfo::Keyed(scope_idx, key_text));
+		} else {
+			variable_scopes.push_back(DecideVarScopeInfo::Row());
+		}
+		var_names.push_back(name);
+		// An `INT` decision is BIGINT, not INTEGER. Nothing bounds a decision to
+		// int32: the solver works in doubles, and an optimum driven by an aggregate
+		// row (`SUM(x) <= 5000000000`) has no per-variable bound to inspect here.
+		// A narrower column would truncate that answer on readback and hand back a
+		// number violating the query's own constraints. BIGINT also matches what
+		// DuckDB itself returns for generated integers (`range()`). `BOOL` stays
+		// INTEGER — its domain is 0/1, so it cannot overflow, and widening it would
+		// change an output column type for no gain.
+		var_types.push_back(type_marker == "real_variable"   ? LogicalType::DOUBLE
+		                    : type_marker == "bool_variable" ? LogicalType::INTEGER
+		                                                     : LogicalType::BIGINT);
+		is_boolean_var.push_back(type_marker == "bool_variable");
+	}
 
-        // A variable's `0/1` domain (declared BOOL, or a boolean-valued auxiliary
-        // like an IN-domain/L0 indicator that must stay INTEGER-typed to
-        // participate in arithmetic — see is_boolean_var's uses below) is never
-        // synthesized as a SUCH THAT constraint. `is_boolean_var` alone carries the
-        // domain from here through LogicalDecide to PhysicalDecide, which applies it
-        // directly to the solver column's bounds (PhysicalDecide::Finalize) — the
-        // same mechanism already used for optimizer-created BOOLEAN-typed
-        // auxiliaries (MIN/MAX indicators, NE indicators). This avoids the round
-        // trip through the constraint tree: no redundant rows for downstream
-        // rewrites to carry or accidentally reshape, and no expression-shape
-        // pattern-matching needed to recover the domain at model-build time.
+	// A variable's `0/1` domain (declared BOOL, or a boolean-valued auxiliary
+	// like an IN-domain/L0 indicator that must stay INTEGER-typed to
+	// participate in arithmetic — see is_boolean_var's uses below) is never
+	// synthesized as a SUCH THAT constraint. `is_boolean_var` alone carries the
+	// domain from here through LogicalDecide to PhysicalDecide, which applies it
+	// directly to the solver column's bounds (PhysicalDecide::Finalize) — the
+	// same mechanism already used for optimizer-created BOOLEAN-typed
+	// auxiliaries (MIN/MAX indicators, NE indicators). This avoids the round
+	// trip through the constraint tree: no redundant rows for downstream
+	// rewrites to carry or accidentally reshape, and no expression-shape
+	// pattern-matching needed to recover the domain at model-build time.
 
-        // Capture user var count BEFORE any rewrites that add auxiliary variables
-        idx_t num_user_vars = var_names.size();
+	// Capture user var count BEFORE any rewrites that add auxiliary variables
+	idx_t num_user_vars = var_names.size();
 
-        // A decision is referenced by its bare name, wherever the query names it.
-        auto refuse_qualified = [&](const ParsedExpression &expr) {
-            RefuseQualifiedDecisionReferences(expr, bind_context, decide_variable_names, false);
-        };
-        if (statement.decide_constraints) {
-            refuse_qualified(*statement.decide_constraints);
-        }
-        if (statement.decide_objective) {
-            refuse_qualified(*statement.decide_objective);
-        }
-        for (auto &sel_expr : statement.select_list) {
-            refuse_qualified(*sel_expr);
-        }
-        for (auto &modifier : statement.modifiers) {
-            if (modifier->type == ResultModifierType::ORDER_MODIFIER) {
-                for (auto &order : modifier->Cast<OrderModifier>().orders) {
-                    refuse_qualified(*order.expression);
-                }
-            }
-        }
+	// A decision is referenced by its bare name, wherever the query names it.
+	auto refuse_qualified = [&](const ParsedExpression &expr) {
+		RefuseQualifiedDecisionReferences(expr, bind_context, decide_variable_names, false);
+	};
+	if (statement.decide_constraints) {
+		refuse_qualified(*statement.decide_constraints);
+	}
+	if (statement.decide_objective) {
+		refuse_qualified(*statement.decide_objective);
+	}
+	for (auto &sel_expr : statement.select_list) {
+		refuse_qualified(*sel_expr);
+	}
+	for (auto &modifier : statement.modifiers) {
+		if (modifier->type == ResultModifierType::ORDER_MODIFIER) {
+			for (auto &order : modifier->Cast<OrderModifier>().orders) {
+				refuse_qualified(*order.expression);
+			}
+		}
+	}
 
-        // Where `when`, `per` and `by` may stand, before anything reads the clauses: every
-        // decision name is known now, so a decision in a condition or a key is named the
-        // way the user spelled it.
-        if (statement.decide_constraints) {
-            ValidateDecideScopeSpellings(*statement.decide_constraints, decide_variable_names, false);
-        }
-        if (statement.decide_objective) {
-            ValidateDecideScopeSpellings(*statement.decide_objective, decide_variable_names, true);
-        }
+	// Where `when`, `per` and `by` may stand, before anything reads the clauses: every
+	// decision name is known now, so a decision in a condition or a key is named the
+	// way the user spelled it.
+	if (statement.decide_constraints) {
+		ValidateDecideScopeSpellings(*statement.decide_constraints, decide_variable_names, false);
+	}
+	if (statement.decide_objective) {
+		ValidateDecideScopeSpellings(*statement.decide_objective, decide_variable_names, true);
+	}
 
-        // A CASE is refused wherever the algebra would read it, before any binder classifies a shape.
-        if (statement.decide_constraints) {
-            ValidateDecideNoCase(*statement.decide_constraints);
-        }
-        if (statement.decide_objective) {
-            ValidateDecideNoCase(*statement.decide_objective);
-        }
+	// A CASE is refused wherever the algebra would read it, before any binder classifies a shape.
+	if (statement.decide_constraints) {
+		ValidateDecideNoCase(*statement.decide_constraints);
+	}
+	if (statement.decide_objective) {
+		ValidateDecideNoCase(*statement.decide_objective);
+	}
 
-        // This is the only point where cast authorship is still observable. Reject
-        // explicit casts over decisions before DECIDE generates any parsed nodes and
-        // before DuckDB binding adds its own type-reconciliation casts. SELECT-list
-        // expressions are intentionally outside this solver-algebra policy.
-        if (statement.decide_constraints) {
-            ValidateDecideNoExplicitDecisionCasts(*statement.decide_constraints,
-                                                  decide_variable_names);
-        }
-        if (statement.decide_objective) {
-            ValidateDecideNoExplicitDecisionCasts(*statement.decide_objective,
-                                                  decide_variable_names);
-        }
+	// This is the only point where cast authorship is still observable. Reject
+	// explicit casts over decisions before DECIDE generates any parsed nodes and
+	// before DuckDB binding adds its own type-reconciliation casts. SELECT-list
+	// expressions are intentionally outside this solver-algebra policy.
+	if (statement.decide_constraints) {
+		ValidateDecideNoExplicitDecisionCasts(*statement.decide_constraints, decide_variable_names);
+	}
+	if (statement.decide_objective) {
+		ValidateDecideNoExplicitDecisionCasts(*statement.decide_objective, decide_variable_names);
+	}
 
-        // NORM and IN bind as explicit markers. Their mathematical formulation
-        // (indicators, linking rows, and aggregate rewrites) belongs to
-        // DecideOptimizer, after types/scopes/casts are known.
+	// NORM and IN bind as explicit markers. Their mathematical formulation
+	// (indicators, linking rows, and aggregate rewrites) belongs to
+	// DecideOptimizer, after types/scopes/casts are known.
 
-        // NOT-EQUAL (<>) indicator variables are now created by DecideOptimizer
-        // (runs after binding, creates BOOLEAN indicators directly on LogicalDecide)
+	// NOT-EQUAL (<>) indicator variables are now created by DecideOptimizer
+	// (runs after binding, creates BOOLEAN indicators directly on LogicalDecide)
 
-        // MIN/MAX, NE, and IN/L0 indicator bounds are all handled the same way now:
-        // `is_boolean_var[i]` marks the domain and PhysicalDecide::Finalize applies
-        // `[0,1]` directly to the solver column, regardless of whether the indicator's
-        // DuckDB-facing type is BOOLEAN (MIN/MAX, NE) or INTEGER (IN/L0, which need
-        // INTEGER to participate in the parsed arithmetic that links them). No
-        // constraint-tree bounds to generate here.
-        idx_t num_auxiliary_vars = var_names.size() - num_user_vars;
+	// MIN/MAX, NE, and IN/L0 indicator bounds are all handled the same way now:
+	// `is_boolean_var[i]` marks the domain and PhysicalDecide::Finalize applies
+	// `[0,1]` directly to the solver column, regardless of whether the indicator's
+	// DuckDB-facing type is BOOLEAN (MIN/MAX, NE) or INTEGER (IN/L0, which need
+	// INTEGER to participate in the parsed arithmetic that links them). No
+	// constraint-tree bounds to generate here.
+	idx_t num_auxiliary_vars = var_names.size() - num_user_vars;
 
-        if (statement.decide_constraints) {
-            // Reject scalar functions like sqrt(x), exp(x), floor(x) wrapping a
-            // DECIDE variable, before anything downstream has to interpret them.
-            ValidateDecideNoNonLinearScalar(context, *statement.decide_constraints, decide_variable_names);
-            // A `<`, `>` or `<>` over a REAL decision has no exact encoding — all three
-            // are encoded by stepping the bound one integer unit — and the declared type
-            // says so without reading a row. Rejecting here names the variable and quotes
-            // the clause; the model builder keeps only the value half of the refusal (a
-            // data column yielding a fractional coefficient).
-            ValidateDecideNoIntegerStepComparisonOnReal(*statement.decide_constraints, decide_variable_names,
-                                                        var_types);
-            // Source-only casts and scalar subqueries lose their written spelling
-            // during binding/flattening. Give those atoms stable fragment ids now;
-            // the DECIDE binder carries the tags onto the bound nodes.
-            TagDecideSourceFragments(*statement.decide_constraints, decide_source_fragments);
-        }
-        if (statement.decide_objective) {
-            ValidateDecideNoNonLinearScalar(context, *statement.decide_objective, decide_variable_names);
-            // The objective quotes its own SQL in a message (a `when` that keeps no row, a
-            // term that reads no decision), so its casts and subqueries keep their written
-            // text, as every constraint's do.
-            TagDecideSourceFragments(*statement.decide_objective, decide_source_fragments);
-        }
+	if (statement.decide_constraints) {
+		// Reject scalar functions like sqrt(x), exp(x), floor(x) wrapping a
+		// DECIDE variable, before anything downstream has to interpret them.
+		ValidateDecideNoNonLinearScalar(context, *statement.decide_constraints, decide_variable_names);
+		// A `<`, `>` or `<>` over a REAL decision has no exact encoding — all three
+		// are encoded by stepping the bound one integer unit — and the declared type
+		// says so without reading a row. Rejecting here names the variable and quotes
+		// the clause; the model builder keeps only the value half of the refusal (a
+		// data column yielding a fractional coefficient).
+		ValidateDecideNoIntegerStepComparisonOnReal(*statement.decide_constraints, decide_variable_names, var_types);
+		// Source-only casts and scalar subqueries lose their written spelling
+		// during binding/flattening. Give those atoms stable fragment ids now;
+		// the DECIDE binder carries the tags onto the bound nodes.
+		TagDecideSourceFragments(*statement.decide_constraints, decide_source_fragments);
+	}
+	if (statement.decide_objective) {
+		ValidateDecideNoNonLinearScalar(context, *statement.decide_objective, decide_variable_names);
+		// The objective quotes its own SQL in a message (a `when` that keeps no row, a
+		// term that reads no decision), so its casts and subqueries keep their written
+		// text, as every constraint's do.
+		TagDecideSourceFragments(*statement.decide_objective, decide_source_fragments);
+	}
 
-        bind_context.AddGenericBinding(result.decide_index, "decide_variables", var_names, var_types);
-        // Query-wide decisions (`per (): x`), so the constraint and objective binders can
-        // tell a query-wide decision from a per-row one.
-        case_insensitive_set_t scalar_variable_names;
-        for (idx_t v = 0; v < variable_scopes.size() && v < var_names.size(); v++) {
-            if (variable_scopes[v].IsGlobal()) {
-                scalar_variable_names.insert(var_names[v]);
-            }
-        }
-        // What a relation-qualified reducer needs to resolve `sum(D: ...)`. The binders
-        // may append a key-only keyed scope to `keyed_scopes`, which is why this runs
-        // before the vector is moved onto the operator below.
-        DecideQualifierContext qualifier_context;
-        qualifier_context.decide_index = result.decide_index;
-        qualifier_context.keyed_scopes = &keyed_scopes;
-	    qualifier_context.keys = &keys;
-        vector<DecideFrameSpec> frames;
-        qualifier_context.frames = &frames;
-	    qualifier_context.source_fragments = &decide_source_fragments;
-	    qualifier_context.source_text = &statement.decide_text;
-        // Isolate with brackets to avoid multiple active binders.
-        {
-            DecideConstraintsBinder decide_constraints_binder (binder, context, decide_variable_names, scalar_variable_names, &qualifier_context);
-            unique_ptr<ParsedExpression> constraints = std::move(statement.decide_constraints);
-            result.decide_constraints = decide_constraints_binder.Bind(constraints);
-            if (result.decide_constraints) {
-                RefuseVolatile(*result.decide_constraints, "a constraint");
-                // The other half of the integer-step gate. The parsed-tree validator above
-                // read the decision's declared type off the DECIDE clause; every other
-                // operand's type is only known now that binding has resolved it. Together
-                // they are the whole refusal, so the model builder no longer raises one.
-			    DecideSourceNames names {decide_source_fragments, keyed_scopes, keys};
-			    ValidateDecideIntegralComparisonOperands(*result.decide_constraints, result.decide_index, &names);
-                // Degree has one owner, and this is it. Running on the bound tree makes the
-                // rule total: a reducer argument and a bare per-row constraint are judged
-                // the same way, which the parsed-tree gate could not do because it was only
-                // ever called for SUM/AVG/MIN/MAX arguments.
-                ValidateDecideConstraintDegree(*result.decide_constraints, result.decide_index);
-			    result.decide_constraint_sources =
-			        InitializeConstraintSourceInfo(*result.decide_constraints, decide_source_fragments, keyed_scopes,
-			                                       result.decide_index, &keys, &statement.decide_text);
-		    }
-            // Types are now determined from the DECIDE clause, not from constraint binding
-        }
-        if (statement.decide_objective) {
-            DecideObjectiveBinder decide_objective_binder (binder, context, decide_variable_names, scalar_variable_names, &qualifier_context);
-            decide_objective_binder.decide_sense = statement.decide_sense;
-            unique_ptr<ParsedExpression> objective = std::move(statement.decide_objective);
-            result.decide_objective = decide_objective_binder.Bind(objective);
-            if (result.decide_objective) {
-                RefuseVolatile(*result.decide_objective, "the objective");
-                ValidateDecideObjectiveDegree(*result.decide_objective, result.decide_index);
-            }
-        }
-	    for (auto &key : keys) {
-		    for (auto &element : key.elements) {
-			    RefuseVolatile(*element.expression, "a by key");
-		    }
-	    }
-	    result.decide_source_fragments = decide_source_fragments;
-        result.decide_sense = statement.decide_sense;
-        // Update types in bind context to reflect the determined types from DECIDE clause
-        bind_context.GetBindingsList().back()->types = var_types;
-        for (idx_t i = 0; i < var_names.size(); i++) {
-            auto bound_col_ref = make_uniq<BoundColumnRefExpression>(
-                var_names[i],
-                var_types[i],
-                ColumnBinding(result.decide_index, i)
-            );
-            result.decide_variables.push_back(std::move(bound_col_ref));
-        }
-        result.num_auxiliary_vars = num_auxiliary_vars;
-        result.is_boolean_var = is_boolean_var;
+	bind_context.AddGenericBinding(result.decide_index, "decide_variables", var_names, var_types);
+	// Query-wide decisions (`per (): x`), so the constraint and objective binders can
+	// tell a query-wide decision from a per-row one.
+	case_insensitive_set_t scalar_variable_names;
+	for (idx_t v = 0; v < variable_scopes.size() && v < var_names.size(); v++) {
+		if (variable_scopes[v].IsGlobal()) {
+			scalar_variable_names.insert(var_names[v]);
+		}
+	}
+	// What a relation-qualified reducer needs to resolve `sum(D: ...)`. The binders
+	// may append a key-only keyed scope to `keyed_scopes`, which is why this runs
+	// before the vector is moved onto the operator below.
+	DecideQualifierContext qualifier_context;
+	qualifier_context.decide_index = result.decide_index;
+	qualifier_context.keyed_scopes = &keyed_scopes;
+	qualifier_context.keys = &keys;
+	vector<DecideFrameSpec> frames;
+	qualifier_context.frames = &frames;
+	qualifier_context.source_fragments = &decide_source_fragments;
+	qualifier_context.source_text = &statement.decide_text;
+	// Isolate with brackets to avoid multiple active binders.
+	{
+		DecideConstraintsBinder decide_constraints_binder(binder, context, decide_variable_names, scalar_variable_names,
+		                                                  &qualifier_context);
+		unique_ptr<ParsedExpression> constraints = std::move(statement.decide_constraints);
+		result.decide_constraints = decide_constraints_binder.Bind(constraints);
+		if (result.decide_constraints) {
+			RefuseVolatile(*result.decide_constraints, "a constraint");
+			// The other half of the integer-step gate. The parsed-tree validator above
+			// read the decision's declared type off the DECIDE clause; every other
+			// operand's type is only known now that binding has resolved it. Together
+			// they are the whole refusal, so the model builder no longer raises one.
+			DecideSourceNames names {decide_source_fragments, keyed_scopes, keys};
+			ValidateDecideIntegralComparisonOperands(*result.decide_constraints, result.decide_index, &names);
+			// Degree has one owner, and this is it. Running on the bound tree makes the
+			// rule total: a reducer argument and a bare per-row constraint are judged
+			// the same way, which the parsed-tree gate could not do because it was only
+			// ever called for SUM/AVG/MIN/MAX arguments.
+			ValidateDecideConstraintDegree(*result.decide_constraints, result.decide_index);
+			result.decide_constraint_sources =
+			    InitializeConstraintSourceInfo(*result.decide_constraints, decide_source_fragments, keyed_scopes,
+			                                   result.decide_index, &keys, &statement.decide_text);
+		}
+		// Types are now determined from the DECIDE clause, not from constraint binding
+	}
+	if (statement.decide_objective) {
+		DecideObjectiveBinder decide_objective_binder(binder, context, decide_variable_names, scalar_variable_names,
+		                                              &qualifier_context);
+		decide_objective_binder.decide_sense = statement.decide_sense;
+		unique_ptr<ParsedExpression> objective = std::move(statement.decide_objective);
+		result.decide_objective = decide_objective_binder.Bind(objective);
+		if (result.decide_objective) {
+			RefuseVolatile(*result.decide_objective, "the objective");
+			ValidateDecideObjectiveDegree(*result.decide_objective, result.decide_index);
+		}
+	}
+	for (auto &key : keys) {
+		for (auto &element : key.elements) {
+			RefuseVolatile(*element.expression, "a by key");
+		}
+	}
+	result.decide_source_fragments = decide_source_fragments;
+	result.decide_sense = statement.decide_sense;
+	// Update types in bind context to reflect the determined types from DECIDE clause
+	bind_context.GetBindingsList().back()->types = var_types;
+	for (idx_t i = 0; i < var_names.size(); i++) {
+		auto bound_col_ref =
+		    make_uniq<BoundColumnRefExpression>(var_names[i], var_types[i], ColumnBinding(result.decide_index, i));
+		result.decide_variables.push_back(std::move(bound_col_ref));
+	}
+	result.num_auxiliary_vars = num_auxiliary_vars;
+	result.is_boolean_var = is_boolean_var;
 
-	    result.decide_keys = std::move(keys);
-        result.decide_frames = std::move(frames);
+	result.decide_keys = std::move(keys);
+	result.decide_frames = std::move(frames);
 
-	    result.keyed_scopes = std::move(keyed_scopes);
-        result.variable_scopes = variable_scopes;
+	result.keyed_scopes = std::move(keyed_scopes);
+	result.variable_scopes = variable_scopes;
 
-        // ne_clause_sources is now populated by DecideOptimizer (post-binding)
-        // minmax_clause_labels and flat_objective_agg/is_easy are now populated by
-        // DecideOptimizer::RewriteMinMax (post-binding)
+	// ne_clause_sources is now populated by DecideOptimizer (post-binding)
+	// minmax_clause_labels and flat_objective_agg/is_easy are now populated by
+	// DecideOptimizer::RewriteMinMax (post-binding)
 
-        // Hide auxiliary vars from SELECT * by truncating the bind context binding.
-        // The decide_variables vector still has ALL vars (user + aux) for the execution layer,
-        // but the bind context only exposes user vars for star expansion.
-        if (num_auxiliary_vars > 0) {
-            auto &binding = *bind_context.GetBindingsList().back();
-            for (idx_t i = num_user_vars; i < var_names.size(); i++) {
-                binding.name_map.erase(var_names[i]);
-            }
-            binding.names.resize(num_user_vars);
-            binding.types.resize(num_user_vars);
-        }
+	// Hide auxiliary vars from SELECT * by truncating the bind context binding.
+	// The decide_variables vector still has ALL vars (user + aux) for the execution layer,
+	// but the bind context only exposes user vars for star expansion.
+	if (num_auxiliary_vars > 0) {
+		auto &binding = *bind_context.GetBindingsList().back();
+		for (idx_t i = num_user_vars; i < var_names.size(); i++) {
+			binding.name_map.erase(var_names[i]);
+		}
+		binding.names.resize(num_user_vars);
+		binding.types.resize(num_user_vars);
+	}
 }
 
 } // namespace duckdb

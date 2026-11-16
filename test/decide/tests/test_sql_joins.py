@@ -34,7 +34,8 @@ def test_q05_join_decide(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(o.o_orderkey AS BIGINT),
                CAST(o.o_totalprice AS DOUBLE),
                c.c_mktsegment
@@ -42,7 +43,8 @@ def test_q05_join_decide(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         WHERE o.o_custkey = c.c_custkey
           AND c.c_mktsegment = 'BUILDING'
           AND o.o_orderkey < 1000
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("q05_join")
@@ -53,7 +55,9 @@ def test_q05_join_decide(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     # SUM(x * totalprice) <= 100000
     oracle_solver.add_constraint(
         {vnames[i]: data[i][1] for i in range(len(data))},
-        "<=", 100000.0, name="budget",
+        "<=",
+        100000.0,
+        name="budget",
     )
     # MAXIMIZE SUM(x * totalprice)
     oracle_solver.set_objective(
@@ -64,14 +68,24 @@ def test_q05_join_decide(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("o_totalprice")])},
     )
 
     perf_tracker.record(
-        "q05_join_decide", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "q05_join_decide",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -100,7 +114,8 @@ def test_three_way_join(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l.l_orderkey AS BIGINT),
                CAST(l.l_linenumber AS BIGINT),
                CAST(l.l_extendedprice AS DOUBLE),
@@ -111,7 +126,8 @@ def test_three_way_join(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
           AND o.o_custkey = c.c_custkey
           AND c.c_mktsegment = 'BUILDING'
           AND l.l_orderkey < 100
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("three_way_join")
@@ -121,7 +137,9 @@ def test_three_way_join(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 
     oracle_solver.add_constraint(
         {vnames[i]: data[i][2] for i in range(len(data))},
-        "<=", 50000.0, name="budget",
+        "<=",
+        50000.0,
+        name="budget",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -131,14 +149,24 @@ def test_three_way_join(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "three_way_join", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "three_way_join",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )

@@ -34,14 +34,16 @@ def test_q06_multi_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_track
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l.l_orderkey AS BIGINT),
                CAST(l.l_quantity AS DOUBLE),
                CAST(p.p_size AS DOUBLE)
         FROM lineitem l, part p
         WHERE l.l_partkey = p.p_partkey
           AND l.l_orderkey < 50
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("q06_multi")
@@ -52,12 +54,16 @@ def test_q06_multi_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_track
     # Constraint 1: SUM(x * quantity) <= 500
     oracle_solver.add_constraint(
         {vnames[i]: data[i][1] for i in range(len(data))},
-        "<=", 500.0, name="weight",
+        "<=",
+        500.0,
+        name="weight",
     )
     # Constraint 2: SUM(x * size) <= 1000
     oracle_solver.add_constraint(
         {vnames[i]: data[i][2] for i in range(len(data))},
-        "<=", 1000.0, name="volume",
+        "<=",
+        1000.0,
+        name="volume",
     )
     # MAXIMIZE SUM(x)
     oracle_solver.set_objective(
@@ -68,14 +74,24 @@ def test_q06_multi_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_track
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
 
     perf_tracker.record(
-        "q06_multi_constraint", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "q06_multi_constraint",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )

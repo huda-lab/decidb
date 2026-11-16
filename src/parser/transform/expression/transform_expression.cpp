@@ -32,12 +32,11 @@ unique_ptr<ParsedExpression> Transformer::TransformExpression(duckdb_libpgquery:
 	switch (node.type) {
 	case duckdb_libpgquery::T_PGColumnRef:
 		return TransformColumnRef(PGCast<duckdb_libpgquery::PGColumnRef>(node));
-    case duckdb_libpgquery::T_PGTypeName:
-    {
-        auto &type_name_node = PGCast<duckdb_libpgquery::PGTypeName>(node);
+	case duckdb_libpgquery::T_PGTypeName: {
+		auto &type_name_node = PGCast<duckdb_libpgquery::PGTypeName>(node);
 		auto logical_type = TransformTypeName(type_name_node);
 		return make_uniq_base<ParsedExpression, ConstantExpression>(Value(logical_type.ToString()));
-    }
+	}
 	case duckdb_libpgquery::T_PGAConst:
 		return TransformConstant(PGCast<duckdb_libpgquery::PGAConst>(node));
 	case duckdb_libpgquery::T_PGAExpr:

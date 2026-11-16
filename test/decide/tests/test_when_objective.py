@@ -37,14 +37,16 @@ def test_when_objective_maximize(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE),
                l_returnflag
         FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("when_obj_max")
@@ -55,7 +57,9 @@ def test_when_objective_maximize(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     # Constraint applies to ALL rows (no WHEN)
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data))},
-        "<=", 100.0, name="capacity",
+        "<=",
+        100.0,
+        name="capacity",
     )
     # Objective: only 'R' rows contribute
     oracle_solver.set_objective(
@@ -68,16 +72,26 @@ def test_when_objective_maximize(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     price_idx = decidb_cols.index("l_extendedprice")
     flag_idx = decidb_cols.index("l_returnflag")
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {
             "x": float(row[price_idx]) if row[flag_idx] == 'R' else 0.0,
         },
     )
 
     perf_tracker.record(
-        "when_obj_max", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "when_obj_max",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -103,14 +117,16 @@ def test_when_objective_minimize(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE),
                l_returnflag
         FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("when_obj_min")
@@ -121,7 +137,9 @@ def test_when_objective_minimize(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     # Must select at least 50 items
     oracle_solver.add_constraint(
         {vnames[i]: 1.0 for i in range(len(data))},
-        ">=", 50.0, name="min_count",
+        ">=",
+        50.0,
+        name="min_count",
     )
     # Objective: minimize quantity contribution from 'A' rows only
     oracle_solver.set_objective(
@@ -134,16 +152,26 @@ def test_when_objective_minimize(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     qty_idx = decidb_cols.index("l_quantity")
     flag_idx = decidb_cols.index("l_returnflag")
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {
             "x": float(row[qty_idx]) if row[flag_idx] == 'A' else 0.0,
         },
     )
 
     perf_tracker.record(
-        "when_obj_min", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "when_obj_min",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -168,13 +196,15 @@ def test_when_objective_all_match(decidb_cli, duckdb_conn, oracle_solver, perf_t
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("when_obj_all_match")
@@ -184,7 +214,9 @@ def test_when_objective_all_match(decidb_cli, duckdb_conn, oracle_solver, perf_t
 
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data))},
-        "<=", 100.0, name="capacity",
+        "<=",
+        100.0,
+        name="capacity",
     )
     # All l_quantity > 0 → all rows contribute to objective
     oracle_solver.set_objective(
@@ -195,14 +227,24 @@ def test_when_objective_all_match(decidb_cli, duckdb_conn, oracle_solver, perf_t
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_obj_all_match", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "when_obj_all_match",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -215,7 +257,10 @@ def test_when_objective_all_match(decidb_cli, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_when_constraint_and_objective_same_condition(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
+    decidb_cli,
+    duckdb_conn,
+    oracle_solver,
+    perf_tracker,
 ):
     """Same WHEN on both constraint and objective — non-R rows are invisible."""
     sql = """
@@ -231,14 +276,16 @@ def test_when_constraint_and_objective_same_condition(
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE),
                l_returnflag
         FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("when_same_cond")
@@ -249,7 +296,9 @@ def test_when_constraint_and_objective_same_condition(
     # Both constraint and objective filter on 'R'
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data)) if data[i][4] == 'R'},
-        "<=", 50.0, name="capacity_R",
+        "<=",
+        50.0,
+        name="capacity_R",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data)) if data[i][4] == 'R'},
@@ -261,16 +310,26 @@ def test_when_constraint_and_objective_same_condition(
     price_idx = decidb_cols.index("l_extendedprice")
     flag_idx = decidb_cols.index("l_returnflag")
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {
             "x": float(row[price_idx]) if row[flag_idx] == 'R' else 0.0,
         },
     )
 
     perf_tracker.record(
-        "when_same_cond", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "when_same_cond",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -283,7 +342,10 @@ def test_when_constraint_and_objective_same_condition(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_when_constraint_and_objective_different_conditions(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
+    decidb_cli,
+    duckdb_conn,
+    oracle_solver,
+    perf_tracker,
 ):
     """Constraint filters 'A' rows, objective rewards 'R' rows — disjoint filters."""
     sql = """
@@ -299,14 +361,16 @@ def test_when_constraint_and_objective_different_conditions(
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE),
                l_returnflag
         FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("when_diff_cond")
@@ -317,7 +381,9 @@ def test_when_constraint_and_objective_different_conditions(
     # Constraint on 'A' rows only
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data)) if data[i][4] == 'A'},
-        "<=", 100.0, name="capacity_A",
+        "<=",
+        100.0,
+        name="capacity_A",
     )
     # Objective on 'R' rows only
     oracle_solver.set_objective(
@@ -330,16 +396,26 @@ def test_when_constraint_and_objective_different_conditions(
     price_idx = decidb_cols.index("l_extendedprice")
     flag_idx = decidb_cols.index("l_returnflag")
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {
             "x": float(row[price_idx]) if row[flag_idx] == 'R' else 0.0,
         },
     )
 
     perf_tracker.record(
-        "when_diff_cond", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "when_diff_cond",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -352,7 +428,10 @@ def test_when_constraint_and_objective_different_conditions(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_when_objective_with_unconditional_constraint(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
+    decidb_cli,
+    duckdb_conn,
+    oracle_solver,
+    perf_tracker,
 ):
     """Unconditional constraints + WHEN on objective only."""
     sql = """
@@ -369,14 +448,16 @@ def test_when_objective_with_unconditional_constraint(
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE),
                l_returnflag
         FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("when_obj_uncon")
@@ -387,7 +468,9 @@ def test_when_objective_with_unconditional_constraint(
 
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data))},
-        "<=", 100.0, name="capacity",
+        "<=",
+        100.0,
+        name="capacity",
     )
     # Objective: only 'R' rows
     oracle_solver.set_objective(
@@ -400,16 +483,26 @@ def test_when_objective_with_unconditional_constraint(
     price_idx = decidb_cols.index("l_extendedprice")
     flag_idx = decidb_cols.index("l_returnflag")
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {
             "x": float(row[price_idx]) if row[flag_idx] == 'R' else 0.0,
         },
     )
 
     perf_tracker.record(
-        "when_obj_uncon", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "when_obj_uncon",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )

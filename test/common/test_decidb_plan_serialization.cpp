@@ -369,8 +369,9 @@ TEST_CASE("A placed frame survives a serialization round trip", "[decidb]") {
 	SetUp(con);
 
 	// The canonicalizer places each frame (DecideFrameSpec::rows, timeline_key, the names its messages use, its D75
-	// partition key) and builds its signature field; execution reads all of it, so none may be lost on the wire. The first frame stands under a `when` and a `per` its `within` does not hold; the second
-	// inside a reducer with a `by` key, over decisions.
+	// partition key) and builds its signature field; execution reads all of it, so none may be lost on the wire. The
+	// first frame stands under a `when` and a `per` its `within` does not hold; the second inside a reducer with a `by`
+	// key, over decisions.
 	auto plan = con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) DECIDE x(INT) "
 	                            "SUCH THAT x <= 9 AND when site.cap > 10 per region.r_name: "
 	                            "x >= at(2 previous else 1: x) over (site.cap desc within site.s_key) "

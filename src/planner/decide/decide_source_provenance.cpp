@@ -46,9 +46,8 @@ string DecideWrittenText(const ParsedExpression &expr) {
 }
 
 void TagDecideSourceFragments(ParsedExpression &expr, vector<string> &fragments) {
-	ParsedExpressionIterator::EnumerateChildren(expr, [&](ParsedExpression &child) {
-		TagDecideSourceFragments(child, fragments);
-	});
+	ParsedExpressionIterator::EnumerateChildren(
+	    expr, [&](ParsedExpression &child) { TagDecideSourceFragments(child, fragments); });
 	if (expr.GetExpressionClass() != ExpressionClass::CAST && expr.GetExpressionClass() != ExpressionClass::SUBQUERY) {
 		return;
 	}
@@ -393,8 +392,7 @@ static string RenderSource(const Expression &expr, const vector<string> &fragmen
 template <class CALLBACK>
 static void VisitSourceInOperators(Expression &expr, CALLBACK &&callback) {
 	ForEachConstraintLeaf(expr, [&](Expression &node) {
-		if (node.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR &&
-		    node.type == ExpressionType::COMPARE_IN) {
+		if (node.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR && node.type == ExpressionType::COMPARE_IN) {
 			callback(node);
 		}
 	});
@@ -747,45 +745,42 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
                                   const vector<string> &fragments, const vector<KeyedScopeInfo> &keyed_scopes,
                                   const vector<DecideKey> *keys) {
 	auto &mutable_constraints = const_cast<Expression &>(constraints);
-	VisitSourceComparisons(mutable_constraints, fragments, keyed_scopes, DecideEnclosingScope(),
-	                       [&](BoundComparisonExpression &cmp, const string &) {
-		                       idx_t source_id;
-		                       if (!TryParseSourceClauseTag(cmp.GetAlias(), source_id) || source_id >= sources.size()) {
-			                       return;
-		                       }
-		                       auto &info = sources[source_id];
-		                       info.canonical_lhs = RenderSource(*cmp.left, fragments, keyed_scopes, keys);
-		                       info.canonical_rhs = RenderSource(*cmp.right, fragments, keyed_scopes, keys);
-		                       info.canonical_cmp = DecideComparisonOperator(cmp.type);
-		                       info.canonical_differs = info.rendered_lhs != info.canonical_lhs ||
-		                                                info.rendered_rhs != info.canonical_rhs ||
-		                                                info.written_cmp != info.canonical_cmp;
-		                       info.rendered_lhs.clear();
-		                       info.rendered_rhs.clear();
-		                       // The written spelling is only worth carrying when it differs
-		                       // from the canonical one. Two cases retire it here. When both
-		                       // sides render identically nothing moved, so the canonical text
-		                       // already IS the user's. When the sides were merely SWAPPED
-		                       // (`100000 <= SUM(x)` canonicalizing to `SUM(x) >= 100000`) the
-		                       // canonical form is a faithful, better-oriented reading of the
-		                       // same clause, and the repair's offset belongs on the bound it
-		                       // now names -- quoting the written order would put the offset on
-		                       // the wrong side.
-		                       bool unchanged = info.source_lhs == info.canonical_lhs &&
-		                                        info.source_rhs == info.canonical_rhs;
-		                       bool swapped = info.source_lhs == info.canonical_rhs &&
-		                                      info.source_rhs == info.canonical_lhs;
-		                       if (unchanged || swapped) {
-			                       info.source_lhs.clear();
-			                       info.source_rhs.clear();
-		                       }
-		                       if (!IsQueryWideBoundTag(cmp.GetAlias()) &&
-		                           !ContainsSubquerySource(*cmp.right)) {
-			                       info.rhs_kind = ConstraintSourceRhsKind::DATA_EXPRESSION;
-		                       } else {
-			                       info.rhs_kind = ConstraintSourceRhsKind::NUMERIC_FALLBACK;
-		                       }
-	                       });
+	VisitSourceComparisons(
+	    mutable_constraints, fragments, keyed_scopes, DecideEnclosingScope(),
+	    [&](BoundComparisonExpression &cmp, const string &) {
+		    idx_t source_id;
+		    if (!TryParseSourceClauseTag(cmp.GetAlias(), source_id) || source_id >= sources.size()) {
+			    return;
+		    }
+		    auto &info = sources[source_id];
+		    info.canonical_lhs = RenderSource(*cmp.left, fragments, keyed_scopes, keys);
+		    info.canonical_rhs = RenderSource(*cmp.right, fragments, keyed_scopes, keys);
+		    info.canonical_cmp = DecideComparisonOperator(cmp.type);
+		    info.canonical_differs = info.rendered_lhs != info.canonical_lhs ||
+		                             info.rendered_rhs != info.canonical_rhs || info.written_cmp != info.canonical_cmp;
+		    info.rendered_lhs.clear();
+		    info.rendered_rhs.clear();
+		    // The written spelling is only worth carrying when it differs
+		    // from the canonical one. Two cases retire it here. When both
+		    // sides render identically nothing moved, so the canonical text
+		    // already IS the user's. When the sides were merely SWAPPED
+		    // (`100000 <= SUM(x)` canonicalizing to `SUM(x) >= 100000`) the
+		    // canonical form is a faithful, better-oriented reading of the
+		    // same clause, and the repair's offset belongs on the bound it
+		    // now names -- quoting the written order would put the offset on
+		    // the wrong side.
+		    bool unchanged = info.source_lhs == info.canonical_lhs && info.source_rhs == info.canonical_rhs;
+		    bool swapped = info.source_lhs == info.canonical_rhs && info.source_rhs == info.canonical_lhs;
+		    if (unchanged || swapped) {
+			    info.source_lhs.clear();
+			    info.source_rhs.clear();
+		    }
+		    if (!IsQueryWideBoundTag(cmp.GetAlias()) && !ContainsSubquerySource(*cmp.right)) {
+			    info.rhs_kind = ConstraintSourceRhsKind::DATA_EXPRESSION;
+		    } else {
+			    info.rhs_kind = ConstraintSourceRhsKind::NUMERIC_FALLBACK;
+		    }
+	    });
 }
 
 string RenderDecideSource(const Expression &expr, const vector<string> &fragments,
@@ -1011,8 +1006,7 @@ vector<DecideClauseLayers> CollectDecideClauseLayers(optional_ptr<const Expressi
 static constexpr const char *LAYER_REWRITTEN_PREFIX = "  \xE2\x86\xB3 ";
 static constexpr const char *LAYER_CANONICAL_PREFIX = "  \xE2\x89\xA1 ";
 
-string RenderDecideClauseLayers(const vector<DecideClauseLayers> &layers,
-                                const vector<string> &unattributed) {
+string RenderDecideClauseLayers(const vector<DecideClauseLayers> &layers, const vector<string> &unattributed) {
 	string result;
 	auto append_line = [&](const string &line) {
 		if (!result.empty()) {

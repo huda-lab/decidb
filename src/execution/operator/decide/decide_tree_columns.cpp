@@ -774,8 +774,7 @@ void DecideTreeColumns::ReadFrames(const vector<DecideFrameSpec> &frames, idx_t 
 	DecideCountFrames(maps);
 }
 
-std::unordered_map<const Expression *, pair<idx_t, idx_t>>
-DecideTreeColumns::FrameExpressions() const {
+std::unordered_map<const Expression *, pair<idx_t, idx_t>> DecideTreeColumns::FrameExpressions() const {
 	std::unordered_map<const Expression *, pair<idx_t, idx_t>> programs;
 	for (idx_t j = 0; j < tree.frame_columns.size(); j++) {
 		auto &column = tree.frame_reads.columns[j];

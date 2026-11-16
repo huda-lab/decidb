@@ -2355,10 +2355,10 @@ string DecideDescent::Dump() const {
 		auto &container = containers[n];
 		auto &node = *tree.nodes[n];
 		auto &groups = container.groups;
-		const auto kind = node.kind == DecideNodeKind::SCOPE       ? "E"
-		                  : node.kind == DecideNodeKind::REDUCER   ? "G"
-		                  : node.kind == DecideNodeKind::FRAME     ? "O"
-		                                                           : "F";
+		const auto kind = node.kind == DecideNodeKind::SCOPE     ? "E"
+		                  : node.kind == DecideNodeKind::REDUCER ? "G"
+		                  : node.kind == DecideNodeKind::FRAME   ? "O"
+		                                                         : "F";
 		out << "node " << n << " " << kind << " rows " << container.rows_in << " -> " << container.rows_out
 		    << " groups=" << groups.size() << " entries=" << container.Count() << " instances=" << container.Instances()
 		    << " text=" << node.text << "\n";

@@ -794,8 +794,8 @@ void DecideListFrameMembers(const DecideFrameMap &map, const string &aggregate, 
 		const double share = is_avg ? 1.0 / static_cast<double>(values) : 1.0;
 		out.AddGroup(map.window_anchor[w]);
 		map.ForEachRead(w, [&](idx_t row, idx_t times) {
-			DecideListMember(payload, payload_vars, row, (extremum ? 1.0 : static_cast<double>(times)) * share,
-			                 label, out, &payload_value_nodes);
+			DecideListMember(payload, payload_vars, row, (extremum ? 1.0 : static_cast<double>(times)) * share, label,
+			                 out, &payload_value_nodes);
 		});
 		const idx_t fallbacks = map.WindowFallbacks(w);
 		if (fallbacks > 0) {

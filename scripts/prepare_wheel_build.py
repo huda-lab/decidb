@@ -57,10 +57,7 @@ def main():
         target_dir, extensions, False, 0, "duckdb_build", use_short_paths
     )
 
-    duckdb_sources = [
-        os.path.sep.join(package_build.get_relative_path(script_path, x).split("/"))
-        for x in source_list
-    ]
+    duckdb_sources = [os.path.sep.join(package_build.get_relative_path(script_path, x).split("/")) for x in source_list]
     duckdb_sources.sort()
 
     duckdb_includes = ["duckdb_build/" + x for x in include_list]

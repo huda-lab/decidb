@@ -62,14 +62,13 @@ class CompilerLauncherMixin:
                     cmd_length = sum(len(arg) + 3 for arg in cmd)
                     if cmd_length > 30000:
                         import tempfile
+
                         rsp_fd, rsp_path = tempfile.mkstemp(suffix='.rsp')
                         try:
                             with os.fdopen(rsp_fd, 'w') as rsp:
                                 for arg in cmd[1:]:
                                     rsp.write(f'"{arg}"\n')
-                            return original_spawn_for_linker(
-                                [cmd[0], f'@{rsp_path}'], **kwargs
-                            )
+                            return original_spawn_for_linker([cmd[0], f'@{rsp_path}'], **kwargs)
                         finally:
                             try:
                                 os.unlink(rsp_path)
@@ -155,8 +154,16 @@ class build_ext(CompilerLauncherMixin, _build_ext):
         if hasattr(self.compiler, 'compile'):
             original_compiler_compile = self.compiler.compile
 
-            def custom_compile(sources, output_dir=None, macros=None, include_dirs=None,
-                              debug=0, extra_preargs=None, extra_postargs=None, depends=None):
+            def custom_compile(
+                sources,
+                output_dir=None,
+                macros=None,
+                include_dirs=None,
+                debug=0,
+                extra_preargs=None,
+                extra_postargs=None,
+                depends=None,
+            ):
                 # Separate C and C++ sources
                 c_sources = [s for s in sources if s.endswith('.c')]
                 cxx_sources = [s for s in sources if not s.endswith('.c')]
@@ -165,35 +172,38 @@ class build_ext(CompilerLauncherMixin, _build_ext):
 
                 # Compile C++ files with original flags
                 if cxx_sources:
-                    objects.extend(original_compiler_compile(
-                        cxx_sources, output_dir, macros, include_dirs,
-                        debug, extra_preargs, extra_postargs, depends
-                    ))
+                    objects.extend(
+                        original_compiler_compile(
+                            cxx_sources, output_dir, macros, include_dirs, debug, extra_preargs, extra_postargs, depends
+                        )
+                    )
 
                 # Compile C files with filtered flags (on non-Windows)
                 if c_sources:
                     if os.name != 'nt':
                         # Filter out C++-specific flags for C compilation
-                        c_postargs = [arg for arg in (extra_postargs or [])
-                                     if arg not in ['-std=c++17', '-stdlib=libc++']]
+                        c_postargs = [
+                            arg for arg in (extra_postargs or []) if arg not in ['-std=c++17', '-stdlib=libc++']
+                        ]
                         # Add minimal C flags
                         c_postargs.insert(0, '-g0')
                         if platform.system() == 'Darwin':
                             c_postargs.append('-mmacosx-version-min=10.13')
 
-                        objects.extend(original_compiler_compile(
-                            c_sources, output_dir, macros, include_dirs,
-                            debug, extra_preargs, c_postargs, depends
-                        ))
+                        objects.extend(
+                            original_compiler_compile(
+                                c_sources, output_dir, macros, include_dirs, debug, extra_preargs, c_postargs, depends
+                            )
+                        )
                     else:
                         # Windows: filter C++-specific flags for C files
-                        c_postargs = [arg for arg in (extra_postargs or [])
-                                     if arg not in ['/std:c++17']]
+                        c_postargs = [arg for arg in (extra_postargs or []) if arg not in ['/std:c++17']]
                         c_postargs.append('/std:c17')
-                        objects.extend(original_compiler_compile(
-                            c_sources, output_dir, macros, include_dirs,
-                            debug, extra_preargs, c_postargs, depends
-                        ))
+                        objects.extend(
+                            original_compiler_compile(
+                                c_sources, output_dir, macros, include_dirs, debug, extra_preargs, c_postargs, depends
+                            )
+                        )
 
                 return objects
 
@@ -255,7 +265,17 @@ os.chdir(os.path.dirname(os.path.realpath(__file__)))
 
 if os.name == 'nt':
     # windows:
-    toolchain_args = ['/std:c++17', '/wd4244', '/wd4267', '/wd4200', '/wd26451', '/wd26495', '/D_CRT_SECURE_NO_WARNINGS', '/DNOMINMAX', '/utf-8']
+    toolchain_args = [
+        '/std:c++17',
+        '/wd4244',
+        '/wd4267',
+        '/wd4200',
+        '/wd26451',
+        '/wd26495',
+        '/D_CRT_SECURE_NO_WARNINGS',
+        '/DNOMINMAX',
+        '/utf-8',
+    ]
 else:
     # macos/linux
     toolchain_args = ['-std=c++17', '-g0']
@@ -284,10 +304,10 @@ if platform.system() == 'Darwin':
     # Add OpenMP support on macOS (requires: brew install libomp)
     # Check Homebrew locations: direct prefix, keg-only libomp, ARM and Intel
     omp_search_dirs = [
-        '/opt/homebrew/opt/libomp',   # ARM keg-only (most common)
-        '/usr/local/opt/libomp',      # Intel keg-only
-        '/opt/homebrew',              # ARM symlinked
-        '/usr/local',                 # Intel symlinked
+        '/opt/homebrew/opt/libomp',  # ARM keg-only (most common)
+        '/usr/local/opt/libomp',  # Intel keg-only
+        '/opt/homebrew',  # ARM symlinked
+        '/usr/local',  # Intel symlinked
     ]
     for omp_dir in omp_search_dirs:
         omp_include = os.path.join(omp_dir, 'include')

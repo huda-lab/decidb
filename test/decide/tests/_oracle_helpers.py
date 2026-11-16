@@ -56,10 +56,20 @@ def add_ne_indicator(
     z_name = f"{name}__z"
     oracle.add_variable(z_name, VarType.BINARY)
     oracle.add_indicator_constraint(
-        z_name, 1, coeffs, "<=", rhs - 1.0, name=f"{name}_lo",
+        z_name,
+        1,
+        coeffs,
+        "<=",
+        rhs - 1.0,
+        name=f"{name}_lo",
     )
     oracle.add_indicator_constraint(
-        z_name, 0, coeffs, ">=", rhs + 1.0, name=f"{name}_hi",
+        z_name,
+        0,
+        coeffs,
+        ">=",
+        rhs + 1.0,
+        name=f"{name}_hi",
     )
 
 
@@ -169,11 +179,19 @@ def emit_hard_inner_max(
         up = dict(coeffs)
         up[z_name] = -1.0
         oracle.add_indicator_constraint(
-            y, 1, up, ">=", 0.0, name=f"{name_prefix}_tight_{i}",
+            y,
+            1,
+            up,
+            ">=",
+            0.0,
+            name=f"{name_prefix}_tight_{i}",
         )
         y_names.append(y)
     oracle.add_constraint(
-        {y: 1.0 for y in y_names}, ">=", 1.0, name=f"{name_prefix}_sel",
+        {y: 1.0 for y in y_names},
+        ">=",
+        1.0,
+        name=f"{name_prefix}_sel",
     )
     return z_name
 
@@ -199,11 +217,19 @@ def emit_hard_inner_min(
         up = dict(coeffs)
         up[z_name] = -1.0
         oracle.add_indicator_constraint(
-            y, 1, up, "<=", 0.0, name=f"{name_prefix}_tight_{i}",
+            y,
+            1,
+            up,
+            "<=",
+            0.0,
+            name=f"{name_prefix}_tight_{i}",
         )
         y_names.append(y)
     oracle.add_constraint(
-        {y: 1.0 for y in y_names}, ">=", 1.0, name=f"{name_prefix}_sel",
+        {y: 1.0 for y in y_names},
+        ">=",
+        1.0,
+        name=f"{name_prefix}_sel",
     )
     return z_name
 
@@ -226,5 +252,8 @@ def add_bool_and(
     oracle.add_constraint({z_name: 1.0, x_name: -1.0}, "<=", 0.0, name=f"{z_name}_le_x")
     oracle.add_constraint({z_name: 1.0, y_name: -1.0}, "<=", 0.0, name=f"{z_name}_le_y")
     oracle.add_constraint(
-        {z_name: 1.0, x_name: -1.0, y_name: -1.0}, ">=", -1.0, name=f"{z_name}_ge_xy",
+        {z_name: 1.0, x_name: -1.0, y_name: -1.0},
+        ">=",
+        -1.0,
+        name=f"{z_name}_ge_xy",
     )

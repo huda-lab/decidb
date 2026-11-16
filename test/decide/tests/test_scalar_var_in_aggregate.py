@@ -115,16 +115,23 @@ def test_scalar_slack_oracle_verified(decidb_cli, oracle_solver, perf_tracker):
     ci = {c: i for i, c in enumerate(cols)}
     sval = int(rows[0][ci["s"]])
     decidb_obj = 10.0 * sval - sum(int(r[ci["x"]]) for r in rows)
-    assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
     # `s` is one decision for the whole query, so every output row repeats it.
     assert len({int(r[ci["s"]]) for r in rows}) == 1
 
     perf_tracker.record(
-        "scalar_slack", decidb_time, build_time, result.solve_time_seconds,
-        len(data), len(names) + 1, 1, result.objective_value,
-        oracle_solver.solver_name(), comparison_status="optimal",
+        "scalar_slack",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(names) + 1,
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status="optimal",
     )
 
 
@@ -155,6 +162,4 @@ def test_scalar_var_in_per_aggregate(decidb_cli):
     per_group = {}
     for r in rows:
         per_group.setdefault(r[ci["g"]], []).append(int(r[ci["x"]]))
-    assert {g: sum(v) for g, v in per_group.items()} == {"A": 6, "B": 6}, (
-        f"expected 6 per group, got {per_group}"
-    )
+    assert {g: sum(v) for g, v in per_group.items()} == {"A": 6, "B": 6}, f"expected 6 per group, got {per_group}"

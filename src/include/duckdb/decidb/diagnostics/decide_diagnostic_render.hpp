@@ -41,8 +41,7 @@ double SnapToPrecision(double v, RoundDirection direction);
 
 //! Render a row's LHS as the user wrote it when the model carries a source
 //! spelling, falling back to rebuilding it from the row's own coefficients.
-string SourceAwareLhs(const SolverModel &model, const ModelConstraint &row,
-                      const vector<ColumnProvenance> &columns);
+string SourceAwareLhs(const SolverModel &model, const ModelConstraint &row, const vector<ColumnProvenance> &columns);
 
 //! The written RHS spelling for a row, or empty when the model has none to honour.
 string SourceWrittenRhs(const SolverModel &model, const ConstraintProvenance &provenance);

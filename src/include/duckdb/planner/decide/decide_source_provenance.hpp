@@ -64,15 +64,15 @@ const Expression &DecideUnguarded(const Expression &expr);
 //! What a message about a clause renders with: the registries above. A column reads as the user wrote it
 //! (`D.depotID`): its bound reference carries that spelling as a source fragment.
 struct DecideSourceNames {
-    const vector<string> &fragments;
-    const vector<KeyedScopeInfo> &keyed_scopes;
+	const vector<string> &fragments;
+	const vector<KeyedScopeInfo> &keyed_scopes;
 	const vector<DecideKey> &keys;
-    //! The decision columns that stand for an expression (`LogicalDecide::aux_var_expressions`:
-    //! an ABS auxiliary `abs(e)`, a product `(b * x)`, an indicator `(x = v)`, a helper
-    //! `sum(e) by (g)`), which print as that expression rather than by their internal
-    //! name; `decide_index` tells a decision column apart. Null prints the name.
-    idx_t decide_index = DConstants::INVALID_INDEX;
-    const vector<pair<idx_t, string>> *aux_labels = nullptr;
+	//! The decision columns that stand for an expression (`LogicalDecide::aux_var_expressions`:
+	//! an ABS auxiliary `abs(e)`, a product `(b * x)`, an indicator `(x = v)`, a helper
+	//! `sum(e) by (g)`), which print as that expression rather than by their internal
+	//! name; `decide_index` tells a decision column apart. Null prints the name.
+	idx_t decide_index = DConstants::INVALID_INDEX;
+	const vector<pair<idx_t, string>> *aux_labels = nullptr;
 };
 
 //! The names a plan and the rewrites render with: the clause registries and the auxiliary labels.
@@ -167,8 +167,7 @@ vector<DecideClauseLayers> CollectDecideClauseLayers(optional_ptr<const Expressi
 string RenderDecideRewriteAccount(const LogicalDecide::RewriteAccount &account);
 
 //! Format clause layers as the indented block EXPLAIN prints, one clause per group.
-string RenderDecideClauseLayers(const vector<DecideClauseLayers> &layers,
-                                const vector<string> &unattributed);
+string RenderDecideClauseLayers(const vector<DecideClauseLayers> &layers, const vector<string> &unattributed);
 
 //! Format the objective's layers the same way. `written` and `canonical` come from
 //! LogicalDecide's two objective snapshots; `accounts` are what its rewrites made of it;

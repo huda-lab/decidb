@@ -135,7 +135,7 @@ static DegreeWalk WalkDegree(const Expression &expr, idx_t decide_index) {
 	idx_t function_aux;
 	if (TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, function_aux)) {
 		result.degree = 1;
-	result.vars.insert(function_aux);
+		result.vars.insert(function_aux);
 		return result;
 	}
 	idx_t column;
@@ -207,8 +207,7 @@ static DegreeWalk WalkDegree(const Expression &expr, idx_t decide_index) {
 				// Squaring a decision-bearing base is the quadratic form, whatever the
 				// base contains: `POWER(x + y, 2)` expands to x² + 2xy + y², which a Q
 				// matrix represents and McCormick does not.
-				result.is_quadratic_form =
-				    base.degree >= 1 && (exponent == 2.0 || base.is_quadratic_form);
+				result.is_quadratic_form = base.degree >= 1 && (exponent == 2.0 || base.is_quadratic_form);
 				return result;
 			}
 			// A fractional, negative or non-constant exponent is not a polynomial degree.
@@ -252,12 +251,11 @@ static void RefuseUnsupportedDegree(const Expression &expr, const DecideDegree &
 	// The expression is deliberately not echoed. `ToString()` on a bound tree prints the
 	// casts the binder inserted (`CAST(x AS DECIMAL(18,0))`), which is not what the user
 	// wrote; the source location carries a caret to the term instead.
-	throw BinderException(
-	    expr,
-	    "Triple or higher-order products of DECIDE variables are not supported (total degree > 2). "
-	    "This term reaches degree %llu. A term may use one decision, one decision squared "
-	    "(POWER(x, 2)), or two different decisions multiplied (x * y).",
-	    static_cast<uint64_t>(degree.degree));
+	throw BinderException(expr,
+	                      "Triple or higher-order products of DECIDE variables are not supported (total degree > 2). "
+	                      "This term reaches degree %llu. A term may use one decision, one decision squared "
+	                      "(POWER(x, 2)), or two different decisions multiplied (x * y).",
+	                      static_cast<uint64_t>(degree.degree));
 }
 
 static void ValidateSideDegree(const Expression &expr, idx_t decide_index) {

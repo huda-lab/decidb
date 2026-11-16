@@ -228,8 +228,7 @@ TEST_CASE("Direct rule driver commits a stub rule that applies", "[decidb]") {
 	REQUIRE(plan.find("STUB_ONE") != string::npos);
 }
 
-TEST_CASE("Direct rule driver falls back to the solver and raises one fixed line under require",
-          "[decidb]") {
+TEST_CASE("Direct rule driver falls back to the solver and raises one fixed line under require", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	InstallRules(con, [] {

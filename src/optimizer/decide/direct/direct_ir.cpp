@@ -462,9 +462,8 @@ private:
 			return true;
 		}
 		bool holds = false;
-		ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-			holds = holds || HoldsValueRewrite(child);
-		});
+		ExpressionIterator::EnumerateChildren(
+		    expr, [&](const Expression &child) { holds = holds || HoldsValueRewrite(child); });
 		return holds;
 	}
 

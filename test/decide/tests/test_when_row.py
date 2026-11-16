@@ -39,14 +39,16 @@ def test_when_row_force_zero(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE),
                l_returnflag
         FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("when_perrow_zero")
@@ -61,7 +63,9 @@ def test_when_row_force_zero(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
     # Aggregate constraint applies to all rows
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data))},
-        "<=", 100.0, name="capacity",
+        "<=",
+        100.0,
+        name="capacity",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -71,14 +75,24 @@ def test_when_row_force_zero(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_perrow_zero", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "when_perrow_zero",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -106,14 +120,16 @@ def test_when_row_force_select(decidb_cli, duckdb_conn, oracle_solver, perf_trac
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE),
                CAST(l_discount AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("when_perrow_select")
@@ -127,7 +143,9 @@ def test_when_row_force_select(decidb_cli, duckdb_conn, oracle_solver, perf_trac
 
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data))},
-        "<=", 5000.0, name="capacity",
+        "<=",
+        5000.0,
+        name="capacity",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -137,14 +155,24 @@ def test_when_row_force_select(decidb_cli, duckdb_conn, oracle_solver, perf_trac
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_perrow_select", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "when_perrow_select",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -171,13 +199,15 @@ def test_when_row_numeric_condition(decidb_cli, duckdb_conn, oracle_solver, perf
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("when_perrow_numeric")
@@ -190,7 +220,9 @@ def test_when_row_numeric_condition(decidb_cli, duckdb_conn, oracle_solver, perf
 
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data))},
-        "<=", 100.0, name="capacity",
+        "<=",
+        100.0,
+        name="capacity",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -200,14 +232,24 @@ def test_when_row_numeric_condition(decidb_cli, duckdb_conn, oracle_solver, perf
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_perrow_numeric", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "when_perrow_numeric",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -234,11 +276,13 @@ def test_when_row_all_match(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(ps_partkey AS BIGINT),
                CAST(ps_availqty AS DOUBLE)
         FROM partsupp WHERE ps_partkey < 20
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("when_perrow_all")
@@ -252,7 +296,9 @@ def test_when_row_all_match(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 
     oracle_solver.add_constraint(
         {vnames[i]: 1.0 for i in range(len(data))},
-        "<=", 50.0, name="total_limit",
+        "<=",
+        50.0,
+        name="total_limit",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][1] for i in range(len(data))},
@@ -262,14 +308,24 @@ def test_when_row_all_match(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("ps_availqty")])},
     )
 
     perf_tracker.record(
-        "when_perrow_all", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "when_perrow_all",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -311,13 +367,15 @@ def test_when_row_real(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                l_returnflag,
                CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("when_perrow_real")
@@ -331,7 +389,9 @@ def test_when_row_real(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 
     oracle_solver.add_constraint(
         {vnames[i]: 1.0 for i in range(len(data))},
-        "<=", 30.0, name="aggregate_cap",
+        "<=",
+        30.0,
+        name="aggregate_cap",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][3] for i in range(len(data))},
@@ -342,14 +402,24 @@ def test_when_row_real(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 
     price_idx = decidb_cols.index("l_extendedprice")
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[price_idx])},
     )
 
     perf_tracker.record(
-        "when_perrow_real", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "when_perrow_real",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )

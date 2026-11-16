@@ -41,8 +41,8 @@ unique_ptr<ParsedExpression> Transformer::TransformDecideFrame(duckdb_libpgquery
 		}
 		result->reducer = StringUtil::Lower(StringUtil::Join(name, "."));
 		const idx_t arguments = call.args ? NumericCast<idx_t>(call.args->length) : 0;
-		auto argument = arguments == 1 ? PGPointerCast<duckdb_libpgquery::PGNode>(call.args->head->data.ptr_value)
-		                               : nullptr;
+		auto argument =
+		    arguments == 1 ? PGPointerCast<duckdb_libpgquery::PGNode>(call.args->head->data.ptr_value) : nullptr;
 		auto range = StringUtil::Format("%s(from %s to %s: e)", result->reducer,
 		                                DecideFrameExpression::PositionToString(result->from, result->from_k),
 		                                DecideFrameExpression::PositionToString(result->to, result->to_k));

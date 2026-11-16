@@ -74,9 +74,9 @@ def compare_direct_with_solver(cli, generate, rng, cases, min_applies_share=0.7,
         if direct_objective is None or solver_objective is None:
             assert direct_objective == solver_objective, f"objective differs\n{sql}"
         else:
-            assert direct_objective == pytest.approx(solver_objective, rel=1e-6, abs=1e-6), (
-                f"objective differs: direct {direct_objective} vs solver {solver_objective}\n{sql}"
-            )
+            assert direct_objective == pytest.approx(
+                solver_objective, rel=1e-6, abs=1e-6
+            ), f"objective differs: direct {direct_objective} vs solver {solver_objective}\n{sql}"
     # Guard against a generator drifting into vacuity: most rule-shaped queries must
     # reach the direct path and a meaningful share must succeed on both paths.
     assert (

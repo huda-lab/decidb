@@ -64,8 +64,7 @@ def _combined_error(cli, sql: str) -> str:
     result = cli.execute_raw(sql)
     combined = result.stderr + result.stdout
     assert result.stderr.strip(), (
-        "Expected DECIDE query to fail, but stderr was empty.\n"
-        f"stdout: {result.stdout[:500]}"
+        "Expected DECIDE query to fail, but stderr was empty.\n" f"stdout: {result.stdout[:500]}"
     )
     return combined
 
@@ -73,21 +72,15 @@ def _combined_error(cli, sql: str) -> str:
 def _assert_friendly_error(cli, sql: str, required: str) -> None:
     combined = _combined_error(cli, sql)
     lower = combined.lower()
-    assert required.lower() in lower, (
-        f"Expected friendly error containing {required!r}, got:\n"
-        f"{combined[:700]}"
-    )
+    assert required.lower() in lower, f"Expected friendly error containing {required!r}, got:\n" f"{combined[:700]}"
     assert "solver status" not in lower, (
-        "Structured-result regression: raw backend status leaked through the user-facing "
-        f"error:\n{combined[:700]}"
+        "Structured-result regression: raw backend status leaked through the user-facing " f"error:\n{combined[:700]}"
     )
 
 
 @pytest.mark.query_diagnostics
 class TestStructuredSolverResult:
-    @pytest.mark.parametrize(
-        "cli_fixture", ["decidb_cli_highs", "decidb_cli_gurobi"]
-    )
+    @pytest.mark.parametrize("cli_fixture", ["decidb_cli_highs", "decidb_cli_gurobi"])
     def test_optimal_status_still_returns_solution(self, request, cli_fixture):
         """Backends still populate SolverResult.solution on OPTIMAL."""
         cli = request.getfixturevalue(cli_fixture)
@@ -107,19 +100,13 @@ class TestStructuredSolverResult:
             (_UNBOUNDED_LP_SQL, "DECIDE optimization is unbounded"),
         ],
     )
-    def test_highs_non_optimal_statuses_use_friendly_errors(
-        self, decidb_cli_highs, sql, required
-    ):
+    def test_highs_non_optimal_statuses_use_friendly_errors(self, decidb_cli_highs, sql, required):
         """HiGHS INFEASIBLE / UNBOUNDED return SolverResult, then operator throws."""
         _assert_friendly_error(decidb_cli_highs, sql, required)
 
     @pytest.mark.error
-    @pytest.mark.parametrize(
-        "sql", [_UNBOUNDED_MILP_SQL, _UNBOUNDED_MILP_MIN_SQL]
-    )
-    def test_highs_inf_or_unbd_status_9_is_disambiguated(
-        self, decidb_cli_highs, sql
-    ):
+    @pytest.mark.parametrize("sql", [_UNBOUNDED_MILP_SQL, _UNBOUNDED_MILP_MIN_SQL])
+    def test_highs_inf_or_unbd_status_9_is_disambiguated(self, decidb_cli_highs, sql):
         """HiGHS MILP-unbounded can report kUnboundedOrInfeasible (raw 9).
 
         The backend maps that to INF_OR_UNBD instead of falling through to the
@@ -131,12 +118,10 @@ class TestStructuredSolverResult:
         combined = _combined_error(decidb_cli_highs, sql)
         lower = combined.lower()
         assert "decide optimization is unbounded" in lower, (
-            "HiGHS status 9 was not disambiguated to a "
-            f"definitive unbounded error:\n{combined[:700]}"
+            "HiGHS status 9 was not disambiguated to a " f"definitive unbounded error:\n{combined[:700]}"
         )
         assert "infeasible or unbounded" not in lower, (
-            "Ambiguous INF_OR_UNBD message leaked through:\n"
-            f"{combined[:700]}"
+            "Ambiguous INF_OR_UNBD message leaked through:\n" f"{combined[:700]}"
         )
         assert "solver status" not in lower, (
             "Structured-result regression: raw backend status leaked through the user-facing "
@@ -151,8 +136,6 @@ class TestStructuredSolverResult:
             (_UNBOUNDED_LP_SQL, "DECIDE optimization is unbounded"),
         ],
     )
-    def test_gurobi_non_optimal_statuses_use_friendly_errors(
-        self, decidb_cli_gurobi, sql, required
-    ):
+    def test_gurobi_non_optimal_statuses_use_friendly_errors(self, decidb_cli_gurobi, sql, required):
         """Gurobi non-optimal statuses follow the same operator throw path."""
         _assert_friendly_error(decidb_cli_gurobi, sql, required)

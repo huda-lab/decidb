@@ -136,21 +136,26 @@ def test_serializer_explain_and_model_dump(decidb_cli, fixture, tmp_path):
 @pytest.mark.correctness
 @_RULES
 def test_prepared_plan_keeps_its_selection_until_rebound(decidb_cli, fixture):
-    prepared = _raw(decidb_cli, f"""
+    prepared = _raw(
+        decidb_cli,
+        f"""
         PREPARE direct_conformance AS {fixture.applies};
         SET decide_direct_solve='off';
         EXPLAIN EXECUTE direct_conformance;
-    """).stdout
+    """,
+    ).stdout
     assert "Direct solve rule" in prepared and "require" in prepared
 
-    rebound = decidb_cli.execute_raw(f"""
+    rebound = decidb_cli.execute_raw(
+        f"""
         {fixture.table_setup}
         SET decide_direct_solve='require';
         PREPARE direct_conformance_table AS {fixture.table_applies};
         SET decide_direct_solve='off';
         {fixture.table_change}
         EXPLAIN EXECUTE direct_conformance_table;
-    """).stdout
+    """
+    ).stdout
     assert _has_decide_operator(rebound) and "Direct solve" not in rebound
 
 

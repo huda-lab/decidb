@@ -80,10 +80,8 @@ def test_a_tiny_coefficient_is_not_dropped(decidb_cli_highs, oracle_solver):
     This is the query the bug was reported on. It crashed because HiGHS deleted both
     matrix entries and said so with a `kWarning` the loader read as fatal.
     """
-    rows, _ = decidb_cli_highs.execute(
-        _weighted_sum_sql("0.000000001", 5, "<=", 1, "MAXIMIZE"))
-    result = _weighted_sum_oracle(
-        oracle_solver, "tiny_cap", 1e-9, 5.0, "<=", 1.0, ObjSense.MAXIMIZE)
+    rows, _ = decidb_cli_highs.execute(_weighted_sum_sql("0.000000001", 5, "<=", 1, "MAXIMIZE"))
+    result = _weighted_sum_oracle(oracle_solver, "tiny_cap", 1e-9, 5.0, "<=", 1.0, ObjSense.MAXIMIZE)
 
     assert result.status == SolverStatus.OPTIMAL
     assert sum(r[1] for r in rows) == pytest.approx(result.objective_value, rel=1e-9)
@@ -105,8 +103,7 @@ def test_a_tiny_coefficient_on_a_floor_is_not_rounded_away(decidb_cli_highs, ora
     rows, _ = decidb_cli_highs.execute(
         _weighted_sum_sql("1e-9", "1e10", ">=", 1, "MINIMIZE"), expect_large_numbers=True
     )
-    result = _weighted_sum_oracle(
-        oracle_solver, "tiny_floor", 1e-9, 1e10, ">=", 1.0, ObjSense.MINIMIZE)
+    result = _weighted_sum_oracle(oracle_solver, "tiny_floor", 1e-9, 1e10, ">=", 1.0, ObjSense.MINIMIZE)
 
     assert result.status == SolverStatus.OPTIMAL
     assert sum(r[1] for r in rows) == pytest.approx(result.objective_value, rel=1e-6)
@@ -119,8 +116,7 @@ def test_a_large_data_coefficient_loads(decidb_cli_highs, oracle_solver):
     rows, _ = decidb_cli_highs.execute(
         _weighted_sum_sql("1e16", 5, "<=", "1e20", "MAXIMIZE"), expect_large_numbers=True
     )
-    result = _weighted_sum_oracle(
-        oracle_solver, "large_cap", 1e16, 5.0, "<=", 1e20, ObjSense.MAXIMIZE)
+    result = _weighted_sum_oracle(oracle_solver, "large_cap", 1e16, 5.0, "<=", 1e20, ObjSense.MAXIMIZE)
 
     assert result.status == SolverStatus.OPTIMAL
     assert sum(r[1] for r in rows) == pytest.approx(result.objective_value, rel=1e-9)
@@ -174,8 +170,7 @@ def test_the_backends_agree_across_the_window(decidb_cli_highs, decidb_cli_gurob
     highs_rows, _ = decidb_cli_highs.execute(sql, expect_large_numbers=large)
     gurobi_rows, _ = decidb_cli_gurobi.execute(sql, expect_large_numbers=large)
 
-    assert sum(r[1] for r in highs_rows) == pytest.approx(
-        sum(r[1] for r in gurobi_rows), rel=1e-6)
+    assert sum(r[1] for r in highs_rows) == pytest.approx(sum(r[1] for r in gurobi_rows), rel=1e-6)
 
 
 @pytest.mark.edge_case
@@ -221,9 +216,7 @@ _BOUND_SQL = """
 @pytest.mark.edge_case
 @pytest.mark.error_infeasible
 @pytest.mark.parametrize("clause", ["SUM(x) >= 1e25", "SUM(x) <= -1e25", "SUM(x) = 1e25"])
-def test_a_bound_past_the_solvers_infinity_is_answered(
-    decidb_cli_highs, decidb_cli_gurobi, clause
-):
+def test_a_bound_past_the_solvers_infinity_is_answered(decidb_cli_highs, decidb_cli_gurobi, clause):
     """A finite limit no assignment can reach is an infeasible query, not a load failure.
 
     `SUM(x) >= 1e25` is unsatisfiable against `x <= 5`, and Gurobi has always said so.
@@ -239,9 +232,7 @@ def test_a_bound_past_the_solvers_infinity_is_answered(
 @pytest.mark.edge_case
 @pytest.mark.correctness
 @pytest.mark.parametrize("clause", ["SUM(x) <= 1e25", "SUM(x) >= -1e25"])
-def test_a_bound_past_infinity_on_the_open_side_still_solves(
-    decidb_cli_highs, decidb_cli_gurobi, clause
-):
+def test_a_bound_past_infinity_on_the_open_side_still_solves(decidb_cli_highs, decidb_cli_gurobi, clause):
     """The same magnitude pointing the other way is satisfiable, and still solves.
 
     These two never crashed — HiGHS reads the bound as ±infinity and drops the row rather
@@ -252,8 +243,7 @@ def test_a_bound_past_infinity_on_the_open_side_still_solves(
     highs_rows, _ = decidb_cli_highs.execute(sql, expect_large_numbers=True)
     gurobi_rows, _ = decidb_cli_gurobi.execute(sql, expect_large_numbers=True)
 
-    assert sum(r[1] for r in highs_rows) == pytest.approx(
-        sum(r[1] for r in gurobi_rows), rel=1e-9)
+    assert sum(r[1] for r in highs_rows) == pytest.approx(sum(r[1] for r in gurobi_rows), rel=1e-9)
 
 
 @pytest.mark.edge_case

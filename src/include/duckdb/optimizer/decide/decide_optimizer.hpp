@@ -202,10 +202,10 @@ private:
 	//! lower-envelope metadata for the tree's ABS F node.
 	void RewriteAbs(LogicalDecide &decide);
 
-	//! Annotate bilinear products (x * y) where at least one factor is Boolean, retaining the written expression for the
-	//! tree and the shared term splitter while allocating helper columns.
-	//! Boolean × Boolean: w = b1 * b2, AND-linearization (w <= b1, w <= b2, w >= b1+b2-1).
-	//! Boolean × Other: w = b * x, partial McCormick (w <= x at plan time,
+	//! Annotate bilinear products (x * y) where at least one factor is Boolean, retaining the written expression for
+	//! the tree and the shared term splitter while allocating helper columns. Boolean × Boolean: w = b1 * b2,
+	//! AND-linearization (w <= b1, w <= b2, w >= b1+b2-1). Boolean × Other: w = b * x, partial McCormick (w <= x at
+	//! plan time,
 	//!   w <= U*b and w >= x-U*(1-b) at execution time via BilinearLink).
 	//! Non-Boolean × Non-Boolean: left in place for Q matrix handling in physical operator.
 	void RewriteBilinear(LogicalDecide &decide);
@@ -243,8 +243,8 @@ private:
 	//! AbsPairInfo entries innermost first. Whether an auxiliary is pinned exactly is
 	//! read off the tag TagAbsForBigM left on the node; this pass decides nothing about it.
 	void FindAbsAndAllocateAux(unique_ptr<Expression> &expr, LogicalDecide &decide,
-	                            const DecideCanonicalizer &canonicalizer, vector<AbsPairInfo> &abs_pairs,
-	                            const string &source_alias, DecideEnclosingScope scope);
+	                           const DecideCanonicalizer &canonicalizer, vector<AbsPairInfo> &abs_pairs,
+	                           const string &source_alias, DecideEnclosingScope scope);
 
 	//! Helper: register a hard MIN/MAX clause and produce the corresponding SUM(inner)
 	//! aggregate tagged with MINMAX_CLAUSE_TAG_PREFIX. Records the clause's diagnosis
@@ -252,9 +252,8 @@ private:
 	//! carries that index, which is how stage 06 names the column it pins. Allocates no
 	//! variable — the binaries a Big-M pinning needs are global-block columns, created by
 	//! the pass that emits the rows reading them.
-	unique_ptr<Expression> EmitHardMinMaxClause(LogicalDecide &decide, const string &agg_name,
-	                                            const Expression &inner, const Expression *filter,
-	                                            idx_t &out_clause_idx);
+	unique_ptr<Expression> EmitHardMinMaxClause(LogicalDecide &decide, const string &agg_name, const Expression &inner,
+	                                            const Expression *filter, idx_t &out_clause_idx);
 
 	//! Helper: append a constraint to the decide constraint tree via AND conjunction
 	//! Thin forwarder to LogicalDecide::AddConstraint, which canonicalizes on insert.

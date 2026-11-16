@@ -29,7 +29,7 @@ using std::move;
 
 //! DeciDB's constants
 extern const std::vector<string> DECIDE_VARIABLE_TYPES;
-bool IsIntegerTypeVariable(string var_type); 
+bool IsIntegerTypeVariable(string var_type);
 
 // NOTE: there is a copy of this in the Postgres' parser grammar (gram.y)
 #define DEFAULT_SCHEMA  "main"

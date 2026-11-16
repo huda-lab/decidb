@@ -18,17 +18,9 @@ namespace duckdb {
 class Serializer;
 class Deserializer;
 
-enum class DecideSense : uint8_t {
-    MAXIMIZE = 0,
-    MINIMIZE = 1,
-    FEASIBILITY = 2
-};
+enum class DecideSense : uint8_t { MAXIMIZE = 0, MINIMIZE = 1, FEASIBILITY = 2 };
 
-enum class DecideExpression : uint8_t {
-    INVALID = 0,
-    VARIABLE,
-    SUM
-};
+enum class DecideExpression : uint8_t { INVALID = 0, VARIABLE, SUM };
 
 //! How one DECIDE declaration maps onto solver columns.
 //!   ROW        — `x(INT)`, `per row: x(INT)` one column per result row
@@ -48,7 +40,7 @@ enum class DecideVarScope : uint8_t { ROW = 0, KEYED = 1, GLOBAL = 2, FRAME_READ
 //! arrays so the optimizer's auxiliary-variable appends cannot desync the
 //! scope from its keyed scope index.
 struct DecideVarScopeInfo {
-    DecideVarScope scope = DecideVarScope::ROW;
+	DecideVarScope scope = DecideVarScope::ROW;
 	//! Index into keyed_scopes / keyed_mappings. Meaningful when scope == KEYED, and for an
 	//! INLINED helper that was keyed (the scope naming its instances); INVALID_INDEX otherwise.
 	idx_t keyed_scope_idx = DConstants::INVALID_INDEX;
@@ -62,8 +54,8 @@ struct DecideVarScopeInfo {
 	}
 
 	static DecideVarScopeInfo Row() {
-        return DecideVarScopeInfo();
-    }
+		return DecideVarScopeInfo();
+	}
 	//! One instance per class of the key of keyed_scopes[keyed_scope_idx_p]. `declared_key_p` is the key as written
 	//! for `per K: x(TYPE)`, and empty for a decision the optimizer adds.
 	static DecideVarScopeInfo Keyed(idx_t keyed_scope_idx_p, string declared_key_p = string()) {
@@ -135,10 +127,10 @@ enum class DecideFrameAnchor : uint8_t { FIRST = 0, LAST = 1, PREVIOUS = 2, NEXT
 
 //! Type of aggregate used in MIN/MAX objective linearization
 enum class ObjectiveAggregateType : uint8_t {
-    NONE = 0,   //! No MIN/MAX objective (pure SUM or no objective)
-    SUM,        //! SUM aggregate
-    MIN_AGG,    //! MIN aggregate (suffixed to avoid MIN/MAX macro collision)
-    MAX_AGG     //! MAX aggregate
+	NONE = 0, //! No MIN/MAX objective (pure SUM or no objective)
+	SUM,      //! SUM aggregate
+	MIN_AGG,  //! MIN aggregate (suffixed to avoid MIN/MAX macro collision)
+	MAX_AGG   //! MAX aggregate
 };
 
 //! Origin/relaxability role of an emitted DECIDE matrix row.

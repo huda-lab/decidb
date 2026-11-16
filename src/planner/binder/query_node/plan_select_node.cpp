@@ -34,77 +34,75 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 		root = PlanFilter(std::move(statement.where_clause), std::move(root));
 	}
 
-    if (statement.HasDecideClause()) {
-        // Which column refs will be ONE value for the whole query once flattening is
-        // done. Canonicalization needs this to tell a legal factor on a reducer
-        // (`(SELECT k FROM p) * SUM(x)`) from an illegal one (`weight * SUM(x)`, which
-        // has no answer to "which row's weight?"). After PlanSubqueries all three of
-        // `weight`, an uncorrelated subquery and a CORRELATED subquery are plain column
-        // refs — the flattened subquery is even named "SUBQUERY" — so only correlation
-        // information captured HERE separates them, and it exists only before
-        // flattening. Hold the owning slots: PlanSubqueries replaces the node in place,
-        // so the slot is what survives to be read afterward.
-        struct SourceSubquerySlot {
-            unique_ptr<Expression> *slot;
-            idx_t source_fragment_id = DConstants::INVALID_INDEX;
-        };
-        vector<SourceSubquerySlot> uncorrelated_subquery_slots;
-        vector<SourceSubquerySlot> correlated_subquery_slots;
-        {
-            std::function<void(unique_ptr<Expression> &)> collect_subqueries =
-                [&](unique_ptr<Expression> &slot) {
-                    if (slot->GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY) {
-                        auto &subq = slot->Cast<BoundSubqueryExpression>();
-                        if (subq.subquery_type == SubqueryType::SCALAR) {
-                            // Correlated ones are recorded only so a rejection can call
-                            // them a subquery; they stay out of the query-wide set and
-                            // are refused by the fail-safe default either way.
-                            idx_t source_fragment_id = DConstants::INVALID_INDEX;
-                            TryParseSourceFragmentTag(slot->GetAlias(), source_fragment_id);
-                            (subq.IsCorrelated() ? correlated_subquery_slots
-                                                 : uncorrelated_subquery_slots)
-                                .push_back({&slot, source_fragment_id});
-                        }
-                        return;
-                    }
-                    ExpressionIterator::EnumerateChildren(*slot, collect_subqueries);
-                };
-            if (statement.decide_constraints) {
-                collect_subqueries(statement.decide_constraints);
-            }
-            // The objective passes through the same canonicalization boundary, so it
-            // needs the same correlation evidence. Without this an UNCORRELATED
-            // subquery scaling a reducer (`(SELECT k) * MAX(x)`) is indistinguishable
-            // from a row-varying column after flattening, hits the fail-safe default,
-            // and is rejected for varying per row when it does not.
-            if (statement.decide_objective) {
-                collect_subqueries(statement.decide_objective);
-            }
-            // A frame's order key and its fallback are data expressions read beside the
-            // clause, so a subquery in one carries the same evidence.
-            for (auto &frame : statement.decide_frames) {
-                for (auto *expr : {&frame.order, &frame.fallback}) {
-                    if (*expr) {
-                        collect_subqueries(*expr);
-                    }
-                }
-            }
-        }
+	if (statement.HasDecideClause()) {
+		// Which column refs will be ONE value for the whole query once flattening is
+		// done. Canonicalization needs this to tell a legal factor on a reducer
+		// (`(SELECT k FROM p) * SUM(x)`) from an illegal one (`weight * SUM(x)`, which
+		// has no answer to "which row's weight?"). After PlanSubqueries all three of
+		// `weight`, an uncorrelated subquery and a CORRELATED subquery are plain column
+		// refs — the flattened subquery is even named "SUBQUERY" — so only correlation
+		// information captured HERE separates them, and it exists only before
+		// flattening. Hold the owning slots: PlanSubqueries replaces the node in place,
+		// so the slot is what survives to be read afterward.
+		struct SourceSubquerySlot {
+			unique_ptr<Expression> *slot;
+			idx_t source_fragment_id = DConstants::INVALID_INDEX;
+		};
+		vector<SourceSubquerySlot> uncorrelated_subquery_slots;
+		vector<SourceSubquerySlot> correlated_subquery_slots;
+		{
+			std::function<void(unique_ptr<Expression> &)> collect_subqueries = [&](unique_ptr<Expression> &slot) {
+				if (slot->GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY) {
+					auto &subq = slot->Cast<BoundSubqueryExpression>();
+					if (subq.subquery_type == SubqueryType::SCALAR) {
+						// Correlated ones are recorded only so a rejection can call
+						// them a subquery; they stay out of the query-wide set and
+						// are refused by the fail-safe default either way.
+						idx_t source_fragment_id = DConstants::INVALID_INDEX;
+						TryParseSourceFragmentTag(slot->GetAlias(), source_fragment_id);
+						(subq.IsCorrelated() ? correlated_subquery_slots : uncorrelated_subquery_slots)
+						    .push_back({&slot, source_fragment_id});
+					}
+					return;
+				}
+				ExpressionIterator::EnumerateChildren(*slot, collect_subqueries);
+			};
+			if (statement.decide_constraints) {
+				collect_subqueries(statement.decide_constraints);
+			}
+			// The objective passes through the same canonicalization boundary, so it
+			// needs the same correlation evidence. Without this an UNCORRELATED
+			// subquery scaling a reducer (`(SELECT k) * MAX(x)`) is indistinguishable
+			// from a row-varying column after flattening, hits the fail-safe default,
+			// and is rejected for varying per row when it does not.
+			if (statement.decide_objective) {
+				collect_subqueries(statement.decide_objective);
+			}
+			// A frame's order key and its fallback are data expressions read beside the
+			// clause, so a subquery in one carries the same evidence.
+			for (auto &frame : statement.decide_frames) {
+				for (auto *expr : {&frame.order, &frame.fallback}) {
+					if (*expr) {
+						collect_subqueries(*expr);
+					}
+				}
+			}
+		}
 
-        // Flatten now, even when this select node is itself being planned inside an
-        // outer subquery's flattening. Ordinary clauses tolerate PlanSubqueries'
-        // `is_outside_flattened` deferral because nothing reads their expressions
-        // again until RecursiveDependentJoinPlanner has peeled the outer subquery.
-        // A DECIDE clause does: canonicalization runs a few lines below, in this same
-        // CreatePlan, and copies the constraint tree -- and copying a
-        // BoundSubqueryExpression throws. Deferring here therefore fails any subquery
-        // written inside a nested DECIDE, whether that subquery is itself a DECIDE or
-        // a plain SELECT. Layer 4's input contract is a subquery-free bound tree, so
-        // the flattening is not optional at this point.
-        const bool outer_flatten_state = is_outside_flattened;
-        is_outside_flattened = true;
-        PlanSubqueries(statement.decide_constraints, root);
-        PlanSubqueries(statement.decide_objective, root);
+		// Flatten now, even when this select node is itself being planned inside an
+		// outer subquery's flattening. Ordinary clauses tolerate PlanSubqueries'
+		// `is_outside_flattened` deferral because nothing reads their expressions
+		// again until RecursiveDependentJoinPlanner has peeled the outer subquery.
+		// A DECIDE clause does: canonicalization runs a few lines below, in this same
+		// CreatePlan, and copies the constraint tree -- and copying a
+		// BoundSubqueryExpression throws. Deferring here therefore fails any subquery
+		// written inside a nested DECIDE, whether that subquery is itself a DECIDE or
+		// a plain SELECT. Layer 4's input contract is a subquery-free bound tree, so
+		// the flattening is not optional at this point.
+		const bool outer_flatten_state = is_outside_flattened;
+		is_outside_flattened = true;
+		PlanSubqueries(statement.decide_constraints, root);
+		PlanSubqueries(statement.decide_objective, root);
 		// A `by` key is a data expression too, and may hold a subquery of its own.
 		for (auto &key : statement.decide_keys) {
 			for (auto &element : key.elements) {
@@ -125,57 +123,55 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 		// strict canonicalizer its planning-time evidence. The expression tags carry
 		// the same semantic fact with the flattened value so it survives copies and
 		// optimizer-generated re-canonicalization.
-		auto collect_flattened_indexes = [](const vector<SourceSubquerySlot> &slots,
-                                            unordered_set<idx_t> &out) {
-            for (auto &entry : slots) {
-                auto *slot = entry.slot;
-                if (!slot || !*slot) {
-                    continue;
-                }
-                // Identity, not value: a flattened subquery is the same column whatever
-                // wraps it, so this peels past any cast (see StripCastsForIdentity).
-                const Expression *flat = StripCastsForIdentity(**slot);
-                if (flat->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-                    out.insert(flat->Cast<BoundColumnRefExpression>().binding.table_index);
-                }
-            }
-        };
-        unordered_set<idx_t> query_wide_table_indexes;
-        unordered_set<idx_t> correlated_subquery_table_indexes;
-        collect_flattened_indexes(uncorrelated_subquery_slots, query_wide_table_indexes);
-        collect_flattened_indexes(correlated_subquery_slots, correlated_subquery_table_indexes);
+		auto collect_flattened_indexes = [](const vector<SourceSubquerySlot> &slots, unordered_set<idx_t> &out) {
+			for (auto &entry : slots) {
+				auto *slot = entry.slot;
+				if (!slot || !*slot) {
+					continue;
+				}
+				// Identity, not value: a flattened subquery is the same column whatever
+				// wraps it, so this peels past any cast (see StripCastsForIdentity).
+				const Expression *flat = StripCastsForIdentity(**slot);
+				if (flat->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+					out.insert(flat->Cast<BoundColumnRefExpression>().binding.table_index);
+				}
+			}
+		};
+		unordered_set<idx_t> query_wide_table_indexes;
+		unordered_set<idx_t> correlated_subquery_table_indexes;
+		collect_flattened_indexes(uncorrelated_subquery_slots, query_wide_table_indexes);
+		collect_flattened_indexes(correlated_subquery_slots, correlated_subquery_table_indexes);
 
-        auto tag_flattened_values = [](const vector<SourceSubquerySlot> &slots,
-                                       const string &tag) {
-            for (auto &entry : slots) {
-                auto *slot = entry.slot;
-                if (!slot || !*slot) {
-                    continue;
-                }
-                auto alias = (*slot)->GetAlias();
-                if (!HasDecideTag(alias, tag)) {
-                    AddDecideTag(alias, tag);
-                }
-                if (entry.source_fragment_id != DConstants::INVALID_INDEX) {
-                    idx_t ignored;
-                    if (!TryParseSourceFragmentTag(alias, ignored)) {
-                        AddDecideTag(alias, MakeSourceFragmentTag(entry.source_fragment_id));
-                    }
-                }
-                (*slot)->SetAlias(std::move(alias));
-            }
-        };
-        tag_flattened_values(uncorrelated_subquery_slots, QUERY_WIDE_VALUE_TAG);
-        tag_flattened_values(correlated_subquery_slots, ROW_VARYING_SUBQUERY_TAG);
+		auto tag_flattened_values = [](const vector<SourceSubquerySlot> &slots, const string &tag) {
+			for (auto &entry : slots) {
+				auto *slot = entry.slot;
+				if (!slot || !*slot) {
+					continue;
+				}
+				auto alias = (*slot)->GetAlias();
+				if (!HasDecideTag(alias, tag)) {
+					AddDecideTag(alias, tag);
+				}
+				if (entry.source_fragment_id != DConstants::INVALID_INDEX) {
+					idx_t ignored;
+					if (!TryParseSourceFragmentTag(alias, ignored)) {
+						AddDecideTag(alias, MakeSourceFragmentTag(entry.source_fragment_id));
+					}
+				}
+				(*slot)->SetAlias(std::move(alias));
+			}
+		};
+		tag_flattened_values(uncorrelated_subquery_slots, QUERY_WIDE_VALUE_TAG);
+		tag_flattened_values(correlated_subquery_slots, ROW_VARYING_SUBQUERY_TAG);
 		// Canonicalization: the single point at which the shape of a user-written
-        // constraint is decided (decision terms left, data right). Runs here rather
-        // than during binding because it needs bound expressions -- a decision
-        // variable is exactly a BoundColumnRefExpression on decide_index -- and
-        // because it must see the flattened form PlanSubqueries just produced.
-        // Everything the optimizer emits later is canonicalized by
-        // LogicalDecide::AddConstraint. Those two are the only call sites.
-        string written_objective;
-        string canonical_objective;
+		// constraint is decided (decision terms left, data right). Runs here rather
+		// than during binding because it needs bound expressions -- a decision
+		// variable is exactly a BoundColumnRefExpression on decide_index -- and
+		// because it must see the flattened form PlanSubqueries just produced.
+		// Everything the optimizer emits later is canonicalized by
+		// LogicalDecide::AddConstraint. Those two are the only call sites.
+		string written_objective;
+		string canonical_objective;
 		DecideSourceNames message_names {statement.decide_source_fragments, statement.keyed_scopes,
 		                                 statement.decide_keys};
 		// The variant signatures (D70), from the canonical clauses: one instance per class and distinct value of each
@@ -206,10 +202,10 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 			// boundary. It carries no relation to orient, which is the only part of
 			// the constraint contract that does not apply to it.
 			if (statement.decide_objective) {
-                // The objective's counterpart to InitializeConstraintSourceInfo /
-                // FinalizeConstraintSourceInfo: written on the way in, canonical on the
-                // way out, captured around the one call that can change it. There is
-                // exactly one objective, so these are two strings rather than a registry.
+				// The objective's counterpart to InitializeConstraintSourceInfo /
+				// FinalizeConstraintSourceInfo: written on the way in, canonical on the
+				// way out, captured around the one call that can change it. There is
+				// exactly one objective, so these are two strings rather than a registry.
 				DecideSourceNames objective_names {statement.decide_source_fragments, statement.keyed_scopes,
 				                                   statement.decide_keys};
 				written_objective = RenderDecideObjective(*statement.decide_objective, objective_names);
@@ -239,34 +235,34 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 		                                          std::move(statement.decide_objective));
 
 		decide_op->num_auxiliary_vars = statement.num_auxiliary_vars;
-        decide_op->objective_constant_offset = statement.objective_constant_offset;
-        decide_op->is_boolean_var = std::move(statement.is_boolean_var);
-        decide_op->keyed_scopes = std::move(statement.keyed_scopes);
-        decide_op->variable_scopes = std::move(statement.variable_scopes);
-        decide_op->constraint_sources = std::move(statement.decide_constraint_sources);
-        decide_op->written_objective = std::move(written_objective);
-        decide_op->canonical_objective = std::move(canonical_objective);
-        decide_op->source_fragments = std::move(statement.decide_source_fragments);
-        // Capture the user's column names off the BindContext, which is still live here
-        // and is the authority name resolution itself used. Every source kind is covered
-        // uniformly: a base table's catalog names, a `t(a, b, c)` alias list over
-        // `(VALUES ...)`, a subquery's or a CTE's output names. Taken here rather than at
-        // physical-plan time because the binding — and with it the only copy of an alias
-        // list — is gone by then, leaving the plan's positional `col0` placeholders.
-        for (auto &binding : bind_context.GetBindingsList()) {
-            for (idx_t i = 0; i < binding->names.size(); i++) {
-                decide_op->source_columns.push_back({ColumnBinding(binding->index, i), binding->names[i]});
-            }
-        }
+		decide_op->objective_constant_offset = statement.objective_constant_offset;
+		decide_op->is_boolean_var = std::move(statement.is_boolean_var);
+		decide_op->keyed_scopes = std::move(statement.keyed_scopes);
+		decide_op->variable_scopes = std::move(statement.variable_scopes);
+		decide_op->constraint_sources = std::move(statement.decide_constraint_sources);
+		decide_op->written_objective = std::move(written_objective);
+		decide_op->canonical_objective = std::move(canonical_objective);
+		decide_op->source_fragments = std::move(statement.decide_source_fragments);
+		// Capture the user's column names off the BindContext, which is still live here
+		// and is the authority name resolution itself used. Every source kind is covered
+		// uniformly: a base table's catalog names, a `t(a, b, c)` alias list over
+		// `(VALUES ...)`, a subquery's or a CTE's output names. Taken here rather than at
+		// physical-plan time because the binding — and with it the only copy of an alias
+		// list — is gone by then, leaving the plan's positional `col0` placeholders.
+		for (auto &binding : bind_context.GetBindingsList()) {
+			for (idx_t i = 0; i < binding->names.size(); i++) {
+				decide_op->source_columns.push_back({ColumnBinding(binding->index, i), binding->names[i]});
+			}
+		}
 		decide_op->signatures = std::move(signatures.signatures);
 		decide_op->objective_signature = signatures.objective;
 		decide_op->keys = std::move(statement.decide_keys);
 		decide_op->frames = std::move(statement.decide_frames);
 		// ne_clause_sources, ABS aux vars, and MIN/MAX indicator links +
-        // objective types are created by DecideOptimizer (runs after plan creation)
-        decide_op->AddChild(std::move(root));
-        root = std::move(decide_op);
-    }
+		// objective types are created by DecideOptimizer (runs after plan creation)
+		decide_op->AddChild(std::move(root));
+		root = std::move(decide_op);
+	}
 
 	if (!statement.aggregates.empty() || !statement.groups.group_expressions.empty()) {
 		if (!statement.groups.group_expressions.empty()) {

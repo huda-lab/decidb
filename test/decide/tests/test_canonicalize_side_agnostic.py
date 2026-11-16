@@ -76,9 +76,11 @@ def test_aggregate_vs_aggregate(decidb_cli, duckdb_conn, oracle_solver):
     """
     rows, cols = decidb_cli.execute(sql)
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey <= 3
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
     assert n > 1 and len(rows) == n
 
@@ -102,8 +104,9 @@ def test_aggregate_vs_aggregate(decidb_cli, duckdb_conn, oracle_solver):
     lhs = sum(int(r[xi]) * float(r[qi]) for r in rows)
     rhs = sum(int(r[yi]) * float(r[qi]) for r in rows)
     assert lhs <= rhs + 1e-6, f"constraint violated: {lhs} > {rhs}"
-    assert abs(lhs - result.objective_value) < 1e-4, \
-        f"Objective mismatch: DeciDB={lhs}, Oracle={result.objective_value}"
+    assert (
+        abs(lhs - result.objective_value) < 1e-4
+    ), f"Objective mismatch: DeciDB={lhs}, Oracle={result.objective_value}"
 
 
 @pytest.mark.cons_aggregate
@@ -163,9 +166,11 @@ def test_data_term_left_of_reducer(decidb_cli, duckdb_conn, oracle_solver):
     """
     rows, cols = decidb_cli.execute(sql)
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey <= 3
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
     assert n > 1
     assert len({row[0] for row in data}) > 1, "needs varying demand to discriminate"
@@ -188,10 +193,10 @@ def test_data_term_left_of_reducer(decidb_cli, duckdb_conn, oracle_solver):
     assert all(abs(float(r[ci]) - cap_value) < 1e-6 for r in rows), "cap is not query-wide"
     total_x = sum(int(r[xi]) for r in rows)
     for i in range(n):
-        assert data[i][0] - total_x <= cap_value + 1e-6, \
-            f"tuple {i} violated: {data[i][0]} - {total_x} > {cap_value}"
-    assert abs(cap_value - result.objective_value) < 1e-4, \
-        f"Objective mismatch: DeciDB={cap_value}, Oracle={result.objective_value}"
+        assert data[i][0] - total_x <= cap_value + 1e-6, f"tuple {i} violated: {data[i][0]} - {total_x} > {cap_value}"
+    assert (
+        abs(cap_value - result.objective_value) < 1e-4
+    ), f"Objective mismatch: DeciDB={cap_value}, Oracle={result.objective_value}"
 
 
 @pytest.mark.cons_aggregate
@@ -215,9 +220,11 @@ def test_composed_reducer_as_bound(decidb_cli, duckdb_conn, oracle_solver):
     """
     rows, cols = decidb_cli.execute(sql)
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey <= 3
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
     assert n > 1
 
@@ -231,7 +238,10 @@ def test_composed_reducer_as_bound(decidb_cli, duckdb_conn, oracle_solver):
         budget[f"x_{i}"] = qty
         row_coeffs.append({f"x_{i}": qty})
     z = emit_hard_inner_max(
-        oracle_solver, "cmax", row_coeffs, max(r[0] for r in data),
+        oracle_solver,
+        "cmax",
+        row_coeffs,
+        max(r[0] for r in data),
     )
     budget[z] = -1.0
     oracle_solver.add_constraint(budget, "<=", 30.0, name="sum_le_max")
@@ -242,10 +252,10 @@ def test_composed_reducer_as_bound(decidb_cli, duckdb_conn, oracle_solver):
     xi, qi = cols.index("x"), cols.index("l_quantity")
     picked = [float(r[qi]) for r in rows if int(r[xi]) == 1]
     total = sum(picked)
-    assert total <= (max(picked) if picked else 0.0) + 30.0 + 1e-6, \
-        f"constraint violated: SUM={total}"
-    assert abs(total - result.objective_value) < 1e-4, \
-        f"Objective mismatch: DeciDB={total}, Oracle={result.objective_value}"
+    assert total <= (max(picked) if picked else 0.0) + 30.0 + 1e-6, f"constraint violated: SUM={total}"
+    assert (
+        abs(total - result.objective_value) < 1e-4
+    ), f"Objective mismatch: DeciDB={total}, Oracle={result.objective_value}"
 
 
 @pytest.mark.cons_perrow
@@ -258,10 +268,12 @@ def test_reversed_per_row_bound(decidb_cli):
     silently (as an unbounded or vacuous row) if the canonicalizer's own mirror
     branch stopped flipping the relation with the sides.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT c_custkey, x FROM customer WHERE c_custkey <= 10
         DECIDE x(INT) SUCH THAT 5 >= x MAXIMIZE SUM(x)
-    """)
+    """
+    )
     assert len(rows) > 1
     xi = cols.index("x")
     assert all(int(r[xi]) == 5 for r in rows), rows
@@ -283,12 +295,8 @@ def test_correlated_subquery_bound_on_either_side(decidb_cli):
         SUCH THAT {constraint}
         MAXIMIZE SUM(x)
     """
-    forward, f_cols = decidb_cli.execute(
-        common.format(constraint="x <= (SELECT hi)")
-    )
-    reversed_, r_cols = decidb_cli.execute(
-        common.format(constraint="(SELECT hi) >= x")
-    )
+    forward, f_cols = decidb_cli.execute(common.format(constraint="x <= (SELECT hi)"))
+    reversed_, r_cols = decidb_cli.execute(common.format(constraint="(SELECT hi) >= x"))
 
     assert f_cols == r_cols
     ii, hi, xi = (f_cols.index(name) for name in ("id", "hi", "x"))
@@ -299,9 +307,7 @@ def test_correlated_subquery_bound_on_either_side(decidb_cli):
 
 @pytest.mark.cons_perrow
 @pytest.mark.correctness
-def test_row_varying_bound_collapses_to_tightest_on_either_side(
-    decidb_cli, oracle_solver
-):
+def test_row_varying_bound_collapses_to_tightest_on_either_side(decidb_cli, oracle_solver):
     """C1: a bare data column is now a legal bound of a reduced constraint.
 
     Without `by` there is one group — the whole selection — so `SUM(x) <= cap`
@@ -317,15 +323,15 @@ def test_row_varying_bound_collapses_to_tightest_on_either_side(
     caps = {1: 4, 2: 9, 3: 6}
     fixture = "(VALUES (1, 4), (2, 9), (3, 6)) t(id, cap)"
 
-    for label, constraint in (
-        ("forward", "SUM(x) <= cap"), ("reversed", "cap >= SUM(x)")
-    ):
-        rows, cols = decidb_cli.execute(f"""
+    for label, constraint in (("forward", "SUM(x) <= cap"), ("reversed", "cap >= SUM(x)")):
+        rows, cols = decidb_cli.execute(
+            f"""
             SELECT id, x FROM {fixture}
             DECIDE x(INT)
             SUCH THAT {constraint}
             MAXIMIZE SUM(x)
-        """)
+        """
+        )
         xi = cols.index("x")
         actual_sum = sum(int(r[xi]) for r in rows)
 
@@ -333,9 +339,7 @@ def test_row_varying_bound_collapses_to_tightest_on_either_side(
         for i in caps:
             oracle_solver.add_variable(f"x_{i}", VarType.INTEGER, lb=0.0)
         for i in caps:
-            oracle_solver.add_constraint(
-                {f"x_{j}": 1.0 for j in caps}, "<=", float(caps[i]), name=f"row_{i}_bound"
-            )
+            oracle_solver.add_constraint({f"x_{j}": 1.0 for j in caps}, "<=", float(caps[i]), name=f"row_{i}_bound")
         oracle_solver.set_objective({f"x_{i}": 1.0 for i in caps}, ObjSense.MAXIMIZE)
         result = oracle_solver.solve()
         assert result.status == SolverStatus.OPTIMAL

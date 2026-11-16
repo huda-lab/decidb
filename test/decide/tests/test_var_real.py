@@ -35,13 +35,15 @@ def test_real_basic(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("real_basic")
@@ -51,7 +53,9 @@ def test_real_basic(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data))},
-        "<=", 500.0, name="capacity",
+        "<=",
+        500.0,
+        name="capacity",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -61,14 +65,24 @@ def test_real_basic(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "real_basic", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "real_basic",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -93,12 +107,14 @@ def test_real_with_bounds(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("real_with_bounds")
@@ -108,7 +124,9 @@ def test_real_with_bounds(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 
     oracle_solver.add_constraint(
         {vnames[i]: data[i][2] for i in range(len(data))},
-        "<=", 50000.0, name="budget",
+        "<=",
+        50000.0,
+        name="budget",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -118,14 +136,24 @@ def test_real_with_bounds(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "real_with_bounds", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "real_with_bounds",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -151,13 +179,15 @@ def test_real_mixed(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("real_mixed")
@@ -170,7 +200,9 @@ def test_real_mixed(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 
     oracle_solver.add_constraint(
         {snames[i]: data[i][3] for i in range(len(data))},
-        "<=", 50.0, name="capacity",
+        "<=",
+        50.0,
+        name="capacity",
     )
     obj = {}
     for i in range(len(data)):
@@ -181,7 +213,11 @@ def test_real_mixed(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["s", "w"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["s", "w"],
         coeff_fn=lambda row: {
             "s": float(row[decidb_cols.index("l_extendedprice")]),
             "w": float(row[decidb_cols.index("l_quantity")]),
@@ -189,9 +225,15 @@ def test_real_mixed(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     )
 
     perf_tracker.record(
-        "real_mixed", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(snames) + len(wnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "real_mixed",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(snames) + len(wnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -216,14 +258,16 @@ def test_real_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE),
                l_returnflag
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("real_with_when")
@@ -244,14 +288,24 @@ def test_real_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "real_with_when", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "real_with_when",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -278,13 +332,15 @@ def test_real_minimize(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("real_minimize")
@@ -294,7 +350,9 @@ def test_real_minimize(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 
     oracle_solver.add_constraint(
         {vnames[i]: 1.0 for i in range(len(data))},
-        ">=", 10.0, name="floor",
+        ">=",
+        10.0,
+        name="floor",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -304,14 +362,24 @@ def test_real_minimize(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "real_minimize", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "real_minimize",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -321,9 +389,7 @@ def test_real_minimize(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_real_fractional_readback(
-    decidb_cli, oracle_solver, perf_tracker
-):
+def test_real_fractional_readback(decidb_cli, oracle_solver, perf_tracker):
     """Force a genuinely non-integer REAL optimum and confirm the readback
     path preserves the fractional value.
 
@@ -354,10 +420,14 @@ def test_real_fractional_readback(
     for vn in vnames:
         oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=0.0, ub=5.0)
     oracle_solver.add_constraint(
-        {vn: 1.0 for vn in vnames}, "=", 10.5, name="sum_fractional",
+        {vn: 1.0 for vn in vnames},
+        "=",
+        10.5,
+        name="sum_fractional",
     )
     oracle_solver.set_objective(
-        {vn: 1.0 for vn in vnames}, ObjSense.MAXIMIZE,
+        {vn: 1.0 for vn in vnames},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -365,24 +435,24 @@ def test_real_fractional_readback(
 
     x_idx = decidb_cols.index("x")
     decidb_sum = sum(float(r[x_idx]) for r in decidb_rows)
-    assert abs(decidb_sum - 10.5) <= 1e-4, (
-        f"Readback lost fractional precision: SUM(x)={decidb_sum}, expected 10.5"
-    )
-    assert abs(decidb_sum - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DeciDB={decidb_sum}, Oracle={result.objective_value}"
-    )
+    assert abs(decidb_sum - 10.5) <= 1e-4, f"Readback lost fractional precision: SUM(x)={decidb_sum}, expected 10.5"
+    assert (
+        abs(decidb_sum - result.objective_value) <= 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_sum}, Oracle={result.objective_value}"
     # Structural check: at least one value must be genuinely fractional.
-    has_fractional = any(
-        abs(float(r[x_idx]) - round(float(r[x_idx]))) > 1e-4 for r in decidb_rows
-    )
-    assert has_fractional, (
-        f"No fractional value in readback; got x={[r[x_idx] for r in decidb_rows]}"
-    )
+    has_fractional = any(abs(float(r[x_idx]) - round(float(r[x_idx]))) > 1e-4 for r in decidb_rows)
+    assert has_fractional, f"No fractional value in readback; got x={[r[x_idx] for r in decidb_rows]}"
 
     perf_tracker.record(
-        "real_fractional_readback", decidb_time, build_time,
-        result.solve_time_seconds, n, n, 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "real_fractional_readback",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="oracle_match",
         decide_vector=None,
     )
@@ -406,13 +476,15 @@ def test_real_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
 
     # Group by l_orderkey for `per` constraint
     groups = {}
@@ -428,7 +500,9 @@ def test_real_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     for orderkey, row_indices in groups.items():
         oracle_solver.add_constraint(
             {vnames[i]: data[i][3] for i in row_indices},
-            "<=", 50.0, name=f"per_{orderkey}",
+            "<=",
+            50.0,
+            name=f"per_{orderkey}",
         )
 
     oracle_solver.set_objective(
@@ -439,14 +513,24 @@ def test_real_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "real_with_per", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "real_with_per",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )

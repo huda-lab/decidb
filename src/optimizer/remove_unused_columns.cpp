@@ -456,14 +456,14 @@ void RemoveUnusedColumns::VisitOperator(LogicalOperator &op) {
 		break;
 	}
 	case LogicalOperatorType::LOGICAL_DECIDE: {
-        auto &decide = op.Cast<LogicalDecide>();
-        // See LogicalDecide::EnumerateExpressions: the single authoritative list of
-        // every expression the operator owns (including keyed decisions' keys and composed
-        // MIN/MAX terms), shared with ColumnBindingResolver and every generic
-        // LogicalOperatorVisitor pass instead of re-listed by hand here.
-        decide.EnumerateExpressions([&](unique_ptr<Expression> *expr) { VisitExpression(expr); });
-        everything_referenced = true;
-        break;
+		auto &decide = op.Cast<LogicalDecide>();
+		// See LogicalDecide::EnumerateExpressions: the single authoritative list of
+		// every expression the operator owns (including keyed decisions' keys and composed
+		// MIN/MAX terms), shared with ColumnBindingResolver and every generic
+		// LogicalOperatorVisitor pass instead of re-listed by hand here.
+		decide.EnumerateExpressions([&](unique_ptr<Expression> *expr) { VisitExpression(expr); });
+		everything_referenced = true;
+		break;
 	}
 	case LogicalOperatorType::LOGICAL_EXTENSION_OPERATOR: {
 		if (!everything_referenced) {

@@ -94,9 +94,8 @@ static void CollectDecideVarIndices(const Expression &expr, idx_t decide_index, 
 			out.push_back(colref.binding.column_index);
 		}
 	}
-	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-		CollectDecideVarIndices(child, decide_index, out);
-	});
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](const Expression &child) { CollectDecideVarIndices(child, decide_index, out); });
 }
 
 //! Whether a reducer stands anywhere in `expr`.
@@ -158,9 +157,9 @@ void AddAffine(Optimizer &optimizer, Affine &into, Affine other) {
 		into.terms.push_back(std::move(term));
 	}
 	if (other.constant) {
-		into.constant = into.constant ? optimizer.BindScalarFunction("+", std::move(into.constant),
-		                                                             std::move(other.constant))
-		                              : std::move(other.constant);
+		into.constant = into.constant
+		                    ? optimizer.BindScalarFunction("+", std::move(into.constant), std::move(other.constant))
+		                    : std::move(other.constant);
 	}
 }
 
@@ -170,8 +169,7 @@ void ScaleAffine(Optimizer &optimizer, Affine &affine, const Expression &factor,
 		if (!divides) {
 			return factor.Copy();
 		}
-		return optimizer.BindScalarFunction("/", make_uniq<BoundConstantExpression>(Value::DOUBLE(1.0)),
-		                                    factor.Copy());
+		return optimizer.BindScalarFunction("/", make_uniq<BoundConstantExpression>(Value::DOUBLE(1.0)), factor.Copy());
 	};
 	for (auto &term : affine.terms) {
 		term.coefficient = MultiplyCoefficients(optimizer, scale(), std::move(term.coefficient));
@@ -258,9 +256,11 @@ bool ReadAffine(Optimizer &optimizer, const Expression &expr, idx_t decide_index
 //! The auxiliary `w = first * second` for two decisions, one of them Boolean (`first` and `second` are in the order
 //! the user wrote them): AND for two Booleans, else the McCormick link whose rows stage 06 emits against the other
 //! factor's box. Returns the auxiliary's decision index.
-idx_t AddBooleanProduct(LogicalDecide &decide, DecideBilinearFunctionGroup &group,
-                        const string &clause_alias, idx_t first, idx_t second) {
-	auto is_bool = [&](idx_t var) { return var < decide.is_boolean_var.size() && decide.is_boolean_var[var]; };
+idx_t AddBooleanProduct(LogicalDecide &decide, DecideBilinearFunctionGroup &group, const string &clause_alias,
+                        idx_t first, idx_t second) {
+	auto is_bool = [&](idx_t var) {
+		return var < decide.is_boolean_var.size() && decide.is_boolean_var[var];
+	};
 	const bool both_bool = is_bool(first) && is_bool(second);
 	const idx_t bool_var_idx = is_bool(first) ? first : second;
 	const idx_t other_var_idx = bool_var_idx == first ? second : first;
@@ -315,8 +315,9 @@ idx_t AddBooleanProduct(LogicalDecide &decide, DecideBilinearFunctionGroup &grou
 } // namespace
 
 void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide,
-                                              const string &source_alias) {
-	if (!expr) return;
+                                             const string &source_alias) {
+	if (!expr)
+		return;
 	idx_t definition_aux;
 	if (TryParseDecideIndexTag(expr->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
 		return; // its source body is compiled from DefinitionFunction metadata, exactly once
@@ -371,8 +372,8 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 							second = DConstants::INVALID_INDEX;
 						}
 						auto same = std::find_if(product.begin(), product.end(), [&](const ProductTerm &term) {
-							const bool swapped = term.first == second && term.second == first &&
-							                     second != DConstants::INVALID_INDEX;
+							const bool swapped =
+							    term.first == second && term.second == first && second != DConstants::INVALID_INDEX;
 							return (term.first == first && term.second == second) || swapped;
 						});
 						if (same == product.end()) {
@@ -419,8 +420,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 						} else if (term.second == DConstants::INVALID_INDEX) {
 							factor = column(term.first);
 						} else if (is_bool(term.first) || is_bool(term.second)) {
-							factor = column(AddBooleanProduct(decide, group, clause_alias, term.first,
-							                                  term.second));
+							factor = column(AddBooleanProduct(decide, group, clause_alias, term.first, term.second));
 						} else {
 							// Two decisions, neither Boolean: the Q matrix's.
 							factor = optimizer.BindScalarFunction("*", column(term.first), column(term.second));
@@ -445,9 +445,8 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 	}
 
 	// Recurse into children
-	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		FindAndReplaceBilinear(child, decide, clause_alias);
-	});
+	ExpressionIterator::EnumerateChildren(
+	    *expr, [&](unique_ptr<Expression> &child) { FindAndReplaceBilinear(child, decide, clause_alias); });
 }
 
 } // namespace duckdb

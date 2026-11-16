@@ -84,8 +84,7 @@ SolverBackend SelectSolverBackend();
 //! A status the backend leaves ambiguous (INF_OR_UNBD) is settled by the same
 //! zero-objective probe SolveModel applies to the query's own solve.
 SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend);
-SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend,
-                                const SolveModelOptions &options);
+SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend, const SolveModelOptions &options);
 
 //! Builds a SolverModel from the given SolverInput, solves it on `backend`, and
 //! returns a SolverResult: the terminal status plus, when optimal, the solution vector of
@@ -115,7 +114,7 @@ SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend,
 //! the warm solver on a time-limit stop. Left untouched when Build() proves
 //! infeasibility before any solver runs.
 SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBackend backend,
-                         const SolveModelOptions &options, SolverModel *retained_model = nullptr,
-                         unique_ptr<SolverSession> *retained_session = nullptr);
+                        const SolveModelOptions &options, SolverModel *retained_model = nullptr,
+                        unique_ptr<SolverSession> *retained_session = nullptr);
 
 } // namespace duckdb

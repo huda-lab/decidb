@@ -364,7 +364,8 @@ struct DecideTreeSources {
 class DecideTreeConstruction {
 public:
 	//! Prepare the plan-time metadata needed to number definition F nodes before MIN/MAX rewrites and term splitting
-	//! read them. The full nodes and their instances are built by the constructor once the optimizer has settled clauses.
+	//! read them. The full nodes and their instances are built by the constructor once the optimizer has settled
+	//! clauses.
 	static void PrepareDefinitionFunctions(ClientContext &context, LogicalDecide &op);
 	//! Builds the nodes, their edges, sigma, gates and definitions.
 	DecideTreeConstruction(ClientContext &context, const LogicalDecide &op);
@@ -415,7 +416,7 @@ string DecideTreeReducerName(const BoundAggregateExpression &aggregate);
 //! Read shape, provenance and bound-admission facts once. Both graph construction
 //! and flat term lowering use this function; neither infers a second clause shape.
 unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const LogicalDecide &op,
-                                                const BoundComparisonExpression &comparison,
-                                                const DecideEnclosingScope &scope);
+                                                   const BoundComparisonExpression &comparison,
+                                                   const DecideEnclosingScope &scope);
 
 } // namespace duckdb

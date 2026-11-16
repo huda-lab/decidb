@@ -44,29 +44,29 @@ idx_t BindKey(ClientContext &context, BindContext &bind_context, const FunctionE
 //! the constraint and objective binders run; the binders hold a pointer so a reducer can
 //! add a key-only scope to the same list.
 struct DecideQualifierContext {
-    //! Table index the decision-variable column refs bind to.
-    idx_t decide_index = DConstants::INVALID_INDEX;
-    vector<KeyedScopeInfo> *keyed_scopes = nullptr;
-    //! Every key bound so far; a reducer's GROUP_KEY_TAG_PREFIX tag names its `by` key.
-    vector<DecideKey> *keys = nullptr;
-    //! Every frame selector bound so far; a frame's FRAME_TAG_PREFIX tag indexes it.
-    vector<DecideFrameSpec> *frames = nullptr;
-    //! The query's source fragments (TagDecideSourceFragments): a `per K:` in front of a
-    //! constraint adds its key as written, which binding expands past recognition.
-    vector<string> *source_fragments = nullptr;
-    //! The text the user wrote for the DECIDE tail (SelectNode::decide_text); null when the statement has none.
-    const DecideSourceText *source_text = nullptr;
+	//! Table index the decision-variable column refs bind to.
+	idx_t decide_index = DConstants::INVALID_INDEX;
+	vector<KeyedScopeInfo> *keyed_scopes = nullptr;
+	//! Every key bound so far; a reducer's GROUP_KEY_TAG_PREFIX tag names its `by` key.
+	vector<DecideKey> *keys = nullptr;
+	//! Every frame selector bound so far; a frame's FRAME_TAG_PREFIX tag indexes it.
+	vector<DecideFrameSpec> *frames = nullptr;
+	//! The query's source fragments (TagDecideSourceFragments): a `per K:` in front of a
+	//! constraint adds its key as written, which binding expands past recognition.
+	vector<string> *source_fragments = nullptr;
+	//! The text the user wrote for the DECIDE tail (SelectNode::decide_text); null when the statement has none.
+	const DecideSourceText *source_text = nullptr;
 
-    //! The text written for the scope or `by` marker `marker`, added to source_fragments for a bound node to carry as
-    //! a fragment tag; INVALID_INDEX when the parser kept none.
-    idx_t WrittenFragment(const ParsedExpression &marker, DecideSpanRole role) const {
-        string text;
-        if (!source_text || !source_fragments || !source_text->Cut(marker.GetQueryLocation(), role, text)) {
-            return DConstants::INVALID_INDEX;
-        }
-        source_fragments->push_back(std::move(text));
-        return source_fragments->size() - 1;
-    }
+	//! The text written for the scope or `by` marker `marker`, added to source_fragments for a bound node to carry as
+	//! a fragment tag; INVALID_INDEX when the parser kept none.
+	idx_t WrittenFragment(const ParsedExpression &marker, DecideSpanRole role) const {
+		string text;
+		if (!source_text || !source_fragments || !source_text->Cut(marker.GetQueryLocation(), role, text)) {
+			return DConstants::INVALID_INDEX;
+		}
+		source_fragments->push_back(std::move(text));
+		return source_fragments->size() - 1;
+	}
 };
 
 bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
@@ -104,7 +104,6 @@ void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr,
 void ValidateDecideScopeSpellings(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
                                   bool objective);
 
-
 bool ContainsDecideAggregate(const ParsedExpression &expr);
 
 //! Reject non-linear scalar functions (SQRT, EXP, LOG, FLOOR, ...) that wrap a
@@ -114,8 +113,7 @@ bool ContainsDecideAggregate(const ParsedExpression &expr);
 //! catalog to distinguish scalar from aggregate functions so aggregate-shaped
 //! mis-uses (e.g., BIT_AND(x), STDDEV(x)) fall through to BindAggregate's
 //! aggregate-specific error instead.
-void ValidateDecideNoNonLinearScalar(ClientContext &context,
-                                     const ParsedExpression &expr,
+void ValidateDecideNoNonLinearScalar(ClientContext &context, const ParsedExpression &expr,
                                      const case_insensitive_map_t<idx_t> &variables);
 
 //! Reject a `<`, `>` or `<>` whose comparison references a REAL decision variable.
@@ -182,70 +180,70 @@ bool DecideValueIsWholeNumbered(const Expression &expr, idx_t decide_index);
 //! The DecideBinder is a base class for binders in DECIDE statements
 class DecideBinder : public ExpressionBinder {
 public:
-    DecideBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables,
-                 const case_insensitive_set_t &scalar_variables = case_insensitive_set_t(),
-                 optional_ptr<DecideQualifierContext> qualifier_context = nullptr);
+	DecideBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables,
+	             const case_insensitive_set_t &scalar_variables = case_insensitive_set_t(),
+	             optional_ptr<DecideQualifierContext> qualifier_context = nullptr);
 
 protected:
-    //! Carry the parsed node's source location onto the bound node it produced.
-    //!
-    //! `ExpressionBinder::Bind` does this at its own entry point, but the DECIDE
-    //! binders dispatch through `BindExpression`, which bypasses it. The bound tree
-    //! therefore reached the post-binding validators with no location, and every
-    //! refusal raised on it — the integrality gate, and now the degree gate — printed
-    //! without the `LINE`/caret that makes a long SUCH THAT clause navigable.
-    //! Applied in each `BindExpression` override, which is where the recursion enters
-    //! a node, so inner nodes keep their own location rather than the root's.
-    //!
-    //! Takes the location by value rather than the parsed node: binding the `norm`
-    //! marker replaces `expr_ptr` in place, so by the time the result comes back the
-    //! node the caller held is no longer the one the user wrote.
-    static BindResult PreserveQueryLocation(optional_idx location, BindResult result);
-    //! A data column that bound at `location` carries its spelling as written (`S.cap`) as a source fragment, which
-    //! RenderDecideSource prints in any message and at any stage. A column the parser kept no text for, a decision
-    //! and anything that is not a plain column reference are left alone.
-    BindResult TagWrittenColumn(optional_idx location, BindResult result) const;
-    //! Throws a clause's error at its root unless a column or table was not found. DuckDB
-    //! retries a failed expression in each outer query, in case it refers to one, and reports
-    //! that retry's error; only a missing name can be such a reference, so any other error is
-    //! the clause's own verdict and must reach the user as it is.
-    static BindResult ThrowClauseError(BindResult result, bool root_expression);
+	//! Carry the parsed node's source location onto the bound node it produced.
+	//!
+	//! `ExpressionBinder::Bind` does this at its own entry point, but the DECIDE
+	//! binders dispatch through `BindExpression`, which bypasses it. The bound tree
+	//! therefore reached the post-binding validators with no location, and every
+	//! refusal raised on it — the integrality gate, and now the degree gate — printed
+	//! without the `LINE`/caret that makes a long SUCH THAT clause navigable.
+	//! Applied in each `BindExpression` override, which is where the recursion enters
+	//! a node, so inner nodes keep their own location rather than the root's.
+	//!
+	//! Takes the location by value rather than the parsed node: binding the `norm`
+	//! marker replaces `expr_ptr` in place, so by the time the result comes back the
+	//! node the caller held is no longer the one the user wrote.
+	static BindResult PreserveQueryLocation(optional_idx location, BindResult result);
+	//! A data column that bound at `location` carries its spelling as written (`S.cap`) as a source fragment, which
+	//! RenderDecideSource prints in any message and at any stage. A column the parser kept no text for, a decision
+	//! and anything that is not a plain column reference are left alone.
+	BindResult TagWrittenColumn(optional_idx location, BindResult result) const;
+	//! Throws a clause's error at its root unless a column or table was not found. DuckDB
+	//! retries a failed expression in each outer query, in case it refers to one, and reports
+	//! that retry's error; only a missing name can be such a reference, so any other error is
+	//! the clause's own verdict and must reach the user as it is.
+	static BindResult ThrowClauseError(BindResult result, bool root_expression);
 
-    //! True when `expr` is a bare reference to a query-wide (`per ()`) decision.
-    //! A scalar has one solver column, so it needs no reducer to collapse it —
-    //! and conversely may not appear inside one on its own.
-    bool IsScalarDecideVariable(const ParsedExpression &expr) const;
-    //! True when `expr` holds the same value on every input row: every leaf is
-    //! either a literal/constant, an uncorrelated subquery, or a query-wide
-    //! (`per ()`) decision — no data column and no per-row or keyed decision
-    //! appears anywhere inside it. A reducer around a row-invariant body has
-    //! nothing to reduce over (SUM(cap), SUM(cap1 + cap2)); a reducer whose body
-    //! mixes a scalar with row-varying data (SUM(cost * cap)) is not row-invariant
-    //! and is legal — the scalar just contributes uniformly to every term.
-    bool IsRowInvariantExpression(const ParsedExpression &expr) const;
-    //! True when `expr`, sitting below a clause's top, is plain data that DuckDB binds by its
-    //! own rules: it reads no decision, and it is not a function (a reducer or a scope
-    //! marker) or a subquery, which keep their DECIDE handling. A CASE never gets this far
-    //! (ValidateDecideNoCase).
-    bool IsDataOperand(const ParsedExpression &expr) const;
+	//! True when `expr` is a bare reference to a query-wide (`per ()`) decision.
+	//! A scalar has one solver column, so it needs no reducer to collapse it —
+	//! and conversely may not appear inside one on its own.
+	bool IsScalarDecideVariable(const ParsedExpression &expr) const;
+	//! True when `expr` holds the same value on every input row: every leaf is
+	//! either a literal/constant, an uncorrelated subquery, or a query-wide
+	//! (`per ()`) decision — no data column and no per-row or keyed decision
+	//! appears anywhere inside it. A reducer around a row-invariant body has
+	//! nothing to reduce over (SUM(cap), SUM(cap1 + cap2)); a reducer whose body
+	//! mixes a scalar with row-varying data (SUM(cost * cap)) is not row-invariant
+	//! and is legal — the scalar just contributes uniformly to every term.
+	bool IsRowInvariantExpression(const ParsedExpression &expr) const;
+	//! True when `expr`, sitting below a clause's top, is plain data that DuckDB binds by its
+	//! own rules: it reads no decision, and it is not a function (a reducer or a scope
+	//! marker) or a subquery, which keep their DECIDE handling. A CASE never gets this far
+	//! (ValidateDecideNoCase).
+	bool IsDataOperand(const ParsedExpression &expr) const;
 
-    BindResult BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) override;
-    //! Binds the colon form `agg(D, T: expr)` as `agg(per D, T: expr)` (language/guide.md §5.1): the
-    //! relations' stored columns as an exact key scope, the tag of that scope, and
-    //! COLON_FORM_TAG for the echo.
-    BindResult BindQualifiedReducer(FunctionExpression &qualified_expr, idx_t depth);
-    //! Binds `agg([when c] [per K]: e)`: `agg(e)` with `c` as the aggregate's filter and
-    //! `K` as the key it keeps one row of each class by (an exact key scope, tagged like a
-    //! qualifier; `per ()` is the empty key).
-    BindResult BindScopedReducer(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
-    //! Binds `agg(...) BY (key)`: the reducer, then the key into LogicalDecide::keys,
-    //! named on the aggregate by a GROUP_KEY_TAG_PREFIX tag (none for `BY ()`).
-    BindResult BindReducerBy(FunctionExpression &by, idx_t depth);
-    //! Binds a frame selector (language/guide.md §5.6) to an aggregate over its payload
-    //! -- `first(e)` for a point frame, its reducer for a range -- tagged by
-    //! FRAME_TAG_PREFIX with the frame's entry in LogicalDecide::frames, which holds the
-    //! order key, the `within` key's columns, the positions and the fallback.
-    BindResult BindDecideFrame(DecideFrameExpression &frame, idx_t depth);
+	BindResult BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) override;
+	//! Binds the colon form `agg(D, T: expr)` as `agg(per D, T: expr)` (language/guide.md §5.1): the
+	//! relations' stored columns as an exact key scope, the tag of that scope, and
+	//! COLON_FORM_TAG for the echo.
+	BindResult BindQualifiedReducer(FunctionExpression &qualified_expr, idx_t depth);
+	//! Binds `agg([when c] [per K]: e)`: `agg(e)` with `c` as the aggregate's filter and
+	//! `K` as the key it keeps one row of each class by (an exact key scope, tagged like a
+	//! qualifier; `per ()` is the empty key).
+	BindResult BindScopedReducer(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
+	//! Binds `agg(...) BY (key)`: the reducer, then the key into LogicalDecide::keys,
+	//! named on the aggregate by a GROUP_KEY_TAG_PREFIX tag (none for `BY ()`).
+	BindResult BindReducerBy(FunctionExpression &by, idx_t depth);
+	//! Binds a frame selector (language/guide.md §5.6) to an aggregate over its payload
+	//! -- `first(e)` for a point frame, its reducer for a range -- tagged by
+	//! FRAME_TAG_PREFIX with the frame's entry in LogicalDecide::frames, which holds the
+	//! order key, the `within` key's columns, the positions and the fallback.
+	BindResult BindDecideFrame(DecideFrameExpression &frame, idx_t depth);
 	//! A frame's `else`, bound into `out`: a number, and none when it is NULL before the
 	//! query runs (D86).
 	ErrorData BindFrameFallback(DecideFrameExpression &frame, const DecideFrameSpec &spec, const string &fallback_text,
@@ -256,38 +254,38 @@ protected:
 	                                          const DecideFrameExpression &frame, const string &alias,
 	                                          ErrorData &error);
 	BindResult BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
-    //! A DECIDE clause carries its metadata in aliases, so a recorded text joins the tags a node holds
-    //! (BoundDecideAlias).
-    string BoundAlias(const Expression &bound, const string &parsed) override;
+	//! A DECIDE clause carries its metadata in aliases, so a recorded text joins the tags a node holds
+	//! (BoundDecideAlias).
+	string BoundAlias(const Expression &bound, const string &parsed) override;
 
-    BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
-                              bool root_expression = false) override;
-    //! The dispatch itself. `BindExpression` wraps it so every bound node this binder
-    //! produces carries a source location, whatever path the dispatch takes.
-    BindResult BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression);
-    virtual DecideExpression GetExpressionType(ParsedExpression &expr, string &error_msg) {
-        throw duckdb::NotImplementedException("GetExpressionType is not implemented for this binder.");
-    }
+	BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
+	                          bool root_expression = false) override;
+	//! The dispatch itself. `BindExpression` wraps it so every bound node this binder
+	//! produces carries a source location, whatever path the dispatch takes.
+	BindResult BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression);
+	virtual DecideExpression GetExpressionType(ParsedExpression &expr, string &error_msg) {
+		throw duckdb::NotImplementedException("GetExpressionType is not implemented for this binder.");
+	}
 
-    //! Shared `norm`/SUM/AVG/MIN/MAX reducer classification between
-    //! `DecideConstraintsBinder` and `DecideObjectiveBinder`. Returns true when `func`
-    //! is one of these reducer names, with `result`/`error_msg` holding the verdict;
-    //! returns false for any other function name so the caller falls through to its
-    //! own remaining classification (the two binders diverge there — a SUCH THAT
-    //! left-hand side and a MAXIMIZE/MINIMIZE objective accept different shapes).
-    bool ClassifyReducerCall(FunctionExpression &func, DecideExpression &result, string &error_msg);
+	//! Shared `norm`/SUM/AVG/MIN/MAX reducer classification between
+	//! `DecideConstraintsBinder` and `DecideObjectiveBinder`. Returns true when `func`
+	//! is one of these reducer names, with `result`/`error_msg` holding the verdict;
+	//! returns false for any other function name so the caller falls through to its
+	//! own remaining classification (the two binders diverge there — a SUCH THAT
+	//! left-hand side and a MAXIMIZE/MINIMIZE objective accept different shapes).
+	bool ClassifyReducerCall(FunctionExpression &func, DecideExpression &result, string &error_msg);
 
-    bool is_top_expression;
-    //! Set while binding a `when` condition or a `per` column: both bypass DECIDE-specific
-    //! dispatch and bind through the base ExpressionBinder instead, since neither may
-    //! reference a DECIDE variable.
-    bool binding_when_condition = false;
-    case_insensitive_map_t<idx_t> variables;
-    //! Subset of `variables` that are query-wide (`per (): x`).
-    case_insensitive_set_t scalar_variables;
-    //! Null when the caller cannot resolve qualifiers (relation-qualified
-    //! reducers are then rejected rather than silently ignored).
-    optional_ptr<DecideQualifierContext> qualifier_context;
+	bool is_top_expression;
+	//! Set while binding a `when` condition or a `per` column: both bypass DECIDE-specific
+	//! dispatch and bind through the base ExpressionBinder instead, since neither may
+	//! reference a DECIDE variable.
+	bool binding_when_condition = false;
+	case_insensitive_map_t<idx_t> variables;
+	//! Subset of `variables` that are query-wide (`per (): x`).
+	case_insensitive_set_t scalar_variables;
+	//! Null when the caller cannot resolve qualifiers (relation-qualified
+	//! reducers are then rejected rather than silently ignored).
+	optional_ptr<DecideQualifierContext> qualifier_context;
 };
 
 } // namespace duckdb

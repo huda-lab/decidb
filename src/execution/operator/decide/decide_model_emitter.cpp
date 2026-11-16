@@ -35,8 +35,8 @@ static const DecideAlgebraNode &ClauseLhsFormula(const DecideNode &node) {
 	}
 	if (!node.compiled.clause ||
 	    node.algebra->children[0]->children.size() != node.compiled.clause->lhs_terms.size() +
-	                                                 node.compiled.clause->bilinear_terms.size() +
-	                                                 node.compiled.clause->quadratic_groups.size()) {
+	                                                      node.compiled.clause->bilinear_terms.size() +
+	                                                      node.compiled.clause->quadratic_groups.size()) {
 		throw InternalException("DECIDE model emitter: E node's left-hand algebra is incomplete");
 	}
 	return *node.algebra->children[0];
@@ -108,9 +108,8 @@ static idx_t AlgebraTermProgram(const DecideTree &tree, const DecideAlgebraNode 
 		resolved_variable = producer.value_var;
 		return producer.decision_value && resolved_variable == term.variable_index && !is_own_definition;
 	};
-	if (formula.kind != DecideAlgebraKind::OPERATOR || formula.operation != "*" ||
-	    formula.source_term != source_term || formula.sign != term.sign ||
-	    formula.children.size() != expected_children || !formula.children.back() ||
+	if (formula.kind != DecideAlgebraKind::OPERATOR || formula.operation != "*" || formula.source_term != source_term ||
+	    formula.sign != term.sign || formula.children.size() != expected_children || !formula.children.back() ||
 	    !matches_variable()) {
 		throw InternalException("DECIDE model emitter: %s member %llu disagrees with its algebra", owner, source_term);
 	}
@@ -167,9 +166,9 @@ static idx_t AlgebraProductProgram(const DecideTree &tree, const DecideAlgebraNo
                                    bool has_coefficient, int sign, const DecideTermSite &site, idx_t source_term,
                                    idx_t *read_a = nullptr, idx_t *read_b = nullptr) {
 	const auto expected_children = has_coefficient ? 3 : 2;
-	if (formula.kind != DecideAlgebraKind::OPERATOR || formula.operation != "*" ||
-	    formula.source_term != source_term || formula.sign != sign || formula.children.size() != expected_children ||
-	    !formula.children[0] || !formula.children[1]) {
+	if (formula.kind != DecideAlgebraKind::OPERATOR || formula.operation != "*" || formula.source_term != source_term ||
+	    formula.sign != sign || formula.children.size() != expected_children || !formula.children[0] ||
+	    !formula.children[1]) {
 		throw InternalException("DECIDE model emitter: product %llu disagrees with its algebra", source_term);
 	}
 	const auto left = AlgebraProductVariable(tree, formula, 0, var_a, source_term, "left");
@@ -203,11 +202,10 @@ static string FunctionAlgebraName(const DecideNode &node) {
 	case DecideFunctionKind::L0_INDICATOR:
 		return "define_l0_indicator";
 	case DecideFunctionKind::DEFINITION:
-		return node.definition_relation == DecideDefinitionRelation::EQUAL
-		           ? "define_equal"
-		       : node.definition_relation == DecideDefinitionRelation::AT_LEAST
-		           ? "define_at_least"
-	       : node.definition_relation == DecideDefinitionRelation::AT_MOST ? "define_at_most" : "define_invalid";
+		return node.definition_relation == DecideDefinitionRelation::EQUAL      ? "define_equal"
+		       : node.definition_relation == DecideDefinitionRelation::AT_LEAST ? "define_at_least"
+		       : node.definition_relation == DecideDefinitionRelation::AT_MOST  ? "define_at_most"
+		                                                                        : "define_invalid";
 	case DecideFunctionKind::INVALID:
 		break;
 	}
@@ -215,11 +213,10 @@ static string FunctionAlgebraName(const DecideNode &node) {
 }
 
 static idx_t FunctionAlgebraOutput(const DecideNode &node) {
-	if (node.kind != DecideNodeKind::FUNCTION || !node.algebra ||
-	    node.algebra->kind != DecideAlgebraKind::OPERATOR ||
+	if (node.kind != DecideNodeKind::FUNCTION || !node.algebra || node.algebra->kind != DecideAlgebraKind::OPERATOR ||
 	    node.algebra->operation != FunctionAlgebraName(node) ||
-	    node.algebra->children.size() != 2 +
-	        (node.function_kind == DecideFunctionKind::ABS && node.abs_indicator_var != DConstants::INVALID_INDEX)) {
+	    node.algebra->children.size() != 2 + (node.function_kind == DecideFunctionKind::ABS &&
+	                                          node.abs_indicator_var != DConstants::INVALID_INDEX)) {
 		throw InternalException("DECIDE model emitter: F node has no output algebra");
 	}
 	const auto &output = *node.algebra->children[0];
@@ -284,8 +281,8 @@ static const DecideAlgebraNode &ComposedTermsFormula(const DecideNode &node) {
 		formula = sum.children.back().get();
 	} else {
 		if (!node.algebra || node.algebra->kind != DecideAlgebraKind::OPERATOR ||
-		    node.algebra->expression_class != ExpressionClass::BOUND_COMPARISON ||
-		    node.algebra->children.size() != 2 || !node.algebra->children[0] || !node.algebra->children[1]) {
+		    node.algebra->expression_class != ExpressionClass::BOUND_COMPARISON || node.algebra->children.size() != 2 ||
+		    !node.algebra->children[0] || !node.algebra->children[1]) {
 			throw InternalException("DECIDE model emitter: composed clause has no E algebra");
 		}
 		formula = node.algebra->children[0].get();
@@ -297,10 +294,8 @@ static const DecideAlgebraNode &ComposedTermsFormula(const DecideNode &node) {
 	for (idx_t term = 0; term < formula->children.size(); term++) {
 		auto &value = *formula->children[term];
 		if (value.kind != DecideAlgebraKind::OPERATOR || value.source_term != term ||
-		    value.operation.find("composed_") != 0 ||
-		    value.children.size() < 1 || value.children.size() > 2 ||
-		    !value.children[0] ||
-		    value.children[0]->kind != DecideAlgebraKind::TREE_VALUE ||
+		    value.operation.find("composed_") != 0 || value.children.size() < 1 || value.children.size() > 2 ||
+		    !value.children[0] || value.children[0]->kind != DecideAlgebraKind::TREE_VALUE ||
 		    value.children[0]->tree_value_node != node.compiled.composed[term] ||
 		    (value.children.size() == 2 && (!value.children[1] || !value.children[1]->source_expression))) {
 			throw InternalException("DECIDE model emitter: E node has a malformed composed term");
@@ -368,8 +363,8 @@ const vector<bool> &DecideModelEmitter::ReadEntriesOf(idx_t site, bool qualified
 }
 
 const vector<bool> &DecideModelEmitter::ReadEntriesOf(const DecideTermSite &term_site, idx_t qualifier_scope,
-                                                       const vector<bool> &candidates, vector<bool> &first,
-                                                       vector<bool> &selected_rows) {
+                                                      const vector<bool> &candidates, vector<bool> &first,
+                                                      vector<bool> &selected_rows) {
 	if (qualifier_scope == DConstants::INVALID_INDEX) {
 		return candidates;
 	}
@@ -429,8 +424,7 @@ void DecideModelEmitter::Filter(idx_t site, idx_t qualifier_scope, const vector<
 		if (tested[entry] && container.groups.InAClass(container.Slot(entry))) {
 			member[row] = true;
 		}
-		if (reads[entry] &&
-		    (qualifier_scope == DConstants::INVALID_INDEX || selected_rows[row])) {
+		if (reads[entry] && (qualifier_scope == DConstants::INVALID_INDEX || selected_rows[row])) {
 			mask[row] = true;
 			read(row, entry);
 		}
@@ -843,8 +837,8 @@ void DecideModelEmitter::DefinitionAbsence(idx_t root, idx_t variable) {
 		for (idx_t position = 0; position < group.inner_terms.size(); position++) {
 			auto &formula = *square.children[position];
 			const auto t = ClauseTermSource(formula, group.inner_terms.size(), "definition square");
-			null_rows(body.squares[g][t].node,
-			          AlgebraTermProgram(tree, formula, group.inner_terms[t], body.squares[g][t], t, "definition E node"));
+			null_rows(body.squares[g][t].node, AlgebraTermProgram(tree, formula, group.inner_terms[t],
+			                                                      body.squares[g][t], t, "definition E node"));
 		}
 	}
 }
@@ -885,9 +879,8 @@ void DecideModelEmitter::Constraints() {
 		auto &clause = *tree.nodes[root]->compiled.clause;
 		auto evaluated = abs_function_of_clause[c] != DConstants::INVALID_INDEX
 		                     ? AbsEnvelope(abs_function_of_clause[c], root, c < num_constraints)
-		                     : clause.lhs_is_aggregate || clause.was_minmax_easy
-		                           ? Groups(root, c < num_constraints)
-		                           : Rows(root, c < num_constraints);
+		                 : clause.lhs_is_aggregate || clause.was_minmax_easy ? Groups(root, c < num_constraints)
+		                                                                     : Rows(root, c < num_constraints);
 		(c < num_constraints ? gstate.evaluated_constraints : gstate.evaluated_singleton_row_constraints)
 		    .push_back(std::move(evaluated));
 	}
@@ -936,7 +929,8 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 	// each, or under `per K:` on one row of each variant of a class.
 	vector<bool> tested = columns.Tested(root);
 	vector<bool> definition_absent(num_rows, false);
-	if (node.definition_function_owner != DConstants::INVALID_INDEX && clause.defined_var < gstate.absent_reads.size()) {
+	if (node.definition_function_owner != DConstants::INVALID_INDEX &&
+	    clause.defined_var < gstate.absent_reads.size()) {
 		const auto &absent = gstate.absent_reads[clause.defined_var];
 		const auto &rows = descent.Containers()[root].rows;
 		for (idx_t entry = 0; entry < tested.size(); entry++) {
@@ -961,8 +955,7 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 		auto &site = body.linear[t];
 		D_ASSERT(site.node == root);
 		const auto program = AlgebraTermProgram(tree, term_formula, term, site, t, "E node");
-		scatter(columns.Numbers(root, program, tested, &nulls, &site, &term.inputs),
-		        evaluated.row_coefficients[t]);
+		scatter(columns.Numbers(root, program, tested, &nulls, &site, &term.inputs), evaluated.row_coefficients[t]);
 	}
 	if (clause.scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
 		Classes(root, tested, evaluated);
@@ -1224,8 +1217,8 @@ void DecideModelEmitter::KeyClasses(idx_t root, vector<idx_t> &class_ids, vector
 }
 
 void DecideModelEmitter::ReadBesideReducers(idx_t root, const DecideTerm &term, const DecideTermSite &site,
-	                                            idx_t program, const DecideEntryRows &rows, CoefficientColumn &column,
-	                                            vector<bool> &null_rows) {
+                                            idx_t program, const DecideEntryRows &rows, CoefficientColumn &column,
+                                            vector<bool> &null_rows) {
 	vector<bool> nulls(descent.Containers()[root].Count(), false);
 	auto numbers = columns.Numbers(root, program, columns.Tested(root), &nulls, &site, &term.inputs);
 	column.AssignDense(num_rows);
@@ -1339,15 +1332,15 @@ bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const DecideEntryRows &row
 	// coefficients follow once the rows are grouped (Polynomial).
 	vector<bool> members;
 	for (idx_t position = 0; position < clause.bilinear_terms.size(); position++) {
-		const auto i = ClauseTermSource(*lhs_formula.children[terms.size() + position],
-		                                clause.bilinear_terms.size(), "bilinear");
+		const auto i =
+		    ClauseTermSource(*lhs_formula.children[terms.size() + position], clause.bilinear_terms.size(), "bilinear");
 		auto &filter = filters[terms.size() + i];
 		const auto &site = body.products[i];
 		vector<bool> first, selected_rows;
-		const auto &reads = ReadEntriesOf(site, clause.bilinear_terms[i].qualifier_scope_idx,
-		                                  columns.Tested(site.node), first, selected_rows);
-		Filter(site.node, clause.bilinear_terms[i].qualifier_scope_idx, reads, selected_rows, filter,
-		       members, [](idx_t, idx_t) {});
+		const auto &reads = ReadEntriesOf(site, clause.bilinear_terms[i].qualifier_scope_idx, columns.Tested(site.node),
+		                                  first, selected_rows);
+		Filter(site.node, clause.bilinear_terms[i].qualifier_scope_idx, reads, selected_rows, filter, members,
+		       [](idx_t, idx_t) {});
 		read_filter(members, filter);
 	}
 	for (idx_t position = 0; position < clause.quadratic_groups.size(); position++) {
@@ -1461,8 +1454,8 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 		// Taken once every rule that drops an instance has run but the next, which reads `null_rows`, after every part
 		// of the clause.
 		try {
-			TakeTightestFrameBound(evaluated.comparison_type, evaluated.rhs_written, kept, bound_null, kept_row_group_ids,
-			                       evaluated.row_group_ids, evaluated.num_groups, true,
+			TakeTightestFrameBound(evaluated.comparison_type, evaluated.rhs_written, kept, bound_null,
+			                       kept_row_group_ids, evaluated.row_group_ids, evaluated.num_groups, true,
 			                       evaluated.rhs_values.MutableDense(), null_rows);
 		} catch (std::exception &ex) {
 			auto rank = tree.nodes[root]->clause_rank;
@@ -1630,17 +1623,18 @@ void DecideModelEmitter::Polynomial(idx_t root, const vector<TermFilterState> &f
 	auto &products = clause.bilinear_terms;
 	const auto &lhs_formula = ClauseLhsFormula(node);
 	for (idx_t position = 0; position < products.size(); position++) {
-		const auto i = ClauseTermSource(*lhs_formula.children[clause.lhs_terms.size() + position], products.size(),
-		                                "bilinear");
+		const auto i =
+		    ClauseTermSource(*lhs_formula.children[clause.lhs_terms.size() + position], products.size(), "bilinear");
 		auto &algebra_term = *lhs_formula.children[clause.lhs_terms.size() + position];
 		auto &product = products[i];
 		auto &site = body.products[i];
 		idx_t var_a, var_b;
-		const auto program = AlgebraProductProgram(tree, algebra_term, product.var_a, product.var_b,
-		                                          product.coefficient != nullptr, product.sign, site, i, &var_a, &var_b);
+		const auto program =
+		    AlgebraProductProgram(tree, algebra_term, product.var_a, product.var_b, product.coefficient != nullptr,
+		                          product.sign, site, i, &var_a, &var_b);
 		EvaluatedConstraint::BilinearTerm column {var_a, var_b, CoefficientColumn()};
-		ReadPart(site, program, product.qualifier_scope_idx, algebra_term.sign,
-		         product.inputs, {var_a, var_b}, column.row_coefficients, null_rows);
+		ReadPart(site, program, product.qualifier_scope_idx, algebra_term.sign, product.inputs, {var_a, var_b},
+		         column.row_coefficients, null_rows);
 		auto &filter = filters[clause.lhs_terms.size() + i];
 		if (product.avg_scale) {
 			ScaleAvgRows(column.row_coefficients, filter.has_filter, filter.mask, false, num_rows,
@@ -1673,8 +1667,8 @@ void DecideModelEmitter::Polynomial(idx_t root, const vector<TermFilterState> &f
 			const auto program = AlgebraTermProgram(tree, algebra_term, inner, site, t, "E square", &variable);
 			square.variable_indices.push_back(gstate.ReadVariable(variable, inner.frame_read));
 			square.row_coefficients.emplace_back();
-			ReadPart(site, program, group.qualifier_scope_idx, algebra_term.sign,
-			         inner.inputs, {variable}, square.row_coefficients.back(), null_rows);
+			ReadPart(site, program, group.qualifier_scope_idx, algebra_term.sign, inner.inputs, {variable},
+			         square.row_coefficients.back(), null_rows);
 			if (group.avg_scale) {
 				ScaleAvgRows(square.row_coefficients.back(), filter.has_filter, filter.mask, true, num_rows,
 				             evaluated.row_group_ids, evaluated.num_groups);
@@ -1705,8 +1699,8 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 	auto &objective = *body.objective;
 	if (!node.algebra || node.algebra->kind != DecideAlgebraKind::OPERATOR ||
 	    (node.algebra->operation != "minimize" && node.algebra->operation != "maximize") ||
-	    node.algebra->children.size() != 1 ||
-	    !node.algebra->children[0] || node.algebra->children[0]->kind != DecideAlgebraKind::OPERATOR) {
+	    node.algebra->children.size() != 1 || !node.algebra->children[0] ||
+	    node.algebra->children[0]->kind != DecideAlgebraKind::OPERATOR) {
 		throw InternalException("DECIDE model emitter: objective E node has no direction algebra");
 	}
 	const auto &sum_formula = ObjectiveSumFormula(node);
@@ -1740,17 +1734,15 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 	for (auto &read : container.routed) {
 		marked[read.first] = true;
 	}
-	evaluated.linear_filters = ObjectiveTerms(root, sum_formula, 0, objective.terms, body.linear,
-	                                          gstate.evaluated_objective_coefficients,
-	                                          gstate.objective_variable_indices,
-	                                          &gstate.objective_value_nodes);
+	evaluated.linear_filters =
+	    ObjectiveTerms(root, sum_formula, 0, objective.terms, body.linear, gstate.evaluated_objective_coefficients,
+	                   gstate.objective_variable_indices, &gstate.objective_value_nodes);
 	// A term outside every reducer counts once, on the first row the objective keeps.
 	CountTupleTermsOnce(objective.terms, gstate.evaluated_objective_coefficients, &kept, num_rows);
 	// Each squared term lies in a reducer, and is read as a term there is.
 	if (objective.has_quadratic) {
-		if (objective.squared_terms.empty() || sum_formula.children[objective.terms.size() +
-		                                                        objective.bilinear_terms.size()]->operation !=
-		                                            "square_sum") {
+		if (objective.squared_terms.empty() ||
+		    sum_formula.children[objective.terms.size() + objective.bilinear_terms.size()]->operation != "square_sum") {
 			throw InternalException("DECIDE model emitter: objective E node has no square-sum operator");
 		}
 		auto &square_formula = *sum_formula.children[objective.terms.size() + objective.bilinear_terms.size()];
@@ -1760,9 +1752,9 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 		}
 		gstate.has_quadratic_objective = true;
 		gstate.quadratic_sign = square_formula.scale;
-		evaluated.quadratic_filters = ObjectiveTerms(root, square_formula, 0, objective.squared_terms,
-	                                              body.squares[0], gstate.evaluated_quadratic_coefficients,
-	                                              gstate.quadratic_variable_indices);
+		evaluated.quadratic_filters =
+		    ObjectiveTerms(root, square_formula, 0, objective.squared_terms, body.squares[0],
+		                   gstate.evaluated_quadratic_coefficients, gstate.quadratic_variable_indices);
 	}
 	// A product is read as a term is, on the members of the G it ranges over or on each row the objective keeps, but
 	// stage 05 dropped none of its rows for a decision with no instance (DropNullObjectiveTerms), so none is dropped
@@ -1783,8 +1775,9 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 		vector<bool> first, selected_rows;
 		const auto &reads = ReadEntriesOf(site, product.qualifier_scope_idx, tested, first, selected_rows);
 		idx_t var_a, var_b;
-		const auto program = AlgebraProductProgram(tree, algebra_term, product.var_a, product.var_b,
-		                                          product.coefficient != nullptr, product.sign, site, i, &var_a, &var_b);
+		const auto program =
+		    AlgebraProductProgram(tree, algebra_term, product.var_a, product.var_b, product.coefficient != nullptr,
+		                          product.sign, site, i, &var_a, &var_b);
 		// Stage 05 leaves a coefficient of 1 out.
 		auto numbers = program == DConstants::INVALID_INDEX
 		                   ? vector<double>(reads.size(), double(algebra_term.sign))
@@ -1805,11 +1798,10 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 }
 
 vector<TermFilterState> DecideModelEmitter::ObjectiveTerms(idx_t root, const DecideAlgebraNode &formula,
-	                                                       idx_t formula_offset, const vector<DecideTerm> &terms,
-	                                                       const vector<DecideTermSite> &sites,
-	                                                       vector<CoefficientColumn> &coefficients,
-	                                                       vector<idx_t> &variables,
-	                                                       vector<idx_t> *value_nodes) {
+                                                           idx_t formula_offset, const vector<DecideTerm> &terms,
+                                                           const vector<DecideTermSite> &sites,
+                                                           vector<CoefficientColumn> &coefficients,
+                                                           vector<idx_t> &variables, vector<idx_t> *value_nodes) {
 	if (formula.kind != DecideAlgebraKind::OPERATOR || formula_offset + terms.size() > formula.children.size()) {
 		throw InternalException("DECIDE model emitter: objective term list has no aligned algebra");
 	}
@@ -1956,8 +1948,8 @@ void DecideModelEmitter::Composed(PhysicalDecide::EvaluatedClauses &evaluated) {
 	}
 }
 
-vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(
-	idx_t root, const DecideAlgebraNode &formula, const char *what, bool &null_factor) {
+vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(idx_t root, const DecideAlgebraNode &formula,
+                                                                 const char *what, bool &null_factor) {
 	auto &body = tree.nodes[root]->compiled;
 	const auto clause = op.WrittenClause(tree.nodes[root]->source_clause_id);
 	if (formula.children.size() != body.composed.size()) {
@@ -2043,7 +2035,8 @@ vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(
 			if (!member_pointer || member_pointer->kind != DecideAlgebraKind::OPERATOR ||
 			    member_pointer->operation != "*" || member_pointer->source_term >= members.members.size() ||
 			    emitted_members[member_pointer->source_term]) {
-				throw InternalException("DECIDE model emitter: G node %llu has a malformed member operator", reducer_node);
+				throw InternalException("DECIDE model emitter: G node %llu has a malformed member operator",
+				                        reducer_node);
 			}
 			const auto i = member_pointer->source_term;
 			emitted_members[i] = true;
@@ -2089,8 +2082,8 @@ void DecideModelEmitter::FrameMembers(idx_t node, ReducerValueMembers &out) {
 				throw InternalException("DECIDE model emitter: O node %llu has a missing frame term", node);
 			}
 			idx_t variable;
-			const auto program = AlgebraTermProgram(tree, *member_formula, terms[t], sites[t], source_term, "O node",
-			                                        &variable);
+			const auto program =
+			    AlgebraTermProgram(tree, *member_formula, terms[t], sites[t], source_term, "O node", &variable);
 			variable_ids.push_back(gstate.ReadVariable(variable, terms[t].frame_read));
 			value_nodes.push_back(terms[t].frame_read == DConstants::INVALID_INDEX
 			                          ? AlgebraTermValueNode(tree, *member_formula)
@@ -2108,7 +2101,7 @@ void DecideModelEmitter::FrameMembers(idx_t node, ReducerValueMembers &out) {
 	vector<idx_t> payload_vars, payload_value_nodes, fallback_vars, fallback_value_nodes;
 	const auto payload = read(body.members, body.linear, map.ReadRows(), 0, payload_vars, payload_value_nodes);
 	const auto fallback = read(body.fallback, body.fallback_sites, map.FallbackAnchors(), body.members.size(),
-	                            fallback_vars, fallback_value_nodes);
+	                           fallback_vars, fallback_value_nodes);
 	const auto aggregate = ValueLinkAggregate(tree_node);
 	DecideListFrameMembers(map, aggregate, tree_node.value_link_label, tree_node.text, payload, payload_vars,
 	                       payload_value_nodes, fallback, fallback_vars, fallback_value_nodes, out);
@@ -2158,8 +2151,7 @@ void DecideModelEmitter::ValueLinks() {
 			continue;
 		}
 		if (!tree_node.algebra || tree_node.algebra->kind != DecideAlgebraKind::OPERATOR ||
-		    tree_node.algebra->operation != aggregate ||
-		    tree_node.algebra->children.size() != body.members.size()) {
+		    tree_node.algebra->operation != aggregate || tree_node.algebra->children.size() != body.members.size()) {
 			throw InternalException("DECIDE model emitter: G node %llu has no aligned reducer algebra", node);
 		}
 		const auto site = DecideTreeOperand(tree, node);
@@ -2187,9 +2179,8 @@ void DecideModelEmitter::ValueLinks() {
 		vector<idx_t> value_nodes(body.members.size(), DConstants::INVALID_INDEX);
 		vector<vector<double>> coefficients(body.members.size());
 		for (auto &algebra_term : tree_node.algebra->children) {
-			if (!algebra_term || algebra_term->kind != DecideAlgebraKind::OPERATOR ||
-			    algebra_term->operation != "*" || algebra_term->source_term >= body.members.size() ||
-			    emitted_terms[algebra_term->source_term]) {
+			if (!algebra_term || algebra_term->kind != DecideAlgebraKind::OPERATOR || algebra_term->operation != "*" ||
+			    algebra_term->source_term >= body.members.size() || emitted_terms[algebra_term->source_term]) {
 				throw InternalException("DECIDE model emitter: G node %llu has a malformed member term", node);
 			}
 			const auto t = algebra_term->source_term;
@@ -2198,9 +2189,8 @@ void DecideModelEmitter::ValueLinks() {
 			auto &site_t = body.linear[t];
 			idx_t variable;
 			const auto program = AlgebraTermProgram(tree, *algebra_term, term, site_t, t, "G node", &variable);
-			value_nodes[t] = term.frame_read == DConstants::INVALID_INDEX
-			                      ? AlgebraTermValueNode(tree, *algebra_term)
-			                      : DConstants::INVALID_INDEX;
+			value_nodes[t] = term.frame_read == DConstants::INVALID_INDEX ? AlgebraTermValueNode(tree, *algebra_term)
+			                                                              : DConstants::INVALID_INDEX;
 			coefficients[t] = columns.Numbers(site, program, members.reads, nullptr, &site_t, &term.inputs);
 			variables[t] = gstate.ReadVariable(variable, term.frame_read);
 		}

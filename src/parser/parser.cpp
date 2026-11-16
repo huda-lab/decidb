@@ -16,7 +16,6 @@
 #include "parser/parser.hpp"
 #include "postgres_parser.hpp"
 
-
 namespace duckdb {
 
 Parser::Parser(ParserOptions options_p) : options(options_p) {

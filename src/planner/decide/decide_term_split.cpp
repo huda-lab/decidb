@@ -115,9 +115,8 @@ static void ReplaceTaggedFunctionsWithAux(unique_ptr<Expression> &expression,
 		expression = decide_variables[aux_idx]->Copy();
 		return;
 	}
-	ExpressionIterator::EnumerateChildren(*expression, [&](unique_ptr<Expression> &child) {
-		ReplaceTaggedFunctionsWithAux(child, decide_variables);
-	});
+	ExpressionIterator::EnumerateChildren(
+	    *expression, [&](unique_ptr<Expression> &child) { ReplaceTaggedFunctionsWithAux(child, decide_variables); });
 }
 
 static void CollectMultiplicativeFactors(const Expression &expr, idx_t decide_index,
@@ -305,9 +304,8 @@ bool DecideTermSplitter::ContainsVariable(const Expression &expr, idx_t var_idx)
 		return expr.Cast<BoundColumnRefExpression>().binding == variable.binding;
 	}
 	bool found = false;
-	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-		found = found || ContainsVariable(child, var_idx);
-	});
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](const Expression &child) { found = found || ContainsVariable(child, var_idx); });
 	return found;
 }
 

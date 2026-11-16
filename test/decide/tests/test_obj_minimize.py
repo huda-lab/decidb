@@ -33,11 +33,13 @@ def test_q09_minimize_cost(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(s_suppkey AS BIGINT),
                CAST(s_acctbal AS DOUBLE)
         FROM supplier WHERE s_nationkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("q09_minimize")
@@ -48,7 +50,9 @@ def test_q09_minimize_cost(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
     # SUM(x) >= 10
     oracle_solver.add_constraint(
         {vnames[i]: 1.0 for i in range(len(data))},
-        ">=", 10.0, name="min_count",
+        ">=",
+        10.0,
+        name="min_count",
     )
     # MINIMIZE SUM(x * s_acctbal)
     oracle_solver.set_objective(
@@ -59,14 +63,24 @@ def test_q09_minimize_cost(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("s_acctbal")])},
     )
 
     perf_tracker.record(
-        "q09_minimize_cost", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "q09_minimize_cost",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -90,13 +104,15 @@ def test_min_cost_supplier(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(ps_partkey AS BIGINT),
                CAST(ps_suppkey AS BIGINT),
                CAST(ps_supplycost AS DOUBLE),
                CAST(ps_availqty AS DOUBLE)
         FROM partsupp WHERE ps_partkey <= 50
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("min_cost_supplier")
@@ -107,7 +123,9 @@ def test_min_cost_supplier(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
     # SUM(x * availqty) >= 1000
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data))},
-        ">=", 1000.0, name="demand",
+        ">=",
+        1000.0,
+        name="demand",
     )
     # MINIMIZE SUM(x * supplycost)
     oracle_solver.set_objective(
@@ -118,14 +136,24 @@ def test_min_cost_supplier(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("ps_supplycost")])},
     )
 
     perf_tracker.record(
-        "min_cost_supplier", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "min_cost_supplier",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -149,13 +177,15 @@ def test_minimize_count(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("minimize_count")
@@ -165,7 +195,9 @@ def test_minimize_count(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 
     oracle_solver.add_constraint(
         {vnames[i]: data[i][2] for i in range(len(data))},
-        ">=", 50000.0, name="min_value",
+        ">=",
+        50000.0,
+        name="min_value",
     )
     oracle_solver.set_objective(
         {vnames[i]: 1.0 for i in range(len(data))},
@@ -175,14 +207,24 @@ def test_minimize_count(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
 
     perf_tracker.record(
-        "minimize_count", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "minimize_count",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )

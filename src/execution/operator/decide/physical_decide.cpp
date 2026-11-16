@@ -55,13 +55,13 @@
 // whether stdin is a terminal. Both are platform primitives; MSVC has neither
 // <sys/resource.h> nor <unistd.h>. Same split as gurobi_loader.cpp.
 #ifdef _WIN32
-#include <cstdio>    // _fileno
-#include <io.h>      // _isatty
+#include <cstdio> // _fileno
+#include <io.h>   // _isatty
 #else
-#include <sys/resource.h>  // getrusage — peak process memory
-#include <unistd.h>        // isatty / STDIN_FILENO
+#include <sys/resource.h> // getrusage — peak process memory
+#include <unistd.h>       // isatty / STDIN_FILENO
 #endif
-#include <iostream>  // std::cin / std::getline — read the continuation decision at a time-limit stop
+#include <iostream> // std::cin / std::getline — read the continuation decision at a time-limit stop
 
 namespace duckdb {
 
@@ -113,9 +113,8 @@ static const DecideAlgebraNode *TreeObjectiveReducer(const DecideTree &tree) {
 	if (value.operation == "+") {
 		return nullptr;
 	}
-	if ((value.operation == "min" || value.operation == "max") && value.children.size() == 1 &&
-	    value.children[0] && value.children[0]->kind == DecideAlgebraKind::OPERATOR &&
-	    value.children[0]->operation == "+") {
+	if ((value.operation == "min" || value.operation == "max") && value.children.size() == 1 && value.children[0] &&
+	    value.children[0]->kind == DecideAlgebraKind::OPERATOR && value.children[0]->operation == "+") {
 		return &value;
 	}
 	throw InternalException("DECIDE objective E node has an unknown aggregate operator: %s", value.operation);
@@ -123,9 +122,9 @@ static const DecideAlgebraNode *TreeObjectiveReducer(const DecideTree &tree) {
 
 static ObjectiveAggregateType TreeFlatObjectiveAggregate(const DecideTree &tree) {
 	const auto *reducer = TreeObjectiveReducer(tree);
-	return !reducer ? ObjectiveAggregateType::NONE
+	return !reducer                      ? ObjectiveAggregateType::NONE
 	       : reducer->operation == "min" ? ObjectiveAggregateType::MIN_AGG
-	                                      : ObjectiveAggregateType::MAX_AGG;
+	                                     : ObjectiveAggregateType::MAX_AGG;
 }
 
 //! A composed objective is represented by an objective E whose composed algebra retains its G terms.
@@ -197,22 +196,20 @@ static void VerifyCountedOnce(const vector<DecideTerm> &terms, const vector<Coef
 // Constructor
 //===--------------------------------------------------------------------===//
 
-PhysicalDecide::PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardinality, 
-                    unique_ptr<PhysicalOperator> child, idx_t decide_index, 
-                    vector<unique_ptr<Expression>> decide_variables,
-                    unique_ptr<Expression> decide_constraints, DecideSense decide_sense,
-                    unique_ptr<Expression> decide_objective)
-    : PhysicalOperator(PhysicalOperatorType::DECIDE, std::move(types), estimated_cardinality)
-    , decide_index(decide_index)
-    , decide_variables(std::move(decide_variables))
-    , decide_constraints(std::move(decide_constraints))
-    , decide_sense(decide_sense)
-    , decide_objective(std::move(decide_objective)) {
-    children.push_back(std::move(child));
-    for (idx_t i = 0; i < this->decide_variables.size(); i++) {
-        auto &var = this->decide_variables[i]->Cast<BoundColumnRefExpression>();
-        decide_variable_map[var.binding] = i;
-    }
+PhysicalDecide::PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardinality,
+                               unique_ptr<PhysicalOperator> child, idx_t decide_index,
+                               vector<unique_ptr<Expression>> decide_variables,
+                               unique_ptr<Expression> decide_constraints, DecideSense decide_sense,
+                               unique_ptr<Expression> decide_objective)
+    : PhysicalOperator(PhysicalOperatorType::DECIDE, std::move(types), estimated_cardinality),
+      decide_index(decide_index), decide_variables(std::move(decide_variables)),
+      decide_constraints(std::move(decide_constraints)), decide_sense(decide_sense),
+      decide_objective(std::move(decide_objective)) {
+	children.push_back(std::move(child));
+	for (idx_t i = 0; i < this->decide_variables.size(); i++) {
+		auto &var = this->decide_variables[i]->Cast<BoundColumnRefExpression>();
+		decide_variable_map[var.binding] = i;
+	}
 }
 
 DecideSourceNames PhysicalDecide::Names() const {
@@ -305,7 +302,6 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 // Multi-variable per-row constraint helpers
 //===--------------------------------------------------------------------===//
 
-
 //===--------------------------------------------------------------------===//
 // Sink (Collecting Data)
 //===--------------------------------------------------------------------===//
@@ -351,7 +347,7 @@ static void AppendDecideDescent(DecideDescent &descent, DataChunk &chunk, idx_t 
 //! descent per thread, as a hash aggregate builds a table per thread, merged into the operator's in Combine.
 class DecideLocalSinkState : public LocalSinkState {
 public:
-    DecideProfileTotals profile_sink {"execution.sink_append"};
+	DecideProfileTotals profile_sink {"execution.sink_append"};
 	ColumnDataCollection data;
 	ColumnDataAppendState append_state;
 	unique_ptr<DecideDescent> descent;
@@ -359,7 +355,7 @@ public:
 	//! merge every chunk as a thread of its own would; never otherwise.
 	idx_t split = DConstants::INVALID_INDEX;
 
-    explicit DecideLocalSinkState(ClientContext &context, const PhysicalDecide &op)
+	explicit DecideLocalSinkState(ClientContext &context, const PhysicalDecide &op)
 	    : data(context, op.children[0]->GetTypes()) {
 		first_input_row.Initialize(context, op.children[0]->GetTypes(), 1);
 		data.InitializeAppend(append_state);
@@ -370,7 +366,7 @@ public:
 				throw InvalidInputException("DECIDB_DESCENT_SPLIT must be a positive row count");
 			}
 		}
-    }
+	}
 	DataChunk first_input_row;
 	bool has_first_input_row = false;
 };
@@ -397,11 +393,11 @@ static void MergeDecideDescent(DecideGlobalSinkState &gstate, DecideLocalSinkSta
 unique_ptr<GlobalSinkState> PhysicalDecide::GetGlobalSinkState(ClientContext &context) const {
 	// The descent reads only the rows reaching each node (plan L2): checked once, before the first row.
 	DecideDescent::RequireRowReads(*tree, children[0]->GetTypes().size());
-    return make_uniq_base<GlobalSinkState, DecideGlobalSinkState>(context, *this);
+	return make_uniq_base<GlobalSinkState, DecideGlobalSinkState>(context, *this);
 }
 
 unique_ptr<LocalSinkState> PhysicalDecide::GetLocalSinkState(ExecutionContext &context) const {
-    return make_uniq_base<LocalSinkState, DecideLocalSinkState>(context.client, *this);
+	return make_uniq_base<LocalSinkState, DecideLocalSinkState>(context.client, *this);
 }
 
 //! Rows `chunk` read by the thread's descent at the rows its buffer gives them, which Combine rebases on the rows
@@ -426,9 +422,9 @@ static void SinkDecideRows(const DecideTree &tree, ClientContext &context, Decid
 }
 
 SinkResultType PhysicalDecide::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
-    auto &lstate = input.local_state.Cast<DecideLocalSinkState>();
-    auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
-    DecideProfileSample profile(lstate.profile_sink);
+	auto &lstate = input.local_state.Cast<DecideLocalSinkState>();
+	auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
+	DecideProfileSample profile(lstate.profile_sink);
 	// Top-down (language/guide.md §6.1): the thread's descent reads each chunk as it arrives; one split finer than
 	// the chunk reads it a piece at a time, each merged as a thread of its own would be.
 	if (chunk.size() <= lstate.split) {
@@ -446,14 +442,14 @@ SinkResultType PhysicalDecide::Sink(ExecutionContext &context, DataChunk &chunk,
 		piece.Slice(chunk, selection, count);
 		SinkDecideRows(*tree, context.client, gstate, lstate, piece);
 	}
-    return SinkResultType::NEED_MORE_INPUT;
+	return SinkResultType::NEED_MORE_INPUT;
 }
 
 SinkCombineResultType PhysicalDecide::Combine(ExecutionContext &context, OperatorSinkCombineInput &input) const {
-    DecideProfileScope profile("execution.sink_combine");
+	DecideProfileScope profile("execution.sink_combine");
 	MergeDecideDescent(input.global_state.Cast<DecideGlobalSinkState>(),
 	                   input.local_state.Cast<DecideLocalSinkState>());
-    return SinkCombineResultType::FINISHED;
+	return SinkCombineResultType::FINISHED;
 }
 
 //! Builds the categorical-candidate groupings the unbounded engine consumes to
@@ -589,9 +585,8 @@ struct UnboundedCandidateProvider {
 
 	vector<ColumnGrouping> operator()(idx_t decide_var_idx, idx_t total_instances) {
 		(void)total_instances;
-		auto scope = decide_var_idx < var_indexer.var_scope.size()
-		                 ? var_indexer.var_scope[decide_var_idx]
-		                 : DecideVarScope::ROW;
+		auto scope =
+		    decide_var_idx < var_indexer.var_scope.size() ? var_indexer.var_scope[decide_var_idx] : DecideVarScope::ROW;
 		if (scope == DecideVarScope::GLOBAL) {
 			// One column for the whole query: there is no subset of rows or
 			// classes to characterize, so offer no grouping candidates.
@@ -641,51 +636,51 @@ BuildUnboundedCandidateProvider(ClientContext &context, ColumnDataCollection &da
 //! than reporting a zero that reads as a measurement.
 static double PeakProcessMemoryBytes() {
 #ifdef _WIN32
-    // Windows has no getrusage. The equivalent (GetProcessMemoryInfo) would add a
-    // psapi link entry to both CMake and setup.py, so the report simply omits its
-    // memory line here instead.
-    return 0.0;
+	// Windows has no getrusage. The equivalent (GetProcessMemoryInfo) would add a
+	// psapi link entry to both CMake and setup.py, so the report simply omits its
+	// memory line here instead.
+	return 0.0;
 #else
-    struct rusage usage;
-    if (getrusage(RUSAGE_SELF, &usage) != 0) {
-        return 0.0;
-    }
+	struct rusage usage;
+	if (getrusage(RUSAGE_SELF, &usage) != 0) {
+		return 0.0;
+	}
 #ifdef __APPLE__
-    return (double)usage.ru_maxrss;
+	return (double)usage.ru_maxrss;
 #else
-    return (double)usage.ru_maxrss * 1024.0;
+	return (double)usage.ru_maxrss * 1024.0;
 #endif
 #endif
 }
 
 //! Compact byte count, e.g. "1.2 GB" / "340 MB".
 static string FormatMemory(double bytes) {
-    const char *unit = "B";
-    double value = bytes;
-    if (value >= 1024.0 * 1024.0 * 1024.0) {
-        value /= 1024.0 * 1024.0 * 1024.0;
-        unit = "GB";
-    } else if (value >= 1024.0 * 1024.0) {
-        value /= 1024.0 * 1024.0;
-        unit = "MB";
-    } else if (value >= 1024.0) {
-        value /= 1024.0;
-        unit = "KB";
-    }
-    return StringUtil::Format(value >= 100.0 ? "%.0f %s" : "%.1f %s", value, unit);
+	const char *unit = "B";
+	double value = bytes;
+	if (value >= 1024.0 * 1024.0 * 1024.0) {
+		value /= 1024.0 * 1024.0 * 1024.0;
+		unit = "GB";
+	} else if (value >= 1024.0 * 1024.0) {
+		value /= 1024.0 * 1024.0;
+		unit = "MB";
+	} else if (value >= 1024.0) {
+		value /= 1024.0;
+		unit = "KB";
+	}
+	return StringUtil::Format(value >= 100.0 ? "%.0f %s" : "%.1f %s", value, unit);
 }
 
 //! Seconds, integer when whole (300s), one decimal for sub-limit probe values (1.5s).
 //! Sub-second values keep their significant digits (0.05s) — one decimal would round a
 //! small time limit up to a misleading 0.1s (or down to 0.0s).
 static string FormatDuration(double seconds) {
-    if (seconds != 0.0 && std::fabs(seconds) < 1.0) {
-        return StringUtil::Format("%.2gs", seconds);
-    }
-    if (std::fabs(seconds - std::round(seconds)) < 0.05) {
-        return StringUtil::Format("%.0fs", std::round(seconds));
-    }
-    return StringUtil::Format("%.1fs", seconds);
+	if (seconds != 0.0 && std::fabs(seconds) < 1.0) {
+		return StringUtil::Format("%.2gs", seconds);
+	}
+	if (std::fabs(seconds - std::round(seconds)) < 0.05) {
+		return StringUtil::Format("%.0fs", std::round(seconds));
+	}
+	return StringUtil::Format("%.1fs", seconds);
 }
 
 string FormatDecideGapPercent(double gap) {
@@ -701,41 +696,39 @@ string FormatDecideGapPercent(double gap) {
 
 //! Print the path-1 (solution found) / path-2 (no solution) status block to stderr.
 //! Info only — the "keep improving it?" prompt lands with the S3 continuation loop.
-static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_seconds,
-                                     double time_limit) {
-    string limit_str = FormatDuration(time_limit);
-    // 0 means "not measurable here" (Windows, or a getrusage failure), not "no memory
-    // used" — say nothing rather than print "peak memory 0 B".
-    double peak_bytes = PeakProcessMemoryBytes();
-    string tail = peak_bytes > 0.0
-                      ? StringUtil::Format("  elapsed %s · peak memory %s\n",
-                                           FormatDuration(elapsed_seconds).c_str(),
-                                           FormatMemory(peak_bytes).c_str())
-                      : StringUtil::Format("  elapsed %s\n", FormatDuration(elapsed_seconds).c_str());
-    // A user Ctrl-C and a wall-clock timeout share the same best-so-far readback, but
-    // must not read the same to the user: "you stopped it" vs "the clock ran out".
-    if (result.has_solution) {
-        // gap is a fraction on both backends; render as a percentage. It is NaN when
-        // no proven bound exists (LP/QP timeouts, failed reads) — claim nothing then.
+static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_seconds, double time_limit) {
+	string limit_str = FormatDuration(time_limit);
+	// 0 means "not measurable here" (Windows, or a getrusage failure), not "no memory
+	// used" — say nothing rather than print "peak memory 0 B".
+	double peak_bytes = PeakProcessMemoryBytes();
+	string tail = peak_bytes > 0.0
+	                  ? StringUtil::Format("  elapsed %s · peak memory %s\n", FormatDuration(elapsed_seconds).c_str(),
+	                                       FormatMemory(peak_bytes).c_str())
+	                  : StringUtil::Format("  elapsed %s\n", FormatDuration(elapsed_seconds).c_str());
+	// A user Ctrl-C and a wall-clock timeout share the same best-so-far readback, but
+	// must not read the same to the user: "you stopped it" vs "the clock ran out".
+	if (result.has_solution) {
+		// gap is a fraction on both backends; render as a percentage. It is NaN when
+		// no proven bound exists (LP/QP timeouts, failed reads) — claim nothing then.
 		string closeness = std::isfinite(result.gap)
 		                       ? StringUtil::Format("  best objective so far: %g  (within %s%% of the best possible)\n",
 		                                            result.objective_value, FormatDecideGapPercent(result.gap))
 		                       : StringUtil::Format("  best objective so far: %g\n", result.objective_value);
-        if (result.user_interrupted) {
-            fprintf(stderr, "DECIDE stopped at your request with a usable solution (not proven best).\n%s%s",
-                    closeness.c_str(), tail.c_str());
-        } else {
-            fprintf(stderr, "DECIDE hit the %s time limit with a usable solution (not proven best).\n%s%s",
-                    limit_str.c_str(), closeness.c_str(), tail.c_str());
-        }
-    } else {
-        if (result.user_interrupted) {
-            fprintf(stderr, "DECIDE stopped at your request before finding a solution yet.\n%s", tail.c_str());
-        } else {
-            fprintf(stderr, "DECIDE hit the %s time limit without finding a solution yet.\n%s",
-                    limit_str.c_str(), tail.c_str());
-        }
-    }
+		if (result.user_interrupted) {
+			fprintf(stderr, "DECIDE stopped at your request with a usable solution (not proven best).\n%s%s",
+			        closeness.c_str(), tail.c_str());
+		} else {
+			fprintf(stderr, "DECIDE hit the %s time limit with a usable solution (not proven best).\n%s%s",
+			        limit_str.c_str(), closeness.c_str(), tail.c_str());
+		}
+	} else {
+		if (result.user_interrupted) {
+			fprintf(stderr, "DECIDE stopped at your request before finding a solution yet.\n%s", tail.c_str());
+		} else {
+			fprintf(stderr, "DECIDE hit the %s time limit without finding a solution yet.\n%s", limit_str.c_str(),
+			        tail.c_str());
+		}
+	}
 }
 
 //===--------------------------------------------------------------------===//
@@ -748,68 +741,66 @@ static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_
 
 SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
-    DecideProfileScope profile("execution.finalize");
-    bool bench = std::getenv("DECIDB_BENCH") != nullptr;
-    Profiler model_timer;
-    Profiler solver_timer;
+	DecideProfileScope profile("execution.finalize");
+	bool bench = std::getenv("DECIDB_BENCH") != nullptr;
+	Profiler model_timer;
+	Profiler solver_timer;
 
-    auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
-    idx_t num_rows = gstate.data.Count();
-    run_time_accounts.clear();
+	auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
+	idx_t num_rows = gstate.data.Count();
+	run_time_accounts.clear();
 
-    if (bench) {
-        model_timer.Start();
-    }
+	if (bench) {
+		model_timer.Start();
+	}
 
-    // Empty input → return empty result (mirrors standard SQL behavior)
-    if (num_rows == 0) {
-        return SinkFinalizeType::READY;
-    }
+	// Empty input → return empty result (mirrors standard SQL behavior)
+	if (num_rows == 0) {
+		return SinkFinalizeType::READY;
+	}
 	// The threads' descents, merged in the order their rows were placed.
 	{
 		DecideProfileScope merge_scope("execution.descent_merge");
 		gstate.descent = DecideDescent::MergeAll(std::move(gstate.descent_parts), context);
 	}
 
-    idx_t num_decide_vars = decide_variables.size();
-    if (num_decide_vars == 0) {
-        throw InternalException(
-            "DECIDE operator has no decision variables "
-            "(should have been caught during binding)");
-    }
+	idx_t num_decide_vars = decide_variables.size();
+	if (num_decide_vars == 0) {
+		throw InternalException("DECIDE operator has no decision variables "
+		                        "(should have been caught during binding)");
+	}
 
-    // Evaluate coefficients and build the model (solver provides verbose output)
+	// Evaluate coefficients and build the model (solver provides verbose output)
 
-    // The values each key's groups are named by in messages (D69), one table per naming site.
-    vector<SolverInput::KeyValues> key_values;
+	// The values each key's groups are named by in messages (D69), one table per naming site.
+	vector<SolverInput::KeyValues> key_values;
 
 	vector<KeyedMapping> keyed_mappings;
 	EvaluatedClauses evaluated;
 	EvaluateTree(context, gstate, num_rows, gstate.descent, key_values, keyed_mappings, evaluated, false);
 
-    //===--------------------------------------------------------------------===//
-    // PHASE 3: Build and Solve ILP
-    //===--------------------------------------------------------------------===//
+	//===--------------------------------------------------------------------===//
+	// PHASE 3: Build and Solve ILP
+	//===--------------------------------------------------------------------===//
 
-    // 3a. Assemble the model input and settle the column box. Nothing below this line
-    // touches the data again.
+	// 3a. Assemble the model input and settle the column box. Nothing below this line
+	// touches the data again.
 	DecideProfileScope phase("execution.assemble_input");
-    VarIndexer var_indexer;
-    SolverInput solver_input =
-        BuildSolverInput(gstate, num_rows, std::move(keyed_mappings), std::move(key_values),
-                         evaluated, var_indexer);
+	VarIndexer var_indexer;
+	SolverInput solver_input =
+	    BuildSolverInput(gstate, num_rows, std::move(keyed_mappings), std::move(key_values), evaluated, var_indexer);
 
-    // Under DIAGNOSE, keep the model input and column space as assembly left them —
-    // before a single constant was derived. An infeasibility repair searches a WIDER box
-    // than the solved model declares, and a Big-M or a McCormick envelope is sound only
-    // for the box it came from, so the INFEASIBLE terminal formulates a second model from
-    // this instead of re-deriving nothing and inheriting the narrow one's constants. It
-    // also emits the scoped bounds the column box enforces, which the solved model has no
-    // row for. The copy is paid for only when the user asked for a diagnosis.
-    unique_ptr<ElasticFormulation> elastic;
-    if (diagnose) {
-        elastic = make_uniq<ElasticFormulation>();
-        elastic->input = solver_input;
+	// Under DIAGNOSE, keep the model input and column space as assembly left them —
+	// before a single constant was derived. An infeasibility repair searches a WIDER box
+	// than the solved model declares, and a Big-M or a McCormick envelope is sound only
+	// for the box it came from, so the INFEASIBLE terminal formulates a second model from
+	// this instead of re-deriving nothing and inheriting the narrow one's constants. It
+	// also emits the scoped bounds the column box enforces, which the solved model has no
+	// row for. The copy is paid for only when the user asked for a diagnosis.
+	unique_ptr<ElasticFormulation> elastic;
+	if (diagnose) {
+		elastic = make_uniq<ElasticFormulation>();
+		elastic->input = solver_input;
 		for (auto &folded : gstate.evaluated_singleton_row_constraints) {
 			elastic->input.constraints.push_back(std::move(folded));
 		}
@@ -817,15 +808,15 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 	}
 
 	// 3b. Formulate: derive the constants and emit the rows, against the box the model
-    // declares. A pure function of what came before, which is what lets the elastic
-    // (infeasibility-repair) path run it a second time against a widened box.
-    phase.Next("execution.formulate");
-    FormulateModel(solver_input, FormulationBox::OfSolvedModel(solver_input), var_indexer, evaluated);
-    ReportAnEmptyObjective(solver_input);
+	// declares. A pure function of what came before, which is what lets the elastic
+	// (infeasibility-repair) path run it a second time against a widened box.
+	phase.Next("execution.formulate");
+	FormulateModel(solver_input, FormulationBox::OfSolvedModel(solver_input), var_indexer, evaluated);
+	ReportAnEmptyObjective(solver_input);
 
-    phase.Next("execution.solve_and_route");
-    return FinalizeSolveResult(context, gstate, solver_input, var_indexer, evaluated, elastic.get(),
-                               bench, model_timer, solver_timer);
+	phase.Next("execution.solve_and_route");
+	return FinalizeSolveResult(context, gstate, solver_input, var_indexer, evaluated, elastic.get(), bench, model_timer,
+	                           solver_timer);
 }
 
 void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
@@ -868,8 +859,8 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	columns.ReadFrames(frames, num_rows, gstate.frame_maps);
 	// What the data checks and the data reducers no clause reads raise, at their ranks, before any clause is read.
 	columns.CheckData();
-	DecideModelEmitter emitter(*this, context, *tree, *descent, columns, gstate, key_values, names, num_rows,
-	                           errors, first);
+	DecideModelEmitter emitter(*this, context, *tree, *descent, columns, gstate, key_values, names, num_rows, errors,
+	                           first);
 	emitter.KeyedMappings(keyed_mappings);
 	emitter.Constraints();
 	// A relation-qualified reducer reads each class's first entry, its first row, so the objective's columns are
@@ -1036,9 +1027,8 @@ void PhysicalDecide::ReportInlinedHelpers(const SolverInput &input) const {
 			linked_nodes.push_back(node);
 		}
 	}
-	std::sort(linked_nodes.begin(), linked_nodes.end(), [&](idx_t left, idx_t right) {
-		return tree->nodes[left]->link < tree->nodes[right]->link;
-	});
+	std::sort(linked_nodes.begin(), linked_nodes.end(),
+	          [&](idx_t left, idx_t right) { return tree->nodes[left]->link < tree->nodes[right]->link; });
 	for (auto node_index : linked_nodes) {
 		const auto &node = *tree->nodes[node_index];
 		if (!node.decision_value || node.value_var >= input.variable_scopes.size() || node.value_link_label.empty()) {
@@ -1078,7 +1068,6 @@ void PhysicalDecide::RecordRunTimeAccount(idx_t source_clause_id, string subject
 	run_time_accounts.push_back(std::move(account));
 }
 
-
 void PhysicalDecide::ScaleObjectiveAvg(DecideGlobalSinkState &gstate, idx_t num_rows, EvaluatedClauses &evaluated) {
 	for (idx_t term_idx = 0; term_idx < evaluated.linear_filters.size(); term_idx++) {
 		if (!evaluated.linear_filters[term_idx].avg_scale) {
@@ -1113,9 +1102,8 @@ void PhysicalDecide::ScaleObjectiveAvg(DecideGlobalSinkState &gstate, idx_t num_
 // Finalize: PHASE 2, sub-phase 3 -- Evaluate composed MIN/MAX clauses
 //===--------------------------------------------------------------------===//
 
-void PhysicalDecide::FinishComposedClause(DecideGlobalSinkState &gstate, idx_t num_rows,
-                                          const DecideNode &node, bool null_factor,
-                                          const std::function<vector<bool>()> &kept_rows,
+void PhysicalDecide::FinishComposedClause(DecideGlobalSinkState &gstate, idx_t num_rows, const DecideNode &node,
+                                          bool null_factor, const std::function<vector<bool>()> &kept_rows,
                                           const std::function<idx_t(const vector<bool> &)> &class_set,
                                           EvaluatedClauses::ComposedConstraint clause,
                                           EvaluatedClauses &evaluated) const {
@@ -1165,19 +1153,18 @@ static void SyncFrameReadBoxes(SolverInput &input) {
 
 SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_t num_rows,
                                              vector<KeyedMapping> keyed_mappings,
-                                             vector<SolverInput::KeyValues> key_values,
-                                             EvaluatedClauses &evaluated,
+                                             vector<SolverInput::KeyValues> key_values, EvaluatedClauses &evaluated,
                                              VarIndexer &out_var_indexer) const {
-    DecideProfileScope phase("assembly.var_indexer");
-    idx_t num_decide_vars = decide_variables.size();
+	DecideProfileScope phase("assembly.var_indexer");
+	idx_t num_decide_vars = decide_variables.size();
 
-    // Construct SolverInput
-    SolverInput solver_input;
-    solver_input.num_rows = num_rows;
-    solver_input.num_decide_vars = num_decide_vars;
-    solver_input.keyed_mappings = std::move(keyed_mappings);
+	// Construct SolverInput
+	SolverInput solver_input;
+	solver_input.num_rows = num_rows;
+	solver_input.num_decide_vars = num_decide_vars;
+	solver_input.keyed_mappings = std::move(keyed_mappings);
 	solver_input.absent_reads = gstate.absent_reads;
-    solver_input.variable_scopes = variable_scopes;
+	solver_input.variable_scopes = variable_scopes;
 	// The decisions frames read at another row (SolverInput::frame_reads), after the plan's
 	// own: each its base read, at each row, at the row its frame selects -- or the row
 	// itself where it selects none, where every term reading it has no value or 0.
@@ -1201,53 +1188,53 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	}
 
 	// The flat column space, built ONCE and handed to every consumer below. It reads only the scopes and the class
-    // mappings, which are final here, and the floors a `when` lowers (ResolveLiftedFloors) need its row to instance
-    // map before the first box pass.
-    //
-    // It is reused for: (1) the row to instance map of the floors, (2) the flat indices every construct site emits
-    // against, a general or indicator constraint naming flat columns, so a site that may state one natively needs the
-    // index before it can emit, (3) the SolverModel::Build() call inside SolveModel(), and (4) gstate.var_indexer for
-    // solution readback after the solve. Nothing below adds a decide variable, so the row / keyed / global blocks are
-    // final from this point; only `solver_input.num_global_vars` keeps growing as auxiliary globals are appended,
-    // and `total_vars` is refreshed just before the solve. The owning form survives past `solver_input` once that is
-    // moved onto gstate.
-    out_var_indexer = VarIndexer::Build(solver_input);
-    phase.Next("assembly.copy_and_bounds");
+	// mappings, which are final here, and the floors a `when` lowers (ResolveLiftedFloors) need its row to instance
+	// map before the first box pass.
+	//
+	// It is reused for: (1) the row to instance map of the floors, (2) the flat indices every construct site emits
+	// against, a general or indicator constraint naming flat columns, so a site that may state one natively needs the
+	// index before it can emit, (3) the SolverModel::Build() call inside SolveModel(), and (4) gstate.var_indexer for
+	// solution readback after the solve. Nothing below adds a decide variable, so the row / keyed / global blocks are
+	// final from this point; only `solver_input.num_global_vars` keeps growing as auxiliary globals are appended,
+	// and `total_vars` is refreshed just before the solve. The owning form survives past `solver_input` once that is
+	// moved onto gstate.
+	out_var_indexer = VarIndexer::Build(solver_input);
+	phase.Next("assembly.copy_and_bounds");
 
-    // Variable types and bounds
-    solver_input.variable_types.resize(num_decide_vars);
-    for (idx_t var = 0; var < num_decide_vars; var++) {
-        auto &decide_var = decide_variables[var]->Cast<BoundColumnRefExpression>();
-        // A BOOLEAN-domain variable (declared `x(BOOL)`, or a boolean-valued
-        // auxiliary such as an IN-domain/L0 indicator) is bound with an INTEGER
-        // DuckDB type so it can appear in arithmetic (`M * z`, `x - v1*z1 - ...`),
-        // but its solver-facing domain is BOOLEAN: `is_boolean_var` is the
-        // authoritative signal, not `return_type`. Reporting it as BOOLEAN here
-        // makes SolverModel::Build (ilp_model_builder.cpp) apply the `[0,1]` box
-        // and mark the column binary directly from the type — the same path
-        // optimizer-created BOOLEAN auxiliaries (MIN/MAX, NE indicators) already
-        // use — with no constraint-tree representation of the domain at all.
-        bool bool_domain = var < is_boolean_var.size() && is_boolean_var[var];
-        solver_input.variable_types[var] = bool_domain ? LogicalType::BOOLEAN : decide_var.return_type;
-    }
+	// Variable types and bounds
+	solver_input.variable_types.resize(num_decide_vars);
+	for (idx_t var = 0; var < num_decide_vars; var++) {
+		auto &decide_var = decide_variables[var]->Cast<BoundColumnRefExpression>();
+		// A BOOLEAN-domain variable (declared `x(BOOL)`, or a boolean-valued
+		// auxiliary such as an IN-domain/L0 indicator) is bound with an INTEGER
+		// DuckDB type so it can appear in arithmetic (`M * z`, `x - v1*z1 - ...`),
+		// but its solver-facing domain is BOOLEAN: `is_boolean_var` is the
+		// authoritative signal, not `return_type`. Reporting it as BOOLEAN here
+		// makes SolverModel::Build (ilp_model_builder.cpp) apply the `[0,1]` box
+		// and mark the column binary directly from the type — the same path
+		// optimizer-created BOOLEAN auxiliaries (MIN/MAX, NE indicators) already
+		// use — with no constraint-tree representation of the domain at all.
+		bool bool_domain = var < is_boolean_var.size() && is_boolean_var[var];
+		solver_input.variable_types[var] = bool_domain ? LogicalType::BOOLEAN : decide_var.return_type;
+	}
 	solver_input.variable_types.resize(solver_input.num_decide_vars);
 
 	// Bounds were folded in the gstate constructor from simple
-    // `x OP const` / BETWEEN constraints; those comparisons were skipped in
-    // AnalyzeConstraint so we don't re-emit them as per-row model rows.
-    solver_input.constraint_sources = constraint_sources;
-    solver_input.objective_written = DecideWrittenObjective(decide_sense, written_objective);
-    // A variable the query never explicitly lowered gets the default lower bound 0 and
-    // stays non-negative. A variable with an explicit (possibly negative) lower bound
-    // keeps it, and a written bound of -1e30 or below is no bound, as -1e29 is. Must
-    // run before any consumer of lower_bounds (implied-bound propagation, Big-M,
-    // McCormick, model builder).
-    solver_input.lower_bounds.resize(gstate.singleton_row_boxes.size());
-    solver_input.upper_bounds.resize(gstate.singleton_row_boxes.size());
-    for (idx_t var = 0; var < gstate.singleton_row_boxes.size(); var++) {
-        solver_input.lower_bounds[var] = gstate.singleton_row_boxes[var].EffectiveLower();
-        solver_input.upper_bounds[var] = gstate.singleton_row_boxes[var].upper;
-    }
+	// `x OP const` / BETWEEN constraints; those comparisons were skipped in
+	// AnalyzeConstraint so we don't re-emit them as per-row model rows.
+	solver_input.constraint_sources = constraint_sources;
+	solver_input.objective_written = DecideWrittenObjective(decide_sense, written_objective);
+	// A variable the query never explicitly lowered gets the default lower bound 0 and
+	// stays non-negative. A variable with an explicit (possibly negative) lower bound
+	// keeps it, and a written bound of -1e30 or below is no bound, as -1e29 is. Must
+	// run before any consumer of lower_bounds (implied-bound propagation, Big-M,
+	// McCormick, model builder).
+	solver_input.lower_bounds.resize(gstate.singleton_row_boxes.size());
+	solver_input.upper_bounds.resize(gstate.singleton_row_boxes.size());
+	for (idx_t var = 0; var < gstate.singleton_row_boxes.size(); var++) {
+		solver_input.lower_bounds[var] = gstate.singleton_row_boxes[var].EffectiveLower();
+		solver_input.upper_bounds[var] = gstate.singleton_row_boxes[var].upper;
+	}
 	if (!solver_input.frame_reads.empty()) {
 		solver_input.lower_bounds.resize(solver_input.num_decide_vars);
 		solver_input.upper_bounds.resize(solver_input.num_decide_vars);
@@ -1261,52 +1248,51 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	solver_input.minmax_clause_labels = minmax_clause_labels;
 	solver_input.ne_clause_sources = ne_clause_sources;
 	for (auto &link : gstate.evaluated_bilinear_links) {
-        solver_input.bilinear_links.push_back(BilinearLinkSpec {
-            link.aux_idx, link.bool_var_idx, link.other_var_idx,
-            link.source_clause_id, link.removal_group_id});
-    }
-    for (auto function : tree->function_nodes) {
-        const auto &node = *tree->nodes[function];
-        if (node.function_kind != DecideFunctionKind::ABS || !node.abs_needs_bigm) {
-            continue;
-        }
-        solver_input.abs_maximize_links.push_back(AbsMaximizeLinkSpec {node.value_var, node.abs_indicator_var});
-    }
-    solver_input.reducer_value_links = std::move(gstate.evaluated_value_links);
+		solver_input.bilinear_links.push_back(BilinearLinkSpec {link.aux_idx, link.bool_var_idx, link.other_var_idx,
+		                                                        link.source_clause_id, link.removal_group_id});
+	}
+	for (auto function : tree->function_nodes) {
+		const auto &node = *tree->nodes[function];
+		if (node.function_kind != DecideFunctionKind::ABS || !node.abs_needs_bigm) {
+			continue;
+		}
+		solver_input.abs_maximize_links.push_back(AbsMaximizeLinkSpec {node.value_var, node.abs_indicator_var});
+	}
+	solver_input.reducer_value_links = std::move(gstate.evaluated_value_links);
 
-    // The rigid box, captured before any propagation runs and with every user-folded
-    // direction re-opened. What is left is the intrinsic domain alone — the only part of
-    // the column box that survives infeasibility diagnosis unchanged, and therefore the
-    // only part a structural rewrite may rely on. The re-opening mirrors the folded
-    // bounds' clauses in the repair model (`singleton_row_constraints`), which relax the same
-    // directions for the same reason.
-    solver_input.rigid_lower_bounds = solver_input.lower_bounds;
-    solver_input.rigid_upper_bounds = solver_input.upper_bounds;
-    for (const auto &b : gstate.user_singleton_row_bounds) {
-        idx_t v = b.decide_var_idx;
-        if (v >= solver_input.rigid_lower_bounds.size()) {
-            continue;
-        }
-        bool bound_is_bool = v < is_boolean_var.size() && is_boolean_var[v];
-        if (b.sense == '<' || b.sense == '=') {
-            solver_input.rigid_upper_bounds[v] = bound_is_bool ? 1.0 : NumericLimits<double>::Maximum();
-        }
-        if (b.sense == '>' || b.sense == '=') {
-            solver_input.rigid_lower_bounds[v] = bound_is_bool ? 0.0 : -NumericLimits<double>::Maximum();
-        }
-    }
+	// The rigid box, captured before any propagation runs and with every user-folded
+	// direction re-opened. What is left is the intrinsic domain alone — the only part of
+	// the column box that survives infeasibility diagnosis unchanged, and therefore the
+	// only part a structural rewrite may rely on. The re-opening mirrors the folded
+	// bounds' clauses in the repair model (`singleton_row_constraints`), which relax the same
+	// directions for the same reason.
+	solver_input.rigid_lower_bounds = solver_input.lower_bounds;
+	solver_input.rigid_upper_bounds = solver_input.upper_bounds;
+	for (const auto &b : gstate.user_singleton_row_bounds) {
+		idx_t v = b.decide_var_idx;
+		if (v >= solver_input.rigid_lower_bounds.size()) {
+			continue;
+		}
+		bool bound_is_bool = v < is_boolean_var.size() && is_boolean_var[v];
+		if (b.sense == '<' || b.sense == '=') {
+			solver_input.rigid_upper_bounds[v] = bound_is_bool ? 1.0 : NumericLimits<double>::Maximum();
+		}
+		if (b.sense == '>' || b.sense == '=') {
+			solver_input.rigid_lower_bounds[v] = bound_is_bool ? 0.0 : -NumericLimits<double>::Maximum();
+		}
+	}
 
-    // A constant lower bound under a `when` replaces the default floor of 0 on the instances its rows reach. After the
-    // rigid box is captured, which it re-opens for the decisions it lowers, and before any pass reads the box.
-    phase.Next("assembly.lifted_floors");
-    ResolveLiftedFloors(solver_input, out_var_indexer, gstate.singleton_row_boxes);
+	// A constant lower bound under a `when` replaces the default floor of 0 on the instances its rows reach. After the
+	// rigid box is captured, which it re-opens for the decisions it lowers, and before any pass reads the box.
+	phase.Next("assembly.lifted_floors");
+	ResolveLiftedFloors(solver_input, out_var_indexer, gstate.singleton_row_boxes);
 	SyncFrameReadBoxes(solver_input);
 	phase.Next("assembly.implied_bounds");
 
-    // Data-driven implied-bound propagation: derive finite upper bounds for
-    // otherwise-unbounded variables from non-negative `<=`/`=` constraints (the
-    // knapsack/budget pattern), so the downstream Big-M can be finite and tight.
-    // Only provably-implied bounds are applied; the feasible region is unchanged.
+	// Data-driven implied-bound propagation: derive finite upper bounds for
+	// otherwise-unbounded variables from non-negative `<=`/`=` constraints (the
+	// knapsack/budget pattern), so the downstream Big-M can be finite and tight.
+	// Only provably-implied bounds are applied; the feasible region is unchanged.
 	// Seed reducer-value bounds first: a SUM/MAX helper over nonnegative decisions is itself nonnegative, which lets
 	// this pass safely propagate a root equality's finite upper bound back through nested helpers. A product has no
 	// default floor (AddBooleanProduct), so it is floored at its factor's first, once the lifted floors have lowered
@@ -1315,42 +1301,42 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	if (!solver_input.reducer_value_links.empty()) {
 		DeriveReducerValueBounds(solver_input, out_var_indexer);
 	}
-    DecidePropagateImpliedBounds(solver_input, out_var_indexer, num_rows);
+	DecidePropagateImpliedBounds(solver_input, out_var_indexer, num_rows);
 	SyncFrameReadBoxes(solver_input);
 	phase.Next("assembly.objective_and_avg");
-    // Objective (linear part)
-    solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
-    solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
+	// Objective (linear part)
+	solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
+	solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
 	solver_input.objective_value_nodes = std::move(gstate.objective_value_nodes);
 #ifdef DEBUG
-    if (auto objective = tree->Objective()) {
-        VerifyCountedOnce(objective->terms, solver_input.objective_coefficients, vector<idx_t>());
-    }
+	if (auto objective = tree->Objective()) {
+		VerifyCountedOnce(objective->terms, solver_input.objective_coefficients, vector<idx_t>());
+	}
 #endif
-    solver_input.sense = TreeObjectiveSense(*tree);
-    solver_input.objective_constant = objective_constant_offset;
+	solver_input.sense = TreeObjectiveSense(*tree);
+	solver_input.objective_constant = objective_constant_offset;
 
-    // Quadratic objective (if present)
-    if (gstate.has_quadratic_objective) {
-        solver_input.has_quadratic_objective = true;
-        solver_input.quadratic_sign = gstate.quadratic_sign;
-        solver_input.quadratic_inner_coefficients = std::move(gstate.evaluated_quadratic_coefficients);
-        solver_input.quadratic_inner_variable_indices.resize(gstate.quadratic_variable_indices.size());
-        for (idx_t i = 0; i < gstate.quadratic_variable_indices.size(); i++) {
-            solver_input.quadratic_inner_variable_indices[i] = gstate.quadratic_variable_indices[i];
-        }
-    }
+	// Quadratic objective (if present)
+	if (gstate.has_quadratic_objective) {
+		solver_input.has_quadratic_objective = true;
+		solver_input.quadratic_sign = gstate.quadratic_sign;
+		solver_input.quadratic_inner_coefficients = std::move(gstate.evaluated_quadratic_coefficients);
+		solver_input.quadratic_inner_variable_indices.resize(gstate.quadratic_variable_indices.size());
+		for (idx_t i = 0; i < gstate.quadratic_variable_indices.size(); i++) {
+			solver_input.quadratic_inner_variable_indices[i] = gstate.quadratic_variable_indices[i];
+		}
+	}
 
-    // Bilinear objective terms (non-Boolean pairs, for Q matrix off-diagonal entries)
-    if (!gstate.evaluated_bilinear_terms.empty()) {
-        for (auto &ebt : gstate.evaluated_bilinear_terms) {
-            SolverInput::BilinearObjectiveTerm bot;
-            bot.var_a = ebt.var_a;
-            bot.var_b = ebt.var_b;
-            bot.row_coefficients = std::move(ebt.row_coefficients);
-            solver_input.bilinear_objective_terms.push_back(std::move(bot));
-        }
-    }
+	// Bilinear objective terms (non-Boolean pairs, for Q matrix off-diagonal entries)
+	if (!gstate.evaluated_bilinear_terms.empty()) {
+		for (auto &ebt : gstate.evaluated_bilinear_terms) {
+			SolverInput::BilinearObjectiveTerm bot;
+			bot.var_a = ebt.var_a;
+			bot.var_b = ebt.var_b;
+			bot.row_coefficients = std::move(ebt.row_coefficients);
+			solver_input.bilinear_objective_terms.push_back(std::move(bot));
+		}
+	}
 
 	// The helpers written where they are read own no column (stage 06, D89): decided here, on the assembled rows and
 	// objective. The floors and implied bounds above read the helpers' columns and keep only what holds of a decision
@@ -1394,104 +1380,102 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 // Finalize: PHASE 3b, formulation -- FormulateModel
 //===--------------------------------------------------------------------===//
 
-void PhysicalDecide::FormulateModel(SolverInput &solver_input, const FormulationBox &box,
-                                    VarIndexer &var_indexer,
+void PhysicalDecide::FormulateModel(SolverInput &solver_input, const FormulationBox &box, VarIndexer &var_indexer,
                                     const EvaluatedClauses &evaluated) const {
-    DecideProfileScope phase("formulation.l0_constants");
-    idx_t num_rows = solver_input.num_rows;
+	DecideProfileScope phase("formulation.l0_constants");
+	idx_t num_rows = solver_input.num_rows;
 
-    // The flat column space is settled by assembly and is never rebuilt here: the row,
-    // keyed and global blocks are final, and only the global block grows as auxiliaries
-    // are appended below. That is what lets a second formulation, against a different
-    // box, name exactly the same columns as the first — which the elastic path relies on
-    // to read its solution back through the same labels.
+	// The flat column space is settled by assembly and is never rebuilt here: the row,
+	// keyed and global blocks are final, and only the global block grows as auxiliaries
+	// are appended below. That is what lets a second formulation, against a different
+	// box, name exactly the same columns as the first — which the elastic path relies on
+	// to read its solution back through the same labels.
 #ifdef DEBUG
-    const idx_t formulation_entry_columns = var_indexer.global_block_start;
+	const idx_t formulation_entry_columns = var_indexer.global_block_start;
 #endif
 
-    // Plain declared names, for the refusals the linearization can raise. `alias`
-    // lives on BaseExpression, so no cast is needed to read it.
-    vector<string> decide_var_names;
+	// Plain declared names, for the refusals the linearization can raise. `alias`
+	// lives on BaseExpression, so no cast is needed to read it.
+	vector<string> decide_var_names;
 	decide_var_names.reserve(solver_input.num_decide_vars);
 	for (auto &v : decide_variables) {
-        decide_var_names.push_back(v->alias);
-    }
+		decide_var_names.push_back(v->alias);
+	}
 	// A frame read is named as its base is: the bound a refusal asks for is the base's.
 	for (auto &read : solver_input.frame_reads) {
 		decide_var_names.push_back(decide_var_names[read.base]);
 	}
 
 	// Auto-M for L0 `norm(e, 0)`: the binder emitted the raw links `e <= M*z` and
-    // `-e <= M*z` with a placeholder coefficient on each `__l0auto_ind_*` indicator.
-    // Now that implied bounds are known, fill a tight, data-driven Big-M (mirrors
-    // the <> path): zero the indicator's own coefficient, compute M from the
-    // remaining (inner-expression) terms + RHS, then set the indicator coefficient
-    // to -M. The links carry a negative indicator coefficient, so the implied-bound
-    // propagation assembly ran already skipped them (no contamination from the
-    // placeholder). This is a constant derived from `box`, which is why it is here and
-    // not with the propagation: it has to be re-derived whenever the box changes.
-    {
-        unordered_set<idx_t> l0_auto;
-        for (idx_t i = 0; i < decide_variables.size(); i++) {
-            if (StringUtil::StartsWith(decide_variables[i]->GetName(), "__l0auto_ind_")) {
-                l0_auto.insert(i);
-            }
-        }
-        if (!l0_auto.empty()) {
-            for (auto &ec : solver_input.constraints) {
-                // Locate the auto-L0 indicator term, and confirm this is a LINK
-                // (it also carries the inner expression's variable) rather than the
-                // indicator's own 0<=z<=1 bound row — which we must not rewrite.
-                idx_t z_term = DConstants::INVALID_INDEX;
-                bool has_inner_var = false;
-                for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
-                    idx_t v = ec.variable_indices[t];
-                    if (v == DConstants::INVALID_INDEX) {
-                        continue;
-                    }
-                    if (l0_auto.count(v)) {
-                        z_term = t;
+	// `-e <= M*z` with a placeholder coefficient on each `__l0auto_ind_*` indicator.
+	// Now that implied bounds are known, fill a tight, data-driven Big-M (mirrors
+	// the <> path): zero the indicator's own coefficient, compute M from the
+	// remaining (inner-expression) terms + RHS, then set the indicator coefficient
+	// to -M. The links carry a negative indicator coefficient, so the implied-bound
+	// propagation assembly ran already skipped them (no contamination from the
+	// placeholder). This is a constant derived from `box`, which is why it is here and
+	// not with the propagation: it has to be re-derived whenever the box changes.
+	{
+		unordered_set<idx_t> l0_auto;
+		for (idx_t i = 0; i < decide_variables.size(); i++) {
+			if (StringUtil::StartsWith(decide_variables[i]->GetName(), "__l0auto_ind_")) {
+				l0_auto.insert(i);
+			}
+		}
+		if (!l0_auto.empty()) {
+			for (auto &ec : solver_input.constraints) {
+				// Locate the auto-L0 indicator term, and confirm this is a LINK
+				// (it also carries the inner expression's variable) rather than the
+				// indicator's own 0<=z<=1 bound row — which we must not rewrite.
+				idx_t z_term = DConstants::INVALID_INDEX;
+				bool has_inner_var = false;
+				for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
+					idx_t v = ec.variable_indices[t];
+					if (v == DConstants::INVALID_INDEX) {
+						continue;
+					}
+					if (l0_auto.count(v)) {
+						z_term = t;
 					} else if (!StringUtil::StartsWith(decide_variables[solver_input.BaseVariable(v)]->GetName(),
 					                                   "__abs_aux_")) {
 						// The REVERSE link `ABS(inner) >= TOL*z` also references the L0
-                        // indicator, but its only other variable is the ABS aux and its
-                        // z-coefficient is the fixed tolerance — it must NOT be refilled.
-                        // Only the FORWARD links carry the inner decision variable, so an
-                        // ABS-aux companion marks the reverse link to skip.
-                        has_inner_var = true;
+						// indicator, but its only other variable is the ABS aux and its
+						// z-coefficient is the fixed tolerance — it must NOT be refilled.
+						// Only the FORWARD links carry the inner decision variable, so an
+						// ABS-aux companion marks the reverse link to skip.
+						has_inner_var = true;
 					}
 				}
-                if (z_term == DConstants::INVALID_INDEX || !has_inner_var) {
-                    continue;
-                }
-                // Zero the indicator's own contribution, compute the tight Big-M from
-                // the remaining (inner) terms + RHS, then set the indicator coeff = +M.
-                // The link is normalized to `M*z - inner >= rhs`, so the indicator
-                // coefficient is positive.
-                ec.row_coefficients[z_term].AssignScalar(num_rows, 0.0);
-                double M = DecideTightPerRowBigM(ec, box, num_rows, decide_var_names,
-                                                 InstanceBox {solver_input, var_indexer},
-                                                 DecideWrittenClause(solver_input, ec.source_clause_id));
-                ec.row_coefficients[z_term].AssignScalar(num_rows, M);
-            }
-        }
-    }
+				if (z_term == DConstants::INVALID_INDEX || !has_inner_var) {
+					continue;
+				}
+				// Zero the indicator's own contribution, compute the tight Big-M from
+				// the remaining (inner) terms + RHS, then set the indicator coeff = +M.
+				// The link is normalized to `M*z - inner >= rhs`, so the indicator
+				// coefficient is positive.
+				ec.row_coefficients[z_term].AssignScalar(num_rows, 0.0);
+				double M =
+				    DecideTightPerRowBigM(ec, box, num_rows, decide_var_names, InstanceBox {solver_input, var_indexer},
+				                          DecideWrittenClause(solver_input, ec.source_clause_id));
+				ec.row_coefficients[z_term].AssignScalar(num_rows, M);
+			}
+		}
+	}
 
-    // THE ROUTING, as stage 05 decided it. Whether ABS is stated natively or lowered is
-    // a FORMULATION choice, and formulation belongs to stage 05 — so this reads the
-    // decision off the plan rather than asking a backend. Native means no Big-M and
-    // therefore no bound requirement, so the answer changes what is refused, not only
-    // what is fast; that is exactly why it has to be the same answer the rewrites above
-    // were selected against. Both arms below only translate.
-    const bool native_abs = use_native_constructs.abs;
-    // MIN/MAX arrives as a POLICY rather than an answer. Stage 05 decided both halves of
-    // it — whether the backend can state the construct, and whether a declared construct
-    // is used everywhere or only as a fallback — and neither is re-decided here. What is
-    // left is a question about the data: whether THIS clause has a Big-M, which only a
-    // stage that has seen the evaluated coefficients can answer. Applying a decision to
-    // data is this layer's job; choosing the decision was not.
-    const NativeConstructPolicy native_min_max {use_native_constructs.min_max,
-                                                force_native_constructs};
+	// THE ROUTING, as stage 05 decided it. Whether ABS is stated natively or lowered is
+	// a FORMULATION choice, and formulation belongs to stage 05 — so this reads the
+	// decision off the plan rather than asking a backend. Native means no Big-M and
+	// therefore no bound requirement, so the answer changes what is refused, not only
+	// what is fast; that is exactly why it has to be the same answer the rewrites above
+	// were selected against. Both arms below only translate.
+	const bool native_abs = use_native_constructs.abs;
+	// MIN/MAX arrives as a POLICY rather than an answer. Stage 05 decided both halves of
+	// it — whether the backend can state the construct, and whether a declared construct
+	// is used everywhere or only as a fallback — and neither is re-decided here. What is
+	// left is a question about the data: whether THIS clause has a Big-M, which only a
+	// stage that has seen the evaluated coefficients can answer. Applying a decision to
+	// data is this layer's job; choosing the decision was not.
+	const NativeConstructPolicy native_min_max {use_native_constructs.min_max, force_native_constructs};
 
 	// A bilinear auxiliary may itself sit inside ABS (notably the reverse link of an
 	// L0 norm). Temporarily expose its exact product box while descendant constructs
@@ -1501,21 +1485,20 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 	bilinear_declared_boxes.reserve(solver_input.bilinear_links.size());
 	for (const auto &link : solver_input.bilinear_links) {
 		bilinear_declared_boxes.push_back(
-		    {link.aux_idx, {solver_input.lower_bounds[link.aux_idx],
-		                    solver_input.upper_bounds[link.aux_idx]}});
+		    {link.aux_idx, {solver_input.lower_bounds[link.aux_idx], solver_input.upper_bounds[link.aux_idx]}});
 	}
 	// A factor that is a helper decision of the value rewrite (`b * sum(x)`) has no box until its members' boxes
 	// are derived below, so with helpers the refusal waits for them.
 	DeriveBilinearAuxiliaryBounds(solver_input, box, decide_var_names,
 	                              /*refuse_when_unbounded=*/solver_input.reducer_value_links.empty());
 
-    // ABS FIRST, and the order is load-bearing. Deriving an ABS auxiliary's range is
-    // also what boxes its column, and every linearizer below computes its Big-M from
-    // column boxes — run them first and an outer MIN/MAX or `<>` over ABS(...) sees an
-    // unbounded column and refuses a query whose bound was there to be computed. Only
-    // the LOWERING path refuses an underivable range; the native path leaves the
-    // auxiliary open and answers.
-    phase.Next("formulation.abs_bounds");
+	// ABS FIRST, and the order is load-bearing. Deriving an ABS auxiliary's range is
+	// also what boxes its column, and every linearizer below computes its Big-M from
+	// column boxes — run them first and an outer MIN/MAX or `<>` over ABS(...) sees an
+	// unbounded column and refuses a query whose bound was there to be computed. Only
+	// the LOWERING path refuses an underivable range; the native path leaves the
+	// auxiliary open and answers.
+	phase.Next("formulation.abs_bounds");
 	if (solver_input.reducer_value_links.empty()) {
 		DeriveAbsAuxiliaryBounds(solver_input, var_indexer, decide_var_names, !native_abs);
 	} else {
@@ -1577,35 +1560,35 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 	}
 
 	// Encode `<>` as the disjunction it is: two conditional rows per instance. Whether a
-    // condition is stated to the backend or encoded with a Big-M is settled once, by
-    // LowerDecideConstructs at the end of this function.
-    phase.Next("formulation.not_equal");
-    if (!ne_clause_sources.empty()) {
-        LinearizeNotEqual(solver_input, var_indexer, decide_var_names);
-    }
+	// condition is stated to the backend or encoded with a Big-M is settled once, by
+	// LowerDecideConstructs at the end of this function.
+	phase.Next("formulation.not_equal");
+	if (!ne_clause_sources.empty()) {
+		LinearizeNotEqual(solver_input, var_indexer, decide_var_names);
+	}
 
-    // Emit the McCormick envelope for every bilinear w = b * x auxiliary.
+	// Emit the McCormick envelope for every bilinear w = b * x auxiliary.
 	for (const auto &saved : bilinear_declared_boxes) {
 		solver_input.lower_bounds[saved.first] = saved.second.first;
 		solver_input.upper_bounds[saved.first] = saved.second.second;
 	}
-    phase.Next("formulation.bilinear");
-    LinearizeBilinear(solver_input, var_indexer, box);
+	phase.Next("formulation.bilinear");
+	LinearizeBilinear(solver_input, var_indexer, box);
 
-    // Handle MIN/MAX objective: create global auxiliary variable z and linking constraints.
-    // Easy (no indicators): MINIMIZE+MAX or MAXIMIZE+MIN; hard (Big-M indicators):
-    // MINIMIZE+MIN or MAXIMIZE+MAX. A nested one is a helper decision, defined with the
-    // other helpers (D81).
+	// Handle MIN/MAX objective: create global auxiliary variable z and linking constraints.
+	// Easy (no indicators): MINIMIZE+MAX or MAXIMIZE+MIN; hard (Big-M indicators):
+	// MINIMIZE+MIN or MAXIMIZE+MAX. A nested one is a helper decision, defined with the
+	// other helpers (D81).
 
-    // Global variables are appended at var_indexer.global_block_start.
-    // As we add more global vars, their indices are global_block_start + g
-    // where g is the position in the global vars array.
+	// Global variables are appended at var_indexer.global_block_start.
+	// As we add more global vars, their indices are global_block_start + g
+	// where g is the position in the global vars array.
 
-    // Encode a MIN/MAX objective (`MIN(expr)`/`MAX(expr)`) into a global auxiliary and its
-    // envelope/indicator rows. Pure stage-06 work: it reads the coefficients PHASE 2
-    // evaluated plus the flat column space, and needs no row of its own.
-    phase.Next("formulation.minmax_objective");
-    MinMaxObjectiveSpec minmax_objective_spec;
+	// Encode a MIN/MAX objective (`MIN(expr)`/`MAX(expr)`) into a global auxiliary and its
+	// envelope/indicator rows. Pure stage-06 work: it reads the coefficients PHASE 2
+	// evaluated plus the flat column space, and needs no row of its own.
+	phase.Next("formulation.minmax_objective");
+	MinMaxObjectiveSpec minmax_objective_spec;
 	const auto *objective_reducer = TreeObjectiveReducer(*tree);
 	minmax_objective_spec.flat_agg = TreeFlatObjectiveAggregate(*tree);
 	minmax_objective_spec.flat_is_easy = objective_reducer ? objective_reducer->is_easy : false;
@@ -1627,8 +1610,8 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 	// so it is handed a mutable copy — the evaluated clauses stay reusable for a second
 	// formulation against a different box.
 	phase.Next("formulation.composed_minmax");
-    for (idx_t i = 0; i < evaluated.composed_constraints.size(); i++) {
-        auto terms = evaluated.composed_constraints[i].terms;
+	for (idx_t i = 0; i < evaluated.composed_constraints.size(); i++) {
+		auto terms = evaluated.composed_constraints[i].terms;
 		auto &clause = evaluated.composed_constraints[i];
 		if (clause.skipped) {
 			continue;
@@ -1639,32 +1622,30 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 	}
 	if (!evaluated.composed_objective_terms.empty()) {
 		auto terms = evaluated.composed_objective_terms;
-        LinearizeComposedMinMaxObjective(solver_input, var_indexer, terms, decide_var_names,
-                                         native_min_max);
+		LinearizeComposedMinMaxObjective(solver_input, var_indexer, terms, decide_var_names, native_min_max);
 	}
 
 	// Refresh total_vars: the row/keyed blocks were finalized before linearization,
-    // but global aux vars were appended by the construct sites above.
-    var_indexer.total_vars = var_indexer.global_block_start + solver_input.num_global_vars;
+	// but global aux vars were appended by the construct sites above.
+	var_indexer.total_vars = var_indexer.global_block_start + solver_input.num_global_vars;
 
-    // THE LOWERING, and the last pass of stage 06. Every site above emitted the semantic
-    // form of its construct and nothing else; this is where the constructs the chosen
-    // backend cannot state become ordinary rows. It runs last because it needs every
-    // column box final — a Big-M reads them, and the sites above are what narrow them.
-    //
-    // What it reads is the answer stage 05 recorded on the plan, carried here as a value.
-    // No backend is consulted at execution time, and nothing here re-decides a
-    // formulation: a pass that answered differently from the rewrites would run a model
-    // on a solver it was not built for.
-    phase.Next("formulation.lower_constructs");
-    LowerDecideConstructs(solver_input, var_indexer, box, decide_var_names, use_native_constructs);
+	// THE LOWERING, and the last pass of stage 06. Every site above emitted the semantic
+	// form of its construct and nothing else; this is where the constructs the chosen
+	// backend cannot state become ordinary rows. It runs last because it needs every
+	// column box final — a Big-M reads them, and the sites above are what narrow them.
+	//
+	// What it reads is the answer stage 05 recorded on the plan, carried here as a value.
+	// No backend is consulted at execution time, and nothing here re-decides a
+	// formulation: a pass that answered differently from the rewrites would run a model
+	// on a solver it was not built for.
+	phase.Next("formulation.lower_constructs");
+	LowerDecideConstructs(solver_input, var_indexer, box, decide_var_names, use_native_constructs);
 
 #ifdef DEBUG
-    // No decide variable was added: only the global block grew.
-    D_ASSERT(var_indexer.global_block_start == formulation_entry_columns);
+	// No decide variable was added: only the global block grew.
+	D_ASSERT(var_indexer.global_block_start == formulation_entry_columns);
 #endif
 }
-
 
 //===--------------------------------------------------------------------===//
 // The elastic column box
@@ -1695,80 +1676,77 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 //! much larger widening than the column's current magnitude; that coupling is local and
 //! semantic rather than model-wide.
 static void OpenElasticColumnBox(SolverInput &input) {
-    //! Headroom every loosenable direction gets, as a multiple of the column's own
-    //! magnitude. It is the floor, not the whole answer: it covers a column whose repair
-    //! target is not visible in any row — the bound behind an `ABS(x) >= 5`, where the
-    //! rows are the construct's own links and carry no target of their own.
-    constexpr double ELASTIC_WIDENING = 10.0;
-    //! A coefficient at or below the solver's own small-value threshold is noise, and
-    //! dividing by it would manufacture a demand of 1e18 from a rounding artefact.
-    constexpr double NEGLIGIBLE_COEFFICIENT = 1e-9;
+	//! Headroom every loosenable direction gets, as a multiple of the column's own
+	//! magnitude. It is the floor, not the whole answer: it covers a column whose repair
+	//! target is not visible in any row — the bound behind an `ABS(x) >= 5`, where the
+	//! rows are the construct's own links and carry no target of their own.
+	constexpr double ELASTIC_WIDENING = 10.0;
+	//! A coefficient at or below the solver's own small-value threshold is noise, and
+	//! dividing by it would manufacture a demand of 1e18 from a rounding artefact.
+	constexpr double NEGLIGIBLE_COEFFICIENT = 1e-9;
 
-    // What each column would have to reach to satisfy a row on its own. `SUM(y) >= 100`
-    // says a repair may need `y` out at 100, however small `y <= 2` looks beside it — and
-    // that is the difference between reporting one edit the user can apply and reporting
-    // two because the first could not go far enough. Divided by the coefficient, so a row
-    // measured in price-weighted units states its demand in the column's units and not in
-    // its own.
-    vector<double> row_demand(input.num_decide_vars, 0.0);
-    for (const auto &ec : input.constraints) {
-        for (idx_t r = 0; r < input.num_rows; r++) {
-            if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
-                continue;
-            }
-            double rhs = ec.rhs_values.IsUniform() ? ec.rhs_values.UniformValue() : ec.rhs_values.Get(r);
-            if (!std::isfinite(rhs) || rhs == 0.0) {
-                continue;
-            }
-            for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
-                idx_t v = ec.variable_indices[t];
-                if (v == DConstants::INVALID_INDEX || v >= row_demand.size()) {
-                    continue;
-                }
-                double coef = std::abs(ec.row_coefficients[t].Get(r));
-                if (coef <= NEGLIGIBLE_COEFFICIENT) {
-                    continue;
-                }
-                double demand = std::abs(rhs) / coef;
-                if (std::isfinite(demand)) {
-                    row_demand[v] = std::max(row_demand[v], demand);
-                }
-            }
-        }
-    }
+	// What each column would have to reach to satisfy a row on its own. `SUM(y) >= 100`
+	// says a repair may need `y` out at 100, however small `y <= 2` looks beside it — and
+	// that is the difference between reporting one edit the user can apply and reporting
+	// two because the first could not go far enough. Divided by the coefficient, so a row
+	// measured in price-weighted units states its demand in the column's units and not in
+	// its own.
+	vector<double> row_demand(input.num_decide_vars, 0.0);
+	for (const auto &ec : input.constraints) {
+		for (idx_t r = 0; r < input.num_rows; r++) {
+			if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
+				continue;
+			}
+			double rhs = ec.rhs_values.IsUniform() ? ec.rhs_values.UniformValue() : ec.rhs_values.Get(r);
+			if (!std::isfinite(rhs) || rhs == 0.0) {
+				continue;
+			}
+			for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
+				idx_t v = ec.variable_indices[t];
+				if (v == DConstants::INVALID_INDEX || v >= row_demand.size()) {
+					continue;
+				}
+				double coef = std::abs(ec.row_coefficients[t].Get(r));
+				if (coef <= NEGLIGIBLE_COEFFICIENT) {
+					continue;
+				}
+				double demand = std::abs(rhs) / coef;
+				if (std::isfinite(demand)) {
+					row_demand[v] = std::max(row_demand[v], demand);
+				}
+			}
+		}
+	}
 
-    for (idx_t var = 0; var < input.num_decide_vars; var++) {
-        if (var >= input.rigid_lower_bounds.size() || var >= input.lower_bounds.size()) {
-            continue;
-        }
-        // A BOOLEAN's 0/1 domain is intrinsic and never widens: a "repair" that let an
-        // indicator sit at 1.4 would be a repair of the encoding, not of the query. A pin
-        // the user wrote on one is still loosenable — that direction is narrower than
-        // rigid, so the clamp lands it back on the domain edge, exactly where the
-        // re-emitted row takes over as its enforcer.
-        bool is_bool = var < input.variable_types.size() &&
-                       input.variable_types[var] == LogicalType::BOOLEAN;
-        double rigid_lower = is_bool ? std::max(input.rigid_lower_bounds[var], 0.0)
-                                     : input.rigid_lower_bounds[var];
-        double rigid_upper = is_bool ? std::min(input.rigid_upper_bounds[var], 1.0)
-                                     : input.rigid_upper_bounds[var];
-        // The column's own magnitude, from whichever of its bounds are finite. Floored at
-        // one so a column pinned at zero still has somewhere to move.
-        double magnitude = 1.0;
-        if (std::abs(input.lower_bounds[var]) < DECIDE_EFFECTIVE_INFINITY) {
-            magnitude = std::max(magnitude, std::abs(input.lower_bounds[var]));
-        }
-        if (std::abs(input.upper_bounds[var]) < DECIDE_EFFECTIVE_INFINITY) {
-            magnitude = std::max(magnitude, std::abs(input.upper_bounds[var]));
-        }
-        double room = std::max(ELASTIC_WIDENING * magnitude, row_demand[var]);
-        if (input.lower_bounds[var] > rigid_lower) {
-            input.lower_bounds[var] = std::max(rigid_lower, input.lower_bounds[var] - room);
-        }
-        if (input.upper_bounds[var] < rigid_upper) {
-            input.upper_bounds[var] = std::min(rigid_upper, input.upper_bounds[var] + room);
-        }
-    }
+	for (idx_t var = 0; var < input.num_decide_vars; var++) {
+		if (var >= input.rigid_lower_bounds.size() || var >= input.lower_bounds.size()) {
+			continue;
+		}
+		// A BOOLEAN's 0/1 domain is intrinsic and never widens: a "repair" that let an
+		// indicator sit at 1.4 would be a repair of the encoding, not of the query. A pin
+		// the user wrote on one is still loosenable — that direction is narrower than
+		// rigid, so the clamp lands it back on the domain edge, exactly where the
+		// re-emitted row takes over as its enforcer.
+		bool is_bool = var < input.variable_types.size() && input.variable_types[var] == LogicalType::BOOLEAN;
+		double rigid_lower = is_bool ? std::max(input.rigid_lower_bounds[var], 0.0) : input.rigid_lower_bounds[var];
+		double rigid_upper = is_bool ? std::min(input.rigid_upper_bounds[var], 1.0) : input.rigid_upper_bounds[var];
+		// The column's own magnitude, from whichever of its bounds are finite. Floored at
+		// one so a column pinned at zero still has somewhere to move.
+		double magnitude = 1.0;
+		if (std::abs(input.lower_bounds[var]) < DECIDE_EFFECTIVE_INFINITY) {
+			magnitude = std::max(magnitude, std::abs(input.lower_bounds[var]));
+		}
+		if (std::abs(input.upper_bounds[var]) < DECIDE_EFFECTIVE_INFINITY) {
+			magnitude = std::max(magnitude, std::abs(input.upper_bounds[var]));
+		}
+		double room = std::max(ELASTIC_WIDENING * magnitude, row_demand[var]);
+		if (input.lower_bounds[var] > rigid_lower) {
+			input.lower_bounds[var] = std::max(rigid_lower, input.lower_bounds[var] - room);
+		}
+		if (input.upper_bounds[var] < rigid_upper) {
+			input.upper_bounds[var] = std::min(rigid_upper, input.upper_bounds[var] + room);
+		}
+	}
 	SyncFrameReadBoxes(input);
 }
 
@@ -1786,32 +1764,30 @@ static void OpenElasticColumnBox(SolverInput &input) {
 //!
 //! Each call starts from a fresh copy of `elastic`, so no rows or auxiliaries from the
 //! solved formulation can leak into the repair formulation.
-SolverModel PhysicalDecide::FormulateElasticModel(const ElasticFormulation &elastic,
-                                                  const EvaluatedClauses &evaluated,
-                                                  bool keep_singleton_rows,
-                                                  VarIndexer &out_var_indexer,
+SolverModel PhysicalDecide::FormulateElasticModel(const ElasticFormulation &elastic, const EvaluatedClauses &evaluated,
+                                                  bool keep_singleton_rows, VarIndexer &out_var_indexer,
                                                   vector<string> &out_global_labels) const {
-    SolverInput input = elastic.input;
-    VarIndexer indexer = elastic.var_indexer;
-    input.keep_singleton_rows = keep_singleton_rows;
+	SolverInput input = elastic.input;
+	VarIndexer indexer = elastic.var_indexer;
+	input.keep_singleton_rows = keep_singleton_rows;
 
-    OpenElasticColumnBox(input);
-    FormulateModel(input, FormulationBox::OfSolvedModel(input), indexer, evaluated);
+	OpenElasticColumnBox(input);
+	FormulateModel(input, FormulationBox::OfSolvedModel(input), indexer, evaluated);
 
-    // Same reconciliation the solved model gets before its build: the `<>` label channel
-    // is a prefix of the global block, padded to its final length.
-    D_ASSERT(input.global_variable_labels.size() <= input.num_global_vars);
-    input.global_variable_labels.resize(input.num_global_vars);
-    out_global_labels = input.global_variable_labels;
+	// Same reconciliation the solved model gets before its build: the `<>` label channel
+	// is a prefix of the global block, padded to its final length.
+	D_ASSERT(input.global_variable_labels.size() <= input.num_global_vars);
+	input.global_variable_labels.resize(input.num_global_vars);
+	out_global_labels = input.global_variable_labels;
 
-    // The decide-variable columns are settled by assembly and shared with the solved
-    // model, so a repair reads back through the same labels. Only the global block may
-    // differ, and only in length.
-    D_ASSERT(indexer.global_block_start == elastic.var_indexer.global_block_start);
+	// The decide-variable columns are settled by assembly and shared with the solved
+	// model, so a repair reads back through the same labels. Only the global block may
+	// differ, and only in length.
+	D_ASSERT(indexer.global_block_start == elastic.var_indexer.global_block_start);
 
-    SolverModel model = SolverModel::Build(input, indexer);
-    out_var_indexer = std::move(indexer);
-    return model;
+	SolverModel model = SolverModel::Build(input, indexer);
+	out_var_indexer = std::move(indexer);
+	return model;
 }
 
 //===--------------------------------------------------------------------===//
@@ -1820,58 +1796,56 @@ SolverModel PhysicalDecide::FormulateElasticModel(const ElasticFormulation &elas
 
 SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, DecideGlobalSinkState &gstate,
                                                      SolverInput &solver_input, VarIndexer &var_indexer,
-                                                     const EvaluatedClauses &evaluated,
-                                                     ElasticFormulation *elastic, bool bench,
-                                                     Profiler &model_timer,
-                                                     Profiler &solver_timer) const {
-    idx_t num_rows = solver_input.num_rows;
+                                                     const EvaluatedClauses &evaluated, ElasticFormulation *elastic,
+                                                     bool bench, Profiler &model_timer, Profiler &solver_timer) const {
+	idx_t num_rows = solver_input.num_rows;
 
-    // Capture model size before solve (solver may move data)
-    size_t bench_total_vars = var_indexer.total_vars;
-    // Clause-level model size: the number of constraint *specs* the operator hands the
-    // builder. A per-row spec still expands to one row per data row and a grouped spec to one
-    // row per group, so this is not a matrix row count — the row count is read back off
-    // the built model (`solve_result.model_constraint_rows`) after the solve below.
-    size_t bench_constraint_specs = solver_input.constraints.size() + solver_input.global_constraints.size();
+	// Capture model size before solve (solver may move data)
+	size_t bench_total_vars = var_indexer.total_vars;
+	// Clause-level model size: the number of constraint *specs* the operator hands the
+	// builder. A per-row spec still expands to one row per data row and a grouped spec to one
+	// row per group, so this is not a matrix row count — the row count is read back off
+	// the built model (`solve_result.model_constraint_rows`) after the solve below.
+	size_t bench_constraint_specs = solver_input.constraints.size() + solver_input.global_constraints.size();
 
-    if (bench) {
-        model_timer.End();
-        solver_timer.Start();
+	if (bench) {
+		model_timer.End();
+		solver_timer.Start();
 	}
 
 	// H3: the statement's DIAGNOSE prefix, and nothing else, arms diagnosis. Under it,
-    // pre-extract the unbounded ray so it is ready if the solve turns out unbounded, and
-    // retain the built model so the INFEASIBLE terminal can hand it to the elastic
-    // engine. An unprefixed query pays for neither, and both failure terminals are
-    // prefix-only anyway (RouteSolveResult).
-    bool diagnosis_armed = diagnose;
-    // One warning slot for the whole query: the solved model and, under DIAGNOSE, the repair model share it.
-    LargeNumberWarning large_number_warning;
-    SolveModelOptions solve_options;
-    solve_options.extract_unbounded_ray = diagnosis_armed;
-    solve_options.large_number_warning = &large_number_warning;
-    // Keep an inverted column box (col_lower > col_upper) alive through Build under
-    // diagnosis so the INFEASIBLE terminal can reset it to the intrinsic domain and
-    // diagnose it (Bug 1, all-column-bound conflicts). An unprefixed query keeps the
-    // fast throw.
-    solver_input.keep_singleton_rows = diagnosis_armed;
+	// pre-extract the unbounded ray so it is ready if the solve turns out unbounded, and
+	// retain the built model so the INFEASIBLE terminal can hand it to the elastic
+	// engine. An unprefixed query pays for neither, and both failure terminals are
+	// prefix-only anyway (RouteSolveResult).
+	bool diagnosis_armed = diagnose;
+	// One warning slot for the whole query: the solved model and, under DIAGNOSE, the repair model share it.
+	LargeNumberWarning large_number_warning;
+	SolveModelOptions solve_options;
+	solve_options.extract_unbounded_ray = diagnosis_armed;
+	solve_options.large_number_warning = &large_number_warning;
+	// Keep an inverted column box (col_lower > col_upper) alive through Build under
+	// diagnosis so the INFEASIBLE terminal can reset it to the intrinsic domain and
+	// diagnose it (Bug 1, all-column-bound conflicts). An unprefixed query keeps the
+	// fast throw.
+	solver_input.keep_singleton_rows = diagnosis_armed;
 
-    // H5: slow-solve continuation is ordinary execution behaviour, not diagnosis, so it
-    // runs with or without the prefix. The interactive prompt needs a human, so it falls
-    // back to a plain error when stdin is not a terminal (tests, benchmarks, -c pipes,
-    // C-API) — never prompt where no one can answer. That tty test IS the rule now; there
-    // is no mode to set.
+	// H5: slow-solve continuation is ordinary execution behaviour, not diagnosis, so it
+	// runs with or without the prefix. The interactive prompt needs a human, so it falls
+	// back to a plain error when stdin is not a terminal (tests, benchmarks, -c pipes,
+	// C-API) — never prompt where no one can answer. That tty test IS the rule now; there
+	// is no mode to set.
 #ifdef _WIN32
-    bool stdin_is_tty = _isatty(_fileno(stdin)) != 0;
+	bool stdin_is_tty = _isatty(_fileno(stdin)) != 0;
 #else
-    bool stdin_is_tty = isatty(STDIN_FILENO) != 0;
+	bool stdin_is_tty = isatty(STDIN_FILENO) != 0;
 #endif
-    bool can_prompt = stdin_is_tty;
-    // The warm solver is retained only where a continuation can actually be asked for.
-    bool want_session = can_prompt;
-    // The first solve chunk uses the same per-chunk budget every Continue() chunk will,
-    // so elapsed climbs in even multiples (300s, 600s, ...) across the loop.
-    solve_options.time_limit_seconds = ResolveDecideTimeLimit();
+	bool can_prompt = stdin_is_tty;
+	// The warm solver is retained only where a continuation can actually be asked for.
+	bool want_session = can_prompt;
+	// The first solve chunk uses the same per-chunk budget every Continue() chunk will,
+	// so elapsed climbs in even multiples (300s, 600s, ...) across the loop.
+	solve_options.time_limit_seconds = ResolveDecideTimeLimit();
 	solve_options.mip_gap = GetDecideMipGap(context);
 	// Ctrl-C cuts the solve short and returns the best-so-far instead of aborting the
 	// query — also ordinary execution behaviour, so the poll is installed unconditionally.
@@ -1880,319 +1854,314 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 		return context.interrupted.load();
 	};
 	SolveModelOptions diagnostic_solve_options;
-	diagnostic_solve_options.time_limit_seconds =
-        ResolveDecideDiagnosticTimeLimit(solve_options.time_limit_seconds);
-    diagnostic_solve_options.interrupt_poll = solve_options.interrupt_poll;
+	diagnostic_solve_options.time_limit_seconds = ResolveDecideDiagnosticTimeLimit(solve_options.time_limit_seconds);
+	diagnostic_solve_options.interrupt_poll = solve_options.interrupt_poll;
 
-    // Reconcile the `<>` label channel with the final global-var count. Only the
-    // aggregate-`<>` site labels its global z (for the infeasible removal dial),
-    // and those z's are allocated first (the deferred-NE loop runs before all
-    // MIN/MAX linking), so the labels form a contiguous prefix; pad the trailing
-    // unlabeled MIN/MAX globals with "" to keep the vector parallel with
-    // global_variable_types. (Invariant: never shrinks — only labeled globals
-    // precede the resize point.)
-    D_ASSERT(solver_input.global_variable_labels.size() <= solver_input.num_global_vars);
-    solver_input.global_variable_labels.resize(solver_input.num_global_vars);
+	// Reconcile the `<>` label channel with the final global-var count. Only the
+	// aggregate-`<>` site labels its global z (for the infeasible removal dial),
+	// and those z's are allocated first (the deferred-NE loop runs before all
+	// MIN/MAX linking), so the labels form a contiguous prefix; pad the trailing
+	// unlabeled MIN/MAX globals with "" to keep the vector parallel with
+	// global_variable_types. (Invariant: never shrinks — only labeled globals
+	// precede the resize point.)
+	D_ASSERT(solver_input.global_variable_labels.size() <= solver_input.num_global_vars);
+	solver_input.global_variable_labels.resize(solver_input.num_global_vars);
 
-    // Retained only when diagnosis is armed; the move is trivial and the model is
-    // freed when Finalize returns. SolveModel otherwise discards the built model.
-    SolverModel retained_model;
-    // Retained only when a continue-capable timeout mode is active: the live warm
-    // solver, so the TIME_LIMIT terminal can Continue() it for more wall-clock.
-    unique_ptr<SolverSession> retained_session;
-    // Always-on wall-clock around the solve (independent of DECIDB_BENCH): the slow
-    // checkpoint report (S2) needs the elapsed solve time to show the user.
-    Profiler solve_wall_timer;
-    solve_wall_timer.Start();
-    SolverResult solve_result =
-        SolveModel(solver_input, var_indexer, PlannedSolverBackend(), solve_options,
-                   diagnosis_armed ? &retained_model : nullptr,
-                   want_session ? &retained_session : nullptr);
-    solve_wall_timer.End();
+	// Retained only when diagnosis is armed; the move is trivial and the model is
+	// freed when Finalize returns. SolveModel otherwise discards the built model.
+	SolverModel retained_model;
+	// Retained only when a continue-capable timeout mode is active: the live warm
+	// solver, so the TIME_LIMIT terminal can Continue() it for more wall-clock.
+	unique_ptr<SolverSession> retained_session;
+	// Always-on wall-clock around the solve (independent of DECIDB_BENCH): the slow
+	// checkpoint report (S2) needs the elapsed solve time to show the user.
+	Profiler solve_wall_timer;
+	solve_wall_timer.Start();
+	SolverResult solve_result =
+	    SolveModel(solver_input, var_indexer, PlannedSolverBackend(), solve_options,
+	               diagnosis_armed ? &retained_model : nullptr, want_session ? &retained_session : nullptr);
+	solve_wall_timer.End();
 
-    // Per-decide-variable labels + is-aux flags for column provenance. Both failure
-    // terminals need them (UNBOUNDED names the runaway variable; INFEASIBLE carries
-    // them into the elastic engine), so build them once here; invoked lazily inside a
-    // failing arm so the SOLVED path pays nothing.
-    auto build_var_labels = [&](vector<string> &var_labels, vector<bool> &var_is_aux) {
-        idx_t nvars = decide_variables.size();
-        var_labels.assign(nvars, string());
-        var_is_aux.assign(nvars, false);
-        for (auto &ae : aux_var_expressions) {
-            if (ae.first < nvars) {
-                var_labels[ae.first] = ae.second;
-                var_is_aux[ae.first] = true;
-            }
-        }
-        for (idx_t i = 0; i < nvars; i++) {
-            if (!var_is_aux[i]) {
-                var_labels[i] = decide_variables[i]->GetName();
-            }
-        }
+	// Per-decide-variable labels + is-aux flags for column provenance. Both failure
+	// terminals need them (UNBOUNDED names the runaway variable; INFEASIBLE carries
+	// them into the elastic engine), so build them once here; invoked lazily inside a
+	// failing arm so the SOLVED path pays nothing.
+	auto build_var_labels = [&](vector<string> &var_labels, vector<bool> &var_is_aux) {
+		idx_t nvars = decide_variables.size();
+		var_labels.assign(nvars, string());
+		var_is_aux.assign(nvars, false);
+		for (auto &ae : aux_var_expressions) {
+			if (ae.first < nvars) {
+				var_labels[ae.first] = ae.second;
+				var_is_aux[ae.first] = true;
+			}
+		}
+		for (idx_t i = 0; i < nvars; i++) {
+			if (!var_is_aux[i]) {
+				var_labels[i] = decide_variables[i]->GetName();
+			}
+		}
 		// A frame read is labelled as its base is.
 		for (auto &read : solver_input.frame_reads) {
 			var_labels.push_back(var_labels[read.base]);
 			var_is_aux.push_back(var_is_aux[read.base]);
 		}
-    };
+	};
 
-    // Under DIAGNOSE, a failure is the ANSWER, not an error: hand off the findings to the
-    // DIAGNOSE operator above and return no rows. Without the prefix the same failure
-    // raises, naming its state and nothing more — naming the clause *is* the elastic
-    // solve, and that only happens when the user asks for it.
-    auto report = [&](DecideDiagnostic diag) {
-        D_ASSERT(diagnosis_armed);
-        StashDecideDiagnostic(context, std::move(diag));
-        gstate.diagnosis_only = true;
-    };
+	// Under DIAGNOSE, a failure is the ANSWER, not an error: hand off the findings to the
+	// DIAGNOSE operator above and return no rows. Without the prefix the same failure
+	// raises, naming its state and nothing more — naming the clause *is* the elastic
+	// solve, and that only happens when the user asks for it.
+	auto report = [&](DecideDiagnostic diag) {
+		D_ASSERT(diagnosis_armed);
+		StashDecideDiagnostic(context, std::move(diag));
+		gstate.diagnosis_only = true;
+	};
 
-    // H5: a time-limit stop (or a Ctrl-C, which arrives as one) is ordinary execution
-    // behaviour and is handled here, before the router sees the result — with or without
-    // the prefix. It either delivers an incumbent, resumes to a proven optimum, or
-    // raises; it never diagnoses.
-    bool deliver_incumbent = false;
-    if (solve_result.status == SolverStatus::TIME_LIMIT) {
-        // Before anything is printed: did another operator in this same query already
-        // fail? A SELECT can hold several DECIDE clauses — two subqueries joined side
-        // by side, say — and when one of them throws, DuckDB stops the rest by setting
-        // the very query interrupt Ctrl-C sets (`Executor::PushError`). Every checkpoint
-        // test below reads that interrupt, so this solve would be reported as a
-        // cancellation the user never asked for, printed *above* the error that actually
-        // stopped the query, with elapsed/memory figures describing a solve that was
-        // never the problem. Say nothing and re-raise the real failure instead.
-        auto &executor = Executor::Get(context);
-        if (executor.HasError()) {
-            executor.ThrowException();
-        }
-        // S2/S3/S4: at each chunk boundary print the checkpoint report (what was found
-        // + how far it can still improve + elapsed/memory), then offer the choice: keep
-        // solving, or take the incumbent with its gap to best. "Keep solving" re-runs
-        // the SAME warm solver (retained_session) for another fresh chunk — the MIP
-        // search resumes, elapsed accumulates. On stop, a usable incumbent is returned
-        // as a SUCCESSFUL result (with a plain stderr caveat that it is not proven
-        // best); no incumbent falls to the plain timeout error.
-        double chunk = ResolveDecideTimeLimit();
-        double cum_elapsed = solve_wall_timer.Elapsed();
-        double cum_budget = chunk;
+	// H5: a time-limit stop (or a Ctrl-C, which arrives as one) is ordinary execution
+	// behaviour and is handled here, before the router sees the result — with or without
+	// the prefix. It either delivers an incumbent, resumes to a proven optimum, or
+	// raises; it never diagnoses.
+	bool deliver_incumbent = false;
+	if (solve_result.status == SolverStatus::TIME_LIMIT) {
+		// Before anything is printed: did another operator in this same query already
+		// fail? A SELECT can hold several DECIDE clauses — two subqueries joined side
+		// by side, say — and when one of them throws, DuckDB stops the rest by setting
+		// the very query interrupt Ctrl-C sets (`Executor::PushError`). Every checkpoint
+		// test below reads that interrupt, so this solve would be reported as a
+		// cancellation the user never asked for, printed *above* the error that actually
+		// stopped the query, with elapsed/memory figures describing a solve that was
+		// never the problem. Say nothing and re-raise the real failure instead.
+		auto &executor = Executor::Get(context);
+		if (executor.HasError()) {
+			executor.ThrowException();
+		}
+		// S2/S3/S4: at each chunk boundary print the checkpoint report (what was found
+		// + how far it can still improve + elapsed/memory), then offer the choice: keep
+		// solving, or take the incumbent with its gap to best. "Keep solving" re-runs
+		// the SAME warm solver (retained_session) for another fresh chunk — the MIP
+		// search resumes, elapsed accumulates. On stop, a usable incumbent is returned
+		// as a SUCCESSFUL result (with a plain stderr caveat that it is not proven
+		// best); no incumbent falls to the plain timeout error.
+		double chunk = ResolveDecideTimeLimit();
+		double cum_elapsed = solve_wall_timer.Elapsed();
+		double cum_budget = chunk;
 
-        // Did the user stop this, or the clock? `user_interrupted` is the backend's own
-        // attribution (both backends cut the solve short mid-search and say so); a Ctrl-C
-        // that lands after the solver's last check arrives indistinguishable from a
-        // timeout. The query interrupt is set either way, so read it too. The answer is
-        // written back into the result once, so the report and the error below read the
-        // same decision.
-        bool stopped_by_user = solve_result.user_interrupted || context.interrupted.load();
-        solve_result.user_interrupted = stopped_by_user;
-        if (stopped_by_user) {
-            // Ctrl-C is not a question. The user has already said stop, so there is
-            // nothing to offer: hand back the best-so-far, with the caveat that it is not
-            // proven best. This is the one stop that does not need a terminal — the
-            // decision was made at the keyboard, not in an answer to a prompt. With
-            // nothing found there is nothing to hand back: the query was cancelled, so
-            // it fails as DuckDB's own interrupt does, with one message.
-            if (!solve_result.has_solution) {
-                throw Exception(ExceptionType::INTERRUPT, "DECIDE stopped at your request before finding a solution.");
-            }
-            PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
-            fprintf(stderr,
-                    "DECIDE is returning the best solution found so far — it is NOT proven the best possible.\n");
-            context.interrupted = false;
-            deliver_incumbent = true;
-        } else if (!can_prompt) {
-            // The clock ran out and nobody is at the keyboard (tests, benchmarks, `-c`
-            // pipes, the C API), so there is no one to answer the offer. Print the
-            // checkpoint once and raise: never prompt where no one can answer.
-            PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
+		// Did the user stop this, or the clock? `user_interrupted` is the backend's own
+		// attribution (both backends cut the solve short mid-search and say so); a Ctrl-C
+		// that lands after the solver's last check arrives indistinguishable from a
+		// timeout. The query interrupt is set either way, so read it too. The answer is
+		// written back into the result once, so the report and the error below read the
+		// same decision.
+		bool stopped_by_user = solve_result.user_interrupted || context.interrupted.load();
+		solve_result.user_interrupted = stopped_by_user;
+		if (stopped_by_user) {
+			// Ctrl-C is not a question. The user has already said stop, so there is
+			// nothing to offer: hand back the best-so-far, with the caveat that it is not
+			// proven best. This is the one stop that does not need a terminal — the
+			// decision was made at the keyboard, not in an answer to a prompt. With
+			// nothing found there is nothing to hand back: the query was cancelled, so
+			// it fails as DuckDB's own interrupt does, with one message.
+			if (!solve_result.has_solution) {
+				throw Exception(ExceptionType::INTERRUPT, "DECIDE stopped at your request before finding a solution.");
+			}
+			PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
+			fprintf(stderr,
+			        "DECIDE is returning the best solution found so far — it is NOT proven the best possible.\n");
+			context.interrupted = false;
+			deliver_incumbent = true;
+		} else if (!can_prompt) {
+			// The clock ran out and nobody is at the keyboard (tests, benchmarks, `-c`
+			// pipes, the C API), so there is no one to answer the offer. Print the
+			// checkpoint once and raise: never prompt where no one can answer.
+			PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
 			ThrowDecideSolveError(solve_result, PlannedSolverBackend());
-        } else {
-            // The interrupt poll installed on the first solve persists on the retained
-            // session into every Continue() chunk, but the prompt below already stops the
-            // user at each boundary, and a watcher thread contending with the interactive
-            // getline destabilizes the prompt (found empirically) — so reset it to
-            // boundary-only here. The entry interrupt already fired *before* this loop, so a
-            // first-solve Ctrl-C still routed us in.
-            if (retained_session) {
-                retained_session->SetInterruptPoll({});
-            }
+		} else {
+			// The interrupt poll installed on the first solve persists on the retained
+			// session into every Continue() chunk, but the prompt below already stops the
+			// user at each boundary, and a watcher thread contending with the interactive
+			// getline destabilizes the prompt (found empirically) — so reset it to
+			// boundary-only here. The entry interrupt already fired *before* this loop, so a
+			// first-solve Ctrl-C still routed us in.
+			if (retained_session) {
+				retained_session->SetInterruptPoll({});
+			}
 
-            // Report at each boundary, then continue or stop.
-            for (;;) {
-                PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
+			// Report at each boundary, then continue or stop.
+			for (;;) {
+				PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
 
-                // stdin is a terminal (can_prompt guaranteed this), so it is safe to block
-                // reading the user's decision. The CLI's line editor is inactive
-                // mid-execution, so a plain getline does not fight it.
-                if (solve_result.has_solution) {
-                    fprintf(stderr, "Keep improving it?  [Enter] continue +%s  ·  s + Enter to stop and take this solution: ",
-                            FormatDuration(chunk).c_str());
-                } else {
-                    fprintf(stderr, "Keep searching?  [Enter] continue +%s  ·  s + Enter to give up: ",
-                            FormatDuration(chunk).c_str());
-                }
-                fflush(stderr);
-                bool go;
-                string line;
-                if (!std::getline(std::cin, line)) {
-                    go = false; // EOF (Ctrl-D / closed input) → stop
-                } else {
-                    StringUtil::Trim(line);
-                    go = StringUtil::Lower(line) != "s";
-                }
-                if (!go) {
-                    break;
-                }
+				// stdin is a terminal (can_prompt guaranteed this), so it is safe to block
+				// reading the user's decision. The CLI's line editor is inactive
+				// mid-execution, so a plain getline does not fight it.
+				if (solve_result.has_solution) {
+					fprintf(stderr,
+					        "Keep improving it?  [Enter] continue +%s  ·  s + Enter to stop and take this solution: ",
+					        FormatDuration(chunk).c_str());
+				} else {
+					fprintf(stderr, "Keep searching?  [Enter] continue +%s  ·  s + Enter to give up: ",
+					        FormatDuration(chunk).c_str());
+				}
+				fflush(stderr);
+				bool go;
+				string line;
+				if (!std::getline(std::cin, line)) {
+					go = false; // EOF (Ctrl-D / closed input) → stop
+				} else {
+					StringUtil::Trim(line);
+					go = StringUtil::Lower(line) != "s";
+				}
+				if (!go) {
+					break;
+				}
 
-                // Resume the warm solver for another chunk (warm start is automatic — the
-                // solver never left scope).
-                Profiler chunk_timer;
-                chunk_timer.Start();
-                solve_result = retained_session->Continue(chunk);
-                chunk_timer.End();
-                cum_elapsed += chunk_timer.Elapsed();
-                cum_budget += chunk;
+				// Resume the warm solver for another chunk (warm start is automatic — the
+				// solver never left scope).
+				Profiler chunk_timer;
+				chunk_timer.Start();
+				solve_result = retained_session->Continue(chunk);
+				chunk_timer.End();
+				cum_elapsed += chunk_timer.Elapsed();
+				cum_budget += chunk;
 
-                if (solve_result.status == SolverStatus::OPTIMAL) {
-                    break; // proven optimum — fall through to the shared success stores
-                }
-                if (solve_result.status != SolverStatus::TIME_LIMIT) {
-                    // A resume can only reach a definitive INFEASIBLE/UNBOUNDED when no
-                    // incumbent ever existed (an incumbent proves feasibility); surface it
-                    // as the plain solver error.
+				if (solve_result.status == SolverStatus::OPTIMAL) {
+					break; // proven optimum — fall through to the shared success stores
+				}
+				if (solve_result.status != SolverStatus::TIME_LIMIT) {
+					// A resume can only reach a definitive INFEASIBLE/UNBOUNDED when no
+					// incumbent ever existed (an incumbent proves feasibility); surface it
+					// as the plain solver error.
 					ThrowDecideSolveError(solve_result, PlannedSolverBackend());
-                }
-                // else: another time-limit stop — loop and re-report with fresh numbers.
-            }
+				}
+				// else: another time-limit stop — loop and re-report with fresh numbers.
+			}
 
-            // Loop exited on a stop decision or an OPTIMAL break.
-            if (solve_result.status == SolverStatus::OPTIMAL || solve_result.has_solution) {
-                if (solve_result.status != SolverStatus::OPTIMAL) {
-                    // Stopped early with a usable-but-unproven incumbent: succeed and
-                    // return it, but say plainly it is not proven best. There is no live
-                    // SQL NOTICE channel, so this rides on stderr with the checkpoint
-                    // report, which already printed the gap to best.
-                    fprintf(stderr,
-                            "DECIDE is returning the best solution found so far — it is NOT proven the best possible.\n");
-                    deliver_incumbent = true;
-                }
-                // If a Ctrl-C broke the loop, the interrupt is now handled (we stopped
-                // solving and have a result to return); clear it so the rows flow to the
-                // client instead of the executor aborting the query. Covers both the
-                // incumbent stop and the rare "Ctrl-C landed as the optimum was proven".
-                context.interrupted = false;
-            } else {
-                // Stopped with nothing found yet: the plain timeout error, same as the
-                // non-interactive exit above.
+			// Loop exited on a stop decision or an OPTIMAL break.
+			if (solve_result.status == SolverStatus::OPTIMAL || solve_result.has_solution) {
+				if (solve_result.status != SolverStatus::OPTIMAL) {
+					// Stopped early with a usable-but-unproven incumbent: succeed and
+					// return it, but say plainly it is not proven best. There is no live
+					// SQL NOTICE channel, so this rides on stderr with the checkpoint
+					// report, which already printed the gap to best.
+					fprintf(
+					    stderr,
+					    "DECIDE is returning the best solution found so far — it is NOT proven the best possible.\n");
+					deliver_incumbent = true;
+				}
+				// If a Ctrl-C broke the loop, the interrupt is now handled (we stopped
+				// solving and have a result to return); clear it so the rows flow to the
+				// client instead of the executor aborting the query. Covers both the
+				// incumbent stop and the rare "Ctrl-C landed as the optimum was proven".
+				context.interrupted = false;
+			} else {
+				// Stopped with nothing found yet: the plain timeout error, same as the
+				// non-interactive exit above.
 				ThrowDecideSolveError(solve_result, PlannedSolverBackend());
-            }
-        }
-    }
+			}
+		}
+	}
 
-    // Route what is left to its diagnosis terminal. RouteSolveResult is a pure
-    // classifier (status + armed → terminal); the operator owns the engine call, the
-    // statement-scoped handoff, and the throw for each terminal.
-    switch (deliver_incumbent ? DiagnosisTerminal::SOLVED
-                              : RouteSolveResult(solve_result, diagnosis_armed)) {
-    case DiagnosisTerminal::SOLVED:
-        if (solve_result.status == SolverStatus::SUBOPTIMAL) {
-            // A feasible incumbent returned without a proof of optimality (a numerically
-            // hard QCP where the barrier stopped before satisfying tolerances). Deliver
-            // the rows, but say plainly they are not proven best — the same caveat as an
-            // early time-limit stop. There is no live SQL NOTICE channel, so it rides on
-            // stderr with the results.
-            fprintf(stderr,
-                    "DECIDE is returning a feasible solution — the solver could not prove it is the best possible.\n");
-            // Machine-readable twin of the caveat above, for the test harness only. The
-            // caveat's wording is owned by the user-facing-output principle and will keep
-            // moving; a suite that greps its prose silently stops matching (it already did
-            // once, turning the QCQP retry into a flake). Tests key on this instead, and
-            // `decidb_cli.py` strips DECIDB_STATUS lines before classifying stderr. Gated
-            // on the env var so user-facing output is unchanged — same pattern as
-            // DECIDB_BENCH instrumentation.
-            if (std::getenv("DECIDB_STATUS_MARKERS")) {
-                fprintf(stderr, "DECIDB_STATUS: SUBOPTIMAL\n");
-            }
-        }
-        break; // fall through to the success stores below
-    case DiagnosisTerminal::UNBOUNDED: {
-        vector<string> var_labels;
-        vector<bool> var_is_aux;
-        build_var_labels(var_labels, var_is_aux);
+	// Route what is left to its diagnosis terminal. RouteSolveResult is a pure
+	// classifier (status + armed → terminal); the operator owns the engine call, the
+	// statement-scoped handoff, and the throw for each terminal.
+	switch (deliver_incumbent ? DiagnosisTerminal::SOLVED : RouteSolveResult(solve_result, diagnosis_armed)) {
+	case DiagnosisTerminal::SOLVED:
+		if (solve_result.status == SolverStatus::SUBOPTIMAL) {
+			// A feasible incumbent returned without a proof of optimality (a numerically
+			// hard QCP where the barrier stopped before satisfying tolerances). Deliver
+			// the rows, but say plainly they are not proven best — the same caveat as an
+			// early time-limit stop. There is no live SQL NOTICE channel, so it rides on
+			// stderr with the results.
+			fprintf(stderr,
+			        "DECIDE is returning a feasible solution — the solver could not prove it is the best possible.\n");
+			// Machine-readable twin of the caveat above, for the test harness only. The
+			// caveat's wording is owned by the user-facing-output principle and will keep
+			// moving; a suite that greps its prose silently stops matching (it already did
+			// once, turning the QCQP retry into a flake). Tests key on this instead, and
+			// `decidb_cli.py` strips DECIDB_STATUS lines before classifying stderr. Gated
+			// on the env var so user-facing output is unchanged — same pattern as
+			// DECIDB_BENCH instrumentation.
+			if (std::getenv("DECIDB_STATUS_MARKERS")) {
+				fprintf(stderr, "DECIDB_STATUS: SUBOPTIMAL\n");
+			}
+		}
+		break; // fall through to the success stores below
+	case DiagnosisTerminal::UNBOUNDED: {
+		vector<string> var_labels;
+		vector<bool> var_is_aux;
+		build_var_labels(var_labels, var_is_aux);
 
-        auto diag_params = GetDecideDiagnosticParams(context);
-        auto get_candidates =
-            BuildUnboundedCandidateProvider(context, gstate.data, gstate.data.Types(), diag_params,
-                                            input_column_names, input_column_in_clause, var_indexer,
-                                            keyed_scopes, num_rows);
+		auto diag_params = GetDecideDiagnosticParams(context);
+		auto get_candidates =
+		    BuildUnboundedCandidateProvider(context, gstate.data, gstate.data.Types(), diag_params, input_column_names,
+		                                    input_column_in_clause, var_indexer, keyed_scopes, num_rows);
 
-        UnboundedDiagnosisInput diag_input {
-            solve_result, var_indexer, var_labels, var_is_aux, diag_params, get_candidates,
-        };
-        DecideDiagnostic diag = DiagnoseUnbounded(diag_input);
-        if (diag.valid && !diag.findings.empty()) {
-            report(std::move(diag));
-            break;
-        }
-        // The engine ran but named no variable. Say why rather than reporting nothing:
-        // an empty ray is a non-linear limitation only when the retained model is
-        // actually non-linear; otherwise it is a neutral "could not identify". A present
-        // ray that named nothing means only internal auxiliaries escaped.
-        bool has_nonlinear_terms = retained_model.has_quadratic_obj ||
-                                   !retained_model.quadratic_constraints.empty() ||
-                                   !retained_model.general_constraints.empty() ||
-                                   !retained_model.indicator_constraints.empty();
-        string reason = BuildUnboundedDiagnosisUnavailableReason(
-            solve_result.diagnostic_timed_out, solve_result.ray.empty(), has_nonlinear_terms);
-        report(BuildUndiagnosedDiagnostic(
-            solve_result.status == SolverStatus::INF_OR_UNBD ? "infeasible or unbounded" : "unbounded",
-            reason));
-        break;
-    }
-    case DiagnosisTerminal::INFEASIBLE: {
-        // A residual INF_OR_UNBD is routed here only with an empty ray; normalize it
-        // so the message (and any diagnosis) reads as infeasible.
-        SolverResult terminal_result = solve_result;
-        if (terminal_result.status == SolverStatus::INF_OR_UNBD) {
-            terminal_result.status = SolverStatus::INFEASIBLE;
-        }
-        vector<string> var_labels;
-        vector<bool> var_is_aux;
-        build_var_labels(var_labels, var_is_aux);
+		UnboundedDiagnosisInput diag_input {
+		    solve_result, var_indexer, var_labels, var_is_aux, diag_params, get_candidates,
+		};
+		DecideDiagnostic diag = DiagnoseUnbounded(diag_input);
+		if (diag.valid && !diag.findings.empty()) {
+			report(std::move(diag));
+			break;
+		}
+		// The engine ran but named no variable. Say why rather than reporting nothing:
+		// an empty ray is a non-linear limitation only when the retained model is
+		// actually non-linear; otherwise it is a neutral "could not identify". A present
+		// ray that named nothing means only internal auxiliaries escaped.
+		bool has_nonlinear_terms = retained_model.has_quadratic_obj || !retained_model.quadratic_constraints.empty() ||
+		                           !retained_model.general_constraints.empty() ||
+		                           !retained_model.indicator_constraints.empty();
+		string reason = BuildUnboundedDiagnosisUnavailableReason(solve_result.diagnostic_timed_out,
+		                                                         solve_result.ray.empty(), has_nonlinear_terms);
+		report(BuildUndiagnosedDiagnostic(
+		    solve_result.status == SolverStatus::INF_OR_UNBD ? "infeasible or unbounded" : "unbounded", reason));
+		break;
+	}
+	case DiagnosisTerminal::INFEASIBLE: {
+		// A residual INF_OR_UNBD is routed here only with an empty ray; normalize it
+		// so the message (and any diagnosis) reads as infeasible.
+		SolverResult terminal_result = solve_result;
+		if (terminal_result.status == SolverStatus::INF_OR_UNBD) {
+			terminal_result.status = SolverStatus::INFEASIBLE;
+		}
+		vector<string> var_labels;
+		vector<bool> var_is_aux;
+		build_var_labels(var_labels, var_is_aux);
 
-        auto diag_params = GetDecideDiagnosticParams(context);
-        // The backend the primary solve ran on, named at plan time. Asking
-        // SelectSolverBackend() again here would be a second, independent answer —
-        // harmless while selection reads only the environment, but wrong the moment it
-        // depends on the model, because the elastic re-solves would then run on a
-        // different solver than the one that produced the failure being diagnosed.
-        SolverBackend backend = PlannedSolverBackend();
+		auto diag_params = GetDecideDiagnosticParams(context);
+		// The backend the primary solve ran on, named at plan time. Asking
+		// SelectSolverBackend() again here would be a second, independent answer —
+		// harmless while selection reads only the environment, but wrong the moment it
+		// depends on the model, because the elastic re-solves would then run on a
+		// different solver than the one that produced the failure being diagnosed.
+		SolverBackend backend = PlannedSolverBackend();
 
-        // Nothing was retained to formulate the repair model from. `Finalize` retains it
-        // whenever `diagnose` is set and this terminal is prefix-only, so reaching here
-        // means the two disagreed — a contract violation, not a user situation. Report
-        // rather than walk a null: a diagnosis that cannot run is still an answer.
-        if (!elastic) {
-            D_ASSERT(false);
-            report(BuildUndiagnosedDiagnostic(
-                "infeasible", "the repair model is unavailable, so there is nothing to diagnose."));
-            break;
-        }
+		// Nothing was retained to formulate the repair model from. `Finalize` retains it
+		// whenever `diagnose` is set and this terminal is prefix-only, so reaching here
+		// means the two disagreed — a contract violation, not a user situation. Report
+		// rather than walk a null: a diagnosis that cannot run is still an answer.
+		if (!elastic) {
+			D_ASSERT(false);
+			report(BuildUndiagnosedDiagnostic("infeasible",
+			                                  "the repair model is unavailable, so there is nothing to diagnose."));
+			break;
+		}
 
-        bool diagnostic_solve_timed_out = terminal_result.diagnostic_timed_out;
-        bool diagnostic_solver_failed = false;
-        auto solve_diagnostic_model = [backend, diagnostic_solve_options,
-                                       &diagnostic_solve_timed_out,
-                                       &diagnostic_solver_failed](const SolverModel &m) {
-            SolverResult result;
-            try {
-                result = SolvePreparedModel(m, backend, diagnostic_solve_options);
-            } catch (const Exception &) {
-                // The widened repair program is harder than the query's own. Treat a
-                // backend load/solve failure as an unavailable diagnosis, but keep this
-                // guard at the callback boundary: exceptions raised by our diagnosis
-                // logic must still surface as bugs instead of being mislabeled as a
-                // solver limitation.
-                result.status = SolverStatus::OTHER;
-            }
+		bool diagnostic_solve_timed_out = terminal_result.diagnostic_timed_out;
+		bool diagnostic_solver_failed = false;
+		auto solve_diagnostic_model = [backend, diagnostic_solve_options, &diagnostic_solve_timed_out,
+		                               &diagnostic_solver_failed](const SolverModel &m) {
+			SolverResult result;
+			try {
+				result = SolvePreparedModel(m, backend, diagnostic_solve_options);
+			} catch (const Exception &) {
+				// The widened repair program is harder than the query's own. Treat a
+				// backend load/solve failure as an unavailable diagnosis, but keep this
+				// guard at the callback boundary: exceptions raised by our diagnosis
+				// logic must still surface as bugs instead of being mislabeled as a
+				// solver limitation.
+				result.status = SolverStatus::OTHER;
+			}
 			// OTHER is a solve the backend could not finish, thrown or returned (a model HiGHS refuses
 			// to load returns it): no answer about the repair model, so it must not read as "no repair".
 			if (result.status == SolverStatus::OTHER) {
@@ -2201,110 +2170,105 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 				diagnostic_solve_timed_out = true;
 			}
 			return result;
-        };
+		};
 
-        // The repair model: formulated against the widened box rather than patched onto
-        // the solved model's matrix, so its Big-M and McCormick constants describe the box
-        // the repair actually searches instead of the narrower one the query solved in.
-        DecideDiagnostic diag;
-        SolverModel elastic_model;
-        VarIndexer elastic_indexer;
-        vector<string> elastic_global_labels;
-        try {
-            elastic_model = FormulateElasticModel(*elastic, evaluated,
-                                                  /*keep_singleton_rows=*/true,
-                                                  elastic_indexer, elastic_global_labels);
-        } catch (const InvalidInputException &ex) {
-            // The only thing the formulation raises by design: a construct the widened box
-            // cannot express. Report it rather than turning the user's DIAGNOSE into an
-            // error — or, worse, falling back to constants derived against the narrow box.
-            // Deliberately NOT a catch-all: an InternalException is a bug in this pass and
-            // has to surface as one.
-            report(BuildUndiagnosedDiagnostic(
-                "infeasible",
-                StringUtil::Format("the repair model could not be built: %s", ex.what())));
-            break;
-        }
-        // The repair model is a solver-neutral model of this query too. The warning is said once, so this only speaks
-        // for a number the solved model did not hold (a one-decision row it folded into a bound).
-        large_number_warning.Check(elastic_model);
-        InfeasibleDiagnosisInput diag_input {
-            elastic_model, elastic_indexer,        var_labels, var_is_aux, elastic_global_labels,
-            diag_params,   solve_diagnostic_model,
-        };
-        diag = DiagnoseInfeasible(diag_input);
+		// The repair model: formulated against the widened box rather than patched onto
+		// the solved model's matrix, so its Big-M and McCormick constants describe the box
+		// the repair actually searches instead of the narrower one the query solved in.
+		DecideDiagnostic diag;
+		SolverModel elastic_model;
+		VarIndexer elastic_indexer;
+		vector<string> elastic_global_labels;
+		try {
+			elastic_model = FormulateElasticModel(*elastic, evaluated,
+			                                      /*keep_singleton_rows=*/true, elastic_indexer, elastic_global_labels);
+		} catch (const InvalidInputException &ex) {
+			// The only thing the formulation raises by design: a construct the widened box
+			// cannot express. Report it rather than turning the user's DIAGNOSE into an
+			// error — or, worse, falling back to constants derived against the narrow box.
+			// Deliberately NOT a catch-all: an InternalException is a bug in this pass and
+			// has to surface as one.
+			report(BuildUndiagnosedDiagnostic(
+			    "infeasible", StringUtil::Format("the repair model could not be built: %s", ex.what())));
+			break;
+		}
+		// The repair model is a solver-neutral model of this query too. The warning is said once, so this only speaks
+		// for a number the solved model did not hold (a one-decision row it folded into a bound).
+		large_number_warning.Check(elastic_model);
+		InfeasibleDiagnosisInput diag_input {
+		    elastic_model, elastic_indexer,        var_labels, var_is_aux, elastic_global_labels,
+		    diag_params,   solve_diagnostic_model,
+		};
+		diag = DiagnoseInfeasible(diag_input);
 		// The engine reads every status it gets: a solve it can do without (the tie-break, the
 		// certificate of a printed amount) keeps the repair it already has. So a repair it
 		// reports stands, whatever a solve on the way to it returned.
 		if (diag.valid && !diag.findings.empty()) {
-            report(std::move(diag));
-            break;
-        }
-        if (diagnostic_solver_failed) {
-            // A backend that cannot load or solve the repair model. That is a limit on
-            // what can be explained, not a failure of the query itself.
-            report(BuildUndiagnosedDiagnostic(
-                "infeasible",
-                "the solver could not analyse the repair model for this query, so no "
-                "least-change repair could be computed."));
-            break;
+			report(std::move(diag));
+			break;
 		}
-        // The elastic engine can decline to report when no actionable relaxation exists.
-        // Say which of the two it was rather than returning an empty relation.
-        report(BuildUndiagnosedDiagnostic(
-            "infeasible",
-            diagnostic_solve_timed_out
-                ? "diagnosis ran out of time before it could find a least-change repair."
-                : "no loosening of the clauses you wrote restores feasibility."));
-        break;
-    }
-    case DiagnosisTerminal::UNDIAGNOSED:
-        // No DIAGNOSE prefix, or a status no engine covers (ITERATION_LIMIT, OTHER).
-        // Either way the query reports its status and stops — the second solve that
-        // would name a clause only happens when the user asks for it by name.
+		if (diagnostic_solver_failed) {
+			// A backend that cannot load or solve the repair model. That is a limit on
+			// what can be explained, not a failure of the query itself.
+			report(BuildUndiagnosedDiagnostic("infeasible",
+			                                  "the solver could not analyse the repair model for this query, so no "
+			                                  "least-change repair could be computed."));
+			break;
+		}
+		// The elastic engine can decline to report when no actionable relaxation exists.
+		// Say which of the two it was rather than returning an empty relation.
+		report(BuildUndiagnosedDiagnostic("infeasible",
+		                                  diagnostic_solve_timed_out
+		                                      ? "diagnosis ran out of time before it could find a least-change repair."
+		                                      : "no loosening of the clauses you wrote restores feasibility."));
+		break;
+	}
+	case DiagnosisTerminal::UNDIAGNOSED:
+		// No DIAGNOSE prefix, or a status no engine covers (ITERATION_LIMIT, OTHER).
+		// Either way the query reports its status and stops — the second solve that
+		// would name a clause only happens when the user asks for it by name.
 		ThrowDecideSolveError(solve_result, PlannedSolverBackend());
-    }
+	}
 
-    // Under DIAGNOSE a failure terminal handed off its findings instead of raising: there
-    // is no solution to read back, so produce no rows and let the DIAGNOSE operator
-    // above turn the handoff into the answer.
-    if (gstate.diagnosis_only) {
-        return SinkFinalizeType::READY;
-    }
+	// Under DIAGNOSE a failure terminal handed off its findings instead of raising: there
+	// is no solution to read back, so produce no rows and let the DIAGNOSE operator
+	// above turn the handoff into the answer.
+	if (gstate.diagnosis_only) {
+		return SinkFinalizeType::READY;
+	}
 
-    // We are past the switch, so we are delivering rows (every failure terminal threw).
-    // With the interrupt poll armed, the rare race where a user Ctrl-C landed just as the
-    // solver proved OPTIMAL leaves `context.interrupted` set — which would make the
-    // executor abort a query that actually succeeded. Clear it so the rows flow. (The
-    // TIME_LIMIT terminal already clears it on its incumbent-stop path; this covers the
-    // SOLVED path. Guarded on the poll being armed, so nothing else changes.)
-    if (solve_options.interrupt_poll) {
-        context.interrupted = false;
-    }
+	// We are past the switch, so we are delivering rows (every failure terminal threw).
+	// With the interrupt poll armed, the rare race where a user Ctrl-C landed just as the
+	// solver proved OPTIMAL leaves `context.interrupted` set — which would make the
+	// executor abort a query that actually succeeded. Clear it so the rows flow. (The
+	// TIME_LIMIT terminal already clears it on its incumbent-stop path; this covers the
+	// SOLVED path. Guarded on the poll being armed, so nothing else changes.)
+	if (solve_options.interrupt_poll) {
+		context.interrupted = false;
+	}
 
-    // The solve succeeded, so there is nothing wrong to report. Clear the handoff so a
-    // DIAGNOSE above this operator sees "no findings" and answers `feasible`.
-    ClearDecideDiagnostic(context);
-    gstate.ilp_solution = std::move(solve_result.solution);
-    // Move the indexer onto gstate now that solve is complete; readback in
-    // Execute() needs it to outlive solver_input.
-    gstate.var_indexer = std::move(var_indexer);
+	// The solve succeeded, so there is nothing wrong to report. Clear the handoff so a
+	// DIAGNOSE above this operator sees "no findings" and answers `feasible`.
+	ClearDecideDiagnostic(context);
+	gstate.ilp_solution = std::move(solve_result.solution);
+	// Move the indexer onto gstate now that solve is complete; readback in
+	// Execute() needs it to outlive solver_input.
+	gstate.var_indexer = std::move(var_indexer);
 
-    if (bench) {
-        solver_timer.End();
-        fprintf(stderr, "DECIDB_BENCH: model_construction_ms=%.2f\n", model_timer.Elapsed() * 1000.0);
-        fprintf(stderr, "DECIDB_BENCH: solver_ms=%.2f\n", solver_timer.Elapsed() * 1000.0);
-        fprintf(stderr, "DECIDB_BENCH: total_variables=%zu\n", bench_total_vars);
-        // Two separate units, never summed: `specs` is the clause-level view (which DECIDE
-        // clause to look at), `rows` is what the solver actually received (where the matrix
-        // pressure is). The old `total_constraints` added the two and reported neither.
-        fprintf(stderr, "DECIDB_BENCH: total_constraint_specs=%zu\n", bench_constraint_specs);
-        fprintf(stderr, "DECIDB_BENCH: total_constraint_rows=%zu\n",
-                (size_t)solve_result.model_constraint_rows);
-        fprintf(stderr, "DECIDB_BENCH: num_rows=%zu\n", (size_t)num_rows);
-    }
+	if (bench) {
+		solver_timer.End();
+		fprintf(stderr, "DECIDB_BENCH: model_construction_ms=%.2f\n", model_timer.Elapsed() * 1000.0);
+		fprintf(stderr, "DECIDB_BENCH: solver_ms=%.2f\n", solver_timer.Elapsed() * 1000.0);
+		fprintf(stderr, "DECIDB_BENCH: total_variables=%zu\n", bench_total_vars);
+		// Two separate units, never summed: `specs` is the clause-level view (which DECIDE
+		// clause to look at), `rows` is what the solver actually received (where the matrix
+		// pressure is). The old `total_constraints` added the two and reported neither.
+		fprintf(stderr, "DECIDB_BENCH: total_constraint_specs=%zu\n", bench_constraint_specs);
+		fprintf(stderr, "DECIDB_BENCH: total_constraint_rows=%zu\n", (size_t)solve_result.model_constraint_rows);
+		fprintf(stderr, "DECIDB_BENCH: num_rows=%zu\n", (size_t)num_rows);
+	}
 
-    return SinkFinalizeType::READY;
+	return SinkFinalizeType::READY;
 }
 
 //===--------------------------------------------------------------------===//
@@ -2312,20 +2276,20 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 //===--------------------------------------------------------------------===//
 class DecideGlobalSourceState : public GlobalSourceState {
 public:
-    DecideProfileTotals profile_readback {"execution.output_readback"};
-    explicit DecideGlobalSourceState(const PhysicalDecide &op, DecideGlobalSinkState &sink) {
-        sink.data.InitializeScan(scan_state);
-        sink.data.InitializeScanChunk(scan_chunk);
-        current_row_offset = 0;
-    }
+	DecideProfileTotals profile_readback {"execution.output_readback"};
+	explicit DecideGlobalSourceState(const PhysicalDecide &op, DecideGlobalSinkState &sink) {
+		sink.data.InitializeScan(scan_state);
+		sink.data.InitializeScanChunk(scan_chunk);
+		current_row_offset = 0;
+	}
 
-    ColumnDataScanState scan_state;
-    DataChunk scan_chunk; // Sized to the buffered input relation, not the wider output chunk
-    idx_t current_row_offset; // Track which row we're at in the solution vector
+	ColumnDataScanState scan_state;
+	DataChunk scan_chunk;     // Sized to the buffered input relation, not the wider output chunk
+	idx_t current_row_offset; // Track which row we're at in the solution vector
 
-    idx_t MaxThreads() override {
-        return 1; // For simplicity, we'll make the source single-threaded.
-    }
+	idx_t MaxThreads() override {
+		return 1; // For simplicity, we'll make the source single-threaded.
+	}
 };
 
 //! A solved value on its way into an integer output column.
@@ -2343,51 +2307,48 @@ public:
 //! double no longer counts consecutively, and no wider integer type recovers a value the
 //! solver never distinguished. That makes the refusal honest rather than a missing
 //! widening. `BOOL` decisions and boolean auxiliaries stay INTEGER and cannot reach it.
-static int64_t DecideSolutionToInteger(double solution_value, const LogicalType &var_type,
-                                       const string &var_name) {
-    double rounded = std::round(solution_value);
-    // Both ends spelled out rather than a symmetric magnitude: int32's range is not
-    // symmetric, and `-2147483648` is a value the column can hold.
-    double lo = var_type == LogicalType::INTEGER
-                    ? static_cast<double>(NumericLimits<int32_t>::Minimum())
-                    : -DECIDE_MAX_EXACT_INTEGER;
-    double hi = var_type == LogicalType::INTEGER
-                    ? static_cast<double>(NumericLimits<int32_t>::Maximum())
-                    : DECIDE_MAX_EXACT_INTEGER;
-    // The helper refuses a NaN, which compares false against everything, rather than
-    // passing it through to the cast this exists to protect.
-    if (!DecideRoundedAnswerWithin(solution_value, lo, hi)) {
-        // The wording is shared with A1's direct plan (`decide_numeric_policy.hpp`).
-        throw InvalidInputException(DecideWholeNumberRangeMessage(var_name, StringUtil::Format("%.0f", rounded)));
-    }
-    return static_cast<int64_t>(rounded);
+static int64_t DecideSolutionToInteger(double solution_value, const LogicalType &var_type, const string &var_name) {
+	double rounded = std::round(solution_value);
+	// Both ends spelled out rather than a symmetric magnitude: int32's range is not
+	// symmetric, and `-2147483648` is a value the column can hold.
+	double lo = var_type == LogicalType::INTEGER ? static_cast<double>(NumericLimits<int32_t>::Minimum())
+	                                             : -DECIDE_MAX_EXACT_INTEGER;
+	double hi = var_type == LogicalType::INTEGER ? static_cast<double>(NumericLimits<int32_t>::Maximum())
+	                                             : DECIDE_MAX_EXACT_INTEGER;
+	// The helper refuses a NaN, which compares false against everything, rather than
+	// passing it through to the cast this exists to protect.
+	if (!DecideRoundedAnswerWithin(solution_value, lo, hi)) {
+		// The wording is shared with A1's direct plan (`decide_numeric_policy.hpp`).
+		throw InvalidInputException(DecideWholeNumberRangeMessage(var_name, StringUtil::Format("%.0f", rounded)));
+	}
+	return static_cast<int64_t>(rounded);
 }
 
 unique_ptr<GlobalSourceState> PhysicalDecide::GetGlobalSourceState(ClientContext &context) const {
-    auto &sink = sink_state->Cast<DecideGlobalSinkState>();
-    return make_uniq_base<GlobalSourceState, DecideGlobalSourceState>(*this, sink);
+	auto &sink = sink_state->Cast<DecideGlobalSinkState>();
+	return make_uniq_base<GlobalSourceState, DecideGlobalSourceState>(*this, sink);
 }
 
 SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &chunk,
                                          OperatorSourceInput &input) const {
-    auto &gstate = sink_state->Cast<DecideGlobalSinkState>();
-    auto &source_state = input.global_state.Cast<DecideGlobalSourceState>();
-    DecideProfileSample profile(source_state.profile_readback);
+	auto &gstate = sink_state->Cast<DecideGlobalSinkState>();
+	auto &source_state = input.global_state.Cast<DecideGlobalSourceState>();
+	DecideProfileSample profile(source_state.profile_readback);
 
-    // The solve failed under DIAGNOSE: there is no assignment to read back, so this
-    // operator produces nothing and the diagnosis it handed off is the statement's answer.
-    if (gstate.diagnosis_only) {
-        return SourceResultType::FINISHED;
-    }
+	// The solve failed under DIAGNOSE: there is no assignment to read back, so this
+	// operator produces nothing and the diagnosis it handed off is the statement's answer.
+	if (gstate.diagnosis_only) {
+		return SourceResultType::FINISHED;
+	}
 
-    // Scan the original buffered data into a chunk sized to match the collection;
-    // `chunk` is wider (it has the appended DECIDE variable columns), so scanning
-    // directly into it would violate ColumnDataCollectionSegment::ReadChunk's
-    // column-count assertion.
-    gstate.data.Scan(source_state.scan_state, source_state.scan_chunk);
-    if (source_state.scan_chunk.size() == 0) {
-        return SourceResultType::FINISHED;
-    }
+	// Scan the original buffered data into a chunk sized to match the collection;
+	// `chunk` is wider (it has the appended DECIDE variable columns), so scanning
+	// directly into it would violate ColumnDataCollectionSegment::ReadChunk's
+	// column-count assertion.
+	gstate.data.Scan(source_state.scan_state, source_state.scan_chunk);
+	if (source_state.scan_chunk.size() == 0) {
+		return SourceResultType::FINISHED;
+	}
 
 	// Reference the input's columns into the leading columns of the wide output chunk. The
 	// collection may hold more after them -- the values frame selectors read
@@ -2398,16 +2359,16 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 	}
 	chunk.SetCardinality(source_state.scan_chunk.size());
 
-    // All DECIDE vars (user + auxiliary) are in the output; projection above prunes aux vars
-    idx_t total_decide_vars = decide_variables.size();
-    idx_t chunk_size = chunk.size();
+	// All DECIDE vars (user + auxiliary) are in the output; projection above prunes aux vars
+	idx_t total_decide_vars = decide_variables.size();
+	idx_t chunk_size = chunk.size();
 
-    // Fill in ALL DECIDE variable columns with solution values from ILP solver
-    for (idx_t decide_var_idx = 0; decide_var_idx < total_decide_vars; decide_var_idx++) {
-        // The DECIDE columns are appended at the end of the output
-        idx_t column_idx = types.size() - total_decide_vars + decide_var_idx;
+	// Fill in ALL DECIDE variable columns with solution values from ILP solver
+	for (idx_t decide_var_idx = 0; decide_var_idx < total_decide_vars; decide_var_idx++) {
+		// The DECIDE columns are appended at the end of the output
+		idx_t column_idx = types.size() - total_decide_vars + decide_var_idx;
 
-        auto &output_vector = chunk.data[column_idx];
+		auto &output_vector = chunk.data[column_idx];
 
 		// An auxiliary's column only carries it to the projection that drops it: nobody
 		// reads its value, so none is converted -- nor refused, which would name an
@@ -2422,85 +2383,84 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 		output_vector.SetVectorType(VectorType::FLAT_VECTOR);
 
 		// Get the logical type for this DECIDE variable
-        auto &decide_var = decide_variables[decide_var_idx]->Cast<BoundColumnRefExpression>();
-        auto var_type = decide_var.return_type;
+		auto &decide_var = decide_variables[decide_var_idx]->Cast<BoundColumnRefExpression>();
+		auto var_type = decide_var.return_type;
 
-        // Get data pointer once based on type
-        if (var_type == LogicalType::INTEGER || var_type == LogicalType::BIGINT) {
-            // Use int32_t for INTEGER, int64_t for BIGINT
-            if (var_type == LogicalType::INTEGER) {
-                auto output_data = FlatVector::GetData<int32_t>(output_vector);
+		// Get data pointer once based on type
+		if (var_type == LogicalType::INTEGER || var_type == LogicalType::BIGINT) {
+			// Use int32_t for INTEGER, int64_t for BIGINT
+			if (var_type == LogicalType::INTEGER) {
+				auto output_data = FlatVector::GetData<int32_t>(output_vector);
 
-                for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
-                    idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                    idx_t solution_idx = gstate.var_indexer.ColumnOrNone(decide_var_idx, global_row);
+				for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
+					idx_t global_row = source_state.current_row_offset + row_in_chunk;
+					idx_t solution_idx = gstate.var_indexer.ColumnOrNone(decide_var_idx, global_row);
 
-                    double solution_value = 0.0;
-                    if (solution_idx < gstate.ilp_solution.size()) {
-                        solution_value = gstate.ilp_solution[solution_idx];
-                    }
-                    output_data[row_in_chunk] = static_cast<int32_t>(
-                        DecideSolutionToInteger(solution_value, var_type, decide_var.GetName()));
-                }
-            } else { // BIGINT
-                auto output_data = FlatVector::GetData<int64_t>(output_vector);
+					double solution_value = 0.0;
+					if (solution_idx < gstate.ilp_solution.size()) {
+						solution_value = gstate.ilp_solution[solution_idx];
+					}
+					output_data[row_in_chunk] =
+					    static_cast<int32_t>(DecideSolutionToInteger(solution_value, var_type, decide_var.GetName()));
+				}
+			} else { // BIGINT
+				auto output_data = FlatVector::GetData<int64_t>(output_vector);
 
-                for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
-                    idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                    idx_t solution_idx = gstate.var_indexer.ColumnOrNone(decide_var_idx, global_row);
+				for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
+					idx_t global_row = source_state.current_row_offset + row_in_chunk;
+					idx_t solution_idx = gstate.var_indexer.ColumnOrNone(decide_var_idx, global_row);
 
-                    double solution_value = 0.0;
-                    if (solution_idx < gstate.ilp_solution.size()) {
-                        solution_value = gstate.ilp_solution[solution_idx];
-                    }
-                    output_data[row_in_chunk] =
-                        DecideSolutionToInteger(solution_value, var_type, decide_var.GetName());
-                }
-            }
+					double solution_value = 0.0;
+					if (solution_idx < gstate.ilp_solution.size()) {
+						solution_value = gstate.ilp_solution[solution_idx];
+					}
+					output_data[row_in_chunk] = DecideSolutionToInteger(solution_value, var_type, decide_var.GetName());
+				}
+			}
 
-        } else if (var_type == LogicalType::BOOLEAN) {
-            auto output_data = FlatVector::GetData<bool>(output_vector);
+		} else if (var_type == LogicalType::BOOLEAN) {
+			auto output_data = FlatVector::GetData<bool>(output_vector);
 
-            for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
-                idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                idx_t solution_idx = gstate.var_indexer.ColumnOrNone(decide_var_idx, global_row);
+			for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
+				idx_t global_row = source_state.current_row_offset + row_in_chunk;
+				idx_t solution_idx = gstate.var_indexer.ColumnOrNone(decide_var_idx, global_row);
 
-                double solution_value = 0.0;
-                if (solution_idx < gstate.ilp_solution.size()) {
-                    solution_value = gstate.ilp_solution[solution_idx];
-                }
-                output_data[row_in_chunk] = (solution_value >= 0.5);
-            }
+				double solution_value = 0.0;
+				if (solution_idx < gstate.ilp_solution.size()) {
+					solution_value = gstate.ilp_solution[solution_idx];
+				}
+				output_data[row_in_chunk] = (solution_value >= 0.5);
+			}
 
-        } else if (var_type == LogicalType::DOUBLE) {
-            auto output_data = FlatVector::GetData<double>(output_vector);
+		} else if (var_type == LogicalType::DOUBLE) {
+			auto output_data = FlatVector::GetData<double>(output_vector);
 
-            for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
-                idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                idx_t solution_idx = gstate.var_indexer.ColumnOrNone(decide_var_idx, global_row);
+			for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
+				idx_t global_row = source_state.current_row_offset + row_in_chunk;
+				idx_t solution_idx = gstate.var_indexer.ColumnOrNone(decide_var_idx, global_row);
 
-                double solution_value = 0.0;
-                if (solution_idx < gstate.ilp_solution.size()) {
-                    solution_value = gstate.ilp_solution[solution_idx];
-                }
-                output_data[row_in_chunk] = solution_value;
-            }
+				double solution_value = 0.0;
+				if (solution_idx < gstate.ilp_solution.size()) {
+					solution_value = gstate.ilp_solution[solution_idx];
+				}
+				output_data[row_in_chunk] = solution_value;
+			}
 
-        } else {
-            // Default to INTEGER
-            auto output_data = FlatVector::GetData<int64_t>(output_vector);
+		} else {
+			// Default to INTEGER
+			auto output_data = FlatVector::GetData<int64_t>(output_vector);
 
-            for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
-                idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                idx_t solution_idx = gstate.var_indexer.ColumnOrNone(decide_var_idx, global_row);
+			for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
+				idx_t global_row = source_state.current_row_offset + row_in_chunk;
+				idx_t solution_idx = gstate.var_indexer.ColumnOrNone(decide_var_idx, global_row);
 
-                double solution_value = 0.0;
-                if (solution_idx < gstate.ilp_solution.size()) {
-                    solution_value = gstate.ilp_solution[solution_idx];
-                }
-                output_data[row_in_chunk] = static_cast<int64_t>(std::round(solution_value));
-            }
-        }
+				double solution_value = 0.0;
+				if (solution_idx < gstate.ilp_solution.size()) {
+					solution_value = gstate.ilp_solution[solution_idx];
+				}
+				output_data[row_in_chunk] = static_cast<int64_t>(std::round(solution_value));
+			}
+		}
 
 		// A row in no class of a keyed decision's key has no decision: its value is NULL.
 		if (decide_var_idx < gstate.var_indexer.var_scope.size() &&
@@ -2514,10 +2474,10 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 		}
 	}
 
-    // Update row offset for next chunk
-    source_state.current_row_offset += chunk_size;
+	// Update row offset for next chunk
+	source_state.current_row_offset += chunk_size;
 
-    return SourceResultType::HAVE_MORE_OUTPUT;
+	return SourceResultType::HAVE_MORE_OUTPUT;
 }
 
 } // namespace duckdb

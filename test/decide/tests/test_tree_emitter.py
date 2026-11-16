@@ -138,7 +138,9 @@ def test_abs_reads_a_nonlinear_reducer_function(decidb_cli_gurobi):
     result = run(decidb_cli_gurobi, sql, DECIDB_DUMP_TREE="1")
     assert result.returncode == 0, result.stderr
     tree = result.stderr.split("DECIDB_TREE_BEGIN\n", 1)[1].split("DECIDB_TREE_END", 1)[0]
-    abs_function = re.search(r"(?m)^(\d+) F .*function=abs .*reads=\[([^]]*)\].*: abs\(max\(power\(x, 2\)\) - 4\)", tree)
+    abs_function = re.search(
+        r"(?m)^(\d+) F .*function=abs .*reads=\[([^]]*)\].*: abs\(max\(power\(x, 2\)\) - 4\)", tree
+    )
     assert abs_function, tree
     reducer = re.search(r"(?m)^(\d+) G .*agg=max .*: max\(power\(x, 2\)\)", tree)
     assert reducer, tree

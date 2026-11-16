@@ -139,13 +139,13 @@ void CollectReducerSigns(ClientContext &context, Expression &side, int sign, idx
 //! (a constraint that holds a MIN or MAX) or `under_extremum` (a reducer inside a MIN or MAX). A reducer
 //! the polarity walk did not reach (`signs`) is pushed neither way.
 void CollectBodySites(Expression &expr, idx_t decide_index, const DecideTermSplitter &splitter, bool sums,
-                      bool extremum_clause, bool under_extremum,
-                      ExtremumPush outer, const unordered_map<const Expression *, int> &signs,
-                      const string &source_alias, const DecideEnclosingScope &scope, vector<BodySite> &sites) {
+                      bool extremum_clause, bool under_extremum, ExtremumPush outer,
+                      const unordered_map<const Expression *, int> &signs, const string &source_alias,
+                      const DecideEnclosingScope &scope, vector<BodySite> &sites) {
 	if (!AsDecisionReducer(expr, decide_index)) {
 		ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) {
-			CollectBodySites(child, decide_index, splitter, sums, extremum_clause, under_extremum, outer, signs, source_alias,
-			                 scope, sites);
+			CollectBodySites(child, decide_index, splitter, sums, extremum_clause, under_extremum, outer, signs,
+			                 source_alias, scope, sites);
 		});
 		return;
 	}
@@ -153,8 +153,8 @@ void CollectBodySites(Expression &expr, idx_t decide_index, const DecideTermSpli
 	const bool is_extremum = IsExtremumName(StringUtil::Lower(reducer.function.name));
 	auto &body = *reducer.children[0];
 	if (HoldsReducer(body, decide_index, false)) {
-		CollectBodySites(body, decide_index, splitter, sums, extremum_clause, is_extremum, outer, signs, source_alias, scope,
-		                 sites);
+		CollectBodySites(body, decide_index, splitter, sums, extremum_clause, is_extremum, outer, signs, source_alias,
+		                 scope, sites);
 		return;
 	}
 	if (splitter.IsLinear(body) || (!is_extremum && !sums && !under_extremum)) {
@@ -162,8 +162,8 @@ void CollectBodySites(Expression &expr, idx_t decide_index, const DecideTermSpli
 	}
 	auto sign = signs.find(&expr);
 	const auto push = sign == signs.end() ? ExtremumPush::NONE : ExtremumPushOf(outer, sign->second);
-	sites.push_back({&reducer, push, !is_extremum && !under_extremum,
-	                 is_extremum || under_extremum || extremum_clause, source_alias, scope});
+	sites.push_back({&reducer, push, !is_extremum && !under_extremum, is_extremum || under_extremum || extremum_clause,
+	                 source_alias, scope});
 }
 
 //! A plain constraint whose one MIN or MAX is pushed its cheap way (`max(q) <= K`, `-2 * min(q) <= K`): the MIN/MAX
@@ -231,43 +231,42 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 	vector<BodySite> sites;
 
 	if (decide.decide_constraints) {
-		std::function<void(Expression &, const string &, DecideEnclosingScope)> walk = [&](Expression &expr,
-		                                                                                   const string &inherited,
-		                                                                                   DecideEnclosingScope scope) {
-			auto source_alias = DescendSourceAlias(expr, inherited);
-			scope = EnterDecideScope(expr, scope);
-			if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-				auto &conj = expr.Cast<BoundConjunctionExpression>();
-				for (idx_t i = 0; i < conj.children.size(); i++) {
-					if (IsConstraintChild(conj, i)) {
-						walk(*conj.children[i], source_alias, scope);
-					}
-				}
-				return;
-			}
-			if (expr.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
-				return;
-			}
-			// A MIN or MAX in the constraint, or any reducer the value rewrite holds in a helper decision.
-			const bool extremum_clause = HoldsReducer(expr, decide_index, true);
-			if (!extremum_clause && !(HasDecideTag(expr.GetAlias(), VALUE_REWRITE_TAG) &&
-			                          HoldsReducer(expr, decide_index, false))) {
-				return;
-			}
-			auto &comparison = expr.Cast<BoundComparisonExpression>();
-			if (IsCheapLoneExtremum(context, comparison, decide_index)) {
-				return;
-			}
-			// Read as `LHS - RHS <op> 0`: the relation pushes the whole expression.
-			unordered_map<const Expression *, int> signs;
-			CollectReducerSigns(context, *comparison.left, 1, decide_index, signs);
-			CollectReducerSigns(context, *comparison.right, -1, decide_index, signs);
-			const auto outer = ExtremumPushOf(comparison.type);
-			CollectBodySites(*comparison.left, decide_index, splitter, true, extremum_clause, false, outer, signs, source_alias,
-			                 scope, sites);
-			CollectBodySites(*comparison.right, decide_index, splitter, true, extremum_clause, false, outer, signs, source_alias,
-			                 scope, sites);
-		};
+		std::function<void(Expression &, const string &, DecideEnclosingScope)> walk =
+		    [&](Expression &expr, const string &inherited, DecideEnclosingScope scope) {
+			    auto source_alias = DescendSourceAlias(expr, inherited);
+			    scope = EnterDecideScope(expr, scope);
+			    if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+				    auto &conj = expr.Cast<BoundConjunctionExpression>();
+				    for (idx_t i = 0; i < conj.children.size(); i++) {
+					    if (IsConstraintChild(conj, i)) {
+						    walk(*conj.children[i], source_alias, scope);
+					    }
+				    }
+				    return;
+			    }
+			    if (expr.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+				    return;
+			    }
+			    // A MIN or MAX in the constraint, or any reducer the value rewrite holds in a helper decision.
+			    const bool extremum_clause = HoldsReducer(expr, decide_index, true);
+			    if (!extremum_clause &&
+			        !(HasDecideTag(expr.GetAlias(), VALUE_REWRITE_TAG) && HoldsReducer(expr, decide_index, false))) {
+				    return;
+			    }
+			    auto &comparison = expr.Cast<BoundComparisonExpression>();
+			    if (IsCheapLoneExtremum(context, comparison, decide_index)) {
+				    return;
+			    }
+			    // Read as `LHS - RHS <op> 0`: the relation pushes the whole expression.
+			    unordered_map<const Expression *, int> signs;
+			    CollectReducerSigns(context, *comparison.left, 1, decide_index, signs);
+			    CollectReducerSigns(context, *comparison.right, -1, decide_index, signs);
+			    const auto outer = ExtremumPushOf(comparison.type);
+			    CollectBodySites(*comparison.left, decide_index, splitter, true, extremum_clause, false, outer, signs,
+			                     source_alias, scope, sites);
+			    CollectBodySites(*comparison.right, decide_index, splitter, true, extremum_clause, false, outer, signs,
+			                     source_alias, scope, sites);
+		    };
 		walk(*decide.decide_constraints, string(), DecideEnclosingScope());
 	}
 

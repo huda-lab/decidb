@@ -34,13 +34,15 @@ def test_q02_integer_procurement(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(ps_partkey AS BIGINT),
                CAST(ps_suppkey AS BIGINT),
                CAST(ps_supplycost AS DOUBLE),
                CAST(ps_availqty AS DOUBLE)
         FROM partsupp WHERE ps_partkey < 50
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("q02_procurement")
@@ -52,7 +54,9 @@ def test_q02_integer_procurement(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     # Budget: SUM(x_i * supplycost_i) <= 10000
     oracle_solver.add_constraint(
         {vnames[i]: data[i][2] for i in range(len(data))},
-        "<=", 10000.0, name="budget",
+        "<=",
+        10000.0,
+        name="budget",
     )
     # Objective: MAXIMIZE SUM(x_i)  (coefficient = 1.0 for each)
     oracle_solver.set_objective(
@@ -64,14 +68,24 @@ def test_q02_integer_procurement(decidb_cli, duckdb_conn, oracle_solver, perf_tr
 
     # For MAXIMIZE SUM(x), the objective coefficient per row is 1.0
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
 
     perf_tracker.record(
-        "q02_integer_procurement", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "q02_integer_procurement",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )

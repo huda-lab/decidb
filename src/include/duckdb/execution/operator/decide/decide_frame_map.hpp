@@ -204,10 +204,6 @@ struct DecideFrameValues {
 //! frame's anchors (DecideTreeColumns).
 using DecideFrameRead = std::function<DecideFrameValues(const Expression &expression, const vector<bool> &rows)>;
 
-
-
-
-
 //! D75's message: the class `class_values` of the partition key (its elements `class_names`) lies in the two
 //! timelines `left` and `right`.
 string DecideFramePartitionMessage(const DecideFrameSpec &frame, const vector<string> &class_names,
@@ -280,7 +276,5 @@ bool DecideFrameReadsAbsent(const DecideFrameMap &map, idx_t row, ABSENT &&absen
 //! The profile's counts of the frames' work (DECIDB_PROFILE): the positions they request, one per anchor of a point and
 //! each value a range's window lists, once per window however many anchors share it.
 void DecideCountFrames(const vector<DecideFrameMap> &maps);
-
-
 
 } // namespace duckdb

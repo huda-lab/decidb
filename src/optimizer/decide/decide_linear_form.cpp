@@ -127,10 +127,9 @@ public:
 		for (auto function : tree.Tree().function_nodes) {
 			auto &node = *tree.Tree().nodes[function];
 			if (node.function_kind == DecideFunctionKind::DEFINITION && node.definition_expression) {
-				ForEachScopedConstraintLeaf(*node.definition_expression, [&](const Expression &leaf,
-				                                                       const DecideEnclosingScope &scope) {
-					AnalyzeConstraint(leaf, scope);
-				});
+				ForEachScopedConstraintLeaf(
+				    *node.definition_expression,
+				    [&](const Expression &leaf, const DecideEnclosingScope &scope) { AnalyzeConstraint(leaf, scope); });
 			}
 		}
 		// The L0 indicator's formulation rows remain outside the written constraint list. Prepare them in the same
@@ -147,9 +146,9 @@ public:
 				if (!*expression) {
 					continue;
 				}
-				ForEachScopedConstraintLeaf(**expression, [&](const Expression &leaf, const DecideEnclosingScope &scope) {
-					AnalyzeConstraint(leaf, scope);
-				});
+				ForEachScopedConstraintLeaf(
+				    **expression,
+				    [&](const Expression &leaf, const DecideEnclosingScope &scope) { AnalyzeConstraint(leaf, scope); });
 			}
 		}
 		if (op.decide_objective) {
@@ -660,8 +659,7 @@ private:
 		// `frame_read` too: `x - at(previous: x)` names one decision at two rows.
 		if (a.reduction != b.reduction || a.avg_scale != b.avg_scale ||
 		    a.qualifier_scope_idx != b.qualifier_scope_idx || a.qualifier_reducer != b.qualifier_reducer ||
-		    a.avg_group_key != b.avg_group_key ||
-		    a.frame_read != b.frame_read) {
+		    a.avg_group_key != b.avg_group_key || a.frame_read != b.frame_read) {
 			return false;
 		}
 		if ((a.filter == nullptr) != (b.filter == nullptr)) {
@@ -893,11 +891,10 @@ private:
 		}
 		double factor;
 		if (!TryEvaluateFoldableDouble(context, scale, factor, FOLD_PLAIN)) {
-			throw InvalidInputException(
-			    "DECIDE objective: a squared term cannot be multiplied by '%s', whose value is "
-			    "not known until the query runs. Use a constant factor, or move it inside the "
-			    "aggregate as SUM(%s * POWER(...)).",
-			    scale.GetName(), scale.GetName());
+			throw InvalidInputException("DECIDE objective: a squared term cannot be multiplied by '%s', whose value is "
+			                            "not known until the query runs. Use a constant factor, or move it inside the "
+			                            "aggregate as SUM(%s * POWER(...)).",
+			                            scale.GetName(), scale.GetName());
 		}
 		if (divides && factor == 0.0) {
 			throw InvalidInputException("DECIDE objective: division by zero in a squared term.");
@@ -922,9 +919,8 @@ private:
 	void Stamp(const BoundAggregateExpression &agg, DecideConstraint &constraint, idx_t linear, idx_t bilinear,
 	           idx_t quadratic) const {
 		const auto node = tree.ReducerChild(agg);
-		const auto qualifier_reducer = QualifierScopeOf(agg) == DConstants::INVALID_INDEX
-		                                  ? DConstants::INVALID_INDEX
-		                                  : tree.ReducerNode(agg);
+		const auto qualifier_reducer =
+		    QualifierScopeOf(agg) == DConstants::INVALID_INDEX ? DConstants::INVALID_INDEX : tree.ReducerNode(agg);
 		for (idx_t i = linear; i < constraint.lhs_terms.size(); i++) {
 			constraint.lhs_terms[i].child = node;
 			if (qualifier_reducer != DConstants::INVALID_INDEX) {
@@ -955,9 +951,8 @@ private:
 	void Stamp(const BoundAggregateExpression &agg, DecideObjective &objective, idx_t linear, idx_t bilinear,
 	           idx_t squared) const {
 		const auto node = tree.ReducerChild(agg);
-		const auto qualifier_reducer = QualifierScopeOf(agg) == DConstants::INVALID_INDEX
-		                                  ? DConstants::INVALID_INDEX
-		                                  : tree.ReducerNode(agg);
+		const auto qualifier_reducer =
+		    QualifierScopeOf(agg) == DConstants::INVALID_INDEX ? DConstants::INVALID_INDEX : tree.ReducerNode(agg);
 		for (idx_t i = linear; i < objective.terms.size(); i++) {
 			objective.terms[i].child = node;
 			if (qualifier_reducer != DConstants::INVALID_INDEX) {
@@ -1171,11 +1166,10 @@ private:
 				vector<ExprVarRef> rhs_refs;
 				CollectDecideVarRefs(*comp->right, +1, rhs_refs);
 				if (!rhs_refs.empty()) {
-					throw InternalException(
-					    "DECIDE constraint is not canonical: decision variable on the right-hand "
-					    "side of '%s'. Constraints must be canonicalized by DecideCanonicalizer "
-					    "before reaching term extraction.",
-					    comp->right->ToString());
+					throw InternalException("DECIDE constraint is not canonical: decision variable on the right-hand "
+					                        "side of '%s'. Constraints must be canonicalized by DecideCanonicalizer "
+					                        "before reaching term extraction.",
+					                        comp->right->ToString());
 				}
 
 				if (lhs->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
@@ -1246,10 +1240,9 @@ private:
 			}
 			case DecideTermKind::SQUARE: {
 				if (obj.has_quadratic) {
-					throw InvalidInputException(
-					    "DECIDE objective contains multiple quadratic (POWER / (expr)*(expr)) "
-					    "groups. Only a single quadratic group plus linear terms is supported; "
-					    "combine them mathematically or rewrite the objective.");
+					throw InvalidInputException("DECIDE objective contains multiple quadratic (POWER / (expr)*(expr)) "
+					                            "groups. Only a single quadratic group plus linear terms is supported; "
+					                            "combine them mathematically or rewrite the objective.");
 				}
 				obj.has_quadratic = true;
 				obj.quadratic_sign = term.square_scale * static_cast<double>(term.sign);
@@ -1342,8 +1335,7 @@ private:
 		auto agg_name = StringUtil::Lower(agg.function.name);
 		if (agg_name != "sum") {
 			throw InvalidInputException(
-			    "DECIDE optimizer should rewrite objective aggregate '%s' to SUM before execution",
-			    agg.function.name);
+			    "DECIDE optimizer should rewrite objective aggregate '%s' to SUM before execution", agg.function.name);
 		}
 		bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
 		idx_t qualifier_scope = QualifierScopeOf(agg);

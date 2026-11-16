@@ -308,7 +308,7 @@ def test_r1_a_non_finite_literal_under_a_guard_raises_what_the_solver_raises(dec
 
 @pytest.mark.error
 @pytest.mark.correctness
-@pytest.mark.parametrize("coefficient", ["s * 'NaN'::DOUBLE - p","s - p + 'NaN'::DOUBLE", "s * 1e308 * 10 - p"])
+@pytest.mark.parametrize("coefficient", ["s * 'NaN'::DOUBLE - p", "s - p + 'NaN'::DOUBLE", "s * 1e308 * 10 - p"])
 def test_a1_a_non_finite_literal_raises_what_the_solver_raises(decidb_cli, coefficient):
     # A literal that is not finite keeps its check, which names the objective as the solver path does. Under the data's
     # NULL skip the literal is still no column's value, so it is never named as one.
@@ -575,8 +575,9 @@ def test_inner_join_passthrough_prunes_stored_payload_but_keeps_computed_errors(
     full, _ = _run(decidb_cli, setup + f"SELECT i, score, payload, x FROM ({decide}) q WHERE i=0")
     assert full == [(0, 0.0, "p" * 200, 0)]
 
-    throwing_relation = relation.replace("s.payload", "CASE WHEN s.i=4999 THEN error('joined payload boom') "
-                                                  "ELSE s.payload END AS payload")
+    throwing_relation = relation.replace(
+        "s.payload", "CASE WHEN s.i=4999 THEN error('joined payload boom') " "ELSE s.payload END AS payload"
+    )
     throwing = f"""
         SELECT COUNT(*) FROM (
             FROM {throwing_relation} DECIDE x(BOOL)

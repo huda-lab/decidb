@@ -329,7 +329,6 @@ public:
 	}
 
 protected:
-
 	//! One item's values, each as the expression that reads it.
 	struct ItemExprs {
 		//! The break-even price, the finite rooms up and down (units of budget), and whether each room is infinite.

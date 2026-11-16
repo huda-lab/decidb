@@ -37,8 +37,8 @@ enum class PhysicalOperatorType : uint8_t {
 	STREAMING_WINDOW,
 	PIVOT,
 	COPY_DATABASE,
-    DECIDE,
-    DECIDE_DIAGNOSE,
+	DECIDE,
+	DECIDE_DIAGNOSE,
 
 	// -----------------------------
 	// Scans

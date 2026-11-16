@@ -91,12 +91,11 @@ void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr,
 		// source location. CastExpression nodes synthesized by the parser itself
 		// (for example for a boolean test) have no location and are not user casts.
 		if (cast.GetQueryLocation().IsValid() && ExpressionContainsDecideVariable(*cast.child, variables)) {
-			throw BinderException(
-			    cast,
-			    "DECIDE does not allow casts over decision expressions: '%s'. "
-			    "Decision values are modeled directly as DOUBLE. Remove the cast; "
-			    "casts over data-only expressions are allowed.",
-			    cast.ToString());
+			throw BinderException(cast,
+			                      "DECIDE does not allow casts over decision expressions: '%s'. "
+			                      "Decision values are modeled directly as DOUBLE. Remove the cast; "
+			                      "casts over data-only expressions are allowed.",
+			                      cast.ToString());
 		}
 	}
 
@@ -190,8 +189,7 @@ static optional_ptr<const ParsedExpression> FindNode(const ParsedExpression &exp
 //! The first node of class `expression_class` in `expr` outside its subqueries, or null.
 static optional_ptr<const ParsedExpression> FindExpressionOfClass(const ParsedExpression &expr,
                                                                   ExpressionClass expression_class) {
-	return FindNode(expr,
-	                [&](const ParsedExpression &node) { return node.GetExpressionClass() == expression_class; });
+	return FindNode(expr, [&](const ParsedExpression &node) { return node.GetExpressionClass() == expression_class; });
 }
 
 //! A frame selector reads rows by a timeline the scope itself chooses, so none stands in
@@ -760,14 +758,20 @@ bool ContainsDecideAggregate(const ParsedExpression &expr) {
 // nodes (synthesized as non-operator FunctionExpression) or nested aggregates.
 static bool IsAllowedNameOverDecideVar(const string &name) {
 	auto lname = StringUtil::Lower(name);
-	if (lname == "abs" || lname == "power" || lname == "pow") return true;
-	if (lname == "norm") return true; // bound as an optimizer-owned aggregate marker below
-	if (lname == "sum" || lname == "avg" || lname == "min" || lname == "max") return true;
-	if (lname == "count" || lname == "count_star") return true;
-	if (lname == "+" || lname == "-" || lname == "*" || lname == "/" || lname == "**") return true;
+	if (lname == "abs" || lname == "power" || lname == "pow")
+		return true;
+	if (lname == "norm")
+		return true; // bound as an optimizer-owned aggregate marker below
+	if (lname == "sum" || lname == "avg" || lname == "min" || lname == "max")
+		return true;
+	if (lname == "count" || lname == "count_star")
+		return true;
+	if (lname == "+" || lname == "-" || lname == "*" || lname == "/" || lname == "**")
+		return true;
 	// DeciDB-internal tag operators (__when_constraint__, __per_constraint__, ...)
 	// are synthesized as FunctionExpression and handled by dedicated binders.
-	if (name.size() >= 4 && name.substr(0, 2) == "__" && name.substr(name.size() - 2) == "__") return true;
+	if (name.size() >= 4 && name.substr(0, 2) == "__" && name.substr(name.size() - 2) == "__")
+		return true;
 	return false;
 }
 
@@ -775,9 +779,8 @@ static bool IsAllowedNameOverDecideVar(const string &name) {
 // are rejected (with an aggregate-specific error) in BindAggregate, so we must
 // not also false-flag them here as "non-linear scalars".
 static bool IsAggregateFunctionName(ClientContext &context, const FunctionExpression &func) {
-	auto entry = Catalog::GetEntry(context, CatalogType::SCALAR_FUNCTION_ENTRY,
-	                                func.catalog, func.schema, func.function_name,
-	                                OnEntryNotFound::RETURN_NULL);
+	auto entry = Catalog::GetEntry(context, CatalogType::SCALAR_FUNCTION_ENTRY, func.catalog, func.schema,
+	                               func.function_name, OnEntryNotFound::RETURN_NULL);
 	return entry && entry->type == CatalogType::AGGREGATE_FUNCTION_ENTRY;
 }
 
@@ -801,8 +804,7 @@ static bool IsPowerFunction(const FunctionExpression &func) {
 // test matchers and user-facing wording are consistent across SUM and non-SUM
 // contexts. Running at bind time keeps a bad exponent from reaching the
 // quadratic extractor, which recognizes only POWER(linear_expr, 2).
-static void ValidatePowerExponent(const FunctionExpression &func,
-                                  const case_insensitive_map_t<idx_t> &variables) {
+static void ValidatePowerExponent(const FunctionExpression &func, const case_insensitive_map_t<idx_t> &variables) {
 	if (func.children.size() != 2) {
 		return; // Arity errors are surfaced elsewhere with clearer messages.
 	}
@@ -813,9 +815,8 @@ static void ValidatePowerExponent(const FunctionExpression &func,
 	}
 	auto &exponent = *func.children[1];
 	if (exponent.GetExpressionClass() != ExpressionClass::CONSTANT) {
-		throw BinderException(
-		    "POWER exponent in DECIDE expression must be a constant integer "
-		    "(only 2 is supported)");
+		throw BinderException("POWER exponent in DECIDE expression must be a constant integer "
+		                      "(only 2 is supported)");
 	}
 	auto &exp_const = exponent.Cast<const ConstantExpression>();
 	double exp_val;
@@ -825,9 +826,9 @@ static void ValidatePowerExponent(const FunctionExpression &func,
 		throw BinderException("POWER exponent must be numeric");
 	}
 	if (exp_val != 2.0) {
-		throw BinderException(
-		    "Only POWER(expr, 2) is supported for quadratic expressions. "
-		    "Found exponent %g. Higher powers are not allowed.", exp_val);
+		throw BinderException("Only POWER(expr, 2) is supported for quadratic expressions. "
+		                      "Found exponent %g. Higher powers are not allowed.",
+		                      exp_val);
 	}
 }
 
@@ -873,22 +874,19 @@ static void ValidateDecideNoNonLinearScalar(ClientContext &context, const Parsed
 			// variable into it (`avg(p)*x` -> `avg(p*x)`, a different constraint) and
 			// return a wrong optimum, so reject it here — before normalization —
 			// consistent with the direct `SUM(sum(p) * x)` rejection.
-			throw BinderException(
-			    "An aggregate over table columns (e.g. AVG(col), MIN(col)) cannot multiply a "
-			    "decision variable. Pre-compute it as a scalar in a subquery or CTE and reference "
-			    "that value.");
+			throw BinderException("An aggregate over table columns (e.g. AVG(col), MIN(col)) cannot multiply a "
+			                      "decision variable. Pre-compute it as a scalar in a subquery or CTE and reference "
+			                      "that value.");
 		} else if (func.is_operator && func.function_name == "/") {
 			// Division is only linear when the divisor contains no decide
 			// variable. x / y (decide vars in divisor) is non-linear; catch
 			// it here so it doesn't fall through to per-row extraction
 			// (which would silently produce wrong results) or symbolic
 			// normalization (which would throw InternalException).
-			if (func.children.size() == 2 &&
-			    ExpressionContainsDecideVariable(*func.children[1], variables)) {
-				throw BinderException(
-				    "Division by a DECIDE variable is not supported: "
-				    "it would make the model non-linear. The divisor must "
-				    "not reference a decision variable.");
+			if (func.children.size() == 2 && ExpressionContainsDecideVariable(*func.children[1], variables)) {
+				throw BinderException("Division by a DECIDE variable is not supported: "
+				                      "it would make the model non-linear. The divisor must "
+				                      "not reference a decision variable.");
 			}
 			// A data-only aggregate stays on the bound side (S10). Like the multiplier
 			// above, it may not share a scaled term with a decision: as the divisor, or
@@ -901,15 +899,13 @@ static void ValidateDecideNoNonLinearScalar(ClientContext &context, const Parsed
 				    ContainsDataOnlyAggregate(context, *func.children[1], variables) ? "divide"
 				                                                                     : "be divided together with");
 			}
-		} else if (!IsAllowedNameOverDecideVar(func.function_name) &&
-		           !IsAggregateFunctionName(context, func)) {
+		} else if (!IsAllowedNameOverDecideVar(func.function_name) && !IsAggregateFunctionName(context, func)) {
 			for (auto &child : func.children) {
 				if (ExpressionContainsDecideVariable(*child, variables)) {
-					throw BinderException(
-					    "Scalar function '%s' over a DECIDE variable is not supported: "
-					    "it would make the model non-linear. Only ABS() and POWER(..., 2) "
-					    "can wrap a decision variable.",
-					    func.function_name);
+					throw BinderException("Scalar function '%s' over a DECIDE variable is not supported: "
+					                      "it would make the model non-linear. Only ABS() and POWER(..., 2) "
+					                      "can wrap a decision variable.",
+					                      func.function_name);
 				}
 			}
 		}
@@ -970,8 +966,7 @@ static bool IsIntegerValuedReducer(const ParsedExpression &expr) {
 //! Stops at an integer-valued reducer: what a comparison compares is the reducer's
 //! value, so a REAL decision counted by `norm(..., 0, M)` is not the compared
 //! quantity and must not be reported as one.
-static string FindRealDecideVariable(const ParsedExpression &expr,
-                                     const case_insensitive_map_t<idx_t> &variables,
+static string FindRealDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
                                      const vector<LogicalType> &variable_types) {
 	if (IsIntegerValuedReducer(expr)) {
 		return "";
@@ -1024,8 +1019,7 @@ void ValidateDecideNoIntegerStepComparisonOnReal(const ParsedExpression &expr,
 	}
 	case ExpressionClass::COMPARISON: {
 		auto type = expr.GetExpressionType();
-		bool is_strict =
-		    type == ExpressionType::COMPARE_LESSTHAN || type == ExpressionType::COMPARE_GREATERTHAN;
+		bool is_strict = type == ExpressionType::COMPARE_LESSTHAN || type == ExpressionType::COMPARE_GREATERTHAN;
 		bool is_not_equal = type == ExpressionType::COMPARE_NOTEQUAL;
 		if (is_strict || is_not_equal) {
 			auto &comp = expr.Cast<const ComparisonExpression>();
@@ -1048,23 +1042,21 @@ void ValidateDecideNoIntegerStepComparisonOnReal(const ParsedExpression &expr,
 				// COMPARE_NOTEQUAL as `!=`. The clause is quoted back to the user, so it
 				// has to read the way they wrote it.
 				string clause = "(" + comp.left->ToString() + " <> " + comp.right->ToString() + ")";
-				throw BinderException(
-				    comp,
-				    "Inequality '<>' is not supported over the REAL decision '%s': '%s'. "
-				    "A REAL decision can take values arbitrarily close to the compared value "
-				    "on either side, so excluding that single point rules out nothing. "
-				    "Declare '%s' as INT if the quantity is a whole number, or use '<=' / '>=' "
-				    "to exclude the range you actually mean.",
-				    real_var, clause, real_var);
+				throw BinderException(comp,
+				                      "Inequality '<>' is not supported over the REAL decision '%s': '%s'. "
+				                      "A REAL decision can take values arbitrarily close to the compared value "
+				                      "on either side, so excluding that single point rules out nothing. "
+				                      "Declare '%s' as INT if the quantity is a whole number, or use '<=' / '>=' "
+				                      "to exclude the range you actually mean.",
+				                      real_var, clause, real_var);
 			}
 			bool is_less = type == ExpressionType::COMPARE_LESSTHAN;
-			throw BinderException(
-			    comp,
-			    "Strict inequality '%s' is not supported over the REAL decision '%s': '%s'. "
-			    "A REAL decision takes any value up to the bound, so there is no next value "
-			    "to stop at. Use '%s' instead, and move the bound by one step if the compared "
-			    "quantity is a count or other whole number.",
-			    is_less ? "<" : ">", real_var, comp.ToString(), is_less ? "<=" : ">=");
+			throw BinderException(comp,
+			                      "Strict inequality '%s' is not supported over the REAL decision '%s': '%s'. "
+			                      "A REAL decision takes any value up to the bound, so there is no next value "
+			                      "to stop at. Use '%s' instead, and move the bound by one step if the compared "
+			                      "quantity is a count or other whole number.",
+			                      is_less ? "<" : ">", real_var, comp.ToString(), is_less ? "<=" : ">=");
 		}
 		return;
 	}
@@ -1343,8 +1335,7 @@ void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t deci
 			return;
 		}
 		auto type = node.GetExpressionType();
-		bool is_strict =
-		    type == ExpressionType::COMPARE_LESSTHAN || type == ExpressionType::COMPARE_GREATERTHAN;
+		bool is_strict = type == ExpressionType::COMPARE_LESSTHAN || type == ExpressionType::COMPARE_GREATERTHAN;
 		bool is_not_equal = type == ExpressionType::COMPARE_NOTEQUAL;
 		if (!is_strict && !is_not_equal) {
 			return;
@@ -1360,28 +1351,25 @@ void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t deci
 			return;
 		}
 		string op = is_not_equal ? "<>" : (type == ExpressionType::COMPARE_LESSTHAN ? "<" : ">");
-		string alternative = is_not_equal ? "'<=' or '>='"
-		                                  : (type == ExpressionType::COMPARE_LESSTHAN ? "'<='" : "'>='");
-		string why = is_not_equal
-		                 ? "the rewrite (x <> K becomes x <= K-1 OR x >= K+1) is exact only on "
-		                   "whole numbers"
-		                 : "stepping the bound is exact only on whole numbers";
+		string alternative =
+		    is_not_equal ? "'<=' or '>='" : (type == ExpressionType::COMPARE_LESSTHAN ? "'<='" : "'>='");
+		string why = is_not_equal ? "the rewrite (x <> K becomes x <= K-1 OR x >= K+1) is exact only on "
+		                            "whole numbers"
+		                          : "stepping the bound is exact only on whole numbers";
 		// Pass the comparison so the message carries a caret. The bound tree only started
 		// carrying source locations when DecideBinder::BindExpression began stamping them;
 		// before that these two throws named no node because there was nothing to name.
 		if (bad.is_castable_column) {
-			throw BinderException(
-			    comp,
-			    "Comparison '%s' is not supported here: column '%s' has type %s, which allows "
-			    "fractional values, and %s. If '%s' holds whole numbers, cast it "
-			    "(%s::BIGINT); otherwise compare with %s.",
-			    op, bad.name, bad.type.ToString(), why, bad.name, bad.name, alternative);
+			throw BinderException(comp,
+			                      "Comparison '%s' is not supported here: column '%s' has type %s, which allows "
+			                      "fractional values, and %s. If '%s' holds whole numbers, cast it "
+			                      "(%s::BIGINT); otherwise compare with %s.",
+			                      op, bad.name, bad.type.ToString(), why, bad.name, bad.name, alternative);
 		}
-		throw BinderException(
-		    comp,
-		    "Comparison '%s' is not supported here: '%s' has type %s and can take fractional "
-		    "values, and %s. Compare with %s instead.",
-		    op, bad.name, bad.type.ToString(), why, alternative);
+		throw BinderException(comp,
+		                      "Comparison '%s' is not supported here: '%s' has type %s and can take fractional "
+		                      "values, and %s. Compare with %s instead.",
+		                      op, bad.name, bad.type.ToString(), why, alternative);
 	});
 }
 
@@ -1397,8 +1385,8 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 // Returns true if the pattern is a valid quadratic form; sets has_decide_variable.
 // The base expression is validated as strictly linear (allow_quadratic=false) to prevent nesting.
 static bool ValidateQuadraticPower(vector<unique_ptr<ParsedExpression>> &children,
-                                   const case_insensitive_map_t<idx_t> &variables,
-                                   bool &has_decide_variable, string &error_msg, const string &label) {
+                                   const case_insensitive_map_t<idx_t> &variables, bool &has_decide_variable,
+                                   string &error_msg, const string &label) {
 	if (children.size() != 2) {
 		error_msg = label + " requires exactly two arguments";
 		return false;
@@ -1417,9 +1405,9 @@ static bool ValidateQuadraticPower(vector<unique_ptr<ParsedExpression>> &childre
 		return false;
 	}
 	if (exp_val != 2.0) {
-		error_msg = StringUtil::Format(
-		    "Only POWER(expr, 2) is supported for quadratic expressions. "
-		    "Found exponent %g. Higher powers are not allowed.", exp_val);
+		error_msg = StringUtil::Format("Only POWER(expr, 2) is supported for quadratic expressions. "
+		                               "Found exponent %g. Higher powers are not allowed.",
+		                               exp_val);
 		return false;
 	}
 	// Validate the base is a LINEAR expression (allow_quadratic=false prevents nesting like POWER(POWER(x,2),2))
@@ -1437,17 +1425,16 @@ static bool ValidateQuadraticPower(vector<unique_ptr<ParsedExpression>> &childre
 }
 
 static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
-                                        bool &has_decide_variable, string &error_msg,
-                                        bool allow_quadratic) {
+                                        bool &has_decide_variable, string &error_msg, bool allow_quadratic) {
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::COLUMN_REF: {
-        if (IsVariableExpression(expr, variables)) {
-            has_decide_variable = true;
-        }
-        return true;
-    }
-    case ExpressionClass::CONSTANT:
-        return true;
+		if (IsVariableExpression(expr, variables)) {
+			has_decide_variable = true;
+		}
+		return true;
+	}
+	case ExpressionClass::CONSTANT:
+		return true;
 	case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
 		string func_name_lower = StringUtil::Lower(func.function_name);
@@ -1477,9 +1464,11 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 					            "POWER(expr, 2) is only allowed in objectives, not constraints";
 					return false;
 				}
-				return ValidateQuadraticPower(func.children, variables, has_decide_variable, error_msg, "POWER(..., 2)");
+				return ValidateQuadraticPower(func.children, variables, has_decide_variable, error_msg,
+				                              "POWER(..., 2)");
 			}
-			if (func_name_lower == "min" || func_name_lower == "max" || func_name_lower == "sum" || func_name_lower == "avg") {
+			if (func_name_lower == "min" || func_name_lower == "max" || func_name_lower == "sum" ||
+			    func_name_lower == "avg") {
 				// A nested reducer (language/guide.md §5.5): its body is held to the rule of any reducer's.
 				if (func.children.size() == 1 && ExpressionContainsDecideVariable(*func.children[0], variables)) {
 					auto &body = const_cast<ParsedExpression &>(ReducerArgumentBody(*func.children[0]));
@@ -1495,7 +1484,8 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 				// symbolization and contributes no DECIDE variable.
 				return true;
 			}
-			error_msg = StringUtil::Format("Unsupported function '%s' inside DECIDE SUM expression", func.function_name);
+			error_msg =
+			    StringUtil::Format("Unsupported function '%s' inside DECIDE SUM expression", func.function_name);
 			return false;
 		}
 		if (func_name_lower == "**") {
@@ -1536,8 +1526,7 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 				            "(would make the model non-linear)";
 				return false;
 			}
-			return ValidateSumArgumentInternal(*func.children[0], variables,
-			                                   has_decide_variable, error_msg,
+			return ValidateSumArgumentInternal(*func.children[0], variables, has_decide_variable, error_msg,
 			                                   allow_quadratic);
 		}
 		if (func_name_lower == "*" || func_name_lower == "+") {
@@ -1575,39 +1564,38 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 			return true;
 		}
 		error_msg = StringUtil::Format(
-		    "Unsupported operator expression over a DECIDE variable inside DECIDE SUM expression: %s",
-		    expr.ToString());
+		    "Unsupported operator expression over a DECIDE variable inside DECIDE SUM expression: %s", expr.ToString());
 		return false;
 	}
 	case ExpressionClass::CAST: {
 		auto &cast = expr.Cast<CastExpression>();
 		return ValidateSumArgumentInternal(*cast.child, variables, has_decide_variable, error_msg, allow_quadratic);
 	}
-    case ExpressionClass::SUBQUERY: {
-        auto &subquery = expr.Cast<SubqueryExpression>();
-        if (subquery.subquery_type != SubqueryType::SCALAR) {
-            error_msg = "Subquery in DECIDE SUM expression must be scalar";
-            return false;
-        }
-        if (ExpressionContainsDecideVariable(expr, variables)) {
-            error_msg = "Subquery in DECIDE SUM expression cannot contain DECIDE variables";
-            return false;
-        }
-        return true;
-    }
-    case ExpressionClass::DECIDE_FRAME: {
-        // A frame term is its payload read at another row, held to the rule of the operand it
-        // stands in, and its fallback is read at the anchor row.
-        auto &frame = expr.Cast<DecideFrameExpression>();
-        for (auto *value : {frame.payload.get(), frame.fallback.get()}) {
-            if (value &&
-                !ValidateSumArgumentInternal(*value, variables, has_decide_variable, error_msg, allow_quadratic)) {
-                return false;
-            }
-        }
-        return true;
-    }
-    default:
+	case ExpressionClass::SUBQUERY: {
+		auto &subquery = expr.Cast<SubqueryExpression>();
+		if (subquery.subquery_type != SubqueryType::SCALAR) {
+			error_msg = "Subquery in DECIDE SUM expression must be scalar";
+			return false;
+		}
+		if (ExpressionContainsDecideVariable(expr, variables)) {
+			error_msg = "Subquery in DECIDE SUM expression cannot contain DECIDE variables";
+			return false;
+		}
+		return true;
+	}
+	case ExpressionClass::DECIDE_FRAME: {
+		// A frame term is its payload read at another row, held to the rule of the operand it
+		// stands in, and its fallback is read at the anchor row.
+		auto &frame = expr.Cast<DecideFrameExpression>();
+		for (auto *value : {frame.payload.get(), frame.fallback.get()}) {
+			if (value &&
+			    !ValidateSumArgumentInternal(*value, variables, has_decide_variable, error_msg, allow_quadratic)) {
+				return false;
+			}
+		}
+		return true;
+	}
+	default:
 		// Any other shape that reads no decision (a comparison, a parameter, a lambda) is a
 		// per-row coefficient DuckDB evaluates, like the data-only operators above.
 		if (!ExpressionContainsDecideVariable(expr, variables)) {
@@ -1615,7 +1603,7 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 		}
 		error_msg = StringUtil::Format("SUM expression does not support '%s'", expr.ToString());
 		return false;
-    }
+	}
 }
 
 bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg,
@@ -1636,7 +1624,7 @@ DecideBinder::DecideBinder(Binder &binder, ClientContext &context, const case_in
                            optional_ptr<DecideQualifierContext> qualifier_context)
     : ExpressionBinder(binder, context), variables(variables), scalar_variables(scalar_variables),
       qualifier_context(qualifier_context) {
-    is_top_expression = true;
+	is_top_expression = true;
 }
 
 BindResult DecideBinder::TagWrittenColumn(optional_idx location, BindResult result) const {
@@ -1736,10 +1724,9 @@ bool DecideBinder::ClassifyReducerCall(FunctionExpression &func, DecideExpressio
 		                : &const_cast<ParsedExpression &>(ReducerArgumentBody(*func.children.front()));
 		if (body && ExpressionContainsDecideVariable(*body, variables) && IsRowInvariantExpression(*body)) {
 			auto body_text = body->ToString();
-			error_msg = StringUtil::Format(
-			    "%s is a query-wide decision, so %s(%s) has nothing to aggregate over; "
-			    "use %s on its own",
-			    body_text, StringUtil::Upper(fname), body_text, body_text);
+			error_msg = StringUtil::Format("%s is a query-wide decision, so %s(%s) has nothing to aggregate over; "
+			                               "use %s on its own",
+			                               body_text, StringUtil::Upper(fname), body_text, body_text);
 			result = DecideExpression::INVALID;
 		} else if (!body) {
 			error_msg =
@@ -1765,8 +1752,9 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 	// the symbolic phase synthesizes `count_star()` internally when rewriting SUM(constant).
 	if (!IsDecideAggregateName(func.name) && func.name != "count" && func.name != "count_star") {
 		return BindResult(BinderException::Unsupported(
-		    aggr, StringUtil::Format("DECIDE clause does not support aggregate '%s', only SUM, AVG, MIN, MAX, or COUNT is allowed.",
-		                             func.name)));
+		    aggr, StringUtil::Format(
+		              "DECIDE clause does not support aggregate '%s', only SUM, AVG, MIN, MAX, or COUNT is allowed.",
+		              func.name)));
 	}
 
 	// COUNT over a DECIDE variable is degenerate: decision variables are never null, so
@@ -1784,19 +1772,20 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 
 	// No Filter/Distinc allowed for Aggregate
 	if (aggr.filter || aggr.distinct) {
-        return BindResult(BinderException::Unsupported(aggr, StringUtil::Format("DECIDE clause does not support '%s'", aggr.ToString())));
+		return BindResult(BinderException::Unsupported(
+		    aggr, StringUtil::Format("DECIDE clause does not support '%s'", aggr.ToString())));
 	}
 
 	// Bind arguments
 	vector<unique_ptr<Expression>> children;
 	vector<LogicalType> child_types;
 	for (auto &child_expr : aggr.children) {
-        // Use this->BindExpression to ensure subqueries are handled (executed at bind time)
-        auto result = BindExpression(child_expr, depth);
-        if (result.HasError()) {
-            return result;
-        }
-        auto &bound_child = result.expression;
+		// Use this->BindExpression to ensure subqueries are handled (executed at bind time)
+		auto result = BindExpression(child_expr, depth);
+		if (result.HasError()) {
+			return result;
+		}
+		auto &bound_child = result.expression;
 		// Bound directly, so it takes the text a cast or subquery recorded here rather than in ExpressionBinder::Bind.
 		// A plain argument name means nothing to these aggregates, and the child's tags stay.
 		idx_t fragment_id;
@@ -1850,8 +1839,7 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 		if (qualifier.GetExpressionClass() != ExpressionClass::COLUMN_REF ||
 		    qualifier.Cast<ColumnRefExpression>().IsQualified()) {
 			return BindResult(BinderException::Unsupported(
-			    qualified_expr,
-			    "The qualifier of a reducer must be a relation name or alias, as in sum(D: ...)."));
+			    qualified_expr, "The qualifier of a reducer must be a relation name or alias, as in sum(D: ...)."));
 		}
 		relations.push_back(qualifier.Cast<ColumnRefExpression>().GetColumnName());
 		string written;
@@ -1873,9 +1861,9 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 		auto binding = binder.bind_context.GetBinding(relation, binding_error);
 		if (!binding || binding->index == ctx.decide_index) {
 			return BindResult(BinderException::Unsupported(
-			    qualified_expr, StringUtil::Format(
-			                        "Relation '%s' is not in the FROM clause, so a reducer cannot be qualified by it.",
-			                        relation)));
+			    qualified_expr,
+			    StringUtil::Format("Relation '%s' is not in the FROM clause, so a reducer cannot be qualified by it.",
+			                       relation)));
 		}
 		AddRelationColumns(*binding, key);
 	}
@@ -1892,10 +1880,10 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 	auto *aggregate = GetBoundAggregate(*aggregate_expr);
 	if (!aggregate) {
 		return BindResult(BinderException::Unsupported(
-		    qualified_expr, StringUtil::Format(
-		                        "A relation qualifier is only allowed on SUM, AVG, MIN or MAX; write %s(...) without "
-		                        "the '%s:' qualifier.",
-		                        StringUtil::Upper(relation_list), relation_list)));
+		    qualified_expr,
+		    StringUtil::Format("A relation qualifier is only allowed on SUM, AVG, MIN or MAX; write %s(...) without "
+		                       "the '%s:' qualifier.",
+		                       StringUtil::Upper(relation_list), relation_list)));
 	}
 	auto agg_name = StringUtil::Lower(aggregate->function.name);
 	if (!IsDecideAggregateName(agg_name)) {
@@ -1980,8 +1968,8 @@ BindResult DecideBinder::BindScopedReducer(unique_ptr<ParsedExpression> &expr_pt
 		auto scope_idx =
 		    FindOrCreateKeyScope(context, binder.bind_context, marker, DecisionNames(variables),
 		                         DecideKeyToString(marker), *qualifier_context->keys, *qualifier_context->keyed_scopes);
-		AddDecideTag(aggregate->alias,
-		             MakeQualifiedReducerTag(scope_idx, qualifier_context->WrittenFragment(marker, DecideSpanRole::PER)));
+		AddDecideTag(aggregate->alias, MakeQualifiedReducerTag(
+		                                   scope_idx, qualifier_context->WrittenFragment(marker, DecideSpanRole::PER)));
 	}
 	return result;
 }
@@ -2254,11 +2242,11 @@ string DecideBinder::BoundAlias(const Expression &bound, const string &parsed) {
 }
 
 BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
-    auto &expr = *expr_ptr;
-    auto &function = expr.Cast<FunctionExpression>();
-    if (function.is_operator && function.function_name == QUALIFIED_REDUCER_TAG) {
-        return BindQualifiedReducer(function, depth);
-    }
+	auto &expr = *expr_ptr;
+	auto &function = expr.Cast<FunctionExpression>();
+	if (function.is_operator && function.function_name == QUALIFIED_REDUCER_TAG) {
+		return BindQualifiedReducer(function, depth);
+	}
 	// `by (key)` and a scope in front of a reducer's argument. ValidateDecideScopeSpellings
 	// has already refused both on anything but SUM, AVG, MIN and MAX.
 	if (function.is_operator && function.function_name == REDUCER_BY_TAG) {
@@ -2275,65 +2263,69 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
 	if (!function.is_operator && StringUtil::CIEquals(function.function_name, "norm")) {
 		if (function.children.size() < 2 || function.children.size() > 3) {
 			return BindResult(BinderException::Unsupported(
-                function, "norm(expr, p) takes an expression, an order (1, 2, 0, or 'inf'), and optional M for L0."));
+			    function, "norm(expr, p) takes an expression, an order (1, 2, 0, or 'inf'), and optional M for L0."));
 		}
 		if (function.children[1]->GetExpressionClass() != ExpressionClass::CONSTANT) {
-            return BindResult(BinderException::Unsupported(
-                function, "The order p in norm(expr, p) must be a constant (1, 2, 0, or 'inf')."));
-        }
-        auto &order_value = function.children[1]->Cast<ConstantExpression>().value;
-        string payload;
-        if (order_value.type().id() == LogicalTypeId::VARCHAR) {
-            auto order = StringUtil::Lower(StringValue::Get(order_value));
-            if (order != "inf" && order != "infinity" && order != "max") {
-                return BindResult(BinderException::Unsupported(function,
-                    StringUtil::Format("Unsupported norm order '%s'. Use 0, 1, 2, or 'inf'.", order)));
-            }
-            if (function.children.size() != 2) {
-                return BindResult(BinderException::Unsupported(function, "norm(expr, 'inf') does not take M."));
-            }
-            payload = "inf";
-        } else if (order_value.type().IsNumeric()) {
-            double order = order_value.GetValue<double>();
-            if (order == 1.0) {
-                if (function.children.size() != 2) return BindResult(BinderException::Unsupported(function, "Only norm(expr, 0, M) accepts M."));
-                payload = "1";
-            } else if (order == 2.0) {
-                if (function.children.size() != 2) return BindResult(BinderException::Unsupported(function, "Only norm(expr, 0, M) accepts M."));
-                payload = "2";
-            } else if (order == 0.0) {
-                if (function.children.size() == 2) {
-                    payload = "0_auto";
-                } else {
-                    if (function.children[2]->GetExpressionClass() != ExpressionClass::CONSTANT) {
-                        return BindResult(BinderException::Unsupported(function,
-                            "norm(expr, 0, M): the bound M must be a constant. Omit it to infer M from the data, or pass a positive literal."));
-                    }
-                    auto m = function.children[2]->Cast<ConstantExpression>().value.GetValue<double>();
-                    if (!(m > 0.0)) {
-                        return BindResult(BinderException::Unsupported(function,
-                            "The L0 bound M in norm(expr, 0, M) must be a positive constant."));
-                    }
-                    payload = "0_" + StringUtil::Format("%.17g", m);
-                }
-            } else {
-                return BindResult(BinderException::Unsupported(function,
-                    StringUtil::Format("Unsupported norm order %g. Supported: 0, 1, 2, or 'inf'.", order)));
-            }
-        } else {
-            return BindResult(BinderException::Unsupported(function,
-                "The order p in norm(expr, p) must be 0, 1, 2, or 'inf'."));
-        }
-		// An L0 norm of a decision stays a marker for the optimizer, which gives it indicators; no row reads it as a value.
-		const bool stays_a_marker = StringUtil::StartsWith(payload, "0") &&
-		                            ExpressionContainsDecideVariable(*function.children[0], variables);
-        vector<unique_ptr<ParsedExpression>> marker_children;
-        marker_children.push_back(std::move(function.children[0]));
-        // The system's SUM by name: a norm is DECIDE syntax, so a user's `sum` macro does not capture it.
-        auto marker = make_uniq<FunctionExpression>(SYSTEM_CATALOG, DEFAULT_SCHEMA, "sum", std::move(marker_children));
-        marker->alias = function.alias;
-        AddDecideTag(marker->alias, string(NORM_MARKER_TAG_PREFIX) + payload + "__");
-        expr_ptr = std::move(marker);
+			return BindResult(BinderException::Unsupported(
+			    function, "The order p in norm(expr, p) must be a constant (1, 2, 0, or 'inf')."));
+		}
+		auto &order_value = function.children[1]->Cast<ConstantExpression>().value;
+		string payload;
+		if (order_value.type().id() == LogicalTypeId::VARCHAR) {
+			auto order = StringUtil::Lower(StringValue::Get(order_value));
+			if (order != "inf" && order != "infinity" && order != "max") {
+				return BindResult(BinderException::Unsupported(
+				    function, StringUtil::Format("Unsupported norm order '%s'. Use 0, 1, 2, or 'inf'.", order)));
+			}
+			if (function.children.size() != 2) {
+				return BindResult(BinderException::Unsupported(function, "norm(expr, 'inf') does not take M."));
+			}
+			payload = "inf";
+		} else if (order_value.type().IsNumeric()) {
+			double order = order_value.GetValue<double>();
+			if (order == 1.0) {
+				if (function.children.size() != 2)
+					return BindResult(BinderException::Unsupported(function, "Only norm(expr, 0, M) accepts M."));
+				payload = "1";
+			} else if (order == 2.0) {
+				if (function.children.size() != 2)
+					return BindResult(BinderException::Unsupported(function, "Only norm(expr, 0, M) accepts M."));
+				payload = "2";
+			} else if (order == 0.0) {
+				if (function.children.size() == 2) {
+					payload = "0_auto";
+				} else {
+					if (function.children[2]->GetExpressionClass() != ExpressionClass::CONSTANT) {
+						return BindResult(BinderException::Unsupported(
+						    function, "norm(expr, 0, M): the bound M must be a constant. Omit it to infer M from the "
+						              "data, or pass a positive literal."));
+					}
+					auto m = function.children[2]->Cast<ConstantExpression>().value.GetValue<double>();
+					if (!(m > 0.0)) {
+						return BindResult(BinderException::Unsupported(
+						    function, "The L0 bound M in norm(expr, 0, M) must be a positive constant."));
+					}
+					payload = "0_" + StringUtil::Format("%.17g", m);
+				}
+			} else {
+				return BindResult(BinderException::Unsupported(
+				    function, StringUtil::Format("Unsupported norm order %g. Supported: 0, 1, 2, or 'inf'.", order)));
+			}
+		} else {
+			return BindResult(
+			    BinderException::Unsupported(function, "The order p in norm(expr, p) must be 0, 1, 2, or 'inf'."));
+		}
+		// An L0 norm of a decision stays a marker for the optimizer, which gives it indicators; no row reads it as a
+		// value.
+		const bool stays_a_marker =
+		    StringUtil::StartsWith(payload, "0") && ExpressionContainsDecideVariable(*function.children[0], variables);
+		vector<unique_ptr<ParsedExpression>> marker_children;
+		marker_children.push_back(std::move(function.children[0]));
+		// The system's SUM by name: a norm is DECIDE syntax, so a user's `sum` macro does not capture it.
+		auto marker = make_uniq<FunctionExpression>(SYSTEM_CATALOG, DEFAULT_SCHEMA, "sum", std::move(marker_children));
+		marker->alias = function.alias;
+		AddDecideTag(marker->alias, string(NORM_MARKER_TAG_PREFIX) + payload + "__");
+		expr_ptr = std::move(marker);
 		auto result = BindFunction(expr_ptr, depth);
 		if (!result.HasError() && !stays_a_marker) {
 			// The marker parses as SUM(e), but the norm's value is its definition's, which what reads it binds to. Its
@@ -2348,12 +2340,13 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
 	}
 	// Check if this is an aggregate function
 	QueryErrorContext error_context(expr_ptr->GetQueryLocation());
-    auto &catalog_entry = *GetCatalogEntry(CatalogType::SCALAR_FUNCTION_ENTRY, function.catalog, function.schema, function.function_name, OnEntryNotFound::THROW_EXCEPTION, error_context);
-    
-    if (catalog_entry.type == CatalogType::AGGREGATE_FUNCTION_ENTRY) {
-        // It's an aggregate function, bind it using our custom aggregate logic
-        return BindAggregate(function, catalog_entry.Cast<AggregateFunctionCatalogEntry>(), depth);
-    }
+	auto &catalog_entry = *GetCatalogEntry(CatalogType::SCALAR_FUNCTION_ENTRY, function.catalog, function.schema,
+	                                       function.function_name, OnEntryNotFound::THROW_EXCEPTION, error_context);
+
+	if (catalog_entry.type == CatalogType::AGGREGATE_FUNCTION_ENTRY) {
+		// It's an aggregate function, bind it using our custom aggregate logic
+		return BindAggregate(function, catalog_entry.Cast<AggregateFunctionCatalogEntry>(), depth);
+	}
 	// It's a scalar function, bind it normally. A NULL argument makes it NULL, and DuckDB
 	// folds it to that constant: the decisions it read are gone, so it is refused here,
 	// where the SQL is still at hand.
@@ -2372,44 +2365,42 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
 }
 
 BindResult DecideBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
-    // Read the location before dispatching: BindFunction rewrites `expr_ptr` in place
-    // for the norm marker, so the node it names afterwards is not the one the user wrote.
-    auto location = expr_ptr->GetQueryLocation();
-    return PreserveQueryLocation(location,
-                                 TagWrittenColumn(location, BindExpressionInternal(expr_ptr, depth, root_expression)));
+	// Read the location before dispatching: BindFunction rewrites `expr_ptr` in place
+	// for the norm marker, so the node it names afterwards is not the one the user wrote.
+	auto location = expr_ptr->GetQueryLocation();
+	return PreserveQueryLocation(location,
+	                             TagWrittenColumn(location, BindExpressionInternal(expr_ptr, depth, root_expression)));
 }
 
 BindResult DecideBinder::BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
                                                 bool root_expression) {
-    if (depth > 0) {
-        return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
-    }
-    auto &expr = *expr_ptr;
-    switch (expr.GetExpressionClass()) {
-    case ExpressionClass::FUNCTION:
-        return BindFunction(expr_ptr, depth);
-    case ExpressionClass::DECIDE_FRAME:
-        return BindDecideFrame(expr.Cast<DecideFrameExpression>(), depth);
-    case ExpressionClass::SUBQUERY: {
-        auto &subquery = expr.Cast<SubqueryExpression>();
-        if (subquery.subquery_type != SubqueryType::SCALAR) {
-             return BindResult(BinderException::Unsupported(expr, "Only scalar subqueries are supported in DECIDE"));
-        }
-        if (ExpressionContainsDecideVariable(expr, variables)) {
-            return BindResult(BinderException::Unsupported(expr,
-                "Subqueries in DECIDE clauses cannot reference DECIDE variables."));
-        }
-        // Standard binding handles both correlated and uncorrelated scalar subqueries.
-        // Uncorrelated: PlanSubqueries evaluates them as cross-joined scalars.
-        // Correlated: PlanSubqueries decorrelates them into joins, producing
-        //             per-row values that the DECIDE operator evaluates normally.
-        return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
-    }
-    default:
-        return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
-    }
+	if (depth > 0) {
+		return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
+	}
+	auto &expr = *expr_ptr;
+	switch (expr.GetExpressionClass()) {
+	case ExpressionClass::FUNCTION:
+		return BindFunction(expr_ptr, depth);
+	case ExpressionClass::DECIDE_FRAME:
+		return BindDecideFrame(expr.Cast<DecideFrameExpression>(), depth);
+	case ExpressionClass::SUBQUERY: {
+		auto &subquery = expr.Cast<SubqueryExpression>();
+		if (subquery.subquery_type != SubqueryType::SCALAR) {
+			return BindResult(BinderException::Unsupported(expr, "Only scalar subqueries are supported in DECIDE"));
+		}
+		if (ExpressionContainsDecideVariable(expr, variables)) {
+			return BindResult(
+			    BinderException::Unsupported(expr, "Subqueries in DECIDE clauses cannot reference DECIDE variables."));
+		}
+		// Standard binding handles both correlated and uncorrelated scalar subqueries.
+		// Uncorrelated: PlanSubqueries evaluates them as cross-joined scalars.
+		// Correlated: PlanSubqueries decorrelates them into joins, producing
+		//             per-row values that the DECIDE operator evaluates normally.
+		return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
+	}
+	default:
+		return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
+	}
 }
-
-
 
 } // namespace duckdb

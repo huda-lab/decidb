@@ -53,29 +53,29 @@ public:
 	unique_ptr<BoundTableRef> from_table;
 	//! The WHERE clause
 	unique_ptr<Expression> where_clause;
-    //! The DECIDE clause
-    vector<unique_ptr<Expression>> decide_variables;
-    unique_ptr<Expression> decide_constraints;
-    //! Stable display provenance captured before PlanSubqueries and finalized after
-    //! canonicalization. source_fragments preserves casts/subqueries while planning.
-    vector<ConstraintSourceInfo> decide_constraint_sources;
-    vector<string> decide_source_fragments;
-    DecideSense decide_sense;
-    unique_ptr<Expression> decide_objective;
-    //! Additive constant peeled from the objective body by
-    //! DecideCanonicalizer::CanonicalizeObjective (e.g. the `3` in
-    //! `MAXIMIZE SUM(x) + 3`). The solver doesn't need this to compute
-    //! `argmax`/`argmin`, but it's kept here so callers that ever want to report
-    //! the actual objective value can add it back. Zero when nothing was peeled.
-    //! Transferred to LogicalDecide at plan time.
-    double objective_constant_offset = 0.0;
-    //! Number of auxiliary variables (e.g. from IN domain rewrite) at the end of decide_variables
-    idx_t num_auxiliary_vars = 0;
-    //! Per-variable boolean flag (true if declared IS BOOLEAN)
-    vector<bool> is_boolean_var;
-    //! Key scopes and each decision's scope (populated during binding, transferred to LogicalDecide)
-    vector<KeyedScopeInfo> keyed_scopes;
-    vector<DecideVarScopeInfo> variable_scopes;
+	//! The DECIDE clause
+	vector<unique_ptr<Expression>> decide_variables;
+	unique_ptr<Expression> decide_constraints;
+	//! Stable display provenance captured before PlanSubqueries and finalized after
+	//! canonicalization. source_fragments preserves casts/subqueries while planning.
+	vector<ConstraintSourceInfo> decide_constraint_sources;
+	vector<string> decide_source_fragments;
+	DecideSense decide_sense;
+	unique_ptr<Expression> decide_objective;
+	//! Additive constant peeled from the objective body by
+	//! DecideCanonicalizer::CanonicalizeObjective (e.g. the `3` in
+	//! `MAXIMIZE SUM(x) + 3`). The solver doesn't need this to compute
+	//! `argmax`/`argmin`, but it's kept here so callers that ever want to report
+	//! the actual objective value can add it back. Zero when nothing was peeled.
+	//! Transferred to LogicalDecide at plan time.
+	double objective_constant_offset = 0.0;
+	//! Number of auxiliary variables (e.g. from IN domain rewrite) at the end of decide_variables
+	idx_t num_auxiliary_vars = 0;
+	//! Per-variable boolean flag (true if declared IS BOOLEAN)
+	vector<bool> is_boolean_var;
+	//! Key scopes and each decision's scope (populated during binding, transferred to LogicalDecide)
+	vector<KeyedScopeInfo> keyed_scopes;
+	vector<DecideVarScopeInfo> variable_scopes;
 	//! Every key of the clause; transferred to LogicalDecide::keys.
 	vector<DecideKey> decide_keys;
 	//! Every frame selector of the clause; transferred to LogicalDecide::frames.
@@ -107,8 +107,8 @@ public:
 	idx_t aggregate_index;
 	//! Index used for GROUPINGS column references
 	idx_t groupings_index;
-    //! The table index for storing decide_variables
-    idx_t decide_index;
+	//! The table index for storing decide_variables
+	idx_t decide_index;
 
 	//! Aggregate functions to compute (only used if HasAggregation is true)
 	vector<unique_ptr<Expression>> aggregates;
@@ -135,8 +135,8 @@ public:
 	idx_t GetRootIndex() override {
 		return need_prune ? prune_index : projection_index;
 	}
-    bool HasDecideClause() const {
-        return !decide_variables.empty();
-    }
+	bool HasDecideClause() const {
+		return !decide_variables.empty();
+	}
 };
 } // namespace duckdb

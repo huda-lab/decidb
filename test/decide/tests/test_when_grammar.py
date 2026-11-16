@@ -26,8 +26,16 @@ from comparison.compare import compare_solutions
 
 
 def _run_oracle_test(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
-    *, test_id, decide_sql, data_sql, build_oracle, decidb_obj_fn,
+    decidb_cli,
+    duckdb_conn,
+    oracle_solver,
+    perf_tracker,
+    *,
+    test_id,
+    decide_sql,
+    data_sql,
+    build_oracle,
+    decidb_obj_fn,
 ):
     """Boilerplate: execute DeciDB, build oracle, compare.
 
@@ -47,14 +55,25 @@ def _run_oracle_test(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        rows, cols, result, data, ["x"],
+        rows,
+        cols,
+        result,
+        data,
+        ["x"],
         decidb_objective_fn=decidb_obj_fn,
     )
     perf_tracker.record(
-        test_id, decidb_time, build_time, result.solve_time_seconds,
-        len(data), n_vars, n_constrs,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        test_id,
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        n_vars,
+        n_constrs,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -67,9 +86,7 @@ def _run_oracle_test(
 @pytest.mark.when_constraint
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-def test_when_paren_not_constraint(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_when_paren_not_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """`sum(when (NOT w): ...)` — parenthesized NOT in a constraint.
 
     Picks `val` only on rows where `w` is false. With val=[10,5,7] and
@@ -98,24 +115,29 @@ def test_when_paren_not_constraint(
         vnames = [f"x_{i}" for i in range(n)]
         for v in vnames:
             oracle.add_variable(v, VarType.BINARY)
-        coeffs = {
-            vnames[i]: data[i][1] for i in range(n) if not data[i][2]
-        }
+        coeffs = {vnames[i]: data[i][1] for i in range(n) if not data[i][2]}
         oracle.add_constraint(coeffs, "<=", 8.0, name="when_not")
         oracle.set_objective(
-            {vnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+            {vnames[i]: data[i][1] for i in range(n)},
+            ObjSense.MAXIMIZE,
         )
         return n, 1
 
     def decidb_obj(rs, cs):
-        xi = cs.index("x"); vi = cs.index("val")
+        xi = cs.index("x")
+        vi = cs.index("val")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_oracle_test(
-        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli,
+        duckdb_conn,
+        oracle_solver,
+        perf_tracker,
         test_id="when_paren_not_constraint",
-        decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, decidb_obj_fn=decidb_obj,
+        decide_sql=decide_sql,
+        data_sql=data_sql,
+        build_oracle=build,
+        decidb_obj_fn=decidb_obj,
     )
 
 
@@ -123,9 +145,7 @@ def test_when_paren_not_constraint(
 @pytest.mark.when_constraint
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-def test_when_paren_eq_constraint(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_when_paren_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """`sum(when (tier = 'high'): ...)` — parenthesized comparison in a constraint.
 
     val=[10,5,7], tier=[high,low,high]. Constraint `10 x_0 + 7 x_2 <= 8`:
@@ -154,24 +174,29 @@ def test_when_paren_eq_constraint(
         vnames = [f"x_{i}" for i in range(n)]
         for v in vnames:
             oracle.add_variable(v, VarType.BINARY)
-        coeffs = {
-            vnames[i]: data[i][1] for i in range(n) if data[i][2] == "high"
-        }
+        coeffs = {vnames[i]: data[i][1] for i in range(n) if data[i][2] == "high"}
         oracle.add_constraint(coeffs, "<=", 8.0, name="when_eq")
         oracle.set_objective(
-            {vnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+            {vnames[i]: data[i][1] for i in range(n)},
+            ObjSense.MAXIMIZE,
         )
         return n, 1
 
     def decidb_obj(rs, cs):
-        xi = cs.index("x"); vi = cs.index("val")
+        xi = cs.index("x")
+        vi = cs.index("val")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_oracle_test(
-        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli,
+        duckdb_conn,
+        oracle_solver,
+        perf_tracker,
         test_id="when_paren_eq_constraint",
-        decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, decidb_obj_fn=decidb_obj,
+        decide_sql=decide_sql,
+        data_sql=data_sql,
+        build_oracle=build,
+        decidb_obj_fn=decidb_obj,
     )
 
 
@@ -179,9 +204,7 @@ def test_when_paren_eq_constraint(
 @pytest.mark.when_constraint
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-def test_when_paren_arith_constraint(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_when_paren_arith_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """`sum(when (a + b > 5): ...)` — parenthesized arithmetic+comparison in a constraint.
 
     val=[10,5,7], (a+b)=[6,2,6]. Same shape as the eq test: rows 0,2 enter
@@ -210,26 +233,29 @@ def test_when_paren_arith_constraint(
         vnames = [f"x_{i}" for i in range(n)]
         for v in vnames:
             oracle.add_variable(v, VarType.BINARY)
-        coeffs = {
-            vnames[i]: data[i][1]
-            for i in range(n)
-            if (data[i][2] + data[i][3]) > 5
-        }
+        coeffs = {vnames[i]: data[i][1] for i in range(n) if (data[i][2] + data[i][3]) > 5}
         oracle.add_constraint(coeffs, "<=", 8.0, name="when_arith")
         oracle.set_objective(
-            {vnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+            {vnames[i]: data[i][1] for i in range(n)},
+            ObjSense.MAXIMIZE,
         )
         return n, 1
 
     def decidb_obj(rs, cs):
-        xi = cs.index("x"); vi = cs.index("val")
+        xi = cs.index("x")
+        vi = cs.index("val")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_oracle_test(
-        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli,
+        duckdb_conn,
+        oracle_solver,
+        perf_tracker,
         test_id="when_paren_arith_constraint",
-        decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, decidb_obj_fn=decidb_obj,
+        decide_sql=decide_sql,
+        data_sql=data_sql,
+        build_oracle=build,
+        decidb_obj_fn=decidb_obj,
     )
 
 
@@ -241,9 +267,7 @@ def test_when_paren_arith_constraint(
 @pytest.mark.when
 @pytest.mark.when_objective
 @pytest.mark.correctness
-def test_when_paren_not_objective(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_when_paren_not_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """`MAXIMIZE when (NOT w): ...` — parenthesized NOT on the objective.
 
     SUCH THAT SUM(x) <= 1 forces a single pick. Objective sums val on
@@ -272,36 +296,38 @@ def test_when_paren_not_objective(
         for v in vnames:
             oracle.add_variable(v, VarType.BINARY)
         oracle.add_constraint(
-            {v: 1.0 for v in vnames}, "<=", 1.0, name="pick_one",
+            {v: 1.0 for v in vnames},
+            "<=",
+            1.0,
+            name="pick_one",
         )
-        obj = {
-            vnames[i]: data[i][1] for i in range(n) if not data[i][2]
-        }
+        obj = {vnames[i]: data[i][1] for i in range(n) if not data[i][2]}
         oracle.set_objective(obj, ObjSense.MAXIMIZE)
         return n, 1
 
     def decidb_obj(rs, cs):
-        xi = cs.index("x"); vi = cs.index("val"); wi = cs.index("w")
-        return sum(
-            float(r[xi]) * float(r[vi])
-            for r in rs
-            if not r[wi]
-        )
+        xi = cs.index("x")
+        vi = cs.index("val")
+        wi = cs.index("w")
+        return sum(float(r[xi]) * float(r[vi]) for r in rs if not r[wi])
 
     _run_oracle_test(
-        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli,
+        duckdb_conn,
+        oracle_solver,
+        perf_tracker,
         test_id="when_paren_not_objective",
-        decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, decidb_obj_fn=decidb_obj,
+        decide_sql=decide_sql,
+        data_sql=data_sql,
+        build_oracle=build,
+        decidb_obj_fn=decidb_obj,
     )
 
 
 @pytest.mark.when
 @pytest.mark.when_objective
 @pytest.mark.correctness
-def test_when_paren_eq_objective(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_when_paren_eq_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """`MAXIMIZE when (tier = 'high'): ...` — parenthesized comparison on the objective.
 
     The unparenthesized equivalent is checked separately so this grammar path
@@ -330,27 +356,31 @@ def test_when_paren_eq_objective(
         for v in vnames:
             oracle.add_variable(v, VarType.BINARY)
         oracle.add_constraint(
-            {v: 1.0 for v in vnames}, "<=", 1.0, name="pick_one",
+            {v: 1.0 for v in vnames},
+            "<=",
+            1.0,
+            name="pick_one",
         )
-        obj = {
-            vnames[i]: data[i][1] for i in range(n) if data[i][2] == "high"
-        }
+        obj = {vnames[i]: data[i][1] for i in range(n) if data[i][2] == "high"}
         oracle.set_objective(obj, ObjSense.MAXIMIZE)
         return n, 1
 
     def decidb_obj(rs, cs):
-        xi = cs.index("x"); vi = cs.index("val"); ti = cs.index("tier")
-        return sum(
-            float(r[xi]) * float(r[vi])
-            for r in rs
-            if r[ti] == "high"
-        )
+        xi = cs.index("x")
+        vi = cs.index("val")
+        ti = cs.index("tier")
+        return sum(float(r[xi]) * float(r[vi]) for r in rs if r[ti] == "high")
 
     _run_oracle_test(
-        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli,
+        duckdb_conn,
+        oracle_solver,
+        perf_tracker,
         test_id="when_paren_eq_objective",
-        decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, decidb_obj_fn=decidb_obj,
+        decide_sql=decide_sql,
+        data_sql=data_sql,
+        build_oracle=build,
+        decidb_obj_fn=decidb_obj,
     )
 
 
@@ -377,9 +407,7 @@ def test_when_unparen_eq_objective_matches_parenthesized(decidb_cli):
 @pytest.mark.when
 @pytest.mark.when_objective
 @pytest.mark.correctness
-def test_when_paren_arith_objective(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_when_paren_arith_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """`MAXIMIZE when (a + b > 5): ...` — parenthesized arithmetic+comparison on the objective."""
     data_sql = """
         SELECT CAST(id AS BIGINT), CAST(val AS DOUBLE),
@@ -405,28 +433,30 @@ def test_when_paren_arith_objective(
         for v in vnames:
             oracle.add_variable(v, VarType.BINARY)
         oracle.add_constraint(
-            {v: 1.0 for v in vnames}, "<=", 1.0, name="pick_one",
+            {v: 1.0 for v in vnames},
+            "<=",
+            1.0,
+            name="pick_one",
         )
-        obj = {
-            vnames[i]: data[i][1]
-            for i in range(n)
-            if (data[i][2] + data[i][3]) > 5
-        }
+        obj = {vnames[i]: data[i][1] for i in range(n) if (data[i][2] + data[i][3]) > 5}
         oracle.set_objective(obj, ObjSense.MAXIMIZE)
         return n, 1
 
     def decidb_obj(rs, cs):
-        xi = cs.index("x"); vi = cs.index("val")
-        ai = cs.index("a"); bi = cs.index("b")
-        return sum(
-            float(r[xi]) * float(r[vi])
-            for r in rs
-            if (int(r[ai]) + int(r[bi])) > 5
-        )
+        xi = cs.index("x")
+        vi = cs.index("val")
+        ai = cs.index("a")
+        bi = cs.index("b")
+        return sum(float(r[xi]) * float(r[vi]) for r in rs if (int(r[ai]) + int(r[bi])) > 5)
 
     _run_oracle_test(
-        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli,
+        duckdb_conn,
+        oracle_solver,
+        perf_tracker,
         test_id="when_paren_arith_objective",
-        decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, decidb_obj_fn=decidb_obj,
+        decide_sql=decide_sql,
+        data_sql=data_sql,
+        build_oracle=build,
+        decidb_obj_fn=decidb_obj,
     )

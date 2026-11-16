@@ -45,7 +45,10 @@ OWNED = re.compile(r"(decide|decidb)", re.IGNORECASE)
 
 HEADER_CHECKS = [
     ("cmath", r"std::(isfinite|isnan|isinf|fabs|floor|ceil|round|pow|sqrt|log|exp|trunc|copysign|nextafter|hypot)\b"),
-    ("algorithm", r"std::(sort|stable_sort|max_element|min_element|find_if|count_if|reverse|unique|lower_bound|upper_bound|all_of|any_of|none_of|clamp)\b"),
+    (
+        "algorithm",
+        r"std::(sort|stable_sort|max_element|min_element|find_if|count_if|reverse|unique|lower_bound|upper_bound|all_of|any_of|none_of|clamp)\b",
+    ),
     ("numeric", r"std::(accumulate|iota)\b"),
     ("cstring", r"std::(memcpy|memset|memcmp|strlen|strcmp)\b"),
     ("limits", r"std::(numeric_limits)\b"),
@@ -53,18 +56,18 @@ HEADER_CHECKS = [
 ]
 
 POSIX_HEADERS = r'#include\s*<(unistd|dirent|pthread|sys/(resource|time|wait|ioctl|mman))\.h>'
-POSIX_FUNCS = (r'\b(getrusage|setenv|unsetenv|isatty|STDIN_FILENO|strcasecmp|strncasecmp'
-               r'|popen|pclose|fork|usleep|nanosleep|gettimeofday|mkstemp|ftruncate'
-               r'|dlopen|dlsym|dlclose|opendir|readdir|closedir)\b')
+POSIX_FUNCS = (
+    r'\b(getrusage|setenv|unsetenv|isatty|STDIN_FILENO|strcasecmp|strncasecmp'
+    r'|popen|pclose|fork|usleep|nanosleep|gettimeofday|mkstemp|ftruncate'
+    r'|dlopen|dlsym|dlclose|opendir|readdir|closedir)\b'
+)
 
 WIN_GUARDS = ("_WIN32", "DUCKDB_WINDOWS", "_MSC_VER")
 
 
 def tracked_sources(dirs, suffixes=(".cpp", ".hpp")):
-    out = subprocess.run(["git", "ls-files", *dirs], cwd=ROOT,
-                         capture_output=True, text=True).stdout.split()
-    return [f for f in out
-            if f.endswith(suffixes) and "third_party" not in f and OWNED.search(f)]
+    out = subprocess.run(["git", "ls-files", *dirs], cwd=ROOT, capture_output=True, text=True).stdout.split()
+    return [f for f in out if f.endswith(suffixes) and "third_party" not in f and OWNED.search(f)]
 
 
 def strip_comments(text):
@@ -85,7 +88,7 @@ def check_headers(files):
         for hdr, pat in HEADER_CHECKS:
             m = re.search(pat, text)
             if m and hdr not in includes:
-                line = text[:m.start()].count("\n") + 1
+                line = text[: m.start()].count("\n") + 1
                 bad.append(f"{f}:{line}  std::{m.group(1)} without <{hdr}>")
     return bad
 
@@ -102,7 +105,7 @@ def check_posix(files):
         for pat, what in ((POSIX_HEADERS, "POSIX header"), (POSIX_FUNCS, "POSIX function")):
             m = re.search(pat, text)
             if m:
-                line = text[:m.start()].count("\n") + 1
+                line = text[: m.start()].count("\n") + 1
                 bad.append(f"{f}:{line}  unguarded {what}: {m.group(0)}")
                 break
     return bad
@@ -111,8 +114,10 @@ def check_posix(files):
 def check_standalone(files):
     cc_path = next((p for p in sorted(ROOT.glob("build/*/compile_commands.json"))), None)
     if cc_path is None:
-        return ["no build/*/compile_commands.json -- run `make release`, or configure with "
-                "cmake -B build/ci -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"]
+        return [
+            "no build/*/compile_commands.json -- run `make release`, or configure with "
+            "cmake -B build/ci -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+        ]
     cc = json.loads(cc_path.read_text())
 
     # Flags differ by area -- test targets need Catch's include path, which no
@@ -135,8 +140,9 @@ def check_standalone(files):
     for i, f in enumerate(cpps, 1):
         print(f"\r  standalone {i}/{len(cpps)}", end="", file=sys.stderr, flush=True)
         flags = by_area.get(f.split("/")[0], fallback)
-        r = subprocess.run(["clang++", "-std=c++17", "-fsyntax-only", *flags, f],
-                           cwd=ROOT, capture_output=True, text=True)
+        r = subprocess.run(
+            ["clang++", "-std=c++17", "-fsyntax-only", *flags, f], cwd=ROOT, capture_output=True, text=True
+        )
         if r.returncode != 0:
             first = next((l for l in r.stderr.splitlines() if "error:" in l), r.stderr[:200])
             bad.append(f"{f}  {first.strip()}")
@@ -153,8 +159,7 @@ def main():
     print(f"checking {len(files)} DeciDB sources\n")
 
     failed = False
-    checks = [("missing standard headers", check_headers, files),
-              ("unguarded POSIX use", check_posix, files)]
+    checks = [("missing standard headers", check_headers, files), ("unguarded POSIX use", check_posix, files)]
     if not args.fast:
         checks.append(("standalone compile (DISABLE_UNITY=1)", check_standalone, files))
 

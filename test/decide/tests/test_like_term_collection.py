@@ -24,10 +24,7 @@ def _row_terms(dump: str, row: int = 0) -> dict[int, float]:
     """`row N: ... | col:coef col:coef` → {col: coef}."""
     match = re.search(rf"^row {row}: .*?\|(.*)$", dump, re.M)
     assert match, f"no row {row} in dump:\n{dump}"
-    return {
-        int(col): float(coef)
-        for col, coef in (pair.split(":") for pair in match.group(1).split())
-    }
+    return {int(col): float(coef) for col, coef in (pair.split(":") for pair in match.group(1).split())}
 
 
 _ROWS = "(VALUES (1, 'A'), (2, 'B'), (3, 'A')) t(id, grp)"
@@ -52,8 +49,9 @@ def test_differing_aggregate_local_when_filters_do_not_merge(decidb_cli, tmp_pat
         """,
         tmp_path / "when.dump",
     )
-    assert _row_terms(dump) == pytest.approx({0: 1.0, 1: 1.0, 2: 1.0}), \
-        f"a disjoint-WHEN pair collapsed into one masked term:\n{dump}"
+    assert _row_terms(dump) == pytest.approx(
+        {0: 1.0, 1: 1.0, 2: 1.0}
+    ), f"a disjoint-WHEN pair collapsed into one masked term:\n{dump}"
 
 
 @pytest.mark.correctness
@@ -70,9 +68,11 @@ def test_avg_and_sum_on_one_column_do_not_merge(decidb_cli, tmp_path):
             DECIDE x(INT) SUCH THAT x <= 9 AND SUM(x) + AVG(x) <= 8
             MAXIMIZE SUM(x)
         """,
-        tmp_path / "avg.dump")
-    assert _row_terms(dump) == pytest.approx({c: 4.0 / 3.0 for c in range(3)}), \
-        f"an AVG term merged with a SUM term before scaling:\n{dump}"
+        tmp_path / "avg.dump",
+    )
+    assert _row_terms(dump) == pytest.approx(
+        {c: 4.0 / 3.0 for c in range(3)}
+    ), f"an AVG term merged with a SUM term before scaling:\n{dump}"
 
 
 @pytest.mark.correctness
@@ -89,6 +89,8 @@ def test_opposite_signs_subtract_rather_than_add(decidb_cli, tmp_path):
             DECIDE x(INT) SUCH THAT x <= 9 AND SUM(3 * x) - SUM(x) <= 12
             MAXIMIZE SUM(x)
         """,
-        tmp_path / "signs.dump")
-    assert _row_terms(dump) == pytest.approx({c: 2.0 for c in range(3)}), \
-        f"opposite-signed like terms did not subtract:\n{dump}"
+        tmp_path / "signs.dump",
+    )
+    assert _row_terms(dump) == pytest.approx(
+        {c: 2.0 for c in range(3)}
+    ), f"opposite-signed like terms did not subtract:\n{dump}"

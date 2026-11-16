@@ -120,9 +120,8 @@ RefusalText DescribeGap(const LogicalDecide &op, const DecideObjective *objectiv
 			return {"the objective multiplies two decision variables",
 			        "use an objective that is linear in the decisions"};
 		}
-		return {op.decide_sense == DecideSense::MAXIMIZE
-		            ? "the objective MAXIMIZEs squared decision terms"
-		            : "the objective MINIMIZEs negated squared decision terms",
+		return {op.decide_sense == DecideSense::MAXIMIZE ? "the objective MAXIMIZEs squared decision terms"
+		                                                 : "the objective MINIMIZEs negated squared decision terms",
 		        op.decide_sense == DecideSense::MAXIMIZE
 		            ? "MINIMIZE the squared terms instead, or use a linear objective"
 		            : "MINIMIZE the squared terms without negating them, or use a linear objective"};
@@ -169,8 +168,7 @@ SolverModelClass DeriveDecideModelClass(const LogicalDecide &op, const DecideTre
 		if (objective->has_bilinear) {
 			needed.nonconvex_quadratic = true;
 		} else {
-			needed.nonconvex_quadratic =
-			    IsNonconvexQuadraticObjective(objective->quadratic_sign, op.decide_sense);
+			needed.nonconvex_quadratic = IsNonconvexQuadraticObjective(objective->quadratic_sign, op.decide_sense);
 		}
 		needed.miqp = MayHaveIntegralColumn(op);
 		needed.singular_quadratic = HasCoupledQuadraticTerms(*objective);

@@ -25,25 +25,15 @@ from ._oracle_helpers import add_ne_indicator
 # quotes the clause. A strict inequality whose variables are all integer but whose
 # coefficients are not is a different refusal, raised by the model builder once the
 # coefficients have been evaluated.
-_STRICT_LT_REAL_MSG = re.compile(
-    r"Strict inequality '<' is not supported over the REAL decision"
-)
-_STRICT_GT_REAL_MSG = re.compile(
-    r"Strict inequality '>' is not supported over the REAL decision"
-)
-_STRICT_LT_COEFF_MSG = re.compile(
-    r"Comparison '<' is not supported here: .*can take fractional values"
-)
+_STRICT_LT_REAL_MSG = re.compile(r"Strict inequality '<' is not supported over the REAL decision")
+_STRICT_GT_REAL_MSG = re.compile(r"Strict inequality '>' is not supported over the REAL decision")
+_STRICT_LT_COEFF_MSG = re.compile(r"Comparison '<' is not supported here: .*can take fractional values")
 _STRICT_QUADRATIC_MSG = re.compile(
-    r"Strict inequality \('<' / '>'\) is not supported on constraints with "
-    r"quadratic or bilinear terms"
+    r"Strict inequality \('<' / '>'\) is not supported on constraints with " r"quadratic or bilinear terms"
 )
-_NE_REAL_MSG = re.compile(
-    r"Inequality '<>' is not supported over the REAL decision"
-)
+_NE_REAL_MSG = re.compile(r"Inequality '<>' is not supported over the REAL decision")
 _NE_FRACTIONAL_COEFF_MSG = re.compile(
-    r"Inequality '<>' is not supported when a column scaling the "
-    r"left-hand side holds a non-integer value"
+    r"Inequality '<>' is not supported when a column scaling the " r"left-hand side holds a non-integer value"
 )
 
 
@@ -65,13 +55,15 @@ def test_sum_equality_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 50
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("sum_eq")
@@ -81,7 +73,9 @@ def test_sum_equality_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tr
 
     oracle_solver.add_constraint(
         {vnames[i]: 1.0 for i in range(len(data))},
-        "=", 10.0, name="exact_count",
+        "=",
+        10.0,
+        name="exact_count",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -91,14 +85,24 @@ def test_sum_equality_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "sum_eq", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "sum_eq",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -128,13 +132,15 @@ def test_sum_strict_less_than(decidb_cli, duckdb_conn, oracle_solver, perf_track
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 50
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("sum_strict_lt")
@@ -145,7 +151,9 @@ def test_sum_strict_less_than(decidb_cli, duckdb_conn, oracle_solver, perf_track
     # For integer variables, SUM < 100 ≡ SUM <= 99
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data))},
-        "<=", 99.0, name="capacity_strict",
+        "<=",
+        99.0,
+        name="capacity_strict",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -155,14 +163,24 @@ def test_sum_strict_less_than(decidb_cli, duckdb_conn, oracle_solver, perf_track
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "sum_strict_lt", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "sum_strict_lt",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -187,13 +205,15 @@ def test_sum_strict_greater_than(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 50
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("sum_strict_gt")
@@ -204,11 +224,15 @@ def test_sum_strict_greater_than(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     # For integer variables, SUM(x) > 5 ≡ SUM(x) >= 6
     oracle_solver.add_constraint(
         {vnames[i]: 1.0 for i in range(len(data))},
-        ">=", 6.0, name="min_count_strict",
+        ">=",
+        6.0,
+        name="min_count_strict",
     )
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data))},
-        "<=", 200.0, name="capacity",
+        "<=",
+        200.0,
+        name="capacity",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -218,14 +242,24 @@ def test_sum_strict_greater_than(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "sum_strict_gt", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "sum_strict_gt",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -236,9 +270,7 @@ def test_sum_strict_greater_than(decidb_cli, duckdb_conn, oracle_solver, perf_tr
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_sum_negative_constant_multiplier(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_sum_negative_constant_multiplier(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """``SUM(x * (-10.0)) <= -50`` — negative constant literal as the coefficient.
 
     Sibling of ``test_sum_negative_coeffs_aggregate`` (which uses a signed
@@ -259,12 +291,14 @@ def test_sum_negative_constant_multiplier(
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 20
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
 
     t_build = time.perf_counter()
@@ -276,7 +310,9 @@ def test_sum_negative_constant_multiplier(
     # Encode the negative form verbatim: SUM(-10 * x) <= -50.
     oracle_solver.add_constraint(
         {vnames[i]: -10.0 for i in range(n)},
-        "<=", -50.0, name="neg_literal_floor",
+        "<=",
+        -50.0,
+        name="neg_literal_floor",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(n)},
@@ -287,14 +323,24 @@ def test_sum_negative_constant_multiplier(
 
     price_idx = decidb_cols.index("l_extendedprice")
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[price_idx])},
     )
 
     perf_tracker.record(
-        "sum_negative_constant_multiplier", decidb_time, build_time,
-        result.solve_time_seconds, n, n, 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "sum_negative_constant_multiplier",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -305,9 +351,7 @@ def test_sum_negative_constant_multiplier(
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_sum_negative_coeffs_aggregate(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_sum_negative_coeffs_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Aggregate constraint ``SUM(x * cost) >= 0`` with mixed-sign cost column.
 
     Exercises coefficient-sign handling during aggregate constraint
@@ -318,9 +362,7 @@ def test_sum_negative_coeffs_aggregate(
     which rows may be selected), producing a different vector/objective.
     """
     data_sql = (
-        "SELECT * FROM (VALUES "
-        "(1, -5.0, 10.0), (2, -3.0, 8.0), (3, 7.0, 15.0), (4, -1.0, 5.0)"
-        ") t(id, cost, val)"
+        "SELECT * FROM (VALUES " "(1, -5.0, 10.0), (2, -3.0, 8.0), (3, 7.0, 15.0), (4, -1.0, 5.0)" ") t(id, cost, val)"
     )
     decide_sql = f"""
         SELECT id, cost, val, x FROM ({data_sql})
@@ -333,8 +375,7 @@ def test_sum_negative_coeffs_aggregate(
     decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute(
-        f"SELECT CAST(id AS BIGINT), CAST(cost AS DOUBLE), CAST(val AS DOUBLE) "
-        f"FROM ({data_sql})"
+        f"SELECT CAST(id AS BIGINT), CAST(cost AS DOUBLE), CAST(val AS DOUBLE) " f"FROM ({data_sql})"
     ).fetchall()
     n = len(data)
 
@@ -346,7 +387,9 @@ def test_sum_negative_coeffs_aggregate(
 
     oracle_solver.add_constraint(
         {vnames[i]: data[i][1] for i in range(n)},
-        ">=", 0.0, name="signed_cost_floor",
+        ">=",
+        0.0,
+        name="signed_cost_floor",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(n)},
@@ -357,14 +400,24 @@ def test_sum_negative_coeffs_aggregate(
 
     val_idx = decidb_cols.index("val")
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[val_idx])},
     )
 
     perf_tracker.record(
-        "sum_negative_coeffs", decidb_time, build_time,
-        result.solve_time_seconds, n, n, 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "sum_negative_coeffs",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -376,14 +429,16 @@ def test_sum_negative_coeffs_aggregate(
 @pytest.mark.obj_maximize
 def test_sum_not_equal(decidb_cli):
     """SUM(x) <> 5 — not-equal on aggregate (disjunctive, hard for ILP)."""
-    result, _ = decidb_cli.execute("""
+    result, _ = decidb_cli.execute(
+        """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <> 5
             AND SUM(x * l_quantity) <= 200
         MAXIMIZE SUM(x * l_extendedprice)
-    """)
+    """
+    )
     assert len(result) > 0
     total = sum(row[4] for row in result)
     assert total != 5, f"SUM(x) = {total}, expected <> 5"
@@ -394,7 +449,8 @@ def test_sum_not_equal(decidb_cli):
 @pytest.mark.obj_maximize
 def test_perrow_not_equal(decidb_cli):
     """x <> 3 — per-row not-equal constraint."""
-    result, _ = decidb_cli.execute("""
+    result, _ = decidb_cli.execute(
+        """
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x(INT)
@@ -402,7 +458,8 @@ def test_perrow_not_equal(decidb_cli):
             AND x <= 5
             AND SUM(x * l_quantity) <= 500
         MAXIMIZE SUM(x * l_extendedprice)
-    """)
+    """
+    )
     assert len(result) > 0
     x_idx = 2
     for row in result:
@@ -415,14 +472,16 @@ def test_perrow_not_equal(decidb_cli):
 @pytest.mark.obj_maximize
 def test_sum_not_equal_zero(decidb_cli):
     """SUM(x) <> 0 — forces at least one selected."""
-    result, _ = decidb_cli.execute("""
+    result, _ = decidb_cli.execute(
+        """
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <> 0
             AND SUM(x) <= 3
         MAXIMIZE SUM(x * l_extendedprice)
-    """)
+    """
+    )
     assert len(result) > 0
     total = sum(row[2] for row in result)
     assert total != 0, f"SUM(x) = {total}, expected <> 0"
@@ -448,8 +507,7 @@ def test_sum_not_equal_with_when(decidb_cli):
     )
     assert len(result) > 0
     conditional_total = sum(row[3] for row in result if row[2] > 20)
-    assert conditional_total != 5, \
-        f"SUM(x) WHEN l_quantity > 20 = {conditional_total}, expected <> 5"
+    assert conditional_total != 5, f"SUM(x) WHEN l_quantity > 20 = {conditional_total}, expected <> 5"
 
 
 @pytest.mark.cons_comparison
@@ -485,21 +543,23 @@ def test_sum_not_equal_with_when_binding(decidb_cli, oracle_solver):
     active_coeffs = {vnames[i]: 1.0 for i in range(n) if data[i][2]}
     add_ne_indicator(oracle_solver, active_coeffs, 2.0, name="ne_active")
     oracle_solver.add_constraint(
-        {vnames[i]: 1.0 for i in range(n)}, "<=", 3.0, name="sum_le_3",
+        {vnames[i]: 1.0 for i in range(n)},
+        "<=",
+        3.0,
+        name="sum_le_3",
     )
     oracle_solver.set_objective(
-        {vnames[i]: float(data[i][1]) for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: float(data[i][1]) for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     res = oracle_solver.solve()
     assert res.status == SolverStatus.OPTIMAL
 
     ci = {name: i for i, name in enumerate(cols)}
-    decidb_obj = sum(
-        int(r[ci["x"]]) * int(r[ci["value"]]) for r in rows
-    )
-    assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-    )
+    decidb_obj = sum(int(r[ci["x"]]) * int(r[ci["value"]]) for r in rows)
+    assert (
+        abs(decidb_obj - res.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
 
 
 @pytest.mark.cons_comparison
@@ -510,7 +570,8 @@ def test_sum_not_equal_with_when_binding(decidb_cli, oracle_solver):
 def test_sum_not_equal_no_when_binding(decidb_cli, oracle_solver):
     """SUM(x) <> K without WHEN where NE is the binding constraint.
     Regression test: aggregate NE without WHEN after the global-z refactor."""
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT name, value, x FROM (
             VALUES ('a', 10),
                    ('b', 5),
@@ -522,7 +583,8 @@ def test_sum_not_equal_no_when_binding(decidb_cli, oracle_solver):
             AND SUM(x) <= 3
             AND SUM(x * value) <= 21
         MAXIMIZE SUM(x * value)
-    """)
+    """
+    )
 
     data = [("a", 10), ("b", 5), ("c", 8), ("d", 3)]
     n = len(data)
@@ -535,21 +597,22 @@ def test_sum_not_equal_no_when_binding(decidb_cli, oracle_solver):
     oracle_solver.add_constraint(sum_coeffs, "<=", 3.0, name="sum_le_3")
     oracle_solver.add_constraint(
         {vnames[i]: float(data[i][1]) for i in range(n)},
-        "<=", 21.0, name="value_le_21",
+        "<=",
+        21.0,
+        name="value_le_21",
     )
     oracle_solver.set_objective(
-        {vnames[i]: float(data[i][1]) for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: float(data[i][1]) for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     res = oracle_solver.solve()
     assert res.status == SolverStatus.OPTIMAL
 
     ci = {name: i for i, name in enumerate(cols)}
-    decidb_obj = sum(
-        int(r[ci["x"]]) * int(r[ci["value"]]) for r in rows
-    )
-    assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-    )
+    decidb_obj = sum(int(r[ci["x"]]) * int(r[ci["value"]]) for r in rows)
+    assert (
+        abs(decidb_obj - res.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
 
 
 # ---------------------------------------------------------------------------
@@ -574,9 +637,7 @@ def test_real_sum_strict_lt_rejected(decidb_cli):
     """
     with pytest.raises(DeciDBCliError) as exc_info:
         decidb_cli.execute(sql)
-    assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
-        f"Unexpected error: {exc_info.value.message}"
-    )
+    assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), f"Unexpected error: {exc_info.value.message}"
 
 
 @pytest.mark.cons_comparison
@@ -594,9 +655,7 @@ def test_real_sum_strict_gt_rejected(decidb_cli):
     """
     with pytest.raises(DeciDBCliError) as exc_info:
         decidb_cli.execute(sql)
-    assert _STRICT_GT_REAL_MSG.search(exc_info.value.message), (
-        f"Unexpected error: {exc_info.value.message}"
-    )
+    assert _STRICT_GT_REAL_MSG.search(exc_info.value.message), f"Unexpected error: {exc_info.value.message}"
 
 
 @pytest.mark.cons_comparison
@@ -612,9 +671,7 @@ def test_real_perrow_strict_rejected(decidb_cli):
     """
     with pytest.raises(DeciDBCliError) as exc_info:
         decidb_cli.execute(sql)
-    assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
-        f"Unexpected error: {exc_info.value.message}"
-    )
+    assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), f"Unexpected error: {exc_info.value.message}"
 
 
 @pytest.mark.cons_comparison
@@ -700,9 +757,7 @@ def test_real_strict_rejected_when_term_stays_continuous(decidb_cli):
     """
     with pytest.raises(DeciDBCliError) as exc_info:
         decidb_cli.execute(sql)
-    assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
-        f"Unexpected error: {exc_info.value.message}"
-    )
+    assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), f"Unexpected error: {exc_info.value.message}"
 
 
 @pytest.mark.cons_comparison
@@ -725,9 +780,7 @@ def test_integer_fractional_coeff_strict_rejected(decidb_cli):
     """
     with pytest.raises(DeciDBCliError) as exc_info:
         decidb_cli.execute(sql)
-    assert _STRICT_LT_COEFF_MSG.search(exc_info.value.message), (
-        f"Unexpected error: {exc_info.value.message}"
-    )
+    assert _STRICT_LT_COEFF_MSG.search(exc_info.value.message), f"Unexpected error: {exc_info.value.message}"
 
 
 _SMALL = "SELECT id, x, y FROM (VALUES (1), (2), (3)) t(id) DECIDE x(INT), y(INT) SUCH THAT x <= 3 AND y <= 3 AND {}"
@@ -820,12 +873,14 @@ def test_decimal_scale_zero_needs_no_cast(decidb_cli):
     The counterpart to the test above: the rule is "scale > 0, or a floating type",
     not "any DECIMAL".
     """
-    rows, _ = decidb_cli.execute("""
+    rows, _ = decidb_cli.execute(
+        """
         SELECT id, x FROM (
             VALUES (1, 2::DECIMAL(15,0)), (2, 3::DECIMAL(15,0))
         ) t(id, w)
         DECIDE x(INT) SUCH THAT x <= 4 AND SUM(x * w) < 10 MAXIMIZE SUM(x)
-    """)
+    """
+    )
     assert rows, "a scale-0 DECIMAL coefficient should need no cast"
 
 
@@ -844,9 +899,7 @@ def test_mixed_bool_real_strict_rejected(decidb_cli):
     """
     with pytest.raises(DeciDBCliError) as exc_info:
         decidb_cli.execute(sql)
-    assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
-        f"Unexpected error: {exc_info.value.message}"
-    )
+    assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), f"Unexpected error: {exc_info.value.message}"
 
 
 @pytest.mark.cons_comparison
@@ -888,9 +941,7 @@ def test_bilinear_bool_int_strict_oracle(decidb_cli, oracle_solver):
     for i in range(n_rows):
         oracle_solver.add_constraint({wnames[i]: 1.0, bnames[i]: -U}, "<=", 0.0, name=f"mc_bU_{i}")
         oracle_solver.add_constraint({wnames[i]: 1.0, nnames[i]: -1.0}, "<=", 0.0, name=f"mc_wn_{i}")
-        oracle_solver.add_constraint(
-            {wnames[i]: 1.0, nnames[i]: -1.0, bnames[i]: -U}, ">=", -U, name=f"mc_tight_{i}"
-        )
+        oracle_solver.add_constraint({wnames[i]: 1.0, nnames[i]: -1.0, bnames[i]: -U}, ">=", -U, name=f"mc_tight_{i}")
     # Integer-valued SUM(b*n) < 5  ⇔  SUM(w) <= 4
     oracle_solver.add_constraint({w: 1.0 for w in wnames}, "<=", 4.0, name="strict_lt_5")
     oracle_solver.set_objective({w: 1.0 for w in wnames}, ObjSense.MAXIMIZE)
@@ -902,9 +953,9 @@ def test_bilinear_bool_int_strict_oracle(decidb_cli, oracle_solver):
     decidb_obj = sum(int(r[b_col]) * int(r[n_col]) for r in rows)
     # Integer-valued objective — no tolerance slack needed.
     assert decidb_obj < 5, f"strict `< 5` violated: DeciDB SUM(b*n) = {decidb_obj}"
-    assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - res.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
 
 
 @pytest.mark.cons_comparison
@@ -933,9 +984,9 @@ def test_bilinear_int_int_strict_oracle(decidb_cli, oracle_solver):
         rows, cols = decidb_cli.execute(sql)
     except DeciDBCliError as e:
         # HiGHS rejects quadratic constraints with a clear message — treat as pass.
-        assert re.search(r"[Qq]uadratic|[Gg]urobi|HiGHS", e.message), (
-            f"Unexpected error on int×int quadratic constraint: {e.message}"
-        )
+        assert re.search(
+            r"[Qq]uadratic|[Gg]urobi|HiGHS", e.message
+        ), f"Unexpected error on int×int quadratic constraint: {e.message}"
         return
 
     n_rows = 2
@@ -965,9 +1016,9 @@ def test_bilinear_int_int_strict_oracle(decidb_cli, oracle_solver):
     y_col = cols.index("y")
     decidb_obj = sum(int(r[x_col]) * int(r[y_col]) for r in rows)
     assert decidb_obj < 10, f"strict `< 10` violated: DeciDB SUM(x*y) = {decidb_obj}"
-    assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - res.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
 
 
 @pytest.mark.cons_comparison
@@ -990,12 +1041,14 @@ def test_integer_sum_strict_lt_oracle(decidb_cli, duckdb_conn, oracle_solver):
     """
     rows, cols = decidb_cli.execute(sql)
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 20
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
 
     oracle_solver.create_model("integer_sum_strict_lt")
@@ -1005,7 +1058,8 @@ def test_integer_sum_strict_lt_oracle(decidb_cli, duckdb_conn, oracle_solver):
     # Integer-valued SUM(x) < 10 ⇔ SUM(x) <= 9
     oracle_solver.add_constraint({vn: 1.0 for vn in vnames}, "<=", 9.0, name="strict_lt_10")
     oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][2] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     res = oracle_solver.solve()
     assert res.status == SolverStatus.OPTIMAL
@@ -1015,9 +1069,9 @@ def test_integer_sum_strict_lt_oracle(decidb_cli, duckdb_conn, oracle_solver):
     assert decidb_sum_x < 10, f"strict `< 10` violated: SUM(x) = {decidb_sum_x}"
     price_col = cols.index("l_extendedprice")
     decidb_obj = sum(int(r[x_col]) * float(r[price_col]) for r in rows)
-    assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - res.objective_value) <= 1e-3
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
 
 
 @pytest.mark.cons_comparison
@@ -1051,12 +1105,8 @@ def test_abs_integer_strict_oracle(decidb_cli, oracle_solver):
         oracle_solver.add_variable(an, VarType.INTEGER, lb=0.0, ub=5.0)
     # ABS linearization: a_i >= x_i - 2, a_i >= -(x_i - 2) ⇔ a_i >= 2 - x_i
     for i in range(n):
-        oracle_solver.add_constraint(
-            {anames[i]: 1.0, xnames[i]: -1.0}, ">=", -2.0, name=f"abs_pos_{i}"
-        )
-        oracle_solver.add_constraint(
-            {anames[i]: 1.0, xnames[i]: 1.0}, ">=", 2.0, name=f"abs_neg_{i}"
-        )
+        oracle_solver.add_constraint({anames[i]: 1.0, xnames[i]: -1.0}, ">=", -2.0, name=f"abs_pos_{i}")
+        oracle_solver.add_constraint({anames[i]: 1.0, xnames[i]: 1.0}, ">=", 2.0, name=f"abs_neg_{i}")
     # Integer-valued SUM(a) < 4  ⇔  SUM(a) <= 3
     oracle_solver.add_constraint({an: 1.0 for an in anames}, "<=", 3.0, name="strict_lt_4")
     oracle_solver.set_objective({xn: 1.0 for xn in xnames}, ObjSense.MAXIMIZE)
@@ -1067,9 +1117,9 @@ def test_abs_integer_strict_oracle(decidb_cli, oracle_solver):
     decidb_obj = sum(int(r[x_col]) for r in rows)
     decidb_sum_abs = sum(abs(int(r[x_col]) - 2) for r in rows)
     assert decidb_sum_abs < 4, f"strict `< 4` violated: SUM(|x-2|) = {decidb_sum_abs}"
-    assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - res.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
 
 
 @pytest.mark.cons_comparison
@@ -1087,12 +1137,14 @@ def test_integer_perrow_strict_oracle(decidb_cli, duckdb_conn, oracle_solver):
     """
     rows, cols = decidb_cli.execute(sql)
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 20
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
 
     oracle_solver.create_model("integer_perrow_strict")
@@ -1102,10 +1154,13 @@ def test_integer_perrow_strict_oracle(decidb_cli, duckdb_conn, oracle_solver):
         oracle_solver.add_variable(vn, VarType.INTEGER, lb=0.0, ub=3.0)
     oracle_solver.add_constraint(
         {vnames[i]: data[i][2] for i in range(n)},
-        "<=", 50000.0, name="budget",
+        "<=",
+        50000.0,
+        name="budget",
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][2] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     res = oracle_solver.solve()
     assert res.status == SolverStatus.OPTIMAL
@@ -1115,9 +1170,9 @@ def test_integer_perrow_strict_oracle(decidb_cli, duckdb_conn, oracle_solver):
         assert int(r[x_col]) < 4, f"per-row `x < 4` violated: x={r[x_col]}"
     price_col = cols.index("l_extendedprice")
     decidb_obj = sum(int(r[x_col]) * float(r[price_col]) for r in rows)
-    assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - res.objective_value) <= 1e-3
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
 
 
 # ---------------------------------------------------------------------------
@@ -1144,13 +1199,15 @@ def test_real_sum_le_still_works(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 50
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("real_sum_le")
@@ -1159,7 +1216,9 @@ def test_real_sum_le_still_works(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=0.0)
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data))},
-        "<=", 100.0, name="capacity",
+        "<=",
+        100.0,
+        name="capacity",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -1169,14 +1228,24 @@ def test_real_sum_le_still_works(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "real_sum_le", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "real_sum_le",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -1211,9 +1280,7 @@ def test_real_sum_not_equal_rejected(decidb_cli):
     # The point of rejecting at bind time: the refusal names the decision and echoes
     # the clause with the spelling the user typed, not the internal `!=`.
     assert "'x'" in message, f"Message does not name the decision: {message}"
-    assert "<>" in message and "!=" not in message, (
-        f"Message should quote the clause as written: {message}"
-    )
+    assert "<>" in message and "!=" not in message, f"Message should quote the clause as written: {message}"
 
 
 # ---------------------------------------------------------------------------
@@ -1244,9 +1311,7 @@ def test_strict_lt_rejection_quadratic_real(decidb_cli):
     """
     with pytest.raises(DeciDBCliError) as exc_info:
         decidb_cli.execute(sql)
-    assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
-        f"Unexpected error: {exc_info.value.message}"
-    )
+    assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), f"Unexpected error: {exc_info.value.message}"
 
 
 @pytest.mark.cons_comparison
@@ -1269,9 +1334,7 @@ def test_strict_lt_rejection_bilinear_bool_real(decidb_cli):
     """
     with pytest.raises(DeciDBCliError) as exc_info:
         decidb_cli.execute(sql)
-    assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
-        f"Unexpected error: {exc_info.value.message}"
-    )
+    assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), f"Unexpected error: {exc_info.value.message}"
 
 
 @pytest.mark.cons_comparison
@@ -1288,7 +1351,8 @@ def test_sum_not_equal_mixed_sign_coeffs(decidb_cli, oracle_solver):
     ``>= 1``) must drop exactly one contributing row. A one-sided Big-M would
     let the negative branch slip through.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, cost, val, x FROM (
             VALUES (1, -3, 10),
                    (2, 3, 10),
@@ -1298,7 +1362,8 @@ def test_sum_not_equal_mixed_sign_coeffs(decidb_cli, oracle_solver):
         DECIDE x(BOOL)
         SUCH THAT SUM(x * cost) <> 0
         MAXIMIZE SUM(x * val)
-    """)
+    """
+    )
 
     data = [(1, -3, 10), (2, 3, 10), (3, -2, 5), (4, 2, 5)]
     n = len(data)
@@ -1313,21 +1378,16 @@ def test_sum_not_equal_mixed_sign_coeffs(decidb_cli, oracle_solver):
         name="ne_signed_sum",
     )
     oracle_solver.set_objective(
-        {vnames[i]: float(data[i][2]) for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: float(data[i][2]) for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     res = oracle_solver.solve()
     assert res.status == SolverStatus.OPTIMAL
 
     ci = {name: i for i, name in enumerate(cols)}
-    decidb_signed_sum = sum(
-        int(r[ci["x"]]) * int(r[ci["cost"]]) for r in rows
-    )
-    assert decidb_signed_sum != 0, (
-        f"NE constraint violated: DeciDB SUM(x*cost) = 0"
-    )
-    decidb_obj = sum(
-        int(r[ci["x"]]) * int(r[ci["val"]]) for r in rows
-    )
-    assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-    )
+    decidb_signed_sum = sum(int(r[ci["x"]]) * int(r[ci["cost"]]) for r in rows)
+    assert decidb_signed_sum != 0, f"NE constraint violated: DeciDB SUM(x*cost) = 0"
+    decidb_obj = sum(int(r[ci["x"]]) * int(r[ci["val"]]) for r in rows)
+    assert (
+        abs(decidb_obj - res.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"

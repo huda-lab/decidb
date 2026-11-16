@@ -353,6 +353,7 @@ le, lt, ge, gt, eq = "<=", "<", ">=", ">", "="
 
 A1_CASES = {}
 
+
 def add(name, domain, bounds, objective_name):
     A1_CASES[name] = case(domain, bounds, objective_name)
 

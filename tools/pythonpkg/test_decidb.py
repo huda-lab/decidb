@@ -15,14 +15,16 @@ con.execute("CREATE TABLE items (name VARCHAR, weight INT, value INT)")
 con.execute("INSERT INTO items VALUES ('A', 3, 4), ('B', 4, 5), ('C', 2, 3)")
 
 try:
-    result = con.execute("""
+    result = con.execute(
+        """
         SELECT name, weight, value, x
         FROM items
         DECIDE x(BOOL)
         SUCH THAT
             SUM(x * weight) <= 5
         MAXIMIZE SUM(x * value)
-    """).fetchall()
+    """
+    ).fetchall()
     print("DECIDE query result:")
     for row in result:
         print(f"  {row}")

@@ -559,24 +559,21 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		if (direct_outer->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
 		    !direct_outer->Cast<BoundAggregateExpression>().children.empty()) {
 			CollectReducerSites(direct_outer->Cast<BoundAggregateExpression>().children[0], 1, optimizer.context,
-			                   decide.decide_index, booleans, nested_outer_sites);
+			                    decide.decide_index, booleans, nested_outer_sites);
 		}
-		const bool direct_outer_is_sum = direct_outer->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
-		                                  StringUtil::CIEquals(
-		                                      direct_outer->Cast<BoundAggregateExpression>().function.name, "sum");
+		const bool direct_outer_is_sum =
+		    direct_outer->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+		    StringUtil::CIEquals(direct_outer->Cast<BoundAggregateExpression>().function.name, "sum");
 		const bool nested_outer_has_unfiltered_reducers =
-		    !nested_outer_sites.empty() && std::all_of(nested_outer_sites.begin(), nested_outer_sites.end(),
-		                                               [](const ReducerSite &site) {
-			                                                       if (site.slot->get()->GetExpressionClass() !=
-			                                                           ExpressionClass::BOUND_AGGREGATE) {
-			                                                       return false;
-			                                                       }
-			                                                       auto &nested =
-			                                                           site.slot->get()->Cast<BoundAggregateExpression>();
-			                                                       return !nested.filter && !nested.children.empty() &&
-			                                                              !DecideCanonicalizer::ContainsReducer(
-			                                                                  *nested.children[0]);
-		                                               });
+		    !nested_outer_sites.empty() &&
+		    std::all_of(nested_outer_sites.begin(), nested_outer_sites.end(), [](const ReducerSite &site) {
+			    if (site.slot->get()->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+				    return false;
+			    }
+			    auto &nested = site.slot->get()->Cast<BoundAggregateExpression>();
+			    return !nested.filter && !nested.children.empty() &&
+			           !DecideCanonicalizer::ContainsReducer(*nested.children[0]);
+		    });
 		// The clause's row is already the outer G's value in this shape. A direct, unfiltered nest with the same
 		// clause and outer keys therefore needs no outer value-link column: the inner helper's G is read once per
 		// instance by the outer G, and the comparison's push still reaches that inner helper. Keep this deliberately
@@ -594,8 +591,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 				auto below = path.Below(outer);
 				for (auto &nested : nested_outer_sites) {
 					D_ASSERT(!nested.under_decision);
-					ReplaceReducer(helpers, names, booleans, below, ExtremumPushOf(cmp.type), source_clause_id,
-					              nested);
+					ReplaceReducer(helpers, names, booleans, below, ExtremumPushOf(cmp.type), source_clause_id, nested);
 				}
 				continue;
 			}

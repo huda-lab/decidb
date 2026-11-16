@@ -77,9 +77,7 @@ def test_a_frame_failure_without_a_consuming_instance_is_deferred(
 
 @pytest.mark.error
 @pytest.mark.parametrize("frame,cells,failed_anchor,total,error", FRAME_ERRORS)
-def test_a_frame_failure_is_raised_when_an_instance_consumes_it(
-    decidb_cli, frame, cells, failed_anchor, total, error
-):
+def test_a_frame_failure_is_raised_when_an_instance_consumes_it(decidb_cli, frame, cells, failed_anchor, total, error):
     """The same anchor now has a class: deferral must preserve and report its original failure."""
     result = decidb_cli.execute_raw(_query(frame, cells, failed_anchor, consumed=True))
     assert error in result.stderr, result.stderr

@@ -171,8 +171,8 @@ bool IsPlainLinearRow(const SolverInput &input, const EvaluatedConstraint &ec) {
 	    ec.abs_aux_idx != DConstants::INVALID_INDEX &&
 	    std::any_of(input.abs_maximize_links.begin(), input.abs_maximize_links.end(),
 	                [&](const AbsMaximizeLinkSpec &link) { return link.aux_idx == ec.abs_aux_idx; });
-	return ec.minmax_agg_type.empty() && ec.ne_clause_idx == DConstants::INVALID_INDEX &&
-	       !exact_abs_pair && ec.bilinear_terms.empty() && !ec.has_quadratic && ec.admitted_lower.Empty();
+	return ec.minmax_agg_type.empty() && ec.ne_clause_idx == DConstants::INVALID_INDEX && !exact_abs_pair &&
+	       ec.bilinear_terms.empty() && !ec.has_quadratic && ec.admitted_lower.Empty();
 }
 
 //! Where a helper is read (D89): whether a reader holds its column, whether rows or the objective read it, and the one
@@ -218,7 +218,9 @@ vector<HelperPlace> PlaceHelpers(const SolverInput &input, const vector<idx_t> &
 			place[i].held = true;
 		}
 	};
-	auto read = [&](idx_t var, bool takes_members) { mark_read(link(var), takes_members); };
+	auto read = [&](idx_t var, bool takes_members) {
+		mark_read(link(var), takes_members);
+	};
 	auto read_value = [&](idx_t var, idx_t value_node, bool takes_members) {
 		mark_read(link(var, value_node), takes_members);
 	};
@@ -250,8 +252,8 @@ vector<HelperPlace> PlaceHelpers(const SolverInput &input, const vector<idx_t> &
 		}
 	}
 	for (idx_t t = 0; t < input.objective_variable_indices.size(); t++) {
-		const auto value_node = t < input.objective_value_nodes.size() ? input.objective_value_nodes[t]
-		                                                              : DConstants::INVALID_INDEX;
+		const auto value_node =
+		    t < input.objective_value_nodes.size() ? input.objective_value_nodes[t] : DConstants::INVALID_INDEX;
 		read_value(input.objective_variable_indices[t], value_node, true);
 	}
 	for (auto var : input.quadratic_inner_variable_indices) {
@@ -312,7 +314,8 @@ bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, cons
 		}
 		if (links[i].value_node != DConstants::INVALID_INDEX) {
 			if (link_of_node[links[i].value_node] != DConstants::INVALID_INDEX) {
-				throw InternalException("DECIDE: tree node %llu defines more than one reducer value", links[i].value_node);
+				throw InternalException("DECIDE: tree node %llu defines more than one reducer value",
+				                        links[i].value_node);
 			}
 			link_of_node[links[i].value_node] = i;
 		}
@@ -412,8 +415,8 @@ bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, cons
 		vector<std::unordered_set<idx_t>> read_by_objective(links.size());
 		for (idx_t t = 0; t < input.objective_variable_indices.size(); t++) {
 			const idx_t var = input.objective_variable_indices[t];
-			const auto value_node = t < input.objective_value_nodes.size() ? input.objective_value_nodes[t]
-			                                                              : DConstants::INVALID_INDEX;
+			const auto value_node =
+			    t < input.objective_value_nodes.size() ? input.objective_value_nodes[t] : DConstants::INVALID_INDEX;
 			const idx_t link = candidate(var, value_node);
 			if (link == DConstants::INVALID_INDEX || t >= input.objective_coefficients.size()) {
 				continue;
@@ -449,8 +452,8 @@ bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, cons
 					seen.clear();
 				}
 				for (idx_t t = members.member_begin[m]; t < members.member_begin[m + 1]; t++) {
-					const auto value_node = t < members.value_nodes.size() ? members.value_nodes[t]
-					                                                     : DConstants::INVALID_INDEX;
+					const auto value_node =
+					    t < members.value_nodes.size() ? members.value_nodes[t] : DConstants::INVALID_INDEX;
 					const idx_t link = candidate(members.variables[t], value_node);
 					if (link == DConstants::INVALID_INDEX) {
 						continue;
@@ -476,8 +479,8 @@ bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, cons
 			for (idx_t m = span.first; m < span.last; m++) {
 				expanded.AddMember(outer.constants[m]);
 				for (idx_t t = outer.member_begin[m]; t < outer.member_begin[m + 1]; t++) {
-					const auto outer_value_node = t < outer.value_nodes.size() ? outer.value_nodes[t]
-					                                                           : DConstants::INVALID_INDEX;
+					const auto outer_value_node =
+					    t < outer.value_nodes.size() ? outer.value_nodes[t] : DConstants::INVALID_INDEX;
 					const bool reads_link = candidate(outer.variables[t], outer_value_node) == i;
 					const idx_t instance = reads_link ? instance_of(link.value_var, outer.rows[t]) : 0;
 					if (!reads_link || !written[instance]) {
@@ -497,7 +500,7 @@ bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, cons
 							expanded.AddTerm(link.members.variables[u], link.members.rows[u],
 							                 c * link.members.coefficients[u],
 							                 u < link.members.value_nodes.size() ? link.members.value_nodes[u]
-							                                              : DConstants::INVALID_INDEX);
+							                                                     : DConstants::INVALID_INDEX);
 						}
 					}
 				}
@@ -573,8 +576,8 @@ bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, cons
 			continue;
 		}
 		if (link.value_var < stays_explicit.size() && stays_explicit[link.value_var]) {
-			// Preserve this G/O's nonlinear value column. A singleton MIN/MAX is just its member and can remain a direct
-			// read; every other group is formulated against the helper at this node.
+			// Preserve this G/O's nonlinear value column. A singleton MIN/MAX is just its member and can remain a
+			// direct read; every other group is formulated against the helper at this node.
 			if (IsExtremum(link) && any_single) {
 				inlined_any = true;
 				if (input.variable_scopes[link.value_var].scope == DecideVarScope::GLOBAL) {

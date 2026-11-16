@@ -443,7 +443,6 @@ class ScopedModel(ScopeModel):
             return value
         return self._linear(part(self.rows[at]), at)
 
-
     # -- clauses ------------------------------------------------------------
 
     def _generate(self, clause: Scoped, emit) -> list[tuple[Linear, str]]:

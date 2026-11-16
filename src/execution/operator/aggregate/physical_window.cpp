@@ -334,8 +334,9 @@ SinkFinalizeType PhysicalWindow::Finalize(Pipeline &pipeline, Event &event, Clie
 	}
 	if (DecideProfileScope::Enabled()) {
 		if (!state.global_partition->grouping_data && !state.global_partition->hash_groups.empty()) {
-			DecideProfileScope::Counter("execution.window.sort_buffer_bytes",
-			                            static_cast<double>(WindowSortBufferBytes(*state.global_partition->hash_groups[0])));
+			DecideProfileScope::Counter(
+			    "execution.window.sort_buffer_bytes",
+			    static_cast<double>(WindowSortBufferBytes(*state.global_partition->hash_groups[0])));
 		}
 		DecideProfileScope::Counter("execution.window.input_rows",
 		                            static_cast<double>(state.global_partition->count.load()));

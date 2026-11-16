@@ -244,9 +244,7 @@ def test_explain_accounts_for_the_objectives_rewrites_too(decidb_cli):
     leaves the objective in its written form and does not print those implementation rows.
     """
     text = _plan(decidb_cli, _ship_query("ship(INT)", "ship >= 1", "MINIMIZE when S.priority: sum(abs(ship - 10))"))
-    assert (
-        "Objective:MINIMIZEwhenS.priority:sum(abs(ship-10))↳abs(ship-10)becomesanauxiliaryvariable"
-    ) in text, text
+    assert ("Objective:MINIMIZEwhenS.priority:sum(abs(ship-10))↳abs(ship-10)becomesanauxiliaryvariable") in text, text
     assert "abs(ship-10)-ship>=-10" not in text, text
     assert "abs(ship-10)+ship<=10" not in text, text
     assert "addedbyformulation" not in text, text

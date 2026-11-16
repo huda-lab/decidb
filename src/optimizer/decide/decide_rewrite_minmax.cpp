@@ -106,14 +106,16 @@ void DecideOptimizer::RewriteComposedMinMax(LogicalDecide &decide) {
 // True if the expression is a BOUND_FUNCTION for `+` (after unwrapping cast).
 static bool IsAddNode(const Expression &e, idx_t decide_index) {
 	auto &u = (*UnwrapDecideCasts(e, decide_index));
-	if (u.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) return false;
+	if (u.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION)
+		return false;
 	return StringUtil::Lower(u.Cast<BoundFunctionExpression>().function.name) == "+";
 }
 
 // True if the expression is a `-` function (both binary and unary).
 static bool IsSubNode(const Expression &e, idx_t decide_index) {
 	auto &u = (*UnwrapDecideCasts(e, decide_index));
-	if (u.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) return false;
+	if (u.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION)
+		return false;
 	return StringUtil::Lower(u.Cast<BoundFunctionExpression>().function.name) == "-";
 }
 
@@ -217,16 +219,16 @@ static void WalkComposedLhs(ClientContext &context, LogicalDecide &decide, idx_t
 	auto &agg = *found;
 	if (name != "sum" && name != "avg" && name != "min" && name != "max") {
 		throw BinderException("Composed MIN/MAX in DECIDE v1 does not support aggregate '%s'; "
-		                      "only SUM/AVG/MIN/MAX are supported.", name);
+		                      "only SUM/AVG/MIN/MAX are supported.",
+		                      name);
 	}
 	if (agg.children.size() != 1) {
 		throw BinderException("Composed MIN/MAX: aggregate '%s' must have a single inner expression.", name);
 	}
 
 	LogicalDecide::ComposedMinMaxTerm term;
-	term.kind = (name == "min" || name == "max")
-	                ? LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND
-	                : LogicalDecide::ComposedMinMaxTerm::SUM_KIND;
+	term.kind = (name == "min" || name == "max") ? LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND
+	                                             : LogicalDecide::ComposedMinMaxTerm::SUM_KIND;
 	term.agg_name = name;
 	term.sign = sign;
 	term.inner_expr = agg.children[0]->Copy();
@@ -345,13 +347,13 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 	    TryMatchScaledAggregate(*comp.left, decide.decide_index, lone_match) ? lone_match.aggregate : nullptr;
 	auto lone_scale = lone_match.scale;
 	bool lone_divides = lone_match.divides;
-	bool unknown_sign_lone_minmax =
-	    lone_scaled && lone_scale && ScaleSignAtPlanTime(optimizer.context, lone_scale, lone_divides) == 0 &&
-	    (StringUtil::Lower(lone_scaled->function.name) == "min" ||
-	     StringUtil::Lower(lone_scaled->function.name) == "max") &&
-	    lone_scaled->children.size() == 1 &&
-	    BoundExpressionReferencesDecide(*lone_scaled->children[0], decide.decide_index) &&
-	    !BoundExpressionReferencesDecide(*lone_scale, decide.decide_index);
+	bool unknown_sign_lone_minmax = lone_scaled && lone_scale &&
+	                                ScaleSignAtPlanTime(optimizer.context, lone_scale, lone_divides) == 0 &&
+	                                (StringUtil::Lower(lone_scaled->function.name) == "min" ||
+	                                 StringUtil::Lower(lone_scaled->function.name) == "max") &&
+	                                lone_scaled->children.size() == 1 &&
+	                                BoundExpressionReferencesDecide(*lone_scaled->children[0], decide.decide_index) &&
+	                                !BoundExpressionReferencesDecide(*lone_scale, decide.decide_index);
 
 	if (!unknown_sign_lone_minmax) {
 		if (!IsAddNode(*comp.left, decide.decide_index) && !IsSubNode(*comp.left, decide.decide_index)) {
@@ -371,8 +373,7 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 	// them anyway, plus a redundant second envelope.
 	bool exact_pin = (cmp_type == ExpressionType::COMPARE_EQUAL);
 	if (!exact_pin && cmp_type != ExpressionType::COMPARE_LESSTHAN &&
-	    cmp_type != ExpressionType::COMPARE_LESSTHANOREQUALTO &&
-	    cmp_type != ExpressionType::COMPARE_GREATERTHAN &&
+	    cmp_type != ExpressionType::COMPARE_LESSTHANOREQUALTO && cmp_type != ExpressionType::COMPARE_GREATERTHAN &&
 	    cmp_type != ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
 		// BETWEEN never reaches here — it is already a pair of directional
 		// comparisons by this point — so the message must not claim otherwise.
@@ -434,13 +435,12 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 	const BoundAggregateExpression *lone_scaled =
 	    TryMatchScaledAggregate(*body, decide.decide_index, lone_match) ? lone_match.aggregate : nullptr;
 	auto lone_scale = lone_match.scale;
-	bool is_scaled_lone_minmax =
-	    lone_scaled && lone_scale &&
-	    (StringUtil::Lower(lone_scaled->function.name) == "min" ||
-	     StringUtil::Lower(lone_scaled->function.name) == "max") &&
-	    lone_scaled->children.size() == 1 &&
-	    BoundExpressionReferencesDecide(*lone_scaled->children[0], decide.decide_index) &&
-	    !BoundExpressionReferencesDecide(*lone_scale, decide.decide_index);
+	bool is_scaled_lone_minmax = lone_scaled && lone_scale &&
+	                             (StringUtil::Lower(lone_scaled->function.name) == "min" ||
+	                              StringUtil::Lower(lone_scaled->function.name) == "max") &&
+	                             lone_scaled->children.size() == 1 &&
+	                             BoundExpressionReferencesDecide(*lone_scaled->children[0], decide.decide_index) &&
+	                             !BoundExpressionReferencesDecide(*lone_scale, decide.decide_index);
 
 	if (!is_scaled_lone_minmax) {
 		if (!IsAddNode(*body, decide.decide_index) && !IsSubNode(*body, decide.decide_index)) {
@@ -667,8 +667,8 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 
 		// Easy part: per-row bound. A negative factor reverses it, for the same reason
 		// it reverses the classification above.
-		auto easy_cmp_type = is_max ? ExpressionType::COMPARE_LESSTHANOREQUALTO
-		                            : ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+		auto easy_cmp_type =
+		    is_max ? ExpressionType::COMPARE_LESSTHANOREQUALTO : ExpressionType::COMPARE_GREATERTHANOREQUALTO;
 		if (scale_sign < 0) {
 			easy_cmp_type = FlipComparisonExpression(easy_cmp_type);
 		}
@@ -692,8 +692,8 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 			easy = std::move(per_wrapper);
 		}
 		new_constraints.push_back(std::move(easy));
-		auto hard_cmp_type = is_max ? ExpressionType::COMPARE_GREATERTHANOREQUALTO
-		                            : ExpressionType::COMPARE_LESSTHANOREQUALTO;
+		auto hard_cmp_type =
+		    is_max ? ExpressionType::COMPARE_GREATERTHANOREQUALTO : ExpressionType::COMPARE_LESSTHANOREQUALTO;
 		if (scale_sign < 0) {
 			hard_cmp_type = FlipComparisonExpression(hard_cmp_type);
 		}
@@ -718,11 +718,9 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 	}
 }
 
-unique_ptr<Expression> DecideOptimizer::EmitHardMinMaxClause(LogicalDecide &decide,
-                                                            const string &agg_name,
-                                                            const Expression &inner,
-                                                            const Expression *filter,
-                                                            idx_t &out_clause_idx) {
+unique_ptr<Expression> DecideOptimizer::EmitHardMinMaxClause(LogicalDecide &decide, const string &agg_name,
+                                                             const Expression &inner, const Expression *filter,
+                                                             idx_t &out_clause_idx) {
 	// No indicator variable. `MAX(e) >= K` now becomes an extremum COLUMN and the user's
 	// own bound as a single row over it, whichever way that column is then pinned, and the
 	// binaries a Big-M pinning needs are global-block columns stage 06 allocates for the
@@ -743,8 +741,7 @@ unique_ptr<Expression> DecideOptimizer::EmitHardMinMaxClause(LogicalDecide &deci
 	if (filter) {
 		new_sum->Cast<BoundAggregateExpression>().filter = filter->Copy();
 	}
-	new_sum->alias =
-	    string(MINMAX_CLAUSE_TAG_PREFIX) + to_string(clause_idx) + "_" + agg_name + "__";
+	new_sum->alias = string(MINMAX_CLAUSE_TAG_PREFIX) + to_string(clause_idx) + "_" + agg_name + "__";
 	out_clause_idx = clause_idx;
 	return new_sum;
 }
@@ -794,7 +791,7 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 		return;
 	}
 	auto &outer_agg = scaled_obj_agg ? const_cast<BoundAggregateExpression &>(*scaled_obj_agg)
-	                                : obj_expr->Cast<BoundAggregateExpression>();
+	                                 : obj_expr->Cast<BoundAggregateExpression>();
 	auto outer_name = StringUtil::Lower(outer_agg.function.name);
 	// A decision-bearing factor is bilinear, not a scale; the canonicalizer rejects
 	// those, so leave the shape alone rather than mis-linearize it.
@@ -813,8 +810,7 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 	if (obj_scale) {
 		return;
 	}
-	if ((outer_name == "min" || outer_name == "max") &&
-	    outer_agg.children.size() == 1 &&
+	if ((outer_name == "min" || outer_name == "max") && outer_agg.children.size() == 1 &&
 	    BoundExpressionReferencesDecide(*outer_agg.children[0], decide.decide_index)) {
 		decide.flat_objective_agg = StrToAggType(outer_name);
 		bool is_min = (outer_name == "min");

@@ -6,7 +6,8 @@
 
 namespace duckdb {
 
-DecideObjectiveBinder::DecideObjectiveBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables,
+DecideObjectiveBinder::DecideObjectiveBinder(Binder &binder, ClientContext &context,
+                                             const case_insensitive_map_t<idx_t> &variables,
                                              const case_insensitive_set_t &scalar_variables,
                                              optional_ptr<DecideQualifierContext> qualifier_context)
     : DecideBinder(binder, context, variables, scalar_variables, qualifier_context) {
@@ -47,8 +48,8 @@ BindResult DecideObjectiveBinder::BindScopedObjective(unique_ptr<ParsedExpressio
 	if (condition_error.HasError()) {
 		return BindResult(std::move(condition_error));
 	}
-	idx_t when_text = qualifier_context ? qualifier_context->WrittenFragment(*when, DecideSpanRole::WHEN)
-	                                    : DConstants::INVALID_INDEX;
+	idx_t when_text =
+	    qualifier_context ? qualifier_context->WrittenFragment(*when, DecideSpanRole::WHEN) : DConstants::INVALID_INDEX;
 	auto wrap = [&](unique_ptr<Expression> objective) -> unique_ptr<Expression> {
 		auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 		wrapper->children.push_back(std::move(objective));
@@ -63,7 +64,8 @@ BindResult DecideObjectiveBinder::BindScopedObjective(unique_ptr<ParsedExpressio
 	return BindResult(wrap(std::move(bound)));
 }
 
-BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
+BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
+                                                 bool root_expression) {
 	auto location = expr_ptr->GetQueryLocation();
 	return ThrowClauseError(
 	    PreserveQueryLocation(location,
@@ -85,10 +87,10 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 	if (!is_top_expression && IsDataOperand(expr)) {
 		return ExpressionBinder::BindExpression(expr_ptr, depth);
 	}
-    string error_msg;
+	string error_msg;
 	switch (expr.GetExpressionClass()) {
-    case ExpressionClass::COLUMN_REF:
-    case ExpressionClass::CONSTANT: {
+	case ExpressionClass::COLUMN_REF:
+	case ExpressionClass::CONSTANT: {
 		// A decision is a complete objective on its own: a query-wide one has a single
 		// solver column, and any other must have one instance over the kept rows, which
 		// a scope check decides.
@@ -98,7 +100,7 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 		break;
 	}
 	case ExpressionClass::FUNCTION: {
-	    auto &func = expr.Cast<FunctionExpression>();
+		auto &func = expr.Cast<FunctionExpression>();
 		if (is_top_expression && func.is_operator &&
 		    (func.function_name == SCOPE_PER_TAG || func.function_name == SCOPE_WHEN_TAG)) {
 			return BindScopedObjective(expr_ptr, depth);
@@ -109,14 +111,14 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 		is_top_expression = false;
 		return BindFunction(expr_ptr, depth);
 	}
-    case ExpressionClass::SUBQUERY:
-        return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
+	case ExpressionClass::SUBQUERY:
+		return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
 	case ExpressionClass::DECIDE_FRAME:
 		// A frame over decisions is an objective on its own, as a decision is.
 		if (is_top_expression && !ExpressionContainsDecideVariable(expr, variables)) {
 			return BindResult(BinderException::Unsupported(
-			    expr, StringUtil::Format("[MAXIMIZE|MINIMIZE] clause: '%s' reads no DECIDE variable",
-			                             expr.ToString())));
+			    expr,
+			    StringUtil::Format("[MAXIMIZE|MINIMIZE] clause: '%s' reads no DECIDE variable", expr.ToString())));
 		}
 		is_top_expression = false;
 		return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
@@ -138,7 +140,7 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 		}
 		break;
 	default:
-        break;
+		break;
 	}
 	auto clause = decide_sense == DecideSense::MAXIMIZE ? "MAXIMIZE" : "MINIMIZE";
 	if (!ExpressionContainsDecideVariable(expr, variables)) {
@@ -149,9 +151,9 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 	    BinderException::Unsupported(expr, StringUtil::Format("%s does not support '%s'", clause, expr.ToString())));
 }
 
-DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr_ptr, string& error_msg){
-    // A relation qualifier changes which tuples a reducer sums over, not what shape it
-    // is, so classification looks straight through it.
+DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr_ptr, string &error_msg) {
+	// A relation qualifier changes which tuples a reducer sums over, not what shape it
+	// is, so classification looks straight through it.
 	auto &expr = const_cast<ParsedExpression &>(UnwrapReducerMarkers(expr_ptr));
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::FUNCTION: {
@@ -161,19 +163,18 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
 		if (ClassifyReducerCall(func, reducer_result, error_msg)) {
 			return reducer_result;
 		}
-        // Non-aggregate outer function. Only additive/scalar composition of
-        // aggregates (e.g. `SUM(x) + SUM(y)`, `-SUM(x)`, `c * SUM(x)`,
-        // `SUM(x) / K`) is allowed; wrapping an aggregate in a non-additive
-        // function (e.g. `POWER(AVG(x), 2)`, `SQRT(SUM(x))`, `LOG(...)`) is
-        // not a linearly-composable objective. Supported quadratic shape is
-        // SUM(POWER(_, 2)), not POWER(AGG(_), _).
-        bool is_additive_or_scalar = (fname == "+" || fname == "-" || fname == "*");
-        // Division is scalar only when the divisor does not contain a
-        // decide aggregate (otherwise the result is genuinely non-linear).
-        if (fname == "/" && func.children.size() == 2 &&
-            !ContainsDecideAggregate(*func.children[1])) {
-            is_additive_or_scalar = true;
-        }
+		// Non-aggregate outer function. Only additive/scalar composition of
+		// aggregates (e.g. `SUM(x) + SUM(y)`, `-SUM(x)`, `c * SUM(x)`,
+		// `SUM(x) / K`) is allowed; wrapping an aggregate in a non-additive
+		// function (e.g. `POWER(AVG(x), 2)`, `SQRT(SUM(x))`, `LOG(...)`) is
+		// not a linearly-composable objective. Supported quadratic shape is
+		// SUM(POWER(_, 2)), not POWER(AGG(_), _).
+		bool is_additive_or_scalar = (fname == "+" || fname == "-" || fname == "*");
+		// Division is scalar only when the divisor does not contain a
+		// decide aggregate (otherwise the result is genuinely non-linear).
+		if (fname == "/" && func.children.size() == 2 && !ContainsDecideAggregate(*func.children[1])) {
+			is_additive_or_scalar = true;
+		}
 		if (is_additive_or_scalar &&
 		    (ContainsDecideAggregate(expr) || ExpressionContainsDecideVariable(expr, variables))) {
 			return DecideExpression::SUM;
@@ -191,9 +192,11 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
 		return DecideExpression::INVALID;
 	}
 	default: {
-        error_msg = StringUtil::Format("The objective of the [MAXIMIZE|MINIMIZE] clause must be a SUM expression over a DECIDE variable (e.g., SUM(x * a) / SUM(x)). Found '%s' instead.", expr.ToString());
-    	return DecideExpression::INVALID;
-    }
+		error_msg = StringUtil::Format("The objective of the [MAXIMIZE|MINIMIZE] clause must be a SUM expression over "
+		                               "a DECIDE variable (e.g., SUM(x * a) / SUM(x)). Found '%s' instead.",
+		                               expr.ToString());
+		return DecideExpression::INVALID;
+	}
 	}
 }
 

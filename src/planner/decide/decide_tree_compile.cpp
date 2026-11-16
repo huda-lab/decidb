@@ -90,8 +90,7 @@ static void SiteClause(const DecideTree &tree, idx_t holder, DecideBody &body) {
 		body.linear.push_back(Site(tree, holder, term.child, term.qualifier_scope_idx, term.qualifier_reducer));
 	}
 	for (auto &term : clause.bilinear_terms) {
-		body.products.push_back(
-		    Site(tree, holder, term.child, term.qualifier_scope_idx, term.qualifier_reducer));
+		body.products.push_back(Site(tree, holder, term.child, term.qualifier_scope_idx, term.qualifier_reducer));
 	}
 	for (auto &group : clause.quadratic_groups) {
 		body.squares.emplace_back();
@@ -108,13 +107,11 @@ static void SiteObjective(const DecideTree &tree, idx_t holder, DecideBody &body
 		body.linear.push_back(Site(tree, holder, term.child, term.qualifier_scope_idx, term.qualifier_reducer));
 	}
 	for (auto &term : objective.bilinear_terms) {
-		body.products.push_back(
-		    Site(tree, holder, term.child, term.qualifier_scope_idx, term.qualifier_reducer));
+		body.products.push_back(Site(tree, holder, term.child, term.qualifier_scope_idx, term.qualifier_reducer));
 	}
 	body.squares.emplace_back();
 	for (auto &term : objective.squared_terms) {
-		body.squares.back().push_back(
-		    Site(tree, holder, term.child, term.qualifier_scope_idx, term.qualifier_reducer));
+		body.squares.back().push_back(Site(tree, holder, term.child, term.qualifier_scope_idx, term.qualifier_reducer));
 	}
 }
 

@@ -34,9 +34,9 @@ public:
 		return std::getenv("DECIDB_PROFILE") != nullptr;
 	}
 	static uint64_t Now() {
-		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-		                                std::chrono::steady_clock::now().time_since_epoch())
-		                                .count());
+		return static_cast<uint64_t>(
+		    std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+		        .count());
 	}
 	void Next(const char *next_name) {
 		if (enabled) {
@@ -47,7 +47,8 @@ public:
 	}
 	static void Counter(const char *key, double value) {
 		if (Enabled()) {
-			std::fprintf(stderr, "DECIDB_PROFILE: {\"event\":\"counter\",\"parent\":%llu,\"name\":\"%s\",\"value\":%.17g}\n",
+			std::fprintf(stderr,
+			             "DECIDB_PROFILE: {\"event\":\"counter\",\"parent\":%llu,\"name\":\"%s\",\"value\":%.17g}\n",
 			             static_cast<unsigned long long>(Current()), key, value);
 		}
 	}
@@ -65,7 +66,8 @@ private:
 #if defined(__APPLE__)
 		mach_task_basic_info_data_t info;
 		mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
-		if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS) {
+		if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) ==
+		    KERN_SUCCESS) {
 			return info.resident_size;
 		}
 #endif
@@ -88,10 +90,12 @@ private:
 		id = NextId();
 		Current() = id;
 		start = Now();
-		std::fprintf(stderr,
-		             "DECIDB_PROFILE: {\"event\":\"begin\",\"id\":%llu,\"parent\":%llu,\"name\":\"%s\",\"start_ns\":%llu,\"rss_bytes\":%llu}\n",
-		             static_cast<unsigned long long>(id), static_cast<unsigned long long>(parent), name,
-		             static_cast<unsigned long long>(start), static_cast<unsigned long long>(ResidentBytes()));
+		std::fprintf(
+		    stderr,
+		    "DECIDB_PROFILE: "
+		    "{\"event\":\"begin\",\"id\":%llu,\"parent\":%llu,\"name\":\"%s\",\"start_ns\":%llu,\"rss_bytes\":%llu}\n",
+		    static_cast<unsigned long long>(id), static_cast<unsigned long long>(parent), name,
+		    static_cast<unsigned long long>(start), static_cast<unsigned long long>(ResidentBytes()));
 	}
 	void End() {
 		if (!enabled) {
@@ -99,7 +103,9 @@ private:
 		}
 		auto finish = Now();
 		std::fprintf(stderr,
-		             "DECIDB_PROFILE: {\"event\":\"end\",\"id\":%llu,\"parent\":%llu,\"name\":\"%s\",\"end_ns\":%llu,\"duration_ms\":%.6f,\"rss_bytes\":%llu,\"peak_rss_bytes\":%llu,\"unwinding\":%s}\n",
+		             "DECIDB_PROFILE: "
+		             "{\"event\":\"end\",\"id\":%llu,\"parent\":%llu,\"name\":\"%s\",\"end_ns\":%llu,\"duration_ms\":%."
+		             "6f,\"rss_bytes\":%llu,\"peak_rss_bytes\":%llu,\"unwinding\":%s}\n",
 		             static_cast<unsigned long long>(id), static_cast<unsigned long long>(parent), name,
 		             static_cast<unsigned long long>(finish), static_cast<double>(finish - start) / 1e6,
 		             static_cast<unsigned long long>(ResidentBytes()), static_cast<unsigned long long>(PeakBytes()),
@@ -119,9 +125,10 @@ public:
 	}
 	~DecideProfileTotals() {
 		if (enabled) {
-			std::fprintf(stderr,
-			             "DECIDB_PROFILE: {\"event\":\"aggregate\",\"name\":\"%s\",\"duration_ms\":%.6f,\"calls\":%llu}\n",
-			             name, static_cast<double>(nanoseconds) / 1e6, static_cast<unsigned long long>(calls));
+			std::fprintf(
+			    stderr,
+			    "DECIDB_PROFILE: {\"event\":\"aggregate\",\"name\":\"%s\",\"duration_ms\":%.6f,\"calls\":%llu}\n", name,
+			    static_cast<double>(nanoseconds) / 1e6, static_cast<unsigned long long>(calls));
 		}
 	}
 	bool enabled;
@@ -149,4 +156,4 @@ private:
 	uint64_t start = 0;
 };
 
-}
+} // namespace duckdb

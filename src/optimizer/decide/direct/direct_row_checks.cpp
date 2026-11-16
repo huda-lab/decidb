@@ -60,7 +60,6 @@ private:
 		return optimizer.BindAggregateFunction(name, std::move(children));
 	}
 
-
 	//! A value check: the least message any row raises.
 	CheckPlan ValueCheck(const DirectRowCheck &check) {
 		vector<unique_ptr<Expression>> aggregates;

@@ -91,6 +91,7 @@ def _shows(out: str, *fragments: str) -> bool:
 # Basic EXPLAIN on TPC-H queries
 # ===================================================================
 
+
 @pytest.mark.explain
 def test_explain_basic_knapsack(decidb_cli):
     """EXPLAIN on a basic knapsack query shows DECIDE, Variables, Objective, Constraints."""
@@ -167,6 +168,7 @@ def test_explain_multi_variable(decidb_cli):
 # when-scoped constraints in EXPLAIN
 # ===================================================================
 
+
 @pytest.mark.explain
 @pytest.mark.when_constraint
 def test_explain_when_string_filter(decidb_cli):
@@ -227,6 +229,7 @@ def test_explain_when_mixed_constraints(decidb_cli):
 # per-scoped constraints in EXPLAIN
 # ===================================================================
 
+
 @pytest.mark.explain
 @pytest.mark.per_clause
 def test_explain_per_basic(decidb_cli):
@@ -279,6 +282,7 @@ def test_explain_multi_column_per_parenthesized(decidb_cli):
 # Constraints render as SQL, never as internal pipeline tags
 # ===================================================================
 
+
 @pytest.mark.explain
 def test_explain_constraints_render_sql_not_internal_tags(decidb_cli):
     """Every constraint row shows the constraint, not the tag DECIDE stamped on it.
@@ -299,8 +303,7 @@ def test_explain_constraints_render_sql_not_internal_tags(decidb_cli):
     text = _plan_text(_explain(decidb_cli, sql))
 
     assert INTERNAL_TAG_RE.search(text) is None, (
-        f"internal tag leaked into EXPLAIN: "
-        f"{INTERNAL_TAG_RE.search(text).group(0)!r}\n{text}"
+        f"internal tag leaked into EXPLAIN: " f"{INTERNAL_TAG_RE.search(text).group(0)!r}\n{text}"
     )
     # Both constraints must be recognizable. Matched loosely on purpose: this
     # test pins only that the user's own terms reach the page, not the exact
@@ -357,13 +360,18 @@ def test_explain_renders_user_casts_only(decidb_cli):
     assert "when l_returnflag = 'R': sum(x * l_quantity) <= 100" in without_cast, without_cast
     assert "CAST" not in without_cast, f"binder cast reached EXPLAIN:\n{without_cast}"
 
-    with_cast = _plan_text(_explain(decidb_cli, """
+    with_cast = _plan_text(
+        _explain(
+            decidb_cli,
+            """
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
         SUCH THAT SUM(x * CAST(l_quantity AS INTEGER)) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
-    """))
+    """,
+        )
+    )
     assert (
         "SUM(x * CAST(l_quantity AS INTEGER)) <= 100" in with_cast
     ), f"the user's own cast was dropped from EXPLAIN:\n{with_cast}"
@@ -382,8 +390,7 @@ def test_explain_json_constraints_render_sql_not_internal_tags(decidb_cli):
     out = _explain_json(decidb_cli, sql)
 
     assert INTERNAL_TAG_RE.search(out) is None, (
-        f"internal tag leaked into JSON EXPLAIN: "
-        f"{INTERNAL_TAG_RE.search(out).group(0)!r}\n{out}"
+        f"internal tag leaked into JSON EXPLAIN: " f"{INTERNAL_TAG_RE.search(out).group(0)!r}\n{out}"
     )
     assert re.search(r"sum\(.*l_quantity.*\)\s*<=", out), out
     assert "when l_returnflag = 'R':" in out, out
@@ -392,6 +399,7 @@ def test_explain_json_constraints_render_sql_not_internal_tags(decidb_cli):
 # ===================================================================
 # per constraint + when objective
 # ===================================================================
+
 
 @pytest.mark.explain
 @pytest.mark.when_constraint
@@ -425,6 +433,7 @@ def test_explain_when_and_per(decidb_cli):
 # when on the objective (rendered symmetrically with constraints)
 # ===================================================================
 
+
 @pytest.mark.explain
 @pytest.mark.when_constraint
 def test_explain_objective_when_postfix(decidb_cli):
@@ -456,6 +465,7 @@ def test_explain_objective_when_postfix(decidb_cli):
 # ===================================================================
 # EXPLAIN (FORMAT JSON) on TPC-H
 # ===================================================================
+
 
 @pytest.mark.explain
 def test_explain_json_structure(decidb_cli):
@@ -521,6 +531,7 @@ def test_explain_json_logical_plan(decidb_cli):
 # ===================================================================
 # EXPLAIN ANALYZE on TPC-H
 # ===================================================================
+
 
 @pytest.mark.explain
 def test_explain_analyze_basic(decidb_cli):
@@ -594,6 +605,7 @@ def test_explain_analyze_multiple_constraints(decidb_cli):
 # ===================================================================
 # Logical plan output
 # ===================================================================
+
 
 @pytest.mark.explain
 def test_explain_logical_plan(decidb_cli):

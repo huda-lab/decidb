@@ -28,7 +28,8 @@ add_library_unity(
   test_strftime.cpp
   test_string_util.cpp)
 
-# HiGHS's headers declare `using std::vector`, which clashes with `using namespace duckdb` in a shared unity file.
+# HiGHS's headers declare `using std::vector`, which clashes with `using
+# namespace duckdb` in a shared unity file.
 add_library_unity(test_decidb_highs OBJECT test_decidb_highs_symmetry.cpp)
 
 set(ALL_OBJECT_FILES

@@ -654,9 +654,7 @@ double DecideComposedBound(ClientContext &context, const Expression &rhs) {
 		                        "not a constant: %s",
 		                        rhs.ToString());
 	}
-	return ExpressionExecutor::EvaluateScalar(context, rhs)
-	    .DefaultCastAs(LogicalType::DOUBLE)
-	    .GetValue<double>();
+	return ExpressionExecutor::EvaluateScalar(context, rhs).DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
 }
 
 void ScaleAvgRows(CoefficientColumn &col, bool has_filter, const vector<bool> &filter_mask, bool quadratic_inner,
@@ -900,8 +898,8 @@ void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx
 	for (idx_t t = 0; t < variables.size(); t++) {
 		const double c = columns[t].Get(row) * scale;
 		if (variables[t] != DConstants::INVALID_INDEX && c != 0.0) {
-			const auto value_node = value_nodes && t < value_nodes->size() ? (*value_nodes)[t]
-			                                                                : DConstants::INVALID_INDEX;
+			const auto value_node =
+			    value_nodes && t < value_nodes->size() ? (*value_nodes)[t] : DConstants::INVALID_INDEX;
 			out.AddTerm(variables[t], row, c, value_node);
 		}
 	}

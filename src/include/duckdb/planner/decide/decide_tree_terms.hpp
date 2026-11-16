@@ -134,15 +134,15 @@ struct DecideConstraint {
 	//! The comparison carries FRAME_TIGHTEST_BOUND_TAG; a rewrite rebuilds its bound, and lowering replaces a bare
 	//! frame.
 	bool tightest_frame_bound = false;
-	ExpressionType comparison_type;  // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
-	bool lhs_is_aggregate = false;   // True if original LHS was an aggregate (e.g., SUM(...))
-	bool was_minmax_easy = false; // An easy-direction MIN/MAX kept its reducer (MINMAX_EASY_REWRITE_TAG): one row per
-	                              // member, the bound reduced over each `by` group.
+	ExpressionType comparison_type; // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
+	bool lhs_is_aggregate = false;  // True if original LHS was an aggregate (e.g., SUM(...))
+	bool was_minmax_easy = false;   // An easy-direction MIN/MAX kept its reducer (MINMAX_EASY_REWRITE_TAG): one row per
+	                                // member, the bound reduced over each `by` group.
 	idx_t minmax_clause_idx = DConstants::INVALID_INDEX; // index into LogicalDecide::minmax_clause_labels
-	string minmax_agg_type;                                 // "min" or "max" (empty if not minmax)
-	idx_t ne_clause_idx = DConstants::INVALID_INDEX;        // index into LogicalDecide::ne_clause_sources
-	idx_t abs_aux_idx = DConstants::INVALID_INDEX;          // ABS auxiliary this envelope row bounds
-	bool abs_is_pos_bound = false;                          // true=C1 (aux >= inner), false=C2 (aux >= -inner)
+	string minmax_agg_type;                              // "min" or "max" (empty if not minmax)
+	idx_t ne_clause_idx = DConstants::INVALID_INDEX;     // index into LogicalDecide::ne_clause_sources
+	idx_t abs_aux_idx = DConstants::INVALID_INDEX;       // ABS auxiliary this envelope row bounds
+	bool abs_is_pos_bound = false;                       // true=C1 (aux >= inner), false=C2 (aux >= -inner)
 	//! The auxiliary this row defines (DEFINES_TAG_PREFIX): it has no value on a row where the decisions the row reads
 	//! beside it have none (D88). INVALID_INDEX for every other row.
 	idx_t defined_var = DConstants::INVALID_INDEX;
@@ -229,12 +229,12 @@ struct DecideObjective {
 	//! These are products of two different DECIDE variables where neither is Boolean
 	//! (Boolean cases are linearized by the optimizer into McCormick auxiliary variables).
 	struct BilinearTerm {
-		idx_t var_a;                        // First DECIDE variable index
-		idx_t var_b;                        // Second DECIDE variable index
-		unique_ptr<Expression> coefficient; // Data coefficient expression (or nullptr for 1.0)
-		int sign = 1;                       // +1 or -1
-		unique_ptr<Expression> filter;      // Optional filter: the reducer's own `when`
-		bool avg_scale = false;             // True when this term came from AVG and needs 1/N scaling
+		idx_t var_a;                                     // First DECIDE variable index
+		idx_t var_b;                                     // Second DECIDE variable index
+		unique_ptr<Expression> coefficient;              // Data coefficient expression (or nullptr for 1.0)
+		int sign = 1;                                    // +1 or -1
+		unique_ptr<Expression> filter;                   // Optional filter: the reducer's own `when`
+		bool avg_scale = false;                          // True when this term came from AVG and needs 1/N scaling
 		idx_t avg_group_key = DConstants::INVALID_INDEX; //!< as DecideTerm's
 		//! Keyed scope this term's reducer is qualified by (`sum(D: ...)`), or
 		//! INVALID_INDEX for an unqualified reducer. Indexes keyed_scopes /

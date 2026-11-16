@@ -28,7 +28,7 @@ add_library_unity(
   result_modifier.cpp
   tableref.cpp
   transformer.cpp)
-  
+
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:duckdb_parser>
     PARENT_SCOPE)

@@ -18,17 +18,18 @@ from ._scope_cases import answer, dump_counts
 
 
 def _common_lineitem(duckdb_conn, where_clause):
-    return duckdb_conn.execute(f"""
+    return duckdb_conn.execute(
+        f"""
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE {where_clause}
-    """).fetchall()
+    """
+    ).fetchall()
 
 
-def _build_in_domain_model(oracle, test_id, data, domain, big_M,
-                           when_mask=None, explicit_bool=False, lb=0.0):
+def _build_in_domain_model(oracle, test_id, data, domain, big_M, when_mask=None, explicit_bool=False, lb=0.0):
     """Create vars for each row, apply IN (domain), return var name list.
 
     `lb` mirrors DeciDB's own floor: a decision variable is non-negative unless
@@ -54,9 +55,7 @@ def _build_in_domain_model(oracle, test_id, data, domain, big_M,
 @pytest.mark.var_integer
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_in_domain_restriction(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_in_domain_restriction(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """x IN (0, 1, 3) — restrict integer variable to a sparse domain."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -75,14 +74,21 @@ def test_in_domain_restriction(
 
     t_build = time.perf_counter()
     vnames = _build_in_domain_model(
-        oracle_solver, "in_domain_restriction", data, [0, 1, 3], big_M=3.0,
+        oracle_solver,
+        "in_domain_restriction",
+        data,
+        [0, 1, 3],
+        big_M=3.0,
     )
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(n)},
-        "<=", 200.0, name="quantity_cap",
+        "<=",
+        200.0,
+        name="quantity_cap",
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][2] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -92,13 +98,25 @@ def test_in_domain_restriction(
         assert row[x_idx] in (0, 1, 3), f"x={row[x_idx]} not in allowed domain"
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "in_domain_restriction", decidb_time, build_time, result.solve_time_seconds,
-        n, n * 4, 2, result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "in_domain_restriction",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 4,
+        2,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -106,9 +124,7 @@ def test_in_domain_restriction(
 @pytest.mark.var_boolean
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_in_binary_domain(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_in_binary_domain(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """x IN (0, 1) on an implicitly typed variable — equivalent to(BOOL)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -127,14 +143,21 @@ def test_in_binary_domain(
 
     t_build = time.perf_counter()
     vnames = _build_in_domain_model(
-        oracle_solver, "in_binary_domain", data, [0, 1], big_M=1.0,
+        oracle_solver,
+        "in_binary_domain",
+        data,
+        [0, 1],
+        big_M=1.0,
     )
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(n)},
-        "<=", 100.0, name="quantity_cap",
+        "<=",
+        100.0,
+        name="quantity_cap",
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][2] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -144,13 +167,25 @@ def test_in_binary_domain(
         assert row[x_idx] in (0, 1), f"x={row[x_idx]} not in {{0, 1}}"
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "in_binary_domain", decidb_time, build_time, result.solve_time_seconds,
-        n, n * 3, 2, result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "in_binary_domain",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 3,
+        2,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -158,9 +193,7 @@ def test_in_binary_domain(
 @pytest.mark.var_integer
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_in_single_value(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_in_single_value(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """x IN (3) — single-value IN, equivalent to x = 3."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, x
@@ -178,10 +211,15 @@ def test_in_single_value(
 
     t_build = time.perf_counter()
     vnames = _build_in_domain_model(
-        oracle_solver, "in_single_value", data, [3], big_M=3.0,
+        oracle_solver,
+        "in_single_value",
+        data,
+        [3],
+        big_M=3.0,
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][3] for i in range(n)}, ObjSense.MINIMIZE,
+        {vnames[i]: data[i][3] for i in range(n)},
+        ObjSense.MINIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -191,13 +229,25 @@ def test_in_single_value(
         assert row[x_idx] == 3, f"x={row[x_idx]}, expected 3"
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_quantity")])},
     )
     perf_tracker.record(
-        "in_single_value", decidb_time, build_time, result.solve_time_seconds,
-        n, n * 2, 0, result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "in_single_value",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 2,
+        0,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -205,9 +255,7 @@ def test_in_single_value(
 @pytest.mark.var_integer
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_in_minimize_picks_smallest(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_in_minimize_picks_smallest(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """x IN (3, 5, 7) MINIMIZE SUM(x) — solver should pick 3 for all rows."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, x
@@ -225,10 +273,15 @@ def test_in_minimize_picks_smallest(
 
     t_build = time.perf_counter()
     vnames = _build_in_domain_model(
-        oracle_solver, "in_minimize_picks_smallest", data, [3, 5, 7], big_M=7.0,
+        oracle_solver,
+        "in_minimize_picks_smallest",
+        data,
+        [3, 5, 7],
+        big_M=7.0,
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][3] for i in range(n)}, ObjSense.MINIMIZE,
+        {vnames[i]: data[i][3] for i in range(n)},
+        ObjSense.MINIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -239,13 +292,25 @@ def test_in_minimize_picks_smallest(
         assert row[x_idx] == 3, f"MINIMIZE should pick smallest: x={row[x_idx]}"
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_quantity")])},
     )
     perf_tracker.record(
-        "in_minimize_picks_smallest", decidb_time, build_time, result.solve_time_seconds,
-        n, n * 4, 0, result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "in_minimize_picks_smallest",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 4,
+        0,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -253,9 +318,7 @@ def test_in_minimize_picks_smallest(
 @pytest.mark.var_integer
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_in_negative_domain_lowers_floor(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_in_negative_domain_lowers_floor(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """x IN (-5, 3, 7) MINIMIZE — a negative domain value must stay reachable.
 
     A decision variable's floor is 0 unless something lowers it. A domain whose
@@ -280,11 +343,16 @@ def test_in_negative_domain_lowers_floor(
 
     t_build = time.perf_counter()
     vnames = _build_in_domain_model(
-        oracle_solver, "in_negative_domain_lowers_floor", data, [-5, 3, 7],
-        big_M=7.0, lb=-5.0,
+        oracle_solver,
+        "in_negative_domain_lowers_floor",
+        data,
+        [-5, 3, 7],
+        big_M=7.0,
+        lb=-5.0,
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][3] for i in range(n)}, ObjSense.MINIMIZE,
+        {vnames[i]: data[i][3] for i in range(n)},
+        ObjSense.MINIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -298,13 +366,25 @@ def test_in_negative_domain_lowers_floor(
         )
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_quantity")])},
     )
     perf_tracker.record(
-        "in_negative_domain_lowers_floor", decidb_time, build_time, result.solve_time_seconds,
-        n, n * 4, 0, result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "in_negative_domain_lowers_floor",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 4,
+        0,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -312,9 +392,7 @@ def test_in_negative_domain_lowers_floor(
 @pytest.mark.var_integer
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_in_arithmetic_domain_lowers_floor(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_in_arithmetic_domain_lowers_floor(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """x IN (0 - 5, 3, 7) — a domain value written as arithmetic still lowers the floor.
 
     Same shape as ``test_in_negative_domain_lowers_floor``, but the negative value
@@ -339,11 +417,16 @@ def test_in_arithmetic_domain_lowers_floor(
 
     t_build = time.perf_counter()
     vnames = _build_in_domain_model(
-        oracle_solver, "in_arithmetic_domain_lowers_floor", data, [-5, 3, 7],
-        big_M=7.0, lb=-5.0,
+        oracle_solver,
+        "in_arithmetic_domain_lowers_floor",
+        data,
+        [-5, 3, 7],
+        big_M=7.0,
+        lb=-5.0,
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][3] for i in range(n)}, ObjSense.MINIMIZE,
+        {vnames[i]: data[i][3] for i in range(n)},
+        ObjSense.MINIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -352,19 +435,29 @@ def test_in_arithmetic_domain_lowers_floor(
     for row in decidb_rows:
         assert row[x_idx] in (-5, 3, 7), f"x escaped the domain: x={row[x_idx]}"
         assert row[x_idx] == -5, (
-            f"an arithmetic domain value must lower the floor the same way a "
-            f"literal does: x={row[x_idx]}"
+            f"an arithmetic domain value must lower the floor the same way a " f"literal does: x={row[x_idx]}"
         )
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_quantity")])},
     )
     perf_tracker.record(
-        "in_arithmetic_domain_lowers_floor", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 4, 0, result.objective_value,
+        "in_arithmetic_domain_lowers_floor",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 4,
+        0,
+        result.objective_value,
         oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -372,9 +465,7 @@ def test_in_arithmetic_domain_lowers_floor(
 @pytest.mark.var_integer
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_in_cast_domain_floor_uses_cast_value(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_in_cast_domain_floor_uses_cast_value(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """x IN (CAST(-5.6 AS INTEGER), 3) — the floor must use the post-cast value.
 
     The cast makes the real domain value -6, not -5.6. The linking constraint uses
@@ -398,11 +489,16 @@ def test_in_cast_domain_floor_uses_cast_value(
 
     t_build = time.perf_counter()
     vnames = _build_in_domain_model(
-        oracle_solver, "in_cast_domain_floor_uses_cast_value", data, [-6, 3],
-        big_M=3.0, lb=-6.0,
+        oracle_solver,
+        "in_cast_domain_floor_uses_cast_value",
+        data,
+        [-6, 3],
+        big_M=3.0,
+        lb=-6.0,
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][3] for i in range(n)}, ObjSense.MINIMIZE,
+        {vnames[i]: data[i][3] for i in range(n)},
+        ObjSense.MINIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -410,20 +506,28 @@ def test_in_cast_domain_floor_uses_cast_value(
     x_idx = decidb_cols.index("x")
     for row in decidb_rows:
         assert row[x_idx] in (-6, 3), f"x escaped the domain: x={row[x_idx]}"
-        assert row[x_idx] == -6, (
-            f"the floor must be read after the cast, so -6 stays reachable: "
-            f"x={row[x_idx]}"
-        )
+        assert row[x_idx] == -6, f"the floor must be read after the cast, so -6 stays reachable: " f"x={row[x_idx]}"
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_quantity")])},
     )
     perf_tracker.record(
-        "in_cast_domain_floor_uses_cast_value", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 3, 0, result.objective_value,
+        "in_cast_domain_floor_uses_cast_value",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 3,
+        0,
+        result.objective_value,
         oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -431,9 +535,7 @@ def test_in_cast_domain_floor_uses_cast_value(
 @pytest.mark.var_integer
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_in_maximize_picks_largest(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_in_maximize_picks_largest(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """x IN (2, 5) MAXIMIZE SUM(x * extendedprice) with a loose aggregate cap."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -452,14 +554,21 @@ def test_in_maximize_picks_largest(
 
     t_build = time.perf_counter()
     vnames = _build_in_domain_model(
-        oracle_solver, "in_maximize_picks_largest", data, [2, 5], big_M=5.0,
+        oracle_solver,
+        "in_maximize_picks_largest",
+        data,
+        [2, 5],
+        big_M=5.0,
     )
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(n)},
-        "<=", 99999.0, name="quantity_cap",
+        "<=",
+        99999.0,
+        name="quantity_cap",
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][2] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -469,13 +578,25 @@ def test_in_maximize_picks_largest(
         assert row[x_idx] in (2, 5), f"x={row[x_idx]} not in domain"
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "in_maximize_picks_largest", decidb_time, build_time, result.solve_time_seconds,
-        n, n * 3, 2, result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "in_maximize_picks_largest",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 3,
+        2,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -484,9 +605,7 @@ def test_in_maximize_picks_largest(
 @pytest.mark.when
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_in_with_when(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_in_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """when condition: x IN (0, 2, 4) — IN restriction gated by a row filter."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -506,15 +625,22 @@ def test_in_with_when(
 
     t_build = time.perf_counter()
     vnames = _build_in_domain_model(
-        oracle_solver, "in_with_when", data, [0, 2, 4], big_M=4.0,
+        oracle_solver,
+        "in_with_when",
+        data,
+        [0, 2, 4],
+        big_M=4.0,
         when_mask=mask,
     )
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(n)},
-        "<=", 500.0, name="quantity_cap",
+        "<=",
+        500.0,
+        name="quantity_cap",
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][2] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -523,17 +649,28 @@ def test_in_with_when(
     qty_idx = decidb_cols.index("l_quantity")
     for row in decidb_rows:
         if row[qty_idx] > 20:
-            assert row[x_idx] in (0, 2, 4), \
-                f"x={row[x_idx]} not in domain when l_quantity={row[qty_idx]} > 20"
+            assert row[x_idx] in (0, 2, 4), f"x={row[x_idx]} not in domain when l_quantity={row[qty_idx]} > 20"
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "in_with_when", decidb_time, build_time, result.solve_time_seconds,
-        n, n * 4, 2, result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "in_with_when",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 4,
+        2,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -541,9 +678,7 @@ def test_in_with_when(
 @pytest.mark.var_boolean
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_in_boolean_explicit(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_in_boolean_explicit(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """x(BOOL) with x IN (0, 1) — trivially satisfied, no auxiliary vars needed."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -562,14 +697,22 @@ def test_in_boolean_explicit(
 
     t_build = time.perf_counter()
     vnames = _build_in_domain_model(
-        oracle_solver, "in_boolean_explicit", data, [0, 1], big_M=1.0,
+        oracle_solver,
+        "in_boolean_explicit",
+        data,
+        [0, 1],
+        big_M=1.0,
         explicit_bool=True,
     )
     oracle_solver.add_constraint(
-        {v: 1.0 for v in vnames}, "<=", 10.0, name="count_cap",
+        {v: 1.0 for v in vnames},
+        "<=",
+        10.0,
+        name="count_cap",
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][2] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -579,13 +722,25 @@ def test_in_boolean_explicit(
         assert row[x_idx] in (0, 1), f"x={row[x_idx]} not in {{0, 1}}"
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "in_boolean_explicit", decidb_time, build_time, result.solve_time_seconds,
-        n, n, 1, result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "in_boolean_explicit",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -613,12 +768,14 @@ def test_real_in_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 15
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
 
     t_build = time.perf_counter()
@@ -629,10 +786,14 @@ def test_real_in_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     for i, v in enumerate(vnames):
         add_in_domain(oracle_solver, v, [0.5, 1.5, 2.75], name_prefix=f"in_{i}")
     oracle_solver.add_constraint(
-        {vnames[i]: 1.0 for i in range(n)}, "<=", 20.0, name="sum_cap",
+        {vnames[i]: 1.0 for i in range(n)},
+        "<=",
+        20.0,
+        name="sum_cap",
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][2] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -640,18 +801,28 @@ def test_real_in_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     x_idx = decidb_cols.index("x")
     allowed = {0.5, 1.5, 2.75}
     for row in decidb_rows:
-        assert any(abs(float(row[x_idx]) - a) < 1e-6 for a in allowed), (
-            f"x={row[x_idx]} not in {allowed}"
-        )
+        assert any(abs(float(row[x_idx]) - a) < 1e-6 for a in allowed), f"x={row[x_idx]} not in {allowed}"
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "real_in_oracle", decidb_time, build_time, result.solve_time_seconds,
-        n, n * 4, 1 + n, result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "real_in_oracle",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 4,
+        1 + n,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -659,9 +830,7 @@ def test_real_in_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.var_integer
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_in_negative_value_with_negative_upper_bound(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_in_negative_value_with_negative_upper_bound(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """x IN (-5, 0, 5) AND x <= -3 — the IN's negative value signs x down, so -5 is the answer.
 
     The default floor of 0 is lowered by the IN's own `x >= -5`. A check that read
@@ -684,26 +853,42 @@ def test_in_negative_value_with_negative_upper_bound(
 
     t_build = time.perf_counter()
     vnames = _build_in_domain_model(
-        oracle_solver, "in_negative_value_negative_upper", data, [-5, 0, 5],
-        big_M=5.0, lb=-5.0,
+        oracle_solver,
+        "in_negative_value_negative_upper",
+        data,
+        [-5, 0, 5],
+        big_M=5.0,
+        lb=-5.0,
     )
     for v in vnames:
         oracle_solver.add_constraint({v: 1.0}, "<=", -3.0, name=f"upper_{v}")
     oracle_solver.set_objective(
-        {vnames[i]: data[i][3] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][3] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_quantity")])},
     )
     perf_tracker.record(
-        "in_negative_value_negative_upper", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 4, 0, result.objective_value,
+        "in_negative_value_negative_upper",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 4,
+        0,
+        result.objective_value,
         oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -711,9 +896,7 @@ def test_in_negative_value_with_negative_upper_bound(
 @pytest.mark.var_integer
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_in_negative_value_with_per_row_upper_bound(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_in_negative_value_with_per_row_upper_bound(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """x IN (-5, 0, 5) AND x <= l_linenumber - 4 — the upper bound varies per row.
 
     Rows whose bound is below 0 can only take -5; rows whose bound is 0 to 3 take 0.
@@ -734,30 +917,48 @@ def test_in_negative_value_with_per_row_upper_bound(
 
     t_build = time.perf_counter()
     vnames = _build_in_domain_model(
-        oracle_solver, "in_negative_value_per_row_upper", data, [-5, 0, 5],
-        big_M=5.0, lb=-5.0,
+        oracle_solver,
+        "in_negative_value_per_row_upper",
+        data,
+        [-5, 0, 5],
+        big_M=5.0,
+        lb=-5.0,
     )
     for i, v in enumerate(vnames):
         oracle_solver.add_constraint(
-            {v: 1.0}, "<=", float(data[i][1] - 4), name=f"upper_{v}",
+            {v: 1.0},
+            "<=",
+            float(data[i][1] - 4),
+            name=f"upper_{v}",
         )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][3] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][3] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_quantity")])},
     )
     perf_tracker.record(
-        "in_negative_value_per_row_upper", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 4, 0, result.objective_value,
+        "in_negative_value_per_row_upper",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 4,
+        0,
+        result.objective_value,
         oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
-
 
 
 # ---------------------------------------------------------------------------

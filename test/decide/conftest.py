@@ -115,9 +115,7 @@ def decidb_exe_path():
     """Path to the native decidb executable."""
     path = _find_decidb_exe()
     if path is None:
-        pytest.skip(
-            "decidb executable not found — build first or set DECIDB_EXE_PATH"
-        )
+        pytest.skip("decidb executable not found — build first or set DECIDB_EXE_PATH")
     return str(path)
 
 
@@ -140,7 +138,9 @@ def decidb_cli_highs(decidb_exe_path, decidb_db_path):
     where Gurobi is also linked.
     """
     return DeciDBCli(
-        decidb_exe_path, decidb_db_path, env={"DECIDB_FORCE_SOLVER": "highs"},
+        decidb_exe_path,
+        decidb_db_path,
+        env={"DECIDB_FORCE_SOLVER": "highs"},
     )
 
 
@@ -156,7 +156,9 @@ def decidb_cli_gurobi(decidb_exe_path, decidb_db_path, _raw_oracle_solver):
     if _raw_oracle_solver is None:
         pytest.skip("Gurobi not available — decidb_cli_gurobi requires it")
     return DeciDBCli(
-        decidb_exe_path, decidb_db_path, env={"DECIDB_FORCE_SOLVER": "gurobi"},
+        decidb_exe_path,
+        decidb_db_path,
+        env={"DECIDB_FORCE_SOLVER": "gurobi"},
     )
 
 
@@ -271,7 +273,7 @@ def _skip_reason(report) -> str:
         text = str(longrepr[2])
     else:
         text = str(longrepr)
-    return text[len("Skipped: "):] if text.startswith("Skipped: ") else text
+    return text[len("Skipped: ") :] if text.startswith("Skipped: ") else text
 
 
 def _audit_skips(session) -> bool:
@@ -288,12 +290,8 @@ def _audit_skips(session) -> bool:
     declared, undeclared = [], []
     for report in skipped:
         reason = _skip_reason(report)
-        why = next(
-            (w for pattern, w in _DECLARED_SKIPS if re.search(pattern, reason)), None
-        )
-        (declared if why else undeclared).append(
-            (getattr(report, "nodeid", "?"), reason, why)
-        )
+        why = next((w for pattern, w in _DECLARED_SKIPS if re.search(pattern, reason)), None)
+        (declared if why else undeclared).append((getattr(report, "nodeid", "?"), reason, why))
 
     print(
         f"\n  DECIDE skip audit: {passed} passed + {len(skipped)} skipped "
@@ -350,10 +348,7 @@ def pytest_sessionfinish(session, exitstatus):
     # entries it would prune; a failed or worker-short run may be missing an
     # accessed set entirely.  Pruning against an incomplete picture deletes live
     # entries that then cost a real solve to rebuild.
-    is_full_run = (
-        not getattr(config.option, "markexpr", "")
-        and not getattr(config.option, "keyword", "")
-    )
+    is_full_run = not getattr(config.option, "markexpr", "") and not getattr(config.option, "keyword", "")
     complete = not getattr(config, "_decidb_workers_incomplete", False)
     gc = is_full_run and exitstatus == 0 and complete
 

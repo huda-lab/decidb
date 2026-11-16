@@ -162,9 +162,8 @@ static void ReplaceTaggedFunctionsForSingletonRead(unique_ptr<Expression> &expre
 		expression = decide.decide_variables[aux]->Copy();
 		return;
 	}
-	ExpressionIterator::EnumerateChildren(*expression, [&](unique_ptr<Expression> &child) {
-		ReplaceTaggedFunctionsForSingletonRead(child, decide);
-	});
+	ExpressionIterator::EnumerateChildren(
+	    *expression, [&](unique_ptr<Expression> &child) { ReplaceTaggedFunctionsForSingletonRead(child, decide); });
 }
 
 //! A frame inside a tagged F body determines that helper's value, not the row on which the surrounding bound is
@@ -188,9 +187,8 @@ static bool ContainsFrameOutsideTaggedFunction(const Expression &expression) {
 }
 
 static unique_ptr<Expression> ReadAsRow(const ExpressionBuilder &calc, const LogicalDecide &decide,
-                                        const DecideTermSplitter &splitter,
-                                        const BoundComparisonExpression &comparison, unique_ptr<Expression> &filter,
-                                        bool &by_key_only) {
+                                        const DecideTermSplitter &splitter, const BoundComparisonExpression &comparison,
+                                        unique_ptr<Expression> &filter, bool &by_key_only) {
 	auto source_row = comparison.left->Copy();
 	unique_ptr<Expression> expanded;
 	if (splitter.ExpandBilinearGroups(*source_row, expanded)) {
@@ -283,7 +281,7 @@ static void FoldKnownBound(ClientContext &context, ExpressionType type, const De
 }
 
 bool DecideReadSingletonRow(ClientContext &context, const LogicalDecide &decide,
-                                const BoundComparisonExpression &comparison, DecideSingletonRow &out) {
+                            const BoundComparisonExpression &comparison, DecideSingletonRow &out) {
 	auto type = comparison.type;
 	if (type != ExpressionType::COMPARE_LESSTHAN && type != ExpressionType::COMPARE_GREATERTHAN &&
 	    type != ExpressionType::COMPARE_LESSTHANOREQUALTO && type != ExpressionType::COMPARE_GREATERTHANOREQUALTO &&

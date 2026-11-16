@@ -89,8 +89,8 @@ class DecideModelEmitter {
 public:
 	DecideModelEmitter(const PhysicalDecide &op, ClientContext &context, const DecideTree &tree,
 	                   const DecideDescent &descent, DecideTreeColumns &columns, DecideGlobalSinkState &gstate,
-	                   vector<SolverInput::KeyValues> &key_values, const DecideSourceNames &names, idx_t num_rows, DecideErrorLedger &errors,
-	                   DataChunk &first);
+	                   vector<SolverInput::KeyValues> &key_values, const DecideSourceNames &names, idx_t num_rows,
+	                   DecideErrorLedger &errors, DataChunk &first);
 
 	//! Each declared decision's classes, numbered by its key's values, each relation-qualified reducer's, its classes
 	//! split by its body's values, and each helper's, the groups that hold a member, a row in none in a class of its
@@ -132,7 +132,8 @@ private:
 	DecideErrorLedger &errors;
 	//! The input's first chunk, where a value the whole query shares is read (FirstRowValue).
 	DataChunk &first;
-	//! Per value-link node, its helper's members, read once where its classes are (HelperMapping), which ValueLinks lists.
+	//! Per value-link node, its helper's members, read once where its classes are (HelperMapping), which ValueLinks
+	//! lists.
 	vector<LinkMembers> link_members;
 
 	//! Each clause's root by its place in stage 05's lists (DecideBody::clause_index).
@@ -199,8 +200,8 @@ private:
 	//! The composed terms `terms` that `root`, a composed clause's or the objective's, holds: each read on the members
 	//! of its G, its factor on the input's `first` chunk (`what` names the clause or the objective); `null_factor` set
 	//! by a NULL one.
-	vector<ComposedMinMaxTermData> ComposedTerms(idx_t root, const DecideAlgebraNode &formula,
-	                                             const char *what, bool &null_factor);
+	vector<ComposedMinMaxTermData> ComposedTerms(idx_t root, const DecideAlgebraNode &formula, const char *what,
+	                                             bool &null_factor);
 	//! A factor the whole query shares (a composed term's, a square's), as flat reads it: on the input's first row,
 	//! whatever a clause keeps.
 	Value FirstRowValue(const Expression &factor);
@@ -215,8 +216,8 @@ private:
 	//! (language/guide.md §5.1): a NULL coefficient there, or a decision of `variables` with no instance there, leaves
 	//! the row's instance no value (`null_rows`, D84).
 	void ReadPart(const DecideTermSite &site, idx_t program, idx_t qualifier_scope, int sign,
-	              const vector<unique_ptr<Expression>> &inputs,
-	              const vector<idx_t> &variables, CoefficientColumn &column, vector<bool> &null_rows);
+	              const vector<unique_ptr<Expression>> &inputs, const vector<idx_t> &variables,
+	              CoefficientColumn &column, vector<bool> &null_rows);
 	//! The sign of `root`'s square `g`, its factor applied (ScaleSquaredGroup), read as flat reads it on the input's
 	//! first row, whatever the clause keeps, first in the square's part (DecideErrorRank::part); a NULL factor leaves
 	//! every instance of the clause no value.
@@ -246,9 +247,8 @@ private:
 	void ForEachRead(idx_t site, const vector<bool> &reads, bool qualified, F &&read) const;
 	//! The entries of `site` a term in a reducer is read on, limited to rows selected by the exact `per` reducer
 	//! occurrence. The two sites differ when a qualified reducer contains a nested reducer.
-	const vector<bool> &ReadEntriesOf(const DecideTermSite &site, idx_t qualifier_scope,
-	                                 const vector<bool> &candidates,
-	                                 vector<bool> &first, vector<bool> &selected_rows);
+	const vector<bool> &ReadEntriesOf(const DecideTermSite &site, idx_t qualifier_scope, const vector<bool> &candidates,
+	                                  vector<bool> &first, vector<bool> &selected_rows);
 	//! Read the selected entries only at rows chosen by the relation-qualified reducer's operand.
 	template <class F>
 	void ForEachTermRead(idx_t site, const vector<bool> &reads, idx_t qualifier_scope,
@@ -283,7 +283,5 @@ vector<KeyedMapping> DecideDeclaredMappings(const DecideDescent &descent);
 //! The values that name each group of the G `node`, by its rank: its key's least spelling over every row the query read
 //! the key on (DecideDescent::Label, D69).
 SolverInput::KeyValues DecideGroupKeyValues(const DecideTree &tree, const DecideDescent &descent, idx_t node);
-
-
 
 } // namespace duckdb

@@ -53,6 +53,7 @@ def _source_hash(fn: Callable, db_checksum: str) -> str:
 # Cache storage
 # ---------------------------------------------------------------------------
 
+
 class OracleCache:
     """Reads/writes oracle results from a JSON file on disk."""
 
@@ -109,20 +110,14 @@ class OracleCache:
 
     def save(self, gc: bool = False) -> None:
         if gc:
-            pruned = {
-                k: v
-                for k, v in self._data["entries"].items()
-                if k in self._accessed
-            }
+            pruned = {k: v for k, v in self._data["entries"].items() if k in self._accessed}
             if len(pruned) != len(self._data["entries"]):
                 self._data["entries"] = pruned
                 self._dirty = True
         if not self._dirty:
             return
         _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _CACHE_PATH.write_text(
-            json.dumps(self._data, indent=2, sort_keys=True) + "\n"
-        )
+        _CACHE_PATH.write_text(json.dumps(self._data, indent=2, sort_keys=True) + "\n")
 
     def worker_report(self) -> dict[str, Any]:
         """This worker's contribution, for the controller to merge.
@@ -140,9 +135,7 @@ class OracleCache:
         }
 
 
-def merge_worker_reports(
-    db_path: str, reports: list[dict[str, Any]], *, gc: bool
-) -> int:
+def merge_worker_reports(db_path: str, reports: list[dict[str, Any]], *, gc: bool) -> int:
     """Fold xdist worker reports into the shared cache.  Returns entries kept."""
     cache = OracleCache(db_path)
     for report in reports:
@@ -162,6 +155,7 @@ def merge_worker_reports(
 # ---------------------------------------------------------------------------
 # Transparent solver wrapper
 # ---------------------------------------------------------------------------
+
 
 class CachedOracleSolver:
     """Drop-in replacement for OracleSolver that caches solve() results.
@@ -197,10 +191,7 @@ class CachedOracleSolver:
 
     def create_model(self, name: str) -> None:
         self._model_count += 1
-        self._current_cache_key = (
-            self._test_id if self._model_count == 1
-            else f"{self._test_id}#{self._model_count}"
-        )
+        self._current_cache_key = self._test_id if self._model_count == 1 else f"{self._test_id}#{self._model_count}"
         cached = self._cache.lookup(self._current_cache_key, self._test_fn)
         if cached is not None:
             self._cached_result = cached
@@ -209,9 +200,8 @@ class CachedOracleSolver:
         self._cached_result = None
         if self._real is None:
             import pytest
-            pytest.skip(
-                f"No solver available and no cached oracle for {self._current_cache_key}"
-            )
+
+            pytest.skip(f"No solver available and no cached oracle for {self._current_cache_key}")
         self._real.create_model(name)
         self._model_active = True
 
@@ -275,7 +265,12 @@ class CachedOracleSolver:
     ) -> None:
         if self._model_active:
             self._real.add_indicator_constraint(
-                indicator_var, indicator_val, coeffs, sense, rhs, name,
+                indicator_var,
+                indicator_val,
+                coeffs,
+                sense,
+                rhs,
+                name,
             )
 
     def solve(self, time_limit: float = 60.0) -> SolverResult:
@@ -283,9 +278,8 @@ class CachedOracleSolver:
             return self._cached_result
         if self._real is None:
             import pytest
-            pytest.skip(
-                f"No solver available and no cached oracle for {self._current_cache_key}"
-            )
+
+            pytest.skip(f"No solver available and no cached oracle for {self._current_cache_key}")
         result = self._real.solve(time_limit)
         self._cache.store(self._current_cache_key, self._test_fn, result)
         return result

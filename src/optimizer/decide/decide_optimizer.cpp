@@ -41,9 +41,12 @@ namespace duckdb {
 using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 
 ObjectiveAggregateType decide_rewrite::StrToAggType(const string &name) {
-	if (name == "sum") return ObjectiveAggregateType::SUM;
-	if (name == "min") return ObjectiveAggregateType::MIN_AGG;
-	if (name == "max") return ObjectiveAggregateType::MAX_AGG;
+	if (name == "sum")
+		return ObjectiveAggregateType::SUM;
+	if (name == "min")
+		return ObjectiveAggregateType::MIN_AGG;
+	if (name == "max")
+		return ObjectiveAggregateType::MAX_AGG;
 	return ObjectiveAggregateType::NONE;
 }
 
@@ -343,8 +346,8 @@ string decide_rewrite::DescendSourceAlias(const Expression &expr, const string &
 //! `0_auto`, or `0_<double>`, so the `0_` prefix selects exactly those and nothing else.
 static bool ContainsNormMarker(const Expression &expr, bool l0_only) {
 	string payload;
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
-	    TryParseNormMarker(expr.GetAlias(), payload) && (!l0_only || payload.rfind("0_", 0) == 0)) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && TryParseNormMarker(expr.GetAlias(), payload) &&
+	    (!l0_only || payload.rfind("0_", 0) == 0)) {
 		return true;
 	}
 	bool found = false;
@@ -381,8 +384,7 @@ static void VerifyNormMarkersLowered(LogicalDecide &decide) {
 //! (MINMAX_EASY_REWRITE_TAG) bounds each member in its own quadratic row and is exempt.
 static void VerifyExtremumBodiesLinear(ClientContext &context, LogicalDecide &decide) {
 	const idx_t decide_index = decide.decide_index;
-	DecideTermSplitter splitter(context, decide_index, decide.decide_variables,
-	                            &decide.bilinear_function_groups);
+	DecideTermSplitter splitter(context, decide_index, decide.decide_variables, &decide.bilinear_function_groups);
 	auto check = [&](const Expression &body) {
 		if (!splitter.IsLinear(body)) {
 			throw InternalException("DECIDE MIN/MAX member '%s' is not linear", body.ToString());

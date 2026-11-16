@@ -203,8 +203,7 @@ static void ClassifyAbsConstraints(ClientContext &context, Expression &expr, idx
 			int pinning_sign;
 			if (t == ExpressionType::COMPARE_LESSTHAN || t == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
 				pinning_sign = 1; // E bounded above: a positive term is pushed down
-			} else if (t == ExpressionType::COMPARE_GREATERTHAN ||
-			           t == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
+			} else if (t == ExpressionType::COMPARE_GREATERTHAN || t == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
 				pinning_sign = -1; // E bounded below: a negative term is pushed down
 			} else {
 				pinning_sign = 0; // equality, <>: pin nothing, exactly as before
@@ -292,10 +291,10 @@ void decide_rewrite::TagAbsForBigM(ClientContext &context, LogicalDecide &decide
 		int pinning_sign = constraint.outer_cmp == ExpressionType::COMPARE_LESSTHAN ||
 		                           constraint.outer_cmp == ExpressionType::COMPARE_LESSTHANOREQUALTO
 		                       ? 1
-		                       : constraint.outer_cmp == ExpressionType::COMPARE_GREATERTHAN ||
-		                                 constraint.outer_cmp == ExpressionType::COMPARE_GREATERTHANOREQUALTO
-		                             ? -1
-		                             : 0;
+		                   : constraint.outer_cmp == ExpressionType::COMPARE_GREATERTHAN ||
+		                           constraint.outer_cmp == ExpressionType::COMPARE_GREATERTHANOREQUALTO
+		                       ? -1
+		                       : 0;
 		for (auto &term : constraint.terms) {
 			classify_composed(term, pinning_sign);
 		}
@@ -409,22 +408,16 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 		auto &aux_ref = aux_var->Cast<BoundColumnRefExpression>();
 
 		// Constraint 1 (C1): aux >= inner_expr
-		auto aux_ref1 = make_uniq<BoundColumnRefExpression>(
-		    aux_ref.alias, aux_ref.return_type, aux_ref.binding);
-		auto c1 = make_uniq<BoundComparisonExpression>(
-		    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-		    std::move(aux_ref1), pair.inner_expr->Copy());
+		auto aux_ref1 = make_uniq<BoundColumnRefExpression>(aux_ref.alias, aux_ref.return_type, aux_ref.binding);
+		auto c1 = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+		                                               std::move(aux_ref1), pair.inner_expr->Copy());
 
 		// Constraint 2 (C2): aux >= -inner_expr  (computed as 0 - inner_expr)
-		auto aux_ref2 = make_uniq<BoundColumnRefExpression>(
-		    aux_ref.alias, aux_ref.return_type, aux_ref.binding);
-		auto neg_expr = optimizer.BindScalarFunction(
-		    "-",
-		    make_uniq<BoundConstantExpression>(Value::INTEGER(0)),
-		    pair.inner_expr->Copy());
-		auto c2 = make_uniq<BoundComparisonExpression>(
-		    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-		    std::move(aux_ref2), std::move(neg_expr));
+		auto aux_ref2 = make_uniq<BoundColumnRefExpression>(aux_ref.alias, aux_ref.return_type, aux_ref.binding);
+		auto neg_expr = optimizer.BindScalarFunction("-", make_uniq<BoundConstantExpression>(Value::INTEGER(0)),
+		                                             pair.inner_expr->Copy());
+		auto c2 = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+		                                               std::move(aux_ref2), std::move(neg_expr));
 
 		const bool needs_bigm = pair.needs_bigm;
 		// The account says how the auxiliary is pinned: on the sound direction solver
@@ -483,9 +476,8 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 }
 
 void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, LogicalDecide &decide,
-	                                           const DecideCanonicalizer &canonicalizer,
-	                                           vector<AbsPairInfo> &abs_pairs, const string &source_alias,
-	                                           DecideEnclosingScope scope) {
+                                            const DecideCanonicalizer &canonicalizer, vector<AbsPairInfo> &abs_pairs,
+                                            const string &source_alias, DecideEnclosingScope scope) {
 	if (!expr) {
 		return;
 	}
@@ -507,10 +499,8 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 				// in ilp_model_builder would reject valid integer-valued strict cases.
 				// Nested ABS functions will be tagged as helpers, but this function node remains in the source tree.
 				const LogicalType inner_type = func.children[0]->return_type;
-				bool inner_is_integer = inner_type.IsIntegral() ||
-				                        inner_type.id() == LogicalTypeId::BOOLEAN;
-				LogicalType aux_type =
-				    inner_is_integer ? LogicalType::INTEGER : LogicalType::DOUBLE;
+				bool inner_is_integer = inner_type.IsIntegral() || inner_type.id() == LogicalTypeId::BOOLEAN;
+				LogicalType aux_type = inner_is_integer ? LogicalType::INTEGER : LogicalType::DOUBLE;
 
 				// F6: a diagnosis and a plan name the helper by the user's ABS(inner), rendered before
 				// nested ABS nodes receive their helper tags.
@@ -535,7 +525,7 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 				// Retain the bound operand for the F node's envelope rows.
 				abs_pairs.push_back({aux_idx, func.children[0]->Copy(), clause_alias, needs_bigm,
 				                     scope.Condition() ? scope.Condition()->Copy() : nullptr, std::move(label),
-			                     aux_scope});
+				                     aux_scope});
 
 				// Preserve ABS(inner) in the clause tree and tag its value-helper mapping for
 				// the F-aware term splitter.

@@ -86,8 +86,8 @@ bool TryMatchScaledAggregate(const Expression &expr, idx_t decide_index, ScaledA
 		return false;
 	}
 
-	result.aggregate = &UnwrapDecideCasts(*func.children[aggregate_child], decide_index)
-	                        ->Cast<BoundAggregateExpression>();
+	result.aggregate =
+	    &UnwrapDecideCasts(*func.children[aggregate_child], decide_index)->Cast<BoundAggregateExpression>();
 	result.scale = func.children[1 - aggregate_child].get();
 	result.function = &func;
 	result.divides = is_div;
@@ -152,8 +152,7 @@ vector<CanonicalAtom> ReadCanonicalAtoms(const Expression &side, idx_t decide_in
 	return atoms;
 }
 
-[[noreturn]] static void CanonicalInvariantFailure(const string &rule, const string &detail,
-                                                   const Expression &expr) {
+[[noreturn]] static void CanonicalInvariantFailure(const string &rule, const string &detail, const Expression &expr) {
 	throw InternalException("DECIDE canonical invariant %s violated: %s. Expression: %s", rule, detail,
 	                        expr.ToString());
 }
@@ -374,7 +373,6 @@ DecideCanonicalizer::Placement DecideCanonicalizer::Classify(const Expression &e
 	return Placement::RIGHT;
 }
 
-
 bool DecideCanonicalizer::IsBooleanFactor(const Expression &expr) const {
 	auto *cur = UnwrapDecideCasts(expr, decide_index);
 	if (cur->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
@@ -416,8 +414,7 @@ bool DecideCanonicalizer::IsQueryWideConstant(const Expression &expr) const {
 			return false; // No evidence available: never promote an arbitrary column.
 		}
 		auto &colref = expr.Cast<BoundColumnRefExpression>();
-		return query_wide_table_indexes.find(colref.binding.table_index) !=
-		       query_wide_table_indexes.end();
+		return query_wide_table_indexes.find(colref.binding.table_index) != query_wide_table_indexes.end();
 	}
 	// An unflattened uncorrelated scalar subquery is one value by definition. A
 	// correlated one is genuinely per-row and must not qualify.
@@ -659,9 +656,9 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 			// reducer becomes a helper decision and the product `b * helper` is linearized as every Boolean
 			// product is. An INT or REAL decision is not convex. (A divisor that bears a decision is refused
 			// by the binder, before this runs.)
-			const bool boolean_factor = IsBooleanFactor(*factor) &&
-			                            UnwrapDecideCasts(*term, decide_index)->GetExpressionClass() ==
-			                                ExpressionClass::BOUND_AGGREGATE;
+			const bool boolean_factor =
+			    IsBooleanFactor(*factor) &&
+			    UnwrapDecideCasts(*term, decide_index)->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE;
 			if (!boolean_factor) {
 				throw BinderException("%s: '%s' is a decision, so it cannot %s %s. %s", clause_name,
 				                      UserFacingName(*factor), verb, UserFacingName(*term),
@@ -685,17 +682,15 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 			// echoing an internal name and suggesting `SUM(x * SUBQUERY)`, which is not
 			// something anyone can type.
 			if (IsCorrelatedSubqueryRef(*factor)) {
-				throw BinderException(
-				    "%s: this subquery returns a different value for each row, "
-				    "so it cannot %s %s. Move it inside the aggregate, e.g. "
-				    "SUM(x %s (SELECT ...)).",
-				    clause_name, verb, UserFacingName(*term), factor_divides ? "/" : "*");
+				throw BinderException("%s: this subquery returns a different value for each row, "
+				                      "so it cannot %s %s. Move it inside the aggregate, e.g. "
+				                      "SUM(x %s (SELECT ...)).",
+				                      clause_name, verb, UserFacingName(*term), factor_divides ? "/" : "*");
 			}
-			throw BinderException(
-			    "%s: '%s' varies per row, so it cannot %s %s. "
-			    "Move it inside the aggregate, e.g. SUM(x %s %s).",
-			    clause_name, UserFacingName(*factor), verb, UserFacingName(*term),
-			    factor_divides ? "/" : "*", UserFacingName(*factor));
+			throw BinderException("%s: '%s' varies per row, so it cannot %s %s. "
+			                      "Move it inside the aggregate, e.g. SUM(x %s %s).",
+			                      clause_name, UserFacingName(*factor), verb, UserFacingName(*term),
+			                      factor_divides ? "/" : "*", UserFacingName(*factor));
 		}
 
 		(factor_divides ? divisors : multipliers).push_back(factor);
@@ -932,7 +927,8 @@ void DecideCanonicalizer::DesugarNormsInPlace(unique_ptr<Expression> &expr) cons
 	string order;
 	if (!IsDesugarableNorm(*expr, decide_index, order)) {
 		// A marker stands wherever a scalar may: under a comparison, `+`, `*` or a cast.
-		ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) { DesugarNormsInPlace(child); });
+		ExpressionIterator::EnumerateChildren(*expr,
+		                                      [&](unique_ptr<Expression> &child) { DesugarNormsInPlace(child); });
 		return;
 	}
 	auto &marker = expr->Cast<BoundAggregateExpression>();
@@ -1076,8 +1072,7 @@ unique_ptr<Expression> DecideCanonicalizer::BindOp(const string &name, unique_pt
 	return BindOp(name, std::move(children));
 }
 
-unique_ptr<Expression> DecideCanonicalizer::BindOp(const string &name,
-                                                   vector<unique_ptr<Expression>> children) const {
+unique_ptr<Expression> DecideCanonicalizer::BindOp(const string &name, vector<unique_ptr<Expression>> children) const {
 	return BindScalar(context, name, std::move(children));
 }
 
@@ -1091,9 +1086,8 @@ unique_ptr<Expression> DecideCanonicalizer::BuildAdditive(const vector<Atom> &at
 			// with the factor on the LEFT. `SUM(x) * 2`, `2 * SUM(x)` and the cast-laden
 			// variants all converge here, which is what lets each downstream consumer
 			// match a single shape instead of four.
-			term = atom.scale_divides
-			           ? BindOp("/", std::move(term), atom.scale->Copy())
-			           : BindOp("*", atom.scale->Copy(), std::move(term));
+			term = atom.scale_divides ? BindOp("/", std::move(term), atom.scale->Copy())
+			                          : BindOp("*", atom.scale->Copy(), std::move(term));
 		}
 		if (!acc) {
 			if (sign >= 0) {
@@ -1210,8 +1204,8 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 	// stable -- negating a reducer would silently turn a cheap per-row rewrite into
 	// a Big-M encoding.
 	if (!left_has_decision) {
-		auto swapped = make_uniq<BoundComparisonExpression>(FlipComparisonExpression(cmp.type),
-		                                                    cmp.right->Copy(), cmp.left->Copy());
+		auto swapped = make_uniq<BoundComparisonExpression>(FlipComparisonExpression(cmp.type), cmp.right->Copy(),
+		                                                    cmp.left->Copy());
 		swapped->SetAlias(cmp.GetAlias());
 		return CanonicalizeComparison(*swapped);
 	}
@@ -1353,9 +1347,8 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 	// reference -- only reachable if Classify and ReferencesDecideVar disagree, which
 	// is an engine bug rather than a user error.
 	if (decision_atoms.empty()) {
-		throw InternalException(
-		    "DECIDE canonicalizer: objective references a decision but decomposed into no "
-		    "decision-bearing term");
+		throw InternalException("DECIDE canonicalizer: objective references a decision but decomposed into no "
+		                        "decision-bearing term");
 	}
 	auto result = BuildAdditive(decision_atoms, false);
 	// A reducer under a Boolean decision takes the VALUE shape, as a comparison does: the value rewrite holds the
@@ -1544,8 +1537,7 @@ void DecideCanonicalizer::VerifyCanonicalComparison(const BoundComparisonExpress
 		}
 	}
 	if (ClassifyCanonicalComparison(comparison) == CanonicalConstraintClass::INVALID) {
-		CanonicalInvariantFailure("C5", "comparison is neither a valid per-row nor aggregate constraint",
-		                          comparison);
+		CanonicalInvariantFailure("C5", "comparison is neither a valid per-row nor aggregate constraint", comparison);
 	}
 }
 
@@ -1588,8 +1580,7 @@ void DecideCanonicalizer::VerifyCanonicalTree(const Expression &constraints) con
 			CanonicalInvariantFailure("C0", "constraint conjunction is not AND", expression);
 		}
 		if (IsWhenFilterWrapper(conjunction) && conjunction.children.size() != 2) {
-			CanonicalInvariantFailure("C0", "WHEN wrapper must contain one constraint and one condition",
-			                          expression);
+			CanonicalInvariantFailure("C0", "WHEN wrapper must contain one constraint and one condition", expression);
 		}
 		if (IsPerClassWrapper(conjunction) && conjunction.children.empty()) {
 			CanonicalInvariantFailure("C0", "per-class wrapper must contain a constraint", expression);
@@ -1619,8 +1610,7 @@ void DecideCanonicalizer::VerifyCanonicalObjectiveBody(const Expression &objecti
 	Decompose(objective, 1, atoms, Clause::OBJECTIVE);
 	for (auto &atom : atoms) {
 		if (atom.placement != Placement::LEFT) {
-			CanonicalInvariantFailure("O2", "canonical objective retains a decision-free additive term",
-			                          *atom.expr);
+			CanonicalInvariantFailure("O2", "canonical objective retains a decision-free additive term", *atom.expr);
 		}
 	}
 }
@@ -1646,14 +1636,13 @@ void DecideCanonicalizer::VerifyCanonicalObjective(const Expression &objective) 
 		}
 		if (!CanonicalTreesEqual(objective, *fixed_point)) {
 			CanonicalInvariantFailure(
-			    "O4/O7", "canonicalizing the objective again changes its structure, reducer scale, or tags",
-			    objective);
+			    "O4/O7", "canonicalizing the objective again changes its structure, reducer scale, or tags", objective);
 		}
 	} catch (const InternalException &) {
 		throw;
 	} catch (const std::exception &ex) {
-		throw InternalException("DECIDE canonical objective verification failed for %s: %s",
-		                        objective.ToString(), ex.what());
+		throw InternalException("DECIDE canonical objective verification failed for %s: %s", objective.ToString(),
+		                        ex.what());
 	}
 #endif
 }
@@ -1671,15 +1660,14 @@ void DecideCanonicalizer::VerifyCanonical(const Expression &constraints) const {
 		auto fixed_point = CanonicalizeTreeInternal(constraints);
 		if (!CanonicalTreesEqual(constraints, *fixed_point)) {
 			CanonicalInvariantFailure(
-			    "C4/C6/C7",
-			    "canonicalizing the tree again changes its structure, reducer scale, or provenance tags",
+			    "C4/C6/C7", "canonicalizing the tree again changes its structure, reducer scale, or provenance tags",
 			    constraints);
 		}
 	} catch (const InternalException &) {
 		throw;
 	} catch (const std::exception &ex) {
-		throw InternalException("DECIDE canonical invariant verification failed for %s: %s",
-		                        constraints.ToString(), ex.what());
+		throw InternalException("DECIDE canonical invariant verification failed for %s: %s", constraints.ToString(),
+		                        ex.what());
 	}
 #endif
 }

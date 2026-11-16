@@ -52,6 +52,7 @@ from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, Scop
 # The sign swap. These two shapes returned a wrong answer before B.3.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.min_max
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
@@ -64,12 +65,14 @@ def test_negative_scale_on_max_objective(decidb_cli):
     returns x = (2, 2). The two are distinguishable by the x vector alone, which is
     why this test reads the vector rather than only the objective.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 5 AND SUM(x) <= 4
         MINIMIZE -1 * MAX(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     xs = sorted(int(r[ci["x"]]) for r in rows)
     assert xs == [0, 4], f"expected one row to take the whole budget, got {xs}"
@@ -90,12 +93,14 @@ def test_negative_scale_on_min_objective(decidb_cli):
     in [4, 5] without changing the objective, so the vector is not unique but the
     quantity being optimized is.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 5 AND SUM(x) >= 4
         MAXIMIZE -1 * MIN(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     xs = [int(r[ci["x"]]) for r in rows]
     assert min(xs) == 0, f"expected MIN(x) driven to 0, got {xs}"
@@ -105,6 +110,7 @@ def test_negative_scale_on_min_objective(decidb_cli):
 # ---------------------------------------------------------------------------
 # Shapes that used to be rejected outright.
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.min_max
 @pytest.mark.cons_aggregate
@@ -118,12 +124,14 @@ def test_scaled_max_constraint(decidb_cli, oracle_solver, perf_tracker):
     """
     data = [(1, 2.0), (2, 3.0), (3, 5.0)]
     t0 = time.perf_counter()
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, v, x FROM (VALUES (1, 2.0), (2, 3.0), (3, 5.0)) t(id, v)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND 2 * MAX(x * v) <= 10
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     decidb_time = time.perf_counter() - t0
 
     t_build = time.perf_counter()
@@ -141,17 +149,24 @@ def test_scaled_max_constraint(decidb_cli, oracle_solver, perf_tracker):
 
     ci = {c: i for i, c in enumerate(cols)}
     decidb_obj = sum(int(r[ci["x"]]) for r in rows)
-    assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
     # And the constraint the user wrote actually holds.
     for r in rows:
         assert 2.0 * int(r[ci["x"]]) * float(r[ci["v"]]) <= 10.0 + 1e-6
 
     perf_tracker.record(
-        "scaled_max_constraint", decidb_time, build_time, result.solve_time_seconds,
-        len(data), len(names), len(data), result.objective_value,
-        oracle_solver.solver_name(), comparison_status="optimal",
+        "scaled_max_constraint",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(names),
+        len(data),
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status="optimal",
     )
 
 
@@ -169,12 +184,14 @@ def test_scaled_max_in_composed_constraint(decidb_cli, oracle_solver, perf_track
     """
     data = [(1, 2.0), (2, 3.0)]
     t0 = time.perf_counter()
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, v, x FROM (VALUES (1, 2.0), (2, 3.0)) t(id, v)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND SUM(x) + 2 * MAX(x * v) <= 12
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     decidb_time = time.perf_counter() - t0
 
     t_build = time.perf_counter()
@@ -196,18 +213,25 @@ def test_scaled_max_in_composed_constraint(decidb_cli, oracle_solver, perf_track
 
     ci = {c: i for i, c in enumerate(cols)}
     decidb_obj = sum(int(r[ci["x"]]) for r in rows)
-    assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
     xs = {int(r[ci["id"]]): int(r[ci["x"]]) for r in rows}
     vs = dict(data)
     lhs = sum(xs.values()) + 2.0 * max(xs[i] * vs[i] for i in xs)
     assert lhs <= 12.0 + 1e-6, f"constraint violated: {lhs} > 12"
 
     perf_tracker.record(
-        "scaled_max_composed", decidb_time, build_time, result.solve_time_seconds,
-        len(data), len(names) + 1, len(data) + 1, result.objective_value,
-        oracle_solver.solver_name(), comparison_status="optimal",
+        "scaled_max_composed",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(names) + 1,
+        len(data) + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status="optimal",
     )
 
 
@@ -223,12 +247,14 @@ def test_negative_scale_on_max_constraint(decidb_cli):
     the swap it would be ``MAX(-2x) >= -8``, i.e. *some* row satisfies -2x >= -8,
     which leaves the other rows unbounded — a strictly larger feasible set.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND -2 * MAX(x) >= -8
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     xs = sorted(int(r[ci["x"]]) for r in rows)
     assert xs == [4, 4], f"every row should be capped at 4, got {xs}"
@@ -244,6 +270,7 @@ def test_negative_scale_on_max_constraint(decidb_cli):
 # wrote it. Matching one order there rejects the other — which is exactly the
 # same-shape-different-outcome asymmetry this work exists to remove.
 
+
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_objective_factor_on_the_right(decidb_cli):
@@ -252,12 +279,14 @@ def test_objective_factor_on_the_right(decidb_cli):
     Must agree with ``MAXIMIZE 2 * SUM(x*p)``: a positive factor cannot change the
     argmax, so both should spend the budget of 3 on the highest-priced row.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, p, x FROM (VALUES (1, 10.0), (2, 20.0)) t(id, p)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND SUM(x) <= 3
         MAXIMIZE SUM(x * p) * 2
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     picks = {float(r[ci["p"]]): int(r[ci["x"]]) for r in rows}
     assert picks == {10.0: 0, 20.0: 3}, f"expected the budget on p=20, got {picks}"
@@ -272,12 +301,14 @@ def test_objective_negative_factor_on_the_right(decidb_cli):
     Same query as ``MINIMIZE -1 * MAX(x)``: minimizing ``-MAX(x)`` maximizes
     ``MAX(x)``, so with ``SUM(x) >= 3`` and ``x <= 9`` every row goes to 9.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND SUM(x) >= 3
         MINIMIZE MAX(x) * -1
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     xs = [int(r[ci["x"]]) for r in rows]
     assert max(xs) == 9, f"expected MAX(x) driven to 9, got {xs}"
@@ -287,18 +318,21 @@ def test_objective_negative_factor_on_the_right(decidb_cli):
 # Division, and a factor that is not a literal.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_reducer_divided_by_constant(decidb_cli):
     """``SUM(x) / 2 <= 3`` — division is a scale too, and stays a division rather
     than being reciprocated (``SUM(x)/3`` has no exact decimal reciprocal)."""
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND SUM(x) / 2 <= 3
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     total = sum(int(r[ci["x"]]) for r in rows)
     assert total == 6, f"expected SUM(x) = 6, got {total}"
@@ -317,12 +351,14 @@ def test_scalar_subquery_scale(decidb_cli):
     this: after flattening the factor is a plain column reference, indistinguishable
     from ``w`` itself and from a correlated subquery (see the rejection test below).
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1, 2.0), (2, 3.0)) t(id, w)
         DECIDE x(INT)
         SUCH THAT x <= 5 AND (SELECT max(w) FROM (VALUES (2.0), (3.0)) u(w)) * SUM(x) <= 12
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     total = sum(int(r[ci["x"]]) for r in rows)
     assert total == 4, f"expected 3*SUM(x) <= 12 -> SUM(x) = 4, got {total}"
@@ -378,14 +414,16 @@ def test_correlated_subquery_factor_moved_inside(decidb_cli):
     acceptance was silently producing: over k = (10, 100) with ``x <= 5``, the cap
     of 100 admits ``x = (5, 0)``.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1, 2.0), (2, 3.0)) m(id, w)
         DECIDE x(INT)
         SUCH THAT x <= 5
             AND SUM(x * (SELECT k FROM (VALUES (1, 10.0), (2, 100.0)) s(sid, k)
                          WHERE s.sid = m.id)) <= 100
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     picks = {int(r[ci["id"]]): int(r[ci["x"]]) for r in rows}
     assert picks == {1: 5, 2: 0}, f"expected x=(5,0), got {picks}"
@@ -847,6 +885,7 @@ def test_bool_decision_factor_names_the_member_without_a_bound(decidb_cli):
 # accepted x = 9 on every row. Each test below therefore asserts the constraint
 # actually holds, not merely that the query ran.
 
+
 @pytest.mark.min_max
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
@@ -857,12 +896,14 @@ def test_unknown_sign_factor_on_max_constraint(decidb_cli):
     Maximizing SUM(x) drives every row to the cap. A formulation that only asserted
     "some row attains the max" would leave the other rows free at x = 9.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND (SELECT max(k) FROM (VALUES (3.0)) u(k)) * MAX(x) <= 12
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     xs = [int(r[ci["x"]]) for r in rows]
     assert max(xs) <= 4, f"constraint violated: 3 * MAX({xs}) > 12"
@@ -875,12 +916,14 @@ def test_unknown_sign_factor_on_max_constraint(decidb_cli):
 @pytest.mark.correctness
 def test_unknown_sign_factor_on_min_constraint(decidb_cli):
     """``(SELECT max(k)) * MIN(x) >= 3`` with k = 3, so ``MIN(x) >= 1``."""
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND (SELECT max(k) FROM (VALUES (3.0)) u(k)) * MIN(x) >= 3
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     xs = [int(r[ci["x"]]) for r in rows]
     assert min(xs) >= 1, f"constraint violated: 3 * MIN({xs}) < 3"
@@ -898,12 +941,14 @@ def test_unknown_sign_factor_in_composed_constraint(decidb_cli):
     4 + 6 = 10. Any larger total pushes MAX up faster than the budget allows —
     (3,1) gives 4 + 9 = 13.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND SUM(x) + (SELECT max(k) FROM (VALUES (3.0)) u(k)) * MAX(x) <= 12
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     xs = [int(r[ci["x"]]) for r in rows]
     assert sum(xs) + 3 * max(xs) <= 12 + 1e-6, f"constraint violated: {xs}"
@@ -921,12 +966,14 @@ def test_unknown_sign_factor_on_minmax_objective(decidb_cli):
     coefficient 1.0, leaving nowhere to put the factor, so a scaled objective is
     routed through the composed path instead.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND SUM(x) <= 4
         MINIMIZE (SELECT max(k) FROM (VALUES (3.0)) u(k)) * MAX(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     xs = [int(r[ci["x"]]) for r in rows]
     assert max(xs) == 0, f"expected MAX(x) driven to 0, got {xs}"
@@ -951,13 +998,15 @@ def test_scaled_composed_minmax_over_a_join(decidb_cli):
     Optimum is SUM(x) = 4 at (2, 2): 4 + 2*max(4,6) = 4 + 12 = 16 > 12, so (2,2) is
     infeasible; (1,2) gives 3 + 2*6 = 15; (2,1) gives 3 + 2*4 = 11 <= 12, SUM = 3.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT t.id, s.v, x FROM (VALUES (1), (2)) t(id)
         JOIN (VALUES (1, 2.0), (2, 3.0)) s(sid, v) ON s.sid = t.id
         DECIDE x(INT)
         SUCH THAT x <= 9 AND SUM(x) + 2 * MAX(x * s.v) <= 12
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     pairs = [(float(r[ci["v"]]), int(r[ci["x"]])) for r in rows]
     lhs = sum(x for _, x in pairs) + 2 * max(v * x for v, x in pairs)
@@ -1000,12 +1049,14 @@ def test_composed_minmax_term_divided_by_constant(decidb_cli):
     multiplication, with `scale_divides` set; the physical layer inverts it once.
     w = (2,3), x <= 9. The optimum is SUM(x) = 7 at (4,3): 7 + max(8,9)/2 = 11.5.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, w, x FROM (VALUES (1, 2.0), (2, 3.0)) t(id, w)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND SUM(x) + MAX(x * w) / 2 <= 12
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     pairs = [(float(r[ci["w"]]), int(r[ci["x"]])) for r in rows]
     lhs = sum(x for _, x in pairs) + max(w * x for w, x in pairs) / 2.0
@@ -1017,6 +1068,7 @@ def test_composed_minmax_term_divided_by_constant(decidb_cli):
 # Nested query-wide scales compose into one accepted scale.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
@@ -1027,12 +1079,14 @@ def test_nested_multiplier_scale(decidb_cli):
     extractor error.  Integer factors keep typed evaluation unambiguous, so
     this is the smallest positive case for the Step 4 implementation.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND 2 * (3 * SUM(x)) <= 12
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     total = sum(int(r[cols.index("x")]) for r in rows)
     assert total == 2, f"expected 6 * SUM(x) <= 12, got SUM(x)={total}"
 
@@ -1046,11 +1100,13 @@ def test_nested_divisor_scale(decidb_cli):
     Evaluating the written typed operations yields ``SUM(x) <= 6``.  The test
     pins support and the arithmetic direction independently of multiplication.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND (SUM(x) / 2) / 3 <= 1
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     total = sum(int(r[cols.index("x")]) for r in rows)
     assert total == 6, f"expected (SUM(x) / 2) / 3 <= 1, got SUM(x)={total}"
