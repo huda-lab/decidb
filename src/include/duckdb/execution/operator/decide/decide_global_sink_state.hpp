@@ -206,7 +206,7 @@ public:
 
 	mutex lock;
 	//! The tree's descent, the threads' merged (language/guide.md §6.1): the rows are read once, as they arrive, and
-	//! the buffer below is never scanned to evaluate them.
+	//! the buffer below is never scanned to evaluate them. Finalize releases it once the evaluation has returned.
 	unique_ptr<DecideDescent> descent;
 	//! Each thread's descent and the row its rows start at, until Finalize merges them into `descent`.
 	vector<pair<unique_ptr<DecideDescent>, idx_t>> descent_parts;

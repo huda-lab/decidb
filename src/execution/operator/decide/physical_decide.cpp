@@ -601,6 +601,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 	vector<KeyedMapping> keyed_mappings;
 	EvaluatedClauses evaluated;
 	EvaluateTree(context, gstate, num_rows, key_values, keyed_mappings, evaluated);
+	// What the solve and the output read of the evaluation is copied into `evaluated` and gstate's fields, so the
+	// node containers go now rather than with the global state.
+	gstate.descent.reset();
 
 	//===--------------------------------------------------------------------===//
 	// PHASE 3: Build and Solve ILP
