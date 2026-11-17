@@ -38,15 +38,6 @@ Upkeep of the repository as a whole: releases, packaging and the docs across are
 - **Done when.** Each quoted message matches the binary on its example, and the guide holds only the solver terms the
   owner keeps.
 
-## OPS-6 — The website teaches spellings the language removed
-
-- **Problem.** `context/website` (`documentation.html`, `examples/intermediate-per.html`,
-  `examples/advanced-relief-allocation.html`, `examples/advanced-scheduling.html`,
-  `examples/intermediate-assignment.html`) teaches a postfix `PER`, `scalar x(INT)` and `T.x(INT)`, which the language
-  no longer reads. The site predates the merge.
-- **Decision needed.** Ask the owner before touching the site: bring it up to the guide, or retire it.
-- **Done when.** The owner's ruling is recorded and carried out; every query the site keeps runs on the binary.
-
 ## OPS-7 — Docs cite ids that no file defines
 
 - **Problem.** FRM-20 and FRM-23 (`direct_solve/framework/todo.md`), PERF-16 (`direct_solve/framework/done.md`,

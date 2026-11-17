@@ -4,21 +4,6 @@ Open coverage gaps, one section each. Coverage that exists is in [coverage.md](c
 [scope_suite.md](scope_suite.md). How to work and the checks:
 [`../direct_solve/framework/todo.md`](../direct_solve/framework/todo.md) § How to work any task in these todo files.
 
-## TEST-3 — Cut the dump-format tests
-
-- **Problem.** 31 tests pin the evaluator's internal dump text rather than answers: `test_tree_bodies.py` (15),
-  `test_one_pass_tree.py` (11) and `test_one_pass_literal.py` (5) (`context/opa_rewrite/handoff.md` § A9). Any change
-  to the tree's internals breaks them without a wrong answer.
-- **Change.** By the owner's ruling (handoff § A6, item 11), delete them except the two that check the deck's pictures
-  (p. 81's tree, p. 91's containers). The owner asked for a coverage check: before deleting, `make decide-coverage`
-  shows which branches each one reaches, and a test that is a branch's only test stays or gives way to an answer-level
-  test of that branch.
-- **Ruling (owner, 2026-11-17).** One coverage run, before the deletion: deleting tests changes no code, so the arms
-  lost are those the deleted tests reach and no kept test does, read from the run's per-test profiles
-  (`build/coverage/run/report.json`).
-- **Done when.** No arm is reached only by the deleted tests;
-  `./test/decide/run_tests.sh -n 2 -k "tree_bodies or one_pass_tree or one_pass_literal"` passes what remains.
-
 ## TEST-4 — Tests that check less than their names say
 
 - **Problem.**
@@ -49,22 +34,6 @@ Open coverage gaps, one section each. Coverage that exists is in [coverage.md](c
 - **Needs.** Every other task of `context/docs/todo.md`.
 - **Done when.** The run passes or each failure is triaged, and the result is in `merge_notes.md` § 4.1.
 
-## TEST-7 — What test_tree_emitter.py's deleted tests checked
-
-- **Problem.** Seven tests of `test_tree_emitter.py` read no stored output and left with the file (R3):
-  `test_a_boolean_product_is_a_function_node`, `test_an_l0_norm_is_a_function_node`,
-  `test_a_nonlinear_reducer_body_is_a_function_node`, `test_abs_reads_a_nonlinear_reducer_function`,
-  `test_a_null_in_a_later_window_marks_its_own_entry`, `test_a_covered_query_prints_each_dump_it_is_asked_for` and
-  `test_a_helper_over_every_row_is_one_column`. None exists on the branch. The review finds no test of an L0 indicator
-  as an F node, `function=definition`, `DECIDB_DUMP_VALUES`, the NULL entry of a later window, or the 6,001-entry helper
-  column. `git show f56845f560:test/decide/tests/test_tree_emitter.py` holds them.
-- **Change.** With TEST-3 and EXEC-4, decide which of these properties are owed a test and port those: an oracle test
-  where an answer depends on the property, a `decide_debug` test where only a dump shows it (EXEC-4's `values` test is
-  one). A property only a dump shows is the owner's call, since TEST-3 deletes dump-format tests.
-- **Needs.** TEST-3, EXEC-4.
-- **Done when.** Each property has a test or an owner ruling; `./test/decide/run_tests.sh -n 2 -k "<the ported tests>"`
-  passes.
-
 ## TEST-8 — Two cases of the too-large-sum test run in no mode
 
 - **Problem.** `test_invalid_value_message.py::test_a_sum_past_a_double_names_its_clause` takes mainline's mode list
@@ -75,3 +44,13 @@ Open coverage gaps, one section each. Coverage that exists is in [coverage.md](c
   removed them.
 - **Done when.** The cases run, or the row states why not, and M9's count matches the commit;
   `./test/decide/run_tests.sh -n 2 -k sum_past_a_double` passes.
+
+## TEST-9 — The coverage run fails the invalidated-session test
+
+- **Problem.** `make decide-coverage` writes no `build/coverage/run/report.json`: its run fails
+  `test_cli_session_invalidated.py::test_invalidated_database_fails_the_call_at_once` with "DID NOT RAISE".
+  `run_coverage.sh` exports `DECIDB_TEST_REUSE_PROCESS=0`, under which `decidb_cli._run_in_session` returns None before
+  it starts a session; the test calls `_run_in_session` directly and takes reuse to be on.
+- **Change.** The test sets the condition it tests: it clears `DECIDB_TEST_REUSE_PROCESS` with `monkeypatch`.
+- **Done when.** With and without `DECIDB_TEST_REUSE_PROCESS=0`,
+  `./test/decide/run_tests.sh -k test_invalidated_database_fails_the_call_at_once` passes.

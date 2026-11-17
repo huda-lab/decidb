@@ -303,7 +303,10 @@ only with the same one (`TermsAreLike`). A decision outside the objective's redu
 two query-wide decisions (`MAXIMIZE SUM(x) + s * u`, a product group with `reduction`
 NONE; inside a reducer it is SUM and weighted by every row, `SUM(w * s * u)`). Any other
 product of decisions left there is refused (*"... multiplies decisions outside a reducer,
-which is not supported yet"*), since it has no once-only reading in the model.
+which is not supported yet"*), since it has no once-only reading in the model. So is a term that is not itself a
+reducer but holds one (`sum(x) * max(x)`, `(sum(x) + 1) * max(x)`, `0 * sum(x) + power(sum(x) - 3, 2)`): no rewrite
+held its reducers in helper decisions, so they cannot be read as terms (`ExtractAggregateObjectiveTerms`). As the
+whole objective, `power(sum(x) - 3, 2)` is the binder's: the aggregate must be the outermost function.
 `RewriteBilinear` has already linearized a product with a `BOOL` decision by then.
 
 ### Terms of degree 2 — product groups
@@ -578,9 +581,10 @@ instance of the auxiliary (`LinearizeBilinear`, `../06_model_formulation/done.md
 a data constant, through `+`, `-`, a data factor, a data divisor and casts. The product distributes over the terms, so
 `b * (x - 1)` is `b * x - b` and `(2 * b - 1) * (x - 1)` has four terms. Each pair holding a Boolean gets one auxiliary,
 and the pairs are merged (`(b + d) * (d + b)` holds `b * d` once); a Boolean squared is itself; a pair of non-Booleans
-stays a product for the Q-matrix path. A factor that is not affine is left in place. A reducer under a factor
-(`b * SUM(x)`) is not a product of variables to this pass: the value rewrite holds the reducer in a helper and hands the
-product back (`FindAndReplaceBilinear`).
+stays a product for the Q-matrix path. A factor that is not affine is left in place. A factor that holds a reducer
+anywhere, a frame's marker included (`b * SUM(x)`, `POWER(SUM(x) - 3, 2)`, `max(x) + 1`), is not a product of variables
+to this pass: the value rewrite holds each reducer in a helper and hands the product back (`FindAndReplaceBilinear`). A
+body its definition F node owns is not such a reducer: `ReadAffine` reads it as its helper decision.
 
 **The auxiliary's scope is `JoinScopes` of its factors' scopes**, the least upper bound, as DuckDB promotes a binary
 operator's type: Global < Keyed < Row. Two query-wide factors give one query-wide column; a query-wide factor and a
@@ -786,13 +790,14 @@ A reducer a function reads (`0 * sum(x) + abs(sum(x) - 2)`; any node but a sum, 
 the same way, as a reducer inside a comparison is the VALUE shape: the function reads one value, and `RewriteAbs`, which
 runs later, would otherwise leave a raw aggregate in its envelope rows, which stage 06 reads per row.
 `sum([when c] per K: inner([when c'] e) by (G))`, `inner` a SUM or AVG with no `per` and
-no reducer inside, every element of `K` in `G`, is read in place instead
+no reducer inside, every element of `K` in `G`, and no function reading it, is read in place instead
 (`InlineSumOfGroupSums`): each `G` group is one member, so the sum of the members is
 `inner` over every group, `c` joined to `c'`, and a square inside it stays a quadratic
 objective (an AVG divides by its group's size, `avg_group_key`). A row in no `G` group --
 a NULL in an element that groups NULL as no group -- is no member of any, so the sum read in
-place tests each such element `IS NOT NULL` (D5). A reducer no decision
-multiplies, no function reads and none nests in stays in the objective. A factor declared per row is
+place tests each such element `IS NOT NULL` (D5). One a function reads (`abs(sum(per g: sum(x) by (g)) - 4)`)
+takes its helper like any nest: read in place, it would stay a raw aggregate inside the function's rows. A reducer no
+decision multiplies, no function reads and none nests in stays in the objective. A factor declared per row is
 refused by the objective's scope check.
 
 A body that multiplies decisions (a square, a product of two non-Booleans) is defined per row

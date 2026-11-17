@@ -395,6 +395,10 @@ What may be a factor (`PeelScale`, the single place that judges it):
   linearized as every Boolean product is (stage 05). The objective is stamped `VALUE_REWRITE_TAG` when a reducer sits
   under such a factor. A `BOOL` is never negative, so it keeps the push of the term it scales (`PlanTimeSignOf` reads it
   POSITIVE through `BooleanDecisions`);
+- an expression that holds a reducer (`sum(x) + 1` in `(sum(x) + 1) * max(x)`) — nowhere: `TryMatchScaledAggregate`
+  declines it (`ContainsReducer`), since a scale is read once per row and a reducer is not, so the term stays whole. A
+  constraint reads it through the value rewrite; the objective refuses it as a product of decisions outside a reducer
+  (`../05_optimizer/done.md`, §1a);
 - any other decision — nowhere: *"DECIDE constraint: 's' is a decision, so it cannot multiply
   SUM(x). Only data or a BOOL decision can scale SUM/AVG/MIN/MAX."* (the objective says *"Only constants,
   query-wide values or a BOOL decision ..."*). An `INT` or `REAL` decision times a reducer is not convex, and a `BOOL`

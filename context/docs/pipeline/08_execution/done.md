@@ -150,7 +150,7 @@ flat did, it names the behaviour the tree keeps from the evaluator it replaced:
   one row at a time alike; the model does not. Before 2026-11-15 an F per class was laid out as a set E, which Store
   never filled, and the inner F of that pair merged before the outer's slots: either crashed the merge of a table
   scanned on two threads or more (`abs(sum(x) by (t.g)) <= 5` over 130,000 rows).
-  `DECIDB_DESCENT_SPLIT=n` merges every `n` rows as a thread of its own
+  `decide_debug`'s `split=n` merges every `n` rows as a thread of its own
   would (`test_descent_merge.py`; the whole suite passes under it, but for the inputs of tens of thousands of rows a
   descent per row cannot read within their time limits). It is a Composite traversal vectorized by selection, as
   DuckDB's filters hand a selection vector on: a window of the input at a time, a node's `when` parts, keys and σ fields
@@ -333,7 +333,7 @@ flat did, it names the behaviour the tree keeps from the evaluator it replaced:
   reducer's body on the reducer's members: their NULL tests are its root's member tests, and the row stands, and its
   NULLs and errors are read, only on an entry they keep (`Rows`, `NullEntries`), as flat reads them under the row's
   `when`. A helper decision of a reducer the value rewrite lifted lists its members per group of its `by` key that holds
-  one, through flat's own blocks (`DecideValueLinkSpec`, `DecideListRowMembers`; `DecideModelEmitter::ValueLinks`): a
+  one (`DecideModelEmitter::ValueLinks`): a
   member is an entry of its G's operand that its reducer's `when` routed and its NULL tests keep, where every decision
   it reads has an instance, a relation-qualified reducer's first of each class, and an AVG's coefficients are divided by
   its group's members (`ScaleAvgRows`). A row in no group of the key is computed on, as flat computes it, but lists no
@@ -458,25 +458,31 @@ ways, each with its cause:
   in the order its window reads its partitions, by hash, and the tree's check in the order of the rows.
 - *G5-ENV*: a test that set the evaluator itself recorded another environment in each log, so its queries paired
   with none; their output was the same. One test failed under the tree (`test_null_values`, a profile span flat alone
-  had; it now reads the term's member test from `DECIDB_DUMP_BODIES`).
+  had; it reads the term's member test from `decide_debug`'s `bodies`).
 
-Switches for the tree: `DECIDB_DUMP_TREE`, `DECIDB_DUMP_CONTAINERS`, `DECIDB_DUMP_BODIES` and `DECIDB_DUMP_VALUES` print
-the tree, the containers, the bodies and their programs, and the columns' values, each node's programs the evaluation
-computed on its entries (`DecideTreeColumns::Dump`), to stderr. The containers dump gives each node its rows in and
-out and a `reach` line: whether it is a root, its children, and the rows each `when` part was read on (the first part
-every row reaching the node, each later one the rows the parts before it kept). `test_one_pass_literal.py` reads them for
-the plan's L6 over every deck case at chunk sizes 1 and 2048: a root reads every row, a node one path reaches reads
-exactly what its parent passed on, and one more paths reach reads each (row, enclosing slot) once. Before the first row,
-`DecideDescent::RequireRowReads` checks L2: every expression the descent reads (`when` parts, carried and program
-columns, signature values, a frame's order, each key's elements) reads only the row, no aggregate, window or subquery
-and no column past the input's. `DECIDB_DUMP_STEPS` prints the containers after each piece the descent reads
-(`DecideDescent::Step`: per node its slots under their enclosing slot, with the rows each holds), so at
-`DECIDB_DESCENT_CHUNK=1` a step per row is the deck's animation: `test_one_pass_literal.py` pins pp. 86-91 for both
-running examples and pp. 100-105 for the frame. `DECIDB_DESCENT_CHUNK` sets the descent's chunk size;
-`DECIDB_EVALUATOR_INJECT=g1`, where the tree is built, makes stage 05's hook find no node for a reducer, which is
-internal; `DECIDB_TREE_INJECT=node:data:value` replaces a G over data's fold in the columns, so a test can show a parent
-reads the bottom-up values, and refuses a node that computes no data value. Profile counters (`DECIDB_PROFILE`):
+Debugging the tree: the `decide_debug` setting, a comma list (`DecideDebug`, `decide_debug.cpp`). It is read once, at
+physical planning, so a prepared statement keeps the value set when it is planned; an item it does not know is refused when
+the setting is set. `tree`, `containers`, `bodies` and `values` print the tree, the containers, the bodies and their
+programs, and the columns' values, each node's programs the evaluation computed on its entries
+(`DecideTreeColumns::Dump`), to stderr. The containers dump gives each node its rows in and out and a `reach` line:
+whether it is a root, its children, and the rows each `when` part is read on (the first part every row reaching the
+node, each later one the rows the parts before it kept). Before the first row, `DecideDescent::RequireRowReads` checks
+L2: every expression the descent reads (`when` parts, carried and program columns, signature values, a frame's order,
+each key's elements) reads only the row, no aggregate, window or subquery and no column past the input's. `steps` prints
+the containers after each piece the descent reads (`DecideDescent::Step`: per node its slots under their enclosing
+slot, with the rows each holds), so with `chunk=1` a step per row is the deck's animation. `chunk=N` sets the descent's
+chunk size, 1 to 2048. `inject=N:data:V` replaces node `N`'s data value, a G over data's fold, with `V` in the columns,
+so a test can show a parent reads the bottom-up values; it refuses a node that computes no data value.
+`test_one_pass_tree.py` pins the deck's p. 81 tree (F1_MAX's) and checks its p. 91 containers;
+`test_every_dump_on_leaves_the_answer_as_it_was` (`test_one_pass_execution.py`) runs a shape per printer branch with
+every dump on and compares the answer with the answer with none. No test reads a dump for a node's kind (a Boolean
+product, an L0 indicator or a definition as an F node, ABS reading a reducer's function): their answers have oracle
+tests. Profile counters (`DECIDB_PROFILE`):
 `execution.descent_rows` and `execution.descent_merge`.
+
+Finalize releases the descent once `EvaluateTree` returns: what the solve and the output read of the evaluation is
+copied into `EvaluatedClauses` and the global state's fields (a key's group values into `KeyValues::values_of`), so the
+node containers do not live through the solve.
 
 ## 2. The folded variable box
 
@@ -693,7 +699,7 @@ the values are gathered onto the anchors. Every later phase reads the frames as 
 the input's own columns only. Once the keyed mappings exist, `CheckDecideFramePeers` holds each position a frame reads
 -- a point's selected peer, every position a range's window visits, one whose NULL reads left it nothing to read
 included (`DecideFrameMap::WindowVisits`) -- of several rows to one signature of its payload (D73, deck p. 110): each
-column the payload reads by value (`AppendPayloadLeaves` over `DecideFramePayloads`: a point's columns, a range's
+column the payload reads by value (a point's columns, a range's
 reducer argument or its helper's member terms), each decision by its instance, whatever its coefficient. A
 frame's decision terms read `gstate.ReadVariable`: a frame read numbered once per decision and frame
 (`SolverInput::frame_reads`, stage 06), its rows the selected ones; a query-wide decision is its own read.
@@ -725,8 +731,7 @@ its own reads have no value, and the auxiliary with it.
 
 A frame field of a signature (D82, deck p. 99) splits by the frame's keys (`DecideDescent::Signature`): the anchor's
 peer on its timeline when it reads relative to the anchor, else its timeline, and where the anchor reaches the `else`
-what the `else` reads -- its FALLBACK columns, referenced once per query (`DecideGlobalSinkState::frame_column_refs`) so
-the chunk expression cache, keyed by node, never meets a freed one, and its decisions' instances at the anchor. An
+what the `else` reads -- its FALLBACK columns and its decisions' instances at the anchor. An
 anchor where the frame reads no value is no variant, so the objective's check (D72, `DecideFrameDifference`) counts only
 anchors that read one, and names what differs among them: a position, a timeline or a fallback.
 
@@ -837,7 +842,7 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   (`CountTupleTermsOnce`, over `CountOnce`), and so does a product of two query-wide decisions there (one inside a
   reducer is SUM and keeps every row). `CountOnce` is the one place a term is counted
   once, in the objective and in each group's row of an aggregate clause; stage 06 sums every
-  row, and a debug build checks no writer left such a term on two rows (`VerifyCountedOnce`). A flat MIN/MAX
+  row. A flat MIN/MAX
   that reads no row is dropped in formulation (D68).
 - **Composed clauses** read the rows their folded filter keeps and de-duplicate among
   them. A clause in which some term reads no row is skipped, and an objective term that

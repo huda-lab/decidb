@@ -214,8 +214,7 @@ its coefficient on one row, the first kept row or its group's first row, and zer
 others (`CountOnce`, `../08_execution/done.md`). A query-wide decision inside a reducer
 (`SUM(opening_cost * cap)`) keeps every row, so its coefficient is the sum of the counted
 rows' data. The rule has one owner, so a writer cannot leave the builder a term whose
-count it reads from elsewhere; a debug build checks that no term outside the reducers
-reaches the builder on two rows of a group (`VerifyCountedOnce`). `TermsHaveTheirOwnColumns()`
+count it reads from elsewhere. `TermsHaveTheirOwnColumns()`
 sends a query-wide term to the accumulator, since its one column would collide with itself. See `../../language/functions.md` ("Query-wide decisions").
 
 ### Path 1 — aggregate, ungrouped
@@ -510,10 +509,7 @@ not fed back to tighten others in the same pass. That is sound and only leaves
 tightness on the table for chained implications.
 
 A row outside `row_group_ids` normally means "not constrained", which disqualifies the
-clause. `EvaluatedConstraint::rows_stand_with_their_class` says otherwise for a
-`per K:` clause with no `when`: it is emitted once per class, at the class's first row,
-and every other row carries the same decisions and data (a scope check), so it is
-skipped instead.
+clause.
 
 ### The formulation box
 
