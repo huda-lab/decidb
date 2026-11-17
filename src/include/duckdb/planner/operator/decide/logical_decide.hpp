@@ -668,6 +668,9 @@ public:
 			//! instances skipped for having no value (deck pp. 50, 56). Recorded by execution, so only EXPLAIN ANALYZE
 			//! prints it, and `subject` is the whole line.
 			RUN_TIME,
+			//! A helper decision that stage 06 wrote where it is read, with no column (D89). Recorded by execution
+			//! with the helper's plan account as `subject`, which it replaces in EXPLAIN ANALYZE.
+			VALUE_HELPER_INLINED,
 		};
 		idx_t source_clause_id = DConstants::INVALID_INDEX;
 		Kind kind = Kind::ABS_AUXILIARY;

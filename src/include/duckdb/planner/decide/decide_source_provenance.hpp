@@ -103,9 +103,7 @@ DecideSourceNames DecidePlanNames(const DecideSourceText &text, const vector<Key
 //! parenthesized.
 string RenderDecideSource(const Expression &expr, const DecideSourceNames &names, int parent_precedence = 0);
 
-//! A reducer as the query writes it, without its own `by`: `sum(when S.priority:
-//! ship)`, for a message that names its `by` group separately. A reducer nested in it
-//! keeps its `by`: `sum(when c: max(x) by (t.h))`.
+//! A reducer as the query writes it, with its own `by`: `sum(when S.priority: ship) by (S.region)`.
 string RenderDecideReducer(const BoundAggregateExpression &reducer, const DecideSourceNames &names);
 
 //! The body `e` of a reducer canonicalization built from `norm(e, p)` (WRITTEN_NORM_TAG_PREFIX), read back out of

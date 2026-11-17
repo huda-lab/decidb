@@ -176,8 +176,19 @@ string PhysicalDecide::GetName() const {
 }
 
 InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
-	// The run-time accounts follow the plan's, so EXPLAIN ANALYZE prints them under their clause.
-	auto accounts = rewrite_accounts;
+	// The run-time accounts follow the plan's, so EXPLAIN ANALYZE prints them under their clause. A helper the run
+	// wrote where it is read holds no column, so its line replaces the plan's, which says it becomes one.
+	vector<LogicalDecide::RewriteAccount> accounts;
+	for (auto &account : rewrite_accounts) {
+		const bool replaced = std::any_of(
+		    run_time_accounts.begin(), run_time_accounts.end(), [&](const LogicalDecide::RewriteAccount &run) {
+			    return run.kind == LogicalDecide::RewriteAccount::Kind::VALUE_HELPER_INLINED &&
+			           run.source_clause_id == account.source_clause_id && run.subject == account.subject;
+		    });
+		if (!replaced) {
+			accounts.push_back(account);
+		}
+	}
 	accounts.insert(accounts.end(), run_time_accounts.begin(), run_time_accounts.end());
 	auto result = RenderDecideParams(*this, accounts, TreeHasComposedObjective(*tree), tree.get());
 	SetEstimatedCardinality(result, estimated_cardinality);
@@ -865,8 +876,10 @@ void PhysicalDecide::ReportInlinedHelpers(const SolverInput &input) const {
 			throw InternalException("DECIDE: linked node %llu has incomplete runtime reporting metadata", node_index);
 		}
 		string line;
+		auto kind = LogicalDecide::RewriteAccount::Kind::RUN_TIME;
 		if (input.variable_scopes[node.value_var].scope == DecideVarScope::INLINED) {
-			line = node.value_link_label + " is written where it is read, with no column";
+			line = node.value_link_label;
+			kind = LogicalDecide::RewriteAccount::Kind::VALUE_HELPER_INLINED;
 		} else if (node.value_var < input.written_in.size() &&
 		           std::find(input.written_in[node.value_var].begin(), input.written_in[node.value_var].end(), true) !=
 		               input.written_in[node.value_var].end()) {
@@ -878,14 +891,15 @@ void PhysicalDecide::ReportInlinedHelpers(const SolverInput &input) const {
 		// Each clause whose plan names the helper: an account of it is one of the helper (AddValueHelper).
 		for (auto &account : rewrite_accounts) {
 			if (account.subject == node.value_link_label) {
-				RecordRunTimeAccount(account.source_clause_id, line);
+				RecordRunTimeAccount(account.source_clause_id, line, kind);
 			}
 		}
 	}
 }
 
 //! One line EXPLAIN ANALYZE prints under clause `source_clause_id` (INVALID_INDEX: the objective), once.
-void PhysicalDecide::RecordRunTimeAccount(idx_t source_clause_id, string subject) const {
+void PhysicalDecide::RecordRunTimeAccount(idx_t source_clause_id, string subject,
+                                          LogicalDecide::RewriteAccount::Kind kind) const {
 	for (auto &recorded : run_time_accounts) {
 		if (recorded.source_clause_id == source_clause_id && recorded.subject == subject) {
 			return; // a clause the rewrites made several rows of
@@ -893,7 +907,7 @@ void PhysicalDecide::RecordRunTimeAccount(idx_t source_clause_id, string subject
 	}
 	LogicalDecide::RewriteAccount account;
 	account.source_clause_id = source_clause_id;
-	account.kind = LogicalDecide::RewriteAccount::Kind::RUN_TIME;
+	account.kind = kind;
 	account.subject = std::move(subject);
 	run_time_accounts.push_back(std::move(account));
 }

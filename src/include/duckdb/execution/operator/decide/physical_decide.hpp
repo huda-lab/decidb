@@ -243,7 +243,9 @@ private:
 	//! Records an EXPLAIN ANALYZE line (run_time_accounts) for a scoped expression that generated `variants`
 	//! instances -- `unit`: constraints, or a reducer's values -- from `classes` classes.
 	void RecordVariants(const DecideSignature &signature, const char *unit, idx_t variants, idx_t classes) const;
-	void RecordRunTimeAccount(idx_t source_clause_id, string subject) const;
+	void RecordRunTimeAccount(
+	    idx_t source_clause_id, string subject,
+	    LogicalDecide::RewriteAccount::Kind kind = LogicalDecide::RewriteAccount::Kind::RUN_TIME) const;
 	//! What the data left of each clause (deck pp. 50, 56): the instances it skipped for having no value, an EXPLAIN
 	//! ANALYZE line under it, and a clause left with none, which constrains nothing, a warning on stderr.
 	void ReportSkippedInstances(const DecideGlobalSinkState &gstate, bool silent) const;
@@ -251,7 +253,8 @@ private:
 	//! a warning on stderr and an EXPLAIN ANALYZE line: any feasible answer is optimal.
 	void ReportAnEmptyObjective(const SolverInput &input) const;
 	//! What stage 06 made of each helper the plan names (D89): written where it is read, with no column, or its groups
-	//! of one member written in -- an EXPLAIN ANALYZE line under each clause whose plan line names the helper.
+	//! of one member written in -- an EXPLAIN ANALYZE line under each clause whose plan line names the helper. A helper
+	//! with no column at all replaces its plan line (ParamsToString), which says it becomes one.
 	void ReportInlinedHelpers(const SolverInput &input) const;
 
 	//! Everything PHASE 2 reads off the data that a later phase still needs. It carries

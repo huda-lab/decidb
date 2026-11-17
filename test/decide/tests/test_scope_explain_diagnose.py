@@ -245,6 +245,49 @@ def test_explain_a_nested_objective_accounts_for_each_helper(decidb_cli):
     assert "↳max(ship)by(D.region)becomesahelperdecisionpergroup" in text, text
 
 
+def _analyze(cli, sql: str) -> str:
+    """EXPLAIN ANALYZE's DECIDE node, as `_plan` prints it: the run adds what the data made of each clause."""
+    out = cli.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"}).execute_raw(f"EXPLAIN ANALYZE {sql}")
+    assert out.returncode == 0 and not out.stderr.strip(), out.stderr
+    return _BOX.sub("", out.stdout)
+
+
+# Three classes of `g`, whose rows hold two, three and four values of `k` (and one `cap` each).
+_CLASS_COLUMNS = ("id", "g", "h", "k", "v", "cap")
+_CLASS_ROWS = (
+    (1, "a", "p", 1, 3, 10),
+    (2, "a", "p", 2, 4, 10),
+    (3, "a", "q", 1, 5, 10),
+    (4, "a", "q", 2, 2, 10),
+    (5, "b", "p", 3, 6, 8),
+    (6, "b", "p", 3, 1, 8),
+    (7, "b", "q", 1, 7, 8),
+    (8, "b", "q", 2, 3, 8),
+    (9, "c", "p", 1, 2, 6),
+    (10, "c", "q", 2, 5, 6),
+    (11, "c", "q", 4, 4, 6),
+    (12, "c", "p", 3, 6, 6),
+)
+
+
+def _classes_query(clause: str, objective: str = "MAXIMIZE sum(t.v * x)") -> str:
+    return f"""SELECT id, x {table('t', _CLASS_COLUMNS, _CLASS_ROWS)}
+        DECIDE x(INT) SUCH THAT x <= 10 AND {clause} {objective}"""
+
+
+@pytest.mark.explain
+def test_explain_analyze_states_a_helper_written_where_it_is_read_once(decidb_cli):
+    """A helper the run wrote where it is read has no column, so its line replaces the plan's, which says it becomes
+    one; the variants line names the reducer as written, with its `by`."""
+    reducer = "sum(pert.h:max(x)by(t.g,t.h))by(t.g)"
+    text = _analyze(decidb_cli, _classes_query("per t.g: sum(per t.h: max(x) by (t.g, t.h)) by (t.g) <= t.cap / 2"))
+    assert text.count(f"↳{reducer}iswrittenwhereitisread,withnocolumn") == 1, text
+    assert f"↳{reducer}becomesahelperdecision" not in text, text
+    assert f"↳{reducer}:6valuesfrom2classes,oneperdistinct(by(t.g,t.h))withinaclass" in text, text
+    # The inner reducer keeps a column of its own, so its plan line stays.
+    assert "↳max(x)by(t.g,t.h)becomesahelperdecisionpergroup" in text, text
+
+
 @pytest.mark.explain
 def test_explain_parenthesizes_an_or_under_an_and_in_a_reducers_when(decidb_cli):
     """AND binds tighter than OR, so the canonical reading of a clause keeps the parentheses the OR was written in."""

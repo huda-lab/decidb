@@ -50,9 +50,6 @@ struct RenderContext {
 	//! which print as that expression; null prints a column's name.
 	idx_t decide_index = DConstants::INVALID_INDEX;
 	const vector<pair<idx_t, string>> *aux_labels = nullptr;
-	//! The one reducer whose `by` is left out, for a message that names its group apart
-	//! (RenderDecideReducer); the reducers inside it keep theirs.
-	const BoundAggregateExpression *without_by = nullptr;
 	//! True quotes every located node as written, as a message and a diagnosis do. False quotes the data-only ones and
 	//! reprints the decision structure, which canonicalization and the rewrites reshape, as a plan's layers do.
 	bool written = false;
@@ -270,7 +267,7 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 	if (carrier.empty() && order.empty() && agg.children.empty()) {
 		// `count(*)` binds as `count_star()`; it takes no scope inside it.
 		idx_t group_key;
-		bool has_by = ctx.keys && &agg != ctx.without_by && TryParseGroupKeyTag(agg.GetAlias(), group_key);
+		bool has_by = ctx.keys && TryParseGroupKeyTag(agg.GetAlias(), group_key);
 		return "count(*)" + (has_by ? " by (" + ByText(agg, ctx, group_key) + ")" : string());
 	}
 	string result = (!carrier.empty() ? carrier
@@ -288,7 +285,7 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 	}
 	result += (scope.empty() ? "" : scope + ": ") + body + (order.empty() ? "" : ", " + order) + ")";
 	idx_t group_key;
-	if (ctx.keys && &agg != ctx.without_by && TryParseGroupKeyTag(agg.GetAlias(), group_key)) {
+	if (ctx.keys && TryParseGroupKeyTag(agg.GetAlias(), group_key)) {
 		result += " by (" + ByText(agg, ctx, group_key) + ")";
 	}
 	return result;
@@ -370,10 +367,6 @@ static bool QuoteSpan(const Expression &expr, const RenderContext &ctx, string &
 	}
 	if (!ctx.written && BoundExpressionReferencesDecide(expr, ctx.decide_index)) {
 		return false;
-	}
-	if (&expr == ctx.without_by && ctx.text.Cut(expr.GetQueryLocation(), DecideSpanRole::CALL, text)) {
-		binding = NumericCast<int>(DecideBinding::WHOLE);
-		return true;
 	}
 	return ctx.text.CutExpr(expr.GetQueryLocation(), text, binding);
 }
@@ -795,9 +788,7 @@ DecideSourceNames DecidePlanNames(const DecideSourceText &text, const vector<Key
 }
 
 string RenderDecideReducer(const BoundAggregateExpression &reducer, const DecideSourceNames &names) {
-	auto ctx = ContextOf(names);
-	ctx.without_by = &reducer;
-	return RenderSource(reducer, ctx);
+	return RenderSource(reducer, ContextOf(names));
 }
 
 //! The source id CollectExpressionStrings reports for a row a rewrite added for the
@@ -1160,6 +1151,8 @@ string RenderDecideRewriteAccount(const LogicalDecide::RewriteAccount &account) 
 		break;
 	case Kind::RUN_TIME:
 		return account.subject;
+	case Kind::VALUE_HELPER_INLINED:
+		return account.subject + " is written where it is read, with no column";
 	}
 	return account.subject + " becomes " + became;
 }
