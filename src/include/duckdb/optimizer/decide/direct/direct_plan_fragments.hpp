@@ -383,7 +383,8 @@ ExprPtr DirectGroupCountLimitRows(const ExpressionBuilder &calc, Optimizer &opti
 
 //! The group bound of a raw `rhs`, which may differ between the rows of a group: the group's tightest value. `<=` reads
 //! the MIN of `rhs`, `>=` its MAX, `=` both; that they agree is the bound-side rewrite's scope check, made before any
-//! rule runs. `invalid` is the message a row raises for a NaN `rhs` (null for none), `text` the bound as written.
+//! rule runs, and it speaks about valid values: a NaN `rhs` is `invalid`'s error. `invalid` is the message a row raises
+//! for a NaN `rhs` (null for none), `text` the bound as written.
 unique_ptr<DecideGroupBound> DirectTightestBound(Optimizer &optimizer, ExpressionType comparison,
                                                  unique_ptr<Expression> rhs, const string &text,
                                                  unique_ptr<Expression> invalid);

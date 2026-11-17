@@ -214,11 +214,18 @@ private:
 		}
 		auto invalid = InvalidValueMessage(*comparison.right, text, Kept());
 		if (reduces) {
+			// An `=` bound owes a disagreement check, which must be a scope check (it is class-aware and runs before
+			// any rule), so its NaN check stands with it, ahead of it, and every path raises the same error of the two.
+			// A `<=` or `>=` bound has no other check: a rule reads its NaN check as an input of its own plan.
+			const bool equal = comparison.type == ExpressionType::COMPARE_EQUAL;
+			if (equal) {
+				AddValueCheck(std::move(invalid));
+			}
 			auto group =
 			    DirectTightestBound(optimizer, comparison.type, comparison.right->Copy(), text, std::move(invalid));
 			group->location = location;
 			Record(comparison, std::move(group));
-			if (comparison.type == ExpressionType::COMPARE_EQUAL) {
+			if (equal) {
 				AddDisagreementCheck(comparison, *comparison.right, text, OwnWhens(*comparison.left));
 			}
 			return;
@@ -578,7 +585,8 @@ private:
 	//! value. A `per K:` makes one instance per class of each group and the groups merge them, so the bound holds one
 	//! value in each class and in each group; the finer is checked first, so two values of one class name it. The
 	//! checks stand in `scope_checks`, made over the source and the aggregates' side tables before any rule runs, so
-	//! every path states them. A group where some reducer reads no row holds no instance (language/guide.md §7.4).
+	//! every path states them. A group where some reducer reads no row holds no instance (language/guide.md §7.4). The
+	//! bound's NaN check stands before these (RewriteBound), so they read valid values.
 	void AddDisagreementCheck(const BoundComparisonExpression &comparison, const Expression &bound, const string &text,
 	                          const vector<const Expression *> &reads) {
 		const auto by = GroupKeyIndex(comparison);
