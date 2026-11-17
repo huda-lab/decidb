@@ -562,6 +562,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 	}
 	// The threads' descents, merged in the order their rows were placed.
 	{
+		DecideProfileScope::Counter("execution.descent_parts", static_cast<double>(gstate.descent_parts.size()));
 		DecideProfileScope merge_scope("execution.descent_merge");
 		gstate.descent = DecideDescent::MergeAll(std::move(gstate.descent_parts), context);
 	}
