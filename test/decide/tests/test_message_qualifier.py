@@ -83,9 +83,11 @@ def test_unreachable_bound_label_quotes_the_scope(decidb_cli):
 
 @pytest.mark.error
 def test_bool_bound_refusal_quotes_the_scope(decidb_cli):
-    """`PhysicalDecide`: the bound a BOOL cannot hold is quoted with the `per` it was written under."""
-    stderr = decidb_cli.execute_raw(_select("per g: x <= -1", var="x(BOOL)")).stderr
-    assert "infeasible: per g: x <= -1 cannot hold for a BOOL variable" in stderr, stderr
+    """`PhysicalDecide`: the bound a BOOL cannot hold is quoted with the `per` it was written under. The `per` is a
+    relation element (`per t`) because the refusal reads the box a constant bound folds into, and a `per` over a
+    written column (`per g:`) does not fold: a row whose `g` is NULL takes no instance of the clause."""
+    stderr = decidb_cli.execute_raw(_select("per t: x <= -1", var="x(BOOL)")).stderr
+    assert "infeasible: per t: x <= -1 cannot hold for a BOOL variable" in stderr, stderr
 
 
 @pytest.mark.error
