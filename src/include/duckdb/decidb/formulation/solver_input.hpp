@@ -137,10 +137,11 @@ struct CoefficientColumn {
 	}
 };
 
-//! What names a group in a message (`'a'`, or `EU, 2024` for a composite key): the representative values of its key
-//! (SolverInput::key_values) and the group's number among them. Its text is formatted only where a message prints it;
-//! a group of no key (the empty key, a `when` alone) has no name. The number is the group's rank in the tree node's
-//! dictionary, which the one pass fills from every row that reads the key, so a key's groups are numbered once.
+//! What names a group in a message (`t.g = 'a'`, or `D.region = 'EU', D.year = 2024` for a composite key): the
+//! representative values of its key (SolverInput::key_values) and the group's number among them. Its text is
+//! formatted only where a message prints it; a group of no key (the empty key, a `when` alone) has no name. The number
+//! is the group's rank in the tree node's dictionary, which the one pass fills from every row that reads the key, so a
+//! key's groups are numbered once.
 struct GroupName {
 	idx_t key_values = DConstants::INVALID_INDEX;
 	idx_t group = DConstants::INVALID_INDEX;
@@ -700,12 +701,13 @@ struct SolverInput {
 	};
 	vector<ClassSet> class_sets;
 
-	//! What names the groups of a key (GroupName::key_values): each column's NULL mode, which decides how a message
-	//! writes a value, and `values_of`, which reads a group's value of each column (a collated column's least
-	//! spelling among the rows any clause read the key on) from the source when a message names the group. Only the
-	//! execution that holds the source can read it, so a message is written while that execution runs.
+	//! What names the groups of a key (GroupName::key_values): each column as the query writes it (`names`, the
+	//! spelling DescribeKeyValues prints before `=`), and `values_of`, which reads a group's value of each column (a
+	//! collated column's least spelling among the rows any clause read the key on) from the source when a message
+	//! names the group. `values_of` may return fewer values than `names` holds. Only the execution that holds the
+	//! source can read it, so a message is written while that execution runs.
 	struct KeyValues {
-		vector<DecideKeyNullMode> null_modes;
+		vector<string> names;
 		std::function<vector<Value>(idx_t group)> values_of;
 	};
 	vector<KeyValues> key_values;

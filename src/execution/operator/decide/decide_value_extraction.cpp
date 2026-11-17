@@ -795,7 +795,7 @@ void DecideNameVariants(const vector<DecideSignatureField> &fields, idx_t class_
 		return field.kind == DecideSignatureFieldKind::DECISION;
 	});
 	if (reads_decisions) {
-		key_values.null_modes.push_back(DecideKeyNullMode::NO_GROUP);
+		key_values.names.push_back("row");
 	}
 	vector<vector<idx_t>> variants_of_class(variants_per_class.size());
 	for (idx_t variant = 0; variant < class_of.size(); variant++) {
@@ -821,7 +821,7 @@ void DecideNameVariants(const vector<DecideSignatureField> &fields, idx_t class_
 		};
 		for (auto other : variants_of_class[class_of[variant]]) {
 			if (reads_decisions && other != variant && same(read(other))) {
-				values.push_back(Value(StringUtil::Format("row %llu", first_rows[variant] + 1)));
+				values.push_back(Value::UBIGINT(first_rows[variant] + 1));
 				break;
 			}
 		}

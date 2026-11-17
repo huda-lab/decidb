@@ -116,7 +116,7 @@ def test_a_collated_group_is_spelled_by_its_least_spelling_in_any_piece(decidb_c
     sql = f"""SELECT id, x FROM (SELECT id, g COLLATE NOCASE AS g FROM {values(rows, 'v', ('id', 'g'))}) t
         DECIDE x(BOOL) SUCH THAT per t.g: sum(x) >= 4 MAXIMIZE SUM(x)"""
     found = _diagnose_relation.rows(_diagnose_relation.run(_split(decidb_cli, 1), sql, scope="expanded"))
-    assert [row["group"] for row in found if row["edit_source"] == "expanded_group"] == ["B"], found
+    assert [row["group"] for row in found if row["edit_source"] == "expanded_group"] == ["t.g = 'B'"], found
 
 
 def test_an_error_ranks_at_its_rebased_row(decidb_cli):

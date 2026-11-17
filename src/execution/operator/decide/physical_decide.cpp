@@ -3,7 +3,6 @@
 #include "duckdb/execution/operator/decide/decide_model_emitter.hpp"
 #include "duckdb/execution/operator/decide/decide_tree_columns.hpp"
 #include "duckdb/execution/operator/decide/decide_frame_map.hpp"
-#include "duckdb/execution/operator/decide/decide_row_evaluation.hpp"
 #include "duckdb/execution/operator/decide/decide_descent.hpp"
 #include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
 #include "duckdb/common/decide_numeric_policy.hpp"
@@ -788,16 +787,6 @@ static vector<double> Mask(const vector<bool> &mask) {
 //===--------------------------------------------------------------------===//
 // Finalize: PHASE 1.6 -- scope checks
 //===--------------------------------------------------------------------===//
-
-//! A class or group, as a message names it: `D.depotID = 'D1', D.region = 'East'`.
-//! `values` holds the group's value of each column.
-string DescribeKeyValues(const vector<string> &names, const vector<Value> &values) {
-	string result;
-	for (idx_t i = 0; i < names.size(); i++) {
-		result += (i > 0 ? ", " : "") + names[i] + " = " + DecideSqlLiteral(values[i]);
-	}
-	return result;
-}
 
 //! One line for EXPLAIN ANALYZE: a scoped expression whose classes held more than one variant (D70, D71), so the
 //! instances it generated -- or the values a reducer read -- outnumber its classes: `per P.depotID: 4 constraints

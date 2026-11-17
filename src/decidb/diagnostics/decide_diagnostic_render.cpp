@@ -584,32 +584,14 @@ vector<ClauseEdit> SpellRangeEdits(vector<ClauseEdit> edits, const SolverModel &
 	return out;
 }
 
-//! Printable key of the group `name` names, empty for none: the per-key-column representative values joined with ", "
-//! (composite key → `EU, 2024`). A column the user wrote renders its value, "NULL" for a NULL; a value of a column a
-//! relation element stands for (`per D`) is an SQL literal, as a data check's message writes it (`'EU'`, `NULL`),
-//! because there NULL is a value a string `'NULL'` must be told from.
+//! Printable key of the group `name` names, empty for none: each key column as the query writes it with the group's
+//! value of it (`t.g = 'c'`; composite key `D.region = 'EU', D.year = 2024`; DescribeKeyValues).
 static string FormatPerGroupKey(const SolverModel &model, const GroupName &name) {
-	string s;
 	if (name.key_values == DConstants::INVALID_INDEX) {
-		return s;
+		return string();
 	}
 	auto &key = model.key_values[name.key_values];
-	auto values = key.values_of(name.group);
-	for (idx_t c = 0; c < values.size(); c++) {
-		const Value &v = values[c];
-		if (!s.empty()) {
-			s += ", ";
-		}
-		if (key.null_modes[c] == DecideKeyNullMode::VALUE) {
-			s += DecideSqlLiteral(v);
-		} else if (v.IsNull()) {
-			s += "NULL";
-		} else {
-			string rendered = v.ToString();
-			s += rendered.empty() ? "''" : rendered;
-		}
-	}
-	return s;
+	return DescribeKeyValues(key.names, key.values_of(name.group));
 }
 
 //! Build a LOOSEN edit from a constraint's rendered LHS + sense + RHS and the

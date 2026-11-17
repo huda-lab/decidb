@@ -205,7 +205,7 @@ def test_diagnose_names_the_variant_it_loosens(decidb_cli):
     result = run_diagnose(decidb_cli, _query("per t.g: x(INT)", "per t.g: x = t.b", rows), scope="expanded")
     assert_no_internal_leak(result, "a diagnosed variant")
     findings = [row for row in diagnose_rows(result) if row["edit_source"] == "expanded_group"]
-    assert [row["group"] for row in findings] == ["a, 2"], result.stdout
+    assert [row["group"] for row in findings] == ["t.g = 'a', t.b = 2"], result.stdout
 
 
 def test_diagnose_tells_variants_of_one_value_apart(decidb_cli):
@@ -215,4 +215,7 @@ def test_diagnose_tells_variants_of_one_value_apart(decidb_cli):
     result = run_diagnose(decidb_cli, _query("x(INT)", "per t.g: x <= t.b", rows), scope="expanded")
     assert_no_internal_leak(result, "two variants of one value")
     findings = [row for row in diagnose_rows(result) if row["edit_source"] == "expanded_group"]
-    assert sorted(row["group"] for row in findings) == ["a, -2, row 1", "a, -2, row 2"], result.stdout
+    assert sorted(row["group"] for row in findings) == [
+        "t.g = 'a', t.b = -2, row = 1",
+        "t.g = 'a', t.b = -2, row = 2",
+    ], result.stdout

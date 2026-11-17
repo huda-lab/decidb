@@ -41,7 +41,7 @@ SolverInput::KeyValues DecideGroupKeyValues(const DecideTree &tree, const Decide
 	}
 	SolverInput::KeyValues key_values;
 	for (auto &element : DecideKeyElements(tree.keys, key)) {
-		key_values.null_modes.push_back(element.null_mode);
+		key_values.names.push_back(element.name);
 	}
 	key_values.values_of = [values](idx_t group) {
 		return values[group];
@@ -847,10 +847,7 @@ vector<GroupName> DecideModelEmitter::NameVariants(idx_t root, const DecideSigna
 	// (DecideNodeGroups::spellings).
 	auto &elements = DecideKeyElements(tree.keys, node.key);
 	SolverInput::KeyValues key_values;
-	for (auto &element : elements) {
-		key_values.null_modes.push_back(element.null_mode);
-	}
-	key_values.null_modes.resize(names.size(), DecideKeyNullMode::NO_GROUP);
+	key_values.names = node.compiled.texts;
 	vector<vector<Value>> values;
 	for (idx_t variant = 0; variant < entry_of.size(); variant++) {
 		const auto entry = entry_of[variant];

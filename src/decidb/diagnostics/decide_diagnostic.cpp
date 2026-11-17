@@ -368,11 +368,12 @@ static string PrescribeCap(const VarEscape &ve) {
 	return "when (" + StringUtil::Join(scope, " OR ") + "): " + cap;
 }
 
-//! The emitted row a finding covers (`expanded` slack scope); INVALID_INDEX leaves the `row` column NULL.
+//! The emitted row a finding covers (`expanded` slack scope), a 0-based position that prints counting from 1, as
+//! `row_number()` does; INVALID_INDEX leaves the `row` column NULL.
 static void SetFindingRow(DiagnosticFinding &finding, idx_t row) {
 	if (row != DConstants::INVALID_INDEX) {
 		finding.has_row = true;
-		finding.row = static_cast<int64_t>(row);
+		finding.row = static_cast<int64_t>(row) + 1;
 	}
 }
 

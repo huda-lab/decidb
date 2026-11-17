@@ -141,6 +141,8 @@ struct DecideBody {
 	//! key's elements its signature reads, and each frame's timeline and, read relative to the anchor, its order key
 	//! (language/guide.md §7.1).
 	vector<idx_t> names;
+	//! Parallel to `names`: the column or value each reads, as the query writes it (`t.g`, `P.lim`).
+	vector<string> texts;
 	//! Of those, each collated order key and its frame: a position is named by its least spelling over its rows (D69).
 	vector<pair<idx_t, idx_t>> position_names;
 	//! A data check's message, a program on its hidden root; INVALID for any other node.

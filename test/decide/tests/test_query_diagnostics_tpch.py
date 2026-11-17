@@ -149,11 +149,11 @@ class TestSolidBranches:
         )
         e = _rows(e_result)
         reported = {r["value"] for r in e if r["attribute"] == "group"}
-        assert reported == set(sizes)
+        assert reported == {f"l_orderkey = {key}" for key in sizes}
         # The clause reads as written; the group is its own column.
         by_group = {f["group"]: f for f in _flat(e_result) if f["edit_source"] == "expanded_group"}
         for gkey, size in sizes.items():
-            edit = by_group[gkey]
+            edit = by_group[f"l_orderkey = {gkey}"]
             assert edit["clause"] == "per l_orderkey: sum(x) by (l_orderkey) >= 5"
             assert int(float(edit["amount"])) == 5 - size
             assert edit["suggested_change"] == (f"per l_orderkey: sum(x) by (l_orderkey) >= {size}")

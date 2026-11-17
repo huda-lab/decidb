@@ -695,13 +695,13 @@ class TestDiagnosticsRelation:
             "per grp: sum(x) by (grp) >= 5",
         ]
         by_group = {e["group"]: e for e in edits}
-        assert set(by_group) == {"a", "b"}
-        assert by_group["a"]["suggested_change"] == "per grp: sum(x) by (grp) >= 2"
-        assert by_group["a"]["amount"] == "3"
-        assert by_group["a"]["edit_source"] == "expanded_group"
-        assert by_group["a"]["offset_scope"] == "group"
-        assert by_group["b"]["suggested_change"] == "per grp: sum(x) by (grp) >= 3"
-        assert by_group["b"]["amount"] == "2"
+        assert set(by_group) == {"grp = 'a'", "grp = 'b'"}
+        assert by_group["grp = 'a'"]["suggested_change"] == "per grp: sum(x) by (grp) >= 2"
+        assert by_group["grp = 'a'"]["amount"] == "3"
+        assert by_group["grp = 'a'"]["edit_source"] == "expanded_group"
+        assert by_group["grp = 'a'"]["offset_scope"] == "group"
+        assert by_group["grp = 'b'"]["suggested_change"] == "per grp: sum(x) by (grp) >= 3"
+        assert by_group["grp = 'b'"]["amount"] == "2"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_per_group_expanded_mode_preserves_empty_string_group(self, request, cli_fixture):
@@ -716,17 +716,17 @@ class TestDiagnosticsRelation:
         rows = _rows(result)
         edits = _clause_edits(rows)
         by_group = {e["group"]: e for e in edits}
-        assert set(by_group) == {"''", "a"}
-        assert by_group["''"]["subject"] == "per grp: sum(x) by (grp) >= 2"
-        assert by_group["''"]["edit_source"] == "expanded_group"
-        assert by_group["''"]["offset_scope"] == "group"
-        assert by_group["''"]["suggested_change"] == "per grp: sum(x) by (grp) >= 1"
+        assert set(by_group) == {"grp = ''", "grp = 'a'"}
+        assert by_group["grp = ''"]["subject"] == "per grp: sum(x) by (grp) >= 2"
+        assert by_group["grp = ''"]["edit_source"] == "expanded_group"
+        assert by_group["grp = ''"]["offset_scope"] == "group"
+        assert by_group["grp = ''"]["suggested_change"] == "per grp: sum(x) by (grp) >= 1"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_relation_key_labels_a_null_and_the_string_null_apart(self, request, cli_fixture):
         """INF-2: a `per D` key compares NULL as a value, so a class whose column is NULL and one whose
-        column is the string 'NULL' are two classes. Their labels are SQL literals, as a determination
-        message writes them: `'NULL'` quoted, NULL bare."""
+        column is the string 'NULL' are two classes. A label names the column as the query writes it and
+        the value as a SQL literal, as a determination message writes them: `'NULL'` quoted, NULL bare."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT tag, x FROM (VALUES (NULL), ('NULL')) D(tag) "
@@ -736,12 +736,12 @@ class TestDiagnosticsRelation:
 
         groups = sorted(r["group"] for r in _flat(result) if r["edit_source"] == "expanded_group")
         # `.mode csv` renders the label NULL and an SQL NULL alike; the quotes tell the string apart.
-        assert groups == ["'NULL'", "NULL"], groups
+        assert groups == ["D.tag = 'NULL'", "D.tag = NULL"], groups
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_written_key_labels_keep_their_plain_form(self, request, cli_fixture):
-        """INF-2: a key the user wrote keeps its labels. A NULL value is in no class there, so the one
-        class the string 'NULL' makes reads `NULL`, with no quotes."""
+        """INF-2: a key the user wrote names its column as written. A NULL value is in no class there, so
+        the one class the string 'NULL' makes reads `tag = 'NULL'`."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT tag, x FROM (VALUES (NULL), ('NULL')) D(tag) "
@@ -749,7 +749,7 @@ class TestDiagnosticsRelation:
         )
         result = _diagnose(cli, sql, scope="expanded")
 
-        assert [r["group"] for r in _flat(result) if r["edit_source"] == "expanded_group"] == ["NULL"]
+        assert [r["group"] for r in _flat(result) if r["edit_source"] == "expanded_group"] == ["tag = 'NULL'"]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_single_row_when_group_keeps_sum_wrapper(self, request, cli_fixture):
@@ -1326,7 +1326,7 @@ class TestDiagnosticsRelation:
 
         expanded = [r for r in _flat(_diagnose(cli, sql, scope="expanded")) if r["edit_source"] == "expanded_row"]
         clause = "power(x - 20, 2) <= 4"
-        assert [(r["clause"], r["row"]) for r in expanded] == [(clause, "0"), (clause, "1")]
+        assert [(r["clause"], r["row"]) for r in expanded] == [(clause, "1"), (clause, "2")]
 
     @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi"])
     def test_infeasible_strict_quadratic_requotes_typed_literal(self, request, cli_fixture):
@@ -2169,10 +2169,10 @@ class TestUnreachableBound:
         # rather than a suffix baked into the clause text.
         assert _attrs(rows, "clause", "per g: min(x) by (g) <= -inf") == {
             "unreachable_bound": "true",
-            "group": "0",
+            "group": "g = 0",
         }
         # Group 1 is satisfiable and must not be implicated.
-        assert not [r for r in rows if r["value"] == "1" and r["attribute"] == "group"], rows
+        assert not [r for r in rows if r["value"] == "g = 1" and r["attribute"] == "group"], rows
 
     @pytest.mark.parametrize("cli_fixture", _INF_BACKENDS)
     def test_one_clause_over_many_rows_is_reported_once(self, request, cli_fixture):

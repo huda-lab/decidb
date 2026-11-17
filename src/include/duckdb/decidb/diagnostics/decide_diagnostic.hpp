@@ -71,11 +71,11 @@ struct DiagnosticFinding {
 	//!   unbounded_after_fix   the repaired problem has no finite optimum
 	//!   undiagnosed         the state is known but the engine could not name a cause
 	string edit_source;
-	//! Printable `per` key of this finding's group (`EU, 2024`), or the categorical slice
+	//! Printable `per` key of this finding's group (`D.region = 'EU', D.year = 2024`), or the categorical slice
 	//! an unbounded variable escapes on (`region = 'EU'`). Empty => NULL.
 	string group;
 	//! Identity of the single emitted row this finding covers, under the `expanded`
-	//! slack scope. `has_row` false => NULL, which is every finding under `query` scope.
+	//! slack scope, counting from 1. `has_row` false => NULL, which is every finding under `query` scope.
 	bool has_row = false;
 	int64_t row = 0;
 };

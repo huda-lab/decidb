@@ -111,7 +111,7 @@ def test_an_expanded_diagnosis_names_the_groups_a_frame_leaves(decidb_cli):
     sql = _edge(f"x >= 5 AND per t.product: sum(at(previous: x) {TL}) by (t.product) <= 4")
     findings = _findings(run_diagnose(decidb_cli, sql, scope="expanded"), sql)
     groups = {row["group"]: float(row["amount"]) for row in findings if row["edit_source"] == "expanded_group"}
-    assert groups == {"A": 6.0, "B": 1.0}, findings
+    assert groups == {"t.product = 'A'": 6.0, "t.product = 'B'": 1.0}, findings
 
 
 @pytest.mark.diagnose

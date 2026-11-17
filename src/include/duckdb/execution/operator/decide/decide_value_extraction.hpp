@@ -293,7 +293,7 @@ void DecideNameVariantClassSets(const vector<idx_t> &class_of, const vector<idx_
 //! own field values where its class holds more than one variant (`D1, 100` beside `D1, 90`), and by the row it is read
 //! at where another variant of its class shows the same values, differing only by the decision instance it reads.
 //! `read(variant)` gives a variant's values, its class's `class_columns` and then its fields', each at its first row
-//! (`first_rows`). Sets the reader of `key_values`, which holds a NULL mode per value read, and adds the row's.
+//! (`first_rows`). Sets the reader of `key_values`, whose `names` already name those values, and adds the row's, `row`.
 void DecideNameVariants(const vector<DecideSignatureField> &fields, idx_t class_columns,
                         std::function<vector<Value>(idx_t)> read, const vector<idx_t> &class_of,
                         const vector<idx_t> &variants_per_class, const vector<idx_t> &first_rows,

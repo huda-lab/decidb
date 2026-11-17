@@ -269,32 +269,34 @@ public:
 	}
 
 	//! What a variant of `root`'s clause is named by at its first row (DecideBody::names), as flat's NameVariants
-	//! reads it: its class key's elements as written, then each value and `by` key its sigma reads. A key's or a
-	//! value's error is the descent's or the terms' to raise, so these are never reported.
+	//! reads it: its class key's elements as written, then each value and `by` key its sigma reads, and each frame's
+	//! timeline and order. Each is named as the query writes it (DecideBody::texts). A key's or a value's error is the
+	//! descent's or the terms' to raise, so these are never reported.
 	void AddNames(idx_t root) {
 		auto &node = *tree.nodes[root];
-		auto add = [&](const Expression &expression) {
+		auto add = [&](const Expression &expression, const string &text) {
 			node.compiled.names.push_back(
 			    Add(root, DecideProgramRole::VALUE, expression, root, DecideBlock::BOUND, 0, 0));
+			node.compiled.texts.push_back(text);
 		};
 		for (auto &element : DecideKeyElements(tree.keys, node.key)) {
-			add(*element.expression);
+			add(*element.expression, element.name);
 		}
 		for (auto &field : node.signature) {
 			if (field.kind == DecideSignatureFieldKind::VALUE) {
-				add(*field.value);
+				add(*field.value, field.text);
 			} else if (field.kind == DecideSignatureFieldKind::BY_KEY) {
 				for (auto &element : DecideKeyElements(tree.keys, field.key)) {
-					add(*element.expression);
+					add(*element.expression, element.name);
 				}
 			} else if (field.kind == DecideSignatureFieldKind::FRAME) {
 				// Its timeline, and its anchor's place there when it reads relative to it.
 				auto &frame = *tree.nodes[tree.frame_nodes[field.frame]]->frame_spec;
 				for (auto &element : DecideKeyElements(tree.keys, frame.timeline_key)) {
-					add(*element.expression);
+					add(*element.expression, element.name);
 				}
 				if (frame.Relative()) {
-					add(*frame.order);
+					add(*frame.order, frame.order_name);
 					if (frame.order_collation) {
 						node.compiled.position_names.emplace_back(node.compiled.names.size() - 1, field.frame);
 					}

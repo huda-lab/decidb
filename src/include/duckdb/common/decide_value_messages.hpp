@@ -97,4 +97,17 @@ inline string DecideSqlLiteral(const Value &value) {
 	return "'" + StringUtil::Replace(value.ToString(), "'", "''") + "'";
 }
 
+//! A class or group, as a message names it: `D.depotID = 'D1', D.region = 'East'`. `values` holds the group's value of
+//! each column, `names` the columns as the query writes them (it may name more than `values` reads). A NULL value
+//! reads `= NULL`: the text names the group, and does not select its rows (an unbounded slice, which a user pastes
+//! into a `when`, writes `IS NULL`).
+inline string DescribeKeyValues(const vector<string> &names, const vector<Value> &values) {
+	D_ASSERT(names.size() >= values.size());
+	string result;
+	for (idx_t i = 0; i < values.size(); i++) {
+		result += (i > 0 ? ", " : "") + names[i] + " = " + DecideSqlLiteral(values[i]);
+	}
+	return result;
+}
+
 } // namespace duckdb

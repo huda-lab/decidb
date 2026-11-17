@@ -131,7 +131,7 @@ def test_a_variant_is_named_by_its_class_s_least_spelling(decidb_cli, order):
     rows = tuple(rows[i] for i in order)
     sql = f"SELECT id, y {_source(rows)} DECIDE per t.g: y(INT) SUCH THAT per t.g: y <= t.cap - 2 MAXIMIZE SUM(y)"
     found = _diagnose_relation.rows(_diagnose_relation.run(decidb_cli, sql, scope="expanded"))
-    assert [row["group"] for row in found if row["edit_source"] == "expanded_group"] == ["A, 1"], found
+    assert [row["group"] for row in found if row["edit_source"] == "expanded_group"] == ["t.g = 'A', t.cap = 1"], found
 
 
 KEYED_COLUMNS = ("id", "k", "g", "cap", "p")
@@ -215,7 +215,7 @@ def _assert_every_finding_names_b(cli, clauses):
         DECIDE x(BOOL) SUCH THAT {clauses[0]} AND {clauses[1]} MAXIMIZE SUM(x)"""
     rows = _diagnose_relation.rows(_diagnose_relation.run(cli, sql, scope="expanded"))
     groups = sorted((row["clause"], row["group"]) for row in rows if row["edit_source"] == "expanded_group")
-    assert groups == sorted([(NARROW, "B"), (WIDE, "B")]), rows
+    assert groups == sorted([(NARROW, "t.g = 'B'"), (WIDE, "t.g = 'B'")]), rows
 
 
 @pytest.mark.diagnose
@@ -234,7 +234,7 @@ def test_a_finding_spells_a_group_by_its_least_spelling_when_a_later_row_holds_i
         SELECT id, x FROM (SELECT id, g COLLATE NOCASE AS g FROM {values(rows, 'v', ('id', 'g'))}) t
         DECIDE x(BOOL) SUCH THAT per t.g: sum(x) >= 4 MAXIMIZE SUM(x)"""
     found = _diagnose_relation.rows(_diagnose_relation.run(decidb_cli, sql, scope="expanded"))
-    assert [row["group"] for row in found if row["edit_source"] == "expanded_group"] == ["B"], found
+    assert [row["group"] for row in found if row["edit_source"] == "expanded_group"] == ["t.g = 'B'"], found
 
 
 @pytest.mark.correctness
@@ -406,8 +406,8 @@ class TestACollatedOrderKey:
             DIAGNOSE SELECT id, y FROM {source} DECIDE per t.g: y(INT)
             SUCH THAT per t.g: y = at(previous else 5: t.v) over (t.k) MAXIMIZE sum(y)"""
         result = decidb_cli.execute_raw(sql)
-        assert "g, A" in result.stdout + result.stderr, result.stdout + result.stderr
-        assert "g, a" not in result.stdout + result.stderr, result.stdout + result.stderr
+        assert "t.g = 'g', t.k = 'A'" in result.stdout + result.stderr, result.stdout + result.stderr
+        assert "t.g = 'g', t.k = 'a'" not in result.stdout + result.stderr, result.stdout + result.stderr
 
     @pytest.mark.parametrize("first", ["1 month", "30 days"])
     def test_every_message_gives_a_position_one_name(self, decidb_cli, first):

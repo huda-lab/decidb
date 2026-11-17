@@ -439,9 +439,9 @@ def test_a_per_key_finer_than_the_by_key_reports_once_per_class(decidb_cli):
     findings = _findings(_diagnose(decidb_cli, "per t.depot: sum(x) by (t.region) >= 100"))
     change = "per t.depot: sum(x) by (t.region) >= {}"
     assert findings == [
-        ("D1", "NULL", 40, "expanded_group", change.format(60)),
-        ("D2", "NULL", 40, "expanded_group", change.format(60)),
-        ("D3", "NULL", 85, "expanded_group", change.format(15)),
+        ("t.depot = 'D1'", "NULL", 40, "expanded_group", change.format(60)),
+        ("t.depot = 'D2'", "NULL", 40, "expanded_group", change.format(60)),
+        ("t.depot = 'D3'", "NULL", 85, "expanded_group", change.format(15)),
     ]
 
 
@@ -452,9 +452,9 @@ def test_a_hard_min_or_max_reports_once_per_class_too(decidb_cli):
     findings = _findings(_diagnose(decidb_cli, "per t.depot: max(x) by (t.region) >= 50"))
     change = "per t.depot: max(x) by (t.region) >= {}"
     assert findings == [
-        ("D1", "NULL", 20, "expanded_group", change.format(30)),
-        ("D2", "NULL", 20, "expanded_group", change.format(30)),
-        ("D3", "NULL", 35, "expanded_group", change.format(15)),
+        ("t.depot = 'D1'", "NULL", 20, "expanded_group", change.format(30)),
+        ("t.depot = 'D2'", "NULL", 20, "expanded_group", change.format(30)),
+        ("t.depot = 'D3'", "NULL", 35, "expanded_group", change.format(15)),
     ]
 
 
@@ -465,29 +465,29 @@ def test_a_hard_min_or_max_reports_once_per_class_too(decidb_cli):
         pytest.param(
             "per t.depot: max(t.cap * x) by (t.region) <= -10",
             [
-                ("D1", "NULL", 10, "expanded_group", "per t.depot: max(t.cap * x) by (t.region) <= 0"),
-                ("D2", "NULL", 10, "expanded_group", "per t.depot: max(t.cap * x) by (t.region) <= 0"),
-                ("D3", "NULL", 10, "expanded_group", "per t.depot: max(t.cap * x) by (t.region) <= 0"),
+                ("t.depot = 'D1'", "NULL", 10, "expanded_group", "per t.depot: max(t.cap * x) by (t.region) <= 0"),
+                ("t.depot = 'D2'", "NULL", 10, "expanded_group", "per t.depot: max(t.cap * x) by (t.region) <= 0"),
+                ("t.depot = 'D3'", "NULL", 10, "expanded_group", "per t.depot: max(t.cap * x) by (t.region) <= 0"),
             ],
             id="easy-max-per-key",
         ),
         pytest.param(
             "max(t.cap * x) by (t.region) <= -10",
-            [("NULL", str(row), 10, "expanded_row", "max(t.cap * x) by (t.region) <= 0") for row in range(4)],
+            [("NULL", str(row + 1), 10, "expanded_row", "max(t.cap * x) by (t.region) <= 0") for row in range(4)],
             id="easy-max-no-per",
         ),
         pytest.param(
             "per t.region: max(x) by (t.region) <= min(t.cap) by (t.region) - 30",
             [
                 (
-                    "E",
+                    "t.region = 'E'",
                     "NULL",
                     20,
                     "expanded_group",
                     "per t.region: max(x) by (t.region) <= min(t.cap) by (t.region) - 30 + 20",
                 ),
                 (
-                    "W",
+                    "t.region = 'W'",
                     "NULL",
                     15,
                     "expanded_group",
@@ -499,15 +499,15 @@ def test_a_hard_min_or_max_reports_once_per_class_too(decidb_cli):
         pytest.param(
             "per t.depot: sum(x) + max(x) <= -5",
             [
-                ("D1", "NULL", 5, "expanded_group", "per t.depot: sum(x) + max(x) <= 0"),
-                ("D2", "NULL", 5, "expanded_group", "per t.depot: sum(x) + max(x) <= 0"),
-                ("D3", "NULL", 5, "expanded_group", "per t.depot: sum(x) + max(x) <= 0"),
+                ("t.depot = 'D1'", "NULL", 5, "expanded_group", "per t.depot: sum(x) + max(x) <= 0"),
+                ("t.depot = 'D2'", "NULL", 5, "expanded_group", "per t.depot: sum(x) + max(x) <= 0"),
+                ("t.depot = 'D3'", "NULL", 5, "expanded_group", "per t.depot: sum(x) + max(x) <= 0"),
             ],
             id="composed-per-key",
         ),
         pytest.param(
             "when t.id > 0: sum(x) + max(x) <= -5",
-            [("NULL", str(row), 5, "expanded_row", "when t.id > 0: sum(x) + max(x) <= 0") for row in range(4)],
+            [("NULL", str(row + 1), 5, "expanded_row", "when t.id > 0: sum(x) + max(x) <= 0") for row in range(4)],
             id="composed-no-per",
         ),
     ],
@@ -547,8 +547,8 @@ def test_a_per_key_equal_to_the_by_key_reports_once_per_group(decidb_cli):
     findings = _findings(_diagnose(decidb_cli, "per t.region: sum(x) by (t.region) >= 100"))
     change = "per t.region: sum(x) by (t.region) >= {}"
     assert findings == [
-        ("E", "NULL", 40, "expanded_group", change.format(60)),
-        ("W", "NULL", 85, "expanded_group", change.format(15)),
+        ("t.region = 'E'", "NULL", 40, "expanded_group", change.format(60)),
+        ("t.region = 'W'", "NULL", 85, "expanded_group", change.format(15)),
     ]
 
 
@@ -560,10 +560,10 @@ def test_no_per_key_reports_once_per_kept_row(decidb_cli):
     findings = _findings(_diagnose(decidb_cli, "sum(x) by (t.region) >= 100"))
     change = "sum(x) by (t.region) >= {}"
     assert findings == [
-        ("NULL", "0", 40, "expanded_row", change.format(60)),
         ("NULL", "1", 40, "expanded_row", change.format(60)),
         ("NULL", "2", 40, "expanded_row", change.format(60)),
-        ("NULL", "3", 85, "expanded_row", change.format(15)),
+        ("NULL", "3", 40, "expanded_row", change.format(60)),
+        ("NULL", "4", 85, "expanded_row", change.format(15)),
     ]
 
 
@@ -574,9 +574,9 @@ def test_a_when_in_front_limits_the_classes_to_the_kept_rows(decidb_cli):
     findings = _findings(_diagnose(decidb_cli, "when t.id <> 2 per t.depot: sum(x) by (t.region) >= 100"))
     change = "when t.id <> 2 per t.depot: sum(x) by (t.region) >= {}"
     assert findings == [
-        ("D1", "NULL", 60, "expanded_group", change.format(40)),
-        ("D2", "NULL", 60, "expanded_group", change.format(40)),
-        ("D3", "NULL", 85, "expanded_group", change.format(15)),
+        ("t.depot = 'D1'", "NULL", 60, "expanded_group", change.format(40)),
+        ("t.depot = 'D2'", "NULL", 60, "expanded_group", change.format(40)),
+        ("t.depot = 'D3'", "NULL", 85, "expanded_group", change.format(15)),
     ]
 
 
@@ -604,9 +604,9 @@ def test_a_row_with_a_null_class_key_stands_for_no_class(decidb_cli):
     )
     change = "per t.depot: sum(x) by (t.region) >= {}"
     assert findings == [
-        ("D1", "NULL", 40, "expanded_group", change.format(60)),
-        ("D2", "NULL", 40, "expanded_group", change.format(60)),
-        ("D3", "NULL", 85, "expanded_group", change.format(15)),
+        ("t.depot = 'D1'", "NULL", 40, "expanded_group", change.format(60)),
+        ("t.depot = 'D2'", "NULL", 40, "expanded_group", change.format(60)),
+        ("t.depot = 'D3'", "NULL", 85, "expanded_group", change.format(15)),
     ]
 
 
@@ -631,7 +631,7 @@ def test_a_group_keeps_its_name_when_a_later_clause_reads_its_key_on_more_rows(d
         )
     )
     change = "when t.region = 'W' per t.region: sum(x) by (t.region) >= {}"
-    assert findings == [("W", "NULL", 85, "expanded_group", change.format(15))]
+    assert findings == [("t.region = 'W'", "NULL", 85, "expanded_group", change.format(15))]
 
 
 @pytest.mark.diagnose
@@ -699,14 +699,14 @@ def test_an_easy_max_with_its_own_when_is_refused_only_through_its_members(decid
         pytest.param(
             "per t.region: abs(sum(x) by (t.region) - 100) <= 5",
             [
-                ("E", "NULL", 35, "expanded_group", "per t.region: abs(sum(x) by (t.region) - 100) <= 40"),
-                ("W", "NULL", 80, "expanded_group", "per t.region: abs(sum(x) by (t.region) - 100) <= 85"),
+                ("t.region = 'E'", "NULL", 35, "expanded_group", "per t.region: abs(sum(x) by (t.region) - 100) <= 40"),
+                ("t.region = 'W'", "NULL", 80, "expanded_group", "per t.region: abs(sum(x) by (t.region) - 100) <= 85"),
             ],
             id="per-key",
         ),
         pytest.param(
             "per row: x >= 18",
-            [("NULL", "0", 8, "expanded_row", "x >= 10"), ("NULL", "3", 3, "expanded_row", "x >= 15")],
+            [("NULL", "1", 8, "expanded_row", "x >= 10"), ("NULL", "4", 3, "expanded_row", "x >= 15")],
             id="per-row",
         ),
     ],
@@ -734,8 +734,8 @@ def test_a_keyed_decision_bound_reports_per_class(decidb_cli):
     assert_no_internal_leak(result, "keyed y")
     rows = [row for row in _diagnose_relation.rows(result) if row["edit_source"] != "achievable_objective"]
     assert _findings(rows) == [
-        ("E", "NULL", 40, "expanded_group", "per t.region: y >= -40"),
-        ("W", "NULL", 85, "expanded_group", "per t.region: y >= -85"),
+        ("t.region = 'E'", "NULL", 40, "expanded_group", "per t.region: y >= -40"),
+        ("t.region = 'W'", "NULL", 85, "expanded_group", "per t.region: y >= -85"),
     ]
 
 
@@ -747,10 +747,10 @@ def test_a_kept_row_finding_offsets_the_bound_as_written(decidb_cli):
     clause = "x >= 0.5 * sum(x) by (t.region) + 20"
     rows = _diagnose(decidb_cli, clause)
     assert sorted((row["row"], row["clause"], row["suggested_change"], row["edit_source"]) for row in rows) == [
-        ("0", clause, clause + " - 20", "expanded_row"),
         ("1", clause, clause + " - 20", "expanded_row"),
         ("2", clause, clause + " - 20", "expanded_row"),
-        ("3", clause, clause + " - 12.5", "expanded_row"),
+        ("3", clause, clause + " - 20", "expanded_row"),
+        ("4", clause, clause + " - 12.5", "expanded_row"),
     ]
 
 
@@ -760,14 +760,14 @@ def test_a_kept_row_finding_offsets_the_bound_as_written(decidb_cli):
     [
         pytest.param(
             "per t.depot: sum(x) by (t.region) >= 'inf'::DOUBLE",
-            [("D1", "NULL"), ("D2", "NULL"), ("D3", "NULL")],
-            [("D1", "NULL"), ("D2", "NULL"), ("D3", "NULL")],
+            [("t.depot = 'D1'", "NULL"), ("t.depot = 'D2'", "NULL"), ("t.depot = 'D3'", "NULL")],
+            [("t.depot = 'D1'", "NULL"), ("t.depot = 'D2'", "NULL"), ("t.depot = 'D3'", "NULL")],
             id="per-key",
         ),
         pytest.param(
             "sum(x) by (t.region) >= 'inf'::DOUBLE",
             [("NULL", "NULL")],
-            [("NULL", "0"), ("NULL", "1"), ("NULL", "2"), ("NULL", "3")],
+            [("NULL", "1"), ("NULL", "2"), ("NULL", "3"), ("NULL", "4")],
             id="no-per",
         ),
         pytest.param("per (): sum(x) >= 'inf'::DOUBLE", [("NULL", "NULL")], [("NULL", "NULL")], id="per-global"),
@@ -910,20 +910,20 @@ def test_the_unbounded_remedy_names_a_key_column_as_written(decidb_cli):
         pytest.param(
             "per t.depot: sum(power(x - 20, 2)) by (t.region) <= 4",
             [
-                ("D1", "NULL", 96, "expanded_group"),
-                ("D2", "NULL", 96, "expanded_group"),
-                ("D3", "NULL", 21, "expanded_group"),
+                ("t.depot = 'D1'", "NULL", 96, "expanded_group"),
+                ("t.depot = 'D2'", "NULL", 96, "expanded_group"),
+                ("t.depot = 'D3'", "NULL", 21, "expanded_group"),
             ],
             id="per-key",
         ),
         pytest.param(
             "sum(power(x - 20, 2)) by (t.region) <= 4",
-            [("NULL", str(row), 96, "expanded_row") for row in range(3)] + [("NULL", "3", 21, "expanded_row")],
+            [("NULL", str(row + 1), 96, "expanded_row") for row in range(3)] + [("NULL", "4", 21, "expanded_row")],
             id="no-per",
         ),
         pytest.param(
             "per row: power(x - 20, 2) <= 4",
-            [("NULL", "0", 96, "expanded_row"), ("NULL", "3", 21, "expanded_row")],
+            [("NULL", "1", 96, "expanded_row"), ("NULL", "4", 21, "expanded_row")],
             id="per-row",
         ),
     ],
@@ -958,7 +958,7 @@ def test_a_per_row_quadratic_clause_names_each_class(decidb_cli_gurobi):
         MAXIMIZE SUM(y)"""
     rows = _diagnose_relation.rows(_diagnose_relation.run(decidb_cli_gurobi, sql, scope="expanded"))
     groups = sorted((row["group"], row["edit_source"]) for row in rows if row["clause"] != "NULL")
-    assert groups == [("D1", "expanded_group"), ("D3", "expanded_group")], rows
+    assert groups == [("t.depot = 'D1'", "expanded_group"), ("t.depot = 'D3'", "expanded_group")], rows
 
 
 @pytest.mark.diagnose
@@ -1008,5 +1008,5 @@ def test_a_finding_names_a_class_by_its_value_wherever_its_row_lies(decidb_cli):
         SELECT id, x FROM (SELECT id, id // 2 AS k FROM range(5000) r(id)) t
         DECIDE x(BOOL) SUCH THAT per t.k: sum(x) by (t.k) >= 3 MAXIMIZE SUM(x)"""
     rows = _diagnose_relation.rows(_diagnose_relation.run(decidb_cli, sql, scope="expanded"))
-    named = sorted(int(row["group"]) for row in rows if row["edit_source"] == "expanded_group")
-    assert named == list(range(2500)), named[:20]
+    named = sorted(row["group"] for row in rows if row["edit_source"] == "expanded_group")
+    assert named == sorted(f"t.k = {k}" for k in range(2500)), named[:20]
