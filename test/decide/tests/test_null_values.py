@@ -215,6 +215,35 @@ def test_a_null_factor_on_an_unreduced_objective_term_drops_only_that_term(decid
     assert 2.0 * rows[0][1] == pytest.approx(optimum)
 
 
+@pytest.mark.cons_perrow
+@pytest.mark.correctness
+def test_a_null_bound_in_a_later_window_skips_only_its_own_row(decidb_cli, oracle_solver):
+    """Row 2,500's NULL bound is read in the second window of 2,048 entries, which marks the entry at its place in the
+    node, not in the window: row 2,500 has no bound of its own and takes 9, and row 452 (2,500 less 2,048) keeps its 5.
+    The weights `id + 1` tell the two rows apart, which a swapped mark would leave at the same sum."""
+    rows = 3000
+    answer = {
+        row[0]: row[1]
+        for row in decidb_cli.execute(
+            f"""SET decide_direct_solve='off';
+            SELECT id, x FROM (SELECT i AS id, CASE WHEN i = 2500 THEN NULL ELSE 5.0 END AS c FROM range({rows}) r(i)) t
+            DECIDE x(INT) SUCH THAT x <= 9 AND x <= t.c MAXIMIZE SUM((t.id + 1) * x)"""
+        )[0]
+    }
+    assert len(answer) == rows
+
+    def build(oracle):
+        for i in range(rows):
+            if i != 2500:
+                oracle.add_constraint({f"x_{i}": 1.0}, "<=", 5.0)
+        oracle.set_objective({f"x_{i}": i + 1 for i in range(rows)}, ObjSense.MAXIMIZE)
+
+    variables = [(f"x_{i}", VarType.INTEGER, 0, 9) for i in range(rows)]
+    optimum = _optimum(oracle_solver, "null_bound_in_a_later_window", variables, build)
+    assert all(answer[i] <= 5 for i in range(rows) if i != 2500)
+    assert sum((i + 1) * answer[i] for i in range(rows)) == pytest.approx(optimum)
+
+
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 # The two sides of one decision: statistics prove `c` never NULL (the test is not read), or a NULL is there (it is).

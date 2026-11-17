@@ -411,6 +411,16 @@ class TestKept:
         assert _model(decidb_cli, sql, tmp_path)["num_vars"] == 6
         _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP, body], MAXIMIZE_X)
 
+    def test_a_helper_every_row_reads_is_one_column_at_scale(self, decidb_cli, tmp_path):
+        """Each of 2,000 rows reads one helper of their sum: each row's two terms, x and the helper, and the helper's
+        own row of its 2,000 members and itself, 6,001 terms, where writing the sum into every row made 4,000,000."""
+        sql = (
+            "SELECT i FROM range(2000) r(i) DECIDE x(REAL) SUCH THAT x <= 9 AND x <= 0.01 * SUM(x) + 1 MAXIMIZE sum(x)"
+        )
+        model = decidb_cli.dump_model(sql, tmp_path / "model.dump")
+        counts = [int(n) for n in re.findall(r"(?m)^row \d+: .*? nnz=(\d+)", model)]
+        assert counts == [2] * 2000 + [2001] and sum(counts) == 6001, model[:300]
+
     def test_a_maximum_closing_on_a_sum_two_members_read(self, decidb_cli_gurobi, scope_solver, tmp_path):
         """`max(sum(x + 1) by (t.product)) >= 15` with `x` unbounded: the MAX is pinned from
         above with no Big-M to read, so Gurobi states it natively, over columns. A's sum is

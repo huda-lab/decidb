@@ -98,6 +98,15 @@ def test_values_prints_what_each_node_computes_on_its_entries(decidb_cli):
     assert clause, values
 
 
+def test_each_dump_asked_for_is_printed_once(decidb_cli):
+    """The four dumps of one query, asked for together: each prints once, and the values show the clause's row."""
+    result = debugged(decidb_cli, "tree,bodies,containers,values")
+    assert result.returncode == 0, result.stderr
+    for dump in ("TREE", "BODIES", "CONTAINERS", "VALUES"):
+        assert result.stderr.count(f"DECIDB_{dump}_BEGIN") == 1, result.stderr
+    assert " x <= sum(t.d)\n  row 0 -> " in result.stderr, result.stderr
+
+
 def test_steps_print_the_containers_after_each_piece_the_descent_reads(decidb_cli):
     """`steps` at `chunk=1` is the deck's animation: after row 1 the sum's group holds row 0, after row 2 both."""
     result = debugged(decidb_cli, "steps,chunk=1")
