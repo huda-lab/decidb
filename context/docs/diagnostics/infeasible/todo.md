@@ -9,18 +9,6 @@ Current behavior and the accepted repair-tie policy are recorded in [`done.md`](
   `test_query_diagnostics_relation.py` cover only uniform coefficients. Add one that applies the reported edit with
   `_apply_reported_fix`.
 
-## INF-4 — Expanded DIAGNOSE spells rows and groups unlike the query
-
-- **Problem.** On a framed query, expanded DIAGNOSE prints `row = 0`, `row = 2`, `row = 5`, counting from 0. Its
-  `suggested_change = when g = 'c': x <= <cap>` drops the `t.` the query wrote (`t.g`). Its expanded-scope row prints
-  `group = c`, with no column, where the unbounded diagnosis prints `group = g = 'c'` (UNB-2;
-  `context/opa_rewrite/review/09_user_facing_behaviour.md`, item S7).
-- **Change.** By the owner's wording (2026-11-17), a group prints as the query writes its key: `t.g = 'c'`, integers
-  unquoted. A suggested change keeps the query's qualifiers. Rows count from 1, as `row_number()` does; if `row` is
-  meant as DuckDB's 0-based `rowid`, stop and ask the owner.
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "query_diagnostics_relation or query_diagnostics_tpch"` passes
-  with the new spellings pinned.
-
 ## Parked
 
 Recorded so it is not lost; not to be built until the owner picks it up.

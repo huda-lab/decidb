@@ -341,10 +341,10 @@ flat did, it names the behaviour the tree keeps from the evaluator it replaced:
   group the clause keeps reads (`DecideModelEmitter::HelperMapping`, `DecideMapRowsInNoClass`); a row of a group with
   none reads no helper, so what reads it there skips its instance. The definitions and the helpers' classes are read in
   the tree's order, which puts what defines a decision before what reads it, a helper no clause reads but through a
-  product's auxiliary included (its root of its own). A member's message names the helper's reducer as written, which
-  every reader shares. Flat reads a helper's rows where it builds its classes, before any clause: the rows its path
-  keeps (the reading clause's `when`), its reducer's `when` and its members' NULL tests, then its `by` key on every row
-  the path keeps. The tree ranks them there, in flat's order of the keyed mappings: every scope in turn, a helper's
+  product's auxiliary included (its root of its own). A member's message names the clause that first read the helper, as
+  written (`value_link_clause`). Flat reads a helper's rows where it builds its classes, before any clause: the rows its
+  path keeps (the reading clause's `when`), its reducer's `when` and its members' NULL tests, then its `by` key on every
+  row the path keeps. The tree ranks them there, in flat's order of the keyed mappings: every scope in turn, a helper's
   after the definitions of the auxiliaries its members read, then every auxiliary's definitions
   (`DecideTreeBuilder::KeyedMappingOrder`). Flat's other recursions number nothing earlier, since the declared scopes
   come before the rewrites' helpers and the rewrites number a nested helper or auxiliary before its reader. A `when`

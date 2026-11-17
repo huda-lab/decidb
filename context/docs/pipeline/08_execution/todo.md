@@ -22,8 +22,8 @@ named-column scan also bypass or revisit parts of the normal tree execution; the
 - **Problem.** `` `e.cap` takes more than one value here (5 and 6) — ... `` names the values but not the group they
   differ in (review 09, item S7). The solver path raises it in `decide_value_extraction.cpp`; direct solve raises the
   same text in `direct_plan_fragments.cpp`.
-- **Change.** Both paths name the group as the query writes its key (`e.g = 'a'`, integers unquoted), the spelling
-  INF-4 sets for DIAGNOSE.
+- **Change.** Both paths name the group as the query writes its key (`e.g = 'a'`, integers unquoted), through
+  `DescribeKeyValues` (`common/decide_value_messages.hpp`), as DIAGNOSE does.
 - **Done when.** The tests that match this message pass with the group named:
   `./test/decide/run_tests.sh -n 2 -k "error_precedence or bound_side_tables or anr_frames"`.
 
@@ -117,17 +117,14 @@ named-column scan also bypass or revisit parts of the normal tree execution; the
 
 ## EXEC-11 — A `per <column>:` bound a domain cannot hold gets the generic infeasible message
 
-- **Decision needed.** Where the domain check reads a bound that stays a row.
 - **Problem.** `per g: x <= -1` on a `BOOL` or a non-negative `INT` answers "DECIDE optimization is infeasible. Prefix
   the query with DIAGNOSE…", where `per t: x <= -1` names the clause ("per t: x <= -1 cannot hold for a BOOL
   variable"). The domain refusal in `decide_global_sink_state.hpp` reads the box a constant bound folds into, and a
   `per` over a written column does not fold (`../05_optimizer/done.md`, singleton-row folding): a row whose key is NULL
   takes no instance, and a box covers the whole column.
-- **Options.**
-  1. One function states the domain test and the message; the box check and the step that writes a clause's rows both
-     call it. A row is written only for an instance, so a NULL-key row is never checked. Cost: a second caller.
-  2. Keep the generic message; DIAGNOSE names the clause. Cost: the two shapes answer differently.
-- **Recommendation.** 1: one rule, and the row step reaches exactly the rows the clause applies to.
+- **Ruling (owner, 2026-11-17).** One function states the domain test and the message; the box check and the
+  step that writes a clause's rows both call it. A row is written only for an instance, so a NULL-key row is
+  never checked.
 - **Change.** As ruled. The refusal quotes the clause with its `per`, as for a folded bound.
 - **Done when.** `test_message_qualifier.py` holds a `per g:` case for the BOOL refusal, one for the non-negative
   refusal, and one whose rows all have a NULL `g` and solve. This passes:

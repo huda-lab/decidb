@@ -857,8 +857,8 @@ A relation, one row per finding; a query that solves returns one row, `state = '
 | `total` | BIGINT | denominator of an unbounded escape count |
 | `scope` | VARCHAR | `row`, or `keyed` for a keyed decision, on an escape count |
 | `edit_source` | VARCHAR | the finding's kind (below) |
-| `group` | VARCHAR | the class's `per` key value (expanded scope; a relation key's values print as SQL literals, `'NULL'` quoted and NULL bare), or the slice a decision escapes on |
-| `row` | BIGINT | the kept row this finding covers (expanded scope) |
+| `group` | VARCHAR | the class's `per` key as the query writes it (expanded scope; `t.g = 'a', t.b = -2`, an integer bare, a NULL as `t.g IS NULL`), or the slice a decision escapes on |
+| `row` | BIGINT | the kept row this finding covers, counted from 1 (expanded scope) |
 
 | `edit_source` | meaning |
 |---|---|
@@ -907,7 +907,8 @@ the rows the solver receives. An auxiliary prints as the expression it stands fo
 derived from data prints as `M`. `EXPLAIN` plans without solving; `EXPLAIN ANALYZE` solves and adds actual rows and
 timing, and under a clause what the data made of it: a `↳` line counting the variants of its classes (§7.1, D71),
 one counting the instances it skipped for having no value (§7.4), and one for each helper decision written where it
-is read, with no column (`↳ sum(t.w * x) by (t.product) is written where it is read, with no column`; §6.4, D89).
+is read, with no column (`↳ sum(t.w * x) by (t.product) is written where it is read, with no column`; §6.4, D89),
+in place of the plan's line saying it becomes a helper decision.
 
 **Echo.** EXPLAIN, DIAGNOSE and messages quote a clause as typed (case, spacing and comments as written), with the
 `when c per K:` qualifier in front and the defaults `per row:` and `by ()` left out. Text DeciDB reprints itself (a

@@ -119,6 +119,9 @@ prints `when g IS NULL: ...`: the slice records which group holds the NULLs
 (`ColumnGrouping::null_group`), so a real string `'NULL'` still prints `g = 'NULL'`. The
 `group` column prints the slice through the same predicate (`SlicePredicate`,
 `decide_diagnostic.cpp`): `g IS NULL` for the NULL slice, `g = 'EU'` otherwise.
+The column is the text the query wrote for it, cut from `DecideSourceText` at its query location
+(`plan_decide.cpp`), and the value keeps its type (`EscapeRule::value`), so an integer key prints bare: `id = 11`.
+The predicate is `DescribeKeyValue`, the one the infeasible diagnosis names a group with.
 
 Two conditions gate it, both decided in `CharacterizeEscape` and carried to the formatter
 on `EscapeRule::covers_scope` (the flattened finding fields cannot recover them):

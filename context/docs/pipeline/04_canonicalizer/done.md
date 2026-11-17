@@ -726,8 +726,10 @@ the path rule, `../../language/guide.md` §5.5), split by its path's `by` keys a
 `within` (`timeline_key`, a key-table entry made when new). Under a `per K` -- the
 objective's root is `per ()` (deck p. 62) -- whose key, with the path's, does not hold the
 frame's `within`, the frame records the D75 check execution runs (`partition_key`,
-`partition_subject`). Whether a frame has a value at an anchor is the data's to say: stage 08
-reads it per instance (D84, D88). `SkipNullData`
+`partition_subject`). Its message spells each key column one way, in the subject and the span
+alike: the binder names a key column by the text the query wrote for it (`DecideWrittenSql` in
+`AddKeyColumn`), so `t.cost` never prints as `t."cost"`. Whether a frame has a value at an
+anchor is the data's to say: stage 08 reads it per instance (D84, D88). `SkipNullData`
 tests a frame inside a reducer over decisions whole (`marker IS NOT NULL`), as it tests a
 column: the frame reads another row, or nothing, so no column of the row itself says whether
 it has a value (D84), and the member goes where it reads nothing (D87); stage 05 makes the

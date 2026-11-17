@@ -257,6 +257,13 @@ the rest of the engine are unchanged. `BuildElasticModel(base, slack_scope)`:
   its slack on the linear RHS only, and in the expanded scope reports the classes it stands
   for through the same `FanOutByClass`.
 
+  A `group` reads as the query writes its key (`DescribeKeyValues`, `common/decide_value_messages.hpp`, which the
+  unbounded slice and execution's messages share): every position named, `<as written> = <literal>` joined by `, `
+  (`t.g = 'a', t.b = -2`), an integer bare and a NULL as `t.g IS NULL`. A `by` field names its key's columns, and a
+  frame's its timeline and order key. A column's text is cut from `DecideSourceText` at its query location. `row`
+  counts a clause's kept rows from 1, as `row_number()` does, and a variant's label names its row the same way
+  (`t.g = 'a', t.b = -2, row = 1`).
+
 **Reporting contract.** Every LOOSEN finding carries
 `edit_source ∈ {source_literal, virtual_offset, expanded_row, expanded_group}`. The
 `group` and `row` columns encode the expanded scope directly. A data conflict is always

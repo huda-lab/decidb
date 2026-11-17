@@ -385,6 +385,18 @@ operand of a non-associative operator keeps its parentheses (`x * (cap % 7)`, `a
 prints `-(-x)` and an `OR` under an `AND` keeps its parentheses. A reprinted function prints its lower-case name and a
 column is quoted where SQL needs it (`"order"`, `"per"`).
 
+The rows an ABS envelope or an L0 link adds belong to the tree's F nodes, not to the constraint list, so the physical
+operator reads them there (`CollectDecideFunctionRows`, ruling R4): each F node's clause root prints its terms and bound
+as stage 05 lowered them, its scope's `when c per K:` in front, after the clause's other rows. A frame read in such a
+row prints as its selector, `else` included (`at(previous else 0: x) over (t.period within t.product)`). The logical
+operator holds no tree and prints none of them; `EXPLAIN` prints the physical plan.
+
+EXPLAIN ANALYZE adds what the run made of each clause (`run_time_accounts`). A helper that stage 06 writes where it is
+read holds no column (D89), so its line (`Kind::VALUE_HELPER_INLINED`) replaces the plan's, which says it becomes a
+helper decision: the clause prints one line about its helper. The variants line (`↳ per t.g: N constraints from M
+classes`) prints for every `per` clause that names classes, a clause whose rows merge into `by` groups included
+(`DecideModelEmitter::Groups`), and names a helper's reducer as written, its outer `by` included.
+
 Both the walker and the leaf renderer `RenderDecideSource` live in
 `src/planner/decide/decide_source_provenance.cpp`, beside the location rule they depend on, because every surface that
 echoes a DECIDE clause back to a user needs them: the logical node, the physical node, and the labels an

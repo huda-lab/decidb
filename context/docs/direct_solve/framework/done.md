@@ -232,7 +232,10 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     the answer reads. Every other bound is a per-row clause carrying the classifier's admitted `lower` and `upper`
     expressions. `DirectStaticFloor` lowers a decision's static floor on the rows where a lower bound under a `when`
     replaces the default of 0. `DirectClauseBounds` reads one clause's two ends on a row (no bound on a row its `when`
-    drops), and `DirectRowBox` intersects them with the box. `DirectBoxIsEmpty` is true on a row whose box no value
+    drops), and `DirectRowBox` intersects them with the box. A floor above the top by rounding alone is closed onto
+    the top, as the model builder closes it (`close_rounded_box`, stage 06), with the same
+    `DECIDE_ROUNDED_BOX_RELATIVE_TOLERANCE`, so A1, A2 and R1 answer such a box as the solver does
+    (`test_rounded_box_is_one_point_on_the_direct_plan`). `DirectBoxIsEmpty` is true on a row whose box no value
     satisfies. `DirectRowBox` leaves a static end that is infinite out of the `GREATEST` (lower) or `LEAST` (upper): an
     infinite end clamps nothing, because −∞ is `GREATEST`'s identity and +∞ is `LEAST`'s for every value but NaN, and a
     NaN bound has raised before the box is read. A box with no other end on that side is the constant ±∞. The floor of
@@ -480,6 +483,10 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   bar.
 - **`EXPLAIN` annotation** ([policy.md](../architecture/policy.md)). `test_serializer_explain_and_model_dump` checks
   the rule and the condition line in the logical, physical and profiled plans.
+- **What a direct plan leaves to DuckDB.** A query direct solve answers prints no "the objective is 0" warning: guide
+  § 7.4 holds that warning to the solver path, as with the number-range warning above (owner, 2026-11-17). EXPLAIN
+  ANALYZE prints the DECIDE node with no internal name (guide § 9); the operators the rule plans below it are DuckDB's
+  and print in DuckDB's notation, `#n` for a column and the `error('DECIDE: ...')` CASE a check compiles to.
 - **The solver's domain check, once.** The solver raises, before it reads any row, for a decision whose box contradicts
   its built-in domain: an upper bound below the default floor of 0, any upper bound below 0 on a `BOOL` (its floor stays
   0 whatever lower bound is written), or a `BOOL` lower bound above 1. The box is the bounds as written

@@ -112,7 +112,8 @@ one type-driven path.
   (`1.0` for BOOLEAN).
 
 A box inverted by rounding alone is one point: a floor above its top by no more than one
-part in 1e9 is closed onto the top (`close_rounded_box`), since boxes are derived in
+part in 1e9 (`DECIDE_ROUNDED_BOX_RELATIVE_TOLERANCE`, which direct solve's `DirectRowBox` reads too) is closed onto
+the top (`close_rounded_box`), since boxes are derived in
 floating point from several sources (a bound divided by its coefficient, a helper's box
 through an AVG's 1/n); a wider inversion stays, an infeasible model. Both the decision boxes and a global
 auxiliary's box are closed (`test_edge_cases.py::test_rounded_box_is_one_point`, the tolerance relative to the top
@@ -790,10 +791,12 @@ A group whose reach overflows a DOUBLE at an end the helper's settled box leaves
 its definition is emitted (`RefuseOverflowedReach`). `DeriveReducerValueBounds` meets that infinity against the open
 end's 1e30 and keeps the 1e30, a bound the data do not give, so the check reads the reach against the settled box: a
 clause that bounds the helper (`max(...) <= 5`) makes the overflow harmless, as it does for an open member. It runs
-after the definition rows, so a sum or a Big-M the definition itself overflows names its own cause first. The refusal
-and the extremum link's TOO_LARGE name the clause that first read the helper as written
-(`ReducerValueLinkSpec::source_clause_id` through `DecideWrittenClause`; the objective when none reads it), on both
-backends (`test_invalid_value_message.py`).
+after the definition rows, so a sum or a Big-M the definition itself overflows names its own cause first. Every
+TOO_LARGE of a helper link names the clause that first read the helper as written: the refusal, the extremum link, a
+member or group sum past a DOUBLE (`LinearizeReducerValueLinks`), a member's constant (`DecideModelEmitter::ValueLinks`)
+and a member's computed coefficient (`DecideTreeColumns::Numbers`), through `ReducerValueLinkSpec::source_clause_id` or
+`DecideNode::value_link_clause` and `DecideWrittenClause` (the objective when none reads it), on both backends
+(`test_invalid_value_message.py`, `HELPER_SUMS`).
 
 ### Inlining a helper
 

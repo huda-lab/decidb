@@ -56,38 +56,3 @@ solver path answers those queries, so none of them is wrong, only slower.
   `n1_groups` went from 1.14 to 1.38 with N1's literal `q` deleted. A constant that decides the plan's shape, such as
   whether a value needs a mask or a check (N1's `q`, A1's floor), is a literal the rule builds with. **Ruling (owner,
   2026-11-13).**
-
-## FW-1 — No "objective is 0" warning when direct solve answers
-
-- **Problem.** On the query of `context/opa_rewrite/review/09_user_facing_behaviour.md` item S5, the solver path warns
-  `DECIDE warning: the objective is 0 whatever the decisions...` and the direct path, where `A1_SEPARABLE_BOX`
-  answers, does not. `context/docs/language/guide.md` § 7.4 documents the warning for the query, whatever the path.
-- **Change.** The warning depends on the query alone, so both paths raise it from one place.
-- **Done when.** A test finds the warning under `decide_direct_solve='require'` and `'off'`;
-  `./test/decide/run_tests.sh -n 2 -k "a1_separable_box or edge_cases"` passes.
-
-## FW-2 — EXPLAIN ANALYZE of a direct-solved query shows internal names
-
-- **Problem.** On the same query, EXPLAIN ANALYZE shows `#0`-style column references and `error('DECIDE: ...')` CASE
-  expressions in the direct plan's operator boxes. `context/docs/language/guide.md` § 9 says the plan never shows an
-  internal name. The DECIDE box itself is clean.
-- **Change.** The direct plan's projections and checks carry readable names (column aliases, a named check), which
-  DuckDB prints in place of `#n`. If a box cannot avoid `#n`, bring the owner its plan text.
-- **Needs.** FW-1 (same plan).
-- **Done when.** A test of that plan finds no `#` reference and no `error(` text;
-  `./test/decide/run_tests.sh -n 2 -k "a1_separable_box and explain"` passes.
-
-## FW-3 — A box inverted by rounding alone is infeasible on the direct path
-
-- **Problem.** `SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(REAL) SUCH THAT 3 * x <= 0.3 AND x >= 0.1
-  MAXIMIZE SUM(x)` answers "DECIDE optimization is infeasible" with direct solve on (the default; `A1_SEPARABLE_BOX`
-  answers). With `decide_direct_solve='off'` it answers `x = 0.09999999999999999`, as the Gurobi oracle does.
-  `0.3 / 3` rounds just below `0.1`, so the box is inverted by 1.4e-17. The model builder closes a box inverted by at
-  most one part in 1e9 (`close_rounded_box`, `src/decidb/formulation/ilp_model_builder.cpp`); the direct path's
-  `DirectRowBox` and `DirectBoxIsEmpty` (`direct_bound_reader.cpp`), which A1, A2 and R1 share, do not.
-- **Change.** The direct path reads a box as the builder does: an inversion within the builder's tolerance is one point.
-  The tolerance is one named constant both paths read; the direct side closes the box in `DirectRowBox`, so no rule
-  has its own copy.
-- **Done when.** Oracle tests of `test_edge_cases.py::test_rounded_box_is_one_point`'s cases with direct solve on find
-  the direct plan answering, and fail on the unfixed code; a wider inversion stays infeasible.
-  `./test/decide/run_tests.sh -n 2 -k "rounded_box or a1_separable_box"` passes.
