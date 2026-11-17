@@ -599,10 +599,9 @@ EvaluatedConstraint DecideModelEmitter::AbsEnvelope(idx_t function, idx_t root, 
 	if (clause.abs_aux_idx != value_var) {
 		throw InternalException("DECIDE model emitter: ABS F envelope belongs to a different auxiliary");
 	}
-	// Preserve the lower row's written algebra: reducers contribute all of their members, while terms beside
-	// them contribute once per group. The F edge supplies the instance scope to the root; this row-shape decision
-	// only decides how its expression is evaluated over those routed rows.
-	return clause.lhs_is_aggregate || clause.was_minmax_easy ? Groups(root, counted) : Rows(root, counted);
+	// An envelope row holds no aggregate (stage 05 gives every reducer a function reads a helper decision) and is
+	// built fresh, never the easy half of a MIN/MAX: it is one row per routed instance of the F edge's scope.
+	return Rows(root, counted);
 }
 
 EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
