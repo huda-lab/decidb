@@ -21,15 +21,16 @@ named-column scan also bypass or revisit parts of the normal tree execution; the
 
 - **Problem.** `context/opa_rewrite/review/07_dead_code_opa.md` §§ 1–3 list code nothing reads; its line numbers are
   stale, so find each by name. Present on `OPA-rewrites`: `DecideEvaluationFields`, both `ExecuteOnReadRows`,
-  `DecideListRowMembers`, `AppendPayloadLeaves`, `DecideFrameMap::PeerSize`, `VerifyCountedOnce` (its
-  `row_group_ids` is always empty), `DecideGlobalSinkState::canonicalizer` and `context`, `frame_column_refs`; the
-  write-only fields `repair_rows`, `minmax_easy`, `tightest_bound`, `child_reads` with `DecideTreeRead`,
-  `rows_stand_with_their_class` and `ComposedMinMaxTerm::Kind`; and parameters every caller passes the same value:
-  `EvaluateTree`'s `silent` and `descent`, `FormulateElasticModel`'s `keep_singleton_rows`, `DescentHash`'s `parent`,
-  `DescentRowValues`'s `begin`, `CollectRangeSigns`'s `sign`, `TakeTightestFrameBound`'s `grouped`, `AssignDense`'s
-  `init`. About 200 lines.
+  `DecideListRowMembers`, `AppendPayloadLeaves`, `DecideFrameMap::PeerSize`, `VerifyCountedOnce` (its `row_group_ids` is
+  always empty), `DecideGlobalSinkState::canonicalizer` and `context`, `frame_column_refs`; the write-only fields
+  `repair_rows`, `minmax_easy`, `tightest_bound` and `rows_stand_with_their_class`; and parameters every caller passes
+  the same value: `EvaluateTree`'s `silent` and `descent`, `FormulateElasticModel`'s `keep_singleton_rows`,
+  `DescentHash`'s `parent`, `DescentRowValues`'s `begin`, `CollectRangeSigns`'s `sign`, `TakeTightestFrameBound`'s
+  `grouped`, `AssignDense`'s `init`. About 200 lines.
 - **Change.** Delete them. Keep what the debug dumps read (`DecideNode::hidden`, `l0_auto_m`; EXEC-4 keeps the dumps)
-  and `DecideListMember`, which is live.
+  and `DecideListMember`, which is live. Keep `ComposedMinMaxTerm::kind`, which `decide_rewrite_abs.cpp` and
+  `decide_rewrite_minmax.cpp` read, and `child_reads` with `DecideTreeRead`, which the validation loop in
+  `decide_tree.cpp` reads: deleting it deletes that check.
 - **Done when.** `git grep` finds none of the deleted names; `build/release/test/unittest "[decidb]"` and
   `./test/decide/run_tests.sh -n 2 -k "one_pass or descent or frames"` pass.
 
@@ -79,6 +80,7 @@ named-column scan also bypass or revisit parts of the normal tree execution; the
   thread-local ids, a possible wrong model. I6: a per-class F node under two reducers with different `by` keys can index
   out of bounds. Neither showed at 1 and 8 threads over 500,000 rows (handoff B4, A7 items 6 and 7).
 - **Change.** Enforce each as a check that holds in a release build, or find a query that breaks it and fix the merge.
+- **Needs.** EXEC-8 (its tests reach both checks).
 - **Done when.** EXEC-8's tests reach both checks; `./test/decide/run_tests.sh -n 2 -k descent_merge` passes.
 
 ## EXEC-8 — Real-thread tests for the descent merge
@@ -95,10 +97,11 @@ named-column scan also bypass or revisit parts of the normal tree execution; the
 
 - **Problem.** OPA's last commit message reports 23 suite failures under `DECIDB_DESCENT_SPLIT=1`. Nobody has sorted
   them (handoff § A4, problem 5).
-- **Change.** Run the suite with the split on, then fix each failure that is a defect, and bring the owner, with
-  evidence, each one that reads a thread-dependent detail.
+- **Change.** Run the suite once with the split on (EXEC-4's `split=1`) and file each failure: a defect as its own task
+  in the todo of the stage that owns it, with its query and a focused test; a failure that reads a thread-dependent
+  detail as a **Decision needed** line here, with its evidence.
 - **Needs.** EXEC-4 (the switch takes the one setting's spelling).
-- **Done when.** Every failure is a fix with a test or an owner decision; the split run of the affected files passes.
+- **Done when.** Each of the failures has a task or a **Decision needed** line; the fixes are those tasks.
 
 ## EXEC-10 — A collation error in a frame's order key names the wrong row
 
@@ -106,6 +109,34 @@ named-column scan also bypass or revisit parts of the normal tree execution; the
   own positions, so a collation error names the wrong row (handoff A7, item 8; `done.md` § 1a, D12). The default
   build's collations (`nfc`, `noaccent`, `nocase`) cannot raise on valid UTF-8, so no SQL reaches the error in that
   build.
-- **Change.** Pass the rows' positions. Check whether the ICU extension loads here and has a collation that raises;
-  with one, test the fix through it. With none, the error branch is unreachable: bring the owner that evidence.
-- **Done when.** A test through a raising collation names the right row, or the owner's decision is recorded.
+- **Change.** Pass the rows' positions. Check whether the ICU extension loads here and has a collation that raises on
+  some input.
+- **Done when.** With such a collation, a test through it names the right row. With none, this task records the evidence
+  (the collations tried and what each did) and a **Decision needed** line: keep the branch untested, or delete it as
+  unreachable.
+
+## EXEC-12 — "Takes more than one value" under `per K:` names no group and can pair two classes' values
+
+- **Problem.** Seen on 052b85d26d with `SET decide_direct_solve = 'off'`. Over `t(id, g, cap)` = (1, 'a', 3), (2, 'a',
+  4), (3, 'b', 2), with `x(INT)`, `x >= 0 AND x <= 10 AND per g: sum(x) = t.cap` and `MAXIMIZE SUM(x)`, the error is
+  "`t.cap` takes more than one value here (2 and 4) — an `=` bound cannot hold two different values at once, so this
+  DECIDE query is infeasible." It names no group, and 2 and 4 come from classes b and a; the conflict is inside class a
+  (3 and 4). `sum(x) by (g) = t.cap` gives "... (3 and 4), in the group g = 'a' ...".
+- **Cause.** The check of 9235fbc18e groups by the clause's `by` key and not by its `per` class:
+  `decide_value_extraction.cpp` (the solver path) and `DirectGroupKey` in `direct_plan_fragments.cpp`. Not traced
+  further.
+- **Change.** The check groups by the instance, its `per` class and its `by` key, on both paths, and names the group as
+  `DescribeKeyValues` writes it.
+- **Needs.** EXEC-3 (it edits `decide_value_extraction.cpp`).
+- **Done when.** A test of this query names g = 'a' and (3 and 4) under `off` and `auto`, and an oracle test answers
+  `per g: sum(x) = t.cap` with one cap per class; `./test/decide/run_tests.sh -n 2 -k "<the new tests> or
+  bound_side_tables or error_precedence"` passes.
+
+## EXEC-13 — done.md explains the tree by the deleted flat evaluator
+
+- **Problem.** `done.md` lines 98-461 describe the tree evaluator by comparison with the deleted flat evaluator, with
+  dates and history, where the docs state the current system and its reasons.
+- **Change.** Each passage states the tree's rule in its own terms, as EXEC-6 does for the comments; dates and history
+  go. "Flat" meaning a non-nested objective stays.
+- **Needs.** EXEC-6.
+- **Done when.** Those sections name the flat evaluator nowhere and hold no dates.

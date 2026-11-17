@@ -34,3 +34,13 @@ Measure Q4 (`max(per l_returnflag: sum(keep * l_extendedprice) by (l_returnflag)
 each group sum is a helper decision, defined by one row per group assembled through `BuildMinMaxGroups`, three
 columns and three rows more on a million-row model. Inlining a SUM helper into the one reader that sums it is the
 expected remedy if the cost shows.
+
+## PERF-25 — The pipeline profiler sums spans the tree evaluator does not emit
+
+- **Problem.** `benchmark/decide/profile_pipeline.py` sums `execution.keyed_mapping`, `execution.scope_checks` and
+  `execution.evaluate_*`, which nothing in `src` emits, and leaves out `execution.tree_descent`,
+  `execution.descent_merge` and `execution.tree_model`, which it does, so its extraction time is wrong. `findings.md`
+  and `pipeline_profiler.md` cite the same spans.
+- **Change.** The script sums the spans `src` emits, and the two docs cite them.
+- **Done when.** The script's span list matches the names `src` emits, and one profiled query's extraction time equals
+  the sum of its spans.
