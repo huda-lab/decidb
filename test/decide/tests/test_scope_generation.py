@@ -597,11 +597,14 @@ def test_a_reducer_when_guards_a_function_that_fails_on_its_dropped_rows(decidb_
     [
         pytest.param("t.w > 0 AND ln(t.w) > 1.5", lambda r: r["w"] > 0 and math.log(r["w"]) > 1.5, id="and"),
         pytest.param("t.w <= 0 OR ln(t.w) > 1.5", lambda r: r["w"] <= 0 or math.log(r["w"]) > 1.5, id="or"),
+        # DecideDescent::Truth stops at the second part when the first has decided every row it reads.
+        pytest.param("t.w >= 0 OR ln(t.w) > 1.5", lambda r: r["w"] >= 0 or math.log(r["w"]) > 1.5, id="or-decided"),
     ],
 )
 def test_a_when_reads_its_parts_left_to_right(decidb_cli, scope_solver, condition, holds):
     """`ln(0)` is an error: an AND's second part is read only where its first keeps the row, an OR's only where its
-    first does not, so the row where w is 0 never reaches `ln`."""
+    first does not, so the row where w is 0 never reaches `ln`. An OR whose first part keeps every row reads no
+    second part."""
     columns = ("id", "w", "v")
     rows = ((1, 0.0, 10), (2, 4.0, 20), (3, 9.0, 30))
     sql = f"""
@@ -612,6 +615,30 @@ def test_a_when_reads_its_parts_left_to_right(decidb_cli, scope_solver, conditio
         ORDER BY id"""
     model = ScopedModel(table_rows(columns, rows), [Decision("x")])
     clauses = [X_BOUND, Scoped((lambda r: {"x": 1},), "<=", (lambda r: {CONSTANT: 5},), when=holds)]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (_x_sum(),))
+    result = aligned(answer(decidb_cli, sql), model, "id")
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective)
+    )
+
+
+@pytest.mark.correctness
+def test_an_or_with_a_null_part_keeps_the_row_only_where_another_part_is_true(decidb_cli, scope_solver):
+    """NULL OR TRUE is true and NULL OR FALSE is NULL, which drops the row (DecideDescent::Truth, an OR's NULL
+    part)."""
+    columns = ("id", "a", "b")
+    rows = ((1, True, False), (2, None, True), (3, None, False), (4, False, None), (5, None, None))
+    sql = f"""
+        SELECT id, x {table('t', columns, rows)}
+        DECIDE x(INT)
+        SUCH THAT x <= 9 AND when t.a OR t.b: x <= 3
+        MAXIMIZE SUM(x)
+        ORDER BY id"""
+    model = ScopedModel(table_rows(columns, rows), [Decision("x")])
+    clauses = [
+        Scoped((lambda r: {"x": 1},), "<=", (lambda r: {CONSTANT: 9},)),
+        Scoped((lambda r: {"x": 1},), "<=", (lambda r: {CONSTANT: 3},), when=lambda r: bool(r["a"]) or bool(r["b"])),
+    ]
     objective = ScopedObjective(ObjSense.MAXIMIZE, (_x_sum(),))
     result = aligned(answer(decidb_cli, sql), model, "id")
     assert model.judge_scoped(result, clauses, objective) == pytest.approx(
