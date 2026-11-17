@@ -705,9 +705,15 @@ void DecideModelEmitter::CheckDomain(idx_t root, const EvaluatedConstraint &eval
 	auto written_bound = [&](bool, double) {
 		return QuoteWrittenClause(quoted);
 	};
-	for (idx_t row = 0; row < num_rows; row++) {
+	// The rows its term's site reads, whose members (an easy MIN's or MAX's reducer filter keeps some) each write a
+	// row.
+	const auto site = tree.nodes[root]->compiled.linear[0].node;
+	auto &members = columns.Tested(site);
+	for (auto read : DecideEntryRows(tree, descent, site)) {
+		const auto row = read.first;
 		// A row is written only for an instance: a row in no class of a `per`, or off a `when`, is never checked.
-		if (!evaluated.row_group_ids.empty() && evaluated.row_group_ids[row] == DConstants::INVALID_INDEX) {
+		if (!members[read.second] ||
+		    (!evaluated.row_group_ids.empty() && evaluated.row_group_ids[row] == DConstants::INVALID_INDEX)) {
 			continue;
 		}
 		// The ends it admits, an open end (infinite) leaving the box as it is.
@@ -1171,6 +1177,9 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 	if (counted) {
 		gstate.CountInstances(evaluated.source_clause_id, grouped_instances,
 		                      CountInstances(evaluated.row_group_ids, evaluated.num_groups, num_rows, true));
+		if (clause.admitted_lower) {
+			CheckDomain(root, evaluated);
+		}
 	}
 	return evaluated;
 }

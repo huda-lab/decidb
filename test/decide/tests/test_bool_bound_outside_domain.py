@@ -127,7 +127,8 @@ def test_bool_bound_outside_domain_matches_oracle(decidb_cli, oracle_solver, bou
 @pytest.mark.correctness
 @pytest.mark.parametrize("bound", _BOUNDS, ids=[b[0] for b in _BOUNDS])
 def test_bool_bound_outside_domain_with_when_matches_oracle(decidb_cli, oracle_solver, bound):
-    # The same bound under a `when` that holds on every row is plain arithmetic, the control for the unconditional form.
+    # The same bound under a `when` that holds on every row is plain arithmetic, and its refusal names the clause with
+    # its `when`, as the unconditional form names it.
     sql = f"""
         SELECT id, x FROM (
             SELECT * FROM {_SOURCE}
@@ -138,7 +139,9 @@ def test_bool_bound_outside_domain_with_when_matches_oracle(decidb_cli, oracle_s
     """
     result, names = _solve_oracle(oracle_solver, "bool_bound_outside_domain_when", bound, ("SUM(x) >= 1", ">=", 1.0))
     if result.status == SolverStatus.INFEASIBLE:
-        decidb_cli.assert_error(sql, match=_INFEASIBLE)
+        decidb_cli.assert_error(
+            sql, match=_cannot_hold(f"when id >= 0: {bound[0]}") if bound[0] in _CANNOT_HOLD else _INFEASIBLE
+        )
         return
     assert result.status == SolverStatus.OPTIMAL
     rows, _ = decidb_cli.execute(sql)

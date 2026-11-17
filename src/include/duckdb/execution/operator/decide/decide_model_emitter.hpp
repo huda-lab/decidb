@@ -192,11 +192,12 @@ private:
 	//! A bound on one decision: the values it admits on each row its term is read on, which the model builder folds
 	//! into the decision's column.
 	void Admit(const DecideBody &body, EvaluatedConstraint &evaluated);
-	//! The domain check on each row a per-row bound on one decision writes (the instances `evaluated` keeps): a bound
-	//! the decision's type cannot hold (`per g: x <= -1` on a BOOL or a non-negative INT) is an error naming the
-	//! clause, as for a bound folded into the decision's box (DecideDomainRefusal). Only a bound written as a constant
-	//! is checked, and its box takes the lowest floor any clause lowers the decision to
-	//! (DecideGlobalSinkState::domains), so a clause the solve could satisfy is never refused.
+	//! The domain check on each row a per-row bound on one decision writes (the instances `evaluated` keeps, an easy
+	//! MIN's or MAX's members among them): a bound the decision's type cannot hold (`per g: x <= -1` on a BOOL or a
+	//! non-negative INT) is an error naming the clause, as for a bound folded into the decision's box
+	//! (DecideDomainRefusal). Only a bound written as a constant is checked, and its box takes the lowest floor any
+	//! clause lowers the decision to (DecideGlobalSinkState::domains), so a clause the solve could satisfy is never
+	//! refused.
 	void CheckDomain(idx_t root, const EvaluatedConstraint &evaluated);
 	//! A clause in the grouped shape, the aggregate shape or a MIN or MAX: one model row per group of its `by` key, its
 	//! kept rows grouped by flat's own rules (GroupRowsByShape), or one per member of an easy MIN or MAX; its instances

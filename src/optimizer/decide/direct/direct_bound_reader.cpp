@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "duckdb/common/decide_numeric_policy.hpp"
+#include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
@@ -45,6 +46,26 @@ bool DirectContradictsDomain(const DirectIR &ir) {
 	}
 	for (idx_t decision = 0; decision < written.size(); decision++) {
 		if (written[decision].ContradictsDomain(ir.decisions[decision].domain == DirectDomain::BOOL)) {
+			return true;
+		}
+	}
+	// A bound written as a constant that no box takes (under a `when`) is checked by the solver on each row an instance
+	// keeps (DecideModelEmitter::CheckDomain): against the box above, whose floor is the lowest any clause lowers the
+	// decision to, with the bound's own ends put in. Which rows an instance keeps is known only from the data, so a
+	// rule declines every such bound; the solver then raises the error or, where no row is kept, solves.
+	for (auto &ir_node : ir.constraints) {
+		if (ir_node.aggregate || !ir_node.singleton_row || ir_node.variable_bound ||
+		    !ir_node.bound.constant_on_read_rows) {
+			continue;
+		}
+		auto box = written[ir_node.bound.var_idx].Box();
+		if (std::isfinite(ir_node.bound.upper_value)) {
+			DecideFoldSingletonRow(box, '<', ir_node.bound.upper_value);
+		}
+		if (std::isfinite(ir_node.bound.lower_value)) {
+			DecideFoldSingletonRow(box, '>', ir_node.bound.lower_value);
+		}
+		if (DecideBoxContradictsDomain(box, ir.decisions[ir_node.bound.var_idx].domain == DirectDomain::BOOL)) {
 			return true;
 		}
 	}

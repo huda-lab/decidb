@@ -899,10 +899,6 @@ S3_ERROR_CASES.update(
         "fixed_rows_over_the_budget": (_fixed_problem(0.0), "infeasible"),
         # Row 1 allows neither value: fixed to both.
         "row_allows_neither_value": (_fixed_problem(2.0, "SUM(w*x) <= 9", "x >= lo"), "infeasible"),
-        "constant_bound_no_bool_meets_under_a_when": (
-            _fixed_problem(0.0, "SUM(w*x) <= 9", "when must: x >= 2"),
-            "infeasible",
-        ),
         "nan_fixed_bound": (_fixed_problem("'NaN'", "SUM(w*x) <= 9", "x >= lo"), "null_bound"),
         # One group's fixed rows are over its budget; the other group is fine.
         "fixed_rows_over_one_groups_budget": (

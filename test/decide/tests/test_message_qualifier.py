@@ -96,17 +96,8 @@ _NON_NEGATIVE = "cannot hold because x is non-negative (>= 0). Add an explicit l
 
 
 @pytest.mark.error
-@pytest.mark.parametrize(
-    "scope, mode",
-    [
-        (scope, mode)
-        for scope in _SCOPES
-        for mode in ("off", "auto")
-        # A bound under a `when` alone is answered by direct solve (A1) before the solver's check: `auto` says the
-        # generic infeasible there, where the solver names the clause.
-        if (scope, mode) != ("when p:", "auto")
-    ],
-)
+@pytest.mark.parametrize("mode", ["off", "auto"])
+@pytest.mark.parametrize("scope", _SCOPES)
 def test_a_scoped_bool_bound_refusal_quotes_the_scope(decidb_cli, scope, mode):
     """`CheckDomain`: a scoped bound a BOOL cannot hold (the upper side) names its clause, whether or not the bound
     folds into the decision's box, and a direct solve and the solver print one message."""
@@ -134,6 +125,16 @@ def test_a_per_bound_a_non_negative_decision_cannot_hold_names_its_clause(decidb
 
 
 @pytest.mark.error
+@pytest.mark.parametrize("mode", ["off", "auto"])
+@pytest.mark.parametrize("var, tail", [("x(BOOL)", "cannot hold for a BOOL variable."), ("x(INT)", _NON_NEGATIVE)])
+def test_an_easy_extremum_bound_the_domain_cannot_hold_names_its_clause(decidb_cli, var, tail, mode):
+    """`CheckDomain` on the rows `Groups` writes for the members of an easy MAX under a `per`."""
+    sql = f"SET decide_direct_solve = '{mode}'; " + _select("per g: max(x) <= -1", var=var)
+    stderr = decidb_cli.execute_raw(sql).stderr
+    assert f"infeasible: per g: max(x) <= -1 {tail}" in stderr, stderr
+
+
+@pytest.mark.error
 def test_a_bound_that_reads_the_data_is_not_a_domain_refusal(decidb_cli):
     """`CheckDomain` declines a bound whose ends are not constants (`per g: x <= cap`): the solve and DIAGNOSE report
     it, since the data says whether a row is left that it contradicts."""
@@ -142,12 +143,12 @@ def test_a_bound_that_reads_the_data_is_not_a_domain_refusal(decidb_cli):
     assert "DECIDE optimization is infeasible. Prefix the query with DIAGNOSE" in stderr, stderr
 
 
-def _solves_as_the_oracle(cli, oracle, name, rows, clauses, bounds):
+def _solves_as_the_oracle(cli, oracle, name, rows, clauses, bounds, mode="auto"):
     """DeciDB's objective on `rows` ((id, g) pairs; `g` None is NULL) under `clauses`, and the oracle's over the
     interval `bounds[id]` each `x` takes, which the oracle states itself."""
     values = ", ".join(f"({i}, {'NULL::VARCHAR' if g is None else repr(g)})" for i, g in rows)
     sql = f"SELECT id, x FROM (VALUES {values}) t(id, g) DECIDE x(INT) SUCH THAT {clauses} MAXIMIZE SUM(x)"
-    found, columns = cli.execute(sql)
+    found, columns = cli.execute(f"SET decide_direct_solve = '{mode}'; {sql}")
     oracle.create_model(name)
     for i, _ in rows:
         low, high = bounds[i]
@@ -168,6 +169,21 @@ def test_a_per_bound_no_row_reaches_is_not_checked(decidb_cli, oracle_solver):
         [(1, None), (2, None)],
         "x <= 4 AND per g: x <= -1",
         {1: (0, 4), 2: (0, 4)},
+    )
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("mode", ["off", "auto"])
+def test_an_easy_extremum_bound_no_row_reaches_is_not_checked(decidb_cli, oracle_solver, mode):
+    """The members of `per g: max(x) <= -1` are the rows in a class of `g`: with every `g` NULL it writes none."""
+    _solves_as_the_oracle(
+        decidb_cli,
+        oracle_solver,
+        f"easy_extremum_bound_no_row_reaches_{mode}",
+        [(1, None), (2, None)],
+        "x <= 4 AND per g: max(x) <= -1",
+        {1: (0, 4), 2: (0, 4)},
+        mode,
     )
 
 

@@ -496,16 +496,17 @@ for _op, _bound in itertools.product(("<=", "<", ">=", ">", "="), ("COUNT(*) / 2
         "sense": "MINIMIZE" if _op in (">", ">=") else "MAXIMIZE",
     }
 
-# A per-row bound on x with a `when` is plain arithmetic on a Boolean: the row is left free, fixed to 0 or 1, or
-# infeasible. Without a `when` the solver reads a spelling that cannot hold as a bound on the variable itself, and S1
-# leaves those on the solver (see the conformance fixture), so only spellings S1 admits are checked without one. Per
-# comparison: the constants checked with a `when`, and the constants checked without one.
+# With a `when`, a per-row bound on x leaves the row free or fixes it to 0 or 1. A constant a BOOL cannot hold is left
+# to the solver with or without a `when` (DirectContradictsDomain), and the solver names the clause. Without a `when`
+# the solver reads a spelling that cannot hold as a bound on the variable itself, and S1 leaves those on the solver
+# (see the conformance fixture), so only spellings S1 admits are checked without one. Per comparison: the constants
+# checked with a `when`, and the constants checked without one.
 _ROWBOUND_CONSTANTS = {
     "<=": (("0", "0.5", "1", "1.5"), ("1", "1.5")),
-    "<": (("0", "0.5", "1", "1.5", "2"), ("1", "1.5", "2")),
-    ">=": (("-1", "-0.5", "0", "0.5", "1", "1.5", "2"), ("-1", "-0.5", "0")),
-    ">": (("-1", "-0.5", "0", "0.5", "1", "1.5"), ("-1", "-0.5")),
-    "=": (("0", "1", "2"), ()),
+    "<": (("0.5", "1", "1.5", "2"), ("1", "1.5", "2")),
+    ">=": (("-1", "-0.5", "0", "0.5", "1"), ("-1", "-0.5", "0")),
+    ">": (("-1", "-0.5", "0", "0.5"), ("-1", "-0.5")),
+    "=": (("0", "1"), ()),
     "<>": (("-1", "-0.5", "0", "0.5", "1", "2"), ("-1", "-0.5", "0.5", "1", "2")),
 }
 for _op, (_when_constants, _everywhere_constants) in _ROWBOUND_CONSTANTS.items():
