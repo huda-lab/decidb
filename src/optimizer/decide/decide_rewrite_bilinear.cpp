@@ -88,10 +88,21 @@ static void CollectDecideVarIndices(const Expression &expr, idx_t decide_index, 
 	    expr, [&](const Expression &child) { CollectDecideVarIndices(child, decide_index, out); });
 }
 
-//! Whether a side of a product is a reducer. A reducer is always the whole side: the binder refuses one inside the
-//! arithmetic a decision multiplies ('b is a decision, so it cannot multiply (sum(y) + 1)').
-static bool IsReducer(const Expression &side, idx_t decide_index) {
-	return UnwrapDecideCasts(side, decide_index)->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE;
+//! Whether a reducer stands anywhere in `expr`, a frame's marker included. A side that holds one is not an affine
+//! expression in the decisions (`sum(x) - 3`, `max(x) + 1`): it is the value rewrite's, which holds each reducer in a
+//! helper decision and hands the product back here.
+static bool ContainsReducer(const Expression &expr) {
+	idx_t definition_aux;
+	if (TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
+		return false; // the F node owns this body; ReadAffine reads it as its helper decision
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		return true;
+	}
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(expr,
+	                                      [&](const Expression &child) { found = found || ContainsReducer(child); });
+	return found;
 }
 
 // A factor of a product is read as an affine expression in the decisions: `sum of coefficient * decision + constant`,
@@ -329,10 +340,9 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 				sides.push_back(factor.base);
 			}
 		}
-		// A reducer under a factor (`b * SUM(x)`) is not a product of two variables: it is the value
-		// rewrite's, which holds the reducer in a helper decision and hands the product back here.
-		if (sides.size() == 2 && !IsReducer(*sides[0], decide.decide_index) &&
-		    !IsReducer(*sides[1], decide.decide_index)) {
+		// A reducer in a factor (`b * SUM(x)`, `POWER(SUM(x) - 3, 2)`) is not a product of two variables: it is the
+		// value rewrite's, which holds the reducer in a helper decision and hands the product back here.
+		if (sides.size() == 2 && !ContainsReducer(*sides[0]) && !ContainsReducer(*sides[1])) {
 			// Each side is an affine expression in the decisions, and the product distributes over its terms.
 			Affine left, right;
 			auto is_bool = [&](idx_t var) {

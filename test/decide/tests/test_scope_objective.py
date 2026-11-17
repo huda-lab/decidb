@@ -167,6 +167,12 @@ def test_a_keyed_decision_with_one_instance_counts_once(decidb_cli, scope_solver
             "DECIDE objective: 's * s' multiplies decisions outside a reducer, which is not supported yet",
             id="product-outside-a-reducer",
         ),
+        pytest.param(
+            "MINIMIZE 0 * sum(ship) + power(sum(ship) - 5, 2)",
+            "DECIDE objective: 'power(sum(ship) - 5, 2)' multiplies decisions outside a reducer, which is not "
+            "supported yet",
+            id="square-of-a-reducer-and-more",
+        ),
     ],
 )
 def test_objective_tuple_term_errors(decidb_cli, objective, message):

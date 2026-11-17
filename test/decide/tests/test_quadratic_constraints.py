@@ -1616,3 +1616,111 @@ class TestQuadraticConstraintEdgeCases:
             oracle_solver.solver_name(),
             comparison_status="optimal",
         )
+
+
+# ===================================================================
+# A reducer inside the factor of a square or product
+# ===================================================================
+
+#: (id, g, v): `x <= v` on every row, and `MAXIMIZE sum(x)`.
+_REDUCER_FACTOR_ROWS = [(1, 1, 1), (2, 1, 2), (3, 2, 3), (4, 2, 4)]
+
+
+def _reducer_factor_sql(clause):
+    values = ", ".join(f"({i}, {g}, {v})" for i, g, v in _REDUCER_FACTOR_ROWS)
+    return f"""
+        SELECT id, ROUND(x, 6) AS x
+        FROM (VALUES {values}) t(id, g, v)
+        DECIDE x(REAL)
+        SUCH THAT x <= v AND {clause}
+        MAXIMIZE SUM(x)
+    """
+
+
+def _reducer_factor_model(oracle_solver, name):
+    """The oracle's rows: `x_i` in [0, v_i], maximized in total."""
+    oracle_solver.create_model(name)
+    for i, _, v in _REDUCER_FACTOR_ROWS:
+        oracle_solver.add_variable(f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=float(v))
+    oracle_solver.set_objective({f"x_{i}": 1.0 for i, _, _ in _REDUCER_FACTOR_ROWS}, ObjSense.MAXIMIZE)
+
+
+def _group_sums(oracle_solver):
+    """`s_g` is the sum of group g's `x`; the groups."""
+    groups = sorted({g for _, g, _ in _REDUCER_FACTOR_ROWS})
+    for g in groups:
+        oracle_solver.add_variable(f"s_{g}", VarType.CONTINUOUS, lb=0.0)
+        members = {f"x_{i}": 1.0 for i, gi, _ in _REDUCER_FACTOR_ROWS if gi == g}
+        oracle_solver.add_constraint({**members, f"s_{g}": -1.0}, "=", 0.0, name=f"sum_{g}")
+    return groups
+
+
+def _group_maxima(oracle_solver):
+    """`m_g` is the largest `x` of group g exactly: above each member, and at one member's value."""
+    groups = sorted({g for _, g, _ in _REDUCER_FACTOR_ROWS})
+    for g in groups:
+        members = [(i, v) for i, gi, v in _REDUCER_FACTOR_ROWS if gi == g]
+        big = float(max(v for _, v in members))
+        oracle_solver.add_variable(f"m_{g}", VarType.CONTINUOUS, lb=0.0, ub=big)
+        for i, _ in members:
+            oracle_solver.add_variable(f"z_{i}", VarType.BINARY)
+            oracle_solver.add_constraint({f"m_{g}": 1.0, f"x_{i}": -1.0}, ">=", 0.0, name=f"above_{i}")
+            oracle_solver.add_constraint({f"m_{g}": 1.0, f"x_{i}": -1.0, f"z_{i}": big}, "<=", big, name=f"at_{i}")
+        oracle_solver.add_constraint({f"z_{i}": 1.0 for i, _ in members}, ">=", 1.0, name=f"pick_{g}")
+    return groups
+
+
+@pytest.mark.correctness
+@pytest.mark.quadratic
+class TestReducerInsideAProductFactor:
+    """A factor that holds a reducer and more (`sum(x) - 3`, `max(x) + 1`) is the value rewrite's: each reducer is a
+    helper decision, and the square or product over the helpers is a quadratic row. Each answer is judged against an
+    oracle that states the helpers by hand."""
+
+    @staticmethod
+    def _total(rows, cols):
+        return sum(float(r[cols.index("x")]) for r in rows)
+
+    def test_square_of_a_sum_minus_a_constant(self, decidb_cli_gurobi, oracle_solver):
+        """`power(sum(x) - 3, 2) <= 4`: the total lies in [1, 5], so the answer is 5."""
+        rows, cols = decidb_cli_gurobi.execute(_reducer_factor_sql("power(sum(x) - 3, 2) <= 4"))
+        _reducer_factor_model(oracle_solver, "square_of_a_sum")
+        oracle_solver.add_variable("s", VarType.CONTINUOUS, lb=0.0)
+        oracle_solver.add_constraint(
+            {**{f"x_{i}": 1.0 for i, _, _ in _REDUCER_FACTOR_ROWS}, "s": -1.0}, "=", 0.0, name="total"
+        )
+        # (s - 3)^2 <= 4  <=>  s^2 - 6 s <= -5
+        oracle_solver.add_quadratic_constraint({"s": -6.0}, {("s", "s"): 1.0}, "<=", -5.0, name="square")
+        _assert_oracle_obj(oracle_solver, self._total(rows, cols), tol=1e-3)
+
+    def test_square_of_a_group_sum_minus_a_constant(self, decidb_cli_gurobi, oracle_solver):
+        """`power(sum(x) by (g) - 3, 2) <= 4`: each group's total lies in [1, 5], so the answer is 3 + 5."""
+        rows, cols = decidb_cli_gurobi.execute(_reducer_factor_sql("power(sum(x) by (g) - 3, 2) <= 4"))
+        _reducer_factor_model(oracle_solver, "square_of_a_group_sum")
+        for g in _group_sums(oracle_solver):
+            oracle_solver.add_quadratic_constraint({f"s_{g}": -6.0}, {(f"s_{g}", f"s_{g}"): 1.0}, "<=", -5.0)
+        _assert_oracle_obj(oracle_solver, self._total(rows, cols), tol=1e-3)
+
+    def test_sum_of_squares_over_a_group_maximum(self, decidb_cli_gurobi, oracle_solver):
+        """`sum(power(max(x) by (g) - 1, 2)) <= 2`: every row of a group reads that group's maximum."""
+        rows, cols = decidb_cli_gurobi.execute(_reducer_factor_sql("sum(power(max(x) by (g) - 1, 2)) <= 2"))
+        _reducer_factor_model(oracle_solver, "sum_of_squares_over_a_maximum")
+        _group_maxima(oracle_solver)
+        linear, quadratic, rhs = {}, {}, 2.0
+        for _, g, _ in _REDUCER_FACTOR_ROWS:
+            # (m - 1)^2 = m^2 - 2 m + 1, once per row
+            linear[f"m_{g}"] = linear.get(f"m_{g}", 0.0) - 2.0
+            quadratic[(f"m_{g}", f"m_{g}")] = quadratic.get((f"m_{g}", f"m_{g}"), 0.0) + 1.0
+            rhs -= 1.0
+        oracle_solver.add_quadratic_constraint(linear, quadratic, "<=", rhs, name="squares")
+        _assert_oracle_obj(oracle_solver, self._total(rows, cols), tol=1e-3)
+
+    def test_sum_of_a_group_maximum_plus_one_times_a_decision(self, decidb_cli_gurobi, oracle_solver):
+        """`sum((max(x) by (g) + 1) * x) <= 10`: a helper plus a constant, times a decision."""
+        rows, cols = decidb_cli_gurobi.execute(_reducer_factor_sql("sum((max(x) by (g) + 1) * x) <= 10"))
+        _reducer_factor_model(oracle_solver, "sum_of_a_maximum_times_a_decision")
+        _group_maxima(oracle_solver)
+        linear = {f"x_{i}": 1.0 for i, _, _ in _REDUCER_FACTOR_ROWS}
+        quadratic = {(f"m_{g}", f"x_{i}"): 1.0 for i, g, _ in _REDUCER_FACTOR_ROWS}
+        oracle_solver.add_quadratic_constraint(linear, quadratic, "<=", 10.0, name="products")
+        _assert_oracle_obj(oracle_solver, self._total(rows, cols), tol=1e-3)
