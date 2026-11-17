@@ -692,7 +692,9 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 
 void DecideModelEmitter::CheckDomain(idx_t root, const EvaluatedConstraint &evaluated) {
 	auto &clause = *tree.nodes[root]->compiled.clause;
-	if (!clause.admitted_lower->IsFoldable() || !clause.admitted_upper->IsFoldable()) {
+	// The box check keeps only a lowered floor of an IN's bounds, which diagnosis drops as one clause.
+	if (clause.removal_group_id != DConstants::INVALID_INDEX || !clause.admitted_lower->IsFoldable() ||
+	    !clause.admitted_upper->IsFoldable()) {
 		return;
 	}
 	const auto var = clause.lhs_terms[0].variable_index;
