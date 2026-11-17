@@ -331,10 +331,9 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, const vec
 
 //! The SQL predicate that selects one categorical slice: the column as the query writes it and the value as a SQL
 //! literal (`t.g = 'c'`, `id = 11`), or `col IS NULL` for the column's NULL group. A finding's `group` and the scope of
-//! its `suggested_change` both print the slice through this; it is DescribeKeyValues' `name = literal`, except that a
-//! NULL is tested for, as a `when` must select the group's rows.
+//! its `suggested_change` both print the slice through this.
 static string SlicePredicate(const EscapeRule &r) {
-	return r.column + (r.value.IsNull() ? " IS NULL" : " = " + DecideSqlLiteral(r.value));
+	return DescribeKeyValue(r.column, r.value);
 }
 
 //! The prescribed remedy for a runaway variable: name what to add, never invent the

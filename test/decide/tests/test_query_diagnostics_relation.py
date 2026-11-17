@@ -726,7 +726,7 @@ class TestDiagnosticsRelation:
     def test_infeasible_relation_key_labels_a_null_and_the_string_null_apart(self, request, cli_fixture):
         """INF-2: a `per D` key compares NULL as a value, so a class whose column is NULL and one whose
         column is the string 'NULL' are two classes. A label names the column as the query writes it and
-        the value as a SQL literal, as a determination message writes them: `'NULL'` quoted, NULL bare."""
+        the value as a SQL literal, as a determination message writes them: `'NULL'` quoted, NULL as `IS NULL`."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT tag, x FROM (VALUES (NULL), ('NULL')) D(tag) "
@@ -736,7 +736,7 @@ class TestDiagnosticsRelation:
 
         groups = sorted(r["group"] for r in _flat(result) if r["edit_source"] == "expanded_group")
         # `.mode csv` renders the label NULL and an SQL NULL alike; the quotes tell the string apart.
-        assert groups == ["D.tag = 'NULL'", "D.tag = NULL"], groups
+        assert groups == ["D.tag = 'NULL'", "D.tag IS NULL"], groups
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_written_key_labels_keep_their_plain_form(self, request, cli_fixture):
