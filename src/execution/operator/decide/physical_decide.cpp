@@ -402,14 +402,7 @@ struct UnboundedCandidateProvider {
 		out.column = input_column_names[ci];
 		out.clause_referenced = input_column_in_clause[ci];
 		out.instance_to_group = std::move(row_to_group); // row-indexed
-		out.group_value.resize(num_groups);
-		for (idx_t g = 0; g < num_groups; g++) {
-			auto &value = values[g];
-			out.group_value[g] = value.IsNull() ? "NULL" : value.ToString();
-			if (value.IsNull()) {
-				out.null_group = g;
-			}
-		}
+		out.group_value = std::move(values);
 		return true;
 	}
 
@@ -435,7 +428,6 @@ struct UnboundedCandidateProvider {
 		out.column = rowcg.column;
 		out.clause_referenced = rowcg.clause_referenced;
 		out.group_value = rowcg.group_value;
-		out.null_group = rowcg.null_group;
 		out.instance_to_group.assign(num_classes, DConstants::INVALID_INDEX);
 		vector<bool> seen(num_classes, false);
 		// Both maps have an entry per data row, and a row in no class has the spare class

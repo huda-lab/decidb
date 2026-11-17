@@ -20,7 +20,7 @@ ColumnGrouping ChannelGrouping() {
 	ColumnGrouping cg;
 	cg.column = "channel";
 	cg.instance_to_group = {0, 0, 0, 1, 1, 1};
-	cg.group_value = {"export", "domestic"};
+	cg.group_value = {Value("export"), Value("domestic")};
 	return cg;
 }
 
@@ -29,7 +29,7 @@ ColumnGrouping RegionGrouping() {
 	ColumnGrouping cg;
 	cg.column = "region";
 	cg.instance_to_group = {0, 1, 2, 0, 1, 2};
-	cg.group_value = {"APAC", "US", "EU"};
+	cg.group_value = {Value("APAC"), Value("US"), Value("EU")};
 	return cg;
 }
 
@@ -39,7 +39,7 @@ ColumnGrouping TagGrouping() {
 	ColumnGrouping cg;
 	cg.column = "tag";
 	cg.instance_to_group = {0, 0, 0, 1, 1, 1};
-	cg.group_value = {"a", "b"};
+	cg.group_value = {Value("a"), Value("b")};
 	return cg;
 }
 
@@ -51,7 +51,7 @@ TEST_CASE("DeciDB unbounded escape characterization", "[decidb][query_diagnostic
 		auto rules = CharacterizeEscape(escaping, {ChannelGrouping()}, 0.8);
 		REQUIRE(rules.size() == 1);
 		REQUIRE(rules[0].column == "channel");
-		REQUIRE(rules[0].value == "export");
+		REQUIRE(rules[0].value.ToString() == "export");
 		REQUIRE(rules[0].escaping == 3);
 		REQUIRE(rules[0].total == 3);
 	}
@@ -64,7 +64,7 @@ TEST_CASE("DeciDB unbounded escape characterization", "[decidb][query_diagnostic
 		auto rules = CharacterizeEscape(escaping, {ChannelGrouping()}, 0.6);
 		REQUIRE(rules.size() == 1);
 		REQUIRE(rules[0].column == "channel");
-		REQUIRE(rules[0].value == "export");
+		REQUIRE(rules[0].value.ToString() == "export");
 		REQUIRE(rules[0].escaping == 2);
 		REQUIRE(rules[0].total == 3);
 	}
@@ -77,14 +77,14 @@ TEST_CASE("DeciDB unbounded escape characterization", "[decidb][query_diagnostic
 		auto rules = CharacterizeEscape(escaping, {ChannelGrouping(), RegionGrouping()}, 0.8);
 		REQUIRE(rules.size() == 1);
 		REQUIRE(rules[0].column == "channel");
-		REQUIRE(rules[0].value == "export");
+		REQUIRE(rules[0].value.ToString() == "export");
 
 		// Lower the bar: every region half-escapes (0.5), export fully (1.0). export
 		// must sort first (highest rate).
 		auto all = CharacterizeEscape(escaping, {ChannelGrouping(), RegionGrouping()}, 0.5);
 		REQUIRE(all.size() == 4); // export + APAC + US + EU
 		REQUIRE(all[0].column == "channel");
-		REQUIRE(all[0].value == "export");
+		REQUIRE(all[0].value.ToString() == "export");
 	}
 
 	SECTION("scattered escape clears nothing") {
@@ -117,7 +117,7 @@ TEST_CASE("DeciDB unbounded escape characterization", "[decidb][query_diagnostic
 		auto rules = CharacterizeEscape(escaping, {ChannelGrouping(), tag}, 0.8);
 		REQUIRE(rules.size() == 1);
 		CHECK(rules[0].column == "tag");
-		CHECK(rules[0].value == "a");
+		CHECK(rules[0].value.ToString() == "a");
 	}
 
 	SECTION("distinct slices are never collapsed") {

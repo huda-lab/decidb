@@ -172,11 +172,16 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	// unnamed columns rather than inventing a positional `colN` the user never typed.
 	decide_op->input_column_names.assign(child_bindings.size(), string());
 	decide_op->input_column_in_clause.assign(child_bindings.size(), false);
-	// Names are kept as SQL, quoted where they need it, so a remedy that prints one is
-	// pasteable. Every reference carries its bare column name (a key column's SQL spelling,
-	// `t.depot`, `D."cost"`, is kept beside it in DecideKeyElement::name).
+	// Names are kept as SQL, as the query writes them (`t.depot`, `"my col"`), so a remedy that prints one is
+	// pasteable. A reference is quoted from the DECIDE tail at its query location, as a message quotes a clause; one
+	// the tail does not hold (a column only the SELECT list names, a reference rewritten without its location) keeps
+	// `fallback`: its bare column name, or a relation element's `D.depotID` (DecideKeyElement::name).
 	std::function<void(const Expression &)> harvest;
-	// A key names a column as the key was written (`t.depot`), whichever clause added the key first.
+	auto written_name = [&](const BoundReferenceExpression &ref, const string &fallback) {
+		string text;
+		int binding;
+		return decide_op->source_text.CutExpr(ref.GetQueryLocation(), text, binding) ? text : fallback;
+	};
 	auto harvest_key = [&](idx_t key) {
 		for (auto &element : DecideKeyElements(decide_op->keys, key)) {
 			auto &expr = *element.expression;
@@ -184,11 +189,11 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 				harvest(expr);
 				continue;
 			}
-			auto index = expr.Cast<BoundReferenceExpression>().index;
-			if (index < decide_op->input_column_names.size()) {
-				decide_op->input_column_in_clause[index] = true;
-				if (decide_op->input_column_names[index].empty()) {
-					decide_op->input_column_names[index] = element.name;
+			auto &ref = expr.Cast<BoundReferenceExpression>();
+			if (ref.index < decide_op->input_column_names.size()) {
+				decide_op->input_column_in_clause[ref.index] = true;
+				if (decide_op->input_column_names[ref.index].empty()) {
+					decide_op->input_column_names[ref.index] = written_name(ref, element.name);
 				}
 			}
 		}
@@ -201,7 +206,8 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 				// — recorded even when an earlier reference already supplied the name.
 				decide_op->input_column_in_clause[r.index] = true;
 				if (decide_op->input_column_names[r.index].empty()) {
-					decide_op->input_column_names[r.index] = QuoteColumnName(StripDecideTags(r.GetName()));
+					decide_op->input_column_names[r.index] =
+					    written_name(r, QuoteColumnName(StripDecideTags(r.GetName())));
 				}
 			}
 		}

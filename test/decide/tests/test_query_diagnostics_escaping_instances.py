@@ -468,9 +468,9 @@ class TestEquivalentSlicesCollapse:
         cli = request.getfixturevalue(cli_fixture)
         found = _escape(_rows(_diagnose(cli, self._NARROW)), "buy")
         assert found == [
-            (2, 2, "row", "cap = '0'"),
-            (1, 1, "row", "w = '2'"),
-            (1, 1, "row", "w = '3'"),
+            (2, 2, "row", "cap = 0"),
+            (1, 1, "row", "w = 2"),
+            (1, 1, "row", "w = 3"),
         ]
         # colour/tag describe the very same rows, so they are the coincidences dropped.
         slices = " ".join(slice_ for _, _, _, slice_ in found)

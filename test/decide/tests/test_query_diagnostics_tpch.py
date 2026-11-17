@@ -262,7 +262,7 @@ class TestSolidBranches:
                 extra_pragmas="PRAGMA diagnose_decide_categorical_ratio=0.5;\n",
             )
         )
-        assert _attr(rows, "variable", "escaping_group") == "n_name = 'GERMANY'"
+        assert _attr(rows, "variable", "escaping_group") == "n.n_name = 'GERMANY'"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_E_loosen_should_not_be_degenerate(self, request, cli_fixture):

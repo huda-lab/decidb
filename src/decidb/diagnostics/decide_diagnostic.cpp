@@ -2,7 +2,7 @@
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/parser/keyword_helper.hpp"
+#include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -235,7 +235,6 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, const vec
 			EscapeRule r;
 			r.column = cg.column;
 			r.value = cg.group_value[g];
-			r.value_is_null = g == cg.null_group;
 			r.escaping = esc_members[g].size();
 			r.total = total_count[g];
 			// On a narrow input many columns correlate perfectly with the escape by
@@ -272,7 +271,7 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, const vec
 		if (a.column != b.column) {
 			return a.column < b.column;
 		}
-		return a.value < b.value;
+		return a.value.ToString() < b.value.ToString();
 	});
 
 	// Can the reported rules account for every escaping instance? If so the caller may
@@ -295,7 +294,7 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, const vec
 		if (a.column != b.column) {
 			return a.column < b.column;
 		}
-		return a.value < b.value;
+		return a.value.ToString() < b.value.ToString();
 	});
 	std::set<idx_t> covered;
 	vector<idx_t> cover;
@@ -330,10 +329,12 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, const vec
 	return sorted;
 }
 
-//! The SQL predicate that selects one categorical slice: `col = 'value'`, or `col IS NULL` for the column's NULL
-//! group. A finding's `group` and the scope of its `suggested_change` both print the slice through this.
+//! The SQL predicate that selects one categorical slice: the column as the query writes it and the value as a SQL
+//! literal (`t.g = 'c'`, `id = 11`), or `col IS NULL` for the column's NULL group. A finding's `group` and the scope of
+//! its `suggested_change` both print the slice through this; it is DescribeKeyValues' `name = literal`, except that a
+//! NULL is tested for, as a `when` must select the group's rows.
 static string SlicePredicate(const EscapeRule &r) {
-	return r.column + (r.value_is_null ? " IS NULL" : " = " + KeywordHelper::WriteQuoted(r.value));
+	return r.column + (r.value.IsNull() ? " IS NULL" : " = " + DecideSqlLiteral(r.value));
 }
 
 //! The prescribed remedy for a runaway variable: name what to add, never invent the

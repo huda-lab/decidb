@@ -59,6 +59,34 @@ class TestUnboundedVariableDiagnostics:
         flat = _diagnose_relation.rows(result)
         assert [f["suggested_change"] for f in flat] == ["x <= <cap>"]
 
+    _SLICE_ROWS = "(VALUES (11, 'b'), (12, 'b'), (2, 'a'), (5, 'a')) t(id, g)"
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_a_slice_names_its_column_as_the_clause_writes_it(self, request, cli_fixture):
+        """UNB-2, quoted branch: a column the DECIDE tail reads is named by the text written there (`t.id`, not the
+        bound `id`), and an integer value prints bare. Rows 11 and 12 escape the `when`."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            f"SELECT t.id, t.g, x FROM {self._SLICE_ROWS} "
+            "DECIDE x(REAL) SUCH THAT x >= 0 AND when t.id < 11 AND t.g = 'a': x <= 5 MAXIMIZE SUM(x)"
+        )
+        flat = _diagnose_relation.rows(_diagnose(cli, sql))
+        assert sorted(f["group"] for f in flat) == ["t.g = 'b'", "t.id = 11", "t.id = 12"], flat
+        assert {f["suggested_change"] for f in flat} == {"when t.g = 'b': x <= <cap>"}, flat
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_a_slice_over_a_select_only_column_keeps_the_name_written_there(self, request, cli_fixture):
+        """UNB-2, fallback branch: the tail never reads `g`, so no span of it holds the column and the slice keeps
+        the bare name its SELECT list gave it, though the query wrote `t.g` there."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            f"SELECT t.id, t.g, x FROM {self._SLICE_ROWS} "
+            "DECIDE x(REAL) SUCH THAT x >= 0 AND when t.id < 11: x <= 5 MAXIMIZE SUM(x)"
+        )
+        flat = _diagnose_relation.rows(_diagnose(cli, sql))
+        assert sorted(f["group"] for f in flat) == ["g = 'b'", "t.id = 11", "t.id = 12"], flat
+        assert {f["suggested_change"] for f in flat} == {"when g = 'b': x <= <cap>"}, flat
+
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_unbounded_integer_var_named(self, request, cli_fixture):
         """An INTEGER var is a MILP — on HiGHS this is the INF_OR_UNBD (status 9)
