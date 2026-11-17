@@ -335,6 +335,11 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 	vector<DecideSplitTerm> terms;
 	DecideTermSplitter(context, decide).Split(argument, 1, terms);
 	ExpressionBuilder calc(context);
+	// The tree evaluates the check, so a frame marker keeps its tag and is read at the row the frame selects (`Of`
+	// strips it, which would read the marker as a reducer over the rows).
+	auto tagged = [&](const Expression &expression) {
+		return calc.Wrap(expression.Copy());
+	};
 	DirectNumberNames names;
 	names.clause = clause;
 	ExprPtr total;
@@ -342,7 +347,7 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 		if (!term.IsConstant()) {
 			continue;
 		}
-		ExprPtr value = term.coefficient ? calc.Cast(calc.Of(*term.coefficient), LogicalType::DOUBLE) : calc.Num(1.0);
+		ExprPtr value = term.coefficient ? calc.Cast(tagged(*term.coefficient), LogicalType::DOUBLE) : calc.Num(1.0);
 		value = term.sign < 0 ? calc.Neg(value) : value;
 		total = total ? calc.Add(total, value) : value;
 		// A literal is no column's value, so a message does not name it.
@@ -360,7 +365,7 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 	    std::isfinite(constant)) {
 		return;
 	}
-	auto message = DirectNumberMessage(calc, total, names, [&](const Expression &input) { return calc.Of(input); });
+	auto message = DirectNumberMessage(calc, total, names, tagged);
 	ExprPtr kept = rows ? calc.Wrap(DirectActiveWhen(calc, rows)) : nullptr;
 	auto check_message = calc.Out(DirectOnKeptRows(calc, kept, message));
 	for (auto &check : decide.scope_checks) {

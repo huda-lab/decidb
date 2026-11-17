@@ -777,6 +777,33 @@ def test_a_value_under_abs_is_named_as_written_not_as_a_bound(request, cli_fixtu
     assert _coefficient("b") in stderr, stderr
 
 
+# The term under `ABS` may be a frame (`at(...)`, `sum(from ... to ...: ...)`). The value check reads it at the row the
+# frame selects, as a coefficient does: row 4 reads row 3's infinite value, though row 4's own is finite.
+FRAME_UNDER_ABS = [
+    ("point-else", "at(previous else 0: t.v) over (t.id)", "MINIMIZE SUM(ABS(x - {frame}))", "x BETWEEN 0 AND 10"),
+    ("point", "at(previous: t.v) over (t.id)", "MINIMIZE SUM(ABS(x - {frame}))", "x BETWEEN 0 AND 10"),
+    (
+        "point-in-a-constraint",
+        "at(previous else 0: t.v) over (t.id)",
+        "MINIMIZE SUM(x)",
+        "x BETWEEN 0 AND 10 AND abs(x - {frame}) <= 100",
+    ),
+    ("range", "sum(from previous to next: t.v) over (t.id)", "MINIMIZE SUM(ABS(x - {frame}))", "x BETWEEN 0 AND 10"),
+]
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("name,frame,objective,clauses", FRAME_UNDER_ABS, ids=[case[0] for case in FRAME_UNDER_ABS])
+def test_a_frame_under_abs_is_named_as_written(decidb_cli, name, frame, objective, clauses):
+    rows = "(1, 1.0), (2, 2.0), (3, 'Infinity'::DOUBLE), (4, 1.0)"
+    sql = (
+        f"SELECT id, x FROM (VALUES {rows}) t(id, v) DECIDE x(REAL) SUCH THAT "
+        f"{clauses.format(frame=frame)} {objective.format(frame=frame)}"
+    )
+    stderr = _stderr(decidb_cli, sql, "off")
+    assert _coefficient(frame) in stderr, stderr
+
+
 @pytest.mark.error
 @pytest.mark.parametrize("name,decide,value", BOTH_PATHS_BOUND, ids=[case[0] for case in BOTH_PATHS_BOUND])
 def test_a_bound_that_is_nan_is_named_as_written_on_both_paths(decidb_cli, name, decide, value):

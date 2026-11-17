@@ -979,6 +979,27 @@ class TestPointShapes:
             Objective(ObjSense.MAXIMIZE, At(FIRST, X, Over("period", desc=True))),
         )
 
+    def test_a_data_frame_under_abs_is_read_only_on_the_rows_the_when_keeps(self, decidb_cli, scope_solver):
+        """The value check of an `ABS` argument reads the frame at the row it selects, on the rows the `when` keeps:
+        row 4 would read row 3's infinite value, and it is not kept, so nothing is refused and the sum is 0 (x = 0, 1,
+        2 at rows 1 to 3)."""
+        data = ((1, 1.0), (2, 2.0), (3, float("inf")), (4, 1.0))
+        sql = """SELECT id, x FROM (VALUES (1, 1.0), (2, 2.0), (3, 'Infinity'::DOUBLE), (4, 1.0)) t(id, v)
+            DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND 10
+            MINIMIZE sum(when t.id < 4: abs(x - at(previous else 0: t.v) over (t.id))) ORDER BY id"""
+        frame = At(previous(), Col("v"), Over("id"), fallback=Const(0))
+        objective = Objective(ObjSense.MINIMIZE, reduce("sum", Abs(X - frame), when=lambda row: row["id"] < 4))
+        reached = _judged(
+            decidb_cli,
+            scope_solver,
+            sql,
+            table_rows(("id", "v"), data),
+            [Decision("x")],
+            [clause(le(X, 10)), clause(ge(X, 0))],
+            objective,
+        )
+        assert reached == 0
+
 
 @pytest.mark.error
 class TestPointErrors:
