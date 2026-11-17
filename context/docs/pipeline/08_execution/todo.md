@@ -17,22 +17,6 @@ Other documented edge differences remain in `done.md` §1a: the D88 variant-name
 order for a gated reducer argument, and unreferenced hidden records. Direct-solve rules and DIAGNOSE's separate
 named-column scan also bypass or revisit parts of the normal tree execution; their scope is open.
 
-## EXEC-12 — "Takes more than one value" under `per K:` names no group and can pair two classes' values
-
-- **Problem.** Seen on 052b85d26d with `SET decide_direct_solve = 'off'`. Over `t(id, g, cap)` = (1, 'a', 3), (2, 'a',
-  4), (3, 'b', 2), with `x(INT)`, `x >= 0 AND x <= 10 AND per g: sum(x) = t.cap` and `MAXIMIZE SUM(x)`, the error is
-  "`t.cap` takes more than one value here (2 and 4) — an `=` bound cannot hold two different values at once, so this
-  DECIDE query is infeasible." It names no group, and 2 and 4 come from classes b and a; the conflict is inside class a
-  (3 and 4). `sum(x) by (g) = t.cap` gives "... (3 and 4), in the group g = 'a' ...".
-- **Cause.** The check of 9235fbc18e groups by the clause's `by` key and not by its `per` class:
-  `decide_value_extraction.cpp` (the solver path) and `DirectGroupKey` in `direct_plan_fragments.cpp`. Not traced
-  further.
-- **Change.** The check groups by the instance, its `per` class and its `by` key, on both paths, and names the group as
-  `DescribeKeyValues` writes it.
-- **Done when.** A test of this query names g = 'a' and (3 and 4) under `off` and `auto`, and an oracle test answers
-  `per g: sum(x) = t.cap` with one cap per class; `./test/decide/run_tests.sh -n 2 -k "<the new tests> or
-  bound_side_tables or error_precedence"` passes.
-
 ## EXEC-13 — done.md explains the tree by the deleted flat evaluator
 
 - **Problem.** `done.md` lines 98-461 describe the tree evaluator by comparison with the deleted flat evaluator, with

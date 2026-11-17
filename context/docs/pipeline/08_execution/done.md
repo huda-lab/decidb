@@ -159,9 +159,10 @@ flat did, it names the behaviour the tree keeps from the evaluator it replaced:
   24 whose inputs run to thousands of rows, which run out of memory or time: each piece keeps its key maps' first
   blocks, about 0.5 MB, so an 8,400-row query holds 4.2 GB against 64 MB unsplit. No answer or model differs. Real
   threads make one piece per thread that reads rows. `test_descent_merge.py` runs eight shapes on real threads (a
-  Parquet file of five row groups of 2,048 rows, the writer's smallest, read on four threads), each asserting, from
-  one run, that more than one descent merged (`execution.descent_parts`) and that the answer reaches its solver
-  model's optimum; and four under `split` for what real threads need not reach: a collated key's spellings folding,
+  Parquet file of five row groups of 2,048 rows, the writer's smallest, read on four threads), each running its query
+  until one run merges more than one descent (`execution.descent_parts`), at most five times, since on a busy
+  machine one thread can read every row group, and asserting that every run's answer reaches its solver model's
+  optimum; and four under `split` for what real threads need not reach: a collated key's spellings folding,
   an error's rank rebased, and an F within an F's slots. The descent is a Composite traversal vectorized by
   selection, as
   DuckDB's filters hand a selection vector on: a window of the input at a time, a node's `when` parts, keys and σ fields
@@ -809,12 +810,17 @@ The `VALUE_IS_VALID` checks the bound-side rewrite (`RewriteRhsAggregates`, stag
 (`DirectRetainRowChecks`) and raised by the tree before any clause is read (`DecideTreeColumns::CheckData`): a bound's
 NaN, a NaN in a bound-side reducer's argument (the reducer skips a NULL, as SQL does), or an `=` bound that takes two
 values in its group (`` `<bound>` takes more than one value here (a and b), in the group t.g = 'a' ... infeasible.``).
-The group is named as the query writes its key (`DecideBoundDisagreementMessage` through `DescribeKeyValues`, the
-spelling DIAGNOSE uses); a bound over the whole query names none. Direct solve prints the same text through
-`__internal_decide_bound_disagreement`, an internal scalar function that calls the same C++ renderer, so the spelling
-rule is written once. A collated key may print another spelling of its group on each path: a row's own on the direct
-plan, the group's least on the solver path. Both name the group, and matching them would cost a window per key
-column. An empty group is no check: a reducer over no rows is NULL, so its instance is skipped where the clause is
+An `=` bound under `per K:` is checked per group and class first, then per group (`AddDisagreementCheck`): a class
+whose rows hold two values is named with its group (`in the group g = 'a'`), and two classes holding one value
+each name none, since a group merges its classes' instances into one constraint. The checks stand among the scope
+checks, after the bound's NaN check, whether or not a direct-solve rule takes the clause, so every path raises the
+same one. The group is named
+as the query writes its key (`DecideBoundDisagreementMessage`, called through the internal scalar function
+`__internal_decide_bound_disagreement`, and `DescribeKeyValues`, the spelling DIAGNOSE uses); a bound over the
+whole query names none. A collated key prints the spelling on the row that raises the check. A frame bound's check
+is the tree's, made as it reads the frame (`TakeTightestFrameBound`), and prints its group's least spelling; no
+direct-solve rule takes a frame.
+An empty group is no check: a reducer over no rows is NULL, so its instance is skipped where the clause is
 read (D68; below).
 
 Groups come from the descent's dictionaries (`DecideKeyMap`): a row with NULL in a written key column

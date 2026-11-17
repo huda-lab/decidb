@@ -391,7 +391,9 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     a rule's `DirectGroupSink`: N1 and S3 a window through `DirectWindowSink`; S1, R1 and A2 their hash aggregate
     through `DirectAggregateSink`), so a direct plan has no side table for them. Only the solver path records their
     aggregates (`RecordGroupBound`, from `RecordReducedBounds`), and it returns the checks in the order a rule raises
-    them: every bound's per-row reads, then each bound's NaN limit and `=` agreement. A reducer on another `by` key, a
+    them: every bound's per-row reads, then each bound's NaN limit. An `=` bound's NaN limit and agreement are scope
+    checks the bound-side rewrite makes before any rule runs, in that order (`AddDisagreementCheck`), so every
+    path raises the same one. A reducer on another `by` key, a
     qualified reducer, a column beside a reducer and a sum with its own `when` are recorded on the direct path too
     (`DirectIR::bounds_to_record`), and read from side tables.
   - Every value a bound reads is checked first, by VALUE_IS_VALID scope checks appended after the planner's: a

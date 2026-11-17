@@ -182,21 +182,26 @@ reducer (`avg(per t.h: max(t.v) by (t.g, t.h)) by (t.g)`, guide §5.5) is record
 grouped by its path key over the rows its path keeps (`DecideReducerPath`), NULL on a row
 in no group of it; the table built after it reads its column, so the reducer around it
 skips that member as a NULL. Such a bound is never a group bound a rule computes itself. A reducer over data alone
-inside one over decisions, on a clause's left side or in the objective (`sum(x - avg(t.v) by (t.h)) by (t.g)`), is
-recorded the same way, over its path from the reducer around it (`ReplaceDataUnderDecisions`), its column replacing it
+on a clause's left side or in the objective, inside one over decisions (`sum(x - avg(t.v) by (t.h)) by (t.g)`) or in
+none (`abs(x - max(t.id) by (t.g))`), is recorded the same way, over its path from the reducers around it
+(`ReplaceDataUnderDecisions`; the empty path in none), its column replacing it
 in the argument and in the NULL test `SkipNullData` put in the filter. It is read there as a coefficient, so its
 argument's check refuses an infinity as well as a NaN (`read_as`, `DecideValueRole::COEFFICIENT`); a bound's refuses a
 NaN only. The column takes the query location of the reducer it stands for (`DecideReplaces`), so a message
 quotes `max(cap) by (g)` as written and never calls it a column, and carries `BOUND_REDUCER_TAG`, so a signature reads
 it as its key alone and the tree reads it whole. A frame selector's value
 is a column stage 08 computes from the rows it selects, so no side table reads one: a frame in a row-wise bound stays
-in it, read as a column is; in a bound of a clause over groups it stays only where it has one value per group -- a
+in it, read as a column is, so an infinite value is a bound as a column's is (guide §3);
+in a bound of a clause over groups it stays only where it has one value per group -- a
 `first` or `last` frame whose timeline key the group key holds -- and execution checks its NaN as it reads it. One
 that needs its group's tightest value (D85) has its comparison tagged `FRAME_TIGHTEST_BOUND_TAG`, which survives the
 rebuilds that give a bound a new node, and execution takes that value from the rows it reads (stage 08), in the groups
-that hold an instance. A column's tightest value is the group's MIN or MAX in the side table (`DirectTightestBound`),
-whose `=` check (two values in one group) speaks only where each of the clause's reducers with a `when` of its own
-keeps a row of the group (`DecideGroupBound::held`): a group with none holds no instance and constrains nothing, so
+that hold an instance. A column's tightest value is the group's MIN or MAX in the side table (`DirectTightestBound`).
+An `=` bound's checks are scope checks made before any rule runs: its NaN check, then its `=` check (two values in
+one group, `AddDisagreementCheck`), which groups by class before any rule can; the NaN check stands with it, so
+every path raises the same error of the two. Another bound's NaN check is an input of the rule that computes the
+bound, which adds no pass to its plan. The `=` check speaks only where each of the clause's reducers with a `when`
+of its own keeps a row of the group: a group with none holds no instance and constrains nothing, so
 its bound is not read (guide §7.4), as a frame's is not. A reducer over data whose argument reads a frame stays a reducer over the rows it
 reads, tagged with its entry of `LogicalDecide::frame_aggregates` (its path key and its own `per` key,
 `MakeFrameAggregate`); the linear form makes it a trailing frame column (`DecideFrameColumn::Kind::AGGREGATE`, a second
@@ -431,7 +436,8 @@ emits `aux >= inner` and `aux >= -inner`.
 The data of an ABS argument is checked where the ABS is read, before the envelope turns
 it into a bound on the auxiliary (`AddAbsValueCheck`): the sum of the argument's terms
 that hold no decision (`-v` in `ABS(x - v)`) must be finite on every row the ABS is read
-on. A row where it is not raises the message every number the model reads raises
+on. Each term is copied with its tags, so a frame among them is read at the row it selects, as a
+coefficient's is. A row where the sum is not finite raises the message every number the model reads raises
 (`DirectNumberMessage`, shared with the direct-solve plans): the first of its values that
 is NaN or infinite, as the user wrote it, or, when each is finite and their sum passes a
 DOUBLE, the clause or objective with `computes a number too large for a DOUBLE`. So the
@@ -548,7 +554,10 @@ value with the cast policy's folder, so a written-out expression such as
 `x IN (1-3, 2)` qualifies exactly like the literal `x IN (-2, 2)` does. Neither
 affects correctness: the indicator encoding is exact with or without them. Every row
 the IN generates keeps the clause's `when`, as an L0 norm's links do (`EnterDecideScope` /
-`ScopeHelperRow` in `decide_optimizer.cpp`), so a row the `when` drops is never read. The
+`ScopeHelperRow` in `decide_optimizer.cpp`), and its `per K:` (`ScopeRowPerClause`), so a row the `when` drops,
+or whose key is NULL and so in no class (guide §6.2), is never read. Such a row takes the signature of the fields
+it reads itself (D70), not the written clause's: over a data domain it reads per-row indicators, so it stays one
+per row, as its indicators are. The
 indicators are defined by the decision and its domain, so their scope is the join of the two
 (`ScopeOf`: `JoinScopes` over the leaves an expression reads; a decision brings its declared
 scope, a query-wide value is query-wide, any other column is row data), and their rows are
@@ -582,8 +591,10 @@ a data constant, through `+`, `-`, a data factor, a data divisor and casts. The 
 `b * (x - 1)` is `b * x - b` and `(2 * b - 1) * (x - 1)` has four terms. Each pair holding a Boolean gets one auxiliary,
 and the pairs are merged (`(b + d) * (d + b)` holds `b * d` once); a Boolean squared is itself; a pair of non-Booleans
 stays a product for the Q-matrix path. A factor that is not affine is left in place. A factor that holds a reducer
-anywhere, a frame's marker included (`b * SUM(x)`, `POWER(SUM(x) - 3, 2)`, `max(x) + 1`), is not a product of variables
-to this pass: the value rewrite holds each reducer in a helper and hands the product back (`FindAndReplaceBilinear`). A
+anywhere (`b * SUM(x)`, `POWER(SUM(x) - 3, 2)`, `max(x) + 1`; `DecideCanonicalizer::ContainsReducer`, the one test
+every pass asks) is not a product of variables to this pass: the value rewrite holds each reducer in a helper and
+hands the product back (`FindAndReplaceBilinear`). A frame's marker is no reducer (D80): `at(F: e)` selects one row per
+row (deck pp. 43, 71), so this pass takes `x * at(previous: x) over (t.id)` as a product. A
 body its definition F node owns is not such a reducer: `ReadAffine` reads it as its helper decision.
 
 **The auxiliary's scope is `JoinScopes` of its factors' scopes**, the least upper bound, as DuckDB promotes a binary
@@ -687,6 +698,8 @@ A comparison whose decision side one model row per `by` group cannot hold is in 
 **VALUE shape**: a per-row or keyed decision beside a reducer (deck example 1,
 `ship <= 0.20 * sum(ship)`), a factor on a reducer that varies by row, reducers with
 different `by` keys, a reducer inside another expression, a reducer holding a reducer.
+Only a reducer over decisions counts (`ContainsDecisionReducer`): a reducer over data alone is a coefficient
+(guide §5.5), so `abs(x - max(t.id) by (t.g)) <= 2` is per-row, as it is without `abs`.
 Stage 04 decides the shape once
 (`CanonicalConstraintClass::VALUE`, `VALUE_REWRITE_TAG`, stage 04 §3.10); this pass reads
 the tag and turns the clause into an ordinary per-row one, so stage 06 needs no new
@@ -839,7 +852,7 @@ column bound, which bound absorption folds into the box (below). A *hard* direct
 rewrites to a `SUM` tagged with the clause (`EmitHardMinMaxClause`), which keeps the
 reducer's `by`; stage 06 creates the extremum column and any binaries its link needs.
 Equality splits into both: the easy half is a copy of the comparison under the clause's
-`when` and `per K:`, the hard half the rebuilt `SUM`. Which way a clause pushes a term —
+`when` and `per K:` (`ScopeRowPerClause`), the hard half the rebuilt `SUM`. Which way a clause pushes a term —
 down under `<=` for a positive term, up for a negative one, the mirror under `>=`, nowhere
 under `=` or an unknown sign — is read once, in `ExtremumPushOf` (`decide_cast_policy.hpp`),
 by this pass, the composed pass and the value rewrite alike; MAX pushed down and MIN pushed

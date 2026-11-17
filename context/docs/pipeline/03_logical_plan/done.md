@@ -373,7 +373,13 @@ left; the objective's accounts, and the rows a rewrite added for the objective (
 under the objective. The hard MIN/MAX carrier (`__minmax_clause_`) prints as the reducer
 it marks, so its row repeats the clause and is left out; a MIN/MAX or composed objective
 prints its accounts and no carrier row, an AVG objective its sum under its account; an
-automatic L0 link's placeholder bound (`L0_AUTO_BOUND_TAG`) prints as `M`. An `IN` under
+L0 link's constants print by the names the user writes or sets them with: an automatic bound
+(`L0_AUTO_BOUND_TAG`) as `M`, a written one (`L0_WRITTEN_BOUND_TAG`) as the number in `norm(e, 0, M)`, and the
+tolerance (`L0_TOLERANCE_TAG`) as `decide_l0_tolerance`. A rewrite's row prints its clause's scope as written
+(`per region:`, and no `when true:` the query did not write; `DecideObjectiveQualifier` for the objective's
+rows), drops a zero the rewrite wrote (`IsRewriteZero`: a numeric constant with no query location, so `0 + v`
+prints `v`), and prints a DOUBLE constant the rewrite wrote as a plain number (`RewriteNumberText`: `>= 0`).
+An `IN` under
 a scope keeps the qualifier of the wrappers above it in its source info
 (`ScopedInQualifier`), so a suggested edit pastes back with its scope; an infinity norm
 echoes its order quoted (`norm(e, 'inf')`). The diagnosis labels of a hard MIN/MAX and
