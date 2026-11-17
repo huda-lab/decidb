@@ -289,6 +289,35 @@ def test_explain_analyze_states_a_helper_written_where_it_is_read_once(decidb_cl
 
 
 @pytest.mark.explain
+@pytest.mark.parametrize(
+    "clause, line",
+    [
+        # A bound that reads the data: class `a` holds two values of `k`, so the instances outnumber the classes.
+        pytest.param(
+            "per t.g: sum(x) <= t.k * 20",
+            "↳pert.g:9constraintsfrom3classes,oneperdistinct(t.k)withinaclass",
+            id="aggregate-bound-reads-data",
+        ),
+        pytest.param(
+            "per t.g: x <= t.k + 3",
+            "↳pert.g:12constraintsfrom3classes,oneperdistinct(x,t.k)withinaclass",
+            id="per-row-bound-reads-data",
+        ),
+        # One value of `cap` in each class: one instance per class, nothing to say.
+        pytest.param("per t.g: sum(x) <= t.cap", None, id="one-variant-per-class"),
+        # A bound that reads no column holds no field, so its signature is empty.
+        pytest.param("per t.g: sum(x) <= 20", None, id="no-field"),
+    ],
+)
+def test_explain_analyze_counts_the_variants_of_every_per_clause(decidb_cli, clause, line):
+    text = _analyze(decidb_cli, _classes_query(clause))
+    if line:
+        assert line in text, text
+    else:
+        assert "withinaclass" not in text, text
+
+
+@pytest.mark.explain
 def test_explain_parenthesizes_an_or_under_an_and_in_a_reducers_when(decidb_cli):
     """AND binds tighter than OR, so the canonical reading of a clause keeps the parentheses the OR was written in."""
     text = _plan(

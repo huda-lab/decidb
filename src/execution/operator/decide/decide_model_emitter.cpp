@@ -1045,6 +1045,16 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 	// Each kept row's group of the `by` key: its slot in the clause's G of that key, numbered by value.
 	const auto keyed = clause.group_key != DConstants::INVALID_INDEX;
 	const auto by = keyed ? ByReducer(root) : DConstants::INVALID_INDEX;
+	// A `per K:` that names classes is one instance per class and distinct value its fields read (D70), as a per-row
+	// clause's (Classes), though its groups merge the instances.
+	if (clause.scope.per == DecideClauseScope::PerRole::NAMES_CLASSES &&
+	    clause.scope.signature != DConstants::INVALID_INDEX) {
+		auto &signature = op.signatures[clause.scope.signature];
+		const auto variants = Variants(root, &signature, false);
+		if (variants.count > variants.num_classes) {
+			op.RecordVariants(signature, "constraints", variants.count, variants.num_classes);
+		}
+	}
 	vector<idx_t> group_of(num_rows, DConstants::INVALID_INDEX);
 	idx_t num_key_groups = 0;
 	if (keyed) {
