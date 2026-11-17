@@ -8,13 +8,14 @@ Covers boundary conditions that other test files don't exercise:
   - Zero rows (empty result after WHERE) — returns empty result like SQL
   - Feasibility problem (no MAXIMIZE/MINIMIZE) — returns any feasible solution
   - NULL values in coefficient columns — error: NULLs rejected with COALESCE hint
+  - A box that rounding inverted by one part in 1e9 is one point; a wider inversion stays infeasible
 """
 
 import time
 
 import pytest
 
-from solver.types import VarType, ObjSense
+from solver.types import VarType, ObjSense, SolverStatus
 from comparison.compare import compare_solutions
 
 
@@ -1103,3 +1104,72 @@ def test_gurobi_highs_agree_on_objective(decidb_cli_highs, decidb_cli_gurobi):
     highs_obj = sum(float(r[h_ci["cost"]]) * int(r[h_ci["b"]]) for r in highs_rows)
     gurobi_obj = sum(float(r[g_ci["cost"]]) * int(r[g_ci["b"]]) for r in gurobi_rows)
     assert abs(highs_obj - gurobi_obj) <= 1e-4, f"Solver disagreement: HiGHS={highs_obj}, Gurobi={gurobi_obj}"
+
+
+# One query shape per case: `k * x <= rhs AND x >= floor`, with the cap `rhs / k` rounded in floating point just
+# below the floor the user wrote as the same number. The oracle gets the row as written, and its own feasibility
+# tolerance holds it.
+_ROUNDED_BOX = {
+    # SolverModel::Build, the per-variable box: closing it leaves one point
+    "per_variable_box": ("3", "0.3", "0.1", "MAXIMIZE SUM(x)", True),
+    # The same box at a magnitude where the gap (1.2e-7) is far past 1e-9 and inside one part in 1e9 of the cap:
+    # the tolerance is relative to the cap
+    "tolerance_scales_with_cap": ("3", "1962965963.1", "654321987.7", "MAXIMIZE SUM(x)", True),
+    # SolverModel::Build, a global auxiliary's box: MAX(x)'s column is boxed from the inverted decision box
+    "auxiliary_box": ("3", "0.3", "0.1", "MINIMIZE MAX(x)", True),
+    # An inversion of 1e-4 is a real one: no tolerance closes it
+    "wide_inversion_stays_infeasible": ("3", "0.2997", "0.1", "MAXIMIZE SUM(x)", False),
+}
+
+
+@pytest.mark.edge_case
+@pytest.mark.cons_perrow
+@pytest.mark.correctness
+@pytest.mark.parametrize("case", list(_ROUNDED_BOX))
+def test_rounded_box_is_one_point(decidb_cli, oracle_solver, case):
+    """A bound divided by its coefficient can land one ulp below the floor beside it.
+
+    `3 * x <= 0.3` folds to `x <= 0.0999...` (0.3 / 3 rounds below 0.1) and `x >= 0.1` is the floor, so the
+    box is inverted by 1.4e-17 although the two bounds are, in exact arithmetic, one point. The model builder
+    closes a box inverted by at most one part in 1e9 (`close_rounded_box`); without it every case here but the last
+    is answered infeasible on both backends, while the oracle, which holds the row to its feasibility tolerance,
+    solves it. The last case is the other side of the tolerance: a gap of 1e-4 is infeasible for both.
+    """
+    coefficient, rhs, floor, objective, feasible = _ROUNDED_BOX[case]
+    # The solver path: the model builder is what is under test, and direct solve answers a single-decision box on its
+    # own.
+    sql = f"""
+        SET decide_direct_solve='off';
+        SELECT id, x
+        FROM (VALUES (1), (2)) t(id)
+        DECIDE x(REAL)
+        SUCH THAT {coefficient} * x <= {rhs} AND x >= {floor}
+        {objective}
+    """
+    n = 2
+    oracle_solver.create_model(f"rounded_box_{case}")
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.CONTINUOUS, lb=float(floor))
+        oracle_solver.add_constraint({f"x_{i}": float(coefficient)}, "<=", float(rhs))
+    if "MAX(x)" in objective:
+        oracle_solver.add_variable("peak", VarType.CONTINUOUS, lb=float(floor))
+        for i in range(n):
+            oracle_solver.add_constraint({f"x_{i}": 1.0, "peak": -1.0}, "<=", 0.0)
+        oracle_solver.set_objective({"peak": 1.0}, ObjSense.MINIMIZE)
+    else:
+        oracle_solver.set_objective({f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE)
+    result = oracle_solver.solve()
+
+    if not feasible:
+        assert result.status == SolverStatus.INFEASIBLE
+        decidb_cli.assert_error(sql, match=r"optimization is infeasible")
+        return
+
+    assert result.status == SolverStatus.OPTIMAL
+    rows, cols = decidb_cli.execute(sql)
+    xs = [float(r[cols.index("x")]) for r in rows]
+    assert len(xs) == n
+    obj = max(xs) if "MAX(x)" in objective else sum(xs)
+    assert abs(obj - result.objective_value) <= 1e-6 * max(
+        1.0, abs(result.objective_value)
+    ), f"Objective mismatch: DeciDB={obj}, Oracle={result.objective_value}"
