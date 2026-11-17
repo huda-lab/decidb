@@ -408,6 +408,63 @@ def test_an_equal_bound_with_two_values_names_its_group_on_every_path(decidb_cli
         assert expected in result.stderr, (mode, result.stderr)
 
 
+CLASS_BOUND_ROWS = "(VALUES (1, 'a', 1, 3), (2, 'a', 1, 4), (3, 'b', 1, 2), (4, 'b', 2, 5)) t(id, g, h, cap)"
+
+
+@pytest.mark.parametrize(
+    "clause, group",
+    [
+        # Class a holds 3 and 4 and class b holds 2: the group of the whole query takes (2 and 4), which no class does.
+        pytest.param("per g: sum(x) = t.cap", "g = 'a'", id="the-class-is-named"),
+        # Class a's rows read 3 and 4 in the group h = 1, where class b reads 2.
+        pytest.param("per g: sum(x) by (h) = t.cap", "h = 1, g = 'a'", id="the-by-key-and-the-class"),
+        # The class lies in the `by` group: one group of the key is one class.
+        pytest.param("per g: sum(x) by (g, h) = t.cap", "g = 'a', h = 1", id="a-class-within-the-by-key"),
+    ],
+)
+def test_an_equal_bound_names_the_class_whose_two_values_it_takes(decidb_cli, clause, group):
+    """`per K:` is one instance per class and the groups merge them: the two values are one class's, not two classes'."""
+    sql = f"""SELECT id, x FROM {CLASS_BOUND_ROWS} DECIDE x(INT) SUCH THAT x >= 0 AND x <= 10 AND {clause}
+        MAXIMIZE SUM(x)"""
+    for mode in ("off", "auto"):
+        result = decidb_cli.execute_raw(f"SET decide_direct_solve = '{mode}'; {sql}")
+        assert f"takes more than one value here (3 and 4), in the group {group} — an `=` bound" in result.stderr, (
+            mode,
+            result.stderr,
+        )
+
+
+def test_an_equal_bound_two_classes_take_one_value_each_names_no_class(decidb_cli):
+    """Class a holds 3 and class b holds 2: each class has one value, but the groups merge the instances, so the whole
+    query takes two and no class holds both."""
+    sql = """SELECT id, x FROM (VALUES (1, 'a', 3), (2, 'a', 3), (3, 'b', 2)) t(id, g, cap) DECIDE x(INT)
+        SUCH THAT x >= 0 AND x <= 10 AND per g: sum(x) = t.cap MAXIMIZE SUM(x)"""
+    for mode in ("off", "auto"):
+        result = decidb_cli.execute_raw(f"SET decide_direct_solve = '{mode}'; {sql}")
+        assert "`t.cap` takes more than one value here (2 and 3) — an `=` bound" in result.stderr, (mode, result.stderr)
+
+
+@pytest.mark.correctness
+def test_an_equal_bound_of_one_value_in_each_class_is_the_oracles(decidb_cli, scope_solver):
+    """`per g: sum(x) = cap` with the one cap of each class holds in every class at once: the oracle's optimum."""
+    records = [
+        {"id": 1, "g": "a", "cap": 3.0, "p": 5.0},
+        {"id": 2, "g": "a", "cap": 3.0, "p": 4.0},
+        {"id": 3, "g": "b", "cap": 3.0, "p": 3.0},
+        {"id": 4, "g": "b", "cap": 3.0, "p": 2.0},
+    ]
+    clauses = [Scoped((Reduce("sum", _x),), "=", (_const(lambda r: r["cap"]),), per=("g",))]
+    model = ScopedModel(records, [X])
+    optimum = model.solve_scoped(scope_solver, clauses, MAXIMIZE_P)
+    rows = ", ".join(f"({r['id']}, '{r['g']}', {int(r['cap'])}, {int(r['p'])})" for r in records)
+    source = f"(VALUES {rows}) t(id, g, cap, p)"
+    sql = f"SELECT id, x FROM {source} DECIDE x(BOOL) SUCH THAT per g: sum(x) = cap MAXIMIZE SUM(p * x) ORDER BY id"
+    for mode in ("off", "auto"):
+        rows, columns = run(decidb_cli, sql, mode)
+        result = aligned([dict(zip(columns, row)) for row in rows], model, "id")
+        assert model.judge_scoped(result, clauses, MAXIMIZE_P) == pytest.approx(optimum), mode
+
+
 @pytest.mark.parametrize("macro", ["a", "max(a)"], ids=["a-scalar-macro", "an-aggregate-macro"])
 def test_a_macro_named_sum_does_not_capture_a_norm(decidb_cli, macro):
     """A norm is DECIDE syntax. Its marker parses as SUM(e), so a macro by that name took it: a scalar one raised

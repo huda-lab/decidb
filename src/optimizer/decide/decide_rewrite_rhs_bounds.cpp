@@ -97,6 +97,7 @@ public:
 		idx_t inserted = 0;
 		for (auto &bound : decide.reduced_bounds) {
 			when = bound.when;
+			class_key = bound.class_key;
 			auto messages = RecordGroupBound(bound.comparison->Cast<BoundComparisonExpression>(), *bound.group);
 			auto position = decide.scope_checks.begin() + NumericCast<int64_t>(bound.check_position + inserted);
 			for (auto &message : messages) {
@@ -349,6 +350,7 @@ private:
 		DecideReducedBound bound;
 		bound.comparison = &comparison;
 		bound.when = when;
+		bound.class_key = class_key;
 		bound.group = std::move(group);
 		bound.check_position = decide.scope_checks.size();
 		decide.reduced_bounds.push_back(std::move(bound));
@@ -567,15 +569,44 @@ private:
 			for (auto aggregate : group.held) {
 				held.push_back(columns[aggregate]);
 			}
-			// The group the row is in, as the query writes its key.
-			DirectGroupKey key;
-			for (auto &element : DecideKeyElements(decide.keys, GroupKeyIndex(comparison))) {
-				key.names.push_back(element.name);
-				key.values.push_back(calc.Of(*element.expression));
+			// The group the row is in, as the query writes its key, and with its class of the clause's `per K:`.
+			const auto by = GroupKeyIndex(comparison);
+			DirectGroupKey group_key;
+			auto name = [&](DirectGroupKey &key, idx_t key_index) {
+				for (auto &element : DecideKeyElements(decide.keys, key_index)) {
+					if (std::find(key.names.begin(), key.names.end(), element.name) == key.names.end()) {
+						key.names.push_back(element.name);
+						key.values.push_back(calc.Of(*element.expression));
+					}
+				}
+			};
+			name(group_key, by);
+			// A `per K:` makes one instance per class of each group, and the groups merge them, so the bound holds one
+			// value in each class and in each group. The finer is checked first, so two values of one class name it.
+			const auto within_class = FindOrCreateDecidePathKey({by, class_key}, decide.keys);
+			if (within_class != by) {
+				auto extremum = [&](idx_t aggregate) {
+					auto &input = group.inputs[group.aggregates[aggregate].input];
+					DecideBoundAggregate record;
+					record.function = group.aggregates[aggregate].function->Copy();
+					if (input.argument) {
+						record.arguments.push_back(input.argument->Copy());
+					}
+					record.key = within_class;
+					return calc.Col(group.aggregates[aggregate].function->return_type,
+					                RecordAggregate(std::move(record), Reads(input.filter.get())));
+				};
+				DirectGroupKey class_group;
+				name(class_group, by);
+				name(class_group, class_key);
+				messages.push_back(
+				    calc.Out(DirectOnKeptRows(calc, Kept(),
+				                              DirectBoundDisagreement(calc, group.text, extremum(group.low),
+				                                                      extremum(group.high), held, class_group))));
 			}
 			messages.push_back(calc.Out(DirectOnKeptRows(
 			    calc, Kept(),
-			    DirectBoundDisagreement(calc, group.text, columns[group.low], columns[group.high], held, key))));
+			    DirectBoundDisagreement(calc, group.text, columns[group.low], columns[group.high], held, group_key))));
 		}
 		comparison.right = std::move(DirectIsUpperBound(comparison.type) ? group.upper : group.lower);
 		DirectReplaceColumns(comparison.right, placeholders, values);

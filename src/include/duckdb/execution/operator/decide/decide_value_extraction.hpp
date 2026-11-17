@@ -243,10 +243,13 @@ void HoistAvgIntoNotEqualBound(const DecideConstraint &constraint, vector<TermFi
 //! remains of those groups once a clause's rules have dropped some (empty: all of one group), and a group it no longer
 //! holds has no instance, so no bound to read (D68). So does a group holding a row of `null_rows`, a
 //! NULL its left side reads, which DecideAbsence::SkipNullInstances drops next. An `=` bound that takes two values in a
-//! group names the group by its key (`group_names`, whose values `key_values` reads).
+//! group names the group by its key (`group_names`, whose values `key_values` reads); one that takes two in a class of
+//! the group (`per K:` makes one instance per class) names the class too, and is raised first (`class_ids` numbers each
+//! row's class, empty without a `per K:` that names classes; `class_names` names them).
 void TakeTightestFrameBound(ExpressionType comparison, const string &written, const vector<bool> &kept,
                             const vector<bool> &bound_null, const vector<idx_t> &kept_groups,
                             const vector<idx_t> &instances, idx_t num_groups, const vector<GroupName> &group_names,
+                            const vector<idx_t> &class_ids, const vector<GroupName> &class_names,
                             const vector<SolverInput::KeyValues> &key_values, vector<double> &rhs,
                             vector<bool> &null_rows);
 

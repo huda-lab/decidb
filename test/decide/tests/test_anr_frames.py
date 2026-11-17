@@ -2325,6 +2325,44 @@ class TestATightestFrameBound:
         assert "takes more than one value here (3 and 4), in the group t.g = 'a'" in result.stderr, result.stderr
         assert_no_internal_leak(result, "an = frame bound with two values")
 
+    # `previous` reads NULL, 3, 4 in group a and NULL, 2 in group b; each class of `k` lies in one timeline.
+    CLASSED_TIGHT = ("id", "g", "s", "c", "k")
+    CLASSED_TIGHT_ROWS = (
+        (1, "a", 1, 3.0, "p"),
+        (2, "a", 2, 4.0, "p"),
+        (3, "a", 3, 9.0, "p"),
+        (4, "b", 1, 2.0, "q"),
+        (5, "b", 2, 6.0, "q"),
+    )
+
+    @pytest.mark.parametrize(
+        "clause, group",
+        [
+            # The class `k = 'p'` holds both values: it is named, as the group of the whole query has no key.
+            pytest.param("per t.k: sum(x) = {frame}", "t.k = 'p'", id="the-class-is-named"),
+            # The class and the `by` key name the group together.
+            pytest.param("per t.k: sum(x) by (t.g) = {frame}", "t.g = 'a', t.k = 'p'", id="the-by-key-and-the-class"),
+            # A class key that is the `by` key names its column once.
+            pytest.param("per t.g: sum(x) by (t.g) = {frame}", "t.g = 'a'", id="a-column-of-both-is-named-once"),
+        ],
+    )
+    def test_an_equal_bound_names_the_class_whose_two_values_it_takes(self, decidb_cli, clause, group):
+        """`per K:` is one instance per class, and the groups merge them: the two values come from one class."""
+        frame = f"at(previous: t.c) {OVER_S}"
+        sql = f"""SELECT id, x {table('t', self.CLASSED_TIGHT, self.CLASSED_TIGHT_ROWS)} DECIDE x(REAL)
+            SUCH THAT x <= 100 AND {clause.format(frame=frame)} MAXIMIZE sum(x)"""
+        result = decidb_cli.execute_raw(sql)
+        assert f"takes more than one value here (3 and 4), in the group {group} —" in result.stderr, result.stderr
+
+    def test_an_equal_bound_two_classes_take_one_value_each_names_no_class(self, decidb_cli):
+        """`previous` reads NULL, 3 in class p and 4 in class q: each class holds one value, but the groups merge the
+        classes' instances, so the group of the whole query takes two and no class holds both."""
+        rows = ((1, "a", 1, 3.0, "p"), (2, "a", 2, 4.0, "p"), (3, "a", 3, 9.0, "q"), (4, "b", 1, 2.0, "r"))
+        sql = f"""SELECT id, x {table('t', self.CLASSED_TIGHT, rows)} DECIDE x(REAL)
+            SUCH THAT x <= 100 AND per t.k: sum(x) = at(previous: t.c) {OVER_S} MAXIMIZE sum(x)"""
+        result = decidb_cli.execute_raw(sql)
+        assert "takes more than one value here (3 and 4) — an `=` bound" in result.stderr, result.stderr
+
     @pytest.mark.parametrize(
         "clause, total",
         [

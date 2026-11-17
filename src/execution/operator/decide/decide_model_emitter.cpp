@@ -1163,9 +1163,17 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 		// Taken once every rule that drops an instance has run but the next, which reads `null_rows`, after every part
 		// of the clause.
 		try {
+			// The classes of a `per K:` that names them, which an `=` bound that disagrees names beside its group.
+			vector<idx_t> class_ids;
+			vector<GroupName> class_names;
+			if (clause.scope.per == DecideClauseScope::PerRole::NAMES_CLASSES &&
+			    evaluated.comparison_type == ExpressionType::COMPARE_EQUAL) {
+				KeyClasses(root, class_ids, class_names);
+			}
 			TakeTightestFrameBound(evaluated.comparison_type, RenderDecideSource(*clause.rhs_expr, names), kept,
 			                       bound_null, kept_row_group_ids, evaluated.row_group_ids, evaluated.num_groups,
-			                       evaluated.group_names, key_values, evaluated.rhs_values.MutableDense(), null_rows);
+			                       evaluated.group_names, class_ids, class_names, key_values,
+			                       evaluated.rhs_values.MutableDense(), null_rows);
 		} catch (std::exception &ex) {
 			// After every part of the clause: its terms and its product groups are part 0.
 			auto rank = tree.nodes[root]->clause_rank;

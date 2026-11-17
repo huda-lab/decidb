@@ -314,6 +314,8 @@ struct DecideReducedBound {
 	Expression *comparison = nullptr;
 	//! The clause's `when` (it is in the constraint tree), or null.
 	const Expression *when = nullptr;
+	//! The key of the clause's `per K:` (an index into `keys`), INVALID_INDEX for none or `per ()`.
+	idx_t class_key = DConstants::INVALID_INDEX;
 	unique_ptr<DecideGroupBound> group;
 	//! Where the bound's checks go in `scope_checks`: its size when the bound was recorded.
 	idx_t check_position = 0;
