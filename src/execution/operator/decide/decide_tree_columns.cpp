@@ -409,15 +409,16 @@ vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, const vector<bool
 		    }
 		    throw InternalException("DECIDE tree: a coefficient's input has no program");
 	    }};
-	// A coefficient's message names its clause where DeciDB's own arithmetic left the DOUBLE range, a helper's member
-	// the helper's reducer as written, which every clause reading it shares; a bound's never.
+	// A coefficient's message names its clause where DeciDB's own arithmetic left the DOUBLE range, as the clause is
+	// written: a helper's member names the clause that first read the helper (DecideNode::value_link_clause); a bound's
+	// never.
 	auto &owner = *tree.nodes[program.owner];
 	const ValueSource source {
 	    program.role == DecideProgramRole::COEFFICIENT ? DecideValueRole::COEFFICIENT : DecideValueRole::BOUND,
 	    *program.written,
 	    names,
 	    context,
-	    owner.link == DConstants::INVALID_INDEX ? written_clause(owner.source_clause_id) : owner.text,
+	    written_clause(owner.link == DConstants::INVALID_INDEX ? owner.source_clause_id : owner.value_link_clause),
 	    inputs ? &computed_from : nullptr};
 	vector<double> out;
 	out.reserve(count);

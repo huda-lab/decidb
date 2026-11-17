@@ -884,10 +884,9 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 		auto &members = link.members;
 		// A member is its expression negated with its constant apart, the shape the extremum link takes; the equality
 		// reads it the same way. Its columns are accumulated: a keyed decision may stand in several terms, and a row
-		// states each column once. A helper serves every clause that reads it, so a sum past a DOUBLE names it as
-		// written.
+		// states each column once. A sum past a DOUBLE names the clause that first read the helper, as written.
 		auto fill_member = [&](idx_t m, MinMaxLinkRow &member) {
-			member_terms.BeginForDecisions(indexer, members.member_begin[m + 1] - members.member_begin[m], link.label);
+			member_terms.BeginForDecisions(indexer, members.member_begin[m + 1] - members.member_begin[m], written);
 			for (idx_t t = members.member_begin[m]; t < members.member_begin[m + 1]; t++) {
 				if (members.coefficients[t] != 0.0) {
 					member_terms.Add(static_cast<int>(indexer.Get(members.variables[t], members.rows[t])),
@@ -911,7 +910,7 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 				// the value against (`value >= sum` when they push it down, `value <= sum` when up), the equality only
 				// when both sides are needed. The members' columns are accumulated first: a keyed decision may stand
 				// in several members of the group, and a row states each column once.
-				sum_terms.BeginForDecisions(indexer, 0, link.label);
+				sum_terms.BeginForDecisions(indexer, 0, written);
 				double constants = 0.0;
 				for (idx_t m = span.first; m < span.last; m++) {
 					for (idx_t t = members.member_begin[m]; t < members.member_begin[m + 1]; t++) {
@@ -920,7 +919,7 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 							              -members.coefficients[t]);
 						}
 					}
-					AddCoefficient(constants, members.constants[m], link.label);
+					AddCoefficient(constants, members.constants[m], written);
 				}
 				MinMaxLinkRow sum;
 				sum_terms.Flush(sum.indices, sum.coefficients);

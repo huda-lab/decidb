@@ -1677,8 +1677,8 @@ void DecideModelEmitter::ValueLinks() {
 					}
 				}
 				if (!std::isfinite(constant)) {
-					throw InvalidInputException(
-					    DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, tree_node.value_link_label));
+					throw InvalidInputException(DecideInvalidValueMessage(
+					    DecideValueRole::TOO_LARGE, op.WrittenClause(tree_node.value_link_clause)));
 				}
 				spec.members.AddMember(constant);
 				for (idx_t term = 0; term < variables.size(); term++) {

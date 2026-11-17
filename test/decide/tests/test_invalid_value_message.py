@@ -289,11 +289,12 @@ TOO_LARGE = [
         "1e308",
     ),
     # A nested objective's group sums are a helper decision (D81), each read by one member of the maximum, so written into
-    # it (D89): the maximum's member computes the sum, and it names the reducer holding it as written.
+    # it (D89): the maximum's member computes the sum, and it names the clause that first read the helper, the objective,
+    # as written.
     (
         "group_sums_of_a_nested_objective",
         "x(REAL), per (): y(REAL) SUCH THAT x <= 5 AND y <= 1 MINIMIZE max(per g: sum(b * y) by (g))",
-        "max(per g: sum(b * y) by (g))",
+        "MINIMIZE max(per g: sum(b * y) by (g))",
         "1e308",
     ),
 ]
@@ -477,6 +478,64 @@ def test_a_helper_big_m_past_a_double_names_the_clause_as_written(decidb_cli_hig
     assert _too_large("MAX(per id: SUM(y + c) BY (id)) >= 0") in stderr, stderr
 
 
+# A helper decision (the two-level form's group sum or extremum) is defined where its first reader reads it, and a sum
+# of its members past a DOUBLE names that clause as written, not the reducer as the plan prints it (lowercased, with
+# its `by`). `by (b)` puts both rows in one group, and each of `b`'s 1e308 is finite. A sum read twice costs a column
+# and a definition (InliningAddsNoNonzero), so those cases read it in two clauses. (name, DECIDE clauses, the clause
+# the message names, the backends that reach the site.)
+HELPER_SUMS = [
+    # SparseCoeffAccumulator::BeginForDecisions of a member: one row's two terms read `y` at the same row.
+    (
+        "like_terms_in_an_extremum_member",
+        "y(REAL) SUCH THAT y <= 5 AND MAX(PER (): MAX(b * y + b * AT(FIRST: y) OVER (a)) BY (b)) >= 0 "
+        "MAXIMIZE SUM(y)",
+        "MAX(PER (): MAX(b * y + b * AT(FIRST: y) OVER (a)) BY (b)) >= 0",
+        ["decidb_cli_gurobi"],
+    ),
+    # BeginForDecisions of a group's sum: the group's rows read the query-wide `s` with `b` each.
+    (
+        "like_terms_in_a_group_sum",
+        "y(REAL), z(REAL), PER (): s(REAL) SUCH THAT y <= 5 AND z <= 5 AND s <= 5 AND "
+        "MAX(PER (): SUM(y + z + b * s) BY (b)) >= 0 AND MAX(PER (): SUM(y + z + b * s) BY (b)) <= 10 "
+        "MAXIMIZE SUM(y)",
+        "MAX(PER (): SUM(y + z + b * s) BY (b)) >= 0",
+        ["decidb_cli_gurobi", "decidb_cli_highs"],
+    ),
+    # AddCoefficient on the constants of a group's sum: `b` of each row.
+    (
+        "constants_of_a_group_sum",
+        "y(REAL), z(REAL) SUCH THAT y <= 5 AND z <= 5 AND MAX(PER (): SUM(y + z + b) BY (b)) >= 0 AND "
+        "MAX(PER (): SUM(y + z + b) BY (b)) <= 10 MAXIMIZE SUM(y)",
+        "MAX(PER (): SUM(y + z + b) BY (b)) >= 0",
+        ["decidb_cli_gurobi", "decidb_cli_highs"],
+    ),
+    # DecideTreeColumns::Numbers: one member's coefficient of `s`, `b + b`, is past a DOUBLE where it is read.
+    (
+        "coefficient_of_a_member",
+        "y(REAL), PER (): s(REAL) SUCH THAT y <= 5 AND s <= 5 AND MAX(PER (): MAX(b * s + b * s + y) BY (b)) >= 0 "
+        "MAXIMIZE SUM(y)",
+        "MAX(PER (): MAX(b * s + b * s + y) BY (b)) >= 0",
+        ["decidb_cli_gurobi", "decidb_cli_highs"],
+    ),
+    # DecideModelEmitter::ValueLinks: one member's constant, `b + b`, is past a DOUBLE.
+    (
+        "constants_of_a_member",
+        "y(REAL) SUCH THAT y <= 5 AND MAX(PER (): SUM(y + b + b) BY (b)) >= 0 MAXIMIZE SUM(y)",
+        "MAX(PER (): SUM(y + b + b) BY (b)) >= 0",
+        ["decidb_cli_gurobi", "decidb_cli_highs"],
+    ),
+]
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("mode", ["off"])
+@pytest.mark.parametrize("name,decide,written,backends", HELPER_SUMS, ids=[case[0] for case in HELPER_SUMS])
+def test_a_helper_sum_past_a_double_names_the_clause_as_written(request, mode, name, decide, written, backends):
+    for backend in backends:
+        stderr = _stderr(request.getfixturevalue(backend), _huge_query(decide), mode)
+        assert _too_large(written) in stderr, stderr
+
+
 # HiGHS only: Gurobi states MIN/MAX natively and needs no bound on `y`. An open end asks for its bound, not the clause.
 @pytest.mark.error
 @pytest.mark.parametrize("mode", ["off"])
@@ -606,11 +665,12 @@ DERIVED_SOLVER = [
         "y(REAL) SUCH THAT y <= 5 MINIMIZE SUM(y) + MAX(b * y + b * y)",
         "MINIMIZE SUM(y) + MAX(b * y + b * y)",
     ),
-    # Like terms merged in a reducer a row-varying factor scales, which a helper decision holds: it names the reducer.
+    # Like terms merged in a reducer a row-varying factor scales, which a helper decision holds: it names the clause
+    # that first read the helper, as written.
     (
         "reducer_under_a_row_factor",
         "y(REAL) SUCH THAT y <= 5 AND c * SUM(b * y + b * y) <= 10 MAXIMIZE SUM(y)",
-        "sum(b * y + b * y)",
+        "c * SUM(b * y + b * y) <= 10",
     ),
 ]
 
