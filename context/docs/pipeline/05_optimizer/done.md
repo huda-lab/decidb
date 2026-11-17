@@ -985,6 +985,10 @@ before the query runs (a `BETWEEN` arrives as its two comparisons, split by the 
 into one `DecideBoundBox` per decision (`singleton_row_boxes` on `LogicalDecide`), and
 tags the comparison `SINGLETON_ROW_BOUND_TAG` so physical extraction skips it.
 
+A clause that skips rows does not fold: a `when` holds on some rows only, and a `per` whose key holds a written
+column skips each row whose key is NULL (`language/guide.md` §6.2), which no box over the whole column says. Each
+stays a model row, `per t.g: x <= 10` among them, whether or not a key is NULL: the pass runs before any row is read.
+
 A comparison that holds a frame selector is no bound on one decision: it reads another row, or nothing, which no
 interval over the row says. A comparison a rewrite left holding an auxiliary alone (`abs(x - at(previous: x) over
 (...)) <= K` as `a <= K`) does fold: where the frame has no value the auxiliary's definition is skipped, so the box

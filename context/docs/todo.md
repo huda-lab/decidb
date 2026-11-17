@@ -9,12 +9,11 @@ Checks: `direct_solve/framework/todo.md` § How to work any task in these todo f
 ## 8. Debug-build run (needs: 9, 11) (one lane)
 - [ ] TEST-6 One suite run on a debug build — testing/todo.md § TEST-6
 
-## 9. Smaller defects (parallel: OPT-11 | PLAN-4 | OPT-12 | EXEC-12 | OPT-13 | OPT-15 | OPT-14)
+## 9. Smaller defects (parallel: OPT-11, OPT-14 | OPT-12, OPT-15 | EXEC-12, PLAN-4)
 - [ ] OPT-11 `per g: x IN (...)` constrains the NULL-key row — pipeline/05_optimizer/todo.md § OPT-11
 - [ ] PLAN-4 EXPLAIN's rewrite rows print text the query did not write — pipeline/03_logical_plan/todo.md § PLAN-4
 - [ ] OPT-12 A value check over a point frame never raises — pipeline/05_optimizer/todo.md § OPT-12
 - [ ] EXEC-12 The `per` bound disagreement names its group — pipeline/08_execution/todo.md § EXEC-12
-- [ ] OPT-13 Decision: fold a `per` over a written column? — pipeline/05_optimizer/todo.md § OPT-13
 - [ ] OPT-15 A data reducer under ABS in a constraint raises — pipeline/05_optimizer/todo.md § OPT-15
 - [ ] OPT-14 Three helpers ask whether an expression holds a reducer — pipeline/05_optimizer/todo.md § OPT-14
 

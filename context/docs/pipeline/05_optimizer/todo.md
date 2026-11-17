@@ -40,16 +40,6 @@ files.
 - **Done when.** A test shows the four queries name the frame, and an oracle test answers the ABS query under
   `when isfinite(...)`; `./test/decide/run_tests.sh -n 2 -k "<the new tests> or invalid_value or abs or frame"`
   passes.
-## OPT-13 — A `per` over a written column never folds into the box
-
-- **Problem.** `decide_singleton_row_folding.cpp` (4f4cb0acfc) stops the box fold for any `per` key that holds a written
-  column (null mode `NO_GROUP`), whether or not a key is NULL, so every `per t.g: x <= c` is a model row. The answers
-  are the same; the cost is model size and speed. The commit's subject names the NULL key only.
-- **Decision needed.** Keep it and say in done.md that a written `per` key always stays a row, or fold where no key is
-  NULL.
-- **Done when.** The owner's ruling is recorded and done.md states it; for folding, oracle tests with and without a
-  NULL-key row pass, and `./test/decide/run_tests.sh -n 2 -k "singleton_row or message_qualifier"` passes.
-
 ## OPT-14 — Three helpers ask whether an expression holds a reducer
 
 - **Problem.** Three functions answer "does this expression hold a reducer?", each with its own exceptions:
@@ -63,9 +53,9 @@ files.
   The bilinear one counts a frame's marker because the side test it replaced (`IsReducer`: the side is an aggregate)
   did. `x * (at(previous else 0: x) over (t.id) + 1) <= 5` and three other frame products answer the same whether
   or not the marker counts.
-- **Change.** One function, in the canonicalizer's header, used by all three. **Decision needed:** whether a frame's
-  marker over decisions counts as a reducer for the bilinear rewrite; the answer decides whether the bilinear rewrite
-  or the value rewrite takes `x * at(previous: x)`.
+- **Change.** One function, in the canonicalizer's header, used by all three.
+- **Ruling (2026-11-17).** A frame's marker is no reducer, as D80 reads it in the canonicalizer: the deck calls
+  `at(F: e)` a point selection evaluated once per tuple (pp. 43, 71). The bilinear rewrite takes `x * at(previous: x)`.
 - **Done when.** One definition remains; `./test/decide/run_tests.sh -n 2 -k "bilinear or quadratic or frame or
   scope_objective or canonical"` passes.
 

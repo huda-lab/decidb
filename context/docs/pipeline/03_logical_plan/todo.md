@@ -16,6 +16,9 @@ files.
   bound. `test_explain.py::test_abs_clause_shows_its_source_and_account` asserts counts `>= 4` and `>= 3`, so it cannot
   see this.
 - **Change.** Each rewrite row prints its scope as the clause wrote it and its bound without the rewrite's zero terms. A
-  row with no written text of its own (the L0 constant) is **Decision needed**: how it is spelled.
+  constant the query did not write prints by the name the user writes or sets it with.
+- **Ruling (owner, 2026-11-17).** L0's link rows print `M` where M comes from the bounds, the number as written where
+  the query writes `norm(e, 0, M)`, and `decide_l0_tolerance` for the tolerance: `M * (x <> 0) - x >= 0`,
+  `abs(x) - decide_l0_tolerance * (x <> 0) >= 0`.
 - **Done when.** `test_abs_clause_shows_its_source_and_account` has exact expectations, and a test of the `per region`
   shape shows `per region` and no `when true:`; `./test/decide/run_tests.sh -n 2 -k explain` passes.
