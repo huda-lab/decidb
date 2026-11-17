@@ -107,6 +107,55 @@ def test_each_dump_asked_for_is_printed_once(decidb_cli):
     assert " x <= sum(t.d)\n  row 0 -> " in result.stderr, result.stderr
 
 
+DUMP_ROWS = (
+    "(VALUES (1, 'a', 3.0::DOUBLE, 2.0, true), (2, 'a', 5.0, 1.0, false), (3, 'b', 1.0, 4.0, true)) t(id, g, c, w, p)"
+)
+
+#: One query per shape of node or program the dumps print differently, each naming the printer arm no other case
+#: reaches (decide_tree.cpp ToString, decide_tree_compile.cpp BodiesToString and its helpers, decide_descent.cpp Step).
+DUMP_SHAPES = {
+    # An O node: ToString's FRAME arm, Step's FRAME arms (a row's `@position`), a hole reading the frame's column.
+    "a-frame": ("DECIDE x(REAL)", "x <= 9 AND x <= at(previous else t.w: t.c) over (t.id)"),
+    # A range's `else`: BodiesToString's fallback.
+    "a-range-else": ("DECIDE x(REAL)", "x <= 9 AND x <= sum(from previous to next else t.w: x) over (t.id)"),
+    # A bound that reads a frame and may differ within a group: RoleName's TIGHTEST_BOUND.
+    "a-tightest-bound": (
+        "DECIDE x(REAL)",
+        "x <= 9 AND sum(x) by (t.g) <= at(previous else 10: t.c) over (t.id within t.g)",
+    ),
+    # An F node of an ABS that needs no Big-M: ToString's FUNCTION and ABS arms, no indicator.
+    "an-abs": ("DECIDE x(REAL), y(REAL)", "x <= 9 AND x >= abs(y)"),
+    # An F node of a Boolean product: ToString's BOOLEAN_PRODUCT arm; the helper of a sum under it, PhaseName's
+    # VALUE_LINKS.
+    "a-boolean-product": ("DECIDE x(INT), b(BOOL)", "x <= 9 AND x + b * sum(when t.p: x) by (t.g) <= 5"),
+    # A composed MIN/MAX clause: PhaseName's COMPOSED and Head's root.
+    "a-composed-clause": ("DECIDE x(REAL)", "x <= 4 AND sum(x) + max(ln(t.c) * x) <= 100"),
+    # A query-wide scale, read as a program column of its operand: ProgramLines' columns.
+    "a-program-column": ("DECIDE x(REAL)", "x <= 9 AND (SELECT 2.0) * sum(t.c * x) by (t.g) <= 5"),
+    # A key of two columns: the containers' and Step's keys printed with a value after the first.
+    "a-key-of-two-columns": ("DECIDE x(INT)", "x <= 9 AND per t.g, t.p: sum(x) <= 3"),
+    # A G whose key extends its parent's: Step's `parent/key` arm.
+    "a-key-under-its-parent": (
+        "DECIDE x(INT)",
+        "x <= 9 AND per t.g: sum(when t.p per t.id: max(x) by (t.id)) by (t.g) <= 5",
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", list(DUMP_SHAPES))
+def test_every_dump_on_leaves_the_answer_as_it_was(decidb_cli, shape):
+    """The dumps read the tree and its containers and change nothing: with every one on, the query answers what it
+    answers with `decide_debug` empty, and each dump is printed. No printed text is pinned."""
+    decide, clause = DUMP_SHAPES[shape]
+    query = f"SELECT id, x FROM {DUMP_ROWS} {decide} SUCH THAT {clause} MAXIMIZE sum(x) ORDER BY id"
+    plain = debugged(decidb_cli, "", query, "-json")
+    dumped = debugged(decidb_cli, "tree,bodies,containers,values,steps", query, "-json")
+    assert plain.returncode == 0 and dumped.returncode == 0, (plain.stderr, dumped.stderr)
+    assert json.loads(dumped.stdout) == json.loads(plain.stdout)
+    for dump in ("TREE", "BODIES", "CONTAINERS", "VALUES", "STEP"):
+        assert f"DECIDB_{dump}_BEGIN" in dumped.stderr, dumped.stderr
+
+
 def test_steps_print_the_containers_after_each_piece_the_descent_reads(decidb_cli):
     """`steps` at `chunk=1` is the deck's animation: after row 1 the sum's group holds row 0, after row 2 both."""
     result = debugged(decidb_cli, "steps,chunk=1")
