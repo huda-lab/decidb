@@ -143,16 +143,27 @@ flat did, it names the behaviour the tree keeps from the evaluator it replaced:
   its errors take their ranks at their rebased rows (`DecideErrorLedger::Rebase`). Each is found again in the order
   the thread made it, which is its rows', so the merged containers number as one descent over every row would. An O
   two reducers' operands read takes its rows in the slots of both, which no enclosing slot tells apart: its entries
-  keep none once merged, which no reader reads. A set E is an E per K or per () alone (`IsSetNode`): every other node,
+  keep none once merged, which no reader reads, and a node that names a parent slot in no single node's slots raises
+  an internal error there (`PartParent`). A class's layout and sort key hold no id a thread numbers for itself: a
+  keyed scope whose classes come from a definition's signature that reads a decision other than a query-wide one
+  raises an internal error at the merge (`DecideDescent::Merge`), which no suite query reaches. A set E is an E per K
+  or per () alone (`IsSetNode`): every other node,
   an F among them, keeps an entry per row it holds, each an instance of its own, and merges as a G's entries do. An F
   reached along several paths within another F's slots (an L0 indicator over an ABS, each per class) numbers its slots
   path by path within each piece of rows, so its numbering follows how the rows were cut, at chunk size 1 or merged
   one row at a time alike; the model does not. Before 2026-11-15 an F per class was laid out as a set E, which Store
   never filled, and the inner F of that pair merged before the outer's slots: either crashed the merge of a table
   scanned on two threads or more (`abs(sum(x) by (t.g)) <= 5` over 130,000 rows).
-  `decide_debug`'s `split=n` merges every `n` rows as a thread of its own
-  would (`test_descent_merge.py`; the whole suite passes under it, but for the inputs of tens of thousands of rows a
-  descent per row cannot read within their time limits). It is a Composite traversal vectorized by selection, as
+  `decide_debug`'s `split=n` merges every `n` rows as a thread of its own would. Under `split=1` (2026-11-17;
+  `DECIDB_TEST_DECIDE_DEBUG=split=1` sets it for every query of a suite run, `decidb_cli.py`) every test passes but
+  24 whose inputs run to thousands of rows, which run out of memory or time: each piece keeps its key maps' first
+  blocks, about 0.5 MB, so an 8,400-row query holds 4.2 GB against 64 MB unsplit. No answer or model differs. Real
+  threads make one piece per thread that reads rows. `test_descent_merge.py` runs eight shapes on real threads (a
+  Parquet file of five row groups of 2,048 rows, the writer's smallest, read on four threads), each asserting, from
+  one run, that more than one descent merged (`execution.descent_parts`) and that the answer reaches its solver
+  model's optimum; and four under `split` for what real threads need not reach: a collated key's spellings folding,
+  an error's rank rebased, and an F within an F's slots. The descent is a Composite traversal vectorized by
+  selection, as
   DuckDB's filters hand a selection vector on: a window of the input at a time, a node's `when` parts, keys and σ fields
   execute only on the rows that reach it (`Reach`: the rows, and the enclosing slot each arrives in), and each key's
   rows find their slots in a `DecideKeyMap` (`decide_key_map.hpp`). That is DuckDB's GROUP BY hash table
@@ -161,7 +172,10 @@ flat did, it names the behaviour the tree keeps from the evaluator it replaced:
   outside an enclosing slot share its dictionary (a Flyweight, `SharedDictionary`), each numbering its own slots in the
   order its rows reach them. A key is evaluated once on a row of a window, by the first node that reads it there, and
   every later read slices those values (`KeyReads`); a row a read raised on is not held, so each node reading it raises
-  at its own rank. `DecideTree::Validate` checks at plan time that the descent reads of a row only its nodes' own `when`
+  at its own rank. A decision's `per` key and a reducer's `by` key alike (`per g: x` with `sum(x) by (g)`) are one
+  key (`FindOrCreateDecideKey`), read once per row and hashed twice: the decision's classes in their layout's map
+  (`FindDecisionGroups`), the reducer's slots in the key's dictionary (`FindGroups`). No test counts either (owner,
+  2026-11-17). `DecideTree::Validate` checks at plan time that the descent reads of a row only its nodes' own `when`
   parts, keys and bare input columns: a carried column, a program column and a σ value are each an input column. A
   node's entries are columns (`DecideNodeContainer`): per entry its row, its enclosing slot, its slot and, for a set E
   alone, its instance, and its values in `DecideColumns`, chunks of 2,048 rows held in memory, so that a window of
@@ -478,7 +492,7 @@ so a test can show a parent reads the bottom-up values; it refuses a node that c
 every dump on and compares the answer with the answer with none. No test reads a dump for a node's kind (a Boolean
 product, an L0 indicator or a definition as an F node, ABS reading a reducer's function): their answers have oracle
 tests. Profile counters (`DECIDB_PROFILE`):
-`execution.descent_rows` and `execution.descent_merge`.
+`execution.descent_rows`, `execution.descent_parts` (the descents merged) and `execution.descent_merge`.
 
 Finalize releases the descent once `EvaluateTree` returns: what the solve and the output read of the evaluation is
 copied into `EvaluatedClauses` and the global state's fields (a key's group values into `KeyValues::values_of`), so the
@@ -972,7 +986,10 @@ for a NOCASE group of 'a' and 'A' in any row order. A bound's side table groups 
 **A frame's order key compares under its collation** (D74). The binder settles it as it settles a key's and a bound
 ORDER BY's, and `DecideFrameSpec::order_collation` holds it as an expression over the value the pass read, which
 messages quote. A prepared frame keeps what binding settled whatever `default_collation` says at `EXECUTE`, and a
-plan's round trip keeps it, which a function's result type alone would not.
+plan's round trip keeps it, which a function's result type alone would not. The descent evaluates the collation at
+the rows' own positions (`DecideDescent::FrameOrder`), so a collation that raises names its row. The default build's
+collations (`nfc`, `noaccent`, `nocase`) raise on no valid UTF-8 (NUL, 200,000-character strings, U+10FFFF, U+FFFD
+and combining marks tried, 2026-11-17), and ICU is not built in, so no test reaches that error.
 
 The bound side of the aggregate shape gets its own map with the same numbering over every
 kept row (a bound-side reducer reads its own `by` groups, §4a). A `per K:` over the

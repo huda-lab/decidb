@@ -17,47 +17,6 @@ Other documented edge differences remain in `done.md` §1a: the D88 variant-name
 order for a gated reducer argument, and unreferenced hidden records. Direct-solve rules and DIAGNOSE's separate
 named-column scan also bypass or revisit parts of the normal tree execution; their scope is open.
 
-## EXEC-7 — Merge invariants I5 and I6 hold in a release build
-
-- **Problem.** `DecideDescent::Merge` relies on two invariants that only debug assertions check
-  (`context/opa_rewrite/review/03_execution_model_and_merge.md`, I5 and I6). I5: classes are matched by a key holding
-  thread-local ids, a possible wrong model. I6: a per-class F node under two reducers with different `by` keys can index
-  out of bounds. Neither showed at 1 and 8 threads over 500,000 rows (handoff B4, A7 items 6 and 7).
-- **Change.** Enforce each as a check that holds in a release build, or find a query that breaks it and fix the merge.
-- **Needs.** EXEC-8 (its tests reach both checks).
-- **Done when.** EXEC-8's tests reach both checks; `./test/decide/run_tests.sh -n 2 -k descent_merge` passes.
-
-## EXEC-8 — Real-thread tests for the descent merge
-
-- **Problem.** No suite test runs the tree on more than one thread. The four tests of `test_descent_merge.py` set
-  `threads = 1` and simulate threads by merging every n rows. The thread check of the merged branch ran outside the
-  suite (`context/opa_rewrite/tools/threads_test.py`: 8 shapes, 1 and 8 threads).
-- **Change.** Oracle tests over several row groups on real threads replace the four; `threads_test.py`'s shapes are
-  the starting set. DuckDB hands threads whole row groups (122,880 rows), so each test needs more than one.
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k descent_merge` passes, and each test shows more than one
-  thread's descent merged (a profile counter or EXPLAIN ANALYZE).
-
-## EXEC-9 — The 23 failures under the descent-split switch
-
-- **Problem.** OPA's last commit message reports 23 suite failures with the descent split after every row
-  (`SET decide_debug = 'split=1'`). Nobody has sorted them (handoff § A4, problem 5).
-- **Change.** Run the suite once with the split on and file each failure: a defect as its own task
-  in the todo of the stage that owns it, with its query and a focused test; a failure that reads a thread-dependent
-  detail as a **Decision needed** line here, with its evidence.
-- **Done when.** Each of the failures has a task or a **Decision needed** line; the fixes are those tasks.
-
-## EXEC-10 — A collation error in a frame's order key names the wrong row
-
-- **Problem.** The frame order-key comparison in `decide_descent.cpp` passes positions `0..n-1` instead of the rows'
-  own positions, so a collation error names the wrong row (handoff A7, item 8; `done.md` § 1a, D12). The default
-  build's collations (`nfc`, `noaccent`, `nocase`) cannot raise on valid UTF-8, so no SQL reaches the error in that
-  build.
-- **Change.** Pass the rows' positions. Check whether the ICU extension loads here and has a collation that raises on
-  some input.
-- **Done when.** With such a collation, a test through it names the right row. With none, this task records the evidence
-  (the collations tried and what each did) and a **Decision needed** line: keep the branch untested, or delete it as
-  unreachable.
-
 ## EXEC-12 — "Takes more than one value" under `per K:` names no group and can pair two classes' values
 
 - **Problem.** Seen on 052b85d26d with `SET decide_direct_solve = 'off'`. Over `t(id, g, cap)` = (1, 'a', 3), (2, 'a',

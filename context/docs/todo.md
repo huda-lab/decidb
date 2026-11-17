@@ -6,16 +6,7 @@ this file when it is empty.
 Read first: `.claude/CLAUDE.md`, `context/opa_rewrite/handoff.md` § A6, `context/opa_rewrite/merge_notes.md` § 4.1.
 Checks: `direct_solve/framework/todo.md` § How to work any task in these todo files.
 
-## 6. Thread merge (one lane)
-- [ ] EXEC-8 Real-thread tests for the descent merge — pipeline/08_execution/todo.md § EXEC-8
-- [ ] EXEC-7 Merge invariants I5 and I6 in release builds — pipeline/08_execution/todo.md § EXEC-7 (needs: EXEC-8)
-- [ ] EXEC-9 Sort the 23 descent-split failures — pipeline/08_execution/todo.md § EXEC-9
-- [ ] EXEC-10 Collation error names the right row — pipeline/08_execution/todo.md § EXEC-10
-
-## 7. Weak tests (one lane)
-- [ ] TEST-4 Tests that check less than their names — testing/todo.md § TEST-4
-
-## 8. Debug-build run (needs: 6–7) (one lane)
+## 8. Debug-build run (needs: 9, 11) (one lane)
 - [ ] TEST-6 One suite run on a debug build — testing/todo.md § TEST-6
 
 ## 9. Smaller defects (parallel: OPT-11 | PLAN-4 | OPT-12 | EXEC-12 | OPT-13 | OPT-15 | OPT-14)
@@ -26,10 +17,6 @@ Checks: `direct_solve/framework/todo.md` § How to work any task in these todo f
 - [ ] OPT-13 Decision: fold a `per` over a written column? — pipeline/05_optimizer/todo.md § OPT-13
 - [ ] OPT-15 A data reducer under ABS in a constraint raises — pipeline/05_optimizer/todo.md § OPT-15
 - [ ] OPT-14 Three helpers ask whether an expression holds a reducer — pipeline/05_optimizer/todo.md § OPT-14
-
-## 10. Tests (one lane)
-- [ ] TEST-8 Two too-large-sum cases run in no mode — testing/todo.md § TEST-8
-- [ ] TEST-9 The coverage run fails the invalidated-session test — testing/todo.md § TEST-9
 
 ## 11. Docs and tools (parallel: OPS-3 | EXEC-13, OPS-4 | OPS-5 | PERF-25 | OPS-7 | EXEC-14)
 - [ ] OPS-3 The OPA handoff and merge notes predate the merge — operations/todo.md § OPS-3
