@@ -22,7 +22,6 @@ from ._anr_oracle import (
     FIRST,
     LAST,
     AnrModel,
-    At,
     Col,
     Const,
     Decision,
@@ -41,7 +40,7 @@ from ._anr_oracle import (
 from ._diagnose_relation import rows as diagnose_rows
 from ._diagnose_relation import run as run_diagnose
 from ._output_helpers import assert_no_internal_leak
-from ._scope_cases import answer, dump_bounds, dump_counts, scope_solver, table, table_rows  # noqa: F401 -- fixture
+from ._scope_cases import answer, dump_counts, scope_solver, table, table_rows  # noqa: F401 -- fixture
 from .test_anr_composition import CAP, EDGE, EDGE_ROWS, MAXIMIZE_X, MINIMIZE_X, TIMELINE, TL, X, _edge, _judged
 from solver.types import ObjSense, VarType
 

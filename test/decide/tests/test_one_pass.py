@@ -29,8 +29,7 @@ def counters(cli, sql: str, name: str) -> list[float]:
 
 @pytest.mark.parametrize("case", [F1_MAX, F1_SUM, F2_PREVIOUS, EXAMPLE_9], ids=lambda case: case.name)
 def test_the_evaluation_reads_the_input_once(decidb_cli, case):
-    """Nested reducers, a frame and the deck's example 9: the descent reads each row as it arrives, and the evaluation
-    never scans the buffer."""
+    """Nested reducers, a frame and the deck's example 9: the descent reads each input row once, as it arrives."""
     cli = decidb_cli.without_verify_serializer()
     rows = counters(cli, case.sql, "execution.descent_rows")
-    assert len(rows) == 1 and rows[0] > 0, rows
+    assert rows == [len(case.data)], rows

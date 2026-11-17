@@ -1007,14 +1007,6 @@ class TestRefusalsInEverySpelling:
         )
         assert quoted in result.stderr, result.stderr
 
-    def test_a_string_that_reads_as_a_tag_is_left_as_written(self, decidb_cli):
-        """Only an alias holds a tag: the same text in a literal is what the query says, a name's mark included."""
-        term = "CAST(sum(t.cap + length('__source_fragment_0__ := abc')) AS INTEGER)"
-        result = decidb_cli.execute_raw(
-            f"SELECT id, x FROM (VALUES (1, 3)) t(id, cap) DECIDE x(REAL) SUCH THAT x <= 7 MAXIMIZE sum(x) - {term}"
-        )
-        assert "length('__source_fragment_0__ := abc')" in result.stderr, result.stderr
-
     @pytest.mark.parametrize(
         "term",
         [

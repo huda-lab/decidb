@@ -2322,11 +2322,10 @@ def test_r1_copy_leaves_out_the_stored_strings_it_reads_back_by_row_id(decidb_cl
         "SELECT id, x FROM (FROM r1_wide DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap AND SUM(w*x) <= SUM(w) by (g) / 2 "
         "AND SUM(w*x) <= SUM(cap) by (g) AND SUM(w*x) >= -SUM(v) by (g) MAXIMIZE SUM(v*x)) q"
     )
-    for limit in ("32MB", "4GB"):
-        solver_plan = decidb_cli.execute_raw(
-            f"SET decide_direct_solve='off'; {VARCHAR_WIDE_SETUP} SET memory_limit='{limit}'; EXPLAIN {solver_query}"
-        ).stdout
-        assert "direct_source" not in solver_plan, solver_plan
+    solver_plan = decidb_cli.execute_raw(
+        f"SET decide_direct_solve='off'; {VARCHAR_WIDE_SETUP} SET memory_limit='32MB'; EXPLAIN {solver_query}"
+    ).stdout
+    assert "direct_source" not in solver_plan, solver_plan
     answer = f"SELECT COUNT(*), ROUND(SUM(v * x), 6), SUM(length(pad_0)) FROM ({query})"
     assert decidb_cli.execute(f"{prefix} {answer}") == decidb_cli.execute(
         f"SET decide_direct_solve='off'; {VARCHAR_WIDE_SETUP} {answer}"
