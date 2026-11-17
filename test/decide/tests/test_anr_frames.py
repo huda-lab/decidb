@@ -1008,6 +1008,19 @@ class TestPointErrors:
         result = decidb_cli.execute_raw(_edge("x <= t.v", objective=objective))
         assert message in result.stderr, result.stderr
 
+    def test_a_class_spanning_timelines_names_its_key_as_written(self, decidb_cli):
+        """D75: the subject and the span of one message name the `per` key by the text the query wrote, not by the
+        column's own spelling (`cost` prints quoted)."""
+        key = "t.cost"
+        rows = ((1, 1, "A", 1, 4), (2, 1, "B", 1, 6))
+        sql = f"""SELECT id, x {table('t', ('id', 'cost', 'product', 'period', 'v'), rows)} DECIDE x(INT)
+            SUCH THAT x <= 9 AND per {key}: x >= at(first: t.v) over (t.period within t.product) MAXIMIZE sum(x)"""
+        result = decidb_cli.execute_raw(sql)
+        assert (
+            f"DECIDE: per {key} does not determine the timeline t.product of at(first: t.v) over "
+            f"(t.period within t.product). {key} = 1 spans t.product = 'A', 'B'."
+        ) in result.stderr, result.stderr
+
     def test_the_objective_falls_back_once(self, decidb_cli):
         """D82: two rows of one position that both reach the `else` read it at their own row,
         5 and 2 here, so the objective would be two values."""

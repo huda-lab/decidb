@@ -534,9 +534,9 @@ static void AddRelationColumns(Binding &relation, KeyColumns &columns) {
 }
 
 //! Adds column `column_index` of `binding`, which `element` names, to `columns`. `key_word`
-//! names the key in a message: `per`, `within`.
+//! names the key in a message: `per`, `within`. Its name is the text the query wrote for `element`.
 static void AddKeyColumn(const ColumnRefExpression &element, Binding &binding, column_t column_index,
-                         KeyColumns &columns, const char *key_word) {
+                         KeyColumns &columns, const char *key_word, const DecideSourceText *text) {
 	if (!IsStoredColumn(binding, column_index)) {
 		throw BinderException(element,
 		                      "DECIDE: %s is not a stored column; a %s key lists columns or relations of the "
@@ -544,7 +544,7 @@ static void AddKeyColumn(const ColumnRefExpression &element, Binding &binding, c
 		                      element.ToString(), key_word);
 	}
 	auto column = MakeKeyColumn(binding, column_index);
-	column.name = element.ToString();
+	column.name = DecideWrittenSql(element, text);
 	column.null_mode = DecideKeyNullMode::NO_GROUP;
 	columns.push_back(std::move(column));
 }
@@ -614,7 +614,8 @@ unique_ptr<ParsedExpression> DecideBinder::QualifyColumnName(ColumnRefExpression
 //! the way SQL resolves the same name: a column (`c`, `R.c`, `S.R.c`, `C.S.R.c`), else a
 //! relation (`R`, `S.R`, `C.S.R`), standing for every column it stores.
 static void ResolveKeyElement(Binder &binder, const ColumnRefExpression &element,
-                              const case_insensitive_set_t &decision_names, KeyColumns &columns, const char *key_word) {
+                              const case_insensitive_set_t &decision_names, KeyColumns &columns, const char *key_word,
+                              const DecideSourceText *text) {
 	auto &bind_context = binder.bind_context;
 	auto &names = element.column_names;
 	if (names.size() == 1 && decision_names.count(names[0])) {
@@ -630,7 +631,7 @@ static void ResolveKeyElement(Binder &binder, const ColumnRefExpression &element
 		    bind_context.GetBinding(RelationAlias(vector<string>(names.begin(), names.end() - 1)), names.back(), error);
 	}
 	if (binding) {
-		AddKeyColumn(element, *binding, binding->GetBindingIndex(names.back()), columns, key_word);
+		AddKeyColumn(element, *binding, binding->GetBindingIndex(names.back()), columns, key_word, text);
 		return;
 	}
 	auto relation = names.size() <= 3 ? bind_context.GetBinding(RelationAlias(names), error) : nullptr;
@@ -645,18 +646,19 @@ static void ResolveKeyElement(Binder &binder, const ColumnRefExpression &element
 //! The columns of a key listed by `elements[first..]` (none for `()`), each element resolved
 //! by ResolveKeyElement. `key_word` names the key in a message: `per`, `within`.
 static KeyColumns ResolveKey(Binder &binder, const vector<unique_ptr<ParsedExpression>> &elements, idx_t first,
-                             const case_insensitive_set_t &decision_names, const char *key_word) {
+                             const case_insensitive_set_t &decision_names, const char *key_word,
+                             const DecideSourceText *text) {
 	KeyColumns columns;
 	for (idx_t i = first; i < elements.size(); i++) {
-		ResolveKeyElement(binder, elements[i]->Cast<ColumnRefExpression>(), decision_names, columns, key_word);
+		ResolveKeyElement(binder, elements[i]->Cast<ColumnRefExpression>(), decision_names, columns, key_word, text);
 	}
 	return columns;
 }
 
 //! The columns of the key `per` lists: its children[1..].
 static KeyColumns ResolveKey(Binder &binder, const FunctionExpression &per,
-                             const case_insensitive_set_t &decision_names) {
-	return ResolveKey(binder, per.children, 1, decision_names, "per");
+                             const case_insensitive_set_t &decision_names, const DecideSourceText *text) {
+	return ResolveKey(binder, per.children, 1, decision_names, "per", text);
 }
 
 //! `columns` as key elements, for FindOrCreateDecideKey to order and de-duplicate.
@@ -685,14 +687,16 @@ static idx_t FindOrCreateScope(idx_t key, vector<KeyedScopeInfo> &keyed_scopes) 
 
 idx_t FindOrCreateKeyScope(ClientContext &context, Binder &binder, const FunctionExpression &per,
                            const case_insensitive_set_t &decision_names, const string &key_text,
-                           vector<DecideKey> &keys, vector<KeyedScopeInfo> &keyed_scopes) {
-	auto key = BindKey(context, binder, per, decision_names, key_text, keys);
+                           const DecideSourceText *text, vector<DecideKey> &keys,
+                           vector<KeyedScopeInfo> &keyed_scopes) {
+	auto key = BindKey(context, binder, per, decision_names, key_text, text, keys);
 	return FindOrCreateScope(key, keyed_scopes);
 }
 
 idx_t BindKey(ClientContext &context, Binder &binder, const FunctionExpression &per,
-              const case_insensitive_set_t &decision_names, const string &key_text, vector<DecideKey> &keys) {
-	return FindOrCreateDecideKey(KeyElements(context, ResolveKey(binder, per, decision_names)), key_text, keys);
+              const case_insensitive_set_t &decision_names, const string &key_text, const DecideSourceText *text,
+              vector<DecideKey> &keys) {
+	return FindOrCreateDecideKey(KeyElements(context, ResolveKey(binder, per, decision_names, text)), key_text, keys);
 }
 
 //! The relation `element` names when it names no column of the FROM clause: `by (D)`
@@ -1691,9 +1695,9 @@ BindResult DecideBinder::BindScopedReducer(unique_ptr<ParsedExpression> &expr_pt
 	}
 	if (per) {
 		auto &marker = per->Cast<FunctionExpression>();
-		auto scope_idx =
-		    FindOrCreateKeyScope(context, binder, marker, DecisionNames(variables), DecideKeyToString(marker),
-		                         *qualifier_context->keys, *qualifier_context->keyed_scopes);
+		auto scope_idx = FindOrCreateKeyScope(context, binder, marker, DecisionNames(variables),
+		                                      DecideKeyToString(marker), qualifier_context->source_text,
+		                                      *qualifier_context->keys, *qualifier_context->keyed_scopes);
 		AddDecideTag(aggregate->alias, MakeQualifiedReducerTag(scope_idx));
 	}
 	return result;
@@ -1928,7 +1932,7 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 		within_text.push_back(DecideWrittenSql(*element, source_text));
 	}
 	spec.within_key = FindOrCreateDecideKey(
-	    KeyElements(context, ResolveKey(binder, frame.within, 0, DecisionNames(variables), "within")),
+	    KeyElements(context, ResolveKey(binder, frame.within, 0, DecisionNames(variables), "within", source_text)),
 	    StringUtil::Join(within_text, ", "), *qualifier_context->keys);
 
 	// The aggregate prints as the frame written: DecideBinder::BindExpression gives it the frame's query location.
