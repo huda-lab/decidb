@@ -17,17 +17,17 @@ static string WrittenDecideComparison(const ConstraintSourceInfo &source) {
 
 static constexpr idx_t SPAN_ENTRY_SIZE = 5;
 
-bool DecideSourceText::Cut(optional_idx location, DecideSpanRole role, string &text) const {
+bool DecideSourceText::Cut(optional_idx location, DecideSpanRole role, string &out) const {
 	int ignored;
-	return CutEntry(location, role, text, ignored);
+	return CutEntry(location, role, out, ignored);
 }
 
-bool DecideSourceText::CutExpr(optional_idx location, string &text, int &binding) const {
-	return CutEntry(location, DecideSpanRole::EXPR, text, binding);
+bool DecideSourceText::CutExpr(optional_idx location, string &out, int &binding) const {
+	return CutEntry(location, DecideSpanRole::EXPR, out, binding);
 }
 
-bool DecideSourceText::CutEntry(optional_idx location, DecideSpanRole role, string &text, int &binding) const {
-	if (!location.IsValid() || location.GetIndex() < tail_start) {
+bool DecideSourceText::CutEntry(optional_idx location, DecideSpanRole role, string &out, int &binding) const {
+	if (!location.IsValid() || location.GetIndex() < start) {
 		return false;
 	}
 	if (!indexed) {
@@ -36,11 +36,11 @@ bool DecideSourceText::CutEntry(optional_idx location, DecideSpanRole role, stri
 		}
 		indexed = true;
 	}
-	auto entry = index.find(std::make_pair(location.GetIndex() - tail_start, static_cast<idx_t>(role)));
+	auto entry = index.find(std::make_pair(location.GetIndex() - start, static_cast<idx_t>(role)));
 	if (entry == index.end()) {
 		return false;
 	}
-	text = tail.substr(spans[entry->second + 2], spans[entry->second + 3] - spans[entry->second + 2]);
+	out = text.substr(spans[entry->second + 2], spans[entry->second + 3] - spans[entry->second + 2]);
 	binding = NumericCast<int>(spans[entry->second + 4]);
 	return true;
 }

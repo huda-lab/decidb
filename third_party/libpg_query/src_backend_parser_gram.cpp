@@ -2796,89 +2796,89 @@ static const yytype_uint16 yyrline[] =
      347,   349,   357,   362,   367,   372,   377,   378,   391,   392,
      393,   394,   395,   396,   400,   401,   409,   416,   417,   425,
      426,   427,   434,   439,   454,   461,   468,   472,   477,   482,
-     493,   498,   503,   518,   533,   553,   554,   559,   584,   598,
-     611,   612,   613,   617,   619,   628,   633,   640,   647,   654,
-     658,   663,   668,   673,   690,   708,   727,   746,   747,   766,
-     770,   774,   778,   782,   792,   803,   813,   822,   833,   844,
-     856,   871,   889,   889,   893,   893,   897,   897,   901,   907,
-     914,   918,   919,   923,   924,   938,   945,   952,   962,   963,
-     966,   979,   980,   981,   985,   996,  1004,  1009,  1014,  1019,
-    1024,  1032,  1040,  1045,  1050,  1057,  1058,  1062,  1063,  1064,
-    1068,  1075,  1076,  1080,  1081,  1085,  1086,  1087,  1091,  1092,
-    1096,  1097,  1113,  1114,  1117,  1126,  1137,  1138,  1139,  1142,
-    1143,  1144,  1148,  1149,  1150,  1151,  1155,  1156,  1160,  1162,
-    1178,  1180,  1185,  1188,  1193,  1197,  1201,  1208,  1212,  1216,
-    1220,  1227,  1232,  1239,  1240,  1244,  1249,  1253,  1257,  1265,
-    1272,  1273,  1278,  1279,  1283,  1284,  1289,  1291,  1293,  1298,
-    1318,  1319,  1321,  1326,  1327,  1331,  1332,  1335,  1336,  1361,
-    1362,  1367,  1371,  1372,  1376,  1377,  1381,  1382,  1383,  1384,
-    1385,  1389,  1402,  1409,  1416,  1423,  1424,  1428,  1429,  1433,
-    1434,  1438,  1439,  1443,  1444,  1448,  1449,  1453,  1464,  1465,
-    1466,  1467,  1471,  1472,  1477,  1478,  1479,  1488,  1494,  1503,
-    1504,  1517,  1518,  1522,  1523,  1527,  1528,  1532,  1543,  1549,
-    1555,  1563,  1571,  1581,  1589,  1598,  1607,  1616,  1620,  1625,
-    1630,  1641,  1655,  1656,  1659,  1660,  1661,  1664,  1672,  1682,
-    1683,  1684,  1687,  1695,  1704,  1708,  1715,  1716,  1720,  1729,
-    1733,  1758,  1762,  1775,  1789,  1804,  1816,  1829,  1843,  1857,
-    1870,  1885,  1904,  1910,  1915,  1921,  1928,  1929,  1937,  1941,
-    1945,  1951,  1958,  1963,  1964,  1965,  1966,  1967,  1968,  1972,
-    1973,  1985,  1986,  1991,  1998,  2005,  2012,  2044,  2055,  2068,
-    2073,  2074,  2077,  2078,  2081,  2082,  2087,  2088,  2093,  2097,
-    2103,  2124,  2132,  2146,  2149,  2153,  2153,  2156,  2157,  2159,
-    2164,  2171,  2176,  2182,  2187,  2193,  2197,  2204,  2211,  2221,
-    2222,  2226,  2228,  2231,  2235,  2236,  2237,  2238,  2239,  2240,
-    2245,  2265,  2266,  2267,  2268,  2279,  2293,  2294,  2300,  2305,
-    2310,  2315,  2320,  2325,  2330,  2335,  2341,  2347,  2353,  2360,
-    2382,  2391,  2395,  2403,  2407,  2415,  2427,  2448,  2452,  2458,
-    2462,  2475,  2483,  2493,  2495,  2497,  2499,  2501,  2503,  2508,
-    2509,  2516,  2525,  2533,  2542,  2553,  2561,  2562,  2563,  2567,
-    2567,  2570,  2570,  2573,  2573,  2576,  2576,  2579,  2579,  2582,
-    2582,  2585,  2585,  2588,  2588,  2591,  2591,  2594,  2594,  2597,
-    2597,  2600,  2600,  2603,  2603,  2606,  2608,  2610,  2612,  2614,
-    2616,  2618,  2620,  2622,  2624,  2626,  2628,  2630,  2632,  2637,
-    2642,  2648,  2655,  2660,  2666,  2672,  2707,  2710,  2712,  2714,
-    2722,  2737,  2739,  2741,  2743,  2745,  2747,  2749,  2751,  2753,
-    2755,  2757,  2759,  2761,  2763,  2765,  2767,  2770,  2772,  2774,
-    2777,  2779,  2781,  2783,  2785,  2790,  2795,  2802,  2807,  2814,
-    2819,  2826,  2831,  2839,  2847,  2855,  2863,  2882,  2890,  2898,
-    2906,  2914,  2922,  2930,  2934,  2950,  2958,  2966,  2974,  2982,
-    2990,  2998,  3002,  3006,  3010,  3014,  3022,  3030,  3038,  3046,
-    3066,  3088,  3099,  3106,  3120,  3129,  3137,  3146,  3167,  3170,
-    3172,  3174,  3176,  3178,  3180,  3182,  3184,  3186,  3188,  3190,
-    3192,  3194,  3196,  3198,  3200,  3202,  3204,  3206,  3208,  3210,
-    3212,  3216,  3220,  3224,  3238,  3239,  3245,  3250,  3258,  3265,
-    3284,  3299,  3306,  3311,  3315,  3321,  3326,  3331,  3345,  3346,
-    3347,  3358,  3382,  3393,  3403,  3408,  3412,  3419,  3423,  3430,
-    3437,  3438,  3439,  3440,  3441,  3442,  3443,  3444,  3455,  3460,
-    3469,  3475,  3482,  3502,  3506,  3513,  3520,  3528,  3536,  3547,
-    3567,  3603,  3614,  3615,  3622,  3628,  3630,  3632,  3636,  3645,
-    3650,  3657,  3672,  3679,  3683,  3687,  3691,  3695,  3705,  3713,
-    3722,  3744,  3745,  3749,  3750,  3751,  3755,  3756,  3763,  3764,
-    3768,  3769,  3774,  3782,  3786,  3788,  3801,  3815,  3818,  3845,
-    3846,  3849,  3850,  3858,  3866,  3874,  3883,  3893,  3911,  3957,
-    3966,  3975,  3984,  3993,  4005,  4006,  4007,  4008,  4009,  4023,
-    4024,  4027,  4028,  4032,  4042,  4043,  4047,  4048,  4052,  4059,
-    4060,  4065,  4066,  4071,  4072,  4075,  4076,  4077,  4080,  4081,
-    4084,  4085,  4086,  4087,  4088,  4089,  4090,  4091,  4092,  4093,
-    4094,  4095,  4096,  4097,  4100,  4102,  4107,  4109,  4114,  4116,
-    4118,  4120,  4122,  4124,  4126,  4128,  4142,  4144,  4149,  4153,
-    4160,  4165,  4171,  4175,  4182,  4187,  4194,  4199,  4207,  4211,
-    4217,  4221,  4230,  4241,  4242,  4246,  4250,  4257,  4258,  4259,
-    4260,  4261,  4262,  4263,  4264,  4265,  4266,  4267,  4268,  4269,
-    4270,  4271,  4281,  4285,  4292,  4299,  4300,  4316,  4320,  4325,
-    4329,  4344,  4349,  4353,  4356,  4359,  4360,  4361,  4364,  4371,
-    4372,  4373,  4383,  4397,  4398,  4402,  4413,  4414,  4417,  4418,
-    4422,  4423,  4428,  4429,  4432,  4438,  4442,  4449,  4457,  4465,
-    4473,  4483,  4484,  4489,  4490,  4494,  4495,  4496,  4500,  4509,
-    4517,  4525,  4534,  4549,  4550,  4555,  4556,  4566,  4567,  4571,
-    4572,  4576,  4577,  4580,  4596,  4604,  4612,  4622,  4623,  4627,
-    4631,  4637,  4639,  4644,  4645,  4649,  4650,  4653,  4657,  4658,
-    4662,  4663,  4666,  4667,  4668,  4671,  4675,  4676,  4680,  4681,
-    4683,  4684,  4685,  4695,  4696,  4700,  4702,  4708,  4709,  4713,
-    4714,  4717,  4728,  4731,  4742,  4746,  4750,  4762,  4766,  4775,
-    4782,  4820,  4824,  4828,  4832,  4836,  4840,  4844,  4850,  4867,
-    4868,  4869,  4872,  4873,  4874,  4877,  4878,  4879,  4882,  4883,
-    4886,  4888,  4893,  4894,  4897,  4901,  4902,     7,    18,    19,
+     493,   498,   503,   518,   533,   553,   554,   559,   585,   599,
+     612,   613,   614,   618,   620,   629,   634,   641,   648,   655,
+     659,   664,   669,   674,   691,   709,   728,   747,   748,   767,
+     771,   775,   779,   783,   793,   804,   814,   823,   834,   845,
+     857,   872,   890,   890,   894,   894,   898,   898,   902,   908,
+     915,   919,   920,   924,   925,   939,   946,   953,   963,   964,
+     967,   980,   981,   982,   986,   997,  1005,  1010,  1015,  1020,
+    1025,  1033,  1041,  1046,  1051,  1058,  1059,  1063,  1064,  1065,
+    1069,  1076,  1077,  1081,  1082,  1086,  1087,  1088,  1092,  1093,
+    1097,  1098,  1114,  1115,  1118,  1127,  1138,  1139,  1140,  1143,
+    1144,  1145,  1149,  1150,  1151,  1152,  1156,  1157,  1161,  1163,
+    1179,  1181,  1186,  1189,  1194,  1198,  1202,  1209,  1213,  1217,
+    1221,  1228,  1233,  1240,  1241,  1245,  1250,  1254,  1258,  1266,
+    1273,  1274,  1279,  1280,  1284,  1285,  1290,  1292,  1294,  1299,
+    1319,  1320,  1322,  1327,  1328,  1332,  1333,  1336,  1337,  1362,
+    1363,  1368,  1372,  1373,  1377,  1378,  1382,  1383,  1384,  1385,
+    1386,  1390,  1403,  1410,  1417,  1424,  1425,  1429,  1430,  1434,
+    1435,  1439,  1440,  1444,  1445,  1449,  1450,  1454,  1465,  1466,
+    1467,  1468,  1472,  1473,  1478,  1479,  1480,  1489,  1495,  1504,
+    1505,  1518,  1519,  1523,  1524,  1528,  1529,  1533,  1544,  1550,
+    1556,  1564,  1572,  1582,  1590,  1599,  1608,  1617,  1621,  1626,
+    1631,  1642,  1656,  1657,  1660,  1661,  1662,  1665,  1673,  1683,
+    1684,  1685,  1688,  1696,  1705,  1709,  1716,  1717,  1721,  1730,
+    1734,  1759,  1763,  1776,  1790,  1805,  1817,  1830,  1844,  1858,
+    1871,  1886,  1905,  1911,  1916,  1922,  1929,  1930,  1938,  1942,
+    1946,  1952,  1959,  1964,  1965,  1966,  1967,  1968,  1969,  1973,
+    1974,  1986,  1987,  1992,  1999,  2006,  2013,  2045,  2056,  2069,
+    2074,  2075,  2078,  2079,  2082,  2083,  2088,  2089,  2094,  2098,
+    2104,  2125,  2133,  2147,  2150,  2154,  2154,  2157,  2158,  2160,
+    2165,  2172,  2177,  2183,  2188,  2194,  2198,  2205,  2212,  2222,
+    2223,  2227,  2229,  2232,  2236,  2237,  2238,  2239,  2240,  2241,
+    2246,  2266,  2267,  2268,  2269,  2280,  2294,  2295,  2301,  2306,
+    2311,  2316,  2321,  2326,  2331,  2336,  2342,  2348,  2354,  2361,
+    2383,  2392,  2396,  2404,  2408,  2416,  2428,  2449,  2453,  2459,
+    2463,  2476,  2484,  2494,  2496,  2498,  2500,  2502,  2504,  2509,
+    2510,  2517,  2526,  2534,  2543,  2554,  2562,  2563,  2564,  2568,
+    2568,  2571,  2571,  2574,  2574,  2577,  2577,  2580,  2580,  2583,
+    2583,  2586,  2586,  2589,  2589,  2592,  2592,  2595,  2595,  2598,
+    2598,  2601,  2601,  2604,  2604,  2607,  2609,  2611,  2613,  2615,
+    2617,  2619,  2621,  2623,  2625,  2627,  2629,  2631,  2633,  2638,
+    2643,  2649,  2656,  2661,  2667,  2673,  2708,  2711,  2713,  2715,
+    2723,  2738,  2740,  2742,  2744,  2746,  2748,  2750,  2752,  2754,
+    2756,  2758,  2760,  2762,  2764,  2766,  2768,  2771,  2773,  2775,
+    2778,  2780,  2782,  2784,  2786,  2791,  2796,  2803,  2808,  2815,
+    2820,  2827,  2832,  2840,  2848,  2856,  2864,  2883,  2891,  2899,
+    2907,  2915,  2923,  2931,  2935,  2951,  2959,  2967,  2975,  2983,
+    2991,  2999,  3003,  3007,  3011,  3015,  3023,  3031,  3039,  3047,
+    3067,  3089,  3100,  3107,  3121,  3130,  3138,  3147,  3168,  3171,
+    3173,  3175,  3177,  3179,  3181,  3183,  3185,  3187,  3189,  3191,
+    3193,  3195,  3197,  3199,  3201,  3203,  3205,  3207,  3209,  3211,
+    3213,  3217,  3221,  3225,  3239,  3240,  3246,  3251,  3259,  3266,
+    3285,  3300,  3307,  3312,  3316,  3322,  3327,  3332,  3346,  3347,
+    3348,  3359,  3383,  3394,  3404,  3409,  3413,  3420,  3424,  3431,
+    3438,  3439,  3440,  3441,  3442,  3443,  3444,  3445,  3456,  3461,
+    3470,  3476,  3483,  3503,  3507,  3514,  3521,  3529,  3537,  3548,
+    3568,  3604,  3615,  3616,  3623,  3629,  3631,  3633,  3637,  3646,
+    3651,  3658,  3673,  3680,  3684,  3688,  3692,  3696,  3706,  3714,
+    3723,  3745,  3746,  3750,  3751,  3752,  3756,  3757,  3764,  3765,
+    3769,  3770,  3775,  3783,  3787,  3789,  3802,  3816,  3819,  3846,
+    3847,  3850,  3851,  3859,  3867,  3875,  3884,  3894,  3912,  3958,
+    3967,  3976,  3985,  3994,  4006,  4007,  4008,  4009,  4010,  4024,
+    4025,  4028,  4029,  4033,  4043,  4044,  4048,  4049,  4053,  4060,
+    4061,  4066,  4067,  4072,  4073,  4076,  4077,  4078,  4081,  4082,
+    4085,  4086,  4087,  4088,  4089,  4090,  4091,  4092,  4093,  4094,
+    4095,  4096,  4097,  4098,  4101,  4103,  4108,  4110,  4115,  4117,
+    4119,  4121,  4123,  4125,  4127,  4129,  4143,  4145,  4150,  4154,
+    4161,  4166,  4172,  4176,  4183,  4188,  4195,  4200,  4208,  4212,
+    4218,  4222,  4231,  4242,  4243,  4247,  4251,  4258,  4259,  4260,
+    4261,  4262,  4263,  4264,  4265,  4266,  4267,  4268,  4269,  4270,
+    4271,  4272,  4282,  4286,  4293,  4300,  4301,  4317,  4321,  4326,
+    4330,  4345,  4350,  4354,  4357,  4360,  4361,  4362,  4365,  4372,
+    4373,  4374,  4384,  4398,  4399,  4403,  4414,  4415,  4418,  4419,
+    4423,  4424,  4429,  4430,  4433,  4439,  4443,  4450,  4458,  4466,
+    4474,  4484,  4485,  4490,  4491,  4495,  4496,  4497,  4501,  4510,
+    4518,  4526,  4535,  4550,  4551,  4556,  4557,  4567,  4568,  4572,
+    4573,  4577,  4578,  4581,  4597,  4605,  4613,  4623,  4624,  4628,
+    4632,  4638,  4640,  4645,  4646,  4650,  4651,  4654,  4658,  4659,
+    4663,  4664,  4667,  4668,  4669,  4672,  4676,  4677,  4681,  4682,
+    4684,  4685,  4686,  4696,  4697,  4701,  4703,  4709,  4710,  4714,
+    4715,  4718,  4729,  4732,  4743,  4747,  4751,  4763,  4767,  4776,
+    4783,  4821,  4825,  4829,  4833,  4837,  4841,  4845,  4851,  4868,
+    4869,  4870,  4873,  4874,  4875,  4878,  4879,  4880,  4883,  4884,
+    4887,  4889,  4894,  4895,  4898,  4902,  4903,     7,    18,    19,
       23,    24,    25,    26,    27,    28,     7,    26,    50,    73,
       80,    85,    86,    87,    88,     8,    33,    62,    66,    67,
       72,    73,    78,    79,    83,    84,    89,    90,     7,    16,
@@ -26672,12 +26672,13 @@ yyreduce:
                     PGDecidePopLexState(pg_yyget_extra(yyscanner));
                     n = (PGDecideClause *) ((yyvsp[(3) - (3)].node) ? (yyvsp[(3) - (3)].node) : makeDecideWithoutBody((yylsp[(1) - (3)])));
                     n->variables = (yyvsp[(2) - (3)].list);
+                    n->decl_start = (yylsp[(1) - (3)]).start;
                     (yyval.node) = (PGNode *)n;
                 ;}
     break;
 
   case 608:
-#line 585 "third_party/libpg_query/grammar/statements/select.y"
+#line 586 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* With no FROM after the declaration (`FROM t DECIDE x ... SUCH THAT`,
 					 * `SELECT x DECIDE x ... SUCH THAT`), SUCH is already read as the lookahead
@@ -26693,7 +26694,7 @@ yyreduce:
     break;
 
   case 609:
-#line 598 "third_party/libpg_query/grammar/statements/select.y"
+#line 599 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* Explicit reset: a prior statement in the same multi-statement
 					 * parse may have left decide_declared_before_from set. */
@@ -26703,27 +26704,27 @@ yyreduce:
     break;
 
   case 610:
-#line 611 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
-    break;
-
-  case 611:
 #line 612 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
-  case 612:
+  case 611:
 #line 613 "third_party/libpg_query/grammar/statements/select.y"
+    { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
+    break;
+
+  case 612:
+#line 614 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = NULL; ;}
     break;
 
   case 613:
-#line 618 "third_party/libpg_query/grammar/statements/select.y"
+#line 619 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
   case 614:
-#line 620 "third_party/libpg_query/grammar/statements/select.y"
+#line 621 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* The removed "C PER g, h" wrote its key with a comma, so its
 					 * columns arrive here one by one; the error then names the whole
@@ -26735,17 +26736,17 @@ yyreduce:
     break;
 
   case 615:
-#line 629 "third_party/libpg_query/grammar/statements/select.y"
+#line 630 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = makeAndExpr((yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 616:
-#line 634 "third_party/libpg_query/grammar/statements/select.y"
+#line 635 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = applyDecideScope((yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node)); ;}
     break;
 
   case 617:
-#line 641 "third_party/libpg_query/grammar/statements/select.y"
+#line 642 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", (yyvsp[(1) - (5)].node), (yyvsp[(3) - (5)].node), (yylsp[(2) - (5)]));
@@ -26755,7 +26756,7 @@ yyreduce:
     break;
 
   case 618:
-#line 648 "third_party/libpg_query/grammar/statements/select.y"
+#line 649 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", (yyvsp[(1) - (7)].node), (yyvsp[(3) - (7)].node), (yylsp[(2) - (7)]));
@@ -26765,14 +26766,14 @@ yyreduce:
     break;
 
   case 619:
-#line 655 "third_party/libpg_query/grammar/statements/select.y"
+#line 656 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)]));
 				;}
     break;
 
   case 620:
-#line 659 "third_party/libpg_query/grammar/statements/select.y"
+#line 660 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)]));
@@ -26780,7 +26781,7 @@ yyreduce:
     break;
 
   case 621:
-#line 664 "third_party/libpg_query/grammar/statements/select.y"
+#line 665 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", (yyvsp[(1) - (5)].node), (PGNode *) (yyvsp[(4) - (5)].list), (yylsp[(2) - (5)]));
@@ -26788,12 +26789,12 @@ yyreduce:
     break;
 
   case 622:
-#line 669 "third_party/libpg_query/grammar/statements/select.y"
+#line 670 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
   case 623:
-#line 676 "third_party/libpg_query/grammar/statements/select.y"
+#line 677 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSelectStmt *n = makeNode(PGSelectStmt);
 					n->targetList = (yyvsp[(3) - (13)].list);
@@ -26811,7 +26812,7 @@ yyreduce:
     break;
 
   case 624:
-#line 693 "third_party/libpg_query/grammar/statements/select.y"
+#line 694 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSelectStmt *n = makeNode(PGSelectStmt);
 					n->distinctClause = (yyvsp[(2) - (13)].list);
@@ -26830,7 +26831,7 @@ yyreduce:
     break;
 
   case 625:
-#line 711 "third_party/libpg_query/grammar/statements/select.y"
+#line 712 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSelectStmt *n = makeNode(PGSelectStmt);
 					n->targetList = (yyvsp[(3) - (12)].list);
@@ -26849,7 +26850,7 @@ yyreduce:
     break;
 
   case 626:
-#line 730 "third_party/libpg_query/grammar/statements/select.y"
+#line 731 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSelectStmt *n = makeNode(PGSelectStmt);
 					n->targetList = (yyvsp[(5) - (14)].list);
@@ -26869,12 +26870,12 @@ yyreduce:
     break;
 
   case 627:
-#line 746 "third_party/libpg_query/grammar/statements/select.y"
+#line 747 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
   case 628:
-#line 748 "third_party/libpg_query/grammar/statements/select.y"
+#line 749 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* same as SELECT * FROM relation_expr */
 					PGColumnRef *cr = makeNode(PGColumnRef);
@@ -26896,35 +26897,35 @@ yyreduce:
     break;
 
   case 629:
-#line 767 "third_party/libpg_query/grammar/statements/select.y"
+#line 768 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeSetOp(PG_SETOP_UNION_BY_NAME, (yyvsp[(3) - (5)].boolean), (yyvsp[(1) - (5)].node), (yyvsp[(5) - (5)].node));
 				;}
     break;
 
   case 630:
-#line 771 "third_party/libpg_query/grammar/statements/select.y"
+#line 772 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeSetOp(PG_SETOP_UNION, (yyvsp[(3) - (4)].boolean), (yyvsp[(1) - (4)].node), (yyvsp[(4) - (4)].node));
 				;}
     break;
 
   case 631:
-#line 775 "third_party/libpg_query/grammar/statements/select.y"
+#line 776 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeSetOp(PG_SETOP_INTERSECT, (yyvsp[(3) - (4)].boolean), (yyvsp[(1) - (4)].node), (yyvsp[(4) - (4)].node));
 				;}
     break;
 
   case 632:
-#line 779 "third_party/libpg_query/grammar/statements/select.y"
+#line 780 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeSetOp(PG_SETOP_EXCEPT, (yyvsp[(3) - (4)].boolean), (yyvsp[(1) - (4)].node), (yyvsp[(4) - (4)].node));
 				;}
     break;
 
   case 633:
-#line 783 "third_party/libpg_query/grammar/statements/select.y"
+#line 784 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSelectStmt *res = makeNode(PGSelectStmt);
 					PGPivotStmt *n = makeNode(PGPivotStmt);
@@ -26937,7 +26938,7 @@ yyreduce:
     break;
 
   case 634:
-#line 793 "third_party/libpg_query/grammar/statements/select.y"
+#line 794 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSelectStmt *res = makeNode(PGSelectStmt);
 					PGPivotStmt *n = makeNode(PGPivotStmt);
@@ -26951,7 +26952,7 @@ yyreduce:
     break;
 
   case 635:
-#line 804 "third_party/libpg_query/grammar/statements/select.y"
+#line 805 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSelectStmt *res = makeNode(PGSelectStmt);
 					PGPivotStmt *n = makeNode(PGPivotStmt);
@@ -26964,7 +26965,7 @@ yyreduce:
     break;
 
   case 636:
-#line 814 "third_party/libpg_query/grammar/statements/select.y"
+#line 815 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSelectStmt *res = makeNode(PGSelectStmt);
 					PGPivotStmt *n = makeNode(PGPivotStmt);
@@ -26976,7 +26977,7 @@ yyreduce:
     break;
 
   case 637:
-#line 823 "third_party/libpg_query/grammar/statements/select.y"
+#line 824 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSelectStmt *res = makeNode(PGSelectStmt);
 					PGPivotStmt *n = makeNode(PGPivotStmt);
@@ -26990,7 +26991,7 @@ yyreduce:
     break;
 
   case 638:
-#line 834 "third_party/libpg_query/grammar/statements/select.y"
+#line 835 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSelectStmt *res = makeNode(PGSelectStmt);
 					PGPivotStmt *n = makeNode(PGPivotStmt);
@@ -27004,7 +27005,7 @@ yyreduce:
     break;
 
   case 639:
-#line 845 "third_party/libpg_query/grammar/statements/select.y"
+#line 846 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSelectStmt *res = makeNode(PGSelectStmt);
 					PGPivotStmt *n = makeNode(PGPivotStmt);
@@ -27019,7 +27020,7 @@ yyreduce:
     break;
 
   case 640:
-#line 857 "third_party/libpg_query/grammar/statements/select.y"
+#line 858 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSelectStmt *res = makeNode(PGSelectStmt);
 					PGPivotStmt *n = makeNode(PGPivotStmt);
@@ -27037,7 +27038,7 @@ yyreduce:
     break;
 
   case 641:
-#line 872 "third_party/libpg_query/grammar/statements/select.y"
+#line 873 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSelectStmt *res = makeNode(PGSelectStmt);
 					PGPivotStmt *n = makeNode(PGPivotStmt);
@@ -27055,7 +27056,7 @@ yyreduce:
     break;
 
   case 648:
-#line 902 "third_party/libpg_query/grammar/statements/select.y"
+#line 903 "third_party/libpg_query/grammar/statements/select.y"
     {
 				PGPivot *n = makeNode(PGPivot);
 				n->pivot_columns = list_make1((yyvsp[(1) - (1)].node));
@@ -27064,7 +27065,7 @@ yyreduce:
     break;
 
   case 649:
-#line 908 "third_party/libpg_query/grammar/statements/select.y"
+#line 909 "third_party/libpg_query/grammar/statements/select.y"
     {
 				PGPivot *n = makeNode(PGPivot);
 				n->pivot_columns = list_make1((yyvsp[(1) - (5)].node));
@@ -27074,32 +27075,32 @@ yyreduce:
     break;
 
   case 650:
-#line 914 "third_party/libpg_query/grammar/statements/select.y"
+#line 915 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
   case 651:
-#line 918 "third_party/libpg_query/grammar/statements/select.y"
+#line 919 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(1) - (1)].node)); ;}
     break;
 
   case 652:
-#line 919 "third_party/libpg_query/grammar/statements/select.y"
+#line 920 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].node)); ;}
     break;
 
   case 653:
-#line 923 "third_party/libpg_query/grammar/statements/select.y"
+#line 924 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (1)].list); ;}
     break;
 
   case 654:
-#line 924 "third_party/libpg_query/grammar/statements/select.y"
+#line 925 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (2)].list); ;}
     break;
 
   case 655:
-#line 939 "third_party/libpg_query/grammar/statements/select.y"
+#line 940 "third_party/libpg_query/grammar/statements/select.y"
     {
 				(yyval.with) = makeNode(PGWithClause);
 				(yyval.with)->ctes = (yyvsp[(2) - (2)].list);
@@ -27109,7 +27110,7 @@ yyreduce:
     break;
 
   case 656:
-#line 946 "third_party/libpg_query/grammar/statements/select.y"
+#line 947 "third_party/libpg_query/grammar/statements/select.y"
     {
 				(yyval.with) = makeNode(PGWithClause);
 				(yyval.with)->ctes = (yyvsp[(2) - (2)].list);
@@ -27119,7 +27120,7 @@ yyreduce:
     break;
 
   case 657:
-#line 953 "third_party/libpg_query/grammar/statements/select.y"
+#line 954 "third_party/libpg_query/grammar/statements/select.y"
     {
 				(yyval.with) = makeNode(PGWithClause);
 				(yyval.with)->ctes = (yyvsp[(3) - (3)].list);
@@ -27129,17 +27130,17 @@ yyreduce:
     break;
 
   case 658:
-#line 962 "third_party/libpg_query/grammar/statements/select.y"
+#line 963 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(1) - (1)].node)); ;}
     break;
 
   case 659:
-#line 963 "third_party/libpg_query/grammar/statements/select.y"
+#line 964 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].node)); ;}
     break;
 
   case 660:
-#line 967 "third_party/libpg_query/grammar/statements/select.y"
+#line 968 "third_party/libpg_query/grammar/statements/select.y"
     {
 				PGCommonTableExpr *n = makeNode(PGCommonTableExpr);
 				n->ctename = (yyvsp[(1) - (7)].str);
@@ -27152,22 +27153,22 @@ yyreduce:
     break;
 
   case 661:
-#line 979 "third_party/libpg_query/grammar/statements/select.y"
+#line 980 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.ctematerialize) = PGCTEMaterializeAlways; ;}
     break;
 
   case 662:
-#line 980 "third_party/libpg_query/grammar/statements/select.y"
+#line 981 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.ctematerialize) = PGCTEMaterializeNever; ;}
     break;
 
   case 663:
-#line 981 "third_party/libpg_query/grammar/statements/select.y"
+#line 982 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.ctematerialize) = PGCTEMaterializeDefault; ;}
     break;
 
   case 664:
-#line 986 "third_party/libpg_query/grammar/statements/select.y"
+#line 987 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.into) = makeNode(PGIntoClause);
 					(yyval.into)->rel = (yyvsp[(2) - (2)].range);
@@ -27180,12 +27181,12 @@ yyreduce:
     break;
 
   case 665:
-#line 996 "third_party/libpg_query/grammar/statements/select.y"
+#line 997 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.into) = NULL; ;}
     break;
 
   case 666:
-#line 1005 "third_party/libpg_query/grammar/statements/select.y"
+#line 1006 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.range) = (yyvsp[(3) - (3)].range);
 					(yyval.range)->relpersistence = PG_RELPERSISTENCE_TEMP;
@@ -27193,7 +27194,7 @@ yyreduce:
     break;
 
   case 667:
-#line 1010 "third_party/libpg_query/grammar/statements/select.y"
+#line 1011 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.range) = (yyvsp[(3) - (3)].range);
 					(yyval.range)->relpersistence = PG_RELPERSISTENCE_TEMP;
@@ -27201,7 +27202,7 @@ yyreduce:
     break;
 
   case 668:
-#line 1015 "third_party/libpg_query/grammar/statements/select.y"
+#line 1016 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.range) = (yyvsp[(4) - (4)].range);
 					(yyval.range)->relpersistence = PG_RELPERSISTENCE_TEMP;
@@ -27209,7 +27210,7 @@ yyreduce:
     break;
 
   case 669:
-#line 1020 "third_party/libpg_query/grammar/statements/select.y"
+#line 1021 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.range) = (yyvsp[(4) - (4)].range);
 					(yyval.range)->relpersistence = PG_RELPERSISTENCE_TEMP;
@@ -27217,7 +27218,7 @@ yyreduce:
     break;
 
   case 670:
-#line 1025 "third_party/libpg_query/grammar/statements/select.y"
+#line 1026 "third_party/libpg_query/grammar/statements/select.y"
     {
 					ereport(PGWARNING,
 							(errmsg("GLOBAL is deprecated in temporary table creation"),
@@ -27228,7 +27229,7 @@ yyreduce:
     break;
 
   case 671:
-#line 1033 "third_party/libpg_query/grammar/statements/select.y"
+#line 1034 "third_party/libpg_query/grammar/statements/select.y"
     {
 					ereport(PGWARNING,
 							(errmsg("GLOBAL is deprecated in temporary table creation"),
@@ -27239,7 +27240,7 @@ yyreduce:
     break;
 
   case 672:
-#line 1041 "third_party/libpg_query/grammar/statements/select.y"
+#line 1042 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.range) = (yyvsp[(3) - (3)].range);
 					(yyval.range)->relpersistence = PG_RELPERSISTENCE_UNLOGGED;
@@ -27247,7 +27248,7 @@ yyreduce:
     break;
 
   case 673:
-#line 1046 "third_party/libpg_query/grammar/statements/select.y"
+#line 1047 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.range) = (yyvsp[(2) - (2)].range);
 					(yyval.range)->relpersistence = RELPERSISTENCE_PERMANENT;
@@ -27255,7 +27256,7 @@ yyreduce:
     break;
 
   case 674:
-#line 1051 "third_party/libpg_query/grammar/statements/select.y"
+#line 1052 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.range) = (yyvsp[(1) - (1)].range);
 					(yyval.range)->relpersistence = RELPERSISTENCE_PERMANENT;
@@ -27263,87 +27264,87 @@ yyreduce:
     break;
 
   case 675:
-#line 1057 "third_party/libpg_query/grammar/statements/select.y"
-    {;}
-    break;
-
-  case 676:
 #line 1058 "third_party/libpg_query/grammar/statements/select.y"
     {;}
     break;
 
+  case 676:
+#line 1059 "third_party/libpg_query/grammar/statements/select.y"
+    {;}
+    break;
+
   case 677:
-#line 1062 "third_party/libpg_query/grammar/statements/select.y"
+#line 1063 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.boolean) = true; ;}
     break;
 
   case 678:
-#line 1063 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.boolean) = false; ;}
-    break;
-
-  case 679:
 #line 1064 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.boolean) = false; ;}
     break;
 
+  case 679:
+#line 1065 "third_party/libpg_query/grammar/statements/select.y"
+    { (yyval.boolean) = false; ;}
+    break;
+
   case 680:
-#line 1068 "third_party/libpg_query/grammar/statements/select.y"
+#line 1069 "third_party/libpg_query/grammar/statements/select.y"
     { ;}
     break;
 
   case 681:
-#line 1075 "third_party/libpg_query/grammar/statements/select.y"
+#line 1076 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(NIL); ;}
     break;
 
   case 682:
-#line 1076 "third_party/libpg_query/grammar/statements/select.y"
+#line 1077 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(4) - (5)].list); ;}
     break;
 
   case 683:
-#line 1080 "third_party/libpg_query/grammar/statements/select.y"
+#line 1081 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL;;}
     break;
 
   case 684:
-#line 1081 "third_party/libpg_query/grammar/statements/select.y"
+#line 1082 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 685:
-#line 1085 "third_party/libpg_query/grammar/statements/select.y"
+#line 1086 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.ignorenulls) = PG_IGNORE_NULLS;;}
     break;
 
   case 686:
-#line 1086 "third_party/libpg_query/grammar/statements/select.y"
+#line 1087 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.ignorenulls) = PG_RESPECT_NULLS;;}
     break;
 
   case 687:
-#line 1087 "third_party/libpg_query/grammar/statements/select.y"
+#line 1088 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.ignorenulls) = PG_DEFAULT_NULLS; ;}
     break;
 
   case 688:
-#line 1091 "third_party/libpg_query/grammar/statements/select.y"
+#line 1092 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (1)].list);;}
     break;
 
   case 689:
-#line 1092 "third_party/libpg_query/grammar/statements/select.y"
+#line 1093 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 690:
-#line 1096 "third_party/libpg_query/grammar/statements/select.y"
+#line 1097 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(3) - (3)].list); ;}
     break;
 
   case 691:
-#line 1098 "third_party/libpg_query/grammar/statements/select.y"
+#line 1099 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSortBy *sort = makeNode(PGSortBy);
 					PGAStar *star = makeNode(PGAStar);
@@ -27359,17 +27360,17 @@ yyreduce:
     break;
 
   case 692:
-#line 1113 "third_party/libpg_query/grammar/statements/select.y"
+#line 1114 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(1) - (1)].sortby)); ;}
     break;
 
   case 693:
-#line 1114 "third_party/libpg_query/grammar/statements/select.y"
+#line 1115 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].sortby)); ;}
     break;
 
   case 694:
-#line 1118 "third_party/libpg_query/grammar/statements/select.y"
+#line 1119 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.sortby) = makeNode(PGSortBy);
 					(yyval.sortby)->node = (yyvsp[(1) - (4)].node);
@@ -27381,7 +27382,7 @@ yyreduce:
     break;
 
   case 695:
-#line 1127 "third_party/libpg_query/grammar/statements/select.y"
+#line 1128 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.sortby) = makeNode(PGSortBy);
 					(yyval.sortby)->node = (yyvsp[(1) - (3)].node);
@@ -27393,72 +27394,72 @@ yyreduce:
     break;
 
   case 696:
-#line 1137 "third_party/libpg_query/grammar/statements/select.y"
+#line 1138 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.sortorder) = PG_SORTBY_ASC; ;}
     break;
 
   case 697:
-#line 1138 "third_party/libpg_query/grammar/statements/select.y"
+#line 1139 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.sortorder) = PG_SORTBY_DESC; ;}
     break;
 
   case 698:
-#line 1139 "third_party/libpg_query/grammar/statements/select.y"
+#line 1140 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.sortorder) = PG_SORTBY_DEFAULT; ;}
     break;
 
   case 699:
-#line 1142 "third_party/libpg_query/grammar/statements/select.y"
+#line 1143 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.nullorder) = PG_SORTBY_NULLS_FIRST; ;}
     break;
 
   case 700:
-#line 1143 "third_party/libpg_query/grammar/statements/select.y"
+#line 1144 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.nullorder) = PG_SORTBY_NULLS_LAST; ;}
     break;
 
   case 701:
-#line 1144 "third_party/libpg_query/grammar/statements/select.y"
+#line 1145 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.nullorder) = PG_SORTBY_NULLS_DEFAULT; ;}
     break;
 
   case 702:
-#line 1148 "third_party/libpg_query/grammar/statements/select.y"
+#line 1149 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make2((yyvsp[(2) - (2)].node), (yyvsp[(1) - (2)].node)); ;}
     break;
 
   case 703:
-#line 1149 "third_party/libpg_query/grammar/statements/select.y"
+#line 1150 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make2((yyvsp[(1) - (2)].node), (yyvsp[(2) - (2)].node)); ;}
     break;
 
   case 704:
-#line 1150 "third_party/libpg_query/grammar/statements/select.y"
+#line 1151 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make2(NULL, (yyvsp[(1) - (1)].node)); ;}
     break;
 
   case 705:
-#line 1151 "third_party/libpg_query/grammar/statements/select.y"
+#line 1152 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make2((yyvsp[(1) - (1)].node), NULL); ;}
     break;
 
   case 706:
-#line 1155 "third_party/libpg_query/grammar/statements/select.y"
+#line 1156 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (1)].list); ;}
     break;
 
   case 707:
-#line 1156 "third_party/libpg_query/grammar/statements/select.y"
+#line 1157 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make2(NULL,NULL); ;}
     break;
 
   case 708:
-#line 1161 "third_party/libpg_query/grammar/statements/select.y"
+#line 1162 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(2) - (2)].node); ;}
     break;
 
   case 709:
-#line 1163 "third_party/libpg_query/grammar/statements/select.y"
+#line 1164 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* Disabled because it was too confusing, bjm 2002-02-18 */
 					ereport(ERROR,
@@ -27470,91 +27471,91 @@ yyreduce:
     break;
 
   case 710:
-#line 1179 "third_party/libpg_query/grammar/statements/select.y"
+#line 1180 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(3) - (5)].node); ;}
     break;
 
   case 711:
-#line 1181 "third_party/libpg_query/grammar/statements/select.y"
+#line 1182 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = makeIntConst(1, -1); ;}
     break;
 
   case 712:
-#line 1186 "third_party/libpg_query/grammar/statements/select.y"
+#line 1187 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(2) - (2)].node); ;}
     break;
 
   case 713:
-#line 1189 "third_party/libpg_query/grammar/statements/select.y"
+#line 1190 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(2) - (3)].node); ;}
     break;
 
   case 714:
-#line 1194 "third_party/libpg_query/grammar/statements/select.y"
+#line 1195 "third_party/libpg_query/grammar/statements/select.y"
     {
             (yyval.node) = makeFloatConst((yyvsp[(1) - (1)].str), (yylsp[(1) - (1)]));
         ;}
     break;
 
   case 715:
-#line 1198 "third_party/libpg_query/grammar/statements/select.y"
+#line 1199 "third_party/libpg_query/grammar/statements/select.y"
     {
             (yyval.node) = makeIntConst((yyvsp[(1) - (1)].ival), (yylsp[(1) - (1)]));
         ;}
     break;
 
   case 717:
-#line 1209 "third_party/libpg_query/grammar/statements/select.y"
+#line 1210 "third_party/libpg_query/grammar/statements/select.y"
     {
 			(yyval.node) = makeSampleSize((yyvsp[(1) - (2)].node), true);
 		;}
     break;
 
   case 718:
-#line 1213 "third_party/libpg_query/grammar/statements/select.y"
+#line 1214 "third_party/libpg_query/grammar/statements/select.y"
     {
 			(yyval.node) = makeSampleSize((yyvsp[(1) - (2)].node), true);
 		;}
     break;
 
   case 719:
-#line 1217 "third_party/libpg_query/grammar/statements/select.y"
+#line 1218 "third_party/libpg_query/grammar/statements/select.y"
     {
 			(yyval.node) = makeSampleSize((yyvsp[(1) - (1)].node), false);
 		;}
     break;
 
   case 720:
-#line 1221 "third_party/libpg_query/grammar/statements/select.y"
+#line 1222 "third_party/libpg_query/grammar/statements/select.y"
     {
 			(yyval.node) = makeSampleSize((yyvsp[(1) - (2)].node), false);
 		;}
     break;
 
   case 721:
-#line 1228 "third_party/libpg_query/grammar/statements/select.y"
+#line 1229 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (yyvsp[(3) - (3)].node);
 				;}
     break;
 
   case 722:
-#line 1232 "third_party/libpg_query/grammar/statements/select.y"
+#line 1233 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = NULL; ;}
     break;
 
   case 723:
-#line 1239 "third_party/libpg_query/grammar/statements/select.y"
+#line 1240 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (yyvsp[(1) - (1)].str); ;}
     break;
 
   case 724:
-#line 1240 "third_party/libpg_query/grammar/statements/select.y"
+#line 1241 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = NULL; ;}
     break;
 
   case 725:
-#line 1245 "third_party/libpg_query/grammar/statements/select.y"
+#line 1246 "third_party/libpg_query/grammar/statements/select.y"
     {
 					int seed = (yyvsp[(5) - (5)].ival);
 					(yyval.node) = makeSampleOptions((yyvsp[(3) - (5)].node), (yyvsp[(1) - (5)].str), &seed, (yylsp[(1) - (5)]));
@@ -27562,21 +27563,21 @@ yyreduce:
     break;
 
   case 726:
-#line 1250 "third_party/libpg_query/grammar/statements/select.y"
+#line 1251 "third_party/libpg_query/grammar/statements/select.y"
     {
 			(yyval.node) = makeSampleOptions((yyvsp[(1) - (1)].node), NULL, NULL, (yylsp[(1) - (1)]));
 		;}
     break;
 
   case 727:
-#line 1254 "third_party/libpg_query/grammar/statements/select.y"
+#line 1255 "third_party/libpg_query/grammar/statements/select.y"
     {
 			(yyval.node) = makeSampleOptions((yyvsp[(1) - (4)].node), (yyvsp[(3) - (4)].str), NULL, (yylsp[(1) - (4)]));
 		;}
     break;
 
   case 728:
-#line 1258 "third_party/libpg_query/grammar/statements/select.y"
+#line 1259 "third_party/libpg_query/grammar/statements/select.y"
     {
 			int seed = (yyvsp[(5) - (6)].ival);
 			(yyval.node) = makeSampleOptions((yyvsp[(1) - (6)].node), (yyvsp[(3) - (6)].str), &seed, (yylsp[(1) - (6)]));
@@ -27584,39 +27585,39 @@ yyreduce:
     break;
 
   case 729:
-#line 1266 "third_party/libpg_query/grammar/statements/select.y"
+#line 1267 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (yyvsp[(2) - (2)].node);
 				;}
     break;
 
   case 730:
-#line 1272 "third_party/libpg_query/grammar/statements/select.y"
+#line 1273 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
   case 731:
-#line 1273 "third_party/libpg_query/grammar/statements/select.y"
+#line 1274 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = NULL; ;}
     break;
 
   case 732:
-#line 1278 "third_party/libpg_query/grammar/statements/select.y"
+#line 1279 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.ival) = (yyvsp[(3) - (4)].ival); ;}
     break;
 
   case 733:
-#line 1279 "third_party/libpg_query/grammar/statements/select.y"
+#line 1280 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.ival) = -1; ;}
     break;
 
   case 734:
-#line 1283 "third_party/libpg_query/grammar/statements/select.y"
+#line 1284 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
   case 735:
-#line 1285 "third_party/libpg_query/grammar/statements/select.y"
+#line 1286 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* LIMIT ALL is represented as a NULL constant */
 					(yyval.node) = makeNullAConst((yylsp[(1) - (1)]));
@@ -27624,77 +27625,77 @@ yyreduce:
     break;
 
   case 736:
-#line 1290 "third_party/libpg_query/grammar/statements/select.y"
+#line 1291 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = makeLimitPercent((yyvsp[(1) - (2)].node)); ;}
     break;
 
   case 737:
-#line 1292 "third_party/libpg_query/grammar/statements/select.y"
+#line 1293 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = makeLimitPercent(makeFloatConst((yyvsp[(1) - (2)].str),(yylsp[(1) - (2)]))); ;}
     break;
 
   case 738:
-#line 1294 "third_party/libpg_query/grammar/statements/select.y"
+#line 1295 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = makeLimitPercent(makeIntConst((yyvsp[(1) - (2)].ival),(yylsp[(1) - (2)]))); ;}
     break;
 
   case 739:
-#line 1298 "third_party/libpg_query/grammar/statements/select.y"
+#line 1299 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
   case 740:
-#line 1318 "third_party/libpg_query/grammar/statements/select.y"
+#line 1319 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
   case 741:
-#line 1320 "third_party/libpg_query/grammar/statements/select.y"
+#line 1321 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "+", NULL, (yyvsp[(2) - (2)].node), (yylsp[(1) - (2)])); ;}
     break;
 
   case 742:
-#line 1322 "third_party/libpg_query/grammar/statements/select.y"
+#line 1323 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = doNegate((yyvsp[(2) - (2)].node), (yylsp[(1) - (2)])); ;}
     break;
 
   case 743:
-#line 1326 "third_party/libpg_query/grammar/statements/select.y"
+#line 1327 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = makeIntConst((yyvsp[(1) - (1)].ival),(yylsp[(1) - (1)])); ;}
     break;
 
   case 744:
-#line 1327 "third_party/libpg_query/grammar/statements/select.y"
+#line 1328 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = makeFloatConst((yyvsp[(1) - (1)].str),(yylsp[(1) - (1)])); ;}
     break;
 
   case 745:
-#line 1331 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.ival) = 0; ;}
-    break;
-
-  case 746:
 #line 1332 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.ival) = 0; ;}
     break;
 
-  case 747:
-#line 1335 "third_party/libpg_query/grammar/statements/select.y"
+  case 746:
+#line 1333 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.ival) = 0; ;}
     break;
 
-  case 748:
+  case 747:
 #line 1336 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.ival) = 0; ;}
     break;
 
+  case 748:
+#line 1337 "third_party/libpg_query/grammar/statements/select.y"
+    { (yyval.ival) = 0; ;}
+    break;
+
   case 749:
-#line 1361 "third_party/libpg_query/grammar/statements/select.y"
+#line 1362 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(3) - (3)].list); ;}
     break;
 
   case 750:
-#line 1363 "third_party/libpg_query/grammar/statements/select.y"
+#line 1364 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGNode *node = (PGNode *) makeGroupingSet(GROUPING_SET_ALL, NIL, (yylsp[(3) - (3)]));
 					(yyval.list) = list_make1(node);
@@ -27702,145 +27703,145 @@ yyreduce:
     break;
 
   case 751:
-#line 1367 "third_party/libpg_query/grammar/statements/select.y"
+#line 1368 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 752:
-#line 1371 "third_party/libpg_query/grammar/statements/select.y"
+#line 1372 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(1) - (1)].node)); ;}
     break;
 
   case 753:
-#line 1372 "third_party/libpg_query/grammar/statements/select.y"
+#line 1373 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (3)].list),(yyvsp[(3) - (3)].node)); ;}
     break;
 
   case 754:
-#line 1376 "third_party/libpg_query/grammar/statements/select.y"
+#line 1377 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (1)].list); ;}
     break;
 
   case 755:
-#line 1377 "third_party/libpg_query/grammar/statements/select.y"
+#line 1378 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (2)].list); ;}
     break;
 
   case 756:
-#line 1381 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
-    break;
-
-  case 757:
 #line 1382 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
-  case 758:
+  case 757:
 #line 1383 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
-  case 759:
+  case 758:
 #line 1384 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
-  case 760:
+  case 759:
 #line 1385 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
+  case 760:
+#line 1386 "third_party/libpg_query/grammar/statements/select.y"
+    { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
+    break;
+
   case 761:
-#line 1390 "third_party/libpg_query/grammar/statements/select.y"
+#line 1391 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeGroupingSet(GROUPING_SET_EMPTY, NIL, (yylsp[(1) - (2)]));
 				;}
     break;
 
   case 762:
-#line 1403 "third_party/libpg_query/grammar/statements/select.y"
+#line 1404 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeGroupingSet(GROUPING_SET_ROLLUP, (yyvsp[(3) - (4)].list), (yylsp[(1) - (4)]));
 				;}
     break;
 
   case 763:
-#line 1410 "third_party/libpg_query/grammar/statements/select.y"
+#line 1411 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeGroupingSet(GROUPING_SET_CUBE, (yyvsp[(3) - (4)].list), (yylsp[(1) - (4)]));
 				;}
     break;
 
   case 764:
-#line 1417 "third_party/libpg_query/grammar/statements/select.y"
+#line 1418 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeGroupingSet(GROUPING_SET_SETS, (yyvsp[(4) - (5)].list), (yylsp[(1) - (5)]));
 				;}
     break;
 
   case 765:
-#line 1423 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.node) = NULL; ;}
-    break;
-
-  case 766:
 #line 1424 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = NULL; ;}
     break;
 
+  case 766:
+#line 1425 "third_party/libpg_query/grammar/statements/select.y"
+    { (yyval.node) = NULL; ;}
+    break;
+
   case 767:
-#line 1428 "third_party/libpg_query/grammar/statements/select.y"
+#line 1429 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(2) - (2)].node); ;}
     break;
 
   case 768:
-#line 1429 "third_party/libpg_query/grammar/statements/select.y"
+#line 1430 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = NULL; ;}
     break;
 
   case 769:
-#line 1433 "third_party/libpg_query/grammar/statements/select.y"
+#line 1434 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(2) - (2)].node); ;}
     break;
 
   case 770:
-#line 1434 "third_party/libpg_query/grammar/statements/select.y"
+#line 1435 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = NULL; ;}
     break;
 
   case 771:
-#line 1438 "third_party/libpg_query/grammar/statements/select.y"
+#line 1439 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (1)].list); ;}
     break;
 
   case 772:
-#line 1439 "third_party/libpg_query/grammar/statements/select.y"
+#line 1440 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 773:
-#line 1443 "third_party/libpg_query/grammar/statements/select.y"
+#line 1444 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (1)].list); ;}
     break;
 
   case 774:
-#line 1444 "third_party/libpg_query/grammar/statements/select.y"
+#line 1445 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 775:
-#line 1448 "third_party/libpg_query/grammar/statements/select.y"
+#line 1449 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(1) - (1)].node)); ;}
     break;
 
   case 776:
-#line 1449 "third_party/libpg_query/grammar/statements/select.y"
+#line 1450 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (2)].list), (yyvsp[(2) - (2)].node)); ;}
     break;
 
   case 777:
-#line 1454 "third_party/libpg_query/grammar/statements/select.y"
+#line 1455 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGLockingClause *n = makeNode(PGLockingClause);
 					n->lockedRels = (yyvsp[(2) - (3)].list);
@@ -27851,52 +27852,52 @@ yyreduce:
     break;
 
   case 778:
-#line 1464 "third_party/libpg_query/grammar/statements/select.y"
+#line 1465 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.lockstrength) = LCS_FORUPDATE; ;}
     break;
 
   case 779:
-#line 1465 "third_party/libpg_query/grammar/statements/select.y"
+#line 1466 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.lockstrength) = PG_LCS_FORNOKEYUPDATE; ;}
     break;
 
   case 780:
-#line 1466 "third_party/libpg_query/grammar/statements/select.y"
+#line 1467 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.lockstrength) = PG_LCS_FORSHARE; ;}
     break;
 
   case 781:
-#line 1467 "third_party/libpg_query/grammar/statements/select.y"
+#line 1468 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.lockstrength) = PG_LCS_FORKEYSHARE; ;}
     break;
 
   case 782:
-#line 1471 "third_party/libpg_query/grammar/statements/select.y"
+#line 1472 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(2) - (2)].list); ;}
     break;
 
   case 783:
-#line 1472 "third_party/libpg_query/grammar/statements/select.y"
+#line 1473 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 784:
-#line 1477 "third_party/libpg_query/grammar/statements/select.y"
+#line 1478 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.lockwaitpolicy) = LockWaitError; ;}
     break;
 
   case 785:
-#line 1478 "third_party/libpg_query/grammar/statements/select.y"
+#line 1479 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.lockwaitpolicy) = PGLockWaitSkip; ;}
     break;
 
   case 786:
-#line 1479 "third_party/libpg_query/grammar/statements/select.y"
+#line 1480 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.lockwaitpolicy) = PGLockWaitBlock; ;}
     break;
 
   case 787:
-#line 1489 "third_party/libpg_query/grammar/statements/select.y"
+#line 1490 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSelectStmt *n = makeNode(PGSelectStmt);
 					n->valuesLists = list_make1((yyvsp[(3) - (4)].list));
@@ -27905,7 +27906,7 @@ yyreduce:
     break;
 
   case 788:
-#line 1495 "third_party/libpg_query/grammar/statements/select.y"
+#line 1496 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSelectStmt *n = (PGSelectStmt *) (yyvsp[(1) - (5)].node);
 					n->valuesLists = lappend(n->valuesLists, (yyvsp[(4) - (5)].list));
@@ -27914,47 +27915,47 @@ yyreduce:
     break;
 
   case 789:
-#line 1503 "third_party/libpg_query/grammar/statements/select.y"
+#line 1504 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
   case 790:
-#line 1504 "third_party/libpg_query/grammar/statements/select.y"
+#line 1505 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (2)].node); ;}
     break;
 
   case 791:
-#line 1517 "third_party/libpg_query/grammar/statements/select.y"
+#line 1518 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(2) - (2)].list); ;}
     break;
 
   case 792:
-#line 1518 "third_party/libpg_query/grammar/statements/select.y"
+#line 1519 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 793:
-#line 1522 "third_party/libpg_query/grammar/statements/select.y"
+#line 1523 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(1) - (1)].node)); ;}
     break;
 
   case 794:
-#line 1523 "third_party/libpg_query/grammar/statements/select.y"
+#line 1524 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].node)); ;}
     break;
 
   case 795:
-#line 1527 "third_party/libpg_query/grammar/statements/select.y"
+#line 1528 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (1)].list); ;}
     break;
 
   case 796:
-#line 1528 "third_party/libpg_query/grammar/statements/select.y"
+#line 1529 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (2)].list); ;}
     break;
 
   case 797:
-#line 1533 "third_party/libpg_query/grammar/statements/select.y"
+#line 1534 "third_party/libpg_query/grammar/statements/select.y"
     {
                 (yyval.alias) = makeNode(PGAlias);
                 (yyval.alias)->aliasname = (yyvsp[(1) - (2)].str);
@@ -27962,7 +27963,7 @@ yyreduce:
     break;
 
   case 798:
-#line 1544 "third_party/libpg_query/grammar/statements/select.y"
+#line 1545 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyvsp[(1) - (3)].range)->alias = (yyvsp[(2) - (3)].alias);
 					(yyvsp[(1) - (3)].range)->sample = (yyvsp[(3) - (3)].node);
@@ -27971,7 +27972,7 @@ yyreduce:
     break;
 
   case 799:
-#line 1550 "third_party/libpg_query/grammar/statements/select.y"
+#line 1551 "third_party/libpg_query/grammar/statements/select.y"
     {
                     (yyvsp[(2) - (3)].range)->alias = (yyvsp[(1) - (3)].alias);
                     (yyvsp[(2) - (3)].range)->sample = (yyvsp[(3) - (3)].node);
@@ -27980,7 +27981,7 @@ yyreduce:
     break;
 
   case 800:
-#line 1556 "third_party/libpg_query/grammar/statements/select.y"
+#line 1557 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGRangeFunction *n = (PGRangeFunction *) (yyvsp[(1) - (3)].node);
 					n->alias = (PGAlias*) linitial((yyvsp[(2) - (3)].list));
@@ -27991,7 +27992,7 @@ yyreduce:
     break;
 
   case 801:
-#line 1564 "third_party/libpg_query/grammar/statements/select.y"
+#line 1565 "third_party/libpg_query/grammar/statements/select.y"
     {
                         PGRangeFunction *n = (PGRangeFunction *) (yyvsp[(2) - (3)].node);
                         n->alias = (yyvsp[(1) - (3)].alias);
@@ -28001,7 +28002,7 @@ yyreduce:
     break;
 
   case 802:
-#line 1572 "third_party/libpg_query/grammar/statements/select.y"
+#line 1573 "third_party/libpg_query/grammar/statements/select.y"
     {
                     PGRangeSubselect *n = makeNode(PGRangeSubselect);
                     n->lateral = false;
@@ -28013,7 +28014,7 @@ yyreduce:
     break;
 
   case 803:
-#line 1582 "third_party/libpg_query/grammar/statements/select.y"
+#line 1583 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGRangeFunction *n = (PGRangeFunction *) (yyvsp[(2) - (3)].node);
 					n->lateral = true;
@@ -28024,7 +28025,7 @@ yyreduce:
     break;
 
   case 804:
-#line 1590 "third_party/libpg_query/grammar/statements/select.y"
+#line 1591 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGRangeSubselect *n = makeNode(PGRangeSubselect);
 					n->lateral = false;
@@ -28036,7 +28037,7 @@ yyreduce:
     break;
 
   case 805:
-#line 1599 "third_party/libpg_query/grammar/statements/select.y"
+#line 1600 "third_party/libpg_query/grammar/statements/select.y"
     {
                     PGRangeSubselect *n = makeNode(PGRangeSubselect);
                     n->lateral = false;
@@ -28048,7 +28049,7 @@ yyreduce:
     break;
 
   case 806:
-#line 1608 "third_party/libpg_query/grammar/statements/select.y"
+#line 1609 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGRangeSubselect *n = makeNode(PGRangeSubselect);
 					n->lateral = true;
@@ -28060,14 +28061,14 @@ yyreduce:
     break;
 
   case 807:
-#line 1617 "third_party/libpg_query/grammar/statements/select.y"
+#line 1618 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) (yyvsp[(1) - (1)].jexpr);
 				;}
     break;
 
   case 808:
-#line 1621 "third_party/libpg_query/grammar/statements/select.y"
+#line 1622 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyvsp[(2) - (4)].jexpr)->alias = (yyvsp[(4) - (4)].alias);
 					(yyval.node) = (PGNode *) (yyvsp[(2) - (4)].jexpr);
@@ -28075,7 +28076,7 @@ yyreduce:
     break;
 
   case 809:
-#line 1626 "third_party/libpg_query/grammar/statements/select.y"
+#line 1627 "third_party/libpg_query/grammar/statements/select.y"
     {
                     (yyvsp[(3) - (4)].jexpr)->alias = (yyvsp[(1) - (4)].alias);
                     (yyval.node) = (PGNode *) (yyvsp[(3) - (4)].jexpr);
@@ -28083,7 +28084,7 @@ yyreduce:
     break;
 
   case 810:
-#line 1631 "third_party/libpg_query/grammar/statements/select.y"
+#line 1632 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGPivotExpr *n = makeNode(PGPivotExpr);
 					n->source = (yyvsp[(1) - (9)].node);
@@ -28097,7 +28098,7 @@ yyreduce:
     break;
 
   case 811:
-#line 1642 "third_party/libpg_query/grammar/statements/select.y"
+#line 1643 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGPivotExpr *n = makeNode(PGPivotExpr);
 					n->source = (yyvsp[(1) - (9)].node);
@@ -28111,32 +28112,32 @@ yyreduce:
     break;
 
   case 812:
-#line 1655 "third_party/libpg_query/grammar/statements/select.y"
+#line 1656 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(3) - (3)].list); ;}
     break;
 
   case 813:
-#line 1656 "third_party/libpg_query/grammar/statements/select.y"
+#line 1657 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NULL; ;}
     break;
 
   case 814:
-#line 1659 "third_party/libpg_query/grammar/statements/select.y"
+#line 1660 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.boolean) = true; ;}
     break;
 
   case 815:
-#line 1660 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.boolean) = false; ;}
-    break;
-
-  case 816:
 #line 1661 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.boolean) = false; ;}
     break;
 
+  case 816:
+#line 1662 "third_party/libpg_query/grammar/statements/select.y"
+    { (yyval.boolean) = false; ;}
+    break;
+
   case 817:
-#line 1665 "third_party/libpg_query/grammar/statements/select.y"
+#line 1666 "third_party/libpg_query/grammar/statements/select.y"
     {
 			PGPivot *n = makeNode(PGPivot);
 			n->pivot_columns = list_make1((yyvsp[(1) - (5)].node));
@@ -28146,7 +28147,7 @@ yyreduce:
     break;
 
   case 818:
-#line 1673 "third_party/libpg_query/grammar/statements/select.y"
+#line 1674 "third_party/libpg_query/grammar/statements/select.y"
     {
 			PGPivot *n = makeNode(PGPivot);
 			n->pivot_columns = list_make1((yyvsp[(1) - (3)].node));
@@ -28156,22 +28157,22 @@ yyreduce:
     break;
 
   case 819:
-#line 1682 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.list) = list_make1((yyvsp[(1) - (1)].node)); ;}
-    break;
-
-  case 820:
 #line 1683 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(1) - (1)].node)); ;}
     break;
 
-  case 821:
+  case 820:
 #line 1684 "third_party/libpg_query/grammar/statements/select.y"
+    { (yyval.list) = list_make1((yyvsp[(1) - (1)].node)); ;}
+    break;
+
+  case 821:
+#line 1685 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(2) - (3)].list); ;}
     break;
 
   case 822:
-#line 1688 "third_party/libpg_query/grammar/statements/select.y"
+#line 1689 "third_party/libpg_query/grammar/statements/select.y"
     {
 			PGPivot *n = makeNode(PGPivot);
 			n->pivot_columns = (yyvsp[(1) - (5)].list);
@@ -28181,7 +28182,7 @@ yyreduce:
     break;
 
   case 823:
-#line 1696 "third_party/libpg_query/grammar/statements/select.y"
+#line 1697 "third_party/libpg_query/grammar/statements/select.y"
     {
 			PGPivot *n = makeNode(PGPivot);
 			n->pivot_columns = (yyvsp[(1) - (3)].list);
@@ -28191,31 +28192,31 @@ yyreduce:
     break;
 
   case 824:
-#line 1705 "third_party/libpg_query/grammar/statements/select.y"
+#line 1706 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make1((yyvsp[(1) - (1)].node));
 				;}
     break;
 
   case 825:
-#line 1709 "third_party/libpg_query/grammar/statements/select.y"
+#line 1710 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = lappend((yyvsp[(1) - (2)].list), (yyvsp[(2) - (2)].node));
 				;}
     break;
 
   case 826:
-#line 1715 "third_party/libpg_query/grammar/statements/select.y"
+#line 1716 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeString((yyvsp[(1) - (1)].str))); ;}
     break;
 
   case 827:
-#line 1716 "third_party/libpg_query/grammar/statements/select.y"
+#line 1717 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(2) - (3)].list); ;}
     break;
 
   case 828:
-#line 1721 "third_party/libpg_query/grammar/statements/select.y"
+#line 1722 "third_party/libpg_query/grammar/statements/select.y"
     {
 			PGPivot *n = makeNode(PGPivot);
 			n->unpivot_columns = (yyvsp[(1) - (5)].list);
@@ -28225,28 +28226,28 @@ yyreduce:
     break;
 
   case 829:
-#line 1730 "third_party/libpg_query/grammar/statements/select.y"
+#line 1731 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make1((yyvsp[(1) - (1)].node));
 				;}
     break;
 
   case 830:
-#line 1734 "third_party/libpg_query/grammar/statements/select.y"
+#line 1735 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = lappend((yyvsp[(1) - (2)].list), (yyvsp[(2) - (2)].node));
 				;}
     break;
 
   case 831:
-#line 1759 "third_party/libpg_query/grammar/statements/select.y"
+#line 1760 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.jexpr) = (yyvsp[(2) - (3)].jexpr);
 				;}
     break;
 
   case 832:
-#line 1763 "third_party/libpg_query/grammar/statements/select.y"
+#line 1764 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* CROSS JOIN is same as unqualified inner join */
 					PGJoinExpr *n = makeNode(PGJoinExpr);
@@ -28262,7 +28263,7 @@ yyreduce:
     break;
 
   case 833:
-#line 1776 "third_party/libpg_query/grammar/statements/select.y"
+#line 1777 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGJoinExpr *n = makeNode(PGJoinExpr);
 					n->jointype = (yyvsp[(2) - (5)].jtype);
@@ -28279,7 +28280,7 @@ yyreduce:
     break;
 
   case 834:
-#line 1790 "third_party/libpg_query/grammar/statements/select.y"
+#line 1791 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* letting join_type reduce to empty doesn't work */
 					PGJoinExpr *n = makeNode(PGJoinExpr);
@@ -28297,7 +28298,7 @@ yyreduce:
     break;
 
   case 835:
-#line 1805 "third_party/libpg_query/grammar/statements/select.y"
+#line 1806 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGJoinExpr *n = makeNode(PGJoinExpr);
 					n->jointype = (yyvsp[(3) - (5)].jtype);
@@ -28312,7 +28313,7 @@ yyreduce:
     break;
 
   case 836:
-#line 1817 "third_party/libpg_query/grammar/statements/select.y"
+#line 1818 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* letting join_type reduce to empty doesn't work */
 					PGJoinExpr *n = makeNode(PGJoinExpr);
@@ -28328,7 +28329,7 @@ yyreduce:
     break;
 
   case 837:
-#line 1830 "third_party/libpg_query/grammar/statements/select.y"
+#line 1831 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGJoinExpr *n = makeNode(PGJoinExpr);
 					n->jointype = (yyvsp[(3) - (6)].jtype);
@@ -28345,7 +28346,7 @@ yyreduce:
     break;
 
   case 838:
-#line 1844 "third_party/libpg_query/grammar/statements/select.y"
+#line 1845 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGJoinExpr *n = makeNode(PGJoinExpr);
 					n->jointype = PG_JOIN_INNER;
@@ -28362,7 +28363,7 @@ yyreduce:
     break;
 
   case 839:
-#line 1858 "third_party/libpg_query/grammar/statements/select.y"
+#line 1859 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* POSITIONAL JOIN is a coordinated scan */
 					PGJoinExpr *n = makeNode(PGJoinExpr);
@@ -28378,7 +28379,7 @@ yyreduce:
     break;
 
   case 840:
-#line 1871 "third_party/libpg_query/grammar/statements/select.y"
+#line 1872 "third_party/libpg_query/grammar/statements/select.y"
     {
                     /* ANTI JOIN is a filter */
                     PGJoinExpr *n = makeNode(PGJoinExpr);
@@ -28396,7 +28397,7 @@ yyreduce:
     break;
 
   case 841:
-#line 1886 "third_party/libpg_query/grammar/statements/select.y"
+#line 1887 "third_party/libpg_query/grammar/statements/select.y"
     {
                    /* SEMI JOIN is also a filter */
                    PGJoinExpr *n = makeNode(PGJoinExpr);
@@ -28415,7 +28416,7 @@ yyreduce:
     break;
 
   case 842:
-#line 1905 "third_party/libpg_query/grammar/statements/select.y"
+#line 1906 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.alias) = makeNode(PGAlias);
 					(yyval.alias)->aliasname = (yyvsp[(2) - (5)].str);
@@ -28424,7 +28425,7 @@ yyreduce:
     break;
 
   case 843:
-#line 1911 "third_party/libpg_query/grammar/statements/select.y"
+#line 1912 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.alias) = makeNode(PGAlias);
 					(yyval.alias)->aliasname = (yyvsp[(2) - (2)].str);
@@ -28432,7 +28433,7 @@ yyreduce:
     break;
 
   case 844:
-#line 1916 "third_party/libpg_query/grammar/statements/select.y"
+#line 1917 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.alias) = makeNode(PGAlias);
 					(yyval.alias)->aliasname = (yyvsp[(1) - (4)].str);
@@ -28441,7 +28442,7 @@ yyreduce:
     break;
 
   case 845:
-#line 1922 "third_party/libpg_query/grammar/statements/select.y"
+#line 1923 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.alias) = makeNode(PGAlias);
 					(yyval.alias)->aliasname = (yyvsp[(1) - (1)].str);
@@ -28449,31 +28450,31 @@ yyreduce:
     break;
 
   case 846:
-#line 1928 "third_party/libpg_query/grammar/statements/select.y"
+#line 1929 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.alias) = (yyvsp[(1) - (1)].alias); ;}
     break;
 
   case 847:
-#line 1929 "third_party/libpg_query/grammar/statements/select.y"
+#line 1930 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.alias) = NULL; ;}
     break;
 
   case 848:
-#line 1938 "third_party/libpg_query/grammar/statements/select.y"
+#line 1939 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make2((yyvsp[(1) - (1)].alias), NIL);
 				;}
     break;
 
   case 849:
-#line 1942 "third_party/libpg_query/grammar/statements/select.y"
+#line 1943 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make2(NULL, (yyvsp[(3) - (4)].list));
 				;}
     break;
 
   case 850:
-#line 1946 "third_party/libpg_query/grammar/statements/select.y"
+#line 1947 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGAlias *a = makeNode(PGAlias);
 					a->aliasname = (yyvsp[(2) - (5)].str);
@@ -28482,7 +28483,7 @@ yyreduce:
     break;
 
   case 851:
-#line 1952 "third_party/libpg_query/grammar/statements/select.y"
+#line 1953 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGAlias *a = makeNode(PGAlias);
 					a->aliasname = (yyvsp[(1) - (4)].str);
@@ -28491,64 +28492,64 @@ yyreduce:
     break;
 
   case 852:
-#line 1958 "third_party/libpg_query/grammar/statements/select.y"
+#line 1959 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make2(NULL, NIL);
 				;}
     break;
 
   case 853:
-#line 1963 "third_party/libpg_query/grammar/statements/select.y"
+#line 1964 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.jtype) = PG_JOIN_FULL; ;}
     break;
 
   case 854:
-#line 1964 "third_party/libpg_query/grammar/statements/select.y"
+#line 1965 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.jtype) = PG_JOIN_LEFT; ;}
     break;
 
   case 855:
-#line 1965 "third_party/libpg_query/grammar/statements/select.y"
+#line 1966 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.jtype) = PG_JOIN_RIGHT; ;}
     break;
 
   case 856:
-#line 1966 "third_party/libpg_query/grammar/statements/select.y"
+#line 1967 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.jtype) = PG_JOIN_SEMI; ;}
     break;
 
   case 857:
-#line 1967 "third_party/libpg_query/grammar/statements/select.y"
+#line 1968 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.jtype) = PG_JOIN_ANTI; ;}
     break;
 
   case 858:
-#line 1968 "third_party/libpg_query/grammar/statements/select.y"
+#line 1969 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.jtype) = PG_JOIN_INNER; ;}
     break;
 
   case 859:
-#line 1972 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.node) = NULL; ;}
-    break;
-
-  case 860:
 #line 1973 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = NULL; ;}
     break;
 
+  case 860:
+#line 1974 "third_party/libpg_query/grammar/statements/select.y"
+    { (yyval.node) = NULL; ;}
+    break;
+
   case 861:
-#line 1985 "third_party/libpg_query/grammar/statements/select.y"
+#line 1986 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) (yyvsp[(3) - (4)].list); ;}
     break;
 
   case 862:
-#line 1986 "third_party/libpg_query/grammar/statements/select.y"
+#line 1987 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(2) - (2)].node); ;}
     break;
 
   case 863:
-#line 1992 "third_party/libpg_query/grammar/statements/select.y"
+#line 1993 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* inheritance query, implicitly */
 					(yyval.range) = (yyvsp[(1) - (1)].range);
@@ -28558,7 +28559,7 @@ yyreduce:
     break;
 
   case 864:
-#line 1999 "third_party/libpg_query/grammar/statements/select.y"
+#line 2000 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* inheritance query, explicitly */
 					(yyval.range) = (yyvsp[(1) - (2)].range);
@@ -28568,7 +28569,7 @@ yyreduce:
     break;
 
   case 865:
-#line 2006 "third_party/libpg_query/grammar/statements/select.y"
+#line 2007 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* no inheritance */
 					(yyval.range) = (yyvsp[(2) - (2)].range);
@@ -28578,7 +28579,7 @@ yyreduce:
     break;
 
   case 866:
-#line 2013 "third_party/libpg_query/grammar/statements/select.y"
+#line 2014 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* no inheritance, SQL99-style syntax */
 					(yyval.range) = (yyvsp[(3) - (4)].range);
@@ -28588,7 +28589,7 @@ yyreduce:
     break;
 
   case 867:
-#line 2045 "third_party/libpg_query/grammar/statements/select.y"
+#line 2046 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGRangeFunction *n = makeNode(PGRangeFunction);
 					n->lateral = false;
@@ -28602,7 +28603,7 @@ yyreduce:
     break;
 
   case 868:
-#line 2056 "third_party/libpg_query/grammar/statements/select.y"
+#line 2057 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGRangeFunction *n = makeNode(PGRangeFunction);
 					n->lateral = false;
@@ -28616,66 +28617,66 @@ yyreduce:
     break;
 
   case 869:
-#line 2069 "third_party/libpg_query/grammar/statements/select.y"
+#line 2070 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make2((yyvsp[(1) - (2)].node), (yyvsp[(2) - (2)].list)); ;}
     break;
 
   case 870:
-#line 2073 "third_party/libpg_query/grammar/statements/select.y"
+#line 2074 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(1) - (1)].list)); ;}
     break;
 
   case 871:
-#line 2074 "third_party/libpg_query/grammar/statements/select.y"
+#line 2075 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].list)); ;}
     break;
 
   case 872:
-#line 2077 "third_party/libpg_query/grammar/statements/select.y"
+#line 2078 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(3) - (4)].list); ;}
     break;
 
   case 873:
-#line 2078 "third_party/libpg_query/grammar/statements/select.y"
+#line 2079 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 874:
-#line 2081 "third_party/libpg_query/grammar/statements/select.y"
+#line 2082 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.boolean) = true; ;}
     break;
 
   case 875:
-#line 2082 "third_party/libpg_query/grammar/statements/select.y"
+#line 2083 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.boolean) = false; ;}
     break;
 
   case 876:
-#line 2087 "third_party/libpg_query/grammar/statements/select.y"
+#line 2088 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(2) - (2)].node); ;}
     break;
 
   case 877:
-#line 2088 "third_party/libpg_query/grammar/statements/select.y"
+#line 2089 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = NULL; ;}
     break;
 
   case 878:
-#line 2094 "third_party/libpg_query/grammar/statements/select.y"
+#line 2095 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make1((yyvsp[(1) - (1)].node));
 				;}
     break;
 
   case 879:
-#line 2098 "third_party/libpg_query/grammar/statements/select.y"
+#line 2099 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].node));
 				;}
     break;
 
   case 880:
-#line 2104 "third_party/libpg_query/grammar/statements/select.y"
+#line 2105 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGColumnDef *n = makeNode(PGColumnDef);
 					n->colname = (yyvsp[(1) - (3)].str);
@@ -28696,7 +28697,7 @@ yyreduce:
     break;
 
   case 881:
-#line 2125 "third_party/libpg_query/grammar/statements/select.y"
+#line 2126 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGCollateClause *n = makeNode(PGCollateClause);
 					n->arg = NULL;
@@ -28707,36 +28708,36 @@ yyreduce:
     break;
 
   case 882:
-#line 2132 "third_party/libpg_query/grammar/statements/select.y"
+#line 2133 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = NULL; ;}
     break;
 
   case 883:
-#line 2146 "third_party/libpg_query/grammar/statements/select.y"
+#line 2147 "third_party/libpg_query/grammar/statements/select.y"
     {
              (yyval.list) = list_make1(list_make2(makeString((yyvsp[(1) - (2)].str)), (yyvsp[(2) - (2)].typnam)));
             ;}
     break;
 
   case 884:
-#line 2149 "third_party/libpg_query/grammar/statements/select.y"
+#line 2150 "third_party/libpg_query/grammar/statements/select.y"
     {
              (yyval.list) = lappend((yyvsp[(1) - (4)].list), list_make2(makeString((yyvsp[(3) - (4)].str)), (yyvsp[(4) - (4)].typnam)));
             ;}
     break;
 
   case 887:
-#line 2156 "third_party/libpg_query/grammar/statements/select.y"
+#line 2157 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.typnam) = (yyvsp[(1) - (1)].typnam); ;}
     break;
 
   case 888:
-#line 2157 "third_party/libpg_query/grammar/statements/select.y"
+#line 2158 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.typnam) = NULL; ;}
     break;
 
   case 889:
-#line 2160 "third_party/libpg_query/grammar/statements/select.y"
+#line 2161 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = (yyvsp[(1) - (2)].typnam);
 					(yyval.typnam)->arrayBounds = (yyvsp[(2) - (2)].list);
@@ -28744,7 +28745,7 @@ yyreduce:
     break;
 
   case 890:
-#line 2165 "third_party/libpg_query/grammar/statements/select.y"
+#line 2166 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = (yyvsp[(2) - (3)].typnam);
 					(yyval.typnam)->arrayBounds = (yyvsp[(3) - (3)].list);
@@ -28753,7 +28754,7 @@ yyreduce:
     break;
 
   case 891:
-#line 2172 "third_party/libpg_query/grammar/statements/select.y"
+#line 2173 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = (yyvsp[(1) - (5)].typnam);
 					(yyval.typnam)->arrayBounds = list_make1(makeInteger((yyvsp[(4) - (5)].ival)));
@@ -28761,7 +28762,7 @@ yyreduce:
     break;
 
   case 892:
-#line 2177 "third_party/libpg_query/grammar/statements/select.y"
+#line 2178 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = (yyvsp[(2) - (6)].typnam);
 					(yyval.typnam)->arrayBounds = list_make1(makeInteger((yyvsp[(5) - (6)].ival)));
@@ -28770,7 +28771,7 @@ yyreduce:
     break;
 
   case 893:
-#line 2183 "third_party/libpg_query/grammar/statements/select.y"
+#line 2184 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = (yyvsp[(1) - (2)].typnam);
 					(yyval.typnam)->arrayBounds = list_make1(makeInteger(-1));
@@ -28778,7 +28779,7 @@ yyreduce:
     break;
 
   case 894:
-#line 2188 "third_party/libpg_query/grammar/statements/select.y"
+#line 2189 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = (yyvsp[(2) - (3)].typnam);
 					(yyval.typnam)->arrayBounds = list_make1(makeInteger(-1));
@@ -28787,14 +28788,14 @@ yyreduce:
     break;
 
   case 895:
-#line 2194 "third_party/libpg_query/grammar/statements/select.y"
+#line 2195 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = makeTypeNameFromNameList((yyvsp[(1) - (1)].list));
 				;}
     break;
 
   case 896:
-#line 2198 "third_party/libpg_query/grammar/statements/select.y"
+#line 2199 "third_party/libpg_query/grammar/statements/select.y"
     {
 				   (yyval.typnam) = SystemTypeName("struct");
 				   (yyval.typnam)->arrayBounds = (yyvsp[(5) - (5)].list);
@@ -28804,7 +28805,7 @@ yyreduce:
     break;
 
   case 897:
-#line 2205 "third_party/libpg_query/grammar/statements/select.y"
+#line 2206 "third_party/libpg_query/grammar/statements/select.y"
     {
 				   (yyval.typnam) = SystemTypeName("map");
 				   (yyval.typnam)->arrayBounds = (yyvsp[(5) - (5)].list);
@@ -28814,7 +28815,7 @@ yyreduce:
     break;
 
   case 898:
-#line 2212 "third_party/libpg_query/grammar/statements/select.y"
+#line 2213 "third_party/libpg_query/grammar/statements/select.y"
     {
 				   (yyval.typnam) = SystemTypeName("union");
 				   (yyval.typnam)->arrayBounds = (yyvsp[(5) - (5)].list);
@@ -28824,57 +28825,57 @@ yyreduce:
     break;
 
   case 899:
-#line 2221 "third_party/libpg_query/grammar/statements/select.y"
+#line 2222 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make2(makeString((yyvsp[(1) - (3)].str)), makeString((yyvsp[(3) - (3)].str))); ;}
     break;
 
   case 900:
-#line 2222 "third_party/libpg_query/grammar/statements/select.y"
+#line 2223 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (3)].list), makeString((yyvsp[(3) - (3)].str))); ;}
     break;
 
   case 901:
-#line 2227 "third_party/libpg_query/grammar/statements/select.y"
+#line 2228 "third_party/libpg_query/grammar/statements/select.y"
     {  (yyval.list) = lappend((yyvsp[(1) - (3)].list), makeInteger(-1)); ;}
     break;
 
   case 902:
-#line 2229 "third_party/libpg_query/grammar/statements/select.y"
+#line 2230 "third_party/libpg_query/grammar/statements/select.y"
     {  (yyval.list) = lappend((yyvsp[(1) - (4)].list), makeInteger((yyvsp[(3) - (4)].ival))); ;}
     break;
 
   case 903:
-#line 2231 "third_party/libpg_query/grammar/statements/select.y"
+#line 2232 "third_party/libpg_query/grammar/statements/select.y"
     {  (yyval.list) = NIL; ;}
     break;
 
   case 904:
-#line 2235 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.typnam) = (yyvsp[(1) - (1)].typnam); ;}
-    break;
-
-  case 905:
 #line 2236 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.typnam) = (yyvsp[(1) - (1)].typnam); ;}
     break;
 
-  case 906:
+  case 905:
 #line 2237 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.typnam) = (yyvsp[(1) - (1)].typnam); ;}
     break;
 
-  case 907:
+  case 906:
 #line 2238 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.typnam) = (yyvsp[(1) - (1)].typnam); ;}
     break;
 
-  case 908:
+  case 907:
 #line 2239 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.typnam) = (yyvsp[(1) - (1)].typnam); ;}
     break;
 
+  case 908:
+#line 2240 "third_party/libpg_query/grammar/statements/select.y"
+    { (yyval.typnam) = (yyvsp[(1) - (1)].typnam); ;}
+    break;
+
   case 909:
-#line 2241 "third_party/libpg_query/grammar/statements/select.y"
+#line 2242 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = (yyvsp[(1) - (2)].typnam);
 					(yyval.typnam)->typmods = (yyvsp[(2) - (2)].list);
@@ -28882,7 +28883,7 @@ yyreduce:
     break;
 
   case 910:
-#line 2246 "third_party/libpg_query/grammar/statements/select.y"
+#line 2247 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = (yyvsp[(1) - (4)].typnam);
 					(yyval.typnam)->typmods = list_make2(makeIntConst(INTERVAL_FULL_RANGE, -1),
@@ -28891,27 +28892,27 @@ yyreduce:
     break;
 
   case 911:
-#line 2265 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.typnam) = (yyvsp[(1) - (1)].typnam); ;}
-    break;
-
-  case 912:
 #line 2266 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.typnam) = (yyvsp[(1) - (1)].typnam); ;}
     break;
 
-  case 913:
+  case 912:
 #line 2267 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.typnam) = (yyvsp[(1) - (1)].typnam); ;}
     break;
 
-  case 914:
+  case 913:
 #line 2268 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.typnam) = (yyvsp[(1) - (1)].typnam); ;}
     break;
 
+  case 914:
+#line 2269 "third_party/libpg_query/grammar/statements/select.y"
+    { (yyval.typnam) = (yyvsp[(1) - (1)].typnam); ;}
+    break;
+
   case 915:
-#line 2280 "third_party/libpg_query/grammar/statements/select.y"
+#line 2281 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = makeTypeName((yyvsp[(1) - (2)].str));
 					(yyval.typnam)->typmods = (yyvsp[(2) - (2)].list);
@@ -28920,17 +28921,17 @@ yyreduce:
     break;
 
   case 916:
-#line 2293 "third_party/libpg_query/grammar/statements/select.y"
+#line 2294 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(2) - (3)].list); ;}
     break;
 
   case 917:
-#line 2294 "third_party/libpg_query/grammar/statements/select.y"
+#line 2295 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 918:
-#line 2301 "third_party/libpg_query/grammar/statements/select.y"
+#line 2302 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = SystemTypeName("int4");
 					(yyval.typnam)->location = (yylsp[(1) - (1)]);
@@ -28938,7 +28939,7 @@ yyreduce:
     break;
 
   case 919:
-#line 2306 "third_party/libpg_query/grammar/statements/select.y"
+#line 2307 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = SystemTypeName("int4");
 					(yyval.typnam)->location = (yylsp[(1) - (1)]);
@@ -28946,7 +28947,7 @@ yyreduce:
     break;
 
   case 920:
-#line 2311 "third_party/libpg_query/grammar/statements/select.y"
+#line 2312 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = SystemTypeName("int2");
 					(yyval.typnam)->location = (yylsp[(1) - (1)]);
@@ -28954,7 +28955,7 @@ yyreduce:
     break;
 
   case 921:
-#line 2316 "third_party/libpg_query/grammar/statements/select.y"
+#line 2317 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = SystemTypeName("int8");
 					(yyval.typnam)->location = (yylsp[(1) - (1)]);
@@ -28962,7 +28963,7 @@ yyreduce:
     break;
 
   case 922:
-#line 2321 "third_party/libpg_query/grammar/statements/select.y"
+#line 2322 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = SystemTypeName("float4");
 					(yyval.typnam)->location = (yylsp[(1) - (1)]);
@@ -28970,7 +28971,7 @@ yyreduce:
     break;
 
   case 923:
-#line 2326 "third_party/libpg_query/grammar/statements/select.y"
+#line 2327 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = (yyvsp[(2) - (2)].typnam);
 					(yyval.typnam)->location = (yylsp[(1) - (2)]);
@@ -28978,7 +28979,7 @@ yyreduce:
     break;
 
   case 924:
-#line 2331 "third_party/libpg_query/grammar/statements/select.y"
+#line 2332 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = SystemTypeName("float8");
 					(yyval.typnam)->location = (yylsp[(1) - (2)]);
@@ -28986,7 +28987,7 @@ yyreduce:
     break;
 
   case 925:
-#line 2336 "third_party/libpg_query/grammar/statements/select.y"
+#line 2337 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = SystemTypeName("numeric");
 					(yyval.typnam)->typmods = (yyvsp[(2) - (2)].list);
@@ -28995,7 +28996,7 @@ yyreduce:
     break;
 
   case 926:
-#line 2342 "third_party/libpg_query/grammar/statements/select.y"
+#line 2343 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = SystemTypeName("numeric");
 					(yyval.typnam)->typmods = (yyvsp[(2) - (2)].list);
@@ -29004,7 +29005,7 @@ yyreduce:
     break;
 
   case 927:
-#line 2348 "third_party/libpg_query/grammar/statements/select.y"
+#line 2349 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = SystemTypeName("numeric");
 					(yyval.typnam)->typmods = (yyvsp[(2) - (2)].list);
@@ -29013,7 +29014,7 @@ yyreduce:
     break;
 
   case 928:
-#line 2354 "third_party/libpg_query/grammar/statements/select.y"
+#line 2355 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = SystemTypeName("bool");
 					(yyval.typnam)->location = (yylsp[(1) - (1)]);
@@ -29021,7 +29022,7 @@ yyreduce:
     break;
 
   case 929:
-#line 2361 "third_party/libpg_query/grammar/statements/select.y"
+#line 2362 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/*
 					 * Check FLOAT() precision limits assuming IEEE floating
@@ -29045,35 +29046,35 @@ yyreduce:
     break;
 
   case 930:
-#line 2382 "third_party/libpg_query/grammar/statements/select.y"
+#line 2383 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = SystemTypeName("float4");
 				;}
     break;
 
   case 931:
-#line 2392 "third_party/libpg_query/grammar/statements/select.y"
+#line 2393 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = (yyvsp[(1) - (1)].typnam);
 				;}
     break;
 
   case 932:
-#line 2396 "third_party/libpg_query/grammar/statements/select.y"
+#line 2397 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = (yyvsp[(1) - (1)].typnam);
 				;}
     break;
 
   case 933:
-#line 2404 "third_party/libpg_query/grammar/statements/select.y"
+#line 2405 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = (yyvsp[(1) - (1)].typnam);
 				;}
     break;
 
   case 934:
-#line 2408 "third_party/libpg_query/grammar/statements/select.y"
+#line 2409 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = (yyvsp[(1) - (1)].typnam);
 					(yyval.typnam)->typmods = NIL;
@@ -29081,7 +29082,7 @@ yyreduce:
     break;
 
   case 935:
-#line 2416 "third_party/libpg_query/grammar/statements/select.y"
+#line 2417 "third_party/libpg_query/grammar/statements/select.y"
     {
 					const char *typname;
 
@@ -29093,7 +29094,7 @@ yyreduce:
     break;
 
   case 936:
-#line 2428 "third_party/libpg_query/grammar/statements/select.y"
+#line 2429 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* bit defaults to bit(1), varbit to no limit */
 					if ((yyvsp[(2) - (2)].boolean))
@@ -29110,28 +29111,28 @@ yyreduce:
     break;
 
   case 937:
-#line 2449 "third_party/libpg_query/grammar/statements/select.y"
+#line 2450 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = (yyvsp[(1) - (1)].typnam);
 				;}
     break;
 
   case 938:
-#line 2453 "third_party/libpg_query/grammar/statements/select.y"
+#line 2454 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = (yyvsp[(1) - (1)].typnam);
 				;}
     break;
 
   case 939:
-#line 2459 "third_party/libpg_query/grammar/statements/select.y"
+#line 2460 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = (yyvsp[(1) - (1)].typnam);
 				;}
     break;
 
   case 940:
-#line 2463 "third_party/libpg_query/grammar/statements/select.y"
+#line 2464 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* Length was not specified so allow to be unrestricted.
 					 * This handles problems with fixed-length (bpchar) strings
@@ -29145,7 +29146,7 @@ yyreduce:
     break;
 
   case 941:
-#line 2476 "third_party/libpg_query/grammar/statements/select.y"
+#line 2477 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = SystemTypeName((yyvsp[(1) - (4)].conststr));
 					(yyval.typnam)->typmods = list_make1(makeIntConst((yyvsp[(3) - (4)].ival), (yylsp[(3) - (4)])));
@@ -29154,7 +29155,7 @@ yyreduce:
     break;
 
   case 942:
-#line 2484 "third_party/libpg_query/grammar/statements/select.y"
+#line 2485 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = SystemTypeName((yyvsp[(1) - (1)].conststr));
 					/* char defaults to char(1), varchar to no limit */
@@ -29165,47 +29166,47 @@ yyreduce:
     break;
 
   case 943:
-#line 2494 "third_party/libpg_query/grammar/statements/select.y"
+#line 2495 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.conststr) = (yyvsp[(2) - (2)].boolean) ? "varchar": "bpchar"; ;}
     break;
 
   case 944:
-#line 2496 "third_party/libpg_query/grammar/statements/select.y"
+#line 2497 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.conststr) = (yyvsp[(2) - (2)].boolean) ? "varchar": "bpchar"; ;}
     break;
 
   case 945:
-#line 2498 "third_party/libpg_query/grammar/statements/select.y"
+#line 2499 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.conststr) = "varchar"; ;}
     break;
 
   case 946:
-#line 2500 "third_party/libpg_query/grammar/statements/select.y"
+#line 2501 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.conststr) = (yyvsp[(3) - (3)].boolean) ? "varchar": "bpchar"; ;}
     break;
 
   case 947:
-#line 2502 "third_party/libpg_query/grammar/statements/select.y"
+#line 2503 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.conststr) = (yyvsp[(3) - (3)].boolean) ? "varchar": "bpchar"; ;}
     break;
 
   case 948:
-#line 2504 "third_party/libpg_query/grammar/statements/select.y"
+#line 2505 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.conststr) = (yyvsp[(2) - (2)].boolean) ? "varchar": "bpchar"; ;}
     break;
 
   case 949:
-#line 2508 "third_party/libpg_query/grammar/statements/select.y"
+#line 2509 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.boolean) = true; ;}
     break;
 
   case 950:
-#line 2509 "third_party/libpg_query/grammar/statements/select.y"
+#line 2510 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.boolean) = false; ;}
     break;
 
   case 951:
-#line 2517 "third_party/libpg_query/grammar/statements/select.y"
+#line 2518 "third_party/libpg_query/grammar/statements/select.y"
     {
 					if ((yyvsp[(5) - (5)].boolean))
 						(yyval.typnam) = SystemTypeName("timestamptz");
@@ -29217,7 +29218,7 @@ yyreduce:
     break;
 
   case 952:
-#line 2526 "third_party/libpg_query/grammar/statements/select.y"
+#line 2527 "third_party/libpg_query/grammar/statements/select.y"
     {
 					if ((yyvsp[(2) - (2)].boolean))
 						(yyval.typnam) = SystemTypeName("timestamptz");
@@ -29228,7 +29229,7 @@ yyreduce:
     break;
 
   case 953:
-#line 2534 "third_party/libpg_query/grammar/statements/select.y"
+#line 2535 "third_party/libpg_query/grammar/statements/select.y"
     {
 					if ((yyvsp[(5) - (5)].boolean))
 						(yyval.typnam) = SystemTypeName("timetz");
@@ -29240,7 +29241,7 @@ yyreduce:
     break;
 
   case 954:
-#line 2543 "third_party/libpg_query/grammar/statements/select.y"
+#line 2544 "third_party/libpg_query/grammar/statements/select.y"
     {
 					if ((yyvsp[(2) - (2)].boolean))
 						(yyval.typnam) = SystemTypeName("timetz");
@@ -29251,7 +29252,7 @@ yyreduce:
     break;
 
   case 955:
-#line 2554 "third_party/libpg_query/grammar/statements/select.y"
+#line 2555 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.typnam) = SystemTypeName("interval");
 					(yyval.typnam)->location = (yylsp[(1) - (1)]);
@@ -29259,87 +29260,87 @@ yyreduce:
     break;
 
   case 956:
-#line 2561 "third_party/libpg_query/grammar/statements/select.y"
+#line 2562 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.boolean) = true; ;}
     break;
 
   case 957:
-#line 2562 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.boolean) = false; ;}
-    break;
-
-  case 958:
 #line 2563 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.boolean) = false; ;}
     break;
 
+  case 958:
+#line 2564 "third_party/libpg_query/grammar/statements/select.y"
+    { (yyval.boolean) = false; ;}
+    break;
+
   case 985:
-#line 2607 "third_party/libpg_query/grammar/statements/select.y"
+#line 2608 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeIntConst(INTERVAL_MASK(YEAR), (yylsp[(1) - (1)]))); ;}
     break;
 
   case 986:
-#line 2609 "third_party/libpg_query/grammar/statements/select.y"
+#line 2610 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeIntConst(INTERVAL_MASK(MONTH), (yylsp[(1) - (1)]))); ;}
     break;
 
   case 987:
-#line 2611 "third_party/libpg_query/grammar/statements/select.y"
+#line 2612 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeIntConst(INTERVAL_MASK(DAY), (yylsp[(1) - (1)]))); ;}
     break;
 
   case 988:
-#line 2613 "third_party/libpg_query/grammar/statements/select.y"
+#line 2614 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeIntConst(INTERVAL_MASK(HOUR), (yylsp[(1) - (1)]))); ;}
     break;
 
   case 989:
-#line 2615 "third_party/libpg_query/grammar/statements/select.y"
+#line 2616 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeIntConst(INTERVAL_MASK(MINUTE), (yylsp[(1) - (1)]))); ;}
     break;
 
   case 990:
-#line 2617 "third_party/libpg_query/grammar/statements/select.y"
+#line 2618 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeIntConst(INTERVAL_MASK(SECOND), (yylsp[(1) - (1)]))); ;}
     break;
 
   case 991:
-#line 2619 "third_party/libpg_query/grammar/statements/select.y"
+#line 2620 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeIntConst(INTERVAL_MASK(MILLISECOND), (yylsp[(1) - (1)]))); ;}
     break;
 
   case 992:
-#line 2621 "third_party/libpg_query/grammar/statements/select.y"
+#line 2622 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeIntConst(INTERVAL_MASK(MICROSECOND), (yylsp[(1) - (1)]))); ;}
     break;
 
   case 993:
-#line 2623 "third_party/libpg_query/grammar/statements/select.y"
+#line 2624 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeIntConst(INTERVAL_MASK(WEEK), (yylsp[(1) - (1)]))); ;}
     break;
 
   case 994:
-#line 2625 "third_party/libpg_query/grammar/statements/select.y"
+#line 2626 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeIntConst(INTERVAL_MASK(QUARTER), (yylsp[(1) - (1)]))); ;}
     break;
 
   case 995:
-#line 2627 "third_party/libpg_query/grammar/statements/select.y"
+#line 2628 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeIntConst(INTERVAL_MASK(DECADE), (yylsp[(1) - (1)]))); ;}
     break;
 
   case 996:
-#line 2629 "third_party/libpg_query/grammar/statements/select.y"
+#line 2630 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeIntConst(INTERVAL_MASK(CENTURY), (yylsp[(1) - (1)]))); ;}
     break;
 
   case 997:
-#line 2631 "third_party/libpg_query/grammar/statements/select.y"
+#line 2632 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeIntConst(INTERVAL_MASK(MILLENNIUM), (yylsp[(1) - (1)]))); ;}
     break;
 
   case 998:
-#line 2633 "third_party/libpg_query/grammar/statements/select.y"
+#line 2634 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make1(makeIntConst(INTERVAL_MASK(YEAR) |
 												 INTERVAL_MASK(MONTH), (yylsp[(1) - (3)])));
@@ -29347,7 +29348,7 @@ yyreduce:
     break;
 
   case 999:
-#line 2638 "third_party/libpg_query/grammar/statements/select.y"
+#line 2639 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make1(makeIntConst(INTERVAL_MASK(DAY) |
 												 INTERVAL_MASK(HOUR), (yylsp[(1) - (3)])));
@@ -29355,7 +29356,7 @@ yyreduce:
     break;
 
   case 1000:
-#line 2643 "third_party/libpg_query/grammar/statements/select.y"
+#line 2644 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make1(makeIntConst(INTERVAL_MASK(DAY) |
 												 INTERVAL_MASK(HOUR) |
@@ -29364,7 +29365,7 @@ yyreduce:
     break;
 
   case 1001:
-#line 2649 "third_party/libpg_query/grammar/statements/select.y"
+#line 2650 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make1(makeIntConst(INTERVAL_MASK(DAY) |
 												 INTERVAL_MASK(HOUR) |
@@ -29374,7 +29375,7 @@ yyreduce:
     break;
 
   case 1002:
-#line 2656 "third_party/libpg_query/grammar/statements/select.y"
+#line 2657 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make1(makeIntConst(INTERVAL_MASK(HOUR) |
 												 INTERVAL_MASK(MINUTE), (yylsp[(1) - (3)])));
@@ -29382,7 +29383,7 @@ yyreduce:
     break;
 
   case 1003:
-#line 2661 "third_party/libpg_query/grammar/statements/select.y"
+#line 2662 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make1(makeIntConst(INTERVAL_MASK(HOUR) |
 												 INTERVAL_MASK(MINUTE) |
@@ -29391,7 +29392,7 @@ yyreduce:
     break;
 
   case 1004:
-#line 2667 "third_party/libpg_query/grammar/statements/select.y"
+#line 2668 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make1(makeIntConst(INTERVAL_MASK(MINUTE) |
 												 INTERVAL_MASK(SECOND), (yylsp[(1) - (3)])));
@@ -29399,27 +29400,27 @@ yyreduce:
     break;
 
   case 1005:
-#line 2672 "third_party/libpg_query/grammar/statements/select.y"
+#line 2673 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 1006:
-#line 2707 "third_party/libpg_query/grammar/statements/select.y"
+#line 2708 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = noteDecideExpr((yyvsp[(1) - (1)].node), (yylsp[(1) - (1)]), yyscanner); ;}
     break;
 
   case 1007:
-#line 2710 "third_party/libpg_query/grammar/statements/select.y"
+#line 2711 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
   case 1008:
-#line 2713 "third_party/libpg_query/grammar/statements/select.y"
+#line 2714 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = makeTypeCast((yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].typnam), 0, (yylsp[(2) - (3)])); ;}
     break;
 
   case 1009:
-#line 2715 "third_party/libpg_query/grammar/statements/select.y"
+#line 2716 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGCollateClause *n = makeNode(PGCollateClause);
 					n->arg = (yyvsp[(1) - (3)].node);
@@ -29430,7 +29431,7 @@ yyreduce:
     break;
 
   case 1010:
-#line 2723 "third_party/libpg_query/grammar/statements/select.y"
+#line 2724 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeFuncCall(SystemFuncName("timezone"),
 											   list_make2((yyvsp[(5) - (5)].node), (yyvsp[(1) - (5)].node)),
@@ -29439,122 +29440,122 @@ yyreduce:
     break;
 
   case 1011:
-#line 2738 "third_party/libpg_query/grammar/statements/select.y"
+#line 2739 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "+", NULL, (yyvsp[(2) - (2)].node), (yylsp[(1) - (2)])); ;}
     break;
 
   case 1012:
-#line 2740 "third_party/libpg_query/grammar/statements/select.y"
+#line 2741 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = doNegate((yyvsp[(2) - (2)].node), (yylsp[(1) - (2)])); ;}
     break;
 
   case 1013:
-#line 2742 "third_party/libpg_query/grammar/statements/select.y"
+#line 2743 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "+", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1014:
-#line 2744 "third_party/libpg_query/grammar/statements/select.y"
+#line 2745 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "-", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1015:
-#line 2746 "third_party/libpg_query/grammar/statements/select.y"
+#line 2747 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "*", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1016:
-#line 2748 "third_party/libpg_query/grammar/statements/select.y"
+#line 2749 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "/", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1017:
-#line 2750 "third_party/libpg_query/grammar/statements/select.y"
+#line 2751 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "//", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1018:
-#line 2752 "third_party/libpg_query/grammar/statements/select.y"
+#line 2753 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "%", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1019:
-#line 2754 "third_party/libpg_query/grammar/statements/select.y"
+#line 2755 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "^", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1020:
-#line 2756 "third_party/libpg_query/grammar/statements/select.y"
+#line 2757 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "**", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1021:
-#line 2758 "third_party/libpg_query/grammar/statements/select.y"
+#line 2759 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1022:
-#line 2760 "third_party/libpg_query/grammar/statements/select.y"
+#line 2761 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, ">", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1023:
-#line 2762 "third_party/libpg_query/grammar/statements/select.y"
+#line 2763 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "=", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1024:
-#line 2764 "third_party/libpg_query/grammar/statements/select.y"
+#line 2765 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<=", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1025:
-#line 2766 "third_party/libpg_query/grammar/statements/select.y"
+#line 2767 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, ">=", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1026:
-#line 2768 "third_party/libpg_query/grammar/statements/select.y"
+#line 2769 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<>", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1027:
-#line 2771 "third_party/libpg_query/grammar/statements/select.y"
+#line 2772 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeAExpr(PG_AEXPR_OP, (yyvsp[(2) - (3)].list), (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1028:
-#line 2773 "third_party/libpg_query/grammar/statements/select.y"
+#line 2774 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeAExpr(PG_AEXPR_OP, (yyvsp[(1) - (2)].list), NULL, (yyvsp[(2) - (2)].node), (yylsp[(1) - (2)])); ;}
     break;
 
   case 1029:
-#line 2775 "third_party/libpg_query/grammar/statements/select.y"
+#line 2776 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeAExpr(PG_AEXPR_OP, (yyvsp[(2) - (2)].list), (yyvsp[(1) - (2)].node), NULL, (yylsp[(2) - (2)])); ;}
     break;
 
   case 1030:
-#line 2778 "third_party/libpg_query/grammar/statements/select.y"
+#line 2779 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = makeAndExpr((yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1031:
-#line 2780 "third_party/libpg_query/grammar/statements/select.y"
+#line 2781 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = makeOrExpr((yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1032:
-#line 2782 "third_party/libpg_query/grammar/statements/select.y"
+#line 2783 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = makeNotExpr((yyvsp[(2) - (2)].node), (yylsp[(1) - (2)])); ;}
     break;
 
   case 1033:
-#line 2784 "third_party/libpg_query/grammar/statements/select.y"
+#line 2785 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = makeNotExpr((yyvsp[(2) - (2)].node), (yylsp[(1) - (2)])); ;}
     break;
 
   case 1034:
-#line 2786 "third_party/libpg_query/grammar/statements/select.y"
+#line 2787 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_GLOB, "~~~",
 												   (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)]));
@@ -29562,7 +29563,7 @@ yyreduce:
     break;
 
   case 1035:
-#line 2791 "third_party/libpg_query/grammar/statements/select.y"
+#line 2792 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_LIKE, "~~",
 												   (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)]));
@@ -29570,7 +29571,7 @@ yyreduce:
     break;
 
   case 1036:
-#line 2796 "third_party/libpg_query/grammar/statements/select.y"
+#line 2797 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGFuncCall *n = makeFuncCall(SystemFuncName("like_escape"),
 											   list_make3((yyvsp[(1) - (5)].node), (yyvsp[(3) - (5)].node), (yyvsp[(5) - (5)].node)),
@@ -29580,7 +29581,7 @@ yyreduce:
     break;
 
   case 1037:
-#line 2803 "third_party/libpg_query/grammar/statements/select.y"
+#line 2804 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_LIKE, "!~~",
 												   (yyvsp[(1) - (4)].node), (yyvsp[(4) - (4)].node), (yylsp[(2) - (4)]));
@@ -29588,7 +29589,7 @@ yyreduce:
     break;
 
   case 1038:
-#line 2808 "third_party/libpg_query/grammar/statements/select.y"
+#line 2809 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGFuncCall *n = makeFuncCall(SystemFuncName("not_like_escape"),
 											   list_make3((yyvsp[(1) - (6)].node), (yyvsp[(4) - (6)].node), (yyvsp[(6) - (6)].node)),
@@ -29598,7 +29599,7 @@ yyreduce:
     break;
 
   case 1039:
-#line 2815 "third_party/libpg_query/grammar/statements/select.y"
+#line 2816 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_ILIKE, "~~*",
 												   (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)]));
@@ -29606,7 +29607,7 @@ yyreduce:
     break;
 
   case 1040:
-#line 2820 "third_party/libpg_query/grammar/statements/select.y"
+#line 2821 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGFuncCall *n = makeFuncCall(SystemFuncName("ilike_escape"),
 											   list_make3((yyvsp[(1) - (5)].node), (yyvsp[(3) - (5)].node), (yyvsp[(5) - (5)].node)),
@@ -29616,7 +29617,7 @@ yyreduce:
     break;
 
   case 1041:
-#line 2827 "third_party/libpg_query/grammar/statements/select.y"
+#line 2828 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_ILIKE, "!~~*",
 												   (yyvsp[(1) - (4)].node), (yyvsp[(4) - (4)].node), (yylsp[(2) - (4)]));
@@ -29624,7 +29625,7 @@ yyreduce:
     break;
 
   case 1042:
-#line 2832 "third_party/libpg_query/grammar/statements/select.y"
+#line 2833 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGFuncCall *n = makeFuncCall(SystemFuncName("not_ilike_escape"),
 											   list_make3((yyvsp[(1) - (6)].node), (yyvsp[(4) - (6)].node), (yyvsp[(6) - (6)].node)),
@@ -29634,7 +29635,7 @@ yyreduce:
     break;
 
   case 1043:
-#line 2840 "third_party/libpg_query/grammar/statements/select.y"
+#line 2841 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGFuncCall *n = makeFuncCall(SystemFuncName("similar_escape"),
 											   list_make2((yyvsp[(4) - (4)].node), makeNullAConst(-1)),
@@ -29645,7 +29646,7 @@ yyreduce:
     break;
 
   case 1044:
-#line 2848 "third_party/libpg_query/grammar/statements/select.y"
+#line 2849 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGFuncCall *n = makeFuncCall(SystemFuncName("similar_escape"),
 											   list_make2((yyvsp[(4) - (6)].node), (yyvsp[(6) - (6)].node)),
@@ -29656,7 +29657,7 @@ yyreduce:
     break;
 
   case 1045:
-#line 2856 "third_party/libpg_query/grammar/statements/select.y"
+#line 2857 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGFuncCall *n = makeFuncCall(SystemFuncName("similar_escape"),
 											   list_make2((yyvsp[(5) - (5)].node), makeNullAConst(-1)),
@@ -29667,7 +29668,7 @@ yyreduce:
     break;
 
   case 1046:
-#line 2864 "third_party/libpg_query/grammar/statements/select.y"
+#line 2865 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGFuncCall *n = makeFuncCall(SystemFuncName("similar_escape"),
 											   list_make2((yyvsp[(5) - (7)].node), (yyvsp[(7) - (7)].node)),
@@ -29678,7 +29679,7 @@ yyreduce:
     break;
 
   case 1047:
-#line 2883 "third_party/libpg_query/grammar/statements/select.y"
+#line 2884 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGNullTest *n = makeNode(PGNullTest);
 					n->arg = (PGExpr *) (yyvsp[(1) - (3)].node);
@@ -29689,7 +29690,7 @@ yyreduce:
     break;
 
   case 1048:
-#line 2891 "third_party/libpg_query/grammar/statements/select.y"
+#line 2892 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGNullTest *n = makeNode(PGNullTest);
 					n->arg = (PGExpr *) (yyvsp[(1) - (2)].node);
@@ -29700,7 +29701,7 @@ yyreduce:
     break;
 
   case 1049:
-#line 2899 "third_party/libpg_query/grammar/statements/select.y"
+#line 2900 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGNullTest *n = makeNode(PGNullTest);
 					n->arg = (PGExpr *) (yyvsp[(1) - (4)].node);
@@ -29711,7 +29712,7 @@ yyreduce:
     break;
 
   case 1050:
-#line 2907 "third_party/libpg_query/grammar/statements/select.y"
+#line 2908 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGNullTest *n = makeNode(PGNullTest);
 					n->arg = (PGExpr *) (yyvsp[(1) - (3)].node);
@@ -29722,7 +29723,7 @@ yyreduce:
     break;
 
   case 1051:
-#line 2915 "third_party/libpg_query/grammar/statements/select.y"
+#line 2916 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGNullTest *n = makeNode(PGNullTest);
 					n->arg = (PGExpr *) (yyvsp[(1) - (2)].node);
@@ -29733,7 +29734,7 @@ yyreduce:
     break;
 
   case 1052:
-#line 2923 "third_party/libpg_query/grammar/statements/select.y"
+#line 2924 "third_party/libpg_query/grammar/statements/select.y"
     {
 				PGLambdaFunction *n = makeNode(PGLambdaFunction);
 				n->lhs = (yyvsp[(1) - (3)].node);
@@ -29744,14 +29745,14 @@ yyreduce:
     break;
 
   case 1053:
-#line 2931 "third_party/libpg_query/grammar/statements/select.y"
+#line 2932 "third_party/libpg_query/grammar/statements/select.y"
     {
 							(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "->>", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)]));
 			;}
     break;
 
   case 1054:
-#line 2935 "third_party/libpg_query/grammar/statements/select.y"
+#line 2936 "third_party/libpg_query/grammar/statements/select.y"
     {
 					if (list_length((yyvsp[(1) - (3)].list)) != 2)
 						ereport(ERROR,
@@ -29770,7 +29771,7 @@ yyreduce:
     break;
 
   case 1055:
-#line 2951 "third_party/libpg_query/grammar/statements/select.y"
+#line 2952 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGBooleanTest *b = makeNode(PGBooleanTest);
 					b->arg = (PGExpr *) (yyvsp[(1) - (3)].node);
@@ -29781,7 +29782,7 @@ yyreduce:
     break;
 
   case 1056:
-#line 2959 "third_party/libpg_query/grammar/statements/select.y"
+#line 2960 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGBooleanTest *b = makeNode(PGBooleanTest);
 					b->arg = (PGExpr *) (yyvsp[(1) - (4)].node);
@@ -29792,7 +29793,7 @@ yyreduce:
     break;
 
   case 1057:
-#line 2967 "third_party/libpg_query/grammar/statements/select.y"
+#line 2968 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGBooleanTest *b = makeNode(PGBooleanTest);
 					b->arg = (PGExpr *) (yyvsp[(1) - (3)].node);
@@ -29803,7 +29804,7 @@ yyreduce:
     break;
 
   case 1058:
-#line 2975 "third_party/libpg_query/grammar/statements/select.y"
+#line 2976 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGBooleanTest *b = makeNode(PGBooleanTest);
 					b->arg = (PGExpr *) (yyvsp[(1) - (4)].node);
@@ -29814,7 +29815,7 @@ yyreduce:
     break;
 
   case 1059:
-#line 2983 "third_party/libpg_query/grammar/statements/select.y"
+#line 2984 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGBooleanTest *b = makeNode(PGBooleanTest);
 					b->arg = (PGExpr *) (yyvsp[(1) - (3)].node);
@@ -29825,7 +29826,7 @@ yyreduce:
     break;
 
   case 1060:
-#line 2991 "third_party/libpg_query/grammar/statements/select.y"
+#line 2992 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGBooleanTest *b = makeNode(PGBooleanTest);
 					b->arg = (PGExpr *) (yyvsp[(1) - (4)].node);
@@ -29836,35 +29837,35 @@ yyreduce:
     break;
 
   case 1061:
-#line 2999 "third_party/libpg_query/grammar/statements/select.y"
+#line 3000 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_DISTINCT, "=", (yyvsp[(1) - (5)].node), (yyvsp[(5) - (5)].node), (yylsp[(2) - (5)]));
 				;}
     break;
 
   case 1062:
-#line 3003 "third_party/libpg_query/grammar/statements/select.y"
+#line 3004 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_NOT_DISTINCT, "=", (yyvsp[(1) - (6)].node), (yyvsp[(6) - (6)].node), (yylsp[(2) - (6)]));
 				;}
     break;
 
   case 1063:
-#line 3007 "third_party/libpg_query/grammar/statements/select.y"
+#line 3008 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", (yyvsp[(1) - (6)].node), (PGNode *) (yyvsp[(5) - (6)].list), (yylsp[(2) - (6)]));
 				;}
     break;
 
   case 1064:
-#line 3011 "third_party/libpg_query/grammar/statements/select.y"
+#line 3012 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "<>", (yyvsp[(1) - (7)].node), (PGNode *) (yyvsp[(6) - (7)].list), (yylsp[(2) - (7)]));
 				;}
     break;
 
   case 1065:
-#line 3015 "third_party/libpg_query/grammar/statements/select.y"
+#line 3016 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = noteDecideBetween((PGNode *) makeSimpleAExpr(PG_AEXPR_BETWEEN,
 												   "BETWEEN",
@@ -29875,7 +29876,7 @@ yyreduce:
     break;
 
   case 1066:
-#line 3023 "third_party/libpg_query/grammar/statements/select.y"
+#line 3024 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_NOT_BETWEEN,
 												   "NOT BETWEEN",
@@ -29886,7 +29887,7 @@ yyreduce:
     break;
 
   case 1067:
-#line 3031 "third_party/libpg_query/grammar/statements/select.y"
+#line 3032 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_BETWEEN_SYM,
 												   "BETWEEN SYMMETRIC",
@@ -29897,7 +29898,7 @@ yyreduce:
     break;
 
   case 1068:
-#line 3039 "third_party/libpg_query/grammar/statements/select.y"
+#line 3040 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_NOT_BETWEEN_SYM,
 												   "NOT BETWEEN SYMMETRIC",
@@ -29908,7 +29909,7 @@ yyreduce:
     break;
 
   case 1069:
-#line 3047 "third_party/libpg_query/grammar/statements/select.y"
+#line 3048 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* in_expr returns a PGSubLink or a list of a_exprs */
 					if (IsA((yyvsp[(3) - (3)].node), PGSubLink))
@@ -29931,7 +29932,7 @@ yyreduce:
     break;
 
   case 1070:
-#line 3067 "third_party/libpg_query/grammar/statements/select.y"
+#line 3068 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* in_expr returns a PGSubLink or a list of a_exprs */
 					if (IsA((yyvsp[(4) - (4)].node), PGSubLink))
@@ -29956,7 +29957,7 @@ yyreduce:
     break;
 
   case 1071:
-#line 3089 "third_party/libpg_query/grammar/statements/select.y"
+#line 3090 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSubLink *n = makeNode(PGSubLink);
 					n->subLinkType = (yyvsp[(3) - (4)].subquerytype);
@@ -29970,7 +29971,7 @@ yyreduce:
     break;
 
   case 1072:
-#line 3100 "third_party/libpg_query/grammar/statements/select.y"
+#line 3101 "third_party/libpg_query/grammar/statements/select.y"
     {
 					if ((yyvsp[(3) - (6)].subquerytype) == PG_ANY_SUBLINK)
 						(yyval.node) = (PGNode *) makeAExpr(PG_AEXPR_OP_ANY, (yyvsp[(2) - (6)].list), (yyvsp[(1) - (6)].node), (yyvsp[(5) - (6)].node), (yylsp[(2) - (6)]));
@@ -29980,7 +29981,7 @@ yyreduce:
     break;
 
   case 1073:
-#line 3107 "third_party/libpg_query/grammar/statements/select.y"
+#line 3108 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/*
 					 * The SQL spec only allows DEFAULT in "contextually typed
@@ -29997,7 +29998,7 @@ yyreduce:
     break;
 
   case 1074:
-#line 3121 "third_party/libpg_query/grammar/statements/select.y"
+#line 3122 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGAStar *star = makeNode(PGAStar);
 					star->expr = (yyvsp[(4) - (5)].node);
@@ -30009,7 +30010,7 @@ yyreduce:
     break;
 
   case 1075:
-#line 3130 "third_party/libpg_query/grammar/statements/select.y"
+#line 3131 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGAStar *star = makeNode(PGAStar);
 					star->expr = (yyvsp[(3) - (4)].node);
@@ -30020,7 +30021,7 @@ yyreduce:
     break;
 
   case 1076:
-#line 3138 "third_party/libpg_query/grammar/statements/select.y"
+#line 3139 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGAStar *star = makeNode(PGAStar);
 					star->except_list = (yyvsp[(2) - (4)].list);
@@ -30032,7 +30033,7 @@ yyreduce:
     break;
 
   case 1077:
-#line 3147 "third_party/libpg_query/grammar/statements/select.y"
+#line 3148 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGAStar *star = makeNode(PGAStar);
 					star->relation = (yyvsp[(1) - (6)].str);
@@ -30045,145 +30046,145 @@ yyreduce:
     break;
 
   case 1078:
-#line 3167 "third_party/libpg_query/grammar/statements/select.y"
+#line 3168 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = noteDecideExpr((yyvsp[(1) - (1)].node), (yylsp[(1) - (1)]), yyscanner); ;}
     break;
 
   case 1079:
-#line 3171 "third_party/libpg_query/grammar/statements/select.y"
+#line 3172 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
   case 1080:
-#line 3173 "third_party/libpg_query/grammar/statements/select.y"
+#line 3174 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = makeTypeCast((yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].typnam), 0, (yylsp[(2) - (3)])); ;}
     break;
 
   case 1081:
-#line 3175 "third_party/libpg_query/grammar/statements/select.y"
+#line 3176 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "+", NULL, (yyvsp[(2) - (2)].node), (yylsp[(1) - (2)])); ;}
     break;
 
   case 1082:
-#line 3177 "third_party/libpg_query/grammar/statements/select.y"
+#line 3178 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = doNegate((yyvsp[(2) - (2)].node), (yylsp[(1) - (2)])); ;}
     break;
 
   case 1083:
-#line 3179 "third_party/libpg_query/grammar/statements/select.y"
+#line 3180 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "+", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1084:
-#line 3181 "third_party/libpg_query/grammar/statements/select.y"
+#line 3182 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "-", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1085:
-#line 3183 "third_party/libpg_query/grammar/statements/select.y"
+#line 3184 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "*", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1086:
-#line 3185 "third_party/libpg_query/grammar/statements/select.y"
+#line 3186 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "/", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1087:
-#line 3187 "third_party/libpg_query/grammar/statements/select.y"
+#line 3188 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "//", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1088:
-#line 3189 "third_party/libpg_query/grammar/statements/select.y"
+#line 3190 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "%", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1089:
-#line 3191 "third_party/libpg_query/grammar/statements/select.y"
+#line 3192 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "^", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1090:
-#line 3193 "third_party/libpg_query/grammar/statements/select.y"
+#line 3194 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "**", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1091:
-#line 3195 "third_party/libpg_query/grammar/statements/select.y"
+#line 3196 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1092:
-#line 3197 "third_party/libpg_query/grammar/statements/select.y"
+#line 3198 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, ">", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1093:
-#line 3199 "third_party/libpg_query/grammar/statements/select.y"
+#line 3200 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "=", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1094:
-#line 3201 "third_party/libpg_query/grammar/statements/select.y"
+#line 3202 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<=", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1095:
-#line 3203 "third_party/libpg_query/grammar/statements/select.y"
+#line 3204 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, ">=", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1096:
-#line 3205 "third_party/libpg_query/grammar/statements/select.y"
+#line 3206 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<>", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1097:
-#line 3207 "third_party/libpg_query/grammar/statements/select.y"
+#line 3208 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeAExpr(PG_AEXPR_OP, (yyvsp[(2) - (3)].list), (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
     break;
 
   case 1098:
-#line 3209 "third_party/libpg_query/grammar/statements/select.y"
+#line 3210 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeAExpr(PG_AEXPR_OP, (yyvsp[(1) - (2)].list), NULL, (yyvsp[(2) - (2)].node), (yylsp[(1) - (2)])); ;}
     break;
 
   case 1099:
-#line 3211 "third_party/libpg_query/grammar/statements/select.y"
+#line 3212 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *) makeAExpr(PG_AEXPR_OP, (yyvsp[(2) - (2)].list), (yyvsp[(1) - (2)].node), NULL, (yylsp[(2) - (2)])); ;}
     break;
 
   case 1100:
-#line 3213 "third_party/libpg_query/grammar/statements/select.y"
+#line 3214 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_DISTINCT, "=", (yyvsp[(1) - (5)].node), (yyvsp[(5) - (5)].node), (yylsp[(2) - (5)]));
 				;}
     break;
 
   case 1101:
-#line 3217 "third_party/libpg_query/grammar/statements/select.y"
+#line 3218 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_NOT_DISTINCT, "=", (yyvsp[(1) - (6)].node), (yyvsp[(6) - (6)].node), (yylsp[(2) - (6)]));
 				;}
     break;
 
   case 1102:
-#line 3221 "third_party/libpg_query/grammar/statements/select.y"
+#line 3222 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", (yyvsp[(1) - (6)].node), (PGNode *) (yyvsp[(5) - (6)].list), (yylsp[(2) - (6)]));
 				;}
     break;
 
   case 1103:
-#line 3225 "third_party/libpg_query/grammar/statements/select.y"
+#line 3226 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "<>", (yyvsp[(1) - (7)].node), (PGNode *) (yyvsp[(6) - (7)].list), (yylsp[(2) - (7)]));
 				;}
     break;
 
   case 1105:
-#line 3240 "third_party/libpg_query/grammar/statements/select.y"
+#line 3241 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* DeciDB: the removed SUM(e) WHEN c, kept as a marker the transformer
 					 * refuses so the error names sum(when c: e). */
@@ -30192,7 +30193,7 @@ yyreduce:
     break;
 
   case 1106:
-#line 3246 "third_party/libpg_query/grammar/statements/select.y"
+#line 3247 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* DeciDB: reducer BY (key). The binder validates that it is a reducer. */
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_REDUCER_BY, "reducer_by", (yyvsp[(1) - (2)].node), (PGNode *) (yyvsp[(2) - (2)].list), (yylsp[(2) - (2)]));
@@ -30200,7 +30201,7 @@ yyreduce:
     break;
 
   case 1107:
-#line 3251 "third_party/libpg_query/grammar/statements/select.y"
+#line 3252 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* DeciDB: a scope inside a reducer, sum(WHEN c PER k: expr). It scopes
 					 * the first argument, the expression being reduced. */
@@ -30211,7 +30212,7 @@ yyreduce:
     break;
 
   case 1108:
-#line 3259 "third_party/libpg_query/grammar/statements/select.y"
+#line 3260 "third_party/libpg_query/grammar/statements/select.y"
     {
 					noteDecideReducerKey((yyvsp[(3) - (7)].node), (yylsp[(7) - (7)]).start, yyscanner);
 					linitial((yyvsp[(5) - (7)].list)) = applyDecideScope((yyvsp[(3) - (7)].node), (PGNode *) linitial((yyvsp[(5) - (7)].list)));
@@ -30221,7 +30222,7 @@ yyreduce:
     break;
 
   case 1109:
-#line 3266 "third_party/libpg_query/grammar/statements/select.y"
+#line 3267 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* DeciDB: relation-qualified reducer, sum(D: expr) or, qualified by
 					 * several relations at once, sum(D, T: expr).
@@ -30243,7 +30244,7 @@ yyreduce:
     break;
 
   case 1110:
-#line 3285 "third_party/libpg_query/grammar/statements/select.y"
+#line 3286 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* DeciDB: the removed sum(D: expr) WHEN cond, a marker the transformer
 					 * refuses so the error names sum(when cond per D: expr).
@@ -30261,7 +30262,7 @@ yyreduce:
     break;
 
   case 1111:
-#line 3300 "third_party/libpg_query/grammar/statements/select.y"
+#line 3301 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* DeciDB: the colon form with BY, sum(D: expr) BY (key) */
 					noteDecideSpan(yyscanner, (yylsp[(7) - (7)]).start, PG_DECIDE_SPAN_PER, (yylsp[(3) - (7)]));
@@ -30271,7 +30272,7 @@ yyreduce:
     break;
 
   case 1112:
-#line 3307 "third_party/libpg_query/grammar/statements/select.y"
+#line 3308 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* DeciDB: a point frame, at(F: e) over (S ...) */
 					(yyval.node) = makeDecideFramePoint((yyvsp[(3) - (7)].list), NULL, (yyvsp[(5) - (7)].node), (yyvsp[(7) - (7)].node), (yylsp[(1) - (7)]));
@@ -30279,14 +30280,14 @@ yyreduce:
     break;
 
   case 1113:
-#line 3312 "third_party/libpg_query/grammar/statements/select.y"
+#line 3313 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeDecideFramePoint((yyvsp[(3) - (9)].list), (yyvsp[(5) - (9)].node), (yyvsp[(7) - (9)].node), (yyvsp[(9) - (9)].node), (yylsp[(1) - (9)]));
 				;}
     break;
 
   case 1114:
-#line 3317 "third_party/libpg_query/grammar/statements/select.y"
+#line 3318 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* DeciDB: a range frame, agg(from F1 to F2 [every d]: e) over (S ...) */
 					(yyval.node) = makeDecideFrameRange((yyvsp[(1) - (11)].list), (yyvsp[(4) - (11)].list), (yyvsp[(6) - (11)].list), (yyvsp[(7) - (11)].ival), NULL, false, (yyvsp[(9) - (11)].list), (yyvsp[(11) - (11)].node), (yylsp[(1) - (11)]));
@@ -30294,21 +30295,21 @@ yyreduce:
     break;
 
   case 1115:
-#line 3323 "third_party/libpg_query/grammar/statements/select.y"
+#line 3324 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeDecideFrameRange((yyvsp[(1) - (13)].list), (yyvsp[(4) - (13)].list), (yyvsp[(6) - (13)].list), (yyvsp[(7) - (13)].ival), (yyvsp[(9) - (13)].node), false, (yyvsp[(11) - (13)].list), (yyvsp[(13) - (13)].node), (yylsp[(1) - (13)]));
 				;}
     break;
 
   case 1116:
-#line 3328 "third_party/libpg_query/grammar/statements/select.y"
+#line 3329 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeDecideFrameRange((yyvsp[(1) - (12)].list), (yyvsp[(4) - (12)].list), (yyvsp[(6) - (12)].list), (yyvsp[(7) - (12)].ival), NULL, true, (yyvsp[(10) - (12)].list), (yyvsp[(12) - (12)].node), (yylsp[(1) - (12)]));
 				;}
     break;
 
   case 1117:
-#line 3332 "third_party/libpg_query/grammar/statements/select.y"
+#line 3333 "third_party/libpg_query/grammar/statements/select.y"
     {
 					if ((yyvsp[(2) - (2)].list))
 					{
@@ -30323,17 +30324,17 @@ yyreduce:
     break;
 
   case 1118:
-#line 3345 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
-    break;
-
-  case 1119:
 #line 3346 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
+  case 1119:
+#line 3347 "third_party/libpg_query/grammar/statements/select.y"
+    { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
+    break;
+
   case 1120:
-#line 3348 "third_party/libpg_query/grammar/statements/select.y"
+#line 3349 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSubLink *n = makeNode(PGSubLink);
 					n->subLinkType = PG_EXPR_SUBLINK;
@@ -30347,7 +30348,7 @@ yyreduce:
     break;
 
   case 1121:
-#line 3359 "third_party/libpg_query/grammar/statements/select.y"
+#line 3360 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/*
 					 * Because the select_with_parens nonterminal is designed
@@ -30374,7 +30375,7 @@ yyreduce:
     break;
 
   case 1122:
-#line 3383 "third_party/libpg_query/grammar/statements/select.y"
+#line 3384 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSubLink *n = makeNode(PGSubLink);
 					n->subLinkType = PG_EXISTS_SUBLINK;
@@ -30388,7 +30389,7 @@ yyreduce:
     break;
 
   case 1123:
-#line 3394 "third_party/libpg_query/grammar/statements/select.y"
+#line 3395 "third_party/libpg_query/grammar/statements/select.y"
     {
 				  PGGroupingFunc *g = makeNode(PGGroupingFunc);
 				  g->args = (yyvsp[(3) - (4)].list);
@@ -30398,7 +30399,7 @@ yyreduce:
     break;
 
   case 1124:
-#line 3404 "third_party/libpg_query/grammar/statements/select.y"
+#line 3405 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* DeciDB: the parentheses are not part of the expression's text */
 					(yyval.node) = noteDecideParen((yyvsp[(2) - (3)].node), yyscanner);
@@ -30406,14 +30407,14 @@ yyreduce:
     break;
 
   case 1125:
-#line 3409 "third_party/libpg_query/grammar/statements/select.y"
+#line 3410 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (yyvsp[(1) - (1)].node);
 				;}
     break;
 
   case 1126:
-#line 3412 "third_party/libpg_query/grammar/statements/select.y"
+#line 3413 "third_party/libpg_query/grammar/statements/select.y"
     {
 				PGFuncCall *n = makeFuncCall(SystemFuncName("row"), (yyvsp[(1) - (1)].list), (yylsp[(1) - (1)]));
 				(yyval.node) = (PGNode *) n;
@@ -30421,14 +30422,14 @@ yyreduce:
     break;
 
   case 1127:
-#line 3420 "third_party/libpg_query/grammar/statements/select.y"
+#line 3421 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeParamRef(0, (yylsp[(1) - (1)]));
 				;}
     break;
 
   case 1128:
-#line 3424 "third_party/libpg_query/grammar/statements/select.y"
+#line 3425 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGParamRef *p = makeNode(PGParamRef);
 					p->number = (yyvsp[(1) - (1)].ival);
@@ -30438,14 +30439,14 @@ yyreduce:
     break;
 
   case 1129:
-#line 3431 "third_party/libpg_query/grammar/statements/select.y"
+#line 3432 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeNamedParamRef((yyvsp[(2) - (2)].str), (yylsp[(1) - (2)]));
 				;}
     break;
 
   case 1137:
-#line 3445 "third_party/libpg_query/grammar/statements/select.y"
+#line 3446 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSubLink *n = makeNode(PGSubLink);
 					n->subLinkType = PG_ARRAY_SUBLINK;
@@ -30459,7 +30460,7 @@ yyreduce:
     break;
 
   case 1138:
-#line 3455 "third_party/libpg_query/grammar/statements/select.y"
+#line 3456 "third_party/libpg_query/grammar/statements/select.y"
     {
 				PGList *func_name = list_make1(makeString("construct_array"));
 				PGFuncCall *n = makeFuncCall(func_name, (yyvsp[(3) - (4)].list), (yylsp[(1) - (4)]));
@@ -30468,7 +30469,7 @@ yyreduce:
     break;
 
   case 1139:
-#line 3461 "third_party/libpg_query/grammar/statements/select.y"
+#line 3462 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGPositionalReference *n = makeNode(PGPositionalReference);
 					n->position = (yyvsp[(2) - (2)].ival);
@@ -30478,7 +30479,7 @@ yyreduce:
     break;
 
   case 1140:
-#line 3469 "third_party/libpg_query/grammar/statements/select.y"
+#line 3470 "third_party/libpg_query/grammar/statements/select.y"
     {
                 PGFuncCall *n = makeFuncCall(SystemFuncName("list_value"), (yyvsp[(2) - (3)].list), (yylsp[(2) - (3)]));
                 (yyval.node) = (PGNode *) n;
@@ -30486,7 +30487,7 @@ yyreduce:
     break;
 
   case 1141:
-#line 3476 "third_party/libpg_query/grammar/statements/select.y"
+#line 3477 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGFuncCall *f = makeFuncCall(SystemFuncName("struct_pack"), (yyvsp[(2) - (3)].list), (yylsp[(2) - (3)]));
 					(yyval.node) = (PGNode *) f;
@@ -30494,7 +30495,7 @@ yyreduce:
     break;
 
   case 1142:
-#line 3483 "third_party/libpg_query/grammar/statements/select.y"
+#line 3484 "third_party/libpg_query/grammar/statements/select.y"
     {
                     PGList *key_list = NULL;
                     PGList *value_list = NULL;
@@ -30514,14 +30515,14 @@ yyreduce:
     break;
 
   case 1143:
-#line 3503 "third_party/libpg_query/grammar/statements/select.y"
+#line 3504 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeFuncCall((yyvsp[(1) - (3)].list), NIL, (yylsp[(1) - (3)]));
 				;}
     break;
 
   case 1144:
-#line 3507 "third_party/libpg_query/grammar/statements/select.y"
+#line 3508 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGFuncCall *n = makeFuncCall((yyvsp[(1) - (5)].list), NIL, (yylsp[(1) - (5)]));
 					n->agg_order = (yyvsp[(3) - (5)].list);
@@ -30531,7 +30532,7 @@ yyreduce:
     break;
 
   case 1145:
-#line 3514 "third_party/libpg_query/grammar/statements/select.y"
+#line 3515 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGFuncCall *n = makeFuncCall((yyvsp[(1) - (6)].list), (yyvsp[(3) - (6)].list), (yylsp[(1) - (6)]));
 					n->agg_order = (yyvsp[(4) - (6)].list);
@@ -30541,7 +30542,7 @@ yyreduce:
     break;
 
   case 1146:
-#line 3521 "third_party/libpg_query/grammar/statements/select.y"
+#line 3522 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGFuncCall *n = makeFuncCall((yyvsp[(1) - (7)].list), list_make1((yyvsp[(4) - (7)].node)), (yylsp[(1) - (7)]));
 					n->func_variadic = true;
@@ -30552,7 +30553,7 @@ yyreduce:
     break;
 
   case 1147:
-#line 3529 "third_party/libpg_query/grammar/statements/select.y"
+#line 3530 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGFuncCall *n = makeFuncCall((yyvsp[(1) - (9)].list), lappend((yyvsp[(3) - (9)].list), (yyvsp[(6) - (9)].node)), (yylsp[(1) - (9)]));
 					n->func_variadic = true;
@@ -30563,7 +30564,7 @@ yyreduce:
     break;
 
   case 1148:
-#line 3537 "third_party/libpg_query/grammar/statements/select.y"
+#line 3538 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGFuncCall *n = makeFuncCall((yyvsp[(1) - (7)].list), (yyvsp[(4) - (7)].list), (yylsp[(1) - (7)]));
 					n->agg_order = (yyvsp[(5) - (7)].list);
@@ -30577,7 +30578,7 @@ yyreduce:
     break;
 
   case 1149:
-#line 3548 "third_party/libpg_query/grammar/statements/select.y"
+#line 3549 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGFuncCall *n = makeFuncCall((yyvsp[(1) - (7)].list), (yyvsp[(4) - (7)].list), (yylsp[(1) - (7)]));
 					n->agg_order = (yyvsp[(5) - (7)].list);
@@ -30588,7 +30589,7 @@ yyreduce:
     break;
 
   case 1150:
-#line 3568 "third_party/libpg_query/grammar/statements/select.y"
+#line 3569 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGFuncCall *n = (PGFuncCall *) (yyvsp[(1) - (5)].node);
 					/*
@@ -30627,22 +30628,22 @@ yyreduce:
     break;
 
   case 1151:
-#line 3604 "third_party/libpg_query/grammar/statements/select.y"
+#line 3605 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
   case 1152:
-#line 3614 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
-    break;
-
-  case 1153:
 #line 3615 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
+  case 1153:
+#line 3616 "third_party/libpg_query/grammar/statements/select.y"
+    { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
+    break;
+
   case 1154:
-#line 3623 "third_party/libpg_query/grammar/statements/select.y"
+#line 3624 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeFuncCall(SystemFuncName("pg_collation_for"),
 											   list_make1((yyvsp[(4) - (5)].node)),
@@ -30651,24 +30652,24 @@ yyreduce:
     break;
 
   case 1155:
-#line 3629 "third_party/libpg_query/grammar/statements/select.y"
+#line 3630 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = makeTypeCast((yyvsp[(3) - (6)].node), (yyvsp[(5) - (6)].typnam), 0, (yylsp[(1) - (6)])); ;}
     break;
 
   case 1156:
-#line 3631 "third_party/libpg_query/grammar/statements/select.y"
+#line 3632 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = makeTypeCast((yyvsp[(3) - (6)].node), (yyvsp[(5) - (6)].typnam), 1, (yylsp[(1) - (6)])); ;}
     break;
 
   case 1157:
-#line 3633 "third_party/libpg_query/grammar/statements/select.y"
+#line 3634 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeFuncCall(SystemFuncName("date_part"), (yyvsp[(3) - (4)].list), (yylsp[(1) - (4)]));
 				;}
     break;
 
   case 1158:
-#line 3637 "third_party/libpg_query/grammar/statements/select.y"
+#line 3638 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* overlay(A PLACING B FROM C FOR D) is converted to
 					 * overlay(A, B, C, D)
@@ -30680,7 +30681,7 @@ yyreduce:
     break;
 
   case 1159:
-#line 3646 "third_party/libpg_query/grammar/statements/select.y"
+#line 3647 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* position(A in B) is converted to position_inverse(A, B) */
 					(yyval.node) = (PGNode *) makeFuncCall(SystemFuncName("__internal_position_operator"), (yyvsp[(3) - (4)].list), (yylsp[(1) - (4)]));
@@ -30688,7 +30689,7 @@ yyreduce:
     break;
 
   case 1160:
-#line 3651 "third_party/libpg_query/grammar/statements/select.y"
+#line 3652 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* substring(A from B for C) is converted to
 					 * substring(A, B, C) - thomas 2000-11-28
@@ -30698,7 +30699,7 @@ yyreduce:
     break;
 
   case 1161:
-#line 3658 "third_party/libpg_query/grammar/statements/select.y"
+#line 3659 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* TREAT(expr AS target) converts expr of a particular type to target,
 					 * which is defined to be a subtype of the original expression.
@@ -30716,7 +30717,7 @@ yyreduce:
     break;
 
   case 1162:
-#line 3673 "third_party/libpg_query/grammar/statements/select.y"
+#line 3674 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* various trim expressions are defined in SQL
 					 * - thomas 1997-07-19
@@ -30726,35 +30727,35 @@ yyreduce:
     break;
 
   case 1163:
-#line 3680 "third_party/libpg_query/grammar/statements/select.y"
+#line 3681 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeFuncCall(SystemFuncName("ltrim"), (yyvsp[(4) - (5)].list), (yylsp[(1) - (5)]));
 				;}
     break;
 
   case 1164:
-#line 3684 "third_party/libpg_query/grammar/statements/select.y"
+#line 3685 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeFuncCall(SystemFuncName("rtrim"), (yyvsp[(4) - (5)].list), (yylsp[(1) - (5)]));
 				;}
     break;
 
   case 1165:
-#line 3688 "third_party/libpg_query/grammar/statements/select.y"
+#line 3689 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeFuncCall(SystemFuncName("trim"), (yyvsp[(3) - (4)].list), (yylsp[(1) - (4)]));
 				;}
     break;
 
   case 1166:
-#line 3692 "third_party/libpg_query/grammar/statements/select.y"
+#line 3693 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_NULLIF, "=", (yyvsp[(3) - (6)].node), (yyvsp[(5) - (6)].node), (yylsp[(1) - (6)]));
 				;}
     break;
 
   case 1167:
-#line 3696 "third_party/libpg_query/grammar/statements/select.y"
+#line 3697 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGCoalesceExpr *c = makeNode(PGCoalesceExpr);
 					c->args = (yyvsp[(3) - (4)].list);
@@ -30764,7 +30765,7 @@ yyreduce:
     break;
 
   case 1168:
-#line 3706 "third_party/libpg_query/grammar/statements/select.y"
+#line 3707 "third_party/libpg_query/grammar/statements/select.y"
     {
 			PGFuncCall *n = makeFuncCall(SystemFuncName("row"), (yyvsp[(1) - (1)].list), (yylsp[(1) - (1)]));
 			(yyval.node) = (PGNode *) n;
@@ -30772,7 +30773,7 @@ yyreduce:
     break;
 
   case 1169:
-#line 3714 "third_party/libpg_query/grammar/statements/select.y"
+#line 3715 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGLambdaFunction *lambda = makeNode(PGLambdaFunction);
 					lambda->lhs = (yyvsp[(4) - (7)].node);
@@ -30784,7 +30785,7 @@ yyreduce:
     break;
 
   case 1170:
-#line 3723 "third_party/libpg_query/grammar/statements/select.y"
+#line 3724 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGLambdaFunction *lambda = makeNode(PGLambdaFunction);
 					lambda->lhs = (yyvsp[(4) - (9)].node);
@@ -30802,62 +30803,62 @@ yyreduce:
     break;
 
   case 1171:
-#line 3744 "third_party/libpg_query/grammar/statements/select.y"
+#line 3745 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(4) - (5)].list); ;}
     break;
 
   case 1172:
-#line 3745 "third_party/libpg_query/grammar/statements/select.y"
+#line 3746 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 1173:
-#line 3749 "third_party/libpg_query/grammar/statements/select.y"
+#line 3750 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(4) - (5)].node); ;}
     break;
 
   case 1174:
-#line 3750 "third_party/libpg_query/grammar/statements/select.y"
+#line 3751 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(3) - (4)].node); ;}
     break;
 
   case 1175:
-#line 3751 "third_party/libpg_query/grammar/statements/select.y"
+#line 3752 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = NULL; ;}
     break;
 
   case 1176:
-#line 3755 "third_party/libpg_query/grammar/statements/select.y"
+#line 3756 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.boolean) = true; ;}
     break;
 
   case 1177:
-#line 3756 "third_party/libpg_query/grammar/statements/select.y"
+#line 3757 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.boolean) = false; ;}
     break;
 
   case 1178:
-#line 3763 "third_party/libpg_query/grammar/statements/select.y"
+#line 3764 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(2) - (2)].list); ;}
     break;
 
   case 1179:
-#line 3764 "third_party/libpg_query/grammar/statements/select.y"
+#line 3765 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 1180:
-#line 3768 "third_party/libpg_query/grammar/statements/select.y"
+#line 3769 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(1) - (1)].windef)); ;}
     break;
 
   case 1181:
-#line 3770 "third_party/libpg_query/grammar/statements/select.y"
+#line 3771 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].windef)); ;}
     break;
 
   case 1182:
-#line 3775 "third_party/libpg_query/grammar/statements/select.y"
+#line 3776 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGWindowDef *n = (yyvsp[(3) - (3)].windef);
 					n->name = (yyvsp[(1) - (3)].str);
@@ -30866,17 +30867,17 @@ yyreduce:
     break;
 
   case 1183:
-#line 3783 "third_party/libpg_query/grammar/statements/select.y"
+#line 3784 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.windef) = (yyvsp[(2) - (2)].windef); ;}
     break;
 
   case 1184:
-#line 3787 "third_party/libpg_query/grammar/statements/select.y"
+#line 3788 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.windef) = (yyvsp[(2) - (2)].windef); ;}
     break;
 
   case 1185:
-#line 3789 "third_party/libpg_query/grammar/statements/select.y"
+#line 3790 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGWindowDef *n = makeNode(PGWindowDef);
 					n->name = (yyvsp[(2) - (2)].str);
@@ -30892,7 +30893,7 @@ yyreduce:
     break;
 
   case 1186:
-#line 3802 "third_party/libpg_query/grammar/statements/select.y"
+#line 3803 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGWindowDef *n = makeNode(PGWindowDef);
 					n->name = (yyvsp[(2) - (2)].str);
@@ -30908,12 +30909,12 @@ yyreduce:
     break;
 
   case 1187:
-#line 3815 "third_party/libpg_query/grammar/statements/select.y"
+#line 3816 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.windef) = NULL; ;}
     break;
 
   case 1188:
-#line 3820 "third_party/libpg_query/grammar/statements/select.y"
+#line 3821 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGWindowDef *n = makeNode(PGWindowDef);
 					n->name = NULL;
@@ -30930,27 +30931,27 @@ yyreduce:
     break;
 
   case 1189:
-#line 3845 "third_party/libpg_query/grammar/statements/select.y"
+#line 3846 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (yyvsp[(1) - (1)].str); ;}
     break;
 
   case 1190:
-#line 3846 "third_party/libpg_query/grammar/statements/select.y"
+#line 3847 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = NULL; ;}
     break;
 
   case 1191:
-#line 3849 "third_party/libpg_query/grammar/statements/select.y"
+#line 3850 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(3) - (3)].list); ;}
     break;
 
   case 1192:
-#line 3850 "third_party/libpg_query/grammar/statements/select.y"
+#line 3851 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 1193:
-#line 3859 "third_party/libpg_query/grammar/statements/select.y"
+#line 3860 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGWindowDef *n = (yyvsp[(2) - (3)].windef);
 
@@ -30961,7 +30962,7 @@ yyreduce:
     break;
 
   case 1194:
-#line 3867 "third_party/libpg_query/grammar/statements/select.y"
+#line 3868 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGWindowDef *n = (yyvsp[(2) - (3)].windef);
 
@@ -30972,7 +30973,7 @@ yyreduce:
     break;
 
   case 1195:
-#line 3875 "third_party/libpg_query/grammar/statements/select.y"
+#line 3876 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGWindowDef *n = (yyvsp[(2) - (3)].windef);
 
@@ -30983,7 +30984,7 @@ yyreduce:
     break;
 
   case 1196:
-#line 3883 "third_party/libpg_query/grammar/statements/select.y"
+#line 3884 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGWindowDef *n = makeNode(PGWindowDef);
 
@@ -30995,7 +30996,7 @@ yyreduce:
     break;
 
   case 1197:
-#line 3894 "third_party/libpg_query/grammar/statements/select.y"
+#line 3895 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGWindowDef *n = (yyvsp[(1) - (1)].windef);
 
@@ -31016,7 +31017,7 @@ yyreduce:
     break;
 
   case 1198:
-#line 3912 "third_party/libpg_query/grammar/statements/select.y"
+#line 3913 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGWindowDef *n1 = (yyvsp[(2) - (4)].windef);
 					PGWindowDef *n2 = (yyvsp[(4) - (4)].windef);
@@ -31057,7 +31058,7 @@ yyreduce:
     break;
 
   case 1199:
-#line 3958 "third_party/libpg_query/grammar/statements/select.y"
+#line 3959 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGWindowDef *n = makeNode(PGWindowDef);
 
@@ -31069,7 +31070,7 @@ yyreduce:
     break;
 
   case 1200:
-#line 3967 "third_party/libpg_query/grammar/statements/select.y"
+#line 3968 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGWindowDef *n = makeNode(PGWindowDef);
 
@@ -31081,7 +31082,7 @@ yyreduce:
     break;
 
   case 1201:
-#line 3976 "third_party/libpg_query/grammar/statements/select.y"
+#line 3977 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGWindowDef *n = makeNode(PGWindowDef);
 
@@ -31093,7 +31094,7 @@ yyreduce:
     break;
 
   case 1202:
-#line 3985 "third_party/libpg_query/grammar/statements/select.y"
+#line 3986 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGWindowDef *n = makeNode(PGWindowDef);
 
@@ -31105,7 +31106,7 @@ yyreduce:
     break;
 
   case 1203:
-#line 3994 "third_party/libpg_query/grammar/statements/select.y"
+#line 3995 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGWindowDef *n = makeNode(PGWindowDef);
 
@@ -31117,52 +31118,52 @@ yyreduce:
     break;
 
   case 1204:
-#line 4005 "third_party/libpg_query/grammar/statements/select.y"
+#line 4006 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.ival) = FRAMEOPTION_EXCLUDE_CURRENT_ROW; ;}
     break;
 
   case 1205:
-#line 4006 "third_party/libpg_query/grammar/statements/select.y"
+#line 4007 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.ival) = FRAMEOPTION_EXCLUDE_GROUP; ;}
     break;
 
   case 1206:
-#line 4007 "third_party/libpg_query/grammar/statements/select.y"
+#line 4008 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.ival) = FRAMEOPTION_EXCLUDE_TIES; ;}
     break;
 
   case 1207:
-#line 4008 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.ival) = 0; ;}
-    break;
-
-  case 1208:
 #line 4009 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.ival) = 0; ;}
     break;
 
+  case 1208:
+#line 4010 "third_party/libpg_query/grammar/statements/select.y"
+    { (yyval.ival) = 0; ;}
+    break;
+
   case 1209:
-#line 4023 "third_party/libpg_query/grammar/statements/select.y"
+#line 4024 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(3) - (4)].list); ;}
     break;
 
   case 1210:
-#line 4024 "third_party/libpg_query/grammar/statements/select.y"
+#line 4025 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 1211:
-#line 4027 "third_party/libpg_query/grammar/statements/select.y"
+#line 4028 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (1)].list);;}
     break;
 
   case 1212:
-#line 4028 "third_party/libpg_query/grammar/statements/select.y"
+#line 4029 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(2) - (5)].list), (yyvsp[(4) - (5)].node)); ;}
     break;
 
   case 1213:
-#line 4032 "third_party/libpg_query/grammar/statements/select.y"
+#line 4033 "third_party/libpg_query/grammar/statements/select.y"
     {
 		PGNamedArgExpr *na = makeNode(PGNamedArgExpr);
 		na->name = (yyvsp[(1) - (3)].str);
@@ -31174,320 +31175,320 @@ yyreduce:
     break;
 
   case 1214:
-#line 4042 "third_party/libpg_query/grammar/statements/select.y"
+#line 4043 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(1) - (1)].node)); ;}
     break;
 
   case 1215:
-#line 4043 "third_party/libpg_query/grammar/statements/select.y"
+#line 4044 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].node)); ;}
     break;
 
   case 1216:
-#line 4047 "third_party/libpg_query/grammar/statements/select.y"
+#line 4048 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (1)].list); ;}
     break;
 
   case 1217:
-#line 4048 "third_party/libpg_query/grammar/statements/select.y"
+#line 4049 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (2)].list); ;}
     break;
 
   case 1218:
-#line 4053 "third_party/libpg_query/grammar/statements/select.y"
+#line 4054 "third_party/libpg_query/grammar/statements/select.y"
     {
 				(yyval.list) = list_make2((yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node));
 			;}
     break;
 
   case 1219:
-#line 4059 "third_party/libpg_query/grammar/statements/select.y"
+#line 4060 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(1) - (1)].list)); ;}
     break;
 
   case 1220:
-#line 4060 "third_party/libpg_query/grammar/statements/select.y"
+#line 4061 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].list)); ;}
     break;
 
   case 1221:
-#line 4065 "third_party/libpg_query/grammar/statements/select.y"
+#line 4066 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (1)].list); ;}
     break;
 
   case 1222:
-#line 4066 "third_party/libpg_query/grammar/statements/select.y"
+#line 4067 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (2)].list); ;}
     break;
 
   case 1223:
-#line 4071 "third_party/libpg_query/grammar/statements/select.y"
+#line 4072 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (1)].list); ;}
     break;
 
   case 1224:
-#line 4072 "third_party/libpg_query/grammar/statements/select.y"
+#line 4073 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NULL; ;}
     break;
 
   case 1225:
-#line 4075 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.subquerytype) = PG_ANY_SUBLINK; ;}
-    break;
-
-  case 1226:
 #line 4076 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.subquerytype) = PG_ANY_SUBLINK; ;}
     break;
 
-  case 1227:
+  case 1226:
 #line 4077 "third_party/libpg_query/grammar/statements/select.y"
+    { (yyval.subquerytype) = PG_ANY_SUBLINK; ;}
+    break;
+
+  case 1227:
+#line 4078 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.subquerytype) = PG_ALL_SUBLINK; ;}
     break;
 
   case 1228:
-#line 4080 "third_party/libpg_query/grammar/statements/select.y"
+#line 4081 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (yyvsp[(1) - (1)].str); ;}
     break;
 
   case 1229:
-#line 4081 "third_party/libpg_query/grammar/statements/select.y"
+#line 4082 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (char*) (yyvsp[(1) - (1)].conststr); ;}
     break;
 
   case 1230:
-#line 4084 "third_party/libpg_query/grammar/statements/select.y"
+#line 4085 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.conststr) = "+"; ;}
     break;
 
   case 1231:
-#line 4085 "third_party/libpg_query/grammar/statements/select.y"
+#line 4086 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.conststr) = "-"; ;}
     break;
 
   case 1232:
-#line 4086 "third_party/libpg_query/grammar/statements/select.y"
+#line 4087 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.conststr) = "*"; ;}
     break;
 
   case 1233:
-#line 4087 "third_party/libpg_query/grammar/statements/select.y"
+#line 4088 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.conststr) = "/"; ;}
     break;
 
   case 1234:
-#line 4088 "third_party/libpg_query/grammar/statements/select.y"
+#line 4089 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.conststr) = "//"; ;}
     break;
 
   case 1235:
-#line 4089 "third_party/libpg_query/grammar/statements/select.y"
+#line 4090 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.conststr) = "%"; ;}
     break;
 
   case 1236:
-#line 4090 "third_party/libpg_query/grammar/statements/select.y"
+#line 4091 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.conststr) = "^"; ;}
     break;
 
   case 1237:
-#line 4091 "third_party/libpg_query/grammar/statements/select.y"
+#line 4092 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.conststr) = "**"; ;}
     break;
 
   case 1238:
-#line 4092 "third_party/libpg_query/grammar/statements/select.y"
+#line 4093 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.conststr) = "<"; ;}
     break;
 
   case 1239:
-#line 4093 "third_party/libpg_query/grammar/statements/select.y"
+#line 4094 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.conststr) = ">"; ;}
     break;
 
   case 1240:
-#line 4094 "third_party/libpg_query/grammar/statements/select.y"
+#line 4095 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.conststr) = "="; ;}
     break;
 
   case 1241:
-#line 4095 "third_party/libpg_query/grammar/statements/select.y"
+#line 4096 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.conststr) = "<="; ;}
     break;
 
   case 1242:
-#line 4096 "third_party/libpg_query/grammar/statements/select.y"
+#line 4097 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.conststr) = ">="; ;}
     break;
 
   case 1243:
-#line 4097 "third_party/libpg_query/grammar/statements/select.y"
+#line 4098 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.conststr) = "<>"; ;}
     break;
 
   case 1244:
-#line 4101 "third_party/libpg_query/grammar/statements/select.y"
+#line 4102 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeString((yyvsp[(1) - (1)].str))); ;}
     break;
 
   case 1245:
-#line 4103 "third_party/libpg_query/grammar/statements/select.y"
+#line 4104 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(3) - (4)].list); ;}
     break;
 
   case 1246:
-#line 4108 "third_party/libpg_query/grammar/statements/select.y"
+#line 4109 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeString((yyvsp[(1) - (1)].str))); ;}
     break;
 
   case 1247:
-#line 4110 "third_party/libpg_query/grammar/statements/select.y"
+#line 4111 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(3) - (4)].list); ;}
     break;
 
   case 1248:
-#line 4115 "third_party/libpg_query/grammar/statements/select.y"
+#line 4116 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeString((yyvsp[(1) - (1)].str))); ;}
     break;
 
   case 1249:
-#line 4117 "third_party/libpg_query/grammar/statements/select.y"
+#line 4118 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(3) - (4)].list); ;}
     break;
 
   case 1250:
-#line 4119 "third_party/libpg_query/grammar/statements/select.y"
+#line 4120 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeString("~~")); ;}
     break;
 
   case 1251:
-#line 4121 "third_party/libpg_query/grammar/statements/select.y"
+#line 4122 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeString("!~~")); ;}
     break;
 
   case 1252:
-#line 4123 "third_party/libpg_query/grammar/statements/select.y"
+#line 4124 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeString("~~~")); ;}
     break;
 
   case 1253:
-#line 4125 "third_party/libpg_query/grammar/statements/select.y"
+#line 4126 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeString("!~~~")); ;}
     break;
 
   case 1254:
-#line 4127 "third_party/libpg_query/grammar/statements/select.y"
+#line 4128 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeString("~~*")); ;}
     break;
 
   case 1255:
-#line 4129 "third_party/libpg_query/grammar/statements/select.y"
+#line 4130 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeString("!~~*")); ;}
     break;
 
   case 1256:
-#line 4143 "third_party/libpg_query/grammar/statements/select.y"
+#line 4144 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeString((yyvsp[(1) - (1)].str))); ;}
     break;
 
   case 1257:
-#line 4145 "third_party/libpg_query/grammar/statements/select.y"
+#line 4146 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lcons(makeString((yyvsp[(1) - (3)].str)), (yyvsp[(3) - (3)].list)); ;}
     break;
 
   case 1258:
-#line 4150 "third_party/libpg_query/grammar/statements/select.y"
+#line 4151 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make1((yyvsp[(1) - (1)].node));
 				;}
     break;
 
   case 1259:
-#line 4154 "third_party/libpg_query/grammar/statements/select.y"
+#line 4155 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].node));
 				;}
     break;
 
   case 1260:
-#line 4161 "third_party/libpg_query/grammar/statements/select.y"
+#line 4162 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = (yyvsp[(1) - (1)].list);
 				;}
     break;
 
   case 1261:
-#line 4166 "third_party/libpg_query/grammar/statements/select.y"
+#line 4167 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = (yyvsp[(1) - (2)].list);
 				;}
     break;
 
   case 1262:
-#line 4172 "third_party/libpg_query/grammar/statements/select.y"
+#line 4173 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make1((yyvsp[(1) - (1)].node));
 				;}
     break;
 
   case 1263:
-#line 4176 "third_party/libpg_query/grammar/statements/select.y"
+#line 4177 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].node));
 				;}
     break;
 
   case 1264:
-#line 4183 "third_party/libpg_query/grammar/statements/select.y"
+#line 4184 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = (yyvsp[(1) - (1)].list);
 				;}
     break;
 
   case 1265:
-#line 4188 "third_party/libpg_query/grammar/statements/select.y"
+#line 4189 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = (yyvsp[(1) - (2)].list);
 				;}
     break;
 
   case 1266:
-#line 4195 "third_party/libpg_query/grammar/statements/select.y"
+#line 4196 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = (yyvsp[(1) - (1)].list);
 				;}
     break;
 
   case 1267:
-#line 4199 "third_party/libpg_query/grammar/statements/select.y"
+#line 4200 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = NULL;
 				;}
     break;
 
   case 1268:
-#line 4208 "third_party/libpg_query/grammar/statements/select.y"
+#line 4209 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make1((yyvsp[(1) - (1)].node));
 				;}
     break;
 
   case 1269:
-#line 4212 "third_party/libpg_query/grammar/statements/select.y"
+#line 4213 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].node));
 				;}
     break;
 
   case 1270:
-#line 4218 "third_party/libpg_query/grammar/statements/select.y"
+#line 4219 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = (yyvsp[(1) - (1)].node);
 				;}
     break;
 
   case 1271:
-#line 4222 "third_party/libpg_query/grammar/statements/select.y"
+#line 4223 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGNamedArgExpr *na = makeNode(PGNamedArgExpr);
 					na->name = (yyvsp[(1) - (3)].str);
@@ -31499,7 +31500,7 @@ yyreduce:
     break;
 
   case 1272:
-#line 4231 "third_party/libpg_query/grammar/statements/select.y"
+#line 4232 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGNamedArgExpr *na = makeNode(PGNamedArgExpr);
 					na->name = (yyvsp[(1) - (3)].str);
@@ -31511,140 +31512,140 @@ yyreduce:
     break;
 
   case 1273:
-#line 4241 "third_party/libpg_query/grammar/statements/select.y"
+#line 4242 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(1) - (1)].typnam)); ;}
     break;
 
   case 1274:
-#line 4242 "third_party/libpg_query/grammar/statements/select.y"
+#line 4243 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].typnam)); ;}
     break;
 
   case 1275:
-#line 4247 "third_party/libpg_query/grammar/statements/select.y"
+#line 4248 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make2(makeStringConst((yyvsp[(1) - (3)].str), (yylsp[(1) - (3)])), (yyvsp[(3) - (3)].node));
 				;}
     break;
 
   case 1276:
-#line 4250 "third_party/libpg_query/grammar/statements/select.y"
+#line 4251 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 1277:
-#line 4257 "third_party/libpg_query/grammar/statements/select.y"
+#line 4258 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (yyvsp[(1) - (1)].str); ;}
     break;
 
   case 1278:
-#line 4258 "third_party/libpg_query/grammar/statements/select.y"
+#line 4259 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (char*) "year"; ;}
     break;
 
   case 1279:
-#line 4259 "third_party/libpg_query/grammar/statements/select.y"
+#line 4260 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (char*) "month"; ;}
     break;
 
   case 1280:
-#line 4260 "third_party/libpg_query/grammar/statements/select.y"
+#line 4261 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (char*) "day"; ;}
     break;
 
   case 1281:
-#line 4261 "third_party/libpg_query/grammar/statements/select.y"
+#line 4262 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (char*) "hour"; ;}
     break;
 
   case 1282:
-#line 4262 "third_party/libpg_query/grammar/statements/select.y"
+#line 4263 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (char*) "minute"; ;}
     break;
 
   case 1283:
-#line 4263 "third_party/libpg_query/grammar/statements/select.y"
+#line 4264 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (char*) "second"; ;}
     break;
 
   case 1284:
-#line 4264 "third_party/libpg_query/grammar/statements/select.y"
+#line 4265 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (char*) "millisecond"; ;}
     break;
 
   case 1285:
-#line 4265 "third_party/libpg_query/grammar/statements/select.y"
+#line 4266 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (char*) "microsecond"; ;}
     break;
 
   case 1286:
-#line 4266 "third_party/libpg_query/grammar/statements/select.y"
+#line 4267 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (char*) "week"; ;}
     break;
 
   case 1287:
-#line 4267 "third_party/libpg_query/grammar/statements/select.y"
+#line 4268 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (char*) "quarter"; ;}
     break;
 
   case 1288:
-#line 4268 "third_party/libpg_query/grammar/statements/select.y"
+#line 4269 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (char*) "decade"; ;}
     break;
 
   case 1289:
-#line 4269 "third_party/libpg_query/grammar/statements/select.y"
+#line 4270 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (char*) "century"; ;}
     break;
 
   case 1290:
-#line 4270 "third_party/libpg_query/grammar/statements/select.y"
+#line 4271 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (char*) "millennium"; ;}
     break;
 
   case 1291:
-#line 4271 "third_party/libpg_query/grammar/statements/select.y"
+#line 4272 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (yyvsp[(1) - (1)].str); ;}
     break;
 
   case 1292:
-#line 4282 "third_party/libpg_query/grammar/statements/select.y"
+#line 4283 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make4((yyvsp[(1) - (4)].node), (yyvsp[(2) - (4)].node), (yyvsp[(3) - (4)].node), (yyvsp[(4) - (4)].node));
 				;}
     break;
 
   case 1293:
-#line 4286 "third_party/libpg_query/grammar/statements/select.y"
+#line 4287 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make3((yyvsp[(1) - (3)].node), (yyvsp[(2) - (3)].node), (yyvsp[(3) - (3)].node));
 				;}
     break;
 
   case 1294:
-#line 4293 "third_party/libpg_query/grammar/statements/select.y"
+#line 4294 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(2) - (2)].node); ;}
     break;
 
   case 1295:
-#line 4299 "third_party/libpg_query/grammar/statements/select.y"
+#line 4300 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make2((yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node)); ;}
     break;
 
   case 1296:
-#line 4300 "third_party/libpg_query/grammar/statements/select.y"
+#line 4301 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 1297:
-#line 4317 "third_party/libpg_query/grammar/statements/select.y"
+#line 4318 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make3((yyvsp[(1) - (3)].node), (yyvsp[(2) - (3)].node), (yyvsp[(3) - (3)].node));
 				;}
     break;
 
   case 1298:
-#line 4321 "third_party/libpg_query/grammar/statements/select.y"
+#line 4322 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* not legal per SQL99, but might as well allow it */
 					(yyval.list) = list_make3((yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yyvsp[(2) - (3)].node));
@@ -31652,14 +31653,14 @@ yyreduce:
     break;
 
   case 1299:
-#line 4326 "third_party/libpg_query/grammar/statements/select.y"
+#line 4327 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = list_make2((yyvsp[(1) - (2)].node), (yyvsp[(2) - (2)].node));
 				;}
     break;
 
   case 1300:
-#line 4330 "third_party/libpg_query/grammar/statements/select.y"
+#line 4331 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/*
 					 * Since there are no cases where this syntax allows
@@ -31677,44 +31678,44 @@ yyreduce:
     break;
 
   case 1301:
-#line 4345 "third_party/libpg_query/grammar/statements/select.y"
+#line 4346 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.list) = (yyvsp[(1) - (1)].list);
 				;}
     break;
 
   case 1302:
-#line 4349 "third_party/libpg_query/grammar/statements/select.y"
+#line 4350 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 1303:
-#line 4353 "third_party/libpg_query/grammar/statements/select.y"
+#line 4354 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(2) - (2)].node); ;}
     break;
 
   case 1304:
-#line 4356 "third_party/libpg_query/grammar/statements/select.y"
+#line 4357 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(2) - (2)].node); ;}
     break;
 
   case 1305:
-#line 4359 "third_party/libpg_query/grammar/statements/select.y"
+#line 4360 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(3) - (3)].list), (yyvsp[(1) - (3)].node)); ;}
     break;
 
   case 1306:
-#line 4360 "third_party/libpg_query/grammar/statements/select.y"
+#line 4361 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(2) - (2)].list); ;}
     break;
 
   case 1307:
-#line 4361 "third_party/libpg_query/grammar/statements/select.y"
+#line 4362 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (1)].list); ;}
     break;
 
   case 1308:
-#line 4365 "third_party/libpg_query/grammar/statements/select.y"
+#line 4366 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGSubLink *n = makeNode(PGSubLink);
 					n->subselect = (yyvsp[(1) - (1)].node);
@@ -31724,17 +31725,17 @@ yyreduce:
     break;
 
   case 1309:
-#line 4371 "third_party/libpg_query/grammar/statements/select.y"
+#line 4372 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *)(yyvsp[(2) - (3)].list); ;}
     break;
 
   case 1311:
-#line 4373 "third_party/libpg_query/grammar/statements/select.y"
+#line 4374 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (PGNode *)(yyvsp[(1) - (1)].node); ;}
     break;
 
   case 1312:
-#line 4384 "third_party/libpg_query/grammar/statements/select.y"
+#line 4385 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGCaseExpr *c = makeNode(PGCaseExpr);
 					c->casetype = InvalidOid; /* not analyzed yet */
@@ -31747,17 +31748,17 @@ yyreduce:
     break;
 
   case 1313:
-#line 4397 "third_party/libpg_query/grammar/statements/select.y"
+#line 4398 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(1) - (1)].node)); ;}
     break;
 
   case 1314:
-#line 4398 "third_party/libpg_query/grammar/statements/select.y"
+#line 4399 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (2)].list), (yyvsp[(2) - (2)].node)); ;}
     break;
 
   case 1315:
-#line 4403 "third_party/libpg_query/grammar/statements/select.y"
+#line 4404 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGCaseWhen *w = makeNode(PGCaseWhen);
 					w->expr = (PGExpr *) (yyvsp[(2) - (4)].node);
@@ -31768,68 +31769,68 @@ yyreduce:
     break;
 
   case 1316:
-#line 4413 "third_party/libpg_query/grammar/statements/select.y"
+#line 4414 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(2) - (2)].node); ;}
     break;
 
   case 1317:
-#line 4414 "third_party/libpg_query/grammar/statements/select.y"
+#line 4415 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = NULL; ;}
     break;
 
   case 1318:
-#line 4417 "third_party/libpg_query/grammar/statements/select.y"
+#line 4418 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
   case 1319:
-#line 4418 "third_party/libpg_query/grammar/statements/select.y"
+#line 4419 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = NULL; ;}
     break;
 
   case 1320:
-#line 4422 "third_party/libpg_query/grammar/statements/select.y"
+#line 4423 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(1) - (1)].node)); ;}
     break;
 
   case 1321:
-#line 4423 "third_party/libpg_query/grammar/statements/select.y"
+#line 4424 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].node)); ;}
     break;
 
   case 1322:
-#line 4428 "third_party/libpg_query/grammar/statements/select.y"
+#line 4429 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(1) - (1)].node)); ;}
     break;
 
   case 1323:
-#line 4429 "third_party/libpg_query/grammar/statements/select.y"
+#line 4430 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].node)); ;}
     break;
 
   case 1324:
-#line 4433 "third_party/libpg_query/grammar/statements/select.y"
+#line 4434 "third_party/libpg_query/grammar/statements/select.y"
     {
 			(yyval.node) = makeColumnRef((yyvsp[(1) - (1)].str), NIL, (yylsp[(1) - (1)]), yyscanner);
 		;}
     break;
 
   case 1325:
-#line 4439 "third_party/libpg_query/grammar/statements/select.y"
+#line 4440 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeColumnRef((yyvsp[(1) - (1)].str), NIL, (yylsp[(1) - (1)]), yyscanner);
 				;}
     break;
 
   case 1326:
-#line 4443 "third_party/libpg_query/grammar/statements/select.y"
+#line 4444 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeColumnRef((yyvsp[(1) - (2)].str), (yyvsp[(2) - (2)].list), (yylsp[(1) - (2)]), yyscanner);
 				;}
     break;
 
   case 1327:
-#line 4450 "third_party/libpg_query/grammar/statements/select.y"
+#line 4451 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGAIndices *ai = makeNode(PGAIndices);
 					ai->is_slice = false;
@@ -31840,7 +31841,7 @@ yyreduce:
     break;
 
   case 1328:
-#line 4458 "third_party/libpg_query/grammar/statements/select.y"
+#line 4459 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGAIndices *ai = makeNode(PGAIndices);
 					ai->is_slice = true;
@@ -31851,7 +31852,7 @@ yyreduce:
     break;
 
   case 1329:
-#line 4465 "third_party/libpg_query/grammar/statements/select.y"
+#line 4466 "third_party/libpg_query/grammar/statements/select.y"
     {
 				    	PGAIndices *ai = makeNode(PGAIndices);
 				    	ai->is_slice = true;
@@ -31863,7 +31864,7 @@ yyreduce:
     break;
 
   case 1330:
-#line 4473 "third_party/libpg_query/grammar/statements/select.y"
+#line 4474 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGAIndices *ai = makeNode(PGAIndices);
 					ai->is_slice = true;
@@ -31874,42 +31875,42 @@ yyreduce:
     break;
 
   case 1331:
-#line 4483 "third_party/libpg_query/grammar/statements/select.y"
+#line 4484 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = (yyvsp[(1) - (1)].node); ;}
     break;
 
   case 1332:
-#line 4484 "third_party/libpg_query/grammar/statements/select.y"
+#line 4485 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.node) = NULL; ;}
     break;
 
   case 1333:
-#line 4489 "third_party/libpg_query/grammar/statements/select.y"
+#line 4490 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 1334:
-#line 4490 "third_party/libpg_query/grammar/statements/select.y"
+#line 4491 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (2)].list), (yyvsp[(2) - (2)].node)); ;}
     break;
 
   case 1335:
-#line 4494 "third_party/libpg_query/grammar/statements/select.y"
+#line 4495 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NULL; ;}
     break;
 
   case 1336:
-#line 4495 "third_party/libpg_query/grammar/statements/select.y"
+#line 4496 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(NULL); ;}
     break;
 
   case 1337:
-#line 4496 "third_party/libpg_query/grammar/statements/select.y"
+#line 4497 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(2) - (3)].list); ;}
     break;
 
   case 1338:
-#line 4501 "third_party/libpg_query/grammar/statements/select.y"
+#line 4502 "third_party/libpg_query/grammar/statements/select.y"
     {
 					if ((yyvsp[(3) - (3)].list)) {
 						PGFuncCall *n = makeFuncCall(list_make1(makeString((yyvsp[(2) - (3)].str))), (yyvsp[(3) - (3)].list)->head->data.ptr_value ? (yyvsp[(3) - (3)].list) : NULL, (yylsp[(2) - (3)]));
@@ -31921,7 +31922,7 @@ yyreduce:
     break;
 
   case 1339:
-#line 4510 "third_party/libpg_query/grammar/statements/select.y"
+#line 4511 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGAIndices *ai = makeNode(PGAIndices);
 					ai->is_slice = false;
@@ -31932,7 +31933,7 @@ yyreduce:
     break;
 
   case 1340:
-#line 4518 "third_party/libpg_query/grammar/statements/select.y"
+#line 4519 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGAIndices *ai = makeNode(PGAIndices);
 					ai->is_slice = true;
@@ -31943,7 +31944,7 @@ yyreduce:
     break;
 
   case 1341:
-#line 4525 "third_party/libpg_query/grammar/statements/select.y"
+#line 4526 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGAIndices *ai = makeNode(PGAIndices);
 					ai->is_slice = true;
@@ -31955,7 +31956,7 @@ yyreduce:
     break;
 
   case 1342:
-#line 4534 "third_party/libpg_query/grammar/statements/select.y"
+#line 4535 "third_party/libpg_query/grammar/statements/select.y"
     {
 					PGAIndices *ai = makeNode(PGAIndices);
 					ai->is_slice = true;
@@ -31966,47 +31967,47 @@ yyreduce:
     break;
 
   case 1343:
-#line 4549 "third_party/libpg_query/grammar/statements/select.y"
+#line 4550 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 1344:
-#line 4550 "third_party/libpg_query/grammar/statements/select.y"
+#line 4551 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (2)].list), (yyvsp[(2) - (2)].node)); ;}
     break;
 
   case 1347:
-#line 4566 "third_party/libpg_query/grammar/statements/select.y"
+#line 4567 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (1)].list); ;}
     break;
 
   case 1348:
-#line 4567 "third_party/libpg_query/grammar/statements/select.y"
+#line 4568 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 1349:
-#line 4571 "third_party/libpg_query/grammar/statements/select.y"
+#line 4572 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(1) - (1)].target)); ;}
     break;
 
   case 1350:
-#line 4572 "third_party/libpg_query/grammar/statements/select.y"
+#line 4573 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].target)); ;}
     break;
 
   case 1351:
-#line 4576 "third_party/libpg_query/grammar/statements/select.y"
+#line 4577 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (1)].list); ;}
     break;
 
   case 1352:
-#line 4577 "third_party/libpg_query/grammar/statements/select.y"
+#line 4578 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (2)].list); ;}
     break;
 
   case 1353:
-#line 4581 "third_party/libpg_query/grammar/statements/select.y"
+#line 4582 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.target) = makeNode(PGResTarget);
 					(yyval.target)->name = (yyvsp[(3) - (3)].str);
@@ -32017,7 +32018,7 @@ yyreduce:
     break;
 
   case 1354:
-#line 4597 "third_party/libpg_query/grammar/statements/select.y"
+#line 4598 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.target) = makeNode(PGResTarget);
 					(yyval.target)->name = (yyvsp[(2) - (2)].str);
@@ -32028,7 +32029,7 @@ yyreduce:
     break;
 
   case 1355:
-#line 4605 "third_party/libpg_query/grammar/statements/select.y"
+#line 4606 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.target) = makeNode(PGResTarget);
 					(yyval.target)->name = NULL;
@@ -32039,7 +32040,7 @@ yyreduce:
     break;
 
   case 1356:
-#line 4613 "third_party/libpg_query/grammar/statements/select.y"
+#line 4614 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.target) = makeNode(PGResTarget);
 					(yyval.target)->name = (yyvsp[(1) - (3)].str);
@@ -32050,191 +32051,191 @@ yyreduce:
     break;
 
   case 1357:
-#line 4622 "third_party/libpg_query/grammar/statements/select.y"
+#line 4623 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(3) - (4)].list); ;}
     break;
 
   case 1358:
-#line 4623 "third_party/libpg_query/grammar/statements/select.y"
+#line 4624 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(2) - (2)].list)); ;}
     break;
 
   case 1359:
-#line 4628 "third_party/libpg_query/grammar/statements/select.y"
+#line 4629 "third_party/libpg_query/grammar/statements/select.y"
     {
 				(yyval.list) = list_make1((yyvsp[(1) - (1)].str));
 			;}
     break;
 
   case 1360:
-#line 4632 "third_party/libpg_query/grammar/statements/select.y"
+#line 4633 "third_party/libpg_query/grammar/statements/select.y"
     {
 				(yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].str));
 			;}
     break;
 
   case 1361:
-#line 4638 "third_party/libpg_query/grammar/statements/select.y"
+#line 4639 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(1) - (1)].list)); ;}
     break;
 
   case 1362:
-#line 4640 "third_party/libpg_query/grammar/statements/select.y"
+#line 4641 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].list)); ;}
     break;
 
   case 1363:
-#line 4644 "third_party/libpg_query/grammar/statements/select.y"
+#line 4645 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (1)].list); ;}
     break;
 
   case 1364:
-#line 4645 "third_party/libpg_query/grammar/statements/select.y"
+#line 4646 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (2)].list); ;}
     break;
 
   case 1365:
-#line 4649 "third_party/libpg_query/grammar/statements/select.y"
+#line 4650 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (1)].list); ;}
     break;
 
   case 1366:
-#line 4650 "third_party/libpg_query/grammar/statements/select.y"
+#line 4651 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NULL; ;}
     break;
 
   case 1367:
-#line 4653 "third_party/libpg_query/grammar/statements/select.y"
+#line 4654 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make2((yyvsp[(1) - (3)].node), makeString((yyvsp[(3) - (3)].str))); ;}
     break;
 
   case 1368:
-#line 4657 "third_party/libpg_query/grammar/statements/select.y"
+#line 4658 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(1) - (1)].list)); ;}
     break;
 
   case 1369:
-#line 4658 "third_party/libpg_query/grammar/statements/select.y"
+#line 4659 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].list)); ;}
     break;
 
   case 1370:
-#line 4662 "third_party/libpg_query/grammar/statements/select.y"
+#line 4663 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (1)].list); ;}
     break;
 
   case 1371:
-#line 4663 "third_party/libpg_query/grammar/statements/select.y"
+#line 4664 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (2)].list); ;}
     break;
 
   case 1372:
-#line 4666 "third_party/libpg_query/grammar/statements/select.y"
+#line 4667 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(3) - (4)].list); ;}
     break;
 
   case 1373:
-#line 4667 "third_party/libpg_query/grammar/statements/select.y"
+#line 4668 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(2) - (2)].list)); ;}
     break;
 
   case 1374:
-#line 4668 "third_party/libpg_query/grammar/statements/select.y"
+#line 4669 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NULL; ;}
     break;
 
   case 1375:
-#line 4671 "third_party/libpg_query/grammar/statements/select.y"
+#line 4672 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make2((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].str)); ;}
     break;
 
   case 1376:
-#line 4675 "third_party/libpg_query/grammar/statements/select.y"
+#line 4676 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(1) - (1)].list)); ;}
     break;
 
   case 1377:
-#line 4676 "third_party/libpg_query/grammar/statements/select.y"
+#line 4677 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].list)); ;}
     break;
 
   case 1378:
-#line 4680 "third_party/libpg_query/grammar/statements/select.y"
+#line 4681 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (1)].list); ;}
     break;
 
   case 1379:
-#line 4681 "third_party/libpg_query/grammar/statements/select.y"
+#line 4682 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (2)].list); ;}
     break;
 
   case 1380:
-#line 4683 "third_party/libpg_query/grammar/statements/select.y"
+#line 4684 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(3) - (4)].list); ;}
     break;
 
   case 1381:
-#line 4684 "third_party/libpg_query/grammar/statements/select.y"
+#line 4685 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(2) - (2)].list)); ;}
     break;
 
   case 1382:
-#line 4685 "third_party/libpg_query/grammar/statements/select.y"
+#line 4686 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NULL; ;}
     break;
 
   case 1383:
-#line 4695 "third_party/libpg_query/grammar/statements/select.y"
+#line 4696 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1((yyvsp[(1) - (1)].range)); ;}
     break;
 
   case 1384:
-#line 4696 "third_party/libpg_query/grammar/statements/select.y"
+#line 4697 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (3)].list), (yyvsp[(3) - (3)].range)); ;}
     break;
 
   case 1385:
-#line 4701 "third_party/libpg_query/grammar/statements/select.y"
+#line 4702 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeString((yyvsp[(1) - (1)].str))); ;}
     break;
 
   case 1386:
-#line 4703 "third_party/libpg_query/grammar/statements/select.y"
+#line 4704 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (3)].list), makeString((yyvsp[(3) - (3)].str))); ;}
     break;
 
   case 1387:
-#line 4708 "third_party/libpg_query/grammar/statements/select.y"
+#line 4709 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (1)].list); ;}
     break;
 
   case 1388:
-#line 4709 "third_party/libpg_query/grammar/statements/select.y"
+#line 4710 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (2)].list); ;}
     break;
 
   case 1389:
-#line 4713 "third_party/libpg_query/grammar/statements/select.y"
+#line 4714 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(1) - (1)].list); ;}
     break;
 
   case 1390:
-#line 4714 "third_party/libpg_query/grammar/statements/select.y"
+#line 4715 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(2) - (3)].list); ;}
     break;
 
   case 1391:
-#line 4717 "third_party/libpg_query/grammar/statements/select.y"
+#line 4718 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (yyvsp[(1) - (1)].str); ;}
     break;
 
   case 1392:
-#line 4729 "third_party/libpg_query/grammar/statements/select.y"
+#line 4730 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeString((yyvsp[(1) - (1)].str))); ;}
     break;
 
   case 1393:
-#line 4732 "third_party/libpg_query/grammar/statements/select.y"
+#line 4733 "third_party/libpg_query/grammar/statements/select.y"
     {
 						(yyval.list) = check_func_name(lcons(makeString((yyvsp[(1) - (2)].str)), (yyvsp[(2) - (2)].list)),
 											 yyscanner);
@@ -32242,21 +32243,21 @@ yyreduce:
     break;
 
   case 1394:
-#line 4743 "third_party/libpg_query/grammar/statements/select.y"
+#line 4744 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeIntConst((yyvsp[(1) - (1)].ival), (yylsp[(1) - (1)]));
 				;}
     break;
 
   case 1395:
-#line 4747 "third_party/libpg_query/grammar/statements/select.y"
+#line 4748 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeFloatConst((yyvsp[(1) - (1)].str), (yylsp[(1) - (1)]));
 				;}
     break;
 
   case 1396:
-#line 4751 "third_party/libpg_query/grammar/statements/select.y"
+#line 4752 "third_party/libpg_query/grammar/statements/select.y"
     {
 					if ((yyvsp[(2) - (2)].list))
 					{
@@ -32271,14 +32272,14 @@ yyreduce:
     break;
 
   case 1397:
-#line 4763 "third_party/libpg_query/grammar/statements/select.y"
+#line 4764 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeBitStringConst((yyvsp[(1) - (1)].str), (yylsp[(1) - (1)]));
 				;}
     break;
 
   case 1398:
-#line 4767 "third_party/libpg_query/grammar/statements/select.y"
+#line 4768 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* This is a bit constant per SQL99:
 					 * Without Feature F511, "BIT data type",
@@ -32290,7 +32291,7 @@ yyreduce:
     break;
 
   case 1399:
-#line 4776 "third_party/libpg_query/grammar/statements/select.y"
+#line 4777 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* generic type 'literal' syntax */
 					PGTypeName *t = makeTypeNameFromNameList((yyvsp[(1) - (2)].list));
@@ -32300,7 +32301,7 @@ yyreduce:
     break;
 
   case 1400:
-#line 4783 "third_party/libpg_query/grammar/statements/select.y"
+#line 4784 "third_party/libpg_query/grammar/statements/select.y"
     {
 					/* generic syntax with a type modifier */
 					PGTypeName *t = makeTypeNameFromNameList((yyvsp[(1) - (7)].list));
@@ -32341,141 +32342,141 @@ yyreduce:
     break;
 
   case 1401:
-#line 4821 "third_party/libpg_query/grammar/statements/select.y"
+#line 4822 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeStringConstCast((yyvsp[(2) - (2)].str), (yylsp[(2) - (2)]), (yyvsp[(1) - (2)].typnam));
 				;}
     break;
 
   case 1402:
-#line 4825 "third_party/libpg_query/grammar/statements/select.y"
+#line 4826 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeIntervalNode((yyvsp[(3) - (5)].node), (yylsp[(3) - (5)]), (yyvsp[(5) - (5)].list));
 				;}
     break;
 
   case 1403:
-#line 4829 "third_party/libpg_query/grammar/statements/select.y"
+#line 4830 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeIntervalNode((yyvsp[(2) - (3)].ival), (yylsp[(2) - (3)]), (yyvsp[(3) - (3)].list));
 				;}
     break;
 
   case 1404:
-#line 4833 "third_party/libpg_query/grammar/statements/select.y"
+#line 4834 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeIntervalNode((yyvsp[(2) - (3)].str), (yylsp[(2) - (3)]), (yyvsp[(3) - (3)].list));
 				;}
     break;
 
   case 1405:
-#line 4837 "third_party/libpg_query/grammar/statements/select.y"
+#line 4838 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeBoolAConst(true, (yylsp[(1) - (1)]));
 				;}
     break;
 
   case 1406:
-#line 4841 "third_party/libpg_query/grammar/statements/select.y"
+#line 4842 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeBoolAConst(false, (yylsp[(1) - (1)]));
 				;}
     break;
 
   case 1407:
-#line 4845 "third_party/libpg_query/grammar/statements/select.y"
+#line 4846 "third_party/libpg_query/grammar/statements/select.y"
     {
 					(yyval.node) = makeNullAConst((yylsp[(1) - (1)]));
 				;}
     break;
 
   case 1408:
-#line 4850 "third_party/libpg_query/grammar/statements/select.y"
+#line 4851 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.ival) = (yyvsp[(1) - (1)].ival); ;}
     break;
 
   case 1409:
-#line 4867 "third_party/libpg_query/grammar/statements/select.y"
+#line 4868 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (yyvsp[(1) - (1)].str); ;}
     break;
 
   case 1410:
-#line 4868 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.str) = pstrdup((yyvsp[(1) - (1)].keyword)); ;}
-    break;
-
-  case 1411:
 #line 4869 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = pstrdup((yyvsp[(1) - (1)].keyword)); ;}
     break;
 
+  case 1411:
+#line 4870 "third_party/libpg_query/grammar/statements/select.y"
+    { (yyval.str) = pstrdup((yyvsp[(1) - (1)].keyword)); ;}
+    break;
+
   case 1412:
-#line 4872 "third_party/libpg_query/grammar/statements/select.y"
+#line 4873 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (yyvsp[(1) - (1)].str); ;}
     break;
 
   case 1413:
-#line 4873 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.str) = pstrdup((yyvsp[(1) - (1)].keyword)); ;}
-    break;
-
-  case 1414:
 #line 4874 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = pstrdup((yyvsp[(1) - (1)].keyword)); ;}
     break;
 
+  case 1414:
+#line 4875 "third_party/libpg_query/grammar/statements/select.y"
+    { (yyval.str) = pstrdup((yyvsp[(1) - (1)].keyword)); ;}
+    break;
+
   case 1415:
-#line 4877 "third_party/libpg_query/grammar/statements/select.y"
+#line 4878 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (yyvsp[(1) - (1)].str); ;}
     break;
 
   case 1416:
-#line 4878 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.str) = pstrdup((yyvsp[(1) - (1)].keyword)); ;}
-    break;
-
-  case 1417:
 #line 4879 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = pstrdup((yyvsp[(1) - (1)].keyword)); ;}
     break;
 
+  case 1417:
+#line 4880 "third_party/libpg_query/grammar/statements/select.y"
+    { (yyval.str) = pstrdup((yyvsp[(1) - (1)].keyword)); ;}
+    break;
+
   case 1418:
-#line 4882 "third_party/libpg_query/grammar/statements/select.y"
+#line 4883 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeString((yyvsp[(1) - (1)].str))); ;}
     break;
 
   case 1419:
-#line 4883 "third_party/libpg_query/grammar/statements/select.y"
+#line 4884 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lcons(makeString((yyvsp[(1) - (2)].str)), (yyvsp[(2) - (2)].list)); ;}
     break;
 
   case 1420:
-#line 4887 "third_party/libpg_query/grammar/statements/select.y"
+#line 4888 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = list_make1(makeString((yyvsp[(2) - (2)].str))); ;}
     break;
 
   case 1421:
-#line 4889 "third_party/libpg_query/grammar/statements/select.y"
+#line 4890 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = lappend((yyvsp[(1) - (3)].list), makeString((yyvsp[(3) - (3)].str))); ;}
     break;
 
   case 1422:
-#line 4893 "third_party/libpg_query/grammar/statements/select.y"
+#line 4894 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = (yyvsp[(2) - (3)].list); ;}
     break;
 
   case 1423:
-#line 4894 "third_party/libpg_query/grammar/statements/select.y"
+#line 4895 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.list) = NIL; ;}
     break;
 
   case 1425:
-#line 4901 "third_party/libpg_query/grammar/statements/select.y"
+#line 4902 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (yyvsp[(1) - (1)].str); ;}
     break;
 
   case 1426:
-#line 4902 "third_party/libpg_query/grammar/statements/select.y"
+#line 4903 "third_party/libpg_query/grammar/statements/select.y"
     { (yyval.str) = (yyvsp[(1) - (1)].str); ;}
     break;
 
@@ -34022,7 +34023,7 @@ yyreduce:
 
 
 /* Line 1267 of yacc.c.  */
-#line 34026 "third_party/libpg_query/grammar/grammar_out.cpp"
+#line 34027 "third_party/libpg_query/grammar/grammar_out.cpp"
       default: break;
     }
   YY_SYMBOL_PRINT ("-> $$ =", yyr1[yyn], &yyval, &yyloc);
@@ -34812,6 +34813,7 @@ makeDecideClause(PGList *decl, PGNode *body, int decl_location,
 	}
 
 	clause->variables = decl;
+	clause->decl_start = decl_location;
 	return (PGNode *) clause;
 }
 

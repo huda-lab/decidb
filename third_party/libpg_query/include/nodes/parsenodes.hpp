@@ -1282,7 +1282,8 @@ typedef struct PGDecideClause {
     PGNode *constraints;    /* SUCH THAT <constraints> */
     PGObjectiveSense sense; /* [MAXIMIZE|MINIMIZE] <objective> */
     PGNode *objective;
-    int tail_start;         /* the text from SUCH THAT through the objective */
+    int decl_start;         /* the DECIDE: the clause's text runs from here through tail_end */
+    int tail_start;         /* the tail, from SUCH THAT through the objective */
     int tail_end;
     PGList *spans;          /* PGDecideSpan of every DECIDE construct parsed so far in the query */
     int location;           /* of the DECIDE, for a clause with no constraints */

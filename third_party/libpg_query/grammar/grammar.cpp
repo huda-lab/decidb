@@ -564,6 +564,7 @@ makeDecideClause(PGList *decl, PGNode *body, int decl_location,
 	}
 
 	clause->variables = decl;
+	clause->decl_start = decl_location;
 	return (PGNode *) clause;
 }
 

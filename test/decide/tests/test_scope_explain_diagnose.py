@@ -740,6 +740,33 @@ def test_a_keyed_decision_bound_reports_per_class(decidb_cli):
 
 
 @pytest.mark.diagnose
+@pytest.mark.parametrize(
+    "decide_first",
+    [
+        pytest.param(False, id="declared_after_from"),
+        pytest.param(True, id="declared_before_from"),
+    ],
+)
+def test_a_declaration_key_is_quoted_as_written_in_a_group(decidb_cli, decide_first):
+    """`per "D"."region": y(INT)` is the only place the query writes the key (the clauses write
+    `region`), and a key is named where it is first written, so the group quotes the
+    declaration's text. Without the declaration's span the key reprints as `D.region`. The
+    split clause order (`DECIDE` before `FROM`) keeps the FROM text between the declaration
+    and SUCH THAT out of every cut."""
+    declaration = 'DECIDE ship(INT), per "D"."region": y(INT)'
+    tail = "SUCH THAT ship <= S.demand AND per region: y >= 8 AND per region: y <= 5 MAXIMIZE SUM(ship)"
+    select = "SELECT shipmentID, ship, y"
+    order = (declaration, from_clause()) if decide_first else (from_clause(), declaration)
+    sql = f"{select} {order[0]} {order[1]} {tail}"
+    result = _diagnose_relation.run(decidb_cli, sql, scope="expanded")
+    assert_no_internal_leak(result, "declaration key")
+    rows = [row for row in _diagnose_relation.rows(result) if row["edit_source"] != "achievable_objective"]
+    assert sorted(row["group"] for row in rows) == [
+        f'"D"."region" = {region}' for region in ("'East'", "'West'")
+    ], result.stdout
+
+
+@pytest.mark.diagnose
 def test_a_kept_row_finding_offsets_the_bound_as_written(decidb_cli):
     """`x >= 0.5 * sum(x) by (t.region) + 20` is canonicalized with its reducer on the
     left, so a row's own bound (20) is not in the query: each kept row's finding offsets

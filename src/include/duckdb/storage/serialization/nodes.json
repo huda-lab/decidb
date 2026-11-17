@@ -1590,7 +1590,7 @@
     "members": [
       {
         "id": 100,
-        "name": "tail",
+        "name": "text",
         "type": "string"
       },
       {
@@ -1602,6 +1602,11 @@
         "id": 102,
         "name": "spans",
         "type": "vector<idx_t>"
+      },
+      {
+        "id": 103,
+        "name": "start",
+        "type": "idx_t"
       }
     ],
     "pointer_type": "none"

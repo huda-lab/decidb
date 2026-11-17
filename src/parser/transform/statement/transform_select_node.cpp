@@ -123,29 +123,30 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
 			if (decide_clause.objective) {
 				result.decide_objective = TransformExpression(decide_clause.objective);
 			}
-			// The text the user wrote for the tail, with where the parser found each construct in it.
+			// The text the user wrote, from DECIDE through the objective, with where the parser found each construct.
 			auto &query = RootTransformer().parsed_query;
-			if (query && decide_clause.tail_start >= 0 && decide_clause.tail_end <= NumericCast<int>(query->size())) {
+			if (query && decide_clause.decl_start >= 0 && decide_clause.decl_start <= decide_clause.tail_start &&
+			    decide_clause.tail_end <= NumericCast<int>(query->size())) {
 				auto &text = result.decide_text;
+				text.start = NumericCast<idx_t>(decide_clause.decl_start);
 				text.tail_start = NumericCast<idx_t>(decide_clause.tail_start);
-				text.tail =
-				    query->substr(text.tail_start, NumericCast<idx_t>(decide_clause.tail_end) - text.tail_start);
+				text.text = query->substr(text.start, NumericCast<idx_t>(decide_clause.tail_end) - text.start);
 				for (auto cell = decide_clause.spans ? decide_clause.spans->head : nullptr; cell; cell = cell->next) {
 					auto &span = *reinterpret_cast<duckdb_libpgquery::PGDecideSpan *>(cell->data.ptr_value);
-					if (span.anchor < decide_clause.tail_start || span.end > decide_clause.tail_end) {
+					if (span.anchor < decide_clause.decl_start || span.end > decide_clause.tail_end) {
 						continue;
 					}
 					for (auto value : {span.anchor, static_cast<int>(span.role), span.start, span.end, 0}) {
 						text.spans.push_back(NumericCast<idx_t>(value));
 					}
 					for (idx_t i : {0, 2, 3}) {
-						text.spans[text.spans.size() - 5 + i] -= text.tail_start;
+						text.spans[text.spans.size() - 5 + i] -= text.start;
 					}
 				}
-				// Every expression of the tail, anchored at the location its parsed expression took.
+				// Every expression of the clause, anchored at the location its parsed expression took.
 				for (auto &entry : RootTransformer().decide_expr_spans) {
 					auto &span = entry.second;
-					if (span.start < decide_clause.tail_start || span.end > decide_clause.tail_end) {
+					if (span.start < decide_clause.decl_start || span.end > decide_clause.tail_end) {
 						continue;
 					}
 					for (auto value : {NumericCast<idx_t>(entry.first), static_cast<idx_t>(DecideSpanRole::EXPR),
@@ -154,7 +155,7 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
 						text.spans.push_back(value);
 					}
 					for (idx_t i : {0, 2, 3}) {
-						text.spans[text.spans.size() - 5 + i] -= text.tail_start;
+						text.spans[text.spans.size() - 5 + i] -= text.start;
 					}
 				}
 			}

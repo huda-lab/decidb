@@ -567,6 +567,7 @@ decide_clause:
                     PGDecidePopLexState(pg_yyget_extra(yyscanner));
                     n = (PGDecideClause *) ($3 ? $3 : makeDecideWithoutBody(@1));
                     n->variables = $2;
+                    n->decl_start = @1.start;
                     $$ = (PGNode *)n;
                 }
 		;

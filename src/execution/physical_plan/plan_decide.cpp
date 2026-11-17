@@ -173,8 +173,8 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	decide_op->input_column_names.assign(child_bindings.size(), string());
 	decide_op->input_column_in_clause.assign(child_bindings.size(), false);
 	// Names are kept as SQL, as the query writes them (`t.depot`, `"my col"`), so a remedy that prints one is
-	// pasteable. A reference is quoted from the DECIDE tail at its query location, as a message quotes a clause; one
-	// the tail does not hold (a column only the SELECT list names, a reference rewritten without its location) keeps
+	// pasteable. A reference is quoted from the DECIDE text at its query location, as a message quotes a clause; one
+	// the text does not hold (a column only the SELECT list names, a reference rewritten without its location) keeps
 	// `fallback`: its bare column name, or a relation element's `D.depotID` (DecideKeyElement::name).
 	std::function<void(const Expression &)> harvest;
 	auto written_name = [&](const BoundReferenceExpression &ref, const string &fallback) {

@@ -15,7 +15,7 @@ namespace duckdb {
 class Serializer;
 class Deserializer;
 
-//! What a span of the DECIDE tail is. The values are the parser's PGDecideSpanRole.
+//! What a span of the DECIDE text is. The values are the parser's PGDecideSpanRole.
 enum class DecideSpanRole : uint8_t {
 	//! The input of a BETWEEN and its bounds (`lo AND hi`), anchored at the BETWEEN. The bound halves carry its
 	//! location, so the clause is quoted whole.
@@ -45,40 +45,49 @@ enum class DecideBinding : uint8_t {
 	POWER = 30
 };
 
-//! The text of a DECIDE clause as the user wrote it (the Clang SourceManager pattern): the tail, `SUCH THAT` through
-//! the objective, and where the parser found each construct in it. A construct is named by the query location of its
-//! parsed node, which a bound node keeps (a copy and a serialization carry it), so a message cuts the text of a node
-//! it holds without the node carrying any. Every expression of the tail has an EXPR span; the other roles are the
-//! constructs that are no expression (a key, a BETWEEN's sides, the objective with its scope). Not compared by
-//! `SelectNode::Equals`, as the query location is not.
+//! The text of a DECIDE clause as the user wrote it (the Clang SourceManager pattern): one buffer from `DECIDE`
+//! through the objective, and where the parser found each construct in it. In the split clause order the buffer holds
+//! the FROM and WHERE text between the declarations and `SUCH THAT`; no span lies in it and nothing cuts it. A
+//! construct is named by the query location of its parsed node, which a bound node keeps (a copy and a serialization
+//! carry it), so a message cuts the text of a node it holds without the node carrying any. Every expression of the
+//! clause has an EXPR span; the other roles are the constructs that are no expression (a key, a BETWEEN's sides, the
+//! objective with its scope). Not compared by `SelectNode::Equals`, as the query location is not.
 struct DecideSourceText {
-	//! The tail, verbatim. Empty for a statement built without the parser's text.
-	string tail;
-	//! Where the tail starts in the string that was parsed; a location is relative to it.
+	//! The clause, verbatim, from `DECIDE` through the objective. Empty for a statement built without the parser's
+	//! text.
+	string text;
+	//! Where the tail (`SUCH THAT` through the objective) starts in the string that was parsed. It anchors the
+	//! objective's span, and `Tail()` starts there.
 	idx_t tail_start = 0;
-	//! Five entries per construct: the anchor, its role, its start and end (all relative to `tail_start`), and, for an
+	//! Five entries per construct: the anchor, its role, its start and end (all relative to `start`), and, for an
 	//! EXPR span, its DecideBinding (0 for any other role).
 	vector<idx_t> spans;
+	//! Where `text` starts in the string that was parsed (the `DECIDE`); a location is relative to it.
+	idx_t start = 0;
 
 	bool HasText() const {
-		return !tail.empty();
+		return !text.empty();
+	}
+	//! The text from `SUCH THAT` through the objective.
+	string Tail() const {
+		return text.substr(tail_start - start);
 	}
 	//! The serialized fields; the serializer compares a member with its default to leave a default out.
 	bool operator==(const DecideSourceText &other) const {
-		return tail == other.tail && tail_start == other.tail_start && spans == other.spans;
+		return text == other.text && tail_start == other.tail_start && spans == other.spans && start == other.start;
 	}
 	//! The text written for the construct of `role` whose token is at `location` (a query location); false when the
 	//! parser kept none.
-	bool Cut(optional_idx location, DecideSpanRole role, string &text) const;
+	bool Cut(optional_idx location, DecideSpanRole role, string &out) const;
 	//! The text of the expression at `location` and how tightly it binds (a DecideBinding).
-	bool CutExpr(optional_idx location, string &text, int &binding) const;
+	bool CutExpr(optional_idx location, string &out, int &binding) const;
 
 	//! Generated from `storage/serialization/nodes.json`.
 	void Serialize(Serializer &serializer) const;
 	static DecideSourceText Deserialize(Deserializer &deserializer);
 
 private:
-	bool CutEntry(optional_idx location, DecideSpanRole role, string &text, int &binding) const;
+	bool CutEntry(optional_idx location, DecideSpanRole role, string &out, int &binding) const;
 	//! (anchor, role) to the construct's entry in `spans`, built on first use.
 	mutable std::map<std::pair<idx_t, idx_t>, idx_t> index;
 	mutable bool indexed = false;

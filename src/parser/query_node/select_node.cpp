@@ -132,7 +132,7 @@ string SelectNode::ToString() const {
 		}
 		if (decide_text.HasText()) {
 			// the tail as written, so a statement parsed from this string keeps the text the user wrote
-			result += " " + decide_text.tail;
+			result += " " + decide_text.Tail();
 		} else {
 			result += " SUCH THAT " + DecideConstraintsToString(*decide_constraints);
 			if (decide_objective) {

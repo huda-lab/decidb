@@ -535,10 +535,11 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 
 	REQUIRE(after->written_objective == before->written_objective);
 	REQUIRE(after->canonical_objective == before->canonical_objective);
-	// The tail as the user wrote it, with the span of each expression in it.
+	// The clause as the user wrote it, with the span of each expression in it.
 	REQUIRE(before->source_text.HasText());
 	REQUIRE(!before->source_text.spans.empty());
-	REQUIRE(after->source_text.tail == before->source_text.tail);
+	REQUIRE(after->source_text.text == before->source_text.text);
+	REQUIRE(after->source_text.start == before->source_text.start);
 	REQUIRE(after->source_text.tail_start == before->source_text.tail_start);
 	REQUIRE(after->source_text.spans == before->source_text.spans);
 	REQUIRE(after->objective_constant_offset == before->objective_constant_offset);

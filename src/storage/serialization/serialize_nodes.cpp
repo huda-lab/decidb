@@ -613,16 +613,18 @@ DecideSourceColumnName DecideSourceColumnName::Deserialize(Deserializer &deseria
 }
 
 void DecideSourceText::Serialize(Serializer &serializer) const {
-	serializer.WritePropertyWithDefault<string>(100, "tail", tail);
+	serializer.WritePropertyWithDefault<string>(100, "text", text);
 	serializer.WritePropertyWithDefault<idx_t>(101, "tail_start", tail_start);
 	serializer.WritePropertyWithDefault<vector<idx_t>>(102, "spans", spans);
+	serializer.WritePropertyWithDefault<idx_t>(103, "start", start);
 }
 
 DecideSourceText DecideSourceText::Deserialize(Deserializer &deserializer) {
 	DecideSourceText result;
-	deserializer.ReadPropertyWithDefault<string>(100, "tail", result.tail);
+	deserializer.ReadPropertyWithDefault<string>(100, "text", result.text);
 	deserializer.ReadPropertyWithDefault<idx_t>(101, "tail_start", result.tail_start);
 	deserializer.ReadPropertyWithDefault<vector<idx_t>>(102, "spans", result.spans);
+	deserializer.ReadPropertyWithDefault<idx_t>(103, "start", result.start);
 	return result;
 }
 
