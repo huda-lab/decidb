@@ -214,10 +214,13 @@ private:
 		}
 		auto invalid = InvalidValueMessage(*comparison.right, text, Kept());
 		if (reduces) {
-			auto group = DirectTightestBound(optimizer, comparison.type, comparison.right->Copy(), text,
-			                                 std::move(invalid), OwnWhens(*comparison.left));
+			auto group =
+			    DirectTightestBound(optimizer, comparison.type, comparison.right->Copy(), text, std::move(invalid));
 			group->location = location;
 			Record(comparison, std::move(group));
+			if (comparison.type == ExpressionType::COMPARE_EQUAL) {
+				AddDisagreementCheck(comparison, *comparison.right, text, OwnWhens(*comparison.left));
+			}
 			return;
 		}
 		AddValueCheck(std::move(invalid));
@@ -310,7 +313,7 @@ private:
 	}
 
 	//! The own `when` of each reducer of the clause's left side that has one: a group holds an instance only where each
-	//! keeps a row (DecideGroupBound::held). A reducer with none reads every kept row of its group.
+	//! keeps a row (AddDisagreementCheck). A reducer with none reads every kept row of its group.
 	static vector<const Expression *> OwnWhens(const Expression &left) {
 		vector<const Expression *> whens;
 		std::function<void(const Expression &)> walk = [&](const Expression &expr) {
@@ -534,12 +537,90 @@ private:
 		return value;
 	}
 
+	//! The aggregate `function` of `argument` over the kept rows of each group of `key`, read as a column of its side
+	//! table (the one record is shared with an equal one).
+	ExprPtr RecordOver(const char *function, const Expression &argument, idx_t key) {
+		vector<unique_ptr<Expression>> children;
+		children.push_back(argument.Copy());
+		DecideBoundAggregate record;
+		record.function = optimizer.BindAggregateFunction(function, std::move(children));
+		record.function->Cast<BoundAggregateExpression>().children.clear();
+		record.arguments.push_back(argument.Copy());
+		record.key = key;
+		auto type = record.function->return_type;
+		return calc.Col(type, RecordAggregate(std::move(record), Kept()));
+	}
+
+	//! The error a row raises for an `=` bound that takes two values (`low` and `high`) in its group: the one text of
+	//! DecideBoundDisagreementMessage, read from `names` (the key's columns as the query writes them) and `values`
+	//! (their value on the row), and NULL where the values agree or where one of `held` is not true: a group whose
+	//! reducers do not each read a row holds no instance, and constrains nothing.
+	ExprPtr BoundDisagreement(const string &text, const ExprPtr &low, const ExprPtr &high, const vector<ExprPtr> &held,
+	                          const vector<string> &names, const vector<ExprPtr> &values) const {
+		D_ASSERT(names.size() == values.size());
+		vector<ExprPtr> arguments {calc.Constant(Value(text)), calc.Cast(low, LogicalType::DOUBLE),
+		                           calc.Cast(high, LogicalType::DOUBLE)};
+		for (idx_t i = 0; i < names.size(); i++) {
+			arguments.push_back(calc.Constant(Value(names[i])));
+			arguments.push_back(values[i]);
+		}
+		auto message = calc.Fn("__internal_decide_bound_disagreement", arguments);
+		auto disagree = calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, low, high);
+		for (auto &read : held) {
+			disagree =
+			    calc.If(calc.Cmp(ExpressionType::COMPARE_EQUAL, read, calc.Bool(true)), disagree, calc.Bool(false));
+		}
+		return calc.If(disagree, message, calc.Constant(Value(LogicalType::VARCHAR)));
+	}
+
+	//! The check of an `=` bound over a group (`bound`, a value that may differ between the kept rows of a group,
+	//! written as `text`; `reads`, the own `when` of each reducer of the clause that has one): the group takes one
+	//! value. A `per K:` makes one instance per class of each group and the groups merge them, so the bound holds one
+	//! value in each class and in each group; the finer is checked first, so two values of one class name it. The
+	//! checks stand in `scope_checks`, made over the source and the aggregates' side tables before any rule runs, so
+	//! every path states them. A group where some reducer reads no row holds no instance (language/guide.md §7.4).
+	void AddDisagreementCheck(const BoundComparisonExpression &comparison, const Expression &bound, const string &text,
+	                          const vector<const Expression *> &reads) {
+		const auto by = GroupKeyIndex(comparison);
+		vector<ExprPtr> held;
+		for (auto *read : reads) {
+			held.push_back(RecordOver("bool_or", *read, by));
+		}
+		// A key's columns as the query writes them, each once, with their value on the row.
+		vector<string> names;
+		vector<ExprPtr> values;
+		auto name = [&](idx_t key_index) {
+			for (auto &element : DecideKeyElements(decide.keys, key_index)) {
+				if (std::find(names.begin(), names.end(), element.name) == names.end()) {
+					names.push_back(element.name);
+					values.push_back(calc.Of(*element.expression));
+				}
+			}
+		};
+		auto check = [&](idx_t key) {
+			AddValueCheck(
+			    calc.Out(DirectOnKeptRows(calc, Kept(),
+			                              BoundDisagreement(text, RecordOver("min", bound, key),
+			                                                RecordOver("max", bound, key), held, names, values))));
+		};
+		const auto within_class = FindOrCreateDecidePathKey({by, class_key}, decide.keys);
+		if (within_class != by) {
+			name(by);
+			name(class_key);
+			check(within_class);
+			names.clear();
+			values.clear();
+		}
+		name(by);
+		check(by);
+	}
+
 	//! Records a left-over bound's aggregates over the group of its clause, so the comparison reads the bound as one
 	//! column (named by the bound as written), and returns the checks of the bound in the solver's order: what each
-	//! aggregate reads, a NaN bound, then an `=` bound that takes two values in a group.
+	//! aggregate reads, then a NaN bound. An `=` bound's two values in a group are checked wherever the bound is
+	//! (AddDisagreementCheck), whether or not a rule takes the clause.
 	vector<unique_ptr<Expression>> RecordGroupBound(BoundComparisonExpression &comparison, DecideGroupBound &group) {
 		vector<ColumnBinding> placeholders;
-		vector<ExprPtr> columns;
 		vector<unique_ptr<Expression>> values;
 		for (auto &aggregate : group.aggregates) {
 			auto &input = group.inputs[aggregate.input];
@@ -550,9 +631,9 @@ private:
 			}
 			record.key = GroupKeyIndex(comparison);
 			placeholders.push_back(aggregate.column);
-			columns.push_back(calc.Col(aggregate.function->return_type,
-			                           RecordAggregate(std::move(record), Reads(input.filter.get()))));
-			values.push_back(calc.Out(InGroup(comparison, columns.back())));
+			auto column = calc.Col(aggregate.function->return_type,
+			                       RecordAggregate(std::move(record), Reads(input.filter.get())));
+			values.push_back(calc.Out(InGroup(comparison, column)));
 		}
 		vector<unique_ptr<Expression>> messages;
 		for (auto &input : group.inputs) {
@@ -563,50 +644,6 @@ private:
 		if (group.invalid) {
 			DirectReplaceColumns(group.invalid, placeholders, values);
 			messages.push_back(calc.Out(DirectOnKeptRows(calc, Kept(), calc.Wrap(std::move(group.invalid)))));
-		}
-		if (group.low != DConstants::INVALID_INDEX) {
-			vector<ExprPtr> held;
-			for (auto aggregate : group.held) {
-				held.push_back(columns[aggregate]);
-			}
-			// The group the row is in, as the query writes its key, and with its class of the clause's `per K:`.
-			const auto by = GroupKeyIndex(comparison);
-			DirectGroupKey group_key;
-			auto name = [&](DirectGroupKey &key, idx_t key_index) {
-				for (auto &element : DecideKeyElements(decide.keys, key_index)) {
-					if (std::find(key.names.begin(), key.names.end(), element.name) == key.names.end()) {
-						key.names.push_back(element.name);
-						key.values.push_back(calc.Of(*element.expression));
-					}
-				}
-			};
-			name(group_key, by);
-			// A `per K:` makes one instance per class of each group, and the groups merge them, so the bound holds one
-			// value in each class and in each group. The finer is checked first, so two values of one class name it.
-			const auto within_class = FindOrCreateDecidePathKey({by, class_key}, decide.keys);
-			if (within_class != by) {
-				auto extremum = [&](idx_t aggregate) {
-					auto &input = group.inputs[group.aggregates[aggregate].input];
-					DecideBoundAggregate record;
-					record.function = group.aggregates[aggregate].function->Copy();
-					if (input.argument) {
-						record.arguments.push_back(input.argument->Copy());
-					}
-					record.key = within_class;
-					return calc.Col(group.aggregates[aggregate].function->return_type,
-					                RecordAggregate(std::move(record), Reads(input.filter.get())));
-				};
-				DirectGroupKey class_group;
-				name(class_group, by);
-				name(class_group, class_key);
-				messages.push_back(
-				    calc.Out(DirectOnKeptRows(calc, Kept(),
-				                              DirectBoundDisagreement(calc, group.text, extremum(group.low),
-				                                                      extremum(group.high), held, class_group))));
-			}
-			messages.push_back(calc.Out(DirectOnKeptRows(
-			    calc, Kept(),
-			    DirectBoundDisagreement(calc, group.text, columns[group.low], columns[group.high], held, group_key))));
 		}
 		comparison.right = std::move(DirectIsUpperBound(comparison.type) ? group.upper : group.lower);
 		DirectReplaceColumns(comparison.right, placeholders, values);

@@ -782,8 +782,7 @@ private:
 		auto bound = DirectTightestBound(optimizer, comparison, end.Copy(), string(), nullptr);
 		vector<DirectGroupInputColumns> input(1);
 		input[0].argument = column;
-		// A tightest end names no `=` message: the bound has no `low`.
-		return DirectAddGroupBound(calc, *bound, input, sink, nullptr, DirectGroupKey());
+		return DirectAddGroupBound(calc, *bound, input, sink, nullptr);
 	}
 
 	//===------------------------------------------------------------------===//

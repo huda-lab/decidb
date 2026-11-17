@@ -345,8 +345,7 @@ public:
 		DirectGroupValues limit_values;
 		if (limit_bound) {
 			DirectAggregateSink sink(aggregate);
-			limit_values = DirectAddGroupBound(calc, *limit_bound, row.limit_inputs, sink, nullptr,
-			                                   DirectGroupKeyOf(calc, condition.keys, carried.key, keys));
+			limit_values = DirectAddGroupBound(calc, *limit_bound, row.limit_inputs, sink, nullptr);
 		}
 		unique_ptr<LogicalOperator> plan = aggregate.Finish(std::move(row.plan));
 

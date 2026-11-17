@@ -1254,8 +1254,8 @@ private:
 		auto limit_eligible = condition.scope.Scoped() ? GroupExists(key) : nullptr;
 		vector<DirectGroupValues> limits;
 		for (idx_t j = 0; j < limit_bounds.size(); j++) {
-			limits.push_back(DirectAddGroupBound(calc, *limit_bounds[j], items.columns.limits[j], sink, limit_eligible,
-			                                     DirectGroupKeyOf(calc, condition.scope.keys, class_key, key)));
+			limits.push_back(
+			    DirectAddGroupBound(calc, *limit_bounds[j], items.columns.limits[j], sink, limit_eligible));
 		}
 		auto plan = items.Repoint(aggregate.Finish(std::move(items.plan)));
 

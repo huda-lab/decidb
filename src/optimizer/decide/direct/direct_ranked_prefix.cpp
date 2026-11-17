@@ -214,8 +214,7 @@ void DirectRankedPrefix::RankRows(Stage &rows) {
 		auto in_group = level.scoped ? Column(LogicalType::BOOLEAN, at.eligible) : nullptr;
 		for (idx_t j = 0; j < level.bounds.size(); j++) {
 			level.bound_values.push_back(
-			    DirectAddGroupBound(calc, *level.bounds[j], level.bound_inputs[j], sink, in_group,
-			                        DirectGroupKeyOf(calc, level.scope.keys, at.key, at.keys)));
+			    DirectAddGroupBound(calc, *level.bounds[j], level.bound_inputs[j], sink, in_group));
 		}
 		w1->children.push_back(std::move(rows.plan));
 		rows.plan = std::move(w1);

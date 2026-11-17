@@ -292,8 +292,7 @@ public:
 			DirectWindowSink sink(*limit_window,
 			                      [&](BoundWindowExpression &aggregate) { PartitionByGroup(carried, aggregate); });
 			limit_values = DirectAddGroupBound(calc, *limit_bound, coefficients.limit_inputs, sink,
-			                                   condition.scope.Scoped() ? Boolean(carried.eligible) : nullptr,
-			                                   DirectGroupKeyOf(calc, condition.scope.keys, carried.key, carried.keys));
+			                                   condition.scope.Scoped() ? Boolean(carried.eligible) : nullptr);
 			limit_window->children.push_back(std::move(plan));
 			plan = std::move(limit_window);
 		}

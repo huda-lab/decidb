@@ -434,6 +434,46 @@ def test_an_equal_bound_names_the_class_whose_two_values_it_takes(decidb_cli, cl
         )
 
 
+RULE_BOUND_ROWS = (
+    "(VALUES (1, 'a', 'p', 3, 4.0, 1.0), (2, 'a', 'p', 4, 2.0, 2.0), (3, 'a', 'q', 3, 5.0, 1.0), "
+    "(4, 'b', 'q', 2, 1.0, 3.0)) t(id, g, h, cap, score, w)"
+)
+
+
+@pytest.mark.parametrize(
+    "decide, group",
+    [
+        # S1 (the ranked prefix): a count limit by group, and one per class.
+        pytest.param("x(BOOL) SUCH THAT SUM(x) by (g) = t.cap MAXIMIZE SUM(score * x)", "g = 'a'", id="s1-by-group"),
+        pytest.param("x(BOOL) SUCH THAT per g: SUM(x) = t.cap MAXIMIZE SUM(score * x)", "g = 'a'", id="s1-per-class"),
+        # R1 (the continuous knapsack): the budget by group, per class, and by group and class.
+        pytest.param(
+            "x(REAL) SUCH THAT x <= 5 AND SUM(w * x) by (g) = t.cap MAXIMIZE SUM(score * x)",
+            "g = 'a'",
+            id="r1-by-group",
+        ),
+        pytest.param(
+            "x(REAL) SUCH THAT x <= 5 AND per g: SUM(w * x) = t.cap MAXIMIZE SUM(score * x)",
+            "g = 'a'",
+            id="r1-per-class",
+        ),
+        pytest.param(
+            "x(REAL) SUCH THAT x <= 5 AND per h: SUM(w * x) by (g) = t.cap MAXIMIZE SUM(score * x)",
+            "g = 'a', h = 'p'",
+            id="r1-by-group-and-class",
+        ),
+    ],
+)
+def test_an_equal_bound_is_checked_before_a_rule_runs(decidb_cli, decide, group):
+    """The bound-side rewrite checks an `=` bound before any rule runs, so `require` (a rule takes each of these) states
+    what `off` does. R4, N1 and A2 take no `=` bound: their budget, ball and ends are `<=` and `>=`."""
+    sql = f"SELECT id, x FROM {RULE_BOUND_ROWS} DECIDE {decide}"
+    expected = f"`t.cap` takes more than one value here (3 and 4), in the group {group} — an `=` bound"
+    for mode in ("off", "auto", "require"):
+        result = decidb_cli.execute_raw(f"SET decide_direct_solve = '{mode}'; {sql}")
+        assert expected in result.stderr, (mode, result.stderr)
+
+
 def test_an_equal_bound_two_classes_take_one_value_each_names_no_class(decidb_cli):
     """Class a holds 3 and class b holds 2: each class has one value, but the groups merge the instances, so the whole
     query takes two and no class holds both."""
