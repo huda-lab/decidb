@@ -67,7 +67,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
             "ship(INT)",
             "when S.priority: abs(ship - 20) <= 3",
             "abs(ship-20)becomesanauxiliaryvariable",
-            None,
+            "whenS.priority:abs(ship-20)-ship>=-20",
             "__abs_aux",
             id="abs",
         ),
@@ -180,7 +180,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
             "ship(INT)",
             "when S.priority: norm(ship, 0) <= 2",
             "norm(ship,0)becomesoneindicatorperrow",
-            None,
+            "whenS.priority:M*(ship<>0)-ship>=0.0",
             "1.0*",
             id="l0-bound-is-derived",
         ),
@@ -200,8 +200,8 @@ def test_explain_accounts_for_each_rewrite(decidb_cli, decide, clause, account, 
     an auxiliary made by an earlier rewrite included. A row that repeats the clause
     (the hard MIN/MAX carrier, printed as its reducer) is not shown again. A scoped `IN`
     keeps its front; `per row:` and an empty `by ()`, the defaults, print as a bare clause
-    (D32). EXPLAIN is plan-time only, so an automatic L0 link's data-derived bound and its
-    raw placeholder coefficient are not printed."""
+    (D32). An automatic L0 link's bound, which stage 06 derives from the box, prints as
+    `M`."""
     text = _plan(decidb_cli, _ship_query(decide, clause))
     assert account in text, text
     if row:
@@ -266,15 +266,13 @@ def test_explain_prints_a_unary_plus_as_a_call(decidb_cli):
 
 @pytest.mark.explain
 def test_explain_accounts_for_the_objectives_rewrites_too(decidb_cli):
-    """An ABS, a product or an AVG in the objective gets its account under the objective.
-
-    The ABS node keeps its generated envelope rows inside the DECIDE formulation; EXPLAIN
-    leaves the objective in its written form and does not print those implementation rows.
-    """
+    """An ABS, a product or an AVG in the objective gets its account under the objective,
+    and the rows a rewrite added for it are printed there too, not as rows no clause owns."""
     text = _plan(decidb_cli, _ship_query("ship(INT)", "ship >= 1", "MINIMIZE when S.priority: sum(abs(ship - 10))"))
-    assert ("Objective:MINIMIZEwhenS.priority:sum(abs(ship-10))↳abs(ship-10)becomesanauxiliaryvariable") in text, text
-    assert "abs(ship-10)-ship>=-10" not in text, text
-    assert "abs(ship-10)+ship<=10" not in text, text
+    assert (
+        "Objective:MINIMIZEwhenS.priority:sum(abs(ship-10))↳abs(ship-10)becomesanauxiliaryvariable"
+        "↳whenS.priority:abs(ship-10)-ship>=-10"
+    ) in text, text
     assert "addedbyformulation" not in text, text
     text = _plan(decidb_cli, _ship_query("ship(INT), per D: open(BOOL)", "ship >= 1", "MAXIMIZE sum(open * ship)"))
     assert "↳(open*ship)becomesanauxiliaryvariablelinearizedbyMcCormickrows" in text, text

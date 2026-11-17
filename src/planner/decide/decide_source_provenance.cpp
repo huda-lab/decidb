@@ -22,6 +22,7 @@
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/decide/decide_tree.hpp"
 #include "duckdb/planner/bind_context.hpp"
 
 #include <cstring>
@@ -893,10 +894,68 @@ string RenderDecideObjective(const Expression &expr, const DecideSourceNames &na
 	return parts[0];
 }
 
+//! A term's coefficient is left out when it is the literal 1, as a user writes no factor of 1; an automatic L0 bound is
+//! the placeholder `M`, which RenderSource prints.
+static bool IsUnitCoefficient(const Expression &coefficient) {
+	if (coefficient.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT ||
+	    HasDecideTag(coefficient.GetAlias(), L0_AUTO_BOUND_TAG)) {
+		return false;
+	}
+	auto &value = coefficient.Cast<BoundConstantExpression>().value;
+	return !value.IsNull() && value.GetValue<double>() == 1.0;
+}
+
+//! One row an F node owns, as `c1 * x1 + c2 * x2 >= bound` over the terms and bound stage 05 lowered, behind the
+//! `when c per K:` qualifier of the scope the row sits in.
+static string RenderFunctionRow(const DecideConstraint &row, const vector<unique_ptr<Expression>> &decide_variables,
+                                const RenderContext &ctx) {
+	string result;
+	for (auto &term : row.lhs_terms) {
+		string text = RenderSource(*decide_variables[term.variable_index], ctx, 20);
+		if (!IsUnitCoefficient(*term.coefficient)) {
+			text = RenderSource(*term.coefficient, ctx, 20) + " * " + text;
+		}
+		if (result.empty()) {
+			result = term.sign < 0 ? "-" + text : text;
+		} else {
+			result += (term.sign < 0 ? " - " : " + ") + text;
+		}
+	}
+	result += " " + DecideComparisonOperator(row.comparison_type) + " " + RenderSource(*row.rhs_expr, ctx);
+	string qualifier;
+	if (row.scope.when) {
+		qualifier = "when " + RenderSource(*row.scope.when, ctx);
+	}
+	if (row.scope.per != DecideClauseScope::PerRole::NONE) {
+		qualifier = AppendQualifier(qualifier, "per " + (row.scope.class_key == DConstants::INVALID_INDEX
+		                                                     ? string("()")
+		                                                     : DecideKeyText(*ctx.keys, row.scope.class_key)));
+	}
+	return AppendQualifier(FrontQualifier(qualifier), result);
+}
+
+vector<DecideFunctionRow> CollectDecideFunctionRows(const DecideTree &tree, const DecideSourceNames &names,
+                                                    const vector<unique_ptr<Expression>> &decide_variables) {
+	vector<DecideFunctionRow> rows;
+	auto ctx = ContextOf(names);
+	// A definition's row restates the body its reducer already prints, so only ABS envelopes and L0 links are rows.
+	for (auto function : tree.function_nodes) {
+		auto &node = *tree.nodes[function];
+		for (auto *roots : {&node.abs_envelope_roots, &node.l0_link_roots}) {
+			for (auto root : *roots) {
+				auto &clause = tree.nodes[root]->compiled.clause;
+				rows.push_back({tree.nodes[root]->source_clause_id, RenderFunctionRow(*clause, decide_variables, ctx)});
+			}
+		}
+	}
+	return rows;
+}
+
 vector<DecideClauseLayers> CollectDecideClauseLayers(const Expression &constraints, const DecideSourceNames &names,
                                                      const vector<ConstraintSourceInfo> &sources,
                                                      vector<string> &unattributed, vector<string> &objective_rows,
-                                                     const vector<LogicalDecide::RewriteAccount> &accounts) {
+                                                     const vector<LogicalDecide::RewriteAccount> &accounts,
+                                                     const vector<DecideFunctionRow> &function_rows) {
 	// Every row the solver will see, tagged with the clause it came from.
 	vector<string> rows;
 	vector<idx_t> row_ids;
@@ -920,6 +979,14 @@ vector<DecideClauseLayers> CollectDecideClauseLayers(const Expression &constrain
 		}
 		if (!rows[i].empty()) {
 			by_clause[row_ids[i]].push_back(std::move(rows[i]));
+		}
+	}
+	// The rows the F nodes own follow the clause's own, or the objective's.
+	for (auto &row : function_rows) {
+		if (row.source_clause_id < by_clause.size()) {
+			by_clause[row.source_clause_id].push_back(row.text);
+		} else {
+			objective_rows.push_back(row.text);
 		}
 	}
 	// A clause the tree no longer mentions anywhere still belongs in the plan.

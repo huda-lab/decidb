@@ -244,7 +244,7 @@ duckdb::vector<DecideClauseLayers> LayersOf(duckdb::vector<duckdb::unique_ptr<Ex
 	duckdb::vector<DecideKey> keys;
 	DecideSourceNames names {text, keyed_scopes, keys};
 	duckdb::vector<string> objective_rows;
-	return CollectDecideClauseLayers(*tree, names, sources, unattributed, objective_rows, {});
+	return CollectDecideClauseLayers(*tree, names, sources, unattributed, objective_rows, {}, {});
 }
 
 } // namespace

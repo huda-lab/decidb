@@ -179,7 +179,7 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 	// The run-time accounts follow the plan's, so EXPLAIN ANALYZE prints them under their clause.
 	auto accounts = rewrite_accounts;
 	accounts.insert(accounts.end(), run_time_accounts.begin(), run_time_accounts.end());
-	auto result = RenderDecideParams(*this, accounts, TreeHasComposedObjective(*tree));
+	auto result = RenderDecideParams(*this, accounts, TreeHasComposedObjective(*tree), tree.get());
 	SetEstimatedCardinality(result, estimated_cardinality);
 	return result;
 }

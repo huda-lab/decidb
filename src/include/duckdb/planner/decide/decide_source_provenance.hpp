@@ -18,6 +18,7 @@ namespace duckdb {
 class BindContext;
 class BoundAggregateExpression;
 class BoundConjunctionExpression;
+struct DecideTree;
 
 //! The location rule (Clang's TreeTransform): a replacement takes the query location of exactly the node it equals in
 //! value, so a message quotes it as the text the user wrote for that node (`DecideSourceText`). A node whose value
@@ -143,6 +144,20 @@ void CollectDecideExpressionStrings(const Expression &expr, const DecideSourceNa
 //! objective's snapshots go through it too.
 string RenderDecideObjective(const Expression &expr, const DecideSourceNames &names, bool written_sense = false);
 
+//! A row an F node of the tree owns (an ABS envelope, an L0 link), as the solver receives it, with the clause it came
+//! from (INVALID_INDEX for the objective's).
+struct DecideFunctionRow {
+	idx_t source_clause_id;
+	string text;
+};
+
+//! The rows the tree's F nodes own, read from their clause roots: each root's terms and bound, as stage 05 lowered
+//! them, with the `when c per K:` qualifier of its scope in front. A plan reads them here because EXPLAIN plans without
+//! solving and the rewrites keep these rows in the tree, not in the constraint list. `decide_variables` names each
+//! decision a term reads.
+vector<DecideFunctionRow> CollectDecideFunctionRows(const DecideTree &tree, const DecideSourceNames &names,
+                                                    const vector<unique_ptr<Expression>> &decide_variables);
+
 //! One user clause, rendered at each layer that says something different about it.
 //!
 //! A DECIDE clause is read three times on its way to a solver: as the user wrote it, as
@@ -172,13 +187,14 @@ struct DecideClauseLayers {
 //! owns several rows, a clause the optimizer extracted into `composed_minmax_constraints`
 //! owns none in the tree, and a row carrying no id at all is returned in `unattributed`.
 //! `accounts` (LogicalDecide::rewrite_accounts) are printed under their clause before its
-//! rows; the objective's (INVALID_INDEX) are left to RenderDecideObjectiveLayers, and so
-//! are the rows a rewrite added for the objective (OBJECTIVE_ROW_TAG), returned in
-//! `objective_rows`.
+//! rows, and `function_rows` (CollectDecideFunctionRows) follow the rows of the constraint list; the objective's
+//! (INVALID_INDEX) are left to RenderDecideObjectiveLayers, and so are the rows a rewrite added for the objective
+//! (OBJECTIVE_ROW_TAG), returned in `objective_rows`.
 vector<DecideClauseLayers> CollectDecideClauseLayers(const Expression &constraints, const DecideSourceNames &names,
                                                      const vector<ConstraintSourceInfo> &sources,
                                                      vector<string> &unattributed, vector<string> &objective_rows,
-                                                     const vector<LogicalDecide::RewriteAccount> &accounts);
+                                                     const vector<LogicalDecide::RewriteAccount> &accounts,
+                                                     const vector<DecideFunctionRow> &function_rows);
 
 //! One account line: the construct a rewrite replaced and what it became, in the one
 //! vocabulary every plan uses ("`abs(e)` becomes an auxiliary variable").
@@ -199,14 +215,15 @@ string RenderDecideObjectiveLayers(const string &sense_prefix, const string &wri
 //! constraints through the clause walker, so `when`/`per` wrappers print as written rather than as a generic
 //! conjunction. LogicalDecide::ParamsToString and PhysicalDecide::ParamsToString both call it and add their own
 //! cardinality. Extract Method as a function template: the two operators carry these fields under the same names, so it
-//! moves no field. Two facts each operator knows its own way are its parameters: the rewrite `accounts` (the physical
-//! operator's add what the data made of each clause, which EXPLAIN ANALYZE prints), and whether the objective is
-//! composed (`composed_objective`: the logical operator's composed terms, the physical operator's tree). It lives here,
-//! beside the renderers it calls, because this header is already included by both operators and the body adds no
-//! include.
+//! moves no field. Three facts each operator knows its own way are its parameters: the rewrite `accounts` (the physical
+//! operator's add what the data made of each clause, which EXPLAIN ANALYZE prints), whether the objective is composed
+//! (`composed_objective`: the logical operator's composed terms, the physical operator's tree), and the `tree` itself,
+//! whose F nodes own the rows its rewrites added (the logical operator has none). It lives here, beside the renderers
+//! it calls, because this header is already included by both operators and the body adds no include.
 template <class OP>
-InsertionOrderPreservingMap<string>
-RenderDecideParams(const OP &op, const vector<LogicalDecide::RewriteAccount> &accounts, bool composed_objective) {
+InsertionOrderPreservingMap<string> RenderDecideParams(const OP &op,
+                                                       const vector<LogicalDecide::RewriteAccount> &accounts,
+                                                       bool composed_objective, const DecideTree *tree) {
 	InsertionOrderPreservingMap<string> result;
 
 	// Variables (exclude auxiliary variables)
@@ -233,9 +250,13 @@ RenderDecideParams(const OP &op, const vector<LogicalDecide::RewriteAccount> &ac
 	// Constraints first: they also hand back the rows the rewrites added for the objective.
 	vector<string> unattributed;
 	vector<string> objective_rows;
+	vector<DecideFunctionRow> function_rows;
+	if (tree) {
+		function_rows = CollectDecideFunctionRows(*tree, names, op.decide_variables);
+	}
 	// The parser requires a SUCH THAT clause, so a plan always has constraints (transform_select_node.cpp).
 	auto layers = CollectDecideClauseLayers(*op.decide_constraints, names, op.constraint_sources, unattributed,
-	                                        objective_rows, accounts);
+	                                        objective_rows, accounts, function_rows);
 	string constraints_text = RenderDecideClauseLayers(layers, unattributed);
 	if (op.decide_objective) {
 		const bool maximize = op.written_sense == DecideSense::MAXIMIZE;
