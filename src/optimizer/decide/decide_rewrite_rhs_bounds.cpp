@@ -151,7 +151,8 @@ private:
 
 	//! A reducer over data alone inside one over decisions is a value of its path's group (language/guide.md §5.5), as
 	//! it is inside one on a bound: its column, read as a coefficient, which must be finite. `path` holds the reducers
-	//! over decisions around `expr`; null outside every one, where canonicalization left no reducer over data.
+	//! over decisions around `expr`; null outside every one, where canonicalization left only a reducer over data
+	//! inside a function of a decision (`abs(x - max(t.v) by (t.g))`): a value of the clause's rows, as on a bound.
 	void ReplaceDataUnderDecisions(unique_ptr<Expression> &expr, const DecideReducerPath *path) {
 		idx_t frame;
 		if (TryGetDecideFrame(*expr, frame)) {
@@ -164,9 +165,7 @@ private:
 		}
 		auto &reducer = expr->Cast<BoundAggregateExpression>();
 		if (reducer.children.empty() || !BoundExpressionReferencesDecide(*reducer.children[0], decide.decide_index)) {
-			if (path) {
-				expr = MakeReducerColumn(reducer, *path);
-			}
+			expr = MakeReducerColumn(reducer, path ? *path : DecideReducerPath());
 			return;
 		}
 		auto below = path ? path->Below(reducer) : DecideReducerPath().Below(reducer);

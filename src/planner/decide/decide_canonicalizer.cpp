@@ -343,7 +343,10 @@ void DecideCanonicalizer::SkipNullData(Expression &expr, const vector<KeyedScope
 	}
 }
 
-bool DecideCanonicalizer::ContainsReducer(const Expression &expr) {
+//! The one walk behind both questions: whether a reducer `counts` stands anywhere in `expr`. A frame's marker and a
+//! definition's body are none (see the header).
+template <class COUNTS>
+static bool HoldsReducer(const Expression &expr, COUNTS &&counts) {
 	idx_t definition_aux;
 	if (TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
 		return false; // the F node owns this body; callers see its scalar value, not its source reducers
@@ -352,16 +355,24 @@ bool DecideCanonicalizer::ContainsReducer(const Expression &expr) {
 	if (TryGetDecideFrame(expr, frame)) {
 		return false; // a tuple term read at another row, whose payload holds no reducer (D80)
 	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && counts(expr)) {
 		return true;
 	}
 	bool found = false;
 	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
 		if (!found) {
-			found = ContainsReducer(child);
+			found = HoldsReducer(child, counts);
 		}
 	});
 	return found;
+}
+
+bool DecideCanonicalizer::ContainsReducer(const Expression &expr) {
+	return HoldsReducer(expr, [](const Expression &) { return true; });
+}
+
+bool DecideCanonicalizer::ContainsDecisionReducer(const Expression &expr) const {
+	return HoldsReducer(expr, [&](const Expression &reducer) { return ReferencesDecideVar(reducer); });
 }
 
 DecideCanonicalizer::Placement DecideCanonicalizer::Classify(const Expression &expr) const {
@@ -1371,10 +1382,11 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 	Decompose(*cmp.left, 1, lhs_atoms, Clause::CONSTRAINT);
 	bool has_reducer = false;
 	for (auto &atom : lhs_atoms) {
-		has_reducer = has_reducer || ContainsReducer(*atom.expr);
+		has_reducer = has_reducer || ContainsDecisionReducer(*atom.expr);
 	}
 	if (!has_reducer) {
-		// A data-only reducer sits on the right, as a bound.
+		// A data-only reducer sits on the right, as a bound, or inside a function of a decision (`abs(x - max(t.v))`),
+		// where it is a value of its row as a column is.
 		return ScopedShape::ROWS;
 	}
 	// The aggregate shape is one row per group: decision reducers sharing one `by` key,
@@ -1474,7 +1486,7 @@ CanonicalConstraintClass DecideCanonicalizer::ClassifyCanonicalComparison(const 
 	if (HasDecideTag(cmp.GetAlias(), VALUE_REWRITE_TAG)) {
 		return CanonicalConstraintClass::VALUE;
 	}
-	return ContainsReducer(*cmp.left) ? CanonicalConstraintClass::AGGREGATE : CanonicalConstraintClass::PER_ROW;
+	return ContainsDecisionReducer(*cmp.left) ? CanonicalConstraintClass::AGGREGATE : CanonicalConstraintClass::PER_ROW;
 }
 
 void DecideCanonicalizer::ValidateCanonicalComparison(const BoundComparisonExpression &comparison) const {

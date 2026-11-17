@@ -2328,3 +2328,48 @@ def test_abs_of_a_sum_of_group_sums_beside_a_total_maximized(request, cli_fixtur
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
     assert abs(total - 2) == pytest.approx(result.objective_value, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# A reducer over data under an ABS of a decision
+# ---------------------------------------------------------------------------
+#
+# `abs(x - max(t.id) by (t.g))` is a function of one row: the group's maximum is a value of the row as a column is, as
+# in `x - max(t.id) by (t.g) <= 2`, where it is the bound. It makes no reducer over decisions, so the clause is a
+# per-row one and no value rewrite holds a reducer of it. Judged by enumeration over t(id, g) = (1, a), (2, a), (3, b),
+# whose maximum by g is 2, 2, 3 and whose minimum by g is 1, 1, 3.
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "cli_fixture, extra_env",
+    [
+        ("decidb_cli_gurobi", {}),
+        ("decidb_cli_gurobi", {"DECIDB_TEST_DIRECT_SOLVE": "off"}),
+        ("decidb_cli_highs", {}),
+    ],
+    ids=["gurobi", "gurobi-solver-path", "highs"],
+)
+@pytest.mark.parametrize(
+    "clause, center, radius",
+    [
+        pytest.param("abs(x - max(t.id) by (t.g)) <= 2", (2, 2, 3), (2, 2, 2), id="by-group"),
+        pytest.param("abs(x - max(t.id)) <= 2", (3, 3, 3), (2, 2, 2), id="whole-query"),
+        # A data reducer on the other side too: the clause is still per-row, so its bound is each row's column.
+        pytest.param("abs(x - max(t.id) by (t.g)) <= min(t.id) by (t.g)", (2, 2, 3), (1, 1, 3), id="both-sides"),
+    ],
+)
+@pytest.mark.parametrize("objective, maximize", [("MAXIMIZE sum(x)", True), ("MINIMIZE sum(x)", False)])
+def test_a_reducer_over_data_under_abs_is_read_as_data(
+    request, cli_fixture, extra_env, clause, center, radius, objective, maximize
+):
+    cli = request.getfixturevalue(cli_fixture).with_env(extra_env)
+    sql = f"""SELECT id, x FROM (VALUES (1, 'a'), (2, 'a'), (3, 'b')) t(id, g)
+        DECIDE x(INT) SUCH THAT x >= 0 AND x <= 5 AND {clause} {objective} ORDER BY id"""
+    judge_rows(
+        answer(cli, sql),
+        {f"x{i}": range(0, 6) for i in range(3)},
+        lambda a: all(abs(a[f"x{i}"] - center[i]) <= radius[i] for i in range(3)),
+        lambda a: a["x0"] + a["x1"] + a["x2"],
+        maximize,
+    )

@@ -202,6 +202,9 @@ public:
 	//! selection evaluated once per tuple (D80). A definition's body is none: the F node owns it, and its readers see
 	//! the helper decision it defines.
 	static bool ContainsReducer(const Expression &expr);
+	//! Whether `expr` holds a reducer over a decision, as ContainsReducer reads it. A reducer over data alone is a
+	//! value like any column, so `abs(x - max(t.v) by (t.g))` holds none.
+	bool ContainsDecisionReducer(const Expression &expr) const;
 
 	//! Provenance-only form: no table-index evidence is available, so arbitrary column
 	//! refs are never promoted to query-wide. Explicit QUERY_WIDE_VALUE_TAG metadata is
