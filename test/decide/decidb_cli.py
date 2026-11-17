@@ -235,6 +235,11 @@ _DIRECT_MODE_PREFIX = re.compile(r"\A\s*SET\s+decide_direct_solve\s*=\s*'(\w+)'\
 #: ``Invalid Input Error:``). A query whose stderr shows one failed: the session and ``_run`` both report 1 for it.
 _ERROR_HEADER = re.compile(r"^[A-Za-z ]*Error:", re.MULTILINE)
 
+#: What DuckDB's shell prints for every statement after a fatal error (an INTERNAL error among them), from
+#: ``ErrorManager``'s ``INVALIDATED_DATABASE`` text in ``src/main/error_manager.cpp``. The statement that follows the
+#: query, which would end stderr with the marker, prints this instead, so the marker never comes.
+_INVALIDATED_DATABASE = b"database has been invalidated because of a previous fatal error"
+
 
 class _Session:
     """One long-lived CLI process that runs queries one after another (a connection pool of size one).
@@ -287,6 +292,11 @@ class _Session:
                         if not chunk:
                             pipes.unregister(ready.fileobj)  # the process died: report what it wrote
                         ready.data.extend(chunk)
+                    if _INVALIDATED_DATABASE in err:
+                        self.close()
+                        raise RuntimeError(
+                            f"the CLI invalidated its database; stderr:\n{bytes(err).decode(errors='replace')}"
+                        )
         except BrokenPipeError:
             pass
         stdout = bytes(out).decode(errors="replace")
