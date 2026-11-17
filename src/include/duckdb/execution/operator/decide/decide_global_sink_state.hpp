@@ -142,6 +142,7 @@ public:
 				is_signed[var] = true;
 			}
 		}
+		domains.resize(num_decide_vars);
 		for (idx_t var = 0; var < num_decide_vars; var++) {
 			if (is_helper[var] || may_lack_value(var, 0)) {
 				continue;
@@ -160,10 +161,6 @@ public:
 				written.AddLowered('>', is_signed[other] ? -DECIDE_SOLVER_INFINITY
 				                                         : written_box(other).Box().EffectiveLower());
 			}
-			if (!written.ContradictsDomain(is_bool)) {
-				continue;
-			}
-			const auto &box = written.Box();
 			// An auxiliary decision (an ABS, a norm) is named by what it stands for.
 			const bool is_aux = var >= num_decide_vars - op.num_auxiliary_vars;
 			string vname = op.decide_variables[var]->GetName();
@@ -172,6 +169,7 @@ public:
 					vname = label.second;
 				}
 			}
+			domains[var] = {true, written.Box(), is_bool, is_aux, vname};
 			// The clause that set the bound `k`, as written (`max(x) <= -5` as much as `x <= -5`, a strict
 			// `x < 0` as typed rather than the folded `x <= -1`).
 			auto written_bound = [&](bool upper, double k) {
@@ -186,26 +184,27 @@ public:
 				}
 				return StringUtil::Format("%s %s %g", vname, upper ? "<=" : ">=", k);
 			};
-			if (is_bool) {
-				// Both sides can contradict at once (`x <= -1 AND x >= 2`); the upper bound is reported.
-				bool upper = box.upper < 0.0;
-				throw InvalidInputException(
-				    StringUtil::Format("DECIDE optimization is infeasible: %s cannot hold for a BOOL variable.",
-				                       written_bound(upper, upper ? box.upper : box.lower)));
+			auto refusal = DecideDomainRefusal(written.Box(), is_bool, is_aux, vname, written_bound);
+			if (!refusal.empty()) {
+				throw InvalidInputException(refusal);
 			}
-			if (is_aux) {
-				throw InvalidInputException(StringUtil::Format(
-				    "DECIDE optimization is infeasible: %s cannot hold because %s is never negative.",
-				    written_bound(true, box.upper), vname));
-			}
-			throw InvalidInputException(StringUtil::Format(
-			    "DECIDE optimization is infeasible: %s cannot hold because %s is non-negative (>= 0). "
-			    "Add an explicit lower bound if it may be negative.",
-			    written_bound(true, box.upper), vname));
 		}
 
 		// Minimal: keep constructor lean; detailed solver output comes from HiGHS
 	}
+
+	//! What the domain check reads of a decision: the box of the bounds written on it as constants, whose floor holds
+	//! the floors a `when` or `per` lowers (conservatively: the lowest), and how its message names the decision.
+	//! `checked` is false for a decision no bound contradicts a type of (a helper, an auxiliary that may read no
+	//! value).
+	struct DecisionDomain {
+		bool checked = false;
+		DecideBoundBox box;
+		bool is_bool = false;
+		bool is_aux = false;
+		string name;
+	};
+	vector<DecisionDomain> domains;
 
 	mutex lock;
 	//! The tree's descent, the threads' merged (language/guide.md §6.1): the rows are read once, as they arrive, and

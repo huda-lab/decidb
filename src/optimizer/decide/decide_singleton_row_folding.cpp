@@ -10,6 +10,7 @@
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
 
 #include "duckdb/common/decide_numeric_policy.hpp"
+#include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
@@ -429,10 +430,7 @@ void DecideWrittenBox::AddLowered(char sense, double k) {
 }
 
 bool DecideWrittenBox::ContradictsDomain(bool is_bool) const {
-	double floor = box.EffectiveLower();
-	// A BOOLEAN's floor is 0 whatever lower bound was written (a lower bound below 0 changes nothing), so an upper
-	// bound below 0 contradicts it even when the written lower bound is negative (`x = -1`).
-	return (box.upper < 0.0 && (floor >= 0.0 || is_bool)) || (is_bool && floor > 1.0);
+	return DecideBoxContradictsDomain(box, is_bool);
 }
 
 void DecideOptimizer::FoldSingletonRowsInExpression(Expression &expr, LogicalDecide &decide) {

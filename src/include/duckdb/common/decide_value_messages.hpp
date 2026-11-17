@@ -12,10 +12,13 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/types/value.hpp"
+
+#include <functional>
 
 namespace duckdb {
 
@@ -112,6 +115,42 @@ inline string DescribeKeyValues(const vector<string> &names, const vector<Value>
 		result += (i > 0 ? ", " : "") + DescribeKeyValue(names[i], values[i]);
 	}
 	return result;
+}
+
+//! True when `box`, the bounds written on one decision, contradicts the decision's built-in domain. A box with no lower
+//! bound written has the default floor of 0. It contradicts the domain when the upper bound is below 0 while the floor
+//! is still at or above 0 (a BOOL's floor is always 0, so for it any upper bound below 0), or when a BOOL's floor is
+//! above 1. A purely inverted box such as `x >= 5 AND x <= 1` is not a contradiction here; the elastic engine reports
+//! it.
+inline bool DecideBoxContradictsDomain(const DecideBoundBox &box, bool is_bool) {
+	double floor = box.EffectiveLower();
+	// A BOOLEAN's floor is 0 whatever lower bound was written (a lower bound below 0 changes nothing), so an upper
+	// bound below 0 contradicts it even when the written lower bound is negative (`x = -1`).
+	return (box.upper < 0.0 && (floor >= 0.0 || is_bool)) || (is_bool && floor > 1.0);
+}
+
+//! The error for a bound the decision's domain cannot hold, empty when `box` holds. The decision is `name` (an
+//! auxiliary, `is_aux`, stands for what it computes: an ABS, a norm). `written_bound(upper, k)` is the clause that set
+//! the bound `k` as the user wrote it, on the upper side or the lower. The check of the bounds written as constants
+//! and the check of each row a scoped clause writes (`per`, `when`) both ask it, so the test and the text are one.
+inline string DecideDomainRefusal(const DecideBoundBox &box, bool is_bool, bool is_aux, const string &name,
+                                  const std::function<string(bool upper, double k)> &written_bound) {
+	if (!DecideBoxContradictsDomain(box, is_bool)) {
+		return string();
+	}
+	if (is_bool) {
+		// Both sides can contradict at once (`x <= -1 AND x >= 2`); the upper bound is reported.
+		const bool upper = box.upper < 0.0;
+		return StringUtil::Format("DECIDE optimization is infeasible: %s cannot hold for a BOOL variable.",
+		                          written_bound(upper, upper ? box.upper : box.lower));
+	}
+	if (is_aux) {
+		return StringUtil::Format("DECIDE optimization is infeasible: %s cannot hold because %s is never negative.",
+		                          written_bound(true, box.upper), name);
+	}
+	return StringUtil::Format("DECIDE optimization is infeasible: %s cannot hold because %s is non-negative (>= 0). "
+	                          "Add an explicit lower bound if it may be negative.",
+	                          written_bound(true, box.upper), name);
 }
 
 //! The error of an `=` bound that takes two values (`low` and `high`) in one group: `written` is the bound as written,

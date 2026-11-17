@@ -13,6 +13,7 @@
 #include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <map>
 
@@ -682,8 +683,50 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 	if (counted) {
 		gstate.CountInstances(evaluated.source_clause_id, instances,
 		                      CountInstances(evaluated.row_group_ids, evaluated.num_groups, num_rows, false));
+		if (clause.admitted_lower) {
+			CheckDomain(root, evaluated);
+		}
 	}
 	return evaluated;
+}
+
+void DecideModelEmitter::CheckDomain(idx_t root, const EvaluatedConstraint &evaluated) {
+	auto &clause = *tree.nodes[root]->compiled.clause;
+	if (!clause.admitted_lower->IsFoldable() || !clause.admitted_upper->IsFoldable()) {
+		return;
+	}
+	const auto var = clause.lhs_terms[0].variable_index;
+	if (var >= gstate.domains.size() || !gstate.domains[var].checked ||
+	    clause.source_clause_id >= op.constraint_sources.size()) {
+		return;
+	}
+	auto &domain = gstate.domains[var];
+	const auto &quoted = op.constraint_sources[clause.source_clause_id];
+	auto written_bound = [&](bool, double) {
+		return QuoteWrittenClause(quoted);
+	};
+	for (idx_t row = 0; row < num_rows; row++) {
+		// A row is written only for an instance: a row in no class of a `per`, or off a `when`, is never checked.
+		if (!evaluated.row_group_ids.empty() && evaluated.row_group_ids[row] == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		// The ends it admits, an open end (infinite) leaving the box as it is.
+		auto box = domain.box;
+		if (std::isfinite(evaluated.admitted_upper[row])) {
+			DecideFoldSingletonRow(box, '<', evaluated.admitted_upper[row]);
+		}
+		if (std::isfinite(evaluated.admitted_lower[row])) {
+			DecideFoldSingletonRow(box, '>', evaluated.admitted_lower[row]);
+		}
+		auto refusal = DecideDomainRefusal(box, domain.is_bool, domain.is_aux, domain.name, written_bound);
+		if (!refusal.empty()) {
+			// After every part of the clause, as a tightest frame bound's check is.
+			auto rank = tree.nodes[root]->clause_rank;
+			rank.part = 1;
+			errors.Add(rank, ErrorData(InvalidInputException(refusal)));
+			return;
+		}
+	}
 }
 
 void DecideModelEmitter::Classes(idx_t root, const vector<bool> &tested, EvaluatedConstraint &evaluated) {
