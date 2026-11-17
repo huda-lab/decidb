@@ -152,6 +152,9 @@ GROUP_ROWS = 2048
 THREAD_ROWS = 8400
 THREADS = 4
 THREAD_SETUP = f"SET threads = {THREADS}; SET decide_direct_solve = 'off';\n"
+#: Runs of a thread case before it fails for want of a merge: on a busy machine one thread can read every row group
+#: before the others start, and that run merges nothing.
+MERGE_RUNS = 5
 
 
 def _thread_table(tmp_path):
@@ -364,7 +367,8 @@ def _answer_and_merged_descents(cli, sql):
 @pytest.mark.parametrize("name", list(THREAD_CASES))
 def test_descents_merged_from_real_threads_reach_the_optimum(decidb_cli, scope_solver, tmp_path, name):
     """The rows of five row groups are read by threads of their own, each filling a descent, which Finalize merges:
-    more than one descent is merged, and the objective the answer reaches is the optimum of the oracle's model."""
+    within MERGE_RUNS runs one merges more than one descent, and the objective every run's answer reaches is the
+    optimum of the oracle's model."""
     decisions, constraints, (decision, weighted), build = THREAD_CASES[name]
     source, rows = _thread_table(tmp_path)
     objective = "sum(t.w * {0})" if weighted else "sum({0})"
@@ -385,9 +389,12 @@ def test_descents_merged_from_real_threads_reach_the_optimum(decidb_cli, scope_s
     scope_solver.set_objective(coefficients, ObjSense.MAXIMIZE)
     expected = scope_solver.solve()
     assert expected.status == SolverStatus.OPTIMAL, expected.status
-    # One run gives the answer and the count, so the answer checked is the merged one.
-    result, merged = _answer_and_merged_descents(cli, sql)
-    assert merged > 1
-    assert [row["id"] for row in result] == [row["id"] for row in rows]
-    reached = sum(weight * answered[decision] for weight, answered in zip(weights, result))
-    assert reached == pytest.approx(expected.objective_value, abs=1e-4, rel=1e-6)
+    # One run gives the answer and the count, so the answer checked last is the merged one.
+    for _ in range(MERGE_RUNS):
+        result, merged = _answer_and_merged_descents(cli, sql)
+        assert [row["id"] for row in result] == [row["id"] for row in rows]
+        reached = sum(weight * answered[decision] for weight, answered in zip(weights, result))
+        assert reached == pytest.approx(expected.objective_value, abs=1e-4, rel=1e-6)
+        if merged > 1:
+            break
+    assert merged > 1, f"none of {MERGE_RUNS} runs merged more than one descent"
