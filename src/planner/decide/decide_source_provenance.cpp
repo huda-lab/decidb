@@ -902,9 +902,18 @@ static string RenderFunctionRow(const DecideConstraint &row, const vector<unique
                                 const RenderContext &ctx) {
 	string result;
 	for (auto &term : row.lhs_terms) {
-		string text = RenderSource(*decide_variables[term.variable_index], ctx, 20);
-		if (!IsUnitCoefficient(*term.coefficient)) {
-			text = RenderSource(*term.coefficient, ctx, 20) + " * " + text;
+		// A frame prints as its selector, `else` included: its READ term, whose coefficient is an indicator column,
+		// prints as the selector, and the term that carries its `else` (no decision, a frame column) prints nothing.
+		string text;
+		if (term.frame_read != DConstants::INVALID_INDEX) {
+			text = (*ctx.frames)[term.frame_read].spelling;
+		} else if (term.variable_index == DConstants::INVALID_INDEX) {
+			continue;
+		} else {
+			text = RenderSource(*decide_variables[term.variable_index], ctx, 20);
+			if (!IsUnitCoefficient(*term.coefficient)) {
+				text = RenderSource(*term.coefficient, ctx, 20) + " * " + text;
+			}
 		}
 		if (result.empty()) {
 			result = term.sign < 0 ? "-" + text : text;

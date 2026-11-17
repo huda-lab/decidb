@@ -318,6 +318,18 @@ def test_explain_analyze_counts_the_variants_of_every_per_clause(decidb_cli, cla
 
 
 @pytest.mark.explain
+def test_explain_prints_a_frame_in_an_abs_row_as_its_selector(decidb_cli):
+    """The rows of an ABS over a frame read the frame once, `else` included, not its indicator columns."""
+    frame = "at(previous else 0: x) over (t.period within t.product)"
+    sql = f"""SELECT id, x FROM (VALUES (1, 'A', 1), (2, 'A', 2), (3, 'B', 1)) t(id, product, period)
+        DECIDE x(REAL) SUCH THAT x <= 9 AND x >= 0 MINIMIZE sum(abs(x - {frame}))"""
+    text = _plan(decidb_cli, sql).replace(" ", "")
+    frame = frame.replace(" ", "")
+    assert f"abs(x-{frame})-x+{frame}>=0.0" in text, text
+    assert f"abs(x-{frame})+x-{frame}>=0" in text, text
+
+
+@pytest.mark.explain
 def test_explain_parenthesizes_an_or_under_an_and_in_a_reducers_when(decidb_cli):
     """AND binds tighter than OR, so the canonical reading of a clause keeps the parentheses the OR was written in."""
     text = _plan(
