@@ -22,12 +22,14 @@ files.
   is always the whole side" does not hold for the language, where a side can be `sum(x) - 3`. `Sami-OPA` asks
   `ContainsReducer` there, and its `ReadAffine` returns false. OPT-10 has the same cause: code that assumes a reducer is
   a whole side or a whole term.
-- **Change.** Recommended: a side that contains a reducer is not read as affine here, so it takes the nested-reducer
-  path, as on `Sami-OPA`. **Decision needed** for the objective form: answer it, or refuse it with a user message as
-  `Sami-OPA` does.
-- **Done when.** Oracle tests answer the four constraint shapes, and a test holds the objective form to the owner's
-  ruling (an oracle test if it is answered); `./test/decide/run_tests.sh -n 2 -k "<the new tests> or bilinear or
-  quadratic"` passes.
+- **Change.** A side that contains a reducer is not read as affine here, so it takes the nested-reducer path, as on
+  `Sami-OPA`.
+- **Ruling (owner, 2026-11-17).** The objective form is refused with the message the language already gives a square or
+  product outside a reducer in the objective (`language/errors.md`: "DECIDE objective: '...' multiplies decisions
+  outside a reducer, which is not supported yet"), as `power(sum(x), 2)` gets.
+- **Done when.** Oracle tests answer the four constraint shapes, and a test shows the objective form's refusal;
+  `./test/decide/run_tests.sh -n 2 -k "<the new tests> or bilinear or quadratic"` passes.
+
 
 ## OPT-9 — ABS over a nested sum of group sums in the objective answers wrong or raises
 
@@ -56,11 +58,14 @@ files.
   (sum(x) * max(x))."
 - **Cause.** `ExtractAggregateObjectiveTerms` in `src/optimizer/decide/decide_linear_form.cpp` keeps mainline's form,
   which lacks `Sami-OPA`'s refusal of a term that is not a bare reducer but holds one. OPT-8 has the same cause.
-- **Change.** Recommended: refuse the term with a user message, as `Sami-OPA` does. **Decision needed:** refuse it, or
-  answer it as a product of two helpers. While in this code, look for a third reader that assumes a reducer is a whole
-  side or a whole term, and file it.
-- **Done when.** A test holds the query to the owner's ruling (an oracle test if it is answered);
-  `./test/decide/run_tests.sh -n 2 -k "<the new test> or linear_form or objective"` passes.
+- **Ruling (owner, 2026-11-17).** The term is refused with the message `language/errors.md` gives a product outside a
+  reducer in the objective ("DECIDE objective: 'sum(x) * max(x)' multiplies decisions outside a reducer, which is not
+  supported yet"), as `sum(x) * sum(x)` gets.
+- **Change.** As ruled. While in this code, look for a third reader that assumes a reducer is a whole side or a whole
+  term, and file it.
+- **Done when.** A test shows the refusal; `./test/decide/run_tests.sh -n 2 -k "<the new test> or linear_form or
+  objective"` passes.
+
 
 ## OPT-11 — `per g: x IN (...)` constrains the row whose `g` is NULL
 
