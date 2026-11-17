@@ -231,6 +231,7 @@ struct DecideNode {
 	idx_t value_var = DConstants::INVALID_INDEX;
 	//! A linked G/O's output contract, copied onto the owning node for formulation.
 	string value_link_label;
+	idx_t value_link_clause = DConstants::INVALID_INDEX;
 	bool value_link_needs_envelope = false;
 	bool value_link_needs_closing = false;
 	//! A G node's relation-qualified scope, whose classes it reads at most once; INVALID_INDEX when unqualified.

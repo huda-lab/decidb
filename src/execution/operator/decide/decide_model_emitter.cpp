@@ -1621,6 +1621,7 @@ void DecideModelEmitter::ValueLinks() {
 		spec.need_envelope = tree_node.value_link_needs_envelope;
 		spec.need_closing = tree_node.value_link_needs_closing;
 		spec.label = tree_node.value_link_label;
+		spec.source_clause_id = tree_node.value_link_clause;
 		spec.frame = tree_node.frame != DConstants::INVALID_INDEX;
 		if (tree_node.frame != DConstants::INVALID_INDEX) {
 			FrameMembers(node, spec.members);

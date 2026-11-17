@@ -600,8 +600,11 @@ public:
 	//! part of the fixed model.
 	struct ReducerValueLink {
 		idx_t value_var = DConstants::INVALID_INDEX;
-		string agg_name;                   //!< "sum", "avg", "min" or "max"
-		string label;                      //!< the reducer as the user wrote it, `by` included, for messages
+		string agg_name; //!< "sum", "avg", "min" or "max"
+		string label;    //!< the reducer as the user wrote it, `by` included, for messages
+		//! The clause that first read it, for a message naming that clause as written (DecideWrittenClause);
+		//! INVALID_INDEX is the objective.
+		idx_t source_clause_id = DConstants::INVALID_INDEX;
 		unique_ptr<Expression> inner_expr; //!< e, as bound; the ABS and bilinear rewrites applied
 		unique_ptr<Expression> filter;     //!< the reducer's own `when`, or null
 		//! Its own `per K'`: the key scope whose classes it counts once; INVALID_INDEX

@@ -1566,6 +1566,7 @@ private:
 			node.link = link_index;
 			node.value_var = link.value_var;
 			node.value_link_label = link.label;
+			node.value_link_clause = link.source_clause_id;
 			node.value_link_needs_envelope = link.need_envelope;
 			node.value_link_needs_closing = link.need_closing;
 			node.qualifier_scope = link.qualifier_scope_idx;
@@ -1582,6 +1583,7 @@ private:
 		node.value_var = link.value_var;
 		node.aggregate = link.agg_name;
 		node.value_link_label = link.label;
+		node.value_link_clause = link.source_clause_id;
 		node.value_link_needs_envelope = link.need_envelope;
 		node.value_link_needs_closing = link.need_closing;
 		node.qualifier_scope = link.qualifier_scope_idx;

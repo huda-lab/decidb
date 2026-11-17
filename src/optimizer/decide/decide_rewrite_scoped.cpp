@@ -64,6 +64,7 @@ idx_t decide_rewrite::AddValueHelper(LogicalDecide &decide, LogicalDecide::Reduc
                                      const KeyedScopeInfo &scope, bool whole, idx_t source_clause_id,
                                      LogicalDecide::RewriteAccount::Kind account) {
 	const idx_t link_idx = decide.reducer_value_links.size();
+	link.source_clause_id = source_clause_id;
 	// One instance per class of a scope of its own (KeyedScopeInfo::value_link), which execution builds from the link.
 	KeyedScopeInfo helper_scope = scope;
 	helper_scope.value_link = link_idx;

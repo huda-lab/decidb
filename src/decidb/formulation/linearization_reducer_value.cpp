@@ -86,6 +86,25 @@ AuxRange GroupReach(const ReducerValueLinkSpec &link, const SolverInput &input, 
 	return reach;
 }
 
+//! Refuse a group whose reach overflowed a DOUBLE at an end where the helper's box stays open. DeriveReducerValueBounds
+//! meets that infinity against the open end's 1e30 and keeps the 1e30, a bound the data do not give; the one column
+//! check at the hand-off would never see it. Decided here, on the settled boxes: a clause that bounds the helper makes
+//! the overflow harmless, as it makes an open member's. Called once the group's definition is emitted, so a sum or a
+//! Big-M the definition itself overflows names its own cause first. An end that overflowed the other way reaches the
+//! box as the infinity itself (max/min against it), which the hand-off names.
+void RefuseOverflowedReach(const SolverInput &input, const ReducerValueLinkSpec &link, idx_t group, idx_t instance) {
+	constexpr double INF = std::numeric_limits<double>::infinity();
+	const auto reach = GroupReach(link, input, group);
+	const bool above =
+	    reach.hi == INF && DecideIsOpenAbove(input.InstanceBoxUpper(link.value_var, instance, input.upper_bounds));
+	const bool below =
+	    reach.lo == -INF && DecideIsOpenBelow(input.InstanceBoxLower(link.value_var, instance, input.lower_bounds));
+	if (above || below) {
+		throw InvalidInputException(
+		    DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, DecideWrittenClause(input, link.source_clause_id)));
+	}
+}
+
 //! The reads of each instance of a helper every reader lets stage 06 inline: by the rows and the objective, or by its
 //! outer link's members (InlineReducerValueLinks).
 struct HelperReads {
@@ -908,6 +927,7 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 				rc.rhs = constants;
 				rc.kind = ConstraintKind::STRUCTURAL;
 				input.global_constraints.push_back(std::move(rc));
+				RefuseOverflowedReach(input, link, group, indexer.InstanceOf(value_var, group_row));
 				continue;
 			}
 			AuxRange family;
@@ -947,6 +967,7 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 				return MemberReach(members, span.first + i, input);
 			};
 			EmitExtremumLink(input, indexer, spec, source, var_names, policy);
+			RefuseOverflowedReach(input, link, group, instance);
 		}
 	}
 	input.reducer_value_links.clear();

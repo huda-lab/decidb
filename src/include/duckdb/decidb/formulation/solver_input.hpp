@@ -413,6 +413,9 @@ struct ReducerValueLinkSpec {
 	bool need_closing = false;
 	//! The reducer as written, for the rows and columns a diagnosis names.
 	string label;
+	//! The clause that first read it, as a message names it written (DecideWrittenClause); INVALID_INDEX is the
+	//! objective.
+	idx_t source_clause_id = DConstants::INVALID_INDEX;
 	//! A range frame's helper, one instance per window (D78), rather than a reducer's.
 	bool frame = false;
 	ReducerValueMembers members;

@@ -366,6 +366,18 @@ DERIVED_TOO_LARGE = [
         "y(REAL) SUCH THAT y <= 5 MINIMIZE MAX(b * y)",
         "MINIMIZE MAX(b * y)",
     ),
+    # A helper decision's reach (the two-level form's group sums) overflows at one end of its box, which stays open
+    # there: refused where the helper is defined (RefuseOverflowedReach), each end on its own.
+    (
+        "reach_of_a_group_sum_extremum",
+        "y(REAL) SUCH THAT y <= 5 MINIMIZE MAX(per id: SUM(b * y) BY (id))",
+        "MINIMIZE MAX(per id: SUM(b * y) BY (id))",
+    ),
+    (
+        "floor_of_a_group_sum_extremum",
+        "y(REAL) SUCH THAT y >= -5 AND y <= 0 MINIMIZE MAX(per id: SUM(b * y) BY (id))",
+        "MINIMIZE MAX(per id: SUM(b * y) BY (id))",
+    ),
     # Members of either sign near the limit: the span of the MIN/MAX link is no Big-M (EmitExtremumLink).
     ("span_of_an_extremum", "y(REAL) SUCH THAT y <= 5 AND MAX(y + c) >= 0 MAXIMIZE SUM(y)", "MAX(y + c) >= 0"),
     # A MIN/MAX bounded from its far side: the Big-M on HiGHS, the native auxiliary's box on Gurobi.
@@ -441,6 +453,17 @@ def test_a_literal_past_a_double_in_the_objective_names_it_on_the_solver_path(de
     # HiGHS: the solver path either way.
     stderr = _stderr(decidb_cli_highs, _huge_query("y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(2e308 * y)"), mode)
     assert _too_large("MAXIMIZE SUM(2e308 * y)") in stderr
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("mode", ["off"])
+def test_a_helper_reach_past_a_double_is_not_refused_where_a_clause_bounds_it(decidb_cli_gurobi, mode):
+    # Gurobi only: HiGHS refuses to load the range. The clause bounds the group sums at 5, so their reach past a
+    # DOUBLE leaves no open end to refuse (RefuseOverflowedReach).
+    decide = "y(REAL) SUCH THAT y <= 5 AND MAX(per id: SUM(b * y) BY (id)) <= 5 MAXIMIZE SUM(y)"
+    sql = f"SET decide_direct_solve='{mode}'; {_huge_query(decide)}"
+    stderr = decidb_cli_gurobi.execute_raw(sql, expect_number_range=True).stderr
+    assert "Error" not in stderr, stderr
 
 
 # HiGHS only: Gurobi states MIN/MAX natively and needs no bound on `y`. An open end asks for its bound, not the clause.
