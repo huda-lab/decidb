@@ -679,8 +679,8 @@ public:
 		return result;
 	}
 
-	//! The ABS F node owns the helper's scope and both transitional envelope roots. Its operand stays as an expression
-	//! until the function lowering compiles it; the envelope roots already carry executable row programs.
+	//! The ABS F node owns the helper's scope and both envelope roots RewriteAbs wrote. Its operand stays as an
+	//! expression until the function lowering compiles it; the envelope roots already carry executable row programs.
 	idx_t AbsFunctionNode(idx_t aux, idx_t source_clause) {
 		for (auto existing : tree->function_nodes) {
 			if (tree->nodes[existing]->value_var == aux) {
@@ -821,9 +821,9 @@ private:
 	//! holding it, then the node inheriting it.
 	vector<pair<idx_t, idx_t>> inherited_gates;
 
-	//! Where flat reads each keyed scope's classes and each auxiliary's definitions
-	//!: every scope in turn, a helper's once the definitions of the auxiliaries
-	//! its members read are, then every decision's definitions in turn. Flat's other recursions number nothing earlier
+	//! Where each keyed scope's classes and each auxiliary's definitions are read: every scope in turn, a helper's once
+	//! the definitions of the auxiliaries its members read are, then every decision's definitions in turn. The other
+	//! recursions number nothing earlier
 	//! here: from a decision into its own scope, since the declared scopes come before the rewrites' helpers and a
 	//! nested helper before its reader, and from a definition into what it reads, since the rewrites number a nested
 	//! auxiliary first. Per scope and per clause, its place.
@@ -863,7 +863,7 @@ private:
 		}
 	}
 
-	//! A node's errors rank at the earliest phase that reads it, in flat's order of phases: a bound's reducer is read
+	//! A node's errors rank at the earliest phase that reads it, in the order of the phases: a bound's reducer is read
 	//! after the data checks on the rows, a definition where its auxiliary's absence is resolved, a helper's rows where
 	//! its classes are, a composed MIN/MAX clause after the objective, and the objective's composed terms after the
 	//! composed clauses.
@@ -895,20 +895,20 @@ private:
 				// F's route and its `when` are the first reads of an ABS instance; its envelope bodies
 				// keep their own clause ranks below it.
 			} else if (node.defined_var != DConstants::INVALID_INDEX) {
-				// Flat resolves each auxiliary's absence in turn, reading its definitions in their order (D88), then
-				// evaluates each definition again at its place among the clauses.
+				// Each auxiliary's absence is resolved in turn, reading its definitions in their order (D88), then
+				// each definition is evaluated again at its place among the clauses.
 				evaluated = {node.compiled.phase, 0, node.compiled.order, 0};
 				rank = {DecideErrorPhase::KEYED_MAPPING, definition_order[node.compiled.order], node.compiled.order, 0};
 			} else if (node.link != DConstants::INVALID_INDEX) {
-				// Flat reads a helper's rows (its path's `when`s, its reducer's, its members' NULL tests and its `by`
-				// key) where it builds its classes, and its members' coefficients after every clause. The nodes holding
-				// its path's `when`s read them there too (DecideNode::when_rank), and a reader's sigma leaves the key's
-				// errors to it (DecideDescent::Signature).
+				// A helper's rows (its path's `when`s, its reducer's, its members' NULL tests and its `by`
+				// key) are read where its classes are built, and its members' coefficients after every clause. The
+				// nodes holding its path's `when`s read them there too (DecideNode::when_rank), and a reader's sigma
+				// leaves the key's errors to it (DecideDescent::Signature).
 				evaluated = {DecideErrorPhase::VALUE_LINKS, 0, node.link, 0};
 				const auto scope = op.variable_scopes[node.value_var].keyed_scope_idx;
 				rank = {DecideErrorPhase::KEYED_MAPPING, scope_order[scope], node.link, 0};
 			} else if (node.compiled.phase != DecideErrorPhase::INVALID) {
-				// A body stage 05 lowered ranks by the list flat's evaluation reads it from: a constraint by its place
+				// A body stage 05 lowered ranks by the list it was lowered from: a constraint by its place
 				// there, the objective, the composed clauses, then the objective's composed terms.
 				rank = {node.compiled.phase, 0, node.compiled.order, 0};
 			}
@@ -967,8 +967,8 @@ private:
 		}
 	}
 
-	//! Whether flat reads a root's `when` only in its composed terms' filters, in front of each term's own
-	//! (ScopeComposedTerms): a composed clause's, and the objective's where flat's objective has no term to carry it
+	//! Whether a root's `when` is read only in its composed terms' filters, in front of each term's own
+	//! (ScopeComposedTerms): a composed clause's, and the objective's where the objective has no term to carry it
 	//! (LogicalDecide::retained_objective_when).
 	bool ReadsWhenInComposedFilters(const DecideNode &node) const {
 		return !node.compiled.composed.empty() &&
@@ -980,7 +980,7 @@ private:
 		                                                      op.aux_var_expressions, op.frames));
 	}
 
-	//! How a message names a root, as flat names a row (DecideWrittenClause): by the clause it comes from as the user
+	//! How a message names a root, as it names a row (DecideWrittenClause): by the clause it comes from as the user
 	//! wrote it (QuoteWrittenClause), and a row no clause claims, which a rewrite added for the objective, by the
 	//! objective.
 	string RootText(idx_t source) const {
@@ -1292,8 +1292,8 @@ private:
 	//! of its `by` key (language/guide.md §6.4), so a root no `per` made a class root is a class of that key, one for
 	//! `by ()`. Its sigma stays what it reads: a frame bound's position still tells a group's anchors apart, and the
 	//! group takes their tightest value (D85). A `per K:` keeps its class, which names the classes a row stands for,
-	//! and a kept row in none of them still lies in a group, whose row reads it. Flat groups the kept rows by the `by`
-	//! key after it computes the terms, on every kept row: the root and its G's of that key read the key there.
+	//! and a kept row in none of them still lies in a group, whose row reads it. The kept rows are grouped by the `by`
+	//! key after the terms are computed, on every kept row: the root and its G's of that key read the key there.
 	void GroupClass(DecideNode &node) {
 		if (!node.facts->lhs_is_aggregate && !node.facts->was_minmax_easy) {
 			return;
@@ -1518,7 +1518,7 @@ private:
 			node.qualifier_scope = qualifier;
 			entry.key = op.keyed_scopes[qualifier].key;
 			entry.per = entry.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
-			// Flat reads the reducer's terms on every row its `when` keeps, and its qualifier keeps no value of a row
+			// The reducer's terms are read on every row its `when` keeps, and its qualifier keeps no value of a row
 			// in no class: such a row still lies in its group.
 			entry.holds_rows_in_no_class = true;
 		}
@@ -1587,7 +1587,7 @@ private:
 		node.key = link.group_key;
 		node.text = link.label;
 		node.decision_value = true;
-		// Flat reads a helper's `by` key on every row its path keeps, after its reducer's `when` and its members' NULL
+		// A helper's `by` key is read on every row its path keeps, after its reducer's `when` and its members' NULL
 		// tests: a row the key raises on still reaches them.
 		node.key_block = DecideBlock::BY_KEY;
 		Gates(index, link.when.get());
@@ -1714,7 +1714,7 @@ private:
 		entry.text = node.text + " operand";
 		Gates(operand, term.filter.get());
 		// ScopeComposedTerms prepends the clause/objective predicate to each
-		// flat term. It belongs to the root E in this graph, so remove only
+		// lowered term. It belongs to the root E in this graph, so remove only
 		// that known prefix; a repeated predicate written by the operand stays.
 		auto &inherited = tree->nodes[owner]->when;
 		bool prefix = entry.when.size() >= inherited.size();

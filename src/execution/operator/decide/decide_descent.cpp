@@ -69,8 +69,8 @@ bool DecideDescentKeyLess(const vector<Value> &left, const vector<Value> &right)
 	return left.size() < right.size();
 }
 
-//! The bytes a least spelling is taken by, ORDER BY's for `values` ascending with NULL last, as flat takes it
-//!: equal bytes are one spelling, so the least does not depend on the order rows are read in.
+//! The bytes a least spelling is taken by, ORDER BY's for `values` ascending with NULL last:
+//! equal bytes are one spelling, so the least does not depend on the order rows are read in.
 static vector<string> SpellingKeys(const vector<Value> &values, const LogicalType &type) {
 	Vector spelled(type, MaxValue<idx_t>(values.size(), 1));
 	for (idx_t i = 0; i < values.size(); i++) {
@@ -293,7 +293,7 @@ static unsafe_vector<idx_t> DescentRanks(const vector<string_t> &keys) {
 }
 
 //! The sort keys of `columns`' rows `count` of them, each column ascending with NULL after every value, as ORDER BY
-//! places them and flat numbers a key's groups (EncodeSortKeys), held in `heap`.
+//! places them and a key's groups are numbered, held in `heap`.
 static void DescentSortKeys(DataChunk &columns, StringHeap &heap, vector<string_t> &keys) {
 	const vector<OrderModifiers> modifiers(columns.ColumnCount(),
 	                                       OrderModifiers(OrderType::ASCENDING, OrderByNullType::NULLS_LAST));
@@ -579,7 +579,7 @@ void DecideDescent::Evaluate(const Expression &expression, DataChunk &chunk, con
 				rank.expression = DecideBlockExpression(read_block, rank.row, false);
 			}
 			errors.Add(rank, error);
-			// A read flat makes before the terms keeps the row from them; one it makes after them leaves the row in no
+			// A read made before the terms keeps the row from them; one made after them leaves the row in no
 			// class of the key, so its terms are still computed.
 			if (active_node < failed_rows.size() && read_block <= DecideBlock::FILTERS) {
 				failed_rows[active_node].insert(rank.row);
@@ -899,9 +899,9 @@ void DecideDescent::Signature(idx_t node_index, DataChunk &chunk, const Reach &r
 		case DecideSignatureFieldKind::BY_KEY:
 		case DecideSignatureFieldKind::FRAME: {
 			// A field naming another node -- a reducer's `by` key, a frame's timeline and position -- reads that
-			// node's values as a `by` key's read, which keeps the row: the node raises what it raises, where flat
-			// reads it (a helper's G where flat builds the helper's classes, a frame's O where flat builds every
-			// frame before any clause, language/guide.md §5.6).
+			// node's values as a `by` key's read, which keeps the row: the node raises what it raises, where it
+			// is read (a helper's G where the helper's classes are built, a frame's O where every frame is built
+			// before any clause, language/guide.md §5.6).
 			const auto block = read_block;
 			const auto position = current_rank.position;
 			read_block = DecideBlock::BY_KEY;
@@ -1521,13 +1521,13 @@ const DecideDescent::Reach &DecideDescent::HoldKeyed(idx_t node_index, DataChunk
 	unsafe_vector<bool> present;
 	KeySpellings spelled;
 	DataChunk keys;
-	// A grouped clause's keys are read where flat groups its kept rows, after its terms (DecideNode::key_block).
+	// A grouped clause's keys are read where its kept rows are grouped, after its terms (DecideNode::key_block).
 	read_block = node.key_block;
 	Key(node.key, chunk, rows, keys, present, &spelled);
 	read_block = DecideBlock::ROUTE;
 	current_rank.position = 0;
 	const auto scope = IsScopeNode(node);
-	// Flat reads a reducer's operand on every row its G reads, except the objective's, which it reads in place, on the
+	// A reducer's operand is read on every row its G reads, except the objective's, which is read in place, on the
 	// rows of each group alone (D81).
 	const auto reducer = node.kind == DecideNodeKind::REDUCER && node.value_rank.phase != DecideErrorPhase::OBJECTIVE;
 	// A row in no class of the key stops here, unless the node holds such rows or is a reducer; an E's still reaches
@@ -1561,9 +1561,9 @@ const DecideDescent::Reach &DecideDescent::HoldKeyed(idx_t node_index, DataChunk
 		}
 	}
 	// A row in no group of a G has no value of it (language/guide.md §5.2), so it holds no entry of the G; it still
-	// reaches the G's operand, as flat computes a clause's terms on every kept row and a side plan a data reducer's
-	// arguments, so an error there is raised (§7.2). Where every row takes a slot and an entry, they are the rows
-	// themselves.
+	// reaches the G's operand, as a clause's terms are computed on every kept row and a side plan computes a data
+	// reducer's arguments, so an error there is raised (§7.2). Where every row takes a slot and an entry, they are the
+	// rows themselves.
 	Reach own_stored;
 	unsafe_vector<idx_t> own_slots;
 	const Reach *stored = &rows;
@@ -1615,7 +1615,7 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base, co
 	active_node = node_index;
 	active_failed = &failed_rows[node_index];
 	active_row_base = row_base;
-	// Its `when` first, where flat reads it (DecideNode::when_rank), then the rest at its own rank.
+	// Its `when` first, at its place (DecideNode::when_rank), then the rest at its own rank.
 	current_rank = node.when_rank;
 	if (context.interrupted) {
 		throw InterruptException();

@@ -755,16 +755,15 @@ public:
 	//! has built their side tables (DirectSourceReader::AddSideTable).
 	vector<DecideBoundAggregate> bound_aggregates;
 
-	//! During the tree evaluator's transition, side tables still serve the flat
-	//! oracle. Keep the data reducer's semantics and its resolved result reference
-	//! so the executable graph can compute it independently. Enumerated with the
+	//! The solver path reads a data reducer from a side table. Keep the reducer's semantics and its resolved result
+	//! reference so the executable graph can compute it independently. Enumerated with the
 	//! operator's live expressions; never serialized (the optimizer creates it).
 	struct RetainedBoundAggregate {
 		DecideBoundAggregate aggregate;
 		unique_ptr<Expression> placeholder;
 	};
 	vector<RetainedBoundAggregate> retained_bound_aggregates;
-	//! The checks side plans execute during the transition, retained for tree execution.
+	//! The checks side plans execute, retained for tree execution.
 	vector<unique_ptr<Expression>> retained_row_checks;
 	//! Semantic expressions before a destructive algebraic rewrite. Enumerated so their source bindings stay live.
 	vector<unique_ptr<Expression>> retained_expressions;

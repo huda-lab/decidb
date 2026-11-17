@@ -314,8 +314,8 @@ private:
 	const Value *greatest = nullptr;
 };
 
-//! How an evaluator reads the fields of the objective's signature over its kept rows, for the scope check's message:
-//! flat from the rows, the tree from its root's entries.
+//! How the fields of the objective's signature are read over its kept rows, for the scope check's message: from its
+//! root's entries.
 struct DecideVariantReader {
 	//! The least and the greatest of `value`, field `field`'s own or element `element` of its `by` key, over the kept
 	//! rows (DecideValueRange::Spans).
@@ -332,8 +332,8 @@ struct DecideVariantReader {
 string DecideObjectiveTwiceMessage(const vector<DecideSignatureField> &fields, const vector<DecideKey> &keys,
                                    const vector<DecideVarScopeInfo> &scopes, const DecideVariantReader &read);
 
-//! How an evaluator reads a frame field of the objective's signature over its kept rows, for the scope check's message
-//! (DecideFrameDifference): flat from the rows, the tree from its root's entries.
+//! How a frame field of the objective's signature is read over its kept rows, for the scope check's message
+//! (DecideFrameDifference): from its root's entries.
 struct DecideFrameReader {
 	//! Each kept row's timeline and peer (DecideFrameMap::timeline, peer), in row order.
 	vector<pair<idx_t, idx_t>> rows;

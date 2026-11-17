@@ -19,7 +19,7 @@
 
 namespace duckdb {
 
-//! A clause's parts a reducer may filter, which flat reads the filters of in this order: its terms, its product groups.
+//! A clause's parts a reducer may filter, whose filters are read in this order: its terms, its product groups.
 static idx_t Parts(const DecideConstraint &clause) {
 	return clause.lhs_terms.size() + clause.product_groups.size();
 }
@@ -305,7 +305,7 @@ DecideModelEmitter::LinkMembers DecideModelEmitter::Members(idx_t node) {
 	const auto site = DecideTreeOperand(tree, node);
 	auto &entries = descent.Containers()[site];
 	auto &slots = descent.Containers()[node].groups;
-	// Flat computes the members on the rows its reducer's `when` and NULL tests keep where every decision they read
+	// The members are computed on the rows its reducer's `when` and NULL tests keep where every decision they read
 	// has an instance, a row in no group of its `by` key among them, and a
 	// relation-qualified reducer lists each class once in its group, at its first row (language/guide.md §5.1).
 	LinkMembers members;
@@ -328,7 +328,7 @@ DecideModelEmitter::LinkMembers DecideModelEmitter::Members(idx_t node) {
 			held[slot] = true;
 		}
 	}
-	// A group's number is its rank among the groups that hold a member, as flat numbers them by value.
+	// A group's number is its rank among the groups that hold a member, as groups are numbered, by value.
 	vector<idx_t> by_rank(slots.size());
 	for (idx_t slot = 0; slot < slots.size(); slot++) {
 		by_rank[slots.ranks[slot]] = slot;
@@ -504,7 +504,7 @@ void DecideModelEmitter::DefinitionAbsence(idx_t root, idx_t variable) {
 		}
 	}
 	// What it reads unreduced is NULL on a row it keeps, which its NULL tests keep too (DecideNode::member_tests):
-	// its bound, then each term's coefficient, then each product group's forms' terms', which flat reads in that order,
+	// its bound, then each term's coefficient, then each product group's forms' terms', which are read in that order,
 	// so what one raises ranks there (DecideNode::value_rank). It reads no group's weight.
 	auto rank = tree.nodes[root]->value_rank;
 	idx_t position = 0;
@@ -524,7 +524,7 @@ void DecideModelEmitter::DefinitionAbsence(idx_t root, idx_t variable) {
 		const std::vector<bool> &null_entries = nulls;
 		DecideEntryRows(tree, descent, node).ForEach([&](idx_t row, idx_t entry) {
 			// A NULL body excludes this row from its reducer's members. The signed helper can remain an unconstrained
-			// value there, as flat leaves it; only a missing decision input makes the function value absent.
+			// value there; only a missing decision input makes the function value absent.
 			if (null_entries[entry] && !reducer_definition) {
 				mark(row);
 			}
@@ -805,7 +805,7 @@ vector<Value> DecideModelEmitter::Identity(idx_t node, idx_t entry) const {
 DecideVariants DecideModelEmitter::Variants(idx_t node, const DecideSignature *signature, bool by_row) const {
 	auto &container = descent.Containers()[node];
 	const auto entries = container.Count();
-	// Flat numbers them by value, their class's and then their fields', unless a field reads a decision's instance
+	// They are numbered by value, their class's and then their fields', unless a field reads a decision's instance
 	// or a frame's keys, which number them by their first rows. No field reads a query-wide
 	// decision, which one instance holds for every class.
 	bool by_rows = false;
@@ -827,9 +827,8 @@ DecideVariants DecideModelEmitter::Variants(idx_t node, const DecideSignature *s
 	std::map<vector<Value>, idx_t, decltype(less)> class_ids(less);
 	vector<vector<Value>> identities(entries);
 	// The entries in a class of the node's key: a reducer reads no value of a row in none, which its operand holds
-	// (DecideNode::holds_rows_in_no_class). Each counts its class, as flat counts the classes over the rows it keeps
-	//; one at an anchor where a frame its fields read reads nothing is no variant, since it
-	// has no instance (D84).
+	// (DecideNode::holds_rows_in_no_class). Each counts its class, as the classes are counted over the rows it keeps;
+	// one at an anchor where a frame its fields read reads nothing is no variant, since it has no instance (D84).
 	vector<idx_t> held;
 	for (idx_t e = 0; e < entries; e++) {
 		const auto row = container.rows[e];
@@ -892,7 +891,7 @@ vector<GroupName> DecideModelEmitter::NameVariants(idx_t root, const DecideSigna
 			entry_of[variant_at[read.first]] = read.second;
 		}
 	}
-	// Each variant's values as flat's reader shows them: what its class key and its fields read at its first row, but
+	// Each variant's values as a message shows them: what its class key and its fields read at its first row, but
 	// a collated column of its class by the least spelling among the clause's rows of the class
 	// (DecideNodeGroups::spellings).
 	auto &elements = DecideKeyElements(tree.keys, node.key);
@@ -972,8 +971,8 @@ vector<bool> DecideModelEmitter::ReadInReducer(const DecideTerm &term, const Dec
                                                vector<bool> &null_rows) {
 	// Its member tests are its filter's NULL tests of what its body reads and of its decisions' keys, so every
 	// member's decision has an instance (D84); a coefficient is NULL on a member only through a value the whole query
-	// shares, which no test reads, and leaves the member's group no value. Flat computes it on every member, and
-	// leaves a relation-qualified one's repeats out afterwards.
+	// shares, which no test reads, and leaves the member's group no value. It is computed on every member, and a
+	// relation-qualified one's repeats are left out afterwards.
 	vector<bool> nulls(descent.Containers()[site.node].Count(), false);
 	vector<bool> first, selected_rows, candidates;
 	const auto &present = columns.ReadEntries(site.node, term, candidates);
@@ -1021,7 +1020,7 @@ bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const DecideEntryRows &row
 	auto &terms = clause.lhs_terms;
 	bool has_local_filters = false;
 	bool unfiltered = false;
-	// A filter that keeps every kept row filters nothing, as flat reads it.
+	// A filter that keeps every kept row filters nothing.
 	auto read_filter = [&](const vector<bool> &members, TermFilterState &filter) {
 		const std::vector<bool> &kept_rows = kept;
 		const std::vector<bool> &member_rows = members;
@@ -1053,7 +1052,7 @@ bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const DecideEntryRows &row
 		read_filter(ReadInReducer(terms[t], site, site.program, evaluated.row_coefficients[t], filters[t], null_rows),
 		            filters[t]);
 	}
-	// A product group's filter, on the members of its reducer, which flat reads with the terms'; its weight and its
+	// A product group's filter, on the members of its reducer, which is read with the terms'; its weight and its
 	// forms' coefficients follow once the rows are grouped (Polynomial).
 	vector<bool> members;
 	for (idx_t g = 0; g < clause.product_groups.size(); g++) {
@@ -1349,7 +1348,7 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 	auto &objective = *body.objective;
 	auto &container = descent.Containers()[root];
 	// The objective is produced once (D72): a second variant over its kept rows would be a second objective, which
-	// flat checks before it reads any clause.
+	// is checked before any clause is read.
 	const auto signature =
 	    op.objective_signature == DConstants::INVALID_INDEX ? nullptr : &op.signatures[op.objective_signature];
 	// Counted first, each row's variant read only for a second variant's message.
@@ -1586,7 +1585,7 @@ vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(idx_t root, con
 		const auto &reducer = *tree.nodes[reducer_node];
 		auto evaluated = DecideComposedTerm(reducer.aggregate, spec.sign, spec.is_easy, reducer.text);
 		if (spec.scale) {
-			// A value the whole query shares, read as flat reads it, on the input's first rows, whatever the clause
+			// A value the whole query shares, read on the input's first rows, whatever the clause
 			// keeps: before the term's members, which follow its predecessor's (DecideErrorRank::part).
 			try {
 				evaluated.scale = DecideQueryWideScale(
@@ -1705,8 +1704,8 @@ void DecideModelEmitter::ValueLinks() {
 				rows_by_group[member_group[row]].push_back(row);
 			}
 		}
-		// Read a term over the entries its own filter keeps, including entries that have no group. Flat evaluates
-		// those terms before dropping rows without a helper value, so their errors keep the same rank and message.
+		// Read a term over the entries its own filter keeps, including entries that have no group. Those terms
+		// are evaluated before rows without a helper value are dropped, so their errors keep the same rank and message.
 		vector<idx_t> variables(body.members.size(), DConstants::INVALID_INDEX);
 		vector<vector<double>> coefficients(body.members.size());
 		for (idx_t t = 0; t < body.members.size(); t++) {

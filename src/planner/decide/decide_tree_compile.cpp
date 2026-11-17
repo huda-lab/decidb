@@ -121,7 +121,7 @@ static void SiteMembers(const DecideTree &tree, idx_t holder, DecideBody &body) 
 }
 
 //! The clause roots holding a clause, numbered in leaf order: the constraints, then the folded bounds whose repair
-//! rows come from their clause (a folded bound with none holds no clause), as flat's repair_group_id numbers them.
+//! rows come from their clause (a folded bound with none holds no clause): the order of the repair group ids.
 static void NumberClauses(DecideTree &tree, const vector<idx_t> &roots) {
 	for (auto root : roots) {
 		auto &node = *tree.nodes[root];
@@ -141,7 +141,7 @@ static void NumberClauses(DecideTree &tree, const vector<idx_t> &roots) {
 	}
 }
 
-//! The composed clauses, which flat evaluates after the objective, then the objective's composed terms (the last
+//! The composed clauses, which are evaluated after the objective, then the objective's composed terms (the last
 //! slot): each term's G holds its inner terms (LowerDecideTree), and the root holding them each term's G and spec.
 static void ComposedBodies(const LogicalDecide &op, DecideTree &tree, const DecideTreeSources &sources) {
 	for (idx_t spec = 0; spec < sources.composed_reducers.size(); spec++) {
@@ -185,7 +185,7 @@ static void LinkBodies(DecideTree &tree, const vector<idx_t> &link_nodes) {
 }
 
 //! Compiles stage 05's expressions into programs over a node's layout, as DuckDB's ColumnBindingResolver turns a plan's
-//! column references into chunk positions: by flat's own rules (ToChunkReferences), with each leaf mapped to the
+//! column references into chunk positions: by ToChunkReferences, with each leaf mapped to the
 //! layout. A read the tree computes no value for yet becomes a NULL of its type and names the reason on the body.
 class DecideProgramCompiler {
 public:
@@ -213,7 +213,7 @@ public:
 		return programs.size() - 1;
 	}
 
-	//! A term's coefficient and its inputs on its site, whose filter flat reads at `slot` among its owner's (Reads).
+	//! A term's coefficient and its inputs on its site, whose filter is read at `slot` among its owner's (Reads).
 	void AddTerm(const DecideTerm &term, DecideTermSite &site, idx_t owner, DecideBlock block, idx_t group,
 	             idx_t position, idx_t slot) {
 		site.program =
@@ -247,8 +247,8 @@ public:
 		Reads(sites.weight.node, part, slot);
 	}
 
-	//! A term's programs lie in the part `part` of its owner's evaluation (DecideErrorRank::part): a pass flat makes
-	//! over the rows whole before the next.
+	//! A term's programs lie in the part `part` of its owner's evaluation (DecideErrorRank::part): a pass over the
+	//! rows made whole before the next.
 	void Part(const DecideTermSite &site, idx_t part) {
 		auto &programs = Programs(site.node);
 		if (site.program != DConstants::INVALID_INDEX) {
@@ -268,8 +268,8 @@ public:
 		first_reads[node] = {0, group};
 	}
 
-	//! What a variant of `root`'s clause is named by at its first row (DecideBody::names), as flat's NameVariants
-	//! reads it: its class key's elements as written, then each value and `by` key its sigma reads, and each frame's
+	//! What a variant of `root`'s clause is named by at its first row (DecideBody::names): its class
+	//! key's elements as written, then each value and `by` key its sigma reads, and each frame's
 	//! timeline and order. Each is named as the query writes it (DecideBody::texts). A key's or a value's error is the
 	//! descent's or the terms' to raise, so these are never reported.
 	void AddNames(idx_t root) {
@@ -305,8 +305,8 @@ public:
 		}
 	}
 
-	//! A node's member tests, over its own carried columns, once every term is compiled. Flat reads them in their
-	//! reducer's filter, which it reads for each of its owner's terms in their order, window by window, before any
+	//! A node's member tests, over its own carried columns, once every term is compiled. They are read in their
+	//! reducer's filter, which is read for each of its owner's terms in their order, window by window, before any
 	//! coefficient: so a test's group is the first term its node holds, and its position its place in the filter,
 	//! after the reducer's own `when`, which the descent reads at the same group (DecideNode::filter_group).
 	void AddTests(idx_t index) {
@@ -357,11 +357,11 @@ private:
 	const LogicalDecide &op;
 	DecideTree &tree;
 	const vector<idx_t> &record_nodes;
-	//! Per node, where flat first reads its filter for a term it holds: the part of its owner's evaluation and the
+	//! Per node, where its filter is first read for a term it holds: the part of its owner's evaluation and the
 	//! term's slot among the filters read there (Reads); the slot INVALID while it holds none.
 	vector<pair<idx_t, idx_t>> first_reads;
 
-	//! A term on `node` whose filter flat reads at `slot` of the part `part` of its owner's evaluation: a clause reads
+	//! A term on `node` whose filter is read at `slot` of the part `part` of its owner's evaluation: a clause reads
 	//! its terms' filters, then its products', then its squares', in one pass before any coefficient, and the
 	//! objective its products' after its other terms' coefficients. The node's
 	//! filter is read at the first.
@@ -571,7 +571,7 @@ private:
 	}
 };
 
-//! A clause root's programs: its terms, its bound and admitted ends, its products and squares. Flat reads each square
+//! A clause root's programs: its terms, its bound and admitted ends, its products and squares. Each square is read
 //! whole before the next, after everything else the clause computes, each in a part of its own; its query-wide factor
 //! is read on the input's first row (DecideModelEmitter::Polynomial).
 static void CompileClause(DecideProgramCompiler &compiler, idx_t root, DecideBody &body) {
@@ -585,7 +585,7 @@ static void CompileClause(DecideProgramCompiler &compiler, idx_t root, DecideBod
 	if (clause.admitted_lower) {
 		// A bound on one decision, admitted on each row its term is read on: an easy extremum's on its members, the
 		// entries of its reducer's operand, whose filter (DecideConstraint::admitted_member) the descent routes. As
-		// flat computes them: the members, then a and r on them, then each end over the row and those two.
+		// They are computed in this order: the members, then a and r on them, then each end over the row and those two.
 		const auto site = body.linear[0].node;
 		const auto a = compiler.Add(site, DecideProgramRole::VALUE, *clause.admitted_a, root, DecideBlock::BOUND, 0, 2);
 		const auto r = compiler.Add(site, DecideProgramRole::VALUE, *clause.admitted_r, root, DecideBlock::BOUND, 0, 3);
@@ -609,8 +609,8 @@ static void CompileClause(DecideProgramCompiler &compiler, idx_t root, DecideBod
 	}
 }
 
-//! The objective's programs: its terms, then its product groups, whose filters and coefficients flat reads in a pass
-//! after them (EvaluateObjective).
+//! The objective's programs: its terms, then its product groups, whose filters and coefficients are read in a pass
+//! after them (DecideModelEmitter::Objective).
 static void CompileObjective(DecideProgramCompiler &compiler, idx_t root, DecideBody &body) {
 	auto &objective = *body.objective;
 	for (idx_t t = 0; t < objective.terms.size(); t++) {
@@ -632,8 +632,8 @@ static void CompileMembers(DecideProgramCompiler &compiler, idx_t holder, Decide
 	}
 }
 
-//! A composed root's terms, which flat reads one after another, each over every row before the next: each term's
-//! members' programs lie in its part. Before any of them it reads every term's filter, window by window, term by term,
+//! A composed root's terms, which are read one after another, each over every row before the next: each term's
+//! members' programs lie in its part. Before any of them every term's filter is read, window by window, term by term,
 //! each after the root's `when`, which ScopeComposedTerms puts in front of it and the root's group 0 holds
 //! (DecideNode::filter_group): a term's filter is read in the group after its predecessor's.
 static void PartComposed(DecideProgramCompiler &compiler, DecideTree &tree, const DecideBody &body) {
@@ -672,7 +672,7 @@ static void CompilePrograms(ClientContext &context, const LogicalDecide &op, Dec
 }
 
 //! A node's layout is known once every program on it is compiled: its holes follow its program columns, and an
-//! admitted end reads its inputs a and r after them, bound as flat binds them after its chunk's columns
+//! admitted end reads its inputs a and r after them, bound after its chunk's columns
 //! (DecideBindAdmittedInputs).
 static void BindLayout(DecideTree &tree) {
 	for (auto &node : tree.nodes) {

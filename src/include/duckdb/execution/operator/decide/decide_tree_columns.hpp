@@ -4,7 +4,8 @@
 // duckdb/execution/operator/decide/decide_tree_columns.hpp
 //
 // The bottom-up half's values (language/guide.md §6.1): each node's programs computed over its entries, one executor
-// per window of entries, and read as stage 08 reads a coefficient or a bound, so a value and a message are flat's.
+// per window of entries, and read as stage 08 reads a coefficient or a bound, so a value and a message are those of the
+// coefficient or bound.
 //===----------------------------------------------------------------------===//
 
 #pragma once
@@ -81,7 +82,7 @@ public:
 	vector<double> Numbers(idx_t node, idx_t program, const vector<bool> &reads, vector<bool> *nulls,
 	                       const DecideTermSite *site = nullptr,
 	                       const vector<unique_ptr<Expression>> *inputs = nullptr);
-	//! Of the entries of `node` that `reads` marks, those at which `program` is NULL, as flat reads what a definition
+	//! Of the entries of `node` that `reads` marks, those at which `program` is NULL, which is what a definition
 	//! reads for its absence on the rows it keeps, and what its evaluation raised there, held at
 	//! `rank` in the window of its entry's row: no value is checked, which the clause's read of the program does
 	//! (Numbers). Empty where the program is NULL on no entry.
@@ -89,7 +90,7 @@ public:
 	//! `program` on entry `entry` of `node`, as written: what a variant's name reads (DecideBody::names). What it
 	//! raises is never read: the descent read the same key, and the clause the same value.
 	Value ValueAt(idx_t node, idx_t program, idx_t entry);
-	//! The entries of `node` its member tests keep (DecideNode::tests), flat's read rows of a reducer's terms: its
+	//! The entries of `node` its member tests keep (DecideNode::tests), the rows a reducer's terms are read on: its
 	//! other programs are read on these alone.
 	const vector<bool> &Tested(idx_t node);
 	//! The entries of `node` on which `term` has a value on at least one represented row. For a non-row node, rows
@@ -104,7 +105,7 @@ public:
 		return absence;
 	}
 	//! The frames' maps over the input's `num_rows` rows (language/guide.md §5.6), each from its O's timelines and
-	//! positions (SelectDecideFramePeers), and each frame's columns, through flat's own blocks
+	//! positions (SelectDecideFramePeers), and each frame's columns
 	//! (SkipDecideFrameNullReads, ComputeDecideFrameColumns), every expression they read a program on the frame's O
 	//! (DecideFrameColumnPrograms): read once the descent is finished, before any program that reads a frame. What a
 	//! frame refuses is held at its rank: its range's limit and its partition (D75) where its rows are routed, a
@@ -168,7 +169,7 @@ private:
 	//! Whether `program` of `node` reads one of its frame columns.
 	bool ReadsFrame(idx_t node, idx_t program) const;
 	//! A frame column's value carries the error its row raised (DecideFrameValues), which `program` of `node`, reading
-	//! it there, raises, as flat's read of the row raises it.
+	//! it there, raises as reading the row raises it.
 	void CarryFrameErrors(idx_t node, idx_t program, ProgramColumn &column);
 	//! A frame's map from the timelines and positions of its O `node` (DecideNodeTimelines): its anchors, timelines
 	//! and peers, which SelectDecideFramePeers selects from; and each peer's timeline slot and position, which D73

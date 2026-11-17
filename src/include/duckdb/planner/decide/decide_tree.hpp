@@ -59,8 +59,8 @@ struct DecideHole {
 	idx_t column = DConstants::INVALID_INDEX;
 };
 
-//! What an O computes on its anchors for one of its frame's columns (DecideFrameReads::columns, flat's
-//! blocks ComputeDecideFrameColumns and SkipDecideRangeNullReads read them): programs on the O, its `value`, its
+//! What an O computes on its anchors for one of its frame's columns (DecideFrameReads::columns, which
+//! ComputeDecideFrameColumns and SkipDecideRangeNullReads read): programs on the O, its `value`, its
 //! `fallback` and a range's reducer's arguments; INVALID where the column has none. Its own frame's columns are
 //! computed from them before the O's other programs, which may read them.
 struct DecideFrameColumnPrograms {
@@ -71,8 +71,8 @@ struct DecideFrameColumnPrograms {
 };
 
 //! An expression a node's entries compute (language/guide.md §6.1), over the node's layout: its carried columns, then
-//! its program columns, then its holes, then the results of `arguments`. Built by flat's own rules
-//! (ToChunkReferences), so it is the expression flat evaluates, and folded where it is executed, as flat folds it.
+//! its program columns, then its holes, then the results of `arguments`. Built by ToChunkReferences and folded where
+//! it is executed (TransformToChunkExpression), as every expression stage 08 evaluates is.
 struct DecideProgram {
 	DecideProgramRole role;
 	unique_ptr<Expression> expression;
@@ -81,7 +81,7 @@ struct DecideProgram {
 	int sign = 1;
 	//! The node whose rank its errors take (the holder of its term or bound); INVALID for the node's own.
 	idx_t owner = DConstants::INVALID_INDEX;
-	//! Its place among flat's evaluations of its owner, after the descent's reads of the owner's rows: the block (a
+	//! Its place among the reads of its owner, after the descent's reads of the owner's rows: the block (a
 	//! member test in the filters, a term, the bound or an admitted end, a product group's weight or form term), a
 	//! product group or a member test's first term, and its order in the block.
 	DecideBlock block = DecideBlock::FILTERS;
@@ -116,7 +116,7 @@ struct DecideGroupSites {
 struct DecideBody {
 	//! A constraint root's clause: its terms, product groups, bound, admitted ends and facts.
 	unique_ptr<DecideConstraint> clause;
-	//! The clause's place in stage 05's lists, which flat's repair_group_id numbers: constraints, then singleton rows.
+	//! The clause's place in stage 05's lists, which number the repair groups: constraints, then singleton rows.
 	idx_t clause_index = DConstants::INVALID_INDEX;
 	//! The objective root's objective.
 	unique_ptr<DecideObjective> objective;
@@ -152,8 +152,8 @@ struct DecideBody {
 	//! as SIGN reads it as 0); INVALID for any other.
 	vector<idx_t> arguments;
 	idx_t norm_body = DConstants::INVALID_INDEX;
-	//! The rank flat's evaluation gives the stage-05 list the body was copied from (PhysicalDecide::Evaluate):
-	//! constraints by their place, the objective, composed clauses, then the objective's composed terms.
+	//! The rank its errors take among the stage-05 lists the body was copied from: constraints by their place, the
+	//! objective, composed clauses, then the objective's composed terms.
 	DecideErrorPhase phase = DecideErrorPhase::INVALID;
 	idx_t order = DConstants::INVALID_INDEX;
 };
@@ -178,12 +178,12 @@ struct DecideNode {
 	//! objective's when the scope check reads its kept rows (D72).
 	DecideErrorRank route_rank {DecideErrorPhase::CONSTRAINTS, 0, 0, 0};
 	DecideErrorRank value_rank {DecideErrorPhase::CONSTRAINTS, 0, 0, 0};
-	//! Where flat evaluates its clause or objective, which reads its programs as
-	//! numbers and checks each: its value_rank, but a definition's at its place among the clauses, since flat first
-	//! computes a definition where it resolves its auxiliary's absence.
+	//! Where its clause or objective is evaluated, which reads its programs as numbers and checks each: its
+	//! value_rank, but a definition's at its place among the clauses, since a definition is first computed where its
+	//! auxiliary's absence is resolved.
 	DecideErrorRank clause_rank {DecideErrorPhase::CONSTRAINTS, 0, 0, 0};
 	//! Where its `when` is read: its route_rank, or earlier where a helper's G or a frame's O below it inherits a gate
-	//! of it, which flat reads where it reads that node's rows, before the clause.
+	//! of it, which is read where that node's rows are, before the clause.
 	DecideErrorRank when_rank;
 	vector<unique_ptr<Expression>> when;
 	//! Generated NULL membership tests are computed after descent, never gates.
@@ -221,10 +221,11 @@ struct DecideNode {
 	DecideDefinitionRelation definition_relation = DecideDefinitionRelation::INVALID;
 	//! Set on the structural clause root owned by a definition F node.
 	idx_t definition_function_owner = DConstants::INVALID_INDEX;
-	//! P9's ABS shadow metadata. The auxiliary remains allocated at plan time until its formulation moves here.
+	//! An ABS F node's maximize link, from RewriteAbs (LogicalDecide::abs_maximize_links): whether its exact form needs
+	//! a big-M indicator, and that indicator's variable. RewriteAbs allocates the auxiliary at plan time.
 	bool abs_needs_bigm = false;
 	idx_t abs_indicator_var = DConstants::INVALID_INDEX;
-	//! The two lower-envelope rows handed to this F node by the transition from RewriteAbs to model emission.
+	//! The two lower-envelope rows RewriteAbs wrote for this F node.
 	vector<idx_t> abs_envelope_roots;
 	unique_ptr<DecideFrameSpec> frame_spec;
 	string aggregate;
@@ -253,20 +254,20 @@ struct DecideNode {
 	//! reads every row its `when` keeps, and its `per K'` keeps no value of a row in no class of K' (§5.3). So does an
 	//! O an anchor in no timeline (§5.6, D75).
 	bool holds_rows_in_no_class = false;
-	//! Where flat reads its key: a grouped clause's root and its G's of its `by` key read it where flat groups the kept
-	//! rows, after their terms, and a helper's G after its members' rows (DecideBlock::BY_KEY), so a row the key raises
-	//! on still reaches them; any other key routes its node's rows (ROUTE).
+	//! Where its key is read: a grouped clause's root and its G's of its `by` key read it where the kept rows are
+	//! grouped, after their terms, and a helper's G after its members' rows (DecideBlock::BY_KEY), so a row the key
+	//! raises on still reaches them; any other key routes its node's rows (ROUTE).
 	DecideBlock key_block = DecideBlock::ROUTE;
 	//! A hidden root's non-NULL string is the data check's error message.
 	bool value_check = false;
-	//! Flat reads a reducer's own `when` inside the filter of its terms, window by window, before any term is
+	//! A reducer's own `when` is read inside the filter of its terms, window by window, before any term is
 	//! computed: on a node that holds terms, the first of them (DecideProgram::group), which its `when` ranks under;
 	//! INVALID on a node whose rows are routed before any term is read.
 	idx_t filter_group = DConstants::INVALID_INDEX;
 	//! The part of its owner's evaluation that filter is read in (DecideErrorRank::part): 0, but 1 for a node of the
-	//! objective's product groups alone, whose filters flat reads after the objective's linear terms.
+	//! objective's product groups alone, whose filters are read after the objective's linear terms.
 	idx_t filter_part = 0;
-	//! Immutable clause metadata shared with flat lowering. Its term vectors are
+	//! Immutable clause metadata shared with term lowering. Its term vectors are
 	//! empty: the graph's bodies and child results supply the model's terms.
 	unique_ptr<DecideConstraint> facts;
 	//! Stage 05's terms for what the node holds (CompileDecideTree).
@@ -299,7 +300,7 @@ struct DecideTree {
 	//! The objective's records, null for none.
 	const DecideObjective *Objective() const;
 	vector<idx_t> roots;
-	//! F nodes shadowing the current plan-time ABS rewrites; P9 lowers these nodes in the model emitter.
+	//! The F nodes: ABS helpers, Boolean products, L0 indicators and definitions.
 	vector<idx_t> function_nodes;
 	//! Deterministic children-first order, including shared and definition edges.
 	vector<idx_t> eval_order;
@@ -308,7 +309,7 @@ struct DecideTree {
 	vector<DecideVarScopeInfo> variable_scopes;
 	//! The G/O defining each helper decision, INVALID for a user decision.
 	vector<idx_t> value_nodes;
-	//! Nodes defining ABS/body/indicator helpers, in written order; P9 F nodes join the existing clause roots here.
+	//! Nodes defining ABS/body/indicator helpers, in written order; F nodes join the clause roots here.
 	vector<vector<idx_t>> definition_nodes;
 	//! Per keyed scope, the operand of the reducer or link it qualifies, whose instances are its classes split by what
 	//! its body reads (KeyedScopeInfo::signature); INVALID for a scope that qualifies none.
@@ -407,7 +408,7 @@ idx_t DecideTreeMembersOf(const DecideTree &tree, idx_t reducer);
 string DecideTreeReducerName(const BoundAggregateExpression &aggregate);
 
 //! Read shape, provenance and bound-admission facts once. Both graph construction
-//! and flat term lowering use this function; neither infers a second clause shape.
+//! and term lowering use this function; neither infers a second clause shape.
 unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const LogicalDecide &op,
                                                    const BoundComparisonExpression &comparison,
                                                    const DecideEnclosingScope &scope);

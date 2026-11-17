@@ -37,13 +37,13 @@ struct DecideErrorRank {
 	idx_t step = 0;
 	idx_t clause = DConstants::INVALID_INDEX;
 	idx_t expression = DConstants::INVALID_INDEX;
-	//! Inside an expression's evaluation, the part that raised, in the order flat evaluates its parts: a tree program's
+	//! Inside an expression's evaluation, the part that raised, in the order its parts are read: a tree program's
 	//! group and its place in its block (DecideProgram).
 	idx_t group = 0;
 	idx_t position = 0;
 	idx_t row = DConstants::INVALID_INDEX;
-	//! A part of a clause flat evaluates whole, after its filters, before the next: a composed clause's terms, one
-	//! after another; 0 everywhere else. It ranks before the expression.
+	//! A part of a clause read whole, after its filters, before the next: a composed clause's terms, one after
+	//! another; 0 everywhere else. It ranks before the expression.
 	idx_t part = 0;
 
 	bool operator<(const DecideErrorRank &other) const {
@@ -53,13 +53,12 @@ struct DecideErrorRank {
 	}
 };
 
-//! Where flat reads an expression inside its evaluation of a clause or the objective (PhysicalDecide::Evaluate): first
-//! the reads that route its rows (ROUTE, its `when`), then its blocks, each over every window of the input's rows
-//! before the next: the term filters, the terms, the grouping of the kept rows by the `by` key, the bound and admitted
-//! ends, the product groups.
+//! Where an expression of a clause or the objective is read, in the order its errors rank: first the reads that route
+//! its rows (ROUTE, its `when`), then its blocks, each over every window of the input's rows before the next: the term
+//! filters, the terms, the grouping of the kept rows by the `by` key, the bound and admitted ends, the product groups.
 enum class DecideBlock : uint8_t { ROUTE, FILTERS, TERMS, BY_KEY, BOUND, PRODUCTS };
 
-//! Flat's order inside its evaluation of a clause or the objective (DecideErrorRank::expression), after the reads that
+//! The rank inside the evaluation of a clause or the objective (DecideErrorRank::expression), after the reads that
 //! route its rows: a block runs over every window of the input's rows before the next, and a window executes every
 //! expression of its block before it checks any `value`. A window's number stays below 2^54 for any row, under the
 //! block's bits.
@@ -100,7 +99,7 @@ public:
 			}
 		}
 	}
-	//! Whether an error ranks in a phase before `phase`: one flat raises before that phase runs.
+	//! Whether an error ranks in a phase before `phase`: one raised before that phase runs.
 	bool HasErrorBefore(DecideErrorPhase phase) const {
 		return std::any_of(errors.begin(), errors.end(), [&](const Entry &entry) { return entry.rank.phase < phase; });
 	}

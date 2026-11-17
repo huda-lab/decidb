@@ -339,7 +339,7 @@ inline string MakeFrameTag(idx_t frame_idx) {
 static constexpr const char *AVG_REWRITE_TAG = "__avg_rewrite__";
 
 //! Metadata for the executable tree when a flat MIN/MAX carrier deliberately
-//! drops its qualifier. Flat term extraction and rendering do not read these.
+//! drops its qualifier. Term extraction and rendering do not read these.
 static constexpr const char *TREE_RETAINED_EXPRESSION_TAG_PREFIX = "__tree_retained_expression_";
 static constexpr const char *TREE_REDUCER_SCOPE_TAG_PREFIX = "__tree_reducer_scope_";
 static constexpr const char *TREE_REDUCER_KEY_TAG_PREFIX = "__tree_reducer_key_";
@@ -578,7 +578,7 @@ static constexpr const char *ABS_UB_POS_TAG_PREFIX = "__abs_ub_pos_";
 static constexpr const char *ABS_UB_NEG_TAG_PREFIX = "__abs_ub_neg_";
 
 //! Tag on an ABS auxiliary's positive lower-envelope row (aux >= inner), including the solver-pressure arm that has
-//! no ABS_UB_POS tag. The tree uses this row to build the shadow F node while the plan-time formulation still exists.
+//! no ABS_UB_POS tag. The tree uses this row to build the ABS F node.
 static constexpr const char *ABS_FUNCTION_TAG_PREFIX = "__abs_function_";
 //! Matching marker on the negative lower-envelope row (aux >= -inner), including the solver-pressure arm.
 static constexpr const char *ABS_FUNCTION_NEG_TAG_PREFIX = "__abs_function_neg_";

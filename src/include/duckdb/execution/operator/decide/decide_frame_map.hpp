@@ -196,8 +196,8 @@ struct DecideFrameValues {
 	std::map<idx_t, ErrorData> errors;
 };
 
-//! Where a frame's columns read an expression on the rows `rows` marks: flat's one pass, or the tree's programs on the
-//! frame's anchors (DecideTreeColumns).
+//! Where a frame's columns read an expression on the rows `rows` marks: the tree's programs on the frame's anchors
+//! (DecideTreeColumns).
 using DecideFrameRead = std::function<DecideFrameValues(const Expression &expression, const vector<bool> &rows)>;
 
 //! D75's message: the class `class_values` of the partition key (its elements `class_names`) lies in the two

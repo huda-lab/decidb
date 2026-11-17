@@ -87,8 +87,8 @@ struct DecideNodeGroups {
 	//! rows reach its operand alone and hold no entry of it. Empty for a node per row.
 	vector<bool> in_a_class;
 	DecideColumns keys;
-	//! A collated key's least spelling over the rows its node holds in each slot, which flat names a variant of the
-	//! class by; Label's is the least over every read of the key. Empty for a key with no collated
+	//! A collated key's least spelling over the rows its node holds in each slot, which names a variant of the
+	//! class; Label's is the least over every read of the key. Empty for a key with no collated
 	//! column.
 	vector<DecideSpelling> spellings;
 	//! A node per row's slots are its entries, each a class of its own keyed by its row: none is held here, and no
@@ -391,7 +391,7 @@ private:
 	DecideErrorRank current_rank;
 	idx_t active_node = DConstants::INVALID_INDEX;
 	idx_t active_row_base = 0;
-	//! The block of flat's in which the visit's read ranks, by the row's window: a reducer's own `when` in the term
+	//! The block in which the visit's read ranks, by the row's window: a reducer's own `when` in the term
 	//! filters, a grouped clause's key in its grouping; ROUTE for a read that routes the node's rows.
 	DecideBlock read_block = DecideBlock::ROUTE;
 	vector<unordered_set<idx_t>> failed_rows;

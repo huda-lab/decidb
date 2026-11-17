@@ -464,7 +464,7 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 		rest = std::move(wrapper);
 	} else if (scoped_when) {
 		// The terms carry the `when` (ScopeComposedTerms) and the objective has none left; the tree's objective root
-		// still reaches only its rows, so it keeps a copy of the `when` and the objective stays as flat reads it.
+		// still reaches only its rows, so it keeps a copy of the `when` and the objective itself stays without one.
 		decide.retained_objective_when = decide.retained_expressions.size();
 		decide.retained_expressions.push_back(scoped_when->Copy());
 	}

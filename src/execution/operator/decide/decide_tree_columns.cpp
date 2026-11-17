@@ -219,8 +219,8 @@ void DecideTreeColumns::ComputeNode(idx_t index, NodeColumns &columns, bool fram
 		if (column.values || (!frames && ReadsFrame(index, p))) {
 			continue;
 		}
-		// Folded where it is executed, as flat folds what it evaluates (TransformToChunkExpression). One that folds
-		// to a constant is that constant on every entry, read in place.
+		// Folded where it is executed, as every expression stage 08 evaluates is (TransformToChunkExpression). One that
+		// folds to a constant is that constant on every entry, read in place.
 		column.folded = DecideFoldConstants(node.programs[p].expression->Copy(), context);
 		if (column.folded->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
 			column.values = make_uniq<Vector>(column.folded->Cast<BoundConstantExpression>().value);
@@ -313,8 +313,8 @@ void DecideTreeColumns::CarryFrameErrors(idx_t index, idx_t program, ProgramColu
 
 void DecideTreeColumns::ReadTests(idx_t index, NodeColumns &columns) {
 	const idx_t count = descent.Containers()[index].Count();
-	// An entry whose member test is false is no member: flat's reducer reads no term on its row. A test that raises
-	// where an entry was reached raises, as flat's raises reading the reducer's filter. A test is `X IS NOT NULL`, so
+	// An entry whose member test is false is no member: its reducer reads no term on its row. A test that raises
+	// where an entry was reached raises, as it does reading the reducer's filter. A test is `X IS NOT NULL`, so
 	// it is NULL only where it raised: that entry is no member either, so its undefined value is never read, and its
 	// error ranks before every read of the node's other programs.
 	columns.tested.assign(count, true);
@@ -336,7 +336,7 @@ void DecideTreeColumns::ReadTests(idx_t index, NodeColumns &columns) {
 	}
 }
 
-//! Flat's order inside its owner's evaluation, under the
+//! The order inside its owner's evaluation, under the
 //! owner's rank: a block runs over every window of the input's rows before the next, a window executes every
 //! expression of its block before it checks any value, and then the program's group and its order in the block. The
 //! descent's reads of the owner's rows (a `when`, a key) number in order of reading from 0, below every block, so a
@@ -429,7 +429,7 @@ vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, const vector<bool
 			base = start;
 			ExtractDoubleColumn(window, size, program.sign, out, source, nulls, &reads, start);
 		} catch (std::exception &) {
-			// The entry that fails, which flat's window raises first: each entry of the window alone. The ledger
+			// The entry that fails, which the window raises first: each entry of the window alone. The ledger
 			// raises at once what stops the query wherever it is raised.
 			for (idx_t i = 0; i < size; i++) {
 				Vector one(window.GetType(), 1);
@@ -455,7 +455,7 @@ vector<bool> DecideTreeColumns::NullEntries(idx_t node, idx_t program, const vec
                                             DecideErrorRank rank) {
 	auto &computed = Computed(node).programs[program];
 	auto &rows = descent.Containers()[node].rows;
-	// Flat executes a definition's reads together, a window at a time: one block, whose window ranks first.
+	// A definition's reads execute together, a window at a time: one block, whose window ranks first.
 	for (auto &error : computed.errors) {
 		if (!reads[error.first]) {
 			continue;
@@ -579,7 +579,7 @@ const vector<Value> &DecideTreeColumns::Folds(idx_t reducer) {
 	}
 	try {
 		// A NaN among the values is the data check's to refuse, which reads every value a G over data folds here and
-		// ranks first, as flat's does; a reducer over frames, which no check reads, refuses one itself, but a count,
+		// ranks first; a reducer over frames, which no check reads, refuses one itself, but a count,
 		// which counts it.
 		auto &over_frames = tree.frame_aggregate_nodes;
 		const bool rejects_nan = std::find(over_frames.begin(), over_frames.end(), reducer) != over_frames.end() &&
@@ -753,7 +753,7 @@ void DecideTreeColumns::ReadFrames(const vector<DecideFrameSpec> &frames, idx_t 
 		}
 		CheckPartition(frames[f], node);
 	}
-	// What each frame reads, through flat's blocks, each expression a program on the frame's O.
+	// What each frame reads, each expression a program on the frame's O.
 	const auto programs = FrameExpressions();
 	const DecideFrameRead read = [&](const Expression &expression, const vector<bool> &rows) {
 		auto found = programs.find(&expression);

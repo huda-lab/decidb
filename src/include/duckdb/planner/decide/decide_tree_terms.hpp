@@ -62,7 +62,7 @@ struct DecideTerm {
 	idx_t frame_read = DConstants::INVALID_INDEX;
 	//! The tree's G whose operand entries this term ranges over (DecideTreeConstruction::ReducerChild): written by
 	//! stage 05 on the terms a reducer produced, INVALID for a term outside every reducer and whenever no tree is
-	//! built. Neither stage 05 nor the flat evaluator reads it.
+	//! built. Stage 05 does not read it.
 	idx_t child = DConstants::INVALID_INDEX;
 
 	DecideTerm(idx_t var_idx, unique_ptr<Expression> coef, int s = 1)

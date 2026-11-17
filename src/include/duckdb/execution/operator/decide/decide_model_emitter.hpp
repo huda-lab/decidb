@@ -3,8 +3,7 @@
 //
 // duckdb/execution/operator/decide/decide_model_emitter.hpp
 //
-// The tree's back end (language/guide.md §6.4): an Adapter (GoF) from the computed containers to what stage 06 reads,
-// so the tree and flat formulate through one code path.
+// The tree's back end (language/guide.md §6.4): an Adapter (GoF) from the computed containers to what stage 06 reads.
 //===----------------------------------------------------------------------===//
 
 #pragma once
@@ -16,8 +15,8 @@ namespace duckdb {
 
 class DecideGlobalSinkState;
 
-//! The variants of a signature over the rows a node holds (language/guide.md §7.1, D70), numbered as flat numbers them,
-//! and the classes of its key, numbered by the key's values: each row's, INVALID_INDEX for a row the node does not
+//! The variants of a signature over the rows a node holds (language/guide.md §7.1, D70), numbered by value, and the
+//! classes of its key, numbered by the key's values: each row's, INVALID_INDEX for a row the node does not
 //! hold in a class.
 struct DecideVariants {
 	vector<idx_t> of_row;
@@ -83,8 +82,8 @@ private:
 	const unsafe_vector<idx_t> *rows = nullptr;
 };
 
-//! Writes what PhysicalDecide::Evaluate writes for the model, from the tree's containers: gstate's evaluated clauses
-//! and the keyed mappings, in flat's order, so frame reads and repair groups are numbered as flat numbers them.
+//! Writes what the model reads, from the tree's containers: gstate's evaluated clauses and the keyed mappings, in the
+//! order of the written clauses, so frame reads and repair groups are numbered in that order.
 class DecideModelEmitter {
 public:
 	DecideModelEmitter(const PhysicalDecide &op, ClientContext &context, const DecideTree &tree,
@@ -96,16 +95,16 @@ public:
 	//! split by its body's values, and each helper's, the groups that hold a member, a row in none in a class of its
 	//! own; and the rows at which each auxiliary has no value (DecideGlobalSinkState::absent_reads).
 	void KeyedMappings(vector<KeyedMapping> &mappings);
-	//! Every clause in flat's order, then the folded bounds' rows under DIAGNOSE.
+	//! Every clause in written order, then the folded bounds' rows under DIAGNOSE.
 	void Constraints();
 	//! The objective's linear terms and its product groups, each on the rows it reads, and each one's filter of those
 	//! rows in `evaluated`, which the qualifiers and AVG then read; none without an objective.
 	void Objective(PhysicalDecide::EvaluatedClauses &evaluated);
 	//! The composed MIN/MAX clauses, then the objective's composed terms, each term a column over the members of its G
-	//! (DecideBody::composed), as flat reads them after the objective.
+	//! (DecideBody::composed), read after the objective.
 	void Composed(PhysicalDecide::EvaluatedClauses &evaluated);
 	//! Each helper's members (DecideGlobalSinkState::evaluated_value_links), per group of its `by` key that holds
-	//! one, as flat lists them after the composed clauses.
+	//! one, listed after the composed clauses.
 	void ValueLinks();
 
 private:
@@ -144,11 +143,10 @@ private:
 	EvaluatedConstraint AbsEnvelope(idx_t function, idx_t root, bool counted);
 	//! The model rows of a clause in the per-row shape under `per K:` (DecideClauseScope::ONE_ROW_PER_CLASS), its
 	//! kept rows those its entries `tested` marks stand for: one per variant of each class of K, at its first row with
-	//! a value (D88), numbered and named as flat numbers and names them, and the classes each stands for under
-	//! DIAGNOSE.
+	//! a value (D88), numbered and named by value as Variants does, and the classes each stands for under DIAGNOSE.
 	void Classes(idx_t root, const vector<bool> &tested, EvaluatedConstraint &evaluated);
 	//! The variants of `signature` (null: none, so its key's classes) over the rows `node` holds, its instances, in
-	//! flat's numbering; with `by_row` false only how many there are.
+	//! the numbering of DecideVariants; with `by_row` false only how many there are.
 	DecideVariants Variants(idx_t node, const DecideSignature *signature, bool by_row = true) const;
 	//! What tells `entry` of `node` apart as a variant (language/guide.md §7.1, D70): its class of the node's key and
 	//! its sigma's values, a frame by its keys.
@@ -182,7 +180,7 @@ private:
 	KeyedMapping HelperMapping(idx_t node);
 	//! A range frame's helper's members (language/guide.md §5.6), per window of its frame (DecideListFrameMembers): its
 	//! payload's terms on the rows the windows read, its `else`'s at the anchors that reach it, each a program on the
-	//! frame's O `node`, as flat lists them.
+	//! frame's O `node`.
 	void FrameMembers(idx_t node, ReducerValueMembers &out);
 	//! A grouped clause's bound on each of `rows` (its kept rows and their root's entries), a NULL one marking its row
 	//! in `null_rows`; for a tightest frame bound (D85) the rows where it bounds nothing instead, which are returned
@@ -200,14 +198,14 @@ private:
 	//! refused.
 	void CheckDomain(idx_t root, const EvaluatedConstraint &evaluated);
 	//! A clause in the grouped shape, the aggregate shape or a MIN or MAX: one model row per group of its `by` key, its
-	//! kept rows grouped by flat's own rules (GroupRowsByShape), or one per member of an easy MIN or MAX; its instances
+	//! kept rows grouped as GroupRowsByShape groups them, or one per member of an easy MIN or MAX; its instances
 	//! `counted` unless it is a folded bound's, which only a repair model emits.
 	EvaluatedConstraint Groups(idx_t root, bool counted);
 	//! The composed terms `terms` that `root`, a composed clause's or the objective's, holds: each read on the members
 	//! of its G, its factor on the input's `first` chunk (`what` names the clause or the objective); `null_factor` set
 	//! by a NULL one.
 	vector<ComposedMinMaxTermData> ComposedTerms(idx_t root, const char *what, bool &null_factor);
-	//! A factor the whole query shares (a composed term's), as flat reads it: on the input's first row, whatever a
+	//! A factor the whole query shares (a composed term's), read on the input's first row, whatever a
 	//! clause keeps.
 	Value FirstRowValue(const Expression &factor);
 	//! A clause's product groups (EvaluatedConstraint::product_groups), once its rows are grouped: each group's weight
@@ -217,7 +215,7 @@ private:
 	void Polynomial(idx_t root, const vector<TermFilterState> &filters, vector<bool> &null_rows,
 	                EvaluatedConstraint &evaluated);
 	//! A group's weight or one of its form terms at its site `site`, its column on each row its site's members stand
-	//! for, a relation-qualified one's first of each class, which flat computes it on once it has left the repeats out
+	//! for, a relation-qualified one's first of each class, which it is computed on once the repeats are left out
 	//! (language/guide.md §5.1): a NULL coefficient there, or the decision of `term` (none for a weight) with no
 	//! instance there, leaves the row's instance no value (`null_rows`, D84).
 	void ReadPart(const DecideTermSite &site, idx_t qualifier_scope, int sign,
@@ -232,7 +230,7 @@ private:
 	//! there, which its 1/n divides by (TermFilterState::avg_group_ids).
 	void AvgGroups(bool avg_scale, idx_t avg_group_key, idx_t child, idx_t site, TermFilterState &filter);
 	//! A grouped clause's terms on `rows`, its kept rows and their root's entries, with each term's and product
-	//! group's filter as flat reads it, and the rows some reducer's filter keeps (`active`, every row with a part that
+	//! group's filter, and the rows some reducer's filter keeps (`active`, every row with a part that
 	//! keeps every kept row), and the rows where a term's coefficient is NULL (`null_rows`). Returns whether some
 	//! filter keeps fewer than the kept rows.
 	bool ReadGroupedTerms(idx_t root, const DecideEntryRows &rows, const vector<bool> &kept,
@@ -266,7 +264,7 @@ private:
 	void ReadBesideReducers(idx_t root, const DecideTerm &term, const DecideTermSite &site, idx_t program,
 	                        const DecideEntryRows &rows, CoefficientColumn &column, vector<bool> &null_rows);
 	//! A term in a reducer, on each member of the G it ranges over: an entry of its operand, which the reducer's `when`
-	//! routed and its member tests keep, a kept row in no group among them, since flat computes the term on every kept
+	//! routed and its member tests keep, a kept row in no group among them, since the term is computed on every kept
 	//! row; a NULL coefficient marks its row (`null_rows`). Returns the rows its filter keeps.
 	vector<bool> ReadInReducer(const DecideTerm &term, const DecideTermSite &site, idx_t program,
 	                           CoefficientColumn &column, TermFilterState &filter, vector<bool> &null_rows);

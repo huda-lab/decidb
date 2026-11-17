@@ -102,11 +102,6 @@ static void GroupColumn(ClientContext &context, const ColumnDataCollection &data
 }
 
 //===--------------------------------------------------------------------===//
-// Phase 2 shared evaluation helpers
-//===--------------------------------------------------------------------===//
-
-
-//===--------------------------------------------------------------------===//
 // Constructor
 //===--------------------------------------------------------------------===//
 
@@ -178,7 +173,7 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 // Sink (Collecting Data)
 //===--------------------------------------------------------------------===//
 
-//! Keep the diagnostic chunk-size setting on the same path used by the source pipeline and the shadow scan.
+//! The chunk to the thread's descent, in pieces of the diagnostic chunk size when one is set.
 static void AppendDecideDescent(DecideDescent &descent, DataChunk &chunk, idx_t row_base) {
 	idx_t chunk_size = STANDARD_VECTOR_SIZE;
 	if (auto setting = std::getenv("DECIDB_DESCENT_CHUNK")) {
@@ -562,14 +557,6 @@ static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_
 	}
 }
 
-//===--------------------------------------------------------------------===//
-// Finalize: PHASE 1.5 — Build Keyed Mappings for Keyed Decisions
-//===--------------------------------------------------------------------===//
-
-//===--------------------------------------------------------------------===//
-// Finalize: PHASE 1.4 — Frame selectors
-//===--------------------------------------------------------------------===//
-
 SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
 	DecideProfileScope profile("execution.finalize");
@@ -664,7 +651,7 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	descent->Finish();
 	DecideProfileScope::Counter("execution.descent_rows", static_cast<double>(gstate.descent_rows));
 	// One ledger for the evaluation: what the descent's routing raised, then what the programs raise where a read
-	// reaches them, each at its rank in flat's order; the least is raised once every phase has run.
+	// reaches them, each at its rank; the least is raised once every phase has run.
 	DecideErrorLedger errors;
 	errors.Append(descent->Errors());
 	if (std::getenv("DECIDB_DUMP_BODIES")) {
@@ -676,7 +663,7 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	if (std::getenv("DECIDB_DUMP_CONTAINERS")) {
 		fprintf(stderr, "DECIDB_CONTAINERS_BEGIN\n%sDECIDB_CONTAINERS_END\n", descent->Dump().c_str());
 	}
-	// Bottom-up: each node's programs over its entries, written as stage 06 reads them, in flat's order.
+	// Bottom-up: each node's programs over its entries, written as stage 06 reads them.
 	phase.Next("execution.tree_model");
 	const auto names = Names();
 	DecideTreeColumns columns(
@@ -694,7 +681,7 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	emitter.Objective(evaluated);
 	ScaleObjectiveAvg(gstate, num_rows, evaluated);
 	emitter.Composed(evaluated);
-	// Flat reports what the data left of each clause once its clauses, its objective and its composed clauses are
+	// What the data left of each clause is reported once its clauses, its objective and its composed clauses are
 	// read, unless one raised.
 	if (!errors.HasErrorBefore(DecideErrorPhase::VALUE_LINKS)) {
 		ReportSkippedInstances(gstate);
@@ -890,10 +877,6 @@ void PhysicalDecide::FinishComposedClause(DecideGlobalSinkState &gstate, idx_t n
 	}
 	evaluated.composed_constraints.push_back(std::move(clause));
 }
-
-//===--------------------------------------------------------------------===//
-// Finalize: PHASE 2, sub-phase 4 -- the value rewrite's helper decisions
-//===--------------------------------------------------------------------===//
 
 //===--------------------------------------------------------------------===//
 // Finalize: PHASE 3a, assembly -- BuildSolverInput

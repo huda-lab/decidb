@@ -33,10 +33,10 @@ string FormatDecideGapPercent(double gap);
 //! entire input before producing output.
 class PhysicalDecide : public PhysicalOperator {
 public:
-	//! Semantic E/G/O graph, captured before flat frame lowering during migration.
+	//! Semantic E/G/O graph, captured before the optimizer lowers frames.
 	unique_ptr<DecideTree> tree;
 	static constexpr const PhysicalOperatorType TYPE = PhysicalOperatorType::DECIDE;
-	//! The tree's back end, which records the variants it numbers as flat records them (RecordVariants).
+	//! The tree's back end, which records the variants it numbers (RecordVariants).
 	friend class DecideModelEmitter;
 
 public:
