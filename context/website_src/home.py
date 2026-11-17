@@ -98,7 +98,7 @@ def hero(b, ex_by_slug):
       <div class="hero__c">
         <p class="pill"><span>New in DeciDB</span><span class="muted">Direct solve</span></p>
         <h1 id="hero-h">Optimization in DuckDB</h1>
-        <p class="hero__lead">Add DECIDE to a SQL query and get the best values back as rows. 9&nbsp;problem classes need no solver.</p>
+        <p class="hero__lead">Add DECIDE to a SQL query and get the best values back as rows.</p>
         <div class="btn-row"><a class="btn btn--primary" href="getting-started.html#install">Install DeciDB</a><a class="btn btn--secondary" href="documentation.html">Read the guide</a></div>
       </div>
       <div class="hero__window" data-fx="grain-gradient" data-fx-seed="7" role="img" aria-label="{esc(label)}">

@@ -32,7 +32,7 @@ pre code { font: inherit; }
 .hw__bar b, .sq__bar b { color: var(--p-ink); font-weight: 500; }
 .hw__sp { flex: 1; }
 .hw__dots { display: inline-flex; gap: 6px; } .hw__dots i { width: 10px; height: 10px; border-radius: 50%; background: #dcdcd8; }
-.hw__body { display: grid; grid-template-columns: 228px minmax(0, 1fr); min-height: 380px; }
+.hw__body { display: grid; grid-template-columns: 228px minmax(0, 1fr); min-height: 300px; }
 .hw__list { border-right: 1px solid rgb(17 17 17 / .08); padding: 10px; display: grid; align-content: start; gap: 2px; }
 .hw__q { height: 32px; margin-bottom: 6px; border-radius: var(--r-sm); background: #f2f2f0; display: flex; align-items: center;
          padding: 0 10px; color: #5f5f5f; }
@@ -73,7 +73,14 @@ pre code { font: inherit; }
 .sq--menu { display: grid; gap: 2px; padding: var(--s-3) var(--s-4); font: 400 12px/18px var(--font-mono); width: 260px; }
 .sq__k { color: #5f5f5f; font-family: var(--font-text); }
 
-#language .panel { --p-h: 336px; }
+#language .panel { --p-h: 336px; max-height: 380px; }
+/* the lit ground stays a margin round the hero window: the window runs wider, and on a tall screen the frame
+   stops a little under the window instead of filling the screen (the hero's block then sits in the middle) */
+@media (min-width: 640px) {
+  .hero--centred .hero__window > .ly-piece.hw { width: min(1120px, calc(100% - 2 * var(--s-6))); }
+  .hero--centred .hero__window { max-height: 460px; }
+  .hero--centred > .wrap > .hero-text { justify-content: center; }
+}
 #language .card > p { max-width: 46ch; }
 
 /* the split sections: plain facts, one per line, each closed by a rule */
