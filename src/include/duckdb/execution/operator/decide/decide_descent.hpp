@@ -374,6 +374,8 @@ private:
 	vector<vector<DecisionLayout>> decision_layouts;
 	//! Per keyed scope, each class's layout (decision_layouts).
 	vector<vector<idx_t>> decision_class_layouts;
+	//! Per keyed scope, whether a class was keyed by a decision's instance numbered by this descent alone (Merge).
+	vector<bool> thread_local_classes;
 	//! Per keyed scope, its classes by their layout's types and sort key, built when a merge first needs them (Merge).
 	vector<unordered_map<string, idx_t>> merged_classes;
 	//! Per node, the G or O whose slots its rows arrive in (DecideNodeContainer::parent_slots), INVALID for none and

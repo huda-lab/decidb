@@ -338,9 +338,9 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
       seen(tree.nodes.size()), landed(tree.nodes.size()), decision_groups(tree.keyed_scopes.size()),
       decision_sort_keys(tree.keyed_scopes.size()), decision_rows(tree.keyed_scopes.size()),
       decision_recorded(tree.keyed_scopes.size()), decision_layouts(tree.keyed_scopes.size()),
-      decision_class_layouts(tree.keyed_scopes.size()), merged_classes(tree.keyed_scopes.size()),
-      enclosing(tree.nodes.size(), DConstants::INVALID_INDEX), spellings(tree.keys.size()),
-      failed_rows(tree.nodes.size()) {
+      decision_class_layouts(tree.keyed_scopes.size()), thread_local_classes(tree.keyed_scopes.size(), false),
+      merged_classes(tree.keyed_scopes.size()), enclosing(tree.nodes.size(), DConstants::INVALID_INDEX),
+      spellings(tree.keys.size()), failed_rows(tree.nodes.size()) {
 	// The paths that reach each node, roots first: a node reached by one reads each of a window's rows once.
 	vector<idx_t> paths(tree.nodes.size(), 0);
 	std::function<void(idx_t)> reach = [&](idx_t node) {
@@ -1218,6 +1218,14 @@ vector<idx_t> DecideDescent::DecisionClasses(idx_t variable, DataChunk &chunk, c
 		DataChunk variants;
 		if (definition != DConstants::INVALID_INDEX) {
 			Signature(definition, chunk, missing, row_base, variants);
+			// A decision of the signature but a query-wide one has an instance this descent numbers alone (Merge).
+			for (auto &field : tree.nodes[definition]->signature) {
+				bool global = false;
+				if (field.kind == DecideSignatureFieldKind::DECISION) {
+					DecisionScope(field.decision, global);
+					thread_local_classes[scope] = thread_local_classes[scope] || !global;
+				}
+			}
 		}
 		auto types = keys.GetTypes();
 		auto signature = variants.GetTypes();
@@ -1765,6 +1773,15 @@ void DecideDescent::Merge(MergedPart &part) {
 	if (finished || other.finished || &tree != &other.tree) {
 		throw InternalException("DECIDE tree: a descent merges another of its tree before either finishes");
 	}
+	// A class is found again by its layout and sort key (class_key), so they may hold no id a thread numbered for
+	// itself (I5): a class made from a definition's signature that reads such an id (DecisionClasses) is not merged.
+	for (idx_t scope = 0; scope < tree.keyed_scopes.size(); scope++) {
+		if (thread_local_classes[scope] || other.thread_local_classes[scope]) {
+			throw InternalException("DECIDE tree: the classes of keyed scope %llu are keyed by ids a thread numbers "
+			                        "for itself, so the threads' descents cannot be merged",
+			                        scope);
+		}
+	}
 	// Its keyed classes take the class of their layout and sort key here, a new one after every class here. A row
 	// is not visited after a merge, so neither the layouts' dictionaries nor the rows recorded hold the merged ones.
 	merged = true;
@@ -2088,8 +2105,11 @@ idx_t DecideDescent::PartParent(const MergedPart &part, idx_t node, idx_t slot) 
 	if (slot == DConstants::INVALID_INDEX) {
 		return slot;
 	}
-	// A node in two nodes' slots keeps none (Store).
-	D_ASSERT(enclosing[node] != DConstants::INVALID_INDEX && enclosing[node] != MIXED_ENCLOSING);
+	// A node in two nodes' slots keeps none (Store): a slot of its parents is found in one node's slots only (I6).
+	if (enclosing[node] == DConstants::INVALID_INDEX || enclosing[node] == MIXED_ENCLOSING) {
+		throw InternalException("DECIDE tree: node %llu names a parent slot but lies in the slots of no single node",
+		                        node);
+	}
 	return part.slot_map[enclosing[node]][slot];
 }
 
