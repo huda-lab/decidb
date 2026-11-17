@@ -219,3 +219,31 @@ def test_diagnose_tells_variants_of_one_value_apart(decidb_cli):
         "t.g = 'a', t.b = -2, row = 1",
         "t.g = 'a', t.b = -2, row = 2",
     ], result.stdout
+
+
+@pytest.mark.diagnose
+def test_diagnose_names_a_variant_by_the_by_group_it_reads(decidb_cli):
+    """`per t.g: x = sum(t.b) by (t.h)` with class 'a' reading the `h` groups 'p' (3) and 'q' (6): two variants that
+    differ only by their `by` key, which the group names as written, `t.h = 'q'`, after the class's key."""
+    rows = ((1, "a", "p", 3, 0), (2, "a", "q", 3, 0), (3, "a", "q", 3, 0), (4, "b", "p", 9, 0))
+    sql = _query("per t.g: x(INT)", "per t.g: x = sum(t.b) by (t.h) AND x >= 10", rows)
+    result = run_diagnose(decidb_cli, sql, scope="expanded")
+    assert_no_internal_leak(result, "a variant of a by group")
+    findings = [row for row in diagnose_rows(result) if row["edit_source"] == "expanded_group"]
+    assert [row["group"] for row in findings] == ["t.g = 'a', t.h = 'q'"], result.stdout
+
+
+@pytest.mark.diagnose
+def test_diagnose_names_a_variant_by_its_frame_timeline_and_position(decidb_cli):
+    """`at(previous else 5: t.v) over (t.k within t.p)` per class: each position of the class's one timeline is a
+    variant, named by the class, the timeline key (`t.p = 'X'`) and the position's order key (`t.k = 3`), as written."""
+    rows = ((1, "g", "X", 1, 5.0), (2, "g", "X", 2, 6.0), (3, "g", "X", 3, 7.0))
+    sql = f"""
+        SELECT id, y FROM (VALUES {", ".join(str(r) for r in rows)}) t(id, g, p, k, v)
+        DECIDE per t.g: y(INT)
+        SUCH THAT per t.g: y = at(previous else 5: t.v) over (t.k within t.p)
+        MAXIMIZE sum(y)"""
+    result = run_diagnose(decidb_cli, sql, scope="expanded")
+    assert_no_internal_leak(result, "a variant of a frame")
+    findings = [row for row in diagnose_rows(result) if row["edit_source"] == "expanded_group"]
+    assert [row["group"] for row in findings] == ["t.g = 'g', t.p = 'X', t.k = 3"], result.stdout
