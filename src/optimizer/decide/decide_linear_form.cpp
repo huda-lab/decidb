@@ -1101,13 +1101,20 @@ private:
 			// (CountOnce in decide_value_extraction.cpp). A frame's marker is a tuple term read at
 			// another row, not a reducer, and splits here too.
 			if (!IsReducer(expr)) {
+				// A reducer left in a term that is not itself one (`sum(x) * max(x)`) was multiplied by another
+				// decision-bearing factor, which no rewrite held in a helper decision: the term is a product of
+				// decisions outside a reducer, and its reducers cannot be read as terms.
+				const bool holds_reducer = BoundExpressionContainsAggregate(expr);
 				idx_t group_before = obj.product_groups.size();
-				ExtractObjectiveBodyTerms(expr, obj, atom.sign, nullptr);
+				if (!holds_reducer) {
+					ExtractObjectiveBodyTerms(expr, obj, atom.sign, nullptr);
+				}
 				bool square = false;
 				for (idx_t i = group_before; i < obj.product_groups.size(); i++) {
 					square = square || obj.product_groups[i].square;
 				}
-				if (square || (obj.product_groups.size() != group_before && !ReadsOnlyQueryWideDecisions(expr))) {
+				if (holds_reducer || square ||
+				    (obj.product_groups.size() != group_before && !ReadsOnlyQueryWideDecisions(expr))) {
 					throw InvalidInputException(
 					    "DECIDE objective: '%s' multiplies decisions outside a reducer, which is not supported yet",
 					    RenderDecideSource(expr, op.source_text, op.keyed_scopes, &op.keys));
