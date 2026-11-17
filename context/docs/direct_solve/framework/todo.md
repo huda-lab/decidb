@@ -76,3 +76,18 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Needs.** FW-1 (same plan).
 - **Done when.** A test of that plan finds no `#` reference and no `error(` text;
   `./test/decide/run_tests.sh -n 2 -k "a1_separable_box and explain"` passes.
+
+## FW-3 — A box inverted by rounding alone is infeasible on the direct path
+
+- **Problem.** `SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(REAL) SUCH THAT 3 * x <= 0.3 AND x >= 0.1
+  MAXIMIZE SUM(x)` answers "DECIDE optimization is infeasible" with direct solve on (the default; `A1_SEPARABLE_BOX`
+  answers). With `decide_direct_solve='off'` it answers `x = 0.09999999999999999`, as the Gurobi oracle does.
+  `0.3 / 3` rounds just below `0.1`, so the box is inverted by 1.4e-17. The model builder closes a box inverted by at
+  most one part in 1e9 (`close_rounded_box`, `src/decidb/formulation/ilp_model_builder.cpp`); the direct path's
+  `DirectRowBox` and `DirectBoxIsEmpty` (`direct_bound_reader.cpp`), which A1, A2 and R1 share, do not.
+- **Change.** The direct path reads a box as the builder does: an inversion within the builder's tolerance is one point.
+  The tolerance is one named constant both paths read; the direct side closes the box in `DirectRowBox`, so no rule
+  has its own copy.
+- **Done when.** Oracle tests of `test_edge_cases.py::test_rounded_box_is_one_point`'s cases with direct solve on find
+  the direct plan answering, and fail on the unfixed code; a wider inversion stays infeasible.
+  `./test/decide/run_tests.sh -n 2 -k "rounded_box or a1_separable_box"` passes.

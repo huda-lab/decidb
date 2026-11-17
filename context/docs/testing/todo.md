@@ -33,15 +33,6 @@ Open coverage gaps, one section each. Coverage that exists is in [coverage.md](c
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "one_pass or r1_copy or reads_as_a_tag or scope_reducer_by or
   anr_inlining"` passes.
 
-## TEST-5 — Session mode turns an INTERNAL error into a 120 s timeout
-
-- **Problem.** In `_run_in_session` (`test/decide/decidb_cli.py`), an INTERNAL error invalidates the database, the
-  end marker never prints, and the test waits out its 120 s timeout instead of failing at once
-  (`context/opa_rewrite/merge_notes.md` § 10). It hid defect D1 during the merge.
-- **Change.** The session reader recognises the invalidated-database message and fails at once with its text.
-- **Done when.** A harness test with a session that raises INTERNAL (`DECIDB_TREE_INJECT` or a stub process) fails
-  within seconds; `./test/decide/run_tests.sh -n 2 -k "coverage_tooling or suite_log"` passes.
-
 ## TEST-6 — One suite run on a debug build
 
 - **Problem.** No debug build ran the merged branch, so its debug-only assertions never ran

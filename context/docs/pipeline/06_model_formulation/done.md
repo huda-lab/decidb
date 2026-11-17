@@ -114,7 +114,9 @@ one type-driven path.
 A box inverted by rounding alone is one point: a floor above its top by no more than one
 part in 1e9 is closed onto the top (`close_rounded_box`), since boxes are derived in
 floating point from several sources (a bound divided by its coefficient, a helper's box
-through an AVG's 1/n); a wider inversion stays, an infeasible model. Afterwards, a
+through an AVG's 1/n); a wider inversion stays, an infeasible model. Both the decision boxes and a global
+auxiliary's box are closed (`test_edge_cases.py::test_rounded_box_is_one_point`, the tolerance relative to the top
+included). Afterwards, a
 `binary` column's bounds are clamped to `[0,1]`: a BOOLEAN is 0 or 1 whatever is written
 on it (`x >= -1` widens nothing; D41 lowers a numeric decision's floor, not a
 BOOLEAN's).
@@ -784,6 +786,15 @@ group's Big-M is its own reach, not the widest group's. Where that constant does
 lowering arm refuses naming a column to bound and the native arm states the extremum, as
 for every other MIN/MAX.
 
+A group whose reach overflows a DOUBLE at an end the helper's settled box leaves open is refused with TOO_LARGE once
+its definition is emitted (`RefuseOverflowedReach`). `DeriveReducerValueBounds` meets that infinity against the open
+end's 1e30 and keeps the 1e30, a bound the data do not give, so the check reads the reach against the settled box: a
+clause that bounds the helper (`max(...) <= 5`) makes the overflow harmless, as it does for an open member. It runs
+after the definition rows, so a sum or a Big-M the definition itself overflows names its own cause first. The refusal
+and the extremum link's TOO_LARGE name the clause that first read the helper as written
+(`ReducerValueLinkSpec::source_clause_id` through `DecideWrittenClause`; the objective when none reads it), on both
+backends (`test_invalid_value_message.py`).
+
 ### Inlining a helper
 
 A helper decision costs a column, a definition row and its reads; written where it is read, it costs none of them, and
@@ -1028,6 +1039,11 @@ ABS under `MINIMIZE`), those two alone pin `aux = |inner|`. Where it pushes `aux
 ABS under `MAXIMIZE`, which arrives negated) they do not — `aux` is free to run
 above `|inner|` — so `LinearizeAbsMaximize()` pairs the tagged rows and derives the
 matching Big-M upper bounds that close it.
+
+**An envelope row holds no aggregate.** Stage 05 gives every reducer a function reads a helper decision
+(`../05_optimizer/done.md`, the objective's value rewrite), so each envelope row is one instance of its F edge's scope,
+built by `DecideModelEmitter::Rows`, and the phases below read it per row. `BuildAbsTagMap`, where they take the rows,
+refuses a row that holds an aggregate as an internal error (`test/common/test_decidb_abs_envelope.cpp`).
 
 **Each sign row has its own M.** `DeriveAbsAuxiliaryBounds` takes the signed interval
 `[lo, hi]` of `inner` over every row (`AbsMaximizeLinkSpec::inner_lo` / `inner_hi`). The

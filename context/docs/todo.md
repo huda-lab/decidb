@@ -6,14 +6,7 @@ this file when it is empty.
 Read first: `.claude/CLAUDE.md`, `context/opa_rewrite/handoff.md` § A6, `context/opa_rewrite/merge_notes.md` § 4.1.
 Checks: `direct_solve/framework/todo.md` § How to work any task in these todo files.
 
-## 2. Merge rough edges (parallel: FORM-1, FORM-2 | FORM-3 | FORM-4 | TEST-5)
-- [ ] FORM-1 Overflowing reducer bound raises TOO_LARGE — pipeline/06_model_formulation/todo.md § FORM-1
-- [ ] FORM-2 HiGHS TOO_LARGE names the clause — pipeline/06_model_formulation/todo.md § FORM-2 (needs: FORM-1)
-- [ ] FORM-3 Test or delete `close_rounded_box` — pipeline/06_model_formulation/todo.md § FORM-3
-- [ ] FORM-4 No ABS envelope row holds a raw aggregate — pipeline/06_model_formulation/todo.md § FORM-4
-- [ ] TEST-5 Session mode fails at once on INTERNAL — testing/todo.md § TEST-5
-
-## 3. Messages and plan text (parallel: PLAN-1, PLAN-2, PLAN-3, FW-1, FW-2 | INF-4, UNB-2 | CANON-1)
+## 3. Messages and plan text (parallel: PLAN-1, PLAN-2, PLAN-3, FW-1, FW-2 | INF-4, UNB-2 | CANON-1 | FW-3 | FORM-5)
 - [ ] PLAN-1 EXPLAIN prints ABS and L0 rows — pipeline/03_logical_plan/todo.md § PLAN-1
 - [ ] PLAN-2 One plan line for a nest in a constraint — pipeline/03_logical_plan/todo.md § PLAN-2
 - [ ] PLAN-3 Variants line for a data-read `per` bound — pipeline/03_logical_plan/todo.md § PLAN-3
@@ -22,6 +15,8 @@ Checks: `direct_solve/framework/todo.md` § How to work any task in these todo f
 - [ ] INF-4 Infeasible DIAGNOSE spells rows and groups as written — diagnostics/infeasible/todo.md § INF-4
 - [ ] UNB-2 Unbounded DIAGNOSE spells keys as written — diagnostics/unbounded/todo.md § UNB-2 (needs: INF-4)
 - [ ] CANON-1 Span message spells a column once — pipeline/04_canonicalizer/todo.md § CANON-1
+- [ ] FW-3 Direct path closes a box rounding inverted — direct_solve/framework/todo.md § FW-3
+- [ ] FORM-5 Helper-link messages name the clause as written — pipeline/06_model_formulation/todo.md § FORM-5
 
 ## 4. Execution messages (needs: 3) (one lane)
 - [ ] EXEC-2 "More than one value" names the group — pipeline/08_execution/todo.md § EXEC-2 (needs: INF-4)
@@ -43,5 +38,5 @@ Checks: `direct_solve/framework/todo.md` § How to work any task in these todo f
 ## 7. Weak tests (one lane)
 - [ ] TEST-4 Tests that check less than their names — testing/todo.md § TEST-4
 
-## 8. Debug-build run (needs: 2–7) (one lane)
+## 8. Debug-build run (needs: 3–7) (one lane)
 - [ ] TEST-6 One suite run on a debug build — testing/todo.md § TEST-6

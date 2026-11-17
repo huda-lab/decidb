@@ -4,43 +4,14 @@ Open work in the linearizations this stage emits. Finished work is in [done.md](
 [`../../direct_solve/framework/todo.md`](../../direct_solve/framework/todo.md) § How to work any task in these todo
 files.
 
-## FORM-1 — An overflowing reducer bound becomes 1e30 instead of TOO_LARGE
+## FORM-5 — Three helper-link messages name the plan label, not the clause as written
 
-- **Problem.** `DeriveReducerValueBounds` (`src/decidb/formulation/linearization_reducer_value.cpp`) absorbs a reach
-  that overflows into 1e30, where the rest of formulation raises TOO_LARGE. The model then carries a bound the data do
-  not give. Both parents of the merge behave this way (`context/opa_rewrite/merge_notes.md` § 10, found with Q-T10).
-- **Change.** Raise the TOO_LARGE error the builder raises for a non-finite end, naming the clause as written.
-- **Done when.** A query whose reach overflows gets TOO_LARGE on both backends; the Q-T10 row of merge_notes § 10 gives
-  a starting query. `./test/decide/run_tests.sh -n 2 -k "too_large or invalid_value"` passes.
-
-## FORM-2 — On HiGHS, a helper link's TOO_LARGE names its plan label
-
-- **Problem.** For `max(per id: sum(b * y) by (id))`, the TOO_LARGE message on HiGHS names the helper's plan label,
-  where Gurobi names the clause as written. `linearization_reducer_value.cpp` sets `spec.written = link.label`.
-- **Change.** The link carries the clause as written (its source span) into `spec.written`.
-- **Needs.** FORM-1 (same file).
-- **Done when.** A message test passes on both backends: `./test/decide/run_tests.sh -n 2 -k <test>` and
-  `DECIDB_FORCE_SOLVER=highs ./test/decide/run_tests.sh -n 2 -k <test>`.
-
-## FORM-3 — `close_rounded_box` has no test
-
-- **Problem.** `close_rounded_box` (`src/decidb/formulation/ilp_model_builder.cpp`, two call sites) closes a variable
-  box that floating-point rounding inverted by at most one part in 1e9. No test reaches it. Its own example,
-  `3 * x <= 0.3 AND x >= 0.1`, comes back infeasible on Gurobi either way, from Gurobi's presolve tolerance.
-- **Change.** By the owner's ruling (handoff § A6, item 11): find a query whose answer depends on it and test that
-  query, or delete it.
-- **Done when.** A test fails with the function removed, or the function is gone and
-  `./test/decide/run_tests.sh -n 2 -k "bounds or edge_cases"` passes.
-
-## FORM-4 — An ABS envelope row that holds a raw aggregate is read per row
-
-- **Problem.** `EmitNativeAbs`, `DeriveAbsAuxiliaryBounds` and `LinearizeAbsMaximize`
-  (`src/decidb/formulation/linearization_bilinear_abs.cpp`) read each envelope row per row. An envelope row whose
-  argument holds a raw aggregate (`aux >= sum(x) - 2`) then states one `|x_r - 2|` per row and boxes the auxiliary from
-  per-row values: the wrong answer of the ABS objective `0 * sum(x) + abs(sum(x) - 2)`. Stage 05 gives every reducer a
-  function reads in the objective a helper decision (`../05_optimizer/done.md`, the objective's value rewrite), so no
-  query reaches that read; a shape that leaves a raw reducer in an envelope row would answer wrongly again.
-- **Change.** State the contract between the stages: an envelope row holds no aggregate. Where stage 06 has code only
-  for that case, delete it; otherwise check the contract where stage 06 takes the rows, as an INTERNAL error.
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k abs_linearization` and `build/release/test/unittest "[decidb]"`
-  pass.
+- **Problem.** A helper link carries the clause that first read it (`ReducerValueLinkSpec::source_clause_id`), and
+  the extremum link's TOO_LARGE quotes it as written. Three other sites raise TOO_LARGE with the plan label, the reducer
+  as the plan prints it (lowercased): `BeginForDecisions` and `AddCoefficient` in `LinearizeReducerValueLinks`
+  (`src/decidb/formulation/linearization_reducer_value.cpp`), and a non-finite member constant in
+  `DecideModelEmitter::ValueLinks` (`decide_model_emitter.cpp`). One family of messages spells its clause two ways.
+- **Change.** Each site quotes the clause through `DecideWrittenClause`, as the extremum link does. A test whose
+  expected text changes goes to the owner with the old and new text before it is edited.
+- **Done when.** A test per site, written in upper case so the label and the clause differ, finds the clause as
+  written; `./test/decide/run_tests.sh -n 2 -k "too_large or invalid_value"` passes.
