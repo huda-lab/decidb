@@ -238,7 +238,7 @@ def result_table(rows, dec=(), on=None, note=None, max_rows=40):
         return isinstance(rows[0][c], (int, float)) and not isinstance(rows[0][c], bool)
 
     head = "".join(
-        f'<th class="{" ".join(x for x in ["num" if is_num(c) else "", "dec" if c in dec else ""] if x)}">{esc(c)}</th>'
+        f'<th scope="col" class="{" ".join(x for x in ["num" if is_num(c) else "", "dec" if c in dec else ""] if x)}">{esc(c)}</th>'
         for c in cols
     )
     trs = []
@@ -369,6 +369,7 @@ def expand(fragment, page, root=""):
         return code_block(code, kind, attr(attrs, "title"))
 
     text = MACRO.sub(sub, fragment)
+    text = re.sub(r"<th(?=[ >])(?![^>]*scope=)", '<th scope="col"', text)
     left = re.search(r"<!--/?(sql|bash|python|text|explain)\b", text)
     if left:
         FAILURES.append(f"{page}: unexpanded macro near {text[left.start():left.start() + 120]!r}")
@@ -390,6 +391,22 @@ TOKENS = """:root {
   --display-weight: 500;
   --display-tracking: -0.035em;
   --display-tracking-xl: -0.045em;
+}
+/* the evening grade (a tech page may take it, chosen on load from the visitor's setting or by the nav's switch):
+   the page tokens go dark; the lit ground (sage) and the panels' painted grounds stay light, as the kit keeps them */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
+    --p-accent: #7d9dff; --p-accent-ink: #0e0f10; --p-action: #3463f0; --p-action-ink: #ffffff;
+    --p-inv-bg: #f4f4f2; --p-inv-surface: #e8e8e6; --p-inv-ink: #111111; --p-inv-muted: #5c5c5c;
+    --p-inv-accent: #1a4be0; --p-inv-accent-ink: #ffffff; --p-inv-action: #111111; --p-inv-action-ink: #ffffff;
+  }
+}
+:root[data-theme="dark"] {
+    --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
+    --p-accent: #7d9dff; --p-accent-ink: #0e0f10; --p-action: #3463f0; --p-action-ink: #ffffff;
+    --p-inv-bg: #f4f4f2; --p-inv-surface: #e8e8e6; --p-inv-ink: #111111; --p-inv-muted: #5c5c5c;
+    --p-inv-accent: #1a4be0; --p-inv-accent-ink: #ffffff; --p-inv-action: #111111; --p-inv-action-ink: #ffffff;
 }"""
 
 CHEV = (
@@ -434,11 +451,24 @@ MENU_COLS = [
 ]
 
 
+THEME = os.environ.get("DECIDB_SITE_THEME", "")  # light or dark pins every page to one theme (to check each)
+SUN = (
+    '<svg class="theme-toggle__sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/>'
+    '<path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>'
+)
+MOON = (
+    '<svg class="theme-toggle__moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472'
+    'c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg>'
+)
+
+
 def head(title, description, root, extra=""):
+    THEME_ATTR = f' data-theme="{THEME}"' if THEME in ("light", "dark") else ""
     return f"""<!doctype html>
-<html lang="en" data-type="software" data-radius="sharp" data-ground="sage" data-buttons="pill" data-motion>
+<html lang="en" data-type="software" data-radius="sharp" data-ground="sage" data-buttons="pill" data-motion{THEME_ATTR}>
 <head>
 <meta charset="utf-8">
+<script>try{{var r=document.documentElement,t=localStorage.getItem('decidb-theme');if(!r.dataset.theme&&(t==='light'||t==='dark'))r.dataset.theme=t}}catch(e){{}}</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{esc(title)}</title>
 <meta name="description" content="{esc(description)}">
@@ -454,7 +484,7 @@ def head(title, description, root, extra=""):
 <meta name="page-type" content="software">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&amp;family=Geist+Mono:wght@400..500&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{root}assets/system.css">
 <link rel="stylesheet" href="{root}assets/ui/cards.css">
 <link rel="stylesheet" href="{root}assets/motion/motion.css">
@@ -498,11 +528,12 @@ def header(root, active):
     return f"""<header class="nav">
   <div class="wrap nav__bar">
     <a class="skip-link" href="#top">Skip to content</a>
-    <a class="nav__logo" href="{root}index.html"><picture><source media="(max-width: 379px)" srcset="{root}assets/images/mark.svg"><img src="{root}assets/images/logo.svg" alt="DeciDB" width="140" height="42"></picture></a>
+    <a class="nav__logo" href="{root}index.html"><img class="logo logo--light" src="{root}assets/images/logo.svg" alt="DeciDB" width="140" height="42"><img class="logo logo--dark" src="{root}assets/images/logo-dark.svg" alt="DeciDB" width="140" height="42" loading="lazy"><img class="logo logo--mark" src="{root}assets/images/mark.svg" alt="DeciDB" width="40" height="32" loading="lazy"></a>
     <nav class="nav__links" aria-label="Main">
       {"".join(words)}
     </nav>
     <div class="nav__actions">
+      <button class="btn btn--secondary theme-toggle" type="button" aria-pressed="false" data-theme-toggle hidden>{SUN}{MOON}<span class="theme-toggle__label">Dark theme</span></button>
       <a class="nav__link" href="{GITHUB}">GitHub</a>
       <a class="btn btn--primary" href="{root}getting-started.html#install">Install DeciDB</a>
     </div>

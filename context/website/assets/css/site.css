@@ -2,6 +2,45 @@
    Only what the kit lacks: the SQL panes on the home page (inside its visuals) and the reading pages (guide,
    problems, examples, install, about). Every colour, space, radius and size is a kit token. */
 
+/* ---------------------------------------------------------------- site tokens
+   The drawn windows (the shell, the SQL panes) and the few status colours, light and evening. The page tokens come
+   from the kit (system.css) and the dealt palette in each page's head, which carries the evening grade too. */
+:root {
+  color-scheme: light;
+  --win-bg: #ffffff; --win-ink: #111111; --win-muted: #5f5f5f; --win-accent: #1a4be0;
+  --win-line: rgb(17 17 17 / .08); --win-rule: rgb(17 17 17 / .07); --win-edge: rgb(17 17 17 / .1);
+  --win-field: #f2f2f0; --win-row: #f0f0ee; --win-dot: #dcdcd8;
+  --win-shadow: 0 0 0 1px var(--win-edge), 0 1px 2px rgb(17 17 17 / .06), 0 28px 56px -28px rgb(24 34 24 / .45);
+  --pane-shadow: 0 0 0 1px var(--win-edge), 0 1px 2px rgb(17 17 17 / .05), 0 20px 40px -24px rgb(24 34 24 / .4);
+  --code-lit: #86300c; --ok-ink: #2f7a45; --err-ink: #8a1c1c; --err-bg: #fbf1f0;
+  --code-note: #4a4a4a;    /* comments in code: 8:1 on the code sheet */
+  --lede: #3b3b3b;         /* the line under a page's title: read text, 10:1 */
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --win-bg: #1c1d20; --win-ink: #ececea; --win-muted: #a2a4a8; --win-accent: #8fb0ff;
+    --win-line: rgb(255 255 255 / .09); --win-rule: rgb(255 255 255 / .08); --win-edge: rgb(255 255 255 / .12);
+    --win-field: #26282c; --win-row: #2a2c31; --win-dot: #45484d;
+    --win-shadow: 0 0 0 1px var(--win-edge), 0 1px 2px rgb(0 0 0 / .3), 0 28px 56px -28px rgb(0 0 0 / .6);
+    --pane-shadow: 0 0 0 1px var(--win-edge), 0 1px 2px rgb(0 0 0 / .3), 0 20px 40px -24px rgb(0 0 0 / .55);
+    --code-lit: #f2a678; --ok-ink: #7fd49a; --err-ink: #ffb3a8; --err-bg: #3a1f1c;
+    --code-note: #b4b4b0; --lede: #d2d2cf;
+  }
+}
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --win-bg: #1c1d20; --win-ink: #ececea; --win-muted: #a2a4a8; --win-accent: #8fb0ff;
+    --win-line: rgb(255 255 255 / .09); --win-rule: rgb(255 255 255 / .08); --win-edge: rgb(255 255 255 / .12);
+    --win-field: #26282c; --win-row: #2a2c31; --win-dot: #45484d;
+    --win-shadow: 0 0 0 1px var(--win-edge), 0 1px 2px rgb(0 0 0 / .3), 0 28px 56px -28px rgb(0 0 0 / .6);
+    --pane-shadow: 0 0 0 1px var(--win-edge), 0 1px 2px rgb(0 0 0 / .3), 0 20px 40px -24px rgb(0 0 0 / .55);
+    --code-lit: #f2a678; --ok-ink: #7fd49a; --err-ink: #ffb3a8; --err-bg: #3a1f1c;
+    --code-note: #b4b4b0; --lede: #d2d2cf;
+}
+/* inside a drawn window its own colours rule, whatever ground the window stands on */
+.hw, .sq { --ink: var(--win-ink); --muted: var(--win-muted); --accent: var(--win-accent); }
+
 /* ---------------------------------------------------------------- browser surfaces */
 html { caret-color: var(--accent); scrollbar-color: color-mix(in oklab, var(--ink) 28%, transparent) transparent; }
 code, pre, .output table, .facts, .sq { font-variant-numeric: tabular-nums; }
@@ -16,62 +55,62 @@ pre code { font: inherit; }
 .tk-k { font-weight: 500; }
 .tk-p { color: var(--accent); font-weight: 500; }
 .tk-f { color: color-mix(in oklab, var(--ink) 82%, var(--accent)); }
-.tk-n, .tk-s { color: #9a3b12; }
-.tk-c { color: var(--muted); }
+.tk-n, .tk-s { color: var(--code-lit); }
+.tk-c { color: var(--code-note); }
 
 /* ---------------------------------------------------------------- home: the hero */
 /* the line under the h1 is read, so it takes the ink (7:1), not the grey the layout gives it */
 .hero--centred .hero__lead { color: var(--ink); }
 
 /* the window: DeciDB's shell with the examples beside the open query (white UI on the sage lit ground) */
-.hw { background: #fff; color: var(--p-ink); border-radius: var(--r-lg); overflow: hidden; text-align: left;
-      box-shadow: 0 0 0 1px rgb(17 17 17 / .1), 0 1px 2px rgb(17 17 17 / .06), 0 28px 56px -28px rgb(24 34 24 / .45);
+.hw { background: var(--win-bg); color: var(--win-ink); border-radius: var(--r-lg); overflow: hidden; text-align: left;
+      box-shadow: var(--win-shadow);
       font: 400 13px/1.45 var(--font-text); }
 .hw__bar, .sq__bar { display: flex; align-items: center; gap: var(--s-3); height: 38px; padding: 0 var(--s-4);
-                     border-bottom: 1px solid rgb(17 17 17 / .08); color: #5f5f5f; white-space: nowrap; }
-.hw__bar b, .sq__bar b { color: var(--p-ink); font-weight: 500; }
+                     border-bottom: 1px solid var(--win-line); color: var(--win-muted); white-space: nowrap; }
+.hw__bar b, .sq__bar b { color: var(--win-ink); font-weight: 500; }
 .hw__sp { flex: 1; }
-.hw__dots { display: inline-flex; gap: 6px; } .hw__dots i { width: 10px; height: 10px; border-radius: 50%; background: #dcdcd8; }
+.hw__dots { display: inline-flex; gap: 6px; } .hw__dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--win-dot); }
 .hw__body { display: grid; grid-template-columns: 228px minmax(0, 1fr); min-height: 300px; }
-.hw__list { border-right: 1px solid rgb(17 17 17 / .08); padding: 10px; display: grid; align-content: start; gap: 2px; }
-.hw__q { height: 32px; margin-bottom: 6px; border-radius: var(--r-sm); background: #f2f2f0; display: flex; align-items: center;
-         padding: 0 10px; color: #5f5f5f; }
+.hw__list { border-right: 1px solid var(--win-line); padding: 10px; display: grid; align-content: start; gap: 2px; }
+.hw__q { height: 32px; margin-bottom: 6px; border-radius: var(--r-sm); background: var(--win-field); display: flex; align-items: center;
+         padding: 0 10px; color: var(--win-muted); }
 .hw__row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-3); height: 34px; padding: 0 10px;
            border-radius: var(--r-sm); min-width: 0; line-height: 34px; }
 .hw__row b { font-weight: 500; white-space: nowrap; overflow: hidden; min-width: 0; }
-.hw__row span { flex: none; color: #5f5f5f; font-size: 12px; }
-.hw__row.is-on { background: #f0f0ee; }
+.hw__row span { flex: none; color: var(--win-muted); font-size: 12px; }
+.hw__row.is-on { background: var(--win-row); }
 .hw__main { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--s-5); align-items: start; align-content: start;
             padding: var(--s-4) var(--s-5); min-width: 0; }
 .hw__sql { white-space: pre; overflow: hidden; }
 .hw__out { display: grid; gap: var(--s-3); min-width: 0; }
 .hw__status { display: flex; align-items: center; gap: var(--s-2); font-weight: 500; }
-.hw__status i { width: 8px; height: 8px; border-radius: 2px; background: var(--p-ink); }
+.hw__status i { width: 8px; height: 8px; border-radius: 2px; background: var(--win-ink); }
 
 /* a result as the shell prints it, on a grid (shared by the window and the SQL panes) */
 .sq__grid { font: 400 12.5px/1 var(--font-mono); min-width: 0; }
 .sq__tr { display: grid; grid-template-columns: var(--tpl); gap: var(--s-3); align-items: center; height: 26px;
-          border-top: 1px solid rgb(17 17 17 / .07); }
+          border-top: 1px solid var(--win-rule); }
 .sq__tr > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sq__tr > .r { text-align: right; }
-.sq__th { border-top: 0; color: #5f5f5f; font-size: 12px; }
-.sq__tr.is-on > :last-child { color: var(--p-accent); font-weight: 500; }
+.sq__th { border-top: 0; color: var(--win-muted); font-size: 12px; }
+.sq__tr.is-on > :last-child { color: var(--win-accent); font-weight: 500; }
 
 /* the SQL panes in the cards and the split frame: a query, then what DeciDB returned */
-.sq { background: #fff; color: var(--p-ink); border-radius: var(--r-md); padding: var(--s-4); display: grid; gap: var(--s-4); align-content: start;
-      box-shadow: 0 0 0 1px rgb(17 17 17 / .1), 0 1px 2px rgb(17 17 17 / .05), 0 20px 40px -24px rgb(24 34 24 / .4);
+.sq { background: var(--win-bg); color: var(--win-ink); border-radius: var(--r-md); padding: var(--s-4); display: grid; gap: var(--s-4); align-content: start;
+      box-shadow: var(--pane-shadow);
       font: 400 13px/1.45 var(--font-text); }
 .sq__code { font-size: 12px; line-height: 19px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.sq__err { font: 400 12px/18px var(--font-mono); color: #8a1c1c; background: #fbf1f0; border-radius: var(--r-sm); padding: var(--s-3); }
+.sq__err { font: 400 12px/18px var(--font-mono); color: var(--err-ink); background: var(--err-bg); border-radius: var(--r-sm); padding: var(--s-3); }
 .sq__err b { font-family: var(--font-text); font-weight: 500; margin-right: var(--s-1); }
 .sq--wide { width: 560px; padding: 0; gap: 0; }
 .sq--wide > :not(.sq__bar) { padding: var(--s-4) var(--s-5) 0; }
 .sq--wide > .sq__out { padding-bottom: var(--s-6); }
 .sq__explain { display: grid; gap: var(--s-2); font-size: 12px; }
 .sq__kv { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: var(--s-3); }
-.sq__kv span { color: #5f5f5f; } .sq__kv b { font: 500 12px/18px var(--font-mono); color: var(--p-accent); overflow-wrap: anywhere; }
+.sq__kv span { color: var(--win-muted); } .sq__kv b { font: 500 12px/18px var(--font-mono); color: var(--win-accent); overflow-wrap: anywhere; }
 .sq--menu { display: grid; gap: 2px; padding: var(--s-3) var(--s-4); font: 400 12px/18px var(--font-mono); width: 260px; }
-.sq__k { color: #5f5f5f; font-family: var(--font-text); }
+.sq__k { color: var(--win-muted); font-family: var(--font-text); }
 
 #language .panel { --p-h: 336px; max-height: 380px; }
 /* the lit ground stays a margin round the hero window: the window runs wider, and on a tall screen the frame
@@ -85,7 +124,7 @@ pre code { font: inherit; }
 
 /* the split sections: plain facts, one per line, each closed by a rule */
 .facts { display: grid; margin: 0; padding: 0; list-style: none; }
-.facts > li { padding: var(--s-3) 0; border-top: 1px solid var(--line); }
+.facts > li { padding: var(--s-3) 0; border-top: 1px solid var(--line); text-wrap: pretty; }
 .facts > li:last-child { border-bottom: 1px solid var(--line); }
 .facts code { background: none; padding: 0; font-size: .92em; }
 #direct .at-corner { --ax: 48px; --ay: 48px; }
@@ -153,9 +192,11 @@ pre code { font: inherit; }
 
 /* ---------------------------------------------------------------- reading pages */
 .doc-body main { padding-top: var(--nav); }
+/* on the reading pages a focused link or an anchor jump stops below the fixed header, never under it */
+html:has(> body.doc-body) { scroll-padding-top: calc(var(--nav) + var(--s-4)); }
 .page-head { padding: var(--s-9) 0 var(--s-7); border-bottom: 1px solid var(--line); }
 .page-head h1 { font-size: clamp(36px, 2.3vw + 24px, 56px); max-width: 20ch; }
-.page-head p { margin-top: var(--s-4); max-width: 62ch; font-size: var(--t-lead); line-height: 1.5; color: var(--muted); }
+.page-head p { margin-top: var(--s-4); max-width: 36em; font-size: var(--t-lead); line-height: 1.5; color: var(--lede); }
 .page-head__tags { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-top: var(--s-5); }
 .crumbs { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-bottom: var(--s-5); font-size: var(--t-small); color: var(--muted); }
 .crumbs a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
@@ -187,10 +228,16 @@ pre code { font: inherit; }
 .prose .lead { font-size: 18px; line-height: 1.6; }
 .prose strong { font-weight: 500; }
 /* running text keeps a reading measure; code, tables and results may use the column's full width */
-.prose :is(p, ul, ol, .reads dd) { max-width: 70ch; }
-.prose .note > p, .prose .refs p { max-width: none; }
-.anchor { margin-left: var(--s-2); color: var(--line-strong); font-weight: 400; opacity: 0; transition: opacity var(--dur) var(--ease); }
-:is(h2, h3):hover > .anchor, .anchor:focus-visible { opacity: 1; }
+.prose :is(p, ul, ol, .reads dd) { max-width: 37em; }
+.prose :is(li, dd, td), .kv dd, .member span, .paper p, .faq p { text-wrap: pretty; }
+.closing__cta .t-lead { text-wrap: balance; }
+.prose .refs p { max-width: none; }
+.prose .note { max-width: calc(37em + 2 * var(--s-5)); }
+/* a heading's own link: always there, quiet, the ink on hover */
+.anchor { margin-left: var(--s-2); color: var(--muted); font-weight: 400; font-size: .7em; vertical-align: .1em;
+          transition: color var(--dur) var(--ease); }
+.anchor:hover { color: var(--ink); }
+@media (max-width: 639px) { .anchor { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; margin-left: 0; vertical-align: middle; } }
 
 /* code blocks: a hairline sheet, the title and a copy button on one quiet row */
 .code { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--p-surface); overflow: hidden; }
@@ -198,7 +245,7 @@ pre code { font: inherit; }
               border-bottom: 1px solid var(--line); font-size: var(--t-label); color: var(--muted); }
 .code__title { color: var(--ink); font-weight: 500; }
 .code__ok { margin-right: auto; display: inline-flex; align-items: center; gap: 6px; }
-.code__ok::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #2f7a45; }
+.code__ok::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ok-ink); }
 .code__title + .code__copy { margin-left: auto; }
 .code__copy { height: 30px; padding: 0 var(--s-3); border: 1px solid transparent; border-radius: var(--r-sm); background: none;
               font-size: var(--t-label); font-weight: 500; color: var(--muted); cursor: pointer; transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease); }
@@ -221,14 +268,14 @@ pre code { font: inherit; }
 .output th.dec { color: var(--accent); }
 .output tr.on td { background: color-mix(in oklab, var(--accent) 6%, transparent); }
 .output tr.on td.dec { color: var(--accent); font-weight: 500; }
-.output--error pre { padding: var(--s-4); white-space: pre-wrap; color: #8a1c1c; font-size: 13px; }
+.output--error pre { padding: var(--s-4); white-space: pre-wrap; color: var(--err-ink); font-size: 13px; }
 
 /* tables in running text */
 .table-wrap { overflow-x: auto; border-top: 1px solid var(--line-strong); }
 .table-wrap table { width: 100%; border-collapse: collapse; font-size: 15px; line-height: 1.5; }
 .table-wrap th, .table-wrap td { padding: 10px var(--s-4) 10px 0; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
 .table-wrap th { font-size: var(--t-label); font-weight: 500; color: var(--muted); }
-.table-wrap td.yes { color: #2f7a45; }
+.table-wrap td.yes { color: var(--ok-ink); }
 .table-wrap td.no { color: var(--muted); }
 
 /* notes, tags, linked references */
@@ -262,7 +309,7 @@ pre code { font: inherit; }
 .member b { font-weight: 500; } .member span { color: var(--muted); font-size: 15px; }
 
 /* example pages */
-.solver-line { font-size: var(--t-small); color: var(--muted); }
+.solver-line { font-size: var(--t-small); color: var(--lede); }
 .reads { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr); gap: var(--s-3) var(--s-6); }
 .reads dt code { background: none; padding: 0; font-size: 13.5px; line-height: 1.6; }
 .reads dd { margin: 0; }
@@ -288,7 +335,7 @@ pre code { font: inherit; }
 .filter[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--bg); }
 .ex-group + .ex-group { margin-top: var(--s-9); }
 .ex-group > h2 { font-size: clamp(26px, .9vw + 21px, 34px); }
-.ex-group > p { margin-top: var(--s-3); max-width: 62ch; color: var(--muted); }
+.ex-group > p { margin-top: var(--s-3); max-width: 36em; color: var(--lede); }
 .ex-list { margin-top: var(--s-5); border-bottom: 1px solid var(--line); }
 .ex-row { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 5fr) minmax(0, 3fr); grid-template-areas: "title code how" "sum code how";
           gap: var(--s-1) var(--s-6); padding: var(--s-5) 0; border-top: 1px solid var(--line); }
@@ -346,3 +393,44 @@ pre code { font: inherit; }
 /* system.js outlines any [bracketed] text as a leftover placeholder; in code a bracket is syntax (grammar, arrays),
    so the outline stays off inside code blocks and result tables only */
 :is(pre, code, .output) [data-placeholder], :is(pre, code)[data-placeholder] { outline: 0 !important; background: none !important; }
+
+/* a phone: the copy and filter buttons are 44px targets like the kit's other controls */
+@media (max-width: 639px) {
+  .code__copy { min-height: 44px; min-width: 64px; } .filter { height: 44px; }
+  .crumbs a { display: inline-flex; align-items: center; min-height: 44px; }
+}
+
+/* the logo: the dark-ground version in the evening grade; the mark alone on the narrowest phones */
+.nav__logo .logo--dark, .nav__logo .logo--mark { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .nav__logo .logo--light { display: none; }
+  :root:not([data-theme="light"]) .nav__logo .logo--dark { display: block; }
+}
+:root[data-theme="dark"] .nav__logo .logo--light { display: none; }
+:root[data-theme="dark"] .nav__logo .logo--dark { display: block; }
+@media (max-width: 379px) {
+  .header .nav__logo .logo, .nav .nav__logo .logo:is(.logo--light, .logo--dark) { display: none !important; }
+  .nav .nav__logo .logo--mark { display: block; height: 32px; }
+}
+.footer .nav__logo .logo--dark, .footer .nav__logo .logo--mark { display: none !important; }
+
+/* the theme switch: the secondary button's look, square, one glyph for the grade it switches to */
+.theme-toggle { width: var(--btn-h); padding: 0; justify-content: center; }
+.theme-toggle svg { flex: none; width: 18px; min-width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.theme-toggle__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.theme-toggle__sun { display: none; }
+.theme-toggle[aria-pressed="true"] .theme-toggle__sun { display: block; }
+.theme-toggle[aria-pressed="true"] .theme-toggle__moon { display: none; }
+/* in the phone and tablet sheet it is a full-width row with its words */
+@media (max-width: 1023px) {
+  .nav.is-open .theme-toggle { width: 100%; gap: var(--s-3); }
+  .nav.is-open .theme-toggle__label { position: static; width: auto; height: auto; overflow: visible; clip: auto; }
+}
+
+/* the diagram's nodes take the lit ground's card in the evening grade (the page card is dark there) */
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .dg-frame { --card: var(--ground-surface); } }
+:root[data-theme="dark"] .dg-frame { --card: var(--ground-surface); }
+
+/* the main action keeps one look in the evening grade too: the closing slab's button stays the page's blue
+   (the kit gives a lit ground the ground's ink on a dark page; #3463f0 holds 3.3:1 on the sage, its label 5:1) */
+.footer--statement, .frame--lit { --action: var(--p-action); --action-ink: var(--p-action-ink); }

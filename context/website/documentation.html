@@ -2,6 +2,7 @@
 <html lang="en" data-type="software" data-radius="sharp" data-ground="sage" data-buttons="pill" data-motion>
 <head>
 <meta charset="utf-8">
+<script>try{var r=document.documentElement,t=localStorage.getItem('decidb-theme');if(!r.dataset.theme&&(t==='light'||t==='dark'))r.dataset.theme=t}catch(e){}</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>DECIDE language guide: DeciDB</title>
 <meta name="description" content="The DECIDE language guide: decisions, keyed and query-wide declarations, per/when/by scopes, reducers, objectives, NULL rules, EXPLAIN and DIAGNOSE.">
@@ -17,7 +18,7 @@
 <meta name="page-type" content="software">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&amp;family=Geist+Mono:wght@400..500&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/system.css">
 <link rel="stylesheet" href="assets/ui/cards.css">
 <link rel="stylesheet" href="assets/motion/motion.css">
@@ -37,6 +38,22 @@
   --display-tracking: -0.035em;
   --display-tracking-xl: -0.045em;
 }
+/* the evening grade (a tech page may take it, chosen on load from the visitor's setting or by the nav's switch):
+   the page tokens go dark; the lit ground (sage) and the panels' painted grounds stay light, as the kit keeps them */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
+    --p-accent: #7d9dff; --p-accent-ink: #0e0f10; --p-action: #3463f0; --p-action-ink: #ffffff;
+    --p-inv-bg: #f4f4f2; --p-inv-surface: #e8e8e6; --p-inv-ink: #111111; --p-inv-muted: #5c5c5c;
+    --p-inv-accent: #1a4be0; --p-inv-accent-ink: #ffffff; --p-inv-action: #111111; --p-inv-action-ink: #ffffff;
+  }
+}
+:root[data-theme="dark"] {
+    --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
+    --p-accent: #7d9dff; --p-accent-ink: #0e0f10; --p-action: #3463f0; --p-action-ink: #ffffff;
+    --p-inv-bg: #f4f4f2; --p-inv-surface: #e8e8e6; --p-inv-ink: #111111; --p-inv-muted: #5c5c5c;
+    --p-inv-accent: #1a4be0; --p-inv-accent-ink: #ffffff; --p-inv-action: #111111; --p-inv-action-ink: #ffffff;
+}
 </style>
 <link rel="stylesheet" href="assets/css/site.css">
 </head>
@@ -44,11 +61,12 @@
 <header class="nav">
   <div class="wrap nav__bar">
     <a class="skip-link" href="#top">Skip to content</a>
-    <a class="nav__logo" href="index.html"><picture><source media="(max-width: 379px)" srcset="assets/images/mark.svg"><img src="assets/images/logo.svg" alt="DeciDB" width="140" height="42"></picture></a>
+    <a class="nav__logo" href="index.html"><img class="logo logo--light" src="assets/images/logo.svg" alt="DeciDB" width="140" height="42"><img class="logo logo--dark" src="assets/images/logo-dark.svg" alt="DeciDB" width="140" height="42" loading="lazy"><img class="logo logo--mark" src="assets/images/mark.svg" alt="DeciDB" width="40" height="32" loading="lazy"></a>
     <nav class="nav__links" aria-label="Main">
       <div class="nav__item"><a class="nav__link" href="documentation.html" aria-current="page">Guide</a></div><div class="nav__item"><a class="nav__link" href="problems.html">Problems</a></div><div class="nav__item"><a class="nav__link" href="examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Without a solver</p><a href="examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="problems.html#direct-solve"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Direct solve</span><span class="t-small muted">Nine classes, no solver called</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="about.html">About</a></div>
     </nav>
     <div class="nav__actions">
+      <button class="btn btn--secondary theme-toggle" type="button" aria-pressed="false" data-theme-toggle hidden><svg class="theme-toggle__sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="theme-toggle__moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg><span class="theme-toggle__label">Dark theme</span></button>
       <a class="nav__link" href="https://github.com/huda-lab/decidb">GitHub</a>
       <a class="btn btn--primary" href="getting-started.html#install">Install DeciDB</a>
     </div>
@@ -149,7 +167,7 @@ element     ::= column | relation                                 -- a relation 
         <p>Each declarator has a name and a mandatory type. Reference a decision by its bare name in
           <code>SUCH THAT</code>, the objective, <code>SELECT</code> and <code>ORDER BY</code>.</p>
         <div class="table-wrap"><table>
-          <thead><tr><th>Type</th><th>Domain</th><th>Result type</th></tr></thead>
+          <thead><tr><th scope="col">Type</th><th scope="col">Domain</th><th scope="col">Result type</th></tr></thead>
           <tbody>
             <tr><td><code>x(BOOL)</code></td><td>{0, 1}</td><td><code>INTEGER</code></td></tr>
             <tr><td><code>x(INT)</code></td><td>0, 1, 2, … by default</td><td><code>BIGINT</code></td></tr>
@@ -167,7 +185,7 @@ element     ::= column | relation                                 -- a relation 
         <h3>How many decisions</h3>
         <p>The declaration's key sets how many decisions a declarator makes. Each declarator has its own key.</p>
         <div class="table-wrap"><table>
-          <thead><tr><th>Spelling</th><th>Scope</th><th>Decisions</th></tr></thead>
+          <thead><tr><th scope="col">Spelling</th><th scope="col">Scope</th><th scope="col">Decisions</th></tr></thead>
           <tbody>
             <tr><td><code>x(INT)</code>, <code>per row: x(INT)</code></td><td>per row (default)</td><td>one per result row</td></tr>
             <tr><td><code>per K: x(INT)</code></td><td>keyed</td><td>one per distinct value of <code>K</code> among the result rows</td></tr>
@@ -225,7 +243,7 @@ element     ::= column | relation                                 -- a relation 
           <code>5 &gt;= x</code> and <code>x &lt;= 5</code> are the same constraint, and a reducer may sit on both
           sides.</p>
         <div class="table-wrap"><table>
-          <thead><tr><th>Operator</th><th>Notes</th></tr></thead>
+          <thead><tr><th scope="col">Operator</th><th scope="col">Notes</th></tr></thead>
           <tbody>
             <tr><td><code>=</code> <code>&lt;=</code> <code>&gt;=</code></td><td>Any decisions.</td></tr>
             <tr><td><code>&lt;</code> <code>&gt;</code> <code>&lt;&gt;</code></td><td>Exact only on whole numbers, so each
@@ -264,7 +282,7 @@ element     ::= column | relation                                 -- a relation 
         <span class="tk-k">DECIDE</span> y(<span class="tk-k">BOOL</span>)
         <span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(y * weight) &lt;= <span class="tk-n">30</span>
         <span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(y * value)))
-<span class="tk-k">MINIMIZE</span> <span class="tk-f">SUM</span>(x * weight);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>5 rows</span></div><div class="output__scroll"><table><thead><tr><th class="">item</th><th class="num">value</th><th class="num">weight</th><th class="num dec">x</th></tr></thead><tbody><tr class="on"><td>Laptop</td><td class="num">100</td><td class="num">20</td><td class="num dec">1</td></tr><tr class="on"><td>Camera</td><td class="num">60</td><td class="num">10</td><td class="num dec">1</td></tr><tr><td>Drone</td><td class="num">120</td><td class="num">30</td><td class="num dec">0</td></tr><tr><td>Tripod</td><td class="num">40</td><td class="num">15</td><td class="num dec">0</td></tr><tr><td>Lens</td><td class="num">75</td><td class="num">12</td><td class="num dec">0</td></tr></tbody></table></div></div></div>
+<span class="tk-k">MINIMIZE</span> <span class="tk-f">SUM</span>(x * weight);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>5 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">item</th><th scope="col" class="num">value</th><th scope="col" class="num">weight</th><th scope="col" class="num dec">x</th></tr></thead><tbody><tr class="on"><td>Laptop</td><td class="num">100</td><td class="num">20</td><td class="num dec">1</td></tr><tr class="on"><td>Camera</td><td class="num">60</td><td class="num">10</td><td class="num dec">1</td></tr><tr><td>Drone</td><td class="num">120</td><td class="num">30</td><td class="num dec">0</td></tr><tr><td>Tripod</td><td class="num">40</td><td class="num">15</td><td class="num dec">0</td></tr><tr><td>Lens</td><td class="num">75</td><td class="num">12</td><td class="num dec">0</td></tr></tbody></table></div></div></div>
       </section>
 
       <!-- ============================================================ SCOPES -->
@@ -272,7 +290,7 @@ element     ::= column | relation                                 -- a relation 
         <h2>Scopes: <code>per</code>, <code>when</code>, <code>by</code> <a class="anchor" href="#scopes">#</a></h2>
         <p class="lead">Three keywords, three separate jobs.</p>
         <div class="table-wrap"><table>
-          <thead><tr><th>Keyword</th><th>Where</th><th>Job</th></tr></thead>
+          <thead><tr><th scope="col">Keyword</th><th scope="col">Where</th><th scope="col">Job</th></tr></thead>
           <tbody>
             <tr><td><code>per K</code></td><td>in front of a declarator, a constraint, the objective, or a reducer's argument</td><td>how many: one decision, constraint or reducer input per class of <code>K</code></td></tr>
             <tr><td><code>when c</code></td><td>in front of a constraint, the objective, or a reducer's argument</td><td>which rows are looked at: those where <code>c</code> is true</td></tr>
@@ -282,7 +300,7 @@ element     ::= column | relation                                 -- a relation 
         <p><code>when</code> comes before <code>per</code>, and a colon follows the scope. A scope covers one constraint:
           in <code>per g: A AND B</code>, only <code>A</code> is scoped.</p>
         <div class="table-wrap"><table>
-          <thead><tr><th>Omitted</th><th>Means</th></tr></thead>
+          <thead><tr><th scope="col">Omitted</th><th scope="col">Means</th></tr></thead>
           <tbody>
             <tr><td><code>per</code> on a declarator, a constraint or inside a reducer</td><td><code>per row</code></td></tr>
             <tr><td><code>per</code> on the objective</td><td><code>per ()</code>: the objective is produced once</td></tr>
@@ -293,7 +311,7 @@ element     ::= column | relation                                 -- a relation 
         <p><code>per</code> never selects the rows a reducer reads, and <code>by</code> never changes how many
           constraints exist. One constraint often needs both:</p>
         <div class="table-wrap"><table>
-          <thead><tr><th>Written</th><th>Constraints</th><th>Each reducer reads</th></tr></thead>
+          <thead><tr><th scope="col">Written</th><th scope="col">Constraints</th><th scope="col">Each reducer reads</th></tr></thead>
           <tbody>
             <tr><td><code>ship &lt;= 0.20 * SUM(ship)</code></td><td>one per row</td><td>all rows</td></tr>
             <tr><td><code>per (): SUM(ship) &lt;= networkCapacity</code></td><td>one</td><td>all rows</td></tr>
@@ -373,7 +391,7 @@ element     ::= column | relation                                 -- a relation 
       <section id="reducers">
         <h2>Reducers <a class="anchor" href="#reducers">#</a></h2>
         <div class="table-wrap"><table>
-          <thead><tr><th>Reducer</th><th>Meaning</th></tr></thead>
+          <thead><tr><th scope="col">Reducer</th><th scope="col">Meaning</th></tr></thead>
           <tbody>
             <tr><td><code>SUM(e)</code></td><td>The primary reducer. Data-only terms inside it move to the bound.</td></tr>
             <tr><td><code>AVG(e)</code></td><td><code>SUM(e) / n</code>, where <code>n</code> is the number of values it reads.</td></tr>
@@ -414,7 +432,7 @@ element     ::= column | relation                                 -- a relation 
 
         <h3 id="norm">norm(e, p) <a class="anchor" href="#norm">#</a></h3>
         <div class="table-wrap"><table>
-          <thead><tr><th><code>p</code></th><th>Means</th><th>Class</th></tr></thead>
+          <thead><tr><th scope="col"><code>p</code></th><th scope="col">Means</th><th scope="col">Class</th></tr></thead>
           <tbody>
             <tr><td><code>1</code></td><td><code>SUM(ABS(e))</code></td><td>LP</td></tr>
             <tr><td><code>2</code></td><td><code>SUM(POWER(e, 2))</code>, the squared L2 norm</td><td>convex QP</td></tr>
@@ -491,7 +509,7 @@ element     ::= column | relation                                 -- a relation 
         <h2>NULL and empty groups <a class="anchor" href="#nulls">#</a></h2>
         <p>A NULL data value is skipped where it is read, never read as zero.</p>
         <div class="table-wrap"><table>
-          <thead><tr><th>Situation</th><th>Outcome</th></tr></thead>
+          <thead><tr><th scope="col">Situation</th><th scope="col">Outcome</th></tr></thead>
           <tbody>
             <tr><td>NULL in a declaration, <code>per</code> or <code>by</code> key column</td><td>no class or group for that row (a relation key compares NULL as a value)</td></tr>
             <tr><td>a keyed decision on a NULL-key row</td><td>no decision: the row shows NULL</td></tr>
@@ -564,9 +582,9 @@ element     ::= column | relation                                 -- a relation 
 <span class="tk-k">SELECT</span> item, x <span class="tk-k">FROM</span> Items
 <span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
 <span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">40</span> <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(x) &gt;= <span class="tk-n">4</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>2 rows</span></div><div class="output__scroll"><table><thead><tr><th class="">state</th><th class="">clause</th><th class="dec">suggested_change</th><th class="num dec">amount</th><th class="">total</th><th class="">scope</th><th class="">edit_source</th><th class="">group</th><th class="">row</th></tr></thead><tbody><tr><td>infeasible</td><td>SUM(x * weight) &lt;= 40</td><td class="dec">SUM(x * weight) &lt;= 57</td><td class="num dec">17.0</td><td class="null">NULL</td><td class="null">NULL</td><td>source_literal</td><td class="null">NULL</td><td class="null">NULL</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">275.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
+<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>2 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="num dec">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td>infeasible</td><td>SUM(x * weight) &lt;= 40</td><td class="dec">SUM(x * weight) &lt;= 57</td><td class="num dec">17.0</td><td class="null">NULL</td><td class="null">NULL</td><td>source_literal</td><td class="null">NULL</td><td class="null">NULL</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">275.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
         <div class="table-wrap"><table>
-          <thead><tr><th>Column</th><th>Holds</th></tr></thead>
+          <thead><tr><th scope="col">Column</th><th scope="col">Holds</th></tr></thead>
           <tbody>
             <tr><td><code>state</code></td><td><code>infeasible</code>, <code>unbounded</code> or <code>feasible</code></td></tr>
             <tr><td><code>clause</code></td><td>the clause as written, or the decision that grows without bound</td></tr>
@@ -596,7 +614,7 @@ element     ::= column | relation                                 -- a relation 
           it answers that way instead of calling a solver. A query it cannot prove takes the solver path unchanged. There is
           no syntax for it: the same SQL simply gets faster and exact.</p>
         <div class="table-wrap"><table>
-          <thead><tr><th>Setting</th><th>Effect</th></tr></thead>
+          <thead><tr><th scope="col">Setting</th><th scope="col">Effect</th></tr></thead>
           <tbody>
             <tr><td><code>SET decide_direct_solve = 'auto'</code></td><td>default: answer directly when proved</td></tr>
             <tr><td><code>SET decide_direct_solve = 'off'</code></td><td>always use the solver</td></tr>
@@ -611,7 +629,7 @@ element     ::= column | relation                                 -- a relation 
       <section id="settings">
         <h2>Settings <a class="anchor" href="#settings">#</a></h2>
         <div class="table-wrap"><table>
-          <thead><tr><th>Setting</th><th>Default</th><th>Effect</th></tr></thead>
+          <thead><tr><th scope="col">Setting</th><th scope="col">Default</th><th scope="col">Effect</th></tr></thead>
           <tbody>
             <tr><td><code>decide_direct_solve</code></td><td><code>auto</code></td><td><code>auto</code>, <code>off</code> or <code>require</code></td></tr>
             <tr><td><code>decide_mip_gap</code></td><td><code>0</code></td><td>accept an answer within this relative gap of the optimum</td></tr>
@@ -638,7 +656,7 @@ element     ::= column | relation                                 -- a relation 
 <span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(pick) &lt;= <span class="tk-n">2</span> PER sector
 <span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(pick * expected_return);</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>refused before solving</span></div><pre>Parser Error: DECIDE: the postfix PER is removed; write per sector: in front of the constraint and by (sector) after each of its reducers</pre></div></div>
         <div class="table-wrap"><table>
-          <thead><tr><th>Old spelling</th><th>Write instead</th></tr></thead>
+          <thead><tr><th scope="col">Old spelling</th><th scope="col">Write instead</th></tr></thead>
           <tbody>
             <tr><td><code>DECIDE T.x(INT)</code></td><td><code>DECIDE per T: x(INT)</code>, or <code>per T.k: x(INT)</code> to key on one column</td></tr>
             <tr><td><code>DECIDE scalar x(INT)</code></td><td><code>DECIDE per (): x(INT)</code></td></tr>

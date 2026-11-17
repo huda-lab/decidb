@@ -48,9 +48,31 @@
     "markUrl": "https://www.python.org/"
   },
   {
+    "file": "ui-moon.svg",
+    "icon": "ui:moon",
+    "name": "Moon",
+    "kind": "line",
+    "source": "@iconify-json/lucide@1.2.100",
+    "author": "Lucide Contributors",
+    "licence": "ISC",
+    "url": "https://github.com/lucide-icons/lucide",
+    "trademark": false
+  },
+  {
     "file": "ui-sigma.svg",
     "icon": "ui:sigma",
     "name": "Sigma",
+    "kind": "line",
+    "source": "@iconify-json/lucide@1.2.100",
+    "author": "Lucide Contributors",
+    "licence": "ISC",
+    "url": "https://github.com/lucide-icons/lucide",
+    "trademark": false
+  },
+  {
+    "file": "ui-sun.svg",
+    "icon": "ui:sun",
+    "name": "Sun",
     "kind": "line",
     "source": "@iconify-json/lucide@1.2.100",
     "author": "Lucide Contributors",

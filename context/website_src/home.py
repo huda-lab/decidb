@@ -120,7 +120,7 @@ def hero(b, ex_by_slug):
 PAINT = '{"bg":"#a3b0b6","accent":"#c49a6c"}'
 PAINT_PARAMS = '{"blur":1,"brush":0.35,"slope":0,"hillY":0.3,"horizon":0.62,"drift":0,"speed":0}'
 SAGE = '{"bg":"#cdd6c6","surface":"#dce3d6","ink":"#262d24","accent":"#6c8e63"}'
-SKY = '{"bg":"#c6d3df","surface":"#d6e0e9","ink":"#25303a","accent":"#3f6a92"}'
+SKY = '{"bg":"#c6d3df","surface":"#d6e0e9","ink":"#25303a","accent":"#7f9fbd"}'
 STILL = '{"drift":0,"speed":0}'
 
 
@@ -129,7 +129,7 @@ def card(title, line, seed, palette, params, label, inner):
           <article class="card card--row card--open span-6 m-nolift">
             <h3>{title}</h3>
             <p>{line}</p>
-            <div class="panel" data-fx="painterly-landscape" data-fx-seed="{seed}" data-fx-palette='{palette}' data-fx-params='{params}'>
+            <div class="panel" data-fx="painterly-landscape" data-fx-seed="{seed}" data-fx-palette='{palette}' data-fx-params='{params}' style="background-color: {json.loads(palette)['bg']}">
               <div class="stage stage--fade-b" role="img" aria-label="{esc(label)}"><div class="at-rise fit" style="--fit-max:420px;--ax:max(24px, 50% - 210px);--ay:44px;--ay-sm:20px">
                 {inner}
               </div></div>
@@ -359,7 +359,7 @@ def faq(b):
         return "".join(f'<div class="faq__item"><h3>{esc(q)}</h3><p>{esc(a)}</p></div>' for q, a in qs)
 
     return f"""
-  <section class="section bg-band" id="faq" aria-labelledby="faq-h">
+  <section class="section bg-band bg-bleed" id="faq" aria-labelledby="faq-h">
     <div class="wrap">
       <div class="grid grid--top">
         <div class="span-5 stack-4">
