@@ -31,3 +31,16 @@ files.
   query, or delete it.
 - **Done when.** A test fails with the function removed, or the function is gone and
   `./test/decide/run_tests.sh -n 2 -k "bounds or edge_cases"` passes.
+
+## FORM-4 — An ABS envelope row that holds a raw aggregate is read per row
+
+- **Problem.** `EmitNativeAbs`, `DeriveAbsAuxiliaryBounds` and `LinearizeAbsMaximize`
+  (`src/decidb/formulation/linearization_bilinear_abs.cpp`) read each envelope row per row. An envelope row whose
+  argument holds a raw aggregate (`aux >= sum(x) - 2`) then states one `|x_r - 2|` per row and boxes the auxiliary from
+  per-row values: the wrong answer of the ABS objective `0 * sum(x) + abs(sum(x) - 2)`. Stage 05 gives every reducer a
+  function reads in the objective a helper decision (`../05_optimizer/done.md`, the objective's value rewrite), so no
+  query reaches that read; a shape that leaves a raw reducer in an envelope row would answer wrongly again.
+- **Change.** State the contract between the stages: an envelope row holds no aggregate. Where stage 06 has code only
+  for that case, delete it; otherwise check the contract where stage 06 takes the rows, as an INTERNAL error.
+- **Done when.** `./test/decide/run_tests.sh -n 2 -k abs_linearization` and `build/release/test/unittest "[decidb]"`
+  pass.

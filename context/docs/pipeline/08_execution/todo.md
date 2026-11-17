@@ -17,17 +17,6 @@ Other documented edge differences remain in `done.md` §1a: the D88 variant-name
 order for a gated reducer argument, and unreferenced hidden records. Direct-solve rules and DIAGNOSE's separate
 named-column scan also bypass or revisit parts of the normal tree execution; their scope is open.
 
-## EXEC-1 — No "constrains nothing" warning in one NULL-key shape
-
-- **Problem.** On query `w3` of `context/opa_rewrite/review/09_user_facing_behaviour.md` item D9(b), the answer is
-  `0,0` with no warning, direct solve on or off, and EXPLAIN ANALYZE prints no skipped-instance line. Item D9(a) warns
-  (`constrains nothing: its one instance has no value, so it is skipped.`).
-- **Change.** The clause warns as D9(a) does (owner, 2026-11-17; handoff § A6, item 8). The warning comes from
-  `ReportSkippedInstances` (`physical_decide.cpp`).
-- **Needs.** OPT-7 (both turn on how a NULL key is read).
-- **Done when.** A test of `w3` finds the warning and the EXPLAIN ANALYZE line, and fails on the unfixed code;
-  `./test/decide/run_tests.sh -n 2 -k "anr_reports or null_values"` passes.
-
 ## EXEC-2 — The "takes more than one value" message does not name the group
 
 - **Problem.** `` `e.cap` takes more than one value here (5 and 6) — ... `` names the values but not the group they
@@ -125,3 +114,21 @@ named-column scan also bypass or revisit parts of the normal tree execution; the
 - **Change.** Pass the rows' positions. Check whether the ICU extension loads here and has a collation that raises;
   with one, test the fix through it. With none, the error branch is unreachable: bring the owner that evidence.
 - **Done when.** A test through a raising collation names the right row, or the owner's decision is recorded.
+
+## EXEC-11 — A `per <column>:` bound a domain cannot hold gets the generic infeasible message
+
+- **Decision needed.** Where the domain check reads a bound that stays a row.
+- **Problem.** `per g: x <= -1` on a `BOOL` or a non-negative `INT` answers "DECIDE optimization is infeasible. Prefix
+  the query with DIAGNOSE…", where `per t: x <= -1` names the clause ("per t: x <= -1 cannot hold for a BOOL
+  variable"). The domain refusal in `decide_global_sink_state.hpp` reads the box a constant bound folds into, and a
+  `per` over a written column does not fold (`../05_optimizer/done.md`, singleton-row folding): a row whose key is NULL
+  takes no instance, and a box covers the whole column.
+- **Options.**
+  1. One function states the domain test and the message; the box check and the step that writes a clause's rows both
+     call it. A row is written only for an instance, so a NULL-key row is never checked. Cost: a second caller.
+  2. Keep the generic message; DIAGNOSE names the clause. Cost: the two shapes answer differently.
+- **Recommendation.** 1: one rule, and the row step reaches exactly the rows the clause applies to.
+- **Change.** As ruled. The refusal quotes the clause with its `per`, as for a folded bound.
+- **Done when.** `test_message_qualifier.py` holds a `per g:` case for the BOOL refusal, one for the non-negative
+  refusal, and one whose rows all have a NULL `g` and solve. This passes:
+  `./test/decide/run_tests.sh -n 2 -k message_qualifier`.

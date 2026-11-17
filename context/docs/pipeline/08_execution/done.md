@@ -982,8 +982,9 @@ Term-level filters are carried on individual terms, not on the whole constraint:
    tests, its de-duplication), so a term with none reads every row of its group.
 5. What the skips left is counted (D90, guide §7.4): each clause's instances once grouped
    -- in the aggregate shape every group of its kept rows by its key, from the key's
-   cached grouping, whether or not a reducer reads a row of it -- and those left after
-   `DecideAbsence::SkipNullInstances`, the most any of its rows holds (`ClauseInstances`). A composed
+   cached grouping, whether or not a reducer reads a row of it; under a `per K:` that names classes, the groups a
+   class's kept rows reach, plus one for each class whose rows reach none (a NULL `by` key), which has no value -- and
+   those left after `DecideAbsence::SkipNullInstances`, the most any of its rows holds (`ClauseInstances`). A composed
    clause is one instance where its `when` keeps a row. `ReportSkippedInstances` turns the
    counts into an EXPLAIN ANALYZE line under the clause and, for a clause left with none,
    a warning on stderr; `ReportAnEmptyObjective` reads the formulated objective (its linear,
