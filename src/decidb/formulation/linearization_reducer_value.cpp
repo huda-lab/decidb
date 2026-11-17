@@ -879,6 +879,8 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 		}
 		const bool is_max = link.agg_name == "max";
 		const idx_t value_var = link.value_var;
+		// The clause as the user wrote it, quoted once for every group's refusal.
+		const string written = DecideWrittenClause(input, link.source_clause_id);
 		auto &members = link.members;
 		// A member is its expression negated with its constant apart, the shape the extremum link takes; the equality
 		// reads it the same way. Its columns are accumulated: a keyed decision may stand in several terms, and a row
@@ -954,7 +956,7 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 			if (spec.closing_underivable) {
 				spec.blame_var = FirstUnboundedMemberVariable(members, input.lower_bounds, input.upper_bounds);
 			}
-			spec.written = link.label;
+			spec.written = written;
 			spec.label = link.label;
 			spec.envelope_kind = ConstraintKind::STRUCTURAL;
 			spec.closing_kind = ConstraintKind::STRUCTURAL;

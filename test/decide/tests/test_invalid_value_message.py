@@ -466,6 +466,17 @@ def test_a_helper_reach_past_a_double_is_not_refused_where_a_clause_bounds_it(de
     assert "Error" not in stderr, stderr
 
 
+# HiGHS only: Gurobi states the closing side of a MIN/MAX natively, so it has no Big-M to overflow. The helper's members
+# span `-1e308` to `1e308 + 5`, so its Big-M (EmitExtremumLink) is past a DOUBLE while its own reach is not: the
+# refusal names the clause as the user wrote it, not the helper's plan label.
+@pytest.mark.error
+@pytest.mark.parametrize("mode", ["off"])
+def test_a_helper_big_m_past_a_double_names_the_clause_as_written(decidb_cli_highs, mode):
+    decide = "y(REAL) SUCH THAT y <= 5 AND MAX(per id: SUM(y + c) BY (id)) >= 0 MAXIMIZE SUM(y)"
+    stderr = _stderr(decidb_cli_highs, _huge_query(decide), mode)
+    assert _too_large("MAX(per id: SUM(y + c) BY (id)) >= 0") in stderr, stderr
+
+
 # HiGHS only: Gurobi states MIN/MAX natively and needs no bound on `y`. An open end asks for its bound, not the clause.
 @pytest.mark.error
 @pytest.mark.parametrize("mode", ["off"])
