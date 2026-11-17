@@ -25,6 +25,7 @@
 #include "duckdb/planner/decide/decide_tree.hpp"
 #include "duckdb/planner/bind_context.hpp"
 
+#include <cmath>
 #include <cstring>
 
 namespace duckdb {
@@ -55,6 +56,9 @@ struct RenderContext {
 	bool written = false;
 	//! The frames (DecideSourceNames::frames); null prints a frame marker's aggregate.
 	const vector<DecideFrameSpec> *frames = nullptr;
+	//! True for a row a rewrite built (RenderFunctionRow): a term of zero it added is left out, and a number it wrote
+	//! prints as a plain number.
+	bool rewrite_row = false;
 };
 } // namespace
 
@@ -136,13 +140,46 @@ static int ArithmeticPrecedence(const string &name) {
 	return name == "**" ? 30 : 0;
 }
 
+//! Whether `expr` is a zero a rewrite wrote: a numeric constant with no span of the query (the user's own zeros have
+//! one), under the casts the binder inserted.
+static bool IsRewriteZero(const Expression &expr) {
+	const Expression *node = &expr;
+	while (node->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		node = node->Cast<BoundCastExpression>().child.get();
+	}
+	if (node->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT || node->GetQueryLocation().IsValid()) {
+		return false;
+	}
+	auto &value = node->Cast<BoundConstantExpression>().value;
+	return !value.IsNull() && value.type().IsNumeric() && value.GetValue<double>() == 0.0;
+}
+
+//! A number a rewrite wrote, as a plan prints it: a whole number without its `.0`, any other as DuckDB prints it.
+static string RewriteNumberText(const Value &value) {
+	const double number = value.GetValue<double>();
+	if (std::floor(number) == number && std::fabs(number) < 1e15) {
+		return to_string(static_cast<int64_t>(number));
+	}
+	return value.ToString();
+}
+
+//! `-operand`; `--` starts a SQL comment, so a negated negation keeps its parentheses.
+static string RenderNegation(const Expression &operand, const RenderContext &ctx) {
+	auto text = RenderSource(operand, ctx, 40);
+	return text.rfind('-', 0) == 0 ? "-(" + text + ")" : "-" + text;
+}
+
 static string RenderFunction(const BoundFunctionExpression &func, const RenderContext &ctx, int parent_precedence) {
 	// As the user wrote it: `abs` for `@`, `pow`, `power` and `^` for `**`.
 	auto name = DecideWrittenName(func.GetAlias(), func.function.name);
 	if (func.children.size() == 1 && name == "-") {
-		// `--` starts a SQL comment, so a negated negation keeps its parentheses.
-		auto operand = RenderSource(*func.children[0], ctx, 40);
-		return operand.rfind('-', 0) == 0 ? "-(" + operand + ")" : "-" + operand;
+		return RenderNegation(*func.children[0], ctx);
+	}
+	// A zero term a rewrite added says nothing: `0 + v` is `v` and `0 - v` is `-v`.
+	if (ctx.rewrite_row && func.children.size() == 2 && (name == "+" || name == "-") &&
+	    IsRewriteZero(*func.children[0])) {
+		return name == "+" ? RenderSource(*func.children[1], ctx, parent_precedence)
+		                   : RenderNegation(*func.children[1], ctx);
 	}
 	if (func.children.size() == 2 && ArithmeticPrecedence(name) != 0) {
 		int precedence = ArithmeticPrecedence(name);
@@ -380,9 +417,17 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 	if (QuoteSpan(expr, ctx, quoted, binding)) {
 		return binding != 0 && binding < parent_precedence ? "(" + quoted + ")" : quoted;
 	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
-	    HasDecideTag(expr.GetAlias(), L0_AUTO_BOUND_TAG)) {
-		return "M"; // stage 06 derives it from the column box
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+		if (HasDecideTag(expr.GetAlias(), L0_AUTO_BOUND_TAG)) {
+			return "M"; // stage 06 derives it from the column box
+		}
+		if (HasDecideTag(expr.GetAlias(), L0_TOLERANCE_TAG)) {
+			return "decide_l0_tolerance";
+		}
+		auto &value = expr.Cast<BoundConstantExpression>().value;
+		if (ctx.rewrite_row && !value.IsNull() && value.type().id() == LogicalTypeId::DOUBLE) {
+			return RewriteNumberText(value);
+		}
 	}
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::BOUND_CAST:
@@ -870,6 +915,11 @@ void CollectDecideExpressionStrings(const Expression &expr, const DecideSourceNa
 	CollectExpressionStrings(expr, names, out, out_source_ids, DecideEnclosingScope(), written_sense);
 }
 
+string DecideObjectiveQualifier(const Expression &objective, const DecideSourceNames &names) {
+	auto ctx = ContextOf(names);
+	return FrontQualifier(ScopeQualifier(EnterDecideScope(objective, DecideEnclosingScope()), ctx));
+}
+
 string RenderDecideObjective(const Expression &expr, const DecideSourceNames &names, bool written_sense) {
 	vector<string> parts;
 	CollectDecideExpressionStrings(expr, names, parts, nullptr, written_sense);
@@ -881,21 +931,26 @@ string RenderDecideObjective(const Expression &expr, const DecideSourceNames &na
 	return parts[0];
 }
 
-//! A term's coefficient is left out when it is the literal 1, as a user writes no factor of 1; an automatic L0 bound is
-//! the placeholder `M`, which RenderSource prints.
+//! A term's coefficient is left out when it is the literal 1, as a user writes no factor of 1; an L0 link's bound and
+//! tolerance are printed whatever they hold (RenderSource).
 static bool IsUnitCoefficient(const Expression &coefficient) {
 	if (coefficient.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT ||
-	    HasDecideTag(coefficient.GetAlias(), L0_AUTO_BOUND_TAG)) {
+	    HasDecideTag(coefficient.GetAlias(), L0_AUTO_BOUND_TAG) ||
+	    HasDecideTag(coefficient.GetAlias(), L0_WRITTEN_BOUND_TAG) ||
+	    HasDecideTag(coefficient.GetAlias(), L0_TOLERANCE_TAG)) {
 		return false;
 	}
 	auto &value = coefficient.Cast<BoundConstantExpression>().value;
 	return !value.IsNull() && value.GetValue<double>() == 1.0;
 }
 
-//! One row an F node owns, as `c1 * x1 + c2 * x2 >= bound` over the terms and bound stage 05 lowered, behind the
-//! `when c per K:` qualifier of the scope the row sits in.
+//! One row an F node owns, as `c1 * x1 + c2 * x2 >= bound` over the terms and bound stage 05 lowered, without the zero
+//! terms the rewrite added. It has no qualifier: the rows an F node owns print under the clause they came from, behind
+//! the scope that clause was written with (CollectDecideClauseLayers).
 static string RenderFunctionRow(const DecideConstraint &row, const vector<unique_ptr<Expression>> &decide_variables,
-                                const RenderContext &ctx) {
+                                const RenderContext &plan_ctx) {
+	auto ctx = plan_ctx;
+	ctx.rewrite_row = true;
 	string result;
 	for (auto &term : row.lhs_terms) {
 		// A frame prints as its selector, `else` included: its READ term, whose coefficient is an indicator column,
@@ -917,17 +972,7 @@ static string RenderFunctionRow(const DecideConstraint &row, const vector<unique
 			result += (term.sign < 0 ? " - " : " + ") + text;
 		}
 	}
-	result += " " + DecideComparisonOperator(row.comparison_type) + " " + RenderSource(*row.rhs_expr, ctx);
-	string qualifier;
-	if (row.scope.when) {
-		qualifier = "when " + RenderSource(*row.scope.when, ctx);
-	}
-	if (row.scope.per != DecideClauseScope::PerRole::NONE) {
-		qualifier = AppendQualifier(qualifier, "per " + (row.scope.class_key == DConstants::INVALID_INDEX
-		                                                     ? string("()")
-		                                                     : DecideKeyText(*ctx.keys, row.scope.class_key)));
-	}
-	return AppendQualifier(FrontQualifier(qualifier), result);
+	return result + " " + DecideComparisonOperator(row.comparison_type) + " " + RenderSource(*row.rhs_expr, ctx);
 }
 
 vector<DecideFunctionRow> CollectDecideFunctionRows(const DecideTree &tree, const DecideSourceNames &names,
@@ -951,7 +996,8 @@ vector<DecideClauseLayers> CollectDecideClauseLayers(const Expression &constrain
                                                      const vector<ConstraintSourceInfo> &sources,
                                                      vector<string> &unattributed, vector<string> &objective_rows,
                                                      const vector<LogicalDecide::RewriteAccount> &accounts,
-                                                     const vector<DecideFunctionRow> &function_rows) {
+                                                     const vector<DecideFunctionRow> &function_rows,
+                                                     const string &objective_qualifier) {
 	// Every row the solver will see, tagged with the clause it came from.
 	vector<string> rows;
 	vector<idx_t> row_ids;
@@ -977,12 +1023,13 @@ vector<DecideClauseLayers> CollectDecideClauseLayers(const Expression &constrain
 			by_clause[row_ids[i]].push_back(std::move(rows[i]));
 		}
 	}
-	// The rows the F nodes own follow the clause's own, or the objective's.
+	// The rows the F nodes own follow the clause's own, or the objective's, behind the scope it was written with.
 	for (auto &row : function_rows) {
 		if (row.source_clause_id < by_clause.size()) {
-			by_clause[row.source_clause_id].push_back(row.text);
+			by_clause[row.source_clause_id].push_back(
+			    AppendQualifier(sources[row.source_clause_id].qualifier, row.text));
 		} else {
-			objective_rows.push_back(row.text);
+			objective_rows.push_back(AppendQualifier(objective_qualifier, row.text));
 		}
 	}
 	// A clause the tree no longer mentions anywhere still belongs in the plan.

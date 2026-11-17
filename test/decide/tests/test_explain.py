@@ -601,11 +601,95 @@ def test_abs_clause_shows_its_source_and_account(decidb_cli):
     # Every generated row is subordinated, and the auxiliary never floats free: it
     # prints as the ABS it stands for, in the account line and in each envelope row.
     assert "__abs_aux_0__" not in packed, _plan_text(out)
-    assert "abs(x-20)becomesanauxiliaryvariable" in packed, _plan_text(out)
-    assert packed.count("abs(x-20)") + packed.count("ABS(x-20)") >= 4, _plan_text(out)
-    assert packed.count(_REWRITTEN_MARK) >= 3, _plan_text(out)
+    # The account line, then the two envelope rows with the bound the rewrite moved over and no zero term of its own.
+    assert (
+        "ABS(x-20)<=5" "↳abs(x-20)becomesanauxiliaryvariable" "↳abs(x-20)-x>=-20" "↳abs(x-20)+x>=20" in packed
+    ), _plan_text(out)
+    assert packed.count(_REWRITTEN_MARK) == 3, _plan_text(out)
     # Nothing was attributed to no clause at all.
     assert "addedbyformulation" not in packed, _plan_text(out)
+
+
+_REGION_SOURCE = "FROM (VALUES (1, 'n', 2), (2, 'n', 3), (3, 's', 1)) s(id, region, v)"
+
+
+@pytest.mark.explain
+@pytest.mark.parametrize(
+    "such_that, objective, clause, rows",
+    [
+        # The rows sit under the scope the clause wrote, whatever scope the rewrite built them in: a `per` the rewrite
+        # dropped is back, and the `when true` it made up is gone. `0 + v` is `v`.
+        pytest.param(
+            "per region: sum(abs(ship - v)) by (region) <= 5",
+            "MAXIMIZE sum(ship)",
+            "perregion:sum(abs(ship-v))by(region)<=5",
+            "perregion:abs(ship-v)-ship>=-v" "↳perregion:abs(ship-v)+ship>=v",
+            id="a-per-clause",
+        ),
+        pytest.param(
+            "when v > 1: abs(ship - v) <= 5",
+            "MAXIMIZE sum(ship)",
+            "whenv>1:abs(ship-v)<=5",
+            "whenv>1:abs(ship-v)-ship>=-v" "↳whenv>1:abs(ship-v)+ship>=v",
+            id="a-when-clause",
+        ),
+        # The objective's rows sit under the objective's own `when`, not under it and the rewrite's `true`.
+        pytest.param(
+            "ship <= 5",
+            "MINIMIZE when v > 1: sum(abs(ship - v))",
+            "MINIMIZEwhenv>1:sum(abs(ship-v))",
+            "whenv>1:abs(ship-v)-ship>=-v" "↳whenv>1:abs(ship-v)+ship>=v",
+            id="an-objective-when",
+        ),
+        # A bound read on the other side moves over with a sign: `0 - v` is `-v`.
+        pytest.param(
+            "abs(v - ship) <= 5",
+            "MAXIMIZE sum(ship)",
+            "abs(v-ship)<=5",
+            "abs(v-ship)+ship>=v" "↳abs(v-ship)-ship>=-v",
+            id="a-bound-with-a-sign",
+        ),
+    ],
+)
+def test_a_rewrite_row_prints_the_scope_and_bound_the_query_wrote(decidb_cli, such_that, objective, clause, rows):
+    out = _explain(decidb_cli, f"SELECT id, ship {_REGION_SOURCE} DECIDE ship(REAL) SUCH THAT {such_that} {objective}")
+    packed = _packed(out)
+    assert clause in packed and "becomesanauxiliaryvariable↳" + rows in packed, _plan_text(out)
+    assert "whentrue" not in packed and "ANDtrue" not in packed, _plan_text(out)
+
+
+_L0_SOURCE = "FROM (VALUES (1), (2)) t(id)"
+
+
+@pytest.mark.explain
+@pytest.mark.parametrize(
+    "norm, bound",
+    [
+        # No bound written: M comes from the bounds on x, and the tolerance is the setting that sets it.
+        pytest.param("norm(x, 0)", "M", id="a-bound-from-the-box"),
+        # A bound written prints as written, and a written 1 is still printed.
+        pytest.param("norm(x, 0, 10)", "10", id="a-written-whole-number"),
+        pytest.param("norm(x, 0, 1)", "1", id="a-written-one"),
+        pytest.param("norm(x, 0, 0.1)", "0.1", id="a-written-fraction"),
+        pytest.param("norm(x, 0, 1e20)", "1e+20", id="a-written-bound-past-a-bigint"),
+    ],
+)
+def test_an_l0_link_prints_its_bound_and_tolerance_by_name(decidb_cli, norm, bound):
+    out = _explain(
+        decidb_cli,
+        f"SELECT id, x {_L0_SOURCE} DECIDE x(REAL) SUCH THAT x <= 5 AND x >= -5 AND {norm} <= 1 MAXIMIZE sum(x)",
+    )
+    packed = _packed(out)
+    links = f"↳{bound}*(x<>0)-x>=0↳{bound}*(x<>0)+x>=0↳abs(x)-decide_l0_tolerance*(x<>0)>=0"
+    assert links in packed, _plan_text(out)
+
+
+@pytest.mark.explain
+def test_an_l0_tolerance_of_one_is_still_printed(decidb_cli):
+    """A coefficient of 1 is left out, as a user writes no factor of 1, except the tolerance of an L0 link."""
+    sql = f"SELECT id, x {_L0_SOURCE} DECIDE x(REAL) SUCH THAT x <= 5 AND x >= -5 AND norm(x, 0) <= 1 MAXIMIZE sum(x)"
+    out = decidb_cli.execute_raw(f"{_SOLVER_PATH}SET decide_l0_tolerance = 1; EXPLAIN {sql}").stdout
+    assert "↳abs(x)-decide_l0_tolerance*(x<>0)>=0" in _packed(out), _plan_text(out)
 
 
 @pytest.mark.explain

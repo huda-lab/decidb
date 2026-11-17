@@ -104,9 +104,8 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		                      RenderForPlan(aggregate, decide));
 		    auto make_mz = [&]() {
 			    auto bound = make_uniq<BoundConstantExpression>(Value::DOUBLE(m));
-			    if (auto_m) {
-				    bound->alias = L0_AUTO_BOUND_TAG; // a placeholder stage 06 fills from the box
-			    }
+			    // An automatic bound is a placeholder stage 06 fills from the box; a written one prints as written.
+			    bound->alias = auto_m ? L0_AUTO_BOUND_TAG : L0_WRITTEN_BOUND_TAG;
 			    return optimizer.BindScalarFunction("*", std::move(bound), z->Copy());
 		    };
 		    auto add_link = [&](unique_ptr<Expression> lhs, unique_ptr<Expression> rhs) {
@@ -125,11 +124,10 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		                                          aggregate.children[0]->Copy()));
 		    vector<unique_ptr<Expression>> absolute_children;
 		    absolute_children.push_back(aggregate.children[0]->Copy());
+		    auto tolerance = make_uniq<BoundConstantExpression>(Value::DOUBLE(GetDecideL0Tolerance(optimizer.context)));
+		    tolerance->alias = L0_TOLERANCE_TAG;
 		    add_link(DecideRebindOperator(optimizer.context, "@", std::move(absolute_children), "abs"),
-		             optimizer.BindScalarFunction(
-		                 "*",
-		                 make_uniq<BoundConstantExpression>(Value::DOUBLE(GetDecideL0Tolerance(optimizer.context))),
-		                 z->Copy()));
+		             optimizer.BindScalarFunction("*", std::move(tolerance), z->Copy()));
 		    auto count = BindSumOver(optimizer, std::move(z), aggregate.filter.get());
 		    count->alias = aggregate.GetAlias();
 		    RemoveDecideTag(count->alias, string(NORM_MARKER_TAG_PREFIX) + payload + "__");

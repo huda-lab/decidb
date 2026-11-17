@@ -180,7 +180,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
             "ship(INT)",
             "when S.priority: norm(ship, 0) <= 2",
             "norm(ship,0)becomesoneindicatorperrow",
-            "whenS.priority:M*(ship<>0)-ship>=0.0",
+            "whenS.priority:M*(ship<>0)-ship>=0",
             "1.0*",
             id="l0-bound-is-derived",
         ),
@@ -325,8 +325,9 @@ def test_explain_prints_a_frame_in_an_abs_row_as_its_selector(decidb_cli):
         DECIDE x(REAL) SUCH THAT x <= 9 AND x >= 0 MINIMIZE sum(abs(x - {frame}))"""
     text = _plan(decidb_cli, sql).replace(" ", "")
     frame = frame.replace(" ", "")
-    assert f"abs(x-{frame})-x+{frame}>=0.0" in text, text
+    assert f"abs(x-{frame})-x+{frame}>=0" in text, text
     assert f"abs(x-{frame})+x-{frame}>=0" in text, text
+    assert ">=0.0" not in text, text
 
 
 @pytest.mark.explain

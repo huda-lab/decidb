@@ -394,6 +394,13 @@ static constexpr const char *OBJECTIVE_ROW_TAG = "__objective_row__";
 //! plan prints it as `M` rather than as the 1.0 it holds until then.
 static constexpr const char *L0_AUTO_BOUND_TAG = "__l0_auto_bound__";
 
+//! Tags on the other two constants an L0 link holds, which the query did not write as a coefficient: the bound M the
+//! query wrote in `norm(e, 0, M)`, and the tolerance of the link `abs(e) >= tolerance * indicator`
+//! (`decide_l0_tolerance`). A plan prints M as the number written and the tolerance by the name it is set with, and a
+//! coefficient of 1 here is still printed.
+static constexpr const char *L0_WRITTEN_BOUND_TAG = "__l0_written_bound__";
+static constexpr const char *L0_TOLERANCE_TAG = "__l0_tolerance__";
+
 //! Tag marking a simple `x OP const` comparison whose entire meaning the optimizer
 //! folded into the decision column's box (`LogicalDecide::singleton_row_boxes`), so it
 //! must not also be emitted as a model row. Set on the BoundComparisonExpression.alias

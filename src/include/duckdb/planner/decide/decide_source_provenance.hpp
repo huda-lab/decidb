@@ -139,17 +139,21 @@ void CollectDecideExpressionStrings(const Expression &expr, const DecideSourceNa
 //! objective's snapshots go through it too.
 string RenderDecideObjective(const Expression &expr, const DecideSourceNames &names, bool written_sense = false);
 
+//! The `when c:` an objective was written with, in front of it; empty for none.
+string DecideObjectiveQualifier(const Expression &objective, const DecideSourceNames &names);
+
 //! A row an F node of the tree owns (an ABS envelope, an L0 link), as the solver receives it, with the clause it came
-//! from (INVALID_INDEX for the objective's).
+//! from (INVALID_INDEX for the objective's). `text` has no qualifier: CollectDecideClauseLayers puts the one its
+//! clause was written with in front.
 struct DecideFunctionRow {
 	idx_t source_clause_id;
 	string text;
 };
 
 //! The rows the tree's F nodes own, read from their clause roots: each root's terms and bound, as stage 05 lowered
-//! them, with the `when c per K:` qualifier of its scope in front. A plan reads them here because EXPLAIN plans without
-//! solving and the rewrites keep these rows in the tree, not in the constraint list. `decide_variables` names each
-//! decision a term reads.
+//! them, without the zero terms the rewrite added. A plan reads them here because EXPLAIN plans without solving and the
+//! rewrites keep these rows in the tree, not in the constraint list. `decide_variables` names each decision a term
+//! reads.
 vector<DecideFunctionRow> CollectDecideFunctionRows(const DecideTree &tree, const DecideSourceNames &names,
                                                     const vector<unique_ptr<Expression>> &decide_variables);
 
@@ -182,14 +186,16 @@ struct DecideClauseLayers {
 //! owns several rows, a clause the optimizer extracted into `composed_minmax_constraints`
 //! owns none in the tree, and a row carrying no id at all is returned in `unattributed`.
 //! `accounts` (LogicalDecide::rewrite_accounts) are printed under their clause before its
-//! rows, and `function_rows` (CollectDecideFunctionRows) follow the rows of the constraint list; the objective's
-//! (INVALID_INDEX) are left to RenderDecideObjectiveLayers, and so are the rows a rewrite added for the objective
-//! (OBJECTIVE_ROW_TAG), returned in `objective_rows`.
+//! rows, and `function_rows` (CollectDecideFunctionRows) follow the rows of the constraint list, each behind the
+//! qualifier its clause was written with; the objective's (INVALID_INDEX), behind `objective_qualifier`
+//! (DecideObjectiveQualifier), are left to RenderDecideObjectiveLayers, and so are the rows a rewrite added for the
+//! objective (OBJECTIVE_ROW_TAG), returned in `objective_rows`.
 vector<DecideClauseLayers> CollectDecideClauseLayers(const Expression &constraints, const DecideSourceNames &names,
                                                      const vector<ConstraintSourceInfo> &sources,
                                                      vector<string> &unattributed, vector<string> &objective_rows,
                                                      const vector<LogicalDecide::RewriteAccount> &accounts,
-                                                     const vector<DecideFunctionRow> &function_rows);
+                                                     const vector<DecideFunctionRow> &function_rows,
+                                                     const string &objective_qualifier);
 
 //! One account line: the construct a rewrite replaced and what it became, in the one
 //! vocabulary every plan uses ("`abs(e)` becomes an auxiliary variable").
@@ -250,8 +256,10 @@ InsertionOrderPreservingMap<string> RenderDecideParams(const OP &op,
 		function_rows = CollectDecideFunctionRows(*tree, names, op.decide_variables);
 	}
 	// The parser requires a SUCH THAT clause, so a plan always has constraints (transform_select_node.cpp).
+	const string objective_qualifier =
+	    op.decide_objective ? DecideObjectiveQualifier(*op.decide_objective, names) : string();
 	auto layers = CollectDecideClauseLayers(*op.decide_constraints, names, op.constraint_sources, unattributed,
-	                                        objective_rows, accounts, function_rows);
+	                                        objective_rows, accounts, function_rows, objective_qualifier);
 	string constraints_text = RenderDecideClauseLayers(layers, unattributed);
 	if (op.decide_objective) {
 		const bool maximize = op.written_sense == DecideSense::MAXIMIZE;
