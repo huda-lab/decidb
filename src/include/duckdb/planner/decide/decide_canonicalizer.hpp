@@ -259,6 +259,11 @@ public:
 	//! The objective's signature, `out.objective` -- it is produced once (D72), so execution refuses a field with a
 	//! second value -- and its qualified reducers', after CanonicalizeObjective.
 	void BuildObjectiveSignatures(Expression &objective, DecideSignatures &out) const;
+
+	//! The signature fields `expr` reads (D70, D82, D83), appended to `fields` unless there or held by `key` already: a
+	//! decision by instance, a reducer's `by` key, a frame by its keys, and data by each column it reads.
+	void CollectSignatureFields(const Expression &expr, idx_t key, vector<DecideSignatureField> &fields) const;
+
 	//! Where every frame selector of the canonical SUCH THAT tree stands (language/guide.md §5.6): the rows its
 	//! timelines read, which are its scoped expression's path rows (§5.5); the key they are grouped by, the path's
 	//! `by` keys then `within`; the comparison it is written in; and whether it is inside a reducer
@@ -514,9 +519,6 @@ private:
 	//! term, or alone under a factor whose sign is not known before the query runs.
 	bool TakesComposedMinMax(const vector<Atom> &atoms) const;
 
-	//! The signature fields `expr` reads (D70, D82, D83), appended to `fields` unless there or held by `key` already: a
-	//! decision by instance, a reducer's `by` key, a frame by its keys, and data by each column it reads.
-	void CollectSignatureFields(const Expression &expr, idx_t key, vector<DecideSignatureField> &fields) const;
 	//! Whether the key `key` holds `field` by construction: one class shows one value of it.
 	bool KeyHoldsField(idx_t key, const DecideSignatureField &field) const;
 	//! Gives every relation-qualified reducer over decisions in `expr` whose body has a field its signature and a

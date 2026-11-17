@@ -196,6 +196,29 @@ def test_a_null_key_row_takes_no_constant_bound_under_per_minimized(request, sco
     assert result[1]["x"] == 10
 
 
+# `per K: x IN (...)` generates rows (indicators, or an equality for one value) that stand beside the clause. They keep
+# its `per`: dropped, the NULL-key row was held to the domain. A whole-numbered `x` is in {1, 2} exactly when
+# 1 <= x <= 2, and in {2} exactly when x = 2, which is how the oracle states them.
+_IN_CASES = [
+    pytest.param(
+        "x IN (1, 2)",
+        [Scoped((_X,), ">=", (const(1),), per=("g",)), Scoped((_X,), "<=", (const(2),), per=("g",))],
+        id="indicators",
+    ),
+    pytest.param("x IN (2)", [Scoped((_X,), "=", (const(2),), per=("g",))], id="one-value"),
+]
+
+
+@_BOUND_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize("domain, clauses", _IN_CASES)
+def test_a_null_key_row_is_outside_the_domain_of_a_per_in(request, scope_solver, cli_fixture, domain, clauses):
+    """The row with a NULL `g` is in no class, so only `x <= 10` bounds it."""
+    cli = request.getfixturevalue(cli_fixture)
+    result = _judge_bound(cli, scope_solver, f"per t.g: {domain}", clauses, "MAXIMIZE", 1)
+    assert [row["x"] for row in result] == [2, 10, 2]
+
+
 @_BOUND_SOLVERS
 @pytest.mark.correctness
 def test_a_relation_null_key_keeps_its_constant_bound_in_the_box(request, scope_solver, cli_fixture):

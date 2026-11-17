@@ -18,6 +18,7 @@
 
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
+#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
@@ -66,6 +67,14 @@ unique_ptr<Expression> MakeTrueExpression(const string &source_alias);
 //! `row`, which a rewrite adds for a clause, wrapped in a copy of the clause's `when` condition when it has one, so
 //! it reads only the rows the clause keeps.
 unique_ptr<Expression> ScopeHelperRow(unique_ptr<Expression> row, const Expression *when);
+
+//! `row`, which a rewrite adds for a clause, in the clause's scope: its `when` (ScopeHelperRow) and its own `per K:`
+//! outermost as the binder nests it, so the row stands for the same classes (D28): a row whose key is NULL is in none.
+//! A written clause's variant signature splits its classes by the fields the clause reads (D70), which are not the
+//! fields of a row the rewrite made of it: the row gets the signature of what it reads itself, built as the binder
+//! builds one (none when it reads no field, so one instance per class). `source_alias` names the clause.
+unique_ptr<Expression> ScopeRowPerClause(ClientContext &context, LogicalDecide &decide, unique_ptr<Expression> row,
+                                         const DecideEnclosingScope &scope, const string &source_alias);
 
 //! `row` once per instance of `scope`: under `per K:` for a scope keyed by K, under `per ():` for a query-wide one,
 //! and as it is for one per row or for a range frame's helper, whose windows no key's classes name. A row that reads

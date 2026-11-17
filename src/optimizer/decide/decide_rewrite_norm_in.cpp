@@ -152,12 +152,14 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 	idx_t in_counter = 0;
 	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.variable_scopes,
 	                                  decide.keyed_scopes, decide.keys, decide.is_boolean_var);
-	// Every row an IN generates keeps its clause's `when`, and is one row per instance of the indicators' scope: an
-	// indicator is a column defined by the decision and its domain, so it is one per instance of their join.
+	// Every row an IN generates keeps its clause's `when` and `per`, and is one row per instance of the indicators'
+	// scope: an indicator is a column defined by the decision and its domain, so it is one per instance of their join.
 	DecideVarScopeInfo scope_of_in;
-	auto emit = [&](unique_ptr<Expression> constraint, const Expression *when, const string &source_alias) {
+	auto emit = [&](unique_ptr<Expression> constraint, const DecideEnclosingScope &scope, const string &source_alias) {
 		MarkFormulationConstraint(*constraint, source_alias);
-		generated.push_back(ScopeRowPerInstance(decide, ScopeHelperRow(std::move(constraint), when), scope_of_in));
+		generated.push_back(ScopeRowPerInstance(
+		    decide, ScopeRowPerClause(optimizer.context, decide, std::move(constraint), scope, source_alias),
+		    scope_of_in));
 	};
 	std::function<void(unique_ptr<Expression> &, DecideEnclosingScope, const string &)> rewrite =
 	    [&](unique_ptr<Expression> &expr, DecideEnclosingScope scope, const string &source_alias) {
@@ -175,7 +177,6 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 				    expr = MakeTrueExpression(conj.children[0]->GetAlias());
 			    return;
 		    }
-		    auto when = scope.Condition();
 		    if (expr->GetExpressionClass() != ExpressionClass::BOUND_OPERATOR)
 			    return;
 		    auto &in = expr->Cast<BoundOperatorExpression>();
@@ -196,7 +197,7 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 				    emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 				                                              in.children[0]->Copy(),
 				                                              make_uniq<BoundConstantExpression>(Value::INTEGER(0))),
-				         when, clause_alias);
+				         scope, clause_alias);
 				    expr = MakeTrueExpression(clause_alias);
 				    return;
 			    }
@@ -204,7 +205,7 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 		    if (k == 1) {
 			    emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, in.children[0]->Copy(),
 			                                              in.children[1]->Copy()),
-			         when, clause_alias);
+			         scope, clause_alias);
 			    expr = MakeTrueExpression(clause_alias);
 			    return;
 		    }
@@ -225,7 +226,7 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 			    cardinality = optimizer.BindScalarFunction("+", std::move(cardinality), indicators[i]->Copy());
 		    emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, std::move(cardinality),
 		                                              make_uniq<BoundConstantExpression>(Value::INTEGER(1))),
-		         when, clause_alias);
+		         scope, clause_alias);
 		    auto linking = in.children[0]->Copy();
 		    bool all_constant = true;
 		    double min_value = 0.0;
@@ -243,12 +244,12 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 		    }
 		    emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, std::move(linking),
 		                                              make_uniq<BoundConstantExpression>(Value::INTEGER(0))),
-		         when, clause_alias);
+		         scope, clause_alias);
 		    if (all_constant && min_value < 0.0) {
 			    emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 			                                              in.children[0]->Copy(),
 			                                              make_uniq<BoundConstantExpression>(Value::DOUBLE(min_value))),
-			         when, clause_alias);
+			         scope, clause_alias);
 		    }
 		    expr = MakeTrueExpression(clause_alias);
 	    };

@@ -510,6 +510,42 @@ unique_ptr<Expression> decide_rewrite::ScopeHelperRow(unique_ptr<Expression> row
 	return std::move(wrapper);
 }
 
+unique_ptr<Expression> decide_rewrite::ScopeRowPerClause(ClientContext &context, LogicalDecide &decide,
+                                                         unique_ptr<Expression> row, const DecideEnclosingScope &scope,
+                                                         const string &source_alias) {
+	if (!scope.per_wrapper) {
+		return ScopeHelperRow(std::move(row), scope.Condition());
+	}
+	DecideCanonicalizer canonicalizer(context, decide.decide_index, decide.variable_scopes, decide.keyed_scopes,
+	                                  decide.keys, decide.is_boolean_var);
+	canonicalizer.frames = &decide.frames;
+	vector<DecideSignatureField> fields;
+	canonicalizer.CollectSignatureFields(*row, scope.PerKey(), fields);
+	row = ScopeHelperRow(std::move(row), scope.Condition());
+	// The wrapper holds its clause only, its key is in the tag (DecideConstraintsBinder).
+	auto wrapper = make_uniq<BoundConjunctionExpression>(scope.per_wrapper->type);
+	auto alias = scope.per_wrapper->GetAlias();
+	idx_t written;
+	string text = "per " + DecideKeyText(decide.keys, scope.PerKey());
+	if (TryParseSignatureTag(alias, written)) {
+		text = decide.signatures[written].text;
+		RemoveDecideTag(alias, MakeSignatureTag(written));
+	}
+	if (!fields.empty()) {
+		DecideSignature signature;
+		signature.rows = scope.Condition() ? scope.Condition()->Copy() : nullptr;
+		signature.key = scope.PerKey();
+		signature.fields = std::move(fields);
+		signature.text = std::move(text);
+		TryParseSourceClauseTag(source_alias, signature.source_clause_id);
+		decide.signatures.push_back(std::move(signature));
+		AddDecideTag(alias, MakeSignatureTag(decide.signatures.size() - 1));
+	}
+	wrapper->alias = std::move(alias);
+	wrapper->children.push_back(std::move(row));
+	return std::move(wrapper);
+}
+
 unique_ptr<Expression> decide_rewrite::ScopeRowPerInstance(const LogicalDecide &decide, unique_ptr<Expression> row,
                                                            const DecideVarScopeInfo &scope) {
 	if (!scope.IsGlobal() && !scope.IsKeyed()) {

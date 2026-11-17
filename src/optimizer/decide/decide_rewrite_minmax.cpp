@@ -632,17 +632,9 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		    make_uniq<BoundComparisonExpression>(easy_cmp_type, comp.left->Copy(), comp.right->Copy());
 		easy->alias = comp.alias;
 		AddDecideTag(easy->alias, MINMAX_EASY_REWRITE_TAG);
-		easy = ScopeHelperRow(std::move(easy), scope.Condition());
-		if (scope.per_wrapper) {
-			auto per_class = scope.per_wrapper;
-			// The clause's own `per K:`, outermost as the binder nests it: the easy half
-			// stands for the same classes (D28) and prints in front as written. The wrapper holds its clause only,
-			// its key is in the tag (DecideConstraintsBinder).
-			auto per_wrapper = make_uniq<BoundConjunctionExpression>(per_class->type);
-			per_wrapper->alias = per_class->alias;
-			per_wrapper->children.push_back(std::move(easy));
-			easy = std::move(per_wrapper);
-		}
+		// The clause's own `per K:` stands outermost: the easy half stands for the same classes (D28) and prints in
+		// front as written.
+		easy = ScopeRowPerClause(optimizer.context, decide, std::move(easy), scope, comp.alias);
 		new_constraints.push_back(std::move(easy));
 		auto hard_cmp_type =
 		    is_max ? ExpressionType::COMPARE_GREATERTHANOREQUALTO : ExpressionType::COMPARE_LESSTHANOREQUALTO;
