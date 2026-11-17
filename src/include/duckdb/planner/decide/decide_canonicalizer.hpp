@@ -198,7 +198,9 @@ unique_ptr<Expression> DecideNormDefinition(ClientContext &context, unique_ptr<E
 
 class DecideCanonicalizer {
 public:
-	//! Whether `expr` holds a reducer anywhere, itself included.
+	//! Whether `expr` holds a reducer anywhere, itself included. A frame's marker is none: `at(F: e)` is a point
+	//! selection evaluated once per tuple (D80). A definition's body is none: the F node owns it, and its readers see
+	//! the helper decision it defines.
 	static bool ContainsReducer(const Expression &expr);
 
 	//! Provenance-only form: no table-index evidence is available, so arbitrary column

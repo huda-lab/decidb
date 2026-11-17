@@ -252,28 +252,6 @@ private:
 		return group;
 	}
 
-	//! Whether `expr` holds a reducer -- a frame's marker is none.
-	static bool BoundExpressionContainsAggregate(const Expression &expr) {
-		idx_t frame;
-		if (TryGetDecideFrame(expr, frame)) {
-			return false;
-		}
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			return true;
-		}
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-			auto &cast = expr.Cast<BoundCastExpression>();
-			return BoundExpressionContainsAggregate(*cast.child);
-		}
-		bool found = false;
-		EnumerateChildrenConst(expr, [&](unique_ptr<Expression> &child) {
-			if (!found && BoundExpressionContainsAggregate(*child)) {
-				found = true;
-			}
-		});
-		return found;
-	}
-
 	//===------------------------------------------------------------------===//
 	// Frame selectors (language/guide.md §5.6)
 	//===------------------------------------------------------------------===//
@@ -1104,7 +1082,7 @@ private:
 				// A reducer left in a term that is not itself one (`sum(x) * max(x)`) was multiplied by another
 				// decision-bearing factor, which no rewrite held in a helper decision: the term is a product of
 				// decisions outside a reducer, and its reducers cannot be read as terms.
-				const bool holds_reducer = BoundExpressionContainsAggregate(expr);
+				const bool holds_reducer = DecideCanonicalizer::ContainsReducer(expr);
 				idx_t group_before = obj.product_groups.size();
 				if (!holds_reducer) {
 					ExtractObjectiveBodyTerms(expr, obj, atom.sign, nullptr);
@@ -1171,7 +1149,8 @@ private:
 			Stamp(agg, objective->terms, objective->product_groups, 0, 0);
 
 			objective->when_condition = std::move(when_cond);
-		} else if (BoundExpressionContainsAggregate(*expr) || FindDecideVariable(*expr) != DConstants::INVALID_INDEX) {
+		} else if (DecideCanonicalizer::ContainsReducer(*expr) ||
+		           FindDecideVariable(*expr) != DConstants::INVALID_INDEX) {
 			// The second arm covers an objective with no aggregate at all: decisions
 			// outside every reducer (e.g. `minimize max_shortfall`), read once.
 			lowered_objective = make_uniq<DecideObjective>();

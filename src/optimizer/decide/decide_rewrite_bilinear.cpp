@@ -88,23 +88,6 @@ static void CollectDecideVarIndices(const Expression &expr, idx_t decide_index, 
 	    expr, [&](const Expression &child) { CollectDecideVarIndices(child, decide_index, out); });
 }
 
-//! Whether a reducer stands anywhere in `expr`, a frame's marker included. A side that holds one is not an affine
-//! expression in the decisions (`sum(x) - 3`, `max(x) + 1`): it is the value rewrite's, which holds each reducer in a
-//! helper decision and hands the product back here.
-static bool ContainsReducer(const Expression &expr) {
-	idx_t definition_aux;
-	if (TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
-		return false; // the F node owns this body; ReadAffine reads it as its helper decision
-	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-		return true;
-	}
-	bool found = false;
-	ExpressionIterator::EnumerateChildren(expr,
-	                                      [&](const Expression &child) { found = found || ContainsReducer(child); });
-	return found;
-}
-
 // A factor of a product is read as an affine expression in the decisions: `sum of coefficient * decision + constant`,
 // each coefficient and the constant decision-free (data, possibly a column that varies by row). `b * (x - 1)` is read
 // as `b * x - b`, `(2 * b) * x` as `2 * (b * x)`. Reading the factors this way is what lets one product rewrite stand
@@ -342,7 +325,8 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 		}
 		// A reducer in a factor (`b * SUM(x)`, `POWER(SUM(x) - 3, 2)`) is not a product of two variables: it is the
 		// value rewrite's, which holds the reducer in a helper decision and hands the product back here.
-		if (sides.size() == 2 && !ContainsReducer(*sides[0]) && !ContainsReducer(*sides[1])) {
+		if (sides.size() == 2 && !DecideCanonicalizer::ContainsReducer(*sides[0]) &&
+		    !DecideCanonicalizer::ContainsReducer(*sides[1])) {
 			// Each side is an affine expression in the decisions, and the product distributes over its terms.
 			Affine left, right;
 			auto is_bool = [&](idx_t var) {
