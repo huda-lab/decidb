@@ -1,126 +1,127 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="en" data-type="software" data-radius="sharp" data-ground="sage" data-buttons="pill" data-motion>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Examples · DeciDB</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Examples: DeciDB queries for 20 decision problems</title>
 <meta name="description" content="Worked DeciDB examples: knapsack, assignment, facility location, fair allocation, matching and more, in DECIDE SQL.">
-<meta name="keywords" content="DeciDB, DuckDB, SQL, constrained optimization, linear programming, mixed-integer programming, quadratic programming, DECIDE, solver, HUDA Lab">
-<link rel="icon" type="image/svg+xml" href="assets/images/mark.svg">
-<script>(function(){try{var t=localStorage.getItem('decidb-theme');if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}})();</script>
+<meta property="og:type" content="website">
+<meta property="og:title" content="Examples: DeciDB queries for 20 decision problems">
+<meta property="og:description" content="Worked DeciDB examples: knapsack, assignment, facility location, fair allocation, matching and more, in DECIDE SQL.">
+<meta property="og:image" content="assets/images/share.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="assets/images/mark.svg" type="image/svg+xml">
+<meta name="theme-color" content="#ffffff">
+<!-- <link rel="canonical" href="https://huda-lab.github.io/decidb/"> once the published address is confirmed -->
+<meta name="site-kind" content="software">
+<meta name="page-type" content="software">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&amp;family=Geist+Mono:wght@400..500&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/system.css">
+<link rel="stylesheet" href="assets/ui/cards.css">
+<link rel="stylesheet" href="assets/motion/motion.css">
+<link rel="stylesheet" href="assets/backgrounds/backgrounds.css">
+<link rel="stylesheet" href="assets/layout/layout.css">
+<link rel="stylesheet" href="assets/icons/icon.css">
+<style>
+:root {
+  --p-bg: #ffffff; --p-surface: #f4f4f4; --p-ink: #111111; --p-muted: #6b6b6b;
+  --p-accent: #1a4be0; --p-accent-ink: #ffffff; --p-action: #1a4be0; --p-action-ink: #ffffff;
+  --p-inv-bg: #111111; --p-inv-surface: #1e1e1e; --p-inv-ink: #ffffff; --p-inv-muted: #9a9a9a;
+  --p-inv-accent: #ffffff; --p-inv-accent-ink: #111111; --p-inv-action: #ffffff; --p-inv-action-ink: #111111;
+  --font-display: "Geist", system-ui, sans-serif;
+  --font-text: "Geist", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --display-weight: 500;
+  --display-tracking: -0.035em;
+  --display-tracking-xl: -0.045em;
+}
+</style>
 <link rel="stylesheet" href="assets/css/site.css">
-<script>window.Prism = window.Prism || {}; window.Prism.manual = true;</script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" defer></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js" defer></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js" defer></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js" defer></script>
-<script src="assets/js/site.js" defer></script>
 </head>
-<body>
-<a class="skip-link" href="#main">Skip to content</a>
-<header class="site-header">
-  <div class="container">
-    <a class="brand" href="index.html" aria-label="DeciDB home">
-      <img class="logo-light" src="assets/images/logo.svg" alt="DeciDB" width="100" height="30">
-      <img class="logo-dark" src="assets/images/logo-dark.svg" alt="DeciDB" width="100" height="30">
-      <span class="by">HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</span>
-    </a>
-    <nav class="nav" aria-label="Main"><a href="documentation.html">Docs</a><a href="problems.html">Problems</a><a href="examples.html" aria-current="page">Examples</a><a href="getting-started.html">Get started</a><a href="about.html">About</a></nav>
-    <div class="header-actions">
-      <a class="btn btn-ghost btn-sm" href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.56-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.78 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg> GitHub</a>
-      <button class="icon-btn theme-toggle" type="button" aria-label="Switch light or dark theme"><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg></button>
-      <button class="icon-btn menu-btn" type="button" aria-label="Open menu" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+<body class="doc-body">
+<header class="nav">
+  <div class="wrap nav__bar">
+    <a class="skip-link" href="#top">Skip to content</a>
+    <a class="nav__logo" href="index.html"><picture><source media="(max-width: 379px)" srcset="assets/images/mark.svg"><img src="assets/images/logo.svg" alt="DeciDB" width="140" height="42"></picture></a>
+    <nav class="nav__links" aria-label="Main">
+      <div class="nav__item"><a class="nav__link" href="documentation.html">Guide</a></div><div class="nav__item"><a class="nav__link" href="problems.html">Problems</a></div><div class="nav__item"><a class="nav__link" href="examples.html" aria-current="page">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Without a solver</p><a href="examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="problems.html#direct-solve"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Direct solve</span><span class="t-small muted">Nine classes, no solver called</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="about.html">About</a></div>
+    </nav>
+    <div class="nav__actions">
+      <a class="nav__link" href="https://github.com/huda-lab/decidb">GitHub</a>
+      <a class="btn btn--primary" href="getting-started.html#install">Install DeciDB</a>
     </div>
+    <button class="nav__toggle" type="button" aria-expanded="false" aria-label="Menu">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M2 5h14M2 13h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </button>
   </div>
-  <nav class="mobile-nav" aria-label="Mobile"><a href="documentation.html">Docs</a><a href="problems.html">Problems</a><a href="examples.html">Examples</a><a href="getting-started.html">Get started</a><a href="about.html">About</a><a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer">GitHub</a></nav>
 </header>
-<main id="main">
-<section class="page-head"><div class="container"><h1>Examples</h1><p>20 complete problems, each with its data, its query and the answer DeciDB returns. Every query on these pages is run on DeciDB when the site is built.</p></div></section><div class="container" style="padding-top:40px;padding-bottom:80px"><div class="filter-bar" role="group" aria-label="Filter examples"><button class="tab" type="button" data-filter="all" aria-selected="true">All</button><button class="tab" type="button" data-filter="basics" aria-selected="false">Basics</button><button class="tab" type="button" data-filter="scopes" aria-selected="false">per / when / by</button><button class="tab" type="button" data-filter="keyed" aria-selected="false">Keyed decisions</button><button class="tab" type="button" data-filter="minmax" aria-selected="false">Min-max &amp; fairness</button><button class="tab" type="button" data-filter="nonlinear" aria-selected="false">Quadratic &amp; norms</button><button class="tab" type="button" data-filter="direct" aria-selected="false">Direct solve</button><button class="tab" type="button" data-filter="diagnose" aria-selected="false">DIAGNOSE</button></div><section class="ex-group"><h2>First problems</h2><p>One decision per row, a budget or a target, and an objective. Start here.</p><div class="grid grid-2"><a class="card ex-card" href="examples/knapsack.html" data-tags="basics"><h3>Pack the most valuable bag</h3><p>Choose which items to carry so their total weight stays under a limit and their total value is as high as possible.</p><div class="card-code">DECIDE x(BOOL)
-SUCH THAT SUM(x * weight) &lt;= 50
-MAXIMIZE SUM(x * value)</div><div class="meta"><span class="badge blue">ILP</span><span class="badge">BOOL</span></div></a><a class="card ex-card" href="examples/production.html" data-tags="basics"><h3>Meet demand at the lowest cost</h3><p>Decide how many units each plant makes, within its capacity, so that total output meets demand at the lowest cost.</p><div class="card-code">DECIDE units(INT)
-SUCH THAT units &lt;= capacity
-      AND SUM(units) &gt;= 500
-MINIMIZE SUM(units * unit_cost)</div><div class="meta"><span class="badge blue">ILP</span><span class="badge">INT</span></div></a><a class="card ex-card" href="examples/diet.html" data-tags="basics"><h3>A cheap diet that meets nutrition targets</h3><p>Pick servings of each food so protein, calories and fat land within their targets at the lowest cost.</p><div class="card-code">DECIDE servings(INT)
-SUCH THAT SUM(servings * protein) &gt;= 90
-  AND SUM(servings * calories) BETWEEN 1800 AND 2200</div><div class="meta"><span class="badge blue">ILP</span><span class="badge">INT</span><span class="badge">BETWEEN</span></div></a><a class="card ex-card" href="examples/category-rules.html" data-tags="basics scopes"><h3>Category rules and a budget from a table</h3><p>Rules that apply to one category at a time, and limits read from a settings table instead of written into the query.</p><div class="card-code">SUCH THAT SUM(pick * cost) &lt;= (SELECT budget FROM Settings)
-  AND when category = &#x27;A&#x27;: SUM(pick) &gt;= 2
-  AND when category = &#x27;B&#x27;: SUM(pick) &lt;= 1</div><div class="meta"><span class="badge blue">ILP</span><span class="badge">when</span><span class="badge">subquery</span></div></a></div></section><section class="ex-group"><h2>Groups and keys</h2><p><code>per</code>, <code>when</code> and <code>by</code> write one constraint per group; a keyed declaration shares one decision across the rows of a key.</p><div class="grid grid-2"><a class="card ex-card" href="examples/shift-coverage.html" data-tags="scopes"><h3>Cover every shift</h3><p>Exactly one nurse per shift, at most one shift per nurse. There is nothing to optimize, only rules to satisfy.</p><div class="card-code">SUCH THAT per shift: SUM(on_duty) by (shift) = 1
-      AND per nurse: SUM(on_duty) by (nurse) &lt;= 1</div><div class="meta"><span class="badge blue">Feasibility</span><span class="badge">per</span><span class="badge">by</span><span class="badge">no objective</span></div></a><a class="card ex-card" href="examples/assignment.html" data-tags="scopes"><h3>Assign people to tasks</h3><p>Every task gets exactly one person, nobody gets two tasks, and the total fit score is as high as possible.</p><div class="card-code">SUCH THAT per worker: SUM(assign) by (worker) &lt;= 1
-      AND per task: SUM(assign) by (task) = 1
-MAXIMIZE SUM(assign * score)</div><div class="meta"><span class="badge blue">ILP</span><span class="badge">per</span><span class="badge">by</span><span class="badge">subquery</span></div></a><a class="card ex-card" href="examples/diversification.html" data-tags="scopes"><h3>A diversified portfolio</h3><p>Pick five stocks with the highest expected return, within a risk budget and at most two per sector.</p><div class="card-code">SUCH THAT SUM(pick) = 5
-      AND SUM(pick * risk) &lt;= 30
-      AND per sector: SUM(pick) by (sector) &lt;= 2</div><div class="meta"><span class="badge blue">ILP</span><span class="badge">per</span><span class="badge">by</span></div></a><a class="card ex-card" href="examples/keyed-decisions.html" data-tags="keyed scopes"><h3>One decision per nurse, not per shift</h3><p>After a join each nurse appears once per shift, but the decision is about the nurse. A keyed declaration makes one decision per nurse.</p><div class="card-code">DECIDE per n: keep(BOOL)
-SUCH THAT SUM(keep * s.hours) &lt;= 60
-MAXIMIZE SUM(per n: keep * n.skill_score)</div><div class="meta"><span class="badge blue">ILP</span><span class="badge">per K: x(TYPE)</span><span class="badge">SUM(per K: …)</span></div></a><a class="card ex-card" href="examples/facility-location.html" data-tags="keyed scopes"><h3>Which depots to open</h3><p>Open depots and route shipments so every customer's demand is met, paying a fixed cost for each open depot plus a cost per unit shipped.</p><div class="card-code">DECIDE per D: open(BOOL), ship(INT)
-SUCH THAT per C: SUM(ship) by (C) &gt;= C.demand
-  AND per D: SUM(ship) by (D) &lt;= D.capacity * open
-MINIMIZE SUM(R.unit_cost * ship) + SUM(D: D.opening_cost * open)</div><div class="meta"><span class="badge blue">MILP</span><span class="badge">per D: open(BOOL)</span><span class="badge">colon form</span></div></a></div></section><section class="ex-group"><h2>Beyond a sum</h2><p>Make the worst case as good as possible, change as little as possible, or stay close to a target.</p><div class="grid grid-2"><a class="card ex-card" href="examples/min-max-shortfall.html" data-tags="minmax keyed"><h3>Share a shortage fairly across regions</h3><p>Supply is short. Ship so that no region falls short of its demand by more than necessary. This is the DeciDB paper's Example 1.</p><div class="card-code">DECIDE ship(INT), per (): max_shortfall(INT)
-SUCH THAT per g: g.demand - SUM(ship) by (g) &lt;= max_shortfall
-MINIMIZE max_shortfall</div><div class="meta"><span class="badge blue">ILP</span><span class="badge">per (): x(TYPE)</span><span class="badge">min-max</span></div></a><a class="card ex-card" href="examples/makespan.html" data-tags="minmax scopes"><h3>Balance work across machines</h3><p>Assign each job to one of two machines so the busier machine finishes as early as possible.</p><div class="card-code">SUCH THAT per J: SUM(run) by (J) = 1
-MINIMIZE max(per M.machine:
-    sum(run * J.hours) by (M.machine))</div><div class="meta"><span class="badge blue">ILP</span><span class="badge">max(per k: sum(…) by (k))</span></div></a><a class="card ex-card" href="examples/price-changes.html" data-tags="nonlinear"><h3>Raise revenue with as few price changes as possible</h3><p>Reach a revenue target by changing prices, keeping the largest change small and touching at most two items.</p><div class="card-code">SUCH THAT SUM(new_price * weekly_qty) &gt;= 16500
-  AND norm(new_price - price, 0) &lt;= 2
-MINIMIZE norm(new_price - price, &#x27;inf&#x27;)</div><div class="meta"><span class="badge blue">MILP</span><span class="badge">norm(e, &#x27;inf&#x27;)</span><span class="badge">norm(e, 0)</span></div></a><a class="card ex-card" href="examples/rebalancing.html" data-tags="nonlinear"><h3>Rebalance toward target weights</h3><p>The targets add up to more than 100% and one asset has a cap. Find the allowed weights closest to the targets.</p><div class="card-code">DECIDE w(REAL)
-SUCH THAT w &lt;= max_weight AND SUM(w) = 1
-MINIMIZE SUM(POWER(w - target, 2))</div><div class="meta"><span class="badge blue">QP</span><span class="badge">POWER(e, 2)</span><span class="badge">convex QP</span></div></a></div></section><section class="ex-group"><h2>Answered without a solver</h2><p>These problems have an exact answer that DuckDB computes with sorting, ranking and aggregation. DeciDB recognizes them and skips the solver, with no change to the query.</p><div class="grid grid-2"><a class="card ex-card" href="examples/shortlist.html" data-tags="direct scopes"><h3>A shortlist: the best two per genre</h3><p>Pick at most two films per genre with the highest total rating. DeciDB ranks rows instead of calling a solver.</p><div class="card-code">DECIDE pick(BOOL)
-SUCH THAT per genre: SUM(pick) by (genre) &lt;= 2
-MAXIMIZE SUM(rating * pick)</div><div class="meta"><span class="badge green">Direct solve</span><span class="badge blue">ILP</span><span class="badge">S1</span></div></a><a class="card ex-card" href="examples/nested-quotas.html" data-tags="direct scopes"><h3>Hire under nested quotas</h3><p>At most one hire per team, two per division and four overall, maximizing total score.</p><div class="card-code">SUCH THAT SUM(hire) by (division, team) &lt;= 1
-      AND SUM(hire) by (division) &lt;= 2
-      AND SUM(hire) &lt;= 4</div><div class="meta"><span class="badge green">Direct solve</span><span class="badge blue">ILP</span><span class="badge">S2</span><span class="badge">by (a, b)</span></div></a><a class="card ex-card" href="examples/sprint-planning.html" data-tags="direct"><h3>Fit as many tickets as possible into a sprint</h3><p>With 20 story points of capacity, take the largest number of tickets.</p><div class="card-code">DECIDE take(BOOL)
-SUCH THAT SUM(points * take) &lt;= 20
-MAXIMIZE SUM(take)</div><div class="meta"><span class="badge green">Direct solve</span><span class="badge blue">ILP</span><span class="badge">S3</span></div></a><a class="card ex-card" href="examples/fair-allocation.html" data-tags="direct minmax"><h3>Allocate a budget fairly</h3><p>Split 100 units among programs so that the worst-served program gets as large a share of its need as possible.</p><div class="card-code">DECIDE alloc(REAL)
-SUCH THAT alloc &lt;= max_alloc AND SUM(alloc) &lt;= 100
-MAXIMIZE MIN(alloc / need)</div><div class="meta"><span class="badge green">Direct solve</span><span class="badge blue">LP</span><span class="badge">R4</span><span class="badge">MAXIMIZE MIN(…)</span></div></a><a class="card ex-card" href="examples/matching.html" data-tags="direct scopes"><h3>Match drivers to pickups</h3><p>Pair four drivers with four pickups along a road so the total distance driven is as small as possible.</p><div class="card-code">SUCH THAT per d: SUM(x) by (d) = 1
-      AND per p: SUM(x) by (p) = 1
-MINIMIZE SUM(ABS(d.km - p.km) * x)</div><div class="meta"><span class="badge green">Direct solve</span><span class="badge blue">ILP</span><span class="badge">O1</span><span class="badge">CROSS JOIN</span></div></a><a class="card ex-card" href="examples/depot-placement.html" data-tags="direct keyed"><h3>Place one depot per highway</h3><p>Choose a mile marker for one depot on each highway that minimizes the total distance to that highway's stores.</p><div class="card-code">DECIDE per highway: depot(REAL)
-SUCH THAT depot &lt;= 100
-MINIMIZE SUM(ABS(depot - mile))</div><div class="meta"><span class="badge green">Direct solve</span><span class="badge blue">LP</span><span class="badge">A2</span><span class="badge">per K: x(REAL)</span></div></a></div></section><section class="ex-group"><h2>When there is no answer</h2><p>A query whose constraints cannot all hold tells you which clause to change.</p><div class="grid grid-2"><a class="card ex-card" href="examples/diagnose.html" data-tags="diagnose"><h3>Find out why there is no answer</h3><p>Four items in a 40 kg bag is impossible. DIAGNOSE names the clause to change and by how much.</p><div class="card-code">DIAGNOSE SELECT item, x FROM Items
-DECIDE x(BOOL)
-SUCH THAT SUM(x * weight) &lt;= 40
-      AND SUM(x) &gt;= 4</div><div class="meta"><span class="badge blue">ILP</span><span class="badge">DIAGNOSE</span></div></a></div></section></div>
+<main id="top">
+<div class="page-head"><div class="container"><nav class="crumbs" aria-label="Breadcrumb"><a href="index.html">Home</a><span aria-hidden="true">/</span>Examples</nav><h1>Examples</h1><p>20 complete problems, each with its data, its query and the table DeciDB returns for it.</p></div></div><div class="container ex-index"><div class="filters" role="group" aria-label="Show examples that use" hidden><button class="filter" type="button" data-filter="all" aria-pressed="true">All</button><button class="filter" type="button" data-filter="basics" aria-pressed="false">Basics</button><button class="filter" type="button" data-filter="scopes" aria-pressed="false">per / when / by</button><button class="filter" type="button" data-filter="keyed" aria-pressed="false">Keyed decisions</button><button class="filter" type="button" data-filter="minmax" aria-pressed="false">Min-max &amp; fairness</button><button class="filter" type="button" data-filter="nonlinear" aria-pressed="false">Quadratic &amp; norms</button><button class="filter" type="button" data-filter="direct" aria-pressed="false">Direct solve</button><button class="filter" type="button" data-filter="diagnose" aria-pressed="false">DIAGNOSE</button></div><section class="ex-group" aria-labelledby="g-0"><h2 id="g-0">First problems</h2><p>One decision per row, a budget or a target, and an objective. Start here.</p><ul class="ex-list"><li data-tags="basics"><a class="ex-row" href="examples/knapsack.html"><span class="ex-row__title">Pack the most valuable bag</span><span class="ex-row__sum">Choose which items to carry so their total weight stays under a limit and their total value is as high as possible.</span><code class="ex-row__code"><span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">50</span>
+<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value)</code><span class="ex-row__how"><span class="tag">ILP</span></span></a></li><li data-tags="basics"><a class="ex-row" href="examples/production.html"><span class="ex-row__title">Meet demand at the lowest cost</span><span class="ex-row__sum">Decide how many units each plant makes, within its capacity, so that total output meets demand at the lowest cost.</span><code class="ex-row__code"><span class="tk-k">DECIDE</span> units(<span class="tk-k">INT</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> units &lt;= capacity
+      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(units) &gt;= <span class="tk-n">500</span>
+<span class="tk-k">MINIMIZE</span> <span class="tk-f">SUM</span>(units * unit_cost)</code><span class="ex-row__how"><span class="tag">ILP</span></span></a></li><li data-tags="basics"><a class="ex-row" href="examples/diet.html"><span class="ex-row__title">A cheap diet that meets nutrition targets</span><span class="ex-row__sum">Pick servings of each food so protein, calories and fat land within their targets at the lowest cost.</span><code class="ex-row__code"><span class="tk-k">DECIDE</span> servings(<span class="tk-k">INT</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(servings * protein) &gt;= <span class="tk-n">90</span>
+  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(servings * calories) <span class="tk-k">BETWEEN</span> <span class="tk-n">1800</span> <span class="tk-k">AND</span> <span class="tk-n">2200</span></code><span class="ex-row__how"><span class="tag">ILP</span></span></a></li><li data-tags="basics scopes"><a class="ex-row" href="examples/category-rules.html"><span class="ex-row__title">Category rules and a budget from a table</span><span class="ex-row__sum">Rules that apply to one category at a time, and limits read from a settings table instead of written into the query.</span><code class="ex-row__code"><span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(pick * cost) &lt;= (<span class="tk-k">SELECT</span> budget <span class="tk-k">FROM</span> Settings)
+  <span class="tk-k">AND</span> <span class="tk-p">when</span> category = <span class="tk-s">&#x27;A&#x27;</span>: <span class="tk-f">SUM</span>(pick) &gt;= <span class="tk-n">2</span>
+  <span class="tk-k">AND</span> <span class="tk-p">when</span> category = <span class="tk-s">&#x27;B&#x27;</span>: <span class="tk-f">SUM</span>(pick) &lt;= <span class="tk-n">1</span></code><span class="ex-row__how"><span class="tag">ILP</span></span></a></li></ul></section><section class="ex-group" aria-labelledby="g-1"><h2 id="g-1">Groups and keys</h2><p><code>per</code>, <code>when</code> and <code>by</code> write one constraint per group; a keyed declaration shares one decision across the rows of a key.</p><ul class="ex-list"><li data-tags="scopes"><a class="ex-row" href="examples/shift-coverage.html"><span class="ex-row__title">Cover every shift</span><span class="ex-row__sum">Exactly one nurse per shift, at most one shift per nurse. There is nothing to optimize, only rules to satisfy.</span><code class="ex-row__code"><span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-p">per</span> shift: <span class="tk-f">SUM</span>(on_duty) <span class="tk-p">by</span> (shift) = <span class="tk-n">1</span>
+      <span class="tk-k">AND</span> <span class="tk-p">per</span> nurse: <span class="tk-f">SUM</span>(on_duty) <span class="tk-p">by</span> (nurse) &lt;= <span class="tk-n">1</span></code><span class="ex-row__how"><span class="tag">Feasibility</span></span></a></li><li data-tags="scopes"><a class="ex-row" href="examples/assignment.html"><span class="ex-row__title">Assign people to tasks</span><span class="ex-row__sum">Every task gets exactly one person, nobody gets two tasks, and the total fit score is as high as possible.</span><code class="ex-row__code"><span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-p">per</span> worker: <span class="tk-f">SUM</span>(assign) <span class="tk-p">by</span> (worker) &lt;= <span class="tk-n">1</span>
+      <span class="tk-k">AND</span> <span class="tk-p">per</span> task: <span class="tk-f">SUM</span>(assign) <span class="tk-p">by</span> (task) = <span class="tk-n">1</span>
+<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(assign * score)</code><span class="ex-row__how"><span class="tag">ILP</span></span></a></li><li data-tags="scopes"><a class="ex-row" href="examples/diversification.html"><span class="ex-row__title">A diversified portfolio</span><span class="ex-row__sum">Pick five stocks with the highest expected return, within a risk budget and at most two per sector.</span><code class="ex-row__code"><span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(pick) = <span class="tk-n">5</span>
+      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(pick * risk) &lt;= <span class="tk-n">30</span>
+      <span class="tk-k">AND</span> <span class="tk-p">per</span> sector: <span class="tk-f">SUM</span>(pick) <span class="tk-p">by</span> (sector) &lt;= <span class="tk-n">2</span></code><span class="ex-row__how"><span class="tag">ILP</span></span></a></li><li data-tags="keyed scopes"><a class="ex-row" href="examples/keyed-decisions.html"><span class="ex-row__title">One decision per nurse, not per shift</span><span class="ex-row__sum">After a join each nurse appears once per shift, but the decision is about the nurse. A keyed declaration makes one decision per nurse.</span><code class="ex-row__code"><span class="tk-k">DECIDE</span> <span class="tk-p">per</span> n: keep(<span class="tk-k">BOOL</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(keep * s.hours) &lt;= <span class="tk-n">60</span>
+<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-p">per</span> n: keep * n.skill_score)</code><span class="ex-row__how"><span class="tag">ILP</span></span></a></li><li data-tags="keyed scopes"><a class="ex-row" href="examples/facility-location.html"><span class="ex-row__title">Which depots to open</span><span class="ex-row__sum">Open depots and route shipments so every customer's demand is met, paying a fixed cost for each open depot plus a cost per unit shipped.</span><code class="ex-row__code"><span class="tk-k">DECIDE</span> <span class="tk-p">per</span> D: open(<span class="tk-k">BOOL</span>), ship(<span class="tk-k">INT</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-p">per</span> C: <span class="tk-f">SUM</span>(ship) <span class="tk-p">by</span> (C) &gt;= C.demand
+  <span class="tk-k">AND</span> <span class="tk-p">per</span> D: <span class="tk-f">SUM</span>(ship) <span class="tk-p">by</span> (D) &lt;= D.capacity * open
+<span class="tk-k">MINIMIZE</span> <span class="tk-f">SUM</span>(R.unit_cost * ship) + <span class="tk-f">SUM</span>(D: D.opening_cost * open)</code><span class="ex-row__how"><span class="tag">MILP</span></span></a></li></ul></section><section class="ex-group" aria-labelledby="g-2"><h2 id="g-2">Beyond a sum</h2><p>Make the worst case as good as possible, change as little as possible, or stay close to a target.</p><ul class="ex-list"><li data-tags="minmax keyed"><a class="ex-row" href="examples/min-max-shortfall.html"><span class="ex-row__title">Share a shortage fairly across regions</span><span class="ex-row__sum">Supply is short. Ship so that no region falls short of its demand by more than necessary. This is the DeciDB paper's Example 1.</span><code class="ex-row__code"><span class="tk-k">DECIDE</span> ship(<span class="tk-k">INT</span>), <span class="tk-p">per</span> (): max_shortfall(<span class="tk-k">INT</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-p">per</span> g: g.demand - <span class="tk-f">SUM</span>(ship) <span class="tk-p">by</span> (g) &lt;= max_shortfall
+<span class="tk-k">MINIMIZE</span> max_shortfall</code><span class="ex-row__how"><span class="tag">ILP</span></span></a></li><li data-tags="minmax scopes"><a class="ex-row" href="examples/makespan.html"><span class="ex-row__title">Balance work across machines</span><span class="ex-row__sum">Assign each job to one of two machines so the busier machine finishes as early as possible.</span><code class="ex-row__code"><span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-p">per</span> J: <span class="tk-f">SUM</span>(run) <span class="tk-p">by</span> (J) = <span class="tk-n">1</span>
+<span class="tk-k">MINIMIZE</span> <span class="tk-f">max</span>(<span class="tk-p">per</span> M.machine:
+    <span class="tk-f">sum</span>(run * J.hours) <span class="tk-p">by</span> (M.machine))</code><span class="ex-row__how"><span class="tag">ILP</span></span></a></li><li data-tags="nonlinear"><a class="ex-row" href="examples/price-changes.html"><span class="ex-row__title">Raise revenue with as few price changes as possible</span><span class="ex-row__sum">Reach a revenue target by changing prices, keeping the largest change small and touching at most two items.</span><code class="ex-row__code"><span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(new_price * weekly_qty) &gt;= <span class="tk-n">16500</span>
+  <span class="tk-k">AND</span> <span class="tk-f">norm</span>(new_price - price, <span class="tk-n">0</span>) &lt;= <span class="tk-n">2</span>
+<span class="tk-k">MINIMIZE</span> <span class="tk-f">norm</span>(new_price - price, <span class="tk-s">&#x27;inf&#x27;</span>)</code><span class="ex-row__how"><span class="tag">MILP</span></span></a></li><li data-tags="nonlinear"><a class="ex-row" href="examples/rebalancing.html"><span class="ex-row__title">Rebalance toward target weights</span><span class="ex-row__sum">The targets add up to more than 100% and one asset has a cap. Find the allowed weights closest to the targets.</span><code class="ex-row__code"><span class="tk-k">DECIDE</span> w(<span class="tk-k">REAL</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> w &lt;= max_weight <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(w) = <span class="tk-n">1</span>
+<span class="tk-k">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(w - target, <span class="tk-n">2</span>))</code><span class="ex-row__how"><span class="tag">QP</span></span></a></li></ul></section><section class="ex-group" aria-labelledby="g-3"><h2 id="g-3">Answered without a solver</h2><p>These problems have an exact answer that DuckDB computes with sorting, ranking and aggregation. DeciDB recognizes them and skips the solver, with no change to the query.</p><ul class="ex-list"><li data-tags="direct scopes"><a class="ex-row" href="examples/shortlist.html"><span class="ex-row__title">A shortlist: the best two per genre</span><span class="ex-row__sum">Pick at most two films per genre with the highest total rating. DeciDB ranks rows instead of calling a solver.</span><code class="ex-row__code"><span class="tk-k">DECIDE</span> pick(<span class="tk-k">BOOL</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-p">per</span> genre: <span class="tk-f">SUM</span>(pick) <span class="tk-p">by</span> (genre) &lt;= <span class="tk-n">2</span>
+<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(rating * pick)</code><span class="ex-row__how"><span class="tag tag--direct">Direct solve S1</span></span></a></li><li data-tags="direct scopes"><a class="ex-row" href="examples/nested-quotas.html"><span class="ex-row__title">Hire under nested quotas</span><span class="ex-row__sum">At most one hire per team, two per division and four overall, maximizing total score.</span><code class="ex-row__code"><span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(hire) <span class="tk-p">by</span> (division, team) &lt;= <span class="tk-n">1</span>
+      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(hire) <span class="tk-p">by</span> (division) &lt;= <span class="tk-n">2</span>
+      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(hire) &lt;= <span class="tk-n">4</span></code><span class="ex-row__how"><span class="tag tag--direct">Direct solve S2</span></span></a></li><li data-tags="direct"><a class="ex-row" href="examples/sprint-planning.html"><span class="ex-row__title">Fit as many tickets as possible into a sprint</span><span class="ex-row__sum">With 20 story points of capacity, take the largest number of tickets.</span><code class="ex-row__code"><span class="tk-k">DECIDE</span> take(<span class="tk-k">BOOL</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(points * take) &lt;= <span class="tk-n">20</span>
+<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(take)</code><span class="ex-row__how"><span class="tag tag--direct">Direct solve S3</span></span></a></li><li data-tags="direct minmax"><a class="ex-row" href="examples/fair-allocation.html"><span class="ex-row__title">Allocate a budget fairly</span><span class="ex-row__sum">Split 100 units among programs so that the worst-served program gets as large a share of its need as possible.</span><code class="ex-row__code"><span class="tk-k">DECIDE</span> alloc(<span class="tk-k">REAL</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> alloc &lt;= max_alloc <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(alloc) &lt;= <span class="tk-n">100</span>
+<span class="tk-k">MAXIMIZE</span> <span class="tk-f">MIN</span>(alloc / need)</code><span class="ex-row__how"><span class="tag tag--direct">Direct solve R4</span></span></a></li><li data-tags="direct scopes"><a class="ex-row" href="examples/matching.html"><span class="ex-row__title">Match drivers to pickups</span><span class="ex-row__sum">Pair four drivers with four pickups along a road so the total distance driven is as small as possible.</span><code class="ex-row__code"><span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-p">per</span> d: <span class="tk-f">SUM</span>(x) <span class="tk-p">by</span> (d) = <span class="tk-n">1</span>
+      <span class="tk-k">AND</span> <span class="tk-p">per</span> p: <span class="tk-f">SUM</span>(x) <span class="tk-p">by</span> (p) = <span class="tk-n">1</span>
+<span class="tk-k">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">ABS</span>(d.km - p.km) * x)</code><span class="ex-row__how"><span class="tag tag--direct">Direct solve O1</span></span></a></li><li data-tags="direct keyed"><a class="ex-row" href="examples/depot-placement.html"><span class="ex-row__title">Place one depot per highway</span><span class="ex-row__sum">Choose a mile marker for one depot on each highway that minimizes the total distance to that highway's stores.</span><code class="ex-row__code"><span class="tk-k">DECIDE</span> <span class="tk-p">per</span> highway: depot(<span class="tk-k">REAL</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> depot &lt;= <span class="tk-n">100</span>
+<span class="tk-k">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">ABS</span>(depot - mile))</code><span class="ex-row__how"><span class="tag tag--direct">Direct solve A2</span></span></a></li></ul></section><section class="ex-group" aria-labelledby="g-4"><h2 id="g-4">When there is no answer</h2><p>A query whose constraints cannot all hold tells you which clause to change.</p><ul class="ex-list"><li data-tags="diagnose"><a class="ex-row" href="examples/diagnose.html"><span class="ex-row__title">Find out why there is no answer</span><span class="ex-row__sum">Four items in a 40 kg bag is impossible. DIAGNOSE names the clause to change and by how much.</span><code class="ex-row__code"><span class="tk-k">DIAGNOSE</span> <span class="tk-k">SELECT</span> item, x <span class="tk-k">FROM</span> Items
+<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">40</span>
+      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(x) &gt;= <span class="tk-n">4</span></code><span class="ex-row__how"><span class="tag">ILP</span></span></a></li></ul></section></div>
 </main>
-<footer class="site-footer">
-  <div class="container">
-    <div class="footer-grid">
-      <div class="footer-brand">
-        <img class="logo-light" src="assets/images/logo.svg" alt="DeciDB" width="94" height="28">
-        <img class="logo-dark" src="assets/images/logo-dark.svg" alt="DeciDB" width="94" height="28">
-        <p>Constrained optimization, native in SQL. Built on DuckDB by the HUDA Lab at NYU Abu Dhabi and UMass Amherst.</p>
+<footer class="footer footer--statement">
+  <div class="wrap">
+      <div class="grid">
+        <div class="span-4 stack-4">
+          <a class="nav__logo" href="index.html"><img src="assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
+          <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
+        </div>
+        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="getting-started.html">Install</a></li><li><a href="documentation.html">Language guide</a></li><li><a href="problems.html">Problems</a></li><li><a href="examples.html">Examples</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="examples/knapsack.html">Knapsack</a></li><li><a href="examples/facility-location.html">Depots</a></li><li><a href="examples/fair-allocation.html">Fair allocation</a></li><li><a href="examples/diagnose.html">DIAGNOSE</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Project</h3><ul><li><a href="about.html">About</a></li><li><a href="about.html#research">Papers</a></li><li><a href="https://github.com/huda-lab/decidb">GitHub</a></li><li><a href="https://huda-lab.github.io/">HUDA Lab</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Contact</h3><ul><li><a href="mailto:support@decidb.com">Email the team</a></li><li><a href="https://github.com/huda-lab/decidb/issues">Report an issue</a></li></ul></div>
       </div>
-      <div>
-        <h4>Learn</h4>
-        <ul>
-          <li><a href="getting-started.html">Get started</a></li>
-          <li><a href="documentation.html">Language reference</a></li>
-          <li><a href="problems.html">Problems you can express</a></li>
-          <li><a href="examples.html">Examples</a></li>
-        </ul>
+      <div class="footer__legal">
+        <span>&copy; 2026 HUDA Lab, NYU Abu Dhabi and UMass Amherst</span>
+        <span>Product names and logos are trademarks of their owners.</span>
       </div>
-      <div>
-        <h4>Project</h4>
-        <ul>
-          <li><a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer">GitHub repository</a></li>
-          <li><a href="https://github.com/huda-lab/decidb/issues" target="_blank" rel="noopener noreferrer">Issue tracker</a></li>
-          <li><a href="about.html#research">Research papers</a></li>
-          <li><a href="https://huda-lab.github.io/" target="_blank" rel="noopener noreferrer">HUDA Lab</a></li>
-        </ul>
-      </div>
-      <div>
-        <h4>Contact</h4>
-        <ul>
-          <li><a href="mailto:support@decidb.com">support@decidb.com</a></li>
-          <li class="subtle">NYU Abu Dhabi &amp; UMass Amherst</li>
-        </ul>
-      </div>
-    </div>
-    <div class="footer-bottom">
-      <span>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</span>
-      <span>Built on DuckDB &middot; Solvers: Gurobi when available, HiGHS bundled</span>
-    </div>
   </div>
 </footer>
+<script type="module" src="assets/system.js"></script>
+<script type="module" src="assets/motion/motion.js"></script>
+<script src="assets/js/site.js" defer></script>
 </body>
 </html>

@@ -1,11 +1,11 @@
-<section class="page-head">
+<div class="page-head">
   <div class="container">
     <div class="crumbs"><a href="index.html">Home</a><span>/</span>Docs</div>
     <h1>The DECIDE language</h1>
     <p>Everything a DECIDE query can say and exactly what it means. Every example in this reference runs on DeciDB as
       written; a green dot on a code block marks one that was executed when the site was built.</p>
   </div>
-</section>
+</div>
 
 <div class="container">
   <div class="doc-layout">
@@ -127,7 +127,7 @@ DECIDE ship(INT), per D: open(BOOL), per (): cap(INT)   -- each declarator has i
           <li>Every row shows its class's value. A row whose key column is NULL is in no class and has no decision; it
             shows NULL.</li>
         </ul>
-        <div class="callout"><strong>Sums count result rows</strong>
+        <div class="note"><strong>Sums count result rows</strong>
           <p>Over a join, a keyed decision appears on every row of its key, and an unscoped <code>SUM</code> reads it once
             per row, as SQL would. To count each class once, give the reducer its own <code>per</code>
             (<code>SUM(per n: keep * skill)</code>) or use the <a href="#colon-form">colon form</a>. See

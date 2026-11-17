@@ -1,11 +1,11 @@
-<section class="page-head">
+<div class="page-head">
   <div class="container">
     <div class="crumbs"><a href="index.html">Home</a><span>/</span>Problems</div>
     <h1>Problems you can express</h1>
     <p>You never name the problem class. DeciDB reads it from the decision types and the shape of each term, picks a
       formulation, and either answers the query directly or hands it to a solver that can take it.</p>
   </div>
-</section>
+</div>
 
 <div class="container">
   <div class="doc-layout">
@@ -24,53 +24,53 @@
         <h2>Modeling patterns <a class="anchor" href="#patterns">#</a></h2>
         <p class="lead">The shapes below cover most decision problems over tables. Each links to a complete example with
           data and the answer DeciDB returns.</p>
-        <div class="grid grid-2">
-          <a class="card" href="examples/knapsack.html"><h3>Selection under a budget</h3>
+        <div class="refs">
+          <a class="ref" href="examples/knapsack.html"><h3>Selection under a budget</h3>
             <p>Pick rows; a weighted sum stays within a limit.</p>
-            <div class="card-code">DECIDE x(BOOL)
+            <div class="ref__code">DECIDE x(BOOL)
 SUCH THAT SUM(x * weight) &lt;= 50
 MAXIMIZE SUM(x * value)</div></a>
-          <a class="card" href="examples/production.html"><h3>Quantities and capacities</h3>
+          <a class="ref" href="examples/production.html"><h3>Quantities and capacities</h3>
             <p>Decide an amount per row, bounded per row, meeting a total.</p>
-            <div class="card-code">DECIDE units(INT)
+            <div class="ref__code">DECIDE units(INT)
 SUCH THAT units &lt;= capacity
   AND SUM(units) &gt;= 500</div></a>
-          <a class="card" href="examples/assignment.html"><h3>Assignment and matching</h3>
+          <a class="ref" href="examples/assignment.html"><h3>Assignment and matching</h3>
             <p>Every task gets one person, nobody gets two.</p>
-            <div class="card-code">per worker: SUM(a) by (worker) &lt;= 1
+            <div class="ref__code">per worker: SUM(a) by (worker) &lt;= 1
 per task: SUM(a) by (task) = 1</div></a>
-          <a class="card" href="examples/diversification.html"><h3>Limits per group</h3>
+          <a class="ref" href="examples/diversification.html"><h3>Limits per group</h3>
             <p>One constraint for every group in the data, with no list of groups in the query.</p>
-            <div class="card-code">per sector: SUM(pick) by (sector) &lt;= 2</div></a>
-          <a class="card" href="examples/facility-location.html"><h3>Fixed cost plus variable cost</h3>
+            <div class="ref__code">per sector: SUM(pick) by (sector) &lt;= 2</div></a>
+          <a class="ref" href="examples/facility-location.html"><h3>Fixed cost plus variable cost</h3>
             <p>Open a facility before using it; pay its fixed cost once.</p>
-            <div class="card-code">DECIDE per D: open(BOOL), ship(INT)
+            <div class="ref__code">DECIDE per D: open(BOOL), ship(INT)
 ... SUM(ship) by (D) &lt;= D.capacity * open
 MINIMIZE ... + SUM(D: D.opening_cost * open)</div></a>
-          <a class="card" href="examples/min-max-shortfall.html"><h3>Worst case (min-max)</h3>
+          <a class="ref" href="examples/min-max-shortfall.html"><h3>Worst case (min-max)</h3>
             <p>One shared decision bounds every group; minimize it.</p>
-            <div class="card-code">DECIDE ship(INT), per (): worst(INT)
+            <div class="ref__code">DECIDE ship(INT), per (): worst(INT)
 ... per g: g.demand - SUM(ship) by (g) &lt;= worst
 MINIMIZE worst</div></a>
-          <a class="card" href="examples/makespan.html"><h3>Load balancing</h3>
+          <a class="ref" href="examples/makespan.html"><h3>Load balancing</h3>
             <p>The two-level objective: a max over groups of a sum within each.</p>
-            <div class="card-code">MINIMIZE max(per m: SUM(run * hours) by (m))</div></a>
-          <a class="card" href="examples/fair-allocation.html"><h3>Fairness (max-min)</h3>
+            <div class="ref__code">MINIMIZE max(per m: SUM(run * hours) by (m))</div></a>
+          <a class="ref" href="examples/fair-allocation.html"><h3>Fairness (max-min)</h3>
             <p>Raise the worst-off row as far as the budget allows.</p>
-            <div class="card-code">MAXIMIZE MIN(alloc / need)</div></a>
-          <a class="card" href="examples/price-changes.html"><h3>Sparse and robust changes</h3>
+            <div class="ref__code">MAXIMIZE MIN(alloc / need)</div></a>
+          <a class="ref" href="examples/price-changes.html"><h3>Sparse and robust changes</h3>
             <p>Count changes with L0, bound the largest with L∞, total them with L1.</p>
-            <div class="card-code">norm(new - old, 0) &lt;= 2
+            <div class="ref__code">norm(new - old, 0) &lt;= 2
 MINIMIZE norm(new - old, 'inf')</div></a>
-          <a class="card" href="examples/rebalancing.html"><h3>Closest to a target</h3>
+          <a class="ref" href="examples/rebalancing.html"><h3>Closest to a target</h3>
             <p>Least squares over a feasible region: a convex QP.</p>
-            <div class="card-code">MINIMIZE SUM(POWER(w - target, 2))</div></a>
-          <a class="card" href="examples/shift-coverage.html"><h3>Feasibility</h3>
+            <div class="ref__code">MINIMIZE SUM(POWER(w - target, 2))</div></a>
+          <a class="ref" href="examples/shift-coverage.html"><h3>Feasibility</h3>
             <p>No objective: any assignment that satisfies the rules.</p>
-            <div class="card-code">SUCH THAT per shift: SUM(on) by (shift) = 1</div></a>
-          <a class="card" href="examples/diagnose.html"><h3>Explaining infeasibility</h3>
+            <div class="ref__code">SUCH THAT per shift: SUM(on) by (shift) = 1</div></a>
+          <a class="ref" href="examples/diagnose.html"><h3>Explaining infeasibility</h3>
             <p>Which clause to change, and by how much.</p>
-            <div class="card-code">DIAGNOSE SELECT ... DECIDE ...</div></a>
+            <div class="ref__code">DIAGNOSE SELECT ... DECIDE ...</div></a>
         </div>
       </section>
 
@@ -104,7 +104,7 @@ MINIMIZE norm(new - old, 'inf')</div></a>
         <p class="lead">Nine problem classes have an exact answer that DuckDB's own operators compute. When DeciDB proves a
           query belongs to one, it replaces the solve with sorting, ranking, window and aggregate operators. The query is
           unchanged; <code>EXPLAIN</code> names the rule.</p>
-        <div class="callout green"><strong>Faster and exact</strong>
+        <div class="note note--direct"><strong>Faster and exact</strong>
           <p>Every class is faster than Gurobi at every size measured, by up to several orders of magnitude once the
             input reaches hundreds of thousands of decisions. The answer is exact, without the solver's tolerance, and a
             quadratic class needs no Gurobi license. <code>SET decide_direct_solve = 'off'</code> sends every query to the
@@ -112,15 +112,15 @@ MINIMIZE norm(new - old, 'inf')</div></a>
         <div class="table-wrap"><table>
           <thead><tr><th>Class</th><th>Problem</th><th>Shape it recognizes</th></tr></thead>
           <tbody>
-            <tr><td><span class="badge green">S1</span></td><td>Choose rows by score</td><td>one per-row <code>BOOL</code>, count limits on <code>SUM(x)</code>, a linear score; per group too</td></tr>
-            <tr><td><span class="badge green">S2</span></td><td>The best rows under nested quotas</td><td>count limits whose groups nest (teams in divisions in a total)</td></tr>
-            <tr><td><span class="badge green">S3</span></td><td>As many rows as fit a budget</td><td><code>MAXIMIZE SUM(x)</code> under one <code>SUM(w * x) &lt;= B</code>, or the fewest rows that reach <code>&gt;= B</code></td></tr>
-            <tr><td><span class="badge green">A1</span></td><td>Each row on its own</td><td>per-row bounds and nothing linking rows; a linear objective or one square</td></tr>
-            <tr><td><span class="badge green">A2</span></td><td>One shared value closest to every row</td><td>a query-wide or keyed <code>REAL</code>, a squared, absolute or largest-absolute loss</td></tr>
-            <tr><td><span class="badge green">R1</span></td><td>Fill one budget by value per unit</td><td>per-row <code>REAL</code> with bounds, one budget <code>SUM(w * x)</code>, a linear objective</td></tr>
-            <tr><td><span class="badge green">R4</span></td><td>Max-min fair allocation</td><td><code>MAXIMIZE MIN(c * x)</code>, per-row caps, one budget; per group too</td></tr>
-            <tr><td><span class="badge green">N1</span></td><td>Stay inside one sum of squares</td><td>one <code>SUM(POWER(x, 2)) &lt;= B</code>, a linear objective or the nearest point to a target</td></tr>
-            <tr><td><span class="badge green">O1</span></td><td>Match two tables one to one</td><td>a <code>BOOL</code> per pair of a cross join, one per side, a distance or product cost</td></tr>
+            <tr><td><span class="tag tag--direct">S1</span></td><td>Choose rows by score</td><td>one per-row <code>BOOL</code>, count limits on <code>SUM(x)</code>, a linear score; per group too</td></tr>
+            <tr><td><span class="tag tag--direct">S2</span></td><td>The best rows under nested quotas</td><td>count limits whose groups nest (teams in divisions in a total)</td></tr>
+            <tr><td><span class="tag tag--direct">S3</span></td><td>As many rows as fit a budget</td><td><code>MAXIMIZE SUM(x)</code> under one <code>SUM(w * x) &lt;= B</code>, or the fewest rows that reach <code>&gt;= B</code></td></tr>
+            <tr><td><span class="tag tag--direct">A1</span></td><td>Each row on its own</td><td>per-row bounds and nothing linking rows; a linear objective or one square</td></tr>
+            <tr><td><span class="tag tag--direct">A2</span></td><td>One shared value closest to every row</td><td>a query-wide or keyed <code>REAL</code>, a squared, absolute or largest-absolute loss</td></tr>
+            <tr><td><span class="tag tag--direct">R1</span></td><td>Fill one budget by value per unit</td><td>per-row <code>REAL</code> with bounds, one budget <code>SUM(w * x)</code>, a linear objective</td></tr>
+            <tr><td><span class="tag tag--direct">R4</span></td><td>Max-min fair allocation</td><td><code>MAXIMIZE MIN(c * x)</code>, per-row caps, one budget; per group too</td></tr>
+            <tr><td><span class="tag tag--direct">N1</span></td><td>Stay inside one sum of squares</td><td>one <code>SUM(POWER(x, 2)) &lt;= B</code>, a linear objective or the nearest point to a target</td></tr>
+            <tr><td><span class="tag tag--direct">O1</span></td><td>Match two tables one to one</td><td>a <code>BOOL</code> per pair of a cross join, one per side, a distance or product cost</td></tr>
           </tbody>
         </table></div>
 
