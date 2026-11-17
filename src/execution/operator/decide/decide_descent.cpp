@@ -1362,16 +1362,20 @@ void DecideDescent::FrameOrder(const DecideNode &node, const DecideEntryLayout &
 	Vector *compared = &order;
 	unique_ptr<Vector> collated;
 	if (node.frame_spec && node.frame_spec->order_collation) {
+		// The order keys stand at the rows' own positions in the chunk, so a collation that raises names its row.
+		SelectionVector at(chunk.size());
+		for (idx_t i = 0; i < chunk.size(); i++) {
+			at.set_index(i, 0);
+		}
+		for (idx_t i = 0; i < stored.size(); i++) {
+			at.set_index(stored.rows[i], i);
+		}
 		DataChunk raw;
 		raw.InitializeEmpty({node.over->return_type});
-		raw.data[0].Reference(order);
-		raw.SetCardinality(stored.size());
-		Reach positions;
-		for (idx_t i = 0; i < stored.size(); i++) {
-			positions.Add(NumericCast<sel_t>(i), 0);
-		}
+		raw.data[0].Slice(order, at, chunk.size());
+		raw.SetCardinality(chunk.size());
 		collated = make_uniq<Vector>(node.frame_spec->order_collation->return_type);
-		Evaluate(*node.frame_spec->order_collation, raw, positions, *collated);
+		Evaluate(*node.frame_spec->order_collation, raw, stored, *collated);
 		compared = collated.get();
 	}
 	const auto direction =
