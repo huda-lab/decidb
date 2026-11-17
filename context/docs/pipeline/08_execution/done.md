@@ -573,6 +573,21 @@ pipeline, before the elastic engine ever sees it, quoting the bound as written
 A purely user-vs-user inverted box such as `x >= 5 AND x <= 1` does **not** match
 and proceeds to the elastic engine, which reports a least-change loosen.
 
+One function states the test and the message (`DecideBoxContradictsDomain` and `DecideDomainRefusal`,
+`common/decide_value_messages.hpp`), and two steps call it. The sink state's constructor checks the box the constant
+bounds fold into (`DecideGlobalSinkState::domains`). A constant bound under a `when`, or under a `per` over a written
+column, folds into no box (`../05_optimizer/done.md`, singleton-row folding), so the model emitter checks each row
+such a clause writes (`DecideModelEmitter::CheckDomain`, from `Rows` and, for an easy MIN's or MAX's members, from
+`Groups`). It runs after `SkipNullInstances`: a row in no instance (a NULL key, a `when` that does not hold) is never
+checked, and a query whose rows all have a NULL key solves. A row's admitted ends fold into the decision's box, whose
+floor is the lowest any `when` or `per` lowers the decision to; instance floors are built in stage 06, after the
+emitter, and the lowest floor never refuses a query that solves. Only a bound whose admitted ends fold (`IsFoldable`),
+one written as a constant, is checked; a bound that reads the data stays the solver's and DIAGNOSE's, and an IN's
+bounds stay diagnosis's under a `when` as they do without one (its `removal_group_id`). The refusal
+quotes the clause with its scope (*"per g: x <= -1 cannot hold for a BOOL variable"*), under DIAGNOSE too. Which rows
+an instance keeps is known only from the data, so direct solve declines every such bound the domain cannot hold
+(`DirectContradictsDomain`), and both paths name the clause.
+
 ### Implied bounds from constraint data
 
 Once coefficients are numbers, a second, data-driven source of column bounds
@@ -774,8 +789,14 @@ and every row of a per-row one, splits its group again. Three readers:
 The `VALUE_IS_VALID` checks the bound-side rewrite (`RewriteRhsAggregates`, stage 05) appends are kept on the node
 (`DirectRetainRowChecks`) and raised by the tree before any clause is read (`DecideTreeColumns::CheckData`): a bound's
 NaN, a NaN in a bound-side reducer's argument (the reducer skips a NULL, as SQL does), or an `=` bound that takes two
-values in its group (`` `<bound>` takes more than one value here (a and b) ... infeasible.``). An empty group is no
-check: a reducer over no rows is NULL, so its instance is skipped where the clause is read (D68; below).
+values in its group (`` `<bound>` takes more than one value here (a and b), in the group t.g = 'a' ... infeasible.``).
+The group is named as the query writes its key (`DecideBoundDisagreementMessage` through `DescribeKeyValues`, the
+spelling DIAGNOSE uses); a bound over the whole query names none. Direct solve prints the same text through
+`__internal_decide_bound_disagreement`, an internal scalar function that calls the same C++ renderer, so the spelling
+rule is written once. A collated key may print another spelling of its group on each path: a row's own on the direct
+plan, the group's least on the solver path. Both name the group, and matching them would cost a window per key
+column. An empty group is no check: a reducer over no rows is NULL, so its instance is skipped where the clause is
+read (D68; below).
 
 Groups come from the descent's dictionaries (`DecideKeyMap`): a row with NULL in a written key column
 (`DecideKeyNullMode::NO_GROUP`) is in no group, and a relation's columns (`VALUE`) compare NULL as a value. A key
@@ -1334,7 +1355,8 @@ it.
 **What stays raised even under the prefix.** DIAGNOSE explains the outcome of a *solve*.
 A query that fails before one happens — a semantic error, a bound that contradicts a
 type's own domain (`x <= -1` on a non-negative decision, checked in the sink state's
-constructor), a model class the host's solver refuses — still raises, with the precise
+constructor, or under a `per` or `when` as the emitter writes the clause's rows), a model
+class the host's solver refuses — still raises, with the precise
 message that path already had. There is no solve outcome to report on.
 
 The slow-solve path is deliberately outside all of this: see `slow_solves.md`.

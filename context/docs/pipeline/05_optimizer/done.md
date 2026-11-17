@@ -1024,8 +1024,8 @@ Recursion goes through `AND` and a `per K:` wrapper, whose key children hold no
 comparison, so `per row: x >= -5` is folded like `x >= -5`. A `per K:` whose `K` holds a column the user wrote
 (null mode `NO_GROUP`) is not: a row whose column is NULL there is in no class and takes no instance of the clause
 (`language/guide.md` §6.2), which a box on the whole column would give it, so the pass stops at the wrapper and the
-clause stays a row. The domain refusal reads only the box, so such a clause that a BOOL or a non-negative decision
-cannot hold gets the generic infeasible message (`../08_execution/todo.md` § EXEC-11). A relation element, which
+clause stays a row. The model emitter checks such a clause's rows against the decision's domain instead
+(`../08_execution/done.md`, "Domain contradictions are a static error"). A relation element, which
 groups NULL as a value, folds. **A `when`-guarded
 comparison is never folded**: `when c: x <= 0` is conditional per row, not a domain,
 so the pass stops at the wrapper. This is why it keeps its own descent rather than

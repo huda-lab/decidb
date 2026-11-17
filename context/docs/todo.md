@@ -6,11 +6,6 @@ this file when it is empty.
 Read first: `.claude/CLAUDE.md`, `context/opa_rewrite/handoff.md` § A6, `context/opa_rewrite/merge_notes.md` § 4.1.
 Checks: `direct_solve/framework/todo.md` § How to work any task in these todo files.
 
-## 4. Execution messages (parallel: EXEC-2, EXEC-11 | PARSE-1)
-- [ ] EXEC-2 "More than one value" names the group — pipeline/08_execution/todo.md § EXEC-2
-- [ ] EXEC-11 Domain refusal for a `per <column>:` bound — pipeline/08_execution/todo.md § EXEC-11
-- [ ] PARSE-1 Declaration keys keep their written text — pipeline/01_parser/todo.md § PARSE-1
-
 ## 5. Evaluator cleanup (one lane)
 - [ ] TEST-3 Cut the dump-format tests, coverage-checked — testing/todo.md § TEST-3
 - [ ] EXEC-3 Delete the dead evaluator code — pipeline/08_execution/todo.md § EXEC-3
@@ -27,5 +22,5 @@ Checks: `direct_solve/framework/todo.md` § How to work any task in these todo f
 ## 7. Weak tests (one lane)
 - [ ] TEST-4 Tests that check less than their names — testing/todo.md § TEST-4
 
-## 8. Debug-build run (needs: 4–7) (one lane)
+## 8. Debug-build run (needs: 5–7) (one lane)
 - [ ] TEST-6 One suite run on a debug build — testing/todo.md § TEST-6

@@ -318,13 +318,17 @@ wrappers and tags (`../02_binder/done.md` §4a). The last two never leave this s
 **Source spans.** The grammar wraps every expression of a DECIDE clause in one decorator reduction
 (`a_expr: a_expr_body` and `b_expr: b_expr_body` call `noteDecideExpr`), the one place that sees an expression with its
 text. It records `{node, start, end}` with the role `EXPR`; `noteDecideParen` leaves the parentheses of `( e )` out of
-`e`'s span. The other roles are the constructs that are no expression: `CALL` (a reducer without its `by`), `PER`, `BY`,
-the two halves of a `BETWEEN` and the objective. The interceptor `Transformer::TransformExpression` (Clang's
+`e`'s span. The other roles are the constructs that are no expression: `PER`, `BY`, the two halves of a `BETWEEN` and
+the objective. The interceptor `Transformer::TransformExpression` (Clang's
 SourceManager idea: one store of text, a location per node) keys each `EXPR` span by the query location its parsed
 expression took, innermost first, together with a `DecideBinding`: how tightly the node's own text binds (`WHOLE` for a
 call, column, literal, `::` cast, parenthesized text, subquery and `CASE ... END`; `LOOSE`, `ADDITIVE`, `MULTIPLICATIVE`
-or `POWER` for an operator). `TransformSelectNode` assembles the tail and its spans into `SelectNode::decide_text`
-(`DecideSourceText`). A parameter takes its location too, so `$1` is quoted as written.
+or `POWER` for an operator). `TransformSelectNode` assembles the clause's text, from `DECIDE` through the objective, and
+its spans into `SelectNode::decide_text` (`DecideSourceText`): one buffer with two marks. `start`, the `DECIDE`, is the
+base of every offset; `tail_start`, the `SUCH`, anchors the objective and begins `Tail()`, which `SelectNode::ToString`
+prints after the declarations. A declaration's `per` key has its span as a clause's does, so a message quotes it as
+written. In the split order the buffer holds the `FROM` and `WHERE` text between the declarations and `SUCH THAT`,
+which no span covers and nothing cuts. A parameter takes its location too, so `$1` is quoted as written.
 
 ### Refusing the removed spellings
 
@@ -485,7 +489,7 @@ Non-DECIDE queries retain DuckDB's existing parsed-result comparison.
 | Frame carrier and helpers | `parsenodes.hpp` (`PGDecideFrame`), `grammar/grammar.cpp` (`makeDecideFrameOver`, `makeDecideFramePoint`, `makeDecideFrameRange`) |
 | Frame parsed expression and its transform | `src/parser/expression/decide_frame_expression.cpp`, `src/parser/transform/expression/transform_decide_frame.cpp` |
 | Scope carrier and helpers | `third_party/libpg_query/include/nodes/parsenodes.hpp` (`PGDecideScope`), `grammar/grammar.cpp` (`makeDecideScope`, `applyDecideScope`, `makeQualifiedReducer`, `absorbRemovedPerKey`) |
-| Source spans (one per expression of the tail, a `per`/`by` key, a reducer's call, a BETWEEN's halves, the objective) | `grammar/grammar.cpp` (`noteDecideExpr`, `noteDecideParen`, `noteDecideCall`, `noteDecideReducerKey`, `noteDecideSpan`), called from the `a_expr` and `b_expr` decorator reductions in `select.y`; the roles are `PGDecideSpanRole` and `DecideSpanRole`, and `language/explain.md` describes how they are used |
+| Source spans (one per expression of the clause, a `per`/`by` key, a BETWEEN's halves, the objective) | `grammar/grammar.cpp` (`noteDecideExpr`, `noteDecideParen`, `noteDecideReducerKey`, `noteDecideSpan`), called from the `a_expr` and `b_expr` decorator reductions in `select.y`; the roles are `PGDecideSpanRole` and `DecideSpanRole`, and `language/explain.md` describes how they are used |
 | Span keyed by query location, with its `DecideBinding` | `src/parser/transform/expression/transform_expression.cpp` (the interceptor `Transformer::TransformExpression`), `transform_select_node.cpp` (assembles `DecideSourceText`) |
 | Clause → `SelectNode` | `src/parser/transform/statement/transform_select_node.cpp` |
 | `DIAGNOSE` → `ShowRef` | `src/parser/transform/statement/transform_show_select.cpp` |

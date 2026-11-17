@@ -493,7 +493,10 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   (`DecideWrittenBox` in `decide_singleton_row_folding.{hpp,cpp}`), and the error quotes the clause, under `DIAGNOSE`
   too. The solver's pre-check (`DecideGlobalSinkState`) raises it; direct solve reads the same box through
   `DirectContradictsDomain`, which `DirectReadBounds` and `DirectReadFixedValues` call, and only declines these
-  queries so the solver raises the error.
+  queries so the solver raises the error. A constant bound under a `when`, or under a `per` over a written column, the
+  solver checks on each row an instance keeps (`../../pipeline/08_execution/done.md`, "Domain contradictions are a
+  static error"). A rule cannot see which rows those are, so `DirectContradictsDomain` declines every such bound the
+  domain cannot hold: a `per` bound sits in its box, and a `when` bound is put into the box on its own.
 - **One box, one way to combine bounds.** A decision's unconditional bounds fold into a `DecideBoundBox`
   (`decide_numeric_policy.hpp`) through `DecideFoldSingletonRow`, which keeps the tightest value on each side. The
   solver's folding pass, the written box of the domain check (`DecideWrittenBox`) and `DirectReadBounds` all call it.

@@ -100,8 +100,8 @@ with 'when NOT isnan(cap):'.`. Neither path names a row: a row's place in the in
 skipped on both paths: a NULL limit is no limit, and a NULL score leaves its row out of the objective.
 The non-finite score and the infeasible messages are the solver's too. A computed bound or fixed value
 (`TRY_CAST(cap AS INTEGER)`) is quoted as written, and an `=` bound that takes two values in a group raises `` `cap`
-takes more than one value here (5 and 7) ``, on both paths. When several rows are bad, which one a message names is not
-specified.
+takes more than one value here (5 and 7), in the group t.g = 'a' ``, on both paths. When several rows are bad, which
+one a message names is not specified.
 
 ## What it does not admit (falls back to the solver)
 

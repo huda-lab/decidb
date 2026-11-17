@@ -17,16 +17,6 @@ Other documented edge differences remain in `done.md` §1a: the D88 variant-name
 order for a gated reducer argument, and unreferenced hidden records. Direct-solve rules and DIAGNOSE's separate
 named-column scan also bypass or revisit parts of the normal tree execution; their scope is open.
 
-## EXEC-2 — The "takes more than one value" message does not name the group
-
-- **Problem.** `` `e.cap` takes more than one value here (5 and 6) — ... `` names the values but not the group they
-  differ in (review 09, item S7). The solver path raises it in `decide_value_extraction.cpp`; direct solve raises the
-  same text in `direct_plan_fragments.cpp`.
-- **Change.** Both paths name the group as the query writes its key (`e.g = 'a'`, integers unquoted), through
-  `DescribeKeyValues` (`common/decide_value_messages.hpp`), as DIAGNOSE does.
-- **Done when.** The tests that match this message pass with the group named:
-  `./test/decide/run_tests.sh -n 2 -k "error_precedence or bound_side_tables or anr_frames"`.
-
 ## EXEC-3 — Delete the dead evaluator code
 
 - **Problem.** `context/opa_rewrite/review/07_dead_code_opa.md` §§ 1–3 list code nothing reads; its line numbers are
@@ -114,18 +104,3 @@ named-column scan also bypass or revisit parts of the normal tree execution; the
 - **Change.** Pass the rows' positions. Check whether the ICU extension loads here and has a collation that raises;
   with one, test the fix through it. With none, the error branch is unreachable: bring the owner that evidence.
 - **Done when.** A test through a raising collation names the right row, or the owner's decision is recorded.
-
-## EXEC-11 — A `per <column>:` bound a domain cannot hold gets the generic infeasible message
-
-- **Problem.** `per g: x <= -1` on a `BOOL` or a non-negative `INT` answers "DECIDE optimization is infeasible. Prefix
-  the query with DIAGNOSE…", where `per t: x <= -1` names the clause ("per t: x <= -1 cannot hold for a BOOL
-  variable"). The domain refusal in `decide_global_sink_state.hpp` reads the box a constant bound folds into, and a
-  `per` over a written column does not fold (`../05_optimizer/done.md`, singleton-row folding): a row whose key is NULL
-  takes no instance, and a box covers the whole column.
-- **Ruling (owner, 2026-11-17).** One function states the domain test and the message; the box check and the
-  step that writes a clause's rows both call it. A row is written only for an instance, so a NULL-key row is
-  never checked.
-- **Change.** As ruled. The refusal quotes the clause with its `per`, as for a folded bound.
-- **Done when.** `test_message_qualifier.py` holds a `per g:` case for the BOOL refusal, one for the non-negative
-  refusal, and one whose rows all have a NULL `g` and solve. This passes:
-  `./test/decide/run_tests.sh -n 2 -k message_qualifier`.

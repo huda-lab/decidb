@@ -55,11 +55,12 @@ An auxiliary column prints as the expression it stands for (`abs(ship - 20)`, `(
 
 **Written text is cut, never re-rendered** (a source map, as Clang's SourceManager and DuckDB's `CreateInfo::sql`).
 Inside a DECIDE clause the parser records one span per expression (`EXPR`, with how tightly its own text binds:
-`DecideBinding`), plus a span for a reducer's call without its `by` (`CALL`), a `per` key, a `by` key, the two halves
-of a `BETWEEN` and the objective (anchored at the start of the tail). A span is `{anchor, role, start, end, binding}`;
-the parentheses around an expression are not part of its span. `SelectNode::decide_text` (`DecideSourceText`) keeps
-the tail as typed and its spans keyed by `(query_location, role)`; it is serialized, `Equals` ignores it, and
-`SelectNode::ToString` prints the tail verbatim, so a print-and-parse round trip keeps the spans. The binder keeps the
+`DecideBinding`), plus a span for a `per` key (a declaration's included), a `by` key, the two halves of a `BETWEEN`
+and the objective (anchored at the start of the tail). A span is `{anchor, role, start, end, binding}`; the
+parentheses around an expression are not part of its span. `SelectNode::decide_text` (`DecideSourceText`) keeps the
+clause as typed, from `DECIDE` through the objective, and its spans keyed by `(query_location, role)`; it is
+serialized, `Equals` ignores it, and `SelectNode::ToString` prints its tail (`SUCH THAT` on) verbatim after the
+declarations, so a print-and-parse round trip keeps the spans. The binder keeps the
 parsed node's query location on the bound node, and the operator carries the text (`LogicalDecide::source_text`,
 copied to `PhysicalDecide`). A table macro whose argument lands in a DECIDE tail clears `decide_text`, since the
 argument is not in the body's text; that clause renders by tree. A scalar macro's expansion stands where its call
