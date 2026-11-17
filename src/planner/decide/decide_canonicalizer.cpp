@@ -85,7 +85,9 @@ bool TryMatchScaledAggregate(const Expression &expr, idx_t decide_index, ScaledA
 	} else {
 		return false;
 	}
-	if (is_reducer(*func.children[1 - aggregate_child])) {
+	// A scale is read once per row, so it holds no reducer: `(sum(x) + 1) * max(x)` is a product of decisions, left
+	// whole for the reader that refuses it.
+	if (DecideCanonicalizer::ContainsReducer(*func.children[1 - aggregate_child])) {
 		return false;
 	}
 

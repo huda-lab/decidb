@@ -179,6 +179,24 @@ def test_a_keyed_decision_with_one_instance_counts_once(decidb_cli, scope_solver
             "supported yet",
             id="product-of-two-reducers",
         ),
+        pytest.param(
+            "MAXIMIZE (sum(ship) + 1) * max(ship)",
+            "DECIDE objective: '(sum(ship) + 1) * max(ship)' multiplies decisions outside a reducer, which is not "
+            "supported yet",
+            id="reducer-scaled-by-a-reducer-and-more",
+        ),
+        pytest.param(
+            "MAXIMIZE sum(ship) + (sum(ship) + 1) * sum(ship)",
+            "DECIDE objective: '(sum(ship) + 1) * sum(ship)' multiplies decisions outside a reducer, which is not "
+            "supported yet",
+            id="sum-scaled-by-itself-and-more",
+        ),
+        pytest.param(
+            "MAXIMIZE sum(ship) - (max(ship) + 1) * sum(ship)",
+            "DECIDE objective: '(max(ship) + 1) * sum(ship)' multiplies decisions outside a reducer, which is not "
+            "supported yet",
+            id="sum-scaled-by-a-maximum-and-more",
+        ),
     ],
 )
 def test_objective_tuple_term_errors(decidb_cli, objective, message):
