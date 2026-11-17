@@ -44,6 +44,11 @@ named-column scan also bypass or revisit parts of the normal tree execution; the
   read once per query and passed down. DuckDB's `SET` options are the pattern `decide_direct_solve` follows. The tests
   that use these variables switch to the setting. `DECIDB_BENCH`, `DECIDB_STATUS_MARKERS` and the solver variables
   are outside this task.
+- **Ruling (owner, 2026-11-17).** The setting is one option, `decide_debug`, a comma list: `tree`, `bodies`,
+  `containers`, `values` and `steps` print their dumps, `chunk=N` and `split=N` set the descent's chunk and split, and
+  `inject=N:data:V` is `DECIDB_TREE_INJECT`'s hook. It is registered as `decide_direct_solve` is, with a set callback
+  that rejects a bad item at `SET`; physical planning reads it once into a struct the operator carries.
+  `DECIDB_EVALUATOR_INJECT` goes with its tests when no kept test uses it. `values` gets a test.
 - **Needs.** TEST-3 (it removes most of the tests that read the dumps).
 - **Done when.** No `getenv` of these names remains outside the one reader;
   `./test/decide/run_tests.sh -n 2 -k "descent_merge or one_pass or null_values or tree_bodies"` passes.

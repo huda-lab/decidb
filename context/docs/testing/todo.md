@@ -13,7 +13,10 @@ Open coverage gaps, one section each. Coverage that exists is in [coverage.md](c
   (p. 81's tree, p. 91's containers). The owner asked for a coverage check: before deleting, `make decide-coverage`
   shows which branches each one reaches, and a test that is a branch's only test stays or gives way to an answer-level
   test of that branch.
-- **Done when.** `test/decide/coverage_report.py compare` finds no arm lost between the runs before and after;
+- **Ruling (owner, 2026-11-17).** One coverage run, before the deletion: deleting tests changes no code, so the arms
+  lost are those the deleted tests reach and no kept test does, read from the run's per-test profiles
+  (`build/coverage/run/report.json`).
+- **Done when.** No arm is reached only by the deleted tests;
   `./test/decide/run_tests.sh -n 2 -k "tree_bodies or one_pass_tree or one_pass_literal"` passes what remains.
 
 ## TEST-4 — Tests that check less than their names say
