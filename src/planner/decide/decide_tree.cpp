@@ -748,15 +748,7 @@ public:
 		if (found != sources.reducer_nodes.end()) {
 			return found->second;
 		}
-		// ABS envelope metadata is lowered independently from the retained source expression, so its canonicalized
-		// reducer nodes are equal copies rather than the same addresses. Reuse the corresponding G when the reducer's
-		// full expression and semantic tags match; otherwise keep the pointer-identity invariant strict.
-		for (auto &entry : sources.reducer_nodes) {
-			if (entry.first && entry.first->GetAlias() == reducer.GetAlias() &&
-			    DecideExpressionsEqual(*entry.first, reducer)) {
-				return entry.second;
-			}
-		}
+		// Stage 05 lowers the reducers the tree recorded, by address.
 		throw InternalException("DECIDE tree: stage 05 lowers a reducer the tree has no node for: %s",
 		                        reducer.ToString());
 	}
