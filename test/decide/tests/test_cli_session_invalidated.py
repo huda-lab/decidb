@@ -26,6 +26,8 @@ def test_invalidated_database_fails_the_call_at_once(tmp_path, monkeypatch):
     stub = tmp_path / "stub_cli.py"
     stub.write_text(STUB)
     monkeypatch.setattr(decidb_cli, "_SESSIONS", {})
+    # The test calls `_run_in_session`, which starts no session with reuse off (the coverage run sets it to 0).
+    monkeypatch.delenv(decidb_cli._REUSE_ENV, raising=False)
     started = time.monotonic()
     with pytest.raises(RuntimeError, match="INTERNAL Error: stub failure") as raised:
         decidb_cli._run_in_session([sys.executable, str(stub)], "SELECT 1", None, mode="quote", timeout=6)
