@@ -3,6 +3,7 @@ add_library_unity(
   OBJECT
   test_cast.cpp
   test_checksum.cpp
+  test_decidb_abs_envelope.cpp
   test_decidb_canonical_verifier.cpp
   test_decidb_constraint_provenance.cpp
   test_decidb_diagnostic_engines.cpp
