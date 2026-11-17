@@ -10,39 +10,101 @@ import pytest
 from ._scope_cases import answer
 
 
-def test_changing_a_data_child_changes_the_answer(decidb_cli):
-    """L7: changing the computed SUM to 8 must flow through the parent and into the solver's bound."""
-    sql = """SET decide_direct_solve='off';
-        SELECT id,x FROM (VALUES (1,2),(2,3)) t(id,d)
-        DECIDE per (): x(REAL) SUCH THAT x <= sum(t.d) MAXIMIZE x ORDER BY id"""
-    env = {**os.environ, **(decidb_cli.env or {}), "DECIDB_DUMP_TREE": "1"}
-    original = subprocess.run(
-        [decidb_cli.exe, "-json", "-c", sql], env=env, capture_output=True, text=True, timeout=120
-    )
-    assert original.returncode == 0, original.stderr
-    # Find the data G through the actual graph, instead of relying on a fixed planner node number.
-    node = re.search(r"(?m)^\s*(\d+) G .*", original.stderr)
-    assert node, original.stderr
-    changed = subprocess.run(
-        [decidb_cli.exe, "-json", "-c", sql],
-        env={**env, "DECIDB_TREE_INJECT": node[1] + ":data:8"},
+SUM_QUERY = """SELECT id,x FROM (VALUES (1,2),(2,3)) t(id,d)
+    DECIDE per (): x(REAL) SUCH THAT x <= sum(t.d) MAXIMIZE x ORDER BY id"""
+
+
+def debugged(cli, items, query=SUM_QUERY, *flags):
+    """The query in a process of its own with `decide_debug` set to `items`: the dumps print internal names, which the
+    wrapper's user-output guard refuses."""
+    return subprocess.run(
+        [cli.exe, *flags, "-c", f"SET decide_direct_solve='off'; SET decide_debug = '{items}'; {query}"],
+        env={**os.environ, **(cli.env or {})},
         capture_output=True,
         text=True,
         timeout=120,
     )
+
+
+def test_changing_a_data_child_changes_the_answer(decidb_cli):
+    """L7: changing the computed SUM to 8 must flow through the parent and into the solver's bound (`inject`)."""
+    original = debugged(decidb_cli, "tree", SUM_QUERY, "-json")
+    assert original.returncode == 0, original.stderr
+    # Find the data G through the actual graph, instead of relying on a fixed planner node number.
+    node = re.search(r"(?m)^\s*(\d+) G .*", original.stderr)
+    assert node, original.stderr
+    changed = debugged(decidb_cli, f"tree,inject={node[1]}:data:8", SUM_QUERY, "-json")
     assert changed.returncode == 0, changed.stderr
     assert [row["x"] for row in json.loads(original.stdout)] == [5, 5]
     assert [row["x"] for row in json.loads(changed.stdout)] == [8, 8]
     # A node that computes no data value, the clause's root, takes no stand-in, so the change above reached the G.
     root = re.search(r"(?m)^\s*(\d+) E root .*", original.stderr)
+    refused = debugged(decidb_cli, f"inject={root[1]}:data:8", SUM_QUERY, "-json")
+    assert f"decide_debug: inject node {root[1]} computes no data value" in refused.stderr, refused.stderr
+
+
+def test_an_injection_names_a_node_of_the_tree(decidb_cli):
+    """The tree has four nodes: `inject` of a fifth is refused where the tree is read."""
+    refused = debugged(decidb_cli, "inject=99:data:8")
+    assert "decide_debug: inject node is outside this tree" in refused.stderr, refused.stderr
+
+
+@pytest.mark.parametrize(
+    "items, message",
+    [
+        pytest.param("bogus", "unknown item 'bogus'", id="an-item-no-one-knows"),
+        pytest.param("bogus=1", "unknown item 'bogus=1'", id="a-setting-no-one-knows"),
+        pytest.param("chunk=x", "chunk must be between 1 and 2048", id="a-chunk-that-is-no-number"),
+        pytest.param("chunk=", "chunk must be between 1 and 2048", id="a-chunk-with-no-digits"),
+        pytest.param("chunk=-1", "chunk must be between 1 and 2048", id="a-chunk-with-a-sign"),
+        pytest.param("chunk=0", "chunk must be between 1 and 2048", id="a-chunk-of-no-rows"),
+        pytest.param("chunk=2049", "chunk must be between 1 and 2048", id="a-chunk-past-a-vector"),
+        pytest.param("split=0", "split must be a positive row count", id="a-split-of-no-rows"),
+        pytest.param("split=1234567890123456789", "split must be a positive row count", id="a-split-of-19-digits"),
+        pytest.param("inject=1:data", "inject must be node:data:value", id="an-injection-without-a-value"),
+        pytest.param("inject=1:text:5", "inject must be node:data:value", id="an-injection-of-no-data"),
+        pytest.param("inject=x:data:5", "inject must be node:data:value", id="an-injection-at-no-node"),
+    ],
+)
+def test_a_bad_debug_item_is_refused_when_the_option_is_set(decidb_cli, items, message):
+    """Like `decide_direct_solve`, `decide_debug` refuses what it cannot read at SET, not when a query reads it."""
     refused = subprocess.run(
-        [decidb_cli.exe, "-json", "-c", sql],
-        env={**env, "DECIDB_TREE_INJECT": root[1] + ":data:8"},
+        [decidb_cli.exe, "-c", f"SET decide_debug = '{items}'"],
+        env={**os.environ, **(decidb_cli.env or {})},
         capture_output=True,
         text=True,
         timeout=120,
     )
-    assert f"DECIDB_TREE_INJECT: node {root[1]} computes no data value" in refused.stderr, refused.stderr
+    assert f"decide_debug: {message}" in refused.stderr, refused.stderr
+
+
+def test_the_debug_items_are_a_comma_list_read_as_written(decidb_cli):
+    """Blanks around an item and an empty item are ignored, and an item's name is read in either case."""
+    result = debugged(decidb_cli, " TREE , ,chunk=7,")
+    assert result.returncode == 0 and "DECIDB_TREE_BEGIN" in result.stderr, result.stderr
+
+
+def test_values_prints_what_each_node_computes_on_its_entries(decidb_cli):
+    """`values` (DecideTreeColumns::Dump): the operand holds the two demands, and the clause's row reads the sum
+    (5) the G above them folds."""
+    result = debugged(decidb_cli, "values")
+    assert result.returncode == 0, result.stderr
+    values = result.stderr.split("DECIDB_VALUES_BEGIN\n", 1)[1].split("DECIDB_VALUES_END", 1)[0]
+    operand = re.search(
+        r"(?m)^node \d+ sum\(t\.d\) operand\n  row 0 -> 2 instance 0\n  row 1 -> 3 instance 1\n", values
+    )
+    assert operand, values
+    clause = re.search(r"(?m)^node \d+ x <= sum\(t\.d\)\n  row 0 -> [^\n]*\b5\.0\b", values)
+    assert clause, values
+
+
+def test_steps_print_the_containers_after_each_piece_the_descent_reads(decidb_cli):
+    """`steps` at `chunk=1` is the deck's animation: after row 1 the sum's group holds row 0, after row 2 both."""
+    result = debugged(decidb_cli, "steps,chunk=1")
+    assert result.returncode == 0, result.stderr
+    steps = re.findall(r"DECIDB_STEP_BEGIN (\d+)\n(.*?)DECIDB_STEP_END", result.stderr, re.DOTALL)
+    assert [int(rows) for rows, _ in steps] == [1, 2], result.stderr
+    assert [re.search(r"(?m)^node \d+ G: \(\) -> (\{[^}]*\})$", step)[1] for _, step in steps] == ["{0}", "{0, 1}"]
 
 
 #: Each query reaches one arm of the descent's nesting rule (decide_descent.cpp, Visit: an E's classes lie within the

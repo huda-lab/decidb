@@ -8,6 +8,7 @@
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_tree_terms.hpp"
 #include "duckdb/planner/decide/decide_tree.hpp"
+#include "duckdb/execution/operator/decide/decide_debug.hpp"
 #include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
@@ -35,6 +36,8 @@ class PhysicalDecide : public PhysicalOperator {
 public:
 	//! Semantic E/G/O graph, captured before the optimizer lowers frames.
 	unique_ptr<DecideTree> tree;
+	//! `SET decide_debug`, read once when the operator is planned.
+	DecideDebug debug;
 	static constexpr const PhysicalOperatorType TYPE = PhysicalOperatorType::DECIDE;
 	//! The tree's back end, which records the variants it numbers (RecordVariants).
 	friend class DecideModelEmitter;

@@ -2,6 +2,7 @@
 
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
+#include "duckdb/execution/operator/decide/decide_debug.hpp"
 #include "duckdb/optimizer/decide/direct/direct_solve.hpp"
 #include "duckdb/common/virtual_file_system.hpp"
 #include "duckdb/execution/index/index_type_set.hpp"
@@ -427,6 +428,7 @@ void DatabaseInstance::Configure(DBConfig &new_config, const char *database_path
 	// diagnosis — only the DIAGNOSE statement prefix does that.
 	RegisterDecideDiagnosticOptions(config);
 	RegisterDirectSolve(config);
+	RegisterDecideDebug(config);
 	if (new_config.file_system) {
 		config.file_system = std::move(new_config.file_system);
 	} else {

@@ -173,22 +173,13 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 // Sink (Collecting Data)
 //===--------------------------------------------------------------------===//
 
-//! The chunk to the thread's descent, in pieces of the diagnostic chunk size when one is set.
-static void AppendDecideDescent(DecideDescent &descent, DataChunk &chunk, idx_t row_base) {
-	idx_t chunk_size = STANDARD_VECTOR_SIZE;
-	if (auto setting = std::getenv("DECIDB_DESCENT_CHUNK")) {
-		char *end = nullptr;
-		auto size = std::strtoul(setting, &end, 10);
-		if (!*setting || *end || size == 0 || size > STANDARD_VECTOR_SIZE) {
-			throw InvalidInputException("DECIDB_DESCENT_CHUNK must be between 1 and %llu", STANDARD_VECTOR_SIZE);
-		}
-		chunk_size = size;
-	}
-	// DECIDB_DUMP_STEPS: the containers after each piece, the deck's animation at chunk size 1 (DecideDescent::Step).
-	const bool steps = std::getenv("DECIDB_DUMP_STEPS") != nullptr;
+//! The chunk to the thread's descent, in pieces of `decide_debug`'s chunk size when one is set.
+static void AppendDecideDescent(DecideDescent &descent, DataChunk &chunk, idx_t row_base, const DecideDebug &debug) {
+	const idx_t chunk_size = debug.chunk == DConstants::INVALID_INDEX ? STANDARD_VECTOR_SIZE : debug.chunk;
 	auto append = [&](DataChunk &piece, idx_t base) {
 		descent.Append(piece, base);
-		if (steps) {
+		// The containers after each piece, the deck's animation at chunk size 1 (DecideDescent::Step).
+		if (debug.steps) {
 			fprintf(stderr, "DECIDB_STEP_BEGIN %llu\n%sDECIDB_STEP_END\n", (unsigned long long)(base + piece.size()),
 			        descent.Step().c_str());
 		}
@@ -218,21 +209,14 @@ public:
 	ColumnDataCollection data;
 	ColumnDataAppendState append_state;
 	unique_ptr<DecideDescent> descent;
-	//! The rows after which the thread's are merged before its input ends: DECIDB_DESCENT_SPLIT, which a test sets to
-	//! merge every chunk as a thread of its own would; never otherwise.
-	idx_t split = DConstants::INVALID_INDEX;
+	//! The rows after which the thread's are merged before its input ends: `decide_debug`'s split, which a test sets
+	//! to merge every chunk as a thread of its own would; never otherwise.
+	const idx_t split;
 
 	explicit DecideLocalSinkState(ClientContext &context, const PhysicalDecide &op)
-	    : data(context, op.children[0]->GetTypes()) {
+	    : data(context, op.children[0]->GetTypes()), split(op.debug.split) {
 		first_input_row.Initialize(context, op.children[0]->GetTypes(), 1);
 		data.InitializeAppend(append_state);
-		if (auto setting = std::getenv("DECIDB_DESCENT_SPLIT")) {
-			char *end = nullptr;
-			split = std::strtoull(setting, &end, 10);
-			if (!*setting || *end || split == 0) {
-				throw InvalidInputException("DECIDB_DESCENT_SPLIT must be a positive row count");
-			}
-		}
 	}
 	DataChunk first_input_row;
 	bool has_first_input_row = false;
@@ -269,8 +253,8 @@ unique_ptr<LocalSinkState> PhysicalDecide::GetLocalSinkState(ExecutionContext &c
 
 //! Rows `chunk` read by the thread's descent at the rows its buffer gives them, which Combine rebases on the rows
 //! placed before.
-static void SinkDecideRows(const DecideTree &tree, ClientContext &context, DecideGlobalSinkState &gstate,
-                           DecideLocalSinkState &lstate, DataChunk &chunk) {
+static void SinkDecideRows(const DecideTree &tree, const DecideDebug &debug, ClientContext &context,
+                           DecideGlobalSinkState &gstate, DecideLocalSinkState &lstate, DataChunk &chunk) {
 	const auto row_base = lstate.data.Count();
 	if (chunk.size() > 0 && !lstate.has_first_input_row) {
 		SelectionVector first_row(1);
@@ -282,7 +266,7 @@ static void SinkDecideRows(const DecideTree &tree, ClientContext &context, Decid
 	if (!lstate.descent) {
 		lstate.descent = make_uniq<DecideDescent>(tree, context);
 	}
-	AppendDecideDescent(*lstate.descent, chunk, row_base);
+	AppendDecideDescent(*lstate.descent, chunk, row_base, debug);
 	if (lstate.data.Count() >= lstate.split) {
 		MergeDecideDescent(gstate, lstate);
 	}
@@ -295,7 +279,7 @@ SinkResultType PhysicalDecide::Sink(ExecutionContext &context, DataChunk &chunk,
 	// Top-down (language/guide.md §6.1): the thread's descent reads each chunk as it arrives; one split finer than
 	// the chunk reads it a piece at a time, each merged as a thread of its own would be.
 	if (chunk.size() <= lstate.split) {
-		SinkDecideRows(*tree, context.client, gstate, lstate, chunk);
+		SinkDecideRows(*tree, debug, context.client, gstate, lstate, chunk);
 		return SinkResultType::NEED_MORE_INPUT;
 	}
 	for (idx_t begin = 0; begin < chunk.size(); begin += lstate.split) {
@@ -307,7 +291,7 @@ SinkResultType PhysicalDecide::Sink(ExecutionContext &context, DataChunk &chunk,
 		DataChunk piece;
 		piece.InitializeEmpty(chunk.GetTypes());
 		piece.Slice(chunk, selection, count);
-		SinkDecideRows(*tree, context.client, gstate, lstate, piece);
+		SinkDecideRows(*tree, debug, context.client, gstate, lstate, piece);
 	}
 	return SinkResultType::NEED_MORE_INPUT;
 }
@@ -654,20 +638,20 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	// reaches them, each at its rank; the least is raised once every phase has run.
 	DecideErrorLedger errors;
 	errors.Append(descent->Errors());
-	if (std::getenv("DECIDB_DUMP_BODIES")) {
+	if (debug.bodies) {
 		fprintf(stderr, "DECIDB_BODIES_BEGIN\n%sDECIDB_BODIES_END\n", tree->BodiesToString().c_str());
 	}
-	if (std::getenv("DECIDB_DUMP_TREE")) {
+	if (debug.tree) {
 		fprintf(stderr, "DECIDB_TREE_BEGIN\n%sDECIDB_TREE_END\n", tree->ToString().c_str());
 	}
-	if (std::getenv("DECIDB_DUMP_CONTAINERS")) {
+	if (debug.containers) {
 		fprintf(stderr, "DECIDB_CONTAINERS_BEGIN\n%sDECIDB_CONTAINERS_END\n", descent->Dump().c_str());
 	}
 	// Bottom-up: each node's programs over its entries, written as stage 06 reads them.
 	phase.Next("execution.tree_model");
 	const auto names = Names();
 	DecideTreeColumns columns(
-	    *tree, *descent, context, names, [&](idx_t clause) { return WrittenClause(clause); }, errors);
+	    *tree, *descent, context, names, [&](idx_t clause) { return WrittenClause(clause); }, errors, debug);
 	// The frames' timelines and the columns they read, before any program reads one (language/guide.md §5.6).
 	columns.ReadFrames(frames, num_rows, gstate.frame_maps);
 	// What the data checks and the data reducers no clause reads raise, at their ranks, before any clause is read.
@@ -688,7 +672,7 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	}
 	emitter.ValueLinks();
 	// The bottom-up values the evaluation computed, each node's programs on its entries.
-	if (std::getenv("DECIDB_DUMP_VALUES")) {
+	if (debug.values) {
 		fprintf(stderr, "DECIDB_VALUES_BEGIN\n%sDECIDB_VALUES_END\n", columns.Dump().c_str());
 	}
 	errors.ThrowIfAny();

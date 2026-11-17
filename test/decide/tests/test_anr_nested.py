@@ -84,9 +84,8 @@ def test_the_answer_does_not_depend_on_how_many_rows_the_descent_reads_at_once(s
     """The descent reads the input in chunks; read one row at a time, F1's rows that its `when` drops reach none of the
     keys below it, so a window reads no key (DecideDescent::KeyReads::Reset of a window that held nothing), and the
     answer is the optimum of the oracle's model all the same."""
-    cli = decidb_cli.with_env({"DECIDB_DESCENT_CHUNK": "1"})
     model = case.model()
-    reached = model.judge(answer(cli, case.sql), case.clauses, case.objective)
+    reached = model.judge(answer(decidb_cli, "SET decide_debug = 'chunk=1'; " + case.sql), case.clauses, case.objective)
     expected = model.solve(scope_solver, case.clauses, case.objective).objective
     assert reached == pytest.approx(expected, abs=1e-6)
 

@@ -329,7 +329,7 @@ struct DecideTree {
 	void Validate() const;
 	//! Stable plan-order dump of nodes, sigma, routing and computation dependencies.
 	string ToString() const;
-	//! Each body's terms with the node they range over and where they are computed (DECIDB_DUMP_BODIES).
+	//! Each body's terms with the node they range over and where they are computed (`decide_debug` `bodies`).
 	string BodiesToString() const;
 };
 

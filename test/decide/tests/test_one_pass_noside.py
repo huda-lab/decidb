@@ -46,8 +46,8 @@ def test_composed_objective_has_one_scope_and_one_inherited_gate(decidb_cli):
     query = """SELECT id,x FROM (VALUES (1,true),(2,false)) t(id,p)
         DECIDE x(REAL) SUCH THAT x<=9
         MAXIMIZE when t.p: max(x)+min(x) ORDER BY id"""
-    cli = native(decidb_cli).with_env({"DECIDB_DUMP_TREE": "1"})
-    result = cli.execute_raw("SET decide_direct_solve='off'; " + query)
+    cli = native(decidb_cli)
+    result = cli.execute_raw("SET decide_direct_solve='off'; SET decide_debug = 'tree'; " + query)
     assert result.returncode == 0, result.stderr
     assert "Error:" not in result.stderr, result.stderr
     tree = result.stderr.split("DECIDB_TREE_BEGIN\n", 1)[1].split("DECIDB_TREE_END", 1)[0]

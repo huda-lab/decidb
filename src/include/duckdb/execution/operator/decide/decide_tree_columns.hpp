@@ -12,6 +12,7 @@
 
 #include "duckdb/common/decide_error_ledger.hpp"
 #include "duckdb/execution/operator/decide/decide_absence.hpp"
+#include "duckdb/execution/operator/decide/decide_debug.hpp"
 #include "duckdb/execution/operator/decide/decide_descent.hpp"
 #include "duckdb/execution/operator/decide/decide_frame_map.hpp"
 #include "duckdb/function/aggregate_function.hpp"
@@ -56,13 +57,9 @@ private:
 	bool rejects_nan;
 };
 
-//! DECIDB_TREE_INJECT=node:data:value, a test's stand-in for a node's data value, which shows a parent reads the
-//! bottom-up values (L7): the node, INVALID_INDEX when unset, and the value, cast to the node's type.
-struct DecideTreeInjection {
-	idx_t node = DConstants::INVALID_INDEX;
-	string data;
-};
-DecideTreeInjection ReadDecideTreeInjection(const DecideTree &tree);
+//! `decide_debug`'s `inject=node:data:value`, a test's stand-in for a node's data value, which shows a parent reads the
+//! bottom-up values (L7), checked against `tree`: the node must be a G over data.
+DecideTreeInjection ReadDecideTreeInjection(const DecideTree &tree, const DecideDebug &debug);
 
 //! A node's programs on its entries (DecideNode::programs), computed once its descent is finished: each program's
 //! values on every entry, and the entries its evaluation raised on, with the error, which is held in the ledger at its
@@ -71,7 +68,7 @@ class DecideTreeColumns {
 public:
 	DecideTreeColumns(const DecideTree &tree, const DecideDescent &descent, ClientContext &context,
 	                  const DecideSourceNames &names, std::function<string(idx_t source_clause_id)> written_clause,
-	                  DecideErrorLedger &errors);
+	                  DecideErrorLedger &errors, const DecideDebug &debug);
 	~DecideTreeColumns();
 
 	//! `program` on each of `node`'s entries `reads` marks, as stage 08 reads a coefficient or a bound
@@ -127,7 +124,7 @@ public:
 	void CheckData();
 
 	//! Each node's programs the evaluation computed, on each of its entries by its row, with the entry's instance
-	//! (DECIDB_DUMP_VALUES): what a node holds once it is read, as the deck's bottom-up pages show it.
+	//! (`decide_debug` `values`): what a node holds once it is read, as the deck's bottom-up pages show it.
 	string Dump() const;
 
 private:

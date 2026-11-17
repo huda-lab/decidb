@@ -744,23 +744,17 @@ public:
 
 	//! The exact G created for this reducer occurrence, before following nested reducer bodies.
 	idx_t ReducerNode(const BoundAggregateExpression &reducer) const {
-		static const bool inject = [] {
-			const char *setting = std::getenv("DECIDB_EVALUATOR_INJECT");
-			return setting && string(setting) == "g1";
-		}();
-		auto found = inject ? sources.reducer_nodes.end() : sources.reducer_nodes.find(&reducer);
+		auto found = sources.reducer_nodes.find(&reducer);
 		if (found != sources.reducer_nodes.end()) {
 			return found->second;
 		}
 		// ABS envelope metadata is lowered independently from the retained source expression, so its canonicalized
 		// reducer nodes are equal copies rather than the same addresses. Reuse the corresponding G when the reducer's
 		// full expression and semantic tags match; otherwise keep the pointer-identity invariant strict.
-		if (!inject) {
-			for (auto &entry : sources.reducer_nodes) {
-				if (entry.first && entry.first->GetAlias() == reducer.GetAlias() &&
-				    DecideExpressionsEqual(*entry.first, reducer)) {
-					return entry.second;
-				}
+		for (auto &entry : sources.reducer_nodes) {
+			if (entry.first && entry.first->GetAlias() == reducer.GetAlias() &&
+			    DecideExpressionsEqual(*entry.first, reducer)) {
+				return entry.second;
 			}
 		}
 		throw InternalException("DECIDE tree: stage 05 lowers a reducer the tree has no node for: %s",

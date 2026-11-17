@@ -2,8 +2,8 @@
 rows, numbered from its first, and DecideDescent::Merge takes it into the operator's at the rows placed before. The
 merged containers are those one descent over every row would fill, so the model and every message are the same.
 
-``DECIDB_DESCENT_SPLIT=n`` merges every ``n`` rows as a thread of its own would; each case compares a query under it
-with the query read by one descent, and names the part of Merge it reaches.
+``SET decide_debug = 'split=n'`` merges every ``n`` rows as a thread of its own would; each case compares a query
+under it with the query read by one descent, and names the part of Merge it reaches.
 """
 
 import pytest
@@ -68,13 +68,15 @@ MODEL_CASES = {
 }
 
 
-def _split(cli, rows):
-    return cli.with_env({"DECIDB_DESCENT_SPLIT": str(rows)})
+def _debug(items):
+    """The setup that sets `decide_debug` to `items`."""
+    return f"{SETUP}SET decide_debug = '{items}';\n"
 
 
-def _containers(cli, sql):
-    """The descent's containers once every row is read (DecideDescent::Dump)."""
-    result = cli.with_env({"DECIDB_DUMP_CONTAINERS": "1"}).execute_raw(SETUP + sql)
+def _containers(cli, sql, items=""):
+    """The descent's containers once every row is read (DecideDescent::Dump), under the `decide_debug` items `items`
+    beside `containers`."""
+    result = cli.execute_raw(_debug(",".join(["containers", items] if items else ["containers"])) + sql)
     return result.stderr.split("DECIDB_CONTAINERS_BEGIN\n", 1)[1].split("DECIDB_CONTAINERS_END", 1)[0]
 
 
@@ -86,8 +88,8 @@ def test_merged_descents_fill_the_containers_one_descent_fills(decidb_cli, tmp_p
     whole = _containers(cli, sql)
     model = cli.dump_model(SETUP + sql, tmp_path / "whole.dump")
     for rows in (1, 2):
-        assert _containers(_split(cli, rows), sql) == whole, rows
-        assert _split(cli, rows).dump_model(SETUP + sql, tmp_path / f"split{rows}.dump") == model, rows
+        assert _containers(cli, sql, f"split={rows}") == whole, rows
+        assert cli.dump_model(_debug(f"split={rows}") + sql, tmp_path / f"split{rows}.dump") == model, rows
 
 
 #: An F node holding its definition roots in its own slots, which hold another F: an L0 indicator per class over an
@@ -104,9 +106,8 @@ def test_an_f_node_in_an_f_nodes_slots_merges_as_its_pieces_were_read(decidb_cli
     cli = decidb_cli.without_verify_serializer()
     model = cli.dump_model(SETUP + F_ENCLOSES_F, tmp_path / "whole.dump")
     for rows in (1, 2):
-        pieces = cli.with_env({"DECIDB_DESCENT_CHUNK": str(rows)})
-        assert _containers(_split(cli, rows), F_ENCLOSES_F) == _containers(pieces, F_ENCLOSES_F), rows
-        assert _split(cli, rows).dump_model(SETUP + F_ENCLOSES_F, tmp_path / f"split{rows}.dump") == model, rows
+        assert _containers(cli, F_ENCLOSES_F, f"split={rows}") == _containers(cli, F_ENCLOSES_F, f"chunk={rows}"), rows
+        assert cli.dump_model(_debug(f"split={rows}") + F_ENCLOSES_F, tmp_path / f"split{rows}.dump") == model, rows
 
 
 def test_a_collated_group_is_spelled_by_its_least_spelling_in_any_piece(decidb_cli):
@@ -115,7 +116,9 @@ def test_a_collated_group_is_spelled_by_its_least_spelling_in_any_piece(decidb_c
     rows = ((1, "b"), (2, "B"), (3, "b"))
     sql = f"""SELECT id, x FROM (SELECT id, g COLLATE NOCASE AS g FROM {values(rows, 'v', ('id', 'g'))}) t
         DECIDE x(BOOL) SUCH THAT per t.g: sum(x) >= 4 MAXIMIZE SUM(x)"""
-    found = _diagnose_relation.rows(_diagnose_relation.run(_split(decidb_cli, 1), sql, scope="expanded"))
+    found = _diagnose_relation.rows(
+        _diagnose_relation.run(decidb_cli, sql, setup="SET decide_debug = 'split=1';\n", scope="expanded")
+    )
     assert [row["group"] for row in found if row["edit_source"] == "expanded_group"] == ["t.g = 'B'"], found
 
 
@@ -127,6 +130,6 @@ def test_an_error_ranks_at_its_rebased_row(decidb_cli):
         DECIDE x(INT) SUCH THAT x <= 1 AND sum(x) by (CAST(t.s AS INT)) <= 10 MAXIMIZE sum(x)"""
     cli = decidb_cli.without_verify_serializer()
     whole = cli.execute_raw(SETUP + sql)
-    split = _split(cli, 2048).execute_raw(SETUP + sql)
+    split = cli.execute_raw(_debug("split=2048") + sql)
     assert "'first'" in whole.stderr, whole.stderr
     assert split.stderr == whole.stderr

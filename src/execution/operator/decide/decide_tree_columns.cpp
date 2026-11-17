@@ -146,9 +146,9 @@ struct DecideTreeColumns::NodeColumns {
 
 DecideTreeColumns::DecideTreeColumns(const DecideTree &tree, const DecideDescent &descent, ClientContext &context,
                                      const DecideSourceNames &names, std::function<string(idx_t)> written_clause,
-                                     DecideErrorLedger &errors)
+                                     DecideErrorLedger &errors, const DecideDebug &debug)
     : tree(tree), descent(descent), context(context), names(names), written_clause(std::move(written_clause)),
-      errors(errors), nodes(tree.nodes.size()), absence(tree), injection(ReadDecideTreeInjection(tree)) {
+      errors(errors), nodes(tree.nodes.size()), absence(tree), injection(ReadDecideTreeInjection(tree, debug)) {
 }
 
 DecideTreeColumns::~DecideTreeColumns() {
@@ -870,33 +870,19 @@ Value DecideTreeColumns::PositionName(idx_t frame, idx_t row) const {
 	return container.Order(container.timelines.named_by[position]);
 }
 
-DecideTreeInjection ReadDecideTreeInjection(const DecideTree &tree) {
-	DecideTreeInjection injection;
-	const char *setting = std::getenv("DECIDB_TREE_INJECT");
-	if (!setting) {
+DecideTreeInjection ReadDecideTreeInjection(const DecideTree &tree, const DecideDebug &debug) {
+	auto &injection = debug.inject;
+	if (injection.node == DConstants::INVALID_INDEX) {
 		return injection;
 	}
-	auto parts = StringUtil::Split(string(setting), ':');
-	if (parts.size() != 3 || parts[1] != "data") {
-		throw InvalidInputException("DECIDB_TREE_INJECT: expected node:data:value");
-	}
-	try {
-		size_t consumed = 0;
-		injection.node = std::stoull(parts[0], &consumed);
-		if (consumed != parts[0].size() || injection.node >= tree.nodes.size()) {
-			throw InvalidInputException("DECIDB_TREE_INJECT: node is outside this tree");
-		}
-	} catch (std::invalid_argument &) {
-		throw InvalidInputException("DECIDB_TREE_INJECT: node must be an unsigned node index");
-	} catch (std::out_of_range &) {
-		throw InvalidInputException("DECIDB_TREE_INJECT: node is outside this tree");
+	if (injection.node >= tree.nodes.size()) {
+		throw InvalidInputException("decide_debug: inject node is outside this tree");
 	}
 	// Only a G over data computes a value its readers read, its fold.
 	auto &node = *tree.nodes[injection.node];
 	if (node.kind != DecideNodeKind::REDUCER || node.decision_value || !node.function) {
-		throw InvalidInputException("DECIDB_TREE_INJECT: node %llu computes no data value", injection.node);
+		throw InvalidInputException("decide_debug: inject node %llu computes no data value", injection.node);
 	}
-	injection.data = parts[2];
 	return injection;
 }
 

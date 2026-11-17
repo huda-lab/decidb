@@ -233,8 +233,8 @@ def test_a_null_test_the_statistics_decide_is_not_read(decidb_cli, oracle_solver
     cli = decidb_cli.without_verify_serializer()
     # In a process of its own: the dump names generated terms, which the wrapper's leak check refuses.
     dumped = subprocess.run(
-        [cli.exe, "-c", sql],
-        env={**os.environ, **(cli.env or {}), "DECIDB_DUMP_TREE": "1", "DECIDB_DUMP_BODIES": "1"},
+        [cli.exe, "-c", "SET decide_debug = 'tree,bodies'; " + sql],
+        env={**os.environ, **(cli.env or {})},
         capture_output=True,
         text=True,
         timeout=120,

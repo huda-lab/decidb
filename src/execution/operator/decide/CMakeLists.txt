@@ -4,6 +4,7 @@ add_library_unity(
   physical_decide.cpp
   physical_decide_frames.cpp
   physical_decide_diagnose.cpp
+  decide_debug.cpp
   decide_descent.cpp
   decide_key_map.cpp
   decide_absence.cpp

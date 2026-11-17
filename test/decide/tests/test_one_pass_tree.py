@@ -11,16 +11,10 @@ from ._anr_cases import F1_MAX
 
 def construction(cli, sql, chunk=2048):
     # These are explicitly requested internal dumps, so inspect them directly instead of the user-output guard.
-    env = {
-        **os.environ,
-        **(cli.env or {}),
-        "DECIDB_DUMP_TREE": "1",
-        "DECIDB_DUMP_CONTAINERS": "1",
-        "DECIDB_DESCENT_CHUNK": str(chunk),
-    }
+    setting = f"SET decide_debug = 'tree,containers,chunk={chunk}'; "
     result = subprocess.run(
-        [cli.exe, "-c", "SET threads=1; SET decide_direct_solve='off'; " + sql],
-        env=env,
+        [cli.exe, "-c", "SET threads=1; SET decide_direct_solve='off'; " + setting + sql],
+        env={**os.environ, **(cli.env or {})},
         capture_output=True,
         text=True,
         timeout=120,
