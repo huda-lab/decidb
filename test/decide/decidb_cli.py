@@ -109,6 +109,11 @@ _VERIFY_SERIALIZER_ENV = "DECIDB_VERIFY_SERIALIZER"
 #: as ``DECIDB_FORCE_SOLVER`` runs it against one backend. A test that sets the mode itself wins.
 _DIRECT_SOLVE_ENV = "DECIDB_TEST_DIRECT_SOLVE"
 
+#: Environment variable that sets ``decide_debug`` for every query this wrapper runs, its value the setting (a comma
+#: list, ``decide_debug.cpp``): ``DECIDB_TEST_DECIDE_DEBUG=split=1`` runs the whole suite with every thread's descent
+#: merged after each row. A test that sets ``decide_debug`` itself wins.
+_DECIDE_DEBUG_ENV = "DECIDB_TEST_DECIDE_DEBUG"
+
 #: Names a directory to turn the suite log on (see ``_log_query``). Unset, nothing is written.
 _SUITE_LOG_ENV = "DECIDB_SUITE_LOG"
 
@@ -512,10 +517,16 @@ class DeciDBCli:
         argv = [self.exe, self.db, "-readonly"]
         if self.verify_serializer:
             argv += _verify_serializer_args()
-        direct_mode = (self.env or {}).get(_DIRECT_SOLVE_ENV, os.environ.get(_DIRECT_SOLVE_ENV))
-        if direct_mode:
-            argv += ["-cmd", f"SET decide_direct_solve='{direct_mode}';"]
-        return argv + list(args)
+        return argv + self._setting_args() + list(args)
+
+    def _setting_args(self) -> list[str]:
+        """The startup commands that apply the suite-wide settings: ``decide_direct_solve`` and ``decide_debug``."""
+        args = []
+        for name, setting in ((_DIRECT_SOLVE_ENV, "decide_direct_solve"), (_DECIDE_DEBUG_ENV, "decide_debug")):
+            value = (self.env or {}).get(name, os.environ.get(name))
+            if value:
+                args += ["-cmd", f"SET {setting}='{value}';"]
+        return args
 
     def _subprocess_env(self, *, status_markers: bool = False) -> dict[str, str] | None:
         # `status_markers` asks DeciDB for machine-readable terminal lines. Only
@@ -765,9 +776,7 @@ class DeciDBCli:
         Like ``execute_interrupted``, it skips the serializer self-check, which runs the query a second time.
         """
         argv = [self.exe, self.db, "-readonly"]
-        direct_mode = (self.env or {}).get(_DIRECT_SOLVE_ENV, os.environ.get(_DIRECT_SOLVE_ENV))
-        if direct_mode:
-            argv += ["-cmd", f"SET decide_direct_solve='{direct_mode}';"]
+        argv += self._setting_args()
         before = resource.getrusage(resource.RUSAGE_CHILDREN)
         env = self._subprocess_env()
         proc = subprocess.Popen(
