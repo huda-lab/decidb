@@ -4,6 +4,7 @@ The answers themselves are checked in `test_direct_s1_uniform_matroid.py` and wh
 the conformance suite, `test_direct_rule_conformance.py`.
 """
 
+import json
 import re
 import math
 from pathlib import Path
@@ -257,8 +258,15 @@ def test_a1_a_number_made_of_finite_literals_has_no_invalid_value_check(decidb_c
     ],
 )
 def test_a1_a_finite_literal_adds_no_too_large_check(decidb_cli, objective, messages):
-    plan = _a1_plan_text(decidb_cli, objective)
-    assert plan.count("computesanumbertoolargeforaDOUBLE") == messages, plan
+    # The JSON plan, where no renderer cuts an expression across the lines of a box.
+    sql = f"""
+        EXPLAIN (FORMAT JSON) SELECT id, s FROM (VALUES (1, 1.0::DOUBLE, 2.0::DOUBLE), (2, NULL, 3.0), (3, 4.0, 5.0))
+        t(id, p, q) DECIDE s(REAL) SUCH THAT s BETWEEN 0 AND q MINIMIZE SUM({objective})
+    """
+    out = _raw(decidb_cli, sql).stdout
+    plan = json.dumps(json.loads(out[out.index("[") :]))
+    assert "A1_SEPARABLE_BOX" in plan, plan
+    assert plan.count("computes a number too large for a DOUBLE") == messages, plan
 
 
 @pytest.mark.correctness

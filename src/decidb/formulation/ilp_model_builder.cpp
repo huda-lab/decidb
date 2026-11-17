@@ -640,10 +640,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 	// A box inverted by rounding alone is one point. Boxes are derived in floating point
 	// from several sources -- a bound divided by its coefficient (`3 * x <= 0.3` is
 	// `x <= 0.0999...` beside `x >= 0.1`), a helper's box through an AVG's 1/n -- and a
-	// floor above its top by no more than one part in 1e9 is, in exact arithmetic, equal
-	// to it. Left inverted it reads as an infeasible model; a wider inversion still is one.
+	// floor above its top by no more than DECIDE_ROUNDED_BOX_RELATIVE_TOLERANCE is, in
+	// exact arithmetic, equal to it. Left inverted it reads as an infeasible model; a wider inversion still is one.
 	auto close_rounded_box = [](double &lower, double &upper) {
-		if (lower > upper && lower - upper <= 1e-9 * MaxValue<double>(1.0, std::abs(upper))) {
+		if (lower > upper &&
+		    lower - upper <= DECIDE_ROUNDED_BOX_RELATIVE_TOLERANCE * MaxValue<double>(1.0, std::abs(upper))) {
 			lower = upper;
 		}
 	};

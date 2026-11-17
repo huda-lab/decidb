@@ -176,6 +176,12 @@ void DirectRowBox(const ExpressionBuilder &calc, const ExprPtr &static_lower, do
 	}
 	lower = lowers.empty() ? calc.Num(NEGATIVE_INFINITY) : calc.Max(lowers);
 	upper = uppers.empty() ? calc.Num(POSITIVE_INFINITY) : calc.Min(uppers);
+	// A box inverted by rounding alone is one point, as the model builder reads it: the lower end closes onto the top
+	// (LEAST leaves a lower end at or below the top as it is). NaN, from an infinite difference, closes nothing.
+	auto reach =
+	    calc.Mul(calc.Num(DECIDE_ROUNDED_BOX_RELATIVE_TOLERANCE), calc.Max({calc.Num(1.0), calc.Fn("abs", upper)}));
+	auto rounded = calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, calc.Sub(lower, upper), reach);
+	lower = calc.If(rounded, calc.Min({lower, upper}), lower);
 }
 
 ExprPtr DirectBoxIsEmpty(const ExpressionBuilder &calc, const ExprPtr &lower, const ExprPtr &upper) {

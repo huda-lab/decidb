@@ -1173,3 +1173,46 @@ def test_rounded_box_is_one_point(decidb_cli, oracle_solver, case):
     assert abs(obj - result.objective_value) <= 1e-6 * max(
         1.0, abs(result.objective_value)
     ), f"Objective mismatch: DeciDB={obj}, Oracle={result.objective_value}"
+
+
+@pytest.mark.edge_case
+@pytest.mark.cons_perrow
+@pytest.mark.correctness
+@pytest.mark.parametrize("case", [name for name, spec in _ROUNDED_BOX.items() if "MAX(x)" not in spec[3]])
+def test_rounded_box_is_one_point_on_the_direct_plan(decidb_cli, oracle_solver, monkeypatch, case):
+    """The direct plan reads the box as the model builder does (`DirectRowBox`): the same table of cases, with direct
+    solve required, where A1_SEPARABLE_BOX answers a single-decision box. The auxiliary case has no direct rule."""
+    # A process-wide forced HiGHS backend rejects `require`.
+    monkeypatch.delenv("DECIDB_FORCE_SOLVER", raising=False)
+    coefficient, rhs, floor, objective, feasible = _ROUNDED_BOX[case]
+    query = f"""
+        SET decide_direct_solve='require';
+        SELECT id, x
+        FROM (VALUES (1), (2)) t(id)
+        DECIDE x(REAL)
+        SUCH THAT {coefficient} * x <= {rhs} AND x >= {floor}
+        {objective}
+    """
+    n = 2
+    oracle_solver.create_model(f"rounded_box_direct_{case}")
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.CONTINUOUS, lb=float(floor))
+        oracle_solver.add_constraint({f"x_{i}": float(coefficient)}, "<=", float(rhs))
+    oracle_solver.set_objective({f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE)
+    result = oracle_solver.solve()
+
+    plan = decidb_cli.execute_raw(query.replace("SELECT id, x", "EXPLAIN SELECT id, x")).stdout
+    assert "A1_SEPARABLE_BOX" in plan, plan
+
+    if not feasible:
+        assert result.status == SolverStatus.INFEASIBLE
+        decidb_cli.assert_error(query, match=r"optimization is infeasible")
+        return
+
+    assert result.status == SolverStatus.OPTIMAL
+    rows, cols = decidb_cli.execute(query)
+    xs = [float(r[cols.index("x")]) for r in rows]
+    assert len(xs) == n
+    assert abs(sum(xs) - result.objective_value) <= 1e-6 * max(
+        1.0, abs(result.objective_value)
+    ), f"Objective mismatch: DeciDB={sum(xs)}, Oracle={result.objective_value}"
