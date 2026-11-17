@@ -631,9 +631,11 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	// (D81), unless it is a sum of group sums read in place; every reducer inside it takes one keyed by its path. So
 	// does a reducer a function reads (`0 * sum(x) + abs(sum(x) - 2)`), as in a comparison (a reducer inside another
 	// expression is the VALUE shape): the function's value is of one number, which an aggregate row of its envelope
-	// would leave per row. The objective is a minimization (the canonicalizer folded a MAXIMIZE into the term signs),
-	// so the push is down times the term's sign, as for the body definitions. A reducer no decision multiplies, no
-	// function reads and none nests in stays in the objective as it is.
+	// would leave per row. A sum of group sums a function reads is no exception: read in place it stays a raw
+	// aggregate inside the function, so it takes its helper like any nest. The objective is a minimization (the
+	// canonicalizer folded a MAXIMIZE into the term signs), so the push is down times the term's sign, as for the body
+	// definitions. A reducer no decision multiplies, no function reads and none nests in stays in the objective as it
+	// is.
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
 		auto *body = &objective;
@@ -652,7 +654,8 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		}
 		for (auto &site : sites) {
 			const bool nest = HasDecideTag((*site.slot)->GetAlias(), VALUE_REWRITE_TAG);
-			if (nest && !site.under_decision && InlineSumOfGroupSums(decide, optimizer.context, *site.slot)) {
+			if (nest && !site.under_decision && !site.under_function &&
+			    InlineSumOfGroupSums(decide, optimizer.context, *site.slot)) {
 				continue;
 			}
 			if (nest || site.under_function || (products && site.under_decision)) {

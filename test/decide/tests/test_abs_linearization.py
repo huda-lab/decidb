@@ -2270,3 +2270,61 @@ def test_abs_auxiliary_takes_the_scope_its_argument_reads(
     num_vars, num_rows = sizes[cli_fixture]
     assert dump_counts(cli.dump_model(sql, tmp_path / "model.dump")) == {"num_vars": num_vars, "num_rows": num_rows}
     judge_rows(answer(cli, sql), domains, holds, objective)
+
+
+# `sum(per k: sum(x) by (k))` is a sum of group sums, which the objective reads in place when nothing else holds it
+# (InlineSumOfGroupSums). Inside an ABS it must be a helper decision like any reducer a function reads: read in place
+# it stayed a raw aggregate in the ABS, so the minimizing query answered a total of 8 where 4 is optimal, and the
+# maximizing one stopped with an internal error. Each answer is judged against an oracle that states the ABS by hand.
+_GROUP_SUM_ROWS = [(1, "a", 3), (2, "a", 3), (3, "b", 2)]
+
+
+def _group_sum_abs_sql(objective):
+    values = ", ".join(f"({i}, '{k}', {cap})" for i, k, cap in _GROUP_SUM_ROWS)
+    return f"""SELECT id, x FROM (VALUES {values}) t(id, k, cap)
+        DECIDE x(INT) SUCH THAT x <= cap AND x >= 0 {objective} ORDER BY id"""
+
+
+def _group_sum_abs_model(oracle_solver, name):
+    """The oracle's rows `x_i` in [0, cap_i] and its auxiliary `a` for the ABS; returns the coefficients of the total
+    `S` over the rows."""
+    oracle_solver.create_model(name)
+    for i, _, cap in _GROUP_SUM_ROWS:
+        oracle_solver.add_variable(f"x_{i}", VarType.INTEGER, lb=0.0, ub=float(cap))
+    oracle_solver.add_variable("a", VarType.CONTINUOUS, lb=0.0, ub=20.0)
+    return {f"x_{i}": 1.0 for i, _, _ in _GROUP_SUM_ROWS}
+
+
+@_NESTED_SOLVERS
+@pytest.mark.correctness
+def test_abs_of_a_sum_of_group_sums_beside_a_total_minimized(request, cli_fixture, oracle_solver):
+    """`MINIMIZE -sum(x) + 3 * abs(S - 4)`: the optimum totals 4 and scores -4."""
+    cli = request.getfixturevalue(cli_fixture)
+    rows, cols = cli.execute(_group_sum_abs_sql("MINIMIZE -sum(x) + 3 * abs(sum(per k: sum(x) by (k)) - 4)"))
+    total = sum(float(r[cols.index("x")]) for r in rows)
+    total_row = _group_sum_abs_model(oracle_solver, "abs_group_sums_minimized")
+    # a >= |S - 4|, minimized with a positive weight
+    oracle_solver.add_constraint({**{n: -1.0 for n in total_row}, "a": 1.0}, ">=", -4.0, name="a_above")
+    oracle_solver.add_constraint({**total_row, "a": 1.0}, ">=", 4.0, name="a_below")
+    oracle_solver.set_objective({**{n: -1.0 for n in total_row}, "a": 3.0}, ObjSense.MINIMIZE)
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL
+    assert -total + 3 * abs(total - 4) == pytest.approx(result.objective_value, abs=1e-6)
+
+
+@_NESTED_SOLVERS
+@pytest.mark.correctness
+def test_abs_of_a_sum_of_group_sums_beside_a_total_maximized(request, cli_fixture, oracle_solver):
+    """`MAXIMIZE 0 * sum(x) + abs(S - 2)`: the total of 8 is farthest from 2."""
+    cli = request.getfixturevalue(cli_fixture)
+    rows, cols = cli.execute(_group_sum_abs_sql("MAXIMIZE 0 * sum(x) + abs(sum(per k: sum(x) by (k)) - 2)"))
+    total = sum(float(r[cols.index("x")]) for r in rows)
+    total_row = _group_sum_abs_model(oracle_solver, "abs_group_sums_maximized")
+    # a <= |S - 2| from either side: z = 1 holds the side S - 2, z = 0 the side 2 - S; 20 relaxes the other side
+    oracle_solver.add_variable("z", VarType.BINARY)
+    oracle_solver.add_constraint({**{n: -1.0 for n in total_row}, "a": 1.0, "z": 20.0}, "<=", 18.0, name="a_upper")
+    oracle_solver.add_constraint({**total_row, "a": 1.0, "z": -20.0}, "<=", 2.0, name="a_lower")
+    oracle_solver.set_objective({"a": 1.0}, ObjSense.MAXIMIZE)
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL
+    assert abs(total - 2) == pytest.approx(result.objective_value, abs=1e-6)
