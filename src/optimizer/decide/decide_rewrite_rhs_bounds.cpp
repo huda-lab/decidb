@@ -568,9 +568,15 @@ private:
 			for (auto aggregate : group.held) {
 				held.push_back(columns[aggregate]);
 			}
+			// The group the row is in, as the query writes its key.
+			DirectGroupKey key;
+			for (auto &element : DecideKeyElements(decide.keys, GroupKeyIndex(comparison))) {
+				key.names.push_back(element.name);
+				key.values.push_back(calc.Of(*element.expression));
+			}
 			messages.push_back(calc.Out(DirectOnKeptRows(
 			    calc, Kept(),
-			    DirectBoundDisagreement(calc, group.text, columns[group.low], columns[group.high], held))));
+			    DirectBoundDisagreement(calc, group.text, columns[group.low], columns[group.high], held, key))));
 		}
 		comparison.right = std::move(DirectIsUpperBound(comparison.type) ? group.upper : group.lower);
 		DirectReplaceColumns(comparison.right, placeholders, values);

@@ -455,18 +455,33 @@ ExprPtr DirectOnKeptRows(const ExpressionBuilder &calc, const ExprPtr &kept, con
 }
 
 ExprPtr DirectBoundDisagreement(const ExpressionBuilder &calc, const string &text, const ExprPtr &low,
-                                const ExprPtr &high, const vector<ExprPtr> &held) {
-	// `text` is the bound as written (RenderDecideSource quotes a subquery from its source fragment).
-	auto format = StringUtil::Replace("`" + text + "`", "%", "%%") +
-	              " takes more than one value here (%g and %g) — an `=` bound cannot hold two different values "
-	              "at once, so this DECIDE query is infeasible.";
-	auto message = calc.Fn("printf", {calc.Constant(Value(format)), calc.Cast(low, LogicalType::DOUBLE),
-	                                  calc.Cast(high, LogicalType::DOUBLE)});
+                                const ExprPtr &high, const vector<ExprPtr> &held, const DirectGroupKey &group) {
+	// `text` is the bound as written (RenderDecideSource quotes a subquery from its source fragment). The function
+	// states the message from the group's key values, as the solver path does (DecideBoundDisagreementMessage).
+	D_ASSERT(group.names.size() == group.values.size());
+	vector<ExprPtr> arguments {calc.Constant(Value(text)), calc.Cast(low, LogicalType::DOUBLE),
+	                           calc.Cast(high, LogicalType::DOUBLE)};
+	for (idx_t i = 0; i < group.names.size(); i++) {
+		arguments.push_back(calc.Constant(Value(group.names[i])));
+		arguments.push_back(group.values[i]);
+	}
+	auto message = calc.Fn("__internal_decide_bound_disagreement", arguments);
 	auto disagree = calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, low, high);
 	for (auto &read : held) {
 		disagree = calc.If(calc.Cmp(ExpressionType::COMPARE_EQUAL, read, calc.Bool(true)), disagree, calc.Bool(false));
 	}
 	return calc.If(disagree, message, calc.Constant(Value(LogicalType::VARCHAR)));
+}
+
+DirectGroupKey DirectGroupKeyOf(const ExpressionBuilder &calc, const vector<DirectKeyElement> &elements,
+                                const DirectClassKey &key, const vector<ColumnBinding> &columns) {
+	// The columns of a key a rule groups by hold its elements first (DirectClassKey::types), then a marker.
+	DirectGroupKey group;
+	for (idx_t i = 0; i < elements.size() && i < columns.size(); i++) {
+		group.names.push_back(elements[i].name);
+		group.values.push_back(calc.Col(key.types[i], columns[i]));
+	}
+	return group;
 }
 
 static unique_ptr<BoundWindowExpression>
@@ -959,7 +974,7 @@ DirectLayoutGroupInputs(Optimizer &optimizer, const ExpressionBuilder &calc, Dir
 
 DirectGroupValues DirectAddGroupBound(const ExpressionBuilder &calc, const DecideGroupBound &bound,
                                       const vector<DirectGroupInputColumns> &inputs, DirectGroupSink &sink,
-                                      const ExprPtr &eligible) {
+                                      const ExprPtr &eligible, const DirectGroupKey &group) {
 	vector<ColumnBinding> placeholders;
 	vector<unique_ptr<Expression>> results;
 	for (auto &aggregate : bound.aggregates) {
@@ -998,7 +1013,7 @@ DirectGroupValues DirectAddGroupBound(const ExpressionBuilder &calc, const Decid
 			held.push_back(calc.Of(*results[aggregate]));
 		}
 		values.messages.push_back(in_group(DirectBoundDisagreement(calc, bound.text, calc.Of(*results[bound.low]),
-		                                                           calc.Of(*results[bound.high]), held)));
+		                                                           calc.Of(*results[bound.high]), held, group)));
 	}
 	return values;
 }

@@ -1116,7 +1116,7 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 		try {
 			TakeTightestFrameBound(evaluated.comparison_type, RenderDecideSource(*clause.rhs_expr, names), kept,
 			                       bound_null, kept_row_group_ids, evaluated.row_group_ids, evaluated.num_groups, true,
-			                       evaluated.rhs_values.MutableDense(), null_rows);
+			                       evaluated.group_names, key_values, evaluated.rhs_values.MutableDense(), null_rows);
 		} catch (std::exception &ex) {
 			// After every part of the clause: its terms and its product groups are part 0.
 			auto rank = tree.nodes[root]->clause_rank;

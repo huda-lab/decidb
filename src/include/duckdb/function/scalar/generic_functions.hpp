@@ -33,6 +33,15 @@ struct GetVariableFun {
 	static ScalarFunction GetFunction();
 };
 
+struct InternalDecideBoundDisagreementFun {
+	static constexpr const char *Name = "__internal_decide_bound_disagreement";
+	static constexpr const char *Parameters = "written,low,high,names_and_values...";
+	static constexpr const char *Description = "The error text of an `=` bound that takes two values in one group, the group named by its key columns";
+	static constexpr const char *Example = "";
+
+	static ScalarFunction GetFunction();
+};
+
 struct InternalDecideWarnNumbersFun {
 	static constexpr const char *Name = "__internal_decide_warn_numbers";
 	static constexpr const char *Parameters = "";

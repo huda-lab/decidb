@@ -323,12 +323,26 @@ unique_ptr<Expression> DirectActiveWhen(const ExpressionBuilder &calc, const Exp
 //! only on a kept row, as on the solver path.
 ExprPtr DirectOnKeptRows(const ExpressionBuilder &calc, const ExprPtr &kept, const ExprPtr &value);
 
+//! The key of a group as a message names it: each column as the query writes it, and its value on the row, an
+//! expression over the plan the message is read in. Empty for the whole query, which names no group.
+struct DirectGroupKey {
+	vector<string> names;
+	vector<ExprPtr> values;
+};
+
+//! The key of the group a rule reads, as a message names it: `elements` as the query writes them, and the value of each
+//! in `columns`, the key's columns (`key` is their shape) in the plan the message is read in. Empty for a rule whose
+//! rows are one group, which has no key column.
+DirectGroupKey DirectGroupKeyOf(const ExpressionBuilder &calc, const vector<DirectKeyElement> &elements,
+                                const DirectClassKey &key, const vector<ColumnBinding> &columns);
+
 //! The error of an `=` bound that takes two values in one group, on a row of the group: its smallest (`low`) and
 //! largest (`high`) value, and NULL where they agree or where one of `held` is not true -- a group whose reducers do
-//! not each read a row holds no instance (DecideGroupBound::held). `text` is the bound as written. The bound-side
-//! rewrite and a rule that reduces the bound itself both raise it.
+//! not each read a row holds no instance (DecideGroupBound::held). `text` is the bound as written, `group` the group
+//! the row is in. The bound-side rewrite and a rule that reduces the bound itself both raise it, through the one text
+//! the solver path states too (`__internal_decide_bound_disagreement`, DecideBoundDisagreementMessage).
 ExprPtr DirectBoundDisagreement(const ExpressionBuilder &calc, const string &text, const ExprPtr &low,
-                                const ExprPtr &high, const vector<ExprPtr> &held);
+                                const ExprPtr &high, const vector<ExprPtr> &held, const DirectGroupKey &group);
 
 //===--------------------------------------------------------------------===//
 // Scope projection and data-valued bounds
@@ -482,14 +496,15 @@ struct DirectGroupValues {
 };
 
 //! Adds the bound's aggregates to the rule's group aggregate. `inputs` says where the rule projected each input's reads
-//! and argument (a binding is unset for a member the input has not); `eligible` is over the group aggregate's output.
+//! and argument (a binding is unset for a member the input has not); `eligible` is over the group aggregate's output,
+//! and so are the values of `group`, the key a message names the group by.
 struct DirectGroupInputColumns {
 	ColumnBinding reads;
 	ColumnBinding argument;
 };
 DirectGroupValues DirectAddGroupBound(const ExpressionBuilder &calc, const DecideGroupBound &bound,
                                       const vector<DirectGroupInputColumns> &inputs, DirectGroupSink &sink,
-                                      const ExprPtr &eligible);
+                                      const ExprPtr &eligible, const DirectGroupKey &group);
 
 //! Lays out the inputs of the bound (DirectGroupInputs) as columns of `stage`, and returns where each one's reads and
 //! argument are (DirectAddGroupBound takes them). Each message an input raises is a column of `stage` too, and its

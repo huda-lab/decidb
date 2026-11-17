@@ -377,7 +377,35 @@ def test_nested_casts_that_change_nothing_print_as_the_outer(decidb_cli):
     sql = f"""SELECT id, x FROM (VALUES (0, 'a', 1.0::DOUBLE), (1, 'a', 2.0::DOUBLE)) t(id, g, w) DECIDE x(REAL)
         SUCH THAT sum(x) by (t.g) = {bound} MAXIMIZE sum(x)"""
     result = decidb_cli.execute_raw(sql)
-    assert f"`{bound}` takes more than one value here" in result.stderr, result.stderr
+    assert f"`{bound}` takes more than one value here (1 and 2), in the group t.g = 'a'" in result.stderr, result.stderr
+
+
+@pytest.mark.parametrize(
+    "keys, rows, group",
+    [
+        pytest.param(
+            "t.g",
+            "(1, 'a', 1, 1, 2.0), (2, 'a', 1, 1, 1.0), (3, 'b', 1, 1, 5.0), (4, 'b', 1, 2, 4.0)",
+            "t.g = 'b'",
+            id="one-key-column",
+        ),
+        pytest.param(
+            "t.g, t.h",
+            "(1, 'a', 1, 1, 2.0), (2, 'a', 2, 1, 1.0), (3, 'b', 2, 1, 5.0), (4, 'b', 2, 2, 4.0)",
+            "t.g = 'b', t.h = 2",
+            id="two-key-columns-a-number-bare",
+        ),
+    ],
+)
+def test_an_equal_bound_with_two_values_names_its_group_on_every_path(decidb_cli, keys, rows, group):
+    """The group the two values differ in is named as the query writes its key (DescribeKeyValues). The solver, the
+    rewrite's plan and a direct rule's plan state one text: `off` is the solver, `auto` and `require` a rule."""
+    sql = f"""SELECT id, x FROM (VALUES {rows}) t(id, g, h, cap, score) DECIDE x(BOOL)
+        SUCH THAT SUM(x) by ({keys}) = t.cap MAXIMIZE SUM(t.score * x)"""
+    expected = f"`t.cap` takes more than one value here (1 and 2), in the group {group} — an `=` bound"
+    for mode in ("off", "auto", "require"):
+        result = decidb_cli.execute_raw(f"SET decide_direct_solve = '{mode}'; {sql}")
+        assert expected in result.stderr, (mode, result.stderr)
 
 
 @pytest.mark.parametrize("macro", ["a", "max(a)"], ids=["a-scalar-macro", "an-aggregate-macro"])

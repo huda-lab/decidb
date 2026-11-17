@@ -1088,8 +1088,8 @@ class TestPointErrors:
             _edge("sum(x) by (t.product) = at(previous: t.v) over (t.period within t.product)")
         )
         assert (
-            "`at(previous: t.v) over (t.period within t.product)` takes more than one value here (4 and 6)"
-            in result.stderr
+            "`at(previous: t.v) over (t.period within t.product)` takes more than one value here (4 and 6), "
+            "in the group t.product = 'A'" in result.stderr
         ), result.stderr
 
     @pytest.mark.correctness
@@ -2301,7 +2301,7 @@ class TestATightestFrameBound:
         sql = f"""SELECT id, x {table('t', TIGHT, TIGHT_ROWS)} DECIDE x(REAL)
             SUCH THAT x <= 100 AND sum(x) by (t.g) = at(previous: t.c) {OVER_S} MAXIMIZE sum(x)"""
         result = decidb_cli.execute_raw(sql)
-        assert "takes more than one value here (3 and 4)" in result.stderr, result.stderr
+        assert "takes more than one value here (3 and 4), in the group t.g = 'a'" in result.stderr, result.stderr
         assert_no_internal_leak(result, "an = frame bound with two values")
 
     @pytest.mark.parametrize(
@@ -2333,7 +2333,7 @@ class TestATightestFrameBound:
         sql = f"""SELECT id, x {table('t', TIGHT, TIGHT_ROWS)} DECIDE x(REAL) SUCH THAT x <= 100
             AND sum(when t.c > 3: x) by (t.g) = at(next: t.c) {OVER_S} MAXIMIZE sum(x)"""
         result = decidb_cli.execute_raw(sql)
-        assert "takes more than one value here (4 and 9)" in result.stderr, result.stderr
+        assert "takes more than one value here (4 and 9), in the group t.g = 'a'" in result.stderr, result.stderr
         assert_no_internal_leak(result, "an = frame bound over a filtered anchor")
 
 
@@ -2456,7 +2456,7 @@ class TestAFrameBoundReadsOnlyInstances:
         sql = f"""SELECT id, x {table('t', TIGHT, TIGHT_ROWS)} DECIDE x(REAL)
             SUCH THAT x <= 100 AND (SELECT 2.0::DOUBLE) * sum(x) by (t.g) = at(previous: t.c) {OVER_S} MAXIMIZE sum(x)"""
         result = decidb_cli.execute_raw(sql)
-        assert "takes more than one value here (3 and 4)" in result.stderr, result.stderr
+        assert "takes more than one value here (3 and 4), in the group t.g = 'a'" in result.stderr, result.stderr
 
     @pytest.mark.parametrize(
         "bound, c, total",

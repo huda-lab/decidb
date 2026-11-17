@@ -15,6 +15,13 @@
         "struct": "GetVariableFun"
     },
     {
+        "name": "__internal_decide_bound_disagreement",
+        "parameters": "written,low,high,names_and_values...",
+        "description": "The error text of an `=` bound that takes two values in one group, the group named by its key columns",
+        "example": "",
+        "type": "scalar_function"
+    },
+    {
         "name": "__internal_decide_warn_numbers",
         "parameters": "",
         "description": "Prints DECIDE's number-range warning once per query and returns true",

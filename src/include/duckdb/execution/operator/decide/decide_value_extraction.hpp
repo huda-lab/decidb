@@ -254,11 +254,13 @@ void HoistAvgIntoNotEqualBound(const DecideConstraint &constraint, vector<TermFi
 //! (`null_rows`). `kept_groups` numbers each kept row's group, empty for every kept row in one; `instances` is what
 //! remains of those groups once a clause's rules have dropped some (empty: all of one group), and a group it no longer
 //! holds has no instance, so no bound to read (D68). So does a `grouped` clause's group holding a row of `null_rows`, a
-//! NULL its left side reads, which DecideAbsence::SkipNullInstances drops next.
+//! NULL its left side reads, which DecideAbsence::SkipNullInstances drops next. An `=` bound that takes two values in a
+//! group names the group by its key (`group_names`, whose values `key_values` reads).
 void TakeTightestFrameBound(ExpressionType comparison, const string &written, const vector<bool> &kept,
                             const vector<bool> &bound_null, const vector<idx_t> &kept_groups,
-                            const vector<idx_t> &instances, idx_t num_groups, bool grouped, vector<double> &rhs,
-                            vector<bool> &null_rows);
+                            const vector<idx_t> &instances, idx_t num_groups, bool grouped,
+                            const vector<GroupName> &group_names, const vector<SolverInput::KeyValues> &key_values,
+                            vector<double> &rhs, vector<bool> &null_rows);
 
 //! The classes each group's rows stand for (language/guide.md §8.1, D28), kept for the diagnosis: under a `per K:`,
 //! K's classes among the group's kept rows, in the order its rows first read them; with no `per`, every kept row of

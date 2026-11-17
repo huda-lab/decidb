@@ -1005,8 +1005,9 @@ string DecideFrameDifference(const DecideSignatureField &field, const DecideFram
 
 void TakeTightestFrameBound(ExpressionType comparison, const string &written, const vector<bool> &kept,
                             const vector<bool> &bound_null, const vector<idx_t> &kept_groups,
-                            const vector<idx_t> &instances, idx_t num_groups, bool grouped, vector<double> &rhs,
-                            vector<bool> &null_rows) {
+                            const vector<idx_t> &instances, idx_t num_groups, bool grouped,
+                            const vector<GroupName> &group_names, const vector<SolverInput::KeyValues> &key_values,
+                            vector<double> &rhs, vector<bool> &null_rows) {
 	const bool one_group = kept_groups.empty();
 	const idx_t groups = one_group ? 1 : num_groups;
 	vector<bool> held(groups, instances.empty());
@@ -1050,9 +1051,15 @@ void TakeTightestFrameBound(ExpressionType comparison, const string &written, co
 			continue;
 		}
 		if (comparison == ExpressionType::COMPARE_EQUAL && least[group] != greatest[group]) {
-			throw InvalidInputException("`%s` takes more than one value here (%g and %g) — an `=` bound cannot hold "
-			                            "two different values at once, so this DECIDE query is infeasible.",
-			                            written, least[group], greatest[group]);
+			vector<string> names;
+			vector<Value> values;
+			if (group < group_names.size() && group_names[group].key_values != DConstants::INVALID_INDEX) {
+				auto &key = key_values[group_names[group].key_values];
+				names = key.names;
+				values = key.values_of(group_names[group].group);
+			}
+			throw InvalidInputException(
+			    DecideBoundDisagreementMessage(written, least[group], greatest[group], names, values));
 		}
 		rhs[row] = upper ? least[group] : greatest[group];
 	}
