@@ -3245,7 +3245,6 @@ c_expr:		d_expr									%prec DECIDE_ITEM
 			| func_application decide_by
 				{
 					/* DeciDB: reducer BY (key). The binder validates that it is a reducer. */
-					noteDecideCall(@1, @2, yyscanner);
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_REDUCER_BY, "reducer_by", $1, (PGNode *) $2, @2);
 				}
 			| func_name '(' decide_scope ':' func_arg_list ')'
@@ -3260,7 +3259,6 @@ c_expr:		d_expr									%prec DECIDE_ITEM
 				{
 					noteDecideReducerKey($3, @7.start, yyscanner);
 					linitial($5) = applyDecideScope($3, (PGNode *) linitial($5));
-					noteDecideCall(@6, @7, yyscanner, @1);
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_REDUCER_BY, "reducer_by", (PGNode *) makeFuncCall($1, $5, @1), (PGNode *) $7, @7);
 				}
@@ -3301,7 +3299,6 @@ c_expr:		d_expr									%prec DECIDE_ITEM
 			| func_name '(' func_arg_list ':' func_arg_list ')' decide_by
 				{
 					/* DeciDB: the colon form with BY, sum(D: expr) BY (key) */
-					noteDecideCall(@6, @7, yyscanner, @1);
 					noteDecideSpan(yyscanner, @7.start, PG_DECIDE_SPAN_PER, @3);
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_REDUCER_BY, "reducer_by",
 						makeQualifiedReducer($1, $3, $5, @1, @3, @4, yyscanner), (PGNode *) $7, @7);

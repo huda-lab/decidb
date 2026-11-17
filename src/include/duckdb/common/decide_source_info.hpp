@@ -28,9 +28,7 @@ enum class DecideSpanRole : uint8_t {
 	//! The objective, anchored at the start of the tail (`tail_start`).
 	OBJECTIVE = 4,
 	//! An expression of the tail, anchored at the query location its parsed expression took.
-	EXPR = 5,
-	//! A reducer's call without its `by`, anchored at the `by`, which is the location of the reducer that has one.
-	CALL = 6
+	EXPR = 5
 };
 
 //! How tightly the text of an EXPR span binds, which decides whether it needs parentheses as an operand: the level of

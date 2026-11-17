@@ -829,21 +829,6 @@ noteDecideReducerKey(PGNode *scope_node, int anchor, core_yyscan_t yyscanner)
 }
 
 /*
- * DeciDB: a reducer's call without its BY, anchored at the BY. The span runs from the start of the call to the end of
- * its closing parenthesis; `call_start` is that of the call when the call is built by this rule (the scoped and the
- * colon form), else `call_end` is the whole call (`func_application`).
- */
-static void
-noteDecideCall(YYLTYPE call_end, YYLTYPE by, core_yyscan_t yyscanner, YYLTYPE call_start)
-{
-	YYLTYPE call = call_end;
-
-	if (call_start.start != 0 || call_start.end != 0)
-		call.start = call_start.start;
-	noteDecideSpan(yyscanner, by.start, PG_DECIDE_SPAN_CALL, call);
-}
-
-/*
  * DeciDB: the sides of a BETWEEN, anchored at its keyword: the input, and the text from the lower bound through the
  * upper one (`lo AND hi`). A message quotes the clause as `input BETWEEN lo AND hi`.
  */

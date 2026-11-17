@@ -1913,7 +1913,7 @@ void DecideCanonicalizer::SignQualifiedReducers(Expression &expr, const DecideRe
 	}
 	// The rows it reads: its path's, then its own `when`'s.
 	auto reducer_rows = below.Rows();
-	auto text = message_names ? RenderDecideReducer(reducer, *message_names) : reducer.ToString();
+	auto text = message_names ? RenderDecideSource(reducer, *message_names) : reducer.ToString();
 	auto signature = AddSignature(out, reducer_rows.get(), key, std::move(fields), std::move(text), source_clause_id);
 	// A scope of its own, on the same key: the classes it reads are the key's split by the signature, which no other
 	// reducer's or declaration's sharing the key are.

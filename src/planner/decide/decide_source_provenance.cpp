@@ -787,10 +787,6 @@ DecideSourceNames DecidePlanNames(const DecideSourceText &text, const vector<Key
 	return names;
 }
 
-string RenderDecideReducer(const BoundAggregateExpression &reducer, const DecideSourceNames &names) {
-	return RenderSource(reducer, ContextOf(names));
-}
-
 //! The source id CollectExpressionStrings reports for a row a rewrite added for the
 //! objective (OBJECTIVE_ROW_TAG): no clause's, and not INVALID_INDEX, which is a row no
 //! one claims.
