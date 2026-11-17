@@ -705,22 +705,6 @@ DecideFrameColumnValues ComputeDecideFrameColumns(ClientContext &context, const 
 	return computed;
 }
 
-//! The columns `expr` reads, each once, appended to `leaves` unless there: a position's signature reads each by value
-//! (deck p. 110; D83). A constant reads none, and a clause refuses data that varies by row without a column.
-static void AppendPayloadLeaves(const Expression &expr, vector<const Expression *> &leaves) {
-	auto kind = expr.GetExpressionClass();
-	if (kind == ExpressionClass::BOUND_COLUMN_REF || kind == ExpressionClass::BOUND_REF) {
-		for (auto *leaf : leaves) {
-			if (leaf->Equals(expr)) {
-				return;
-			}
-		}
-		leaves.push_back(&expr);
-		return;
-	}
-	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { AppendPayloadLeaves(child, leaves); });
-}
-
 void SkipDecideFrameNullReads(const DecideTree &tree, vector<DecideFrameMap> &maps, idx_t num_rows,
                               const DecideFrameRead &read,
                               const std::function<bool(idx_t variable, idx_t row)> &absent) {

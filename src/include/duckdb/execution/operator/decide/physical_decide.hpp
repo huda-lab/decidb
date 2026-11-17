@@ -248,7 +248,7 @@ private:
 	    LogicalDecide::RewriteAccount::Kind kind = LogicalDecide::RewriteAccount::Kind::RUN_TIME) const;
 	//! What the data left of each clause (deck pp. 50, 56): the instances it skipped for having no value, an EXPLAIN
 	//! ANALYZE line under it, and a clause left with none, which constrains nothing, a warning on stderr.
-	void ReportSkippedInstances(const DecideGlobalSinkState &gstate, bool silent) const;
+	void ReportSkippedInstances(const DecideGlobalSinkState &gstate) const;
 	//! An objective that is 0 whatever the decisions -- every term with no value or a zero factor on every row -- is
 	//! a warning on stderr and an EXPLAIN ANALYZE line: any feasible answer is optimal.
 	void ReportAnEmptyObjective(const SolverInput &input) const;
@@ -290,12 +290,12 @@ private:
 		vector<ComposedMinMaxTermData> composed_objective_terms;
 	};
 
-	//! The evaluation (language/guide.md §6.4): the tree's descent over the input (into `descent`), each node's
+	//! The evaluation (language/guide.md §6.4): the tree's descent over the input (`gstate.descent`), each node's
 	//! programs over its entries, and the model emitter, filling gstate's evaluation fields and the arguments after
-	//! `descent`, with the values its groups are named by in `key_values`. It prints only when not `silent`.
+	//! `num_rows`, with the values its groups are named by in `key_values`.
 	void EvaluateTree(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-	                  unique_ptr<DecideDescent> &descent, vector<SolverInput::KeyValues> &key_values,
-	                  vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated, bool silent) const;
+	                  vector<SolverInput::KeyValues> &key_values, vector<KeyedMapping> &keyed_mappings,
+	                  EvaluatedClauses &evaluated) const;
 
 	//! Then each AVG term is divided by the rows it reads, or by those of its own group (D81).
 	static void ScaleObjectiveAvg(DecideGlobalSinkState &gstate, idx_t num_rows, EvaluatedClauses &evaluated);
@@ -353,8 +353,7 @@ private:
 	//! every constant against that box, and build the solver model from it. `elastic` is
 	//! left untouched — the copy it works on is local.
 	SolverModel FormulateElasticModel(const ElasticFormulation &elastic, const EvaluatedClauses &evaluated,
-	                                  bool keep_singleton_rows, VarIndexer &out_var_indexer,
-	                                  vector<string> &out_global_labels) const;
+	                                  VarIndexer &out_var_indexer, vector<string> &out_global_labels) const;
 };
 
 } // namespace duckdb

@@ -43,18 +43,6 @@ unique_ptr<Expression> DecideFoldConstants(unique_ptr<Expression> expr, ClientCo
 //! `45 >= 1e20`) is evaluated on every row. A message names the prepared tree, not this one, so it reads as written.
 unique_ptr<Expression> TransformToChunkExpression(const Expression &expr, ClientContext &context);
 
-//! Runs each expression of `executor` over `chunk`, whose first row is row `row_offset` of
-//! the data, into `results`: expression i only on the rows `*reads[i]` marks (every row
-//! when null), NULL on the others. A scoped clause filters before it generates
-//! (language/guide.md §6.1), so nothing is computed on a row its `when` drops:
-//! `when w > 0: x <= ln(w)` takes no logarithm of 0.
-void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, idx_t row_offset,
-                       const vector<const vector<bool> *> &reads, DataChunk &results);
-
-//! The same, with one set of rows for every expression; without one, every row.
-void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, idx_t row_offset, const vector<bool> *rows,
-                       DataChunk &results);
-
 //! Whether an error stops the query wherever it is raised, rather than belonging to the row it is raised on.
 bool DecideErrorStopsTheQuery(const ErrorData &error);
 
@@ -253,14 +241,14 @@ void HoistAvgIntoNotEqualBound(const DecideConstraint &constraint, vector<TermFi
 //! §3.2.1). A row where the bound has none (`bound_null`) bounds nothing, and a group with no such row has no instance
 //! (`null_rows`). `kept_groups` numbers each kept row's group, empty for every kept row in one; `instances` is what
 //! remains of those groups once a clause's rules have dropped some (empty: all of one group), and a group it no longer
-//! holds has no instance, so no bound to read (D68). So does a `grouped` clause's group holding a row of `null_rows`, a
+//! holds has no instance, so no bound to read (D68). So does a group holding a row of `null_rows`, a
 //! NULL its left side reads, which DecideAbsence::SkipNullInstances drops next. An `=` bound that takes two values in a
 //! group names the group by its key (`group_names`, whose values `key_values` reads).
 void TakeTightestFrameBound(ExpressionType comparison, const string &written, const vector<bool> &kept,
                             const vector<bool> &bound_null, const vector<idx_t> &kept_groups,
-                            const vector<idx_t> &instances, idx_t num_groups, bool grouped,
-                            const vector<GroupName> &group_names, const vector<SolverInput::KeyValues> &key_values,
-                            vector<double> &rhs, vector<bool> &null_rows);
+                            const vector<idx_t> &instances, idx_t num_groups, const vector<GroupName> &group_names,
+                            const vector<SolverInput::KeyValues> &key_values, vector<double> &rhs,
+                            vector<bool> &null_rows);
 
 //! The classes each group's rows stand for (language/guide.md §8.1, D28), kept for the diagnosis: under a `per K:`,
 //! K's classes among the group's kept rows, in the order its rows first read them; with no `per`, every kept row of
@@ -309,11 +297,6 @@ void DecideMapRowsInNoClass(KeyedMapping &mapping);
 //! times `scale`, those of no decision its constant. A constant past a DOUBLE names `label`, the helper as written.
 void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx_t> &variables, idx_t row, double scale,
                       const string &label, ReducerValueMembers &out);
-
-//! `ec`'s members -- its rows, each in the group `row_group_ids` names, a reducer's `by` groups partitioning them --
-//! listed per group (ReducerValueMembers), each group read at its first member row; a group with no member is left
-//! out.
-void DecideListRowMembers(const EvaluatedConstraint &ec, idx_t num_rows, const string &label, ReducerValueMembers &out);
 
 //! The helpers' sizes, which DECIDB_PROFILE reports: their instances, members and members' terms.
 void DecideCountValueLinks(const vector<ReducerValueLinkSpec> &links);

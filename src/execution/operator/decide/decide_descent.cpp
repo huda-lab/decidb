@@ -32,8 +32,8 @@ static bool IsSetNode(const DecideNode &node) {
 	return node.kind == DecideNodeKind::SCOPE && node.per != DecideTreePer::ROW;
 }
 
-static hash_t DescentHash(idx_t parent, const vector<Value> &values) {
-	hash_t result = Hash<uint64_t>(parent);
+static hash_t DescentHash(const vector<Value> &values) {
+	hash_t result = Hash<uint64_t>(0);
 	for (auto &value : values) {
 		result = MurmurHash64(result ^ value.Hash());
 	}
@@ -161,11 +161,11 @@ static vector<LogicalType> DescentTypes(const vector<unique_ptr<Expression>> &ex
 	return types;
 }
 
-//! Row `i` of `values`' columns `begin` to `end`.
-static vector<Value> DescentRowValues(DataChunk &values, idx_t begin, idx_t end, idx_t i) {
+//! Row `i` of `values`' columns before `end`.
+static vector<Value> DescentRowValues(DataChunk &values, idx_t end, idx_t i) {
 	vector<Value> result;
-	result.reserve(end - begin);
-	for (idx_t c = begin; c < end; c++) {
+	result.reserve(end);
+	for (idx_t c = 0; c < end; c++) {
 		result.push_back(values.data[c].GetValue(i));
 	}
 	return result;
@@ -772,7 +772,7 @@ void DecideDescent::ReadKey(idx_t key, DataChunk &chunk, const Reach &rows, cons
 	if (collated && !missing.empty()) {
 		vector<vector<Value>> groups;
 		for (idx_t i = 0; i < missing.size(); i++) {
-			groups.push_back(DescentRowValues(values, 0, values.ColumnCount(), i));
+			groups.push_back(DescentRowValues(values, values.ColumnCount(), i));
 		}
 		Spell(key, groups, spelled.spelled, spelled.sort_keys);
 	}
@@ -853,7 +853,7 @@ void DecideDescent::Spell(idx_t key, const vector<vector<Value>> &groups, const 
                           const vector<vector<string>> &sort_keys) {
 	auto &table = spellings[key];
 	for (idx_t i = 0; i < groups.size(); i++) {
-		auto &bucket = table[DescentHash(0, groups[i])];
+		auto &bucket = table[DescentHash(groups[i])];
 		auto known = std::find_if(bucket.begin(), bucket.end(),
 		                          [&](const KeySpelling &spelling) { return DescentEqual(spelling.group, groups[i]); });
 		if (known == bucket.end()) {
@@ -868,7 +868,7 @@ vector<Value> DecideDescent::Label(idx_t key, const vector<Value> &group) const 
 	if (key >= spellings.size() || spellings[key].empty()) {
 		return group;
 	}
-	auto bucket = spellings[key].find(DescentHash(0, group));
+	auto bucket = spellings[key].find(DescentHash(group));
 	if (bucket != spellings[key].end()) {
 		for (auto &spelling : bucket->second) {
 			if (DescentEqual(spelling.group, group)) {

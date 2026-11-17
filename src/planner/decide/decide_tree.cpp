@@ -1171,9 +1171,6 @@ private:
 		node.facts = ReadDecideClauseFacts(context, op, *row, scope);
 		node.comparison_type = row->type;
 		node.folded = HasDecideTag(comparison.GetAlias(), SINGLETON_ROW_BOUND_TAG);
-		node.repair_rows = HasDecideTag(comparison.GetAlias(), SINGLETON_ROW_CLAUSE_ROWS_TAG);
-		node.minmax_easy = HasDecideTag(comparison.GetAlias(), MINMAX_EASY_REWRITE_TAG);
-		node.tightest_bound = HasDecideTag(comparison.GetAlias(), FRAME_TIGHTEST_BOUND_TAG);
 		TryParseSourceClauseTag(comparison.GetAlias(), node.source_clause_id);
 		node.text = RootText(node.source_clause_id);
 		TryParseRemovalGroupTag(comparison.GetAlias(), node.removal_group_id);

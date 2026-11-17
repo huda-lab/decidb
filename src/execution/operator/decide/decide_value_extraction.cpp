@@ -74,59 +74,6 @@ unique_ptr<Expression> TransformToChunkExpression(const Expression &expr, Client
 	return DecideFoldConstants(ToChunkReferences(expr, context), context);
 }
 
-void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, idx_t row_offset,
-                       const vector<const vector<bool> *> &reads, DataChunk &results) {
-	const idx_t count = chunk.size();
-	results.SetCardinality(count);
-	if (count == 0) {
-		return;
-	}
-	SelectionVector read_sel(count);
-	for (idx_t expr_idx = 0; expr_idx < results.ColumnCount(); expr_idx++) {
-		auto &result = results.data[expr_idx];
-		auto *rows = reads[expr_idx];
-		idx_t read_count = 0;
-		for (idx_t i = 0; i < count; i++) {
-			if (!rows || (*rows)[row_offset + i]) {
-				read_sel.set_index(read_count++, i);
-			}
-		}
-		if (read_count == count) {
-			executor.SetChunk(chunk);
-			executor.ExecuteExpression(expr_idx, result);
-			continue;
-		}
-		// The read rows' values, then one NULL slot every other row points at.
-		Vector values(result.GetType(), read_count + 1);
-		if (read_count > 0) {
-			DataChunk read_chunk;
-			read_chunk.InitializeEmpty(chunk.GetTypes());
-			read_chunk.Slice(chunk, read_sel, read_count);
-			Vector read_result(result.GetType());
-			executor.SetChunk(read_chunk);
-			executor.ExecuteExpression(expr_idx, read_result);
-			VectorOperations::Copy(read_result, values, read_count, 0, 0);
-		}
-		FlatVector::SetNull(values, read_count, true);
-		// The result keeps this selection, so each expression gets its own.
-		SelectionVector back(count);
-		for (idx_t i = 0, slot = 0; i < count; i++) {
-			bool read = slot < read_count && read_sel.get_index(slot) == i;
-			back.set_index(i, read ? slot++ : read_count);
-		}
-		result.Slice(values, back, count);
-	}
-}
-
-void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, idx_t row_offset, const vector<bool> *rows,
-                       DataChunk &results) {
-	if (!rows) {
-		executor.Execute(chunk, results);
-		return;
-	}
-	ExecuteOnReadRows(executor, chunk, row_offset, vector<const vector<bool> *>(results.ColumnCount(), rows), results);
-}
-
 bool DecideErrorStopsTheQuery(const ErrorData &error) {
 	auto type = error.Type();
 	return type == ExceptionType::INTERRUPT || type == ExceptionType::OUT_OF_MEMORY || type == ExceptionType::FATAL;
@@ -861,28 +808,6 @@ void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx
 	}
 }
 
-void DecideListRowMembers(const EvaluatedConstraint &ec, idx_t num_rows, const string &label,
-                          ReducerValueMembers &out) {
-	const bool grouped = !ec.row_group_ids.empty();
-	const idx_t num_groups = grouped ? ec.num_groups : 1;
-	vector<vector<idx_t>> rows_of(num_groups);
-	for (idx_t row = 0; row < num_rows; row++) {
-		const idx_t group = grouped ? ec.row_group_ids[row] : 0;
-		if (group != DConstants::INVALID_INDEX && group < num_groups) {
-			rows_of[group].push_back(row);
-		}
-	}
-	for (auto &rows : rows_of) {
-		if (rows.empty()) {
-			continue;
-		}
-		out.AddGroup(rows[0]);
-		for (auto row : rows) {
-			DecideListMember(ec.row_coefficients, ec.variable_indices, row, 1.0, label, out);
-		}
-	}
-}
-
 void DecideCountValueLinks(const vector<ReducerValueLinkSpec> &links) {
 	if (DecideProfileScope::Enabled() && !links.empty()) {
 		idx_t groups = 0, members = 0, terms = 0;
@@ -1005,9 +930,9 @@ string DecideFrameDifference(const DecideSignatureField &field, const DecideFram
 
 void TakeTightestFrameBound(ExpressionType comparison, const string &written, const vector<bool> &kept,
                             const vector<bool> &bound_null, const vector<idx_t> &kept_groups,
-                            const vector<idx_t> &instances, idx_t num_groups, bool grouped,
-                            const vector<GroupName> &group_names, const vector<SolverInput::KeyValues> &key_values,
-                            vector<double> &rhs, vector<bool> &null_rows) {
+                            const vector<idx_t> &instances, idx_t num_groups, const vector<GroupName> &group_names,
+                            const vector<SolverInput::KeyValues> &key_values, vector<double> &rhs,
+                            vector<bool> &null_rows) {
 	const bool one_group = kept_groups.empty();
 	const idx_t groups = one_group ? 1 : num_groups;
 	vector<bool> held(groups, instances.empty());
@@ -1016,7 +941,7 @@ void TakeTightestFrameBound(ExpressionType comparison, const string &written, co
 			held[one_group ? 0 : group] = true;
 		}
 	}
-	for (idx_t row = 0; grouped && row < null_rows.size(); row++) {
+	for (idx_t row = 0; row < null_rows.size(); row++) {
 		const idx_t instance = instances.empty() ? 0 : instances[row];
 		if (null_rows[row] && instance != DConstants::INVALID_INDEX) {
 			held[one_group ? 0 : instance] = false;

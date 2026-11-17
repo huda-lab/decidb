@@ -60,7 +60,7 @@ bool HoldsRangeOverDecisions(const LogicalDecide &decide, const Expression &expr
 //! The sign each range over decisions in `expr` carries once `expr` is read as a sum (WalkPolarity): through SUM and
 //! AVG, whose members it keeps, and through a MIN or a MAX, which does not decrease when a member grows; 0 under a
 //! norm, which pins its helper from both sides (D79).
-void CollectRangeSigns(ClientContext &context, const LogicalDecide &decide, Expression &expr, int sign,
+void CollectRangeSigns(ClientContext &context, const LogicalDecide &decide, Expression &expr,
                        unordered_map<const Expression *, int> &signs) {
 	PolarityHolds holds = [&](const Expression &node) {
 		return HoldsRangeOverDecisions(decide, node);
@@ -87,7 +87,7 @@ void CollectRangeSigns(ClientContext &context, const LogicalDecide &decide, Expr
 		}
 		return true;
 	};
-	WalkPolarity(context, expr, sign, holds, visit);
+	WalkPolarity(context, expr, 1, holds, visit);
 }
 
 //! Each point frame over decisions a product of decisions or a square reads -- a term of degree 2 -- becomes the range
@@ -231,7 +231,7 @@ void DecideOptimizer::RewriteFrameRanges(LogicalDecide &decide) {
 			                        comparison.ToString());
 		}
 		unordered_map<const Expression *, int> signs;
-		CollectRangeSigns(context, decide, *comparison.left, 1, signs);
+		CollectRangeSigns(context, decide, *comparison.left, signs);
 		idx_t source_clause_id = DConstants::INVALID_INDEX;
 		TryParseSourceClauseTag(comparison.GetAlias(), source_clause_id);
 		lifter.Lift(comparison.left, ExtremumPushOf(comparison.type), source_clause_id, signs);
@@ -254,7 +254,7 @@ void DecideOptimizer::RewriteFrameRanges(LogicalDecide &decide) {
 		body = &conjunction.children[0];
 	}
 	unordered_map<const Expression *, int> signs;
-	CollectRangeSigns(context, decide, **body, 1, signs);
+	CollectRangeSigns(context, decide, **body, signs);
 	lifter.Lift(*body, ExtremumPush::DOWN, DConstants::INVALID_INDEX, signs);
 	decide.SetObjective(context, std::move(objective));
 }

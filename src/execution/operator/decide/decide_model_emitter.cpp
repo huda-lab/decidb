@@ -747,7 +747,6 @@ void DecideModelEmitter::Classes(idx_t root, const vector<bool> &tested, Evaluat
 	                       gstate.absent_reads, clause.defined_var, evaluated.row_group_ids, class_of, first_rows,
 	                       variants_per_class);
 	evaluated.num_groups = variants.count;
-	evaluated.rows_stand_with_their_class = !clause.scope.when;
 	// A variant is named by its class, and by its own field values where its class has more than one.
 	vector<idx_t> class_ids;
 	vector<GroupName> class_names;
@@ -1166,7 +1165,7 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 		// of the clause.
 		try {
 			TakeTightestFrameBound(evaluated.comparison_type, RenderDecideSource(*clause.rhs_expr, names), kept,
-			                       bound_null, kept_row_group_ids, evaluated.row_group_ids, evaluated.num_groups, true,
+			                       bound_null, kept_row_group_ids, evaluated.row_group_ids, evaluated.num_groups,
 			                       evaluated.group_names, key_values, evaluated.rhs_values.MutableDense(), null_rows);
 		} catch (std::exception &ex) {
 			// After every part of the clause: its terms and its product groups are part 0.

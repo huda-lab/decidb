@@ -247,9 +247,6 @@ struct DecideNode {
 	bool hidden = false;
 	bool decision_value = false;
 	bool folded = false;
-	bool repair_rows = false;
-	bool minmax_easy = false;
-	bool tightest_bound = false;
 	//! A grouped root whose `per K:` names the classes its rows stand for (DecideClauseScope::NAMES_CLASSES): its
 	//! instances are its `by` key's groups (language/guide.md §6.4), so it holds a kept row in no class of K too, in a
 	//! slot of its own (DecideNodeGroups::in_a_class). So does a relation-qualified reducer's operand: its reducer

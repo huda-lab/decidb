@@ -113,10 +113,10 @@ struct CoefficientColumn {
 		// Drop any prior dense allocation
 		vector<double>().swap(dense_values);
 	}
-	//! Bulk replace with a dense column, all entries = init.
-	void AssignDense(idx_t n, double init = 0.0) {
+	//! Bulk replace with a dense column of zeros.
+	void AssignDense(idx_t n) {
 		kind = Kind::Dense;
-		dense_values.assign(n, init);
+		dense_values.assign(n, 0.0);
 		logical_size = n;
 	}
 	//! Reserve dense capacity for upcoming fills.
@@ -278,10 +278,6 @@ struct EvaluatedConstraint {
 	//! 0..K-1 = group assignment
 	vector<idx_t> row_group_ids;
 	idx_t num_groups = 0; // 0 = ungrouped, >0 = number of distinct groups
-	//! A `per K:` clause over every row: a row INVALID above is
-	//! not excluded but stands with its class's first row, which carries the same
-	//! decisions and data (a scope check). So every row is still constrained.
-	bool rows_stand_with_their_class = false;
 	//! The name of each group (size num_groups when the clause's groups have a key; empty
 	//! otherwise), so infeasible diagnosis can identify which group an edit belongs to.
 	//! A row of group g carries NameOf(g), so diagnosis can name the group its finding sits in.

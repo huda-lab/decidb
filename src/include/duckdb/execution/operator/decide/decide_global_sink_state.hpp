@@ -18,7 +18,6 @@
 #include "duckdb/execution/operator/decide/decide_frame_map.hpp"
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
-#include "duckdb/planner/decide/decide_canonicalizer.hpp"
 
 #include <map>
 
@@ -32,8 +31,7 @@ using UserBoundSpec = LogicalDecide::UserBoundSpec;
 class DecideGlobalSinkState : public GlobalSinkState {
 public:
 	explicit DecideGlobalSinkState(ClientContext &context, const PhysicalDecide &op)
-	    : data(context, op.children[0]->GetTypes()), context(context), op(op),
-	      canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.keys, op.is_boolean_var) {
+	    : data(context, op.children[0]->GetTypes()), op(op) {
 		first_input_row.Initialize(context, op.children[0]->GetTypes(), 1);
 		// The decision column box was resolved by DecideOptimizer::FoldSingletonRows.
 		// A variable whose box never had a lower bound written is one the query never
@@ -221,11 +219,7 @@ public:
 	// them, placed as the descents merge
 	ColumnDataCollection data;
 
-	//! Needed to evaluate coefficient expressions against the materialized rows.
-	ClientContext &context;
-
 	const PhysicalDecide &op;
-	DecideCanonicalizer canonicalizer;
 
 	//! Local copies of the decision column box and the singleton-row-bound records that
 	//! DecideOptimizer::FoldSingletonRows resolved. Finalize copies the box into
@@ -265,9 +259,6 @@ public:
 	//! The decisions a frame reads at another row (SolverInput::frame_reads): each pair of
 	//! a decision and a frame once, the variable after the plan's decisions.
 	vector<std::pair<idx_t, idx_t>> frame_reads;
-	//! A reference to each column the frames computed (DecideFrameReads::columns), held for the
-	//! query so the chunk expression cache, keyed by node, never meets a freed one.
-	vector<unique_ptr<Expression>> frame_column_refs;
 	//! Per decision, the rows whose instance of it has no value beyond its keyed scope's absent class: an auxiliary
 	//! whose definition reads an instance with none there (D88); empty where none.
 	vector<vector<bool>> absent_reads;

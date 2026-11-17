@@ -105,30 +105,6 @@ static void GroupColumn(ClientContext &context, const ColumnDataCollection &data
 // Phase 2 shared evaluation helpers
 //===--------------------------------------------------------------------===//
 
-#ifdef DEBUG
-//! Verify (DuckDB's Verify() style): no writer left a term outside the reducers with its coefficient on more than one
-//! row of a group, which the model would count once per row.
-static void VerifyCountedOnce(const vector<DecideTerm> &terms, const vector<CoefficientColumn> &coefficients,
-                              const vector<idx_t> &row_group_ids) {
-	for (idx_t term_idx = 0; term_idx < terms.size() && term_idx < coefficients.size(); term_idx++) {
-		if (!CountsOnce(terms[term_idx])) {
-			continue;
-		}
-		auto &column = coefficients[term_idx];
-		unordered_set<idx_t> counted_groups;
-		for (idx_t row = 0; row < column.Size(); row++) {
-			if (column.Get(row) == 0.0) {
-				continue;
-			}
-			auto group = row_group_ids.empty() ? idx_t(0) : row_group_ids[row];
-			if (group != DConstants::INVALID_INDEX && !counted_groups.insert(group).second) {
-				throw InternalException("DECIDE: a term outside the reducers is counted on more than one row of a "
-				                        "group");
-			}
-		}
-	}
-}
-#endif
 
 //===--------------------------------------------------------------------===//
 // Constructor
@@ -624,7 +600,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
 	vector<KeyedMapping> keyed_mappings;
 	EvaluatedClauses evaluated;
-	EvaluateTree(context, gstate, num_rows, gstate.descent, key_values, keyed_mappings, evaluated, false);
+	EvaluateTree(context, gstate, num_rows, key_values, keyed_mappings, evaluated);
 
 	//===--------------------------------------------------------------------===//
 	// PHASE 3: Build and Solve ILP
@@ -667,9 +643,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 }
 
 void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                                  unique_ptr<DecideDescent> &descent, vector<SolverInput::KeyValues> &key_values,
-                                  vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated,
-                                  bool silent) const {
+                                  vector<SolverInput::KeyValues> &key_values, vector<KeyedMapping> &keyed_mappings,
+                                  EvaluatedClauses &evaluated) const {
+	auto &descent = gstate.descent;
 	// Top-down: the descent read every chunk as Sink received it, and the buffer is never scanned to evaluate a row.
 	DecideProfileScope phase("execution.tree_descent");
 	// A value the whole query shares is read (a composed term's or a square's factor) against the retained input row.
@@ -688,13 +664,13 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	// reaches them, each at its rank in flat's order; the least is raised once every phase has run.
 	DecideErrorLedger errors;
 	errors.Append(descent->Errors());
-	if (!silent && std::getenv("DECIDB_DUMP_BODIES")) {
+	if (std::getenv("DECIDB_DUMP_BODIES")) {
 		fprintf(stderr, "DECIDB_BODIES_BEGIN\n%sDECIDB_BODIES_END\n", tree->BodiesToString().c_str());
 	}
-	if (!silent && std::getenv("DECIDB_DUMP_TREE")) {
+	if (std::getenv("DECIDB_DUMP_TREE")) {
 		fprintf(stderr, "DECIDB_TREE_BEGIN\n%sDECIDB_TREE_END\n", tree->ToString().c_str());
 	}
-	if (!silent && std::getenv("DECIDB_DUMP_CONTAINERS")) {
+	if (std::getenv("DECIDB_DUMP_CONTAINERS")) {
 		fprintf(stderr, "DECIDB_CONTAINERS_BEGIN\n%sDECIDB_CONTAINERS_END\n", descent->Dump().c_str());
 	}
 	// Bottom-up: each node's programs over its entries, written as stage 06 reads them, in flat's order.
@@ -718,46 +694,15 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	// Flat reports what the data left of each clause once its clauses, its objective and its composed clauses are
 	// read, unless one raised.
 	if (!errors.HasErrorBefore(DecideErrorPhase::VALUE_LINKS)) {
-		ReportSkippedInstances(gstate, silent);
+		ReportSkippedInstances(gstate);
 	}
 	emitter.ValueLinks();
 	// The bottom-up values the evaluation computed, each node's programs on its entries.
-	if (!silent && std::getenv("DECIDB_DUMP_VALUES")) {
+	if (std::getenv("DECIDB_DUMP_VALUES")) {
 		fprintf(stderr, "DECIDB_VALUES_BEGIN\n%sDECIDB_VALUES_END\n", columns.Dump().c_str());
 	}
 	errors.ThrowIfAny();
 }
-
-//! The fields of gstate an evaluator fills, which a second run fills on its own while the first's stand aside.
-struct DecideEvaluationFields {
-	vector<EvaluatedConstraint> constraints;
-	vector<EvaluatedConstraint> singleton_row_constraints;
-	vector<SolverInput::ClassSet> class_sets;
-	vector<ReducerValueLinkSpec> value_links;
-	vector<CoefficientColumn> objective_coefficients;
-	vector<idx_t> objective_variable_indices;
-	vector<EvaluatedProductGroup> objective_groups;
-	vector<DecideFrameMap> frame_maps;
-	vector<std::pair<idx_t, idx_t>> frame_reads;
-	vector<unique_ptr<Expression>> frame_column_refs;
-	vector<vector<bool>> absent_reads;
-	map<idx_t, DecideGlobalSinkState::ClauseInstances> clause_instances;
-
-	void SwapWith(DecideGlobalSinkState &gstate) {
-		std::swap(constraints, gstate.evaluated_constraints);
-		std::swap(singleton_row_constraints, gstate.evaluated_singleton_row_constraints);
-		std::swap(class_sets, gstate.class_sets);
-		std::swap(value_links, gstate.evaluated_value_links);
-		std::swap(objective_coefficients, gstate.evaluated_objective_coefficients);
-		std::swap(objective_variable_indices, gstate.objective_variable_indices);
-		std::swap(objective_groups, gstate.evaluated_objective_groups);
-		std::swap(frame_maps, gstate.frame_maps);
-		std::swap(frame_reads, gstate.frame_reads);
-		std::swap(frame_column_refs, gstate.frame_column_refs);
-		std::swap(absent_reads, gstate.absent_reads);
-		std::swap(clause_instances, gstate.clause_instances);
-	}
-};
 
 static double Id(idx_t id) {
 	return id == DConstants::INVALID_INDEX ? -1.0 : static_cast<double>(id);
@@ -795,7 +740,7 @@ void PhysicalDecide::RecordVariants(const DecideSignature &signature, const char
 	                                        StringUtil::Join(fields, ", ")));
 }
 
-void PhysicalDecide::ReportSkippedInstances(const DecideGlobalSinkState &gstate, bool silent) const {
+void PhysicalDecide::ReportSkippedInstances(const DecideGlobalSinkState &gstate) const {
 	for (auto &entry : gstate.clause_instances) {
 		auto &counts = entry.second;
 		if (counts.kept >= counts.grouped) {
@@ -807,7 +752,7 @@ void PhysicalDecide::ReportSkippedInstances(const DecideGlobalSinkState &gstate,
 		    counts.grouped == 1
 		        ? string("its one instance has no value and is skipped")
 		        : StringUtil::Format("%llu of %llu instances have no value and are skipped", skipped, counts.grouped));
-		if (counts.kept == 0 && !silent) {
+		if (counts.kept == 0) {
 			fprintf(stderr, "DECIDE warning: '%s' constrains nothing: %s no value, so %s skipped.\n",
 			        WrittenClause(entry.first).c_str(),
 			        counts.grouped == 1 ? "its one instance has"
@@ -1120,11 +1065,6 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// Objective (linear part)
 	solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
 	solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
-#ifdef DEBUG
-	if (auto objective = tree->Objective()) {
-		VerifyCountedOnce(objective->terms, solver_input.objective_coefficients, vector<idx_t>());
-	}
-#endif
 	solver_input.objective_constant = objective_constant_offset;
 
 	solver_input.objective_product_groups = std::move(gstate.evaluated_objective_groups);
@@ -1550,11 +1490,11 @@ static void OpenElasticColumnBox(SolverInput &input) {
 //! Each call starts from a fresh copy of `elastic`, so no rows or auxiliaries from the
 //! solved formulation can leak into the repair formulation.
 SolverModel PhysicalDecide::FormulateElasticModel(const ElasticFormulation &elastic, const EvaluatedClauses &evaluated,
-                                                  bool keep_singleton_rows, VarIndexer &out_var_indexer,
+                                                  VarIndexer &out_var_indexer,
                                                   vector<string> &out_global_labels) const {
 	SolverInput input = elastic.input;
 	VarIndexer indexer = elastic.var_indexer;
-	input.keep_singleton_rows = keep_singleton_rows;
+	input.keep_singleton_rows = true;
 
 	OpenElasticColumnBox(input);
 	FormulateModel(input, FormulationBox::OfSolvedModel(input), indexer, evaluated);
@@ -1963,8 +1903,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 		VarIndexer elastic_indexer;
 		vector<string> elastic_global_labels;
 		try {
-			elastic_model = FormulateElasticModel(*elastic, evaluated,
-			                                      /*keep_singleton_rows=*/true, elastic_indexer, elastic_global_labels);
+			elastic_model = FormulateElasticModel(*elastic, evaluated, elastic_indexer, elastic_global_labels);
 		} catch (const InvalidInputException &ex) {
 			// The only thing the formulation raises by design: a construct the widened box
 			// cannot express. Report it rather than turning the user's DIAGNOSE into an

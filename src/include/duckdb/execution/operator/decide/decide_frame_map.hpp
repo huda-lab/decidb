@@ -105,10 +105,6 @@ struct DecideFrameMap {
 	bool Absent(idx_t row) const {
 		return absent[row];
 	}
-	//! The rows `peer` holds.
-	idx_t PeerSize(idx_t p) const {
-		return peer_begin[p + 1] - peer_begin[p];
-	}
 	idx_t WindowCount() const {
 		return window_anchor.size();
 	}
