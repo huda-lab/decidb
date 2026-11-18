@@ -1,6 +1,6 @@
 """A/B benchmark of two decidb binaries on the ANR scaling workloads.
 
-Unlike benchmark/decide/anr_scaling.py, this measures the whole process's wall time as well as DECIDB_BENCH's
+Unlike benchmark/decide/anr_scaling.py, this measures the whole process's wall time as well as the profile's
 phases, because one evaluator does its row pass inside Sink (outside `model_construction_ms`) and the other in
 Finalize (inside it). `nonsolver_ms` = wall - solver_ms is the comparable number. Runs are interleaved A, B, A, B
 so drift on the host hits both alike.
@@ -13,7 +13,6 @@ import csv
 import importlib.util
 import json
 import os
-import re
 import statistics
 import subprocess
 import sys
@@ -53,7 +52,7 @@ def run_once(binary: Path, name: str, n: int, threads: int, source: str) -> dict
     sql = f"SELECT id, x FROM {relation} DECIDE {decisions} SUCH THAT {constraints.format(n=n)} {objective}"
     script = setup + ".timer on\n" + f"CREATE TEMP TABLE result AS {sql};\n"
     env = {key: value for key, value in os.environ.items() if not key.startswith("DECIDB_")}
-    env.update(DECIDB_BENCH="1", DECIDB_PROFILE="1", DECIDB_TIME_LIMIT="300")
+    env.update(DECIDB_PROFILE="1", DECIDB_TIME_LIMIT="300")
     with tempfile.TemporaryFile("w+") as stderr, tempfile.TemporaryFile("w+") as stdout:
         start = time.monotonic()
         process = subprocess.Popen(
@@ -70,11 +69,11 @@ def run_once(binary: Path, name: str, n: int, threads: int, source: str) -> dict
     if process.returncode != 0:
         row["error"] = err.strip().splitlines()[-1][:200] if err.strip() else "?"
         return row
-    bench = dict(re.findall(r"DECIDB_BENCH: (\w+)=([\d.]+)", err))
+    bench = _scaling.parse_stage_output(err)
     row["wall_ms"] = wall
-    row["optimizer_ms"] = float(bench.get("optimizer_ms", "nan"))
-    row["model_ms"] = float(bench.get("model_construction_ms", "nan"))
-    row["solver_ms"] = float(bench.get("solver_ms", "nan"))
+    row["optimizer_ms"] = bench.get("optimizer_ms", float("nan"))
+    row["model_ms"] = bench.get("model_construction_ms", float("nan"))
+    row["solver_ms"] = bench.get("solver_ms", float("nan"))
     row["nonsolver_ms"] = wall - row["solver_ms"]
     row["peak_rss_mb"] = usage.ru_maxrss / 2**20
     for line in err.splitlines():

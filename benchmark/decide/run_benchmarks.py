@@ -13,7 +13,7 @@ Usage:
     python3 benchmark/decide/run_benchmarks.py --compare          # auto compare
 
 Databases must be generated first: make decide-bench-setup
-When DECIDB_BENCH=1 is set, also parses per-stage timers from decidb stderr.
+When DECIDB_PROFILE=1 is set, also parses per-stage timers from decidb stderr.
 """
 
 from __future__ import annotations
@@ -297,19 +297,38 @@ def parse_time_output(stderr: str) -> dict:
     return result
 
 
-def parse_bench_output(stderr: str) -> dict:
-    """Parse DECIDB_BENCH stage timer lines from stderr.
+def parse_stage_output(stderr: str) -> dict:
+    """The stage figures of one query from its `DECIDB_PROFILE=1` events, under the names the results files carry.
 
-    Lines look like: DECIDB_BENCH: key=value
+    `optimizer_ms` is the optimizer's span, `solver_ms` the operator's solve-and-route span (the solver's model, the
+    solve and the readback), `model_construction_ms` the rest of its finalize. The counters are the model's size: `total_variables`
+    columns, `total_constraint_specs` clauses handed to the builder and `total_constraint_rows` rows the solver got,
+    from `num_rows` input rows. A figure the run did not reach is left out.
     """
+    spans: dict = {}
+    counters: dict = {}
+    for line in stderr.splitlines():
+        if not line.startswith("DECIDB_PROFILE: "):
+            continue
+        event = json.loads(line.split("DECIDB_PROFILE: ", 1)[1])
+        if event["event"] == "end":
+            spans[event["name"]] = spans.get(event["name"], 0.0) + event["duration_ms"]
+        elif event["event"] == "counter":
+            counters[event["name"]] = event["value"]
     stages: dict = {}
-    for m in re.finditer(r"DECIDB_BENCH:\s*(\w+)=([\d.]+)", stderr):
-        key = m.group(1)
-        val = m.group(2)
-        try:
-            stages[key] = float(val) if "." in val else int(val)
-        except ValueError:
-            stages[key] = val
+    if "optimizer.decide" in spans:
+        stages["optimizer_ms"] = round(spans["optimizer.decide"], 2)
+    if "execution.finalize" in spans and "execution.solve_and_route" in spans:
+        stages["model_construction_ms"] = round(spans["execution.finalize"] - spans["execution.solve_and_route"], 2)
+        stages["solver_ms"] = round(spans["execution.solve_and_route"], 2)
+    for key, counter in (
+        ("total_variables", "model.variables"),
+        ("total_constraint_specs", "model.clause_specs"),
+        ("total_constraint_rows", "model.constraint_rows"),
+        ("num_rows", "execution.descent_rows"),
+    ):
+        if counter in counters:
+            stages[key] = int(counters[counter])
     return stages
 
 
@@ -350,8 +369,8 @@ def run_single(query_sql: str, db_path: Path, timeout: int = 600) -> dict:
         time_metrics = parse_time_output(result.stderr)
         metrics.update(time_metrics)
 
-        # Parse DECIDB_BENCH stage timers if present
-        bench_metrics = parse_bench_output(result.stderr)
+        # Parse the stage figures if the run was profiled (DECIDB_PROFILE=1)
+        bench_metrics = parse_stage_output(result.stderr)
         if bench_metrics:
             metrics["stages"] = bench_metrics
 
@@ -582,8 +601,8 @@ def main() -> None:
         print(f"DeciDB Manual Benchmark (commit: {commit}{'*' if dirty else ''})")
         print(f"Sizes: {', '.join(sizes)}")
         print(f"Iterations: {args.iterations}")
-        if os.environ.get("DECIDB_BENCH"):
-            print("Stage timers: ENABLED (DECIDB_BENCH=1)")
+        if os.environ.get("DECIDB_PROFILE"):
+            print("Stage timers: ENABLED (DECIDB_PROFILE=1)")
         print()
 
         for size in sizes:
@@ -649,8 +668,8 @@ def main() -> None:
     print(f"Queries: {', '.join(query_names)}")
     print(f"Sizes: {', '.join(sizes)}")
     print(f"Iterations: {args.iterations}")
-    if os.environ.get("DECIDB_BENCH"):
-        print("Stage timers: ENABLED (DECIDB_BENCH=1)")
+    if os.environ.get("DECIDB_PROFILE"):
+        print("Stage timers: ENABLED (DECIDB_PROFILE=1)")
     print()
 
     all_results: list[dict] = []

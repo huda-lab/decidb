@@ -369,8 +369,7 @@ private:
 	//! four terminal cases, and the shared success epilogue.
 	SinkFinalizeType FinalizeSolveResult(ClientContext &context, DecideGlobalSinkState &gstate,
 	                                     SolverInput &solver_input, VarIndexer &var_indexer,
-	                                     const EvaluatedClauses &evaluated, ElasticFormulation *elastic, bool bench,
-	                                     Profiler &model_timer, Profiler &solver_timer) const;
+	                                     const EvaluatedClauses &evaluated, ElasticFormulation *elastic) const;
 
 	//! Formulate the elastic model: widen every loosenable column direction, re-derive
 	//! every constant against that box, and build the solver model from it. `elastic` is

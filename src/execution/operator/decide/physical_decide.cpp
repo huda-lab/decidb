@@ -544,17 +544,10 @@ static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_
 SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
 	DecideProfileScope profile("execution.finalize");
-	bool bench = std::getenv("DECIDB_BENCH") != nullptr;
-	Profiler model_timer;
-	Profiler solver_timer;
 
 	auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
 	idx_t num_rows = gstate.data.Count();
 	run_time_accounts.clear();
-
-	if (bench) {
-		model_timer.Start();
-	}
 
 	// Empty input → return empty result (mirrors standard SQL behavior)
 	if (num_rows == 0) {
@@ -609,8 +602,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 	ReportAnEmptyObjective(solver_input);
 
 	phase.Next("execution.solve_and_route");
-	return FinalizeSolveResult(context, gstate, solver_input, var_indexer, evaluated, elastic.get(), bench, model_timer,
-	                           solver_timer);
+	return FinalizeSolveResult(context, gstate, solver_input, var_indexer, evaluated, elastic.get());
 }
 
 void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
@@ -673,23 +665,6 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 		fprintf(stderr, "DECIDB_VALUES_BEGIN\n%sDECIDB_VALUES_END\n", columns.Dump().c_str());
 	}
 	errors.ThrowIfAny();
-}
-
-static double Id(idx_t id) {
-	return id == DConstants::INVALID_INDEX ? -1.0 : static_cast<double>(id);
-}
-
-static vector<double> Ids(const vector<idx_t> &ids) {
-	vector<double> numbers;
-	numbers.reserve(ids.size());
-	for (auto id : ids) {
-		numbers.push_back(Id(id));
-	}
-	return numbers;
-}
-
-static vector<double> Mask(const vector<bool> &mask) {
-	return vector<double>(mask.begin(), mask.end());
 }
 
 //===--------------------------------------------------------------------===//
@@ -1492,22 +1467,15 @@ SolverModel PhysicalDecide::FormulateElasticModel(const ElasticFormulation &elas
 
 SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, DecideGlobalSinkState &gstate,
                                                      SolverInput &solver_input, VarIndexer &var_indexer,
-                                                     const EvaluatedClauses &evaluated, ElasticFormulation *elastic,
-                                                     bool bench, Profiler &model_timer, Profiler &solver_timer) const {
+                                                     const EvaluatedClauses &evaluated,
+                                                     ElasticFormulation *elastic) const {
 	idx_t num_rows = solver_input.num_rows;
 
-	// Capture model size before solve (solver may move data)
-	size_t bench_total_vars = var_indexer.total_vars;
 	// Clause-level model size: the number of constraint *specs* the operator hands the
 	// builder. A per-row spec still expands to one row per data row and a grouped spec to one
 	// row per group, so this is not a matrix row count — the row count is read back off
 	// the built model (`solve_result.model_constraint_rows`) after the solve below.
-	size_t bench_constraint_specs = solver_input.constraints.size() + solver_input.global_constraints.size();
-
-	if (bench) {
-		model_timer.End();
-		solver_timer.Start();
-	}
+	size_t constraint_specs = solver_input.constraints.size() + solver_input.global_constraints.size();
 
 	// H3: the statement's DIAGNOSE prefix, and nothing else, arms diagnosis. Under it,
 	// pre-extract the unbounded ray so it is ready if the solve turns out unbounded, and
@@ -1572,7 +1540,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 	// Retained only when a continue-capable timeout mode is active: the live warm
 	// solver, so the TIME_LIMIT terminal can Continue() it for more wall-clock.
 	unique_ptr<SolverSession> retained_session;
-	// Always-on wall-clock around the solve (independent of DECIDB_BENCH): the slow
+	// Always-on wall-clock around the solve (independent of the profile channel): the slow
 	// checkpoint report (S2) needs the elapsed solve time to show the user.
 	Profiler solve_wall_timer;
 	solve_wall_timer.Start();
@@ -1776,8 +1744,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 			// moving; a suite that greps its prose silently stops matching (it already did
 			// once, turning the QCQP retry into a flake). Tests key on this instead, and
 			// `decidb_cli.py` strips DECIDB_STATUS lines before classifying stderr. Gated
-			// on the env var so user-facing output is unchanged — same pattern as
-			// DECIDB_BENCH instrumentation.
+			// on the env var so user-facing output is unchanged.
 			if (std::getenv("DECIDB_STATUS_MARKERS")) {
 				fprintf(stderr, "DECIDB_STATUS: SUBOPTIMAL\n");
 			}
@@ -1954,18 +1921,10 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 	// Execute() needs it to outlive solver_input.
 	gstate.var_indexer = std::move(var_indexer);
 
-	if (bench) {
-		solver_timer.End();
-		fprintf(stderr, "DECIDB_BENCH: model_construction_ms=%.2f\n", model_timer.Elapsed() * 1000.0);
-		fprintf(stderr, "DECIDB_BENCH: solver_ms=%.2f\n", solver_timer.Elapsed() * 1000.0);
-		fprintf(stderr, "DECIDB_BENCH: total_variables=%zu\n", bench_total_vars);
-		// Two separate units, never summed: `specs` is the clause-level view (which DECIDE
-		// clause to look at), `rows` is what the solver actually received (where the matrix
-		// pressure is). The old `total_constraints` added the two and reported neither.
-		fprintf(stderr, "DECIDB_BENCH: total_constraint_specs=%zu\n", bench_constraint_specs);
-		fprintf(stderr, "DECIDB_BENCH: total_constraint_rows=%zu\n", (size_t)solve_result.model_constraint_rows);
-		fprintf(stderr, "DECIDB_BENCH: num_rows=%zu\n", (size_t)num_rows);
-	}
+	// Two separate units, never summed: `clause_specs` is the clause-level view (which DECIDE clause to look at),
+	// `constraint_rows` is what the solver actually received (where the matrix pressure is).
+	DecideProfileScope::Counter("model.clause_specs", static_cast<double>(constraint_specs));
+	DecideProfileScope::Counter("model.constraint_rows", static_cast<double>(solve_result.model_constraint_rows));
 
 	return SinkFinalizeType::READY;
 }

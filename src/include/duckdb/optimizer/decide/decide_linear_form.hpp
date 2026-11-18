@@ -17,14 +17,13 @@ class LogicalDecide;
 
 //! Lower every canonical constraint and the objective into the tree under construction: each clause's records
 //! (DecideConstraint) into the root the tree made of its comparison, the objective's into the objective's root, and
-//! the frames' columns on `decide.prepared`. Every term a reducer produces names the G it ranges over
-//! (DecideTerm::child, DecideTreeConstruction::ReducerChild).
+//! the frames' columns into the tree (DecideTreeConstruction::TakeFrameReads). Every term a reducer produces names the
+//! G it ranges over (DecideTerm::child, DecideTreeConstruction::ReducerChild).
 //!
-//! This is the LAST pass of DECIDE optimization, and it must stay last for the
-//! same reason singleton-row folding does: the nine rewrites above it emit fresh
-//! constraint rows through `LogicalDecide::AddConstraint`, and folding tags
-//! the comparisons it folded into the variable box. Lowering earlier would
-//! miss the former and re-emit the latter.
+//! It runs at physical planning (PhysicalPlanGenerator::CreatePlan of a LogicalDecide), after the DECIDE optimizer has
+//! finished and the column bindings are final. It must stay after every rewrite and after singleton-row folding: the
+//! rewrites emit fresh constraint rows through `LogicalDecide::AddConstraint`, and folding tags the comparisons it
+//! folded into the variable box. Lowering earlier would miss the former and re-emit the latter.
 //!
 //! Doing the algebra here rather than at execution time is what lets a rebuilt
 //! coefficient be bound through `FunctionBinder` instead of inheriting another

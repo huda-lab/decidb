@@ -12,6 +12,7 @@
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
@@ -1049,6 +1050,14 @@ private:
 			return;
 		}
 		if (HasDecideTag(condition->GetAlias(), SKIP_NULL_TAG)) {
+			// A test the statistics proved true (StatisticsPropagator::FoldSkipNullTests) keeps every entry: it is no
+			// member test, so no program is compiled for it and none runs per entry.
+			if (condition->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+				auto &verdict = condition->Cast<BoundConstantExpression>().value;
+				if (verdict.type().id() == LogicalTypeId::BOOLEAN && !verdict.IsNull() && verdict.GetValue<bool>()) {
+					return;
+				}
+			}
 			// An O container gathers positions before any reader's generated
 			// presence test runs. Testing that same frame here would make it
 			// depend on its own not-yet-computed result.

@@ -602,10 +602,10 @@ decide-bench-setup:
 	python3 benchmark/decide/generate_databases.py
 
 decide-bench:
-	DECIDB_BENCH=1 python3 benchmark/decide/run_benchmarks.py
+	DECIDB_PROFILE=1 python3 benchmark/decide/run_benchmarks.py
 
 decide-bench-manual:
-	DECIDB_BENCH=1 python3 benchmark/decide/run_benchmarks.py --manual
+	DECIDB_PROFILE=1 python3 benchmark/decide/run_benchmarks.py --manual
 
 decide-view:
 	python3 benchmark/decide/view_results.py

@@ -74,10 +74,10 @@ static bool IsReducer(const Expression &expr) {
 // DecideLinearFormBuilder
 //===--------------------------------------------------------------------===//
 
-//! Flattens the canonical constraint tree and the objective into the prepared
-//! linear form. Everything it needs is a type or a structure: the decision
-//! variable list, their scopes, and the tags earlier passes stamped on the tree.
-//! It never reads a data row.
+//! Flattens the canonical constraint tree and the objective into the tree's
+//! terms, at physical planning. Everything it needs is a type or a structure: the
+//! decision variable list, their scopes, and the tags earlier passes stamped on
+//! the tree. It never reads a data row.
 class DecideLinearFormBuilder {
 public:
 	DecideLinearFormBuilder(ClientContext &context, LogicalDecide &op, DecideTreeConstruction &tree)

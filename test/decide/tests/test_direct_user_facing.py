@@ -1285,9 +1285,12 @@ def test_a_query_a_rule_answers_loads_no_solver(decidb_cli):
 @pytest.mark.correctness
 @pytest.mark.parametrize("mode", ["require", "off"])
 def test_the_optimizer_timer_covers_the_stage_on_both_paths(decidb_cli, mode):
-    # A direct query prints the stage's time as a solver query does (DECIDB_BENCH).
-    timed = decidb_cli.with_env({"DECIDB_BENCH": "1"})
-    assert "DECIDB_BENCH: optimizer_ms=" in _raw(timed, _source_query((2.0, 9.0), 1), mode=mode).stderr
+    # A direct query prints the stage's span as a solver query does (DECIDB_PROFILE).
+    timed = decidb_cli.with_env({"DECIDB_PROFILE": "1"})
+    stderr = _raw(timed, _source_query((2.0, 9.0), 1), mode=mode).stderr
+    ended = [line for line in stderr.splitlines() if '"event":"end"' in line and '"name":"optimizer.decide"' in line]
+    # The serializer verifier optimizes the plan again, so a run may end the span more than once.
+    assert ended, stderr
 
 
 @pytest.mark.correctness

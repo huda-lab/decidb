@@ -250,7 +250,7 @@ def test_a_null_bound_in_a_later_window_skips_only_its_own_row(decidb_cli, oracl
 @pytest.mark.parametrize("c_on_row_2, reads_the_test", [(4.0, False), (None, True)], ids=["never_null", "null"])
 def test_a_null_test_the_statistics_decide_is_not_read(decidb_cli, oracle_solver, c_on_row_2, reads_the_test):
     """`SUM(c * x)` skips a row whose `c` is NULL. On a table whose statistics prove `c` never NULL, the test is decided
-    before the query runs, and the term's member test is the constant `true`, which reads no row's `c`; with a NULL on
+    before the query runs, and the term has no member test, so none is compiled or read; with a NULL on
     row 2 the member test reads `c IS NOT NULL` and skips that row. Either way the answer reaches the oracle's
     optimum."""
     rows = [(i, c_on_row_2 if i == 2 else c, p) for i, c, p in ROWS]
@@ -269,8 +269,9 @@ def test_a_null_test_the_statistics_decide_is_not_read(decidb_cli, oracle_solver
         timeout=120,
     )
     assert dumped.returncode == 0 and "Error" not in dumped.stderr, dumped.stderr
-    reads = [line for line in dumped.stderr.splitlines() if " TEST " in line and "written=(c IS NOT NULL)" in line]
+    reads = [line for line in dumped.stderr.splitlines() if " TEST " in line]
     assert bool(reads) == reads_the_test, dumped.stderr
+    assert all("written=(c IS NOT NULL)" in line for line in reads), dumped.stderr
     answer = {row[0]: row[1] for row in cli.execute(sql)[0]}
 
     def build(oracle):

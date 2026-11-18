@@ -140,7 +140,7 @@ def profile_pair(db, direct_sql, hand_sql, threads, repeats, timeout, scratch):
             lines.append(f"PRAGMA enable_profiling='json'; PRAGMA profiling_output='{scratch}/{side}{i}.json';")
             lines.append(sql)
             lines.append("PRAGMA disable_profiling;")
-    env = {k: v for k, v in os.environ.items() if k not in ("DECIDB_FORCE_SOLVER", "DECIDB_BENCH", "DECIDB_TIME_LIMIT")}
+    env = {k: v for k, v in os.environ.items() if k not in ("DECIDB_FORCE_SOLVER", "DECIDB_TIME_LIMIT")}
     env["DECIDB_PROFILE"] = "1"
     try:
         proc = subprocess.run(
@@ -245,10 +245,12 @@ def run(db, mode, sql, timeout):
     """One fresh process. Returns (wall seconds, peak MiB, status, stdout, stderr); status is None when the run
     finished."""
     setting = "off" if mode in SOLVERS else "require"
-    env = {k: v for k, v in os.environ.items() if k not in ("DECIDB_FORCE_SOLVER", "DECIDB_BENCH", "DECIDB_TIME_LIMIT")}
+    env = {
+        k: v for k, v in os.environ.items() if k not in ("DECIDB_FORCE_SOLVER", "DECIDB_PROFILE", "DECIDB_TIME_LIMIT")
+    }
     if mode in SOLVERS:
         env["DECIDB_FORCE_SOLVER"] = mode
-        env["DECIDB_BENCH"] = "1"
+        env["DECIDB_PROFILE"] = "1"
         env["DECIDB_TIME_LIMIT"] = str(timeout * 2)  # `--timeout` decides, not DeciDB's default limit of 300 s
     command = [
         "/usr/bin/time",
@@ -285,7 +287,7 @@ def run(db, mode, sql, timeout):
     before_stats = re.split(r"real|^\s*Command ", stderr, flags=re.MULTILINE)[0]
     if proc.returncode != 0 or "Error" in before_stats:
         lines = before_stats.strip().splitlines()
-        # The error's own line, not the first: `DECIDB_BENCH:` timing lines are written before it.
+        # The error's own line, not the first: `DECIDB_PROFILE:` span lines are written before it.
         detail = next((line for line in lines if "Error" in line), lines[0] if lines else "failed")[:160]
         print(f"  [{mode}] error: {detail}", file=sys.stderr)
         return wall, peak_mib, "error", stdout, stderr
@@ -293,9 +295,9 @@ def run(db, mode, sql, timeout):
 
 
 def bench_seconds(stderr, name):
-    """A `DECIDB_BENCH: <name>_ms=<value>` line, in seconds; None when the run printed none."""
-    found = re.search(rf"^DECIDB_BENCH: {name}_ms=([\d.]+)$", stderr, re.MULTILINE)
-    return float(found.group(1)) / 1000 if found else None
+    """The run's `<name>_ms` stage figure (run_benchmarks.parse_stage_output), in seconds; None when it reached none."""
+    found = bench.parse_stage_output(stderr).get(f"{name}_ms")
+    return found / 1000 if found is not None else None
 
 
 def measure(db, mode, sql, repeats, timeout, repeat_budget):

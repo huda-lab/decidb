@@ -4,7 +4,7 @@
 Each workload is one DECIDE query over a synthetic table of `n` rows, run at several `n`
 with the key cardinalities, nesting depth, variant count and frame width held fixed, so
 that every helper, window and member grows with `n` alone. DeciDB's own time is the
-optimizer's and the model's construction (`DECIDB_BENCH`), the solve left out; the model's
+optimizer's and the model's construction (`DECIDB_PROFILE` spans), the solve left out; the model's
 size and the ANR counters (`DECIDB_PROFILE`: anr.helpers, anr.members, ...) are recorded
 beside it, and the peak memory of the process that ran the query: its whole peak resident
 set, so the solver's share is in it too. Each workload runs `--runs` times (3) at each size,
@@ -32,7 +32,6 @@ import csv
 import json
 import math
 import os
-import re
 import statistics
 import subprocess
 import sys
@@ -41,6 +40,9 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from run_benchmarks import parse_stage_output  # noqa: E402  (the stage figures of a profiled run)
+
 DECIDB = HERE.parent.parent / "build" / "release" / "decidb"
 RESULTS = HERE / "results"
 
@@ -164,16 +166,16 @@ def run(name: str, n: int) -> dict:
         f"CREATE TEMP TABLE result AS {sql};\n"
     )
     env = {key: value for key, value in os.environ.items() if not key.startswith("DECIDB_")}
-    env.update(DECIDB_BENCH="1", DECIDB_PROFILE="1", DECIDB_TIME_LIMIT="120")
+    env.update(DECIDB_PROFILE="1", DECIDB_TIME_LIMIT="120")
     returncode, stderr, peak_bytes = run_measured([str(DECIDB), ":memory:"], script, env, timeout=900)
     row = {"workload": name, "rows": n, "status": "ok" if returncode == 0 else "error"}
     row["peak_rss_mb"] = round(peak_bytes / 2**20, 1)
     if returncode != 0:
         row["error"] = stderr.strip().splitlines()[-1][:200] if stderr.strip() else "?"
-    bench = dict(re.findall(r"DECIDB_BENCH: (\w+)=([\d.]+)", stderr))
-    row["optimizer_ms"] = float(bench.get("optimizer_ms", "nan"))
-    row["model_ms"] = float(bench.get("model_construction_ms", "nan"))
-    row["solver_ms"] = float(bench.get("solver_ms", "nan"))
+    bench = parse_stage_output(stderr)
+    row["optimizer_ms"] = bench.get("optimizer_ms", float("nan"))
+    row["model_ms"] = bench.get("model_construction_ms", float("nan"))
+    row["solver_ms"] = bench.get("solver_ms", float("nan"))
     row["own_ms"] = row["optimizer_ms"] + row["model_ms"]
     for line in stderr.splitlines():
         if line.startswith("DECIDB_PROFILE: ") and '"counter"' in line:

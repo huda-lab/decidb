@@ -72,7 +72,7 @@ private:
 
 	//! Optimize the DECIDE node held by `op`, which sits inside the plan held by `root`: pass 0, the choice of how it
 	//! is answered, and for the solver the formulation passes. A rule that answers the query replaces `op`. The whole
-	//! stage is one profile span and one DECIDB_BENCH timer, whichever way the query is answered.
+	//! stage is one profile span, whichever way the query is answered.
 	void OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOperator> &root);
 	//! Keeps the node's scope checks and records for the tree, which evaluates them (DirectRetainRowChecks).
 	void RetainRowChecks(LogicalDecide &decide);

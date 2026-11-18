@@ -155,9 +155,7 @@ def run_one(name: str, path: Path, backend: str, repeat: int) -> dict:
         ]
     )
     environment = {key: value for key, value in os.environ.items() if not key.startswith("DECIDB_")}
-    environment.update(
-        DECIDB_FORCE_SOLVER=backend, DECIDB_TIME_LIMIT=str(SOLVER_SECONDS), DECIDB_PROFILE="1", DECIDB_BENCH="1"
-    )
+    environment.update(DECIDB_FORCE_SOLVER=backend, DECIDB_TIME_LIMIT=str(SOLVER_SECONDS), DECIDB_PROFILE="1")
     database = str(bench.DATABASES_DIR / f"{DATABASE}.db")
     status = "ok"
     try:

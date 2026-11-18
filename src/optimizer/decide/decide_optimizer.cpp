@@ -84,11 +84,6 @@ void RunPass(const char *name, PASS &&pass) {
 
 void DecideOptimizer::OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOperator> &root) {
 	DecideProfileScope profile("optimizer.decide");
-	bool bench = std::getenv("DECIDB_BENCH") != nullptr;
-	Profiler timer;
-	if (bench) {
-		timer.Start();
-	}
 	auto &decide = op->Cast<LogicalDecide>();
 
 	// The objective's sums of group sums of squares, summed in the other order: their weights are reducers over data
@@ -106,11 +101,6 @@ void DecideOptimizer::OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr
 	RunPass("optimizer.choose_answer", [&] { replaced = ChooseDecideAnswer(op, root, optimizer); });
 	if (!replaced) {
 		RewriteForSolver(decide, *root);
-	}
-
-	if (bench) {
-		timer.End();
-		fprintf(stderr, "DECIDB_BENCH: optimizer_ms=%.2f\n", timer.Elapsed() * 1000.0);
 	}
 }
 
