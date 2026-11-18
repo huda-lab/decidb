@@ -324,7 +324,7 @@ runs under whichever test a worker reached first. A query's runs compare as a se
 docstring:
 - numbers: stdout alone goes through `golden/normalize_results.py`, since stderr's spaces place an error's caret;
 - row order: rows are sorted unless the query is an EXPLAIN or has an ORDER BY outside every parenthesis;
-- timings and the `DECIDB_BENCH`/`DECIDB_PROFILE` lines;
+- timings and the `DECIDB_PROFILE` lines;
 - temporary paths in the SQL and the environment (no query has printed one);
 - `unproven`: a solve every run stopped before it proved an answer. What it held at the stop is waived: its report past
   what stopped it, and in its box the values of each column a declarator names (`x` of `x(BOOL)`). That holds only

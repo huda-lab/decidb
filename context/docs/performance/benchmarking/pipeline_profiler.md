@@ -49,7 +49,7 @@ then `SELECT count(*) FROM result`. CTAS makes the engine produce every output r
 for a terminal. `query_s` is the CLI's reported wall time for that statement, not a sum of spans.
 
 The child environment drops every inherited `DECIDB_*` variable, then sets `DECIDB_FORCE_SOLVER`,
-`DECIDB_TIME_LIMIT`, `DECIDB_PROFILE=1` and `DECIDB_BENCH=1`. A run cannot fall back to a backend other than the one
+`DECIDB_TIME_LIMIT` and `DECIDB_PROFILE=1`. A run cannot fall back to a backend other than the one
 being measured.
 
 `DECIDB_PROFILE=1` makes the engine print one JSON line per span event to stderr. The script prints

@@ -680,7 +680,9 @@ per D.depotID: sum(ship) by (D.region) <= D.capacity
   parts of an `and`/`or` are read left to right, each only on rows the earlier parts leave undecided, so
   `when s <> '' and CAST(s AS INT) > 3:` raises nothing on an empty text.
 - Dropped rows keep their decisions; the clause just does not constrain them.
-- **A `when` that keeps no row yields no constraint** (D68). An input with no rows at all gives an empty result.
+- **A `when` that keeps no row yields no constraint** (D68). An input with no rows at all gives an empty result,
+  unless a bound written as a constant contradicts its decision's type (`x(INT) ... x <= -1`): that is refused from
+  the query alone, before any row is read.
 
 ### 6.4 How a clause becomes model rows
 
@@ -801,7 +803,7 @@ so it cannot count them. Tests: `test/decide/tests/test_scope_variants.py`, `tes
 | a reducer reads no row of a group (its own `when`, NULL data, an absent decision) | the reducer is NULL: that group's instance is skipped (D68) |
 | an objective reducer reads no row | the term is dropped (D68) |
 | `count(*)` over no rows | 0, as in SQL |
-| the input has no rows | empty result |
+| the input has no rows | empty result (a bound its decision's type cannot hold is still refused) |
 
 ### 7.3 Data checks
 

@@ -107,7 +107,7 @@ Details:
   prints only "best objective so far: N" — the report never claims closeness it
   cannot prove.
 - **Elapsed** is measured by an always-on `Profiler` wrapped around the `SolveModel`
-  call (independent of `DECIDB_BENCH`), reported via `FormatDuration`: integer seconds
+  call (independent of `DECIDB_PROFILE`), reported via `FormatDuration`: integer seconds
   when whole (`300s`), one decimal for larger fractional values (`1.5s`), and two
   significant figures for sub-second values so a small limit keeps its digits (`0.05s`,
   `elapsed 0.056s`) instead of rounding up to a misleading `0.1s`.

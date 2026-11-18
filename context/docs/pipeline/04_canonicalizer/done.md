@@ -559,7 +559,9 @@ escape for `AGG * factor`: every consumer sees `factor * AGG` or `AGG / factor`.
 
 In the objective, which has no shape, `CanonicalizeObjective` tags the outermost reducer
 of each nest `VALUE_REWRITE_TAG` (`TagNestedObjectiveReducers`, D81): the shape of a nest
-is decided here, once, and the value rewrite reads the tag.
+is decided here, once, and the value rewrite reads the tag. A nest is a reducer over decisions holding another reducer
+over decisions (`ContainsDecisionReducer`). A reducer over data alone is one value per row, as in a constraint, so
+`MINIMIZE SUM(POWER(x - avg(score) by (g), 2))` is the objective's own quadratic, which HiGHS solves too.
 
 The refusal: an `AVG`'s exclusion under `<>` scales the bound by the group's row count,
 exact only when every term is a plain `AVG` over all of them. Neither way around it pays

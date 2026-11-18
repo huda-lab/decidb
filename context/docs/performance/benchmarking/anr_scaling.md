@@ -7,9 +7,9 @@ synthetic `range(n)` table whose key cardinalities, nesting depth, variant count
 helper, window and member grows with `n` alone. Every decision is `REAL`, so the solve is an LP: what is measured is the
 model, not a branch-and-bound.
 
-DeciDB's own time is the optimizer's and the model construction's (`DECIDB_BENCH`), the solve left out. Beside it the
-script records the model's size and the ANR counters `DECIDB_PROFILE` prints (`model.variables`, `model.linear_rows`,
-`model.linear_nonzeros`, `anr.frame_windows`, `anr.frame_positions`, `anr.helpers`, `anr.helper_instances`,
+DeciDB's own time is the optimizer's and the model construction's (`DECIDB_PROFILE` spans), the solve left out.
+Beside it the script records the model's size and the ANR counters `DECIDB_PROFILE` prints (`model.variables`,
+`model.linear_rows`, `model.linear_nonzeros`, `anr.frame_windows`, `anr.frame_positions`, `anr.helpers`, `anr.helper_instances`,
 `anr.members`, `anr.member_terms`, `anr.inlined_helpers`; `../../pipeline/08_execution/done.md`), and prints each
 workload's growth exponent: the slope of log(own time) against log(n) between the two largest sizes, about 1 when it
 grows linearly. Direct solve is off (`decide_direct_solve = 'off'`), since it answers a flat sum without a model, and

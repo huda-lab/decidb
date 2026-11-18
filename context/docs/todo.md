@@ -12,15 +12,6 @@ the owner rules first.
 
 # Phase 0 — Preliminaries
 
-## 0.1 Defects (parallel: OPT-22, EXEC-17, EXEC-18 | BIND-3 | OPT-23, FORM-6, FORM-7)
-- [ ] OPT-22 Helper decisions known by origin — pipeline/05_optimizer/todo.md § OPT-22
-- [ ] EXEC-17 Plan-only refusal raised at planning — pipeline/08_execution/todo.md § EXEC-17
-- [ ] EXEC-18 Dead code and stale comments in the operator — pipeline/08_execution/todo.md § EXEC-18
-- [ ] BIND-3 Refuse user names that contain a tag — pipeline/02_binder/todo.md § BIND-3
-- [ ] OPT-23 Quadratic objective over a data reducer answers — pipeline/05_optimizer/todo.md § OPT-23
-- [ ] FORM-6 HiGHS and a concave square — pipeline/06_model_formulation/todo.md § FORM-6
-- [ ] FORM-7 A refusal names an internal column — pipeline/06_model_formulation/todo.md § FORM-7
-
 ## 0.2 Leftovers, docs and tests (parallel: PERF-26 | PLAN-5 | OPS-8 | TEST-13, TEST-14)
 - [ ] PERF-26 findings.md measures replaced extraction code — performance/todo.md § PERF-26
 - [ ] PLAN-5 EXPLAIN names helpers in solver terms — pipeline/03_logical_plan/todo.md § PLAN-5
@@ -28,7 +19,7 @@ the owner rules first.
 - [ ] TEST-13 Four merge choices — testing/todo.md § TEST-13
 - [ ] TEST-14 A data-weighted keyed clause in DIAGNOSE — testing/todo.md § TEST-14
 
-## 0.3 Debug-build run (needs: 0.1, 0.2) (one lane)
+## 0.3 Debug-build run (needs: 0.2) (one lane)
 - [ ] TEST-6 One suite run on a debug build — testing/todo.md § TEST-6
 
 # Phase 1 — Errors are raised where they are found

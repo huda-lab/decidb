@@ -244,7 +244,7 @@ term splitter use them:
 | 19 | `FoldSingletonRows` | Must be last of all — see below. |
 
 `RewriteComposedMinMaxObjectiveTop` runs within the composed pass for the
-objective side. Setting `DECIDB_BENCH` prints `optimizer_ms` for the whole block.
+objective side. The `optimizer.decide` span of `DECIDB_PROFILE=1` times the whole block.
 
 A later stage-05 lowering, `LowerDecideTree`, belongs to this stage but is
 **triggered during physical planning** — see §1a. It lowers each `ReducerValueLink`'s body
@@ -339,6 +339,10 @@ constraint and in the objective. It stands for `Q += w · l · rᵀ` summed over
 | `sign` | The term's sign. |
 | `weight_sign` | The sign of `sign * weight` as the plan knows it (`ScaleSignAtPlanTime`): +1 or -1, and 0 for a weight known only when the query runs. The gate reads convexity from it. |
 | `filter`, `avg_scale`, `qualifier_scope_idx`, `reduction`, `inputs` | As for `DecideTerm`: the reducer's own `when`, AVG's `1/N`, the key scope of its `per`, whether it is a SUM or counted once, and the values `weight` is computed from. |
+
+`ReadDecideProduct` merges equal factors into one raised to the sum of their powers, and a factor equal to another
+with every sign reversed into that factor too, flipping the product's sign once per odd power of it: `(x - s) * (s - x)`
+is `-(x - s)²`, a square whose sign the gate reads for convexity, not a product of two forms.
 
 The model builder writes a square as a symmetric rank-one update and a product as a general one
 (`../06_model_formulation/done.md` §6). AVG scales the group's weight by `1/N`.

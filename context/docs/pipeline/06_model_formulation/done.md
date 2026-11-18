@@ -73,7 +73,7 @@ where every column resolution already passes rather than at each emission site; 
 refuse it, and `NumInstances` is 0. `ResolveRead` turns it into its base at the selected row for the readers of an
 instance's box (`InstanceBox`). Its type and box are its base's, copied again wherever the boxes are rewritten
 wholesale (after the floors, the implied bounds and a diagnosis's widening, `SyncFrameReadBoxes` in stage 08), and
-`BaseVariable` maps it to its base for a table of the plan's decisions (a name, an `__abs_aux_` test). The composed
+`BaseVariable` maps it to its base for a table of the plan's decisions (a name, the ABS helpers the tree's `ABS` nodes name). The composed
 MIN/MAX formulation reads each term's variable through the indexer at each row (`ComposedMinMaxTermData::variables`),
 so a frame read lands on the selected row's column there too, and its range is its base's box.
 
@@ -1025,7 +1025,8 @@ more it implies the lower corner, so three rows suffice; where it is negative al
 instance, one whose own `L >= 0` included, so the product reaches the negative value of `x` at `b = 1` and is 0 at
 `b = 0`. The floor is the product's range, not the default 0, so a floor written on the product holds, a `when` floor
 lowers the product's other rows with it, and `b * x + 3 <= 1` is not refused as never negative. A missing finite
-upper bound on `x` is refused by name — there is no envelope without it. A factor that is a
+upper bound on `x` is refused by name, since there is no envelope without it; where `x` is an ABS helper the refusal
+quotes the `ABS(...)` as the user wrote it (the tree's `ABS` node carries that text), never the helper. A factor that is a
 helper has no box until its members' are derived, so the refusal waits for them and names the
 member.
 

@@ -155,6 +155,10 @@ Four layers refuse a DECIDE query, each for what only it can see:
 **What this stage refuses.** Each of these needs the parsed tree, the declared types or the binding context:
 
 - a name that collides, a decision used where only data may stand, `D.x` (§1, §4a);
+- a decision's name, or a column a clause reads (a `per` or `within` key too), that contains a DECIDE tag or the
+  name prefix of a helper decision (`DecideNameContainsTag`, over the one list `DECIDE_TAGS` in `enums/decide.hpp`):
+  later stages find a tag by searching an expression's name, so such a name would be read as the tag. The refusal
+  names the identifier (*"DECIDE does not support the name '...'"*), in any letter case, as DuckDB's identifiers are;
 - a volatile function, below;
 - a user-written cast over a decision (`ValidateDecideNoExplicitDecisionCasts`): authorship is observable only on
   the parsed tree (`../04_canonicalizer/done.md` §3.6);

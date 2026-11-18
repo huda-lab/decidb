@@ -41,29 +41,6 @@ files.
 - **Done when.** `grep -rln "decide/direct/" src/optimizer/decide/*.cpp` lists only the dispatch file;
   `./test/decide/run_tests.sh -n 2 -k "bound_side_tables or abs or nan"` passes.
 
-## OPT-22 — A helper decision is known by its origin, not its name
-
-- **Problem.** `FormulateModel` (`physical_decide.cpp`) finds L0 indicators and ABS helpers by name prefix
-  (`StartsWith(name, "__l0auto_ind_")`, `"__abs_aux_"`), so a decision the user names `"__l0auto_ind_q"` is read as an
-  indicator: `context/opa_rewrite/repro/marker_names.sql` query 1 answers 0/12 where the plain spelling answers 12/0.
-- **Change.** By the owner's ruling (2026-11-18, `context/opa_rewrite/decisions.md` R20): a decision a rewrite adds
-  (`AddAuxiliaryDecision`, the L0 rewrite) records its origin as a field, and every reader that tells a helper from a
-  user decision reads that field. The L0 link reads the typed fact the tree holds (`l0_auto_m`).
-- **Ruling (owner, 2026-11-18).** No origin field: a reader tells a helper from a user decision by the tree's
-  typed function nodes (an `L0_INDICATOR` node with `l0_auto_m`, an `ABS` node's `value_var`). Nothing is serialized.
-- **Done when.** An oracle test of repro query 1 answers the same under both spellings;
-  `grep -rn "StartsWith.*\"__" src/execution/operator/decide src/optimizer/decide src/decidb src/planner/decide`
-  finds nothing; `./test/decide/run_tests.sh -n 2 -k "l0 or abs"` passes, and with `DECIDB_VERIFY_SERIALIZER=1` if
-  the field is on a serialized record.
-
-## OPT-23 — A quadratic objective over a data reducer answers
-
-- **Problem.** `MINIMIZE SUM(POWER(x - avg(t.score) by (t.g), 2))` raises an INTERNAL error ("linear expression split
-  into a non-linear term"); the same body as a constraint answers (`context/opa_rewrite/repro/refusals.sql`).
-- **Change.** The objective reads the data reducer as a constraint side does.
-- **Done when.** An oracle test of the query passes; `./test/decide/run_tests.sh -n 2 -k "quadratic or objective"`
-  passes.
-
 ## OPT-24 — A rewritten MIN/MAX clause is scoped once per instance
 
 - **Problem.** `sum(a*x) + max(b*x) <= 40` builds 13 rows; the same clause with a subquery bound builds 25

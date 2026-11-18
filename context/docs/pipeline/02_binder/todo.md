@@ -14,20 +14,6 @@ Language-surface work is owned by `../../language/` (the scopes:
 - **Needs.** TEST-15 (the tests the rewording breaks move to its helper).
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "binder or scope"` passes.
 
-## BIND-3 — A user name that contains a DECIDE tag is refused
-
-- **Problem.** A DECIDE tag is a substring of an expression's name, and a column's name is the user's:
-  `context/opa_rewrite/repro/marker_names.sql` query 2 (`"w__query_wide_value__"`) breaks a constraint, query 3
-  (`"__definition_function_0__"`) raises an INTERNAL error.
-- **Change.** By the owner's ruling (2026-11-18, `context/opa_rewrite/decisions.md` R20): until Phase 5 removes the
-  tags, the binder refuses a decision or a column a DECIDE clause reads whose name contains a DECIDE tag, with a
-  message that names the identifier (R12). One check against the tag list in `enums/decide.hpp`, no case list.
-  Phase 5 deletes it with the last tag.
-- **Ruling (owner, 2026-11-18).** The refusal also covers the name prefixes rewrites build for helper decisions
-  and parser temporaries (`__abs_aux_`, `__l0auto_ind_`, ...): each is a named constant in the same tag list.
-- **Done when.** Repro queries 2 and 3 raise the refusal, as tests; `./test/decide/run_tests.sh -n 2 -k "binder"`
-  passes.
-
 ## BIND-4 — The binder judges algebra by name
 
 - **Decision needed.** About 1,340 of `decide_binder.cpp`'s 2,098 lines are validators that classify the parsed tree

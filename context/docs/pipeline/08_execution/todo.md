@@ -36,29 +36,14 @@ named-column scan also bypass or revisit parts of the normal tree execution; the
 
 - **Problem.** The plan- and run-time rows of `language/errors.md` and the data checks of `guide.md` §7.3 that
   OPT-19, OPT-20 and FW-4 leave carry fixes (`Add a constraint like ...`, bounds to add, rewrites to write).
+  Among them: the solver-gap refusals (`ThrowDecideSolverGap`, `decide_solver_gate.cpp`), whose shared sentence
+  names solvers, `DECIDB_FORCE_SOLVER` and an install, and the bilinear refusal of a factor with no finite upper
+  bound (`linearization_bilinear_abs.cpp`). `FirstQuadraticClause` reads a quadratic row's source clause at index
+  -1 when a definition row belongs to no clause (no query reaches it today); the gap message names where without it.
 - **Change.** By the owner's rulings (2026-11-18, `context/opa_rewrite/decisions.md` R12, R19): each says what is wrong
   and points at it, and stops. `errors.md` and the guide quote the new text; the opening of `errors.md` states the rule.
 - **Needs.** EXEC-15, OPT-19, OPT-20, FW-4; TEST-15 (the tests the rewording breaks move to its helper).
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "error or unbounded or infeasible"` passes.
-
-## EXEC-17 — A refusal that reads only the plan is raised at planning
-
-- **Decision needed.** `x(INT) ... x <= -1` is refused when run: an empty input raises (the guide says it gives an
-  empty result) and `EXPLAIN` prints a plan. The check is a 150-line constructor of `DecideGlobalSinkState`.
-- **Options.** 1. Raise it at physical planning: `EXPLAIN` and `PREPARE` raise, an empty input raises too. 2. Keep it
-  at execution and skip it over an empty input.
-- **Recommendation.** 1: the check reads only the plan, so it belongs where the plan is known.
-- **Ruling (owner, 2026-11-18).** Option 1: the check moves to physical planning; `EXPLAIN`, `PREPARE` and an
-  empty input raise it.
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "domain or empty or explain"` passes.
-
-## EXEC-18 — Dead code and stale comments in the operator
-
-- **Problem.** Two timing channels (`DECIDB_BENCH` beside `DecideProfileScope`); dead `Id`, `Ids`, `Mask` in
-  `physical_decide.cpp` and a constant `true` member test run per entry; `decide_linear_form.hpp` says
-  `decide.prepared` and "last optimizer pass", though it runs at physical planning.
-- **Change.** `DecideProfileScope` is the one timing channel; the dead code goes; the comment states where it runs.
-- **Done when.** `grep -rn "DECIDB_BENCH" src` finds nothing; `./test/decide/run_tests.sh -n 2 -k "profile"` passes.
 
 ## EXEC-19 — An ordinary query builds no diagnosis state
 

@@ -552,8 +552,9 @@ A purely user-vs-user inverted box such as `x >= 5 AND x <= 1` does **not** matc
 and proceeds to the elastic engine, which reports a least-change loosen.
 
 One function states the test and the message (`DecideBoxContradictsDomain` and `DecideDomainRefusal`,
-`common/decide_value_messages.hpp`), and two steps call it. The sink state's constructor checks the box the constant
-bounds fold into (`DecideGlobalSinkState::domains`). A constant bound under a `when`, or under a `per` over a written
+`common/decide_value_messages.hpp`), and two steps call it. Physical planning checks the box the constant bounds
+fold into (`PhysicalDecide::CheckDecisionDomains`, which fills `PhysicalDecide::domains`): the check reads only the
+plan, so `EXPLAIN`, `PREPARE` and a query over an empty input raise it as a run does. A constant bound under a `when`, or under a `per` over a written
 column, folds into no box (`../05_optimizer/done.md`, singleton-row folding), so the model emitter checks each row
 such a clause writes (`DecideModelEmitter::CheckDomain`, from `Rows` and, for an easy MIN's or MAX's members, from
 `Groups`). It runs after `SkipNullInstances`: a row in no instance (a NULL key, a `when` that does not hold) is never
@@ -1084,7 +1085,10 @@ stage 06 along with the rows it guards. See
 
 The one Big-M still derived here is the auto-`M` refill for `norm(e, 0)` links,
 whose `M` bounds an expression rather than answering a comparison, so there is no
-bound to classify. It calls `DecideTightPerRowBigM` across the stage boundary.
+bound to classify. It calls `DecideTightPerRowBigM` across the stage boundary. The
+links it refills and the ABS helpers it leaves alone are read from the tree's function
+nodes (an `L0_INDICATOR` node with `l0_auto_m`, an `ABS` node's `value_var`), never from
+a decision's name, which is the user's to choose.
 
 A *variable* with no finite bound is the separate case, and the answer there is also
 refusal rather than a constant — there is no fixed Big-M anywhere in DeciDB. The order

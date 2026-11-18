@@ -12,7 +12,7 @@ benchmark: [direct_solve.md](direct_solve.md).
 
 ```bash
 make decide-bench-setup      # generate medium.db and large.db (once)
-make decide-bench            # every query, both sizes, 3 iterations, stage timers on (DECIDB_BENCH=1)
+make decide-bench            # every query, both sizes, 3 iterations, stage timers on (DECIDB_PROFILE=1)
 make decide-bench-manual     # queries/manual.sql instead of the suite
 make decide-view             # show the newest result file
 
@@ -23,7 +23,7 @@ python3 benchmark/decide/run_benchmarks.py --compare abc1234                 # a
 python3 benchmark/decide/run_benchmarks.py --timeout 900                     # seconds per run (default 600)
 ```
 
-Run the script directly without `DECIDB_BENCH=1` and the stage timers are off; only wall time and memory are recorded.
+Run the script directly without `DECIDB_PROFILE=1` and the stage timers are off; only wall time and memory are recorded.
 
 ## Databases
 
@@ -54,16 +54,17 @@ peak RSS and the median of each stage timer, over the successful runs.
 
 ## Stage timers
 
-With `DECIDB_BENCH=1` the engine prints one line per figure to stderr, and the runner parses them into the result:
+With `DECIDB_PROFILE=1` the engine prints one JSON line per span end and counter to stderr, and
+`run_benchmarks.parse_stage_output` turns them into the result. A figure the run did not reach is left out.
 
 ```
-DECIDB_BENCH: optimizer_ms=0.01         # the whole DecideOptimizer stage, on either path
-DECIDB_BENCH: model_construction_ms=32  # model building, up to SolverModel::Build
-DECIDB_BENCH: solver_ms=1448            # the SolveModel() call, which includes the neutral model build
-DECIDB_BENCH: total_variables=9965      # decision variables plus auxiliaries
-DECIDB_BENCH: total_constraint_specs=5  # DECIDE clauses handed to the builder
-DECIDB_BENCH: total_constraint_rows=19934  # matrix rows the solver received
-DECIDB_BENCH: num_rows=9965
+optimizer_ms=0.01         # the optimizer.decide span: the whole DecideOptimizer stage, on either path
+model_construction_ms=32  # the execution.finalize span minus execution.solve_and_route
+solver_ms=1448            # the execution.solve_and_route span: the neutral model build, the solve and the readback
+total_variables=9965      # counter model.variables: decision variables plus auxiliaries
+total_constraint_specs=5  # counter model.clause_specs: DECIDE clauses handed to the builder
+total_constraint_rows=19934  # counter model.constraint_rows: matrix rows the solver received
+num_rows=9965             # counter execution.descent_rows
 ```
 
 The two constraint counts are different units; never add them. A spec is one DECIDE clause as the operator hands it to
@@ -76,15 +77,11 @@ spec.
 Older result files carry a single `total_constraints` that summed the two units. `view_results.py` shows it flagged
 `pre-split, mixed unit`; do not compare it with a `total_constraint_rows` figure.
 
-Where each line is printed:
-
-- `src/optimizer/decide/decide_optimizer.cpp`: `optimizer_ms`.
-- `src/execution/operator/decide/physical_decide.cpp`: the other six. `total_constraint_rows` is read from
-  `SolverResult::model_constraint_rows`, which `src/decidb/solver/ilp_solver.cpp` sets from the built model, since
-  only the built model knows the expanded row count.
-
-The timers use DuckDB's `Profiler` class and are gated on `std::getenv("DECIDB_BENCH")`. For a finer, nested
-breakdown use the [pipeline profiler](pipeline_profiler.md).
+The spans and counters come from `DecideProfileScope`: `optimizer.decide` in `src/optimizer/decide/decide_optimizer.cpp`
+and the `execution.*` and `model.*` ones in `src/execution/operator/decide/physical_decide.cpp`.
+`model.constraint_rows` is read from `SolverResult::model_constraint_rows`, which `src/decidb/solver/ilp_solver.cpp`
+sets from the built model, since only the built model knows the expanded row count. For a finer, nested breakdown use
+the [pipeline profiler](pipeline_profiler.md).
 
 ## Query set
 

@@ -87,7 +87,7 @@ the decision count and the objective it reached, and the time does not include s
 Every mode runs `SET threads=32`, the most Gurobi uses by default, so both sides have the same cores.
 
 A solver mode also sets `DECIDB_TIME_LIMIT` above `--timeout`, because DeciDB otherwise stops a solve at 300 s and the
-query fails, and `DECIDB_BENCH`, which gives the model-build and solve split.
+query fails, and `DECIDB_PROFILE`, which gives the model-build and solve split.
 
 `require` means a query the rule does not take fails instead of falling back to the solver, so a reported speedup can
 never be the solver timed against itself.
