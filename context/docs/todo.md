@@ -15,6 +15,9 @@ the owner rules first.
 ## 0.3 Debug-build run (one lane)
 - [ ] TEST-6 One suite run on a debug build — testing/todo.md § TEST-6
 
+## 0.4 Release hang (one lane, after 0.3's gate)
+- [ ] EXEC-24 A rare hang in the descent's parallel merge — pipeline/08_execution/todo.md § EXEC-24
+
 # Phase 1 — Errors are raised where they are found
 
 ## 1.1 Error-test helper (one lane)
@@ -40,7 +43,6 @@ the owner rules first.
 
 ## 1.5 Filed cleanups (one lane)
 - [ ] INF-5 Three label formatters no test reaches — diagnostics/infeasible/todo.md § INF-5
-- [ ] EXEC-24 A rare hang in the descent's parallel merge — pipeline/08_execution/todo.md § EXEC-24
 
 # Phase 2 — Direct solve is a separate layer
 
