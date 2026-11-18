@@ -14,6 +14,9 @@ files.
 - **Recommendation.** 1: the problem is convex as written; the refusal comes from a missed classification. Check
   first whether HiGHS solves a convex quadratic over integer decisions; if not, that case keeps a refusal that says
   so.
+- **Ruling (owner, 2026-11-18).** Option 1: the product group recognises the square, so HiGHS solves the concave
+  maximization over continuous decisions. Over integer decisions HiGHS refuses a quadratic objective (MIQP) at plan
+  time; that refusal states its kind and where (R12).
 - **Done when.** An oracle test under `DECIDB_FORCE_SOLVER=highs` passes;
   `./test/decide/run_tests.sh -n 2 -k "bilinear or square"` passes.
 
@@ -25,6 +28,8 @@ files.
   the `ABS(...)` the user wrote. 2. The helper also takes its bound from its operand's, so the refusal is left for
   an unbounded operand only.
 - **Recommendation.** 1: an unbounded operand is refused under either option, so the message is needed either way.
+- **Ruling (owner, 2026-11-18).** Option 1: the message states the kind of error and points at the `ABS(...)` the
+  user wrote (R12); the helper's bound is unchanged.
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "abs"` passes.
 
 ## FORM-8 — One record per kind of model row

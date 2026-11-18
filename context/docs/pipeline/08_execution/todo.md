@@ -48,6 +48,8 @@ named-column scan also bypass or revisit parts of the normal tree execution; the
 - **Options.** 1. Raise it at physical planning: `EXPLAIN` and `PREPARE` raise, an empty input raises too. 2. Keep it
   at execution and skip it over an empty input.
 - **Recommendation.** 1: the check reads only the plan, so it belongs where the plan is known.
+- **Ruling (owner, 2026-11-18).** Option 1: the check moves to physical planning; `EXPLAIN`, `PREPARE` and an
+  empty input raise it.
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "domain or empty or explain"` passes.
 
 ## EXEC-18 — Dead code and stale comments in the operator

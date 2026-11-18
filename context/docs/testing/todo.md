@@ -44,6 +44,8 @@ Open coverage gaps, one section each. Coverage that exists is in [coverage.md](c
 - **Recommendation.** 1 and 3 change (a test that reads a dump or edits the IR breaks when Phase 5 replaces both); 2
   stays refused until Phase 6 gives products a node rule; 4 restores the two cases if they reach a branch the others
   do not.
+- **Ruling (owner, 2026-11-18).** As recommended: 1 asserts answers, not the dump; 3 writes each decline as a
+  query; 2 stays refused until Phase 6; 4 restores the two cases only if each reaches a branch the others do not.
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "one_pass_tree"` and
   `build/release/test/unittest "[decidb]"` pass.
 
