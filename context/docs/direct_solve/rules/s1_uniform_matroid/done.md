@@ -96,8 +96,9 @@ behavior, so changing it is deliberate.
 
 **Error wording** (`../../architecture/policy.md`). The messages are the solver's, built by the same functions. A NaN
 count bound, fixed value or `SUM` source column raises `DECIDE: the bound cap is NaN on some rows. Skip those rows
-with 'when NOT isnan(cap):'.`. Neither path names a row: a row's place in the input depends on the scan. A NULL is
-skipped on both paths: a NULL limit is no limit, and a NULL score leaves its row out of the objective.
+by writing 'CASE WHEN NOT isnan(cap) THEN cap END' in its place.`. Neither path names a row: a row's place in the input
+depends on the scan. A NULL is skipped on both paths: a NULL limit is no limit, and a NULL score leaves its row out of
+the objective.
 The non-finite score and the infeasible messages are the solver's too. A computed bound or fixed value
 (`TRY_CAST(cap AS INTEGER)`) is quoted as written, and an `=` bound that takes two values in a group raises `` `cap`
 takes more than one value here (5 and 7), in the group t.g = 'a' ``, on both paths. When several rows are bad, which

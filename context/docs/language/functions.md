@@ -88,8 +88,11 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   their coefficients with a CASE, and open a box or limit whose value is NULL. NaN in a bound or a coefficient is an
   error, unlike SQL, because no solver reads a NaN; an infinite coefficient is an error because a model cannot hold
   one, and an infinite bound keeps its SQL meaning (D65). Both paths raise `DecideInvalidValueMessage`, which names the
-  value as written and the `when` that skips its rows. Integer arithmetic is DuckDB's: a bound is computed in DuckDB's
-  types before the model reads it as `DOUBLE`, so a `HUGEINT` overflow raises as in SQL and division by zero gives
+  value as written and the edit that skips its rows: the value replaced where it stands by
+  `CASE WHEN isfinite(v) THEN v END` (a bound: `CASE WHEN NOT isnan(v) THEN v END`). A `when` drops its rows before
+  any frame is computed, so it moves every frame's timeline; the NULL skips that row's instance alone. Integer
+  arithmetic is DuckDB's: a bound is computed in DuckDB's types before the model reads it as `DOUBLE`, so a `HUGEINT`
+  overflow raises as in SQL and division by zero gives
   DuckDB's `inf`, `nan` or NULL. A `DOUBLE` bound that overflows in SQL (`x <= b + b` with `b` = 1e308) is DuckDB's
   infinity and keeps that meaning: +inf is no bound, and -inf makes the query infeasible, which DIAGNOSE reports as the
   clause `x <= -inf` with "raise this bound". A number DeciDB itself computes past a `DOUBLE` is an error instead

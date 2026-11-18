@@ -35,12 +35,11 @@ to the extremum directly: each group sum is a helper decision, defined by one ro
 `BuildMinMaxGroups`, three columns and three rows more on a million-row model. Inlining a SUM helper into the one
 reader that sums it is the expected remedy if the cost shows.
 
-## PERF-25 — The pipeline profiler sums spans the tree evaluator does not emit
+## PERF-26 — findings.md measures extraction code the tree evaluator replaced
 
-- **Problem.** `benchmark/decide/profile_pipeline.py` sums `execution.keyed_mapping`, `execution.scope_checks` and
-  `execution.evaluate_*`, which nothing in `src` emits, and leaves out `execution.tree_descent`,
-  `execution.descent_merge` and `execution.tree_model`, which it does, so its extraction time is wrong. `findings.md`
-  and `pipeline_profiler.md` cite the same spans.
-- **Change.** The script sums the spans `src` emits, and the two docs cite them.
-- **Done when.** The script's span list matches the names `src` emits, and one profiled query's extraction time equals
-  the sum of its spans.
+- **Problem.** `findings.md` § Measured design choices cites `extraction.group_ids`, `extraction.constraint_setup`,
+  `extraction.when_per_and_qualifiers`, `extraction.rhs` and `extraction.constraint`, which nothing in `src` emits, and
+  its figures time code the tree evaluator replaced, so they say nothing of the current pipeline.
+- **Change.** Each figure is measured again on the spans `src` emits (`profile_pipeline.py`), or goes with its passage.
+- **Done when.** Every span `findings.md` cites is one `src` emits. It is a measurement run: confirm the start with
+  the owner.

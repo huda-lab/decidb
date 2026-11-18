@@ -200,12 +200,16 @@ that hold an instance. A column's tightest value is the group's MIN or MAX in th
 An `=` bound's checks are scope checks made before any rule runs: its NaN check, then its `=` check (two values in
 one group, `AddDisagreementCheck`), which groups by class before any rule can; the NaN check stands with it, so
 every path raises the same error of the two. Another bound's NaN check is an input of the rule that computes the
-bound, which adds no pass to its plan. The `=` check speaks only where each of the clause's reducers with a `when`
-of its own keeps a row of the group: a group with none holds no instance and constrains nothing, so
+bound, which adds no pass to its plan. A check copies the value it reads with its tags (`NanMessage`,
+`AddAbsValueCheck`): the tree reads a frame, a reducer and a query-wide value by their tags. The `=` check speaks only
+where each of the clause's reducers with a `when` of its own keeps a row of the group: a group with none holds no
+instance and constrains nothing, so
 its bound is not read (guide §7.4), as a frame's is not. A reducer over data whose argument reads a frame stays a reducer over the rows it
 reads, tagged with its entry of `LogicalDecide::frame_aggregates` (its path key and its own `per` key,
-`MakeFrameAggregate`); the linear form makes it a trailing frame column (`DecideFrameColumn::Kind::AGGREGATE`, a second
-`LowerFramesOnce` once every frame has its columns) that stage 08 computes. With several threads the
+`MakeFrameAggregate`), and a norm of one also checks its body (`ArgumentMessage`) at the rows the reducer reads,
+since a norm's value can hide a NaN (an L0 count's SIGN reads it as 0); the linear form makes it a trailing frame column
+(`DecideFrameColumn::Kind::AGGREGATE`, a second `LowerFramesOnce` once every frame has its columns) that stage 08
+computes. With several threads the
 source hands its rows on in an order that varies with the thread schedule. The DECIDE operator reads them in that order,
 so the model's row and column order and the group a scope check names first can differ between runs of
 one query. Neither changes the answer's optimum. Tests that compare models run on one thread
@@ -1007,6 +1011,11 @@ A comparison that holds a frame selector is no bound on one decision: it reads a
 interval over the row says. A comparison a rewrite left holding an auxiliary alone (`abs(x - at(previous: x) over
 (...)) <= K` as `a <= K`) does fold: where the frame has no value the auxiliary's definition is skipped, so the box
 binds nothing there (D88).
+
+**A helper stands in for its function with the function's type** (`DecideTermSplitter::ReplaceTaggedFunctions`,
+which singleton-row folding and `IsLinear` call). A function the optimizer gave a helper (an ABS, a definition) is
+read as its helper cast to the function's type: the casts around the function are bound to that type, and a
+helper's is its decision's, so an INT decision's `abs(x - 2)` is a BIGINT and its helper an INTEGER.
 
 **One classifier reads every bound on one decision** (`DecideReadSingletonRow`,
 `decide_singleton_row_folding.hpp`). This pass, the linear form (a data bound, stage 06)

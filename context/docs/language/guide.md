@@ -232,8 +232,9 @@ data and unaffected.
   `SUM(x) <= cap` with a NULL `cap` has no constraint there. In the objective, a NULL term is dropped. `COALESCE`
   imputes a value instead: `SUM(x * COALESCE(w, 0))`. A NULL written in the query beside a decision
   (`SUM(x + NULL)`) is refused where it is written. NaN is an error, as is an infinite coefficient; an infinite bound
-  is a value, as in SQL (`x <= 4 / 0` always holds). The error names the value and the `when` that skips its rows.
-  `COUNT(col)` also counts a NaN, as SQL does.
+  is a value, as in SQL (`x <= 4 / 0` always holds). The error names the value and the edit that skips its rows:
+  the value replaced where it stands by `CASE WHEN isfinite(v) THEN v END`, which leaves every frame's timeline as it
+  is. `COUNT(col)` also counts a NaN, as SQL does.
   In a `when`, NULL is false; in a written key column, NULL is no class (§7.2).
 
 ### 3.1 Quadratic constraints
@@ -480,7 +481,8 @@ per t.g: sum(per t.h: max(per t.k: sum(x) by (t.g, t.h, t.k)) by (t.g, t.h)) by 
   over its path: in `per t.g: sum(x - avg(t.v) by (t.h)) by (t.g) <= 0` each row reads the mean of its `(t.g, t.h)`
   group among the rows the path keeps; where that group has no value (a NULL key, a `when` that keeps none of its
   rows) the member is skipped, as any NULL a reducer reads. It is read as a coefficient, so what it reads must be
-  finite (*"DECIDE: t.v / 0.0 is NaN or infinite on some rows. Skip those rows with 'when isfinite(t.v / 0.0):'"*);
+  finite (*"DECIDE: t.v / 0.0 is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(t.v / 0.0)
+  THEN t.v / 0.0 END' in its place"*);
   on a bound, infinity is a value.
 - **How it is solved.** Every reducer of a nest over decisions is a helper decision (§6.4) keyed by its path, one
   instance per path group, defined once per group, innermost first, and read by the reducers around it. A helper is

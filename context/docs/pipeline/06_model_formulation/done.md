@@ -898,7 +898,7 @@ and the envelope alone is exact. Every term's reach is walked once by
 `ComposedTermRange` and reused three times — as the auxiliary's box, as the closing
 Big-M, and as the box of any column the native arm pins — so the arms cannot disagree
 about what the term can reach. It walks each end through the one signed walk (§ Big-M constants), so a composed term
-keeps every finite end the flat path keeps for the same term.
+keeps every finite end the same term keeps outside a composition.
 
 ### `<>` disjunctions
 

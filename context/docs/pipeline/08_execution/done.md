@@ -209,10 +209,12 @@ a scan of their own.
   at its first row and nothing of a row in no class (`FirstOfEachInstance`), with DuckDB's aggregate functions over a
   dense array of states, one per slot, as `PerfectAggregateHashTable` lays out its groups (`DecideAggregateStates`); a
   norm folds its desugared reducer's (a sum of squares, of absolute values); a NaN among its values, or in a norm's
-  body, is the data check's to refuse, since the check ranks first. A reducer over frames, which no check reads,
-  refuses one itself, a norm's in its body (`DecideBody::norm_body`, since SIGN reads a NaN as 0), but a count, which
-  counts it; it folds once every frame's columns are, before any keyed mapping, in its column's order (FRAMES). A node
-  reads a data reducer's value as a hole of its layout, after its carried and program columns: the fold in the slot its
+  body, is the data check's to refuse, since the check ranks first. A reducer over frames, like a range frame's
+  window, that reads a NaN has the value NaN (`DecideNanValue`), as SQL's SUM does, whatever its aggregate, but a
+  count counts it; the value's reader refuses it with the ordinary message, and a norm, whose value can hide a NaN,
+  through the check on its body; it folds once every frame's columns are, before any keyed mapping, in its column's
+  order (FRAMES). A node reads a data reducer's value as a hole of its layout, after its carried and program columns:
+  the fold in the slot its
   row lies in, NULL where the row reaches none. A data check's message is a program on its hidden root, raised at its
   rank before any clause is read (`CheckData`); a window of it that raises raises the error its whole evaluation
   meets first, as DuckDB's vectorized evaluation of a chunk does.
@@ -1052,7 +1054,7 @@ Every coefficient and RHS value is checked after evaluation:
   one: `DropNullObjectiveTerms` read it as 0 in stage 05, so a NULL there is an
   internal error.
 - **NaN / Infinity** → `InvalidInputException` with `DecideInvalidValueMessage`: the
-  value as written and the `when` that skips its rows.
+  value as written and the in-place `CASE` that skips its rows.
 
 **Infinity is admitted on one path only: the values that become a row's `rhs`.** An
 infinite bound is not an error there — it is the absence of a constraint (`<= +inf`)
