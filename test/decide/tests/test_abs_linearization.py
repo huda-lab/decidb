@@ -2373,3 +2373,35 @@ def test_a_reducer_over_data_under_abs_is_read_as_data(
         lambda a: a["x0"] + a["x1"] + a["x2"],
         maximize,
     )
+
+
+# An INT decision's `abs(x - 2)` is a BIGINT and its helper an INTEGER. A bound the data carries as a DOUBLE (an
+# average, a sum divided by a count) puts a cast to DOUBLE around the function, bound to the BIGINT: the helper that
+# stands in for the function in the bound's admitted interval must be a BIGINT too, or the cast reads its four-byte
+# values as eight and the bound is whatever the rows next to it hold. The average is the same on every row. Judged by
+# enumeration over t(id) = 1, 2, 3, where it is 2, on the default plan and the solver path.
+
+_AVERAGED_IDS = (1, 2, 3)
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "cli_fixture, extra_env",
+    [("decidb_cli_gurobi", {}), ("decidb_cli_gurobi", {"DECIDB_TEST_DIRECT_SOLVE": "off"})],
+    ids=["gurobi", "gurobi-solver-path"],
+)
+@pytest.mark.parametrize("bound", ["avg(t.id)", "sum(t.id) / 3"])
+def test_a_double_bound_over_an_int_abs_is_read_on_every_row(request, cli_fixture, extra_env, bound):
+    cli = request.getfixturevalue(cli_fixture).with_env(extra_env)
+    rows = len(_AVERAGED_IDS)
+    radius = sum(_AVERAGED_IDS) / rows
+    values = ", ".join(f"({i})" for i in _AVERAGED_IDS)
+    sql = f"""SELECT id, x FROM (VALUES {values}) t(id)
+        DECIDE x(INT) SUCH THAT x >= 0 AND x <= 5 AND abs(x - 2) <= {bound} MAXIMIZE sum(x) ORDER BY id"""
+    judge_rows(
+        answer(cli, sql),
+        {f"x{i}": range(0, 6) for i in range(rows)},
+        lambda a: all(abs(a[f"x{i}"] - 2) <= radius for i in range(rows)),
+        lambda a: sum(a[f"x{i}"] for i in range(rows)),
+        True,
+    )

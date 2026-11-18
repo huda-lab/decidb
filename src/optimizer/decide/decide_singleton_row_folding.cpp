@@ -147,27 +147,6 @@ static void AdmittedInterval(const ExpressionBuilder &calc, ExpressionType compa
 	lower = calc.If(skipped, negative_infinity, lower);
 }
 
-//! The decision side as the row it bounds. An easy `max(m) <= K` / `min(m) >= K` bounds every member its reducer
-//! reads (its `when`, the reducer's filter, chooses them), and the extremum of one member is that member: the clause is
-//! read with the member in the reducer's place (`2 * max(c * x) <= K` reads as `2 * (c * x) <= K`), and `filter` is
-//! set to the reducer's filter. The reducer stays in the tree, so EXPLAIN and DIAGNOSE read the clause as written.
-static void ReplaceTaggedFunctionsForSingletonRead(unique_ptr<Expression> &expression, const LogicalDecide &decide) {
-	idx_t aux;
-	const bool abs_function = expression->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
-	                          TryParseDecideIndexTag(expression->GetAlias(), ABS_FUNCTION_TAG_PREFIX, aux);
-	const bool definition_function =
-	    TryParseDecideIndexTag(expression->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, aux);
-	if (abs_function || definition_function) {
-		if (aux >= decide.decide_variables.size()) {
-			throw InternalException("DECIDE singleton-row folding: function references invalid helper %llu", aux);
-		}
-		expression = decide.decide_variables[aux]->Copy();
-		return;
-	}
-	ExpressionIterator::EnumerateChildren(
-	    *expression, [&](unique_ptr<Expression> &child) { ReplaceTaggedFunctionsForSingletonRead(child, decide); });
-}
-
 //! A frame inside a tagged F body determines that helper's value, not the row on which the surrounding bound is
 //! read. After the function value is replaced by its helper, the bound can still be folded into that helper's box.
 //! Other frame reads remain row-dependent and keep the conservative refusal below.
@@ -188,6 +167,10 @@ static bool ContainsFrameOutsideTaggedFunction(const Expression &expression) {
 	return found;
 }
 
+//! The decision side as the row it bounds. An easy `max(m) <= K` / `min(m) >= K` bounds every member its reducer
+//! reads (its `when`, the reducer's filter, chooses them), and the extremum of one member is that member: the clause is
+//! read with the member in the reducer's place (`2 * max(c * x) <= K` reads as `2 * (c * x) <= K`), and `filter` is
+//! set to the reducer's filter. The reducer stays in the tree, so EXPLAIN and DIAGNOSE read the clause as written.
 static unique_ptr<Expression> ReadAsRow(const ExpressionBuilder &calc, const LogicalDecide &decide,
                                         const DecideTermSplitter &splitter, const BoundComparisonExpression &comparison,
                                         unique_ptr<Expression> &filter, bool &by_key_only) {
@@ -196,7 +179,7 @@ static unique_ptr<Expression> ReadAsRow(const ExpressionBuilder &calc, const Log
 	if (splitter.ExpandBilinearGroups(*source_row, expanded)) {
 		source_row = std::move(expanded);
 	}
-	ReplaceTaggedFunctionsForSingletonRead(source_row, decide);
+	splitter.ReplaceTaggedFunctions(source_row);
 	auto row = calc.Out(calc.Of(*source_row));
 	if (HasDecideTag(comparison.GetAlias(), MINMAX_EASY_REWRITE_TAG)) {
 		// The reducer's `by` key is on the written reducer: the copy above keeps no alias.

@@ -82,23 +82,6 @@ static bool TryGetFunctionAuxIndex(const Expression &expr, idx_t &var_idx) {
 	       TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, var_idx);
 }
 
-static void ReplaceTaggedFunctionsWithAux(unique_ptr<Expression> &expression,
-                                          const vector<unique_ptr<Expression>> &decide_variables) {
-	if (!expression) {
-		return;
-	}
-	idx_t aux_idx;
-	if (TryGetFunctionAuxIndex(*expression, aux_idx)) {
-		if (aux_idx >= decide_variables.size()) {
-			throw InternalException("DECIDE term splitter: function references invalid helper %llu", aux_idx);
-		}
-		expression = decide_variables[aux_idx]->Copy();
-		return;
-	}
-	ExpressionIterator::EnumerateChildren(
-	    *expression, [&](unique_ptr<Expression> &child) { ReplaceTaggedFunctionsWithAux(child, decide_variables); });
-}
-
 //! `left * right` for two coefficients, `right` null for 1. A bare decision's literal 1 stays out of the product, so
 //! `w * x` reads `w`: a product of a coefficient and 1 could overflow where the coefficient cannot.
 static unique_ptr<Expression> MultiplyCoefficients(ClientContext &context, const Expression &left,
@@ -171,8 +154,25 @@ bool DecideTermSplitter::IsLinear(const Expression &expr) const {
 	if (!ExpandBilinearGroups(expr, lowered)) {
 		lowered = expr.Copy();
 	}
-	ReplaceTaggedFunctionsWithAux(lowered, decide_variables);
+	ReplaceTaggedFunctions(lowered);
 	return DecideDegreeOf(context, *lowered, decide_index).IsLinear();
+}
+
+void DecideTermSplitter::ReplaceTaggedFunctions(unique_ptr<Expression> &expression) const {
+	if (!expression) {
+		return;
+	}
+	idx_t aux_idx;
+	if (TryGetFunctionAuxIndex(*expression, aux_idx)) {
+		if (aux_idx >= decide_variables.size()) {
+			throw InternalException("DECIDE term splitter: function references invalid helper %llu", aux_idx);
+		}
+		const auto type = expression->return_type;
+		expression = BoundCastExpression::AddCastToType(context, decide_variables[aux_idx]->Copy(), type);
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(*expression,
+	                                      [&](unique_ptr<Expression> &child) { ReplaceTaggedFunctions(child); });
 }
 
 idx_t DecideTermSplitter::FindVariable(const Expression &expr) const {
