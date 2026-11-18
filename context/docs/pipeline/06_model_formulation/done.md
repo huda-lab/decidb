@@ -1023,9 +1023,8 @@ propagation, once the lifted floors have lowered them, so `b * x` over x >= 0 is
 final box, which a helper factor (`b * sum(x)`) only has after its members are derived. Where that floor is 0 or
 more it implies the lower corner, so three rows suffice; where it is negative all four are emitted for every
 instance, one whose own `L >= 0` included, so the product reaches the negative value of `x` at `b = 1` and is 0 at
-`b = 0`. Before 2026-11-15 the product took the default floor of 0 and formulation widened it to `L`: a floor written
-on the product was lost, a `when` floor left the other rows at 0, and `b * x + 3 <= 1` was refused as never
-negative. A missing finite
+`b = 0`. The floor is the product's range, not the default 0, so a floor written on the product holds, a `when` floor
+lowers the product's other rows with it, and `b * x + 3 <= 1` is not refused as never negative. A missing finite
 upper bound on `x` is refused by name — there is no envelope without it. A factor that is a
 helper has no box until its members' are derived, so the refusal waits for them and names the
 member.

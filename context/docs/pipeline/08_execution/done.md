@@ -318,11 +318,11 @@ a scan of their own.
   members stand for, a relation-qualified one's first of each class, the repeats left out; their filters decide the rows
   a group emits and the groups a reducer over no row leaves no instance, as a term's do. A product's coefficient of 1,
   which stage 05 leaves out, reads its sign. A NULL coefficient, or a factor
-  with no instance at its row, skips the row's instance. A square's factor is read as a composed term's is, on the
-  input's first row, whatever the clause keeps. The objective's squared terms are read as its terms are; its products on
-  the rows they are read on, with no row dropped for a decision with no instance, and
-  one outside every reducer is counted once on the first row the objective keeps (`CountProductsOnce`). A product's
-  auxiliary has no value where a factor has none (`DecideAbsence::At`), which the
+  with no instance at its row, skips the row's instance. A square's weight is a program on its site, read on each row
+  its reducer reads (`DecideModelEmitter::Polynomial`), as a product's weight is. The objective's squared
+  terms are read as its terms are; its products on the rows they are read on, with no row dropped for a decision with
+  no instance, and one outside every reducer is counted once on the first row the objective keeps
+  (`CountProductsOnce`). A product's auxiliary has no value where a factor has none (`DecideAbsence::At`), which the
   definitions reading it see and stage 06 reads (`absent_reads`). A row defining an auxiliary reads its products'
   factors and its squares' terms as it reads its terms' decisions, and its squares' coefficients as its terms', but no
   product's coefficient; no part of a definition lies in a reducer,
@@ -665,13 +665,14 @@ timelines (D75).
 `ComputeDecideFrameColumns` then computes each column stage 05 registered (`DecideFrameReads::columns`): a payload is
 read on the first row of each selected peer only, an `else` on the anchors that reach it only, so an unused one raises
 nothing (a cast that would fail there does not), and the values are gathered onto the anchors. Every later phase reads
-the frames as data columns, and readback references the input's own columns only. Once the keyed mappings exist,
-`DecideTreeColumns::CheckPositions` holds each position a frame reads -- a point's selected peer, every position a
-range's window visits, one whose NULL reads left it nothing to read included (`DecideFrameMap::WindowVisits`) -- of
-several rows to one signature of its payload (D73, deck p. 110): each column the payload reads by value (a point's
-columns, a range's reducer argument or its helper's member terms), each decision by its instance, whatever its
-coefficient. A frame's decision terms read `gstate.ReadVariable`: a frame read numbered once per decision and frame
-(`SolverInput::frame_reads`, stage 06), its rows the selected ones; a query-wide decision is its own read.
+the frames as data columns, and readback references the input's own columns only. `ReadFrames` then calls
+`DecideTreeColumns::CheckPositions`, which needs the finished descent and the skipped NULL reads and holds each position
+a frame reads -- a point's selected peer, every position a range's window visits, one whose NULL reads left it nothing
+to read included (`DecideFrameMap::WindowVisits`) -- of several rows to one signature of its payload (D73, deck p. 110):
+each column the payload reads by value (a point's columns, a range's reducer argument or its helper's member terms),
+each decision by its instance, whatever its coefficient. A frame's decision terms read `gstate.ReadVariable`: a frame
+read numbered once per decision and frame (`SolverInput::frame_reads`, stage 06), its rows the selected ones; a
+query-wide decision is its own read.
 
 Where a frame has nothing to read, every column of it holds NULL, which is no value (D84) as any NULL a clause reads:
 the instance is skipped (`DecideAbsence::SkipNullInstances`), a reducer's member is out of its filter, an objective term is dropped. An
