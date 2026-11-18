@@ -698,11 +698,11 @@ void DecideModelEmitter::CheckDomain(idx_t root, const EvaluatedConstraint &eval
 		return;
 	}
 	const auto var = clause.lhs_terms[0].variable_index;
-	if (var >= gstate.domains.size() || !gstate.domains[var].checked ||
+	if (var >= op.domains.size() || !op.domains[var].checked ||
 	    clause.source_clause_id >= op.constraint_sources.size()) {
 		return;
 	}
-	auto &domain = gstate.domains[var];
+	auto &domain = op.domains[var];
 	const auto &quoted = op.constraint_sources[clause.source_clause_id];
 	auto written_bound = [&](bool, double) {
 		return QuoteWrittenClause(quoted);

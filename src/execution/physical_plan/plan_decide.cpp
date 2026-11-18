@@ -284,6 +284,8 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 			}
 		}
 	}
+	// The refusal of a bound the decision's type cannot hold reads the plan alone, so it is raised here.
+	decide_op->CheckDecisionDomains();
 	// Back-fill SELECT-only columns from the child projection's user-written names.
 	// Only slots the DECIDE-clause harvest left empty are touched, so a name the user
 	// referenced in the clause always wins over the raw projection alias.

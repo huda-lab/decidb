@@ -203,6 +203,26 @@ public:
 	//! a fact only it can see, the same way the `<>` range collapse does.
 	bool force_native_constructs = false;
 
+	//! What the domain check reads of a decision: the box of the bounds written on it as constants, whose floor holds
+	//! the floors a `when` or `per` lowers (conservatively: the lowest), and how its message names the decision.
+	//! `checked` is false for a decision no bound contradicts a type of (a helper, an auxiliary that may read no
+	//! value).
+	struct DecisionDomain {
+		bool checked = false;
+		DecideBoundBox box;
+		bool is_bool = false;
+		bool is_aux = false;
+		string name;
+	};
+	//! One per decision, filled by CheckDecisionDomains. The run-time check of a per-row bound reads it
+	//! (DecideModelEmitter::CheckDomain).
+	vector<DecisionDomain> domains;
+
+	//! The refusal of a bound a decision's type cannot hold (`x(INT) ... x <= -1`): it reads only the plan, so it is
+	//! raised where the plan is made, once the operator holds its tree and its bounds -- for an `EXPLAIN` or a
+	//! `PREPARE` as for a run, and over an empty input. Fills `domains`.
+	void CheckDecisionDomains();
+
 public:
 	// Source interface
 	unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const override;

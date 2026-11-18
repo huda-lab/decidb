@@ -49,6 +49,9 @@ struct Shape {
 	Edit edit;
 	//! The query's FROM clause; null for SOURCE_ROWS.
 	const char *source;
+	//! The query is refused at physical planning, once the rule has declined it: a bound its decision's type cannot
+	//! hold (PhysicalDecide::CheckDecisionDomains), so EXPLAIN raises that error instead of printing the plan.
+	bool refused;
 };
 
 //! Source columns: id, w (DOUBLE), cap (INTEGER), flag (BOOLEAN), name (VARCHAR), f (FLOAT).
@@ -121,7 +124,12 @@ bool Applies(MakeRule make_rule, Connection &con, const Shape &shape) {
 	auto sql = "EXPLAIN SELECT id FROM (FROM " + string(shape.source ? shape.source : SOURCE_ROWS) + " DECIDE " +
 	           shape.declaration + " SUCH THAT " + shape.constraints + " " + shape.objective + ") q";
 	auto result = con.Query(sql);
-	REQUIRE_NO_FAIL(*result);
+	if (shape.refused) {
+		REQUIRE(result->HasError());
+		REQUIRE(result->GetError().find("cannot hold") != string::npos);
+	} else {
+		REQUIRE_NO_FAIL(*result);
+	}
 	REQUIRE(offered);
 	return applied;
 }
@@ -304,6 +312,7 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	shapes.push_back(S1("a fixed value under a WHEN that reads more than the source",
 	                    "SUM(x) <= 2 AND when txid_current() >= 0: x = 1"));
 	shapes.push_back(S1("a fixed value below the Boolean domain", "SUM(x) <= 2 AND x <= -1"));
+	shapes.back().refused = true;
 	shapes.push_back(
 	    S1("a fixed value that is a constant but not a finite number", "SUM(x) <= 2 AND x = 'inf'::DOUBLE"));
 	// SourceBooleanFixedValue: the value is a Boolean column or expression cast to a number.
@@ -465,6 +474,7 @@ duckdb::vector<Shape> A1DeclineShapes() {
 	shapes.push_back(A1("a bound with a coefficient that reads a column outside the source", "x <= cap",
 	                    [](DirectIR &ir) { LeftPart(ir).terms[0].coefficient = ForeignColumn(LogicalType::DOUBLE); }));
 	shapes.push_back(A1("a Boolean bound below the domain", "x <= -1", nullptr, A1_OBJECTIVE, "x(BOOL)"));
+	shapes.back().refused = true;
 	// ProveObjective.
 	shapes.push_back(A1("an objective WHEN that reads more than the source", "x <= cap", nullptr,
 	                    "MAXIMIZE when txid_current() >= 0: SUM(w*x)"));
@@ -686,6 +696,7 @@ duckdb::vector<Shape> R1DeclineShapes() {
 		ir.constraints[0].rhs = make_uniq<BoundSubqueryExpression>(LogicalType::DOUBLE);
 	}));
 	shapes.push_back(R1("a bound below the built-in domain", "x <= -1 AND SUM(cap*x) <= 5"));
+	shapes.back().refused = true;
 	// CheckCondition and ProveObjective: the objective.
 	shapes.push_back(
 	    R1("an objective with a by key", "x <= cap AND SUM(cap*x) <= 5", ObjectiveByFlag, "MAXIMIZE SUM(w*x)"));
@@ -1081,6 +1092,7 @@ duckdb::vector<Shape> A2DeclineShapes() {
 	shapes.push_back(A2("a constraint that is not a bound", "c BETWEEN 0 AND 10",
 	                    [](DirectIR &ir) { ir.constraints[0].singleton_row = false; }));
 	shapes.push_back(A2("a bound below the built-in domain", "c <= -1"));
+	shapes.back().refused = true;
 	// ProveObjective.
 	shapes.push_back(A2("no objective", "c BETWEEN 0 AND 10", nullptr, ""));
 	shapes.push_back(A2("an average objective", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE AVG(POWER(c - w, 2))"));
@@ -1454,6 +1466,7 @@ duckdb::vector<Shape> S3DeclineShapes() {
 	shapes.push_back(S3("no budget, a fixed value alone", "x = 1"));
 	shapes.push_back(S3("a membership constraint beside the budget", "SUM(w*x) <= 9 AND x IN (0, 1)"));
 	shapes.push_back(S3("a fixed value no BOOL meets", "SUM(w*x) <= 9 AND x >= 2"));
+	shapes.back().refused = true;
 	shapes.push_back(S3("a fixed value fixed only within the query", "SUM(w*x) <= 9 AND x <= txid_current()"));
 	shapes.push_back(S3("a strict budget", "SUM(cap*x) < 9"));
 	shapes.push_back(S3("a maximized count under a minimum budget", "SUM(w*x) >= 9"));

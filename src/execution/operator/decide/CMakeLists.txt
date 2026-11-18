@@ -10,7 +10,8 @@ add_library_unity(
   decide_absence.cpp
   decide_value_extraction.cpp
   decide_tree_columns.cpp
-  decide_model_emitter.cpp)
+  decide_model_emitter.cpp
+  decide_domain_check.cpp)
 target_link_libraries(duckdb_operator_decide duckdb_highs)
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:duckdb_operator_decide>

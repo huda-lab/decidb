@@ -170,12 +170,34 @@ def _near_miss_sql(fixture, case):
     )
 
 
+#: The near misses whose bound a BOOL decision cannot hold: S1 declines them, and the solver plan is refused at planning.
+_REFUSED_AT_PLANNING = [
+    case
+    for fixture in RULE_FIXTURES
+    if fixture.rule == "S1_UNIFORM_MATROID"
+    for case in fixture.near_misses
+    if re.search(r"AND x>(1|1\.5|2)$", case[1])
+]
+
+
 @pytest.mark.correctness
 @pytest.mark.parametrize("fixture,case", _NEAR_MISSES, ids=_case_ids(_NEAR_MISSES))
 def test_near_misses_name_their_reason_and_keep_the_solver_plan(decidb_cli, fixture, case):
     sql = _near_miss_sql(fixture, case)
     required = _raw(decidb_cli, sql).stderr
     assert "decide_direct_solve=require:" in required, (sql, required)
+    if fixture.rule == "S1_UNIFORM_MATROID" and case in _REFUSED_AT_PLANNING:
+        # The rule declines (its reason above) and the solver plan refuses the bound at physical planning
+        # (PhysicalDecide::CheckDecisionDomains), so EXPLAIN and the run raise one error, whichever way they are
+        # answered, instead of showing a plan.
+        messages = set()
+        for mode in ("auto", "off"):
+            for statement in (f"EXPLAIN {sql}", sql):
+                with pytest.raises(DeciDBCliError, match="cannot hold for a BOOL variable") as refused:
+                    decidb_cli.execute(f"SET decide_direct_solve='{mode}'; {statement}")
+                messages.add(str(refused.value))
+        assert len(messages) == 1, messages
+        return
     plan = _raw(decidb_cli, f"EXPLAIN {sql}", mode="auto")
     assert _has_decide_operator(plan.stdout) and "Direct solve" not in plan.stdout, (sql, plan.stderr)
 

@@ -12,6 +12,7 @@ Covers:
   - test_bool_bound_outside_domain_with_when_matches_oracle: the `when` form of the same bounds, as a control
   - test_bool_bound_outside_domain_diagnose_raises_the_same_error: DIAGNOSE raises the same error
   - test_bool_bound_outside_domain_over_empty_source_raises: an empty source raises the same error
+  - test_bool_bound_outside_domain_explain_raises: EXPLAIN raises it at planning, reading no row
 """
 
 import re
@@ -50,10 +51,10 @@ _INFEASIBLE = r"DECIDE optimization is infeasible\. Prefix the query with DIAGNO
 _CANNOT_HOLD = {"x >= 2", "x <= -1", "x < 0", "x > 1.5", "x = -1"}
 
 
-# The (bound, aggregate) runs. The error of a bound that cannot hold comes from the sink's constructor
-# (DecideGlobalSinkState), which reads only the bounds on one decision, so the aggregate cannot change it: each such
-# bound runs alone, and `x >= 2` once beside an aggregate a direct-solve rule takes, which reaches S1's decline of a
-# bound that contradicts the domain (ProveFixedVariables). A bound that always holds is exploited at one end only: a
+# The (bound, aggregate) runs. The error of a bound that cannot hold comes from physical planning
+# (PhysicalDecide::CheckDecisionDomains), which reads only the bounds on one decision, so the aggregate cannot change
+# it: each such bound runs alone, and `x >= 2` once beside an aggregate a direct-solve rule takes, which reaches S1's
+# decline of a bound that contradicts the domain (ProveFixedVariables). A bound that always holds is exploited at one end only: a
 # floor below 0 by `SUM(x) <= -2` (satisfiable by a signed x), a ceiling above 1 by `SUM(x) >= 4` (satisfiable by an x
 # above 1); the aggregate of the other direction cannot tell a widened box from the Boolean one. `SUM(x) >= 1` is
 # satisfiable either way.
@@ -179,6 +180,21 @@ def test_bool_bound_outside_domain_over_empty_source_raises(decidb_cli, bound):
             decidb_cli.execute(f"SET decide_direct_solve='{mode}'; {sql}")
         messages[mode] = str(error.value)
     assert messages["off"] == messages["auto"]
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_perrow
+@pytest.mark.error
+def test_bool_bound_outside_domain_explain_raises(decidb_cli):
+    # The check reads only the plan, so it is raised where the plan is made: EXPLAIN, which runs nothing, raises the
+    # error a run raises instead of printing a plan.
+    bound = "x <= -1"
+    sql = f"SELECT id, x FROM {_SOURCE} DECIDE x(BOOL) SUCH THAT {bound} MINIMIZE SUM(v * x)"
+    with pytest.raises(DeciDBCliError, match=_cannot_hold(bound)) as planned:
+        decidb_cli.execute(f"EXPLAIN {sql}")
+    with pytest.raises(DeciDBCliError, match=_cannot_hold(bound)) as run:
+        decidb_cli.execute(sql)
+    assert str(planned.value) == str(run.value)
 
 
 @pytest.mark.var_boolean
