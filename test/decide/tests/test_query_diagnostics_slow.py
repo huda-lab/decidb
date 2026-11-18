@@ -96,7 +96,7 @@ class TestSlowCheckpointReport:
     def test_path1_incumbent_report(self, request, cli_fixture):
         """Solution-found timeout prints the usable-solution block with closeness."""
         cli = _slow_cli(request.getfixturevalue(cli_fixture), 1)
-        result = cli.execute_raw(_KNAPSACK_SQL, timeout=scaled(30))
+        result = cli.execute_raw(_KNAPSACK_SQL, timeout=30)
         combined = result.stderr + result.stdout
         low = combined.lower()
 
@@ -114,7 +114,7 @@ class TestSlowCheckpointReport:
     def test_path2_no_solution_report(self, request, cli_fixture):
         """No-incumbent timeout prints the no-solution block, no objective line."""
         cli = _slow_cli(request.getfixturevalue(cli_fixture), 2)
-        result = cli.execute_raw(_MARKET_SPLIT_SQL, timeout=scaled(30))
+        result = cli.execute_raw(_MARKET_SPLIT_SQL, timeout=30)
         combined = result.stderr + result.stdout
         low = combined.lower()
 
@@ -132,7 +132,7 @@ def _timeout_report(cli, sql):
     A timeout is execution behaviour now, so everything the user learns is in the
     checkpoint report the operator prints — there is no diagnosis relation to read.
     """
-    return cli.execute_raw(sql, timeout=scaled(30))
+    return cli.execute_raw(sql, timeout=30)
 
 
 def _large_lp_sql():
@@ -216,7 +216,7 @@ class TestSlowContinuation:
     def test_ask_stop_immediately(self, request, cli_fixture):
         """ask at a terminal: `s` stops and returns the incumbent rows + caveat."""
         cli = _slow_cli(request.getfixturevalue(cli_fixture), 1)
-        result = cli.execute_interactive(_KNAPSACK_SQL, "s\n", timeout=scaled(40))
+        result = cli.execute_interactive(_KNAPSACK_SQL, "s\n", timeout=40)
         err = result.stderr.lower()
         assert _report_count(result.stderr) == 1, result.stderr[:800]
         assert _PROMPT in err, result.stderr[:800]
@@ -235,7 +235,7 @@ class TestSlowContinuation:
     def test_ask_eof_stops(self, request, cli_fixture):
         """ask: EOF (Ctrl-D) on the prompt stops and returns the incumbent."""
         cli = _slow_cli(request.getfixturevalue(cli_fixture), 1)
-        result = cli.execute_interactive(_KNAPSACK_SQL, "\x04", timeout=scaled(40))
+        result = cli.execute_interactive(_KNAPSACK_SQL, "\x04", timeout=40)
         err = result.stderr.lower()
         assert _report_count(result.stderr) >= 1, result.stderr[:800]
         assert _STOP_CAVEAT in err, result.stderr[:800]
@@ -246,7 +246,7 @@ class TestSlowContinuation:
         """ask over non-terminal stdin never prompts: report, then timeout error."""
         cli = _slow_cli(request.getfixturevalue(cli_fixture), 1)
         # execute_raw pipes stdin (not a TTY); must return promptly (no hang on stdin).
-        result = cli.execute_raw(_KNAPSACK_SQL, timeout=scaled(30))
+        result = cli.execute_raw(_KNAPSACK_SQL, timeout=30)
         combined = (result.stderr + result.stdout).lower()
         assert "usable solution (not proven best)" in combined, combined[:800]
         assert _PROMPT not in combined, "must not prompt without a terminal"
@@ -258,7 +258,7 @@ class TestSlowContinuation:
         """No terminal: print the report, then error — even when an incumbent exists.
         Nobody is there to say whether to keep going or take it."""
         cli = _slow_cli(request.getfixturevalue(cli_fixture), 1)
-        result = cli.execute_raw(_KNAPSACK_SQL, timeout=scaled(30))
+        result = cli.execute_raw(_KNAPSACK_SQL, timeout=30)
         combined = (result.stderr + result.stdout).lower()
         assert "usable solution (not proven best)" in combined, combined[:800]
         assert _STOP_CAVEAT not in combined, "a clock timeout never delivers unasked"
@@ -270,7 +270,7 @@ class TestSlowContinuation:
         comes back with its caveat — no prompt, no terminal needed, no error."""
         # Both backends cut the solve short mid-search; the short chunk only bounds the run.
         cli = _slow_cli(request.getfixturevalue(cli_fixture), 3)
-        proc, _ = cli.execute_interrupted(_KNAPSACK_SQL, after=scaled(1.0), timeout=scaled(40))
+        proc, _ = cli.execute_interrupted(_KNAPSACK_SQL, after=scaled(1.0), timeout=40)
         assert _STOP_CAVEAT in proc.stderr.lower(), proc.stderr[:1200]
         assert proc.stdout.strip(), "expected incumbent rows on stdout after interrupt"
         assert proc.returncode == 0, f"expected success, got {proc.returncode}"
@@ -340,7 +340,7 @@ class TestSlowFirstSolveInterrupt:
         run to the far 20s boundary; without the `kInterrupt` mapping the stop would not read as
         the user's."""
         cli = _slow_cli(decidb_cli_highs, 20)
-        proc, latency = cli.execute_interrupted(_MARKET_SPLIT_SQL, after=scaled(1.0), timeout=scaled(8))
+        proc, latency = cli.execute_interrupted(_MARKET_SPLIT_SQL, after=scaled(1.0), timeout=8)
         out, err = proc.stdout, proc.stderr
         low = err.lower()
         assert low.count(_STOP_REQUEST) == 1, err[:1000]
@@ -372,7 +372,7 @@ class TestTimeoutObjectiveSign:
         incumbent is above zero as `MAXIMIZE SUM(p*x)` and below zero as `MINIMIZE SUM(-p*x)`."""
         cli = _slow_cli(request.getfixturevalue(cli_fixture), 1)
         sql = _KNAPSACK_SQL.replace("MAXIMIZE SUM(p*x)", f"{sense} {objective}")
-        result = cli.execute_raw(sql, timeout=scaled(30))
+        result = cli.execute_raw(sql, timeout=30)
         reported = _BEST_SO_FAR.search((result.stderr + result.stdout).lower())
         assert reported, (result.stderr + result.stdout)[:800]
         value = float(reported[1])

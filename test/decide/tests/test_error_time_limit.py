@@ -146,7 +146,7 @@ def _run_decidb(cli, sql, *, time_limit=None, subprocess_timeout=30):
     if time_limit is not None:
         numeric = isinstance(time_limit, (int, float))
         cli = cli.with_env({"DECIDB_TIME_LIMIT": str(scaled(time_limit) if numeric else time_limit)})
-    return cli.execute_raw(sql, timeout=scaled(subprocess_timeout))
+    return cli.execute_raw(sql, timeout=subprocess_timeout)
 
 
 @pytest.mark.error
@@ -222,7 +222,7 @@ class TestTimeLimit:
         60 s limit, and the subprocess timeout would kill it.
         """
         cli = decidb_cli_highs.with_env({"DECIDB_TIME_LIMIT": str(scaled(60))})
-        result, latency = cli.execute_interrupted(_CLIQUE_PARTITION_SQL, after=scaled(3.0), timeout=scaled(15))
+        result, latency = cli.execute_interrupted(_CLIQUE_PARTITION_SQL, after=scaled(3.0), timeout=15)
         assert "stopped at your request" in result.stderr.lower(), result.stderr[:800]
         assert latency < scaled(10.0), f"interrupt took {latency:.2f}s — expected a stop inside the clique partition"
 
@@ -312,7 +312,7 @@ class TestTimeLimit:
         (about 17 s) under the 60 s limit.
         """
         cli = decidb_cli_highs.with_env({"DECIDB_TIME_LIMIT": str(scaled(60))})
-        result, latency = cli.execute_interrupted(_SYMMETRY_PATH_SQL, after=scaled(3.0), timeout=scaled(15))
+        result, latency = cli.execute_interrupted(_SYMMETRY_PATH_SQL, after=scaled(3.0), timeout=15)
         assert (
             re.search(r"\b30000\b", result.stdout) or "stopped at your request" in result.stderr.lower()
         ), f"  stdout: {result.stdout[:400]}\n  stderr: {result.stderr[:400]}"
@@ -328,7 +328,7 @@ class TestTimeLimit:
         stretches wall time (14 s with those 24 copies).
         """
         cli = decidb_cli_highs.with_env({"DECIDB_TIME_LIMIT": str(scaled(30))})
-        result, cpu = cli.execute_counting_cpu(_SYMMETRY_PAIRS_SQL, timeout=scaled(60))
+        result, cpu = cli.execute_counting_cpu(_SYMMETRY_PAIRS_SQL, timeout=60)
         assert re.search(r"\b100000\b", result.stdout), (
             f"Expected the row count 100000 but got:\n"
             f"  stdout: {result.stdout[:400]}\n"

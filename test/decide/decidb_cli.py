@@ -114,8 +114,9 @@ _DIRECT_SOLVE_ENV = "DECIDB_TEST_DIRECT_SOLVE"
 #: merged after each row. A test that sets ``decide_debug`` itself wins.
 _DECIDE_DEBUG_ENV = "DECIDB_TEST_DECIDE_DEBUG"
 
-#: Multiplies the wall-clock and CPU budgets of the timing tests (``scaled``), for a binary that runs slower than a
-#: release build, such as a debug one. A positive number; unset, every budget is the one the test writes.
+#: Multiplies the time budgets of the tests (``scaled``), for a binary that runs slower than a release build, such as a
+#: debug one: every subprocess timeout of this wrapper, and the time limits, delays and bounds the timing tests write
+#: through ``scaled``. A positive number; unset, every budget is the one written.
 _TIME_SCALE_ENV = "DECIDB_TEST_TIME_SCALE"
 
 
@@ -239,6 +240,8 @@ def _check(
 def _run(argv: list[str], sql: str, *, removed_spelling: bool = False, **kwargs) -> subprocess.CompletedProcess:
     """Run the CLI on ``sql`` in a process of its own (see ``_check``). Its return code follows the session's rule
     (``_ERROR_HEADER``): the shell exits 0 after an error under ``-c`` unless ``-bail`` is given."""
+    if "timeout" in kwargs:
+        kwargs["timeout"] = scaled(kwargs["timeout"])
     proc = subprocess.run(argv, capture_output=True, text=True, **kwargs)
     if _ERROR_HEADER.search(proc.stderr):
         proc = subprocess.CompletedProcess(proc.args, proc.returncode or 1, proc.stdout, proc.stderr)
@@ -385,7 +388,7 @@ def _run_in_session(
     _SESSIONS[key] = session
     while len(_SESSIONS) > _MAX_SESSIONS:
         _SESSIONS.pop(next(iter(_SESSIONS))).close()
-    result = session.run(sql, mode=mode, timeout=timeout)
+    result = session.run(sql, mode=mode, timeout=scaled(timeout))
     if not session.alive():
         session.close()
         del _SESSIONS[key]
@@ -759,7 +762,7 @@ class DeciDBCli:
             slave_fd = -1
             time.sleep(0.2)  # let the child come up before queueing the answers
             os.write(master_fd, responses.encode())
-            stdout, stderr = proc.communicate(timeout=timeout)
+            stdout, stderr = proc.communicate(timeout=scaled(timeout))
         finally:
             os.close(master_fd)
             if slave_fd >= 0:
@@ -787,7 +790,7 @@ class DeciDBCli:
         signalled = time.time()
         proc.send_signal(signal.SIGINT)
         try:
-            stdout, stderr = proc.communicate(timeout=timeout)
+            stdout, stderr = proc.communicate(timeout=scaled(timeout))
         except subprocess.TimeoutExpired:
             proc.kill()
             stdout, stderr = proc.communicate()
@@ -814,7 +817,7 @@ class DeciDBCli:
             env=env,
         )
         try:
-            stdout, stderr = proc.communicate(timeout=timeout)
+            stdout, stderr = proc.communicate(timeout=scaled(timeout))
         except subprocess.TimeoutExpired:
             proc.kill()
             stdout, stderr = proc.communicate()
