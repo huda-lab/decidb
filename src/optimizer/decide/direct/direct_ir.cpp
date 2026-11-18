@@ -268,10 +268,12 @@ private:
 				MarkNotProved(ir.status);
 			}
 			// A binder scope's key is columns of the source (the binder keeps every keyed decision's key live in it),
-			// which a row check can evaluate, so reading it cannot decline.
-			bool read = ReadKey(scope.key, ir_node.key);
-			D_ASSERT(read);
-			(void)read;
+			// which a row check can evaluate, so reading it cannot decline. The empty key, `per ()`, has no columns.
+			if (scope.key != DConstants::INVALID_INDEX) {
+				bool read = ReadKey(scope.key, ir_node.key);
+				D_ASSERT(read);
+				(void)read;
+			}
 			ir.keyed_scopes.push_back(std::move(ir_node));
 		}
 	}
