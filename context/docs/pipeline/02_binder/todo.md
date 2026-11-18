@@ -23,6 +23,8 @@ Language-surface work is owned by `../../language/` (the scopes:
   tags, the binder refuses a decision or a column a DECIDE clause reads whose name contains a DECIDE tag, with a
   message that names the identifier (R12). One check against the tag list in `enums/decide.hpp`, no case list.
   Phase 5 deletes it with the last tag.
+- **Ruling (owner, 2026-11-18).** The refusal also covers the name prefixes rewrites build for helper decisions
+  and parser temporaries (`__abs_aux_`, `__l0auto_ind_`, ...): each is a named constant in the same tag list.
 - **Done when.** Repro queries 2 and 3 raise the refusal, as tests; `./test/decide/run_tests.sh -n 2 -k "binder"`
   passes.
 

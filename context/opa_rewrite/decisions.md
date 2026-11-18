@@ -31,7 +31,7 @@ recommendation; nobody settles one silently. Rulings about a single task live wi
 | R17 | Direct-solve rules read the tree directly; `DirectIR` goes. A rule that fires lowers to relational operators and takes its bound values from SQL side tables; the solver path evaluates them in the tree. It lands in Phase 5, once the tree exists before the rules run (2026-11-18) |
 | R18 | `DecideGroupBound` goes: a direct rule reads a bound's values from side tables, as for every other bound. No benchmark: the change removes a representation (2026-11-18) |
 | R19 | R12 covers every error message, not only the NaN and direct-solve ones; `DIAGNOSE` proposes edits (2026-11-18) |
-| R20 | Every DECIDE tag in an expression's name goes, replaced by the tree's typed nodes, records and fields in Phase 5; no interim tag field. Until then a helper decision carries its origin as a field, and DECIDE refuses a user name that contains a tag (2026-11-18) |
+| R20 | Every DECIDE tag in an expression's name goes, replaced by the tree's typed nodes, records and fields in Phase 5; no interim tag field. Until then a reader tells a helper from a user decision by the tree's typed function nodes (no origin field), and DECIDE refuses a user name that contains a tag or a helper-name prefix (2026-11-18) |
 
 ## Open decisions
 

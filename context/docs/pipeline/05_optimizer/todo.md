@@ -49,6 +49,8 @@ files.
 - **Change.** By the owner's ruling (2026-11-18, `context/opa_rewrite/decisions.md` R20): a decision a rewrite adds
   (`AddAuxiliaryDecision`, the L0 rewrite) records its origin as a field, and every reader that tells a helper from a
   user decision reads that field. The L0 link reads the typed fact the tree holds (`l0_auto_m`).
+- **Ruling (owner, 2026-11-18).** No origin field: a reader tells a helper from a user decision by the tree's
+  typed function nodes (an `L0_INDICATOR` node with `l0_auto_m`, an `ABS` node's `value_var`). Nothing is serialized.
 - **Done when.** An oracle test of repro query 1 answers the same under both spellings;
   `grep -rn "StartsWith.*\"__" src/execution/operator/decide src/optimizer/decide src/decidb src/planner/decide`
   finds nothing; `./test/decide/run_tests.sh -n 2 -k "l0 or abs"` passes, and with `DECIDB_VERIFY_SERIALIZER=1` if

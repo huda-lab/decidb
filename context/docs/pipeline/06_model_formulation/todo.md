@@ -17,6 +17,8 @@ files.
 - **Ruling (owner, 2026-11-18).** Option 1: the product group recognises the square, so HiGHS solves the concave
   maximization over continuous decisions. Over integer decisions HiGHS refuses a quadratic objective (MIQP) at plan
   time; that refusal states its kind and where (R12).
+- **Ruling (owner, 2026-11-18, second).** FORM-6 recognises the square only; the integer-decision refusal keeps
+  its text, and EXEC-16 rewrites every solver-gap message to R12 together.
 - **Done when.** An oracle test under `DECIDB_FORCE_SOLVER=highs` passes;
   `./test/decide/run_tests.sh -n 2 -k "bilinear or square"` passes.
 
@@ -30,6 +32,8 @@ files.
 - **Recommendation.** 1: an unbounded operand is refused under either option, so the message is needed either way.
 - **Ruling (owner, 2026-11-18).** Option 1: the message states the kind of error and points at the `ABS(...)` the
   user wrote (R12); the helper's bound is unchanged.
+- **Ruling (owner, 2026-11-18, second).** The user's written `ABS(...)` text goes on the tree's `ABS` function
+  node beside its `value_var`; the refusal finds the node from the helper (OPT-22 reads helpers the same way).
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "abs"` passes.
 
 ## FORM-8 — One record per kind of model row
