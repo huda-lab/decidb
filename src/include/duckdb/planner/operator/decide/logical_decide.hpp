@@ -358,8 +358,10 @@ struct DecideSourceColumnName {
 //! (as LogicalGet::ResolveTypes walks the list). Any other column is named by its binding. A column the user wrote no
 //! name for is named by no column (INVALID_INDEX): a row id, which is synthetic, and a projection's computed column
 //! without an alias, which the binder records under its own ToString. A plain column reference, bound or resolved,
-//! forwards a name.
-ColumnBinding DecideSourceColumnKey(const LogicalOperator &source, const ColumnBinding &binding);
+//! forwards a name, and so does the compression the optimizer wraps a join in: a projection the binder did not name
+//! (`named`) is the optimizer's, and its column is named as the column it reads.
+ColumnBinding DecideSourceColumnKey(const LogicalOperator &source, const ColumnBinding &binding,
+                                    const vector<DecideSourceColumnName> &named);
 
 class LogicalDecide : public LogicalOperator {
 public:

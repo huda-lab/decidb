@@ -107,7 +107,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	// so the key names no column for it, while the spelling comes from the binder.
 	vector<string> child_userwritten_names(child_bindings.size(), string());
 	for (idx_t i = 0; i < child_bindings.size(); i++) {
-		auto key = DecideSourceColumnKey(*op.children[0], child_bindings[i]);
+		auto key = DecideSourceColumnKey(*op.children[0], child_bindings[i], op.source_columns);
 		if (key.column_index == DConstants::INVALID_INDEX) {
 			continue;
 		}

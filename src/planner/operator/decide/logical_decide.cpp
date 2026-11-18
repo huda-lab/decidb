@@ -1,5 +1,6 @@
 // src/planner/operator/logical_decide.cpp
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/planner/expression_binder.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 
@@ -7,6 +8,8 @@
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 
 namespace duckdb {
@@ -161,10 +164,50 @@ static const LogicalOperator *DecideBindingProducer(const LogicalOperator &plan,
 	return nullptr;
 }
 
-ColumnBinding DecideSourceColumnKey(const LogicalOperator &source, const ColumnBinding &binding) {
+//! The column of `producer`'s input that `expression` carries unchanged: a plain reference, bound or resolved, or one
+//! under the compression the optimizer puts around a join (CompressedMaterialization), which changes how the column is
+//! held and not which column it is. False for any other expression.
+static bool DecideForwardedColumn(const LogicalOperator &producer, const Expression &expression,
+                                  ColumnBinding &forwarded) {
+	auto expression_class = expression.GetExpressionClass();
+	if (expression_class == ExpressionClass::BOUND_FUNCTION) {
+		auto &function = expression.Cast<BoundFunctionExpression>();
+		const auto &name = function.function.name;
+		auto compression = StringUtil::StartsWith(name, "__internal_compress_") ||
+		                   StringUtil::StartsWith(name, "__internal_decompress_");
+		return compression && !function.children.empty() &&
+		       DecideForwardedColumn(producer, *function.children[0], forwarded);
+	}
+	if (expression_class == ExpressionClass::BOUND_COLUMN_REF) {
+		forwarded = expression.Cast<BoundColumnRefExpression>().binding;
+		return true;
+	}
+	if (expression_class == ExpressionClass::BOUND_REF && producer.children.size() == 1) {
+		auto input = producer.children[0]->GetColumnBindings();
+		auto index = expression.Cast<BoundReferenceExpression>().index;
+		if (index < input.size()) {
+			forwarded = input[index];
+			return true;
+		}
+	}
+	return false;
+}
+
+ColumnBinding DecideSourceColumnKey(const LogicalOperator &source, const ColumnBinding &binding,
+                                    const vector<DecideSourceColumnName> &named) {
 	auto *producer = DecideBindingProducer(source, binding.table_index);
 	if (producer && producer->type == LogicalOperatorType::LOGICAL_PROJECTION) {
 		auto &expr = *producer->expressions[binding.column_index];
+		auto is_named = std::any_of(named.begin(), named.end(),
+		                            [&](const DecideSourceColumnName &column) { return column.binding == binding; });
+		if (!is_named) {
+			// The binder named no such column: the optimizer put this projection there, and its column is the one it
+			// reads.
+			ColumnBinding forwarded;
+			return DecideForwardedColumn(*producer, expr, forwarded)
+			           ? DecideSourceColumnKey(source, forwarded, named)
+			           : ColumnBinding(binding.table_index, DConstants::INVALID_INDEX);
+		}
 		auto forwards = expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
 		                expr.GetExpressionClass() == ExpressionClass::BOUND_REF;
 		return forwards || expr.HasAlias() ? binding : ColumnBinding(binding.table_index, DConstants::INVALID_INDEX);
