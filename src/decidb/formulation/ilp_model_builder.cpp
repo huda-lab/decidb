@@ -701,13 +701,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 	// unbounded decision variable (flagged, and legitimate), or a creation site skipped
 	// the derivation. The second is a silent performance cliff rather than a wrong
 	// answer — a free continuous column leaves the root simplex without a box and it
-	// crawls — so it is asserted rather than left to a benchmark to notice.
+	// crawls — so it is asserted (after the sanity checks) rather than left to a benchmark to notice.
 	for (idx_t g = 0; g < input.num_global_vars; g++) {
 		idx_t var_idx = indexer.global_block_start + g;
 		auto gtype = input.global_variable_types[g];
-		D_ASSERT(g >= input.global_bounds_unbounded.size() || input.global_bounds_unbounded[g] ||
-		         (input.global_lower_bounds[g] > -DECIDE_EFFECTIVE_INFINITY &&
-		          input.global_upper_bounds[g] < DECIDE_EFFECTIVE_INFINITY));
 		model.col_lower[var_idx] = input.global_lower_bounds[g];
 		model.col_upper[var_idx] = input.global_upper_bounds[g];
 		close_rounded_box(model.col_lower[var_idx], model.col_upper[var_idx]);
@@ -1380,6 +1377,14 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 				throw too_large(constr.provenance.source_clause_id);
 			}
 		}
+	}
+
+	// An auxiliary's box is open and says so, or it is derived. A reach that overflowed a DOUBLE is neither: it is the
+	// user's error raised above, which this check must not pre-empt.
+	for (idx_t g = 0; g < input.num_global_vars; g++) {
+		D_ASSERT(g >= input.global_bounds_unbounded.size() || input.global_bounds_unbounded[g] ||
+		         (input.global_lower_bounds[g] > -DECIDE_EFFECTIVE_INFINITY &&
+		          input.global_upper_bounds[g] < DECIDE_EFFECTIVE_INFINITY));
 	}
 
 	// Moved last: every row above names its clause from them (DecideWrittenClause).
