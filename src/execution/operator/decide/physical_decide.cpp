@@ -577,11 +577,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 	// node containers go now rather than with the global state.
 	gstate.descent.reset();
 
-	//===--------------------------------------------------------------------===//
-	// PHASE 3: Build and Solve ILP
-	//===--------------------------------------------------------------------===//
-
-	// 3a. Assemble the model input and settle the column box. Nothing below this line
+	// BuildSolverInput: assemble the model input and settle the column box. Nothing below this line
 	// touches the data again.
 	DecideProfileScope phase("execution.assemble_input");
 	VarIndexer var_indexer;
@@ -605,7 +601,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 		elastic->var_indexer = var_indexer;
 	}
 
-	// 3b. Formulate: derive the constants and emit the rows, against the box the model
+	// FormulateModel: derive the constants and emit the rows, against the box the model
 	// declares. A pure function of what came before, which is what lets the elastic
 	// (infeasibility-repair) path run it a second time against a widened box.
 	phase.Next("execution.formulate");
@@ -697,7 +693,7 @@ static vector<double> Mask(const vector<bool> &mask) {
 }
 
 //===--------------------------------------------------------------------===//
-// Finalize: PHASE 1.6 -- scope checks
+// Finalize: EXPLAIN ANALYZE accounts
 //===--------------------------------------------------------------------===//
 
 //! One line for EXPLAIN ANALYZE: a scoped expression whose classes held more than one variant (D70, D71), so the
@@ -813,6 +809,10 @@ void PhysicalDecide::RecordRunTimeAccount(idx_t source_clause_id, string subject
 	run_time_accounts.push_back(std::move(account));
 }
 
+//===--------------------------------------------------------------------===//
+// EvaluateTree: the objective's AVG scale
+//===--------------------------------------------------------------------===//
+
 void PhysicalDecide::ScaleObjectiveAvg(DecideGlobalSinkState &gstate, idx_t num_rows, EvaluatedClauses &evaluated) {
 	for (idx_t term_idx = 0; term_idx < evaluated.linear_filters.size(); term_idx++) {
 		auto &filter = evaluated.linear_filters[term_idx];
@@ -832,7 +832,7 @@ void PhysicalDecide::ScaleObjectiveAvg(DecideGlobalSinkState &gstate, idx_t num_
 }
 
 //===--------------------------------------------------------------------===//
-// Finalize: PHASE 2, sub-phase 3 -- Evaluate composed MIN/MAX clauses
+// EvaluateTree: composed MIN/MAX clauses
 //===--------------------------------------------------------------------===//
 
 void PhysicalDecide::FinishComposedClause(DecideGlobalSinkState &gstate, idx_t num_rows, const DecideNode &node,
@@ -864,7 +864,7 @@ void PhysicalDecide::FinishComposedClause(DecideGlobalSinkState &gstate, idx_t n
 }
 
 //===--------------------------------------------------------------------===//
-// Finalize: PHASE 3a, assembly -- BuildSolverInput
+// Finalize: BuildSolverInput
 //===--------------------------------------------------------------------===//
 
 //! A frame read is its base decision read at another row, so its type and its box are its
@@ -1079,7 +1079,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 }
 
 //===--------------------------------------------------------------------===//
-// Finalize: PHASE 3b, formulation -- FormulateModel
+// Finalize: FormulateModel
 //===--------------------------------------------------------------------===//
 
 void PhysicalDecide::FormulateModel(SolverInput &solver_input, const FormulationBox &box, VarIndexer &var_indexer,
@@ -1285,7 +1285,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 	// where g is the position in the global vars array.
 
 	// Encode a MIN/MAX objective (`MIN(expr)`/`MAX(expr)`) into a global auxiliary and its
-	// envelope/indicator rows. Pure stage-06 work: it reads the coefficients PHASE 2
+	// envelope/indicator rows. Pure stage-06 work: it reads the coefficients EvaluateTree
 	// evaluated plus the flat column space, and needs no row of its own.
 	phase.Next("formulation.minmax_objective");
 	MinMaxObjectiveSpec minmax_objective_spec;
@@ -1304,7 +1304,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 	}
 	LinearizeMinMaxObjective(solver_input, var_indexer, minmax_objective_spec, decide_var_names, native_min_max);
 
-	// Composed MIN/MAX clauses. PHASE 2 evaluated each one; stage 06 owns the auxiliary,
+	// Composed MIN/MAX clauses. EvaluateTree evaluated each one; stage 06 owns the auxiliary,
 	// envelope and indicator emission. The linearizer fills each MIN/MAX term's `z_idx`,
 	// so it is handed a mutable copy — the evaluated clauses stay reusable for a second
 	// formulation against a different box.
@@ -1454,7 +1454,7 @@ static void OpenElasticColumnBox(SolverInput &input) {
 //!
 //! A Big-M or a McCormick envelope is sound only for the box it was derived from, so an
 //! elastic model that re-opens the box must re-derive them. That is why this runs the
-//! same PHASE 3b pass the solved model went through — `FormulateModel` is a pure
+//! same FormulateModel pass the solved model went through — `FormulateModel` is a pure
 //! function of the evaluated clauses plus a box, which is what makes running it twice
 //! meaningful rather than merely possible.
 //!
@@ -1487,7 +1487,7 @@ SolverModel PhysicalDecide::FormulateElasticModel(const ElasticFormulation &elas
 }
 
 //===--------------------------------------------------------------------===//
-// Finalize: PHASE 3, solve + readback -- FinalizeSolveResult
+// Finalize: FinalizeSolveResult
 //===--------------------------------------------------------------------===//
 
 SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, DecideGlobalSinkState &gstate,

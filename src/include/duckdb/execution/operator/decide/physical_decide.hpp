@@ -18,7 +18,7 @@
 namespace duckdb {
 
 //! Global sink state accumulated by PhysicalDecide::Sink/Combine; defined in
-//! physical_decide.cpp. Finalize's private phase methods take it by reference.
+//! physical_decide.cpp. Finalize's private step methods take it by reference.
 class DecideGlobalSinkState;
 
 class DecideDescent;
@@ -260,9 +260,9 @@ private:
 	//! with no column at all replaces its plan line (ParamsToString), which says it becomes one.
 	void ReportInlinedHelpers(const SolverInput &input) const;
 
-	//! Everything PHASE 2 reads off the data that a later phase still needs. It carries
+	//! Everything EvaluateTree reads off the data that a later step still needs. It carries
 	//! objective terms *and* composed-MIN/MAX constraint clauses, so it is named for the
-	//! phase that produces it rather than for one of its consumers. Nothing here depends
+	//! step that produces it rather than for one of its consumers. Nothing here depends
 	//! on a variable bound, which is what lets the formulation pass run twice against
 	//! two different boxes from the same evaluated clauses.
 	struct EvaluatedClauses {
@@ -313,7 +313,7 @@ private:
 	                          const std::function<idx_t(const vector<bool> &)> &class_set,
 	                          EvaluatedClauses::ComposedConstraint clause, EvaluatedClauses &evaluated) const;
 
-	//! PHASE 3a, assembly: build `SolverInput` out of what PHASE 2 evaluated — variable
+	//! BuildSolverInput: build `SolverInput` out of what EvaluateTree evaluated — variable
 	//! types and the column box, implied-bound propagation, the objective transfer, and
 	//! the flat column space. Runs once per query: it moves the evaluated data off
 	//! `gstate`, and the box it settles is the one the formulation pass below is then
@@ -322,7 +322,7 @@ private:
 	                             vector<SolverInput::KeyValues> key_values, EvaluatedClauses &evaluated,
 	                             VarIndexer &out_var_indexer) const;
 
-	//! PHASE 3b, formulation: turn the evaluated clauses into solver rows against `box`
+	//! FormulateModel: turn the evaluated clauses into solver rows against `box`
 	//! — the auto-`M` refill, every linearization pass, and the lowering of whatever the
 	//! chosen backend cannot state natively.
 	//!
@@ -330,11 +330,11 @@ private:
 	//! evaluation. That is what lets it run a second time, on a copy of `input` against a
 	//! widened box, to derive the constants an elastic (infeasibility-repair) model needs
 	//! — see `FormulateElasticModel`. Keep it that way: anything here that reads the data
-	//! instead of `input` belongs in PHASE 2.
+	//! instead of `input` belongs in EvaluateTree.
 	void FormulateModel(SolverInput &input, const FormulationBox &box, VarIndexer &var_indexer,
 	                    const EvaluatedClauses &evaluated) const;
 
-	//! The model input and column space as PHASE 3a left them — before a single Big-M or
+	//! The model input and column space as BuildSolverInput left them — before a single Big-M or
 	//! McCormick constant was derived — plus the scoped bounds the column box enforces
 	//! (`evaluated_singleton_row_constraints`), whose rows only a repair model carries. Retained
 	//! only under `DIAGNOSE`, so the INFEASIBLE terminal can formulate a *second* model
@@ -345,7 +345,7 @@ private:
 		VarIndexer var_indexer;
 	};
 
-	//! PHASE 3, solve + readback: build_var_labels, the RouteSolveResult switch and its
+	//! FinalizeSolveResult, solve and readback: build_var_labels, the RouteSolveResult switch and its
 	//! four terminal cases, and the shared success epilogue.
 	SinkFinalizeType FinalizeSolveResult(ClientContext &context, DecideGlobalSinkState &gstate,
 	                                     SolverInput &solver_input, VarIndexer &var_indexer,
