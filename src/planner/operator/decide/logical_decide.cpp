@@ -217,10 +217,10 @@ ColumnBinding DecideSourceColumnKey(const LogicalOperator &source, const ColumnB
 	}
 	auto &get = producer->Cast<LogicalGet>();
 	auto &column_ids = get.GetColumnIds();
-	// The remove-unused-columns pass prunes nothing below a DECIDE (it reads every column), so a scan under one has no
-	// projection_ids and its output slot is its column slot.
-	D_ASSERT(get.projection_ids.empty());
-	// A scan with no column ids answers (table, 0) from GetColumnBindings; that slot names no column.
+	// A binding of a scan indexes its column ids whether or not the scan has projection_ids
+	// (LogicalGet::GetColumnBindings lists the projected ids as the binding's column), so the slot is a place in the
+	// column ids for any scan the walk reaches. A scan with no column ids answers (table, 0) from GetColumnBindings;
+	// that slot names no column.
 	auto slot = binding.column_index;
 	auto ordinal = slot >= column_ids.size() || column_ids[slot].IsRowIdColumn() ? DConstants::INVALID_INDEX
 	                                                                             : column_ids[slot].GetPrimaryIndex();
