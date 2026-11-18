@@ -1093,10 +1093,13 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 	// placeholder). This is a constant derived from `box`, which is why it is here and
 	// not with the propagation: it has to be re-derived whenever the box changes.
 	{
-		unordered_set<idx_t> l0_auto;
-		for (idx_t i = 0; i < decide_variables.size(); i++) {
-			if (StringUtil::StartsWith(decide_variables[i]->GetName(), "__l0auto_ind_")) {
-				l0_auto.insert(i);
+		unordered_set<idx_t> l0_auto, abs_helpers;
+		for (auto function : tree->function_nodes) {
+			auto &node = *tree->nodes[function];
+			if (node.function_kind == DecideFunctionKind::L0_INDICATOR && node.l0_auto_m) {
+				l0_auto.insert(node.value_var);
+			} else if (node.function_kind == DecideFunctionKind::ABS) {
+				abs_helpers.insert(node.value_var);
 			}
 		}
 		if (!l0_auto.empty()) {
@@ -1113,8 +1116,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 					}
 					if (l0_auto.count(v)) {
 						z_term = t;
-					} else if (!StringUtil::StartsWith(decide_variables[solver_input.BaseVariable(v)]->GetName(),
-					                                   "__abs_aux_")) {
+					} else if (!abs_helpers.count(solver_input.BaseVariable(v))) {
 						// The REVERSE link `ABS(inner) >= TOL*z` also references the L0
 						// indicator, but its only other variable is the ABS aux and its
 						// z-coefficient is the fixed tolerance — it must NOT be refilled.
