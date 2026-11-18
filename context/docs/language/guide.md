@@ -204,7 +204,7 @@ data and unaffected.
   `SUM(x) >= 1`); an unreachable `K` drops the constraint. Only a variable's intrinsic domain licenses the collapse, so
   a bound you wrote stays loosenable under `DIAGNOSE`. Gurobi needs no such bound. `AVG(x) <> K` becomes
   `SUM(x) <> K·n`.
-- **`IN`** on a column is a filter; on a decision it restricts the domain (K binary indicators). `IN` on a reducer is
+- **`IN`** on a column is a filter; on a decision it restricts the decision to the listed values. `IN` on a reducer is
   not supported.
 - **Degree**: a term has at most two decision factors. Linear terms, products of two decisions (§4) and squares
   (`POWER(linear, 2)`, `linear ** 2`, `linear * linear`) are allowed, and every spelling of one polynomial answers
@@ -303,8 +303,8 @@ MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))      -- a nested reducer (
   (divided by the group's own members for an `AVG`), so `MINIMIZE sum(sum(x * x) by (t.h))` is `sum(n_h * x * x)`
   over the groups' sizes `n_h`, a convex QP on both solvers.
 - **Quadratic objectives**: `MINIMIZE SUM(POWER(linear, 2))` is convex QP on both solvers (HiGHS only when continuous
-  and the Q matrix is non-singular). `-POWER(...)` under `MAXIMIZE` is concave QP on both. `MAXIMIZE SUM(POWER(...))`
-  is non-convex, Gurobi only. Integer variables with a quadratic objective (MIQP) need Gurobi. An objective may hold
+  and each square holds one decision, as in `POWER(x - a, 2)`; `POWER(x + y, 2)` needs Gurobi). `-POWER(...)` under
+  `MAXIMIZE` is concave QP on both. `MAXIMIZE SUM(POWER(...))` is non-convex, Gurobi only. Integer variables with a quadratic objective (MIQP) need Gurobi. An objective may hold
   any number of squares (`SUM(POWER(x - a, 2)) + SUM(POWER(y - b, 2))`). A square with a data weight
   (`SUM(w * POWER(x, 2))`, `SUM(w * x * x)`) or a factor known only when the query runs
   (`(SELECT m) * SUM(POWER(x, 2))`) is Gurobi only, as `x * y` is, because its sign is not known before then; HiGHS
@@ -323,7 +323,7 @@ Tests: `test/decide/tests/test_scope_objective.py`. Problem classes and solver s
   evaluated over the same rows and moved to the bound.
 - **`AVG(e)`** is `SUM(e)` divided by `n`, the number of values the reducer receives: its `by` group's kept rows that
   pass its own `when`, or the classes of its own `per`. In a constraint `AVG(e) op K` is `SUM(e) op K·n`.
-- **`MIN` and `MAX`**. The *easy* direction (`MAX(e) <= K`, `MIN(e) >= K`) bounds each member, with no auxiliary; with
+- **`MIN` and `MAX`**. The *easy* direction (`MAX(e) <= K`, `MIN(e) >= K`) bounds each member directly; with
   no `when` and no filter, a member that is a lone decision is bounded in its column box, so `min(x) >= -5` makes `x`
   signed (§2). The *hard* direction is the opposite one, or `=`. In the objective, `MINIMIZE MAX` and `MAXIMIZE MIN`
   are the easy direction; `MAXIMIZE MAX` and `MINIMIZE MIN` are the hard one. On HiGHS a hard case needs every member
@@ -363,8 +363,7 @@ Tests: `test/decide/tests/test_scope_objective.py`. Problem classes and solver s
   | `'inf'` | `MAX(ABS(e))` | LP |
   | `0[, M]` | exact count of rows where `|e| >= tolerance` | MILP |
 
-  The L0 count is exact in every direction (cap, floor, `=`, `MAXIMIZE`), because each row's indicator is pinned both
-  ways. `M` is a bound on `|e|`, inferred from the bounds on `e` when omitted; `e` must have finite bounds. The
+  The L0 count is exact in every direction (cap, floor, `=`, `MAXIMIZE`). `M` is a bound on `|e|`, inferred from the bounds on `e` when omitted; `e` must have finite bounds. The
   tolerance defaults to `1e-4` (`SET decide_l0_tolerance`); a value forced strictly between 0 and the tolerance is
   infeasible. Over data only, `norm(e, 0)` is a plain count of nonzero rows.
 - **Other functions and operators over a decision** (`sqrt`, `exp`, `ln`, `floor`, `%`, `COALESCE`, …) are refused: the
@@ -581,9 +580,9 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   reading it -- as it does a nested reducer whose `when` keeps no row --, and an objective term holding it is dropped.
   A frame over decisions in a `MIN`/`MAX` of several terms (`max(at(first: x) over (...)) + sum(x) <= 20`) is read at
   its selected row too. A row a rewrite adds for a construct in a member -- an `abs`'s rows, an L0 count's
-  rows -- defines an auxiliary and is no instance of its clause: it stays where the clause's instance is skipped
+  rows -- defines a helper and is no instance of its clause: it stays where the clause's instance is skipped
   (D88), so `sum(abs(x - 3)) + at(previous: x) over (t.period) <= 4` keeps `abs(x1 - 3)` in the sum the other
-  periods read. The auxiliary has no value where what it reads has none, so `sum(abs(x - max(at(previous: x) over
+  periods read. The helper has no value where what it reads has none, so `sum(abs(x - max(at(previous: x) over
   (t.period within t.product)) by (t.product)))` drops the member of a product with one period, whose inner `max`
   has no member.
 - **On the bound of a clause over groups** a frame that reads more than one value in a group bounds the group's
@@ -693,8 +692,8 @@ Tuple terms and reducers mix freely on either side. Each comparison takes one of
 - **Helper decision** — anything else: a term beside a reducer that varies within a group (`ship <= 0.20 * sum(ship)`,
   a decision keyed by another key), a row-varying factor, reducers with different `by`
   keys, a reducer inside another expression (`abs(sum(ship) by (g) - 40) <= 5`). Each reducer becomes a **helper
-  decision** with one instance per `by` group, defined once (a row for `SUM`/`AVG` on the side the clause pushes it, an
-  extremum link for `MIN`/`MAX`), and the clause is one row per class.
+  decision** with one instance per `by` group, defined once (it holds its members' `SUM` or `AVG` on the side the clause pushes
+  it, or their `MIN` or `MAX`), and the clause is one row per class.
   Example 1 costs N rows of two entries plus one definition row,
   not N rows of N entries. Where writing a helper's members into the rows that read it adds no nonzero -- an instance
   of `m` terms read `k` times costs `m·k` written in, `m + 1 + k` defined -- the helper is written in and has no
@@ -903,7 +902,7 @@ How the engine works: [diagnose.md](diagnose.md) and `../diagnostics/`.
 variables, the objective and the constraints. Each clause leads with the SQL as written; indented lines follow only
 when the model differs: `≡` for the canonical form, `↳` for what each rewrite made of it
 (`abs(ship - 20) becomes an auxiliary variable`, `sum(ship) by (D.region) becomes a helper decision per group`) and
-the rows the solver receives. An auxiliary prints as the expression it stands for, never an internal name; the bound
+the rows the solver receives. A helper prints as the expression it stands for, never an internal name; the bound
 of a `norm(e, 0)` derived from data prints as `M`. `EXPLAIN` plans without solving; `EXPLAIN ANALYZE` solves and adds
 actual rows and timing, and under a clause what the data made of it: a `↳` line counting the variants of its classes
 (§7.1, D71), one counting the instances it skipped for having no value (§7.4), and one for each helper decision written

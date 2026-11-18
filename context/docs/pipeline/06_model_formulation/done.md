@@ -1029,6 +1029,15 @@ upper bound on `x` is refused by name — there is no envelope without it. A fac
 helper has no box until its members' are derived, so the refusal waits for them and names the
 member.
 
+### L0 counts
+
+An L0 count `norm(e, 0)` is a sum of indicator columns, one per instance, each tied to the counted expression by rows
+on both sides: `M*z - e >= 0` and `M*z + e >= 0` hold `e` at 0 where `z = 0`, and `|e| - tolerance*z >= 0` holds
+`|e|` at the tolerance or more where `z = 1`. The indicator is therefore pinned in both directions, so the count is
+exact whether a clause caps it, floors it or equates it, and whether the objective minimizes or maximizes it. A value
+of `e` strictly between 0 and the tolerance has no feasible indicator. An auto `M` is the span of `e` over the rows and
+is refused where `e` has no finite bound.
+
 ### ABS under MAXIMIZE
 
 Stage 05 emits `aux >= inner` and `aux >= -inner` and tags them via `abs_aux_idx` /

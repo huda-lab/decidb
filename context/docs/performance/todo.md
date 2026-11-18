@@ -29,11 +29,11 @@ where some classes hold several. Compare with the same clause without `per`.
 
 ## PERF-24 — A nested objective's helpers
 
-Measure Q4 (`max(per l_returnflag: sum(keep * l_extendedprice) by (l_returnflag))`) at `execution.value_links` and
-`formulation.value_links` against `cec0e42f99`, where the two-level path fed the group sums to the extremum directly:
-each group sum is a helper decision, defined by one row per group assembled through `BuildMinMaxGroups`, three
-columns and three rows more on a million-row model. Inlining a SUM helper into the one reader that sums it is the
-expected remedy if the cost shows.
+Measure Q4 (`max(per l_returnflag: sum(keep * l_extendedprice) by (l_returnflag))`) at `execution.tree_model` (the
+emitter's value links) and `formulation.value_links` against `cec0e42f99`, where the two-level path fed the group sums
+to the extremum directly: each group sum is a helper decision, defined by one row per group assembled through
+`BuildMinMaxGroups`, three columns and three rows more on a million-row model. Inlining a SUM helper into the one
+reader that sums it is the expected remedy if the cost shows.
 
 ## PERF-25 — The pipeline profiler sums spans the tree evaluator does not emit
 
