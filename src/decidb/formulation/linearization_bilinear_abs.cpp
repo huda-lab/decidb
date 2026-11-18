@@ -41,6 +41,13 @@ void DeriveBilinearAuxiliaryBounds(SolverInput &input, const FormulationBox &box
 					blame = member == DConstants::INVALID_INDEX ? blame : member;
 				}
 			}
+			for (const auto &abs : input.abs_written) {
+				if (abs.first == blame) {
+					throw InvalidInputException("DECIDE: a Boolean decision multiplies `%s`, which has no finite upper "
+					                            "bound",
+					                            abs.second);
+				}
+			}
 			throw InvalidInputException("Bilinear term requires a finite upper bound on variable '%s'. "
 			                            "Add a constraint like '%s <= <bound>' to provide one.",
 			                            var_names[blame], var_names[blame]);

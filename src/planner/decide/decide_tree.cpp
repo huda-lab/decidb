@@ -389,6 +389,7 @@ public:
 			// Keep the LogicalDecide-owned operand alive: Lower records reducer addresses in sources.reducer_nodes.
 			const Expression *operand = nullptr;
 			idx_t source_clause;
+			string written;
 		};
 		vector<AbsFunctionSpec> specs;
 		for (auto &envelope : op.abs_function_envelopes) {
@@ -412,6 +413,7 @@ public:
 				    spec.condition = scope.Condition() ? scope.Condition()->Copy() : nullptr;
 				    spec.operand = envelope.operand.get();
 				    spec.source_clause = source;
+				    spec.written = envelope.written;
 				    specs.push_back(std::move(spec));
 			    });
 		}
@@ -425,6 +427,7 @@ public:
 				throw InternalException("DECIDE tree: ABS helper %llu has no function operand", spec.aux);
 			}
 			auto &node = *tree->nodes[*function];
+			node.abs_written = spec.written;
 			if (!node.body) {
 				node.body = Lower(*function, *spec.operand);
 			}

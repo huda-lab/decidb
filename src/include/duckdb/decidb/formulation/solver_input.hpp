@@ -590,6 +590,8 @@ struct SolverInput {
 	// auxiliary variables the optimizer already created; the rows that realize
 	// them need evaluated bounds, so they are derived at stage 06.
 	vector<BilinearLinkSpec> bilinear_links;
+	//! Per ABS helper, the ABS as the user wrote it, for a refusal that points at it.
+	vector<pair<idx_t, string>> abs_written;
 	vector<AbsMaximizeLinkSpec> abs_maximize_links;
 	//! The value rewrite's helper decisions, each with its evaluated definition. Consumed
 	//! (moved into `constraints` or emitted as extremum links) by the formulation pass.

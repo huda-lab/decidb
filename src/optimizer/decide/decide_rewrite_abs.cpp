@@ -547,6 +547,7 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 		AddDecideTag(c2->alias, MakeAbsFunctionNegTag(pair.aux_idx));
 
 		LogicalDecide::AbsFunctionEnvelope envelope;
+		envelope.written = pair.written;
 		envelope.operand = pair.inner_expr->Copy();
 		envelope.positive = ScopeRowPerInstance(decide, ScopeHelperRow(std::move(c1), pair.when.get()), pair.scope);
 		envelope.negative = ScopeRowPerInstance(decide, ScopeHelperRow(std::move(c2), pair.when.get()), pair.scope);
@@ -618,7 +619,8 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 
 		// Retain the bound operand for the F node's envelope rows.
 		abs_pairs.push_back({aux_idx, func.children[0]->Copy(), clause_alias, needs_bigm, std::move(read_rows),
-		                     std::move(label), aux_scope});
+		                     std::move(label), aux_scope,
+		                     RenderDecideSource(func, decide.source_text, decide.keyed_scopes, &decide.keys)});
 
 		// Preserve ABS(inner) in the clause tree and tag its value-helper mapping for
 		// the F-aware term splitter.

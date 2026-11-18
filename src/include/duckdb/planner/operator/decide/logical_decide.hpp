@@ -514,6 +514,8 @@ public:
 		unique_ptr<Expression> operand;
 		unique_ptr<Expression> positive;
 		unique_ptr<Expression> negative;
+		//! The ABS as the user wrote it (RenderDecideSource), for a message that points at it.
+		string written;
 	};
 	vector<AbsFunctionEnvelope> abs_function_envelopes;
 

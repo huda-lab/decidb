@@ -180,7 +180,7 @@ def test_abs_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
             name=f"abs_neg_{i}",
         )
     # Objective only on rows where l_returnflag = 'R'
-    obj = {dnames[i]: 1.0 for i in range(n) if data[i][3] == 'R'}
+    obj = {dnames[i]: 1.0 for i in range(n) if data[i][3] == "R"}
     if obj:
         oracle_solver.set_objective(obj, ObjSense.MINIMIZE)
     else:
@@ -193,7 +193,7 @@ def test_abs_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     decidb_obj = sum(
         abs(float(row[ci["new_qty"]]) - float(row[ci["l_quantity"]]))
         for row in decidb_result
-        if row[ci["l_returnflag"]] == 'R'
+        if row[ci["l_returnflag"]] == "R"
     )
     assert (
         abs(decidb_obj - result.objective_value) <= 1e-4
@@ -556,7 +556,7 @@ def test_abs_constraint_aggregate_with_when(decidb_cli, duckdb_conn, oracle_solv
         )
 
     # Aggregate upper bound only over WHEN-matching (R) rows
-    r_rows = {dnames[i]: 1.0 for i in range(n) if data[i][4] == 'R'}
+    r_rows = {dnames[i]: 1.0 for i in range(n) if data[i][4] == "R"}
     if r_rows:
         oracle_solver.add_constraint(r_rows, "<=", 30.0, name="when_abs_sum")
 
@@ -574,7 +574,7 @@ def test_abs_constraint_aggregate_with_when(decidb_cli, duckdb_conn, oracle_solv
     r_total_dev = sum(
         abs(float(row[ci["new_qty"]]) - float(row[ci["l_quantity"]]))
         for row in decidb_result
-        if row[ci["l_returnflag"]] == 'R'
+        if row[ci["l_returnflag"]] == "R"
     )
     assert r_total_dev <= 30.0 + 1e-4, f"WHEN-filtered ABS sum exceeded 30: {r_total_dev}"
 
@@ -1616,7 +1616,7 @@ def test_abs_constraint_aggregate_hard_ge_with_per(decidb_cli, oracle_solver, pe
     25 + 45 = 70, already above 50, so a global-scoping bug would leave every
     `x` at 0 and report objective 0 instead of 90.
     """
-    data = [(1, 'A', 10.0), (2, 'A', 15.0), (3, 'B', 20.0), (4, 'B', 25.0)]
+    data = [(1, "A", 10.0), (2, "A", 15.0), (3, "B", 20.0), (4, "B", 25.0)]
     n = len(data)
     ub = 100.0
     k = 50.0
@@ -2405,3 +2405,19 @@ def test_a_double_bound_over_an_int_abs_is_read_on_every_row(request, cli_fixtur
         lambda a: sum(a[f"x{i}"] for i in range(rows)),
         True,
     )
+
+
+@pytest.mark.error
+def test_a_boolean_times_an_unbounded_abs_names_the_abs_as_written(decidb_cli):
+    """The refusal states its kind and quotes the ABS the user wrote, spacing and case included, not the helper
+    column that holds its value."""
+    sql = """
+        SELECT id, x, b FROM (VALUES (1, 2.0), (2, 4.0)) t(id, score)
+        DECIDE x(REAL), b(BOOL)
+        SUCH THAT x >= 0
+        MINIMIZE SUM(b * abs( x-score ))
+    """
+    decidb_cli.assert_error(
+        sql, match=r"a Boolean decision multiplies `abs\( x-score \)`, which has no finite upper bound"
+    )
+    assert "__abs_aux" not in decidb_cli.execute_raw(sql).stderr

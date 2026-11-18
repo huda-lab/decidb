@@ -960,6 +960,9 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	}
 	for (auto function : tree->function_nodes) {
 		const auto &node = *tree->nodes[function];
+		if (node.function_kind == DecideFunctionKind::ABS) {
+			solver_input.abs_written.emplace_back(node.value_var, node.abs_written);
+		}
 		if (node.function_kind != DecideFunctionKind::ABS || !node.abs_needs_bigm) {
 			continue;
 		}

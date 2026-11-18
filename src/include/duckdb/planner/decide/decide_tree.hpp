@@ -223,6 +223,8 @@ struct DecideNode {
 	//! a big-M indicator, and that indicator's variable. RewriteAbs allocates the auxiliary at plan time.
 	bool abs_needs_bigm = false;
 	idx_t abs_indicator_var = DConstants::INVALID_INDEX;
+	//! An ABS F node's call as the user wrote it, which a message about its value points at.
+	string abs_written;
 	//! The two lower-envelope rows RewriteAbs wrote for this F node.
 	vector<idx_t> abs_envelope_roots;
 	unique_ptr<DecideFrameSpec> frame_spec;

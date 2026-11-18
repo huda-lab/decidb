@@ -236,6 +236,8 @@ private:
 		string label;
 		//! The auxiliary's scope, ScopeOf its argument: its envelope rows are one per instance of it.
 		DecideVarScopeInfo scope;
+		//! The ABS as the user wrote it, for a message that points at it.
+		string written;
 	};
 
 	//! Helper: recursively find BoundFunctionExpression for ABS over decide vars,
