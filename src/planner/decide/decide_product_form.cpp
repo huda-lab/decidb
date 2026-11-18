@@ -130,11 +130,8 @@ bool DecideTermsEqual(const Expression &left, const Expression &right, idx_t dec
 	return DecideExpressionsEqual(left, right) && DecisionAliasesEqual(left, right, decide_index);
 }
 
-bool DecideFactorsEqual(const Expression &left, const Expression &right, idx_t decide_index) {
-	if (DecideTermsEqual(left, right, decide_index)) {
-		return true;
-	}
-	// An additive form is a multiset of signed terms: `x + y` and `y + x` are one factor.
+//! Whether two additive forms are the same multiset of terms, `right` with every sign multiplied by `flip` (1 or -1).
+static bool SameSignedTerms(const Expression &left, const Expression &right, idx_t decide_index, int flip) {
 	auto left_atoms = ReadCanonicalAtoms(left, decide_index);
 	auto right_atoms = ReadCanonicalAtoms(right, decide_index);
 	if (left_atoms.size() < 2 || left_atoms.size() != right_atoms.size()) {
@@ -144,7 +141,7 @@ bool DecideFactorsEqual(const Expression &left, const Expression &right, idx_t d
 	for (auto &atom : left_atoms) {
 		bool found = false;
 		for (idx_t i = 0; i < right_atoms.size() && !found; i++) {
-			if (!matched[i] && right_atoms[i].sign == atom.sign &&
+			if (!matched[i] && right_atoms[i].sign * flip == atom.sign &&
 			    DecideTermsEqual(*UnwrapDecideCasts(*atom.term, decide_index),
 			                     *UnwrapDecideCasts(*right_atoms[i].term, decide_index), decide_index)) {
 				matched[i] = true;
@@ -156,6 +153,16 @@ bool DecideFactorsEqual(const Expression &left, const Expression &right, idx_t d
 		}
 	}
 	return true;
+}
+
+bool DecideFactorsEqual(const Expression &left, const Expression &right, idx_t decide_index) {
+	// An additive form is a multiset of signed terms: `x + y` and `y + x` are one factor.
+	return DecideTermsEqual(left, right, decide_index) || SameSignedTerms(left, right, decide_index, 1);
+}
+
+//! Whether `right` is `-left`: the same additive form with every sign reversed (`x - s` and `s - x`).
+static bool DecideFactorsNegated(const Expression &left, const Expression &right, idx_t decide_index) {
+	return SameSignedTerms(left, right, decide_index, -1);
 }
 
 bool DecideFactorListsEqual(const vector<DecideProductFactor> &left, const vector<DecideProductFactor> &right,
@@ -297,12 +304,18 @@ DecideProductForm ReadDecideProduct(ClientContext &context, const Expression &ex
 	DecideProductForm form;
 	ProductReader reader {context, decide_index, form};
 	reader.Read(expr, 1);
-	// Equal decision-bearing factors are one factor raised to the sum of their powers.
+	// Equal decision-bearing factors are one factor raised to the sum of their powers; a factor that is the negation
+	// of another is that factor too, the product's sign flipped once per power of it (`(x - s) * (s - x)` is
+	// `-(x - s) ** 2`).
 	for (idx_t i = 0; i < form.factors.size(); i++) {
 		for (idx_t j = i + 1; j < form.factors.size();) {
-			if (!DecideFactorsEqual(*form.factors[i].base, *form.factors[j].base, decide_index)) {
+			const bool equal = DecideFactorsEqual(*form.factors[i].base, *form.factors[j].base, decide_index);
+			if (!equal && !DecideFactorsNegated(*form.factors[i].base, *form.factors[j].base, decide_index)) {
 				j++;
 				continue;
+			}
+			if (!equal && form.factors[j].power % 2 == 1) {
+				form.sign = -form.sign;
 			}
 			form.factors[i].power += form.factors[j].power;
 			form.factors.erase(form.factors.begin() + static_cast<int64_t>(j));

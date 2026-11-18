@@ -2515,3 +2515,49 @@ class TestHighsQuadratic:
             oracle_solver.solver_name(),
             comparison_status="optimal",
         )
+
+
+_OPPOSITE_FORMS = "(x - score) * (score - x)"
+
+
+@pytest.mark.correctness
+@pytest.mark.quadratic
+def test_highs_square_of_opposite_forms_matches_oracle(decidb_cli_highs, duckdb_conn, oracle_solver):
+    """MAXIMIZE SUM((x - score) * (score - x)) is the concave square -(x - score)^2, so HiGHS solves it. The two
+    factors are one form with every sign reversed, which the product reads as one factor squared; a SUM(x) cap
+    makes the optimum a trade-off rather than x = score."""
+    data_sql = "SELECT 1 AS id, 2.0 AS score UNION ALL SELECT 2, 4.0 UNION ALL SELECT 3, 6.0"
+    sql = f"""
+        WITH data AS ({data_sql})
+        SELECT id, score, ROUND(x, 4) AS x FROM data
+        DECIDE x(REAL)
+        SUCH THAT x >= 0 AND x <= 10 AND SUM(x) <= 8
+        MAXIMIZE SUM({_OPPOSITE_FORMS})
+    """
+    rows, cols = decidb_cli_highs.execute(sql)
+    data = duckdb_conn.execute(f"SELECT CAST(score AS DOUBLE) FROM ({data_sql}) ORDER BY id").fetchall()
+    oracle_solver.create_model("highs_square_of_opposite_forms")
+    names = [f"x_{i}" for i in range(len(data))]
+    for name in names:
+        oracle_solver.add_variable(name, VarType.CONTINUOUS, lb=0.0, ub=10.0)
+    oracle_solver.add_constraint({name: 1.0 for name in names}, "<=", 8.0, name="cap")
+    oracle_solver.set_quadratic_objective(
+        {names[i]: -2.0 * data[i][0] for i in range(len(data))},
+        {(name, name): 1.0 for name in names},
+        ObjSense.MINIMIZE,
+    )
+    _solve_and_compare(oracle_solver, rows, cols, lambda rs, cs: _qp_target_obj(rs, cs, target_col="score"))
+
+
+@pytest.mark.quadratic
+@pytest.mark.error
+def test_highs_square_of_opposite_forms_over_integers_is_a_miqp_refusal(decidb_cli_highs):
+    """The same objective over integer decisions is a MIQP, which HiGHS does not solve: the MIQP gap is raised at plan
+    time, not the product-of-two-decisions one the unrecognised square used to give."""
+    sql = f"""
+        SELECT id, x FROM (VALUES (1, 2.0), (2, 4.0)) t(id, score)
+        DECIDE x(INT)
+        SUCH THAT x BETWEEN 0 AND 10
+        MAXIMIZE SUM({_OPPOSITE_FORMS})
+    """
+    decidb_cli_highs.assert_error(sql, match=r"squares decision variables that are not continuous.*Gurobi")
