@@ -66,8 +66,10 @@ cd test/decide && .venv/bin/python3 -m fuzz all --seed 1 --count 2000 --jobs 6
 
 - Run each mode as its own command and read its exit status.
 - Goldens stay identical unless the change is meant to move them; read the diff before regenerating.
-- Last full run, at `052b85d26d` (2026-11-17): 8,884 passed in each of the four modes; 115 C++ cases; fuzzers on
-  seeds 1 to 2000 clean (`nests` refuses 628 by design). Record a new baseline with the first cleanup commit.
+- The latest full run and its counts are in `context/docs/direct_solve/framework/done.md`.
+- On a debug build (`make debug`): `make decide-test-debug` and `build/debug/test/unittest "[decidb]"`. They run
+  DuckDB's assertions and ASan/UBSan, about 20 minutes; run them when a change touches memory, numeric casts or
+  the plan shapes the optimizer builds (`context/docs/testing/oracle.md` § 10).
 - For a change to evaluation or model building, `tools/ab_bench.py` against the previous build: no workload moves
   outside about 10%.
 - A fresh test environment needs `gurobipy==13.0.3`; version 14 is refused by the licence.

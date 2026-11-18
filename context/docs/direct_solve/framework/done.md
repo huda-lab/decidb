@@ -1,8 +1,9 @@
 # Shared engine — what exists today
 
 Latest full run, 2026-11-18: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off, serializer,
-highs) 8,833 passed; C++ `build/release/test/unittest "[decidb]"` 11,549 assertions in 115 cases. It is the baseline for
-every direct-solve task and rule. Design: `../architecture/`.
+highs) 8,835 passed; C++ `build/release/test/unittest "[decidb]"` 11,549 assertions in 115 cases. A debug build, the
+same day: `make decide-test-debug` 8,835 passed, its C++ suite 11,549 assertions in 115 cases, no assertion,
+ASan or UBSan report. It is the baseline for every direct-solve task and rule. Design: `../architecture/`.
 
 ## What it does
 

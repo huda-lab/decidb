@@ -6,17 +6,9 @@ this file when it is empty.
 Read first: `.claude/CLAUDE.md`, `context/opa_rewrite/README.md`. Checks: `direct_solve/framework/todo.md` § How to
 work any task in these todo files.
 
-Phase 0 clears what blocks the real work. Each later phase is one architectural change. Phases run in order; groups
+Each phase is one architectural change. Phases run in order; groups
 inside a phase run in order; measurement runs fit between phases. `(decision)` marks a task whose **Decision needed**
 the owner rules first.
-
-# Phase 0 — Preliminaries
-
-## 0.3 Debug-build run (one lane)
-- [ ] TEST-6 One suite run on a debug build — testing/todo.md § TEST-6
-
-## 0.4 Release hang (one lane, after 0.3's gate)
-- [ ] EXEC-24 A rare hang in the descent's parallel merge — pipeline/08_execution/todo.md § EXEC-24
 
 # Phase 1 — Errors are raised where they are found
 

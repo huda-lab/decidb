@@ -87,7 +87,7 @@ chunk alone, for a value the whole query shares (`execution.descent_rows`, `DECI
 thread, and `Finalize` merges them (below). `Combine` places the thread's rows after those placed before and keeps its
 descent; `Finalize` merges every part's maps one after another, a few thousand slots and classes, and then copies each
 node's entries and routed rows in parallel, a task per window of the merged containers (`DecideDescent::MergeAll`,
-`execution.descent_merge`). Over 4 million stored rows the query reached its evaluation after 0.14 s on 8 threads
+`execution.descent_merge`). The copy runs on DuckDB's `TaskExecutor`, whose waiting thread runs tasks until every task has finished, so a task the queue hides for a moment is still run (`pipeline/architecture.md` § Edits to existing DuckDB code). Over 4 million stored rows the query reached its evaluation after 0.14 s on 8 threads
 (0.08 s reading, 0.06 s merging) against 0.31 s on one, in a query whose model and solve took 3.7 s. Until the merge,
 every thread's descent is held, so the peak holds the threads' containers and the merged ones at once. The unbounded
 diagnosis's column groupings (§7b) explain the solved model after the evaluation, and read the named input columns in

@@ -576,3 +576,16 @@ keys, a MAX helper pinned on one or both sides, a keyed decision beside a reduce
 Entries 86–88 box auxiliaries over a range open on one side, on both the constraint
 and the objective path; without them every MIN/MAX query in the corpus carries a
 finite bound, so a model that discarded a derivable bound would diff clean.
+
+## 10. A debug build
+
+`make debug` builds `build/debug/decidb` with DuckDB's assertions, ASan and UBSan; it runs several times slower than
+release. `make decide-test-debug` runs the Python suite against it (no goldens: they read the release build), with
+`DECIDB_TEST_TIME_SCALE` set to `DECIDE_DEBUG_TIME_SCALE` (default 8). The wrapper multiplies every subprocess timeout by
+the scale, and the timing tests multiply their time limits, interrupt delays and latency and CPU bounds by it through
+`scaled()` (`test/decide/decidb_cli.py`). Unset, every budget is the one the test writes, so a release run is unchanged.
+A debug build compiles the bundled HiGHS optimized and without its own NDEBUG-guarded checks, which re-derive a bound
+on every domain change, sanitizers kept (`third_party/highs/CMakeLists.txt`). A debug build also applies DuckDB's
+compressed materialization to every join and adds verification projections, so a plan test that walks operators looks
+through single-child projections, and a test that reaches compression on release does so through a `DISTINCT` source,
+which DuckDB compresses at any size.

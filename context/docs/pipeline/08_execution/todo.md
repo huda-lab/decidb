@@ -92,13 +92,3 @@ named-column scan also bypass or revisit parts of the normal tree execution; the
 - **Recommendation.** 1: the merge costs more code than its time saves.
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "descent or merge or thread"` passes; `tools/ab_bench.py`
   shows no workload moving beyond about 10%.
-
-## EXEC-24 — A rare hang in the descent's parallel merge
-
-- **Problem.** One release run of `build/release/test/unittest "[decidb]"` hung for over 9 minutes at 99% CPU. The
-  main thread sat in `PhysicalDecide::Finalize` → `DecideDescent::MergeAll` → `CopyMergedParts` →
-  `TaskExecutor::WorkOnTasks`, inside a sqllogic test whose name was not captured. 47 reruns (6 with `-s`) did not
-  reproduce it. Suspected: a task that is lost or spins in the parallel merge.
-- **Change.** Find the cause: loop the C++ suite (and the descent-heavy sqllogic files alone) until it hangs, then read
-  the stack of every thread. Fix it at its cause. If EXEC-23 rules option 1, the merge goes and this task goes with it.
-- **Done when.** The cause is named and fixed, or EXEC-23 deletes the code; a looped run of the C++ suite shows no hang.
