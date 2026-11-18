@@ -21,17 +21,15 @@ import tempfile
 import time
 from pathlib import Path
 
-WORKTREES = Path("/Users/hatim/Code/decidb/.claude/worktrees")
+REPO = Path(__file__).resolve().parents[3]
+# Label -> binary. Edit to the two builds being compared; the second is the OPA parent of the merge (f56845f560).
 BINARIES = {
-    "anr": WORKTREES / "sami-anr" / "build" / "release" / "decidb",
-    "opa": WORKTREES / "sami-opa" / "build" / "release" / "decidb",
-    "opa13": WORKTREES / "sami-opa-nov13" / "build" / "release" / "decidb",
+    "tip": REPO / "build" / "release" / "decidb",
+    "opa": REPO / ".claude" / "worktrees" / "sami-opa" / "build" / "release" / "decidb",
 }
 
-# The workloads are the repository's own (identical file on both branches).
-_spec = importlib.util.spec_from_file_location(
-    "anr_scaling", WORKTREES / "sami-opa" / "benchmark" / "decide" / "anr_scaling.py"
-)
+# The workloads are the repository's own.
+_spec = importlib.util.spec_from_file_location("anr_scaling", REPO / "benchmark" / "decide" / "anr_scaling.py")
 _scaling = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_scaling)
 WORKLOADS, TABLE = _scaling.WORKLOADS, _scaling.TABLE

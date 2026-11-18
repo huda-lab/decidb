@@ -2,16 +2,6 @@
 
 Upkeep of the repository as a whole: releases, packaging and the docs across areas.
 
-## OPS-3 — The OPA handoff and merge notes describe the branch before the merge
-
-- **Problem.** `context/opa_rewrite/handoff.md` lines 9-17 say the merge comes next. Its A7 items 3 and 9 are listed
-  open, and 4f4cb0acfc and 00ab2c5a5c settle them. `merge_notes.md` marks rough the rows for D-3, the HiGHS plan label,
-  the session timeout and `DeriveReducerValueBounds`, which are settled, and calls R4 "still open" in two places. Both
-  cite a test baseline other than the branch's (8,884 tests and 115 C++ cases at 052b85d26d), and their line numbers
-  into `physical_decide.cpp`, `linearization_reducer_value.cpp` and `decide_tree_compile.cpp` drift.
-- **Change.** Each item states the branch as it stands; code is cited by function name, not line.
-- **Done when.** Every item above matches the branch at the commit that lands this task.
-
 ## OPS-4 — Docs name code that does not exist
 
 - **Problem.** About 35 backticked identifiers in `pipeline/05_optimizer/done.md`, `pipeline/08_execution/done.md`,
@@ -46,7 +36,7 @@ Upkeep of the repository as a whole: releases, packaging and the docs across are
 
 - **Problem.** FRM-20 and FRM-23 (`direct_solve/framework/todo.md`), PERF-16 (`direct_solve/framework/done.md`,
   `performance/findings.md`) and TEST-2 (`direct_solve/rules/n1_euclidean_ball/done.md`) name closed tasks whose text is
-  gone; `git log -S` finds each. D12 (`pipeline/08_execution/done.md` and `todo.md`) is defined in
-  `context/opa_rewrite/review/09_user_facing_behaviour.md` § D12, which the citations do not name.
+  gone; `git log -S` finds each. D12 (`pipeline/08_execution/done.md` and `todo.md`) is defined in no file of the
+  tree; the review that numbered it is `git show 5db8334431:context/opa_rewrite/review/09_user_facing_behaviour.md`.
 - **Change.** Each citation states what it stands for, or names the file that defines it.
 - **Done when.** `git grep -w` of each id under `context/docs` finds no bare citation.

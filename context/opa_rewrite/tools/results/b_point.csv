@@ -1,4 +1,0 @@
-binary,workload,rows,status,runs,wall_ms,nonsolver_ms,optimizer_ms,model_ms,solver_ms,peak_rss_mb,model.variables,model.linear_rows,model.linear_nonzeros,anr.helpers,anr.inlined_helpers,error
-anr,point,1000000,ok,3,892.88,272.07,5.13,197.46,608.71,1442.95,1000000,1000000,1999900,,,
-opa,point,1000000,ok,3,883.32,282.96,5.21,157.46,601.47,1564.12,1000000,1000000,1999900,,,
-opa13,point,1000000,ok,3,877.99,278.86,5.24,152.19,599.13,1571.53,1000000,1000000,1999900,,,

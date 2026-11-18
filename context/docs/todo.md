@@ -3,11 +3,10 @@
 Scratchpad. Each line points to a task in a nested todo; details live there. Delete a line when its task ships; delete
 this file when it is empty.
 
-Read first: `.claude/CLAUDE.md`, `context/opa_rewrite/handoff.md` § A6, `context/opa_rewrite/merge_notes.md` § 4.1.
+Read first: `.claude/CLAUDE.md`. What follows this queue: `context/opa_rewrite/README.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task in these todo files.
 
-## 1. Docs and tools (parallel: OPS-3 | EXEC-13, OPS-4 | OPS-5 | PERF-25 | OPS-7 | EXEC-14)
-- [ ] OPS-3 The OPA handoff and merge notes predate the merge — operations/todo.md § OPS-3
+## 1. Docs and tools (parallel: EXEC-13, OPS-4 | OPS-5 | PERF-25 | OPS-7 | EXEC-14)
 - [ ] EXEC-13 done.md without the flat evaluator — pipeline/08_execution/todo.md § EXEC-13
 - [ ] OPS-4 Docs name code that does not exist — operations/todo.md § OPS-4 (needs: EXEC-13)
 - [ ] OPS-5 errors.md and the guide quote unprinted text — operations/todo.md § OPS-5

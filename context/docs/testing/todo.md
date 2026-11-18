@@ -6,10 +6,10 @@ Open coverage gaps, one section each. Coverage that exists is in [coverage.md](c
 
 ## TEST-6 — One suite run on a debug build
 
-- **Problem.** No debug build ran the merged branch, so its debug-only assertions never ran
-  (`context/opa_rewrite/merge_notes.md`, trap 6).
-- **Change.** By the owner's ruling (handoff § A6, item 11): build debug once, after every other task in the queue,
+- **Problem.** No debug build ran the merged branch, so its debug-only assertions never ran.
+- **Change.** By the owner's ruling (2026-11-17): build debug once, after every other task in the queue,
   and run `make decide-test` against it in the background. It is a long CPU-bound run, so confirm the start with the
   owner.
 - **Needs.** Every other task of `context/docs/todo.md`.
-- **Done when.** The run passes or each failure is triaged, and the result is in `merge_notes.md` § 4.1.
+- **Done when.** The run passes or each failure is triaged, and the result is in
+  `context/opa_rewrite/README.md` § The gate for every change.

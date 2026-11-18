@@ -290,7 +290,7 @@ def _abs_under_two_reducers(solver, rows):
             solver.add_constraint(coefficients, "<=", 2500.0 if key == "g2" else 3000.0)
 
 
-#: The shapes of ``context/opa_rewrite/tools/threads_test.py``: name -> (decisions, constraints, the objective's
+#: The shapes the real-thread test runs: name -> (decisions, constraints, the objective's
 #: decision and whether it is weighted by w, the oracle's model). Each reaches a part of Merge that the threads'
 #: descents number differently: a G's slots, a G in a G, an F per class, a keyed decision's classes, a frame's rows, an
 #: F node of a keyed decision, an F under two reducers. Classes are many and small (g1 of 40, g2 of 5, g3 of 4), so
