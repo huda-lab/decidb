@@ -304,8 +304,9 @@ MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))      -- a nested reducer (
   over the groups' sizes `n_h`, a convex QP on both solvers.
 - **Quadratic objectives**: `MINIMIZE SUM(POWER(linear, 2))` is convex QP on both solvers (HiGHS only when continuous
   and each square holds one decision, as in `POWER(x - a, 2)`; `POWER(x + y, 2)` needs Gurobi). `-POWER(...)` under
-  `MAXIMIZE` is concave QP on both. `MAXIMIZE SUM(POWER(...))` is non-convex, Gurobi only. Integer variables with a quadratic objective (MIQP) need Gurobi. An objective may hold
-  any number of squares (`SUM(POWER(x - a, 2)) + SUM(POWER(y - b, 2))`). A square with a data weight
+  `MAXIMIZE` is concave QP on both. `MAXIMIZE SUM(POWER(...))` is non-convex, Gurobi only. Integer variables with a
+  quadratic objective (MIQP) need Gurobi. An objective may hold any number of squares
+  (`SUM(POWER(x - a, 2)) + SUM(POWER(y - b, 2))`). A square with a data weight
   (`SUM(w * POWER(x, 2))`, `SUM(w * x * x)`) or a factor known only when the query runs
   (`(SELECT m) * SUM(POWER(x, 2))`) is Gurobi only, as `x * y` is, because its sign is not known before then; HiGHS
   refuses it at plan time. A constant factor works on both.
@@ -363,9 +364,10 @@ Tests: `test/decide/tests/test_scope_objective.py`. Problem classes and solver s
   | `'inf'` | `MAX(ABS(e))` | LP |
   | `0[, M]` | exact count of rows where `|e| >= tolerance` | MILP |
 
-  The L0 count is exact in every direction (cap, floor, `=`, `MAXIMIZE`). `M` is a bound on `|e|`, inferred from the bounds on `e` when omitted; `e` must have finite bounds. The
-  tolerance defaults to `1e-4` (`SET decide_l0_tolerance`); a value forced strictly between 0 and the tolerance is
-  infeasible. Over data only, `norm(e, 0)` is a plain count of nonzero rows.
+  The L0 count is exact in every direction (cap, floor, `=`, `MAXIMIZE`). `M` is a bound on `|e|`, inferred from the
+  bounds on `e` when omitted; `e` must have finite bounds. The tolerance defaults to `1e-4`
+  (`SET decide_l0_tolerance`); a value forced strictly between 0 and the tolerance is infeasible. Over data only,
+  `norm(e, 0)` is a plain count of nonzero rows.
 - **Other functions and operators over a decision** (`sqrt`, `exp`, `ln`, `floor`, `%`, `COALESCE`, …) are refused: the
   model has no reading for them. So are a division by a decision, a `POWER` whose exponent is not a whole number known
   before the query runs, and a `CASE` over a decision. Only `ABS` and `POWER` with a whole exponent wrap a decision, and
@@ -692,8 +694,8 @@ Tuple terms and reducers mix freely on either side. Each comparison takes one of
 - **Helper decision** — anything else: a term beside a reducer that varies within a group (`ship <= 0.20 * sum(ship)`,
   a decision keyed by another key), a row-varying factor, reducers with different `by`
   keys, a reducer inside another expression (`abs(sum(ship) by (g) - 40) <= 5`). Each reducer becomes a **helper
-  decision** with one instance per `by` group, defined once (it holds its members' `SUM` or `AVG` on the side the clause pushes
-  it, or their `MIN` or `MAX`), and the clause is one row per class.
+  decision** with one instance per `by` group, defined once (it holds its members' `SUM` or `AVG` on the side the
+  clause pushes it, or their `MIN` or `MAX`), and the clause is one row per class.
   Example 1 costs N rows of two entries plus one definition row,
   not N rows of N entries. Where writing a helper's members into the rows that read it adds no nonzero -- an instance
   of `m` terms read `k` times costs `m·k` written in, `m + 1 + k` defined -- the helper is written in and has no
