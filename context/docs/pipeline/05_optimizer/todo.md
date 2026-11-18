@@ -21,6 +21,8 @@ files.
   3. The message names the frame and suggests no fix.
 - **Recommendation.** 2 for a point frame, the shape that raises here: it is writable today and skips what the `when`
   would. An architect review settles whether a range frame takes the same text.
+- **Ruling (owner, 2026-11-18).** Option 2 for a point frame. A range frame's text is the one the architect review
+  settles; a choice the review leaves open goes to the owner.
 - **Change.** A frame's non-finite message suggests only what the binder accepts.
 - **Done when.** A test writes the suggested fix and gets an answer; `./test/decide/run_tests.sh -n 2 -k
   "invalid_value or frame"` passes.
