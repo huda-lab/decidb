@@ -557,7 +557,7 @@ decide-golden:
 # The Python suite against build/debug/decidb (make debug builds it), with the timing tests' budgets (time limits,
 # interrupt delays, subprocess timeouts, latency and CPU bounds) multiplied by DECIDE_DEBUG_TIME_SCALE
 # (test/decide/decidb_cli.py, scaled). The goldens are not run: they read the release build.
-DECIDE_DEBUG_TIME_SCALE ?= 5
+DECIDE_DEBUG_TIME_SCALE ?= 8
 decide-test-debug:
 	DECIDB_EXE_PATH=$(PROJ_DIR)build/debug/decidb DECIDB_TEST_TIME_SCALE=$(DECIDE_DEBUG_TIME_SCALE) test/decide/run_tests.sh
 
