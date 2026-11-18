@@ -1,0 +1,45 @@
+diff --git a/highs/mip/HighsRedcostFixing.cpp b/highs/mip/HighsRedcostFixing.cpp
+index 6f3e6278fd..d454191702 100644
+--- a/highs/mip/HighsRedcostFixing.cpp
++++ b/highs/mip/HighsRedcostFixing.cpp
+@@ -192,6 +192,14 @@ void HighsRedcostFixing::propagateRedCost(const HighsMipSolver& mipsolver,
+   }
+ }
+ 
++// DeciDB patch (UB-1): a column bound as an integer, saturated at the integer range. An infinite bound is not
++// representable, and converting it is undefined; findLurkingBounds reads the other bound only when it is finite.
++static HighsInt boundAsInt(double bound) {
++  if (bound >= kHighsIInf) return kHighsIInf;
++  if (bound <= -kHighsIInf) return -kHighsIInf;
++  return static_cast<HighsInt>(bound);
++}
++
+ void HighsRedcostFixing::addRootRedcost(const HighsMipSolver& mipsolver,
+                                         const std::vector<double>& lpredcost,
+                                         double lpobjective) {
+@@ -297,10 +305,8 @@ void HighsRedcostFixing::addRootRedcost(const HighsMipSolver& mipsolver,
+       //  cutoffbound = (lurkub - lb) * redcost + lpobj
+       findLurkingBounds(
+           col, HighsInt{1},
+-          static_cast<HighsInt>(
+-              mipsolver.mipdata_->getDomain().col_lower_[col]),
+-          static_cast<HighsInt>(
+-              mipsolver.mipdata_->getDomain().col_upper_[col]),
++          boundAsInt(mipsolver.mipdata_->getDomain().col_lower_[col]),
++          boundAsInt(mipsolver.mipdata_->getDomain().col_upper_[col]),
+           mipsolver.mipdata_->getDomain().col_upper_[col] != kHighsInf,
+           lpobjective, lpredcost[col], maxNumSteps, maxNumStepsExp,
+           lurkingColUpper[col], lurkingColLower[col]);
+@@ -312,10 +318,8 @@ void HighsRedcostFixing::addRootRedcost(const HighsMipSolver& mipsolver,
+       //  cutoffbound = (lurklb - ub) * redcost + lpobj
+       findLurkingBounds(
+           col, HighsInt{-1},
+-          static_cast<HighsInt>(
+-              mipsolver.mipdata_->getDomain().col_upper_[col]),
+-          static_cast<HighsInt>(
+-              mipsolver.mipdata_->getDomain().col_lower_[col]),
++          boundAsInt(mipsolver.mipdata_->getDomain().col_upper_[col]),
++          boundAsInt(mipsolver.mipdata_->getDomain().col_lower_[col]),
+           mipsolver.mipdata_->getDomain().col_lower_[col] != -kHighsInf,
+           lpobjective, lpredcost[col], maxNumSteps, maxNumStepsExp,
+           lurkingColLower[col], lurkingColUpper[col]);

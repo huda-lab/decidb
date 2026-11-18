@@ -37,3 +37,5 @@ Each patch's edits are marked `DeciDB patch (<id>)` in the source. Why each exis
   per 2^20 scanned row entries.
 - `0008-BUG-53` (`presolve/HPresolve.*`, `presolve/PresolveComponent.*`, `lp_data/Highs.cpp`): presolve's limit
   check asks the user interrupt beside the clock, so a Ctrl-C stops presolve.
+- `0009-UB-1` (`mip/HighsRedcostFixing.cpp`): the lurking-bound search converts a column's bounds to integers through a
+  saturating helper; an infinite bound was cast directly, which is undefined (found by UBSan on a debug build).
