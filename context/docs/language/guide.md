@@ -199,10 +199,11 @@ data and unaffected.
   (`SUM(0.5 * x) < 5`) is refused, and so is an offset under anything non-linear (`POWER(x + 0.25, 2) < 11`). The
   message names the offender and the cast that fixes it.
 - **`<>`** works per row and on reducers. Its cost depends on where `K` falls in the left side's reachable range:
-  interior costs one binary and two Big-M rows; a range wholly on one side collapses to one plain inequality
-  (`SUM(x) <> 0` over non-negative decisions is `SUM(x) >= 1`); an unreachable `K` drops the constraint. Only a
-  variable's intrinsic domain licenses the collapse, so a bound you wrote stays loosenable under `DIAGNOSE`. On Gurobi
-  `<>` is two indicator constraints, with no Big-M. `AVG(x) <> K` becomes `SUM(x) <> K·n`.
+  interior costs one extra yes/no decision, and on HiGHS needs a finite bound on the left side, written or inferred; a
+  range wholly on one side collapses to one plain inequality (`SUM(x) <> 0` over non-negative decisions is
+  `SUM(x) >= 1`); an unreachable `K` drops the constraint. Only a variable's intrinsic domain licenses the collapse, so
+  a bound you wrote stays loosenable under `DIAGNOSE`. Gurobi needs no such bound. `AVG(x) <> K` becomes
+  `SUM(x) <> K·n`.
 - **`IN`** on a column is a filter; on a decision it restricts the domain (K binary indicators). `IN` on a reducer is
   not supported.
 - **Degree**: a term has at most two decision factors. Linear terms, products of two decisions (§4) and squares
@@ -215,7 +216,7 @@ data and unaffected.
   statement's `$1`, a table macro's parameter. A `CASE` that reads no decision is data as well, a per-row coefficient as
   `COALESCE` over data is (`SUM(x * CASE WHEN tier = 1 THEN 1 ELSE 2 END)`); a `CASE` over a decision is refused (§5).
   A comparison that reads a decision, used as a number (`x <= (x > 1)`), is refused: *"SUCH THAT does not support
-  '(x > 1)'"*.
+  'x > 1'"*.
 - **Subqueries**: scalar subqueries, uncorrelated or correlated, may be bounds or factors. A correlated one becomes a
   per-row value and follows the bound rule of §5. A subquery cannot reference the enclosing query's decisions.
 - **Nested DECIDE**: a scalar bound subquery may hold its own `DECIDE`; it solves first and its one-row result is the
@@ -288,7 +289,7 @@ MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))      -- a nested reducer (
     `per ()` decision, or a per-row or keyed one when the `when` keeps one row or class (`MAXIMIZE when id = 3: x`).
     Otherwise the objective would be produced more than once, an error (§7.3). Not beside a `MIN` or `MAX`.
   - A product of two query-wide decisions counts once (Gurobi). Any other product of two decisions outside a reducer
-    is refused unless one is `BOOL`, which is linearized first.
+    is refused unless one is `BOOL`.
   - A factor on a reducer must be one value over the kept rows (§5).
 - **`by` on a top-level reducer** must be one group over the kept rows: `by ()`, or a `Γ` with one value there
   (`MAXIMIZE when g = 'A': sum(x) by (g)`).
@@ -310,8 +311,8 @@ MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))      -- a nested reducer (
   refuses it at plan time. A constant factor works on both.
 - **A square or product under `MIN`/`MAX`**, in the objective or a constraint (`MINIMIZE MAX(POWER(x - t, 2))`,
   `SUM(x) + MAX(POWER(x, 2)) <= 20`): Gurobi only ([problem_types.md](problem_types.md)).
-- **Bilinear (`x * y`)**, in objectives and constraints: with one `BOOL` factor it is linearized exactly (McCormick;
-  both solvers; the other factor needs a finite upper bound, written or inferred, §5). Otherwise it is non-convex,
+- **Bilinear (`x * y`)**, in objectives and constraints: with one `BOOL` factor it is exact on both
+  solvers, and the other factor needs a finite upper bound, written or inferred (§5). Otherwise it is non-convex,
   Gurobi only. Data coefficients work (`SUM(profit * b * x)`); products of three decisions are refused.
 
 Tests: `test/decide/tests/test_scope_objective.py`. Problem classes and solver support: [problem_types.md](problem_types.md).
@@ -324,10 +325,9 @@ Tests: `test/decide/tests/test_scope_objective.py`. Problem classes and solver s
   pass its own `when`, or the classes of its own `per`. In a constraint `AVG(e) op K` is `SUM(e) op K·n`.
 - **`MIN` and `MAX`**. The *easy* direction (`MAX(e) <= K`, `MIN(e) >= K`) bounds each member, with no auxiliary; with
   no `when` and no filter, a member that is a lone decision is bounded in its column box, so `min(x) >= -5` makes `x`
-  signed (§2). The *hard* direction (the opposite, or `=`) adds an extremum column per `by` group, pinned by Big-M
-  indicator rows (or a native general constraint on Gurobi). In the objective, `MINIMIZE MAX` and `MAXIMIZE MIN` take
-  one auxiliary; `MAXIMIZE MAX` and `MINIMIZE MIN` add indicators. A lowered hard case needs every member bounded,
-  written or inferred, because no finite Big-M dominates an unbounded range.
+  signed (§2). The *hard* direction is the opposite one, or `=`. In the objective, `MINIMIZE MAX` and `MAXIMIZE MIN`
+  are the easy direction; `MAXIMIZE MAX` and `MINIMIZE MIN` are the hard one. On HiGHS a hard case needs every member
+  bounded, written or inferred; the message names the variable and the bound to add. Gurobi needs none.
 - **A reducer's own filter**: `sum(when morning: x * hours) + sum(when evening: x * hours) <= 40` (§5.3).
 - **A factor on a reducer** works for every reducer, on either side: `2 * SUM(x*p)`, `SUM(x*p) / 2`, `2 * MAX(x*v)`,
   `SUM(x) + 2 * MAX(x*v)`. A negative factor reverses the relation the reducer faces (`-2 * MAX(e) >= -8` is
@@ -364,9 +364,9 @@ Tests: `test/decide/tests/test_scope_objective.py`. Problem classes and solver s
   | `0[, M]` | exact count of rows where `|e| >= tolerance` | MILP |
 
   The L0 count is exact in every direction (cap, floor, `=`, `MAXIMIZE`), because each row's indicator is pinned both
-  ways. `M` is inferred from bounds when omitted; `e` must have finite bounds. The tolerance defaults to `1e-4`
-  (`SET decide_l0_tolerance`); a value forced strictly between 0 and the tolerance is infeasible. Over data only,
-  `norm(e, 0)` is a plain count of nonzero rows.
+  ways. `M` is a bound on `|e|`, inferred from the bounds on `e` when omitted; `e` must have finite bounds. The
+  tolerance defaults to `1e-4` (`SET decide_l0_tolerance`); a value forced strictly between 0 and the tolerance is
+  infeasible. Over data only, `norm(e, 0)` is a plain count of nonzero rows.
 - **Other functions and operators over a decision** (`sqrt`, `exp`, `ln`, `floor`, `%`, `COALESCE`, …) are refused: the
   model has no reading for them. So are a division by a decision, a `POWER` whose exponent is not a whole number known
   before the query runs, and a `CASE` over a decision. Only `ABS` and `POWER` with a whole exponent wrap a decision, and
@@ -485,11 +485,11 @@ per t.g: sum(per t.h: max(per t.k: sum(x) by (t.g, t.h, t.k)) by (t.g, t.h)) by 
   instance per path group, defined once per group, innermost first, and read by the reducers around it. A helper is
   pinned on the side its readers push it, through `SUM`, `AVG`, `MIN` and `MAX` levels -- a `MIN` or `MAX` does not
   decrease when a member grows, so it passes its push on --, and on both sides under `=`, `<>`, `abs`, a norm or a
-  factor of unknown sign (D79). So the running example needs no Big-M: each inner `MAX` is pushed down, and its
-  envelope alone holds it; and so does `MINIMIZE max(per t.rid: sum(per t.cid: max(ship) by (t.cid)) by (t.rid))`,
-  an LP whatever bounds the shipments have. A bound
-  written only at the root reaches an inner `MIN`/`MAX` that needs its closing side: in `per t.g: sum(max(x) by (t.g,
-  t.h)) by (t.g) = 10`, with no other bound on `x`, the inner helper's Big-M is read off the outer one's box.
+  factor of unknown sign (D79). So the running example needs no bound on the shipments: each inner `MAX` is pushed
+  down, and that alone holds it; and so does `MINIMIZE max(per t.rid: sum(per t.cid: max(ship) by (t.cid)) by (t.rid))`,
+  an LP whatever bounds the shipments have. A bound written only at the root serves an inner `MIN`/`MAX` that needs
+  one: in `per t.g: sum(max(x) by (t.g, t.h)) by (t.g) = 10`, with no other bound on `x`, the inner helper takes its
+  bound from the outer one.
 - **A square or product of decisions** inside a nest is defined first, where a constraint or a `MIN`/`MAX` of the
   objective reads it: a helper per row at least (or at most) its value, the way the clause pushes it, which needs a
   backend that states `MIN`/`MAX` natively when one reads it (Gurobi). Refused where a helper would have to hold it
@@ -580,8 +580,8 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   reducer left with no member is NULL (D68): its comparison skips that instance, a reducer around it drops the member
   reading it -- as it does a nested reducer whose `when` keeps no row --, and an objective term holding it is dropped.
   A frame over decisions in a `MIN`/`MAX` of several terms (`max(at(first: x) over (...)) + sum(x) <= 20`) is read at
-  its selected row too. A row a rewrite adds for a construct in a member -- an `abs`'s envelope, an L0 indicator's
-  links -- defines an auxiliary and is no instance of its clause: it stays where the clause's instance is skipped
+  its selected row too. A row a rewrite adds for a construct in a member -- an `abs`'s rows, an L0 count's
+  rows -- defines an auxiliary and is no instance of its clause: it stays where the clause's instance is skipped
   (D88), so `sum(abs(x - 3)) + at(previous: x) over (t.period) <= 4` keeps `abs(x1 - 3)` in the sum the other
   periods read. The auxiliary has no value where what it reads has none, so `sum(abs(x - max(at(previous: x) over
   (t.period within t.product)) by (t.product)))` drops the member of a product with one period, whose inner `max`
@@ -708,7 +708,7 @@ Tuple terms and reducers mix freely on either side. Each comparison takes one of
   which belongs to none of them: a `DIAGNOSE` that drops one leaves the definition the others read. The helper is whole-numbered when the reducer's value is, so `<`, `>`, `<>` follow §3. A
   product or square of decisions inside such a reducer is defined per row first, so `sum(power(x, 2)) + gcap * s <= 30`
   answers on Gurobi and is refused on HiGHS, which has no quadratic constraints (§3.1). A `BOOL` factor on a reducer
-  (`b * sum(x)`) leaves the product `b * helper`, which is linearized as any `BOOL` product (§4).
+  (`b * sum(x)`) leaves the product `b * helper`, which stays exact as any `BOOL` product does (§4).
 
 `EXPLAIN` names a helper by its reducer; `DIAGNOSE` names the clause and never a definition row. Tests:
 `test/decide/tests/test_scope_value_rewrite.py`, `test/decide/tests/test_anr_inlining.py` (a helper written in or
@@ -903,12 +903,12 @@ How the engine works: [diagnose.md](diagnose.md) and `../diagnostics/`.
 variables, the objective and the constraints. Each clause leads with the SQL as written; indented lines follow only
 when the model differs: `≡` for the canonical form, `↳` for what each rewrite made of it
 (`abs(ship - 20) becomes an auxiliary variable`, `sum(ship) by (D.region) becomes a helper decision per group`) and
-the rows the solver receives. An auxiliary prints as the expression it stands for, never an internal name; a bound
-derived from data prints as `M`. `EXPLAIN` plans without solving; `EXPLAIN ANALYZE` solves and adds actual rows and
-timing, and under a clause what the data made of it: a `↳` line counting the variants of its classes (§7.1, D71),
-one counting the instances it skipped for having no value (§7.4), and one for each helper decision written where it
-is read, with no column (`↳ sum(t.w * x) by (t.product) is written where it is read, with no column`; §6.4, D89),
-in place of the plan's line saying it becomes a helper decision.
+the rows the solver receives. An auxiliary prints as the expression it stands for, never an internal name; the bound
+of a `norm(e, 0)` derived from data prints as `M`. `EXPLAIN` plans without solving; `EXPLAIN ANALYZE` solves and adds
+actual rows and timing, and under a clause what the data made of it: a `↳` line counting the variants of its classes
+(§7.1, D71), one counting the instances it skipped for having no value (§7.4), and one for each helper decision written
+where it is read, with no column (`↳ sum(t.w * x) by (t.product) is written where it is read, with no column`; §6.4,
+D89), in place of the plan's line saying it becomes a helper decision.
 
 **Echo.** EXPLAIN, DIAGNOSE and messages quote a clause as typed (case, spacing and comments as written), with the
 `when c per K:` qualifier in front and the defaults `per row:` and `by ()` left out. Text DeciDB reprints itself (a
@@ -945,7 +945,7 @@ of calling a solver; a query it cannot prove takes the solver path unchanged. No
   ```
 
   Adding `x <= 50 AND` before the limit loses it: `require` raises an error, and `auto` answers on the solver. A direct
-  answer is exact, where the solver's carries its tolerance (3.0005 and 3.9996 here).
+  answer is exact, where the solver's carries its tolerance: values close to 3 and 4, not 3 and 4.
 
 A count limit, budget or sum of squares may also have a `by` key or a `per K:` (`per K: sum(x) by (K) <= k` gives each
 group its own limit). When several assignments are optimal you may get a different one than the solver; the objective is

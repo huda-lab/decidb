@@ -9,7 +9,6 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 | Situation | Raised | Message |
 |---|---|---|
 | The objective takes two values or instances over its kept rows | run, before solving | [guide.md §7.3](guide.md#73-data-checks) |
-| A reducer in a `when` | run, before solving | `DECIDE: an aggregate cannot be used here. ...` |
 | `per` other than `()` on the objective | parse | `an objective is produced once: write per (): or leave per out` |
 | A parenthesized key | parse | `write per a, b: without parentheses; parentheses are only for per ()` |
 | An expression in a `per` key | parse | `a per key lists columns or relations; put expressions in by (...)` |
@@ -20,7 +19,7 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 | `by` after anything but a function call (a column, literal, `CASE`, `CAST`, `::`, `COALESCE`, parentheses, …), or a scope inside such a form | parse | syntax error |
 | A removed spelling | parse (`D.x`: bind) | names the new spelling (§3) |
 | `OR` between constraints | bind | `SUCH THAT: OR is not supported.` |
-| A comparison, `BETWEEN` or conjunction that reads a decision, used as a number (`x <= (x > 1)`) | bind | `SUCH THAT does not support '(x > 1)'` (`SUM expression` / `MAXIMIZE` inside a reducer / the objective) |
+| A comparison, `BETWEEN` or conjunction that reads a decision, used as a number (`x <= (x > 1)`) | bind | `SUCH THAT does not support 'x > 1'` (inside a reducer: `SUM expression does not support 'x > 1', found 'sum((x > 1))'`; as the objective: `MAXIMIZE does not support 'x > 1'`) |
 | A column of an outer query (`LATERAL`, a scalar subquery in another query's select list), in any clause or the `WHERE` | bind | `DECIDE: 'o.k' refers to an outer query, which a DECIDE cannot read; to solve per group, join that table into this query's FROM and write the clause with per` |
 | `by` after a call other than `SUM`, `AVG`, `MIN`, `MAX`, `norm`, `count` | bind | `DECIDE: by (...) must directly follow SUM, AVG, MIN, MAX, norm or count` |
 | `when` or `per` inside a call other than `SUM`, `AVG`, `MIN`, `MAX` | bind | `DECIDE: when and per inside a call need SUM, AVG, MIN or MAX; write the scope in front of the constraint or inside a reducer` |
@@ -33,7 +32,7 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 | A frame's `k` or `every` that is not a positive whole number | parse | `... must be a positive whole number` |
 | A frame word misspelled (`prev`, `evry`, `cyclc`) | parse | `DECIDE: a frame position is first, last, [k] previous or [k] next, found prev` (`expected every d ...`, `expected cyclic or within ...`) |
 | An expression in a frame's `within` | parse | `DECIDE: within lists columns or relations, as a per key does` |
-| A range frame over more than one expression, or a reducer other than `sum`, `avg`, `min`, `max`, `count` | parse / bind | `sum(from first to last: e) reduces one expression, found 2` · `DECIDE: a range frame reduces with sum, avg, min, max or count, found ...` |
+| A range frame over more than one expression, or a reducer other than `sum`, `avg`, `min`, `max`, `count` | parse / bind | `DECIDE: sum(from first to last: e) reduces one expression, found 2` · `DECIDE: a range frame reduces with sum, avg, min, max or count, found ...` |
 | A frame's `else` that is not a number | bind | `DECIDE: in at(previous else 'a': x) over (t.period), else 'a' is not a number` |
 | A range's `else` over a collated payload, whose `min` or `max` compares text under the collation | bind | `DECIDE: in max(from previous to next else 0: t.n) over (t.s), else 0 stands in a collated payload, which compares text` |
 | A decision in a frame's order key or `within` | bind | `DECIDE: x is a decision; a frame's order key and within may only use data` |
@@ -41,11 +40,11 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 | An unqualified `FULL OUTER JOIN USING` column in a key | bind | `DECIDE: depotID is merged by a FULL OUTER JOIN USING; write S.depotID or D.depotID in the per key` |
 | A reducer with no argument or more than one, or `norm` with no argument | bind | `SUM needs one argument, found 'sum()'` · `MAX needs one argument, found 'max(x, 2)'` · `NORM needs an expression and an order, as in norm(e, 1), found 'norm()'` |
 | A colon form naming a relation not in `FROM` | bind | `Relation 'X' is not in the FROM clause, so a reducer cannot be qualified by it.` |
-| A comparison whose reducers, under arithmetic, read no decision (`SUM(t.v) + 1 <= 500`) | bind | `SUCH THAT clause: '(sum(l_quantity) + 1)' reads no DECIDE variable; compare a decision with it` |
+| A comparison whose reducers, under arithmetic, read no decision (`SUM(t.v) + 1 <= 500`) | bind | `SUCH THAT clause: 'SUM(t.v) + 1' reads no DECIDE variable; compare a decision with it` |
 | A reducer over query-wide decisions only, as a constraint's whole decision side | bind | `cap is a query-wide decision, so SUM(cap) has nothing to aggregate over; use cap on its own` |
 | An `INT` or `REAL` decision as a factor on a reducer, or a `BOOL` one on anything but a bare reducer | bind | `DECIDE constraint: 's' is a decision, so it cannot multiply SUM(x). Only data or a BOOL decision can scale SUM/AVG/MIN/MAX.` (objective: `... Only constants, query-wide values or a BOOL decision can scale ...`) |
 | A row-varying factor on a reducer in the objective | bind | `DECIDE objective: 'weight' varies per row, so it cannot multiply SUM(x). Move it inside the aggregate, e.g. SUM(x * weight).` (a correlated subquery is named "this subquery") |
-| A data-only reducer scaling a decision (`x * avg(cap)`, `sum(x) / sum(cap)`) | bind | `An aggregate over table columns ... cannot multiply / divide / be divided together with a decision variable` |
+| A data-only reducer scaling a decision (`x * avg(cap)`, `sum(x) / sum(cap)`) | bind | `An aggregate over table columns (e.g. AVG(col), MIN(col)) cannot multiply a decision variable. Pre-compute it as a scalar in a subquery or CTE and reference that value.` (`divide` for a divisor; `be divided together with` for a dividend) |
 | `<`, `>` or `<>` on a side that is not whole-numbered | bind | names the offender and the cast that fixes it |
 | `<`, `>` or `<>` on a helper decision whose value can be fractional | bind | `Comparison '>' is not supported here: 'sum(ship + 0.5) by (D.region)' can take fractional values in this constraint, and stepping the bound is exact only on whole numbers. Compare with '>=' instead.` |
 | A strict bound on a `MIN`/`MAX` whose body can be fractional once its constant addends move to the bound | bind | `Comparison '>' is not supported here: 'max(x + w)' has type DECIMAL(21,1) ... Compare with '>=' instead.` |
@@ -60,7 +59,7 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 | A `BOOL` bound that cannot hold (`x >= 2`) | before reading rows | `DECIDE optimization is infeasible: x >= 2 cannot hold for a BOOL variable.` |
 | A NaN in the data, an infinite coefficient, or an infinite value under `ABS`, `MIN` or `MAX` | run | `DECIDE: v is NaN or infinite on some rows. Skip those rows with 'when isfinite(v):'.` (a bound: `DECIDE: the bound v is NaN on some rows. Skip those rows with 'when NOT isnan(v):'.`) |
 | A constant coefficient that SQL computes as NaN or infinite (`x / 0`) | run | `DECIDE: 1 / 0 is NaN or infinite. Use a finite value.` |
-| A NaN a frame's reducer reads | run | `DECIDE: min(at(first: t.v) over (t.d)) reads a NaN on some rows. Skip those rows with a 'when' on the column it reads.` |
+| A NaN a frame's reducer reads | run | `DECIDE: min(at(first: t.f) over (t.id within t.id)) reads a NaN on some rows. Skip those rows with a 'when' on the column it reads.` |
 | A number past a DOUBLE that DeciDB derives (`SUM(b*x)` over rows of one keyed decision, `POWER(b*x, 2)`, a Big-M or range over the decisions' bounds) or a literal coefficient (`2e308*x`) | run | `DECIDE: SUM(b * x) <= 10 computes a number too large for a DOUBLE. Scale its data down.` (names the clause, or the objective) |
 | An unbounded member under a lowered hard `MIN`/`MAX`, `<>`, Big-M `ABS`, `norm(e, 0)` or McCormick product | run | names the variable and the bound to add |
 | A model class the available solver cannot run (non-convex QP, MIQP, quadratic constraints on HiGHS) | plan | names what the query does and that it needs Gurobi; a quadratic limit is quoted: `DECIDE: the SUCH THAT clause \`SUM(POWER(x, 2)) <= 25\` squares or multiplies decision variables, which needs Gurobi — not available on this machine. Install Gurobi, or rewrite that constraint so each term holds at most one decision variable.` |
@@ -93,18 +92,18 @@ formulates; their open work is in the owning stage's `todo.md`.
 |---|---|
 | **D80** `norm` inside a reducer | `DECIDE: norm inside a reducer is not supported yet` |
 | **D80** A reducer inside `norm` | `DECIDE: a reducer inside norm is not supported yet` |
-| **D80** A square or product of decisions inside nested reducers that no body definition names: a nest of sums in the objective neither read in place nor summed in the other order | `DECIDE: 'sum(x * x) by (t.g)' squares or multiplies decisions inside nested reducers, which is not supported yet` |
-| A frame's payload not linear in the decisions (`abs`, a decision divisor) | `DECIDE: 'abs((x - 3))' inside at(...) is not linear in the decisions, which is not supported yet; write it outside the frame` |
+| **D80** A square or product of decisions inside nested reducers that no body definition names: a nest of sums in the objective neither read in place nor summed in the other order | `DECIDE: 'sum((x - 1) * max(x) by (t.g))' squares or multiplies decisions inside nested reducers, which is not supported yet` |
+| A frame's payload not linear in the decisions (`abs`, a decision divisor) | `DECIDE: 'abs(x - 3)' inside at(...) is not linear in the decisions, which is not supported yet; write it outside the frame` |
 | A frame's `else` that reads a decision while its payload reads none | `DECIDE: in at(previous else s: t.demand) over (t.period), else s reads a decision while the payload reads none, which is not supported yet` |
 | **D80** A frame in a `when`, `per`, `by`, `within` or an order key | `DECIDE: a frame selector is not allowed in when, per, by, within or an order key` |
 | **D80** A reducer or a frame inside a frame's payload or fallback | `DECIDE: a reducer inside at(...) is not supported; reduce outside the frame` · `DECIDE: a frame selector inside at(...) is not supported` |
 | **D80** A square or product of decisions in a frame's payload | `DECIDE: 'x * x' squares or multiplies decisions inside at(...), which is not supported yet` |
-| `AVG` under `<>` beside another term, or with its own `when`/`per` | `DECIDE: AVG in a <> constraint is not supported yet ...` |
+| `AVG` under `<>` beside another term, or with its own `when`/`per` | `DECIDE: AVG in a <> constraint is not supported yet beside another term or with its own when or per` |
 | `<>` over a square or product of decisions not linearized first (a product with a `BOOL` is) | `DECIDE: <> over a product or a power of decisions is not supported yet: SUM(POWER(x,2)) <> 3` |
-| `<>` on a `MIN`/`MAX`, alone or composed | `DECIDE does not support <> comparison with MIN/MAX aggregates.` |
+| `<>` on a `MIN`/`MAX`, alone or composed | `DECIDE does not support <> comparison with MIN/MAX aggregates (norm(e, 'inf') is a MAX of absolute values): max(x) <> 3` |
 | A square, or a product of two decisions, outside a reducer in the objective, unless the two are distinct query-wide decisions or one is `BOOL` | `DECIDE objective: 'x * y' multiplies decisions outside a reducer, which is not supported yet` |
 | A scope inside an ordinary SQL subquery written in the clause | `DECIDE: 'WHEN condition:' is not supported yet` (or `'PER key:'`, `'PER ():'`, `'PER ROW:'`, `'BY (key)'`) |
-| `IN` on a reducer | refused |
+| `IN` on a reducer | `SUCH THAT does not support IN on 'sum(x)'. Only simple DECIDE variables are allowed as the IN target` |
 
 A reducer over data only stays on the bound side of a comparison.
 
