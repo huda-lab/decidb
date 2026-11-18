@@ -2,13 +2,14 @@
 <html lang="en" data-type="software" data-radius="sharp" data-ground="sage" data-buttons="pill" data-motion>
 <head>
 <meta charset="utf-8">
-<script>(function(){var r=document.documentElement,t;try{t=localStorage.getItem('decidb-theme')}catch(e){}if(!r.dataset.theme)r.dataset.theme=t==='light'||t==='dark'?t:matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'})()</script>
+<script>(function(){var r=document.documentElement,t;try{t=localStorage.getItem('decidb-theme')}catch(e){}if(!r.dataset.theme)r.dataset.theme=t==='dark'?'dark':'light'})()</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script>document.documentElement.classList.add('m-enter');setTimeout(()=>document.documentElement.classList.add('m-enter-done'),700)</script>
 <title>DeciDB: optimization queries in DuckDB</title>
-<meta name="description" content="DeciDB adds a DECIDE clause to DuckDB: state decisions, constraints and a goal in SQL and get the best values back as rows. Nine problem classes are answered without a solver; the rest go to Gurobi or HiGHS.">
+<meta name="description" content="DeciDB adds a DECIDE clause to DuckDB: state decisions, constraints and a goal in SQL and get the best values back as rows. Query rewriting answers nine problem classes without a solver; the rest go to Gurobi or HiGHS.">
 <meta property="og:type" content="website">
 <meta property="og:title" content="DeciDB: optimization queries in DuckDB">
-<meta property="og:description" content="DeciDB adds a DECIDE clause to DuckDB: state decisions, constraints and a goal in SQL and get the best values back as rows. Nine problem classes are answered without a solver; the rest go to Gurobi or HiGHS.">
+<meta property="og:description" content="DeciDB adds a DECIDE clause to DuckDB: state decisions, constraints and a goal in SQL and get the best values back as rows. Query rewriting answers nine problem classes without a solver; the rest go to Gurobi or HiGHS.">
 <meta property="og:image" content="assets/images/share.jpg">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="assets/images/mark.svg" type="image/svg+xml">
@@ -38,8 +39,8 @@
   --display-tracking: -0.035em;
   --display-tracking-xl: -0.045em;
 }
-/* the evening grade (a tech page may take it): the head script sets data-theme from the nav's switch (remembered) or the
-   visitor's setting; the page tokens go dark, the lit ground (sage) and the panels' painted grounds stay light, as the
+/* the evening grade (a tech page may take it): light is the default; the nav's switch sets data-theme to dark and the
+   head script remembers it; the page tokens go dark, the lit ground (sage) and the panels' painted grounds stay light, as the
    kit keeps them */
 :root[data-theme="dark"] {
   --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
@@ -49,7 +50,6 @@
 }
 </style>
 <link rel="stylesheet" href="assets/css/site.css">
-<script>document.documentElement.classList.add('m-enter');setTimeout(()=>document.documentElement.classList.add('m-enter-done'),700)</script>
 <script src="assets/backgrounds/backgrounds.js"></script>
 <script>document.documentElement.classList.add('mo-js');setTimeout(()=>document.documentElement.classList.add('mo-safe'),2500)</script>
 <link rel="modulepreload" href="assets/moments/moments.js">
@@ -62,17 +62,19 @@
      deal: hero centred, palette white-link-blue (a white sheet and a biro blue, the blue of DeciDB's own
      logo, for a tool whose answers are tables of numbers), type geist, radius sharp, nav mega (nav-cards
      dealt first; it needs two to four products and DeciDB is one), close word, footer statement, rhythm
-     space, buttons pill, mark: DeciDB's own logo, lit ground sage, grounds statement bg-mist and faq bg-band,
+     space, buttons pill, mark: DeciDB's own logo, lit ground sage, ground statement bg-mist,
      effect grain-gradient in the hero frame, card ground painterly-landscape
      moments: liquid-type in #statement (the one sentence that sums DeciDB up answers the pointer)
      motion: hero entrance (the name first, then what to do); the window's result rows arrive (a query
-     returning its rows); the first card's rows arrive; hover on every link and button -->
+     returning its rows); hover on every link and button
+     sections, in the order of the live site: hero, why in the database, the three clauses, problems, novel
+     features (query rewriting, DIAGNOSE), built on DuckDB, get started -->
 <header class="nav">
   <div class="wrap nav__bar">
     <a class="skip-link" href="#top">Skip to content</a>
     <a class="nav__logo" href="index.html"><img class="logo logo--light" src="assets/images/logo.svg" alt="DeciDB" width="140" height="42"><img class="logo logo--dark" src="assets/images/logo-dark.svg" alt="DeciDB" width="140" height="42" loading="lazy"><img class="logo logo--mark" src="assets/images/mark.svg" alt="DeciDB" width="40" height="32" loading="lazy"></a>
     <nav class="nav__links" aria-label="Main">
-      <div class="nav__item"><a class="nav__link" href="documentation.html">Guide</a></div><div class="nav__item"><a class="nav__link" href="problems.html">Problems</a></div><div class="nav__item"><a class="nav__link" href="examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Without a solver</p><a href="examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="problems.html#direct-solve"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Direct solve</span><span class="t-small muted">Nine classes, no solver called</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="about.html">About</a></div>
+      <div class="nav__item"><a class="nav__link" href="getting-started.html">Get started</a></div><div class="nav__item"><a class="nav__link" href="documentation.html">Guide</a></div><div class="nav__item"><a class="nav__link" href="examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Query rewriting</p><a href="examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="features.html"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="about.html">About</a></div><div class="nav__item"><a class="nav__link" href="features.html">Novel features</a></div>
     </nav>
     <div class="nav__actions">
       <button class="btn btn--secondary theme-toggle" type="button" aria-pressed="false" data-theme-toggle hidden><svg class="theme-toggle__sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="theme-toggle__moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg><span class="theme-toggle__label">Dark theme</span></button>
@@ -96,7 +98,7 @@
         <div class="ly-piece ui ui-hw hw" role="img" aria-label="A DeciDB session: the knapsack query takes the laptop, camera and lens, worth 235 at 42 kg of the 50 allowed. Beside it, a list of other example problems.">
           <div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · knapsack.sql</span><span class="hw__sp"></span><span class="hw__meta">in-memory</span></div>
           <div class="hw__body">
-            <div class="hw__list"><div class="hw__q">Examples</div><div class="hw__row is-on"><b>Knapsack</b><span>ILP</span></div><div class="hw__row"><b>Production plan</b><span>ILP</span></div><div class="hw__row"><b>Depots</b><span>MILP</span></div><div class="hw__row"><b>Fair allocation</b><span>direct solve R4</span></div><div class="hw__row"><b>Matching</b><span>direct solve O1</span></div></div>
+            <div class="hw__list"><div class="hw__q">Examples</div><div class="hw__row is-on"><b>Knapsack</b><span>ILP</span></div><div class="hw__row"><b>Production plan</b><span>ILP</span></div><div class="hw__row"><b>Depots</b><span>MILP</span></div><div class="hw__row"><b>Fair allocation</b><span>rewritten</span></div><div class="hw__row"><b>Matching</b><span>rewritten</span></div></div>
             <div class="hw__main">
               <pre class="hw__sql"><code><span class="tk-k">SELECT</span> item, value, weight, x <span class="tk-k">AS</span> take
 <span class="tk-k">FROM</span> Items
@@ -110,98 +112,46 @@
       </div>
     </div></div>
   </section>
-  <section class="section g2m pair" id="language" aria-labelledby="language-h">
+  <section class="section g2m pair" id="why" aria-labelledby="why-h">
     <div class="wrap grid">
       <div class="group">
-        <div class="section-head"><h2 id="language-h">Write the model in SQL. <span class="muted">Decisions, rules and the goal sit in one DECIDE query.</span></h2></div>
+        <div class="section-head"><h2 id="why-h">Why optimization belongs in the database</h2></div>
           <article class="card card--row card--open span-6 m-nolift">
-            <h3>Declares one decision per key</h3>
-            <p><code>per n: keep(BOOL)</code> gives each nurse one decision, shared by every shift row the join returns.</p>
-            <div class="panel" data-fx="painterly-landscape" data-fx-seed="21" data-fx-palette='{"bg":"#a3b0b6","accent":"#c49a6c"}' data-fx-params='{"blur":1,"brush":0.35,"slope":0,"hillY":0.3,"horizon":0.62,"drift":0,"speed":0}' style="background-color: #a3b0b6">
-              <div class="stage stage--fade-b" role="img" aria-label="A keyed DECIDE query over nurses and their shifts keeps Bob, Carol, Dan: one value per nurse."><div class="at-rise fit" style="--fit-max:420px;--ax:max(24px, 50% - 210px);--ay:44px;--ay-sm:20px">
-                <div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">DECIDE</span> <span class="tk-p">per</span> n: keep(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(keep * s.hours) &lt;= <span class="tk-n">60</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-p">per</span> n: keep * n.skill_score)</code></pre><div class="sq__out" data-ly-steps="520"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">name</span><span class="r">keep</span></div><div class="sq__tr" data-step><span class="">Alice</span><span class="r">0</span></div><div class="sq__tr is-on" data-step><span class="">Bob</span><span class="r">1</span></div><div class="sq__tr is-on" data-step><span class="">Carol</span><span class="r">1</span></div><div class="sq__tr is-on" data-step><span class="">Dan</span><span class="r">1</span></div></div></div></div>
+            <h3>Without DeciDB</h3>
+            <p>Read the rows out, rebuild the problem in a solver library, solve it, and load the answer back in.</p>
+            <div class="panel" data-fx="painterly-landscape" data-fx-seed="31" data-fx-palette='{"bg":"#c6d3df","surface":"#d6e0e9","ink":"#25303a","accent":"#7f9fbd"}' data-fx-params='{"drift":0,"speed":0}' style="background-color: #c6d3df">
+              <div class="stage" role="img" aria-label="Thirteen lines of Python: read the items from DuckDB, build a PuLP model with one binary variable per item, solve it, and insert the answer into a new table."><div class="at-rise fit" style="--fit-max:520px;--ax:max(24px, 50% - 260px);--ay:32px;--ay-sm:20px">
+                <div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">import</span> duckdb, pulp
+
+rows = duckdb.sql(<span class="tk-s">&quot;SELECT * FROM Items&quot;</span>).fetchall()
+
+bag = pulp.LpProblem(<span class="tk-s">&quot;bag&quot;</span>, pulp.LpMaximize)
+take = {i: pulp.LpVariable(i, cat=<span class="tk-s">&quot;Binary&quot;</span>) <span class="tk-k">for</span> i, _, _ <span class="tk-k">in</span> rows}
+bag += pulp.lpSum(v * take[i] <span class="tk-k">for</span> i, v, _ <span class="tk-k">in</span> rows)
+bag += pulp.lpSum(w * take[i] <span class="tk-k">for</span> i, _, w <span class="tk-k">in</span> rows) &lt;= 50
+bag.solve()
+
+answer = [(i, round(take[i].value())) <span class="tk-k">for</span> i, _, _ <span class="tk-k">in</span> rows]
+duckdb.sql(<span class="tk-s">&quot;CREATE TABLE Answer (item VARCHAR, take INT)&quot;</span>)
+duckdb.executemany(<span class="tk-s">&quot;INSERT INTO Answer VALUES (?, ?)&quot;</span>, answer)</code></pre></div>
               </div></div>
             </div>
           </article>
       </div>
       <div class="group">
           <article class="card card--row card--open span-6 m-nolift">
-            <h3>Limits a constraint to the rows it names</h3>
-            <p><code>when</code> picks the rows a constraint reads. Here the bag takes at most one tech item.</p>
-            <div class="panel" data-fx="painterly-landscape" data-fx-seed="22" data-fx-palette='{"bg":"#cdd6c6","surface":"#dce3d6","ink":"#262d24","accent":"#6c8e63"}' data-fx-params='{"drift":0,"speed":0}' style="background-color: #cdd6c6">
-              <div class="stage stage--fade-b" role="img" aria-label="With at most one tech item, DeciDB takes Laptop, Tripod, Lens."><div class="at-rise fit" style="--fit-max:420px;--ax:max(24px, 50% - 210px);--ay:44px;--ay-sm:20px">
-                <div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">50</span>
-  <span class="tk-k">AND</span> <span class="tk-p">when</span> category = <span class="tk-s">&#x27;tech&#x27;</span>: <span class="tk-f">SUM</span>(x) &lt;= <span class="tk-n">1</span></code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(2, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">item</span><span class="">category</span><span class="r">x</span></div><div class="sq__tr is-on"><span class="">Laptop</span><span class="">tech</span><span class="r">1</span></div><div class="sq__tr"><span class="">Camera</span><span class="">tech</span><span class="r">0</span></div><div class="sq__tr"><span class="">Drone</span><span class="">tech</span><span class="r">0</span></div><div class="sq__tr is-on"><span class="">Tripod</span><span class="">gear</span><span class="r">1</span></div><div class="sq__tr is-on"><span class="">Lens</span><span class="">gear</span><span class="r">1</span></div></div></div></div>
-              </div></div>
-            </div>
-          </article>
-      </div>
-    </div>
-  </section>
-  <section class="section g2m pair" id="checks" aria-labelledby="checks-h">
-    <div class="wrap grid">
-      <div class="group">
-        <div class="section-head"><h2 id="checks-h">When a query cannot be answered</h2></div>
-          <article class="card card--row card--open span-6 m-nolift">
-            <h3>Refuses a constraint the data cannot decide</h3>
-            <p>A depot ships several rows, so a cap per depot on a decision per row stops before solving.</p>
-            <div class="panel" data-fx="painterly-landscape" data-fx-seed="23" data-fx-palette='{"bg":"#c6d3df","surface":"#d6e0e9","ink":"#25303a","accent":"#7f9fbd"}' data-fx-params='{"drift":0,"speed":0}' style="background-color: #c6d3df">
-              <div class="stage stage--fade-b" role="img" aria-label="The query stops with: DECIDE: per D.depotID does not determine the decision ship (declared per row). D.depotID = &#x27;D1&#x27; covers more than one ship."><div class="at-rise fit" style="--fit-max:420px;--ax:max(24px, 50% - 210px);--ay:44px;--ay-sm:20px">
-                <div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">DECIDE</span> ship(<span class="tk-k">INT</span>)
-<span class="tk-k">SUCH THAT</span> ... <span class="tk-k">AND</span> <span class="tk-p">per</span> D.depotID: ship &lt;= <span class="tk-n">10</span></code></pre><div class="sq__err"><b>Error</b> DECIDE: per D.depotID does not determine the decision ship (declared per row). D.depotID = &#x27;D1&#x27; covers more than one ship.</div></div>
-              </div></div>
-            </div>
-          </article>
-      </div>
-      <div class="group">
-          <article class="card card--row card--open span-6 m-nolift">
-            <h3>Explains a query with no answer</h3>
-            <p><code>DIAGNOSE</code> returns the clause to change and by how much: here, a weight limit of 57 instead of 40.</p>
-            <div class="panel" data-fx="painterly-landscape" data-fx-seed="24" data-fx-palette='{"bg":"#cdd6c6","surface":"#dce3d6","ink":"#262d24","accent":"#6c8e63"}' data-fx-params='{"drift":0,"speed":0}' style="background-color: #cdd6c6">
-              <div class="stage stage--fade-b" role="img" aria-label="DIAGNOSE suggests changing SUM(x * weight) &lt;= 40 to SUM(x * weight) &lt;= 57, which reaches an objective of 275."><div class="at-rise fit" style="--fit-max:420px;--ax:max(24px, 50% - 210px);--ay:44px;--ay-sm:20px">
-                <div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">DIAGNOSE</span>
-<span class="tk-k">SELECT</span> item, x <span class="tk-k">FROM</span> Items
+            <h3>With DeciDB</h3>
+            <p>One query over the table. The answer comes back as rows, ready to join with the rest of your data.</p>
+            <div class="panel" data-fx="painterly-landscape" data-fx-seed="32" data-fx-palette='{"bg":"#cdd6c6","surface":"#dce3d6","ink":"#262d24","accent":"#6c8e63"}' data-fx-params='{"drift":0,"speed":0}' style="background-color: #cdd6c6">
+              <div class="stage" role="img" aria-label="One DECIDE query over the same table; it returns every item with take set to 1 for the Laptop, Camera, Lens."><div class="at-rise fit" style="--fit-max:520px;--ax:max(24px, 50% - 260px);--ay:32px;--ay-sm:20px">
+                <div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">SELECT</span> item, value, weight, x <span class="tk-k">AS</span> take
+<span class="tk-k">FROM</span> Items
 <span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">40</span>
-  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(x) &gt;= <span class="tk-n">4</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 3fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">suggested_change</span><span class="r">amount</span></div><div class="sq__tr"><span class="">SUM(x * weight) &lt;= 57</span><span class="r">17</span></div></div></div></div>
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">50</span>
+<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">item</span><span class="r">value</span><span class="r">weight</span><span class="r">take</span></div><div class="sq__tr is-on"><span class="">Laptop</span><span class="r">100</span><span class="r">20</span><span class="r">1</span></div><div class="sq__tr is-on"><span class="">Camera</span><span class="r">60</span><span class="r">10</span><span class="r">1</span></div><div class="sq__tr"><span class="">Drone</span><span class="r">120</span><span class="r">30</span><span class="r">0</span></div><div class="sq__tr"><span class="">Tripod</span><span class="r">40</span><span class="r">15</span><span class="r">0</span></div><div class="sq__tr is-on"><span class="">Lens</span><span class="r">75</span><span class="r">12</span><span class="r">1</span></div></div></div></div>
               </div></div>
             </div>
           </article>
-        <p class="group__end"><a class="link" href="documentation.html#scopes">Read about scopes<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a></p>
-      </div>
-    </div>
-  </section>
-  <section class="section split m2" id="direct" aria-labelledby="direct-h">
-    <div class="wrap grid grid--top">
-      <div class="span-5 split-col">
-        <h2 id="direct-h">9 problem classes skip the solver</h2>
-        <p class="t-lead">When a query matches a class with an exact answer, DeciDB computes it with DuckDB's own sorting and aggregation. The query stays the same, and <code>EXPLAIN</code> names the rule.</p>
-        <ul class="facts">
-          <li>Fair allocation over 800,000 decisions: 0.026 s, where Gurobi took 2,158 s</li>
-          <li>Faster than Gurobi in all nine classes, at every size measured</li>
-          <li><code>SET decide_direct_solve = 'off'</code> sends a query back to the solver</li>
-        </ul>
-        <p class="split-col__end"><a class="link" href="problems.html#direct-solve">See all 9 classes<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a></p>
-      </div>
-      <div class="frame frame--split frame--lit span-6 start-7">
-        <div class="stage stage--fade-b" role="img" aria-label="EXPLAIN on a fair-allocation query names the direct-solve rule R4_MAX_MIN_FAIRNESS and the condition it checked; run without EXPLAIN, the query gives each program its share.">
-          <div class="at-corner to-edge">
-            <div class="ui ui-sq sq sq--wide" aria-hidden="true">
-              <div class="sq__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · fair.sql</span></div>
-              <pre class="sq__code"><code><span class="tk-k">EXPLAIN</span> <span class="tk-k">SELECT</span> program, alloc
-<span class="tk-k">FROM</span> Programs
-<span class="tk-k">DECIDE</span> alloc(<span class="tk-k">REAL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> alloc &lt;= max_alloc
-  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(alloc) &lt;= <span class="tk-n">100</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">MIN</span>(alloc / need);</code></pre>
-              <div class="sq__explain"><div class="sq__kv"><span>Direct solve rule</span><b>R4_MAX_MIN_FAIRNESS</b></div><div class="sq__kv"><span>Direct solve condition</span><b>max MIN(c*x), 0 &lt;= x &lt;= cap, SUM(w*x) &lt;= B</b></div></div>
-              <div class="sq__run"><span class="sq__k">The same query without EXPLAIN</span><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">program</span><span class="r">alloc</span></div><div class="sq__tr"><span class="">Clinic</span><span class="r">16.67</span></div><div class="sq__tr"><span class="">Shelter</span><span class="r">25</span></div><div class="sq__tr"><span class="">School</span><span class="r">41.67</span></div><div class="sq__tr"><span class="">Pantry</span><span class="r">8.33</span></div></div></div>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   </section>
@@ -211,7 +161,67 @@
         <h2 id="statement-h" class="mo-lt__type">The query is the model</h2>
         <p>Three clauses added to a SELECT. The rows stay in DuckDB from the scan to the answer.</p>
       </div>
-      <div class="grid parts"><div class="span-4 part"><code><span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)</code><p>The decisions: one per row, per key or per query.</p></div><div class="span-4 part"><code><span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> ...</code><p>The constraints, on each row or on sums over groups.</p></div><div class="span-4 part"><code><span class="tk-k">MAXIMIZE</span> ...</code><p>The goal; leave it out to ask for any answer that fits.</p></div></div>
+      <div class="grid parts"><div class="span-4 part"><code><span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)</code><p>The decisions: what DeciDB chooses, one per row, per key or per query.</p></div><div class="span-4 part"><code><span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> ...</code><p>The constraints: the rules every answer follows, on each row or on totals.</p></div><div class="span-4 part"><code><span class="tk-k">MAXIMIZE</span> ...</code><p>The objective: what makes an answer best. Leave it out to ask for any answer that fits.</p></div></div>
+      <p class="group__end"><a class="link" href="documentation.html">Read the guide, clause by clause<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a></p>
+    </div>
+  </section>
+  <section class="section" id="problems" aria-labelledby="problems-h">
+    <div class="wrap">
+      <div class="section-head">
+        <h2 id="problems-h">Problems DeciDB solves. <span class="muted">Choosing and allocating over rows.</span></h2>
+      </div>
+      <div class="grid probs fill"><a class="prob span-3" href="examples/knapsack.html"><h3>Budget constraints</h3><p>Pick rows under a weight or cost limit.</p><div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">50</span>
+<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value)</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">item</span><span class="r">take</span></div><div class="sq__tr is-on"><span class="">Laptop</span><span class="r">1</span></div><div class="sq__tr is-on"><span class="">Camera</span><span class="r">1</span></div><div class="sq__tr"><span class="">Drone</span><span class="r">0</span></div><div class="sq__tr"><span class="">Tripod</span><span class="r">0</span></div><div class="sq__tr is-on"><span class="">Lens</span><span class="r">1</span></div></div></div></div></a><a class="prob span-3" href="examples/production.html"><h3>Production plans</h3><p>How much each plant makes.</p><div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">DECIDE</span> units(<span class="tk-k">INT</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> units &lt;= capacity
+  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(units) &gt;= <span class="tk-n">500</span>
+<span class="tk-k">MINIMIZE</span> <span class="tk-f">SUM</span>(units * unit_cost)</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">plant</span><span class="r">units</span></div><div class="sq__tr"><span class="">Austin</span><span class="r">0</span></div><div class="sq__tr is-on"><span class="">Boston</span><span class="r">200</span></div><div class="sq__tr is-on"><span class="">Chicago</span><span class="r">150</span></div><div class="sq__tr is-on"><span class="">Denver</span><span class="r">150</span></div></div></div></div></a><a class="prob span-3" href="examples/assignment.html"><h3>Assignment decisions</h3><p>One person for every task.</p><div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">DECIDE</span> assign(<span class="tk-k">BOOL</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-p">per</span> task:
+  <span class="tk-f">SUM</span>(assign) <span class="tk-p">by</span> (task) = <span class="tk-n">1</span>
+<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(assign * score)</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">task</span><span class="">worker</span></div><div class="sq__tr"><span class="">Backend</span><span class="">Ana</span></div><div class="sq__tr"><span class="">Data</span><span class="">Cleo</span></div><div class="sq__tr"><span class="">Frontend</span><span class="">Ben</span></div></div></div></div></a><a class="prob span-3" href="examples/facility-location.html"><h3>Depot decisions</h3><p>Which depots open, and what ships.</p><div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">DECIDE</span> <span class="tk-p">per</span> D: open(<span class="tk-k">BOOL</span>), ...
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-p">per</span> D: <span class="tk-f">SUM</span>(ship)
+  <span class="tk-p">by</span> (D) &lt;= D.capacity * open
+<span class="tk-k">MINIMIZE</span> ... +
+  <span class="tk-f">SUM</span>(D: D.opening_cost * open)</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">depotID</span><span class="r">open</span></div><div class="sq__tr"><span class="">D1</span><span class="r">0</span></div><div class="sq__tr is-on"><span class="">D2</span><span class="r">1</span></div><div class="sq__tr is-on"><span class="">D3</span><span class="r">1</span></div></div></div></div></a></div>
+      <p class="group__end"><a class="link" href="examples.html">See all 20 examples<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a></p>
+    </div>
+  </section>
+  <section class="section g2m pair" id="novel" aria-labelledby="novel-h">
+    <div class="wrap grid">
+      <div class="group">
+        <div class="section-head"><h2 id="novel-h">Novel features. <span class="muted">Two things a solver library does not do.</span></h2></div>
+          <article class="card card--row card--open span-6 m-nolift">
+            <h3>Query rewriting</h3>
+            <p>A query with an exact answer, such as a fair split of a budget, runs as sorting and aggregation in DuckDB, with no solver: 0.026 s at 800,000 decisions, where Gurobi took 2,158 s.</p>
+            <div class="panel" data-fx="painterly-landscape" data-fx-seed="41" data-fx-palette='{"bg":"#a3b0b6","accent":"#c49a6c"}' data-fx-params='{"blur":1,"brush":0.35,"slope":0,"hillY":0.3,"horizon":0.62,"drift":0,"speed":0}' style="background-color: #a3b0b6">
+              <div class="stage" role="img" aria-label="A fair-allocation query, and the line EXPLAIN prints for it: Direct solve rule R4_MAX_MIN_FAIRNESS."><div class="at-rise fit" style="--fit-max:420px;--ax:max(24px, 50% - 210px);--ay:32px;--ay-sm:20px">
+                <div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">SELECT</span> program, alloc
+<span class="tk-k">FROM</span> Programs
+<span class="tk-k">DECIDE</span> alloc(<span class="tk-k">REAL</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> alloc &lt;= max_alloc
+  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(alloc) &lt;= <span class="tk-n">100</span>
+<span class="tk-k">MAXIMIZE</span> <span class="tk-f">MIN</span>(alloc / need);</code></pre><div class="sq__explain"><div class="sq__kv"><span>EXPLAIN</span><b>Direct solve rule: R4_MAX_MIN_FAIRNESS</b></div></div></div>
+              </div></div>
+            </div>
+          </article>
+      </div>
+      <div class="group">
+          <article class="card card--row card--open span-6 m-nolift">
+            <h3>DIAGNOSE for a query with no answer</h3>
+            <p>Put it in front of the query and it returns the clause to change and by how much: here, a weight limit of 57 instead of 40.</p>
+            <div class="panel" data-fx="painterly-landscape" data-fx-seed="42" data-fx-palette='{"bg":"#cdd6c6","surface":"#dce3d6","ink":"#262d24","accent":"#6c8e63"}' data-fx-params='{"drift":0,"speed":0}' style="background-color: #cdd6c6">
+              <div class="stage" role="img" aria-label="DIAGNOSE suggests changing SUM(x * weight) &lt;= 40 to SUM(x * weight) &lt;= 57, which reaches an objective of 275."><div class="at-rise fit" style="--fit-max:420px;--ax:max(24px, 50% - 210px);--ay:32px;--ay-sm:20px">
+                <div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">DIAGNOSE</span>
+<span class="tk-k">SELECT</span> item, x <span class="tk-k">FROM</span> Items
+<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">40</span>
+  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(x) &gt;= <span class="tk-n">4</span>
+<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 3fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">suggested_change</span><span class="r">amount</span></div><div class="sq__tr"><span class="">SUM(x * weight) &lt;= 57</span><span class="r">17</span></div></div></div></div>
+              </div></div>
+            </div>
+          </article>
+        <p class="group__end"><a class="link" href="features.html">Read about query rewriting and DIAGNOSE<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a></p>
+      </div>
     </div>
   </section>
   <section class="section split m2" id="solvers" aria-labelledby="solvers-h">
@@ -220,29 +230,15 @@
         <h2 id="solvers-h">Built on DuckDB, solved by Gurobi or HiGHS</h2>
         <p class="t-lead">DeciDB is DuckDB with the DECIDE clause added, so it reads the same tables and files. HiGHS ships in every build; Gurobi is used when its license is present.</p>
         <ul class="facts">
+          <li>The data never leaves DuckDB: the model is built from the query's own rows</li>
           <li>Python: <code>pip install decidb</code>, with DuckDB's API</li>
           <li>A command-line shell for macOS, Linux and Windows</li>
-          <li>LP, MILP and convex QP on HiGHS; non-convex QP, MIQP and QCQP need Gurobi</li>
+          <li>You state the rules and the goal; DeciDB writes the model the solver reads</li>
         </ul>
-        <p class="split-col__end"><a class="link" href="problems.html#classes">See solvers by class<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a></p>
+        <p class="split-col__end"><a class="link" href="documentation.html#solvers">See which solver takes what<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a></p>
       </div>
       <div class="frame frame--split frame--lit span-6 start-7 dg-frame">
         <div class="dg" data-diagram data-dg-still><script type="application/json">{"layout": "hub", "alt": "DeciDB at the centre, reading DuckDB tables and Parquet files, solving with Gurobi or HiGHS, called from Python or the command line.", "center": {"label": "DeciDB"}, "motion": {"pulse": "none"}, "spokes": [{"label": "DuckDB", "icon": "si:duckdb"}, {"label": "Parquet", "icon": "si:apacheparquet"}, {"label": "Gurobi", "icon": "si:gurobi"}, {"label": "HiGHS", "icon": "ui:sigma"}, {"label": "Python", "icon": "python"}, {"label": "Command line", "icon": "ui:terminal"}]}</script></div>
-      </div>
-    </div>
-  </section>
-  <section class="section bg-band bg-bleed g2m" id="faq" aria-labelledby="faq-h">
-    <div class="wrap">
-      <div class="grid grid--top">
-        <div class="span-5 stack-4">
-          <h2 id="faq-h">Questions</h2>
-          <p class="t-lead">On solvers, releases and what happens when a model has no answer.</p>
-          <p><a class="link" href="https://github.com/huda-lab/decidb/issues">Ask on GitHub<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a></p>
-        </div>
-        <div class="span-6 start-7 faq"><div class="faq__item"><h3>Do I need a Gurobi license?</h3><p>No. HiGHS is bundled and solves LP, MILP and convex QP. With a Gurobi license, DeciDB also takes non-convex and mixed-integer quadratic models.</p></div></div>
-      </div>
-      <div class="grid grid--top">
-        <div class="span-6 start-7 faq faq--more"><div class="faq__item"><h3>Does ordinary DuckDB SQL still work?</h3><p>Yes. DeciDB is DuckDB with one more clause; a query without DECIDE runs as it does in DuckDB.</p></div><div class="faq__item"><h3>What happens when no answer meets every constraint?</h3><p>The query stops and says so. Put DIAGNOSE in front of it to see which clause to change and by how much.</p></div><div class="faq__item"><h3>Can I see the optimization model it builds?</h3><p>Yes. EXPLAIN shows the DECIDE node with its variables, constraints and objective, and the direct-solve rule when one applies.</p></div><div class="faq__item"><h3>Does release 0.2 run the queries on this site?</h3><p>No. Release 0.2 uses the earlier spellings, such as a postfix PER. The guide&#x27;s migration table lists each change.</p></div></div>
       </div>
     </div>
   </section>
@@ -262,7 +258,7 @@
           <a class="nav__logo" href="index.html"><img src="assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
           <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
         </div>
-        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="getting-started.html">Install</a></li><li><a href="documentation.html">Guide</a></li><li><a href="problems.html">Problems</a></li><li><a href="examples.html">Examples</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="getting-started.html">Get started</a></li><li><a href="documentation.html">Guide</a></li><li><a href="features.html">Novel features</a></li><li><a href="examples.html">Examples</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="examples/knapsack.html">Knapsack</a></li><li><a href="examples/facility-location.html">Depots</a></li><li><a href="examples/fair-allocation.html">Fair allocation</a></li><li><a href="examples/diagnose.html">DIAGNOSE</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Project</h3><ul><li><a href="about.html">About</a></li><li><a href="about.html#research">Papers</a></li><li><a href="https://github.com/huda-lab/decidb">GitHub</a></li><li><a href="https://huda-lab.github.io/">HUDA Lab</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Contact</h3><ul><li><a href="mailto:support@decidb.com">Email the team</a></li><li><a href="https://github.com/huda-lab/decidb/issues">Report an issue</a></li></ul></div>

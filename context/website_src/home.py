@@ -16,15 +16,6 @@ DECIDE x(BOOL)
 SUCH THAT SUM(x * weight) <= 50
 MAXIMIZE SUM(x * value);"""
 
-TECH_LIMIT = """SELECT item, category, x
-FROM Items
-DECIDE x(BOOL)
-SUCH THAT SUM(x * weight) <= 50
-  AND when category = 'tech': SUM(x) <= 1
-MAXIMIZE SUM(x * value);"""
-
-PER_DEPOT = "per D.depotID: ship <= 10"
-
 DIAGNOSE = """DIAGNOSE
 SELECT item, x FROM Items
 DECIDE x(BOOL)
@@ -86,7 +77,7 @@ def hero(b, ex_by_slug):
     items = []
     for slug, name in WINDOW_LIST:
         ex = ex_by_slug[slug]
-        how = f'direct solve {ex["direct"].split("_")[0]}' if ex.get("direct") else ex["class"]
+        how = "rewritten" if ex.get("direct") else ex["class"]
         on = " is-on" if slug == "knapsack" else ""
         items.append(f'<div class="hw__row{on}"><b>{esc(name)}</b><span>{esc(how)}</span></div>')
     status = (
@@ -123,168 +114,193 @@ SAGE = '{"bg":"#cdd6c6","surface":"#dce3d6","ink":"#262d24","accent":"#6c8e63"}'
 SKY = '{"bg":"#c6d3df","surface":"#d6e0e9","ink":"#25303a","accent":"#7f9fbd"}'
 STILL = '{"drift":0,"speed":0}'
 
+# the same bag, solved the usual way: read the rows out, model them in a solver library, write the answer back
+# (checked by hand with PuLP 2.9 on the Items table: it takes the laptop, camera and lens, as the DECIDE query does)
+WITHOUT = """import duckdb, pulp
 
-def card(title, line, seed, palette, params, label, inner):
+rows = duckdb.sql("SELECT * FROM Items").fetchall()
+
+bag = pulp.LpProblem("bag", pulp.LpMaximize)
+take = {i: pulp.LpVariable(i, cat="Binary") for i, _, _ in rows}
+bag += pulp.lpSum(v * take[i] for i, v, _ in rows)
+bag += pulp.lpSum(w * take[i] for i, _, w in rows) <= 50
+bag.solve()
+
+answer = [(i, round(take[i].value())) for i, _, _ in rows]
+duckdb.sql("CREATE TABLE Answer (item VARCHAR, take INT)")
+duckdb.executemany("INSERT INTO Answer VALUES (?, ?)", answer)"""
+
+# the problems on the home page: one of each kind, each linking to its example page, with lines from its query and
+# the columns of its answer that show the decision (a column repeated across a key's rows is shown once per key)
+PROBLEMS = [
+    (
+        "knapsack",
+        "Budget constraints",
+        "Pick rows under a weight or cost limit.",
+        "DECIDE x(BOOL)\nSUCH THAT SUM(x * weight) <= 50\nMAXIMIZE SUM(x * value)",
+        ["item", "take"],
+    ),
+    (
+        "production",
+        "Production plans",
+        "How much each plant makes.",
+        "DECIDE units(INT)\nSUCH THAT units <= capacity\n  AND SUM(units) >= 500\nMINIMIZE SUM(units * unit_cost)",
+        ["plant", "units"],
+    ),
+    (
+        "assignment",
+        "Assignment decisions",
+        "One person for every task.",
+        "DECIDE assign(BOOL)\nSUCH THAT per task:\n  SUM(assign) by (task) = 1\nMAXIMIZE SUM(assign * score)",
+        ["task", "worker"],
+    ),
+    (
+        "facility-location",
+        "Depot decisions",
+        "Which depots open, and what ships.",
+        "DECIDE per D: open(BOOL), ...\nSUCH THAT per D: SUM(ship)\n  by (D) <= D.capacity * open\nMINIMIZE ... +\n  SUM(D: D.opening_cost * open)",
+        ["depotID", "open"],
+    ),
+]
+
+
+def card(title, line, seed, palette, params, label, inner, fit=420):
+    """An open card: its title and line on the page, and under them a painted panel holding a drawn pane whole."""
     return f"""
           <article class="card card--row card--open span-6 m-nolift">
             <h3>{title}</h3>
             <p>{line}</p>
             <div class="panel" data-fx="painterly-landscape" data-fx-seed="{seed}" data-fx-palette='{palette}' data-fx-params='{params}' style="background-color: {json.loads(palette)['bg']}">
-              <div class="stage stage--fade-b" role="img" aria-label="{esc(label)}"><div class="at-rise fit" style="--fit-max:420px;--ax:max(24px, 50% - 210px);--ay:44px;--ay-sm:20px">
+              <div class="stage" role="img" aria-label="{esc(label)}"><div class="at-rise fit" style="--fit-max:{fit}px;--ax:max(24px, 50% - {fit // 2}px);--ay:32px;--ay-sm:20px">
                 {inner}
               </div></div>
             </div>
           </article>"""
 
 
-def language(b, ex_by_slug, fx):
-    keyed = ex_by_slug["keyed-decisions"]
-    krows = b.rows_of("index.html language", keyed["setup"], keyed["query"])
-    seen, pairs = set(), []
-    for r in krows:
-        if r["name"] not in seen:
-            seen.add(r["name"])
-            pairs.append({"name": r["name"], "keep": r["keep"]})
-    kept = [p["name"] for p in pairs if p["keep"]]
-    key_sql = "DECIDE per n: keep(BOOL)\nSUCH THAT SUM(keep * s.hours) <= 60\nMAXIMIZE SUM(per n: keep * n.skill_score)"
-    c1 = card(
-        "Declares one decision per key",
-        "<code>per n: keep(BOOL)</code> gives each nurse one decision, shared by every shift row the join returns.",
-        21,
-        PAINT,
-        PAINT_PARAMS,
-        f"A keyed DECIDE query over nurses and their shifts keeps {', '.join(kept)}: one value per nurse.",
-        f'<div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code>{b.hl_sql(key_sql)}</code></pre>'
-        f'<div class="sq__out" data-ly-steps="520">{grid(["name", "keep"], pairs, mark="keep", steps=True)}</div></div>',
-    )
+def cards(name, heading, items, link=""):
+    """A section of cards under one heading: side by side on a laptop (the groups dissolve into the section's
+    grid), and on a phone the heading with the first half, then the rest, one screen each."""
+    half = (len(items) + 1) // 2
+    end = f'\n        <p class="group__end">{link}</p>' if link else ""
+    return f"""
+  <section class="section g2m pair" id="{name}" aria-labelledby="{name}-h">
+    <div class="wrap grid">
+      <div class="group">
+        <div class="section-head"><h2 id="{name}-h">{heading}</h2></div>{"".join(items[:half])}
+      </div>
+      <div class="group">{"".join(items[half:])}{end}
+      </div>
+    </div>
+  </section>"""
 
-    trows = b.rows_of("index.html language", fx["items"]["setup"], TECH_LIMIT)
-    when_sql = "SUCH THAT SUM(x * weight) <= 50\n  AND when category = 'tech': SUM(x) <= 1"
-    c2 = card(
-        "Limits a constraint to the rows it names",
-        "<code>when</code> picks the rows a constraint reads. Here the bag takes at most one tech item.",
-        22,
-        SAGE,
-        STILL,
-        "With at most one tech item, DeciDB takes " + ", ".join(r["item"] for r in trows if r["x"]) + ".",
-        f'<div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code>{b.hl_sql(when_sql)}</code></pre>'
-        f'<div class="sq__out">{grid(["item", "category", "x"], trows, mark="x")}</div></div>',
-    )
 
-    deck = fx["deck"]
-    message = b.error_of(
-        "index.html language", deck["setup"], deck["template"].replace("{CLAUSES}", PER_DEPOT), "does not determine"
-    )
-    message = message.replace("Invalid Input Error: ", "")
-    c3 = card(
-        "Refuses a constraint the data cannot decide",
-        "A depot ships several rows, so a cap per depot on a decision per row stops before solving.",
-        23,
+def why(b, ex_by_slug):
+    rows = b.rows_of("index.html why", ex_by_slug["knapsack"]["setup"], KNAPSACK)
+    taken = [r["item"] for r in rows if r["take"]]
+    without = card(
+        "Without DeciDB",
+        "Read the rows out, rebuild the problem in a solver library, solve it, and load the answer back in.",
+        31,
         SKY,
         STILL,
-        "The query stops with: " + message,
-        f'<div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code>{b.hl_sql("DECIDE ship(INT)")}\n'
-        f'<span class="tk-k">SUCH THAT</span> ... <span class="tk-k">AND</span> {b.hl_sql(PER_DEPOT)}</code></pre>'
-        f'<div class="sq__err"><b>Error</b> {esc(message)}</div></div>',
+        "Thirteen lines of Python: read the items from DuckDB, build a PuLP model with one binary variable per item, "
+        "solve it, and insert the answer into a new table.",
+        f'<div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code>{b.highlight(WITHOUT, "python")}</code></pre></div>',
+        fit=520,
+    )
+    with_ = card(
+        "With DeciDB",
+        "One query over the table. The answer comes back as rows, ready to join with the rest of your data.",
+        32,
+        SAGE,
+        STILL,
+        f"One DECIDE query over the same table; it returns every item with take set to 1 for the {', '.join(taken)}.",
+        f'<div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code>{b.hl_sql(KNAPSACK)}</code></pre>'
+        f'<div class="sq__out">{grid(["item", "value", "weight", "take"], rows, mark="take")}</div></div>',
+        fit=520,
+    )
+    return cards("why", "Why optimization belongs in the database", [without, with_])
+
+
+def problems(b, ex_by_slug):
+    items = []
+    for slug, title, line, lines, cols in PROBLEMS:
+        ex = ex_by_slug[slug]
+        shown, seen = [], set()
+        for r in b.rows_of("index.html problems", ex["setup"], ex["query"]):
+            row = {c: r[c] for c in cols}
+            if tuple(row.values()) not in seen:
+                seen.add(tuple(row.values()))
+                shown.append(row)
+        mark = cols[-1] if isinstance(shown[0][cols[-1]], int) else None
+        items.append(
+            f'<a class="prob span-3" href="examples/{slug}.html"><h3>{esc(title)}</h3><p>{esc(line)}</p>'
+            f'<div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code>{b.hl_sql(lines)}</code></pre>'
+            f'<div class="sq__out">{grid(cols, shown, mark=mark)}</div></div></a>'
+        )
+    items = "".join(items)
+    return f"""
+  <section class="section" id="problems" aria-labelledby="problems-h">
+    <div class="wrap">
+      <div class="section-head">
+        <h2 id="problems-h">Problems DeciDB solves. <span class="muted">Choosing and allocating over rows.</span></h2>
+      </div>
+      <div class="grid probs fill">{items}</div>
+      <p class="group__end"><a class="link" href="examples.html">See all {len(b.EX.EXAMPLES)} examples{b.ARROW}</a></p>
+    </div>
+  </section>"""
+
+
+def novel(b, ex_by_slug):
+    ex = ex_by_slug["fair-allocation"]
+    rule = b.explain_fields(ex["setup"], FAIR).get("Direct solve rule", "")
+    if not rule.startswith("R4"):
+        b.FAILURES.append(f"index.html novel: expected the R4 rewrite, got {rule!r}")
+    b.rows_of("index.html novel", ex["setup"], FAIR)
+    rewrite = card(
+        "Query rewriting",
+        "A query with an exact answer, such as a fair split of a budget, runs as sorting and aggregation in DuckDB, "
+        "with no solver: 0.026 s at 800,000 decisions, where Gurobi took 2,158 s.",
+        41,
+        PAINT,
+        PAINT_PARAMS,
+        f"A fair-allocation query, and the line EXPLAIN prints for it: Direct solve rule {rule}.",
+        f'<div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code>{b.hl_sql(FAIR)}</code></pre>'
+        f'<div class="sq__explain"><div class="sq__kv"><span>EXPLAIN</span><b>Direct solve rule: {esc(rule)}</b></div></div></div>',
     )
 
-    drows = b.rows_of("index.html language", ex_by_slug["diagnose"]["setup"], DIAGNOSE)
+    drows = b.rows_of("index.html novel", ex_by_slug["diagnose"]["setup"], DIAGNOSE)
     fix = [r for r in drows if r.get("clause")]
-    first = fix[0] if fix else {"clause": "", "suggested_change": "", "amount": 0}
+    first = fix[0] if fix else {"clause": "", "suggested_change": ""}
     target = [r for r in drows if r.get("edit_source") == "achievable_objective"]
     objective = num(target[0]["amount"]) if target else ""
     shown = [{"suggested_change": r["suggested_change"], "amount": r["amount"]} for r in fix]
     limit = re.search(r"(\d+(?:\.\d+)?)\s*$", first["suggested_change"] or "")
-    c4 = card(
-        "Explains a query with no answer",
-        "<code>DIAGNOSE</code> returns the clause to change and by how much: here, a weight limit of "
+    diagnose = card(
+        "DIAGNOSE for a query with no answer",
+        "Put it in front of the query and it returns the clause to change and by how much: here, a weight limit of "
         f"{limit.group(1) if limit else '?'} instead of 40.",
-        24,
+        42,
         SAGE,
         STILL,
         f"DIAGNOSE suggests changing {first['clause']} to {first['suggested_change']}, which reaches an objective of {objective}.",
         f'<div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code>{b.hl_sql(DIAGNOSE)}</code></pre>'
         f'<div class="sq__out">{grid(["suggested_change", "amount"], shown, lead="3fr") if shown else ""}</div></div>',
     )
-    return pair(
-        "language",
-        'Write the model in SQL. <span class="muted">Decisions, rules and the goal sit in one DECIDE query.</span>',
-        c1,
-        c2,
-    ) + pair(
-        "checks",
-        "When a query cannot be answered",
-        c3,
-        c4,
-        f'<a class="link" href="documentation.html#scopes">Read about scopes{b.ARROW}</a>',
+    return cards(
+        "novel",
+        'Novel features. <span class="muted">Two things a solver library does not do.</span>',
+        [rewrite, diagnose],
+        f'<a class="link" href="features.html">Read about query rewriting and DIAGNOSE{b.ARROW}</a>',
     )
-
-
-def pair(name, heading, first, second, link=""):
-    """A section of two cards: side by side under the heading on a tablet or a desktop (the groups dissolve
-    into the section's grid), one card a screen on a phone (each group is one of its two screens)."""
-    end = f'\n        <p class="group__end">{link}</p>' if link else ""
-    return f"""
-  <section class="section g2m pair" id="{name}" aria-labelledby="{name}-h">
-    <div class="wrap grid">
-      <div class="group">
-        <div class="section-head"><h2 id="{name}-h">{heading}</h2></div>{first}
-      </div>
-      <div class="group">{second}{end}
-      </div>
-    </div>
-  </section>"""
-
-
-def direct(b, ex_by_slug):
-    ex = ex_by_slug["fair-allocation"]
-    fields = b.explain_fields(ex["setup"], FAIR)
-    rule = fields.get("Direct solve rule", "")
-    if not rule.startswith("R4"):
-        b.FAILURES.append(f"index.html direct: expected direct solve R4, got {rule!r}")
-    rows = b.rows_of("index.html direct", ex["setup"], FAIR)
-    shown = [{"program": r["program"], "alloc": round(r["alloc"], 2)} for r in rows]
-    explain = "".join(
-        f'<div class="sq__kv"><span>{esc(k)}</span><b>{esc(v)}</b></div>'
-        for k, v in (
-            ("Direct solve rule", rule),
-            ("Direct solve condition", fields.get("Direct solve condition", "")),
-        )
-    )
-    return f"""
-  <section class="section split m2" id="direct" aria-labelledby="direct-h">
-    <div class="wrap grid grid--top">
-      <div class="span-5 split-col">
-        <h2 id="direct-h">9 problem classes skip the solver</h2>
-        <p class="t-lead">When a query matches a class with an exact answer, DeciDB computes it with DuckDB's own sorting and aggregation. The query stays the same, and <code>EXPLAIN</code> names the rule.</p>
-        <ul class="facts">
-          <li>Fair allocation over 800,000 decisions: 0.026 s, where Gurobi took 2,158 s</li>
-          <li>Faster than Gurobi in all nine classes, at every size measured</li>
-          <li><code>SET decide_direct_solve = 'off'</code> sends a query back to the solver</li>
-        </ul>
-        <p class="split-col__end"><a class="link" href="problems.html#direct-solve">See all 9 classes{b.ARROW}</a></p>
-      </div>
-      <div class="frame frame--split frame--lit span-6 start-7">
-        <div class="stage stage--fade-b" role="img" aria-label="EXPLAIN on a fair-allocation query names the direct-solve rule {esc(rule)} and the condition it checked; run without EXPLAIN, the query gives each program its share.">
-          <div class="at-corner to-edge">
-            <div class="ui ui-sq sq sq--wide" aria-hidden="true">
-              <div class="sq__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · fair.sql</span></div>
-              <pre class="sq__code"><code><span class="tk-k">EXPLAIN</span> {b.hl_sql(FAIR)}</code></pre>
-              <div class="sq__explain">{explain}</div>
-              <div class="sq__run"><span class="sq__k">The same query without EXPLAIN</span>{grid(["program", "alloc"], shown)}</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>"""
 
 
 def statement(b):
     parts = [
-        ("DECIDE x(BOOL)", "The decisions: one per row, per key or per query."),
-        ("SUCH THAT ...", "The constraints, on each row or on sums over groups."),
-        ("MAXIMIZE ...", "The goal; leave it out to ask for any answer that fits."),
+        ("DECIDE x(BOOL)", "The decisions: what DeciDB chooses, one per row, per key or per query."),
+        ("SUCH THAT ...", "The constraints: the rules every answer follows, on each row or on totals."),
+        ("MAXIMIZE ...", "The objective: what makes an answer best. Leave it out to ask for any answer that fits."),
     ]
     cols = "".join(f'<div class="span-4 part"><code>{b.hl_sql(c)}</code><p>{esc(t)}</p></div>' for c, t in parts)
     return f"""
@@ -295,6 +311,7 @@ def statement(b):
         <p>Three clauses added to a SELECT. The rows stay in DuckDB from the scan to the answer.</p>
       </div>
       <div class="grid parts">{cols}</div>
+      <p class="group__end"><a class="link" href="documentation.html">Read the guide, clause by clause{b.ARROW}</a></p>
     </div>
   </section>"""
 
@@ -321,11 +338,12 @@ def solvers(b):
         <h2 id="solvers-h">Built on DuckDB, solved by Gurobi or HiGHS</h2>
         <p class="t-lead">DeciDB is DuckDB with the DECIDE clause added, so it reads the same tables and files. HiGHS ships in every build; Gurobi is used when its license is present.</p>
         <ul class="facts">
+          <li>The data never leaves DuckDB: the model is built from the query's own rows</li>
           <li>Python: <code>pip install decidb</code>, with DuckDB's API</li>
           <li>A command-line shell for macOS, Linux and Windows</li>
-          <li>LP, MILP and convex QP on HiGHS; non-convex QP, MIQP and QCQP need Gurobi</li>
+          <li>You state the rules and the goal; DeciDB writes the model the solver reads</li>
         </ul>
-        <p class="split-col__end"><a class="link" href="problems.html#classes">See solvers by class{b.ARROW}</a></p>
+        <p class="split-col__end"><a class="link" href="documentation.html#solvers">See which solver takes what{b.ARROW}</a></p>
       </div>
       <div class="frame frame--split frame--lit span-6 start-7 dg-frame">
         <div class="dg" data-diagram data-dg-still><script type="application/json">{json.dumps(spec)}</script></div>
@@ -334,94 +352,28 @@ def solvers(b):
   </section>"""
 
 
-FAQ = [
-    (
-        "Do I need a Gurobi license?",
-        "No. HiGHS is bundled and solves LP, MILP and convex QP. With a Gurobi license, DeciDB also takes "
-        "non-convex and mixed-integer quadratic models.",
-    ),
-    (
-        "Does ordinary DuckDB SQL still work?",
-        "Yes. DeciDB is DuckDB with one more clause; a query without DECIDE runs as it does in DuckDB.",
-    ),
-    (
-        "What happens when no answer meets every constraint?",
-        "The query stops and says so. Put DIAGNOSE in front of it to see which clause to change and by how much.",
-    ),
-    (
-        "Can I see the optimization model it builds?",
-        "Yes. EXPLAIN shows the DECIDE node with its variables, constraints and objective, and the direct-solve rule "
-        "when one applies.",
-    ),
-    (
-        "Does release 0.2 run the queries on this site?",
-        "No. Release 0.2 uses the earlier spellings, such as a postfix PER. The guide's migration table lists each "
-        "change.",
-    ),
-]
-
-
-def faq(b):
-    def items(qs):
-        return "".join(f'<div class="faq__item"><h3>{esc(q)}</h3><p>{esc(a)}</p></div>' for q, a in qs)
-
-    return f"""
-  <section class="section bg-band bg-bleed g2m" id="faq" aria-labelledby="faq-h">
-    <div class="wrap">
-      <div class="grid grid--top">
-        <div class="span-5 stack-4">
-          <h2 id="faq-h">Questions</h2>
-          <p class="t-lead">On solvers, releases and what happens when a model has no answer.</p>
-          <p><a class="link" href="{b.GITHUB}/issues">Ask on GitHub{b.ARROW}</a></p>
-        </div>
-        <div class="span-6 start-7 faq">{items(FAQ[:1])}</div>
-      </div>
-      <div class="grid grid--top">
-        <div class="span-6 start-7 faq faq--more">{items(FAQ[1:])}</div>
-      </div>
-    </div>
-  </section>"""
-
-
-def closing(b):
-    return f"""<footer class="footer closing footer--statement g2m" id="contact" aria-labelledby="close-h">
-  <div class="wrap">
-    <div class="closing__cta close--word">
-      <div class="section-head--split">
-        <div><h2 id="close-h">Run your first DECIDE query</h2><p class="t-lead">Python wheels and command-line builds for macOS, Linux and Windows.</p></div>
-        <a class="btn btn--primary" href="getting-started.html#install">Install DeciDB{b.ARROW}</a>
-      </div>
-      <p class="close__word" aria-hidden="true">DeciDB</p>
-    </div>
-    <div class="closing__links">
-      {b.footer_links("")}
-    </div>
-  </div>
-</footer>"""
-
-
 PLAN = """<!-- type: software (a developer tool: DuckDB with a DECIDE clause)
      deal: hero centred, palette white-link-blue (a white sheet and a biro blue, the blue of DeciDB's own
      logo, for a tool whose answers are tables of numbers), type geist, radius sharp, nav mega (nav-cards
      dealt first; it needs two to four products and DeciDB is one), close word, footer statement, rhythm
-     space, buttons pill, mark: DeciDB's own logo, lit ground sage, grounds statement bg-mist and faq bg-band,
+     space, buttons pill, mark: DeciDB's own logo, lit ground sage, ground statement bg-mist,
      effect grain-gradient in the hero frame, card ground painterly-landscape
      moments: liquid-type in #statement (the one sentence that sums DeciDB up answers the pointer)
      motion: hero entrance (the name first, then what to do); the window's result rows arrive (a query
-     returning its rows); the first card's rows arrive; hover on every link and button -->"""
+     returning its rows); hover on every link and button
+     sections, in the order of the live site: hero, why in the database, the three clauses, problems, novel
+     features (query rewriting, DIAGNOSE), built on DuckDB, get started -->"""
 
 
 def render(b):
     ex_by_slug = {ex["slug"]: ex for ex in b.EX.EXAMPLES}
-    fx = b.FX.FIXTURES
     head = b.head(
         "DeciDB: optimization queries in DuckDB",
         "DeciDB adds a DECIDE clause to DuckDB: state decisions, constraints and a goal in SQL and get the best "
-        "values back as rows. Nine problem classes are answered without a solver; the rest go to Gurobi or HiGHS.",
+        "values back as rows. Query rewriting answers nine problem classes without a solver; the rest go to Gurobi or "
+        "HiGHS.",
         "",
         extra=(
-            "<script>document.documentElement.classList.add('m-enter');"
-            "setTimeout(()=>document.documentElement.classList.add('m-enter-done'),700)</script>\n"
             '<script src="assets/backgrounds/backgrounds.js"></script>\n'
             "<script>document.documentElement.classList.add('mo-js');"
             "setTimeout(()=>document.documentElement.classList.add('mo-safe'),2500)</script>\n"
@@ -432,7 +384,12 @@ def render(b):
         ),
     )
     main = (
-        hero(b, ex_by_slug) + language(b, ex_by_slug, fx) + direct(b, ex_by_slug) + statement(b) + solvers(b) + faq(b)
+        hero(b, ex_by_slug)
+        + why(b, ex_by_slug)
+        + statement(b)
+        + problems(b, ex_by_slug)
+        + novel(b, ex_by_slug)
+        + solvers(b)
     )
     return f"""{head}
 <body class="home">
@@ -440,8 +397,8 @@ def render(b):
 {b.header("", "")}
 <main id="top">{main}
 </main>
-{closing(b)}
-{b.scripts("", '<script type="module" src="assets/layout/layout.js"></script>' + chr(10) + '<script type="module" src="assets/diagrams/mount.js"></script>' + chr(10))}
+{b.closing("")}
+{b.scripts("", '<script type="module" src="assets/diagrams/mount.js"></script>' + chr(10))}
 </body>
 </html>
 """

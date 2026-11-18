@@ -1,11 +1,4 @@
-<div class="page-head">
-  <div class="container">
-    <!--crumbs-->
-    <h1>About DeciDB</h1>
-    <p>A research collaboration between the HUDA Lab at NYU Abu Dhabi and UMass Amherst on bringing constrained
-      optimization into the database.</p>
-  </div>
-</div>
+<!--hero-->
 
 <div class="container">
   <div class="doc-layout">
@@ -101,12 +94,12 @@
           <dd>Used when its library and license are present: every model class, and the fastest on these workloads.</dd>
           <dt><a href="https://highs.dev/" target="_blank" rel="noopener noreferrer">HiGHS</a></dt>
           <dd>Bundled and open source: LP, MILP and convex QP, with no setup.</dd>
-          <dt>Direct solve</dt>
-          <dd>Rules that recognize nine problem classes with an exact relational answer and compute it with DuckDB
-            operators, skipping the solver.</dd>
+          <dt><a href="features.html#rewriting">Query rewriting</a></dt>
+          <dd>Rules that recognize nine problem classes with an exact relational answer and rewrite the query to
+            compute it with DuckDB operators, skipping the solver.</dd>
           <dt>Testing</dt>
           <dd>More than 7,000 Python cases, each comparing DeciDB's answer with an independent Gurobi model, run with
-            each solver and with direct solve on and off.</dd>
+            each solver and with query rewriting on and off.</dd>
           <dt>Distribution</dt>
           <dd>Tagged releases ship command-line binaries for macOS, Linux and Windows, and Python wheels.</dd>
         </dl>
@@ -118,7 +111,7 @@
           <li><strong>The rest of the language proposal:</strong> nested reducers at any depth, frame selectors for ordered
             data, <code>if</code> on decisions, declaration bounds and lexicographic objectives
             (<a href="documentation.html#roadmap">details</a>).</li>
-          <li><strong>More direct-solve classes:</strong> the catalogue lists further classes with exact relational answers,
+          <li><strong>More query-rewriting classes:</strong> the catalogue lists further classes with exact relational answers,
             such as discrete resource allocation and transportation on sorted costs.</li>
           <li><strong>Sketch-Refine:</strong> scale past exact solving to very large inputs with a bounded approximation
             error.</li>

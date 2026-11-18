@@ -1,10 +1,4 @@
-<div class="page-head">
-  <div class="container">
-    <!--crumbs-->
-    <h1>Get started</h1>
-    <p>Install DeciDB, run a first optimization query, and learn the four parts every DECIDE query has.</p>
-  </div>
-</div>
+<!--hero-->
 
 <div class="container">
   <div class="doc-layout">
@@ -44,6 +38,10 @@ chmod +x decidb
         <div class="note"><strong>Unsigned binaries</strong>
           <p>On macOS, right-click the binary, choose Open and confirm. On Windows, choose "More info" and then "Run
             anyway" in SmartScreen.</p></div>
+        <div class="note"><strong>Release 0.2 and this site</strong>
+          <p>The current release, 0.2, uses the earlier spellings, such as <code>PER</code> after a constraint. The
+            queries on this site use the new ones; the guide's <a href="documentation.html#migrating">migration
+            table</a> lists each change.</p></div>
         <h3 id="install-python">Python</h3>
         <p>Wheels are published for Python 3.11, 3.12 and 3.13 on macOS (Apple Silicon), Linux (x86-64) and Windows
           (x86-64). The API is DuckDB's.</p>
@@ -84,19 +82,21 @@ MAXIMIZE SUM(x * value);<!--/sql-->
 
       <section id="anatomy">
         <h2>Anatomy of a DECIDE query</h2>
-        <p>A DECIDE query is a <code>SELECT</code> with three more clauses:</p>
-        <ol class="steps">
-          <li><strong><code>DECIDE x(BOOL)</code> declares the decisions.</strong> Each has a name and a type in
-            parentheses. Without a key, there is one decision per result row.</li>
-          <li><strong><code>SUCH THAT ...</code> states the constraints</strong>, joined by <code>AND</code>. A
-            constraint without a reducer holds on every row (<code>x &lt;= cap</code>); one with a reducer such as
-            <code>SUM</code> holds over a set of rows.</li>
-          <li><strong><code>MAXIMIZE</code> or <code>MINIMIZE</code> states the objective.</strong> Leave it out to ask
-            only for an assignment that satisfies every constraint.</li>
-          <li><strong>The rest is SQL.</strong> <code>FROM</code>, joins and <code>WHERE</code> run first and decide
-            which rows get decisions; <code>SELECT</code> and <code>ORDER BY</code> run after the solve and can use
-            the decisions like columns.</li>
-        </ol>
+        <p>A DECIDE query is a <code>SELECT</code> with three more clauses. In the query above:</p>
+        <dl class="reads">
+          <dt><code>DECIDE x(BOOL)</code></dt>
+          <dd>declares the decisions: here one yes-or-no value <code>x</code> per row. Every decision has a name and a
+            type in parentheses.</dd>
+          <dt><code>SUCH THAT SUM(x * weight) &lt;= 50</code></dt>
+          <dd>states the constraints, joined by <code>AND</code>. A constraint with a sum holds over many rows; one
+            without, such as <code>x &lt;= cap</code>, holds on every row.</dd>
+          <dt><code>MAXIMIZE SUM(x * value)</code></dt>
+          <dd>states the objective. Write <code>MINIMIZE</code> for a cost, or leave it out to ask for any answer that
+            satisfies the constraints.</dd>
+          <dt><code>SELECT</code>, <code>FROM</code>, <code>WHERE</code></dt>
+          <dd>are ordinary SQL. <code>FROM</code> and <code>WHERE</code> run first and pick the rows that get decisions;
+            <code>SELECT</code> and <code>ORDER BY</code> run after the solve and read the decisions like columns.</dd>
+        </dl>
         <p>The declaration can also sit between <code>SELECT</code> and <code>FROM</code>, the order the DeciDB paper
           uses. Both orders mean the same:</p>
 <!--sql check="items"-->SELECT item, x
@@ -130,7 +130,7 @@ SUCH THAT ship <= S.demand * open
 MINIMIZE SUM(S.unit_cost * ship) + SUM(D: D.opening_cost * open) + 10 * biggest;<!--/sql-->
         <p><code>ship</code> is one decision per shipment row, <code>open</code> one per depot, shared by that depot's
           shipments, and <code>biggest</code> one for the whole query: the largest single shipment, which the objective
-          keeps small. <a href="documentation.html#decisions">More on declarations</a>.</p>
+          keeps small. <a href="documentation.html#decide">More on decisions</a>.</p>
       </section>
 
       <section id="groups">
@@ -153,7 +153,7 @@ DECIDE x(BOOL)
 SUCH THAT SUM(x * weight) <= 50
       AND when category = 'tech': SUM(x) <= 1
 MAXIMIZE SUM(x * value);<!--/sql-->
-        <p>The <a href="documentation.html#scopes">language reference</a> covers the rules exactly, and the
+        <p>The <a href="documentation.html#per">guide</a> covers group rules step by step, and the
           <a href="examples.html">examples</a> show each pattern on a full problem.</p>
       </section>
 
@@ -179,14 +179,15 @@ answer = con.sql("""
           models. When the Gurobi library and a license are present, DeciDB uses Gurobi: it is faster on these workloads
           and also takes non-convex and mixed-integer quadratic models and quadratic constraints. A model that only
           Gurobi can solve is refused, with a message, when Gurobi is not available. Some problems need neither:
-          <a href="problems.html#direct-solve">direct solve</a> answers them with DuckDB's own operators.</p>
+          <a href="features.html#rewriting">query rewriting</a> answers them with DuckDB's own operators. The
+          <a href="documentation.html#solvers">guide</a> lists which solver takes which kind of query.</p>
       </section>
 
       <section id="next">
         <h2>Next steps</h2>
         <div class="refs refs--3">
-          <a class="ref" href="documentation.html"><h3>Language reference</h3><p>Every clause, scope and rule, with the exact semantics.</p></a>
-          <a class="ref" href="problems.html"><h3>Problems</h3><p>The problem classes DeciDB solves, and which solver takes each.</p></a>
+          <a class="ref" href="documentation.html"><h3>Guide</h3><p>Each clause in the order you write it: DECIDE, SUCH THAT, then the objective.</p></a>
+          <a class="ref" href="features.html"><h3>Novel features</h3><p>Query rewriting, and DIAGNOSE for a query with no answer.</p></a>
           <a class="ref" href="examples.html"><h3>Examples</h3><p>Twenty complete problems with data, query and answer.</p></a>
         </div>
       </section>

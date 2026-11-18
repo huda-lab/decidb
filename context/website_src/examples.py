@@ -1,6 +1,7 @@
 """The examples on the website. Each one is run on DeciDB at build time; its result table is that run's output.
 
-`direct` names the direct-solve rule EXPLAIN must report; an example without it must take the solver path.
+`direct` names the rewrite rule EXPLAIN must report (its "Direct solve rule" line: the engine's name for query
+rewriting); an example without it must take the solver path.
 """
 
 GROUPS = [
@@ -15,9 +16,10 @@ GROUPS = [
         "Make the worst case as good as possible, change as little as possible, or stay close to a target.",
     ),
     (
-        "Answered without a solver",
+        "Answered by query rewriting",
         "These problems have an exact answer that DuckDB computes with sorting, ranking "
-        "and aggregation. DeciDB recognizes them and skips the solver, with no change to the query.",
+        "and aggregation. DeciDB recognizes them and rewrites the query to compute it, with no solver and no "
+        "change to the SQL you write.",
     ),
     ("When there is no answer", "A query whose constraints cannot all hold tells you which clause to change."),
 ]
@@ -28,7 +30,7 @@ FILTERS = [
     ("keyed", "Keyed decisions"),
     ("minmax", "Min-max &amp; fairness"),
     ("nonlinear", "Quadratic &amp; norms"),
-    ("direct", "Direct solve"),
+    ("direct", "Query rewriting"),
     ("diagnose", "DIAGNOSE"),
 ]
 
@@ -635,18 +637,18 @@ MINIMIZE SUM(POWER(w - target, 2));""",
         "amounts, about 1.67 percentage points each, which is what least squares does when no other bound is "
         "active.</p>",
     },
-    # ------------------------------------------------------------------ direct solve
+    # ------------------------------------------------------------------ query rewriting
     {
         "slug": "shortlist",
         "title": "A shortlist: the best two per genre",
-        "group": "Answered without a solver",
+        "group": "Answered by query rewriting",
         "class": "ILP",
         "direct": "S1_UNIFORM_MATROID",
         "filters": ["direct", "scopes"],
         "card_tags": ["S1"],
-        "features": ["choose K rows by score", "a count limit per group", "direct solve"],
+        "features": ["choose K rows by score", "a count limit per group", "query rewriting"],
         "summary": "Pick at most two films per genre with the highest total rating. DeciDB ranks rows instead of calling a solver.",
-        "summary_plain": "Top-k per group, answered by DeciDB's direct solve.",
+        "summary_plain": "Top-k per group, answered by DeciDB's query rewriting.",
         "snippet": "DECIDE pick(BOOL)\nSUCH THAT per genre: SUM(pick) by (genre) <= 2\nMAXIMIZE SUM(rating * pick)",
         "story": "<p>Choosing rows by score under a count limit has an exact answer: sort by score and take the top "
         "<em>k</em> in each group. DeciDB proves the query has that shape and computes it with DuckDB's own window "
@@ -671,22 +673,22 @@ ORDER BY genre, rating DESC;""",
             ("MAXIMIZE SUM(rating * pick)", "A linear score: the class DeciDB calls S1, choose rows by score."),
         ],
         "answer": "<p>The two highest-rated films of each genre. <code>EXPLAIN</code> on this query shows "
-        "<code>Direct solve rule: S1_UNIFORM_MATROID</code>; the solver is never started.</p>",
+        "<code>Direct solve rule: S1_UNIFORM_MATROID</code>: the query was rewritten, and no solver was started.</p>",
     },
     {
         "slug": "nested-quotas",
         "title": "Hire under nested quotas",
-        "group": "Answered without a solver",
+        "group": "Answered by query rewriting",
         "class": "ILP",
         "direct": "S2_LAMINAR_MATROID",
         "filters": ["direct", "scopes"],
         "card_tags": ["S2", "by (a, b)"],
-        "features": ["quotas that nest: team, division, total", "by with two columns", "direct solve"],
+        "features": ["quotas that nest: team, division, total", "by with two columns", "query rewriting"],
         "summary": "At most one hire per team, two per division and four overall, maximizing total score.",
-        "summary_plain": "Nested hiring quotas, answered by DeciDB's direct solve.",
+        "summary_plain": "Nested hiring quotas, answered by DeciDB's query rewriting.",
         "snippet": "SUCH THAT SUM(hire) by (division, team) <= 1\n      AND SUM(hire) by (division) <= 2\n      AND SUM(hire) <= 4",
         "story": "<p>The quotas nest: every team lies inside one division, and every division inside the company. Quotas "
-        "that nest like this still have a greedy exact answer, so DeciDB answers without a solver.</p>",
+        "that nest like this still have a greedy exact answer, so DeciDB rewrites the query and calls no solver.</p>",
         "setup": """CREATE TABLE Candidates (name VARCHAR, division VARCHAR, team VARCHAR, score DOUBLE);
 INSERT INTO Candidates VALUES
     ('Ada', 'Product', 'Design', 9.1), ('Bo', 'Product', 'Design', 8.7),
@@ -717,14 +719,14 @@ MAXIMIZE SUM(score * hire);""",
     {
         "slug": "sprint-planning",
         "title": "Fit as many tickets as possible into a sprint",
-        "group": "Answered without a solver",
+        "group": "Answered by query rewriting",
         "class": "ILP",
         "direct": "S3_MAX_CARDINALITY_KNAPSACK",
         "filters": ["direct"],
         "card_tags": ["S3"],
-        "features": ["maximize a count", "one budget", "direct solve"],
+        "features": ["maximize a count", "one budget", "query rewriting"],
         "summary": "With 20 story points of capacity, take the largest number of tickets.",
-        "summary_plain": "Maximum-cardinality knapsack, answered by DeciDB's direct solve.",
+        "summary_plain": "Maximum-cardinality knapsack, answered by DeciDB's query rewriting.",
         "snippet": "DECIDE take(BOOL)\nSUCH THAT SUM(points * take) <= 20\nMAXIMIZE SUM(take)",
         "story": "<p>When every item is worth the same, a knapsack has an exact greedy answer: take the smallest items "
         "first. DeciDB recognizes the shape (a count objective and one weight budget) and sorts instead of "
@@ -750,14 +752,14 @@ ORDER BY points;""",
     {
         "slug": "fair-allocation",
         "title": "Allocate a budget fairly",
-        "group": "Answered without a solver",
+        "group": "Answered by query rewriting",
         "class": "LP",
         "direct": "R4_MAX_MIN_FAIRNESS",
         "filters": ["direct", "minmax"],
         "card_tags": ["R4", "MAXIMIZE MIN(…)"],
-        "features": ["max-min fairness", "MIN in the objective", "direct solve"],
+        "features": ["max-min fairness", "MIN in the objective", "query rewriting"],
         "summary": "Split 100 units among programs so that the worst-served program gets as large a share of its need as possible.",
-        "summary_plain": "Weighted max-min fair allocation, answered by DeciDB's direct solve.",
+        "summary_plain": "Weighted max-min fair allocation, answered by DeciDB's query rewriting.",
         "snippet": "DECIDE alloc(REAL)\nSUCH THAT alloc <= max_alloc AND SUM(alloc) <= 100\nMAXIMIZE MIN(alloc / need)",
         "story": "<p>Four programs need 110 units in total but only 100 are available, and each program can absorb only so "
         "much. Max-min fairness raises every program's share of its need together until the budget runs out. "
@@ -778,20 +780,20 @@ MAXIMIZE MIN(alloc / need);""",
             ("MAXIMIZE MIN(alloc / need)", "Make the smallest share of need as large as possible."),
         ],
         "answer": "<p>Every program receives 83.3% of its need. Shelter's share is also its cap, 25 units. On the solver "
-        "path this is a linear program with an auxiliary variable for the minimum; direct solve computes the "
-        "level without one.</p>",
+        "path this is a linear program; the rewritten query computes the level with DuckDB's own operators."
+        "</p>",
     },
     {
         "slug": "matching",
         "title": "Match drivers to pickups",
-        "group": "Answered without a solver",
+        "group": "Answered by query rewriting",
         "class": "ILP",
         "direct": "O1_MONGE_ASSIGNMENT",
         "filters": ["direct", "scopes"],
         "card_tags": ["O1", "CROSS JOIN"],
-        "features": ["one-to-one matching", "per / by on both sides", "direct solve"],
+        "features": ["one-to-one matching", "per / by on both sides", "query rewriting"],
         "summary": "Pair four drivers with four pickups along a road so the total distance driven is as small as possible.",
-        "summary_plain": "One-to-one matching by position, answered by DeciDB's direct solve.",
+        "summary_plain": "One-to-one matching by position, answered by DeciDB's query rewriting.",
         "snippet": "SUCH THAT per d: SUM(x) by (d) = 1\n      AND per p: SUM(x) by (p) = 1\nMINIMIZE SUM(ABS(d.km - p.km) * x)",
         "story": "<p>When both sides sit on a line and the cost is the distance between them, the best one-to-one matching "
         "pairs them in sorted order. DeciDB recognizes the pattern, ranks both sides and joins on rank.</p>",
@@ -828,14 +830,14 @@ MINIMIZE SUM(ABS(d.km - p.km) * x)""",
     {
         "slug": "depot-placement",
         "title": "Place one depot per highway",
-        "group": "Answered without a solver",
+        "group": "Answered by query rewriting",
         "class": "LP",
         "direct": "A2_SINGLE_FACILITY_LOCATION",
         "filters": ["direct", "keyed"],
         "card_tags": ["A2", "per K: x(REAL)"],
-        "features": ["keyed REAL decision", "absolute-distance objective", "direct solve"],
+        "features": ["keyed REAL decision", "absolute-distance objective", "query rewriting"],
         "summary": "Choose a mile marker for one depot on each highway that minimizes the total distance to that highway's stores.",
-        "summary_plain": "One-dimensional facility location per group, answered by DeciDB's direct solve.",
+        "summary_plain": "One-dimensional facility location per group, answered by DeciDB's query rewriting.",
         "snippet": "DECIDE per highway: depot(REAL)\nSUCH THAT depot <= 100\nMINIMIZE SUM(ABS(depot - mile))",
         "story": "<p>One shared value closest to many rows is a median (for absolute distance), a mean (for squared "
         "distance) or a midrange (for the largest distance). A keyed decision makes one such value per highway.</p>",

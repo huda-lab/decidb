@@ -40,6 +40,7 @@ sys.path.insert(0, HERE)
 
 import examples as EX  # noqa: E402
 import fixtures as FX  # noqa: E402
+import heroes  # noqa: E402
 import home  # noqa: E402
 
 BIN = os.environ.get("DECIDB_BIN", os.path.join(REPO, "build", "release", "decidb"))
@@ -133,11 +134,13 @@ SQL_KEYWORDS = set(
     """SELECT FROM WHERE DECIDE SUCH THAT AND OR NOT MAXIMIZE MINIMIZE AS JOIN ON USING GROUP BY ORDER LIMIT
     INSERT INTO VALUES CREATE TABLE WITH IN IS NULL CASE WHEN THEN ELSE END DIAGNOSE EXPLAIN FORMAT DISTINCT
     LEFT RIGHT INNER OUTER CROSS UNION ALL HAVING SET PRAGMA BETWEEN ASC DESC OVER PARTITION BOOL BOOLEAN INT
-    INTEGER BIGINT REAL DOUBLE VARCHAR DATE TRUE FALSE""".split()
+    INTEGER BIGINT REAL DOUBLE DECIMAL VARCHAR DATE TRUE FALSE CAST""".split()
 )
 SQL_SCOPE = {"per", "when", "by"}
 SQL_FUNCS = set("""SUM MIN MAX AVG COUNT ABS ROUND POWER NORM LEAST GREATEST COALESCE SQRT LN EXP FLOOR CEIL""".split())
-SQL_TOKEN = re.compile(r"(--[^\n]*)|('(?:[^']|'')*')|(\b\d+(?:\.\d+)?\b)|([A-Za-z_][A-Za-z_0-9]*)(?=(\s*\()?)|([\s\S])")
+SQL_TOKEN = re.compile(
+    r"(--[^\n]*)|('(?:[^']|'')*')|(\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)|([A-Za-z_][A-Za-z_0-9]*)(?=(\s*\()?)|([\s\S])"
+)
 
 
 def hl_sql(code):
@@ -321,9 +324,19 @@ MACRO = re.compile(r'<!--(sql|bash|python|text|explain)(\s(?:[^>"]|"[^"]*")*)?--
 
 
 def expand_explain(attrs, code, page):
-    """Show a query, then the DECIDE node of its EXPLAIN (FORMAT JSON), as EXPLAIN prints it."""
+    """Show a query, then the DECIDE node of its EXPLAIN (FORMAT JSON), as EXPLAIN prints it. With `rewrite`, the query
+    must be answered by query rewriting: show the lines EXPLAIN prints for the rewrite instead."""
     fx = FX.FIXTURES[attr(attrs, "check")]
     query = code.strip().rstrip(";")
+    if has_flag(attrs, "rewrite"):
+        fields = explain_fields(fx["setup"], query)
+        if not fields.get("Direct solve rule"):
+            FAILURES.append(f"{where(page, code)}\n    expected a rewritten query, EXPLAIN names no rule")
+            return code_block(code, "sql", attr(attrs, "title"))
+        lines = [f"{k}: {v}" for k, v in fields.items()]
+        return code_block(code, "sql", attr(attrs, "title"), "ok") + code_block(
+            "\n".join(lines), "text", "EXPLAIN: the rewrite"
+        )
     ok, out, err = run_sql(fx["setup"] + "\nEXPLAIN (FORMAT JSON) " + query + ";", json_mode=False)
     node = None
     if ok:
@@ -392,8 +405,8 @@ TOKENS = """:root {
   --display-tracking: -0.035em;
   --display-tracking-xl: -0.045em;
 }
-/* the evening grade (a tech page may take it): the head script sets data-theme from the nav's switch (remembered) or the
-   visitor's setting; the page tokens go dark, the lit ground (sage) and the panels' painted grounds stay light, as the
+/* the evening grade (a tech page may take it): light is the default; the nav's switch sets data-theme to dark and the
+   head script remembers it; the page tokens go dark, the lit ground (sage) and the panels' painted grounds stay light, as the
    kit keeps them */
 :root[data-theme="dark"] {
   --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
@@ -411,10 +424,11 @@ ARROW = (
     '<path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg>'
 )
 NAV_WORDS = [
+    ("getting-started.html", "Get started"),
     ("documentation.html", "Guide"),
-    ("problems.html", "Problems"),
     ("examples.html", "Examples"),
     ("about.html", "About"),
+    ("features.html", "Novel features"),
 ]
 MENU_COLS = [
     (
@@ -434,7 +448,7 @@ MENU_COLS = [
         ],
     ),
     (
-        "Without a solver",
+        "Query rewriting",
         [
             ("fair-allocation", "Fair allocation", "Max-min shares of a budget"),
             ("matching", "Matching", "Drivers to pickups"),
@@ -461,8 +475,9 @@ def head(title, description, root, extra=""):
 <html lang="en" data-type="software" data-radius="sharp" data-ground="sage" data-buttons="pill" data-motion{THEME_ATTR}>
 <head>
 <meta charset="utf-8">
-<script>(function(){{var r=document.documentElement,t;try{{t=localStorage.getItem('decidb-theme')}}catch(e){{}}if(!r.dataset.theme)r.dataset.theme=t==='light'||t==='dark'?t:matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}})()</script>
+<script>(function(){{var r=document.documentElement,t;try{{t=localStorage.getItem('decidb-theme')}}catch(e){{}}if(!r.dataset.theme)r.dataset.theme=t==='dark'?'dark':'light'}})()</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script>document.documentElement.classList.add('m-enter');setTimeout(()=>document.documentElement.classList.add('m-enter-done'),700)</script>
 <title>{esc(title)}</title>
 <meta name="description" content="{esc(description)}">
 <meta property="og:type" content="website">
@@ -508,11 +523,11 @@ def header(root, active):
             for g, items in MENU_COLS
         )
         card = (
-            f'<a class="menu-card span-3" href="{root}problems.html#direct-solve">'
+            f'<a class="menu-card span-3" href="{root}features.html">'
             '<div class="panel"><div class="stage stage--fade-br"><div class="at-corner">'
             '<div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span>'
             "<span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div>"
-            '<span class="t-card">Direct solve</span><span class="t-small muted">Nine classes, no solver called</span></a>'
+            '<span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a>'
         )
         words.append(
             f'<div class="nav__item"><a class="nav__link" href="{root}{href}"{cur}>{word} {CHEV}</a>'
@@ -547,7 +562,7 @@ def footer_links(root):
           <a class="nav__logo" href="{root}index.html"><img src="{root}assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
           <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
         </div>
-        {col("Learn", [(f"{root}getting-started.html", "Install"), (f"{root}documentation.html", "Guide"), (f"{root}problems.html", "Problems"), (f"{root}examples.html", "Examples")])}
+        {col("Learn", [(f"{root}getting-started.html", "Get started"), (f"{root}documentation.html", "Guide"), (f"{root}features.html", "Novel features"), (f"{root}examples.html", "Examples")])}
         {col("Examples", [(f"{root}examples/knapsack.html", "Knapsack"), (f"{root}examples/facility-location.html", "Depots"), (f"{root}examples/fair-allocation.html", "Fair allocation"), (f"{root}examples/diagnose.html", "DIAGNOSE")])}
         {col("Project", [(f"{root}about.html", "About"), (f"{root}about.html#research", "Papers"), (GITHUB, "GitHub"), ("https://huda-lab.github.io/", "HUDA Lab")])}
         {col("Contact", [("mailto:support@decidb.com", "Email the team"), (f"{GITHUB}/issues", "Report an issue")])}
@@ -562,9 +577,28 @@ def scripts(root, extra=""):
     return (
         f'<script type="module" src="{root}assets/system.js"></script>\n'
         f'<script type="module" src="{root}assets/motion/motion.js"></script>\n'
+        f'<script type="module" src="{root}assets/layout/layout.js"></script>\n'
         f"{extra}"
         f'<script src="{root}assets/js/site.js" defer></script>'
     )
+
+
+def closing(root):
+    """The close of every page: the next step, DeciDB's name set large, and the footer's links."""
+    return f"""<footer class="footer closing footer--statement g2m" id="contact" aria-labelledby="close-h">
+  <div class="wrap">
+    <div class="closing__cta close--word">
+      <div class="section-head--split">
+        <div><h2 id="close-h">Run your first DECIDE query</h2><p class="t-lead">Python wheels and command-line builds for macOS, Linux and Windows.</p></div>
+        <a class="btn btn--primary" href="{root}getting-started.html#install">Install DeciDB{ARROW}</a>
+      </div>
+      <p class="close__word" aria-hidden="true">DeciDB</p>
+    </div>
+    <div class="closing__links">
+      {footer_links(root)}
+    </div>
+  </div>
+</footer>"""
 
 
 def page(title, description, body, active, root=""):
@@ -574,11 +608,7 @@ def page(title, description, body, active, root=""):
 <main id="top">
 {body}
 </main>
-<footer class="footer footer--statement">
-  <div class="wrap">
-      {footer_links(root)}
-  </div>
-</footer>
+{closing(root)}
 {scripts(root)}
 </body>
 </html>
@@ -591,11 +621,6 @@ def crumbs(root, *trail):
     steps = [f'<a href="{root}index.html">Home</a>']
     steps += [f'<a href="{root}{st[0]}">{esc(st[1])}</a>' if isinstance(st, tuple) else esc(st) for st in trail]
     return '<nav class="crumbs" aria-label="Breadcrumb">' + '<span aria-hidden="true">/</span>'.join(steps) + "</nav>"
-
-
-def page_head(title, lede, trail, tags="", root=""):
-    t = f'<div class="page-head__tags">{tags}</div>' if tags else ""
-    return f'<div class="page-head"><div class="container">{crumbs(root, *trail)}<h1>{title}</h1><p>{lede}</p>{t}</div></div>'
 
 
 # ---------------------------------------------------------------- examples
@@ -618,7 +643,7 @@ def example_page(ex, prev_ex, next_ex):
 
     tags = f'<span class="tag">{esc(ex["class"])}</span>'
     if rule:
-        tags = f'<span class="tag tag--direct">Direct solve {esc(rule.split("_")[0])}</span>' + tags
+        tags = '<span class="tag tag--direct">Query rewriting</span>' + tags
     explain = "".join(f"<dt><code>{esc(c)}</code></dt><dd>{d}</dd>" for c, d in ex["explain"])
     result = result_table(rows, dec=tuple(ex.get("dec", ())), on=ex.get("on"), note=ex.get("result_note"))
     extra = expand(ex.get("after", ""), "examples/" + ex["slug"])
@@ -635,13 +660,14 @@ def example_page(ex, prev_ex, next_ex):
     )
     nav += "</nav>"
     solver_line = (
-        f"Answered by direct solve ({esc(rule)}): DuckDB operators compute the optimum, no solver is called."
+        f'Answered by <a href="../features.html#rewriting">query rewriting</a>: DuckDB\'s own operators compute the '
+        f"optimum and no solver is called. <code>EXPLAIN</code> names the rule, <code>{esc(rule)}</code>."
         if rule
         else f"Problem class: {esc(ex['class'])}, solved by Gurobi or HiGHS."
     )
     shows = "".join(f"<li>{esc(t)}</li>" for t in ex["features"])
     body = f"""
-{page_head(esc(ex["title"]), ex["summary"], [("examples.html", "Examples"), ex["group"]], tags, root="../")}
+{heroes.example(sys.modules[__name__], ex, rows, tags)}
 <div class="container">
   <div class="doc-layout doc-layout--example">
     <article class="prose">
@@ -680,7 +706,7 @@ def examples_index():
             if ex["group"] != gname:
                 continue
             how = (
-                f'<span class="tag tag--direct">Direct solve {esc(ex["direct"].split("_")[0])}</span>'
+                '<span class="tag tag--direct">Query rewriting</span>'
                 if ex.get("direct")
                 else f'<span class="tag">{esc(ex["class"])}</span>'
             )
@@ -699,11 +725,7 @@ def examples_index():
         for k, v in filters
     )
     body = (
-        page_head(
-            "Examples",
-            f"{len(EX.EXAMPLES)} complete problems, each with its data, its query and the table DeciDB returns for it.",
-            ["Examples"],
-        )
+        heroes.examples_index(sys.modules[__name__])
         + f'<div class="container ex-index"><div class="filters" role="group" aria-label="Show examples that use" hidden>{bar}</div>'
         + "".join(groups)
         + "</div>"
@@ -723,7 +745,7 @@ PAGES = [
         "getting-started.html",
         "Install DeciDB: first DECIDE query in DuckDB",
         "Install DeciDB and write your first DECIDE query: decisions, constraints, objectives and the scope words per, when and by.",
-        "",
+        "getting-started.html",
     ),
     (
         "documentation.html",
@@ -732,10 +754,10 @@ PAGES = [
         "documentation.html",
     ),
     (
-        "problems.html",
-        "Problem classes DeciDB solves in SQL",
-        "The problem classes DeciDB solves in SQL: LP, MILP, QP, QCQP, bilinear, min-max and max-min, norms, and the classes answered by direct solve without a solver.",
-        "problems.html",
+        "features.html",
+        "Novel features: query rewriting and DIAGNOSE in DeciDB",
+        "Two DeciDB features a solver library does not have: query rewriting answers nine problem classes with DuckDB's own operators, and DIAGNOSE explains a query with no answer.",
+        "features.html",
     ),
     (
         "about.html",
@@ -744,10 +766,6 @@ PAGES = [
         "about.html",
     ),
 ]
-
-
-# each reading page's own step in its breadcrumb: the word the nav and the footer give it
-CRUMB = {**dict(NAV_WORDS), "getting-started.html": "Install"}
 
 
 def write_page(path, text):
@@ -774,7 +792,11 @@ def main():
     copy_assets()
     write_page(os.path.join(OUT, "index.html"), home.render(sys.modules[__name__]))
     for name, title, desc, active in PAGES:
-        frag = open(os.path.join(HERE, "pages", name)).read().replace("<!--crumbs-->", crumbs("", CRUMB[name]))
+        frag = (
+            open(os.path.join(HERE, "pages", name))
+            .read()
+            .replace("<!--hero-->", heroes.PAGES[name](sys.modules[__name__]))
+        )
         write_page(os.path.join(OUT, name), page(title, desc, expand(frag, name), active))
     write_page(os.path.join(OUT, "examples.html"), examples_index())
     exs = EX.EXAMPLES
