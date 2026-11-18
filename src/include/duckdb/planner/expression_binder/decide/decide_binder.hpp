@@ -81,6 +81,9 @@ struct DecideQualifierContext {
 
 bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
+//! Refuses `name`, a decision's or a column a clause reads, at `at` when it contains a DECIDE tag (R20).
+void RefuseDecideTagInName(const ParsedExpression &at, const string &name);
+
 //! `expr` as a message quotes it: the span of the query the user wrote for it (`text`, which its query location
 //! indexes), else, for a node the parser kept no span for, its SQL without the tags the binders put on its nodes.
 string DecideWrittenSql(const ParsedExpression &expr, const DecideSourceText *text);

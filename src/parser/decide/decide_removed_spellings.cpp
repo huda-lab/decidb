@@ -463,8 +463,8 @@ WrittenWhen WrittenCondition(const vector<PathStep> &path, idx_t first, idx_t &t
 			continue;
 		}
 		auto node = path[i].node->Copy();
-		*ChildSlot(*node, 0) = make_uniq<ColumnRefExpression>("__decide_condition__");
-		result.text = StringUtil::Replace(Written(*node), "__decide_condition__", result.text);
+		*ChildSlot(*node, 0) = make_uniq<ColumnRefExpression>(REMOVED_SPELLING_CONDITION_NAME);
+		result.text = StringUtil::Replace(Written(*node), REMOVED_SPELLING_CONDITION_NAME, result.text);
 		result.is_or = node->GetExpressionType() == ExpressionType::CONJUNCTION_OR;
 	}
 	return result;
@@ -528,7 +528,8 @@ vector<ReducerWhenFix> FixReducerWhens(unique_ptr<ParsedExpression> &region, Reg
 		for (idx_t i = 0; i < top; i++) {
 			slot = ChildSlot(**slot, path[i].child);
 		}
-		*slot = make_uniq<ColumnRefExpression>("__decide_fix_" + to_string(fixes.size() - 1) + "__");
+		*slot = make_uniq<ColumnRefExpression>(string(REMOVED_SPELLING_FIX_NAME_PREFIX) + to_string(fixes.size() - 1) +
+		                                       "__");
 	}
 }
 
@@ -539,7 +540,7 @@ string Converted(const ParsedExpression &expr) {
 	auto text = Written(*copy);
 	for (idx_t i = 0; i < fixes.size(); i++) {
 		auto spelling = fixes[i].in_norm ? fixes[i].written : fixes[i].spelling;
-		text = StringUtil::Replace(text, "__decide_fix_" + to_string(i) + "__", spelling);
+		text = StringUtil::Replace(text, string(REMOVED_SPELLING_FIX_NAME_PREFIX) + to_string(i) + "__", spelling);
 	}
 	return text;
 }

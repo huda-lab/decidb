@@ -88,7 +88,8 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		    // The orders left are the L0 counts: `0_auto`, and `0_<M>` for a written M.
 		    bool auto_m = payload == "0_auto";
 		    double m = auto_m ? 1.0 : std::stod(payload.substr(2));
-		    string z_name = (auto_m ? "__l0auto_ind_" : "__l0_ind_") + to_string(l0_counter++) + "__";
+		    string z_name =
+		        (auto_m ? L0_AUTO_INDICATOR_NAME_PREFIX : L0_INDICATOR_NAME_PREFIX) + to_string(l0_counter++) + "__";
 		    // An indicator is a column defined by the counted expression: one per instance of the scopes it reads, its
 		    // links one row per instance.
 		    auto z_scope = ScopeOf(decide, canonicalizer, *aggregate.children[0]);
@@ -211,7 +212,8 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 		    AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::IN_INDICATORS,
 		                      RenderForPlan(in, decide));
 		    for (idx_t i = 0; i < k; i++) {
-			    string name = "__in_ind_" + target->GetName() + "_" + to_string(in_counter) + "_" + to_string(i) + "__";
+			    string name = string(IN_INDICATOR_NAME_PREFIX) + target->GetName() + "_" + to_string(in_counter) + "_" +
+			                  to_string(i) + "__";
 			    // A plan names an indicator by the value it stands for.
 			    string label = "(" + RenderForPlan(*in.children[0], decide) + " = " +
 			                   RenderForPlan(*in.children[1 + i], decide) + ")";

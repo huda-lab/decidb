@@ -46,6 +46,12 @@ bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_m
 	return !colref.IsQualified() && variables.count(colref.GetColumnName()) > 0;
 }
 
+void RefuseDecideTagInName(const ParsedExpression &at, const string &name) {
+	if (DecideNameContainsTag(name)) {
+		throw BinderException(at, "DECIDE does not support the name '%s'", name);
+	}
+}
+
 static void StripTagsInPlace(ParsedExpression &expr) {
 	expr.SetAlias(StripDecideTags(expr.GetAlias()));
 	ParsedExpressionIterator::EnumerateChildren(expr, [&](ParsedExpression &child) { StripTagsInPlace(child); });
@@ -606,6 +612,8 @@ unique_ptr<ParsedExpression> DecideBinder::QualifyColumnName(ColumnRefExpression
 	auto qualified = ExpressionBinder::QualifyColumnName(col_ref, error);
 	if (!qualified) {
 		ThrowIfOuterColumn(binder, col_ref);
+	} else {
+		RefuseDecideTagInName(col_ref, col_ref.GetColumnName());
 	}
 	return qualified;
 }
@@ -631,6 +639,7 @@ static void ResolveKeyElement(Binder &binder, const ColumnRefExpression &element
 		    bind_context.GetBinding(RelationAlias(vector<string>(names.begin(), names.end() - 1)), names.back(), error);
 	}
 	if (binding) {
+		RefuseDecideTagInName(element, names.back());
 		AddKeyColumn(element, *binding, binding->GetBindingIndex(names.back()), columns, key_word, text);
 		return;
 	}

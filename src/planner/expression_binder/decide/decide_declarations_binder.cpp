@@ -177,6 +177,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 		if (bind_context.GetMatchingBinding(name) || bind_context.GetUsingBinding(name)) {
 			throw BinderException(*expr_ptr, "DECIDE variable '%s' conflicts with an existing column name.", name);
 		}
+		RefuseDecideTagInName(*expr_ptr, name);
 		if (!declared_names.insert(name).second) {
 			throw BinderException(*expr_ptr, "Duplicate DECIDE variable name '%s'.", name);
 		}

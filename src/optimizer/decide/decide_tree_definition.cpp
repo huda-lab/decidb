@@ -343,7 +343,7 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 		// A column defined by the body: one per instance of the scopes it reads, its row one per instance.
 		const auto scope = ScopeOf(decide, canonicalizer, *body);
 		idx_t helper =
-		    AddAuxiliaryDecision(decide, "__body_" + to_string(family) + "__",
+		    AddAuxiliaryDecision(decide, string(BODY_NAME_PREFIX) + to_string(family) + "__",
 		                         whole ? LogicalType::INTEGER : LogicalType::DOUBLE, false, scope, body_text);
 		decide.signed_helper_vars.push_back(helper);
 		// Each clause that reads the helper says so in its own plan, once.

@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/common/constants.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/common/to_string.hpp"
 
 #include <cstring>
@@ -635,5 +636,107 @@ inline bool TryParseAbsFunctionEnvelopeTag(const string &alias, idx_t &var_idx) 
 //! native `aux = |t|` on a backend that states ABS itself. The tag is set by
 //! TagAbsForBigM (formerly ValidateAbsConstraintDirection).
 static constexpr const char *ABS_NEEDS_BIGM_TAG = "__abs_needs_bigm__";
+
+//! The name prefixes a rewrite gives a helper decision it adds (AddAuxiliaryDecision), and the names the parser gives a
+//! part of a clause it sets aside while it converts a removed spelling. Each is the opening of a name `<prefix><n>__`.
+//! They are tags in a decision's or a column's name, so DecideNameContainsTag refuses a user name that holds one.
+//! A helper's origin is read from them until the helper carries it as a field (R20).
+//! The 0/1 indicator of an L0 count: the one whose big-M the optimizer picks, and the one whose big-M is written.
+static constexpr const char *L0_AUTO_INDICATOR_NAME_PREFIX = "__l0auto_ind_";
+static constexpr const char *L0_INDICATOR_NAME_PREFIX = "__l0_ind_";
+//! The 0/1 indicator of one value of an `x IN (...)` over a decision; its name continues with the decision's own.
+static constexpr const char *IN_INDICATOR_NAME_PREFIX = "__in_ind_";
+//! The auxiliary of an ABS, and the sign indicator beside it.
+static constexpr const char *ABS_AUX_NAME_PREFIX = "__abs_aux_";
+static constexpr const char *ABS_SIGN_NAME_PREFIX = "__abs_y_";
+//! The auxiliary of a bilinear product.
+static constexpr const char *BILINEAR_AUX_NAME_PREFIX = "__bilinear_aux_";
+//! The helper standing for a nonlinear reducer body.
+static constexpr const char *BODY_NAME_PREFIX = "__body_";
+//! The helper standing for a reducer's value, one per link of a scoped rewrite.
+static constexpr const char *VALUE_LINK_NAME_PREFIX = "__value_";
+//! The parser's stand-ins while it converts a removed spelling: the condition of a `WHEN`, and each fixed part.
+static constexpr const char *REMOVED_SPELLING_CONDITION_NAME = "__decide_condition__";
+static constexpr const char *REMOVED_SPELLING_FIX_NAME_PREFIX = "__decide_fix_";
+
+//! Every DECIDE tag above, the one list DecideNameContainsTag reads. A constant added above is added here.
+static constexpr const char *DECIDE_TAGS[] = {POSTFIX_WHEN_TAG,
+                                              POSTFIX_PER_TAG,
+                                              WHEN_FILTER_TAG,
+                                              QUALIFIED_REDUCER_TAG,
+                                              QUALIFIED_REDUCER_SCOPE_TAG_PREFIX,
+                                              SCOPE_WHEN_TAG,
+                                              SCOPE_PER_TAG,
+                                              SCOPE_PER_ROW_TAG,
+                                              REDUCER_BY_TAG,
+                                              PER_CLASS_TAG,
+                                              SIGNATURE_TAG_PREFIX,
+                                              VALUE_REWRITE_TAG,
+                                              GROUP_KEY_TAG_PREFIX,
+                                              PER_KEY_TAG_PREFIX,
+                                              FRAME_TAG_PREFIX,
+                                              AVG_REWRITE_TAG,
+                                              TREE_RETAINED_EXPRESSION_TAG_PREFIX,
+                                              TREE_REDUCER_SCOPE_TAG_PREFIX,
+                                              TREE_REDUCER_KEY_TAG_PREFIX,
+                                              MINMAX_CLAUSE_TAG_PREFIX,
+                                              NE_CLAUSE_TAG_PREFIX,
+                                              MINMAX_EASY_REWRITE_TAG,
+                                              BODY_DEFINITION_TAG,
+                                              STRUCTURAL_CONSTRAINT_TAG,
+                                              DEFINES_TAG_PREFIX,
+                                              OBJECTIVE_ROW_TAG,
+                                              L0_AUTO_BOUND_TAG,
+                                              L0_WRITTEN_BOUND_TAG,
+                                              L0_TOLERANCE_TAG,
+                                              SINGLETON_ROW_BOUND_TAG,
+                                              SINGLETON_ROW_CLAUSE_ROWS_TAG,
+                                              NORM_MARKER_TAG_PREFIX,
+                                              WRITTEN_NORM_TAG_PREFIX,
+                                              WRITTEN_NAME_TAG_PREFIX,
+                                              QUERY_WIDE_VALUE_TAG,
+                                              ROW_VARYING_SUBQUERY_TAG,
+                                              BOUND_REDUCER_TAG,
+                                              SKIP_NULL_TAG,
+                                              NULL_GUARD_TAG,
+                                              SOURCE_CLAUSE_TAG_PREFIX,
+                                              BETWEEN_LOWER_TAG,
+                                              BETWEEN_UPPER_TAG,
+                                              REMOVAL_GROUP_TAG_PREFIX,
+                                              QUERY_WIDE_BOUND_TAG,
+                                              FRAME_TIGHTEST_BOUND_TAG,
+                                              FRAME_COLUMN_TAG,
+                                              FRAME_AGGREGATE_TAG_PREFIX,
+                                              ABS_UB_POS_TAG_PREFIX,
+                                              ABS_UB_NEG_TAG_PREFIX,
+                                              ABS_FUNCTION_TAG_PREFIX,
+                                              ABS_FUNCTION_NEG_TAG_PREFIX,
+                                              BILINEAR_FUNCTION_GROUP_TAG_PREFIX,
+                                              L0_INDICATOR_FUNCTION_TAG_PREFIX,
+                                              DEFINITION_FUNCTION_TAG_PREFIX,
+                                              ABS_NEEDS_BIGM_TAG,
+                                              L0_AUTO_INDICATOR_NAME_PREFIX,
+                                              L0_INDICATOR_NAME_PREFIX,
+                                              IN_INDICATOR_NAME_PREFIX,
+                                              ABS_AUX_NAME_PREFIX,
+                                              ABS_SIGN_NAME_PREFIX,
+                                              BILINEAR_AUX_NAME_PREFIX,
+                                              BODY_NAME_PREFIX,
+                                              VALUE_LINK_NAME_PREFIX,
+                                              REMOVED_SPELLING_CONDITION_NAME,
+                                              REMOVED_SPELLING_FIX_NAME_PREFIX};
+
+//! True when a name a user wrote contains a DECIDE tag, in any letter case. The tags travel in expression aliases and
+//! are found by search (HasDecideTag), so such a name is read as the tag. Until the tags are gone (R20) DECIDE refuses
+//! it, as a decision's name and as a column a clause reads.
+inline bool DecideNameContainsTag(const string &name) {
+	auto lower = StringUtil::Lower(name);
+	for (auto tag : DECIDE_TAGS) {
+		if (lower.find(tag) != string::npos) {
+			return true;
+		}
+	}
+	return false;
+}
 
 } // namespace duckdb

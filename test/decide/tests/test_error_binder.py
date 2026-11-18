@@ -6,6 +6,7 @@ now succeed and are omitted.
 """
 
 import re
+from pathlib import Path
 
 import pytest
 
@@ -1243,3 +1244,51 @@ class TestBinderRefusalBranches:
     )
     def test_objective_shape(self, decidb_cli, objective, message):
         _branch_refusal(decidb_cli, f"SUCH THAT x <= 3 MINIMIZE {objective}", message)
+
+
+@pytest.mark.error_binder
+@pytest.mark.error
+class TestTagNamesRefused:
+    """A decision, or a column a clause reads, whose name contains a DECIDE tag is refused (R20) until the tags are
+    gone; the refusal names the identifier and nothing of the engine."""
+
+    @pytest.mark.parametrize(
+        "name, tail",
+        [
+            # DecideBinder::QualifyColumnName's refusal, reached from a constraint's bound side
+            # (marker_names.sql query 2) and from a reducer's body (query 3).
+            ("w__query_wide_value__", 'SUCH THAT "w__query_wide_value__" * SUM(x) <= 2 MAXIMIZE SUM(x * v)'),
+            (
+                "__definition_function_0__",
+                'SUCH THAT x <= 5 AND SUM("__definition_function_0__" * x + v) <= 40 MAXIMIZE SUM(x)',
+            ),
+        ],
+    )
+    def test_column_read_by_a_clause(self, decidb_cli, name, tail):
+        rows = f'SELECT id, x FROM (VALUES (1, 1.0, 5.0), (2, 2.0, 6.0)) t(id, "{name}", v) '
+        result = decidb_cli.execute_raw(f"{rows}DECIDE x(INT) {tail}")
+        assert f"DECIDE does not support the name '{name}'" in result.stderr, result.stderr
+
+    @pytest.mark.parametrize("name", ["__per_class__", "__abs_aux_0__"])  # a tag, and a helper decision's name prefix
+    def test_decision_name(self, decidb_cli, name):
+        """DecideDeclarationsBinder's refusal of a declared name."""
+        result = decidb_cli.execute_raw(
+            f'SELECT id, "{name}" FROM (VALUES (1, 5.0)) t(id, v) DECIDE "{name}"(INT) '
+            f'SUCH THAT "{name}" <= 3 MAXIMIZE SUM("{name}" * v)'
+        )
+        assert f"DECIDE does not support the name '{name}'" in result.stderr, result.stderr
+
+    def test_key_column(self, decidb_cli):
+        """ResolveKeyElement's refusal of a `per` key column; the key is no QualifyColumnName read."""
+        result = decidb_cli.execute_raw(
+            'SELECT id, x FROM (VALUES (1, 1, 5.0), (2, 1, 6.0), (3, 2, 7.0)) t(id, "__frame_0__", v) '
+            'DECIDE x(INT) SUCH THAT x <= 3 AND per "__frame_0__": SUM(x) <= 4 MAXIMIZE SUM(x * v)'
+        )
+        assert "DECIDE does not support the name '__frame_0__'" in result.stderr, result.stderr
+
+    def test_every_tag_constant_is_in_the_list(self):
+        """DecideNameContainsTag reads DECIDE_TAGS alone, so a tag constant missing from it is a name left unrefused."""
+        header = (Path(__file__).resolve().parents[3] / "src/include/duckdb/common/enums/decide.hpp").read_text()
+        constants = re.findall(r'static constexpr const char \*([A-Z_0-9]+) = "__', header)
+        listed = re.search(r"DECIDE_TAGS\[\] = \{(.*?)\};", header, re.S).group(1)
+        assert set(constants) == set(re.findall(r"[A-Z_0-9]+", listed))

@@ -250,7 +250,7 @@ idx_t AddBooleanProduct(LogicalDecide &decide, DecideBilinearFunctionGroup &grou
 	const idx_t other_var_idx = bool_var_idx == first ? second : first;
 
 	// The auxiliary, named by the column it will take.
-	string aux_name = "__bilinear_aux_" + to_string(decide.decide_variables.size()) + "__";
+	string aux_name = BILINEAR_AUX_NAME_PREFIX + to_string(decide.decide_variables.size()) + "__";
 	// Bool×Bool auxiliary is semantically boolean but uses INTEGER type to match
 	// how user BOOLEAN variables are represented (INTEGER with 0/1 bounds).
 	// Using BOOLEAN would cause type-mismatch errors when binding arithmetic.

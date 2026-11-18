@@ -73,8 +73,8 @@ idx_t decide_rewrite::AddValueHelper(LogicalDecide &decide, LogicalDecide::Reduc
 	// Whole-numbered when the value is, so a strict bound on a row reading it still steps on the integer lattice.
 	// F6: a diagnosis, and a plan, name the helper by what it holds.
 	LogicalType aux_type = whole ? LogicalType::INTEGER : LogicalType::DOUBLE;
-	link.value_var =
-	    AddAuxiliaryDecision(decide, "__value_" + to_string(link_idx) + "__", aux_type, false, var_scope, link.label);
+	link.value_var = AddAuxiliaryDecision(decide, string(VALUE_LINK_NAME_PREFIX) + to_string(link_idx) + "__", aux_type,
+	                                      false, var_scope, link.label);
 	AddRewriteAccount(decide, source_clause_id, account, link.label);
 	// A reducer's value may be negative: no default floor. The formulation pass boxes it by its members' reach.
 	decide.signed_helper_vars.push_back(link.value_var);

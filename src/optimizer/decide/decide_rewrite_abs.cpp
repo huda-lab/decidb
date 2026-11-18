@@ -521,8 +521,9 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 			idx_t y_idx = DConstants::INVALID_INDEX;
 			if (!decide.use_native_constructs.abs) {
 				// The sign of the auxiliary's argument: one per instance of the auxiliary.
-				y_idx = AddAuxiliaryDecision(decide, "__abs_y_" + to_string(pi) + "__", LogicalType::BOOLEAN, true,
-				                             pair.scope, "(" + RenderForPlan(*pair.inner_expr, decide) + " >= 0)");
+				y_idx = AddAuxiliaryDecision(decide, string(ABS_SIGN_NAME_PREFIX) + to_string(pi) + "__",
+				                             LogicalType::BOOLEAN, true, pair.scope,
+				                             "(" + RenderForPlan(*pair.inner_expr, decide) + " >= 0)");
 			}
 
 			// Tag both envelope rows so the tree can build F's two child scopes and the
@@ -601,8 +602,8 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 
 		// A column defined by its argument: one per instance of the scopes the argument reads.
 		auto aux_scope = ScopeOf(decide, canonicalizer, *func.children[0]);
-		idx_t aux_idx = AddAuxiliaryDecision(decide, "__abs_aux_" + to_string(abs_pairs.size()) + "__", aux_type, false,
-		                                     aux_scope, label);
+		idx_t aux_idx = AddAuxiliaryDecision(decide, string(ABS_AUX_NAME_PREFIX) + to_string(abs_pairs.size()) + "__",
+		                                     aux_type, false, aux_scope, label);
 
 		// Read the Big-M marker TagAbsForBigM set on the BoundFunctionExpression
 		// alias before the rewrite: the one place that decides exactness, for a
