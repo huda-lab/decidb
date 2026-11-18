@@ -34,9 +34,13 @@ Upkeep of the repository as a whole: releases, packaging and the docs across are
   per machine, and the guide sections written since the merge use solver terms (Big-M, McCormick, envelope, LP) in a
   document for SQL users.
 - **Change.** Each quoted message is what the binary prints for its example; § 10 quotes no machine-dependent digits.
-  Solver detail moves to the stage docs; **Decision needed** for any solver term the guide keeps.
+  Solver detail moves to the stage docs; the owner's ruling below says which solver terms the guide keeps.
 - **Done when.** Each quoted message matches the binary on its example, and the guide holds only the solver terms the
   owner keeps.
+- **Ruling (owner, 2026-11-18).** The guide keeps the problem-class names (LP, QP, MILP, convex, non-convex):
+  they tell a user which solver and licence a query needs. Big-M, McCormick, envelope and "linearized" leave it:
+  each sentence states what the user can act on, and the mechanism goes to the stage 06 docs. The `M` of
+  `norm(e, 0, M)` stays as the parameter's name, a bound on |e|.
 
 ## OPS-7 — Docs cite ids that no file defines
 
