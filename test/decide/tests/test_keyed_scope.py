@@ -1948,6 +1948,66 @@ def test_keyed_abs(decidb_cli, duckdb_conn, oracle_solver):
 
 
 @pytest.mark.correctness
+def test_keyed_abs_over_a_distinct_source(decidb_cli, duckdb_conn, oracle_solver):
+    """The ABS operand's columns follow the optimizer when it rewrites the source.
+
+    The source is a DISTINCT, which the optimizer holds compressed and reads back through a decompressing projection,
+    so the ABS operand's column is rebound to that projection's output. Same model as test_keyed_abs.
+    """
+    sql = """
+        SELECT c_custkey, n_nationkey, c_acctbal, keepN
+        FROM (SELECT DISTINCT c.c_custkey, n.n_nationkey, c.c_acctbal
+              FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+              WHERE n.n_regionkey = 0 AND c.c_custkey <= 80) s
+        DECIDE per n_nationkey: keepN(BOOL)
+        SUCH THAT SUM(ABS(c_acctbal * keepN - 3000)) <= 50000
+        MAXIMIZE SUM(keepN)
+    """
+    result, cols = decidb_cli.execute(sql)
+    assert len(result) > 0
+
+    keepN_idx = cols.index("keepN")
+    acctbal_idx = cols.index("c_acctbal")
+    abs_sum = sum(abs(float(row[acctbal_idx]) * int(row[keepN_idx]) - 3000.0) for row in result)
+    assert abs_sum <= 50000.0 + 1e-3
+
+    data = duckdb_conn.execute(
+        """
+        SELECT CAST(n.n_nationkey AS BIGINT), CAST(c.c_acctbal AS DOUBLE)
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_regionkey = 0 AND c.c_custkey <= 80
+        ORDER BY c.c_custkey
+    """
+    ).fetchall()
+    nation_ids = sorted(set(int(r[0]) for r in data))
+
+    oracle_solver.create_model("keyed_abs_distinct_source")
+    keep_v = {n: f"keepN_{n}" for n in nation_ids}
+    for n in nation_ids:
+        oracle_solver.add_variable(keep_v[n], VarType.BINARY)
+    aux_vars = []
+    for idx, (nkey, acctbal) in enumerate(data):
+        aux = f"aux_{idx}"
+        aux_vars.append(aux)
+        oracle_solver.add_variable(aux, VarType.CONTINUOUS, lb=0.0, ub=100000.0)
+        oracle_solver.add_constraint(
+            {aux: 1.0, keep_v[int(nkey)]: -float(acctbal)}, ">=", -3000.0, name=f"abs_pos_{idx}"
+        )
+        oracle_solver.add_constraint({aux: 1.0, keep_v[int(nkey)]: float(acctbal)}, ">=", 3000.0, name=f"abs_neg_{idx}")
+    oracle_solver.add_constraint({a: 1.0 for a in aux_vars}, "<=", 50000.0, name="abs_sum")
+    nation_cnt = {}
+    for nkey, _ in data:
+        nation_cnt[int(nkey)] = nation_cnt.get(int(nkey), 0) + 1
+    oracle_solver.set_objective({keep_v[n]: float(nation_cnt[n]) for n in nation_ids}, ObjSense.MAXIMIZE)
+    oracle_result = oracle_solver.solve()
+
+    decidb_obj = sum(int(row[keepN_idx]) for row in result)
+    assert (
+        abs(decidb_obj - oracle_result.objective_value) < 1e-4
+    ), f"DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+
+
+@pytest.mark.correctness
 @pytest.mark.min_max
 @pytest.mark.when_constraint
 def test_keyed_when_min_max_triple(decidb_cli, duckdb_conn, oracle_solver):

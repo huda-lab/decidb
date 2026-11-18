@@ -91,3 +91,15 @@ def test_diagnose_names_a_join_source_column_by_the_users_name(decidb_cli):
         "MAXIMIZE SUM(buy * i.w);"
     )
     assert "when zone = 'Q': buy <= <cap>" in result.stdout, result.stdout
+
+
+def test_diagnose_names_a_distinct_source_column_by_the_users_name(decidb_cli):
+    """The names follow a source the optimizer holds compressed and reads back through a decompressing projection."""
+    result = decidb_cli.execute_raw(
+        "CREATE OR REPLACE TEMP TABLE cp_items(id INTEGER, w INTEGER, zone VARCHAR); "
+        "INSERT INTO cp_items VALUES (1, 1, 'P'), (2, 2, 'P'), (3, 3, 'P'), (4, 4, 'Q'), (5, 5, 'Q'), (6, 6, 'Q'); "
+        "SET decide_direct_solve='off'; "
+        "DIAGNOSE SELECT * FROM (SELECT DISTINCT id, w, zone FROM cp_items) s DECIDE buy(REAL) "
+        "SUCH THAT when id <= 3: buy <= 100 MAXIMIZE SUM(buy * w);"
+    )
+    assert "when zone = 'Q': buy <= <cap>" in result.stdout, result.stdout
