@@ -68,13 +68,13 @@ environment would save under 1 ms a query, so nothing is cached.
 
 DuckDB operator profiles expose scans, joins, sorting and output-table writing. Per-chunk accumulators measure sink append and solution-to-row mapping without logging every chunk. Sink-combine timing includes its lock wait.
 
-Finalize spans separate the keyed-decision mapping (`execution.keyed_mapping`), the run-time scope checks (`execution.scope_checks`), constraint evaluation, objective evaluation, composed MIN/MAX evaluation and the helper decisions' members (`execution.evaluate_value_links`). Constraint subspans isolate setup, linear coefficients, the `when` / `per` / `by` grouping with a reducer's inner `per` and colon form (`extraction.when_per_and_qualifiers`), RHS and quadratic coefficients. Nested group-id and Boolean-mask spans identify shared helpers; constraint ordinals identify clauses.
+Finalize spans separate the merge of the threads' descents (`execution.descent_merge`), the descent's routing of the rows (`execution.tree_descent`) and the evaluation of each node's programs into the columns stage 06 reads (`execution.tree_model`: the keyed-decision mapping, constraints, objective, composed MIN/MAX clauses and the helper decisions' members), then `execution.assemble_input` and `execution.formulate`. Constraint subspans isolate setup, linear coefficients, the `when` / `per` / `by` grouping with a reducer's inner `per` and colon form (`extraction.when_per_and_qualifiers`), RHS and quadratic coefficients. Nested group-id and Boolean-mask spans identify shared helpers; constraint ordinals identify clauses.
 
 **Ranking.** Gurobi, load 2.2-3.0; HiGHS within 2 % of these. ms:
 
 | Query | Top extraction costs |
 |---|---|
-| Q4 | `evaluate_composed` 495 (21 today, § Measured design choices); `formulate` 312 (composed MIN/MAX 240, MIN/MAX objective 73); constraints 156 (RHS 82) |
+| Q4 | composed MIN/MAX evaluation 495 (21 today, § Measured design choices); `formulate` 312 (composed MIN/MAX 240, MIN/MAX objective 73); constraints 156 (RHS 82) |
 | Q8 | group ids 304 (inside the keyed mapping 255 and the constraints); constraints 152 (`when`/`per` 106) |
 | Q1 | constraints 217: linear coefficients 63, `when`/`per` 63, setup 59, RHS 31, group ids 23; objective 32 |
 | P4 | constraints 121: `when`/`per` 114, of it group ids 95 (250k order-key classes); objective 11.5 |
@@ -200,7 +200,7 @@ interleaved runs beside other work (load 8-18, single spans swing up to 3x).
 
 - **Q8's keyed mapping.** Group ids come from DuckDB's aggregate hash table, labels are formatted only for the groups a
   message names, and a key keeps one copy of an uncollated column. Against comparing each row with its group's
-  representative `Value`, a label for every group and a copied label column: `execution.keyed_mapping` 1,169 → 257
+  representative `Value`, a label for every group and a copied label column: the keyed mapping 1,169 → 257
   ms; `extraction.group_ids` 868 → 309 ms and extraction 1,028 → 453 ms on Q8; Q1's group ids 104 → 25-37 ms; Q8's
   peak RSS 1,172 → about 860 MiB.
 - **A `when` is read in one scan** (`DecideDescent`), not one scan per AND or OR part: Q1 `when_per_and_qualifiers`
@@ -218,18 +218,18 @@ interleaved runs beside other work (load 8-18, single spans swing up to 3x).
   read for it, and the objective sites treat an identity filter as none. Two interleaved rounds (load 5-14), Q1 / Q4 /
   P4: `extraction.constraint` 216 → 202, 156 → 120, 122 → 120 ms; `assembly.implied_bounds` 52 → 38, 51 → 42,
   26 → 24; `extraction.rhs` Q4 83 → 55; `extraction.constraint_setup` Q1 60 → 43, Q4 8 → 0;
-  `execution.evaluate_objective` 32 → 20, 26 → 17, 11 → 7; `model.build` 53 → 46, 157 → 128, 42 → 43. Term filters
+  objective evaluation 32 → 20, 26 → 17, 11 → 7; `model.build` 53 → 46, 157 → 128, 42 → 43. Term filters
   select kept rows with a per-row `vector<bool>`: a `SelectionVector` path would let DuckDB's conjunction `Select`
   reorder AND/OR operands, and DECIDE reads them left to right.
 - **Composed MIN/MAX coefficients are read a chunk at a time.** `DecideModelEmitter::ComposedTerms` reads a term's inner
   coefficients in one scan through `DecideTreeColumns::Numbers`, the vectorized reader every other clause uses. Reading
   them row by row (box a `Value`, cast it to `DOUBLE` through a fresh `Vector`, unbox it, one scan per inner term; a
-  stack sample put the phase's whole time in the cast) costs Q4 `execution.evaluate_composed` 489 ms against 21 ms on
+  stack sample put the phase's whole time in the cast) costs Q4's composed MIN/MAX evaluation 489 ms against 21 ms on
   Gurobi, 21 ms on HiGHS; no other span differs.
 - **A group keeps its row, not its key values.** A group keeps its first row (for a collated column, the row of its
   least spelling); groups number through DuckDB's sort key instead of a `Value` comparator, and a message reads a
   group's values at its row when it names it (late materialization). Against one `Value` per group per key column
-  (250k groups × 9 columns on Q8's `per o`), Q8, two interleaved rounds (load 10-13): `execution.keyed_mapping`
+  (250k groups × 9 columns on Q8's `per o`), Q8, two interleaved rounds (load 10-13): the keyed mapping
   264 → 167 ms, `extraction.group_ids` 314 → 219, `solver.cleanup` 52 → 0, peak RSS 834 → 526 MiB. The keyed mapping
   left is the hash-table build (about 100 ms) and the sort of 250k groups (about 80 ms).
 - **MIN/MAX link rows sum in the model builder's `SparseCoeffAccumulator`** (dense scatter, first-touch order) and are

@@ -74,7 +74,7 @@ span's.
 | `rewrite_ms` | `optimizer.decide`: the whole stage, from the bound-side rewrite and the choice of a rule or a solver to the solver path's row checks, bound side tables and formulation passes |
 | `plan_ms` | `frontend.physical_decide` |
 | `input_ms` | `execution.assemble_input`, `execution.sink_append`, `execution.sink_combine` |
-| `extraction_ms` | `execution.keyed_mapping`, `execution.scope_checks`, `execution.evaluate_constraints`, `execution.evaluate_objective`, `execution.evaluate_composed`, `execution.evaluate_value_links`, `execution.formulate` |
+| `extraction_ms` | `execution.descent_merge`, `execution.tree_descent`, `execution.tree_model`, `execution.formulate` |
 | `model_build_ms` | `solver.build_neutral_model` |
 | `backend_load_ms` | `gurobi.load`, `highs.load` |
 | `solve_ms` | `gurobi.optimize`, `highs.optimize` |
