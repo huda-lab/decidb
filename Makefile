@@ -1,4 +1,4 @@
-.PHONY: all opt unit clean debug release test unittest allunit benchmark docs doxygen format sqlite decide-setup decide-test decide-golden decide-coverage decide-coverage-build decide-bench decide-bench-setup decide-bench-manual decide-view grammar grammar-build
+.PHONY: all opt unit clean debug release test unittest allunit benchmark docs doxygen format sqlite decide-setup decide-test decide-test-debug decide-golden decide-coverage decide-coverage-build decide-bench decide-bench-setup decide-bench-manual decide-view grammar grammar-build
 
 all: release
 opt: release
@@ -553,6 +553,13 @@ decide-test: decide-golden
 
 decide-golden:
 	test/decide/golden/check.sh
+
+# The Python suite against build/debug/decidb (make debug builds it), with the timing tests' budgets (time limits,
+# interrupt delays, subprocess timeouts, latency and CPU bounds) multiplied by DECIDE_DEBUG_TIME_SCALE
+# (test/decide/decidb_cli.py, scaled). The goldens are not run: they read the release build.
+DECIDE_DEBUG_TIME_SCALE ?= 5
+decide-test-debug:
+	DECIDB_EXE_PATH=$(PROJ_DIR)build/debug/decidb DECIDB_TEST_TIME_SCALE=$(DECIDE_DEBUG_TIME_SCALE) test/decide/run_tests.sh
 
 # Vendors HiGHS release HIGHS_VERSION into third_party/highs and reapplies its patch series (third_party/highs/README.md).
 upgrade-highs:

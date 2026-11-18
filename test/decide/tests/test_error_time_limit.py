@@ -28,6 +28,8 @@ import re
 
 import pytest
 
+from decidb_cli import scaled
+
 
 # Symmetric MIQP: ~105 INTEGER vars (all interchangeable), equality
 # SUM = 30, quadratic objective. The optimal-set cardinality is roughly
@@ -142,8 +144,9 @@ def _run_decidb(cli, sql, *, time_limit=None, subprocess_timeout=30):
     Returns the CompletedProcess.
     """
     if time_limit is not None:
-        cli = cli.with_env({"DECIDB_TIME_LIMIT": str(time_limit)})
-    return cli.execute_raw(sql, timeout=subprocess_timeout)
+        numeric = isinstance(time_limit, (int, float))
+        cli = cli.with_env({"DECIDB_TIME_LIMIT": str(scaled(time_limit) if numeric else time_limit)})
+    return cli.execute_raw(sql, timeout=scaled(subprocess_timeout))
 
 
 @pytest.mark.error
@@ -218,10 +221,10 @@ class TestTimeLimit:
         in stops the solve at once. A clock-only check there would sit out the whole loop (about a minute) under the
         60 s limit, and the subprocess timeout would kill it.
         """
-        cli = decidb_cli_highs.with_env({"DECIDB_TIME_LIMIT": "60"})
-        result, latency = cli.execute_interrupted(_CLIQUE_PARTITION_SQL, after=3.0, timeout=15)
+        cli = decidb_cli_highs.with_env({"DECIDB_TIME_LIMIT": str(scaled(60))})
+        result, latency = cli.execute_interrupted(_CLIQUE_PARTITION_SQL, after=scaled(3.0), timeout=scaled(15))
         assert "stopped at your request" in result.stderr.lower(), result.stderr[:800]
-        assert latency < 10.0, f"interrupt took {latency:.2f}s — expected a stop inside the clique partition"
+        assert latency < scaled(10.0), f"interrupt took {latency:.2f}s — expected a stop inside the clique partition"
 
     def test_highs_limit_bounds_symmetry_detection(self, decidb_cli_highs):
         """HiGHS stops its symmetry detection at DECIDB_TIME_LIMIT.
@@ -308,12 +311,12 @@ class TestTimeLimit:
         answer comes back rather than the stop message. A clock-only check there would sit out the refinement
         (about 17 s) under the 60 s limit.
         """
-        cli = decidb_cli_highs.with_env({"DECIDB_TIME_LIMIT": "60"})
-        result, latency = cli.execute_interrupted(_SYMMETRY_PATH_SQL, after=3.0, timeout=15)
+        cli = decidb_cli_highs.with_env({"DECIDB_TIME_LIMIT": str(scaled(60))})
+        result, latency = cli.execute_interrupted(_SYMMETRY_PATH_SQL, after=scaled(3.0), timeout=scaled(15))
         assert (
             re.search(r"\b30000\b", result.stdout) or "stopped at your request" in result.stderr.lower()
         ), f"  stdout: {result.stdout[:400]}\n  stderr: {result.stderr[:400]}"
-        assert latency < 10.0, f"interrupt took {latency:.2f}s — expected a stop inside the symmetry detection"
+        assert latency < scaled(10.0), f"interrupt took {latency:.2f}s — expected a stop inside the symmetry detection"
 
     def test_highs_solved_mip_does_not_wait_for_symmetry_search(self, decidb_cli_highs):
         """A MIP HiGHS solves at its root returns without waiting for its symmetry search.
@@ -324,14 +327,14 @@ class TestTimeLimit:
         solve spends about 22 s. The bound is on CPU time, which other work on the machine stretches far less than it
         stretches wall time (14 s with those 24 copies).
         """
-        cli = decidb_cli_highs.with_env({"DECIDB_TIME_LIMIT": "30"})
-        result, cpu = cli.execute_counting_cpu(_SYMMETRY_PAIRS_SQL, timeout=60)
+        cli = decidb_cli_highs.with_env({"DECIDB_TIME_LIMIT": str(scaled(30))})
+        result, cpu = cli.execute_counting_cpu(_SYMMETRY_PAIRS_SQL, timeout=scaled(60))
         assert re.search(r"\b100000\b", result.stdout), (
             f"Expected the row count 100000 but got:\n"
             f"  stdout: {result.stdout[:400]}\n"
             f"  stderr: {result.stderr[:400]}"
         )
-        assert cpu < 10.0, f"the solve spent {cpu:.2f} s of CPU: it waited for the symmetry search"
+        assert cpu < scaled(10.0), f"the solve spent {cpu:.2f} s of CPU: it waited for the symmetry search"
 
     # `ResolveDecideTimeLimit`: `stod` throws on text (`abc`; an empty string throws the same way) into one catch, and
     # `parsed > 0.0` refuses a negative (`-5`) and the boundary (`0`).

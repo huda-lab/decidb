@@ -114,6 +114,32 @@ _DIRECT_SOLVE_ENV = "DECIDB_TEST_DIRECT_SOLVE"
 #: merged after each row. A test that sets ``decide_debug`` itself wins.
 _DECIDE_DEBUG_ENV = "DECIDB_TEST_DECIDE_DEBUG"
 
+#: Multiplies the wall-clock and CPU budgets of the timing tests (``scaled``), for a binary that runs slower than a
+#: release build, such as a debug one. A positive number; unset, every budget is the one the test writes.
+_TIME_SCALE_ENV = "DECIDB_TEST_TIME_SCALE"
+
+
+def time_scale() -> float:
+    """The factor ``DECIDB_TEST_TIME_SCALE`` sets, 1 when it is unset."""
+    raw = os.environ.get(_TIME_SCALE_ENV)
+    if raw is None or raw == "":
+        return 1
+    try:
+        factor = float(raw)
+    except ValueError:
+        factor = float("nan")
+    if not 0 < factor < float("inf"):
+        raise ValueError(f"{_TIME_SCALE_ENV} must be a positive number, got {raw!r}")
+    return factor
+
+
+def scaled(seconds):
+    """A time budget of a test (a time limit, a delay before an interrupt, a subprocess timeout, a latency or CPU
+    bound) times the suite's time scale. Unscaled, it is returned as it was written."""
+    factor = time_scale()
+    return seconds if factor == 1 else seconds * factor
+
+
 #: Names a directory to turn the suite log on (see ``_log_query``). Unset, nothing is written.
 _SUITE_LOG_ENV = "DECIDB_SUITE_LOG"
 
