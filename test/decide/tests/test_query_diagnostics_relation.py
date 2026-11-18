@@ -385,6 +385,29 @@ class TestDiagnosticsRelation:
         assert attrs["suggested_change"] == "per grp: sum(buy) by (grp) >= 1"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_keyed_decision_with_a_data_weight_names_the_weight_column(self, request, cli_fixture):
+        """A keyed decision summed with a data weight (`SUM(keepS * cost)`) reaches the matrix as one accumulated
+        coefficient per sensor (the sum of the costs of its rows), with no row of its own per cost. The clause is
+        named as written, with its weight column, and the loosened bound is the most the weights can reach (the sum of
+        every cost); `_apply_reported_fix` pastes the edit back and re-solves, so a bound below that sum, or a
+        clause that is not the user's text, fails here."""
+        cli = request.getfixturevalue(cli_fixture)
+        costs = [2, 3, 1, 4]
+        values = ", ".join(f"({i}, '{'a' if i < 3 else 'b'}', {cost})" for i, cost in enumerate(costs, 1))
+        sql = (
+            f"SELECT s, keepS FROM (VALUES {values}) t(id, s, cost) "
+            "DECIDE per s: keepS(BOOL) "
+            "SUCH THAT SUM(keepS * cost) >= 100 "
+            "MAXIMIZE SUM(keepS)"
+        )
+        rows = _rows(_diagnose(cli, sql))
+        assert {r["state"] for r in rows} == {"infeasible"}
+        assert [e["subject"] for e in _clause_edits(rows)] == ["SUM(keepS * cost) >= 100"], rows
+        attrs = _attrs(rows, "clause", "SUM(keepS * cost) >= 100")
+        assert attrs["suggested_change"] == f"SUM(keepS * cost) >= {sum(costs)}"
+        _apply_reported_fix(cli, sql, rows)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_stage2_picks_objective_best_edit(self, request, cli_fixture):
         """I3: two editable caps `x <= 0` and `y <= 0` tie with the floor `x + y >= 10`
         on total loosening (S* = 10), so the minimal fix is non-unique. Stage 2 freezes
