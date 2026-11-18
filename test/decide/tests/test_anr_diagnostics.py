@@ -197,7 +197,7 @@ def test_dropping_a_clause_drops_its_helpers_alone(request, cli_fixture):
     "clause_sql, account",
     [
         pytest.param(
-            f"sum(abs(x - at(previous: x) {TL})) <= 4", "becomesanauxiliaryvariable", id="a-sum-of-abs-over-a-frame"
+            f"sum(abs(x - at(previous: x) {TL})) <= 4", "becomesahelperdecision", id="a-sum-of-abs-over-a-frame"
         ),
         pytest.param(f"x <= sum(from previous to next: x) {TL}", "becomesahelperdecision", id="a-range-over-decisions"),
     ],

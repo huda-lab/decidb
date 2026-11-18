@@ -76,15 +76,6 @@ static void KeepTreeReducerScope(Expression &carrier, const BoundAggregateExpres
 //               (`ComposedMinMaxTerm::scale`), or distributed over the per-row
 //               form when the constraint linearizes the easy way.
 
-//! What the plan says a MIN/MAX column became: held by its envelope in the cheap direction; otherwise pinned by
-//! indicator rows, or stated natively when its members are defined bodies (BODY_DEFINITION_TAG), which have no box.
-static LogicalDecide::RewriteAccount::Kind ExtremumAccount(bool is_easy, const BoundAggregateExpression &agg) {
-	using Kind = LogicalDecide::RewriteAccount::Kind;
-	return is_easy                                        ? Kind::EXTREMUM
-	       : HasDecideTag(agg.alias, BODY_DEFINITION_TAG) ? Kind::EXTREMUM_NATIVE
-	                                                      : Kind::EXTREMUM_PINNED;
-}
-
 // ---------------------------------------------------------------------------
 // Composed MIN/MAX constraints (additive LHS mixing SUM/AVG/MIN/MAX terms)
 // ---------------------------------------------------------------------------
@@ -251,7 +242,8 @@ static void WalkComposedLhs(ClientContext &context, LogicalDecide &decide, idx_t
 		int scale_sign = ScaleSignAtPlanTime(context, scale, scale_divides);
 		term.is_easy = ScaleVanishesAtPlanTime(context, scale, scale_divides) ||
 		               IsEasyExtremum(is_max, ExtremumPushOf(outer_push, sign * scale_sign));
-		AddRewriteAccount(decide, source_clause_id, ExtremumAccount(term.is_easy, agg), RenderForPlan(agg, decide));
+		AddRewriteAccount(decide, source_clause_id, LogicalDecide::RewriteAccount::Kind::HELPER,
+		                  RenderForPlan(agg, decide));
 	}
 	out_terms.push_back(std::move(term));
 }
@@ -607,7 +599,7 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 	// What the plan says the reducer became: an extremum column for the hard direction, a
 	// bound on each member for the cheap one, both for an equality.
 	if (is_hard || cmp_type == ExpressionType::COMPARE_EQUAL) {
-		AddRewriteAccount(decide, comp.alias, ExtremumAccount(false, agg), RenderForPlan(agg, decide));
+		AddRewriteAccount(decide, comp.alias, LogicalDecide::RewriteAccount::Kind::HELPER, RenderForPlan(agg, decide));
 	}
 	if (is_easy || cmp_type == ExpressionType::COMPARE_EQUAL) {
 		AddRewriteAccount(decide, comp.alias, LogicalDecide::RewriteAccount::Kind::EXTREMUM_EACH_MEMBER,
@@ -742,7 +734,7 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 	if (IsExtremumName(outer_name)) {
 		decide.flat_objective_agg = StrToAggType(minimized(outer_name));
 		decide.flat_objective_is_easy = IsEasyExtremum(minimized(outer_name) == "max", ExtremumPush::DOWN);
-		AddRewriteAccount(decide, DConstants::INVALID_INDEX, ExtremumAccount(decide.flat_objective_is_easy, outer_agg),
+		AddRewriteAccount(decide, DConstants::INVALID_INDEX, LogicalDecide::RewriteAccount::Kind::HELPER,
 		                  RenderForPlan(outer_agg, decide));
 		auto new_sum = BindSumOver(optimizer, outer_agg.children[0]->Copy(), outer_agg.filter.get());
 		KeepTreeReducerScope(*new_sum, outer_agg);

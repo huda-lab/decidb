@@ -66,7 +66,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
         pytest.param(
             "ship(INT)",
             "when S.priority: abs(ship - 20) <= 3",
-            "abs(ship-20)becomesanauxiliaryvariable",
+            "abs(ship-20)becomesahelperdecision",
             "whenS.priority:abs(ship-20)-ship>=-20",
             "__abs_aux",
             id="abs",
@@ -74,7 +74,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
         pytest.param(
             "ship(INT), per D: open(BOOL)",
             "per (): sum(open * ship) by () <= 50",
-            "(open*ship)becomesanauxiliaryvariablelinearizedbyMcCormickrows",
+            "(open*ship)becomesahelperdecision",
             "(open*ship)",
             "__bilinear",
             id="product",
@@ -82,7 +82,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
         pytest.param(
             "ship(INT), per D: open(BOOL), per S: pick(BOOL)",
             "per (): sum(open * pick) by () <= 2",
-            "(open*pick)becomesanauxiliaryvariable",
+            "(open*pick)becomesahelperdecision",
             None,
             "McCormick",
             id="product-of-booleans",
@@ -90,7 +90,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
         pytest.param(
             "ship(INT)",
             "ship IN (0, 5, 10)",
-            "shipIN(0,5,10)becomesoneindicatorpervalue",
+            "shipIN(0,5,10)becomesahelperdecisionpervalue",
             "(ship=0)+(ship=5)+(ship=10)=1",
             "__in_ind",
             id="in",
@@ -98,7 +98,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
         pytest.param(
             "ship(INT)",
             "per D.region: max(ship) by (D.region) >= 12",
-            "max(ship)by(D.region)becomesanextremumcolumnpinnedbyindicatorrows",
+            "max(ship)by(D.region)becomesahelperdecision",
             None,
             "sum(ship)by(D.region)>=12",
             id="hard-max",
@@ -106,7 +106,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
         pytest.param(
             "ship(INT)",
             "per (): sum(ship) + max(ship) <= 40",
-            "max(ship)becomesanextremumcolumn",
+            "max(ship)becomesahelperdecision",
             None,
             "MAX(",
             id="composed",
@@ -114,7 +114,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
         pytest.param(
             "ship(INT), per D: open(BOOL)",
             "per (): sum(open * abs(ship - 5)) <= 50",
-            "(open*abs(ship-5))becomesanauxiliaryvariablelinearizedbyMcCormickrows",
+            "(open*abs(ship-5))becomesahelperdecision",
             None,
             "__abs_aux",
             id="stacked-rewrites",
@@ -154,8 +154,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
         pytest.param(
             "ship(INT)",
             "per D.region: max(ship) by (D.region) = 12",
-            "max(ship)by(D.region)becomesanextremumcolumnpinnedbyindicatorrows"
-            "↳max(ship)by(D.region)becomesaboundoneachmember",
+            "max(ship)by(D.region)becomesahelperdecision" "↳max(ship)by(D.region)becomesaboundoneachmember",
             "perD.region:max(ship)by(D.region)>=12",
             None,
             id="max-equality",
@@ -179,7 +178,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
         pytest.param(
             "ship(INT)",
             "when S.priority: norm(ship, 0) <= 2",
-            "norm(ship,0)becomesoneindicatorperrow",
+            "norm(ship,0)becomesahelperdecisionperrow",
             "whenS.priority:M*(ship<>0)-ship>=0",
             "1.0*",
             id="l0-bound-is-derived",
@@ -187,7 +186,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
         pytest.param(
             "ship(INT)",
             "per D.region: sum(ship) by (D.region) <> 20",
-            "sum(ship)by(D.region)<>20becomestwoconditionalrowswithanindicator",
+            "sum(ship)by(D.region)<>20becomesahelperdecisionchoosingbetween<and>",
             None,
             None,
             id="not-equal",
@@ -281,7 +280,7 @@ def test_explain_analyze_states_a_helper_written_where_it_is_read_once(decidb_cl
     one; the variants line names the reducer as written, with its `by`."""
     reducer = "sum(pert.h:max(x)by(t.g,t.h))by(t.g)"
     text = _analyze(decidb_cli, _classes_query("per t.g: sum(per t.h: max(x) by (t.g, t.h)) by (t.g) <= t.cap / 2"))
-    assert text.count(f"↳{reducer}iswrittenwhereitisread,withnocolumn") == 1, text
+    assert text.count(f"↳{reducer}iswrittenwhereitisread,withnohelperdecision") == 1, text
     assert f"↳{reducer}becomesahelperdecision" not in text, text
     assert f"↳{reducer}:6valuesfrom2classes,oneperdistinct(by(t.g,t.h))withinaclass" in text, text
     # The inner reducer keeps a column of its own, so its plan line stays.
@@ -355,12 +354,12 @@ def test_explain_accounts_for_the_objectives_rewrites_too(decidb_cli):
     and the rows a rewrite added for it are printed there too, not as rows no clause owns."""
     text = _plan(decidb_cli, _ship_query("ship(INT)", "ship >= 1", "MINIMIZE when S.priority: sum(abs(ship - 10))"))
     assert (
-        "Objective:MINIMIZEwhenS.priority:sum(abs(ship-10))↳abs(ship-10)becomesanauxiliaryvariable"
+        "Objective:MINIMIZEwhenS.priority:sum(abs(ship-10))↳abs(ship-10)becomesahelperdecision"
         "↳whenS.priority:abs(ship-10)-ship>=-10"
     ) in text, text
     assert "addedbyformulation" not in text, text
     text = _plan(decidb_cli, _ship_query("ship(INT), per D: open(BOOL)", "ship >= 1", "MAXIMIZE sum(open * ship)"))
-    assert "↳(open*ship)becomesanauxiliaryvariablelinearizedbyMcCormickrows" in text, text
+    assert "↳(open*ship)becomesahelperdecision" in text, text
     text = _plan(decidb_cli, _ship_query("ship(INT)", "ship >= 1", "MAXIMIZE when S.priority: avg(ship)"))
     assert "↳avg(ship)becomesasumdividedbyitsrowcount" in text, text
     text = _plan(

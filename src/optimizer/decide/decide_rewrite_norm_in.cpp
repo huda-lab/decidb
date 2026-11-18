@@ -101,7 +101,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		    indicator.m = m;
 		    indicator.label = RenderForPlan(aggregate, decide);
 		    auto z = MakeDecisionRef(decide, z_idx);
-		    AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::L0_INDICATORS,
+		    AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::HELPER_PER_ROW,
 		                      RenderForPlan(aggregate, decide));
 		    auto make_mz = [&]() {
 			    auto bound = make_uniq<BoundConstantExpression>(Value::DOUBLE(m));
@@ -209,7 +209,7 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 			    return;
 		    }
 		    vector<unique_ptr<Expression>> indicators;
-		    AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::IN_INDICATORS,
+		    AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::HELPER_PER_VALUE,
 		                      RenderForPlan(in, decide));
 		    for (idx_t i = 0; i < k; i++) {
 			    string name = string(IN_INDICATOR_NAME_PREFIX) + target->GetName() + "_" + to_string(in_counter) + "_" +

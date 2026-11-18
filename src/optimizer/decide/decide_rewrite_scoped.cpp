@@ -286,9 +286,8 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	// its own `by` key.
 	auto rows = path.Rows();
 	const idx_t group_key = FindOrCreateDecidePathKey(path.KeysOf(DecideReducerGroupKey(agg)), decide.keys);
-	auto account_kind = group_key == DConstants::INVALID_INDEX
-	                        ? LogicalDecide::RewriteAccount::Kind::VALUE_HELPER
-	                        : LogicalDecide::RewriteAccount::Kind::VALUE_HELPER_PER_GROUP;
+	auto account_kind = group_key == DConstants::INVALID_INDEX ? LogicalDecide::RewriteAccount::Kind::HELPER
+	                                                           : LogicalDecide::RewriteAccount::Kind::HELPER_PER_GROUP;
 	idx_t link_idx = helpers.Find(agg, rows.get(), group_key, class_key);
 	if (link_idx != DConstants::INVALID_INDEX) {
 		auto &link = decide.reducer_value_links[link_idx];

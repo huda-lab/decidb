@@ -196,19 +196,19 @@ def test_a_query_with_no_objective_is_no_warning(decidb_cli):
         # Each window read by its anchor alone: written into its row.
         pytest.param(
             f"x >= sum(from 2 previous to previous else 0: x) {TL} - t.w",
-            f"↳sum(from2previoustopreviouselse0:x){TL}iswrittenwhereitisread,withnocolumn",
+            f"↳sum(from2previoustopreviouselse0:x){TL}iswrittenwhereitisread,withnohelperdecision",
             id="whole",
         ),
         # A reducer's helper per group, each read by its group's rows once.
         pytest.param(
             "x <= sum(t.w * x) by (t.product) - 1",
-            "↳sum(t.w*x)by(t.product)iswrittenwhereitisread,withnocolumn",
+            "↳sum(t.w*x)by(t.product)iswrittenwhereitisread,withnohelperdecision",
             id="a-reducer",
         ),
         # C's window is C alone: that group of one member is its member; the others keep their columns.
         pytest.param(
             f"x >= max(from previous to next: x) {TL} - 1",
-            f"↳max(frompreviousto next:x){TL}:eachgroupofonememberiswrittenwhereitisread,withnocolumn",
+            f"↳max(frompreviousto next:x){TL}:eachgroupofonememberiswrittenwhereitisread,withnohelperdecision",
             id="groups-of-one-member",
         ),
     ],

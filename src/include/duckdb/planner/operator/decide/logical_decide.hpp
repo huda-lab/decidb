@@ -634,29 +634,21 @@ public:
 	//! optimized plan is never serialized.
 	struct RewriteAccount {
 		enum class Kind : uint8_t {
-			AVG_SUM,                      //!< an AVG over decisions, a sum scaled by its row count
-			NORM_SUM_ABS,                 //!< `norm(e, 1)`, a sum of absolute values
-			NORM_SUM_SQUARES,             //!< `norm(e, 2)`, a sum of squares
-			NORM_MAX_ABS,                 //!< `norm(e, 'inf')`, a maximum of absolute values
-			EXTREMUM_EACH_MEMBER,         //!< a MIN/MAX in its cheap direction, a bound on each member
-			ABS_AUXILIARY,                //!< an ABS held by solver pressure alone
-			ABS_AUXILIARY_SIGN_INDICATOR, //!< an ABS pinned by Big-M rows and a sign binary
-			ABS_AUXILIARY_NATIVE,         //!< an ABS stated to the solver as an absolute value
-			PRODUCT_AND,                  //!< a Boolean product, AND rows
-			PRODUCT_MCCORMICK,            //!< a Boolean times a bounded decision, McCormick rows
-			IN_INDICATORS,                //!< `x IN (...)`, one indicator per value
-			L0_INDICATORS,                //!< `norm(e, 0)`, one indicator per row
-			VALUE_HELPER,                 //!< a reducer held by one helper decision
-			VALUE_HELPER_PER_GROUP,       //!< a reducer held by a helper decision per `by` group
-			FRAME_HELPER_PER_TIMELINE,    //!< a range frame held by a helper decision per timeline
-			FRAME_HELPER_PER_POSITION,    //!< a range frame held by a helper decision per position
-			EXTREMUM,                     //!< a MIN/MAX held by its envelope
-			EXTREMUM_PINNED,              //!< a MIN/MAX pinned by indicator rows
-			NOT_EQUAL,                    //!< `<>`, two conditional rows with an indicator
-			BODY_AT_LEAST,                //!< a reducer's non-linear body, a helper per row at least its value
-			BODY_AT_MOST,                 //!< the same, at most its value
-			BODY_EQUAL,                   //!< the same, equal to its value
-			EXTREMUM_NATIVE,              //!< a MIN/MAX over defined bodies, stated to the solver as one
+			AVG_SUM,              //!< an AVG over decisions, a sum scaled by its row count
+			NORM_SUM_ABS,         //!< `norm(e, 1)`, a sum of absolute values
+			NORM_SUM_SQUARES,     //!< `norm(e, 2)`, a sum of squares
+			NORM_MAX_ABS,         //!< `norm(e, 'inf')`, a maximum of absolute values
+			EXTREMUM_EACH_MEMBER, //!< a MIN/MAX in its cheap direction, a bound on each member
+			HELPER,           //!< an ABS, a product of decisions, a reducer or a MIN/MAX held by one helper decision
+			HELPER_PER_GROUP, //!< a reducer held by a helper decision per `by` group
+			HELPER_PER_VALUE, //!< `x IN (...)`, a helper decision per listed value
+			HELPER_PER_ROW,   //!< `norm(e, 0)`, a helper decision per row
+			FRAME_HELPER_PER_TIMELINE, //!< a range frame held by a helper decision per timeline
+			FRAME_HELPER_PER_POSITION, //!< a range frame held by a helper decision per position
+			NOT_EQUAL,                 //!< `<>`, a helper decision choosing between `<` and `>`
+			BODY_AT_LEAST,             //!< a reducer's non-linear body, a helper per row at least its value
+			BODY_AT_MOST,              //!< the same, at most its value
+			BODY_EQUAL,                //!< the same, equal to its value
 			//! What the data made of a clause: a scoped expression's classes holding more than one variant (D70, D71),
 			//! instances skipped for having no value (deck pp. 50, 56). Recorded by execution, so only EXPLAIN ANALYZE
 			//! prints it, and `subject` is the whole line.
@@ -666,7 +658,7 @@ public:
 			VALUE_HELPER_INLINED,
 		};
 		idx_t source_clause_id = DConstants::INVALID_INDEX;
-		Kind kind = Kind::ABS_AUXILIARY;
+		Kind kind = Kind::HELPER;
 		string subject;
 	};
 	vector<RewriteAccount> rewrite_accounts;

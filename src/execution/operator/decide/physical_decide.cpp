@@ -755,7 +755,8 @@ void PhysicalDecide::ReportInlinedHelpers(const SolverInput &input) const {
 		} else if (node.value_var < input.written_in.size() &&
 		           std::find(input.written_in[node.value_var].begin(), input.written_in[node.value_var].end(), true) !=
 		               input.written_in[node.value_var].end()) {
-			line = node.value_link_label + ": each group of one member is written where it is read, with no column";
+			line = node.value_link_label +
+			       ": each group of one member is written where it is read, with no helper decision";
 		}
 		if (line.empty()) {
 			continue;

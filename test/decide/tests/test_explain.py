@@ -603,7 +603,7 @@ def test_abs_clause_shows_its_source_and_account(decidb_cli):
     assert "__abs_aux_0__" not in packed, _plan_text(out)
     # The account line, then the two envelope rows with the bound the rewrite moved over and no zero term of its own.
     assert (
-        "ABS(x-20)<=5" "↳abs(x-20)becomesanauxiliaryvariable" "↳abs(x-20)-x>=-20" "↳abs(x-20)+x>=20" in packed
+        "ABS(x-20)<=5" "↳abs(x-20)becomesahelperdecision" "↳abs(x-20)-x>=-20" "↳abs(x-20)+x>=20" in packed
     ), _plan_text(out)
     assert packed.count(_REWRITTEN_MARK) == 3, _plan_text(out)
     # Nothing was attributed to no clause at all.
@@ -654,7 +654,7 @@ _REGION_SOURCE = "FROM (VALUES (1, 'n', 2), (2, 'n', 3), (3, 's', 1)) s(id, regi
 def test_a_rewrite_row_prints_the_scope_and_bound_the_query_wrote(decidb_cli, such_that, objective, clause, rows):
     out = _explain(decidb_cli, f"SELECT id, ship {_REGION_SOURCE} DECIDE ship(REAL) SUCH THAT {such_that} {objective}")
     packed = _packed(out)
-    assert clause in packed and "becomesanauxiliaryvariable↳" + rows in packed, _plan_text(out)
+    assert clause in packed and "becomesahelperdecision↳" + rows in packed, _plan_text(out)
     assert "whentrue" not in packed and "ANDtrue" not in packed, _plan_text(out)
 
 
@@ -731,7 +731,7 @@ def test_composed_minmax_clause_does_not_vanish(decidb_cli):
     packed = _packed(out)
     assert "MAX(x)+SUM(x)<=100" in packed, _plan_text(out)
     assert "true" not in packed.lower().replace("truncated", ""), _plan_text(out)
-    assert "max(x)becomesanextremumcolumn" in packed, _plan_text(out)
+    assert "max(x)becomesahelperdecision" in packed, _plan_text(out)
 
 
 @pytest.mark.explain

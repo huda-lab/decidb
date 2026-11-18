@@ -198,7 +198,7 @@ vector<DecideClauseLayers> CollectDecideClauseLayers(const Expression &constrain
                                                      const string &objective_qualifier);
 
 //! One account line: the construct a rewrite replaced and what it became, in the one
-//! vocabulary every plan uses ("`abs(e)` becomes an auxiliary variable").
+//! vocabulary every plan uses ("`abs(e)` becomes a helper decision").
 string RenderDecideRewriteAccount(const LogicalDecide::RewriteAccount &account);
 
 //! Format clause layers as the indented block EXPLAIN prints, one clause per group.

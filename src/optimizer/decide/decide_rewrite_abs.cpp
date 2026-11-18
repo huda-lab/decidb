@@ -498,15 +498,7 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 		                                               std::move(aux_ref2), std::move(neg_expr));
 
 		const bool needs_bigm = pair.needs_bigm;
-		// The account says how the auxiliary is pinned: on the sound direction solver
-		// pressure does it; otherwise the lowering arm switches the envelope with a sign
-		// indicator and the native arm states the absolute value outright.
-		using Kind = LogicalDecide::RewriteAccount::Kind;
-		AddRewriteAccount(decide, pair.source_alias,
-		                  !needs_bigm                        ? Kind::ABS_AUXILIARY
-		                  : decide.use_native_constructs.abs ? Kind::ABS_AUXILIARY_NATIVE
-		                                                     : Kind::ABS_AUXILIARY_SIGN_INDICATOR,
-		                  pair.label);
+		AddRewriteAccount(decide, pair.source_alias, LogicalDecide::RewriteAccount::Kind::HELPER, pair.label);
 		if (needs_bigm) {
 			// The sign indicator exists to switch the Big-M upper envelope, and the
 			// native arm emits no Big-M: it states `aux = |t|` outright. So allocate y

@@ -274,10 +274,7 @@ idx_t AddBooleanProduct(LogicalDecide &decide, DecideBilinearFunctionGroup &grou
 	// column is floored at the product's range, min(0, the factor's floor) (LinearizeBilinear). An AND of two
 	// Booleans keeps its BOOL box.
 	decide.signed_helper_vars.push_back(aux_idx);
-	AddRewriteAccount(decide, clause_alias,
-	                  both_bool ? LogicalDecide::RewriteAccount::Kind::PRODUCT_AND
-	                            : LogicalDecide::RewriteAccount::Kind::PRODUCT_MCCORMICK,
-	                  label);
+	AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::HELPER, label);
 
 	// Both kinds are linked per instance of the auxiliary by LinearizeBilinear, which reads the factors' boxes
 	// there: the McCormick rows against the other factor's box (the structural `w <= x` is not emitted here, being

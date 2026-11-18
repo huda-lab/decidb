@@ -1149,30 +1149,17 @@ string RenderDecideRewriteAccount(const LogicalDecide::RewriteAccount &account) 
 	case Kind::EXTREMUM_EACH_MEMBER:
 		became = "a bound on each member";
 		break;
-	case Kind::ABS_AUXILIARY:
-	case Kind::PRODUCT_AND:
-		became = "an auxiliary variable";
-		break;
-	case Kind::ABS_AUXILIARY_SIGN_INDICATOR:
-		became = "an auxiliary variable with a sign indicator";
-		break;
-	case Kind::ABS_AUXILIARY_NATIVE:
-		became = "an auxiliary variable stated to the solver as an absolute value";
-		break;
-	case Kind::PRODUCT_MCCORMICK:
-		became = "an auxiliary variable linearized by McCormick rows";
-		break;
-	case Kind::IN_INDICATORS:
-		became = "one indicator per value";
-		break;
-	case Kind::L0_INDICATORS:
-		became = "one indicator per row";
-		break;
-	case Kind::VALUE_HELPER:
+	case Kind::HELPER:
 		became = "a helper decision";
 		break;
-	case Kind::VALUE_HELPER_PER_GROUP:
+	case Kind::HELPER_PER_GROUP:
 		became = "a helper decision per group";
+		break;
+	case Kind::HELPER_PER_VALUE:
+		became = "a helper decision per value";
+		break;
+	case Kind::HELPER_PER_ROW:
+		became = "a helper decision per row";
 		break;
 	case Kind::FRAME_HELPER_PER_TIMELINE:
 		became = "a helper decision per timeline";
@@ -1180,14 +1167,8 @@ string RenderDecideRewriteAccount(const LogicalDecide::RewriteAccount &account) 
 	case Kind::FRAME_HELPER_PER_POSITION:
 		became = "a helper decision per position";
 		break;
-	case Kind::EXTREMUM:
-		became = "an extremum column";
-		break;
-	case Kind::EXTREMUM_PINNED:
-		became = "an extremum column pinned by indicator rows";
-		break;
 	case Kind::NOT_EQUAL:
-		became = "two conditional rows with an indicator";
+		became = "a helper decision choosing between < and >";
 		break;
 	case Kind::BODY_AT_LEAST:
 		became = "a helper decision per row, at least its value";
@@ -1198,13 +1179,10 @@ string RenderDecideRewriteAccount(const LogicalDecide::RewriteAccount &account) 
 	case Kind::BODY_EQUAL:
 		became = "a helper decision per row, equal to its value";
 		break;
-	case Kind::EXTREMUM_NATIVE:
-		became = "an extremum column stated to the solver natively";
-		break;
 	case Kind::RUN_TIME:
 		return account.subject;
 	case Kind::VALUE_HELPER_INLINED:
-		return account.subject + " is written where it is read, with no column";
+		return account.subject + " is written where it is read, with no helper decision";
 	}
 	return account.subject + " becomes " + became;
 }

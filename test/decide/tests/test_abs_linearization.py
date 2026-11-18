@@ -1801,8 +1801,8 @@ def test_nested_abs_explain_names_both(decidb_cli):
     """EXPLAIN accounts for the inner and the outer ABS, each by the text the user wrote."""
     out = decidb_cli.execute_raw("EXPLAIN " + _per_row_nested("abs(abs(x) - 2) <= 0", "MINIMIZE sum(x)")).stdout
     text = re.sub(r"[│┌┐└┘├┤┬┴┼─\s]", "", out)
-    assert "↳abs(x)becomesanauxiliaryvariable" in text, text
-    assert "↳abs(abs(x)-2)becomesanauxiliaryvariable" in text, text
+    assert "↳abs(x)becomesahelperdecision" in text, text
+    assert "↳abs(abs(x)-2)becomesahelperdecision" in text, text
 
 
 # ===========================================================================
@@ -1955,21 +1955,26 @@ def test_abs_objective_data_weight_of_any_sign(request, cli_fixture, weights, se
     )
 
 
-def test_abs_objective_explain_says_how_it_is_pinned(decidb_cli):
-    """With every construct lowered, a negated ABS under MINIMIZE gets the sign indicator
-    and the same ABS under MAXIMIZE keeps the plain envelope."""
+def test_abs_objective_explain_says_how_it_is_pinned(decidb_cli, tmp_path):
+    """With every construct lowered, a negated ABS under MINIMIZE needs the sign indicator (one binary column) and the
+    same ABS under MAXIMIZE keeps the plain envelope (none). Both plans say the ABS became a helper decision: the model
+    holds the difference, so it is read there."""
     cli = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
 
-    def accounts(objective):
+    def plan(objective):
         out = cli.execute_raw("EXPLAIN " + _signed_objective(objective)).stdout
         return re.sub(r"[│┌┐└┘├┤┬┴┼─\s]", "", out)
 
-    assert "↳abs(sum(x)-9)becomesanauxiliaryvariablewithasignindicator" in accounts(
-        "MINIMIZE 0 * sum(x) - abs(sum(x) - 9)"
-    )
-    maximized = accounts("MAXIMIZE 0 * sum(x) - abs(sum(x) - 9)")
-    assert "↳abs(sum(x)-9)becomesanauxiliaryvariable" in maximized, maximized
-    assert "signindicator" not in maximized, maximized
+    def binary_columns(objective):
+        dump = cli.dump_model(_signed_objective(objective), tmp_path / "model.dump")
+        return len(re.findall(r"^col \d+: .* bin=1 ", dump, re.MULTILINE))
+
+    minimized = "MINIMIZE 0 * sum(x) - abs(sum(x) - 9)"
+    maximized = "MAXIMIZE 0 * sum(x) - abs(sum(x) - 9)"
+    assert "↳abs(sum(x)-9)becomesahelperdecision" in plan(minimized)
+    assert "↳abs(sum(x)-9)becomesahelperdecision" in plan(maximized)
+    assert binary_columns(minimized) == 1
+    assert binary_columns(maximized) == 0
 
 
 # ---------------------------------------------------------------------------
