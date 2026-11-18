@@ -301,7 +301,7 @@ static void DescentSortKeys(DataChunk &columns, StringHeap &heap, vector<string_
 	CreateSortKeyHelpers::CreateSortKey(columns, modifiers, encoded);
 	auto data = FlatVector::GetData<string_t>(encoded);
 	for (idx_t i = 0; i < columns.size(); i++) {
-		keys.push_back(heap.AddBlob(data[i]));
+		keys.push_back(data[i].IsInlined() ? data[i] : heap.AddBlob(data[i]));
 	}
 }
 
@@ -1821,7 +1821,7 @@ void DecideDescent::Merge(MergedPart &part) {
 			groups.parent_slots.push_back(DConstants::INVALID_INDEX);
 			groups.first_rows.push_back(theirs.first_rows[c] + offset);
 			groups.in_a_class.push_back(true);
-			decision_sort_keys[scope].push_back(sort_key.GetSize() == 0 ? string_t() : decision_heap.AddBlob(sort_key));
+			decision_sort_keys[scope].push_back(sort_key.IsInlined() ? sort_key : decision_heap.AddBlob(sort_key));
 		}
 		auto &mapping = decision_rows[scope];
 		D_ASSERT(mapping.size() <= offset);
