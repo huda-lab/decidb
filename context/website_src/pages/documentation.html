@@ -1,6 +1,6 @@
 <div class="page-head">
   <div class="container">
-    <div class="crumbs"><a href="index.html">Home</a><span>/</span>Docs</div>
+    <!--crumbs-->
     <h1>The DECIDE language</h1>
     <p>Everything a DECIDE query can say and exactly what it means. Every example in this reference runs on DeciDB as
       written; a green dot on a code block marks one that was executed when the site was built.</p>
@@ -42,7 +42,7 @@
 
       <!-- ============================================================ OVERVIEW -->
       <section id="overview">
-        <h2>Overview <a class="anchor" href="#overview">#</a></h2>
+        <h2><a class="anchor" href="#overview">Overview</a></h2>
         <p class="lead">A DECIDE query is a <code>SELECT</code> that also declares decisions, the constraints they must
           satisfy and, optionally, what to optimize. DeciDB builds a model from the query's rows, solves it, and returns
           the rows with the decisions filled in.</p>
@@ -85,7 +85,7 @@ element     ::= column | relation                                 -- a relation 
 
       <!-- ============================================================ DECISIONS -->
       <section id="decisions">
-        <h2>Decisions <a class="anchor" href="#decisions">#</a></h2>
+        <h2><a class="anchor" href="#decisions">Decisions</a></h2>
         <p>Each declarator has a name and a mandatory type. Reference a decision by its bare name in
           <code>SUCH THAT</code>, the objective, <code>SELECT</code> and <code>ORDER BY</code>.</p>
         <div class="table-wrap"><table>
@@ -115,7 +115,7 @@ element     ::= column | relation                                 -- a relation 
           </tbody>
         </table></div>
 
-        <h3 id="keyed">Keyed decisions: <code>per K: x(TYPE)</code> <a class="anchor" href="#keyed">#</a></h3>
+        <h3 id="keyed"><a class="anchor" href="#keyed">Keyed decisions: <code>per K: x(TYPE)</code></a></h3>
 <!--sql-->DECIDE per D.depotID: reserve(REAL)              -- one per distinct depotID
 DECIDE per D: open(BOOL)                         -- one per distinct row of D
 DECIDE per D.region, S.shipmentID: alloc(INT)    -- one per distinct pair, across relations
@@ -138,7 +138,7 @@ DECIDE per n: keep(BOOL)
 SUCH THAT SUM(keep * s.hours) <= 60            -- one term per shift row
 MAXIMIZE SUM(per n: keep * n.skill_score);     -- each nurse's skill once<!--/sql-->
 
-        <h3 id="query-wide">Query-wide decisions: <code>per (): x(TYPE)</code> <a class="anchor" href="#query-wide">#</a></h3>
+        <h3 id="query-wide"><a class="anchor" href="#query-wide">Query-wide decisions: <code>per (): x(TYPE)</code></a></h3>
         <p>One decision for the whole query, whatever the input size: a threshold, a shared ceiling, a worst case. Its
           value repeats on every row. It may stand beside a reducer or be its bound under any <code>per</code>, and it
           counts once.</p>
@@ -156,7 +156,7 @@ MINIMIZE max_shortfall;<!--/sql-->
 
       <!-- ============================================================ CONSTRAINTS -->
       <section id="constraints">
-        <h2>Constraints <a class="anchor" href="#constraints">#</a></h2>
+        <h2><a class="anchor" href="#constraints">Constraints</a></h2>
         <p>Every constraint must hold. Join them with <code>AND</code>; <code>OR</code> between constraints is refused,
           because a choice between alternatives is a <code>BOOL</code> decision. <code>OR</code> inside a
           <code>when</code> or a subquery is data and unaffected.</p>
@@ -209,7 +209,7 @@ MINIMIZE SUM(x * weight);<!--/sql-->
 
       <!-- ============================================================ SCOPES -->
       <section id="scopes">
-        <h2>Scopes: <code>per</code>, <code>when</code>, <code>by</code> <a class="anchor" href="#scopes">#</a></h2>
+        <h2><a class="anchor" href="#scopes">Scopes: <code>per</code>, <code>when</code>, <code>by</code></a></h2>
         <p class="lead">Three keywords, three separate jobs.</p>
         <div class="table-wrap"><table>
           <thead><tr><th>Keyword</th><th>Where</th><th>Job</th></tr></thead>
@@ -265,7 +265,7 @@ AND per S.shipmentID: ship <= 0.25 * SUM(ship) by (D.depotID, S.dispatchDay + S.
             inside. <code>Γ</code> lists columns, relations and data expressions, never a decision.</li>
         </ul>
 
-        <h3 id="scope-order">How a scope is evaluated <a class="anchor" href="#scope-order">#</a></h3>
+        <h3 id="scope-order"><a class="anchor" href="#scope-order">How a scope is evaluated</a></h3>
         <ol>
           <li><strong>Filter.</strong> Keep the rows where the <code>when</code> condition is true.</li>
           <li><strong>Generate.</strong> Split the kept rows into classes by the <code>per</code> key; write the
@@ -289,7 +289,7 @@ AND per S.shipmentID: ship <= 0.25 * SUM(ship) by (D.depotID, S.dispatchDay + S.
 SUM(per D: D.opening_cost * open)                   -- each depot once
 SUM(when S.priority per D: D.opening_cost * open)   -- filter, then each remaining depot once<!--/sql-->
 
-        <h3 id="determination">The determination rule <a class="anchor" href="#determination">#</a></h3>
+        <h3 id="determination"><a class="anchor" href="#determination">The determination rule</a></h3>
         <p>A constraint written once per class must read one value per class. So a <code>per</code> key must
           <em>determine</em> everything its body reads outside reducers (bounds, factors, decisions) and every
           <code>by</code> key: every row of a class must carry the same value.</p>
@@ -311,7 +311,7 @@ SUM(when S.priority per D: D.opening_cost * open)   -- filter, then each remaini
 
       <!-- ============================================================ REDUCERS -->
       <section id="reducers">
-        <h2>Reducers <a class="anchor" href="#reducers">#</a></h2>
+        <h2><a class="anchor" href="#reducers">Reducers</a></h2>
         <div class="table-wrap"><table>
           <thead><tr><th>Reducer</th><th>Meaning</th></tr></thead>
           <tbody>
@@ -328,7 +328,7 @@ SUM(when S.priority per D: D.opening_cost * open)   -- filter, then each remaini
           <code>BOOL</code> decision may scale a bare reducer (<code>b * SUM(x) &lt;= 4</code>).</p>
 <!--sql check="items" frag-->AVG(x * value) >= 20 AND SUM(x * weight) <= 2 * count(*) * 5<!--/sql-->
 
-        <h3 id="colon-form">The colon form: <code>SUM(D: e)</code> <a class="anchor" href="#colon-form">#</a></h3>
+        <h3 id="colon-form"><a class="anchor" href="#colon-form">The colon form: <code>SUM(D: e)</code></a></h3>
         <p><code>agg(Rel: e)</code> means <code>agg(per Rel: e)</code>: one term per tuple of the named relation instead of
           one per result row. Use it for a fixed cost that a join repeats.</p>
 <!--sql check="deck"-->SELECT S.shipmentID, D.depotID, open, ship
@@ -344,7 +344,7 @@ MINIMIZE SUM(S.unit_cost * ship) + SUM(D: D.opening_cost * open);  -- each depot
             removes the fan-out of each.</li>
         </ul>
 
-        <h3 id="min-max">MIN and MAX <a class="anchor" href="#min-max">#</a></h3>
+        <h3 id="min-max"><a class="anchor" href="#min-max">MIN and MAX</a></h3>
         <p>The <em>easy</em> direction, <code>MAX(e) &lt;= K</code> or <code>MIN(e) &gt;= K</code>, bounds every member
           and adds nothing to the model. The <em>hard</em> direction (the opposite, or <code>=</code>) adds an extremum
           variable per group, tied to the members by indicator constraints, so every member needs a finite bound. In the
@@ -352,7 +352,7 @@ MINIMIZE SUM(S.unit_cost * ship) + SUM(D: D.opening_cost * open);  -- each depot
           indicators.</p>
 <!--sql check="items-int" frag-->MAX(x * weight) <= 40 AND MAX(x * weight) >= 30 AND SUM(x) <= 4<!--/sql-->
 
-        <h3 id="norm">norm(e, p) <a class="anchor" href="#norm">#</a></h3>
+        <h3 id="norm"><a class="anchor" href="#norm">norm(e, p)</a></h3>
         <div class="table-wrap"><table>
           <thead><tr><th><code>p</code></th><th>Means</th><th>Class</th></tr></thead>
           <tbody>
@@ -376,7 +376,7 @@ MINIMIZE norm(new_price - price, 1);            -- smallest total change<!--/sql
 
       <!-- ============================================================ OBJECTIVE -->
       <section id="objective">
-        <h2>Objective <a class="anchor" href="#objective">#</a></h2>
+        <h2><a class="anchor" href="#objective">Objective</a></h2>
 <!--sql-->MAXIMIZE SUM(ship)                                     -- produced once: per () implied
 MAXIMIZE when S.priority: SUM(ship)                    -- over the priority rows only
 MINIMIZE SUM(S.unit_cost * ship) + SUM(D: D.opening_cost * open)
@@ -392,7 +392,7 @@ MINIMIZE max(per D.depotID: SUM(ship) by (D.depotID))  -- two-level form<!--/sql
         </ul>
 <!--sql check="deck-obj" frag-->MINIMIZE when S.priority: SUM(S.unit_cost * ship) + SUM(D: D.opening_cost * open) + cap<!--/sql-->
 
-        <h3 id="two-level">Two-level objective <a class="anchor" href="#two-level">#</a></h3>
+        <h3 id="two-level"><a class="anchor" href="#two-level">Two-level objective</a></h3>
         <p><code>outer(per k: inner(e) by (k))</code> computes <code>inner</code> once per class of <code>k</code>, then
           <code>outer</code> over those values. All nine <code>SUM</code>/<code>MIN</code>/<code>MAX</code> pairs work;
           <code>k</code> may list several columns. It takes a minus sign or a constant factor and a <code>when</code> in
@@ -403,7 +403,7 @@ DECIDE run(BOOL)
 SUCH THAT per J: SUM(run) by (J) = 1
 MINIMIZE max(per M.machine: SUM(run * J.hours) by (M.machine));   -- the busiest machine<!--/sql-->
 
-        <h3 id="quadratic">Quadratic and bilinear terms <a class="anchor" href="#quadratic">#</a></h3>
+        <h3 id="quadratic"><a class="anchor" href="#quadratic">Quadratic and bilinear terms</a></h3>
         <ul>
           <li><strong>Squares.</strong> <code>MINIMIZE SUM(POWER(linear, 2))</code> is a convex QP on both solvers (on
             HiGHS when continuous and the matrix is non-singular). <code>-POWER(...)</code> under <code>MAXIMIZE</code>
@@ -428,7 +428,7 @@ MINIMIZE SUM(POWER(w - target, 2)) + 0.1 * norm(w - target, 1);<!--/sql-->
 
       <!-- ============================================================ NULLS -->
       <section id="nulls">
-        <h2>NULL and empty groups <a class="anchor" href="#nulls">#</a></h2>
+        <h2><a class="anchor" href="#nulls">NULL and empty groups</a></h2>
         <p>A NULL data value is skipped where it is read, never read as zero.</p>
         <div class="table-wrap"><table>
           <thead><tr><th>Situation</th><th>Outcome</th></tr></thead>
@@ -449,7 +449,7 @@ MINIMIZE SUM(POWER(w - target, 2)) + 0.1 * norm(w - target, 1);<!--/sql-->
 
       <!-- ============================================================ NUMBERS -->
       <section id="numbers">
-        <h2>Numbers and casts <a class="anchor" href="#numbers">#</a></h2>
+        <h2><a class="anchor" href="#numbers">Numbers and casts</a></h2>
         <ul>
           <li>A model carries one numeric type, <code>DOUBLE</code>, as both solvers do.</li>
           <li>A cast over a decision is refused in <code>SUCH THAT</code> and the objective; cast the data instead.
@@ -462,7 +462,7 @@ MINIMIZE SUM(POWER(w - target, 2)) + 0.1 * norm(w - target, 1);<!--/sql-->
 
       <!-- ============================================================ EXPLAIN -->
       <section id="explain">
-        <h2>EXPLAIN <a class="anchor" href="#explain">#</a></h2>
+        <h2><a class="anchor" href="#explain">EXPLAIN</a></h2>
         <p><code>EXPLAIN</code>, <code>EXPLAIN ANALYZE</code> and <code>EXPLAIN (FORMAT JSON)</code> work on a DECIDE
           query. The DECIDE node lists the decisions, the objective and the constraints, each as you wrote it. Indented
           lines follow only where the model differs: <code>↳</code> for what a rewrite made of a clause, such as an
@@ -480,7 +480,7 @@ MAXIMIZE SUM(ship);<!--/explain-->
 
       <!-- ============================================================ DIAGNOSE -->
       <section id="diagnose">
-        <h2>DIAGNOSE <a class="anchor" href="#diagnose">#</a></h2>
+        <h2><a class="anchor" href="#diagnose">DIAGNOSE</a></h2>
         <p>When no assignment satisfies every constraint, a query stops with an error that says what to do next:</p>
 <!--sql check="knapsack" expect="Prefix the query with DIAGNOSE" show-->SELECT item, x FROM Items
 DECIDE x(BOOL)
@@ -520,7 +520,7 @@ MAXIMIZE SUM(x * value);<!--/sql-->
 
       <!-- ============================================================ DIRECT SOLVE -->
       <section id="direct-solve">
-        <h2>Direct solve <a class="anchor" href="#direct-solve">#</a></h2>
+        <h2><a class="anchor" href="#direct-solve">Direct solve</a></h2>
         <p>Some queries have a closed-form answer that DuckDB's own operators compute: sort and take the top
           <em>k</em>, fill a budget greedily, match two sorted lists. When DeciDB can prove a query has one of these shapes,
           it answers that way instead of calling a solver. A query it cannot prove takes the solver path unchanged. There is
@@ -539,7 +539,7 @@ MAXIMIZE SUM(x * value);<!--/sql-->
 
       <!-- ============================================================ SETTINGS -->
       <section id="settings">
-        <h2>Settings <a class="anchor" href="#settings">#</a></h2>
+        <h2><a class="anchor" href="#settings">Settings</a></h2>
         <div class="table-wrap"><table>
           <thead><tr><th>Setting</th><th>Default</th><th>Effect</th></tr></thead>
           <tbody>
@@ -556,7 +556,7 @@ MAXIMIZE SUM(x * value);<!--/sql-->
 
       <!-- ============================================================ MIGRATING -->
       <section id="migrating">
-        <h2>Migrating from 0.2 <a class="anchor" href="#migrating">#</a></h2>
+        <h2><a class="anchor" href="#migrating">Migrating from 0.2</a></h2>
         <p class="lead">DeciDB 0.2 wrote scopes after a constraint (<code>SUM(x) &lt;= 2 PER sector</code>) and
           qualified declarations with a table (<code>T.x(INT)</code>, <code>scalar x(INT)</code>). The language now
           follows the DECIDE language proposal: scopes go in front, and a reducer says which rows it reads with
@@ -596,7 +596,7 @@ MAXIMIZE SUM(pick * expected_return);<!--/sql-->
 
       <!-- ============================================================ ROADMAP -->
       <section id="roadmap">
-        <h2>Not supported yet <a class="anchor" href="#roadmap">#</a></h2>
+        <h2><a class="anchor" href="#roadmap">Not supported yet</a></h2>
         <p>The DECIDE language proposal goes further than DeciDB does today. These parts of it are planned, and a query
           that uses one is refused with a message rather than answered differently:</p>
         <ul>

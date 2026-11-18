@@ -392,21 +392,14 @@ TOKENS = """:root {
   --display-tracking: -0.035em;
   --display-tracking-xl: -0.045em;
 }
-/* the evening grade (a tech page may take it, chosen on load from the visitor's setting or by the nav's switch):
-   the page tokens go dark; the lit ground (sage) and the panels' painted grounds stay light, as the kit keeps them */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
-    --p-accent: #7d9dff; --p-accent-ink: #0e0f10; --p-action: #3463f0; --p-action-ink: #ffffff;
-    --p-inv-bg: #f4f4f2; --p-inv-surface: #e8e8e6; --p-inv-ink: #111111; --p-inv-muted: #5c5c5c;
-    --p-inv-accent: #1a4be0; --p-inv-accent-ink: #ffffff; --p-inv-action: #111111; --p-inv-action-ink: #ffffff;
-  }
-}
+/* the evening grade (a tech page may take it): the head script sets data-theme from the nav's switch (remembered) or the
+   visitor's setting; the page tokens go dark, the lit ground (sage) and the panels' painted grounds stay light, as the
+   kit keeps them */
 :root[data-theme="dark"] {
-    --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
-    --p-accent: #7d9dff; --p-accent-ink: #0e0f10; --p-action: #3463f0; --p-action-ink: #ffffff;
-    --p-inv-bg: #f4f4f2; --p-inv-surface: #e8e8e6; --p-inv-ink: #111111; --p-inv-muted: #5c5c5c;
-    --p-inv-accent: #1a4be0; --p-inv-accent-ink: #ffffff; --p-inv-action: #111111; --p-inv-action-ink: #ffffff;
+  --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
+  --p-accent: #7d9dff; --p-accent-ink: #0e0f10; --p-action: #3463f0; --p-action-ink: #ffffff;
+  --p-inv-bg: #f4f4f2; --p-inv-surface: #e8e8e6; --p-inv-ink: #111111; --p-inv-muted: #5c5c5c;
+  --p-inv-accent: #1a4be0; --p-inv-accent-ink: #ffffff; --p-inv-action: #111111; --p-inv-action-ink: #ffffff;
 }"""
 
 CHEV = (
@@ -468,7 +461,7 @@ def head(title, description, root, extra=""):
 <html lang="en" data-type="software" data-radius="sharp" data-ground="sage" data-buttons="pill" data-motion{THEME_ATTR}>
 <head>
 <meta charset="utf-8">
-<script>try{{var r=document.documentElement,t=localStorage.getItem('decidb-theme');if(!r.dataset.theme&&(t==='light'||t==='dark'))r.dataset.theme=t}}catch(e){{}}</script>
+<script>(function(){{var r=document.documentElement,t;try{{t=localStorage.getItem('decidb-theme')}}catch(e){{}}if(!r.dataset.theme)r.dataset.theme=t==='light'||t==='dark'?t:matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}})()</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{esc(title)}</title>
 <meta name="description" content="{esc(description)}">
@@ -554,7 +547,7 @@ def footer_links(root):
           <a class="nav__logo" href="{root}index.html"><img src="{root}assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
           <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
         </div>
-        {col("Learn", [(f"{root}getting-started.html", "Install"), (f"{root}documentation.html", "Language guide"), (f"{root}problems.html", "Problems"), (f"{root}examples.html", "Examples")])}
+        {col("Learn", [(f"{root}getting-started.html", "Install"), (f"{root}documentation.html", "Guide"), (f"{root}problems.html", "Problems"), (f"{root}examples.html", "Examples")])}
         {col("Examples", [(f"{root}examples/knapsack.html", "Knapsack"), (f"{root}examples/facility-location.html", "Depots"), (f"{root}examples/fair-allocation.html", "Fair allocation"), (f"{root}examples/diagnose.html", "DIAGNOSE")])}
         {col("Project", [(f"{root}about.html", "About"), (f"{root}about.html#research", "Papers"), (GITHUB, "GitHub"), ("https://huda-lab.github.io/", "HUDA Lab")])}
         {col("Contact", [("mailto:support@decidb.com", "Email the team"), (f"{GITHUB}/issues", "Report an issue")])}
@@ -592,12 +585,17 @@ def page(title, description, body, active, root=""):
 """
 
 
-def page_head(title, lede, crumbs=None, tags=""):
-    c = ""
-    if crumbs:
-        c = '<nav class="crumbs" aria-label="Breadcrumb">' + '<span aria-hidden="true">/</span>'.join(crumbs) + "</nav>"
+def crumbs(root, *trail):
+    """The breadcrumb of every reading page: Home, then each step. A (href, words) pair is a link; plain words name
+    the page itself or its group."""
+    steps = [f'<a href="{root}index.html">Home</a>']
+    steps += [f'<a href="{root}{st[0]}">{esc(st[1])}</a>' if isinstance(st, tuple) else esc(st) for st in trail]
+    return '<nav class="crumbs" aria-label="Breadcrumb">' + '<span aria-hidden="true">/</span>'.join(steps) + "</nav>"
+
+
+def page_head(title, lede, trail, tags="", root=""):
     t = f'<div class="page-head__tags">{tags}</div>' if tags else ""
-    return f'<div class="page-head"><div class="container">{c}<h1>{title}</h1><p>{lede}</p>{t}</div></div>'
+    return f'<div class="page-head"><div class="container">{crumbs(root, *trail)}<h1>{title}</h1><p>{lede}</p>{t}</div></div>'
 
 
 # ---------------------------------------------------------------- examples
@@ -643,7 +641,7 @@ def example_page(ex, prev_ex, next_ex):
     )
     shows = "".join(f"<li>{esc(t)}</li>" for t in ex["features"])
     body = f"""
-{page_head(esc(ex["title"]), ex["summary"], ['<a href="../index.html">Home</a>', '<a href="../examples.html">Examples</a>', esc(ex["group"])], tags)}
+{page_head(esc(ex["title"]), ex["summary"], [("examples.html", "Examples"), ex["group"]], tags, root="../")}
 <div class="container">
   <div class="doc-layout doc-layout--example">
     <article class="prose">
@@ -687,9 +685,9 @@ def examples_index():
                 else f'<span class="tag">{esc(ex["class"])}</span>'
             )
             rows.append(
-                f'<li data-tags="{" ".join(ex["filters"])}"><a class="ex-row" href="examples/{ex["slug"]}.html">'
-                f'<span class="ex-row__title">{esc(ex["title"])}</span><span class="ex-row__sum">{ex["summary"]}</span>'
-                f'<code class="ex-row__code">{hl_sql(ex["snippet"])}</code><span class="ex-row__how">{how}</span></a></li>'
+                f'<li data-tags="{" ".join(ex["filters"])}"><div class="ex-row">'
+                f'<a class="ex-row__title" href="examples/{ex["slug"]}.html">{esc(ex["title"])}</a><span class="ex-row__sum">{ex["summary"]}</span>'
+                f'<code class="ex-row__code">{hl_sql(ex["snippet"])}</code><span class="ex-row__how">{how}</span></div></li>'
             )
         groups.append(
             f'<section class="ex-group" aria-labelledby="g-{len(groups)}"><h2 id="g-{len(groups)}">{esc(gname)}</h2>'
@@ -704,7 +702,7 @@ def examples_index():
         page_head(
             "Examples",
             f"{len(EX.EXAMPLES)} complete problems, each with its data, its query and the table DeciDB returns for it.",
-            ['<a href="index.html">Home</a>', "Examples"],
+            ["Examples"],
         )
         + f'<div class="container ex-index"><div class="filters" role="group" aria-label="Show examples that use" hidden>{bar}</div>'
         + "".join(groups)
@@ -748,6 +746,10 @@ PAGES = [
 ]
 
 
+# each reading page's own step in its breadcrumb: the word the nav and the footer give it
+CRUMB = {**dict(NAV_WORDS), "getting-started.html": "Install"}
+
+
 def write_page(path, text):
     """Write a generated page with no trailing whitespace, so the repository's diff check stays clean."""
     with open(path, "w") as f:
@@ -772,7 +774,7 @@ def main():
     copy_assets()
     write_page(os.path.join(OUT, "index.html"), home.render(sys.modules[__name__]))
     for name, title, desc, active in PAGES:
-        frag = open(os.path.join(HERE, "pages", name)).read()
+        frag = open(os.path.join(HERE, "pages", name)).read().replace("<!--crumbs-->", crumbs("", CRUMB[name]))
         write_page(os.path.join(OUT, name), page(title, desc, expand(frag, name), active))
     write_page(os.path.join(OUT, "examples.html"), examples_index())
     exs = EX.EXAMPLES

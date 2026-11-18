@@ -54,9 +54,10 @@ def num(v):
     return str(v)
 
 
-def grid(cols, rows, mark=None, steps=False, cls=""):
-    """A result as the window draws it: a header row and one row per tuple, aligned on a CSS grid."""
-    style = f' style="--tpl: minmax(0, 1.4fr) repeat({len(cols) - 1}, minmax(0, 1fr))"'
+def grid(cols, rows, mark=None, steps=False, cls="", lead="1.4fr"):
+    """A result as the window draws it: a header row and one row per tuple, aligned on a CSS grid (the first column
+    takes `lead` to the others' 1fr)."""
+    style = f' style="--tpl: minmax(0, {lead}) repeat({len(cols) - 1}, minmax(0, 1fr))"'
     head = "".join(f'<span class="{"r" if isinstance(rows[0][c], (int, float)) else ""}">{esc(c)}</span>' for c in cols)
     out = [f'<div class="sq__grid {cls}"{style}><div class="sq__tr sq__th">{head}</div>']
     for r in rows:
@@ -96,13 +97,12 @@ def hero(b, ex_by_slug):
   <section class="hero hero--centred" data-enter aria-labelledby="hero-h">
     <div class="wrap"><div class="hero-text">
       <div class="hero__c">
-        <p class="pill"><span>New in DeciDB</span><span class="muted">Direct solve</span></p>
         <h1 id="hero-h">Optimization in DuckDB</h1>
         <p class="hero__lead">Add DECIDE to a SQL query and get the best values back as rows.</p>
         <div class="btn-row"><a class="btn btn--primary" href="getting-started.html#install">Install DeciDB</a><a class="btn btn--secondary" href="documentation.html">Read the guide</a></div>
       </div>
-      <div class="hero__window" data-fx="grain-gradient" data-fx-seed="7" role="img" aria-label="{esc(label)}">
-        <div class="ly-piece ui ui-hw hw" aria-hidden="true">
+      <div class="hero__window" data-fx="grain-gradient" data-fx-seed="7" data-ui-pause-host>
+        <div class="ly-piece ui ui-hw hw" role="img" aria-label="{esc(label)}">
           <div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · knapsack.sql</span><span class="hw__sp"></span><span class="hw__meta">in-memory</span></div>
           <div class="hw__body">
             <div class="hw__list"><div class="hw__q">Examples</div>{"".join(items)}</div>
@@ -204,22 +204,33 @@ def language(b, ex_by_slug, fx):
         STILL,
         f"DIAGNOSE suggests changing {first['clause']} to {first['suggested_change']}, which reaches an objective of {objective}.",
         f'<div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code>{b.hl_sql(DIAGNOSE)}</code></pre>'
-        f'<div class="sq__out">{grid(["suggested_change", "amount"], shown) if shown else ""}</div></div>',
+        f'<div class="sq__out">{grid(["suggested_change", "amount"], shown, lead="3fr") if shown else ""}</div></div>',
     )
+    return pair(
+        "language",
+        'Write the model in SQL. <span class="muted">Decisions, rules and the goal sit in one DECIDE query.</span>',
+        c1,
+        c2,
+    ) + pair(
+        "checks",
+        "When a query cannot be answered",
+        c3,
+        c4,
+        f'<a class="link" href="documentation.html#scopes">Read about scopes{b.ARROW}</a>',
+    )
+
+
+def pair(name, heading, first, second, link=""):
+    """A section of two cards: side by side under the heading on a tablet or a desktop (the groups dissolve
+    into the section's grid), one card a screen on a phone (each group is one of its two screens)."""
+    end = f'\n        <p class="group__end">{link}</p>' if link else ""
     return f"""
-  <section class="section g2 g2m" id="language" aria-labelledby="language-h">
-    <div class="wrap">
+  <section class="section g2m pair" id="{name}" aria-labelledby="{name}-h">
+    <div class="wrap grid">
       <div class="group">
-        <div class="section-head">
-          <h2 id="language-h">Write the model in SQL. <span class="muted">Decisions, rules and the goal sit in one DECIDE query.</span></h2>
-        </div>
-        <div class="grid">{c1}{c2}
-        </div>
+        <div class="section-head"><h2 id="{name}-h">{heading}</h2></div>{first}
       </div>
-      <div class="group">
-        <div class="grid">{c3}{c4}
-        </div>
-        <p class="group__end"><a class="link" href="documentation.html#scopes">Read about scopes{b.ARROW}</a></p>
+      <div class="group">{second}{end}
       </div>
     </div>
   </section>"""
@@ -241,28 +252,26 @@ def direct(b, ex_by_slug):
         )
     )
     return f"""
-  <section class="section" id="direct" aria-labelledby="direct-h">
-    <div class="wrap">
-      <div class="grid grid--top fill">
-        <div class="span-5 split-col">
-          <h2 id="direct-h">9 problem classes skip the solver</h2>
-          <p class="t-lead">When a query matches a class with an exact answer, DeciDB computes it with DuckDB's own sorting and aggregation. The query stays the same, and <code>EXPLAIN</code> names the rule.</p>
-          <ul class="facts">
-            <li>Fair allocation over 800,000 decisions: 0.026 s, where Gurobi took 2,158 s</li>
-            <li>Faster than Gurobi in all nine classes, at every size measured</li>
-            <li><code>SET decide_direct_solve = 'off'</code> sends a query back to the solver</li>
-          </ul>
-          <p class="split-col__end"><a class="link" href="problems.html#direct-solve">See all 9 classes{b.ARROW}</a></p>
-        </div>
-        <div class="frame frame--split frame--lit span-6 start-7">
-          <div class="stage stage--fade-br" role="img" aria-label="EXPLAIN on a fair-allocation query names the direct-solve rule {esc(rule)}, and the query returns each program's share.">
-            <div class="at-corner to-edge">
-              <div class="ui ui-sq sq sq--wide" aria-hidden="true">
-                <div class="sq__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · fair.sql</span></div>
-                <pre class="sq__code"><code><span class="tk-k">EXPLAIN</span> {b.hl_sql(FAIR)}</code></pre>
-                <div class="sq__explain">{explain}</div>
-                <div class="sq__out">{grid(["program", "alloc"], shown)}</div>
-              </div>
+  <section class="section split m2" id="direct" aria-labelledby="direct-h">
+    <div class="wrap grid grid--top">
+      <div class="span-5 split-col">
+        <h2 id="direct-h">9 problem classes skip the solver</h2>
+        <p class="t-lead">When a query matches a class with an exact answer, DeciDB computes it with DuckDB's own sorting and aggregation. The query stays the same, and <code>EXPLAIN</code> names the rule.</p>
+        <ul class="facts">
+          <li>Fair allocation over 800,000 decisions: 0.026 s, where Gurobi took 2,158 s</li>
+          <li>Faster than Gurobi in all nine classes, at every size measured</li>
+          <li><code>SET decide_direct_solve = 'off'</code> sends a query back to the solver</li>
+        </ul>
+        <p class="split-col__end"><a class="link" href="problems.html#direct-solve">See all 9 classes{b.ARROW}</a></p>
+      </div>
+      <div class="frame frame--split frame--lit span-6 start-7">
+        <div class="stage stage--fade-b" role="img" aria-label="EXPLAIN on a fair-allocation query names the direct-solve rule {esc(rule)} and the condition it checked; run without EXPLAIN, the query gives each program its share.">
+          <div class="at-corner to-edge">
+            <div class="ui ui-sq sq sq--wide" aria-hidden="true">
+              <div class="sq__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · fair.sql</span></div>
+              <pre class="sq__code"><code><span class="tk-k">EXPLAIN</span> {b.hl_sql(FAIR)}</code></pre>
+              <div class="sq__explain">{explain}</div>
+              <div class="sq__run"><span class="sq__k">The same query without EXPLAIN</span>{grid(["program", "alloc"], shown)}</div>
             </div>
           </div>
         </div>
@@ -306,22 +315,20 @@ def solvers(b):
         ],
     }
     return f"""
-  <section class="section" id="solvers" aria-labelledby="solvers-h">
-    <div class="wrap">
-      <div class="grid grid--top fill">
-        <div class="span-5 split-col">
-          <h2 id="solvers-h">Built on DuckDB, solved by Gurobi or HiGHS</h2>
-          <p class="t-lead">DeciDB is DuckDB with the DECIDE clause added, so it reads the same tables and files. HiGHS ships in every build; Gurobi is used when its license is present.</p>
-          <ul class="facts">
-            <li>Python: <code>pip install decidb</code>, with DuckDB's API</li>
-            <li>A command-line shell for macOS, Linux and Windows</li>
-            <li>LP, MILP and convex QP on HiGHS; non-convex QP, MIQP and QCQP need Gurobi</li>
-          </ul>
-          <p class="split-col__end"><a class="link" href="problems.html#classes">See solvers by class{b.ARROW}</a></p>
-        </div>
-        <div class="frame frame--split frame--lit span-6 start-7 dg-frame">
-          <div class="dg" data-diagram data-dg-still><script type="application/json">{json.dumps(spec)}</script></div>
-        </div>
+  <section class="section split m2" id="solvers" aria-labelledby="solvers-h">
+    <div class="wrap grid grid--top">
+      <div class="span-5 split-col">
+        <h2 id="solvers-h">Built on DuckDB, solved by Gurobi or HiGHS</h2>
+        <p class="t-lead">DeciDB is DuckDB with the DECIDE clause added, so it reads the same tables and files. HiGHS ships in every build; Gurobi is used when its license is present.</p>
+        <ul class="facts">
+          <li>Python: <code>pip install decidb</code>, with DuckDB's API</li>
+          <li>A command-line shell for macOS, Linux and Windows</li>
+          <li>LP, MILP and convex QP on HiGHS; non-convex QP, MIQP and QCQP need Gurobi</li>
+        </ul>
+        <p class="split-col__end"><a class="link" href="problems.html#classes">See solvers by class{b.ARROW}</a></p>
+      </div>
+      <div class="frame frame--split frame--lit span-6 start-7 dg-frame">
+        <div class="dg" data-diagram data-dg-still><script type="application/json">{json.dumps(spec)}</script></div>
       </div>
     </div>
   </section>"""
@@ -359,7 +366,7 @@ def faq(b):
         return "".join(f'<div class="faq__item"><h3>{esc(q)}</h3><p>{esc(a)}</p></div>' for q, a in qs)
 
     return f"""
-  <section class="section bg-band bg-bleed" id="faq" aria-labelledby="faq-h">
+  <section class="section bg-band bg-bleed g2m" id="faq" aria-labelledby="faq-h">
     <div class="wrap">
       <div class="grid grid--top">
         <div class="span-5 stack-4">
@@ -367,10 +374,10 @@ def faq(b):
           <p class="t-lead">On solvers, releases and what happens when a model has no answer.</p>
           <p><a class="link" href="{b.GITHUB}/issues">Ask on GitHub{b.ARROW}</a></p>
         </div>
-        <div class="span-6 start-7 faq">{items(FAQ[:3])}</div>
+        <div class="span-6 start-7 faq">{items(FAQ[:1])}</div>
       </div>
       <div class="grid grid--top">
-        <div class="span-6 start-7 faq faq--more">{items(FAQ[3:])}</div>
+        <div class="span-6 start-7 faq faq--more">{items(FAQ[1:])}</div>
       </div>
     </div>
   </section>"""

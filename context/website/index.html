@@ -2,7 +2,7 @@
 <html lang="en" data-type="software" data-radius="sharp" data-ground="sage" data-buttons="pill" data-motion>
 <head>
 <meta charset="utf-8">
-<script>try{var r=document.documentElement,t=localStorage.getItem('decidb-theme');if(!r.dataset.theme&&(t==='light'||t==='dark'))r.dataset.theme=t}catch(e){}</script>
+<script>(function(){var r=document.documentElement,t;try{t=localStorage.getItem('decidb-theme')}catch(e){}if(!r.dataset.theme)r.dataset.theme=t==='light'||t==='dark'?t:matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'})()</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>DeciDB: optimization queries in DuckDB</title>
 <meta name="description" content="DeciDB adds a DECIDE clause to DuckDB: state decisions, constraints and a goal in SQL and get the best values back as rows. Nine problem classes are answered without a solver; the rest go to Gurobi or HiGHS.">
@@ -38,21 +38,14 @@
   --display-tracking: -0.035em;
   --display-tracking-xl: -0.045em;
 }
-/* the evening grade (a tech page may take it, chosen on load from the visitor's setting or by the nav's switch):
-   the page tokens go dark; the lit ground (sage) and the panels' painted grounds stay light, as the kit keeps them */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
-    --p-accent: #7d9dff; --p-accent-ink: #0e0f10; --p-action: #3463f0; --p-action-ink: #ffffff;
-    --p-inv-bg: #f4f4f2; --p-inv-surface: #e8e8e6; --p-inv-ink: #111111; --p-inv-muted: #5c5c5c;
-    --p-inv-accent: #1a4be0; --p-inv-accent-ink: #ffffff; --p-inv-action: #111111; --p-inv-action-ink: #ffffff;
-  }
-}
+/* the evening grade (a tech page may take it): the head script sets data-theme from the nav's switch (remembered) or the
+   visitor's setting; the page tokens go dark, the lit ground (sage) and the panels' painted grounds stay light, as the
+   kit keeps them */
 :root[data-theme="dark"] {
-    --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
-    --p-accent: #7d9dff; --p-accent-ink: #0e0f10; --p-action: #3463f0; --p-action-ink: #ffffff;
-    --p-inv-bg: #f4f4f2; --p-inv-surface: #e8e8e6; --p-inv-ink: #111111; --p-inv-muted: #5c5c5c;
-    --p-inv-accent: #1a4be0; --p-inv-accent-ink: #ffffff; --p-inv-action: #111111; --p-inv-action-ink: #ffffff;
+  --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
+  --p-accent: #7d9dff; --p-accent-ink: #0e0f10; --p-action: #3463f0; --p-action-ink: #ffffff;
+  --p-inv-bg: #f4f4f2; --p-inv-surface: #e8e8e6; --p-inv-ink: #111111; --p-inv-muted: #5c5c5c;
+  --p-inv-accent: #1a4be0; --p-inv-accent-ink: #ffffff; --p-inv-action: #111111; --p-inv-action-ink: #ffffff;
 }
 </style>
 <link rel="stylesheet" href="assets/css/site.css">
@@ -95,13 +88,12 @@
   <section class="hero hero--centred" data-enter aria-labelledby="hero-h">
     <div class="wrap"><div class="hero-text">
       <div class="hero__c">
-        <p class="pill"><span>New in DeciDB</span><span class="muted">Direct solve</span></p>
         <h1 id="hero-h">Optimization in DuckDB</h1>
         <p class="hero__lead">Add DECIDE to a SQL query and get the best values back as rows.</p>
         <div class="btn-row"><a class="btn btn--primary" href="getting-started.html#install">Install DeciDB</a><a class="btn btn--secondary" href="documentation.html">Read the guide</a></div>
       </div>
-      <div class="hero__window" data-fx="grain-gradient" data-fx-seed="7" role="img" aria-label="A DeciDB session: the knapsack query takes the laptop, camera and lens, worth 235 at 42 kg of the 50 allowed. Beside it, a list of other example problems.">
-        <div class="ly-piece ui ui-hw hw" aria-hidden="true">
+      <div class="hero__window" data-fx="grain-gradient" data-fx-seed="7" data-ui-pause-host>
+        <div class="ly-piece ui ui-hw hw" role="img" aria-label="A DeciDB session: the knapsack query takes the laptop, camera and lens, worth 235 at 42 kg of the 50 allowed. Beside it, a list of other example problems.">
           <div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · knapsack.sql</span><span class="hw__sp"></span><span class="hw__meta">in-memory</span></div>
           <div class="hw__body">
             <div class="hw__list"><div class="hw__q">Examples</div><div class="hw__row is-on"><b>Knapsack</b><span>ILP</span></div><div class="hw__row"><b>Production plan</b><span>ILP</span></div><div class="hw__row"><b>Depots</b><span>MILP</span></div><div class="hw__row"><b>Fair allocation</b><span>direct solve R4</span></div><div class="hw__row"><b>Matching</b><span>direct solve O1</span></div></div>
@@ -118,13 +110,10 @@
       </div>
     </div></div>
   </section>
-  <section class="section g2 g2m" id="language" aria-labelledby="language-h">
-    <div class="wrap">
+  <section class="section g2m pair" id="language" aria-labelledby="language-h">
+    <div class="wrap grid">
       <div class="group">
-        <div class="section-head">
-          <h2 id="language-h">Write the model in SQL. <span class="muted">Decisions, rules and the goal sit in one DECIDE query.</span></h2>
-        </div>
-        <div class="grid">
+        <div class="section-head"><h2 id="language-h">Write the model in SQL. <span class="muted">Decisions, rules and the goal sit in one DECIDE query.</span></h2></div>
           <article class="card card--row card--open span-6 m-nolift">
             <h3>Declares one decision per key</h3>
             <p><code>per n: keep(BOOL)</code> gives each nurse one decision, shared by every shift row the join returns.</p>
@@ -136,6 +125,8 @@
               </div></div>
             </div>
           </article>
+      </div>
+      <div class="group">
           <article class="card card--row card--open span-6 m-nolift">
             <h3>Limits a constraint to the rows it names</h3>
             <p><code>when</code> picks the rows a constraint reads. Here the bag takes at most one tech item.</p>
@@ -146,10 +137,13 @@
               </div></div>
             </div>
           </article>
-        </div>
       </div>
+    </div>
+  </section>
+  <section class="section g2m pair" id="checks" aria-labelledby="checks-h">
+    <div class="wrap grid">
       <div class="group">
-        <div class="grid">
+        <div class="section-head"><h2 id="checks-h">When a query cannot be answered</h2></div>
           <article class="card card--row card--open span-6 m-nolift">
             <h3>Refuses a constraint the data cannot decide</h3>
             <p>A depot ships several rows, so a cap per depot on a decision per row stops before solving.</p>
@@ -160,6 +154,8 @@
               </div></div>
             </div>
           </article>
+      </div>
+      <div class="group">
           <article class="card card--row card--open span-6 m-nolift">
             <h3>Explains a query with no answer</h3>
             <p><code>DIAGNOSE</code> returns the clause to change and by how much: here, a weight limit of 57 instead of 40.</p>
@@ -170,42 +166,39 @@
 <span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
 <span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">40</span>
   <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(x) &gt;= <span class="tk-n">4</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">suggested_change</span><span class="r">amount</span></div><div class="sq__tr"><span class="">SUM(x * weight) &lt;= 57</span><span class="r">17</span></div></div></div></div>
+<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 3fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">suggested_change</span><span class="r">amount</span></div><div class="sq__tr"><span class="">SUM(x * weight) &lt;= 57</span><span class="r">17</span></div></div></div></div>
               </div></div>
             </div>
           </article>
-        </div>
         <p class="group__end"><a class="link" href="documentation.html#scopes">Read about scopes<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a></p>
       </div>
     </div>
   </section>
-  <section class="section" id="direct" aria-labelledby="direct-h">
-    <div class="wrap">
-      <div class="grid grid--top fill">
-        <div class="span-5 split-col">
-          <h2 id="direct-h">9 problem classes skip the solver</h2>
-          <p class="t-lead">When a query matches a class with an exact answer, DeciDB computes it with DuckDB's own sorting and aggregation. The query stays the same, and <code>EXPLAIN</code> names the rule.</p>
-          <ul class="facts">
-            <li>Fair allocation over 800,000 decisions: 0.026 s, where Gurobi took 2,158 s</li>
-            <li>Faster than Gurobi in all nine classes, at every size measured</li>
-            <li><code>SET decide_direct_solve = 'off'</code> sends a query back to the solver</li>
-          </ul>
-          <p class="split-col__end"><a class="link" href="problems.html#direct-solve">See all 9 classes<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a></p>
-        </div>
-        <div class="frame frame--split frame--lit span-6 start-7">
-          <div class="stage stage--fade-br" role="img" aria-label="EXPLAIN on a fair-allocation query names the direct-solve rule R4_MAX_MIN_FAIRNESS, and the query returns each program's share.">
-            <div class="at-corner to-edge">
-              <div class="ui ui-sq sq sq--wide" aria-hidden="true">
-                <div class="sq__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · fair.sql</span></div>
-                <pre class="sq__code"><code><span class="tk-k">EXPLAIN</span> <span class="tk-k">SELECT</span> program, alloc
+  <section class="section split m2" id="direct" aria-labelledby="direct-h">
+    <div class="wrap grid grid--top">
+      <div class="span-5 split-col">
+        <h2 id="direct-h">9 problem classes skip the solver</h2>
+        <p class="t-lead">When a query matches a class with an exact answer, DeciDB computes it with DuckDB's own sorting and aggregation. The query stays the same, and <code>EXPLAIN</code> names the rule.</p>
+        <ul class="facts">
+          <li>Fair allocation over 800,000 decisions: 0.026 s, where Gurobi took 2,158 s</li>
+          <li>Faster than Gurobi in all nine classes, at every size measured</li>
+          <li><code>SET decide_direct_solve = 'off'</code> sends a query back to the solver</li>
+        </ul>
+        <p class="split-col__end"><a class="link" href="problems.html#direct-solve">See all 9 classes<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a></p>
+      </div>
+      <div class="frame frame--split frame--lit span-6 start-7">
+        <div class="stage stage--fade-b" role="img" aria-label="EXPLAIN on a fair-allocation query names the direct-solve rule R4_MAX_MIN_FAIRNESS and the condition it checked; run without EXPLAIN, the query gives each program its share.">
+          <div class="at-corner to-edge">
+            <div class="ui ui-sq sq sq--wide" aria-hidden="true">
+              <div class="sq__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · fair.sql</span></div>
+              <pre class="sq__code"><code><span class="tk-k">EXPLAIN</span> <span class="tk-k">SELECT</span> program, alloc
 <span class="tk-k">FROM</span> Programs
 <span class="tk-k">DECIDE</span> alloc(<span class="tk-k">REAL</span>)
 <span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> alloc &lt;= max_alloc
   <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(alloc) &lt;= <span class="tk-n">100</span>
 <span class="tk-k">MAXIMIZE</span> <span class="tk-f">MIN</span>(alloc / need);</code></pre>
-                <div class="sq__explain"><div class="sq__kv"><span>Direct solve rule</span><b>R4_MAX_MIN_FAIRNESS</b></div><div class="sq__kv"><span>Direct solve condition</span><b>max MIN(c*x), 0 &lt;= x &lt;= cap, SUM(w*x) &lt;= B</b></div></div>
-                <div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">program</span><span class="r">alloc</span></div><div class="sq__tr"><span class="">Clinic</span><span class="r">16.67</span></div><div class="sq__tr"><span class="">Shelter</span><span class="r">25</span></div><div class="sq__tr"><span class="">School</span><span class="r">41.67</span></div><div class="sq__tr"><span class="">Pantry</span><span class="r">8.33</span></div></div></div>
-              </div>
+              <div class="sq__explain"><div class="sq__kv"><span>Direct solve rule</span><b>R4_MAX_MIN_FAIRNESS</b></div><div class="sq__kv"><span>Direct solve condition</span><b>max MIN(c*x), 0 &lt;= x &lt;= cap, SUM(w*x) &lt;= B</b></div></div>
+              <div class="sq__run"><span class="sq__k">The same query without EXPLAIN</span><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">program</span><span class="r">alloc</span></div><div class="sq__tr"><span class="">Clinic</span><span class="r">16.67</span></div><div class="sq__tr"><span class="">Shelter</span><span class="r">25</span></div><div class="sq__tr"><span class="">School</span><span class="r">41.67</span></div><div class="sq__tr"><span class="">Pantry</span><span class="r">8.33</span></div></div></div>
             </div>
           </div>
         </div>
@@ -221,26 +214,24 @@
       <div class="grid parts"><div class="span-4 part"><code><span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)</code><p>The decisions: one per row, per key or per query.</p></div><div class="span-4 part"><code><span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> ...</code><p>The constraints, on each row or on sums over groups.</p></div><div class="span-4 part"><code><span class="tk-k">MAXIMIZE</span> ...</code><p>The goal; leave it out to ask for any answer that fits.</p></div></div>
     </div>
   </section>
-  <section class="section" id="solvers" aria-labelledby="solvers-h">
-    <div class="wrap">
-      <div class="grid grid--top fill">
-        <div class="span-5 split-col">
-          <h2 id="solvers-h">Built on DuckDB, solved by Gurobi or HiGHS</h2>
-          <p class="t-lead">DeciDB is DuckDB with the DECIDE clause added, so it reads the same tables and files. HiGHS ships in every build; Gurobi is used when its license is present.</p>
-          <ul class="facts">
-            <li>Python: <code>pip install decidb</code>, with DuckDB's API</li>
-            <li>A command-line shell for macOS, Linux and Windows</li>
-            <li>LP, MILP and convex QP on HiGHS; non-convex QP, MIQP and QCQP need Gurobi</li>
-          </ul>
-          <p class="split-col__end"><a class="link" href="problems.html#classes">See solvers by class<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a></p>
-        </div>
-        <div class="frame frame--split frame--lit span-6 start-7 dg-frame">
-          <div class="dg" data-diagram data-dg-still><script type="application/json">{"layout": "hub", "alt": "DeciDB at the centre, reading DuckDB tables and Parquet files, solving with Gurobi or HiGHS, called from Python or the command line.", "center": {"label": "DeciDB"}, "motion": {"pulse": "none"}, "spokes": [{"label": "DuckDB", "icon": "si:duckdb"}, {"label": "Parquet", "icon": "si:apacheparquet"}, {"label": "Gurobi", "icon": "si:gurobi"}, {"label": "HiGHS", "icon": "ui:sigma"}, {"label": "Python", "icon": "python"}, {"label": "Command line", "icon": "ui:terminal"}]}</script></div>
-        </div>
+  <section class="section split m2" id="solvers" aria-labelledby="solvers-h">
+    <div class="wrap grid grid--top">
+      <div class="span-5 split-col">
+        <h2 id="solvers-h">Built on DuckDB, solved by Gurobi or HiGHS</h2>
+        <p class="t-lead">DeciDB is DuckDB with the DECIDE clause added, so it reads the same tables and files. HiGHS ships in every build; Gurobi is used when its license is present.</p>
+        <ul class="facts">
+          <li>Python: <code>pip install decidb</code>, with DuckDB's API</li>
+          <li>A command-line shell for macOS, Linux and Windows</li>
+          <li>LP, MILP and convex QP on HiGHS; non-convex QP, MIQP and QCQP need Gurobi</li>
+        </ul>
+        <p class="split-col__end"><a class="link" href="problems.html#classes">See solvers by class<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a></p>
+      </div>
+      <div class="frame frame--split frame--lit span-6 start-7 dg-frame">
+        <div class="dg" data-diagram data-dg-still><script type="application/json">{"layout": "hub", "alt": "DeciDB at the centre, reading DuckDB tables and Parquet files, solving with Gurobi or HiGHS, called from Python or the command line.", "center": {"label": "DeciDB"}, "motion": {"pulse": "none"}, "spokes": [{"label": "DuckDB", "icon": "si:duckdb"}, {"label": "Parquet", "icon": "si:apacheparquet"}, {"label": "Gurobi", "icon": "si:gurobi"}, {"label": "HiGHS", "icon": "ui:sigma"}, {"label": "Python", "icon": "python"}, {"label": "Command line", "icon": "ui:terminal"}]}</script></div>
       </div>
     </div>
   </section>
-  <section class="section bg-band bg-bleed" id="faq" aria-labelledby="faq-h">
+  <section class="section bg-band bg-bleed g2m" id="faq" aria-labelledby="faq-h">
     <div class="wrap">
       <div class="grid grid--top">
         <div class="span-5 stack-4">
@@ -248,10 +239,10 @@
           <p class="t-lead">On solvers, releases and what happens when a model has no answer.</p>
           <p><a class="link" href="https://github.com/huda-lab/decidb/issues">Ask on GitHub<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a></p>
         </div>
-        <div class="span-6 start-7 faq"><div class="faq__item"><h3>Do I need a Gurobi license?</h3><p>No. HiGHS is bundled and solves LP, MILP and convex QP. With a Gurobi license, DeciDB also takes non-convex and mixed-integer quadratic models.</p></div><div class="faq__item"><h3>Does ordinary DuckDB SQL still work?</h3><p>Yes. DeciDB is DuckDB with one more clause; a query without DECIDE runs as it does in DuckDB.</p></div><div class="faq__item"><h3>What happens when no answer meets every constraint?</h3><p>The query stops and says so. Put DIAGNOSE in front of it to see which clause to change and by how much.</p></div></div>
+        <div class="span-6 start-7 faq"><div class="faq__item"><h3>Do I need a Gurobi license?</h3><p>No. HiGHS is bundled and solves LP, MILP and convex QP. With a Gurobi license, DeciDB also takes non-convex and mixed-integer quadratic models.</p></div></div>
       </div>
       <div class="grid grid--top">
-        <div class="span-6 start-7 faq faq--more"><div class="faq__item"><h3>Can I see the optimization model it builds?</h3><p>Yes. EXPLAIN shows the DECIDE node with its variables, constraints and objective, and the direct-solve rule when one applies.</p></div><div class="faq__item"><h3>Does release 0.2 run the queries on this site?</h3><p>No. Release 0.2 uses the earlier spellings, such as a postfix PER. The guide&#x27;s migration table lists each change.</p></div></div>
+        <div class="span-6 start-7 faq faq--more"><div class="faq__item"><h3>Does ordinary DuckDB SQL still work?</h3><p>Yes. DeciDB is DuckDB with one more clause; a query without DECIDE runs as it does in DuckDB.</p></div><div class="faq__item"><h3>What happens when no answer meets every constraint?</h3><p>The query stops and says so. Put DIAGNOSE in front of it to see which clause to change and by how much.</p></div><div class="faq__item"><h3>Can I see the optimization model it builds?</h3><p>Yes. EXPLAIN shows the DECIDE node with its variables, constraints and objective, and the direct-solve rule when one applies.</p></div><div class="faq__item"><h3>Does release 0.2 run the queries on this site?</h3><p>No. Release 0.2 uses the earlier spellings, such as a postfix PER. The guide&#x27;s migration table lists each change.</p></div></div>
       </div>
     </div>
   </section>
@@ -271,7 +262,7 @@
           <a class="nav__logo" href="index.html"><img src="assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
           <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
         </div>
-        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="getting-started.html">Install</a></li><li><a href="documentation.html">Language guide</a></li><li><a href="problems.html">Problems</a></li><li><a href="examples.html">Examples</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="getting-started.html">Install</a></li><li><a href="documentation.html">Guide</a></li><li><a href="problems.html">Problems</a></li><li><a href="examples.html">Examples</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="examples/knapsack.html">Knapsack</a></li><li><a href="examples/facility-location.html">Depots</a></li><li><a href="examples/fair-allocation.html">Fair allocation</a></li><li><a href="examples/diagnose.html">DIAGNOSE</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Project</h3><ul><li><a href="about.html">About</a></li><li><a href="about.html#research">Papers</a></li><li><a href="https://github.com/huda-lab/decidb">GitHub</a></li><li><a href="https://huda-lab.github.io/">HUDA Lab</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Contact</h3><ul><li><a href="mailto:support@decidb.com">Email the team</a></li><li><a href="https://github.com/huda-lab/decidb/issues">Report an issue</a></li></ul></div>

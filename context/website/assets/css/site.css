@@ -1,12 +1,28 @@
 /* DeciDB site styles, on top of the taste-skill kit (assets/system.css and the files beside it, unchanged copies).
    Only what the kit lacks: the SQL panes on the home page (inside its visuals) and the reading pages (guide,
-   problems, examples, install, about). Every colour, space, radius and size is a kit token. */
+   problems, examples, install, about). Every colour, space, radius and type size is a kit token or a site token
+   below; the drawn windows are pictures, so their few sizes are px tokens that keep their rows' heights. */
 
-/* ---------------------------------------------------------------- site tokens
-   The drawn windows (the shell, the SQL panes) and the few status colours, light and evening. The page tokens come
-   from the kit (system.css) and the dealt palette in each page's head, which carries the evening grade too. */
+/* ---------------------------------------------------------------- site tokens */
 :root {
   color-scheme: light;
+  /* the kit's type scale in rem, so a reader's own text size carries through (1rem = 16px by default) */
+  --t-label: .8125rem; --t-small: .875rem; --t-body: 1rem; --t-lead: 1.125rem; --t-card: 1.125rem; --t-h3: 1.5rem;
+  --t-h2: clamp(1.875rem, 1.72vw + 1.45625rem, 3rem);
+  --t-h1: clamp(2.375rem, 3.24vw + 1.5875rem, 4.5rem);
+  --t-stat: clamp(1.75rem, .952vw + 1.518rem, 2.375rem);
+  /* the steps the reading pages add to it */
+  --t-note: .9375rem;       /* a summary under a title, a table in running text */
+  --t-read: 1.03125rem;     /* the guide's running text */
+  --t-h4: 1.1875rem;        /* a heading inside the guide */
+  --t-code: .84375rem;      /* code and results on the reading pages */
+  --t-code-sm: .78125rem;   /* a snippet in a list */
+  --t-h2-read: clamp(1.625rem, .9vw + 1.3125rem, 2.125rem);
+  --t-page: clamp(2.25rem, 2.3vw + 1.5rem, 3.5rem);
+  /* the drawn windows (the shell, the SQL panes): pictures with fixed rows */
+  --w-text: 13px; --w-small: 12px; --w-mono: 12.5px;
+
+  /* the drawn windows' colours and the few status colours */
   --win-bg: #ffffff; --win-ink: #111111; --win-muted: #5f5f5f; --win-accent: #1a4be0;
   --win-line: rgb(17 17 17 / .08); --win-rule: rgb(17 17 17 / .07); --win-edge: rgb(17 17 17 / .1);
   --win-field: #f2f2f0; --win-row: #f0f0ee; --win-dot: #dcdcd8;
@@ -16,27 +32,16 @@
   --code-note: #4a4a4a;    /* comments in code: 8:1 on the code sheet */
   --lede: #3b3b3b;         /* the line under a page's title: read text, 10:1 */
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-    --win-bg: #1c1d20; --win-ink: #ececea; --win-muted: #a2a4a8; --win-accent: #8fb0ff;
-    --win-line: rgb(255 255 255 / .09); --win-rule: rgb(255 255 255 / .08); --win-edge: rgb(255 255 255 / .12);
-    --win-field: #26282c; --win-row: #2a2c31; --win-dot: #45484d;
-    --win-shadow: 0 0 0 1px var(--win-edge), 0 1px 2px rgb(0 0 0 / .3), 0 28px 56px -28px rgb(0 0 0 / .6);
-    --pane-shadow: 0 0 0 1px var(--win-edge), 0 1px 2px rgb(0 0 0 / .3), 0 20px 40px -24px rgb(0 0 0 / .55);
-    --code-lit: #f2a678; --ok-ink: #7fd49a; --err-ink: #ffb3a8; --err-bg: #3a1f1c;
-    --code-note: #b4b4b0; --lede: #d2d2cf;
-  }
-}
+/* the evening grade: the head script sets data-theme from the stored choice or the visitor's setting */
 :root[data-theme="dark"] {
-    color-scheme: dark;
-    --win-bg: #1c1d20; --win-ink: #ececea; --win-muted: #a2a4a8; --win-accent: #8fb0ff;
-    --win-line: rgb(255 255 255 / .09); --win-rule: rgb(255 255 255 / .08); --win-edge: rgb(255 255 255 / .12);
-    --win-field: #26282c; --win-row: #2a2c31; --win-dot: #45484d;
-    --win-shadow: 0 0 0 1px var(--win-edge), 0 1px 2px rgb(0 0 0 / .3), 0 28px 56px -28px rgb(0 0 0 / .6);
-    --pane-shadow: 0 0 0 1px var(--win-edge), 0 1px 2px rgb(0 0 0 / .3), 0 20px 40px -24px rgb(0 0 0 / .55);
-    --code-lit: #f2a678; --ok-ink: #7fd49a; --err-ink: #ffb3a8; --err-bg: #3a1f1c;
-    --code-note: #b4b4b0; --lede: #d2d2cf;
+  color-scheme: dark;
+  --win-bg: #1c1d20; --win-ink: #ececea; --win-muted: #a2a4a8; --win-accent: #8fb0ff;
+  --win-line: rgb(255 255 255 / .09); --win-rule: rgb(255 255 255 / .08); --win-edge: rgb(255 255 255 / .12);
+  --win-field: #26282c; --win-row: #2a2c31; --win-dot: #45484d;
+  --win-shadow: 0 0 0 1px var(--win-edge), 0 1px 2px rgb(0 0 0 / .3), 0 28px 56px -28px rgb(0 0 0 / .6);
+  --pane-shadow: 0 0 0 1px var(--win-edge), 0 1px 2px rgb(0 0 0 / .3), 0 20px 40px -24px rgb(0 0 0 / .55);
+  --code-lit: #f2a678; --ok-ink: #7fd49a; --err-ink: #ffb3a8; --err-bg: #3a1f1c;
+  --code-note: #b4b4b0; --lede: #d2d2cf;
 }
 /* inside a drawn window its own colours rule, whatever ground the window stands on */
 .hw, .sq { --ink: var(--win-ink); --muted: var(--win-muted); --accent: var(--win-accent); }
@@ -48,7 +53,7 @@ code, pre, .output table, .facts, .sq { font-variant-numeric: tabular-nums; }
   font: 400 .9em/1 var(--font-mono); padding: .14em .36em; border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--ink) 6%, transparent); overflow-wrap: anywhere;
 }
-pre { margin: 0; font: 400 13px/20px var(--font-mono); tab-size: 2; }
+pre { margin: 0; font: 400 var(--t-code)/1.55 var(--font-mono); tab-size: 2; }
 pre code { font: inherit; }
 
 /* SQL as the guide sets it: the three scope words carry the accent, the rest stays ink */
@@ -58,14 +63,17 @@ pre code { font: inherit; }
 .tk-n, .tk-s { color: var(--code-lit); }
 .tk-c { color: var(--code-note); }
 
+/* the kit's authoring guard outlines any [bracketed] text as a leftover placeholder; in code a bracket is syntax
+   (grammar, arrays), so code and result tables keep no outline */
+:is(pre, code, .output) [data-placeholder], :is(pre, code)[data-placeholder] { outline: 0; }
+
 /* ---------------------------------------------------------------- home: the hero */
 /* the line under the h1 is read, so it takes the ink (7:1), not the grey the layout gives it */
 .hero--centred .hero__lead { color: var(--ink); }
 
 /* the window: DeciDB's shell with the examples beside the open query (white UI on the sage lit ground) */
 .hw { background: var(--win-bg); color: var(--win-ink); border-radius: var(--r-lg); overflow: hidden; text-align: left;
-      box-shadow: var(--win-shadow);
-      font: 400 13px/1.45 var(--font-text); }
+      box-shadow: var(--win-shadow); font: 400 var(--w-text)/1.45 var(--font-text); }
 .hw__bar, .sq__bar { display: flex; align-items: center; gap: var(--s-3); height: 38px; padding: 0 var(--s-4);
                      border-bottom: 1px solid var(--win-line); color: var(--win-muted); white-space: nowrap; }
 .hw__bar b, .sq__bar b { color: var(--win-ink); font-weight: 500; }
@@ -78,41 +86,40 @@ pre code { font: inherit; }
 .hw__row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-3); height: 34px; padding: 0 10px;
            border-radius: var(--r-sm); min-width: 0; line-height: 34px; }
 .hw__row b { font-weight: 500; white-space: nowrap; overflow: hidden; min-width: 0; }
-.hw__row span { flex: none; color: var(--win-muted); font-size: 12px; }
+.hw__row span { flex: none; color: var(--win-muted); font-size: var(--w-small); }
 .hw__row.is-on { background: var(--win-row); }
 .hw__main { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--s-5); align-items: start; align-content: start;
             padding: var(--s-4) var(--s-5); min-width: 0; }
-.hw__sql { white-space: pre; overflow: hidden; }
+.hw__sql { white-space: pre; overflow: hidden; font-size: var(--w-text); line-height: 20px; }
 .hw__out { display: grid; gap: var(--s-3); min-width: 0; }
 .hw__status { display: flex; align-items: center; gap: var(--s-2); font-weight: 500; }
 .hw__status i { width: 8px; height: 8px; border-radius: 2px; background: var(--win-ink); }
 
 /* a result as the shell prints it, on a grid (shared by the window and the SQL panes) */
-.sq__grid { font: 400 12.5px/1 var(--font-mono); min-width: 0; }
+.sq__grid { font: 400 var(--w-mono)/1 var(--font-mono); min-width: 0; }
 .sq__tr { display: grid; grid-template-columns: var(--tpl); gap: var(--s-3); align-items: center; height: 26px;
           border-top: 1px solid var(--win-rule); }
 .sq__tr > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sq__tr > .r { text-align: right; }
-.sq__th { border-top: 0; color: var(--win-muted); font-size: 12px; }
+.sq__th { border-top: 0; color: var(--win-muted); font-size: var(--w-small); }
 .sq__tr.is-on > :last-child { color: var(--win-accent); font-weight: 500; }
 
 /* the SQL panes in the cards and the split frame: a query, then what DeciDB returned */
-.sq { background: var(--win-bg); color: var(--win-ink); border-radius: var(--r-md); padding: var(--s-4); display: grid; gap: var(--s-4); align-content: start;
-      box-shadow: var(--pane-shadow);
-      font: 400 13px/1.45 var(--font-text); }
-.sq__code { font-size: 12px; line-height: 19px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.sq__err { font: 400 12px/18px var(--font-mono); color: var(--err-ink); background: var(--err-bg); border-radius: var(--r-sm); padding: var(--s-3); }
+.sq { background: var(--win-bg); color: var(--win-ink); border-radius: var(--r-md); padding: var(--s-4); display: grid; gap: var(--s-4);
+      align-content: start; box-shadow: var(--pane-shadow); font: 400 var(--w-text)/1.45 var(--font-text); }
+.sq__code { font-size: var(--w-small); line-height: 19px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sq__err { font: 400 var(--w-small)/18px var(--font-mono); color: var(--err-ink); background: var(--err-bg); border-radius: var(--r-sm); padding: var(--s-3); }
 .sq__err b { font-family: var(--font-text); font-weight: 500; margin-right: var(--s-1); }
 .sq--wide { width: 560px; padding: 0; gap: 0; }
 .sq--wide > :not(.sq__bar) { padding: var(--s-4) var(--s-5) 0; }
-.sq--wide > .sq__out { padding-bottom: var(--s-6); }
-.sq__explain { display: grid; gap: var(--s-2); font-size: 12px; }
+.sq__explain { display: grid; gap: var(--s-2); font-size: var(--w-small); }
+/* the same query run without EXPLAIN, under a rule: its label, then the rows */
+.sq--wide > .sq__run { display: grid; gap: var(--s-3); margin-top: var(--s-4); border-top: 1px solid var(--win-line); }
 .sq__kv { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: var(--s-3); }
-.sq__kv span { color: var(--win-muted); } .sq__kv b { font: 500 12px/18px var(--font-mono); color: var(--win-accent); overflow-wrap: anywhere; }
-.sq--menu { display: grid; gap: 2px; padding: var(--s-3) var(--s-4); font: 400 12px/18px var(--font-mono); width: 260px; }
+.sq__kv span { color: var(--win-muted); } .sq__kv b { font: 500 var(--w-small)/18px var(--font-mono); color: var(--win-accent); overflow-wrap: anywhere; }
+.sq--menu { display: grid; gap: 2px; padding: var(--s-3) var(--s-4); font: 400 var(--w-small)/18px var(--font-mono); width: 260px; }
 .sq__k { color: var(--win-muted); font-family: var(--font-text); }
 
-#language .panel { --p-h: 336px; max-height: 380px; }
 /* the lit ground stays a margin round the hero window: the window runs wider, and on a tall screen the frame
    stops a little under the window instead of filling the screen (the hero's block then sits in the middle) */
 @media (min-width: 640px) {
@@ -120,33 +127,64 @@ pre code { font: inherit; }
   .hero--centred .hero__window { max-height: 460px; }
   .hero--centred > .wrap > .hero-text { justify-content: center; }
 }
-#language .card > p { max-width: 46ch; }
 
-/* the split sections: plain facts, one per line, each closed by a rule */
+/* ---------------------------------------------------------------- home: two cards a section
+   Side by side under the heading from a tablet up: the two groups dissolve into the section's grid and the cards'
+   row takes what the heading and the link leave, so the panels grow to the screen's foot. On a phone each group is
+   one of the section's two screens: the heading and the first card, then the second card and the link. */
+.pair .panel { --p-h: 264px; }
+@media (min-width: 640px) {
+  .pair > .wrap { grid-template-rows: auto minmax(0, 1fr) auto; }
+  .pair > .wrap > .group { display: contents; }
+  .pair .section-head, .pair .group__end { grid-column: 1 / -1; }
+  .pair .card { grid-column: auto / span 6; align-self: stretch; }
+  .pair .panel { max-height: 380px; }
+}
+@media (max-width: 639px) {
+  .pair .panel { --p-h: 340px; }
+  /* each screen's card runs down to that screen's foot (its panel grows), so no screen ends in an empty band */
+  .pair > .wrap > .group > .card { flex: 1 1 auto; }
+}
+.group__end { margin-top: var(--s-6); }
+
+/* ---------------------------------------------------------------- home: the split sections
+   The words beside a framed picture that runs to the section's foot; stacked on a phone, each takes a screen. */
+main > section.split > .wrap.grid { align-content: stretch; }
+.split > .wrap > .frame { align-self: stretch; }
+/* stacked (a tablet, a phone): the words, then the frame takes what the screen leaves */
+@media (max-width: 1023px) { main > section.split > .wrap.grid { grid-template-rows: auto minmax(0, 1fr); } }
+/* a phone gives a split two screens, in one flow (no screen groups: the frame is a picture, not a group's content) */
+@media (max-width: 639px) { main > section.m2 { --hm: 2; } }
+.frame--split .at-corner { --ax: 48px; --ay: 48px; }
+/* the window in the split frame runs past the frame's foot, so the frame cuts it (never a window floating on ground) */
+.to-edge > .sq--wide { min-height: calc(100% - 8px); }
+.dg-frame { padding: var(--s-5); }
+.dg-frame > .dg { width: 100%; }
+
+/* plain facts, one per line, each closed by a rule */
 .facts { display: grid; margin: 0; padding: 0; list-style: none; }
 .facts > li { padding: var(--s-3) 0; border-top: 1px solid var(--line); text-wrap: pretty; }
 .facts > li:last-child { border-bottom: 1px solid var(--line); }
 .facts code { background: none; padding: 0; font-size: .92em; }
-#direct .at-corner { --ax: 48px; --ay: 48px; }
-.group__end { margin-top: var(--s-6); }
-/* the name across the .wrap: its capitals rise above a .86 line, so the line opens upward (clipped only sideways) */
-.close__word { overflow-x: clip; overflow-y: visible; }
-/* the second half of the questions continues the first list on a desktop */
-#faq .faq--more > .faq__item:first-child { padding-top: var(--s-5); }
-#faq .wrap > .grid + .grid { margin-top: 0; }
-/* the second pair of tiles fills its screen, as the first does */
-#language .wrap > .group:last-child > .grid { flex: 1 1 auto; min-height: 0; }
-#direct .frame, #solvers .frame { align-self: stretch; }
-.dg-frame { padding: var(--s-5); }
-.dg-frame > .dg { width: 100%; }
 
 /* the statement and the three clauses under it */
 .statement { max-width: none; }
 .statement > p { max-width: 52ch; }
 .parts { margin-top: auto; row-gap: var(--s-5); }
 .part { display: grid; gap: var(--s-3); align-content: start; padding-top: var(--s-4); border-top: 1px solid var(--line-strong); }
-.part code { font: 500 15px/1.4 var(--font-mono); background: none; padding: 0; }
+.part code { font: 500 var(--t-note)/1.4 var(--font-mono); background: none; padding: 0; }
 .part p { max-width: 32ch; }
+
+/* the questions: the second list continues the first on a desktop, and is the second screen on a phone (the
+   heading and the first answer, then the other four) */
+.faq--more > .faq__item:first-child { padding-top: var(--s-5); }
+.grid:has(> .faq--more) { margin-top: 0; }
+
+/* a section on a dealt ground keeps its screens (backgrounds.css reads --g-screen as its minimum) */
+main > section:is(.bg-mist, .bg-band) { --g-screen: calc(var(--h, 1) * 100svh); }
+
+/* the name across the .wrap: its capitals rise above a .86 line, so the line opens upward (clipped only sideways) */
+.close__word { overflow-x: clip; overflow-y: visible; }
 
 @media (min-width: 1024px) and (max-width: 1279px) {
   .hw__body { grid-template-columns: 200px minmax(0, 1fr); }
@@ -158,7 +196,7 @@ pre code { font: inherit; }
   .hw__list { padding: 8px; } .hw__q { height: 28px; margin-bottom: 4px; }
   .hw__row { height: 30px; line-height: 30px; } .hw__row:nth-child(n+5) { display: none; }
   .hw__main { padding-block: var(--s-3); }
-  .hw__sql { font-size: 12px; line-height: 18px; }
+  .hw__sql { font-size: var(--w-small); line-height: 18px; }
   .hw__main .sq__tr { height: 22px; }
 }
 @media (max-width: 1023px) {
@@ -168,26 +206,24 @@ pre code { font: inherit; }
   .sq--wide { width: 480px; }
   .footer__legal { flex-direction: column; align-items: flex-start; }
 }
-/* a tablet: the 2x2 stays two-up (cards.css) and fits one screen, so the section is one screen there */
 @media (min-width: 640px) and (max-width: 1023px) {
-  #language.g2 { --h: 1; }
-  #language.g2 > .wrap { display: flex; flex-direction: column; row-gap: var(--s-5); }
-  #language .panel { --p-h: 168px; }
-  #direct .at-corner { --ax: max(24px, calc(50% - 240px)); }
-  .close__word { font-size: clamp(64px, 12vw, 216px); }
-  #language .group__end { margin-top: var(--s-5); }
+  .frame--split .at-corner { --ax: max(24px, calc(50% - 240px)); }
+  /* a tablet stacks the split in one screen, so the frame shows the EXPLAIN lines and leaves the run's rows out */
+  .sq--wide > .sq__run { display: none; }
+  .close__word { font-size: clamp(4rem, 12vw, 13.5rem); }
 }
 @media (max-width: 639px) {
+  main > section:is(.bg-mist, .bg-band) { --g-screen: calc(var(--hm, var(--h, 1)) * 100lvh); }
   .hw__bar .hw__meta { display: none; }
   .hw__main { padding: var(--s-3) var(--s-4); gap: var(--s-3); }
-  .hw__sql { font-size: 11.5px; line-height: 18px; }
-  .hw__out .sq__grid { display: none; }
-  #language .panel { --p-h: 260px; }
+  .hw__sql { font-size: var(--w-small); line-height: 18px; }
+  .hw__main .sq__tr { height: 22px; }
   .sq--wide { width: 300px; }
-  #direct .at-corner { --ax: 16px; --ay: 16px; }
+  .frame--split .at-corner { --ax: 16px; --ay: 16px; }
   .nav__logo img { height: 32px; }
   .sq__kv { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .parts { margin-top: var(--s-6); }
+  .close__word { font-size: 3.5rem; line-height: 1.32; }
 }
 
 /* ---------------------------------------------------------------- reading pages */
@@ -195,7 +231,7 @@ pre code { font: inherit; }
 /* on the reading pages a focused link or an anchor jump stops below the fixed header, never under it */
 html:has(> body.doc-body) { scroll-padding-top: calc(var(--nav) + var(--s-4)); }
 .page-head { padding: var(--s-9) 0 var(--s-7); border-bottom: 1px solid var(--line); }
-.page-head h1 { font-size: clamp(36px, 2.3vw + 24px, 56px); max-width: 20ch; }
+.page-head h1 { font-size: var(--t-page); max-width: 20ch; }
 .page-head p { margin-top: var(--s-4); max-width: 36em; font-size: var(--t-lead); line-height: 1.5; color: var(--lede); }
 .page-head__tags { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-top: var(--s-5); }
 .crumbs { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-bottom: var(--s-5); font-size: var(--t-small); color: var(--muted); }
@@ -210,22 +246,23 @@ html:has(> body.doc-body) { scroll-padding-top: calc(var(--nav) + var(--s-4)); }
 .toc a { display: block; padding: 5px 0 5px var(--s-4); margin-left: -1px; border-left: 1px solid transparent;
          font-size: var(--t-small); color: var(--muted); transition: color var(--dur) var(--ease); }
 .toc a:hover { color: var(--ink); }
-.toc a[aria-current="true"] { color: var(--ink); border-left-color: var(--accent); }
+/* the list scrolls, so its focus ring is drawn inside each link, where the scroller does not cut it */
+.toc a:focus-visible { outline-offset: -2px; }
 
-.prose { min-width: 0; font-size: 16.5px; line-height: 1.68; }
+.prose { min-width: 0; font-size: var(--t-read); line-height: 1.68; }
 .prose > section + section { margin-top: var(--s-9); }
-.prose h2 { font-size: clamp(26px, .9vw + 21px, 34px); line-height: 1.15; margin: var(--s-8) 0 var(--s-4); scroll-margin-top: calc(var(--nav) + var(--s-5)); }
+.prose h2 { font-size: var(--t-h2-read); line-height: 1.15; margin: var(--s-8) 0 var(--s-4); scroll-margin-top: calc(var(--nav) + var(--s-5)); }
 .prose > h2:first-child, .prose > section > h2:first-child { margin-top: 0; }
-.prose h3 { font: 500 19px/1.35 var(--font-text); letter-spacing: -0.01em; margin: var(--s-7) 0 var(--s-3); scroll-margin-top: calc(var(--nav) + var(--s-5)); }
+.prose h3 { font: 500 var(--t-h4)/1.35 var(--font-text); letter-spacing: -0.01em; margin: var(--s-7) 0 var(--s-3); scroll-margin-top: calc(var(--nav) + var(--s-5)); }
 .prose p, .prose ul, .prose ol, .prose .table-wrap, .prose .code, .prose .qr, .prose .note, .prose .refs, .prose dl { margin-top: var(--s-4); }
 .prose ul:not([class]) { padding-left: 1.2em; list-style: disc; }
 .prose ol:not([class]) { padding-left: 1.4em; list-style: decimal; }
 .prose li + li { margin-top: var(--s-2); }
 .prose li::marker { color: var(--muted); }
-.prose a:not(.ref, .link, .anchor, .ex-row) { text-decoration: underline; text-decoration-color: color-mix(in oklab, var(--accent) 45%, transparent);
+.prose a:not(.ref, .link, .anchor) { text-decoration: underline; text-decoration-color: color-mix(in oklab, var(--accent) 45%, transparent);
   text-underline-offset: 3px; text-decoration-thickness: 1px; transition: text-decoration-color var(--dur) var(--ease); }
-.prose a:not(.ref, .link, .anchor, .ex-row):hover { text-decoration-color: var(--accent); }
-.prose .lead { font-size: 18px; line-height: 1.6; }
+.prose a:not(.ref, .link, .anchor):hover { text-decoration-color: var(--accent); }
+.prose .lead { font-size: var(--t-lead); line-height: 1.6; }
 .prose strong { font-weight: 500; }
 /* running text keeps a reading measure; code, tables and results may use the column's full width */
 .prose :is(p, ul, ol, .reads dd) { max-width: 37em; }
@@ -233,11 +270,11 @@ html:has(> body.doc-body) { scroll-padding-top: calc(var(--nav) + var(--s-4)); }
 .closing__cta .t-lead { text-wrap: balance; }
 .prose .refs p { max-width: none; }
 .prose .note { max-width: calc(37em + 2 * var(--s-5)); }
-/* a heading's own link: always there, quiet, the ink on hover */
-.anchor { margin-left: var(--s-2); color: var(--muted); font-weight: 400; font-size: .7em; vertical-align: .1em;
-          transition: color var(--dur) var(--ease); }
-.anchor:hover { color: var(--ink); }
-@media (max-width: 639px) { .anchor { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; margin-left: 0; vertical-align: middle; } }
+/* a heading's own link: the heading's words are the link, a quiet # after them marks it (no name of its own) */
+.anchor { color: inherit; }
+.anchor::after { content: "#"; content: "#" / ""; margin-left: var(--s-2); color: var(--muted); font-weight: 400; font-size: .7em;
+                 vertical-align: .1em; transition: color var(--dur) var(--ease); }
+.anchor:hover::after { color: var(--ink); }
 
 /* code blocks: a hairline sheet, the title and a copy button on one quiet row */
 .code { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--p-surface); overflow: hidden; }
@@ -250,7 +287,7 @@ html:has(> body.doc-body) { scroll-padding-top: calc(var(--nav) + var(--s-4)); }
 .code__copy { height: 30px; padding: 0 var(--s-3); border: 1px solid transparent; border-radius: var(--r-sm); background: none;
               font-size: var(--t-label); font-weight: 500; color: var(--muted); cursor: pointer; transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease); }
 .code__copy:hover { color: var(--ink); border-color: var(--line); }
-.code pre { padding: var(--s-4); overflow-x: auto; font-size: 13.5px; line-height: 21px; }
+.code pre { padding: var(--s-4); overflow-x: auto; }
 
 /* a query and what it returned, joined into one sheet */
 .qr > .code { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
@@ -260,19 +297,19 @@ html:has(> body.doc-body) { scroll-padding-top: calc(var(--nav) + var(--s-4)); }
                 border-bottom: 1px solid var(--line); font-size: var(--t-label); color: var(--muted); }
 .output__head > :first-child { color: var(--ink); font-weight: 500; }
 .output__scroll { overflow-x: auto; }
-.output table { width: 100%; border-collapse: collapse; font: 400 13px/1.4 var(--font-mono); }
+.output table { width: 100%; border-collapse: collapse; font: 400 var(--t-code)/1.4 var(--font-mono); }
 .output th, .output td { padding: 7px var(--s-4); text-align: left; white-space: nowrap; border-top: 1px solid var(--line); }
-.output thead th { border-top: 0; font: 500 12px/1.4 var(--font-text); color: var(--muted); }
+.output thead th { border-top: 0; font: 500 var(--t-label)/1.4 var(--font-text); color: var(--muted); }
 .output .num { text-align: right; }
 .output .null { color: var(--muted); }
 .output th.dec { color: var(--accent); }
 .output tr.on td { background: color-mix(in oklab, var(--accent) 6%, transparent); }
 .output tr.on td.dec { color: var(--accent); font-weight: 500; }
-.output--error pre { padding: var(--s-4); white-space: pre-wrap; color: var(--err-ink); font-size: 13px; }
+.output--error pre { padding: var(--s-4); white-space: pre-wrap; color: var(--err-ink); }
 
 /* tables in running text */
 .table-wrap { overflow-x: auto; border-top: 1px solid var(--line-strong); }
-.table-wrap table { width: 100%; border-collapse: collapse; font-size: 15px; line-height: 1.5; }
+.table-wrap table { width: 100%; border-collapse: collapse; font-size: var(--t-note); line-height: 1.5; }
 .table-wrap th, .table-wrap td { padding: 10px var(--s-4) 10px 0; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
 .table-wrap th { font-size: var(--t-label); font-weight: 500; color: var(--muted); }
 .table-wrap td.yes { color: var(--ok-ink); }
@@ -289,10 +326,10 @@ html:has(> body.doc-body) { scroll-padding-top: calc(var(--nav) + var(--s-4)); }
 .refs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 var(--s-6); }
 .refs--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .ref { display: grid; align-content: start; gap: var(--s-2); padding: var(--s-5) 0; border-top: 1px solid var(--line); }
-.ref h3 { margin: 0; font: 500 17px/1.35 var(--font-text); letter-spacing: -0.01em; transition: color var(--dur) var(--ease); }
-.ref p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.5; }
+.ref h3 { margin: 0; font: 500 var(--t-card)/1.35 var(--font-text); letter-spacing: -0.01em; transition: color var(--dur) var(--ease); }
+.ref p { margin: 0; color: var(--muted); font-size: var(--t-note); line-height: 1.5; }
 .ref:hover h3 { color: var(--accent); }
-.ref__code { margin-top: var(--s-2); font: 400 12.5px/19px var(--font-mono); white-space: pre-wrap; color: var(--ink); }
+.ref__code { margin-top: var(--s-2); font: 400 var(--t-code-sm)/1.52 var(--font-mono); white-space: pre-wrap; color: var(--ink); }
 .steps { counter-reset: step; display: grid; gap: var(--s-4); }
 .steps > li { counter-increment: step; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: var(--s-3); }
 .steps > li::before { content: counter(step); font: 500 var(--t-small)/1.9 var(--font-mono); color: var(--muted); }
@@ -302,19 +339,19 @@ html:has(> body.doc-body) { scroll-padding-top: calc(var(--nav) + var(--s-4)); }
 
 /* about: papers and people */
 .paper { display: flex; justify-content: space-between; align-items: start; gap: var(--s-6); padding: var(--s-5) 0; border-top: 1px solid var(--line); }
-.paper .paper__title { margin: 0; font: 500 17px/1.4 var(--font-text); letter-spacing: -0.01em; }
-.paper p { margin-top: var(--s-1); color: var(--muted); font-size: 15px; }
+.paper .paper__title { margin: 0; font: 500 var(--t-card)/1.4 var(--font-text); letter-spacing: -0.01em; }
+.paper p { margin-top: var(--s-1); color: var(--muted); font-size: var(--t-note); }
 .members { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 var(--s-6); margin-top: var(--s-3); }
 .member { display: grid; padding: var(--s-3) 0; border-top: 1px solid var(--line); }
-.member b { font-weight: 500; } .member span { color: var(--muted); font-size: 15px; }
+.member b { font-weight: 500; } .member span { color: var(--muted); font-size: var(--t-note); }
 
 /* example pages */
 .solver-line { font-size: var(--t-small); color: var(--lede); }
 .reads { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr); gap: var(--s-3) var(--s-6); }
-.reads dt code { background: none; padding: 0; font-size: 13.5px; line-height: 1.6; }
+.reads dt code { background: none; padding: 0; font-size: var(--t-code); line-height: 1.6; }
 .reads dd { margin: 0; }
 .reads > :nth-child(n+3) { padding-top: var(--s-3); border-top: 1px solid var(--line); }
-.side { position: sticky; top: calc(var(--nav) + var(--s-6)); align-self: start; display: grid; gap: var(--s-3); font-size: 15px; }
+.side { position: sticky; top: calc(var(--nav) + var(--s-6)); align-self: start; display: grid; gap: var(--s-3); font-size: var(--t-note); }
 .side__title { font: 500 var(--t-label)/1.4 var(--font-text); letter-spacing: 0; color: var(--muted); }
 .side__title:not(:first-child) { margin-top: var(--s-5); }
 .side__list { display: grid; gap: var(--s-2); }
@@ -326,7 +363,7 @@ html:has(> body.doc-body) { scroll-padding-top: calc(var(--nav) + var(--s-4)); }
 .pager small { font-size: var(--t-label); font-weight: 400; color: var(--muted); }
 .pager__next { text-align: right; }
 
-/* the examples index: one ruled list per group */
+/* the examples index: one ruled list per group; the title is the link, and it covers its row */
 .ex-index { padding: var(--s-7) 0 var(--s-10); }
 .filters { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-bottom: var(--s-7); }
 .filter { height: 36px; padding: 0 var(--s-4); border-radius: 999px; border: 1px solid var(--line-strong); background: none;
@@ -334,14 +371,15 @@ html:has(> body.doc-body) { scroll-padding-top: calc(var(--nav) + var(--s-4)); }
 .filter:hover { border-color: var(--ink); }
 .filter[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--bg); }
 .ex-group + .ex-group { margin-top: var(--s-9); }
-.ex-group > h2 { font-size: clamp(26px, .9vw + 21px, 34px); }
+.ex-group > h2 { font-size: var(--t-h2-read); }
 .ex-group > p { margin-top: var(--s-3); max-width: 36em; color: var(--lede); }
 .ex-list { margin-top: var(--s-5); border-bottom: 1px solid var(--line); }
-.ex-row { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 5fr) minmax(0, 3fr); grid-template-areas: "title code how" "sum code how";
+.ex-row { position: relative; display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 5fr) minmax(0, 3fr); grid-template-areas: "title code how" "sum code how";
           gap: var(--s-1) var(--s-6); padding: var(--s-5) 0; border-top: 1px solid var(--line); }
 .ex-row__title { grid-area: title; font-weight: 500; transition: color var(--dur) var(--ease); }
-.ex-row__sum { grid-area: sum; color: var(--muted); font-size: 15px; line-height: 1.5; }
-.ex-row__code { grid-area: code; font: 400 12.5px/19px var(--font-mono); white-space: pre-wrap; background: none; padding: 0; }
+.ex-row__title::after { content: ""; position: absolute; inset: 0; }
+.ex-row__sum { grid-area: sum; color: var(--muted); font-size: var(--t-note); line-height: 1.5; }
+.ex-row__code { grid-area: code; font: 400 var(--t-code-sm)/1.52 var(--font-mono); white-space: pre-wrap; background: none; padding: 0; }
 .ex-row__how { grid-area: how; justify-self: end; }
 .ex-row:hover .ex-row__title { color: var(--accent); }
 .ex-list > li[hidden] { display: none; }
@@ -364,55 +402,30 @@ html:has(> body.doc-body) { scroll-padding-top: calc(var(--nav) + var(--s-4)); }
   .pager__next { text-align: left; }
   .ex-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "title" "sum" "code" "how"; }
   .ex-row__how { justify-self: start; }
-  .prose { font-size: 16px; }
-}
-
-/* the window in the split frame runs past the frame's foot, so the frame cuts it (never a window floating on ground) */
-.to-edge > .sq--wide { min-height: calc(100% - 8px); }
-.nav__logo img { height: 40px; width: auto; }
-
-/* the two sections on a dealt ground keep their screens (backgrounds.css reads --g-screen as their minimum) */
-#statement, #faq { --g-screen: calc(var(--h, 1) * 100svh); }
-@media (max-width: 639px) { #statement, #faq { --g-screen: calc(var(--hm, var(--h, 1)) * 100lvh); } }
-/* the four tiles keep two screens on a short laptop screen and on a phone */
-@media (min-width: 1024px) and (max-height: 820px) { #language .panel { --p-h: 292px; } }
-/* a phone: the tiles' panels shorter, the news pill and the last two questions left to the desktop, so each
-   section keeps to its screens; the name under the close a step smaller */
-@media (max-width: 639px) {
-  #language .panel { --p-h: 128px; } #language .stage { --fade-h: 32px; }
-  .hero--centred .pill { display: none; }
-  #faq .faq > .faq__item { padding-block: var(--s-6); }
-  #faq .faq > .faq__item:first-child { padding-top: 0; }
-  #faq .faq > .faq__item:last-child { padding-bottom: 0; border-bottom: 0; }
-  #faq .wrap > .grid + .grid { display: none; }
-  .close__word { font-size: 56px; line-height: 1.32; }
-}
-/* stacked on a phone, the two splits (words, then the frame) take two screens each */
-@media (max-width: 639px) { #direct, #solvers { --hm: 2; } }
-
-/* system.js outlines any [bracketed] text as a leftover placeholder; in code a bracket is syntax (grammar, arrays),
-   so the outline stays off inside code blocks and result tables only */
-:is(pre, code, .output) [data-placeholder], :is(pre, code)[data-placeholder] { outline: 0 !important; background: none !important; }
-
-/* a phone: the copy and filter buttons are 44px targets like the kit's other controls */
-@media (max-width: 639px) {
+  .prose { font-size: var(--t-body); }
+  /* the copy, filter and breadcrumb buttons are 44px targets like the kit's other controls */
   .code__copy { min-height: 44px; min-width: 64px; } .filter { height: 44px; }
   .crumbs a { display: inline-flex; align-items: center; min-height: 44px; }
 }
 
+/* ---------------------------------------------------------------- the header and the theme switch */
+.nav__logo img { height: 40px; width: auto; }
 /* the logo: the dark-ground version in the evening grade; the mark alone on the narrowest phones */
 .nav__logo .logo--dark, .nav__logo .logo--mark { display: none; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .nav__logo .logo--light { display: none; }
-  :root:not([data-theme="light"]) .nav__logo .logo--dark { display: block; }
-}
 :root[data-theme="dark"] .nav__logo .logo--light { display: none; }
 :root[data-theme="dark"] .nav__logo .logo--dark { display: block; }
 @media (max-width: 379px) {
-  .header .nav__logo .logo, .nav .nav__logo .logo:is(.logo--light, .logo--dark) { display: none !important; }
+  .header .nav__logo .logo, .nav .nav__logo .logo:is(.logo--light, .logo--dark) { display: none; }
   .nav .nav__logo .logo--mark { display: block; height: 32px; }
 }
-.footer .nav__logo .logo--dark, .footer .nav__logo .logo--mark { display: none !important; }
+.footer .nav__logo .logo:is(.logo--dark, .logo--mark) { display: none; }
+:root[data-theme="dark"] .footer .nav__logo .logo--light { display: block; }
+
+/* Escape shuts an open menu panel (site.js); it opens again on the next hover or focus */
+@media (min-width: 1024px) {
+  .nav .nav__item.is-shut > .nav__menu { opacity: 0; visibility: hidden; transform: translateY(-6px); transition-delay: 0s; }
+  .nav .nav__item.is-shut > .nav__link .chev { transform: none; }
+}
 
 /* the theme switch: the secondary button's look, square, one glyph for the grade it switches to */
 .theme-toggle { width: var(--btn-h); padding: 0; justify-content: center; }
@@ -427,10 +440,10 @@ html:has(> body.doc-body) { scroll-padding-top: calc(var(--nav) + var(--s-4)); }
   .nav.is-open .theme-toggle__label { position: static; width: auto; height: auto; overflow: visible; clip: auto; }
 }
 
-/* the diagram's nodes take the lit ground's card in the evening grade (the page card is dark there) */
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .dg-frame { --card: var(--ground-surface); } }
+/* ---------------------------------------------------------------- the lit ground in the evening grade
+   The sage ground stays light in both grades (the kit's lit ground); what stands on it keeps its own look: the
+   diagram's nodes take the ground's card, and the main action keeps the page's blue, darkening under the pointer
+   (the kit mixes a hover toward the ground, which on sage would lighten it to 4:1) */
 :root[data-theme="dark"] .dg-frame { --card: var(--ground-surface); }
-
-/* the main action keeps one look in the evening grade too: the closing slab's button stays the page's blue
-   (the kit gives a lit ground the ground's ink on a dark page; #3463f0 holds 3.3:1 on the sage, its label 5:1) */
 .footer--statement, .frame--lit { --action: var(--p-action); --action-ink: var(--p-action-ink); }
+html:not([data-motion="off"]) :is(.footer--statement, .frame--lit) .btn--primary:hover { background: color-mix(in oklab, var(--action) 82%, var(--ground-ink)); }

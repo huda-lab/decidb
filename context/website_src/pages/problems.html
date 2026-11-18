@@ -1,6 +1,6 @@
 <div class="page-head">
   <div class="container">
-    <div class="crumbs"><a href="index.html">Home</a><span>/</span>Problems</div>
+    <!--crumbs-->
     <h1>Problems you can express</h1>
     <p>You never name the problem class. DeciDB reads it from the decision types and the shape of each term, picks a
       formulation, and either answers the query directly or hands it to a solver that can take it.</p>
@@ -21,7 +21,7 @@
 
     <article class="prose">
       <section id="patterns">
-        <h2>Modeling patterns <a class="anchor" href="#patterns">#</a></h2>
+        <h2><a class="anchor" href="#patterns">Modeling patterns</a></h2>
         <p class="lead">The shapes below cover most decision problems over tables. Each links to a complete example with
           data and the answer DeciDB returns.</p>
         <div class="refs">
@@ -75,7 +75,7 @@ MINIMIZE norm(new - old, 'inf')</div></a>
       </section>
 
       <section id="classes">
-        <h2>Problem classes and solvers <a class="anchor" href="#classes">#</a></h2>
+        <h2><a class="anchor" href="#classes">Problem classes and solvers</a></h2>
         <p>DeciDB uses Gurobi when its library and a license are present, and the bundled HiGHS otherwise. A model that
           the available solver cannot take is refused at plan time, before reading a row, with a message that names
           what the query does and which solver it needs. The same SQL runs on a machine with Gurobi.</p>
@@ -100,7 +100,7 @@ MINIMIZE norm(new - old, 'inf')</div></a>
       </section>
 
       <section id="direct-solve">
-        <h2>Answered without a solver <a class="anchor" href="#direct-solve">#</a></h2>
+        <h2><a class="anchor" href="#direct-solve">Answered without a solver</a></h2>
         <p class="lead">Nine problem classes have an exact answer that DuckDB's own operators compute. When DeciDB proves a
           query belongs to one, it replaces the solve with sorting, ranking, window and aggregate operators. The query is
           unchanged; <code>EXPLAIN</code> names the rule.</p>
@@ -150,7 +150,7 @@ MAXIMIZE SUM(score * x);<!--/sql-->
       </section>
 
       <section id="rewrites">
-        <h2>What DeciDB adds for you <a class="anchor" href="#rewrites">#</a></h2>
+        <h2><a class="anchor" href="#rewrites">What DeciDB adds for you</a></h2>
         <p>Several shapes are not linear as written. DeciDB rewrites them into a form the solver takes, and
           <code>EXPLAIN</code> shows each rewrite under the clause it came from.</p>
         <div class="table-wrap"><table>

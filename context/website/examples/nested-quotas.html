@@ -2,7 +2,7 @@
 <html lang="en" data-type="software" data-radius="sharp" data-ground="sage" data-buttons="pill" data-motion>
 <head>
 <meta charset="utf-8">
-<script>try{var r=document.documentElement,t=localStorage.getItem('decidb-theme');if(!r.dataset.theme&&(t==='light'||t==='dark'))r.dataset.theme=t}catch(e){}</script>
+<script>(function(){var r=document.documentElement,t;try{t=localStorage.getItem('decidb-theme')}catch(e){}if(!r.dataset.theme)r.dataset.theme=t==='light'||t==='dark'?t:matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'})()</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Hire under nested quotas: a DeciDB example</title>
 <meta name="description" content="Nested hiring quotas, answered by DeciDB&#x27;s direct solve.">
@@ -38,21 +38,14 @@
   --display-tracking: -0.035em;
   --display-tracking-xl: -0.045em;
 }
-/* the evening grade (a tech page may take it, chosen on load from the visitor's setting or by the nav's switch):
-   the page tokens go dark; the lit ground (sage) and the panels' painted grounds stay light, as the kit keeps them */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
-    --p-accent: #7d9dff; --p-accent-ink: #0e0f10; --p-action: #3463f0; --p-action-ink: #ffffff;
-    --p-inv-bg: #f4f4f2; --p-inv-surface: #e8e8e6; --p-inv-ink: #111111; --p-inv-muted: #5c5c5c;
-    --p-inv-accent: #1a4be0; --p-inv-accent-ink: #ffffff; --p-inv-action: #111111; --p-inv-action-ink: #ffffff;
-  }
-}
+/* the evening grade (a tech page may take it): the head script sets data-theme from the nav's switch (remembered) or the
+   visitor's setting; the page tokens go dark, the lit ground (sage) and the panels' painted grounds stay light, as the
+   kit keeps them */
 :root[data-theme="dark"] {
-    --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
-    --p-accent: #7d9dff; --p-accent-ink: #0e0f10; --p-action: #3463f0; --p-action-ink: #ffffff;
-    --p-inv-bg: #f4f4f2; --p-inv-surface: #e8e8e6; --p-inv-ink: #111111; --p-inv-muted: #5c5c5c;
-    --p-inv-accent: #1a4be0; --p-inv-accent-ink: #ffffff; --p-inv-action: #111111; --p-inv-action-ink: #ffffff;
+  --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
+  --p-accent: #7d9dff; --p-accent-ink: #0e0f10; --p-action: #3463f0; --p-action-ink: #ffffff;
+  --p-inv-bg: #f4f4f2; --p-inv-surface: #e8e8e6; --p-inv-ink: #111111; --p-inv-muted: #5c5c5c;
+  --p-inv-accent: #1a4be0; --p-inv-accent-ink: #ffffff; --p-inv-action: #111111; --p-inv-action-ink: #ffffff;
 }
 </style>
 <link rel="stylesheet" href="../assets/css/site.css">
@@ -125,7 +118,7 @@
           <a class="nav__logo" href="../index.html"><img src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
           <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
         </div>
-        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Install</a></li><li><a href="../documentation.html">Language guide</a></li><li><a href="../problems.html">Problems</a></li><li><a href="../examples.html">Examples</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Install</a></li><li><a href="../documentation.html">Guide</a></li><li><a href="../problems.html">Problems</a></li><li><a href="../examples.html">Examples</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="../examples/knapsack.html">Knapsack</a></li><li><a href="../examples/facility-location.html">Depots</a></li><li><a href="../examples/fair-allocation.html">Fair allocation</a></li><li><a href="../examples/diagnose.html">DIAGNOSE</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Project</h3><ul><li><a href="../about.html">About</a></li><li><a href="../about.html#research">Papers</a></li><li><a href="https://github.com/huda-lab/decidb">GitHub</a></li><li><a href="https://huda-lab.github.io/">HUDA Lab</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Contact</h3><ul><li><a href="mailto:support@decidb.com">Email the team</a></li><li><a href="https://github.com/huda-lab/decidb/issues">Report an issue</a></li></ul></div>
