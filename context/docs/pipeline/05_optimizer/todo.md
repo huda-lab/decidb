@@ -4,28 +4,29 @@ Open work in the optimizer passes. Finished work is in [done.md](done.md). How t
 [`../../direct_solve/framework/todo.md`](../../direct_solve/framework/todo.md) § How to work any task in these todo
 files.
 
-## OPT-16 — A non-finite frame's message suggests a `when` the binder refuses
+## OPT-16 — A NaN or infinite value's message suggests a `when` that changes the query
 
-- **Decision needed.** What the message suggests for a frame, since `when isfinite(<frame>):` cannot be written.
 - **Problem.** Over `f(id, v)` = (1, 1.0), (2, 2.0), (3, 'inf'), (4, 1.0), read as `t`, with `x(REAL)`,
   `x BETWEEN 0 AND 10` and `MINIMIZE SUM(ABS(x - at(previous else 0: t.v) over (t.id)))` raises "DECIDE:
   at(previous else 0: t.v) over (t.id) is NaN or infinite on some rows. Skip those rows with 'when
   isfinite(at(previous else 0: t.v) over (t.id)):'." Writing that `when` gives "Binder Error: DECIDE: a frame selector
-  is not allowed in when, per, by, within or an order key" (D80, `ValidateNoFrame` in `decide_binder.cpp`).
-- **Options.**
-  1. The binder accepts a frame in a clause's `when`. Cost: re-ruling D80, whose reason is that a frame reads rows by
-     a timeline the scope chooses, and computing frames before the `when` filter.
-  2. The message suggests nulling the value inside the frame's argument (`CASE WHEN isfinite(t.v) THEN t.v END`). A
-     point frame then selects NULL and its instance is skipped (deck p. 50); a range frame leaves the value out of
-     its window, which is a different query.
-  3. The message names the frame and suggests no fix.
-- **Recommendation.** 2 for a point frame, the shape that raises here: it is writable today and skips what the `when`
-  would. An architect review settles whether a range frame takes the same text.
-- **Ruling (owner, 2026-11-18).** Option 2 for a point frame. A range frame's text is the one the architect review
-  settles; a choice the review leaves open goes to the owner.
-- **Change.** A frame's non-finite message suggests only what the binder accepts.
-- **Done when.** A test writes the suggested fix and gets an answer; `./test/decide/run_tests.sh -n 2 -k
-  "invalid_value or frame"` passes.
+  is not allowed in when, per, by, within or an order key" (D80, `ValidateNoFrame` in `decide_binder.cpp`). A `when`
+  drops rows before any frame is computed (`frame.rows = path.Rows()`, `decide_canonicalizer.cpp`), so a `when` that
+  does run shifts every frame's timeline: `when isfinite(t.c):` on a plain column of a clause that holds a frame moves
+  another row's `previous`. A NaN a range frame's window reads, or a reducer over frames reads, raises its own error
+  (`DecideFrameNanMessage`) whose advice, a `when` on the column, shifts the timeline too.
+- **Ruling (owner, 2026-11-18).** Every NaN or infinite value's message suggests replacing the value where it stands:
+  `CASE WHEN isfinite(W) THEN W END`, and for a bound `CASE WHEN NOT isnan(W) THEN W END`, W the value as written.
+  The NULL skips that row's instance and leaves every timeline as it is, for a plain value, a point frame (also with a
+  non-finite `else`) and a range frame alike, so the text needs no branch on the value's kind. A NaN a frame's window
+  or a reducer over frames reads makes that value NaN (COUNT counts it), and the ordinary value check raises it with
+  the same text; `DecideFrameNanMessage` goes. NaN stays an error everywhere it is one.
+- **Change.** `DecideInvalidValueMessage` gives the in-place edit for the COEFFICIENT and BOUND roles. Every place a
+  frame's value is read (a coefficient, a bound, an ABS argument, a reducer over frames, a direct-solve plan) has the
+  value check that raises on its NaN, and a window or frame reducer that reads a NaN yields NaN instead of raising.
+- **Done when.** For each place that raises the message, a test writes the suggested edit and gets the oracle's
+  answer; `./test/decide/run_tests.sh -n 2 -k "invalid_value or frame or error_precedence or bound_side_tables"`
+  passes.
 
 ## OPT-17 — Solver-path checks copy the bound with every tag stripped
 
