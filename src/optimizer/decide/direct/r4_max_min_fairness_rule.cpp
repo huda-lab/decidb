@@ -199,8 +199,8 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 		return false;
 	}
 	auto &part = ir.objective.parts[0];
-	if (part.reducer != DirectReducer::MIN || part.qualifier != DConstants::INVALID_INDEX || !part.by.empty() ||
-	    part.terms.size() != 1 || !part.terms[0].IsLinear()) {
+	if (part.reducer != DirectReducer::MIN || part.qualifier != DConstants::INVALID_INDEX || part.terms.size() != 1 ||
+	    !part.terms[0].IsLinear()) {
 		return false;
 	}
 	auto &read = condition.objective;

@@ -129,10 +129,11 @@ struct DirectPart {
 	//! The body's terms.
 	vector<DecideSplitTerm> terms;
 
-	//! Whether the part is a plain `SUM(...)`: the SUM reducer, not qualified by a keyed scope, with no `by` key. Its
-	//! sign, factor and filter are the rule's to read.
+	//! Whether the part is a plain `SUM(...)` of the objective: the SUM reducer, not qualified by a keyed scope. Its
+	//! sign, factor and filter are the rule's to read. An objective part has no `by` key: the front end refuses an
+	//! objective with one, which is produced once (D72).
 	bool IsPlainSum() const {
-		return reducer == DirectReducer::SUM && qualifier == DConstants::INVALID_INDEX && by.empty();
+		return reducer == DirectReducer::SUM && qualifier == DConstants::INVALID_INDEX;
 	}
 };
 

@@ -522,9 +522,8 @@ static unique_ptr<Loss> ProveAbsolute(const DirectIR &ir, ClientContext &context
 static unique_ptr<Loss> ProveMaxAbsolute(const DirectIR &ir, ClientContext &context, const DirectPart &part_ir) {
 	DirectQuadraticPart part;
 	double weight, slope;
-	// The reducer is a MAX (ProveObjective): a plain one is not qualified by a keyed scope or grouped by a key.
-	bool plain = part_ir.qualifier == DConstants::INVALID_INDEX && part_ir.by.empty();
-	if (!plain || !ReadAbsolute(ir, context, part_ir, part, weight, slope)) {
+	// The reducer is a MAX (ProveObjective): a plain one is not qualified by a keyed scope.
+	if (part_ir.qualifier != DConstants::INVALID_INDEX || !ReadAbsolute(ir, context, part_ir, part, weight, slope)) {
 		return nullptr;
 	}
 	return make_uniq<MaxAbsoluteLoss>(std::move(part), weight);
