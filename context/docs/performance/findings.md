@@ -82,9 +82,9 @@ Finalize spans separate the keyed-decision mapping (`execution.keyed_mapping`), 
 
 The Q4 and Q8 rows are older than the changes in § Measured design choices, which give their current numbers.
 
-**Variant numbering.** The determination checks are gone (D70): a `per K:` clause in the per-row shape numbers its
-rows by key and signature (`BuildSignatureIds`) where its signature has a field, and nothing runs where it has none.
-Its cost on a 1M-row join is not yet measured ([todo.md § PERF-23](todo.md#perf-23--variant-numbering)).
+**Variant numbering.** The determination checks are gone (D70): a `per K:` clause in the per-row shape numbers its rows
+by key and signature (`DecideModelEmitter::Variants`) where its signature has a field, and nothing runs where it has
+none. Its cost on a 1M-row join is not yet measured ([todo.md § PERF-23](todo.md#perf-23--variant-numbering)).
 
 ## Model construction
 
@@ -203,7 +203,7 @@ interleaved runs beside other work (load 8-18, single spans swing up to 3x).
   representative `Value`, a label for every group and a copied label column: `execution.keyed_mapping` 1,169 → 257
   ms; `extraction.group_ids` 868 → 309 ms and extraction 1,028 → 453 ms on Q8; Q1's group ids 104 → 25-37 ms; Q8's
   peak RSS 1,172 → about 860 MiB.
-- **A `when` is read in one scan** (`KeptRows`), not one scan per AND or OR part: Q1 `when_per_and_qualifiers`
+- **A `when` is read in one scan** (`DecideDescent`), not one scan per AND or OR part: Q1 `when_per_and_qualifiers`
   218 → 165-174 ms.
 - **Extraction passes.** Measured alone at `large`, two interleaved rounds against the build before. A NULL-skip
   filter that keeps every row the clause reads (a NULL test on data with no NULL) counts as no filter, so an ungrouped
@@ -221,10 +221,10 @@ interleaved runs beside other work (load 8-18, single spans swing up to 3x).
   `execution.evaluate_objective` 32 → 20, 26 → 17, 11 → 7; `model.build` 53 → 46, 157 → 128, 42 → 43. Term filters
   select kept rows with a per-row `vector<bool>`: a `SelectionVector` path would let DuckDB's conjunction `Select`
   reorder AND/OR operands, and DECIDE reads them left to right.
-- **Composed MIN/MAX coefficients are read a chunk at a time.** `EvaluateComposedClauses` reads a term's inner
-  coefficients in one scan through `EvaluateTermColumns`, the vectorized reader every other clause uses. Reading them
-  row by row (box a `Value`, cast it to `DOUBLE` through a fresh `Vector`, unbox it, one scan per inner term; a stack
-  sample put the phase's whole time in the cast) costs Q4 `execution.evaluate_composed` 489 ms against 21 ms on
+- **Composed MIN/MAX coefficients are read a chunk at a time.** `DecideModelEmitter::ComposedTerms` reads a term's inner
+  coefficients in one scan through `DecideTreeColumns::Numbers`, the vectorized reader every other clause uses. Reading
+  them row by row (box a `Value`, cast it to `DOUBLE` through a fresh `Vector`, unbox it, one scan per inner term; a
+  stack sample put the phase's whole time in the cast) costs Q4 `execution.evaluate_composed` 489 ms against 21 ms on
   Gurobi, 21 ms on HiGHS; no other span differs.
 - **A group keeps its row, not its key values.** A group keeps its first row (for a collated column, the row of its
   least spelling); groups number through DuckDB's sort key instead of a `Value` comparator, and a message reads a
@@ -238,7 +238,7 @@ interleaved runs beside other work (load 8-18, single spans swing up to 3x).
   same model (1,000,002 columns, 1,000,010 rows, 6,000,004 nonzeros).
 - **A MIN/MAX member is built into the row it becomes.** `EmitExtremumLink` asks an `ExtremumMemberSource` for each
   member as it emits the row, into one reused scratch row, and reads a member's range only where the native arm pins
-  a column (late materialization). Against building each member as an `ExtremumMember` (two vectors and a copied
+  a column (late materialization). Against building each member as an object of its own (two vectors and a copied
   `AuxRange`) and copying it into the row, Q4 (load 15): `execution.formulate` 167 → 122 ms; same model. The dense
   accumulator `BuildMinMaxGroups` assigns per call costs 1.4 ms cold, 0.12 ms warm: left as is.
 - **`SparseCoeffAccumulator::Flush` reserves nothing; the vectors grow geometrically.** `ClauseEmittedRows` appends

@@ -484,7 +484,7 @@ singleton-row bound does not also produce `num_rows` redundant per-row model row
 comparison itself stays in the tree, which is why `EXPLAIN` still renders the bound
 the user wrote. A recorded one is lowered into its
 root too, a folded one (`DecideNode::folded`): under DIAGNOSE the model emitter
-writes it after every other lowered clause (numbered after them, `REPAIR_ROWS`) into
+writes it after every other lowered clause (its repair group numbered after them) into
 `evaluated_singleton_row_constraints`, and only the elastic input receives it, so the
 repair model loosens it one kept row or class at a time (D28) while the solved model
 keeps the box alone. Those clauses are the repair model's only rows for a folded bound.
@@ -653,25 +653,24 @@ The result is a `KeyedMapping { num_classes, row_to_class, absent_class }` on th
 ## 4b. PHASE 1.4 — frame selectors
 
 Once the descent has its O's timelines (§1a), before any clause is read, `DecideTreeColumns::ReadFrames`
-(`physical_decide_frames.cpp`, `decide_frame_map.hpp`) builds a
-`DecideFrameMap` per frame selector (`../../language/guide.md` §5.6): its anchors are the rows its scoped expression
-reads (`DecideFrameSpec::rows`), grouped into timelines by its timeline key through the one key cache, so a row whose
-written `within` column is NULL is in no timeline (D75). Each anchor's order key becomes a DuckDB sort key -- the
-frame's direction, NULL where `default_null_order` puts it (D74) -- and each timeline's anchors are stably sorted into
-peers, rows of one order-key value. A position counts peers: `first`, `last`, `k previous`, `k next`, wrapped when
-cyclic, missing past either end. Under a `per` that does not hold the timeline, `CheckDecideFramePartition` stops a
-class that spans two timelines (D75).
+(`physical_decide_frames.cpp`, `decide_frame_map.hpp`) builds a `DecideFrameMap` per frame selector
+(`../../language/guide.md` §5.6): its anchors are the rows its scoped expression reads (`DecideFrameSpec::rows`),
+grouped into timelines by its timeline key through the one key cache, so a row whose written `within` column is NULL is
+in no timeline (D75). Each anchor's order key becomes a DuckDB sort key -- the frame's direction, NULL where
+`default_null_order` puts it (D74) -- and each timeline's anchors are stably sorted into peers, rows of one order-key
+value. A position counts peers: `first`, `last`, `k previous`, `k next`, wrapped when cyclic, missing past either end.
+Under a `per` that does not hold the timeline, `DecideTreeColumns::CheckPartition` stops a class that spans two
+timelines (D75).
 
-`AppendDecideFrameColumns` then adds to the pass's columns, after the input's, each column stage 05 registered
-(`DecideFrameReads::columns`): a payload is read on the first row of each selected peer only,
-an `else` on the anchors that reach it only, so an unused one raises nothing (a cast that would fail there does not), and
-the values are gathered onto the anchors. Every later phase reads the frames as data columns, and readback references
-the input's own columns only. Once the keyed mappings exist, `CheckDecideFramePeers` holds each position a frame reads
--- a point's selected peer, every position a range's window visits, one whose NULL reads left it nothing to read
-included (`DecideFrameMap::WindowVisits`) -- of several rows to one signature of its payload (D73, deck p. 110): each
-column the payload reads by value (a point's columns, a range's
-reducer argument or its helper's member terms), each decision by its instance, whatever its coefficient. A
-frame's decision terms read `gstate.ReadVariable`: a frame read numbered once per decision and frame
+`ComputeDecideFrameColumns` then computes each column stage 05 registered (`DecideFrameReads::columns`): a payload is
+read on the first row of each selected peer only, an `else` on the anchors that reach it only, so an unused one raises
+nothing (a cast that would fail there does not), and the values are gathered onto the anchors. Every later phase reads
+the frames as data columns, and readback references the input's own columns only. Once the keyed mappings exist,
+`DecideTreeColumns::CheckPositions` holds each position a frame reads -- a point's selected peer, every position a
+range's window visits, one whose NULL reads left it nothing to read included (`DecideFrameMap::WindowVisits`) -- of
+several rows to one signature of its payload (D73, deck p. 110): each column the payload reads by value (a point's
+columns, a range's reducer argument or its helper's member terms), each decision by its instance, whatever its
+coefficient. A frame's decision terms read `gstate.ReadVariable`: a frame read numbered once per decision and frame
 (`SolverInput::frame_reads`, stage 06), its rows the selected ones; a query-wide decision is its own read.
 
 Where a frame has nothing to read, every column of it holds NULL, which is no value (D84) as any NULL a clause reads:
@@ -752,11 +751,11 @@ and every row of a per-row one, splits its group again. Three readers:
   in one message (`DecideObjectiveTwiceMessage`).
 - The model emitter (`Classes`) emits a per-row clause under `per K:` (`ONE_ROW_PER_CLASS`) once per variant of each
   class, at the variant's first row, which stands for the variant's rows: they agree on every field. Where a class holds
-  more than one variant the clause records an EXPLAIN ANALYZE line (`RecordVariants`, `Kind::VARIANTS`, printed by
-  `ParamsToString` from `variant_accounts`, which a plain EXPLAIN never fills) and names each variant for a diagnosis by
-  its class's key values followed by its own field values (`DecideModelEmitter::NameVariants`: a key-values entry of its
-  own, numbered by variant; a collated key column quotes the class's least spelling, D69). Under
-  DIAGNOSE such a variant's row stands for its own class set.
+  more than one variant the clause records an EXPLAIN ANALYZE line (`RecordVariants`, printed by `ParamsToString` from
+  `run_time_accounts`, which a plain EXPLAIN never fills) and names each variant for a diagnosis by its class's key
+  values followed by its own field values (`DecideModelEmitter::NameVariants`: a key-values entry of its own, numbered
+  by variant; a collated key column quotes the class's least spelling, D69). Under DIAGNOSE such a variant's row stands
+  for its own class set.
 - A reducer's variant scope (`KeyedScopeInfo::signature`) takes the signature's numbering
   over the rows the reducer reads, so its operand holds one entry per variant of each class
   (below).
@@ -975,7 +974,7 @@ is built for a group no message quotes.
 Term-level filters are carried on individual terms, not on the whole constraint:
 
 1. Each distinct filter expression is evaluated once into a boolean row mask, on the
-   clause's kept rows only (`KeptRowsOfEach`).
+   clause's kept rows only (`TermFilterState::mask`).
 2. Linear terms and product groups get coefficient `0` (a group, weight `0`) on rows their own
    filter excludes — **for that term only**.
 3. A row joins a group when the clause's `when` keeps it and some reducer's own `when`
@@ -1164,7 +1163,7 @@ minimization and carries no sense.
 
 When the objective is quadratic, the same evaluation runs on `product_groups` **in
 addition to** `terms`, not instead of: the linear terms fill `objective_coefficients` /
-`objective_variable_indices`, and `EvaluateProductGroups` fills `objective_product_groups`
+`objective_variable_indices`, and `DecideModelEmitter::Objective` fills `objective_product_groups`
 for the quadratic half. Each term's filter — its own
 `when` with the objective's folded in — applies to each list independently.
 
@@ -1349,7 +1348,7 @@ The slow-solve path is deliberately outside all of this: see `slow_solves.md`.
 Each is a guard the type system or a stage boundary needs, or a path only a nondeterministic run takes:
 
 - **Typed reads and stage handoffs.** A NULL `Value` before `GetValue<double>` (`IsFiniteOnRow`); `ExtractDoubleColumn`
-  without `null_rows` (the canonicalizer promises no NULL there); `GroupKeyReader`'s `Seek` result; the backend the plan
+  without `null_rows` (the canonicalizer promises no NULL there); the backend the plan
   names by string (`PlannedSolverBackend`); a bound side that must be foldable (the optimizer asserts it); the solution
   index read from a backend (`GetData`); the sink state's `written_bound` fallback and its
   `bound.source_clause_id < constraint_sources.size()` test (a recorded singleton-row bound indexes `constraint_sources`

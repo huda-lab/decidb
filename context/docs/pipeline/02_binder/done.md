@@ -52,8 +52,8 @@ decision is a column there.
 
 ### Scope
 
-Three scopes, recorded per variable in `variable_scopes` as a `DecideVarScopeInfo`
-(`common/enums/decide.hpp`; the enum `DecideVarScope` is `ROW`, `ENTITY`, `SCALAR`):
+Three scopes, recorded per variable in `variable_scopes` as a `DecideVarScopeInfo` (`common/enums/decide.hpp`; the
+enum `DecideVarScope` is `ROW`, `KEYED`, `GLOBAL`, with `FRAME_READ` and `INLINED` for the decisions no query declares):
 
 | Declaration | Scope | Meaning |
 |---|---|---|
@@ -61,8 +61,8 @@ Three scopes, recorded per variable in `variable_scopes` as a `DecideVarScopeInf
 | `per K: x(TYPE)` | `Keyed(scope_idx, K as written)` | one decision per class of `K` |
 | `per (): x(TYPE)` | `Global()` | one decision for the whole query |
 
-`Keyed` is an `ENTITY` scope that also records `declared_key`, so a message can name
-the decision as it was declared; everything past the binder treats it as `ENTITY`.
+`Keyed` is a `KEYED` scope that also records `declared_key`, so a message can name
+the decision as declared.
 `per ()` creates no key scope. The names of the query-wide decisions travel to the two
 clause binders (`scalar_variables`), which treat such a decision as one value.
 
@@ -554,7 +554,7 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 |---|---|
 | `when c: C` | a WHEN wrapper (`WHEN_FILTER_TAG`) `[C, c]` |
 | `per K: C` | a `PER_CLASS_TAG` wrapper `[C]` tagged `__per_key_<i>__` with K's entry of the key table (no tag for `per ()`, which has no entry), its location the `per`'s, where the parser kept the key as written |
-| `when c per K: C` | `PER_CLASS{WHEN{C, c}}`, tagged with K |
+| `when c per K: C` | a `PER_CLASS_TAG` wrapper around the `WHEN_FILTER_TAG` one `[C, c]`, tagged with K |
 | `per row: C`, `agg(per row: e)`, `per row: x(TYPE)` | nothing: the default written out (`SCOPE_PER_ROW_TAG`, peeled) |
 | `agg(...) by (G)` | the aggregate tagged `__group_key_<i>__`, naming `BoundSelectNode::decide_keys[i]`, whose `written_as_by` is set; `by ()` adds nothing |
 | `agg(when c: e)` | the aggregate's `filter` (§3) |

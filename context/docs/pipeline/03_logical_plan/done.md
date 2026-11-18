@@ -118,7 +118,7 @@ Together with the call in `plan_select_node.cpp`, these are the only three place
 Grouped by who writes it:
 
 **From the binder** — `decide_index`, `decide_variables`, `decide_constraints`,
-`decide_sense`, `decide_objective`, `is_boolean_var`,
+`written_sense`, `decide_objective`, `is_boolean_var`,
 `variable_scopes`, `keys`, `keyed_scopes`, `constraint_sources`. `keys` is the one
 key table (`DecideKey`): every key the clauses write -- a declaration's `per K:`, a
 reducer's own `per K'` and the colon form `SUM(D: …)`, a reducer's `by (G)`, a
@@ -176,7 +176,7 @@ decisions, one per reducer over one set of rows, shared by every clause that rea
 each `ReducerValueLink` holds the reducer a helper replaced — kind, body, its own `when`
 and `per`, its path key (its `by` key under every enclosing one), its SQL as a label —
 the rows its path keeps, and the sides any reader needs; innermost first, and
-`inner_terms` are flattened with the prepared form),
+its body's terms are lowered into its node's `DecideBody::members` (`LowerDecideTree`)),
 `flat_objective_agg` / `flat_objective_is_easy`, and the folded variable box.
 
 `optimized` marks the boundary between the first two groups and the third. It is

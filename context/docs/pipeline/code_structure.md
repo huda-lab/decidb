@@ -82,7 +82,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `optimizer/decide/decide_rewrite_abs.cpp` | 05 | ABS Big-M tagging and linearization |
 | `optimizer/decide/decide_rewrite_minmax.cpp` | 05 | MIN/MAX, plain and composed |
 | `optimizer/decide/decide_rewrite_bilinear.cpp` | 05 | Bilinear McCormick |
-| `optimizer/decide/decide_rewrite_define.cpp` | 05 | `DefineNonlinearReducerBodies`: a helper decision per row for each non-linear body a MIN/MAX formulation reads |
+| `optimizer/decide/decide_tree_definition.cpp` | 05 | `PrepareDefinitionFunctions`: helpers for non-linear bodies |
 | `optimizer/decide/decide_rewrite_scoped.cpp` | 05 | The value rewrite (`RewriteScopedReducers`): each decision reducer of a VALUE-shape comparison becomes a helper decision per `by` group |
 | `optimizer/decide/decide_rewrite_frames.cpp` | 05 | `RewriteFrameRanges`: a range frame over decisions becomes a helper decision per window, before any rewrite copies it |
 | `optimizer/decide/decide_singleton_row_folding.cpp` | 05 | Literal bounds folded into column boxes |
@@ -236,7 +236,6 @@ classDiagram
 - **`CanonicalizeTree()` / `CanonicalizeObjective()`** — pure; a comparison is canonicalized inside the tree.
 - **`Decompose()` / `PeelScale()` / `BuildAdditive()`** — shared by both clauses.
 - **`ClassifyScoped()` / `ClassifyCanonicalComparison()`** — `PER_ROW` / `AGGREGATE` / `VALUE` / `INVALID`.
-- **`BuildConstraintScopeChecks()` / `BuildObjectiveScopeChecks()`** — the run-time checks.
 - **`VerifyCanonical()` / `VerifyCanonicalObjective()`** — non-mutating, throwing.
 
 ### `src/planner/decide/decide_product_form.cpp` — stage 04

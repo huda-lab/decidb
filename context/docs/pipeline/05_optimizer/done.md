@@ -262,8 +262,8 @@ clause's `DecideConstraint` into the root the tree made of its comparison (`Take
 folded root), the optional `DecideObjective` into the objective's root, each composed term's and each helper's terms
 into its G or O, and the frame columns they read into `DecideTree::frame_reads`. So every construct reaches execution
 as lowered terms rather than one path re-deriving its own, and the solver gate reads its model class off the same
-records (`RequireDecideSolverSupport`). This is the tree's lowering, one IR: until D1b it wrote a second model
-(`DecidePreparedModel`) that the tree copied into its bodies.
+records (`RequireDecideSolverSupport`). This is the tree's lowering, one IR: the records stage 08 reads
+are the ones it writes.
 
 **A coefficient stays an unevaluated `Expression`.** `SUM(x * price)` yields the
 coefficient `price`, which is a number only once a row exists. Everything else
@@ -272,7 +272,7 @@ filter applies, which key scope (`KeyedScopeInfo`) its reducer's own `per` names
 fact about types and structure and is settled here. The pass reads no data.
 
 **Why it is here and not at execution.** Doing this algebra needs a binder: every
-rebuilt subtree goes through `RebindOperator` → `FunctionBinder::BindScalarFunction`
+rebuilt subtree goes through `DecideRebindOperator` → `FunctionBinder::BindScalarFunction`
 so the operator is resolved for the children it is actually given. Downstream of the
 binder it would mean reconstructing bound nodes by hand from another node's
 `FunctionData`, which does not fail on a type mismatch — it reinterprets the
@@ -297,7 +297,7 @@ the extraction branches, where a branch that forgets it leaves one term unfilter
 the model as `constant >= K`, and a feasible query is called infeasible. A comparison classified `INVALID`, or still in the VALUE shape, is
 an `InternalException`: stage 04 refuses the first and the value rewrite replaces the
 second. So is a term that holds a decision under anything but a bare reference
-(`ExtractTerms`): no rewrite lowered it, and reading it as its decision would drop the
+(term extraction, `DecideLinearFormBuilder`): no rewrite lowered it, and reading it as its decision would drop the
 construct without a word.
 
 The objective's `when` wrapper gives `DecideObjective::when_condition`. An AVG term with a
@@ -355,28 +355,29 @@ in the objective follows §1a above.
 `AppendFrameTerms` turns it into the terms the model reads: each payload term `c·x` becomes `f·READ(c)·x`, its decision
 read at the row the frame selects (`DecideTerm::frame_read`), and each term `c'·y` of the `else` becomes
 `f·FALLBACK(c')·y`, read at the row itself. `READ`, `FALLBACK`, `VALUE` and `DEFINED` are columns stage 08 appends to
-the input after its own (`DecideFrameReads::columns`, from `frame_column_base`), so every evaluator reads a
+the input after its own (`DecideFrameReads::columns`, from `DecideFrameReads::column_base`), so every evaluator reads a
 frame as data and none learns what one is: `READ` is `c` at the selected row, 0 where a missing position has an `else`
 and NULL where it has none; `FALLBACK` is `c'` at a row whose position is missing, 0 elsewhere. NULL is no value
 (D84): a comparison reading it skips that instance, the objective drops the term (`DropNullObjectiveTerms`). The
-payload's terms are recorded once per frame (`frame_payload_terms`, for D73), and the decisions its `else` reads
-(`frame_fallback_decisions`, for D82). `LowerFramesInPreparedModel` then replaces each frame left in an expression
-stage 08 evaluates -- a frame over data, in a coefficient, a bound, a filter -- by its `VALUE` column (the payload at
-the selected row, the `else` at a row that reaches it, NULL where neither stands, of the payload's own type) or, for a
-range, its `REDUCED` column (the frame's reducer over the window's values), and a
-reducer's NULL test of a frame over decisions (stage 04) by its `DEFINED` column, TRUE where each of the frame's
-`READ` and `FALLBACK` columns holds a value. A frame over decisions inside a `MIN`/`MAX` of several terms is a term
-like any other (`ComposedMinMaxTerm::inner_terms`), its `frame_read` set: stage 08 hands stage 06 the variable each term
+payload's terms are the frame's `READ` columns, and a position whose rows hold two payloads is refused at execution
+(D73, `DecideDescentPosition::conflict`); the decisions its `else` reads are recorded per frame
+(`DecideFrameReads::fallback_decisions`, for D82). `LowerFramesInPreparedModel` then replaces each frame left in an
+expression stage 08 evaluates -- a frame over data, in a coefficient, a bound, a filter -- by its `VALUE` column (the
+payload at the selected row, the `else` at a row that reaches it, NULL where neither stands, of the payload's own type)
+or, for a range, its `REDUCED` column (the frame's reducer over the window's values), and a reducer's NULL test of a
+frame over decisions (stage 04) by its `DEFINED` column, TRUE where each of the frame's `READ` and `FALLBACK` columns
+holds a value. A frame over decisions inside a `MIN`/`MAX` of several terms is a term
+like any other (`DecideBody::members`), its `frame_read` set: stage 08 hands stage 06 the variable each term
 reads (`ComposedMinMaxTermData::variables`), a frame read among them. A range over decisions reaches no term: it is a
 helper by now (§2, `RewriteFrameRanges`), whose link also reads the range's `else` as terms, each coefficient a
-FALLBACK column (`ReducerValueLink::fallback_terms`). What a signature reads of a reached `else` is recorded per frame
-(`frame_fallback_columns`).
+FALLBACK column (`DecideBody::fallback`). What a signature reads of a reached `else` is recorded per frame
+(`DecideFrameReads::fallback_columns`).
 
 ### Like-term collection
 
 After flattening, every list that becomes a **linear** solver row is grouped:
-constraint `lhs_terms`, the objective's `terms`, and each
-`ComposedMinMaxTerm::inner_terms`. `2*ship + 3*ship` becomes one term with
+constraint `lhs_terms`, the objective's `terms`, each composed
+MIN/MAX term's inner terms, and each value link's terms and `else` terms. `2*ship + 3*ship` becomes one term with
 coefficient `2 + 3`. A term contributes `sign * coefficient`, so a group merges as
 `sign_first * (coef_first ± coef_next ± ...)`, taking `-` exactly when a term's
 sign differs from the group's.
@@ -445,7 +446,7 @@ solver path and direct solve's A2 raise the same text, and no message names a bo
 user never wrote. The rows an ABS is read on are those its clause's `when` keeps that also
 pass the `when` of each reducer around it (`SUM(when f: ABS(x - v))`), and the envelope
 rows carry the same condition, so a row a reducer's own `when` drops is never read. The
-check is a value scope check, so `install_row_checks` runs after this pass.
+check is a value scope check, so `RetainRowChecks` runs after this pass.
 
 `AbsPairInfo::needs_bigm` records whether the auxiliary needs an upper envelope.
 It is false when solver pressure or the clause's shape pins `aux` to `|inner|`
@@ -491,7 +492,7 @@ answer instead of demanding a bound on the ABS auxiliary.
 The two envelope rows keep the clause's `when` (`ScopeHelperRow`), so they read only the
 rows the clause keeps; the objective's keep the objective's `when`.
 
-**An ABS inside an ABS.** `FindAndReplaceAbs` rewrites the argument before the node, so
+**An ABS inside an ABS.** `FindAbsAndAllocateAux` rewrites the argument before the node, so
 an inner ABS becomes its own auxiliary first and the outer's envelope rows refer to it
 (term extraction would read an ABS left in a row as its argument, losing the sign). The pairs are appended innermost first, the order `DeriveAbsAuxiliaryBounds`
 boxes them in: the outer range needs the inner box. An ABS beneath another is pinned
@@ -682,7 +683,7 @@ restates the body the reducer already prints. The row carries the source clause 
 first clause that reads the helper (`CopySourceClauseTag`), so a refusal can quote it, and
 no removal group (§ The value rewrite). A MIN or MAX over defined members that is not
 held by its envelope alone `becomes an extremum column stated to the solver natively`
-(`EXTREMUM_NATIVE`, `EXTREMUM_PER_GROUP_NATIVE`), read off `BODY_DEFINITION_TAG` on the
+(`RewriteAccount::Kind::EXTREMUM_NATIVE`), read off `BODY_DEFINITION_TAG` on the
 reducer, instead of claiming indicator rows it never has.
 
 **Exit contract.** `VerifyExtremumBodiesLinear` runs after `RewriteMinMax` and raises an
