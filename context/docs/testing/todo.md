@@ -38,5 +38,11 @@ Open coverage gaps, one section each. Coverage that exists is in [coverage.md](c
 - **Change.** By the owner's ruling (2026-11-18, `context/opa_rewrite/decisions.md` R16): one helper beside
   `assert_error` (`test/decide/decidb_cli.py`) asserts an error's kind and the location it quotes. It lands before
   any message changes; a Phase 1 task that rewords a message converts the tests it breaks to the helper.
+- **Ruling (owner, 2026-11-18).** An error's kind is the DuckDB error class on the message's first line (`Parser
+  Error`, `Binder Error`, `Invalid Input Error`, ...); no list of kinds is added to `language/errors.md` or the code.
+  Its location is what the message quotes from the query: the `LINE n:` caret line, or the quoted SQL fragment where
+  there is no caret. A test asserts the kind, and the location where the message has one, and no other message text;
+  the wording lives in `language/errors.md` only. Two errors of one class at one place look the same to the helper; a
+  test that must tell them apart matches one more word.
 - **Done when.** The helper has a test that fails on a wrong kind and on a wrong location;
   `./test/decide/run_tests.sh -n 2 -k "error"` passes.
