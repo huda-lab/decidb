@@ -613,7 +613,7 @@ unique_ptr<ParsedExpression> DecideBinder::QualifyColumnName(ColumnRefExpression
 	if (!qualified) {
 		ThrowIfOuterColumn(binder, col_ref);
 	} else {
-		RefuseDecideTagInName(col_ref, col_ref.GetColumnName());
+		RefuseDecideTagInName(col_ref, col_ref.column_names.back());
 	}
 	return qualified;
 }

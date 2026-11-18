@@ -38,7 +38,9 @@ static void RefuseQualifiedDecisionReferences(const ParsedExpression &expr, Bind
                                               const case_insensitive_map_t<idx_t> &variables, bool data_position) {
 	if (expr.GetExpressionClass() == ExpressionClass::COLUMN_REF) {
 		auto &colref = expr.Cast<ColumnRefExpression>();
-		if (!colref.IsQualified() || !variables.count(colref.GetColumnName())) {
+		// `[catalog.][schema.]D.open` is at most four names; the SQL binder reads the names after the fourth as
+		// struct fields, and a decision has none.
+		if (!colref.IsQualified() || colref.column_names.size() > 4 || !variables.count(colref.GetColumnName())) {
 			return;
 		}
 		ErrorData error;
