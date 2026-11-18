@@ -347,6 +347,9 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 		callback(&expression);
 	}
 	for (auto &envelope : abs_function_envelopes) {
+		if (envelope.operand) {
+			callback(&envelope.operand);
+		}
 		if (envelope.positive) {
 			callback(&envelope.positive);
 		}
