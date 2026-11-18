@@ -31,6 +31,11 @@ target_include_directories(duckdb_highs PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/highs/util>
 )
 
+# A debug build keeps HiGHS optimised and without its NDEBUG-guarded checks (they re-derive a bound on every domain
+# change, which makes a solve over thousands of columns minutes long). The sanitizer flags stay, so UBSan and ASan still
+# cover it. The target's options come after the global debug flags, so -O2 replaces -O0.
+target_compile_options(duckdb_highs PRIVATE $<$<CONFIG:Debug>:-O2 -DNDEBUG>)
+
 set_target_properties(duckdb_highs PROPERTIES EXPORT_NAME duckdb_duckdb_highs)
 
 install(TARGETS duckdb_highs
