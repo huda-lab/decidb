@@ -40,6 +40,7 @@ the owner rules first.
 
 ## 1.5 Filed cleanups (one lane)
 - [ ] INF-5 Three label formatters no test reaches — diagnostics/infeasible/todo.md § INF-5
+- [ ] EXEC-24 A rare hang in the descent's parallel merge — pipeline/08_execution/todo.md § EXEC-24
 
 # Phase 2 — Direct solve is a separate layer
 
