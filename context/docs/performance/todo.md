@@ -34,12 +34,3 @@ emitter's value links) and `formulation.value_links` against `cec0e42f99`, where
 to the extremum directly: each group sum is a helper decision, defined by one row per group assembled through
 `BuildMinMaxGroups`, three columns and three rows more on a million-row model. Inlining a SUM helper into the one
 reader that sums it is the expected remedy if the cost shows.
-
-## PERF-26 — findings.md measures extraction code the tree evaluator replaced
-
-- **Problem.** `findings.md` § Measured design choices cites `extraction.group_ids`, `extraction.constraint_setup`,
-  `extraction.when_per_and_qualifiers`, `extraction.rhs` and `extraction.constraint`, which nothing in `src` emits, and
-  its figures time code the tree evaluator replaced, so they say nothing of the current pipeline.
-- **Change.** Each figure is measured again on the spans `src` emits (`profile_pipeline.py`), or goes with its passage.
-- **Done when.** Every span `findings.md` cites is one `src` emits. It is a measurement run: confirm the start with
-  the owner.

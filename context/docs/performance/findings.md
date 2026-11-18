@@ -68,19 +68,9 @@ environment would save under 1 ms a query, so nothing is cached.
 
 DuckDB operator profiles expose scans, joins, sorting and output-table writing. Per-chunk accumulators measure sink append and solution-to-row mapping without logging every chunk. Sink-combine timing includes its lock wait.
 
-Finalize spans separate the merge of the threads' descents (`execution.descent_merge`), the descent's routing of the rows (`execution.tree_descent`) and the evaluation of each node's programs into the columns stage 06 reads (`execution.tree_model`: the keyed-decision mapping, constraints, objective, composed MIN/MAX clauses and the helper decisions' members), then `execution.assemble_input` and `execution.formulate`. Constraint subspans isolate setup, linear coefficients, the `when` / `per` / `by` grouping with a reducer's inner `per` and colon form (`extraction.when_per_and_qualifiers`), RHS and quadratic coefficients. Nested group-id and Boolean-mask spans identify shared helpers; constraint ordinals identify clauses.
+Finalize spans separate the merge of the threads' descents (`execution.descent_merge`), the descent's routing of the rows (`execution.tree_descent`) and the evaluation of each node's programs into the columns stage 06 reads (`execution.tree_model`: the keyed-decision mapping, constraints, objective, composed MIN/MAX clauses and the helper decisions' members), then `execution.assemble_input` and `execution.formulate`.
 
-**Ranking.** Gurobi, load 2.2-3.0; HiGHS within 2 % of these. ms:
-
-| Query | Top extraction costs |
-|---|---|
-| Q4 | composed MIN/MAX evaluation 495 (21 today, § Measured design choices); `formulate` 312 (composed MIN/MAX 240, MIN/MAX objective 73); constraints 156 (RHS 82) |
-| Q8 | group ids 304 (inside the keyed mapping 255 and the constraints); constraints 152 (`when`/`per` 106) |
-| Q1 | constraints 217: linear coefficients 63, `when`/`per` 63, setup 59, RHS 31, group ids 23; objective 32 |
-| P4 | constraints 121: `when`/`per` 114, of it group ids 95 (250k order-key classes); objective 11.5 |
-| P1 | constraints 43 (RHS 39); objective 11.5 |
-
-The Q4 and Q8 rows are older than the changes in § Measured design choices, which give their current numbers.
+Per-query costs on these spans come from the measurement runs ([todo.md § PERF-6](todo.md#perf-6--solver-execution)).
 
 **Variant numbering.** The determination checks are gone (D70): a `per K:` clause in the per-row shape numbers its rows
 by key and signature (`DecideModelEmitter::Variants`) where its signature has a field, and nothing runs where it has
@@ -194,31 +184,23 @@ The medium-tier sweep (`results/pipeline_profile_medium.csv`) peaks at 6,525 MiB
 
 ## Measured design choices
 
-Each item is a design the code has, measured against the alternative it replaced on the same query and machine:
-alternative → current. Unless stated: measured from 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three
+Each item is a design the code has. Where it is measured on the spans the code emits, the figures compare it with the
+alternative it replaced on the same query and machine: alternative → current. Unless stated: measured from 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three
 interleaved runs beside other work (load 8-18, single spans swing up to 3x).
 
 - **Q8's keyed mapping.** Group ids come from DuckDB's aggregate hash table, labels are formatted only for the groups a
-  message names, and a key keeps one copy of an uncollated column. Against comparing each row with its group's
-  representative `Value`, a label for every group and a copied label column: the keyed mapping 1,169 → 257
-  ms; `extraction.group_ids` 868 → 309 ms and extraction 1,028 → 453 ms on Q8; Q1's group ids 104 → 25-37 ms; Q8's
-  peak RSS 1,172 → about 860 MiB.
-- **A `when` is read in one scan** (`DecideDescent`), not one scan per AND or OR part: Q1 `when_per_and_qualifiers`
-  218 → 165-174 ms.
-- **Extraction passes.** Measured alone at `large`, two interleaved rounds against the build before. A NULL-skip
+  message names, and a key keeps one copy of an uncollated column.
+- **A `when` is read in one scan** (`DecideDescent`), not one scan per AND or OR part.
+- **Extraction passes.** A NULL-skip
   filter that keeps every row the clause reads (a NULL test on data with no NULL) counts as no filter, so an ungrouped
   clause carries no 1M-row group list or CSR for it (DuckDB's ValidityMask idea: allocate nothing while every row is
   valid); a `per K:` class check reads the cached grouping and stops at the first kept row with a class instead of
   renumbering every row; a clause's term conditions are read in one scan; the kept rows' groups are built only under
-  DIAGNOSE, their one reader. `extraction.constraint` Q1 312 → 217 ms, Q4 210 → 156, P4 134 → 123;
-  `assembly.implied_bounds` Q1 61 → 49, Q4 and P4 unchanged.
+  DIAGNOSE, their one reader.
 - **Rows, bounds and NULL tests built once.** Each clause's emitted rows are one CSR shared by implied bounds, the
   `<>` expansion and the builder; a bound's admitted ends read `a` and `r` evaluated once per row (two projections)
   and stage 08 folds constants once; a NULL test the statistics prove always TRUE folds at plan time and no filter is
-  read for it, and the objective sites treat an identity filter as none. Two interleaved rounds (load 5-14), Q1 / Q4 /
-  P4: `extraction.constraint` 216 → 202, 156 → 120, 122 → 120 ms; `assembly.implied_bounds` 52 → 38, 51 → 42,
-  26 → 24; `extraction.rhs` Q4 83 → 55; `extraction.constraint_setup` Q1 60 → 43, Q4 8 → 0;
-  objective evaluation 32 → 20, 26 → 17, 11 → 7; `model.build` 53 → 46, 157 → 128, 42 → 43. Term filters
+  read for it, and the objective sites treat an identity filter as none. Term filters
   select kept rows with a per-row `vector<bool>`: a `SelectionVector` path would let DuckDB's conjunction `Select`
   reorder AND/OR operands, and DECIDE reads them left to right.
 - **Composed MIN/MAX coefficients are read a chunk at a time.** `DecideModelEmitter::ComposedTerms` reads a term's inner
@@ -228,10 +210,7 @@ interleaved runs beside other work (load 8-18, single spans swing up to 3x).
   Gurobi, 21 ms on HiGHS; no other span differs.
 - **A group keeps its row, not its key values.** A group keeps its first row (for a collated column, the row of its
   least spelling); groups number through DuckDB's sort key instead of a `Value` comparator, and a message reads a
-  group's values at its row when it names it (late materialization). Against one `Value` per group per key column
-  (250k groups × 9 columns on Q8's `per o`), Q8, two interleaved rounds (load 10-13): the keyed mapping
-  264 → 167 ms, `extraction.group_ids` 314 → 219, `solver.cleanup` 52 → 0, peak RSS 834 → 526 MiB. The keyed mapping
-  left is the hash-table build (about 100 ms) and the sort of 250k groups (about 80 ms).
+  group's values at its row when it names it (late materialization), not one `Value` per group per key column.
 - **MIN/MAX link rows sum in the model builder's `SparseCoeffAccumulator`** (dense scatter, first-touch order) and are
   sized once. Against a `std::unordered_map` per link row (a bucket array and a node per member, millions of
   allocations on Q4's 1M members, rows grown from capacity 1), Q4 (load 11-16): `execution.formulate` 346 → 172 ms;
@@ -292,8 +271,6 @@ interleaved runs beside other work (load 8-18, single spans swing up to 3x).
 - **A grouped clause's row lists are built once** (`ClauseRows`), for implied bounds and the builder: Q1 model build
   about 15 ms lower than building them twice.
 - **Group keys are formatted when printed.** A row carries a group number, and the key text is formatted only for a
-  finding that prints it. Against formatting every group's key when its data is read and copying it into each model
-  row, on a clause of 200,000 groups over 1M rows, `extraction.constraint` 150 → 103 ms (load ~17); Q1 and Q8, whose
-  grouped clauses have 4-6 groups, unchanged. DIAGNOSE on 20,000 groups: same time and peak RSS.
+  finding that prints it. A key is not formatted when its data is read, nor copied into each model row.
 - **Peak memory on Q3 and Q10** is inside Gurobi's solve, after DeciDB hands over the model; the stages before it hold
   less than the solve adds. Not a DeciDB cost.

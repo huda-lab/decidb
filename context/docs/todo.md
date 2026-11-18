@@ -12,10 +12,7 @@ the owner rules first.
 
 # Phase 0 — Preliminaries
 
-## 0.2 Leftovers (one lane)
-- [ ] PERF-26 findings.md measures replaced extraction code — performance/todo.md § PERF-26
-
-## 0.3 Debug-build run (needs: 0.2) (one lane)
+## 0.3 Debug-build run (one lane)
 - [ ] TEST-6 One suite run on a debug build — testing/todo.md § TEST-6
 
 # Phase 1 — Errors are raised where they are found
