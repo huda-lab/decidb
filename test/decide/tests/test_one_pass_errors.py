@@ -48,7 +48,7 @@ FRAME_ERRORS = [
         ("NaN", 9.0, 7.0),
         2,
         9,
-        "reads a NaN",
+        "is NaN on some rows",
         id="range-fold",
     ),
 ]

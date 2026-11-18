@@ -560,8 +560,8 @@ def test_a_data_reducer_read_as_a_coefficient_must_be_finite(decidb_cli):
     query = f"SELECT id, x {table('t', ('id', 'g', 'v'), rows)} DECIDE x(INT) SUCH THAT x <= 9 AND {{}} MAXIMIZE sum(x)"
     result = decidb_cli.execute_raw(query.format("sum(x + max(t.v / 0.0) by (t.g)) <= 30"))
     assert (
-        "DECIDE: t.v / 0.0 is NaN or infinite on some rows. Skip those rows with 'when isfinite(t.v / 0.0):'"
-        in result.stderr
+        "DECIDE: t.v / 0.0 is NaN or infinite on some rows. "
+        "Skip those rows by writing 'CASE WHEN isfinite(t.v / 0.0) THEN t.v / 0.0 END' in its place." in result.stderr
     ), result.stderr
     assert_no_internal_leak(result, "an infinite data reducer")
     bound = decidb_cli.execute_raw(query.format("sum(x) <= max(t.v / 0.0) by (t.g)"))

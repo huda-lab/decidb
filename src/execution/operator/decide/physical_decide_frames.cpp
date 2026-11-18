@@ -301,33 +301,19 @@ struct FrameAggregateStates {
 	Vector pointers;
 };
 
-//! Whether one of `values`' first `count` entries is a NaN, a NULL being none.
-template <class T>
-static bool HoldsNan(Vector &values, idx_t count) {
-	UnifiedVectorFormat format;
-	values.ToUnifiedFormat(count, format);
-	auto data = UnifiedVectorFormat::GetData<T>(format);
-	for (idx_t i = 0; i < count; i++) {
-		const auto index = format.sel->get_index(i);
-		if (format.validity.RowIsValid(index) && std::isnan(data[index])) {
-			return true;
-		}
-	}
-	return false;
-}
-
 //! An aggregate run through its state functions over values of `sources`, one vector per argument, so the value has
-//! SQL's type and arithmetic, and a NULL is skipped as SQL's aggregate skips it. A NaN in what it reads (`read`,
-//! indexed as `sources`) is an error, except to COUNT, which counts it (language/guide.md §3, as a reducer's
-//! ArgumentMessage): checked on the values, since SQL's MIN passes over one. `written` names the reducer in that error.
+//! SQL's type and arithmetic, and a NULL is skipped as SQL's aggregate skips it. A state that read a NaN (`read`,
+//! indexed as `sources`) has the value NaN, whatever its aggregate: SQL's SUM gives NaN, and its MIN passes over one.
+//! Its reader refuses the NaN (ThrowInvalidValue, naming the frame as written). COUNT counts a NaN
+//! (language/guide.md §3, as a reducer's ArgumentMessage).
 class AggregateFold {
 public:
 	AggregateFold(ClientContext &context, const BoundAggregateExpression &aggregate, vector<Vector> &sources_p,
-	              Vector &read_p, idx_t count, const string &written_p)
+	              Vector &read_p, idx_t count)
 	    : allocator(BufferAllocator::Get(context)), input(aggregate.bind_info.get(), allocator), sources(sources_p),
 	      read(read_p), states(aggregate.function, input, count), selection(STANDARD_VECTOR_SIZE),
-	      targets(LogicalType::POINTER, STANDARD_VECTOR_SIZE), written(written_p),
-	      refuses_nan(StringUtil::Lower(aggregate.function.name) != "count") {
+	      targets(LogicalType::POINTER, STANDARD_VECTOR_SIZE), owners(STANDARD_VECTOR_SIZE),
+	      carries_nan(StringUtil::Lower(aggregate.function.name) != "count"), read_nan(count, false) {
 	}
 
 	//! State `state` reads the values at `index`, `times` times.
@@ -338,6 +324,7 @@ public:
 				Flush();
 			}
 			selection.set_index(pending, index);
+			owners[pending] = state;
 			target_states[pending++] = states.At(state);
 		}
 	}
@@ -346,6 +333,11 @@ public:
 	void Finish(Vector &values) {
 		Flush();
 		states.function.finalize(states.pointers, input, values, states.count, 0);
+		for (idx_t state = 0; state < read_nan.size(); state++) {
+			if (read_nan[state]) {
+				values.SetValue(state, DecideNanValue(values.GetType()));
+			}
+		}
 	}
 
 private:
@@ -359,22 +351,13 @@ private:
 			slices.emplace_back(source, selection, pending);
 		}
 		Vector values(read, selection, pending);
-		if (refuses_nan && ReadsNan(values)) {
-			throw InvalidInputException(DecideFrameNanMessage(written));
+		if (carries_nan) {
+			for (auto entry : DecideNanEntries(values, pending)) {
+				read_nan[owners[entry]] = true;
+			}
 		}
 		states.function.update(slices.data(), input, slices.size(), targets, pending);
 		pending = 0;
-	}
-
-	bool ReadsNan(Vector &values) const {
-		switch (values.GetType().InternalType()) {
-		case PhysicalType::DOUBLE:
-			return HoldsNan<double>(values, pending);
-		case PhysicalType::FLOAT:
-			return HoldsNan<float>(values, pending);
-		default:
-			return false;
-		}
 	}
 
 	ArenaAllocator allocator;
@@ -384,8 +367,11 @@ private:
 	FrameAggregateStates states;
 	SelectionVector selection;
 	Vector targets;
-	const string &written;
-	const bool refuses_nan;
+	//! The state each pending entry folds into.
+	vector<idx_t> owners;
+	const bool carries_nan;
+	//! Per state, whether it read a NaN.
+	vector<bool> read_nan;
 	idx_t pending = 0;
 };
 
@@ -401,11 +387,11 @@ static void SetEveryRowNull(Vector &out, idx_t num_rows) {
 //! error separately: an anchor that never reads the failing state must still be able to read the others.
 template <class FEED>
 static Vector FoldFrameStates(ClientContext &context, const BoundAggregateExpression &aggregate,
-                              vector<Vector> &sources, Vector &read, idx_t count, const string &written,
-                              const FEED &feed, std::map<idx_t, ErrorData> &errors) {
+                              vector<Vector> &sources, Vector &read, idx_t count, const FEED &feed,
+                              std::map<idx_t, ErrorData> &errors) {
 	Vector values(aggregate.return_type, count);
 	try {
-		AggregateFold fold(context, aggregate, sources, read, count, written);
+		AggregateFold fold(context, aggregate, sources, read, count);
 		for (idx_t state = 0; state < count; state++) {
 			if (!errors.count(state)) {
 				feed(state, fold, state);
@@ -424,7 +410,7 @@ static Vector FoldFrameStates(ClientContext &context, const BoundAggregateExpres
 			continue;
 		}
 		try {
-			AggregateFold fold(context, aggregate, sources, read, 1, written);
+			AggregateFold fold(context, aggregate, sources, read, 1);
 			feed(state, fold, 0);
 			Vector one(aggregate.return_type);
 			fold.Finish(one);
@@ -507,7 +493,7 @@ static void ReduceRangeValues(ClientContext &context, const DecideFrameSpec &fra
 			fold.Feed(num_rows + map.window_anchor[w], state, fallbacks);
 		}
 	};
-	auto values = FoldFrameStates(context, marker, sources, sources[0], windows, frame.text, feed, window_errors);
+	auto values = FoldFrameStates(context, marker, sources, sources[0], windows, feed, window_errors);
 	// Each anchor reads its window's value; every other row, and an anchor whose window reads nothing, reads NULL.
 	SelectionVector gather(num_rows);
 	vector<bool> unread(num_rows, false);

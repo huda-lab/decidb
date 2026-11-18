@@ -1,8 +1,9 @@
 """The one message for a NaN or infinite number: every site that refuses one names the value as the user wrote it and
 the smallest edit, and the solver path and the direct-solve plans print the same text.
 
-A coefficient must be finite (`v is NaN or infinite on some rows. Skip those rows with 'when isfinite(v):'`); a bound
-may be infinite and must not be NaN (`the bound v is NaN on some rows. ...'when NOT isnan(v):'`). A NULL value is
+A coefficient must be finite (`v is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(v) THEN
+v END' in its place.`); a bound may be infinite and must not be NaN (`the bound v is NaN on some rows. ... 'CASE WHEN
+NOT isnan(v) THEN v END' ...`). The edit stays where the value stands, so no frame's timeline shifts. A NULL value is
 skipped, not refused. A number the model computes from finite ones (a sum over rows, a square) that is too large for a
 DOUBLE names its clause or the objective and asks to scale its data. The wording lives in `DecideInvalidValueMessage`
 (`decide_value_messages.hpp`).
@@ -26,11 +27,11 @@ def _query(decide, bad):
 
 
 def _coefficient(value):
-    return f"DECIDE: {value} is NaN or infinite on some rows. Skip those rows with 'when isfinite({value}):'."
+    return f"DECIDE: {value} is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite({value}) THEN {value} END' in its place."
 
 
 def _bound(value):
-    return f"DECIDE: the bound {value} is NaN on some rows. Skip those rows with 'when NOT isnan({value}):'."
+    return f"DECIDE: the bound {value} is NaN on some rows. Skip those rows by writing 'CASE WHEN NOT isnan({value}) THEN {value} END' in its place."
 
 
 def _stderr(cli, sql, mode):
@@ -878,4 +879,4 @@ def test_a_rewrite_that_needs_a_finite_bound_names_the_infinite_one_as_written(d
 def test_a_constant_bound_that_is_nan_is_named(decidb_cli, decide):
     # Nothing reads a constant bound per row, so the check on the values it admits is the only one that sees it.
     stderr = _stderr(decidb_cli, _query(decide, "1.0"), "off")
-    assert "is NaN on some rows. Skip those rows with 'when NOT isnan(" in stderr, stderr
+    assert "is NaN on some rows. Skip those rows by writing 'CASE WHEN NOT isnan(" in stderr, stderr

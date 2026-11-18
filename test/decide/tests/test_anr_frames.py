@@ -29,6 +29,7 @@ from ._anr_oracle import (
     Col,
     Const,
     Decision,
+    Finite,
     Objective,
     Over,
     Range,
@@ -2191,14 +2192,64 @@ def _folded(cli, bound, rows=FOLD_ROWS, warnings=()):
     return [row["x"] for row in answer(cli, f"{sql} ORDER BY id", warnings)]
 
 
+def _refusal(role, written):
+    """The message for a NaN (a bound) or a non-finite number (a coefficient) read in `written`, and the edit it gives:
+    the value written again where it stands, NULL where the test fails."""
+    if role == "bound":
+        return (
+            f"DECIDE: the bound {written} is NaN on some rows. "
+            f"Skip those rows by writing 'CASE WHEN NOT isnan({written}) THEN {written} END' in its place."
+        )
+    return (
+        f"DECIDE: {written} is NaN or infinite on some rows. "
+        f"Skip those rows by writing 'CASE WHEN isfinite({written}) THEN {written} END' in its place."
+    )
+
+
 NAN_READERS = (
-    ("min-bound", f"x <= min(at(first: t.f) {ONE_TIMELINE_EACH})", "DOUBLE"),
-    ("min-float", f"x <= min(at(first: t.f) {ONE_TIMELINE_EACH})", "FLOAT"),
-    ("min-factor", f"sum(x * min(at(first: t.f) {ONE_TIMELINE_EACH})) <= 50", "DOUBLE"),
-    ("max-middle", f"x <= max(at(first: t.f) {ONE_TIMELINE_EACH})", "DOUBLE"),
-    ("range", "x <= min(from first to last: t.f) over (t.id)", "DOUBLE"),
-    # SIGN reads a NaN as 0, so the norm's definition hides what its body reads.
-    ("l0-norm", f"x <= norm(at(first: t.f) {ONE_TIMELINE_EACH}, 0)", "DOUBLE"),
+    (
+        "min-bound",
+        f"x <= min(at(first: t.f) {ONE_TIMELINE_EACH})",
+        "DOUBLE",
+        "bound",
+        f"min(at(first: t.f) {ONE_TIMELINE_EACH})",
+    ),
+    (
+        "min-float",
+        f"x <= min(at(first: t.f) {ONE_TIMELINE_EACH})",
+        "FLOAT",
+        "bound",
+        f"min(at(first: t.f) {ONE_TIMELINE_EACH})",
+    ),
+    (
+        "min-factor",
+        f"sum(x * min(at(first: t.f) {ONE_TIMELINE_EACH})) <= 50",
+        "DOUBLE",
+        "coefficient",
+        f"min(at(first: t.f) {ONE_TIMELINE_EACH})",
+    ),
+    (
+        "max-middle",
+        f"x <= max(at(first: t.f) {ONE_TIMELINE_EACH})",
+        "DOUBLE",
+        "bound",
+        f"max(at(first: t.f) {ONE_TIMELINE_EACH})",
+    ),
+    (
+        "range",
+        "x <= min(from first to last: t.f) over (t.id)",
+        "DOUBLE",
+        "bound",
+        "min(from first to last: t.f) over (t.id)",
+    ),
+    # SIGN reads a NaN as 0, so the norm's definition hides what its body reads: the body is checked.
+    (
+        "l0-norm",
+        f"x <= norm(at(first: t.f) {ONE_TIMELINE_EACH}, 0)",
+        "DOUBLE",
+        "bound",
+        f"at(first: t.f) {ONE_TIMELINE_EACH}",
+    ),
 )
 
 
@@ -2219,22 +2270,14 @@ class TestFrameReducerFold:
 
     @pytest.mark.parametrize("clause", NAN_READERS, ids=[c[0] for c in NAN_READERS])
     def test_a_nan_it_reads_is_an_error(self, decidb_cli, clause):
-        """The rule sits on what the reducer reads, not on its value: SQL's MIN passes over a NaN, so a check of the
-        result alone answered 1 here, and a `when` could not be written around the reducer the message named."""
+        """What the reducer reads makes its value NaN, which SQL's MIN would pass over: its reader refuses the NaN and
+        names the reducer, and a norm's body, which its definition can hide (SIGN reads a NaN as 0)."""
         rows = values(((1, "1"), (2, "NaN"), (3, "4")), "v", ("id", "f"))
         sql = f"""SELECT id, x FROM (SELECT id, CAST(f AS {clause[2]}) AS f FROM {rows}) t
             DECIDE x(REAL) SUCH THAT x <= 100 AND {clause[1]} MAXIMIZE sum(x)"""
         result = decidb_cli.execute_raw(sql)
-        assert "reads a NaN on some rows" in result.stderr, result.stderr
+        assert _refusal(clause[3], clause[4]) in result.stderr, result.stderr
         assert_no_internal_leak(result, "a NaN a frame reducer reads")
-
-    def test_the_when_it_advises_can_be_written(self, decidb_cli):
-        """Rows 1 and 3 keep the frame, whose least is 1; row 2's `x` has only its own bound."""
-        rows = values(((1, "1"), (2, "NaN"), (3, "4")), "v", ("id", "f"))
-        sql = f"""SELECT id, x FROM (SELECT id, CAST(f AS DOUBLE) AS f FROM {rows}) t
-            DECIDE x(REAL) SUCH THAT x <= 100 AND when NOT isnan(t.f): x <= min(at(first: t.f) {ONE_TIMELINE_EACH})
-            MAXIMIZE sum(x) ORDER BY id"""
-        assert [row["x"] for row in answer(decidb_cli, sql)] == [1, 100, 1]
 
     def test_a_norm_reads_only_the_rows_its_when_keeps(self, decidb_cli):
         """Row 2's NaN is out of the clause, and rows 1 and 3 count 2 nonzero values."""
@@ -2574,3 +2617,168 @@ def test_a_frame_else_holds_no_tag(decidb_cli):
         SUCH THAT x <= at(next else concat(CAST(t.c AS VARCHAR), 'x'): t.c) over (t.id) MAXIMIZE sum(x)"""
     result = decidb_cli.execute_raw(sql)
     assert "else concat(CAST(t.c AS VARCHAR), 'x') is not a number" in result.stderr, result.stderr
+
+
+NON_FINITE = ("id", "v", "e", "w")
+NAN, INF = float("nan"), float("inf")
+EACH_ROW = Over("id")
+
+
+def _number(value):
+    if value != value:
+        return "'NaN'::DOUBLE"
+    return "'Infinity'::DOUBLE" if value == INF else repr(float(value))
+
+
+def _non_finite_query(rows, tail):
+    tuples = ", ".join("(" + ", ".join([str(row[0])] + [_number(value) for value in row[1:]]) + ")" for row in rows)
+    return f"SELECT id, x FROM (VALUES {tuples}) t({', '.join(NON_FINITE)}) DECIDE x(REAL) SUCH THAT {tail} ORDER BY id"
+
+
+X_AT_MOST_TEN = clause(le(X, 10))
+FRAME_VALUES = ((1, 1.0, 0.0, 1.0), (2, 2.0, 0.0, 1.0), (3, 3.0, 0.0, 1.0), (4, 1.0, 0.0, 1.0))
+
+
+def _with(rows, column, at, value):
+    """`rows` with `value` in `column` of the row whose id is `at`."""
+    index = NON_FINITE.index(column)
+    return tuple(row[:index] + (value,) + row[index + 1 :] if row[0] == at else row for row in rows)
+
+
+# (rows, the SUCH THAT tail with `{v}` where the refused value stands, that value as written, its role, the oracle's
+# clauses and objective given the edit that wraps a value). Each case reaches a place that reads a frame's value, or a
+# value beside a frame, that no other does.
+NON_FINITE_EDITS = [
+    pytest.param(
+        _with(FRAME_VALUES, "w", 2, NAN),
+        "AND x <= at(previous else 0: t.v) over (t.id) AND sum(x * {v}) <= 50 MAXIMIZE sum(x)",
+        "t.w",
+        "coefficient",
+        lambda edit: (
+            [
+                clause(le(X, At(previous(), Col("v"), EACH_ROW, fallback=Const(0)))),
+                clause(le(reduce("sum", X * edit(Col("w"))), 50)),
+            ],
+            MAXIMIZE_X,
+        ),
+        id="plain-column-beside-a-frame",
+    ),
+    pytest.param(
+        ((1, 1.0, NAN, 1.0), (2, 2.0, 1.0, 1.0)),
+        "AND x <= {v} MAXIMIZE sum(x)",
+        "at(previous else t.e: t.v) over (t.id)",
+        "bound",
+        lambda edit: (
+            [clause(le(X, edit(At(previous(), Col("v"), EACH_ROW, fallback=Col("e")))))],
+            MAXIMIZE_X,
+        ),
+        id="point-else-not-finite",
+    ),
+    pytest.param(
+        _with(FRAME_VALUES, "v", 1, NAN),
+        "AND x <= {v} MAXIMIZE sum(x)",
+        "at(previous: t.v) over (t.id)",
+        "bound",
+        lambda edit: ([clause(le(X, edit(At(previous(), Col("v"), EACH_ROW))))], MAXIMIZE_X),
+        id="point-bound",
+    ),
+    pytest.param(
+        _with(FRAME_VALUES, "v", 3, INF),
+        "AND x * {v} <= 6 MAXIMIZE sum(x)",
+        "sum(from previous to next: t.v) over (t.id)",
+        "coefficient",
+        lambda edit: (
+            [clause(le(X * edit(Range("sum", previous(), next_(), Col("v"), EACH_ROW)), 6))],
+            MAXIMIZE_X,
+        ),
+        id="range-infinite",
+    ),
+    pytest.param(
+        _with(FRAME_VALUES, "v", 3, NAN),
+        "AND x <= {v} MAXIMIZE sum(x)",
+        "min(from previous to next: t.v) over (t.id)",
+        "bound",
+        lambda edit: (
+            [clause(le(X, edit(Range("min", previous(), next_(), Col("v"), EACH_ROW))))],
+            MAXIMIZE_X,
+        ),
+        id="range-window-reads-a-nan",
+    ),
+    pytest.param(
+        _with(FRAME_VALUES, "v", 2, NAN),
+        "AND x <= {v} MAXIMIZE sum(x)",
+        "min(at(previous: t.v) over (t.id))",
+        "bound",
+        lambda edit: (
+            [clause(le(X, edit(reduce("min", At(previous(), Col("v"), EACH_ROW)))))],
+            MAXIMIZE_X,
+        ),
+        id="reducer-over-frames",
+    ),
+    pytest.param(
+        _with(FRAME_VALUES, "v", 3, INF),
+        "MINIMIZE sum(abs(x - {v}))",
+        "at(previous else 0: t.v) over (t.id)",
+        "coefficient",
+        lambda edit: (
+            [],
+            Objective(
+                ObjSense.MINIMIZE,
+                reduce("sum", Abs(X - edit(At(previous(), Col("v"), EACH_ROW, fallback=Const(0))))),
+            ),
+        ),
+        id="abs-argument",
+    ),
+    pytest.param(
+        _with(FRAME_VALUES[:3], "v", 2, NAN),
+        "AND x <= norm({v}, 0) MAXIMIZE sum(x)",
+        "at(first: t.v) over (t.id within t.id)",
+        "bound",
+        lambda edit: (
+            [clause(le(X, reduce("count", edit(At(FIRST, Col("v"), Over("id", within=("id",)))))))],
+            MAXIMIZE_X,
+        ),
+        id="norm-body",
+    ),
+]
+
+
+@pytest.mark.correctness
+class TestNonFiniteEdit:
+    """A message for a NaN or an infinite value suggests the value written again where it stands, `CASE WHEN <test>
+    THEN <value> END`, whatever kind of value it is: a `when` drops its rows before any frame is computed, and so
+    moves every frame's timeline, even for a plain column. The edit makes the value NULL on the rows it fails, as
+    the oracle's `Finite` does, and the query answers as the oracle does."""
+
+    @pytest.mark.parametrize("rows, tail, written, role, model", NON_FINITE_EDITS)
+    def test_the_edit_a_message_gives_runs_and_answers_as_the_oracle_does(
+        self, decidb_cli, scope_solver, rows, tail, written, role, model
+    ):
+        refused = decidb_cli.execute_raw(_non_finite_query(rows, "x <= 10 " + tail.format(v=written)))
+        assert refused.returncode != 0 and _refusal(role, written) in refused.stderr, refused.stderr
+        test = f"NOT isnan({written})" if role == "bound" else f"isfinite({written})"
+        edit = f"CASE WHEN {test} THEN {written} END"
+        clauses, objective = model(lambda value: Finite(value, nan_only=role == "bound"))
+        _judged(
+            decidb_cli,
+            scope_solver,
+            _non_finite_query(rows, "x <= 10 " + tail.format(v=edit)),
+            table_rows(NON_FINITE, rows),
+            [Decision("x", var_type=VarType.CONTINUOUS)],
+            [X_AT_MOST_TEN] + clauses,
+            objective,
+        )
+
+    def test_a_range_counts_the_nan_it_reads(self, decidb_cli, scope_solver):
+        """COUNT reads no number: a window with a NaN in it counts it (guide §3) and no refusal follows, so the
+        bound is each window's size."""
+        rows = _with(FRAME_VALUES, "v", 3, NAN)
+        _judged(
+            decidb_cli,
+            scope_solver,
+            _non_finite_query(rows, "x <= 10 AND x <= count(from previous to next: t.v) over (t.id) MAXIMIZE sum(x)"),
+            table_rows(NON_FINITE, rows),
+            [Decision("x", var_type=VarType.CONTINUOUS)],
+            [clause(le(X, Range("count", previous(), next_(), Col("v"), EACH_ROW)))],
+            MAXIMIZE_X,
+        )

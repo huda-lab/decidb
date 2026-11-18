@@ -247,12 +247,11 @@ struct DecideFrameColumn {
 	//! VALUE, REDUCED: the frame's `else`, of the payload's type; null when it has none.
 	unique_ptr<Expression> fallback;
 	LogicalType type;
-	//! AGGREGATE: its path key and its own `per` key, into LogicalDecide::keys, the reducer as written, and the order
-	//! of the norm it was written as (LogicalDecide::FrameAggregate).
+	//! AGGREGATE: its path key and its own `per` key, into LogicalDecide::keys, and the reducer as written
+	//! (LogicalDecide::FrameAggregate).
 	idx_t key = DConstants::INVALID_INDEX;
 	idx_t class_key = DConstants::INVALID_INDEX;
 	string text;
-	string norm_order;
 };
 
 //! The values the frame selectors read, as columns after the input's, which stage 05's lowering makes of every frame

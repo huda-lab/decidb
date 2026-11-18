@@ -271,7 +271,8 @@ def test_rhs_aggregate_argument_that_is_nan_raises_without_a_row_position(decidb
         "DECIDE x(BOOL) SUCH THAT SUM(x * w) <= MIN(cap) MAXIMIZE SUM(p*x)) q"
     )
     with pytest.raises(
-        DeciDBCliError, match=r"the bound cap is NaN on some rows\. Skip those rows with 'when NOT isnan\(cap\):'\."
+        DeciDBCliError,
+        match=r"the bound cap is NaN on some rows\. Skip those rows by writing 'CASE WHEN NOT isnan\(cap\) THEN cap END' in its place\.",
     ):
         run(decidb_cli, sql, "off")
 
@@ -285,7 +286,8 @@ def test_rhs_l0_norm_reads_a_nan_body_as_invalid(decidb_cli, mode):
         "DECIDE x(BOOL) SUCH THAT SUM(x) <= norm(cap, 0) MAXIMIZE SUM(p*x)) q"
     )
     with pytest.raises(
-        DeciDBCliError, match=r"the bound cap is NaN on some rows\. Skip those rows with 'when NOT isnan\(cap\):'\."
+        DeciDBCliError,
+        match=r"the bound cap is NaN on some rows\. Skip those rows by writing 'CASE WHEN NOT isnan\(cap\) THEN cap END' in its place\.",
     ):
         run(decidb_cli, sql, mode)
 

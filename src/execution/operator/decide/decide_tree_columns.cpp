@@ -30,11 +30,11 @@
 namespace duckdb {
 
 DecideAggregateStates::DecideAggregateStates(ClientContext &context, const BoundAggregateExpression &aggregate_p,
-                                             idx_t slots, string text_p, bool rejects_nan_p)
+                                             idx_t slots)
     : aggregate(aggregate_p), allocator(BufferAllocator::Get(context)), input(aggregate.bind_info.get(), allocator),
       slot_count(slots), state_size(AlignValue(aggregate.function.state_size(aggregate.function))),
-      states(allocator.AllocateAligned(MaxValue<idx_t>(slots, 1) * state_size)), text(std::move(text_p)),
-      rejects_nan(rejects_nan_p) {
+      states(allocator.AllocateAligned(MaxValue<idx_t>(slots, 1) * state_size)),
+      carries_nan(StringUtil::Lower(aggregate.function.name) != "count"), read_nan(slots, false) {
 	// The binder admits no DISTINCT reducer, so every member is folded.
 	D_ASSERT(!aggregate.IsDistinct());
 	for (idx_t slot = 0; slot < slot_count; slot++) {
@@ -57,41 +57,20 @@ DecideAggregateStates::~DecideAggregateStates() {
 	}
 }
 
-//! Whether `values` holds a NaN at one of its `count` rows.
-static bool DecideReadsNan(Vector &values, idx_t count) {
-	const auto type = values.GetType().InternalType();
-	if (type != PhysicalType::DOUBLE && type != PhysicalType::FLOAT) {
-		return false;
-	}
-	UnifiedVectorFormat format;
-	values.ToUnifiedFormat(count, format);
-	for (idx_t i = 0; i < count; i++) {
-		const auto index = format.sel->get_index(i);
-		if (format.validity.RowIsValid(index) &&
-		    (type == PhysicalType::DOUBLE ? std::isnan(UnifiedVectorFormat::GetData<double>(format)[index])
-		                                  : std::isnan(UnifiedVectorFormat::GetData<float>(format)[index]))) {
-			return true;
-		}
-	}
-	return false;
-}
-
 void DecideAggregateStates::Update(const vector<const Vector *> &arguments, const vector<idx_t> &members,
-                                   const vector<idx_t> &slots, const Vector *read) {
-	// A NaN has no place in an order or a sum: the reducer refuses it, wherever it lies among the members.
-	if (!read && !arguments.empty()) {
-		read = arguments[0];
-	}
+                                   const vector<idx_t> &slots) {
+	// A NaN has no place in an order or a sum: the slot that reads one is NaN, wherever it lies among the members.
+	const Vector *read = arguments.empty() ? nullptr : arguments[0];
 	for (idx_t offset = 0; offset < members.size(); offset += STANDARD_VECTOR_SIZE) {
 		const auto count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, members.size() - offset);
 		SelectionVector selection(count);
 		for (idx_t i = 0; i < count; i++) {
 			selection.set_index(i, members[offset + i]);
 		}
-		if (rejects_nan && read) {
+		if (carries_nan && read) {
 			Vector values(*read, selection, count);
-			if (DecideReadsNan(values, count)) {
-				throw InvalidInputException(DecideFrameNanMessage(text));
+			for (auto entry : DecideNanEntries(values, count)) {
+				read_nan[slots[offset + entry]] = true;
 			}
 		}
 		vector<Vector> sources;
@@ -122,7 +101,7 @@ vector<Value> DecideAggregateStates::Finalize() {
 		Vector result(aggregate.return_type);
 		aggregate.function.finalize(pointers, input, result, count, 0);
 		for (idx_t i = 0; i < count; i++) {
-			values.push_back(result.GetValue(i));
+			values.push_back(read_nan[offset + i] ? DecideNanValue(aggregate.return_type) : result.GetValue(i));
 		}
 	}
 	return values;
@@ -556,7 +535,6 @@ const vector<Value> &DecideTreeColumns::Folds(idx_t reducer) {
 		Report(operand, argument, tested);
 	}
 	const auto members = FirstOfEachInstance(operand, tested);
-	const auto norm_body = tree.nodes[operand]->compiled.norm_body;
 	vector<idx_t> read;
 	vector<idx_t> slots;
 	for (idx_t e = 0; e < entries.Count(); e++) {
@@ -578,15 +556,8 @@ const vector<Value> &DecideTreeColumns::Folds(idx_t reducer) {
 		return result;
 	}
 	try {
-		// A NaN among the values is the data check's to refuse, which reads every value a G over data folds here and
-		// ranks first; a reducer over frames, which no check reads, refuses one itself, but a count,
-		// which counts it.
-		auto &over_frames = tree.frame_aggregate_nodes;
-		const bool rejects_nan = std::find(over_frames.begin(), over_frames.end(), reducer) != over_frames.end() &&
-		                         StringUtil::Lower(node.function->function.name) != "count";
-		DecideAggregateStates states(context, *node.function, slot_count, node.text, rejects_nan);
-		states.Update(values, read, slots,
-		              norm_body == DConstants::INVALID_INDEX ? nullptr : computed.programs[norm_body].values.get());
+		DecideAggregateStates states(context, *node.function, slot_count);
+		states.Update(values, read, slots);
 		result = states.Finalize();
 	} catch (std::exception &ex) {
 		errors.Add(node.value_rank, ErrorData(ex));

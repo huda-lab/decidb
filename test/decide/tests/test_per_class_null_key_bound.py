@@ -121,7 +121,7 @@ def test_a_nan_bound_on_a_class_row_still_raises(decidb_cli, shape, mode):
     rows = [row[:4] + (NAN if row[0] == 4 else row[4],) for row in ROWS if row[1] != "b" or row[0] == 4]
     with pytest.raises(
         DeciDBCliError,
-        match=r"DECIDE: the bound cap is NaN on some rows\. Skip those rows with 'when NOT isnan\(cap\):'\.",
+        match=r"DECIDE: the bound cap is NaN on some rows\. Skip those rows by writing 'CASE WHEN NOT isnan\(cap\) THEN cap END' in its place\.",
     ):
         run(decidb_cli, _sql(rows, shape), mode)
 

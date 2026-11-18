@@ -147,11 +147,9 @@ struct DecideBody {
 	vector<pair<idx_t, idx_t>> position_names;
 	//! A data check's message, a program on its hidden root; INVALID for any other node.
 	idx_t check = DConstants::INVALID_INDEX;
-	//! A G over data's operand: its function's arguments, programs on it, which the G folds per slot; and a reducer
-	//! over frames written as a norm, its written body, whose NaN its fold refuses (the norm's definition can hide one,
-	//! as SIGN reads it as 0); INVALID for any other.
+	//! A G over data's operand: its function's arguments, programs on it, which the G folds per slot; empty for any
+	//! other.
 	vector<idx_t> arguments;
-	idx_t norm_body = DConstants::INVALID_INDEX;
 	//! The rank its errors take among the stage-05 lists the body was copied from: constraints by their place, the
 	//! objective, composed clauses, then the objective's composed terms.
 	DecideErrorPhase phase = DecideErrorPhase::INVALID;

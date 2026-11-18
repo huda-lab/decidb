@@ -428,6 +428,12 @@ private:
 	//! column execution computes after the frames (DecideFrameColumn::Kind::AGGREGATE). The reducers inside its
 	//! argument are columns first, as for any reducer.
 	unique_ptr<Expression> MakeFrameAggregate(const BoundAggregateExpression &reducer, const DecideReducerPath &path) {
+		// A NaN its argument reads makes the reducer's value NaN, which the value's reader refuses; a norm's value can
+		// hide it (an L0 count's SIGN reads it as 0), so its body is checked as a reducer over data's is, at the rows
+		// the reducer reads.
+		if (DecideWrittenNormBody(reducer)) {
+			AddValueCheck(ArgumentMessage(reducer, reducer.children[0].get(), Reads(path, reducer.filter.get()), path));
+		}
 		auto marker = reducer.Copy();
 		auto &aggregate = marker->Cast<BoundAggregateExpression>();
 		for (auto &child : aggregate.children) {
@@ -442,7 +448,6 @@ private:
 			record.class_key = decide.keyed_scopes[scope_idx].key;
 		}
 		record.text = Written(reducer);
-		ExtractDecideTagPayload(reducer.GetAlias(), WRITTEN_NORM_TAG_PREFIX, record.norm_order);
 		auto alias = MakeFrameAggregateTag(decide.frame_aggregates.size());
 		if (TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx)) {
 			AddDecideTag(alias, string(TREE_REDUCER_SCOPE_TAG_PREFIX) + to_string(scope_idx) + "__");

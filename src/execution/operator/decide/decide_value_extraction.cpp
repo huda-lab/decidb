@@ -132,6 +132,39 @@ static bool IsFiniteOnRow(const DecideValueInputs &inputs, const Expression &inp
 	return value.IsNull() || std::isfinite(value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>());
 }
 
+template <class T>
+static void CollectNan(Vector &values, idx_t count, vector<idx_t> &entries) {
+	UnifiedVectorFormat format;
+	values.ToUnifiedFormat(count, format);
+	auto data = UnifiedVectorFormat::GetData<T>(format);
+	for (idx_t i = 0; i < count; i++) {
+		const auto index = format.sel->get_index(i);
+		if (format.validity.RowIsValid(index) && std::isnan(data[index])) {
+			entries.push_back(i);
+		}
+	}
+}
+
+vector<idx_t> DecideNanEntries(Vector &values, idx_t count) {
+	vector<idx_t> entries;
+	switch (values.GetType().InternalType()) {
+	case PhysicalType::DOUBLE:
+		CollectNan<double>(values, count, entries);
+		break;
+	case PhysicalType::FLOAT:
+		CollectNan<float>(values, count, entries);
+		break;
+	default:
+		break;
+	}
+	return entries;
+}
+
+Value DecideNanValue(const LogicalType &type) {
+	const double nan = std::numeric_limits<double>::quiet_NaN();
+	return type.id() == LogicalTypeId::FLOAT ? Value::FLOAT(float(nan)) : Value::DOUBLE(nan);
+}
+
 void ThrowInvalidValue(const ValueSource &source, idx_t row) {
 	auto refuse = [&](DecideValueRole role, const Expression &value) {
 		return InvalidInputException(DecideInvalidValueMessage(role, RenderDecideSource(value, source.names)));

@@ -61,14 +61,14 @@ INFEASIBLE = (
 def _coefficient(value):
     return (
         f"Invalid Input Error: DECIDE: {value} is NaN or infinite on some rows. "
-        f"Skip those rows with 'when isfinite({value}):'."
+        f"Skip those rows by writing 'CASE WHEN isfinite({value}) THEN {value} END' in its place."
     )
 
 
 def _bound(value):
     return (
         f"Invalid Input Error: DECIDE: the bound {value} is NaN on some rows. "
-        f"Skip those rows with 'when NOT isnan({value}):'."
+        f"Skip those rows by writing 'CASE WHEN NOT isnan({value}) THEN {value} END' in its place."
     )
 
 
@@ -394,8 +394,9 @@ def test_within_a_phase_the_first_written_raises(decidb_cli, one, other):
 
 FRAME_VALUE = Fault(
     "frame_value",
-    "Invalid Input Error: DECIDE: min(from first to last: t.fval) over (t.q within t.tl) reads a NaN on some rows. "
-    "Skip those rows with a 'when' on the column it reads.",
+    "Invalid Input Error: DECIDE: the bound min(from first to last: t.fval) over (t.q within t.tl) is NaN on some "
+    "rows. Skip those rows by writing 'CASE WHEN NOT isnan(min(from first to last: t.fval) over (t.q within t.tl)) "
+    "THEN min(from first to last: t.fval) over (t.q within t.tl) END' in its place.",
     clause="x <= min(from first to last: t.fval) over (t.q within t.tl)",
     cells=(("fval", 0, NAN),),
 )

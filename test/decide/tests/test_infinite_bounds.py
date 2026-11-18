@@ -286,7 +286,7 @@ def test_infinite_value_inside_abs_is_named(decidb_cli):
         SUCH THAT x <= 5
         MAXIMIZE SUM(ABS(x - big))
     """,
-        match=r"DECIDE: big is NaN or infinite on some rows\. Skip those rows with 'when isfinite\(big\):'\.",
+        match=r"DECIDE: big is NaN or infinite on some rows\. Skip those rows by writing 'CASE WHEN isfinite\(big\) THEN big END' in its place\.",
     )
 
 

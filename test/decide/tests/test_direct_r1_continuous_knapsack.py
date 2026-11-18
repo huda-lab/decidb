@@ -2197,7 +2197,7 @@ def test_r1_source_is_one_copy_read_four_times_when_the_copy_fits(decidb_cli):
 # messages as codes (DirectEncodeMessage) and the least text wins, whichever row comes first: "a is NaN or infinite" is
 # less than "z is NaN or infinite", which the plan meets first in the coefficient, and the clause's "computes a number
 # too large" (an overflow of z + a) is less than both, but for the one of `z`.
-_A_IS_BAD = "DECIDE: a is NaN or infinite on some rows. Skip those rows with 'when isfinite(a):'."
+_A_IS_BAD = "DECIDE: a is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(a) THEN a END' in its place."
 _TOO_LARGE = "DECIDE: SUM(z * x + a * x) by (g) <= 100 computes a number too large for a DOUBLE. Scale its data down."
 TWO_BAD_ROWS = {
     "z_infinite_then_a_nan": ("(1, 1, 'Infinity'::DOUBLE, 1.0::DOUBLE), (2, 1, 1.0, 'NaN'::DOUBLE)", _A_IS_BAD),

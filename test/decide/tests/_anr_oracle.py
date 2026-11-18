@@ -161,6 +161,16 @@ class Col(Expr):
 
 
 @dataclass(frozen=True, eq=False)
+class Finite(Expr):
+    """``CASE WHEN isfinite(operand) THEN operand END``, or with ``nan_only`` ``CASE WHEN NOT isnan(operand) THEN operand
+    END``: the operand's value, and no value where it is a NaN or an infinity (a NaN alone for ``nan_only``). The edit
+    DeciDB's message suggests, written where the value stands."""
+
+    operand: Expr
+    nan_only: bool = False
+
+
+@dataclass(frozen=True, eq=False)
 class Var(Expr):
     """A decision, read through its class at the row."""
 
@@ -467,7 +477,7 @@ def _columns_of(expr) -> list[Col]:
         parts = expr.terms
     elif isinstance(expr, Mul):
         parts = (expr.left, expr.right)
-    elif isinstance(expr, Abs):
+    elif isinstance(expr, (Abs, Finite)):
         parts = (expr.operand,)
     else:
         return []
@@ -681,6 +691,8 @@ class AnrModel:
             return ("mul", self._fields(node.left, t, kept), self._fields(node.right, t, kept))
         if isinstance(node, Abs):
             return ("abs", self._fields(node.operand, t, kept))
+        if isinstance(node, Finite):
+            return ("finite", self._fields(node.operand, t, kept))
         raise TypeError(f"unexpected node {node!r}")
 
     def _frame_fields(self, node, t, kept) -> tuple:
@@ -708,7 +720,7 @@ class AnrModel:
             return all(self._is_data(term) for term in expr.terms)
         if isinstance(expr, Mul):
             return self._is_data(expr.left) and self._is_data(expr.right)
-        if isinstance(expr, Abs):
+        if isinstance(expr, (Abs, Finite)):
             return self._is_data(expr.operand)
         return False
 
@@ -720,7 +732,7 @@ class AnrModel:
             return all(self._is_pure(term) for term in expr.terms)
         if isinstance(expr, Mul):
             return self._is_pure(expr.left) and self._is_pure(expr.right)
-        if isinstance(expr, Abs):
+        if isinstance(expr, (Abs, Finite)):
             return self._is_pure(expr.operand)
         return False
 
@@ -731,7 +743,7 @@ class AnrModel:
             return [frame for term in expr.terms for frame in self._direct_frames(term)]
         if isinstance(expr, Mul):
             return self._direct_frames(expr.left) + self._direct_frames(expr.right)
-        if isinstance(expr, Abs):
+        if isinstance(expr, (Abs, Finite)):
             return self._direct_frames(expr.operand)
         return []
 
@@ -793,6 +805,12 @@ class AnrModel:
             if _is_constant(right):
                 return _scaled(left, right.get(CONSTANT, 0.0))
             raise Unsupported("a product of decisions")
+        if isinstance(expr, Finite):
+            operand = self._form(expr.operand, i, kept)
+            if operand is ABSENT or not _is_constant(operand):
+                return operand
+            number = operand.get(CONSTANT, 0.0)
+            return ABSENT if math.isnan(number) or (math.isinf(number) and not expr.nan_only) else operand
         if isinstance(expr, Abs):
             operand = self._form(expr.operand, i, kept)
             if operand is ABSENT:
@@ -846,8 +864,10 @@ class AnrModel:
                 _add_into(total, value, 1.0 if kind == "sum" else 1.0 / len(values))
             return total
         if all(_is_constant(value) for value in values):
-            pick = max if kind == "max" else min
-            return {CONSTANT: pick(value.get(CONSTANT, 0.0) for value in values)}
+            numbers = [value.get(CONSTANT, 0.0) for value in values]
+            if any(math.isnan(number) for number in numbers):
+                return {CONSTANT: math.nan}  # a NaN read is the value, as SQL's SUM has it (MIN would pass over it)
+            return {CONSTANT: (max if kind == "max" else min)(numbers)}
         distinct = {_freeze(value) for value in values}
         if len(distinct) == 1:
             return _thaw(next(iter(distinct)))

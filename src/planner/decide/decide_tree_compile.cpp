@@ -345,11 +345,6 @@ public:
 		for (auto &argument : operand_node.arguments) {
 			operand_node.compiled.arguments.push_back(AddValue(operand, *argument, "a data reducer's argument"));
 		}
-		// A reducer over frames, which no data check reads, refuses a NaN its norm's body reads itself.
-		auto &over_frames = tree.frame_aggregate_nodes;
-		if (node.body && std::find(over_frames.begin(), over_frames.end(), index) != over_frames.end()) {
-			operand_node.compiled.norm_body = AddValue(operand, *node.body, "a norm's body");
-		}
 	}
 
 private:

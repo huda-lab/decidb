@@ -1515,9 +1515,6 @@ private:
 			entry.body = entry.arguments[0]->Copy();
 		}
 		const Expression *norm_body = DecideWrittenNormBody(aggregate);
-		if (frame_aggregate < op.frame_aggregates.size()) {
-			norm_body = DecideNormBody(aggregate, op.frame_aggregates[frame_aggregate].norm_order);
-		}
 		if (norm_body && !node.decision_value) {
 			// G's original data body is also the value validated before its
 			// bound definition (SIGN for L0 can hide a NaN).

@@ -214,8 +214,8 @@ def test_a1_invalid_coefficient_names_the_value_the_user_wrote(decidb_cli, bad):
         """
         return _raw(decidb_cli, sql, mode=mode).stderr
 
-    skip_w = "DECIDE: w is NaN or infinite on some rows. Skip those rows with 'when isfinite(w):'."
-    skip_two_w = "DECIDE: 2 * w is NaN or infinite on some rows. Skip those rows with 'when isfinite(2 * w):'."
+    skip_w = "DECIDE: w is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(w) THEN w END' in its place."
+    skip_two_w = "DECIDE: 2 * w is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(2 * w) THEN 2 * w END' in its place."
     for mode in ("require", "off"):
         assert skip_w in error("w * x", "s * x", mode), mode
         assert skip_w in error("x", "w * x", mode), mode
@@ -580,7 +580,7 @@ def test_r1_invalid_number_names_the_value_the_user_wrote(decidb_cli, bad):
         """
         return _raw(decidb_cli, sql, mode=mode).stderr
 
-    skip_b = "DECIDE: b is NaN or infinite on some rows. Skip those rows with 'when isfinite(b):'."
+    skip_b = "DECIDE: b is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(b) THEN b END' in its place."
     for mode in ("require", "off"):
         assert skip_b in error("b", "a", mode), mode
         assert skip_b in error("a", "b", mode), mode
@@ -729,17 +729,17 @@ def test_n1_a_weight_errors_are_the_solvers_word_for_word(decidb_cli, w, limit, 
         (
             "'NaN'",
             "MINIMIZE SUM(POWER(c - v, 2))",
-            "DECIDE: v is NaN or infinite on some rows. Skip those rows with 'when isfinite(v):'.",
+            "DECIDE: v is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(v) THEN v END' in its place.",
         ),
         (
             "'Infinity'",
             "MINIMIZE SUM(POWER(v - c, 2))",
-            "DECIDE: v is NaN or infinite on some rows. Skip those rows with 'when isfinite(v):'.",
+            "DECIDE: v is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(v) THEN v END' in its place.",
         ),
         (
             "'NaN'",
             "MINIMIZE SUM(POWER(c - 2 * v, 2))",
-            "DECIDE: 2 * v is NaN or infinite on some rows. Skip those rows with 'when isfinite(2 * v):'.",
+            "DECIDE: 2 * v is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(2 * v) THEN 2 * v END' in its place.",
         ),
         (
             "1e308",
@@ -773,7 +773,7 @@ def test_a2_errors_are_the_solvers_word_for_word(decidb_cli, v, decide, message)
         # A NaN on a row with a class raises the query-wide form's text.
         (
             "(1, 'a', 2.0), (2, 'a', 'NaN'::DOUBLE), (3, 'b', 3.0)",
-            "DECIDE: v is NaN or infinite on some rows. Skip those rows with 'when isfinite(v):'.",
+            "DECIDE: v is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(v) THEN v END' in its place.",
         ),
         # A row with a NULL key has no decision, so its value is not read: no error on either path.
         (
@@ -826,19 +826,19 @@ def test_a2_a_nan_data_bound_is_the_solvers_word_for_word(decidb_cli, declaratio
             "per ()",
             "SUM(w * POWER(c - v, 2))",
             "(1, 'a', 2.0, 1.0), (2, 'a', 3.0, 'NaN'::DOUBLE)",
-            "DECIDE: w is NaN or infinite on some rows. Skip those rows with 'when isfinite(w):'.",
+            "DECIDE: w is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(w) THEN w END' in its place.",
         ),
         (
             "per k",
             "SUM(w * POWER(c - v, 2))",
             "(1, 'a', 2.0, 1.0), (2, 'b', 3.0, 'Infinity'::DOUBLE)",
-            "DECIDE: w is NaN or infinite on some rows. Skip those rows with 'when isfinite(w):'.",
+            "DECIDE: w is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(w) THEN w END' in its place.",
         ),
         (
             "per ()",
             "SUM((w + 1) * POWER(c - v, 2))",
             "(1, 'a', 2.0, 1.0), (2, 'a', 3.0, 'NaN'::DOUBLE)",
-            "DECIDE: w + 1 is NaN or infinite on some rows. Skip those rows with 'when isfinite(w + 1):'.",
+            "DECIDE: w + 1 is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(w + 1) THEN w + 1 END' in its place.",
         ),
         # A row with no class is never read: no error on either path.
         ("per k", "SUM(w * POWER(c - v, 2))", "(1, 'a', 2.0, 1.0), (2, NULL, 3.0, 'NaN'::DOUBLE)", None),
@@ -975,7 +975,10 @@ def _s1_source_bound_error(decidb_cli, cap_type, cap):
 def test_s1_source_bound_error_for_a_column_is_the_solvers(decidb_cli):
     """A bound that is one column raises the solver's NaN error."""
     direct, solver = _s1_source_bound_error(decidb_cli, "DOUBLE", "'NaN'")
-    assert "DECIDE: the bound cap is NaN on some rows. Skip those rows with 'when NOT isnan(cap):'." in direct, direct
+    assert (
+        "DECIDE: the bound cap is NaN on some rows. Skip those rows by writing 'CASE WHEN NOT isnan(cap) THEN cap END' in its place."
+        in direct
+    ), direct
     assert solver == direct
 
 
@@ -1025,7 +1028,8 @@ def test_r1_budget_limit_error_is_the_solvers(decidb_cli):
     for lim_type in ("FLOAT", "DOUBLE"):
         direct, solver = error(lim_type, "'NaN'")
         assert (
-            "DECIDE: the bound lim is NaN on some rows. Skip those rows with 'when NOT isnan(lim):'." in direct
+            "DECIDE: the bound lim is NaN on some rows. Skip those rows by writing 'CASE WHEN NOT isnan(lim) THEN lim END' in its place."
+            in direct
         ), direct
         assert solver == direct
 

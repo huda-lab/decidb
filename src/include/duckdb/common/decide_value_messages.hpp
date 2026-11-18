@@ -35,7 +35,10 @@ enum class DecideValueRole : uint8_t { COEFFICIENT, BOUND, TOO_LARGE, CONSTANT }
 
 //! The error for a NaN or infinite value, the one text every site that refuses one raises. `written` is the value as
 //! the user wrote it (the cut text of the query, or the tree rendered where no text was cut). The message gives the
-//! smallest edit, a `when` that skips the rows, and names no row: a row's position in the input depends on the scan.
+//! smallest edit: the value written again where it stands as `CASE WHEN <test> THEN <value> END`, which is NULL where
+//! the test fails and so skips that row's instance. A `when` would drop the rows before any frame is computed and
+//! shift every frame's timeline, so the edit stays in place, and it reads the same for every kind of value. It names
+//! no row: a row's position in the input depends on the scan.
 //! For TOO_LARGE, `written` is the clause (or the objective) the sum belongs to, and the edit is to scale its data.
 inline string DecideInvalidValueMessage(DecideValueRole role, const string &written) {
 	if (role == DecideValueRole::TOO_LARGE) {
@@ -45,11 +48,12 @@ inline string DecideInvalidValueMessage(DecideValueRole role, const string &writ
 		return "DECIDE: " + written + " is NaN or infinite. Use a finite value.";
 	}
 	if (role == DecideValueRole::BOUND) {
-		return "DECIDE: the bound " + written + " is NaN on some rows. Skip those rows with 'when NOT isnan(" +
-		       written + "):'.";
+		return "DECIDE: the bound " + written +
+		       " is NaN on some rows. Skip those rows by writing 'CASE WHEN NOT isnan(" + written + ") THEN " +
+		       written + " END' in its place.";
 	}
-	return "DECIDE: " + written + " is NaN or infinite on some rows. Skip those rows with 'when isfinite(" + written +
-	       "):'.";
+	return "DECIDE: " + written + " is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(" +
+	       written + ") THEN " + written + " END' in its place.";
 }
 
 //! The error of a model with no feasible point, and of one whose objective improves without end. Both paths raise
@@ -67,12 +71,6 @@ inline string DecideUnboundedMessage(bool diagnose_runs) {
 	return diagnose_runs ? "DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see which decision "
 	                       "needs a bound."
 	                     : "DECIDE optimization is unbounded.";
-}
-
-//! The error for a NaN a frame's reducer reads (`written`, the reducer or range as written): an error wherever its
-//! aggregate would pass over it, as SQL's MIN does. A frame cannot stand in a `when`, so the edit names the column.
-inline string DecideFrameNanMessage(const string &written) {
-	return "DECIDE: " + written + " reads a NaN on some rows. Skip those rows with a 'when' on the column it reads.";
 }
 
 //! The objective as a TOO_LARGE message names it: the sense, then the objective as EXPLAIN prints it

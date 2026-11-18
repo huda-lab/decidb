@@ -85,6 +85,16 @@ struct ValueSource {
 //! coefficient as written is the one value it is computed from.
 [[noreturn]] void ThrowInvalidValue(const ValueSource &source, idx_t row = 0);
 
+//! The entries among the first `count` of `values` that hold a NaN: none for a NULL, and none for a type that holds no
+//! NaN. A fold over frames (a range's window, a reducer over frames) reads a NaN through these, and its value is NaN
+//! (DecideNanValue), which the value's reader refuses with the one message (ThrowInvalidValue): SQL's MIN would pass
+//! over it.
+vector<idx_t> DecideNanEntries(Vector &values, idx_t count);
+
+//! What a fold that read a NaN gives, in the type its aggregate returns: a NaN, for the FLOAT or DOUBLE that every
+//! aggregate of a value that holds a NaN returns.
+Value DecideNanValue(const LogicalType &type);
+
 //! Vectorized extraction of a chunk-result column into a vector<double>, multiplied by `sign`.
 //! Throws InvalidInputException on a number the model cannot read, naming `source`. A NULL reads
 //! 0 and marks its row in `null_rows`: the caller skips what it reaches (deck p. 50). With

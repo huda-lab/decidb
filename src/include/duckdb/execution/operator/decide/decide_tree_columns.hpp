@@ -31,18 +31,14 @@ struct KeyedMapping;
 //! The tree's columns fold a data reducer here (DecideTreeColumns::Folds).
 class DecideAggregateStates {
 public:
-	//! `slots` states of `aggregate`; `text` is the reducer as written, which a NaN it reads is named by, unless
-	//! `rejects_nan` is false: a count reads none of its values, and the columns leave a NaN to the data check, which
-	//! ranks first (DecideTreeColumns::Folds). A NaN reaches a fold that refuses it only where no check reads it: a
-	//! reducer over frames.
-	DecideAggregateStates(ClientContext &context, const BoundAggregateExpression &aggregate, idx_t slots, string text,
-	                      bool rejects_nan);
+	//! `slots` states of `aggregate`. A slot that reads a NaN is NaN, whatever the aggregate: SQL's SUM gives one, and
+	//! its MIN passes over it. Its reader refuses it (ThrowInvalidValue), a value over data first by its data check.
+	//! A count counts a NaN.
+	DecideAggregateStates(ClientContext &context, const BoundAggregateExpression &aggregate, idx_t slots);
 	~DecideAggregateStates();
 	//! Folds member i, entry `members[i]` of each argument's values over the operand's entries, into the state of slot
-	//! `slots[i]`. A NaN of what it reads (`read`, its first argument when null: a norm's body otherwise) raises the
-	//! reducer's message.
-	void Update(const vector<const Vector *> &arguments, const vector<idx_t> &members, const vector<idx_t> &slots,
-	            const Vector *read = nullptr);
+	//! `slots[i]`. A NaN of its first argument makes the slot NaN.
+	void Update(const vector<const Vector *> &arguments, const vector<idx_t> &members, const vector<idx_t> &slots);
 	//! Each slot's value; a slot that folded no member holds what the aggregate gives no rows.
 	vector<Value> Finalize();
 
@@ -53,8 +49,9 @@ private:
 	idx_t slot_count;
 	idx_t state_size;
 	data_ptr_t states;
-	string text;
-	bool rejects_nan;
+	const bool carries_nan;
+	//! Per slot, whether a member it folded held a NaN.
+	vector<bool> read_nan;
 };
 
 //! `decide_debug`'s `inject=node:data:value`, a test's stand-in for a node's data value, which shows a parent reads the
