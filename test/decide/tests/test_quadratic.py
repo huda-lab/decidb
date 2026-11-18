@@ -2006,6 +2006,53 @@ def test_qp_entity_scoped_objective(decidb_cli, duckdb_conn, oracle_solver, perf
     )
 
 
+@pytest.mark.quadratic
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_qp_objective_over_a_data_reducer(decidb_cli, duckdb_conn, oracle_solver):
+    """MINIMIZE SUM(POWER(x - avg(score) by (grp), 2)): the data reducer is a constant per row, so the
+    objective is the flat QP over each row's group average. A SUM(x) cap forces a trade-off."""
+    data_sql = """
+        SELECT 1 AS id, 'A' AS grp, 2.0 AS score UNION ALL
+        SELECT 2, 'A', 4.0 UNION ALL
+        SELECT 3, 'B', 6.0 UNION ALL
+        SELECT 4, 'B', 12.0 UNION ALL
+        SELECT 5, 'C', 5.0
+    """
+    sql = f"""
+        WITH data AS ({data_sql})
+        SELECT id, ROUND(x, 4) AS x FROM data
+        DECIDE x(REAL)
+        SUCH THAT x >= 0 AND x <= 20 AND SUM(x) <= 20
+        MINIMIZE SUM(POWER(x - avg(score) by (grp), 2))
+    """
+    rows, cols = decidb_cli.execute(sql)
+    data = duckdb_conn.execute(
+        f"""
+        SELECT CAST(id AS BIGINT), CAST(avg(score) OVER (PARTITION BY grp) AS DOUBLE)
+        FROM ({data_sql}) ORDER BY id
+    """
+    ).fetchall()
+    oracle_solver.create_model("qp_objective_over_a_data_reducer")
+    names = [f"x_{row[0]}" for row in data]
+    for name in names:
+        oracle_solver.add_variable(name, VarType.CONTINUOUS, lb=0.0, ub=20.0)
+    oracle_solver.add_constraint({name: 1.0 for name in names}, "<=", 20.0, name="cap")
+    oracle_solver.set_quadratic_objective(
+        {names[i]: -2.0 * data[i][1] for i in range(len(data))},
+        {(name, name): 1.0 for name in names},
+        ObjSense.MINIMIZE,
+    )
+    id_idx, x_idx = cols.index("id"), cols.index("x")
+    target = {row[0]: row[1] for row in data}
+    _solve_and_compare(
+        oracle_solver,
+        rows,
+        cols,
+        lambda rs, cs: sum((float(r[x_idx]) - target[r[id_idx]]) ** 2 - target[r[id_idx]] ** 2 for r in rs),
+    )
+
+
 # ---------------------------------------------------------------------------
 # HiGHS-forced rejection tests (require DECIDB_FORCE_SOLVER=highs)
 # ---------------------------------------------------------------------------

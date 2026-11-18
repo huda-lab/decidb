@@ -1260,14 +1260,15 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 	return FinalizeBoundProvenance(std::move(result));
 }
 
-//! Tags every reducer over decisions in `expr` that holds another reducer -- the outermost
+//! Tags every reducer over decisions in `expr` that holds another reducer over decisions -- the outermost
 //! of each nest -- for the value rewrite: in the objective it is a helper decision, and so
-//! is every reducer inside it (D81).
-static void TagNestedObjectiveReducers(Expression &expr, idx_t decide_index) {
+//! is every reducer inside it (D81). A reducer over data alone is a value per row: it stays in the objective's terms,
+//! as a constraint's does, so a body that squares around it is the objective's own quadratic.
+static void TagNestedObjectiveReducers(const DecideCanonicalizer &canonicalizer, Expression &expr, idx_t decide_index) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		auto &reducer = expr.Cast<BoundAggregateExpression>();
 		if (!reducer.children.empty() && BoundExpressionReferencesDecide(reducer, decide_index) &&
-		    DecideCanonicalizer::ContainsReducer(*reducer.children[0]) &&
+		    canonicalizer.ContainsDecisionReducer(*reducer.children[0]) &&
 		    !HasDecideTag(reducer.GetAlias(), VALUE_REWRITE_TAG)) {
 			auto alias = reducer.GetAlias();
 			AddDecideTag(alias, VALUE_REWRITE_TAG);
@@ -1275,8 +1276,8 @@ static void TagNestedObjectiveReducers(Expression &expr, idx_t decide_index) {
 		}
 		return;
 	}
-	ExpressionIterator::EnumerateChildren(expr,
-	                                      [&](Expression &child) { TagNestedObjectiveReducers(child, decide_index); });
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](Expression &child) { TagNestedObjectiveReducers(canonicalizer, child, decide_index); });
 }
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjective(const Expression &objective,
@@ -1366,7 +1367,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 	}
 	// A reducer holding a reducer takes the value rewrite, as in a constraint: the shape is
 	// decided here, once, and the rewrite reads the tag.
-	TagNestedObjectiveReducers(*result, decide_index);
+	TagNestedObjectiveReducers(*this, *result, decide_index);
 	return result;
 }
 
