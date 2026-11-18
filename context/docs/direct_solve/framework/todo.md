@@ -45,11 +45,11 @@ solver path answers those queries, so none of them is wrong, only slower.
   row and takes 1.8 times the hand plan's CPU for `s3_global`; a shared row stage with an aggregate joined back is a
   second plan shape; DuckDB's one-thread `OVER ()` keeps table order for other queries. **Ruling (owner, 2026-11-11).**
   Not done either: reading `SUM(c*x) op B`, the coefficients adding up to a constant c other than 1 or -1, as the
-  count `SUM(x) op B/c` (FRM-20). The solver path answers it correctly, a user who means a count writes `SUM(x)`, and
+  count `SUM(x) op B/c`. The solver path answers it correctly, a user who means a count writes `SUM(x)`, and
   the rules' checks for 1 or -1 are a fixed list (the sign). Dividing by c brings a rounding edge (`SUM(0.1*x) <= 0.3`
   gives 2.9999999999999996) that needs a decline of its own; in the shared canonicalizer the division also moves the
   solver's rows, tolerance and diagnostics. **Ruling (owner, 2026-11-12).** Not done either: a pass after the rules that propagates
-  the constants a rule lays out as columns and simplifies the expressions over them (FRM-23, built and measured). Every
+  the constants a rule lays out as columns and simplifies the expressions over them (built and measured). Every
   figure stayed within noise (`n1` 1.22 against 1.21, `a1` 1.12 against 1.08, `a2` 1.15 against 1.14), and it cannot
   replace a literal the rule builds with: a scoped rule (a `when`, a `by` key or a `per`) masks each raw value to NULL
   on the rows outside a ball (`DirectOnKeptRows`), so a constant becomes a CASE over a column that no pass folds;

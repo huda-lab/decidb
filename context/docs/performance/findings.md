@@ -246,7 +246,7 @@ interleaved runs beside other work (load 8-18, single spans swing up to 3x).
   the whole buffer each time: quadratic in the clause's rows. d1 (1M-row join, `per l.l_orderkey` over 250k kept rows)
   passing, three runs each (load 6-10): 6.2 s with that reserve (5 s in `assembly.implied_bounds`), 0.98 s without.
   Q1, Q4 and P4 are too small to show it.
-- **Folding a constant subtree alone saves nothing on a direct plan (PERF-16).** DuckDB folds constants before the
+- **Folding a constant subtree alone saves nothing on a direct plan.** DuckDB folds constants before the
   DECIDE optimizer runs, so the trees a direct rule builds start unfolded. A fold over the finished direct plan
   (`ExpressionRewriter` with `ConstantFoldingRule`, after `Apply`) folds them (`CAST(100 AS DOUBLE)` → `100.0`) and
   saves nothing: on 1M lineitem rows, medians of 9, A1 0.119 → 0.118 s and 0.111 → 0.111 s, R1 0.372 → 0.376 s and 0.315

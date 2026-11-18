@@ -142,8 +142,8 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   Neither pass changes a value or an error: each rule is one DuckDB applies to any query. What they remove is per-row
   work a constant decides (a CASE on a constant flag, an addition of a seed, a multiplication by 1.0). Measured at
   `sf=1`, the rewriter alone lowers the cost of the row-side projections by about a tenth. Folding a constant subtree
-  alone saves nothing, since DuckDB evaluates one once per chunk (`../../performance/findings.md`, PERF-16). The float
-  identities the rewriter needs here, and the fix to its CASE rule, are in
+  alone saves nothing, since DuckDB evaluates one once per chunk (`../../performance/findings.md` § Measured design
+  choices). The float identities the rewriter needs here, and the fix to its CASE rule, are in
   [architecture.md](../../pipeline/architecture.md) § 1.
 - **Runtime checks.** `direct_runtime_checks.hpp` holds the predicates that raise an error while the plan runs, and
   their messages: `DirectErrorPredicate` (a BOOLEAN that raises a given message, fixed or computed per row),

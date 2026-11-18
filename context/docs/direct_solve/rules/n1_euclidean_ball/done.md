@@ -185,10 +185,10 @@ does not.
 | C++ `[decidb]` | N1's applicability condition: 36 forms that apply, and a case for each decline branch; no two rules apply to one N1, S1, A1 or R1 shape |
 
 Branch coverage at `73b52ab1d1` (`make decide-coverage`): the tests reach 161 of the rule's 164 arms. The three left are
-a limit input with no argument (`COUNT(*)`, two arms) and a square on some rows beside a part with no linear term
-(`../../framework/todo.md` § TEST-2). No existing test is pinned to `off`, and none needs to be: logging the rule's
-`Apply` over the suite, no test outside this rule's own (`-k "not n1"`) reaches N1 under `auto`. Their quadratic limits
-have a bound beside them, so N1 declines, or they force a backend.
+a limit input with no argument (`COUNT(*)`, two arms) and a square on some rows beside a part with no linear term. No
+existing test is pinned to `off`, and none needs to be: logging the rule's `Apply` over the suite, no test outside this
+rule's own (`-k "not n1"`) reaches N1 under `auto`. Their quadratic limits have a bound beside them, so N1 declines, or
+they force a backend.
 
 The objective tolerance (5e-6 relative) and the ball tolerances (1e-7 on `off`, 1e-14 on `require`) are measured on these
 cases and stated in the test file. They are that file's own.
