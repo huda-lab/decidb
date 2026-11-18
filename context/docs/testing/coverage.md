@@ -648,12 +648,12 @@ MAX} and inner ∈ {SUM, MIN, MAX, AVG}: `sum(per k: sum(e) by (k))` equal to th
 groups, `max(per k: avg(...))` and `min(per k: avg(...))`, the two-level form under a
 `when` in front, under a unary minus, a factor on either side and a divisor
 (`test_two_level_under_a_factor`), a single class, and hard inner MIN/MAX over `power(...)` (Gurobi).
-`max(per g: max(c * x) by (g))` with mixed-sign coefficients is in `test_min_max.py`.
+`max(per g: max(c * x) by (g))` with mixed-sign coefficients is in `test_min_max.py`. An outer `avg` over the classes,
+a `when` in either reducer and a third level are in
+`test_scope_objective.py::test_a_former_two_level_refusal_answers`.
 
 #### Error cases
 
-- An outer AVG over the classes is refused ("not supported yet") —
-  `test_scope_explain_diagnose.py::test_an_outer_avg_over_the_classes_is_refused`.
 - The removed spellings of a grouped constraint and of a grouped objective are
   refused by the parser (`../language/errors.md` §3) — `test_scope_removed_syntax.py`.
 

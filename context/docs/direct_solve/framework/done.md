@@ -1,8 +1,8 @@
 # Shared engine — what exists today
 
-Verified on 2026-11-09 at `c1c603746f`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
-serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,670 assertions in 89 cases. Design:
-`../architecture/`.
+Latest full run, 2026-11-18: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off, serializer,
+highs) 8,833 passed; C++ `build/release/test/unittest "[decidb]"` 11,549 assertions in 115 cases. It is the baseline for
+every direct-solve task and rule. Design: `../architecture/`.
 
 ## What it does
 
@@ -17,7 +17,9 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   per class and variant, D70, which the group's tightest bound covers), the objective, and the row checks the plan must
   run (`row_checks`: the bound-side rewrite's value checks). A key element that is NULL puts its
   row in no group (D5), except a relation column, where NULL is a value. Building the IR never throws; what it cannot
-  model is not proved (`DirectIR::status` for the whole IR). No IR node is kept that no rule reads.
+  model is not proved (`DirectIR::status` for the whole IR). An objective reducer with a `by` key carries a signature,
+  which the front end does not prove, so no rule is offered one and no rule checks an objective part's `by`. No IR
+  node is kept that no rule reads.
 - **Rule interface.** `CheckCondition`, `Apply` and a fixed `Summary()` line for `EXPLAIN`, plus a shared Map step that
   checks the slot map. Rules are listed in `direct_registry.cpp`; a test seam replaces the list per connection. The
   rule driver first checks that the front end read the whole IR (`DirectIRIsReadable`: every

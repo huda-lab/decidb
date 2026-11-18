@@ -907,12 +907,13 @@ How the engine works: [diagnose.md](diagnose.md) and `../diagnostics/`.
 `EXPLAIN`, `EXPLAIN ANALYZE` and `EXPLAIN (FORMAT JSON)` work on a DECIDE query. The DECIDE node lists the declared
 variables, the objective and the constraints. Each clause leads with the SQL as written; indented lines follow only
 when the model differs: `≡` for the canonical form, `↳` for what each rewrite made of it
-(`abs(ship - 20) becomes an auxiliary variable`, `sum(ship) by (D.region) becomes a helper decision per group`) and
+(`abs(ship - 20) becomes a helper decision`, `sum(ship) by (D.region) becomes a helper decision per group`) and
 the rows the solver receives. A helper prints as the expression it stands for, never an internal name; the bound
 of a `norm(e, 0)` derived from data prints as `M`. `EXPLAIN` plans without solving; `EXPLAIN ANALYZE` solves and adds
 actual rows and timing, and under a clause what the data made of it: a `↳` line counting the variants of its classes
 (§7.1, D71), one counting the instances it skipped for having no value (§7.4), and one for each helper decision written
-where it is read, with no column (`↳ sum(t.w * x) by (t.product) is written where it is read, with no column`; §6.4,
+where it is read, with no helper decision (`↳ sum(t.w * x) by (t.product) is written where it is read, with no helper
+decision`; §6.4,
 D89), in place of the plan's line saying it becomes a helper decision.
 
 **Echo.** EXPLAIN, DIAGNOSE and messages quote a clause as typed (case, spacing and comments as written), with the

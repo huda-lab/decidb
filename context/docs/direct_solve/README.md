@@ -69,6 +69,7 @@ The general rules are in [../README.md](../README.md). In this area:
   construction, correctness, eligibility). It is the only copy. Edit it when the code proves something different.
 - A class that is started also has a `todo.md`, and once something works, a `done.md`. A class not started is a row in
   [todo.md](todo.md).
-- Each `done.md` starts with a stamp: the commit and command last used to verify it. Re-run and update the stamp when
-  you change the behavior it describes; `test/decide/run_direct_matrix.sh` renews it in one command (about 3 minutes).
+- `framework/done.md` starts with one stamp: the date and result of the latest full run, the baseline for every rule.
+  Re-run and update it when a change gets its full gate; `test/decide/run_direct_matrix.sh` renews it in one command
+  (about 3 minutes). The rule `done.md` files carry no count.
 - These docs are a map. For detail, read the code in `src/optimizer/decide/direct/`.

@@ -9,7 +9,8 @@ solver path answers those queries, so none of them is wrong, only slower.
 
 - Each task stands alone. Read its **Problem**, make the change and run the checks. When it ships, its result moves to
   the owning `done.md` and the task is deleted from its `todo.md`.
-- The baseline to compare against is the stamp at the top of `done.md`. Any other failure after your change is yours.
+- The baseline to compare against is the stamp at the top of `done.md` in this folder. Any other failure after your
+  change is yours.
 - A task runs only the focused tests its **Done when** names, after `make release`. The full gate runs once where
   the work is combined or committed, not per task: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make
   decide-test`, `DECIDB_VERIFY_SERIALIZER=1 make decide-test`, `DECIDB_FORCE_SOLVER=highs make decide-test`, and

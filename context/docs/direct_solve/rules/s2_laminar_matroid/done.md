@@ -1,8 +1,5 @@
 # S2 (laminar-matroid optimization) — what works today
 
-Verified on 2026-11-13 at `86ccc227ec`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
-serializer, highs) 7,037 run; C++ `build/release/test/unittest "[decidb]"` 9,547 assertions in 105 cases.
-
 Code: `src/optimizer/decide/direct/s2_laminar_matroid_rule.cpp`, on the ranked-prefix builder with one level per quota
 scope (`../../framework/done.md`). Class definition: [definition.md](definition.md).
 

@@ -37,9 +37,10 @@ DuckDB's own suite (`build/release/test/unittest "test/sql/*"`) is the check.
 ### Edits to existing DuckDB code
 
 Direct solve (`../direct_solve/`) replaces a DECIDE node with ordinary DuckDB operators, so its plans are only as cheap
-as DuckDB's own rules and operators make them. Seven edits to DuckDB, none of which names DECIDE, make a plan the rules
-build run as DuckDB would run the same answer written as SQL. Each helps any query that has the shape it handles, and a
-standard query returns the same rows.
+as DuckDB's own rules and operators make them. Ten edits to DuckDB make a plan the rules build run as DuckDB would run
+the same answer written as SQL. The first eight name nothing of DECIDE; each helps any query that has the shape it
+handles, and a standard query returns the same rows. The last two hook direct solve's own passes into unused-column
+removal, and a standard query reaches neither.
 
 - **`CaseSimplificationRule` (`optimizer/rule/case_simplification.cpp`).** It evaluates a constant `WHEN` with
   `ExpressionExecutor::TryEvaluateScalar`. When the evaluation fails (an overflow, a bad cast) the check stays in the
@@ -90,13 +91,38 @@ standard query returns the same rows.
   column, since a hash join and a hash aggregate are built on columns. Reason: a direct plan carries a constant through
   its stages as a column (a seed, a flag, a bound the query writes as a number), and the computation above reads it per
   row; the expression rewriter does not look through a projection.
+- **Materialized CTE column pruning (`optimizer/remove_unused_columns.cpp`).** `RemoveUnusedColumns` records which
+  columns each reference to a materialized CTE reads. It narrows the definition to their union with a projection over
+  the definition's root, whatever the root is, and gives every reference the narrowed layout, since a CTE scan reads the
+  materialized columns by position. A CTE with a reference the pass does not reach keeps every column. Reason: a
+  materialized CTE holds every column of its definition, and a direct plan defines one over its source, so a column no
+  reference reads is held for nothing. It is projection pushdown across the CTE boundary, the column twin of
+  `CTEFilterPusher`.
+- **`LogicalExtensionOperator::PruneUnusedOutputs` (`planner/operator/logical_extension_operator.hpp`, called from
+  `optimizer/remove_unused_columns.cpp`).** A virtual hook, empty by default. For an extension operator whose parents do
+  not read everything, the pass hands it which of its outputs are referenced before it visits the operator's
+  expressions, and an operator that keeps its output bindings may drop what it computes for an unreferenced one.
+  `LogicalDirectResultAdapter` replaces the expression of each unread output that is safe to skip with a typed NULL, and
+  its row id when no column a parent reads can be late-materialized. Reason: the pass otherwise visits every expression
+  of an extension operator as read, so the plan below it would keep a column no parent reads.
+- **The late-materialization call (`optimizer/optimizer.cpp`).** Inside the `UNUSED_COLUMNS` step, right after
+  `RemoveUnusedColumns` has run, the optimizer calls `ApplyDirectLateMaterialization`, which reads a stored column the
+  direct plan only forwards from a second scan of its table, joined on the row id, and prunes once more. Reason: only
+  after that pass is it known which columns a parent reads. It runs inside the step and not beside DuckDB's
+  `LATE_MATERIALIZATION` pass, because the passes between them add positional projection maps that unused-column removal
+  does not maintain ([result_adapter.md](../direct_solve/architecture/result_adapter.md)).
 
 Tests: `test/optimizer/statistics/statistics_case.test` (each fold, a nested `CASE`, a check that fails to evaluate),
 `statistics_constant_folding.test` and `statistics_constant_columns.test` (the same directory),
 `test/sql/optimizer/expression/test_case_simplification_error.test`, `test_nop_arithmetic_float.test` and
 `test_not_distinct_from_to_equal.test`, `test/sql/join/left_outer/test_left_join_perfect_hash.test` (gaps, a NULL probe
-key, a key out of range, duplicate build keys, an empty build), and `test/common/test_decidb_perfect_hash_join.cpp`
-(which join types the executor takes).
+key, a key out of range, duplicate build keys, an empty build), `test/common/test_decidb_perfect_hash_join.cpp` (which
+join types the executor takes), `test/sql/optimizer/test_materialized_cte_column_pruning.test` (references that read
+different columns, a definition whose root is a `UNION ALL`),
+`test_unused_wide_output_is_pruned_without_losing_rank_or_bindings` and
+`test_second_read_returns_the_solvers_answers_and_the_plan_reads_the_table_twice` in
+`test/decide/tests/test_direct_user_facing.py`, and `test/common/test_decidb_direct_rule_driver.cpp` (the late
+materialization of a stored table).
 
 One edit fixes a defect in DuckDB itself. `StringUtil::CILessThan` (`common/string_util.cpp`), the order of every
 case-insensitive catalog map, compares the common prefix and then puts the shorter string first. It used to read the

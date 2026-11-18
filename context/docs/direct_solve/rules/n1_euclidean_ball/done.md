@@ -1,8 +1,6 @@
 # N1 (Euclidean ball) — what works today
 
-Verified on 2026-11-13 at `855e01cf98`: `test/decide/run_direct_matrix.sh` at `116972c7a9`, each of its four suites (auto,
-off, serializer, highs) 7,141 passed; C++ `build/release/test/unittest "[decidb]"` 9,649 assertions in 105 cases; the
-tests that reach N1 again at `855e01cf98`, which changes only how the plan computes a row's share. Code:
+Code:
 `src/optimizer/decide/direct/n1_euclidean_ball_rule.cpp`. Class definition: [definition.md](definition.md).
 
 ## What it admits

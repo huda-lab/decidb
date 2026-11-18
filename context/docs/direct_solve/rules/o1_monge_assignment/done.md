@@ -1,7 +1,6 @@
 # O1 (Monge assignment) — what works today
 
-Verified on 2026-11-10 at `8515df17ae`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
-serializer, highs) 6,715 passed; C++ `build/release/test/unittest "[decidb]"` 6,035 assertions in 103 cases. Code:
+Code:
 `src/optimizer/decide/direct/o1_monge_assignment_rule.cpp`. Class definition: [definition.md](definition.md).
 
 ## What it admits
@@ -115,8 +114,8 @@ on these shapes is in [todo.md](todo.md).
   answer under `require`; no key, a nullable UNIQUE column, one column of a composite key and a key with a nullable
   column keep the solver (`test_o1_monge_a_column_key_of_its_table_agrees_with_the_oracle`,
   `test_o1_monge_a_column_that_is_no_key_of_its_table_keeps_the_solver`).
-- Spellings: `test_alias_o1_monge_reads_a_square_or_an_absolute_value_under_any_spelling` in
-  `test_function_aliases.py`.
+- Spellings: `test_alias_o1_monge_reads_an_absolute_value_under_another_name` in `test_function_aliases.py` (the
+  absolute value written `@`).
 - Error text: `test_o1_monge_infeasible_error_is_the_solvers_error_word_for_word` in `test_direct_user_facing.py`.
 - C++: `O1AppliesShapes` and `O1DeclineShapes` in `test/common/test_decidb_direct_decline.cpp`, one decline per
   `CheckCondition` branch, and the partition test against every other rule; the IR's `cross_product`, `not_null` and

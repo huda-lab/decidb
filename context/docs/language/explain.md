@@ -14,12 +14,12 @@ front).
 ```
 Constraints:
   max(ship) + sum(ship) <= 100
-    ↳ max(ship) becomes an extremum column
+    ↳ max(ship) becomes a helper decision
   avg(ship) >= 10
     ↳ avg(ship) becomes a sum divided by its row count
     ↳ sum(ship) >= 10
   abs(ship - 20) <= 5
-    ↳ abs(ship - 20) becomes an auxiliary variable
+    ↳ abs(ship - 20) becomes a helper decision
     ↳ abs(ship - 20) - ship >= -20
     ↳ abs(ship - 20) + ship >= 0 + 20
   ship <= capacity * open

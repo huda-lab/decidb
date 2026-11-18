@@ -367,8 +367,8 @@ column that stands for an expression -- an ABS auxiliary `abs(e)`, a product `(b
 an indicator `(x = v)`, a helper `sum(e) by (g)` -- prints that expression wherever it
 appears, a later rewrite's label included. Each
 rewrite's account (`rewrite_accounts`, worded once by `RenderDecideRewriteAccount`:
-"`abs(e)` becomes an auxiliary variable") is printed under its clause before the rows it
-left; the objective's accounts, and the rows a rewrite added for the objective (tagged
+"`abs(e)` becomes a helper decision"; it names what the expression became, never the
+solver's construction) is printed under its clause before the rows it left; the objective's accounts, and the rows a rewrite added for the objective (tagged
 `OBJECTIVE_ROW_TAG`, returned by `CollectDecideClauseLayers` in `objective_rows`), print
 under the objective. The hard MIN/MAX carrier (`__minmax_clause_`) prints as the reducer
 it marks, so its row repeats the clause and is left out; a MIN/MAX or composed objective

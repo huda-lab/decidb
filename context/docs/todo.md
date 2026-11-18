@@ -12,12 +12,8 @@ the owner rules first.
 
 # Phase 0 — Preliminaries
 
-## 0.2 Leftovers, docs and tests (parallel: PERF-26 | PLAN-5 | OPS-8 | TEST-13, TEST-14)
+## 0.2 Leftovers (one lane)
 - [ ] PERF-26 findings.md measures replaced extraction code — performance/todo.md § PERF-26
-- [ ] PLAN-5 EXPLAIN names helpers in solver terms — pipeline/03_logical_plan/todo.md § PLAN-5
-- [ ] OPS-8 Docs that cite what does not exist — operations/todo.md § OPS-8
-- [ ] TEST-13 Four merge choices — testing/todo.md § TEST-13
-- [ ] TEST-14 A data-weighted keyed clause in DIAGNOSE — testing/todo.md § TEST-14
 
 ## 0.3 Debug-build run (needs: 0.2) (one lane)
 - [ ] TEST-6 One suite run on a debug build — testing/todo.md § TEST-6
@@ -44,6 +40,9 @@ the owner rules first.
 ## 1.4 Error tests (needs: 1.3) (one lane)
 - [ ] TEST-11 Solver-path error tests assert kind and location — testing/todo.md § TEST-11
 - [ ] TEST-12 Direct-path error tests assert kind and location — testing/todo.md § TEST-12 (needs: TEST-11)
+
+## 1.5 Filed cleanups (one lane)
+- [ ] INF-5 Three label formatters no test reaches — diagnostics/infeasible/todo.md § INF-5
 
 # Phase 2 — Direct solve is a separate layer
 

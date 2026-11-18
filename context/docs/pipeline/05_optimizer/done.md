@@ -689,10 +689,7 @@ at least its value` (`BODY_AT_LEAST`; `at most`, `equal to` for `BODY_AT_MOST`,
 `BODY_EQUAL`). The defining row itself is left out (`BODY_DEFINITION_TAG` on the row): it
 restates the body the reducer already prints. The row carries the source clause of the
 first clause that reads the helper (`CopySourceClauseTag`), so a refusal can quote it, and
-no removal group (§ The value rewrite). A MIN or MAX over defined members that is not
-held by its envelope alone `becomes an extremum column stated to the solver natively`
-(`RewriteAccount::Kind::EXTREMUM_NATIVE`), read off `BODY_DEFINITION_TAG` on the
-reducer, instead of claiming indicator rows it never has.
+no removal group (§ The value rewrite).
 
 **Exit contract.** `VerifyExtremumBodiesLinear` runs after `RewriteMinMax` and raises an
 internal error when any member an extremum reads is not linear: a composed term, a MIN/MAX

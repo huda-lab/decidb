@@ -1,8 +1,5 @@
 # S1 (uniform-matroid optimization) — what works today
 
-Verified on 2026-11-11 at `a94e16e743`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
-serializer, highs) 6,864 passed; C++ `build/release/test/unittest "[decidb]"` 7,233 assertions in 106 cases.
-
 Code: `src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp`; its scope projection and bound validation are the
 shared fragments in `direct_plan_fragments.{hpp,cpp}`. Class definition: [definition.md](definition.md).
 

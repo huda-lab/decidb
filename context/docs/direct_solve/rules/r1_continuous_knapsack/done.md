@@ -1,7 +1,6 @@
 # R1 (continuous knapsack) — what works today
 
-Verified on 2026-11-08 at `73b52ab1d1`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
-serializer, highs) 7,020 passed; C++ `build/release/test/unittest "[decidb]"` 4,635 assertions in 85 cases. Code:
+Code:
 `src/optimizer/decide/direct/r1_continuous_knapsack_rule.cpp`; its per-row bounds and the linear terms of the budget and
 the objective come from the shared reader in `direct_bound_reader.cpp`. Class definition and correctness argument:
 [definition.md](definition.md).

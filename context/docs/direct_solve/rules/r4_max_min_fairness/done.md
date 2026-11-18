@@ -1,7 +1,6 @@
 # R4 (weighted max-min fair allocation) — what works today
 
-Verified on 2026-11-13 at `a0475b387f`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
-serializer, highs) 7,288 passed; C++ `build/release/test/unittest "[decidb]"` 11,174 assertions in 107 cases. Code:
+Code:
 `src/optimizer/decide/direct/r4_max_min_fairness_rule.cpp`. Class definition: [definition.md](definition.md).
 
 ## What it admits

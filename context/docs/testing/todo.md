@@ -31,24 +31,6 @@ Open coverage gaps, one section each. Coverage that exists is in [coverage.md](c
 - **Needs.** TEST-11, FW-4.
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "direct"` passes.
 
-## TEST-13 — Four merge choices waiting on the owner
-
-- **Decision needed.** The merge left four choices marked "owner to confirm":
-  1. Two tests in `test_one_pass_tree.py` read a node's reads from the dump's `reads=` field.
-  2. A product or square over a nested reducer under a bound that reads the rows is refused by name
-     (`context/opa_rewrite/repro/refusals.sql`, last query).
-  3. Four decline shapes in `test_decidb_direct_decline.cpp` are written as an IR edit.
-  4. `test_decidb_helper_inlining.cpp` reads product groups in two cases where OPA had four.
-- **Options.** Per item: keep as is, or change (1: assert answers, not the dump; 2: solve it; 3: write each as a
-  query; 4: restore the two cases).
-- **Recommendation.** 1 and 3 change (a test that reads a dump or edits the IR breaks when Phase 5 replaces both); 2
-  stays refused until Phase 6 gives products a node rule; 4 restores the two cases if they reach a branch the others
-  do not.
-- **Ruling (owner, 2026-11-18).** As recommended: 1 asserts answers, not the dump; 3 writes each decline as a
-  query; 2 stays refused until Phase 6; 4 restores the two cases only if each reaches a branch the others do not.
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "one_pass_tree"` and
-  `build/release/test/unittest "[decidb]"` pass.
-
 ## TEST-15 — One helper asserts an error's kind and location
 
 - **Problem.** About 690 of 2,533 test functions compare message text (108 of 177 test files), so each rewording of
@@ -58,11 +40,3 @@ Open coverage gaps, one section each. Coverage that exists is in [coverage.md](c
   any message changes; a Phase 1 task that rewords a message converts the tests it breaks to the helper.
 - **Done when.** The helper has a test that fails on a wrong kind and on a wrong location;
   `./test/decide/run_tests.sh -n 2 -k "error"` passes.
-
-## TEST-14 — A data-weighted keyed clause under the infeasible diagnosis
-
-- **Problem.** A keyed decision summed with a data weight (`SUM(keepS * cost)`) renders symbolically in the infeasible
-  diagnosis, but no test reaches it; the keyed-fold label tests in `test_query_diagnostics_relation.py` cover only
-  uniform coefficients.
-- **Change.** One test that applies the reported edit with `_apply_reported_fix`.
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "query_diagnostics_relation"` passes.
