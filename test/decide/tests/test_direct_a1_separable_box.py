@@ -1234,7 +1234,12 @@ def test_a1_each_verdict_gates_one_read_and_the_rows_wait_for_the_newest(decidb_
             if node.get("operator_type") == "CTE" and info.get("CTE Name") == "direct_verdict":
                 verdicts.append(info["Table Index"])
             if node.get("operator_type") == "FILTER":
-                gates.extend(c["extra_info"]["CTE Index"] for c in node["children"] if c["operator_type"] == "CTE_SCAN")
+                # A debug build puts verification projections between an operator and its child.
+                for child in node["children"]:
+                    while child["operator_type"] == "PROJECTION" and len(child["children"]) == 1:
+                        child = child["children"][0]
+                    if child["operator_type"] == "CTE_SCAN":
+                        gates.append(child["extra_info"]["CTE Index"])
             for child in node.get("children", []):
                 visit(child)
 
