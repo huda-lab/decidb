@@ -724,7 +724,9 @@ private:
 		if (value.return_type != LogicalType::FLOAT && value.return_type != LogicalType::DOUBLE) {
 			return nullptr;
 		}
-		auto number = calc.Cast(calc.Of(value), LogicalType::DOUBLE);
+		// The tree evaluates the check, so the value keeps its tags (a frame's, a reducer's, a query-wide value's):
+		// `Of` strips them, which would read a frame marker as a reducer over the rows.
+		auto number = calc.Cast(calc.Wrap(value.Copy()), LogicalType::DOUBLE);
 		// A NULL is no value: neither test holds of it.
 		auto refused = role == DecideValueRole::BOUND
 		                   ? calc.Fn("isnan", number)
