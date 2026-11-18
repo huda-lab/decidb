@@ -36,16 +36,17 @@ void TaskExecutor::FinishTask() {
 }
 
 void TaskExecutor::WorkOnTasks() {
-	// repeatedly execute tasks until we are finished
+	// Execute tasks until all are finished. The queue may report empty while a task is queued (its dequeue is
+	// documented to return false when it only "appeared empty"), so an empty poll does not end the work: poll again.
 	shared_ptr<Task> task_from_producer;
-	while (scheduler.GetTaskFromProducer(*token, task_from_producer)) {
+	while (completed_tasks != total_tasks) {
+		if (!scheduler.GetTaskFromProducer(*token, task_from_producer)) {
+			continue;
+		}
 		auto res = task_from_producer->Execute(TaskExecutionMode::PROCESS_ALL);
 		(void)res;
 		D_ASSERT(res != TaskExecutionResult::TASK_BLOCKED);
 		task_from_producer.reset();
-	}
-	// wait for all active tasks to finish
-	while (completed_tasks != total_tasks) {
 	}
 
 	// check if we ran into any errors while checkpointing
