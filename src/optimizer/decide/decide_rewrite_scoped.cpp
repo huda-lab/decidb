@@ -605,8 +605,9 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 			if (has_nested_outer && UnwrapDecideCasts(*site.slot->get(), decide.decide_index) == direct_outer) {
 				auto &outer = direct_outer->Cast<BoundAggregateExpression>();
 				auto below = path.Below(outer);
+				// A decision times a nested reducer (`sum((x - 1) * max(x) by (g))`) stays under the outer sum, whose
+				// term splitter states the product's row.
 				for (auto &nested : nested_outer_sites) {
-					D_ASSERT(!nested.under_decision);
 					ReplaceReducer(helpers, names, booleans, below, Helpers::ClassKeyOf(scope),
 					               ExtremumPushOf(cmp.type), source_clause_id, nested);
 				}
