@@ -1,4 +1,4 @@
--- CU-10: one failing `when` over 200,000 rows. Measured 3.1 s and 264 MB to print the error.
+-- EXEC-15: one failing `when` over 200,000 rows. Measured 3.1 s and 264 MB to print the error.
 -- The same predicate in a WHERE fails in 0.02 s (second statement).
 -- Time each: /usr/bin/time -l build/release/decidb :memory: < this file, with one statement commented out.
 SET decide_direct_solve = 'off';

@@ -56,3 +56,53 @@ solver path answers those queries, so none of them is wrong, only slower.
   `n1_groups` went from 1.14 to 1.38 with N1's literal `q` deleted. A constant that decides the plan's shape, such as
   whether a value needs a mask or a check (N1's `q`, A1's floor), is a literal the rule builds with. **Ruling (owner,
   2026-11-13).**
+
+## FW-4 — Direct solve's messages name the clause, with one check per rule
+
+- **Problem.** The direct path keeps machinery that only chooses what a message names: it redoes the NaN naming in
+  SQL and adds dictionary codes (`DirectMessageCodes`, used by R1 only) so an aggregate takes the least message;
+  `DirectIR::model_shape` and `DirectStateErrors` classify a solver model nobody builds, to decide whether one hint
+  sentence is appended; `check_position` keeps checks where they would have stood.
+- **Change.** By the owner's rulings (2026-11-18, `context/opa_rewrite/decisions.md` R10, R12, R14): a message states
+  the kind of error and where; one raising check per rule; no hint sentence. The machinery above goes.
+- **Needs.** OPT-19 (both edit the NaN naming); TEST-15 (the tests the rewording breaks move to its helper).
+- **Done when.** `grep -rn "DirectMessageCodes\|check_position" src` finds nothing;
+  `./test/decide/run_tests.sh -n 2 -k "direct"` passes.
+
+## FW-5 — A direct rule reads every bound from side tables
+
+- **Problem.** A bound whose reducers group as its clause does (`sum(x) by (g) <= sum(cap) by (g) - 2`) is recorded
+  as a `DecideGroupBound`: placeholder aggregates a rule computes inside its own group aggregate (R1, R4, N1, S1, S2,
+  S3, and A2 through `DirectTightestBound`). It is a third form of a bound beside side tables and the tree; pass 0
+  builds it on every path and the solver path turns it back into bound records (`RecordGroupBound`). When a group
+  bound's sum has its own `when`, the driver rewrites the plan (`RecordReducedBounds`) before it knows a rule applies,
+  and the solver path inherits the change.
+- **Change.** By the owner's ruling (2026-11-18, `context/opa_rewrite/decisions.md` R18): pass 0 records every bound
+  reducer as a bound aggregate; a rule reads it from side tables; a per-row bound's tightest value is a side table's
+  MIN or MAX. `DecideGroupBound`, `DecideReducedBound`, `reduced_bounds`, `bounds_to_record`,
+  `DirectGroupBoundIsReadable` and the rules' group-bound branches go. A rule that does not fire leaves the plan as
+  it found it.
+- **Done when.** `grep -rn "DecideGroupBound\|reduced_bounds" src` finds nothing;
+  `./test/decide/run_tests.sh -n 2 -k "bound_side_tables or s1_uniform or r1_continuous or group_bound"` passes, and
+  `DECIDB_TEST_DIRECT_SOLVE=off` on the same pattern.
+
+## FW-6 — Two rules that apply to one query
+
+- **Decision needed.** `direct_rule_driver.cpp` raises an INTERNAL error when more than one rule applies. Nine
+  boundary probes found no overlap; the exposure is 36 rule pairs.
+- **Options.** 1. Assert no overlap in a debug build and take the first match in release. 2. Decline: the solver
+  path answers. 3. Keep the error.
+- **Recommendation.** 1: an overlap is a rule bug, which a debug build catches, and a user never sees an INTERNAL
+  error for it.
+- **Done when.** `./test/decide/run_tests.sh -n 2 -k "direct and driver"` passes.
+
+## FW-7 — Direct rules forward columns by hand
+
+- **Decision needed.** Each projection stage of a non-ranked rule has a struct of bindings and forwards them by hand
+  (R1: 17 fields at five stages); `direct_plan_fragments` is 1,711 lines over 11 topics; `DirectCanSkipSourceOutput`
+  is a case list over operator types. R1's plan alone is 1,348 lines.
+- **Options.** 1. A stage builder that forwards every column and leaves pruning to DuckDB (about 400 lines go).
+  2. Only the shared row-box fragment (about 80 lines go). Either way, the owner rules whether R1 keeps its breadth.
+- **Recommendation.** 1, leaving `DirectRankedPrefix` alone: DuckDB's own column pruning is the standard tool, and it
+  removes a case list.
+- **Done when.** `DECIDB_TEST_DIRECT_SOLVE=off` and the default pass `./test/decide/run_tests.sh -n 2 -k "direct"`.

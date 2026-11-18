@@ -24,6 +24,9 @@ Test a fix for patchwork: does it carry a list of cases that will keep growing? 
 the same way. Compilers do the same: Clang underlines the original source text in its errors rather than reprinting
 its syntax tree. Prefer the fix with no case list, and add no code that does not remove a cause.
 
+A user-facing error states the kind of error and where it is in the query, in SQL terms, and stops: no suggested
+fix, no internal names, no solver terms. `DIAGNOSE` is the feature that proposes edits.
+
 ## Commands (from the repository root)
 
 | Command | Purpose |

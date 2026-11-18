@@ -1,4 +1,4 @@
--- CU-20: one clause, two models. Both answer sum(x) = 17.
+-- OPT-24: one clause, two models. Both answer sum(x) = 17.
 -- Run each statement with DECIDB_DUMP_MODEL=<file> and read num_vars and num_rows.
 --   literal bound  (composed route): 13 variables, 13 rows
 --   subquery bound (value route):    14 variables, 25 rows (12 identical rows)

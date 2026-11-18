@@ -1,4 +1,4 @@
--- CU-01: an internal marker is a substring of an expression's name, and a user can write that name.
+-- OPT-22 (query 1), BIND-3 (queries 2 and 3): an internal marker is a substring of an expression's name, and a user can write that name.
 -- Each pair runs one query twice; only an identifier's spelling differs, so the two answers must match.
 SET decide_direct_solve = 'off';
 

@@ -1,7 +1,7 @@
-# OPA-rewrites: what comes after the queue
+# OPA-rewrites: the plan
 
-The plan for the branch `OPA-rewrites` once the work queue (`context/docs/todo.md`) is empty: the cleanup a
-whole-codebase review asked for, and the design changes the owner has planned.
+The plan for the branch `OPA-rewrites`: the cleanup a whole-codebase review asked for, and the design changes the
+owner has planned. The work queue (`context/docs/todo.md`) orders the tasks.
 
 ## Where the branch stands
 
@@ -22,34 +22,32 @@ whole-codebase review asked for, and the design changes the owner has planned.
 
 ## What to do, in order
 
-A recommendation; the owner decides the order.
+The queue (`context/docs/todo.md`) holds every task, in seven phases:
 
-| Step | Work | Where |
-|---|---|---|
-| 1 | Finish the queue | `context/docs/todo.md` |
-| 2 | Get the rulings marked **first** | [decisions.md](decisions.md) |
-| 3 | Fix the defects | [cleanup.md](cleanup.md), part 1 |
-| 4 | Remove message machinery | [cleanup.md](cleanup.md), part 2 |
-| 5 | Simplify structure that stands alone | [cleanup.md](cleanup.md), part 3 |
-| 6 | Phase 2: the tree becomes the representation | [design.md](design.md), section 3 |
-| 7 | Phase 3: write the model at the nodes | [design.md](design.md), section 4 |
+| Phase | Change |
+|---|---|
+| 0 | Preliminaries: leftovers, defects, a debug-build run |
+| 1 | Errors are raised where they are found; messages state the kind and where |
+| 2 | Direct solve is a separate layer |
+| 3 | Each shape and formulation has one owner (binder checks, MIN/MAX, ABS, stage 05's passes, model rows) |
+| 4 | Model building has one contract (`SolverInput`, the operator, the thread model) |
+| 5 | The parser builds the tree, the one representation ([design.md](design.md) § 3) |
+| 6 | The model is written at the nodes, the deck's step 5 ([design.md](design.md) § 4) |
 
-Steps 3 to 5 delete code the design changes would otherwise carry through a rewrite. [cleanup.md](cleanup.md)
-part 4 lists what to leave alone until Phases 2 and 3, which replace it.
+Phases 1 to 4 delete code Phases 5 and 6 would otherwise carry through a rewrite; [design.md](design.md) § 7 lists
+what to leave alone until those phases replace it.
 
 ## Files
 
 | File | Holds |
 |---|---|
-| [cleanup.md](cleanup.md) | The review's findings as tasks |
-| [design.md](design.md) | What the deck requires, the target architecture, Phases 2 and 3 |
-| [decisions.md](decisions.md) | Rulings in force and decisions still open |
+| [design.md](design.md) | What the deck requires, the target architecture, Phases 5 and 6 |
+| [decisions.md](decisions.md) | Rulings in force |
 | `repro/` | A reproducing query file for each task that has one, and the deck's running example |
 | `tools/ab_bench.py` | Two binaries on the scaling workloads: whole-process time minus solver time, and peak memory |
 
-A task here is not on the queue yet. File it in the owning stage's `todo.md` under `context/docs` with that file's
-next free id, then add its queue line (`/make-queue`). The ids `CU-nn` and `OD-nn` are local to this folder. Delete a
-task or a decision here when it ships or is ruled.
+Every task is on the queue and lives in the owning stage's `todo.md` under `context/docs`. Delete a ruling here
+only when the owner withdraws it.
 
 Evidence labels: **[reproduced]** run on the binary at `38699104bc`, with the query in `repro/`; **[measured]** a script
 counted or timed it; **[read]** a reviewer read it in the code; **[estimate]** a reviewer's guess, usually a line count.

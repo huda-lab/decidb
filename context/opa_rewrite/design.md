@@ -1,7 +1,7 @@
 # Planned design changes
 
-Two changes are planned after the cleanup: the tree becomes the one representation of a DECIDE clause (Phase 2), and
-the solver model is written at the tree's nodes (Phase 3, the deck's step 5). Rulings: [decisions.md](decisions.md).
+Two changes follow Phases 0 to 4 of the queue: the tree becomes the one representation of a DECIDE clause (Phase 5), and
+the solver model is written at the tree's nodes (Phase 6, the deck's step 5). Rulings: [decisions.md](decisions.md).
 
 ## 1. What the deck requires
 
@@ -33,7 +33,7 @@ One clause exists in eight forms between planning and the solver: the bound expr
 side tables on `LogicalDecide`; the tree's nodes; the linear-form records inside the nodes; compiled programs;
 per-thread containers; program value columns; the emitter's output; `SolverInput`. The deck has one, the tree.
 
-## 3. Phase 2: the tree is the representation
+## 3. Phase 5: the tree is the representation
 
 **Target.** The parser builds the structure and every later stage works on it.
 
@@ -48,17 +48,17 @@ Canonicalizer, optimizer:  analyse and transform it
         /              \
 direct relational plan    compiled tree execution
                                   |
-                       model written at the nodes (Phase 3)
+                       model written at the nodes (Phase 6)
 ```
 
 - **Parser.** The transformer creates explicit scope, reducer and frame nodes. The grammar builds no execution
   objects, and ordinary SQL expressions inside the nodes stay DuckDB expressions. `DecideFrameExpression` is already
   a parsed node of this kind.
 - **Binder.** Resolves names, types, keys, aggregate overloads and collations in that structure and derives each
-  node's signature. It refuses only what needs the parsed tree (CU-05).
+  node's signature. It refuses only what needs the parsed tree (BIND-4).
 - **Canonicalizer and optimizer.** Transform the bound tree or apply a rule at a node. No stage rediscovers
   structure from marker strings or helper records.
-- **One home per fact.** The clause list is a list of clause records (OD-06). A reducer's `per` and `by`, a norm and
+- **One home per fact.** The clause list is a list of clause records (ARCH-1). A reducer's `per` and `by`, a norm and
   a frame are fields or node classes, not markers. The linear-form records and the side tables go as their readers
   move. Nodes are split by kind, as DuckDB's `Expression` is.
 
@@ -81,8 +81,8 @@ a reason not to.
 5. **Source locations survive rewrites,** so messages still quote the query. The rule exists: a replacement takes
    the location of the node it equals in value (`DecideReplaces`).
 
-**Order** (OD-05): front to back, with an adapter that lowers the new bound tree to today's tagged expressions for
-the stages not yet converted. Settle the error-order rule first (OD-01): the binder raises most of the pinned errors.
+**Order** (ARCH-1 decides): front to back, with an adapter that lowers the new bound tree to today's tagged expressions
+for the stages not yet converted. Errors follow R11: the first one reached is raised.
 
 **Size** [measured]: parser about 1,300 lines, binder 3,600, the rest of planning 11,500, optimizer rewrites 7,800.
 
@@ -90,7 +90,8 @@ the stages not yet converted. Settle the error-order rule first (OD-01): the bin
 
 - scopes, reducers and frames originate in parsing, and binding and every rewrite use them;
 - evaluation and model generation do not reconstruct them from helper lists or marker strings;
-- no marker constant remains in `enums/decide.hpp` for a fact the tree holds;
+- no DECIDE tag constant remains in `enums/decide.hpp` (R20): the tag list is this phase's checklist, each tag
+  replaced by a node, a record or a field, and the refusal of user names that contain a tag goes with the last one;
 - behaviour tests exist at each boundary: parser and binder, rewrites, serialization, direct solve against its
   fallback, and parallel execution.
 
@@ -98,7 +99,7 @@ the stages not yet converted. Settle the error-order rule first (OD-01): the bin
 one shape into another after the pass that reduces its bound had run on the old shape. Building the tree earlier
 does not prevent that by itself; contract 4 does.
 
-## 4. Phase 3: the model is written at the nodes
+## 4. Phase 6: the model is written at the nodes
 
 - **The node rule.** A SUM or AVG passes its members up. A MIN or MAX allocates one variable per group that has more
   than one member, plus its rows. How a MIN or MAX is written depends on which way its clause or the objective
@@ -114,12 +115,12 @@ does not prevent that by itself; contract 4 does.
 
 **Constraints the design must meet**
 
-- Helper inlining and implied-bound propagation need every reader of a helper, which one node does not see (OD-08).
+- Helper inlining and implied-bound propagation need every reader of a helper, which one node does not see (ARCH-2).
 - `FormulateModel` stays a pure function of the evaluated clauses and a box, re-runnable for `DIAGNOSE` without
   reading data. Writing at the nodes must not bake in Big-M constants.
-- Variables allocated at run time change names in `EXPLAIN` and `DIAGNOSE` (OD-08).
+- Variables allocated at run time change names in `EXPLAIN` and `DIAGNOSE` (ARCH-2).
 - The deck has no rule for ABS, products, L0, `<>`, AVG, norms or quadratic terms. Each needs one, and each is a
-  departure to present (OD-07). The F nodes mirror the plan-time rewrites and write nothing yet.
+  departure to present (ARCH-2). The F nodes mirror the plan-time rewrites and write nothing yet.
 
 **How to change it safely.** Run the old and the new model building side by side and compare the solver models
 while both exist. An earlier attempt composed values at the nodes beside stage 06; it changed no model and removed
@@ -128,20 +129,33 @@ no code, and was reverted. Step 5 has to replace the helper logic, not sit next 
 ## 5. Direct solve and the tree
 
 Direct solve reads its own `DirectIR`, built from `LogicalDecide` with the solver path's readers, and never the
-tree. The direction is ruled (R-C): it works from the central tree. How is open (OD-04). The recommended shape: a
-rule analyses the bound tree, directly or through a view derived from it; a rule that fires lowers to ordinary
-relational operators; a miss leaves the solver path's meaning unchanged. Keep the driver, the rule interface and
-the shared readers; they are small and rule-agnostic.
+tree. By R17, each rule reads the bound tree directly and `DirectIR` goes; this lands in Phase 5, once the parser
+builds the tree before the rules run. A rule that fires lowers to ordinary relational operators and reads its bound
+values from SQL side tables; a miss leaves the solver path's meaning unchanged. Keep the driver, the rule interface
+and the shared readers; they are small and rule-agnostic.
 
 ## 6. Tests and docs
 
 - **Keep** every test judged by the independent oracle, and the regression tests of fixed defects. They survive an
   internal rewrite.
 - **Cut** a test when the code it alone reaches is deleted, in the same change. A test of dump format or of exact
-  model text does not survive Phase 3; move a query worth keeping into the golden corpus.
-- **Add** an oracle test for each defect of [cleanup.md](cleanup.md) part 1; for Phase 2, behaviour tests at each
-  boundary the tree crosses; for Phase 3, the model comparison between old and new model building.
+  model text does not survive Phase 6; move a query worth keeping into the golden corpus.
+- **Add** an oracle test for each defect task; for Phase 5, behaviour tests at each
+  boundary the tree crosses; for Phase 6, the model comparison between old and new model building.
 - **The rule** (`.claude/CLAUDE.md`): each decision point gets a test that reaches it and fails if the branch is
   removed.
-- **Docs.** Each phase rewrites `context/docs` for the stages it touches, in the present tense. When Phase 3 is
+- **Docs.** Each phase rewrites `context/docs` for the stages it touches, in the present tense. When Phase 6 is
   done, this file's content lives in the stage docs and this folder goes.
+
+## 7. What Phases 5 and 6 replace
+
+Cleaning this code before the phase that replaces it is work done twice.
+
+| What the review found | Replaced by |
+|---|---|
+| Each clause is lowered twice at planning (`DecideTreeConstruction` and `LowerDecideTree`), joined by expression address; 82 internal cross-checks | Phase 5: the rewrites produce the tree |
+| One AND expression for all clauses, with `when` and `per` as tagged conjunctions | Phase 5: the clause record (ARCH-1) |
+| `norm` bound as a `SUM` with a patched return type; a frame as a tagged aggregate guarded at 28 sites | Phase 5: node classes |
+| `DecideNode` is one struct of 67 fields; `DecideTree::Validate` has complexity 142 | Phase 5: nodes split by kind |
+| The emitter scatters node values into arrays as long as the input; evaluation scales with clauses times rows (`repro/clauses_times_rows.sql`) | Phase 6 |
+| Helpers are created at planning and removed by `InlineReducerValueLinks` (300 lines, complexity 90) | Phase 6 |
