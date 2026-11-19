@@ -83,8 +83,8 @@ struct DecideNodeGroups {
 	unsafe_vector<idx_t> first_rows;
 	//! Value order, of the enclosing slot and then the key, assigned by Finish.
 	unsafe_vector<idx_t> ranks;
-	//! False for a slot of rows in no class of the key: a root's (DecideNode::holds_rows_in_no_class), and a G's, whose
-	//! rows reach its operand alone and hold no entry of it. Empty for a node per row.
+	//! False for a slot of rows in no class of the key, held by a node that holds such rows
+	//! (DecideNode::holds_rows_in_no_class). Empty for a node per row.
 	vector<bool> in_a_class;
 	DecideColumns keys;
 	//! A collated key's least spelling over the rows its node holds in each slot, which names a variant of the

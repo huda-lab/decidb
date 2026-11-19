@@ -128,3 +128,65 @@ def test_a_composed_min_max_holds_only_with_a_class(decidb_cli, oracle_solver, c
         assert math.isclose(value, oracle.objective_value, abs_tol=1e-6), (mode, value, oracle.objective_value)
 
     agree_with_oracle(decidb_cli, sql, oracle, check_assignment, modes=("off",))
+
+
+# id, k, c. Row 2 is in no class of k and its c is NaN: nothing below `per k` reads it, so no query raises.
+NAN_ROWS = [(1, "a", -1.0), (2, None, math.nan), (3, "b", -2.0), (4, "b", 1.0)]
+NAN_TYPES = ["INTEGER", "VARCHAR", "DOUBLE"]
+NAN_SHAPES = {
+    "sum_objective": "MINIMIZE sum(per k: sum(c * x) by (k))",
+    "max_objective": "MINIMIZE max(per k: sum(c * x) by (k))",
+    "sum_constraint": "AND sum(per k: sum(c * x) by (k)) <= -1.5 MINIMIZE sum(x)",
+}
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("shape", list(NAN_SHAPES))
+def test_a_nan_on_a_row_in_no_class_is_read_by_no_reducer(decidb_cli, oracle_solver, shape):
+    """A row whose k is NULL is in no class of `per k`, so no reducer below it reads its NaN: an objective's `sum` and
+    `max` and a constraint's `sum` all answer, as the oracle does over the rows of a class alone."""
+    classed = [row for row in NAN_ROWS if row[1] is not None]
+    groups = sorted({row[1] for row in classed})
+    values = ", ".join(
+        "(" + ", ".join(sql_literal(value, sql_type) for value, sql_type in zip(row, NAN_TYPES)) + ")"
+        for row in NAN_ROWS
+    )
+    clause = NAN_SHAPES[shape]
+    sql = (
+        f"SELECT id, x FROM (FROM (VALUES {values}) t(id, k, c) DECIDE x(REAL) SUCH THAT "
+        f"x BETWEEN 0 AND 1 {clause}) q ORDER BY id"
+    )
+    oracle_solver.create_model("per_class_null_key_nan")
+    for row in NAN_ROWS:
+        oracle_solver.add_variable(f"x_{row[0]}", VarType.CONTINUOUS, 0.0, 1.0)
+
+    def group_terms(group):
+        return {f"x_{row[0]}": row[2] for row in classed if row[1] == group}
+
+    if shape == "sum_objective":
+        oracle_solver.set_objective({f"x_{row[0]}": row[2] for row in classed}, ObjSense.MINIMIZE)
+    elif shape == "max_objective":
+        oracle_solver.add_variable("t", VarType.CONTINUOUS, -100.0, 100.0)
+        for group in groups:
+            oracle_solver.add_constraint({**{k: -v for k, v in group_terms(group).items()}, "t": 1.0}, ">=", 0.0)
+        oracle_solver.set_objective({"t": 1.0}, ObjSense.MINIMIZE)
+    else:
+        oracle_solver.add_constraint({f"x_{row[0]}": row[2] for row in classed}, "<=", -1.5)
+        oracle_solver.set_objective({f"x_{row[0]}": 1.0 for row in NAN_ROWS}, ObjSense.MINIMIZE)
+    oracle = oracle_solver.solve()
+
+    def check_assignment(result, columns, mode):
+        chosen = {row[0]: row[1] for row in result}
+        assert set(chosen) == {row[0] for row in NAN_ROWS}, mode
+        sums = [sum(row[2] * chosen[row[0]] for row in classed if row[1] == group) for group in groups]
+        if shape == "sum_objective":
+            value = sum(sums)
+        elif shape == "max_objective":
+            value = max(sums)
+        else:
+            assert sum(sums) <= -1.5 + 1e-6, (mode, sums)
+            value = sum(chosen.values())
+        assert math.isclose(value, oracle.objective_value, abs_tol=1e-6), (mode, value, oracle.objective_value)
+
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, modes=("off",))

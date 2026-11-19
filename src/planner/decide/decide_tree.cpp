@@ -1242,7 +1242,7 @@ private:
 			return Read(owner, Frame(frame, &expression), expression.return_type, expression.GetAlias());
 		}
 		if (expression.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			auto reducer = Aggregate(owner, expression.Cast<BoundAggregateExpression>());
+			auto reducer = Aggregate(expression.Cast<BoundAggregateExpression>());
 			sources.reducer_nodes[&expression] = reducer;
 			return Read(owner, reducer, expression.return_type, expression.GetAlias());
 		}
@@ -1322,15 +1322,10 @@ private:
 		return result;
 	}
 
-	//! The G of a reducer `owner` reads. One the objective's own expression holds, or a reducer of that expression
-	//! does, is of the objective (DecideNode::of_objective); a frame's column is not.
-	idx_t Aggregate(idx_t owner, const BoundAggregateExpression &aggregate) {
+	//! The G of a reducer.
+	idx_t Aggregate(const BoundAggregateExpression &aggregate) {
 		auto index = NewNode(DecideNodeKind::REDUCER);
 		auto &node = *tree->nodes[index];
-		auto &holder = *tree->nodes[owner];
-		const auto enclosing = holder.parent;
-		const bool in_objective =
-		    holder.objective || (enclosing != DConstants::INVALID_INDEX && tree->nodes[enclosing]->of_objective);
 		node.aggregate = DecideTreeReducerName(aggregate);
 		node.text = Text(aggregate);
 		node.decision_value = HasDecision(aggregate);
@@ -1345,7 +1340,6 @@ private:
 			node.text = op.frame_aggregates[frame_aggregate].text;
 			tree->frame_aggregate_nodes[frame_aggregate] = index;
 		}
-		node.of_objective = in_objective && frame_aggregate == DConstants::INVALID_INDEX;
 		node.function = unique_ptr_cast<Expression, BoundAggregateExpression>(aggregate.Copy());
 		auto operand = NewNode(DecideNodeKind::SCOPE);
 		Edge(index, operand);

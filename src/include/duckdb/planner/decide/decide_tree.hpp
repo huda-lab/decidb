@@ -234,9 +234,6 @@ struct DecideNode {
 	//! reads every row its `when` keeps, and its `per K'` keeps no value of a row in no class of K' (§5.3). So does an
 	//! O an anchor in no timeline (§5.6, D75).
 	bool holds_rows_in_no_class = false;
-	//! A G of a reducer written in the objective: its operand is read in place, on the rows of each group alone (D81),
-	//! so a row in no class of its key stops there. A helper's, a composed term's, a frame's and a record's are not.
-	bool of_objective = false;
 	//! A hidden root's non-NULL string is the data check's error message.
 	bool value_check = false;
 	//! Immutable clause metadata shared with term lowering. Its term vectors are

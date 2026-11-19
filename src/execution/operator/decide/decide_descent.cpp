@@ -1422,13 +1422,10 @@ const DecideDescent::Reach &DecideDescent::HoldKeyed(idx_t node_index, DataChunk
 	DataChunk keys;
 	Key(node.key, chunk, rows, keys, present, &spelled);
 	const auto scope = IsScopeNode(node);
-	// A reducer's operand is read on every row its G reads, except the objective's, which is read in place, on the
-	// rows of each group alone (D81).
-	const auto reducer = node.kind == DecideNodeKind::REDUCER && !node.of_objective;
-	// A row in no class of the key stops here, unless the node holds such rows or is a reducer; an E's still reaches
-	// its children, since `per` never gates them.
+	// A row in no class of the key stops here, unless the node holds such rows; an E's still reaches its children,
+	// since `per` never gates them.
 	auto unclassed = [&](idx_t i) {
-		return !present[i] && !node.holds_rows_in_no_class && !reducer;
+		return !present[i] && !node.holds_rows_in_no_class;
 	};
 	// The rows that take a slot: those in a class of the key or held anyway.
 	const auto count = rows.size();
@@ -1454,26 +1451,18 @@ const DecideDescent::Reach &DecideDescent::HoldKeyed(idx_t node_index, DataChunk
 			              spelled.sort_keys, i);
 		}
 	}
-	// A row in no group of a G has no value of it (language/guide.md §5.2), so it holds no entry of the G; it still
-	// reaches the G's operand, as a clause's terms are computed on every kept row and a side plan computes a data
-	// reducer's arguments, so an error there is raised (§7.2). Where every row takes a slot and an entry, they are the
-	// rows themselves.
+	// A row in no class of the key stops here, so the rows that take a slot are the rows the node holds. Where every
+	// row takes one, they are the rows themselves.
 	Reach own_stored;
 	unsafe_vector<idx_t> own_slots;
 	const Reach *stored = &rows;
 	const unsafe_vector<idx_t> *stored_slots = &slots;
-	bool every_row = grouped.size() == count;
-	for (idx_t k = 0; k < grouped.size() && every_row && reducer; k++) {
-		every_row = present[grouped[k]];
-	}
-	if (!every_row) {
+	if (grouped.size() != count) {
 		own_stored.Reserve(grouped.size());
 		own_slots.reserve(grouped.size());
 		for (auto i : grouped) {
-			if (present[i] || !reducer) {
-				own_stored.Add(rows.rows[i], rows.parents[i]);
-				own_slots.push_back(slots[i]);
-			}
+			own_stored.Add(rows.rows[i], rows.parents[i]);
+			own_slots.push_back(slots[i]);
 		}
 		stored = &own_stored;
 		stored_slots = &own_slots;
