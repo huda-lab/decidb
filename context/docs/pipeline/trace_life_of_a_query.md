@@ -33,7 +33,6 @@ matches `DECIDE typed_decide_variable_list opt_decide_tail`, and `x(BOOL)` match
 The transformer moves three things onto the `SelectNode`: `decide_variables`
 (one `PG_AEXPR_OF` node pairing `x` with `bool_variable`), `decide_constraints`,
 and `decide_objective`, with `decide_sense = MAXIMIZE`.
-`RefuseRemovedDecideSpellings` finds nothing to refuse.
 
 Parsed-tree validation, at the binder's entry: nothing fires. No decision named
 through a relation, no scope to place, no cast over a decision, no scalar function

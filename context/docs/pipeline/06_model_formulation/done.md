@@ -255,7 +255,7 @@ data-valued bound differs per row and is known only here. The fold:
 - **leaves an open end open.** `x <= +inf` admits every value, so the box stays as it is. An
   end that admits nothing (`x >= +inf`) keeps the row, which `SolverModel::ProvesInfeasible`
   answers before any backend.
-- **does not run under diagnosis** (`keep_singleton_rows`, set by the `DIAGNOSE`
+- **does not run under diagnosis** (`SolverInput::diagnose`, set by the `DIAGNOSE`
   prefix). The elastic engine relaxes rows and quotes the clause from their provenance
   (`x <= cap_col + delta`), so a diagnosed statement keeps the rows.
 
@@ -393,7 +393,9 @@ than a point. Gurobi handles that. HiGHS is declared not to support the
 ## 7. Provenance carried on every row
 
 `ConstraintProvenance` (`ilp_model.hpp`) travels with each emitted constraint so
-diagnosis can report at the **user-clause** level rather than at raw matrix rows:
+diagnosis can report at the **user-clause** level rather than at raw matrix rows. An ordinary query records the
+clause of each row (`source_clause_id`) and builds nothing else: every other field is what a diagnosis reads, and is
+stamped only under `DIAGNOSE` (`SolverInput::diagnose`). Under `DIAGNOSE` a row holds
 the source comparison for display, `repair_group_id` for elastic grouping (execution
 numbers every clause it evaluates -- the lowered clauses, then under DIAGNOSE the
 folded (singleton-row) bounds' clauses, then the composed clauses, whose id

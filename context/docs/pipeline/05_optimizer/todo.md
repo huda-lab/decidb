@@ -4,30 +4,6 @@ Open work in the optimizer passes. Finished work is in [done.md](done.md). How t
 [`../../direct_solve/framework/todo.md`](../../direct_solve/framework/todo.md) § How to work any task in these todo
 files.
 
-## OPT-19 — A NaN message says NaN and names where it stands
-
-- **Problem.** A NaN or infinite value's message names the value and suggests an in-place `CASE WHEN isfinite(...)`
-  edit. To name the first bad input of a merged coefficient, the coefficient keeps its original `inputs` through four
-  layers.
-- **Change.** By the owner's ruling (2026-11-18, `context/opa_rewrite/decisions.md` R12, R14): the message says it
-  found a NaN or infinite value and names the column or value where it stands, with the query's caret; no
-  suggestion. The `inputs` kept only to choose what a message names go. `language/errors.md`, the guide and the
-  stage docs quote the new text.
-- **Tests.** The tests the rewording breaks move to `assert_error_at` (`testing/oracle.md` §3.6).
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "nan or finite"` passes.
-
-## OPT-20 — An = bound's disagreement names its group, not its class
-
-- **Problem.** Under `per K`, an `=` bound whose class is not inside its `by` gets a second, finer check only to
-  name the class: two more aggregates and one more scope check on every query that has one
-  (`AddDisagreementCheck` in `decide_rewrite_rhs_bounds.cpp`), and a per-(group, class) pass in
-  `TakeTightestFrameBound` (`decide_value_extraction.cpp`) for a frame bound.
-- **Change.** By the owner's ruling (2026-11-18, `context/opa_rewrite/decisions.md` R15): one check per `by` group, on
-  both bound kinds; the class-naming code (about 60 lines) and the tests that check only the class name go.
-  `class_key` and `KeyClasses` have other readers and stay.
-- **Tests.** The tests the rewording breaks move to `assert_error_at` (`testing/oracle.md` §3.6).
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "bound_side_tables or anr_frames"` passes.
-
 ## OPT-21 — The solver path depends on no direct-solve code
 
 - **Problem.** `DecideOptimizer::RetainRowChecks` builds a whole `DirectFrontEnd` to copy one vector; a check passes
@@ -94,3 +70,27 @@ files.
 - **Needs.** OPT-28.
 - **Done when.** Each pass runs once per query (`DECIDB_PROFILE=1`); `./test/decide/run_tests.sh -n 2 -k "bilinear
   or abs or rewrite"` passes.
+
+## OPT-30 — Two value checks of one comparison
+
+- **Problem.** `AddAbsValueCheck` (`decide_rewrite_abs.cpp`) drops a duplicate by comparing two checks including their
+  place, and `AddValueCheck` (`decide_rewrite_rhs_bounds.cpp`) compares them its own way. Two checks that differ only in
+  place are one check with two carets.
+- **Change.** One comparison, shared by both, which ignores the place.
+- **Done when.** `./test/decide/run_tests.sh -n 2 -k "abs or bound_side_tables"` passes.
+
+## OPT-31 — A node built with no value keeps no location
+
+- **Problem.** A builder that makes a node with no value of its own gives it no location: `INTEGER(1)` and `INTEGER(0)`
+  in `decide_product_form`, the `norm_in` L0 links, `rewrite_scoped`'s `sqrt(w) * e` and `power`, the scale, negate and
+  add of `decide_tree.cpp`, `RebindMultiply`, `ScaleFrameColumn`. A NaN message about a value one of them holds finds no
+  caret. A quotient inside a sum of several terms is not tested.
+- **Change.** Each takes the location of the node it replaces (`DecideReplaces`), and a test reaches each.
+- **Done when.** `./test/decide/run_tests.sh -n 2 -k "nan or finite or invalid_value"` passes.
+
+## OPT-32 — Optimizer labels are built on every query
+
+- **Problem.** `minmax_clause_labels`, `aux_var_expressions` and `link.label` are display state built for every clause,
+  in time proportional to the clauses, and no `diagnose` gate stands before them.
+- **Change.** They are built under `EXPLAIN` and `DIAGNOSE` only.
+- **Done when.** `./test/decide/run_tests.sh -n 2 -k "explain or diagnose"` passes with no golden change.

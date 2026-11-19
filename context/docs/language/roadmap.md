@@ -27,9 +27,8 @@ which replaces it.
 ### A qualified decision name (p. 7)
 
 - **Today:** a declaration `DECIDE T.ship(INT)` and a reference `D.open` in `SUCH THAT` are refused; a decision is
-  declared and referenced by its bare name (the removed-spelling rules for `T.x(TYPE)` in
-  `decide_removed_spellings.cpp`, D56; `RefuseQualifiedDecisionReferences`, D43, S2).
-- **Why today:** so a qualifier is never read as a scope, which the removed `T.x(TYPE)` spelling did.
+  declared and referenced by its bare name (`T.x(TYPE)` is a syntax error, D56; `RefuseQualifiedDecisionReferences`, D43, S2).
+- **Why today:** so a qualifier is never read as a scope.
 - **Deck:** "Reason 3": a qualifier keeps its SQL role and only resolves the name; with the same scope, `T.ship(INT)`
   and `ship(INT)` differ only in name resolution.
 

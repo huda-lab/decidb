@@ -92,8 +92,7 @@ decline it. To avoid the difference, round the bound. `test_s1_direct_reads_boun
 behavior, so changing it is deliberate.
 
 **Error wording** (`../../architecture/policy.md`). The messages are the solver's, built by the same functions. A NaN
-count bound, fixed value or `SUM` source column raises `DECIDE: the bound cap is NaN on some rows. Skip those rows
-by writing 'CASE WHEN NOT isnan(cap) THEN cap END' in its place.`. Neither path names a row: a row's place in the input
+count bound, fixed value or `SUM` source column raises `the bound 'cap' is NaN on some rows`, with the caret on the bound. Neither path names a row: a row's place in the input
 depends on the scan. A NULL is skipped on both paths: a NULL limit is no limit, and a NULL score leaves its row out of
 the objective.
 The non-finite score and the infeasible messages are the solver's too. A computed bound or fixed value
@@ -113,7 +112,7 @@ A query S1 does not apply to keeps its answer: it runs on the solver, and `requi
 | A count body with a constant or a column term (`SUM(x + 1)`, `SUM(x + bonus)`) | The class is a count of `x`; the solver answers these exactly | A rewrite to `SUM(x) <op> B - c*COUNT(*)` before both paths, which changes the solver's overflow, `DIAGNOSE` and error text |
 | A count body with a weight on `x` other than 1 or -1 (`SUM(2*x + 1)`) | A weighted constraint (S3, S4) | A weighted rule |
 | A factor on `SUM(...)` in the objective that is not a usable constant: a zero divisor or a subquery factor (`(SELECT 2) * SUM(...)`) | A zero divisor raises on the solver, which a plan built from a constant cannot reproduce. A subquery factor has no sign when the plan is built, and the sign decides whether the part reverses | Admit a subquery factor once its value can be read before the plan is chosen. Low value |
-| A bound on `x` the solver folds (`variable_bound`) that cannot hold: an upper bound below 0 or a lower bound above 1 (`x >= 2`, `x <= -1`, `x < 0`, `x > 1.5`, `x = -1`; a strict bound counts after its shift to a whole number) | The solver raises `x >= 2 cannot hold for a BOOL variable.` before it reads a row, so an empty source raises it too, and under `DIAGNOSE` too. A query that can only fail has no speed to win, so S1 declines it (`DirectContradictsDomain`) and the solver answers. The same bound with a `when` is admitted and raises DECIDE's generic infeasible error from the plan, as the solver does. An affine spelling (`1*x >= 2`) folds too, and S1 declines it the same way | Not planned |
+| A bound on `x` the solver folds (`variable_bound`) that cannot hold: an upper bound below 0 or a lower bound above 1 (`x >= 2`, `x <= -1`, `x < 0`, `x > 1.5`, `x = -1`; a strict bound counts after its shift to a whole number) | The solver raises `the constraint cannot hold: 'x' is a BOOL decision` before it reads a row, so an empty source raises it too, and under `DIAGNOSE` too. A query that can only fail has no speed to win, so S1 declines it (`DirectContradictsDomain`) and the solver answers. The same bound with a `when` is admitted and raises DECIDE's generic infeasible error from the plan, as the solver does. An affine spelling (`1*x >= 2`) folds too, and S1 declines it the same way | Not planned |
 
 **Belongs to another problem class or is intentional:** weighted constraints such as `SUM(w * x) <= B` (S3 and S4 cover two special cases of them); `INT` and
 `REAL` variables (A1 and the R classes); more than one decision, keyed or query-wide decisions (D1); lower and upper bounds with

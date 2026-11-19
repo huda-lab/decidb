@@ -450,7 +450,7 @@ preferred when it can restore feasibility.
   term has no single literal coefficient to quote, and the raw per-row fan-out
   (`24710*buy + 56688*buy + …`) is unreadable. The coefficient's source-column name is carried
   from the binder (`Term::coefficient->GetName()` at evaluation in `physical_decide.cpp`) through
-  `EvaluatedConstraint::coefficient_labels` → `ConstraintProvenance::weight_labels`
+  `EvaluatedConstraint::coefficient_names` → `ConstraintProvenance::weight_labels`
   (`ilp_model_builder.cpp`, stamped at the aggregate emission sites) → `FormatSumLhs`, which renders
   `SUM(var * label)` when a fanned variable is data-varying and a label is present (else it still
   falls back to the raw form). Uniform-coefficient sums are unaffected (they still fold to
@@ -492,9 +492,8 @@ preferred when it can restore feasibility.
   pasteable-edit test and leak the keyed/per-row distinction. The accumulating build sites
   therefore stamp `provenance.folded_terms` — the coefficient the user actually wrote per
   summed decide variable, taken from `CoefficientColumn::IsUniform()` or, when the constant
-  materializes dense, from a numeric `coefficient_labels` entry (that label is the
-  coefficient expression's source text, so a wholly-numeric label *is* the written
-  coefficient). `FormatLhs` consults `FormatFoldedSumLhs` **before** the matrix-inference
+  materializes dense, from a `coefficient_names` entry that holds the user's literal (`CoefficientName::is_literal`,
+  `literal`: the number the user wrote, carried as a number). `FormatLhs` consults `FormatFoldedSumLhs` **before** the matrix-inference
   paths, since those misread accumulated rows; it declines (returning false) for any row it
   cannot reconstruct whole — an auxiliary column, an unstamped variable, or a data-varying
   term with no symbolic name — leaving the paths below unchanged. `folded_terms` is

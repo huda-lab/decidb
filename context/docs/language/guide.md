@@ -2,8 +2,8 @@
 
 What a user can write, and what it means. This is the single source for syntax; the other files in this folder
 explain how each part is built. Every claim here describes current behavior; where code and this file disagree, the
-code wins and this file is fixed. Messages are in [errors.md](errors.md); shapes the language refuses or does not have
-yet are in [errors.md §2](errors.md#2-not-supported-yet) and [roadmap.md](roadmap.md).
+code wins and this file is fixed. Messages are in [errors.md](errors.md); shapes the language refuses or does not handle
+are in [errors.md](errors.md#2-bind-time) and [roadmap.md](roadmap.md).
 
 Section numbers are stable: code and tests cite them (`guide.md §6.4`).
 
@@ -215,16 +215,14 @@ data and unaffected.
   as 0/1 (`x <= 4 * CAST(cap > 2 AS INT)`), a lambda (`SUM(x * list_reduce([cap, b], (a, z) -> a + z))`), a prepared
   statement's `$1`, a table macro's parameter. A `CASE` that reads no decision is data as well, a per-row coefficient as
   `COALESCE` over data is (`SUM(x * CASE WHEN tier = 1 THEN 1 ELSE 2 END)`); a `CASE` over a decision is refused (§5).
-  A comparison that reads a decision, used as a number (`x <= (x > 1)`), is refused: *"SUCH THAT does not support
-  'x > 1'"*.
+  A comparison that reads a decision, used as a number (`x <= (x > 1)`), is refused: *"'x > 1' is a comparison used as a number"*.
 - **Subqueries**: scalar subqueries, uncorrelated or correlated, may be bounds or factors. A correlated one becomes a
   per-row value and follows the bound rule of §5. A subquery cannot reference the enclosing query's decisions.
 - **Nested DECIDE**: a scalar bound subquery may hold its own `DECIDE`; it solves first and its one-row result is the
   outer bound. A refusal of the inner query reaches the user as its own message.
 - **Outer queries**: a DECIDE solves one problem, so it cannot read a column of an outer query (a `LATERAL` subquery,
   or a scalar subquery in another query's select list), in any clause or its `WHERE`. The message names the column
-  as written, inside a reducer or a `when`, `per` or `by` too, and points to joining that table into the FROM and
-  writing the clause with `per`.
+  as written (*"'o.k' refers to an outer query"*), inside a reducer or a `when`, `per` or `by` too, and points at it.
 - **NULL**: a NULL data value is skipped where it is read, never read as a zero (deck pp. 50, 56). A reducer skips a
   row whose summand is NULL, as SQL does: `SUM(w * x)` leaves out the rows where `w` is NULL, `SUM(a*x + b*y)` drops
   the row's whole summand when `a` is NULL, and `AVG(w * x)` divides by the rows it kept. A NULL that reaches a
@@ -232,9 +230,9 @@ data and unaffected.
   `SUM(x) <= cap` with a NULL `cap` has no constraint there. In the objective, a NULL term is dropped. `COALESCE`
   imputes a value instead: `SUM(x * COALESCE(w, 0))`. A NULL written in the query beside a decision
   (`SUM(x + NULL)`) is refused where it is written. NaN is an error, as is an infinite coefficient; an infinite bound
-  is a value, as in SQL (`x <= 4 / 0` always holds). The error names the value and the edit that skips its rows:
-  the value replaced where it stands by `CASE WHEN isfinite(v) THEN v END`, which leaves every frame's timeline as it
-  is. `COUNT(col)` also counts a NaN, as SQL does.
+  is a value, as in SQL (`x <= 4 / 0` always holds). The error says the value is NaN or infinite and points at it where it stands
+  (*"'v' is NaN or infinite on some rows"*, for a bound *"the bound 'v' is NaN on some rows"*); it names no row and
+  suggests no edit. `COUNT(col)` also counts a NaN, as SQL does.
   In a `when`, NULL is false; in a written key column, NULL is no class (§7.2).
 
 ### 3.1 Quadratic constraints
@@ -268,7 +266,7 @@ backends take doubles, so every value ends up there.
   sizes can carry that slack into a visible error. When the model sent to a solver holds a coefficient of 1e6 or more, a
   limit or bound of about 4.5e9 or more (a constant DeciDB adds counts too), or a nonzero objective coefficient of 1e-6
   or less (`AVG` over a million rows has one), stderr shows once per query: *DECIDE: a very large or very small number may
-  make this answer inaccurate. Scale its data toward 1.* The query solves as usual. A query answered by direct solve (§10) uses no
+  make this answer inaccurate.* The query solves as usual. A query answered by direct solve (§10) uses no
   solver, so these sizes do not apply to it; it prints the same line where its own arithmetic loses precision.
 
 ## 4. Objective
@@ -329,7 +327,8 @@ Tests: `test/decide/tests/test_scope_objective.py`. Problem classes and solver s
   no `when` and no filter, a member that is a lone decision is bounded in its column box, so `min(x) >= -5` makes `x`
   signed (§2). The *hard* direction is the opposite one, or `=`. In the objective, `MINIMIZE MAX` and `MAXIMIZE MIN`
   are the easy direction; `MAXIMIZE MAX` and `MINIMIZE MIN` are the hard one. On HiGHS a hard case needs every member
-  bounded, written or inferred; the message names the variable and the bound to add. Gurobi needs none.
+  bounded, written or inferred; the message names the variable and the construct that needs its bound (*"'x' has no
+  finite bound, which MIN or MAX needs"*). Gurobi needs none.
 - **A reducer's own filter**: `sum(when morning: x * hours) + sum(when evening: x * hours) <= 40` (§5.3).
 - **A factor on a reducer** works for every reducer, on either side: `2 * SUM(x*p)`, `SUM(x*p) / 2`, `2 * MAX(x*v)`,
   `SUM(x) + 2 * MAX(x*v)`. A negative factor reverses the relation the reducer faces (`-2 * MAX(e) >= -8` is
@@ -337,12 +336,11 @@ Tests: `test/decide/tests/test_scope_objective.py`. Problem classes and solver s
   - In a **constraint** the factor may be any decision-free term: a literal, an uncorrelated subquery, a column or a
     correlated subquery. It is a tuple term: under `per`, each of its values in a class is a variant (§7.1), and a
     row-varying one gives the helper-decision shape (§6.4).
-  - In the **objective** it must be one value over the kept rows; a row-varying one is refused with a pointer to
-    `SUM(x * weight)`.
+  - In the **objective** it must be one value over the kept rows; a row-varying one is refused (*"'weight' varies per row, which cannot scale a reducer in the objective"*).
   - A **`BOOL` decision** as the factor answers, in a constraint and in the objective: `b * sum(x) <= 4`,
     `MAXIMIZE b * sum(x)`. It also takes `-b` and data times `b` (`2 * b`); the reducer is a bare `SUM`, `AVG`, `MIN` or
-    `MAX` (§6.4). An `INT` or `REAL` decision as the factor is refused, even a query-wide one: `s * sum(x)` is written
-    `sum(s * x)`, a bilinear term. In the objective `b` must be one instance over the kept rows, as a decision beside a
+    `MAX` (§6.4). An `INT` or `REAL` decision as the factor is refused, even a query-wide one (*"'s' is an INT decision, which cannot scale
+    a reducer"*): `s * sum(x)` is written `sum(s * x)`, a bilinear term. In the objective `b` must be one instance over the kept rows, as a decision beside a
     reducer must.
   - A **data-only reducer** may not share a scaled term with a decision (`x * avg(cap)`, `sum(x) / sum(cap)`); compute
     it as an uncorrelated subquery instead.
@@ -372,7 +370,8 @@ Tests: `test/decide/tests/test_scope_objective.py`. Problem classes and solver s
 - **Other functions and operators over a decision** (`sqrt`, `exp`, `ln`, `floor`, `%`, `COALESCE`, …) are refused: the
   model has no reading for them. So are a division by a decision, a `POWER` whose exponent is not a whole number known
   before the query runs, and a `CASE` over a decision. Only `ABS` and `POWER` with a whole exponent wrap a decision, and
-  a term of degree above 2 is refused. Each message quotes the clause as written and points at the term. Any function,
+  a term of degree above 2 is refused (*"function 'sqrt' over a decision is not supported"*, *"a term of degree 3 is not
+  supported"*). Each message points at the term. Any function,
   operator or `CASE` over data only is a per-row coefficient.
 
 ### 5.1 The colon form — `SUM(D: e)`
@@ -481,8 +480,7 @@ per t.g: sum(per t.h: max(per t.k: sum(x) by (t.g, t.h, t.k)) by (t.g, t.h)) by 
   over its path: in `per t.g: sum(x - avg(t.v) by (t.h)) by (t.g) <= 0` each row reads the mean of its `(t.g, t.h)`
   group among the rows the path keeps; where that group has no value (a NULL key, a `when` that keeps none of its
   rows) the member is skipped, as any NULL a reducer reads. It is read as a coefficient, so what it reads must be
-  finite (*"DECIDE: t.v / 0.0 is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(t.v / 0.0)
-  THEN t.v / 0.0 END' in its place"*);
+  finite (*"'t.v / 0.0' is NaN or infinite on some rows"*);
   on a bound, infinity is a value.
 - **How it is solved.** Every reducer of a nest over decisions is a helper decision (§6.4) keyed by its path, one
   instance per path group, defined once per group, innermost first, and read by the reducers around it. A helper is
@@ -503,11 +501,11 @@ per t.g: sum(per t.h: max(per t.k: sum(x) by (t.g, t.h, t.k)) by (t.g, t.h)) by 
   sides, so `per t.g: sum(abs(max(x) by (t.h) - 4)) by (t.g) <= 5` reads each `(t.g, t.h)` group's maximum; a square or
   product of decisions it then makes is a quadratic row (Gurobi).
 - **Refused** (D80): `norm` inside a reducer and a reducer inside `norm`; a square in a nest the objective would have
-  a helper hold (*"... squares or multiplies decisions inside nested reducers ..."*).
+  a helper hold (*"'q' squares or multiplies decisions inside nested reducers, which is not allowed"*).
 - **A reducer over data alone scaling a decision** inside a reducer over decisions is a value of its path's group, a
   coefficient as any data is: `sum(avg(t.p) * x) <= 25` over p = 10, 30 is `20 (x1 + x2) <= 25`, and `x / max(t.v) by
-  (t.h)` divides by each group's largest value. Outside every reducer over decisions the rule of §5 refuses it with
-  its remedy (*"An aggregate over table columns ... cannot multiply a decision variable"*). A factor on a reducer over decisions scales that reducer, not a reducer over data in its operand,
+  (t.h)` divides by each group's largest value. Outside every reducer over decisions the rule of §5 refuses it
+  (*"'avg(cap)' reduces data, which cannot multiply a decision"*). A factor on a reducer over decisions scales that reducer, not a reducer over data in its operand,
   which is a term of the operand's own scope: `2 * sum(x - avg(t.v) by (t.h)) by (t.g)` is linear, as `sum(2 * x - 2 *
   avg(t.v) by (t.h)) by (t.g)` is.
 
@@ -561,16 +559,13 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   -- the range several anchors share: one per timeline when neither end depends on the anchor, one per position
   otherwise -- defined once, so `x <= sum(from first to last: x) over (t.period)` over n rows is one definition of n
   terms. `count` over decisions is refused, as `count(x)` is. One frame may read at most `decide_frame_limit` values
-  over its ranges (default 10,000,000; `SET decide_frame_limit = n`), else *"DECIDE: sum(from first to last: t.v) over
-  (t.period) reads more than 4 values over its ranges, above decide_frame_limit (4). Narrow the range, or raise the
-  setting."*
+  over its ranges (default 10,000,000; `SET decide_frame_limit = n`), else *"the frame reads more than 4 values over its ranges, above decide_frame_limit (4)"*, at the frame
 - **One row per position** (D73): the rows of a position a frame reads -- a point's selected one, each one a range
   visits -- must hold one signature of the payload, as the deck's frame container holds one per position (p. 110):
   each column it reads by value, each decision by instance, whatever its coefficient. So `at(previous: t.a + t.b)`
   over rows (1, 2) and (2, 1) at one position is two, though both read 3, and so is `t.w * x` over two rows with `t.w
   = 0`; a NULL and a value are two, whichever row comes first. Else
-  *"DECIDE: at(previous: x) over (t.period within t.product) finds 2 rows at t.product = 'A', t.period = 1; a position
-  must hold one row."*
+  *"the frame finds 2 rows at t.product = 'A', t.period = 1"*, at the frame.
 - **Under `per K`** (D75): each class of `K` lies in one timeline of every frame its body reads directly, else an
   error naming the class and the timelines. A frame is a field of the clause's signature by its keys (D82, deck p.
   99), as a reducer is by its `by` key: its timeline, the anchor's position there when it reads relative to the
@@ -594,8 +589,7 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   over (t.period within t.g)` is the least previous cap of each group, `>=` the greatest, `=` its one value (two are
   an error, as for a column); a group none of whose anchors reads a value has no instance.
 - **The objective** is produced once, `per ()` (D72, D75): a root frame whose kept rows span two timelines is the
-  `per ()` error above (*"DECIDE: the objective (per ()) does not determine the timeline t.product of at(first: x) over
-  (t.period within t.product). Its rows span t.product = 'A', 'B'."*), whatever the timelines read; one read from more
+  `per ()` error above (*"the objective (per ()) does not determine the timeline t.product: its rows span t.product = 'A', 'B'"*), whatever the timelines read; one read from more
   than one position or fallback of one timeline is an error saying the objective would be produced more than once.
 - **Refused** (D80): a frame in a `when`, a `per`, a `by`, a `within` or an order key; a reducer or another frame
   inside a frame's payload or fallback. A frame over data is a coefficient read
@@ -608,9 +602,9 @@ selected row's own column, with no helper decision; a range over decisions is it
 ([roadmap.md](roadmap.md)). A reducer over data whose argument reads a frame, on a bound or inside a reducer over
 decisions, is computed once the frames are, over the rows its path keeps, each class of its own `per` once per
 signature (the frame by its keys, D82): `sum(per t.product: at(first: t.v) over (t.period within t.product))` reads
-each product's first value once. Not supported yet ([errors.md §2](errors.md#2-not-supported-yet)): an `else` that reads
-a decision while the payload reads none; an AVG range under `<>`, which is fractional (*"Comparison '<>' is not supported here: 'avg(from
-first to last: x) over (t.period)' has type DOUBLE and can take fractional values ..."*).
+each product's first value once. Not supported ([errors.md](errors.md#2-bind-time)): an `else` that reads
+a decision while the payload reads none; an AVG range under `<>`, which is fractional (*"'<>' compares 'avg(from first to last:
+x) over (t.period)', which can take fractional values"*).
 
 Tests: `test/decidb/test_frame_parser.test` (answers, parse and bind errors, ordinary SQL windows unchanged),
 `test/decide/tests/test_anr_frames.py` (`TestSyntax`; `TestPoint` and `TestRange`: every frame fixture of
@@ -659,7 +653,8 @@ per D.depotID: sum(ship) by (D.region) <= D.capacity
 - **One scope, one constraint**: in `per g: A AND B` only `A` is scoped.
 - Key elements are columns and relations, as in §2.3. Several columns are written without parentheses (`per a, b:`).
 - **A NULL key is no class** (D5): a row whose written `per` column is NULL gets no constraint from the clause. A
-  relation's columns compare NULL as a value.
+  relation's columns compare NULL as a value. A row in no class of a `per` key is read by nothing below the `per`, a
+  reducer, a frame or a helper included, so an error in its values raises nothing (D81).
 - **A key groups under its collation** (D69), as `GROUP BY` does: over a `COLLATE NOCASE` column, 'a' and 'A' are one
   class, one `by` group and one keyed decision, and a message names the group by its least spelling ('A'). Plain text
   compares case-sensitively.
@@ -791,6 +786,7 @@ so it cannot count them. Tests: `test/decide/tests/test_scope_variants.py`, `tes
 | Situation | Outcome |
 |---|---|
 | NULL in a declaration's, constraint's or `by` key column | no class or group of that key (D5); a relation's columns compare NULL as a value |
+| a row in no class of a `per` key | read by nothing below the `per`: no reducer, frame or helper reads it, and an error in its values raises nothing (D81) |
 | a keyed decision on a NULL-key row | no decision: the row shows NULL, a reducer skips it, an unreduced use skips the instance |
 | NULL `when` condition | row dropped |
 | NULL in a reducer's summand | the row is skipped, as in SQL; AVG divides by the rows kept (§3) |
@@ -811,9 +807,10 @@ Run before solving, on every run, also under `DIAGNOSE`:
 
 | Check | Message |
 |---|---|
-| The objective is produced once (§4, D72) | `DECIDE objective: 'D.capacity' takes more than one value over the kept rows (20, 40), so the objective would be produced more than once; move it inside a reducer or fix it with when.` · for a decision: `the decision 'ship' (declared per row) has more than one instance over the kept rows, ...` · for a `by` key: `'D.region' in by (D.region) takes more than one value over the kept rows ('East', 'West'), ...` |
+| The objective is produced once (§4, D72) | `'D.capacity' takes more than one value over the kept rows (20, 40), so the objective would be produced more than once` · for a decision: `the decision 'ship' (declared per row) has more than one instance over the kept rows, so the objective would be produced more than once` · for a `by` key: `'D.region' in by (D.region) takes more than one value over the kept rows ('East', 'West'), so the objective would be produced more than once` |
 
-The phrase `would be produced more than once` is fixed; names and values come from the query and the data, the least
+The message states the cause and stops; its caret is on the field, the key element, the declaration or the frame that
+differs. The phrase `would be produced more than once` is fixed; names and values come from the query and the data, the least
 and the greatest value as `ORDER BY` places them (NULL last), so the message does not depend on row order. A frame's two
 positions read first and last in the frame's own order. Over a join a column is named with its relation.
 
@@ -840,9 +837,8 @@ As with the large-number warning (§3), a query answered by direct solve (§10) 
 `DIAGNOSE` prefixes a `SELECT` that carries a `DECIDE` clause. It runs the query and reports on the run instead of
 returning rows, as `EXPLAIN ANALYZE` does for an ordinary query. **It is the only thing that starts the diagnostics
 engine**, so a query without it never pays for a diagnostic solve. Without the prefix a failed query states its state
-and stops: *"DECIDE optimization is infeasible. Prefix the query with DIAGNOSE to see which clause to change."*
-Where no solver on the machine can run the model (a quadratic limit with no Gurobi licence), `DIAGNOSE` is refused, so
-the error leaves the advice out.
+and stops: *"the DECIDE query is infeasible"*. Where no solver on the installation can run the model (a quadratic limit
+with no Gurobi licence), `DIAGNOSE` is refused as the plain query is (*"... is not supported on this installation"*).
 
 ```sql
 DIAGNOSE SELECT id, x FROM t DECIDE x(INT) SUCH THAT x <= 5 AND x >= 8 MAXIMIZE SUM(x);

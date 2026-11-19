@@ -256,8 +256,8 @@ it and no automatic path.
   → logical plan → stage 08, and never read back out of a setting.
 - **What it arms.** `PhysicalDecide::FinalizeSolveResult` reads the flag once as
   `diagnosis_armed` and pre-arms the shared diagnosis prep it gates:
-  `SolveModelOptions::extract_unbounded_ray`, `keep_singleton_rows` (data-valued singleton rows stay rows), and
-  retained-model capture. An unprefixed query pays for none of it.
+  `SolveModelOptions::extract_unbounded_ray`, `SolverInput::diagnose` (the display state of each row is built, and
+  data-valued singleton rows stay rows), and retained-model capture. An unprefixed query pays for none of it.
 - **The gate.** The router's classifier takes the armed flag and routes a failure to an
   engine only under the prefix (`../router/done.md`).
 - **A query with no DECIDE clause is rejected**, at bind time, by `BindDiagnose`:

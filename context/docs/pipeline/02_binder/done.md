@@ -31,22 +31,23 @@ resolves, so a key can be told from a decision declared before or after it. The 
 
 | Check | Message |
 |---|---|
-| Name collides with a column of the FROM clause, a `USING` column included | `DECIDE variable '%s' conflicts with an existing column name.` |
-| Name declared twice | `Duplicate DECIDE variable name '%s'.` |
+| Name collides with a column of the FROM clause, a `USING` column included | `decision 'x' has the name of a column` |
+| Name declared twice | `decision 'x' is declared twice` |
+
+Each is a Binder Error at the declaration. The messages of every layer are in [`../../language/errors.md`](../../language/errors.md).
 
 A decision is registered under its bare name, and only that name references it.
 `RefuseQualifiedDecisionReferences` refuses `D.x`, where `D` is a relation of the FROM
-clause with no column `x` and `x` is a decision, over the constraints, the objective,
-the select list and `ORDER BY`, before anything else reads them: *"DECIDE: write x, not
-D.x; a decision is referenced by its bare name"*, or, in a `when` condition, a `per` key
-or a `by` key, *"DECIDE: D.x is a decision; when, per and by may only use data"* (D43).
-A qualified name that binds to a column, a struct field or a `USING` column is left to
-the SQL binder.
+clause with no column `x` and `x` is a decision, in a `when` condition, a `per` key or a
+`by` key, before anything else reads them: *"'D.x' is a decision, which when, per and by
+cannot read"* (D43). Anywhere else `D.x` is no decision: it is an ordinary column name,
+and the SQL binder reads it (a qualified name that binds to a column, a struct field or a
+`USING` column is left to it).
 
 WHERE is planned below the DECIDE operator, where a decision has no value yet, so it
 refuses one. After WHERE binds, `RefuseDecisionInWhere` (`bind_select_node.cpp`) looks
 for the DECIDE binding in the filter, directly or as a correlated column of a subquery:
-*"DECIDE: x is a decision; WHERE may only use data"*. HAVING, QUALIFY, GROUP BY,
+*"'x' is a decision, which WHERE cannot read"*, at the decision. HAVING, QUALIFY, GROUP BY,
 ORDER BY and the select list are planned above DECIDE and read its result, so a
 decision is a column there.
 
@@ -84,17 +85,17 @@ decision's scope. One scope exists per key, whichever spelling names it: a decla
 parser's marker. Each key element resolves against the query's own bind context —
 never an outer query, whose column would be one constant per run of this one:
 
-1. A declared decision, by its name: *"DECIDE: x is a decision; when, per and by may
-   only use data"*. A decision named like a column was already refused by the
+1. A declared decision, by its name: *"'x' is a decision, which when, per and by cannot
+   read"*. A decision named like a column was already refused by the
    conflict check, so a name never means both.
 2. A column, resolved as SQL resolves it (`BindContext::GetBinding(alias, column)`):
    `R.c`, `S.R.c`, `C.S.R.c`, or an unqualified `c` — the `USING` primary relation's
-   for a `USING` column (a `FULL OUTER JOIN USING` column has none: *"... write
-   S.depotID or D.depotID in the per key"*), else the one relation that has it
+   for a `USING` column (a `FULL OUTER JOIN USING` column has none: *"'depotID' is merged
+   by FULL OUTER JOIN USING"*), else the one relation that has it
    (DuckDB's ambiguity error otherwise).
 3. A relation (`R`, `S.R`, `C.S.R`), standing for its stored columns.
 4. A column of an outer query: the outer-query refusal (§ the outer-query refusal below).
-5. Otherwise *"DECIDE: depot is neither a column nor a relation of the FROM clause"*.
+5. Otherwise *"'depot' is not a column or a relation of the FROM clause"*.
 
 `rowid` and a generated column are not stored columns: named, they are an error;
 inside a relation, they are skipped. Columns are registered through
@@ -147,8 +148,8 @@ Four layers refuse a DECIDE query, each for what only it can see:
 
 | Layer | Refuses |
 |---|---|
-| Parser (stage 01) | Syntax: the removed spellings and the grammar's own errors (a missing type, a comma between constraints). |
-| Binder (this stage) | Binding: names, scopes, aggregation levels, function resolution. Language not built yet (*"is not supported yet"*). What only this stage can see: cast authorship, the declared types an integer step needs, a truth value read as a number. |
+| Parser (stage 01) | Syntax: the grammar's own errors (a missing type, a comma between constraints), a removed spelling among them. |
+| Binder (this stage) | Binding: names, scopes, aggregation levels, function resolution. A shape the language allows and DeciDB does not handle is *"is not supported"* (Not implemented Error); a nesting the language keeps out is *"is not allowed"* (D80). What only this stage can see: cast authorship, the declared types an integer step needs, a truth value read as a number. |
 | Shape check (stage 04, `DecideShapeCheck`) | Algebra: the function and operator vocabulary over a decision, exponents, division by a decision, `CASE` over a decision, degree (`../04_canonicalizer/done.md` §3.11). |
 | Solver gate (stage 05, `RequireDecideSolverSupport`) | What the chosen backend cannot take: quadratic rows on HiGHS, non-convexity, MIQP, a singular Q. |
 
@@ -158,18 +159,18 @@ Four layers refuse a DECIDE query, each for what only it can see:
 - a decision's name, or a column a clause reads (a `per` or `within` key too), that contains a DECIDE tag or the
   name prefix of a helper decision (`DecideNameContainsTag`, over the one list `DECIDE_TAGS` in `enums/decide.hpp`):
   later stages find a tag by searching an expression's name, so such a name would be read as the tag. The refusal
-  names the identifier (*"DECIDE does not support the name '...'"*), in any letter case, as DuckDB's identifiers are;
+  names the identifier (*"'...' is not allowed as a name in DECIDE"*), in any letter case, as DuckDB's identifiers are;
 - a volatile function, below;
 - a user-written cast over a decision (`ValidateDecideNoExplicitDecisionCasts`): authorship is observable only on
   the parsed tree (`../04_canonicalizer/done.md` §3.6);
 - an aggregate over table columns that multiplies or divides a decision (`ValidateDecideNoDataAggregateFactor`);
 - a NULL beside a decision, a reducer with no argument, a reducer inside a reducer, a non-scalar subquery or one that
   reads a decision (§4a, §4);
-- a comparison, `BETWEEN` or conjunction that reads a decision, used as a number (*"SUM expression does not support
-  '(x > 1)'"*), and an `OR` between constraints (§4);
+- a comparison, `BETWEEN` or conjunction that reads a decision, used as a number (*"'x > 1' is a comparison used as a
+  number"*), and an `OR` between constraints (§4);
 - `<`, `>` and `<>` over a `REAL` decision or a fractional operand (§4): the rule is stated on declared types, which
   only this stage reads without reading a row;
-- every *"not supported yet"* shape (§4a, §5).
+- every *"is not supported"* shape (§4a, §5).
 
 **Why the algebra is not judged here.** The binder sees the tree as the user wrote it, and one polynomial has many
 spellings: `2*x*x`, `x*2*x`, `w*x*x` and `(x-t)*(x-t)` are products with different trees. A judgement on that tree
@@ -183,8 +184,8 @@ The binder keeps no definition of degree. `DecideDegreeOf` (`decide_product_form
 the one place that refuses on it.
 
 **Volatile functions are refused** (`RefuseVolatile`, `decide_declarations_binder.cpp`),
-over the whole bound constraint tree, the objective and every `by` key: *"DECIDE:
-random() is not supported in a constraint"*. The check reads each function's own
+over the whole bound constraint tree, the objective and every `by` key: *"a volatile function is not
+allowed in a DECIDE clause"*, at the call. The check reads each function's own
 stability, since `IsVolatile()` is also true for every expression above a volatile one.
 Every later stage reads a clause more than once (the signatures, the rows, the
 bound-side window, direct solve's plan), so one volatile value would select different
@@ -247,12 +248,12 @@ written name from the tag, since cutting it from the source text fails for an in
 `IsDecideAggregateName` recognizes `SUM`, `AVG`, `MIN`, `MAX` as DECIDE reducers, and
 `DecideBinder::ClassifyReducerCall` is the one place both clause binders ask whether a call is one. A reducer takes
 exactly one argument: `max(x, 2)` is DuckDB's top-n aggregate, which returns a list, and is refused in the objective
-as in a constraint (*"MAX needs one argument, found 'max(x, 2)'"*). A subquery in a reducer's body counts as
+as in a constraint (*"'max(x, 2)' has 2 arguments"*). A subquery in a reducer's body counts as
 query-wide only when its own body names no per-row decision (`ReadsRowDecision`).
 `DecideBinder::BindAggregate` binds them; the optimizer, not the binder, decides
 their formulation. `norm(e, p)` binds as an inert `SUM` marker tagged with its order
 (`NORM_MARKER_TAG_PREFIX`), which stage 05 lowers. `COUNT` binds as data only:
-`COUNT(x)` over a decision is refused as degenerate.
+`COUNT(x)` over a decision is refused (*"COUNT over a decision is not supported"*).
 
 ### A reducer's own `when` and `per`
 
@@ -365,10 +366,8 @@ The rule holds in four places, one per walk that reads an operand:
 A comparison, `BETWEEN` or conjunction that reads a decision, below the top, is neither a
 constraint nor data. `x <= (x > 1 AND cap > 1)` has a meaning in SQL (DuckDB casts the
 boolean to 0/1), but modelling it needs an indicator no layer builds, so it is refused
-with the clause quoted: *"SUCH THAT does not support '((x > 1) AND (cap > 1))'"*. The
-same shape inside a reducer gets *"SUM expression does not support '(x BETWEEN 1 AND
-2)'"*, and in the objective *"MAXIMIZE does not support '(x > 1)'"*. Written with an
-explicit cast, it meets the cast rule first.
+with the comparison quoted as written, at it: *"'(x > 1 AND cap > 1)' is a comparison used as a number"*. The same
+message serves a reducer body and the objective. Written with an explicit cast, it meets the cast rule first.
 
 A table macro's parameter reaches a clause because `ParsedExpressionIterator` visits a
 DECIDE's `SUCH THAT` and objective, which macro substitution walks (`ReplaceMacroParameters`).
@@ -388,7 +387,7 @@ is not taken for a scope written inside a subquery.
 A DECIDE inside a subquery reports its own refusal. When an expression fails to bind in a
 subquery, DuckDB retries it in each outer query, in case it refers to one, and reports the
 retry's error. That retry binds the clause in a binder that knows no DECIDE construct: an
-inner *"SUCH THAT: OR is not supported"* would reach the user as the outer *"Referenced
+inner *"OR between SUCH THAT constraints is not supported"* would reach the user as the outer *"Referenced
 column "y" not found"*, and a missing name inside a `when` as an unknown function
 `__scope_when__`. A clause reads no outer query (below), so the retry has nothing to find:
 `DecideBinder::ThrowClauseError` throws every error at the clause's root, before it.
@@ -399,9 +398,9 @@ column, where it fails to resolve in the query's own bind context: `DecideBinder
 `QualifyColumnName`, and the per-key resolver (`ResolveKeyElement`) calls the same helper,
 `ThrowIfOuterColumn`. The helper asks each active binder only to qualify the name, as
 DuckDB's retry does, and binds nothing there; if one resolves it, the column is refused as
-written: *"DECIDE: 'o.cap' refers to an outer query, which a DECIDE cannot read; to solve per
-group, join that table into this query's FROM and write the clause with per"*. So every
-construct (a scope's `when` or `per`, a reducer's `when`, `per` or `by`, the objective, a
+written, at the column: *"'o.cap' refers to an outer query"*. A `CorrelatedColumnInfo` carries the column's
+query location (`binder.hpp`), so the fallback that reports a correlated column left after the clause is bound points at
+it too. So every construct (a scope's `when` or `per`, a reducer's `when`, `per` or `by`, the objective, a
 declaration's `per`) gives that one message, and a reducer over an outer column names the
 column, not the reducer. A name no binder resolves keeps DuckDB's *"Referenced column ...
 not found"*. The `WHERE` is bound by DuckDB's own binder, so at the end of `BindSelectNode`
@@ -467,13 +466,10 @@ makes a query's *validity* depend on the table's contents: the same query is leg
 and illegal tomorrow because someone inserted `0.05`. Whether a query is well-formed
 should follow from the query and the schema.
 
-The message therefore names the column, its type, and the cast that fixes it — the cast
-is the user stating the assumption the rewrite depends on:
+The message therefore says what the comparison reads and why it is refused, and points at the comparison; the user
+may cast the column, which states the assumption the rewrite depends on (`l_quantity::BIGINT`):
 
-> Comparison '<' is not supported here: column 'l_quantity' has type DECIMAL(15,2), which
-> allows fractional values, and stepping the bound is exact only on whole numbers. If
-> 'l_quantity' holds whole numbers, cast it (l_quantity::BIGINT); otherwise compare with
-> '<='.
+> '<' compares 'l_quantity', which can take fractional values
 
 `DECIMAL(p, 0)` carries its scale in the type and needs no cast. The rule is "scale > 0,
 or a floating type", not "any DECIMAL".
@@ -499,17 +495,31 @@ Four things are deliberately **not** refused:
 Both halves of the gate answer to one rule, in one layer, before any data is read. The
 model builder's remaining checks are `InternalException` invariants.
 
-### Refusals quote the clause
+### A refusal states its kind and points at its node
 
-A constraint shape the binder does not read is refused by quoting it as written, through one helper
-(`UnsupportedConstraint`): *"SUCH THAT does not support '(x IS NULL)'"*. A reducer body it does not read gets *"SUM
-expression does not support '(x BETWEEN 1 AND 2)'"*. A function on either side is named as the user wrote it
-(`DecideWrittenFunctionName`): `count(*)`, not DuckDB's internal `count_star`. A reducer whose body holds no decision
-(`sum(1)`, `sum(cap)`) gets *"SUM expression must reference at least one DECIDE variable"*; only a body that holds a
-query-wide decision is told to drop the reducer. Every binder message that quotes a clause takes its text from
+Every binder message states the kind of error and where it is, and stops (R12, R19). The kind follows the cause:
+Binder Error for a query wrong in the language, Not implemented Error for a shape DeciDB does not handle
+(`../../language/errors.md`). A refusal is built by `DecideRefusal`, which carries the message, the node it points at
+and the kind, and raises it at that node (`DecideRefusal::ToResult`); a throw site passes the node to the exception, as
+DuckDB's own binder errors do. A constraint shape the binder does not read is `'q' is not supported` when it reads a
+decision and `'q' reads no decision` when it does not; a constraint that is no comparison is `'q' is not a comparison`. A
+function on either side is named as the user wrote it (`DecideWrittenFunctionName`): `count(*)`, not DuckDB's internal
+`count_star`. A reducer whose body holds no decision (`sum(1)`, `sum(cap)`) is `'q' reads no decision`; a body that holds
+only a query-wide decision is *"'cap' is a query-wide decision, so 'sum(cap)' has no rows to reduce"*. Every binder message that quotes a clause takes its text from
 `DecideWrittenSql`, which cuts the expression's span from `DecideSourceText` by its query location. A parsed node with
 no span (a statement built without the parser's text) is printed from a copy stripped of the binders' tags, since a call
 prints its arguments' aliases.
+
+**Ruling (owner, 2026-11-19).** A comparison, `BETWEEN` or conjunction a constraint cannot use as a number is `'q' is a
+comparison used as a number`; any other shape no case names is `'q' is not supported` (Not implemented Error), at its
+node.
+
+**Ruling (owner, 2026-11-19).** `CorrelatedColumnInfo` carries an optional query location, so the refusal of a
+correlated column left after binding points at the column (a core edit, `../architecture.md` § Edits to existing DuckDB
+code).
+
+**Ruling (owner, 2026-11-19).** A frame's `else` whose text carries its own quotes keeps the doubled quote in
+`else ''a'' is not a number`.
 
 Arms kept as guards (BLOAT-26): the null check after `GetBoundAggregate` in `BindScopedReducer` and `BindReducerBy`
 (a nullable pointer read on the next line), and the error check after the scope lambda binds a scoped constraint's
@@ -525,28 +535,25 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 (one `AND` operand at a time) and on the objective, before either binds:
 
 - a scope or `by` inside an ordinary SQL subquery written in the clause, a `when`
-  condition or a key: *"DECIDE: 'PER key:' is not supported yet"* (or `'PER ():'`,
-  `'PER ROW:'`, `'WHEN condition:'`, `'BY (key)'`, whichever was written);
-- a scope inside a call other than `SUM`/`AVG`/`MIN`/`MAX`: *"DECIDE: when and per
-  inside a call need SUM, AVG, MIN or MAX; write the scope in front of the constraint
-  or inside a reducer"* (D15); a `by` after anything but those four, `norm` or `count`:
-  *"DECIDE: by (...) must directly follow SUM, AVG, MIN, MAX, norm or count"* (D34,
-  D35). After a special form (`COALESCE`, `NULLIF`, `CAST`) or a parenthesized
+  condition or a key: *"'per key:' inside a subquery is not supported"* (or `per ():`,
+  `per row:`, `when condition:`, `by (key)`, whichever was written);
+- a scope inside a call other than `SUM`/`AVG`/`MIN`/`MAX`: *"when or per inside
+  'q', which is not a reducer"* (D15); a `by` after anything but those four, `norm` or `count`:
+  *"by (...) does not follow a reducer"* (D34, D35). After a special form (`COALESCE`, `NULLIF`, `CAST`) or a parenthesized
   expression a `by` is a syntax error, as the grammar admits it only after a function
   call;
-- a decision in a `when`, a key or a `by`: *"DECIDE: x is a decision; when, per and by
-  may only use data"*; a window function there: *"DECIDE: a window function such as
-  'row_number() OVER ()' is not supported in when, per or by"*; a reducer there (`when
-  sum(cap) > 1:`, `by (max(cap))`): *"DECIDE: a reducer such as 'sum(cap)' is not
-  supported in when, per or by"*. Each reads rows the scope has not chosen yet, so
+- a decision in a `when`, a key or a `by`: *"'x' is a decision, which when, per and by
+  cannot read"*; a window function there: *"a window function is not allowed in when, per, by or a frame's order
+  key"*; a reducer there (`when sum(cap) > 1:`, `by (max(cap))`): *"a reducer is not allowed in when, per, by or a
+  frame's order key"*. Each reads rows the scope has not chosen yet, so
   `ValidateScopeData` refuses them with a caret, in that order, before execution sees the
   query. A `per` key cannot hold one: the grammar takes only columns and relations there;
 - a reducer nests in another to any depth (D79-D81, guide §5.5), and its body is held to
   the rule of any reducer's (`ValidateSumArgumentInternal` reads through a nested
   reducer's `by` and qualifier). `ValidateScopePlacement` refuses what a nest may not hold
   (D80), a norm rewritten before the value rewrite reads the path, so the inner reducer
-  would lose the enclosing `when` and `by`: *"DECIDE: norm inside a reducer is not supported
-  yet"* and *"DECIDE: a reducer inside norm is not supported yet"*. An ABS, a square or a
+  would lose the enclosing `when` and `by`: *"norm inside a reducer is not allowed"* and *"a reducer inside norm is not
+  allowed"*. An ABS, a square or a
   product with a decision around a nested reducer binds: the tree keeps the inner reducer as
   its own G node and the enclosing function reads that value. A reducer over data alone added
   inside one over decisions binds as data (`ValidateSumArgumentInternal`), a value of its
@@ -597,34 +604,31 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
   value rewrite's helper decisions (stage 05).
 - A scalar function over a decision that binds to a NULL constant (`x + NULL`: DuckDB
   folds it) is refused in `DecideBinder::BindFunction`, where the SQL is still at hand:
-  *"DECIDE: '(x + NULL)' is NULL whatever the decisions are; replace the NULL with a
-  value, as in COALESCE(column, 0)"*. The decision would be gone from the bound tree.
-- A `SUM`, `AVG`, `MIN`, `MAX` or `norm` with no argument is refused: *"SUM needs one
-  argument, found 'sum()'"*, *"NORM needs an expression and an order, as in norm(e, 1),
-  found 'norm()'"*.
+    *"'x + NULL' is NULL whatever the decisions are"*, at the expression. The decision would be gone from the bound tree.
+- A `SUM`, `AVG`, `MIN`, `MAX` or `norm` with no argument is refused: *"'sum()' has 0 arguments"*, *"'norm()' has 0 arguments"*.
 
 ---
 
 ## 4b. Frame selectors
 
 `ValidateDecideScopeSpellings` reads a frame before it binds (`ValidateFrame`, `decide_binder.cpp`; D80): its order
-key and `within` key take data only (*"DECIDE: x is a decision; a frame's order key and within may only use data"*),
+key and `within` key take data only (*"'x' is a decision, which a frame's order key and within cannot read"*),
 no window, no reducer and no frame; its payload and fallback hold no reducer and no other frame and square or
-multiply no decision (*"... squares or multiplies decisions inside at(...)"*); a frame over decisions a decision
+multiply no decision (*"'x * x' squares or multiplies decisions inside a frame, which is not allowed"*); a frame over decisions a decision
 multiplies, or squared, binds: stage 05 makes it the range of its one position, a helper per position
 (`RewriteFrameRanges`); a frame over data is a coefficient read at another row, as a column is one read at the row. A payload or fallback not linear in the decisions otherwise -- `abs(x - 3)`, a decision
-divisor -- is refused too (`FindNonlinearDecisionUse`: *"... inside at(...) is not linear in the decisions, which is
-not supported yet; write it outside the frame"*): the rewrite rows of an `abs` would stand at the anchor while the
+divisor -- is refused too (`FindNonlinearDecisionUse`: *"'abs(x - 3)' inside a frame is not linear in the decisions, which is not
+supported"*): the rewrite rows of an `abs` would stand at the anchor while the
 frame reads another row. So is an `else` that reads a decision beside a payload that reads none, which no layer below
-would see: the marker's children are the payload's (*"... else s reads a decision while the payload reads none, which
-is not supported yet"*). `ValidateScopeData` refuses a frame in a `when`, a key or a `by`
-(`ValidateNoFrame`: *"DECIDE: a frame selector is not allowed in when, per, by, within or an order key"*).
+would see: the marker's children are the payload's (*"else 's' reads a decision while the payload reads none, which is not
+supported"*). `ValidateScopeData` refuses a frame in a `when`, a key or a `by`
+(`ValidateNoFrame`: *"a frame selector is not allowed in when, per, by, within or an order key"*).
 
 `DecideBinder::BindDecideFrame` binds the frame onto the aggregate that reads its payload at the selected rows: the
 range's reducer (`sum`, `avg`, `min`, `max` or `count`), else `first`, which reads the one row a point selects. It
 records a `DecideFrameSpec` (`logical_decide.hpp`) on the clause's frame list, the aggregate tagged
 `__frame_<i>__` and with the frame as written (its defaults left out) as a source fragment of its own: the anchors and
-their `k`, `every`, `all`, the fallback (a number, *"in at(...), else 'a' is not a number"*; `else NULL` written, or one
+their `k`, `every`, `all`, the fallback (a number, *"else ''a'' is not a number"*, whose doubled quote is the text's own plus the sentence's; `else NULL` written, or one
 that folds to NULL, is none, D86), the order key bound as
 plain SQL, `desc`, `cyclic`, and the `within` key, resolved as a `per` key is into the one key table
 (`within_key`), so a row whose written `within` column is NULL is in no timeline (D5, D75). A frame over data is data
@@ -650,16 +654,15 @@ range is no AVG the `<>` hoist multiplies through (`IsBoundAvgAggregate`), so un
 ## 5. Objective
 
 `DecideObjectiveBinder` binds `MAXIMIZE` / `MINIMIZE` bodies through the same
-`DecideBinder` rules. It knows the sense the user wrote (`decide_sense`), which its
-messages quote; stage 04 writes every objective as a minimization
+`DecideBinder` rules. It knows the sense the user wrote (`decide_sense`); stage 04 writes every objective as a minimization
 (`../04_canonicalizer/done.md` §3.9). A scope in front (`BindScopedObjective`) is bound as §4a describes. It performs no algebraic
 rewriting: the objective's shape — its additive spine, its reducer scales, its
 constant offset — is decided once by `DecideCanonicalizer::CanonicalizeObjective` on
 the bound tree, alongside constraints.
 
-A body it cannot read is refused in SQL terms, with the sense the user wrote: a body
-with no decision gets *"MAXIMIZE 3 has no decision to optimize"*, any other *"MAXIMIZE
-does not support '(x > 1)'"*. A decision-free operand below the top is data (§4, Data
+A body it cannot read is refused in SQL terms, at the body: a body with no decision is *"'3' reads no decision"*, a
+comparison used as a number is *"'x > 1' is a comparison used as a number"*, any other shape that reads a decision
+*"'q' is not supported"*. A decision-free operand below the top is data (§4, Data
 operands).
 
 ---

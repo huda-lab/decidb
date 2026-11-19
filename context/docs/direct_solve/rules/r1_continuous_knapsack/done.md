@@ -121,13 +121,9 @@ its best end. No BOOLEAN column stands in the key.
 
 2. Group totals: a hash aggregate of every item's sums, the row count, each data limit's MIN and MAX, and the check of
    every raw value and `v`, so a NaN raises here, before any verdict; a NULL weight or value leaves its row out of the
-   sums, and a NULL limit is no limit. A check's message is a column of stage 1 that holds a code of its text, not the
-   text (dictionary encoding, as the framework's [message codes](../../framework/done.md) § Runtime checks): the
-   aggregate takes the `MIN` of the codes, which is the code of the least text because the codes follow the order of the
-   texts, and the projection that raises decodes the least code of each check on the group's row (`DirectDecodeMessage`)
-   and raises them in the order the plan meets them (error order is not owed). Two rows of a group that fail the same
-   check in different ways raise the least text, whichever row comes first. The aggregate compares integers per row, and
-   a row that passes carries no text. A data limit is one value on the group's rows, so its MIN (upper) or MAX (lower)
+   sums, and a NULL limit is no limit. A check is a raising filter: it raises where its value is found, with the call's
+   own place, and the checks raise in the order the plan meets them (error order is not owed, R10). No message is
+   built as a column and no minimum picks one, so a row that passes carries no text. A data limit is one value on the group's rows, so its MIN (upper) or MAX (lower)
    carries it. A projection raises the data checks, then infeasible, then unbounded, and gives the stages after it `S`,
    `L`, `U`, the finite room down, the highest price of an infinite room up and the lowest of one down, and which limit
    binds.
@@ -141,6 +137,10 @@ its best end. No BOOLEAN column stands in the key.
    at it and the infinite rooms at it, then the two shares of step 6.
 5. The answer: the source rows join their group's numbers, and one projection gives one answer per decision, held to
    its box, and the verdict column, which the adapter keeps so a parent that reads no answer still raises.
+
+**Ruling (owner, 2026-11-19).** An `=` limit read from the data raises the bound's NaN message, `the bound 'b' is NaN on
+some rows`, with the caret on the bound, when its group holds only NaN, on both paths: `test_invalid_value_message.py`
+holds the case `r1_equality_limit`.
 
 With several decisions, each read computes every decision's item values in columns of their own (`t_0`, `t_1`, ...).
 Stages 2 and 4 sum over the decisions of a row inside one aggregate input, and the extreme open prices combine with

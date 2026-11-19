@@ -31,8 +31,8 @@ Each clause appears in up to three layers:
 
 | Layer | Marker | Shown when | Source |
 |---|---|---|---|
-| As written | none | always | `ConstraintSourceInfo::written_*`, set by `InitializeConstraintSourceInfo` on the bound tree before canonicalization |
-| Canonical | `≡` | canonicalization changed it | `ConstraintSourceInfo::spelled_*`, set by `FinalizeConstraintSourceInfo` |
+| As written | none | always | the clause cut from the query by its span, `ConstraintSourceInfo::location` (`DecideSourceText::CutExpr`), set by `InitializeConstraintSourceInfo` on the bound tree before canonicalization |
+| Canonical | `≡` | canonicalization changed it (`ConstraintSourceInfo::canonical_differs`, which `DecideCanonicalizer::CanonicalizeTree` reports) | `ConstraintSourceInfo::canonical_*`, set by `FinalizeConstraintSourceInfo` |
 | Rewritten | `↳` | the optimizer changed it | the post-optimizer tree, walked at render time |
 
 A clause nothing touched stays one line, and a row that reads the same as the layer above is left out. The canonical
@@ -41,7 +41,8 @@ layer prints the spelling canonicalization wrote, with every product coefficient
 rewritten clause, the account lines (what the rewrite made of the construct) come first, then the rows. An account is
 a fact the rewrite recorded (`LogicalDecide::rewrite_accounts`), worded in one place by `RenderDecideRewriteAccount`
 (D27). The objective has the same layers (`written_objective`, cut from the `OBJECTIVE` span; `canonical_objective` and
-`objective_canonical_differs`, captured around `CanonicalizeObjective` in `Binder::CreatePlan`); rows a rewrite added
+`objective_canonical_differs`, captured around `CanonicalizeObjective` in `Binder::CreatePlan`, where the flag still
+compares two renderings); rows a rewrite added
 for it carry `OBJECTIVE_ROW_TAG` and print under `Objective:`. The canonical objective is a minimization
 (`../pipeline/04_canonicalizer/done.md` §3.9), and its layer renders in the sense written (`RenderWrittenSense`
 reverses each term's sign and keeps its factor), so the flip of a `MAXIMIZE` objective adds no `≡` line.
@@ -107,8 +108,9 @@ child, so reconciliation casts never appear.
 | `COMPARE_IN` marker | `<target> IN (v1, …)` |
 | leaf | `RenderDecideSource`: the cut text of a located node, else the reprint; quoted with its qualifier by `QuoteWrittenClause` |
 
-Messages quote a clause only through `QuoteWrittenClause` or `QuoteEditedClause` (`decide_source_info.cpp`), which
-put the qualifier in front. The objective goes through the same walker. `GetName()` on a `when` wrapper would return its alias, the raw tag.
+A clause is stored once: its span (`location`) and one canonical rendering. Its written text is never kept; a message that
+needs it cuts it from `DecideSourceText`. Messages quote a clause only through `QuoteWrittenClause` or
+`QuoteEditedClause` (`decide_source_info.cpp`), which put the qualifier in front. The objective goes through the same walker. `GetName()` on a `when` wrapper would return its alias, the raw tag.
 
 **Clause identity is an id, not a position.** Stage 05 appends rows and removes clauses, so positional matching
 would drift. The binder stamps a `source_clause_id` on every written comparison, and every rewrite that emits rows
@@ -149,7 +151,7 @@ sort to the end.
 |---|---|
 | Node rendering | `logical_decide.cpp`; `PhysicalDecide::ParamsToString` (`physical_decide.cpp`) |
 | Walker and renderer | `decide_source_provenance.cpp` / `.hpp` (`CollectDecideClauseLayers`, `RenderDecideClauseLayers`, `RenderDecideObjectiveLayers`, `DecidePlanNames`) |
-| Three-layer record | `ConstraintSourceInfo` (`decide_source_info.hpp`) |
+| Clause record: its span and canonical layer | `ConstraintSourceInfo` (`decide_source_info.hpp`) |
 | Clause ids on emitted rows | `decide_optimizer.cpp` (shared through `decide_optimizer_internal.hpp`) |
 | Accounts and auxiliary labels | `RewriteAccount` (`logical_decide.hpp`); `AddRewriteAccount`, `RenderForPlan` (`decide_optimizer.cpp`) |
 | Tests | `test_explain.py`, `test_scope_explain_diagnose.py`, `test_diagnosis_written_clause.py::test_explain_leads_with_the_written_clause` |

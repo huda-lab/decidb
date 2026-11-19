@@ -13,47 +13,27 @@ the implied bounds (done.md, "Departure from the deck"). Phase 6 builds it (ARCH
 that means re-ruling D89 so a G can decide at its node, and replacing `InlineReducerValueLinks`, `EmitExtremumLink`
 and `LinearizeMinMaxConstraints` rather than composing records beside them.
 
-Other documented edge differences remain in `done.md` §1a: the D88 variant-name edge, side-plan versus tree error
-order for a gated reducer argument, and unreferenced hidden records. Direct-solve rules and DIAGNOSE's separate
+Other documented edge differences remain in `done.md` §1a: the D88 variant-name edge and unreferenced hidden
+records. Direct-solve rules and DIAGNOSE's separate
 named-column scan also bypass or revisit parts of the normal tree execution; their scope is open.
 
-## EXEC-15 — The tree evaluator raises the first error it reaches
+## EXEC-19 — A model row carries a back-pointer, and the diagnosis derives the rest
 
-- **Problem.** Evaluation catches every error, continues, and raises the least by an eight-key rank
-  (`decide_error_ledger.hpp`: phase, step, clause, part, expression, group, position, row). Every node carries rank
-  fields; `ErrorRanks`, `WhenRanks` and `KeyedMappingOrder` list cases per node kind; a vector that fails is retried
-  row by row and each failing row's error stored. `context/opa_rewrite/repro/error_cost.sql`: one failing `when` over
-  200,000 rows takes 3.1 s and 264 MB, where plain SQL fails in 0.02 s. The guide promises no order.
-- **Change.** By the owner's ruling (2026-11-18, `context/opa_rewrite/decisions.md` R11): the first error reached is
-  raised, as in SQL. A row a `when` drops, or a value no parent reads, raises nothing; nothing else is deferred.
-  `DecideBlock`, the rank fields, the rank functions and `Rebase` go, with the tests that pin an order
-  (`test_error_precedence.py` and the order cases in other files).
-- **Tests.** The tests the change breaks move to `assert_error_at` (`testing/oracle.md` §3.6).
-- **Done when.** The repro fails in time close to plain SQL's; `grep -rn "DecideBlock\|ErrorRanks" src` finds
-  nothing; `./test/decide/run_tests.sh -n 2 -k "error or when or nan"` passes.
-
-## EXEC-16 — Plan- and run-time messages state the kind and where
-
-- **Problem.** The plan- and run-time rows of `language/errors.md` and the data checks of `guide.md` §7.3 that
-  OPT-19, OPT-20 and FW-4 leave carry fixes (`Add a constraint like ...`, bounds to add, rewrites to write).
-  Among them: the solver-gap refusals (`ThrowDecideSolverGap`, `decide_solver_gate.cpp`), whose shared sentence
-  names solvers, `DECIDB_FORCE_SOLVER` and an install, and the bilinear refusal of a factor with no finite upper
-  bound (`linearization_bilinear_abs.cpp`). `FirstQuadraticClause` reads a quadratic row's source clause at index
-  -1 when a definition row belongs to no clause (no query reaches it today); the gap message names where without it.
-- **Change.** By the owner's rulings (2026-11-18, `context/opa_rewrite/decisions.md` R12, R19): each says what is wrong
-  and points at it, and stops. `errors.md` and the guide quote the new text; the opening of `errors.md` states the rule.
-- **Needs.** EXEC-15, OPT-19, OPT-20, FW-4.
-- **Tests.** The tests the rewording breaks move to `assert_error_at` (`testing/oracle.md` §3.6).
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "error or unbounded or infeasible"` passes.
-
-## EXEC-19 — An ordinary query builds no diagnosis state
-
-- **Problem.** Every model row carries a `ConstraintProvenance` of about 20 fields, stamped with no `diagnose` gate;
-  `plan_decide.cpp` spends about 190 lines harvesting column names whose only reader is the unbounded diagnosis;
-  `ParseLiteralCoefficient` recovers a number from a display label with `strtod`.
-- **Change.** The stamping and the harvest run under `DIAGNOSE` only; the unit coefficient travels as a number.
-- **Done when.** `grep -rn "ParseLiteralCoefficient" src` finds nothing;
-  `./test/decide/run_tests.sh -n 2 -k "diagnose or unbounded or infeasible"` passes.
+- **Problem.** `SolverInput::diagnose` gates the display fields of `ConstraintProvenance` and the harvest of input
+  column names in `plan_decide.cpp` (`NameInputColumns`). Each emission site carries a `diagnose` branch, every helper
+  that stamps a row has one, and the display fields are written where the row is built.
+- **Change.** **Ruling (owner, 2026-11-19, Decision 5).** Late materialization. `ConstraintProvenance` keeps a
+  back-pointer to the row's clause, always: `repair_group_id`, `group_key` and `data_row`, with no new field. One
+  `ResolveProvenance` in the diagnosis layer derives kind, shape, labels, class set, `per_kept_row` and `is_aggregate`
+  from it under `DIAGNOSE`, through a resolver callback in `InfeasibleDiagnosisInput` (as `solve_model` is), in
+  `src/execution/operator/decide/decide_provenance_resolver.cpp`; about 15 signatures and two C++ test files change.
+  `strict`, `typed_k` and `rhs_mechanism_offset` stay on the row as formulation facts, and `lhs_offset` goes. The stamp
+  helpers lose their `diagnose` branches. `keep_singleton_rows` is restored as the name of the singleton-row mode, and
+  the `<>` indicator labels become a numeric back-pointer. `NameInputColumns` moves into the unbounded engine, called
+  from `plan_decide` under `DIAGNOSE` only, and `composed_minmax_constraints` moves with it. `DIAGNOSE` output stays
+  byte-identical: the 18 examples and the goldens.
+- **Done when.** `./test/decide/run_tests.sh -n 2 -k "diagnose or unbounded or infeasible"` passes and a golden shows no
+  change; `build/release/test/unittest "[decidb]"` passes.
 
 ## EXEC-20 — SolverInput is the whole contract of model building
 
@@ -93,3 +73,14 @@ named-column scan also bypass or revisit parts of the normal tree execution; the
 - **Recommendation.** 1: the merge costs more code than its time saves.
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "descent or merge or thread"` passes; `tools/ab_bench.py`
   shows no workload moving beyond about 10%.
+
+## EXEC-25 — A failing coefficient is found at the first entry
+
+- **Problem.** A coefficient that fails on one row over 200,000 rows takes 4.6 s: `ComputeNode` evaluates every
+  entry up front, and `DecideEvaluateWindow` then reads the failing window row by row. Plain SQL fails in milliseconds.
+  The repro is `context/opa_rewrite/repro/failing_coefficient.sql`.
+- **Decision needed.** Where the first failing entry is found: 1. Compute in windows and stop at the first window that
+  fails. 2. Keep the whole-column computation and shorten the retry.
+- **Recommendation.** 1: the guide promises no order among errors, so the first failing window may stop the query.
+- **Done when.** The repro fails in time close to plain SQL's; `./test/decide/run_tests.sh -n 2 -k "nan or finite or
+  coefficient"` passes.

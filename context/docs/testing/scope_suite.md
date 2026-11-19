@@ -14,8 +14,8 @@ Tests live in:
 - `test/decide/tests/_anr_cases.py` — the ANR fixtures, each as SQL and as oracle expressions with its hand-computed answer
 - `test/decide/tests/test_anr_oracle_selfcheck.py` — the checks that the ANR evaluator is right
 - `test/decide/tests/test_scope_*.py` — one suite per part of the language
-- `test/decide/tests/test_no_old_spellings_remain.py` with `_old_spellings.py` — the scanner that keeps removed spellings out of every test surface
-- `test/decidb/test_scope_parser.test` — sqllogic: every spelling parses and binds (also inside a nested DECIDE; inside an ordinary subquery written in the clause it answers "not supported yet"), quoted keywords as names, the exact parse errors, and the removed spellings' messages
+
+- `test/decidb/test_scope_parser.test` — sqllogic: every spelling parses and binds (also inside a nested DECIDE; inside an ordinary subquery written in the clause it answers "is not supported"), quoted keywords as names, the exact parse errors, and the old spellings' syntax errors
 
 The feature suites written in the same language are tracked in [coverage.md](coverage.md):
 [`per`](coverage.md#per-constraints-and-two-level-objectives) (`test_per_*.py`), [`when`](coverage.md#when)
@@ -322,7 +322,7 @@ one group at a time. No test asserts an answer its docstring derives.
   a reducer, or two reducers with different `by` keys × the reducer's own scope (none,
   `when`, `per`, both) × SUM / AVG / MIN / MAX, over a per-row decision and a keyed one
   — 784 cells. Each cell has two allowed outcomes: the oracle's optimum, or the error
-  the language defines for the data with the same phrase. Never "not supported yet", a
+  the language defines for the data with the same phrase. Never a not-supported refusal, a
   wrong answer or an internal error. Oracle. The grid is kept whole: no two cells reach
   the same set of branches (`make decide-coverage` over the whole DECIDE pipeline), and
   it exists to find bugs that only a combination shows.
@@ -343,17 +343,12 @@ one group at a time. No test asserts an answer its docstring derives.
   (D28); covers easy and hard MIN/MAX, absorbed and keyed bounds, unreachable bounds,
   composed clauses, quadratic clauses, the unbounded remedy naming a key column, and a
   suggested change that pastes back and runs. Pinned output text; no oracle.
-- **`test_scope_removed_syntax.py`** — the one file that writes the removed spellings
-  (`../language/errors.md` §3). Every removed declaration,
-  constraint and objective spelling, in each variant the parser distinguishes, is
-  refused with a message carrying "is removed" and the suggested spelling built from
-  the user's text, keyword-named columns quoted. The refusal holds under EXPLAIN,
-  DIAGNOSE, in a CTE, a nested DECIDE, a view and a prepared statement. A removed form
-  written after a clause that already has a scope in front is a plain syntax error. A
-  relation-qualified reference to a decision is refused in every position, with the
-  data-only message inside `when`, `per` and `by`; a struct field or column named like
-  a decision still binds. `scalar` is an ordinary name, the colon form stays, and a
-  suggested spelling pastes back and runs. Pinned message fragments.
+- **`test_scope_old_forms.py`** — the one file that writes the old spellings (`../language/errors.md`). Each old
+  declaration, constraint and objective spelling is a syntax error at the token the grammar cannot place; a
+  declaration with no type is refused at its name. A removed form written after a clause that already has a scope in
+  front is a plain syntax error. A relation-qualified reference to a decision is an unknown column, and in `when`,
+  `per` and `by` the data-only message; a struct field or column named like a decision still binds. `scalar` is an
+  ordinary name and the colon form stays.
 
 - **`test_anr_oracle_selfcheck.py`** — the ANR evaluator against five independent
   readings: the deck's and the rulings' hand computations (every case's instances,
@@ -366,31 +361,18 @@ one group at a time. No test asserts an answer its docstring derives.
   with every decision fixed, assignment by assignment, over a helper-decision clause and a
   keyed decision (the status grid). Oracle, hand-checked and brute force.
 
-## Keeping removed spellings out
+## Old spellings and the leak guard
 
-- **The scanner.** `test_no_old_spellings_remain.py` runs `_old_spellings.scan_file`
-  over every test surface — `test/decide/**/*.py`, `test/decidb/*.test`,
-  `test/common/test_decidb_*.cpp`, `test/decide/golden/corpus.sql`,
-  `benchmark/decide/queries/*.sql` and `run.sh` — one parametrized case per file. It
-  flags the removed declarations, a `when` or `per` written after the clause it scopes,
-  and a relation-qualified reference to a declared decision (guide §2). It is token-aware:
-  comments and string literals are skipped, `CASE ... END` and ordinary subqueries are
-  skipped, and a `when` or `per` that reaches its colon is the scope spelling. From Python it
-  reads string literals and f-strings, not docstrings, assertion messages or regex
-  patterns. Deliberate cases are skipped: `test_scope_removed_syntax.py` (and the
-  scanner's own two files) as a whole, a sqllogic block whose comment or text says
-  "removed spelling" or whose `statement error` expects a syntax error, and a C++ string
-  literal with "removed spelling" on its line or the two above.
-- **The runtime guard.** Every query a test runs through `decidb_cli.py` (`execute`,
-  `execute_raw`, `execute_script`, `execute_interactive`, `execute_interrupted`) fails its test when stderr
-  carries "is removed", so a loose error pattern cannot pass on a removed-spelling
-  error by accident. `execute_raw(..., removed_spelling=True)` opts in; only
-  `test_scope_removed_syntax.py` does.
-- **The leak guard beside it.** The same runner calls
-  `_output_helpers.assert_no_internal_leak` on every query: an INTERNAL error or an
-  internal `__tag__` in the output fails the test, unless the `__name__` is text the
-  query itself contains. `test_error_time_limit.py` and `test_query_diagnostics_slow.py`
-  start the CLI with `subprocess` directly and bypass both guards.
+- **Old spellings.** `test_scope_old_forms.py` is the one file that writes an old spelling. A `when` or `per` after a
+  clause, a `scalar` declaration, a qualified declaration and a postfix after a scope fail as any syntax error does
+  (`../language/errors.md`, `decisions.md` R13), at the token the grammar cannot place; a declaration with no type is
+  `decision 'x' has no type` at its name. A relation-qualified reference to a decision is an ordinary unknown column,
+  and is refused with the data-only message inside `when`, `per` and `by`; a struct field or column named like a
+  decision still binds. `scalar` is an ordinary name and the colon form stays.
+- **The leak guard.** The runner calls `_output_helpers.assert_no_internal_leak` on every query: an INTERNAL error or an
+  internal `__tag__` in the output fails the test, unless the `__name__` is text the query itself contains.
+  `test_error_time_limit.py` and `test_query_diagnostics_slow.py` start the CLI with `subprocess` directly and bypass
+  it.
 
 ## Coverage tiers
 
@@ -400,6 +382,6 @@ one group at a time. No test asserts an answer its docstring derives.
 | Brute force (`_brute_force`) | bare_clauses, generation, reducer_by, reducer_inner, value_rewrite |
 | ANR oracle (`_anr_oracle`) | anr_oracle_selfcheck, and every `test_anr_*.py` suite |
 | Model dump | declare, generation, reducer_by, reducer_inner, objective, value_rewrite, deck_examples |
-| Error / message pins | variants (the objective), removed_syntax, and the error cases of every suite |
+| Error / message pins | variants (the objective), old_forms, and the error cases of every suite |
 | Output text pins | explain_diagnose, and the echo cases of generation and value_rewrite |
-| Scanner and guards | `test_no_old_spellings_remain.py`, `decidb_cli.py` |
+| Guards | `decidb_cli.py` |

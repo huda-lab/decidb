@@ -8,13 +8,14 @@ prefix is implemented. The engines that compute the findings are in `../diagnost
 
 - **The prefix is the only trigger.** There is no automatic diagnosis, so an unprefixed query never pays for a
   diagnostic solve.
-- **A bare failed query reports its state and stops**: `DECIDE optimization is infeasible.` or `… is unbounded.`,
-  with a pointer to the prefix. Naming the clause takes the diagnostic (elastic) solve, which runs only when asked.
+- **A bare failed query reports its state and stops**: `the DECIDE query is infeasible` or `… is unbounded`, with no
+  suggestion. Naming the clause takes the diagnostic (elastic) solve, which runs only when asked.
 - **The result is a relation**: one row per finding, real columns and types, like `EXPLAIN`, `DESCRIBE` and
   `SUMMARIZE`. It composes: `SELECT clause FROM (DIAGNOSE …) WHERE amount > 1000`.
 - **A feasible query returns one row**, `state = 'feasible'`, all else NULL, so there is no second output path.
-- **The query must contain exactly one DECIDE**, possibly inside a subquery. No DECIDE, a nested DECIDE, or sibling
-  DECIDE subqueries are refused at bind time with the number found: one relation cannot say which solve it describes.
+- **The query must contain exactly one DECIDE**, possibly inside a subquery. No DECIDE (*"DIAGNOSE needs a query with a DECIDE clause"*), a nested DECIDE, or sibling DECIDE subqueries (*"DIAGNOSE on
+  more than one DECIDE clause is not supported"*) are refused at bind time, at the query: one relation cannot say which
+  solve it describes.
 - **There is no options syntax** (`DIAGNOSE (VERBOSE) …`).
 - **Scoped clauses.** `clause` and `suggested_change` quote clauses in the EXPLAIN style
   ([explain.md](explain.md#rendering)). `group` holds the `per` key value of an expanded finding, one row per class

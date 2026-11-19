@@ -1,18 +1,9 @@
 # Stage 02 — Binder: open work
 
 Language-surface work is owned by `../../language/` (the scopes:
-`../../language/scopes.md`); what the language does not yet accept is listed in
-`../../language/errors.md` §2, and the scope suites in
+`../../language/scopes.md`); what the language does not accept is listed in
+`../../language/errors.md`, and the scope suites in
 `../../testing/scope_suite.md`.
-
-## BIND-2 — Bind-time messages state the kind and where
-
-- **Problem.** The bind-time rows of `language/errors.md` §1 and §2 tell the user what to write (`join that table into
-  this query's FROM and write the clause with per`, `write the scope in front of the constraint or inside a reducer`).
-- **Change.** By the owner's rulings (2026-11-18, `context/opa_rewrite/decisions.md` R12, R19): each says what is wrong
-  and points at it, and stops. `errors.md` quotes the new text.
-- **Tests.** The tests the rewording breaks move to `assert_error_at` (`testing/oracle.md` §3.6).
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "binder or scope"` passes.
 
 ## BIND-4 — The binder judges algebra by name
 
@@ -38,3 +29,12 @@ Language-surface work is owned by `../../language/` (the scopes:
   off and tested, and goes if it guards nothing.
 - **Needs.** BIND-4.
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "binder or integer"` passes.
+
+## BIND-6 — Two binder messages name the wrong fragment
+
+- **Problem.** A refusal of `3 <= CASE WHEN ... END` names `'3'`, the side that reads no decision, where the user's
+  mistake is the `CASE`. The outer-query refusal names a bare `'k'` for a column written `g.k`
+  (`DecideBinder::ThrowIfOuterColumn`).
+- **Change.** Each message quotes the node the user wrote: the whole side, and the column as qualified.
+- **Tests.** `assert_error_at` with `at=` the quoted fragment (`testing/oracle.md` §3.6).
+- **Done when.** `./test/decide/run_tests.sh -n 2 -k "binder or scope"` passes.

@@ -12,26 +12,30 @@ the owner rules first.
 
 # Phase 1 — Errors are raised where they are found
 
-## 1.2 Messages (parallel: EXEC-15, OPT-20 | PARSE-2, PARSE-3 | BIND-2 | OPT-19, FW-4 | PLAN-6, EXEC-19)
-- [ ] EXEC-15 Raise the first error reached — pipeline/08_execution/todo.md § EXEC-15
-- [ ] OPT-20 An = bound names its group only — pipeline/05_optimizer/todo.md § OPT-20
-- [ ] PARSE-2 A removed spelling is a syntax error — pipeline/01_parser/todo.md § PARSE-2
-- [ ] PARSE-3 Parse-time messages: kind and where — pipeline/01_parser/todo.md § PARSE-3
-- [ ] BIND-2 Bind-time messages: kind and where — pipeline/02_binder/todo.md § BIND-2
-- [ ] OPT-19 A NaN message says NaN and where — pipeline/05_optimizer/todo.md § OPT-19
-- [ ] FW-4 Direct messages name the clause — direct_solve/framework/todo.md § FW-4 (needs: OPT-19)
-- [ ] PLAN-6 Clause text is stored once — pipeline/03_logical_plan/todo.md § PLAN-6
-- [ ] EXEC-19 An ordinary query builds no diagnosis state — pipeline/08_execution/todo.md § EXEC-19
+## 1.2 Messages left (one lane)
+- [ ] EXEC-19 A model row carries a back-pointer, and the diagnosis derives the rest (decision) — pipeline/08_execution/todo.md § EXEC-19
 
-## 1.3 Remaining messages (needs: 1.2) (one lane)
-- [ ] EXEC-16 Plan- and run-time messages: kind and where — pipeline/08_execution/todo.md § EXEC-16
-
-## 1.4 Error tests (needs: 1.3) (one lane)
+## 1.4 Error tests (one lane)
 - [ ] TEST-11 Solver-path error tests assert kind and location — testing/todo.md § TEST-11
 - [ ] TEST-12 Direct-path error tests assert kind and location — testing/todo.md § TEST-12 (needs: TEST-11)
 
-## 1.5 Filed cleanups (one lane)
+## 1.5 Filed cleanups (parallel: PARSE-4, BIND-6 | PLAN-8, PLAN-10 | OPT-30, OPT-31, OPT-32 | FW-8 | TEST-16, TEST-17 | PERF-27, EXEC-25 | INF-5)
 - [ ] INF-5 Three label formatters no test reaches — diagnostics/infeasible/todo.md § INF-5
+- [ ] PARSE-4 Two span roles of a BETWEEN are never read — pipeline/01_parser/todo.md § PARSE-4
+- [ ] BIND-6 Two binder messages name the wrong fragment — pipeline/02_binder/todo.md § BIND-6
+- [ ] PLAN-8 The objective's canonical layer is compared as two renderings — pipeline/03_logical_plan/todo.md § PLAN-8
+- [ ] PLAN-10 Check names and comments say "message" — pipeline/03_logical_plan/todo.md § PLAN-10
+- [ ] OPT-30 Two value checks of one comparison — pipeline/05_optimizer/todo.md § OPT-30
+- [ ] OPT-31 A node built with no value keeps no location — pipeline/05_optimizer/todo.md § OPT-31
+- [ ] OPT-32 Optimizer labels are built on every query — pipeline/05_optimizer/todo.md § OPT-32
+- [ ] FW-8 A square's NaN is named differently on the two paths — direct_solve/framework/todo.md § FW-8
+- [ ] TEST-16 A frame reducer reads no row in no class — testing/todo.md § TEST-16
+- [ ] TEST-17 Branches of the new messages no test reaches — testing/todo.md § TEST-17
+- [ ] PERF-27 The pipeline profiler's error filter misses a refusal — performance/todo.md § PERF-27
+- [ ] EXEC-25 A failing coefficient is found at the first entry (decision) — pipeline/08_execution/todo.md § EXEC-25
+
+## 1.6 Filed after EXEC-19 (needs: 1.2) (one lane)
+- [ ] PLAN-9 `source_columns` is built and serialized on every query — pipeline/03_logical_plan/todo.md § PLAN-9
 
 # Phase 2 — Direct solve is a separate layer
 
@@ -74,6 +78,9 @@ the owner rules first.
 ## 5.1 Design (one lane)
 - [ ] ARCH-1 Design Phase 5 and file its tasks (decision) — pipeline/todo.md § ARCH-1
 
+## 5.2 Filed Phase 5 tasks (needs: ARCH-1) (one lane)
+- [ ] ARCH-3 A node's caret location and its identity as the user's text are two things — pipeline/todo.md § ARCH-3
+
 # Phase 6 — The model is written at the nodes
 
 ## 6.1 Design (needs: Phase 5) (one lane)
@@ -87,3 +94,8 @@ the owner rules first.
 - [ ] PERF-6 Solver execution — performance/todo.md § PERF-6
 - [ ] PERF-8 Memory and scaling — performance/todo.md § PERF-8
 - [ ] PERF-1 Methodology, a second host — performance/todo.md § PERF-1
+
+# Open questions (owner)
+
+- **The `DECIDE:` prefix of the number-range warning** (`decide_numeric_policy.hpp`). The warning no longer tells the
+  user what to change; whether its prefix follows V1 of the Phase 1 plan is open.

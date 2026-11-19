@@ -1,147 +1,292 @@
-# Errors, refusals and removed spellings
+# Errors and refusals
 
-Every message DECIDE raises for a query it will not run, grouped by why. Messages quote the user's SQL, never an
-internal name, and say what to write instead. All of them are still raised under `DIAGNOSE`: nothing was solved, so
-there is nothing to diagnose. The data checks that run before solving are in [guide.md §7.3](guide.md#73-data-checks).
+Every message DECIDE raises for a query it will not run. A message states the kind of error and where it is in the
+query, and stops there: it does not say how to fix the query. `DIAGNOSE` is the feature that proposes edits, and these
+messages are all still raised under it, since nothing was solved and there is nothing to diagnose. The data checks that
+run before solving are in [guide.md §7.3](guide.md#73-data-checks).
 
-## 1. Errors
+## What a message looks like
 
-| Situation | Raised | Message |
-|---|---|---|
-| The objective takes two values or instances over its kept rows | run, before solving | [guide.md §7.3](guide.md#73-data-checks) |
-| `per` other than `()` on the objective | parse | `an objective is produced once: write per (): or leave per out` |
-| A parenthesized key | parse | `write per a, b: without parentheses; parentheses are only for per ()` |
-| An expression in a `per` key | parse | `a per key lists columns or relations; put expressions in by (...)` |
-| A declaration with no type | parse | `DECIDE variable "x" needs a type; write x(INT), x(BOOL) or x(REAL)` |
-| A declaration with no `SUCH THAT` | parse | `DECIDE requires a SUCH THAT clause; add SUCH THAT with at least one constraint` |
-| A declaration right after another, with no comma | parse | syntax error at the second declaration |
-| A comma between constraints | parse | `comma-separated SUCH THAT constraints are not supported; use AND between constraints` |
-| `by` after anything but a function call (a column, literal, `CASE`, `CAST`, `::`, `COALESCE`, parentheses, …), or a scope inside such a form | parse | syntax error |
-| A removed spelling | parse (`D.x`: bind) | names the new spelling (§3) |
-| `OR` between constraints | bind | `SUCH THAT: OR is not supported.` |
-| A comparison, `BETWEEN` or conjunction that reads a decision, used as a number (`x <= (x > 1)`) | bind | `SUCH THAT does not support 'x > 1'` (inside a reducer: `SUM expression does not support 'x > 1', found 'sum((x > 1))'`; as the objective: `MAXIMIZE does not support 'x > 1'`) |
-| A column of an outer query (`LATERAL`, a scalar subquery in another query's select list), in any clause or the `WHERE` | bind | `DECIDE: 'o.k' refers to an outer query, which a DECIDE cannot read; to solve per group, join that table into this query's FROM and write the clause with per` |
-| `by` after a call other than `SUM`, `AVG`, `MIN`, `MAX`, `norm`, `count` | bind | `DECIDE: by (...) must directly follow SUM, AVG, MIN, MAX, norm or count` |
-| `when` or `per` inside a call other than `SUM`, `AVG`, `MIN`, `MAX` | bind | `DECIDE: when and per inside a call need SUM, AVG, MIN or MAX; write the scope in front of the constraint or inside a reducer` |
-| A decision in a `when`, a key or a `by` | bind | `DECIDE: x is a decision; when, per and by may only use data` |
-| A window function in a `when`, a key or a `by` | bind | `DECIDE: a window function such as 'row_number() OVER ()' is not supported in when, per or by` |
-| A reducer in a `when` or a `by` key | bind | `DECIDE: a reducer such as 'sum(cap)' is not supported in when, per or by` |
-| A volatile function (`random()`) in a constraint, the objective or a `by` key | bind | `DECIDE: random() is not supported in a constraint` (`the objective`, `a by key`) |
-| An unknown key element (keys resolve in their own query's `FROM`) | bind | `DECIDE: depot is neither a column nor a relation of the FROM clause` |
-| `rowid` or a generated column in a key | bind | `DECIDE: g.b is not a stored column; a per key lists columns or relations of the FROM clause` (`a within key` in a frame) |
-| A frame's `k` or `every` that is not a positive whole number | parse | `... must be a positive whole number` |
-| A frame word misspelled (`prev`, `evry`, `cyclc`) | parse | `DECIDE: a frame position is first, last, [k] previous or [k] next, found prev` (`expected every d ...`, `expected cyclic or within ...`) |
-| An expression in a frame's `within` | parse | `DECIDE: within lists columns or relations, as a per key does` |
-| A range frame over more than one expression, or a reducer other than `sum`, `avg`, `min`, `max`, `count` | parse / bind | `DECIDE: sum(from first to last: e) reduces one expression, found 2` · `DECIDE: a range frame reduces with sum, avg, min, max or count, found ...` |
-| A frame's `else` that is not a number | bind | `DECIDE: in at(previous else 'a': x) over (t.period), else 'a' is not a number` |
-| A range's `else` over a collated payload, whose `min` or `max` compares text under the collation | bind | `DECIDE: in max(from previous to next else 0: t.n) over (t.s), else 0 stands in a collated payload, which compares text` |
-| A decision in a frame's order key or `within` | bind | `DECIDE: x is a decision; a frame's order key and within may only use data` |
-| A frame selector outside a DECIDE clause (a `SELECT` list, a `WHERE`): the parser reads it in a clause only | parse | `Parser Error: syntax error at or near "over"` |
-| An unqualified `FULL OUTER JOIN USING` column in a key | bind | `DECIDE: depotID is merged by a FULL OUTER JOIN USING; write S.depotID or D.depotID in the per key` |
-| A reducer with no argument or more than one, or `norm` with no argument | bind | `SUM needs one argument, found 'sum()'` · `MAX needs one argument, found 'max(x, 2)'` · `NORM needs an expression and an order, as in norm(e, 1), found 'norm()'` |
-| A colon form naming a relation not in `FROM` | bind | `Relation 'X' is not in the FROM clause, so a reducer cannot be qualified by it.` |
-| A comparison whose reducers, under arithmetic, read no decision (`SUM(t.v) + 1 <= 500`) | bind | `SUCH THAT clause: 'SUM(t.v) + 1' reads no DECIDE variable; compare a decision with it` |
-| A reducer over query-wide decisions only, as a constraint's whole decision side | bind | `cap is a query-wide decision, so SUM(cap) has nothing to aggregate over; use cap on its own` |
-| An `INT` or `REAL` decision as a factor on a reducer, or a `BOOL` one on anything but a bare reducer | bind | `DECIDE constraint: 's' is a decision, so it cannot multiply SUM(x). Only data or a BOOL decision can scale SUM/AVG/MIN/MAX.` (objective: `... Only constants, query-wide values or a BOOL decision can scale ...`) |
-| A row-varying factor on a reducer in the objective | bind | `DECIDE objective: 'weight' varies per row, so it cannot multiply SUM(x). Move it inside the aggregate, e.g. SUM(x * weight).` (a correlated subquery is named "this subquery") |
-| A data-only reducer scaling a decision (`x * avg(cap)`, `sum(x) / sum(cap)`) | bind | `An aggregate over table columns (e.g. AVG(col), MIN(col)) cannot multiply a decision variable. Pre-compute it as a scalar in a subquery or CTE and reference that value.` (`divide` for a divisor; `be divided together with` for a dividend) |
-| `<`, `>` or `<>` on a side that is not whole-numbered | bind | names the offender and the cast that fixes it |
-| `<`, `>` or `<>` on a helper decision whose value can be fractional | bind | `Comparison '>' is not supported here: 'sum(ship + 0.5) by (D.region)' can take fractional values in this constraint, and stepping the bound is exact only on whole numbers. Compare with '>=' instead.` |
-| A strict bound on a `MIN`/`MAX` whose body can be fractional once its constant addends move to the bound | bind | `Comparison '>' is not supported here: 'max(x + w)' has type DECIMAL(21,1) ... Compare with '>=' instead.` |
-| A NULL beside a decision | bind | `DECIDE: '(x + NULL)' is NULL whatever the decisions are; replace the NULL with a value, as in COALESCE(column, 0)` |
-| A cast over a decision | bind | refused in `SUCH THAT` and the objective ([guide.md §3.2](guide.md#32-numeric-precision-and-casts)) |
-| A function over a decision outside `+`, `-`, `*`, `/` by data, `POWER`, `ABS` and the reducers (`sqrt`, `exp`, `floor`) | plan | `DECIDE: function 'sqrt' cannot take a DECIDE variable. In the SUCH THAT clause \`SUM(sqrt(x)) <= 10\`.` |
-| An operator over a decision outside that vocabulary (`%`, `COALESCE`) | plan | `DECIDE: operator '%' cannot take a DECIDE variable. In the objective \`SUM(x % 2)\`.` |
-| `POWER(e, n)` over a decision with `n` not a whole number known before the query runs (`0.5`, `-1`, a decision, a column) | plan | `POWER over a DECIDE variable needs an exponent that is a whole number known before the query runs, found '0.5'. In the SUCH THAT clause ...` |
-| Division by a decision | plan | `DECIDE: cannot divide by a DECIDE variable. In the SUCH THAT clause ...` |
-| A `CASE` over a decision (a `CASE` over data is a per-row coefficient) | plan | `CASE over a DECIDE variable is not supported. Write the condition as a scope in front of the clause ... In the SUCH THAT clause ...` |
-| A term of degree above 2 (three decisions in one product, `POWER(x, 3)`) | plan | `DECIDE: the SUCH THAT clause \`SUM(x*x*x) <= 10\` has a term of degree 3, which no solver DeciDB supports can optimize. Instead, write each term with at most two decision factors, as in x, POWER(x, 2) or x * y.` |
-| A `BOOL` bound that cannot hold (`x >= 2`) | before reading rows | `DECIDE optimization is infeasible: x >= 2 cannot hold for a BOOL variable.` |
-| A NaN in the data, an infinite coefficient, or an infinite value under `ABS`, `MIN` or `MAX` | run | `DECIDE: v is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(v) THEN v END' in its place.` (a bound: `DECIDE: the bound v is NaN on some rows. Skip those rows by writing 'CASE WHEN NOT isnan(v) THEN v END' in its place.`) |
-| A constant coefficient that SQL computes as NaN or infinite (`x / 0`) | run | `DECIDE: 1 / 0 is NaN or infinite. Use a finite value.` |
-| A NaN a frame's reducer or window reads (the value is NaN, as SQL's SUM gives) | run | `DECIDE: the bound min(at(first: t.f) over (t.id within t.id)) is NaN on some rows. Skip those rows by writing 'CASE WHEN NOT isnan(min(at(first: t.f) over (t.id within t.id))) THEN min(at(first: t.f) over (t.id within t.id)) END' in its place.` |
-| A number past a DOUBLE that DeciDB derives (`SUM(b*x)` over rows of one keyed decision, `POWER(b*x, 2)`, a bound or range DeciDB computes from the decisions' bounds) or a literal coefficient (`2e308*x`) | run | `DECIDE: SUM(b * x) <= 10 computes a number too large for a DOUBLE. Scale its data down.` (names the clause, or the objective) |
-| A variable with no finite bound under a `MIN`/`MAX` or `ABS` in the direction that needs one, a `<>` (these three on HiGHS), a `norm(e, 0)`, or the other factor of a product with a `BOOL` | run | names the variable and the bound to add |
-| A model class the available solver cannot run (non-convex QP, MIQP, quadratic constraints on HiGHS) | plan | names what the query does and that it needs Gurobi; a quadratic limit is quoted: `DECIDE: the SUCH THAT clause \`SUM(POWER(x, 2)) <= 25\` squares or multiplies decision variables, which needs Gurobi — not available on this machine. Install Gurobi, or rewrite that constraint so each term holds at most one decision variable.` |
-| A square multiplied by a value whose sign is known only when the query runs (`SUM(w * POWER(x, 2))`, a data weight or a query-wide subquery), on HiGHS | plan | `DECIDE: the objective multiplies a squared decision term by a value whose sign is known only when the query runs, which needs Gurobi — not available on this machine. Install Gurobi, or multiply the square by a constant, or use a linear objective.` |
-| A range frame reading more values than `decide_frame_limit` | run, before solving | `DECIDE: sum(from first to last: t.v) over (t.period within t.product) reads more than 4 values over its ranges, above decide_frame_limit (4). Narrow the range, or raise the setting.` |
-| A frame's selected position holding rows with two signatures of its payload (D73) | run, before solving | `DECIDE: at(previous: x) over (t.period within t.product) finds 2 rows at t.product = 'A', t.period = 1; a position must hold one row.` |
-| Under `per K`, a class whose rows lie in two timelines of a frame its body reads, or an objective's rows in two of a frame at its root (D75) | run, before solving | `DECIDE: per t.category does not determine the timeline t.product of at(first: t.v) over (t.period within t.product). t.category = 'Food' spans t.product = 'A', 'B'.` |
-| A square or product under a `MIN`/`MAX` on HiGHS | plan | `DECIDE: 'max(power(x, 2))' takes the maximum of a squared or multiplied expression, which needs Gurobi — not available on this machine. Install Gurobi, or replace power(x, 2) with an expression linear in the decision variables.` |
+- **The form.** `<Kind>: <what is wrong>.` One statement, then DuckDB's own block that shows the place: `LINE n: …` with
+  a caret under it. The sentence carries no prefix (`DECIDE:`, `SUCH THAT clause:`) and never repeats the clause the
+  caret already shows. It names only what is smaller than the caret's target (`'x'`, `ABS`).
+- **Quoting.** A fragment the sentence quotes is cut from the query by its position, in single quotes, as the user
+  wrote it. It is not re-rendered from an internal form, so a spelling, a cast or a `CASE` appears as typed. In the
+  tables, `'q'` stands for such a fragment, `N` for a count and `'x'` for a name.
+- **The kind follows the cause, by one rule:**
+  - **Parser Error**: text that is not DECIDE syntax.
+  - **Binder Error**: a query that is wrong in the language. This includes the nesting limits the language keeps
+    (D80, [guide.md §5.5](guide.md#55-reducers-inside-reducers--the-path-rule)); those say "is not allowed".
+  - **Not implemented Error**: a shape the language allows but DeciDB does not handle, and a model class this
+    installation cannot solve. These say "is not supported".
+  - **Invalid Input Error**: the data or the outcome of solving (NaN, two values, infeasible, unbounded, a limit).
+  - **Internal Error**: DeciDB's own invariant. No query written in SQL causes one.
+- **A model class this installation cannot solve** says `… is not supported on this installation`, with no solver
+  named. A host with the solver answers the same query, so the installation is the place. `DECIDB_FORCE_SOLVER` gives
+  the same text: the forced solver is the installation.
+- **No place in the query.** A message about a setting, the environment or the outcome of a solve has no caret. It
+  names the setting or the component and states what is wrong (§5).
+- **A node DeciDB built** from the user's text takes the position of the text it replaces (the `==` and arithmetic
+  rewrites of the canonicalizer, like-term merges, a bound's reducer). A message about one prints the caret of that
+  text. A node with no such text prints no caret.
+- **Which of several errors is reported is not owed.** The solver path raises the first error it reaches, and so does
+  the direct path (R10, R11, `../../opa_rewrite/decisions.md`). A parallel scan can reach a different failing row on
+  another run.
+- **A removed spelling is a syntax error.** A form the grammar no longer has (`C PER g`, `C WHEN c`, `scalar x`,
+  `T.x(INT)`, `MAXIMIZE e PER g`) fails as any other: `Parser Error: syntax error at or near "…"`. Nothing in the
+  parser recognizes an old spelling.
 
-Each refusal of the shape check (stage 04, the six rows from the function row to the degree row) quotes the clause as
-written, in an ending `In the SUCH THAT clause ...` or `In the objective ...` (the degree message names it in its first
-sentence), and points a caret at the term. When a
-query has two refusals, the one the pipeline reaches first is reported: the binder's, then the shape check's.
+**Raised** is the stage that throws: **parse** (the grammar and the transformer), **bind** (the binder, while
+expressions are bound), **plan** (the canonicalizer, the shape check, the rewrites, the solver choice and the physical
+plan: everything before a row is read) and **run** (execution, and the formulation it calls).
+
+## 1. Parse time
+
+| Situation | Kind | Message | Caret at |
+|---|---|---|---|
+| `per` other than `per ()` on the objective | Parser | `an objective cannot have a per key` | `per` |
+| A parenthesized key (`per (g):`) | Parser | `a per key cannot be in parentheses` | the `(` |
+| An expression in a `per` key | Parser | `'q' in a per key is not a column or a relation` | the element |
+| An expression in a frame's `within` | Parser | `'q' in within is not a column or a relation` | the element |
+| A declaration with no type | Parser | `decision 'x' has no type` | the name |
+| A `DECIDE` with no `SUCH THAT`, or an objective where its constraints belong | Parser | `DECIDE has no SUCH THAT clause` | `DECIDE` |
+| A `SUCH THAT` with no `DECIDE` | Parser | `SUCH THAT has no DECIDE clause` | `SUCH THAT` |
+| A second `DECIDE` clause | Parser | `DECIDE appears twice` | the second `DECIDE` |
+| A comma between constraints | Parser | `SUCH THAT constraints cannot be separated by a comma` | the comma |
+| A qualifier of a reducer that is not one relation name (`sum(a.b: x)`) | Parser | `'q' before ':' in a reducer is not a relation` | the qualifier |
+| A frame's `k` or `every` that is not a positive whole number | Parser | `'0' in a frame is not a positive whole number` | the frame |
+| A frame position that is not `first`, `last`, `[k] previous` or `[k] next` | Parser | `'prev' is not a frame position` | the word |
+| A frame word that is not `every` or `cyclic` where one stands | Parser | `'cyclc' is not a frame keyword` | the word |
+| A range frame over more than one expression | Parser | `a range frame reduces one expression, 'sum' has 2` | the reducer |
+| A name on a frame's expression (`a := e`) | Parser | `an expression in a frame cannot have a name` | the frame |
+| A declaration right after another with no comma, a spelling the grammar does not have, a frame selector outside a `DECIDE` clause, `by` after anything but a function call (a column, a literal, `CASE`, `CAST`, `::`, `COALESCE`, parentheses), `WHERE` after a `DECIDE` clause | Parser | `syntax error at or near "…"` (DuckDB's own) | the token |
+
+## 2. Bind time
+
+Binder Error unless marked **NI** (Not implemented Error). The rows marked **D80** are the nesting limits the language
+keeps ([guide.md §5.5](guide.md#55-reducers-inside-reducers--the-path-rule)).
+
+### Constraints and the objective
+
+| Situation | Kind | Message | Caret at |
+|---|---|---|---|
+| `OR` between constraints | NI | `OR between SUCH THAT constraints is not supported` | the `OR` |
+| A comparison, `BETWEEN` or conjunction that reads a decision, used as a number (`x <= (x > 1)`, a `CASE WHEN x > 1`) | Binder | `'q' is a comparison used as a number` | the inner comparison |
+| A side or term of a shape the binder does not read (a `NOT`, an `IS NULL`, a `CASE`) that reads a decision | NI | `'q' is not supported` | the side |
+| The same shape reading no decision | Binder | `'q' reads no decision` | the side |
+| A constraint that is not a comparison (`SUCH THAT x`) | Binder | `'q' is not a comparison` | the term |
+| A column that is not a decision where one must stand | Binder | `'c' is not a decision` | the column |
+| A side that is neither data nor a reducer (a subquery that is not a value) | Binder | `'q' is not data or a reducer` | that side |
+| `IN` on a reducer | NI | `IN on 'q' is not supported` | the `IN` |
+| An `IN` list that reads a decision | Binder | `an IN list reads a decision` | the `IN` |
+| A comparison whose reducers, under arithmetic, read no decision (`SUM(t.v) + 1 <= 500`), or an objective term with none | Binder | `'q' reads no decision` | the side, or the objective term |
+| A function in the objective that is not `+`, `-`, `*` or `/` by data, over a reducer (`sqrt(sum(x))`, `sum(x) / sum(x)`) | NI | `'sqrt' over a reducer is not supported in the objective` | the call |
+| A function a constraint side or the objective does not read, over no reducer | NI | `function 'f' is not supported here` | the call |
+| A reducer that is not `SUM`, `AVG`, `MIN`, `MAX`, `norm` or `COUNT`, or one with `FILTER` | NI | `'q' is not supported in a DECIDE clause` | the aggregate |
+| `COUNT` over a decision | NI | `COUNT over a decision is not supported` | the call |
+| A reducer or `norm` with the wrong number of arguments | Binder | `'sum()' has 0 arguments` (`1 argument`) | the call |
+| A `norm` whose order is not a constant | Binder | `the order of 'q' is not a constant` | the order |
+| A `norm` order other than 0, 1, 2 or `'inf'` | NI | `norm order '3' is not supported` | the order |
+| A bound on a `norm` that is not of order 0, or one that is not a positive constant | Binder | `only norm order 0 takes a bound` · `the bound of 'q' is not a positive constant` | the argument |
+| A subquery in a clause that is not scalar, or that reads a decision | Binder | `a subquery in a DECIDE clause is not scalar` · `a subquery in a DECIDE clause reads a decision` | the subquery |
+| A reducer over query-wide decisions only | Binder | `'cap' is a query-wide decision, so 'sum(cap)' has no rows to reduce` | the reducer |
+| A data-only reducer scaling a decision (`x * avg(cap)`, `sum(x) / sum(cap)`) | Binder | `'avg(cap)' reduces data, which cannot multiply a decision` (`divide`, `be divided together with`) | the reducer |
+| A cast over a decision | Binder | `'x::DOUBLE' casts a decision` | the cast |
+| A NULL beside a decision | Binder | `'x + NULL' is NULL whatever the decisions are` | the expression |
+| `<`, `>` or `<>` on a side that can take fractional values | NI | `'<' compares 'q', which can take fractional values` | the comparison |
+| A decision whose name is a column's or another decision's | Binder | `decision 'x' has the name of a column` · `decision 'x' is declared twice` | the declaration |
+| A name DECIDE reserves | Binder | `'q' is not allowed as a name in DECIDE` | the name |
+
+### Scopes, keys and relations
+
+| Situation | Kind | Message | Caret at |
+|---|---|---|---|
+| A column of an outer query (`LATERAL`, a scalar subquery in another query's select list), in any clause or the `WHERE` | Binder | `'o.k' refers to an outer query` | the column |
+| `by` after a call that is not a reducer | Binder | `by (...) does not follow a reducer` | the `by` |
+| `when` or `per` inside a call that is not a reducer | Binder | `when or per inside 'q', which is not a reducer` | the call |
+| A decision in a `when`, a key or a `by`, in the `WHERE`, or in a frame's order key or `within` | Binder | `'x' is a decision, which when, per and by cannot read` (`WHERE`; `a frame's order key and within`) | the decision |
+| A window function in a `when`, a key, a `by` or a frame's order key | Binder | `a window function is not allowed in when, per, by or a frame's order key` | the window call |
+| A reducer in a `when`, a key, a `by` or a frame's order key | Binder | `a reducer is not allowed in when, per, by or a frame's order key` | the reducer |
+| A volatile function (`random()`) in a clause | Binder | `a volatile function is not allowed in a DECIDE clause` | the call |
+| An unknown key element | Binder | `'depot' is not a column or a relation of the FROM clause` | the element |
+| `rowid` or a generated column in a key | Binder | `'g.b' is not a stored column` | the element |
+| An unqualified `FULL OUTER JOIN USING` column in a key | Binder | `'depotID' is merged by FULL OUTER JOIN USING` | the element |
+| A colon form naming a relation not in `FROM` | Binder | `'X' is not a relation of the FROM clause` | the qualifier |
+| A relation qualifier on a call that is not a reducer | Binder | `'q' cannot be qualified by a relation` | the call |
+| A scope or the colon form inside an ordinary subquery written in a clause | NI | `'q' inside a subquery is not supported` | the scope |
+| **D80** `norm` inside a reducer, a reducer inside `norm` | Binder | `norm inside a reducer is not allowed` · `a reducer inside norm is not allowed` | the call |
+
+### Frames
+
+| Situation | Kind | Message | Caret at |
+|---|---|---|---|
+| **D80** A frame in a `when`, a `per`, a `by`, a `within` or an order key | Binder | `a frame selector is not allowed in when, per, by, within or an order key` | the frame |
+| **D80** A reducer or a frame inside a frame's payload or fallback | Binder | `a reducer inside 'q' is not allowed` · `a frame selector inside 'q' is not allowed` | the inner node |
+| **D80** A square or product of decisions in a frame's payload | Binder | `'x * x' squares or multiplies decisions inside a frame, which is not allowed` | the inner node |
+| A frame's payload not linear in the decisions (`abs`, a decision divisor) | NI | `'abs(x - 3)' inside a frame is not linear in the decisions, which is not supported` | the node |
+| A frame's `else` that reads a decision while its payload reads none | NI | `else 'x' reads a decision while the payload reads none, which is not supported` | the `else` value |
+| A frame's `else` that is not a number | Binder | `else ''a'' is not a number` | the `else` value |
+| A range's `else` over a collated payload, whose `min` or `max` compares text under the collation | Binder | `else '0' stands in a collated text payload` | the `else` value |
+| A range frame reducing with a function other than `sum`, `avg`, `min`, `max`, `count` | NI | `a range frame reducing with 'median' is not supported` | the frame |
+
+A frame's `else` that is text carries its own quotes, so the sentence doubles them (`else ''a'' is not a number`).
+
+### `DIAGNOSE`
+
+| Situation | Kind | Message | Caret at |
+|---|---|---|---|
+| `DIAGNOSE` on a query with no `DECIDE` clause | Binder | `DIAGNOSE needs a query with a DECIDE clause` | the query |
+| `DIAGNOSE` on a query with more than one `DECIDE` clause | NI | `DIAGNOSE on more than one DECIDE clause is not supported` | the query |
+
+## 3. Plan time
+
+The messages raised after binding, while the plan is built and optimized, before any row is read. A caret is printed
+where the message names a clause or a node the user wrote.
+
+| Situation | Kind | Message | Caret at |
+|---|---|---|---|
+| An `INT` or `REAL` decision as a factor on a reducer, or a `BOOL` one on a reducer inside another expression | Binder | `'s' is an INT decision, which cannot scale a reducer` (`a REAL`, `a BOOL`; `divide`; `a reducer inside another expression`; a compound factor reads `'b - c' reads a decision, which cannot scale a reducer`) | the factor |
+| A row-varying factor on a reducer in the objective | Binder | `'weight' varies per row, which cannot scale a reducer in the objective` | the factor |
+| A bound that is NULL | Binder | `the bound 'q' is NULL` | the bound |
+| A comparison whose reducers read no decision, found after rewriting | Binder | `'q' reads no decision` | the term |
+| `AVG` under `<>` beside another term, or with its own `when` or `per` | NI | `AVG in a <> constraint beside another term, or with its own when or per, is not supported` | the comparison |
+| `<>` over a square or product of decisions not linearized first (a product with a `BOOL` is) | NI | `<> over a product or a power of decisions is not supported` | the comparison |
+| `<>` on a `MIN` or `MAX` | NI | `<> on MIN or MAX is not supported` | the comparison |
+| A term beside a `MIN` or `MAX` in a shape the rewrite does not read, or a comparison operator on a composed `MIN` or `MAX` | NI | `'q' beside MIN or MAX is not supported` · `'<>' on a composed MIN or MAX is not supported` | the term, the comparison |
+| **D80** A square or product of decisions inside nested reducers that no body definition names | Binder | `'q' squares or multiplies decisions inside nested reducers, which is not allowed` | the reducer |
+| A square, or a product of two decisions, outside a reducer in the objective, unless the two are distinct query-wide decisions or one is `BOOL` | NI | `'x * y' multiplies decisions outside a reducer, which is not supported` | the product |
+| `<`, `>` or `<>` on a helper whose value can be fractional | NI | `'>' compares 'sum(ship + 0.5) by (D.region)', which can take fractional values` | the comparison |
+| A `CASE`, `if` or `iif` over a decision (a `CASE` over data is a per-row coefficient) | NI | `CASE over a decision is not supported` (`IF`, `IIF` as written) | the conditional |
+| A function over a decision outside `+`, `-`, `*`, `/` by data, `POWER`, `ABS` and the reducers (`sqrt`, `exp`, `floor`) | NI | `function 'sqrt' over a decision is not supported` | the call |
+| An operator over a decision outside that vocabulary (`%`, `COALESCE`) | NI | `operator '%' over a decision is not supported` | the operator |
+| `POWER(e, n)` over a decision with `n` not a whole number known before the query runs | NI | `the exponent '0.5' of POWER over a decision is not a constant whole number` | the `POWER` |
+| Division by a decision | NI | `division by a decision is not supported` | the `/` |
+| A term of degree above 2 (three decisions in one product, `POWER(x, 3)`) | NI | `a term of degree 3 is not supported` | the term |
+| A model class this installation cannot solve | NI | one text per cause, each ending `is not supported on this installation` (below) | the clause, the reducer or the objective |
+| A bound that cannot hold for the decision's domain: a `BOOL` above 1 or below 0 (`x >= 2`), or an upper bound below the default floor of 0 | Invalid Input | `the constraint cannot hold: 'x' is a BOOL decision` · `the constraint cannot hold: 'x' is never negative` | the clause |
+| `decide_direct_solve` is `require` | Invalid Input | `decide_direct_solve is 'require' and the query is DIAGNOSE` · `decide_direct_solve is 'require' and DECIDB_FORCE_SOLVER is set` · `decide_direct_solve is 'require' and no direct rule applies to this query` | none |
+| `decide_optimizer` in `disabled_optimizers` | Invalid Input | `DECIDE needs the optimizer 'decide_optimizer', which is disabled` | none |
+| `DECIDB_FORCE_SOLVER` names a solver DeciDB does not know, or one this installation lacks | Invalid Input | `DECIDB_FORCE_SOLVER names no solver: 'x'` · `DECIDB_FORCE_SOLVER names a solver this installation does not have: 'x'` | none |
+
+**The causes of a solver gap.** Each reads `<cause> is not supported on this installation`. The installation, not a
+solver, is the place, so a user on Gurobi gets an answer to the same query.
+
+| Cause | Caret at |
+|---|---|
+| `squaring or multiplying decisions in a constraint` | the first such clause |
+| `multiplying two decisions in the objective` | the objective |
+| `maximizing a squared decision` · `minimizing a negated squared decision` | the objective |
+| `squaring a decision that is not REAL` | the objective |
+| `squaring an expression of more than one decision` | the objective |
+| `a square scaled by a value whose sign is known only when the query runs` | the objective |
+| `MIN or MAX over a squared or multiplied expression` | the reducer |
+
+## 4. Run time
+
+Raised while rows are read or the model is built. A message that quotes a value names no row: a row's position in the
+input depends on the scan.
+
+| Situation | Kind | Message | Caret at |
+|---|---|---|---|
+| A NaN in the data, an infinite coefficient, or an infinite value under `ABS`, `MIN` or `MAX` | Invalid Input | `'v' is NaN or infinite on some rows` | the column or expression as written, or the nearest located expression above a value DeciDB built |
+| A bound that is NaN on some rows | Invalid Input | `the bound 'v' is NaN on some rows` | the bound |
+| A constant coefficient that SQL computes as NaN or infinite (`x / 0`, `2e308`, `'Infinity'`) | Invalid Input | `'1 / 0' is NaN or infinite` | the constant |
+| A number past a DOUBLE that DeciDB derives across rows (`SUM(b*x)` over rows of one keyed decision, `POWER(b*x, 2)`, a bound or range DeciDB computes from the decisions' bounds) | Invalid Input | `the constraint computes a number too large for a DOUBLE` (`the objective …`) | the clause |
+| A factor on an aggregate that evaluates to 0 where DeciDB divides by it | Invalid Input | `'q' divides by zero` | the divisor |
+| An `=` bound that takes two values in a `by` group | Invalid Input | `the = bound 'cap' takes two values (5 and 7) in the group category = 'Food'` (a bound over the whole query names no group) | the bound |
+| The objective takes two values or instances over its kept rows | Invalid Input | `'D.capacity' takes more than one value over the kept rows (20, 40), so the objective would be produced more than once` (below) | the field, the key element, the declaration or the frame |
+| A range frame reading more values than `decide_frame_limit` | Invalid Input | `the frame reads more than 4 values over its ranges, above decide_frame_limit (4)` | the frame |
+| A frame's selected position holding rows with two signatures of its payload (D73) | Invalid Input | `the frame finds 2 rows at t.product = 'A', t.period = 1` | the frame |
+| Under `per K`, a class whose rows lie in two timelines of a frame its body reads, or an objective's rows in two of a frame at its root (D75) | Invalid Input | `per t.category does not determine the timeline t.product: t.category = 'Food' spans t.product = 'A', 'B'` (the objective: `the objective (per ()) does not determine the timeline t.product: its rows span t.product = 'A', 'B'`) | the frame |
+| A variable with no finite bound under a `MIN`/`MAX`, `ABS` or `<>` in the direction that needs one, or a `norm(e, 0)` | Invalid Input | `'x' has no finite bound, which ABS needs` (`MIN or MAX`, `<>`, `norm(e, 0)`) | the clause |
+| The other factor of a product with a `BOOL` decision | Invalid Input | `'q' has no finite upper bound, which its product with a BOOL decision needs` | the clause |
+| A whole-numbered decision that solves past 2^53 | Invalid Input | `decision 'x' takes the value 100000000000000000, past 2^53, the largest whole number DECIDE returns exactly` | the declaration |
+| A row or objective whose numbers lie too far apart for the installation to load | NI | `the constraint holds numbers too far apart in size, which is not supported on this installation` (`the objective …`) | the clause |
+| The query has no feasible point | Invalid Input | `the DECIDE query is infeasible` | none |
+| The objective improves without end | Invalid Input | `the DECIDE query is unbounded` | none |
+| The solver cannot tell the two apart | Invalid Input | `the DECIDE query is infeasible or unbounded` | none |
+| A time or iteration limit with no answer to return | Invalid Input | `the DECIDE query reached the time limit` · `the DECIDE query reached the iteration limit` | none |
+| The solver stopped with another status | Invalid Input | `the DECIDE query could not be solved: <status>` (the status text is omitted where the solver gives none) | none |
+| The Gurobi environment or licence cannot start | Invalid Input | `the Gurobi environment could not start: <reason>` | none |
+| An interrupt before an answer | Interrupt | `DECIDE stopped at your request before finding a solution.` (DuckDB's interrupt) | none |
+
+An error in a Gurobi model load (`Failed to add … to Gurobi`, `GRBaddqconstr`) is an Internal Error: a query never
+causes it.
+
+**What the objective takes two values over.** The phrase `so the objective would be produced more than once` is fixed;
+names and values come from the query and the data, the least and the greatest as `ORDER BY` places them (NULL last), so
+the message does not depend on row order. The first part names the field that differs:
+
+- a column or expression: `'D.capacity' takes more than one value over the kept rows (20, 40)`;
+- a `by` key: `'D.region' in by (D.region) takes more than one value over the kept rows ('East', 'West')`;
+- a decision: `the decision 'ship' (declared per row) has more than one instance over the kept rows`;
+- a frame: `'at(first: x) over (t.period within t.product)' reads more than one position over the kept rows (t.period
+  = 1, 2)`, `… reads more than one timeline over the kept rows (t.product = 'A', 'B')` or `… falls back to more than one
+  value over the kept rows`.
+
+## 5. No place in the query
+
+A message about a setting, the environment or the solve itself has no caret. Each names the setting or the component,
+states what is wrong, and stops.
+
+| Message | Kind |
+|---|---|
+| A setting out of range: `decide_frame_limit must be >= 1; got 0.`, `decide_mip_gap must be >= 0; got -1.`, `decide_l0_tolerance must be at least 1e-5; got 1e-7`, `diagnose_decide_infeasible_slack_scope must be 'query' or 'expanded'; got 'x'`, and the same form for the other `diagnose_decide_*` settings | Invalid Input |
+| `decide_direct_solve must be off, auto, or require` | Invalid Input |
+| The messages of `decide_direct_solve = 'require'`, `DECIDB_FORCE_SOLVER` and a disabled `decide_optimizer` (§3) | Invalid Input |
+| The solver outcomes and the Gurobi environment (§4) | Invalid Input |
+
+The `decide_debug` setting reads its own items (`decide_debug: unknown item 'x'`); it is a developer setting and states
+what it rejects.
+
+## Warnings
+
+A warning is not an error and leaves the answer unchanged. The number-range warning is one line on stderr, once per
+query: `DECIDE: a very large or very small number may make this answer inaccurate.` The two warnings about what the
+data left of a clause are in [guide.md §7.4](guide.md#74-what-the-data-left-of-a-clause).
+
+## Notes
 
 DeciDB prevents no overflow, as DuckDB's DOUBLE arithmetic does not. Large finite numbers solve after the number-range
 warning (`../pipeline/07_solver/done.md`), and the solver's verdict on them stands. An infinite bound is no bound. A
-coefficient that is NaN or infinite where DeciDB reads it raises one of the two messages above: the first when a column
-holds it, quoting that column's value even inside a merged or scaled coefficient (`2 * b` names `b`); the constant
-one when no column holds it but SQL's arithmetic made it so (`1 / 0` is infinite in DuckDB); TOO_LARGE naming the
-clause when a literal is past a DOUBLE as written (`2e308 * x`) or a sum of finite numbers overflows
-(`x*1e308 + x*1e308`).
+coefficient that is NaN or infinite where DeciDB reads it raises one of the first three run-time rows: the first when a
+column holds it, quoting the column or expression as the user wrote it (`2 * b` names `b`); the third when no column
+holds it but SQL's arithmetic made it so (`1 / 0` is infinite in DuckDB). A coefficient has no separate message for NaN
+and for infinity. The too-large row is for a number no expression of the query holds: it names the clause, and it
+applies only where DeciDB accumulates across rows (`x*1e308 + x*1e308`), since a literal past a DOUBLE as written
+(`2e308 * x`) is an infinite constant.
 
-## 2. Not supported yet
+A clause that comes from a table macro's body has a position relative to the body, and a clause with no text of its
+own prints no caret.
 
-Each shape is refused with a message, never answered wrongly. Rows marked **D80** are the nesting limits the language
-keeps ([guide.md §5.5](guide.md#55-reducers-inside-reducers--the-path-rule)). The others are limits on what DeciDB
-formulates; their open work is in the owning stage's `todo.md`.
+**Ruling (owner, 2026-11-18).** A message states the kind of error and where it is in the query, and stops (R12,
+R19). A removed spelling is an ordinary syntax error (R13). A NaN or infinite value says so and names where it stands
+(R14). An `=` bound that takes two values names its `by` group (R15).
 
-| Shape | Message |
-|---|---|
-| **D80** `norm` inside a reducer | `DECIDE: norm inside a reducer is not supported yet` |
-| **D80** A reducer inside `norm` | `DECIDE: a reducer inside norm is not supported yet` |
-| **D80** A square or product of decisions inside nested reducers that no body definition names: a nest of sums in the objective neither read in place nor summed in the other order | `DECIDE: 'sum((x - 1) * max(x) by (t.g))' squares or multiplies decisions inside nested reducers, which is not supported yet` |
-| A frame's payload not linear in the decisions (`abs`, a decision divisor) | `DECIDE: 'abs(x - 3)' inside at(...) is not linear in the decisions, which is not supported yet; write it outside the frame` |
-| A frame's `else` that reads a decision while its payload reads none | `DECIDE: in at(previous else s: t.demand) over (t.period), else s reads a decision while the payload reads none, which is not supported yet` |
-| **D80** A frame in a `when`, `per`, `by`, `within` or an order key | `DECIDE: a frame selector is not allowed in when, per, by, within or an order key` |
-| **D80** A reducer or a frame inside a frame's payload or fallback | `DECIDE: a reducer inside at(...) is not supported; reduce outside the frame` · `DECIDE: a frame selector inside at(...) is not supported` |
-| **D80** A square or product of decisions in a frame's payload | `DECIDE: 'x * x' squares or multiplies decisions inside at(...), which is not supported yet` |
-| `AVG` under `<>` beside another term, or with its own `when`/`per` | `DECIDE: AVG in a <> constraint is not supported yet beside another term or with its own when or per` |
-| `<>` over a square or product of decisions not linearized first (a product with a `BOOL` is) | `DECIDE: <> over a product or a power of decisions is not supported yet: SUM(POWER(x,2)) <> 3` |
-| `<>` on a `MIN`/`MAX`, alone or composed | `DECIDE does not support <> comparison with MIN/MAX aggregates (norm(e, 'inf') is a MAX of absolute values): max(x) <> 3` |
-| A square, or a product of two decisions, outside a reducer in the objective, unless the two are distinct query-wide decisions or one is `BOOL` | `DECIDE objective: 'x * y' multiplies decisions outside a reducer, which is not supported yet` |
-| A scope inside an ordinary SQL subquery written in the clause | `DECIDE: 'WHEN condition:' is not supported yet` (or `'PER key:'`, `'PER ():'`, `'PER ROW:'`, `'BY (key)'`) |
-| `IN` on a reducer | `SUCH THAT does not support IN on 'sum(x)'. Only simple DECIDE variables are allowed as the IN target` |
+**Ruling (owner, 2026-11-19).** Every message of the tables above carries the raise call's own position
+(`query_location`), as DuckDB's casts do. A direct-solve rule raises where the value is found, so a direct plan and
+the solver path print the same text and the same caret.
 
-A reducer over data only stays on the bound side of a comparison.
+**Ruling (owner, 2026-11-19).** A `too large for a DOUBLE` message has its caret on the clause and never quotes the
+clause: `the constraint computes a number too large for a DOUBLE`, `the objective …`.
 
-## 3. Removed spellings
+**Ruling (owner, 2026-11-19).** A constraint that is none of the comparisons the rows above name is `'q' is not
+supported` (Not implemented Error) at its node.
 
-Each is a parse error whose message carries the phrase `is removed` and names the spelling to write, built from the
-query's own text so it pastes back (`D.x` is the exception: a Binder Error). A condition is quoted whole as written, a
-name that needs quotes is quoted, and a removed form inside a subquery of a clause is refused the same way. A
-`WHEN` after a reducer followed by a bare comparison (`SUM(x) <= SUM(cap) WHEN cap > 2`) is a plain syntax
-error, as does a removed form after a clause that already has a scope in front. Messages below are for
-`FROM ... t(id, cap, g)`.
+**Ruling (owner, 2026-11-19).** A side of a shape no row names splits by what it reads: a side that reads a decision is
+`'q' is not supported` (Not implemented Error) and one that reads none is `'q' reads no decision` (Binder Error). A
+`CASE WHEN c > 1 THEN x ELSE 0 END` compared with a bound reads a decision, so it is the first.
 
-| Removed | Write instead | Message (key phrase) |
-|---|---|---|
-| `T.x(TYPE)` | `per T: x(TYPE)` | `the declaration t.x(INT) is removed; write per t: x(INT) (per t keys on every column of t; write per t.k: x(INT) to key on one column k)` |
-| `T.x` (no type) | `per T: x(INT)` / `(BOOL)` / `(REAL)` | `the declaration t.x is removed; write per t: x(INT), per t: x(BOOL) or per t: x(REAL) (per t keys on every column of t)` |
-| `scalar x(TYPE)`, `scalar T.x(TYPE)` | `per (): x(TYPE)` | `scalar s(INT) is removed; write per (): s(INT)` |
-| `scalar x` (no type) | `per (): x(INT)` / … | `scalar s is removed; write per (): s(INT), per (): s(BOOL) or per (): s(REAL)` |
-| `C PER g` · `C PER (g, h)` · `C PER g, h` | `per g, h: C`, with `by (g, h)` after each reducer | `the postfix PER is removed; write per g: in front of the constraint and by (g) after each of its reducers` |
-| `C PER g`, `C` without a reducer | `C` | `the postfix PER is removed; a constraint with no reducer already holds on every row, so drop the PER` |
-| `C WHEN c` | `when c: C` | `the postfix WHEN is removed; write when g = 'A': in front of the constraint` |
-| `C WHEN c PER g` | `when c per g: C`, with `by (g)` | `the postfix PER is removed, as is the WHEN before it; write when g = 'A' per g: ...` (with the NULL note) |
-| `SUM(e) WHEN c` | `sum(when c: e)`; after a reducer with a scope or `by`, the condition joins it | `the WHEN after sum(x) is removed; write sum(when g = 'A': x)` |
-| `COUNT(*) WHEN c` · `norm(e, p) WHEN c` | `sum(when c: 1)` · `when c:` in front | `... write sum(when g = 'A': 1)` · `... norm takes no when inside it: write when g = 'A': in front of the constraint when the condition holds for all of it` |
-| `SUM(D: e) WHEN c` | `sum(when c per D: e)` | `the WHEN after sum(t: x) is removed; write sum(when g = 'A' per t: x)` |
-| `MAXIMIZE E WHEN c` | `MAXIMIZE when c: E` | `the postfix WHEN is removed; write MAXIMIZE when g = 'A': sum(x)` |
-| `MINIMIZE OUTER(INNER(e)) PER g` | `MINIMIZE outer(per g: inner(e) by (g))`; a `WHEN` inside goes in front, the colon form inside stays (`max(per t: x)`) | `the postfix PER is removed; write MINIMIZE sum(per g: max(x) by (g))` |
-| `MINIMIZE c * OUTER(INNER(e)) PER g` | the nested reducer where it stands | `the postfix PER is removed; write the nested reducer in 2 * sum(max(x)) where it stands as outer(per g: inner(e) by (g)), as in MINIMIZE sum(per g: max(e) by (g))` |
-| `MAXIMIZE SUM(e) PER g` | `MAXIMIZE sum(e)` | `the postfix PER is removed; an objective is produced once: write MAXIMIZE sum(x)` |
-| `MAXIMIZE MAX(e) PER g` | `MAXIMIZE max(e)`, or `sum(per g: max(e) by (g))` | `... an objective is produced once: write MAXIMIZE max(x), or MAXIMIZE sum(per g: max(x) by (g)) to combine one value per class` |
-| `MAXIMIZE AVG(e) PER g` | `MAXIMIZE sum(per g: avg(e) by (g))`, or `MAXIMIZE avg(e)` | `the postfix PER is removed; write MAXIMIZE sum(per g: avg(x) by (g)) to add up one average per class as before, or MAXIMIZE avg(x) for one average over all rows` |
-| `D.x`, a decision with its relation | `x` | `DECIDE: write open, not t.open; a decision is referenced by its bare name` · in a `when`, `per` or `by`: `DECIDE: t.open is a decision; when, per and by may only use data` |
+**Ruling (owner, 2026-11-19).** `else ''a'' is not a number` keeps the doubled quote: the fallback text carries its own
+quotes and the sentence adds its own.
 
-- `D.x` is refused only when `D` is a relation of the `FROM` clause and `D.x` names none of its columns, so a struct
-  field or a real column `D.x` is unaffected (D43).
-- A view or macro stored with a removed spelling prints as written and is refused when bound (D54).
-- The colon form `SUM(D: e)` is current syntax ([guide.md §5.1](guide.md#51-the-colon-form--sumd-e)).
+**Ruling (owner, 2026-11-19).** The decision-as-factor message names the decision's type (`'s' is an INT decision, which
+cannot scale a reducer`; `a REAL`, `a BOOL`; `divide`; `a reducer inside another expression`), and a compound factor
+reads `'b - c' reads a decision, which cannot scale a reducer`. Minimizing a negated square is its own cause
+(`minimizing a negated squared decision`). An objective that takes two instances of a decision has its caret on the
+declaration.
 
-Tests: `test/decide/tests/test_scope_removed_syntax.py`; the scanner `test_no_old_spellings_remain.py` (with
-`_old_spellings.py`) keeps these spellings out of every other test; the removed-spelling cases of
-`test/decidb/test_scope_parser.test`.
+**Ruling (owner, 2026-11-19).** `the DECIDE query could not be solved: <status>` names the solver's own status text where
+there is one. `the constraint holds numbers too far apart in size` has one text for every cause. The number-range
+warning does not tell the user what to change. The settings in §5 and the `DIAGNOSE` form of `decide_direct_solve =
+'require'` read as the tables give them.

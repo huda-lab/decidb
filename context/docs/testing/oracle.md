@@ -85,7 +85,6 @@ test/decide/
     ├── _scope_oracle.py       # Reference evaluator of the per / when / by language (§3.10)
     ├── _scope_cases.py        # The deck's relations and shared helpers of the scope suites
     ├── _brute_force.py        # Enumeration reference for tiny models (§3.10)
-    ├── _old_spellings.py      # Scanner behind test_no_old_spellings_remain.py
     ├── test_oracle_api_quadratic.py  # Smoke tests for the quadratic oracle API
     └── test_*.py              # Feature test files
 ```
@@ -179,7 +178,7 @@ gurobipy check (see §3.6) to cross-verify on the oracle side.
 |---------|-------|---------|
 | `decidb_db_path` | session | Path to `decidb.db` (TPC-H SF-0.01); skip if missing |
 | `decidb_exe_path` | session | Path to `build/release/decidb`; skip if missing |
-| `decidb_cli` | session | `DeciDBCli` subprocess wrapper — `execute(sql) -> (rows, cols)`, `assert_error(sql, match=...)`, `assert_error_at(sql, kind=..., at=...)` (§3.6). `execute` reads the CLI's quote-mode output, so a NULL is `None` and a NaN is `float('nan')` (`test_cli_result_values.py`). DeciDB picks its own backend (Gurobi when available). Every run fails its test on an internal error or an internal name in the output, and on an error that carries "is removed" (a removed DECIDE spelling) unless the call passes `removed_spelling=True`, as only `test_scope_removed_syntax.py` does. A call whose CLI invalidates its database (after an INTERNAL or other fatal error) fails at once with the CLI's text rather than at its timeout (`test_cli_session_invalidated.py`) |
+| `decidb_cli` | session | `DeciDBCli` subprocess wrapper — `execute(sql) -> (rows, cols)`, `assert_error(sql, match=...)`, `assert_error_at(sql, kind=..., at=...)` (§3.6). `execute` reads the CLI's quote-mode output, so a NULL is `None` and a NaN is `float('nan')` (`test_cli_result_values.py`). DeciDB picks its own backend (Gurobi when available). Every run fails its test on an internal error or an internal name in the output. A call whose CLI invalidates its database (after an INTERNAL or other fatal error) fails at once with the CLI's text rather than at its timeout (`test_cli_session_invalidated.py`) |
 | `decidb_cli_gurobi` | session | Same wrapper with `DECIDB_FORCE_SOLVER=gurobi`; skips up front if Gurobi is unavailable on the host |
 | `decidb_cli_highs` | session | Same wrapper with `DECIDB_FORCE_SOLVER=highs`, for verifying HiGHS-specific error paths on a host where Gurobi is also linked |
 | `_oracle_db_path` | session | Path to `_tpch_oracle.duckdb`; auto-generated on first run via `CALL dbgen(sf=0.01)` against a vanilla duckdb connection |

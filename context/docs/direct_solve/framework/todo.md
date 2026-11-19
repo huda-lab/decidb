@@ -58,19 +58,6 @@ solver path answers those queries, so none of them is wrong, only slower.
   whether a value needs a mask or a check (N1's `q`, A1's floor), is a literal the rule builds with. **Ruling (owner,
   2026-11-13).**
 
-## FW-4 — Direct solve's messages name the clause, with one check per rule
-
-- **Problem.** The direct path keeps machinery that only chooses what a message names: it redoes the NaN naming in
-  SQL and adds dictionary codes (`DirectMessageCodes`, used by R1 only) so an aggregate takes the least message;
-  `DirectIR::model_shape` and `DirectStateErrors` classify a solver model nobody builds, to decide whether one hint
-  sentence is appended; `check_position` keeps checks where they would have stood.
-- **Change.** By the owner's rulings (2026-11-18, `context/opa_rewrite/decisions.md` R10, R12, R14): a message states
-  the kind of error and where; one raising check per rule; no hint sentence. The machinery above goes.
-- **Needs.** OPT-19 (both edit the NaN naming).
-- **Tests.** The tests the rewording breaks move to `assert_error_at` (`testing/oracle.md` §3.6).
-- **Done when.** `grep -rn "DirectMessageCodes\|check_position" src` finds nothing;
-  `./test/decide/run_tests.sh -n 2 -k "direct"` passes.
-
 ## FW-5 — A direct rule reads every bound from side tables
 
 - **Problem.** A bound whose reducers group as its clause does (`sum(x) by (g) <= sum(cap) by (g) - 2`) is recorded
@@ -108,3 +95,12 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Recommendation.** 1, leaving `DirectRankedPrefix` alone: DuckDB's own column pruning is the standard tool, and it
   removes a case list.
 - **Done when.** `DECIDB_TEST_DIRECT_SOLVE=off` and the default pass `./test/decide/run_tests.sh -n 2 -k "direct"`.
+
+## FW-8 — A square's NaN is named differently on the two paths
+
+- **Problem.** A NaN in a square's operand is named on the solver path by the value `b` it comes from, or as too large
+  for a DOUBLE when it is a sum; a direct plan points at the form. The two print different carets for one query.
+- **Change.** Both paths name the value where it stands, as `'b' is NaN or infinite on some rows`, and say too large
+  only for a number DeciDB accumulates.
+- **Done when.** A direct and a solver run of one square print one text and one caret;
+  `./test/decide/run_tests.sh -n 2 -k "invalid_value or direct"` passes.

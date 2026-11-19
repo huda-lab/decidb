@@ -89,9 +89,8 @@ This stage is required, not an optional speedup. It chooses the backend, reduces
 data bound to its group's tightest value with its value checks, and folds bounds into
 column boxes. A plan it never saw (`SET disabled_optimizers='decide_optimizer'`,
 `PRAGMA disable_optimizer`, or the unoptimized run of `PRAGMA enable_verification`) is
-refused at physical planning (`plan_decide.cpp`): *DECIDE needs the DECIDE optimizer.
-Remove 'decide_optimizer' from disabled_optimizers, and run PRAGMA enable_optimizer if
-it is disabled.* So `ChooseDecideSolver` runs exactly once per plan, and the operator
+refused at physical planning (`plan_decide.cpp`): *DECIDE needs the optimizer 'decide_optimizer', which is
+disabled* (Invalid Input Error, no caret). So `ChooseDecideSolver` runs exactly once per plan, and the operator
 always runs against one backend and one formulation.
 
 See [`../07_solver/done.md`](../07_solver/done.md) §2 for what selection reads, and
@@ -123,13 +122,12 @@ different reasons:
 
 - **Not bind time.** The same SQL is legal on every machine. What differs is whether
   this machine has a solver that can run it — so this is a planning failure, not a
-  semantic one, and the message blames the host and names the solver to install.
-  A quadratic limit is quoted as written (`the SUCH THAT clause \`SUM(POWER(x, 2)) <= 25\`
-  squares or multiplies decision variables`): `FirstQuadraticClause` reads the first
-  quadratic row's source clause, and asserts the row has one. When `DECIDB_FORCE_SOLVER`
-  excludes an installed backend that could run the query, the sentence names the
-  override (`... which needs Gurobi, and DECIDB_FORCE_SOLVER selects HiGHS. Unset
-  DECIDB_FORCE_SOLVER, or ...`) instead of asking for an install.
+  semantic one, and the message says what the query does and that this installation does not support it, naming no
+  solver: `squaring or multiplying decisions in a constraint is not supported on this installation`
+  (`ThrowDecideSolverGap`, one text; `../../language/errors.md` § 3). The installation is the place, so a host with the
+  solver answers the same query. The caret is on the clause: `FirstQuadraticClauseLocation` reads the span of the first
+  clause with a product group, and asserts the query has one. `DECIDB_FORCE_SOLVER` gives the same text, since the
+  forced solver is the installation.
 - **Not model load.** A refusal there would fire after a full scan and a full model
   build, and nothing about the four classes needs a single row: `quadratic_constraints` is tree shape (a constraint with a product group), `miqp` is declared
   integrality, `nonconvex_quadratic` is judged per product group of the objective
@@ -138,9 +136,8 @@ different reasons:
   non-convex when the sign of its weight there is negative (a positive weight written under `MAXIMIZE`, a negative
   one under `MINIMIZE`) or is not known before the
   query runs. The plan knows a constant weight's sign (`ScaleSignAtPlanTime`) and not a data weight's, which counts as
-  0. So `MINIMIZE SUM(w * POWER(x, 2))` is refused on HiGHS: *"the objective multiplies a squared decision term by a
-  value whose sign is known only when the query runs"*, with the advice to multiply the square by a constant or use a
-  linear objective. A group couples two decisions when it is a product, or a square of a form over two or more
+  0. So `MINIMIZE SUM(w * POWER(x, 2))` is refused on HiGHS: *"a square scaled by a value whose sign is known only when
+  the query runs is not supported on this installation"*, at the objective. A group couples two decisions when it is a product, or a square of a form over two or more
   decisions.
 
 `ClassifyDecideModel(const DecideModelShape &)` (`decide_solver_capabilities.hpp`) is the one classifier of a model's
@@ -198,8 +195,8 @@ that needs its group's tightest value (D85) has its comparison tagged `FRAME_TIG
 rebuilds that give a bound a new node, and execution takes that value from the rows it reads (stage 08), in the groups
 that hold an instance. A column's tightest value is the group's MIN or MAX in the side table (`DirectTightestBound`).
 An `=` bound's checks are scope checks made before any rule runs: its NaN check, then its `=` check (two values in
-one group, `AddDisagreementCheck`), which groups by class before any rule can; the NaN check stands with it, so
-every path raises the same error of the two. Another bound's NaN check is an input of the rule that computes the
+one group, `AddDisagreementCheck`): one check per `by` group, whose message names the group and points at the bound
+(R15), made before any rule can; the NaN check stands with it, so every path raises the same error of the two. Another bound's NaN check is an input of the rule that computes the
 bound, which adds no pass to its plan. A check copies the value it reads with its tags (`NanMessage`,
 `AddAbsValueCheck`): the tree reads a frame, a reducer and a query-wide value by their tags. The `=` check speaks only
 where each of the clause's reducers with a `when` of its own keeps a row of the group: a group with none holds no
@@ -311,8 +308,8 @@ only with the same one (`TermsAreLike`). A decision outside the objective's redu
 — query-wide or not — is a `NONE` term, counted once at execution, and so is a product of
 two query-wide decisions (`MAXIMIZE SUM(x) + s * u`, a product group with `reduction`
 NONE; inside a reducer it is SUM and weighted by every row, `SUM(w * s * u)`). Any other
-product of decisions left there is refused (*"... multiplies decisions outside a reducer,
-which is not supported yet"*), since it has no once-only reading in the model. So is a term that is not itself a
+product of decisions left there is refused (*"'x * y' multiplies decisions outside a reducer,
+which is not supported"*), since it has no once-only reading in the model. So is a term that is not itself a
 reducer but holds one (`sum(x) * max(x)`, `(sum(x) + 1) * max(x)`, `0 * sum(x) + power(sum(x) - 3, 2)`): no rewrite
 held its reducers in helper decisions, so they cannot be read as terms (`ExtractAggregateObjectiveTerms`). As the
 whole objective, `power(sum(x) - 3, 2)` is the binder's: the aggregate must be the outermost function.
@@ -441,6 +438,29 @@ inlining relies on. Where a helper is written in is stage 06's alone, decided fr
 Detects `BoundFunctionExpression` for `ABS` over decision variables, creates
 auxiliary `REAL` variables, replaces the ABS nodes with references to them, and
 emits `aux >= inner` and `aux >= -inner`.
+
+**A NaN or infinite value is named where it stands.** Its message says the value is NaN or infinite and quotes it as
+the user wrote it, with the caret on it (`DecideInvalidValueError`, `common/decide_value_messages.hpp`); it names no
+row and suggests no edit. A coefficient keeps no list of the inputs it was merged from: the solver path throws the
+error at the value's own location, and a direct plan raises it with the SQL function `__internal_decide_invalid_value`,
+which reads that location from its own expression. A node a rewrite builds takes the location of the node it equals in
+value (`DecideReplaces`); a like-term merge takes the span of the whole sum, and a non-finite value with no location is
+named and pointed at by its nearest located ancestor. A coefficient has one message for NaN and infinity. A number
+past a DOUBLE (`TOO_LARGE`) is raised only where DeciDB accumulates across rows. An `=` bound that takes two values
+raises through `__internal_decide_bound_disagreement` on a direct plan, from the same builder.
+
+**Ruling (owner, 2026-11-19).** The nodes the canonicalizer and the other rewrites build keep the location of the
+user text they replace (`context/opa_rewrite/design.md` § 3, contract 5).
+
+**Ruling (owner, 2026-11-19, the narrower version).** The value-equality location rule stays
+(`decide_source_provenance.hpp`, `DecideReplaces`): every replacement equal in value takes the replaced node's location,
+`ReadQuotient`'s `(1/0) * x` and the like-term merge included. The structural proxy (the sum, difference and quotient
+decomposition, the zero-divisor rule that names the value) goes, with `parts` and `WrittenParts`. A coefficient has no
+split between a NaN message and an infinity message, and `TOO_LARGE` is raised only where DeciDB accumulates across
+rows.
+
+**Ruling (owner, 2026-11-18).** An `=` bound that takes two values names its `by` group, not its class: one check per
+group, on a bound of a row-wise clause and a frame bound alike (R15).
 
 The data of an ABS argument is checked where the ABS is read, before the envelope turns
 it into a bound on the auxiliary (`AddAbsValueCheck`): the sum of the argument's terms
@@ -677,11 +697,9 @@ family with no box (`../06_model_formulation/done.md`). When the backend chosen 
 states no MIN/MAX (HiGHS, or Gurobi under `DECIDB_NATIVE_CONSTRUCTS=off`), tree function
 preparation refuses
 before a row is read, through the same sentence the model-class gate raises
-(`ThrowDecideSolverGap`): `'max(power(x, 2))' takes the maximum of a squared or multiplied
-expression, which needs Gurobi — not available on this machine. Install Gurobi, or replace
-power(x, 2) with an expression linear in the decision variables.` A SUM term reads
-`squares or multiplies decision variables beside a MIN or MAX` (`inside` for a reducer
-nested in one). The refusal names the reducer and not a column to bound, because bounding
+(`ThrowDecideSolverGap`): `MIN or MAX over a squared or multiplied expression is not supported on this
+installation`, at the reducer. A SUM term beside a MIN or MAX that squares or multiplies decisions takes the same
+gate, as a reducer nested in one does. The refusal names the reducer and not a column to bound, because bounding
 `x` would not give `t` a box.
 
 EXPLAIN says how the helper holds the body: `power(x, 2) becomes a helper decision per row,
@@ -739,8 +757,7 @@ terms. The user-facing account of the three shapes is
 
 A strict `<`, `>` or a `<>` steps onto the whole numbers, which is exact for the rewritten
 row only when the helper is whole, so over a helper that can be fractional it is refused
-here, with the binder's message (*"Comparison '>' is not supported here: 'sum(ship + 0.5)'
-can take fractional values in this constraint ..."*). The aggregate shape accepts the same
+here, with the binder's message (*"'>' compares 'sum(ship + 0.5)', which can take fractional values"*). The aggregate shape accepts the same
 reducer, because there its constant moves to the bound when the reducer is summed in place
 (`sum(x + 0.5) > 4` is `sum(x) > 4 - 0.5 * n`).
 
@@ -893,7 +910,7 @@ clause's one row names the key's classes (`scope.per` `NAMES_CLASSES`, `class_ke
 Stage 06 steps a strict outer bound onto the lattice. The canonicalizer has refused such a
 clause with a `by` or a bound that is not a constant (stage 04 §3.10); `AssertComposable`
 asserts it. In a constraint a term beside a MIN or MAX that is no reducer is refused here, quoting it
-(*"DECIDE: 's' beside MIN or MAX is not supported yet"*).
+(*"'s' beside MIN or MAX is not supported"*).
 
 In the objective it stays where it is. A constraint's terms share the one row its MIN/MAX
 auxiliaries stand in, so the composed path owns them all; an objective has no such row. So
@@ -960,8 +977,8 @@ binaries and emits the disjunction rows once bounds are known. A hard MIN/MAX's 
 The two rows a `<>` becomes hold a linear left side. The pass runs after
 `RewriteBilinear`, so a product with a `BOOL` decision is already an auxiliary; a square
 or a product of decisions still on the left (`DecideDegreeOf` above 1) has no
-formulation and is refused here (*"DECIDE: <> over a product or a power of decisions is
-not supported yet: SUM(POWER(x,2)) <> 3"*, the clause as written). `LinearizeNotEqual` (stage 06) throws an
+formulation and is refused here (*"<> over a product or a power of decisions is not
+supported"*, at the comparison). `LinearizeNotEqual` (stage 06) throws an
 `InternalException` if one reaches it.
 
 ### AVG → SUM — `RewriteAvgToSum`
@@ -1129,7 +1146,7 @@ its clause ids. Stage 08 re-opens its direction in the rigid box and in the elas
 and checks the box of the written bounds against the variable's domain, quoting the clause
 that contradicts it. The written bound, not the admitted end, is what that check reads:
 `x = -0.5` on an INT admits nothing, which the solve reports as infeasible, rather than
-"x is non-negative". A
+a domain refusal. A
 variable's *intrinsic* domain is excluded: a BOOLEAN's `[0,1]` box is never
 synthesized as a constraint, so it only appears here when the user restated it
 redundantly, and `is_boolean_var` is consulted to skip that restatement. A genuine

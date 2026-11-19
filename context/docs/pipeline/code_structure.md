@@ -15,7 +15,6 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `common/decide_source_info.hpp` | 03 | `DecideSourceText` — the DECIDE tail's text and spans; `ConstraintSourceInfo` — the source display registry entry |
 | `common/decide_solver_capabilities.hpp` | 07 answers, 03/05/06/08 read | `SolverConstructSupport`, `SolverModelClass`, `DecideModelShape` and `ClassifyDecideModel` (the one classifier of a model's shape), `IsNonconvexProductGroup` — the backend differences upstream stages branch on. In `common/` because stage 07 answers it but four stages above read it |
 | `parser/decide/decide_parsed_markers.hpp` | 01, 02 read | Predicates over the parsed DECIDE markers: `IsDecideMarker`, `IsDecideScopeMarker`, `IsDecideAggregateName`, `IsScopedReducerCall`, `TakesReducerBy`, `UnwrapReducerMarkers`, `ReducerArgumentBody` |
-| `parser/decide/decide_removed_spellings.hpp` | 01 | `RefuseRemovedDecideSpellings` |
 | `parser/expression/decide_frame_expression.hpp` | 01 | `DecideFrameExpression` — a parsed frame selector, a point or a range (guide §5.6) |
 | `planner/expression_binder/decide/decide_binder.hpp` | 02 | Base decision binder; `ValidateSumArgument`, `ValidateDecideScopeSpellings`, `FindOrCreateKeyScope`, `ValidateDecideNoExplicitDecisionCasts`, `ValidateDecideNoDataAggregateFactor`, the integrality gate and `DecideValueIsWholeNumbered` |
 | `planner/expression_binder/decide/decide_constraints_binder.hpp` | 02 | `SUCH THAT` |
@@ -56,8 +55,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 
 | Path | Stage | Contents |
 |---|---|---|
-| `parser/decide/decide_parsed_markers.cpp` | 01 | The parsed-marker predicates, shared by the removed-spelling refusal and the binder |
-| `parser/decide/decide_removed_spellings.cpp` | 01 | Refuses the removed DECIDE spellings, naming the new spelling from the user's own text; called by the transformer and, for a stored parse tree, by `BindDeclarations` |
+| `parser/decide/decide_parsed_markers.cpp` | 01 | The parsed-marker predicates, shared by the binder |
 | `parser/expression/decide_frame_expression.cpp` | 01 | A frame selector's parsed form: equality, copy, its text and serialization |
 | `planner/expression_binder/decide/decide_binder.cpp` | 02 | Shared DECIDE expression rules, reducers, the colon form, a reducer's own scope and `by`, key scopes, where `when` / `per` / `by` may stand, the integrality gate |
 | `planner/expression_binder/decide/decide_constraints_binder.cpp` | 02 | `SUCH THAT` |
@@ -116,10 +114,10 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 
 | Path | Contents |
 |---|---|
-| `third_party/libpg_query/grammar/statements/select.y` | Every DECIDE production, the error-only ones for the removed spellings included |
+| `third_party/libpg_query/grammar/statements/select.y` | Every DECIDE production |
 | `third_party/libpg_query/grammar/grammar.y` | The `%expect 4` conflict budget and its rationale; the DECIDE token declarations |
 | `third_party/libpg_query/grammar/keywords/reserved_keywords.list` | `DECIDE`, `MAXIMIZE`, `MINIMIZE`, `SUCH` |
-| `third_party/libpg_query/src_backend_parser_parser.cpp` | `base_yylex` — the DECIDE keyword tokens (`WHEN_DECIDE`, `WHEN_DECIDE_OBJECTIVE`, `PER_DECIDE`, `PER_DECIDE_PAREN`, `PER_DECIDE_ROW`, `BY_DECIDE`) |
+| `third_party/libpg_query/src_backend_parser_parser.cpp` | `base_yylex` — the DECIDE keyword tokens (`WHEN_DECIDE`, `PER_DECIDE`, `PER_DECIDE_PAREN`, `PER_DECIDE_ROW`, `BY_DECIDE`) |
 
 ---
 
@@ -220,9 +218,7 @@ classDiagram
 
 ## 3. Key entry points
 
-### `src/parser/decide/decide_removed_spellings.cpp` — stage 01
-- **`RefuseRemovedDecideSpellings()`** — the first removed spelling in a parsed clause,
-  refused with a message that names its replacement.
+
 
 ### `src/planner/expression_binder/decide/decide_binder.cpp` — stage 02
 - **`ValidateSumArgument()`** — what only the binder sees in a reducer's argument (a nested reducer over data, a

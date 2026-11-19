@@ -1,9 +1,9 @@
 # Stage 01 — Parser
 
 Turns SQL text into a parsed `SelectNode` carrying `decide_variables`,
-`decide_constraints`, `decide_sense` and `decide_objective`, refuses the removed DECIDE
-spellings with a message that names their replacement, and applies the
-source-preserving validation that must see what the user actually typed.
+`decide_constraints`, `decide_sense` and `decide_objective`, and applies the
+source-preserving validation that must see what the user actually typed. A form the grammar
+does not have, such as a removed spelling, is an ordinary syntax error.
 
 **This stage decides no shape.** Which side of a comparison a term sits on, which
 way the relation points, and where a factor on a reducer lives are all decided
@@ -28,12 +28,11 @@ Both build the identical `PGDecideClause` through `makeDecideClause()`:
 | Split (paper's) | `SELECT ... DECIDE x(INT) ... FROM ... SUCH THAT ... MAXIMIZE ...` | `decide_declaration` (after `into_clause`) + `decide_body` |
 
 `decide_declared_before_from` records that the declaration slot fired, so a
-second `DECIDE` arriving through `decide_body` reports *"DECIDE appears twice;
-declare the variables either before FROM or with SUCH THAT, not both"* instead of
-a generic syntax error.
+second `DECIDE` arriving through `decide_body` reports *"DECIDE appears twice"*, at the second `DECIDE`, instead of
+a generic syntax error. A `SUCH THAT` with no declaration is *"SUCH THAT has no DECIDE clause"*, at the `SUCH THAT`.
 
 A declaration with no `SUCH THAT` is refused by the transformer
-(`DECIDE_NO_CONSTRAINTS_MESSAGE`), not by a grammar action: Bison reduces by default, so
+(`DECIDE_NO_CONSTRAINTS_MESSAGE`: *"DECIDE has no SUCH THAT clause"*, at the `DECIDE`), not by a grammar action: Bison reduces by default, so
 an action runs before the parser reads the next token, and an error raised there would
 hide a syntax error at that token. `DECIDE x(INT) y(INT) FROM t SUCH THAT ...` therefore
 reports `syntax error at or near "y"`. Only an objective where the constraints belong is
@@ -53,14 +52,19 @@ per (): x(TYPE)     query-wide — one decision for the whole query
 ```
 
 Each builds a `PG_AEXPR_OF` node pairing a one-field `PGColumnRef` with the type; with
-a `per`, `applyDecideScope` wraps the name in its scope marker. The other alternatives
-exist **only to produce an actionable message** rather than a parse failure: a name with
-no type (`x`, or `per K: x`: *"DECIDE variable "x" needs a type; write x(INT), x(BOOL) or
-x(REAL)"*, with the scope repeated by `decideScopeText`), the removed `x IS INTEGER`
-form, and the declarations ../../language/errors.md §3 lists as removed, whose messages
-name the `per` spelling that replaces them (`decideTypeWord` turns the type marker back
-into `INT`, `BOOL` or `REAL`). `scalar` is an unreserved keyword, so it still names a
-column or a decision (`DECIDE scalar(INT)`).
+a `per`, `applyDecideScope` wraps the name in its scope marker.
+
+A name with no type (`x`, or `per K: x`) is the same declaration node with a NULL type, as DuckDB's `CREATE TABLE` builds
+a column with no type. Bison reduces by default,
+so an action in that production would run before the parser reads the token after the
+name, and its error would hide a syntax error there (`DECIDE t.x(INT) ...`). The
+transformer refuses the NULL type once the whole query has parsed, at the name: `decision
+'x' has no type` (`../../language/errors.md`). `scalar` is an ordinary name, so it names
+a column or a decision (`DECIDE scalar(INT)`).
+
+**Ruling (owner, 2026-11-19).** A declaration with no type builds the declaration node with a NULL type, as DuckDB's
+`CREATE TABLE` does for a column with no type; the transformer refuses a node whose `rexpr` is null. The message and its
+caret are unchanged.
 
 The type in the parentheses is a `ColId`, which `makeDecideVariableType` (`grammar.cpp`)
 reads as `INT`, `REAL` or `BOOL` in any case; any other name is a syntax error at it.
@@ -69,9 +73,7 @@ a keyword `BOOL` would quote a column or a `UNION` member named `bool` in every 
 and rendered query.
 
 `decide_constraint_list` joins its items with `AND`. A comma is refused with
-*"comma-separated SUCH THAT constraints are not supported; use AND between
-constraints"*, unless `absorbRemovedPerKey` folds it into the key of a removed `PER`
-written after a constraint with a comma, so that message names the whole key.
+*"SUCH THAT constraints cannot be separated by a comma"*, at the comma.
 
 ### Scopes: `when`, `per`, `by`
 
@@ -79,7 +81,7 @@ A scope is written *in front* of what it governs (../../language/guide.md §1.1)
 
 ```
 decide_scope  ::= decide_when | decide_when decide_per | decide_per
-decide_when   ::= WHEN_DECIDE a_expr | WHEN_DECIDE_OBJECTIVE a_expr
+decide_when   ::= WHEN_DECIDE a_expr
 decide_per    ::= PER_DECIDE expr_list | PER_DECIDE_PAREN '(' ')' | PER_DECIDE_ROW ROW
 decide_by     ::= BY_DECIDE '(' ')' | BY_DECIDE '(' expr_list ')'
 ```
@@ -97,14 +99,14 @@ decide_by     ::= BY_DECIDE '(' ')' | BY_DECIDE '(' expr_list ')'
   builds `PG_AEXPR_SCOPE_PER_ROW` (`lexpr` body, no key), so a clause keeps the
   spelling it was written in (D19). `by` builds `PG_AEXPR_REDUCER_BY` (`lexpr` the
   call, `rexpr` the key list, `NULL` for `by ()`).
-- A key element must be a column or relation name (`makeDecideScope`): anything
-  else is *"a per key lists columns or relations; put expressions in by (...)"*.
-  A parenthesized key is *"write per a, b: without parentheses; parentheses are
-  only for per ()"*. A `per` other than `()` on an objective is *"an objective is
-  produced once: write per (): or leave per out"*.
+- A key element must be a column or relation name (`decideCheckKey`): anything
+  else is *"'q' in a per key is not a column or a relation"*, at the element.
+  A parenthesized key is *"a per key cannot be in parentheses"*, at the `(`. A `per`
+  other than `()` on an objective is *"an objective cannot have a per key"*, at the
+  `per`. A `WHEN` or `PER` written after a clause or a reducer is a plain syntax error,
+  as is one written after a clause that already has a scope in front.
 - Because the colon ends the scope, the condition is a full `a_expr` and needs no
-  parentheses. A `WHEN` or `PER` written after a clause that already has a scope in
-  front is a plain syntax error.
+  parentheses.
 - `decide_item_expr` closes a constraint or objective body at `DECIDE_ITEM`
   precedence. That precedence is above `AND`, so a top-level `AND` separates
   constraints and `per g: A AND B` scopes only `A`, but below the comparison
@@ -136,43 +138,16 @@ decide_frame_over   ::= OVER_DECIDE '(' a_expr opt_asc_desc [IDENT] [WITHIN_DECI
 
 - `previous`, `every` and `cyclic` are `IDENT`s whose text the grammar checks whatever its case, as a keyword's
   (`makeDecideFramePrevious`, `decideFrameWord`), so they become no keyword and no column anywhere loses the name:
-  *"DECIDE: a frame position is first, last, [k] previous or [k] next, found prev"*, *"DECIDE: expected every d in a
-  frame selector, found evry"*, *"... expected cyclic or within ..."*. A misspelling that is itself a keyword
-  (`each`, `cycle`) is a plain syntax error.
-- A `within` element must be a column or relation name (`makeDecideFrameOver`): *"DECIDE: within lists columns or
-  relations, as a per key does"*.
+  *"'prev' is not a frame position"*, *"'cyclc' is not a frame keyword"*, each at the word. A misspelling that is itself a
+  keyword or a token the grammar cannot place (`each`, `cycle`, `evry`) is a plain syntax error.
+- A `within` element must be a column or relation name (`decideCheckKey`): *"'q' in within is not a column or a
+  relation"*, at the element.
 - The frame travels as a `PGDecideFrame` (`parsenodes.hpp`): the anchors and their `k`, `every`, `all`, the
   fallback, the body (the payload, or for a range the call `agg(args)`), the order key, `desc`, `cyclic`, the
   `within` list.
 - A SQL window written at the clause's level arrives with `OVER_DECIDE` (§2), so `over_clause` takes `OVER_DECIDE
   window_specification` and `OVER_DECIDE ColId` too: `when row_number() over () > 1: ...` parses as before and the
   binder refuses it where it did.
-
-### Productions kept for the removed spellings
-
-The forms ../../language/errors.md §3 lists as removed — a `WHEN` or `PER` written after
-a clause or a reducer — still parse, so that the transformer can refuse each with a
-message built from the user's own expressions (§3):
-five alternatives of `decide_constraint_item` and of `decide_objective_item` (a `WHEN`,
-a `PER` with one or several columns, or both, after the item), and the `c_expr`
-alternatives of a `WHEN` after a call or after the colon form. They build
-`PG_AEXPR_WHEN_CONSTRAINT` and `PG_AEXPR_PER_CONSTRAINT` markers, nested
-`PER(WHEN(body, condition), key)` when both are written. Their key is a
-`decide_per_columnList`, whose columns are bare or qualified (`r.id`); the shared
-`columnrefList`, which a list comprehension's names also use, stays plain columns.
-
-- After a constraint the condition is an `a_expr`, so `NOT f` or `g IN (...)` is named
-  as written; `WHEN_DECIDE` outranks `AND`, so it ends where the next constraint
-  begins.
-- After the objective, `WHEN_DECIDE_OBJECTIVE` takes `decide_objective_when_condition`:
-  a `c_expr` or one comparison between atomic operands, since an `a_expr` there would add
-  three conflicts. A longer condition (`IN`, `IS NULL`, `BETWEEN`, `LIKE`) parses as
-  operators around the marker, and the transformer reads the whole condition back
-  (`WrittenCondition`).
-- After a call in a constraint, the condition is a `c_expr`
-  (`decide_aggregate_when_condition`), so a comparison there needs parentheses to reach
-  the message; without them it is a syntax error. In the objective it takes the
-  objective's condition rule above.
 
 ### Conflicts
 
@@ -233,10 +208,7 @@ the lexer emits DECIDE-only tokens inside the clause:
   `test/decide/tests/test_nested_decide.py`.
 - While armed, `CASE` increments `decide_case_depth` and `END` decrements it, so a
   `CASE ... WHEN ... END` keeps its ordinary `WHEN` and still parses.
-- A depth-0 `WHEN` becomes `WHEN_DECIDE`. After `MAXIMIZE` or `MINIMIZE`,
-  `in_decide_objective` makes it `WHEN_DECIDE_OBJECTIVE`. The scope grammar reads the
-  two alike (`decide_when`); the objective's own token lets the production kept for a
-  removed `WHEN` after the objective read a comparison as its condition (§1).
+- A depth-0 `WHEN` becomes `WHEN_DECIDE`, which the scope grammar reads (`decide_when`).
 - `BY` directly after `)` becomes `BY_DECIDE` (`decide_after_rparen` remembers
   the previous token). `GROUP BY`, `ORDER BY` and `PARTITION BY` always follow a
   keyword, so those clauses stay plain in a subquery written inside the clause; a
@@ -276,8 +248,7 @@ does. Outside the clause nothing changes.
 `TransformSelectNode` (`src/parser/transform/statement/transform_select_node.cpp`) moves the
 clause onto the `SelectNode`: `decide_variables` (via `TransformExpressionList`),
 `decide_constraints`, `decide_sense` (`MAXIMIZE` / `MINIMIZE` / `FEASIBILITY`
-when no objective was written), and `decide_objective`. It then calls
-`RefuseRemovedDecideSpellings` on the node.
+when no objective was written), and `decide_objective`.
 
 A frame selector is not a tagged function but a parsed expression class of its own, `DecideFrameExpression`
 (`ExpressionClass::DECIDE_FRAME`, `src/include/duckdb/parser/expression/decide_frame_expression.hpp`), the way
@@ -285,9 +256,9 @@ A frame selector is not a tagged function but a parsed expression class of its o
 `fallback`, `order`, `descending`, `cyclic`, `within`. `Transformer::TransformDecideFrame`
 (`transform_decide_frame.cpp`) builds it. A range's reducer is read from the call as a name and one argument, never
 through `TransformFuncCall`, which turns some names (`construct_array`, `if`) into other kinds of expression:
-*"DECIDE: sum(from first to last: e) reduces one expression, found 2"*, *"... takes its expression without a name"*
-for `a := e`. It refuses a `k` or `d` of 0, as DuckDB refuses `#0`: *"DECIDE: in at(0 previous: x) over (t.p), 0 must
-be a positive whole number"*. Its children (payload, fallback, order key, `within` elements) are visited by
+*"a range frame reduces one expression, 'sum' has 2"*, at the reducer, and *"an expression in a frame cannot have a
+name"* for `a := e`, at the frame. It refuses a `k` or `d` of 0, as DuckDB refuses `#0`: *"'0' in a frame is not a
+positive whole number"*, at the frame. Its children (payload, fallback, order key, `within` elements) are visited by
 `ParsedExpressionIterator`, so every parsed-tree walk sees inside a frame. `DecideFrameExpression::ToString()` prints a
 frame in lower case with its defaults left out (`asc`, `k` = 1, `every 1`, `within ()`), the text a message quotes;
 the statement itself prints the clause as typed, and a frame with its defaults written equals one without.
@@ -309,11 +280,9 @@ node, or a list) the children after it — into a tagged `FunctionExpression` wi
 | `PG_AEXPR_SCOPE_PER_ROW` | `FunctionExpression(SCOPE_PER_ROW_TAG, [body])` |
 | `PG_AEXPR_REDUCER_BY` | `FunctionExpression(REDUCER_BY_TAG, [reducer, key...])` |
 | `PG_AEXPR_QUALIFIED_REDUCER` | `FunctionExpression(QUALIFIED_REDUCER_TAG, [aggregate, relation...])` |
-| `PG_AEXPR_WHEN_CONSTRAINT` | `FunctionExpression(POSTFIX_WHEN_TAG, [body, condition])`, a removed spelling |
-| `PG_AEXPR_PER_CONSTRAINT` | `FunctionExpression(POSTFIX_PER_TAG, [body, col...])`, a removed spelling |
 
-The first five reach the binder, which binds every one into the bound tree's own
-wrappers and tags (`../02_binder/done.md` §4a). The last two never leave this stage.
+All five reach the binder, which binds every one into the bound tree's own
+wrappers and tags (`../02_binder/done.md` §4a).
 
 **Source spans.** The grammar wraps every expression of a DECIDE clause in one decorator reduction
 (`a_expr: a_expr_body` and `b_expr: b_expr_body` call `noteDecideExpr`), the one place that sees an expression with its
@@ -330,62 +299,6 @@ prints after the declarations. A declaration's `per` key has its span as a claus
 written. In the split order the buffer holds the `FROM` and `WHERE` text between the declarations and `SUCH THAT`,
 which no span covers and nothing cuts. A parameter takes its location too, so `$1` is quoted as written.
 
-### Refusing the removed spellings
-
-`RefuseRemovedDecideSpellings` (`src/parser/decide/decide_removed_spellings.cpp`) walks
-the declarations, the constraints and the objective and throws a `ParserException` at
-the first removed form, outermost first: a form written after a whole constraint is named
-before one inside it. `TransformSelectNode` calls it on every select node, after the
-node's `WHERE`, `GROUP BY`, `HAVING` and `QUALIFY` are built: a subquery inside a clause
-is read with the clause's spellings, so its own expressions are checked as well
-(`RefuseInExpressions`). The walk itself does not enter a subquery body; each node is
-checked when it is transformed. Every message starts `DECIDE: `, carries the phrase
-"is removed", and names the new spelling built from the user's own expressions
-(`Written` drops the one pair of parentheses `ToString` puts around a comparison and
-prints `count_star()` as `count(*)`).
-
-The productions kept for a removed `WHEN` read a reducer's condition as one term (a
-column, a constant, a call, or a parenthesized expression), and the objective's also as
-one bare comparison of two terms (§1); the rest of a longer condition parses as operators
-around the marker (`SUM(cap) WHEN cap BETWEEN 2 AND 5` is `BETWEEN(SUM(cap) WHEN cap, 2, 5)`).
-`WrittenCondition` rebuilds the condition as written: it follows every operator written
-after the operand the condition ended with, up to the outermost one that yields a
-condition, and joins their text in order. A condition that was not one term was written
-in parentheses and is whole, so the operators after it belong to the clause; an operator
-whose other operands hold a reducer belongs to the clause too. A `WHEN` after something
-that is not a constraint whose condition read on into a comparison
-(`sum(x) by (g) WHEN (c) <= 5`) keeps the comparison's left side (`SwallowedCondition`).
-`ReadReducer` reads a reducer once -- removed `WHEN`s around it, its `by`, the colon form,
-the scopes in front of its argument -- and `ReducerSpelling` spells it once, joining a
-removed condition to the reducer's own `when`:
-
-- `RefusePostfixWhen` and `RefusePostfixPer`, after a constraint: the scope to write in
-  front, plus "by (g) after each of its reducers" when the constraint holds a reducer (a
-  constraint with no reducer is told to drop the `PER`), and a note for a `WHEN` after one
-  of its reducers (`ReducerWhenNote`);
-- `RefuseReducerWhens`, after a reducer: every such `WHEN` of the clause, each as the
-  reducer's own `when` -- `sum(when c: e)`, `sum(when c per D: e)` for the colon form,
-  `sum(when d and c: e) by (g)` after a reducer with a scope or a `by`; `count(*)`
-  becomes `sum(when c: 1)`, and `norm` (which takes no `when` inside it) is pointed at the
-  scope in front;
-- `RefuseObjective` and `RefuseObjectivePer`, after the objective: the `when` in
-  front, the nested form `outer(per g: inner(e) by (g))` for a reducer over a reducer
-  (a `WHEN` inside the inner reducer goes in front and an inner colon form stays; one beside
-  another term or under a factor is pointed at the nested reducer where it stands), and *"an
-  objective is produced once"* for a flat reducer (a flat `avg` is pointed at the sum of one
-  average per class, or at one average over all rows);
-- `RefuseDeclaration`, for a declaration in a parse tree stored before the removal (a
-  view or a macro): a qualified name or a `scalar_` type marker. A fresh query never
-  reaches it; the grammar refuses both (§1).
-
-The binder calls the same function at the top of `BindDeclarations`, for a parse tree it
-receives already built (D54). A decision referenced through a relation (`D.x`) has no
-grammar signal; the binder refuses it (`RefuseQualifiedDecisionReferences`, §4). The
-exact messages are pinned by `test/decide/tests/test_scope_removed_syntax.py`
-(`../../testing/scope_suite.md`), and the CLI test runner (`test/decide/decidb_cli.py`)
-fails any query whose stderr says "is removed" unless the call says it is about one
-(`removed_spelling=True`).
-
 ---
 
 ## 4. Parsed-tree validation
@@ -400,12 +313,11 @@ In execution order:
 
 | # | Operation | What it does |
 |---|---|---|
-| 1 | `RefuseRemovedDecideSpellings` | §3, for a parse tree stored before the removal. |
-| 2 | `RefuseQualifiedDecisionReferences` | Refuses a decision referenced through a relation, `D.x` (`../02_binder/done.md` §1). |
-| 3 | `ValidateDecideScopeSpellings` | Where `when`, `per` and `by` may stand (`../02_binder/done.md` §4a). |
-| 4 | `ValidateDecideNoExplicitDecisionCasts` | Rejects a user-written cast over a decision, in `SUCH THAT` and the objective; only the parsed tree shows who wrote a cast (`../04_canonicalizer/done.md` §3.6). |
-| 5 | `ValidateDecideNoDataAggregateFactor` | Rejects a data-only reducer scaling a decision (`x * avg(cap)`, `sum(x) / sum(cap)`), before symbolic normalization could distribute the decision into it. Every other refusal of algebra is the shape check's (`../04_canonicalizer/done.md` §3.11). |
-| 6 | `ValidateDecideNoIntegerStepComparisonOnReal` | Rejects `<`, `>` and `<>` over a `REAL` decision, in the constraints (`../02_binder/done.md` §4). |
+| 1 | `RefuseQualifiedDecisionReferences` | Refuses a decision referenced through a relation, `D.x`, in a `when`, a key or a `by` (`../02_binder/done.md` §1). |
+| 2 | `ValidateDecideScopeSpellings` | Where `when`, `per` and `by` may stand (`../02_binder/done.md` §4a). |
+| 3 | `ValidateDecideNoExplicitDecisionCasts` | Rejects a user-written cast over a decision, in `SUCH THAT` and the objective; only the parsed tree shows who wrote a cast (`../04_canonicalizer/done.md` §3.6). |
+| 4 | `ValidateDecideNoDataAggregateFactor` | Rejects a data-only reducer scaling a decision (`x * avg(cap)`, `sum(x) / sum(cap)`), before symbolic normalization could distribute the decision into it. Every other refusal of algebra is the shape check's (`../04_canonicalizer/done.md` §3.11). |
+| 5 | `ValidateDecideNoIntegerStepComparisonOnReal` | Rejects `<`, `>` and `<>` over a `REAL` decision, in the constraints (`../02_binder/done.md` §4). |
 
 `norm()` and DECIDE-variable `IN (...)` are deliberately not rewritten here.
 The binder retains bound markers, and stage 05 chooses the indicator and linking
@@ -426,9 +338,7 @@ generic SQL parentheses that the DECIDE grammar cannot accept, and restores obje
 direction. `FunctionExpression::ToString()` restores the scope `WHEN condition PER key:
 body` (WHEN first, as written, although PER is the outer tag), `PER ROW: body`,
 `reducer BY (key)` and `SUM(D, T: expression)` wherever those tags occur inside a larger
-expression. A marker of a removed spelling, and a `scalar_` type marker, print as
-written, so a view stored before the removal still shows its own SQL and is refused when
-bound. Ordinary parsed functions keep DuckDB's generic renderer.
+expression. Ordinary parsed functions keep DuckDB's generic renderer.
 `SelectNode::decide_sense` defaults to `FEASIBILITY` and `decide_text` to empty, and
 `query_node.json` gives both that default, so they are written only for a DECIDE query
 and a view DuckDB stored, which has neither, loads with the defaults.
@@ -481,20 +391,20 @@ Non-DECIDE queries retain DuckDB's existing parsed-result comparison.
 
 | Concern | Location |
 |---|---|
-| Grammar productions, the error-only ones included | `third_party/libpg_query/grammar/statements/select.y` |
+| Grammar productions | `third_party/libpg_query/grammar/statements/select.y` |
 | `DIAGNOSE` prefix production | `third_party/libpg_query/grammar/statements/variable_show.y` |
 | Conflict budget and rationale | `third_party/libpg_query/grammar/grammar.y` (header comment) |
 | Reserved keywords | `third_party/libpg_query/grammar/keywords/reserved_keywords.list` |
 | DECIDE `WHEN`, `PER`, `BY`, `AT`, `OVER` and `WITHIN` lexer gating | `third_party/libpg_query/src_backend_parser_parser.cpp` (`base_yylex`), state in `include/parser/gramparse.hpp` |
 | Frame carrier and helpers | `parsenodes.hpp` (`PGDecideFrame`), `grammar/grammar.cpp` (`makeDecideFrameOver`, `makeDecideFramePoint`, `makeDecideFrameRange`) |
 | Frame parsed expression and its transform | `src/parser/expression/decide_frame_expression.cpp`, `src/parser/transform/expression/transform_decide_frame.cpp` |
-| Scope carrier and helpers | `third_party/libpg_query/include/nodes/parsenodes.hpp` (`PGDecideScope`), `grammar/grammar.cpp` (`makeDecideScope`, `applyDecideScope`, `makeQualifiedReducer`, `absorbRemovedPerKey`) |
+| Scope carrier and helpers | `third_party/libpg_query/include/nodes/parsenodes.hpp` (`PGDecideScope`), `grammar/grammar.cpp` (`makeDecideScope`, `applyDecideScope`, `makeQualifiedReducer`) |
 | Source spans (one per expression of the clause, a `per`/`by` key, a BETWEEN's halves, the objective) | `grammar/grammar.cpp` (`noteDecideExpr`, `noteDecideParen`, `noteDecideReducerKey`, `noteDecideSpan`), called from the `a_expr` and `b_expr` decorator reductions in `select.y`; the roles are `PGDecideSpanRole` and `DecideSpanRole`, and `language/explain.md` describes how they are used |
 | Span keyed by query location, with its `DecideBinding` | `src/parser/transform/expression/transform_expression.cpp` (the interceptor `Transformer::TransformExpression`), `transform_select_node.cpp` (assembles `DecideSourceText`) |
 | Clause → `SelectNode` | `src/parser/transform/statement/transform_select_node.cpp` |
 | `DIAGNOSE` → `ShowRef` | `src/parser/transform/statement/transform_show_select.cpp` |
 | DECIDE tag construction | `src/parser/transform/expression/transform_operator.cpp` |
-| Removed spellings refused | `src/parser/decide/decide_removed_spellings.cpp` (`RefuseRemovedDecideSpellings`) |
+
 | Parsed-marker predicates | `src/parser/decide/decide_parsed_markers.cpp` (`IsDecideMarker`, `IsScopedReducerCall`, `TakesReducerBy`, ...) |
 | Parsed-tree validation | `src/planner/expression_binder/decide/decide_declarations_binder.cpp` (`BindDeclarations`), `decide_binder.cpp` (`ValidateDecideScopeSpellings` and the other validators) |
 | DECIDE statement rendering | `src/parser/query_node/select_node.cpp`, `src/parser/expression/function_expression.cpp` |

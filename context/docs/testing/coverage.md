@@ -161,10 +161,10 @@ Rows with unique caveats:
 
 - `test_keyed_mixed_when_per` — keyed + per-row + `when` + `per`,
   oracle-verified but Gurobi-only; the fixture skips on HiGHS-only hosts.
-- `test_keyed_nonexistent_table` — error test: `per nonexistent:` is "neither
-  a column nor a relation of the FROM clause".
-- `test_keyed_var_in_when_condition_error` — error test: "keepN is a decision;
-  when, per and by may only use data".
+- `test_keyed_nonexistent_table` — error test: `per nonexistent:` is "not a
+  column or a relation of the FROM clause".
+- `test_keyed_var_in_when_condition_error` — error test: "'keepN' is a decision,
+  which when, per and by cannot read".
 - `test_keyed_over_subquery_of_base_table` /
   `test_keyed_over_cte_of_base_table` — `FROM (SELECT ... FROM base) t DECIDE
   per t: x(BOOL)` and the same shape through a `WITH` CTE keep one decision per row of
@@ -239,7 +239,7 @@ pre-`FROM` declaration position.
 - **`scalar` is an ordinary name** (`test_scalar_still_usable_as_identifier`,
   `test_query_wide_decision_beside_a_column_named_scalar`): it is an unreserved
   keyword, so a column, alias or CTE named `scalar` still resolves, including beside a
-  query-wide decision, and as the name of a decision (`test_scope_removed_syntax.py`).
+  query-wide decision, and as the name of a decision (`test_scope_old_forms.py`).
 - **Empty input** (`test_scalar_empty_input`): an empty selection returns an empty
   relation, exactly as for a per-row decision. There is no special case.
 - **Composition with the rewrite-heavy features**, all oracle-verified except the
@@ -312,7 +312,7 @@ columns (D71): a body that reads more than `D` holds reads one value per distinc
 value of what it reads. Semantics: `../language/functions.md` and
 `../language/scopes.md`; syntax: `../language/guide.md`
 §5.1. The equivalence with `sum(per D: e)` is pinned in `test_scope_reducer_inner.py`
-and `test_scope_removed_syntax.py::test_colon_form_stays`.
+and `test_scope_old_forms.py::test_colon_form_stays`.
 
 The fixture is `customer JOIN nation`, where the join repeats each nation once
 per customer and nations have unequal customer counts — that inequality is what
@@ -563,11 +563,9 @@ takes (also run under `require`). A `when` in front that leaves one
 
 #### Error cases
 
-A decision in a condition is refused with "x is a decision; when, per and by may only
-use data" — `test_error_binder.py` (plain and compound) and
-`test_reducer_filter.py` (a reducer's `when` and the objective's). The removed
-spellings of a condition are refused by the parser (`../language/errors.md` §3) —
-`test_scope_removed_syntax.py`.
+A decision in a condition is refused with "'x' is a decision, which when, per and by cannot read" —
+`test_error_binder.py` (plain and compound) and `test_reducer_filter.py` (a reducer's `when` and the objective's).
+The old spellings of a condition are syntax errors — `test_scope_old_forms.py`.
 
 ### Feature interactions covered
 
@@ -654,8 +652,8 @@ a `when` in either reducer and a third level are in
 
 #### Error cases
 
-- The removed spellings of a grouped constraint and of a grouped objective are
-  refused by the parser (`../language/errors.md` §3) — `test_scope_removed_syntax.py`.
+- The old spellings of a grouped constraint and of a grouped objective are syntax errors —
+  `test_scope_old_forms.py`.
 
 ### Feature interactions covered
 
@@ -721,7 +719,7 @@ MIN, MAX} and inner ∈ {SUM, MIN, MAX, AVG}: `sum(per k: max(...))` and
 `sum(per k: min(...))` (both directions, easy and hard inner), `max(per k: sum(...))`,
 `min(per k: sum(...))`, and `max`/`min`/`sum` over an inner `avg`.
 `max(per g: max(c * x) by (g))` with mixed-sign coefficients is in `test_min_max.py`.
-An outer AVG is refused ("not supported yet").
+An outer AVG is refused ("is not supported").
 
 #### Composed MIN/MAX (additive LHS/objective with mixed aggregate terms)
 
@@ -738,8 +736,7 @@ scope oracle (`test_composed_minmax_per_scope_answers`,
 #### Error cases (binder rejections)
 
 `test_min_max.py`: `MAX(x) <> K` rejected (`test_max_notequal_error`). The
-removed spellings of a grouped MIN/MAX objective are refused by the parser
-(`../language/errors.md` §3, `test_scope_removed_syntax.py`).
+old spellings of a grouped MIN/MAX objective are syntax errors (`test_scope_old_forms.py`).
 
 `<>` is the only outer comparison the composed path refuses, pinned by
 `test_composed_minmax_outer_not_equal_rejected` (over a whole-numbered column so
@@ -986,8 +983,8 @@ side alone.
 
 ### Error cases
 
-- Exponent rejections (`test_quadratic.py`, `test_error_binder.py`): a variable, column or fractional exponent (*"POWER
-  over a DECIDE variable needs an exponent that is a whole number"*); `POWER(x, 3)` and `POWER(x, 4)` are degree
+- Exponent rejections (`test_quadratic.py`, `test_error_binder.py`): a variable, column or fractional exponent (*"the exponent
+  '0.5' of POWER over a decision is not a constant whole number"*); `POWER(x, 3)` and `POWER(x, 4)` are degree
   refusals.
 - Degree > 2 rejections — self-product of POWER, product of two POWERs, variable × POWER — each tested in both objective
   (`test_quadratic.py`) and constraint (`test_quadratic_constraints.py`) positions.
@@ -1101,11 +1098,9 @@ Tests live in:
 `test_error_parser.py`: DECIDE without
 SUCH THAT, DECIDE without a variable name, MAXIMIZE/MINIMIZE without an
 objective expression, an unknown type, comma-separated `SUCH THAT`
-constraints ("use AND between constraints").
+constraints ("SUCH THAT constraints cannot be separated by a comma").
 
-The removed spellings (`../language/errors.md` §3) are parser
-errors whose message carries "is removed" and names the replacement —
-`test_scope_removed_syntax.py`. The scoping language's own
+The old spellings are syntax errors (`../language/errors.md`) — `test_scope_old_forms.py`. The scoping language's own
 parse errors (a `per` key or `per row` on the objective, a parenthesized key, an
 expression in a key) are pinned in `test/decidb/test_scope_parser.test`. See
 [`scope_suite.md`](scope_suite.md).
@@ -1118,7 +1113,7 @@ Categories covered in `test_error_binder.py` unless noted:
 - Unsupported syntax in SUCH THAT: IS NULL, `SUM(x) IN (...)`, non-DECIDE variable in constraint, non-SUM/AVG/MIN/MAX function in objective.
 - Non-linear / invalid aggregate: no DECIDE variable in SUM, multiple DECIDE variables in SUM. A function, operator,
   exponent or division that the model cannot read (`sqrt`, `exp`, `log`, `floor`, `POWER(x, 0.5)`, `x / y`) is the
-  shape check's refusal, pinned in `test_error_binder.py` (*"DECIDE: function 'sqrt' cannot take a DECIDE variable."*).
+  shape check's refusal, pinned in `test_error_binder.py` (*"function 'sqrt' over a decision is not supported"*).
 - RHS shape: non-scalar BETWEEN / SUM RHS / `SUM = RHS`, DECIDE variable in BETWEEN bounds, IN RHS, or constraint RHS.
 - Objective: a constant added to the objective is accepted
   (`test_objective_with_addition_succeeds`); a bare data column is rejected.

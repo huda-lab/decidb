@@ -49,26 +49,23 @@ attribute read, or a solver infinity sentinel. Report writers must skip them whe
 `ThrowDecideSolveError` is the single home for the user-facing failure text. The
 operator calls it only on an **undiagnosed** terminal — the statement carried no
 `DIAGNOSE` prefix, or the status has no engine (`ITERATION_LIMIT` / `OTHER`). Its text
-names the state and points at the prefix (`DecideInfeasibleMessage(true)`, `DecideUnboundedMessage(true)` in
-`decide_value_messages.hpp`, the texts both paths raise); a diagnosed failure raises nothing at all and
-returns its findings as rows. `OTHER`, a solve the backend could not finish, has no state to name: the text names the
-backend and quotes its own reason (`status_text`), never a status number: "DECIDE optimization failed: HiGHS could not
-solve this model (Solve error)." HiGHS fills `status_text` from `modelStatusToString`; Gurobi, which names a status only
+names the state and stops (`DecideInfeasibleMessage()`, `DecideUnboundedMessage()`, `DecideInfeasibleOrUnboundedMessage()`,
+`DecideTimeLimitMessage()` and `DecideIterationLimitMessage()` in `decide_value_messages.hpp`, the texts both paths raise,
+each Invalid Input Error: `the DECIDE query is infeasible`, `... is unbounded`, `... reached the time limit`); it
+suggests no edit, since `DIAGNOSE` is the feature that proposes one, and no caret, since a solve has no place in the
+query. A diagnosed failure raises nothing at all and returns its findings as rows. `OTHER`, a solve the backend
+could not finish, has no state to name: the text quotes the backend's own reason (`status_text`), never a status
+number: "the DECIDE query could not be solved: Solve error", bare when the backend gives no reason. HiGHS fills `status_text` from `modelStatusToString`; Gurobi, which names a status only
 by its number, fills it when its optimize call fails, from `GRBgeterrormsg`, and on `GRB_NUMERIC`, where that message is
 empty, with the words of its log: "numerical trouble". A model HiGHS refuses to load
-(`passModel` or `passHessian` returns `kError`) is `OTHER` with no reason text. Gurobi's environment failures stay
-internal errors and quote Gurobi's message, not its error code. See
+(`passModel` or `passHessian` returns `kError`) is `OTHER` with no reason text. Gurobi's environment failures are an Invalid Input Error that quotes Gurobi's message, not its error code
+(`the Gurobi environment could not start: <reason>`); a failure to add a row to a Gurobi model is an Internal Error,
+since no query causes it. See
 [`../../diagnostics/`](../../diagnostics/).
 
-A direct-solve plan raises the same two states without a backend, so it advises the prefix only where `DIAGNOSE` would
-run. The rule driver decides once per query, after a rule is selected: `DecideSolverRuns(ClassifyDecideModel(
-ir.model_shape))` asks the solver-support check `DIAGNOSE` goes through (`FindDecideSolverGap`, beside the throwing
-gate in `decide_solver_gate.cpp`), and the driver hands the rule the matching texts (`DirectStateErrors`). With no
-Gurobi licence, a quadratic limit or an `INT` decision under a square objective has no backend, so its errors read
-`DECIDE optimization is infeasible.` and stop. The IR's model shape reports less when unsure, which keeps the advice.
-A model every backend takes gets the advice without a backend being picked, so such a query loads no solver
-(§ Capabilities).
-Where `DIAGNOSE` runs but cannot name a variable, the error keeps the advice.
+A direct-solve plan raises the same two states without a backend, from the same builders, so its text is the solver
+path's: `the DECIDE query is infeasible`, `... is unbounded`. The rule driver hands a rule these two texts and nothing
+else: no check decides whether a hint sentence follows.
 
 ---
 
@@ -336,8 +333,7 @@ order:
    on the freshly built model so diagnostic re-solves never pollute the dump. This
    is the golden corpus's characterization oracle.
 4. `options.say_number_warning()` when `ModelHoldsNumberOutOfRange(model)`: stderr gets
-   *DECIDE: a very large or very small number may make this answer inaccurate. Scale its
-   data toward 1.* when the model
+   *DECIDE: a very large or very small number may make this answer inaccurate.* when the model
    holds a number past the point where the solver's tolerance can show in the user's
    numbers. The model, the settings and the answer are unchanged. Numerical precision is
    the solver's limit: DeciDB does not rescale or analyse clauses to get around it, it
@@ -345,8 +341,12 @@ order:
    (`decide_numeric_policy.hpp`): integrality and feasibility, 1e-6 each on every backend
    (Gurobi `IntFeasTol` / `FeasibilityTol`, HiGHS `mip_feasibility_tolerance` /
    `primal_feasibility_tolerance`), and optimality, 1e-6 (Gurobi `OptimalityTol`, its
-   default). HiGHS keeps its tighter default for optimality, so the warning comes no later
+      default). HiGHS keeps its tighter default for optimality, so the warning comes no later
    than HiGHS's own limit.
+
+   **Ruling (owner, 2026-11-19).** The warning states what may happen and does not tell the user what to change: the
+   sentence "Scale its data toward 1." is not part of it. The `DECIDE:` prefix of the one line stays.
+
    - A coefficient (constraint, quadratic, indicator, objective) warns from
      `DECIDE_LARGE_COEFFICIENT` = 1 / integrality tolerance = 1e6: an integer column
      accepted that far from a whole number moves the row by 1.
@@ -504,8 +504,7 @@ same solve error; a last run without presolve then settles the model's status it
 
 A `kError` from `highs.run()` is a solve HiGHS could not finish, not a DeciDB fault, so
 `HighsSession` returns it as `SolverStatus::OTHER` with the model status's text in
-`status_text`, and the operator raises the ordinary "DECIDE optimization failed: HiGHS could
-not solve this model (Solve error)." The known case is HiGHS's QP solver: it is an active-set method that keeps a
+`status_text`, and the operator raises the ordinary "the DECIDE query could not be solved: Solve error". The known case is HiGHS's QP solver: it is an active-set method that keeps a
 dense matrix over the variables that end strictly inside their bounds, and it stops with
 "Large nullspace" (model status 4) when there are more than its `qp_nullspace_limit` of
 4,000. A box-bounded QP on 9,000 rows with about half the optima inside their range hits

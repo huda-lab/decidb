@@ -14,7 +14,7 @@ the clause the user wrote.
 ## Parser
 
 - The lexer filter `base_yylex` (`third_party/libpg_query/src_backend_parser_parser.cpp`) turns the words into
-  DECIDE-only tokens inside a DECIDE clause: `WHEN_DECIDE` (`WHEN_DECIDE_OBJECTIVE` after `MAXIMIZE`/`MINIMIZE`),
+  DECIDE-only tokens inside a DECIDE clause: `WHEN_DECIDE`,
   `PER_DECIDE`, `PER_DECIDE_PAREN` before `(`, `PER_DECIDE_ROW` before `ROW`, and `BY_DECIDE` for a `BY` right after
   `)`. Ordinary SQL never sees these tokens, so `GROUP BY`, `CASE WHEN` and columns named `per` are unaffected. A
   `WHEN` inside `CASE … END` stays SQL's (`decide_case_depth`), so a `CASE` parses as SQL.
@@ -23,11 +23,8 @@ the clause the user wrote.
 - Grammar (`third_party/libpg_query/grammar/statements/select.y`): `decide_when`, `decide_per`, `decide_scope`,
   `decide_by`. `applyDecideScope` builds the markers `SCOPE_WHEN_TAG`, `SCOPE_PER_TAG` (children: body, then key) and
   `SCOPE_PER_ROW_TAG`; `by` is `REDUCER_BY_TAG`. `%expect 4`, all from the optional declaration slot.
-- The removed spellings keep error-only productions; `RefuseRemovedDecideSpellings`
-  (`src/parser/decide/decide_removed_spellings.cpp`) throws the message, built from the user's own expressions. It
-  runs from `TransformSelectNode`, and again at the top of `BindDeclarations` for a parse tree stored in a view or
-  macro (D54). The predicates over parsed markers that the refusal and the binder share are in
-  `src/parser/decide/decide_parsed_markers.cpp`.
+- The grammar has only the current spellings: an old one is an ordinary syntax error (R13). The predicates over parsed
+  markers that the binder shares are in `src/parser/decide/decide_parsed_markers.cpp`.
 
 ## Binder
 
@@ -158,5 +155,5 @@ the model. The optimizer's work on large models is in `../pipeline/05_optimizer/
 
 The scope suites, the `_scope_oracle.py` reference model and `_brute_force.py` are described in
 `../testing/scope_suite.md`: `test/decide/tests/test_scope_*.py` and `test/decidb/test_scope_parser.test`.
-`test_scope_combinations.py` runs 784 cells against the oracle. `test_no_old_spellings_remain.py` keeps removed
-spellings out of every test but `test_scope_removed_syntax.py`.
+`test_scope_combinations.py` runs 784 cells against the oracle. `test_scope_old_forms.py` writes the old
+spellings and checks each is a syntax error.

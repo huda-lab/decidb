@@ -13,12 +13,12 @@
 - **Gurobi's barrier on many limits on squares.** With a redundant bound on the decision, a feasible, well-scaled query
   with one `SUM(POWER(x, 2))` limit per group can stop with Gurobi's numerical-trouble status and no solution, at
   Gurobi's default settings. With `x <= 50` and a limit of 25, 7 of 20 random inputs fail on 2,000 rows in 100 groups
-  and 9 of 20 on 20,000 rows in 1,000 groups. No Gurobi setting tried recovers them. The query raises `DECIDE
-  optimization failed: Gurobi could not solve this model (numerical trouble).` Inside Gurobi.
+  and 9 of 20 on 20,000 rows in 1,000 groups. No Gurobi setting tried recovers them. The query raises `the DECIDE
+  query could not be solved: numerical trouble`. Inside Gurobi.
 - **Gurobi at an objective constant of about 1e200 and above.** `SELECT id, x FROM (VALUES (1, 1e100)) t(id, v) DECIDE
   x(REAL) SUCH THAT x BETWEEN 0 AND 2e100 MINIMIZE SUM(POWER(x - v, 2))` prints the number-range warning, then
-  `DECIDE optimization is unbounded`, on a model whose every decision is bounded. Gurobi returns an unbounded status
-  for the expanded square's constant `v^2`; HiGHS refuses to load it ("numbers too far apart in size"). Inside the
+  `the DECIDE query is unbounded`, on a model whose every decision is bounded. Gurobi returns an unbounded status
+  for the expanded square's constant `v^2`; HiGHS refuses to load it ("the objective holds numbers too far apart in size, which is not supported on this installation"). Inside the
   backends; direct solve answers `x = v`.
 - **DuckDB moves a constant across a comparison and drops an overflow.** `SELECT i FROM t WHERE i + 127::TINYINT > 0`
   over a TINYINT `i = 1` returns the row, where `SELECT i + 127::TINYINT FROM t` raises `Overflow in addition of INT8`.

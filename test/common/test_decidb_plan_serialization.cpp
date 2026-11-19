@@ -270,8 +270,8 @@ TEST_CASE("Parsed DECIDE scope spellings survive ToString and binary round trips
 	        "'lower(a)' in a per key is not a column or a relation");
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT SUM(per 5: x) <= 1",
 	        "'5' in a per key is not a column or a relation");
-	// Nothing may trail a scoped constraint (a removed spelling after a scope is a
-	// plain syntax error), and outside DECIDE nothing changed.
+	// Nothing may trail a scoped constraint (a `WHEN` after a clause is a plain syntax
+	// error), and outside DECIDE nothing changed.
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT per a: x <= 1 WHEN b", "syntax error at or near", "WHEN");
 	rejects("SELECT SUM(x) BY (a) FROM t", "syntax error at or near", "BY");
 	rejects("SELECT SUM(when a: x) FROM t", "syntax error at or near", "when");

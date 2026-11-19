@@ -13,7 +13,7 @@ walked end to end see [`trace_life_of_a_query.md`](trace_life_of_a_query.md).
 DeciDB extends DuckDB's parser and planner to inject a new operator. It registers:
 
 - **Reserved keywords** — `DECIDE`, `SUCH` (as in `SUCH THAT`), `MAXIMIZE`, `MINIMIZE`.
-- **Gated tokens** — `WHEN_DECIDE`, `WHEN_DECIDE_OBJECTIVE`, `PER_DECIDE`,
+- **Gated tokens** — `WHEN_DECIDE`, `PER_DECIDE`,
   `PER_DECIDE_PAREN`, `PER_DECIDE_ROW` and `BY_DECIDE`, which the lexer emits only
   inside a DECIDE clause, so the clause's `when`, `per` and `by` never collide with
   SQL's `CASE ... WHEN`, a column named `per`, or `GROUP BY`.
@@ -21,8 +21,7 @@ DeciDB extends DuckDB's parser and planner to inject a new operator. It register
   `decide_tail`, `decide_constraint_item`, `decide_objective_item`, `decide_scope`,
   `decide_by`.
 - **Transformer rules** — parsed nodes into `SelectNode` fields, the tagged scope,
-  `by` and colon-form markers, and the refusal of the removed spellings
-  (`RefuseRemovedDecideSpellings`).
+  `by` and colon-form markers.
 - **A logical operator** — `LogicalDecide`, with hand-written serialization.
 - **An optimizer pass** — `DecideOptimizer`.
 - **A physical operator** — `PhysicalDecide`.
@@ -141,13 +140,35 @@ workers slept, which hung the descent's parallel merge (`DecideDescent::CopyMerg
 the C++ suite. DuckDB's `main` drains until the count is reached as well, through a rewritten scheduler. No test forces
 the race; a stress run is clean before and after.
 
+Four edits let an error point at the place in the query it is about, as DuckDB's `BinderException` does. Each helps
+any query that raises through them, and a standard query returns the same rows:
+
+- **`NotImplementedException` takes a position (`common/exception.hpp`, `common/exception.cpp`).** Constructors take the
+  `ParsedExpression` or `Expression` the error is about, an `optional_idx` location, or the extra info itself, as
+  `BinderException`'s do, so `ClientContext::ProcessError` prints the `LINE n:` block with a caret. Reason: a shape the
+  language allows and DeciDB does not handle is a Not implemented Error that points at the shape.
+- **`DIAGNOSE` records its location (`third_party/libpg_query/grammar/statements/variable_show.y`).** The production sets
+  `PGVariableShowSelectStmt::location` to the position of the query after the keyword, so a refusal of `DIAGNOSE` points
+  at the query.
+- **`CorrelatedColumnInfo::query_location` (`planner/binder.hpp`).** The structure copies the `query_location` of the
+  `BoundColumnRefExpression` it records, so the refusal of a correlated column that survives binding points at the
+    column. Reason: the column is a core binder record, and DuckDB's own correlated-column handling reads none of the new
+  field.
+- **The parsed verifier skips `EXPLAIN` (`main/client_context.cpp`).** `PendingStatementOrPreparedStatement` does not
+  re-parse an `EXPLAIN_STATEMENT` under `verify_serializer`. Reason: an `EXPLAIN` runs its inner statement's binding, and
+  an error there points into the text the statement was parsed from (`query_location`); a statement parsed again from its
+  re-printed text points into that text, which is not the query the error is shown against, so the caret is lost. Plain
+  DuckDB loses it too. Verification only: the `SELECT` inside is round-tripped by the plain `SELECT` tests.
+
+
+
 ---
 
 ## 2. Query lifecycle
 
 ```mermaid
 graph TD
-    User[User SQL] --> P[01 Parser: grammar, DECIDE keyword tokens, removed-spelling refusal]
+    User[User SQL] --> P[01 Parser: grammar, DECIDE keyword tokens]
     P --> B[02 Binder: names, scopes, types, reducers]
     B --> L[03 Logical plan: PlanSubqueries + correlation provenance]
     L --> C[04 Canonicalizer: ONE shape decision, constraints AND objective; the shape check judges the algebra]

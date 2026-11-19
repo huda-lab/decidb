@@ -348,7 +348,12 @@ every non-interactive query it runs through shell startup commands, with the pra
 own result redirected away. Parsed DECIDE statements reparse from `ToString()`, with no
 second solve; see [`../01_parser/done.md`](../01_parser/done.md) §5. The two PTY-driven
 interactive continuation cases are outside DuckDB's materializing verifier. Model-dump
-assertions select one complete build when verifier paths append equivalent copies.
+assertions select one complete build when verifier paths append equivalent copies. The parsed verifier does not
+re-parse an `EXPLAIN` statement (`ClientContext::PendingStatementOrPreparedStatement`, `../architecture.md` § Edits to
+existing DuckDB code); the `SELECT` inside is round-tripped by the plain `SELECT` tests.
+
+**Ruling (owner, 2026-11-19).** The verifier does not re-parse `EXPLAIN`. A re-parsed `EXPLAIN` points its error into the
+re-printed text, which is not the query the error is shown against, so the caret is lost.
 
 ---
 
@@ -418,10 +423,19 @@ its children; an implicit cast takes its child's location, so it quotes as the c
 location true is Clang's TreeTransform one (`../architecture.md` §3, `DecideReplaces`).
 
 `source_text` (`DecideSourceText`) rides on `LogicalDecide` (serialized) and is copied to `PhysicalDecide`, alongside
-the `constraint_sources` registry that shares the same renderer. The registry entry holds a clause's canonical text with
-each respelled term quoted as written (`canonical_lhs`, `canonical_rhs`) and the canonical spelling a plan shows
-(`spelled_lhs`, `spelled_rhs`). The objective's `written_objective` is the text cut from the parser's `OBJECTIVE` span,
-and `objective_canonical_differs` says canonicalization changed it.
+the `constraint_sources` registry that shares the same renderer. A registry entry (`ConstraintSourceInfo`) stores a clause once: its span
+(`location`, the query location of its comparison, a BETWEEN's shared by its two halves), the span of its canonical left
+side (`lhs_location`), the canonical text a plan shows (`canonical_lhs`, `canonical_cmp`, `canonical_rhs`) and
+`canonical_differs`, which the canonicalizer reports (`DecideCanonicalizer::CanonicalizeTree`). The clause as written is
+cut from `DecideSourceText` by `location` where a plan or a message needs it. A clause whose two sides both read a
+decision (`ship <= capacity * open`) keeps `source_lhs` and `source_rhs`, DeciDB's own rendering of the two sides before
+canonicalization merged them, because the clause a repair edits is no text of the query. The span id travels to
+formulation: `source_clause_id` gives a clause-level message its caret (`DecideClauseLocation`,
+`DecideClauseErrorInfo`). The objective's `written_objective` is the text cut from the parser's `OBJECTIVE` span; its
+`objective_canonical_differs` still compares two renderings.
+
+**Ruling (owner, 2026-11-19).** `source_lhs` and `source_rhs` stay for a clause with a decision on both sides, and
+`DIAGNOSE`'s echo (D32) of those sides is DeciDB's rendering, not the query text.
 
 See [`../../language/explain.md`](../../language/explain.md)
 for the output itself.

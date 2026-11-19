@@ -51,8 +51,7 @@ solver does: NaN or infinite coefficients, slopes and NaN limits on a row that r
 late bad row raises under `LIMIT 1`, `COUNT(*)` or a filter; only `LIMIT 0` skips it. An empty source returns no rows,
 whatever the limit says.
 
-**With no Gurobi.** The solver path refuses a quadratic limit on a machine with no Gurobi license ("the SUCH THAT clause
-`SUM(POWER(x, 2)) <= 25` squares or multiplies decision variables, which needs Gurobi"). That refusal is raised when the solver plan is built
+**With no Gurobi.** The solver path refuses a quadratic limit on a machine with no Gurobi license ("squaring or multiplying decisions in a constraint is not supported on this installation"). That refusal is raised when the solver plan is built
 (`plan_decide.cpp`, `RequireDecideSolverSupport`), after a rule has replaced the DECIDE node, so N1 answers such a query.
 A forced backend turns direct solve off, so forced HiGHS still refuses it.
 
@@ -92,10 +91,9 @@ A query N1 does not apply to keeps its answer: it runs on the solver, and `requi
   work around them: its method is correct, and the loss is the DOUBLE's. `off` warns from an objective coefficient of 1e-6.
 - **Huge scores.** Gurobi gives 3 and 4 with a warning at 1e12 to 1e25, stops with numerical trouble at 1e30 to 1e50, and
   returns 0 with a warning at 1e100 to 1e153 and above. N1 gives 3 and 4 up to about 1e153. Past about 1e154 the sum of
-  squares is past a DOUBLE and N1 raises `DECIDE: MAXIMIZE sum(s * x) computes a number too large for a DOUBLE. Scale its
-  data down.`
+  squares is past a DOUBLE and N1 raises `the objective computes a number too large for a DOUBLE`
 - **An infinite limit read from the data, with an improving row.** N1 raises unbounded, which the problem is. The solver
-  stops with "Gurobi could not solve this model (numerical trouble)".
+  stops with "the DECIDE query could not be solved: numerical trouble".
 - **A target from about 1e30.** Gurobi stops with numerical trouble. N1 answers up to the range of the squares, then
   raises the too-large error above.
 - **The limit's term past a DOUBLE.** A row's share of `h` is the limit's own term at the row's point, `q * p^2`, so it

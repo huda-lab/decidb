@@ -149,32 +149,25 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
   choices). The float identities the rewriter needs here, and the fix to its CASE rule, are in
   [architecture.md](../../pipeline/architecture.md) § 1.
 - **Runtime checks.** `direct_runtime_checks.hpp` holds the predicates that raise an error while the plan runs, and
-  their messages: `DirectErrorPredicate` (a BOOLEAN that raises a given message, fixed or computed per row),
-  `DirectValidBoundPredicate` and `DirectNumberMessage`. The two state errors come from `DirectStateErrors {infeasible,
-  unbounded}`, which the rule driver builds once per query from `DecideSolverRuns(ClassifyDecideModel(ir.model_shape))`
-  and hands to every rule's `Apply`; `DirectInfeasibleErrorPredicate` and `DirectUnboundedErrorPredicate` take it. Their
-  texts are `DecideInfeasibleMessage` and `DecideUnboundedMessage` (`decide_value_messages.hpp`, given `diagnose_runs`),
-  which advise prefixing the query with `DIAGNOSE` only where `DIAGNOSE` would run. `DirectCheckNumber` checks a raw
-  value a projection computes, naming the values it is made of, and is null when no value it is made of can fail
-  (Number messages, below); `DirectRaiseTooLarge` checks a number computed from values checked before it. Both gate on
-  one BOOLEAN per row, `isfinite(number)`, and build the message only in the arm that raises, as a `CASE` evaluates a
-  branch only where it is chosen, so a row that passes computes no message. Every check that raises is built with
-  `DirectRaiseUnless(ok, error)`, `DirectRaiseIf(bad, error)` (both return true or raise), `DirectRaiseMessage` (raises
-  a per-row message where it is not NULL). A check of a value computed only on the rows a `when` keeps needs no mask of
+  their messages. A check raises where its value is found, and the call that raises carries its own place in the query
+  (`Expression::query_location`), so no place travels as row data and no message is built as a column. `DirectErrorPredicate`
+  is a BOOLEAN that raises a given message; `DirectValidBoundPredicate` raises the bound error at the bound. The two state
+  errors are `DirectInfeasibleErrorPredicate` and `DirectUnboundedErrorPredicate`, whose texts are
+  `DecideInfeasibleMessage` and `DecideUnboundedMessage` (`decide_value_messages.hpp`): the solver path's, with no hint
+  sentence, so the driver hands a rule no state errors. `DirectCheckNumber` checks a raw value a projection computes,
+  naming the number as the user wrote it (`DirectNumberNames`), and is null when no value it is made of can fail (Number
+  messages, below); `DirectRaiseTooLarge` checks a number computed from values checked before it and raises at the
+  clause. Both gate on one BOOLEAN per row, `isfinite(number)`, and raise through `__internal_decide_invalid_value`,
+  which reads its place from its own expression, in the arm that raises only, as a `CASE` evaluates a branch only where
+  it is chosen, so a row that passes computes no message. An `=` bound that takes two values raises through
+  `__internal_decide_bound_disagreement`, built by the solver path's message builder. Every check that raises is built
+  with `DirectRaiseUnless(ok, error)`, `DirectRaiseIf(bad, error)` (both return true or raise), `DirectRaiseMessage`. A check of a value computed only on the rows a `when` keeps needs no mask of
   its own: the value is NULL on a dropped row, and `DirectCheckNumber` and `DirectValidBoundPredicate` pass a NULL.
   A list of checks is joined by `DirectAllHold`, a `CASE` chain in the order given, so an earlier check guards the later
   ones. `DirectWarnIf` and `DirectBelowNormalRange` build the warning, which is always true (Number-range warning,
-  below). Error order is not owed (owner's ruling): a rule raises when the solver
-  raises, with the message of the first failing check its plan meets, which may not be the solver's.
-  **Message codes.** A rule that takes the least message of a group with an aggregate does not aggregate the texts. It
-  aggregates codes of them, as a column store dictionary-encodes a string column and decodes it late (late
-  materialization of strings). A message built by `DirectNumberMessage` or `DirectOnKeptRows` is a `CASE` over constant
-  texts, so every text it can take is known when the plan is built. `DirectEncodeMessage` collects those texts into a
-  `DirectMessageCodes`, sorted in ascending order, and returns the expression with each text replaced by its code (a
-  UINTEGER, NULL staying NULL). Because the texts are sorted, the least code is the code of the least text, so
-  `MIN` of the codes picks the message `MIN` of the texts would. `DirectDecodeMessage` turns the group's least code
-  back into its text, on the group's row, and that is the only place a text is built. The aggregate then hashes and
-  compares four-byte integers per row, not strings, and a row that passes carries no text.
+  below). Error order is not owed (R10): a rule raises when the solver
+  raises, with the message of the first failing check its plan meets, which may not be the solver's. One raising check
+  stands for each rule, and a check stays where the rule's plan builds it.
 - **Row checks, one implementation** (`direct_row_checks.cpp`), in the shape of DuckDB's uncorrelated scalar subquery.
   One `DirectSourceReader` serves the whole plan: the rule driver builds it for the rule's reads
   (`DirectApplicabilityCondition::source_reads`) plus one per bound side table and one per check, so it decides once,
@@ -423,13 +416,14 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
   tags, so EXPLAIN never prints one.
 - **Number messages.** Both paths raise one text, `DecideInvalidValueMessage` (`decide_value_messages.hpp`), from the
   value's `DecideValueRole` and its text as written: the cut query text, or `DirectIR::render` where none was cut
-  (`NULL_GUARD_TAG` keeps a NULL guard out of the text). It names no row: a row's place in the input depends on the
-  scan.
-  - A coefficient DeciDB computes (like terms merged, a reducer's factor or divisor applied) keeps the values it is
-    computed from (`DecideTerm::inputs` on the solver path, `DirectNumberNames` from `DirectNamesOf` in direct solve).
-    Its check is one `isfinite` on the result; only the row it fails on reads the inputs. The first input a column
-    holds that is not finite is named (COEFFICIENT, quoting the input as written); with none, DeciDB's arithmetic or a
-    literal left the DOUBLE range, and the clause is named (TOO_LARGE). Only the first failing row is classified.
+  (`NULL_GUARD_TAG` keeps a NULL guard out of the text), with the caret on the value
+  (`DecideInvalidValueError`; a plan raises through `__internal_decide_invalid_value`). It names no row: a row's place
+  in the input depends on the scan.
+  - A coefficient DeciDB computes (like terms merged, a reducer's factor or divisor applied) is named where it stands: a
+    number made of several values stands where the least expression holding them all stands (`DecideCoveringLocation`,
+    `DirectNumberNames` from `DirectNamesOf` in direct solve). Its check is one `isfinite` on the result, and it is
+    COEFFICIENT, NaN or infinite alike. A constant no column holds that is not finite is CONSTANT; a number that
+    DeciDB's arithmetic or a literal took past the DOUBLE range, with no value named, is TOO_LARGE at the clause.
   - A number no answer reads is not computed: an objective's per-row constants are checked one term at a time, as the
     solver path reads them, and never summed.
   - A number that cannot fail gets no check. The test is abstract interpretation over magnitudes, seeded by types

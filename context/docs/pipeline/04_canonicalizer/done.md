@@ -384,9 +384,7 @@ What may be a factor (`PeelScale`, the single place that judges it):
 - a row-varying column or a correlated subquery — in a constraint, where it is a term
   of each row's constraint: the comparison takes the VALUE shape (§3.10), whose helper
   decision the row's factor multiplies. The objective is produced once, so there it is
-  refused: *"DECIDE objective: 'w' varies per row, so it cannot multiply SUM(x). Move
-  it inside the aggregate, e.g. SUM(x * w)."*, or, for a correlated subquery, *"this
-  subquery returns a different value for each row, ..."*;
+  refused: *"'w' varies per row, which cannot scale a reducer in the objective"*, at the factor;
 - a `BOOL` decision on a bare reducer (`IsBooleanFactor`: `b`, or data times `b`, such as `2 * b`), in a constraint and
   in the objective. A minus over a factor that reads a decision is the term's sign, not part of the factor:
   `-b * SUM(x)` is the term `-(b * SUM(x))` (`PeelScale` takes the minus off, `WithoutDecisionNegation`). A minus over
@@ -399,10 +397,14 @@ What may be a factor (`PeelScale`, the single place that judges it):
   declines it (`ContainsReducer`), since a scale is read once per row and a reducer is not, so the term stays whole. A
   constraint reads it through the value rewrite; the objective refuses it as a product of decisions outside a reducer
   (`../05_optimizer/done.md`, §1a);
-- any other decision — nowhere: *"DECIDE constraint: 's' is a decision, so it cannot multiply
-  SUM(x). Only data or a BOOL decision can scale SUM/AVG/MIN/MAX."* (the objective says *"Only constants,
-  query-wide values or a BOOL decision ..."*). An `INT` or `REAL` decision times a reducer is not convex, and a `BOOL`
+- any other decision — nowhere: *"'s' is an INT decision, which cannot scale a reducer"* (`a REAL`; `divide` for a
+  divisor; `a BOOL` on a reducer inside another expression, *"which cannot scale a reducer inside another
+  expression"*; a compound factor reads *"'b - c' reads a decision, which cannot scale a reducer"*), at the factor.
+  An `INT` or `REAL` decision times a reducer is not convex, and a `BOOL`
   times anything but a bare reducer (`b * (sum(x) - 1)`) is not held by a helper.
+
+**Ruling (owner, 2026-11-19).** The message names the decision's type (`INT`, `REAL`, `BOOL`), whether it divides or
+scales, and a compound factor by what it reads.
 
 The canonicalizer takes the `BOOL` decisions at construction (`is_boolean`, after `variable_scopes`, required by both
 constructors), since the factor's type is not in the bound tree.
@@ -555,7 +557,7 @@ escape for `AGG * factor`: every consumer sees `factor * AGG` or `AGG / factor`.
 | no reducer (a data-only reducer may sit on the bound side) | `ROWS` | one per kept row, or per class of an enclosing `per K:` |
 | decision reducers sharing one `by` key, under whole-query factors, beside terms that are one value per group | `AGGREGATE` | one per `by` group of the kept rows |
 | anything else: a term beside a reducer finer than the `by` key, a factor that varies by row or is a `BOOL` decision, a second `by` key, a reducer inside another expression, a reducer holding a reducer (guide §5.5), a product of decisions beside a reducer with a query-wide decision in the clause (`sum(x) + b * s`) | `VALUE` | the value rewrite (stage 05): each decision reducer becomes a helper decision per `by` group (a nested one per group of its path key), then one row per class |
-| `AVG` under `<>` unless every term is a plain `AVG` | refused | *"DECIDE: AVG in a <> constraint is not supported yet beside another term or with its own when or per"* |
+| `AVG` under `<>` unless every term is a plain `AVG` | refused | *"AVG in a <> constraint beside another term, or with its own when or per, is not supported"* |
 
 In the objective, which has no shape, `CanonicalizeObjective` tags the outermost reducer
 of each nest `VALUE_REWRITE_TAG` (`TagNestedObjectiveReducers`, D81): the shape of a nest
@@ -622,16 +624,16 @@ It refuses, for each clause as written:
 
 | Refused | Message |
 |---|---|
-| A function over a decision outside the vocabulary (`+`, `-`, `*`, a division by data, a whole-exponent `POWER`, `ABS`, the reducers and DeciDB's markers, each under any name DuckDB registers for it, §3.3c) | `DECIDE: function 'sqrt' cannot take a DECIDE variable.` |
-| An operator over a decision outside it (`%`, `COALESCE`) | `DECIDE: operator '%' cannot take a DECIDE variable.` |
-| A `POWER` over a decision whose exponent is not a whole number known before the query runs | `POWER over a DECIDE variable needs an exponent that is a whole number known before the query runs, found '0.5'.` |
-| A division by a decision | `DECIDE: cannot divide by a DECIDE variable.` |
-| A `CASE` over a decision (a `CASE` over data is a per-row coefficient, as `COALESCE` over data is) | `CASE over a DECIDE variable is not supported.` and the alternatives: a scope in front, `per`, or a CTE. The first word is the user's: `if(c, a, b)` binds as a CASE and is refused as `IF over ...` (`WrittenConditional` reads it off the node's span) |
-| A term of degree above 2 | `DECIDE: the SUCH THAT clause ... has a term of degree 3, which no solver DeciDB supports can optimize.` and the advice to write each term with at most two decision factors |
+| A function over a decision outside the vocabulary (`+`, `-`, `*`, a division by data, a whole-exponent `POWER`, `ABS`, the reducers and DeciDB's markers, each under any name DuckDB registers for it, §3.3c) | `function 'sqrt' over a decision is not supported` |
+| An operator over a decision outside it (`%`, `COALESCE`) | `operator '%' over a decision is not supported` |
+| A `POWER` over a decision whose exponent is not a whole number known before the query runs | `the exponent '0.5' of POWER over a decision is not a constant whole number` |
+| A division by a decision | `division by a decision is not supported` |
+| A `CASE` over a decision (a `CASE` over data is a per-row coefficient, as `COALESCE` over data is) | `CASE over a decision is not supported`. The first word is the user's: `if(c, a, b)` binds as a CASE and is refused as `IF over a decision ...` (`WrittenConditional` reads it off the node's span) |
+| A term of degree above 2 | `a term of degree 3 is not supported` |
 
-Every refusal is an Invalid Input error that ends with the clause as written (`In the SUCH THAT clause ...`, `In the
-objective ...`) and carries the source location of the term, so the caret underlines it. The degree refusal puts the
-clause in its first sentence and underlines the smallest product of the highest degree. The vocabulary is judged
+Every refusal is a Not implemented Error that states what is unsupported and carries the source location of the node, so the
+caret underlines it; the sentence quotes no clause. The degree refusal underlines the smallest product of the highest
+degree. The vocabulary is judged
 before the degree, the constraints before the objective, and a binder refusal comes before all of them: when a query
 has two refusals, the one the pipeline reaches first is reported.
 

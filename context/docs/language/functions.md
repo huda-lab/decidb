@@ -88,8 +88,7 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   their coefficients with a CASE, and open a box or limit whose value is NULL. NaN in a bound or a coefficient is an
   error, unlike SQL, because no solver reads a NaN; an infinite coefficient is an error because a model cannot hold
   one, and an infinite bound keeps its SQL meaning (D65). Both paths raise `DecideInvalidValueMessage`, which names the
-  value as written and the edit that skips its rows: the value replaced where it stands by
-  `CASE WHEN isfinite(v) THEN v END` (a bound: `CASE WHEN NOT isnan(v) THEN v END`). A `when` drops its rows before
+  value as written and points at it, and suggests no edit (`errors.md`). A `when` drops its rows before
   any frame is computed, so it moves every frame's timeline; the NULL skips that row's instance alone. Integer
   arithmetic is DuckDB's: a bound is computed in DuckDB's types before the model reads it as `DOUBLE`, so a `HUGEINT`
   overflow raises as in SQL and division by zero gives
@@ -166,10 +165,10 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
 - **Other functions and operators over a decision** are refused by the shape check (`decide_shape_check.cpp`), once,
   after canonicalization and before any rewrite, in every position (per row, inside a reducer, inside `ABS`). It allows
   `+`, `-`, `*`, a division by data, `POWER` with a whole exponent known before the query runs, `ABS` and the reducers;
-  any other function reads *"DECIDE: function 'sqrt' cannot take a DECIDE variable."*, any other operator (`%`,
-  `COALESCE`) *"DECIDE: operator '%' cannot take a DECIDE variable."*, a `POWER` with another exponent asks for a whole
-  number known before the query runs, and a `CASE` over a decision gets its own message with the alternatives. Each
-  quotes the clause as written and points at the term. Without the check, such a
+  any other function reads *"function 'sqrt' over a decision is not supported"*, any other operator (`%`,
+  `COALESCE`) *"operator '%' over a decision is not supported"*, a `POWER` with another exponent reads *"the exponent
+  '0.5' of POWER over a decision is not a constant whole number"*, and a `CASE` over a decision gets its own message.
+  Each points at the term. Without the check, such a
   function would be dropped or reach execution unmodelled. `POWER(x, 1)` is `x` and `POWER(x, 0)` is 1. Tests:
   `test_error_binder.py`, `test_product_normal_form.py`, `test_error_case_expression.py`.
 - **Every name DuckDB registers for a function** answers as that function: `pow`, `power`, `**` and `^`; `abs` and
@@ -182,8 +181,7 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   *aggregate* inside a reducer (`SUM(avg(col) * x)`) is refused, since it needs the whole row set; compute it as a
   scalar subquery. Tests: `test_error_unsupported_operator.py`, `test_power_over_data.py`.
 - **Division** by a constant or data column folds into the coefficient (`x / col` → `1/col[row]`), in per-row
-  constraints, reducers and quadratic bases; division by a decision is refused (*"DECIDE: cannot divide by a DECIDE
-  variable."*). Code: `DecideTermSplitter::Split` (`decide_term_split.cpp`), `DecideShapeCheck`.
+  constraints, reducers and quadratic bases; division by a decision is refused (*"division by a decision is not supported"*). Code: `DecideTermSplitter::Split` (`decide_term_split.cpp`), `DecideShapeCheck`.
 - **Per-row linear left sides** (`x + 3 <= 10`, `x - col <= 1`, `-x <= -2`, `x / 2 + 1 <= 3`): the term splitter
   separates decision terms from constants and data, and the model builder moves the latter to the per-row bound. A
   decision under anything else is an opaque term or a shape-check refusal, never read as a plain variable. Tests:

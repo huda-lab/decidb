@@ -534,7 +534,7 @@ MAXIMIZE SUM(buy * p_retailprice);
 ```
 
 ```
-Invalid Input Error: DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see which decision needs a bound.
+Invalid Input Error: the DECIDE query is unbounded
 ```
 
 ## Capturing examples

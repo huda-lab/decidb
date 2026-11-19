@@ -149,10 +149,9 @@ lives in the opt-in relation, not the error.
 
 - **Without the prefix, the state and nothing more.** An unprefixed unbounded solve
   throws the static error (`ThrowDecideSolveError`, UNBOUNDED branch,
-  `ilp_solver.cpp`): *"DECIDE optimization is unbounded. Prefix the query with DIAGNOSE
-  to see which decision needs a bound."* No variable is named, because naming it means
-  extracting and walking the ray — work the user did not ask for. The one sentence that
-  survives is the one that unblocks them.
+  `ilp_solver.cpp`): *"the DECIDE query is unbounded"*. No variable is named, because naming it means
+  extracting and walking the ray — work the user did not ask for. The message states the
+  outcome and stops: `DIAGNOSE` is the feature that proposes an edit.
 - **Under the prefix, no error at all.** The findings are the statement's answer, so the
   query returns rows rather than raising.
 - **No clause-blame caveat in the message.** The limit (a missing bound and a

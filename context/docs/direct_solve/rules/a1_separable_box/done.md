@@ -80,12 +80,12 @@ A query A1 does not apply to keeps its answer: it runs on the solver, and `requi
 - **Values within the solver's tolerance of an integer** (`INT x <= 1.9999999`). Direct solve reads every bound exactly,
   as in S1 (`../s1_uniform_matroid/done.md`); the solver accepts a violation of about 1e-6 and returns 2. The tests use values that are
   exact in a double, so they never sit in that band.
-- **Error wording.** An empty box on a row reads `DECIDE optimization is infeasible. Prefix the query with DIAGNOSE
-  ...` here. A bound that contradicts the built-in domain is left to the solver (see above), so its own message appears:
-  for a non-negative decision it quotes the clause as typed (`x < 0 cannot hold because x is non-negative`), and for a
-  `BOOL` too (`x >= 2 cannot hold for a BOOL variable.`). A NULL coefficient, target, weight or bound names the columns that are NULL
-  on the failing row, in the solver's text, and a NaN value reads as the solver's message; both are built by the
-  functions the solver calls (`decide_value_messages.hpp`).
+- **Error wording.** An empty box on a row reads `the DECIDE query is infeasible`, the text the solver path raises. A bound that contradicts the
+  built-in domain is left to the solver (see above), so its own message appears: `the constraint cannot hold: 'x' is
+  never negative` for a non-negative decision and `the constraint cannot hold: 'x' is a BOOL decision` for a `BOOL`,
+  with the caret on the clause. A NaN or infinite coefficient, target, weight or bound reads as the solver's message
+  (`'v' is NaN or infinite on some rows`), raised where the value stands; both are built by the functions the solver
+  calls (`decide_value_messages.hpp`).
 - **Its own warning.** The divisor is a decision's square factor `a`, which the turning point `-b / 2a` divides by; the
   rule is the framework's [Number-range warning](../../framework/done.md). `MINIMIZE SUM(1e-322 * POWER(x - 1/3, 2))`
   answers 0.35 and warns. At 1e-300 it answers 1/3 and is silent, where `off` warns and returns 0 (Gurobi) or
