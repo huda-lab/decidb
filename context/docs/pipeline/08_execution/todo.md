@@ -55,13 +55,3 @@ named-column scan also bypass or revisit parts of the normal tree execution; the
 - **Recommendation.** 1: the merge costs more code than its time saves.
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "descent or merge or thread"` passes; `tools/ab_bench.py`
   shows no workload moving beyond about 10%.
-
-## EXEC-25 — A failing coefficient is found at the first entry
-
-- **Problem.** A coefficient that fails on one row over 200,000 rows takes 4.6 s: `ComputeNode` evaluates every
-  entry up front, and `DecideEvaluateWindow` then reads the failing window row by row. Plain SQL fails in milliseconds.
-  The repro is `context/opa_rewrite/repro/failing_coefficient.sql`.
-- **Change.** Compute in windows and stop at the first window that fails (`errors.md` rule 4: which error is reported
-  is not owed).
-- **Done when.** The repro fails in time close to plain SQL's; `./test/decide/run_tests.sh -n 2 -k "nan or finite or
-  coefficient"` passes.
