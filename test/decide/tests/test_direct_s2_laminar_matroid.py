@@ -741,7 +741,7 @@ def test_s2_leaves_what_it_cannot_prove_to_the_solver(decidb_cli, name):
     sql = f"SELECT id, x FROM (FROM {source} DECIDE x(BOOL) SUCH THAT {DECLINED[name]} MAXIMIZE SUM(score*x)) q ORDER BY id"
     with pytest.raises(DeciDBCliError) as declined:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" in str(declined.value), declined.value
+    assert "decide_direct_solve is 'require'" in str(declined.value), declined.value
     assert _outcome(decidb_cli, sql, "auto") == _outcome(decidb_cli, sql, "off")
     assert _outcome(decidb_cli, sql, "off")[0] == "ok"
 
@@ -831,7 +831,7 @@ def test_s2_a_nan_cap_raises_the_solver_error_before_the_first_row_leaves(decidb
     for outer in (sql, f"SELECT id FROM ({sql}) q LIMIT 1", f"SELECT COUNT(*) FROM ({sql}) q"):
         with pytest.raises(DeciDBCliError) as direct_error:
             _run(decidb_cli, outer, "require")
-        assert "decide_direct_solve=require" not in str(direct_error.value), str(direct_error.value)
+        assert "decide_direct_solve is 'require'" not in str(direct_error.value), str(direct_error.value)
         if name in NAN_INPUT_OF_AN_AGGREGATE:
             # Two checks fail: the NaN the reducer reads and the NaN it gives. Error order is not owed, so either
             # message is the solver's; each is its own text, whichever check the thread meets first.

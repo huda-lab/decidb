@@ -191,7 +191,7 @@ _REFUSED_AT_PLANNING = [
 def test_near_misses_name_their_reason_and_keep_the_solver_plan(decidb_cli, fixture, case):
     sql = _near_miss_sql(fixture, case)
     required = _raw(decidb_cli, sql).stderr
-    assert "decide_direct_solve=require:" in required, (sql, required)
+    assert "decide_direct_solve is 'require'" in required, (sql, required)
     if fixture.rule == "S1_UNIFORM_MATROID" and case in _REFUSED_AT_PLANNING:
         # The rule declines (its reason above) and the solver plan refuses the bound at physical planning
         # (PhysicalDecide::CheckDecisionDomains), so EXPLAIN and the run raise one error, whichever way they are
@@ -199,7 +199,7 @@ def test_near_misses_name_their_reason_and_keep_the_solver_plan(decidb_cli, fixt
         messages = set()
         for mode in ("auto", "off"):
             for statement in (f"EXPLAIN {sql}", sql):
-                with pytest.raises(DeciDBCliError, match="cannot hold for a BOOL variable") as refused:
+                with pytest.raises(DeciDBCliError, match="is a BOOL decision") as refused:
                     decidb_cli.execute(f"SET decide_direct_solve='{mode}'; {statement}")
                 messages.add(str(refused.value))
         assert len(messages) == 1, messages
@@ -226,7 +226,7 @@ def test_plain_forms_of_the_near_misses_apply(decidb_cli, fixture, case):
     # itself.
     sql = _near_miss_sql(fixture, case)
     required = _raw(decidb_cli, sql)
-    assert "decide_direct_solve=require:" not in required.stderr, (sql, required.stderr)
+    assert "decide_direct_solve is 'require'" not in required.stderr, (sql, required.stderr)
     assert "Direct solve" not in required.stderr, (sql, required.stderr)
     plan = _raw(decidb_cli, f"EXPLAIN {sql}", mode="require")
     assert f"{fixture.rule}" in plan.stdout and not _has_decide_operator(plan.stdout), (sql, plan.stderr)
@@ -247,7 +247,7 @@ def test_off_and_a_forced_backend_keep_the_solver_path(request, decidb_cli, fixt
     assert _has_decide_operator(forced.stdout) and "Direct solve" not in forced.stdout
     rows, _ = _run(forced_cli, fixture.applies, mode="auto")
     assert rows == _run(decidb_cli, fixture.applies, mode="off")[0]
-    assert "conflicts with DECIDB_FORCE_SOLVER" in _raw(forced_cli, fixture.applies).stderr
+    assert "DECIDB_FORCE_SOLVER is set" in _raw(forced_cli, fixture.applies).stderr
 
 
 @pytest.mark.correctness

@@ -971,7 +971,7 @@ def test_upper_bound_below_zero_with_an_unkept_row_is_left_to_the_solve(request,
     cli = request.getfixturevalue(cli_fixture)
     sql = _LIFT_CASES["upper_below_zero_some_row_unkept"]().sql
     cli.assert_error_at(sql, kind="Invalid Input Error", word="infeasible")
-    assert "non-negative" not in cli.execute_raw(sql).stderr
+    assert "never negative" not in cli.execute_raw(sql).stderr
 
 
 @pytest.mark.var_integer
@@ -1016,9 +1016,11 @@ def test_diagnose_repairs_a_conditional_floor_as_it_repairs_an_unconditional_one
 @pytest.mark.when
 @pytest.mark.correctness
 def test_upper_bound_below_zero_beside_a_non_negative_conditional_floor_is_the_domain_error(decidb_cli):
-    """A floor of 0 or more under a `when` cannot make `x <= -2` feasible, so the early domain check still names it."""
-    error = decidb_cli.execute_raw(
+    """A floor of 0 or more under a `when` cannot make `x <= -2` feasible, so the early domain check still refuses it."""
+    decidb_cli.assert_error_at(
         "SELECT id, x FROM (VALUES (1, true), (2, true)) t(id, p) "
-        "DECIDE x(REAL) SUCH THAT x <= -2 AND when p: x >= 3 MINIMIZE SUM(x)"
-    ).stderr
-    assert "non-negative" in error, error
+        "DECIDE x(REAL) SUCH THAT x <= -2 AND when p: x >= 3 MINIMIZE SUM(x)",
+        kind="Invalid Input Error",
+        at="x <= -2",
+        word="'x' is never negative",
+    )

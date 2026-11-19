@@ -25,7 +25,7 @@ import time
 
 import pytest
 
-from decidb_cli import DeciDBCliError
+from decidb_cli import DeciDBCliError, assert_error_text
 from solver.types import ObjSense, SolverStatus, VarType
 
 from ._direct_oracle_common import without_gurobi
@@ -724,7 +724,7 @@ class TestQuadraticMaximize:
             rows, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
         except DeciDBCliError as e:
-            assert re.search(r"needs Gurobi", e.message)
+            assert re.search(r"is not supported on this installation", e.message)
             return
 
         data = duckdb_conn.execute(f"SELECT CAST(id AS BIGINT) FROM ({data_sql})").fetchall()
@@ -774,7 +774,7 @@ class TestQuadraticMaximize:
             rows, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
         except DeciDBCliError as e:
-            assert re.search(r"needs Gurobi", e.message)
+            assert re.search(r"is not supported on this installation", e.message)
             return
 
         data = duckdb_conn.execute(f"SELECT CAST(id AS BIGINT) FROM ({data_sql})").fetchall()
@@ -962,7 +962,7 @@ class TestQuadraticMaximize:
             decidb_time = time.perf_counter() - t0
         except DeciDBCliError as e:
             assert re.search(
-                r"not continuous.*needs Gurobi",
+                r"not REAL is not supported on this installation",
                 e.message,
                 re.IGNORECASE,
             )
@@ -1055,7 +1055,7 @@ class TestQuadraticErrors:
     """Queries rejected by the binder or physical operator."""
 
     def test_power_exponent_3_rejected(self, decidb_cli):
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
             WITH data AS (SELECT 1 AS id, 10.0 AS target)
             SELECT id, x FROM data
@@ -1063,7 +1063,9 @@ class TestQuadraticErrors:
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM(POWER(x - target, 3))
         """,
-            match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver",
+            kind="Not implemented Error",
+            at="POWER(x - target, 3)",
+            word="a term of degree 3 is not supported",
         )
 
     def test_product_of_different_vars_now_supported(self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
@@ -1080,7 +1082,7 @@ class TestQuadraticErrors:
             rows, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
         except DeciDBCliError as e:
-            assert re.search(r"needs Gurobi", e.message)
+            assert re.search(r"is not supported on this installation", e.message)
             return
 
         # Oracle: minimize x*y with both in [0,10].
@@ -1130,7 +1132,7 @@ class TestQuadraticErrors:
             rows, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
         except DeciDBCliError as e:
-            assert re.search(r"needs Gurobi", e.message)
+            assert re.search(r"is not supported on this installation", e.message)
             return
 
         t_build = time.perf_counter()
@@ -1165,7 +1167,7 @@ class TestQuadraticErrors:
         )
 
     def test_power_with_variable_exponent_rejected(self, decidb_cli):
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
             WITH data AS (SELECT 1 AS id, 10.0 AS target, 2 AS exp)
             SELECT id, x FROM data
@@ -1173,7 +1175,9 @@ class TestQuadraticErrors:
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM(POWER(x - target, exp))
         """,
-            match=r"POWER over a DECIDE variable needs an exponent that is a whole number",
+            kind="Not implemented Error",
+            at="POWER(x - target, exp)",
+            word="the exponent 'exp' of POWER over a decision is not a constant whole number",
         )
 
     def test_qp_two_quadratic_groups_answer(self, decidb_cli, oracle_solver):
@@ -1216,7 +1220,7 @@ class TestQuadraticErrors:
     def test_qp_self_product_of_power_rejected(self, decidb_cli):
         # POWER(x, 2) * POWER(x, 2) = x^4 — identical-children self-product with
         # a quadratic inner must be rejected, not silently reduced to x^2.
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
             WITH data AS (SELECT 1 AS id)
             SELECT id, ROUND(x, 4) AS x FROM data
@@ -1224,7 +1228,9 @@ class TestQuadraticErrors:
             SUCH THAT x >= 0 AND x <= 3
             MINIMIZE SUM(POWER(x - 1, 2) * POWER(x - 1, 2)) + SUM(-2 * x)
         """,
-            match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver",
+            kind="Not implemented Error",
+            at="POWER(x - 1, 2) * POWER(x - 1, 2)",
+            word="a term of degree 4 is not supported",
         )
 
 
@@ -2084,9 +2090,11 @@ class TestHighsRejection:
             SUCH THAT x >= 0 AND x <= 10
             MAXIMIZE SUM(POWER(x, 2))
         """
-        decidb_cli_highs.assert_error(
+        decidb_cli_highs.assert_error_at(
             sql,
-            match=r"MAXIMIZEs squared decision terms.*Gurobi",
+            kind="Not implemented Error",
+            at="SUM(POWER(x, 2))",
+            word="maximizing a squared decision is not supported on this installation",
         )
 
     def test_highs_miqp_rejected(self, decidb_cli_highs):
@@ -2101,9 +2109,11 @@ class TestHighsRejection:
             SUCH THAT x <= 10
             MINIMIZE SUM(POWER(x - target, 2))
         """
-        decidb_cli_highs.assert_error(
+        decidb_cli_highs.assert_error_at(
             sql,
-            match=r"squares decision variables that are not continuous.*Gurobi",
+            kind="Not implemented Error",
+            at="SUM(POWER(x - target, 2))",
+            word="squaring a decision that is not REAL is not supported on this installation",
         )
 
     def test_highs_quadratic_constraint_rejected(self, decidb_cli_highs):
@@ -2115,9 +2125,11 @@ class TestHighsRejection:
             SUCH THAT POWER(x, 2) <= 4
             MAXIMIZE SUM(x)
         """
-        decidb_cli_highs.assert_error(
+        decidb_cli_highs.assert_error_at(
             sql,
-            match=r"the SUCH THAT clause `POWER\(x, 2\) <= 4` squares or multiplies decision variables.*Gurobi",
+            kind="Not implemented Error",
+            at="POWER(x, 2) <= 4",
+            word="squaring or multiplying decisions in a constraint is not supported on this installation",
         )
 
     @pytest.mark.parametrize(
@@ -2128,7 +2140,7 @@ class TestHighsRejection:
         ],
     )
     def test_highs_refusal_quotes_the_quadratic_clause_not_the_linear_one(self, decidb_cli_highs, clause):
-        """The refusal names the clause that squares or multiplies decisions, as written, and passes the linear
+        """The refusal points at the clause that squares or multiplies decisions, and passes the linear
         clause that comes before it (the square and the product are the two kinds of quadratic row)."""
         sql = f"""
             SELECT x, y FROM (VALUES (1), (2)) t(id)
@@ -2136,45 +2148,57 @@ class TestHighsRejection:
             SUCH THAT SUM(x + y) <= 100 AND {clause}
             MAXIMIZE SUM(x + y)
         """
-        decidb_cli_highs.assert_error(sql, match=rf"the SUCH THAT clause `{re.escape(clause)}` squares or multiplies")
+        decidb_cli_highs.assert_error_at(
+            sql,
+            kind="Not implemented Error",
+            at=clause,
+            word="squaring or multiplying decisions in a constraint is not supported on this installation",
+        )
 
     def test_highs_refusal_blames_the_override_when_gurobi_is_installed(self, decidb_cli_highs):
-        """Gurobi is installed here and DECIDB_FORCE_SOLVER keeps it out, so the refusal names the override and does
-        not tell the user to install a solver the machine has."""
+        """Gurobi is installed here and DECIDB_FORCE_SOLVER keeps it out: the refusal is the one a host without
+        Gurobi gets, and it names neither the override nor a solver."""
         sql = """
             SELECT x FROM (VALUES (1), (2)) t(id)
             DECIDE x(REAL)
             SUCH THAT POWER(x, 2) <= 4
             MAXIMIZE SUM(x)
         """
-        decidb_cli_highs.assert_error(
+        decidb_cli_highs.assert_error_at(
             sql,
-            match=r"which needs Gurobi, and DECIDB_FORCE_SOLVER selects HiGHS\. "
-            r"Unset DECIDB_FORCE_SOLVER, or rewrite that constraint",
+            kind="Not implemented Error",
+            at="POWER(x, 2) <= 4",
+            word="squaring or multiplying decisions in a constraint is not supported on this installation",
         )
-        assert "not available" not in decidb_cli_highs.execute_raw(sql).stderr
+        stderr = decidb_cli_highs.execute_raw(sql).stderr
+        assert "DECIDB_FORCE_SOLVER" not in stderr and "Gurobi" not in stderr and "HiGHS" not in stderr, stderr
 
     def test_highs_refusal_asks_for_an_install_when_gurobi_is_missing(self, decidb_exe_path, tmp_path):
-        """With no Gurobi licence the override is not what keeps Gurobi out, so unsetting it would not help and the
-        refusal asks for an install."""
+        """With no Gurobi licence the refusal is the same text: it asks for nothing and names no solver."""
         sql = "SELECT x FROM (VALUES (1), (2)) t(id) DECIDE x(REAL) SUCH THAT POWER(x, 2) <= 4 MAXIMIZE SUM(x)"
         refused = without_gurobi(decidb_exe_path, tmp_path, {"DECIDB_FORCE_SOLVER": "highs"})(sql)
-        assert (
-            "which needs Gurobi — not available on this machine. Install Gurobi, or" in refused.stderr
-        ), refused.stderr
-        assert "DECIDB_FORCE_SOLVER selects" not in refused.stderr
+        assert_error_text(
+            refused.stderr,
+            kind="Not implemented Error",
+            at="POWER(x, 2) <= 4",
+            word="squaring or multiplying decisions in a constraint is not supported on this installation",
+        )
+        assert "Install" not in refused.stderr and "Gurobi" not in refused.stderr, refused.stderr
 
     def test_highs_refusal_quotes_the_clause_that_reads_a_helper(self, decidb_cli_highs):
         """`SUM(x * x)` is held by a helper decision whose defining row is quadratic. The row records the clause that
-        reads the helper, and the refusal quotes that clause as written."""
+        reads the helper, and the refusal points at that clause."""
         sql = """
             SELECT x FROM (VALUES (1), (2)) t(id)
             DECIDE x(REAL)
             SUCH THAT x <= 4 AND x <= 0.5 * SUM(x * x)
             MAXIMIZE SUM(x)
         """
-        decidb_cli_highs.assert_error(
-            sql, match=r"the SUCH THAT clause `x <= 0\.5 \* SUM\(x \* x\)` squares or multiplies decision variables"
+        decidb_cli_highs.assert_error_at(
+            sql,
+            kind="Not implemented Error",
+            at="x <= 0.5 * SUM(x * x)",
+            word="squaring or multiplying decisions in a constraint is not supported on this installation",
         )
 
     def test_highs_refusal_happens_before_any_row_is_read(self, decidb_cli_highs):
@@ -2195,7 +2219,12 @@ class TestHighsRejection:
         with tempfile.TemporaryDirectory() as tmp:
             dump_path = os.path.join(tmp, "model.dump")
             cli = decidb_cli_highs.with_env({"DECIDB_DUMP_MODEL": dump_path})
-            cli.assert_error(sql, match=r"SUCH THAT clause `POWER\(x, 2\) <= 4` squares")
+            cli.assert_error_at(
+                sql,
+                kind="Not implemented Error",
+                at="POWER(x, 2) <= 4",
+                word="squaring or multiplying decisions in a constraint is not supported on this installation",
+            )
             assert not os.path.exists(dump_path), "a plan-time refusal must not build a model, but a dump was written"
 
     def test_highs_coupled_quadratic_rejected(self, decidb_cli_highs):
@@ -2219,9 +2248,11 @@ class TestHighsRejection:
             SUCH THAT x >= 0 AND y >= 0 AND x <= 4 AND y <= 4
             MINIMIZE SUM(POWER(x + 2*y - 6, 2) - 3*x)
         """
-        decidb_cli_highs.assert_error(
+        decidb_cli_highs.assert_error_at(
             sql,
-            match=r"squares an expression containing more than one decision variable.*Gurobi",
+            kind="Not implemented Error",
+            at="SUM(POWER(x + 2*y - 6, 2) - 3*x)",
+            word="squaring an expression of more than one decision is not supported on this installation",
         )
 
     def test_highs_coupled_quadratic_refused_before_any_row_is_read(self, decidb_cli_highs):
@@ -2236,7 +2267,12 @@ class TestHighsRejection:
         with tempfile.TemporaryDirectory() as tmp:
             dump_path = os.path.join(tmp, "model.dump")
             cli = decidb_cli_highs.with_env({"DECIDB_DUMP_MODEL": dump_path})
-            cli.assert_error(sql, match=r"squares an expression containing more than one")
+            cli.assert_error_at(
+                sql,
+                kind="Not implemented Error",
+                at="SUM(POWER(x + 2*y - 6, 2) - 3*x)",
+                word="squaring an expression of more than one decision",
+            )
             assert not os.path.exists(dump_path), "a plan-time refusal must not build a model, but a dump was written"
 
     def test_gurobi_solves_what_highs_refuses(self, decidb_cli_gurobi, oracle_solver, perf_tracker):
@@ -2311,9 +2347,11 @@ class TestHighsRejection:
             SUCH THAT y <= 10 AND {clause}
             MINIMIZE SUM(POWER(y - q, 2))
         """
-        decidb_cli_highs.assert_error(
+        decidb_cli_highs.assert_error_at(
             sql,
-            match=r"squares decision variables that are not continuous.*Gurobi",
+            kind="Not implemented Error",
+            at="SUM(POWER(y - q, 2))",
+            word="squaring a decision that is not REAL is not supported on this installation",
         )
 
     def test_highs_solves_a_qp_beside_a_continuous_helper(self, decidb_cli_highs, oracle_solver):
@@ -2359,7 +2397,7 @@ def test_highs_qp_it_cannot_finish_is_an_ordinary_error(decidb_cli_highs):
     end strictly inside their bounds: here about half of 9,000 rows have a cap
     above the target of 5,000. ``HighsSession`` reports that ``kError`` as a
     failed solve (``deterministic_naive.cpp``), so the query raises
-    ``DECIDE optimization failed``, naming HiGHS, and the session survives. Direct solve is off,
+    ``the DECIDE query could not be solved``, and the session survives. Direct solve is off,
     or A1 would answer the query without HiGHS.
     """
     cli = decidb_cli_highs.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
@@ -2370,13 +2408,12 @@ def test_highs_qp_it_cannot_finish_is_an_ordinary_error(decidb_cli_highs):
             SUCH THAT x BETWEEN 0 AND cap
             MINIMIZE SUM(POWER(x - 5000, 2)))
     """
+    cli.assert_error_at(sql, kind="Invalid Input Error", word="the DECIDE query could not be solved")
     result = cli.execute_raw(sql)
     output = result.stderr + result.stdout
-    assert "DECIDE optimization failed" in output, output[:500]
     assert "INTERNAL" not in output, output[:500]
-    # The solver is named and quoted in its own words (HiGHS's model-status text), never by a status number.
-    assert "HiGHS could not solve this model (" in output, output[:500]
-    assert not re.search(r"\((?:solver status )?-?\d+\)", output), output[:500]
+    # No solver is named, and no status number appears.
+    assert "HiGHS" not in output and not re.search(r"\((?:solver status )?-?\d+\)", output), output[:500]
 
 
 # ---------------------------------------------------------------------------
@@ -2560,4 +2597,9 @@ def test_highs_square_of_opposite_forms_over_integers_is_a_miqp_refusal(decidb_c
         SUCH THAT x BETWEEN 0 AND 10
         MAXIMIZE SUM({_OPPOSITE_FORMS})
     """
-    decidb_cli_highs.assert_error(sql, match=r"squares decision variables that are not continuous.*Gurobi")
+    decidb_cli_highs.assert_error_at(
+        sql,
+        kind="Not implemented Error",
+        at=f"SUM({_OPPOSITE_FORMS})",
+        word="squaring a decision that is not REAL is not supported on this installation",
+    )

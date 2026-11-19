@@ -31,14 +31,14 @@ struct Condition final : DirectApplicabilityCondition {
 	//! The box is [0, inf), rather than (-inf, inf).
 	bool nonnegative = true;
 	//! The objective as a message names it: a number computed past a DOUBLE names it, as the solver path names one.
-	string objective_written;
+	DecideClauseRef objective_written;
 	//! The clause's scope.
 	DirectSharedScope scope;
 	//! The limit B of the sum of squares. B is a constant, or a limit read from the data, whose NULL skips the
 	//! instance.
 	DirectLimit limit;
 	//! The limit's clause as a message names it.
-	string limit_written;
+	DecideClauseRef limit_written;
 	//! The factor of a row's square, `q = weight * slope^2`: the coefficient `weight`, one positive constant, and the
 	//! slope `s` inside the square, a constant or a value of the row (`constant_slope` says which).
 	double weight = 1.0;

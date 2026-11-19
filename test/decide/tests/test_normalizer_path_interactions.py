@@ -43,7 +43,7 @@ def _expect_gurobi(func):
             return func(*args, **kwargs)
         except DeciDBCliError as e:
             assert re.search(
-                r"[Qq]uadratic|[Gg]urobi|McCormick|bilinear|non-convex", str(e)
+                r"is not supported on this installation", str(e)
             ), f"Unexpected error (expected QP/bilinear backend rejection): {e}"
 
     return wrapper

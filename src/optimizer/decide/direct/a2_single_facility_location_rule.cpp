@@ -37,7 +37,7 @@ struct PlanTools {
 	Binder &binder;
 	const vector<ColumnBinding> &source_bindings;
 	//! The objective as a message names it: a number computed past a DOUBLE names it, as the solver path names one.
-	const string &written;
+	const DecideClauseRef &written;
 };
 
 //! The hash aggregate over the rows of a class: an aggregate added to it holds the class's value on the class's one
@@ -381,8 +381,8 @@ struct Condition final : DirectApplicabilityCondition {
 	//! The bounds the plan evaluates per row: read from the data, or under a `when`. A class's interval is the box
 	//! tightened by the tightest end of each clause over the rows of the class.
 	vector<DirectBoundClause> clauses;
-	//! The objective as written, which a too-large message names (PlanTools::written).
-	string written;
+	//! The objective, which a too-large message points at (PlanTools::written).
+	DecideClauseRef written;
 	//! The decision's key, empty for a query-wide decision (one class). A row with a NULL in a `no_group` element is in
 	//! no class: it has no decision, and the front end already leaves it out of the objective's `kept` rows.
 	vector<DirectKeyElement> keys;

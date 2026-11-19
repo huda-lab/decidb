@@ -43,7 +43,7 @@ COLUMNS = (
     ("fv", "DOUBLE"),
 )
 UPPER = 100.0
-TWO_VALUES = "takes more than one value"
+TWO_VALUES = "takes two values"
 #: A reducer's own ``when``; one keeps no row.
 MEMBER_WHENS = (
     None,

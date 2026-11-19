@@ -604,8 +604,10 @@ void DecideTreeColumns::CheckPartition(const DecideFrameSpec &frame, idx_t node)
 		auto timeline = [&](idx_t anchor) {
 			return descent.Label(tree.nodes[node]->key, container.groups.Key(container.Slot(anchor)));
 		};
-		throw InvalidInputException(DecideFramePartitionMessage(
-		    frame, names, descent.Label(frame.partition_key, partition(earlier)), timeline(earlier), timeline(e)));
+		throw InvalidInputException(DecideFramePartitionMessage(frame, names,
+		                                                        descent.Label(frame.partition_key, partition(earlier)),
+		                                                        timeline(earlier), timeline(e)),
+		                            Exception::InitializeExtraInfo(frame.location));
 	}
 }
 
@@ -719,7 +721,8 @@ void DecideTreeColumns::CheckPositions(const vector<DecideFrameSpec> &frames) {
 			auto named = descent.Label(tree.nodes[node]->key, container.groups.Key(peers[peer].slot));
 			named.push_back(container.Order(timelines.named_by[position]));
 			const auto entries = timelines.first_entry[position + 1] - timelines.first_entry[position];
-			throw InvalidInputException(DecideAmbiguousPositionMessage(frames[f], entries, named));
+			throw InvalidInputException(DecideAmbiguousPositionMessage(frames[f], entries, named),
+			                            Exception::InitializeExtraInfo(frames[f].location));
 		}
 	}
 }

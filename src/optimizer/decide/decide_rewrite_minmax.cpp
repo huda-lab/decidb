@@ -206,7 +206,11 @@ static void WalkComposedLhs(ClientContext &context, LogicalDecide &decide, idx_t
 		return;
 	}
 	if (!found) {
-		throw BinderException("DECIDE: '%s' beside MIN or MAX is not supported yet", RenderDecideSource(e, names));
+		// The term as the user wrote it, not as a plan reprints it.
+		auto written_names = names;
+		written_names.written = true;
+		throw NotImplementedException(e, "'%s' beside MIN or MAX is not supported",
+		                              RenderDecideSource(e, written_names));
 	}
 	auto &agg = *found;
 
@@ -348,10 +352,11 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 	if (!exact_pin && cmp_type != ExpressionType::COMPARE_LESSTHAN &&
 	    cmp_type != ExpressionType::COMPARE_LESSTHANOREQUALTO && cmp_type != ExpressionType::COMPARE_GREATERTHAN &&
 	    cmp_type != ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-		// BETWEEN never reaches here — it is already a pair of directional
-		// comparisons by this point — so the message must not claim otherwise.
-		throw BinderException("Composed MIN/MAX in DECIDE v1 supports only the <, <=, =, >, >= and "
-		                      "BETWEEN comparisons.");
+		// BETWEEN never reaches here: it is already a pair of directional comparisons by this point.
+		throw NotImplementedException(
+		    comp,
+		    "'" + (cmp_type == ExpressionType::COMPARE_NOTEQUAL ? string("<>") : ExpressionTypeToOperator(cmp_type)) +
+		        "' on a composed MIN or MAX is not supported");
 	}
 
 	const ExtremumPush outer_push = ExtremumPushOf(cmp_type);
@@ -548,11 +553,8 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 	const bool is_hard = push != ExtremumPush::NONE && !is_easy;
 
 	if (cmp_type == ExpressionType::COMPARE_NOTEQUAL) {
-		// Name the clause as written: a `norm(e, 'inf')` reaches here lowered onto a MAX.
-		throw BinderException(
-		    "DECIDE does not support <> comparison with MIN/MAX aggregates (norm(e, 'inf') is a MAX "
-		    "of absolute values): %s",
-		    QuoteWrittenClause(decide.constraint_sources, SourceClauseOf(comp, decide), decide.source_text));
+		// A `norm(e, 'inf')` reaches here lowered onto a MAX.
+		throw NotImplementedException(comp, "<> on MIN or MAX is not supported");
 	}
 
 	// Re-attach the peeled factor to whatever form is emitted below. `scale * e` keeps

@@ -302,16 +302,10 @@ SolverBackend SelectSolverBackend() {
 	if (!force.empty()) {
 		SolverBackend forced = SolverRegistry::Find(force);
 		if (!forced.IsValid()) {
-			vector<string> names;
-			for (auto &backend : SolverRegistry::Backends()) {
-				names.emplace_back(backend.Name());
-			}
-			throw InvalidInputException("DECIDB_FORCE_SOLVER=%s is not a solver DeciDB knows. Valid names: %s", force,
-			                            StringUtil::Join(names, ", "));
+			throw InvalidInputException("DECIDB_FORCE_SOLVER names no solver: '%s'", force);
 		}
 		if (!forced.IsAvailable()) {
-			throw InvalidInputException("DECIDB_FORCE_SOLVER=%s but that solver is not available "
-			                            "on this host",
+			throw InvalidInputException("DECIDB_FORCE_SOLVER names a solver this installation does not have: '%s'",
 			                            forced.Name());
 		}
 		return forced;
@@ -535,25 +529,21 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 	return result;
 }
 
-void ThrowDecideSolveError(const SolverResult &result, SolverBackend backend) {
-	// A query with no DIAGNOSE prefix reports its state and stops. It does not name a
-	// clause and does not suggest a repair — working either out means running the
-	// diagnosis engines, which is exactly what the prefix asks for and what an
-	// unprefixed query must not be made to pay for. So: the state, and how to ask for
-	// more.
+void ThrowDecideSolveError(const SolverResult &result) {
+	// A query with no DIAGNOSE prefix states what happened and stops. It does not name a clause: working that out means
+	// running the diagnosis engines, which is exactly what the prefix asks for and what an unprefixed query must not
+	// be made to pay for.
 	switch (result.status) {
 	case SolverStatus::INFEASIBLE:
 		throw InvalidInputException(DecideInfeasibleMessage());
 	case SolverStatus::UNBOUNDED:
 		throw InvalidInputException(DecideUnboundedMessage());
 	case SolverStatus::INF_OR_UNBD:
-		throw InvalidInputException("DECIDE optimization is infeasible or unbounded. "
-		                            "Prefix the query with DIAGNOSE to see which clause to change.");
+		throw InvalidInputException(DecideInfeasibleOrUnboundedMessage());
 	case SolverStatus::TIME_LIMIT:
-		throw InvalidInputException(
-		    "DECIDE optimization hit the time limit. Simplify the constraints or reduce the input size.");
+		throw InvalidInputException(DecideTimeLimitMessage());
 	case SolverStatus::ITERATION_LIMIT:
-		throw InvalidInputException("DECIDE optimization hit the iteration limit. Simplify the constraints.");
+		throw InvalidInputException(DecideIterationLimitMessage());
 	case SolverStatus::OTHER:
 	case SolverStatus::OPTIMAL:
 	case SolverStatus::SUBOPTIMAL:
@@ -563,11 +553,8 @@ void ThrowDecideSolveError(const SolverResult &result, SolverBackend backend) {
 		// flags any future addition; control still reaches the throw below.)
 		break;
 	}
-	// No state to name: the solver stopped without an answer. Say which solver, in its own words when it has some,
-	// never by a status number the user cannot look up.
-	string reason = result.status_text.empty() ? string() : " (" + result.status_text + ")";
-	throw InvalidInputException("DECIDE optimization failed: %s could not solve this model%s.", backend.DisplayName(),
-	                            reason);
+	// No state to name: the solver stopped without an answer.
+	throw InvalidInputException("the DECIDE query could not be solved");
 }
 
 } // namespace duckdb

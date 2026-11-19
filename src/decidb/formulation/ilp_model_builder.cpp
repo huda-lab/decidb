@@ -14,7 +14,7 @@
 namespace duckdb {
 
 double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint, const vector<idx_t> *rows, idx_t begin,
-                                  idx_t end, const string &written) {
+                                  idx_t end, const DecideClauseRef &written) {
 	double offset = 0.0;
 	for (idx_t term_idx = 0; term_idx < constraint.variable_indices.size(); term_idx++) {
 		if (constraint.variable_indices[term_idx] != DConstants::INVALID_INDEX) {
@@ -29,16 +29,10 @@ double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint, const v
 	return offset;
 }
 
-string DecideWrittenClause(const vector<ConstraintSourceInfo> &sources, const DecideSourceText &text,
-                           const string &objective_written, idx_t source_clause_id) {
-	if (source_clause_id < sources.size()) {
-		return QuoteWrittenClause(sources, source_clause_id, text);
-	}
-	return objective_written;
-}
-
-string DecideWrittenClause(const SolverInput &input, idx_t source_clause_id) {
-	return DecideWrittenClause(input.constraint_sources, input.source_text, input.objective_written, source_clause_id);
+DecideClauseRef DecideWrittenClause(const SolverInput &input, idx_t source_clause_id) {
+	return source_clause_id < input.constraint_sources.size()
+	           ? DecideClauseRefOf(input.constraint_sources, input.source_text, source_clause_id)
+	           : input.objective_written;
 }
 
 static uint64_t PackQKey(int row, int col) {
@@ -52,7 +46,7 @@ struct FormRow {
 };
 
 static FormRow ReadFormRow(const vector<idx_t> &variables, const vector<CoefficientColumn> &columns, idx_t row,
-                           const VarIndexer &indexer, const string &written) {
+                           const VarIndexer &indexer, const DecideClauseRef &written) {
 	FormRow form;
 	// `variables` and `columns` are pushed together (DecideModelEmitter), and each column holds every data row.
 	for (idx_t t = 0; t < variables.size(); t++) {
@@ -78,7 +72,7 @@ static double &QEntry(std::unordered_map<uint64_t, double> &q, int a, int b) {
 //! once and an off-diagonal pair doubled; `2wc·a` to the linear part and `wc^2` to the constant.
 template <class ADD_LINEAR>
 static void AddSquareRow(const FormRow &form, double w, std::unordered_map<uint64_t, double> &q, ADD_LINEAR &add_linear,
-                         double &constant, const string &written) {
+                         double &constant, const DecideClauseRef &written) {
 	for (idx_t i = 0; i < form.terms.size(); i++) {
 		for (idx_t j = 0; j <= i; j++) {
 			double val = w * form.terms[i].second * form.terms[j].second;
@@ -100,7 +94,7 @@ static void AddSquareRow(const FormRow &form, double w, std::unordered_map<uint6
 //! it is; `wd·a + wc·b` to the linear part and `wcd` to the constant.
 template <class ADD_LINEAR>
 static void AddProductRow(const FormRow &left, const FormRow &right, double w, std::unordered_map<uint64_t, double> &q,
-                          ADD_LINEAR &add_linear, double &constant, const string &written) {
+                          ADD_LINEAR &add_linear, double &constant, const DecideClauseRef &written) {
 	for (auto &l : left.terms) {
 		for (auto &r : right.terms) {
 			AddCoefficient(QEntry(q, l.first, r.first), w * l.second * r.second, written);
@@ -124,7 +118,7 @@ static void AddProductRow(const FormRow &left, const FormRow &right, double w, s
 template <class ADD_LINEAR>
 static void AddProductGroupRow(const EvaluatedProductGroup &group, idx_t row, const VarIndexer &indexer,
                                std::unordered_map<uint64_t, double> &q, ADD_LINEAR &&add_linear, double &constant,
-                               const string &written) {
+                               const DecideClauseRef &written) {
 	double w = group.weight.Get(row);
 	if (w == 0.0) {
 		return;
@@ -417,7 +411,7 @@ static double ForEachClauseRowTerm(const EvaluatedConstraint &ec, const SolverIn
 }
 
 const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const SolverInput &input, const VarIndexer &indexer,
-                                     const string &written) {
+                                     const DecideClauseRef &written) {
 	auto &out = ec.emitted_rows;
 	if (!out.offsets.empty()) {
 		return out;
@@ -943,7 +937,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
 		bool is_aggregate = eval_const.lhs_is_aggregate;
 		bool has_groups = !eval_const.row_group_ids.empty();
-		const string written = DecideWrittenClause(input, eval_const.source_clause_id);
+		const auto written = DecideWrittenClause(input, eval_const.source_clause_id);
 
 		// A data-weighted aggregate's coefficient names, under DIAGNOSE: map each summed decide variable to its
 		// coefficient expression (`buy → l_extendedprice`) so infeasible diagnosis can render
@@ -1111,7 +1105,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 	// path's `lhs_offset`), for the stamp call. written: the clause, for a sum past a DOUBLE.
 	auto BuildQuadraticConstraint = [&](const EvaluatedConstraint &ec, const vector<idx_t> &row_set, double rhs,
 	                                    double &lhs_constant,
-	                                    const string &written) -> SolverModel::QuadraticConstraint {
+	                                    const DecideClauseRef &written) -> SolverModel::QuadraticConstraint {
 		SolverModel::QuadraticConstraint qc;
 		std::unordered_map<int, double> linear_accum;
 		std::unordered_map<uint64_t, double> q_accum;
@@ -1202,7 +1196,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
 		bool is_aggregate = eval_const.lhs_is_aggregate;
 		bool has_groups = !eval_const.row_group_ids.empty();
-		const string written = DecideWrittenClause(input, eval_const.source_clause_id);
+		const auto written = DecideWrittenClause(input, eval_const.source_clause_id);
 
 		if (is_aggregate) {
 			double rhs = eval_const.rhs_values.Get(0);
@@ -1323,8 +1317,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 	// Big-M DeciDB derived past a DOUBLE: the user's error names the clause it belongs to. A column belongs to the
 	// first row that reads it, else to the objective.
 	auto too_large = [&](idx_t source_clause_id) {
-		return InvalidInputException(
-		    DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, DecideWrittenClause(input, source_clause_id)));
+		return DecideTooLargeError(DecideWrittenClause(input, source_clause_id));
 	};
 	auto column_clause = [&](idx_t col) {
 		for (auto &constr : model.constraints) {
@@ -1426,7 +1419,7 @@ vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer, const 
 // SparseCoeffAccumulator
 //===----------------------------------------------------------------------===//
 
-void SparseCoeffAccumulator::BeginDense(idx_t total_vars, const string &written_p) {
+void SparseCoeffAccumulator::BeginDense(idx_t total_vars, const DecideClauseRef &written_p) {
 	written = &written_p;
 	use_dense = true;
 	if (dense.size() < total_vars) {
@@ -1437,7 +1430,7 @@ void SparseCoeffAccumulator::BeginDense(idx_t total_vars, const string &written_
 	pairs.clear();
 }
 
-void SparseCoeffAccumulator::BeginSparse(idx_t expected_size, const string &written_p) {
+void SparseCoeffAccumulator::BeginSparse(idx_t expected_size, const DecideClauseRef &written_p) {
 	written = &written_p;
 	use_dense = false;
 	pairs.clear();
@@ -1448,7 +1441,7 @@ void SparseCoeffAccumulator::BeginSparse(idx_t expected_size, const string &writ
 }
 
 void SparseCoeffAccumulator::BeginForDecisions(const VarIndexer &indexer, idx_t expected_size,
-                                               const string &written_p) {
+                                               const DecideClauseRef &written_p) {
 	constexpr idx_t DENSE_CAP = 1u << 20;
 	if (indexer.global_block_start <= DENSE_CAP) {
 		BeginDense(indexer.global_block_start, written_p);

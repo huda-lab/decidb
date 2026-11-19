@@ -192,12 +192,10 @@ DecideCanonicalizer::DecideCanonicalizer(ClientContext &context, idx_t decide_in
 DecideCanonicalizer::DecideCanonicalizer(ClientContext &context, idx_t decide_index,
                                          vector<DecideVarScopeInfo> variable_scopes_p,
                                          const vector<KeyedScopeInfo> &keyed_scopes_p, const vector<DecideKey> &keys_p,
-                                         const vector<bool> &is_boolean, unordered_set<idx_t> query_wide_table_indexes,
-                                         unordered_set<idx_t> correlated_subquery_table_indexes)
+                                         const vector<bool> &is_boolean, unordered_set<idx_t> query_wide_table_indexes)
     : context(context), decide_index(decide_index), variable_scopes(std::move(variable_scopes_p)),
       decision_keys(DecisionKeys(variable_scopes, keyed_scopes_p)),
-      query_wide_table_indexes(std::move(query_wide_table_indexes)),
-      correlated_subquery_table_indexes(std::move(correlated_subquery_table_indexes)), judge_column_refs(true),
+      query_wide_table_indexes(std::move(query_wide_table_indexes)), judge_column_refs(true),
       boolean_decisions(is_boolean), keyed_scopes(keyed_scopes_p), keys(keys_p) {
 }
 
@@ -569,15 +567,6 @@ static string UserFacingName(const Expression &expr) {
 	return name.empty() ? cur->ToString() : name;
 }
 
-bool DecideCanonicalizer::IsCorrelatedSubqueryRef(const Expression &expr) const {
-	const Expression *cur = StripCastsForIdentity(expr);
-	if (cur->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
-		return false;
-	}
-	auto idx = cur->Cast<BoundColumnRefExpression>().binding.table_index;
-	return correlated_subquery_table_indexes.find(idx) != correlated_subquery_table_indexes.end();
-}
-
 unique_ptr<Expression> DecideCanonicalizer::WithoutDecisionNegation(const Expression &factor, bool &negated) const {
 	auto &bare = *UnwrapDecideCasts(factor, decide_index);
 	if (bare.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
@@ -601,12 +590,33 @@ unique_ptr<Expression> DecideCanonicalizer::WithoutDecisionNegation(const Expres
 	return factor.Copy();
 }
 
+string DecideCanonicalizer::DecisionScalesReducerMessage(const Expression &factor, const Expression &positive,
+                                                         bool divides) const {
+	// A decision column says its type; a compound factor (`b - c`) is one expression over several. A BOOL decision
+	// scales a reducer on its own, so a BOOL one refused is on a reducer inside another expression.
+	auto &bare = *UnwrapDecideCasts(positive, decide_index);
+	string subject = "'" + Quote(factor) + "' reads a decision";
+	string object = "a reducer";
+	if (bare.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		auto column = bare.Cast<BoundColumnRefExpression>().binding.column_index;
+		const bool boolean = boolean_decisions[column];
+		subject = "'" + Quote(factor) + "' is " +
+		          (boolean                                   ? "a BOOL"
+		           : bare.return_type == LogicalType::DOUBLE ? "a REAL"
+		                                                     : "an INT") +
+		          " decision";
+		if (boolean && !divides) {
+			object = "a reducer inside another expression";
+		}
+	}
+	return subject + ", which cannot " + (divides ? "divide" : "scale") + " " + object;
+}
+
 const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_ptr<Expression> &out_scale,
                                                  bool &out_divides, bool &out_negated, Clause clause) const {
 	out_scale = nullptr;
 	out_divides = false;
 	out_negated = false;
-	const char *clause_name = clause == Clause::OBJECTIVE ? "DECIDE objective" : "DECIDE constraint";
 
 	// Only a DECISION-BEARING reducer is scaled here: a data-only reducer
 	// (`2 * AVG(price)` as a bound) is the RHS evaluator's business, and reaching into
@@ -661,7 +671,6 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 		// The single judgement. A reducer collapses many rows to one number, so anything
 		// multiplying it must also be one number. Each nesting level is judged
 		// separately, so the message names the factor the user actually has to fix.
-		const char *verb = factor_divides ? "divide" : "multiply";
 		if (ReferencesDecideVar(*factor)) {
 			// A constraint takes any data factor (a row-varying one is a tuple term, below), and a clause of
 			// either kind a Boolean decision on a bare reducer: the clause takes the VALUE shape, where the
@@ -673,11 +682,8 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 			    !factor_divides && IsBooleanFactor(*positive_factor) &&
 			    UnwrapDecideCasts(*term, decide_index)->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE;
 			if (!boolean_factor) {
-				throw BinderException(
-				    "%s: '%s' is a decision, so it cannot %s %s. %s", clause_name, Quote(*factor), verb, Quote(*term),
-				    clause == Clause::CONSTRAINT ? "Only data or a BOOL decision can scale SUM/AVG/MIN/MAX."
-				                                 : "Only constants, query-wide values or a BOOL decision can scale "
-				                                   "SUM/AVG/MIN/MAX.");
+				throw BinderException(*factor, "%s",
+				                      DecisionScalesReducerMessage(*factor, *positive_factor, factor_divides));
 			}
 			out_negated = out_negated != factor_negated;
 			without_negation.push_back(std::move(positive_factor));
@@ -691,20 +697,8 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 		// objective, produced once, refuses it.
 		bool row_varying_tuple_term = clause == Clause::CONSTRAINT;
 		if (!IsQueryWideConstant(*factor) && !row_varying_tuple_term) {
-			// A correlated subquery has no SQL identifier to quote -- flattening left it a
-			// column ref named "SUBQUERY" -- so name it for what the user wrote instead of
-			// echoing an internal name and suggesting `SUM(x * SUBQUERY)`, which is not
-			// something anyone can type.
-			if (IsCorrelatedSubqueryRef(*factor)) {
-				throw BinderException("%s: this subquery returns a different value for each row, "
-				                      "so it cannot %s %s. Move it inside the aggregate, e.g. "
-				                      "SUM(x %s (SELECT ...)).",
-				                      clause_name, verb, Quote(*term), factor_divides ? "/" : "*");
-			}
-			throw BinderException("%s: '%s' varies per row, so it cannot %s %s. "
-			                      "Move it inside the aggregate, e.g. SUM(x %s %s).",
-			                      clause_name, Quote(*factor), verb, Quote(*term), factor_divides ? "/" : "*",
-			                      Quote(*factor, factor_divides ? 21 : 20));
+			throw BinderException(*factor, "'%s' varies per row, which cannot scale a reducer in the objective",
+			                      Quote(*factor));
 		}
 
 		(factor_divides ? divisors : multipliers).push_back(factor);
@@ -1386,8 +1380,7 @@ string DecideCanonicalizer::Quote(const Expression &expr, int parent_precedence)
 }
 
 DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const BoundComparisonExpression &cmp,
-                                                                     idx_t data_key, idx_t &group_key,
-                                                                     string &refusal) const {
+                                                                     idx_t data_key, idx_t &group_key) const {
 	group_key = DConstants::INVALID_INDEX;
 	vector<Atom> lhs_atoms;
 	Decompose(*cmp.left, 1, lhs_atoms, Clause::CONSTRAINT);
@@ -1461,8 +1454,6 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 		value = true;
 	}
 	if (cmp.type == ExpressionType::COMPARE_NOTEQUAL && has_avg && !only_plain_avgs) {
-		refusal = "DECIDE: AVG in a <> constraint is not supported yet beside another term or with its own when "
-		          "or per";
 		return ScopedShape::UNSUPPORTED;
 	}
 	// A MIN or MAX beside another term, or under a factor of unknown sign, takes the
@@ -1500,7 +1491,8 @@ CanonicalConstraintClass DecideCanonicalizer::ClassifyCanonicalComparison(const 
 	return ContainsDecisionReducer(*cmp.left) ? CanonicalConstraintClass::AGGREGATE : CanonicalConstraintClass::PER_ROW;
 }
 
-void DecideCanonicalizer::ValidateCanonicalComparison(const BoundComparisonExpression &comparison) const {
+void DecideCanonicalizer::ValidateCanonicalComparison(const BoundComparisonExpression &comparison,
+                                                      const vector<ConstraintSourceInfo> *sources) const {
 	if (ClassifyCanonicalComparison(comparison) == CanonicalConstraintClass::INVALID) {
 		throw InternalException("DECIDE canonicalizer: a decision survived on the bound side of '%s'",
 		                        comparison.ToString());
@@ -1511,16 +1503,23 @@ void DecideCanonicalizer::ValidateCanonicalComparison(const BoundComparisonExpre
 	if (comparison.right->IsFoldable()) {
 		Value value;
 		if (ExpressionExecutor::TryEvaluateScalar(context, *comparison.right, value) && value.IsNull()) {
-			throw BinderException(
-			    "DECIDE constraint bound evaluates to NULL. Use COALESCE(...) to provide a numeric bound.");
+			// The bound as the user wrote it where canonicalization left it, else the clause's span.
+			auto &bound = *comparison.right;
+			idx_t source_id = DConstants::INVALID_INDEX;
+			TryParseSourceClauseTag(comparison.GetAlias(), source_id);
+			auto place = bound.GetQueryLocation().IsValid() ? bound.GetQueryLocation()
+			             : sources                          ? DecideClauseLocation(*sources, source_id)
+			                                                : optional_idx();
+			throw BinderException(place, "the bound '%s' is NULL", Quote(bound));
 		}
 	}
 }
 
-void DecideCanonicalizer::ValidateCanonicalTree(const Expression &constraints) const {
+void DecideCanonicalizer::ValidateCanonicalTree(const Expression &constraints,
+                                                const vector<ConstraintSourceInfo> *sources) const {
 	auto validate = [&](const Expression &expression) {
 		if (expression.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-			ValidateCanonicalComparison(expression.Cast<BoundComparisonExpression>());
+			ValidateCanonicalComparison(expression.Cast<BoundComparisonExpression>(), sources);
 		}
 		return true;
 	};
@@ -1718,11 +1717,12 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTreeInternal(const Expre
 		// reducers, and one in the VALUE shape VALUE_REWRITE_TAG (ClassifyCanonicalComparison reads the stamp).
 		if (!ReferencesDecideVar(*result->Cast<BoundComparisonExpression>().right)) {
 			idx_t group_key;
-			string refusal;
 			auto shape = ClassifyScoped(result->Cast<BoundComparisonExpression>(),
-			                            scope.per_wrapper ? scope.PerKey() : DECIDE_ROW_KEY, group_key, refusal);
+			                            scope.per_wrapper ? scope.PerKey() : DECIDE_ROW_KEY, group_key);
 			if (shape == ScopedShape::UNSUPPORTED) {
-				throw BinderException(refusal);
+				throw NotImplementedException(
+				    *result, "AVG in a <> constraint beside another term, or with its own when or per, "
+				             "is not supported");
 			}
 			idx_t stamped;
 			if (shape == ScopedShape::AGGREGATE && group_key != DConstants::INVALID_INDEX &&
@@ -1777,7 +1777,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTree(const Expression &c
 	auto desugared = DesugarNorms(constraints);
 	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : constraints);
 	auto result = CanonicalizeTreeInternal(*written);
-	ValidateCanonicalTree(*result);
+	ValidateCanonicalTree(*result, sources);
 	if (sources) {
 		ReportChangedClauses(constraints, *result, *sources);
 	}
@@ -2113,8 +2113,8 @@ void DecideCanonicalizer::PlaceFramesIn(const Expression &expr, const DecideRedu
 			return;
 		}
 		frame.partition_key = class_key;
-		frame.partition_subject = per->text + " does not determine the timeline " +
-		                          StringUtil::Join(frame.timeline_names, ", ") + " of " + frame.text;
+		frame.partition_subject =
+		    per->text + " does not determine the timeline " + StringUtil::Join(frame.timeline_names, ", ");
 		return;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {

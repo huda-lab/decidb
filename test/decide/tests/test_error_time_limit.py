@@ -4,7 +4,7 @@ These verify the contract around DECIDB_TIME_LIMIT, the env-var knob that
 caps Gurobi solve time:
 
   - When set to a small value, a pathologically hard MIQP hits the limit
-    and the friendly "hit the time limit" message surfaces (rather than
+    and the time limit error surfaces (rather than
     the generic Gurobi-status fallback or a SIGKILL from the test harness).
   - When unset, the 300s default applies and normal queries finish without
     interference.
@@ -154,7 +154,7 @@ class TestTimeLimit:
     """DECIDB_TIME_LIMIT env-var contract."""
 
     def test_env_var_surfaces_friendly_error(self, decidb_cli_gurobi):
-        """Short DECIDB_TIME_LIMIT must surface the friendly TIME_LIMIT message.
+        """Short DECIDB_TIME_LIMIT must surface the TIME_LIMIT error.
 
         Primary regression test for the bug: hardcoded 300s used to clobber
         any user-supplied limit, so a 1s ceiling could not fire and the
@@ -169,8 +169,8 @@ class TestTimeLimit:
             subprocess_timeout=15,
         )
         combined = result.stderr + result.stdout
-        assert re.search(r"(?i)hit the time limit", combined), (
-            f"Expected 'hit the time limit' message but got:\n"
+        assert re.search(r"Invalid Input Error: the DECIDE query reached the time limit", combined), (
+            f"Expected the time limit error but got:\n"
             f"  stdout: {result.stdout[:400]}\n"
             f"  stderr: {result.stderr[:400]}"
         )
@@ -189,7 +189,7 @@ class TestTimeLimit:
             subprocess_timeout=10,
         )
         combined = result.stderr + result.stdout
-        assert not re.search(r"(?i)hit the time limit", combined), (
+        assert not re.search(r"Invalid Input Error: the DECIDE query reached the time limit", combined), (
             f"Cheap query unexpectedly hit a time limit:\n"
             f"  stdout: {result.stdout[:400]}\n"
             f"  stderr: {result.stderr[:400]}"
@@ -208,8 +208,8 @@ class TestTimeLimit:
         """
         result = _run_decidb(decidb_cli_highs, _CLIQUE_PARTITION_SQL, time_limit=1, subprocess_timeout=15)
         combined = result.stderr + result.stdout
-        assert re.search(r"(?i)hit the time limit", combined), (
-            f"Expected 'hit the time limit' message but got:\n"
+        assert re.search(r"Invalid Input Error: the DECIDE query reached the time limit", combined), (
+            f"Expected the time limit error but got:\n"
             f"  stdout: {result.stdout[:400]}\n"
             f"  stderr: {result.stderr[:400]}"
         )
@@ -235,8 +235,8 @@ class TestTimeLimit:
         """
         result = _run_decidb(decidb_cli_highs, _SYMMETRY_PATH_SQL, time_limit=1.5, subprocess_timeout=5)
         combined = result.stderr + result.stdout
-        assert re.search(r"(?i)hit the time limit", combined), (
-            f"Expected 'hit the time limit' message but got:\n"
+        assert re.search(r"Invalid Input Error: the DECIDE query reached the time limit", combined), (
+            f"Expected the time limit error but got:\n"
             f"  stdout: {result.stdout[:400]}\n"
             f"  stderr: {result.stderr[:400]}"
         )
@@ -250,8 +250,8 @@ class TestTimeLimit:
         """
         result = _run_decidb(decidb_cli_highs, _DOMINATED_COLUMNS_SQL, time_limit=1, subprocess_timeout=5)
         combined = result.stderr + result.stdout
-        assert re.search(r"(?i)hit the time limit", combined), (
-            f"Expected 'hit the time limit' message but got:\n"
+        assert re.search(r"Invalid Input Error: the DECIDE query reached the time limit", combined), (
+            f"Expected the time limit error but got:\n"
             f"  stdout: {result.stdout[:400]}\n"
             f"  stderr: {result.stderr[:400]}"
         )
@@ -265,8 +265,8 @@ class TestTimeLimit:
         """
         result = _run_decidb(decidb_cli_highs, _CLIQUE_EXTRACTION_SQL, time_limit=1, subprocess_timeout=5)
         combined = result.stderr + result.stdout
-        assert re.search(r"(?i)hit the time limit", combined), (
-            f"Expected 'hit the time limit' message but got:\n"
+        assert re.search(r"Invalid Input Error: the DECIDE query reached the time limit", combined), (
+            f"Expected the time limit error but got:\n"
             f"  stdout: {result.stdout[:400]}\n"
             f"  stderr: {result.stderr[:400]}"
         )
@@ -282,8 +282,8 @@ class TestTimeLimit:
         """
         result = _run_decidb(decidb_cli_highs, _PARALLEL_COLUMNS_SQL, time_limit=1, subprocess_timeout=5)
         combined = result.stderr + result.stdout
-        assert re.search(r"(?i)hit the time limit", combined), (
-            f"Expected 'hit the time limit' message but got:\n"
+        assert re.search(r"Invalid Input Error: the DECIDE query reached the time limit", combined), (
+            f"Expected the time limit error but got:\n"
             f"  stdout: {result.stdout[:400]}\n"
             f"  stderr: {result.stderr[:400]}"
         )
@@ -297,8 +297,8 @@ class TestTimeLimit:
         """
         result = _run_decidb(decidb_cli_highs, _PARALLEL_ROWS_SQL, time_limit=1, subprocess_timeout=5)
         combined = result.stderr + result.stdout
-        assert re.search(r"(?i)hit the time limit", combined), (
-            f"Expected 'hit the time limit' message but got:\n"
+        assert re.search(r"Invalid Input Error: the DECIDE query reached the time limit", combined), (
+            f"Expected the time limit error but got:\n"
             f"  stdout: {result.stdout[:400]}\n"
             f"  stderr: {result.stderr[:400]}"
         )
@@ -354,7 +354,7 @@ class TestTimeLimit:
             subprocess_timeout=10,
         )
         combined = result.stderr + result.stdout
-        assert not re.search(r"(?i)hit the time limit", combined), (
+        assert not re.search(r"Invalid Input Error: the DECIDE query reached the time limit", combined), (
             f"Garbage env-var value {garbage!r} unexpectedly triggered a "
             f"time limit:\n"
             f"  stdout: {result.stdout[:400]}\n"
@@ -380,7 +380,7 @@ class TestTimeLimit:
             subprocess_timeout=10,
         )
         combined = result.stderr + result.stdout
-        assert re.search(r"(?i)hit the time limit", combined), (
+        assert re.search(r"Invalid Input Error: the DECIDE query reached the time limit", combined), (
             f"DECIDB_TIME_LIMIT=0.5 did not fire on pathological MIQP:\n"
             f"  stdout: {result.stdout[:400]}\n"
             f"  stderr: {result.stderr[:400]}"

@@ -211,7 +211,6 @@ public:
 		bool checked = false;
 		DecideBoundBox box;
 		bool is_bool = false;
-		bool is_aux = false;
 		string name;
 	};
 	//! One per decision, filled by CheckDecisionDomains. The run-time check of a per-row bound reads it

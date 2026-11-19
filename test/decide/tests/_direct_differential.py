@@ -16,7 +16,7 @@ from decidb_cli import DeciDBCliError
 # (pattern, class). The first match wins; anything unmatched compares by text.
 ERROR_CLASSES = [
     (r"(?i)parser error|syntax error", "parser"),
-    (r"decide_direct_solve=require", "direct_not_applied"),
+    (r"decide_direct_solve is 'require'", "direct_not_applied"),
     (r"takes two values", "equality_varies"),
     (r"(?i)infeasible", "infeasible"),
     # A NaN bound reads "the bound v is NaN on some rows" on both paths.
@@ -25,7 +25,7 @@ ERROR_CLASSES = [
     (r"(?i)is NaN or infinite on some rows", "invalid_value"),
     (r"(?i)is unbounded", "unbounded"),
     # An INT answer beyond what a double holds exactly. The solver names the variable; direct solve cannot.
-    (r"(?i)beyond the range", "int_range"),
+    (r"(?i)past 2\^53", "int_range"),
 ]
 
 

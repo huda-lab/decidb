@@ -116,7 +116,7 @@ def test_grid_cell(decidb_cli, scope_solver, declaration, front, body, agg, inne
     expected = model.solve_scoped(scope_solver, clauses, MAXIMIZE_X)
     result = decidb_cli.execute_raw(sql)
     assert_no_internal_leak(result, f"grid cell {front}{sql_of(agg, inner)}")
-    assert "not supported yet" not in result.stderr, f"items 3 to 5 handle every cell; got:\n{result.stderr}"
+    assert "is not supported" not in result.stderr, f"items 3 to 5 handle every cell; got:\n{result.stderr}"
     assert result.returncode == 0 and not result.stderr.strip(), result.stderr
     rows = aligned(answer(decidb_cli, sql), model, "id")
     assert model.judge_scoped(rows, clauses, MAXIMIZE_X) == pytest.approx(expected, abs=1e-4)

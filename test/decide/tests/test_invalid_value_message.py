@@ -6,8 +6,8 @@ A coefficient must be finite; a bound may be infinite and must not be NaN; a con
 one coefficient, a coefficient under a factor) stands where the text it replaces stands (`DecideReplaces`), so the
 error points there. A test of one checks the kind and where the caret lands (`assert_error_at`), not the wording, which
 `DecideInvalidValueMessage` (`decide_value_messages.hpp`) owns. A NULL value is skipped, not refused. A number the
-model computes across rows (a sum over rows, a square) that is too large for a DOUBLE names its clause or the
-objective and asks to scale its data.
+model computes across rows (a sum over rows, a square) that is too large for a DOUBLE points at its clause or the
+objective.
 """
 
 import pytest
@@ -33,9 +33,9 @@ def _stderr(cli, sql, mode):
     return cli.execute_raw(f"SET decide_direct_solve='{mode}'; {sql}").stderr
 
 
-def _points_at(cli, sql, mode, at):
+def _points_at(cli, sql, mode, at, word=None):
     """`sql` under `mode` fails with an Invalid Input Error whose caret stands inside `at`, the value as written."""
-    cli.assert_error_at(f"SET decide_direct_solve='{mode}'; {sql}", kind=INVALID_INPUT, at=at)
+    cli.assert_error_at(f"SET decide_direct_solve='{mode}'; {sql}", kind=INVALID_INPUT, at=at, word=word)
 
 
 # A forced backend (`decidb_cli_gurobi`, `decidb_cli_highs`) keeps the solver path whatever the mode says
@@ -145,38 +145,38 @@ def test_a_coefficient_that_is_not_finite_is_named_as_written_on_both_paths(deci
     assert direct == solver
 
 
-def _too_large(written):
-    return f"DECIDE: {written} computes a number too large for a DOUBLE. Scale its data down."
-
-
 class At(str):
     """The expression of the query an error points at (`_points_at`), where a case expects the error of a value that is
     not finite rather than a clause named as too large."""
 
 
+class TooLarge(str):
+    """The clause, or the objective, a sum or square past a DOUBLE belongs to: the error points at it (`_refused`)."""
+
+
 def _refused(cli, sql, mode, expected):
-    """`sql` fails as `expected` says: pointing at an `At` expression, or naming the clause a sum past a DOUBLE
-    belongs to."""
+    """`sql` fails as `expected` says: pointing at an `At` expression, or at the clause (the objective) a sum past a
+    DOUBLE belongs to, a `TooLarge` or a plain string."""
     if isinstance(expected, At):
         _points_at(cli, sql, mode, str(expected))
     else:
-        assert _too_large(expected) in _stderr(cli, sql, mode)
+        _points_at(cli, sql, mode, str(expected), "computes a number too large for a DOUBLE")
 
 
 # Values each finite whose sum or square is not, on the middle row. Both paths print one text.
 DIRECT_OVERFLOW = [
-    # The squared coefficient of a decision, `b * b`, is beyond a double. No value of a row is, so the message names
-    # the objective and asks to scale its data.
+    # The squared coefficient of a decision, `b * b`, is beyond a double. No value of a row is, so the error points at
+    # the objective.
     (
         "a1_square_overflows",
         "x(REAL) SUCH THAT x <= 5 MINIMIZE SUM(POWER(b * x, 2))",
-        _too_large("MINIMIZE SUM(POWER(b * x, 2))"),
+        TooLarge("SUM(POWER(b * x, 2))"),
         "1e200",
     ),
     (
         "a1_square_and_linear_overflow",
         "x(REAL) SUCH THAT x <= 5 MINIMIZE SUM(POWER(b * x, 2) + a * x)",
-        _too_large("MINIMIZE SUM(POWER(b * x, 2) + a * x)"),
+        TooLarge("SUM(POWER(b * x, 2) + a * x)"),
         "1e200",
     ),
     # Like terms on one row merge into that row's coefficient, `b + b`, which stands where their sum is written. Each
@@ -201,10 +201,7 @@ DIRECT_OVERFLOW = [
 def test_a_sum_the_plan_computes_that_overflows_is_named_as_written(decidb_cli, name, decide, message, big):
     direct = _stderr(decidb_cli, _query(decide, big), "require")
     solver = _stderr(decidb_cli, _query(decide, big), "off")
-    if isinstance(message, At):
-        _points_at(decidb_cli, _query(decide, big), "require", str(message))
-    else:
-        assert message in direct, direct
+    _refused(decidb_cli, _query(decide, big), "require", message)
     assert direct == solver
 
 
@@ -278,13 +275,13 @@ TOO_LARGE = [
     (
         "objective_on_a_query_wide_decision",
         "x(REAL), per (): y(REAL) SUCH THAT x <= 5 AND y <= 5 MAXIMIZE SUM(a * x + b * y)",
-        "MAXIMIZE SUM(a * x + b * y)",
+        "SUM(a * x + b * y)",
         "1e308",
     ),
     (
         "square_in_the_objective",
         "x(REAL) SUCH THAT x <= 5 MINIMIZE SUM(POWER(b * x, 2))",
-        "MINIMIZE SUM(POWER(b * x, 2))",
+        "SUM(POWER(b * x, 2))",
         "1e200",
     ),
     (
@@ -309,7 +306,7 @@ TOO_LARGE = [
     (
         "member_of_an_extremum_in_the_objective",
         "x(REAL) SUCH THAT x <= 5 MINIMIZE SUM(x) + MAX(x + b + b)",
-        "MINIMIZE SUM(x) + MAX(x + b + b)",
+        "SUM(x) + MAX(x + b + b)",
         "1e308",
     ),
     # The data of an ABS' argument, `-b - b`, is not finite though each `b` is: raised where the ABS is read, naming the
@@ -338,7 +335,7 @@ TOO_LARGE = [
     (
         "group_sums_of_a_nested_objective",
         "x(REAL), per (): y(REAL) SUCH THAT x <= 5 AND y <= 1 MINIMIZE max(per g: sum(b * y) by (g))",
-        "MINIMIZE max(per g: sum(b * y) by (g))",
+        "max(per g: sum(b * y) by (g))",
         "1e308",
     ),
 ]
@@ -361,7 +358,7 @@ TREE_WRITTEN = [
         "composed_extremum_under_a_when",
         "x(REAL), per (): y(REAL) SUCH THAT x <= 5 AND y <= 1 AND when a > 0: SUM(b * y) + MAX(x) <= 10 "
         "MAXIMIZE SUM(a * x)",
-        "when a > 0: SUM(b * y) + MAX(x) <= 10",
+        "SUM(b * y) + MAX(x) <= 10",
         "1e308",
     ),
     (
@@ -384,8 +381,7 @@ def test_the_tree_names_a_root_as_flat_names_its_row(decidb_cli, name, decide, w
 def test_a_square_past_a_double_in_a_constraint_names_its_clause(decidb_cli_gurobi, mode):
     # Gurobi only: HiGHS refuses a quadratic constraint when the query is planned, whatever its numbers.
     decide = "x(REAL) SUCH THAT x <= 5 AND SUM(POWER(b * x, 2)) <= 10 MAXIMIZE SUM(a * x)"
-    stderr = _stderr(decidb_cli_gurobi, _big_query(decide, "1e200"), mode)
-    assert _too_large("SUM(POWER(b * x, 2)) <= 10") in stderr
+    _refused(decidb_cli_gurobi, _big_query(decide, "1e200"), mode, TooLarge("SUM(POWER(b * x, 2)) <= 10"))
 
 
 def _huge_query(decide):
@@ -408,19 +404,19 @@ DERIVED_TOO_LARGE = [
     (
         "reach_of_an_extremum_in_the_objective",
         "y(REAL) SUCH THAT y <= 5 MINIMIZE MAX(b * y)",
-        "MINIMIZE MAX(b * y)",
+        "MAX(b * y)",
     ),
     # A helper decision's reach (the two-level form's group sums) overflows at one end of its box, which stays open
     # there: refused where the helper is defined (RefuseOverflowedReach), each end on its own.
     (
         "reach_of_a_group_sum_extremum",
         "y(REAL) SUCH THAT y <= 5 MINIMIZE MAX(per id: SUM(b * y) BY (id))",
-        "MINIMIZE MAX(per id: SUM(b * y) BY (id))",
+        "MAX(per id: SUM(b * y) BY (id))",
     ),
     (
         "floor_of_a_group_sum_extremum",
         "y(REAL) SUCH THAT y >= -5 AND y <= 0 MINIMIZE MAX(per id: SUM(b * y) BY (id))",
-        "MINIMIZE MAX(per id: SUM(b * y) BY (id))",
+        "MAX(per id: SUM(b * y) BY (id))",
     ),
     # Members of either sign near the limit: the span of the MIN/MAX link is no Big-M (EmitExtremumLink).
     ("span_of_an_extremum", "y(REAL) SUCH THAT y <= 5 AND MAX(y + c) >= 0 MAXIMIZE SUM(y)", "MAX(y + c) >= 0"),
@@ -467,7 +463,7 @@ DERIVED_TOO_LARGE = [
     (
         "reciprocal_on_an_extremum_in_the_objective",
         "y(REAL) SUCH THAT y <= 5 MINIMIZE MAX(y) / (SELECT 1e-310)",
-        "MINIMIZE MAX(y) / (SELECT 1e-310)",
+        "MAX(y) / (SELECT 1e-310)",
     ),
 ]
 
@@ -516,8 +512,7 @@ def test_a_helper_reach_past_a_double_is_not_refused_where_a_clause_bounds_it(de
 @pytest.mark.parametrize("mode", ["off"])
 def test_a_helper_big_m_past_a_double_names_the_clause_as_written(decidb_cli_highs, mode):
     decide = "y(REAL) SUCH THAT y <= 5 AND MAX(per id: SUM(y + c) BY (id)) >= 0 MAXIMIZE SUM(y)"
-    stderr = _stderr(decidb_cli_highs, _huge_query(decide), mode)
-    assert _too_large("MAX(per id: SUM(y + c) BY (id)) >= 0") in stderr, stderr
+    _refused(decidb_cli_highs, _huge_query(decide), mode, TooLarge("MAX(per id: SUM(y + c) BY (id)) >= 0"))
 
 
 # A helper decision (the two-level form's group sum or extremum) is defined where its first reader reads it, and a sum
@@ -581,8 +576,13 @@ def test_a_helper_sum_past_a_double_names_the_clause_as_written(request, mode, n
 @pytest.mark.error
 @pytest.mark.parametrize("mode", ["off"])
 def test_a_big_m_over_an_open_decision_still_asks_for_its_bound(decidb_cli_highs, mode):
-    stderr = _stderr(decidb_cli_highs, _huge_query("y(REAL) SUCH THAT MAX(b * y) >= 1 MINIMIZE SUM(y)"), mode)
-    assert "Rewriting MIN/MAX requires a finite bound on 'y'." in stderr, stderr
+    _points_at(
+        decidb_cli_highs,
+        _huge_query("y(REAL) SUCH THAT MAX(b * y) >= 1 MINIMIZE SUM(y)"),
+        mode,
+        "MAX(b * y) >= 1",
+        "'y' has no finite bound, which MIN or MAX needs",
+    )
 
 
 @pytest.mark.error
@@ -606,7 +606,7 @@ R1_TOO_LARGE = [
 @pytest.mark.parametrize("mode", ["require"])
 @pytest.mark.parametrize("name,decide,written", R1_TOO_LARGE, ids=[case[0] for case in R1_TOO_LARGE])
 def test_a_number_the_knapsack_plan_computes_past_a_double_names_the_budget(decidb_cli, mode, name, decide, written):
-    assert _too_large(written) in _stderr(decidb_cli, _huge_query(decide), mode)
+    _refused(decidb_cli, _huge_query(decide), mode, TooLarge(written))
 
 
 def _derived_query(decide, outcome):
@@ -751,13 +751,13 @@ SQUARES = [
         "a1_square_of_like_terms",
         "y(REAL) SUCH THAT y <= 5 MINIMIZE SUM(POWER(b * y + b * y, 2))",
         "b * y + b * y",
-        "MINIMIZE SUM(POWER(b * y + b * y, 2))",
+        "SUM(POWER(b * y + b * y, 2))",
     ),
     (
         "a1_square_of_constants",
         "y(REAL) SUCH THAT y <= 5 MINIMIZE SUM(POWER(y - b - b, 2))",
         "y - b - b",
-        "MINIMIZE SUM(POWER(y - b - b, 2))",
+        "SUM(POWER(y - b - b, 2))",
     ),
 ]
 
@@ -772,7 +772,7 @@ def test_a_square_of_a_sum_names_where_each_path_reads_it(
     _points_at(decidb_cli, sql, "require", direct_at)
     for cli in (decidb_cli_gurobi, decidb_cli_highs):
         if outcome == "too_large":
-            assert _too_large(clause) in _stderr(cli, sql, "off")
+            _refused(cli, sql, "off", TooLarge(clause))
         else:
             _points_at(cli, sql, "off", "b")
 
@@ -797,8 +797,13 @@ def test_a_model_of_finite_huge_numbers_keeps_the_solvers_verdict(decidb_cli_gur
     sql = f"SET decide_direct_solve='{mode}'; {_huge_query('y(REAL) SUCH THAT y <= 5 MINIMIZE SUM(ABS(b * y))')}"
     answered = decidb_cli_gurobi.execute_raw(sql, expect_number_range=True).stderr
     assert "Error" not in answered, answered
-    refused = decidb_cli_highs.execute_raw(sql, expect_number_range=True).stderr
-    assert "mixes numbers too far apart in size for HiGHS to load" in refused, refused
+    decidb_cli_highs.assert_error_at(
+        sql,
+        kind="Not implemented Error",
+        at="SUM(ABS(b * y))",
+        word="the objective holds numbers too far apart in size",
+        expect_number_range=True,
+    )
 
 
 @pytest.mark.error

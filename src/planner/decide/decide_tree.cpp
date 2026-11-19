@@ -161,6 +161,7 @@ static unique_ptr<DecideFrameSpec> CopyFrame(const DecideFrameSpec &frame) {
 	result->cyclic = frame.cyclic;
 	result->within_key = frame.within_key;
 	result->text = frame.text;
+	result->location = frame.location;
 	result->spelling = frame.spelling;
 	result->rows = CopyOrNull(frame.rows);
 	result->timeline_key = frame.timeline_key;

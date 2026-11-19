@@ -50,7 +50,8 @@ enum class NECollapse : uint8_t {
 //! Classify one row of a `<>` constraint. Only called for an integer-valued LHS and an integer `K`, so a half-unit
 //! tolerance cleanly separates "can reach K" from "cannot".
 static NECollapse ClassifyNERow(const EvaluatedConstraint &ec, idx_t row, const vector<double> &lower_bounds,
-                                const vector<double> &upper_bounds, const InstanceBox &floors, const string &written) {
+                                const vector<double> &upper_bounds, const InstanceBox &floors,
+                                const DecideClauseRef &written) {
 	auto range = DecideRowSignedRange(ec, row, lower_bounds, upper_bounds, DConstants::INVALID_INDEX, &floors);
 	double lo = range.Lo();
 	double hi = range.Hi();
@@ -78,7 +79,7 @@ static NECollapse ClassifyNERow(const EvaluatedConstraint &ec, idx_t row, const 
 //! verdict for every row. So a mixed constraint keeps the Big-M pair, unsplit.
 static NECollapse ClassifyNEConstraint(const EvaluatedConstraint &ec, idx_t num_rows,
                                        const vector<double> &lower_bounds, const vector<double> &upper_bounds,
-                                       const InstanceBox &floors, const string &written) {
+                                       const InstanceBox &floors, const DecideClauseRef &written) {
 	bool seen = false;
 	NECollapse verdict = NECollapse::DISJUNCTION;
 	for (idx_t r = 0; r < num_rows; r++) {
@@ -290,7 +291,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 	const InstanceBox floors {input, var_indexer};
 	for (auto &ec : deferred_aggregate) {
 		bool has_groups = !ec.row_group_ids.empty();
-		const string written = DecideWrittenClause(input, ec.source_clause_id);
+		const auto written = DecideWrittenClause(input, ec.source_clause_id);
 		// The group's LHS, one row the clause emits (ClauseEmittedRows): a group of a grouped clause, the whole
 		// clause for an ungrouped one.
 		auto &emitted = ClauseEmittedRows(ec, input, var_indexer, written);

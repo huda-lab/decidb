@@ -312,7 +312,7 @@ A1 = RuleFixture(
             _a1_late_error(
                 "x(INT) SUCH THAT x <= cap MAXIMIZE SUM(score*x)", cap_sql="CASE WHEN i=4999 THEN 1e17 ELSE 10.0 END"
             ),
-            "beyond the range",
+            "past 2^53",
         ),
     ),
     late_column="i",

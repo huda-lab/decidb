@@ -199,9 +199,8 @@ ComposedMinMaxTermData DecideComposedTerm(const string &agg_name, int sign, bool
 //! A composed term's factor (LogicalDecide::ComposedMinMaxTerm::scale), one value for the whole query by construction
 //! (the canonicalizer refuses one that varies by row), as read on a row: a NULL one makes its clause's instance NULL,
 //! which sets `is_null` and reads 0; one the model cannot read is refused, named by `source`; a divisor of 0 is a
-//! division by zero in `what`, the clause ("constraint") or the objective.
-double DecideQueryWideScale(const Value &value, bool divides, const char *what, const ValueSource &source,
-                            bool &is_null);
+//! division by zero, named by `source` too.
+double DecideQueryWideScale(const Value &value, bool divides, const ValueSource &source, bool &is_null);
 
 //! Whether a composed term reads no row: a reducer over none is NULL (deck p. 56), so its clause is skipped and its
 //! objective term dropped.
@@ -292,9 +291,10 @@ void DecideNameVariants(const vector<DecideSignatureField> &fields, idx_t class_
 void DecideMapRowsInNoClass(KeyedMapping &mapping);
 
 //! One member: the terms whose coefficients `columns` and variables `variables` are read at `row`, each coefficient
-//! times `scale`, those of no decision its constant. A constant past a DOUBLE names `label`, the helper as written.
+//! times `scale`, those of no decision its constant. A constant past a DOUBLE points at `clause`, the one that reads
+//! the helper.
 void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx_t> &variables, idx_t row, double scale,
-                      const string &label, ReducerValueMembers &out);
+                      const DecideClauseRef &clause, ReducerValueMembers &out);
 
 //! The helpers' sizes, which DECIDB_PROFILE reports: their instances, members and members' terms.
 void DecideCountValueLinks(const vector<ReducerValueLinkSpec> &links);
@@ -325,10 +325,19 @@ struct DecideVariantReader {
 	std::function<string(idx_t field)> frame;
 };
 
+//! Why an objective's kept rows are more than one variant, and where the query writes what differs.
+struct DecideVariantDifference {
+	string message;
+	optional_idx place;
+};
+
 //! The error for an objective whose kept rows are more than one variant of `fields`, so it would be produced more than
-//! once (D72, language/guide.md §7.3): the first field `read` finds two values or instances of, and the edit.
-string DecideObjectiveTwiceMessage(const vector<DecideSignatureField> &fields, const vector<DecideKey> &keys,
-                                   const vector<DecideVarScopeInfo> &scopes, const DecideVariantReader &read);
+//! once (D72, language/guide.md §7.3): the first field `read` finds two values or instances of. The place is the
+//! field's expression, the key element, the decision's declaration or the frame, as `text` and `frames` have them.
+DecideVariantDifference DecideObjectiveTwice(const vector<DecideSignatureField> &fields, const vector<DecideKey> &keys,
+                                             const vector<DecideVarScopeInfo> &scopes,
+                                             const vector<DecideFrameSpec> &frames, const DecideSourceText &text,
+                                             const DecideVariantReader &read);
 
 //! How a frame field of the objective's signature is read over its kept rows, for the scope check's message
 //! (DecideFrameDifference): from its root's entries.

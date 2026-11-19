@@ -465,6 +465,7 @@ void DecideFrameSpec::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<string>(121, "reducer", reducer);
 	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(122, "order_collation", order_collation);
 	serializer.WritePropertyWithDefault<string>(123, "spelling", spelling);
+	serializer.WritePropertyWithDefault<optional_idx>(124, "location", location, optional_idx());
 }
 
 DecideFrameSpec DecideFrameSpec::Deserialize(Deserializer &deserializer) {
@@ -491,6 +492,7 @@ DecideFrameSpec DecideFrameSpec::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadPropertyWithDefault<string>(121, "reducer", result.reducer);
 	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(122, "order_collation", result.order_collation);
 	deserializer.ReadPropertyWithDefault<string>(123, "spelling", result.spelling);
+	deserializer.ReadPropertyWithExplicitDefault<optional_idx>(124, "location", result.location, optional_idx());
 	return result;
 }
 
@@ -626,6 +628,7 @@ void DecideVarScopeInfo::Serialize(Serializer &serializer) const {
 	serializer.WriteProperty<DecideVarScope>(100, "scope", scope);
 	serializer.WritePropertyWithDefault<idx_t>(101, "keyed_scope_idx", keyed_scope_idx);
 	serializer.WritePropertyWithDefault<string>(102, "declared_key", declared_key);
+	serializer.WritePropertyWithDefault<optional_idx>(103, "declaration", declaration, optional_idx());
 }
 
 DecideVarScopeInfo DecideVarScopeInfo::Deserialize(Deserializer &deserializer) {
@@ -633,6 +636,7 @@ DecideVarScopeInfo DecideVarScopeInfo::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadProperty<DecideVarScope>(100, "scope", result.scope);
 	deserializer.ReadPropertyWithDefault<idx_t>(101, "keyed_scope_idx", result.keyed_scope_idx);
 	deserializer.ReadPropertyWithDefault<string>(102, "declared_key", result.declared_key);
+	deserializer.ReadPropertyWithExplicitDefault<optional_idx>(103, "declaration", result.declaration, optional_idx());
 	return result;
 }
 

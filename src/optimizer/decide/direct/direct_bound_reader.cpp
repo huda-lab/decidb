@@ -262,7 +262,8 @@ bool DirectReadCountLimit(const DirectIR &ir, ClientContext &context, const Dire
 	return true;
 }
 
-DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedValue> &values, const string &clause) {
+DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedValue> &values,
+                                const DecideClauseRef &clause) {
 	DirectNumberNames names;
 	for (auto &value : values) {
 		DirectNameValue(names, *ir.source_text, *value.expr, ir.render(*value.expr), value.place);
@@ -313,8 +314,8 @@ bool DirectOnlyLinearTerms(const vector<DecideSplitTerm> &terms) {
 	return true;
 }
 
-bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const DirectPart &part, const string &clause,
-                          DirectLinearPart &out) {
+bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const DirectPart &part,
+                          const DecideClauseRef &clause, DirectLinearPart &out) {
 	out.sign = part.sign;
 	if (!DirectPartFactor(context, part, out.factor)) {
 		return false;
@@ -334,7 +335,7 @@ bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const Dire
 	return true;
 }
 
-bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause,
+bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, const DecideClauseRef &clause,
                             DirectConstantTerm &out, optional_idx scale_place) {
 	if (!DirectProveValue(ir, *term.coefficient)) {
 		return false;
@@ -349,7 +350,7 @@ bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, con
 
 //! The weight of a square or an absolute value: the term's sign and its coefficient (1 when it has none), which a rule
 //! that needs it constant folds (DirectFoldConstantSum).
-static bool DirectReadWeight(const DirectIR &ir, const DecideSplitTerm &term, const string &clause,
+static bool DirectReadWeight(const DirectIR &ir, const DecideSplitTerm &term, const DecideClauseRef &clause,
                              vector<DirectSignedValue> &weight, DirectNumberNames &names, optional_idx scale_place) {
 	if (term.coefficient && !DirectProveValue(ir, *term.coefficient)) {
 		return false;
@@ -381,7 +382,7 @@ static bool DirectReadFormDecision(const DirectIR &ir, const vector<DecideSplitT
 	return has_decision;
 }
 
-bool DirectReadLinearForm(const DirectIR &ir, const vector<DecideSplitTerm> &form, const string &clause,
+bool DirectReadLinearForm(const DirectIR &ir, const vector<DecideSplitTerm> &form, const DecideClauseRef &clause,
                           DirectLinearForm &out, optional_idx scale_place) {
 	if (!DirectReadFormDecision(ir, form, out.decision)) {
 		return false;
@@ -401,14 +402,14 @@ bool DirectReadLinearForm(const DirectIR &ir, const vector<DecideSplitTerm> &for
 	return true;
 }
 
-bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause,
+bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const DecideClauseRef &clause,
                           DirectWeightedForm &out, optional_idx scale_place) {
 	return term.IsSquare() && DirectReadWeight(ir, term, clause, out.weight, out.weight_names, scale_place) &&
 	       DirectReadLinearForm(ir, term.factors[0].form, clause, out.inner, scale_place);
 }
 
-bool DirectReadAbsTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause, DirectWeightedForm &out,
-                       optional_idx scale_place) {
+bool DirectReadAbsTerm(const DirectIR &ir, const DecideSplitTerm &term, const DecideClauseRef &clause,
+                       DirectWeightedForm &out, optional_idx scale_place) {
 	if (!term.IsAbs()) {
 		throw InternalException("DECIDE: an absolute value is expected here; the A2 rule promises an ABS term");
 	}
@@ -443,8 +444,8 @@ bool DirectObjectivePartKept(const DirectIR &ir, const DirectPart &part, unique_
 	return true;
 }
 
-bool DirectReadQuadraticPart(const DirectIR &ir, ClientContext &context, const DirectPart &part, const string &clause,
-                             DirectQuadraticPart &out) {
+bool DirectReadQuadraticPart(const DirectIR &ir, ClientContext &context, const DirectPart &part,
+                             const DecideClauseRef &clause, DirectQuadraticPart &out) {
 	if (!DirectReadLinearPart(ir, context, part, clause, out.linear) || !DirectObjectivePartKept(ir, part, out.kept)) {
 		return false;
 	}

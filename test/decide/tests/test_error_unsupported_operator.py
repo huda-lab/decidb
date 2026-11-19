@@ -223,16 +223,18 @@ class TestUnsupportedOperatorOverVariableRejection:
 
     def test_scalar_function_over_decide_variable_is_rejected(self, decidb_cli):
         """A named scalar function wrapping a decision variable (`mod(x, 5)`) is
-        non-linear → rejected with a friendly, actionable error (the data-only
+        non-linear → rejected with an error that names the function and points at the call (the data-only
         fold must NOT swallow variable-bearing functions)."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
             SELECT id, x FROM range(1, 5) t(id)
             DECIDE x(INT)
             SUCH THAT SUM(mod(x, 5)) <= 3
             MAXIMIZE SUM(x)
         """,
-            match=r"(?i)'mod'.*DECIDE variable",
+            kind="Not implemented Error",
+            at="mod(x, 5)",
+            word="function 'mod' over a decision is not supported",
         )
 
     def test_variable_bearing_modulo_does_not_emit_stack_trace(self, decidb_cli):

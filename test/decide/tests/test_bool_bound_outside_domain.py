@@ -2,7 +2,7 @@
 
 A BOOL decision only ever takes 0 or 1. A per-row bound with no `when` that lies outside that range does not widen
 the variable: one that always holds (`x >= -3`, `x > -3`, `x <= 5`) changes nothing, and one that cannot hold
-(`x >= 2`, `x <= -1`, `x < 0`, `x > 1.5`, `x = -1`) makes the problem infeasible, with an error that quotes it. Each
+(`x >= 2`, `x <= -1`, `x < 0`, `x > 1.5`, `x = -1`) makes the problem infeasible, with an error that points at it. Each
 case runs alone and next to an aggregate that would exploit a widened box (`SUM(x) <= -2` is satisfiable by a signed
 x, `SUM(x) >= 4` over three rows is satisfiable by x above 1). The independent oracle reads each bound as plain
 arithmetic on a binary variable.
@@ -46,9 +46,11 @@ _AGGREGATES = [
     ("SUM(x) >= 1", ">=", 1.0),
 ]
 
-# The verdict of the solve, which the domain refusal ("is infeasible: ... cannot hold") is not.
-_INFEASIBLE = r"is infeasible(?!:)"
-#: The bounds that cannot hold on their own: the error quotes the bound rather than the generic infeasible text.
+# The verdict of the solve, which the domain refusal ("the constraint cannot hold: ...") is not.
+_INFEASIBLE = "the DECIDE query is infeasible"
+_BOOL_WORD = "the constraint cannot hold: 'x' is a BOOL decision"
+_KIND = "Invalid Input Error"
+#: The bounds that cannot hold on their own: the error points at the bound rather than giving the solve's verdict.
 _CANNOT_HOLD = {"x >= 2", "x <= -1", "x < 0", "x > 1.5", "x = -1"}
 
 
@@ -75,8 +77,9 @@ _RUNS = [
 ]
 
 
-def _cannot_hold(bound):
-    return re.escape(f"DECIDE optimization is infeasible: {bound} cannot hold for a BOOL variable.")
+def _cannot_hold(bound=None):
+    """The refusal of a bound a BOOL cannot hold: it names the decision, and the caret stands on the bound."""
+    return re.escape(_BOOL_WORD)
 
 
 def _solve_oracle(oracle_solver, model_name, bound, aggregate, *, rows=_ROWS):
@@ -112,7 +115,10 @@ def test_bool_bound_outside_domain_matches_oracle(decidb_cli, oracle_solver, bou
     """
     result, names = _solve_oracle(oracle_solver, "bool_bound_outside_domain", bound, aggregate)
     if result.status == SolverStatus.INFEASIBLE:
-        decidb_cli.assert_error(sql, match=_cannot_hold(bound[0]) if bound[0] in _CANNOT_HOLD else _INFEASIBLE)
+        if bound[0] in _CANNOT_HOLD:
+            decidb_cli.assert_error_at(sql, kind=_KIND, at=bound[0], word=_BOOL_WORD)
+        else:
+            decidb_cli.assert_error_at(sql, kind=_KIND, word=_INFEASIBLE)
         return
     assert result.status == SolverStatus.OPTIMAL
     rows, _ = decidb_cli.execute(sql)
@@ -129,8 +135,8 @@ def test_bool_bound_outside_domain_matches_oracle(decidb_cli, oracle_solver, bou
 @pytest.mark.correctness
 @pytest.mark.parametrize("bound", _BOUNDS, ids=[b[0] for b in _BOUNDS])
 def test_bool_bound_outside_domain_with_when_matches_oracle(decidb_cli, oracle_solver, bound):
-    # The same bound under a `when` that holds on every row is plain arithmetic, and its refusal names the clause with
-    # its `when`, as the unconditional form names it.
+    # The same bound under a `when` that holds on every row is plain arithmetic, and its refusal points at the clause
+    # under its `when`, as the unconditional form points at it.
     sql = f"""
         SELECT id, x FROM (
             SELECT * FROM {_SOURCE}
@@ -141,9 +147,10 @@ def test_bool_bound_outside_domain_with_when_matches_oracle(decidb_cli, oracle_s
     """
     result, names = _solve_oracle(oracle_solver, "bool_bound_outside_domain_when", bound, ("SUM(x) >= 1", ">=", 1.0))
     if result.status == SolverStatus.INFEASIBLE:
-        decidb_cli.assert_error(
-            sql, match=_cannot_hold(f"when id >= 0: {bound[0]}") if bound[0] in _CANNOT_HOLD else _INFEASIBLE
-        )
+        if bound[0] in _CANNOT_HOLD:
+            decidb_cli.assert_error_at(sql, kind=_KIND, at=bound[0], word=_BOOL_WORD)
+        else:
+            decidb_cli.assert_error_at(sql, kind=_KIND, word=_INFEASIBLE)
         return
     assert result.status == SolverStatus.OPTIMAL
     rows, _ = decidb_cli.execute(sql)
@@ -157,8 +164,7 @@ def test_bool_bound_outside_domain_with_when_matches_oracle(decidb_cli, oracle_s
 def test_bool_bound_outside_domain_diagnose_raises_the_same_error(decidb_cli):
     # A bound against the type's own range is not a clause to loosen: DIAGNOSE raises it as the plain query does.
     sql = f"DIAGNOSE SELECT id, x FROM {_SOURCE} DECIDE x(BOOL) SUCH THAT x >= 2 MINIMIZE SUM(v * x)"
-    with pytest.raises(DeciDBCliError, match=_cannot_hold("x >= 2")):
-        decidb_cli.execute(sql)
+    decidb_cli.assert_error_at(sql, kind=_KIND, at="x >= 2", word=_BOOL_WORD)
 
 
 @pytest.mark.var_boolean
@@ -177,7 +183,8 @@ def test_bool_bound_outside_domain_over_empty_source_raises(decidb_cli, bound):
     """
     messages = {}
     for mode in ("off", "auto"):
-        with pytest.raises(DeciDBCliError, match=_cannot_hold(bound)) as error:
+        decidb_cli.assert_error_at(f"SET decide_direct_solve='{mode}'; {sql}", kind=_KIND, at=bound, word=_BOOL_WORD)
+        with pytest.raises(DeciDBCliError, match=_cannot_hold()) as error:
             decidb_cli.execute(f"SET decide_direct_solve='{mode}'; {sql}")
         messages[mode] = str(error.value)
     assert messages["off"] == messages["auto"]
@@ -191,9 +198,10 @@ def test_bool_bound_outside_domain_explain_raises(decidb_cli):
     # error a run raises instead of printing a plan.
     bound = "x <= -1"
     sql = f"SELECT id, x FROM {_SOURCE} DECIDE x(BOOL) SUCH THAT {bound} MINIMIZE SUM(v * x)"
-    with pytest.raises(DeciDBCliError, match=_cannot_hold(bound)) as planned:
+    decidb_cli.assert_error_at(f"EXPLAIN {sql}", kind=_KIND, at=bound, word=_BOOL_WORD)
+    with pytest.raises(DeciDBCliError, match=_cannot_hold()) as planned:
         decidb_cli.execute(f"EXPLAIN {sql}")
-    with pytest.raises(DeciDBCliError, match=_cannot_hold(bound)) as run:
+    with pytest.raises(DeciDBCliError, match=_cannot_hold()) as run:
         decidb_cli.execute(sql)
     assert str(planned.value) == str(run.value)
 
@@ -223,44 +231,30 @@ def test_bool_bound_outside_domain_unfolded_spelling_is_read_per_row(decidb_cli,
     assert messages["off"] == messages["require"]
 
 
-_NON_NEGATIVE = " cannot hold because {name} is non-negative (>= 0). Add an explicit lower bound if it may be negative."
-_NEVER_NEGATIVE = " cannot hold because {name} is never negative."
-
-
 @pytest.mark.var_boolean
 @pytest.mark.cons_perrow
 @pytest.mark.error
 @pytest.mark.parametrize(
-    "decide, quoted, tail",
+    "decide, at, word",
     [
-        # The quoted clause is the one that sets the box end, not the first bound written on the variable.
+        # The clause pointed at is the one that sets the box end, not the first bound written on the variable.
         pytest.param(
-            "x(BOOL) SUCH THAT x >= 2 AND x <= -1",
-            "x <= -1",
-            " cannot hold for a BOOL variable.",
-            id="other-side-first",
+            "x(BOOL) SUCH THAT x >= 2 AND x <= -1", "x <= -1", "'x' is a BOOL decision", id="other-side-first"
         ),
+        pytest.param("x(BOOL) SUCH THAT x >= 2 AND x >= 3", "x >= 3", "'x' is a BOOL decision", id="tighter"),
+        pytest.param("x(INT) SUCH THAT x <= 3 AND x <= -1", "x <= -1", "'x' is never negative", id="tighter-ceiling"),
         pytest.param(
-            "x(BOOL) SUCH THAT x >= 2 AND x >= 3", "x >= 3", " cannot hold for a BOOL variable.", id="tighter"
-        ),
-        pytest.param(
-            "x(INT) SUCH THAT x <= 3 AND x <= -1", "x <= -1", _NON_NEGATIVE.format(name="x"), id="tighter-ceiling"
-        ),
-        pytest.param(
-            "x(BOOL), y(BOOL) SUCH THAT x <= 0 AND y >= 2",
-            "y >= 2",
-            " cannot hold for a BOOL variable.",
-            id="other-variable",
+            "x(BOOL), y(BOOL) SUCH THAT x <= 0 AND y >= 2", "y >= 2", "'y' is a BOOL decision", id="other-variable"
         ),
         # An auxiliary decision (the ABS of y) is named by what it stands for; the other ABS has its own label.
         pytest.param(
             "x(REAL), y(REAL) SUCH THAT abs(x) >= 3 AND abs(y) <= -1",
             "abs(y) <= -1",
-            _NEVER_NEGATIVE.format(name="abs(y)"),
+            "'abs(y)' is never negative",
             id="two-auxiliaries",
         ),
     ],
 )
-def test_the_clause_quoted_is_the_one_that_sets_the_end_that_cannot_hold(decidb_cli, decide, quoted, tail):
+def test_the_clause_quoted_is_the_one_that_sets_the_end_that_cannot_hold(decidb_cli, decide, at, word):
     sql = f"SELECT id FROM (VALUES (1), (2)) t(id) DECIDE {decide} MAXIMIZE SUM(x)"
-    decidb_cli.assert_error(sql, match=re.escape(f"DECIDE optimization is infeasible: {quoted}{tail}"))
+    decidb_cli.assert_error_at(sql, kind=_KIND, at=at, word=word)

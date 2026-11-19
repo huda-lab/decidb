@@ -1,8 +1,8 @@
 """`DIAGNOSE <query>` is the only thing that starts the diagnostics engine.
 
 There is no automatic path and no session setting. A query that is never prefixed
-never pays for a diagnostic solve: it reports its state ("DECIDE optimization is
-infeasible.") and stops, with no clause named and no repair suggested — naming the
+never pays for a diagnostic solve: it reports its state ("the DECIDE query is
+infeasible") and stops, with no clause named and no repair suggested — naming the
 clause *is* the elastic solve, and that only happens when the user asks for it. The
 prefix runs the same query and returns the diagnosis as a relation instead of raising.
 
@@ -37,13 +37,12 @@ class TestDiagnoseIsTheOnlyTrigger:
     )
     def test_a_bare_failure_reports_its_state_and_stops(self, request, cli_fixture, sql, state):
         cli = request.getfixturevalue(cli_fixture)
+        cli.assert_error_at(sql, kind="Invalid Input Error", word=f"the DECIDE query is {state}")
         out = _combined(cli.execute_raw(sql))
-        assert f"decide optimization is {state}" in out
-        # No clause, no repair, no second statement to run.
+        # No clause, no repair, no second statement to run, and no pointer to the prefix.
         assert "suggested_change" not in out
         assert "decide_diagnostics" not in out
-        # It does point at the prefix that would answer the question.
-        assert "diagnose" in out
+        assert "diagnose" not in out
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     @pytest.mark.parametrize(
@@ -126,8 +125,8 @@ class TestDiagnoseReportsOnOneOptimization:
     `DIAGNOSE` used to arm whichever DECIDE operator the plan walk reached first,
     so whether you got a diagnosis at all depended on which solve happened to fail
     — and when it was the wrong one, the query raised the unprefixed error telling
-    the user to add the prefix they had already added. It now refuses up front and
-    says how to get an answer. Solving such queries is unaffected; only the prefix
+    the user to add the prefix they had already added. It now refuses up front.
+    Solving such queries is unaffected; only the prefix
     is refused.
     """
 
@@ -143,12 +142,7 @@ class TestDiagnoseReportsOnOneOptimization:
     )
     def test_the_prefix_is_refused_on_more_than_one_decide(self, request, cli_fixture, sql, shape):
         cli = request.getfixturevalue(cli_fixture)
-        out = _combined(cli.execute_raw(f"DIAGNOSE {sql};"))
-        assert "one optimization at a time" in out, shape
-        assert "2 decide clauses" in out, shape
-        assert "separately" in out, shape
-        # The refusal replaces the old self-contradicting advice.
-        assert "prefix the query with diagnose" not in out, shape
+        cli.assert_error_at(f"DIAGNOSE {sql};", kind="Not implemented Error", at="SELECT")
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     @pytest.mark.parametrize(

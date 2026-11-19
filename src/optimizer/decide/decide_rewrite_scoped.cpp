@@ -267,9 +267,11 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	// retain the established refusal instead of reaching linear term extraction with unsupported Q terms.
 	if ((!path.keys.empty() || !nested.empty()) &&
 	    !DecideDegreeOf(helpers.context, *agg.children[0], decide.decide_index).IsLinear()) {
-		throw BinderException("DECIDE: '%s' squares or multiplies decisions inside nested reducers, which is not "
-		                      "supported yet",
-		                      plan_label);
+		// The reducer as the user wrote it, not as a plan reprints it.
+		auto written_names = names;
+		written_names.written = true;
+		throw BinderException(agg, "'%s' squares or multiplies decisions inside nested reducers, which is not allowed",
+		                      RenderDecideSource(agg, written_names));
 	}
 
 	// Read once the reducers inside it are helpers, each whole-numbered when its value is.

@@ -233,15 +233,9 @@ public:
 	//! relation's own bindings) reads the same for `weight` but silently admits a
 	//! CORRELATED subquery, which also flattens onto a fresh table index while being
 	//! per-row by construction.
-	//!
-	//! `correlated_subquery_table_indexes` is carried purely so the rejection can name
-	//! what the user wrote. A flattened correlated subquery is a column ref literally
-	//! named "SUBQUERY", and reporting that -- or suggesting `SUM(x * SUBQUERY)` --
-	//! would name an object the user never typed.
 	DecideCanonicalizer(ClientContext &context, idx_t decide_index, vector<DecideVarScopeInfo> variable_scopes,
 	                    const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> &keys,
-	                    const vector<bool> &is_boolean, unordered_set<idx_t> query_wide_table_indexes,
-	                    unordered_set<idx_t> correlated_subquery_table_indexes = {});
+	                    const vector<bool> &is_boolean, unordered_set<idx_t> query_wide_table_indexes);
 
 	//! Canonicalize a whole SUCH THAT tree: AND-conjunctions plus the `when` and `per K:`
 	//! wrappers. Descends only into the constraint child of a wrapper, never into its
@@ -484,16 +478,18 @@ private:
 	//! every component is query-wide receives QUERY_WIDE_BOUND_TAG.
 	unique_ptr<Expression> FinalizeBoundProvenance(unique_ptr<BoundComparisonExpression> comparison) const;
 
-	//! True when `expr` is what a CORRELATED scalar subquery flattened into. Affects
-	//! only the wording of a rejection, never the decision.
-	bool IsCorrelatedSubqueryRef(const Expression &expr) const;
+	//! The refusal of a decision-bearing `factor` on a reducer: the decision's type when `positive` (the factor without
+	//! its minus signs) is one decision, else that it reads one. `divides` says it divides the reducer.
+	string DecisionScalesReducerMessage(const Expression &factor, const Expression &positive, bool divides) const;
 
 	//! The one question this pass asks of a term. Never inspects further.
 	Placement Classify(const Expression &expr) const;
 
 	bool ReferencesDecideVar(const Expression &expr) const;
-	void ValidateCanonicalTree(const Expression &constraints) const;
-	void ValidateCanonicalComparison(const BoundComparisonExpression &comparison) const;
+	//! `sources` (null for none) gives a clause's span, which an error points at where the comparison has none.
+	void ValidateCanonicalTree(const Expression &constraints, const vector<ConstraintSourceInfo> *sources) const;
+	void ValidateCanonicalComparison(const BoundComparisonExpression &comparison,
+	                                 const vector<ConstraintSourceInfo> *sources) const;
 	void VerifyCanonicalTree(const Expression &constraints) const;
 	//! A copy of `expr` with every norm marker of order 1, 2 or 'inf' replaced by its
 	//! definition, or nullptr when there is none to replace.
@@ -519,12 +515,11 @@ private:
 	//! The shape of a comparison's decision side (language/guide.md §6.4): ROWS has no
 	//! decision reducer; AGGREGATE has decision reducers sharing one `by` key under
 	//! whole-query factors with only query-wide terms beside them (one model row per group);
-	//! VALUE needs the value rewrite; UNSUPPORTED is refused with `refusal`. `group_key` is
-	//! the AGGREGATE shape's shared key, INVALID for `by ()`.
+	//! VALUE needs the value rewrite; UNSUPPORTED is refused (an AVG in a `<>` clause beside another term).
+	//! `group_key` is the AGGREGATE shape's shared key, INVALID for `by ()`.
 	enum class ScopedShape : uint8_t { ROWS, AGGREGATE, VALUE, UNSUPPORTED };
 	//! `data_key` is the scope of the clause's data (ScopeKeyOf).
-	ScopedShape ClassifyScoped(const BoundComparisonExpression &comparison, idx_t data_key, idx_t &group_key,
-	                           string &refusal) const;
+	ScopedShape ClassifyScoped(const BoundComparisonExpression &comparison, idx_t data_key, idx_t &group_key) const;
 	//! Whether a comparison's decision side takes the composed MIN/MAX formulation
 	//! (RewriteComposedMinMaxInConstraint): a MIN or MAX over decisions beside another
 	//! term, or alone under a factor whose sign is not known before the query runs.
@@ -582,10 +577,6 @@ private:
 	//! Table indexes that uncorrelated scalar subqueries flattened into. Meaningful
 	//! only when `judge_column_refs` is set.
 	unordered_set<idx_t> query_wide_table_indexes;
-	//! Table indexes that CORRELATED scalar subqueries flattened into. Never affects
-	//! the decision (they are row-varying by construction, and would be rejected by the
-	//! fail-safe default anyway) -- only the wording of the rejection.
-	unordered_set<idx_t> correlated_subquery_table_indexes;
 	//! False when the pass was given no flattening evidence. In that mode an arbitrary
 	//! column ref is never guessed to be query-wide; only explicit semantic tags qualify.
 	bool judge_column_refs = false;

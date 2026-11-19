@@ -192,9 +192,11 @@ def test_highs_names_the_negated_square_when_the_objective_minimizes_it(decidb_c
         DECIDE y(REAL)
         SUCH THAT y <= 3
         MINIMIZE SUM(-POWER(y, 2))"""
-    decidb_cli_highs.assert_error(
+    decidb_cli_highs.assert_error_at(
         sql,
-        match=r"the objective MINIMIZEs negated squared decision terms.*MINIMIZE the squared terms without negating",
+        kind="Not implemented Error",
+        at="SUM(-POWER(y, 2))",
+        word="minimizing a negated squared decision is not supported on this installation",
     )
 
 
@@ -399,7 +401,12 @@ def test_highs_names_the_product_of_two_decisions_after_a_convex_square(decidb_c
         DECIDE y(REAL), z(REAL)
         SUCH THAT y <= 3 AND z <= 2
         MINIMIZE SUM(POWER(y, 2)) + SUM(y * z)"""
-    decidb_cli_highs.assert_error(sql, match=r"the objective multiplies two decision variables.*Gurobi")
+    decidb_cli_highs.assert_error_at(
+        sql,
+        kind="Not implemented Error",
+        at="SUM(POWER(y, 2)) + SUM(y * z)",
+        word="multiplying two decisions in the objective is not supported on this installation",
+    )
 
 
 #: Reducers over squared bodies, beside the three of `_SQUARE_BODY_CASES` (the `when` against none, in both orders;

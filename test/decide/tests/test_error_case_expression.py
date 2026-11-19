@@ -5,8 +5,7 @@ clause reads its value. Each answer test solves the same model with the CASE's v
 in Python and compares DeciDB's objective with the oracle's.
 
 A CASE that reads a decision has no reading in the model. The shape check refuses it after
-canonicalization with one message that names the alternatives (a scope in front, `per`, or a
-CTE), quotes the clause and points at the CASE; it never surfaces as an internal error.
+canonicalization with one message that points at the CASE; it never surfaces as an internal error.
 """
 
 import pytest
@@ -207,47 +206,43 @@ class TestCaseOverDataIsACoefficient:
 
 @pytest.mark.error
 class TestCaseOverADecisionIsRefused:
-    """A CASE that reads a decision is refused by the shape check, with the alternatives named."""
-
-    _MESSAGE = (
-        "CASE over a DECIDE variable is not supported. Write the condition as a scope in front of the clause "
-        "(when category = 'A': sum(x) >= 1), split rows into classes with per, or pre-compute conditional values "
-        "in a CTE or subquery before the DECIDE clause."
-    )
+    """A CASE that reads a decision is refused by the shape check, pointing at the CASE."""
 
     # One per place the shape check walks: a reducer's argument, the objective, a side of a per-row constraint.
     @pytest.mark.parametrize(
-        "constraint,objective",
+        "constraint,objective,at",
         [
-            ("SUM(CASE WHEN nat = 1 THEN x ELSE 0 END) >= 1", "SUM(x * bal)"),
-            ("x <= 1", "SUM(CASE WHEN nat = 1 THEN x ELSE 0 END)"),
-            ("x <= CASE WHEN nat = 1 THEN 1 - x ELSE 1 END", "SUM(x * bal)"),
+            ("SUM(CASE WHEN nat = 1 THEN x ELSE 0 END) >= 1", "SUM(x * bal)", "CASE WHEN nat = 1 THEN x ELSE 0 END"),
+            ("x <= 1", "SUM(CASE WHEN nat = 1 THEN x ELSE 0 END)", "CASE WHEN nat = 1 THEN x ELSE 0 END"),
+            (
+                "x <= CASE WHEN nat = 1 THEN 1 - x ELSE 1 END",
+                "SUM(x * bal)",
+                "CASE WHEN nat = 1 THEN 1 - x ELSE 1 END",
+            ),
         ],
         ids=["reducer argument", "objective", "per-row side"],
     )
-    def test_case_over_a_decision_is_refused(self, decidb_cli, constraint, objective):
-        result = decidb_cli.execute_raw(
-            f"""
+    def test_case_over_a_decision_is_refused(self, decidb_cli, constraint, objective, at):
+        sql = f"""
             SELECT id, x FROM {_TABLE} DECIDE x(BOOL)
             SUCH THAT {constraint}
             MAXIMIZE {objective}
         """
+        decidb_cli.assert_error_at(
+            sql, kind="Not implemented Error", at=at, word="CASE over a decision is not supported"
         )
-        assert self._MESSAGE in result.stderr, result.stderr
-        assert "LINE " in result.stderr, result.stderr
-        assert_no_internal_leak(result, "CASE over a decision")
+        assert_no_internal_leak(decidb_cli.execute_raw(sql), "CASE over a decision")
 
     def test_the_refusal_quotes_the_clause_as_written(self, decidb_cli):
-        result = decidb_cli.execute_raw(
+        decidb_cli.assert_error_at(
             f"""
             SELECT id, x FROM {_TABLE} DECIDE x(BOOL)
             SUCH THAT SUM(CASE WHEN nat = 1 THEN x ELSE 0 END) >= 1
             MAXIMIZE SUM(x * bal)
-        """
+        """,
+            kind="Not implemented Error",
+            at="CASE WHEN nat = 1 THEN x ELSE 0 END",
         )
-        assert (
-            "In the SUCH THAT clause `SUM(CASE WHEN nat = 1 THEN x ELSE 0 END) >= 1`." in result.stderr
-        ), result.stderr
 
     def test_case_in_constraint_does_not_emit_stack_trace(self, decidb_cli):
         """No C++ trace, the symptom that motivated the refusal, whatever the CASE reads."""

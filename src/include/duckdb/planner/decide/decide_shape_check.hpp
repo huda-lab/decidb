@@ -18,7 +18,7 @@
 //   - a division by a decision;
 //   - a CASE over a decision (a CASE over data is a per-row coefficient);
 //   - a term of degree above 2, which no backend takes.
-// Each refusal quotes the clause as written and carries the term's source location.
+// Each refusal states what the model does not take and points at the term.
 //
 //===----------------------------------------------------------------------===//
 
@@ -38,16 +38,16 @@ public:
 	DecideShapeCheck(ClientContext &context, idx_t decide_index, const DecideSourceNames &names);
 
 	//! Judge every comparison of the canonical constraint tree.
-	void CheckConstraints(const Expression &constraints, const vector<ConstraintSourceInfo> &sources) const;
-	//! Judge the canonical objective; `written` is the objective as written.
-	void CheckObjective(const Expression &objective, const string &written) const;
+	void CheckConstraints(const Expression &constraints) const;
+	//! Judge the canonical objective.
+	void CheckObjective(const Expression &objective) const;
 
 private:
 	//! One side of a comparison, or the objective: its vocabulary, then the degree of each term.
-	void CheckSide(const Expression &side, const string &clause) const;
+	void CheckSide(const Expression &side) const;
 	//! Refuse the first decision-bearing node under `expr` the model has no reading for.
-	void CheckVocabulary(const Expression &expr, const string &clause) const;
-	[[noreturn]] void Refuse(const Expression &term, const string &problem, const string &clause) const;
+	void CheckVocabulary(const Expression &expr) const;
+	[[noreturn]] void Refuse(const Expression &term, const string &problem) const;
 
 	ClientContext &context;
 	idx_t decide_index;

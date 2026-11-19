@@ -628,7 +628,7 @@ struct DirectLinearScore {
 	DirectNumberNames combined_names;
 	//! The rows each reducer reads (DirectObjectivePartKept), null for every row: any other row scores 0 in it.
 	vector<unique_ptr<Expression>> part_kept;
-	string objective_written;
+	DecideClauseRef objective_written;
 
 	//! Reads the objective of `ir` as a signed sum of `SUM(coefficient * x)` terms; false when it is not one. Each
 	//! coefficient must be evaluable per source row.

@@ -141,6 +141,9 @@ struct DecideFrameSpec {
 	idx_t within_key = DConstants::INVALID_INDEX;
 	//! The frame as written, for messages
 	string text;
+	//! Where the frame stands in the query (its expression's location), which an error about the frame points at.
+	//! Invalid where the query text holds none.
+	optional_idx location;
 	//! The frame in DeciDB's own spelling, lower case with its defaults left out (`at(previous: x) over (t.period)`):
 	//! a plan's layers, a helper's label and the frame's column print it, as they reprint every node that reads a
 	//! decision (DecideSourceNames::written).

@@ -316,7 +316,7 @@ class TestBilinearNonConvexObjectives:
             result, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
         except DeciDBCliError as e:
-            assert re.search(r"needs Gurobi", e.message), f"Unexpected error: {e.message}"
+            assert re.search(r"is not supported on this installation", e.message), f"Unexpected error: {e.message}"
             return
 
         t_build = time.perf_counter()
@@ -366,7 +366,7 @@ class TestBilinearNonConvexObjectives:
             result, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
         except DeciDBCliError as e:
-            assert re.search(r"needs Gurobi", e.message), f"Unexpected error: {e.message}"
+            assert re.search(r"is not supported on this installation", e.message), f"Unexpected error: {e.message}"
             return
 
         t_build = time.perf_counter()
@@ -416,7 +416,7 @@ class TestBilinearNonConvexObjectives:
             result, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
         except DeciDBCliError as e:
-            assert re.search(r"needs Gurobi", e.message), f"Unexpected error: {e.message}"
+            assert re.search(r"is not supported on this installation", e.message), f"Unexpected error: {e.message}"
             return
 
         t_build = time.perf_counter()
@@ -957,7 +957,7 @@ class TestFactoredProductDegree:
     )
     def test_genuine_degree_three_still_rejected(self, decidb_cli, constraint_expr):
         """The fix must not widen the gate: real degree > 2 still fails."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             f"""
             WITH data AS (SELECT 1 AS id)
             SELECT id, x, y, z, w
@@ -968,7 +968,9 @@ class TestFactoredProductDegree:
                   AND {constraint_expr}
             {self.OBJECTIVE}
         """,
-            match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver",
+            kind="Not implemented Error",
+            at=constraint_expr,
+            word="a term of degree 3 is not supported",
         )
 
 
@@ -2305,5 +2307,9 @@ def test_a_product_of_a_non_negative_decision_is_never_negative(decidb_cli):
         DECIDE x(INT), b(BOOL)
         SUCH THAT x <= 3 AND b * x + 3 <= 1
         MINIMIZE SUM(x)"""
-    stderr = decidb_cli.execute_raw(sql).stderr
-    assert "b * x + 3 <= 1 cannot hold because (b * x) is never negative" in stderr, stderr
+    decidb_cli.assert_error_at(
+        sql,
+        kind="Invalid Input Error",
+        at="b * x + 3 <= 1",
+        word="the constraint cannot hold: '(b * x)' is never negative",
+    )

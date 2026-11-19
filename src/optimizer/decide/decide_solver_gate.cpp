@@ -118,71 +118,49 @@ const DecideProductGroup &FirstNonconvexGroup(const DecideTree &tree) {
 	throw InternalException("DECIDE solver gate found no non-convex product group to name");
 }
 
-//! One line naming what the query does, in the user's own vocabulary, plus the
-//! smallest edit that avoids it. The gap decides the wording, so a query is always
-//! told which of its constructs is the one no solver here can take.
+//! What the query does that this installation's solver cannot take, in the user's own vocabulary, and where in the
+//! query it stands.
 struct RefusalText {
 	string cause;
-	string remedy;
+	optional_idx place;
 };
 
-//! The first SUCH THAT clause that squares or multiplies decisions, as the user wrote it. DeriveDecideModelClass reads
-//! the same constraints, so a query refused for quadratic constraints has one. A row a rewrite defines (a reducer's
-//! non-linear body held by a helper) records the clause that reads the helper.
-string FirstQuadraticClause(const LogicalDecide &op, const DecideTree &tree) {
+//! The span of the first SUCH THAT clause that squares or multiplies decisions. DeriveDecideModelClass reads the same
+//! constraints, so a query refused for quadratic constraints has one. A row a rewrite defines (a reducer's non-linear
+//! body held by a helper) records the clause that reads the helper; a row no clause claims has no span.
+optional_idx FirstQuadraticClauseLocation(const LogicalDecide &op, const DecideTree &tree) {
 	for (auto *constraint : HeldClauses(tree)) {
 		if (!constraint->product_groups.empty()) {
-			// A quadratic row without a source clause is an engine bug, not a query to refuse.
-			D_ASSERT(constraint->source_clause_id < op.constraint_sources.size());
-			return QuoteWrittenClause(op.constraint_sources, constraint->source_clause_id, op.source_text);
+			return DecideClauseLocation(op.constraint_sources, constraint->source_clause_id);
 		}
 	}
 	throw InternalException("DECIDE solver gate found no quadratic clause to name");
 }
 
 RefusalText DescribeGap(const LogicalDecide &op, const DecideTree &tree, SolverModelClassGap gap) {
+	const auto objective = DecideObjectiveLocation(op.source_text);
 	switch (gap) {
 	case SolverModelClassGap::QUADRATIC_CONSTRAINTS:
-		return {"the SUCH THAT clause `" + FirstQuadraticClause(op, tree) +
-		            "` squares or multiplies decision variables",
-		        "rewrite that constraint so each term holds at most one decision variable"};
+		return {"squaring or multiplying decisions in a constraint", FirstQuadraticClauseLocation(op, tree)};
 	case SolverModelClassGap::NONCONVEX_QUADRATIC: {
 		auto &group = FirstNonconvexGroup(tree);
 		if (!group.square) {
-			return {"the objective multiplies two decision variables",
-			        "use an objective that is linear in the decisions"};
+			return {"multiplying two decisions in the objective", objective};
 		}
 		if (group.weight_sign == 0) {
-			return {"the objective multiplies a squared decision term by a value whose sign is known only when the "
-			        "query runs",
-			        "multiply the square by a constant, or use a linear objective"};
+			return {"a square scaled by a value whose sign is known only when the query runs", objective};
 		}
-		return {op.written_sense == DecideSense::MAXIMIZE ? "the objective MAXIMIZEs squared decision terms"
-		                                                  : "the objective MINIMIZEs negated squared decision terms",
-		        op.written_sense == DecideSense::MAXIMIZE
-		            ? "MINIMIZE the squared terms instead, or use a linear objective"
-		            : "MINIMIZE the squared terms without negating them, or use a linear objective"};
+		return {op.written_sense == DecideSense::MAXIMIZE ? "maximizing a squared decision"
+		                                                  : "minimizing a negated squared decision",
+		        objective};
 	}
 	case SolverModelClassGap::MIQP:
-		return {"the objective squares decision variables that are not continuous",
-		        "declare those variables REAL, as in x(REAL), or use a linear objective"};
+		return {"squaring a decision that is not REAL", objective};
 	case SolverModelClassGap::SINGULAR_QUADRATIC:
-		return {"the objective squares an expression containing more than one decision variable",
-		        "keep at most one decision variable inside the POWER, as in "
-		        "SUM(POWER(x - target, 2)), or use a linear objective"};
+		return {"squaring an expression of more than one decision", objective};
 	default:
 		throw InternalException("DECIDE solver gate asked to describe a satisfied model class");
 	}
-}
-
-//! Is some backend that takes `needed` installed on this host?
-bool AnyAvailable(const SolverModelClass &needed) {
-	for (auto &backend : SolverRegistry::Backends()) {
-		if (backend.IsAvailable() && SupportsModelClass(needed, backend.ModelClasses())) {
-			return true;
-		}
-	}
-	return false;
 }
 
 } // namespace
@@ -207,26 +185,14 @@ void RequireDecideSolverSupport(const LogicalDecide &op, const DecideTree &tree)
 		return;
 	}
 
-	RefusalText text = DescribeGap(op, tree, gap);
-	ThrowDecideSolverGap(needed, text.cause, text.remedy);
+	auto text = DescribeGap(op, tree, gap);
+	ThrowDecideSolverGap(text.cause, text.place);
 }
 
-void ThrowDecideSolverGap(const SolverModelClass &needed, const string &cause, const string &remedy) {
-	// Name the solvers that could run it, from the registry rather than from a
-	// hard-coded name here, so the sentence stays true as backends are added. The list is never empty: a backend's
-	// model classes are a static table, so Gurobi is named on a host without its library or licence too.
-	vector<string> capable = SolverRegistry::BackendsSupporting(needed);
-	// A solver the override excludes is not missing: the host has one that could run the query, and the override is
-	// what keeps it out. The sentence then names the override, not an install.
-	if (!ForcedSolverName().empty() && AnyAvailable(needed)) {
-		throw InvalidInputException("DECIDE: %s, which needs %s, and DECIDB_FORCE_SOLVER selects %s. Unset "
-		                            "DECIDB_FORCE_SOLVER, or %s.",
-		                            cause, StringUtil::Join(capable, " or "),
-		                            SolverRegistry::Find(ForcedSolverName()).DisplayName(), remedy);
-	}
-	throw InvalidInputException("DECIDE: %s, which needs %s — not available on this machine. Install %s, "
-	                            "or %s.",
-	                            cause, StringUtil::Join(capable, " or "), StringUtil::Join(capable, " or "), remedy);
+void ThrowDecideSolverGap(const string &cause, optional_idx place) {
+	// The one text: the installation is the place, so a host with the solver (or one forced off it by
+	// DECIDB_FORCE_SOLVER) answers the same query.
+	throw NotImplementedException(place, cause + " is not supported on this installation");
 }
 
 } // namespace duckdb

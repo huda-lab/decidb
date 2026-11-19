@@ -557,8 +557,7 @@ ComposedMinMaxTermData DecideComposedTerm(const string &agg_name, int sign, bool
 	return evaluated;
 }
 
-double DecideQueryWideScale(const Value &value, bool divides, const char *what, const ValueSource &source,
-                            bool &is_null) {
+double DecideQueryWideScale(const Value &value, bool divides, const ValueSource &source, bool &is_null) {
 	if (value.IsNull()) {
 		is_null = true;
 		return 0.0;
@@ -569,9 +568,10 @@ double DecideQueryWideScale(const Value &value, bool divides, const char *what, 
 	}
 	if (divides) {
 		if (v == 0.0) {
-			throw InvalidInputException("DECIDE %s: division by zero — the factor on an aggregate "
-			                            "evaluated to 0.",
-			                            what);
+			// The divisor, where it stands in the query.
+			throw InvalidInputException("'" + RenderDecideSource(source.value, source.names) + "' divides by zero",
+			                            Exception::InitializeExtraInfo(DecideSpanLocation(
+			                                source.names.text, DecideUnguarded(source.value).GetQueryLocation())));
 		}
 		return 1.0 / v;
 	}
@@ -816,7 +816,7 @@ void DecideMapRowsInNoClass(KeyedMapping &mapping) {
 }
 
 void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx_t> &variables, idx_t row, double scale,
-                      const string &label, ReducerValueMembers &out) {
+                      const DecideClauseRef &clause, ReducerValueMembers &out) {
 	double constant = 0.0;
 	for (idx_t t = 0; t < variables.size(); t++) {
 		if (variables[t] == DConstants::INVALID_INDEX) {
@@ -824,7 +824,7 @@ void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx
 		}
 	}
 	if (!std::isfinite(constant)) {
-		throw InvalidInputException(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, label));
+		throw DecideTooLargeError(clause);
 	}
 	out.AddMember(constant);
 	for (idx_t t = 0; t < variables.size(); t++) {
@@ -870,24 +870,31 @@ bool DecideValueRange::Spans(string &values) const {
 	return true;
 }
 
-//! Why the kept rows are more than one variant: the first field that takes two values or instances over them.
-static string VariantDifference(const vector<DecideSignatureField> &fields, const vector<DecideKey> &keys,
-                                const vector<DecideVarScopeInfo> &scopes, const DecideVariantReader &read) {
+//! Why the kept rows are more than one variant: the first field that takes two values or instances over them, and
+//! where the query writes it: the field's own expression, the key element, the decision's declaration or the frame.
+static DecideVariantDifference VariantDifference(const vector<DecideSignatureField> &fields,
+                                                 const vector<DecideKey> &keys,
+                                                 const vector<DecideVarScopeInfo> &scopes,
+                                                 const vector<DecideFrameSpec> &frames, const DecideSourceText &text,
+                                                 const DecideVariantReader &read) {
 	for (idx_t f = 0; f < fields.size(); f++) {
 		auto &field = fields[f];
 		string values;
 		switch (field.kind) {
 		case DecideSignatureFieldKind::VALUE:
 			if (read.values(f, 0, *field.value, values)) {
-				return StringUtil::Format("'%s' takes more than one value over the kept rows (%s)", field.text, values);
+				return {
+				    StringUtil::Format("'%s' takes more than one value over the kept rows (%s)", field.text, values),
+				    DecideSpanLocation(text, field.value->GetQueryLocation())};
 			}
 			break;
 		case DecideSignatureFieldKind::BY_KEY: {
 			auto &elements = DecideKeyElements(keys, field.key);
 			for (idx_t e = 0; e < elements.size(); e++) {
 				if (read.values(f, e, *elements[e].expression, values)) {
-					return StringUtil::Format("'%s' in %s takes more than one value over the kept rows (%s)",
-					                          elements[e].name, field.text, values);
+					return {StringUtil::Format("'%s' in %s takes more than one value over the kept rows (%s)",
+					                           elements[e].name, field.text, values),
+					        DecideSpanLocation(text, elements[e].expression->GetQueryLocation())};
 				}
 			}
 			break;
@@ -895,15 +902,16 @@ static string VariantDifference(const vector<DecideSignatureField> &fields, cons
 		case DecideSignatureFieldKind::DECISION:
 			if (read.instances(f)) {
 				auto &scope = scopes[field.decision];
-				return StringUtil::Format(
-				    "the decision '%s' (declared per %s) has more than one instance over the kept rows", field.text,
-				    scope.HasDeclaredKey() ? scope.declared_key : string("row"));
+				return {StringUtil::Format(
+				            "the decision '%s' (declared per %s) has more than one instance over the kept rows",
+				            field.text, scope.HasDeclaredKey() ? scope.declared_key : string("row")),
+				        scope.declaration};
 			}
 			break;
 		case DecideSignatureFieldKind::FRAME: {
 			auto why = read.frame(f);
 			if (!why.empty()) {
-				return why;
+				return {why, frames[field.frame].location};
 			}
 			break;
 		}
@@ -912,12 +920,13 @@ static string VariantDifference(const vector<DecideSignatureField> &fields, cons
 	throw InternalException("DECIDE: two variants of a signature agree on every field");
 }
 
-string DecideObjectiveTwiceMessage(const vector<DecideSignatureField> &fields, const vector<DecideKey> &keys,
-                                   const vector<DecideVarScopeInfo> &scopes, const DecideVariantReader &read) {
-	return StringUtil::Format(
-	    "DECIDE objective: %s, so the objective would be produced more than once; move it inside a reducer or fix it "
-	    "with when.",
-	    VariantDifference(fields, keys, scopes, read));
+DecideVariantDifference DecideObjectiveTwice(const vector<DecideSignatureField> &fields, const vector<DecideKey> &keys,
+                                             const vector<DecideVarScopeInfo> &scopes,
+                                             const vector<DecideFrameSpec> &frames, const DecideSourceText &text,
+                                             const DecideVariantReader &read) {
+	auto difference = VariantDifference(fields, keys, scopes, frames, text, read);
+	difference.message += ", so the objective would be produced more than once";
+	return difference;
 }
 
 string DecideFrameDifference(const DecideSignatureField &field, const DecideFrameSpec &frame,

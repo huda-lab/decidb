@@ -53,7 +53,7 @@ namespace {
 //! plain per-row constraint an unsatisfiable group becomes. Returns false when no
 //! group is left to encode.
 bool ClassifyMinMaxGroups(EvaluatedConstraint &ec, idx_t num_rows, bool is_max_agg,
-                          vector<EvaluatedConstraint> &new_constraints, const string &written) {
+                          vector<EvaluatedConstraint> &new_constraints, const DecideClauseRef &written) {
 	// Classify each group's bound before asking for a Big-M over it. The RHS
 	// reaching here already holds one value per group: the optimizer's bound-side
 	// window rewrite (RewriteRhsAggregates) reduced a row-varying bound to the
@@ -137,7 +137,7 @@ bool ClassifyMinMaxGroups(EvaluatedConstraint &ec, idx_t num_rows, bool is_max_a
 //! The reach of one row's expression, constant part included: the variable-only bracket
 //! shifted by it, which is also what the Big-M over the family reads.
 static AuxRange MinMaxRowRange(const SolverInput &input, const EvaluatedConstraint &ec, idx_t row,
-                               const string &written) {
+                               const DecideClauseRef &written) {
 	auto rr = DecideRowSignedRange(ec, row, input.lower_bounds, input.upper_bounds);
 	AuxRange range;
 	rr.CoverInto(range, DecideRowFixedLhsOffset(ec.variable_indices, ec.row_coefficients, row, written));
@@ -145,7 +145,7 @@ static AuxRange MinMaxRowRange(const SolverInput &input, const EvaluatedConstrai
 }
 
 vector<MinMaxGroup> decide_linearize::BuildMinMaxGroups(const SolverInput &input, const EvaluatedConstraint &ec,
-                                                        const string &written) {
+                                                        const DecideClauseRef &written) {
 	const idx_t num_rows = input.num_rows;
 	bool has_groups = !ec.row_group_ids.empty();
 	idx_t group_count = has_groups ? MaxValue<idx_t>(ec.num_groups, 1) : 1;
@@ -166,7 +166,7 @@ vector<MinMaxGroup> decide_linearize::BuildMinMaxGroups(const SolverInput &input
 }
 
 decide_linearize::MinMaxRowMembers::MinMaxRowMembers(const SolverInput &input, const VarIndexer &indexer,
-                                                     const EvaluatedConstraint &ec, const string &written)
+                                                     const EvaluatedConstraint &ec, const DecideClauseRef &written)
     : input(input), indexer(indexer), ec(ec), written(written) {
 	row_terms.BeginForDecisions(indexer, ec.variable_indices.size(), written);
 }
@@ -216,7 +216,7 @@ void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer, c
 			continue;
 		}
 		bool is_max_agg = (ec.minmax_agg_type == "max");
-		const string written = DecideWrittenClause(input, ec.source_clause_id);
+		const auto written = DecideWrittenClause(input, ec.source_clause_id);
 		// Settle every group's bound before anything is encoded. A bound out of reach or
 		// beyond reach is answered by the direction it points, not by an encoding, and
 		// whatever this emits (the unsatisfiable group's plain row) is an ordinary
@@ -492,7 +492,7 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
 	// A span past a DOUBLE (`MAX(x + c)` over `c` of either sign near the limit) is no Big-M either, and no column is
 	// open: the refusal names the clause. The closing rows carry no clause of their own to name at the hand-off.
 	if (spec.closing_underivable || !std::isfinite(spec.closing_big_m)) {
-		ThrowUnboundedBigMNaming(spec.blame_var != DConstants::INVALID_INDEX, spec.blame_var, var_names, "MIN/MAX",
+		ThrowUnboundedBigMNaming(spec.blame_var != DConstants::INVALID_INDEX, spec.blame_var, var_names, "MIN or MAX",
 		                         spec.written);
 	}
 
@@ -686,7 +686,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer, con
 //! with the opposite sign and its constant part lands on the bound.
 static void AddComposedRowTerms(const VarIndexer &indexer, SparseCoeffAccumulator &row_terms, MinMaxLinkRow &link,
                                 const vector<idx_t> &variables, const vector<vector<double>> &per_term_coefs, idx_t row,
-                                const string &written) {
+                                const DecideClauseRef &written) {
 	for (idx_t it = 0; it < variables.size(); it++) {
 		double coeff = per_term_coefs[it][row];
 		idx_t v = variables[it];
@@ -755,7 +755,7 @@ static void EmitComposedMinMaxAuxiliaries(SolverInput &input, const VarIndexer &
 	// global block whatever formulation each term then turns out to need. The range is
 	// computed once here and reused as the closing Big-M and as the box of any column a
 	// native arm pins — one walk, one answer, rather than each arm deriving its own.
-	const string written = DecideWrittenClause(input, source_clause_id);
+	const auto written = DecideWrittenClause(input, source_clause_id);
 	vector<AuxRange> term_range(terms.size());
 	for (idx_t i = 0; i < terms.size(); i++) {
 		auto &ta = terms[i];
@@ -836,7 +836,7 @@ void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &ind
 
 	// Build the outer composed RawConstraint. Its fixed terms move to the bound side as one sum, as the model builder
 	// moves a clause's (SumFixedAggregateLhsOffset).
-	const string written = DecideWrittenClause(input, source_clause_id);
+	const auto written = DecideWrittenClause(input, source_clause_id);
 	// A term's `z_k` is its own column, so it enters the row as it comes; the decision columns of the SUM/AVG terms
 	// sum per column.
 	SolverInput::RawConstraint outer;

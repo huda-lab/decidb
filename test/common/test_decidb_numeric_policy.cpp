@@ -65,12 +65,9 @@ TEST_CASE("DECIDE whole-number answers round first and the range includes both e
 	// refuses.
 	REQUIRE_FALSE(DecideRoundedAnswerWithin(2.5, 0.0, 2.0));
 	REQUIRE(DecideRoundedAnswerWithin(2.4, 0.0, 2.0));
-	// The message is the two halves around the value text.
-	REQUIRE(DecideWholeNumberRangeMessageBefore("x") + "100" + DecideWholeNumberRangeMessageAfter("x") ==
-	        DecideWholeNumberRangeMessage("x", "100"));
-	REQUIRE(DecideWholeNumberRangeMessage("n", "-7") ==
-	        "DECIDE variable 'n' solves to -7, which is beyond the range DeciDB can return as a whole number. Tighten "
-	        "the bound on 'n', or declare it 'n(REAL)' to read the value approximately.");
+	// The message is the decision and its value, then the reason.
+	REQUIRE(DecideInvalidValueMessage(DecideValueRole::INTEGER_ANSWER, DecideWholeNumberRangeBefore("n") + "-7") ==
+	        "decision 'n' takes the value -7, past 2^53, the largest whole number DECIDE returns exactly");
 }
 
 TEST_CASE("DECIDE exact finite double needs a finite double that converts back", "[decidb][numeric_policy]") {
@@ -98,7 +95,7 @@ TEST_CASE("DECIDE exact finite double needs a finite double that converts back",
 TEST_CASE("DECIDE sparse merge of like terms past a DOUBLE names the clause", "[decidb][numeric_policy]") {
 	// Past about a million decision columns the builder sums like terms as sorted pairs merged at Flush, not in a dense
 	// row. The SQL tests never build that many, so the merge is checked here.
-	const string written = "'SUM(b * x) <= 10'";
+	DecideClauseRef written;
 	SparseCoeffAccumulator accum;
 	duckdb::vector<int> indices;
 	duckdb::vector<double> coefficients;
@@ -115,5 +112,5 @@ TEST_CASE("DECIDE sparse merge of like terms past a DOUBLE names the clause", "[
 	accum.Add(1, 1e308);
 	accum.Add(1, 1e308);
 	REQUIRE_THROWS_WITH(accum.Flush(indices, coefficients),
-	                    Catch::Contains(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, written)));
+	                    Catch::Contains("the constraint computes a number too large for a DOUBLE"));
 }

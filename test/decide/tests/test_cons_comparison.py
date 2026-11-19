@@ -869,7 +869,7 @@ def test_bilinear_int_int_strict_oracle(decidb_cli, oracle_solver):
     except DeciDBCliError as e:
         # HiGHS rejects quadratic constraints with a clear message — treat as pass.
         assert re.search(
-            r"[Qq]uadratic|[Gg]urobi|HiGHS", e.message
+            r"is not supported on this installation", e.message
         ), f"Unexpected error on int×int quadratic constraint: {e.message}"
         return
 

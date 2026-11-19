@@ -474,9 +474,13 @@ def test_an_unbounded_member_under_a_closing_link(decidb_cli_highs, decidb_cli_g
         SUCH THAT ship <= 0.5 * max(ship) by (D.region) + 8
         MAXIMIZE SUM(ship)
         ORDER BY shipmentID"""
-    refused = decidb_cli_highs.execute_raw(sql)
-    assert "requires a finite bound on 'ship'" in refused.stderr, refused.stderr
-    assert_no_internal_leak(refused, "a MIN/MAX helper over an unbounded member")
+    decidb_cli_highs.assert_error_at(
+        sql,
+        kind="Invalid Input Error",
+        at="ship <= 0.5 * max(ship) by (D.region) + 8",
+        word="'ship' has no finite bound, which MIN or MAX needs",
+    )
+    assert_no_internal_leak(decidb_cli_highs.execute_raw(sql), "a MIN/MAX helper over an unbounded member")
     rows, _ = decidb_cli_gurobi.execute(sql)
     assert [ship for _, ship in rows] == [16] * 5
 
@@ -971,10 +975,13 @@ def test_a_product_of_decisions_inside_a_rewritten_reducer(decidb_cli_gurobi, de
     _judge_apart(
         rows, lambda row: row["region"], lambda region, ships: all(s <= 0.5 * sum(t * t for t in ships) for s in ships)
     )
-    refused = decidb_cli_highs.execute_raw(sql)
-    assert "squares or multiplies decision variables" in refused.stderr, refused.stderr
-    assert "MIN or MAX" not in refused.stderr, refused.stderr  # no extremum reads the sum
-    assert_no_internal_leak(refused, "a product inside a rewritten reducer on HiGHS")
+    decidb_cli_highs.assert_error_at(
+        sql,
+        kind="Not implemented Error",
+        at="ship <= 0.5 * sum(ship * ship) by (D.region)",
+        word="squaring or multiplying decisions in a constraint is not supported on this installation",
+    )
+    assert_no_internal_leak(decidb_cli_highs.execute_raw(sql), "a product inside a rewritten reducer on HiGHS")
 
 
 @pytest.mark.correctness
@@ -997,10 +1004,13 @@ def test_a_quadratic_sum_beside_a_row_varying_factor_on_a_query_wide_decision(de
         lambda a: all(sum(a[f"x{i}"] ** 2 for i in range(3)) + gcap * a["s"] <= 30 for _, gcap in rows),
         lambda a: sum(a[f"x{i}"] for i in range(3)) + 2 * a["s"],
     )
-    refused = decidb_cli_highs.execute_raw(sql)
-    assert "squares or multiplies decision variables" in refused.stderr, refused.stderr
-    assert "MIN or MAX" not in refused.stderr, refused.stderr  # no extremum reads the sum
-    assert_no_internal_leak(refused, "a quadratic sum behind a helper on HiGHS")
+    decidb_cli_highs.assert_error_at(
+        sql,
+        kind="Not implemented Error",
+        at="sum(power(x, 2)) + t.gcap * s <= 30",
+        word="squaring or multiplying decisions in a constraint is not supported on this installation",
+    )
+    assert_no_internal_leak(decidb_cli_highs.execute_raw(sql), "a quadratic sum behind a helper on HiGHS")
 
 
 #: The side of a SUM or AVG helper's definition the clauses push it against: `v >= sum` where they push it down,

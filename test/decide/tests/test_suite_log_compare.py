@@ -181,9 +181,7 @@ PROFILED = {
     "stderr": "",
 }
 
-TIME_LIMIT_ERROR = (
-    "Invalid Input Error: DECIDE optimization hit the time limit. Simplify the constraints or reduce the input size.\n"
-)
+TIME_LIMIT_ERROR = "Invalid Input Error: the DECIDE query reached the time limit\n"
 
 #: A real pair: on a 1 ms limit the solver has found a solution on some runs and none on others.
 STOP_FOUND = {

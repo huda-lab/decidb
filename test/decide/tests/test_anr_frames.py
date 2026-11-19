@@ -956,10 +956,12 @@ class TestPointShapes:
         with pytest.raises(ScopeError) as raised:
             model.instances(clause(body))
         assert raised.value.kind == "ambiguous_peer"
-        result = decidb_cli.execute_raw(_edge(f"s <= 2 AND {clause_sql}", decide="x(INT), per (): s(INT)", rows=rows))
-        assert (
-            "finds 2 rows at t.product = 'A', t.period = 1; a position must hold one row." in result.stderr
-        ), result.stderr
+        decidb_cli.assert_error_at(
+            _edge(f"s <= 2 AND {clause_sql}", decide="x(INT), per (): s(INT)", rows=rows),
+            kind="Invalid Input Error",
+            at="at(previous:",
+            word="the frame finds 2 rows at t.product = 'A', t.period = 1",
+        )
 
     def test_the_objective_reads_one_position(self, decidb_cli, scope_solver):
         """D72: `at(first: x) over (t.period)` reads one row, so the objective is one value."""
@@ -1000,30 +1002,31 @@ class TestPointShapes:
 @pytest.mark.error
 class TestPointErrors:
     @pytest.mark.parametrize(
-        "objective, message",
+        "objective, at, message",
         [
             pytest.param(
                 "MAXIMIZE when t.product = 'A': at(previous: x) over (t.period within t.product)",
-                "DECIDE objective: 'at(previous: x) over (t.period within t.product)' reads more than one "
-                "position over the kept rows (t.period = 2, 3), so the objective would be produced more than "
-                "once",
+                "at(previous: x) over (t.period within t.product)",
+                "'at(previous: x) over (t.period within t.product)' reads more than one position over the kept rows "
+                "(t.period = 2, 3), so the objective would be produced more than once",
                 id="relative",
             ),
             pytest.param(
                 "MAXIMIZE at(first: x) over (t.period within t.product)",
-                "DECIDE: the objective (per ()) does not determine the timeline t.product of at(first: x) over "
-                "(t.period within t.product). Its rows span t.product = 'A', 'B'.",
+                "at(first: x) over (t.period within t.product)",
+                "the objective (per ()) does not determine the timeline t.product: its rows span t.product = 'A', 'B'",
                 id="two-timelines",
             ),
         ],
     )
-    def test_the_objective_is_produced_once(self, decidb_cli, objective, message):
+    def test_the_objective_is_produced_once(self, decidb_cli, objective, at, message):
         """D72: a root frame read from more than one position is two objectives. The first
         period, which has no previous one, reads none and is no variant (D84): the anchors that
         read differ at periods 2 and 3. Over two products' rows, the objective's one class
-        spans two timelines first (D75)."""
-        result = decidb_cli.execute_raw(_edge("x <= t.v", objective=objective))
-        assert message in result.stderr, result.stderr
+        spans two timelines first (D75). The error points at the frame."""
+        decidb_cli.assert_error_at(
+            _edge("x <= t.v", objective=objective), kind="Invalid Input Error", at=at, word=message
+        )
 
     def test_a_class_spanning_timelines_names_its_key_as_written(self, decidb_cli):
         """D75: the subject and the span of one message name the `per` key by the text the query wrote, not by the
@@ -1032,23 +1035,24 @@ class TestPointErrors:
         rows = ((1, 1, "A", 1, 4), (2, 1, "B", 1, 6))
         sql = f"""SELECT id, x {table('t', ('id', 'cost', 'product', 'period', 'v'), rows)} DECIDE x(INT)
             SUCH THAT x <= 9 AND per {key}: x >= at(first: t.v) over (t.period within t.product) MAXIMIZE sum(x)"""
-        result = decidb_cli.execute_raw(sql)
-        assert (
-            f"DECIDE: per {key} does not determine the timeline t.product of at(first: t.v) over "
-            f"(t.period within t.product). {key} = 1 spans t.product = 'A', 'B'."
-        ) in result.stderr, result.stderr
+        decidb_cli.assert_error_at(
+            sql,
+            kind="Invalid Input Error",
+            at="at(first: t.v) over (t.period within t.product)",
+            word=f"per {key} does not determine the timeline t.product: {key} = 1 spans t.product = 'A', 'B'",
+        )
 
     def test_the_objective_falls_back_once(self, decidb_cli):
         """D82: two rows of one position that both reach the `else` read it at their own row,
         5 and 2 here, so the objective would be two values."""
         rows = ((1, "A", 1, 4, 5), (2, "A", 1, 4, 2))
-        result = decidb_cli.execute_raw(
-            _edge("x <= t.v", objective="MAXIMIZE at(previous else t.w: x) over (t.period)", rows=rows)
+        decidb_cli.assert_error_at(
+            _edge("x <= t.v", objective="MAXIMIZE at(previous else t.w: x) over (t.period)", rows=rows),
+            kind="Invalid Input Error",
+            at="at(previous else t.w: x) over (t.period)",
+            word="'at(previous else t.w: x) over (t.period)' falls back to more than one value over the kept rows, "
+            "so the objective would be produced more than once",
         )
-        assert (
-            "DECIDE objective: 'at(previous else t.w: x) over (t.period)' falls back to more than one value "
-            "over the kept rows, so the objective would be produced more than once"
-        ) in result.stderr, result.stderr
 
     @pytest.mark.correctness
     def test_a_missing_position_drops_the_objective_term(self, decidb_cli, scope_solver):
@@ -1764,11 +1768,12 @@ class TestRangeErrors:
         """`decide_frame_limit` caps the values one frame reads over its ranges: every row of
         every selected position, and every `else` standing in for a missing one."""
         sql = _edge("x <= sum(from first to last: t.v) over (t.period within t.product)")
-        result = decidb_cli.execute_raw("SET decide_frame_limit = 4; " + sql)
-        assert (
-            "DECIDE: sum(from first to last: t.v) over (t.period within t.product) reads more than 4 values over "
-            "its ranges, above decide_frame_limit (4). Narrow the range, or raise the setting."
-        ) in result.stderr, result.stderr
+        decidb_cli.assert_error_at(
+            "SET decide_frame_limit = 4; " + sql,
+            kind="Invalid Input Error",
+            at="sum(from first to last:",
+            word="the frame reads more than 4 values over its ranges, above decide_frame_limit (4)",
+        )
         assert [int(row["x"]) for row in answer(decidb_cli, "SET decide_frame_limit = 5; " + sql)] == [9, 9, 9, 9, 9]
         result = decidb_cli.execute_raw("SET decide_frame_limit = 0")
         assert "decide_frame_limit must be >= 1" in result.stderr, result.stderr
@@ -1942,8 +1947,12 @@ class TestRangeReview:
             "MAXIMIZE sum(per t.p: x)"
         )
         result = decidb_cli.execute_raw(sql)
-        message = f"reads more than {limit} values over its ranges, above decide_frame_limit ({limit})"
+        message = f"the frame reads more than {limit} values over its ranges, above decide_frame_limit ({limit})"
         assert (message in result.stderr) == refused, result.stderr
+        if refused:
+            decidb_cli.assert_error_at(
+                sql, kind="Invalid Input Error", at="sum(from previous to next else t.w: x) over (t.p)", word=message
+            )
         assert refused or result.returncode == 0, result.stderr
 
     @pytest.mark.parametrize("bound, optimum", [(4, None), (8, 20)])
@@ -2055,9 +2064,14 @@ class TestAbsenceAndTies:
         decisions -- leave the range no value to read there: the error names the position, as
         a point's does (D73)."""
         rows = ((1, "A", 1, 5), (2, "A", 1, 7), (3, "A", 2, 0))
-        result = decidb_cli.execute_raw(self._sql(rows, clause_sql))
-        assert "finds 2 rows at t.p = 1; a position must hold one row" in result.stderr, (payload, result.stderr)
-        assert_no_internal_leak(result, "a tied position")
+        sql = self._sql(rows, clause_sql)
+        decidb_cli.assert_error_at(
+            sql,
+            kind="Invalid Input Error",
+            at="sum(from previous to previous else 0:",
+            word="the frame finds 2 rows at t.p = 1",
+        )
+        assert_no_internal_leak(decidb_cli.execute_raw(sql), "a tied position")
 
     @pytest.mark.parametrize(
         "bound, expected",
@@ -2083,15 +2097,19 @@ class TestAbsenceAndTies:
         rows = ((1, "A", 1, 5), (2, "A", 2, 6), (3, "A", 3, 4))
         sql = self._sql(rows, "x <= t.d", objective="MINIMIZE norm(x - at(previous: x) over (t.p), 2) - sum(x)")
         assert decidb_cli_gurobi.execute_raw(sql).returncode == 0
-        result = decidb_cli_highs.execute_raw(sql)
-        assert "the objective squares an expression containing more than one decision variable" in result.stderr
-        assert_no_internal_leak(result, "a square over a frame on HiGHS")
+        decidb_cli_highs.assert_error_at(
+            sql,
+            kind="Not implemented Error",
+            at="norm(x - at(previous: x) over (t.p), 2) - sum(x)",
+            word="squaring an expression of more than one decision is not supported on this installation",
+        )
+        assert_no_internal_leak(decidb_cli_highs.execute_raw(sql), "a square over a frame on HiGHS")
 
 
 @pytest.mark.correctness
 @pytest.mark.quadratic
 @pytest.mark.parametrize(
-    "decide, clause_sql, objective, expected, objective_value",
+    "decide, clause_sql, objective, expected, objective_value, refused_at",
     [
         pytest.param(
             "x(REAL), per t.product: y(REAL)",
@@ -2099,6 +2117,7 @@ class TestAbsenceAndTies:
             "MAXIMIZE sum(x) + sum(per t.product: y)",
             None,
             11 + 4 / 6 + 10 + 4 / 7,
+            "y * at(previous: x) over (t.period within t.product) <= 4",
             id="decision-times-a-frame",
         ),
         pytest.param(
@@ -2107,6 +2126,7 @@ class TestAbsenceAndTies:
             "MAXIMIZE sum(x)",
             [3, 3, 1, 3, 3],
             13,
+            "power(at(previous: x) over (t.period within t.product), 2) <= 9",
             id="square-of-a-frame",
         ),
         pytest.param(
@@ -2115,16 +2135,17 @@ class TestAbsenceAndTies:
             "MINIMIZE sum(power(x - at(previous else 0: x) over (t.period within t.product), 2)) - sum(x)",
             [5 / 6, 7 / 6, 1, 1, 1.5],
             None,
+            "sum(power(x - at(previous else 0: x)",
             id="square-in-the-objective",
         ),
     ],
 )
 def test_a_frame_over_decisions_in_a_quadratic_term(
-    decidb_cli_gurobi, decidb_cli_highs, decide, clause_sql, objective, expected, objective_value
+    decidb_cli_gurobi, decidb_cli_highs, decide, clause_sql, objective, expected, objective_value, refused_at
 ):
     """A frame over decisions a product of decisions or a square reads is the range of its one
     position first, a helper per position (deck p. 51), so the term is an ordinary quadratic one:
-    Gurobi answers, HiGHS refuses by name. Worked by hand over A (v 4, 6, 1) and B (v 7, 3):
+    Gurobi answers, HiGHS refuses it. Worked by hand over A (v 4, 6, 1) and B (v 7, 3):
     `y_A x1 <= 4` and `y_A x2 <= 4` keep every x at its bound and y_A at 4/6, B's `y_B x4 <= 4`
     y_B at 4/7; the squares bound x1, x2 and x4 by 3; the objective's sums of squared
     differences are least at (5/6, 7/6, 1), with x3's bound 1 active, and (1, 1.5)."""
@@ -2139,9 +2160,10 @@ def test_a_frame_over_decisions_in_a_quadratic_term(
         assert sum(x) + sum(y) == pytest.approx(objective_value, abs=1e-4), (x, y)
     elif objective_value is not None:
         assert sum(x) == pytest.approx(objective_value, abs=1e-4), x
-    result = decidb_cli_highs.execute_raw(sql)
-    assert "needs Gurobi" in result.stderr, result.stderr
-    assert_no_internal_leak(result, clause_sql)
+    decidb_cli_highs.assert_error_at(
+        sql, kind="Not implemented Error", at=refused_at, word="is not supported on this installation"
+    )
+    assert_no_internal_leak(decidb_cli_highs.execute_raw(sql), clause_sql)
 
 
 @pytest.mark.correctness
@@ -2574,8 +2596,12 @@ def test_a_frames_two_positions_read_in_its_own_order(decidb_cli):
     """The message quotes a frame's first and last position (guide §7.3), so a descending key reads 3 first."""
     sql = """SELECT id, y FROM (VALUES (1, 1), (2, 2), (3, 3)) t(id, k) DECIDE per (): y(REAL)
         SUCH THAT y <= 3 MAXIMIZE at(previous else 0: y) over (t.k desc)"""
-    result = decidb_cli.execute_raw(sql)
-    assert "reads more than one position over the kept rows (t.k = 3, 1)" in result.stderr, result.stderr
+    decidb_cli.assert_error_at(
+        sql,
+        kind="Invalid Input Error",
+        at="at(previous else 0: y) over (t.k desc)",
+        word="reads more than one position over the kept rows (t.k = 3, 1)",
+    )
 
 
 def test_a_frame_text_holds_no_tag(decidb_cli):

@@ -122,8 +122,9 @@ DecideSourceNames PhysicalDecide::Names() const {
 }
 
 string PhysicalDecide::WrittenClause(idx_t source_clause_id) const {
-	return DecideWrittenClause(constraint_sources, source_text,
-	                           DecideWrittenObjective(written_sense, written_objective), source_clause_id);
+	return source_clause_id < constraint_sources.size()
+	           ? QuoteWrittenClause(constraint_sources, source_clause_id, source_text)
+	           : DecideWrittenObjective(written_sense, written_objective);
 }
 
 SolverBackend PhysicalDecide::PlannedSolverBackend() const {
@@ -924,7 +925,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// AnalyzeConstraint so we don't re-emit them as per-row model rows.
 	solver_input.constraint_sources = constraint_sources;
 	solver_input.source_text = source_text;
-	solver_input.objective_written = DecideWrittenObjective(written_sense, written_objective);
+	solver_input.objective_written = DecideClauseRefOf(constraint_sources, source_text, DConstants::INVALID_INDEX);
 	// A variable the query never explicitly lowered gets the default lower bound 0 and
 	// stays non-negative. A variable with an explicit (possibly negative) lower bound
 	// keeps it, and a written bound of -1e30 or below is no bound, as -1e29 is. Must
@@ -1634,7 +1635,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 			// pipes, the C API), so there is no one to answer the offer. Print the
 			// checkpoint once and raise: never prompt where no one can answer.
 			PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget, written_sense == DecideSense::MAXIMIZE);
-			ThrowDecideSolveError(solve_result, PlannedSolverBackend());
+			ThrowDecideSolveError(solve_result);
 		} else {
 			// The interrupt poll installed on the first solve persists on the retained
 			// session into every Continue() chunk, but the prompt below already stops the
@@ -1690,7 +1691,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 					// A resume can only reach a definitive INFEASIBLE/UNBOUNDED when no
 					// incumbent ever existed (an incumbent proves feasibility); surface it
 					// as the plain solver error.
-					ThrowDecideSolveError(solve_result, PlannedSolverBackend());
+					ThrowDecideSolveError(solve_result);
 				}
 				// else: another time-limit stop — loop and re-report with fresh numbers.
 			}
@@ -1715,7 +1716,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 			} else {
 				// Stopped with nothing found yet: the plain timeout error, same as the
 				// non-interactive exit above.
-				ThrowDecideSolveError(solve_result, PlannedSolverBackend());
+				ThrowDecideSolveError(solve_result);
 			}
 		}
 	}
@@ -1889,7 +1890,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 		// No DIAGNOSE prefix, or a status no engine covers (ITERATION_LIMIT, OTHER).
 		// Either way the query reports its status and stops — the second solve that
 		// would name a clause only happens when the user asks for it by name.
-		ThrowDecideSolveError(solve_result, PlannedSolverBackend());
+		ThrowDecideSolveError(solve_result);
 	}
 
 	// Under DIAGNOSE a failure terminal handed off its findings instead of raising: there
@@ -1958,7 +1959,8 @@ public:
 //! double no longer counts consecutively, and no wider integer type recovers a value the
 //! solver never distinguished. That makes the refusal honest rather than a missing
 //! widening. `BOOL` decisions and boolean auxiliaries stay INTEGER and cannot reach it.
-static int64_t DecideSolutionToInteger(double solution_value, const LogicalType &var_type, const string &var_name) {
+static int64_t DecideSolutionToInteger(double solution_value, const LogicalType &var_type, const string &var_name,
+                                       optional_idx declaration) {
 	double rounded = std::round(solution_value);
 	// Both ends spelled out rather than a symmetric magnitude: int32's range is not
 	// symmetric, and `-2147483648` is a value the column can hold.
@@ -1969,8 +1971,11 @@ static int64_t DecideSolutionToInteger(double solution_value, const LogicalType 
 	// The helper refuses a NaN, which compares false against everything, rather than
 	// passing it through to the cast this exists to protect.
 	if (!DecideRoundedAnswerWithin(solution_value, lo, hi)) {
-		// The wording is shared with A1's direct plan (`decide_numeric_policy.hpp`).
-		throw InvalidInputException(DecideWholeNumberRangeMessage(var_name, StringUtil::Format("%.0f", rounded)));
+		// The wording is shared with A1's direct plan (`decide_numeric_policy.hpp`); the error points at the decision's
+		// declaration.
+		throw DecideInvalidValueError(DecideValueRole::INTEGER_ANSWER,
+		                              DecideWholeNumberRangeBefore(var_name) + StringUtil::Format("%.0f", rounded),
+		                              declaration);
 	}
 	return static_cast<int64_t>(rounded);
 }
@@ -2048,13 +2053,15 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 			auto output_data = FlatVector::GetData<int32_t>(output_vector);
 			for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
 				output_data[row_in_chunk] = static_cast<int32_t>(
-				    DecideSolutionToInteger(solution_at(row_in_chunk), var_type, decide_var.GetName()));
+				    DecideSolutionToInteger(solution_at(row_in_chunk), var_type, decide_var.GetName(),
+				                            variable_scopes[decide_var_idx].declaration));
 			}
 		} else if (var_type == LogicalType::BIGINT) {
 			auto output_data = FlatVector::GetData<int64_t>(output_vector);
 			for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
 				output_data[row_in_chunk] =
-				    DecideSolutionToInteger(solution_at(row_in_chunk), var_type, decide_var.GetName());
+				    DecideSolutionToInteger(solution_at(row_in_chunk), var_type, decide_var.GetName(),
+				                            variable_scopes[decide_var_idx].declaration);
 			}
 		} else {
 			// A user decision is INTEGER (BOOL), BIGINT (INT) or DOUBLE (REAL) (DecideDeclarationsBinder).

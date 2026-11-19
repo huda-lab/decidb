@@ -847,15 +847,23 @@ class DeciDBCli:
         one place. Runs the query as ``execute_raw`` does.
         """
         result = self.execute_raw(sql, timeout=timeout, expect_number_range=expect_number_range)
-        message = _error_message(result.stderr)
-        assert (
-            message is not None
-        ), f"Expected an error but stderr had none.\nstdout: {result.stdout[:500]}\nstderr: {result.stderr[:500]}"
-        header = message.splitlines()[0]
-        assert header.startswith(f"{kind}:"), f"Expected a {kind}, the error is:\n{message[:500]}"
-        if word is not None:
-            assert word in message, f"The error does not contain {word!r}:\n{message[:500]}"
-        _assert_error_location(message, at)
+        assert_error_text(result.stderr, kind=kind, at=at, word=word, stdout=result.stdout)
+
+
+def assert_error_text(
+    stderr: str, *, kind: str, at: str | None = None, word: str | None = None, stdout: str = ""
+) -> None:
+    """The check of `DeciDBCli.assert_error_at` on the stderr of a statement some other process ran (a CLI built to run
+    without a solver, for one)."""
+    message = _error_message(stderr)
+    assert (
+        message is not None
+    ), f"Expected an error but stderr had none.\nstdout: {stdout[:500]}\nstderr: {stderr[:500]}"
+    header = message.splitlines()[0]
+    assert header.startswith(f"{kind}:"), f"Expected a {kind}, the error is:\n{message[:500]}"
+    if word is not None:
+        assert word in message, f"The error does not contain {word!r}:\n{message[:500]}"
+    _assert_error_location(message, at)
 
 
 #: The line of a caret block that quotes the query, and the caret line under it.

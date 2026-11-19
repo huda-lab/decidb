@@ -188,7 +188,9 @@ def execute(script: str, env: Mapping[str, str]) -> Outcome:
     error = _ERROR_HEADER.search(process.stderr)
     if error:
         text = process.stderr[error.start() :].strip()
-        return Outcome("infeasible" if "is infeasible" in text else "error", text=text)
+        # A bound the type cannot hold ("the constraint cannot hold") is the verdict infeasible, reached before a solve.
+        infeasible = "is infeasible" in text or "the constraint cannot hold" in text
+        return Outcome("infeasible" if infeasible else "error", text=text)
     start = process.stdout.rfind("[{")
     return Outcome("answer", rows=json.loads(process.stdout[start:]) if start >= 0 else [])
 

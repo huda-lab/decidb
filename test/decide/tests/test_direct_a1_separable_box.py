@@ -978,7 +978,7 @@ def test_a1_error_cases_fail_on_both_paths(decidb_cli, name):
         _run(decidb_cli, sql, "off", expected == "int_range")
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
+    assert "decide_direct_solve is 'require'" not in str(direct_error.value), "no rule applied to the query"
     assert error_class(str(direct_error.value)) == expected, str(direct_error.value)
 
 
@@ -1075,7 +1075,7 @@ def test_a1_boundary_values_read_like_the_solver(decidb_cli, name):
     sql = BOUNDARY_CASES[name]
     direct = _run_all(decidb_cli, sql, "require")
     solver = _run_all(decidb_cli, sql, "off", writes_number_out_of_range(sql))
-    assert direct[0] != "error" or "decide_direct_solve=require" not in direct[1], "no rule applied to the query"
+    assert direct[0] != "error" or "decide_direct_solve is 'require'" not in direct[1], "no rule applied to the query"
     assert _all_close(direct, solver), (direct, solver)
 
 
@@ -1331,7 +1331,7 @@ def test_a1_a_late_bad_row_raises_with_a_row_check_in_front_of_the_verdict(decid
     [
         ("x >= 5 AND x <= 3 MINIMIZE SUM(x)", "infeasible"),
         ("x >= 0 MAXIMIZE SUM(x)", "unbounded"),
-        ("x <= 1e17 AND x >= 0 MAXIMIZE SUM(x)", "beyond the range"),
+        ("x <= 1e17 AND x >= 0 MAXIMIZE SUM(x)", "past 2\\^53"),
     ],
 )
 def test_a1_a_constant_problem_raises_however_little_of_the_result_is_read(decidb_cli, problem, message):

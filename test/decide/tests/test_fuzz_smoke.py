@@ -112,8 +112,8 @@ OPTIMAL = Expected("optimal", objective=1.0)
     [
         pytest.param(OPTIMAL, Outcome("internal", text="INTERNAL Error"), "internal", id="a-failed-run"),
         pytest.param(
-            Expected("error", phrase="must hold one row"),
-            Outcome("error", text="... must hold one row."),
+            Expected("error", phrase="the frame finds"),
+            Outcome("error", text="... the frame finds 2 rows at t.p = 1"),
             "ok",
             id="expected-error",
         ),

@@ -147,11 +147,13 @@ class TestInfeasibleModels:
     def test_real_upper_below_nonnegativity_is_rejected(self, decidb_cli, oracle_solver):
         """Bug 1 / Part C: a user upper bound below the non-negative REAL floor
         (`x <= -1`, default lower 0) is a type-domain conflict — loosening can never
-        help, only the type can. It is rejected with a precise static error naming the
-        domain, BEFORE the elastic engine, rather than reaching diagnosis."""
-        decidb_cli.assert_error(
+        help, only the type can. It is rejected with a precise static error pointing at the
+        bound, BEFORE the elastic engine, rather than reaching diagnosis."""
+        decidb_cli.assert_error_at(
             "SELECT x FROM (VALUES (1)) t(id) " "DECIDE x(REAL) SUCH THAT x <= -1 MAXIMIZE SUM(x)",
-            match=r"(?i)x <= -1 cannot hold.*non-negative",
+            kind="Invalid Input Error",
+            at="x <= -1",
+            word="'x' is never negative",
         )
         oracle_solver.create_model("infeas_real_upper_below_zero")
         oracle_solver.add_variable("x", VarType.CONTINUOUS, lb=0.0, ub=-1.0)
@@ -162,9 +164,11 @@ class TestInfeasibleModels:
         """A user lower bound above the BOOLEAN 0/1 ceiling (`x >= 2`) is Boolean
         arithmetic that cannot hold, so the query is infeasible, and the error names the
         bound before any model is built. The 0/1 box is intrinsic and never loosened."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             "SELECT x FROM (VALUES (1)) t(id) " "DECIDE x(BOOL) SUCH THAT x >= 2 MAXIMIZE SUM(x)",
-            match=r"DECIDE optimization is infeasible: x >= 2 cannot hold for a BOOL variable\.",
+            kind="Invalid Input Error",
+            at="x >= 2",
+            word="the constraint cannot hold: 'x' is a BOOL decision",
         )
         oracle_solver.create_model("infeas_boolean_lower_above_one")
         oracle_solver.add_variable("x", VarType.BINARY, lb=0.0, ub=1.0)
@@ -173,21 +177,27 @@ class TestInfeasibleModels:
         assert oracle_solver.solve().status == SolverStatus.INFEASIBLE
 
     def test_strict_bound_is_quoted_as_typed_in_domain_rejection(self, decidb_cli):
-        """The pre-solve rejection of a bound against the type domain quotes the clause as the
+        """The pre-solve rejection of a bound against the type domain points at the clause as the
         user wrote it. A strict `x < 0` is normalized to `x <= -1` inside the solver, but the
-        message says `x < 0`. A strict BOOLEAN bound outside 0 and 1 (`x > 1`, `x > 1.5`) is quoted
+        caret stands on `x < 0`. A strict BOOLEAN bound outside 0 and 1 (`x > 1`, `x > 1.5`) is pointed at
         the same way."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             "SELECT x FROM (VALUES (1)) t(id) " "DECIDE x(INT) SUCH THAT x < 0 MAXIMIZE SUM(x)",
-            match=r"(?i)x < 0 cannot hold.*non-negative",
+            kind="Invalid Input Error",
+            at="x < 0",
+            word="'x' is never negative",
         )
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             "SELECT x FROM (VALUES (1)) t(id) " "DECIDE x(BOOL) SUCH THAT x > 1 MAXIMIZE SUM(x)",
-            match=r"DECIDE optimization is infeasible: x > 1 cannot hold for a BOOL variable\.",
+            kind="Invalid Input Error",
+            at="x > 1",
+            word="'x' is a BOOL decision",
         )
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             "SELECT x FROM (VALUES (1)) t(id) " "DECIDE x(BOOL) SUCH THAT x > 1.5 MAXIMIZE SUM(x)",
-            match=r"DECIDE optimization is infeasible: x > 1\.5 cannot hold for a BOOL variable\.",
+            kind="Invalid Input Error",
+            at="x > 1.5",
+            word="'x' is a BOOL decision",
         )
 
     def test_strict_fraction_inside_domain_is_not_rejected(self, decidb_cli):

@@ -82,11 +82,11 @@ SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x >= sum(from 1 previous to 3 next 
 2	0.0
 3	0.0
 
-# over one timeline, period 1 holds two rows: the message quotes the frame as written
+# over one timeline, period 1 holds two rows: the message names the position
 statement error
 SELECT id, x FROM T DECIDE x(REAL) SUCH THAT sum(at(1 next else NULL: x) over (T.period desc within ())) <= 3 MAXIMIZE sum(x);
 ----
-Invalid Input Error: DECIDE: at(1 next else NULL: x) over (T.period desc within ()) finds 2 rows at T.period = 1; a position must hold one row.
+Invalid Input Error: the frame finds 2 rows at T.period = 1
 
 # within each product, a missing position drops its member: A's sum reads x1 alone, and
 # B's, which reads nothing, is skipped

@@ -160,10 +160,8 @@ void GurobiSession::Load(const SolverModel &ilp) {
 	int error = api.emptyenv_internal(&guard.env, api.version_major, api.version_minor, api.version_tech);
 	if (error || !guard.env) {
 		// Gurobi's own words when it made an environment to hold them, never its error number.
-		string reason = guard.env ? StringUtil::Format(" (%s)", api.geterrormsg(guard.env)) : string();
-		throw InternalException("Failed to create Gurobi environment%s. "
-		                        "Check that GUROBI_HOME is set and license is valid.",
-		                        reason);
+		throw InvalidInputException("the Gurobi environment could not start%s",
+		                            guard.env ? StringUtil::Format(": %s", api.geterrormsg(guard.env)) : string());
 	}
 	api.setintparam(guard.env, "OutputFlag", std::getenv("DECIDB_PROFILE_SOLVER_LOG") ? 1 : 0);
 	// By default a query answers with the optimum (`decide_mip_gap` = 0), not an incumbent within Gurobi's default
@@ -185,9 +183,7 @@ void GurobiSession::Load(const SolverModel &ilp) {
 	}
 	error = api.startenv(guard.env);
 	if (error) {
-		throw InternalException("Failed to start Gurobi environment (%s). "
-		                        "Check that GUROBI_HOME is set and license is valid.",
-		                        api.geterrormsg(guard.env));
+		throw InvalidInputException("the Gurobi environment could not start: %s", api.geterrormsg(guard.env));
 	}
 
 	//===--------------------------------------------------------------------===//
@@ -241,9 +237,8 @@ void GurobiSession::Load(const SolverModel &ilp) {
 		error = api.addconstr(guard.model, (int)constr.indices.size(), const_cast<int *>(constr.indices.data()),
 		                      const_cast<double *>(constr.coefficients.data()), constr.sense, constr.rhs, nullptr);
 		if (error) {
-			// Use InvalidInputException so a malformed constraint rejects this query
-			// without invalidating the DuckDB session for subsequent queries.
-			throw InvalidInputException("Failed to add constraint to Gurobi: %s", api.geterrormsg(guard.env));
+			// A query never causes a load failure.
+			throw InternalException("Failed to add constraint to Gurobi: %s", api.geterrormsg(guard.env));
 		}
 	}
 
@@ -251,15 +246,15 @@ void GurobiSession::Load(const SolverModel &ilp) {
 	phase.Next("gurobi.quadratic_rows");
 	for (auto &qc : ilp.quadratic_constraints) {
 		if (!api.addqconstr) {
-			throw InvalidInputException("Quadratic constraints require Gurobi with GRBaddqconstr support. "
-			                            "Your Gurobi version does not support this function.");
+			throw InternalException("Quadratic constraints require Gurobi with GRBaddqconstr support. "
+			                        "Your Gurobi version does not support this function.");
 		}
 		error = api.addqconstr(guard.model, (int)qc.linear_indices.size(), const_cast<int *>(qc.linear_indices.data()),
 		                       const_cast<double *>(qc.linear_coefficients.data()), (int)qc.q_rows.size(),
 		                       const_cast<int *>(qc.q_rows.data()), const_cast<int *>(qc.q_cols.data()),
 		                       const_cast<double *>(qc.q_coefficients.data()), qc.sense, qc.rhs, nullptr);
 		if (error) {
-			throw InvalidInputException("Failed to add quadratic constraint to Gurobi: %s", api.geterrormsg(guard.env));
+			throw InternalException("Failed to add quadratic constraint to Gurobi: %s", api.geterrormsg(guard.env));
 		}
 	}
 
@@ -293,7 +288,7 @@ void GurobiSession::Load(const SolverModel &ilp) {
 		}
 		}
 		if (error) {
-			throw InvalidInputException("Failed to add general constraint to Gurobi: %s", api.geterrormsg(guard.env));
+			throw InternalException("Failed to add general constraint to Gurobi: %s", api.geterrormsg(guard.env));
 		}
 	}
 
@@ -306,7 +301,7 @@ void GurobiSession::Load(const SolverModel &ilp) {
 		                                  static_cast<int>(ic.indices.size()), ic.indices.data(),
 		                                  ic.coefficients.data(), ic.sense, ic.rhs);
 		if (error) {
-			throw InvalidInputException("Failed to add indicator constraint to Gurobi: %s", api.geterrormsg(guard.env));
+			throw InternalException("Failed to add indicator constraint to Gurobi: %s", api.geterrormsg(guard.env));
 		}
 	}
 
@@ -319,8 +314,8 @@ void GurobiSession::Load(const SolverModel &ilp) {
 		error = api.addqpterms(guard.model, (int)ilp.q_vals.size(), const_cast<int *>(ilp.q_rows.data()),
 		                       const_cast<int *>(ilp.q_cols.data()), const_cast<double *>(ilp.q_vals.data()));
 		if (error) {
-			throw InvalidInputException("Failed to add quadratic objective terms to Gurobi: %s",
-			                            api.geterrormsg(guard.env));
+			throw InternalException("Failed to add quadratic objective terms to Gurobi: %s",
+			                        api.geterrormsg(guard.env));
 		}
 	}
 }

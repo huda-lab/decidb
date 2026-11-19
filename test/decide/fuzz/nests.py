@@ -61,8 +61,8 @@ DRAWS = 16
 #: What the language refuses under ``<>``: an AVG it does not read as ``SUM(e) <> K·n`` makes its side fractional
 #: (guide 3) or is refused beside another term or with its own ``when`` or ``per`` (errors.md), and a MIN or MAX over
 #: a leaf that is the whole side has no ``<>`` (``RewriteMinMax``).
-FRACTIONAL = ("can take fractional values", "AVG in a <> constraint is not supported yet")
-EXTREMUM = ("does not support <> comparison with MIN/MAX",)
+FRACTIONAL = ("can take fractional values", "AVG in a <> constraint beside another term")
+EXTREMUM = ("<> on MIN or MAX is not supported",)
 
 
 def decision(name: str) -> Text:

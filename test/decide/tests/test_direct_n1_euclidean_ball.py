@@ -37,6 +37,8 @@ import pytest
 from solver.types import ObjSense, VarType
 
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
+from decidb_cli import assert_error_text
+
 from ._direct_oracle_common import agree_with_oracle, outcome, run, sql_literal, values_clause, without_gurobi
 
 
@@ -701,9 +703,14 @@ def test_n1_a_factor_past_a_double_raises_the_solvers_error(decidb_cli):
         "SELECT id, x FROM (FROM (VALUES (1, 3.0::DOUBLE, 1e200::DOUBLE), (2, 4.0::DOUBLE, 1.0::DOUBLE)) t(id, s, w) "
         "DECIDE x(REAL) SUCH THAT SUM(POWER(w * x, 2)) <= 25 MAXIMIZE SUM(s * x)) ORDER BY id"
     )
+    decidb_cli.assert_error_at(
+        f"SET decide_direct_solve='require'; {sql}",
+        kind="Invalid Input Error",
+        at="SUM(POWER(w * x, 2)) <= 25",
+        word="computes a number too large for a DOUBLE",
+    )
     direct = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {sql}").stderr
     solver = decidb_cli.execute_raw(f"SET decide_direct_solve='off'; {sql}").stderr
-    assert "SUM(POWER(w * x, 2)) <= 25 computes a number too large for a DOUBLE" in direct, direct
     assert direct == solver, (direct, solver)
 
 
@@ -715,8 +722,12 @@ def test_n1_a_huge_constant_factor_on_a_square_objective_raises_the_too_large_er
         "SELECT id, x FROM (FROM (VALUES (1, 3e60::DOUBLE), (2, 4e60::DOUBLE)) t(id, s) "
         "DECIDE x(REAL) SUCH THAT SUM(1e200 * POWER(x, 2)) <= 25 MINIMIZE SUM(POWER(x - s, 2))) ORDER BY id"
     )
-    direct = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {sql}").stderr
-    assert "MINIMIZE SUM(POWER(x - s, 2)) computes a number too large for a DOUBLE" in direct, direct
+    decidb_cli.assert_error_at(
+        f"SET decide_direct_solve='require'; {sql}",
+        kind="Invalid Input Error",
+        at="SUM(POWER(x - s, 2))",
+        word="computes a number too large for a DOUBLE",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -769,8 +780,12 @@ def test_n1_formula_stays_in_range_where_the_squares_do(decidb_cli, scale, facto
 def test_n1_scores_past_the_range_of_their_squares_raise_rather_than_answer_zero(decidb_cli, factor, q):
     # h is past a DOUBLE from finite inputs: the direct path raises, where Gurobi returns x = 0 with a warning.
     sql = _two_rows("3e154", "4e154", _max_25(factor))
-    direct = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {sql}").stderr
-    assert "MAXIMIZE SUM(s * x) computes a number too large for a DOUBLE" in direct
+    decidb_cli.assert_error_at(
+        f"SET decide_direct_solve='require'; {sql}",
+        kind="Invalid Input Error",
+        at="SUM(s * x)",
+        word="computes a number too large for a DOUBLE",
+    )
     assert _solver_values(decidb_cli, sql, number_range=True) == [0.0, 0.0]
 
 
@@ -784,8 +799,12 @@ _SHARES_IN_RANGE = [pytest.param("", "1.2e154", id="q1"), pytest.param("2 * ", "
 def test_n1_a_sum_of_squares_past_a_double_raises_though_each_square_is_in_range(decidb_cli, factor, score):
     # Each share is in range; only h is past a DOUBLE, a check above the window.
     sql = _two_rows(score, score, _max_25(factor))
-    direct = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {sql}").stderr
-    assert "MAXIMIZE SUM(s * x) computes a number too large for a DOUBLE" in direct
+    decidb_cli.assert_error_at(
+        f"SET decide_direct_solve='require'; {sql}",
+        kind="Invalid Input Error",
+        at="SUM(s * x)",
+        word="computes a number too large for a DOUBLE",
+    )
 
 
 # 5,000 rows: the first 4,998 are in group `a`, whose h passes; the last two are in group `b`, whose h is past a DOUBLE
@@ -809,8 +828,12 @@ def test_n1_a_group_whose_h_passes_a_double_raises_though_no_streamed_row_reads_
     # h is checked when the groups are built (the group's row, above the aggregate), so the group raises whether or not
     # a row of it is among the rows read: the solver reads every row, and raises for the one group of several.
     sql = f"{read}{_one_group_overflows(factor, score)}) q{tail}"
-    direct = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {sql}").stderr
-    assert "MAXIMIZE SUM(s * x) computes a number too large for a DOUBLE" in direct
+    decidb_cli.assert_error_at(
+        f"SET decide_direct_solve='require'; {sql}",
+        kind="Invalid Input Error",
+        at="SUM(s * x)",
+        word="computes a number too large for a DOUBLE",
+    )
 
 
 @pytest.mark.correctness
@@ -820,8 +843,12 @@ def test_n1_a_target_past_a_double_raises_on_a_row_outside_every_ball(decidb_cli
         "SELECT x FROM (FROM (VALUES (1, 1e10::DOUBLE, NULL::VARCHAR)) t(id, s, k) DECIDE x(REAL) "
         "SUCH THAT SUM(POWER(x, 2)) by (k) <= 9 MINIMIZE SUM(1e-300 * POWER(x, 2) - s * x)) q"
     )
-    direct = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {sql}").stderr
-    assert "computes a number too large for a DOUBLE" in direct
+    decidb_cli.assert_error_at(
+        f"SET decide_direct_solve='require'; {sql}",
+        kind="Invalid Input Error",
+        at="SUM(1e-300 * POWER(x, 2) - s * x)",
+        word="computes a number too large for a DOUBLE",
+    )
 
 
 @pytest.mark.correctness
@@ -1149,19 +1176,26 @@ def test_n1_answers_on_a_machine_with_no_gurobi(decidb_exe_path, tmp_path):
     answered = cli(query)
     assert answered.stdout.split() == ["1|3.0", "2|4.0"], answered.stderr
     refused = cli(f"SET decide_direct_solve='off'; {query}")
-    assert "which needs Gurobi" in refused.stderr, refused.stderr
+    assert_error_text(
+        refused.stderr,
+        kind="Not implemented Error",
+        at="SUM(POWER(x, 2)) <= 25",
+        word="squaring or multiplying decisions in a constraint is not supported on this installation",
+    )
 
 
 @pytest.mark.error
 def test_a_refusal_with_no_gurobi_quotes_the_quadratic_clause(decidb_exe_path, tmp_path):
-    # An extra clause makes N1 decline, so the solver plan is built and refuses the quadratic limit. The refusal names
-    # that limit as written, and not the linear clause beside it.
+    # An extra clause makes N1 decline, so the solver plan is built and refuses the quadratic limit. The refusal points
+    # at that limit, and not the linear clause beside it.
     query = (
         "SELECT id, x FROM (FROM (VALUES (1, 3.0::DOUBLE), (2, 4.0::DOUBLE)) t(id, s) "
         "DECIDE x(REAL) SUCH THAT SUM(x) <= 50 AND SUM(POWER(x, 2)) <= 25 MAXIMIZE SUM(s * x)) ORDER BY id"
     )
     refused = without_gurobi(decidb_exe_path, tmp_path)(query)
-    assert (
-        "the SUCH THAT clause `SUM(POWER(x, 2)) <= 25` squares or multiplies decision variables" in refused.stderr
-    ), refused.stderr
-    assert "SUM(x) <= 50" not in refused.stderr, refused.stderr
+    assert_error_text(
+        refused.stderr,
+        kind="Not implemented Error",
+        at="SUM(POWER(x, 2)) <= 25",
+        word="squaring or multiplying decisions in a constraint is not supported on this installation",
+    )

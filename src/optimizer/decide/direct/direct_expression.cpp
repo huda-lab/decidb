@@ -210,8 +210,11 @@ ExprPtr ExpressionBuilder::Fn(const string &name, const vector<ExprPtr> &args) c
 	return Wrap(std::move(expr));
 }
 ExprPtr ExpressionBuilder::RaiseInvalidValue(DecideValueRole role, const string &written, optional_idx place) const {
+	return RaiseInvalidValue(role, Constant(Value(written)), place);
+}
+ExprPtr ExpressionBuilder::RaiseInvalidValue(DecideValueRole role, const ExprPtr &written, optional_idx place) const {
 	return Fn("__internal_decide_invalid_value",
-	          {Constant(Value::INTEGER(static_cast<int32_t>(role))), Constant(Value(written)),
+	          {Constant(Value::INTEGER(static_cast<int32_t>(role))), written,
 	           Constant(place.IsValid() ? Value::UBIGINT(place.GetIndex()) : Value(LogicalType::UBIGINT))});
 }
 ExprPtr ExpressionBuilder::IsNull(const ExprPtr &a) const {

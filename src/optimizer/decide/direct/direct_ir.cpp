@@ -202,6 +202,7 @@ private:
 			auto &variable = decide.decide_variables[i];
 			DirectIRDecision decision;
 			decision.name = variable->GetName();
+			decision.declaration = decide.variable_scopes[i].declaration;
 			decision.output_type = variable->return_type;
 			decision.scope = decide.variable_scopes[i].scope;
 			if (decision.scope == DecideVarScope::KEYED) {
@@ -449,7 +450,7 @@ private:
 		idx_t source_id;
 		if (TryParseSourceClauseTag(leaf.GetAlias(), source_id)) {
 			D_ASSERT(source_id < decide.constraint_sources.size());
-			ir_node.written = QuoteWrittenClause(decide.constraint_sources, source_id, decide.source_text);
+			ir_node.written = DecideClauseRefOf(decide.constraint_sources, decide.source_text, source_id);
 		} else {
 			MarkNotProved(ir_node.status);
 		}
@@ -535,7 +536,7 @@ private:
 
 	void ReadObjective(DirectIRObjective &objective) const {
 		objective.offset = decide.objective_constant_offset;
-		objective.written = DecideWrittenObjective(decide.written_sense, decide.written_objective);
+		objective.written = DecideClauseRefOf(decide.constraint_sources, decide.source_text, DConstants::INVALID_INDEX);
 		if (!decide.decide_objective) {
 			return;
 		}

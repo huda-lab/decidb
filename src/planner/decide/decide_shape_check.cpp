@@ -18,8 +18,8 @@ DecideShapeCheck::DecideShapeCheck(ClientContext &context, idx_t decide_index, c
     : context(context), decide_index(decide_index), names(names) {
 }
 
-void DecideShapeCheck::Refuse(const Expression &term, const string &problem, const string &clause) const {
-	throw InvalidInputException(term, "%s In %s.", problem, clause);
+void DecideShapeCheck::Refuse(const Expression &term, const string &problem) const {
+	throw NotImplementedException(term, "%s", problem);
 }
 
 //! An operator as SQL writes it: `COALESCE`, `IS NULL`, `%`; a function as the user wrote it (`mod` for `%`).
@@ -46,51 +46,39 @@ static string WrittenConditional(const Expression &expr, const DecideSourceText 
 	return length == 0 ? "CASE" : StringUtil::Upper(written.substr(0, length));
 }
 
-void DecideShapeCheck::CheckVocabulary(const Expression &expr, const string &clause) const {
+void DecideShapeCheck::CheckVocabulary(const Expression &expr) const {
 	if (!BoundExpressionReferencesDecide(expr, decide_index)) {
 		return;
 	}
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::BOUND_CASE:
-		Refuse(expr,
-		       StringUtil::Format("%s over a DECIDE variable is not supported. Write the condition as a scope in "
-		                          "front of the clause (when category = 'A': sum(x) >= 1), split rows into classes "
-		                          "with per, or pre-compute conditional values in a CTE or subquery before the "
-		                          "DECIDE clause.",
-		                          WrittenConditional(expr, names.text)),
-		       clause);
+		Refuse(expr, WrittenConditional(expr, names.text) + " over a decision is not supported");
 	case ExpressionClass::BOUND_OPERATOR:
-		Refuse(expr, StringUtil::Format("DECIDE: operator '%s' cannot take a DECIDE variable.", OperatorName(expr)),
-		       clause);
+		Refuse(expr, "operator '" + OperatorName(expr) + "' over a decision is not supported");
 	case ExpressionClass::BOUND_FUNCTION: {
 		auto &func = expr.Cast<BoundFunctionExpression>();
 		auto &name = func.function.name;
 		idx_t exponent;
 		if (IsDecidePowerCall(func)) {
 			if (!TryGetDecideWholeExponent(context, *func.children[1], exponent)) {
-				Refuse(expr,
-				       StringUtil::Format("POWER over a DECIDE variable needs an exponent that is a whole number known "
-				                          "before the query runs, found '%s'.",
-				                          RenderDecideSource(*func.children[1], names)),
-				       clause);
+				Refuse(expr, "the exponent '" + RenderDecideSource(*func.children[1], names) +
+				                 "' of POWER over a decision is not a constant whole number");
 			}
 		} else if (name == "/") {
 			if (BoundExpressionReferencesDecide(*func.children[1], decide_index)) {
-				Refuse(expr, "DECIDE: cannot divide by a DECIDE variable.", clause);
+				Refuse(expr, "division by a decision is not supported");
 			}
 		} else if (name != "+" && name != "-" && name != "*" && name != "@") {
 			// The vocabulary of the model.
-			Refuse(expr,
-			       StringUtil::Format("DECIDE: %s '%s' cannot take a DECIDE variable.",
-			                          func.is_operator ? "operator" : "function", OperatorName(expr)),
-			       clause);
+			Refuse(expr, string(func.is_operator ? "operator" : "function") + " '" + OperatorName(expr) +
+			                 "' over a decision is not supported");
 		}
 		break;
 	}
 	default:
 		break;
 	}
-	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { CheckVocabulary(child, clause); });
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { CheckVocabulary(child); });
 }
 
 //! The smallest node under `term` whose degree is still `degree`: the product the caret points at.
@@ -105,40 +93,31 @@ static const Expression &HighestDegreeNode(ClientContext &context, const Express
 	return found ? HighestDegreeNode(context, *found, decide_index, degree) : term;
 }
 
-void DecideShapeCheck::CheckSide(const Expression &side, const string &clause) const {
-	CheckVocabulary(side, clause);
+void DecideShapeCheck::CheckSide(const Expression &side) const {
+	CheckVocabulary(side);
 	for (auto &atom : ReadCanonicalAtoms(side, decide_index)) {
 		auto degree = DecideDegreeOf(context, *atom.term, decide_index).degree;
 		if (degree > 2) {
-			throw InvalidInputException(HighestDegreeNode(context, *atom.term, decide_index, degree),
-			                            "DECIDE: %s has a term of degree %llu, which no solver DeciDB supports can "
-			                            "optimize. Instead, write each term with at most two decision factors, as in "
-			                            "x, POWER(x, 2) or x * y.",
-			                            clause, static_cast<uint64_t>(degree));
+			throw NotImplementedException(HighestDegreeNode(context, *atom.term, decide_index, degree),
+			                              "a term of degree %llu is not supported", static_cast<uint64_t>(degree));
 		}
 	}
 }
 
-void DecideShapeCheck::CheckConstraints(const Expression &constraints,
-                                        const vector<ConstraintSourceInfo> &sources) const {
+void DecideShapeCheck::CheckConstraints(const Expression &constraints) const {
 	ForEachConstraintLeaf(constraints, [&](const Expression &leaf) {
 		// A bound IN marker or a bare BOOL decision is a row with nothing to judge.
 		if (leaf.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
 			return;
 		}
-		// InitializeConstraintSourceInfo tagged every comparison of the clause tree.
-		idx_t source_id = DConstants::INVALID_INDEX;
-		TryParseSourceClauseTag(leaf.GetAlias(), source_id);
-		D_ASSERT(source_id < sources.size());
-		auto clause = "the SUCH THAT clause `" + QuoteWrittenClause(sources, source_id, names.text) + "`";
 		auto &comparison = leaf.Cast<BoundComparisonExpression>();
-		CheckSide(*comparison.left, clause);
-		CheckSide(*comparison.right, clause);
+		CheckSide(*comparison.left);
+		CheckSide(*comparison.right);
 	});
 }
 
-void DecideShapeCheck::CheckObjective(const Expression &objective, const string &written) const {
-	CheckSide(objective, "the objective `" + written + "`");
+void DecideShapeCheck::CheckObjective(const Expression &objective) const {
+	CheckSide(objective);
 }
 
 } // namespace duckdb

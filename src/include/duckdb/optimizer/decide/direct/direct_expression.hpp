@@ -138,6 +138,8 @@ public:
 	//! it, at `place` in the query (invalid for none): NULL where it is not reached, so it stands as the branch of a
 	//! CASE that tests the value.
 	ExprPtr RaiseInvalidValue(DecideValueRole role, const string &written, optional_idx place) const;
+	//! The same for a `written` computed at run time (an answer's value), a VARCHAR expression.
+	ExprPtr RaiseInvalidValue(DecideValueRole role, const ExprPtr &written, optional_idx place) const;
 	//! `a IS NULL`.
 	ExprPtr IsNull(const ExprPtr &a) const;
 	//! `a` converted to `type`; `a` itself when it already has that type.

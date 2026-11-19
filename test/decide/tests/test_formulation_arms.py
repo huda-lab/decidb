@@ -35,7 +35,12 @@ def _answer(cli, sql, **options):
     return [dict(zip(cols, row)) for row in rows]
 
 
-def _refused(cli, sql, message):
+def _refused(cli, sql, message, at=None, kind="Invalid Input Error"):
+    """`sql` fails: pointing at `at` with the sentence `message` when `at` is given, else with a message that matches
+    the regular expression `message`."""
+    if at is not None:
+        cli.assert_error_at(sql, kind=kind, at=at, word=message)
+        return
     with pytest.raises(DeciDBCliError) as excinfo:
         cli.execute(sql)
     assert re.search(message, excinfo.value.message), excinfo.value.message
@@ -100,7 +105,9 @@ def test_strict_greater_than_over_a_quadratic_clause(decidb_cli_gurobi, decidb_c
     _refused(
         decidb_cli_highs,
         sql,
-        r"squares or multiplies decision variables, which needs Gurobi",
+        "squaring or multiplying decisions in a constraint is not supported on this installation",
+        at="SUM(x * x) > 20",
+        kind="Not implemented Error",
     )
 
 
@@ -265,11 +272,7 @@ def test_not_equal_over_a_decision_open_below_is_refused(decidb_cli_gurobi, deci
         SUCH THAT x >= -1e30 AND x <= 10 AND x <> 3
         MAXIMIZE SUM(x)"""
     for cli in (decidb_cli_gurobi, decidb_cli_highs):
-        _refused(
-            _lowered(cli),
-            sql,
-            r"Rewriting <> requires a finite bound on 'x'\. Add constraints 'x >= <lower>' and",
-        )
+        _refused(_lowered(cli), sql, "'x' has no finite bound, which <> needs", at="x <> 3")
 
 
 def test_not_equal_over_a_product_open_below_names_its_factor(decidb_cli_gurobi, decidb_cli_highs):
@@ -281,11 +284,7 @@ def test_not_equal_over_a_product_open_below_names_its_factor(decidb_cli_gurobi,
         SUCH THAT x >= -1e30 AND x <= 10 AND b * x <> 3
         MAXIMIZE SUM(x)"""
     for cli in (decidb_cli_gurobi, decidb_cli_highs):
-        _refused(
-            _lowered(cli),
-            sql,
-            r"Rewriting <> requires a finite bound on 'x'\. Add constraints",
-        )
+        _refused(_lowered(cli), sql, "'x' has no finite bound, which <> needs", at="b * x <> 3")
 
 
 def test_not_equal_over_a_coefficient_that_is_zero_on_a_row(decidb_cli_gurobi, decidb_cli_highs):
@@ -650,7 +649,8 @@ def test_a_product_with_two_reducer_helpers_names_the_unbounded_member(decidb_cl
         _refused(
             cli,
             sql,
-            r"Bilinear term requires a finite upper bound on variable 'y'\. Add a constraint like",
+            "'y' has no finite upper bound, which its product with a BOOL decision needs",
+            at="b * SUM(y) by (t.g) <= 4",
         )
 
 
@@ -669,14 +669,14 @@ _HELPER_ROWS = "(VALUES (1, 'a'), (2, 'a'), (3, 'b')) t(id, g)"
             "x >= -1e30 AND x <= 20",
             "x <= 0.5 * max(x) by (t.g) + 8",
             "MAXIMIZE SUM(x)",
-            r"Rewriting MIN/MAX requires a finite bound on 'x'",
+            "'x' has no finite bound, which MIN or MAX needs",
         ),
         # MIN helper whose own box is open below.
         (
             "x >= -1e30 AND x <= 20",
             "x >= 2 * min(x) by (t.g) - 1",
             "MINIMIZE SUM(x)",
-            r"Rewriting MIN/MAX requires a finite bound on 'x'",
+            "'x' has no finite bound, which MIN or MAX needs",
         ),
         # MIN helper whose members are open above: nothing bounds the maximum.
         ("x >= 0", "x <= min(x) by (t.g) + 5", "MAXIMIZE SUM(x)", _UNBOUNDED),
@@ -697,7 +697,10 @@ def test_reducer_helper_with_an_open_closing_side(
         SUCH THAT {bounds} AND {clause}
         {objective}"""
     for cli in (decidb_cli_gurobi, decidb_cli_highs):
-        _refused(_lowered(cli), sql, message)
+        if message is _UNBOUNDED:
+            _refused(_lowered(cli), sql, message)
+        else:
+            _refused(_lowered(cli), sql, message, at=clause)
 
 
 # ---------------------------------------------------------------------------
@@ -712,15 +715,11 @@ def test_reducer_helper_with_an_open_closing_side(
 )
 def test_l0_norm_over_an_unbounded_decision_names_the_norm(decidb_cli_gurobi, decidb_cli_highs, bounds):
     """`norm(x - w, 0)` links a 0/1 indicator to `x - w` with a Big-M, which needs a finite box on `x`. The refusal
-    names the construct that asked, the norm, and the variable to bound (it said MIN/MAX before).
+    names the construct that asked, the norm, and the variable with no bound (it said MIN/MAX before).
     """
     sql = f"""
         SELECT id, x FROM (VALUES (1, 3.0), (2, 7.0)) t(id, w) DECIDE x(REAL)
         SUCH THAT SUM(x) = 10 AND {bounds}
         MINIMIZE norm(x - w, 0)"""
     for cli in (decidb_cli_gurobi, decidb_cli_highs):
-        _refused(
-            cli,
-            sql,
-            r"Rewriting norm\(e, 0\) requires a finite bound on 'x'\. Add constraints 'x >= <lower>' and 'x <= <upper>'\.",
-        )
+        _refused(cli, sql, "'x' has no finite bound, which norm(e, 0) needs", at="norm(x - w, 0)")

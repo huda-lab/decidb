@@ -1259,14 +1259,16 @@ def test_minmax_constraint_and_objective(decidb_cli, duckdb_conn, oracle_solver,
 @pytest.mark.error_binder
 def test_max_notequal_error(decidb_cli):
     """MAX(x) <> K should produce a binder error."""
-    decidb_cli.assert_error(
+    decidb_cli.assert_error_at(
         """
         SELECT l_quantity FROM lineitem
         DECIDE x(BOOL)
         SUCH THAT MAX(x) <> 0
         MAXIMIZE SUM(x) LIMIT 1
     """,
-        match=r"does not support <> comparison with MIN/MAX",
+        kind="Not implemented Error",
+        at="MAX(x) <> 0",
+        word="<> on MIN or MAX is not supported",
     )
 
 
@@ -1906,14 +1908,16 @@ def test_composed_minmax_outer_not_equal_rejected(decidb_cli):
     being pinned. `=` is supported and appears in the message; `<>` is the
     remaining unsupported comparison.
     """
-    decidb_cli.assert_error(
+    decidb_cli.assert_error_at(
         """
         SELECT id, v FROM (VALUES (1, 10, true), (2, 5, true)) t(id, v, w)
         DECIDE x(BOOL)
         SUCH THAT (SUM(x * v) + MAX(x * v)) <> 12
         MAXIMIZE SUM(x * v)
     """,
-        match=r"supports only the <, <=, =, >, >= and BETWEEN comparisons",
+        kind="Not implemented Error",
+        at="(SUM(x * v) + MAX(x * v)) <> 12",
+        word="'<>' on a composed MIN or MAX is not supported",
     )
 
 

@@ -132,7 +132,7 @@ SELECT SUM(ship) FROM (SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SU
 statement error
 SELECT shipmentID, ship FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT) SUCH THAT ship <= 5 MINIMIZE max(when S.priority per D: ship - D.capacity) by (D.region);
 ----
-Invalid Input Error: DECIDE objective: 'D.region' in by (D.region) takes more than one value over the kept rows ('East', 'West'), so the objective would be produced more than once; move it inside a reducer or fix it with when.
+Invalid Input Error: 'D.region' in by (D.region) takes more than one value over the kept rows ('East', 'West'), so the objective would be produced more than once
 
 # reducer: by on the kept colon form, which reads one value per variant as sum(per D: e) does (S4, D71)
 query I

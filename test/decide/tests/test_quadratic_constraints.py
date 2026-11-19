@@ -57,8 +57,8 @@ def _expect_gurobi(func, _retries=3):
                     last_suboptimal = str(e)
                     continue  # Gurobi nondeterminism — retry for a proven optimum
                 assert re.search(
-                    r"[Qq]uadratic|[Gg]urobi", str(e)
-                ), f"Unexpected error (expected quadratic/Gurobi rejection): {e}"
+                    r"is not supported on this installation", str(e)
+                ), f"Unexpected error (expected quadratic rejection): {e}"
                 return
         pytest.skip(
             "Gurobi returned SUBOPTIMAL on this non-convex QCQP on every attempt "

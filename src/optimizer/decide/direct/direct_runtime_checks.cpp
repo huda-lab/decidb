@@ -13,7 +13,10 @@ namespace duckdb {
 
 unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, unique_ptr<Expression> message) {
 	ExpressionBuilder calc(optimizer.context);
-	return calc.Out(calc.Cast(calc.Fn("error", calc.Wrap(std::move(message))), LogicalType::BOOLEAN));
+	// Raised as the located error its message carries (DecideLocatedMessage), `error()` where it carries no place.
+	return calc.Out(
+	    calc.Cast(calc.RaiseInvalidValue(DecideValueRole::MESSAGE, calc.Wrap(std::move(message)), optional_idx()),
+	              LogicalType::BOOLEAN));
 }
 
 unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, const string &message) {
@@ -100,7 +103,9 @@ static ExprPtr NotFiniteMessage(const ExpressionBuilder &calc, const DirectNumbe
 		return calc.RaiseInvalidValue(names.constant ? DecideValueRole::CONSTANT : DecideValueRole::COEFFICIENT,
 		                              names.text, names.place);
 	}
-	return calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, names.clause)));
+	// A message, not a raise: it is raised where the plan's check chain says (DirectErrorPredicate).
+	return calc.Constant(Value(DecideLocatedMessage(
+	    DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, names.clause.Noun()), names.clause.place)));
 }
 
 ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const DirectNumberNames &names) {
@@ -109,7 +114,7 @@ ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number
 	               calc.If(calc.Fn("isfinite", number), none, NotFiniteMessage(calc, names)));
 }
 
-ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const string &clause) {
+ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const DecideClauseRef &clause) {
 	DirectNumberNames names;
 	names.clause = clause;
 	return DirectNumberMessage(calc, number, names);
@@ -129,7 +134,7 @@ static unique_ptr<Expression> RaiseUnlessFinite(Optimizer &optimizer, const Expr
 	return calc.Out(calc.If(calc.Fn("isfinite", number), calc.Bool(true), raise));
 }
 
-unique_ptr<Expression> DirectRaiseTooLarge(Optimizer &optimizer, const ExprPtr &number, const string &clause) {
+unique_ptr<Expression> DirectRaiseTooLarge(Optimizer &optimizer, const ExprPtr &number, const DecideClauseRef &clause) {
 	DirectNumberNames names;
 	names.clause = clause;
 	return DirectRaiseNotFinite(optimizer, number, names);

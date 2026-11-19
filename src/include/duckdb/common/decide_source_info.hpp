@@ -177,10 +177,34 @@ optional_idx DecideClauseLocation(const vector<ConstraintSourceInfo> &sources, i
 //! relative to the macro body), so no caret lands on text the user did not write there.
 optional_idx DecideSpanLocation(const DecideSourceText &text, optional_idx location);
 
+//! Where an error about the objective points: the start of the objective's text. Invalid for a statement built without
+//! the query text.
+optional_idx DecideObjectiveLocation(const DecideSourceText &text);
+
 //! The expression of the query text that holds both expressions at `first` and `second` and no more than they need: the
 //! least EXPR span that contains both. A number DeciDB made from two of the user's (like terms added into one
 //! coefficient) stands where their sum stands. Invalid when either has no span.
 optional_idx DecideCoveringLocation(const DecideSourceText &text, optional_idx first, optional_idx second);
+
+//! Where a SUCH THAT clause, or the objective, stands in the query: what a message about a number the model computes
+//! across the clause's rows names (TOO_LARGE), and where its error points.
+struct DecideClauseRef {
+	//! The objective, not a clause.
+	bool objective = false;
+	//! The clause's span, or the start of the objective's text; invalid where the query text holds none (a clause a
+	//! table macro's tail expanded, a statement built without the text).
+	optional_idx place;
+
+	//! What a TOO_LARGE message calls it.
+	const char *Noun() const {
+		return objective ? "objective" : "constraint";
+	}
+};
+
+//! The clause `source_clause_id` as a message refers to it: its span, or for an id no clause owns (the objective's, a
+//! row no clause claims) the objective.
+DecideClauseRef DecideClauseRefOf(const vector<ConstraintSourceInfo> &sources, const DecideSourceText &text,
+                                  idx_t source_clause_id);
 
 //! The extra info of an exception about the clause `source_clause_id`, so DuckDB prints the caret under its span
 //! (`Exception::InitializeExtraInfo`; `ClientContext::ProcessError` adds the `LINE n:` block). Empty where the clause

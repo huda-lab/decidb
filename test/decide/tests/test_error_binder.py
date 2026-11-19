@@ -186,14 +186,15 @@ class TestBinderErrors:
 
     def test_multiple_decide_variables_in_sum(self, decidb_cli):
         """Cubic (x*x*x) in SUM is not supported — must reject."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
                 SUCH THAT SUM(x*x*x) <= 5
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """,
-            match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver",
+            kind="Not implemented Error",
+            at="x*x*x",
         )
 
     def test_between_non_scalar(self, decidb_cli):
@@ -421,41 +422,44 @@ class TestBinderErrors:
         """f(x) op K as per-row constraint — silently produced wrong answers before
         the bind-time whitelist check. Each non-linear scalar wrapping a DECIDE
         variable should now be rejected with a uniform error."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             f"""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(REAL)
                 SUCH THAT {fn}(x) <= 2
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
             """,
-            match=r"DECIDE: function '[a-z]+' cannot take a DECIDE variable\.",
+            kind="Not implemented Error",
+            at=f"{fn}(x)",
         )
 
     @pytest.mark.parametrize("fn", ["sqrt"])
     def test_nonlinear_scalar_inside_sum(self, decidb_cli, fn):
         """SUM(f(x)) — crashed the symbolic layer with InternalException before.
         Now a clean BinderException."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             f"""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(REAL)
                 SUCH THAT x <= 5
                 MAXIMIZE SUM({fn}(x)) LIMIT 1
             """,
-            match=r"DECIDE: function '[a-z]+' cannot take a DECIDE variable\.",
+            kind="Not implemented Error",
+            at=f"{fn}(x)",
         )
 
     def test_nonlinear_scalar_inside_abs(self, decidb_cli):
         """ABS(f(x)) — ABS passes its child through opaquely, so sqrt inside
         ABS used to FATAL the session. The recursive walk catches it."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(REAL)
                 SUCH THAT x <= 5
                 MAXIMIZE SUM(ABS(sqrt(x) - 1)) LIMIT 1
             """,
-            match=r"DECIDE: function 'sqrt' cannot take a DECIDE variable\.",
+            kind="Not implemented Error",
+            at="sqrt(x)",
         )
 
     # --- POWER over a decision ---
@@ -468,52 +472,56 @@ class TestBinderErrors:
     @pytest.mark.parametrize("exp", ["0.5", "-1"])
     def test_power_bad_constant_exponent_in_sum(self, decidb_cli, exp):
         """SUM(POWER(x, <not a whole number>)) has no reading in the model."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             f"""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(REAL)
                 SUCH THAT x <= 5
                 MINIMIZE SUM(POWER(x, {exp})) LIMIT 1
             """,
-            match=r"POWER over a DECIDE variable needs an exponent that is a whole number",
+            kind="Not implemented Error",
+            at=f"POWER(x, {exp})",
         )
 
     # 3 is the first whole exponent past degree 2, so the degree rule judges it; every larger one reaches that branch.
     @pytest.mark.parametrize("exp", ["3"])
     def test_power_whole_exponent_above_two_is_a_degree_refusal(self, decidb_cli, exp):
         """SUM(POWER(x, 3)) is x * x * x: the degree rule refuses it, not the exponent rule."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             f"""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(REAL)
                 SUCH THAT x <= 5
                 MINIMIZE SUM(POWER(x, {exp})) LIMIT 1
             """,
-            match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver",
+            kind="Not implemented Error",
+            at=f"POWER(x, {exp})",
         )
 
     def test_power_variable_exponent_rejected(self, decidb_cli):
         """POWER(x, x) — exponent is itself a decide var; must be a constant."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(REAL)
                 SUCH THAT x <= 5
                 MINIMIZE SUM(POWER(x, x)) LIMIT 1
             """,
-            match=r"POWER over a DECIDE variable needs an exponent that is a whole number",
+            kind="Not implemented Error",
+            at="POWER(x, x)",
         )
 
     def test_power_bad_exponent_per_row_constraint(self, decidb_cli):
         """POWER(x, 0.5) <= K as per-row (no SUM) — same clean rejection as inside SUM."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(REAL)
                 SUCH THAT POWER(x, 0.5) <= 3
                 MAXIMIZE SUM(x) LIMIT 1
             """,
-            match=r"POWER over a DECIDE variable needs an exponent that is a whole number",
+            kind="Not implemented Error",
+            at="POWER(x, 0.5)",
         )
 
     def test_power_over_data_column_allowed(self, decidb_cli):
@@ -535,14 +543,15 @@ class TestBinderErrors:
 
         The fault is that squaring a bilinear base reaches degree 4, not the bilinear base,
         which an objective accepts. The degree rule says so directly."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(REAL), y(REAL)
                 SUCH THAT x <= 5 AND y <= 5
                 MINIMIZE SUM(POWER(x * y, 2)) LIMIT 1
             """,
-            match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver",
+            kind="Not implemented Error",
+            at="POWER(x * y, 2)",
         )
 
     # `ReadProduct` sums power * degree over the factors in one loop, so a second squared factor adds no branch.
@@ -554,26 +563,28 @@ class TestBinderErrors:
         degree 1 and these were refused much later by physical extraction with a
         message naming a normalization pass that no longer exists. Pin the
         rejection at the shape check, where it is worded for a user."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             f"""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(REAL), y(REAL)
                 SUCH THAT SUM({expr}) <= 10 AND x <= 5 AND y <= 5
                 MAXIMIZE SUM(x) LIMIT 1
             """,
-            match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver",
+            kind="Not implemented Error",
+            at=expr,
         )
 
     def test_power_degree_rejected_in_objective(self, decidb_cli):
         """Same shape in an objective takes the same path and the same error."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(REAL), y(REAL)
                 SUCH THAT x <= 5 AND y <= 5
                 MINIMIZE SUM(POWER(x, 2) * y) LIMIT 1
             """,
-            match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver",
+            kind="Not implemented Error",
+            at="POWER(x, 2) * y",
         )
 
     # Four nestings `ReadDecideProduct` flattens to a degree past 2: a power of a product, a product of products, a
@@ -594,14 +605,15 @@ class TestBinderErrors:
         because the degree gate ran for `SUM(...)` arguments alone. Degree is one
         judgement with one owner, the shape check, so the spelling must not decide which
         layer refuses."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             f"""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT), y(INT)
                 SUCH THAT {constraint} AND SUM(x) >= 1
                 MAXIMIZE SUM(x) LIMIT 1
             """,
-            match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver",
+            kind="Not implemented Error",
+            at=constraint.split(" <=")[0],
         )
 
     def test_degree_refusal_points_at_the_offending_term(self, decidb_cli):
@@ -651,7 +663,9 @@ class TestBinderErrors:
         try:
             rows, _ = decidb_cli.execute(sql)
         except DeciDBCliError as e:
-            assert "needs Gurobi" in e.message, f"degree 2 was rejected before reaching a backend: {e.message}"
+            assert (
+                "is not supported on this installation" in e.message
+            ), f"degree 2 was rejected before reaching a backend: {e.message}"
             return
         assert rows
 
@@ -670,23 +684,27 @@ class TestBinderErrors:
 
     # The NULL bound as written, after the decision's side was rebuilt, and on the left.
     @pytest.mark.parametrize(
-        "constraint",
+        "constraint, at",
         [
-            "x <= CAST(NULL AS DOUBLE)",
-            "x + 3 <= CAST(NULL AS DOUBLE)",
-            "CAST(NULL AS DOUBLE) >= x + 3",
+            # The bound canonicalization left stands where the user wrote it, and the error points at it.
+            ("x <= CAST(NULL AS DOUBLE)", "CAST(NULL AS DOUBLE)"),
+            # A bound canonicalization rebuilt has no place of its own: the error points at the clause.
+            ("x + 3 <= CAST(NULL AS DOUBLE)", "<="),
+            ("CAST(NULL AS DOUBLE) >= x + 3", ">="),
         ],
     )
-    def test_perrow_null_rhs_rejected(self, decidb_cli, constraint):
+    def test_perrow_null_rhs_rejected(self, decidb_cli, constraint, at):
         """Direct, rebuilt and reversed known-NULL bounds fail during planning."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             f"""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(REAL)
                 SUCH THAT {constraint}
                 MAXIMIZE SUM(x) LIMIT 1
             """,
-            match=r"Binder Error: DECIDE constraint bound evaluates to NULL.*COALESCE",
+            kind="Binder Error",
+            at=at,
+            word="is NULL",
         )
 
     # --- WHEN error cases ---
@@ -756,7 +774,7 @@ class TestBinderErrors:
 
     def test_perrow_division_by_decide_var_rejected(self, decidb_cli):
         """`x / y <= K` where both are DECIDE variables — must reject."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 WITH t AS (SELECT 1 AS id UNION ALL SELECT 2)
                 SELECT id, x, y FROM t
@@ -766,13 +784,14 @@ class TestBinderErrors:
                     AND y <= 10
                 MAXIMIZE SUM(x)
             """,
-            match=r"DECIDE: cannot divide by a DECIDE variable\.",
+            kind="Not implemented Error",
+            at="x / y",
         )
 
     def test_sum_division_by_decide_var_rejected(self, decidb_cli):
         """`SUM(x / y) <= K` with both DECIDE variables — must reject cleanly
         instead of crashing in symbolic normalization."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 WITH t AS (SELECT 1 AS id UNION ALL SELECT 2)
                 SELECT id, x, y FROM t
@@ -782,12 +801,13 @@ class TestBinderErrors:
                     AND y <= 10
                 MAXIMIZE SUM(x)
             """,
-            match=r"DECIDE: cannot divide by a DECIDE variable\.",
+            kind="Not implemented Error",
+            at="x / y",
         )
 
     def test_objective_division_by_decide_var_rejected(self, decidb_cli):
         """Same rejection from the objective path."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 WITH t AS (SELECT 1 AS id UNION ALL SELECT 2)
                 SELECT id, x, y FROM t
@@ -795,7 +815,8 @@ class TestBinderErrors:
                 SUCH THAT x <= 10 AND y <= 10
                 MAXIMIZE SUM(x / y)
             """,
-            match=r"DECIDE: cannot divide by a DECIDE variable\.",
+            kind="Not implemented Error",
+            at="x / y",
         )
 
     def test_not_equal_still_accepted(self, decidb_cli):
@@ -1185,7 +1206,7 @@ class TestBinderRefusalBranches:
             ("SUM(when nosuch > 0: x) <= 3", r'Referenced column "nosuch" not found'),
             ("max(x, 2) <= 2", At("Binder Error", "max(x, 2)")),
             # A COALESCE over a reducer, in the body of a sum's left side (ContainsDecideAggregate's OPERATOR case).
-            ("COALESCE(SUM(x), 0) + 1 <= 100", r"operator 'COALESCE' cannot take a DECIDE variable"),
+            ("COALESCE(SUM(x), 0) + 1 <= 100", At("Not implemented Error", "COALESCE(SUM(x), 0)")),
         ],
     )
     def test_constraint_shape(self, decidb_cli, clause, message):
@@ -1297,7 +1318,7 @@ class TestBinderRefusalBranches:
             ("when nosuch > 0: sum(w * x)", r'Referenced column "nosuch" not found'),
             # An operator or CASE at the top, an operator below it, a product of data, a quotient by a reducer.
             ("COALESCE(SUM(x), 0)", r"does not support 'COALESCE\(SUM\(x\), 0\)'"),
-            ("SUM(x) + COALESCE(x, 1)", r"operator 'COALESCE' cannot take a DECIDE variable"),
+            ("SUM(x) + COALESCE(x, 1)", At("Not implemented Error", "COALESCE(x, 1)")),
             ("CASE WHEN c > 1 THEN 1 ELSE 2 END", At("Binder Error", "CASE WHEN c > 1 THEN 1 ELSE 2 END")),
             ("w * 2", At("Not implemented Error", "w * 2")),
             ("SUM(x * w) / SUM(x)", At("Not implemented Error", "SUM(x * w) / SUM(x)")),

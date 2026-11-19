@@ -27,7 +27,7 @@ SHIP = lambda r: {"ship": 1}  # noqa: E731
 CAPACITY = lambda r: {CONSTANT: r["capacity"]}  # noqa: E731
 DEMAND_BOUND = Scoped((SHIP,), "<=", (lambda r: {CONSTANT: r["demand"]},))
 MAXIMIZE_SHIP = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", SHIP),))
-PRODUCED_TWICE = "so the objective would be produced more than once; move it inside a reducer or fix it with when."
+PRODUCED_TWICE = "so the objective would be produced more than once"
 
 
 def _constant(value):
@@ -72,9 +72,9 @@ def _answers(
     return expected
 
 
-def _stops(cli, sql: str, message: str) -> None:
+def _stops(cli, sql: str, at: str, message: str) -> None:
+    cli.assert_error_at(sql, kind="Invalid Input Error", at=at, word=message)
     result = cli.execute_raw(sql)
-    assert message in result.stderr, result.stderr
     assert "does not determine" not in result.stderr
     assert_no_internal_leak(result, "an objective produced more than once")
 
@@ -211,7 +211,8 @@ def test_objective_messages_quote_the_sql_only(decidb_cli, factor):
     _stops(
         decidb_cli,
         _query("s <= 1", decide=decide, objective=f"MAXIMIZE sum(ship) - ({factor}) * s"),
-        "DECIDE objective: 'D.capacity' takes more than one value over the kept rows (20, 40), " + PRODUCED_TWICE,
+        "D.capacity",
+        "'D.capacity' takes more than one value over the kept rows (20, 40), " + PRODUCED_TWICE,
     )
 
 
@@ -221,5 +222,6 @@ def test_the_objective_error_is_raised_under_diagnose(decidb_cli):
     _stops(
         decidb_cli,
         "DIAGNOSE " + _query("ship <= 7", objective="MAXIMIZE when S.priority: ship"),
-        "DECIDE objective: the decision 'ship' (declared per row) has more than one instance",
+        "ship(INT)",
+        "the decision 'ship' (declared per row) has more than one instance",
     )

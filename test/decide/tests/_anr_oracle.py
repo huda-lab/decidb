@@ -88,7 +88,7 @@ class ScopeError(Exception):
     PHRASES = {
         "objective_variants": "would be produced more than once",
         "frame_partition": "does not determine the timeline",
-        "ambiguous_peer": "a position must hold one row",
+        "ambiguous_peer": "the frame finds",
     }
 
     def __init__(self, kind: str, detail: str):

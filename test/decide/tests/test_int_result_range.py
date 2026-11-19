@@ -217,14 +217,16 @@ def test_a_value_past_exact_integer_range_is_refused_in_sql_terms(decidb_cli):
 
     No wider integer type recovers a number the solver never distinguished, which is
     what separates this refusal from the truncation it replaced: there is no correct
-    answer being withheld. The message names the variable and an edit.
+    answer being withheld. The message names the decision and its value, and points at its declaration.
     """
-    decidb_cli.assert_error(
+    decidb_cli.assert_error_at(
         """
         SELECT id, x FROM (VALUES (1)) t(id)
         DECIDE x(INT) SUCH THAT SUM(x) <= 90071992547409920 MAXIMIZE SUM(x)
         """,
-        match="beyond the range DeciDB can return as a whole number",
+        kind="Invalid Input Error",
+        at="x(INT)",
+        word="past 2^53, the largest whole number DECIDE returns exactly",
         expect_number_range=True,
     )
 

@@ -41,16 +41,17 @@ void DeriveBilinearAuxiliaryBounds(SolverInput &input, const FormulationBox &box
 					blame = member == DConstants::INVALID_INDEX ? blame : member;
 				}
 			}
+			// An ABS helper is named by the ABS the user wrote.
+			string name = var_names[blame];
 			for (const auto &abs : input.abs_written) {
 				if (abs.first == blame) {
-					throw InvalidInputException("DECIDE: a Boolean decision multiplies `%s`, which has no finite upper "
-					                            "bound",
-					                            abs.second);
+					name = abs.second;
 				}
 			}
-			throw InvalidInputException("Bilinear term requires a finite upper bound on variable '%s'. "
-			                            "Add a constraint like '%s <= <bound>' to provide one.",
-			                            var_names[blame], var_names[blame]);
+			throw InvalidInputException(
+			    StringUtil::Format("'%s' has no finite upper bound, which its product with a BOOL decision needs",
+			                       name),
+			    Exception::InitializeExtraInfo(DecideWrittenClause(input, link.source_clause_id).place));
 		}
 		input.lower_bounds[link.aux_idx] = std::min(0.0, L);
 		input.upper_bounds[link.aux_idx] = std::max(0.0, U);
@@ -231,7 +232,7 @@ static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t nu
 		bool pushes_down = ec.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
 		                   ec.comparison_type == ExpressionType::COMPARE_LESSTHAN ||
 		                   ec.comparison_type == ExpressionType::COMPARE_EQUAL;
-		const string written = DecideWrittenClause(input, ec.source_clause_id);
+		const auto written = DecideWrittenClause(input, ec.source_clause_id);
 		for (idx_t r = 0; r < num_rows; r++) {
 			if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
 				continue; // row excluded by `when` or its group: this clause asks nothing here
@@ -289,7 +290,7 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
 		double lo = 0.0;
 		double hi = 0.0;
 		bool seen_row = false;
-		const string written = DecideWrittenClause(input, c1.source_clause_id);
+		const auto written = DecideWrittenClause(input, c1.source_clause_id);
 		for (idx_t r = 0; r < num_rows; r++) {
 			// The link's bound carries the constant part of the expression the user wrote inside ABS, with C1's
 			// constant terms moved across, where a frame's `else` read as data stands. It is finite: an infinity there
@@ -478,7 +479,7 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
 		// C1 and C2 stay. They are exact (`aux >= inner`, `aux >= -inner`), implied by
 		// `aux = |t|`, and they carry the clause provenance the elastic engine reads.
 		// Dropping them would be a separate optimization that costs diagnosis.
-		const string written = DecideWrittenClause(input, c1.source_clause_id);
+		const auto written = DecideWrittenClause(input, c1.source_clause_id);
 		SparseCoeffAccumulator argument;
 		for (idx_t r = 0; r < num_rows; r++) {
 			if (!c1.row_group_ids.empty() && c1.row_group_ids[r] == DConstants::INVALID_INDEX) {

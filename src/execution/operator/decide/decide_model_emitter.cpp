@@ -212,7 +212,7 @@ vector<Value> DecideModelEmitter::Fallback(idx_t frame, idx_t row) const {
 	return read;
 }
 
-string DecideModelEmitter::ObjectiveDifference(idx_t root, const vector<idx_t> &surviving) const {
+DecideVariantDifference DecideModelEmitter::ObjectiveDifference(idx_t root, const vector<idx_t> &surviving) const {
 	auto &node = *tree.nodes[root];
 	auto &container = descent.Containers()[root];
 	const auto starts = SignatureStarts(tree, node);
@@ -267,7 +267,7 @@ string DecideModelEmitter::ObjectiveDifference(idx_t root, const vector<idx_t> &
 		};
 		return DecideFrameDifference(node.signature[field], op.frames[f], tree.keys, frame);
 	};
-	return DecideObjectiveTwiceMessage(node.signature, tree.keys, tree.variable_scopes, read);
+	return DecideObjectiveTwice(node.signature, tree.keys, tree.variable_scopes, op.frames, op.source_text, read);
 }
 
 void DecideModelEmitter::KeyedMappings(vector<KeyedMapping> &mappings) {
@@ -699,9 +699,6 @@ void DecideModelEmitter::CheckDomain(idx_t root, const EvaluatedConstraint &eval
 		return;
 	}
 	auto &domain = op.domains[var];
-	auto written_bound = [&](bool, double) {
-		return QuoteWrittenClause(op.constraint_sources, clause.source_clause_id, op.source_text);
-	};
 	// The rows its term's site reads, whose members (an easy MIN's or MAX's reducer filter keeps some) each write a
 	// row.
 	const auto site = tree.nodes[root]->compiled.linear[0].node;
@@ -721,9 +718,10 @@ void DecideModelEmitter::CheckDomain(idx_t root, const EvaluatedConstraint &eval
 		if (std::isfinite(evaluated.admitted_lower[row])) {
 			DecideFoldSingletonRow(box, '>', evaluated.admitted_lower[row]);
 		}
-		auto refusal = DecideDomainRefusal(box, domain.is_bool, domain.is_aux, domain.name, written_bound);
-		if (!refusal.empty()) {
-			throw InvalidInputException(refusal);
+		auto refusal = DecideRefuseDomain(box, domain.is_bool, domain.name);
+		if (!refusal.message.empty()) {
+			throw InvalidInputException(refusal.message,
+			                            DecideClauseErrorInfo(op.constraint_sources, clause.source_clause_id));
 		}
 	}
 }
@@ -1344,7 +1342,8 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 				surviving[variant] = read.second;
 			}
 		}
-		throw InvalidInputException(ObjectiveDifference(root, surviving));
+		auto difference = ObjectiveDifference(root, surviving);
+		throw InvalidInputException(difference.message, Exception::InitializeExtraInfo(difference.place));
 	}
 	// The rows its `when` keeps.
 	vector<bool> kept(num_rows, false);
@@ -1521,7 +1520,7 @@ void DecideModelEmitter::Composed(PhysicalDecide::EvaluatedClauses &evaluated) {
 		clause.comparison = node.facts->comparison_type;
 		clause.rhs = DecideComposedBound(context, *node.rhs);
 		bool null_factor = false;
-		clause.terms = ComposedTerms(root, "constraint", null_factor);
+		clause.terms = ComposedTerms(root, null_factor);
 		// The rows its `when` keeps are those its root holds in a class of its `per K:`. A `per K:` root routes a row
 		// in none to an unclassed slot (holds_rows_in_no_class), which is no instance, as the aggregate path counts it.
 		auto kept_rows = [&]() {
@@ -1545,14 +1544,14 @@ void DecideModelEmitter::Composed(PhysicalDecide::EvaluatedClauses &evaluated) {
 	}
 	if (objective != DConstants::INVALID_INDEX) {
 		bool null_factor = false;
-		auto terms = ComposedTerms(objective, "objective", null_factor);
+		auto terms = ComposedTerms(objective, null_factor);
 		// A term with a NULL factor reads 0; one that reads no row is dropped.
 		terms.erase(std::remove_if(terms.begin(), terms.end(), DecideComposedTermReadsNoRow), terms.end());
 		evaluated.composed_objective_terms = std::move(terms);
 	}
 }
 
-vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(idx_t root, const char *what, bool &null_factor) {
+vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(idx_t root, bool &null_factor) {
 	auto &body = tree.nodes[root]->compiled;
 	if (body.composed_specs.size() != body.composed.size()) {
 		throw InternalException("DECIDE model emitter: composed E node has no spec for each term");
@@ -1565,7 +1564,7 @@ vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(idx_t root, con
 		auto evaluated = DecideComposedTerm(reducer.aggregate, spec.sign, spec.is_easy, reducer.text);
 		if (spec.scale) {
 			// A value the whole query shares, read on the input's first rows, whatever the clause keeps.
-			evaluated.scale = DecideQueryWideScale(FirstRowValue(*spec.scale), spec.scale_divides, what,
+			evaluated.scale = DecideQueryWideScale(FirstRowValue(*spec.scale), spec.scale_divides,
 			                                       {DecideValueRole::COEFFICIENT, *spec.scale, names}, null_factor);
 		}
 		// Its members are its G's: the entries of its operand its member tests keep, and a relation-qualified one's
@@ -1623,8 +1622,9 @@ void DecideModelEmitter::FrameMembers(idx_t node, ReducerValueMembers &out) {
 	vector<idx_t> payload_vars, fallback_vars;
 	const auto payload = read(body.members, body.linear, map.ReadRows(), payload_vars);
 	const auto fallback = read(body.fallback, body.fallback_sites, map.FallbackAnchors(), fallback_vars);
-	DecideListFrameMembers(map, tree_node.aggregate, tree_node.value_link_label, tree_node.text, payload, payload_vars,
-	                       fallback, fallback_vars, out);
+	DecideListFrameMembers(map, tree_node.aggregate,
+	                       DecideClauseRefOf(op.constraint_sources, op.source_text, tree_node.value_link_clause),
+	                       tree_node.text, payload, payload_vars, fallback, fallback_vars, out);
 }
 
 void DecideModelEmitter::ValueLinks() {
@@ -1698,8 +1698,8 @@ void DecideModelEmitter::ValueLinks() {
 					}
 				}
 				if (!std::isfinite(constant)) {
-					throw InvalidInputException(DecideInvalidValueMessage(
-					    DecideValueRole::TOO_LARGE, op.WrittenClause(tree_node.value_link_clause)));
+					throw DecideTooLargeError(
+					    DecideClauseRefOf(op.constraint_sources, op.source_text, tree_node.value_link_clause));
 				}
 				spec.members.AddMember(constant);
 				for (idx_t term = 0; term < variables.size(); term++) {

@@ -2422,7 +2422,10 @@ def test_a_boolean_times_an_unbounded_abs_names_the_abs_as_written(decidb_cli):
         SUCH THAT x >= 0
         MINIMIZE SUM(b * abs( x-score ))
     """
-    decidb_cli.assert_error(
-        sql, match=r"a Boolean decision multiplies `abs\( x-score \)`, which has no finite upper bound"
+    decidb_cli.assert_error_at(
+        sql,
+        kind="Invalid Input Error",
+        at="SUM(b * abs( x-score ))",
+        word="'abs( x-score )' has no finite upper bound, which its product with a BOOL decision needs",
     )
     assert "__abs_aux" not in decidb_cli.execute_raw(sql).stderr

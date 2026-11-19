@@ -658,7 +658,7 @@ def test_product_of_query_wide_decisions_in_the_objective(decidb_cli_gurobi, dec
         lambda a: a["s"] + a["u"] <= 6,
         lambda a: sum(_xs(a)) + a["s"] * a["u"],
     )
-    assert "needs Gurobi" in decidb_cli_highs.execute_raw(sql).stderr
+    assert "is not supported on this installation" in decidb_cli_highs.execute_raw(sql).stderr
     # A shared budget makes the product's weight decide: counted once, s * u = 2 loses to
     # three units of x; counted once per row it would win.
     shared = _query(
@@ -743,7 +743,7 @@ def test_query_wide_decision_beside_a_squared_reducer(decidb_cli_gurobi, decidb_
         lambda a: sum(v * v for v in _xs(a)) + a["s"] <= 30,
         lambda a: sum(_xs(a)) + a["s"],
     )
-    assert "needs Gurobi" in decidb_cli_highs.execute_raw(sql).stderr
+    assert "is not supported on this installation" in decidb_cli_highs.execute_raw(sql).stderr
 
 
 # ---------------------------------------------------------------------------
@@ -801,8 +801,12 @@ def test_not_equal_over_a_product_or_power_is_refused(decidb_cli_gurobi, decidb_
     two decisions neither of which is BOOL it is refused, never solved without those terms
     (it once returned an assignment the clause excludes). HiGHS refuses the product anyway."""
     sql = _query("x(INT), per (): s(INT)", f"x <= 3 AND s <= 3 AND {clause}", "MAXIMIZE SUM(x) + s", select="id, x, s")
-    stderr = decidb_cli_gurobi.execute_raw(sql).stderr
-    assert "<> over a product or a power of decisions is not supported yet" in stderr, stderr
+    decidb_cli_gurobi.assert_error_at(
+        sql,
+        kind="Not implemented Error",
+        at=clause,
+        word="<> over a product or a power of decisions is not supported",
+    )
     assert "Error" in decidb_cli_highs.execute_raw(sql).stderr
 
 
@@ -824,8 +828,12 @@ def test_not_equal_over_a_boolean_product_still_answers(request, cli_fixture):
 
 def test_a_negative_bound_on_an_absolute_value_names_it(decidb_cli):
     """The bound check before solving names an auxiliary decision by what it stands for."""
-    stderr = decidb_cli.execute_raw(_query("x(INT)", "abs(x) <= -1", "MAXIMIZE SUM(x)")).stderr
-    assert "abs(x) <= -1 cannot hold because abs(x) is never negative" in stderr, stderr
+    decidb_cli.assert_error_at(
+        _query("x(INT)", "abs(x) <= -1", "MAXIMIZE SUM(x)"),
+        kind="Invalid Input Error",
+        at="abs(x) <= -1",
+        word="the constraint cannot hold: 'abs(x)' is never negative",
+    )
 
 
 @pytest.mark.correctness

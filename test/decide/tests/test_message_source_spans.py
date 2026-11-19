@@ -32,18 +32,23 @@ def _stderr(cli, sql):
 @pytest.mark.error
 def test_an_if_is_refused_as_an_if_not_as_a_case(decidb_cli):
     """`if(c, a, b)` reaches the binder as the parser's CASE; the refusal names what was written (the shape check's
-    WrittenConditional)."""
-    stderr = _stderr(decidb_cli, _query("SUM(if(s = 'F', x, 2 * x)) <= 3"))
-    assert "IF over a DECIDE variable is not supported." in stderr, stderr
-    assert "CASE over" not in stderr, stderr
-    assert "`SUM(if(s = 'F', x, 2 * x)) <= 3`" in stderr, stderr
+    WrittenConditional) and points at it."""
+    sql = _query("SUM(if(s = 'F', x, 2 * x)) <= 3")
+    decidb_cli.assert_error_at(
+        sql, kind="Not implemented Error", at="if(s = 'F', x, 2 * x)", word="IF over a decision is not supported"
+    )
+    assert "CASE over" not in _stderr(decidb_cli, sql)
 
 
 @pytest.mark.error
 def test_a_case_is_still_refused_as_a_case(decidb_cli):
     """The branch of WrittenConditional that keeps the word `CASE` when the text starts with it."""
-    stderr = _stderr(decidb_cli, _query("SUM(CASE WHEN s = 'F' THEN x ELSE 2 * x END) <= 3"))
-    assert "CASE over a DECIDE variable is not supported." in stderr, stderr
+    decidb_cli.assert_error_at(
+        _query("SUM(CASE WHEN s = 'F' THEN x ELSE 2 * x END) <= 3"),
+        kind="Not implemented Error",
+        at="CASE WHEN s = 'F' THEN x ELSE 2 * x END",
+        word="CASE over a decision is not supported",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -53,27 +58,37 @@ def test_a_case_is_still_refused_as_a_case(decidb_cli):
 
 @pytest.mark.error
 def test_a_product_term_is_named_by_its_operator_over_the_written_factors(decidb_cli):
-    """`SUM(x) * (w * x)` is refused naming the term `w * SUM(x)`: canonicalization built the product, so it prints
-    its operator over its factors, each as written; the casts around `w` (a DECIMAL) do not appear."""
-    stderr = _stderr(decidb_cli, _query("SUM(x) * (w * x) <= 7"))
-    assert "'x' is a decision, so it cannot multiply w * SUM(x)." in stderr, stderr
+    """`SUM(x) * (w * x)` is refused at its decision factor: canonicalization built the product, so a message prints
+    nothing of it, and the casts around `w` (a DECIMAL) do not appear."""
+    sql = _query("SUM(x) * (w * x) <= 7")
+    decidb_cli.assert_error_at(
+        sql,
+        kind="Binder Error",
+        at="SUM(x) * (w * x)",
+        word="'x' is a REAL decision, which cannot scale a reducer",
+    )
+    stderr = _stderr(decidb_cli, sql)
     assert "CAST" not in stderr and '"*"' not in stderr, stderr
 
 
 @pytest.mark.error
 def test_a_case_factor_is_quoted_as_written(decidb_cli):
-    stderr = _stderr(decidb_cli, _query("SUM(x) <= 7", "MAXIMIZE SUM(x) * CASE WHEN s = 'F' THEN 1 ELSE 2 END"))
-    assert "'CASE WHEN s = 'F' THEN 1 ELSE 2 END' varies" in stderr, stderr
-    assert "e.g. SUM(x * CASE WHEN s = 'F' THEN 1 ELSE 2 END)." in stderr, stderr
+    decidb_cli.assert_error_at(
+        _query("SUM(x) <= 7", "MAXIMIZE SUM(x) * CASE WHEN s = 'F' THEN 1 ELSE 2 END"),
+        kind="Binder Error",
+        at="CASE WHEN s = 'F' THEN 1 ELSE 2 END",
+        word="'CASE WHEN s = 'F' THEN 1 ELSE 2 END' varies",
+    )
 
 
 @pytest.mark.error
 def test_a_sum_in_a_factor_is_quoted_as_written_and_parenthesized_in_the_suggestion(decidb_cli):
-    """`(w + 1) * SUM(x)`: the factor is `w + 1`, as written, and the suggestion keeps it whole under the `*`."""
-    stderr = _stderr(decidb_cli, _query("SUM(x) <= 7", "MAXIMIZE (w + 1) * SUM(x)"))
-    assert "'w + 1' varies per row, so it cannot multiply SUM(x)." in stderr, stderr
-    assert "e.g. SUM(x * (w + 1))." in stderr, stderr
-    assert "DECIMAL" not in stderr, stderr
+    """`(w + 1) * SUM(x)`: the factor is `w + 1`, as written, and the message points at it."""
+    sql = _query("SUM(x) <= 7", "MAXIMIZE (w + 1) * SUM(x)")
+    decidb_cli.assert_error_at(
+        sql, kind="Binder Error", at="w + 1", word="'w + 1' varies per row, which cannot scale a reducer"
+    )
+    assert "DECIMAL" not in _stderr(decidb_cli, sql)
 
 
 # ---------------------------------------------------------------------------
@@ -84,27 +99,36 @@ def test_a_sum_in_a_factor_is_quoted_as_written_and_parenthesized_in_the_suggest
 @pytest.mark.error
 def test_a_call_that_binds_as_a_case_takes_no_parentheses_under_a_product(decidb_cli):
     """`if(...)` binds as a CASE, which a bound node would parenthesize; the text is a call, so it stays whole."""
-    stderr = _stderr(decidb_cli, _query("SUM(x) <= 7", "MAXIMIZE SUM(x) * if(s = 'F', 1, 2)"))
-    assert "e.g. SUM(x * if(s = 'F', 1, 2))." in stderr, stderr
+    decidb_cli.assert_error_at(
+        _query("SUM(x) <= 7", "MAXIMIZE SUM(x) * if(s = 'F', 1, 2)"),
+        kind="Binder Error",
+        at="if(s = 'F', 1, 2)",
+        word="'if(s = 'F', 1, 2)' varies per row",
+    )
 
 
 @pytest.mark.error
 def test_a_parameter_is_quoted_as_written(decidb_cli):
     """`$1` is what the user wrote, not its value."""
-    result = decidb_cli.execute_script("PREPARE p AS " + _query("SUM(x) <= 7", "MAXIMIZE SUM(x) * $1") + ";\n")
-    assert "'$1' varies per row, so it cannot multiply SUM(x)." in result.stderr, result.stderr
+    decidb_cli.assert_error_at(
+        "PREPARE p AS " + _query("SUM(x) <= 7", "MAXIMIZE SUM(x) * $1") + ";",
+        kind="Binder Error",
+        at="$1",
+        word="'$1' varies per row",
+    )
 
 
 @pytest.mark.error
 def test_a_macro_call_is_quoted_as_the_call(decidb_cli):
     """A macro's body was parsed from its definition, so its locations are cleared and the expansion takes the call's:
-    the message quotes `twice(b + 1)`, never a span of this query cut at an offset of the macro's text."""
-    result = decidb_cli.without_verify_serializer().execute_script(
-        "CREATE TEMP MACRO twice(v) AS v * 2 + w;\n" + _query("SUM(x) <= 7", "MAXIMIZE SUM(x) * twice(b + 1)") + ";\n"
+    the message quotes `twice(b + 1)` and points at the call, never a span of this query cut at an offset of the
+    macro's text."""
+    decidb_cli.without_verify_serializer().assert_error_at(
+        "CREATE TEMP MACRO twice(v) AS v * 2 + w;\n" + _query("SUM(x) <= 7", "MAXIMIZE SUM(x) * twice(b + 1)") + ";",
+        kind="Binder Error",
+        at="twice(b + 1)",
+        word="'twice(b + 1)' varies per row",
     )
-    assert "'twice(b + 1)' varies per row, so it cannot multiply SUM(x)." in result.stderr, result.stderr
-    # The call is whole in the text, though its expansion is a `+`: the suggestion takes no parentheses.
-    assert "e.g. SUM(x * twice(b + 1))." in result.stderr, result.stderr
 
 
 @pytest.mark.explain
@@ -124,11 +148,16 @@ def test_a_macro_body_is_reprinted_beside_the_arguments_written_in_the_query(dec
 @pytest.mark.error
 def test_a_cut_keeps_its_whitespace_and_comments(decidb_cli):
     """A cut is the text between its two ends, verbatim (Clang's SourceRange): the comment inside stays."""
-    stderr = _stderr(decidb_cli, _query("SUM(x) <= 7", "MAXIMIZE SUM(x) * (w /* kg */  + 1)"))
-    assert "'w /* kg */  + 1' varies per row" in stderr, stderr
+    decidb_cli.assert_error_at(
+        _query("SUM(x) <= 7", "MAXIMIZE SUM(x) * (w /* kg */  + 1)"),
+        kind="Binder Error",
+        at="w /* kg */  + 1",
+        word="'w /* kg */  + 1' varies per row",
+    )
 
 
 @pytest.mark.error
 def test_a_column_is_quoted_with_the_relation_the_user_wrote(decidb_cli):
-    stderr = _stderr(decidb_cli, _query("SUM(x) <= 7", "MAXIMIZE SUM(x) * t.w"))
-    assert "'t.w' varies per row" in stderr, stderr
+    decidb_cli.assert_error_at(
+        _query("SUM(x) <= 7", "MAXIMIZE SUM(x) * t.w"), kind="Binder Error", at="t.w", word="'t.w' varies per row"
+    )

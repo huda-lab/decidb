@@ -92,6 +92,23 @@ optional_idx DecideSpanLocation(const DecideSourceText &text, optional_idx locat
 	return text.CutExpr(location, ignored_text, ignored_binding) ? location : optional_idx();
 }
 
+optional_idx DecideObjectiveLocation(const DecideSourceText &text) {
+	for (idx_t i = 0; i + SPAN_ENTRY_SIZE <= text.spans.size(); i += SPAN_ENTRY_SIZE) {
+		if (text.spans[i + 1] == static_cast<idx_t>(DecideSpanRole::OBJECTIVE)) {
+			return text.start + text.spans[i + 2];
+		}
+	}
+	return optional_idx();
+}
+
+DecideClauseRef DecideClauseRefOf(const vector<ConstraintSourceInfo> &sources, const DecideSourceText &text,
+                                  idx_t source_clause_id) {
+	DecideClauseRef result;
+	result.objective = source_clause_id >= sources.size();
+	result.place = result.objective ? DecideObjectiveLocation(text) : DecideClauseLocation(sources, source_clause_id);
+	return result;
+}
+
 optional_idx DecideCoveringLocation(const DecideSourceText &text, optional_idx first, optional_idx second) {
 	if (!first.IsValid() || !second.IsValid()) {
 		return optional_idx();

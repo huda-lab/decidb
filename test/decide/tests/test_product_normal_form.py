@@ -316,44 +316,45 @@ class TestBooleanProducts:
 
 @pytest.mark.error
 class TestShapeCheckRefusals:
-    """One refusal per kind the shape check judges, each quoting the clause and pointing at the term."""
+    """One refusal per kind the shape check judges, each pointing at the term."""
 
     # One case per refusal of the shape check: a degree by a product and by a power, an exponent, a function, a
-    # division, an operator and a CASE.
+    # division, an operator and a CASE. (constraint, the term the error points at, the sentence's own words)
     @pytest.mark.parametrize(
-        "constraint,message",
+        "constraint,at,word",
         [
-            (
-                "SUM(x*x*y) <= 10",
-                r"Invalid Input Error: DECIDE: the SUCH THAT clause `SUM\(x\*x\*y\) <= 10` has a term " r"of degree 3",
-            ),
-            ("SUM(POWER(x, 3)) <= 10", r"has a term of degree 3"),
+            ("SUM(x*x*y) <= 10", "x*x*y", "a term of degree 3 is not supported"),
+            ("SUM(POWER(x, 3)) <= 10", "POWER(x, 3)", "a term of degree 3 is not supported"),
             (
                 "SUM(POWER(x, 0.5)) <= 10",
-                r"POWER over a DECIDE variable needs an exponent that is a whole number known "
-                r"before the query runs, found '0\.5'",
+                "POWER(x, 0.5)",
+                "the exponent '0.5' of POWER over a decision is not a constant whole number",
             ),
-            ("SUM(EXP(x)) <= 10", r"DECIDE: function 'exp' cannot take a DECIDE variable\."),
-            ("SUM(x / y) <= 10", r"DECIDE: cannot divide by a DECIDE variable\."),
-            ("SUM(x % 2) <= 10", r"DECIDE: operator '%' cannot take a DECIDE variable\."),
-            ("SUM(CASE WHEN w > 1 THEN x ELSE y END) <= 10", r"CASE over a DECIDE variable is not supported"),
+            ("SUM(EXP(x)) <= 10", "EXP(x)", "function 'exp' over a decision is not supported"),
+            ("SUM(x / y) <= 10", "x / y", "division by a decision is not supported"),
+            ("SUM(x % 2) <= 10", "x % 2", "operator '%' over a decision is not supported"),
+            (
+                "SUM(CASE WHEN w > 1 THEN x ELSE y END) <= 10",
+                "CASE WHEN w > 1 THEN x ELSE y END",
+                "CASE over a decision is not supported",
+            ),
             # A term beside a reducer is read for its degree before the vocabulary is judged.
             (
                 "SUM(POWER(x, 'inf'::DOUBLE)) <= 10",
-                r"POWER over a DECIDE variable needs an exponent that is a whole number known "
-                r"before the query runs, found ''inf'::DOUBLE'",
+                "POWER(x, 'inf'::DOUBLE)",
+                "of POWER over a decision is not a constant whole number",
             ),
             (
                 "SUM(POWER(x, 1e10)) <= 10",
-                r"POWER over a DECIDE variable needs an exponent that is a whole number known "
-                r"before the query runs, found '1e10'",
+                "POWER(x, 1e10)",
+                "the exponent '1e10' of POWER over a decision is not a constant whole number",
             ),
             (
                 "SUM(x) + POWER(x, 0.5) * x <= 10",
-                r"POWER over a DECIDE variable needs an exponent that is a whole number known "
-                r"before the query runs, found '0\.5'",
+                "POWER(x, 0.5)",
+                "the exponent '0.5' of POWER over a decision is not a constant whole number",
             ),
-            ("SUM(x) + 2 / y <= 10", r"DECIDE: cannot divide by a DECIDE variable\."),
+            ("SUM(x) + 2 / y <= 10", "2 / y", "division by a decision is not supported"),
         ],
         ids=[
             "degree",
@@ -369,18 +370,17 @@ class TestShapeCheckRefusals:
             "division beside a reducer",
         ],
     )
-    def test_refusal_quotes_the_clause_and_points_at_the_term(self, decidb_cli, constraint, message):
-        result = decidb_cli.execute_raw(
+    def test_refusal_quotes_the_clause_and_points_at_the_term(self, decidb_cli, constraint, at, word):
+        decidb_cli.assert_error_at(
             f"""
             SELECT id, x, y FROM {_TABLE} DECIDE x(REAL), y(REAL)
             SUCH THAT x <= {_UB} AND y <= {_UB} AND {constraint}
             MAXIMIZE SUM(x + y)
-        """
+        """,
+            kind="Not implemented Error",
+            at=at,
+            word=word,
         )
-        assert result.returncode != 0
-        assert re.search(message, result.stderr), result.stderr
-        assert f"In the SUCH THAT clause `{constraint}`" in result.stderr or "has a term of degree" in result.stderr
-        assert "LINE " in result.stderr and "^" in result.stderr, result.stderr
 
     # COALESCE is a parser node of its own and IFNULL a rewritten call: each reaches the refusal by its own source
     # location.
@@ -395,7 +395,7 @@ class TestShapeCheckRefusals:
         """
         )
         assert result.returncode != 0
-        assert "cannot take a DECIDE variable" in result.stderr, result.stderr
+        assert "over a decision is not supported" in result.stderr, result.stderr
         lines = result.stderr.splitlines()
         source = next(line for line in lines if line.startswith("LINE "))
         caret = lines[lines.index(source) + 1]
@@ -404,30 +404,30 @@ class TestShapeCheckRefusals:
     def test_data_weight_on_a_square_is_refused_on_highs(self, decidb_cli_highs):
         """A data weight's sign is known only when the query runs, so the square may be non-convex: HiGHS cannot
         take it, and the gate says so before a row is read."""
-        result = decidb_cli_highs.execute_raw(
+        decidb_cli_highs.assert_error_at(
             f"""
             SELECT id, x FROM {_TABLE} DECIDE x(REAL)
             SUCH THAT x <= {_UB}
             MINIMIZE SUM(w * POWER(x, 2) - c * x)
-        """
+        """,
+            kind="Not implemented Error",
+            at="SUM(w * POWER(x, 2) - c * x)",
+            word="a square scaled by a value whose sign is known only when the query runs is not supported on this "
+            "installation",
         )
-        assert result.returncode != 0
-        assert (
-            "the objective multiplies a squared decision term by a value whose sign is known only when the query runs"
-            in result.stderr
-        ), result.stderr
 
     def test_objective_refusal_quotes_the_objective_as_written(self, decidb_cli):
-        """The objective is quoted from the parser's OBJECTIVE span, spacing and case as typed."""
-        result = decidb_cli.execute_raw(
+        """The objective's term is pointed at in the query, spacing and case as typed."""
+        decidb_cli.assert_error_at(
             f"""
             SELECT id, x FROM {_TABLE} DECIDE x(REAL)
             SUCH THAT x <= {_UB}
             MINIMIZE SUM(POWER(x,3))
-        """
+        """,
+            kind="Not implemented Error",
+            at="POWER(x,3)",
+            word="a term of degree 3 is not supported",
         )
-        assert "DECIDE: the objective `SUM(POWER(x,3))` has a term of degree 3" in result.stderr, result.stderr
-        assert "^" in result.stderr, result.stderr
 
 
 # ---------------------------------------------------------------------------

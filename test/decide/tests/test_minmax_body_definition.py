@@ -587,7 +587,7 @@ _REFUSAL_CASES = [
         "x(INT)",
         "x <= 7 AND max(power(x, 2)) >= 49",
         "MINIMIZE sum(x)",
-        "'max(power(x, 2))' takes the maximum of a squared or multiplied expression",
+        "max(power(x, 2))",
     ),
     (
         "MIN on HiGHS",
@@ -595,7 +595,7 @@ _REFUSAL_CASES = [
         "x(REAL)",
         "x <= 7",
         "MINIMIZE min(power(x, 2))",
-        "'min(power(x, 2))' takes the minimum of a squared or multiplied expression",
+        "min(power(x, 2))",
     ),
     (
         "SUM beside a MIN or MAX",
@@ -603,7 +603,7 @@ _REFUSAL_CASES = [
         "x(INT)",
         "x <= 7 AND sum(power(x, 2)) + max(x) <= 30",
         "MAXIMIZE sum(x)",
-        "'sum(power(x, 2))' squares or multiplies decision variables beside a MIN or MAX",
+        "sum(power(x, 2))",
     ),
     (
         "SUM inside a MIN or MAX",
@@ -611,7 +611,7 @@ _REFUSAL_CASES = [
         "x(REAL)",
         "x <= 7",
         "MINIMIZE max(per id: sum(power(x, 2)) by (id))",
-        "'sum(power(x, 2)) by (id)' squares or multiplies decision variables inside a MIN or MAX",
+        "sum(power(x, 2)) by (id)",
     ),
 ]
 
@@ -620,16 +620,17 @@ _REFUSAL_CASES = [
 @pytest.mark.quadratic
 @pytest.mark.error
 @pytest.mark.parametrize(
-    "name,env,decision,constraints,objective,cause", _REFUSAL_CASES, ids=[c[0] for c in _REFUSAL_CASES]
+    "name,env,decision,constraints,objective,at", _REFUSAL_CASES, ids=[c[0] for c in _REFUSAL_CASES]
 )
-def test_defined_body_refused_without_native_minmax(decidb_cli, name, env, decision, constraints, objective, cause):
+def test_defined_body_refused_without_native_minmax(decidb_cli, name, env, decision, constraints, objective, at):
+    """The refusal is one for every reducer whose body squares or multiplies decisions, and points at the reducer."""
     sql = f"SELECT id, x FROM {_TWO_ROWS} DECIDE {decision} SUCH THAT {constraints} {objective}"
-    with pytest.raises(DeciDBCliError) as error:
-        decidb_cli.with_env(env).execute(sql)
-    message = str(error.value)
-    assert cause in message, message
-    assert "which needs Gurobi" in message, message
-    assert "replace power(x, 2) with an expression linear in the decision variables" in message, message
+    decidb_cli.with_env(env).assert_error_at(
+        sql,
+        kind="Not implemented Error",
+        at=at,
+        word="MIN or MAX over a squared or multiplied expression is not supported on this installation",
+    )
 
 
 # ---------------------------------------------------------------------------

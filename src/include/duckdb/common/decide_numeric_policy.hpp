@@ -143,23 +143,15 @@ inline bool DecideRoundedAnswerWithin(double solution_value, double lo, double h
 	return rounded >= lo && rounded <= hi;
 }
 
-//! The text before the value in the error for a whole-numbered answer that cannot be returned exactly. The value text
-//! (`%.0f` of the rounded answer) goes between the two halves, so a plan that formats the value at run time builds the
-//! same message as `DecideWholeNumberRangeMessage`.
-inline std::string DecideWholeNumberRangeMessageBefore(const std::string &name) {
-	return "DECIDE variable '" + name + "' solves to ";
+//! The error for a whole-numbered answer that cannot be returned exactly (DecideValueRole::INTEGER_ANSWER) is the
+//! decision and its value, then the reason. The value text (`%.0f` of the rounded answer) goes between the two, so a
+//! plan that formats the value at run time builds the same message as the solver path.
+inline std::string DecideWholeNumberRangeBefore(const std::string &name) {
+	return "decision '" + name + "' takes the value ";
 }
 
 //! The text after the value in that error.
-inline std::string DecideWholeNumberRangeMessageAfter(const std::string &name) {
-	return ", which is beyond the range DeciDB can return as a whole number. Tighten the bound on '" + name +
-	       "', or declare it '" + name + "(REAL)' to read the value approximately.";
-}
-
-//! The whole error: the variable's name and its rounded answer as `value_text`.
-inline std::string DecideWholeNumberRangeMessage(const std::string &name, const std::string &value_text) {
-	return DecideWholeNumberRangeMessageBefore(name) + value_text + DecideWholeNumberRangeMessageAfter(name);
-}
+constexpr const char *DECIDE_WHOLE_NUMBER_RANGE_AFTER = ", past 2^53, the largest whole number DECIDE returns exactly";
 
 //! True when a value that was converted to a DOUBLE is usable as an exact number: the double is finite and
 //! `convert_back(converted)` gives the original value again. `convert_back` may throw on a double the original type

@@ -105,8 +105,8 @@ struct SolverResult {
 //! Single home for the message text that both backends used to duplicate. The
 //! operator calls this on the UNDIAGNOSED terminal only — either the statement was
 //! not prefixed with DIAGNOSE, or the status has no engine (ITERATION_LIMIT / OTHER).
-//! A diagnosed failure returns findings instead of throwing. `backend` is the one that
-//! ran the solve: a status no state names (OTHER) is reported as that solver's failure.
-[[noreturn]] void ThrowDecideSolveError(const SolverResult &result, SolverBackend backend);
+//! A diagnosed failure returns findings instead of throwing. A status no state names (OTHER) is reported as a query
+//! that could not be solved.
+[[noreturn]] void ThrowDecideSolveError(const SolverResult &result);
 
 } // namespace duckdb

@@ -18,8 +18,10 @@ namespace direct_a1_separable_box {
 constexpr const char *RULE_NAME = "A1_SEPARABLE_BOX";
 
 struct Decision {
-	//! The declared name, which the whole-number range error quotes.
+	//! The declared name, which the whole-number range error quotes, and where it is declared, which the error points
+	//! at.
 	string name;
+	optional_idx declaration;
 	DirectDomain domain = DirectDomain::REAL;
 	LogicalType output_type;
 	//! The decision's box before any per-row bound: its default, replaced or tightened by the bounds the solver folds
@@ -31,7 +33,7 @@ struct Decision {
 struct Condition final : DirectApplicabilityCondition {
 	//! The objective as written, which a message names when a decision's quadratic or linear coefficient, computed from
 	//! finite values, is too large for a DOUBLE (TOO_LARGE), as the solver path names it.
-	string objective_written;
+	DecideClauseRef objective_written;
 	//! The query's text, which a number made of several parts names the least expression holding (DirectNameMerge).
 	const DecideSourceText *source_text = nullptr;
 	vector<Decision> decisions;
@@ -117,6 +119,7 @@ public:
 		for (auto &decision : ir.decisions) {
 			Decision prepared;
 			prepared.name = decision.name;
+			prepared.declaration = decision.declaration;
 			prepared.domain = decision.domain;
 			prepared.output_type = decision.output_type;
 			condition->decisions.push_back(std::move(prepared));
@@ -448,13 +451,15 @@ private:
 		                         calc.Fn("abs", calc.Wrap(RoundedAnswer(value))), calc.Num(DECIDE_MAX_EXACT_INTEGER)));
 	}
 
-	//! The solver's error for an answer beyond the exact range, character for character: the name is filled in now and
-	//! the value (`%.0f` of the rounded answer, as the solver prints it) at run time.
-	unique_ptr<Expression> OutOfRangeError(const string &name, ColumnBinding value) const {
-		vector<ExprPtr> parts {calc.Constant(Value(DecideWholeNumberRangeMessageBefore(name))),
-		                       calc.Fn("printf", calc.Constant(Value("%.0f")), calc.Wrap(RoundedAnswer(value))),
-		                       calc.Constant(Value(DecideWholeNumberRangeMessageAfter(name)))};
-		return DirectErrorPredicate(optimizer, calc.Out(calc.Fn("concat", parts)));
+	//! The solver's error for an answer beyond the exact range, character for character, pointing at the decision's
+	//! declaration: the name is filled in now and the value (`%.0f` of the rounded answer, as the solver prints it) at
+	//! run time.
+	unique_ptr<Expression> OutOfRangeError(const Decision &decision, ColumnBinding value) const {
+		vector<ExprPtr> parts {calc.Constant(Value(DecideWholeNumberRangeBefore(decision.name))),
+		                       calc.Fn("printf", calc.Constant(Value("%.0f")), calc.Wrap(RoundedAnswer(value)))};
+		return DirectErrorPredicate(optimizer,
+		                            calc.Out(calc.RaiseInvalidValue(DecideValueRole::INTEGER_ANSWER,
+		                                                            calc.Fn("concat", parts), decision.declaration)));
 	}
 
 	//! The condition every row must meet. It is true, or the row raises the error that applies: a coefficient the
@@ -477,7 +482,7 @@ private:
 			                      DirectUnboundedErrorPredicate(optimizer)));
 			if (DirectIsWholeNumbered(condition.decisions[d].domain)) {
 				checks.push_back(DirectRaiseUnless(calc, WithinExactRange(answers.value[d]),
-				                                   OutOfRangeError(condition.decisions[d].name, answers.value[d])));
+				                                   OutOfRangeError(condition.decisions[d], answers.value[d])));
 			}
 		}
 		vector<ExprPtr> imprecise;

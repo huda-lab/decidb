@@ -137,25 +137,27 @@ void PhysicalDecide::CheckDecisionDomains() {
 				vname = label.second;
 			}
 		}
-		domains[var] = {true, written.Box(), is_bool, is_aux, vname};
-		// The clause that set the bound `k`, as written (`max(x) <= -5` as much as `x <= -5`, a strict
-		// `x < 0` as typed rather than the folded `x <= -1`).
-		auto written_bound = [&](bool upper, double k) {
+		domains[var] = {true, written.Box(), is_bool, vname};
+		// The clause that set the bound `k` (`max(x) <= -5` as much as `x <= -5`, a strict `x < 0` as typed rather than
+		// the folded `x <= -1`).
+		auto refusal = DecideRefuseDomain(written.Box(), is_bool, vname);
+		if (!refusal.message.empty()) {
+			idx_t clause = DConstants::INVALID_INDEX;
 			const vector<LogicalDecide::UserBoundSpec> *lists[] = {&user_singleton_row_bounds,
 			                                                       &member_singleton_row_bounds};
 			for (auto *bounds : lists) {
 				for (const auto &bound : *bounds) {
-					if (bound.decide_var_idx == var && bound.sense != (upper ? '>' : '<') && bound.k == k &&
-					    bound.source_clause_id < constraint_sources.size()) {
-						return QuoteWrittenClause(constraint_sources, bound.source_clause_id, source_text);
+					if (bound.decide_var_idx == var && bound.sense != (refusal.upper ? '>' : '<') &&
+					    bound.k == refusal.k && bound.source_clause_id < constraint_sources.size()) {
+						clause = bound.source_clause_id;
+						break;
 					}
 				}
+				if (clause != DConstants::INVALID_INDEX) {
+					break;
+				}
 			}
-			return StringUtil::Format("%s %s %g", vname, upper ? "<=" : ">=", k);
-		};
-		auto refusal = DecideDomainRefusal(written.Box(), is_bool, is_aux, vname, written_bound);
-		if (!refusal.empty()) {
-			throw InvalidInputException(refusal);
+			throw InvalidInputException(refusal.message, DecideClauseErrorInfo(constraint_sources, clause));
 		}
 	}
 }

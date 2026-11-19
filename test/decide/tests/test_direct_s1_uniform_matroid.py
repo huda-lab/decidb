@@ -904,7 +904,7 @@ def test_s1_leaves_a_constant_count_limit_beyond_1e20_to_the_solver(decidb_cli, 
     sql = _wrapped_sql(case, "plain")
     with pytest.raises(DeciDBCliError) as declined:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" in str(declined.value), declined.value
+    assert "decide_direct_solve is 'require'" in str(declined.value), declined.value
     # The solver warns about the 1e30 on both of its runs: `auto` runs it because the rule declined.
     _agree(decidb_cli, oracle_solver, case, modes=("off",))
     assert _outcome(decidb_cli, sql, "auto", expect_number_range=True) == _outcome(
@@ -1134,7 +1134,7 @@ def test_s1_column_coefficient_raises_the_solver_error(decidb_cli, rows):
         _run(decidb_cli, sql, "off")
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" not in str(direct_error.value), str(direct_error.value)
+    assert "decide_direct_solve is 'require'" not in str(direct_error.value), str(direct_error.value)
     assert str(direct_error.value) == str(solver_error.value)
 
 
@@ -1159,7 +1159,7 @@ def test_s1_a_fixed_value_that_raises_on_a_kept_row_raises_the_solvers_error(dec
         _run(decidb_cli, sql, "off")
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" not in str(direct_error.value), str(direct_error.value)
+    assert "decide_direct_solve is 'require'" not in str(direct_error.value), str(direct_error.value)
     assert str(direct_error.value) == str(solver_error.value)
 
 
@@ -1173,7 +1173,7 @@ def test_s1_objective_when_raises_the_solver_error_on_a_row_it_keeps(decidb_cli,
         _run(decidb_cli, sql, "off")
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" not in str(direct_error.value), str(direct_error.value)
+    assert "decide_direct_solve is 'require'" not in str(direct_error.value), str(direct_error.value)
     assert str(direct_error.value) == str(solver_error.value)
 
 
@@ -1189,7 +1189,7 @@ def test_s1_error_cases_fail_on_both_paths(decidb_cli, name):
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
     message = str(direct_error.value)
-    assert "decide_direct_solve=require" not in message, f"direct solve declined:\n{message}"
+    assert "decide_direct_solve is 'require'" not in message, f"direct solve declined:\n{message}"
     assert error_class(message) == expected, message
 
 
@@ -1582,7 +1582,7 @@ def test_s1_reducer_bound_errors_fail_on_both_paths(decidb_cli, name):
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
     message = str(direct_error.value)
-    assert "decide_direct_solve=require" not in message, f"direct solve declined:\n{message}"
+    assert "decide_direct_solve is 'require'" not in message, f"direct solve declined:\n{message}"
     assert error_class(message) == error_class(str(solver_error.value)), (message, str(solver_error.value))
 
 
@@ -1671,7 +1671,7 @@ def test_s1_reducer_bound_declines_what_it_cannot_read_exactly(decidb_cli, name)
     )
     with pytest.raises(DeciDBCliError) as declined:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" in str(declined.value), declined.value
+    assert "decide_direct_solve is 'require'" in str(declined.value), declined.value
     assert _outcome(decidb_cli, sql, "auto") == _outcome(decidb_cli, sql, "off")
 
 
@@ -1973,7 +1973,7 @@ def test_s1_a_nan_bound_of_reducers_raises_the_solver_error(decidb_cli, constrai
         _run(decidb_cli, sql, "off")
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" not in str(direct_error.value), str(direct_error.value)
+    assert "decide_direct_solve is 'require'" not in str(direct_error.value), str(direct_error.value)
     assert str(direct_error.value) == str(solver_error.value)
 
 

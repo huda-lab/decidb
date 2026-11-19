@@ -54,8 +54,11 @@ bool ChooseDecideAnswer(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOpera
 		// A DIAGNOSE query or a forced backend keeps the solver path; there is nothing to report.
 		if (decide.diagnose || !ForcedSolverName().empty()) {
 			if (mode == DirectSolveMode::REQUIRE) {
-				throw InvalidInputException("decide_direct_solve=require conflicts with %s: the solver is required",
-				                            decide.diagnose ? "DIAGNOSE" : "DECIDB_FORCE_SOLVER");
+				if (decide.diagnose) {
+					throw InvalidInputException("decide_direct_solve=require conflicts with DIAGNOSE: the solver is "
+					                            "required");
+				}
+				throw InvalidInputException("decide_direct_solve is 'require' and DECIDB_FORCE_SOLVER is set");
 			}
 		} else {
 			if (ApplyDirectSolveRules(op, root, optimizer, mode)) {
@@ -63,7 +66,7 @@ bool ChooseDecideAnswer(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOpera
 			}
 			if (mode == DirectSolveMode::REQUIRE) {
 				throw InvalidInputException(
-				    "decide_direct_solve=require: direct solve did not apply; the solver is required");
+				    "decide_direct_solve is 'require' and no direct rule applies to this query");
 			}
 		}
 	}

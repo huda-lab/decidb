@@ -528,14 +528,16 @@ def test_decision_factor_rejected(decidb_cli):
     decisions is bilinear, not a scale. Before B.3 this produced the unrelated
     "SUM(s) has nothing to aggregate over", because the fold pushed ``s`` into the
     reducer's body."""
-    decidb_cli.assert_error(
+    decidb_cli.assert_error_at(
         """
         SELECT id, x, s FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT), per (): s(INT)
         SUCH THAT x <= 5 AND s <= 3 AND s * SUM(x) <= 12
         MAXIMIZE SUM(x)
     """,
-        match=r"'s' is a decision, so it cannot multiply SUM\(x\)",
+        kind="Binder Error",
+        at="s * SUM(x)",
+        word="'s' is an INT decision, which cannot scale a reducer",
     )
 
 
@@ -727,23 +729,33 @@ def test_bool_decision_factor_on_a_reducer(
 @pytest.mark.cons_aggregate
 @pytest.mark.error_binder
 @pytest.mark.parametrize(
-    "clause",
+    "clause, word",
     [
-        pytest.param("b * (SUM(x) - 1) <= 4", id="a-reducer-inside-another-expression"),
-        pytest.param("(b + 1) * SUM(x) <= 4", id="a-sum-in-the-factor"),
+        # One BOOL decision, on a reducer that is part of a larger expression.
+        pytest.param(
+            "b * (SUM(x) - 1) <= 4",
+            "'b' is a BOOL decision, which cannot scale a reducer inside another expression",
+            id="a-reducer-inside-another-expression",
+        ),
+        # A factor that is no one decision.
+        pytest.param(
+            "(b + 1) * SUM(x) <= 4", "'b + 1' reads a decision, which cannot scale a reducer", id="a-sum-in-the-factor"
+        ),
     ],
 )
-def test_bool_decision_factor_stays_on_a_bare_reducer(decidb_cli, clause):
+def test_bool_decision_factor_stays_on_a_bare_reducer(decidb_cli, clause, word):
     """The factor is one Boolean decision (under a sign and data) and the term a reducer: anything else is a
     product of decisions the value rewrite does not hold."""
-    decidb_cli.assert_error(
+    decidb_cli.assert_error_at(
         f"""
         SELECT id, x FROM {_BOOL_FACTOR_ROWS}
         DECIDE x(INT), per (): b(BOOL), per (): c(BOOL)
         SUCH THAT x <= 3 AND {clause}
         MAXIMIZE SUM(x)
     """,
-        match=r"is a decision, so it cannot multiply",
+        kind="Binder Error",
+        at=clause.split(" <=")[0],
+        word=word,
     )
 
 
@@ -884,14 +896,16 @@ def test_bool_decision_factor_per_row_in_the_objective_is_refused(decidb_cli):
 @pytest.mark.error_binder
 def test_int_decision_factor_in_the_objective_stays_refused(decidb_cli):
     """Only a Boolean factor is lifted in the objective: an INT one is not convex."""
-    decidb_cli.assert_error(
+    decidb_cli.assert_error_at(
         f"""
         SELECT id, x FROM {_BOOL_FACTOR_ROWS}
         DECIDE x(INT), per (): s(INT)
         SUCH THAT x <= 3 AND s <= 3
         MAXIMIZE s * SUM(x)
     """,
-        match=r"'s' is a decision, so it cannot multiply SUM\(x\)",
+        kind="Binder Error",
+        at="s * SUM(x)",
+        word="'s' is an INT decision, which cannot scale a reducer",
     )
 
 
@@ -899,15 +913,17 @@ def test_int_decision_factor_in_the_objective_stays_refused(decidb_cli):
 @pytest.mark.error_binder
 def test_bool_decision_factor_names_the_member_without_a_bound(decidb_cli):
     """`b * SUM(x)` needs the reducer's value bounded above, which its members give: with no bound on `x` the
-    refusal names `x`, the column to bound, and not the helper that holds the sum."""
-    decidb_cli.assert_error(
+    refusal names `x`, the decision with no bound, and not the helper that holds the sum, and points at the clause."""
+    decidb_cli.assert_error_at(
         f"""
         SELECT id, x FROM {_BOOL_FACTOR_ROWS}
         DECIDE x(INT), per (): b(BOOL)
         SUCH THAT b * SUM(x) <= 4
         MAXIMIZE SUM(x)
     """,
-        match=r"finite upper bound on variable 'x'",
+        kind="Invalid Input Error",
+        at="b * SUM(x) <= 4",
+        word="'x' has no finite upper bound, which its product with a BOOL decision needs",
     )
 
 
@@ -1105,14 +1121,16 @@ def test_decision_factor_in_objective_rejected(decidb_cli):
     that can say no — without a guard the decision column was read as a data
     coefficient and evaluation crashed with an internal DuckDB assertion.
     """
-    decidb_cli.assert_error(
+    decidb_cli.assert_error_at(
         """
         SELECT id, x, s FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT), per (): s(INT)
         SUCH THAT x <= 5 AND s <= 3 AND SUM(x) <= 4
         MAXIMIZE s * SUM(x)
     """,
-        match=r"'s' is a decision, so it cannot multiply SUM\(x\)",
+        kind="Binder Error",
+        at="s * SUM(x)",
+        word="'s' is an INT decision, which cannot scale a reducer",
     )
 
 
@@ -1389,46 +1407,34 @@ _OBJECTIVE_ROWS = "(VALUES (1, 2.0), (2, 3.0)) t(id, w)"
 @pytest.mark.obj_maximize
 @pytest.mark.error_binder
 @pytest.mark.parametrize(
-    "objective, message",
+    "objective, at",
     [
-        pytest.param(
-            "w * SUM(x)",
-            r"'w' varies per row, so it cannot multiply SUM\(x\)\. Move it inside the aggregate, e\.g\. SUM\(x \* w\)\.",
-            id="column-multiplies",
-        ),
-        pytest.param(
-            "SUM(x) / w",
-            r"'w' varies per row, so it cannot divide SUM\(x\)\. Move it inside the aggregate, e\.g\. SUM\(x / w\)\.",
-            id="column-divides",
-        ),
-        pytest.param(
-            "(w + 1) * SUM(x)",
-            r"varies per row, so it cannot multiply SUM\(x\)\. Move it inside the aggregate",
-            id="sum",
-        ),
+        pytest.param("w * SUM(x)", "w * SUM(x)", id="column-multiplies"),
+        pytest.param("SUM(x) / w", "SUM(x) / w", id="column-divides"),
+        pytest.param("(w + 1) * SUM(x)", "w + 1", id="sum"),
         pytest.param(
             "(SELECT max(u.w) FROM (VALUES (1.0), (2.0)) u(w) WHERE u.w = t.w) * SUM(x)",
-            r"this subquery returns a different value for each row, so it cannot multiply SUM\(x\)\. Move it inside "
-            r"the aggregate, e\.g\. SUM\(x \* \(SELECT \.\.\.\)\)\.",
+            "(SELECT max(u.w)",
             id="correlated-subquery-multiplies",
         ),
         pytest.param(
             "SUM(x) / (SELECT max(u.w) FROM (VALUES (1.0), (2.0)) u(w) WHERE u.w = t.w)",
-            r"this subquery returns a different value for each row, so it cannot divide SUM\(x\)\. Move it inside "
-            r"the aggregate, e\.g\. SUM\(x / \(SELECT \.\.\.\)\)\.",
+            "(SELECT max(u.w)",
             id="correlated-subquery-divides",
         ),
     ],
 )
-def test_the_objective_refuses_a_factor_that_varies_per_row(decidb_cli, objective, message):
-    decidb_cli.assert_error(
+def test_the_objective_refuses_a_factor_that_varies_per_row(decidb_cli, objective, at):
+    decidb_cli.assert_error_at(
         f"""
         SELECT id, x FROM {_OBJECTIVE_ROWS}
         DECIDE x(INT)
         SUCH THAT x <= 5 AND SUM(x) <= 7
         MAXIMIZE {objective}
     """,
-        match=f"DECIDE objective: .*{message}",
+        kind="Binder Error",
+        at=at,
+        word="varies per row, which cannot scale a reducer in the objective",
     )
 
 
@@ -1486,31 +1492,63 @@ _DECISION_ROWS = "(VALUES (1, 2.0), (2, 3.0)) t(id, w)"
 @pytest.mark.cons_aggregate
 @pytest.mark.error_binder
 @pytest.mark.parametrize(
-    "clause, message",
+    "clause, kind, at, word",
     [
-        pytest.param("SUM(x) / y <= 3", r"'y' is a decision, so it cannot divide SUM\(x\)\.", id="int-divides"),
-        pytest.param("SUM(x) / b <= 3", r"'b' is a decision, so it cannot divide SUM\(x\)\.", id="bool-divides"),
-        pytest.param("SUM(x) / SUM(y) <= 3", r"DECIDE: cannot divide by a DECIDE variable\.", id="reducer-divides"),
         pytest.param(
-            "SUM(x) * (b - c) <= 3", r"'b - c' is a decision, so it cannot multiply SUM\(x\)\.", id="difference"
+            "SUM(x) / y <= 3",
+            "Binder Error",
+            "SUM(x) / y",
+            "'y' is an INT decision, which cannot divide",
+            id="int-divides",
+        ),
+        pytest.param(
+            "SUM(x) / b <= 3",
+            "Binder Error",
+            "SUM(x) / b",
+            "'b' is a BOOL decision, which cannot divide",
+            id="bool-divides",
+        ),
+        pytest.param(
+            "SUM(x) / SUM(y) <= 3",
+            "Not implemented Error",
+            "SUM(x) / SUM(y)",
+            "division by a decision is not supported",
+            id="reducer-divides",
+        ),
+        pytest.param(
+            "SUM(x) * (b - c) <= 3",
+            "Binder Error",
+            "b - c",
+            "'b - c' reads a decision, which cannot scale",
+            id="difference",
         ),
         pytest.param(
             "SUM(x) * CASE WHEN w > 2 THEN b ELSE 0 END <= 3",
-            r"is a decision, so it cannot multiply SUM\(x\)\.",
+            "Binder Error",
+            "CASE WHEN w > 2 THEN b ELSE 0 END",
+            "reads a decision, which cannot scale",
             id="case",
         ),
-        pytest.param("(b * c) * SUM(x) <= 3", r"has a term of degree 3", id="product-of-booleans"),
+        pytest.param(
+            "(b * c) * SUM(x) <= 3",
+            "Not implemented Error",
+            "(b * c) * SUM(x)",
+            "a term of degree 3 is not supported",
+            id="product-of-booleans",
+        ),
     ],
 )
-def test_a_decision_factor_on_a_reducer_is_refused(decidb_cli, clause, message):
-    decidb_cli.assert_error(
+def test_a_decision_factor_on_a_reducer_is_refused(decidb_cli, clause, kind, at, word):
+    decidb_cli.assert_error_at(
         f"""
         SELECT id, x FROM {_DECISION_ROWS}
         DECIDE x(INT), y(INT), b(BOOL), c(BOOL)
         SUCH THAT x <= 3 AND y <= 3 AND {clause}
         MAXIMIZE SUM(x)
     """,
-        match=message,
+        kind=kind,
+        at=at,
+        word=word,
     )
 
 
@@ -1527,14 +1565,17 @@ def test_a_decision_factor_on_a_reducer_is_refused(decidb_cli, clause, message):
     ],
 )
 def test_a_refusal_names_a_norm_as_it_was_written(decidb_cli, norm, written):
-    decidb_cli.assert_error(
+    """A decision on a norm points at the decision, whichever way the norm is written (a norm is a reducer)."""
+    decidb_cli.assert_error_at(
         f"""
         SELECT id, x FROM {_DECISION_ROWS}
         DECIDE x(INT)
         SUCH THAT x <= 5 AND x * {norm} <= 7
         MAXIMIZE SUM(x)
     """,
-        match=re.escape(f"'x' is a decision, so it cannot multiply {written}."),
+        kind="Binder Error",
+        at=f"x * {written}",
+        word="'x' is an INT decision, which cannot scale a reducer",
     )
 
 

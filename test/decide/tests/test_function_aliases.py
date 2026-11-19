@@ -212,9 +212,12 @@ def test_alias_explain_shows_a_name_in_data_and_a_reducer_as_written(decidb_cli)
 @pytest.mark.correctness
 def test_alias_a_refusal_names_the_function_as_written(decidb_cli):
     """`mod` is an alias of `%`: the refusal names the call as written."""
-    with pytest.raises(DeciDBCliError) as error:
-        decidb_cli.execute(f"SELECT id, x FROM {_T} DECIDE x(INT) SUCH THAT mod(x, 2) <= 1 MAXIMIZE SUM(x)")
-    assert "function 'mod' cannot take a DECIDE variable" in str(error.value)
+    decidb_cli.assert_error_at(
+        f"SELECT id, x FROM {_T} DECIDE x(INT) SUCH THAT mod(x, 2) <= 1 MAXIMIZE SUM(x)",
+        kind="Not implemented Error",
+        at="mod(x, 2)",
+        word="function 'mod' over a decision is not supported",
+    )
 
 
 @pytest.mark.error

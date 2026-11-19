@@ -230,8 +230,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	// value with its value checks, and folds bounds into column boxes. A plan it never saw (the optimizer switched off,
 	// or PRAGMA enable_verification's unoptimized run) cannot be answered, so it is refused in SQL terms.
 	if (!op.optimized) {
-		throw InvalidInputException("DECIDE needs the DECIDE optimizer. Remove 'decide_optimizer' from "
-		                            "disabled_optimizers, and run PRAGMA enable_optimizer if it is disabled.");
+		throw InvalidInputException("DECIDE needs the optimizer 'decide_optimizer', which is disabled");
 	}
 	D_ASSERT(op.children.size() == 1);
 	// Both clauses are verified after ALL optimizer rewriting and before any logical

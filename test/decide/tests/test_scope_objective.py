@@ -142,67 +142,80 @@ def test_a_keyed_decision_with_one_instance_counts_once(decidb_cli, scope_solver
 
 @pytest.mark.error
 @pytest.mark.parametrize(
-    "objective, message",
+    "objective, kind, at, word",
     [
         pytest.param(
             "MAXIMIZE when S.priority: sum(ship) + D.capacity * s",
-            "DECIDE objective: 'D.capacity' takes more than one value over the kept rows (20, 40), so the objective "
-            "would be produced more than once",
+            "Invalid Input Error",
+            "D.capacity",
+            "'D.capacity' takes more than one value over the kept rows (20, 40), so the objective would be produced "
+            "more than once",
             id="data-value",
         ),
         pytest.param(
             "MAXIMIZE when S.priority: ship",
-            "DECIDE objective: the decision 'ship' (declared per row) has more than one instance over the kept rows, "
-            "so the objective would be produced more than once",
+            "Invalid Input Error",
+            "ship(INT)",
+            "the decision 'ship' (declared per row) has more than one instance over the kept rows, so the objective "
+            "would be produced more than once",
             id="per-row-decision",
         ),
         pytest.param(
             "MAXIMIZE sum(ship) by (D.region)",
-            "DECIDE objective: 'D.region' in by (D.region) takes more than one value over the kept rows ('East', "
-            "'West'), so the objective would be produced more than once",
+            "Invalid Input Error",
+            "D.region",
+            "'D.region' in by (D.region) takes more than one value over the kept rows ('East', 'West'), so the "
+            "objective would be produced more than once",
             id="top-level-by",
         ),
         pytest.param(
             "MAXIMIZE when S.priority: sum(ship) + s * s",
-            "DECIDE objective: 's * s' multiplies decisions outside a reducer, which is not supported yet",
+            "Not implemented Error",
+            "s * s",
+            "'s * s' multiplies decisions outside a reducer, which is not supported",
             id="product-outside-a-reducer",
         ),
         pytest.param(
             "MINIMIZE 0 * sum(ship) + power(sum(ship) - 5, 2)",
-            "DECIDE objective: 'power(sum(ship) - 5, 2)' multiplies decisions outside a reducer, which is not "
-            "supported yet",
+            "Not implemented Error",
+            "power(sum(ship) - 5, 2)",
+            "'power(sum(ship) - 5, 2)' multiplies decisions outside a reducer, which is not supported",
             id="square-of-a-reducer-and-more",
         ),
         pytest.param(
             "MAXIMIZE sum(ship) - sum(ship) * max(ship)",
-            "DECIDE objective: 'sum(ship) * max(ship)' multiplies decisions outside a reducer, which is not "
-            "supported yet",
+            "Not implemented Error",
+            "sum(ship) * max(ship)",
+            "'sum(ship) * max(ship)' multiplies decisions outside a reducer, which is not supported",
             id="product-of-two-reducers",
         ),
         pytest.param(
             "MAXIMIZE (sum(ship) + 1) * max(ship)",
-            "DECIDE objective: '(sum(ship) + 1) * max(ship)' multiplies decisions outside a reducer, which is not "
-            "supported yet",
+            "Not implemented Error",
+            "(sum(ship) + 1) * max(ship)",
+            "'(sum(ship) + 1) * max(ship)' multiplies decisions outside a reducer, which is not supported",
             id="reducer-scaled-by-a-reducer-and-more",
         ),
         pytest.param(
             "MAXIMIZE sum(ship) + (sum(ship) + 1) * sum(ship)",
-            "DECIDE objective: '(sum(ship) + 1) * sum(ship)' multiplies decisions outside a reducer, which is not "
-            "supported yet",
+            "Not implemented Error",
+            "(sum(ship) + 1) * sum(ship)",
+            "'(sum(ship) + 1) * sum(ship)' multiplies decisions outside a reducer, which is not supported",
             id="sum-scaled-by-itself-and-more",
         ),
         pytest.param(
             "MAXIMIZE sum(ship) - (max(ship) + 1) * sum(ship)",
-            "DECIDE objective: '(max(ship) + 1) * sum(ship)' multiplies decisions outside a reducer, which is not "
-            "supported yet",
+            "Not implemented Error",
+            "(max(ship) + 1) * sum(ship)",
+            "'(max(ship) + 1) * sum(ship)' multiplies decisions outside a reducer, which is not supported",
             id="sum-scaled-by-a-maximum-and-more",
         ),
     ],
 )
-def test_objective_tuple_term_errors(decidb_cli, objective, message):
-    result = decidb_cli.execute_raw(_query(objective, "ship <= S.demand AND s <= 5", "ship(INT), per (): s(INT)"))
-    assert message in result.stderr, result.stderr
-    assert_no_internal_leak(result, "an objective tuple term error")
+def test_objective_tuple_term_errors(decidb_cli, objective, kind, at, word):
+    sql = _query(objective, "ship <= S.demand AND s <= 5", "ship(INT), per (): s(INT)")
+    decidb_cli.assert_error_at(sql, kind=kind, at=at, word=word)
+    assert_no_internal_leak(decidb_cli.execute_raw(sql), "an objective tuple term error")
 
 
 # ---------------------------------------------------------------------------

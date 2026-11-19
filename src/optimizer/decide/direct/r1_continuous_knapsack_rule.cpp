@@ -50,7 +50,7 @@ struct Condition final : DirectApplicabilityCondition {
 	DirectLinearPart budget;
 	//! The budget's first clause as a message names it: a price, a room or a sum the plan computes past a DOUBLE names
 	//! it (DecideValueRole::TOO_LARGE), as the solver path names a number it computes.
-	string budget_written;
+	DecideClauseRef budget_written;
 	//! The budget's constant limits: `<=` sets the upper one, `>=` the lower one, `=` both. A side with no limit is
 	//! infinite. Several constraints on the same weights are one budget, with the largest lower and smallest upper
 	//! limit, counting the data limits below.
@@ -64,7 +64,7 @@ struct Condition final : DirectApplicabilityCondition {
 	vector<unique_ptr<Expression>> objective_kept;
 	//! The objective as a message names it: an item's value, its parts' values summed and scaled, past a DOUBLE names
 	//! it, as the solver path names the coefficient it merges.
-	string objective_written;
+	DecideClauseRef objective_written;
 	//! The query's text, which a number made of several parts names the least expression holding (DirectNameMerge).
 	const DecideSourceText *source_text = nullptr;
 };

@@ -210,23 +210,9 @@ unique_ptr<Expression> HelperCondition(const BodySite &site) {
 	                                             site.reducer->filter->Copy());
 }
 
-[[noreturn]] void RefuseWithoutNativeMinMax(const BodySite &site, LogicalDecide &decide) {
-	const auto name = StringUtil::Lower(site.reducer->function.name);
-	// A message quotes what the user wrote (MSG-1); the plan renderer reprints decision structure.
-	const string reducer_text =
-	    RenderDecideSource(*site.reducer, decide.source_text, decide.keyed_scopes, &decide.keys);
-	SolverModelClass needed;
-	needed.quadratic_constraints = true;
-	string cause = IsExtremumName(name)
-	                   ? "'" + reducer_text + "' takes the " + (name == "max" ? "maximum" : "minimum") +
-	                         " of a squared or multiplied expression"
-	                   : "'" + reducer_text + "' squares or multiplies decision variables " +
-	                         (site.beside_extremum ? "beside" : "inside") + " a MIN or MAX";
-	ThrowDecideSolverGap(
-	    needed, cause,
-	    "replace " +
-	        RenderDecideSource(*site.reducer->children[0], decide.source_text, decide.keyed_scopes, &decide.keys) +
-	        " with an expression linear in the decision variables");
+[[noreturn]] void RefuseWithoutNativeMinMax(const BodySite &site) {
+	// The reducer is the place: the error points at it.
+	ThrowDecideSolverGap("MIN or MAX over a squared or multiplied expression", site.reducer->GetQueryLocation());
 }
 
 } // namespace
@@ -301,7 +287,7 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 	if (!decide.use_native_constructs.min_max) {
 		for (auto &site : sites) {
 			if (site.needs_native_extremum) {
-				RefuseWithoutNativeMinMax(site, decide);
+				RefuseWithoutNativeMinMax(site);
 			}
 		}
 	}

@@ -30,10 +30,10 @@ idx_t AddGlobalBinaryAux(SolverInput &input, const VarIndexer &indexer, double o
 //! The constant part of one row's LHS: the terms whose variable index is fixed. `written` names the clause when the
 //! sum grows past a DOUBLE (AddCoefficient).
 double DecideRowFixedLhsOffset(const vector<idx_t> &variable_indices, const vector<CoefficientColumn> &row_coefficients,
-                               idx_t row, const string &written);
+                               idx_t row, const DecideClauseRef &written);
 
 //! One row's RHS with its fixed LHS offset already moved across.
-double DecideRowEffectiveBound(const EvaluatedConstraint &ec, idx_t row, const string &written);
+double DecideRowEffectiveBound(const EvaluatedConstraint &ec, idx_t row, const DecideClauseRef &written);
 
 //! One row's expression bracketed against every contributing variable's box, each end on its own: the one walk behind
 //! every signed range, the constraint side's (DecideRowSignedRange) and every MIN/MAX auxiliary's.
@@ -131,9 +131,9 @@ SignedRowRange DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row, co
 //! message the user reads lives in one place. `open` says whether a column of the row
 //! has an open box (an auxiliary's counts): `bad` is then the column to name. With
 //! no open column the reach overflowed a DOUBLE, and the refusal is the TOO_LARGE
-//! message naming `written`, the clause the row belongs to (DecideWrittenClause).
+//! message pointing at `written`, the clause the row belongs to (DecideWrittenClause).
 [[noreturn]] void ThrowUnboundedBigMNaming(bool open, idx_t bad, const vector<string> &var_names, const char *construct,
-                                           const string &written);
+                                           const DecideClauseRef &written);
 
 //! The first term whose column is unbounded in the direction a Big-M would need,
 //! or INVALID_INDEX when every contributor is boxed.
@@ -161,7 +161,8 @@ struct MinMaxGroup {
 
 //! Split one grouped row into its groups' families. An ungrouped row is the single
 //! group 0. `written` names what the row comes from, for a member's constant past a DOUBLE (AddCoefficient).
-vector<MinMaxGroup> BuildMinMaxGroups(const SolverInput &input, const EvaluatedConstraint &ec, const string &written);
+vector<MinMaxGroup> BuildMinMaxGroups(const SolverInput &input, const EvaluatedConstraint &ec,
+                                      const DecideClauseRef &written);
 
 //! The members of a MIN/MAX row's groups, each built when the extremum link asks for it (ExtremumMemberSource): one
 //! data row's expression negated (the shape `MinMaxLinkRow` and `EmitExtremumLink` take) with its constant part
@@ -170,7 +171,7 @@ vector<MinMaxGroup> BuildMinMaxGroups(const SolverInput &input, const EvaluatedC
 class MinMaxRowMembers {
 public:
 	MinMaxRowMembers(const SolverInput &input, const VarIndexer &indexer, const EvaluatedConstraint &ec,
-	                 const string &written);
+	                 const DecideClauseRef &written);
 
 	//! Writes `row`'s member into `link`, which is empty.
 	void FillLink(idx_t row, MinMaxLinkRow &link);
@@ -183,7 +184,7 @@ private:
 	const SolverInput &input;
 	const VarIndexer &indexer;
 	const EvaluatedConstraint &ec;
-	const string &written;
+	const DecideClauseRef &written;
 	SparseCoeffAccumulator row_terms;
 };
 

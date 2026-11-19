@@ -426,9 +426,11 @@ class TestACollatedOrderKey:
     def test_one_position_holds_one_value(self, decidb_cli):
         """D73: 'a' and 'A' are one position, whose two rows read 10 and 20."""
         rows = ((1, "a", 10.0), (2, "A", 20.0), (3, "b", 30.0))
-        result = decidb_cli.execute_raw(_ordered("at(previous else 0: t.v) {over}", rows))
-        assert "a position must hold one row" in result.stderr, result.stderr
-        assert_no_internal_leak(result, "two rows at one collated position")
+        sql = _ordered("at(previous else 0: t.v) {over}", rows)
+        decidb_cli.assert_error_at(
+            sql, kind="Invalid Input Error", at="at(previous else 0: t.v)", word="the frame finds 2 rows at"
+        )
+        assert_no_internal_leak(decidb_cli.execute_raw(sql), "two rows at one collated position")
 
 
 # A frame's timeline key is a key: a message names its timeline as the key is spelled (D69). Each group below has one
@@ -440,8 +442,12 @@ def test_the_tree_names_a_position_within_its_timeline_as_the_key_is_spelled(dec
     source = f"(SELECT id, g COLLATE NOCASE AS g, h, k, v FROM {values(rows, 'r', ('id', 'g', 'h', 'k', 'v'))}) t"
     sql = f"""SELECT id, x FROM {source} DECIDE x(REAL)
         SUCH THAT x <= 50 AND x <= at(previous else 0: t.v) over (t.k within t.g, t.h) MAXIMIZE sum(x)"""
-    result = decidb_cli.execute_raw(sql)
-    assert "finds 2 rows at t.g = 'B', t.h = 1, t.k = 1;" in result.stderr, result.stderr
+    decidb_cli.assert_error_at(
+        sql,
+        kind="Invalid Input Error",
+        at="at(previous else 0: t.v)",
+        word="the frame finds 2 rows at t.g = 'B', t.h = 1, t.k = 1",
+    )
 
 
 @pytest.mark.parametrize(
@@ -457,5 +463,9 @@ def test_the_tree_names_a_class_spanning_timelines_as_its_keys_are_spelled(decid
     source = f"(SELECT id, {category} AS category, {product} AS product, period, v FROM {values(rows, 'r', columns)}) t"
     sql = f"""SELECT id, x FROM {source} DECIDE x(INT)
         SUCH THAT x <= 10 AND per t.category: x >= at(first: t.v) over (t.period within t.product) MINIMIZE sum(x)"""
-    result = decidb_cli.execute_raw(sql)
-    assert "t.category = 'Food' spans t.product = 'A', 'B'." in result.stderr, result.stderr
+    decidb_cli.assert_error_at(
+        sql,
+        kind="Invalid Input Error",
+        at="at(first: t.v)",
+        word="t.category = 'Food' spans t.product = 'A', 'B'",
+    )

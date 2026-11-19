@@ -114,14 +114,16 @@ def test_imputation_inside_objective_reducer_matches_oracle(decidb_cli, oracle_s
 @pytest.mark.error
 def test_coalesce_over_decide_variable_inside_reducer_is_rejected(decidb_cli, clauses):
     """Imputation may wrap data, never a value controlled by the solver."""
-    decidb_cli.assert_error(
+    decidb_cli.assert_error_at(
         f"""
         SELECT id, keep
         FROM range(1, 4) items(id)
         DECIDE keep(BOOL)
         {clauses}
     """,
-        match=r"DECIDE: operator 'COALESCE' cannot take a DECIDE variable\.",
+        kind="Not implemented Error",
+        at="COALESCE(keep, 0)",
+        word="operator 'COALESCE' over a decision is not supported",
     )
 
 

@@ -611,16 +611,16 @@ const vector<idx_t> &ClauseRows(const EvaluatedConstraint &ec);
 //! `written` names the clause when a sum grows past a DOUBLE. Built against one column space: laid out again
 //! (InlineReducerValueLinks), it is built anew.
 const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const SolverInput &input, const VarIndexer &indexer,
-                                     const string &written);
+                                     const DecideClauseRef &written);
 
 //! Adds `value` into `target`, a number the model merges from several: like coefficients on one solver column, a
 //! square's products, the fixed terms moved to the bound side. The one place such a sum grows. Every value it adds was
-//! read finite, so a sum that is not finite has grown past a DOUBLE, and the user error names `written`, the clause the
-//! sum belongs to (DecideWrittenClause).
-inline void AddCoefficient(double &target, double value, const string &written) {
+//! read finite, so a sum that is not finite has grown past a DOUBLE, and the user error points at `written`, the clause
+//! the sum belongs to (DecideWrittenClause).
+inline void AddCoefficient(double &target, double value, const DecideClauseRef &written) {
 	target += value;
 	if (!std::isfinite(target)) {
-		throw InvalidInputException(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, written));
+		throw DecideTooLargeError(written);
 	}
 }
 
@@ -642,18 +642,18 @@ struct SparseCoeffAccumulator {
 
 	//! The clause the sums belong to, for the error of one past a DOUBLE (AddCoefficient). Set by Begin*; the string
 	//! outlives the rows the clause emits.
-	const string *written = nullptr;
+	const DecideClauseRef *written = nullptr;
 
 	//! Configure for dense accumulation. Allocates `total_vars` doubles
 	//! (zero-initialized) on first use; subsequent calls only clear `touched`.
-	void BeginDense(idx_t total_vars, const string &written);
+	void BeginDense(idx_t total_vars, const DecideClauseRef &written);
 
 	//! Configure for sorted-pairs accumulation. `expected_size` is a hint for reserve().
-	void BeginSparse(idx_t expected_size, const string &written);
+	void BeginSparse(idx_t expected_size, const DecideClauseRef &written);
 
 	//! Configure for the decision columns of `indexer`, [0, global_block_start): dense while that span is small
 	//! enough to keep as scratch (about 8MB), sorted pairs past it.
-	void BeginForDecisions(const VarIndexer &indexer, idx_t expected_size, const string &written);
+	void BeginForDecisions(const VarIndexer &indexer, idx_t expected_size, const DecideClauseRef &written);
 
 	//! Add a contribution. Branchless on use_dense via the pre-set mode.
 	inline void Add(int idx, double coeff) {

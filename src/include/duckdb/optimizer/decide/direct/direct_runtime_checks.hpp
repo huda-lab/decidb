@@ -49,13 +49,13 @@ unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const Expression
 //! named by its own text and place; a number made of several (like terms added into one coefficient) stands where the
 //! least expression holding them all stands (DecideCoveringLocation). It is a constant when no value reads a column
 //! (DecideValueRole::CONSTANT). `clause` is the clause (or the objective) it belongs to, which a number the plan
-//! computes from values it checked before names when it is past a DOUBLE (TOO_LARGE).
+//! computes from values it checked before points at when it is past a DOUBLE (TOO_LARGE).
 struct DirectNumberNames {
 	bool named = false;
 	bool constant = true;
 	string text;
 	optional_idx place;
-	string clause;
+	DecideClauseRef clause;
 };
 
 //! Adds `value`, an expression of the source whose text the user wrote as `text`, to what `names` calls the number. A
@@ -74,11 +74,11 @@ ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number
 
 //! The message of a number the plan computes from values it checked before: past a DOUBLE it names `clause`
 //! (TOO_LARGE), as the solver path names a number it computes (AddCoefficient).
-ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const string &clause);
+ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const DecideClauseRef &clause);
 
 //! The check of a number the plan computes from values checked before it: it raises TOO_LARGE naming `clause` when
 //! `number` (a DOUBLE) is past the DOUBLE range, and passes a NULL.
-unique_ptr<Expression> DirectRaiseTooLarge(Optimizer &optimizer, const ExprPtr &number, const string &clause);
+unique_ptr<Expression> DirectRaiseTooLarge(Optimizer &optimizer, const ExprPtr &number, const DecideClauseRef &clause);
 
 //! The same for a number the plan computes from values it checked before, which `names` calls (a name with a place
 //! raises where the number stands, as DirectNumberMessage does; one without names `names.clause`).

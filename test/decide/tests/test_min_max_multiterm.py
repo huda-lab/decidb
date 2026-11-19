@@ -912,8 +912,10 @@ def test_a_composed_clause_reads_each_tuple_of_a_qualified_reducer_once(decidb_c
 )
 def test_a_factor_that_divides_by_a_query_wide_zero_is_refused(decidb_cli, decide, clause):
     """`max(x) / (SELECT count(*) - 3 ...)` divides the extremum by a value known only when the query runs: 0 here. The
-    composed clause names where the zero stands."""
-    decidb_cli.assert_error(
+    error points at the divisor."""
+    decidb_cli.assert_error_at(
         f"SELECT id, x FROM (VALUES (1), (2), (3)) t(id) DECIDE x(REAL) {decide}",
-        match=f"DECIDE {clause}: division by zero — the factor on an aggregate evaluated to 0\\.",
+        kind="Invalid Input Error",
+        at="(SELECT count(*) - 3 FROM range(3))",
+        word="'(SELECT count(*) - 3 FROM range(3))' divides by zero",
     )

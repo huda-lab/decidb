@@ -100,11 +100,6 @@ struct SolverRegistry {
 	//! Look one up by name, case-insensitively. Returns an invalid handle when no
 	//! backend answers to that name.
 	static SolverBackend Find(const string &name);
-	//! The display names of every registered backend that could take a model of this
-	//! class, in preference order — regardless of whether it is installed here. This
-	//! is what a plan-time refusal names as the thing to install, so the sentence
-	//! stays correct as backends are added or their capabilities grow.
-	static vector<string> BackendsSupporting(const SolverModelClass &needed);
 };
 
 //! Test-only: `DECIDB_NATIVE_CONSTRUCTS=force` asks for a construct to be stated

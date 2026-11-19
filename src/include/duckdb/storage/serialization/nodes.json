@@ -1072,6 +1072,12 @@
         "id": 102,
         "name": "declared_key",
         "type": "string"
+      },
+      {
+        "id": 103,
+        "name": "declaration",
+        "type": "optional_idx",
+        "default": "optional_idx()"
       }
     ],
     "pointer_type": "none"
@@ -1309,6 +1315,12 @@
         "id": 123,
         "name": "spelling",
         "type": "string"
+      },
+      {
+        "id": 124,
+        "name": "location",
+        "type": "optional_idx",
+        "default": "optional_idx()"
       }
     ],
     "pointer_type": "none"

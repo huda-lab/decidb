@@ -60,8 +60,8 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices, const vector<Co
 //! `instances` gives each row's instance its own box (InstanceBox), so an instance the default floor of 0 holds on is
 //! sized from 0 and not from a lowered instance's floor.
 double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox &box, idx_t num_rows,
-                             const vector<string> &var_names, const InstanceBox &instances, const string &written,
-                             const char *construct);
+                             const vector<string> &var_names, const InstanceBox &instances,
+                             const DecideClauseRef &written, const char *construct);
 
 //! The instances of a decision whose default floor of 0 a constant lower bound under a `when` replaces (a constraint's
 //! `lifted_floor`). A constant lower bound replaces the default floor on the instances whose rows it keeps; a decision
@@ -469,7 +469,7 @@ struct MinMaxLinkRow {
 	vector<double> coefficients;
 	double constant = 0.0;
 
-	void AddConstant(double value, const string &written) {
+	void AddConstant(double value, const DecideClauseRef &written) {
 		AddCoefficient(constant, value, written);
 	}
 
@@ -534,7 +534,7 @@ struct ExtremumLinkSpec {
 	double closing_big_m = 0.0;
 	bool closing_underivable = false;
 	idx_t blame_var = DConstants::INVALID_INDEX;
-	string written;
+	DecideClauseRef written;
 	//! Names every column and binary this emits, through the global label channel, so a
 	//! diagnosis renders `MAX(x)` rather than an internal column.
 	string label;

@@ -154,9 +154,9 @@ private:
 	//! where it does, its terms' coefficients and its decisions' instances, which split a variant.
 	vector<Value> Fallback(idx_t frame, idx_t row) const;
 	//! The scope check's message for an objective `root` with more than one variant over its kept rows (D72,
-	//! DecideObjectiveTwiceMessage): its sigma read on the entries `surviving` names, a variant each, and its frames
-	//! by their keys.
-	string ObjectiveDifference(idx_t root, const vector<idx_t> &surviving) const;
+	//! DecideObjectiveTwice), and where it points: its sigma read on the entries `surviving` names, a variant each, and
+	//! its frames by their keys.
+	DecideVariantDifference ObjectiveDifference(idx_t root, const vector<idx_t> &surviving) const;
 	//! The names of `root`'s variants, by their class's values and their own, read at their first rows as written
 	//! (DecideBody::names, DecideNameVariants).
 	vector<GroupName> NameVariants(idx_t root, const DecideSignature &signature, const vector<idx_t> &class_of,
@@ -191,8 +191,8 @@ private:
 	void Admit(const DecideBody &body, EvaluatedConstraint &evaluated);
 	//! The domain check on each row a per-row bound on one decision writes (the instances `evaluated` keeps, an easy
 	//! MIN's or MAX's members among them): a bound the decision's type cannot hold (`per g: x <= -1` on a BOOL or a
-	//! non-negative INT) is an error naming the clause, as for a bound folded into the decision's box
-	//! (DecideDomainRefusal). Only a bound written as a constant is checked, and its box takes the lowest floor any
+	//! non-negative INT) is an error pointing at the clause, as for a bound folded into the decision's box
+	//! (DecideRefuseDomain). Only a bound written as a constant is checked, and its box takes the lowest floor any
 	//! clause lowers the decision to (PhysicalDecide::domains), so a clause the solve could satisfy is never
 	//! refused.
 	void CheckDomain(idx_t root, const EvaluatedConstraint &evaluated);
@@ -201,9 +201,8 @@ private:
 	//! `counted` unless it is a folded bound's, which only a repair model emits.
 	EvaluatedConstraint Groups(idx_t root, bool counted);
 	//! The composed terms `terms` that `root`, a composed clause's or the objective's, holds: each read on the members
-	//! of its G, its factor on the input's `first` chunk (`what` names the clause or the objective); `null_factor` set
-	//! by a NULL one.
-	vector<ComposedMinMaxTermData> ComposedTerms(idx_t root, const char *what, bool &null_factor);
+	//! of its G, its factor on the input's `first` chunk; `null_factor` set by a NULL one.
+	vector<ComposedMinMaxTermData> ComposedTerms(idx_t root, bool &null_factor);
 	//! A factor the whole query shares (a composed term's), read on the input's first row, whatever a
 	//! clause keeps.
 	Value FirstRowValue(const Expression &factor);

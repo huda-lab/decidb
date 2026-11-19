@@ -1,9 +1,10 @@
-"""A message that quotes a clause names it with its `when c per K:` qualifier.
+"""A message about a clause points at it, and a diagnosis quotes it with its `when c per K:` qualifier.
 
-Every site that quotes a clause goes through `QuoteWrittenClause` / `QuoteEditedClause`
-(`decide_source_info.hpp`), which attach the qualifier the clause was written under. One test
-per site, each failing if that site quotes the clause bare. A bare `per row:` is never printed
-(D32), so it is not tested here.
+A refusal of a clause points at the clause in the query (the caret), whatever scope it is written under. Every site
+of a diagnosis that quotes a clause goes through `QuoteWrittenClause` / `QuoteEditedClause`
+(`decide_source_info.hpp`), which attach the qualifier the clause was written under. One test per site, each failing if
+that site points at nothing or quotes the clause bare. A bare `per row:` is never printed (D32), so it is not tested
+here.
 """
 
 import csv
@@ -33,17 +34,25 @@ def _diagnosis(cli, sql):
 @pytest.mark.min_max
 @pytest.mark.parametrize("scope", _SCOPES)
 def test_minmax_not_equal_refusal_quotes_the_scope(decidb_cli, scope):
-    """`decide_rewrite_minmax.cpp`: the `<>` refusal over a MIN/MAX names the clause with its scope."""
-    stderr = decidb_cli.execute_raw(_select(f"x <= 3 AND {scope} max(x) <> 2")).stderr
-    assert f"MAX of absolute values): {scope} max(x) <> 2" in stderr, stderr
+    """`decide_rewrite_minmax.cpp`: the `<>` refusal over a MIN/MAX points at the clause, under any scope."""
+    decidb_cli.assert_error_at(
+        _select(f"x <= 3 AND {scope} max(x) <> 2"),
+        kind="Not implemented Error",
+        at="max(x) <> 2",
+        word="<> on MIN or MAX",
+    )
 
 
 @pytest.mark.error
 @pytest.mark.parametrize("scope", ["when p per g:"])
 def test_product_not_equal_refusal_quotes_the_scope(decidb_cli, scope):
-    """`decide_rewrite_notequal_avg.cpp`: the `<>` refusal over a product of decisions names its scope."""
-    stderr = decidb_cli.execute_raw(_select(f"x <= 3 AND {scope} x * x <> 2")).stderr
-    assert f"is not supported yet: {scope} x * x <> 2" in stderr, stderr
+    """`decide_rewrite_notequal_avg.cpp`: the `<>` refusal over a product of decisions points at the clause."""
+    decidb_cli.assert_error_at(
+        _select(f"x <= 3 AND {scope} x * x <> 2"),
+        kind="Not implemented Error",
+        at="x * x <> 2",
+        word="<> over a product",
+    )
 
 
 @pytest.mark.error
@@ -84,33 +93,39 @@ def test_unreachable_bound_label_quotes_the_scope(decidb_cli):
 
 @pytest.mark.error
 def test_bool_bound_refusal_quotes_the_scope(decidb_cli):
-    """`PhysicalDecide`: the bound a BOOL cannot hold is quoted with the `per` it was written under. The `per` is a
-    relation element (`per t`) because the refusal reads the box a constant bound folds into, and a `per` over a
-    written column (`per g:`) does not fold: a row whose `g` is NULL takes no instance of the clause."""
-    stderr = decidb_cli.execute_raw(_select("per t: x <= -1", var="x(BOOL)")).stderr
-    assert "infeasible: per t: x <= -1 cannot hold for a BOOL variable" in stderr, stderr
+    """`PhysicalDecide`: the bound a BOOL cannot hold points at the clause that wrote it, under the `per` it was
+    written under. The `per` is a relation element (`per t`) because the refusal reads the box a constant bound folds
+    into, and a `per` over a written column (`per g:`) does not fold: a row whose `g` is NULL takes no instance of the
+    clause."""
+    decidb_cli.assert_error_at(
+        _select("per t: x <= -1", var="x(BOOL)"),
+        kind="Invalid Input Error",
+        at="x <= -1",
+        word="'x' is a BOOL decision",
+    )
 
 
 #: The two refusals of a bound the domain cannot hold, for a bound under each scope the clause can carry.
-_NON_NEGATIVE = "cannot hold because x is non-negative (>= 0). Add an explicit lower bound if it may be negative."
+_BOOL_BOUND = "'x' is a BOOL decision"
+_NON_NEGATIVE = "'x' is never negative"
 
 
 @pytest.mark.error
 @pytest.mark.parametrize("mode", ["off", "auto"])
 @pytest.mark.parametrize("scope", _SCOPES)
 def test_a_scoped_bool_bound_refusal_quotes_the_scope(decidb_cli, scope, mode):
-    """`CheckDomain`: a scoped bound a BOOL cannot hold (the upper side) names its clause, whether or not the bound
+    """`CheckDomain`: a scoped bound a BOOL cannot hold (the upper side) points at its clause, whether or not the bound
     folds into the decision's box, and a direct solve and the solver print one message."""
     sql = f"SET decide_direct_solve = '{mode}'; " + _select(f"{scope} x <= -1", var="x(BOOL)")
-    stderr = decidb_cli.execute_raw(sql).stderr
-    assert f"infeasible: {scope} x <= -1 cannot hold for a BOOL variable." in stderr, stderr
+    decidb_cli.assert_error_at(sql, kind="Invalid Input Error", at="x <= -1", word=_BOOL_BOUND)
 
 
 @pytest.mark.error
 def test_a_per_bound_a_bool_cannot_reach_names_its_clause(decidb_cli):
     """`CheckDomain` reads the lower end too: a floor above 1 contradicts a BOOL, as it does a folded bound."""
-    stderr = decidb_cli.execute_raw(_select("per g: x >= 2", var="x(BOOL)")).stderr
-    assert "infeasible: per g: x >= 2 cannot hold for a BOOL variable." in stderr, stderr
+    decidb_cli.assert_error_at(
+        _select("per g: x >= 2", var="x(BOOL)"), kind="Invalid Input Error", at="x >= 2", word=_BOOL_BOUND
+    )
 
 
 @pytest.mark.error
@@ -120,18 +135,16 @@ def test_a_per_bound_a_non_negative_decision_cannot_hold_names_its_clause(decidb
     """`CheckDomain`: the floor of 0 and the upper bound below it, under a `per` over a written column, which does
     not fold into a box. A direct solve and the solver print one message."""
     sql = f"SET decide_direct_solve = '{mode}'; " + _select(f"{scope} x <= -1")
-    stderr = decidb_cli.execute_raw(sql).stderr
-    assert f"infeasible: {scope} x <= -1 {_NON_NEGATIVE}" in stderr, stderr
+    decidb_cli.assert_error_at(sql, kind="Invalid Input Error", at="x <= -1", word=_NON_NEGATIVE)
 
 
 @pytest.mark.error
 @pytest.mark.parametrize("mode", ["off", "auto"])
-@pytest.mark.parametrize("var, tail", [("x(BOOL)", "cannot hold for a BOOL variable."), ("x(INT)", _NON_NEGATIVE)])
+@pytest.mark.parametrize("var, tail", [("x(BOOL)", _BOOL_BOUND), ("x(INT)", _NON_NEGATIVE)])
 def test_an_easy_extremum_bound_the_domain_cannot_hold_names_its_clause(decidb_cli, var, tail, mode):
     """`CheckDomain` on the rows `Groups` writes for the members of an easy MAX under a `per`."""
     sql = f"SET decide_direct_solve = '{mode}'; " + _select("per g: max(x) <= -1", var=var)
-    stderr = decidb_cli.execute_raw(sql).stderr
-    assert f"infeasible: per g: max(x) <= -1 {tail}" in stderr, stderr
+    decidb_cli.assert_error_at(sql, kind="Invalid Input Error", at="max(x) <= -1", word=tail)
 
 
 @pytest.mark.error
@@ -202,7 +215,12 @@ def test_a_per_floor_that_lowers_the_domain_lets_the_upper_bound_below_zero_hold
 
 @pytest.mark.error
 def test_highs_coefficient_refusal_quotes_the_scope(decidb_cli_highs):
-    """`DescribeRowClause`: HiGHS's refusal of a limit it cannot hold names the clause with its scope."""
+    """HiGHS's refusal of a limit it cannot hold points at the clause, under any scope."""
     sql = _select("x >= 0 AND x <= 5 AND when p per g: SUM(x) >= 1e40", var="x(REAL)")
-    stderr = decidb_cli_highs.execute_raw(sql, expect_number_range=True).stderr
-    assert "Constraint `when p per g: SUM(x) >= 1e+40` sets a limit" in stderr, stderr
+    decidb_cli_highs.assert_error_at(
+        sql,
+        kind="Not implemented Error",
+        at="SUM(x) >= 1e40",
+        word="the constraint holds numbers too far apart in size",
+        expect_number_range=True,
+    )

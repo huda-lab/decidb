@@ -195,6 +195,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 		} else {
 			variable_scopes.push_back(DecideVarScopeInfo::Row());
 		}
+		variable_scopes.back().declaration = expr_ptr->GetQueryLocation();
 		var_names.push_back(name);
 		// An `INT` decision is BIGINT, not INTEGER. Nothing bounds a decision to
 		// int32: the solver works in doubles, and an optimum driven by an aggregate

@@ -139,9 +139,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 			}
 		};
 		unordered_set<idx_t> query_wide_table_indexes;
-		unordered_set<idx_t> correlated_subquery_table_indexes;
 		collect_flattened_indexes(uncorrelated_subquery_slots, query_wide_table_indexes);
-		collect_flattened_indexes(correlated_subquery_slots, correlated_subquery_table_indexes);
 
 		auto tag_flattened_values = [](const vector<SourceSubquerySlot> &slots, const string &tag) {
 			for (auto &entry : slots) {
@@ -179,8 +177,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 		{
 			DecideCanonicalizer canonicalizer(context, statement.decide_index, statement.variable_scopes,
 			                                  statement.keyed_scopes, statement.decide_keys, statement.is_boolean_var,
-			                                  std::move(query_wide_table_indexes),
-			                                  std::move(correlated_subquery_table_indexes));
+			                                  std::move(query_wide_table_indexes));
 			canonicalizer.QuoteMessagesWith(message_names);
 			canonicalizer.frames = &statement.decide_frames;
 			// The algebra of every clause, judged once on the one spelling canonicalization wrote.
@@ -194,7 +191,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 				FinalizeConstraintSourceInfo(*statement.decide_constraints, statement.decide_constraint_sources,
 				                             statement.decide_text, statement.keyed_scopes, statement.decide_index,
 				                             &statement.decide_keys, statement.decide_frames);
-				shape_check.CheckConstraints(*statement.decide_constraints, statement.decide_constraint_sources);
+				shape_check.CheckConstraints(*statement.decide_constraints);
 				canonicalizer.SkipNullData(*statement.decide_constraints, statement.keyed_scopes,
 				                           statement.decide_keys);
 			}
@@ -229,7 +226,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 				// alone is no difference to show.
 				canonical_objective = RenderDecideObjective(*statement.decide_objective, objective_names,
 				                                            statement.decide_sense == DecideSense::MAXIMIZE);
-				shape_check.CheckObjective(*statement.decide_objective, written_objective);
+				shape_check.CheckObjective(*statement.decide_objective);
 				objective_canonical_differs = canonical_objective != rendered_objective;
 				canonicalizer.SkipNullData(*statement.decide_objective, statement.keyed_scopes, statement.decide_keys);
 			}

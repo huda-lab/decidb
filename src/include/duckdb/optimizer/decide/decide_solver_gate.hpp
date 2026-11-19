@@ -11,6 +11,7 @@
 #pragma once
 
 #include "duckdb/common/decide_solver_capabilities.hpp"
+#include "duckdb/common/optional_idx.hpp"
 
 namespace duckdb {
 
@@ -31,7 +32,7 @@ SolverModelClass DeriveDecideModelClass(const LogicalDecide &op, const DecideTre
 //! It happens HERE, at plan time, for two reasons. The message arrives before the
 //! query scans anything, and — more importantly — the same SQL is legal on every
 //! machine. What differs is whether this machine has a solver that can run it, so
-//! the refusal blames the host and names the solver to install.
+//! the refusal blames the host.
 //!
 //! Called once, right after LowerDecideTree, which is the first point at
 //! which the shape of every constraint and the objective is settled.
@@ -41,10 +42,10 @@ void RequireDecideSolverSupport(const LogicalDecide &op, const DecideTree &tree)
 //! capabilities are read against a query's demand.
 SolverModelClassGap FindDecideSolverGap(const SolverModelClass &needed, const SolverBackend &backend);
 
-//! The refusal both gates raise: `cause` names what the query does in the user's words, `remedy` the smallest edit
-//! that avoids it, and the sentence names the solvers that take `needed`, from the registry. RequireDecideSolverSupport
+//! The refusal both gates raise: `cause` names what the query does in the user's words, and the refusal says this
+//! installation does not take it. `place` is where the error points (invalid for none). RequireDecideSolverSupport
 //! raises it for a model class; the definition of a non-linear reducer body raises it when the backend chosen here
 //! states no MIN/MAX natively, before any model is built.
-[[noreturn]] void ThrowDecideSolverGap(const SolverModelClass &needed, const string &cause, const string &remedy);
+[[noreturn]] void ThrowDecideSolverGap(const string &cause, optional_idx place);
 
 } // namespace duckdb

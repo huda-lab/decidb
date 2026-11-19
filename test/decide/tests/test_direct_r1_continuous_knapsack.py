@@ -1855,7 +1855,7 @@ def test_r1_objective_when_raises_the_solver_error_on_a_row_it_keeps(decidb_cli,
         _run(decidb_cli, sql, "off")
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
+    assert "decide_direct_solve is 'require'" not in str(direct_error.value), "no rule applied to the query"
     assert str(direct_error.value) == str(solver_error.value)
 
 
@@ -1870,7 +1870,7 @@ def test_r1_error_cases_fail_on_both_paths(decidb_cli, name):
     assert error_class(str(solver_error.value)) == expected, str(solver_error.value)
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
+    assert "decide_direct_solve is 'require'" not in str(direct_error.value), "no rule applied to the query"
     assert error_class(str(direct_error.value)) == expected, str(direct_error.value)
 
 
@@ -1940,7 +1940,7 @@ def test_r1_boundary_values_read_like_the_solver(decidb_cli, name):
     sql = BOUNDARY_CASES[name]
     direct = _run_all(decidb_cli, sql, "require")
     solver = _run_all(decidb_cli, sql, "off", writes_number_out_of_range(sql))
-    assert direct[0] != "error" or "decide_direct_solve=require" not in direct[1], "no rule applied to the query"
+    assert direct[0] != "error" or "decide_direct_solve is 'require'" not in direct[1], "no rule applied to the query"
     assert _all_close(direct, solver), (direct, solver)
 
 
@@ -2125,7 +2125,7 @@ def test_r1_a_nan_limit_of_reducers_raises_the_solver_error(decidb_cli, budget, 
         _run(decidb_cli, sql, "off")
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" not in str(direct_error.value), str(direct_error.value)
+    assert "decide_direct_solve is 'require'" not in str(direct_error.value), str(direct_error.value)
     assert str(direct_error.value) == str(solver_error.value)
 
 
@@ -2961,7 +2961,7 @@ def test_r1_several_decisions_error_cases_fail_on_both_paths(decidb_cli, name):
         _run(decidb_cli, sql, "off")
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
+    assert "decide_direct_solve is 'require'" not in str(direct_error.value), "no rule applied to the query"
     assert error_class(str(solver_error.value)) == expected, str(solver_error.value)
     assert error_class(str(direct_error.value)) == expected, str(direct_error.value)
 

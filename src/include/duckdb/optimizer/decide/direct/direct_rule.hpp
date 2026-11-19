@@ -43,6 +43,8 @@ enum class DirectDomain : uint8_t { BOOL, INT, REAL };
 struct DirectIRDecision {
 	//! The name the user declared, as the solver quotes it.
 	string name;
+	//! Where it is declared, which an error about the decision points at (LogicalDecide::variable_scopes).
+	optional_idx declaration;
 	DirectDomain domain;
 	//! The SQL type of the decision's output column (INTEGER for BOOL, BIGINT for INT, DOUBLE for REAL).
 	LogicalType output_type;
@@ -146,9 +148,9 @@ struct DirectIRScope {
 
 struct DirectIRConstraint {
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
-	//! The clause as a message names it (QuoteWrittenClause), as the solver path names it: a number the plan computes
-	//! past a DOUBLE names its clause (DecideValueRole::TOO_LARGE).
-	string written;
+	//! The clause as a message refers to it, as the solver path does: a number the plan computes past a DOUBLE points
+	//! at its clause (DecideValueRole::TOO_LARGE).
+	DecideClauseRef written;
 	//! True for a reduced constraint, false for one constraint per row.
 	bool aggregate = false;
 	//! COMPARE_LESSTHANOREQUALTO ... COMPARE_NOTEQUAL, or COMPARE_IN for a membership `x IN (v, ...)`.
@@ -189,9 +191,8 @@ struct DirectIRObjective {
 	//! Decision-free additive constant canonicalization folded out of the objective. The parts below are a
 	//! minimization, so both are of the objective negated when the query was written MAXIMIZE.
 	double offset = 0;
-	//! The objective as a message names it, in the direction written (DecideWrittenObjective), as the solver path
-	//! names it.
-	string written;
+	//! The objective as a message refers to it, as the solver path does.
+	DecideClauseRef written;
 	vector<DirectPart> parts;
 	DirectIRScope scope;
 };

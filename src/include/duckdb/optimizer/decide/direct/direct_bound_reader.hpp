@@ -215,7 +215,8 @@ vector<DirectSignedValue> DirectValuesOn(const DirectLinearPart &part, idx_t dec
 //! What a message names for a number computed from `values` (DirectNumberNames): each value a column holds, printed as
 //! the user wrote it, in reading order, and `clause`. A literal is no column's value: a number made of literals names
 //! the clause, as the solver path names it.
-DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedValue> &values, const string &clause);
+DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedValue> &values,
+                                const DecideClauseRef &clause);
 
 //! Whether a number computed from `values` (with the part's `factor`) needs no invalid-value check: the
 //! sum of the magnitude bounds of the values (DirectMagnitudeBound), each read as a row its NULL guard keeps reads it
@@ -244,8 +245,8 @@ bool DirectOnlyLinearTerms(const vector<DecideSplitTerm> &terms);
 //! A term that is not linear is skipped, and so are the part's reducer, filter and qualifier: the rule checks those,
 //! and which decision a term names. `clause` is the clause (or the objective) the part belongs to, which a message
 //! names.
-bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const DirectPart &part, const string &clause,
-                          DirectLinearPart &out);
+bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const DirectPart &part,
+                          const DecideClauseRef &clause, DirectLinearPart &out);
 
 //===--------------------------------------------------------------------===//
 // Terms of a part that are not linear
@@ -281,26 +282,26 @@ struct DirectWeightedForm {
 };
 
 //! Reads a CONSTANT term of a part. False when its value is not a numeric value of the source row.
-bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause,
+bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, const DecideClauseRef &clause,
                             DirectConstantTerm &out, optional_idx scale_place = optional_idx());
 
 //! Reads the terms of a linear form (the factor of a square, or what an absolute value holds): linear terms of one
 //! declared decision, and constants, each with a coefficient that is a numeric value of the source row. False when a
 //! term is of another kind, the form names no decision or two, or a value cannot be proved.
-bool DirectReadLinearForm(const DirectIR &ir, const vector<DecideSplitTerm> &form, const string &clause,
+bool DirectReadLinearForm(const DirectIR &ir, const vector<DecideSplitTerm> &form, const DecideClauseRef &clause,
                           DirectLinearForm &out, optional_idx scale_place = optional_idx());
 
 //! Reads a square of a part: a linear form squared under a coefficient. False when the form is not linear in one
 //! decision, or the coefficient or a value in the form is not a numeric value of the source row. A weight read from the
 //! data is read like any other; a rule that needs a constant one folds it (DirectFoldConstantSum).
-bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause,
+bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const DecideClauseRef &clause,
                           DirectWeightedForm &out, optional_idx scale_place = optional_idx());
 
 //! Reads an absolute value of a part, `ABS(inner)` under a coefficient, into the same form a square is read into.
 //! DirectReadQuadraticPart does not call it, so a rule that does not take an absolute loss declines one without a check
 //! of its own. `term` is an `ABS`. False when its form or coefficient cannot be read.
-bool DirectReadAbsTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause, DirectWeightedForm &out,
-                       optional_idx scale_place = optional_idx());
+bool DirectReadAbsTerm(const DirectIR &ir, const DecideSplitTerm &term, const DecideClauseRef &clause,
+                       DirectWeightedForm &out, optional_idx scale_place = optional_idx());
 
 //! The signed sum of `values` as one constant, with a NULL guard read through (a row it skips reads 0, as coefficient
 //! 0), so a term's weight `DirectWeightedForm::weight` or slope `DirectLinearForm::linear` folds to the number every
@@ -322,8 +323,8 @@ struct DirectQuadraticPart {
 //! DirectReadConstantTerm, DirectReadSquareTerm, DirectObjectivePartKept). False when any of them cannot be read, a
 //! linear term names a decision the IR does not declare, or a term is of another kind. How many squares the rule
 //! admits, and which signs, is the rule's to check on `out`.
-bool DirectReadQuadraticPart(const DirectIR &ir, ClientContext &context, const DirectPart &part, const string &clause,
-                             DirectQuadraticPart &out);
+bool DirectReadQuadraticPart(const DirectIR &ir, ClientContext &context, const DirectPart &part,
+                             const DecideClauseRef &clause, DirectQuadraticPart &out);
 
 //! The rows an objective part reads: those the objective's `when` and the part's own both keep, over the source, or
 //! null for every row. A row they drop (a false or NULL `when`) has no coefficient in the part, which a rule reads as

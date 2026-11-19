@@ -872,12 +872,12 @@ def test_a_square_in_a_grouped_reducer(decidb_cli_gurobi):
     [
         pytest.param(
             "avg(ship) by (D.region) + sum(ship) by (D.region) <> 3",
-            "DECIDE: AVG in a <> constraint is not supported yet beside another term or with its own when " "or per",
+            ("Not implemented Error", "sum(ship) by (D.region) <> 3", "AVG in a <> constraint beside another term"),
             id="avg-beside-a-term-under-not-equal",
         ),
         pytest.param(
             "avg(when S.priority: ship) <> 3",
-            "DECIDE: AVG in a <> constraint is not supported yet beside another term or with its own when " "or per",
+            ("Not implemented Error", "avg(when S.priority: ship) <> 3", "or with its own when or per"),
             id="avg-with-its-own-when-under-not-equal",
         ),
         pytest.param(

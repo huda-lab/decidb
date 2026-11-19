@@ -246,7 +246,7 @@ TEST_CASE("Direct rule driver falls back to the solver and raises one fixed line
 	auto required = con.Query(QUERY);
 	REQUIRE(required->HasError());
 	auto &message = required->GetError();
-	REQUIRE(message.find("decide_direct_solve=require") != string::npos);
+	REQUIRE(message.find("decide_direct_solve is 'require'") != string::npos);
 	REQUIRE(message.find("STUB_A") == string::npos);
 	REQUIRE(message.find("STUB_B") == string::npos);
 }
@@ -307,7 +307,7 @@ TEST_CASE("Direct rule driver offers a rule no IR the front end could not read",
 		REQUIRE_NO_FAIL(con.Query("SET decide_direct_solve='require'"));
 		auto required = con.Query(query_of(clauses));
 		REQUIRE(required->HasError());
-		REQUIRE(required->GetError().find("direct solve did not apply") != string::npos);
+		REQUIRE(required->GetError().find("no direct rule applies to this query") != string::npos);
 		REQUIRE_NO_FAIL(con.Query("SET decide_direct_solve='auto'"));
 	}
 }
@@ -536,7 +536,7 @@ TEST_CASE("With all three real rules registered each query shape reaches the rul
 		                        " SUCH THAT SUM(w*x) <= 7 MAXIMIZE SUM(score*x)");
 		INFO(declaration);
 		REQUIRE(result->HasError());
-		REQUIRE(result->GetError().find("decide_direct_solve=require") != string::npos);
+		REQUIRE(result->GetError().find("decide_direct_solve is 'require'") != string::npos);
 	}
 }
 

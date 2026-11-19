@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/common/constants.hpp"
+#include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/to_string.hpp"
 
@@ -48,6 +49,9 @@ struct DecideVarScopeInfo {
 	//! The key written after `per`, as written (`D.depotID, S.customerID`), so a message
 	//! can name the decision the way it was declared. Empty for every other spelling.
 	string declared_key;
+	//! Where the decision is declared in the query, which an error about the decision points at. Invalid for a
+	//! decision the optimizer adds.
+	optional_idx declaration;
 
 	DecideVarScopeInfo() = default;
 	DecideVarScopeInfo(DecideVarScope scope_p, idx_t keyed_scope_idx_p)

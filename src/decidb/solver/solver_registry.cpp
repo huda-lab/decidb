@@ -133,14 +133,4 @@ SolverBackend SolverRegistry::Find(const string &name) {
 	return SolverBackend();
 }
 
-vector<string> SolverRegistry::BackendsSupporting(const SolverModelClass &needed) {
-	vector<string> names;
-	for (auto &backend : Backends()) {
-		if (SupportsModelClass(needed, backend.ModelClasses())) {
-			names.emplace_back(backend.DisplayName());
-		}
-	}
-	return names;
-}
-
 } // namespace duckdb

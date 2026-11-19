@@ -254,14 +254,16 @@ def test_a_bound_no_scaling_can_reach_is_refused(decidb_cli_highs, clause):
     passed straight through to the internal error it was supposed to prevent. The limit
     is read from the clause instead, and the sense says which side it lands on.
     """
-    decidb_cli_highs.assert_error(
+    decidb_cli_highs.assert_error_at(
         f"""
         SELECT id, x FROM (VALUES (1),(2)) t(id)
         DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 5 AND {clause}
         MAXIMIZE SUM(x)
     """,
-        match=r"sets a limit of .* that HiGHS cannot hold",
+        kind="Not implemented Error",
+        at=clause,
+        word="the constraint holds numbers too far apart in size",
         expect_number_range=True,
     )
 
@@ -272,17 +274,18 @@ def test_a_row_spanning_the_window_is_refused_in_sql_terms(decidb_cli_highs):
     """No single factor holds both ends of a row spanning more than the window.
 
     Scaling is all the loader is allowed to do — it may move a row, never reshape it —
-    so this one is refused, naming the clause as written and the numbers that conflict
-    rather than reporting a solver-internal status.
+    so this one is refused, pointing at the clause rather than reporting a solver-internal status.
     """
-    decidb_cli_highs.assert_error(
+    decidb_cli_highs.assert_error_at(
         """
         SELECT id, x, y FROM (VALUES (1,1e-12,1e16)) t(id,a,b)
         DECIDE x(REAL), y(REAL)
         SUCH THAT x >= 0 AND x <= 5 AND y >= 0 AND y <= 5 AND SUM(a*x + b*y) <= 1e18
         MAXIMIZE SUM(x + y)
     """,
-        match=r"mixes numbers too far apart in size.*1e-12.*1e\+16",
+        kind="Not implemented Error",
+        at="SUM(a*x + b*y) <= 1e18",
+        word="the constraint holds numbers too far apart in size",
         expect_number_range=True,
     )
 
@@ -293,17 +296,18 @@ def test_a_bound_too_large_to_scale_is_refused_in_sql_terms(decidb_cli_highs):
     """The bound rides along with the row, and has a ceiling of its own.
 
     Scaling `1e-12` up into the window multiplies a limit of `1e19` past HiGHS's
-    `infinite_bound`, at which point it stops being a limit at all. Refused for that
-    reason specifically, rather than reported as the same spread problem.
+    `infinite_bound`, at which point it stops being a limit at all. Refused, as a spread of the row's own numbers is.
     """
-    decidb_cli_highs.assert_error(
+    decidb_cli_highs.assert_error_at(
         """
         SELECT id, x FROM (VALUES (1,1e-12)) t(id,w)
         DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 5 AND SUM(w*x) <= 1e19
         MAXIMIZE SUM(x)
     """,
-        match=r"sets a limit of 1e\+19 .* coefficients as small as 1e-12",
+        kind="Not implemented Error",
+        at="SUM(w*x) <= 1e19",
+        word="the constraint holds numbers too far apart in size",
         expect_number_range=True,
     )
 
@@ -426,18 +430,20 @@ def test_an_objective_spanning_the_window_is_refused_in_sql_terms(decidb_cli_hig
     """No single factor holds an objective whose own coefficients span more than the window.
 
     The objective is moved, never reshaped, as a row is: `POWER(w*x - 1, 2)` with `w` at 1e-6 and 1e7 puts Hessian
-    entries 1e-12 and 1e14 side by side, and the query is refused naming the objective rather than solved with the small
+    entries 1e-12 and 1e14 side by side, and the query is refused at the objective rather than solved with the small
     entry dropped.
     """
     cli = decidb_cli_highs.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
-    cli.assert_error(
+    cli.assert_error_at(
         """
         SELECT id, x FROM (VALUES (1,1e-6),(2,1e7)) t(id,w)
         DECIDE x(REAL)
         SUCH THAT x BETWEEN 0 AND 10
         MINIMIZE SUM(POWER(w * x - 1, 2))
     """,
-        match=r"The objective mixes numbers too far apart in size for HiGHS to load",
+        kind="Not implemented Error",
+        at="SUM(POWER(w * x - 1, 2))",
+        word="the objective holds numbers too far apart in size",
         expect_number_range=True,
     )
 
@@ -491,13 +497,12 @@ def test_a_repair_model_highs_refuses_is_reported_as_such(decidb_cli_highs):
 
 
 # A column scaled for a limit past `infinite_bound` multiplies its entries, so a row or objective that fits the window
-# as written can fail once scaled. The cause is judged on the set as written: a set that fits is refused for the
-# decision's limit, one that does not is refused as itself, and either way the message quotes only numbers the user
-# wrote (2^30, the scale `x >= 1e29` takes, turns a coefficient of 1 into 1.07374e+09).
+# as written can fail once scaled. The message is one whatever the cause (a decision's limit, or the row's own numbers),
+# and it points at the row's clause or the objective.
 @pytest.mark.edge_case
 @pytest.mark.error
 @pytest.mark.parametrize(
-    "sql, where",
+    "sql, at, word",
     [
         pytest.param(
             """
@@ -506,7 +511,8 @@ def test_a_repair_model_highs_refuses_is_reported_as_such(decidb_cli_highs):
             SUCH THAT x >= 1e29 AND y BETWEEN 0 AND 5 AND SUM(x + w*y) >= 0
             MINIMIZE SUM(x)
             """,
-            r"Constraint `SUM\(x \+ w\*y\) >= 0`",
+            "SUM(x + w*y) >= 0",
+            "the constraint holds numbers too far apart in size",
             id="row",
         ),
         pytest.param(
@@ -516,59 +522,55 @@ def test_a_repair_model_highs_refuses_is_reported_as_such(decidb_cli_highs):
             SUCH THAT x >= lb
             MINIMIZE SUM(POWER(w * x - 1, 2))
             """,
-            r"The objective",
+            "SUM(POWER(w * x - 1, 2))",
+            "the objective holds numbers too far apart in size",
             id="objective",
         ),
     ],
 )
-def test_a_refusal_a_decision_limit_causes_says_so(decidb_cli_highs, sql, where):
+def test_a_refusal_a_decision_limit_causes_says_so(decidb_cli_highs, sql, at, word):
     """As written, each fits the window; a scaled `x` puts a 1.07374e+09 entry beside 1e-16, or a 2.3e+18 Hessian
-    entry beside 2e-8. The decision's limit is the cause, and the scaled numbers appear nowhere."""
+    entry beside 2e-8. The refusal points at the row or the objective, and the scaled numbers appear nowhere."""
     cli = decidb_cli_highs.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
+    cli.assert_error_at(sql, kind="Not implemented Error", at=at, word=word, expect_number_range=True)
     stderr = cli.execute_raw(sql, expect_number_range=True).stderr
-    assert re.search(
-        where + r" cannot be loaded by HiGHS together with a decision limit of 1e\+20 or more\. Use smaller limits on "
-        r"the decisions in it, or install Gurobi",
-        stderr,
-    ), stderr
     assert "1.07374" not in stderr and "2.30584" not in stderr, stderr
 
 
 @pytest.mark.edge_case
 @pytest.mark.error
 @pytest.mark.parametrize(
-    "clauses, match, scaled",
+    "clauses, at, scaled",
     [
-        pytest.param(
-            "SUM(1e-45 * x) <= 1e19",
-            r"sets a limit of 1e\+19 that HiGHS cannot hold alongside coefficients as small as 1e-45\.",
-            "1.07374e-36",
-            id="bound-too-large",
-        ),
+        pytest.param("SUM(1e-45 * x) <= 1e19", "SUM(1e-45 * x) <= 1e19", "1.07374e-36", id="bound-too-large"),
         pytest.param(
             "y BETWEEN 0 AND 5 AND SUM(1e10 * x + 1e-16 * y) >= 0",
-            r"mixes numbers too far apart in size for HiGHS to load: coefficients run from 1e-16 to 1e\+10 ",
+            "SUM(1e10 * x + 1e-16 * y) >= 0",
             "1.07374e+19",
             id="spread",
         ),
     ],
 )
-def test_a_refusal_the_written_numbers_cause_quotes_them(decidb_cli_highs, clauses, match, scaled):
-    """A row that cannot be placed as written is refused as itself, though it holds a scaled `x`.
+def test_a_refusal_the_written_numbers_cause_quotes_them(decidb_cli_highs, clauses, at, scaled):
+    """A row that cannot be placed as written is refused as itself, though it holds a scaled `x`, and its message
+    holds none of the scaled numbers.
 
     - bound-too-large: 1e-45 cannot be scaled up past a limit of 1e19; scaled, it read 1.07374e-36.
-    - spread: 1e-16 and 1e10 span more than the window; scaled, 1e10 read 1.07374e+19. Lowering `x`'s limit would not
-      load this row, so naming it would send the user the wrong way.
+    - spread: 1e-16 and 1e10 span more than the window; scaled, 1e10 read 1.07374e+19.
     """
     cli = decidb_cli_highs.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
-    stderr = cli.execute_raw(
-        f"""
+    sql = f"""
         SELECT id, x FROM (VALUES (1),(2)) t(id)
         DECIDE x(REAL), y(REAL)
         SUCH THAT x >= 1e29 AND {clauses}
         MINIMIZE SUM(x)
-    """,
+    """
+    cli.assert_error_at(
+        sql,
+        kind="Not implemented Error",
+        at=at,
+        word="the constraint holds numbers too far apart in size",
         expect_number_range=True,
-    ).stderr
-    assert re.search(match, stderr), stderr
+    )
+    stderr = cli.execute_raw(sql, expect_number_range=True).stderr
     assert scaled not in stderr and "decision limit" not in stderr, stderr

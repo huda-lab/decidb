@@ -13,7 +13,8 @@ alternative — leaving one backend on the 1e6 floor — means the same query an
 correctly on Gurobi and wrongly on HiGHS, with no story for the divergence. There is
 no fixed Big-M anywhere in DeciDB any more.
 
-The refusal names a column the user can bound and the edit that bounds it. It fires
+The refusal names the column that has no finite bound and the construct that needs one, and points at
+the clause. It fires
 only when the bound is genuinely unknowable: a box derived by implied-bound
 propagation counts, and so does one derived for an ABS auxiliary, which is why
 ``MAX(ABS(x - 5)) >= 3`` over a bounded ``x`` still answers.
@@ -53,19 +54,17 @@ _ROWS = "(VALUES (1),(2),(3)) t(id)"
 def test_hard_minmax_over_unbounded_variable_is_refused(decidb_cli):
     """``MAX(x) >= 5`` lowered needs an indicator, and an indicator needs a finite M."""
     lowering = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
-    with pytest.raises(DeciDBCliError) as excinfo:
-        lowering.execute(
-            f"""
-            SELECT id, x FROM {_ROWS}
-            DECIDE x(REAL)
-            SUCH THAT MAX(x) >= 5
-            MINIMIZE SUM(x)
-        """
-        )
-    message = excinfo.value.message
-    assert re.search(r"finite bound on 'x'", message), message
-    # The remedy has to be an edit the user can actually type.
-    assert "x >= <lower>" in message and "x <= <upper>" in message, message
+    lowering.assert_error_at(
+        f"""
+        SELECT id, x FROM {_ROWS}
+        DECIDE x(REAL)
+        SUCH THAT MAX(x) >= 5
+        MINIMIZE SUM(x)
+    """,
+        kind="Invalid Input Error",
+        at="MAX(x) >= 5",
+        word="'x' has no finite bound, which MIN or MAX needs",
+    )
 
 
 @pytest.mark.cons_comparison
@@ -78,16 +77,17 @@ def test_not_equal_over_unbounded_variable_is_refused(decidb_cli, constraint):
     exist. They took the same 1e6 floor and now take the same refusal.
     """
     lowering = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
-    with pytest.raises(DeciDBCliError) as excinfo:
-        lowering.execute(
-            f"""
-            SELECT id, x FROM {_ROWS}
-            DECIDE x(INT)
-            SUCH THAT {constraint}
-            MAXIMIZE SUM(x)
-        """
-        )
-    assert re.search(r"finite bound on 'x'", excinfo.value.message), excinfo.value.message
+    lowering.assert_error_at(
+        f"""
+        SELECT id, x FROM {_ROWS}
+        DECIDE x(INT)
+        SUCH THAT {constraint}
+        MAXIMIZE SUM(x)
+    """,
+        kind="Invalid Input Error",
+        at=constraint,
+        word="'x' has no finite bound, which <> needs",
+    )
 
 
 @pytest.mark.min_max
@@ -101,16 +101,17 @@ def test_composed_minmax_over_unbounded_variable_is_refused(decidb_cli):
     Big-M at all.
     """
     lowering = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
-    with pytest.raises(DeciDBCliError) as excinfo:
-        lowering.execute(
-            f"""
-            SELECT id, x FROM {_ROWS}
-            DECIDE x(REAL)
-            SUCH THAT x >= -100 AND SUM(x) + MAX(x) >= -10
-            MINIMIZE SUM(x)
-        """
-        )
-    assert re.search(r"finite bound on 'x'", excinfo.value.message), excinfo.value.message
+    lowering.assert_error_at(
+        f"""
+        SELECT id, x FROM {_ROWS}
+        DECIDE x(REAL)
+        SUCH THAT x >= -100 AND SUM(x) + MAX(x) >= -10
+        MINIMIZE SUM(x)
+    """,
+        kind="Invalid Input Error",
+        at="SUM(x) + MAX(x) >= -10",
+        word="'x' has no finite bound, which MIN or MAX needs",
+    )
 
 
 @pytest.mark.min_max
@@ -234,21 +235,15 @@ def test_native_path_reports_unbounded_rather_than_the_integer_ceiling(decidb_cl
     the Big-M refusal above — correct behaviour, and a different test.
     """
     native = decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "force"})
-    with pytest.raises(DeciDBCliError) as excinfo:
-        native.execute(
-            f"""
-            SELECT id, x FROM {_ROWS}
-            DECIDE x(INT)
-            SUCH THAT x >= 0 AND SUM(x) <> 500
-            MAXIMIZE SUM(x)
-        """
-        )
-    message = excinfo.value.message
-    assert "unbounded" in message.lower(), message
-    # Naming the variable is the whole point: the ray fallback cannot derive it
-    # through an indicator row, so the ceiling check hands its own column over.
-    assert "x" in message, message
-    assert "2147483647" not in message, message
+    sql = f"""
+        SELECT id, x FROM {_ROWS}
+        DECIDE x(INT)
+        SUCH THAT x >= 0 AND SUM(x) <> 500
+        MAXIMIZE SUM(x)
+    """
+    native.assert_error_at(sql, kind="Invalid Input Error", word="the DECIDE query is unbounded")
+    # The answer is no integer ceiling.
+    assert "2147483647" not in native.execute_raw(sql).stderr
 
 
 @pytest.mark.cons_comparison

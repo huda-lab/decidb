@@ -100,8 +100,7 @@ void RefuseOverflowedReach(const SolverInput &input, const ReducerValueLinkSpec 
 	const bool below =
 	    reach.lo == -INF && DecideIsOpenBelow(input.InstanceBoxLower(link.value_var, instance, input.lower_bounds));
 	if (above || below) {
-		throw InvalidInputException(
-		    DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, DecideWrittenClause(input, link.source_clause_id)));
+		throw DecideTooLargeError(DecideWrittenClause(input, link.source_clause_id));
 	}
 }
 
@@ -880,7 +879,7 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 		const bool is_max = link.agg_name == "max";
 		const idx_t value_var = link.value_var;
 		// The clause as the user wrote it, quoted once for every group's refusal.
-		const string written = DecideWrittenClause(input, link.source_clause_id);
+		const auto written = DecideWrittenClause(input, link.source_clause_id);
 		auto &members = link.members;
 		// A member is its expression negated with its constant apart, the shape the extremum link takes; the equality
 		// reads it the same way. Its columns are accumulated: a keyed decision may stand in several terms, and a row

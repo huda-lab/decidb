@@ -921,7 +921,7 @@ def test_s3_error_cases_fail_on_both_paths(decidb_cli, name):
     assert error_class(str(solver_error.value)) == expected, str(solver_error.value)
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
+    assert "decide_direct_solve is 'require'" not in str(direct_error.value), "no rule applied to the query"
     assert error_class(str(direct_error.value)) == expected, str(direct_error.value)
     if expected in ("invalid_value", "null_bound"):
         # A NaN or infinite value is worded by one function for both paths.
@@ -943,7 +943,7 @@ def test_s3_a_fixed_value_that_raises_on_a_kept_row_raises_the_solvers_error(dec
         _run(decidb_cli, sql, "off")
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" not in str(direct_error.value), str(direct_error.value)
+    assert "decide_direct_solve is 'require'" not in str(direct_error.value), str(direct_error.value)
     assert str(direct_error.value) == str(solver_error.value)
 
 
@@ -961,7 +961,7 @@ def test_s3_constant_weights_that_add_up_past_a_double_raise_the_solvers_error(d
     )
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
+    assert "decide_direct_solve is 'require'" not in str(direct_error.value), "no rule applied to the query"
     assert str(direct_error.value) == str(solver_error.value)
 
 
@@ -980,8 +980,13 @@ def test_s3_a_running_total_past_a_double_raises_where_the_solver_answers(decidb
     assert len(_run(decidb_cli, sql, "off", expect_number_range=True)[0]) == 5
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
-    assert "SUM(w*x) <= 0 computes a number too large for a DOUBLE" in str(direct_error.value)
+    assert "decide_direct_solve is 'require'" not in str(direct_error.value), "no rule applied to the query"
+    decidb_cli.assert_error_at(
+        "SET decide_direct_solve='require'; " + sql,
+        kind="Invalid Input Error",
+        at="SUM(w*x) <= 0",
+        word="the constraint computes a number too large for a DOUBLE",
+    )
 
 
 # The rows fixed to 1 are summed too. Like the running total of the prefix, a sum past a DOUBLE is a number the plan
@@ -1004,8 +1009,13 @@ def test_s3_fixed_rows_past_a_double_raise_where_the_solver_answers(decidb_cli, 
     assert len(_run(decidb_cli, sql, "off", expect_number_range=True)[0]) == 2
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
-    assert "SUM(w*x) <= 0 computes a number too large for a DOUBLE" in str(direct_error.value)
+    assert "decide_direct_solve is 'require'" not in str(direct_error.value), "no rule applied to the query"
+    decidb_cli.assert_error_at(
+        "SET decide_direct_solve='require'; " + sql,
+        kind="Invalid Input Error",
+        at="SUM(w*x) <= 0",
+        word="the constraint computes a number too large for a DOUBLE",
+    )
 
 
 # ---------------------------------------------------------------------------

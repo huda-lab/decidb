@@ -1778,6 +1778,8 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 	spec.cyclic = frame.cyclic;
 	spec.text = DecideWrittenSql(frame, source_text);
 	spec.spelling = DecideSpelling(frame);
+	// Where the frame stands, when the query text holds a span for it (a table macro's tail has none).
+	spec.location = source_text ? DecideSpanLocation(*source_text, frame.GetQueryLocation()) : optional_idx();
 	spec.order_name = DecideWrittenSql(*frame.order, source_text);
 	auto fallback_text = frame.fallback ? DecideWrittenSql(*frame.fallback, source_text) : string();
 	// The fallback's own place, which its refusals point at; read before it binds in place.

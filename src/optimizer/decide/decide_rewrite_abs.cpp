@@ -310,19 +310,19 @@ static unique_ptr<Expression> AbsReadRows(const Expression *clause_when, const E
 	                                             reducer_when->Copy());
 }
 
-//! The clause an ABS was written in, as the user wrote it, or the objective: what a message about a number computed
-//! from the ABS' argument names (DecideWrittenClause on the solver path). An ABS in a body that belongs to no one
-//! clause (a reducer value helper's, shared by every clause that reads it; a definition's) names itself, `written`.
-static string AbsWrittenClause(const LogicalDecide &decide, const string &clause_alias, const string &written) {
+//! The clause an ABS was written in, or the objective: what a message about a number computed from the ABS' argument
+//! points at (DecideWrittenClause on the solver path). An ABS in a body that belongs to no one clause (a reducer value
+//! helper's, shared by every clause that reads it; a definition's) is a constraint of no place.
+static DecideClauseRef AbsWrittenClause(const LogicalDecide &decide, const string &clause_alias) {
 	idx_t source_clause_id;
 	if (TryParseSourceClauseTag(clause_alias, source_clause_id) &&
 	    source_clause_id < decide.constraint_sources.size()) {
-		return QuoteWrittenClause(decide.constraint_sources, source_clause_id, decide.source_text);
+		return DecideClauseRefOf(decide.constraint_sources, decide.source_text, source_clause_id);
 	}
 	if (HasDecideTag(clause_alias, OBJECTIVE_ROW_TAG)) {
-		return DecideWrittenObjective(decide.written_sense, decide.written_objective);
+		return DecideClauseRefOf(decide.constraint_sources, decide.source_text, DConstants::INVALID_INDEX);
 	}
-	return written;
+	return DecideClauseRef();
 }
 
 //! Refuses an argument of an ABS whose data is NaN or infinite where the ABS is read, on the rows it is read on, before
@@ -331,7 +331,7 @@ static string AbsWrittenClause(const LogicalDecide &decide, const string &clause
 //! raises (DirectNumberMessage, as the direct-solve plans): the data, as the user wrote it, where it stands. A
 //! coefficient of a decision is a coefficient of the lowered row, which the solver path refuses by name already.
 static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, const Expression &argument,
-                             const Expression *rows, const string &clause) {
+                             const Expression *rows, const DecideClauseRef &clause) {
 	vector<DecideSplitTerm> terms;
 	DecideTermSplitter(context, decide).Split(argument, 1, terms);
 	ExpressionBuilder calc(context);
@@ -595,7 +595,7 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 		// The rows the ABS is read on: the envelope rows, and the check of its values, are made for those only.
 		auto read_rows = AbsReadRows(scope.Condition(), reducer_when);
 		AddAbsValueCheck(optimizer.context, decide, *func.children[0], read_rows.get(),
-		                 AbsWrittenClause(decide, clause_alias, label));
+		                 AbsWrittenClause(decide, clause_alias));
 
 		// Retain the bound operand for the F node's envelope rows.
 		abs_pairs.push_back({aux_idx, func.children[0]->Copy(), clause_alias, needs_bigm, std::move(read_rows),

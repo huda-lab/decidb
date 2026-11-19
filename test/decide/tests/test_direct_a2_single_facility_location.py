@@ -752,7 +752,7 @@ def test_a2_an_empty_interval_raises_the_solvers_infeasible_error(decidb_cli, de
     )
     with pytest.raises(DeciDBCliError, match="(?i)infeasible") as direct:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" not in str(direct.value)
+    assert "decide_direct_solve is 'require'" not in str(direct.value)
     for cli in (decidb_cli, decidb_cli_highs):
         with pytest.raises(DeciDBCliError) as solver:
             _run(cli, sql, "off")
@@ -842,7 +842,7 @@ def test_a2_error_cases_fail_on_both_paths(decidb_cli, name):
         _run(decidb_cli, sql, "off")
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
+    assert "decide_direct_solve is 'require'" not in str(direct_error.value), "no rule applied to the query"
     assert error_class(str(direct_error.value)) == error_class(str(solver_error.value))
     assert expected in str(direct_error.value) or error_class(str(direct_error.value)) == expected
 
@@ -972,7 +972,7 @@ def test_a2_boundary_values_read_like_the_solver(decidb_cli, name):
         warns, declared = writes_number_out_of_range(sql, bounded=["c"]), ()
     direct = _run_all(decidb_cli, sql, "require")
     solver = _run_all(decidb_cli, sql, "off", warns, *declared)
-    assert direct[0] != "error" or "decide_direct_solve=require" not in direct[1], "no rule applied to the query"
+    assert direct[0] != "error" or "decide_direct_solve is 'require'" not in direct[1], "no rule applied to the query"
     assert _all_close(direct, solver), (direct, solver)
 
 
@@ -1269,7 +1269,7 @@ def test_a2_weighted_error_cases_fail_on_both_paths(decidb_cli, name):
         _run(decidb_cli, sql, "off")
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
+    assert "decide_direct_solve is 'require'" not in str(direct_error.value), "no rule applied to the query"
     assert error_class(str(direct_error.value)) == error_class(str(solver_error.value)) == expected
 
 
@@ -1289,8 +1289,12 @@ def test_a2_a_turning_point_past_a_double_answers_the_finite_end(decidb_cli, sig
     expected = 10.0 if b < 0 else 0.0
     case_ = _weighted_case("interior", "w_sq", _query_wide_rows(triples))
     assert [row[1] for row in _run(decidb_cli, _sql(case_), "require")[0]] == [expected, expected]
-    with pytest.raises(DeciDBCliError, match="computes a number too large"):
-        _run(decidb_cli, _sql(case_), "off")
+    decidb_cli.assert_error_at(
+        "SET decide_direct_solve='off'; " + _sql(case_),
+        kind="Invalid Input Error",
+        at="SUM(w * POWER(c - v, 2))",
+        word="computes a number too large",
+    )
 
 
 @pytest.mark.error
@@ -1300,8 +1304,12 @@ def test_a2_a_turning_point_past_a_double_with_an_open_end_is_too_large(decidb_c
     sql = _problem(
         _query_wide_rows(((1e300, 1.0), (-1e300, CANCELLING_WEIGHT))), bounds, WEIGHTED_OBJECTIVES["w_sq"].sql
     )
-    with pytest.raises(DeciDBCliError, match=r"MINIMIZE SUM\(w \* POWER\(c - v, 2\)\) computes a number too large"):
-        _run(decidb_cli, sql, "require")
+    decidb_cli.assert_error_at(
+        "SET decide_direct_solve='require'; " + sql,
+        kind="Invalid Input Error",
+        at="SUM(w * POWER(c - v, 2))",
+        word="computes a number too large",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1590,8 +1598,12 @@ def test_a2_absolute_agrees_inside_a_parent_context(decidb_cli, oracle_solver, b
 def test_a2_a_class_weight_past_a_double_raises_too_large(decidb_cli):
     # Each term weighs 1e308, which is a number; the class's total weight does not fit a DOUBLE.
     sql = _problem(ROWS[:3], obj="MINIMIZE SUM(1e308 * ABS(c - v))")
-    with pytest.raises(DeciDBCliError, match="MINIMIZE SUM\\(1e308 \\* ABS\\(c - v\\)\\) computes a number too large"):
-        _run(decidb_cli, sql, "require")
+    decidb_cli.assert_error_at(
+        "SET decide_direct_solve='require'; " + sql,
+        kind="Invalid Input Error",
+        at="SUM(1e308 * ABS(c - v))",
+        word="computes a number too large",
+    )
 
 
 @pytest.mark.error
@@ -1715,7 +1727,7 @@ def test_a2_absolute_error_cases_fail_on_both_paths(decidb_cli, name):
         _run(decidb_cli, sql, "off")
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
+    assert "decide_direct_solve is 'require'" not in str(direct_error.value), "no rule applied to the query"
     assert error_class(str(direct_error.value)) == direct_class
     assert error_class(str(solver_error.value)) == solver_class
 

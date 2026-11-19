@@ -12,8 +12,10 @@ from pathlib import Path
 
 import pytest
 
+from decidb_cli import assert_error_text
+
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
-from ._direct_oracle_common import outcome
+from ._direct_oracle_common import outcome, without_gurobi
 
 
 def _source_query(scores, capacity, sense="MAXIMIZE"):
@@ -39,9 +41,14 @@ class At(str):
     """A NaN or infinite value an error points at: the text of the query the caret stands inside (`assert_error_at`)."""
 
 
+class TooLarge(At):
+    """The clause or the objective a number the plan computes, past a DOUBLE, belongs to: the caret stands inside it."""
+
+
 def _points_at(cli, sql, at, mode="require"):
     """`sql` fails under `mode` with an Invalid Input Error whose caret stands inside `at`, the value as written."""
-    cli.assert_error_at(f"SET decide_direct_solve='{mode}'; {sql}", kind="Invalid Input Error", at=str(at))
+    word = "computes a number too large for a DOUBLE" if isinstance(at, TooLarge) else None
+    cli.assert_error_at(f"SET decide_direct_solve='{mode}'; {sql}", kind="Invalid Input Error", at=str(at), word=word)
 
 
 def _expect(cli, sql, expected, mode="require"):
@@ -155,8 +162,10 @@ def test_a1_whole_number_range_error_is_the_solvers_error_word_for_word(
         ) q
     """
     direct = _raw(decidb_cli, sql, mode="require").stderr
-    assert "beyond the range DeciDB can return as a whole number" in direct, direct
-    assert f"DECIDE variable '{name}' solves to " in direct, direct
+    assert "past 2^53, the largest whole number DECIDE returns exactly" in direct, direct
+    assert f"decision '{name}' takes the value " in direct, direct
+    # The error points at the decision's declaration.
+    _points_at(decidb_cli, sql, f"{name}(INT)")
     # Every bound is 1e6 or more, so the solver warns before it reaches the answer it cannot return; a direct plan
     # builds no model.
     assert _raw(decidb_cli, sql, mode="off", expect_number_range=True).stderr == direct
@@ -695,7 +704,7 @@ def test_s3_infeasible_error_is_the_solvers_error_word_for_word(decidb_cli):
         ) q
     """
     direct = _raw(decidb_cli, sql, mode="require").stderr
-    assert "infeasible" in direct and "decide_direct_solve=require" not in direct, direct
+    assert "infeasible" in direct and "decide_direct_solve is 'require'" not in direct, direct
     assert direct == _raw(decidb_cli, sql, mode="off").stderr
 
 
@@ -740,7 +749,7 @@ _N1_WEIGHT_ROWS = "(1, 3.0::DOUBLE, 1.0::DOUBLE), (2, 4.0::DOUBLE, {w}::DOUBLE)"
         (
             "1e200",
             "SUM(POWER(w * x, 2)) <= 25",
-            "SUM(POWER(w * x, 2)) <= 25 computes a number too large for a DOUBLE. Scale its data down.",
+            TooLarge("SUM(POWER(w * x, 2)) <= 25"),
         ),
         # A row of weight 0 or a NULL weight improves without end.
         ("0.0", "SUM(POWER(SQRT(w) * x, 2)) <= 25", "unbounded"),
@@ -776,12 +785,12 @@ def test_n1_a_weight_errors_are_the_solvers_word_for_word(decidb_cli, w, limit, 
         (
             "1e308",
             "MINIMIZE SUM(POWER(c - v, 2))",
-            "DECIDE: MINIMIZE SUM(POWER(c - v, 2)) computes a number too large for a DOUBLE.",
+            TooLarge("SUM(POWER(c - v, 2))"),
         ),
         (
             "0.0",
             "MINIMIZE 1e308 * SUM(POWER(c - v, 2))",
-            "DECIDE: MINIMIZE 1e308 * SUM(POWER(c - v, 2)) computes a number too large for a DOUBLE. Scale its data down.",
+            TooLarge("1e308 * SUM(POWER(c - v, 2))"),
         ),
     ],
 )
@@ -902,13 +911,12 @@ def test_a2_a_data_weight_is_the_solvers_word_for_word(decidb_cli, declaration, 
 @pytest.mark.correctness
 def test_n1_a_number_past_a_double_names_the_objective_as_the_other_rules_do(decidb_cli):
     # The solver has no such number: it computes no sum of squares. The text is the one every rule raises for a number
-    # computed past a DOUBLE, naming the objective as the user wrote it.
+    # computed past a DOUBLE, pointing at the objective.
     sql = """
         SELECT id, x FROM (FROM (VALUES (1, 3e200::DOUBLE), (2, 4e200::DOUBLE)) t(id, s)
         DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) <= 25 MAXIMIZE SUM(s * x)) q
     """
-    direct = _raw(decidb_cli, sql, mode="require").stderr
-    assert "DECIDE: MAXIMIZE SUM(s * x) computes a number too large for a DOUBLE. Scale its data down." in direct
+    _points_at(decidb_cli, sql, TooLarge("SUM(s * x)"))
 
 
 @pytest.mark.correctness
@@ -1179,15 +1187,42 @@ def test_invalid_forced_solver_and_disabled_optimizer_policy(decidb_cli):
     # (test_direct_rule_conformance.py).
     sql = _source_query((2.0, 9.0), 1)
     invalid = decidb_cli.with_env({"DECIDB_FORCE_SOLVER": "unknown_backend"})
-    error = _raw(invalid, sql, mode="auto").stderr
-    assert "DECIDB_FORCE_SOLVER=unknown_backend" in error
+    invalid.assert_error_at(
+        f"SET decide_direct_solve='auto'; {sql}",
+        kind="Invalid Input Error",
+        at="unknown_backend",
+        word="DECIDB_FORCE_SOLVER names no solver: 'unknown_backend'",
+    )
 
     # A plan the DECIDE optimizer never saw is refused on every path, whichever way the optimizer was switched off.
-    refusal = "DECIDE needs the DECIDE optimizer."
+    refusal = "DECIDE needs the optimizer 'decide_optimizer', which is disabled"
     for mode in ("require", "off"):
-        disabled = _raw(decidb_cli, f"SET disabled_optimizers='decide_optimizer'; {sql}", mode=mode).stderr
-        assert refusal in disabled, disabled
-    assert refusal in _raw(decidb_cli, f"PRAGMA disable_optimizer; {sql}", mode="off").stderr
+        decidb_cli.assert_error_at(
+            f"SET decide_direct_solve='{mode}'; SET disabled_optimizers='decide_optimizer'; {sql}",
+            kind="Invalid Input Error",
+            at="decide_optimizer",
+            word=refusal,
+        )
+    decidb_cli.assert_error_at(
+        f"SET decide_direct_solve='off'; PRAGMA disable_optimizer; {sql}",
+        kind="Invalid Input Error",
+        at="decide_optimizer",
+        word=refusal,
+    )
+
+
+@pytest.mark.correctness
+def test_a_forced_solver_the_installation_lacks_is_refused(decidb_exe_path, tmp_path):
+    # Gurobi is a solver DeciDB knows; with no licence this installation does not have it, which is not the unknown
+    # name above.
+    sql = _source_query((2.0, 9.0), 1)
+    forced = without_gurobi(decidb_exe_path, tmp_path, {"DECIDB_FORCE_SOLVER": "gurobi"})
+    assert_error_text(
+        forced(f"SET decide_direct_solve='off'; {sql}").stderr,
+        kind="Invalid Input Error",
+        at="gurobi",
+        word="DECIDB_FORCE_SOLVER names a solver this installation does not have: 'gurobi'",
+    )
 
 
 @pytest.mark.correctness
@@ -1212,7 +1247,7 @@ def test_an_empty_forced_solver_name_is_no_solver_override_on_the_solver_path_to
     sql = _source_query((2.0, 9.0, -1.0), 1)
     unforced = decidb_cli.with_env({"DECIDB_FORCE_SOLVER": ""})
     result = _raw(unforced, sql, mode="off")
-    assert "is not a solver DeciDB knows" not in result.stderr, result.stderr
+    assert "names no solver" not in result.stderr, result.stderr
     assert _run(unforced, sql, mode="off")[0] == _run(decidb_cli, sql, mode="off")[0]
 
 
@@ -1223,7 +1258,8 @@ def test_require_reports_the_conflict_before_it_looks_at_the_forced_backend(deci
     sql = _source_query((2.0, 9.0), 1)
     invalid = decidb_cli.with_env({"DECIDB_FORCE_SOLVER": "unknown_backend"})
     error = _raw(invalid, sql, mode="require").stderr
-    assert "conflicts with DECIDB_FORCE_SOLVER" in error and "is not a solver DeciDB knows" not in error, error
+    assert "decide_direct_solve is 'require' and DECIDB_FORCE_SOLVER is set" in error, error
+    assert "names no solver" not in error, error
 
 
 @pytest.mark.correctness

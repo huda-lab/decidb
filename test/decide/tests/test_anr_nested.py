@@ -824,18 +824,33 @@ def test_a_root_bound_reaches_a_nested_closing_link(decidb_cli_highs, scope_solv
 
 
 @pytest.mark.error
+@pytest.mark.error_binder
+def test_a_reducer_over_decisions_multiplied_inside_a_nest_is_refused_at_the_inner_reducer(decidb_cli):
+    """`max(sum(x * y) by (t.g)) <= 70`: a nested reducer whose body multiplies decisions is refused (D80), at the
+    inner reducer as the user wrote it (`DecideRewriteScoped`, the nested-reducer refusal)."""
+    decidb_cli.assert_error_at(
+        _bound_query("x <= 5 AND max(sum(x * y) by (t.g)) <= 70").replace("DECIDE x(INT)", "DECIDE x(INT), y(INT)"),
+        kind="Binder Error",
+        at="sum(x * y) by (t.g)",
+        word="'sum(x * y) by (t.g)' squares or multiplies decisions inside nested reducers, which is not allowed",
+    )
+
+
+@pytest.mark.error
 @pytest.mark.min_max
 def test_a_minimum_with_no_bound_above_is_refused_by_name(decidb_cli_highs):
     """`min(sum(x) by (t.g, t.h)) by (t.g) = 10` caps the smallest group sum only: the
     others reach any value, so the MIN's closing side has no Big-M, and the lowering names
-    the inner reducer to bound, as written."""
+    the inner reducer with no bound, as written."""
     cli = decidb_cli_highs.with_env({"DECIDB_NATIVE_CONSTRUCTS": "force"})
-    result = cli.execute_raw(_bound_query("per t.g: min(sum(x) by (t.g, t.h)) by (t.g) = 10"))
-    assert (
-        "requires a finite bound on 'sum(x) by (t.g, t.h)'. Add constraints 'sum(x) by (t.g, t.h) >= <lower>' "
-        "and 'sum(x) by (t.g, t.h) <= <upper>'"
-    ) in result.stderr, result.stderr
-    assert_no_internal_leak(result, "an underivable nested closing link")
+    sql = _bound_query("per t.g: min(sum(x) by (t.g, t.h)) by (t.g) = 10")
+    cli.assert_error_at(
+        sql,
+        kind="Invalid Input Error",
+        at="min(sum(x) by (t.g, t.h)) by (t.g) = 10",
+        word="'sum(x) by (t.g, t.h)' has no finite bound, which MIN or MAX needs",
+    )
+    assert_no_internal_leak(cli.execute_raw(sql), "an underivable nested closing link")
 
 
 @pytest.mark.correctness
@@ -1081,9 +1096,13 @@ def test_a_product_or_square_over_a_nested_reducer(decidb_cli_gurobi, decidb_cli
     x = {row["id"]: row["x"] for row in answer(decidb_cli_gurobi, sql)}
     assert holds(x), x
     assert sum(x.values()) == optimum, x
-    result = decidb_cli_highs.execute_raw(sql)
-    assert "squares or multiplies decision variables, which needs Gurobi" in result.stderr, result.stderr
-    assert_no_internal_leak(result, clause_sql)
+    decidb_cli_highs.assert_error_at(
+        sql,
+        kind="Not implemented Error",
+        at=clause_sql,
+        word="squaring or multiplying decisions in a constraint is not supported on this installation",
+    )
+    assert_no_internal_leak(decidb_cli_highs.execute_raw(sql), clause_sql)
 
 
 @pytest.mark.correctness
@@ -1095,9 +1114,13 @@ def test_a_square_inside_a_nest_is_defined_where_a_max_reads_it(decidb_cli_gurob
     HiGHS, which states no MIN/MAX, is refused by name."""
     sql = _bound_query("x <= 9 AND sum(max(x * x) by (t.g)) <= 5")
     assert [row["x"] for row in answer(decidb_cli_gurobi, sql)] == [1, 1, 1, 1]
-    result = decidb_cli_highs.execute_raw(sql)
-    assert "'max(x * x) by (t.g)' takes the maximum of a squared or multiplied expression" in result.stderr
-    assert_no_internal_leak(result, "a square under a MAX on HiGHS")
+    decidb_cli_highs.assert_error_at(
+        sql,
+        kind="Not implemented Error",
+        at="max(x * x) by (t.g)",
+        word="MIN or MAX over a squared or multiplied expression is not supported on this installation",
+    )
+    assert_no_internal_leak(decidb_cli_highs.execute_raw(sql), "a square under a MAX on HiGHS")
 
 
 SWAP_COLUMNS = ("id", "g", "h", "v")

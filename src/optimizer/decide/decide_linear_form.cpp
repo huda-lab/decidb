@@ -1075,9 +1075,9 @@ private:
 				}
 				if (holds_reducer || square ||
 				    (obj.product_groups.size() != group_before && !ReadsOnlyQueryWideDecisions(expr))) {
-					throw InvalidInputException(
-					    "DECIDE objective: '%s' multiplies decisions outside a reducer, which is not supported yet",
-					    RenderDecideSource(expr, op.source_text, op.keyed_scopes, &op.keys));
+					throw NotImplementedException(expr,
+					                              "'%s' multiplies decisions outside a reducer, which is not supported",
+					                              RenderDecideSource(expr, op.source_text, op.keyed_scopes, &op.keys));
 				}
 				continue;
 			}
@@ -1088,8 +1088,8 @@ private:
 	void ExtractReducerObjectiveTerms(const BoundAggregateExpression &agg, DecideObjective &obj, int sign) {
 		auto agg_name = StringUtil::Lower(agg.function.name);
 		if (agg_name != "sum") {
-			throw InvalidInputException(
-			    "DECIDE optimizer should rewrite objective aggregate '%s' to SUM before execution", agg.function.name);
+			throw InternalException("DECIDE optimizer should rewrite objective aggregate '%s' to SUM before execution",
+			                        agg.function.name);
 		}
 		idx_t before = obj.terms.size();
 		idx_t group_before = obj.product_groups.size();

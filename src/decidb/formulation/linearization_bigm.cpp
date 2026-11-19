@@ -51,7 +51,7 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices, const vector<Co
 
 double decide_linearize::DecideRowFixedLhsOffset(const vector<idx_t> &variable_indices,
                                                  const vector<CoefficientColumn> &row_coefficients, idx_t row,
-                                                 const string &written) {
+                                                 const DecideClauseRef &written) {
 	double offset = 0.0;
 	for (idx_t t = 0; t < variable_indices.size(); t++) {
 		if (variable_indices[t] == DConstants::INVALID_INDEX) {
@@ -64,7 +64,8 @@ double decide_linearize::DecideRowFixedLhsOffset(const vector<idx_t> &variable_i
 //! The bound a row actually imposes: its right-hand side less the constant part of
 //! its left-hand side. This is the value a Big-M has to dominate, so it is also the
 //! value a caller must classify before asking for an M over it.
-double decide_linearize::DecideRowEffectiveBound(const EvaluatedConstraint &ec, idx_t row, const string &written) {
+double decide_linearize::DecideRowEffectiveBound(const EvaluatedConstraint &ec, idx_t row,
+                                                 const DecideClauseRef &written) {
 	return ec.rhs_values.Get(row) - DecideRowFixedLhsOffset(ec.variable_indices, ec.row_coefficients, row, written);
 }
 
@@ -97,7 +98,7 @@ SignedRowRange decide_linearize::DecideRowSignedRange(const EvaluatedConstraint 
 	    [&](idx_t v) { return instances ? instances->UpperOfRow(v, row, upper_bounds) : upper_bounds[v]; });
 }
 
-//! Refuse a Big-M linearization that has no finite M, naming a column to bound.
+//! Refuse a Big-M linearization that has no finite M, naming the column that has no finite bound.
 //!
 //! A Big-M constant must dominate the reachable magnitude of the row's left-hand
 //! side. When a contributing decision variable has no finite bound, no constant does
@@ -113,17 +114,16 @@ SignedRowRange decide_linearize::DecideRowSignedRange(const EvaluatedConstraint 
 //! The callers differ only in how they locate the column to blame, so the words the
 //! user reads live here, once. `open` says whether a column of the row has an open box
 //! (an auxiliary's counts); `bad` is then that column. With no open column the reach
-//! overflowed a DOUBLE: nothing is missing a bound, and the refusal names `written`, the
+//! overflowed a DOUBLE: nothing is missing a bound, and the refusal points at `written`, the
 //! clause the row belongs to, as every number too large for a DOUBLE does (AddCoefficient).
 [[noreturn]] void decide_linearize::ThrowUnboundedBigMNaming(bool open, idx_t bad, const vector<string> &var_names,
-                                                             const char *construct, const string &written) {
+                                                             const char *construct, const DecideClauseRef &written) {
 	if (!open) {
-		throw InvalidInputException(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, written));
+		throw DecideTooLargeError(written);
 	}
-	const string &name = var_names[bad];
-	throw InvalidInputException("Rewriting %s requires a finite bound on '%s'. Add constraints "
-	                            "'%s >= <lower>' and '%s <= <upper>'.",
-	                            construct, name, name, name);
+	throw InvalidInputException(
+	    StringUtil::Format("'%s' has no finite bound, which %s needs", var_names[bad], construct),
+	    Exception::InitializeExtraInfo(written.place));
 }
 
 //! Locate the blame for a row Big-M: the first contributing decision variable whose box
@@ -148,8 +148,8 @@ idx_t decide_linearize::FindUnboundedContributor(const EvaluatedConstraint &ec, 
 }
 
 double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox &box, idx_t num_rows,
-                             const vector<string> &var_names, const InstanceBox &instances, const string &written,
-                             const char *construct) {
+                             const vector<string> &var_names, const InstanceBox &instances,
+                             const DecideClauseRef &written, const char *construct) {
 	const vector<double> &lower_bounds = box.lower;
 	const vector<double> &upper_bounds = box.upper;
 	bool has_unbounded = false;
@@ -227,7 +227,7 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
 		if (!nonneg) {
 			continue;
 		}
-		const string written = DecideWrittenClause(input, ec.source_clause_id);
+		const auto written = DecideWrittenClause(input, ec.source_clause_id);
 		// Row e the clause emits, read as the model builder emits it (ClauseEmittedRows), over the data rows
 		// [begin, end) of `rows` (row k itself for none). A solver column's coefficient is the sum of its terms over
 		// the row's data rows, so a decision that stands in several rows of a group, or one counted once beside the

@@ -677,9 +677,13 @@ def test_an_easy_max_below_the_floor_is_refused_as_written(decidb_cli, clause):
     sql = f"""
         SELECT id, x {table('t', T_COLUMNS, T_ROWS)}
         DECIDE x(INT) SUCH THAT x <= t.cap AND {clause} MAXIMIZE SUM(x)"""
-    message = f"DECIDE optimization is infeasible: {clause} cannot hold because x is non-negative (>= 0)."
-    assert message in decidb_cli.execute_raw(sql).stderr
-    assert message in decidb_cli.execute_raw(f"DIAGNOSE {sql}").stderr
+    for statement in (sql, f"DIAGNOSE {sql}"):
+        decidb_cli.assert_error_at(
+            statement,
+            kind="Invalid Input Error",
+            at=clause,
+            word="the constraint cannot hold: 'x' is never negative",
+        )
 
 
 def test_an_easy_max_with_its_own_when_is_refused_only_through_its_members(decidb_cli):
