@@ -253,7 +253,12 @@ def test_off_and_a_forced_backend_keep_the_solver_path(request, decidb_cli, fixt
 @pytest.mark.correctness
 @_ONE_RULE
 def test_diagnose_keeps_the_solver_path(decidb_cli, fixture):
-    assert "conflicts with DIAGNOSE" in _raw(decidb_cli, f"DIAGNOSE {fixture.applies}").stderr
+    decidb_cli.assert_error_at(
+        f"SET decide_direct_solve='require'; DIAGNOSE {fixture.applies}",
+        kind="Invalid Input Error",
+        at="require",
+        word="the query is DIAGNOSE",
+    )
     diagnose_plan = _raw(decidb_cli, f"EXPLAIN DIAGNOSE {fixture.applies}", mode="auto").stdout
     assert "DECIDE_DIAGNOSE" in diagnose_plan and "Direct solve" not in diagnose_plan
 

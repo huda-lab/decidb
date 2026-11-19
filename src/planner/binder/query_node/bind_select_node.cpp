@@ -427,7 +427,7 @@ static void RefuseDecisionInWhere(const Expression &expr, const BoundSelectNode 
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY) {
 		for (auto &correlated : expr.Cast<BoundSubqueryExpression>().binder->correlated_columns) {
 			if (correlated.binding.table_index == node.decide_index) {
-				throw BinderException("%s", DecisionInDataMessage(correlated.name, "WHERE"));
+				throw BinderException(correlated.query_location, "%s", DecisionInDataMessage(correlated.name, "WHERE"));
 			}
 		}
 	}
@@ -725,7 +725,8 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
 	// a clause is refused where it fails to resolve (ThrowIfOuterColumn); this catches the rest,
 	// as in WHERE. A subquery's own correlation to this query stays on that subquery's binder.
 	if (statement.HasDecideClause() && !correlated_columns.empty()) {
-		throw BinderException(OuterQueryColumnMessage(correlated_columns[0].name));
+		throw BinderException(correlated_columns[0].query_location, "%s",
+		                      OuterQueryColumnMessage(correlated_columns[0].name));
 	}
 	return std::move(result);
 }

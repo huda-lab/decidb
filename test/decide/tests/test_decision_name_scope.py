@@ -24,8 +24,8 @@ def test_decision_named_like_a_using_column(decidb_cli):
         # The caret is at the decision in the WHERE clause, which a quoted `'x'` in the message would not show.
         ("x(INT)", "x > 1", "x > 1"),
         ("x(INT), y(INT)", "y > 1", "y > 1"),
-        # A decision read by a subquery of the WHERE clause is a correlated column, which holds no location: the
-        # error names it, and points at nothing.
+        # A decision read by a subquery of the WHERE clause is a correlated column, which holds the location it was
+        # written at.
         ("x(INT)", "(SELECT x) > 1", "x"),
     ],
     ids=["decision", "second-decision", "decision-in-correlated-subquery"],

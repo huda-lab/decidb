@@ -294,7 +294,7 @@ def test_a_nested_refusal_reaches_the_user(decidb_cli, inner_clauses, kind, at):
 @pytest.mark.parametrize(
     "inner,name",
     [
-        ("FROM t WHERE t.k = g.k DECIDE x(INT) SUCH THAT x <= 1 MAXIMIZE SUM(x)", "k"),
+        ("FROM t WHERE t.k = g.k DECIDE x(INT) SUCH THAT x <= 1 MAXIMIZE SUM(x)", "g.k"),
         ("FROM t DECIDE x(INT) SUCH THAT x <= lim MAXIMIZE SUM(x)", "lim"),
         ("FROM t DECIDE x(INT) SUCH THAT x <= 1 AND SUM(x) <= g.lim MAXIMIZE SUM(x)", "g.lim"),
     ],

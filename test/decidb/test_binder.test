@@ -29,7 +29,7 @@ SELECT l_quantity FROM lineitem DECIDE y(INT) SUCH THAT x IN (1,2,3) MAXIMIZE SU
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT x IS NULL MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-<REGEX>:Binder Error: SUCH THAT does not support 'x IS NULL'.*
+<REGEX>:Not implemented Error: 'x IS NULL' is not supported.*
 
 # Bind IN
 statement ok

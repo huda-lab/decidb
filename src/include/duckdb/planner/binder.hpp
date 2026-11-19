@@ -65,6 +65,9 @@ struct CorrelatedColumnInfo {
 	LogicalType type;
 	string name;
 	idx_t depth;
+	//! Where the column was written in the query, for an error that points at it. Invalid for a column no query text
+	//! holds.
+	optional_idx query_location;
 
 	// NOLINTNEXTLINE - work-around bug in clang-tidy
 	CorrelatedColumnInfo(ColumnBinding binding, LogicalType type_p, string name_p, idx_t depth)
@@ -72,6 +75,7 @@ struct CorrelatedColumnInfo {
 	}
 	explicit CorrelatedColumnInfo(BoundColumnRefExpression &expr)
 	    : CorrelatedColumnInfo(expr.binding, expr.return_type, expr.GetName(), expr.depth) {
+		query_location = expr.query_location;
 	}
 
 	bool operator==(const CorrelatedColumnInfo &rhs) const {

@@ -34,9 +34,7 @@ from tests._output_helpers import assert_no_internal_leak
 _STATUS_MARKER_PREFIX = "DECIDB_STATUS:"
 
 #: The stderr line DeciDB prints once per query when a number may make the answer unstable (DECIDE_NUMBER_RANGE_WARNING).
-_NUMBER_RANGE_WARNING = (
-    "DECIDE: a very large or very small number may make this answer inaccurate. Scale its data toward 1."
-)
+_NUMBER_RANGE_WARNING = "DECIDE: a very large or very small number may make this answer inaccurate."
 
 #: The prefix of a line DECIDE prints on stderr about a query it still answers: a clause left with no instance, an
 #: objective that is 0 whatever the decisions (language/guide.md §7.4). Only the solver path prints one.

@@ -62,14 +62,15 @@ class TestBinderErrors:
 
     def test_is_null_unsupported(self, decidb_cli):
         """IS NULL is not supported in SUCH THAT."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
                 SUCH THAT x IS NULL
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """,
-            match=r"does not support",
+            kind="Not implemented Error",
+            at="x IS NULL",
         )
 
     @pytest.mark.parametrize("clause", ["x * avg(p) <= 25", "avg(p) * sum(x) <= 25", "sum(x) * max(p) <= 25"])
@@ -1100,8 +1101,12 @@ class TestRefusalsSpeakSql:
         ],
     )
     def test_unsupported_constraint_is_quoted(self, decidb_cli, clause, quoted):
-        stderr = self._refusal(decidb_cli, clause)
-        assert f"SUCH THAT does not support {quoted}" in stderr, stderr
+        decidb_cli.assert_error_at(
+            f"{_REFUSAL_ROWS} DECIDE x(INT) SUCH THAT x <= 5 AND {clause} MAXIMIZE SUM(x)",
+            kind="Not implemented Error",
+            at=quoted.strip("'"),
+            word=f"{quoted} is not supported",
+        )
 
     @pytest.mark.parametrize(
         "clause,at",
@@ -1195,9 +1200,16 @@ class TestBinderRefusalBranches:
         [
             # A constraint that is a plain function call: DecideConstraintsBinder::BindExpressionInternal's FUNCTION case
             # at the top, and ValidateDecideNoIntegerStepComparisonOnReal's FUNCTION case that is no scope marker.
-            ("abs(x)", r"SUCH THAT does not support 'abs\(x\)'"),
+            ("abs(x)", At("Not implemented Error", "abs(x)")),
             # The same for a CASE at the top.
-            ("CASE WHEN c > 1 THEN true ELSE false END", r"SUCH THAT does not support 'CASE"),
+            ("CASE WHEN c > 1 THEN true ELSE false END", At("Not implemented Error", "CASE WHEN c > 1 THEN true")),
+            # A side of the comparison that is neither a decision nor a reducer, in GetExpressionType's default: a CASE
+            # that reads no decision, and one that reads a decision.
+            ("CASE WHEN c > 1 THEN 1 ELSE 0 END <= 3", At("Binder Error", "CASE WHEN c > 1 THEN 1 ELSE 0 END")),
+            (
+                "CASE WHEN c > 1 THEN x ELSE 0 END <= 3",
+                At("Not implemented Error", "CASE WHEN c > 1 THEN x ELSE 0 END"),
+            ),
             # A subquery that is not scalar, and one that reads a decision (DecideBinder::BindExpressionInternal).
             ("x IN (SELECT 1)", At("Binder Error", "IN (SELECT 1)")),
             ("x <= (SELECT x)", At("Binder Error", "(SELECT x)")),
@@ -1317,7 +1329,7 @@ class TestBinderRefusalBranches:
             ("when c > 0: sum(nosuch * x)", r'Referenced column "nosuch" not found'),
             ("when nosuch > 0: sum(w * x)", r'Referenced column "nosuch" not found'),
             # An operator or CASE at the top, an operator below it, a product of data, a quotient by a reducer.
-            ("COALESCE(SUM(x), 0)", r"does not support 'COALESCE\(SUM\(x\), 0\)'"),
+            ("COALESCE(SUM(x), 0)", At("Not implemented Error", "COALESCE(SUM(x), 0)")),
             ("SUM(x) + COALESCE(x, 1)", At("Not implemented Error", "COALESCE(x, 1)")),
             ("CASE WHEN c > 1 THEN 1 ELSE 2 END", At("Binder Error", "CASE WHEN c > 1 THEN 1 ELSE 2 END")),
             ("w * 2", At("Not implemented Error", "w * 2")),

@@ -553,8 +553,9 @@ void ThrowDecideSolveError(const SolverResult &result) {
 		// flags any future addition; control still reaches the throw below.)
 		break;
 	}
-	// No state to name: the solver stopped without an answer.
-	throw InvalidInputException("the DECIDE query could not be solved");
+	// No state to name: the solver stopped without an answer, in its own words when it has some.
+	throw InvalidInputException("the DECIDE query could not be solved%s",
+	                            result.status_text.empty() ? string() : ": " + result.status_text);
 }
 
 } // namespace duckdb

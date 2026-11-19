@@ -49,8 +49,8 @@ static bool IsValidSlackScope(const string &scope) {
 static void SlackScopeSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
 	string mode = StringUtil::Lower(parameter.ToString());
 	if (!IsValidSlackScope(mode)) {
-		throw InvalidInputException("Invalid diagnose_decide_infeasible_slack_scope '" + parameter.ToString() +
-		                            "'. Valid scopes: query, expanded.");
+		throw InvalidInputException("diagnose_decide_infeasible_slack_scope must be 'query' or 'expanded'; got '" +
+		                            parameter.ToString() + "'");
 	}
 	parameter = Value(mode); // normalize to lowercase
 }
@@ -66,9 +66,7 @@ static constexpr double DECIDE_L0_TOLERANCE_FLOOR = 1e-5;
 static void L0ToleranceSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
 	double v = parameter.GetValue<double>();
 	if (!(v >= DECIDE_L0_TOLERANCE_FLOOR)) {
-		throw InvalidInputException("decide_l0_tolerance must be >= 1e-5 (it must exceed the solver feasibility "
-		                            "tolerance ~1e-6 to be enforced); got " +
-		                            parameter.ToString() + ".");
+		throw InvalidInputException("decide_l0_tolerance must be at least 1e-5; got " + parameter.ToString());
 	}
 }
 

@@ -157,8 +157,7 @@ static BindResult NotAComparison(const ParsedExpression &expr, const DecideSourc
 
 //! The refusal for a constraint shape DECIDE cannot read, quoting the part as written.
 static BindResult UnsupportedConstraint(ParsedExpression &expr, const DecideSourceText *text) {
-	return BindResult(BinderException::Unsupported(
-	    expr, StringUtil::Format("SUCH THAT does not support '%s'", DecideWrittenSql(expr, text))));
+	return BindResult(NotImplementedException(expr, "'%s' is not supported", DecideWrittenSql(expr, text)));
 }
 
 BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
@@ -519,10 +518,14 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
 		return DecideExpression::INVALID;
 	}
 	default: {
-		refusal.Set(expr, StringUtil::Format(
-		                      "The left-hand side of a SUCH THAT constraint must be a DECIDE variable or a SUM "
-		                      "expression over a DECIDE variable (e.g., SUM(x * a) / SUM(x)). Found '%s' instead.",
-		                      DecideWrittenSql(expr, qualifier_context->source_text)));
+		// A side of another shape (a CASE, a constant) is either data, which reads no decision, or a shape that
+		// reads one and is not supported.
+		auto written = DecideWrittenSql(expr, qualifier_context->source_text);
+		if (ExpressionContainsDecideVariable(expr, variables)) {
+			refusal.Set(expr, StringUtil::Format("'%s' is not supported", written), true);
+		} else {
+			refusal.Set(expr, ReadsNoDecisionMessage(written));
+		}
 		return DecideExpression::INVALID;
 	}
 	}

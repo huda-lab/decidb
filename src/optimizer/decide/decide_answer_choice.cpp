@@ -55,8 +55,7 @@ bool ChooseDecideAnswer(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOpera
 		if (decide.diagnose || !ForcedSolverName().empty()) {
 			if (mode == DirectSolveMode::REQUIRE) {
 				if (decide.diagnose) {
-					throw InvalidInputException("decide_direct_solve=require conflicts with DIAGNOSE: the solver is "
-					                            "required");
+					throw InvalidInputException("decide_direct_solve is 'require' and the query is DIAGNOSE");
 				}
 				throw InvalidInputException("decide_direct_solve is 'require' and DECIDB_FORCE_SOLVER is set");
 			}

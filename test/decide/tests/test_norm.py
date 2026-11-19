@@ -337,7 +337,9 @@ def test_norm_l0_tolerance_pragma(decidb_cli):
     decidb_cli.assert_error("SET decide_l0_tolerance=2.0;\n" + sql, match=r"(?i)infeasible")
 
     # Below the floor is rejected up front.
-    decidb_cli.assert_error("SET decide_l0_tolerance=1e-9;", match=r"(?i)decide_l0_tolerance must be")
+    decidb_cli.assert_error_at(
+        "SET decide_l0_tolerance=1e-9;", kind="Invalid Input Error", word="decide_l0_tolerance must be at least 1e-5"
+    )
 
 
 # --- norm() inside arithmetic ---------------------------------------------

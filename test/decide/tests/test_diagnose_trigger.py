@@ -237,3 +237,14 @@ class TestASiblingFailureIsNotACancellation:
         # The elapsed/memory tail belongs to that report and describes a solve that
         # was never the problem, so it must be gone too.
         assert "peak memory" not in out, out[:600]
+
+
+@pytest.mark.query_diagnostics
+@pytest.mark.error
+def test_a_slack_scope_that_is_neither_query_nor_expanded_is_refused(decidb_cli):
+    decidb_cli.assert_error_at(
+        "SET diagnose_decide_infeasible_slack_scope='wide';",
+        kind="Invalid Input Error",
+        at="wide",
+        word="must be 'query' or 'expanded'",
+    )

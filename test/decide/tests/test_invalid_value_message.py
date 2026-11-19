@@ -20,9 +20,10 @@ INFINITY = "'Infinity'::DOUBLE"
 SUBQUERY = "(SELECT max(v) FROM range(2) r(v))"
 
 
-def _query(decide, bad):
-    # The middle row holds the bad value in `b`.
-    rows = f"(1, 1.0, 2.0, 3.0, 'g'), (2, 2.0, {bad}, 1.0, 'g'), (3, 3.0, 1.0, 2.0, 'h')"
+def _query(decide, bad, every_row=False):
+    # The middle row holds the bad value in `b`, or every row does when `every_row`.
+    first, last = (bad, bad) if every_row else ("2.0", "1.0")
+    rows = f"(1, 1.0, {first}, 3.0, 'g'), (2, 2.0, {bad}, 1.0, 'g'), (3, 3.0, {last}, 2.0, 'h')"
     return f"SELECT id FROM (FROM (VALUES {rows}) t(id, a, b, c, g) DECIDE {decide}) q"
 
 
@@ -114,6 +115,7 @@ BOTH_PATHS_BOUND = [
     ("a1_bound_under_a_when", "x(REAL) SUCH THAT when a > 0: x <= b MAXIMIZE SUM(a * x)", "b"),
     ("r1_limit", "x(REAL) SUCH THAT x <= 4 AND SUM(a * x) <= b MAXIMIZE SUM(c * x)", "b"),
     ("r1_limit_expression", "x(REAL) SUCH THAT x <= 4 AND SUM(a * x) <= b + 2 MAXIMIZE SUM(c * x)", "b + 2"),
+    ("r1_equality_limit", "x(REAL) SUCH THAT x <= 4 AND SUM(a * x) = b MINIMIZE SUM(c * x)", "b"),
     ("r1_per_row_bound", "x(REAL) SUCH THAT x <= b AND SUM(a * x) <= 9 MAXIMIZE SUM(c * x)", "b"),
     ("r1_limit_by_group", "x(REAL) SUCH THAT x <= 4 AND SUM(a * x) by (g) <= SUM(b) by (g) MAXIMIZE SUM(c * x)", "b"),
     ("s1_count_bound", "x(BOOL) SUCH THAT SUM(x) <= b MAXIMIZE SUM(a * x)", "b"),
@@ -122,6 +124,10 @@ BOTH_PATHS_BOUND = [
     ("data_reducer_argument", "x(BOOL) SUCH THAT SUM(x) <= MIN(b) MAXIMIZE SUM(a * x)", "b"),
     ("data_reducer_sum_argument", "x(BOOL) SUCH THAT SUM(x) <= SUM(b) MAXIMIZE SUM(a * x)", "b"),
 ]
+
+# An `=` bound takes one value in its group, so a group with a NaN and a number holds two values, and the query would
+# raise that instead of the NaN. These cases hold NaN on every row: one value, and it is NaN.
+_BOUND_NAN_ON_EVERY_ROW = {"r1_equality_limit"}
 
 
 # Every site that refuses a coefficient tests `isfinite` (`ExtractDoubleColumn`, the direct plans' `isfinite` checks),
@@ -873,9 +879,10 @@ def test_a_frame_under_abs_is_named_as_written(decidb_cli, name, frame, objectiv
 @pytest.mark.error
 @pytest.mark.parametrize("name,decide,value", BOTH_PATHS_BOUND, ids=[case[0] for case in BOTH_PATHS_BOUND])
 def test_a_bound_that_is_nan_is_named_as_written_on_both_paths(decidb_cli, name, decide, value):
-    direct = _stderr(decidb_cli, _query(decide, NAN), "require")
-    solver = _stderr(decidb_cli, _query(decide, NAN), "off")
-    _points_at(decidb_cli, _query(decide, NAN), "off", value)
+    sql = _query(decide, NAN, every_row=name in _BOUND_NAN_ON_EVERY_ROW)
+    direct = _stderr(decidb_cli, sql, "require")
+    solver = _stderr(decidb_cli, sql, "off")
+    _points_at(decidb_cli, sql, "off", value)
     assert direct == solver
 
 

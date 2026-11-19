@@ -123,7 +123,6 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 	default:
 		break;
 	}
-	auto clause = decide_sense == DecideSense::MAXIMIZE ? "MAXIMIZE" : "MINIMIZE";
 	auto written = DecideWrittenSql(expr, qualifier_context->source_text);
 	if (!ExpressionContainsDecideVariable(expr, variables)) {
 		return BindResult(BinderException(expr, "%s", ReadsNoDecisionMessage(written)));
@@ -134,8 +133,7 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 	    expr.GetExpressionClass() == ExpressionClass::CONJUNCTION) {
 		return BindResult(BinderException(expr, "%s", ComparisonUsedAsNumberMessage(written)));
 	}
-	return BindResult(
-	    BinderException::Unsupported(expr, StringUtil::Format("%s does not support '%s'", clause, written)));
+	return BindResult(NotImplementedException(expr, "'%s' is not supported", written));
 }
 
 DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr_ptr, DecideRefusal &refusal) {
