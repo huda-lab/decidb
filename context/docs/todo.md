@@ -17,7 +17,6 @@ improves a wording or a caret.
 
 ## 1.1 Errors (one lane)
 - [ ] EXEC-25 A failing coefficient is found at the first entry — pipeline/08_execution/todo.md § EXEC-25
-- [ ] PARSE-4 Two span roles of a BETWEEN are never read — pipeline/01_parser/todo.md § PARSE-4
 
 ## 1.2 Other cleanups filed in Phase 1 (one lane)
 - [ ] PLAN-8 The objective's canonical layer is compared as two renderings — pipeline/03_logical_plan/todo.md § PLAN-8
