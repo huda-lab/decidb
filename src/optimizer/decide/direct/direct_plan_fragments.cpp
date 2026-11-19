@@ -997,13 +997,9 @@ bool DirectLinearScore::Prove(const DirectIR &ir, ClientContext &context) {
 			terms.push_back({part_names.size(), read.sign * term.sign, std::move(term.coefficient), read.factor});
 		}
 		// Every term is in `x`, the one decision.
-		// The score adds every part's coefficient, as the solver's like-term collection does: one number, named where
-		// the least expression holding them stands.
-		DirectNameMerge(combined_names, *ir.source_text, read.names[0]);
 		part_names.push_back(std::move(read.names[0]));
 		part_kept.push_back(std::move(kept));
 	}
-	combined_names.clause = objective_written;
 	return true;
 }
 
@@ -1039,7 +1035,8 @@ ExprPtr DirectLinearScore::Check(const ExpressionBuilder &calc, Optimizer &optim
 			checks.push_back(calc.Out(DirectNumberCheck(calc, part_scores[p], part_names[p])));
 		}
 	}
-	checks.push_back(calc.Out(DirectNumberCheck(calc, combined_score, combined_names)));
+	// The score adds the parts, each checked before: past a DOUBLE it names the objective.
+	checks.push_back(calc.Out(DirectNumberCheck(calc, combined_score, objective_written)));
 	return calc.Wrap(DirectAllHold(calc, std::move(checks)));
 }
 

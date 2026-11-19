@@ -196,20 +196,13 @@ public:
 	}
 
 	//! A program on `site` computing `expression`, of `owner`'s body; returns its index on the site. A message about a
-	//! value that is not finite names `written`, and one with no location of its own stands where `ancestor`, the
-	//! nearest located expression that holds it, does.
-	idx_t Add(idx_t site, DecideProgramRole role, const Expression &expression, idx_t owner, int sign = 1,
-	          optional_idx ancestor = optional_idx()) {
+	//! value that is not finite names `written`, and points at it when it has a location of its own.
+	idx_t Add(idx_t site, DecideProgramRole role, const Expression &expression, idx_t owner, int sign = 1) {
 		auto &owner_body = tree.nodes[owner]->compiled;
 		DecideProgram program;
 		program.role = role;
 		program.expression = Translate(site, expression, owner_body);
 		program.written = expression.Copy();
-		// What a NULL guard protects is the value a message names (DecideUnguarded). `written` serves messages alone.
-		auto &named = const_cast<Expression &>(DecideUnguarded(*program.written)); // NOLINT
-		if (!named.GetQueryLocation().IsValid()) {
-			named.SetQueryLocation(ancestor);
-		}
 		program.sign = sign;
 		program.owner = owner;
 		auto &programs = tree.nodes[site]->programs;
@@ -219,20 +212,19 @@ public:
 
 	//! A term's coefficient on its site.
 	void AddTerm(const DecideTerm &term, DecideTermSite &site, idx_t owner) {
-		site.program =
-		    Add(site.node, DecideProgramRole::COEFFICIENT, *term.coefficient, owner, term.sign, term.ancestor);
+		site.program = Add(site.node, DecideProgramRole::COEFFICIENT, *term.coefficient, owner, term.sign);
 	}
 
 	//! A product group's weight, none when stage 05 left it out (1), then each term of its forms.
 	void AddGroup(const DecideProductGroup &group, DecideGroupSites &sites, idx_t owner) {
 		if (group.weight) {
-			sites.weight.program = Add(sites.weight.node, DecideProgramRole::COEFFICIENT, *group.weight, owner,
-			                           group.sign, group.ancestor);
+			sites.weight.program =
+			    Add(sites.weight.node, DecideProgramRole::COEFFICIENT, *group.weight, owner, group.sign);
 		}
 		auto add_form = [&](const vector<DecideTerm> &terms, vector<DecideTermSite> &form) {
 			for (idx_t t = 0; t < terms.size(); t++) {
-				form[t].program = Add(form[t].node, DecideProgramRole::COEFFICIENT, *terms[t].coefficient, owner,
-				                      terms[t].sign, terms[t].ancestor);
+				form[t].program =
+				    Add(form[t].node, DecideProgramRole::COEFFICIENT, *terms[t].coefficient, owner, terms[t].sign);
 			}
 		};
 		add_form(group.left, sites.left);

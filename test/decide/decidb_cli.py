@@ -872,6 +872,13 @@ _CARET_LINE = re.compile(r"^ *\^$")
 _QUOTED_FRAGMENT = re.compile(r"""(?<!\w)'([^'\n]*)'(?!\w)|(?<!\w)"([^"\n]*)"(?!\w)""")
 
 
+def error_kind(stderr: str) -> str | None:
+    """The class of the error in ``stderr`` (``Invalid Input Error``), or None when it holds none: what two runs of one
+    query are held to agree on (``errors.md`` rule 7)."""
+    message = _error_message(stderr)
+    return message.split(":", 1)[0] if message else None
+
+
 def _error_message(stderr: str) -> str | None:
     """The error in ``stderr``, from its first line on, or None when stderr holds no error. Lines the CLI prints in
     front of it (a warning, a solver preamble) are not part of it."""

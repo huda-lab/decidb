@@ -53,46 +53,29 @@ unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer) {
 	return DirectErrorPredicate(optimizer, DecideUnboundedMessage());
 }
 
-void DirectNameMerge(DirectNumberNames &names, const DecideSourceText &source, const DirectNumberNames &other) {
-	if (!other.named) {
+void DirectNameValue(DirectNumberNames &names, const Expression &value, int sign, const string &text,
+                     optional_idx place) {
+	const bool constant = DecideUnguarded(value).IsFoldable();
+	if (constant && !place.IsValid()) {
 		return;
 	}
-	if (!names.named) {
-		names.named = true;
-		names.constant = other.constant;
-		names.text = other.text;
-		names.place = other.place;
-		return;
+	if (names.values == 0) {
+		names.first_sign = sign;
+		names.text = text;
+		names.place = place;
+	} else {
+		const string front = names.values == 1 && names.first_sign < 0 ? "-" : "";
+		names.text = front + names.text + (sign < 0 ? " - " : " + ") + text;
+		names.place = optional_idx();
 	}
-	names.constant = names.constant && other.constant;
-	names.place = DecideCoveringLocation(source, names.place, other.place);
-	string covering;
-	int ignored;
-	if (source.CutExpr(names.place, covering, ignored)) {
-		names.text = covering;
-	}
-}
-
-void DirectNameValue(DirectNumberNames &names, const DecideSourceText &source, const Expression &value,
-                     const string &text, optional_idx held_at) {
-	auto &unguarded = DecideUnguarded(value);
-	DirectNumberNames one;
-	one.place = DecideSpanLocation(source, held_at.IsValid() ? held_at : unguarded.GetQueryLocation());
-	one.constant = unguarded.IsFoldable();
-	// A number the engine made for itself is no value of the user's.
-	one.named = !one.constant || one.place.IsValid();
-	one.text = text;
-	int ignored;
-	if (held_at.IsValid() && one.place.IsValid()) {
-		source.CutExpr(one.place, one.text, ignored);
-	}
-	DirectNameMerge(names, source, one);
+	names.constant = names.constant && constant;
+	names.values++;
 }
 
 //! The call that raises for a number that is not finite: it names the expression of the query the number stands for
 //! and carries its place, and for a number the plan computes it names the clause (TOO_LARGE), at the clause's place.
 static ExprPtr NotFiniteRaise(const ExpressionBuilder &calc, const DirectNumberNames &names) {
-	if (names.named) {
+	if (names.values > 0) {
 		return calc.RaiseInvalidValue(names.constant ? DecideValueRole::CONSTANT : DecideValueRole::COEFFICIENT,
 		                              names.text, names.place);
 	}
@@ -115,12 +98,6 @@ ExprPtr DirectNumberCheck(const ExpressionBuilder &calc, const ExprPtr &number, 
 unique_ptr<Expression> DirectRaiseTooLarge(Optimizer &optimizer, const ExprPtr &number, const DecideClauseRef &clause) {
 	ExpressionBuilder calc(optimizer.context);
 	return calc.Out(DirectNumberCheck(calc, number, clause));
-}
-
-unique_ptr<Expression> DirectRaiseNotFinite(Optimizer &optimizer, const ExprPtr &number,
-                                            const DirectNumberNames &names) {
-	ExpressionBuilder calc(optimizer.context);
-	return calc.Out(DirectNumberCheck(calc, number, names));
 }
 
 unique_ptr<Expression> DirectCheckNumber(Optimizer &optimizer, ColumnBinding number, const DirectNumberNames &names,

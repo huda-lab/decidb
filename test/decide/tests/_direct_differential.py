@@ -21,8 +21,9 @@ ERROR_CLASSES = [
     (r"(?i)infeasible", "infeasible"),
     # A NaN bound reads "the bound v is NaN on some rows" on both paths.
     (r"(?i)is NULL|NULL or NaN|contains NULL|the bound .* is NaN on some rows", "null_bound"),
-    # A coefficient that is NaN or infinite reads "v is NaN or infinite on some rows".
-    (r"(?i)is NaN or infinite on some rows", "invalid_value"),
+    # A coefficient that is NaN or infinite reads "v is NaN or infinite on some rows"; one DeciDB computed from finite
+    # values may name its clause instead ("computes a number too large for a DOUBLE"). Both are one error.
+    (r"(?i)is NaN or infinite on some rows|computes a number too large for a DOUBLE", "invalid_value"),
     (r"(?i)is unbounded", "unbounded"),
     # An INT answer beyond what a double holds exactly. The solver names the variable; direct solve cannot.
     (r"(?i)past 2\^53", "int_range"),

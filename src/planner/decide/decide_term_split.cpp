@@ -223,8 +223,6 @@ void DecideTermSplitter::ReadProduct(const Expression &expr, int sign, vector<De
 		Split(*form.factors[0].base, sign, out);
 		for (idx_t i = begin; i < out.size(); i++) {
 			out[i].coefficient = MultiplyCoefficients(context, *coefficient, std::move(out[i].coefficient));
-			// The product holds the coefficient now, not the factor it was read from (Split).
-			out[i].ancestor = optional_idx();
 		}
 		return;
 	}
@@ -267,20 +265,11 @@ void DecideTermSplitter::ReadQuotient(const BoundFunctionExpression &quotient, i
 		children.push_back(BoundCastExpression::AddDefaultCastToType(std::move(numerator), num_type));
 		children.push_back(BoundCastExpression::AddDefaultCastToType(quotient.children[1]->Copy(), denom_type));
 		out[i].coefficient = DecideRebindOperator(context, "/", std::move(children));
-		// The quotient holds the coefficient now (Split).
-		out[i].ancestor = optional_idx();
 	}
 }
 
 void DecideTermSplitter::Split(const Expression &expr, int sign, vector<DecideSplitTerm> &out) const {
-	const auto begin = out.size();
 	SplitNode(expr, sign, out);
-	// The innermost located expression a term was read from is the one it was first given.
-	for (auto i = begin; i < out.size(); i++) {
-		if (!out[i].ancestor.IsValid()) {
-			out[i].ancestor = expr.GetQueryLocation();
-		}
-	}
 }
 
 void DecideTermSplitter::SplitNode(const Expression &expr, int sign, vector<DecideSplitTerm> &out) const {

@@ -175,14 +175,15 @@ def test_a_strict_bound_on_a_fractional_reducer_is_refused_for_less_than(decidb_
 @pytest.mark.parametrize("backend", ["gurobi", "highs"])
 def test_dividing_an_abs_by_a_zero_literal_is_refused_where_the_number_is_read(request, backend):
     """WalkPolarity reads a zero divisor as a factor that is exactly zero (`ZERO` and `is_divisor`). SQL makes the
-    coefficient 1 / 0 infinite, a constant no `when` skips, and the error points at the division the user wrote."""
+    coefficient 1 / 0 infinite, a constant no `when` skips. DeciDB made the reciprocal, which has no place of its own,
+    so the error quotes it."""
     cli = request.getfixturevalue(f"decidb_cli_{backend}")
     sql = f"""
         SELECT id, y FROM {_ROWS}
         DECIDE y(INT)
         SUCH THAT y <= 6 AND SUM(ABS(y) / 0) <= 30
         MAXIMIZE SUM(y)"""
-    cli.assert_error_at(sql, kind="Invalid Input Error", at="ABS(y) / 0")
+    cli.assert_error_at(sql, kind="Invalid Input Error", at="/ 0")
 
 
 def test_highs_names_the_negated_square_when_the_objective_minimizes_it(decidb_cli_highs):
@@ -477,11 +478,12 @@ def test_an_abs_over_two_reducers_reads_each_helper_once_per_copy(decidb_cli_gur
 @pytest.mark.parametrize("backend", ["gurobi", "highs"])
 @pytest.mark.parametrize("divided", ["y / c", "ABS(y) / c"])
 def test_dividing_by_a_data_zero_is_refused_naming_the_coefficient(request, backend, divided):
-    """A zero in the divisor column makes the coefficient infinite, which DuckDB divides to (`1.0 / 0 = inf`)."""
+    """A zero in the divisor column makes the coefficient infinite, which DuckDB divides to (`1.0 / 0 = inf`). The
+    coefficient is the reciprocal DeciDB made, which has no place of its own: the error quotes it."""
     cli = request.getfixturevalue(f"decidb_cli_{backend}")
     sql = f"""
         SELECT id, y FROM (VALUES (1, 2), (2, 0), (3, 1)) t(id, c)
         DECIDE y(INT)
         SUCH THAT y <= 6 AND SUM({divided}) <= 30
         MAXIMIZE SUM(y)"""
-    cli.assert_error_at(sql, kind="Invalid Input Error", at=divided)
+    cli.assert_error_at(sql, kind="Invalid Input Error", at="/ c")

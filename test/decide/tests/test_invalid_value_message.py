@@ -1,16 +1,19 @@
-"""The one message for a NaN or infinite number: every site that refuses one points at the value where it stands in the
-query (the caret), and the solver path and the direct-solve plans print the same text and caret.
+"""The one error for a NaN or infinite number: an Invalid Input Error on every site that refuses one, on the solver
+path and the direct-solve plans alike.
 
 A coefficient must be finite; a bound may be infinite and must not be NaN; a constant SQL computes as NaN or infinite
-(`1 / 0`) is refused whole. A number DeciDB made from the user's text (a quotient's reciprocal, like terms added into
-one coefficient, a coefficient under a factor) stands where the text it replaces stands (`DecideReplaces`), so the
-error points there. A test of one checks the kind and where the caret lands (`assert_error_at`), not the wording, which
-`DecideInvalidValueMessage` (`decide_value_messages.hpp`) owns. A NULL value is skipped, not refused. A number the
-model computes across rows (a sum over rows, a square) that is too large for a DOUBLE points at its clause or the
-objective.
+(`1 / 0`) is refused whole. A value the user wrote is pointed at where it stands (the caret). A number DeciDB made
+from the user's text (like terms added into one coefficient, a coefficient under a factor, a quotient's reciprocal) has
+no place of its own, so its error has no caret (`errors.md` rule 3), and a test of one checks the kind alone. A test
+checks the kind and the place (`assert_error_at`), not the wording. Two paths are held to the same kind (rule 5). A
+NULL value is skipped, not refused. A number the model computes across rows (a sum over rows, a square) that is too
+large for a DOUBLE points at its clause or the objective.
 """
 
 import pytest
+
+from decidb_cli import error_kind
+
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
 
 NAN = "'NaN'::DOUBLE"
@@ -34,8 +37,18 @@ def _stderr(cli, sql, mode):
     return cli.execute_raw(f"SET decide_direct_solve='{mode}'; {sql}").stderr
 
 
+def _fails(cli, sql, mode):
+    """`sql` under `mode` fails with an Invalid Input Error. For a number DeciDB made, which has no place of its own."""
+    stderr = _stderr(cli, sql, mode)
+    assert error_kind(stderr) == INVALID_INPUT, stderr
+
+
 def _points_at(cli, sql, mode, at, word=None):
-    """`sql` under `mode` fails with an Invalid Input Error whose caret stands inside `at`, the value as written."""
+    """`sql` under `mode` fails with an Invalid Input Error whose caret stands inside `at`, the value as written. With
+    `at` None, a number DeciDB made, only the kind is checked (`_fails`)."""
+    if at is None:
+        _fails(cli, sql, mode)
+        return
     cli.assert_error_at(f"SET decide_direct_solve='{mode}'; {sql}", kind=INVALID_INPUT, at=at, word=word)
 
 
@@ -44,15 +57,15 @@ def _points_at(cli, sql, mode, at, word=None):
 # the query (`ApplyDirectSolveRules`), so a query a rule takes runs the same under both: `require` stands for them.
 
 
-# (name, DECIDE clauses, the value the message names). Both paths take each one. A coefficient DeciDB computes (like
-# terms merged, a reducer's factor applied) stands where the text it replaces stands.
+# (name, DECIDE clauses, the value the message points at). Both paths take each one. A coefficient DeciDB computes (like
+# terms merged, a reducer's factor applied) has no place of its own: None.
 BOTH_PATHS_COEFFICIENT = [
     ("a1_constraint", "x(REAL) SUCH THAT b * x <= 5 MAXIMIZE SUM(a * x)", "b"),
     ("a1_objective", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(b * x)", "b"),
-    ("a1_like_terms_merge", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(b * x + a * x)", "b * x + a * x"),
-    ("a1_like_terms_subtract", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(a * x - b * x)", "a * x - b * x"),
-    ("a1_factor_on_the_sum", "x(REAL) SUCH THAT x <= 5 MAXIMIZE 2 * SUM(b * x)", "2 * SUM(b * x)"),
-    ("a1_divisor_of_the_sum", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(b * x) / 2", "SUM(b * x) / 2"),
+    ("a1_like_terms_merge", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(b * x + a * x)", None),
+    ("a1_like_terms_subtract", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(a * x - b * x)", None),
+    ("a1_factor_on_the_sum", "x(REAL) SUCH THAT x <= 5 MAXIMIZE 2 * SUM(b * x)", None),
+    ("a1_divisor_of_the_sum", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(b * x) / 2", None),
     ("a1_constant_term", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(a * x + b)", "b"),
     # Each constant term is checked on its own: the first that is not finite is named.
     ("a1_two_constant_terms", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(a * x + b + b)", "b"),
@@ -68,17 +81,17 @@ BOTH_PATHS_COEFFICIENT = [
     (
         "r1_factor_on_the_value",
         "x(REAL) SUCH THAT x <= 4 AND SUM(a * x) <= 9 MAXIMIZE 2 * SUM(b * x)",
-        "2 * SUM(b * x)",
+        None,
     ),
     (
         "r1_like_terms_merge",
         "x(REAL) SUCH THAT x <= 4 AND SUM(a * x + b * x) <= 9 MAXIMIZE SUM(c * x)",
-        "a * x + b * x",
+        None,
     ),
     ("r1_one_of_two_reducers", "x(REAL) SUCH THAT x <= 4 AND SUM(a * x) <= 9 MAXIMIZE SUM(a * x) + SUM(b * x)", "b"),
     ("r1_per_row_clause", "x(REAL) SUCH THAT b * x <= 4 AND SUM(a * x) <= 9 MAXIMIZE SUM(c * x)", "b"),
     ("s1_score", "x(BOOL) SUCH THAT SUM(x) <= 2 MAXIMIZE SUM(b * x)", "b"),
-    ("s1_factor_on_the_score", "x(BOOL) SUCH THAT SUM(x) <= 2 MAXIMIZE 2 * SUM(b * x)", "2 * SUM(b * x)"),
+    ("s1_factor_on_the_score", "x(BOOL) SUCH THAT SUM(x) <= 2 MAXIMIZE 2 * SUM(b * x)", None),
     ("s1_one_of_two_reducers", "x(BOOL) SUCH THAT SUM(x) <= 2 MAXIMIZE SUM(a * x) + SUM(b * x)", "b"),
     ("s1_fixing_coefficient", "x(BOOL) SUCH THAT SUM(x) <= 2 AND b * x >= 1 MAXIMIZE SUM(a * x)", "b"),
 ]
@@ -148,7 +161,7 @@ def test_a_coefficient_that_is_not_finite_is_named_as_written_on_both_paths(deci
     direct = _stderr(decidb_cli, _query(decide, bad), "require")
     solver = _stderr(decidb_cli, _query(decide, bad), "off")
     _points_at(decidb_cli, _query(decide, bad), "off", value)
-    assert direct == solver
+    assert error_kind(direct) == error_kind(solver)
 
 
 # A raise call carries its own place (its `query_location`), so a plan that serializes keeps the caret. The harness runs
@@ -182,14 +195,16 @@ class TooLarge(str):
 
 def _refused(cli, sql, mode, expected):
     """`sql` fails as `expected` says: pointing at an `At` expression, or at the clause (the objective) a sum past a
-    DOUBLE belongs to, a `TooLarge` or a plain string."""
-    if isinstance(expected, At):
+    DOUBLE belongs to, a `TooLarge` or a plain string. None: a number DeciDB made, checked by its kind alone."""
+    if expected is None:
+        _fails(cli, sql, mode)
+    elif isinstance(expected, At):
         _points_at(cli, sql, mode, str(expected))
     else:
         _points_at(cli, sql, mode, str(expected), "computes a number too large for a DOUBLE")
 
 
-# Values each finite whose sum or square is not, on the middle row. Both paths print one text.
+# Values each finite whose sum or square is not, on the middle row. Both paths raise one kind.
 DIRECT_OVERFLOW = [
     # The squared coefficient of a decision, `b * b`, is beyond a double. No value of a row is, so the error points at
     # the objective.
@@ -205,18 +220,18 @@ DIRECT_OVERFLOW = [
         TooLarge("SUM(POWER(b * x, 2) + a * x)"),
         "1e200",
     ),
-    # Like terms on one row merge into that row's coefficient, `b + b`, which stands where their sum is written. Each
-    # value is finite, and the merged coefficient is not.
+    # Like terms on one row merge into that row's coefficient, `b + b`, which DeciDB made. Each value is finite, and the
+    # merged coefficient is not.
     (
         "s1_score_overflows",
         "x(BOOL) SUCH THAT SUM(x) <= 2 MAXIMIZE SUM(b * x) + SUM(b * x)",
-        At("SUM(b * x) + SUM(b * x)"),
+        None,
         "1e308",
     ),
     (
         "a1_coefficient_overflows",
         "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(b * x) + SUM(b * x)",
-        At("SUM(b * x) + SUM(b * x)"),
+        None,
         "1e308",
     ),
 ]
@@ -228,17 +243,17 @@ def test_a_sum_the_plan_computes_that_overflows_is_named_as_written(decidb_cli, 
     direct = _stderr(decidb_cli, _query(decide, big), "require")
     solver = _stderr(decidb_cli, _query(decide, big), "off")
     _refused(decidb_cli, _query(decide, big), "require", message)
-    assert direct == solver
+    assert error_kind(direct) == error_kind(solver)
 
 
 # A coefficient that is a constant, NaN or infinite itself: SQL computes `1 / 0` as infinity, so no row holds it and no
-# `when` skips it. Both paths point at the division the user wrote.
+# `when` skips it. A literal is pointed at; a quotient DeciDB computes has no place of its own (None).
 BOTH_PATHS_CONSTANT = [
-    ("a1_objective", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(x / 0)", "x / 0"),
+    ("a1_objective", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(x / 0)", None),
     ("a1_infinite_literal", f"x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(x * {INFINITY})", INFINITY),
-    ("r1_objective", "x(REAL) SUCH THAT x <= 4 AND SUM(a * x) <= 9 MAXIMIZE SUM(x / 0)", "x / 0"),
-    ("r1_budget_weight", "x(REAL) SUCH THAT x <= 4 AND SUM(x / 0) <= 9 MAXIMIZE SUM(c * x)", "x / 0"),
-    ("s1_score", "x(BOOL) SUCH THAT SUM(x) <= 2 MAXIMIZE SUM(x / 0)", "x / 0"),
+    ("r1_objective", "x(REAL) SUCH THAT x <= 4 AND SUM(a * x) <= 9 MAXIMIZE SUM(x / 0)", None),
+    ("r1_budget_weight", "x(REAL) SUCH THAT x <= 4 AND SUM(x / 0) <= 9 MAXIMIZE SUM(c * x)", None),
+    ("s1_score", "x(BOOL) SUCH THAT SUM(x) <= 2 MAXIMIZE SUM(x / 0)", None),
 ]
 
 
@@ -248,31 +263,31 @@ def test_a_constant_coefficient_that_is_not_finite_is_named_on_both_paths(decidb
     direct = _stderr(decidb_cli, _query(decide, "1.0"), "require")
     solver = _stderr(decidb_cli, _query(decide, "1.0"), "off")
     _points_at(decidb_cli, _query(decide, "1.0"), "off", value)
-    assert direct == solver
+    assert error_kind(direct) == error_kind(solver)
 
 
-# A division by zero makes the coefficient infinite: the error points at the user's division, whether the zero is a
-# literal or a value of a column, in a constraint, the objective or a reducer under MIN.
+# A division by zero makes the coefficient infinite, whether the zero is a literal or a value of a column, in a
+# constraint, the objective or a reducer under MIN. The coefficient is the reciprocal DeciDB computes, which has no place
+# of its own.
 DIVISIONS_BY_ZERO = [
-    ("sum_in_the_objective", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(x / 0)", "x / 0", "1.0"),
-    ("comparison_in_a_constraint", "x(REAL) SUCH THAT x / 0 <= 4 MAXIMIZE SUM(a * x)", "x / 0", "1.0"),
+    ("sum_in_the_objective", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(x / 0)", "1.0"),
+    ("comparison_in_a_constraint", "x(REAL) SUCH THAT x / 0 <= 4 MAXIMIZE SUM(a * x)", "1.0"),
     (
         "min_in_the_objective",
         "amount(REAL) SUCH THAT amount <= c AND SUM(amount) <= 9 MAXIMIZE MIN(amount / d)",
-        "amount / d",
         "0.0",
     ),
-    ("sum_over_a_column", "y(INT) SUCH THAT y <= 6 AND SUM(y / d) <= 30 MAXIMIZE SUM(y)", "y / d", "0.0"),
+    ("sum_over_a_column", "y(INT) SUCH THAT y <= 6 AND SUM(y / d) <= 30 MAXIMIZE SUM(y)", "0.0"),
 ]
 
 
 @pytest.mark.error
 @pytest.mark.parametrize("mode", ["off", "auto"])
-@pytest.mark.parametrize("name,decide,at,d", DIVISIONS_BY_ZERO, ids=[case[0] for case in DIVISIONS_BY_ZERO])
-def test_a_division_by_zero_points_at_the_division_the_user_wrote(decidb_cli, name, decide, at, d, mode):
+@pytest.mark.parametrize("name,decide,d", DIVISIONS_BY_ZERO, ids=[case[0] for case in DIVISIONS_BY_ZERO])
+def test_a_division_by_zero_is_refused(decidb_cli, name, decide, d, mode):
     rows = f"(1, 1.0, 2.0, 3.0), (2, 2.0, {d}, 1.0), (3, 3.0, 1.0, 2.0)"
     sql = f"SELECT id FROM (FROM (VALUES {rows}) t(id, a, d, c) DECIDE {decide}) q"
-    _points_at(decidb_cli, sql, mode, at)
+    _fails(decidb_cli, sql, mode)
 
 
 def _big_query(decide, big):
@@ -335,24 +350,24 @@ TOO_LARGE = [
         "SUM(x) + MAX(x + b + b)",
         "1e308",
     ),
-    # The data of an ABS' argument, `-b - b`, is not finite though each `b` is: raised where the ABS is read, naming the
-    # clause as written, on each way the ABS is stated (pressed by the objective, Big-M, or a constraint).
+    # The data of an ABS' argument, `-b - b`, is not finite though each `b` is: raised where the ABS is read, on each
+    # way the ABS is stated (pressed by the objective, Big-M, or a constraint). DeciDB made the sum: no place.
     (
         "abs_the_objective_presses_down",
         "x(REAL) SUCH THAT x BETWEEN 0 AND 10 MINIMIZE SUM(ABS(x - b - b))",
-        At("x - b - b"),
+        None,
         "1e308",
     ),
     (
         "abs_the_objective_presses_up",
         "x(REAL) SUCH THAT x BETWEEN 0 AND 10 MAXIMIZE SUM(ABS(x - b - b))",
-        At("x - b - b"),
+        None,
         "1e308",
     ),
     (
         "abs_in_a_constraint",
         "x(REAL) SUCH THAT x BETWEEN 0 AND 10 AND ABS(x - b - b) >= 1 MINIMIZE SUM(x)",
-        At("x - b - b"),
+        None,
         "1e308",
     ),
     # A nested objective's group sums are a helper decision (D81), each read by one member of the maximum, so written into
@@ -390,7 +405,7 @@ TREE_WRITTEN = [
     (
         "row_of_an_abs_in_the_objective",
         "per (): y(REAL) SUCH THAT y <= 5 AND y >= -5 MAXIMIZE SUM(ABS(b * y + b * y))",
-        At("b * y + b * y"),
+        None,
         "1e308",
     ),
 ]
@@ -462,7 +477,7 @@ DERIVED_TOO_LARGE = [
     (
         "like_literals_on_one_decision",
         "y(REAL) SUCH THAT y <= 5 AND 1e308 * y + 1e308 * y <= 1e308 MAXIMIZE SUM(y)",
-        At("1e308 * y + 1e308 * y"),
+        None,
     ),
     (
         "literal_beside_another_decision",
@@ -472,7 +487,7 @@ DERIVED_TOO_LARGE = [
     (
         "reciprocal_of_a_literal",
         "y(REAL) SUCH THAT y <= 5 AND SUM(y) / 1e-310 <= 10 MAXIMIZE SUM(y)",
-        At("SUM(y) / 1e-310"),
+        None,
     ),
     # A composed MIN/MAX reads its member's coefficients and its factor apart from the rows of a sum.
     (
@@ -510,7 +525,7 @@ def test_a_literal_past_a_double_on_one_decision_names_its_clause_on_both_paths(
     decide, written = next((case[1], case[2]) for case in DERIVED_TOO_LARGE if case[0] == name)
     direct = _stderr(decidb_cli, _huge_query(decide), "require")
     _refused(decidb_cli, _huge_query(decide), "require", written)
-    assert direct == _stderr(decidb_cli, _huge_query(decide), "off")
+    assert error_kind(direct) == error_kind(_stderr(decidb_cli, _huge_query(decide), "off"))
 
 
 @pytest.mark.error
@@ -572,12 +587,13 @@ HELPER_SUMS = [
         "MAX(PER (): SUM(y + z + b) BY (b)) >= 0",
         ["decidb_cli_gurobi", "decidb_cli_highs"],
     ),
-    # DecideTreeColumns::Numbers: one member's coefficient of `s`, `b + b`, is past a DOUBLE where it is read.
+    # DecideTreeColumns::Numbers: one member's coefficient of `s`, `b + b`, is past a DOUBLE where it is read. DeciDB
+    # made it: no place.
     (
         "coefficient_of_a_member",
         "y(REAL), PER (): s(REAL) SUCH THAT y <= 5 AND s <= 5 AND MAX(PER (): MAX(b * s + b * s + y) BY (b)) >= 0 "
         "MAXIMIZE SUM(y)",
-        At("b * s + b * s"),
+        None,
         ["decidb_cli_gurobi", "decidb_cli_highs"],
     ),
     # DecideModelEmitter::ValueLinks: one member's constant, `b + b`, is past a DOUBLE.
@@ -617,7 +633,7 @@ def test_a_reciprocal_past_a_double_on_a_squared_sum_names_its_clause(decidb_cli
     # Gurobi only: HiGHS has no quadratic constraints. A query-wide factor is read when the query runs; its
     # reciprocal is computed then.
     decide = "y(REAL) SUCH THAT y <= 5 AND SUM(POWER(y, 2)) / (SELECT 1e-310) <= 10 MAXIMIZE SUM(y)"
-    _refused(decidb_cli_gurobi, _huge_query(decide), mode, At("SUM(POWER(y, 2)) / (SELECT 1e-310)"))
+    _refused(decidb_cli_gurobi, _huge_query(decide), mode, None)
 
 
 # The continuous knapsack plan (R1) computes each item's price, value over weight, and the group's sums of the rooms
@@ -644,49 +660,43 @@ def _derived_query(decide, outcome):
     return f"SELECT id FROM (FROM (VALUES {rows}) t(id, a, b, c) DECIDE {decide}) q"
 
 
-# (name, DECIDE clauses, the expression the error points at). Each derives a coefficient from the values it reads at a
-# different place: like terms merged or a reducer's factor applied on the solver path, and the sum the direct plan
-# checks (DirectNumberCheck). The coefficient DeciDB makes stands where the user's text it replaces stands
-# (DecideReplaces): the sum of the like terms, or the scaled reducer. The same query raises the same error when every
-# value is finite and the sum is not, and when a value is infinite, on every path that takes it.
+# (name, DECIDE clauses). Each derives a coefficient from the values it reads at a different place: like terms merged or
+# a reducer's factor applied on the solver path, and the sum the direct plan checks (DirectNumberCheck). DeciDB made
+# the coefficient, so it has no place of its own. The query raises an Invalid Input Error when every value is finite and
+# the sum is not, and when a value is infinite, on every path that takes it.
 DERIVED_BOTH_PATHS = [
     # Solver: like terms merged on a row of a constraint. A1: the clause's coefficient.
-    ("a1_like_terms_on_one_row", "y(REAL) SUCH THAT y <= 5 AND b * y + b * y <= 1 MAXIMIZE SUM(y)", "b * y + b * y"),
+    ("a1_like_terms_on_one_row", "y(REAL) SUCH THAT y <= 5 AND b * y + b * y <= 1 MAXIMIZE SUM(y)"),
     # Solver: like terms merged in the objective. A1: one reducer's sum of a decision's terms.
-    ("a1_like_terms_in_a_reducer", "y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(b * y + b * y)", "b * y + b * y"),
+    ("a1_like_terms_in_a_reducer", "y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(b * y + b * y)"),
     # Solver: the objective's factor applied. A1: the parts' sum, scaled, after each part's values were checked.
-    ("a1_factor_on_a_reducer", "y(REAL) SUCH THAT y <= 5 MAXIMIZE 2 * SUM(b * y)", "2 * SUM(b * y)"),
+    ("a1_factor_on_a_reducer", "y(REAL) SUCH THAT y <= 5 MAXIMIZE 2 * SUM(b * y)"),
     # Solver: a scaled coefficient merged with a like term, whose values it already holds.
     (
         "a1_factor_then_like_terms",
         "y(REAL) SUCH THAT y <= 5 MAXIMIZE 2 * SUM(b * y) + SUM(b * y)",
-        "2 * SUM(b * y) + SUM(b * y)",
     ),
     # Solver: the objective's factor or divisor applied to a constant term. A1: each constant term, scaled.
-    ("a1_factor_on_a_constant", "y(REAL) SUCH THAT y <= 5 MAXIMIZE 2 * SUM(y + b)", "2 * SUM(y + b)"),
-    ("a1_divisor_of_a_constant", "y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(y + b) / 0.5", "SUM(y + b) / 0.5"),
+    ("a1_factor_on_a_constant", "y(REAL) SUCH THAT y <= 5 MAXIMIZE 2 * SUM(y + b)"),
+    ("a1_divisor_of_a_constant", "y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(y + b) / 0.5"),
     # S1: one reducer's share of the score.
-    ("s1_like_terms_in_a_reducer", "y(BOOL) SUCH THAT SUM(y) <= 1 MAXIMIZE SUM(b * y + b * y)", "b * y + b * y"),
+    ("s1_like_terms_in_a_reducer", "y(BOOL) SUCH THAT SUM(y) <= 1 MAXIMIZE SUM(b * y + b * y)"),
     # R1: a per-row clause's coefficient, the budget's weight, an objective part's value, and the item's value.
     (
         "r1_like_terms_on_one_row",
         "y(REAL) SUCH THAT y <= 5 AND b * y + b * y <= 1 AND SUM(a * y) <= 9 MAXIMIZE SUM(a * y)",
-        "b * y + b * y",
     ),
     (
         "r1_like_terms_in_the_budget",
         "y(REAL) SUCH THAT y <= 5 AND SUM(b * y + b * y) <= 9 MAXIMIZE SUM(a * y)",
-        "b * y + b * y",
     ),
     (
         "r1_like_terms_in_the_objective",
         "y(REAL) SUCH THAT y <= 5 AND SUM(a * y) <= 9 MAXIMIZE SUM(b * y + b * y)",
-        "b * y + b * y",
     ),
     (
         "r1_factor_on_the_objective",
         "y(REAL) SUCH THAT y <= 5 AND SUM(a * y) <= 9 MAXIMIZE 2 * SUM(b * y)",
-        "2 * SUM(b * y)",
     ),
 ]
 
@@ -696,24 +706,20 @@ DERIVED_SOLVER = [
     (
         "divisor_known_at_run_time",
         "y(REAL) SUCH THAT y <= 5 AND SUM(b * y) / (SELECT 0.5) <= 10 MAXIMIZE SUM(y)",
-        "SUM(b * y) / (SELECT 0.5)",
     ),
     # Like terms merged inside a composed MIN or MAX, in a constraint and in the objective.
     (
         "composed_extremum_in_a_constraint",
         "y(REAL) SUCH THAT y <= 5 AND SUM(y) + MAX(b * y + b * y) <= 10 MAXIMIZE SUM(y)",
-        "b * y + b * y",
     ),
     (
         "composed_extremum_in_the_objective",
         "y(REAL) SUCH THAT y <= 5 MINIMIZE SUM(y) + MAX(b * y + b * y)",
-        "b * y + b * y",
     ),
     # Like terms merged in a reducer a row-varying factor scales, which a helper decision holds.
     (
         "reducer_under_a_row_factor",
         "y(REAL) SUCH THAT y <= 5 AND c * SUM(b * y + b * y) <= 10 MAXIMIZE SUM(y)",
-        "b * y + b * y",
     ),
 ]
 
@@ -723,12 +729,10 @@ DERIVED_PRODUCT = [
     (
         "factor_on_a_product_in_the_objective",
         "x(REAL), y(REAL) SUCH THAT x <= 4 AND y <= 4 MAXIMIZE 2 * SUM(b * x * y)",
-        "2 * SUM(b * x * y)",
     ),
     (
         "factor_on_a_product_in_a_constraint",
         "x(REAL), y(REAL) SUCH THAT x <= 4 AND y <= 4 AND 2 * SUM(b * x * y) <= 20 MAXIMIZE SUM(x)",
-        "2 * SUM(b * x * y)",
     ),
 ]
 
@@ -742,47 +746,39 @@ EVERY_PATH = SOLVER_PATHS[:2] + [("decidb_cli", "require")]
 @pytest.mark.error
 @pytest.mark.parametrize("outcome", ["too_large", "infinite_value"])
 @pytest.mark.parametrize("cli_fixture,mode", EVERY_PATH)
-@pytest.mark.parametrize("name,decide,at", DERIVED_BOTH_PATHS, ids=[case[0] for case in DERIVED_BOTH_PATHS])
-def test_a_derived_coefficient_names_its_value_or_its_clause_on_every_path(
-    request, cli_fixture, mode, outcome, name, decide, at
-):
-    cli = request.getfixturevalue(cli_fixture)
-    _points_at(cli, _derived_query(decide, outcome), mode, at)
+@pytest.mark.parametrize("name,decide", DERIVED_BOTH_PATHS, ids=[case[0] for case in DERIVED_BOTH_PATHS])
+def test_a_derived_coefficient_is_refused_on_every_path(request, cli_fixture, mode, outcome, name, decide):
+    _fails(request.getfixturevalue(cli_fixture), _derived_query(decide, outcome), mode)
 
 
 @pytest.mark.error
 @pytest.mark.parametrize("outcome", ["too_large", "infinite_value"])
 @pytest.mark.parametrize("cli_fixture,mode", SOLVER_PATHS)
-@pytest.mark.parametrize("name,decide,at", DERIVED_SOLVER, ids=[case[0] for case in DERIVED_SOLVER])
-def test_a_coefficient_the_solver_derives_names_its_value_or_its_clause(
-    request, cli_fixture, mode, outcome, name, decide, at
-):
-    cli = request.getfixturevalue(cli_fixture)
-    _points_at(cli, _derived_query(decide, outcome), mode, at)
+@pytest.mark.parametrize("name,decide", DERIVED_SOLVER, ids=[case[0] for case in DERIVED_SOLVER])
+def test_a_coefficient_the_solver_derives_is_refused(request, cli_fixture, mode, outcome, name, decide):
+    _fails(request.getfixturevalue(cli_fixture), _derived_query(decide, outcome), mode)
 
 
 @pytest.mark.error
 @pytest.mark.parametrize("outcome", ["too_large", "infinite_value"])
 @pytest.mark.parametrize("mode", ["off"])
-@pytest.mark.parametrize("name,decide,at", DERIVED_PRODUCT, ids=[case[0] for case in DERIVED_PRODUCT])
-def test_a_factor_on_a_product_names_its_value_or_its_clause(decidb_cli_gurobi, mode, outcome, name, decide, at):
-    _points_at(decidb_cli_gurobi, _derived_query(decide, outcome), mode, at)
+@pytest.mark.parametrize("name,decide", DERIVED_PRODUCT, ids=[case[0] for case in DERIVED_PRODUCT])
+def test_a_factor_on_a_product_is_refused(decidb_cli_gurobi, mode, outcome, name, decide):
+    _fails(decidb_cli_gurobi, _derived_query(decide, outcome), mode)
 
 
 # The terms inside a square are not merged into one coefficient on the solver path: each is read where it is written,
 # and the sum of finite ones, past a DOUBLE, is the model builder's own arithmetic, which names the objective. The
-# direct plan reads the square's form as one number and points at where the form stands.
+# direct plan reads the square's form as one number, which DeciDB made: no place.
 SQUARES = [
     (
         "a1_square_of_like_terms",
         "y(REAL) SUCH THAT y <= 5 MINIMIZE SUM(POWER(b * y + b * y, 2))",
-        "b * y + b * y",
         "SUM(POWER(b * y + b * y, 2))",
     ),
     (
         "a1_square_of_constants",
         "y(REAL) SUCH THAT y <= 5 MINIMIZE SUM(POWER(y - b - b, 2))",
-        "y - b - b",
         "SUM(POWER(y - b - b, 2))",
     ),
 ]
@@ -790,12 +786,12 @@ SQUARES = [
 
 @pytest.mark.error
 @pytest.mark.parametrize("outcome", ["too_large", "infinite_value"])
-@pytest.mark.parametrize("name,decide,direct_at,clause", SQUARES, ids=[case[0] for case in SQUARES])
-def test_a_square_of_a_sum_names_where_each_path_reads_it(
-    decidb_cli, decidb_cli_gurobi, decidb_cli_highs, outcome, name, decide, direct_at, clause
+@pytest.mark.parametrize("name,decide,clause", SQUARES, ids=[case[0] for case in SQUARES])
+def test_a_square_of_a_sum_is_refused_where_each_path_reads_it(
+    decidb_cli, decidb_cli_gurobi, decidb_cli_highs, outcome, name, decide, clause
 ):
     sql = _derived_query(decide, outcome)
-    _points_at(decidb_cli, sql, "require", direct_at)
+    _fails(decidb_cli, sql, "require")
     for cli in (decidb_cli_gurobi, decidb_cli_highs):
         if outcome == "too_large":
             _refused(cli, sql, "off", TooLarge(clause))
@@ -883,17 +879,17 @@ def test_a_bound_that_is_nan_is_named_as_written_on_both_paths(decidb_cli, name,
     direct = _stderr(decidb_cli, sql, "require")
     solver = _stderr(decidb_cli, sql, "off")
     _points_at(decidb_cli, sql, "off", value)
-    assert direct == solver
+    assert error_kind(direct) == error_kind(solver)
 
 
 # A factor on a squared sum in a constraint, and on a composed MIN or MAX. It is one value for the whole query, so no
 # row can be skipped. Every `b` is finite: the factor is the bad value. The squared sum's coefficient is the factor
-# applied, which stands where the product is written; the composed MIN or MAX reads the factor itself.
+# applied, which DeciDB made (no place); the composed MIN or MAX reads the factor itself.
 FACTORS = [
     (
         "factor_on_a_squared_sum",
         "x(REAL) SUCH THAT x <= 4 AND (SELECT {bad}) * SUM(POWER(b * x, 2)) <= 20 MAXIMIZE SUM(a * x)",
-        "(SELECT '{written}'::DOUBLE) * SUM(POWER(b * x, 2))",
+        None,
     ),
     (
         "factor_on_a_composed_extremum",
@@ -908,7 +904,7 @@ FACTORS = [
 @pytest.mark.parametrize("name,decide,at", FACTORS, ids=[case[0] for case in FACTORS])
 def test_a_factor_that_is_not_finite_is_named_as_written(decidb_cli, name, decide, at, bad, written):
     sql = _query(decide.format(bad=bad), "1.0")
-    _points_at(decidb_cli, sql, "off", at.format(written=written))
+    _points_at(decidb_cli, sql, "off", at and at.format(written=written))
 
 
 # A NULL at the places the refusals above read a value (a coefficient and a bound, in A1, R1 and S1): skipped in each.
@@ -960,27 +956,11 @@ def test_a_constant_bound_that_is_nan_is_named(decidb_cli, decide):
     )
 
 
-# The caret stands where the user wrote what DeciDB scaled or merged into the coefficient: the scaled reducer, or the
-# sum of the like terms (DecideReplaces), not the column inside it.
+# Like terms of opposite signs merge to a difference of the user's literals, each finite and the difference not. Both
+# paths refuse it.
 @pytest.mark.error
-@pytest.mark.parametrize("mode", ["off", "require"])
-@pytest.mark.parametrize(
-    "decide,at",
-    [
-        ("x(REAL) SUCH THAT x <= 5 MAXIMIZE 2 * SUM(b * x)", "2 * SUM(b * x)"),
-        ("x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(a * x + b * x)", "a * x + b * x"),
-    ],
-    ids=["factor-on-the-sum", "like-terms-merged"],
-)
-def test_the_caret_stands_where_a_scaled_or_merged_coefficient_is_written(decidb_cli, decide, at, mode):
-    decidb_cli.assert_error_at(f"SET decide_direct_solve='{mode}'; {_query(decide, NAN)}", kind=INVALID_INPUT, at=at)
-
-
-# Like terms of opposite signs merge to a difference of the user's literals, each finite and the difference not: the
-# merged coefficient stands where the difference is written, and the error points there.
-@pytest.mark.error
-def test_a_difference_of_finite_literals_past_a_double_names_the_objective(decidb_cli):
+def test_a_difference_of_finite_literals_past_a_double_is_refused(decidb_cli):
     objective = "SUM(1e308 * x) - SUM(-1e308 * x)"
     sql = f"SELECT id, x FROM (VALUES (1), (2), (3)) t(id) DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE {objective}"
-    _points_at(decidb_cli, sql, "off", objective)
-    assert _stderr(decidb_cli, sql, "require") == _stderr(decidb_cli, sql, "off")
+    _fails(decidb_cli, sql, "off")
+    _fails(decidb_cli, sql, "require")

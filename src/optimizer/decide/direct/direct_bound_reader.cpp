@@ -17,17 +17,6 @@
 
 namespace duckdb {
 
-//! Where a message about `term`'s coefficient points, as the solver path points (DecideProgram::written): a coefficient
-//! scaled by a factor is held by the scaled node (`scale_place`); one with no place of its own, by the nearest located
-//! expression that holds it (DecideSplitTerm::ancestor); any other stands at its own place (invalid here).
-static optional_idx DirectHeldAt(const DecideSplitTerm &term, optional_idx scale_place) {
-	if (scale_place.IsValid()) {
-		return scale_place;
-	}
-	return term.coefficient && !DecideUnguarded(*term.coefficient).GetQueryLocation().IsValid() ? term.ancestor
-	                                                                                            : optional_idx();
-}
-
 static bool DirectProveValues(const DirectIR &ir, const vector<DecideSplitTerm> &terms,
                               vector<DirectSignedValue> &out) {
 	for (auto &term : terms) {
@@ -37,7 +26,6 @@ static bool DirectProveValues(const DirectIR &ir, const vector<DecideSplitTerm> 
 		DirectSignedValue value;
 		value.sign = term.sign;
 		value.expr = term.coefficient->Copy();
-		value.place = DirectHeldAt(term, optional_idx());
 		out.push_back(std::move(value));
 	}
 	return true;
@@ -265,10 +253,10 @@ bool DirectReadCountLimit(const DirectIR &ir, ClientContext &context, const Dire
 DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedValue> &values,
                                 const DecideClauseRef &clause) {
 	DirectNumberNames names;
-	for (auto &value : values) {
-		DirectNameValue(names, *ir.source_text, *value.expr, ir.render(*value.expr), value.place);
-	}
 	names.clause = clause;
+	for (auto &value : values) {
+		DirectNameValue(names, *value.expr, value.sign, ir.render(*value.expr), ir.place(*value.expr));
+	}
 	return names;
 }
 
@@ -299,7 +287,7 @@ vector<DirectSignedValue> DirectValuesOn(const DirectLinearPart &part, idx_t dec
 	vector<DirectSignedValue> values;
 	for (auto &term : part.terms) {
 		if (term.decision == decision) {
-			values.push_back({term.sign, term.coefficient->Copy(), term.place});
+			values.push_back({term.sign, term.coefficient->Copy()});
 		}
 	}
 	return values;
@@ -327,7 +315,7 @@ bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const Dire
 		if (!DirectProveValue(ir, *term.coefficient)) {
 			return false;
 		}
-		out.terms.push_back({term.var_a, term.sign, term.coefficient->Copy(), DirectHeldAt(term, part.scale_place)});
+		out.terms.push_back({term.var_a, term.sign, term.coefficient->Copy()});
 	}
 	for (idx_t decision = 0; decision < ir.decisions.size(); decision++) {
 		out.names.push_back(DirectNamesOf(ir, DirectValuesOn(out, decision), clause));
@@ -336,14 +324,14 @@ bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const Dire
 }
 
 bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, const DecideClauseRef &clause,
-                            DirectConstantTerm &out, optional_idx scale_place) {
+                            DirectConstantTerm &out) {
 	if (!DirectProveValue(ir, *term.coefficient)) {
 		return false;
 	}
 	out.sign = term.sign;
 	out.value = term.coefficient->Copy();
 	vector<DirectSignedValue> value;
-	value.push_back({term.sign, term.coefficient->Copy(), DirectHeldAt(term, scale_place)});
+	value.push_back({term.sign, term.coefficient->Copy()});
 	out.value_names = DirectNamesOf(ir, value, clause);
 	return true;
 }
@@ -351,14 +339,13 @@ bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, con
 //! The weight of a square or an absolute value: the term's sign and its coefficient (1 when it has none), which a rule
 //! that needs it constant folds (DirectFoldConstantSum).
 static bool DirectReadWeight(const DirectIR &ir, const DecideSplitTerm &term, const DecideClauseRef &clause,
-                             vector<DirectSignedValue> &weight, DirectNumberNames &names, optional_idx scale_place) {
+                             vector<DirectSignedValue> &weight, DirectNumberNames &names) {
 	if (term.coefficient && !DirectProveValue(ir, *term.coefficient)) {
 		return false;
 	}
 	DirectSignedValue value;
 	value.sign = term.sign;
 	value.expr = term.coefficient ? term.coefficient->Copy() : make_uniq<BoundConstantExpression>(Value::DOUBLE(1.0));
-	value.place = DirectHeldAt(term, scale_place);
 	weight.push_back(std::move(value));
 	names = DirectNamesOf(ir, weight, clause);
 	return true;
@@ -383,7 +370,7 @@ static bool DirectReadFormDecision(const DirectIR &ir, const vector<DecideSplitT
 }
 
 bool DirectReadLinearForm(const DirectIR &ir, const vector<DecideSplitTerm> &form, const DecideClauseRef &clause,
-                          DirectLinearForm &out, optional_idx scale_place) {
+                          DirectLinearForm &out) {
 	if (!DirectReadFormDecision(ir, form, out.decision)) {
 		return false;
 	}
@@ -394,7 +381,6 @@ bool DirectReadLinearForm(const DirectIR &ir, const vector<DecideSplitTerm> &for
 		DirectSignedValue value;
 		value.sign = inner.sign;
 		value.expr = inner.coefficient->Copy();
-		value.place = DirectHeldAt(inner, scale_place);
 		(inner.IsLinear() ? out.linear : out.constant).push_back(std::move(value));
 	}
 	out.linear_names = DirectNamesOf(ir, out.linear, clause);
@@ -403,18 +389,18 @@ bool DirectReadLinearForm(const DirectIR &ir, const vector<DecideSplitTerm> &for
 }
 
 bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const DecideClauseRef &clause,
-                          DirectWeightedForm &out, optional_idx scale_place) {
-	return term.IsSquare() && DirectReadWeight(ir, term, clause, out.weight, out.weight_names, scale_place) &&
-	       DirectReadLinearForm(ir, term.factors[0].form, clause, out.inner, scale_place);
+                          DirectWeightedForm &out) {
+	return term.IsSquare() && DirectReadWeight(ir, term, clause, out.weight, out.weight_names) &&
+	       DirectReadLinearForm(ir, term.factors[0].form, clause, out.inner);
 }
 
 bool DirectReadAbsTerm(const DirectIR &ir, const DecideSplitTerm &term, const DecideClauseRef &clause,
-                       DirectWeightedForm &out, optional_idx scale_place) {
+                       DirectWeightedForm &out) {
 	if (!term.IsAbs()) {
 		throw InternalException("DECIDE: an absolute value is expected here; the A2 rule promises an ABS term");
 	}
-	return DirectReadWeight(ir, term, clause, out.weight, out.weight_names, scale_place) &&
-	       DirectReadLinearForm(ir, term.inner, clause, out.inner, scale_place);
+	return DirectReadWeight(ir, term, clause, out.weight, out.weight_names) &&
+	       DirectReadLinearForm(ir, term.inner, clause, out.inner);
 }
 
 bool DirectFoldConstantSum(ClientContext &context, const vector<DirectSignedValue> &values, double &total) {
@@ -455,12 +441,12 @@ bool DirectReadQuadraticPart(const DirectIR &ir, ClientContext &context, const D
 		}
 		if (term.IsConstant()) {
 			out.constants.emplace_back();
-			if (!DirectReadConstantTerm(ir, term, clause, out.constants.back(), part.scale_place)) {
+			if (!DirectReadConstantTerm(ir, term, clause, out.constants.back())) {
 				return false;
 			}
 		} else {
 			out.squares.emplace_back();
-			if (!DirectReadSquareTerm(ir, term, clause, out.squares.back(), part.scale_place)) {
+			if (!DirectReadSquareTerm(ir, term, clause, out.squares.back())) {
 				return false;
 			}
 		}

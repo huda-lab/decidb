@@ -65,8 +65,6 @@ struct Condition final : DirectApplicabilityCondition {
 	//! The objective as a message names it: an item's value, its parts' values summed and scaled, past a DOUBLE names
 	//! it, as the solver path names the coefficient it merges.
 	DecideClauseRef objective_written;
-	//! The query's text, which a number made of several parts names the least expression holding (DirectNameMerge).
-	const DecideSourceText *source_text = nullptr;
 };
 
 class Rule final : public DirectSolveRule {
@@ -246,7 +244,6 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 		condition.objective_kept.push_back(std::move(kept));
 	}
 	condition.objective_written = ir.objective.written;
-	condition.source_text = ir.source_text;
 	return true;
 }
 
@@ -958,12 +955,7 @@ private:
 			auto l = DoubleColumn(from.items[k].l), u = DoubleColumn(from.items[k].u);
 			auto w = DoubleColumn(from.items[k].w), v = DoubleColumn(from.items[k].v);
 			// An item's value sums its parts' values, each checked before: past a DOUBLE it names the objective.
-			DirectNumberNames merged;
-			merged.clause = condition.objective_written;
-			for (auto &part : condition.objective) {
-				DirectNameMerge(merged, *condition.source_text, part.names[k]);
-			}
-			checks.push_back(calc.Out(DirectNumberCheck(calc, v, merged)));
+			checks.push_back(calc.Out(DirectNumberCheck(calc, v, condition.objective_written)));
 			auto empty = DirectBoxIsEmpty(calc, l, u);
 			auto anchor = calc.If(empty, Zero(), calc.Min({calc.Max({Zero(), l}), u}));
 			auto free_of_budget = Equal(w, Zero());

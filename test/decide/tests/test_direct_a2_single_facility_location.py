@@ -1610,13 +1610,11 @@ def test_a2_a_class_weight_past_a_double_raises_too_large(decidb_cli):
 @pytest.mark.correctness
 @pytest.mark.parametrize("objective", ["MINIMIZE SUM(ABS(c - v - v))", "MINIMIZE MAX(ABS(c - v - v))"])
 def test_a2_values_that_sum_past_a_double_raise_too_large_on_both_paths(decidb_cli, objective):
-    # Each v is finite; the negated constant of the argument, -v - v, is not. Neither path names a bound: both point at
-    # the sum where the argument writes it.
+    # Each v is finite; the negated constant of the argument, -v - v, is not. Neither path names a bound: both quote
+    # the sum, which DeciDB made and which has no place of its own.
     sql = _problem(_with(1, v=1e308), obj=objective)
     for mode in ("off", "require"):
-        decidb_cli.assert_error_at(
-            f"SET decide_direct_solve='{mode}'; {sql}", kind="Invalid Input Error", at="c - v - v"
-        )
+        decidb_cli.assert_error_at(f"SET decide_direct_solve='{mode}'; {sql}", kind="Invalid Input Error", at="v - v")
 
 
 @pytest.mark.var_real

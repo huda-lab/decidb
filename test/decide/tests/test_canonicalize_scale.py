@@ -1378,13 +1378,13 @@ def test_like_terms_over_constant_divisors(decidb_cli, clause, holds):
     "clause, constant",
     [
         # SQL makes 1 / 0 infinite, so the coefficient is a constant that is not finite: no row holds it and no `when`
-        # skips it. The coefficient DeciDB builds (the reciprocal of the divisor) stands where the quotient it replaces
-        # is written (DecideReplaces), and the error points there.
-        pytest.param("x / 0 <= 4", "x / 0", id="zero-divisor"),
-        pytest.param("x / 0.0 + x / 0.0 <= 3", "x / 0.0 + x / 0.0", id="zero-divisor-merged"),
+        # skips it. DeciDB builds the coefficient (the reciprocal of the divisor), which has no place of its own, so
+        # the error points at the clause.
+        pytest.param("x / 0 <= 4", "x / 0 <= 4", id="zero-divisor"),
+        pytest.param("x / 0.0 + x / 0.0 <= 3", "x / 0.0 + x / 0.0 <= 3", id="zero-divisor-merged"),
         pytest.param("x * 'Infinity'::DOUBLE <= 3", "'Infinity'::DOUBLE", id="infinite-literal"),
-        # Finite terms whose sum leaves the DOUBLE range: the merged coefficient stands where the sum is written.
-        pytest.param("x * 1e308 + x * 1e308 <= 4", "x * 1e308 + x * 1e308", id="finite-sum-past-the-range"),
+        # Finite terms whose sum leaves the DOUBLE range: the merged coefficient has no place, and the error quotes it.
+        pytest.param("x * 1e308 + x * 1e308 <= 4", "1e308", id="finite-sum-past-the-range"),
     ],
 )
 def test_a_constant_coefficient_that_is_not_finite_is_refused(decidb_cli, clause, constant):

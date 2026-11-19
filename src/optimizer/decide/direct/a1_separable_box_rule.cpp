@@ -34,8 +34,6 @@ struct Condition final : DirectApplicabilityCondition {
 	//! The objective as written, which a message names when a decision's quadratic or linear coefficient, computed from
 	//! finite values, is too large for a DOUBLE (TOO_LARGE), as the solver path names it.
 	DecideClauseRef objective_written;
-	//! The query's text, which a number made of several parts names the least expression holding (DirectNameMerge).
-	const DecideSourceText *source_text = nullptr;
 	vector<Decision> decisions;
 	vector<DirectBoundClause> clauses;
 	vector<DirectQuadraticPart> parts;
@@ -115,7 +113,6 @@ public:
 		}
 		auto condition = make_uniq<Condition>();
 		condition->objective_written = ir.objective.written;
-		condition->source_text = ir.source_text;
 		for (auto &decision : ir.decisions) {
 			Decision prepared;
 			prepared.name = decision.name;
@@ -366,15 +363,10 @@ private:
 		}
 		for (idx_t d = 0; d < condition.decisions.size(); d++) {
 			auto sum = DirectFoldQuadratic(optimizer, calc, condition.parts, raw.parts, d);
-			// The linear coefficient the parts' like terms merge into, `b + b` for SUM(b * x) + SUM(b * x), as the
-			// solver path reads it: named where the least expression holding them stands.
+			// The linear coefficient the parts' like terms merge into, `b + b` for SUM(b * x) + SUM(b * x). Each part
+			// was checked before, so past a DOUBLE it names the objective.
 			if (sum.linear) {
-				DirectNumberNames merged;
-				merged.clause = condition.objective_written;
-				for (auto &part : condition.parts) {
-					DirectNameMerge(merged, *condition.source_text, part.linear.names[d]);
-				}
-				checks.push_back(DirectRaiseNotFinite(optimizer, sum.linear, merged));
+				checks.push_back(DirectRaiseTooLarge(optimizer, sum.linear, condition.objective_written));
 			}
 			bounds.a.push_back(p2.Add(calc.Out(sum.a)));
 			bounds.b.push_back(p2.Add(calc.Out(sum.b)));

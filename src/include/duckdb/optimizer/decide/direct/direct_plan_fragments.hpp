@@ -626,13 +626,11 @@ struct DirectLinearScore {
 	using Over = std::function<unique_ptr<Expression>(const Expression &)>;
 
 	vector<Term> terms;
-	//! What a message names for each reducer's share of the score (DirectNamesOf), and the objective, which the score
-	//! names once every share is fine and their sum is not.
+	//! What a message names for each reducer's share of the score (DirectNamesOf).
 	vector<DirectNumberNames> part_names;
-	//! What a message names for the score, the sum of every part's terms.
-	DirectNumberNames combined_names;
 	//! The rows each reducer reads (DirectObjectivePartKept), null for every row: any other row scores 0 in it.
 	vector<unique_ptr<Expression>> part_kept;
+	//! The objective, which the score names once every share is fine and their sum is not.
 	DecideClauseRef objective_written;
 
 	//! Reads the objective of `ir` as a signed sum of `SUM(coefficient * x)` terms; false when it is not one. Each

@@ -1062,14 +1062,9 @@ bool DecideCanonicalizer::MergeLikeAtoms(vector<Atom> &atoms) const {
 		if (like.empty() || total == 0.0 || !std::isfinite(total)) {
 			continue;
 		}
-		// The merged atom stands where the least expression holding every atom it replaces stands.
-		auto written = atoms[i].written;
-		for (auto j : like) {
-			written =
-			    message_names ? DecideCoveringLocation(message_names->text, written, atoms[j].written) : optional_idx();
-		}
+		// DeciDB made the merged atom, so it has no location of its own.
 		ScaleAtomBy(atoms[i], term, total);
-		atoms[i].written = written;
+		atoms[i].written = optional_idx();
 		for (auto it = like.rbegin(); it != like.rend(); ++it) {
 			atoms.erase(atoms.begin() + static_cast<int64_t>(*it));
 		}

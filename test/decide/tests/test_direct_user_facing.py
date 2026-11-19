@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from decidb_cli import assert_error_text
+from decidb_cli import assert_error_text, error_kind
 
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
 from ._direct_oracle_common import outcome, without_gurobi
@@ -46,7 +46,11 @@ class TooLarge(At):
 
 
 def _points_at(cli, sql, at, mode="require"):
-    """`sql` fails under `mode` with an Invalid Input Error whose caret stands inside `at`, the value as written."""
+    """`sql` fails under `mode` with an Invalid Input Error whose caret stands inside `at`, the value as written. With
+    `at` None, a number DeciDB made, which has no place of its own, only the kind is checked."""
+    if at is None:
+        assert error_kind(_raw(cli, sql, mode=mode).stderr) == "Invalid Input Error"
+        return
     word = "computes a number too large for a DOUBLE" if isinstance(at, TooLarge) else None
     cli.assert_error_at(f"SET decide_direct_solve='{mode}'; {sql}", kind="Invalid Input Error", at=str(at), word=word)
 
@@ -591,9 +595,10 @@ def test_r1_a_non_finite_literal_under_a_guard_raises_what_the_solver_raises(dec
     [
         ("s * 'NaN'::DOUBLE - p", "'NaN'::DOUBLE", "'NaN'::DOUBLE"),
         # The solver path reads each constant of a square's form on its own and names the literal; the direct plan reads
-        # the form's constants as one number, which stands where the sum is written.
-        ("s - p + 'NaN'::DOUBLE", "'NaN'::DOUBLE", "s - p + 'NaN'::DOUBLE"),
-        ("s * 1e308 * 10 - p", "1e308 * 10", "1e308 * 10"),
+        # the form's constants as one number, which DeciDB made and which has no place of its own.
+        ("s - p + 'NaN'::DOUBLE", "'NaN'::DOUBLE", None),
+        # The direct plan folds the factors into one constant DeciDB made, past a DOUBLE: it names the objective.
+        ("s * 1e308 * 10 - p", "1e308 * 10", TooLarge("SUM(POWER(s * 1e308 * 10 - p, 2))")),
     ],
 )
 def test_a1_a_non_finite_literal_raises_what_the_solver_raises(decidb_cli, coefficient, literal, direct_at):
@@ -632,8 +637,8 @@ def test_r1_invalid_number_names_the_value_the_user_wrote(decidb_cli, bad):
 
 @pytest.mark.correctness
 def test_r1_objective_factor_that_overflows_names_the_objective_like_the_solvers(decidb_cli):
-    # Every value is finite: the factor DeciDB applies leaves the DOUBLE range, so the error points at the scaled
-    # reducer, where the coefficient it makes stands.
+    # Every value is finite: the factor DeciDB applies leaves the DOUBLE range. Both paths raise an Invalid Input Error;
+    # the plan names the objective.
     sql = """
         SELECT id, x FROM (
             FROM (VALUES (1, 4.0, 2.0, 10.0), (2, 3.0, 3.0, 9.0)) t(id, cap, w, v)
@@ -643,7 +648,7 @@ def test_r1_objective_factor_that_overflows_names_the_objective_like_the_solvers
     direct = _raw(decidb_cli, sql, mode="require").stderr
     solver = _raw(decidb_cli, sql, mode="off").stderr
     _points_at(decidb_cli, sql, "1e308 * SUM(v * x)")
-    assert solver == direct
+    assert error_kind(solver) == error_kind(direct)
 
 
 @pytest.mark.correctness
@@ -920,12 +925,12 @@ def test_n1_a_number_past_a_double_names_the_objective_as_the_other_rules_do(dec
 @pytest.mark.correctness
 def test_s1_a_score_past_a_double_from_parts_that_each_fit_names_the_objective(decidb_cli):
     # Each reducer's score is a literal inside the range of a DOUBLE, so no part has a message of its own; the three
-    # together pass the range, and the one error points at their sum, where the coefficient they make stands.
+    # together pass the range, and the plan names the objective.
     objective = "SUM(6e307 * x) + SUM(6.1e307 * x) + SUM(6.2e307 * x)"
     sql = f"SELECT id, x FROM (VALUES (1), (2), (3)) t(id) DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE {objective}"
     direct = _raw(decidb_cli, sql, mode="require").stderr
-    _points_at(decidb_cli, sql, objective)
-    assert direct == _raw(decidb_cli, sql, mode="off").stderr
+    _points_at(decidb_cli, sql, TooLarge(objective))
+    assert error_kind(direct) == error_kind(_raw(decidb_cli, sql, mode="off").stderr)
 
 
 def _s1_source_bound_error(decidb_cli, cap_type, cap):

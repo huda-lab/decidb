@@ -350,8 +350,9 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 		total = total ? calc.Add(total, value) : value;
 		if (term.coefficient) {
 			DirectNameValue(
-			    names, decide.source_text, *term.coefficient,
-			    RenderDecideSource(*term.coefficient, decide.source_text, decide.keyed_scopes, &decide.keys));
+			    names, *term.coefficient, term.sign,
+			    RenderDecideSource(*term.coefficient, decide.source_text, decide.keyed_scopes, &decide.keys),
+			    DecideSpanLocation(decide.source_text, DecideUnguarded(*term.coefficient).GetQueryLocation()));
 		}
 	}
 	if (!total) {

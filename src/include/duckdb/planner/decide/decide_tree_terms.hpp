@@ -36,11 +36,8 @@ struct DecideTerm {
 	idx_t variable_index;               // Which DECIDE variable (or INVALID_INDEX for constants)
 	unique_ptr<Expression> coefficient; // Row-varying expression to evaluate later
 	int sign = 1;                       // +1 or -1, applied at coefficient evaluation time
-	//! The nearest located expression that holds the coefficient, for one with no location of its own
-	//! (DecideSplitTerm::ancestor).
-	optional_idx ancestor;
-	unique_ptr<Expression> filter; // Optional filter: the reducer's own `when`
-	bool avg_scale = false;        // True when this term came from AVG and needs 1/N scaling
+	unique_ptr<Expression> filter;      // Optional filter: the reducer's own `when`
+	bool avg_scale = false;             // True when this term came from AVG and needs 1/N scaling
 	//! An objective AVG's `by` key, into LogicalDecide::keys: it divides each row by
 	//! its group's count, not the objective's (a nested `sum(per k: avg(e) by (k))`, D81).
 	//! INVALID_INDEX for one group.
@@ -97,8 +94,6 @@ struct DecideProductGroup {
 	idx_t avg_group_key = DConstants::INVALID_INDEX;
 	//! SUM inside a reducer, NONE outside every reducer (counted once), as for DecideTerm. Read by the objective only.
 	LinearTermReduction reduction = LinearTermReduction::NONE;
-	//! As DecideTerm::ancestor, for the weight.
-	optional_idx ancestor;
 	//! As DecideTerm::child.
 	idx_t child = DConstants::INVALID_INDEX;
 };

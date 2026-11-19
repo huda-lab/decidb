@@ -181,11 +181,6 @@ optional_idx DecideSpanLocation(const DecideSourceText &text, optional_idx locat
 //! the query text.
 optional_idx DecideObjectiveLocation(const DecideSourceText &text);
 
-//! The expression of the query text that holds both expressions at `first` and `second` and no more than they need: the
-//! least EXPR span that contains both. A number DeciDB made from two of the user's (like terms added into one
-//! coefficient) stands where their sum stands. Invalid when either has no span.
-optional_idx DecideCoveringLocation(const DecideSourceText &text, optional_idx first, optional_idx second);
-
 //! Where a SUCH THAT clause, or the objective, stands in the query: what a message about a number the model computes
 //! across the clause's rows names (TOO_LARGE), and where its error points.
 struct DecideClauseRef {

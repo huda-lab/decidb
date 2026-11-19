@@ -56,10 +56,6 @@ struct DecideSplitFactor;
 //! One additive term: `sign * coefficient * ...`, where what follows the coefficient is its degree's part.
 struct DecideSplitTerm {
 	int sign = 1;
-	//! The nearest located expression that holds the term's coefficient, where the coefficient has no location of its
-	//! own (DecideReplaces): a message about a coefficient that is not finite names and points at it. Invalid when the
-	//! query text holds none.
-	optional_idx ancestor;
 	//! Decision-free; null means 1. A term of degree 0 is its coefficient.
 	unique_ptr<Expression> coefficient;
 	//! The term's degree in the decisions. An opaque term has the degree of its node.

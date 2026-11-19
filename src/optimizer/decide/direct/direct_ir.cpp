@@ -69,7 +69,6 @@ public:
 			// What a NULL guard protects stands in the query, as the render quotes it.
 			return DecideSpanLocation(decide.source_text, DecideUnguarded(expr).GetQueryLocation());
 		};
-		ir.source_text = &decide.source_text;
 		ir.decide_index = decide.decide_index;
 		D_ASSERT(decide.children.size() == 1 && decide.children[0]);
 		source_bindings = decide.SourceBindings();
@@ -382,7 +381,6 @@ private:
 		if (atom.scaled) {
 			part.scale = atom.scale.scale->Copy();
 			part.scale_divides = atom.scale.divides;
-			part.scale_place = DecideSpanLocation(decide.source_text, atom.scale.function->GetQueryLocation());
 			term = atom.scale.aggregate;
 		}
 		auto root = UnwrapDecideCasts(*term, decide.decide_index);

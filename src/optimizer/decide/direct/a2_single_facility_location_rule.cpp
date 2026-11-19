@@ -488,8 +488,7 @@ static bool ReadAbsolute(const DirectIR &ir, ClientContext &context, const Direc
                          DirectQuadraticPart &part, double &weight, double &slope) {
 	if (!DirectReadLinearPart(ir, context, part_ir, ir.objective.written, part.linear) ||
 	    !DirectObjectivePartKept(ir, part_ir, part.kept) ||
-	    !DirectReadAbsTerm(ir, part_ir.terms[0], ir.objective.written, part.squares.emplace_back(),
-	                       part_ir.scale_place)) {
+	    !DirectReadAbsTerm(ir, part_ir.terms[0], ir.objective.written, part.squares.emplace_back())) {
 		return false;
 	}
 	auto &read = part.squares[0];
