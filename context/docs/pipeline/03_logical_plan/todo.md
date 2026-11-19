@@ -28,14 +28,3 @@ files.
   serialized property go.
 - **Needs.** EXEC-19 (it moves `NameInputColumns` into the unbounded engine).
 - **Done when.** `DECIDB_VERIFY_SERIALIZER=1 ./test/decide/run_tests.sh -n 2 -k "unbounded or diagnose"` passes.
-
-## PLAN-10 — Check names and comments say "message"
-
-- **Problem.** A check no longer builds a message: `LogicalDecide::scope_checks` has a field `value` and
-  `DecideGroupBound::invalid` holds a BOOLEAN check, and the comments in `decide_tree_terms.hpp` and
-  `logical_decide.hpp` still say a check yields a message that is NULL on a valid row. `decide_tree_terms.hpp` is
-  misformatted at HEAD.
-- **Change.** The names and comments say what the BOOLEAN check does (it raises where its value is found), and the file
-  is formatted.
-- **Done when.** `make format-check` reports only `logical_operator.hpp`; `./test/decide/run_tests.sh -n 2 -k
-  "bound_side_tables"` passes.

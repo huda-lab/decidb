@@ -19,18 +19,13 @@ the owner rules first.
 - [ ] TEST-11 Solver-path error tests assert kind and location — testing/todo.md § TEST-11
 - [ ] TEST-12 Direct-path error tests assert kind and location — testing/todo.md § TEST-12 (needs: TEST-11)
 
-## 1.5 Filed cleanups (parallel: PARSE-4, BIND-6 | PLAN-8, PLAN-10 | OPT-30, OPT-31, OPT-32 | FW-8 | TEST-16, TEST-17 | PERF-27, EXEC-25 | INF-5)
+## 1.5 Filed cleanups (parallel: PARSE-4 | PLAN-8 | OPT-30, OPT-32 | TEST-16 | PERF-27, EXEC-25 | INF-5)
 - [ ] INF-5 Three label formatters no test reaches — diagnostics/infeasible/todo.md § INF-5
 - [ ] PARSE-4 Two span roles of a BETWEEN are never read — pipeline/01_parser/todo.md § PARSE-4
-- [ ] BIND-6 Two binder messages name the wrong fragment — pipeline/02_binder/todo.md § BIND-6
 - [ ] PLAN-8 The objective's canonical layer is compared as two renderings — pipeline/03_logical_plan/todo.md § PLAN-8
-- [ ] PLAN-10 Check names and comments say "message" — pipeline/03_logical_plan/todo.md § PLAN-10
 - [ ] OPT-30 Two value checks of one comparison — pipeline/05_optimizer/todo.md § OPT-30
-- [ ] OPT-31 A node built with no value keeps no location — pipeline/05_optimizer/todo.md § OPT-31
 - [ ] OPT-32 Optimizer labels are built on every query — pipeline/05_optimizer/todo.md § OPT-32
-- [ ] FW-8 A square's NaN is named differently on the two paths — direct_solve/framework/todo.md § FW-8
 - [ ] TEST-16 A frame reducer reads no row in no class — testing/todo.md § TEST-16
-- [ ] TEST-17 Branches of the new messages no test reaches — testing/todo.md § TEST-17
 - [ ] PERF-27 The pipeline profiler's error filter misses a refusal — performance/todo.md § PERF-27
 - [ ] EXEC-25 A failing coefficient is found at the first entry (decision) — pipeline/08_execution/todo.md § EXEC-25
 

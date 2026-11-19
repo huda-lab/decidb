@@ -37,13 +37,3 @@ Open coverage gaps, one section each. Coverage that exists is in [coverage.md](c
   one whose objective sum, objective max and constraint agree on the same rows. The test fails if the branch that
   drops the row is removed.
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "class_null_key or frame"` passes.
-
-## TEST-17 — Branches of the new messages no test reaches
-
-- **Problem.** Some arms raise a message no test reaches: a term beside a `MIN` or `MAX` that the rewrite does not read
-  (`'q' beside MIN or MAX is not supported`; 26 shapes were tried and none reaches it, and none is proved unreachable),
-  the internal error of `decide_linear_form.cpp` that expects a rewritten objective aggregate, the solver statuses
-  `infeasible or unbounded` and the iteration limit, the Gurobi model-load failures (`Failed to add ... to Gurobi`,
-  `GRBaddqconstr`) and the Gurobi environment failure.
-- **Change.** A test for each that a query can reach; the others are listed in `testing/coverage.md` as uncovered.
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "error or unbounded or infeasible"` passes.

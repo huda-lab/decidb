@@ -29,12 +29,3 @@ Language-surface work is owned by `../../language/` (the scopes:
   off and tested, and goes if it guards nothing.
 - **Needs.** BIND-4.
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "binder or integer"` passes.
-
-## BIND-6 — Two binder messages name the wrong fragment
-
-- **Problem.** A refusal of `3 <= CASE WHEN ... END` names `'3'`, the side that reads no decision, where the user's
-  mistake is the `CASE`. The outer-query refusal names a bare `'k'` for a column written `g.k`
-  (`DecideBinder::ThrowIfOuterColumn`).
-- **Change.** Each message quotes the node the user wrote: the whole side, and the column as qualified.
-- **Tests.** `assert_error_at` with `at=` the quoted fragment (`testing/oracle.md` §3.6).
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "binder or scope"` passes.

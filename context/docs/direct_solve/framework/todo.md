@@ -95,12 +95,3 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Recommendation.** 1, leaving `DirectRankedPrefix` alone: DuckDB's own column pruning is the standard tool, and it
   removes a case list.
 - **Done when.** `DECIDB_TEST_DIRECT_SOLVE=off` and the default pass `./test/decide/run_tests.sh -n 2 -k "direct"`.
-
-## FW-8 — A square's NaN is named differently on the two paths
-
-- **Problem.** A NaN in a square's operand is named on the solver path by the value `b` it comes from, or as too large
-  for a DOUBLE when it is a sum; a direct plan points at the form. The two print different carets for one query.
-- **Change.** Both paths name the value where it stands, as `'b' is NaN or infinite on some rows`, and say too large
-  only for a number DeciDB accumulates.
-- **Done when.** A direct and a solver run of one square print one text and one caret;
-  `./test/decide/run_tests.sh -n 2 -k "invalid_value or direct"` passes.

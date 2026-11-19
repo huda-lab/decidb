@@ -348,12 +348,9 @@ every non-interactive query it runs through shell startup commands, with the pra
 own result redirected away. Parsed DECIDE statements reparse from `ToString()`, with no
 second solve; see [`../01_parser/done.md`](../01_parser/done.md) §5. The two PTY-driven
 interactive continuation cases are outside DuckDB's materializing verifier. Model-dump
-assertions select one complete build when verifier paths append equivalent copies. The parsed verifier does not
-re-parse an `EXPLAIN` statement (`ClientContext::PendingStatementOrPreparedStatement`, `../architecture.md` § Edits to
-existing DuckDB code); the `SELECT` inside is round-tripped by the plain `SELECT` tests.
-
-**Ruling (owner, 2026-11-19).** The verifier does not re-parse `EXPLAIN`. A re-parsed `EXPLAIN` points its error into the
-re-printed text, which is not the query the error is shown against, so the caret is lost.
+assertions select one complete build when verifier paths append equivalent copies. The parsed verifier re-parses an
+`EXPLAIN` from its printed text, so an error under `EXPLAIN` loses its caret in this mode; tests that compare an
+`EXPLAIN` error with a run's compare the error's first line.
 
 ---
 

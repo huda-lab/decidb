@@ -154,11 +154,6 @@ any query that raises through them, and a standard query returns the same rows:
   `BoundColumnRefExpression` it records, so the refusal of a correlated column that survives binding points at the
     column. Reason: the column is a core binder record, and DuckDB's own correlated-column handling reads none of the new
   field.
-- **The parsed verifier skips `EXPLAIN` (`main/client_context.cpp`).** `PendingStatementOrPreparedStatement` does not
-  re-parse an `EXPLAIN_STATEMENT` under `verify_serializer`. Reason: an `EXPLAIN` runs its inner statement's binding, and
-  an error there points into the text the statement was parsed from (`query_location`); a statement parsed again from its
-  re-printed text points into that text, which is not the query the error is shown against, so the caret is lost. Plain
-  DuckDB loses it too. Verification only: the `SELECT` inside is round-tripped by the plain `SELECT` tests.
 
 
 

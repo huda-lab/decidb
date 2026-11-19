@@ -29,6 +29,12 @@ run before solving are in [guide.md §7.3](guide.md#73-data-checks).
 - **A node DeciDB built** from the user's text takes the position of the text it replaces (the `==` and arithmetic
   rewrites of the canonicalizer, like-term merges, a bound's reducer). A message about one prints the caret of that
   text. A node with no such text prints no caret.
+- **A caret is given when it is at hand.** Where the expression an error is raised on already carries a location, the
+  message points at it; where it does not, the message gives the kind and the text and no caret. No location is
+  threaded, stored or computed for a caret alone.
+
+  **Ruling (owner, 2026-11-19).** Name the kind of error, and give details when possible. A message with the right
+  kind is finished: no task is filed to improve a caret or a wording.
 - **Which of several errors is reported is not owed.** The solver path raises the first error it reaches, and so does
   the direct path (R10, R11, `../../opa_rewrite/decisions.md`). A parallel scan can reach a different failing row on
   another run.

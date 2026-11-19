@@ -79,15 +79,6 @@ files.
 - **Change.** One comparison, shared by both, which ignores the place.
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "abs or bound_side_tables"` passes.
 
-## OPT-31 — A node built with no value keeps no location
-
-- **Problem.** A builder that makes a node with no value of its own gives it no location: `INTEGER(1)` and `INTEGER(0)`
-  in `decide_product_form`, the `norm_in` L0 links, `rewrite_scoped`'s `sqrt(w) * e` and `power`, the scale, negate and
-  add of `decide_tree.cpp`, `RebindMultiply`, `ScaleFrameColumn`. A NaN message about a value one of them holds finds no
-  caret. A quotient inside a sum of several terms is not tested.
-- **Change.** Each takes the location of the node it replaces (`DecideReplaces`), and a test reaches each.
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "nan or finite or invalid_value"` passes.
-
 ## OPT-32 — Optimizer labels are built on every query
 
 - **Problem.** `minmax_clause_labels`, `aux_var_expressions` and `link.label` are display state built for every clause,
