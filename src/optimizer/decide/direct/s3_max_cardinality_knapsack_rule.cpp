@@ -308,8 +308,7 @@ private:
 		if (HasFixes()) {
 			fixed_weight = p1.Add(calc.If(FixedOne(state), weight_value, calc.Constant(Value(LogicalType::DOUBLE))));
 		}
-		if (auto check =
-		        DirectCheckNumber(optimizer, weight, condition.budget.names[0], values, source_bindings, p1.index)) {
+		if (auto check = DirectCheckNumber(optimizer, weight, condition.budget.names[0], values)) {
 			layout.checks_above.push_back(std::move(check));
 		}
 		layout.rank_key = weight;

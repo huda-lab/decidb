@@ -519,8 +519,8 @@ private:
 			auto slope =
 			    DirectOnKeptRows(calc, eligible, calc.Wrap(DirectSumOf(optimizer, condition.slope.linear, over_state)));
 			raw.slope = p1.Add(calc.Out(slope));
-			if (auto check = DirectCheckNumber(optimizer, raw.slope, condition.slope.linear_names,
-			                                   condition.slope.linear, source_bindings, p1.index)) {
+			if (auto check =
+			        DirectCheckNumber(optimizer, raw.slope, condition.slope.linear_names, condition.slope.linear)) {
 				raw.checks.push_back(std::move(check));
 			}
 		}

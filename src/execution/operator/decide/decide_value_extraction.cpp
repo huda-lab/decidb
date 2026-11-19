@@ -128,12 +128,6 @@ void DecideEvaluateWindow(ClientContext &context, unique_ptr<ExpressionExecutor>
 	VectorOperations::Copy(out, values, count, 0, offset);
 }
 
-//! Whether part `part` is a finite number or NULL on row `row` of the window, the one row a failing coefficient reads.
-static bool IsFiniteOnRow(const DecideValueParts &parts, idx_t part, idx_t row) {
-	auto value = parts.value_at(part, row);
-	return value.IsNull() || std::isfinite(value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>());
-}
-
 template <class T>
 static void CollectNan(Vector &values, idx_t count, vector<idx_t> &entries) {
 	UnifiedVectorFormat format;
@@ -167,70 +161,16 @@ Value DecideNanValue(const LogicalType &type) {
 	return type.id() == LogicalTypeId::FLOAT ? Value::FLOAT(float(nan)) : Value::DOUBLE(nan);
 }
 
-void ThrowInvalidValue(const ValueSource &source, idx_t row) {
-	auto refuse = [&](DecideValueRole role, const Expression &value) {
-		// What a NULL guard protects stands in the query, as the render quotes it.
-		return DecideInvalidValueError(
-		    role, RenderDecideSource(value, source.names),
-		    DecideSpanLocation(source.names.text, DecideUnguarded(value).GetQueryLocation()));
-	};
-	auto too_large = InvalidInputException(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, source.clause));
-	if (source.role != DecideValueRole::COEFFICIENT) {
-		throw refuse(source.role, source.value);
+void ThrowInvalidValue(const ValueSource &source) {
+	// What a NULL guard protects stands in the query, as the render quotes it.
+	auto &value = DecideUnguarded(source.value);
+	// A coefficient that reads no column is a constant: it fails on every row, so no `when` skips it.
+	auto role = source.role;
+	if (role == DecideValueRole::COEFFICIENT && value.IsFoldable()) {
+		role = DecideValueRole::CONSTANT;
 	}
-	// A constant that SQL computes as NaN or infinite (`1 / 0`, `'Infinity'`) is the user's value, not DeciDB's
-	// arithmetic past a DOUBLE. It fails on every row, so no `when` skips it and it is named before any column's value.
-	// A literal the parser reads past the DOUBLE range (`2e308`) is a number too large, and names its clause.
-	auto is_non_finite_constant = [&](const Expression &value) {
-		double number;
-		return value.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT && value.IsFoldable() &&
-		       TryEvaluateFoldableDouble(source.context, value, number, FOLD_CATCH_ALL) && !std::isfinite(number);
-	};
-	if (!source.parts || source.parts->values.empty()) {
-		if (source.value.IsFoldable()) {
-			throw is_non_finite_constant(source.value) ? refuse(DecideValueRole::CONSTANT, source.value) : too_large;
-		}
-		throw refuse(DecideValueRole::COEFFICIENT, source.value);
-	}
-	auto &parts = source.parts->values;
-	for (auto part : parts) {
-		if (is_non_finite_constant(*part)) {
-			throw refuse(DecideValueRole::CONSTANT, *part);
-		}
-	}
-	for (idx_t part = 0; part < parts.size(); part++) {
-		if (!parts[part]->IsFoldable() && !IsFiniteOnRow(*source.parts, part, row)) {
-			throw refuse(DecideValueRole::COEFFICIENT, *parts[part]);
-		}
-	}
-	// A divisor that is 0 on this row makes the value infinite: the user's own number, as a column that holds it is.
-	// Every other number the parts make that is not finite is DeciDB's own arithmetic past the DOUBLE range.
-	std::function<bool(const Expression &)> divides_by_zero = [&](const Expression &expression) {
-		auto &value = DecideUnguarded(expression);
-		if (value.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-			auto &function = value.Cast<BoundFunctionExpression>();
-			if (function.function.name == "/" && function.children.size() == 2) {
-				for (idx_t part = 0; part < parts.size(); part++) {
-					if (!parts[part]->Equals(DecideUnguarded(*function.children[1]))) {
-						continue;
-					}
-					// A NULL divisor is not 0: the value is NULL there, and skipped.
-					if (source.parts->value_at(part, row).DefaultCastAs(LogicalType::DOUBLE) == Value::DOUBLE(0.0)) {
-						return true;
-					}
-				}
-			}
-		}
-		bool found = false;
-		ExpressionIterator::EnumerateChildren(
-		    value, [&](const Expression &child) { found = found || divides_by_zero(child); });
-		return found;
-	};
-	if (divides_by_zero(source.value)) {
-		throw refuse(source.value.IsFoldable() ? DecideValueRole::CONSTANT : DecideValueRole::COEFFICIENT,
-		             source.value);
-	}
-	throw too_large;
+	throw DecideInvalidValueError(role, RenderDecideSource(source.value, source.names),
+	                              DecideSpanLocation(source.names.text, value.GetQueryLocation()));
 }
 
 void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign, vector<double> &out, const ValueSource &source,
@@ -269,7 +209,7 @@ void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign, vector<do
 		}
 		double dv = data[idx];
 		if (allow_infinite ? std::isnan(dv) : !std::isfinite(dv)) {
-			ThrowInvalidValue(source, i);
+			ThrowInvalidValue(source);
 		}
 		out.push_back(dv * sign);
 	}

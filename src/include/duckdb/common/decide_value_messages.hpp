@@ -25,14 +25,13 @@
 namespace duckdb {
 
 //! What a number the model reads is: a coefficient must be finite, and a bound only has to be a number (an infinite
-//! bound means "no bound" or "nothing satisfies it"). TOO_LARGE is no number read but one the model computes from
-//! finite ones: like coefficients merged into one, a factor applied, a square, the fixed terms moved to the bound side.
-//! Past a DOUBLE it names the clause, as no row holds it. A coefficient computed from values a column holds is checked
-//! once, on the result; a row where it is not finite names the first of those values that is not finite (COEFFICIENT),
-//! and the clause when each is (TOO_LARGE). The solver path (ThrowInvalidValue) and the direct-solve plans
-//! (DirectNumberMessage) apply the one rule. CONSTANT is a coefficient that is not a column's value but a constant, NaN
-//! or infinite itself (`1 / 0`, an
-//! `'Infinity'` literal): SQL computes it, DeciDB's arithmetic did not, and no row can be skipped.
+//! bound means "no bound" or "nothing satisfies it"). A coefficient that is not finite is named where it stands in the
+//! query: its own expression, or, for one DeciDB made from the user's text (like terms added into one, a factor
+//! applied, a quotient's reciprocal), the text it replaces (DecideReplaces). COEFFICIENT is a value of some rows;
+//! CONSTANT reads no column (`1 / 0`, an `'Infinity'` literal), so no row can be skipped. TOO_LARGE is no number read
+//! but one the model computes across rows (a sum over rows, a square, the fixed terms moved to the bound side), which
+//! no expression of the query holds: past a DOUBLE it names the clause. The solver path (ThrowInvalidValue) and the
+//! direct-solve plans (DirectNumberMessage) apply the one rule.
 enum class DecideValueRole : uint8_t { COEFFICIENT, BOUND, TOO_LARGE, CONSTANT };
 
 //! The error for a NaN or infinite value, the one text every site that refuses one raises. `written` is the value as

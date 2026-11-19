@@ -2744,8 +2744,10 @@ class TestNonFiniteEdit:
     ):
         refused = decidb_cli.execute_raw(_non_finite_query(rows, "x <= 10 " + tail.format(v=written)))
         assert refused.returncode != 0, refused.stderr
+        # A coefficient the frame is multiplied into has no place of its own: it stands where the product stands.
+        at = f"x * {written}" if role == "coefficient" and "from previous to next" in written else written
         decidb_cli.assert_error_at(
-            _non_finite_query(rows, "x <= 10 " + tail.format(v=written)), kind="Invalid Input Error", at=written
+            _non_finite_query(rows, "x <= 10 " + tail.format(v=written)), kind="Invalid Input Error", at=at
         )
         test = f"NOT isnan({written})" if role == "bound" else f"isfinite({written})"
         edit = f"CASE WHEN {test} THEN {written} END"

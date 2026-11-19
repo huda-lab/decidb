@@ -952,11 +952,13 @@ def test_s3_a_fixed_value_that_raises_on_a_kept_row_raises_the_solvers_error(dec
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_s3_constant_weights_that_add_up_past_a_double_raise_the_solvers_error(decidb_cli):
-    # Each weight is finite and the like terms make one that is not, which the solver refuses in its own words.
+    # Each weight is finite and the like terms make one that is not, which the solver refuses where the sum is written.
     sql = _problem(_SOURCE.format(w="3.0", cap="9.0"), "SUM(w*x + 1e308*x + 1e308*x) <= 9")
     with pytest.raises(DeciDBCliError) as solver_error:
         _run(decidb_cli, sql, "off")
-    assert "computes a number too large for a DOUBLE" in str(solver_error.value)
+    decidb_cli.assert_error_at(
+        f"SET decide_direct_solve='off'; {sql}", kind="Invalid Input Error", at="w*x + 1e308*x + 1e308*x"
+    )
     with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
     assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"

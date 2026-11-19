@@ -63,15 +63,14 @@ DecideTreeInjection ReadDecideTreeInjection(const DecideTree &tree, const Decide
 class DecideTreeColumns {
 public:
 	DecideTreeColumns(const DecideTree &tree, const DecideDescent &descent, ClientContext &context,
-	                  const DecideSourceNames &names, std::function<string(idx_t source_clause_id)> written_clause,
-	                  const DecideDebug &debug);
+	                  const DecideSourceNames &names, const DecideDebug &debug);
 	~DecideTreeColumns();
 
 	//! `program` on each of `node`'s entries `reads` marks, as stage 08 reads a coefficient or a bound
 	//! (ExtractDoubleColumn): signed, and 0 on the others and where it is NULL, which `nulls` marks; with no `nulls` a
 	//! NULL is an internal error, as for an objective's coefficient. A value or an error on an entry it does not read
-	//! is never read. A coefficient DeciDB composed names the first of its parts (DecideProgram::parts) that is not
-	//! finite where it fails.
+	//! is never read. A value that is not finite is named where its expression stands in the query
+	//! (ThrowInvalidValue).
 	vector<double> Numbers(idx_t node, idx_t program, const vector<bool> &reads, vector<bool> *nulls);
 	//! Of the entries of `node` that `reads` marks, those at which `program` is NULL, which is what a definition
 	//! reads for its absence on the rows it keeps, and what its evaluation raised there, raised: no value is checked,
@@ -127,7 +126,6 @@ private:
 	const DecideDescent &descent;
 	ClientContext &context;
 	const DecideSourceNames &names;
-	std::function<string(idx_t)> written_clause;
 	vector<unique_ptr<NodeColumns>> nodes;
 	DecideAbsence absence;
 	const vector<DecideFrameMap> *frame_maps = nullptr;

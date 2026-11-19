@@ -624,6 +624,8 @@ struct DirectLinearScore {
 	//! What a message names for each reducer's share of the score (DirectNamesOf), and the objective, which the score
 	//! names once every share is fine and their sum is not.
 	vector<DirectNumberNames> part_names;
+	//! What a message names for the score, the sum of every part's terms.
+	DirectNumberNames combined_names;
 	//! The rows each reducer reads (DirectObjectivePartKept), null for every row: any other row scores 0 in it.
 	vector<unique_ptr<Expression>> part_kept;
 	string objective_written;

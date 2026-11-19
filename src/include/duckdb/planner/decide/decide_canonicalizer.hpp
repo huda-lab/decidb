@@ -404,6 +404,10 @@ private:
 		//! The term when Decompose built it rather than borrowed it (a MIN or MAX whose constant addends moved
 		//! beside it); `expr` points into it.
 		unique_ptr<Expression> owned;
+		//! Where the user wrote what the atom is the value of, set where it is that value alone (no factor distributed
+		//! onto it, no sign peeled off it): the rebuilt `scale * expr` is equal to it, so it stands there
+		//! (DecideReplaces). Like atoms merged into one stand where the least expression holding them all does.
+		optional_idx written;
 	};
 
 	//! Split an expression into signed additive terms. Descends through `+`,

@@ -117,6 +117,9 @@ struct DirectPart {
 	//! A query-wide factor canonicalization left on the reducer; null for none.
 	unique_ptr<Expression> scale;
 	bool scale_divides = false;
+	//! Where the scaled node (`2 * SUM(...)`) stands in the query; invalid without a scale or where the text holds no
+	//! place for it.
+	optional_idx scale_place;
 	DirectReducer reducer = DirectReducer::NONE;
 	//! The reducer's `by` key (`sum(x) by (g)`): the groups it reduces, one value each. Empty without one. Every
 	//! reducer of an aggregate clause shares it, and a clause's rows are one constraint per group.
@@ -215,6 +218,8 @@ struct DirectIR {
 	//! Where an expression of the source stands in the query, as the error that names it points (invalid for one the
 	//! query text holds no place for).
 	std::function<optional_idx(const Expression &)> place;
+	//! The query's text, which a number made of several values names the least expression holding (DirectNameValue).
+	const DecideSourceText *source_text = nullptr;
 	idx_t decide_index;
 	vector<DirectIRDecision> decisions;
 	vector<DirectIRKeyedScope> keyed_scopes;

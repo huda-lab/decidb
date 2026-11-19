@@ -31,6 +31,12 @@ class Optimizer;
 
 namespace decide_rewrite {
 
+//! Adds `check`, a message that raises the error of a value the model cannot read (VALUE_IS_VALID), to the DECIDE
+//! node's scope checks, unless a check of the same value stands there. Two checks are of one value when they are equal
+//! but for where each points (the place of a NaN or infinite value's error), so a value shared by two clauses is
+//! checked once, and the place the first raises at stays (the first error reached is the one raised).
+void AddValueCheck(LogicalDecide &decide, unique_ptr<Expression> check);
+
 //! Map an aggregate's SQL name onto the objective aggregate enum.
 ObjectiveAggregateType StrToAggType(const string &name);
 

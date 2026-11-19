@@ -124,10 +124,9 @@ struct DecideTreeColumns::NodeColumns {
 };
 
 DecideTreeColumns::DecideTreeColumns(const DecideTree &tree, const DecideDescent &descent, ClientContext &context,
-                                     const DecideSourceNames &names, std::function<string(idx_t)> written_clause,
-                                     const DecideDebug &debug)
-    : tree(tree), descent(descent), context(context), names(names), written_clause(std::move(written_clause)),
-      nodes(tree.nodes.size()), absence(tree), injection(ReadDecideTreeInjection(tree, debug)) {
+                                     const DecideSourceNames &names, const DecideDebug &debug)
+    : tree(tree), descent(descent), context(context), names(names), nodes(tree.nodes.size()), absence(tree),
+      injection(ReadDecideTreeInjection(tree, debug)) {
 }
 
 DecideTreeColumns::~DecideTreeColumns() {
@@ -353,47 +352,15 @@ vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, const vector<bool
 	auto &column = *Computed(node).programs[p].values;
 	const idx_t count = descent.Containers()[node].Count();
 	D_ASSERT(reads.size() == count && (!nulls || nulls->size() == count));
-	// The entry a message reads a part on: the window's first, then the one entry a retry reads.
-	idx_t base = 0;
-	DecideValueParts composed_of;
-	for (auto part : program.parts) {
-		composed_of.values.push_back(tree.nodes[node]->programs[part].written.get());
-	}
-	composed_of.value_at = [&](idx_t part, idx_t i) {
-		// A part is computed where its coefficient is.
-		return Computed(node).programs[program.parts[part]].values->GetValue(base + i);
-	};
-	// A coefficient's message names its clause where DeciDB's own arithmetic left the DOUBLE range, as the clause is
-	// written: a helper's member names the clause that first read the helper (DecideNode::value_link_clause); a bound's
-	// never.
-	auto &owner = *tree.nodes[program.owner];
-	const ValueSource source {
-	    program.role == DecideProgramRole::COEFFICIENT ? DecideValueRole::COEFFICIENT : DecideValueRole::BOUND,
-	    *program.written,
-	    names,
-	    context,
-	    written_clause(owner.link == DConstants::INVALID_INDEX ? owner.source_clause_id : owner.value_link_clause),
-	    &composed_of};
+	const ValueSource source {program.role == DecideProgramRole::COEFFICIENT ? DecideValueRole::COEFFICIENT
+	                                                                         : DecideValueRole::BOUND,
+	                          *program.written, names};
 	vector<double> out;
 	out.reserve(count);
 	for (idx_t start = 0; start < count; start += STANDARD_VECTOR_SIZE) {
 		const idx_t size = MinValue<idx_t>(STANDARD_VECTOR_SIZE, count - start);
 		Vector window(column, start, start + size);
-		try {
-			base = start;
-			ExtractDoubleColumn(window, size, program.sign, out, source, nulls, &reads, start);
-		} catch (std::exception &) {
-			// The entry that fails, which the window raises first: each entry of the window alone, so the message
-			// reads that entry's own parts. It raises at once.
-			for (idx_t i = 0; i < size; i++) {
-				Vector one(window.GetType(), 1);
-				VectorOperations::Copy(window, one, i + 1, i, 0);
-				base = start + i;
-				ExtractDoubleColumn(one, 1, program.sign, out, source, nulls, &reads, start + i);
-			}
-			throw InternalException("DECIDE tree: %s fails on its window and on no entry of it",
-			                        program.written->ToString());
-		}
+		ExtractDoubleColumn(window, size, program.sign, out, source, nulls, &reads, start);
 	}
 	return out;
 }

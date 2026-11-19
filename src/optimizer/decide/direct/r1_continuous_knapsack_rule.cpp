@@ -65,6 +65,8 @@ struct Condition final : DirectApplicabilityCondition {
 	//! The objective as a message names it: an item's value, its parts' values summed and scaled, past a DOUBLE names
 	//! it, as the solver path names the coefficient it merges.
 	string objective_written;
+	//! The query's text, which a number made of several parts names the least expression holding (DirectNameMerge).
+	const DecideSourceText *source_text = nullptr;
 };
 
 class Rule final : public DirectSolveRule {
@@ -244,6 +246,7 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 		condition.objective_kept.push_back(std::move(kept));
 	}
 	condition.objective_written = ir.objective.written;
+	condition.source_text = ir.source_text;
 	return true;
 }
 
@@ -803,8 +806,7 @@ private:
 			}
 		}
 		auto number = [&](ColumnBinding binding, const DirectNumberNames &names) {
-			return DirectNumberMessage(calc, DoubleColumn(binding), names,
-			                           [&](const Expression &input) { return OverSource(input, raw.rows.carried); });
+			return DirectNumberMessage(calc, DoubleColumn(binding), names);
 		};
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
 			auto &clause = condition.clauses[j];
@@ -1194,9 +1196,14 @@ private:
 		}
 		// An item's value sums its parts' values, each checked before: past a DOUBLE it names the objective.
 		vector<ColumnBinding> value_messages;
-		for (auto &item : items.columns.decisions) {
+		for (idx_t d = 0; d < items.columns.decisions.size(); d++) {
+			DirectNumberNames merged;
+			merged.clause = condition.objective_written;
+			for (auto &part : condition.objective) {
+				DirectNameMerge(merged, *condition.source_text, part.names[d]);
+			}
 			value_messages.push_back(aggregate.Add(DirectHashAggregate(
-			    optimizer, calc, "min", DirectNumberMessage(calc, item.v, condition.objective_written))));
+			    optimizer, calc, "min", DirectNumberMessage(calc, items.columns.decisions[d].v, merged))));
 		}
 		for (auto message : items.columns.computed_messages) {
 			value_messages.push_back(

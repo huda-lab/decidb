@@ -11,13 +11,11 @@
 
 #include "duckdb/planner/decide/decide_tree.hpp"
 
-#include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
-#include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
@@ -197,44 +195,44 @@ public:
 	    : context(context), op(op), tree(tree), record_nodes(record_nodes) {
 	}
 
-	//! A program on `site` computing `expression`, of `owner`'s body; returns its index on the site. A coefficient
-	//! DeciDB composed gets a program for each value of the query it is composed of (DecideProgram::parts).
-	idx_t Add(idx_t site, DecideProgramRole role, const Expression &expression, idx_t owner, int sign = 1) {
+	//! A program on `site` computing `expression`, of `owner`'s body; returns its index on the site. A message about a
+	//! value that is not finite names `written`, and one with no location of its own stands where `ancestor`, the
+	//! nearest located expression that holds it, does.
+	idx_t Add(idx_t site, DecideProgramRole role, const Expression &expression, idx_t owner, int sign = 1,
+	          optional_idx ancestor = optional_idx()) {
 		auto &owner_body = tree.nodes[owner]->compiled;
 		DecideProgram program;
 		program.role = role;
 		program.expression = Translate(site, expression, owner_body);
 		program.written = expression.Copy();
+		// What a NULL guard protects is the value a message names (DecideUnguarded). `written` serves messages alone.
+		auto &named = const_cast<Expression &>(DecideUnguarded(*program.written)); // NOLINT
+		if (!named.GetQueryLocation().IsValid()) {
+			named.SetQueryLocation(ancestor);
+		}
 		program.sign = sign;
 		program.owner = owner;
 		auto &programs = tree.nodes[site]->programs;
 		programs.push_back(std::move(program));
-		const auto index = programs.size() - 1;
-		if (role == DecideProgramRole::COEFFICIENT) {
-			vector<idx_t> parts;
-			for (auto *part : WrittenParts(expression)) {
-				parts.push_back(Add(site, DecideProgramRole::VALUE, *part, owner));
-			}
-			tree.nodes[site]->programs[index].parts = std::move(parts);
-		}
-		return index;
+		return programs.size() - 1;
 	}
 
 	//! A term's coefficient on its site.
 	void AddTerm(const DecideTerm &term, DecideTermSite &site, idx_t owner) {
-		site.program = Add(site.node, DecideProgramRole::COEFFICIENT, *term.coefficient, owner, term.sign);
+		site.program =
+		    Add(site.node, DecideProgramRole::COEFFICIENT, *term.coefficient, owner, term.sign, term.ancestor);
 	}
 
 	//! A product group's weight, none when stage 05 left it out (1), then each term of its forms.
 	void AddGroup(const DecideProductGroup &group, DecideGroupSites &sites, idx_t owner) {
 		if (group.weight) {
-			sites.weight.program =
-			    Add(sites.weight.node, DecideProgramRole::COEFFICIENT, *group.weight, owner, group.sign);
+			sites.weight.program = Add(sites.weight.node, DecideProgramRole::COEFFICIENT, *group.weight, owner,
+			                           group.sign, group.ancestor);
 		}
 		auto add_form = [&](const vector<DecideTerm> &terms, vector<DecideTermSite> &form) {
 			for (idx_t t = 0; t < terms.size(); t++) {
-				form[t].program =
-				    Add(form[t].node, DecideProgramRole::COEFFICIENT, *terms[t].coefficient, owner, terms[t].sign);
+				form[t].program = Add(form[t].node, DecideProgramRole::COEFFICIENT, *terms[t].coefficient, owner,
+				                      terms[t].sign, terms[t].ancestor);
 			}
 		};
 		add_form(group.left, sites.left);
@@ -326,47 +324,6 @@ private:
 		program.written = expression.Copy();
 		node.programs.push_back(std::move(program));
 		return node.programs.size() - 1;
-	}
-
-	//! The values of the query `coefficient` is composed of, in reading order: the outermost expressions of it that the
-	//! query text holds a place for (a node quotes as written where it stands, as RenderDecideSource reads it), or that
-	//! are one constant DeciDB re-expressed (CollectWrittenParts); none when `coefficient` itself is one of those. A
-	//! node DeciDB built to combine values (a merged sum, a product with a factor) stands nowhere, so its operands are
-	//! read in its place.
-	vector<const Expression *> WrittenParts(const Expression &coefficient) const {
-		vector<const Expression *> parts;
-		CollectWrittenParts(coefficient, parts);
-		if (parts.size() == 1 && parts[0] == &DecideUnguarded(coefficient)) {
-			parts.clear();
-		}
-		return parts;
-	}
-
-	//! Whether `expression` is a sum, a difference or a quotient DeciDB built: like terms added into one coefficient,
-	//! or a reciprocal. Each is the model's own number, and its operands are the user's.
-	static bool IsComputed(const Expression &expression) {
-		if (expression.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
-			return false;
-		}
-		auto &name = expression.Cast<BoundFunctionExpression>().function.name;
-		return name == "+" || name == "-" || name == "/";
-	}
-
-	bool StandsInQuery(const Expression &expression) const {
-		return DecideSpanLocation(op.source_text, expression.GetQueryLocation()).IsValid();
-	}
-
-	void CollectWrittenParts(const Expression &guarded, vector<const Expression *> &parts) const {
-		// What a NULL guard protects is the value; the guard's own 0 is the engine's.
-		auto &expression = DecideUnguarded(guarded);
-		// A constant DeciDB rebuilt (a product of the user's literals) is the user's constant in another form: one
-		// value. A sum or a quotient it computed is its own number: each operand is read as the user wrote it.
-		if (StandsInQuery(expression) || (expression.IsFoldable() && !IsComputed(expression))) {
-			parts.push_back(&expression);
-			return;
-		}
-		ExpressionIterator::EnumerateChildren(expression,
-		                                      [&](const Expression &child) { CollectWrittenParts(child, parts); });
 	}
 
 	//! A source column's place in `site`'s layout: among its carried columns, else among its program columns, added.

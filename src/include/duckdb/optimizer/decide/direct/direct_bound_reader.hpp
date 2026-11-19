@@ -39,6 +39,9 @@ constexpr double NEGATIVE_INFINITY = -std::numeric_limits<double>::infinity();
 struct DirectSignedValue {
 	int sign = 1;
 	unique_ptr<Expression> expr;
+	//! Where a message about the value points when that is not where `expr` is written (DirectNameValue); invalid
+	//! for a value that stands at its own place.
+	optional_idx place;
 };
 
 //! One bound the plan evaluates per row, under an optional `when`. A bound the solver folds into the variable's box is
@@ -184,6 +187,8 @@ struct DirectLinearTerm {
 	idx_t decision = 0;
 	int sign = 1;
 	unique_ptr<Expression> coefficient;
+	//! As DirectSignedValue::place.
+	optional_idx place;
 };
 
 //! One part `sign * scale * SUM(...)` of an objective or of a constraint's left side, with the part's constant factor
@@ -277,24 +282,25 @@ struct DirectWeightedForm {
 
 //! Reads a CONSTANT term of a part. False when its value is not a numeric value of the source row.
 bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause,
-                            DirectConstantTerm &out);
+                            DirectConstantTerm &out, optional_idx scale_place = optional_idx());
 
 //! Reads the terms of a linear form (the factor of a square, or what an absolute value holds): linear terms of one
 //! declared decision, and constants, each with a coefficient that is a numeric value of the source row. False when a
 //! term is of another kind, the form names no decision or two, or a value cannot be proved.
 bool DirectReadLinearForm(const DirectIR &ir, const vector<DecideSplitTerm> &form, const string &clause,
-                          DirectLinearForm &out);
+                          DirectLinearForm &out, optional_idx scale_place = optional_idx());
 
 //! Reads a square of a part: a linear form squared under a coefficient. False when the form is not linear in one
 //! decision, or the coefficient or a value in the form is not a numeric value of the source row. A weight read from the
 //! data is read like any other; a rule that needs a constant one folds it (DirectFoldConstantSum).
 bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause,
-                          DirectWeightedForm &out);
+                          DirectWeightedForm &out, optional_idx scale_place = optional_idx());
 
 //! Reads an absolute value of a part, `ABS(inner)` under a coefficient, into the same form a square is read into.
 //! DirectReadQuadraticPart does not call it, so a rule that does not take an absolute loss declines one without a check
 //! of its own. `term` is an `ABS`. False when its form or coefficient cannot be read.
-bool DirectReadAbsTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause, DirectWeightedForm &out);
+bool DirectReadAbsTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause, DirectWeightedForm &out,
+                       optional_idx scale_place = optional_idx());
 
 //! The signed sum of `values` as one constant, with a NULL guard read through (a row it skips reads 0, as coefficient
 //! 0), so a term's weight `DirectWeightedForm::weight` or slope `DirectLinearForm::linear` folds to the number every

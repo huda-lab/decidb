@@ -635,8 +635,7 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	// Bottom-up: each node's programs over its entries, written as stage 06 reads them.
 	phase.Next("execution.tree_model");
 	const auto names = Names();
-	DecideTreeColumns columns(
-	    *tree, *descent, context, names, [&](idx_t clause) { return WrittenClause(clause); }, debug);
+	DecideTreeColumns columns(*tree, *descent, context, names, debug);
 	// The frames' timelines and the columns they read, before any program reads one (language/guide.md §5.6).
 	columns.ReadFrames(frames, num_rows, gstate.frame_maps);
 	// What the data checks and the data reducers no clause reads raise, before any clause is read.

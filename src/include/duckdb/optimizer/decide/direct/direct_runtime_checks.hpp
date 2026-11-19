@@ -3,6 +3,7 @@
 #include <functional>
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/planner/column_binding.hpp"
@@ -43,29 +44,33 @@ ExprPtr DirectBelowNormalRange(const ExpressionBuilder &calc, const ExprPtr &val
 //! A check that raises `message` as an error on a row where it is not NULL, and is true otherwise.
 unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const ExpressionBuilder &calc, const ExprPtr &message);
 
-//! What a message names for a number a plan checks, as the solver path names it (ValueSource): the values it is
-//! computed from that a column holds, each over the source with the text the user wrote it as, in reading order, and
-//! the clause (or the objective) it belongs to, and where each stands in the query (the error points at it). A literal
-//! is no column's value, so it is not among `inputs`; it is among `constants`, which a message names when one is NaN
-//! or infinite itself (DecideValueRole::CONSTANT).
+//! What a message names for a number a plan checks, as the solver path names it (ThrowInvalidValue): the expression of
+//! the query the number stands for, as the user wrote it, and where it stands (the error points at it). One value is
+//! named by its own text and place; a number made of several (like terms added into one coefficient) stands where the
+//! least expression holding them all stands (DecideCoveringLocation). It is a constant when no value reads a column
+//! (DecideValueRole::CONSTANT). `clause` is the clause (or the objective) it belongs to, which a number the plan
+//! computes from values it checked before names when it is past a DOUBLE (TOO_LARGE).
 struct DirectNumberNames {
-	vector<unique_ptr<Expression>> inputs;
-	vector<string> texts;
-	vector<optional_idx> places;
-	vector<unique_ptr<Expression>> constants;
-	vector<string> constant_texts;
-	vector<optional_idx> constant_places;
+	bool named = false;
+	bool constant = true;
+	string text;
+	optional_idx place;
 	string clause;
 };
 
+//! Adds `value`, an expression of the source whose text the user wrote as `text`, to what `names` calls the number. A
+//! number the engine made for itself (a constant the query text holds no place for) is no value of the user's.
+//! A value held by an expression of the query other than its own (`held_at`, valid then) is named by that one.
+void DirectNameValue(DirectNumberNames &names, const DecideSourceText &source, const Expression &value,
+                     const string &text, optional_idx held_at = optional_idx());
+
+//! Adds the name of another number to `names`: the number is made of both.
+void DirectNameMerge(DirectNumberNames &names, const DecideSourceText &source, const DirectNumberNames &other);
+
 //! The message of a number the solver refuses (NaN or infinite), NULL for a valid number; a NULL number skips what it
-//! reaches, so it is valid. It names the first of `names.inputs` that is not finite (DecideValueRole::COEFFICIENT),
-//! and the clause when each is: the arithmetic left the DOUBLE range (TOO_LARGE). Only a row whose number is not finite
-//! reads the inputs, as a CASE evaluates a branch only on the rows that reach it. A constant that is not finite is
-//! named before any input (DecideValueRole::CONSTANT), as the solver path names it. `into` re-points an input at the
-//! operator the message is evaluated in.
-ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const DirectNumberNames &names,
-                            const std::function<ExprPtr(const Expression &)> &into);
+//! reaches, so it is valid. A number with a name raises where the name stands; one with none, the plan's own
+//! arithmetic, names `names.clause` past a DOUBLE (TOO_LARGE).
+ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const DirectNumberNames &names);
 
 //! The message of a number the plan computes from values it checked before: past a DOUBLE it names `clause`
 //! (TOO_LARGE), as the solver path names a number it computes (AddCoefficient).
@@ -75,13 +80,16 @@ ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number
 //! `number` (a DOUBLE) is past the DOUBLE range, and passes a NULL.
 unique_ptr<Expression> DirectRaiseTooLarge(Optimizer &optimizer, const ExprPtr &number, const string &clause);
 
-//! The check of a raw value of a projection: `number`, a DOUBLE column of the projection `projection_index`, which
-//! carries the source first (`source_bindings`). It raises what DirectNumberMessage names, reading the values the
-//! number is made of in those source columns. `values` are what the number is made of (with the part's `factor`). Null
-//! when they are finite constants, which no row can fail (DirectIsFiniteWhereKept).
+//! The same for a number the plan computes from values it checked before, which `names` calls (a name with a place
+//! raises where the number stands, as DirectNumberMessage does; one without names `names.clause`).
+unique_ptr<Expression> DirectRaiseNotFinite(Optimizer &optimizer, const ExprPtr &number,
+                                            const DirectNumberNames &names);
+
+//! The check of a raw value of a projection: `number`, a DOUBLE column. It raises what DirectNumberMessage names.
+//! `values` are what the number is made of (with the part's `factor`). Null when they are finite constants, which no
+//! row can fail (DirectIsFiniteWhereKept).
 unique_ptr<Expression> DirectCheckNumber(Optimizer &optimizer, ColumnBinding number, const DirectNumberNames &names,
                                          const vector<DirectSignedValue> &values,
-                                         const vector<ColumnBinding> &source_bindings, idx_t projection_index,
                                          const DirectFactor &factor = DirectFactor());
 
 //! Joins checks into one BOOLEAN expression that is true when every check is. The checks run in the order given, as a

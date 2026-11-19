@@ -43,6 +43,7 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/optimizer/decide/decide_optimizer_internal.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
@@ -57,8 +58,6 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
-#include "duckdb/planner/expression/bound_function_expression.hpp"
-#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
@@ -733,38 +732,8 @@ private:
 		               calc.Constant(Value(LogicalType::VARCHAR)));
 	}
 
-	//! `message` with the place of each error it raises left out, so two checks of one value stand as one wherever the
-	//! value is written.
-	static unique_ptr<Expression> WithoutPlaces(const Expression &message) {
-		auto copy = message.Copy();
-		ExpressionIterator::EnumerateExpression(copy, [](Expression &expression) {
-			if (expression.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
-				return;
-			}
-			auto &function = expression.Cast<BoundFunctionExpression>();
-			if (function.function.name == "__internal_decide_invalid_value") {
-				function.children[2] = make_uniq<BoundConstantExpression>(Value(LogicalType::UBIGINT));
-			}
-		});
-		return copy;
-	}
-
-	//! A check of a value already checked is dropped, and the place the first one raises at stays (the first error
-	//! reached is the one raised).
 	void AddValueCheck(unique_ptr<Expression> message) {
-		if (!message) {
-			return;
-		}
-		auto key = WithoutPlaces(*message);
-		for (auto &check : decide.scope_checks) {
-			if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID && WithoutPlaces(*check.value)->Equals(*key)) {
-				return;
-			}
-		}
-		DecideScopeCheck check;
-		check.kind = DecideScopeCheckKind::VALUE_IS_VALID;
-		check.value = std::move(message);
-		decide.scope_checks.push_back(std::move(check));
+		decide_rewrite::AddValueCheck(decide, std::move(message));
 	}
 
 	//! The key a reducer under the reducers of `path` groups by: its `by` key under every enclosing one, an index

@@ -1654,13 +1654,13 @@ R1_ERROR_CASES = {
         _late(LATE_DECIDE, w_sql=_last_row("-1.0", "1.0"), cap_sql=_last_row("'Infinity'::DOUBLE", "10.0")),
         "unbounded",
     ),
-    # The factor on the objective overflows the value, though every value is finite: both paths name the objective
-    # (no class matches the message, so its text is compared).
+    # The factor on the objective overflows the value, though every value is finite: both paths refuse the scaled
+    # objective as a value that is not finite.
     "objective_factor_overflows": (
         _late(
             "amount >= 0 AND amount <= cap AND SUM(w*amount) <= {limit} MAXIMIZE 1e308 * SUM(v*amount)", v_sql="10.0"
         ),
-        "other:DeciDB CLI error: Invalid Input Error: DECIDE: MAXIMIZE 1e308 * SUM(v*amount) co",
+        "invalid_value",
     ),
     "infeasible_before_unbounded": (
         _late(

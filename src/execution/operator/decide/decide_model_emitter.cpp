@@ -1554,7 +1554,6 @@ void DecideModelEmitter::Composed(PhysicalDecide::EvaluatedClauses &evaluated) {
 
 vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(idx_t root, const char *what, bool &null_factor) {
 	auto &body = tree.nodes[root]->compiled;
-	const auto clause = op.WrittenClause(tree.nodes[root]->source_clause_id);
 	if (body.composed_specs.size() != body.composed.size()) {
 		throw InternalException("DECIDE model emitter: composed E node has no spec for each term");
 	}
@@ -1566,9 +1565,8 @@ vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(idx_t root, con
 		auto evaluated = DecideComposedTerm(reducer.aggregate, spec.sign, spec.is_easy, reducer.text);
 		if (spec.scale) {
 			// A value the whole query shares, read on the input's first rows, whatever the clause keeps.
-			evaluated.scale =
-			    DecideQueryWideScale(FirstRowValue(*spec.scale), spec.scale_divides, what,
-			                         {DecideValueRole::COEFFICIENT, *spec.scale, names, context, clause}, null_factor);
+			evaluated.scale = DecideQueryWideScale(FirstRowValue(*spec.scale), spec.scale_divides, what,
+			                                       {DecideValueRole::COEFFICIENT, *spec.scale, names}, null_factor);
 		}
 		// Its members are its G's: the entries of its operand its member tests keep, and a relation-qualified one's
 		// first of each class (language/guide.md §5.1). Every other row reads 0.

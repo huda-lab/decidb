@@ -131,7 +131,7 @@ DirectQuadraticColumns DirectLayoutQuadraticPart(Optimizer &optimizer, const Exp
 	};
 	auto check_number = [&](ColumnBinding number, const DirectNumberNames &names,
 	                        const vector<DirectSignedValue> &values, const DirectFactor &factor = DirectFactor()) {
-		if (auto check = DirectCheckNumber(optimizer, number, names, values, source_bindings, p1.index, factor)) {
+		if (auto check = DirectCheckNumber(optimizer, number, names, values, factor)) {
 			checks.push_back(std::move(check));
 		}
 	};
@@ -200,8 +200,7 @@ DirectLayoutBoundClauses(Optimizer &optimizer, const ExpressionBuilder &calc, Di
 			columns.has_when = true;
 			columns.when = p1.Add(calc.Out(kept));
 		}
-		if (auto check = DirectCheckNumber(optimizer, coefficient, clause.coefficient_names, clause.coefficient,
-		                                   source_bindings, p1.index)) {
+		if (auto check = DirectCheckNumber(optimizer, coefficient, clause.coefficient_names, clause.coefficient)) {
 			checks.push_back(std::move(check));
 		}
 		// A right side of an exact type is never NaN.
@@ -991,9 +990,13 @@ bool DirectLinearScore::Prove(const DirectIR &ir, ClientContext &context) {
 			terms.push_back({part_names.size(), read.sign * term.sign, std::move(term.coefficient), read.factor});
 		}
 		// Every term is in `x`, the one decision.
+		// The score adds every part's coefficient, as the solver's like-term collection does: one number, named where
+		// the least expression holding them stands.
+		DirectNameMerge(combined_names, *ir.source_text, read.names[0]);
 		part_names.push_back(std::move(read.names[0]));
 		part_kept.push_back(std::move(kept));
 	}
+	combined_names.clause = objective_written;
 	return true;
 }
 
@@ -1020,18 +1023,15 @@ bool DirectLinearScore::PartIsFiniteConstant(Optimizer &optimizer, idx_t part) c
 
 ExprPtr DirectLinearScore::Message(const ExpressionBuilder &calc, Optimizer &optimizer, const Over &over,
                                    const ExprPtr &combined_score, const vector<ExprPtr> &part_scores) const {
-	auto into_score = [&](const Expression &input) {
-		return calc.Wrap(over(input));
-	};
 	vector<ExprPtr> candidates;
 	for (idx_t p = 0; p < part_scores.size(); p++) {
 		// Every part has a term (PartIsFiniteConstant finds it).
 		D_ASSERT(part_scores[p]);
 		if (!PartIsFiniteConstant(optimizer, p)) {
-			candidates.push_back(DirectNumberMessage(calc, part_scores[p], part_names[p], into_score));
+			candidates.push_back(DirectNumberMessage(calc, part_scores[p], part_names[p]));
 		}
 	}
-	candidates.push_back(DirectNumberMessage(calc, combined_score, objective_written));
+	candidates.push_back(DirectNumberMessage(calc, combined_score, combined_names));
 	return calc.Coalesce(candidates);
 }
 

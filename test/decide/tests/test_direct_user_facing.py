@@ -6,6 +6,7 @@ the conformance suite, `test_direct_rule_conformance.py`.
 
 import json
 import re
+import re
 import math
 from pathlib import Path
 
@@ -281,7 +282,7 @@ def test_a1_a_finite_literal_adds_no_too_large_check(decidb_cli, objective, mess
     out = _raw(decidb_cli, sql).stdout
     plan = json.dumps(json.loads(out[out.index("[") :]))
     assert "A1_SEPARABLE_BOX" in plan, plan
-    assert plan.count("computes a number too large for a DOUBLE") == messages, plan
+    assert _checked_numbers(plan) == messages, plan
 
 
 @pytest.mark.correctness
@@ -350,6 +351,15 @@ def test_a1_a_nan_upper_end_raises_though_no_static_end_clamps_it(decidb_cli):
     assert messages[0] == messages[1]
 
 
+def _checked_numbers(plan):
+    """How many numbers a plan checks: each raises the error of a coefficient or constant that is not finite (roles 0
+    and 3 of the invalid-value error), or the one of a sum past a DOUBLE."""
+    text = "".join(plan.replace("│", "").split())
+    return text.count("computesanumbertoolargeforaDOUBLE") + len(
+        re.findall(r"__internal_decide_invalid_value\((?:0|3),", text)
+    )
+
+
 def _r1_too_large_checks(cli, decisions, constraint, objective):
     sql = f"""
         EXPLAIN SELECT id FROM (VALUES (1, 1.0::DOUBLE, 2.0::DOUBLE), (2, NULL, 3.0), (3, 4.0, 5.0)) t(id, p, q)
@@ -357,7 +367,7 @@ def _r1_too_large_checks(cli, decisions, constraint, objective):
     """
     plan = _raw(cli, sql).stdout
     assert "R1_CONTINUOUS_KNAPSACK" in plan, plan
-    return "".join(plan.replace("│", "").split()).count("computesanumbertoolargeforaDOUBLE")
+    return _checked_numbers(plan)
 
 
 @pytest.mark.correctness
@@ -389,7 +399,7 @@ def test_s1_a_finite_literal_score_adds_no_too_large_check(decidb_cli):
         """
         plan = _raw(decidb_cli, sql).stdout
         assert "S1_UNIFORM_MATROID" in plan, plan
-        return "".join(plan.replace("│", "").split()).count("computesanumbertoolargeforaDOUBLE")
+        return _checked_numbers(plan)
 
     assert checks("2 * x") < checks("q * x")
 
@@ -570,24 +580,27 @@ def test_r1_a_non_finite_literal_under_a_guard_raises_what_the_solver_raises(dec
 @pytest.mark.error
 @pytest.mark.correctness
 @pytest.mark.parametrize(
-    "coefficient,literal",
+    "coefficient,literal,direct_at",
     [
-        ("s * 'NaN'::DOUBLE - p", "'NaN'::DOUBLE"),
-        ("s - p + 'NaN'::DOUBLE", "'NaN'::DOUBLE"),
-        ("s * 1e308 * 10 - p", "1e308 * 10"),
+        ("s * 'NaN'::DOUBLE - p", "'NaN'::DOUBLE", "'NaN'::DOUBLE"),
+        # The solver path reads each constant of a square's form on its own and names the literal; the direct plan reads
+        # the form's constants as one number, which stands where the sum is written.
+        ("s - p + 'NaN'::DOUBLE", "'NaN'::DOUBLE", "s - p + 'NaN'::DOUBLE"),
+        ("s * 1e308 * 10 - p", "1e308 * 10", "1e308 * 10"),
     ],
 )
-def test_a1_a_non_finite_literal_raises_what_the_solver_raises(decidb_cli, coefficient, literal):
-    # A literal that is not finite keeps its check, which names it as a constant as the solver path does. Under the
-    # data's NULL skip the literal is still no column's value, so it is never named as one.
+def test_a1_a_non_finite_literal_raises_what_the_solver_raises(decidb_cli, coefficient, literal, direct_at):
+    # A literal that is not finite keeps its check, which names it as a constant as the solver path does.
     sql = f"""
         SELECT id, s FROM (VALUES (1, 1.0::DOUBLE, 2.0::DOUBLE), (2, NULL, 3.0), (3, 4.0, 5.0)) t(id, p, q)
         DECIDE s(REAL) SUCH THAT s BETWEEN 0 AND q MINIMIZE SUM(POWER({coefficient}, 2))
     """
     direct = _raw(decidb_cli, sql, mode="require").stderr
-    _points_at(decidb_cli, sql, literal)
-    assert "on some rows" not in direct, direct
-    assert direct == _raw(decidb_cli, sql, mode="off").stderr
+    _points_at(decidb_cli, sql, direct_at)
+    _points_at(decidb_cli, sql, literal, mode="off")
+    if direct_at == literal:
+        assert "on some rows" not in direct, direct
+        assert direct == _raw(decidb_cli, sql, mode="off").stderr
 
 
 @pytest.mark.correctness
@@ -612,7 +625,8 @@ def test_r1_invalid_number_names_the_value_the_user_wrote(decidb_cli, bad):
 
 @pytest.mark.correctness
 def test_r1_objective_factor_that_overflows_names_the_objective_like_the_solvers(decidb_cli):
-    # Every value is finite: the factor DeciDB applies leaves the DOUBLE range, so the message names the objective.
+    # Every value is finite: the factor DeciDB applies leaves the DOUBLE range, so the error points at the scaled
+    # reducer, where the coefficient it makes stands.
     sql = """
         SELECT id, x FROM (
             FROM (VALUES (1, 4.0, 2.0, 10.0), (2, 3.0, 3.0, 9.0)) t(id, cap, w, v)
@@ -621,9 +635,7 @@ def test_r1_objective_factor_that_overflows_names_the_objective_like_the_solvers
     """
     direct = _raw(decidb_cli, sql, mode="require").stderr
     solver = _raw(decidb_cli, sql, mode="off").stderr
-    assert (
-        "DECIDE: MAXIMIZE 1e308 * SUM(v * x) computes a number too large for a DOUBLE. Scale its data down." in direct
-    )
+    _points_at(decidb_cli, sql, "1e308 * SUM(v * x)")
     assert solver == direct
 
 
@@ -901,12 +913,12 @@ def test_n1_a_number_past_a_double_names_the_objective_as_the_other_rules_do(dec
 
 @pytest.mark.correctness
 def test_s1_a_score_past_a_double_from_parts_that_each_fit_names_the_objective(decidb_cli):
-    # Each reducer's score is a literal inside the range of a DOUBLE, so no part has a message of its own (the plan
-    # holds the objective's message alone); the three together pass the range, and the one message names the objective.
+    # Each reducer's score is a literal inside the range of a DOUBLE, so no part has a message of its own; the three
+    # together pass the range, and the one error points at their sum, where the coefficient they make stands.
     objective = "SUM(6e307 * x) + SUM(6.1e307 * x) + SUM(6.2e307 * x)"
     sql = f"SELECT id, x FROM (VALUES (1), (2), (3)) t(id) DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE {objective}"
     direct = _raw(decidb_cli, sql, mode="require").stderr
-    assert f"DECIDE: MAXIMIZE {objective} computes a number too large for a DOUBLE. Scale its data down." in direct
+    _points_at(decidb_cli, sql, objective)
     assert direct == _raw(decidb_cli, sql, mode="off").stderr
 
 

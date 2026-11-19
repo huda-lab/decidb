@@ -45,7 +45,7 @@ struct DecideTermSite {
 
 //! What a program computes on a node's entries: a term's coefficient, a bound (a tightest frame bound's own, whose NULL
 //! bounds nothing rather than leaving its instance without a value, D85), a member test, or a value something else
-//! reads (a coefficient's parts, an admitted bound's a and r).
+//! reads (an admitted bound's a and r).
 enum class DecideProgramRole : uint8_t { COEFFICIENT, BOUND, TIGHTEST_BOUND, TEST, VALUE };
 
 //! A value a node's programs read from another node (language/guide.md §6.1): a G over data's, a data reducer's, at an
@@ -76,12 +76,6 @@ struct DecideProgram {
 	unique_ptr<Expression> expression;
 	//! What a message names: stage 05's coefficient or bound as written.
 	unique_ptr<Expression> written;
-	//! A coefficient DeciDB composed (like terms merged, a factor applied) stands nowhere in the query as a whole, but
-	//! the values it is composed of do: `parts` are programs of the same node that compute each, in reading order
-	//! (the outermost expressions of `written` the query text holds a place for). A coefficient that is not finite
-	//! names the first of them that is not, where that part stands; with none finite, DeciDB's own arithmetic left
-	//! the DOUBLE range. Empty for an expression that stands in the query itself. Only a row where it fails reads them.
-	vector<idx_t> parts;
 	int sign = 1;
 	//! The node whose clause a message names (the holder of its term or bound); INVALID for the node's own.
 	idx_t owner = DConstants::INVALID_INDEX;

@@ -1,5 +1,6 @@
 #include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/limits.hpp"
 
 namespace duckdb {
 
@@ -89,6 +90,42 @@ optional_idx DecideSpanLocation(const DecideSourceText &text, optional_idx locat
 	string ignored_text;
 	int ignored_binding;
 	return text.CutExpr(location, ignored_text, ignored_binding) ? location : optional_idx();
+}
+
+optional_idx DecideCoveringLocation(const DecideSourceText &text, optional_idx first, optional_idx second) {
+	if (!first.IsValid() || !second.IsValid()) {
+		return optional_idx();
+	}
+	if (first == second) {
+		return first;
+	}
+	// The extent the two expressions span together, then the least expression that holds it.
+	idx_t from = NumericLimits<idx_t>::Maximum();
+	idx_t to = 0;
+	idx_t found = 0;
+	const auto expression = static_cast<idx_t>(DecideSpanRole::EXPR);
+	for (idx_t i = 0; i + SPAN_ENTRY_SIZE <= text.spans.size(); i += SPAN_ENTRY_SIZE) {
+		const auto location = text.start + text.spans[i];
+		if (text.spans[i + 1] != expression || (location != first.GetIndex() && location != second.GetIndex())) {
+			continue;
+		}
+		from = MinValue(from, text.spans[i + 2]);
+		to = MaxValue(to, text.spans[i + 3]);
+		found++;
+	}
+	if (found < 2) {
+		return optional_idx();
+	}
+	optional_idx covering;
+	idx_t least = NumericLimits<idx_t>::Maximum();
+	for (idx_t i = 0; i + SPAN_ENTRY_SIZE <= text.spans.size(); i += SPAN_ENTRY_SIZE) {
+		const auto length = text.spans[i + 3] - text.spans[i + 2];
+		if (text.spans[i + 1] == expression && text.spans[i + 2] <= from && text.spans[i + 3] >= to && length < least) {
+			least = length;
+			covering = text.start + text.spans[i];
+		}
+	}
+	return covering;
 }
 
 unordered_map<string, string> DecideClauseErrorInfo(const vector<ConstraintSourceInfo> &sources,

@@ -830,7 +830,8 @@ void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Ato
 		    // Classify on the whole original term. The factors are decision-free and
 		    // reducer-free by construction, so this agrees with classifying `term` -- stated
 		    // rather than assumed, because Classify is the part that was wrong twice before.
-		    out.push_back(Atom {term_sign, &term, Classify(whole), std::move(scale), divides});
+		    out.push_back(Atom {term_sign, &term, Classify(whole), std::move(scale), divides, nullptr,
+		                        factor || negated ? optional_idx() : whole.GetQueryLocation()});
 	    });
 }
 
@@ -1067,7 +1068,14 @@ bool DecideCanonicalizer::MergeLikeAtoms(vector<Atom> &atoms) const {
 		if (like.empty() || total == 0.0 || !std::isfinite(total)) {
 			continue;
 		}
+		// The merged atom stands where the least expression holding every atom it replaces stands.
+		auto written = atoms[i].written;
+		for (auto j : like) {
+			written =
+			    message_names ? DecideCoveringLocation(message_names->text, written, atoms[j].written) : optional_idx();
+		}
 		ScaleAtomBy(atoms[i], term, total);
+		atoms[i].written = written;
 		for (auto it = like.rbegin(); it != like.rend(); ++it) {
 			atoms.erase(atoms.begin() + static_cast<int64_t>(*it));
 		}
@@ -1108,6 +1116,9 @@ unique_ptr<Expression> DecideCanonicalizer::BuildAdditive(const vector<Atom> &at
 			term = atom.scale_divides ? BindOp("/", std::move(term), atom.scale->Copy())
 			       : product          ? BuildDecideProduct(context, decide_index, atom.scale->Copy(), std::move(term))
 			                          : BindOp("*", atom.scale->Copy(), std::move(term));
+			if (atom.written.IsValid()) {
+				term->SetQueryLocation(atom.written);
+			}
 		}
 		if (!acc) {
 			if (sign >= 0) {

@@ -328,9 +328,8 @@ static string AbsWrittenClause(const LogicalDecide &decide, const string &clause
 //! Refuses an argument of an ABS whose data is NaN or infinite where the ABS is read, on the rows it is read on, before
 //! the lowering turns the data into a bound on the auxiliary. The data is the sum of the argument's terms that hold no
 //! decision (`-v` in `ABS(x - v)`). A row where it is not finite raises the message every other number the model reads
-//! raises (DirectNumberMessage, as the direct-solve plans): the first of the values it is computed from that is not
-//! finite, as the user wrote it, or the clause when each is finite and their sum passes a DOUBLE. A coefficient of a
-//! decision is a coefficient of the lowered row, which the solver path refuses by name already.
+//! raises (DirectNumberMessage, as the direct-solve plans): the data, as the user wrote it, where it stands. A
+//! coefficient of a decision is a coefficient of the lowered row, which the solver path refuses by name already.
 static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, const Expression &argument,
                              const Expression *rows, const string &clause) {
 	vector<DecideSplitTerm> terms;
@@ -338,9 +337,6 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 	ExpressionBuilder calc(context);
 	// The tree evaluates the check, so a frame marker keeps its tag and is read at the row the frame selects (`Of`
 	// strips it, which would read the marker as a reducer over the rows).
-	auto tagged = [&](const Expression &expression) {
-		return calc.Wrap(expression.Copy());
-	};
 	DirectNumberNames names;
 	names.clause = clause;
 	ExprPtr total;
@@ -348,16 +344,14 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 		if (!term.IsConstant()) {
 			continue;
 		}
-		ExprPtr value = term.coefficient ? calc.Cast(tagged(*term.coefficient), LogicalType::DOUBLE) : calc.Num(1.0);
+		ExprPtr value =
+		    term.coefficient ? calc.Cast(calc.Wrap(term.coefficient->Copy()), LogicalType::DOUBLE) : calc.Num(1.0);
 		value = term.sign < 0 ? calc.Neg(value) : value;
 		total = total ? calc.Add(total, value) : value;
-		// A literal is no column's value, so a message does not name it.
-		if (term.coefficient && !DecideUnguarded(*term.coefficient).IsFoldable()) {
-			names.inputs.push_back(term.coefficient->Copy());
-			names.texts.push_back(
+		if (term.coefficient) {
+			DirectNameValue(
+			    names, decide.source_text, *term.coefficient,
 			    RenderDecideSource(*term.coefficient, decide.source_text, decide.keyed_scopes, &decide.keys));
-			names.places.push_back(
-			    DecideSpanLocation(decide.source_text, DecideUnguarded(*term.coefficient).GetQueryLocation()));
 		}
 	}
 	if (!total) {
@@ -368,18 +362,9 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 	    std::isfinite(constant)) {
 		return;
 	}
-	auto message = DirectNumberMessage(calc, total, names, tagged);
+	auto message = DirectNumberMessage(calc, total, names);
 	ExprPtr kept = rows ? calc.Wrap(DirectActiveWhen(calc, rows)) : nullptr;
-	auto check_message = calc.Out(DirectOnKeptRows(calc, kept, message));
-	for (auto &check : decide.scope_checks) {
-		if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID && check.value->Equals(*check_message)) {
-			return;
-		}
-	}
-	DecideScopeCheck check;
-	check.kind = DecideScopeCheckKind::VALUE_IS_VALID;
-	check.value = std::move(check_message);
-	decide.scope_checks.push_back(std::move(check));
+	AddValueCheck(decide, calc.Out(DirectOnKeptRows(calc, kept, message)));
 }
 
 // ---------------------------------------------------------------------------

@@ -344,8 +344,8 @@ public:
 		DirectReplaceColumns(written, source_bindings, as_read);
 		auto coefficient = p1.Add(DirectScaledTerm(optimizer, std::move(written), cost.sign * term.sign, cost.factor));
 		vector<unique_ptr<Expression>> checks;
-		if (auto valid = DirectCheckNumber(optimizer, coefficient, cost.names[0], DirectValuesOn(cost, 0),
-		                                   source_bindings, p1.index, cost.factor)) {
+		if (auto valid =
+		        DirectCheckNumber(optimizer, coefficient, cost.names[0], DirectValuesOn(cost, 0), cost.factor)) {
 			checks.push_back(std::move(valid));
 		} else {
 			// No value can make it past the DOUBLE range, but DuckDB's own evaluation of it can still raise, and only

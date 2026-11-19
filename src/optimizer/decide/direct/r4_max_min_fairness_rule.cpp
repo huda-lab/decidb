@@ -681,8 +681,7 @@ private:
 		auto &read = condition.scope.when ? condition.scope.when : condition.present;
 		auto kept = read ? calc.Wrap(DirectActiveWhen(calc, over(*read).get())) : nullptr;
 		auto weight = p1.Add(calc.Out(DirectOnKeptRows(calc, kept, calc.Wrap(DirectSumOf(optimizer, values, over)))));
-		if (auto check =
-		        DirectCheckNumber(optimizer, weight, condition.weights.names[0], values, source_bindings, p1.index)) {
+		if (auto check = DirectCheckNumber(optimizer, weight, condition.weights.names[0], values)) {
 			checks.push_back(std::move(check));
 		}
 		return weight;

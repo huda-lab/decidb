@@ -219,6 +219,7 @@ private:
 				throw InternalException("DECIDE linear expression split into a non-linear term");
 			}
 			out.push_back(DecideTerm {term.var_a, std::move(term.coefficient), term.sign});
+			out.back().ancestor = term.ancestor;
 		}
 	}
 
@@ -228,6 +229,7 @@ private:
 		D_ASSERT(term.IsSquare() || term.IsProduct());
 		DecideProductGroup group;
 		group.weight = std::move(term.coefficient);
+		group.ancestor = term.ancestor;
 		group.sign = term.sign;
 		group.square = term.IsSquare();
 		AppendLinearTerms(term.factors[0].form, group.left);
@@ -650,8 +652,17 @@ private:
 				continue;
 			}
 			auto &merged = out[target];
+			// `(a + b) * x` replaces the sum `a * x + b * x`: the least expression that holds both, which the sum's
+			// own location is where the two stand side by side (DecideReplaces).
+			const auto placed = [](const DecideTerm &t) {
+				auto own = DecideUnguarded(*t.coefficient).GetQueryLocation();
+				return own.IsValid() ? own : t.ancestor;
+			};
+			const auto place = DecideCoveringLocation(op.source_text, placed(merged), placed(term));
 			merged.coefficient = DecideMergeLikeCoefficients(context, merged.sign, std::move(merged.coefficient),
 			                                                 term.sign, std::move(term.coefficient));
+			merged.coefficient->SetQueryLocation(place);
+			merged.ancestor = place;
 		}
 		terms = std::move(out);
 	}
@@ -752,11 +763,14 @@ private:
 	void ApplyScaleToExtracted(const BoundFunctionExpression &scale_func, const Expression &scale, bool divides,
 	                           vector<DecideTerm> &terms, vector<DecideProductGroup> &groups, idx_t linear_before,
 	                           idx_t group_before) {
+		// The scaled coefficient is held by the scaled node, whatever it held before.
 		for (idx_t i = linear_before; i < terms.size(); i++) {
 			ScaleCoefficient(scale_func, scale, divides, terms[i].coefficient);
+			terms[i].ancestor = scale_func.GetQueryLocation();
 		}
 		for (idx_t i = group_before; i < groups.size(); i++) {
 			ScaleCoefficient(scale_func, scale, divides, groups[i].weight);
+			groups[i].ancestor = scale_func.GetQueryLocation();
 		}
 	}
 
@@ -903,6 +917,7 @@ private:
 			}
 			if (term.degree <= 1) {
 				constr.lhs_terms.push_back(DecideTerm {term.var_a, std::move(term.coefficient), term.sign});
+				constr.lhs_terms.back().ancestor = term.ancestor;
 				continue;
 			}
 			constr.product_groups.push_back(ReadProductGroup(term));
@@ -1013,6 +1028,7 @@ private:
 				continue;
 			}
 			DecideTerm linear {term.var_a, std::move(term.coefficient), term.sign};
+			linear.ancestor = term.ancestor;
 			if (filter) {
 				linear.filter = filter->Copy();
 			}

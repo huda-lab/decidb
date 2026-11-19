@@ -651,7 +651,7 @@ class At(str):
 # (the class of the error, the text it has or where it points, the bad row's d, cap, r and w, the clauses, and its l).
 # Row 0 is ordinary.
 ERROR_CASES = {
-    "demand_zero": ("invalid_value", At("1 / d"), "0.0", "4.0", "1.0", "1.0", _RATIO),
+    "demand_zero": ("invalid_value", At("amount / d"), "0.0", "4.0", "1.0", "1.0", _RATIO),
     "rate_nan": ("invalid_value", At("r * amount"), "2.0", "4.0", "'NaN'", "1.0", _RATE),
     "weight_nan": ("invalid_value", At("w * amount"), "2.0", "4.0", "1.0", "'NaN'", _WEIGHT),
     "limit_nan": ("null_bound", At("<= l"), "2.0", "4.0", "1.0", "1.0", _LIMIT, "'NaN'"),

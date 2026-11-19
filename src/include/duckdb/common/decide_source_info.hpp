@@ -177,6 +177,11 @@ optional_idx DecideClauseLocation(const vector<ConstraintSourceInfo> &sources, i
 //! relative to the macro body), so no caret lands on text the user did not write there.
 optional_idx DecideSpanLocation(const DecideSourceText &text, optional_idx location);
 
+//! The expression of the query text that holds both expressions at `first` and `second` and no more than they need: the
+//! least EXPR span that contains both. A number DeciDB made from two of the user's (like terms added into one
+//! coefficient) stands where their sum stands. Invalid when either has no span.
+optional_idx DecideCoveringLocation(const DecideSourceText &text, optional_idx first, optional_idx second);
+
 //! The extra info of an exception about the clause `source_clause_id`, so DuckDB prints the caret under its span
 //! (`Exception::InitializeExtraInfo`; `ClientContext::ProcessError` adds the `LINE n:` block). Empty where the clause
 //! has no span.

@@ -184,6 +184,37 @@ bool decide_rewrite::TryParseNormMarker(const string &alias, string &payload) {
 	return true;
 }
 
+//! `message` with the place of each error it raises left out.
+static unique_ptr<Expression> WithoutPlaces(const Expression &message) {
+	auto copy = message.Copy();
+	ExpressionIterator::EnumerateExpression(copy, [](Expression &expression) {
+		if (expression.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+			return;
+		}
+		auto &function = expression.Cast<BoundFunctionExpression>();
+		if (function.function.name == "__internal_decide_invalid_value") {
+			function.children[2] = make_uniq<BoundConstantExpression>(Value(LogicalType::UBIGINT));
+		}
+	});
+	return copy;
+}
+
+void decide_rewrite::AddValueCheck(LogicalDecide &decide, unique_ptr<Expression> check) {
+	if (!check) {
+		return;
+	}
+	auto key = WithoutPlaces(*check);
+	for (auto &stood : decide.scope_checks) {
+		if (stood.kind == DecideScopeCheckKind::VALUE_IS_VALID && WithoutPlaces(*stood.value)->Equals(*key)) {
+			return;
+		}
+	}
+	DecideScopeCheck added;
+	added.kind = DecideScopeCheckKind::VALUE_IS_VALID;
+	added.value = std::move(check);
+	decide.scope_checks.push_back(std::move(added));
+}
+
 void decide_rewrite::CopySourceClauseTag(const string &from_alias, Expression &to) {
 	idx_t source_id;
 	if (TryParseSourceClauseTag(from_alias, source_id)) {
