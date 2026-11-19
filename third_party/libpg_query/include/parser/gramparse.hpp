@@ -36,7 +36,6 @@ namespace duckdb_libpgquery {
  */
 typedef struct PGDecideLexState {
 	bool in_decide_clause;
-	bool in_decide_objective;
 	int decide_case_depth;
 	bool decide_declared_before_from;
 	int decide_subquery_depth;
@@ -73,10 +72,6 @@ typedef struct base_yy_extra_type {
 	 */
 	bool in_decide_clause;
 
-	/* DeciDB: true after MAXIMIZE/MINIMIZE in a DECIDE clause. Objective WHEN
-	 * gets a distinct token because its condition cannot steal a trailing
-	 * constraint bound. */
-	bool in_decide_objective;
 
 	/*
 	 * DeciDB: CASE...END nesting depth while inside a DECIDE clause. WHEN is
@@ -162,7 +157,6 @@ static inline void PGDecidePushLexState(base_yy_extra_type *yyextra) {
 	if (yyextra->decide_state_depth >= 0 && yyextra->decide_state_depth < PG_DECIDE_STATE_STACK_MAX) {
 		PGDecideLexState *slot = &yyextra->decide_state_stack[yyextra->decide_state_depth];
 		slot->in_decide_clause = yyextra->in_decide_clause;
-		slot->in_decide_objective = yyextra->in_decide_objective;
 		slot->decide_case_depth = yyextra->decide_case_depth;
 		slot->decide_declared_before_from = yyextra->decide_declared_before_from;
 		slot->decide_subquery_depth = yyextra->decide_subquery_depth;
@@ -180,7 +174,6 @@ static inline void PGDecidePopLexState(base_yy_extra_type *yyextra) {
 	if (yyextra->decide_state_depth <= 0) {
 		yyextra->decide_state_depth = 0;
 		yyextra->in_decide_clause = false;
-		yyextra->in_decide_objective = false;
 		yyextra->decide_case_depth = 0;
 		yyextra->decide_subquery_depth = -1;
 		yyextra->decide_in_body = false;
@@ -190,7 +183,6 @@ static inline void PGDecidePopLexState(base_yy_extra_type *yyextra) {
 	if (yyextra->decide_state_depth < PG_DECIDE_STATE_STACK_MAX) {
 		PGDecideLexState *slot = &yyextra->decide_state_stack[yyextra->decide_state_depth];
 		yyextra->in_decide_clause = slot->in_decide_clause;
-		yyextra->in_decide_objective = slot->in_decide_objective;
 		yyextra->decide_case_depth = slot->decide_case_depth;
 		yyextra->decide_declared_before_from = slot->decide_declared_before_from;
 		yyextra->decide_subquery_depth = slot->decide_subquery_depth;

@@ -17,9 +17,7 @@
  * DECIDE_ITEM precedence, below both DECIDE WHEN tokens, so the parser shifts
  * WHEN. They are keyed on tokens base_yylex() emits only inside DECIDE.
  * PER and the reducer's BY reach the grammar as DECIDE-only tokens too, so
- * neither can be read as an identifier. A WHEN or PER written after a clause
- * is a removed spelling: its productions survive only so the error can name
- * the scope written in front (see RefuseRemovedDecideSpellings).
+ * neither can be read as an identifier.
  */
 %expect 4
 %name-prefix="base_yy"
@@ -120,12 +118,9 @@
  * NULLS_LA and WITH_LA are needed to make the grammar LALR(1).
  */
 %token		NOT_LA NULLS_LA WITH_LA
-/* DeciDB: context-sensitive WHEN tokens emitted only inside DECIDE. The
- * objective variant lets the removed postfix "E WHEN c" name a comparison
- * condition as written: an objective has no trailing comparison bound that
- * the condition could take. Never produced by keywords. */
+/* DeciDB: the context-sensitive WHEN token emitted only inside DECIDE. Never
+ * produced by keywords. */
 %token		WHEN_DECIDE
-%token		WHEN_DECIDE_OBJECTIVE
 /* DeciDB: PER and a reducer's BY, emitted only inside DECIDE. PER is split by
  * what follows it, because PER (), PER ROW and PER <key> are not LALR(1)-
  * separable otherwise: '(' also opens an expression, and ROW is also a column
@@ -151,7 +146,7 @@
  * tightly than the tokens; the two condition nonterminals decide whether that
  * comparison belongs to WHEN or is the constraint bound. */
 %nonassoc	DECIDE_ITEM
-%nonassoc	WHEN_DECIDE WHEN_DECIDE_OBJECTIVE
+%nonassoc	WHEN_DECIDE
 %right		NOT
 %nonassoc	IS ISNULL NOTNULL	/* IS sets precedence for IS NULL, etc */
 %nonassoc	'<' '>' '=' LESS_EQUALS GREATER_EQUALS NOT_EQUALS

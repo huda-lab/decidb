@@ -137,21 +137,6 @@ string FunctionExpression::ToString() const {
 		}
 		return children[0]->ToString() + " BY (" + DecideKeyToString(*this) + ")";
 	}
-	// The removed postfix WHEN and PER print as written: a parse tree stored before they
-	// were removed (a view) still shows its own SQL, and is refused when bound.
-	if (is_operator && function_name == POSTFIX_WHEN_TAG) {
-		if (children.size() != 2) {
-			throw InternalException("DECIDE WHEN marker has %s children, expected 2", children.size());
-		}
-		return children[0]->ToString() + " WHEN " + children[1]->ToString();
-	}
-	if (is_operator && function_name == POSTFIX_PER_TAG) {
-		if (children.size() < 2) {
-			throw InternalException("DECIDE PER marker has %s children, expected at least 2", children.size());
-		}
-		auto key = DecideKeyToString(*this);
-		return children[0]->ToString() + " PER " + (children.size() > 2 ? "(" + key + ")" : key);
-	}
 	if (is_operator && function_name == QUALIFIED_REDUCER_TAG) {
 		return QualifiedReducerToString(*this);
 	}

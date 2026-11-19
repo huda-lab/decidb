@@ -175,9 +175,6 @@ variable_type:
 /* A single typed variable declaration. The type is mandatory:
  *   "x(INT)"                  -- one decision per result row
  *   "PER key: x(INT)"         -- keyed (one per distinct key; PER () for one in all)
- * The removed "T.x(TYPE)" and "scalar x(TYPE)" (language/errors.md, "Removed
- * spellings") keep a production each, so the error names the spelling that
- * replaces them.
  */
 typed_decide_variable:
 			ColId '(' variable_type ')'
@@ -196,64 +193,7 @@ typed_decide_variable:
 					col->location = @3;
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", applyDecideScope($1, (PGNode *)col), (PGNode *)$5, @4);
 				}
-			| ColId '.' ColId '(' variable_type ')'
-				{
-					ereport(ERROR,
-							(errcode(PG_ERRCODE_SYNTAX_ERROR),
-							 errmsg("DECIDE: the declaration %s.%s(%s) is removed; write per %s: %s(%s) (per %s keys on every column of %s; write per %s.k: %s(%s) to key on one column k)",
-									decideName($1), decideName($3), decideTypeWord($5), decideName($1), decideName($3), decideTypeWord($5),
-									decideName($1), decideName($1), decideName($1), decideName($3), decideTypeWord($5)),
-							 parser_errposition(@1)));
-					$$ = NULL;
-				}
-			| ColId '.' ColId
-				{
-					ereport(ERROR,
-							(errcode(PG_ERRCODE_SYNTAX_ERROR),
-							 errmsg("DECIDE: the declaration %s.%s is removed; write per %s: %s(INT), per %s: %s(BOOL) or per %s: %s(REAL) (per %s keys on every column of %s)",
-									decideName($1), decideName($3), decideName($1), decideName($3), decideName($1), decideName($3),
-									decideName($1), decideName($3), decideName($1), decideName($1)),
-							 parser_errposition(@1)));
-					$$ = NULL;
-				}
-			| ColId '.' ColId IS ColId
-				{
-					ereport(ERROR,
-							(errcode(PG_ERRCODE_SYNTAX_ERROR),
-							 errmsg("DECIDE: the declaration %s.%s IS %s is removed; write per %s: %s(INT), per %s: %s(BOOL) or per %s: %s(REAL)",
-									decideName($1), decideName($3), $5, decideName($1), decideName($3), decideName($1), decideName($3),
-									decideName($1), decideName($3)),
-							 parser_errposition(@1)));
-					$$ = NULL;
-				}
-			| SCALAR ColId '(' variable_type ')'
-				{
-					ereport(ERROR,
-							(errcode(PG_ERRCODE_SYNTAX_ERROR),
-							 errmsg("DECIDE: scalar %s(%s) is removed; write per (): %s(%s)",
-									decideName($2), decideTypeWord($4), decideName($2), decideTypeWord($4)),
-							 parser_errposition(@1)));
-					$$ = NULL;
-				}
-			| SCALAR ColId '.' ColId '(' variable_type ')'
-				{
-					ereport(ERROR,
-							(errcode(PG_ERRCODE_SYNTAX_ERROR),
-							 errmsg("DECIDE: scalar %s.%s(%s) is removed; write per (): %s(%s)",
-									decideName($2), decideName($4), decideTypeWord($6), decideName($4), decideTypeWord($6)),
-							 parser_errposition(@1)));
-					$$ = NULL;
-				}
-			| SCALAR ColId
-				{
-					ereport(ERROR,
-							(errcode(PG_ERRCODE_SYNTAX_ERROR),
-							 errmsg("DECIDE: scalar %s is removed; write per (): %s(INT), per (): %s(BOOL) or per (): %s(REAL)",
-									decideName($2), decideName($2), decideName($2), decideName($2)),
-							 parser_errposition(@1)));
-					$$ = NULL;
-				}
-			/* A declaration with no type, and the old "x IS INTEGER" form. */
+			/* A declaration with no type. */
 			| ColId
 				{
 					ereport(ERROR,
@@ -273,14 +213,6 @@ typed_decide_variable:
 							 parser_errposition(@3)));
 					$$ = NULL;
 				}
-			| ColId IS ColId
-				{
-					ereport(ERROR,
-							(errcode(PG_ERRCODE_SYNTAX_ERROR),
-							 errmsg("write the DECIDE type in parentheses, e.g. %s(INT); the IS form is no longer accepted", $1),
-							 parser_errposition(@2)));
-					$$ = NULL;
-				}
 		;
 
 /* List of typed variables: "x IS INTEGER, y IS BOOLEAN" */
@@ -291,48 +223,11 @@ typed_decide_variable_list:
 				{ $$ = lappend($1, $3); }
 		;
 
-decide_when_condition:
-			c_expr								%prec DECIDE_ITEM
-				{ $$ = $1; }
-		;
-
-/* Objective WHEN has no trailing comparison bound, so it may admit one
- * comparison directly without creating the constraint-side ambiguity. */
-/* The condition of the removed objective WHEN. It may hold one comparison, since
- * nothing follows an objective that the comparison could take; a tail the rule
- * does not cover (IN, IS NULL, BETWEEN, AND) parses around the marker instead,
- * and RefuseRemovedDecideSpellings reads the whole condition back from there. */
-decide_objective_when_condition:
-			c_expr								%prec DECIDE_ITEM
-				{ $$ = $1; }
-			| d_expr '<' d_expr					%prec POSTFIXOP
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<", $1, $3, @2); }
-			| d_expr '>' d_expr					%prec POSTFIXOP
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, ">", $1, $3, @2); }
-			| d_expr '=' d_expr					%prec POSTFIXOP
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "=", $1, $3, @2); }
-			| d_expr LESS_EQUALS d_expr			%prec POSTFIXOP
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<=", $1, $3, @2); }
-			| d_expr GREATER_EQUALS d_expr		%prec POSTFIXOP
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, ">=", $1, $3, @2); }
-			| d_expr NOT_EQUALS d_expr			%prec POSTFIXOP
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<>", $1, $3, @2); }
-		;
-
-decide_aggregate_when_condition:
-			WHEN_DECIDE decide_when_condition
-				{ $$ = $2; }
-			| WHEN_DECIDE_OBJECTIVE decide_objective_when_condition
-				{ $$ = $2; }
-		;
-
 /* DeciDB: the scope written in front of a constraint, an objective, a declared
  * variable or a reducer's argument -- [WHEN condition] [PER key]. A ':' always
  * ends it, so the condition is a full a_expr and needs no parentheses. */
 decide_when:
 			WHEN_DECIDE a_expr
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_SCOPE_WHEN, "scope_when", NULL, $2, @1); }
-			| WHEN_DECIDE_OBJECTIVE a_expr
 				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_SCOPE_WHEN, "scope_when", NULL, $2, @1); }
 		;
 
@@ -446,38 +341,6 @@ decide_objective_item:
 								 errmsg("an objective is produced once: write per (): or leave per out"),
 								 parser_errposition(scope->location)));
 					$$ = applyDecideScope($1, $3);
-				}
-			/* The removed postfix forms, E WHEN c [PER g] and E PER g, kept as markers
-			 * the transformer refuses so the error names the new spelling. The
-			 * objective's own WHEN token lets the condition hold a comparison: nothing
-			 * follows an objective that the comparison could take. */
-			| decide_item_expr WHEN_DECIDE_OBJECTIVE decide_objective_when_condition PER_DECIDE columnref_opt_indirection
-				{
-					PGNode *when_node = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, $5, @4);
-				}
-			| decide_item_expr WHEN_DECIDE_OBJECTIVE decide_objective_when_condition PER_DECIDE_PAREN '(' decide_per_columnList ')'
-				{
-					PGNode *when_node = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, (PGNode *) $6, @4);
-				}
-			| decide_item_expr WHEN_DECIDE_OBJECTIVE decide_objective_when_condition
-				{
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
-				}
-			| decide_item_expr PER_DECIDE columnref_opt_indirection
-				{
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, $3, @2);
-				}
-			| decide_item_expr PER_DECIDE_PAREN '(' decide_per_columnList ')'
-				{
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, (PGNode *) $4, @2);
 				}
 			| decide_item_expr
 				{ $$ = $1; }
@@ -619,11 +482,7 @@ decide_constraint_list:
 				{ $$ = $1; }
 			| decide_constraint_list ',' decide_constraint_item
 				{
-					/* The removed "C PER g, h" wrote its key with a comma, so its
-					 * columns arrive here one by one; the error then names the whole
-					 * key. Any other comma stands where AND belongs. */
-					if (!absorbRemovedPerKey($1, $3))
-						ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR), errmsg("comma-separated SUCH THAT constraints are not supported; use AND between constraints"), parser_errposition(@2)));
+					ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR), errmsg("comma-separated SUCH THAT constraints are not supported; use AND between constraints"), parser_errposition(@2)));
 					$$ = $1;
 				}
 			| decide_constraint_list AND decide_constraint_item
@@ -633,39 +492,6 @@ decide_constraint_list:
 decide_constraint_item:
 			decide_scope ':' decide_item_expr
 				{ $$ = applyDecideScope($1, $3); }
-			/* The removed postfix forms, C WHEN c [PER g] and C PER g. They still
-			 * parse, as markers the transformer refuses, so the error names the
-			 * scope written in front; the condition is a full a_expr, so a NOT or an
-			 * IN is named as written too. WHEN_DECIDE outranks AND, so the condition
-			 * ends where the next constraint begins. */
-			| decide_item_expr WHEN_DECIDE a_expr PER_DECIDE columnref_opt_indirection
-				{
-					PGNode *when_node = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, $5, @4);
-				}
-			| decide_item_expr WHEN_DECIDE a_expr PER_DECIDE_PAREN '(' decide_per_columnList ')'
-				{
-					PGNode *when_node = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, (PGNode *) $6, @4);
-				}
-			| decide_item_expr WHEN_DECIDE a_expr
-				{
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
-				}
-			| decide_item_expr PER_DECIDE columnref_opt_indirection
-				{
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, $3, @2);
-				}
-			| decide_item_expr PER_DECIDE_PAREN '(' decide_per_columnList ')'
-				{
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, (PGNode *) $4, @2);
-				}
 			| decide_item_expr
 				{ $$ = $1; }
 		;
@@ -3237,12 +3063,6 @@ b_expr_body:		c_expr
  * ambiguity to the b_expr syntax.
  */
 c_expr:		d_expr									%prec DECIDE_ITEM
-			| func_application decide_aggregate_when_condition	%prec POSTFIXOP
-				{
-					/* DeciDB: the removed SUM(e) WHEN c, kept as a marker the transformer
-					 * refuses so the error names sum(when c: e). */
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $2, @2);
-				}
 			| func_application decide_by
 				{
 					/* DeciDB: reducer BY (key). The binder validates that it is a reducer. */
@@ -3275,27 +3095,11 @@ c_expr:		d_expr									%prec DECIDE_ITEM
 					 * is checked here instead of in the grammar. The decision point
 					 * moves to ':' vs ')' after a completed func_arg_list, which is
 					 * conflict-free. Every item in the list must be a bare relation
-					 * name; the whole list travels as one PGList (cast to PGNode*, the
-					 * same idiom `decide_per_columnList` uses for multi-column PER) rather than
+					 * name; the whole list travels as one PGList (cast to PGNode*) rather than
 					 * being unpacked here, so the binder sees the full qualifier set.
 					 */
 					noteDecideSpan(yyscanner, @4.start, PG_DECIDE_SPAN_PER, @3);
 					$$ = makeQualifiedReducer($1, $3, $5, @1, @3, @4, yyscanner);
-				}
-			| func_name '(' func_arg_list ':' func_arg_list ')' decide_aggregate_when_condition	%prec POSTFIXOP
-				{
-					/* DeciDB: the removed sum(D: expr) WHEN cond, a marker the transformer
-					 * refuses so the error names sum(when cond per D: expr).
-					 *
-					 * Without this production, `sum(D: expr) WHEN cond` never matches
-					 * here (a qualified reducer is not a func_application, so the
-					 * aggregate-WHEN clause right after `func_application` above cannot
-					 * fire), so the token stream falls to the loose, whole-constraint
-					 * `a_expr WHEN_DECIDE b_expr` production instead, which swallows
-					 * a trailing comparison like `<= bound` into the WHEN condition.
-					 */
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint",
-						makeQualifiedReducer($1, $3, $5, @1, @3, @4, yyscanner), $7, @7);
 				}
 			| func_name '(' func_arg_list ':' func_arg_list ')' decide_by
 				{
@@ -4422,12 +4226,6 @@ case_arg:	a_expr									{ $$ = $1; }
 columnrefList:
 			columnref								{ $$ = list_make1($1); }
 			| columnrefList ',' columnref				{ $$ = lappend($1, $3); }
-		;
-
-/* DeciDB: the columns of a PER key, each bare or qualified (r.id). */
-decide_per_columnList:
-			columnref_opt_indirection								{ $$ = list_make1($1); }
-			| decide_per_columnList ',' columnref_opt_indirection				{ $$ = lappend($1, $3); }
 		;
 
 columnref: ColId

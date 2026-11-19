@@ -220,13 +220,7 @@ unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgque
 		                                       std::move(right_expr));
 	}
 	// DeciDB: the constraint or reducer in children[0], its WHEN condition, PER columns
-	// or qualifying relations after it (see common/enums/decide.hpp for each tag). The
-	// postfix WHEN and PER are removed spellings: they still parse so that
-	// RefuseRemovedDecideSpellings can name the new spelling once the clause is built.
-	case duckdb_libpgquery::PG_AEXPR_WHEN_CONSTRAINT:
-		return decide_marker(POSTFIX_WHEN_TAG);
-	case duckdb_libpgquery::PG_AEXPR_PER_CONSTRAINT:
-		return decide_marker(POSTFIX_PER_TAG);
+	// or qualifying relations after it (see common/enums/decide.hpp for each tag).
 	case duckdb_libpgquery::PG_AEXPR_QUALIFIED_REDUCER:
 		return decide_marker(QUALIFIED_REDUCER_TAG);
 	case duckdb_libpgquery::PG_AEXPR_SCOPE_WHEN:

@@ -53,7 +53,6 @@ PGList *raw_parser(const char *str) {
 	/* base_yylex() only needs this much initialization */
 	yyextra.have_lookahead = false;
 	yyextra.in_decide_clause = false;
-	yyextra.in_decide_objective = false;
 	yyextra.decide_case_depth = 0;
 	yyextra.decide_declared_before_from = false;
 	yyextra.decide_after_rparen = false;
@@ -123,7 +122,6 @@ std::vector<PGSimplifiedToken> tokenize(const char *str) {
 	yyscanner = scanner_init(str, &yyextra.core_yy_extra, ScanKeywords, NumScanKeywords);
 	yyextra.have_lookahead = false;
 	yyextra.in_decide_clause = false;
-	yyextra.in_decide_objective = false;
 	yyextra.decide_case_depth = 0;
 	yyextra.decide_declared_before_from = false;
 	yyextra.decide_after_rparen = false;
@@ -269,8 +267,7 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 
 	/*
 	 * DeciDB: track whether we are lexing inside a DECIDE clause, and while we
-	 * are, emit the clause's WHEN as a DECIDE-specific token. The objective gets
-	 * its own variant because it has no trailing comparison bound. This keeps
+	 * are, emit the clause's WHEN as a DECIDE-specific token. This keeps
 	 * DECIDE WHEN out of the global expression grammar (where WHEN after a
 	 * function call collided with WITHIN GROUP and corrupted ordinary function
 	 * parsing). A BY directly after ')' is a reducer's BY and gets its own token
@@ -295,7 +292,6 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 		 * here as an identifier.
 		 */
 		yyextra->in_decide_clause = true;
-		yyextra->in_decide_objective = false;
 		yyextra->decide_case_depth = 0;
 		/* DeciDB: a declaration list after DECIDE, the clause's body after SUCH */
 		yyextra->decide_in_body = cur_token == SUCH;
@@ -305,15 +301,13 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 		 * still parses (DeciDB rejects CASE-in-DECIDE later, with a friendly
 		 * error). Only a bare DECIDE WHEN (depth 0) is rewritten.
 		 */
-		if (cur_token == MAXIMIZE || cur_token == MINIMIZE)
-			yyextra->in_decide_objective = true;
-		else if (cur_token == CASE)
+		if (cur_token == CASE)
 			yyextra->decide_case_depth++;
 		else if (cur_token == END_P) {
 			if (yyextra->decide_case_depth > 0)
 				yyextra->decide_case_depth--;
 		} else if (cur_token == WHEN && yyextra->decide_case_depth == 0)
-			return yyextra->in_decide_objective ? WHEN_DECIDE_OBJECTIVE : WHEN_DECIDE;
+			return WHEN_DECIDE;
 		else if (cur_token == BY && after_rparen)
 			return BY_DECIDE;
 		/*

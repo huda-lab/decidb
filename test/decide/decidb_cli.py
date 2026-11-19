@@ -184,20 +184,6 @@ def _verify_serializer_args() -> list[str]:
     ]
 
 
-#: The phrase every removed-spelling error carries (RefuseRemovedDecideSpellings).
-REMOVED_SPELLING_PHRASE = "is removed"
-
-
-def assert_no_removed_spelling(result: subprocess.CompletedProcess, sql: str) -> None:
-    """Fail the calling test when the query was refused for a removed DECIDE spelling: a
-    loose error pattern would otherwise pass on that error by accident. Only the
-    removed-syntax suite runs such queries, and it says so."""
-    assert REMOVED_SPELLING_PHRASE not in result.stderr, (
-        f"the query uses a removed DECIDE spelling (only test_scope_removed_syntax.py may):\n"
-        f"{sql[:300]}\nstderr: {result.stderr[:500]}"
-    )
-
-
 def _log_query(result: subprocess.CompletedProcess, sql: str, env: dict[str, str] | None) -> None:
     """Append what ``sql`` printed to the suite log, when ``DECIDB_SUITE_LOG`` names a directory.
 
@@ -223,21 +209,16 @@ def _log_query(result: subprocess.CompletedProcess, sql: str, env: dict[str, str
         log.write(json.dumps(record) + "\n")
 
 
-def _check(
-    result: subprocess.CompletedProcess, sql: str, removed_spelling: bool, env: dict[str, str] | None
-) -> subprocess.CompletedProcess:
+def _check(result: subprocess.CompletedProcess, sql: str, env: dict[str, str] | None) -> subprocess.CompletedProcess:
     """Fail the calling test if the query showed the user an internal error or an internal
-    tag: no query, accepted or refused, may do either. Unless ``removed_spelling`` says the
-    test is about one, a removed-spelling error fails it too. Every query this wrapper runs
+    tag: no query, accepted or refused, may do either. Every query this wrapper runs
     comes through here, so this is where the suite log hears of it, before a failure can end the test."""
     _log_query(result, sql, env)
     assert_no_internal_leak(result, f"the query {sql[:300]!r}", sql)
-    if not removed_spelling:
-        assert_no_removed_spelling(result, sql)
     return result
 
 
-def _run(argv: list[str], sql: str, *, removed_spelling: bool = False, **kwargs) -> subprocess.CompletedProcess:
+def _run(argv: list[str], sql: str, **kwargs) -> subprocess.CompletedProcess:
     """Run the CLI on ``sql`` in a process of its own (see ``_check``). Its return code follows the session's rule
     (``_ERROR_HEADER``): the shell exits 0 after an error under ``-c`` unless ``-bail`` is given."""
     if "timeout" in kwargs:
@@ -245,7 +226,7 @@ def _run(argv: list[str], sql: str, *, removed_spelling: bool = False, **kwargs)
     proc = subprocess.run(argv, capture_output=True, text=True, **kwargs)
     if _ERROR_HEADER.search(proc.stderr):
         proc = subprocess.CompletedProcess(proc.args, proc.returncode or 1, proc.stdout, proc.stderr)
-    return _check(proc, sql, removed_spelling, kwargs.get("env"))
+    return _check(proc, sql, kwargs.get("env"))
 
 
 #: Set to ``0`` to start a new process for every query, as the wrapper did before sessions.
@@ -369,7 +350,6 @@ def _run_in_session(
     *,
     mode: str,
     timeout: float,
-    removed_spelling: bool = False,
 ) -> subprocess.CompletedProcess | None:
     """Run ``sql`` in this worker's long-lived process for ``argv`` and ``env``, or return None
     when it must run in a process of its own: it touches session state other than a leading
@@ -392,7 +372,7 @@ def _run_in_session(
     if not session.alive():
         session.close()
         del _SESSIONS[key]
-    return _check(result, sql, removed_spelling, env)
+    return _check(result, sql, env)
 
 
 #: The shell mode ``execute`` reads results in. JSON would do, but it writes a NaN as ``null``, the same as a
@@ -700,16 +680,14 @@ class DeciDBCli:
         sql: str,
         *,
         timeout: float = 120,
-        removed_spelling: bool = False,
         expect_number_range: bool | dict[str, bool] = False,
     ) -> subprocess.CompletedProcess:
-        """Run a SQL query and return the raw ``CompletedProcess``. ``removed_spelling``
-        says the query is expected to be refused for a removed DECIDE spelling. The number-range warning is
+        """Run a SQL query and return the raw ``CompletedProcess``. The number-range warning is
         settled out of ``stderr`` first (see ``execute``), so a caller reads the rest of it as it was printed."""
         env = self._subprocess_env()
-        proc = _run_in_session(
-            self._argv(), sql, env, mode="duckbox", timeout=timeout, removed_spelling=removed_spelling
-        ) or _run(self._argv("-c", sql), sql, removed_spelling=removed_spelling, timeout=timeout, env=env)
+        proc = _run_in_session(self._argv(), sql, env, mode="duckbox", timeout=timeout) or _run(
+            self._argv("-c", sql), sql, timeout=timeout, env=env
+        )
         return self._settled(proc, expect_number_range)
 
     def execute_script(
@@ -767,7 +745,7 @@ class DeciDBCli:
             os.close(master_fd)
             if slave_fd >= 0:
                 os.close(slave_fd)
-        return _check(subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr), sql, False, env)
+        return _check(subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr), sql, env)
 
     def execute_interrupted(
         self, sql: str, *, after: float, timeout: float = 30
@@ -795,7 +773,7 @@ class DeciDBCli:
             proc.kill()
             stdout, stderr = proc.communicate()
         latency = time.time() - signalled
-        return _check(subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr), sql, False, env), latency
+        return _check(subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr), sql, env), latency
 
     def execute_counting_cpu(self, sql: str, *, timeout: float = 120) -> tuple[subprocess.CompletedProcess, float]:
         """Run *sql* in a process of its own and return ``(result, cpu)``, where cpu is the CPU seconds the process
@@ -823,7 +801,7 @@ class DeciDBCli:
             stdout, stderr = proc.communicate()
         after = resource.getrusage(resource.RUSAGE_CHILDREN)
         cpu = (after.ru_utime - before.ru_utime) + (after.ru_stime - before.ru_stime)
-        return _check(subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr), sql, False, env), cpu
+        return _check(subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr), sql, env), cpu
 
     def assert_error(
         self,

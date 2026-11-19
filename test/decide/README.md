@@ -170,15 +170,10 @@ The `per` / `when` / `by` language as a whole is covered by the scope suites,
 `tests/test_scope_*.py`, which no single marker selects (`-k test_scope` does):
 declarations, constraint scopes, `by`, a reducer's own scope, the objective,
 determination, the helper-decision rewrite, the deck examples, bare clauses,
-combinations, the EXPLAIN / DIAGNOSE echo and the removed spellings. They are judged
+combinations, the EXPLAIN / DIAGNOSE echo and the old forms that are now syntax errors. They are judged
 by `tests/_scope_oracle.py` or `tests/_brute_force.py` rather than a hand-built
 gurobipy model; see `context/docs/testing/oracle.md` §3.10 and
 `context/docs/testing/scope_suite.md`.
-
-`tests/test_no_old_spellings_remain.py` (with `tests/_old_spellings.py`) scans every
-test surface — the Python tests, the sqllogic files, the C++ DECIDE tests, the golden
-corpus, the benchmark queries and `run.sh` — for a removed DECIDE spelling. Only
-`test_scope_removed_syntax.py` may write one.
 
 ### EXPLAIN Output
 
@@ -259,9 +254,7 @@ rm test/decide/results/oracle_cache.json
 The steps, with a worked example: `context/docs/testing/oracle.md` §7.
 
 Write DECIDE in the current syntax (`context/docs/language/guide.md`).
-`decidb_cli` fails a test whose query is refused with an error that says "is removed"
-(a removed spelling), unless the call passes `removed_spelling=True`; it also fails any
-run whose output shows an internal error or an internal name.
+`decidb_cli` fails any run whose output shows an internal error or an internal name.
 
 ### Never assert on user-facing message text
 

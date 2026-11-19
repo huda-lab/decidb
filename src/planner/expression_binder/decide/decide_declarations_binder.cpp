@@ -8,7 +8,6 @@
 #include "duckdb/parser/expression/comparison_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
-#include "duckdb/parser/decide/decide_removed_spellings.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/result_modifier.hpp"
@@ -28,19 +27,19 @@ namespace duckdb {
 // formulation for them is layer 5's job (`src/optimizer/decide/`), which is what lets
 // this layer resolve names and types without also deciding how a construct is encoded.
 
-//! A decision is referenced by its bare name. `D.open`, where D is a relation of the FROM
-//! clause with no column `open` and `open` is a decision, is the removed table-qualified
-//! reference and is refused with the bare name; in a `when` condition, a `per` key or a
-//! `by` key it is a decision where only data may stand. A qualified name that binds to a
-//! column, a struct field or a USING column is left to the SQL binder. Subquery bodies are
-//! not entered: their names are their own.
+//! In a `when` condition, a `per` key or a `by` key only data may stand: `D.open`, where D is
+//! a relation of the FROM clause with no column `open` and `open` is a decision, is refused
+//! there. Anywhere else, and for a qualified name that binds to a column, a struct field or
+//! a USING column, the SQL binder reads the name. Subquery bodies are not entered: their
+//! names are their own.
 static void RefuseQualifiedDecisionReferences(const ParsedExpression &expr, BindContext &bind_context,
                                               const case_insensitive_map_t<idx_t> &variables, bool data_position) {
 	if (expr.GetExpressionClass() == ExpressionClass::COLUMN_REF) {
 		auto &colref = expr.Cast<ColumnRefExpression>();
 		// `[catalog.][schema.]D.open` is at most four names; the SQL binder reads the names after the fourth as
 		// struct fields, and a decision has none.
-		if (!colref.IsQualified() || colref.column_names.size() > 4 || !variables.count(colref.GetColumnName())) {
+		if (!data_position || !colref.IsQualified() || colref.column_names.size() > 4 ||
+		    !variables.count(colref.GetColumnName())) {
 			return;
 		}
 		ErrorData error;
@@ -48,12 +47,7 @@ static void RefuseQualifiedDecisionReferences(const ParsedExpression &expr, Bind
 		if (!binding) {
 			return;
 		}
-		if (data_position) {
-			throw BinderException(expr, "DECIDE: %s is a decision; when, per and by may only use data",
-			                      colref.ToString());
-		}
-		throw BinderException(expr, "DECIDE: write %s, not %s; a decision is referenced by its bare name",
-		                      colref.GetColumnName(), colref.ToString());
+		throw BinderException(expr, "DECIDE: %s is a decision; when, per and by may only use data", colref.ToString());
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
 		auto &func = expr.Cast<FunctionExpression>();
@@ -164,11 +158,6 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 	vector<KeyedScopeInfo> keyed_scopes;
 	vector<DecideVarScopeInfo> variable_scopes; // per variable: row / keyed / query-wide
 
-	// A parse tree stored by an earlier version (a view, a macro) may still carry a
-	// removed spelling (D54, language/errors.md §3); a fresh query never does, the
-	// transformer refuses them.
-	RefuseRemovedDecideSpellings(statement);
-
 	// Every declared name, checked and collected before any key resolves, so a key
 	// element can be told from a decision declared before or after it.
 	case_insensitive_set_t declared_names;
@@ -228,25 +217,12 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 		RespellDecideAliases(context, *statement.decide_objective);
 	}
 
-	// A decision is referenced by its bare name, wherever the query names it.
-	auto refuse_qualified = [&](const ParsedExpression &expr) {
-		RefuseQualifiedDecisionReferences(expr, bind_context, decide_variable_names, false);
-	};
+	// A relation-qualified decision in a `when`, `per` or `by` is refused.
 	if (statement.decide_constraints) {
-		refuse_qualified(*statement.decide_constraints);
+		RefuseQualifiedDecisionReferences(*statement.decide_constraints, bind_context, decide_variable_names, false);
 	}
 	if (statement.decide_objective) {
-		refuse_qualified(*statement.decide_objective);
-	}
-	for (auto &sel_expr : statement.select_list) {
-		refuse_qualified(*sel_expr);
-	}
-	for (auto &modifier : statement.modifiers) {
-		if (modifier->type == ResultModifierType::ORDER_MODIFIER) {
-			for (auto &order : modifier->Cast<OrderModifier>().orders) {
-				refuse_qualified(*order.expression);
-			}
-		}
+		RefuseQualifiedDecisionReferences(*statement.decide_objective, bind_context, decide_variable_names, false);
 	}
 
 	// Where `when`, `per` and `by` may stand, before anything reads the clauses: every

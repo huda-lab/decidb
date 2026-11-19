@@ -644,22 +644,6 @@ makeDecideVariableType(const char *name, int location, core_yyscan_t yyscanner)
 }
 
 /*
- * DeciDB: the type word of a declaration's type marker, so a message can quote
- * the declaration as written.
- */
-static const char *
-decideTypeWord(PGTypeName *type)
-{
-	const char *marker = strVal(llast(type->names));
-
-	if (strcmp(marker, "integer_variable") == 0)
-		return "INT";
-	if (strcmp(marker, "real_variable") == 0)
-		return "REAL";
-	return "BOOL";
-}
-
-/*
  * DeciDB: a name as a message quotes it, so the declaration it suggests parses: in double
  * quotes when it is a keyword or holds anything but letters, digits and underscores, the
  * rule DuckDB prints names by (KeywordHelper::WriteOptionallyQuoted).
@@ -726,32 +710,6 @@ decideScopeText(PGNode *scope_node)
 		}
 	}
 	return text;
-}
-
-/*
- * DeciDB: the removed "C PER g, h" wrote a multi-column key with a comma, so its
- * columns reach the constraint list one by one. Fold such a column into the PER
- * marker that ends the list, so the error names the whole key; false for any
- * other comma.
- */
-static bool
-absorbRemovedPerKey(PGNode *constraints, PGNode *item)
-{
-	PGNode *last = constraints;
-	PGAExpr *per;
-
-	if (!IsA(item, PGColumnRef))
-		return false;
-	if (IsA(last, PGBoolExpr) && ((PGBoolExpr *) last)->boolop == PG_AND_EXPR)
-		last = (PGNode *) llast(((PGBoolExpr *) last)->args);
-	if (!IsA(last, PGAExpr) || ((PGAExpr *) last)->kind != PG_AEXPR_PER_CONSTRAINT)
-		return false;
-	per = (PGAExpr *) last;
-	if (per->rexpr && IsA(per->rexpr, PGList))
-		per->rexpr = (PGNode *) lappend((PGList *) per->rexpr, item);
-	else
-		per->rexpr = (PGNode *) list_make2(per->rexpr, item);
-	return true;
 }
 
 /*

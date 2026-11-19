@@ -239,13 +239,6 @@ inline bool TryParseDecideIndexTag(const string &alias, const string &prefix, id
 	return true;
 }
 
-//! The parser's markers for the removed postfix spellings, `C WHEN c` and `C PER k`: children[0] is the clause,
-//! children[1] the condition or children[1..] the key. RefuseRemovedDecideSpellings refuses both (language/errors.md
-//! §3); a parse tree stored before they were removed (a view) still prints its own SQL from them. A parser marker is
-//! named for the spelling it marks and a bound wrapper for what it means, so no check reads one as the other.
-static constexpr const char *POSTFIX_WHEN_TAG = "__when_constraint__";
-static constexpr const char *POSTFIX_PER_TAG = "__per_constraint__";
-
 //! The bound form of a `when c:` in front of a constraint or the objective: a conjunction whose child 0 is the body
 //! and child 1 the condition. The body reads only the rows where the condition is true. A nested objective is a nested
 //! reducer (D81).
@@ -655,14 +648,9 @@ static constexpr const char *BILINEAR_AUX_NAME_PREFIX = "__bilinear_aux_";
 static constexpr const char *BODY_NAME_PREFIX = "__body_";
 //! The helper standing for a reducer's value, one per link of a scoped rewrite.
 static constexpr const char *VALUE_LINK_NAME_PREFIX = "__value_";
-//! The parser's stand-ins while it converts a removed spelling: the condition of a `WHEN`, and each fixed part.
-static constexpr const char *REMOVED_SPELLING_CONDITION_NAME = "__decide_condition__";
-static constexpr const char *REMOVED_SPELLING_FIX_NAME_PREFIX = "__decide_fix_";
 
 //! Every DECIDE tag above, the one list DecideNameContainsTag reads. A constant added above is added here.
-static constexpr const char *DECIDE_TAGS[] = {POSTFIX_WHEN_TAG,
-                                              POSTFIX_PER_TAG,
-                                              WHEN_FILTER_TAG,
+static constexpr const char *DECIDE_TAGS[] = {WHEN_FILTER_TAG,
                                               QUALIFIED_REDUCER_TAG,
                                               QUALIFIED_REDUCER_SCOPE_TAG_PREFIX,
                                               SCOPE_WHEN_TAG,
@@ -722,9 +710,7 @@ static constexpr const char *DECIDE_TAGS[] = {POSTFIX_WHEN_TAG,
                                               ABS_SIGN_NAME_PREFIX,
                                               BILINEAR_AUX_NAME_PREFIX,
                                               BODY_NAME_PREFIX,
-                                              VALUE_LINK_NAME_PREFIX,
-                                              REMOVED_SPELLING_CONDITION_NAME,
-                                              REMOVED_SPELLING_FIX_NAME_PREFIX};
+                                              VALUE_LINK_NAME_PREFIX};
 
 //! True when a name a user wrote contains a DECIDE tag, in any letter case. The tags travel in expression aliases and
 //! are found by search (HasDecideTag), so such a name is read as the tag. Until the tags are gone (R20) DECIDE refuses

@@ -233,10 +233,8 @@ static PGNode *makeQualifiedReducer(PGList *funcname, PGList *qualifier, PGList 
 									int colon_location, core_yyscan_t yyscanner);
 static bool decideSpells(const char *name, const char *word);
 static PGTypeName *makeDecideVariableType(const char *name, int location, core_yyscan_t yyscanner);
-static const char *decideTypeWord(PGTypeName *type);
 static char *decideName(const char *name);
 static char *decideScopeText(PGNode *scope_node);
-static bool absorbRemovedPerKey(PGNode *constraints, PGNode *item);
 static PGNode *makeAndExpr(PGNode *lexpr, PGNode *rexpr, int location);
 static PGNode *makeOrExpr(PGNode *lexpr, PGNode *rexpr, int location);
 static PGNode *makeNotExpr(PGNode *expr, int location);
