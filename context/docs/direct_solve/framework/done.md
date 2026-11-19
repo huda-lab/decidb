@@ -419,10 +419,11 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
   (`NULL_GUARD_TAG` keeps a NULL guard out of the text), with the caret on the value
   (`DecideInvalidValueError`; a plan raises through `__internal_decide_invalid_value`). It names no row: a row's place
   in the input depends on the scan.
-  - A coefficient DeciDB computes (like terms merged, a reducer's factor or divisor applied) is named where it stands: a
-    number made of several values stands where the least expression holding them all stands (`DecideCoveringLocation`,
-    `DirectNumberNames` from `DirectNamesOf` in direct solve). Its check is one `isfinite` on the result, and it is
-    COEFFICIENT, NaN or infinite alike. A constant no column holds that is not finite is CONSTANT; a number that
+  - A coefficient DeciDB computes (like terms merged, a reducer's factor or divisor applied) has no place of its own,
+    so its error has no caret (`errors.md` rule 3). The solver path renders it; a direct plan names the one value it is
+    made of at that value's place, or joins the texts of several (`DirectNamesOf`). A sum of parts each checked before
+    names the clause, TOO_LARGE. Its check is one `isfinite` on the result, and it is COEFFICIENT, NaN or infinite
+    alike. A constant no column holds that is not finite is CONSTANT; a number that
     DeciDB's arithmetic or a literal took past the DOUBLE range, with no value named, is TOO_LARGE at the clause.
   - A number no answer reads is not computed: an objective's per-row constants are checked one term at a time, as the
     solver path reads them, and never summed.

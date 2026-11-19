@@ -16,7 +16,6 @@ The rules: `language/errors.md` § How DECIDE throws an error. A task here remov
 improves a wording or a caret.
 
 ## 1.1 Errors (one lane)
-- [ ] FW-9 The direct path names what it checks, and nothing more — direct_solve/framework/todo.md § FW-9
 - [ ] EXEC-25 A failing coefficient is found at the first entry — pipeline/08_execution/todo.md § EXEC-25
 - [ ] PARSE-4 Two span roles of a BETWEEN are never read — pipeline/01_parser/todo.md § PARSE-4
 

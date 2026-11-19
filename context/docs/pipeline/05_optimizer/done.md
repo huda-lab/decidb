@@ -444,8 +444,8 @@ the user wrote it, with the caret on it (`DecideInvalidValueError`, `common/deci
 row and suggests no edit. A coefficient keeps no list of the inputs it was merged from: the solver path throws the
 error at the value's own location, and a direct plan raises it with the SQL function `__internal_decide_invalid_value`,
 which reads that location from its own expression. A node a rewrite builds takes the location of the node it equals in
-value (`DecideReplaces`); a like-term merge takes the span of the whole sum, and a non-finite value with no location is
-named and pointed at by its nearest located ancestor. A coefficient has one message for NaN and infinity. A number
+value (`DecideReplaces`); a like-term merge or a factor applied makes a coefficient with no location, whose error has
+no caret. A coefficient has one message for NaN and infinity. A number
 past a DOUBLE (`TOO_LARGE`) is raised only where DeciDB accumulates across rows. An `=` bound that takes two values
 raises through `__internal_decide_bound_disagreement` on a direct plan, from the same builder.
 
