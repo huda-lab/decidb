@@ -78,12 +78,9 @@ a reason not to.
    (`DECIDB_VERIFY_SERIALIZER=1`).
 4. **What each rewrite invalidates.** A rewrite can make signatures, degree, bounds, frame placement or
    dependencies stale. State which analyses it preserves and which are recomputed.
-5. **An error is raised where it is found, and points at the user's text.** The first error the evaluation reaches
-   stops the query, and no order among errors is owed (R10, R11). A raise call carries its own location
-   (`query_location`), as DuckDB's casts do, so a message needs no place carried as data and a direct rule raises where
-   it finds the value. The caret survives rewrites by one rule: a replacement takes the location of the node it equals in
-   value (`DecideReplaces`), and a merge takes the span that covers its operands. The design states how a node tells
-   the caret's place from being the user's own text (ARCH-3).
+5. **An error is raised where it is found** (`../docs/language/errors.md` § How DECIDE throws an error). The first
+   error the evaluation reaches stops the query, and no order among errors is owed (R10, R11). It points at the user's
+   text when the expression in hand has a location, and nothing is built to give it one.
 
 **Order** (ARCH-1 decides): front to back, with an adapter that lowers the new bound tree to today's tagged expressions
 for the stages not yet converted. Errors follow R11: the first one reached is raised.

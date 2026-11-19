@@ -95,3 +95,19 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Recommendation.** 1, leaving `DirectRankedPrefix` alone: DuckDB's own column pruning is the standard tool, and it
   removes a case list.
 - **Done when.** `DECIDB_TEST_DIRECT_SOLVE=off` and the default pass `./test/decide/run_tests.sh -n 2 -k "direct"`.
+
+## FW-9 — The direct path names what it checks, and nothing more
+
+- **Problem.** The direct path carries a name for every number it checks so that its message matches the solver
+  path's text and caret: `DirectNumberNames` (text, place, constant, clause), `DirectNameValue`, `DirectNameMerge`,
+  `DirectHeldAt` and `scale_place` (`direct_runtime_checks.*`, `direct_bound_reader.*`, `direct_ir.cpp`, the rules).
+  The solver path keeps `DecideCoveringLocation` and the `ancestor` fields of `DecideTerm`, `DecideProductGroup` and
+  `DecideSplitTerm` so a merged or scaled coefficient gets a caret. `AddAbsValueCheck` and `AddValueCheck` each drop a
+  duplicate check their own way. `errors.md` rules 3 and 5 owe none of this.
+- **Change.** A direct check raises on the expression it checks: its text, and its own location when it has one. A
+  coefficient DeciDB merged or scaled has no location and gets no caret. The names, the merge, the held-at place, the
+  covering span and the `ancestor` fields go; both value checks use `Expression::Equals`. Tests that require the two
+  paths to print one text assert one kind (`errors.md` rule 7).
+- **Done when.** `grep -rn "DirectNumberNames\|DirectNameMerge\|DirectHeldAt\|scale_place\|DecideCoveringLocation\|ancestor" src`
+  finds nothing; `./test/decide/run_tests.sh -n 3 -k "nan or finite or invalid_value or direct_user_facing or abs or
+  bound_side_tables"` passes.

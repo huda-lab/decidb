@@ -10,27 +10,19 @@ Each phase is one architectural change. Phases run in order; groups
 inside a phase run in order; measurement runs fit between phases. `(decision)` marks a task whose **Decision needed**
 the owner rules first.
 
-# Phase 1 — Errors are raised where they are found
+# Phase 1 — Finish errors
 
-## 1.2 Messages left (one lane)
-- [ ] EXEC-19 A model row carries a back-pointer, and the diagnosis derives the rest (decision) — pipeline/08_execution/todo.md § EXEC-19
+The rules: `language/errors.md` § How DECIDE throws an error. A task here removes code or fixes a real fault; none
+improves a wording or a caret.
 
-## 1.4 Error tests (one lane)
-- [ ] TEST-11 Solver-path error tests assert kind and location — testing/todo.md § TEST-11
-- [ ] TEST-12 Direct-path error tests assert kind and location — testing/todo.md § TEST-12 (needs: TEST-11)
-
-## 1.5 Filed cleanups (parallel: PARSE-4 | PLAN-8 | OPT-30, OPT-32 | TEST-16 | PERF-27, EXEC-25 | INF-5)
-- [ ] INF-5 Three label formatters no test reaches — diagnostics/infeasible/todo.md § INF-5
+## 1.1 Errors (one lane)
+- [ ] FW-9 The direct path names what it checks, and nothing more — direct_solve/framework/todo.md § FW-9
+- [ ] EXEC-25 A failing coefficient is found at the first entry — pipeline/08_execution/todo.md § EXEC-25
 - [ ] PARSE-4 Two span roles of a BETWEEN are never read — pipeline/01_parser/todo.md § PARSE-4
-- [ ] PLAN-8 The objective's canonical layer is compared as two renderings — pipeline/03_logical_plan/todo.md § PLAN-8
-- [ ] OPT-30 Two value checks of one comparison — pipeline/05_optimizer/todo.md § OPT-30
-- [ ] OPT-32 Optimizer labels are built on every query — pipeline/05_optimizer/todo.md § OPT-32
-- [ ] TEST-16 A frame reducer reads no row in no class — testing/todo.md § TEST-16
-- [ ] PERF-27 The pipeline profiler's error filter misses a refusal — performance/todo.md § PERF-27
-- [ ] EXEC-25 A failing coefficient is found at the first entry (decision) — pipeline/08_execution/todo.md § EXEC-25
 
-## 1.6 Filed after EXEC-19 (needs: 1.2) (one lane)
-- [ ] PLAN-9 `source_columns` is built and serialized on every query — pipeline/03_logical_plan/todo.md § PLAN-9
+## 1.2 Other cleanups filed in Phase 1 (one lane)
+- [ ] PLAN-8 The objective's canonical layer is compared as two renderings — pipeline/03_logical_plan/todo.md § PLAN-8
+- [ ] INF-5 Three label formatters no test reaches — diagnostics/infeasible/todo.md § INF-5
 
 # Phase 2 — Direct solve is a separate layer
 
@@ -73,9 +65,6 @@ the owner rules first.
 ## 5.1 Design (one lane)
 - [ ] ARCH-1 Design Phase 5 and file its tasks (decision) — pipeline/todo.md § ARCH-1
 
-## 5.2 Filed Phase 5 tasks (needs: ARCH-1) (one lane)
-- [ ] ARCH-3 A node's caret location and its identity as the user's text are two things — pipeline/todo.md § ARCH-3
-
 # Phase 6 — The model is written at the nodes
 
 ## 6.1 Design (needs: Phase 5) (one lane)
@@ -89,8 +78,3 @@ the owner rules first.
 - [ ] PERF-6 Solver execution — performance/todo.md § PERF-6
 - [ ] PERF-8 Memory and scaling — performance/todo.md § PERF-8
 - [ ] PERF-1 Methodology, a second host — performance/todo.md § PERF-1
-
-# Open questions (owner)
-
-- **The `DECIDE:` prefix of the number-range warning** (`decide_numeric_policy.hpp`). The warning no longer tells the
-  user what to change; whether its prefix follows V1 of the Phase 1 plan is open.

@@ -8,7 +8,7 @@ todo files.
 
 - **Problem.** The grammar records the two halves of a `BETWEEN` as span roles `BETWEEN_INPUT` and `BETWEEN_BOUNDS`
   (`noteDecideBetween` in `grammar.cpp`, `parsenodes.hpp`, `DecideSpanRole`), and no reader cuts either.
-- **Change.** Delete the two roles and `noteDecideBetween`, or use them where a message names a half of a `BETWEEN`.
+- **Change.** Delete the two roles and `noteDecideBetween`.
   Needs `make grammar-build`.
 - **Done when.** `grep -rn "BETWEEN_INPUT\|BETWEEN_BOUNDS" src third_party` finds a reader or nothing;
   `./test/decide/run_tests.sh -n 2 -k "parser or between"` passes.

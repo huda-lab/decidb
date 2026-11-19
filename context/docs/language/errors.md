@@ -5,42 +5,34 @@ query, and stops there: it does not say how to fix the query. `DIAGNOSE` is the 
 messages are all still raised under it, since nothing was solved and there is nothing to diagnose. The data checks that
 run before solving are in [guide.md §7.3](guide.md#73-data-checks).
 
-## What a message looks like
+## How DECIDE throws an error
 
-- **The form.** `<Kind>: <what is wrong>.` One statement, then DuckDB's own block that shows the place: `LINE n: …` with
-  a caret under it. The sentence carries no prefix (`DECIDE:`, `SUCH THAT clause:`) and never repeats the clause the
-  caret already shows. It names only what is smaller than the caret's target (`'x'`, `ABS`).
-- **Quoting.** A fragment the sentence quotes is cut from the query by its position, in single quotes, as the user
-  wrote it. It is not re-rendered from an internal form, so a spelling, a cast or a `CASE` appears as typed. In the
-  tables, `'q'` stands for such a fragment, `N` for a count and `'x'` for a name.
-- **The kind follows the cause, by one rule:**
-  - **Parser Error**: text that is not DECIDE syntax.
-  - **Binder Error**: a query that is wrong in the language. This includes the nesting limits the language keeps
-    (D80, [guide.md §5.5](guide.md#55-reducers-inside-reducers--the-path-rule)); those say "is not allowed".
-  - **Not implemented Error**: a shape the language allows but DeciDB does not handle, and a model class this
-    installation cannot solve. These say "is not supported".
-  - **Invalid Input Error**: the data or the outcome of solving (NaN, two values, infeasible, unbounded, a limit).
-  - **Internal Error**: DeciDB's own invariant. No query written in SQL causes one.
-- **A model class this installation cannot solve** says `… is not supported on this installation`, with no solver
-  named. A host with the solver answers the same query, so the installation is the place. `DECIDB_FORCE_SOLVER` gives
-  the same text: the forced solver is the installation.
-- **No place in the query.** A message about a setting, the environment or the outcome of a solve has no caret. It
-  names the setting or the component and states what is wrong (§5).
-- **A node DeciDB built** from the user's text takes the position of the text it replaces (the `==` and arithmetic
-  rewrites of the canonicalizer, like-term merges, a bound's reducer). A message about one prints the caret of that
-  text. A node with no such text prints no caret.
-- **A caret is given when it is at hand.** Where the expression an error is raised on already carries a location, the
-  message points at it; where it does not, the message gives the kind and the text and no caret. No location is
-  threaded, stored or computed for a caret alone.
+These are the rules for every error DECIDE raises. Code and tests follow them; nothing else about a message is owed.
 
-  **Ruling (owner, 2026-11-19).** Name the kind of error, and give details when possible. A message with the right
-  kind is finished: no task is filed to improve a caret or a wording.
-- **Which of several errors is reported is not owed.** The solver path raises the first error it reaches, and so does
-  the direct path (R10, R11, `../../opa_rewrite/decisions.md`). A parallel scan can reach a different failing row on
-  another run.
-- **A removed spelling is a syntax error.** A form the grammar no longer has (`C PER g`, `C WHEN c`, `scalar x`,
-  `T.x(INT)`, `MAXIMIZE e PER g`) fails as any other: `Parser Error: syntax error at or near "…"`. Nothing in the
-  parser recognizes an old spelling.
+1. **The kind is the DuckDB exception class, chosen by the cause.**
+   - `ParserException`: text that is not DECIDE syntax. A removed spelling is a plain syntax error.
+   - `BinderException`: a query that is wrong in the language. A nesting limit the language keeps says "is not
+     allowed".
+   - `NotImplementedException`: a shape the language allows but DeciDB does not handle, or a model this installation
+     cannot solve. It says "is not supported" (`… on this installation` for the second, with no solver named).
+   - `InvalidInputException`: the data or the outcome of solving: NaN, two values, infeasible, unbounded, a limit.
+   - `InternalException`: DeciDB's own bug. No query causes one.
+2. **The text is one plain statement of what is wrong, in SQL terms, and stops.** No fix (`DIAGNOSE` proposes edits),
+   no solver names, no internal names, no prefix. It may quote a piece of the query, as the code has it at hand.
+3. **A caret is given when it is at hand.** If the expression the error is raised on already has a location, pass it.
+   Otherwise raise without one. Never thread, store, serialize, merge or compute a location to get a caret. A message
+   about a setting, the environment or a solve outcome has no place in the query.
+4. **Raise where the problem is found.** Nothing collects, ranks or orders errors. When a query has several, which
+   one is reported is not owed.
+5. **The direct path and the solver path raise the same kind.** Their texts match where that falls out of shared
+   code; no code exists to make them match.
+6. **A message with the right kind is finished.** No task is filed to improve a wording or a caret.
+7. **Tests assert the kind, and the place when the message gives one**, with `assert_error_at`
+   (`../testing/oracle.md` §3.6), never the full text. A test that compares two runs compares their kind or first
+   line. A change to error paths alone runs only the error tests it touches.
+
+**Ruling (owner, 2026-11-19).** Name the kind of error and give details when possible; no hoops to throw verbose
+errors. The two paths need not print the same text.
 
 **Raised** is the stage that throws: **parse** (the grammar and the transformer), **bind** (the binder, while
 expressions are bound), **plan** (the canonicalizer, the shape check, the rewrites, the solver choice and the physical

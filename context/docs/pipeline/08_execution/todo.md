@@ -17,24 +17,6 @@ Other documented edge differences remain in `done.md` §1a: the D88 variant-name
 records. Direct-solve rules and DIAGNOSE's separate
 named-column scan also bypass or revisit parts of the normal tree execution; their scope is open.
 
-## EXEC-19 — A model row carries a back-pointer, and the diagnosis derives the rest
-
-- **Problem.** `SolverInput::diagnose` gates the display fields of `ConstraintProvenance` and the harvest of input
-  column names in `plan_decide.cpp` (`NameInputColumns`). Each emission site carries a `diagnose` branch, every helper
-  that stamps a row has one, and the display fields are written where the row is built.
-- **Change.** **Ruling (owner, 2026-11-19, Decision 5).** Late materialization. `ConstraintProvenance` keeps a
-  back-pointer to the row's clause, always: `repair_group_id`, `group_key` and `data_row`, with no new field. One
-  `ResolveProvenance` in the diagnosis layer derives kind, shape, labels, class set, `per_kept_row` and `is_aggregate`
-  from it under `DIAGNOSE`, through a resolver callback in `InfeasibleDiagnosisInput` (as `solve_model` is), in
-  `src/execution/operator/decide/decide_provenance_resolver.cpp`; about 15 signatures and two C++ test files change.
-  `strict`, `typed_k` and `rhs_mechanism_offset` stay on the row as formulation facts, and `lhs_offset` goes. The stamp
-  helpers lose their `diagnose` branches. `keep_singleton_rows` is restored as the name of the singleton-row mode, and
-  the `<>` indicator labels become a numeric back-pointer. `NameInputColumns` moves into the unbounded engine, called
-  from `plan_decide` under `DIAGNOSE` only, and `composed_minmax_constraints` moves with it. `DIAGNOSE` output stays
-  byte-identical: the 18 examples and the goldens.
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "diagnose or unbounded or infeasible"` passes and a golden shows no
-  change; `build/release/test/unittest "[decidb]"` passes.
-
 ## EXEC-20 — SolverInput is the whole contract of model building
 
 - **Problem.** `physical_decide.cpp` is 2,132 lines, about 425 of them the operator. `FormulateModel`, a second
@@ -79,8 +61,7 @@ named-column scan also bypass or revisit parts of the normal tree execution; the
 - **Problem.** A coefficient that fails on one row over 200,000 rows takes 4.6 s: `ComputeNode` evaluates every
   entry up front, and `DecideEvaluateWindow` then reads the failing window row by row. Plain SQL fails in milliseconds.
   The repro is `context/opa_rewrite/repro/failing_coefficient.sql`.
-- **Decision needed.** Where the first failing entry is found: 1. Compute in windows and stop at the first window that
-  fails. 2. Keep the whole-column computation and shorten the retry.
-- **Recommendation.** 1: the guide promises no order among errors, so the first failing window may stop the query.
+- **Change.** Compute in windows and stop at the first window that fails (`errors.md` rule 4: which error is reported
+  is not owed).
 - **Done when.** The repro fails in time close to plain SQL's; `./test/decide/run_tests.sh -n 2 -k "nan or finite or
   coefficient"` passes.

@@ -32,18 +32,3 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   compared side by side while both exist, and the tasks of the phase, each filed with an id.
 - **Needs.** Phase 5.
 - **Done when.** The owner approves the design and the phase's tasks are on the queue.
-
-## ARCH-3 — A node's caret location and its identity as the user's text are two things
-
-- **Problem.** `Expression::query_location` does two jobs. It is where a message's caret goes, and it marks a node as
-  the user's own text (a node with a location is quoted from the query; one without is reprinted). A rewrite that builds a
-  node takes the location of the node it equals in value (`DecideReplaces`) so both jobs stay true, and the code that
-  walks up to a located ancestor (`held_at`, the nearest located ancestor of a non-finite value) exists to bridge them.
-- **Change.** The pattern is Clang and LLVM's `SourceLocation` against a node's identity. A replacement inherits the
-  location of what it replaces, a merge takes the covering location of its operands, and quoting reads the parsed-tree
-  node, never the bound one. The location says where a caret goes; a separate fact says a node is the user's text.
-  The ancestor and `held_at` fields go. The design is part of ARCH-1's tree (`context/opa_rewrite/design.md` §3, contract
-  5).
-- **Needs.** ARCH-1.
-- **Done when.** No message reads a located ancestor; `./test/decide/run_tests.sh -n 2 -k "error or nan or explain"`
-  passes.

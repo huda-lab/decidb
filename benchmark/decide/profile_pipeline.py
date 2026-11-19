@@ -123,7 +123,7 @@ def parse_profile(stderr: str) -> dict:
 
 def classify(stderr: str) -> str:
     """Why a statement failed: a backend that cannot express the model, or one that ran out of time."""
-    if re.search(r"needs Gurobi|requires Gurobi|does not support|cannot solve", stderr, re.I):
+    if "Not implemented Error:" in stderr:
         return "unsupported"
     if re.search(r"hit the time limit|time limit|timed out", stderr, re.I):
         return "solver_limit"

@@ -70,18 +70,3 @@ files.
 - **Needs.** OPT-28.
 - **Done when.** Each pass runs once per query (`DECIDB_PROFILE=1`); `./test/decide/run_tests.sh -n 2 -k "bilinear
   or abs or rewrite"` passes.
-
-## OPT-30 — Two value checks of one comparison
-
-- **Problem.** `AddAbsValueCheck` (`decide_rewrite_abs.cpp`) drops a duplicate by comparing two checks including their
-  place, and `AddValueCheck` (`decide_rewrite_rhs_bounds.cpp`) compares them its own way. Two checks that differ only in
-  place are one check with two carets.
-- **Change.** One comparison, shared by both, which ignores the place.
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "abs or bound_side_tables"` passes.
-
-## OPT-32 — Optimizer labels are built on every query
-
-- **Problem.** `minmax_clause_labels`, `aux_var_expressions` and `link.label` are display state built for every clause,
-  in time proportional to the clauses, and no `diagnose` gate stands before them.
-- **Change.** They are built under `EXPLAIN` and `DIAGNOSE` only.
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "explain or diagnose"` passes with no golden change.

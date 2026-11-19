@@ -24,8 +24,10 @@ Test a fix for patchwork: does it carry a list of cases that will keep growing? 
 the same way. Compilers do the same: Clang underlines the original source text in its errors rather than reprinting
 its syntax tree. Prefer the fix with no case list, and add no code that does not remove a cause.
 
-A user-facing error states the kind of error and where it is in the query, in SQL terms, and stops: no suggested
-fix, no internal names, no solver terms. `DIAGNOSE` is the feature that proposes edits.
+Errors follow `context/docs/language/errors.md` § How DECIDE throws an error. In short: the right DuckDB exception
+class for the cause; one plain statement of what is wrong, with no fix and no internal or solver names; a caret only
+when the expression in hand already has a location; raise where found. Never build machinery for a message. `DIAGNOSE`
+is the feature that proposes edits.
 
 ## Commands (from the repository root)
 

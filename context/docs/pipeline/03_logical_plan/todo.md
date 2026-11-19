@@ -19,12 +19,3 @@ files.
 - **Change.** `CanonicalizeObjective` reports "changed", as `CanonicalizeTree` does for a clause, and the comparison of
   two renderings goes.
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "explain"` passes with no golden change.
-
-## PLAN-9 — `source_columns` is built and serialized on every query
-
-- **Problem.** `LogicalDecide::source_columns` is built and serialized for every query, and only `DIAGNOSE` reads it.
-  `DIAGNOSE` is set after planning (`bind_showref.cpp`), so planning cannot tell whether to build it.
-- **Change.** The columns are named where `DIAGNOSE` reads them, from the plan's column bindings, and the field and its
-  serialized property go.
-- **Needs.** EXEC-19 (it moves `NameInputColumns` into the unbounded engine).
-- **Done when.** `DECIDB_VERIFY_SERIALIZER=1 ./test/decide/run_tests.sh -n 2 -k "unbounded or diagnose"` passes.

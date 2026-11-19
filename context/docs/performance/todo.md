@@ -34,11 +34,3 @@ emitter's value links) and `formulation.value_links` against `cec0e42f99`, where
 to the extremum directly: each group sum is a helper decision, defined by one row per group assembled through
 `BuildMinMaxGroups`, three columns and three rows more on a million-row model. Inlining a SUM helper into the one
 reader that sums it is the expected remedy if the cost shows.
-
-## PERF-27 — The pipeline profiler's error filter misses a refusal
-
-- **Problem.** `classify` in `benchmark/decide/profile_pipeline.py` (line 126) marks a statement `unsupported` by a regex
-  over the error text (`needs Gurobi|requires Gurobi|does not support|cannot solve`). A message that says `is not
-  supported` matches none of its alternatives, so the row is recorded as an `error`.
-- **Change.** The profiler classifies by the error's kind (`Not implemented Error`), not by its wording.
-- **Done when.** A sweep of `benchmark/decide/queries` records every refusal as `unsupported`.
