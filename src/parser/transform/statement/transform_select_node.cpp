@@ -103,18 +103,24 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
 		// DeciDB's decide
 		if (stmt.decideClause) {
 			auto &decide_clause = PGCast<duckdb_libpgquery::PGDecideClause>(*stmt.decideClause);
-			// A declaration with no type is a bare name here (select.y, typed_decide_variable): refused only now,
-			// after the whole query has parsed, so that a syntax error after the name is the one reported.
+			// A declaration with no type has a NULL type here (select.y, typed_decide_variable): refused only now,
+			// after the whole query has parsed, so that a syntax error after the name is the one reported. Its
+			// location is the name's.
 			for (auto cell = decide_clause.variables ? decide_clause.variables->head : nullptr; cell;
 			     cell = cell->next) {
-				auto &variable =
-				    PGCast<duckdb_libpgquery::PGNode>(*PGPointerCast<duckdb_libpgquery::PGNode>(cell->data.ptr_value));
-				if (variable.type == duckdb_libpgquery::T_PGColumnRef) {
-					auto &name = PGCast<duckdb_libpgquery::PGColumnRef>(variable);
-					auto text = PGPointerCast<duckdb_libpgquery::PGValue>(name.fields->head->data.ptr_value)->val.str;
+				auto &declaration =
+				    PGCast<duckdb_libpgquery::PGAExpr>(*PGPointerCast<duckdb_libpgquery::PGNode>(cell->data.ptr_value));
+				if (!declaration.rexpr) {
+					// The name, under any scope the declaration is written in.
+					auto name = declaration.lexpr;
+					while (name->type == duckdb_libpgquery::T_PGAExpr) {
+						name = PGCast<duckdb_libpgquery::PGAExpr>(*name).lexpr;
+					}
+					auto &column = PGCast<duckdb_libpgquery::PGColumnRef>(*name);
+					auto text = PGPointerCast<duckdb_libpgquery::PGValue>(column.fields->head->data.ptr_value)->val.str;
 					throw ParserException::SyntaxError(*RootTransformer().parsed_query,
 					                                   StringUtil::Format("decision '%s' has no type", text),
-					                                   NumericCast<idx_t>(name.location));
+					                                   NumericCast<idx_t>(declaration.location));
 				}
 			}
 			if (!decide_clause.constraints) {

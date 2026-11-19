@@ -195,21 +195,22 @@ typed_decide_variable:
 				}
 			/* A declaration with no type. Bison reduces by default, so an action here runs before the
 			 * parser reads the token after the name: an error raised here would hide the syntax error
-			 * there (DECIDE t.x(INT) ...). The name goes on as a bare column reference, which the
-			 * transformer refuses once the whole query has parsed. */
+			 * there (DECIDE t.x(INT) ...). The declaration is built as the typed forms are, with a NULL
+			 * type (as CREATE TABLE builds a column with no type), which the transformer refuses once
+			 * the whole query has parsed. */
 			| ColId
 				{
 					PGColumnRef *col = makeNode(PGColumnRef);
 					col->fields = list_make1(makeString($1));
 					col->location = @1;
-					$$ = (PGNode *) col;
+					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", (PGNode *)col, NULL, @1);
 				}
 			| decide_per ':' ColId
 				{
 					PGColumnRef *col = makeNode(PGColumnRef);
 					col->fields = list_make1(makeString($3));
 					col->location = @3;
-					$$ = (PGNode *) col;
+					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", applyDecideScope($1, (PGNode *)col), NULL, @3);
 				}
 		;
 

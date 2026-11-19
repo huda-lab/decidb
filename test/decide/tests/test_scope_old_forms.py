@@ -54,8 +54,15 @@ def test_old_declaration_is_a_syntax_error_after_the_name(decidb_cli, sql, at):
     decidb_cli.assert_error_at(sql, kind="Parser Error", at=at, word="syntax error")
 
 
-def test_a_declaration_with_no_type_is_refused_at_its_name(decidb_cli):
-    decidb_cli.assert_error_at(_query("x"), kind="Parser Error", at="DECIDE x")
+@pytest.mark.parametrize(
+    "declarations, at",
+    [
+        pytest.param("x", "DECIDE x", id="bare"),
+        pytest.param("per g: x", ": x", id="under-a-per"),
+    ],
+)
+def test_a_declaration_with_no_type_is_refused_at_its_name(decidb_cli, declarations, at):
+    decidb_cli.assert_error_at(_query(declarations), kind="Parser Error", at=at)
 
 
 @pytest.mark.parametrize(
