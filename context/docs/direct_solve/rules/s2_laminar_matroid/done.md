@@ -48,9 +48,8 @@ raised in the held rows before the first row leaves, so an infeasible group rais
 This is the greedy for a laminar matroid: a row rejected by a finer quota takes no place in a coarser one, which ranking
 each level over all its rows would get wrong (a division of cap 2 holding scores 9, 8 and 7, where 9 and 8 share a
 department of cap 1, selects 9 and 7). Ties may break differently at each level; the exchange argument of the definition
-allows it. A data cap is a group bound of its level, registered with the builder: its aggregates are computed in the
-level's rank window and its value per group, rounded to whole rows, by the shared group-count-limit fragments S1 reads
-too. Where a cap's input fails in two ways at once (a NaN `cap` under `MAX(cap)`), which of the solver's two messages is
+allows it. A data cap is a column the bound-side rewrite built, with one value in each group of its level; S2 lays it
+out on the rows its level keeps and rounds it to whole rows with the shared `DirectGroupCountLimitRows`. Where a cap's input fails in two ways at once (a NaN `cap` under `MAX(cap)`), which of the solver's two messages is
 raised depends on the thread (error order is not owed). `EXPLAIN` shows `S2_LAMINAR_MATROID` and `min/max SUM(s*x), x in
 {0,1}, nested SUM(x) <= k quotas`.
 

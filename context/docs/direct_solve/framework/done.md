@@ -1,8 +1,10 @@
 # Shared engine — what exists today
 
-Latest full run, 2026-11-18: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off, serializer,
-highs) 8,835 passed; C++ `build/release/test/unittest "[decidb]"` 11,549 assertions in 115 cases. A debug build, the
-same day: `make decide-test-debug` 8,835 passed, its C++ suite 11,549 assertions in 115 cases, no assertion,
+Latest full run, 2026-11-19 (the Phase 1 gate): `test/decide/run_direct_matrix.sh`, 8,452 tests in each suite; auto
+and serializer 8,450 passed, off and highs 8,448. The failures are FW-9 tests that ran only in auto: R4's coefficient
+fixture (fixed with FW-5) and two zero-divisor cases on the solver path, open with the owner. The Gurobi golden is
+identical; the HiGHS golden differs by three Phase 1 error texts, not yet regenerated. C++
+`build/release/test/unittest "[decidb]"` 11,559 assertions in 115 cases. A debug build, 2026-11-18: `make decide-test-debug` 8,835 passed, its C++ suite 11,549 assertions in 115 cases, no assertion,
 ASan or UBSan report. It is the baseline for every direct-solve task and rule. Design: `../architecture/`.
 
 ## What it does
@@ -65,10 +67,8 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
     lower one when above. A tie takes the point of the interval nearest 0 (owner's ruling): two equal ends take the
     end nearer 0, the lower when both are as near, and a flat objective (`a = b = 0`) the clamp of 0, with no fallback
     for an open end. A NaN factor comes from two infinite ends and counts as a tie.
-  - **A group's aggregates** take one interface, `DirectGroupSink`. `DirectWindowSink` is its window form: each
-    aggregate becomes a window over the whole partition, with the rule's group as the partition (N1's data limit).
-    `DirectAggregateSink` is its hash form: each aggregate goes into the rule's hash aggregate through
-    `DirectAggregateOf`, which the bound side tables use too (S1, R1 and A2).
+  - **An aggregate from a reducer.** `DirectAggregateOf` builds the aggregate a recorded reducer names over its
+    arguments, for a bound side table.
   - **Group-then-join** (`DirectJoinClassAnswers`): a rule that gives one answer per class computes it once, on a
     class plan of one row per class (a hash aggregate of a first read on the class key, the answer and its checks above
     it), and joins it back to a second read of the rows on the class key, a SINGLE join, or a cross product for a
@@ -82,14 +82,13 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
     rule gives the steps that differ (the order, its columns, the windows over the order, the prefix columns, the prefix
     size, the group's verdict, whether a row is chosen). S1 ranks by score and keeps the best k, S3 by weight and keeps
     the longest run within the budget; S2, S4 and R2 take the same shape. The builder holds a list of levels, finest
-    first, each with its scope, its key, its rank and its group bounds; S1 and S3 build one. Level k > 0 ranks, over its
+    first, each with its scope, its key and its rank; S1 and S3 build one. Level k > 0 ranks, over its
     own partition and the rule's order, only the rows level k-1 keeps (`ROW_NUMBER` partitioned by the group and
     `Keeps(k-1)`, the AND of the finer levels' `WithinLimit`), which is the exact greedy for nested quotas; a window of
-    level k over the whole group (a count of fixed rows, a group bound) keeps the group's partition alone. The plan is
+    level k over the whole group (a count of fixed rows) keeps the group's partition alone. The plan is
     one read: the scope projection (every level's eligible flag and key), P1 (the rule's columns and the checks over the
     scope's columns), W1 (one window stage per level, per group in order of the ranking column, a NULL on a fixed row so
-    it ranks last: the rank, the rule's windows and the group limits through `DirectWindowSink`), PL (what each group
-    bound gives, computed once per row, only with a group bound), P2 (the prefix columns and the checks over P1's or
+    it ranks last: the rank, the rule's windows and the group limits), P2 (the prefix columns and the checks over P1's or
     W1's columns), W2 (the prefix size, for a rule that needs a window for it), the held rows (only where a check stands
     above the last window) and the answer. A check stands in P1 or P2 by what it reads. A check above the last window
     reaches a later group only when the parent reads that far, so the builder holds the rows in a materialized stage
@@ -185,8 +184,10 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
   1/2 copies at three reads and re-scans at two, so 0.4 stays. Any other source (a join, a subquery with an aggregate, a
   table function, a volatile expression) is one `LogicalMaterializedCTE`, defined through a projection that names its
   columns (a join under it may reorder its output in later passes) and read by `LogicalCTERef`s. Every read returns the
-  same rows, and no plan depends on their order. `DirectAddRowChecks` gives each check its own read and an
-  ungrouped `min` over the per-row message. The checks' verdict (`DirectAllHold`, true or raises) is the definition of a one-row materialized CTE, and
+  same rows, and no plan depends on their order. `DirectAddRowChecks` makes every check on one read: each row
+  makes the checks in the solver's order (`DirectAllHold`, true or raises), so a row that fails two raises the first
+  one's error, and an ungrouped `bool_and` over the rows gives the verdict (true for a source with no row), the
+  definition of a one-row materialized CTE, and
   the reader is gated on it (`DirectSourceReader::Gate`): every later read is `Filter[v](CrossProduct(rows, CTERef v))`
   under the read's forwarding projection, which keeps the rows' bindings. A gated read passes a row only once the CTE is
   computed, whichever side of the product is built first, so a check raises before any rule-built raise. Gates chain: a
@@ -248,18 +249,17 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
     `DirectAnyCondition` tests the conditions in the solver's order.
   - **The limit of an aggregate constraint.** `DirectReadLimit` reads a budget's right side into a `DirectLimit`: a
     constant of magnitude below 1e20 (from 1e20 the solver's reading depends on the rows, so the rule declines), or a
-    value of the data (`DirectDataLimit`), either a numeric expression over source columns that may raise, evaluated
-    on the rows that read it as the solver evaluates it, or the group aggregates the bound-side rewrite left to the
-    plan (`DirectGroupBoundIsReadable`). R1, S3 and N1 read their budget's limit with it, and
-    `DirectDataLimit::GroupBound` gives a data limit's group bound: the one the rewrite left, or the tightest per-row
-    value (`DirectTightestBound`). A count limit (S1) is read by `DirectReadCountLimit`, which is `DirectReadLimit` with
+    value of the data (`DirectDataLimit`: the comparison and a numeric expression over source columns that may raise,
+    evaluated on the rows that read it as the solver evaluates it). The bound-side rewrite has made a limit in the
+    aggregate shape a column with one value on every row of its group (below), so a rule reads it as it reads any
+    column. R1, S3 and N1 read their budget's limit with it. A count limit (S1) is read by `DirectReadCountLimit`, which is `DirectReadLimit` with
     the body's sign: `SUM(-x) <= B` is `SUM(x) >= -B`, a constant negated when read and a data value negated by the
     plan.
     `DirectInclusiveRows` (a constant, at plan time) and `DirectInclusiveRowsExpr` (a value of the data, per row or per
     group) turn a limit into an inclusive whole number of rows: ceil for a lower side, floor for an upper one, a strict
     comparison stepped by one, nothing past 2^53, an upper side below 0 impossible and a NULL no limit. A count limit
-    left to the plan as a group bound gives its value per group with `DirectGroupCountLimitValue` (the body's sign
-    applied) and its whole rows with `DirectGroupCountLimitRows`; S1 and S2 read their data caps with them.
+    of the data gives its whole rows with `DirectGroupCountLimitRows` (the body's sign applied); S2 reads its data
+    caps with it.
   - **A count body, a decision and fixed rows.** `DirectReadCountBody` reads a SUM whose constant coefficients add up
     to exactly 1 or -1 (`DirectConstantSlope`) as a count and gives its sign; S1 takes such a body and S3 declines it,
     so the two rules are apart by one test. `DirectIsOneRowDecision` proves one decision of a domain per row (S1, S2,
@@ -374,30 +374,18 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
   `SUM(ABS(SIGN(e)))`.
   - The bound of a clause in the aggregate shape holds when its group's tightest value does: the MIN of an upper bound,
     the MAX of a lower one, over the kept rows of the comparison's group; a row in no class of the clause's `per K:`
-    (D5) gives no bound. An `=` bound must take one value per group. A constant, a query-wide value, a reducer whose
-    `by` key is coarser than the group's, and a `<>` bound (which excludes each value it takes) are left alone. Every
-    other data bound is one kind, a value computed from its group (`DecideGroupBound`, held by `DecideReducedBound`):
-    the group's aggregates over per-row inputs, an upper and a lower limit over their results, and the checks of what
-    they read and give. A raw bound that varies in its group is the MIN and MAX of its value (`DirectTightestBound`); a
-    bound that reads data only through reducers of exactly the clause's group (`sum(x) by (g) <= sum(cap) by (g)`) is an
-    expression over those reducers' aggregates. A rule proves it can compute the bound (`DirectGroupBoundIsReadable`),
-    lays out the columns of each input (`DirectGroupLayout`, `DirectGroupInputs`; `DirectLayoutGroupInputs` adds them to
-    a `DirectProjectionStage`, for the ranked prefix, N1 and R1; R1 passes no check list and codes the messages itself)
-    and adds the aggregates to the group aggregate it already runs, with no branch per bound (`DirectAddGroupBound` and
-    a rule's `DirectGroupSink`: N1 and S3 a window through `DirectWindowSink`; S1, R1 and A2 their hash aggregate
-    through `DirectAggregateSink`), so a direct plan has no side table for them. Only the solver path records their
-    aggregates (`RecordGroupBound`, from `RecordReducedBounds`), and it returns the checks in the order a rule raises
-    them: every bound's per-row reads, then each bound's NaN limit. An `=` bound's NaN limit and agreement are scope
-    checks the bound-side rewrite makes before any rule runs, in that order (`AddDisagreementCheck`), so every
-    path raises the same one. A reducer on another `by` key, a
-    qualified reducer, a column beside a reducer and a sum with its own `when` are recorded on the direct path too
-    (`DirectIR::bounds_to_record`), and read from side tables.
+    (D5) gives no bound. An `=` bound must take one value per group. A constant, a query-wide value, a value with one
+    value per group already, and a `<>` bound (which excludes each value it takes) are left alone. Every other data
+    bound is recorded as a side table (ruling R18, `context/opa_rewrite/decisions.md`): each reducer it reads is a bound
+    aggregate, and the bound's tightest value is one more, the MIN or MAX of the bound over the group's kept rows. The
+    bound then reads a column with one value on every row of its group, on the solver path and the direct path alike,
+    so a rule reads a data limit as it reads any source column and computes no bound itself. An `=` bound's NaN limit
+    and agreement are scope checks the bound-side rewrite makes before any rule runs, in that order
+    (`AddDisagreementCheck`), so every path raises the same one.
   - Every value a bound reads is checked first, by VALUE_IS_VALID scope checks appended after the planner's: a
     reducer's argument (or a norm's written body: `SIGN(NaN)` is 0) on the rows the reducer reads, the bound on the
     kept rows, and an `=` bound's agreement in its group. Each check is a per-row message, NULL on a valid row. Both
     paths make them with `DirectAddRowChecks` (above), so both paths raise the same text.
-  - A data reducer on the bound side over exactly the clause's group is computed in the rule's group aggregate, not
-    as a side table; one on another `by` key, qualified, or beside a column is a side table.
   - The solver and the direct rules read DuckDB's value, so `SUM(x) <= SUM(cap)` over the `BIGINT` values 2^60, 1, -2^60
     reads the limit 1 on `off` and `require`. Arithmetic around the aggregate (`COUNT(*) / 2`) runs in DuckDB's types.
     On a row a reducer does not read, its argument is not computed (syntax reference §6.3). A read carries the tables'
@@ -412,7 +400,7 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
   open: S1's `SourceLimit` reads it as no limit, R1's limits pass over it through `MIN`/`MAX`/`LEAST`/`GREATEST`, and
   `DirectRowBoundMessage` and the singleton-row box (`AdmittedInterval`) give the instance no bound. The driver strips
   every tag from the operators above the source (`StripTagsAbove`), and an aggregate built from a reducer
-  (`DirectAggregateOf`, for a side table or a group bound, on either path) drops the reducer's alias, which carries its
+  (`DirectAggregateOf`, for a side table, on either path) drops the reducer's alias, which carries its
   tags, so EXPLAIN never prints one.
 - **Number messages.** Both paths raise one text, `DecideInvalidValueMessage` (`decide_value_messages.hpp`), from the
   value's `DecideValueRole` and its text as written: the cut query text, or `DirectIR::render` where none was cut

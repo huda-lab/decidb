@@ -14,7 +14,7 @@ One `REAL` decision shared by many rows, query-wide (`per ():`) or keyed (`per k
   `DirectProjectScope`.
 - **The interval.** Per class, the decision's box (the default floor of 0 or a written constant lower bound, and a
   constant upper bound) tightened by every bound clause: `MAX` of each clause's lower ends and `MIN` of its upper ends
-  over the rows of the class it keeps (`DirectTightestBound`). Constant and data bounds are one reading; a constant
+  over the rows of the class it keeps, in the class plan's hash aggregate. Constant and data bounds are one reading; a constant
   folds. As on the solver path, a NULL bound is skipped, an infinite bound in the open direction is no bound, an
   upper bound of `-inf` is infeasible, and a data lower bound does not lift the default floor of 0. A constant lower
   bound under a `when` lifts the floor for the whole class when some row of the class keeps it (`DirectStaticFloor`

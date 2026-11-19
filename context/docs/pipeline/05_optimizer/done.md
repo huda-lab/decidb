@@ -178,7 +178,7 @@ skipped, and only a NaN is checked (`COUNT` counts one). A reducer nested in a b
 reducer (`avg(per t.h: max(t.v) by (t.g, t.h)) by (t.g)`, guide §5.5) is recorded first,
 grouped by its path key over the rows its path keeps (`DecideReducerPath`), NULL on a row
 in no group of it; the table built after it reads its column, so the reducer around it
-skips that member as a NULL. Such a bound is never a group bound a rule computes itself. A reducer over data alone
+skips that member as a NULL. A reducer over data alone
 on a clause's left side or in the objective, inside one over decisions (`sum(x - avg(t.v) by (t.h)) by (t.g)`) or in
 none (`abs(x - max(t.id) by (t.g))`), is recorded the same way, over its path from the reducers around it
 (`ReplaceDataUnderDecisions`; the empty path in none), its column replacing it
@@ -193,11 +193,10 @@ in a bound of a clause over groups it stays only where it has one value per grou
 `first` or `last` frame whose timeline key the group key holds -- and execution checks its NaN as it reads it. One
 that needs its group's tightest value (D85) has its comparison tagged `FRAME_TIGHTEST_BOUND_TAG`, which survives the
 rebuilds that give a bound a new node, and execution takes that value from the rows it reads (stage 08), in the groups
-that hold an instance. A column's tightest value is the group's MIN or MAX in the side table (`DirectTightestBound`).
+that hold an instance. A column's tightest value is the group's MIN or MAX in a side table.
 An `=` bound's checks are scope checks made before any rule runs: its NaN check, then its `=` check (two values in
 one group, `AddDisagreementCheck`): one check per `by` group, whose message names the group and points at the bound
-(R15), made before any rule can; the NaN check stands with it, so every path raises the same error of the two. Another bound's NaN check is an input of the rule that computes the
-bound, which adds no pass to its plan. A check copies the value it reads with its tags (`NanMessage`,
+(R15), made before any rule can; the NaN check stands with it, so every path raises the same error of the two. Every other data bound's NaN check is a scope check too. A check copies the value it reads with its tags (`NanMessage`,
 `AddAbsValueCheck`): the tree reads a frame, a reducer and a query-wide value by their tags. The `=` check speaks only
 where each of the clause's reducers with a `when` of its own keeps a row of the group: a group with none holds no
 instance and constrains nothing, so
@@ -215,30 +214,29 @@ ordinary operators (`../../direct_solve/README.md`); a node they leave takes the
 below.
 
 `DecideOptimizer::RewriteForSolver` runs the passes below, and the order is load-bearing. The table includes the
-tree's early definition-function preparation (9), which reserves helper indices before the MIN/MAX rewrites and the
+tree's early definition-function preparation (8), which reserves helper indices before the MIN/MAX rewrites and the
 term splitter use them:
 
 | # | Pass | Why here |
 |---|---|---|
-| 1 | `RecordReducedBounds` | Records the aggregates of the bounds the bound-side rewrite left to a rule as bound aggregates, with their checks in the scope checks; the solver path reads them. |
-| 2 | `TagAtomicRemovalGroups` | Gives each source clause a written-order identity before any one-to-many rewrite, so a diagnostic repair removes a clause's rows together. |
-| 3 | `RewriteFrameRanges` | Each range frame over decisions becomes a helper decision per window before later rewrites copy clauses, so they read an ordinary keyed decision. |
-| 4 | `TagAbsForBigM` (written expressions) | Records the polarity of ABS nodes before rewrites move them into function bodies. |
-| 5 | `RewriteNorm` | Lowers the NORM marker, including L0 indicator metadata, and removes display tags from desugared L1/L2/infinity norms. |
-| 6 | `RewriteInDomain` | Lowers bound DECIDE-variable IN markers to indicator metadata. |
-| 7 | `TagAbsForBigM` (normalized expressions) | Classifies ABS nodes introduced by normalization before their F-node metadata is collected. |
-| 8 | `RewriteBilinear` | Retains Boolean products and records their expansions and product F-node specs. |
-| 9 | `DecideTreeConstruction::PrepareDefinitionFunctions` | Registers definition F-node specs and reserves scoped helper columns before value and MIN/MAX rewrites consume their reads. |
-| 10 | `RewriteScopedReducers` | The value rewrite: a VALUE-shape comparison's reducers become helper decisions. |
-| 11 | `RewriteBilinear` (nested values) | Records products exposed after nested reducer values become decisions. |
-| 12 | `RewriteComposedMinMax` | Detects composed (additive, mixed-reducer) MIN/MAX before single-term MIN/MAX handling. |
-| 13 | `RewriteMinMax` | Classifies and rewrites single top-level MIN/MAX in constraints and objectives. |
-| 14 | `RewriteNotEqual` | Creates `<>` indicators. |
-| 15 | `RewriteAvgToSum` | Scales AVG values into SUM terms after value and extremum rewrites. |
-| 16 | `RewriteAbs` | Allocates ABS helpers, stores the written function and lower-envelope metadata for F nodes, and adds the check of each ABS argument's data. |
-| 17 | `RewriteBilinear` (ABS factors) | Records products involving the newly allocated ABS helpers. |
-| 18 | `RetainRowChecks` | Keeps the scope checks a plan can make on the node for the tree to evaluate on the rows it reads (`DirectRetainRowChecks`, beside the direct path's `DirectAddRowChecks`). After every pass that adds one: `RecordReducedBounds` and `RewriteAbs`. |
-| 19 | `FoldSingletonRows` | Must be last of all — see below. |
+| 1 | `TagAtomicRemovalGroups` | Gives each source clause a written-order identity before any one-to-many rewrite, so a diagnostic repair removes a clause's rows together. |
+| 2 | `RewriteFrameRanges` | Each range frame over decisions becomes a helper decision per window before later rewrites copy clauses, so they read an ordinary keyed decision. |
+| 3 | `TagAbsForBigM` (written expressions) | Records the polarity of ABS nodes before rewrites move them into function bodies. |
+| 4 | `RewriteNorm` | Lowers the NORM marker, including L0 indicator metadata, and removes display tags from desugared L1/L2/infinity norms. |
+| 5 | `RewriteInDomain` | Lowers bound DECIDE-variable IN markers to indicator metadata. |
+| 6 | `TagAbsForBigM` (normalized expressions) | Classifies ABS nodes introduced by normalization before their F-node metadata is collected. |
+| 7 | `RewriteBilinear` | Retains Boolean products and records their expansions and product F-node specs. |
+| 8 | `DecideTreeConstruction::PrepareDefinitionFunctions` | Registers definition F-node specs and reserves scoped helper columns before value and MIN/MAX rewrites consume their reads. |
+| 9 | `RewriteScopedReducers` | The value rewrite: a VALUE-shape comparison's reducers become helper decisions. |
+| 10 | `RewriteBilinear` (nested values) | Records products exposed after nested reducer values become decisions. |
+| 11 | `RewriteComposedMinMax` | Detects composed (additive, mixed-reducer) MIN/MAX before single-term MIN/MAX handling. |
+| 12 | `RewriteMinMax` | Classifies and rewrites single top-level MIN/MAX in constraints and objectives. |
+| 13 | `RewriteNotEqual` | Creates `<>` indicators. |
+| 14 | `RewriteAvgToSum` | Scales AVG values into SUM terms after value and extremum rewrites. |
+| 15 | `RewriteAbs` | Allocates ABS helpers, stores the written function and lower-envelope metadata for F nodes, and adds the check of each ABS argument's data. |
+| 16 | `RewriteBilinear` (ABS factors) | Records products involving the newly allocated ABS helpers. |
+| 17 | `RetainRowChecks` | Keeps the scope checks a plan can make on the node for the tree to evaluate on the rows it reads (`DirectRetainRowChecks`, beside the direct path's `DirectAddRowChecks`). After the last pass that adds one, `RewriteAbs`. |
+| 18 | `FoldSingletonRows` | Must be last of all — see below. |
 
 `RewriteComposedMinMaxObjectiveTop` runs within the composed pass for the
 objective side. The `optimizer.decide` span of `DECIDB_PROFILE=1` times the whole block.

@@ -58,23 +58,6 @@ solver path answers those queries, so none of them is wrong, only slower.
   whether a value needs a mask or a check (N1's `q`, A1's floor), is a literal the rule builds with. **Ruling (owner,
   2026-11-13).**
 
-## FW-5 — A direct rule reads every bound from side tables
-
-- **Problem.** A bound whose reducers group as its clause does (`sum(x) by (g) <= sum(cap) by (g) - 2`) is recorded
-  as a `DecideGroupBound`: placeholder aggregates a rule computes inside its own group aggregate (R1, R4, N1, S1, S2,
-  S3, and A2 through `DirectTightestBound`). It is a third form of a bound beside side tables and the tree; pass 0
-  builds it on every path and the solver path turns it back into bound records (`RecordGroupBound`). When a group
-  bound's sum has its own `when`, the driver rewrites the plan (`RecordReducedBounds`) before it knows a rule applies,
-  and the solver path inherits the change.
-- **Change.** By the owner's ruling (2026-11-18, `context/opa_rewrite/decisions.md` R18): pass 0 records every bound
-  reducer as a bound aggregate; a rule reads it from side tables; a per-row bound's tightest value is a side table's
-  MIN or MAX. `DecideGroupBound`, `DecideReducedBound`, `reduced_bounds`, `bounds_to_record`,
-  `DirectGroupBoundIsReadable` and the rules' group-bound branches go. A rule that does not fire leaves the plan as
-  it found it.
-- **Done when.** `grep -rn "DecideGroupBound\|reduced_bounds" src` finds nothing;
-  `./test/decide/run_tests.sh -n 2 -k "bound_side_tables or s1_uniform or r1_continuous or group_bound"` passes, and
-  `DECIDB_TEST_DIRECT_SOLVE=off` on the same pattern.
-
 ## FW-6 — Two rules that apply to one query
 
 - **Decision needed.** `direct_rule_driver.cpp` raises an INTERNAL error when more than one rule applies. Nine

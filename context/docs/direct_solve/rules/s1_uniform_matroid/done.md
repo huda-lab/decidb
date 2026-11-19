@@ -10,19 +10,18 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
 - **Count bounds on `SUM(x)`:** `<=`, `<`, `>=`, `>`, `=`, or several combined into one interval. A bound can be a
   constant or a foldable constant expression of magnitude below 1e20 (from 1e20 the solver reads it, as for every rule
   that reads a limit with the shared reader), or a numeric source column or deterministic expression over source columns
-  that varies per row, including one that can raise (`cap + 1`, a narrowing `CAST`). A data bound reaches S1 as a group
-  bound (`../../framework/done.md`): S1 computes its aggregates (the MIN of an upper bound, the MAX of a lower one, an
-  `=` bound's MIN and MAX that must agree) once per group, in the rank window over the one read of the source, and
-  raises its NaN and disagreement errors where it holds the rows, in the solver's words (a NULL skips the instance). S1
-  reads that value in its score projection, on the rows its clause keeps; nothing is computed on a row the `when` drops
+  that varies per row, including one that can raise (`cap + 1`, a narrowing `CAST`). A data bound reaches S1 as a column
+  the bound-side rewrite built from a side table, the group's tightest value on every row of the group (the MIN of an
+  upper bound, the MAX of a lower one; an `=` bound's values must agree), and its NaN and disagreement are scope checks
+  raised before the plan, in the solver's words (a NULL skips the instance). S1 reads that value in its score
+  projection, on the rows its clause keeps; nothing is computed on a row the `when` drops
   (syntax reference §6.3). Values are converted to DOUBLE as the solver does; strict and fractional limits become
   inclusive integer counts; limits are exact up to 2^53.
 - **Bounds read from the kept rows:** `COUNT(*)`, `COUNT`, `MIN`, `MAX`, `SUM` and `AVG` of a numeric source expression on
   the right of a count bound, alone or inside `+ - * / //` and other arithmetic (`SUM(x) <= COUNT(*) / 2`,
   `>= COUNT(*) * 0.1`, `<= MIN(cap)`, `>= MAX(lo) / 2`, `<= SUM(cap)`), with or without a `when` of its own
-  (`<= sum(when f: 1)`, `<= min(when cap > 1: cap)`), a written norm and a keyed or colon reducer. A reducer over exactly the clause's
-  group is a group bound, which S1 computes in that aggregate; any other reducer reaches S1 as a source column the
-  bound-side rewrite built (`../../framework/done.md`). S1 has no reader of its own for a reducer. The value is DuckDB's, in its own types: `SUM` over any numeric type is
+  (`<= sum(when f: 1)`, `<= min(when cap > 1: cap)`), a written norm and a keyed or colon reducer. Every reducer, and the
+  tightest value of a per-row bound in its group, reaches S1 as a source column the bound-side rewrite built (`../../framework/done.md`). S1 has no reader of its own for a reducer. The value is DuckDB's, in its own types: `SUM` over any numeric type is
   exact, a bound of `COUNT(*) * 0.57` over 100 rows is exactly 57, and over the `BIGINT` values 2^60, 1, -2^60
   `SUM(cap)` is 1. `COUNT(*)` counts the rows the clause's `when` keeps; a `when` inside the left-hand sum
   (`SUM(when active: x) <= COUNT(*) / 2`) does not narrow the right. An infinite value is a value. An overflow
@@ -123,8 +122,8 @@ different `when` membership (S2); `SUM(x) <> k` (not an interval); bounds that a
 ## How it works
 
 The plan is the framework's ranked prefix (`DirectRankedPrefix`, [framework](../../framework/done.md)), over one read of
-the source: a scope projection, a score projection (P1), a rank window in order of the score that also computes the
-group bounds' aggregates (W1), the projection of what the group bounds give (PL), the prefix projection (P2), the held
+the source: a scope projection, a score projection (P1), a rank window in order of the score (W1), the prefix
+projection (P2), the held
 rows where a group can fail and the assignment. S1 reads the size of its prefix off the group's limits in P2, so it has
 no W2. Its count limits are read by the shared count-limit reader and rounded to whole rows by the shared fragment, and
 its score by the shared linear score (`../../framework/done.md`).
@@ -132,7 +131,7 @@ its score by the shared linear score (`../../framework/done.md`).
 - **Where the checks stand.** A window holds every row before it gives one, then gives them group by group, so a check
   above it reaches a later group only when the parent reads that far. The checks of a row over the scope's columns (the
   score, the values the row fixes, a row fixed to both values) stand in the score projection, below the rank window.
-  What a group bound reads is checked in P2, and every group bound brings the held rows above it. The checks of a group
+  The checks of a group
   (what its bounds give, and whether its rows and fixed values can meet them) read the rank window's counts, so they
   stand above it, in the projection of the held rows (`DirectHeldRows`), which every row passes before the first
   leaves and which raises the infeasible error unless the group's verdict holds. The held rows stand only where a check
@@ -142,7 +141,7 @@ its score by the shared linear score (`../../framework/done.md`).
 - **Class key.** A scoped problem carries the framework's [class key](../../framework/done.md): the `by` key's
   elements, compared with `=` where a NULL puts a row in no group, and one marker column when a `when` can drop rows
   and no element says so. The rank and count windows partition by it, so a row in no group ranks apart from every
-  group, and the group bounds join on it, so that row meets no group's bounds. No BOOLEAN eligibility column is part of
+  group, and its bound columns are NULL, so that row meets no group's bounds. No BOOLEAN eligibility column is part of
   the key.
 - **The score's check.** The score projection checks the score only for a score that can fail: the sum of the bounds of
   its terms, with their factors, is not below half the range of a DOUBLE (the framework's [Number
@@ -172,7 +171,7 @@ latency is on all threads; the planning DECIDE adds is apart. Both sides gave th
 | `s1` | 162.0 ms | 154.8 ms | 1.05 | 19.1 ms | 17.4 ms | 0.09 ms |
 | `s1_global` | 216.1 ms | 125.9 ms | 1.72 | 34.2 ms | 17.9 ms | 0.14 ms |
 
-`s1` is within the noise of the hand plan. `s1_global` (`SUM(pick) <= 0.1 * COUNT(*)`) reads a group bound, which
+`s1` is within the noise of the hand plan. `s1_global` (`SUM(pick) <= 0.1 * COUNT(*)`) reads a limit of the data, which
 brings the held rows: every row is stored once, from every thread, before the first leaves. The hand plan holds no
 rows, since it knows the limit is not negative, and counts the rows in an aggregate rather than in the rank window. That
 is the price of checking every group before the first row leaves.

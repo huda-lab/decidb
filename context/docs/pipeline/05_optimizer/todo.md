@@ -13,7 +13,6 @@ files.
   kept-row helpers).
 - **Change.** One vector of value checks on `LogicalDecide`; the kind enum and both wrapper types go. The general
   helpers move to `src/optimizer/decide/`; no solver-path file includes a `direct/` header.
-- **Needs.** FW-5 (it edits pass 0's bound records).
 - **Done when.** `grep -rln "decide/direct/" src/optimizer/decide/*.cpp` lists only the dispatch file;
   `./test/decide/run_tests.sh -n 2 -k "bound_side_tables or abs or nan"` passes.
 

@@ -15,12 +15,11 @@ One row-scoped `REAL` decision, with:
   constant slope gives a finite `q > 0`. A slope from the data is read and checked on the rows the clause keeps.
 - **Scope.** The clause's `when`, the sum's own `when`, a `by` key and a `per K:`, through `DirectProveSharedScope`. A row
   is in a ball when the scope keeps it and its key has no NULL in an element that does not group NULLs.
-- **The limit's value.** A constant of magnitude below 1e20, or a value of the source row
-  (`DirectIsSourceOnlyNumericMayRaise`). The tightest value in a group applies and a NULL has no limit, so a group with
-  no value has no ball. Or an aggregate of the rows (`<= SUM(budget) by (k)`, `<= 0.5 * SUM(l)`), a value of its group
-  that the plan computes in a window over the ball's group (`DirectGroupBoundIsReadable`,
-  `DirectWindowSink`); a NULL sum has no limit, and a NaN sum raises the solver's error. A sum with its own `when` is
-  computed first by the driver, and the rule reads it as a column.
+- **The limit's value.** A constant of magnitude below 1e20, or a value of the data
+  (`DirectIsSourceOnlyNumericMayRaise`): a value of the source row, or an aggregate of the rows (`<= SUM(budget) by
+  (k)`, `<= 0.5 * SUM(l)`). The bound-side rewrite gives either one as a column with one value in each group, the
+  tightest for a per-row value, from side tables, and N1 reads that column. A NULL has no limit, so a group with no
+  value has no ball, and a NaN raises the solver's error.
 - **The box.** Exactly `[0, inf)` (`x >= 0`, or nothing written) or `(-inf, inf)` (`x >= -1e30`).
 - **The objective.** None, or signed `SUM` parts, each with an optional constant factor or divisor and an optional `when`,
   plus an optional objective-level `when`. Terms: a row-valued coefficient times the decision, a per-row constant, and at

@@ -54,10 +54,10 @@ serves both directions; it reads the source once and uses windows only, no hash 
 framework's ranked prefix (`DirectRankedPrefix`, [framework](../../framework/done.md)), with W2 for the prefix size:
 
 1. The scope projection (`DirectProjectScope`), then each row's weight (`DirectSumOf` of the budget's terms, NULL on a
-   row the budget's `when` drops or a fixed row) and what the data limit reads, on the rows the budget keeps.
+   row the budget's `when` drops or a fixed row) and the data limit, on the rows the budget keeps: a column the
+   bound-side rewrite built, with the group's tightest value on every row of the group.
 2. One window, per group, in order of the weight (ascending under `<=`, descending under `>=`, a NULL weight last): the
-   running total (`DirectRunningSum`), the row's rank (`ROW_NUMBER`), the total of the rows fixed to 1 and the group's
-   limit (`DirectWindowSink`, `DirectAddGroupBound`; its MIN under `<=`, its MAX under `>=`). The rank and the running
+   running total (`DirectRunningSum`), the row's rank (`ROW_NUMBER`), and the total of the rows fixed to 1. The rank and the running
    total share one partition and one order, so DuckDB sorts once (`plan_window.cpp`, `PartitionsAreEquivalent`) and a
    row's rank is the position its total was summed at. Two sorts could order tied rows differently, and then select tied
    rows whose total exceeds `B`.
