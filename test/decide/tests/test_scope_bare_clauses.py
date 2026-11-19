@@ -267,10 +267,12 @@ def test_a_column_addend_keeps_a_min_or_max_fractional(request, cli_fixture):
     """`MAX(x + w)` is not `MAX(x)` plus one number: `w` varies by row, so it stays inside and
     a strict bound cannot step."""
     cli = request.getfixturevalue(cli_fixture)
-    result = cli.execute_raw(_query("x(INT)", "x <= cap AND MAX(x + w) > 3", "MINIMIZE SUM(x)"))
-    assert (
-        "Comparison '>' is not supported here: 'MAX(x + w)' has type DECIMAL(21,1) and can take fractional values"
-    ) in result.stderr, result.stderr
+    cli.assert_error_at(
+        _query("x(INT)", "x <= cap AND MAX(x + w) > 3", "MINIMIZE SUM(x)"),
+        kind="Not implemented Error",
+        at="MAX(x + w) > 3",
+        word="'>' compares 'MAX(x + w)'",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -406,9 +408,9 @@ def test_reducer_in_a_when_or_a_by_key_is_refused_at_bind_time(decidb_cli, claus
     """A `when` condition and a `by` key take data per row: a reducer there is refused
     while binding, naming it, not from the executor. (A `per` key lists columns, so the
     parser refuses an expression there.)"""
-    stderr = decidb_cli.execute_raw(_query("x(INT)", f"x <= cap AND {clause}", "MAXIMIZE SUM(x)")).stderr
-    assert f"a reducer such as '{reducer}' is not supported in when, per or by" in stderr, stderr
-    assert "Binder Error" in stderr and "^" in stderr, stderr
+    decidb_cli.assert_error_at(
+        _query("x(INT)", f"x <= cap AND {clause}", "MAXIMIZE SUM(x)"), kind="Binder Error", at=reducer
+    )
 
 
 @BOTH_SOLVERS

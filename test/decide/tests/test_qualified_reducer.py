@@ -554,14 +554,15 @@ def test_two_relation_composite_qualifier_equals_unqualified_when_query_has_only
 
 @pytest.mark.error_binder
 def test_unknown_relation_in_multi_relation_qualifier_rejected(decidb_cli):
-    """`sum(n,bogus: ...)`: the same "not in the FROM clause" rejection as the
-    single-relation case, naming the unresolvable relation."""
-    with pytest.raises(DeciDBCliError, match="not in the FROM clause"):
-        decidb_cli.execute(
-            _REJECT_BASE.format(
-                extra_decls="", constraint="SUM(keepN) <= 5", objective="SUM(n,bogus: n.n_nationkey * keepN)"
-            )
-        )
+    """`sum(n,bogus: ...)`: the same rejection as the single-relation case, pointing at the unresolvable
+    relation."""
+    decidb_cli.assert_error_at(
+        _REJECT_BASE.format(
+            extra_decls="", constraint="SUM(keepN) <= 5", objective="SUM(n,bogus: n.n_nationkey * keepN)"
+        ),
+        kind="Binder Error",
+        at="bogus",
+    )
 
 
 @pytest.mark.correctness
@@ -617,12 +618,13 @@ def test_query_wide_decision_alone_inside_qualified_reducer_rejected(decidb_cli)
 
 @pytest.mark.error_binder
 def test_unknown_relation_qualifier_rejected(decidb_cli):
-    with pytest.raises(DeciDBCliError, match="not in the FROM clause"):
-        decidb_cli.execute(
-            _REJECT_BASE.format(
-                extra_decls="", constraint="SUM(keepN) <= 5", objective="SUM(supplier: n.n_nationkey * keepN)"
-            )
-        )
+    decidb_cli.assert_error_at(
+        _REJECT_BASE.format(
+            extra_decls="", constraint="SUM(keepN) <= 5", objective="SUM(supplier: n.n_nationkey * keepN)"
+        ),
+        kind="Binder Error",
+        at="supplier",
+    )
 
 
 # ---------------------------------------------------------------------------

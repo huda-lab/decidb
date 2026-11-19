@@ -33,7 +33,8 @@ namespace duckdb {
 //! a USING column, the SQL binder reads the name. Subquery bodies are not entered: their
 //! names are their own.
 static void RefuseQualifiedDecisionReferences(const ParsedExpression &expr, BindContext &bind_context,
-                                              const case_insensitive_map_t<idx_t> &variables, bool data_position) {
+                                              const case_insensitive_map_t<idx_t> &variables,
+                                              const DecideSourceText *text, bool data_position) {
 	if (expr.GetExpressionClass() == ExpressionClass::COLUMN_REF) {
 		auto &colref = expr.Cast<ColumnRefExpression>();
 		// `[catalog.][schema.]D.open` is at most four names; the SQL binder reads the names after the fourth as
@@ -47,7 +48,7 @@ static void RefuseQualifiedDecisionReferences(const ParsedExpression &expr, Bind
 		if (!binding) {
 			return;
 		}
-		throw BinderException(expr, "DECIDE: %s is a decision; when, per and by may only use data", colref.ToString());
+		throw BinderException(expr, "%s", DecisionInDataMessage(DecideWrittenSql(expr, text), "when, per and by"));
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
 		auto &func = expr.Cast<FunctionExpression>();
@@ -55,16 +56,16 @@ static void RefuseQualifiedDecisionReferences(const ParsedExpression &expr, Bind
 		bool scope = func.is_operator && (func.function_name == SCOPE_WHEN_TAG || func.function_name == SCOPE_PER_TAG ||
 		                                  func.function_name == REDUCER_BY_TAG);
 		for (idx_t i = 0; i < func.children.size(); i++) {
-			RefuseQualifiedDecisionReferences(*func.children[i], bind_context, variables,
+			RefuseQualifiedDecisionReferences(*func.children[i], bind_context, variables, text,
 			                                  data_position || (scope && i > 0));
 		}
 		if (func.filter) {
-			RefuseQualifiedDecisionReferences(*func.filter, bind_context, variables, data_position);
+			RefuseQualifiedDecisionReferences(*func.filter, bind_context, variables, text, data_position);
 		}
 		return;
 	}
 	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
-		RefuseQualifiedDecisionReferences(child, bind_context, variables, data_position);
+		RefuseQualifiedDecisionReferences(child, bind_context, variables, text, data_position);
 	});
 }
 
@@ -110,15 +111,15 @@ struct ParsedDeclaration {
 //! A volatile function (`random()`) would take a different value each time a clause is read, and the solver reads a
 //! clause more than once (its scope checks, its rows, a bound-side reducer), so it is refused where it is written.
 //! A value computed once per row in a subquery or CTE is ordinary data.
-static void RefuseVolatile(const Expression &expr, const char *where) {
+static void RefuseVolatile(const Expression &expr) {
 	// The function's own stability: IsVolatile() is true for every expression above a volatile one too.
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &function = expr.Cast<BoundFunctionExpression>();
 		if (function.function.stability == FunctionStability::VOLATILE) {
-			throw BinderException("DECIDE: %s() is not supported in %s", function.function.name, where);
+			throw BinderException(expr, "a volatile function is not allowed in a DECIDE clause");
 		}
 	}
-	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { RefuseVolatile(child, where); });
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { RefuseVolatile(child); });
 }
 
 //! The grammar builds a declaration as `name = 'type_marker'` (typed_decide_variable), the name a column reference,
@@ -166,11 +167,11 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 		// GetMatchingBinding skips a USING column (its binding is the join's merged column), so a
 		// decision named like one has to be asked for separately.
 		if (bind_context.GetMatchingBinding(name) || bind_context.GetUsingBinding(name)) {
-			throw BinderException(*expr_ptr, "DECIDE variable '%s' conflicts with an existing column name.", name);
+			throw BinderException(*expr_ptr, "decision '%s' has the name of a column", name);
 		}
 		RefuseDecideTagInName(*expr_ptr, name);
 		if (!declared_names.insert(name).second) {
-			throw BinderException(*expr_ptr, "Duplicate DECIDE variable name '%s'.", name);
+			throw BinderException(*expr_ptr, "decision '%s' is declared twice", name);
 		}
 	}
 
@@ -219,10 +220,12 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 
 	// A relation-qualified decision in a `when`, `per` or `by` is refused.
 	if (statement.decide_constraints) {
-		RefuseQualifiedDecisionReferences(*statement.decide_constraints, bind_context, decide_variable_names, false);
+		RefuseQualifiedDecisionReferences(*statement.decide_constraints, bind_context, decide_variable_names,
+		                                  &statement.decide_text, false);
 	}
 	if (statement.decide_objective) {
-		RefuseQualifiedDecisionReferences(*statement.decide_objective, bind_context, decide_variable_names, false);
+		RefuseQualifiedDecisionReferences(*statement.decide_objective, bind_context, decide_variable_names,
+		                                  &statement.decide_text, false);
 	}
 
 	// Where `when`, `per` and `by` may stand, before anything reads the clauses: every
@@ -252,7 +255,8 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 	if (statement.decide_constraints) {
 		// An aggregate over data that scales a decision is refused before symbolic
 		// normalization could distribute the decision into it.
-		ValidateDecideNoDataAggregateFactor(context, *statement.decide_constraints, decide_variable_names);
+		ValidateDecideNoDataAggregateFactor(context, *statement.decide_constraints, decide_variable_names,
+		                                    &statement.decide_text);
 		// A `<`, `>` or `<>` over a REAL decision has no exact encoding — all three
 		// are encoded by stepping the bound one integer unit — and the declared type
 		// says so without reading a row. Rejecting here names the variable and quotes
@@ -262,7 +266,8 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 		                                            &statement.decide_text);
 	}
 	if (statement.decide_objective) {
-		ValidateDecideNoDataAggregateFactor(context, *statement.decide_objective, decide_variable_names);
+		ValidateDecideNoDataAggregateFactor(context, *statement.decide_objective, decide_variable_names,
+		                                    &statement.decide_text);
 	}
 
 	bind_context.AddGenericBinding(result.decide_index, "decide_variables", var_names, var_types);
@@ -291,7 +296,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 		unique_ptr<ParsedExpression> constraints = std::move(statement.decide_constraints);
 		result.decide_constraints = decide_constraints_binder.Bind(constraints);
 		if (result.decide_constraints) {
-			RefuseVolatile(*result.decide_constraints, "a constraint");
+			RefuseVolatile(*result.decide_constraints);
 			// The other half of the integer-step gate. The parsed-tree validator above
 			// read the decision's declared type off the DECIDE clause; every other
 			// operand's type is only known now that binding has resolved it. Together
@@ -309,12 +314,12 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 		unique_ptr<ParsedExpression> objective = std::move(statement.decide_objective);
 		result.decide_objective = decide_objective_binder.Bind(objective);
 		if (result.decide_objective) {
-			RefuseVolatile(*result.decide_objective, "the objective");
+			RefuseVolatile(*result.decide_objective);
 		}
 	}
 	for (auto &key : keys) {
 		for (auto &element : key.elements) {
-			RefuseVolatile(*element.expression, "a by key");
+			RefuseVolatile(*element.expression);
 		}
 	}
 	result.decide_text = statement.decide_text;

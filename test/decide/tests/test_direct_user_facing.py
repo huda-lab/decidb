@@ -1302,9 +1302,7 @@ def test_extension_registration_preserves_binder_errors(decidb_cli):
         ) q
     """
     for mode in ("off", "require"):
-        result = _raw(decidb_cli, sql, mode=mode)
-        assert "Binder Error" in result.stderr
-        assert "Relation 'm' is not in the FROM clause" in result.stderr
+        decidb_cli.assert_error_at(f"SET decide_direct_solve='{mode}'; {sql}", kind="Binder Error", at="m")
 
 
 # --- Reading a stored table twice instead of holding wide rows ---------------------------------------------------------

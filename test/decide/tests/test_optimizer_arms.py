@@ -155,19 +155,21 @@ def test_a_query_wide_decision_beside_its_own_sum(decidb_cli_gurobi, decidb_cli_
 
 
 # ---------------------------------------------------------------------------
-# Refusals, pinned by their text
+# Refusals, pinned by their kind and place
 # ---------------------------------------------------------------------------
 
 
 def test_a_strict_bound_on_a_fractional_reducer_is_refused_for_less_than(decidb_cli):
-    """RefuseFractionalStep: the `<` message, beside the `>` and `<>` ones the suite pins. It refuses before a backend
-    runs."""
+    """RefuseFractionalStep: the `<` refusal, beside the `>` and `<>` ones the suite pins. It refuses before a backend
+    runs, at the comparison."""
     sql = f"""
         SELECT id, y FROM {_ROWS}
         DECIDE y(INT)
         SUCH THAT y <= 6 AND y < sum(y + 0.5) by (id)
         MAXIMIZE SUM(y)"""
-    decidb_cli.assert_error(sql, match=re.escape("Comparison '<' is not supported here") + r".*Compare with '<='")
+    decidb_cli.assert_error_at(
+        sql, kind="Not implemented Error", at="y < sum(y + 0.5) by (id)", word="'<' compares 'sum(y + 0.5) by (id)'"
+    )
 
 
 @pytest.mark.parametrize("backend", ["gurobi", "highs"])

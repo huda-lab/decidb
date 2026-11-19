@@ -130,17 +130,15 @@ def test_coalesce_over_decide_variable_inside_reducer_is_rejected(decidb_cli, cl
 def test_null_beside_a_decision_is_refused(decidb_cli, clause):
     """`keep + NULL` is NULL whatever `keep` is: refused where it is written, not
     reported as an internal error once the decision has been folded away."""
-    result = decidb_cli.execute_raw(
+    decidb_cli.assert_error_at(
         f"""
         SELECT id, keep
         FROM range(1, 4) items(id)
         DECIDE keep(BOOL)
         SUCH THAT {clause}
         MAXIMIZE SUM(keep)
-    """
+    """,
+        kind="Binder Error",
+        at="keep + NULL",
+        word="'keep + NULL'",
     )
-    assert (
-        "DECIDE: 'keep + NULL' is NULL whatever the decisions are; replace the NULL with a value, as in "
-        "COALESCE(column, 0)"
-    ) in result.stderr, result.stderr
-    assert "INTERNAL" not in result.stderr, result.stderr

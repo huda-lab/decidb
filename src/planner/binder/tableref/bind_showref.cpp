@@ -165,18 +165,13 @@ unique_ptr<BoundTableRef> Binder::BindDiagnose(ShowRef &ref) {
 	vector<reference<LogicalDecide>> decides;
 	CollectDecides(*plan.plan, decides);
 	if (decides.empty()) {
-		throw BinderException("DIAGNOSE needs a query with a DECIDE clause — it reports on "
-		                      "an optimization run, and this query has no optimization to run. "
-		                      "Use EXPLAIN ANALYZE for a plain SQL query.");
+		throw BinderException(ref, "DIAGNOSE needs a query with a DECIDE clause");
 	}
 	// One report, one optimization. A query with several DECIDE clauses runs several
 	// solves, and a single diagnosis relation cannot say which one it describes -- so
 	// refuse rather than pick one and report it as if it were the query's answer.
 	if (decides.size() > 1) {
-		throw BinderException("DIAGNOSE reports on one optimization at a time, and this query has "
-		                      "%s DECIDE clauses. Isolate each decision query and run DIAGNOSE "
-		                      "on each separately.",
-		                      to_string(decides.size()));
+		throw NotImplementedException(ref.query_location, "DIAGNOSE on more than one DECIDE clause is not supported");
 	}
 	// The trigger, carried on the plan itself rather than read back out of a session
 	// setting: this operator, in this statement, diagnoses.

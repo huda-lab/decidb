@@ -934,22 +934,18 @@ def test_an_inlined_group_average_stays_apart_from_another(scope_solver, decidb_
 @pytest.mark.error
 @pytest.mark.error_binder
 @pytest.mark.parametrize(
-    "clause_sql, message",
+    "clause_sql, at",
     [
-        pytest.param("sum(norm(x, 1)) <= 5", "DECIDE: norm inside a reducer is not supported yet", id="norm"),
+        pytest.param("sum(norm(x, 1)) <= 5", "norm(x, 1)", id="norm"),
         # A norm is rewritten before the value rewrite reads the path rule, so the inner
         # reducer would lose the enclosing reducer's `when` and `by`.
         pytest.param(
-            "per t.g: norm(max(x) by (t.h), 1) by (t.g) <= 5",
-            "DECIDE: a reducer inside norm is not supported yet",
-            id="reducer-in-norm",
+            "per t.g: norm(max(x) by (t.h), 1) by (t.g) <= 5", "norm(max(x) by (t.h), 1)", id="reducer-in-norm"
         ),
     ],
 )
-def test_refused_nests(decidb_cli, clause_sql, message):
-    result = decidb_cli.execute_raw(_bound_query(f"x <= 9 AND {clause_sql}"))
-    assert message in result.stderr, result.stderr
-    assert_no_internal_leak(result, "a refused nest")
+def test_refused_nests(decidb_cli, clause_sql, at):
+    decidb_cli.assert_error_at(_bound_query(f"x <= 9 AND {clause_sql}"), kind="Binder Error", at=at)
 
 
 @BOTH_SOLVERS

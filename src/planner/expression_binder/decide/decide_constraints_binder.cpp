@@ -145,6 +145,16 @@ static bool IsAllowedDecisionFreeBoundExpression(const ParsedExpression &expr,
 	}
 }
 
+//! The refusal for a comparison, BETWEEN or conjunction that reads a decision and stands where a number does.
+static BindResult ComparisonUsedAsNumber(const ParsedExpression &expr, const DecideSourceText *text) {
+	return BindResult(BinderException(expr, "%s", ComparisonUsedAsNumberMessage(DecideWrittenSql(expr, text))));
+}
+
+//! The refusal for a bare decision or frame standing as a whole constraint: it says nothing to hold.
+static BindResult NotAComparison(const ParsedExpression &expr, const DecideSourceText *text) {
+	return BindResult(BinderException(expr, "'%s' is not a comparison", DecideWrittenSql(expr, text)));
+}
+
 //! The refusal for a constraint shape DECIDE cannot read, quoting the part as written.
 static BindResult UnsupportedConstraint(ParsedExpression &expr, const DecideSourceText *text) {
 	return BindResult(BinderException::Unsupported(
@@ -166,15 +176,15 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
 	// constraint, and so are `x <= 5` and `5 >= x`. Nothing here rewrites the
 	// comparison to make that true: DecideCanonicalizer swaps the sides on the
 	// BOUND tree when every decision term sits on the right, so shape is decided once.
-	string left_error, right_error;
-	auto left_type = GetExpressionType(*comp.left, left_error);
-	auto right_type = GetExpressionType(*comp.right, right_error);
+	DecideRefusal left_refusal, right_refusal;
+	auto left_type = GetExpressionType(*comp.left, left_refusal);
+	auto right_type = GetExpressionType(*comp.right, right_refusal);
 
 	if (!IsDecideSide(left_type) && !IsDecideSide(right_type)) {
 		// Neither side decides anything. Report the left-hand diagnosis: it is the
 		// one the user reads first, and for the common `col <= 5` it is the accurate
 		// one -- classification only ever fails on a side, never on the relation.
-		return BindResult(BinderException::Unsupported(expr, left_error));
+		return left_refusal.ToResult(expr);
 	}
 
 	// A reduced constraint collapses many rows to one number, so a side of it that
@@ -186,12 +196,11 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
 			return IsAllowedDecisionFreeBoundExpression(side, variables) &&
 			       !ExpressionContainsDecideVariable(side, variables);
 		};
+		auto &bound_side = !IsDecideSide(left_type) && !IsValidBound(*comp.left) ? *comp.left : *comp.right;
 		if ((!IsDecideSide(left_type) && !IsValidBound(*comp.left)) ||
 		    (!IsDecideSide(right_type) && !IsValidBound(*comp.right))) {
-			return BindResult(BinderException::Unsupported(
-			    expr, StringUtil::Format("SUM cannot be compared to an expression that is not a scalar or aggregate "
-			                             "without DECIDE variables, found '%s'",
-			                             DecideWrittenSql(expr, qualifier_context->source_text))));
+			return BindResult(BinderException(bound_side, "'%s' is not data or a reducer",
+			                                  DecideWrittenSql(bound_side, qualifier_context->source_text)));
 		}
 	}
 	is_top_expression = false;
@@ -204,17 +213,13 @@ BindResult DecideConstraintsBinder::BindOperator(unique_ptr<ParsedExpression> &e
 	switch (op.type) {
 	case ExpressionType::COMPARE_IN: {
 		if (!IsVariableExpression(*op.children.front(), variables)) {
-			return BindResult(BinderException::Unsupported(
-			    expr,
-			    StringUtil::Format(
-			        "SUCH THAT does not support IN on '%s'. Only simple DECIDE variables are allowed as the IN target",
-			        DecideWrittenSql(*op.children.front(), qualifier_context->source_text))));
+			return BindResult(
+			    NotImplementedException(expr, "IN on '%s' is not supported",
+			                            DecideWrittenSql(*op.children.front(), qualifier_context->source_text)));
 		}
 		for (idx_t i = 1; i < op.children.size(); i++) {
 			if (ExpressionContainsDecideVariable(*op.children[i], variables)) {
-				return BindResult(BinderException::Unsupported(
-				    expr, "IN domain constraints on DECIDE variables are not yet supported. "
-				          "The values in the IN list must be constants or table columns, not DECIDE variables."));
+				return BindResult(BinderException(expr, "an IN list reads a decision"));
 			}
 		}
 		// Keep the native bound operator as an optimizer marker. DuckDB binds its
@@ -257,7 +262,7 @@ BindResult DecideConstraintsBinder::BindConjunction(unique_ptr<ParsedExpression>
 	// Constraints are joined with AND. An OR between them would need an indicator per
 	// alternative, which no layer builds, and every later walk reads a conjunction as AND.
 	if (conj.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
-		return BindResult(BinderException::Unsupported(expr, "SUCH THAT: OR is not supported."));
+		return BindResult(NotImplementedException(expr, "OR between SUCH THAT constraints is not supported"));
 	}
 	// Only a constraint list reaches here (an operand conjunction is data or refused), so
 	// each child is a constraint.
@@ -406,7 +411,7 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
 	if (!is_top_expression && (expr.GetExpressionClass() == ExpressionClass::COMPARISON ||
 	                           expr.GetExpressionClass() == ExpressionClass::BETWEEN ||
 	                           expr.GetExpressionClass() == ExpressionClass::CONJUNCTION)) {
-		return UnsupportedConstraint(expr, qualifier_context->source_text);
+		return ComparisonUsedAsNumber(expr, qualifier_context->source_text);
 	}
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::COLUMN_REF: {
@@ -414,9 +419,7 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
 			return ExpressionBinder::BindExpression(expr_ptr, depth);
 		}
 		// A bare column at the top level of SUCH THAT is never a valid constraint.
-		return BindResult(BinderException::Unsupported(
-		    expr, StringUtil::Format("'%s' is not a valid SUCH THAT constraint on its own; compare it with a value",
-		                             DecideWrittenSql(expr, qualifier_context->source_text))));
+		return NotAComparison(expr, qualifier_context->source_text);
 	}
 	case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
@@ -455,24 +458,22 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
 			return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
 		}
 		// A frame alone, like a bare decision, says nothing to hold.
-		return BindResult(BinderException::Unsupported(
-		    expr, StringUtil::Format("'%s' is not a valid SUCH THAT constraint on its own; compare it with a value",
-		                             DecideWrittenSql(expr, qualifier_context->source_text))));
+		return NotAComparison(expr, qualifier_context->source_text);
 	default:
 		break;
 	}
 	return UnsupportedConstraint(expr, qualifier_context->source_text);
 }
 
-DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &expr_ptr, string &error_msg) {
+DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &expr_ptr, DecideRefusal &refusal) {
 	// A relation qualifier changes which tuples a reducer sums over, not what shape it
 	// is, so classification looks straight through it.
 	auto &expr = const_cast<ParsedExpression &>(UnwrapReducerMarkers(expr_ptr));
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::COLUMN_REF: {
 		if (!IsVariableExpression(expr, variables)) {
-			error_msg = StringUtil::Format("SUCH THAT clause: Column '%s' must be one of the DECIDE variables",
-			                               DecideWrittenSql(expr, qualifier_context->source_text));
+			refusal.Set(expr, StringUtil::Format("'%s' is not a decision",
+			                                     DecideWrittenSql(expr, qualifier_context->source_text)));
 			return DecideExpression::INVALID;
 		}
 		return DecideExpression::VARIABLE;
@@ -480,16 +481,14 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
 	case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
 		DecideExpression reducer_result;
-		if (ClassifyReducerCall(func, reducer_result, error_msg)) {
+		if (ClassifyReducerCall(func, reducer_result, refusal)) {
 			return reducer_result;
 		}
 		if (ContainsDecideAggregate(expr)) {
 			// A reducer under arithmetic decides nothing unless something in it reads a
 			// decision: `sum(t.v) by (t.g) + 1` is data, as a bare column is.
 			if (!ExpressionContainsDecideVariable(expr, variables)) {
-				error_msg =
-				    StringUtil::Format("SUCH THAT clause: '%s' reads no DECIDE variable; compare a decision with it",
-				                       DecideWrittenSql(expr, qualifier_context->source_text));
+				refusal.Set(expr, ReadsNoDecisionMessage(DecideWrittenSql(expr, qualifier_context->source_text)));
 				return DecideExpression::INVALID;
 			}
 			return DecideExpression::SUM;
@@ -499,9 +498,8 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
 			// (e.g., z_1 + z_2 + z_3 from IN rewrite, or d - x from ABS linearization)
 			return DecideExpression::VARIABLE;
 		} else {
-			error_msg = StringUtil::Format("SUCH THAT clause does not support left-hand side function '%s', only SUM, "
-			                               "AVG, MIN, or MAX is allowed.",
-			                               DecideWrittenFunctionName(func));
+			refusal.Set(
+			    func, StringUtil::Format("function '%s' is not supported here", DecideWrittenFunctionName(func)), true);
 			return DecideExpression::INVALID;
 		}
 	}
@@ -510,22 +508,21 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
 		// row/aggregate shape. Keep it in the parsed and bound trees so the
 		// exact-cast classifier or atomic preimage lowering can consume it.
 		auto &cast = expr.Cast<CastExpression>();
-		return GetExpressionType(*cast.child, error_msg);
+		return GetExpressionType(*cast.child, refusal);
 	}
 	case ExpressionClass::DECIDE_FRAME: {
 		// A frame term is one value per anchor row: its payload read at the rows it selects.
 		if (ExpressionContainsDecideVariable(expr, variables)) {
 			return DecideExpression::VARIABLE;
 		}
-		error_msg = StringUtil::Format("SUCH THAT clause: '%s' reads no DECIDE variable; compare a decision with it",
-		                               DecideWrittenSql(expr, qualifier_context->source_text));
+		refusal.Set(expr, ReadsNoDecisionMessage(DecideWrittenSql(expr, qualifier_context->source_text)));
 		return DecideExpression::INVALID;
 	}
 	default: {
-		error_msg =
-		    StringUtil::Format("The left-hand side of a SUCH THAT constraint must be a DECIDE variable or a SUM "
-		                       "expression over a DECIDE variable (e.g., SUM(x * a) / SUM(x)). Found '%s' instead.",
-		                       DecideWrittenSql(expr, qualifier_context->source_text));
+		refusal.Set(expr, StringUtil::Format(
+		                      "The left-hand side of a SUCH THAT constraint must be a DECIDE variable or a SUM "
+		                      "expression over a DECIDE variable (e.g., SUM(x * a) / SUM(x)). Found '%s' instead.",
+		                      DecideWrittenSql(expr, qualifier_context->source_text)));
 		return DecideExpression::INVALID;
 	}
 	}

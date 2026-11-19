@@ -243,6 +243,14 @@ TransactionException::TransactionException(const string &msg) : Exception(Except
 NotImplementedException::NotImplementedException(const string &msg) : Exception(ExceptionType::NOT_IMPLEMENTED, msg) {
 }
 
+NotImplementedException::NotImplementedException(const string &msg, const unordered_map<string, string> &extra_info)
+    : Exception(ExceptionType::NOT_IMPLEMENTED, msg, extra_info) {
+}
+
+NotImplementedException::NotImplementedException(optional_idx error_location, const string &msg)
+    : Exception(ExceptionType::NOT_IMPLEMENTED, msg, Exception::InitializeExtraInfo(error_location)) {
+}
+
 OutOfRangeException::OutOfRangeException(const string &msg) : Exception(ExceptionType::OUT_OF_RANGE, msg) {
 }
 

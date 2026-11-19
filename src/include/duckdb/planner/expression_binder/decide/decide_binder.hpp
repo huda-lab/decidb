@@ -26,10 +26,48 @@ struct DecideSourceNames;
 //! The names a key element may not take: every declared decision, as the user may spell it.
 case_insensitive_set_t DecisionNames(const case_insensitive_map_t<idx_t> &variables);
 
+//! The texts several sites raise, one builder each (language/errors.md). Each states what is wrong and stops: the
+//! caret names the place, and `q` is a fragment cut from the query.
+//!
 //! The refusal of a DECIDE that reads a column of an outer query (a LATERAL subquery's or a scalar
 //! subquery's outer query): it solves one problem, so it cannot be re-solved per outer row. One message
 //! for every way the column is reached.
 string OuterQueryColumnMessage(const string &column_name);
+//! A decision read where only data may stand: `where` is `when, per and by`, `WHERE`, or `a frame's order key and
+//! within`.
+string DecisionInDataMessage(const string &decision, const string &where);
+//! A comparison, BETWEEN or conjunction that reads a decision, used as a number: `x <= (x > 1)`.
+string ComparisonUsedAsNumberMessage(const string &expression);
+//! A call given the wrong number of arguments.
+string ArgumentCountMessage(const string &call, idx_t count);
+//! A side or a term that reads no decision where one is needed.
+string ReadsNoDecisionMessage(const string &expression);
+//! A subquery in a clause that is not scalar, or that reads a decision.
+string SubqueryNotScalarMessage();
+string SubqueryReadsDecisionMessage();
+//! A strict or <> comparison over a quantity that can take fractional values: `<`, `>` and `<>` step the bound onto
+//! the whole numbers, which is exact only on them.
+string FractionalComparisonMessage(const string &comparison, const string &operand);
+
+//! A refusal found while classifying the sides of a clause: what is wrong, the node its caret stands on, and its
+//! kind. It is raised against its own node (a side, a reducer), not the enclosing clause.
+struct DecideRefusal {
+	string message;
+	optional_ptr<const ParsedExpression> at;
+	//! A shape the language allows and DeciDB does not handle (Not implemented Error); else a Binder Error.
+	bool not_implemented = false;
+
+	bool IsSet() const {
+		return !message.empty();
+	}
+	void Set(const ParsedExpression &node, string text, bool is_not_implemented = false) {
+		at = &node;
+		message = std::move(text);
+		not_implemented = is_not_implemented;
+	}
+	//! The refusal as a bind result, raised at `fallback` when it names no node.
+	BindResult ToResult(const ParsedExpression &fallback) const;
+};
 
 //! Throws that refusal, naming `column` as written, when `column`, which did not resolve in `binder`'s own
 //! query, resolves in an outer one. The outer binders are asked only to qualify the name, as DuckDB's retry does, and
@@ -88,8 +126,9 @@ void RefuseDecideTagInName(const ParsedExpression &at, const string &name);
 //! indexes), else, for a node the parser kept no span for, its SQL without the tags the binders put on its nodes.
 string DecideWrittenSql(const ParsedExpression &expr, const DecideSourceText *text);
 
-bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
-                         const DecideSourceText *text, string &error_msg);
+bool ValidateSumArgument(ParsedExpression &reducer, ParsedExpression &argument,
+                         const case_insensitive_map_t<idx_t> &variables, const DecideSourceText *text,
+                         DecideRefusal &refusal);
 
 bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
@@ -111,7 +150,7 @@ void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr, const c
 //! `count`; a condition, a key and a `by` key take data only. A reducer may hold reducers
 //! to any depth (§5.5), but not a norm, and one over decisions not one over data alone
 //! (D80). Anything else -- a scope inside a condition, a key or an ordinary subquery --
-//! answers "not supported yet".
+//! is refused.
 void ValidateDecideScopeSpellings(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
                                   bool objective, const DecideSourceText *text);
 
@@ -121,7 +160,7 @@ bool ContainsDecideAggregate(const ParsedExpression &expr);
 //! rows, so it is no per-row coefficient, and symbolic normalization would distribute the decision into it. Runs on
 //! the parsed tree, before that normalization. Every other algebra refusal is DecideShapeCheck's.
 void ValidateDecideNoDataAggregateFactor(ClientContext &context, const ParsedExpression &expr,
-                                         const case_insensitive_map_t<idx_t> &variables);
+                                         const case_insensitive_map_t<idx_t> &variables, const DecideSourceText *text);
 
 //! Reject a `<`, `>` or `<>` whose comparison references a REAL decision variable.
 //!
@@ -256,8 +295,8 @@ protected:
 	BindResult BindDecideFrame(DecideFrameExpression &frame, idx_t depth);
 	//! A frame's `else`, bound into `out`: a number, and none when it is NULL before the
 	//! query runs (D86).
-	ErrorData BindFrameFallback(DecideFrameExpression &frame, const DecideFrameSpec &spec, const string &fallback_text,
-	                            idx_t depth, unique_ptr<Expression> &out);
+	ErrorData BindFrameFallback(DecideFrameExpression &frame, const string &fallback_text, idx_t depth,
+	                            unique_ptr<Expression> &out);
 	//! The catalog aggregate `name` (a range's reducer, or a point's `first`) over a bound payload, aliased `alias`;
 	//! null, with `error` set, when none takes its type.
 	unique_ptr<Expression> BindFrameAggregate(const string &name, unique_ptr<Expression> payload,
@@ -269,17 +308,17 @@ protected:
 	//! The dispatch itself. `BindExpression` wraps it so every bound node this binder
 	//! produces carries a source location, whatever path the dispatch takes.
 	BindResult BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression);
-	virtual DecideExpression GetExpressionType(ParsedExpression &expr, string &error_msg) {
+	virtual DecideExpression GetExpressionType(ParsedExpression &expr, DecideRefusal &refusal) {
 		throw duckdb::NotImplementedException("GetExpressionType is not implemented for this binder.");
 	}
 
 	//! Shared `norm`/SUM/AVG/MIN/MAX reducer classification between
 	//! `DecideConstraintsBinder` and `DecideObjectiveBinder`. Returns true when `func`
-	//! is one of these reducer names, with `result`/`error_msg` holding the verdict;
+	//! is one of these reducer names, with `result`/`refusal` holding the verdict;
 	//! returns false for any other function name so the caller falls through to its
 	//! own remaining classification (the two binders diverge there — a SUCH THAT
 	//! left-hand side and a MAXIMIZE/MINIMIZE objective accept different shapes).
-	bool ClassifyReducerCall(FunctionExpression &func, DecideExpression &result, string &error_msg);
+	bool ClassifyReducerCall(FunctionExpression &func, DecideExpression &result, DecideRefusal &refusal);
 
 	//! Binds a data expression (a `when` condition, a `by` key element) through the base ExpressionBinder, which
 	//! bypasses DECIDE-specific dispatch since neither may reference a DECIDE variable. The error, if any, is

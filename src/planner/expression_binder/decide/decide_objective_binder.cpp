@@ -72,7 +72,7 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 	if (!is_top_expression && IsDataOperand(expr)) {
 		return ExpressionBinder::BindExpression(expr_ptr, depth);
 	}
-	string error_msg;
+	DecideRefusal refusal;
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::COLUMN_REF: {
 		// A decision is a complete objective on its own: a query-wide one has a single
@@ -89,8 +89,8 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 		    (func.function_name == SCOPE_PER_TAG || func.function_name == SCOPE_WHEN_TAG)) {
 			return BindScopedObjective(expr_ptr, depth);
 		}
-		if (is_top_expression && GetExpressionType(expr, error_msg) == DecideExpression::INVALID) {
-			return BindResult(BinderException::Unsupported(expr, error_msg));
+		if (is_top_expression && GetExpressionType(expr, refusal) == DecideExpression::INVALID) {
+			return refusal.ToResult(expr);
 		}
 		is_top_expression = false;
 		return BindFunction(expr_ptr, depth);
@@ -100,9 +100,8 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 	case ExpressionClass::DECIDE_FRAME:
 		// A frame over decisions is an objective on its own, as a decision is.
 		if (is_top_expression && !ExpressionContainsDecideVariable(expr, variables)) {
-			return BindResult(BinderException::Unsupported(
-			    expr, StringUtil::Format("[MAXIMIZE|MINIMIZE] clause: '%s' reads no DECIDE variable",
-			                             DecideWrittenSql(expr, qualifier_context->source_text))));
+			return BindResult(BinderException(
+			    expr, "%s", ReadsNoDecisionMessage(DecideWrittenSql(expr, qualifier_context->source_text))));
 		}
 		is_top_expression = false;
 		return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
@@ -125,17 +124,21 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 		break;
 	}
 	auto clause = decide_sense == DecideSense::MAXIMIZE ? "MAXIMIZE" : "MINIMIZE";
+	auto written = DecideWrittenSql(expr, qualifier_context->source_text);
 	if (!ExpressionContainsDecideVariable(expr, variables)) {
-		return BindResult(BinderException::Unsupported(
-		    expr, StringUtil::Format("%s %s has no decision to optimize", clause,
-		                             DecideWrittenSql(expr, qualifier_context->source_text))));
+		return BindResult(BinderException(expr, "%s", ReadsNoDecisionMessage(written)));
+	}
+	// A comparison, BETWEEN or conjunction over a decision is a truth value, not a number.
+	if (expr.GetExpressionClass() == ExpressionClass::COMPARISON ||
+	    expr.GetExpressionClass() == ExpressionClass::BETWEEN ||
+	    expr.GetExpressionClass() == ExpressionClass::CONJUNCTION) {
+		return BindResult(BinderException(expr, "%s", ComparisonUsedAsNumberMessage(written)));
 	}
 	return BindResult(
-	    BinderException::Unsupported(expr, StringUtil::Format("%s does not support '%s'", clause,
-	                                                          DecideWrittenSql(expr, qualifier_context->source_text))));
+	    BinderException::Unsupported(expr, StringUtil::Format("%s does not support '%s'", clause, written)));
 }
 
-DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr_ptr, string &error_msg) {
+DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr_ptr, DecideRefusal &refusal) {
 	// A relation qualifier changes which tuples a reducer sums over, not what shape it
 	// is, so classification looks straight through it. Only a function reaches here
 	// (BindExpressionInternal).
@@ -143,7 +146,7 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
 	auto &func = expr.Cast<FunctionExpression>();
 	auto fname = StringUtil::Lower(func.function_name);
 	DecideExpression reducer_result;
-	if (ClassifyReducerCall(func, reducer_result, error_msg)) {
+	if (ClassifyReducerCall(func, reducer_result, refusal)) {
 		return reducer_result;
 	}
 	// Non-aggregate outer function. Only additive/scalar composition of
@@ -162,16 +165,13 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
 		return DecideExpression::SUM;
 	}
 	if (ContainsDecideAggregate(expr)) {
-		error_msg =
-		    StringUtil::Format("[MAXIMIZE|MINIMIZE] does not support wrapping an aggregate in '%s'. "
-		                       "The aggregate must be the outermost function. "
-		                       "For quadratic objectives use SUM(POWER(expr, 2)), not %s(AGG(expr), ...).",
-		                       DecideWrittenFunctionName(func), StringUtil::Upper(DecideWrittenFunctionName(func)));
+		refusal.Set(func,
+		            StringUtil::Format("'%s' over a reducer is not supported in the objective",
+		                               DecideWrittenFunctionName(func)),
+		            true);
 		return DecideExpression::INVALID;
 	}
-	error_msg = StringUtil::Format(
-	    "[MAXIMIZE|MINIMIZE] clause does not support function '%s', only SUM, AVG, MIN, or MAX is allowed.",
-	    DecideWrittenFunctionName(func));
+	refusal.Set(func, StringUtil::Format("function '%s' is not supported here", DecideWrittenFunctionName(func)), true);
 	return DecideExpression::INVALID;
 }
 

@@ -1075,27 +1075,17 @@ def test_a_sum_helper_is_defined_on_the_side_the_clauses_push_it(
 
 
 @pytest.mark.error
-@pytest.mark.parametrize(
-    "op, why",
-    [
-        (">", "stepping the bound is exact only on whole numbers. Compare with '>=' instead."),
-        (
-            "<>",
-            "the rewrite (x <> K becomes x <= K-1 OR x >= K+1) is exact only on whole numbers. Compare with "
-            "'<=' or '>=' instead.",
-        ),
-    ],
-)
-def test_a_helper_that_can_be_fractional_takes_no_step(decidb_cli, op, why):
+@pytest.mark.parametrize("op", [">", "<>"])
+def test_a_helper_that_can_be_fractional_takes_no_step(decidb_cli, op):
     """The helper holds the reducer's whole value, `sum(ship + 0.5)` included, so `<`, `>`
     and `<>` cannot step it; summed in place (the aggregate shape) the constant would move
     to the bound instead. `>=` answers."""
-    result = decidb_cli.execute_raw(_ship_query(f"ship + sum(ship + 0.5) by (D.region) {op} 40"))
-    assert (
-        f"Comparison '{op}' is not supported here: 'sum(ship + 0.5) by (D.region)' can take fractional "
-        f"values in this constraint, and {why}"
-    ) in result.stderr, result.stderr
-    assert_no_internal_leak(result, "a fractional helper under a step")
+    decidb_cli.assert_error_at(
+        _ship_query(f"ship + sum(ship + 0.5) by (D.region) {op} 40"),
+        kind="Not implemented Error",
+        at=f"ship + sum(ship + 0.5) by (D.region) {op} 40",
+        word=f"'{op}' compares 'sum(ship + 0.5) by (D.region)'",
+    )
     assert decidb_cli.execute(_ship_query("ship + sum(ship + 0.5) by (D.region) >= 40"))[0]
 
 

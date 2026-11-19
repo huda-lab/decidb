@@ -7,6 +7,7 @@ now succeed and are omitted.
 
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -22,38 +23,41 @@ class TestBinderErrors:
 
     def test_variable_conflicts_with_column(self, decidb_cli):
         """DECIDE variable name clashes with an existing column."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE l_quantity(INT), x(INT)
                 SUCH THAT x IN (1,2,3)
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """,
-            match=r"conflicts with an existing column",
+            kind="Binder Error",
+            at="l_quantity(INT)",
         )
 
     def test_duplicate_decide_variables(self, decidb_cli):
         """Same variable name declared twice."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT), x(INT)
                 SUCH THAT x IN (1,2,3)
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """,
-            match=r"Duplicate DECIDE variable",
+            kind="Binder Error",
+            at="x(INT)",
         )
 
     def test_unknown_variable_in_constraint(self, decidb_cli):
         """Using an undeclared variable in IN expression."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE y(INT)
                 SUCH THAT x IN (1,2,3)
                 MAXIMIZE SUM(x) LIMIT 1
             """,
-            match=r"does not support IN on",
+            kind="Not implemented Error",
+            at="x IN (1,2,3)",
         )
 
     def test_is_null_unsupported(self, decidb_cli):
@@ -74,14 +78,15 @@ class TestBinderErrors:
         decision outside every reducer over decisions is rejected: the bound side holds it
         (S10). Inside one it is a value of its path's group, a coefficient
         (test_anr_nested.py)."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             f"""
                 SELECT id, p, x FROM (VALUES (1,10.0),(2,20.0)) t(id, p)
                 DECIDE x(REAL)
                 SUCH THAT x <= 1 AND {clause}
                 MAXIMIZE SUM(x)
             """,
-            match=r"aggregate over table columns .* cannot multiply a decision variable",
+            kind="Binder Error",
+            at=re.search(r"(?:avg|max)\(p\)", clause).group(0),
         )
 
     def test_data_only_aggregate_rhs_still_allowed(self, decidb_cli):
@@ -114,66 +119,70 @@ class TestBinderErrors:
         regression in error-message quality (e.g. falling back to a generic
         "not supported" path) would fail the test.
         """
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
                 SUCH THAT SUM(x) IN (1,2,3)
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """,
-            match=r"does not support IN on.*Only simple DECIDE variables are allowed as the IN target",
+            kind="Not implemented Error",
+            at="SUM(x) IN (1,2,3)",
         )
 
     def test_non_decide_variable_in_constraint(self, decidb_cli):
         """Using a regular column (not a DECIDE var) as a constrained value."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
                 SUCH THAT l_quantity <= 5
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """,
-            match=r"must be one of the DECIDE variables",
+            kind="Binder Error",
+            at="l_quantity",
         )
 
     def test_non_sum_avg_min_max_function_in_objective(self, decidb_cli):
         """STDDEV(x) is not supported in objective — only SUM, AVG, MIN, or MAX is allowed."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
                 SUCH THAT SUM(x) <= 5
                 MAXIMIZE STDDEV(x*l_quantity) LIMIT 1
             """,
-            match=r"only SUM, AVG, MIN, or MAX is allowed",
+            kind="Not implemented Error",
+            at="STDDEV(x*l_quantity)",
         )
 
     def test_no_decide_variable_in_sum(self, decidb_cli):
         """SUM over a regular column without DECIDE variable."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
                 SUCH THAT SUM(l_quantity) <= 5
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """,
-            match=r"must reference at least one DECIDE variable",
+            kind="Binder Error",
+            at="SUM(l_quantity)",
         )
 
     @pytest.mark.parametrize("lhs", ["SUM(l_quantity) + 1", "2 * MAX(l_quantity)", "ABS(SUM(l_quantity) - 3)"])
     def test_no_decide_variable_under_arithmetic(self, decidb_cli, lhs):
         """A reducer under arithmetic reads no decision either: refused by name, where it
         reached term extraction as an internal error."""
-        result = decidb_cli.execute_raw(
+        decidb_cli.assert_error_at(
             f"""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
                 SUCH THAT x <= 1 AND {lhs} <= 500
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
-            """
+            """,
+            kind="Binder Error",
+            at=lhs,
         )
-        assert "reads no DECIDE variable; compare a decision with it" in result.stderr, result.stderr
-        assert_no_internal_leak(result, "a comparison with no decision")
 
     def test_multiple_decide_variables_in_sum(self, decidb_cli):
         """Cubic (x*x*x) in SUM is not supported — must reject."""
@@ -223,14 +232,15 @@ class TestBinderErrors:
 
     def test_in_rhs_with_decide_variable(self, decidb_cli):
         """IN domain constraints on DECIDE variables are not yet supported."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
                 SUCH THAT x IN (1,2,x)
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """,
-            match=r"IN domain constraints on DECIDE variables are not yet supported",
+            kind="Binder Error",
+            at="x IN (1,2,x)",
         )
 
     def test_sum_rhs_non_scalar(self, decidb_cli):
@@ -301,14 +311,15 @@ class TestBinderErrors:
 
     def test_objective_bare_column(self, decidb_cli):
         """MAXIMIZE with a bare column (not SUM) is not allowed."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
                 SUCH THAT SUM(x) <= 3
                 MAXIMIZE l_quantity LIMIT 1
             """,
-            match=r"MAXIMIZE l_quantity has no decision to optimize",
+            kind="Binder Error",
+            at="l_quantity",
         )
 
     def test_subquery_rhs_non_scalar(self, decidb_cli):
@@ -319,14 +330,15 @@ class TestBinderErrors:
         wording so a regression (e.g. a less-informative generic scalar
         check) would fail.
         """
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
                 SUCH THAT SUM(x) <= (SELECT l_quantity+x FROM lineitem)
                 MAXIMIZE SUM(x) LIMIT 1
             """,
-            match=r"SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables",
+            kind="Binder Error",
+            at="(SELECT l_quantity+x FROM lineitem)",
         )
 
     def test_subquery_rhs_returns_multiple_rows(self, decidb_cli):
@@ -375,26 +387,28 @@ class TestBinderErrors:
 
     def test_unsupported_aggregate_rejected(self, decidb_cli):
         """Non-whitelisted aggregates (BIT_AND, STRING_AGG, MEDIAN, ...) are rejected in DECIDE clauses."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
                 SUCH THAT BIT_AND(x) >= 0
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
             """,
-            match=r"only SUM, AVG, MIN, MAX, or COUNT is allowed",
+            kind="Not implemented Error",
+            at="BIT_AND(x)",
         )
 
     def test_count_over_decide_variable_rejected(self, decidb_cli):
         """COUNT(x) where x is a DECIDE variable is degenerate (always = row count)."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
                 SUCH THAT COUNT(x) >= 5
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
             """,
-            match=r"COUNT over a DECIDE variable is degenerate",
+            kind="Not implemented Error",
+            at="COUNT(x)",
         )
 
     # --- Non-linear scalar functions wrapping a DECIDE variable ---
@@ -679,27 +693,29 @@ class TestBinderErrors:
     @pytest.mark.when_constraint
     def test_when_decide_variable_in_condition(self, decidb_cli):
         """WHEN condition must not reference DECIDE variables."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
                 SUCH THAT when x = 1: SUM(x * l_quantity) <= 50
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
             """,
-            match=r"x is a decision; when, per and by may only use data",
+            kind="Binder Error",
+            at="x",
         )
 
     @pytest.mark.when_compound
     def test_when_decide_variable_in_compound_condition(self, decidb_cli):
         """WHEN compound condition must not hide a DECIDE variable."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
                 SUCH THAT when (x = 1 AND l_returnflag = 'R'): x <= 1
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
             """,
-            match=r"x is a decision; when, per and by may only use data",
+            kind="Binder Error",
+            at="x",
         )
 
     # --- Correlated subquery on aggregate RHS ---
@@ -834,12 +850,11 @@ class TestRefusalsInEverySpelling:
         """`OR` between constraints used to be read as `AND`: `x <= cap OR x <= 1`
         answered x = 1 on every row. A disjunction needs an indicator the engine does
         not build, so it is refused."""
-        _refusal(
-            decidb_cli,
+        decidb_cli.assert_error_at(
             f"""{TABLES}
             SELECT id, x FROM t DECIDE x(INT) SUCH THAT {clause} MAXIMIZE SUM(x)""",
-            r"SUCH THAT: OR is not supported\.",
-            "OR between constraints",
+            kind="Not implemented Error",
+            at="OR",
         )
 
     def test_or_inside_a_when_condition_still_filters(self, decidb_cli):
@@ -864,12 +879,11 @@ class TestRefusalsInEverySpelling:
     def test_volatile_function_refused(self, decidb_cli, clauses, where):
         """The solver reads a clause more than once (scope checks, rows, a bound-side
         reducer), so `random()` would select different rows each time."""
-        _refusal(
-            decidb_cli,
+        decidb_cli.assert_error_at(
             f"""{TABLES}
             SELECT id, x FROM t DECIDE x(INT) {clauses}""",
-            rf"DECIDE: random\(\) is not supported in {where}",
-            "volatile function",
+            kind="Binder Error",
+            at="random()",
         )
 
     def test_volatile_function_in_the_source_is_data(self, decidb_cli):
@@ -906,12 +920,11 @@ class TestRefusalsInEverySpelling:
         decision term it is refused like the same aggregate as a multiplier, never
         reaching term extraction ('INTERNAL Error: ... VALUE shape reached term
         extraction')."""
-        _refusal(
-            decidb_cli,
+        decidb_cli.assert_error_at(
             f"""{TABLES}
             SELECT id, x FROM t DECIDE x(INT) SUCH THAT x <= cap AND {spelling}{clause} MAXIMIZE SUM(x)""",
-            r"aggregate over table columns .* cannot divide a decision variable",
-            "a data-only aggregate divisor",
+            kind="Binder Error",
+            at="count(*)" if "count(*)" in clause else "sum(cap)",
         )
 
     # The same walk, the other message (the divisor holds no data-only aggregate). The clauses differ in the side of
@@ -936,12 +949,11 @@ class TestRefusalsInEverySpelling:
         """A data-only aggregate divided together with a decision term is the scaled term
         the multiplier rule already refuses (`2 * (sum(x) - avg(cap))`); under a scope
         spelling it, too, reached term extraction as an internal error."""
-        _refusal(
-            decidb_cli,
+        decidb_cli.assert_error_at(
             f"""{TABLES}
             SELECT id, x FROM t DECIDE x(INT) SUCH THAT x <= cap AND {spelling}{clause} MAXIMIZE SUM(x)""",
-            r"aggregate over table columns .* cannot be divided together with a decision variable",
-            "a data-only aggregate in a divided term",
+            kind="Binder Error",
+            at="count(*)" if "count(*)" in clause else "sum(cap)",
         )
 
     def test_data_only_aggregate_in_a_divided_term_as_a_scalar_or_moved(self, decidb_cli):
@@ -979,15 +991,13 @@ class TestRefusalsInEverySpelling:
         an internal alias ('__source_fragment_0____row_varying_subquery__'). A subquery
         prints as DuckDB renders it (logged in issues/bugs.md), so only its text is
         pinned."""
-        result = decidb_cli.execute_raw(
+        decidb_cli.assert_error_at(
             f"""{TABLES}
             SELECT id, x FROM t DECIDE x(INT) SUCH THAT x <= cap
-            MAXIMIZE per (): sum(x) + (SELECT k FROM f WHERE f.g = t.g)"""
+            MAXIMIZE per (): sum(x) + (SELECT k FROM f WHERE f.g = t.g)""",
+            kind="Binder Error",
+            at="(SELECT k FROM f WHERE f.g = t.g)",
         )
-        assert re.search(
-            r"'\(SELECT k FROM f WHERE [^']*\)' does not reference a decision", result.stderr
-        ), result.stderr
-        assert_no_internal_leak(result, "a decision-free objective term")
 
     @pytest.mark.parametrize(
         "term, quoted",
@@ -1036,11 +1046,12 @@ class TestRefusalsInEverySpelling:
     def test_a_decision_free_term_is_quoted_as_written(self, decidb_cli, term):
         """Binding casts a factor's operand, and a cast prints its child by its alias, so the bound name held the tag
         `__written_norm_inf__`; the term's own spelling holds no internal name (D40)."""
-        result = decidb_cli.execute_raw(
-            f"SELECT id, x FROM (VALUES (1, 3), (2, 4)) t(id, cap) DECIDE x(REAL) SUCH THAT x <= 7 MAXIMIZE sum(x) - {term}"
+        decidb_cli.assert_error_at(
+            f"SELECT id, x FROM (VALUES (1, 3), (2, 4)) t(id, cap) DECIDE x(REAL) SUCH THAT x <= 7 MAXIMIZE sum(x) - {term}",
+            kind="Binder Error",
+            at=term,
+            word=f"'{term}'",
         )
-        assert f"'{term}' does not reference a decision" in result.stderr, result.stderr
-        assert_no_internal_leak(result, "a decision-free objective term")
 
 
 _REFUSAL_ROWS = "SELECT id, x FROM (VALUES (1, 3), (2, 4)) t(id, cap) "
@@ -1063,42 +1074,71 @@ class TestRefusalsSpeakSql:
             ("x IS DISTINCT FROM 3", "'x IS DISTINCT FROM 3'"),  # a comparison DECIDE does not read
             ("NOT (x <= 1 OR x >= 3)", "'NOT (x <= 1 OR x >= 3)'"),  # an operator it does not read
             ("1", "'1'"),  # a clause of no kind it reads
-            ("x = (x > 2)", "'x > 2'"),  # a comparison over a decision as an operand
-            ("x >= (x BETWEEN 1 AND 3)", "'x BETWEEN 1 AND 3'"),  # the same, a BETWEEN
-            ("x <= (x > 1 AND cap > 1)", "'x > 1 AND cap > 1'"),  # the same, an AND
         ],
     )
     def test_unsupported_constraint_is_quoted(self, decidb_cli, clause, quoted):
         stderr = self._refusal(decidb_cli, clause)
         assert f"SUCH THAT does not support {quoted}" in stderr, stderr
 
+    @pytest.mark.parametrize(
+        "clause,at",
+        [
+            ("x = (x > 2)", "x > 2"),  # a comparison over a decision as an operand
+            ("x >= (x BETWEEN 1 AND 3)", "x BETWEEN 1 AND 3"),  # the same, a BETWEEN
+            ("x <= (x > 1 AND cap > 1)", "x > 1 AND cap > 1"),  # the same, an AND
+        ],
+    )
+    def test_a_comparison_used_as_a_number_is_refused_at_it(self, decidb_cli, clause, at):
+        decidb_cli.assert_error_at(
+            f"{_REFUSAL_ROWS} DECIDE x(INT) SUCH THAT x <= 5 AND {clause} MAXIMIZE SUM(x)",
+            kind="Binder Error",
+            at=at,
+            word=f"'{at}'",
+        )
+
     def test_unsupported_reducer_body_is_quoted(self, decidb_cli):
         # A comparison over data is a 0/1 coefficient (test_data_operands.py); over a
         # decision it is refused.
-        stderr = self._refusal(decidb_cli, "SUM(x * (x BETWEEN 1 AND 2)) <= 3")
-        assert "SUM expression does not support 'x BETWEEN 1 AND 2'" in stderr, stderr
+        decidb_cli.assert_error_at(
+            f"{_REFUSAL_ROWS} DECIDE x(INT) SUCH THAT x <= 5 AND SUM(x * (x BETWEEN 1 AND 2)) <= 3 MAXIMIZE SUM(x)",
+            kind="Binder Error",
+            at="x BETWEEN 1 AND 2",
+            word="'x BETWEEN 1 AND 2'",
+        )
 
     # One per message the objective check words: no decision (a constant, a data column), a comparison, `count(*)`.
     @pytest.mark.parametrize(
-        "objective,message",
+        "objective,kind,at",
         [
-            ("MAXIMIZE 3", "MAXIMIZE 3 has no decision to optimize"),
-            ("MINIMIZE cap", "MINIMIZE cap has no decision to optimize"),
-            ("MAXIMIZE x > 1", "MAXIMIZE does not support 'x > 1'"),
-            ("MAXIMIZE count(*)", "does not support function 'count(*)'"),
+            ("MAXIMIZE 3", "Binder Error", "3"),
+            ("MINIMIZE cap", "Binder Error", "cap"),
+            ("MAXIMIZE x > 1", "Binder Error", "x > 1"),
+            ("MAXIMIZE count(*)", "Not implemented Error", "count(*)"),
         ],
     )
-    def test_unsupported_objective_is_quoted(self, decidb_cli, objective, message):
-        assert message in self._refusal(decidb_cli, "SUM(x) <= 9", objective)
+    def test_unsupported_objective_is_quoted(self, decidb_cli, objective, kind, at):
+        decidb_cli.assert_error_at(
+            f"{_REFUSAL_ROWS} DECIDE x(INT) SUCH THAT x <= 5 AND SUM(x) <= 9 {objective}",
+            kind=kind,
+            at=at,
+            word=f"'{at}'",
+        )
 
     def test_count_star_in_a_constraint_is_quoted_as_written(self, decidb_cli):
-        stderr = self._refusal(decidb_cli, "count(*) <= 3")
-        assert "left-hand side function 'count(*)'" in stderr, stderr
+        decidb_cli.assert_error_at(
+            f"{_REFUSAL_ROWS} DECIDE x(INT) SUCH THAT x <= 5 AND count(*) <= 3 MAXIMIZE SUM(x)",
+            kind="Not implemented Error",
+            at="count(*)",
+            word="'count(*)'",
+        )
 
     def test_reducer_over_a_constant_is_not_a_query_wide_decision(self, decidb_cli):
         """`SUM(1)` has no decision at all; only a body made of query-wide decisions is called one."""
-        stderr = self._refusal(decidb_cli, "SUM(1) <= 5")
-        assert "SUM expression must reference at least one DECIDE variable" in stderr, stderr
+        decidb_cli.assert_error_at(
+            f"{_REFUSAL_ROWS} DECIDE x(INT) SUCH THAT x <= 5 AND SUM(1) <= 5 MAXIMIZE SUM(x)",
+            kind="Binder Error",
+            at="SUM(1)",
+        )
 
 
 _BRANCH_ROWS = (
@@ -1106,7 +1146,17 @@ _BRANCH_ROWS = (
 )
 
 
+class At(NamedTuple):
+    """Where a refusal points and of what kind (`assert_error_at`), for a case whose message has no wording to match."""
+
+    kind: str
+    at: str
+
+
 def _branch_refusal(decidb_cli, tail, message, rows=_BRANCH_ROWS):
+    if isinstance(message, At):
+        decidb_cli.assert_error_at(f"{rows}DECIDE x(INT) {tail}", kind=message.kind, at=message.at)
+        return
     result = decidb_cli.execute_raw(f"{rows}DECIDE x(INT) {tail}")
     assert re.search(message, result.stderr), result.stderr
     assert_no_internal_leak(result, "a refused clause")
@@ -1126,12 +1176,12 @@ class TestBinderRefusalBranches:
             # The same for a CASE at the top.
             ("CASE WHEN c > 1 THEN true ELSE false END", r"SUCH THAT does not support 'CASE"),
             # A subquery that is not scalar, and one that reads a decision (DecideBinder::BindExpressionInternal).
-            ("x IN (SELECT 1)", r"Only scalar subqueries are supported in DECIDE"),
-            ("x <= (SELECT x)", r"Subqueries in DECIDE clauses cannot reference DECIDE variables"),
+            ("x IN (SELECT 1)", At("Binder Error", "IN (SELECT 1)")),
+            ("x <= (SELECT x)", At("Binder Error", "(SELECT x)")),
             # A `when` whose condition, or a reducer's, does not bind (BindScopedConstraint, BindScopedReducer).
             ("when nosuch > 0: x <= 3", r'Referenced column "nosuch" not found'),
             ("SUM(when nosuch > 0: x) <= 3", r'Referenced column "nosuch" not found'),
-            ("max(x, 2) <= 2", r"MAX needs one argument, found 'max\(x, 2\)'"),
+            ("max(x, 2) <= 2", At("Binder Error", "max(x, 2)")),
             # A COALESCE over a reducer, in the body of a sum's left side (ContainsDecideAggregate's OPERATOR case).
             ("COALESCE(SUM(x), 0) + 1 <= 100", r"operator 'COALESCE' cannot take a DECIDE variable"),
         ],
@@ -1154,13 +1204,17 @@ class TestBinderRefusalBranches:
         ],
     )
     def test_bound_side(self, decidb_cli, bound):
-        message = r"SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables"
-        _branch_refusal(decidb_cli, f"SUCH THAT x <= 3 AND SUM(x) <= {bound} MAXIMIZE SUM(x)", message)
+        _branch_refusal(
+            decidb_cli, f"SUCH THAT x <= 3 AND SUM(x) <= {bound} MAXIMIZE SUM(x)", At("Binder Error", bound)
+        )
 
     def test_bound_side_on_the_left(self, decidb_cli):
         """The decision-free side is the left one: IsValidBound is asked of it."""
-        message = r"SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables"
-        _branch_refusal(decidb_cli, "SUCH THAT x <= 3 AND sum(w) OVER () >= SUM(x) MAXIMIZE SUM(x)", message)
+        _branch_refusal(
+            decidb_cli,
+            "SUCH THAT x <= 3 AND sum(w) OVER () >= SUM(x) MAXIMIZE SUM(x)",
+            At("Binder Error", "sum(w) OVER ()"),
+        )
 
     def test_bound_side_filter_on_a_scalar_function(self, decidb_cli):
         """An allowed filter on a scalar function is left to DuckDB, which refuses it."""
@@ -1173,15 +1227,14 @@ class TestBinderRefusalBranches:
     @pytest.mark.parametrize(
         "argument, message",
         [
-            ("abs(x, 1)", r"ABS requires exactly one argument"),
+            ("abs(x, 1)", At("Binder Error", "abs(x, 1)")),
             # A non-scalar subquery, first among a product's factors (the second is then not asked).
-            ("EXISTS (SELECT 1) * x", r"Subquery in DECIDE SUM expression must be scalar"),
-            ("x * (SELECT x)", r"Subquery in DECIDE SUM expression cannot contain DECIDE variables"),
+            ("EXISTS (SELECT 1) * x", At("Binder Error", "EXISTS (SELECT 1)")),
+            ("x * (SELECT x)", At("Binder Error", "(SELECT x)")),
             # A subquery over a per-row decision is not "a query-wide decision": IsRowInvariantExpression reads its body.
-            ("2 * (SELECT x)", r"Subquery in DECIDE SUM expression cannot contain DECIDE variables"),
-            # The same as a call's lone argument, which a call prints with its alias: the refusal quotes `sum((SELECT x))`
-            # as written, never the tag the binder put on the subquery.
-            ("(SELECT x)", r"found 'SUM\(\(SELECT x\)\)'"),
+            ("2 * (SELECT x)", At("Binder Error", "(SELECT x)")),
+            # The same as a call's lone argument, which a call prints with its alias.
+            ("(SELECT x)", At("Binder Error", "(SELECT x)")),
         ],
     )
     def test_reducer_argument(self, decidb_cli, argument, message):
@@ -1192,11 +1245,11 @@ class TestBinderRefusalBranches:
         [
             # A colon form over a function that is no reducer, then a reducer that cannot be qualified, and over a
             # reducer that fails to bind.
-            ("abs(t: x) <= 5", r"A relation qualifier is only allowed on SUM, AVG, MIN or MAX"),
-            ("SUM(x) + count(t: w) <= 30", r"'COUNT' cannot be qualified by a relation"),
-            ("count(t: x) <= 5", r"COUNT over a DECIDE variable is degenerate"),
+            ("abs(t: x) <= 5", At("Binder Error", "abs(t: x)")),
+            ("SUM(x) + count(t: w) <= 30", At("Binder Error", "count(t: w)")),
+            ("count(t: x) <= 5", At("Not implemented Error", "count(")),
             # The relation of the decisions.
-            ("sum(decide_variables: x) <= 5", r"Relation 'decide_variables' is not in the FROM clause"),
+            ("sum(decide_variables: x) <= 5", At("Binder Error", "decide_variables")),
         ],
     )
     def test_colon_form(self, decidb_cli, constraint, message):
@@ -1216,8 +1269,8 @@ class TestBinderRefusalBranches:
         [
             # Three names that name no relation (RelationAlias's catalog.schema.alias case), and five that are a
             # column's path past any relation.
-            ("per a.b.c: SUM(x) <= 3", r"a\.b\.c is neither a column nor a relation of the FROM clause"),
-            ("per t.s.a.b.c: SUM(x) <= 3", r"t\.s\.a\.b\.c is neither a column nor a relation of the FROM clause"),
+            ("per a.b.c: SUM(x) <= 3", At("Binder Error", "a.b.c")),
+            ("per t.s.a.b.c: SUM(x) <= 3", At("Binder Error", "t.s.a.b.c")),
             # A `by` key of four names that name no column: it is data, and the catalog is not found.
             ("SUM(x) by (a.b.t.nosuch) <= 3", r'Referenced table "a" not found'),
         ],
@@ -1229,25 +1282,25 @@ class TestBinderRefusalBranches:
         "objective, message",
         [
             # A COUNT over a decision inside a nest.
-            ("sum(per k: count(x) by (k))", r"COUNT over a DECIDE variable is degenerate"),
+            ("sum(per k: count(x) by (k))", At("Not implemented Error", "count(x)")),
             # A nested reducer with no argument: ValidateSumArgumentInternal's one-child guard keeps it from reading
             # children[0], and it reads as a reducer over data.
-            ("sum(per k: max() by (k))", r"SUM expression must reference at least one DECIDE variable"),
+            ("sum(per k: max() by (k))", At("Binder Error", "sum(per k: max() by (k))")),
             # An aggregate with arguments no function takes.
-            ("SUM(w * x, 2)", r"SUM needs one argument, found 'SUM\(w \* x, 2\)'"),
+            ("SUM(w * x, 2)", At("Binder Error", "SUM(w * x, 2)")),
             # MAX(x, n) is DuckDB's top-n aggregate, a list: the objective refuses it as a constraint does.
-            ("max(x, 2)", r"MAX needs one argument, found 'max\(x, 2\)'"),
+            ("max(x, 2)", At("Binder Error", "max(x, 2)")),
             # A scope whose body, or condition, does not bind.
             ("when c > 0: sum(nosuch * x)", r'Referenced column "nosuch" not found'),
             ("when nosuch > 0: sum(w * x)", r'Referenced column "nosuch" not found'),
             # An operator or CASE at the top, an operator below it, a product of data, a quotient by a reducer.
             ("COALESCE(SUM(x), 0)", r"does not support 'COALESCE\(SUM\(x\), 0\)'"),
             ("SUM(x) + COALESCE(x, 1)", r"operator 'COALESCE' cannot take a DECIDE variable"),
-            ("CASE WHEN c > 1 THEN 1 ELSE 2 END", r"has no decision to optimize"),
-            ("w * 2", r"clause does not support function '\*'"),
-            ("SUM(x * w) / SUM(x)", r"does not support wrapping an aggregate in '/'"),
+            ("CASE WHEN c > 1 THEN 1 ELSE 2 END", At("Binder Error", "CASE WHEN c > 1 THEN 1 ELSE 2 END")),
+            ("w * 2", At("Not implemented Error", "w * 2")),
+            ("SUM(x * w) / SUM(x)", At("Not implemented Error", "SUM(x * w) / SUM(x)")),
             # `"/"` called by name takes any number of arguments, one here.
-            ('"/"(SUM(x))', r"does not support wrapping an aggregate in '/'"),
+            ('"/"(SUM(x))', At("Not implemented Error", '"/"(SUM(x))')),
         ],
     )
     def test_objective_shape(self, decidb_cli, objective, message):
@@ -1274,25 +1327,26 @@ class TestTagNamesRefused:
     )
     def test_column_read_by_a_clause(self, decidb_cli, name, tail):
         rows = f'SELECT id, x FROM (VALUES (1, 1.0, 5.0), (2, 2.0, 6.0)) t(id, "{name}", v) '
-        result = decidb_cli.execute_raw(f"{rows}DECIDE x(INT) {tail}")
-        assert f"DECIDE does not support the name '{name}'" in result.stderr, result.stderr
+        decidb_cli.assert_error_at(f"{rows}DECIDE x(INT) {tail}", kind="Binder Error", at=f'"{name}"')
 
     @pytest.mark.parametrize("name", ["__per_class__", "__abs_aux_0__"])  # a tag, and a helper decision's name prefix
     def test_decision_name(self, decidb_cli, name):
         """DecideDeclarationsBinder's refusal of a declared name."""
-        result = decidb_cli.execute_raw(
+        decidb_cli.assert_error_at(
             f'SELECT id, "{name}" FROM (VALUES (1, 5.0)) t(id, v) DECIDE "{name}"(INT) '
-            f'SUCH THAT "{name}" <= 3 MAXIMIZE SUM("{name}" * v)'
+            f'SUCH THAT "{name}" <= 3 MAXIMIZE SUM("{name}" * v)',
+            kind="Binder Error",
+            at=f'"{name}"(INT)',
         )
-        assert f"DECIDE does not support the name '{name}'" in result.stderr, result.stderr
 
     def test_key_column(self, decidb_cli):
         """ResolveKeyElement's refusal of a `per` key column; the key is no QualifyColumnName read."""
-        result = decidb_cli.execute_raw(
+        decidb_cli.assert_error_at(
             'SELECT id, x FROM (VALUES (1, 1, 5.0), (2, 1, 6.0), (3, 2, 7.0)) t(id, "__frame_0__", v) '
-            'DECIDE x(INT) SUCH THAT x <= 3 AND per "__frame_0__": SUM(x) <= 4 MAXIMIZE SUM(x * v)'
+            'DECIDE x(INT) SUCH THAT x <= 3 AND per "__frame_0__": SUM(x) <= 4 MAXIMIZE SUM(x * v)',
+            kind="Binder Error",
+            at='"__frame_0__"',
         )
-        assert "DECIDE does not support the name '__frame_0__'" in result.stderr, result.stderr
 
     def test_every_tag_constant_is_in_the_list(self):
         """DecideNameContainsTag reads DECIDE_TAGS alone, so a tag constant missing from it is a name left unrefused."""

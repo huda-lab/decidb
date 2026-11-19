@@ -398,7 +398,7 @@ def test_cast_aggregate_per_bounds(decidb_cli, duckdb_conn):
 @pytest.mark.correctness
 def test_explicit_decision_cast_is_rejected_before_model_build(decidb_cli):
     """A cast around any decision-bearing subtree is unsupported solver algebra."""
-    decidb_cli.assert_error(
+    decidb_cli.assert_error_at(
         """
         SELECT id, value, lim, x
         FROM (VALUES (1, 2147483646::BIGINT, 2147483647::INTEGER))
@@ -408,7 +408,8 @@ def test_explicit_decision_cast_is_rejected_before_model_build(decidb_cli):
           AND CAST(x + value AS INTEGER) <= lim
         MAXIMIZE SUM(x)
     """,
-        match=r"Binder Error: DECIDE does not allow casts over decision expressions",
+        kind="Binder Error",
+        at="CAST(x + value AS INTEGER)",
     )
 
 
@@ -557,7 +558,7 @@ def test_magnitudes_beyond_double_domain_are_a_documented_limit(decidb_cli, duck
 def test_all_explicit_decision_cast_syntax_is_rejected(decidb_cli, cast_expression, location):
     constraint = f"{cast_expression} <= 4" if location == "constraint" else "x <= 4"
     objective = f"SUM({cast_expression})" if location == "objective" else "SUM(x)"
-    decidb_cli.assert_error(
+    decidb_cli.assert_error_at(
         f"""
         SELECT id, x
         FROM (VALUES (1)) t(id)
@@ -565,7 +566,8 @@ def test_all_explicit_decision_cast_syntax_is_rejected(decidb_cli, cast_expressi
         SUCH THAT x >= 0 AND {constraint}
         MAXIMIZE {objective}
     """,
-        match=r"Binder Error: DECIDE does not allow casts over decision expressions",
+        kind="Binder Error",
+        at=cast_expression,
     )
 
 

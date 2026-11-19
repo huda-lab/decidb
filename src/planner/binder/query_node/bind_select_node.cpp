@@ -418,15 +418,16 @@ static void RefuseDecisionInWhere(const Expression &expr, const BoundSelectNode 
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto &colref = expr.Cast<BoundColumnRefExpression>();
 		if (colref.binding.table_index == node.decide_index) {
-			throw BinderException("DECIDE: %s is a decision; WHERE may only use data",
-			                      node.decide_variables[colref.binding.column_index]->GetAlias());
+			throw BinderException(
+			    expr, "%s",
+			    DecisionInDataMessage(node.decide_variables[colref.binding.column_index]->GetAlias(), "WHERE"));
 		}
 		return;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY) {
 		for (auto &correlated : expr.Cast<BoundSubqueryExpression>().binder->correlated_columns) {
 			if (correlated.binding.table_index == node.decide_index) {
-				throw BinderException("DECIDE: %s is a decision; WHERE may only use data", correlated.name);
+				throw BinderException("%s", DecisionInDataMessage(correlated.name, "WHERE"));
 			}
 		}
 	}

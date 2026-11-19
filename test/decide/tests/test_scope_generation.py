@@ -667,53 +667,28 @@ def test_an_input_with_no_rows_is_not_an_error(decidb_cli):
 @pytest.mark.error
 @pytest.mark.error_binder
 @pytest.mark.parametrize(
-    "clause, message",
+    "clause, at",
     [
-        pytest.param(
-            "when ship > 1: ship <= 5",
-            "DECIDE: ship is a decision; when, per and by may only use data",
-            id="decision-in-when",
-        ),
-        pytest.param(
-            "per (): sum(ship) by (ship) <= 5",
-            "DECIDE: ship is a decision; when, per and by may only use data",
-            id="decision-in-by",
-        ),
-        pytest.param(
-            "when S.priority: o",
-            "'o' is not a valid SUCH THAT constraint on its own; compare it with a value",
-            id="bare-decision",
-        ),
-        pytest.param(
-            "when row_number() over () > 1: ship <= 1",
-            "DECIDE: a window function such as 'row_number() over ()' is not supported in when, per or by",
-            id="window-function-in-when",
-        ),
-        pytest.param(
-            "sum(ship) by (row_number() over ()) <= 1",
-            "DECIDE: a window function such as 'row_number() over ()' is not supported in when, per or by",
-            id="window-function-in-by",
-        ),
-        pytest.param(
-            "when S.priority: sum() <= 3", "SUM needs one argument, found 'sum()'", id="reducer-without-argument"
-        ),
-        pytest.param(
-            "when S.priority: norm() <= 3",
-            "NORM needs an expression and an order, as in norm(e, 1), found 'norm()'",
-            id="norm-without-argument",
-        ),
+        # The caret is at the decision, not at the comparison that holds it.
+        pytest.param("when ship > 1: ship <= 5", "ship", id="decision-in-when"),
+        pytest.param("per (): sum(ship) by (ship) <= 5", "by (ship)", id="decision-in-by"),
+        pytest.param("when S.priority: o", ": o", id="bare-decision"),
+        pytest.param("when row_number() over () > 1: ship <= 1", "row_number() over ()", id="window-function-in-when"),
+        pytest.param("sum(ship) by (row_number() over ()) <= 1", "row_number() over ()", id="window-function-in-by"),
+        pytest.param("when S.priority: sum() <= 3", "sum()", id="reducer-without-argument"),
+        pytest.param("when S.priority: norm() <= 3", "norm()", id="norm-without-argument"),
     ],
 )
-def test_scope_errors(decidb_cli, clause, message):
-    result = decidb_cli.execute_raw(
+def test_scope_errors(decidb_cli, clause, at):
+    decidb_cli.assert_error_at(
         f"""
         SELECT shipmentID, ship {from_clause()}
         DECIDE ship(INT), per D: o(BOOL)
         SUCH THAT ship <= S.demand AND {clause}
-        MAXIMIZE SUM(ship)"""
+        MAXIMIZE SUM(ship)""",
+        kind="Binder Error",
+        at=at,
     )
-    assert message in result.stderr, result.stderr
-    assert_no_internal_leak(result, "a scope error")
 
 
 @pytest.mark.correctness

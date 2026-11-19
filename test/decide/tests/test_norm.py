@@ -10,11 +10,8 @@ Each correctness test asserts norm() reaches the SAME optimal objective value as
 its hand-written equivalent (robust to alternate optima), plus the error paths.
 """
 
-import re
-
 import pytest
 
-from decidb_cli import DeciDBCliError
 from solver.types import ObjSense, VarType
 from ._brute_force import judge_rows
 from ._scope_cases import answer, dump_counts
@@ -110,13 +107,13 @@ def test_norm_l0_auto_m_matches_explicit(decidb_cli):
 
 
 def test_norm_l0_negative_bound_rejected(decidb_cli):
-    with pytest.raises(DeciDBCliError, match=r"positive"):
-        decidb_cli.execute(_BASE.format(obj="norm(new_qty - l_quantity, 0, -5)"))
+    decidb_cli.assert_error_at(_BASE.format(obj="norm(new_qty - l_quantity, 0, -5)"), kind="Binder Error", at="-5")
 
 
 def test_norm_unsupported_order(decidb_cli):
-    with pytest.raises(DeciDBCliError, match=r"[Uu]nsupported norm order|Supported"):
-        decidb_cli.execute(_BASE.format(obj="norm(new_qty - l_quantity, 3)"))
+    decidb_cli.assert_error_at(
+        _BASE.format(obj="norm(new_qty - l_quantity, 3)"), kind="Not implemented Error", at="3", word="'3'"
+    )
 
 
 @pytest.mark.correctness
@@ -134,23 +131,22 @@ _SHAPE_ROWS = "SELECT id, x FROM (VALUES (1, 10.0, 1, 2), (2, 20.0, 1, 3)) t(id,
 @pytest.mark.error
 @pytest.mark.error_binder
 @pytest.mark.parametrize(
-    "clause, message",
+    "clause, kind, at",
     [
         # A strict comparison also asks IsIntegerValuedReducer, which declines on each of the first two shapes.
-        ("norm(x) < 5", r"norm\(expr, p\) takes an expression, an order"),
-        ("norm(x, c) < 5", r"The order p in norm\(expr, p\) must be a constant"),
-        ("norm(x, 0, 5, 7) <= 5", r"norm\(expr, p\) takes an expression, an order"),
-        ("norm(x, 'a') <= 5", r"Unsupported norm order 'a'"),
-        ("norm(x, 'inf', 3) <= 5", r"norm\(expr, 'inf'\) does not take M"),
-        ("norm(x, 1, 3) <= 5", r"Only norm\(expr, 0, M\) accepts M"),
-        ("norm(x, 2, 3) <= 5", r"Only norm\(expr, 0, M\) accepts M"),
-        ("norm(x, 0, c) <= 5", r"the bound M must be a constant"),
-        ("norm(x, NULL) <= 5", r"The order p in norm\(expr, p\) must be 0, 1, 2, or 'inf'"),
+        ("norm(x) < 5", "Binder Error", "norm(x)"),
+        ("norm(x, c) < 5", "Binder Error", "c) < 5"),
+        ("norm(x, 0, 5, 7) <= 5", "Binder Error", "norm(x, 0, 5, 7)"),
+        ("norm(x, 'a') <= 5", "Not implemented Error", "'a'"),
+        ("norm(x, 'inf', 3) <= 5", "Binder Error", "3) <= 5"),
+        ("norm(x, 1, 3) <= 5", "Binder Error", "3) <= 5"),
+        ("norm(x, 2, 3) <= 5", "Binder Error", "3) <= 5"),
+        ("norm(x, 0, c) <= 5", "Binder Error", "c) <= 5"),
+        ("norm(x, NULL) <= 5", "Not implemented Error", "NULL"),
     ],
 )
-def test_norm_shape_rejected(decidb_cli, clause, message):
-    result = decidb_cli.execute_raw(f"{_SHAPE_ROWS} SUCH THAT x <= 3 AND {clause} MAXIMIZE SUM(x)")
-    assert re.search(message, result.stderr), result.stderr
+def test_norm_shape_rejected(decidb_cli, clause, kind, at):
+    decidb_cli.assert_error_at(f"{_SHAPE_ROWS} SUCH THAT x <= 3 AND {clause} MAXIMIZE SUM(x)", kind=kind, at=at)
 
 
 # --- compositions ---------------------------------------------------------

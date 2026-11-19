@@ -1692,6 +1692,7 @@ typedef struct PGVariableShowSelectStmt
 	char       *name;
 	int         is_summary; // whether or not this is a DESCRIBE or a SUMMARIZE
 	int         is_diagnose; // whether or not this is a DIAGNOSE
+	int         location; // where the query after DIAGNOSE starts
 } PGVariableShowSelectStmt;
 
 

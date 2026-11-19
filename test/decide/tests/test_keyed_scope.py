@@ -16,7 +16,6 @@ Covers:
 from collections import Counter
 
 import pytest
-from decidb_cli import DeciDBCliError
 from solver.types import VarType, ObjSense, SolverStatus
 
 from ._oracle_helpers import add_ne_indicator
@@ -440,8 +439,7 @@ def test_keyed_nonexistent_table(decidb_cli):
         SUCH THAT SUM(x) <= 5
         MAXIMIZE SUM(x * c.c_acctbal)
     """
-    with pytest.raises(DeciDBCliError, match="nonexistent is neither a column nor a relation of the FROM clause"):
-        decidb_cli.execute(sql)
+    decidb_cli.assert_error_at(sql, kind="Binder Error", at="nonexistent")
 
 
 # ---------------------------------------------------------------------------
@@ -1623,16 +1621,17 @@ def test_keyed_two_tables(decidb_cli, duckdb_conn, oracle_solver):
 @pytest.mark.error_binder
 def test_keyed_var_in_when_condition_error(decidb_cli):
     """WHEN condition must not reference DECIDE variables (including entity-scoped)."""
-    with pytest.raises(DeciDBCliError, match="keepN is a decision; when, per and by may only use data"):
-        decidb_cli.execute(
-            """
+    decidb_cli.assert_error_at(
+        """
             SELECT n.n_nationkey, keepN
             FROM nation n
             DECIDE per n: keepN(BOOL)
             SUCH THAT when keepN = 1: SUM(keepN) <= 5
             MAXIMIZE SUM(keepN)
-        """
-        )
+        """,
+        kind="Binder Error",
+        at="keepN = 1",
+    )
 
 
 # ---------------------------------------------------------------------------

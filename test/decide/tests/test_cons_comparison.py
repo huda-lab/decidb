@@ -25,10 +25,10 @@ from ._oracle_helpers import add_ne_indicator
 # quotes the clause. A strict inequality whose variables are all integer but whose
 # coefficients are not is a different refusal, raised by the model builder once the
 # coefficients have been evaluated.
-_STRICT_LT_REAL_MSG = re.compile(r"Strict inequality '<' is not supported over the REAL decision")
-_STRICT_GT_REAL_MSG = re.compile(r"Strict inequality '>' is not supported over the REAL decision")
-_STRICT_LT_COEFF_MSG = re.compile(r"Comparison '<' is not supported here: .*can take fractional values")
-_NE_REAL_MSG = re.compile(r"Inequality '<>' is not supported over the REAL decision")
+#
+# Each refusal is a Not implemented Error at the comparison; its sentence names the comparison's operator and the
+# operand that can take fractional values.
+_NOT_IMPLEMENTED = "Not implemented Error"
 
 
 @pytest.mark.cons_comparison
@@ -565,9 +565,7 @@ def test_real_sum_strict_gt_rejected(decidb_cli):
             AND SUM(x * l_extendedprice) <= 50000
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    with pytest.raises(DeciDBCliError) as exc_info:
-        decidb_cli.execute(sql)
-    assert _STRICT_GT_REAL_MSG.search(exc_info.value.message), f"Unexpected error: {exc_info.value.message}"
+    decidb_cli.assert_error_at(sql, kind=_NOT_IMPLEMENTED, at="SUM(x) > 1", word="'>' compares 'x'")
 
 
 @pytest.mark.cons_comparison
@@ -587,12 +585,7 @@ def test_real_strict_rejection_names_variable_and_clause(decidb_cli):
         SUCH THAT qty < 5
         MAXIMIZE SUM(qty)
     """
-    with pytest.raises(DeciDBCliError) as exc_info:
-        decidb_cli.execute(sql)
-    message = exc_info.value.message
-    assert _STRICT_LT_REAL_MSG.search(message), f"Unexpected error: {message}"
-    assert "'qty'" in message, f"Message does not name the decision: {message}"
-    assert "qty < 5" in message, f"Message does not quote the clause: {message}"
+    decidb_cli.assert_error_at(sql, kind=_NOT_IMPLEMENTED, at="qty < 5", word="'<' compares 'qty'")
 
 
 @pytest.mark.cons_comparison
@@ -651,9 +644,9 @@ def test_real_strict_rejected_when_term_stays_continuous(decidb_cli):
             AND norm(new_qty - l_quantity, 1) < 3
         MAXIMIZE SUM(new_qty)
     """
-    with pytest.raises(DeciDBCliError) as exc_info:
-        decidb_cli.execute(sql)
-    assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), f"Unexpected error: {exc_info.value.message}"
+    decidb_cli.assert_error_at(
+        sql, kind=_NOT_IMPLEMENTED, at="norm(new_qty - l_quantity, 1) < 3", word="'<' compares 'new_qty'"
+    )
 
 
 @pytest.mark.cons_comparison
@@ -674,9 +667,7 @@ def test_integer_fractional_coeff_strict_rejected(decidb_cli):
             AND SUM(0.5 * x) < 5
         MAXIMIZE SUM(x)
     """
-    with pytest.raises(DeciDBCliError) as exc_info:
-        decidb_cli.execute(sql)
-    assert _STRICT_LT_COEFF_MSG.search(exc_info.value.message), f"Unexpected error: {exc_info.value.message}"
+    decidb_cli.assert_error_at(sql, kind=_NOT_IMPLEMENTED, at="SUM(0.5 * x) < 5", word="'<' compares ")
 
 
 _SMALL = "SELECT id, x, y FROM (VALUES (1), (2), (3)) t(id) DECIDE x(INT), y(INT) SUCH THAT x <= 3 AND y <= 3 AND {}"
@@ -699,9 +690,12 @@ def test_offset_under_a_nonlinear_term_is_refused(decidb_cli, clause, operand, o
     """A constant moves to the bound only where the side is linear in it: `(x + 0.25)^2`
     is `x^2 + 0.5*x + 1/16`, `|x + 0.5|` is no whole number, so stepping either is not
     exact (`POWER(x + 0.25, 2) < 11` holds at x = 3, which a step to `<= 10` drops)."""
-    stderr = decidb_cli.execute_raw(_SMALL.format(clause) + " MAXIMIZE SUM(x)").stderr
-    assert f"Comparison '{op}' is not supported here: '{operand}'" in stderr, stderr
-    assert "can take fractional values" in stderr, stderr
+    decidb_cli.assert_error_at(
+        _SMALL.format(clause) + " MAXIMIZE SUM(x)",
+        kind=_NOT_IMPLEMENTED,
+        at=clause,
+        word=f"'{op}' compares '{operand}'",
+    )
 
 
 @pytest.mark.cons_comparison
@@ -738,8 +732,7 @@ def test_strict_rejected_on_fractional_column_type(decidb_cli):
     so inserting one fractional row would break a query that worked yesterday. The
     declared type is the contract.
 
-    The message must name the column, its type, and the cast that fixes it — the cast is
-    the user stating the assumption the rewrite needs.
+    The cast is the user stating the assumption the rewrite needs.
     """
     sql = """
         SELECT l_orderkey, l_linenumber, x
@@ -748,16 +741,13 @@ def test_strict_rejected_on_fractional_column_type(decidb_cli):
         SUCH THAT SUM(x * l_quantity) < 100
         MAXIMIZE SUM(x)
     """
-    with pytest.raises(DeciDBCliError) as exc_info:
-        decidb_cli.execute(sql)
-    message = exc_info.value.message
-    assert "l_quantity" in message, f"Message must name the column: {message}"
-    assert "DECIMAL(15,2)" in message, f"Message must name the type: {message}"
-    assert "l_quantity::BIGINT" in message, f"Message must name the cast: {message}"
+    decidb_cli.assert_error_at(
+        sql, kind=_NOT_IMPLEMENTED, at="SUM(x * l_quantity) < 100", word="'<' compares 'l_quantity'"
+    )
 
-    # The cast the message suggests is accepted.
+    # The cast that states the assumption is accepted.
     rows, _ = decidb_cli.execute(sql.replace("l_quantity)", "l_quantity::BIGINT)"))
-    assert rows, "the suggested cast should solve"
+    assert rows, "the cast should solve"
 
 
 @pytest.mark.cons_comparison
@@ -793,9 +783,7 @@ def test_mixed_bool_real_strict_rejected(decidb_cli):
             AND SUM(x + y) < 20
         MAXIMIZE SUM(x + y)
     """
-    with pytest.raises(DeciDBCliError) as exc_info:
-        decidb_cli.execute(sql)
-    assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), f"Unexpected error: {exc_info.value.message}"
+    decidb_cli.assert_error_at(sql, kind=_NOT_IMPLEMENTED, at="SUM(x + y) < 20", word="'<' compares 'y'")
 
 
 @pytest.mark.cons_comparison
@@ -1169,14 +1157,9 @@ def test_real_sum_not_equal_rejected(decidb_cli):
         SUCH THAT x <= 3.33 AND SUM(x) <> 10
         MAXIMIZE SUM(x)
     """
-    with pytest.raises(DeciDBCliError) as exc_info:
-        decidb_cli.execute(sql)
-    message = exc_info.value.message
-    assert _NE_REAL_MSG.search(message), f"Unexpected error: {message}"
-    # The point of rejecting at bind time: the refusal names the decision and echoes
-    # the clause with the spelling the user typed, not the internal `!=`.
-    assert "'x'" in message, f"Message does not name the decision: {message}"
-    assert "<>" in message and "!=" not in message, f"Message should quote the clause as written: {message}"
+    # The point of rejecting at bind time: the refusal points at the clause as the user typed it and names the
+    # decision.
+    decidb_cli.assert_error_at(sql, kind=_NOT_IMPLEMENTED, at="SUM(x) <> 10", word="'<>' compares 'x'")
 
 
 # ---------------------------------------------------------------------------
@@ -1205,9 +1188,7 @@ def test_strict_lt_rejection_quadratic_real(decidb_cli):
             AND SUM(POWER(x, 2)) < 5
         MAXIMIZE SUM(x)
     """
-    with pytest.raises(DeciDBCliError) as exc_info:
-        decidb_cli.execute(sql)
-    assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), f"Unexpected error: {exc_info.value.message}"
+    decidb_cli.assert_error_at(sql, kind=_NOT_IMPLEMENTED, at="SUM(POWER(x, 2)) < 5", word="'<' compares 'x'")
 
 
 @pytest.mark.cons_comparison
@@ -1228,9 +1209,7 @@ def test_strict_lt_rejection_bilinear_bool_real(decidb_cli):
             AND SUM(b * y) < 5
         MAXIMIZE SUM(b * y)
     """
-    with pytest.raises(DeciDBCliError) as exc_info:
-        decidb_cli.execute(sql)
-    assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), f"Unexpected error: {exc_info.value.message}"
+    decidb_cli.assert_error_at(sql, kind=_NOT_IMPLEMENTED, at="SUM(b * y) < 5", word="'<' compares 'y'")
 
 
 @pytest.mark.cons_comparison
@@ -1350,21 +1329,23 @@ def test_strict_over_a_power(decidb_cli, oracle_solver):
 @pytest.mark.cons_comparison
 @pytest.mark.error_binder
 @pytest.mark.parametrize(
-    "clause, message",
+    "clause, operand",
     [
         # A power whose exponent is a column, negative, or fractional is no degree: it is not a whole number.
-        ("SUM(power(x, c)) < 30", r"Comparison '<' is not supported here: 'power\(x, c\)' has type DOUBLE"),
-        ("SUM(power(x, -1)) < 30", r"Comparison '<' is not supported here: 'power\(x, -1\)' has type DOUBLE"),
-        ("SUM(power(x, 0.5)) < 30", r"Comparison '<' is not supported here"),
-        # `<>` over an AVG of a fractional column, and over a SUM of one (both messages say `<>`).
-        ("AVG(x * w) <> 3", r"Comparison '<>' is not supported here: column 'w' has type DECIMAL"),
-        ("SUM(x * w) <> 3", r"Comparison '<>' is not supported here: column 'w' has type DECIMAL"),
+        ("SUM(power(x, c)) < 30", "power(x, c)"),
+        ("SUM(power(x, -1)) < 30", "power(x, -1)"),
+        ("SUM(power(x, 0.5)) < 30", "0.5"),
+        # `<>` over an AVG of a fractional column, and over a SUM of one.
+        ("AVG(x * w) <> 3", "w"),
+        ("SUM(x * w) <> 3", "w"),
         # The compared side on the right: the left is the bound.
-        ("5 < SUM(x * w)", r"Comparison '<' is not supported here: column 'w' has type DECIMAL"),
+        ("5 < SUM(x * w)", "w"),
     ],
 )
-def test_strict_gate_refusals(decidb_cli, clause, message):
-    result = decidb_cli.execute_raw(
-        f"SELECT id, x FROM {_GATE_TABLE} DECIDE x(INT) SUCH THAT x <= 3 AND {clause} MAXIMIZE SUM(x)"
+def test_strict_gate_refusals(decidb_cli, clause, operand):
+    decidb_cli.assert_error_at(
+        f"SELECT id, x FROM {_GATE_TABLE} DECIDE x(INT) SUCH THAT x <= 3 AND {clause} MAXIMIZE SUM(x)",
+        kind=_NOT_IMPLEMENTED,
+        at=clause,
+        word=f"compares '{operand}'",
     )
-    assert re.search(message, result.stderr), result.stderr

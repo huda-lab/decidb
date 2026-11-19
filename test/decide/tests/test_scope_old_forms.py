@@ -95,8 +95,6 @@ def test_a_relation_qualified_decision_is_an_unknown_column(decidb_cli, sql, at)
 # What stays
 # ---------------------------------------------------------------------------
 
-DATA = "DECIDE: t.open is a decision; when, per and by may only use data"
-
 
 @pytest.mark.parametrize(
     "clauses",
@@ -108,8 +106,9 @@ DATA = "DECIDE: t.open is a decision; when, per and by may only use data"
 )
 def test_a_relation_qualified_decision_in_a_when_per_or_by_is_refused(decidb_cli, clauses):
     """In a `when`, `per` or `by` a decision stands where only data may."""
-    stderr = decidb_cli.execute_raw(_query("per t: open(BOOL)", clauses, "MAXIMIZE SUM(open)", "id, open")).stderr
-    assert DATA in stderr, stderr
+    decidb_cli.assert_error_at(
+        _query("per t: open(BOOL)", clauses, "MAXIMIZE SUM(open)", "id, open"), kind="Binder Error", at="t.open"
+    )
 
 
 def test_scalar_stays_a_name(decidb_cli):
@@ -120,8 +119,7 @@ def test_scalar_stays_a_name(decidb_cli):
 def test_colon_form_inside_a_plain_subquery_is_named(decidb_cli):
     """The colon form is a spelling only for a DECIDE clause's own reducers."""
     sql = _query(clauses="x <= cap AND x <= (SELECT SUM(u: cap) FROM (VALUES (1, 'A')) u(cap, g))")
-    stderr = decidb_cli.execute_raw(sql).stderr
-    assert "the colon form SUM(u: cap) is not supported inside a subquery yet" in stderr, stderr
+    decidb_cli.assert_error_at(sql, kind="Not implemented Error", at="SUM(u: cap)", word="'SUM(u: cap)'")
 
 
 def test_qualified_names_that_are_not_decisions_still_bind(decidb_cli):

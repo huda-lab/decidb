@@ -9,7 +9,6 @@ matching neither drops out of both. In the oracle we pre-compute a row's
 and then call ``add_constraint`` / ``set_objective`` with the merged dict.
 """
 
-import re
 import time
 from collections import defaultdict
 
@@ -946,9 +945,8 @@ def test_aggregate_local_when_three_terms(decidb_cli, duckdb_conn, oracle_solver
 @pytest.mark.error
 @pytest.mark.error_binder
 def test_aggregate_local_when_decide_var_in_condition_error(decidb_cli):
-    """A decision in a reducer's `when` is refused as "x is a decision; when, per
-    and by may only use data"."""
-    decidb_cli.assert_error(
+    """A decision in a reducer's `when` is refused at the decision."""
+    decidb_cli.assert_error_at(
         """
         SELECT name, value, x FROM (
             VALUES ('a', 10), ('b', 5)
@@ -957,7 +955,8 @@ def test_aggregate_local_when_decide_var_in_condition_error(decidb_cli):
         SUCH THAT sum(when x: x * value) <= 10
         MAXIMIZE SUM(x * value)
     """,
-        match=re.escape("x is a decision; when, per and by may only use data"),
+        kind="Binder Error",
+        at="x: x",
     )
 
 
@@ -966,9 +965,8 @@ def test_aggregate_local_when_decide_var_in_condition_error(decidb_cli):
 @pytest.mark.error
 @pytest.mark.error_binder
 def test_aggregate_local_when_decide_var_in_objective_condition_error(decidb_cli):
-    """A decision in the objective's `when` is refused as "x is a decision; when,
-    per and by may only use data"."""
-    decidb_cli.assert_error(
+    """A decision in the objective's `when` is refused at the decision."""
+    decidb_cli.assert_error_at(
         """
         SELECT name, value, x FROM (
             VALUES ('a', 10), ('b', 5)
@@ -977,7 +975,8 @@ def test_aggregate_local_when_decide_var_in_objective_condition_error(decidb_cli
         SUCH THAT SUM(x) <= 2
         MAXIMIZE when x: sum(x * value)
     """,
-        match=re.escape("x is a decision; when, per and by may only use data"),
+        kind="Binder Error",
+        at="x: sum",
     )
 
 

@@ -162,130 +162,119 @@ class TestSyntax:
 
     @pytest.mark.error_binder
     @pytest.mark.parametrize(
-        "clause, message",
+        "clause, kind, at",
         [
             pytest.param(
                 "when at(previous: t.demand) over (t.period) > 1: x <= 3",
-                "DECIDE: a frame selector is not allowed in when, per, by, within or an order key",
+                "Binder Error",
+                "at(previous: t.demand) over (t.period)",
                 id="in-when",
             ),
             pytest.param(
                 "sum(x) by (at(first: t.product) over (t.period)) <= 3",
-                "DECIDE: a frame selector is not allowed in when, per, by, within or an order key",
+                "Binder Error",
+                "at(first: t.product) over (t.period)",
                 id="in-by",
             ),
             pytest.param(
                 "x <= at(first: t.demand) over (at(first: t.period) over (t.id))",
-                "DECIDE: a frame selector is not allowed in when, per, by, within or an order key",
+                "Binder Error",
+                "at(first: t.period) over (t.id)",
                 id="in-an-order-key",
             ),
+            pytest.param("at(previous: x) over (x) <= 3", "Binder Error", "(x)", id="decision-order-key"),
             pytest.param(
-                "at(previous: x) over (x) <= 3",
-                "DECIDE: x is a decision; a frame's order key and within may only use data",
-                id="decision-order-key",
+                "at(previous: x) over (t.period within x) <= 3", "Binder Error", "within x", id="decision-within"
             ),
             pytest.param(
-                "at(previous: x) over (t.period within x) <= 3",
-                "DECIDE: x is a decision; a frame's order key and within may only use data",
-                id="decision-within",
-            ),
-            pytest.param(
-                "at(previous: sum(x)) over (t.period) <= 3",
-                "DECIDE: a reducer inside at(...) is not supported; reduce outside the frame",
-                id="reducer-in-a-point",
+                "at(previous: sum(x)) over (t.period) <= 3", "Binder Error", "sum(x)", id="reducer-in-a-point"
             ),
             pytest.param(
                 "sum(from first to last: max(x)) over (t.period) <= 3",
-                "DECIDE: a reducer inside sum(from ...) is not supported; reduce outside the frame",
+                "Binder Error",
+                "max(x)",
                 id="reducer-in-a-range",
             ),
             pytest.param(
                 "at(previous: at(next: x) over (t.period)) over (t.period) <= 3",
-                "DECIDE: a frame selector inside at(...) is not supported",
+                "Binder Error",
+                "at(next: x) over (t.period)",
                 id="frame-in-a-payload",
             ),
             pytest.param(
                 "at(previous else at(next: x) over (t.period): x) over (t.period) <= 3",
-                "DECIDE: a frame selector inside at(...) is not supported",
+                "Binder Error",
+                "at(next: x) over (t.period)",
                 id="frame-in-a-fallback",
             ),
             pytest.param(
                 "abs(from first to last: x) over (t.period) <= 3",
-                "DECIDE: a range frame reduces with sum, avg, min, max or count, found abs",
+                "Not implemented Error",
+                "abs(from first to last: x) over (t.period)",
                 id="range-reducer",
             ),
+            # The caret is at the `else` value, not at the frame.
             pytest.param(
-                "at(previous else 'none': x) over (t.period) <= 3",
-                "DECIDE: in at(previous else 'none': x) over (t.period), else 'none' is not a number",
-                id="fallback-not-a-number",
+                "at(previous else 'none': x) over (t.period) <= 3", "Binder Error", "'none'", id="fallback-not-a-number"
             ),
-            pytest.param(
-                "x <= at(previous: x * x) over (t.period)",
-                "DECIDE: 'x * x' squares or multiplies decisions inside at(...), which is not supported yet",
-                id="square-in-a-payload",
-            ),
+            pytest.param("x <= at(previous: x * x) over (t.period)", "Binder Error", "x * x", id="square-in-a-payload"),
             pytest.param(
                 "x >= at(previous: abs(x - 3)) over (t.period)",
-                "DECIDE: 'abs(x - 3)' inside at(...) is not linear in the decisions, which is not supported "
-                "yet; write it outside the frame",
+                "Not implemented Error",
+                "abs(x - 3)",
                 id="abs-in-a-payload",
             ),
             pytest.param(
                 "x >= at(previous: t.price / x) over (t.period)",
-                "DECIDE: 't.price / x' inside at(...) is not linear in the decisions",
+                "Not implemented Error",
+                "t.price / x",
                 id="decision-divisor",
             ),
+            # The caret is at the `else` value.
             pytest.param(
                 "x >= at(previous else s: t.demand) over (t.period)",
-                "DECIDE: in at(previous else s: t.demand) over (t.period), else s reads a decision while the "
-                "payload reads none, which is not supported yet",
+                "Not implemented Error",
+                "else s",
                 id="decision-fallback-over-data",
             ),
             pytest.param(
-                "x <= at(first: t.demand) over (count(*))",
-                "DECIDE: a reducer such as 'count(*)' is not allowed in a frame's order key",
-                id="reducer-in-an-order-key",
+                "x <= at(first: t.demand) over (count(*))", "Binder Error", "count(*)", id="reducer-in-an-order-key"
             ),
             pytest.param(
                 "at(previous: x) over (t.period)",
-                "'at(previous: x) over (t.period)' is not a valid SUCH THAT constraint on its own",
+                "Binder Error",
+                "at(previous: x) over (t.period)",
                 id="frame-alone",
             ),
             pytest.param(
-                "at(previous: x) over (t.period within t.shelf) <= 3",
-                "DECIDE: t.shelf is neither a column nor a relation of the FROM clause",
-                id="unknown-within",
+                "at(previous: x) over (t.period within t.shelf) <= 3", "Binder Error", "t.shelf", id="unknown-within"
             ),
         ],
     )
-    def test_a_refusal_names_the_construct(self, decidb_cli, clause, message):
+    def test_a_refusal_names_the_construct(self, decidb_cli, clause, kind, at):
         """D80: a frame in a condition or a key, a decision in a frame's keys, a reducer or a
         frame in a payload, a frame over decisions times a decision, and a payload that is not
         linear in the decisions."""
-        result = decidb_cli.execute_raw(_query(clause))
-        assert message in result.stderr, result.stderr
-        assert_no_internal_leak(result, "a frame refusal")
+        decidb_cli.assert_error_at(_query(clause), kind=kind, at=at)
 
     def test_an_average_range_under_not_equal_is_fractional(self, decidb_cli):
         """A range is a value of the row, not a reducer `<>` could multiply through by its
         count as it does an AVG: an AVG range under `<>` is refused as fractional, in the
         words a fractional column takes."""
-        result = decidb_cli.execute_raw(
+        decidb_cli.assert_error_at(
             f"SELECT id, x {T} DECIDE x(INT) SUCH THAT x <= 9 AND "
-            "x + avg(from first to last: x) over (t.period) <> 3 MAXIMIZE sum(x)"
+            "x + avg(from first to last: x) over (t.period) <> 3 MAXIMIZE sum(x)",
+            kind="Not implemented Error",
+            at="<>",
+            word="'avg(from first to last: x) over (t.period)'",
         )
-        assert (
-            "Comparison '<>' is not supported here: 'avg(from first to last: x) over (t.period)' has type "
-            "DOUBLE and can take fractional values"
-        ) in result.stderr, result.stderr
-        assert_no_internal_leak(result, "an AVG range under <>")
 
     @pytest.mark.correctness
     def test_ordinary_sql_in_a_clause_keeps_its_meaning(self, decidb_cli):
         """A subquery that starts with FROM or VALUES keeps OVER, WITHIN and a named window
         as SQL's, and a decision may be called `at`."""
         rows, _ = decidb_cli.execute(
-            f"SELECT id, at {T} DECIDE at(REAL) SUCH THAT at <= (FROM (SELECT t.demand AS \"within\" {T}) u "
+            f'SELECT id, at {T} DECIDE at(REAL) SUCH THAT at <= (FROM (SELECT t.demand AS "within" {T}) u '
             "WINDOW w AS (ORDER BY u.within) QUALIFY row_number() OVER w = 1) MAXIMIZE sum(at)"
         )
         assert sorted(rows) == [(1, 5.0), (2, 5.0), (3, 5.0)]
@@ -1753,8 +1742,11 @@ class TestRangeDeck:
 @pytest.mark.error
 class TestRangeErrors:
     def test_count_over_decisions_is_refused(self, decidb_cli):
-        result = decidb_cli.execute_raw(_edge("x <= count(from first to last: x) over (t.period)"))
-        assert "COUNT over a DECIDE variable is degenerate" in result.stderr, result.stderr
+        decidb_cli.assert_error_at(
+            _edge("x <= count(from first to last: x) over (t.period)"),
+            kind="Not implemented Error",
+            at="count(from first to last: x) over (t.period)",
+        )
 
     @pytest.mark.correctness
     def test_an_objective_range_that_reads_nothing(self, decidb_cli, scope_solver):
@@ -1892,10 +1884,12 @@ class TestRangeReview:
     def test_a_strict_bound_on_a_fractional_range_is_refused(self, decidb_cli, sense, frame):
         """The binder reads a range's whole-numberedness the same way, so `<`, `>` and `<>`
         over a fractional range get its fractional message, not an internal error."""
-        result = decidb_cli.execute_raw(_edge(f"{frame} {sense} 3"))
-        assert "'sum(from previous to next" in result.stderr and "has type DECIMAL" in result.stderr, result.stderr
-        assert "can take fractional values" in result.stderr, result.stderr
-        assert_no_internal_leak(result, "a strict bound on a fractional range")
+        decidb_cli.assert_error_at(
+            _edge(f"{frame} {sense} 3"),
+            kind="Not implemented Error",
+            at=f"{frame} {sense} 3",
+            word="'sum(from previous to next",
+        )
 
     def test_an_else_of_another_type(self, decidb_cli, scope_solver):
         """The `else` takes the type the bound reducer reads, which its overload may widen
@@ -2604,8 +2598,7 @@ def test_a_frame_text_holds_no_tag(decidb_cli):
     frame = "at(next else 0: abs(CAST(t.v AS DOUBLE))) over (t.id)"
     sql = f"""SELECT id, x FROM (VALUES (1, 1.0::DOUBLE), (2, 2.0::DOUBLE)) t(id, v) DECIDE x(REAL)
         SUCH THAT x <= 7 MAXIMIZE sum(x) - {frame}"""
-    result = decidb_cli.execute_raw(sql)
-    assert f"'{frame}' does not reference a decision" in result.stderr, result.stderr
+    decidb_cli.assert_error_at(sql, kind="Binder Error", at=frame, word=f"'{frame}'")
 
 
 def test_a_frame_order_key_holds_no_tag(decidb_cli):
@@ -2621,8 +2614,12 @@ def test_a_frame_else_holds_no_tag(decidb_cli):
     """The refusal quotes the `else` as written, with a cast under a function in it."""
     sql = """SELECT id, x FROM (VALUES (1, 1.0::DOUBLE)) t(id, c) DECIDE x(REAL)
         SUCH THAT x <= at(next else concat(CAST(t.c AS VARCHAR), 'x'): t.c) over (t.id) MAXIMIZE sum(x)"""
-    result = decidb_cli.execute_raw(sql)
-    assert "else concat(CAST(t.c AS VARCHAR), 'x') is not a number" in result.stderr, result.stderr
+    decidb_cli.assert_error_at(
+        sql,
+        kind="Binder Error",
+        at="concat(CAST(t.c AS VARCHAR), 'x')",
+        word="else 'concat(CAST(t.c AS VARCHAR), 'x')' is not a number",
+    )
 
 
 NON_FINITE = ("id", "v", "e", "w")

@@ -17,6 +17,7 @@ unique_ptr<QueryNode> Transformer::TransformShowSelect(duckdb_libpgquery::PGVari
 		// DIAGNOSE <select>: the prefix is a property of the statement, carried here as
 		// its own ShowType. The binder turns it into the DECIDE diagnosis relation.
 		show_ref->show_type = ShowType::DIAGNOSE;
+		show_ref->query_location = optional_idx(NumericCast<idx_t>(stmt.location));
 	} else {
 		show_ref->show_type = stmt.is_summary ? ShowType::SUMMARY : ShowType::DESCRIBE;
 	}

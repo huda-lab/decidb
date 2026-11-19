@@ -922,8 +922,12 @@ def test_a1_empty_source_returns_no_rows_whatever_the_bounds_say(decidb_cli):
 @pytest.mark.correctness
 def test_a1_binder_rejects_strict_bounds_on_real_before_direct_solve_is_asked(decidb_cli):
     for mode in ("off", "require"):
-        with pytest.raises(DeciDBCliError, match="Strict inequality"):
-            _run(decidb_cli, "SELECT x FROM (SELECT 1 AS id) DECIDE x(REAL) SUCH THAT x < 3 MAXIMIZE SUM(x)", mode)
+        decidb_cli.assert_error_at(
+            f"SET decide_direct_solve='{mode}'; "
+            "SELECT x FROM (SELECT 1 AS id) DECIDE x(REAL) SUCH THAT x < 3 MAXIMIZE SUM(x)",
+            kind="Not implemented Error",
+            at="x < 3",
+        )
 
 
 # ---------------------------------------------------------------------------

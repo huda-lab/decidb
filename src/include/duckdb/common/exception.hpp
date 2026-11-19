@@ -251,11 +251,22 @@ public:
 class NotImplementedException : public Exception {
 public:
 	DUCKDB_API explicit NotImplementedException(const string &msg);
+	DUCKDB_API explicit NotImplementedException(const string &msg, const unordered_map<string, string> &extra_info);
 
 	template <typename... ARGS>
 	explicit NotImplementedException(const string &msg, ARGS... params)
 	    : NotImplementedException(ConstructMessage(msg, params...)) {
 	}
+	//! A refusal that points at a place in the query, as BinderException's do.
+	template <typename... ARGS>
+	explicit NotImplementedException(const ParsedExpression &expr, const string &msg, ARGS... params)
+	    : NotImplementedException(ConstructMessage(msg, params...), Exception::InitializeExtraInfo(expr)) {
+	}
+	template <typename... ARGS>
+	explicit NotImplementedException(const Expression &expr, const string &msg, ARGS... params)
+	    : NotImplementedException(ConstructMessage(msg, params...), Exception::InitializeExtraInfo(expr)) {
+	}
+	DUCKDB_API explicit NotImplementedException(optional_idx error_location, const string &msg);
 };
 
 class AutoloadException : public Exception {

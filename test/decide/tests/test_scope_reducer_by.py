@@ -867,7 +867,7 @@ def test_a_square_in_a_grouped_reducer(decidb_cli_gurobi):
 @pytest.mark.error
 @pytest.mark.error_binder
 @pytest.mark.parametrize(
-    "clause, message",
+    "clause, expected",
     [
         pytest.param(
             "avg(ship) by (D.region) + sum(ship) by (D.region) <> 3",
@@ -881,39 +881,51 @@ def test_a_square_in_a_grouped_reducer(decidb_cli_gurobi):
         ),
         pytest.param(
             "abs(ship) by (D.region) <= 5",
-            "DECIDE: by (...) must directly follow SUM, AVG, MIN, MAX, norm or count",
+            ("Binder Error", "by (D.region)"),
             id="by-after-abs",
         ),
-        pytest.param(
-            "sum(ship) by (ship) <= 5",
-            "DECIDE: ship is a decision; when, per and by may only use data",
-            id="decision-in-by",
-        ),
+        pytest.param("sum(ship) by (ship) <= 5", ("Binder Error", "by (ship)"), id="decision-in-by"),
         pytest.param(
             "per D.region: avg(ship) by (D.region) < 3",
-            "Comparison '<' is not supported here: 'avg(ship) by (D.region)' has type DOUBLE",
+            ("Not implemented Error", "avg(ship) by (D.region) < 3", "'<' compares 'avg(ship) by (D.region)'"),
             id="strict-avg-with-by",
         ),
         pytest.param(
             "avg(when S.priority: ship) by (D.region) > 3",
-            "Comparison '>' is not supported here: 'avg(when S.priority: ship) by (D.region)' has type DOUBLE",
+            (
+                "Not implemented Error",
+                "avg(when S.priority: ship) by (D.region) > 3",
+                "'>' compares 'avg(when S.priority: ship) by (D.region)'",
+            ),
             id="strict-avg-with-a-when",
         ),
         pytest.param(
             "avg(per D.depotID: ship) by (D.region) < 3",
-            "Comparison '<' is not supported here: 'avg(per D.depotID: ship) by (D.region)' has type DOUBLE",
+            (
+                "Not implemented Error",
+                "avg(per D.depotID: ship) by (D.region) < 3",
+                "'<' compares 'avg(per D.depotID: ship) by (D.region)'",
+            ),
             id="strict-avg-with-an-inner-per",
         ),
         pytest.param(
             "per (): min(ship - D.networkReserveShare) < 3",
-            "Comparison '<' is not supported here: 'min(ship - D.networkReserveShare)' has type DECIMAL",
+            (
+                "Not implemented Error",
+                "min(ship - D.networkReserveShare) < 3",
+                "'<' compares 'min(ship - D.networkReserveShare)'",
+            ),
             id="strict-min-of-a-fractional-column",
         ),
     ],
 )
-def test_refused_shapes(decidb_cli, clause, message):
+def test_refused_shapes(decidb_cli, clause, expected):
+    if isinstance(expected, tuple):
+        kind, at, *word = expected
+        decidb_cli.assert_error_at(_ship_query(clause), kind=kind, at=at, word=word[0] if word else None)
+        return
     result = decidb_cli.execute_raw(_ship_query(clause))
-    assert message in result.stderr, result.stderr
+    assert expected in result.stderr, result.stderr
     assert_no_internal_leak(result, "a refused by shape")
 
 
@@ -938,27 +950,28 @@ def test_a_nested_reducer_reads_its_by_group(decidb_cli, scope_solver):
 @pytest.mark.error
 @pytest.mark.error_binder
 @pytest.mark.parametrize(
-    "decide, clause, objective, message",
+    "decide, clause, objective, at",
     [
         pytest.param(
             "ship(INT), per D.depotID: r(INT)",
             "r <= 9 AND avg(per D.depotID: r) < 3",
             "MAXIMIZE SUM(ship)",
-            "Comparison '<' is not supported here: 'avg(per D.depotID: r)' has type DOUBLE",
+            "avg(per D.depotID: r) < 3",
             id="strict-avg-keyed",
         ),
     ],
 )
-def test_refused_shapes_beside_other_decisions(decidb_cli, decide, clause, objective, message):
-    result = decidb_cli.execute_raw(
+def test_refused_shapes_beside_other_decisions(decidb_cli, decide, clause, objective, at):
+    decidb_cli.assert_error_at(
         f"""
         SELECT shipmentID, ship {from_clause()}
         DECIDE {decide}
         SUCH THAT ship <= S.demand AND {clause}
-        {objective}"""
+        {objective}""",
+        kind="Not implemented Error",
+        at=at,
+        word="'<' compares 'avg(per D.depotID: r)'",
     )
-    assert message in result.stderr, result.stderr
-    assert_no_internal_leak(result, "a refused shape beside another decision")
 
 
 @pytest.mark.correctness

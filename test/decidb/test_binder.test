@@ -11,19 +11,19 @@ CALL dbgen(sf=0.01);
 statement error
 SELECT l_quantity FROM lineitem DECIDE l_quantity(INT), x(INT) SUCH THAT x IN (1,2,3) MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-<REGEX>:Binder Error: DECIDE variable '[a-zA-Z_][a-zA-Z0-9_]*' conflicts with an existing column name.*
+<REGEX>:Binder Error: decision '[a-zA-Z_][a-zA-Z0-9_]*' has the name of a column.*
 
 # Duplicated DECIDE variables
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT), x(INT) SUCH THAT x IN (1,2,3) MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-<REGEX>:Binder Error: Duplicate DECIDE variable name '[a-zA-Z_][a-zA-Z0-9_]*'.*
+<REGEX>:Binder Error: decision '[a-zA-Z_][a-zA-Z0-9_]*' is declared twice.*
 
 # Unknown DECIDE variable
 statement error
 SELECT l_quantity FROM lineitem DECIDE y(INT) SUCH THAT x IN (1,2,3) MAXIMIZE SUM(x) LIMIT 1;
 ----
-<REGEX>:Binder Error: SUCH THAT does not support IN on 'x'. Only simple DECIDE variables are allowed as the IN target.*
+<REGEX>:Not implemented Error: IN on 'x' is not supported.*
 
 # An operator DECIDE does not read is quoted as written
 statement error
@@ -39,7 +39,7 @@ SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT x IN (1,2,3) MAXIMIZE SU
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x) IN (1,2,3) MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-<REGEX>:Binder Error: SUCH THAT does not support IN on 'SUM\(x\)'. Only simple DECIDE variables are allowed as the IN target.*
+<REGEX>:Not implemented Error: IN on 'SUM\(x\)' is not supported.*
 
 # Bind BETWEEN
 statement ok
@@ -53,13 +53,13 @@ SELECT l_quantity FROM lineitem DECIDE x(REAL) SUCH THAT x <= 1 MAXIMIZE SUM(x*l
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT l_quantity <= 5 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-<REGEX>:Binder Error: SUCH THAT clause: Column '[a-zA-Z_][a-zA-Z0-9_]*' must be one of the DECIDE variables.*
+<REGEX>:Binder Error: '[a-zA-Z_][a-zA-Z0-9_]*' is not a decision.*
 
 # LHS is unsupported aggregate function
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT COUNT(l_quantity) <= 5 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-<REGEX>:Binder Error: SUCH THAT clause does not support left-hand side function 'count', only SUM, AVG, MIN, or MAX is allowed.*
+<REGEX>:Not implemented Error: function 'count' is not supported here.*
 
 # Triple product in SUM
 statement error
@@ -71,7 +71,7 @@ SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x*x*x) <= 5 MAXIMIZE
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(l_quantity) <= 5  MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-<REGEX>:Binder Error: SUM expression must reference at least one DECIDE variable, found 'SUM\(l_quantity\)'.*
+<REGEX>:Binder Error: 'SUM\(l_quantity\)' reads no decision.*
 
 # Repeated DECIDE variable in linear SUM
 statement ok
@@ -111,7 +111,7 @@ SELECT l_quantity FROM lineitem DECIDE x(INT), y(INT) SUCH THAT x BETWEEN y and 
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT x IN (1,2,x) MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-<REGEX>:Binder Error: IN domain constraints on DECIDE variables are not yet supported. The values in the IN list must be constants or table columns, not DECIDE variables.*
+<REGEX>:Binder Error: an IN list reads a decision.*
 
 # SUM with a row-varying column as the bound: legal since batch C. The conjunction of
 # `SUM(x) <= l_quantityᵢ` over every tuple is the tightest of them, so this solves.
@@ -137,7 +137,7 @@ SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x) <= 3 MAXIMIZE SUM
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x) <= 3 MAXIMIZE l_quantity LIMIT 1;
 ----
-<REGEX>:Binder Error: MAXIMIZE l_quantity has no decision to optimize.*
+<REGEX>:Binder Error: 'l_quantity' reads no decision.*
 
 # Bind subquery
 statement ok
@@ -147,4 +147,4 @@ SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x) <= (SELECT SUM(l_
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x) <= (SELECT l_quantity+x FROM lineitem) MAXIMIZE SUM(x) LIMIT 1;
 ----
-<REGEX>:Binder Error: SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables, found.*
+<REGEX>:Binder Error: '\(SELECT l_quantity\+x FROM lineitem\)' is not data or a reducer.*

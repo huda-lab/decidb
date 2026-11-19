@@ -25,6 +25,7 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_subquery_expression.hpp"
+#include "duckdb/planner/expression_binder/decide/decide_binder.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 
 #include <algorithm>
@@ -1342,9 +1343,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 			                            : BindOp("*", atom.scale->Copy(), atom.expr->Copy());
 		}
 		if (!TryEvaluateFoldableDouble(context, scaled ? *scaled : *atom.expr, value, FOLD_PLAIN)) {
-			throw BinderException("MAXIMIZE/MINIMIZE: '%s' does not reference a decision, so it cannot be part of "
-			                      "the objective. Remove it, or move it to the SELECT list.",
-			                      Quote(*atom.expr));
+			throw BinderException(*atom.expr, "%s", ReadsNoDecisionMessage(Quote(*atom.expr)));
 		}
 		out_constant_offset += (negate ? -atom.sign : atom.sign) * value;
 	}

@@ -1,5 +1,5 @@
 # name: test/decidb/test_scope_parser.test
-# description: The scopes of the DECIDE extension parse and run (per key:, when condition:, by (key), per row:); inside an ordinary subquery they answer not supported yet
+# description: The scopes of the DECIDE extension parse and run (per key:, when condition:, by (key), per row:); inside an ordinary subquery they are not supported
 # group: [decidb]
 
 statement ok
@@ -23,7 +23,7 @@ INSERT INTO kw VALUES (1, 2, 3, 1, 5), (4, 5, 6, 2, 7);
 # ---------------------------------------------------------------------------
 # Scopes parse and bind (their meaning is tested in
 # test/decide/tests/test_scope_*.py). A scope inside an ordinary SQL subquery
-# written in the clause still answers "not supported yet" -- a Binder Error, which
+# written in the clause is not supported -- a Not implemented Error, which
 # proves the parser accepted it there too.
 # ---------------------------------------------------------------------------
 
@@ -186,24 +186,24 @@ SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= (SELECT
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= (SELECT sum(demand) by (depotID) FROM Shipment) MAXIMIZE SUM(ship);
 ----
-Binder Error: DECIDE: 'BY (key)' is not supported yet
+Not implemented Error: 'by' inside a subquery is not supported
 
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= (SELECT sum(when priority: demand) FROM Shipment) MAXIMIZE SUM(ship);
 ----
-Binder Error: DECIDE: 'WHEN condition:' is not supported yet
+Not implemented Error: 'when' inside a subquery is not supported
 
 # ... in a FROM subquery of that subquery
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= (SELECT max(s) FROM (SELECT sum(per depotID: demand) AS s FROM Shipment) t) MAXIMIZE SUM(ship);
 ----
-Binder Error: DECIDE: 'PER key:' is not supported yet
+Not implemented Error: 'per' inside a subquery is not supported
 
 # ... and in the objective
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= 5 MAXIMIZE SUM(ship) + (SELECT sum(per (): demand) FROM Shipment);
 ----
-Binder Error: DECIDE: 'PER ():' is not supported yet
+Not implemented Error: 'per ()' inside a subquery is not supported
 
 # quoted keywords are ordinary names inside a DECIDE clause: as a declaration key ...
 query II
@@ -255,7 +255,7 @@ SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= demand 
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= (SELECT sum(per row: demand) FROM Shipment) MAXIMIZE SUM(ship);
 ----
-Binder Error: DECIDE: 'PER ROW:' is not supported yet
+Not implemented Error: 'per row' inside a subquery is not supported
 
 # ---------------------------------------------------------------------------
 # The three exact parse errors.

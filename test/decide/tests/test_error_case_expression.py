@@ -342,28 +342,31 @@ class TestCaseAnswersEverywhere:
         "aggregate bound, in a reducer's FILTER": (
             f"SUM(x) <= SUM(id) FILTER (WHERE {_CASE} = 1)",
             "SUM(x)",
-            "DECIDE clause does not support 'SUM(id) FILTER",
+            "Not implemented Error",
+            "SUM(id) FILTER",
         ),
         "decision reducer's FILTER": (
             f"SUM(x) FILTER (WHERE {_CASE} = 1) <= 3",
             "SUM(x)",
-            "DECIDE clause does not support 'SUM(x) FILTER",
+            "Not implemented Error",
+            "SUM(x) FILTER",
         ),
-        "objective term": ("SUM(x) <= 3", f"SUM(x) + {_CASE}", "does not reference a decision"),
-        "objective under when": ("SUM(x) <= 3", f"when id > 2: SUM(x) + {_CASE}", "does not reference a decision"),
+        "objective term": ("SUM(x) <= 3", f"SUM(x) + {_CASE}", "Binder Error", _CASE),
+        "objective under when": ("SUM(x) <= 3", f"when id > 2: SUM(x) + {_CASE}", "Binder Error", _CASE),
     }
 
     @pytest.mark.parametrize("position", list(_REFUSED_FIRST))
     def test_another_refusal_reaches_the_case_first(self, decidb_cli, position):
-        constraint, objective, message = self._REFUSED_FIRST[position]
-        result = decidb_cli.execute_raw(
+        constraint, objective, kind, at = self._REFUSED_FIRST[position]
+        decidb_cli.assert_error_at(
             f"""
             SELECT id, x FROM {_TABLE} DECIDE x(INT)
             SUCH THAT {constraint}
             MAXIMIZE {objective}
-        """
+        """,
+            kind=kind,
+            at=at,
         )
-        assert message in result.stderr, f"{position}: {result.stderr[:600]}"
 
     # Positions that hold SQL over the rows, not the clause's algebra: a CASE there is the user's own filter or key.
     _ACCEPTED = {

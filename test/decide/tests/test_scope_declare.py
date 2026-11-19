@@ -564,46 +564,31 @@ def _decide(declarations: str, source: str = None) -> str:
         MAXIMIZE SUM(x)"""
 
 
-DECISION = "is a decision; when, per and by may only use data"
-NEITHER = "is neither a column nor a relation of the FROM clause"
-
-
-def _binder_error(sql, message, id):
-    return pytest.param(sql, message, id=id, marks=pytest.mark.error_binder)
+def _binder_error(sql, at, id):
+    """A Binder Error that points at `at` (a piece of the query); with `at` None, DuckDB's own ambiguity error."""
+    return pytest.param(sql, at, id=id, marks=pytest.mark.error_binder)
 
 
 KEY_ERRORS = [
-    _binder_error(_decide("per depot: x(INT)"), f"DECIDE: depot {NEITHER}", "unknown-name"),
-    _binder_error(_decide("per D.depot: x(INT)"), f"DECIDE: D.depot {NEITHER}", "unknown-column"),
-    _binder_error(_decide("per ship: x(INT), ship(INT)"), f"DECIDE: ship {DECISION}", "decision-declared-after"),
-    _binder_error(_decide("ship(INT), per ship: x(INT)"), f"DECIDE: ship {DECISION}", "decision-declared-before"),
-    _binder_error(_decide("per x: x(INT)"), f"DECIDE: x {DECISION}", "its-own-name"),
+    _binder_error(_decide("per depot: x(INT)"), "depot", "unknown-name"),
+    _binder_error(_decide("per D.depot: x(INT)"), "D.depot", "unknown-column"),
+    _binder_error(_decide("per ship: x(INT), ship(INT)"), "ship", "decision-declared-after"),
+    _binder_error(_decide("ship(INT), per ship: x(INT)"), "ship", "decision-declared-before"),
+    _binder_error(_decide("per x: x(INT)"), "x", "its-own-name"),
     # A qualified name over a per decision or a query-wide one names nothing.
-    _binder_error(
-        _decide("per D: open(BOOL), per D.open: x(INT)"), f"DECIDE: D.open {NEITHER}", "qualified-per-decision"
-    ),
-    _binder_error(
-        _decide("per (): cap(INT), per S.cap: x(INT)"), f"DECIDE: S.cap {NEITHER}", "qualified-query-wide-decision"
-    ),
+    _binder_error(_decide("per D: open(BOOL), per D.open: x(INT)"), "D.open", "qualified-per-decision"),
+    _binder_error(_decide("per (): cap(INT), per S.cap: x(INT)"), "S.cap", "qualified-query-wide-decision"),
     # A decision named like a column is the conflict error, wherever the key sits.
-    _binder_error(
-        _decide("per D.region: x(INT), region(INT)"),
-        "DECIDE variable 'region' conflicts with an existing column name.",
-        "conflict-after-qualified-key",
-    ),
-    _binder_error(
-        _decide("per region: x(INT), region(INT)"),
-        "DECIDE variable 'region' conflicts with an existing column name.",
-        "conflict-after-key",
-    ),
+    _binder_error(_decide("per D.region: x(INT), region(INT)"), "region(INT)", "conflict-after-qualified-key"),
+    _binder_error(_decide("per region: x(INT), region(INT)"), "region(INT)", "conflict-after-key"),
     _binder_error(
         _decide("per depotID: x(INT)", _from(join="FULL OUTER JOIN")),
-        "DECIDE: depotID is merged by a FULL OUTER JOIN USING; write S.depotID or D.depotID in the per key",
+        "depotID",
         "full-outer-using",
     ),
     _binder_error(
         _decide("per depotID: x(INT)", _from().replace("USING (depotID)", "ON S.depotID = D.depotID")),
-        'Ambiguous reference to column name "depotID"',
+        None,
         "ambiguous-column",
     ),
     _binder_error(
@@ -613,7 +598,7 @@ KEY_ERRORS = [
         SUCH THAT x <= (SELECT MAX(y) FROM {_values(SHIPMENTS, 'S2', SHIPMENT_COLUMNS)}
                         DECIDE per D.region: y(INT) SUCH THAT y <= 3 MAXIMIZE SUM(y))
         MAXIMIZE SUM(x)""",
-        "DECIDE: 'D.region' refers to an outer query, which a DECIDE cannot read; to solve per group",
+        "D.region",
         "outer-query-column",
     ),
     _binder_error(
@@ -622,18 +607,22 @@ KEY_ERRORS = [
         DECIDE per n.rowid: x(INT)
         SUCH THAT x <= 1
         MAXIMIZE SUM(x)""",
-        "DECIDE: n.rowid is not a stored column",
+        "n.rowid",
         "rowid",
     ),
 ]
 
 
 @pytest.mark.error
-@pytest.mark.parametrize("sql, message", KEY_ERRORS)
-def test_key_errors(decidb_cli, sql, message):
-    result = decidb_cli.execute_raw(sql)
-    assert message in result.stderr, result.stderr
-    assert_no_internal_leak(result, "a per key error")
+@pytest.mark.parametrize("sql, at", KEY_ERRORS)
+def test_key_errors(decidb_cli, sql, at):
+    if at is None:
+        # DuckDB's own: a column two relations have, which a USING does not merge.
+        result = decidb_cli.execute_raw(sql)
+        assert 'Ambiguous reference to column name "depotID"' in result.stderr, result.stderr
+        assert_no_internal_leak(result, "a per key error")
+        return
+    decidb_cli.assert_error_at(sql, kind="Binder Error", at=at)
 
 
 @pytest.mark.error
@@ -652,14 +641,18 @@ def test_generated_column_is_not_a_key_column(decidb_cli, tmp_path):
         """
         CREATE TEMP TABLE g(a INTEGER, b INTEGER GENERATED ALWAYS AS (a * 2));
         INSERT INTO g (a) VALUES (1), (1), (2);
-        SELECT a, x FROM g DECIDE per g.b: x(INT) SUCH THAT x <= 1 MAXIMIZE SUM(x);
         .mode csv
         SELECT a, x FROM g DECIDE per g: x(INT) SUCH THAT x <= a MAXIMIZE SUM(x) ORDER BY a;
     """
     )
+    decidb_cli.assert_error_at(
+        "CREATE TEMP TABLE g(a INTEGER, b INTEGER GENERATED ALWAYS AS (a * 2)); "
+        "INSERT INTO g (a) VALUES (1), (1), (2); "
+        "SELECT a, x FROM g DECIDE per g.b: x(INT) SUCH THAT x <= 1 MAXIMIZE SUM(x);",
+        kind="Binder Error",
+        at="g.b",
+    )
     result = decidb_cli.execute_script(script)
-    combined = result.stdout + result.stderr
-    assert "DECIDE: g.b is not a stored column" in combined, combined
     assert "a,x\n1,1\n1,1\n2,2" in result.stdout.replace("\r\n", "\n"), result.stdout
     dump = decidb_cli.dump_model(
         "CREATE TEMP TABLE g(a INTEGER, b INTEGER GENERATED ALWAYS AS (a * 2)); "

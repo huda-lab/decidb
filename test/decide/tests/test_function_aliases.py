@@ -110,15 +110,15 @@ def test_alias_whole_number_check_of_a_strict_comparison_reads_the_primary(decid
 @pytest.mark.error
 @pytest.mark.correctness
 def test_alias_whole_number_check_refuses_a_fractional_factor_under_an_alias(decidb_cli):
-    """`multiply(x, v)` is refused as `x * v` is, with the same message."""
+    """`multiply(x, v)` is refused as `x * v` is, at the comparison as written."""
     refused = "SELECT id, x FROM {t} DECIDE x(INT) SUCH THAT {c} < 3 MAXIMIZE SUM(x)"
-    messages = []
     for written in ("x * v", "multiply(x, v)"):
-        with pytest.raises(DeciDBCliError) as error:
-            decidb_cli.execute(refused.format(t=_T, c=written))
-        messages.append(str(error.value).split("\n\n")[0])
-    assert "allows fractional values" in messages[0]
-    assert messages[0] == messages[1]
+        decidb_cli.assert_error_at(
+            refused.format(t=_T, c=written),
+            kind="Not implemented Error",
+            at=f"{written} < 3",
+            word="'<' compares 'v'",
+        )
 
 
 @pytest.mark.var_integer
@@ -140,12 +140,10 @@ def test_alias_data_aggregate_factor_is_refused_as_its_operator_is(decidb_cli):
     """`multiply(avg(v), SUM(x))` is refused as `avg(v) * SUM(x)` is: a data aggregate does not multiply a reducer.
     (Inside a reducer, `SUM(avg(v) * x)`, it is a coefficient.)"""
     sql = "SELECT id, x FROM {t} DECIDE x(INT) SUCH THAT x <= 4 MAXIMIZE {e}"
-    with pytest.raises(DeciDBCliError) as primary:
-        decidb_cli.execute(sql.format(t=_T, e="avg(v) * SUM(x)"))
-    with pytest.raises(DeciDBCliError) as alias:
-        decidb_cli.execute(sql.format(t=_T, e="multiply(avg(v), SUM(x))"))
-    assert "cannot multiply a decision variable" in str(primary.value)
-    assert str(alias.value) == str(primary.value)
+    for written in ("avg(v) * SUM(x)", "multiply(avg(v), SUM(x))"):
+        decidb_cli.assert_error_at(
+            sql.format(t=_T, e=written), kind="Binder Error", at="avg(v)", word="'avg(v)' reduces data"
+        )
 
 
 @pytest.mark.var_integer
@@ -222,9 +220,12 @@ def test_alias_a_refusal_names_the_function_as_written(decidb_cli):
 @pytest.mark.error
 @pytest.mark.correctness
 def test_alias_a_reducer_refusal_names_the_reducer_as_written(decidb_cli):
-    with pytest.raises(DeciDBCliError) as error:
-        decidb_cli.execute(f"SELECT id, x FROM {_T} DECIDE x(INT) SUCH THAT x <= 4 MAXIMIZE mean(x, 2)")
-    assert "MEAN needs one argument" in str(error.value)
+    decidb_cli.assert_error_at(
+        f"SELECT id, x FROM {_T} DECIDE x(INT) SUCH THAT x <= 4 MAXIMIZE mean(x, 2)",
+        kind="Binder Error",
+        at="mean(x, 2)",
+        word="'mean(x, 2)'",
+    )
 
 
 @pytest.mark.var_real

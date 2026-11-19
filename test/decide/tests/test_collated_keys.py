@@ -324,9 +324,7 @@ class TestACollatedReducerOverData:
         """A missing position's `else` would need a key under the collation, and a number has none."""
         clause = f"x <= length(max(from previous to next else 0: t.n) {TIMELINE})"
         sql = f"SELECT id, x {TEXT_SOURCE} DECIDE x(REAL) SUCH THAT {clause} MAXIMIZE sum(x)"
-        result = decidb_cli.execute_raw(sql)
-        assert "else 0 stands in a collated payload" in result.stderr, result.stderr
-        assert_no_internal_leak(result, "an else over a collated payload")
+        decidb_cli.assert_error_at(sql, kind="Binder Error", at="else 0", word="else '0'")
 
 
 ORDER_ROWS = ((1, "a", 10.0), (2, "A", 10.0), (3, "b", 30.0))

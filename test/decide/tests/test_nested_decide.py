@@ -267,19 +267,20 @@ def test_plain_subquery_inside_a_nested_decide_objective(decidb_cli, oracle_solv
 @pytest.mark.error_binder
 @pytest.mark.error
 @pytest.mark.parametrize(
-    "inner_clauses,message",
+    "inner_clauses,kind,at",
     [
-        ("SUCH THAT y <= cap OR y <= 1 MAXIMIZE SUM(y)", "SUCH THAT: OR is not supported"),
-        ("SUCH THAT y <= cap MAXIMIZE y > 1", r"MAXIMIZE does not support 'y > 1'"),
+        ("SUCH THAT y <= cap OR y <= 1 MAXIMIZE SUM(y)", "Not implemented Error", "OR"),
+        ("SUCH THAT y <= cap MAXIMIZE y > 1", "Binder Error", "y > 1"),
     ],
     ids=["constraint", "objective"],
 )
-def test_a_nested_refusal_reaches_the_user(decidb_cli, inner_clauses, message):
+def test_a_nested_refusal_reaches_the_user(decidb_cli, inner_clauses, kind, at):
     table = "(VALUES (1, 3), (2, 5)) t(id, cap)"
-    decidb_cli.assert_error(
+    decidb_cli.assert_error_at(
         f"SELECT id, x FROM {table} DECIDE x(INT) SUCH THAT x <= "
         f"(SELECT max(y) FROM (SELECT y FROM {table} DECIDE y(INT) {inner_clauses})) MAXIMIZE SUM(x)",
-        match=message,
+        kind=kind,
+        at=at,
     )
 
 
@@ -300,10 +301,11 @@ def test_a_nested_refusal_reaches_the_user(decidb_cli, inner_clauses, message):
     ids=["where", "clause column", "clause table"],
 )
 def test_a_decide_cannot_read_an_outer_query(decidb_cli, inner, name):
-    decidb_cli.assert_error(
+    decidb_cli.assert_error_at(
         "SELECT g.k, q.x FROM (VALUES (1, 2)) g(k, lim), "
         f"LATERAL ({inner.replace('FROM t', 'FROM (VALUES (1), (2)) t(k)')}) q",
-        match=f"DECIDE: '{name}' refers to an outer query, which a DECIDE cannot read; to solve per group",
+        kind="Binder Error",
+        at=name,
     )
 
 
@@ -353,10 +355,7 @@ def _lateral_decide(declaration, clauses):
     ],
 )
 def test_a_decide_construct_cannot_read_an_outer_query(decidb_cli, declaration, clauses, name):
-    decidb_cli.assert_error(
-        _lateral_decide(declaration, clauses),
-        match=f"DECIDE: '{name}' refers to an outer query, which a DECIDE cannot read; to solve per group",
-    )
+    decidb_cli.assert_error_at(_lateral_decide(declaration, clauses), kind="Binder Error", at=name)
 
 
 # A reducer over an outer column in a scalar subquery of the outer select list: SQL used to
@@ -364,10 +363,11 @@ def test_a_decide_construct_cannot_read_an_outer_query(decidb_cli, declaration, 
 @pytest.mark.error_binder
 @pytest.mark.error
 def test_a_reducer_over_an_outer_column_names_the_column(decidb_cli):
-    decidb_cli.assert_error(
+    decidb_cli.assert_error_at(
         f"SELECT o.cap, (SELECT MAX(x) FROM (FROM {_INNER_T} DECIDE x(REAL) "
         f"SUCH THAT x BETWEEN 0 AND 3 AND SUM(o.cap * x) <= 2 MAXIMIZE SUM(v * x)) q) FROM {_OUTER_O}",
-        match="DECIDE: 'o.cap' refers to an outer query, which a DECIDE cannot read; to solve per group",
+        kind="Binder Error",
+        at="o.cap",
     )
 
 

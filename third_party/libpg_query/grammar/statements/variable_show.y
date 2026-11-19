@@ -20,6 +20,7 @@ VariableShowStmt:
 				n->name = (char*) "select";
 				n->is_summary = 0;
 				n->is_diagnose = 1;
+				n->location = @2;
 				$$ = (PGNode *) n;
 			}
 		 | SUMMARIZE qualified_name

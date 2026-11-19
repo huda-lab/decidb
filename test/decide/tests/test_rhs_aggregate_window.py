@@ -442,5 +442,8 @@ def test_rhs_aggregate_whose_own_when_empties_a_group_skips_it(decidb_cli, oracl
 @pytest.mark.error
 def test_rhs_aggregate_shapes_the_binder_rejects(decidb_cli):
     # The binder admits no DISTINCT reducer, so a window never has to copy one.
-    with pytest.raises(DeciDBCliError, match=r"does not support 'SUM\(DISTINCT cap\)'"):
-        run(decidb_cli, _sql(PLAIN, "SUM(x * w) <= SUM(DISTINCT cap)"), "off")
+    decidb_cli.assert_error_at(
+        "SET decide_direct_solve='off'; " + _sql(PLAIN, "SUM(x * w) <= SUM(DISTINCT cap)"),
+        kind="Not implemented Error",
+        at="SUM(DISTINCT cap)",
+    )

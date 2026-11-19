@@ -15,7 +15,6 @@ DECIDB_DUMP_MODEL.
 import pytest
 
 from ._brute_force import judge, optimum
-from ._output_helpers import assert_no_internal_leak
 from ._scope_cases import (  # noqa: F401
     DEPOT_COLUMNS,
     DEPOTS,
@@ -354,25 +353,15 @@ def test_norm_with_a_relation_qualifier_reads_each_depot_once(
 @pytest.mark.error
 @pytest.mark.error_binder
 @pytest.mark.parametrize(
-    "clause, message",
+    "clause, at",
     [
-        pytest.param(
-            "norm(when S.priority: ship, 1) <= 5",
-            "DECIDE: when and per inside a call need SUM, AVG, MIN or MAX; write the scope in front of the "
-            "constraint or inside a reducer",
-            id="scope-in-norm",
-        ),
-        pytest.param(
-            "sum(when ship > 1: ship) <= 5",
-            "DECIDE: ship is a decision; when, per and by may only use data",
-            id="decision-in-inner-when",
-        ),
+        pytest.param("norm(when S.priority: ship, 1) <= 5", "norm(when S.priority: ship, 1)", id="scope-in-norm"),
+        # The caret is at the decision, not at the comparison that holds it.
+        pytest.param("sum(when ship > 1: ship) <= 5", "ship", id="decision-in-inner-when"),
     ],
 )
-def test_inner_scope_errors(decidb_cli, clause, message):
-    result = decidb_cli.execute_raw(_open_query(clause))
-    assert message in result.stderr, result.stderr
-    assert_no_internal_leak(result, "an inner scope error")
+def test_inner_scope_errors(decidb_cli, clause, at):
+    decidb_cli.assert_error_at(_open_query(clause), kind="Binder Error", at=at)
 
 
 @pytest.mark.correctness

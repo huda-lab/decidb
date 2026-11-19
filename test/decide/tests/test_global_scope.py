@@ -191,50 +191,54 @@ class TestScalarReducerRejected:
     it is rejected rather than silently given a row-count coefficient."""
 
     def test_sum_over_scalar_in_objective(self, decidb_cli):
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT cap FROM lineitem
                 DECIDE per (): cap(INT)
                 SUCH THAT cap >= l_linenumber
                 MINIMIZE SUM(cap)
             """,
-            match=r"query-wide decision.*use cap on its own",
+            kind="Binder Error",
+            at="SUM(cap)",
         )
 
     def test_sum_over_scalar_in_constraint(self, decidb_cli):
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT cap FROM lineitem
                 DECIDE per (): cap(INT)
                 SUCH THAT SUM(cap) >= 5
                 MINIMIZE cap
             """,
-            match=r"query-wide decision.*use cap on its own",
+            kind="Binder Error",
+            at="SUM(cap)",
         )
 
     def test_avg_over_scalar_in_objective(self, decidb_cli):
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT cap FROM lineitem
                 DECIDE per (): cap(INT)
                 SUCH THAT cap >= l_linenumber
                 MINIMIZE AVG(cap)
             """,
-            match=r"query-wide decision",
+            kind="Binder Error",
+            at="AVG(cap)",
         )
 
     def test_sum_over_two_scalars_rejected(self, decidb_cli):
         """A body built from nothing but scalars/constants is still row-invariant,
         whichever combination of them it is (batch D: reducer body is row-invariant,
         not "contains a scalar")."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT cap1, cap2 FROM lineitem
                 DECIDE per (): cap1(INT), per (): cap2(INT)
                 SUCH THAT cap1 <= 5 AND cap2 <= 5
                 MINIMIZE SUM(cap1 + cap2)
             """,
-            match=r"query-wide decision",
+            kind="Binder Error",
+            at="SUM(cap1 + cap2)",
         )
 
 

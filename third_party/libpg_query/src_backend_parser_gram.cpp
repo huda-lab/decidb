@@ -2867,8 +2867,8 @@ static const yytype_uint16 yyrline[] =
       35,    42,    53,    54,    60,    61,     9,    19,     7,    16,
       28,    35,    42,    51,    52,    56,    57,     2,     7,    12,
       17,    22,    31,    38,    48,    49,    56,     3,    10,    17,
-      25,    32,    39,    46,    53,    60,    69,    69,    71,    71,
-      73,    73,    75,    76,     6,     8,    21,    34,    47,    65,
+      26,    33,    40,    47,    54,    61,    70,    70,    72,    72,
+      74,    74,    76,    77,     6,     8,    21,    34,    47,    65,
       87,    88,    89,    90,    11,    24,    37,    54,    55,    56,
       61,    74,    74,    74,    74,    74,    74,    74,    74,    74,
       74,    74,    74,    74,    74,    74,    74,    74,    74,    74,
@@ -33281,12 +33281,13 @@ yyreduce:
 				n->name = (char*) "select";
 				n->is_summary = 0;
 				n->is_diagnose = 1;
+				n->location = (yylsp[(2) - (2)]);
 				(yyval.node) = (PGNode *) n;
 			;}
     break;
 
   case 1590:
-#line 26 "third_party/libpg_query/grammar/statements/variable_show.y"
+#line 27 "third_party/libpg_query/grammar/statements/variable_show.y"
     {
 				PGVariableShowStmt *n = makeNode(PGVariableShowStmt);
 				n->relation = (yyvsp[(2) - (2)].range);
@@ -33296,7 +33297,7 @@ yyreduce:
     break;
 
   case 1591:
-#line 33 "third_party/libpg_query/grammar/statements/variable_show.y"
+#line 34 "third_party/libpg_query/grammar/statements/variable_show.y"
     {
 				PGVariableShowStmt *n = makeNode(PGVariableShowStmt);
 				n->relation = (yyvsp[(2) - (2)].range);
@@ -33306,7 +33307,7 @@ yyreduce:
     break;
 
   case 1592:
-#line 40 "third_party/libpg_query/grammar/statements/variable_show.y"
+#line 41 "third_party/libpg_query/grammar/statements/variable_show.y"
     {
 				PGVariableShowStmt *n = makeNode(PGVariableShowStmt);
 				n->set = (char*) "timezone";
@@ -33316,7 +33317,7 @@ yyreduce:
     break;
 
   case 1593:
-#line 47 "third_party/libpg_query/grammar/statements/variable_show.y"
+#line 48 "third_party/libpg_query/grammar/statements/variable_show.y"
     {
 				PGVariableShowStmt *n = makeNode(PGVariableShowStmt);
 				n->set = (char*) "transaction_isolation";
@@ -33326,7 +33327,7 @@ yyreduce:
     break;
 
   case 1594:
-#line 54 "third_party/libpg_query/grammar/statements/variable_show.y"
+#line 55 "third_party/libpg_query/grammar/statements/variable_show.y"
     {
 				PGVariableShowStmt *n = makeNode(PGVariableShowStmt);
 				n->set = (char*) "__show_tables_expanded";
@@ -33336,7 +33337,7 @@ yyreduce:
     break;
 
   case 1595:
-#line 61 "third_party/libpg_query/grammar/statements/variable_show.y"
+#line 62 "third_party/libpg_query/grammar/statements/variable_show.y"
     {
 				PGVariableShowStmt *n = makeNode(PGVariableShowStmt);
 				n->set = (char*) "__show_tables_expanded";
@@ -33346,12 +33347,12 @@ yyreduce:
     break;
 
   case 1602:
-#line 75 "third_party/libpg_query/grammar/statements/variable_show.y"
+#line 76 "third_party/libpg_query/grammar/statements/variable_show.y"
     { (yyval.str) = (yyvsp[(1) - (1)].str); ;}
     break;
 
   case 1603:
-#line 77 "third_party/libpg_query/grammar/statements/variable_show.y"
+#line 78 "third_party/libpg_query/grammar/statements/variable_show.y"
     { (yyval.str) = psprintf("%s.%s", (yyvsp[(1) - (3)].str), (yyvsp[(3) - (3)].str)); ;}
     break;
 
@@ -33547,7 +33548,7 @@ yyreduce:
 
 
 /* Line 1267 of yacc.c.  */
-#line 33551 "third_party/libpg_query/grammar/grammar_out.cpp"
+#line 33552 "third_party/libpg_query/grammar/grammar_out.cpp"
       default: break;
     }
   YY_SYMBOL_PRINT ("-> $$ =", yyr1[yyn], &yyval, &yyloc);
