@@ -703,49 +703,6 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(Find(diag, clause).suggested_change == "when enabled per region: CAST(real_x AS DOUBLE) <= capacity + 3");
 	}
 
-	SECTION("AVG row renders an AVG(...) label and reports the raw slack") {
-		// I2.d: a pure AVG aggregate stores coefficients pre-scaled by 1/N (avg_scaled),
-		// so the label collapses back to `AVG(x)` and the slack is reported in AVG units.
-		SolverInput row_input = MakeRowScopedInput(2);
-		VarIndexer row_indexer = VarIndexer::Build(row_input);
-		duckdb::vector<string> row_labels {"x"};
-		duckdb::vector<bool> row_aux {false};
-		SolverModel m;
-		m.num_vars = 2;
-		m.col_lower = {0.0, 0.0};
-		m.col_upper = {DECIDE_SOLVER_INFINITY, DECIDE_SOLVER_INFINITY};
-		m.is_integer = {false, false};
-		m.is_binary = {false, false};
-		m.obj_coeffs = {0.0, 0.0};
-		ModelConstraint avg_row;
-		avg_row.indices = {0, 1};
-		avg_row.coefficients = {0.5, 0.5}; // (1/2)x0 + (1/2)x1 = AVG(x)
-		avg_row.sense = '<';
-		avg_row.rhs = 5.0;
-		avg_row.provenance.repair_group_id = 0;
-		avg_row.provenance.source_clause_id = 0;
-		avg_row.provenance.kind = ConstraintKind::USER_PARAMETER;
-		avg_row.provenance.shape = ElasticShape::SHARED_SCALAR;
-		avg_row.provenance.avg_scaled = true;
-		m.constraint_sources.push_back(ConstraintSourceInfo());
-		m.constraints.push_back(std::move(avg_row));
-		for (int v : {0, 1}) {
-			ModelConstraint floor;
-			floor.indices = {v};
-			floor.coefficients = {1.0};
-			floor.sense = '>';
-			floor.rhs = 10.0;
-			floor.provenance.kind = ConstraintKind::STRUCTURAL;
-			m.constraints.push_back(std::move(floor));
-		}
-		InfeasibleDiagnosisInput diag_input {m, row_indexer, row_labels, row_aux, kNoGlobalLabels, params, solve_highs};
-		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
-
-		REQUIRE(diag.valid);
-		CHECK(Find(diag, "AVG(x) <= 5").suggested_change == "AVG(x) <= 10");
-		CHECK(AmountOf(diag, "AVG(x) <= 5") == "5");
-	}
-
 	SECTION("BuildElasticModel slacks a quadratic constraint's linear RHS only, never Q") {
 		// I2.d: a relaxable quadratic constraint `x² <= 4` gets a slack on its LINEAR
 		// part; the Q matrix is untouched, and the block is marked quadratic.

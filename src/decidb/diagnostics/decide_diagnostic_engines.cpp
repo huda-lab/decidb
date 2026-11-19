@@ -143,7 +143,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 	// Everything a blamable row must carry. A relaxable row is one the diagnosis may
 	// tell the user to edit, so besides an explicit shape it has to be able to name
 	// WHICH clause of theirs it is: without a source_clause_id, SourceAwareLhs falls
-	// back to FormatLhs and rebuilds the clause from the row's own coefficients, so the
+	// back to FormatTerms and rebuilds the clause from the row's own coefficients, so the
 	// user is shown a lowering's Big-M as though they had typed it. A row that encodes
 	// a construct's mechanism rather than its bound is USER_MECHANISM and never gets
 	// here -- which is also the honest answer when no editable form exists, since
