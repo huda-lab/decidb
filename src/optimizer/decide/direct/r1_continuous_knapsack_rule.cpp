@@ -92,8 +92,7 @@ public:
 	}
 
 	DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
-	                       const DirectApplicabilityCondition &candidate,
-	                       const DirectStateErrors &errors) const override;
+	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
 	bool ProveDecision(const DirectIR &ir) const;
@@ -535,12 +534,9 @@ struct ItemColumns {
 	//! The message each check of a raw value or of a limit read from the data raises on the row (VARCHAR, NULL when it
 	//! passes).
 	vector<ColumnBinding> messages;
-	//! The texts of each message, which a column holds as a code (DirectEncodeMessage); parallel to `messages`.
-	vector<DirectMessageCodes> message_codes;
 	//! The message of each item's price past a DOUBLE (VARCHAR, NULL when finite): a number the plan computes from the
 	//! checked values. Raised after every check of a value read; the group sums are checked after it (GroupTotals).
 	vector<ColumnBinding> computed_messages;
-	vector<DirectMessageCodes> computed_message_codes;
 	//! What the aggregates of each limit read from the data read on the row, per data limit and per input.
 	vector<vector<DirectGroupInputColumns>> limits;
 	//! The items of the row, one per decision.
@@ -632,9 +628,7 @@ public:
 		items.sources = last.carried.source;
 		items.keys = last.carried.keys;
 		items.messages = last.messages;
-		items.message_codes = message_codes;
 		items.computed_messages = last.computed_messages;
-		items.computed_message_codes = computed_message_codes;
 		items.limits = last.limits;
 		for (auto &bindings : last.items) {
 			ItemExprs item;
@@ -677,10 +671,9 @@ private:
 		DirectCarried carried;
 		//! What the aggregates of each data limit read on the row, per data limit and per input.
 		vector<vector<DirectGroupInputColumns>> limits;
-		//! The message of each check of a raw value or of a limit read from the data (UINTEGER, a code of
-		//! `message_codes`; NULL when it passes).
+		//! The message of each check of a raw value or of a limit read from the data (VARCHAR; NULL when it passes).
 		vector<ColumnBinding> messages;
-		//! The message of each item's price past a DOUBLE (a code of `computed_message_codes`).
+		//! The message of each item's price past a DOUBLE.
 		vector<ColumnBinding> computed_messages;
 		vector<ItemBindings> items;
 	};
@@ -696,7 +689,7 @@ private:
 		vector<Clause> clauses;
 		//! Each decision's value in each objective part; unset where the part does not name the decision.
 		vector<vector<ColumnBinding>> values;
-		//! The message of each check, as an expression over P1 (DirectEncodeMessage's code).
+		//! The message of each check, as an expression over P1.
 		vector<ExprPtr> messages;
 	};
 
@@ -717,23 +710,6 @@ private:
 	//! The columns of the plan Build returned, in output order, and where each is.
 	vector<ColumnBinding> top;
 	RowColumns last;
-	//! The texts of each message of `RowColumns::messages`, in the same order, which its column holds as a code.
-	vector<DirectMessageCodes> message_codes;
-	//! The texts of each message of `RowColumns::computed_messages`.
-	vector<DirectMessageCodes> computed_message_codes;
-
-	//! A message as the code of its text, with its texts kept in `codes` (DirectEncodeMessage): an aggregate takes the
-	//! least code, and the group's row gives the text back.
-	ExprPtr Coded(const ExprPtr &message, vector<DirectMessageCodes> &codes) const {
-		codes.emplace_back();
-		return DirectEncodeMessage(calc, message, codes.back());
-	}
-
-	//! A column of the type of a message's code.
-	ExprPtr CodeColumn(ColumnBinding binding) const {
-		return calc.Col(DirectMessageCodes::Type(), binding);
-	}
-
 	idx_t DecisionCount() const {
 		return condition.boxes.size();
 	}
@@ -771,10 +747,9 @@ private:
 				to.limits.back().push_back(moved);
 			}
 		}
-		to.messages =
-		    stage.Forward(from.messages, vector<LogicalType>(from.messages.size(), DirectMessageCodes::Type()));
-		to.computed_messages = stage.Forward(
-		    from.computed_messages, vector<LogicalType>(from.computed_messages.size(), DirectMessageCodes::Type()));
+		to.messages = stage.Forward(from.messages, vector<LogicalType>(from.messages.size(), LogicalType::VARCHAR));
+		to.computed_messages = stage.Forward(from.computed_messages,
+		                                     vector<LogicalType>(from.computed_messages.size(), LogicalType::VARCHAR));
 		for (auto &item : from.items) {
 			ItemBindings moved;
 			auto forward = [&](ColumnBinding ItemBindings::*column, const LogicalType &type) {
@@ -816,20 +791,17 @@ private:
 		auto over_state = [&](const Expression &value) {
 			return OverState(value);
 		};
-		// The checks of what a limit reads come first. A message is a column of P1 that holds a code.
+		// The checks of what a limit reads come first.
 		for (idx_t j = 0; j < limit_bounds.size(); j++) {
 			raw.rows.limits.push_back(
 			    DirectLayoutGroupInputs(optimizer, calc, p1, *limit_bounds[j], eligible, over_state, nullptr));
 			for (auto &input : limit_bounds[j]->inputs) {
 				if (input.invalid) {
-					auto message = p1.Add(calc.Out(Coded(calc.Wrap(OverState(*input.invalid)), message_codes)));
-					raw.messages.push_back(CodeColumn(message));
+					auto message = p1.Add(calc.Out(calc.Wrap(OverState(*input.invalid))));
+					raw.messages.push_back(calc.Col(LogicalType::VARCHAR, message));
 				}
 			}
 		}
-		auto coded = [&](const ExprPtr &message) {
-			return Coded(message, message_codes);
-		};
 		auto number = [&](ColumnBinding binding, const DirectNumberNames &names) {
 			return DirectNumberMessage(calc, DoubleColumn(binding), names,
 			                           [&](const Expression &input) { return OverSource(input, raw.rows.carried); });
@@ -856,12 +828,12 @@ private:
 				return clause.when ? DirectOnKeptRows(calc, BoolColumn(laid.ends.when), message) : message;
 			};
 			if (!DirectIsFiniteWhereKept(optimizer, clause.coefficient)) {
-				raw.messages.push_back(coded(read_on(number(laid.coefficient, clause.coefficient_names))));
+				raw.messages.push_back(read_on(number(laid.coefficient, clause.coefficient_names)));
 			}
 			raw.messages.push_back(
-			    coded(read_on(calc.If(calc.Fn("isnan", DoubleColumn(laid.rhs)),
-			                          calc.RaiseInvalidValue(DecideValueRole::BOUND, clause.rhs_text, clause.rhs_place),
-			                          calc.Constant(Value(LogicalType::VARCHAR))))));
+			    read_on(calc.If(calc.Fn("isnan", DoubleColumn(laid.rhs)),
+			                    calc.RaiseInvalidValue(DecideValueRole::BOUND, clause.rhs_text, clause.rhs_place),
+			                    calc.Constant(Value(LogicalType::VARCHAR)))));
 		}
 		for (idx_t k = 0; k < DecisionCount(); k++) {
 			ItemBindings item;
@@ -870,7 +842,7 @@ private:
 			item.w = p1.Add(calc.Out(scoped ? calc.If(eligible, weight, Zero()) : weight));
 			raw.rows.items.push_back(item);
 			if (!weights.empty() && !DirectIsFiniteWhereKept(optimizer, weights)) {
-				raw.messages.push_back(coded(number(item.w, condition.budget.names[k])));
+				raw.messages.push_back(number(item.w, condition.budget.names[k]));
 			}
 			raw.values.emplace_back();
 			for (idx_t p = 0; p < condition.objective.size(); p++) {
@@ -886,7 +858,7 @@ private:
 				}
 				raw.values.back().push_back(p1.Add(calc.Out(value)));
 				if (!DirectIsFiniteWhereKept(optimizer, values)) {
-					raw.messages.push_back(coded(number(raw.values.back().back(), condition.objective[p].names[k])));
+					raw.messages.push_back(number(raw.values.back().back(), condition.objective[p].names[k]));
 				}
 			}
 		}
@@ -989,8 +961,7 @@ private:
 			// The -infinity of an item outside the ranking is a mark, not a number computed: past a DOUBLE, a price
 			// names the budget.
 			auto too_large =
-			    Coded(DirectNumberMessage(calc, calc.If(free_of_budget, NullDouble(), price), condition.budget_written),
-			          computed_message_codes);
+			    DirectNumberMessage(calc, calc.If(free_of_budget, NullDouble(), price), condition.budget_written);
 			rows.computed_messages.push_back(p4.Add(calc.Out(too_large)));
 			item.empty = p4.Add(calc.Out(empty));
 			item.a = p4.Add(calc.Out(anchor));
@@ -1073,10 +1044,8 @@ private:
 //! no answer still raises.
 class AggregatePlanBuilder : public ItemAlgebra {
 public:
-	AggregatePlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, DirectSourceReader &reader_p,
-	                     const DirectStateErrors &errors_p)
-	    : ItemAlgebra(optimizer_p), condition(condition_p), binder(optimizer_p.binder), reader(reader_p),
-	      errors(errors_p) {
+	AggregatePlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, DirectSourceReader &reader_p)
+	    : ItemAlgebra(optimizer_p), condition(condition_p), binder(optimizer_p.binder), reader(reader_p) {
 		for (auto &limit : condition.data_limits) {
 			limit_bounds.push_back(limit.GroupBound(optimizer));
 		}
@@ -1145,7 +1114,6 @@ private:
 	vector<unique_ptr<DecideGroupBound>> limit_bounds;
 	Binder &binder;
 	DirectSourceReader &reader;
-	const DirectStateErrors &errors;
 	idx_t reads_made = 0;
 	//! The last build of the row stage (ItemStages), which says where each item column is in a read.
 	unique_ptr<ItemStages> layout;
@@ -1218,29 +1186,22 @@ private:
 			key.push_back(aggregate.Group(calc.Out(KeyColumn(i, items.columns.keys))));
 		}
 		auto rows = aggregate.Add(DirectHashAggregate(optimizer, calc, "count_star", nullptr));
-		// The least message of each check in the group, as the least code; the group raises them below, decoding each
-		// text on its row.
+		// The least message of each check in the group; the group raises them below.
 		vector<ColumnBinding> messages;
 		for (auto message : items.columns.messages) {
-			messages.push_back(aggregate.Add(
-			    DirectHashAggregate(optimizer, calc, "min", calc.Col(DirectMessageCodes::Type(), message))));
+			messages.push_back(
+			    aggregate.Add(DirectHashAggregate(optimizer, calc, "min", calc.Col(LogicalType::VARCHAR, message))));
 		}
 		// An item's value sums its parts' values, each checked before: past a DOUBLE it names the objective.
 		vector<ColumnBinding> value_messages;
-		vector<DirectMessageCodes> value_codes;
 		for (auto &item : items.columns.decisions) {
-			value_codes.emplace_back();
 			value_messages.push_back(aggregate.Add(DirectHashAggregate(
-			    optimizer, calc, "min",
-			    DirectEncodeMessage(calc, DirectNumberMessage(calc, item.v, condition.objective_written),
-			                        value_codes.back()))));
+			    optimizer, calc, "min", DirectNumberMessage(calc, item.v, condition.objective_written))));
 		}
 		for (auto message : items.columns.computed_messages) {
-			value_messages.push_back(aggregate.Add(
-			    DirectHashAggregate(optimizer, calc, "min", calc.Col(DirectMessageCodes::Type(), message))));
+			value_messages.push_back(
+			    aggregate.Add(DirectHashAggregate(optimizer, calc, "min", calc.Col(LogicalType::VARCHAR, message))));
 		}
-		value_codes.insert(value_codes.end(), items.columns.computed_message_codes.begin(),
-		                   items.columns.computed_message_codes.end());
 		vector<ColumnBinding> sums;
 		for (idx_t slot = 0; slot < TOTAL_COUNT; slot++) {
 			sums.push_back(aggregate.Add(DirectHashAggregate(optimizer, calc, TotalFunction(slot), inputs[slot])));
@@ -1270,20 +1231,16 @@ private:
 		// The row messages, what the limits give (a NaN limit, an `=` limit that takes two values in a group), the
 		// messages of the numbers the plan computes, then infeasible and unbounded.
 		vector<unique_ptr<Expression>> checks;
-		auto raise = [&](ColumnBinding message, const DirectMessageCodes &codes) {
-			checks.push_back(DirectRaiseMessage(
-			    optimizer, calc, DirectDecodeMessage(calc, codes, calc.Col(DirectMessageCodes::Type(), message))));
-		};
-		for (idx_t i = 0; i < messages.size(); i++) {
-			raise(messages[i], items.columns.message_codes[i]);
+		for (auto message : messages) {
+			checks.push_back(DirectRaiseMessage(optimizer, calc, calc.Col(LogicalType::VARCHAR, message)));
 		}
 		for (auto &limit : limits) {
 			for (auto &message : limit.messages) {
 				checks.push_back(DirectRaiseMessage(optimizer, calc, message));
 			}
 		}
-		for (idx_t i = 0; i < value_messages.size(); i++) {
-			raise(value_messages[i], value_codes[i]);
+		for (auto message : value_messages) {
+			checks.push_back(DirectRaiseMessage(optimizer, calc, calc.Col(LogicalType::VARCHAR, message)));
 		}
 		// The group's sums of the finite parts: the spend of the anchors and the finite rooms. An item's own part past
 		// a DOUBLE makes its sum so. The sums of the rooms at price zero are parts of these, and the running sums of
@@ -1292,9 +1249,9 @@ private:
 			checks.push_back(DirectRaiseTooLarge(optimizer, totals[slot], condition.budget_written));
 		}
 		checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(has_rows, verdict.infeasible)),
-		                               DirectInfeasibleErrorPredicate(optimizer, errors)));
+		                               DirectInfeasibleErrorPredicate(optimizer)));
 		checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(has_rows, verdict.unbounded)),
-		                               DirectUnboundedErrorPredicate(optimizer, errors)));
+		                               DirectUnboundedErrorPredicate(optimizer)));
 		// A group that raises nothing warns when an item's price lost precision.
 		checks.push_back(DirectWarnIf(calc, calc.Out(BoolColumn(imprecise))));
 
@@ -1584,10 +1541,10 @@ private:
 };
 
 DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
-                             const DirectApplicabilityCondition &candidate, const DirectStateErrors &errors) const {
+                             const DirectApplicabilityCondition &candidate) const {
 	auto &condition = static_cast<const Condition &>(candidate);
 	D_ASSERT(condition.source_reads == SOURCE_READS);
-	AggregatePlanBuilder builder(condition, optimizer, reader, errors);
+	AggregatePlanBuilder builder(condition, optimizer, reader);
 	return builder.Build();
 }
 

@@ -139,8 +139,7 @@ def test_a_bound_that_reads_the_data_is_not_a_domain_refusal(decidb_cli):
     """`CheckDomain` declines a bound whose ends are not constants (`per g: x <= cap`): the solve and DIAGNOSE report
     it, since the data says whether a row is left that it contradicts."""
     sql = "SELECT id, x FROM (VALUES (1, 'a', -1), (2, 'a', -1)) t(id, g, cap) DECIDE x(INT) SUCH THAT per g: x <= cap MAXIMIZE SUM(x)"
-    stderr = decidb_cli.execute_raw(sql).stderr
-    assert "DECIDE optimization is infeasible. Prefix the query with DIAGNOSE" in stderr, stderr
+    decidb_cli.assert_error_at(sql, kind="Invalid Input Error", word="infeasible")
 
 
 def _solves_as_the_oracle(cli, oracle, name, rows, clauses, bounds, mode="auto"):

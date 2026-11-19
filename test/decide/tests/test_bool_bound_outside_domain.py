@@ -46,7 +46,8 @@ _AGGREGATES = [
     ("SUM(x) >= 1", ">=", 1.0),
 ]
 
-_INFEASIBLE = r"DECIDE optimization is infeasible\. Prefix the query with DIAGNOSE to see which clause to change\."
+# The verdict of the solve, which the domain refusal ("is infeasible: ... cannot hold") is not.
+_INFEASIBLE = r"is infeasible(?!:)"
 #: The bounds that cannot hold on their own: the error quotes the bound rather than the generic infeasible text.
 _CANNOT_HOLD = {"x >= 2", "x <= -1", "x < 0", "x > 1.5", "x = -1"}
 

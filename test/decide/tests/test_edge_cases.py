@@ -1162,7 +1162,7 @@ def test_rounded_box_is_one_point(decidb_cli, oracle_solver, case):
 
     if not feasible:
         assert result.status == SolverStatus.INFEASIBLE
-        decidb_cli.assert_error(sql, match=r"optimization is infeasible")
+        decidb_cli.assert_error_at(sql, kind="Invalid Input Error", word="infeasible")
         return
 
     assert result.status == SolverStatus.OPTIMAL
@@ -1206,7 +1206,7 @@ def test_rounded_box_is_one_point_on_the_direct_plan(decidb_cli, oracle_solver, 
 
     if not feasible:
         assert result.status == SolverStatus.INFEASIBLE
-        decidb_cli.assert_error(query, match=r"optimization is infeasible")
+        decidb_cli.assert_error_at(query, kind="Invalid Input Error", word="infeasible")
         return
 
     assert result.status == SolverStatus.OPTIMAL

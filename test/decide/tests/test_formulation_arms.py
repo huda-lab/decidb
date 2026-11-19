@@ -16,8 +16,8 @@ from ._brute_force import judge, judge_rows, optimum
 
 _INFINITY = "CAST('Infinity' AS DOUBLE)"
 _MINUS_INFINITY = "CAST('-Infinity' AS DOUBLE)"
-_INFEASIBLE = r"DECIDE optimization is infeasible\. Prefix the query with DIAGNOSE"
-_UNBOUNDED = r"DECIDE optimization is unbounded\. Prefix the query with DIAGNOSE"
+_INFEASIBLE = r"infeasible"
+_UNBOUNDED = r"unbounded"
 
 
 def _lowered(cli):

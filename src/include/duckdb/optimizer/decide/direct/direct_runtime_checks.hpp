@@ -67,30 +67,6 @@ struct DirectNumberNames {
 ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const DirectNumberNames &names,
                             const std::function<ExprPtr(const Expression &)> &into);
 
-//! The texts a message can take, for a message kept as a code. Code i stands for texts[i], and the texts are in
-//! ascending order, so the least code is the code of the least text. The codes after the texts stand for the calls that
-//! raise a value's error where they are evaluated (ExpressionBuilder::RaiseInvalidValue), which no text holds: code
-//! texts.size() + j stands for raises[j].
-struct DirectMessageCodes {
-	vector<string> texts;
-	vector<ExprPtr> raises;
-
-	static LogicalType Type() {
-		return LogicalType::UINTEGER;
-	}
-};
-
-//! Dictionary encoding of a message, for an aggregate that takes the least message of a group (late materialization of
-//! strings). `message` is a VARCHAR expression whose results are constants: CASEs over constants, as
-//! DirectNumberMessage and DirectOnKeptRows build them, so every text it can take is known when the plan is built; a
-//! leaf may also be a call that raises. Returns the expression with each text and each call replaced by its code (a
-//! NULL stays NULL) and fills `codes`. The aggregate takes MIN of the codes and DirectDecodeMessage gives the text back
-//! on the group's row, where it raises, and evaluates the call there.
-ExprPtr DirectEncodeMessage(const ExpressionBuilder &calc, const ExprPtr &message, DirectMessageCodes &codes);
-
-//! The message a code (of type DirectMessageCodes::Type()) stands for, and NULL for a NULL code.
-ExprPtr DirectDecodeMessage(const ExpressionBuilder &calc, const DirectMessageCodes &codes, const ExprPtr &code);
-
 //! The message of a number the plan computes from values it checked before: past a DOUBLE it names `clause`
 //! (TOO_LARGE), as the solver path names a number it computes (AddCoefficient).
 ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const string &clause);
@@ -113,19 +89,11 @@ unique_ptr<Expression> DirectCheckNumber(Optimizer &optimizer, ColumnBinding num
 //! that is false or NULL, not an error, makes the whole false. No checks join to true.
 unique_ptr<Expression> DirectAllHold(const ExpressionBuilder &calc, vector<unique_ptr<Expression>> checks);
 
-//! The text of the two state errors a rule raises. The rule driver decides once per query whether DIAGNOSE would run on
-//! it (DecideSolverRuns) and hands the rules the matching texts (DecideInfeasibleMessage, DecideUnboundedMessage), so
-//! no rule asks for itself.
-struct DirectStateErrors {
-	string infeasible;
-	string unbounded;
-};
-
 //! DECIDE's infeasibility error, as a BOOLEAN expression that raises it when evaluated.
-unique_ptr<Expression> DirectInfeasibleErrorPredicate(Optimizer &optimizer, const DirectStateErrors &errors);
+unique_ptr<Expression> DirectInfeasibleErrorPredicate(Optimizer &optimizer);
 
 //! DECIDE's unboundedness error: some decision can improve the objective without limit.
-unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer, const DirectStateErrors &errors);
+unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer);
 
 //! Evaluates to true for a DOUBLE bound that is not NaN, and raises the bound error, naming the bound as the user
 //! `written` it, at `place` in the query, otherwise. Infinity is a valid bound (no bound on that side), and a NULL one

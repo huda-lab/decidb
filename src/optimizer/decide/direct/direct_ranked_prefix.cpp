@@ -9,11 +9,11 @@
 namespace duckdb {
 
 DirectRankedPrefix::DirectRankedPrefix(Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
-                                       const vector<LogicalType> &source_types_p, const DirectStateErrors &errors_p,
+                                       const vector<LogicalType> &source_types_p,
                                        const vector<reference<const DirectSharedScope>> &scopes,
                                        const DirectFixedValues &fixed_p)
     : optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context), source_bindings(source_bindings_p),
-      source_types(source_types_p), errors(errors_p), fixed(fixed_p) {
+      source_types(source_types_p), fixed(fixed_p) {
 	D_ASSERT(source_bindings.size() == source_types.size());
 	D_ASSERT(!scopes.empty());
 	for (auto &scope : scopes) {
@@ -169,7 +169,7 @@ DirectRankedPrefix::Stage DirectRankedPrefix::ProjectRows(unique_ptr<LogicalOper
 	}
 	if (HasFixes()) {
 		auto both = calc.If(FixedOne(state), FixedZero(state), calc.Bool(false));
-		checks_below.push_back(DirectRaiseIf(calc, calc.Out(both), DirectInfeasibleErrorPredicate(optimizer, errors)));
+		checks_below.push_back(DirectRaiseIf(calc, calc.Out(both), DirectInfeasibleErrorPredicate(optimizer)));
 	}
 	auto layout = LayoutRows(p1, state);
 	rank_key = layout.rank_key;
@@ -343,7 +343,7 @@ void DirectRankedPrefix::CloseGroups(Stage &prefix) {
 	}
 	unique_ptr<Expression> raise;
 	if (verdict) {
-		raise = DirectRaiseUnless(calc, calc.Out(verdict), DirectInfeasibleErrorPredicate(optimizer, errors));
+		raise = DirectRaiseUnless(calc, calc.Out(verdict), DirectInfeasibleErrorPredicate(optimizer));
 	}
 	prefix.plan->ResolveOperatorTypes();
 	auto &hold = prefix.hold;

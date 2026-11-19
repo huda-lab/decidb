@@ -93,21 +93,18 @@ public:
 		}
 	}
 
-	//! Records the aggregates of the group bounds `Run` left to a rule, and puts their checks where they would have
-	//! stood. The solver path needs them; a direct rule computes the bound itself.
+	//! Records the aggregates of the group bounds `Run` left to a rule, and adds their checks. The solver path needs
+	//! them; a direct rule computes the bound itself.
 	void RecordGroupBounds() {
-		idx_t inserted = 0;
 		for (auto &bound : decide.reduced_bounds) {
 			when = bound.when;
 			class_key = bound.class_key;
 			auto messages = RecordGroupBound(bound.comparison->Cast<BoundComparisonExpression>(), *bound.group);
-			auto position = decide.scope_checks.begin() + NumericCast<int64_t>(bound.check_position + inserted);
 			for (auto &message : messages) {
 				DecideScopeCheck check;
 				check.kind = DecideScopeCheckKind::VALUE_IS_VALID;
 				check.value = std::move(message);
-				position = decide.scope_checks.insert(position, std::move(check)) + 1;
-				inserted++;
+				decide.scope_checks.push_back(std::move(check));
 			}
 		}
 		decide.reduced_bounds.clear();
@@ -357,15 +354,13 @@ private:
 		}
 	}
 
-	//! Leaves the bound to the rule. Its checks stand where they would have, in clause order, once the aggregates are
-	//! recorded.
+	//! Leaves the bound to the rule. Its checks join the clauses' once the aggregates are recorded.
 	void Record(BoundComparisonExpression &comparison, unique_ptr<DecideGroupBound> group) {
 		DecideReducedBound bound;
 		bound.comparison = &comparison;
 		bound.when = when;
 		bound.class_key = class_key;
 		bound.group = std::move(group);
-		bound.check_position = decide.scope_checks.size();
 		decide.reduced_bounds.push_back(std::move(bound));
 	}
 

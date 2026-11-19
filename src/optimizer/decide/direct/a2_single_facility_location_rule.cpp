@@ -36,7 +36,6 @@ struct PlanTools {
 	const ExpressionBuilder &calc;
 	Binder &binder;
 	const vector<ColumnBinding> &source_bindings;
-	const DirectStateErrors &errors;
 	//! The objective as a message names it: a number computed past a DOUBLE names it, as the solver path names one.
 	const string &written;
 };
@@ -204,7 +203,7 @@ public:
 		auto infinite = calc.Any({calc.Cmp(ExpressionType::COMPARE_EQUAL, minimum.value, calc.Num(POSITIVE_INFINITY)),
 		                          calc.Cmp(ExpressionType::COMPARE_EQUAL, minimum.value, calc.Num(NEGATIVE_INFINITY))});
 		answer.checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(has_class, calc.And(calc.Not(convex), infinite))),
-		                                      DirectUnboundedErrorPredicate(tools.optimizer, tools.errors)));
+		                                      DirectUnboundedErrorPredicate(tools.optimizer)));
 		answer.warnings.push_back(DirectWarnIf(calc, calc.Out(minimum.loses_precision)));
 		return answer;
 	}
@@ -424,8 +423,7 @@ public:
 	}
 
 	DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
-	                       const DirectApplicabilityCondition &candidate,
-	                       const DirectStateErrors &errors) const override;
+	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
 	bool ProveInterval(const DirectIR &ir, ClientContext &context, Condition &condition) const;
@@ -575,11 +573,10 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 class PlanBuilder {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
-	            const vector<LogicalType> &source_types_p, const DirectStateErrors &errors_p)
+	            const vector<LogicalType> &source_types_p)
 	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context),
 	      source_bindings(source_bindings_p),
-	      source_types(source_types_p), tools {optimizer, calc, binder, source_bindings, errors_p, condition_p.written},
-	      errors(errors_p) {
+	      source_types(source_types_p), tools {optimizer, calc, binder, source_bindings, condition_p.written} {
 		D_ASSERT(source_bindings.size() == source_types.size());
 	}
 
@@ -685,7 +682,6 @@ private:
 	vector<ColumnBinding> source_bindings;
 	vector<LogicalType> source_types;
 	PlanTools tools;
-	const DirectStateErrors &errors;
 
 	bool IsKeyed() const {
 		return !condition.keys.empty();
@@ -833,7 +829,7 @@ private:
 		// An empty interval raises on every key that has a class. A query whose only bounds are constants has two
 		// constants here, which DuckDB folds.
 		checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(has_class, DirectBoxIsEmpty(calc, lower, upper))),
-		                               DirectInfeasibleErrorPredicate(optimizer, errors)));
+		                               DirectInfeasibleErrorPredicate(optimizer)));
 		// The loss's checks, then the answer's, then the loss's warnings: a warning prints as it runs, so it follows
 		// every check that can raise first.
 		MoveInto(checks, finish.checks);
@@ -848,9 +844,9 @@ private:
 };
 
 DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
-                             const DirectApplicabilityCondition &candidate, const DirectStateErrors &errors) const {
+                             const DirectApplicabilityCondition &candidate) const {
 	auto &condition = static_cast<const Condition &>(candidate);
-	PlanBuilder plan_builder(condition, optimizer, reader.SourceBindings(), reader.SourceTypes(), errors);
+	PlanBuilder plan_builder(condition, optimizer, reader.SourceBindings(), reader.SourceTypes());
 	auto classes = DirectBuildOverRead(reader, reader.ReadSource(), [&](unique_ptr<LogicalOperator> rows) {
 		return plan_builder.BuildClasses(std::move(rows));
 	});

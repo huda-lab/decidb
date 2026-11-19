@@ -101,7 +101,7 @@ SELECT l_quantity FROM lineitem DECIDE x(REAL) SUCH THAT x <= 1 MAXIMIZE SUM(x*l
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x) BETWEEN l_quantity and 1 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-<REGEX>:.*DECIDE optimization is infeasible.*
+<REGEX>:.*the DECIDE query is infeasible.*
 
 # Bind BETWEEN with DECIDE variable bound
 statement ok

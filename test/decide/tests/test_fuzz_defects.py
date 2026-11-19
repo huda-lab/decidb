@@ -71,8 +71,9 @@ def test_a_crossed_box_leaves_every_helper_bounded_on_highs(decidb_cli):
             <= ((t.cap - max(min(per t.k: t.v) by (t.h, t.w + t.v)) by (t.g)) - 5)
         MAXIMIZE sum(t.c * x) + sum(y) + sum(z) + min(when t.p: (y + min(when t.v > 1 per t.h: y) by (t.h, t.w + t.v)))
         ORDER BY t.id"""
-    result = decidb_cli.with_env({"DECIDB_FORCE_SOLVER": "highs"}).execute_raw(SETUP + sql)
-    assert "DECIDE optimization is infeasible" in result.stderr, result.stderr
+    decidb_cli.with_env({"DECIDB_FORCE_SOLVER": "highs"}).assert_error_at(
+        SETUP + sql, kind="Invalid Input Error", word="infeasible"
+    )
 
 
 #: Group b's rows fail the reducer's own `when`, so it holds no instance and constrains nothing: its bound, 4 and 5, is

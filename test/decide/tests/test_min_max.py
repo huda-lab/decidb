@@ -2276,7 +2276,6 @@ def test_an_extremum_past_every_row_bound_is_infeasible(request, cli_fixture, na
         "SELECT t.id, x FROM (VALUES (1, 'p', 4), (2, 'p', 3), (3, 'q', 5)) t(id, h, v) "
         f"DECIDE x(INT) SUCH THAT x <= t.v AND {clause} MAXIMIZE sum(x)"
     )
-    result = cli.execute_raw(sql)
-    assert "DECIDE optimization is infeasible" in result.stderr, result.stderr
+    cli.assert_error_at(sql, kind="Invalid Input Error", word="infeasible")
     diagnosis = cli.execute_raw("DIAGNOSE " + sql)
     assert diagnosis.returncode == 0 and "infeasible" in diagnosis.stdout, diagnosis.stderr

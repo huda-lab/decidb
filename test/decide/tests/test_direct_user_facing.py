@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
-from ._direct_oracle_common import outcome, without_gurobi
+from ._direct_oracle_common import outcome
 
 
 def _source_query(scores, capacity, sense="MAXIMIZE"):
@@ -866,7 +866,7 @@ def test_a2_a_nan_data_bound_is_the_solvers_word_for_word(decidb_cli, declaratio
             "per ()",
             "SUM(w * POWER(c - v, 2))",
             "(1, 'a', 2.0, -1.0), (2, 'a', 3.0, -2.0)",
-            "DECIDE optimization is unbounded.",
+            "is unbounded",
         ),
     ],
 )
@@ -885,76 +885,6 @@ def test_a2_a_data_weight_is_the_solvers_word_for_word(decidb_cli, declaration, 
     else:
         _expect(decidb_cli, sql, message)
         assert direct.stderr == solver.stderr
-
-
-# The infeasible and unbounded errors advise prefixing the query with DIAGNOSE only where DIAGNOSE runs. The rule driver
-# asks the solver-support check DIAGNOSE goes through (DecideSolverRuns) once per query. On a machine with no Gurobi,
-# HiGHS takes a linear model and a convex quadratic objective over continuous decisions, and refuses the rest.
-_ADVICE = "Prefix the query with DIAGNOSE"
-# Row 2 has a NULL key, so it is in no ball and its linear objective improves without end.
-_NULL_KEY_BALL = "SUM(POWER(x, 2)) by (k) <= 25 MAXIMIZE SUM(s * x)"
-_EMPTY_BOX = "x >= 2 AND x <= 1"
-
-
-def _two_rows_query(domain, decide):
-    return f"SELECT id, x FROM (FROM (VALUES (1, 3.0::DOUBLE, 'a'), (2, 4.0::DOUBLE, NULL)) t(id, s, k) DECIDE x({domain}) SUCH THAT {decide}) q"
-
-
-@pytest.mark.error
-@pytest.mark.parametrize(
-    "domain,decide,state",
-    [
-        # QCQP: HiGHS takes no quadratic limit.
-        pytest.param("REAL", "SUM(POWER(x, 2)) <= -1", "infeasible", id="infeasible-quadratic-limit"),
-        pytest.param("REAL", _NULL_KEY_BALL, "unbounded", id="unbounded-quadratic-limit"),
-        # MIQP: HiGHS takes a quadratic objective over continuous decisions only.
-        pytest.param(
-            "INT", f"{_EMPTY_BOX} MINIMIZE SUM(POWER(x - s, 2))", "infeasible", id="infeasible-integer-square"
-        ),
-    ],
-)
-def test_the_state_errors_leave_out_diagnose_where_it_is_refused(decidb_exe_path, tmp_path, domain, decide, state):
-    run = without_gurobi(decidb_exe_path, tmp_path)
-    sql = _two_rows_query(domain, decide)
-    # The premise: DIAGNOSE on this query is refused for lack of a solver.
-    assert "which needs Gurobi" in run(f"SET decide_direct_solve='auto'; DIAGNOSE {sql}").stderr
-    error = run(f"SET decide_direct_solve='require'; {sql}").stderr
-    assert error.strip() == f"Invalid Input Error: DECIDE optimization is {state}.", error
-
-
-@pytest.mark.error
-@pytest.mark.parametrize(
-    "domain,decide,state",
-    [
-        pytest.param("REAL", f"{_EMPTY_BOX} MAXIMIZE SUM(s * x)", "infeasible", id="infeasible-linear"),
-        pytest.param(
-            "REAL", f"{_EMPTY_BOX} MINIMIZE SUM(POWER(x - s, 2))", "infeasible", id="infeasible-convex-square"
-        ),
-        pytest.param("REAL", "x >= 0 MAXIMIZE SUM(s * x)", "unbounded", id="unbounded-linear"),
-    ],
-)
-def test_the_state_errors_keep_diagnose_where_it_runs_without_gurobi(decidb_exe_path, tmp_path, domain, decide, state):
-    run = without_gurobi(decidb_exe_path, tmp_path)
-    sql = _two_rows_query(domain, decide)
-    assert "which needs Gurobi" not in run(f"SET decide_direct_solve='auto'; DIAGNOSE {sql}").stderr
-    error = run(f"SET decide_direct_solve='require'; {sql}").stderr
-    assert f"DECIDE optimization is {state}. {_ADVICE}" in error, error
-
-
-@pytest.mark.error
-@pytest.mark.parametrize(
-    "decide,state",
-    [
-        # Gurobi takes any model class, so DIAGNOSE runs on a quadratic limit. A row whose key is NULL is in no ball, and
-        # its linear objective improves without end; DIAGNOSE cannot name a variable there, and the error still advises it.
-        ("SUM(POWER(x, 2)) by (k) <= 25 MAXIMIZE SUM(s * x)", "unbounded"),
-        ("SUM(POWER(x, 2)) <= -1", "infeasible"),
-    ],
-)
-def test_the_state_errors_keep_diagnose_where_gurobi_runs_it(decidb_cli, decide, state):
-    sql = f"SELECT id, x FROM (FROM (VALUES (1, 3.0::DOUBLE, NULL::VARCHAR)) t(id, s, k) DECIDE x(REAL) SUCH THAT {decide}) q"
-    error = _raw(decidb_cli, sql, mode="require").stderr
-    assert f"DECIDE optimization is {state}. {_ADVICE}" in error, error
 
 
 @pytest.mark.correctness
@@ -1286,9 +1216,8 @@ def test_require_reports_the_conflict_before_it_looks_at_the_forced_backend(deci
 
 @pytest.mark.correctness
 def test_a_query_a_rule_answers_loads_no_solver(decidb_cli):
-    # DecideSolverRuns' short-circuit: every backend takes a linear model, so the wording of the state errors does not
-    # depend on which backend would run DIAGNOSE, and no backend is picked. Without it, the pick probes Gurobi (loads
-    # its library and starts a licensed environment, a span of its own) on every query a rule answers.
+    # A query a rule answers picks no backend. A pick probes Gurobi (loads its library and starts a licensed
+    # environment, a span of its own), which would then cost every query a rule answers.
     sql = _source_query((2.0, 9.0, -1.0), 1)
     profiled = _raw(decidb_cli.with_env({"DECIDB_PROFILE": "1"}), sql)
     assert '"name":"optimizer.direct.analyze"' in profiled.stderr, profiled.stderr

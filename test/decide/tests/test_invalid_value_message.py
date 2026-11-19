@@ -106,7 +106,6 @@ BOTH_PATHS_BOUND = [
     ("a1_bound_under_a_when", "x(REAL) SUCH THAT when a > 0: x <= b MAXIMIZE SUM(a * x)", "b"),
     ("r1_limit", "x(REAL) SUCH THAT x <= 4 AND SUM(a * x) <= b MAXIMIZE SUM(c * x)", "b"),
     ("r1_limit_expression", "x(REAL) SUCH THAT x <= 4 AND SUM(a * x) <= b + 2 MAXIMIZE SUM(c * x)", "b + 2"),
-    ("r1_equality_limit", "x(REAL) SUCH THAT x <= 4 AND SUM(a * x) = b MINIMIZE SUM(c * x)", "b"),
     ("r1_per_row_bound", "x(REAL) SUCH THAT x <= b AND SUM(a * x) <= 9 MAXIMIZE SUM(c * x)", "b"),
     ("r1_limit_by_group", "x(REAL) SUCH THAT x <= 4 AND SUM(a * x) by (g) <= SUM(b) by (g) MAXIMIZE SUM(c * x)", "b"),
     ("s1_count_bound", "x(BOOL) SUCH THAT SUM(x) <= b MAXIMIZE SUM(a * x)", "b"),

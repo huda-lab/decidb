@@ -70,8 +70,7 @@ public:
 	}
 
 	DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
-	                       const DirectApplicabilityCondition &candidate,
-	                       const DirectStateErrors &errors) const override;
+	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
 	bool ProveConstraints(const DirectIR &ir, ClientContext &context, Condition &condition,
@@ -228,9 +227,8 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 class PlanBuilder final : public DirectRankedPrefix {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
-	            const vector<LogicalType> &source_types_p, const DirectStateErrors &errors_p)
-	    : DirectRankedPrefix(optimizer_p, source_bindings_p, source_types_p, errors_p, {condition_p.scope},
-	                         condition_p.fixed),
+	            const vector<LogicalType> &source_types_p)
+	    : DirectRankedPrefix(optimizer_p, source_bindings_p, source_types_p, {condition_p.scope}, condition_p.fixed),
 	      condition(condition_p) {
 		if (!condition.limit.constant) {
 			limit_bound = condition.limit.data.GroupBound(optimizer);
@@ -439,9 +437,9 @@ private:
 };
 
 DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
-                             const DirectApplicabilityCondition &candidate, const DirectStateErrors &errors) const {
+                             const DirectApplicabilityCondition &candidate) const {
 	auto &condition = static_cast<const Condition &>(candidate);
-	PlanBuilder plan_builder(condition, optimizer, reader.SourceBindings(), reader.SourceTypes(), errors);
+	PlanBuilder plan_builder(condition, optimizer, reader.SourceBindings(), reader.SourceTypes());
 	return DirectBuildOverOneRead(
 	    reader, [&](unique_ptr<LogicalOperator> rows) { return plan_builder.Build(std::move(rows)); });
 }

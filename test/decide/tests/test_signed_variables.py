@@ -672,7 +672,7 @@ def test_integer_bounds_without_a_whole_number(request, cli_fixture):
     cli = request.getfixturevalue(cli_fixture)
     query = """SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT) SUCH THAT x >= 2.3 AND x <= 2.7 MINIMIZE SUM(x)"""
-    assert "DECIDE optimization is infeasible" in cli.execute_raw(query).stderr
+    cli.assert_error_at(query, kind="Invalid Input Error", word="infeasible")
     diagnosis = cli.execute_raw(f"DIAGNOSE {query}")
     assert diagnosis.stdout.count("infeasible") >= 1, diagnosis.stdout + diagnosis.stderr
 
@@ -782,10 +782,7 @@ def _lift_check(cli, scope_solver, case):
     for mode in _LIFT_MODES:
         sql = f"SET decide_direct_solve='{mode}'; {case.sql}"
         if result.status == SolverStatus.INFEASIBLE:
-            with pytest.raises(
-                DeciDBCliError, match=r"DECIDE optimization is infeasible\. Prefix the query with DIAGNOSE"
-            ):
-                cli.execute(sql)
+            cli.assert_error_at(sql, kind="Invalid Input Error", word="infeasible")
             continue
         assert result.status == SolverStatus.OPTIMAL, result.status
         rows, columns = cli.execute(sql)
@@ -972,8 +969,9 @@ def test_upper_bound_below_zero_with_an_unkept_row_is_left_to_the_solve(request,
     """The early check that an upper bound below 0 contradicts the default floor counts a floor under a `when` as
     lowering it, so it leaves the query to the solve and the message is the solve's."""
     cli = request.getfixturevalue(cli_fixture)
-    error = cli.execute_raw(_LIFT_CASES["upper_below_zero_some_row_unkept"]().sql).stderr
-    assert "DECIDE optimization is infeasible" in error and "non-negative" not in error, error
+    sql = _LIFT_CASES["upper_below_zero_some_row_unkept"]().sql
+    cli.assert_error_at(sql, kind="Invalid Input Error", word="infeasible")
+    assert "non-negative" not in cli.execute_raw(sql).stderr
 
 
 @pytest.mark.var_integer

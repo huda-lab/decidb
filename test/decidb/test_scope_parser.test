@@ -56,7 +56,7 @@ SELECT shipmentID FROM Shipment DECIDE per (): cap(INT) SUCH THAT cap <= 5 MAXIM
 statement error
 SELECT shipmentID FROM Shipment DECIDE per(): a(INT), per ( ): b(INT) SUCH THAT a <= b MAXIMIZE a;
 ----
-Invalid Input Error: DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see which decision needs a bound.
+Invalid Input Error: the DECIDE query is unbounded
 
 # declaration before FROM (the paper's clause order)
 query IR rowsort
@@ -70,7 +70,7 @@ SELECT shipmentID, reserve DECIDE per D.depotID: reserve(REAL) FROM Shipment S J
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT when priority and demand > 5: ship <= 5 MAXIMIZE SUM(ship);
 ----
-Invalid Input Error: DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see which decision needs a bound.
+Invalid Input Error: the DECIDE query is unbounded
 
 # constraint: per in front
 statement ok
@@ -80,7 +80,7 @@ SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per depotID: su
 statement error
 SELECT shipmentID, ship FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT) SUCH THAT when S.priority per D.depotID, D.region: sum(ship) by (D.depotID) <= D.capacity MAXIMIZE SUM(ship);
 ----
-Invalid Input Error: DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see which decision needs a bound.
+Invalid Input Error: the DECIDE query is unbounded
 
 # constraint: per ()
 statement ok
@@ -90,13 +90,13 @@ SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per (): sum(shi
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT when priority per row: ship <= 5 MAXIMIZE SUM(ship);
 ----
-Invalid Input Error: DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see which decision needs a bound.
+Invalid Input Error: the DECIDE query is unbounded
 
 # constraint: a scoped constraint, then a plain one
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT when priority: ship <= 5 AND ship >= 0 MAXIMIZE SUM(ship);
 ----
-Invalid Input Error: DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see which decision needs a bound.
+Invalid Input Error: the DECIDE query is unbounded
 
 # reducer: by () and by (expression); a decision beside a reducer is the value
 # rewrite: every shipment arrives on its own depot-day, so a quarter of its group's
@@ -112,7 +112,7 @@ SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(ship) by ()
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(when priority: ship) <= 100 MAXIMIZE SUM(ship);
 ----
-Invalid Input Error: DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see which decision needs a bound.
+Invalid Input Error: the DECIDE query is unbounded
 
 # reducer: per inside, with a column key; ship is per row, so each row is a variant (D71)
 query II rowsort

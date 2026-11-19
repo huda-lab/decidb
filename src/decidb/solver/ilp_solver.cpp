@@ -543,9 +543,9 @@ void ThrowDecideSolveError(const SolverResult &result, SolverBackend backend) {
 	// more.
 	switch (result.status) {
 	case SolverStatus::INFEASIBLE:
-		throw InvalidInputException(DecideInfeasibleMessage(true));
+		throw InvalidInputException(DecideInfeasibleMessage());
 	case SolverStatus::UNBOUNDED:
-		throw InvalidInputException(DecideUnboundedMessage(true));
+		throw InvalidInputException(DecideUnboundedMessage());
 	case SolverStatus::INF_OR_UNBD:
 		throw InvalidInputException("DECIDE optimization is infeasible or unbounded. "
 		                            "Prefix the query with DIAGNOSE to see which clause to change.");

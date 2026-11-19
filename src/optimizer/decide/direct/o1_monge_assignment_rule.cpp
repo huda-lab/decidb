@@ -216,8 +216,7 @@ public:
 		       "min/max SUM(a*b*x)";
 	}
 	DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
-	                       const DirectApplicabilityCondition &candidate,
-	                       const DirectStateErrors &errors) const override;
+	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
 	bool ProveClause(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &clause, Side &side,
@@ -319,9 +318,9 @@ bool Rule::ProveCost(const DirectIR &ir, ClientContext &context, Condition &cond
 class PlanBuilder {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
-	            const vector<LogicalType> &source_types_p, idx_t left_width_p, const DirectStateErrors &errors_p)
+	            const vector<LogicalType> &source_types_p, idx_t left_width_p)
 	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context),
-	      source_bindings(source_bindings_p), source_types(source_types_p), left_width(left_width_p), errors(errors_p) {
+	      source_bindings(source_bindings_p), source_types(source_types_p), left_width(left_width_p) {
 	}
 
 	//! The verdict on every pair (DirectSourceReader::Gate): true when the written coefficient is a valid number on
@@ -429,7 +428,7 @@ public:
 		result.Add(calc.If(assigned, calc.Constant(Value::INTEGER(1)), calc.Constant(Value::INTEGER(0))));
 		// The two sides pair one to one only with as many classes on one side as on the other.
 		result.Add(DirectRaiseUnless(calc, calc.Out(calc.Cmp(ExpressionType::COMPARE_EQUAL, left_count, right_count)),
-		                             DirectInfeasibleErrorPredicate(optimizer, errors)));
+		                             DirectInfeasibleErrorPredicate(optimizer)));
 
 		DirectSubstitute substitute;
 		substitute.prunable_decisions.push_back(1);
@@ -450,11 +449,10 @@ private:
 	const vector<ColumnBinding> &source_bindings;
 	const vector<LogicalType> &source_types;
 	idx_t left_width;
-	const DirectStateErrors &errors;
 };
 
 DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
-                             const DirectApplicabilityCondition &candidate, const DirectStateErrors &errors) const {
+                             const DirectApplicabilityCondition &candidate) const {
 	auto &condition = static_cast<const Condition &>(candidate);
 	// The source is read once, so the reader hands back DECIDE's own cross product. O1's shape has no bound table and
 	// no row check, which would be reads of their own and a gate on it. The node stays in the plan as the cross
@@ -466,7 +464,7 @@ DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
 	DirectSourceReader left(optimizer, std::move(pairs->children[0]), 2, vector<idx_t>());
 	DirectSourceReader right(optimizer, std::move(pairs->children[1]), 2, vector<idx_t>());
 	auto left_width = left.SourceBindings().size();
-	PlanBuilder plan(condition, optimizer, reader.SourceBindings(), reader.SourceTypes(), left_width, errors);
+	PlanBuilder plan(condition, optimizer, reader.SourceBindings(), reader.SourceTypes(), left_width);
 	// Verify, then stream: the left side ranks once every pair is known to be valid.
 	left.Gate(plan.CheckPairs(left.ReadSource(), right.ReadSource()));
 	auto rank = [&](DirectSourceReader &side_reader, const Side &side, bool descending, idx_t index) {

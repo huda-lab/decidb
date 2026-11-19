@@ -348,7 +348,7 @@ def test_a_bound_below_every_value_is_infeasible_not_a_box(request, backend):
         DECIDE x(INT)
         SUCH THAT x <= 5 AND x <= -'inf'::DOUBLE
         MAXIMIZE SUM(x)"""
-    cli.assert_error(sql, match="DECIDE optimization is infeasible")
+    cli.assert_error_at(sql, kind="Invalid Input Error", word="infeasible")
 
 
 @pytest.mark.correctness

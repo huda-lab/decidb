@@ -32,8 +32,7 @@ struct SolverBackendInfo {
 	bool (*is_available)();
 	//! The model classes this backend can load at all. Mathematics, the same on every
 	//! host: answering loads no library and checks no licence, so a refusal can name a
-	//! solver the host lacks, and a question whose answer every backend shares costs
-	//! nothing (DecideSolverRuns).
+	//! solver the host lacks.
 	SolverModelClass (*model_classes)();
 	//! The constructs this backend states natively, before the central
 	//! DECIDB_NATIVE_CONSTRUCTS mask (see SolverBackend::Constructs). A runtime fact: a

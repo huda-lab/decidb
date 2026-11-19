@@ -38,14 +38,8 @@ SolverModelClass DeriveDecideModelClass(const LogicalDecide &op, const DecideTre
 void RequireDecideSolverSupport(const LogicalDecide &op, const DecideTree &tree);
 
 //! The demand of `needed` that `backend` fails to meet, NONE when it can take the model. The one place a backend's
-//! capabilities are read against a query's demand: the gate throws on a gap, and DecideSolverRuns asks whether there is
-//! none.
+//! capabilities are read against a query's demand.
 SolverModelClassGap FindDecideSolverGap(const SolverModelClass &needed, const SolverBackend &backend);
-
-//! Whether the backend DIAGNOSE would use on this host (SelectSolverBackend) can take a model of class `needed`: the
-//! non-throwing form of RequireDecideSolverSupport. DIAGNOSE is refused where this is false, so advice to prefix the
-//! query with DIAGNOSE would send the user to a refusal.
-bool DecideSolverRuns(const SolverModelClass &needed);
 
 //! The refusal both gates raise: `cause` names what the query does in the user's words, `remedy` the smallest edit
 //! that avoids it, and the sentence names the solvers that take `needed`, from the registry. RequireDecideSolverSupport

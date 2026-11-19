@@ -111,7 +111,7 @@ protected:
 	//! `scopes` and `fixed` are the rule's, read at Build: the rows and groups each level ranks, finest first, and the
 	//! rows its clauses fix to 1 or to 0, which leave the ranking and keep the value they are fixed to.
 	DirectRankedPrefix(Optimizer &optimizer, const vector<ColumnBinding> &source_bindings,
-	                   const vector<LogicalType> &source_types, const DirectStateErrors &errors,
+	                   const vector<LogicalType> &source_types,
 	                   const vector<reference<const DirectSharedScope>> &scopes, const DirectFixedValues &fixed);
 
 	//! The direction of the ranking: ascending ranks the smallest ranking value first.
@@ -201,7 +201,6 @@ protected:
 	ExpressionBuilder calc;
 	vector<ColumnBinding> source_bindings;
 	vector<LogicalType> source_types;
-	const DirectStateErrors &errors;
 	//! The levels, finest first.
 	vector<Level> levels;
 	const DirectFixedValues &fixed;

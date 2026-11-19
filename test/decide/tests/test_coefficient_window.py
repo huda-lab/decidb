@@ -412,9 +412,10 @@ def test_a_scaled_columns_open_side_stays_open(decidb_cli_highs, oracle_solver, 
     oracle_solver.set_objective({"x": 1.0}, sense[1])
     assert oracle_solver.solve().status == SolverStatus.UNBOUNDED
 
-    decidb_cli_highs.assert_error(
+    decidb_cli_highs.assert_error_at(
         f"SELECT id, x FROM (VALUES (1),(2)) t(id) DECIDE x(REAL) SUCH THAT {clauses} {sense[0]} SUM(x)",
-        match=r"DECIDE optimization is unbounded",
+        kind="Invalid Input Error",
+        word="unbounded",
         expect_number_range=True,
     )
 

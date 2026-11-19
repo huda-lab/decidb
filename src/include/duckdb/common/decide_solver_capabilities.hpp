@@ -137,12 +137,12 @@ inline bool IsNonconvexProductGroup(bool square, int weight_sign) {
 }
 
 //! What the model-class question reads of one query (ClassifyDecideModel), filled term by term with AddTerm by each
-//! reader of the query's terms: the solver gate from the prepared model's product groups (DeriveDecideModelClass), and
-//! direct solve from its IR's split terms (DirectIR::model_shape). The built model fills the same fields from its
-//! matrix (SolverModel::ModelClass), so the prediction and the fact are classified by one function.
+//! reader of the query's terms: the solver gate from the prepared model's product groups (DeriveDecideModelClass). The
+//! built model fills the same fields from its matrix (SolverModel::ModelClass), so the prediction and the fact are
+//! classified by one function.
 //!
 //! A reader that cannot tell what a term becomes in the built model says which way it errs: the gate demands more
-//! (SolverModelClass), direct solve reports less.
+//! (SolverModelClass).
 struct DecideModelShape {
 	//! Some column of the model may be integral: a declared INT or BOOL, or a helper a rewrite adds as one.
 	bool integral_column = false;

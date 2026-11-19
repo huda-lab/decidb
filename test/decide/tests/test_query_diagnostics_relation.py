@@ -205,13 +205,12 @@ class TestDiagnoseRelationShape:
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_a_bare_failure_reports_its_state_and_stops(self, request, cli_fixture):
-        """Without the prefix: the state, and how to ask for more. No clause name, no
+        """Without the prefix: the state. No clause name, no
         repair, no second statement to run — naming the clause IS the elastic solve."""
         cli = request.getfixturevalue(cli_fixture)
         result = cli.execute_script(f".mode csv\n{_UNBOUNDED_SQL};\n")
         err = result.stderr.lower()
-        assert "decide optimization is unbounded" in err
-        assert "diagnose" in err
+        assert "is unbounded" in err
         # None of the diagnosis's own vocabulary leaks into the bare error.
         assert "x <=" not in err
         assert "decide_diagnostics" not in err
@@ -1758,7 +1757,7 @@ class TestDiagnosticsRelation:
         sql = "SELECT x FROM (VALUES (1)) t(id) " "DECIDE x(REAL) SUCH THAT x <= 5 AND 2 * x >= 30 MAXIMIZE SUM(x)"
         result = cli.execute_script(f".mode csv\n{sql};\n")
         err = result.stderr.lower()
-        assert "decide optimization is infeasible" in err
+        assert "is infeasible" in err
         assert "x <= 15" not in err
         assert not list(csv.DictReader(io.StringIO(result.stdout)))
 

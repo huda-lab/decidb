@@ -89,8 +89,7 @@ public:
 	}
 
 	DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
-	                       const DirectApplicabilityCondition &candidate,
-	                       const DirectStateErrors &errors) const override;
+	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
 	bool ProveLimitClause(const DirectIR &ir, ClientContext &context, Condition &condition) const;
@@ -262,9 +261,9 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 class PlanBuilder {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
-	            const vector<LogicalType> &source_types_p, const DirectStateErrors &errors_p)
+	            const vector<LogicalType> &source_types_p)
 	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context),
-	      source_bindings(source_bindings_p), source_types(source_types_p), errors(errors_p) {
+	      source_bindings(source_bindings_p), source_types(source_types_p) {
 		D_ASSERT(source_bindings.size() == source_types.size());
 		if (!condition.limit.constant) {
 			limit_bound = condition.limit.data.GroupBound(optimizer);
@@ -449,7 +448,6 @@ private:
 	ExpressionBuilder calc;
 	vector<ColumnBinding> source_bindings;
 	vector<LogicalType> source_types;
-	const DirectStateErrors &errors;
 	//! The group bound of the data limit; null for a constant limit.
 	unique_ptr<DecideGroupBound> limit_bound;
 
@@ -679,7 +677,7 @@ private:
 		checks.push_back(DirectRaiseTooLarge(optimizer, Double(targets.target), condition.objective_written));
 		checks.push_back(DirectRaiseTooLarge(optimizer, squared_length, condition.objective_written));
 		auto negative = calc.And(in_ball, calc.Cmp(ExpressionType::COMPARE_LESSTHAN, limit, zero));
-		checks.push_back(DirectRaiseIf(calc, calc.Out(negative), DirectInfeasibleErrorPredicate(optimizer, errors)));
+		checks.push_back(DirectRaiseIf(calc, calc.Out(negative), DirectInfeasibleErrorPredicate(optimizer)));
 		if (!condition.has_square) {
 			// A direction with no limit improves without end: on a row with no square in a ball's sum (outside every
 			// ball, or with a factor q of 0), or in a ball whose limit B the user wrote as infinite. B itself is
@@ -687,8 +685,8 @@ private:
 			auto no_limit = calc.If(in_sum, calc.Cmp(ExpressionType::COMPARE_EQUAL, limit, calc.Num(POSITIVE_INFINITY)),
 			                        calc.Bool(true));
 			auto moves = calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, value, zero);
-			checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(no_limit, moves)),
-			                               DirectUnboundedErrorPredicate(optimizer, errors)));
+			checks.push_back(
+			    DirectRaiseIf(calc, calc.Out(calc.And(no_limit, moves)), DirectUnboundedErrorPredicate(optimizer)));
 		} else {
 			// A warning reads every row the clause keeps, before any is released, as the checks above do.
 			checks.push_back(DirectWarnIf(calc, calc.Out(Boolean(targets.loses_precision))));
@@ -780,9 +778,9 @@ private:
 };
 
 DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
-                             const DirectApplicabilityCondition &candidate, const DirectStateErrors &errors) const {
+                             const DirectApplicabilityCondition &candidate) const {
 	auto &condition = static_cast<const Condition &>(candidate);
-	PlanBuilder plan_builder(condition, optimizer, reader.SourceBindings(), reader.SourceTypes(), errors);
+	PlanBuilder plan_builder(condition, optimizer, reader.SourceBindings(), reader.SourceTypes());
 	auto classes = DirectBuildOverRead(reader, reader.ReadSource(), [&](unique_ptr<LogicalOperator> rows) {
 		return plan_builder.BuildClasses(std::move(rows));
 	});

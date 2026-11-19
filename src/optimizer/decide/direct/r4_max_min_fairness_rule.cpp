@@ -67,8 +67,7 @@ public:
 	}
 
 	DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
-	                       const DirectApplicabilityCondition &candidate,
-	                       const DirectStateErrors &errors) const override;
+	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
 	bool ProveDecision(const DirectIR &ir, Condition &condition) const;
@@ -319,9 +318,9 @@ public:
 	};
 
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
-	            const vector<LogicalType> &source_types_p, const DirectStateErrors &errors_p)
+	            const vector<LogicalType> &source_types_p)
 	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context),
-	      source_bindings(source_bindings_p), source_types(source_types_p), errors(errors_p) {
+	      source_bindings(source_bindings_p), source_types(source_types_p) {
 		D_ASSERT(source_bindings.size() == source_types.size());
 		if (!condition.limit.constant) {
 			limit_bound = condition.limit.data.GroupBound(optimizer);
@@ -419,9 +418,9 @@ public:
 		auto no_budget =
 		    calc.And(has_rows, calc.And(calc.Not(group_unlimited),
 		                                calc.Cmp(ExpressionType::COMPARE_LESSTHAN, Double(budget_column), zero)));
-		checks.push_back(DirectRaiseIf(calc, calc.Out(no_budget), DirectInfeasibleErrorPredicate(optimizer, errors)));
+		checks.push_back(DirectRaiseIf(calc, calc.Out(no_budget), DirectInfeasibleErrorPredicate(optimizer)));
 		auto no_bound = calc.Cmp(ExpressionType::COMPARE_EQUAL, Double(star), calc.Num(POSITIVE_INFINITY));
-		checks.push_back(DirectRaiseIf(calc, calc.Out(no_bound), DirectUnboundedErrorPredicate(optimizer, errors)));
+		checks.push_back(DirectRaiseIf(calc, calc.Out(no_bound), DirectUnboundedErrorPredicate(optimizer)));
 		c2.Add(DirectAllHold(calc, std::move(checks)));
 		return c2.Finish(std::move(plan));
 	}
@@ -544,7 +543,6 @@ private:
 	ExpressionBuilder calc;
 	vector<ColumnBinding> source_bindings;
 	vector<LogicalType> source_types;
-	const DirectStateErrors &errors;
 	//! The group bound of a limit read from the data; null for a constant limit.
 	unique_ptr<DecideGroupBound> limit_bound;
 
@@ -761,8 +759,8 @@ private:
 		// a decision (the capacity is infinite where it has none).
 		vector<unique_ptr<Expression>> row_checks;
 		row_checks.push_back(calc.Out(Boolean(raw_valid)));
-		row_checks.push_back(DirectRaiseIf(calc, calc.Out(Negative(Double(capacity))),
-		                                   DirectInfeasibleErrorPredicate(optimizer, errors)));
+		row_checks.push_back(
+		    DirectRaiseIf(calc, calc.Out(Negative(Double(capacity))), DirectInfeasibleErrorPredicate(optimizer)));
 		result.valid = p3.Add(DirectAllHold(calc, std::move(row_checks)));
 		result.plan = p3.Finish(std::move(plan));
 		return result;
@@ -770,9 +768,9 @@ private:
 };
 
 DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
-                             const DirectApplicabilityCondition &candidate, const DirectStateErrors &errors) const {
+                             const DirectApplicabilityCondition &candidate) const {
 	auto &condition = static_cast<const Condition &>(candidate);
-	PlanBuilder plan_builder(condition, optimizer, reader.SourceBindings(), reader.SourceTypes(), errors);
+	PlanBuilder plan_builder(condition, optimizer, reader.SourceBindings(), reader.SourceTypes());
 	if (condition.keys.empty()) {
 		auto groups = DirectBuildOverRead(reader, reader.ReadSource(), [&](unique_ptr<LogicalOperator> rows) {
 			return plan_builder.BuildGroups(plan_builder.BuildRows(std::move(rows)));

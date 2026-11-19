@@ -3,7 +3,6 @@
 #include <functional>
 
 #include "duckdb/common/common.hpp"
-#include "duckdb/common/decide_solver_capabilities.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/main/client_context_state.hpp"
@@ -235,10 +234,6 @@ struct DirectIR {
 	//! A bound the bound-side rewrite left to the rule cannot be computed by it (its sum has a `when` of its own): the
 	//! driver records the aggregates of its group (RecordReducedBounds) and reads the IR again.
 	bool bounds_to_record = false;
-	//! What a backend would be asked to run for this query, read from the parts' split terms, for ClassifyDecideModel.
-	//! It reports less when unsure: a term under MIN or MAX becomes a rewrite's helper rows, whose shape the IR does
-	//! not know, so it is not read, and neither are the integral helpers those rows add.
-	DecideModelShape model_shape;
 	//! NOT_PROVED when the DECIDE operator owes the rows a check the plan cannot make: a reducer's own `per` whose
 	//! classes split by the variants of its body (KeyedScopeInfo::signature).
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
@@ -293,11 +288,9 @@ public:
 	                                                                ClientContext &context) const = 0;
 	virtual string Summary() const = 0;
 	//! `reader` reads the DECIDE input, gated by the row checks when there are any; the rule reads the source
-	//! `condition.source_reads` times through it and finishes its plan with it (DirectSourceReader::Finish). `errors`
-	//! are the texts of the state errors the plan raises.
+	//! `condition.source_reads` times through it and finishes its plan with it (DirectSourceReader::Finish).
 	virtual DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
-	                               const DirectApplicabilityCondition &condition,
-	                               const DirectStateErrors &errors) const = 0;
+	                               const DirectApplicabilityCondition &condition) const = 0;
 };
 
 //! A plan over one read the reader gave (ReadSource), written over the source's own bindings: `build` makes it over

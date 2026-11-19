@@ -48,19 +48,6 @@ void MarkNotProved(DirectAnalysisStatus &status) {
 	status = DirectAnalysisStatus::NOT_PROVED;
 }
 
-//! How many distinct decisions the forms of a degree-2 term read.
-idx_t CountTermDecisions(const DecideSplitTerm &term) {
-	vector<idx_t> seen;
-	for (auto &factor : term.factors) {
-		for (auto &part : factor.form) {
-			if (part.IsLinear() && std::find(seen.begin(), seen.end(), part.var_a) == seen.end()) {
-				seen.push_back(part.var_a);
-			}
-		}
-	}
-	return seen.size();
-}
-
 //! Reads one DECIDE node into the IR. It is the only direct-solve code that knows LogicalDecide's layout and the
 //! bound-tree spelling of DECIDE constructs.
 class DirectFrontEnd {
@@ -98,7 +85,6 @@ public:
 		ReadConstraints(ir);
 		ReadObjective(ir.objective);
 		ReadRowChecks(ir);
-		ReadModelShape(ir);
 		ir.bounds_to_record = bounds_to_record;
 		return ir;
 	}
@@ -172,35 +158,6 @@ private:
 					ir.keys.push_back(std::move(key));
 				}
 			}
-		}
-	}
-
-	//! DirectIR::model_shape: each degree-2 term of a part, with the sign of its weight as the plan knows it (the
-	//! part's sign and scale, the term's sign and coefficient), outside MIN and MAX.
-	void AddModelTerms(const DirectPart &part, int sign, bool objective, DecideModelShape &shape) const {
-		if (part.reducer == DirectReducer::MIN || part.reducer == DirectReducer::MAX) {
-			return;
-		}
-		sign *= part.sign * ScaleSignAtPlanTime(context, part.scale.get(), part.scale_divides);
-		for (auto &term : part.terms) {
-			if (term.IsSquare() || term.IsProduct()) {
-				int weight_sign = sign * term.sign * ScaleSignAtPlanTime(context, term.coefficient.get(), false);
-				shape.AddTerm(objective, term.IsSquare(), weight_sign, CountTermDecisions(term));
-			}
-		}
-	}
-
-	void ReadModelShape(DirectIR &ir) const {
-		for (auto &decision : ir.decisions) {
-			ir.model_shape.integral_column = ir.model_shape.integral_column || decision.domain != DirectDomain::REAL;
-		}
-		for (auto &constraint : ir.constraints) {
-			for (auto &part : constraint.lhs) {
-				AddModelTerms(part, 1, false, ir.model_shape);
-			}
-		}
-		for (auto &part : ir.objective.parts) {
-			AddModelTerms(part, 1, true, ir.model_shape);
 		}
 	}
 

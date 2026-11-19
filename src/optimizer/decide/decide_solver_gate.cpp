@@ -195,18 +195,6 @@ SolverModelClassGap FindDecideSolverGap(const SolverModelClass &needed, const So
 	return FindModelClassGap(needed, backend.ModelClasses());
 }
 
-bool DecideSolverRuns(const SolverModelClass &needed) {
-	// The backend SelectSolverBackend picks takes `needed` whenever every backend does, so the pick is made only when
-	// the answer depends on it: its availability probe loads Gurobi's library and starts a licensed environment, and a
-	// query a direct-solve rule answers asks this only for the wording of its errors.
-	auto &backends = SolverRegistry::Backends();
-	if (std::all_of(backends.begin(), backends.end(),
-	                [&](const SolverBackend &backend) { return SupportsModelClass(needed, backend.ModelClasses()); })) {
-		return true;
-	}
-	return FindDecideSolverGap(needed, SelectSolverBackend()) == SolverModelClassGap::NONE;
-}
-
 void RequireDecideSolverSupport(const LogicalDecide &op, const DecideTree &tree) {
 	// The name was recorded by ChooseDecideSolver; resolving it back to a registry entry
 	// is a table lookup, not a session, so the model-class question can still be asked

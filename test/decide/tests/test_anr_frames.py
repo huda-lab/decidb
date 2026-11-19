@@ -1817,8 +1817,7 @@ class TestRangeErrors:
               AND t.w * at(3 next: x - y) over (t.period desc within t.g) + x
                   = count(from previous to last every 2: t.w) over (t.period within t.g)
             MINIMIZE sum(abs(x - at(next: x - y) over (t.period desc cyclic within t.g))) ORDER BY t.id"""
-        result = cli.execute_raw(sql)
-        assert "DECIDE optimization is infeasible" in result.stderr, result.stderr
+        cli.assert_error_at(sql, kind="Invalid Input Error", word="infeasible")
 
 
 @pytest.mark.correctness

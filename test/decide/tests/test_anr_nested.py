@@ -643,7 +643,7 @@ def test_a_nest_no_value_can_meet_is_infeasible(request, cli_fixture, native, ne
         MAXIMIZE SUM(x)"""
     result = cli.execute_raw(sql)
     assert_no_internal_leak(result, nest_sql)
-    assert "DECIDE optimization is infeasible" in result.stderr, result.stderr
+    cli.assert_error_at(sql, kind="Invalid Input Error", word="infeasible")
     diagnosis = cli.execute_raw("DIAGNOSE " + sql)
     assert_no_internal_leak(diagnosis, "DIAGNOSE " + nest_sql)
     assert diagnosis.returncode == 0 and "infeasible" in diagnosis.stdout, diagnosis.stderr

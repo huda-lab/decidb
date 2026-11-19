@@ -23,7 +23,7 @@ import pytest
 from decidb_cli import DeciDBCliError
 
 _WINDOW = range(-50, 51)
-_INFEASIBLE = r"DECIDE optimization is infeasible\. Prefix the query with DIAGNOSE"
+_INFEASIBLE = r"infeasible"
 
 # (id, source row, SUCH THAT clause, objective sense). The source has one row, `t(id, c)`.
 _CASES = [

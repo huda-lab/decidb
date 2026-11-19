@@ -295,7 +295,7 @@ private:
 
 //! A bound the bound-side rewrite (DecideOptimizer::RewriteRhsAggregates) left unevaluated, because a direct-solve rule
 //! computes it in its own group aggregate. When none does, the solver path records its aggregates (RecordReducedBounds)
-//! and the bound's checks join `scope_checks` where they would have stood.
+//! and the bound's checks join `scope_checks`.
 struct DecideReducedBound {
 	//! The comparison whose right-hand side is the bound. It points into `decide_constraints`, which nothing rewrites
 	//! between the bound-side rewrite and the choice of how the query is answered; the aggregates are built, or the
@@ -306,8 +306,6 @@ struct DecideReducedBound {
 	//! The key of the clause's `per K:` (an index into `keys`), INVALID_INDEX for none or `per ()`.
 	idx_t class_key = DConstants::INVALID_INDEX;
 	unique_ptr<DecideGroupBound> group;
-	//! Where the bound's checks go in `scope_checks`: its size when the bound was recorded.
-	idx_t check_position = 0;
 };
 
 //! A reducer a bound reads from the data (`sum(cap) by (g)`), recorded by the bound-side rewrite

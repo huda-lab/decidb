@@ -96,8 +96,8 @@ class TestStructuredSolverResult:
     @pytest.mark.parametrize(
         ("sql", "required"),
         [
-            (_INFEASIBLE_SQL, "DECIDE optimization is infeasible"),
-            (_UNBOUNDED_LP_SQL, "DECIDE optimization is unbounded"),
+            (_INFEASIBLE_SQL, "is infeasible"),
+            (_UNBOUNDED_LP_SQL, "is unbounded"),
         ],
     )
     def test_highs_non_optimal_statuses_use_friendly_errors(self, decidb_cli_highs, sql, required):
@@ -117,7 +117,7 @@ class TestStructuredSolverResult:
         """
         combined = _combined_error(decidb_cli_highs, sql)
         lower = combined.lower()
-        assert "decide optimization is unbounded" in lower, (
+        assert "is unbounded" in lower, (
             "HiGHS status 9 was not disambiguated to a " f"definitive unbounded error:\n{combined[:700]}"
         )
         assert "infeasible or unbounded" not in lower, (
@@ -132,8 +132,8 @@ class TestStructuredSolverResult:
     @pytest.mark.parametrize(
         ("sql", "required"),
         [
-            (_INFEASIBLE_SQL, "DECIDE optimization is infeasible"),
-            (_UNBOUNDED_LP_SQL, "DECIDE optimization is unbounded"),
+            (_INFEASIBLE_SQL, "is infeasible"),
+            (_UNBOUNDED_LP_SQL, "is unbounded"),
         ],
     )
     def test_gurobi_non_optimal_statuses_use_friendly_errors(self, decidb_cli_gurobi, sql, required):

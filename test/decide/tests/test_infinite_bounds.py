@@ -64,10 +64,6 @@ import pytest
 from solver.types import VarType, ObjSense, SolverStatus
 
 
-# The shared verdict; DIAGNOSE names the clause.
-_UNREACHABLE = r"optimization is infeasible"
-
-
 @pytest.mark.cons_perrow
 @pytest.mark.cons_comparison
 @pytest.mark.edge_case
@@ -126,7 +122,7 @@ def test_infinite_bound_wrong_direction_is_infeasible(decidb_cli):
     infeasible before any backend reads it, as the rebuilt spelling's is.
     """
     for bound in ("x + l_linenumber >= 1e1000::DOUBLE", "x >= 1e1000::DOUBLE"):
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             f"""
             SELECT l_orderkey, x
             FROM lineitem WHERE l_orderkey <= 3
@@ -134,7 +130,8 @@ def test_infinite_bound_wrong_direction_is_infeasible(decidb_cli):
             SUCH THAT x <= 6 AND {bound}
             MAXIMIZE SUM(x)
         """,
-            match=_UNREACHABLE,
+            kind="Invalid Input Error",
+            word="infeasible",
         )
 
 
@@ -229,7 +226,7 @@ def test_unreachable_minmax_bound_is_infeasible(decidb_cli):
     half and this hard half, and the easy half is satisfiable on its own.
     """
     for constraint in ("MAX(x) >= 1e1000::DOUBLE", "MIN(x) <= -1e1000", "MAX(x) = 1e1000::DOUBLE"):
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             f"""
             SELECT l_orderkey, x
             FROM lineitem WHERE l_orderkey <= 3
@@ -237,7 +234,8 @@ def test_unreachable_minmax_bound_is_infeasible(decidb_cli):
             SUCH THAT x >= 0 AND x <= 6 AND {constraint}
             MAXIMIZE SUM(x)
         """,
-            match=_UNREACHABLE,
+            kind="Invalid Input Error",
+            word="infeasible",
         )
 
 
@@ -445,7 +443,7 @@ def test_data_reducer_unreachable_bound_is_infeasible(decidb_cli):
     emitted per row carrying the unreachable bound, exactly as the literal
     spelling already was.
     """
-    decidb_cli.assert_error(
+    decidb_cli.assert_error_at(
         """
         WITH data AS (
             SELECT 0 AS g, -1e1000::DOUBLE AS cap UNION ALL
@@ -458,7 +456,8 @@ def test_data_reducer_unreachable_bound_is_infeasible(decidb_cli):
         SUCH THAT x >= 0 AND x <= 6 AND per g: min(x) by (g) <= max(cap) by (g)
         MAXIMIZE SUM(x)
     """,
-        match=_UNREACHABLE,
+        kind="Invalid Input Error",
+        word="infeasible",
     )
 
 
@@ -566,4 +565,6 @@ def test_an_unreachable_floor_is_infeasible_wherever_it_is_written(
     sql = f"SELECT id FROM (VALUES (1, 'a'), (2, 'b')) t(id, g) DECIDE {declare} SUCH THAT {clause} {objective}"
     for cli in (decidb_cli_gurobi, decidb_cli_highs):
         for mode in ("off", "auto"):
-            cli.assert_error(f"SET decide_direct_solve='{mode}'; {sql}", match=_UNREACHABLE)
+            cli.assert_error_at(
+                f"SET decide_direct_solve='{mode}'; {sql}", kind="Invalid Input Error", word="infeasible"
+            )

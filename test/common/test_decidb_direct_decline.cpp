@@ -82,8 +82,7 @@ public:
 	string Summary() const override {
 		return "probe";
 	}
-	DirectSubstitute Apply(DirectSourceReader &, Optimizer &, const DirectApplicabilityCondition &,
-	                       const DirectStateErrors &) const override {
+	DirectSubstitute Apply(DirectSourceReader &, Optimizer &, const DirectApplicabilityCondition &) const override {
 		throw InternalException("The probe rule never applies");
 	}
 
