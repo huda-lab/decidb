@@ -660,8 +660,9 @@ private:
 		vector<ColumnBinding> keys;
 		DirectClassKey key;
 		ColumnBinding valid;
-		vector<DirectGroupValues> lowers;
-		vector<DirectGroupValues> uppers;
+		//! Each clause's tightest ends over the class: the MAX of its lower ends, the MIN of its upper ends.
+		vector<ColumnBinding> lowers;
+		vector<ColumnBinding> uppers;
 		//! Whether some row of a floor-lifting clause is kept, one per such clause.
 		vector<ColumnBinding> lowering_whens;
 	};
@@ -739,7 +740,7 @@ private:
 	//===------------------------------------------------------------------===//
 
 	//! Puts one hash aggregate on the key over `plan`: the loss's aggregates, and for each clause the MAX of its lower
-	//! ends and the MIN of its upper ends (DirectTightestBound), and whether some row a floor-lifting clause keeps
+	//! ends and the MIN of its upper ends, and whether some row a floor-lifting clause keeps
 	//! exists. A row with no class sits in a key of its own, whose answer is NULL whatever the key holds.
 	Aggregates AggregateClasses(const Rows &rows, unique_ptr<LogicalOperator> &plan, LossColumns &loss_columns) const {
 		DirectAggregateStage stage(binder);
@@ -750,14 +751,11 @@ private:
 		}
 		ClassAggregate classes(stage, optimizer, calc);
 		condition.loss->Aggregate(tools, classes, loss_columns);
-		DirectAggregateSink sink(stage);
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
 			auto &clause = condition.clauses[j];
 			auto &ends = rows.ends[j];
-			result.lowers.push_back(
-			    TightestEnd(sink, ExpressionType::COMPARE_GREATERTHANOREQUALTO, *clause.lower, ends.lower));
-			result.uppers.push_back(
-			    TightestEnd(sink, ExpressionType::COMPARE_LESSTHANOREQUALTO, *clause.upper, ends.upper));
+			result.lowers.push_back(classes.Add("max", ends.lower, clause.lower->return_type));
+			result.uppers.push_back(classes.Add("min", ends.upper, clause.upper->return_type));
 			if (clause.lifts_floor) {
 				result.lowering_whens.push_back(classes.Add("bool_or", ends.when, LogicalType::BOOLEAN));
 			}
@@ -768,16 +766,6 @@ private:
 		result.valid = classes.Add("bool_and", rows.valid, LogicalType::BOOLEAN);
 		plan = stage.Finish(std::move(plan));
 		return result;
-	}
-
-	//! The tightest value of a clause's end `column` (of the admitted end `end`) over the class: the MAX of lower ends
-	//! for `>=`, the MIN of upper ends for `<=`.
-	DirectGroupValues TightestEnd(DirectGroupSink &sink, ExpressionType comparison, const Expression &end,
-	                              ColumnBinding column) const {
-		auto bound = DirectTightestBound(optimizer, comparison, end.Copy(), string(), nullptr);
-		vector<DirectGroupInputColumns> input(1);
-		input[0].argument = column;
-		return DirectAddGroupBound(calc, *bound, input, sink, nullptr);
 	}
 
 	//===------------------------------------------------------------------===//
@@ -793,10 +781,10 @@ private:
 		result.valid = p3.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, aggregates.valid)));
 		condition.loss->CarryClasses(tools, p3, loss_columns);
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
-			result.clause_lowers.push_back(
-			    p3.Add(calc.Out(calc.Cast(aggregates.lowers[j].lower, LogicalType::DOUBLE))));
-			result.clause_uppers.push_back(
-			    p3.Add(calc.Out(calc.Cast(aggregates.uppers[j].upper, LogicalType::DOUBLE))));
+			result.clause_lowers.push_back(p3.Add(calc.Out(calc.Cast(
+			    calc.Col(condition.clauses[j].lower->return_type, aggregates.lowers[j]), LogicalType::DOUBLE))));
+			result.clause_uppers.push_back(p3.Add(calc.Out(calc.Cast(
+			    calc.Col(condition.clauses[j].upper->return_type, aggregates.uppers[j]), LogicalType::DOUBLE))));
 		}
 		result.floor = p3.Add(calc.Out(DirectStaticFloor(calc, condition.lower, aggregates.lowering_whens)));
 		return result;

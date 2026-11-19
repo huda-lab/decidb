@@ -945,11 +945,11 @@ R4 = RuleFixture(
         # Errors R4 raises, on the last of 5,000 rows: a zero demand, a NaN demand, a NaN weight, a NaN capacity and a negative one.
         (
             _r4_late_error(f"x(REAL) SUCH THAT {_R4_PLAIN}", d_sql="CASE WHEN i=4999 THEN 0.0 ELSE 2.0 END"),
-            At("x / d"),
+            At("/ d"),
         ),
         (
             _r4_late_error(f"x(REAL) SUCH THAT {_R4_PLAIN}", d_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 2.0 END"),
-            At("x / d"),
+            At("/ d"),
         ),
         (
             _r4_late_error(

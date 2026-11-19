@@ -44,8 +44,7 @@ struct Condition final : DirectApplicabilityCondition {
 	DirectSharedScope scope;
 	DirectFixedValues fixed;
 	//! The count limits read from the data, one per bound whose limit is not a constant (the constant ones fold into
-	//! `lower` and `upper`): a value on every row the clause keeps already, or the aggregates of the group
-	//! (DecideGroupBound), which the plan computes in a hash aggregate over the group, joined to every row.
+	//! `lower` and `upper`): one value on every row of its group.
 	vector<DirectCountLimit> source_bounds;
 };
 
@@ -170,8 +169,6 @@ public:
 		for (auto &bound : condition.source_bounds) {
 			source_lower |= DirectIsLowerBound(bound.comparison);
 			source_upper |= DirectIsUpperBound(bound.comparison);
-			group_bound.push_back(bound.limit.data.group ? AddGroupBound(0, *bound.limit.data.group)
-			                                             : DConstants::INVALID_INDEX);
 		}
 		has_lower = condition.lower || source_lower;
 		has_upper = condition.has_upper || source_upper;
@@ -188,9 +185,7 @@ private:
 	//! values of exact types, whose bounds sum below the range of a DOUBLE (DirectScaledMagnitude), cannot, and the
 	//! plan has no check for it.
 	bool has_score_check = false;
-	//! Each source-valued count bound's index among the builder's group bounds; unset for a bound read per row.
-	vector<idx_t> group_bound;
-	//! P1: the row's score, and each source-valued count bound's value (unset for a bound of the group's aggregates).
+	//! P1: the row's score, and each source-valued count bound's value.
 	ColumnBinding score_column;
 	vector<ColumnBinding> bound_columns;
 	//! W1: the count of the group's rows fixed to 1 (set only with fixed rows) and of its rows free to take either
@@ -231,10 +226,6 @@ private:
 		auto combined_score = condition.score.Combined(calc, optimizer, over_state, part_scores);
 		score_column = p1.Add(calc.Out(combined_score));
 		for (auto &bound : condition.source_bounds) {
-			if (bound.limit.data.group) {
-				bound_columns.emplace_back();
-				continue;
-			}
 			// A bound is read on the eligible rows only. On a row its clause's `when` drops, the windows it reads hold
 			// NULL or a count of 0, so computing it there raises nothing.
 			auto value = over_state(*bound.limit.data.value);
@@ -274,23 +265,14 @@ private:
 		row_count = add(DirectWindowMatchingCount(calc, HasFixes() ? FreeRow(rows) : calc.Out(calc.Bool(true))));
 	}
 
-	//! The value of source-valued bound `index` on a side, as DOUBLE: the group's value when the plan computes its
-	//! aggregates (DirectGroupCountLimitValue), else the bound's own column.
-	ExprPtr BoundValue(idx_t index, bool upper) const {
-		auto &bound = condition.source_bounds[index];
-		if (!bound.limit.data.group) {
-			return calc.Col(LogicalType::DOUBLE, bound_columns[index]);
-		}
-		return DirectGroupCountLimitValue(calc, optimizer, bound, upper, GroupValues(0, group_bound[index]));
-	}
-
 	//! Inclusive count limit of one source-valued bound, as BIGINT: its value rounded, clamped to the BIGINT range,
 	//! and -1 (upper) or 0 (lower) when the value is below zero. A NULL value skips its instance: no limit.
 	ExprPtr SourceLimit(idx_t index, bool upper) const {
 		auto &bound = condition.source_bounds[index];
 		// Every caller asks for a side the bound has: an upper limit of an upper bound, a lower of a lower bound.
 		D_ASSERT(upper ? DirectIsUpperBound(bound.comparison) : DirectIsLowerBound(bound.comparison));
-		return DirectInclusiveRowsExpr(calc, bound.comparison, upper, [&]() { return BoundValue(index, upper); });
+		return DirectInclusiveRowsExpr(calc, bound.comparison, upper,
+		                               [&]() { return calc.Col(LogicalType::DOUBLE, bound_columns[index]); });
 	}
 
 	//! Largest lower limit across the constant and source-valued bounds.
@@ -358,9 +340,9 @@ private:
 					if (!DirectIsLowerBound(condition.source_bounds[i].comparison)) {
 						continue;
 					}
-					group_checks.push_back(
-					    must_not_hold(calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, BoundValue(i, false),
-					                           calc.Num(DECIDE_FIRST_DOUBLE_BEYOND_BIGINT))));
+					group_checks.push_back(must_not_hold(calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+					                                              calc.Col(LogicalType::DOUBLE, bound_columns[i]),
+					                                              calc.Num(DECIDE_FIRST_DOUBLE_BEYOND_BIGINT))));
 				}
 			}
 			if (HasFixes() && has_upper) {

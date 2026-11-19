@@ -228,90 +228,6 @@ struct DecideSignature {
 	static DecideSignature Deserialize(Deserializer &deserializer);
 };
 
-//! A bound computed from the aggregates of its group: the group's aggregates, an expression over their results, and the
-//! checks of what they read and give. Every bound the aggregate shape reads from the data is one, or has one value per
-//! group already:
-//!  - a clause in the aggregate shape is one constraint per group, which holds when the group's tightest bound does
-//!    (`<=` takes its MIN, `>=` its MAX, `=` needs one value), so a bound that may differ between the kept rows of a
-//!    group is the MIN and/or MAX of its raw value (DirectTightestBound);
-//!  - a bound that reads data only through reducers over exactly the clause's group (`SUM(x) BY (g) <= SUM(cap) BY
-//!  (g)`)
-//!    is an expression over those reducers' aggregates.
-//! The aggregates read their inputs on the rows of the group. A rule that applies computes them in the group aggregate
-//! it already runs (DirectAddGroupBound), and the solver path records them as bound aggregates
-//! (RecordReducedBounds). Not serialized: the optimizer makes it, and an optimized plan is never
-//! serialized.
-struct DecideGroupBound {
-	//! What an aggregate reads, per row, over the source (and the placeholders of the bounds that are recorded).
-	struct Input {
-		//! The value aggregated; null for COUNT(*).
-		unique_ptr<Expression> argument;
-		//! The reducer's own `when`: only the rows it keeps are read; null for every row of the group.
-		unique_ptr<Expression> filter;
-		//! A BOOLEAN check that raises on a NaN argument of a row the aggregate reads, true on any other row; null when
-		//! the argument cannot be NaN.
-		unique_ptr<Expression> invalid;
-	};
-	//! One aggregate of the group, read by the placeholder `column`, which no operator produces.
-	struct Aggregate {
-		ColumnBinding column;
-		//! The BoundAggregateExpression with its function and result type bound; its argument and filter are the
-		//! input's.
-		unique_ptr<Expression> function;
-		idx_t input = 0;
-	};
-	vector<Input> inputs;
-	vector<Aggregate> aggregates;
-	//! The bound as an upper and as a lower limit, over the placeholders; null for a side the comparison does not read.
-	//! A tightest bound reads the MIN as an upper limit and the MAX as a lower one, an expression of reducers reads the
-	//! same value on both.
-	unique_ptr<Expression> upper;
-	unique_ptr<Expression> lower;
-	//! A BOOLEAN check that raises on a NaN limit, over the placeholders, on any row of the group; null when it cannot
-	//! be NaN.
-	unique_ptr<Expression> invalid;
-	//! The bound as the user wrote it, for a message, and where it was written: the column that stands for the bound
-	//! takes that location, so a render quotes it as the bound.
-	string text;
-	optional_idx location;
-
-	unique_ptr<DecideGroupBound> Copy() const {
-		auto copy = make_uniq<DecideGroupBound>();
-		for (auto &input : inputs) {
-			copy->inputs.push_back({CopyOrNull(input.argument), CopyOrNull(input.filter), CopyOrNull(input.invalid)});
-		}
-		for (auto &aggregate : aggregates) {
-			copy->aggregates.push_back({aggregate.column, aggregate.function->Copy(), aggregate.input});
-		}
-		copy->upper = CopyOrNull(upper);
-		copy->lower = CopyOrNull(lower);
-		copy->invalid = CopyOrNull(invalid);
-		copy->text = text;
-		copy->location = location;
-		return copy;
-	}
-
-private:
-	static unique_ptr<Expression> CopyOrNull(const unique_ptr<Expression> &expression) {
-		return expression ? expression->Copy() : nullptr;
-	}
-};
-
-//! A bound the bound-side rewrite (DecideOptimizer::RewriteRhsAggregates) left unevaluated, because a direct-solve rule
-//! computes it in its own group aggregate. When none does, the solver path records its aggregates (RecordReducedBounds)
-//! and the bound's checks join `scope_checks`.
-struct DecideReducedBound {
-	//! The comparison whose right-hand side is the bound. It points into `decide_constraints`, which nothing rewrites
-	//! between the bound-side rewrite and the choice of how the query is answered; the aggregates are built, or the
-	//! node replaced, before the first formulation rewrite touches the tree.
-	Expression *comparison = nullptr;
-	//! The clause's `when` (it is in the constraint tree), or null.
-	const Expression *when = nullptr;
-	//! The key of the clause's `per K:` (an index into `keys`), INVALID_INDEX for none or `per ()`.
-	idx_t class_key = DConstants::INVALID_INDEX;
-	unique_ptr<DecideGroupBound> group;
-};
-
 //! A reducer a bound reads from the data (`sum(cap) by (g)`), recorded by the bound-side rewrite
 //! (DecideOptimizer::RewriteRhsAggregates) and not yet computed. The bound's expressions read its result at the
 //! placeholder `column`: the column of the aggregate's side table (DirectSourceReader::AddSideTable), which no operator
@@ -735,10 +651,6 @@ public:
 	//! The objective's signature: it is produced once, so execution refuses a second instance (D72). INVALID_INDEX when
 	//! the objective has no field.
 	idx_t objective_signature = DConstants::INVALID_INDEX;
-
-	//! The bounds RewriteRhsAggregates left to a rule, in clause order; see DecideReducedBound. Empty once the solver
-	//! path has built their side tables (DirectSourceReader::AddSideTable).
-	vector<DecideReducedBound> reduced_bounds;
 
 	//! The reducers the bounds read from the data, in the order the bound-side rewrite met them. Empty once the path
 	//! has built their side tables (DirectSourceReader::AddSideTable).

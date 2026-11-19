@@ -11,86 +11,35 @@
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/operator/logical_aggregate.hpp"
-#include "duckdb/planner/operator/logical_cross_product.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 namespace duckdb {
 
-namespace {
-
-//! One check's plan over its own read of the source: an aggregate that comes to one row, whose one column is true when
-//! the check holds on every row (a row it refuses raises where the check is evaluated).
-struct CheckPlan {
-	unique_ptr<LogicalOperator> plan;
-	ColumnBinding holds;
-};
-
-//! Builds each check as aggregates over a read of the source, pruned by the optimizer to the columns the check reads.
-class RowCheckBuilder {
-public:
-	RowCheckBuilder(Optimizer &optimizer_p, DirectSourceReader &reader_p)
-	    : optimizer(optimizer_p), reader(reader_p), calc(optimizer_p.context) {
-	}
-
-	CheckPlan Build(const DirectRowCheck &check) {
-		read = reader.ReadSource();
-		return ValueCheck(check);
-	}
-
-private:
-	Optimizer &optimizer;
-	DirectSourceReader &reader;
-	ExpressionBuilder calc;
-	//! The read the check being built aggregates.
-	DirectSourceReader::Read read;
-
-	//! An expression over the source, re-pointed at the read.
-	ExprPtr Over(const Expression &expression) const {
-		return calc.Wrap(DirectOverProjection(expression, reader.SourceBindings(), read.table_index));
-	}
-
-	unique_ptr<Expression> Aggregate(const string &name, vector<ExprPtr> arguments) const {
-		vector<unique_ptr<Expression>> children;
-		for (auto &argument : arguments) {
-			children.push_back(calc.Out(argument));
-		}
-		return optimizer.BindAggregateFunction(name, std::move(children));
-	}
-
-	//! A value check: every row evaluates it, and the one that finds a value the model cannot read raises.
-	CheckPlan ValueCheck(const DirectRowCheck &check) {
-		vector<unique_ptr<Expression>> aggregates;
-		aggregates.push_back(Aggregate("bool_and", {Over(*check.invalid)}));
-		auto aggregate = DirectAggregateOver(optimizer, std::move(read.plan), {}, std::move(aggregates));
-		auto holds = ColumnBinding(aggregate->aggregate_index, 0);
-		return {std::move(aggregate), holds};
-	}
-};
-
-} // namespace
-
 void DirectAddRowChecks(Optimizer &optimizer, DirectSourceReader &reader, const vector<DirectRowCheck> &checks) {
 	if (checks.empty()) {
 		return;
 	}
 	ExpressionBuilder calc(optimizer.context);
-	RowCheckBuilder builder(optimizer, reader);
-	unique_ptr<LogicalOperator> verdicts;
-	vector<unique_ptr<Expression>> checked;
+	auto read = reader.ReadSource();
+	// Each row makes the checks in the solver's order, so a row that fails two raises the first one's error.
+	vector<unique_ptr<Expression>> chain;
 	for (auto &check : checks) {
-		auto built = builder.Build(check);
-		// A source with no row has no value to refuse: the aggregate is NULL there and the check holds.
-		checked.push_back(calc.Out(calc.Coalesce({calc.Col(LogicalType::BOOLEAN, built.holds), calc.Bool(true)})));
-		verdicts =
-		    verdicts ? LogicalCrossProduct::Create(std::move(verdicts), std::move(built.plan)) : std::move(built.plan);
+		chain.push_back(DirectOverProjection(*check.invalid, reader.SourceBindings(), read.table_index));
 	}
-	// One row: true once every check has been evaluated, or the error one of them raised.
+	vector<unique_ptr<Expression>> children;
+	children.push_back(DirectAllHold(calc, std::move(chain)));
+	vector<unique_ptr<Expression>> aggregates;
+	aggregates.push_back(optimizer.BindAggregateFunction("bool_and", std::move(children)));
+	auto aggregate = DirectAggregateOver(optimizer, std::move(read.plan), {}, std::move(aggregates));
+	// One row: true once every row has been checked, or the error a row raised. A source with no row has no value to
+	// refuse: the aggregate is NULL there and the checks hold.
 	vector<unique_ptr<Expression>> verdict_columns;
-	verdict_columns.push_back(DirectAllHold(calc, std::move(checked)));
+	verdict_columns.push_back(calc.Out(calc.Coalesce(
+	    {calc.Col(LogicalType::BOOLEAN, ColumnBinding(aggregate->aggregate_index, 0)), calc.Bool(true)})));
 	auto verdict = make_uniq<LogicalProjection>(optimizer.binder.GenerateTableIndex(), std::move(verdict_columns));
-	verdict->children.push_back(std::move(verdicts));
+	verdict->children.push_back(std::move(aggregate));
 	reader.Gate(std::move(verdict));
 }
 

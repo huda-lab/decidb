@@ -531,13 +531,13 @@ struct ItemColumns {
 	vector<ColumnBinding> sources;
 	//! The class key of the row's group (DirectClassKey). Empty without a scope.
 	vector<ColumnBinding> keys;
-	//! Whether every check of the row holds (BOOLEAN; unset when no value can fail): the checks of the raw values and
-	//! of the limits read from the data, then of each item's value and price past a DOUBLE, numbers the plan computes
+	//! Whether every check of the row holds (BOOLEAN; unset when no value can fail): the checks of the raw values, then
+	//! of each item's value and price past a DOUBLE, numbers the plan computes
 	//! from the checked values. A row that fails raises where its check is evaluated; the group sums are checked
 	//! after it (GroupTotals).
 	ColumnBinding valid;
-	//! What the aggregates of each limit read from the data read on the row, per data limit and per input.
-	vector<vector<DirectGroupInputColumns>> limits;
+	//! Each limit read from the data, on the rows of the budget (NULL on the others): it has one value in each group.
+	vector<ColumnBinding> limits;
 	//! The items of the row, one per decision.
 	vector<ItemExprs> decisions;
 };
@@ -559,7 +559,7 @@ struct ItemColumns {
 //!
 //!   P0 scope             whether the row belongs to a budget (scoped budgets only)
 //!   P1 raw values        every coefficient, bound, mask and limit read from the data, on the rows that read it
-//!   P2 bounds, v         each clause's bounds, each decision's value, the check on every raw value and every limit
+//!   P2 bounds, v         each clause's bounds, each decision's value, the check on every raw value
 //!   P3 box               each decision's l and u
 //!   P4 anchor, price     whether the box is empty, a, whether w = 0, t
 //!   P5 rooms             room up and down, finite and infinite, the spend of the anchors, unbounded items
@@ -568,9 +568,9 @@ public:
 	//! `proved_bindings` are the bindings the proved expressions of the condition refer to, and `source_types` the
 	//! types of the source columns in the same order. The plan reads the source through a fresh set of bindings each
 	//! time, and the expressions are re-pointed at it (Build).
-	ItemStages(const Condition &condition_p, const vector<unique_ptr<DecideGroupBound>> &limit_bounds_p,
-	           Optimizer &optimizer_p, vector<ColumnBinding> proved_bindings_p, vector<LogicalType> source_types_p)
-	    : ItemAlgebra(optimizer_p), condition(condition_p), limit_bounds(limit_bounds_p), binder(optimizer_p.binder),
+	ItemStages(const Condition &condition_p, Optimizer &optimizer_p, vector<ColumnBinding> proved_bindings_p,
+	           vector<LogicalType> source_types_p)
+	    : ItemAlgebra(optimizer_p), condition(condition_p), binder(optimizer_p.binder),
 	      proved_bindings(std::move(proved_bindings_p)), source_types(std::move(source_types_p)) {
 		// The source reader hands the input over with its types resolved.
 		D_ASSERT(proved_bindings.size() == source_types.size());
@@ -667,8 +667,8 @@ private:
 	//! The columns a stage hands to the next, which forwards each one that is set.
 	struct RowColumns {
 		DirectCarried carried;
-		//! What the aggregates of each data limit read on the row, per data limit and per input.
-		vector<vector<DirectGroupInputColumns>> limits;
+		//! Each data limit on the row.
+		vector<ColumnBinding> limits;
 		//! Whether every check of the row holds so far (BOOLEAN; unset until a stage makes one).
 		ColumnBinding valid;
 		vector<ItemBindings> items;
@@ -685,13 +685,11 @@ private:
 		vector<Clause> clauses;
 		//! Each decision's value in each objective part; unset where the part does not name the decision.
 		vector<vector<ColumnBinding>> values;
-		//! Each check of a raw value or of a limit read from the data, as an expression over P1.
+		//! Each check of a raw value, as an expression over P1.
 		vector<ExprPtr> checks;
 	};
 
 	const Condition &condition;
-	//! The group bound of each data limit of the condition (AggregatePlanBuilder::LimitBounds).
-	const vector<unique_ptr<DecideGroupBound>> &limit_bounds;
 	Binder &binder;
 	//! The bindings the proved expressions refer to, and the types of the source columns.
 	vector<ColumnBinding> proved_bindings;
@@ -729,19 +727,8 @@ private:
 	RowColumns Forward(DirectProjectionStage &stage, const RowColumns &from) const {
 		RowColumns to;
 		to.carried = stage.Forward(from.carried, source_types, condition.scope.Scoped());
-		for (idx_t j = 0; j < from.limits.size(); j++) {
-			to.limits.emplace_back();
-			for (idx_t i = 0; i < from.limits[j].size(); i++) {
-				DirectGroupInputColumns moved;
-				if (from.limits[j][i].reads.table_index != DConstants::INVALID_INDEX) {
-					moved.reads = stage.Forward({from.limits[j][i].reads}, {LogicalType::BOOLEAN})[0];
-				}
-				if (from.limits[j][i].argument.table_index != DConstants::INVALID_INDEX) {
-					moved.argument = stage.Forward({from.limits[j][i].argument},
-					                               {limit_bounds[j]->inputs[i].argument->return_type})[0];
-				}
-				to.limits.back().push_back(moved);
-			}
+		for (auto &limit : from.limits) {
+			to.limits.push_back(stage.Forward({limit}, {LogicalType::DOUBLE})[0]);
 		}
 		if (from.valid.table_index != DConstants::INVALID_INDEX) {
 			to.valid = stage.Forward({from.valid}, {LogicalType::BOOLEAN})[0];
@@ -773,11 +760,10 @@ private:
 
 	//! P1: every raw value, computed on the rows that read it: a row a `when` drops reads nothing, as on the solver
 	//! path. A clause's values are NULL on the rows its `when` drops, where its bounds are not read; a row outside the
-	//! budget has the weight 0, as an item outside every budget. What the aggregates of each limit read from the data
-	//! is read on the rows of the budget alone (NULL on the others), and the aggregates are stage 2's
-	//! (DirectLayoutGroupInputs). The check on each value is built over P1, and raises only where the value is read. A
-	//! decision the budget does not name has the weight 0, which needs no check; an objective part has a raw value for
-	//! each decision it names.
+	//! budget has the weight 0, as an item outside every budget. Each limit read from the data is read on the rows of
+	//! the budget alone (NULL on the others), and stage 2 takes its group's value. The check on each value is built
+	//! over P1, and raises only where the value is read. A decision the budget does not name has the weight 0, which
+	//! needs no check; an objective part has a raw value for each decision it names.
 	Raw LayoutRawValues(const DirectCarried &from_scope) {
 		DirectProjectionStage p1(binder.GenerateTableIndex());
 		Raw raw;
@@ -787,16 +773,9 @@ private:
 		auto over_state = [&](const Expression &value) {
 			return OverState(value);
 		};
-		// The checks of what a limit reads come first.
-		for (idx_t j = 0; j < limit_bounds.size(); j++) {
-			raw.rows.limits.push_back(
-			    DirectLayoutGroupInputs(optimizer, calc, p1, *limit_bounds[j], eligible, over_state, nullptr));
-			for (auto &input : limit_bounds[j]->inputs) {
-				if (input.invalid) {
-					auto check = p1.Add(calc.Out(calc.Wrap(OverState(*input.invalid))));
-					raw.checks.push_back(calc.Col(LogicalType::BOOLEAN, check));
-				}
-			}
+		for (auto &limit : condition.data_limits) {
+			auto value = calc.Cast(calc.Wrap(over_state(*limit.value)), LogicalType::DOUBLE);
+			raw.rows.limits.push_back(p1.Add(calc.Out(DirectOnKeptRows(calc, eligible, value))));
 		}
 		auto number = [&](ColumnBinding binding, const DirectNumberNames &names) {
 			return DirectNumberCheck(calc, DoubleColumn(binding), names);
@@ -1033,10 +1012,10 @@ private:
 //!
 //!   1. item values      ItemColumns   a projection over a read of the source; per decision, ItemExprs
 //!   2. group totals     TotalColumns  a hash aggregate per group over stage 1 (a row adds the sum of its items, and
-//!                                     the MIN or MAX of each limit read from the data), then a projection: the
+//!                                     the value of each limit read from the data), then a projection: the
 //!                                     group's limits L and U, the verdicts, as checks that raise, and the target
-//!                                     spend's side. Every row's NULL and NaN checks, limits included, are evaluated
-//!                                     inside the aggregate, so they raise before a verdict does.
+//!                                     spend's side. Every row's NULL and NaN checks are evaluated inside the
+//!                                     aggregate, so they raise before a verdict does.
 //!   3. price            PriceColumns  stage 1's few columns through the plan's one window (partitioned by group,
 //!                                     ordered by price, highest first), joined to stage 2, then a hash aggregate;
 //!                                     L and U ride along as group columns
@@ -1052,9 +1031,6 @@ class AggregatePlanBuilder : public ItemAlgebra {
 public:
 	AggregatePlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, DirectSourceReader &reader_p)
 	    : ItemAlgebra(optimizer_p), condition(condition_p), binder(optimizer_p.binder), reader(reader_p) {
-		for (auto &limit : condition.data_limits) {
-			limit_bounds.push_back(limit.GroupBound(optimizer));
-		}
 		if (condition.scope.Scoped()) {
 			class_key =
 			    DirectClassKeyOf(condition.scope.keys, condition.scope.when != nullptr || condition.scope.gated);
@@ -1062,8 +1038,7 @@ public:
 		// Every read computes the items of the row by the same stage: the reader holds it once when it copies the
 		// source, and builds it per read otherwise. The layout is the stage's last build, whose columns every read has.
 		reader.SetRowStage([this](DirectSourceReader::Read read) {
-			layout = make_uniq<ItemStages>(condition, limit_bounds, optimizer, reader.SourceBindings(),
-			                               reader.SourceTypes());
+			layout = make_uniq<ItemStages>(condition, optimizer, reader.SourceBindings(), reader.SourceTypes());
 			return layout->Build(std::move(read.plan), read.table_index);
 		});
 	}
@@ -1116,8 +1091,6 @@ private:
 	};
 
 	const Condition &condition;
-	//! The group bound of each data limit of the condition.
-	vector<unique_ptr<DecideGroupBound>> limit_bounds;
 	Binder &binder;
 	DirectSourceReader &reader;
 	idx_t reads_made = 0;
@@ -1163,26 +1136,26 @@ private:
 		return items;
 	}
 
-	//! One side of the budget in a group: the constant limit and the limit each data limit gives on that side (the
-	//! group's MIN of an upper limit, its MAX of a lower one, an equality both). A value is the number it is, however
+	//! One side of the budget in a group: the constant limit and each data limit on that side (an equality is on both).
+	//! A value is the number it is, however
 	//! large (the solver loads a right side of 1e25 as that number), and an infinite one is infinite: an upper limit of
 	//! +infinity is no bound, a lower limit of +infinity cannot be met. A group with no value (the aggregate over no
 	//! row) takes the constant alone, as LEAST and GREATEST skip a NULL.
-	ExprPtr LimitOf(bool upper, const vector<DirectGroupValues> &limits) const {
+	ExprPtr LimitOf(bool upper, const vector<ExprPtr> &limits) const {
 		vector<ExprPtr> sides {calc.Num(upper ? condition.upper : condition.lower)};
-		for (auto &limit : limits) {
-			if (auto &value = upper ? limit.upper : limit.lower) {
-				sides.push_back(calc.Cast(value, LogicalType::DOUBLE));
+		for (idx_t j = 0; j < limits.size(); j++) {
+			auto comparison = condition.data_limits[j].comparison;
+			if (upper ? DirectIsUpperBound(comparison) : DirectIsLowerBound(comparison)) {
+				sides.push_back(limits[j]);
 			}
 		}
 		return upper ? calc.Min(sides) : calc.Max(sides);
 	}
 
 	//! Stage 2. The aggregate sums stage 1's values over the group (the sums of TotalInputs, the number of rows, the
-	//! MIN and MAX of the limits read from the data, and whether every row's checks held: a NaN or an infinity raises
-	//! in the row's stage). The projection after it gives the group's limits L and U, and tests the verdicts: the data
-	//! checks, then infeasible, then unbounded; a source with no row
-	//! has no verdict.
+	//! value of each limit read from the data, which is one in each group, and whether every row's checks held: a NaN
+	//! or an infinity raises in the row's stage). The projection after it gives the group's limits L and U, and tests
+	//! the verdicts: the data checks, then infeasible, then unbounded; a source with no row has no verdict.
 	Stage<TotalColumns> GroupTotals() {
 		auto items = ReadItems();
 		auto inputs = TotalInputsOfRow(items.columns.decisions);
@@ -1207,18 +1180,21 @@ private:
 			imprecise_items.push_back(item.imprecise);
 		}
 		auto imprecise = aggregate.Add(DirectHashAggregate(optimizer, calc, "bool_or", calc.Any(imprecise_items)));
-		DirectAggregateSink sink(aggregate);
-		auto limit_eligible = condition.scope.Scoped() ? GroupExists(key) : nullptr;
-		vector<DirectGroupValues> limits;
-		for (idx_t j = 0; j < limit_bounds.size(); j++) {
-			limits.push_back(
-			    DirectAddGroupBound(calc, *limit_bounds[j], items.columns.limits[j], sink, limit_eligible));
+		vector<ColumnBinding> limit_values;
+		for (auto &limit : items.columns.limits) {
+			limit_values.push_back(aggregate.Add(DirectHashAggregate(optimizer, calc, "min", DoubleColumn(limit))));
 		}
 		auto plan = items.Repoint(aggregate.Finish(std::move(items.plan)));
 
 		vector<ExprPtr> totals;
 		for (auto &sum : sums) {
 			totals.push_back(DoubleColumn(sum));
+		}
+		// Outside a group the limits read nothing, and nothing computed from them is read.
+		auto in_group = condition.scope.Scoped() ? GroupExists(key) : nullptr;
+		vector<ExprPtr> limits;
+		for (auto &value : limit_values) {
+			limits.push_back(DirectOnKeptRows(calc, in_group, DoubleColumn(value)));
 		}
 		auto lower = LimitOf(false, limits), upper = LimitOf(true, limits);
 		auto verdict = VerdictOf(totals, lower, upper, condition.scope.Scoped() ? GroupExists(key) : nullptr);
@@ -1230,11 +1206,6 @@ private:
 		if (rows_valid.table_index != DConstants::INVALID_INDEX) {
 			// A group of no row holds no check.
 			checks.push_back(calc.Out(calc.Coalesce({BoolColumn(rows_valid), calc.Bool(true)})));
-		}
-		for (auto &limit : limits) {
-			for (auto &check : limit.checks) {
-				checks.push_back(calc.Out(check));
-			}
 		}
 		// The group's sums of the finite parts: the spend of the anchors and the finite rooms. An item's own part past
 		// a DOUBLE makes its sum so. The sums of the rooms at price zero are parts of these, and the running sums of

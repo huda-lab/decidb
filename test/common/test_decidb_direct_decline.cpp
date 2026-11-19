@@ -336,12 +336,8 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	}));
 	shapes.push_back(S1("a count bound that is a column outside the source", "SUM(x) <= 2",
 	                    [](DirectIR &ir) { ir.constraints[0].rhs = ForeignColumn(LogicalType::INTEGER); }));
-	shapes.push_back(
-	    S1("a count bound that is a cast to a type that is not a number", "SUM(x) <= cap", [](DirectIR &ir) {
-		    // `cap` varies in its group, so the plan reads the limit its group bound gives.
-		    auto &bound = ir.constraints[0];
-		    (bound.group_bound ? *bound.group_bound->upper : *bound.rhs).return_type = LogicalType::BOOLEAN;
-	    }));
+	shapes.push_back(S1("a count bound that is a cast to a type that is not a number", "SUM(x) <= cap",
+	                    [](DirectIR &ir) { ir.constraints[0].rhs->return_type = LogicalType::BOOLEAN; }));
 	// ProveObjective.
 	shapes.push_back(S1("an average objective", "SUM(x) <= 2", nullptr, "MAXIMIZE AVG(w*x)"));
 	shapes.push_back(S1("an objective WHEN that reads more than the source", "SUM(x) <= 2", nullptr,
@@ -912,14 +908,6 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	shapes.push_back(N1("a limit of minus 1e20", "SUM(POWER(x, 2)) <= -1e20"));
 	shapes.push_back(N1("an infinite limit", "SUM(POWER(x, 2)) <= 'inf'::DOUBLE"));
 	shapes.push_back(N1("a limit fixed only within the query", "SUM(POWER(x, 2)) <= txid_current()"));
-	// DirectGroupBoundIsReadable: a reducer of the limit reads its argument and its WHEN on the row, from the source.
-	shapes.push_back(
-	    N1("a limit reducer over a value fixed only within the query", "SUM(POWER(x, 2)) <= SUM(txid_current())"));
-	shapes.push_back(N1("a limit reducer with a WHEN fixed only within the query",
-	                    "SUM(POWER(x, 2)) <= SUM(when txid_current() > 0: w)"));
-	shapes.push_back(
-	    N1("a limit left as an aggregate that is not a number", "SUM(POWER(x, 2)) <= 0.5 * SUM(w)",
-	       [](DirectIR &ir) { ir.constraints[0].group_bound->upper->return_type = LogicalType::BOOLEAN; }));
 	// ProveBox.
 	shapes.push_back(N1("an upper bound", "x <= 2 AND SUM(POWER(x, 2)) <= 25"));
 	shapes.push_back(N1("an upper bound that would not bind", "x <= 50 AND SUM(POWER(x, 2)) <= 25"));
@@ -1599,8 +1587,6 @@ duckdb::vector<Shape> S2DeclineShapes() {
 	shapes.push_back(S2("a limit of 1e20", "SUM(x) by (flag) <= 1 AND SUM(x) <= 1e20"));
 	shapes.push_back(S2("a limit of minus 1e20", "SUM(x) by (flag) <= 1 AND SUM(x) <= -1e20"));
 	shapes.push_back(S2("a limit that is infinite", "SUM(x) by (flag) <= 1 AND SUM(x) <= 'inf'::DOUBLE"));
-	shapes.push_back(S2("a limit that is a reducer over a value fixed only within the query",
-	                    "SUM(x) by (flag) <= 1 AND SUM(x) <= SUM(txid_current())"));
 	// A lower limit, an equal limit and a range can force a selection, which the cascade of upper quotas cannot honor.
 	shapes.push_back(S2("a lower limit on the finer scope", "SUM(x) by (flag) >= 1 AND SUM(x) <= 3"));
 	shapes.push_back(S2("a lower limit on the coarser scope", "SUM(x) by (flag) <= 1 AND SUM(x) >= 1"));

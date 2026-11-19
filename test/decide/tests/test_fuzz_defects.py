@@ -77,7 +77,7 @@ def test_a_crossed_box_leaves_every_helper_bounded_on_highs(decidb_cli):
 
 
 #: Group b's rows fail the reducer's own `when`, so it holds no instance and constrains nothing: its bound, 4 and 5, is
-#: not read (owner's ruling on Q7-ruling-equals; DecideGroupBound::held). No direct rule takes these queries, so they
+#: not read (owner's ruling on Q7-ruling-equals). No direct rule takes these queries, so they
 #: run on the solver path in every `decide_direct_solve` mode.
 EQUAL_ROWS = "(VALUES (1, 'a', true, 3), (2, 'b', false, 4), (3, 'b', false, 5)) t(id, g, p, c)"
 

@@ -457,22 +457,6 @@ ExprPtr DirectCheckOnKeptRows(const ExpressionBuilder &calc, const ExprPtr &kept
 	return kept ? calc.If(kept, check, calc.Bool(true)) : check;
 }
 
-static unique_ptr<BoundWindowExpression>
-DirectWindowOfAggregate(const Expression &function, unique_ptr<Expression> argument, unique_ptr<Expression> reads) {
-	auto &aggregate = function.Cast<BoundAggregateExpression>();
-	// Hand-built, as in DirectWindowExtremum. The aggregate's bind data (the scale of AVG over a DECIMAL) goes with it.
-	auto result = make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_AGGREGATE, aggregate.return_type,
-	                                               make_uniq<AggregateFunction>(aggregate.function),
-	                                               aggregate.bind_info ? aggregate.bind_info->Copy() : nullptr);
-	if (argument) {
-		result->children.push_back(std::move(argument));
-	}
-	result->filter_expr = std::move(reads);
-	result->start = WindowBoundary::UNBOUNDED_PRECEDING;
-	result->end = WindowBoundary::UNBOUNDED_FOLLOWING;
-	return result;
-}
-
 unique_ptr<Expression> DirectAggregateOf(const Expression &function, vector<unique_ptr<Expression>> arguments,
                                          unique_ptr<Expression> reads) {
 	auto result = function.Copy();
@@ -796,177 +780,14 @@ ExprPtr DirectInclusiveRowsExpr(const ExpressionBuilder &calc, ExpressionType co
 	return calc.If(calc.IsNull(value()), open, limit);
 }
 
-ExprPtr DirectGroupCountLimitValue(const ExpressionBuilder &calc, Optimizer &optimizer, const DirectCountLimit &count,
-                                   bool upper, const DirectGroupValues &values) {
-	auto &limit = upper != count.negated ? values.upper : values.lower;
-	D_ASSERT(limit);
-	if (count.negated) {
-		return calc.Wrap(DirectScaledTerm(optimizer, calc.Out(limit), -1));
-	}
-	return calc.Cast(limit, LogicalType::DOUBLE);
-}
-
 ExprPtr DirectGroupCountLimitRows(const ExpressionBuilder &calc, Optimizer &optimizer, const DirectCountLimit &count,
-                                  bool upper, const DirectGroupValues &values) {
-	return DirectInclusiveRowsExpr(calc, count.comparison, upper,
-	                               [&]() { return DirectGroupCountLimitValue(calc, optimizer, count, upper, values); });
-}
-
-unique_ptr<DecideGroupBound> DirectTightestBound(Optimizer &optimizer, ExpressionType comparison,
-                                                 unique_ptr<Expression> rhs, const string &text,
-                                                 unique_ptr<Expression> invalid) {
-	ExpressionBuilder calc(optimizer.context);
-	auto bound = make_uniq<DecideGroupBound>();
-	bound->text = text;
-	auto type = rhs->return_type;
-	auto table_index = optimizer.binder.GenerateTableIndex();
-	auto add = [&](const char *name) {
-		vector<unique_ptr<Expression>> children;
-		children.push_back(rhs->Copy());
-		auto function = optimizer.BindAggregateFunction(name, std::move(children));
-		function->Cast<BoundAggregateExpression>().children.clear();
-		bound->aggregates.push_back({ColumnBinding(table_index, bound->aggregates.size()), std::move(function), 0});
-		return bound->aggregates.size() - 1;
-	};
-	if (DirectIsUpperBound(comparison)) {
-		bound->upper = calc.Out(calc.Col(type, bound->aggregates[add("min")].column));
-	}
-	if (DirectIsLowerBound(comparison)) {
-		bound->lower = calc.Out(calc.Col(type, bound->aggregates[add("max")].column));
-	}
-	bound->inputs.push_back({std::move(rhs), nullptr, std::move(invalid)});
-	return bound;
-}
-
-bool DirectGroupBoundIsReadable(const DirectIR &ir, const DecideGroupBound &bound) {
-	auto readable = ir.source_bindings;
-	for (auto &aggregate : bound.aggregates) {
-		readable.push_back(aggregate.column);
-	}
-	auto of_the_row = [&](const unique_ptr<Expression> &expr) {
-		return !expr || (DirectIsDecisionFreeDeterministic(*expr, ir.decide_index) &&
-		                 DirectReferencesOnlySource(*expr, ir.source_bindings));
-	};
-	for (auto &input : bound.inputs) {
-		if (!of_the_row(input.argument) || !of_the_row(input.filter)) {
-			return false;
+                                  bool upper, const ExprPtr &value) {
+	return DirectInclusiveRowsExpr(calc, count.comparison, upper, [&]() {
+		if (count.negated) {
+			return calc.Wrap(DirectScaledTerm(optimizer, calc.Out(value), -1));
 		}
-	}
-	for (auto &limit : {&bound.upper, &bound.lower}) {
-		if (*limit && !DirectIsSourceOnlyNumericMayRaise(**limit, ir.decide_index, readable)) {
-			return false;
-		}
-	}
-	return true;
-}
-
-ColumnBinding DirectWindowSink::Add(const Expression &function, unique_ptr<Expression> argument,
-                                    unique_ptr<Expression> reads) {
-	auto aggregate = DirectWindowOfAggregate(function, std::move(argument), std::move(reads));
-	partition(*aggregate);
-	window.expressions.push_back(std::move(aggregate));
-	return ColumnBinding(window.window_index, window.expressions.size() - 1);
-}
-
-ColumnBinding DirectAggregateSink::Add(const Expression &function, unique_ptr<Expression> argument,
-                                       unique_ptr<Expression> reads) {
-	vector<unique_ptr<Expression>> arguments;
-	if (argument) {
-		arguments.push_back(std::move(argument));
-	}
-	return aggregate.Add(DirectAggregateOf(function, std::move(arguments), std::move(reads)));
-}
-
-DirectGroupInputLayout DirectGroupLayout(const DecideGroupBound::Input &input, bool scoped) {
-	return {scoped || input.filter, input.argument != nullptr, input.invalid != nullptr};
-}
-
-vector<DirectGroupInput> DirectGroupInputs(const ExpressionBuilder &calc, const DecideGroupBound &bound,
-                                           const ExprPtr &eligible,
-                                           const std::function<unique_ptr<Expression>(const Expression &)> &over) {
-	vector<DirectGroupInput> inputs;
-	for (auto &input : bound.inputs) {
-		DirectGroupInput columns;
-		columns.reads = eligible;
-		if (input.filter) {
-			auto own = calc.Wrap(DirectActiveWhen(calc, over(*input.filter).get()));
-			columns.reads = eligible ? calc.If(eligible, own, calc.Bool(false)) : own;
-		}
-		// A reducer reads its argument on the rows it reads alone: nothing is computed on any other.
-		if (input.argument) {
-			auto argument = calc.Wrap(over(*input.argument));
-			columns.argument = DirectOnKeptRows(calc, columns.reads, argument);
-		}
-		if (input.invalid) {
-			columns.invalid = calc.Wrap(over(*input.invalid));
-		}
-		inputs.push_back(std::move(columns));
-	}
-	return inputs;
-}
-
-vector<DirectGroupInputColumns>
-DirectLayoutGroupInputs(Optimizer &optimizer, const ExpressionBuilder &calc, DirectProjectionStage &stage,
-                        const DecideGroupBound &bound, const ExprPtr &eligible,
-                        const std::function<unique_ptr<Expression>(const Expression &)> &over,
-                        vector<unique_ptr<Expression>> *checks) {
-	vector<DirectGroupInputColumns> columns;
-	for (auto &input : DirectGroupInputs(calc, bound, eligible, over)) {
-		DirectGroupInputColumns column;
-		if (input.reads) {
-			column.reads = stage.Add(calc.Out(input.reads));
-		}
-		if (input.argument) {
-			column.argument = stage.Add(calc.Out(input.argument));
-		}
-		if (input.invalid && checks) {
-			checks->push_back(calc.Out(calc.Col(LogicalType::BOOLEAN, stage.Add(calc.Out(input.invalid)))));
-		}
-		columns.push_back(column);
-	}
-	return columns;
-}
-
-DirectGroupValues DirectAddGroupBound(const ExpressionBuilder &calc, const DecideGroupBound &bound,
-                                      const vector<DirectGroupInputColumns> &inputs, DirectGroupSink &sink,
-                                      const ExprPtr &eligible) {
-	vector<ColumnBinding> placeholders;
-	vector<unique_ptr<Expression>> results;
-	for (auto &aggregate : bound.aggregates) {
-		auto &input = bound.inputs[aggregate.input];
-		auto &columns = inputs[aggregate.input];
-		auto argument = input.argument ? calc.Out(calc.Col(input.argument->return_type, columns.argument)) : nullptr;
-		auto reads = columns.reads.table_index != DConstants::INVALID_INDEX
-		                 ? calc.Out(calc.Col(LogicalType::BOOLEAN, columns.reads))
-		                 : nullptr;
-		auto result = sink.Add(*aggregate.function, std::move(argument), std::move(reads));
-		placeholders.push_back(aggregate.column);
-		results.push_back(calc.Out(calc.Col(aggregate.function->return_type, result)));
-	}
-	// Outside a group the aggregates read nothing, and nothing computed from them is read.
-	auto in_group = [&](ExprPtr value) {
-		return eligible ? calc.If(eligible, value, calc.Constant(Value(value->return_type))) : value;
-	};
-	auto over_results = [&](const Expression &expr) {
-		auto copy = expr.Copy();
-		DirectReplaceColumns(copy, placeholders, results);
-		return in_group(calc.Wrap(std::move(copy)));
-	};
-	DirectGroupValues values;
-	if (bound.upper) {
-		values.upper = over_results(*bound.upper);
-	}
-	if (bound.lower) {
-		values.lower = over_results(*bound.lower);
-	}
-	if (bound.invalid) {
-		auto copy = bound.invalid->Copy();
-		DirectReplaceColumns(copy, placeholders, results);
-		// Outside a group there is no value to check, and the check holds.
-		auto check = calc.Wrap(std::move(copy));
-		values.checks.push_back(eligible ? calc.If(eligible, check, calc.Bool(true)) : check);
-	}
-	return values;
+		return calc.Cast(value, LogicalType::DOUBLE);
+	});
 }
 
 bool DirectLinearScore::Prove(const DirectIR &ir, ClientContext &context) {

@@ -12,9 +12,9 @@ class LogicalDecide;
 class Optimizer;
 
 //! Makes the IR's row checks (DirectRowCheck) on the reads of `reader`, where the solver makes them: before a value is
-//! read. Each check is a side aggregate over its own read of the source, pruned to the columns it reads, that comes to
-//! one row: true when the check holds on every row, and a row that does not raises where the check is evaluated. A
-//! projection over their cross product, the verdict, gates the reader (DirectSourceReader::Gate): every later read
+//! read. The checks are one side aggregate over one read of the source that comes to one row: true when every check
+//! holds on every row. Each row makes them in order, as the solver does, so a row that fails one raises its error where
+//! it is evaluated. A projection over it, the verdict, gates the reader (DirectSourceReader::Gate): every later read
 //! passes its rows only once the verdict holds. This is DuckDB's plan of an uncorrelated scalar subquery, the verdict a
 //! one-row CTE. A check that is not a row check is not in `checks`; with none, the reader stays ungated.
 //!

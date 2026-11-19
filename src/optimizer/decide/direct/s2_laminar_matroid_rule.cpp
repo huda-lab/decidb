@@ -184,24 +184,18 @@ public:
 	            const vector<LogicalType> &source_types_p)
 	    : DirectRankedPrefix(optimizer_p, source_bindings_p, source_types_p, ScopesOf(condition_p), condition_p.fixed),
 	      condition(condition_p), fixed_count(condition_p.levels.size()), group_ok(condition_p.levels.size()),
-	      cap_bounds(condition_p.levels.size()), cap_index(condition_p.levels.size()) {
+	      cap_columns(condition_p.levels.size()) {
 		has_score_check = condition.score.CanFail(optimizer);
-		// Each cap read from the data is one group bound of its level: the group's tightest value, whether the clause
-		// gave the plan the group's aggregates or one value per row (DirectDataLimit::GroupBound).
-		for (idx_t i = 0; i < condition.levels.size(); i++) {
-			for (auto &data_cap : condition.levels[i].data_caps) {
-				cap_bounds[i].push_back(data_cap.limit.data.GroupBound(optimizer));
-				cap_index[i].push_back(AddGroupBound(i, *cap_bounds[i].back()));
-			}
-		}
 	}
 
 private:
 	const Condition &condition;
 	//! Whether a score can fail: be NaN or infinite, or the sum of the parts' scores pass a DOUBLE.
 	bool has_score_check = false;
-	//! P1: the row's score.
+	//! P1: the row's score, and per level the value of each of its data caps on the rows of its groups (NULL on the
+	//! others): a cap has one value in each group.
 	ColumnBinding score_column;
+	vector<vector<ColumnBinding>> cap_columns;
 	//! W1, per level: the count of the group's rows fixed to 1; set only with fixed rows.
 	vector<ColumnBinding> fixed_count;
 	//! P2: the score, the rows the last level keeps, and per level whether its groups can be met (set where a group
@@ -209,10 +203,6 @@ private:
 	ColumnBinding score_after;
 	ColumnBinding kept;
 	vector<ColumnBinding> group_ok;
-	//! Per level, the group bound of each of its data caps, and its index among the builder's group bounds of the
-	//! level.
-	vector<vector<unique_ptr<DecideGroupBound>>> cap_bounds;
-	vector<vector<idx_t>> cap_index;
 
 	static vector<reference<const DirectSharedScope>> ScopesOf(const Condition &condition) {
 		vector<reference<const DirectSharedScope>> scopes;
@@ -233,7 +223,7 @@ private:
 		return OrderType::ASCENDING;
 	}
 
-	//! P1: the score and the check of it. What the fixed values read is the builder's.
+	//! P1: the score and the check of it, and the data caps. What the fixed values read is the builder's.
 	DirectRowLayout LayoutRows(DirectProjectionStage &p1, const DirectScopeState &state) override {
 		DirectRowLayout layout;
 		vector<ExprPtr> part_scores;
@@ -245,6 +235,13 @@ private:
 		if (has_score_check) {
 			layout.checks_below.push_back(
 			    calc.Out(condition.score.Check(calc, optimizer, over_state, combined_score, part_scores)));
+		}
+		for (idx_t i = 0; i < condition.levels.size(); i++) {
+			auto eligible = levels[i].scoped ? Column(LogicalType::BOOLEAN, state.scopes[i].eligible) : nullptr;
+			for (auto &data_cap : condition.levels[i].data_caps) {
+				auto value = calc.Wrap(over_state(*data_cap.limit.data.value));
+				cap_columns[i].push_back(p1.Add(calc.Out(DirectOnKeptRows(calc, eligible, value))));
+			}
 		}
 		layout.rank_key = score_column;
 		return layout;
@@ -271,8 +268,9 @@ private:
 			caps.push_back(calc.Constant(Value::BIGINT(at.impossible ? -1 : NumericCast<int64_t>(at.cap))));
 		}
 		for (idx_t i = 0; i < at.data_caps.size(); i++) {
+			auto &value = *at.data_caps[i].limit.data.value;
 			caps.push_back(DirectGroupCountLimitRows(calc, optimizer, at.data_caps[i], true,
-			                                         GroupValues(level, cap_index[level][i])));
+			                                         Column(value.return_type, cap_columns[level][i])));
 		}
 		D_ASSERT(!caps.empty());
 		return calc.Min(caps);

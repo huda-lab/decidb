@@ -27,7 +27,6 @@ class Optimizer;
 //!     (DirectSourceReader::AddSideTable)
 //!   - ChooseDecideAnswer (decide_answer_choice.hpp): a direct-solve rule replaces the node, else a solver is chosen
 //! and, when a solver is, the formulation passes of RewriteForSolver, in this order:
-//!   - RecordReducedBounds: the aggregates of the bounds pass 0 left to a rule (DecideGroupBound)
 //!   - RewriteNorm: lowers the bound NORM marker, including L0 indicators/links
 //!   - RewriteInDomain: lowers DECIDE variable IN lists to indicator formulations
 //!   - TagAbsForBigM: marks the ABS nodes needing a Big-M envelope, in the constraints and the objective.
@@ -45,11 +44,6 @@ class Optimizer;
 //!   - FoldSingletonRows: folds simple `x OP const` bounds into the column box.
 //!     Must run LAST — see its declaration.
 //!
-//! Records the aggregates of the bounds the bound-side rewrite left to a rule (LogicalDecide::reduced_bounds) as bound
-//! aggregates (LogicalDecide::bound_aggregates), and puts their checks in the scope checks. The solver path needs them;
-//! so does a direct-solve IR whose rules cannot compute a bound themselves (DirectIR::bounds_to_record).
-void RecordReducedBounds(Optimizer &optimizer, LogicalDecide &decide);
-
 class DecideOptimizer {
 public:
 	explicit DecideOptimizer(Optimizer &optimizer);
@@ -66,8 +60,7 @@ private:
 	//! aggregate over its groups (LogicalDecide::bound_aggregates), reduces the bound of an aggregate-shape clause to
 	//! its group's tightest value, and appends the VALUE_IS_VALID checks of what those windows read. The solver and the
 	//! direct-solve rules then read one number that DuckDB computed. Runs first, in every mode, because both paths must
-	//! see it. A bound a direct-solve rule can compute in its own group aggregate is left to it, recorded as the
-	//! aggregates of its group (LogicalDecide::reduced_bounds).
+	//! see it.
 	void RewriteRhsAggregates(LogicalDecide &decide);
 
 	//! Optimize the DECIDE node held by `op`, which sits inside the plan held by `root`: pass 0, the choice of how it

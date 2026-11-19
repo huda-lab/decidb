@@ -15,13 +15,9 @@
 //     the one around it reads its value as a column of an earlier table;
 //   - the tightest bound of a clause in the aggregate shape: such a clause is one constraint per group, and the
 //     constraint on each kept row of the group holds when the tightest one does (paper §3.2.1), so `<=` takes the
-//     group's MIN and `>=` its MAX; `=` must have one value per group.
-// The solver (PhysicalDecide) and the direct-solve rules then read plain columns, and neither reduces a bound.
-//
-// A bound the group's own aggregate can compute is not evaluated here. It is recorded as a DecideGroupBound: the MIN
-// and/or MAX of a raw value, or an expression of reducers that read exactly the clause's group (`sum(x) by (g) <=
-// sum(cap) by (g)`). A direct-solve rule computes its aggregates in the group aggregate it already runs; the solver
-// path records their aggregates (RecordGroupBounds) as it does for every other bound.
+//     group's MIN and `>=` its MAX, recorded as a side table too; `=` must have one value per group.
+// The solver (PhysicalDecide) and the direct-solve rules then read plain columns, each with one value on every row of
+// its clause's group, and neither reduces a bound.
 //
 // A frame selector's values are columns execution computes from the rows it selects
 // (DecideFrameReads::columns), so no side table can read one: a row-wise bound reads a frame as it reads a
@@ -65,16 +61,9 @@ namespace duckdb {
 
 namespace {
 
-//! Whether each of the grouping expressions `own` is one of `keys`.
-bool KeysWithin(const vector<const Expression *> &own, const vector<const Expression *> &keys) {
-	return std::all_of(own.begin(), own.end(), [&](const Expression *key) {
-		return std::any_of(keys.begin(), keys.end(), [&](const Expression *group) { return group->Equals(*key); });
-	});
-}
-
 //! The bound-side rewrite of one DECIDE node: every value a bound needs that is not one row's value is replaced by a
 //! placeholder column, and the reducers behind the placeholders are recorded (LogicalDecide::bound_aggregates), not
-//! computed. A group bound that a direct-solve rule can compute itself is recorded as a DecideGroupBound instead.
+//! computed.
 class RhsBoundRewriter {
 public:
 	RhsBoundRewriter(Optimizer &optimizer_p, LogicalDecide &decide_p)
@@ -90,23 +79,6 @@ public:
 		if (decide.decide_objective) {
 			WalkObjective(decide.decide_objective);
 		}
-	}
-
-	//! Records the aggregates of the group bounds `Run` left to a rule, and adds their checks. The solver path needs
-	//! them; a direct rule computes the bound itself.
-	void RecordGroupBounds() {
-		for (auto &bound : decide.reduced_bounds) {
-			when = bound.when;
-			class_key = bound.class_key;
-			auto messages = RecordGroupBound(bound.comparison->Cast<BoundComparisonExpression>(), *bound.group);
-			for (auto &message : messages) {
-				DecideScopeCheck check;
-				check.kind = DecideScopeCheckKind::VALUE_IS_VALID;
-				check.value = std::move(message);
-				decide.scope_checks.push_back(std::move(check));
-			}
-		}
-		decide.reduced_bounds.clear();
 	}
 
 private:
@@ -176,10 +148,9 @@ private:
 	}
 
 	//! A clause in the aggregate shape is one constraint per group. Its data bound is checked on every kept row, before
-	//! any value is read. A bound that reads data only through the reducers of its group is recorded as the aggregates
-	//! it is a function of, and one that may differ between the kept rows of a group as its tightest value. `<>` keeps
-	//! every value: each one is excluded. A query-wide value has one value already. A row-wise bound is checked by the
-	//! solver as it reads it. The solver path records the aggregates of a recorded bound later (RecordGroupBounds).
+	//! any value is read, and one that may differ between the kept rows of a group is read as its tightest value. `<>`
+	//! keeps every value: each one is excluded. A query-wide value has one value already. A row-wise bound is checked
+	//! by the solver as it reads it.
 	void RewriteBound(BoundComparisonExpression &comparison) {
 		// Canonicalization put every decision on the left, so the right is data.
 		bool aggregate_data_bound =
@@ -189,10 +160,6 @@ private:
 		auto text = Written(*comparison.right);
 		auto location = comparison.right->GetQueryLocation();
 		auto frame = FrameText(*comparison.right);
-		if (aggregate_data_bound && IsGroupBound(comparison)) {
-			RecordReducers(comparison, text, location);
-			return;
-		}
 		ReplaceReducers(comparison.right);
 		if (!aggregate_data_bound) {
 			return;
@@ -210,112 +177,24 @@ private:
 		if (reduces) {
 			InClassOnly(comparison.right);
 		}
-		auto invalid = InvalidValueCheck(*comparison.right, text, SpanOf(location), Kept());
-		if (reduces) {
-			// An `=` bound owes a disagreement check, which must be a scope check (it is class-aware and runs before
-			// any rule), so its NaN check stands with it, ahead of it, and every path raises the same error of the two.
-			// A `<=` or `>=` bound has no other check: a rule reads its NaN check as an input of its own plan.
-			const bool equal = comparison.type == ExpressionType::COMPARE_EQUAL;
-			if (equal) {
-				AddValueCheck(std::move(invalid));
-			}
-			auto group =
-			    DirectTightestBound(optimizer, comparison.type, comparison.right->Copy(), text, std::move(invalid));
-			group->location = location;
-			Record(comparison, std::move(group));
-			if (equal) {
-				AddDisagreementCheck(comparison, *comparison.right, text,
-				                     DecideSpanLocation(decide.source_text, location), OwnWhens(*comparison.left));
-			}
+		AddValueCheck(InvalidValueCheck(*comparison.right, text, SpanOf(location), Kept()));
+		if (!reduces) {
 			return;
 		}
-		AddValueCheck(std::move(invalid));
-	}
-
-	//! Whether the bound is a function of its group's own reducers: each reads exactly the rows the clause's group
-	//! holds, and the bound reads no data but through them, so it has one value per group, which the group's aggregate
-	//! computes. A reducer with another `by` key reads other rows, and one that counts each class of a `per` key once
-	//! is no plain aggregate; `<>` excludes each value its bound takes. The side tables compute all of those.
-	bool IsGroupBound(const BoundComparisonExpression &comparison) const {
-		if (comparison.type == ExpressionType::COMPARE_NOTEQUAL) {
-			return false;
+		// An `=` bound takes one value in each group, which its check states ahead of the value read; the NaN check
+		// stands before it, so it reads valid values.
+		if (comparison.type == ExpressionType::COMPARE_EQUAL) {
+			AddDisagreementCheck(comparison, *comparison.right, text, SpanOf(location), OwnWhens(*comparison.left));
 		}
-		return ReadsOnlyGroupReducers(*comparison.right, GroupKeyOf(comparison));
-	}
-
-	bool ReadsOnlyGroupReducers(const Expression &expr, const vector<const Expression *> &keys) const {
-		idx_t frame;
-		if (TryGetDecideFrame(expr, frame)) {
-			return false;
+		auto function = DirectIsUpperBound(comparison.type) ? "min" : "max";
+		comparison.right =
+		    calc.Out(InGroup(comparison, RecordOver(function, *comparison.right, GroupKeyIndex(comparison))));
+		// The bound is replaced by a column of its value, which a message quotes as it quotes the bound.
+		if (location.IsValid()) {
+			comparison.right->SetQueryLocation(location);
+		} else {
+			comparison.right->SetAlias(text);
 		}
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			idx_t scope_idx;
-			auto own = GroupKeyOf(expr);
-			// A reducer holding a reducer reads its inner one per group of a path key: a side table. One holding a
-			// frame is refused there (MakeReducerColumn). A rule's group aggregate reads one argument, so one that
-			// reads more -- a collated MIN or MAX -- takes a side table too.
-			auto &reducer = expr.Cast<BoundAggregateExpression>();
-			if (reducer.children.size() > 1) {
-				return false;
-			}
-			if (!reducer.children.empty() && (DecideCanonicalizer::ContainsReducer(*reducer.children[0]) ||
-			                                  ContainsDecideFrame(*reducer.children[0]))) {
-				return false;
-			}
-			return !TryParseQualifiedReducerTag(expr.GetAlias(), scope_idx) && own.size() == keys.size() &&
-			       KeysWithin(own, keys);
-		}
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-			return false;
-		}
-		bool only = true;
-		ExpressionIterator::EnumerateChildren(
-		    expr, [&](const Expression &child) { only = only && ReadsOnlyGroupReducers(child, keys); });
-		return only;
-	}
-
-	//! Records the bound as the aggregates of its reducers and an expression over their placeholders.
-	void RecordReducers(BoundComparisonExpression &comparison, const string &text, optional_idx location) {
-		auto group = make_uniq<DecideGroupBound>();
-		group->text = text;
-		group->location = location;
-		ReplaceWithPlaceholders(comparison.right, optimizer.binder.GenerateTableIndex(), *group);
-		if (DirectIsUpperBound(comparison.type)) {
-			group->upper = comparison.right->Copy();
-		}
-		if (DirectIsLowerBound(comparison.type)) {
-			group->lower = comparison.right->Copy();
-		}
-		// The group's one value is not yet limited to the rows the clause keeps: the solver path does that, a rule's
-		// group is those rows.
-		auto nan = NanCheck(*comparison.right, text, SpanOf(location));
-		group->invalid = nan ? calc.Out(nan) : nullptr;
-		Record(comparison, std::move(group));
-	}
-
-	void ReplaceWithPlaceholders(unique_ptr<Expression> &expr, idx_t table_index, DecideGroupBound &group) {
-		if (expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-			ExpressionIterator::EnumerateChildren(
-			    *expr, [&](unique_ptr<Expression> &child) { ReplaceWithPlaceholders(child, table_index, group); });
-			return;
-		}
-		auto &reducer = expr->Cast<BoundAggregateExpression>();
-		DecideGroupBound::Input input;
-		// A group bound holds no nested reducer (ReadsOnlyGroupReducers): its argument is data.
-		input.invalid = ArgumentCheck(reducer, reducer.children.empty() ? nullptr : reducer.children[0].get(),
-		                              Reads(reducer.filter.get()), DecideReducerPath());
-		if (!reducer.children.empty()) {
-			input.argument = std::move(reducer.children[0]);
-			reducer.children.clear();
-		}
-		input.filter = std::move(reducer.filter);
-		auto placeholder = calc.Out(calc.Col(reducer.return_type, ColumnBinding(table_index, group.aggregates.size())));
-		NameAsWritten(*placeholder, reducer);
-		MarkReducerValue(*placeholder);
-		group.aggregates.push_back(
-		    {ColumnBinding(table_index, group.aggregates.size()), std::move(expr), group.inputs.size()});
-		group.inputs.push_back(std::move(input));
-		expr = std::move(placeholder);
 	}
 
 	//! The own `when` of each reducer of the clause's left side that has one: a group holds an instance only where each
@@ -351,16 +230,6 @@ private:
 				bound = calc.Out(calc.If(calc.IsNull(calc.Of(element.Grouping())), none, value));
 			}
 		}
-	}
-
-	//! Leaves the bound to the rule. Its checks join the clauses' once the aggregates are recorded.
-	void Record(BoundComparisonExpression &comparison, unique_ptr<DecideGroupBound> group) {
-		DecideReducedBound bound;
-		bound.comparison = &comparison;
-		bound.when = when;
-		bound.class_key = class_key;
-		bound.group = std::move(group);
-		decide.reduced_bounds.push_back(std::move(bound));
 	}
 
 	//! `path` holds the reducers around `expr`: their own `when`s and `by` keys (the clause's `when` is `when`).
@@ -619,47 +488,6 @@ private:
 		                                                     RecordOver("max", bound, by), held, names, values))));
 	}
 
-	//! Records a left-over bound's aggregates over the group of its clause, so the comparison reads the bound as one
-	//! column (named by the bound as written), and returns the checks of the bound in the solver's order: what each
-	//! aggregate reads, then a NaN bound. An `=` bound's two values in a group are checked wherever the bound is
-	//! (AddDisagreementCheck), whether or not a rule takes the clause.
-	vector<unique_ptr<Expression>> RecordGroupBound(BoundComparisonExpression &comparison, DecideGroupBound &group) {
-		vector<ColumnBinding> placeholders;
-		vector<unique_ptr<Expression>> values;
-		for (auto &aggregate : group.aggregates) {
-			auto &input = group.inputs[aggregate.input];
-			DecideBoundAggregate record;
-			record.function = aggregate.function->Copy();
-			if (input.argument) {
-				record.arguments.push_back(input.argument->Copy());
-			}
-			record.key = GroupKeyIndex(comparison);
-			placeholders.push_back(aggregate.column);
-			auto column = calc.Col(aggregate.function->return_type,
-			                       RecordAggregate(std::move(record), Reads(input.filter.get())));
-			values.push_back(calc.Out(InGroup(comparison, column)));
-		}
-		vector<unique_ptr<Expression>> messages;
-		for (auto &input : group.inputs) {
-			if (input.invalid) {
-				messages.push_back(std::move(input.invalid));
-			}
-		}
-		if (group.invalid) {
-			DirectReplaceColumns(group.invalid, placeholders, values);
-			messages.push_back(calc.Out(DirectCheckOnKeptRows(calc, Kept(), calc.Wrap(std::move(group.invalid)))));
-		}
-		comparison.right = std::move(DirectIsUpperBound(comparison.type) ? group.upper : group.lower);
-		DirectReplaceColumns(comparison.right, placeholders, values);
-		// The bound is replaced by a column of its value, which a message quotes as it quotes the bound.
-		if (group.location.IsValid()) {
-			comparison.right->SetQueryLocation(group.location);
-		} else {
-			comparison.right->SetAlias(group.text);
-		}
-		return messages;
-	}
-
 	//! Whether `bound` has one value in each group of `keys` among the kept rows: it reads data only through reducers
 	//! whose `by` key is part of `keys`.
 	bool OneValuePerGroup(const Expression &bound, const vector<const Expression *> &keys) const {
@@ -828,12 +656,6 @@ private:
 void DecideOptimizer::RewriteRhsAggregates(LogicalDecide &decide) {
 	D_ASSERT(decide.children.size() == 1);
 	RhsBoundRewriter(optimizer, decide).Run();
-}
-
-void RecordReducedBounds(Optimizer &optimizer, LogicalDecide &decide) {
-	if (!decide.reduced_bounds.empty()) {
-		RhsBoundRewriter(optimizer, decide).RecordGroupBounds();
-	}
 }
 
 } // namespace duckdb

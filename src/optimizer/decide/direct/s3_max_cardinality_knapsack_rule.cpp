@@ -197,12 +197,12 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //!   [W0]  the source read
 //!   S     the scope projection (DirectProjectScope): the eligible flag and the group key, for a `by` budget or a
 //!         `when`; and whether a clause fixes the row to 1 or to 0
-//!   P1    the rows' weights `w` and what the data limit reads; a fixed row has no weight in the prefix; the checks of
-//!         the fixed values and of a row fixed to both values (the builder's)
+//!   P1    the rows' weights `w` and the data limit B, which has one value in each group; a fixed row has no weight in
+//!         the prefix; the checks of the fixed values and of a row fixed to both values (the builder's)
 //!   W1    per group, the free rows in order of `w`: their rank and running sum of `w` (the prefix total); the total
-//!         of the weights of the rows fixed to 1; and the group's limit B (DirectWindowSink)
+//!         of the weights of the rows fixed to 1
 //!   P2    whether the row's prefix fits (`fixed total + total <= B`), the rank when it does, and the checks: the
-//!         weight, what the limit reads and what it gives, and the prefix total
+//!         weight and the prefix total
 //!   W2    per group, k, the largest rank that fits (NULL when none does); for a minimum, the smallest rank that
 //!         reaches B, with the order of W1 reversed
 //!   H     the rows held in a materialized CTE, and whether every group fits a prefix, raised in the hold; only when a
@@ -230,19 +230,14 @@ public:
 	            const vector<LogicalType> &source_types_p)
 	    : DirectRankedPrefix(optimizer_p, source_bindings_p, source_types_p, {condition_p.scope}, condition_p.fixed),
 	      condition(condition_p) {
-		if (!condition.limit.constant) {
-			limit_bound = condition.limit.data.GroupBound(optimizer);
-			limit_index = AddGroupBound(0, *limit_bound);
-		}
 	}
 
 private:
 	const Condition &condition;
-	//! The group bound of the data limit; null for a constant limit.
-	unique_ptr<DecideGroupBound> limit_bound;
-	idx_t limit_index = DConstants::INVALID_INDEX;
 	//! P1: the weight of the row, and what the weight of a row fixed to 1 and the objective's rows add.
 	ColumnBinding weight;
+	//! P1: the data limit on the rows of a group, NULL on the others; unset for a constant limit.
+	ColumnBinding limit;
 	//! The weight of a row fixed to 1, NULL elsewhere; set only with fixed rows.
 	ColumnBinding fixed_weight;
 	//! Whether the budget's `when` keeps the row, in P1 and in P2; set only when the objective counts the budget's rows
@@ -311,6 +306,11 @@ private:
 		if (auto check = DirectCheckNumber(optimizer, weight, condition.budget.names[0], values)) {
 			layout.checks_above.push_back(std::move(check));
 		}
+		if (!condition.limit.constant) {
+			auto eligible = levels[0].scoped ? Column(LogicalType::BOOLEAN, state.scopes[0].eligible) : nullptr;
+			auto value = calc.Cast(calc.Wrap(over_state(*condition.limit.data.value)), LogicalType::DOUBLE);
+			limit = p1.Add(calc.Out(DirectOnKeptRows(calc, eligible, value)));
+		}
 		layout.rank_key = weight;
 		return layout;
 	}
@@ -331,14 +331,12 @@ private:
 		}
 	}
 
-	//! The group's limit B as a DOUBLE: NULL when the group has no limit (a NULL data limit skips its instance). The
-	//! group's value is the tightest of its rows': the MIN of a maximum, the MAX of a minimum.
+	//! The group's limit B as a DOUBLE: NULL when the group has no limit (a NULL data limit skips its instance).
 	ExprPtr LimitOf() const {
 		if (condition.limit.constant) {
 			return calc.Num(condition.limit.number);
 		}
-		auto &limit = GroupValues(0, limit_index);
-		return calc.Cast(condition.at_least ? limit.lower : limit.upper, LogicalType::DOUBLE);
+		return Column(LogicalType::DOUBLE, limit);
 	}
 
 	//! Whether `total <= B` (`total >= B` for a minimum); true when the group has no limit.

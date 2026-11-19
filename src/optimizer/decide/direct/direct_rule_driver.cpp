@@ -214,10 +214,6 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	auto &decide = op->Cast<LogicalDecide>();
 	D_ASSERT(decide.children.size() == 1 && decide.children[0]);
 	auto ir = DirectIR::Read(optimizer.context, decide);
-	if (ir.bounds_to_record) {
-		RecordReducedBounds(optimizer, decide);
-		ir = DirectIR::Read(optimizer.context, decide);
-	}
 	auto &source = *decide.children[0];
 	struct AppliedCandidate {
 		const DirectSolveRule *rule;

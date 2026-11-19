@@ -125,19 +125,12 @@ ExprPtr DirectBoxIsEmpty(const ExpressionBuilder &calc, const ExprPtr &lower, co
 // The limit of an aggregate constraint
 //===--------------------------------------------------------------------===//
 
-//! A limit read from the data: a source column or an expression over source columns, or the bound-side rewrite's
-//! aggregates of the group (DecideGroupBound). The plan takes the group's tightest value of a `value`
-//! (DirectTightestBound) and computes a `group`'s aggregates in its group aggregate. A NULL skips its instance: the
-//! group's MIN or MAX passes over it.
+//! A limit read from the data: an expression over source columns and the bound-side rewrite's side tables, which has
+//! one value on every row of its clause's group (the rewrite reads a bound that may differ within a group as the
+//! group's tightest value). A NULL skips its instance.
 struct DirectDataLimit {
 	ExpressionType comparison = ExpressionType::INVALID;
-	//! The limit, one value on every kept row of a group already. Null with a `group`.
 	unique_ptr<Expression> value;
-	unique_ptr<DecideGroupBound> group;
-
-	//! The group bound the plan computes: the `group` the rewrite left, or else the tightest of the per-row `value`
-	//! in the group (DirectTightestBound).
-	unique_ptr<DecideGroupBound> GroupBound(Optimizer &optimizer) const;
 };
 
 //! The limit of one aggregate constraint: a constant, or a value of the data.
@@ -152,8 +145,7 @@ struct DirectLimit {
 //! DECIDE_EFFECTIVE_INFINITY (from there the solver stops reading a right side as a number, so those stay with it), or
 //! a value of the data, which is read at run time instead. A value of the data is a numeric, deterministic expression
 //! over source columns that mentions at least one and may raise (the plan evaluates it on the rows that read it, as the
-//! solver does, so both raise on the same inputs), or the aggregates of its group that the bound-side rewrite left to
-//! the plan (DirectGroupBoundIsReadable). False when it is neither.
+//! solver does, so both raise on the same inputs). False when it is neither.
 bool DirectReadLimit(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &constraint,
                      DirectLimit &limit);
 

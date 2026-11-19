@@ -212,10 +212,6 @@ ExprPtr DirectBoxIsEmpty(const ExpressionBuilder &calc, const ExprPtr &lower, co
 	                 calc.Cmp(ExpressionType::COMPARE_EQUAL, upper, calc.Num(NEGATIVE_INFINITY))});
 }
 
-unique_ptr<DecideGroupBound> DirectDataLimit::GroupBound(Optimizer &optimizer) const {
-	return group ? group->Copy() : DirectTightestBound(optimizer, comparison, value->Copy(), string(), nullptr);
-}
-
 bool DirectReadLimit(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &constraint,
                      DirectLimit &limit) {
 	if (TryEvaluateFoldableDouble(context, *constraint.rhs, limit.number, DIRECT_FINITE_CONSTANT)) {
@@ -223,13 +219,6 @@ bool DirectReadLimit(const DirectIR &ir, ClientContext &context, const DirectIRC
 		return std::fabs(limit.number) < DECIDE_EFFECTIVE_INFINITY;
 	}
 	limit.data.comparison = constraint.comparison;
-	if (constraint.group_bound) {
-		if (!DirectGroupBoundIsReadable(ir, *constraint.group_bound)) {
-			return false;
-		}
-		limit.data.group = constraint.group_bound->Copy();
-		return true;
-	}
 	if (!DirectIsSourceOnlyNumericMayRaise(*constraint.rhs, ir.decide_index, ir.source_bindings)) {
 		return false;
 	}

@@ -1,6 +1,5 @@
 #include "duckdb/optimizer/decide/direct/direct_ranked_prefix.hpp"
 
-#include "duckdb/optimizer/column_binding_replacer.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression/bound_window_expression.hpp"
@@ -19,15 +18,6 @@ DirectRankedPrefix::DirectRankedPrefix(Optimizer &optimizer_p, const vector<Colu
 	for (auto &scope : scopes) {
 		levels.emplace_back(scope.get());
 	}
-}
-
-idx_t DirectRankedPrefix::AddGroupBound(idx_t level, const DecideGroupBound &bound) {
-	levels[level].bounds.push_back(&bound);
-	return levels[level].bounds.size() - 1;
-}
-
-const DirectGroupValues &DirectRankedPrefix::GroupValues(idx_t level, idx_t bound) const {
-	return levels[level].bound_values[bound];
 }
 
 ExprPtr DirectRankedPrefix::RankKey() const {
@@ -104,47 +94,13 @@ DirectScopeState DirectRankedPrefix::ProjectScopes(unique_ptr<LogicalOperator> r
 	return DirectProjectScopes(binder, std::move(rows), std::move(scopes), std::move(flags));
 }
 
-void DirectRankedPrefix::LayoutGroupInputs(DirectProjectionStage &p1, const DirectScopeState &state,
-                                           vector<unique_ptr<Expression>> &checks) {
-	auto over_state = [&](const Expression &value) {
-		return OverState(state, value);
-	};
-	for (idx_t i = 0; i < levels.size(); i++) {
-		auto &level = levels[i];
-		auto eligible = level.scoped ? Column(LogicalType::BOOLEAN, state.scopes[i].eligible) : nullptr;
-		for (auto bound : level.bounds) {
-			level.bound_inputs.push_back(
-			    DirectLayoutGroupInputs(optimizer, calc, p1, *bound, eligible, over_state, &checks));
-		}
-	}
-}
-
-void DirectRankedPrefix::AppendGroupChecks(vector<unique_ptr<Expression>> &checks) const {
-	for (auto &level : levels) {
-		for (auto &values : level.bound_values) {
-			for (auto &check : values.checks) {
-				checks.push_back(calc.Out(check));
-			}
-		}
-	}
-}
-
-bool DirectRankedPrefix::HasGroupBounds() const {
-	for (auto &level : levels) {
-		if (!level.bounds.empty()) {
-			return true;
-		}
-	}
-	return false;
-}
-
 DirectRankedPrefix::Stage DirectRankedPrefix::ProjectRows(unique_ptr<LogicalOperator> rows) {
 	auto state = ProjectScopes(std::move(rows));
 	auto over_state = [&](const Expression &value) {
 		return OverState(state, value);
 	};
 
-	// P1: what each group bound reads, the rule's columns, and the checks below the rank window.
+	// P1: the rule's columns, and the checks below the rank window.
 	Stage result;
 	auto &columns = result.columns;
 	DirectProjectionStage p1(binder.GenerateTableIndex());
@@ -159,7 +115,6 @@ DirectRankedPrefix::Stage DirectRankedPrefix::ProjectRows(unique_ptr<LogicalOper
 		columns.fixed_zero = p1.Add(FixedZero(state));
 	}
 	vector<unique_ptr<Expression>> checks_below;
-	LayoutGroupInputs(p1, state, result.checks);
 	key_fixed_one = columns.fixed_one;
 	key_fixed_zero = columns.fixed_zero;
 	// The checks of the rows the clauses fix: each value a row fixes, and a row fixed to both values.
@@ -203,51 +158,14 @@ void DirectRankedPrefix::RankRows(Stage &rows) {
 	// W1: per level, the rank and the rule's windows share one partition and one order, so DuckDB sorts once.
 	auto &columns = rows.columns;
 	for (idx_t i = 0; i < levels.size(); i++) {
-		auto &level = levels[i];
 		auto &at = columns.levels[i];
 		auto w1 = make_uniq<LogicalWindow>(binder.GenerateTableIndex());
 		w1->expressions.push_back(RankWindow(i, columns));
 		at.rank = ColumnBinding(w1->window_index, 0);
 		AddGroupWindows(i, *w1, columns);
-		DirectWindowSink sink(*w1, [&](BoundWindowExpression &aggregate) { OverRank(at, aggregate); });
-		auto in_group = level.scoped ? Column(LogicalType::BOOLEAN, at.eligible) : nullptr;
-		for (idx_t j = 0; j < level.bounds.size(); j++) {
-			level.bound_values.push_back(
-			    DirectAddGroupBound(calc, *level.bounds[j], level.bound_inputs[j], sink, in_group));
-		}
 		w1->children.push_back(std::move(rows.plan));
 		rows.plan = std::move(w1);
 	}
-}
-
-void DirectRankedPrefix::HoistGroupValues(Stage &ranked, ColumnBindingReplacer &forwarded) {
-	// PL: what each group bound gives (its limits and its checks) is computed once per row, here, and P2 reads the
-	// columns (loop-invariant code motion): the expressions are arithmetic over the group's aggregates, and a rule
-	// reads them at several places, some of them under a CASE, where DuckDB's common subexpression elimination does not
-	// look. P2 reads P1's and W1's columns too, so PL forwards every column W1 has, and P2's expressions are re-pointed
-	// at the forwards (HoistGroupValues's caller).
-	ranked.plan->ResolveOperatorTypes();
-	auto bindings = ranked.plan->GetColumnBindings();
-	DirectProjectionStage pl(binder.GenerateTableIndex());
-	auto moved = pl.Forward(bindings, ranked.plan->types);
-	for (idx_t i = 0; i < bindings.size(); i++) {
-		forwarded.replacement_bindings.emplace_back(bindings[i], moved[i]);
-	}
-	auto hoist = [&](ExprPtr &value) {
-		if (value) {
-			value = Column(value->return_type, pl.Add(calc.Out(value)));
-		}
-	};
-	for (auto &level : levels) {
-		for (auto &values : level.bound_values) {
-			hoist(values.upper);
-			hoist(values.lower);
-			for (auto &check : values.checks) {
-				hoist(check);
-			}
-		}
-	}
-	ranked.plan = pl.Finish(std::move(ranked.plan));
 }
 
 DirectRankedPrefix::Stage DirectRankedPrefix::ProjectPrefix(Stage ranked) {
@@ -255,12 +173,6 @@ DirectRankedPrefix::Stage DirectRankedPrefix::ProjectPrefix(Stage ranked) {
 	auto &input = ranked.columns;
 	Stage result;
 	auto &second = result.columns;
-	ColumnBindingReplacer forwarded;
-	bool has_bounds = HasGroupBounds();
-	if (has_bounds) {
-		HoistGroupValues(ranked, forwarded);
-	}
-	optional_ptr<LogicalOperator> hoisted = has_bounds ? ranked.plan.get() : nullptr;
 	DirectProjectionStage p2(binder.GenerateTableIndex());
 	second.source = p2.Forward(input.source, source_types);
 	for (idx_t i = 0; i < levels.size(); i++) {
@@ -278,15 +190,10 @@ DirectRankedPrefix::Stage DirectRankedPrefix::ProjectPrefix(Stage ranked) {
 	}
 	auto checks = std::move(ranked.checks);
 	AppendChecks(checks, LayoutPrefix(p2, input));
-	AppendGroupChecks(checks);
 	if (!checks.empty()) {
 		second.valid = p2.Add(DirectAllHold(calc, std::move(checks)));
 	}
 	result.plan = p2.Finish(std::move(ranked.plan));
-	if (hoisted) {
-		forwarded.stop_operator = hoisted;
-		forwarded.VisitOperator(*result.plan);
-	}
 	return result;
 }
 

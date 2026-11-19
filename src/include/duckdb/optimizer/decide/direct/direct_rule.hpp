@@ -154,10 +154,6 @@ struct DirectIRConstraint {
 	ExpressionType comparison = ExpressionType::INVALID;
 	vector<DirectPart> lhs;
 	unique_ptr<Expression> rhs;
-	//! Set when the bound-side rewrite left the bound to the rule (DecideReducedBound): the rule computes its
-	//! aggregates in its own group aggregate, with `rhs` as the rewrite saw it. Null when `rhs` is one value per group
-	//! already.
-	unique_ptr<DecideGroupBound> group_bound;
 	//! True when the comparison is a bound on one decision, read into `bound` by the solver path's own classifier
 	//! (DecideReadSingletonRow): the values it admits, on each row it keeps.
 	bool singleton_row = false;
@@ -233,9 +229,6 @@ struct DirectIR {
 	DirectIRObjective objective;
 	//! The scope checks the plan makes on the source rows, which the rule driver adds above every rule's plan.
 	vector<DirectRowCheck> row_checks;
-	//! A bound the bound-side rewrite left to the rule cannot be computed by it (its sum has a `when` of its own): the
-	//! driver records the aggregates of its group (RecordReducedBounds) and reads the IR again.
-	bool bounds_to_record = false;
 	//! NOT_PROVED when the DECIDE operator owes the rows a check the plan cannot make: a reducer's own `per` whose
 	//! classes split by the variants of its body (KeyedScopeInfo::signature).
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;

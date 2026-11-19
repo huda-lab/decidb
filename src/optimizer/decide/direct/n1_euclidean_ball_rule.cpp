@@ -13,7 +13,6 @@
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
-#include "duckdb/planner/operator/logical_window.hpp"
 
 namespace duckdb {
 
@@ -233,7 +232,6 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //!   scope the row's membership and group key (DirectProjectScope)
 //!   P1    raw values: every coefficient, constant, limit and the limit's slope, each on the rows that read it
 //!   P2    K and b of the row, the factor q of its square in the limit, and the check on every raw value
-//!   [W1]  the group's tightest limit, for a limit read from the data
 //!   P3    the row's target (or direction) in the domain and its point (the direction over q), whether it lost
 //!         precision, whether it is in a ball and whether its square is in the ball's sum (q > 0), and the ball's limit
 //!   P4    the row's share of h (the limit's term q * p^2 at its point p), every other check a row can raise, and
@@ -265,9 +263,6 @@ public:
 	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context),
 	      source_bindings(source_bindings_p), source_types(source_types_p) {
 		D_ASSERT(source_bindings.size() == source_types.size());
-		if (!condition.limit.constant) {
-			limit_bound = condition.limit.data.GroupBound(optimizer);
-		}
 	}
 
 	//! The class plan over the first read `rows`: the group key's columns, then the group's values
@@ -283,21 +278,9 @@ public:
 		DirectProjectionStage p2(binder.GenerateTableIndex());
 		auto coefficients = ComputeCoefficients(p2, raw);
 		plan = p2.Finish(std::move(plan));
-		auto carried = coefficients.carried;
-
-		DirectGroupValues limit_values;
-		if (limit_bound) {
-			auto limit_window = make_uniq<LogicalWindow>(binder.GenerateTableIndex());
-			DirectWindowSink sink(*limit_window,
-			                      [&](BoundWindowExpression &aggregate) { PartitionByGroup(carried, aggregate); });
-			limit_values = DirectAddGroupBound(calc, *limit_bound, coefficients.limit_inputs, sink,
-			                                   condition.scope.Scoped() ? Boolean(carried.eligible) : nullptr);
-			limit_window->children.push_back(std::move(plan));
-			plan = std::move(limit_window);
-		}
 
 		DirectProjectionStage p3(binder.GenerateTableIndex());
-		auto targets = ComputeTargets(p3, coefficients, limit_values);
+		auto targets = ComputeTargets(p3, coefficients);
 		plan = p3.Finish(std::move(plan));
 
 		DirectProjectionStage p4(binder.GenerateTableIndex());
@@ -310,7 +293,7 @@ public:
 		}
 		stage.Add(DirectHashAggregate(optimizer, calc, "sum", Double(lengths.squared_length)));
 		stage.Add(DirectHashAggregate(optimizer, calc, "bool_and", Boolean(lengths.valid)));
-		if (limit_bound) {
+		if (!condition.limit.constant) {
 			// The limit is one value on the rows a group's ball holds, and NULL on the others.
 			stage.Add(DirectHashAggregate(optimizer, calc, "max", Double(lengths.limit)));
 		}
@@ -349,7 +332,7 @@ public:
 		// its factor q is positive.
 		auto in_ball = condition.scope.Scoped() ? Boolean(carried.eligible) : calc.Bool(true);
 		ExprPtr limit = calc.Num(condition.limit.number);
-		if (limit_bound) {
+		if (!condition.limit.constant) {
 			limit = Double(joined.answers[next]);
 			in_ball = calc.And(in_ball, calc.Not(calc.IsNull(limit)));
 		}
@@ -385,15 +368,16 @@ private:
 		//! The slope `s` inside the limit's square, on the rows the clause keeps: a column only for a slope that is a
 		//! value of the row.
 		ColumnBinding slope;
-		//! What the aggregates of the limit read, one member per input of the limit's group bound.
-		vector<DirectGroupInputColumns> limit_inputs;
+		//! The data limit on the rows the clause keeps, NULL on the others (it has one value in each group); unset for
+		//! a constant limit.
+		ColumnBinding limit;
 		vector<DirectQuadraticColumns> parts;
 		vector<unique_ptr<Expression>> checks;
 	};
 	//! Columns of P2.
 	struct Coefficients {
 		DirectCarried carried;
-		vector<DirectGroupInputColumns> limit_inputs;
+		ColumnBinding limit;
 		ColumnBinding a;
 		//! The linear coefficient oriented as a minimum; the direction -b of a row with no square.
 		ColumnBinding b;
@@ -448,8 +432,6 @@ private:
 	ExpressionBuilder calc;
 	vector<ColumnBinding> source_bindings;
 	vector<LogicalType> source_types;
-	//! The group bound of the data limit; null for a constant limit.
-	unique_ptr<DecideGroupBound> limit_bound;
 
 	ExprPtr Double(ColumnBinding binding) const {
 		return calc.Col(LogicalType::DOUBLE, binding);
@@ -467,14 +449,6 @@ private:
 	//! Whether the factor q is positive, built from the factor in both cases: a constant slope folds it to true.
 	ExprPtr Positive(const ExprPtr &q) const {
 		return calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, q, calc.Num(0.0));
-	}
-
-	//! Makes `window` run over the rows of the row's group. A row outside every ball reads NULL in the window's input,
-	//! so it adds nothing to the group whose key it shares, and the answer does not read what the window returns on it.
-	void PartitionByGroup(const DirectCarried &carried, BoundWindowExpression &window) const {
-		for (idx_t i = 0; i < carried.keys.size(); i++) {
-			window.partitions.push_back(calc.Out(calc.Col(carried.key.types[i], carried.keys[i])));
-		}
 	}
 
 	//! The scope of a read of the source: [W0] and the scope projection, which both reads take.
@@ -504,18 +478,16 @@ private:
 		Raw raw;
 		raw.carried = p1.Forward(from_scope, source_types, condition.scope.Scoped());
 		auto eligible = condition.scope.Scoped() ? Boolean(from_scope.eligible) : nullptr;
-		if (limit_bound) {
-			raw.limit_inputs = DirectLayoutGroupInputs(
-			    optimizer, calc, p1, *limit_bound, eligible,
-			    [&](const Expression &value) { return Over(value, state_index); }, &raw.checks);
-		}
 		auto over_state = [&](const Expression &value) {
 			return Over(value, state_index);
 		};
+		if (!condition.limit.constant) {
+			auto limit = calc.Cast(calc.Wrap(over_state(*condition.limit.data.value)), LogicalType::DOUBLE);
+			raw.limit = p1.Add(calc.Out(DirectOnKeptRows(calc, eligible, limit)));
+		}
 		// A constant slope is the plan's literal (Factor): no column and no check.
 		if (!condition.constant_slope) {
-			// The slope of the limit's square is read and checked on the rows the clause keeps, as the limit's inputs
-			// are.
+			// The slope of the limit's square is read and checked on the rows the clause keeps, as the limit is.
 			auto slope =
 			    DirectOnKeptRows(calc, eligible, calc.Wrap(DirectSumOf(optimizer, condition.slope.linear, over_state)));
 			raw.slope = p1.Add(calc.Out(slope));
@@ -538,16 +510,8 @@ private:
 	Coefficients ComputeCoefficients(DirectProjectionStage &p2, Raw &raw) const {
 		Coefficients result;
 		result.carried = p2.Forward(raw.carried, source_types, condition.scope.Scoped());
-		for (idx_t i = 0; i < raw.limit_inputs.size(); i++) {
-			DirectGroupInputColumns columns;
-			if (raw.limit_inputs[i].reads.table_index != DConstants::INVALID_INDEX) {
-				columns.reads = p2.Add(calc.Out(Boolean(raw.limit_inputs[i].reads)));
-			}
-			if (raw.limit_inputs[i].argument.table_index != DConstants::INVALID_INDEX) {
-				auto type = limit_bound->inputs[i].argument->return_type;
-				columns.argument = p2.Add(calc.Out(calc.Col(type, raw.limit_inputs[i].argument)));
-			}
-			result.limit_inputs.push_back(columns);
+		if (!condition.limit.constant) {
+			result.limit = p2.Add(calc.Out(Double(raw.limit)));
 		}
 		auto sum = DirectFoldQuadratic(optimizer, calc, condition.parts, raw.parts, 0);
 		result.a = p2.Add(calc.Out(sum.a));
@@ -605,16 +569,15 @@ private:
 	}
 
 	//! The first read: the row's target, whether it is in a ball, and the ball's limit.
-	Targets ComputeTargets(DirectProjectionStage &p3, const Coefficients &coefficients,
-	                       const DirectGroupValues &limit_values) const {
+	Targets ComputeTargets(DirectProjectionStage &p3, const Coefficients &coefficients) const {
 		Targets result;
 		result.carried = p3.Forward(coefficients.carried, source_types, condition.scope.Scoped());
 		auto row = TargetOf(coefficients);
 		// A row is in a ball when the clause keeps it and the group has a limit.
 		auto in_ball = condition.scope.Scoped() ? Boolean(coefficients.carried.eligible) : calc.Bool(true);
 		ExprPtr limit = calc.Num(condition.limit.number);
-		if (limit_bound) {
-			limit = calc.Cast(limit_values.upper, LogicalType::DOUBLE);
+		if (!condition.limit.constant) {
+			limit = Double(coefficients.limit);
 			in_ball = calc.And(in_ball, calc.Not(calc.IsNull(limit)));
 		}
 		result.limit = p3.Add(calc.Out(limit));
@@ -627,14 +590,10 @@ private:
 		result.in_ball = p3.Add(calc.Out(in_ball));
 		result.in_sum = p3.Add(calc.Out(calc.And(in_ball, row.positive)));
 		result.loses_precision = p3.Add(calc.Out(row.loses_precision));
-		// The checks of the row's values hold first, then the factor q of its square, then what the limit gives: a
-		// group's NaN limit.
+		// The checks of the row's values hold first, then the factor q of its square.
 		vector<unique_ptr<Expression>> checks;
 		checks.push_back(calc.Out(Boolean(coefficients.valid)));
 		checks.push_back(DirectRaiseTooLarge(optimizer, Factor(coefficients.q), condition.limit_written));
-		for (auto &check : limit_values.checks) {
-			checks.push_back(calc.Out(check));
-		}
 		result.valid = p3.Add(DirectAllHold(calc, std::move(checks)));
 		return result;
 	}
@@ -702,7 +661,7 @@ private:
 	//! The columns ComputeClassValues gives after the key: the length, whether h is below the normal range, whether the
 	//! checks held, then whether h is 0 (with no square) and the group's limit (read from the data).
 	idx_t ClassValueCount() const {
-		return 3 + (condition.has_square ? 0 : 1) + (limit_bound ? 1 : 0);
+		return 3 + (condition.has_square ? 0 : 1) + (condition.limit.constant ? 0 : 1);
 	}
 
 	//! The group's row over the aggregate `classes` (the key, then h, whether the rows' checks held and the limit):
@@ -725,7 +684,7 @@ private:
 		if (!condition.has_square) {
 			c.Add(calc.Cmp(ExpressionType::COMPARE_EQUAL, total, calc.Num(0.0)));
 		}
-		if (limit_bound) {
+		if (!condition.limit.constant) {
 			c.Add(Double(bindings[keys + 2]));
 		}
 		return c.Finish(std::move(classes));

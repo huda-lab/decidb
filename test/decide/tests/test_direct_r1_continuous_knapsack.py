@@ -2129,25 +2129,21 @@ def test_r1_a_nan_limit_of_reducers_raises_the_solver_error(decidb_cli, budget, 
     assert str(direct_error.value) == str(solver_error.value)
 
 
-# A budget limit that is a function of reducers over exactly the budget's group is computed in the aggregate of the group
-# totals (stage 2): the source stays a chain of scans, with no window under the plan and no side table. A reducer over
-# other rows than the group's is a side table (`direct_bound`): its aggregate, one row per group, is joined back to the
-# rows of each read by the key with a SINGLE join (a scalar subquery's form), so the source stays a chain the plan
-# re-scans four times and the bound's NaN check reads once more. The check's verdict is a one-row CTE that gates each of
-# the four reads. The plan is read as JSON, which prints each operator whole: a wide box plan cuts the rule's name.
+# A budget limit read from the data is a column of side tables (`direct_bound`): each reducer's aggregate, and the
+# group's tightest value of a limit that differs within a group, one row per group, joined back to the rows of each read
+# by the key with a SINGLE join (a scalar subquery's form). The source stays a chain the plan re-scans once per stage,
+# and the checks' verdict is a one-row CTE that gates each read. The plan is read as JSON, which prints each operator
+# whole: a wide box plan cuts the rule's name.
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 @pytest.mark.parametrize(
-    "budget, side_table",
+    "budget, tables",
     [
-        pytest.param("SUM(w*x) by (g) <= 0.5 * SUM(pad_0) by (g)", False, id="reducer-of-the-group"),
-        pytest.param("when f: SUM(w*x) by (g) <= 0.5 * COUNT(*) by (g)", False, id="count-of-the-group-under-a-when"),
-        pytest.param("SUM(w*x) <= 0.5 * SUM(pad_0)", False, id="reducer-of-all-rows"),
-        pytest.param("SUM(w*x) <= 0.5 * SUM(pad_0) by (g)", True, id="reducer-by-another-key"),
-        pytest.param("SUM(w*x) by (g) <= 0.5 * SUM(pad_0) by (g) + pad_1", True, id="column-beside-the-reducer"),
+        pytest.param("SUM(w*x) by (g) <= 0.5 * SUM(pad_0) by (g)", 1, id="reducer-of-the-group"),
+        pytest.param("SUM(w*x) <= 0.5 * SUM(pad_0) by (g)", 2, id="tightest-value-of-the-group"),
     ],
 )
-def test_r1_plan_has_no_window_under_a_bound_of_the_groups_own_reducers(decidb_cli, budget, side_table):
+def test_r1_reads_a_limit_from_side_tables_and_no_window(decidb_cli, budget, tables):
     out = decidb_cli.execute_raw(f"{REQUIRE_RESCAN}{WIDE_SETUP} EXPLAIN (FORMAT JSON) {_wide_query(budget)}").stdout
     nodes, stack = [], json.loads(out[out.index("[") :])
     while stack:
@@ -2159,21 +2155,12 @@ def test_r1_plan_has_no_window_under_a_bound_of_the_groups_own_reducers(decidb_c
     assert "DECIDE" not in names and "DECIDE_DIAGNOSE" not in names, out
     # The one window is the sort of the items: no bound is a window.
     assert names.count("WINDOW") == 1, out
-    ctes = {info["CTE Name"]: info["Table Index"] for name, info in nodes if name == "CTE"}
-    scans = [info["CTE Index"] for name, info in nodes if name == "CTE_SCAN"]
-    single_joins = sum(1 for name, info in nodes if name == "HASH_JOIN" and info.get("Join Type") == "SINGLE")
+    ctes = [info["CTE Name"] for name, info in nodes if name == "CTE"]
     # The source is never materialized: it is re-scanned once per stage.
-    assert "direct_source" not in ctes, out
-    if not side_table:
-        assert names.count("SEQ_SCAN") == 4 and not ctes and not scans, out
-        return
-    # The four stages' scans, the bound's own read and the check's read.
-    assert names.count("SEQ_SCAN") == 6, out
-    assert set(ctes) == {"direct_bound", "direct_verdict"}, out
-    # The four reads and the check's join the table, and the verdict gates the four reads. The plan's own stages may
-    # join their groups with SINGLE joins as well.
-    assert scans.count(ctes["direct_bound"]) == 4 + 1 and scans.count(ctes["direct_verdict"]) == 4, out
-    assert single_joins >= scans.count(ctes["direct_bound"]), out
+    assert sorted(ctes) == ["direct_bound"] * tables + ["direct_verdict"], out
+    # The table grouped by `g` joins each of the four reads; a table of one row, the whole query's, is a cross product.
+    single_joins = sum(1 for name, info in nodes if name == "HASH_JOIN" and info.get("Join Type") == "SINGLE")
+    assert single_joins >= 4, out
 
 
 # The source is a chain over one table scan, which the plan can re-scan once per stage or read from one copy. It takes the
@@ -3051,42 +3038,6 @@ def test_r1_several_decisions_plan_has_one_sort_one_unpivot_and_one_aggregate(de
     # decision, nothing else.
     unpivots = _profiled_unpivots(decidb_cli, tmp_path, pair)
     assert [(rows, len(inputs)) for rows, inputs in unpivots] == [(4000, 5 if scoped else 4)], unpivots
-
-
-@pytest.mark.cons_aggregate
-@pytest.mark.correctness
-@pytest.mark.parametrize(
-    "decisions, scope",
-    [pytest.param(1, "", id="1-global"), pytest.param(2, " by (g)", id="2-per")],
-)
-def test_r1_a_limit_from_the_data_runs_the_plan_of_a_constant_limit(decidb_cli, tmp_path, decisions, scope):
-    # The group's limits come from the stage that totals the group, so a limit read from the data adds no operator to
-    # the plan of a constant one: one sort over narrow columns, and no window over source columns (a window left is
-    # over the groups, one row each).
-    def query(limit):
-        if decisions == 1:
-            return _wide_query(f"SUM(w*x){scope} <= {limit}")
-        return _wide_pair_query(f"SUM(w*x + w*y){scope} <= {limit}")
-
-    plans = {}
-    for name, limit in (("data", "cap * 500"), ("constant", "1500")):
-        plans[name] = decidb_cli.execute_raw(f"{REQUIRE_RESCAN}{WIDE_SETUP} EXPLAIN {query(limit)}").stdout
-    plan = plans["data"]
-    assert "R1_CONTINUOUS_KNAPSACK" in plan and not re.search(r"│\s+DECIDE(_DIAGNOSE)?\s+│", plan), plan
-    assert _count(plan, "SEQ_SCAN") == 4 and "ORDER_BY" not in plan and len(_ordered_windows(plan)) == 1, plan
-    for operator in (
-        "HASH_GROUP_BY",
-        "UNGROUPED_AGGREGATE",
-        "HASH_JOIN",
-        "CROSS_PRODUCT",
-        "WINDOW",
-        "COLUMN_DATA_SCAN",
-    ):
-        assert _count(plan, operator) == _count(plans["constant"], operator), (operator, plan)
-    windows = _profiled_windows(decidb_cli, tmp_path, query("cap * 500"))
-    ((_, rows, width),) = [window for window in windows if window[0]]
-    assert rows == 2000 * decisions and width <= 6 * 8, (rows, width)
-    assert all(rows <= 8 for ordered, rows, _ in windows if not ordered), windows
 
 
 @pytest.mark.cons_aggregate

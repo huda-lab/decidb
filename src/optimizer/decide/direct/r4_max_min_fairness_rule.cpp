@@ -288,8 +288,9 @@ public:
 		DirectCarried carried;
 		//! The decision's key, for a decision shared by the rows of a key.
 		DirectScopeColumns decision;
-		//! What the limit's aggregates read, one member per input of the limit's group bound.
-		vector<DirectGroupInputColumns> limit_inputs;
+		//! The limit read from the data, on the budget's rows (NULL on the others): one value in each group. Unset for
+		//! a constant limit.
+		ColumnBinding limit;
 		//! The MIN's coefficient `c`, NULL on a row the MIN does not read, the weight (a column only for one read from
 		//! the data, Weight) and the capacity of the row.
 		ColumnBinding coefficient;
@@ -322,9 +323,6 @@ public:
 	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context),
 	      source_bindings(source_bindings_p), source_types(source_types_p) {
 		D_ASSERT(source_bindings.size() == source_types.size());
-		if (!condition.limit.constant) {
-			limit_bound = condition.limit.data.GroupBound(optimizer);
-		}
 	}
 
 	//! The class plan over `row`, the rows of the first read or the rows of their keys: the group key's columns, then
@@ -341,10 +339,9 @@ public:
 		auto unlimited = aggregate.Add(DirectHashAggregate(optimizer, calc, "sum", Double(row.unlimited)));
 		auto allowed = aggregate.Add(DirectHashAggregate(optimizer, calc, "min", Double(row.allowed)));
 		auto valid = aggregate.Add(DirectHashAggregate(optimizer, calc, "bool_and", Boolean(row.valid)));
-		DirectGroupValues limit_values;
-		if (limit_bound) {
-			DirectAggregateSink sink(aggregate);
-			limit_values = DirectAddGroupBound(calc, *limit_bound, row.limit_inputs, sink, nullptr);
+		ColumnBinding limit_value;
+		if (!condition.limit.constant) {
+			limit_value = aggregate.Add(DirectHashAggregate(optimizer, calc, "min", Double(row.limit)));
 		}
 		unique_ptr<LogicalOperator> plan = aggregate.Finish(std::move(row.plan));
 
@@ -357,8 +354,7 @@ public:
 		for (idx_t i = 0; i < keys.size(); i++) {
 			key_values.push_back(calc.Col(carried.key.types[i], keys[i]));
 		}
-		auto limit =
-		    limit_bound ? calc.Cast(limit_values.upper, LogicalType::DOUBLE) : calc.Num(condition.limit.number);
+		auto limit = condition.limit.constant ? calc.Num(condition.limit.number) : Double(limit_value);
 		auto present = DirectClassPresent(calc, carried.key, key_values);
 		auto unlimited_weight = calc.Coalesce({Double(unlimited), zero});
 		auto is_unlimited = Positive(unlimited_weight);
@@ -371,12 +367,6 @@ public:
 		auto need_column = c1.Add(Double(need));
 		auto unlimited_column = c1.Add(unlimited_weight);
 		auto valid_column = c1.Add(Boolean(valid));
-		// The group's limit can fail as a value (a NaN limit, which the solver names); its check is a column of the
-		// group's row.
-		vector<ColumnBinding> limit_checks;
-		for (auto &check : limit_values.checks) {
-			limit_checks.push_back(c1.Add(check));
-		}
 		vector<ColumnBinding> keys1;
 		for (idx_t i = 0; i < keys.size(); i++) {
 			keys1.emplace_back(c1.index, i);
@@ -411,9 +401,6 @@ public:
 		c2.Add(Double(star));
 		vector<unique_ptr<Expression>> checks;
 		checks.push_back(calc.Out(Boolean(valid_column)));
-		for (auto &check : limit_checks) {
-			checks.push_back(calc.Out(Boolean(check)));
-		}
 		auto has_rows = calc.Not(calc.IsNull(Boolean(valid_column)));
 		auto no_budget =
 		    calc.And(has_rows, calc.And(calc.Not(group_unlimited),
@@ -543,8 +530,6 @@ private:
 	ExpressionBuilder calc;
 	vector<ColumnBinding> source_bindings;
 	vector<LogicalType> source_types;
-	//! The group bound of a limit read from the data; null for a constant limit.
-	unique_ptr<DecideGroupBound> limit_bound;
 
 	ExprPtr Double(ColumnBinding binding) const {
 		return calc.Col(LogicalType::DOUBLE, binding);
@@ -562,19 +547,6 @@ private:
 	//! over it, or the column `weight`.
 	ExprPtr Weight(ColumnBinding weight) const {
 		return condition.constant_weight ? calc.Num(condition.weight) : Double(weight);
-	}
-
-	//! Forwards the columns the limit's aggregates read through `stage`.
-	void ForwardLimitInputs(DirectProjectionStage &stage, vector<DirectGroupInputColumns> &inputs) const {
-		for (idx_t i = 0; i < inputs.size(); i++) {
-			if (inputs[i].reads.table_index != DConstants::INVALID_INDEX) {
-				inputs[i].reads = stage.Add(calc.Out(Boolean(inputs[i].reads)));
-			}
-			if (inputs[i].argument.table_index != DConstants::INVALID_INDEX) {
-				auto type = limit_bound->inputs[i].argument->return_type;
-				inputs[i].argument = stage.Add(calc.Out(calc.Col(type, inputs[i].argument)));
-			}
-		}
 	}
 
 	//! The row's capacity: the least upper end of the box on it. A clause's end is +infinity where its `when` drops the
@@ -717,8 +689,10 @@ private:
 		auto laid =
 		    DirectLayoutQuadraticPart(optimizer, calc, p1, condition.objective, 1, source_bindings, over, checks);
 		auto raw_weight = LayoutWeight(p1, over, checks);
-		if (limit_bound) {
-			result.limit_inputs = DirectLayoutGroupInputs(optimizer, calc, p1, *limit_bound, eligible, over, &checks);
+		ColumnBinding limit;
+		if (!condition.limit.constant) {
+			auto value = calc.Cast(calc.Wrap(over(*condition.limit.data.value)), LogicalType::DOUBLE);
+			limit = p1.Add(calc.Out(DirectOnKeptRows(calc, eligible, value)));
 		}
 		auto plan = p1.Finish(std::move(state.plan));
 
@@ -731,7 +705,9 @@ private:
 		if (!condition.constant_weight) {
 			weight = p2.Add(calc.Out(Double(raw_weight)));
 		}
-		ForwardLimitInputs(p2, result.limit_inputs);
+		if (!condition.limit.constant) {
+			limit = p2.Add(calc.Out(Double(limit)));
+		}
 		auto capacity = p2.Add(calc.Out(RowCapacity(clauses)));
 		auto raw_valid = p2.Add(DirectAllHold(calc, std::move(checks)));
 		plan = p2.Finish(std::move(plan));
@@ -740,7 +716,9 @@ private:
 		DirectProjectionStage p3(binder.GenerateTableIndex());
 		result.carried = p3.Forward(carried2, source_types, scoped);
 		result.decision = p3.Forward(decision2, keyed);
-		ForwardLimitInputs(p3, result.limit_inputs);
+		if (!condition.limit.constant) {
+			result.limit = p3.Add(calc.Out(Double(limit)));
+		}
 		result.coefficient = p3.Add(calc.Out(Double(coefficient)));
 		if (!condition.constant_weight) {
 			result.weight = p3.Add(calc.Out(Double(weight)));

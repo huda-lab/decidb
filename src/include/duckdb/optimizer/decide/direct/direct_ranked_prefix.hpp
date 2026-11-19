@@ -10,7 +10,6 @@
 namespace duckdb {
 
 class Binder;
-class ColumnBindingReplacer;
 class LogicalWindow;
 class Optimizer;
 
@@ -58,7 +57,7 @@ struct DirectRowLayout {
 //! the protected virtual members are its steps.
 //!
 //! The rows are ranked over a chain of levels, finest first: each level has a scope (a `by` key, a `when`, a `per`
-//! key), group bounds and a rank. The first level ranks every row not fixed. A level after it ranks, in its own
+//! key) and a rank. The first level ranks every row not fixed. A level after it ranks, in its own
 //! groups and in the rule's order (RankKey), the rows the level before it keeps, and a row is kept by a level
 //! when the rule says it is within the level's limit (WithinLimit) and the levels before keep it (Keeps). S1 and S3
 //! have one level.
@@ -67,12 +66,11 @@ struct DirectRowLayout {
 //!        fixed-value flags
 //!   P1   the rule's columns (LayoutRows), among them the ranking column; the checks of the fixed values; the checks
 //!        below the rank window
-//!   W1   for each level, per group, in order of the ranking column: the rank, what the rule adds (AddGroupWindows),
-//!        and the group limits (AddGroupBound), over the one read. A level's window stands over the last one's, which
+//!   W1   for each level, per group, in order of the ranking column: the rank and what the rule adds
+//!        (AddGroupWindows), over the one read. A level's window stands over the last one's, which
 //!        gives it the keep flag of the level before it as the expression the rule gives (WithinLimit); the rank of
 //!        a level after the first has the flag in its partition
-//!   PL   what the group limits give, once per row, as columns (only with a group limit)
-//!   P2   the rule's prefix columns (LayoutPrefix); the checks above W1 and what the group limits raise
+//!   P2   the rule's prefix columns (LayoutPrefix); the checks above W1
 //!   W2   per group, the size of the prefix (PrefixSize); only a rule whose prefix size needs a window of its own
 //!   H    the rows held in a materialized CTE (DirectHeldRows) over everything above, and the verdict, whether every
 //!        group can be met (GroupVerdict), raised in the hold's naming projection with the checks the plan owes; only
@@ -97,7 +95,7 @@ struct DirectRowLayout {
 //! BoundWindowExpression::PartitionsAreEquivalent into one PhysicalWindow). A level has its own partition, so it has
 //! its own sort, and ties may break differently at each level. The rank of a later level is a ROW_NUMBER over the
 //! group and the keep flag of the level before it (instead of a running count of the kept rows, which DuckDB
-//! evaluates frame by frame); the windows over the whole group (the group limits, a rule's counts) must not split the
+//! evaluates frame by frame); the windows over the whole group (a rule's counts) must not split the
 //! group by that flag, so they keep the group alone as the partition and sort on their own (OverRank).
 class DirectRankedPrefix {
 public:
@@ -146,13 +144,6 @@ protected:
 	//! A: whether the row is selected, where no clause fixes it; the builder lets a fixed row keep its value.
 	virtual ExprPtr Chosen(const DirectRankedColumns &rows) = 0;
 
-	//! Registers a group bound of `level` whose aggregates W1 reads over the level's group, and returns its index into
-	//! GroupValues of the level. A rule registers its bounds when it is built.
-	idx_t AddGroupBound(idx_t level, const DecideGroupBound &bound);
-	//! What the registered bound of `level` gives, over the columns of the level's window; valid in LayoutPrefix and
-	//! after (and in WithinLimit of the level and the levels after it).
-	const DirectGroupValues &GroupValues(idx_t level, idx_t bound) const;
-
 	//! Makes `window`, an aggregate over the whole group, take the group as its partition and the ranking column as
 	//! its order. DuckDB runs a window with no order, or no partition, on one thread and sorts it on its own; with the
 	//! order it stays parallel, and in the first level it shares the rank's sort. Its frame over the whole partition
@@ -181,19 +172,13 @@ protected:
 		return calc.Col(type, binding);
 	}
 
-	//! A level of the chain: the rows and groups it ranks and its group bounds, which a rule reads only through
-	//! `scope` and `scoped`.
+	//! A level of the chain: the rows and groups it ranks, which a rule reads only through `scope` and `scoped`.
 	struct Level {
 		explicit Level(const DirectSharedScope &scope_p) : scope(scope_p), scoped(scope_p.Scoped()) {
 		}
 		const DirectSharedScope &scope;
 		//! Whether the rows have a scope: a `by` key, a `when` or a `per` key.
 		const bool scoped;
-		//! The bounds a rule registered (AddGroupBound), where P1 laid out what each reads, and what each gives once
-		//! the level's window has computed it.
-		vector<const DecideGroupBound *> bounds;
-		vector<vector<DirectGroupInputColumns>> bound_inputs;
-		vector<DirectGroupValues> bound_values;
 	};
 
 	Optimizer &optimizer;
@@ -227,12 +212,6 @@ private:
 
 	//! S: the scope projection over the one read.
 	DirectScopeState ProjectScopes(unique_ptr<LogicalOperator> rows);
-	//! Lays out in `p1` what each registered group bound reads, and appends the checks of what it reads to `checks`.
-	void LayoutGroupInputs(DirectProjectionStage &p1, const DirectScopeState &state,
-	                       vector<unique_ptr<Expression>> &checks);
-	//! Appends the check each group bound makes (a NaN limit raises) to `checks`.
-	void AppendGroupChecks(vector<unique_ptr<Expression>> &checks) const;
-	bool HasGroupBounds() const;
 	Stage ProjectRows(unique_ptr<LogicalOperator> rows);
 	//! The rank of the rows of `level`: ROW_NUMBER over the level's group in the first level, which ranks every row not
 	//! fixed (a fixed row has a NULL ranking value and ranks last), and ROW_NUMBER over the level's group and whether
@@ -240,9 +219,6 @@ private:
 	//! group.
 	unique_ptr<BoundWindowExpression> RankWindow(idx_t level, const DirectRankedColumns &rows) const;
 	void RankRows(Stage &rows);
-	//! Puts what the group bounds give into columns of a projection over W1 (PL), and records in `forwarded` where each
-	//! column of W1 goes, for the stage above to be re-pointed.
-	void HoistGroupValues(Stage &ranked, ColumnBindingReplacer &forwarded);
 	Stage ProjectPrefix(Stage ranked);
 	//! Adds W2 over `prefix`, and holds its rows (DirectHeldRows) where a check stands above the last window.
 	void CloseGroups(Stage &prefix);

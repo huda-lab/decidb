@@ -109,7 +109,6 @@ void DecideOptimizer::RetainRowChecks(LogicalDecide &decide) {
 }
 
 void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &root) {
-	RunPass("optimizer.record_bounds", [&] { RecordReducedBounds(optimizer, decide); });
 	RunPass("optimizer.tag_groups", [&] { TagAtomicRemovalGroups(decide); });
 	// A range over decisions becomes a helper before any rewrite copies it.
 	RunPass("optimizer.frame_ranges", [&] { RewriteFrameRanges(decide); });

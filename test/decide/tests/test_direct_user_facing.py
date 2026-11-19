@@ -1336,7 +1336,19 @@ def _late_materialization_decide(rule, relation="rr_src"):
 
 
 def _table_scans(plan, table="rr_src"):
-    return len(re.findall(rf"Table: {table}\b", plan))
+    """Scans of `table` in a box or a JSON plan."""
+    return len(re.findall(rf'Table: {table}\b|"Table":\s*"{table}"', plan))
+
+
+def _json_plan(cli, setup, query):
+    """The JSON plan of `query`: a wide box plan cuts names across lines."""
+    return _raw(cli, setup + f"EXPLAIN (FORMAT JSON) {query}").stdout
+
+
+def _applied_rule(plan):
+    """The direct rule a JSON plan applies."""
+    match = re.search(r'"Direct solve rule":\s*"(\w+)"', plan)
+    return match.group(1) if match else None
 
 
 def _same_answers(left, right):
@@ -1470,7 +1482,7 @@ _LATE_MATERIALIZATION_AROUND_CTES = {
         "direct_bound",
         2,
     ),
-    # A group bound can fail in a group, so S1 holds every row in a group stage (`direct_group`) and raises the
+    # A limit of the data can fail in a group, so S1 holds every row in a group stage (`direct_group`) and raises the
     # verdict there. The rule's read is the only scan the stage's definition makes, and the payload's is the other.
     "group_stage": (
         "DECIDE x(BOOL) SUCH THAT SUM(x) by (g) <= SUM(cap) by (g) / 2 MAXIMIZE SUM(score * x)",
@@ -1500,8 +1512,8 @@ def test_second_read_reaches_the_row_id_through_the_ctes_around_the_plan(decidb_
         "SELECT COUNT(*) FILTER (WHERE payload = 'payload-' || id::VARCHAR), SUM(score * x::DOUBLE) "
         f"FROM (FROM rr_src {decide}) q"
     )
-    plan = _raw(decidb_cli, setup + f"EXPLAIN {query}").stdout
-    assert "Direct solve rule" in plan and cte in plan and _table_scans(plan) == scans, plan
+    plan = _json_plan(decidb_cli, setup, query)
+    assert _applied_rule(plan) and cte in plan and _table_scans(plan) == scans, plan
     direct, _ = _run(decidb_cli.with_verify_serializer(), setup + query)
     solver, _ = _run(decidb_cli, setup + query, mode="off")
     assert direct[0][0] == _LATE_MATERIALIZATION_ROWS
@@ -1552,8 +1564,9 @@ def test_a_scan_below_a_row_check_reads_only_the_columns_the_plan_needs(decidb_c
         FROM range(5000) t(i);
     """
     decide = "FROM gated_src DECIDE x(BOOL) SUCH THAT SUM(x) <= SUM(cap) by (g) / 4 MAXIMIZE SUM(score * x)"
-    plan = _raw(decidb_cli, setup + f"EXPLAIN SELECT COUNT(*), SUM(x) FROM ({decide}) q").stdout
-    assert "S1_UNIFORM_MATROID" in plan and "direct_verdict" in plan, plan
+    narrow = f"SELECT COUNT(*), SUM(x) FROM ({decide}) q"
+    plan = _json_plan(decidb_cli, setup, narrow)
+    assert _applied_rule(plan) == "S1_UNIFORM_MATROID" and "direct_verdict" in plan, plan
     assert "payload" not in plan, plan
     rows, _ = _run(decidb_cli, setup + f"SELECT COUNT(*), SUM(x::INT) FROM ({decide}) q")
     solver, _ = _run(decidb_cli, setup + f"SELECT COUNT(*), SUM(x::INT) FROM ({decide}) q", mode="off")
@@ -1575,8 +1588,9 @@ def test_a_copy_of_a_joined_source_holds_only_the_columns_the_plan_reads(decidb_
         "FROM (SELECT s.* FROM joined_src s JOIN joined_one o ON o.k = s.g) s "
         "DECIDE x(BOOL) SUCH THAT SUM(x) <= SUM(cap) by (g) / 4 MAXIMIZE SUM(score * x)"
     )
-    plan = _raw(decidb_cli, setup + f"EXPLAIN SELECT COUNT(*), SUM(x) FROM ({decide}) q").stdout
-    assert "S1_UNIFORM_MATROID" in plan and "direct_source" in plan, plan
+    narrow = f"SELECT COUNT(*), SUM(x) FROM ({decide}) q"
+    plan = _json_plan(decidb_cli, setup, narrow)
+    assert _applied_rule(plan) == "S1_UNIFORM_MATROID" and "direct_source" in plan, plan
     assert "payload" not in plan, plan
     wide = _raw(decidb_cli, setup + f"EXPLAIN SELECT SUM(length(payload)), SUM(x) FROM ({decide}) q").stdout
     assert "direct_source" in wide and "payload" in wide, wide

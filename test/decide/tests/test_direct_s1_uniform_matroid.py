@@ -1808,10 +1808,8 @@ def test_s1_a_data_bound_is_read_over_the_rows_the_clause_keeps(decidb_cli, cons
     assert direct == _outcome(decidb_cli, sql, "off")
 
 
-# A bound that is a function of reducers over exactly the clause's group (`SUM(x) by (g) <= SUM(cap) by (g) / 2`) is
-# computed by S1 in the window it already runs over the group, so no window stands under the plan. A bound that reads
-# other rows than the group's, or a column beside its reducer, is a window column of the source, as is a reducer under a
-# sum with a `when` of its own (S1 sums fewer rows than the reducer reads).
+# A bound that reads reducers is a column of side tables (`direct_bound`) joined back to the rows, and no window
+# computes it. The plan is read as JSON, which prints each operator whole: a wide box plan cuts the rule's name.
 _GROUP_BOUND_ROWS = (
     "(1,'a',3.0,9.0,true),(2,'a',3.0,8.0,false),(3,'a',3.0,7.0,true),(4,'b',1.0,6.0,true),(5,'b',1.0,5.0,true),"
     "(6,'b',2.0,4.0,false),(7,'c',2.0,3.0,true),(8,NULL,2.0,2.0,true)"
@@ -1826,13 +1824,15 @@ def _group_bound_sql(constraint):
 
 
 def _bound_plan(decidb_cli, constraint):
-    plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {_group_bound_sql(constraint)}").stdout
-    assert "S1_UNIFORM_MATROID" in plan, plan
+    plan = decidb_cli.execute_raw(
+        f"SET decide_direct_solve='require'; EXPLAIN (FORMAT JSON) {_group_bound_sql(constraint)}"
+    ).stdout
+    assert '"S1_UNIFORM_MATROID"' in plan, plan
     return plan
 
 
 def _window_count(decidb_cli, constraint):
-    return len(re.findall(r"│\s+WINDOW\s+│", _bound_plan(decidb_cli, constraint)))
+    return len(re.findall(r'"name":\s*"\s*WINDOW\s*"', _bound_plan(decidb_cli, constraint)))
 
 
 def _group_stage_count(decidb_cli, constraint):
@@ -1851,26 +1851,6 @@ _GROUP_STAGE = 1
 @pytest.mark.parametrize(
     "constraint",
     [
-        pytest.param("when g IS NOT NULL: SUM(x) by (g) <= SUM(cap) by (g) / 2", id="sum"),
-        pytest.param("when g IS NOT NULL: SUM(x) by (g) >= COUNT(*) by (g) / 2", id="count"),
-        pytest.param("SUM(x) <= MIN(when keep: cap) + MAX(cap)", id="two-reducers-no-key"),
-    ],
-)
-def test_s1_a_bound_of_the_groups_own_reducers_adds_no_window(decidb_cli, constraint):
-    # No window computes a reducer, and the check of every group is a group stage, not a window over all the rows
-    # (S1-24, FRM-22): the plan has the windows of a constant bound, and one group stage more.
-    assert _window_count(decidb_cli, constraint) == _window_count(decidb_cli, "SUM(x) <= 2")
-    assert _group_stage_count(decidb_cli, "SUM(x) <= 2") == 0
-    assert _group_stage_count(decidb_cli, constraint) == _GROUP_STAGE
-    assert "direct_bound" not in _bound_plan(decidb_cli, constraint)
-
-
-@pytest.mark.var_boolean
-@pytest.mark.cons_aggregate
-@pytest.mark.correctness
-@pytest.mark.parametrize(
-    "constraint",
-    [
         pytest.param("when g IS NOT NULL: SUM(x) <= SUM(cap) by (g) / 2", id="reducer-by-another-key"),
         pytest.param("when g IS NOT NULL: SUM(x) by (g) <= SUM(cap) by (g) / 2 + cap", id="column-beside-the-reducer"),
         pytest.param("when g IS NOT NULL: SUM(when keep: x) by (g) <= SUM(cap) by (g) / 2", id="sum-with-its-own-when"),
@@ -1879,7 +1859,7 @@ def test_s1_a_bound_of_the_groups_own_reducers_adds_no_window(decidb_cli, constr
 def test_s1_a_bound_that_is_not_the_groups_own_is_read_from_a_side_table(decidb_cli, constraint):
     plan = _bound_plan(decidb_cli, constraint)
     # The reducer is a side table (`direct_bound`) joined back to the rows by its key; no bound is a window.
-    assert "direct_bound" in plan and "Join Type: SINGLE" in plan, plan
+    assert "direct_bound" in plan and re.search(r'"Join Type":\s*"SINGLE"', plan), plan
     assert _window_count(decidb_cli, constraint) == _window_count(decidb_cli, "SUM(x) <= 2")
     assert _group_stage_count(decidb_cli, constraint) == _GROUP_STAGE
 

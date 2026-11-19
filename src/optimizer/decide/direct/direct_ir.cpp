@@ -85,7 +85,6 @@ public:
 		ReadConstraints(ir);
 		ReadObjective(ir.objective);
 		ReadRowChecks(ir);
-		ir.bounds_to_record = bounds_to_record;
 		return ir;
 	}
 
@@ -95,8 +94,6 @@ private:
 	DecideTermSplitter splitter;
 	DecideCanonicalizer canonicalizer;
 	vector<ColumnBinding> source_bindings;
-	//! Set while reading: a recorded bound a rule could not reduce.
-	mutable bool bounds_to_record = false;
 
 	//! DirectIR::cross_product: only DECIDE's own child counts. A projection, filter or join between them leaves it
 	//! empty.
@@ -421,28 +418,6 @@ private:
 	// Constraints
 	//===--------------------------------------------------------------------===//
 
-	//! The group bound the bound-side rewrite left to the rule, if it left one for this comparison.
-	void ReadGroupBound(const Expression &comparison, DirectIRConstraint &ir_node) const {
-		for (auto &bound : decide.reduced_bounds) {
-			if (bound.comparison != &comparison) {
-				continue;
-			}
-			// A rule sums the rows the sum reads. With a `when` of its own those are fewer than the rows the bound is
-			// read over, so the rule cannot compute the bound: its aggregates are recorded and the IR is read again.
-			for (auto &part : ir_node.lhs) {
-				if (part.filter) {
-					bounds_to_record = true;
-					return;
-				}
-			}
-			// What the aggregates read is over the source and the placeholders of the reducers other bounds recorded.
-			for (auto &input : bound.group->inputs) {
-				D_ASSERT(!input.invalid || CheckablePredicate(input.invalid.get()));
-			}
-			ir_node.group_bound = bound.group->Copy();
-		}
-	}
-
 	DirectIRConstraint ReadConstraint(const Expression &leaf, const DecideEnclosingScope &wrappers) const {
 		DirectIRConstraint ir_node;
 		idx_t source_id;
@@ -478,7 +453,6 @@ private:
 				ir_node.lhs.push_back(ReadRowPart(*comparison.left));
 			}
 			ir_node.rhs = comparison.right->Copy();
-			ReadGroupBound(leaf, ir_node);
 			// Direct rules run before the MIN/MAX rewrite tags an easy extremum, so only a per-row bound reads here.
 			ir_node.singleton_row = DecideReadSingletonRow(context, decide, comparison, ir_node.bound);
 			// Folding never reads a clause under a `when`: `when c: x <= 0` does not bound `x` everywhere.

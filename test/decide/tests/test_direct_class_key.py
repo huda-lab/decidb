@@ -93,17 +93,17 @@ def test_the_join_of_a_class_compares_each_key_column_by_what_a_null_means(decid
     "name, source, key, expected",
     [
         # A bound read from the data is a side table joined to the rows by the key of its `by`, element by element.
-        ("a-written-column", ROWS, "g", [["="]]),
-        ("a-relation-column", RELATION, "d", [["NDF"]]),
+        ("a-written-column", ROWS, "g", ["="]),
+        ("a-relation-column", RELATION, "d", ["NDF"]),
     ],
 )
 def test_the_join_of_a_bound_compares_each_key_column_by_what_a_null_means(decidb_cli, name, source, key, expected):
     # The side table is built and joined by the source reader, which the solver path uses as well (its plan prints the
-    # DECIDE operator's internal columns, so the comparisons are read from a direct plan). The bound's reducer has a key
-    # of its own, so it is not the clause's group: the table is joined once, and S1 reads the source once (its group
-    # limits are read in its rank window, not by a second read joined back to the rows).
+    # DECIDE operator's internal columns, so the comparisons are read from a direct plan). Every read that joins it
+    # compares the key the same way.
     sql = f"SELECT id, x FROM {source} DECIDE x(BOOL) SUCH THAT SUM(x) <= SUM(v) by ({key}) / 8 MAXIMIZE SUM(v * x)"
-    assert _single_join_conditions(decidb_cli, sql) == expected, name
+    joins = _single_join_conditions(decidb_cli, sql)
+    assert joins and all(join == expected for join in joins), (name, joins)
 
 
 # Rows 1 and 2 have no `g` and name no class, so the clause `per g:` has no instance, and the groups of `by (h)` it
