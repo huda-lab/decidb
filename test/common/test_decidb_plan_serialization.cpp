@@ -257,17 +257,19 @@ TEST_CASE("Parsed DECIDE scope spellings survive ToString and binary round trips
 		Parser parser;
 		REQUIRE_THROWS_WITH(parser.ParseQuery(sql), Catch::Contains(message) && Catch::Contains(token));
 	};
-	const string once = "an objective is produced once: write per (): or leave per out";
+	const string once = "an objective cannot have a per key";
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x <= 1 MAXIMIZE per a: SUM(x)", once);
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x <= 1 MINIMIZE when a = 1 per row: SUM(x)", once);
-	const string parens = "write per a, b: without parentheses; parentheses are only for per ()";
+	const string parens = "a per key cannot be in parentheses";
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT per (a, b): SUM(x) <= 1", parens);
 	rejects("SELECT a FROM t DECIDE per (a): x(INT) SUCH THAT x <= 1", parens);
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT SUM(per (a): x) <= 1", parens);
-	const string names = "a per key lists columns or relations; put expressions in by (...)";
-	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT per a + 1: SUM(x) <= 1", names);
-	rejects("SELECT a FROM t DECIDE per lower(a): x(INT) SUCH THAT x <= 1", names);
-	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT SUM(per 5: x) <= 1", names);
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT per a + 1: SUM(x) <= 1",
+	        "'a + 1' in a per key is not a column or a relation");
+	rejects("SELECT a FROM t DECIDE per lower(a): x(INT) SUCH THAT x <= 1",
+	        "'lower(a)' in a per key is not a column or a relation");
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT SUM(per 5: x) <= 1",
+	        "'5' in a per key is not a column or a relation");
 	// Nothing may trail a scoped constraint (a removed spelling after a scope is a
 	// plain syntax error), and outside DECIDE nothing changed.
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT per a: x <= 1 WHEN b", "syntax error at or near", "WHEN");
@@ -341,20 +343,19 @@ TEST_CASE("Parsed frame selectors survive ToString and binary round trips", "[de
 		Parser parser;
 		REQUIRE_THROWS_WITH(parser.ParseQuery(sql), Catch::Contains(message) && Catch::Contains(token));
 	};
-	const string positive = "must be a positive whole number";
+	const string positive = "in a frame is not a positive whole number";
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(0 previous: x) over (t.p)", positive);
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= sum(from 0 next to last: x) over (t.p)", positive);
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= sum(from first to last every 0: x) over (t.p)", positive);
-	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(prev: x) over (t.p)",
-	        "a frame position is first, last, [k] previous or [k] next, found prev");
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(prev: x) over (t.p)", "'prev' is not a frame position");
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= sum(from first to last evry 2: x) over (t.p)",
-	        "expected every d in a frame selector, found evry");
+	        "'evry' is not a frame keyword");
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(first: x) over (t.p cyclc)",
-	        "expected cyclic or within in a frame selector, found cyclc");
+	        "'cyclc' is not a frame keyword");
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(first: x) over (t.p within t.a + 1)",
-	        "within lists columns or relations, as a per key does");
+	        "'t.a + 1' in within is not a column or a relation");
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= sum(from first to last: x, x) over (t.p)",
-	        "sum(from first to last: e) reduces one expression, found 2");
+	        "a range frame reduces one expression, 'sum' has 2");
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(3 first: x) over (t.p)", "syntax error at or near",
 	        "first");
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(previous else 0 else 1: x) over (t.p)",

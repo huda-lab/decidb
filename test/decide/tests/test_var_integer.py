@@ -18,13 +18,13 @@ import pytest
 @pytest.mark.error_parser
 @pytest.mark.error
 def test_simple_test(decidb_cli):
-    """Omitted type: ``DECIDE x`` is rejected and the message names the fix.
+    """Omitted type: ``DECIDE x`` is rejected, at the name.
 
     This replaces the former default-integer oracle test. A bare ``DECIDE x``
     used to default to an integer variable; now the type is mandatory, so the
-    behaviour worth pinning is the rejection and that it names the fix.
+    behaviour worth pinning is the rejection and where it points.
     """
-    decidb_cli.assert_error(
+    decidb_cli.assert_error_at(
         """
             SELECT x, l_orderkey FROM LINEITEM
             WHERE l_orderkey <= 5
@@ -32,5 +32,6 @@ def test_simple_test(decidb_cli):
             SUCH THAT SUM(x * l_extendedprice) <= 10000
             MAXIMIZE SUM(x * l_extendedprice)
         """,
-        match=r'DECIDE variable "x" needs a type',
+        kind="Parser Error",
+        at="x",
     )

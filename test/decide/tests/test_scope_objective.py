@@ -366,15 +366,15 @@ def test_a_former_two_level_refusal_answers(decidb_cli, scope_solver, objective_
 @pytest.mark.error
 @pytest.mark.error_binder
 def test_a_keyed_objective_is_refused(decidb_cli):
-    result = decidb_cli.execute_raw(
+    decidb_cli.assert_error_at(
         f"""
         SELECT id, x {table('t', GROUPS, GROUP_ROWS)}
         DECIDE x(INT)
         SUCH THAT x <= t.cap
-        MAXIMIZE per t.g: sum(x)"""
+        MAXIMIZE per t.g: sum(x)""",
+        kind="Parser Error",
+        at="per",
     )
-    assert "an objective is produced once: write per (): or leave per out" in result.stderr, result.stderr
-    assert_no_internal_leak(result, "a keyed objective")
 
 
 @pytest.mark.correctness

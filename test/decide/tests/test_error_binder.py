@@ -1195,13 +1195,21 @@ class TestBinderRefusalBranches:
             ("abs(t: x) <= 5", r"A relation qualifier is only allowed on SUM, AVG, MIN or MAX"),
             ("SUM(x) + count(t: w) <= 30", r"'COUNT' cannot be qualified by a relation"),
             ("count(t: x) <= 5", r"COUNT over a DECIDE variable is degenerate"),
-            # A qualifier that is itself qualified, and the relation of the decisions.
-            ("sum(t.u: x) <= 5", r"The qualifier of a reducer must be a relation name or alias"),
+            # The relation of the decisions.
             ("sum(decide_variables: x) <= 5", r"Relation 'decide_variables' is not in the FROM clause"),
         ],
     )
     def test_colon_form(self, decidb_cli, constraint, message):
         _branch_refusal(decidb_cli, f"SUCH THAT x <= 3 AND {constraint} MAXIMIZE SUM(x)", message)
+
+    @pytest.mark.error_parser
+    def test_a_qualified_name_before_a_colon_is_a_parser_error(self, decidb_cli):
+        """A reducer's qualifier is one name per relation: a qualified name is refused where it is written."""
+        decidb_cli.assert_error_at(
+            f"{_BRANCH_ROWS}DECIDE x(INT) SUCH THAT x <= 3 AND sum(t.u: x) <= 5 MAXIMIZE SUM(x)",
+            kind="Parser Error",
+            at="t.u",
+        )
 
     @pytest.mark.parametrize(
         "key, message",

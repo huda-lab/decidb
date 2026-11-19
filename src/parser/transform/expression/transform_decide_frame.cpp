@@ -43,16 +43,13 @@ unique_ptr<ParsedExpression> Transformer::TransformDecideFrame(duckdb_libpgquery
 		const idx_t arguments = call.args ? NumericCast<idx_t>(call.args->length) : 0;
 		auto argument =
 		    arguments == 1 ? PGPointerCast<duckdb_libpgquery::PGNode>(call.args->head->data.ptr_value) : nullptr;
-		auto range = StringUtil::Format("%s(from %s to %s: e)", result->reducer,
-		                                DecideFrameExpression::PositionToString(result->from, result->from_k),
-		                                DecideFrameExpression::PositionToString(result->to, result->to_k));
 		if (arguments != 1) {
 			throw ParserException(optional_idx(NumericCast<idx_t>(root.location)),
-			                      "DECIDE: %s reduces one expression, found %d", range, arguments);
+			                      "a range frame reduces one expression, '%s' has %d", result->reducer, arguments);
 		}
 		if (argument->type == duckdb_libpgquery::T_PGNamedArgExpr) {
 			throw ParserException(optional_idx(NumericCast<idx_t>(root.location)),
-			                      "DECIDE: %s takes its expression without a name", range);
+			                      "an expression in a frame cannot have a name");
 		}
 		result->payload = TransformExpression(*argument);
 	} else {
@@ -75,7 +72,7 @@ unique_ptr<ParsedExpression> Transformer::TransformDecideFrame(duckdb_libpgquery
 	// k and d are positive whole numbers (P8); the grammar reads them as unsigned literals
 	for (auto k : {result->from_k, result->IsRange() ? result->to_k : int64_t(1), result->every}) {
 		if (k <= 0) {
-			throw ParserException(*result, "DECIDE: in %s, %d must be a positive whole number", result->ToString(), k);
+			throw ParserException(*result, "'%d' in a frame is not a positive whole number", k);
 		}
 	}
 	return std::move(result);

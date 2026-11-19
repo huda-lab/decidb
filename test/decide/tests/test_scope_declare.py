@@ -596,12 +596,6 @@ KEY_ERRORS = [
         "DECIDE variable 'region' conflicts with an existing column name.",
         "conflict-after-key",
     ),
-    pytest.param(
-        _decide("per S.demand + 1: x(INT)"),
-        "a per key lists columns or relations; put expressions in by (...)",
-        id="expression",
-        marks=pytest.mark.error_parser,
-    ),
     _binder_error(
         _decide("per depotID: x(INT)", _from(join="FULL OUTER JOIN")),
         "DECIDE: depotID is merged by a FULL OUTER JOIN USING; write S.depotID or D.depotID in the per key",
@@ -640,6 +634,13 @@ def test_key_errors(decidb_cli, sql, message):
     result = decidb_cli.execute_raw(sql)
     assert message in result.stderr, result.stderr
     assert_no_internal_leak(result, "a per key error")
+
+
+@pytest.mark.error
+@pytest.mark.error_parser
+def test_a_key_expression_is_refused_at_the_element(decidb_cli):
+    """The caret is at the expression, not at `per`: the first of two elements that is no column or relation."""
+    decidb_cli.assert_error_at(_decide("per D.region, S.demand + 1: x(INT)"), kind="Parser Error", at="S.demand + 1")
 
 
 @pytest.mark.error

@@ -150,7 +150,7 @@ def test_a_real_duplicate_decide_is_still_rejected(decidb_cli):
     raise this error if an inner declaration leaked. This pins the other half: a
     genuine duplicate is still caught.
     """
-    decidb_cli.assert_error(
+    decidb_cli.assert_error_at(
         """
             SELECT id, x
             DECIDE x(INT)
@@ -159,7 +159,8 @@ def test_a_real_duplicate_decide_is_still_rejected(decidb_cli):
             SUCH THAT x >= 0 AND x <= 9
             MAXIMIZE SUM(x)
         """,
-        match=r"(?i)DECIDE appears twice",
+        kind="Parser Error",
+        at="DECIDE",
     )
 
 

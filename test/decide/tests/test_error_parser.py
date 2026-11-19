@@ -14,32 +14,35 @@ class TestParserErrors:
 
     def test_missing_such_that(self, decidb_cli):
         """DECIDE x(INT) MAXIMIZE ... without SUCH THAT."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT) MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """,
-            match=r"DECIDE requires a SUCH THAT clause",
+            kind="Parser Error",
+            at="MAXIMIZE",
         )
 
     def test_objective_without_such_that_minimize(self, decidb_cli):
         """MINIMIZE where the constraints belong."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT) MINIMIZE SUM(x*l_quantity) LIMIT 1
             """,
-            match=r"DECIDE requires a SUCH THAT clause",
+            kind="Parser Error",
+            at="MINIMIZE",
         )
 
     def test_body_declaration_with_no_tail(self, decidb_cli):
         """A declaration after FROM with nothing of the tail."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT) LIMIT 1
             """,
-            match=r"DECIDE requires a SUCH THAT clause",
+            kind="Parser Error",
+            at="DECIDE",
         )
 
     # The DECIDE tail's declarations sit in two grammar positions, before the FROM clause and after it.
@@ -89,12 +92,13 @@ class TestParserErrors:
 
     def test_comma_separated_constraints_rejected(self, decidb_cli):
         """Top-level SUCH THAT constraints must be separated with AND."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(BOOL)
                 SUCH THAT x <= 1, SUM(x) <= 10
                 MAXIMIZE SUM(x) LIMIT 1
             """,
-            match=r"(?i)comma-separated SUCH THAT constraints are not supported",
+            kind="Parser Error",
+            at=",",
         )

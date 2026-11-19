@@ -558,7 +558,7 @@ makeDecideClause(PGList *decl, PGNode *body, int decl_location,
 		if (clause->variables == NULL)
 			ereport(ERROR,
 					(errcode(PG_ERRCODE_SYNTAX_ERROR),
-					 errmsg("SUCH THAT requires a DECIDE clause; declare the decision variables with DECIDE"),
+					 errmsg("SUCH THAT has no DECIDE clause"),
 					 parser_errposition(body_location)));
 		return body;
 	}
@@ -569,31 +569,65 @@ makeDecideClause(PGList *decl, PGNode *body, int decl_location,
 }
 
 /*
- * DeciDB: the PER half of a scope written in front of a body. A key names
- * columns or relations and nothing else; an expression there is meant for BY,
- * which is where expressions go.
+ * DeciDB: the text of the query from start to end, as the user wrote it, for a message to quote.
  */
-static PGNode *
-makeDecideScope(PGDecidePer per, PGList *key, int location, core_yyscan_t yyscanner)
+static char *
+decideQueryText(int start, int end, core_yyscan_t yyscanner)
 {
-	PGDecideScope *scope = makeNode(PGDecideScope);
+	char *text = (char *) palloc(end - start + 1);
+
+	memcpy(text, pg_yyget_extra(yyscanner)->core_yy_extra.scanbuf + start, end - start);
+	text[end - start] = '\0';
+	return text;
+}
+
+/*
+ * DeciDB: a key lists columns or relations and nothing else, per's and within's alike. An element
+ * that is an expression is refused where it is written: the message quotes it from the query by the
+ * span the parser kept for it (noteDecideExpr), and the caret is at its first character.
+ */
+static void
+decideCheckKey(PGList *key, const char *owner, core_yyscan_t yyscanner)
+{
 	PGListCell *element;
 	PGListCell *field;
+	PGListCell *entry;
 
 	foreach(element, key)
 	{
 		PGNode *name = (PGNode *) lfirst(element);
 		bool is_name = IsA(name, PGColumnRef);
+		PGDecideSpan *span = NULL;
 
 		if (is_name)
 			foreach(field, ((PGColumnRef *) name)->fields)
 				is_name = is_name && IsA((PGNode *) lfirst(field), PGString);
-		if (!is_name)
-			ereport(ERROR,
-					(errcode(PG_ERRCODE_SYNTAX_ERROR),
-					 errmsg("a per key lists columns or relations; put expressions in by (...)"),
-					 parser_errposition(location)));
+		if (is_name)
+			continue;
+		/* every element is an a_expr, so the parser kept its span (the last, the widest, if several) */
+		foreach(entry, pg_yyget_extra(yyscanner)->decide_spans)
+		{
+			if (((PGDecideSpan *) lfirst(entry))->node == name)
+				span = (PGDecideSpan *) lfirst(entry);
+		}
+		Assert(span);
+		ereport(ERROR,
+				(errcode(PG_ERRCODE_SYNTAX_ERROR),
+				 errmsg("'%s' in %s is not a column or a relation",
+						decideQueryText(span->start, span->end, yyscanner), owner),
+				 parser_errposition(span->start)));
 	}
+}
+
+/*
+ * DeciDB: the PER half of a scope written in front of a body.
+ */
+static PGNode *
+makeDecideScope(PGDecidePer per, PGList *key, int location, core_yyscan_t yyscanner)
+{
+	PGDecideScope *scope = makeNode(PGDecideScope);
+
+	decideCheckKey(key, "a per key", yyscanner);
 	scope->per = per;
 	scope->key = key;
 	scope->location = location;
@@ -641,75 +675,6 @@ makeDecideVariableType(const char *name, int location, core_yyscan_t yyscanner)
 	type = makeTypeName((char *) marker);
 	type->location = location;
 	return type;
-}
-
-/*
- * DeciDB: a name as a message quotes it, so the declaration it suggests parses: in double
- * quotes when it is a keyword or holds anything but letters, digits and underscores, the
- * rule DuckDB prints names by (KeywordHelper::WriteOptionallyQuoted).
- */
-static char *
-decideName(const char *name)
-{
-	bool plain = name[0] != '\0';
-	int quotes = 0;
-	const char *c;
-	char *quoted;
-	char *out;
-
-	for (c = name; *c; c++)
-	{
-		bool letter = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || *c == '_';
-		bool digit = c != name && *c >= '0' && *c <= '9';
-		if (!letter && !digit)
-			plain = false;
-		if (*c == '"')
-			quotes++;
-	}
-	if (plain && is_keyword(name) == PGKeywordCategory::PG_KEYWORD_NONE)
-		return pstrdup(name);
-	quoted = (char *) palloc(strlen(name) + quotes + 3);
-	out = quoted;
-	*out++ = '"';
-	for (c = name; *c; c++)
-	{
-		if (*c == '"')
-			*out++ = '"';
-		*out++ = *c;
-	}
-	*out++ = '"';
-	*out = '\0';
-	return quoted;
-}
-
-/*
- * DeciDB: a declaration's scope as written -- per (), per row, per a, D.b -- so a
- * message can name the declaration.
- */
-static char *
-decideScopeText(PGNode *scope_node)
-{
-	PGDecideScope *scope = (PGDecideScope *) scope_node;
-	PGListCell *element;
-	PGListCell *field;
-	char *text;
-
-	if (scope->per == PG_DECIDE_PER_ALL)
-		return psprintf("per ()");
-	if (scope->per == PG_DECIDE_PER_ROW)
-		return psprintf("per row");
-	text = psprintf("per");
-	foreach(element, scope->key)
-	{
-		const char *separator = element == list_head(scope->key) ? " " : ", ";
-
-		foreach(field, ((PGColumnRef *) lfirst(element))->fields)
-		{
-			text = psprintf("%s%s%s", text, separator, decideName(strVal(lfirst(field))));
-			separator = ".";
-		}
-	}
-	return text;
 }
 
 /*
@@ -846,12 +811,12 @@ decideFrameWordIs(const char *word, const char *expected)
 }
 
 static void
-decideFrameWord(char *word, const char *expected, const char *what, int location, core_yyscan_t yyscanner)
+decideFrameWord(char *word, const char *expected, int location, core_yyscan_t yyscanner)
 {
 	if (!decideFrameWordIs(word, expected))
 		ereport(ERROR,
 				(errcode(PG_ERRCODE_SYNTAX_ERROR),
-				 errmsg("DECIDE: expected %s in a frame selector, found %s", what, word),
+				 errmsg("'%s' is not a frame keyword", word),
 				 parser_errposition(location)));
 }
 
@@ -861,7 +826,7 @@ makeDecideFramePrevious(char *word, int k, int location, core_yyscan_t yyscanner
 	if (!decideFrameWordIs(word, "previous"))
 		ereport(ERROR,
 				(errcode(PG_ERRCODE_SYNTAX_ERROR),
-				 errmsg("DECIDE: a frame position is first, last, [k] previous or [k] next, found %s", word),
+				 errmsg("'%s' is not a frame position", word),
 				 parser_errposition(location)));
 	return list_make2(makeInteger(PG_DECIDE_FRAME_PREVIOUS), makeInteger(k));
 }
@@ -871,24 +836,9 @@ makeDecideFrameOver(PGNode *order, bool descending, bool cyclic, PGList *within,
 					core_yyscan_t yyscanner)
 {
 	PGDecideFrame *frame = makeNode(PGDecideFrame);
-	PGListCell *element;
-	PGListCell *field;
 
 	/* within takes a key like per's: columns and relations */
-	foreach(element, within)
-	{
-		PGNode *name = (PGNode *) lfirst(element);
-		bool is_name = IsA(name, PGColumnRef);
-
-		if (is_name)
-			foreach(field, ((PGColumnRef *) name)->fields)
-				is_name = is_name && IsA((PGNode *) lfirst(field), PGString);
-		if (!is_name)
-			ereport(ERROR,
-					(errcode(PG_ERRCODE_SYNTAX_ERROR),
-					 errmsg("DECIDE: within lists columns or relations, as a per key does"),
-					 parser_errposition(location)));
-	}
+	decideCheckKey(within, "within", yyscanner);
 	frame->order = order;
 	frame->descending = descending;
 	frame->cyclic = cyclic;
@@ -935,22 +885,26 @@ makeDecideFrameRange(PGList *funcname, PGList *from, PGList *to, int every, PGNo
 
 /*
  * DeciDB: a relation-qualified reducer, sum(D: expr) or sum(D, T: expr). Every
- * item of the qualifier must be a bare relation name; the binder resolves them.
+ * item of the qualifier must be a bare relation name, one identifier; the binder resolves them.
  */
 static PGNode *
 makeQualifiedReducer(PGList *funcname, PGList *qualifier, PGList *args,
-					 int location, int qualifier_location, int colon_location,
+					 int location, YYLTYPE qualifier_span, int colon_location,
 					 core_yyscan_t yyscanner)
 {
 	PGListCell *lc;
 
 	foreach(lc, qualifier)
 	{
-		if (!IsA((PGNode *) lfirst(lc), PGColumnRef))
+		PGNode *name = (PGNode *) lfirst(lc);
+
+		if (!IsA(name, PGColumnRef) || list_length(((PGColumnRef *) name)->fields) != 1 ||
+			!IsA((PGNode *) linitial(((PGColumnRef *) name)->fields), PGString))
 			ereport(ERROR,
 					(errcode(PG_ERRCODE_SYNTAX_ERROR),
-					 errmsg("the qualifier of a reducer must be a relation name or alias, as in sum(D: ...)"),
-					 parser_errposition(qualifier_location)));
+					 errmsg("'%s' before ':' in a reducer is not a relation",
+							decideQueryText(qualifier_span.start, qualifier_span.end, yyscanner)),
+					 parser_errposition(qualifier_span.start)));
 	}
 	return (PGNode *) makeSimpleAExpr(PG_AEXPR_QUALIFIED_REDUCER, "qualified_reducer",
 									  (PGNode *) makeFuncCall(funcname, args, location),

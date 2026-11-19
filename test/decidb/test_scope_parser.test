@@ -265,49 +265,49 @@ Binder Error: DECIDE: 'PER ROW:' is not supported yet
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= 5 MAXIMIZE per depotID: sum(ship);
 ----
-Parser Error: an objective is produced once: write per (): or leave per out
+Parser Error: an objective cannot have a per key
 
 # an objective is produced once: per row
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= 5 MAXIMIZE when priority per row: sum(ship);
 ----
-Parser Error: an objective is produced once: write per (): or leave per out
+Parser Error: an objective cannot have a per key
 
 # parenthesized key, two columns, on a constraint
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per (depotID, customerID): sum(ship) by (depotID) <= 100 MAXIMIZE SUM(ship);
 ----
-Parser Error: write per a, b: without parentheses; parentheses are only for per ()
+Parser Error: a per key cannot be in parentheses
 
 # parenthesized key, one column, on a declaration
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE per (depotID): ship(INT) SUCH THAT ship <= 5 MAXIMIZE SUM(ship);
 ----
-Parser Error: write per a, b: without parentheses; parentheses are only for per ()
+Parser Error: a per key cannot be in parentheses
 
 # parenthesized key inside a reducer
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(per (depotID): ship) <= 100 MAXIMIZE SUM(ship);
 ----
-Parser Error: write per a, b: without parentheses; parentheses are only for per ()
+Parser Error: a per key cannot be in parentheses
 
 # an expression in a per key: arithmetic
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per dispatchDay + transitDays: sum(ship) <= 100 MAXIMIZE SUM(ship);
 ----
-Parser Error: a per key lists columns or relations; put expressions in by (...)
+Parser Error: 'dispatchDay + transitDays' in a per key is not a column or a relation
 
 # an expression in a per key: a function call, in a declaration
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE per lower(depotID): ship(INT) SUCH THAT ship <= 5 MAXIMIZE SUM(ship);
 ----
-Parser Error: a per key lists columns or relations; put expressions in by (...)
+Parser Error: 'lower(depotID)' in a per key is not a column or a relation
 
 # an expression in a per key: a literal, inside a reducer
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(per 1: ship) <= 100 MAXIMIZE SUM(ship);
 ----
-Parser Error: a per key lists columns or relations; put expressions in by (...)
+Parser Error: '1' in a per key is not a column or a relation
 
 # ---------------------------------------------------------------------------
 # Malformed scopes are ordinary syntax errors.

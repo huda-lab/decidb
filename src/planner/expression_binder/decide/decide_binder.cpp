@@ -1600,14 +1600,10 @@ static BoundAggregateExpression *GetBoundAggregate(Expression &expr) {
 
 BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr, idx_t depth) {
 	auto &ctx = *qualifier_context;
-	// The grammar makes the qualifier a list of names (makeQualifiedReducer), one or more.
+	// The grammar makes the qualifier a list of single names (makeQualifiedReducer), one or more.
 	vector<string> relations;
 	for (idx_t i = 1; i < qualified_expr.children.size(); i++) {
 		auto &qualifier = qualified_expr.children[i]->Cast<ColumnRefExpression>();
-		if (qualifier.IsQualified()) {
-			return BindResult(BinderException::Unsupported(
-			    qualified_expr, "The qualifier of a reducer must be a relation name or alias, as in sum(D: ...)."));
-		}
 		relations.push_back(qualifier.GetColumnName());
 	}
 	auto relation_list = StringUtil::Join(relations, ", ");

@@ -154,6 +154,12 @@ class TestSyntax:
         sql = _query("x >= 0", "MINIMIZE sum(abs(x - at(previous else 0: x) over (t.period within t.product)))")
         assert _bare("at(previous else 0: x) over (t.period within t.product)") in _explained(decidb_cli, sql)
 
+    @pytest.mark.error_parser
+    def test_a_within_expression_is_refused_at_the_element(self, decidb_cli):
+        """The caret is at the expression, not at `over`: the first element of the key that is no column or relation."""
+        sql = _query("at(first: t.demand) over (t.period within t.product, t.id + 1) <= 3")
+        decidb_cli.assert_error_at(sql, kind="Parser Error", at="t.id + 1")
+
     @pytest.mark.error_binder
     @pytest.mark.parametrize(
         "clause, message",

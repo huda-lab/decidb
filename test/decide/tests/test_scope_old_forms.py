@@ -43,13 +43,19 @@ def test_old_postfix_is_a_syntax_error(decidb_cli, sql, at):
 @pytest.mark.parametrize(
     "sql, at",
     [
-        pytest.param(_query("t.x(INT)"), "t.x(INT)", id="T.x"),
-        pytest.param(_query("x(INT), scalar s(INT)", "x <= cap AND s <= 4"), "scalar s(INT)", id="scalar"),
-        pytest.param(_query("x IS INTEGER"), "x IS INTEGER", id="IS-type"),
+        pytest.param(_query("t.x(INT)"), ".x(INT)", id="T.x"),
+        pytest.param(_query("x(INT), scalar s(INT)", "x <= cap AND s <= 4"), "s(INT)", id="scalar"),
+        pytest.param(_query("x IS INTEGER"), "IS INTEGER", id="IS-type"),
     ],
 )
-def test_old_declaration_is_a_parser_error(decidb_cli, sql, at):
-    decidb_cli.assert_error_at(sql, kind="Parser Error", at=at)
+def test_old_declaration_is_a_syntax_error_after_the_name(decidb_cli, sql, at):
+    """The name before the old spelling is not refused as a declaration with no type: the syntax error is at the
+    token the grammar cannot place."""
+    decidb_cli.assert_error_at(sql, kind="Parser Error", at=at, word="syntax error")
+
+
+def test_a_declaration_with_no_type_is_refused_at_its_name(decidb_cli):
+    decidb_cli.assert_error_at(_query("x"), kind="Parser Error", at="DECIDE x")
 
 
 @pytest.mark.parametrize(

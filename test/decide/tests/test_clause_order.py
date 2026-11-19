@@ -286,26 +286,28 @@ class TestClauseOrderErrors:
         )
 
     def test_split_declaration_without_such_that_rejected(self, decidb_cli):
-        """A pre-FROM declaration with no constraints names the fix."""
-        decidb_cli.assert_error(
+        """A pre-FROM declaration with no constraints is refused at its DECIDE."""
+        decidb_cli.assert_error_at(
             """
                 SELECT c_custkey, x
                 DECIDE x(BOOL)
                 FROM customer WHERE c_custkey <= 10
             """,
-            match=r"DECIDE requires a SUCH THAT clause",
+            kind="Parser Error",
+            at="DECIDE",
         )
 
     def test_such_that_without_declaration_rejected(self, decidb_cli):
-        """Constraints with nothing declared name the fix."""
-        decidb_cli.assert_error(
+        """Constraints with nothing declared are refused at their SUCH THAT."""
+        decidb_cli.assert_error_at(
             """
                 SELECT c_custkey
                 FROM customer WHERE c_custkey <= 10
                 SUCH THAT SUM(c_acctbal) <= 3
                 MAXIMIZE SUM(c_acctbal)
             """,
-            match=r"SUCH THAT requires a DECIDE clause",
+            kind="Parser Error",
+            at="SUCH THAT",
         )
 
 

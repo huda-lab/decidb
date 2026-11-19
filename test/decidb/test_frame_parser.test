@@ -127,12 +127,12 @@ DROP VIEW point_frames;
 statement error
 SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x >= at(0 previous: x) over (T.period) MAXIMIZE sum(x);
 ----
-Parser Error: DECIDE: in at(0 previous: x) over (T.period), 0 must be a positive whole number
+Parser Error: '0' in a frame is not a positive whole number
 
 statement error
 SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x >= sum(from first to last every 0: x) over (T.period) MAXIMIZE sum(x);
 ----
-Parser Error: DECIDE: in sum(from first to last every 0: x) over (T.period), 0 must be a positive whole number
+Parser Error: '0' in a frame is not a positive whole number
 
 statement error
 SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x >= at(3 first: x) over (T.period) MAXIMIZE sum(x);
@@ -147,27 +147,27 @@ Parser Error: syntax error at or near "else"
 statement error
 SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x >= at(prev: x) over (T.period) MAXIMIZE sum(x);
 ----
-Parser Error: DECIDE: a frame position is first, last, [k] previous or [k] next, found prev
+Parser Error: 'prev' is not a frame position
 
 statement error
 SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x >= sum(from first to last evry 2: x) over (T.period) MAXIMIZE sum(x);
 ----
-Parser Error: DECIDE: expected every d in a frame selector, found evry
+Parser Error: 'evry' is not a frame keyword
 
 statement error
 SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x >= at(first: x) over (T.period cyclc) MAXIMIZE sum(x);
 ----
-Parser Error: DECIDE: expected cyclic or within in a frame selector, found cyclc
+Parser Error: 'cyclc' is not a frame keyword
 
 statement error
 SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x >= at(first: x) over (T.period within lower(T.product)) MAXIMIZE sum(x);
 ----
-Parser Error: DECIDE: within lists columns or relations, as a per key does
+Parser Error: 'lower(T.product)' in within is not a column or a relation
 
 statement error
 SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x >= sum(from first to last: x, x) over (T.period) MAXIMIZE sum(x);
 ----
-Parser Error: DECIDE: sum(from first to last: e) reduces one expression, found 2
+Parser Error: a range frame reduces one expression, 'sum' has 2
 
 # ---------------------------------------------------------------------------
 # The bind errors (D80): what a frame may not hold, and where it may not stand.
@@ -278,7 +278,7 @@ Binder Error: DECIDE: a range frame reduces with sum, avg, min, max or count, fo
 statement error
 SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x <= sum(from first to last: a := T.demand) over (T.period) MAXIMIZE sum(x);
 ----
-Parser Error: DECIDE: sum(from first to last: e) takes its expression without a name
+Parser Error: an expression in a frame cannot have a name
 
 # a frame word is read whatever its case: product A's two periods wrap onto each other,
 # so x1 = x2, and the range reads every other position, rows 1 and 3

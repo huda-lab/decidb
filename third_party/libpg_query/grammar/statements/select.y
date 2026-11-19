@@ -193,25 +193,23 @@ typed_decide_variable:
 					col->location = @3;
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", applyDecideScope($1, (PGNode *)col), (PGNode *)$5, @4);
 				}
-			/* A declaration with no type. */
+			/* A declaration with no type. Bison reduces by default, so an action here runs before the
+			 * parser reads the token after the name: an error raised here would hide the syntax error
+			 * there (DECIDE t.x(INT) ...). The name goes on as a bare column reference, which the
+			 * transformer refuses once the whole query has parsed. */
 			| ColId
 				{
-					ereport(ERROR,
-							(errcode(PG_ERRCODE_SYNTAX_ERROR),
-							 errmsg("DECIDE variable \"%s\" needs a type; write %s(INT), %s(BOOL) or %s(REAL)",
-									$1, decideName($1), decideName($1), decideName($1)),
-							 parser_errposition(@1)));
-					$$ = NULL;
+					PGColumnRef *col = makeNode(PGColumnRef);
+					col->fields = list_make1(makeString($1));
+					col->location = @1;
+					$$ = (PGNode *) col;
 				}
 			| decide_per ':' ColId
 				{
-					char *scope = decideScopeText($1);
-					ereport(ERROR,
-							(errcode(PG_ERRCODE_SYNTAX_ERROR),
-							 errmsg("DECIDE variable \"%s\" needs a type; write %s: %s(INT), %s: %s(BOOL) or %s: %s(REAL)",
-									$3, scope, decideName($3), scope, decideName($3), scope, decideName($3)),
-							 parser_errposition(@3)));
-					$$ = NULL;
+					PGColumnRef *col = makeNode(PGColumnRef);
+					col->fields = list_make1(makeString($3));
+					col->location = @3;
+					$$ = (PGNode *) col;
 				}
 		;
 
@@ -245,7 +243,7 @@ decide_per:
 				{
 					ereport(ERROR,
 							(errcode(PG_ERRCODE_SYNTAX_ERROR),
-							 errmsg("write per a, b: without parentheses; parentheses are only for per ()"),
+							 errmsg("a per key cannot be in parentheses"),
 							 parser_errposition(@2)));
 					$$ = NULL;
 				}
@@ -295,7 +293,7 @@ opt_decide_frame_every:
 			/*EMPTY*/			{ $$ = 1; }
 			| IDENT Iconst
 				{
-					decideFrameWord($1, "every", "every d", @1, yyscanner);
+					decideFrameWord($1, "every", @1, yyscanner);
 					$$ = $2;
 				}
 		;
@@ -311,7 +309,7 @@ opt_decide_frame_cyclic:
 			/*EMPTY*/			{ $$ = false; }
 			| IDENT
 				{
-					decideFrameWord($1, "cyclic", "cyclic or within", @1, yyscanner);
+					decideFrameWord($1, "cyclic", @1, yyscanner);
 					$$ = true;
 				}
 		;
@@ -338,7 +336,7 @@ decide_objective_item:
 					if (scope->per == PG_DECIDE_PER_ROW || scope->per == PG_DECIDE_PER_KEY)
 						ereport(ERROR,
 								(errcode(PG_ERRCODE_SYNTAX_ERROR),
-								 errmsg("an objective is produced once: write per (): or leave per out"),
+								 errmsg("an objective cannot have a per key"),
 								 parser_errposition(scope->location)));
 					$$ = applyDecideScope($1, $3);
 				}
@@ -425,7 +423,7 @@ decide_clause:
                     if (pg_yyget_extra(yyscanner)->decide_declared_before_from)
                         ereport(ERROR,
                                 (errcode(PG_ERRCODE_SYNTAX_ERROR),
-                                 errmsg("DECIDE appears twice; declare the variables either before FROM or with SUCH THAT, not both"),
+                                 errmsg("DECIDE appears twice"),
                                  parser_errposition(@1)));
                     PGDecidePopLexState(pg_yyget_extra(yyscanner));
                     n = (PGDecideClause *) ($3 ? $3 : makeDecideWithoutBody(@1));
@@ -482,7 +480,7 @@ decide_constraint_list:
 				{ $$ = $1; }
 			| decide_constraint_list ',' decide_constraint_item
 				{
-					ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR), errmsg("comma-separated SUCH THAT constraints are not supported; use AND between constraints"), parser_errposition(@2)));
+					ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR), errmsg("SUCH THAT constraints cannot be separated by a comma"), parser_errposition(@2)));
 					$$ = $1;
 				}
 			| decide_constraint_list AND decide_constraint_item
