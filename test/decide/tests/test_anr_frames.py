@@ -2191,20 +2191,6 @@ def _folded(cli, bound, rows=FOLD_ROWS, warnings=()):
     return [row["x"] for row in answer(cli, f"{sql} ORDER BY id", warnings)]
 
 
-def _refusal(role, written):
-    """The message for a NaN (a bound) or a non-finite number (a coefficient) read in `written`, and the edit it gives:
-    the value written again where it stands, NULL where the test fails."""
-    if role == "bound":
-        return (
-            f"DECIDE: the bound {written} is NaN on some rows. "
-            f"Skip those rows by writing 'CASE WHEN NOT isnan({written}) THEN {written} END' in its place."
-        )
-    return (
-        f"DECIDE: {written} is NaN or infinite on some rows. "
-        f"Skip those rows by writing 'CASE WHEN isfinite({written}) THEN {written} END' in its place."
-    )
-
-
 NAN_READERS = (
     (
         "min-bound",
@@ -2275,7 +2261,7 @@ class TestFrameReducerFold:
         sql = f"""SELECT id, x FROM (SELECT id, CAST(f AS {clause[2]}) AS f FROM {rows}) t
             DECIDE x(REAL) SUCH THAT x <= 100 AND {clause[1]} MAXIMIZE sum(x)"""
         result = decidb_cli.execute_raw(sql)
-        assert _refusal(clause[3], clause[4]) in result.stderr, result.stderr
+        decidb_cli.assert_error_at(sql, kind="Invalid Input Error", at=clause[4])
         assert_no_internal_leak(result, "a NaN a frame reducer reads")
 
     def test_a_norm_reads_only_the_rows_its_when_keeps(self, decidb_cli):
@@ -2748,17 +2734,20 @@ NON_FINITE_EDITS = [
 
 @pytest.mark.correctness
 class TestNonFiniteEdit:
-    """A message for a NaN or an infinite value suggests the value written again where it stands, `CASE WHEN <test>
-    THEN <value> END`, whatever kind of value it is: a `when` drops its rows before any frame is computed, and so
-    moves every frame's timeline, even for a plain column. The edit makes the value NULL on the rows it fails, as
-    the oracle's `Finite` does, and the query answers as the oracle does."""
+    """A NaN or an infinite value is refused where it stands. Writing it again as `CASE WHEN <test> THEN <value> END`,
+    whatever kind of value it is, makes it NULL on the rows it fails, as the oracle's `Finite` does, and the query
+    answers as the oracle does: a `when` would drop its rows before any frame is computed, and so move every frame's
+    timeline, even for a plain column."""
 
     @pytest.mark.parametrize("rows, tail, written, role, model", NON_FINITE_EDITS)
     def test_the_edit_a_message_gives_runs_and_answers_as_the_oracle_does(
         self, decidb_cli, scope_solver, rows, tail, written, role, model
     ):
         refused = decidb_cli.execute_raw(_non_finite_query(rows, "x <= 10 " + tail.format(v=written)))
-        assert refused.returncode != 0 and _refusal(role, written) in refused.stderr, refused.stderr
+        assert refused.returncode != 0, refused.stderr
+        decidb_cli.assert_error_at(
+            _non_finite_query(rows, "x <= 10 " + tail.format(v=written)), kind="Invalid Input Error", at=written
+        )
         test = f"NOT isnan({written})" if role == "bound" else f"isfinite({written})"
         edit = f"CASE WHEN {test} THEN {written} END"
         clauses, objective = model(lambda value: Finite(value, nan_only=role == "bound"))

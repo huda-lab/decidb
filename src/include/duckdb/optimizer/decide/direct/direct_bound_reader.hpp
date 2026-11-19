@@ -49,9 +49,10 @@ struct DirectBoundClause {
 	vector<DirectSignedValue> coefficient;
 	unique_ptr<Expression> rhs;
 	//! What a message calls them: the coefficient's values and its clause (DirectNamesOf), and the right side as the
-	//! user wrote it (DirectIR::render).
+	//! user wrote it and where (DirectIR::render, DirectIR::place).
 	DirectNumberNames coefficient_names;
 	string rhs_text;
+	optional_idx rhs_place;
 	//! The values of the decision the clause admits (DecideSingletonRow): DOUBLE, ±infinity on an open side.
 	unique_ptr<Expression> lower;
 	unique_ptr<Expression> upper;
@@ -359,8 +360,9 @@ struct DirectSourceFixedValue {
 	//! The clause's `when`; the value is read only on the rows it keeps. Null for every row.
 	unique_ptr<Expression> when;
 	bool coefficient = false;
-	//! The value as the user wrote it, which the error names.
+	//! The value as the user wrote it, which the error names, and where it stands.
 	string written;
+	optional_idx place;
 };
 
 //! What the per-row clauses on a BOOL decision fix, read as the set of {0, 1} each row allows: a condition per clause

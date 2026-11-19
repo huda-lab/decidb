@@ -3,6 +3,7 @@ add_library_unity(
   OBJECT
   constant_or_null.cpp
   decide_bound_disagreement.cpp
+  decide_invalid_value.cpp
   decide_warn_numbers.cpp
   error.cpp
   getvariable.cpp)

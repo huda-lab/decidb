@@ -643,13 +643,19 @@ _RATE = "amount <= cap AND SUM(amount) <= 9 MAXIMIZE MIN(r * amount)"
 _WEIGHT = "amount <= cap AND SUM(w * amount) <= 9 MAXIMIZE MIN(amount / d)"
 _LIMIT = "amount <= cap AND SUM(w * amount) <= l MAXIMIZE MIN(amount / d)"
 
-# (the class of the error, the text it has, the bad row's d, cap, r and w, the clauses, and its l). Row 0 is ordinary.
+
+class At(str):
+    """A NaN or infinite value an error points at: the text of the query the caret stands inside (`assert_error_at`)."""
+
+
+# (the class of the error, the text it has or where it points, the bad row's d, cap, r and w, the clauses, and its l).
+# Row 0 is ordinary.
 ERROR_CASES = {
-    "demand_zero": ("invalid_value", "1 / d is NaN or infinite on some rows", "0.0", "4.0", "1.0", "1.0", _RATIO),
-    "rate_nan": ("invalid_value", "r is NaN or infinite on some rows", "2.0", "4.0", "'NaN'", "1.0", _RATE),
-    "weight_nan": ("invalid_value", "w is NaN or infinite on some rows", "2.0", "4.0", "1.0", "'NaN'", _WEIGHT),
-    "limit_nan": ("null_bound", "the bound l is NaN on some rows", "2.0", "4.0", "1.0", "1.0", _LIMIT, "'NaN'"),
-    "capacity_nan": ("null_bound", "the bound cap is NaN on some rows", "2.0", "'NaN'", "1.0", "1.0", _RATIO),
+    "demand_zero": ("invalid_value", At("1 / d"), "0.0", "4.0", "1.0", "1.0", _RATIO),
+    "rate_nan": ("invalid_value", At("r * amount"), "2.0", "4.0", "'NaN'", "1.0", _RATE),
+    "weight_nan": ("invalid_value", At("w * amount"), "2.0", "4.0", "1.0", "'NaN'", _WEIGHT),
+    "limit_nan": ("null_bound", At("<= l"), "2.0", "4.0", "1.0", "1.0", _LIMIT, "'NaN'"),
+    "capacity_nan": ("null_bound", At("<= cap"), "2.0", "'NaN'", "1.0", "1.0", _RATIO),
     "capacity_minus_infinite": ("infeasible", "infeasible", "2.0", "'-Infinity'", "1.0", "1.0", _RATIO),
 }
 
@@ -678,4 +684,9 @@ def test_r4_both_paths_raise_the_same_error(decidb_cli, name):
     assert direct[0] == "error", direct
     assert direct == solver == ("error", error_class), (direct, solver)
     for mode in ("require", "off"):
-        assert text in decidb_cli.execute_raw(f"SET decide_direct_solve='{mode}'; {sql}").stderr, mode
+        if isinstance(text, At):
+            decidb_cli.assert_error_at(
+                f"SET decide_direct_solve='{mode}'; {sql}", kind="Invalid Input Error", at=str(text)
+            )
+        else:
+            assert text in decidb_cli.execute_raw(f"SET decide_direct_solve='{mode}'; {sql}").stderr, mode

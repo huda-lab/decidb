@@ -19,6 +19,7 @@ from ._direct_differential import error_class
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
 from ._number_range import writes_number_out_of_range
 from ._direct_rule_fixtures import (
+    At,
     RULE_FIXTURES,
     S1_AGGREGATE_BOUNDS_NOW_APPLIED,
     late_error_cases,
@@ -110,7 +111,12 @@ def test_every_input_row_is_read_before_any_row_is_released(decidb_cli, fixture,
         f"SELECT COUNT(*) FROM ({decide}) q",
         f"SELECT {fixture.late_column} FROM ({decide}) q WHERE {fixture.late_column}=0",
     ):
-        assert message in _raw(decidb_cli, outer).stderr, outer
+        if isinstance(message, At):
+            decidb_cli.assert_error_at(
+                f"SET decide_direct_solve='require'; {outer}", kind="Invalid Input Error", at=str(message)
+            )
+        else:
+            assert message in _raw(decidb_cli, outer).stderr, outer
     rows, _ = _run(decidb_cli, f"SELECT {fixture.late_column} FROM ({decide}) q LIMIT 0")
     assert rows == []
 

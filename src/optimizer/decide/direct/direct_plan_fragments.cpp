@@ -206,7 +206,7 @@ DirectLayoutBoundClauses(Optimizer &optimizer, const ExpressionBuilder &calc, Di
 		}
 		// A right side of an exact type is never NaN.
 		if (!std::isfinite(DirectMagnitudeBound(optimizer.context, *clause.rhs))) {
-			checks.push_back(DirectValidBoundPredicate(optimizer, rhs, clause.rhs_text));
+			checks.push_back(DirectValidBoundPredicate(optimizer, rhs, clause.rhs_text, clause.rhs_place));
 		}
 		result.push_back(columns);
 	}
@@ -723,10 +723,10 @@ ExprPtr DirectRowBoundMessage(ClientContext &context, const ExpressionBuilder &c
 	}
 	if (bound.coefficient) {
 		message = calc.If(calc.Fn("isfinite", as_double), none,
-		                  calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::COEFFICIENT, bound.written))));
+		                  calc.RaiseInvalidValue(DecideValueRole::COEFFICIENT, bound.written, bound.place));
 	} else if (bound.reject_nan) {
 		message = calc.If(calc.Fn("isnan", as_double),
-		                  calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::BOUND, bound.written))), none);
+		                  calc.RaiseInvalidValue(DecideValueRole::BOUND, bound.written, bound.place), none);
 	}
 	// A NULL value skips the instance it reaches.
 	message = calc.If(calc.IsNull(calc.Of(*bound.value)), none, message);
@@ -747,6 +747,7 @@ ExprPtr DirectFixedValueMessage(ClientContext &context, const ExpressionBuilder 
 	bound.reject_nan = fixed.reject_nan;
 	bound.coefficient = fixed.coefficient;
 	bound.written = fixed.written;
+	bound.place = fixed.place;
 	return DirectRowBoundMessage(context, calc, bound);
 }
 

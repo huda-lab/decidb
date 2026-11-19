@@ -1357,39 +1357,34 @@ def test_like_terms_over_constant_divisors(decidb_cli, clause, holds):
 @pytest.mark.cons_comparison
 @pytest.mark.error_binder
 @pytest.mark.parametrize(
-    "clause, message",
+    "clause, message, constant",
     [
         # SQL makes 1 / 0 infinite, so the coefficient is a constant that is not finite: no row holds it and no `when`
-        # skips it.
-        pytest.param("x / 0 <= 4", "DECIDE: 1 / 0 is NaN or infinite. Use a finite value.", id="zero-divisor"),
-        pytest.param(
-            "x / 0.0 + x / 0.0 <= 3",
-            "DECIDE: 2 * (1 / 0.0) is NaN or infinite. Use a finite value.",
-            id="zero-divisor-merged",
-        ),
-        pytest.param(
-            "x * 'Infinity'::DOUBLE <= 3",
-            "DECIDE: 'Infinity'::DOUBLE is NaN or infinite. Use a finite value.",
-            id="infinite-literal",
-        ),
+        # skips it. DeciDB builds the constant (the reciprocal of the divisor), so the query has no place for it: the
+        # message quotes it.
+        pytest.param("x / 0 <= 4", None, "1 / 0", id="zero-divisor"),
+        pytest.param("x / 0.0 + x / 0.0 <= 3", None, "2 * (1 / 0.0)", id="zero-divisor-merged"),
+        pytest.param("x * 'Infinity'::DOUBLE <= 3", None, "'Infinity'::DOUBLE", id="infinite-literal"),
         # Finite terms whose sum leaves the DOUBLE range: DeciDB's own arithmetic, so the clause is named.
         pytest.param(
             "x * 1e308 + x * 1e308 <= 4",
             "DECIDE: x * 1e308 + x * 1e308 <= 4 computes a number too large for a DOUBLE. Scale its data down.",
+            None,
             id="finite-sum-past-the-range",
         ),
     ],
 )
-def test_a_constant_coefficient_that_is_not_finite_is_refused(decidb_cli, clause, message):
-    decidb_cli.assert_error(
-        f"""
+def test_a_constant_coefficient_that_is_not_finite_is_refused(decidb_cli, clause, message, constant):
+    sql = f"""
         SELECT id, x FROM {_NESTED_ROWS}
         DECIDE x(INT)
         SUCH THAT x <= 5 AND {clause}
         MAXIMIZE SUM(x)
-    """,
-        match=re.escape(message),
-    )
+    """
+    if message is None:
+        decidb_cli.assert_error_at(sql, kind="Invalid Input Error", at=constant)
+    else:
+        decidb_cli.assert_error(sql, match=re.escape(message))
 
 
 # ---------------------------------------------------------------------------

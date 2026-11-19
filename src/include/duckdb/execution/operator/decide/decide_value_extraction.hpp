@@ -57,32 +57,32 @@ void DecideEvaluateWindow(ClientContext &context, unique_ptr<ExpressionExecutor>
                           Vector &values, std::map<idx_t, ErrorData> &errors, DataChunk &chunk, idx_t offset,
                           ErrorData *raised = nullptr);
 
-//! What a coefficient DeciDB computed is computed from (DecideTerm::inputs), and how a message reads one of them on the
-//! row the coefficient fails on: `value_at(input, i)` is its value at row i of the window the coefficient was computed
-//! over.
-struct DecideValueInputs {
-	const vector<unique_ptr<Expression>> &values;
-	std::function<Value(const Expression &input, idx_t i)> value_at;
+//! What a coefficient DeciDB composed is composed of (DecideProgram::parts): the values of the query, in reading order,
+//! and how a message reads one of them on the row the coefficient fails on: `value_at(part, i)` is the value of
+//! `values[part]` at row i of the window the coefficient was computed over.
+struct DecideValueParts {
+	vector<const Expression *> values;
+	std::function<Value(idx_t part, idx_t i)> value_at;
 };
 
 //! A number read from the source, and what the message that refuses it calls it: `value` is the expression the number
-//! comes from, printed as the user wrote it (DecideInvalidValueMessage). `clause` is the clause (or the objective) it
-//! belongs to, which a coefficient past a DOUBLE that no column's value made so names (TOO_LARGE), as AddCoefficient
-//! does. `inputs` are what a coefficient DeciDB computed is computed from; none for one as written. `context` evaluates
-//! a constant the value is computed from.
+//! comes from, printed as the user wrote it and pointed at where it stands (DecideInvalidValueError). `clause` is the
+//! clause (or the objective) it belongs to, which a coefficient past a DOUBLE that no column's value made so names
+//! (TOO_LARGE), as AddCoefficient does. `parts` are what a coefficient DeciDB composed is composed of; none for one
+//! that stands in the query itself. `context` evaluates a constant the value is composed of.
 struct ValueSource {
 	DecideValueRole role;
 	const Expression &value;
 	const DecideSourceNames &names;
 	ClientContext &context;
 	string clause = string();
-	const DecideValueInputs *inputs = nullptr;
+	const DecideValueParts *parts = nullptr;
 };
 
-//! Refuses a number the model cannot read (NaN, or infinite where a bound is not allowed to be), naming `source`. A
-//! coefficient names the first value it is computed from that a column holds and that is not finite on `row`, the row
-//! it fails on; with none, DeciDB's own arithmetic (or a literal) left the DOUBLE range, and it names its clause. A
-//! coefficient as written is the one value it is computed from.
+//! Refuses a number the model cannot read (NaN, or infinite where a bound is not allowed to be), naming `source` at
+//! the place it stands. A coefficient names the first part of it that a column holds and that is not finite on `row`,
+//! the row it fails on; with none, DeciDB's own arithmetic (or a literal) left the DOUBLE range, and it names its
+//! clause. A coefficient that stands in the query is its own one value.
 [[noreturn]] void ThrowInvalidValue(const ValueSource &source, idx_t row = 0);
 
 //! The entries among the first `count` of `values` that hold a NaN: none for a NULL, and none for a type that holds no

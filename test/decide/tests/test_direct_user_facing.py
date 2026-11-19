@@ -34,6 +34,24 @@ def _raw(cli, sql, mode="require", expect_number_range=False):
     return cli.execute_raw(f"SET decide_direct_solve='{mode}'; {sql}", expect_number_range=expect_number_range)
 
 
+class At(str):
+    """A NaN or infinite value an error points at: the text of the query the caret stands inside (`assert_error_at`)."""
+
+
+def _points_at(cli, sql, at, mode="require"):
+    """`sql` fails under `mode` with an Invalid Input Error whose caret stands inside `at`, the value as written."""
+    cli.assert_error_at(f"SET decide_direct_solve='{mode}'; {sql}", kind="Invalid Input Error", at=str(at))
+
+
+def _expect(cli, sql, expected, mode="require"):
+    """The error of `sql` under `mode` is `expected`: a text it holds, or the place a NaN or infinite value stands."""
+    if isinstance(expected, At):
+        _points_at(cli, sql, expected, mode)
+    else:
+        stderr = _raw(cli, sql, mode=mode).stderr
+        assert expected in stderr, stderr
+
+
 def _has_decide_operator(plan):
     # The operator's box title. A plain substring test would also match the DECIDE: prefix of the error text that
     # a direct plan carries.
@@ -204,23 +222,20 @@ def test_wide_value_is_proved_by_direct_solve_and_answers_like_the_solver(decidb
 @pytest.mark.correctness
 @pytest.mark.parametrize("bad", ["'NaN'::DOUBLE", "'Infinity'::DOUBLE"])
 def test_a1_invalid_coefficient_names_the_value_the_user_wrote(decidb_cli, bad):
-    # A bad number is reported as the value the user wrote and the edit that skips its rows, in both modes.
-    def error(constraint_expression, objective_expression, mode):
-        sql = f"""
+    # A bad number is pointed at where the user wrote it, in both modes.
+    def query(constraint_expression, objective_expression):
+        return f"""
             SELECT id, x FROM (
                 FROM (VALUES (1, 1.0, 1.0), (2, 2.0, {bad}), (3, 3.0, 1.0)) t(id, s, w)
                 DECIDE x(REAL) SUCH THAT {constraint_expression} <= 5 MAXIMIZE SUM({objective_expression})
             ) q
         """
-        return _raw(decidb_cli, sql, mode=mode).stderr
 
-    skip_w = "DECIDE: w is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(w) THEN w END' in its place."
-    skip_two_w = "DECIDE: 2 * w is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(2 * w) THEN 2 * w END' in its place."
     for mode in ("require", "off"):
-        assert skip_w in error("w * x", "s * x", mode), mode
-        assert skip_w in error("x", "w * x", mode), mode
+        _points_at(decidb_cli, query("w * x", "s * x"), "w * x", mode)
+        _points_at(decidb_cli, query("x", "w * x"), "w * x", mode)
         # The value is named as the solver reads it once the sum's constant factor is applied.
-        assert skip_two_w in error("x", "2 * w * x", mode), mode
+        _points_at(decidb_cli, query("x", "2 * w * x"), "2 * w", mode)
 
 
 def _a1_plan_text(cli, objective):
@@ -239,8 +254,8 @@ def test_a1_a_number_made_of_finite_literals_has_no_invalid_value_check(decidb_c
     # A literal is finite on every row (a row the data skips reads 0), so the plan checks only the numbers a column
     # makes: `p / 100` and not the `1` that multiplies `s` (BUG-41, which named it as a value NaN on some rows).
     plan = _a1_plan_text(decidb_cli, "POWER(s - p / 100, 2)")
-    assert "DECIDE:p/100isNaNorinfiniteonsomerows" in plan
-    assert "DECIDE:1isNaNorinfinite" not in plan
+    assert "__internal_decide_invalid_value(0,'p/100'" in plan
+    assert "__internal_decide_invalid_value(0,'1'" not in plan
 
 
 @pytest.mark.correctness
@@ -331,7 +346,7 @@ def test_a1_a_nan_upper_end_raises_though_no_static_end_clamps_it(decidb_cli):
         with pytest.raises(Exception) as error:
             _run(decidb_cli, sql, mode)
         messages.append(str(error.value))
-    assert "the bound cap is NaN on some rows" in messages[1], messages
+    _points_at(decidb_cli, sql, "<= cap")
     assert messages[0] == messages[1]
 
 
@@ -459,7 +474,7 @@ def test_a1_a_bound_of_an_exact_type_is_not_checked_for_nan(decidb_cli, column_t
     """
     plan = "".join(_raw(decidb_cli, sql).stdout.replace("│", "").split())
     assert "A1_SEPARABLE_BOX" in plan, plan
-    assert ("isNaNonsomerows" in plan) == checked, plan
+    assert ("__internal_decide_invalid_value(1," in plan) == checked, plan
 
 
 def _invalid_value_checks(cli, column_type, decide):
@@ -472,7 +487,9 @@ def _invalid_value_checks(cli, column_type, decide):
     """
     plan = _raw(cli, sql).stdout
     assert re.search(r"Direct solve rule:\s+\w+", plan.replace("│", "")), plan
-    return "".join(plan.replace("│", "").split()).count("isNaNorinfinite")
+    plan = "".join(plan.replace("│", "").split())
+    # A coefficient (role 0) or a constant (role 3) that is not finite; a bound that is NaN (role 1) is another check.
+    return plan.count("__internal_decide_invalid_value(0,") + plan.count("__internal_decide_invalid_value(3,")
 
 
 @pytest.mark.correctness
@@ -545,15 +562,22 @@ def test_r1_a_non_finite_literal_under_a_guard_raises_what_the_solver_raises(dec
         MAXIMIZE SUM({'x + y' if budget else body})
     """
     direct = _raw(decidb_cli, sql, mode="require").stderr
-    assert "is NaN or infinite. Use a finite value." in direct, direct
+    _points_at(decidb_cli, sql, "'NaN'::DOUBLE")
     assert "on some rows" not in direct, direct
     assert direct == _raw(decidb_cli, sql, mode="off").stderr
 
 
 @pytest.mark.error
 @pytest.mark.correctness
-@pytest.mark.parametrize("coefficient", ["s * 'NaN'::DOUBLE - p", "s - p + 'NaN'::DOUBLE", "s * 1e308 * 10 - p"])
-def test_a1_a_non_finite_literal_raises_what_the_solver_raises(decidb_cli, coefficient):
+@pytest.mark.parametrize(
+    "coefficient,literal",
+    [
+        ("s * 'NaN'::DOUBLE - p", "'NaN'::DOUBLE"),
+        ("s - p + 'NaN'::DOUBLE", "'NaN'::DOUBLE"),
+        ("s * 1e308 * 10 - p", "1e308 * 10"),
+    ],
+)
+def test_a1_a_non_finite_literal_raises_what_the_solver_raises(decidb_cli, coefficient, literal):
     # A literal that is not finite keeps its check, which names it as a constant as the solver path does. Under the
     # data's NULL skip the literal is still no column's value, so it is never named as one.
     sql = f"""
@@ -561,7 +585,7 @@ def test_a1_a_non_finite_literal_raises_what_the_solver_raises(decidb_cli, coeff
         DECIDE s(REAL) SUCH THAT s BETWEEN 0 AND q MINIMIZE SUM(POWER({coefficient}, 2))
     """
     direct = _raw(decidb_cli, sql, mode="require").stderr
-    assert "is NaN or infinite. Use a finite value." in direct, direct
+    _points_at(decidb_cli, sql, literal)
     assert "on some rows" not in direct, direct
     assert direct == _raw(decidb_cli, sql, mode="off").stderr
 
@@ -571,21 +595,19 @@ def test_a1_a_non_finite_literal_raises_what_the_solver_raises(decidb_cli, coeff
 def test_r1_invalid_number_names_the_value_the_user_wrote(decidb_cli, bad):
     # The weight of the budget and the value in the objective are named as written, on both paths, and the two messages
     # are the same.
-    def error(weight, value, mode):
-        sql = f"""
+    def query(weight, value):
+        return f"""
             SELECT id, x FROM (
                 FROM (VALUES (1, 1.0, 1.0), (2, 2.0, {bad}), (3, 3.0, 1.0)) t(id, a, b)
                 DECIDE x(REAL) SUCH THAT x <= 5 AND SUM({weight} * x) <= 9 MAXIMIZE SUM({value} * x)
             ) q
         """
-        return _raw(decidb_cli, sql, mode=mode).stderr
 
-    skip_b = "DECIDE: b is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(b) THEN b END' in its place."
     for mode in ("require", "off"):
-        assert skip_b in error("b", "a", mode), mode
-        assert skip_b in error("a", "b", mode), mode
-    direct = error("b", "a", "require")
-    assert error("b", "a", "off") == direct
+        _points_at(decidb_cli, query("b", "a"), "b * x", mode)
+        _points_at(decidb_cli, query("a", "b"), "b * x", mode)
+    direct = _raw(decidb_cli, query("b", "a"), mode="require").stderr
+    assert _raw(decidb_cli, query("b", "a"), mode="off").stderr == direct
 
 
 @pytest.mark.correctness
@@ -676,20 +698,19 @@ _N1_MAX = "SUM(POWER(x, 2)) <= l MAXIMIZE SUM(s * x)"
         ("4.0", "2.0", "-1.0", "'a'", _N1_MAX, "infeasible"),
         ("4.0", "2.0", "9.0", "'a'", "SUM(POWER(x, 2)) <= -1", "infeasible"),
         ("4.0", "2.0", "9.0", "NULL", "SUM(POWER(x, 2)) by (k) <= l MAXIMIZE SUM(s * x)", "unbounded"),
-        ("'NaN'", "2.0", "9.0", "'a'", _N1_MAX, "s is NaN or infinite on some rows"),
-        ("'Infinity'", "2.0", "9.0", "'a'", _N1_MAX, "s is NaN or infinite on some rows"),
-        ("4.0", "'NaN'", "9.0", "'a'", "SUM(POWER(x, 2)) <= 25 MINIMIZE SUM(POWER(x - y, 2))", "y is NaN or infinite"),
-        ("4.0", "'NaN'", "9.0", "'a'", "SUM(POWER(x, 2)) <= 25 MAXIMIZE SUM(s * x + y)", "y is NaN or infinite"),
-        ("4.0", "2.0", "'NaN'", "'a'", _N1_MAX, "the bound l is NaN on some rows"),
-        ("4.0", "2.0", "'NaN'", "'a'", "SUM(POWER(x, 2)) by (k) <= l MAXIMIZE SUM(s * x)", "l is NaN on some rows"),
+        ("'NaN'", "2.0", "9.0", "'a'", _N1_MAX, At("s * x")),
+        ("'Infinity'", "2.0", "9.0", "'a'", _N1_MAX, At("s * x")),
+        ("4.0", "'NaN'", "9.0", "'a'", "SUM(POWER(x, 2)) <= 25 MINIMIZE SUM(POWER(x - y, 2))", At("- y")),
+        ("4.0", "'NaN'", "9.0", "'a'", "SUM(POWER(x, 2)) <= 25 MAXIMIZE SUM(s * x + y)", At("+ y")),
+        ("4.0", "2.0", "'NaN'", "'a'", _N1_MAX, At("<= l")),
+        ("4.0", "2.0", "'NaN'", "'a'", "SUM(POWER(x, 2)) by (k) <= l MAXIMIZE SUM(s * x)", At("<= l")),
     ],
 )
 def test_n1_errors_are_the_solvers_word_for_word(decidb_cli, s, y, l, k, decide, message):
     rows = _N1_ROWS.format(s=s, y=y, l=l, k=k)
     sql = f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, s, y, l, k) DECIDE x(REAL) SUCH THAT {decide}) q"
-    direct = _raw(decidb_cli, sql, mode="require").stderr
-    assert message in direct, direct
-    assert direct == _raw(decidb_cli, sql, mode="off").stderr
+    _expect(decidb_cli, sql, message)
+    assert _raw(decidb_cli, sql, mode="require").stderr == _raw(decidb_cli, sql, mode="off").stderr
 
 
 _N1_WEIGHT_ROWS = "(1, 3.0::DOUBLE, 1.0::DOUBLE), (2, 4.0::DOUBLE, {w}::DOUBLE)"
@@ -702,8 +723,8 @@ _N1_WEIGHT_ROWS = "(1, 3.0::DOUBLE, 1.0::DOUBLE), (2, 4.0::DOUBLE, {w}::DOUBLE)"
         # A weight inside the square is read on every row the clause keeps. A negative one under SQRT is DuckDB's own error,
         # a NaN or infinite one names the slope as written, and one whose square is past a DOUBLE names the clause.
         ("-4.0", "SUM(POWER(SQRT(w) * x, 2)) <= 25", "cannot take square root of a negative number"),
-        ("'NaN'", "SUM(POWER(SQRT(w) * x, 2)) <= 25", "SQRT(w) is NaN or infinite on some rows"),
-        ("'Infinity'", "SUM(POWER(w * x, 2)) <= 25", "w is NaN or infinite on some rows"),
+        ("'NaN'", "SUM(POWER(SQRT(w) * x, 2)) <= 25", At("SQRT(w)")),
+        ("'Infinity'", "SUM(POWER(w * x, 2)) <= 25", At("w * x")),
         (
             "1e200",
             "SUM(POWER(w * x, 2)) <= 25",
@@ -717,9 +738,8 @@ _N1_WEIGHT_ROWS = "(1, 3.0::DOUBLE, 1.0::DOUBLE), (2, 4.0::DOUBLE, {w}::DOUBLE)"
 def test_n1_a_weight_errors_are_the_solvers_word_for_word(decidb_cli, w, limit, message):
     rows = _N1_WEIGHT_ROWS.format(w=w)
     sql = f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, s, w) DECIDE x(REAL) SUCH THAT {limit} MAXIMIZE SUM(s * x)) q"
-    direct = _raw(decidb_cli, sql, mode="require").stderr
-    assert message in direct, direct
-    assert direct == _raw(decidb_cli, sql, mode="off").stderr
+    _expect(decidb_cli, sql, message)
+    assert _raw(decidb_cli, sql, mode="require").stderr == _raw(decidb_cli, sql, mode="off").stderr
 
 
 @pytest.mark.correctness
@@ -729,17 +749,17 @@ def test_n1_a_weight_errors_are_the_solvers_word_for_word(decidb_cli, w, limit, 
         (
             "'NaN'",
             "MINIMIZE SUM(POWER(c - v, 2))",
-            "DECIDE: v is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(v) THEN v END' in its place.",
+            At("- v"),
         ),
         (
             "'Infinity'",
             "MINIMIZE SUM(POWER(v - c, 2))",
-            "DECIDE: v is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(v) THEN v END' in its place.",
+            At("v -"),
         ),
         (
             "'NaN'",
             "MINIMIZE SUM(POWER(c - 2 * v, 2))",
-            "DECIDE: 2 * v is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(2 * v) THEN 2 * v END' in its place.",
+            At("2 * v"),
         ),
         (
             "1e308",
@@ -755,15 +775,14 @@ def test_n1_a_weight_errors_are_the_solvers_word_for_word(decidb_cli, w, limit, 
 )
 def test_a2_errors_are_the_solvers_word_for_word(decidb_cli, v, decide, message):
     # The full text is compared across `require` and `off`, never against a hand-written string alone: the value is
-    # named as the user wrote it, and a number computed past a DOUBLE names the objective as written. The solver adds no
-    # row number to these.
+    # pointed at where the user wrote it, and a number computed past a DOUBLE names the objective as written. The
+    # solver adds no row number to these.
     sql = (
         f"SELECT id, c FROM (FROM (VALUES (1, 2.0), (2, {v}::DOUBLE), (3, {v}::DOUBLE)) t(id, v) "
         f"DECIDE per (): c(REAL) SUCH THAT c BETWEEN 0 AND 10 {decide}) q"
     )
-    direct = _raw(decidb_cli, sql, mode="require").stderr
-    assert message in direct, direct
-    assert direct == _raw(decidb_cli, sql, mode="off").stderr
+    _expect(decidb_cli, sql, message)
+    assert _raw(decidb_cli, sql, mode="require").stderr == _raw(decidb_cli, sql, mode="off").stderr
 
 
 @pytest.mark.correctness
@@ -773,7 +792,7 @@ def test_a2_errors_are_the_solvers_word_for_word(decidb_cli, v, decide, message)
         # A NaN on a row with a class raises the query-wide form's text.
         (
             "(1, 'a', 2.0), (2, 'a', 'NaN'::DOUBLE), (3, 'b', 3.0)",
-            "DECIDE: v is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(v) THEN v END' in its place.",
+            At("- v"),
         ),
         # A row with a NULL key has no decision, so its value is not read: no error on either path.
         (
@@ -793,7 +812,7 @@ def test_a2_keyed_errors_are_the_solvers_word_for_word(decidb_cli, rows, message
         assert direct.returncode == 0 and solver.returncode == 0, (direct.stderr, solver.stderr)
         assert direct.stdout == solver.stdout
     else:
-        assert message in direct.stderr, direct.stderr
+        _expect(decidb_cli, sql, message)
         assert direct.stderr == solver.stderr
 
 
@@ -813,7 +832,7 @@ def test_a2_a_nan_data_bound_is_the_solvers_word_for_word(decidb_cli, declaratio
         f"DECIDE {declaration}: c(REAL) SUCH THAT c <= cap MINIMIZE SUM(POWER(c - v, 2))) q"
     )
     direct = _raw(decidb_cli, sql, mode="require").stderr
-    assert "the bound cap is NaN on some rows" in direct, direct
+    _points_at(decidb_cli, sql, "<= cap")
     assert direct == _raw(decidb_cli, sql, mode="off").stderr
 
 
@@ -826,19 +845,19 @@ def test_a2_a_nan_data_bound_is_the_solvers_word_for_word(decidb_cli, declaratio
             "per ()",
             "SUM(w * POWER(c - v, 2))",
             "(1, 'a', 2.0, 1.0), (2, 'a', 3.0, 'NaN'::DOUBLE)",
-            "DECIDE: w is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(w) THEN w END' in its place.",
+            At("w * POWER"),
         ),
         (
             "per k",
             "SUM(w * POWER(c - v, 2))",
             "(1, 'a', 2.0, 1.0), (2, 'b', 3.0, 'Infinity'::DOUBLE)",
-            "DECIDE: w is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(w) THEN w END' in its place.",
+            At("w * POWER"),
         ),
         (
             "per ()",
             "SUM((w + 1) * POWER(c - v, 2))",
             "(1, 'a', 2.0, 1.0), (2, 'a', 3.0, 'NaN'::DOUBLE)",
-            "DECIDE: w + 1 is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(w + 1) THEN w + 1 END' in its place.",
+            At("w + 1"),
         ),
         # A row with no class is never read: no error on either path.
         ("per k", "SUM(w * POWER(c - v, 2))", "(1, 'a', 2.0, 1.0), (2, NULL, 3.0, 'NaN'::DOUBLE)", None),
@@ -864,7 +883,7 @@ def test_a2_a_data_weight_is_the_solvers_word_for_word(decidb_cli, declaration, 
         assert direct.returncode == 0 and solver.returncode == 0, (direct.stderr, solver.stderr)
         assert direct.stdout == solver.stdout
     else:
-        assert message in direct.stderr, direct.stderr
+        _expect(decidb_cli, sql, message)
         assert direct.stderr == solver.stderr
 
 
@@ -968,6 +987,7 @@ def _s1_source_bound_error(decidb_cli, cap_type, cap):
             DECIDE x(BOOL) SUCH THAT SUM(x)<=cap MAXIMIZE SUM(score*x)
         ) q
     """
+    _points_at(decidb_cli, sql, "<=cap")
     return _raw(decidb_cli, sql, mode="require").stderr, _raw(decidb_cli, sql, mode="off").stderr
 
 
@@ -975,10 +995,6 @@ def _s1_source_bound_error(decidb_cli, cap_type, cap):
 def test_s1_source_bound_error_for_a_column_is_the_solvers(decidb_cli):
     """A bound that is one column raises the solver's NaN error."""
     direct, solver = _s1_source_bound_error(decidb_cli, "DOUBLE", "'NaN'")
-    assert (
-        "DECIDE: the bound cap is NaN on some rows. Skip those rows by writing 'CASE WHEN NOT isnan(cap) THEN cap END' in its place."
-        in direct
-    ), direct
     assert solver == direct
 
 
@@ -1023,14 +1039,11 @@ def test_r1_budget_limit_error_is_the_solvers(decidb_cli):
                 DECIDE x(REAL) SUCH THAT x<=5 AND SUM(w*x)<=lim MAXIMIZE SUM(score*x)
             ) q
         """
+        _points_at(decidb_cli, sql, "<=lim")
         return _raw(decidb_cli, sql, mode="require").stderr, _raw(decidb_cli, sql, mode="off").stderr
 
     for lim_type in ("FLOAT", "DOUBLE"):
         direct, solver = error(lim_type, "'NaN'")
-        assert (
-            "DECIDE: the bound lim is NaN on some rows. Skip those rows by writing 'CASE WHEN NOT isnan(lim) THEN lim END' in its place."
-            in direct
-        ), direct
         assert solver == direct
 
 
@@ -1069,7 +1082,7 @@ def test_unused_wide_output_is_pruned_without_losing_rank_or_bindings(decidb_cli
 
     invalid = setup.replace("(i % 101)::DOUBLE AS score", "CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END AS score")
     count_only = f"SELECT COUNT(*) FROM ({decide.replace('<=500', '<=0')}) q"
-    assert "score is NaN or infinite on some rows" in _raw(decidb_cli, invalid + count_only).stderr
+    _points_at(decidb_cli, invalid + count_only, "score*x")
 
     throwing_source = """
         SELECT i, i::DOUBLE AS score,

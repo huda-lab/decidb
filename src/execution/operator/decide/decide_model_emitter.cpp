@@ -637,8 +637,7 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 		auto &term = clause.lhs_terms[t];
 		auto &site = body.linear[t];
 		D_ASSERT(site.node == root);
-		scatter(columns.Numbers(root, site.program, tested, &nulls, &site, &term.inputs),
-		        evaluated.row_coefficients[t]);
+		scatter(columns.Numbers(root, site.program, tested, &nulls), evaluated.row_coefficients[t]);
 	}
 	if (clause.scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
 		Classes(root, tested, evaluated);
@@ -944,7 +943,7 @@ void DecideModelEmitter::ReadBesideReducers(idx_t root, const DecideTerm &term, 
                                             idx_t program, const DecideEntryRows &rows, CoefficientColumn &column,
                                             vector<bool> &null_rows) {
 	vector<bool> nulls(descent.Containers()[root].Count(), false);
-	auto numbers = columns.Numbers(root, program, columns.Tested(root), &nulls, &site, &term.inputs);
+	auto numbers = columns.Numbers(root, program, columns.Tested(root), &nulls);
 	column.AssignDense(num_rows);
 	for (auto read : rows) {
 		column.Set(read.first, numbers[read.second]);
@@ -972,7 +971,7 @@ vector<bool> DecideModelEmitter::ReadInReducer(const DecideTerm &term, const Dec
 	// Evaluate the coefficient before the relation qualifier removes rows outside its classes. The old lowering reads
 	// these values on the reducer's kept rows, then applies the qualifier to the members; a NaN on a row in no class
 	// still raises here.
-	auto numbers = columns.Numbers(site.node, program, present, &nulls, &site, &term.inputs);
+	auto numbers = columns.Numbers(site.node, program, present, &nulls);
 	filter.avg_scale = term.avg_scale;
 	vector<bool> members;
 	column.AssignDense(num_rows);
@@ -1259,17 +1258,15 @@ Value DecideModelEmitter::FirstRowValue(const Expression &factor) {
 	return value.data[0].GetValue(0);
 }
 
-void DecideModelEmitter::ReadPart(const DecideTermSite &site, idx_t qualifier_scope, int sign,
-                                  const vector<unique_ptr<Expression>> &inputs, const DecideTerm *term,
+void DecideModelEmitter::ReadPart(const DecideTermSite &site, idx_t qualifier_scope, int sign, const DecideTerm *term,
                                   CoefficientColumn &column, vector<bool> &null_rows) {
 	vector<bool> first, selected_rows;
 	const auto &tested = columns.Tested(site.node);
 	const auto &reads = ReadEntriesOf(site, qualifier_scope, tested, first, selected_rows);
 	vector<bool> nulls(reads.size(), false);
 	// Stage 05 leaves a weight of 1 out.
-	auto numbers = site.program == DConstants::INVALID_INDEX
-	                   ? vector<double>(reads.size(), double(sign))
-	                   : columns.Numbers(site.node, site.program, reads, &nulls, &site, &inputs);
+	auto numbers = site.program == DConstants::INVALID_INDEX ? vector<double>(reads.size(), double(sign))
+	                                                         : columns.Numbers(site.node, site.program, reads, &nulls);
 	const bool absent = term && columns.Absence().MayBe(*term);
 	column.AssignDense(num_rows);
 	const auto coefficients = column.MutableDense().data();
@@ -1291,15 +1288,14 @@ void DecideModelEmitter::Polynomial(idx_t root, const vector<TermFilterState> &f
 		out.weight_sign = group.weight_sign;
 		// Its weight, 0 on a row it does not read, then each form term's coefficient, whose decision has no value
 		// where it has no instance (D84).
-		ReadPart(sites.weight, group.qualifier_scope_idx, group.sign, group.inputs, nullptr, out.weight, null_rows);
+		ReadPart(sites.weight, group.qualifier_scope_idx, group.sign, nullptr, out.weight, null_rows);
 		auto read_form = [&](const vector<DecideTerm> &terms, const vector<DecideTermSite> &form,
 		                     vector<idx_t> &variables, vector<CoefficientColumn> &coefficients) {
 			for (idx_t t = 0; t < terms.size(); t++) {
 				auto &term = terms[t];
 				variables.push_back(gstate.ReadVariable(term.variable_index, term.frame_read));
 				coefficients.emplace_back();
-				ReadPart(form[t], group.qualifier_scope_idx, term.sign, term.inputs, &term, coefficients.back(),
-				         null_rows);
+				ReadPart(form[t], group.qualifier_scope_idx, term.sign, &term, coefficients.back(), null_rows);
 			}
 		};
 		read_form(group.left, sites.left, out.left_variables, out.left_coefficients);
@@ -1377,10 +1373,9 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 		EvaluatedProductGroup out;
 		out.square = group.square;
 		out.weight_sign = group.weight_sign;
-		const auto weight =
-		    sites.weight.program == DConstants::INVALID_INDEX
-		        ? vector<double>(reads.size(), double(group.sign))
-		        : columns.Numbers(site, sites.weight.program, reads, nullptr, &sites.weight, &group.inputs);
+		const auto weight = sites.weight.program == DConstants::INVALID_INDEX
+		                        ? vector<double>(reads.size(), double(group.sign))
+		                        : columns.Numbers(site, sites.weight.program, reads, nullptr);
 		out.weight.AssignDense(num_rows);
 		vector<const DecideTerm *> absent;
 		vector<vector<double>> numbers;
@@ -1394,7 +1389,7 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 				if (columns.Absence().MayBe(term)) {
 					absent.push_back(&term);
 				}
-				numbers.push_back(columns.Numbers(site, form[t].program, reads, nullptr, &form[t], &term.inputs));
+				numbers.push_back(columns.Numbers(site, form[t].program, reads, nullptr));
 				columns_out[t].AssignDense(num_rows);
 				coefficients.push_back(&columns_out[t]);
 			}
@@ -1447,7 +1442,7 @@ vector<TermFilterState> DecideModelEmitter::ObjectiveTerms(idx_t root, const vec
 		const auto &present = columns.ReadEntries(site.node, term, absent);
 		vector<bool> selected_rows;
 		const auto &reads = ReadEntriesOf(site, term.qualifier_scope_idx, present, first, selected_rows);
-		auto numbers = columns.Numbers(site.node, program, present, nullptr, &site, &term.inputs);
+		auto numbers = columns.Numbers(site.node, program, present, nullptr);
 		const std::vector<bool> &marked = reads;
 		std::vector<bool> &mask = filter.mask;
 		const auto values = coefficients[t].MutableDense().data();
@@ -1591,7 +1586,7 @@ vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(idx_t root, con
 			auto &inner = members.members[i];
 			auto &site_info = members.linear[i];
 			evaluated.variables.push_back(gstate.ReadVariable(inner.variable_index, inner.frame_read));
-			auto numbers = columns.Numbers(site, site_info.program, reads, nullptr, &site_info, &inner.inputs);
+			auto numbers = columns.Numbers(site, site_info.program, reads, nullptr);
 			evaluated.per_term_coefs.emplace_back(num_rows, 0.0);
 			for (auto read : rows) {
 				evaluated.per_term_coefs.back()[read.first] = numbers[read.second];
@@ -1617,7 +1612,7 @@ void DecideModelEmitter::FrameMembers(idx_t node, ReducerValueMembers &out) {
 		vector<CoefficientColumn> coefficients(terms.size());
 		for (idx_t t = 0; t < terms.size(); t++) {
 			variable_ids.push_back(gstate.ReadVariable(terms[t].variable_index, terms[t].frame_read));
-			auto numbers = columns.Numbers(node, sites[t].program, reads, nullptr, &sites[t], &terms[t].inputs);
+			auto numbers = columns.Numbers(node, sites[t].program, reads, nullptr);
 			coefficients[t].AssignDense(num_rows);
 			for (idx_t e = 0; e < entries.size(); e++) {
 				if (reads[e]) {
@@ -1687,7 +1682,7 @@ void DecideModelEmitter::ValueLinks() {
 		for (idx_t t = 0; t < body.members.size(); t++) {
 			auto &term = body.members[t];
 			auto &site_t = body.linear[t];
-			coefficients[t] = columns.Numbers(site, site_t.program, members.reads, nullptr, &site_t, &term.inputs);
+			coefficients[t] = columns.Numbers(site, site_t.program, members.reads, nullptr);
 			variables[t] = gstate.ReadVariable(term.variable_index, term.frame_read);
 		}
 		for (auto &group_rows : rows_by_group) {

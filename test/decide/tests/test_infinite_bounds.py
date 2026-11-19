@@ -275,7 +275,7 @@ def test_infinite_value_inside_abs_is_named(decidb_cli):
     expression's range; infinity has no such constant. The user never wrote an
     ``M``, so the message names the value as written, where the ``ABS`` is read.
     """
-    decidb_cli.assert_error(
+    decidb_cli.assert_error_at(
         """
         WITH data AS (
             SELECT 1 AS id, 1e1000::DOUBLE AS big UNION ALL
@@ -286,7 +286,8 @@ def test_infinite_value_inside_abs_is_named(decidb_cli):
         SUCH THAT x <= 5
         MAXIMIZE SUM(ABS(x - big))
     """,
-        match=r"DECIDE: big is NaN or infinite on some rows\. Skip those rows by writing 'CASE WHEN isfinite\(big\) THEN big END' in its place\.",
+        kind="Invalid Input Error",
+        at="big",
     )
 
 

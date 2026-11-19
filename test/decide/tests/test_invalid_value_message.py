@@ -1,15 +1,15 @@
-"""The one message for a NaN or infinite number: every site that refuses one names the value as the user wrote it and
-the smallest edit, and the solver path and the direct-solve plans print the same text.
+"""The one message for a NaN or infinite number: every site that refuses one points at the value where it stands in the
+query (the caret), and the solver path and the direct-solve plans print the same text and caret.
 
-A coefficient must be finite (`v is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(v) THEN
-v END' in its place.`); a bound may be infinite and must not be NaN (`the bound v is NaN on some rows. ... 'CASE WHEN
-NOT isnan(v) THEN v END' ...`). The edit stays where the value stands, so no frame's timeline shifts. A NULL value is
-skipped, not refused. A number the model computes from finite ones (a sum over rows, a square) that is too large for a
-DOUBLE names its clause or the objective and asks to scale its data. The wording lives in `DecideInvalidValueMessage`
-(`decide_value_messages.hpp`).
+A coefficient must be finite; a bound may be infinite and must not be NaN; a constant SQL computes as NaN or infinite
+(`1 / 0`) is refused whole. A test of one checks the kind and where the caret lands (`assert_error_at`), not the
+wording, which `DecideInvalidValueMessage` (`decide_value_messages.hpp`) owns. A NULL value is skipped, not refused. A
+number the model computes from finite ones (a sum over rows, a square) that is too large for a DOUBLE names its clause
+or the objective and asks to scale its data.
 """
 
 import pytest
+from decidb_cli import _caret_location, _error_message
 
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
 
@@ -26,16 +26,16 @@ def _query(decide, bad):
     return f"SELECT id FROM (FROM (VALUES {rows}) t(id, a, b, c, g) DECIDE {decide}) q"
 
 
-def _coefficient(value):
-    return f"DECIDE: {value} is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite({value}) THEN {value} END' in its place."
-
-
-def _bound(value):
-    return f"DECIDE: the bound {value} is NaN on some rows. Skip those rows by writing 'CASE WHEN NOT isnan({value}) THEN {value} END' in its place."
+INVALID_INPUT = "Invalid Input Error"
 
 
 def _stderr(cli, sql, mode):
     return cli.execute_raw(f"SET decide_direct_solve='{mode}'; {sql}").stderr
+
+
+def _points_at(cli, sql, mode, at):
+    """`sql` under `mode` fails with an Invalid Input Error whose caret stands inside `at`, the value as written."""
+    cli.assert_error_at(f"SET decide_direct_solve='{mode}'; {sql}", kind=INVALID_INPUT, at=at)
 
 
 # A forced backend (`decidb_cli_gurobi`, `decidb_cli_highs`) keeps the solver path whatever the mode says
@@ -134,7 +134,7 @@ COEFFICIENT_CASES = [
 def test_a_coefficient_that_is_not_finite_is_named_as_written_on_both_paths(decidb_cli, name, decide, value, bad):
     direct = _stderr(decidb_cli, _query(decide, bad), "require")
     solver = _stderr(decidb_cli, _query(decide, bad), "off")
-    assert _coefficient(value) in solver, solver
+    _points_at(decidb_cli, _query(decide, bad), "off", value)
     assert direct == solver
 
 
@@ -184,10 +184,6 @@ def test_a_sum_the_plan_computes_that_overflows_is_named_as_written(decidb_cli, 
     assert direct == solver
 
 
-def _constant(value):
-    return f"DECIDE: {value} is NaN or infinite. Use a finite value."
-
-
 # A coefficient that is a constant, NaN or infinite itself: SQL computes `1 / 0` as infinity, so no row holds it and no
 # `when` skips it. Both paths name it, in one text without the `when`.
 BOTH_PATHS_CONSTANT = [
@@ -204,8 +200,7 @@ BOTH_PATHS_CONSTANT = [
 def test_a_constant_coefficient_that_is_not_finite_is_named_on_both_paths(decidb_cli, name, decide, value):
     direct = _stderr(decidb_cli, _query(decide, "1.0"), "require")
     solver = _stderr(decidb_cli, _query(decide, "1.0"), "off")
-    assert _constant(value) in solver, solver
-    assert "when isfinite" not in solver, solver
+    _points_at(decidb_cli, _query(decide, "1.0"), "off", value)
     assert direct == solver
 
 
@@ -691,8 +686,13 @@ DERIVED_PRODUCT = [
 ]
 
 
-def _derived_message(outcome, written):
-    return _too_large(written) if outcome == "too_large" else _coefficient("b")
+def _derived_error(cli, sql, mode, outcome, written):
+    """A number past a DOUBLE names its clause; an infinite `b` is pointed at where it stands."""
+    if outcome == "too_large":
+        stderr = _stderr(cli, sql, mode)
+        assert _too_large(written) in stderr, stderr
+    else:
+        _points_at(cli, sql, mode, "b")
 
 
 # (CLI, direct-solve mode): the solver path on each backend, and direct solve, which a forced backend turns off. The
@@ -710,8 +710,7 @@ def test_a_derived_coefficient_names_its_value_or_its_clause_on_every_path(
     request, cli_fixture, mode, outcome, name, decide, written
 ):
     cli = request.getfixturevalue(cli_fixture)
-    stderr = _stderr(cli, _derived_query(decide, outcome), mode)
-    assert _derived_message(outcome, written) in stderr, stderr
+    _derived_error(cli, _derived_query(decide, outcome), mode, outcome, written)
 
 
 @pytest.mark.error
@@ -722,8 +721,7 @@ def test_a_coefficient_the_solver_derives_names_its_value_or_its_clause(
     request, cli_fixture, mode, outcome, name, decide, written
 ):
     cli = request.getfixturevalue(cli_fixture)
-    stderr = _stderr(cli, _derived_query(decide, outcome), mode)
-    assert _derived_message(outcome, written) in stderr, stderr
+    _derived_error(cli, _derived_query(decide, outcome), mode, outcome, written)
 
 
 @pytest.mark.error
@@ -731,8 +729,7 @@ def test_a_coefficient_the_solver_derives_names_its_value_or_its_clause(
 @pytest.mark.parametrize("mode", ["off"])
 @pytest.mark.parametrize("name,decide,written", DERIVED_PRODUCT, ids=[case[0] for case in DERIVED_PRODUCT])
 def test_a_factor_on_a_product_names_its_value_or_its_clause(decidb_cli_gurobi, mode, outcome, name, decide, written):
-    stderr = _stderr(decidb_cli_gurobi, _derived_query(decide, outcome), mode)
-    assert _derived_message(outcome, written) in stderr, stderr
+    _derived_error(decidb_cli_gurobi, _derived_query(decide, outcome), mode, outcome, written)
 
 
 @pytest.mark.error
@@ -762,7 +759,7 @@ def test_a_model_of_finite_huge_numbers_keeps_the_solvers_verdict(decidb_cli_gur
 @pytest.mark.error
 @pytest.mark.parametrize("name,decide,value", SOLVER_COEFFICIENT, ids=[case[0] for case in SOLVER_COEFFICIENT])
 def test_a_coefficient_only_the_solver_reads_is_named_as_written(decidb_cli, name, decide, value):
-    assert _coefficient(value) in _stderr(decidb_cli, _query(decide, NAN), "off")
+    _points_at(decidb_cli, _query(decide, NAN), "off", value)
 
 
 # `ABS` is lowered to bounds on a helper, which would word its argument's value as a bound the user never wrote ("the
@@ -774,8 +771,7 @@ def test_a_coefficient_only_the_solver_reads_is_named_as_written(decidb_cli, nam
 def test_a_value_under_abs_is_named_as_written_not_as_a_bound(request, cli_fixture, bad):
     cli = request.getfixturevalue(cli_fixture)
     decide = "per (): x(REAL) SUCH THAT x BETWEEN 0 AND 10 MINIMIZE SUM(ABS(x - b))"
-    stderr = _stderr(cli, _query(decide, bad), "off")
-    assert _coefficient("b") in stderr, stderr
+    _points_at(cli, _query(decide, bad), "off", "b")
 
 
 # The term under `ABS` may be a frame (`at(...)`, `sum(from ... to ...: ...)`). The value check reads it at the row the
@@ -801,8 +797,7 @@ def test_a_frame_under_abs_is_named_as_written(decidb_cli, name, frame, objectiv
         f"SELECT id, x FROM (VALUES {rows}) t(id, v) DECIDE x(REAL) SUCH THAT "
         f"{clauses.format(frame=frame)} {objective.format(frame=frame)}"
     )
-    stderr = _stderr(decidb_cli, sql, "off")
-    assert _coefficient(frame) in stderr, stderr
+    _points_at(decidb_cli, sql, "off", frame)
 
 
 @pytest.mark.error
@@ -810,7 +805,7 @@ def test_a_frame_under_abs_is_named_as_written(decidb_cli, name, frame, objectiv
 def test_a_bound_that_is_nan_is_named_as_written_on_both_paths(decidb_cli, name, decide, value):
     direct = _stderr(decidb_cli, _query(decide, NAN), "require")
     solver = _stderr(decidb_cli, _query(decide, NAN), "off")
-    assert _bound(value) in solver, solver
+    _points_at(decidb_cli, _query(decide, NAN), "off", value)
     assert direct == solver
 
 
@@ -834,7 +829,7 @@ FACTORS = [
 @pytest.mark.parametrize("name,decide", FACTORS, ids=[case[0] for case in FACTORS])
 def test_a_factor_that_is_not_finite_is_named_as_written(decidb_cli, name, decide, bad, written):
     sql = _query(decide.format(bad=bad), "1.0")
-    assert _coefficient(f"(SELECT '{written}'::DOUBLE)") in _stderr(decidb_cli, sql, "off")
+    _points_at(decidb_cli, sql, "off", f"(SELECT '{written}'::DOUBLE)")
 
 
 # A NULL at the places the refusals above read a value (a coefficient and a bound, in A1, R1 and S1): skipped in each.
@@ -862,8 +857,8 @@ def test_a_rewrite_that_needs_a_finite_bound_names_the_infinite_one_as_written(d
     # `norm(e, 0)` states its links with a Big-M, which no infinite bound can dominate: the value is refused where the
     # norm's `ABS` is read, as written, whether it is infinite or NaN.
     decide = "x(REAL) SUCH THAT x <= 10 AND norm(x + b, 0) <= 2 MAXIMIZE SUM(a * x)"
-    assert _coefficient("b") in _stderr(decidb_cli, _query(decide, INFINITY), "off")
-    assert _coefficient("b") in _stderr(decidb_cli, _query(decide, NAN), "off")
+    _points_at(decidb_cli, _query(decide, INFINITY), "off", "b")
+    _points_at(decidb_cli, _query(decide, NAN), "off", "b")
 
 
 # A constant bound as a literal, as an expression that is NaN, and with a factor on the decision.
@@ -878,5 +873,39 @@ def test_a_rewrite_that_needs_a_finite_bound_names_the_infinite_one_as_written(d
 )
 def test_a_constant_bound_that_is_nan_is_named(decidb_cli, decide):
     # Nothing reads a constant bound per row, so the check on the values it admits is the only one that sees it.
-    stderr = _stderr(decidb_cli, _query(decide, "1.0"), "off")
-    assert "is NaN on some rows. Skip those rows by writing 'CASE WHEN NOT isnan(" in stderr, stderr
+    _points_at(
+        decidb_cli,
+        _query(decide, "1.0"),
+        "off",
+        decide.split("<= ")[-1].split(" MAXIMIZE")[0] if "AND x >=" not in decide else "0.0 / 0.0",
+    )
+
+
+# The caret stands under the column itself where the user wrote it, inside a coefficient DeciDB scaled or merged: the
+# factor `2` and the like term `a * x` are no place to point at.
+@pytest.mark.error
+@pytest.mark.parametrize("mode", ["off", "require"])
+@pytest.mark.parametrize(
+    "decide",
+    [
+        "x(REAL) SUCH THAT x <= 5 MAXIMIZE 2 * SUM(b * x)",
+        "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(a * x + b * x)",
+    ],
+    ids=["factor-on-the-sum", "like-terms-merged"],
+)
+def test_the_caret_stands_on_the_column_inside_a_scaled_or_merged_coefficient(decidb_cli, decide, mode):
+    sql = f"SET decide_direct_solve='{mode}'; {_query(decide, NAN)}"
+    decidb_cli.assert_error_at(sql, kind=INVALID_INPUT, at="b")
+    line, column = _caret_location(_error_message(decidb_cli.execute_raw(sql).stderr))
+    assert line[column : column + 5] == "b * x", line
+
+
+# Like terms of opposite signs merge to a difference of the user's literals, each finite and the difference not: the
+# model's own number, which names the objective, not a constant the user wrote.
+@pytest.mark.error
+def test_a_difference_of_finite_literals_past_a_double_names_the_objective(decidb_cli):
+    objective = "SUM(1e308 * x) - SUM(-1e308 * x)"
+    sql = f"SELECT id, x FROM (VALUES (1), (2), (3)) t(id) DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE {objective}"
+    solver = _stderr(decidb_cli, sql, "off")
+    assert _too_large(f"MAXIMIZE {objective}") in solver, solver
+    assert _stderr(decidb_cli, sql, "require") == solver

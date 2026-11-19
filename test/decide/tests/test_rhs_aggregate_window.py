@@ -17,7 +17,6 @@ from fractions import Fraction
 
 import pytest
 
-from decidb_cli import DeciDBCliError
 from solver.types import ObjSense, VarType
 
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
@@ -270,11 +269,7 @@ def test_rhs_aggregate_argument_that_is_nan_raises_without_a_row_position(decidb
         "SELECT id, x FROM (FROM (VALUES (0, 3, 1.0, 5.0), (1, 4, 'NaN'::DOUBLE, 4.0)) t(id, w, cap, p) "
         "DECIDE x(BOOL) SUCH THAT SUM(x * w) <= MIN(cap) MAXIMIZE SUM(p*x)) q"
     )
-    with pytest.raises(
-        DeciDBCliError,
-        match=r"the bound cap is NaN on some rows\. Skip those rows by writing 'CASE WHEN NOT isnan\(cap\) THEN cap END' in its place\.",
-    ):
-        run(decidb_cli, sql, "off")
+    decidb_cli.assert_error_at(f"SET decide_direct_solve='off'; {sql}", kind="Invalid Input Error", at="MIN(cap)")
 
 
 @pytest.mark.error
@@ -285,11 +280,9 @@ def test_rhs_l0_norm_reads_a_nan_body_as_invalid(decidb_cli, mode):
         "SELECT id, x FROM (FROM (VALUES (0, 3, 1.0, 5.0), (1, 4, 'NaN'::DOUBLE, 4.0)) t(id, w, cap, p) "
         "DECIDE x(BOOL) SUCH THAT SUM(x) <= norm(cap, 0) MAXIMIZE SUM(p*x)) q"
     )
-    with pytest.raises(
-        DeciDBCliError,
-        match=r"the bound cap is NaN on some rows\. Skip those rows by writing 'CASE WHEN NOT isnan\(cap\) THEN cap END' in its place\.",
-    ):
-        run(decidb_cli, sql, mode)
+    decidb_cli.assert_error_at(
+        f"SET decide_direct_solve='{mode}'; {sql}", kind="Invalid Input Error", at="norm(cap, 0)"
+    )
 
 
 @pytest.mark.cons_aggregate

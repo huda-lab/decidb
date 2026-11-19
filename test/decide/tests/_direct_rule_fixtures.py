@@ -33,13 +33,18 @@ class RuleFixture:
     near_miss_source: str
     #: A column of `near_miss_source` the near-miss queries select.
     near_miss_column: str
-    #: (DECIDE subquery text, error substring): a problem whose last of 5,000 rows is invalid. The error must
-    #: raise however little of the result a parent reads; `LIMIT 0` may skip it.
+    #: (DECIDE subquery text, error substring or `At`): a problem whose last of 5,000 rows is invalid. The error must
+    #: raise however little of the result a parent reads; `LIMIT 0` may skip it. An `At` is the value the caret of a
+    #: NaN or infinite value stands under.
     late_errors: tuple
     #: The source column the late-error subqueries expose.
     late_column: str
     #: The CLI fixture that forces a backend able to solve `applies`.
     forced_backend_cli: str = "decidb_cli_highs"
+
+
+class At(str):
+    """A NaN or infinite value a late error points at: the text of the query the caret stands inside."""
 
 
 _S1_NAN_LAST = "CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END"
@@ -108,11 +113,11 @@ S1 = RuleFixture(
         # one group at a time, so a check that stands above it reaches a late group only when a parent reads that far.
         (
             _s1_late_error("x(BOOL) SUCH THAT SUM(x) <= 3 MAXIMIZE SUM(score*x)", score_sql=_S1_NAN_LAST),
-            "score is NaN or infinite on some rows",
+            At("score*x"),
         ),
         (
             _s1_late_error("x(BOOL) SUCH THAT per g: SUM(x) by (g) <= 3 MAXIMIZE SUM(score*x)", score_sql=_S1_NAN_LAST),
-            "score is NaN or infinite on some rows",
+            At("score*x"),
         ),
         # What a group's bound reads: a NaN limit on the last row of the last group.
         (
@@ -120,7 +125,7 @@ S1 = RuleFixture(
                 "x(BOOL) SUCH THAT SUM(x) by (g) <= cap MAXIMIZE SUM(score*x)",
                 cap_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 3.0 END",
             ),
-            "the bound cap is NaN on some rows",
+            At("<= cap"),
         ),
         # What a row fixes: a NaN value on the last row, and a last row that two clauses fix to both values.
         (
@@ -128,7 +133,7 @@ S1 = RuleFixture(
                 "x(BOOL) SUCH THAT SUM(x) by (g) <= 3 AND x <= cap MAXIMIZE SUM(score*x)",
                 cap_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
             ),
-            "the bound cap is NaN on some rows",
+            At("<= cap"),
         ),
         (
             _s1_late_error("x(BOOL) SUCH THAT SUM(x) by (g) <= 3 AND x >= (i=4999) AND x <= 0 MAXIMIZE SUM(score*x)"),
@@ -140,7 +145,7 @@ S1 = RuleFixture(
                 "x(BOOL) SUCH THAT SUM(x) by (g) = cap MAXIMIZE SUM(score*x)",
                 cap_sql="CASE WHEN i=4999 THEN 2.0 ELSE 3.0 END",
             ),
-            "takes more than one value",
+            At("= cap"),
         ),
         # A lower bound the last group cannot reach: its only row is alone in a group of its own.
         (
@@ -227,7 +232,7 @@ S2 = RuleFixture(
         # A NaN score on the last of 5,000 rows, which the plan reads below its rank windows.
         (
             _s2_late_error(f"x(BOOL) SUCH THAT {_S2_QUOTAS} MAXIMIZE SUM(score*x)", score_sql=_S1_NAN_LAST),
-            "score is NaN or infinite on some rows",
+            At("score*x"),
         ),
         # A level that fails only in its last group. Two rows fixed to 1 share one group of the finer level (rows 4899
         # and 4999 are in group h = 99) or of the coarser level (rows 4949 and 4999 are in group g = 49), and its cap is
@@ -383,7 +388,7 @@ R1 = RuleFixture(
                 "x(REAL) SUCH THAT x >= 0 AND x <= cap AND SUM(w*x) <= 3000 MAXIMIZE SUM(v*x)",
                 w_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
             ),
-            "w is NaN or infinite on some rows",
+            At("w*x"),
         ),
         # The same in the last of fifty budgets: a NaN weight, and a lower limit that the last group's only row cannot
         # reach.
@@ -392,7 +397,7 @@ R1 = RuleFixture(
                 "x(REAL) SUCH THAT x >= 0 AND x <= cap AND SUM(w*x) by (g) <= 60 MAXIMIZE SUM(v*x)",
                 w_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
             ),
-            "w is NaN or infinite on some rows",
+            At("w*x"),
         ),
         (
             _r1_late_error(
@@ -495,14 +500,14 @@ N1 = RuleFixture(
                 "x(REAL) SUCH THAT SUM(POWER(x,2)) <= 9 MAXIMIZE SUM(s*x)",
                 s_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
             ),
-            "s is NaN or infinite on some rows",
+            At("s*x"),
         ),
         (
             _n1_late_error(
                 "x(REAL) SUCH THAT SUM(POWER(x,2)) by (k) <= l MAXIMIZE SUM(s*x)",
                 l_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 9.0 END",
             ),
-            "NaN on some rows",
+            At("<= l"),
         ),
         # A NaN score on the last row of the last of fifty groups.
         (
@@ -511,7 +516,7 @@ N1 = RuleFixture(
                 s_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
                 k_sql="(i % 50)::VARCHAR",
             ),
-            "s is NaN or infinite on some rows",
+            At("s*x"),
         ),
         # A score past a DOUBLE when squared, in a group of its own: nothing but this row reads its sum.
         (
@@ -536,7 +541,7 @@ N1 = RuleFixture(
                 "x(REAL) SUCH THAT SUM(POWER(SQRT(w) * x, 2)) <= 9 MAXIMIZE SUM(s*x)",
                 w_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
             ),
-            "SQRT(w) is NaN or infinite on some rows",
+            At("SQRT(w)"),
         ),
         (
             _n1_late_error(
@@ -650,7 +655,7 @@ A2 = RuleFixture(
                 "per (): c(REAL) SUCH THAT c BETWEEN 0 AND 10 MINIMIZE SUM(POWER(c - v, 2))",
                 v_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
             ),
-            "v is NaN or infinite on some rows",
+            At("- v"),
         ),
         (
             _a2_late_error(
@@ -665,14 +670,14 @@ A2 = RuleFixture(
                 "per (): c(REAL) SUCH THAT c <= cap MINIMIZE SUM(POWER(c - v, 2))",
                 cap_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 5.0 END",
             ),
-            "the bound cap is NaN on some rows",
+            At("<= cap"),
         ),
         (
             _a2_late_error(
                 "per g: c(REAL) SUCH THAT c <= cap MINIMIZE SUM(POWER(c - v, 2))",
                 cap_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 5.0 END",
             ),
-            "the bound cap is NaN on some rows",
+            At("<= cap"),
         ),
         # The same on a keyed decision: the last row belongs to one of seven classes.
         (
@@ -680,7 +685,7 @@ A2 = RuleFixture(
                 "per g: c(REAL) SUCH THAT c BETWEEN 0 AND 10 MINIMIZE SUM(POWER(c - v, 2))",
                 v_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
             ),
-            "v is NaN or infinite on some rows",
+            At("- v"),
         ),
     ),
     late_column="i",
@@ -834,7 +839,7 @@ S3 = RuleFixture(
                 "x(BOOL) SUCH THAT SUM(w*x) <= 3000 MAXIMIZE SUM(x)",
                 w_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
             ),
-            "w is NaN or infinite on some rows",
+            At("w*x"),
         ),
         # The same in the last of fifty budgets, and a limit below zero that only the last group's last row gives.
         (
@@ -842,7 +847,7 @@ S3 = RuleFixture(
                 "x(BOOL) SUCH THAT SUM(w*x) by (g) <= 30 MAXIMIZE SUM(x)",
                 w_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
             ),
-            "w is NaN or infinite on some rows",
+            At("w*x"),
         ),
         (
             _s3_late_error(
@@ -940,18 +945,18 @@ R4 = RuleFixture(
         # Errors R4 raises, on the last of 5,000 rows: a zero demand, a NaN demand, a NaN weight, a NaN capacity and a negative one.
         (
             _r4_late_error(f"x(REAL) SUCH THAT {_R4_PLAIN}", d_sql="CASE WHEN i=4999 THEN 0.0 ELSE 2.0 END"),
-            "1 / d is NaN or infinite on some rows",
+            At("1 / d"),
         ),
         (
             _r4_late_error(f"x(REAL) SUCH THAT {_R4_PLAIN}", d_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 2.0 END"),
-            "1 / d is NaN or infinite on some rows",
+            At("1 / d"),
         ),
         (
             _r4_late_error(
                 "x(REAL) SUCH THAT x <= cap AND SUM(w * x) <= 9 MAXIMIZE MIN(x / d)",
                 w_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
             ),
-            "w is NaN or infinite on some rows",
+            At("w * x"),
         ),
         # The last of fifty budgets: a NaN weight, a NaN limit and a negative one.
         (
@@ -959,14 +964,14 @@ R4 = RuleFixture(
                 "x(REAL) SUCH THAT x <= cap AND SUM(w * x) by (g) <= 9 MAXIMIZE MIN(x / d)",
                 w_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
             ),
-            "w is NaN or infinite on some rows",
+            At("w * x"),
         ),
         (
             _r4_late_error(
                 "x(REAL) SUCH THAT x <= cap AND SUM(x) by (g) <= l MAXIMIZE MIN(x / d)",
                 l_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 9.0 END",
             ),
-            "the bound l is NaN on some rows",
+            At("<= l"),
         ),
         (
             _r4_late_error(
@@ -981,7 +986,7 @@ R4 = RuleFixture(
                 "per g: x(REAL) SUCH THAT x <= cap AND SUM(w * x) by (g) <= 9 MAXIMIZE MIN(x / d)",
                 w_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
             ),
-            "w is NaN or infinite on some rows",
+            At("w * x"),
         ),
         (
             _r4_late_error(
@@ -994,7 +999,7 @@ R4 = RuleFixture(
             _r4_late_error(
                 f"x(REAL) SUCH THAT {_R4_PLAIN}", cap_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 4.0 END"
             ),
-            "the bound cap is NaN on some rows",
+            At("<= cap"),
         ),
         (
             _r4_late_error(f"x(REAL) SUCH THAT {_R4_PLAIN}", cap_sql="CASE WHEN i=4999 THEN -1.0 ELSE 4.0 END"),

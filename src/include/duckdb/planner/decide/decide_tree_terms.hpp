@@ -50,11 +50,6 @@ struct DecideTerm {
 	idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
 	//! The exact G whose `per` qualifies this term. Scope indexes may be reused by several reducer occurrences.
 	idx_t qualifier_reducer = DConstants::INVALID_INDEX;
-	//! The values the user wrote that `coefficient` is computed from when DeciDB computed it (like terms merged, a
-	//! reducer's factor applied), in reading order; empty when `coefficient` is as written. A coefficient that is not
-	//! finite names the first of them a column holds that is not finite, and its clause when there is none: DeciDB's
-	//! own arithmetic left the DOUBLE range (DecideInvalidValueMessage). Only a row where it fails reads them.
-	vector<unique_ptr<Expression>> inputs;
 	//! A frame selector's payload term (language/guide.md §5.6): the variable is read at
 	//! the row frame `frame_read` (into LogicalDecide::frames) selects for each row, not at
 	//! the row itself. Its coefficient reads a READ frame column (DecideFrameColumn).
@@ -99,8 +94,6 @@ struct DecideProductGroup {
 	idx_t avg_group_key = DConstants::INVALID_INDEX;
 	//! SUM inside a reducer, NONE outside every reducer (counted once), as for DecideTerm. Read by the objective only.
 	LinearTermReduction reduction = LinearTermReduction::NONE;
-	//! The values `weight` is computed from (DecideTerm::inputs).
-	vector<unique_ptr<Expression>> inputs;
 	//! As DecideTerm::child.
 	idx_t child = DConstants::INVALID_INDEX;
 };

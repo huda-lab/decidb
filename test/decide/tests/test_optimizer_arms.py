@@ -182,7 +182,7 @@ def test_dividing_an_abs_by_a_zero_literal_is_refused_where_the_number_is_read(r
         DECIDE y(INT)
         SUCH THAT y <= 6 AND SUM(ABS(y) / 0) <= 30
         MAXIMIZE SUM(y)"""
-    cli.assert_error(sql, match=re.escape("DECIDE: 1 / 0 is NaN or infinite. Use a finite value."))
+    cli.assert_error_at(sql, kind="Invalid Input Error", at="1 / 0")
 
 
 def test_highs_names_the_negated_square_when_the_objective_minimizes_it(decidb_cli_highs):
@@ -477,4 +477,4 @@ def test_dividing_by_a_data_zero_is_refused_naming_the_coefficient(request, back
         DECIDE y(INT)
         SUCH THAT y <= 6 AND SUM({divided}) <= 30
         MAXIMIZE SUM(y)"""
-    cli.assert_error(sql, match=re.escape("DECIDE: 1 / c is NaN or infinite on some rows"))
+    cli.assert_error_at(sql, kind="Invalid Input Error", at="1 / c")

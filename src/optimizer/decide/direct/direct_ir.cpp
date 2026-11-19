@@ -78,6 +78,10 @@ public:
 		ir.render = [&decide = decide](const Expression &expr) {
 			return RenderDecideSource(expr, decide.source_text, decide.keyed_scopes, &decide.keys);
 		};
+		ir.place = [&decide = decide](const Expression &expr) {
+			// What a NULL guard protects stands in the query, as the render quotes it.
+			return DecideSpanLocation(decide.source_text, DecideUnguarded(expr).GetQueryLocation());
+		};
 		ir.decide_index = decide.decide_index;
 		D_ASSERT(decide.children.size() == 1 && decide.children[0]);
 		source_bindings = decide.SourceBindings();

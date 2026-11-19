@@ -587,8 +587,9 @@ struct DirectRowBound {
 	//! A coefficient of a decision: a NaN or an infinity is the solver's coefficient error, where a bound may be
 	//! infinite.
 	bool coefficient = false;
-	//! The value as the user wrote it, which the error names.
+	//! The value as the user wrote it, which the error names, and where it stands.
 	string written;
+	optional_idx place;
 };
 
 //! The message a row raises for a per-row bound that is NaN or, for a coefficient, infinite, on a row its clause keeps;

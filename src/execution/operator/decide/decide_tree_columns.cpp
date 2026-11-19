@@ -347,27 +347,22 @@ const vector<bool> &DecideTreeColumns::ReadEntries(idx_t node, const DecideTerm 
 	return present;
 }
 
-vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, const vector<bool> &reads, vector<bool> *nulls,
-                                          const DecideTermSite *site, const vector<unique_ptr<Expression>> *inputs) {
+vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, const vector<bool> &reads, vector<bool> *nulls) {
 	auto &program = tree.nodes[node]->programs[p];
 	Report(node, p, reads);
 	auto &column = *Computed(node).programs[p].values;
 	const idx_t count = descent.Containers()[node].Count();
 	D_ASSERT(reads.size() == count && (!nulls || nulls->size() == count));
-	// The entry a message reads an input on: the window's first, then the one entry a retry reads.
+	// The entry a message reads a part on: the window's first, then the one entry a retry reads.
 	idx_t base = 0;
-	static const vector<unique_ptr<Expression>> no_inputs;
-	DecideValueInputs computed_from {
-	    inputs ? *inputs : no_inputs, [&](const Expression &input, idx_t i) {
-		    for (idx_t k = 0; k < inputs->size(); k++) {
-			    if ((*inputs)[k].get() != &input) {
-				    continue;
-			    }
-			    // The input is computed wherever its coefficient is.
-			    return Computed(site->node).programs[site->inputs[k]].values->GetValue(base + i);
-		    }
-		    throw InternalException("DECIDE tree: a coefficient's input has no program");
-	    }};
+	DecideValueParts composed_of;
+	for (auto part : program.parts) {
+		composed_of.values.push_back(tree.nodes[node]->programs[part].written.get());
+	}
+	composed_of.value_at = [&](idx_t part, idx_t i) {
+		// A part is computed where its coefficient is.
+		return Computed(node).programs[program.parts[part]].values->GetValue(base + i);
+	};
 	// A coefficient's message names its clause where DeciDB's own arithmetic left the DOUBLE range, as the clause is
 	// written: a helper's member names the clause that first read the helper (DecideNode::value_link_clause); a bound's
 	// never.
@@ -378,7 +373,7 @@ vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, const vector<bool
 	    names,
 	    context,
 	    written_clause(owner.link == DConstants::INVALID_INDEX ? owner.source_clause_id : owner.value_link_clause),
-	    inputs ? &computed_from : nullptr};
+	    &composed_of};
 	vector<double> out;
 	out.reserve(count);
 	for (idx_t start = 0; start < count; start += STANDARD_VECTOR_SIZE) {
@@ -389,7 +384,7 @@ vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, const vector<bool
 			ExtractDoubleColumn(window, size, program.sign, out, source, nulls, &reads, start);
 		} catch (std::exception &) {
 			// The entry that fails, which the window raises first: each entry of the window alone, so the message
-			// reads that entry's own inputs. It raises at once.
+			// reads that entry's own parts. It raises at once.
 			for (idx_t i = 0; i < size; i++) {
 				Vector one(window.GetType(), 1);
 				VectorOperations::Copy(window, one, i + 1, i, 0);

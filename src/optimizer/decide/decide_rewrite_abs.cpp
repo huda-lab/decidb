@@ -13,6 +13,7 @@
 #include "duckdb/planner/decide/decide_term_split.hpp"
 
 #include <cstdlib>
+#include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/profiler.hpp"
@@ -355,6 +356,8 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 			names.inputs.push_back(term.coefficient->Copy());
 			names.texts.push_back(
 			    RenderDecideSource(*term.coefficient, decide.source_text, decide.keyed_scopes, &decide.keys));
+			names.places.push_back(
+			    DecideSpanLocation(decide.source_text, DecideUnguarded(*term.coefficient).GetQueryLocation()));
 		}
 	}
 	if (!total) {

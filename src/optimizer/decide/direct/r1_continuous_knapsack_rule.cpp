@@ -858,10 +858,10 @@ private:
 			if (!DirectIsFiniteWhereKept(optimizer, clause.coefficient)) {
 				raw.messages.push_back(coded(read_on(number(laid.coefficient, clause.coefficient_names))));
 			}
-			raw.messages.push_back(coded(read_on(
-			    calc.If(calc.Fn("isnan", DoubleColumn(laid.rhs)),
-			            calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::BOUND, clause.rhs_text))),
-			            calc.Constant(Value(LogicalType::VARCHAR))))));
+			raw.messages.push_back(
+			    coded(read_on(calc.If(calc.Fn("isnan", DoubleColumn(laid.rhs)),
+			                          calc.RaiseInvalidValue(DecideValueRole::BOUND, clause.rhs_text, clause.rhs_place),
+			                          calc.Constant(Value(LogicalType::VARCHAR))))));
 		}
 		for (idx_t k = 0; k < DecisionCount(); k++) {
 			ItemBindings item;

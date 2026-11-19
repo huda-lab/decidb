@@ -57,6 +57,8 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
@@ -212,7 +214,7 @@ private:
 		if (reduces) {
 			InClassOnly(comparison.right);
 		}
-		auto invalid = InvalidValueMessage(*comparison.right, text, Kept());
+		auto invalid = InvalidValueMessage(*comparison.right, text, SpanOf(location), Kept());
 		if (reduces) {
 			// An `=` bound owes a disagreement check, which must be a scope check (it is class-aware and runs before
 			// any rule), so its NaN check stands with it, ahead of it, and every path raises the same error of the two.
@@ -290,7 +292,7 @@ private:
 		}
 		// The group's one value is not yet limited to the rows the clause keeps: the solver path does that, a rule's
 		// group is those rows.
-		auto nan = NanMessage(*comparison.right, text);
+		auto nan = NanMessage(*comparison.right, text, SpanOf(location));
 		group->invalid = nan ? calc.Out(nan) : nullptr;
 		Record(comparison, std::move(group));
 	}
@@ -497,7 +499,8 @@ private:
 		// A norm's definition can hide a NaN (an L0 count's SIGN reads it as 0), so the value checked is the body.
 		auto body = DecideWrittenNormBody(reducer);
 		auto checked = body ? body : argument;
-		auto nan = NanMessage(*checked, Written(body ? *body : *reducer.children[0]), read_as);
+		auto &named = body ? *body : *reducer.children[0];
+		auto nan = NanMessage(*checked, Written(named), SpanOf(named.GetQueryLocation()), read_as);
 		if (!nan) {
 			return nullptr;
 		}
@@ -699,21 +702,27 @@ private:
 		return one;
 	}
 
-	//! The message a row raises for a NaN `value` among `rows` (every row when null), and NULL elsewhere: the one text
-	//! of DecideInvalidValueMessage, naming the bound as `written`; null when `value` cannot be NaN. A NULL bound skips
-	//! its instance (deck p. 50) and infinity is a value.
-	unique_ptr<Expression> InvalidValueMessage(const Expression &value, const string &written,
+	//! The error a row raises for a NaN `value` among `rows` (every row when null), and NULL elsewhere: the one error
+	//! of DecideInvalidValueMessage, naming the bound as `written` and pointing at `place`; null when `value` cannot be
+	//! NaN. A NULL bound skips its instance (deck p. 50) and infinity is a value.
+	unique_ptr<Expression> InvalidValueMessage(const Expression &value, const string &written, optional_idx place,
 	                                           const ExprPtr &rows) const {
-		auto nan = NanMessage(value, written);
+		auto nan = NanMessage(value, written, place);
 		if (!nan) {
 			return nullptr;
 		}
 		return calc.Out(DirectOnKeptRows(calc, rows, nan));
 	}
 
-	//! The message a row raises for a `value` its `role` refuses -- a NaN bound, a coefficient that is not finite --
-	//! and NULL elsewhere; null when `value` cannot be either.
-	ExprPtr NanMessage(const Expression &value, const string &written,
+	//! Where a message about the expression at `location` points: the span the query text holds for it, none for a
+	//! location in a table macro's tail.
+	optional_idx SpanOf(optional_idx location) const {
+		return DecideSpanLocation(decide.source_text, location);
+	}
+
+	//! The error a row raises for a `value` its `role` refuses -- a NaN bound, a coefficient that is not finite -- and
+	//! NULL elsewhere; null when `value` cannot be either. `written` is the value as the query writes it, at `place`.
+	ExprPtr NanMessage(const Expression &value, const string &written, optional_idx place,
 	                   DecideValueRole role = DecideValueRole::BOUND) const {
 		if (value.return_type != LogicalType::FLOAT && value.return_type != LogicalType::DOUBLE) {
 			return nullptr;
@@ -725,16 +734,35 @@ private:
 		auto refused = role == DecideValueRole::BOUND
 		                   ? calc.Fn("isnan", number)
 		                   : calc.Cmp(ExpressionType::COMPARE_EQUAL, calc.Fn("isfinite", number), calc.Bool(false));
-		return calc.If(std::move(refused), calc.Constant(Value(DecideInvalidValueMessage(role, written))),
+		return calc.If(std::move(refused), calc.RaiseInvalidValue(role, written, place),
 		               calc.Constant(Value(LogicalType::VARCHAR)));
 	}
 
+	//! `message` with the place of each error it raises left out, so two checks of one value stand as one wherever the
+	//! value is written.
+	static unique_ptr<Expression> WithoutPlaces(const Expression &message) {
+		auto copy = message.Copy();
+		ExpressionIterator::EnumerateExpression(copy, [](Expression &expression) {
+			if (expression.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+				return;
+			}
+			auto &function = expression.Cast<BoundFunctionExpression>();
+			if (function.function.name == "__internal_decide_invalid_value") {
+				function.children[2] = make_uniq<BoundConstantExpression>(Value(LogicalType::UBIGINT));
+			}
+		});
+		return copy;
+	}
+
+	//! A check of a value already checked is dropped, and the place the first one raises at stays (the first error
+	//! reached is the one raised).
 	void AddValueCheck(unique_ptr<Expression> message) {
 		if (!message) {
 			return;
 		}
+		auto key = WithoutPlaces(*message);
 		for (auto &check : decide.scope_checks) {
-			if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID && check.value->Equals(*message)) {
+			if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID && WithoutPlaces(*check.value)->Equals(*key)) {
 				return;
 			}
 		}

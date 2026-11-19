@@ -217,9 +217,8 @@ private:
 	//! for, a relation-qualified one's first of each class, which it is computed on once the repeats are left out
 	//! (language/guide.md §5.1): a NULL coefficient there, or the decision of `term` (none for a weight) with no
 	//! instance there, leaves the row's instance no value (`null_rows`, D84).
-	void ReadPart(const DecideTermSite &site, idx_t qualifier_scope, int sign,
-	              const vector<unique_ptr<Expression>> &inputs, const DecideTerm *term, CoefficientColumn &column,
-	              vector<bool> &null_rows);
+	void ReadPart(const DecideTermSite &site, idx_t qualifier_scope, int sign, const DecideTerm *term,
+	              CoefficientColumn &column, vector<bool> &null_rows);
 	//! The objective's linear terms `terms` at their sites `sites`: each its decision as a
 	//! row reads it, its column and its filter, the rows it is read on (D84).
 	vector<TermFilterState> ObjectiveTerms(idx_t root, const vector<DecideTerm> &terms,

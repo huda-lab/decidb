@@ -855,8 +855,9 @@ def test_a2_a_bad_value_on_the_last_row_raises_under_count_and_where(decidb_cli)
         "DECIDE per (): c(REAL) SUCH THAT c BETWEEN 0 AND 10 MINIMIZE SUM(POWER(c - v, 2))"
     )
     for outer in (f"SELECT COUNT(*) FROM ({inner}) q", f"SELECT i FROM ({inner}) q WHERE i = 0"):
-        with pytest.raises(DeciDBCliError, match=r"v is NaN or infinite on some rows"):
-            _run(decidb_cli, outer, "require")
+        decidb_cli.assert_error_at(
+            f"SET decide_direct_solve='require'; {outer}", kind="Invalid Input Error", at="c - v"
+        )
     assert _run(decidb_cli, f"SELECT i FROM ({inner}) q LIMIT 0", "require")[0] == []
 
 
@@ -1727,5 +1728,6 @@ def test_a2_a_bad_value_on_the_last_row_raises_under_an_absolute_loss(decidb_cli
             f"DECIDE per (): c(REAL) SUCH THAT c BETWEEN 0 AND 10 MINIMIZE {objective}"
         )
         for outer in (f"SELECT COUNT(*) FROM ({inner}) q", f"SELECT i FROM ({inner}) q WHERE i = 0"):
-            with pytest.raises(DeciDBCliError, match=r"v is NaN or infinite on some rows"):
-                _run(decidb_cli, outer, "require")
+            decidb_cli.assert_error_at(
+                f"SET decide_direct_solve='require'; {outer}", kind="Invalid Input Error", at="c - v"
+            )

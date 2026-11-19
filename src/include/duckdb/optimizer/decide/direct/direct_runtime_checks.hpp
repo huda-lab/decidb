@@ -45,13 +45,16 @@ unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const Expression
 
 //! What a message names for a number a plan checks, as the solver path names it (ValueSource): the values it is
 //! computed from that a column holds, each over the source with the text the user wrote it as, in reading order, and
-//! the clause (or the objective) it belongs to. A literal is no column's value, so it is not among `inputs`; it is
-//! among `constants`, which a message names when one is NaN or infinite itself (DecideValueRole::CONSTANT).
+//! the clause (or the objective) it belongs to, and where each stands in the query (the error points at it). A literal
+//! is no column's value, so it is not among `inputs`; it is among `constants`, which a message names when one is NaN
+//! or infinite itself (DecideValueRole::CONSTANT).
 struct DirectNumberNames {
 	vector<unique_ptr<Expression>> inputs;
 	vector<string> texts;
+	vector<optional_idx> places;
 	vector<unique_ptr<Expression>> constants;
 	vector<string> constant_texts;
+	vector<optional_idx> constant_places;
 	string clause;
 };
 
@@ -65,9 +68,12 @@ ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number
                             const std::function<ExprPtr(const Expression &)> &into);
 
 //! The texts a message can take, for a message kept as a code. Code i stands for texts[i], and the texts are in
-//! ascending order, so the least code is the code of the least text.
+//! ascending order, so the least code is the code of the least text. The codes after the texts stand for the calls that
+//! raise a value's error where they are evaluated (ExpressionBuilder::RaiseInvalidValue), which no text holds: code
+//! texts.size() + j stands for raises[j].
 struct DirectMessageCodes {
 	vector<string> texts;
+	vector<ExprPtr> raises;
 
 	static LogicalType Type() {
 		return LogicalType::UINTEGER;
@@ -76,9 +82,10 @@ struct DirectMessageCodes {
 
 //! Dictionary encoding of a message, for an aggregate that takes the least message of a group (late materialization of
 //! strings). `message` is a VARCHAR expression whose results are constants: CASEs over constants, as
-//! DirectNumberMessage and DirectOnKeptRows build them, so every text it can take is known when the plan is built.
-//! Returns the expression with each text replaced by its code (a NULL stays NULL) and fills `codes`. The aggregate
-//! takes MIN of the codes and DirectDecodeMessage gives the text back on the group's row, where it raises.
+//! DirectNumberMessage and DirectOnKeptRows build them, so every text it can take is known when the plan is built; a
+//! leaf may also be a call that raises. Returns the expression with each text and each call replaced by its code (a
+//! NULL stays NULL) and fills `codes`. The aggregate takes MIN of the codes and DirectDecodeMessage gives the text back
+//! on the group's row, where it raises, and evaluates the call there.
 ExprPtr DirectEncodeMessage(const ExpressionBuilder &calc, const ExprPtr &message, DirectMessageCodes &codes);
 
 //! The message a code (of type DirectMessageCodes::Type()) stands for, and NULL for a NULL code.
@@ -121,9 +128,9 @@ unique_ptr<Expression> DirectInfeasibleErrorPredicate(Optimizer &optimizer, cons
 unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer, const DirectStateErrors &errors);
 
 //! Evaluates to true for a DOUBLE bound that is not NaN, and raises the bound error, naming the bound as the user
-//! `written` it, otherwise. Infinity is a valid bound (no bound on that side), and a NULL one skips the instance it
-//! reaches, which the plan reads as no bound.
+//! `written` it, at `place` in the query, otherwise. Infinity is a valid bound (no bound on that side), and a NULL one
+//! skips the instance it reaches, which the plan reads as no bound.
 unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding,
-                                                 const string &written);
+                                                 const string &written, optional_idx place);
 
 } // namespace duckdb

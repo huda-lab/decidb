@@ -49,21 +49,6 @@ static void EnumerateChildrenConst(const Expression &expr,
 	throw InternalException("DECIDE term '%s' reached term extraction unopened", term.opaque->ToString());
 }
 
-//! Takes what a coefficient is computed from out of its term (DecideTerm::inputs): the values recorded when DeciDB
-//! computed it, else the coefficient itself, as written.
-static vector<unique_ptr<Expression>> TakeInputs(vector<unique_ptr<Expression>> &inputs,
-                                                 const Expression &coefficient) {
-	vector<unique_ptr<Expression>> taken;
-	if (inputs.empty()) {
-		taken.push_back(coefficient.Copy());
-	}
-	for (auto &input : inputs) {
-		taken.push_back(std::move(input));
-	}
-	inputs.clear();
-	return taken;
-}
-
 //! Whether `expr` is a reducer: an aggregate, a frame's marker excepted (a tuple term read at another row).
 static bool IsReducer(const Expression &expr) {
 	idx_t frame;
@@ -457,7 +442,6 @@ private:
 		for (auto &term : terms) {
 			LowerFrames(term.coefficient);
 			LowerFrames(term.filter);
-			LowerFrames(term.inputs);
 		}
 	}
 
@@ -476,7 +460,6 @@ private:
 		for (auto &group : groups) {
 			LowerFrames(group.weight);
 			LowerFrames(group.filter);
-			LowerFrames(group.inputs);
 			LowerFrames(group.left);
 			LowerFrames(group.right);
 		}
@@ -667,13 +650,8 @@ private:
 				continue;
 			}
 			auto &merged = out[target];
-			auto inputs = TakeInputs(merged.inputs, *merged.coefficient);
-			for (auto &input : TakeInputs(term.inputs, *term.coefficient)) {
-				inputs.push_back(std::move(input));
-			}
 			merged.coefficient = DecideMergeLikeCoefficients(context, merged.sign, std::move(merged.coefficient),
 			                                                 term.sign, std::move(term.coefficient));
-			merged.inputs = std::move(inputs);
 		}
 		terms = std::move(out);
 	}
@@ -745,15 +723,11 @@ private:
 	//! rebuilt node through `FunctionBinder`. Casting first preserves the division
 	//! semantics the user's expression was bound with; binding after is what removes
 	//! the need to reuse another node's `FunctionData`. A missing coefficient is 1.
-	//!
-	//! The product is a number DeciDB computes: `inputs` (DecideTerm::inputs) records the factor and what the
-	//! coefficient is computed from, in the order the operands stand.
 	void ScaleCoefficient(const BoundFunctionExpression &scale_func, const Expression &scale, bool divides,
-	                      unique_ptr<Expression> &coef, vector<unique_ptr<Expression>> &inputs) const {
+	                      unique_ptr<Expression> &coef) const {
 		if (!coef) {
 			coef = make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1));
 		}
-		auto written = TakeInputs(inputs, *coef);
 		const auto &coef_type = scale_func.function.arguments[divides ? 0 : 1];
 		const auto &scale_type = scale_func.function.arguments[divides ? 1 : 0];
 		vector<unique_ptr<Expression>> children;
@@ -765,13 +739,6 @@ private:
 		} else {
 			children.push_back(BoundCastExpression::AddDefaultCastToType(scale.Copy(), scale_type));
 			children.push_back(BoundCastExpression::AddDefaultCastToType(std::move(coef), coef_type));
-			inputs.push_back(scale.Copy());
-		}
-		for (auto &input : written) {
-			inputs.push_back(std::move(input));
-		}
-		if (divides) {
-			inputs.push_back(scale.Copy());
 		}
 		coef = DecideRebindOperator(context, divides ? "/" : "*", std::move(children));
 	}
@@ -786,10 +753,10 @@ private:
 	                           vector<DecideTerm> &terms, vector<DecideProductGroup> &groups, idx_t linear_before,
 	                           idx_t group_before) {
 		for (idx_t i = linear_before; i < terms.size(); i++) {
-			ScaleCoefficient(scale_func, scale, divides, terms[i].coefficient, terms[i].inputs);
+			ScaleCoefficient(scale_func, scale, divides, terms[i].coefficient);
 		}
 		for (idx_t i = group_before; i < groups.size(); i++) {
-			ScaleCoefficient(scale_func, scale, divides, groups[i].weight, groups[i].inputs);
+			ScaleCoefficient(scale_func, scale, divides, groups[i].weight);
 		}
 	}
 

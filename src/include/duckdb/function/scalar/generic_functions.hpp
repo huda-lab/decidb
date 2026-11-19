@@ -42,6 +42,15 @@ struct InternalDecideBoundDisagreementFun {
 	static ScalarFunction GetFunction();
 };
 
+struct InternalDecideInvalidValueFun {
+	static constexpr const char *Name = "__internal_decide_invalid_value";
+	static constexpr const char *Parameters = "role,written,place";
+	static constexpr const char *Description = "Raises the error of a NaN or infinite value the model cannot read, at its place in the query";
+	static constexpr const char *Example = "";
+
+	static ScalarFunction GetFunction();
+};
+
 struct InternalDecideWarnNumbersFun {
 	static constexpr const char *Name = "__internal_decide_warn_numbers";
 	static constexpr const char *Parameters = "";

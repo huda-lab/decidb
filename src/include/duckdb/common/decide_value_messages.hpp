@@ -14,6 +14,8 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/common/exception.hpp"
+#include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/types/value.hpp"
@@ -34,26 +36,31 @@ namespace duckdb {
 enum class DecideValueRole : uint8_t { COEFFICIENT, BOUND, TOO_LARGE, CONSTANT };
 
 //! The error for a NaN or infinite value, the one text every site that refuses one raises. `written` is the value as
-//! the user wrote it (the cut text of the query, or the tree rendered where no text was cut). The message gives the
-//! smallest edit: the value written again where it stands as `CASE WHEN <test> THEN <value> END`, which is NULL where
-//! the test fails and so skips that row's instance. A `when` would drop the rows before any frame is computed and
-//! shift every frame's timeline, so the edit stays in place, and it reads the same for every kind of value. It names
-//! no row: a row's position in the input depends on the scan.
+//! the user wrote it (cut from the query where it stands, or the tree rendered where no text was cut); the error
+//! points at it (`Exception::InitializeExtraInfo`), so the sentence only names it. It names no row: a row's position
+//! in the input depends on the scan.
 //! For TOO_LARGE, `written` is the clause (or the objective) the sum belongs to, and the edit is to scale its data.
 inline string DecideInvalidValueMessage(DecideValueRole role, const string &written) {
 	if (role == DecideValueRole::TOO_LARGE) {
 		return "DECIDE: " + written + " computes a number too large for a DOUBLE. Scale its data down.";
 	}
 	if (role == DecideValueRole::CONSTANT) {
-		return "DECIDE: " + written + " is NaN or infinite. Use a finite value.";
+		return "'" + written + "' is NaN or infinite";
 	}
 	if (role == DecideValueRole::BOUND) {
-		return "DECIDE: the bound " + written +
-		       " is NaN on some rows. Skip those rows by writing 'CASE WHEN NOT isnan(" + written + ") THEN " +
-		       written + " END' in its place.";
+		return "the bound '" + written + "' is NaN on some rows";
 	}
-	return "DECIDE: " + written + " is NaN or infinite on some rows. Skip those rows by writing 'CASE WHEN isfinite(" +
-	       written + ") THEN " + written + " END' in its place.";
+	return "'" + written + "' is NaN or infinite on some rows";
+}
+
+//! The error for a NaN or infinite value, raised where the value stands: the message of DecideInvalidValueMessage,
+//! with `place` (the value's span in the query, invalid for a value the query text holds none for) as its position,
+//! so DuckDB prints the caret under it. The solver path and the direct-solve plans both throw it here, as the SQL
+//! function `__internal_decide_invalid_value` does.
+inline InvalidInputException DecideInvalidValueError(DecideValueRole role, const string &written, optional_idx place) {
+	auto message = DecideInvalidValueMessage(role, written);
+	return place.IsValid() ? InvalidInputException(message, Exception::InitializeExtraInfo(place))
+	                       : InvalidInputException(message);
 }
 
 //! The error of a model with no feasible point, and of one whose objective improves without end. Both paths raise

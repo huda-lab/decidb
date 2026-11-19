@@ -115,6 +115,7 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 		clause.rhs = ir_node.rhs->Copy();
 		clause.coefficient_names = DirectNamesOf(ir, clause.coefficient, ir_node.written);
 		clause.rhs_text = ir.render(*clause.rhs);
+		clause.rhs_place = ir.place(*clause.rhs);
 		clause.lower = bound.RowLower();
 		clause.upper = bound.RowUpper();
 		if (ir_node.scope.when) {
@@ -256,10 +257,12 @@ DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedVal
 		if (!DecideUnguarded(*value.expr).IsFoldable()) {
 			names.inputs.push_back(value.expr->Copy());
 			names.texts.push_back(ir.render(*value.expr));
+			names.places.push_back(ir.place(*value.expr));
 		} else if (DecideUnguarded(*value.expr).GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
 			// A literal past the DOUBLE range is a number too large, not a constant SQL computed as infinite.
 			names.constants.push_back(DecideUnguarded(*value.expr).Copy());
 			names.constant_texts.push_back(ir.render(*value.expr));
+			names.constant_places.push_back(ir.place(*value.expr));
 		}
 	}
 	names.clause = clause;
@@ -557,7 +560,8 @@ static void FixFromBooleanSource(const ExpressionBuilder &calc, ExpressionType t
 		fixed.zero_conditions.push_back(
 		    OnKeptRows(calc, when, calc.Cmp(ExpressionType::COMPARE_EQUAL, calc.Of(source), calc.Bool(false))));
 	}
-	fixed.source_values.push_back({source.Copy(), false, when ? when->Copy() : nullptr, false, string()});
+	fixed.source_values.push_back(
+	    {source.Copy(), false, when ? when->Copy() : nullptr, false, string(), optional_idx()});
 }
 
 //! A clause read as the values of {0, 1} each row allows.
@@ -613,14 +617,14 @@ static bool FixFromAllowedValues(const DirectIR &ir, ClientContext &context, con
 	fixed.zero_conditions.push_back(OnKeptRows(calc, when, disallows(1.0)));
 	for (auto &term : *DirectFixedTerms(factor)) {
 		if (!term.coefficient->IsFoldable()) {
-			fixed.source_values.push_back(
-			    {term.coefficient->Copy(), true, when ? when->Copy() : nullptr, true, ir.render(*term.coefficient)});
+			fixed.source_values.push_back({term.coefficient->Copy(), true, when ? when->Copy() : nullptr, true,
+			                               ir.render(*term.coefficient), ir.place(*term.coefficient)});
 		}
 	}
 	if (!constant_value) {
 		auto reject_nan = value.return_type == LogicalType::FLOAT || value.return_type == LogicalType::DOUBLE;
 		fixed.source_values.push_back(
-		    {value.Copy(), reject_nan, when ? when->Copy() : nullptr, false, ir.render(value)});
+		    {value.Copy(), reject_nan, when ? when->Copy() : nullptr, false, ir.render(value), ir.place(value)});
 	}
 	return true;
 }

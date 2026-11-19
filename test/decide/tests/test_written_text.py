@@ -130,8 +130,7 @@ def test_a_reducer_in_a_macro_body_keeps_its_name_in_the_bound_check(decidb_cli)
         "t(id, g, cap) DECIDE x(REAL) SUCH THAT x <= 3 AND SUM(x) by (g) <= ts(cap) MAXIMIZE SUM(x)"
     )
     cli = decidb_cli.without_verify_serializer()
-    result = cli.execute_raw(f"{_OFF}{create}; {query}")
-    assert "DECIDE: the bound ts(cap) is NaN on some rows." in result.stderr, result.stderr
+    cli.assert_error_at(f"{_OFF}{create}; {query}", kind="Invalid Input Error", at="ts(cap)")
 
 
 @pytest.mark.explain

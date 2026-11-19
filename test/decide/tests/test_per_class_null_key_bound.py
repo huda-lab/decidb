@@ -13,7 +13,6 @@ import math
 
 import pytest
 
-from decidb_cli import DeciDBCliError
 from solver.types import ObjSense, VarType
 
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
@@ -119,11 +118,9 @@ def test_no_class_when_every_key_is_null(decidb_cli, oracle_solver, shape):
 def test_a_nan_bound_on_a_class_row_still_raises(decidb_cli, shape, mode):
     """Class b's one row has a NaN bound: the class determines it, and the message is the same on both paths."""
     rows = [row[:4] + (NAN if row[0] == 4 else row[4],) for row in ROWS if row[1] != "b" or row[0] == 4]
-    with pytest.raises(
-        DeciDBCliError,
-        match=r"DECIDE: the bound cap is NaN on some rows\. Skip those rows by writing 'CASE WHEN NOT isnan\(cap\) THEN cap END' in its place\.",
-    ):
-        run(decidb_cli, _sql(rows, shape), mode)
+    decidb_cli.assert_error_at(
+        f"SET decide_direct_solve='{mode}'; {_sql(rows, shape)}", kind="Invalid Input Error", at="<= cap"
+    )
 
 
 # A relation key: D2's NULL region is a value of `D`, so D2 is a class of its own and its rows' bound (1) is read.

@@ -10,6 +10,7 @@
 #include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
 
 #include "duckdb/common/decide_profile.hpp"
+#include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/optimizer/expression_rewriter.hpp"
 #include "duckdb/optimizer/rule/constant_folding.hpp"
@@ -17,6 +18,7 @@
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
@@ -126,9 +128,9 @@ void DecideEvaluateWindow(ClientContext &context, unique_ptr<ExpressionExecutor>
 	VectorOperations::Copy(out, values, count, 0, offset);
 }
 
-//! Whether `input` is a finite number or NULL on row `row` of the window, the one row a failing coefficient reads.
-static bool IsFiniteOnRow(const DecideValueInputs &inputs, const Expression &input, idx_t row) {
-	auto value = inputs.value_at(input, row);
+//! Whether part `part` is a finite number or NULL on row `row` of the window, the one row a failing coefficient reads.
+static bool IsFiniteOnRow(const DecideValueParts &parts, idx_t part, idx_t row) {
+	auto value = parts.value_at(part, row);
 	return value.IsNull() || std::isfinite(value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>());
 }
 
@@ -167,7 +169,10 @@ Value DecideNanValue(const LogicalType &type) {
 
 void ThrowInvalidValue(const ValueSource &source, idx_t row) {
 	auto refuse = [&](DecideValueRole role, const Expression &value) {
-		return InvalidInputException(DecideInvalidValueMessage(role, RenderDecideSource(value, source.names)));
+		// What a NULL guard protects stands in the query, as the render quotes it.
+		return DecideInvalidValueError(
+		    role, RenderDecideSource(value, source.names),
+		    DecideSpanLocation(source.names.text, DecideUnguarded(value).GetQueryLocation()));
 	};
 	auto too_large = InvalidInputException(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, source.clause));
 	if (source.role != DecideValueRole::COEFFICIENT) {
@@ -181,21 +186,49 @@ void ThrowInvalidValue(const ValueSource &source, idx_t row) {
 		return value.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT && value.IsFoldable() &&
 		       TryEvaluateFoldableDouble(source.context, value, number, FOLD_CATCH_ALL) && !std::isfinite(number);
 	};
-	if (!source.inputs || source.inputs->values.empty()) {
+	if (!source.parts || source.parts->values.empty()) {
 		if (source.value.IsFoldable()) {
 			throw is_non_finite_constant(source.value) ? refuse(DecideValueRole::CONSTANT, source.value) : too_large;
 		}
 		throw refuse(DecideValueRole::COEFFICIENT, source.value);
 	}
-	for (auto &input : source.inputs->values) {
-		if (is_non_finite_constant(*input)) {
-			throw refuse(DecideValueRole::CONSTANT, *input);
+	auto &parts = source.parts->values;
+	for (auto part : parts) {
+		if (is_non_finite_constant(*part)) {
+			throw refuse(DecideValueRole::CONSTANT, *part);
 		}
 	}
-	for (auto &input : source.inputs->values) {
-		if (!input->IsFoldable() && !IsFiniteOnRow(*source.inputs, *input, row)) {
-			throw refuse(DecideValueRole::COEFFICIENT, *input);
+	for (idx_t part = 0; part < parts.size(); part++) {
+		if (!parts[part]->IsFoldable() && !IsFiniteOnRow(*source.parts, part, row)) {
+			throw refuse(DecideValueRole::COEFFICIENT, *parts[part]);
 		}
+	}
+	// A divisor that is 0 on this row makes the value infinite: the user's own number, as a column that holds it is.
+	// Every other number the parts make that is not finite is DeciDB's own arithmetic past the DOUBLE range.
+	std::function<bool(const Expression &)> divides_by_zero = [&](const Expression &expression) {
+		auto &value = DecideUnguarded(expression);
+		if (value.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+			auto &function = value.Cast<BoundFunctionExpression>();
+			if (function.function.name == "/" && function.children.size() == 2) {
+				for (idx_t part = 0; part < parts.size(); part++) {
+					if (!parts[part]->Equals(DecideUnguarded(*function.children[1]))) {
+						continue;
+					}
+					// A NULL divisor is not 0: the value is NULL there, and skipped.
+					if (source.parts->value_at(part, row).DefaultCastAs(LogicalType::DOUBLE) == Value::DOUBLE(0.0)) {
+						return true;
+					}
+				}
+			}
+		}
+		bool found = false;
+		ExpressionIterator::EnumerateChildren(
+		    value, [&](const Expression &child) { found = found || divides_by_zero(child); });
+		return found;
+	};
+	if (divides_by_zero(source.value)) {
+		throw refuse(source.value.IsFoldable() ? DecideValueRole::CONSTANT : DecideValueRole::COEFFICIENT,
+		             source.value);
 	}
 	throw too_large;
 }

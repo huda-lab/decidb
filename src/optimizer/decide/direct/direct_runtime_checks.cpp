@@ -71,15 +71,16 @@ static ExprPtr NotFiniteMessage(const ExpressionBuilder &calc, const DirectNumbe
 	for (idx_t i = names.inputs.size(); i > 0; i--) {
 		auto input = calc.Cast(into(*names.inputs[i - 1]), LogicalType::DOUBLE);
 		auto not_finite = calc.Cmp(ExpressionType::COMPARE_EQUAL, calc.Fn("isfinite", input), calc.Bool(false));
-		auto named = DecideInvalidValueMessage(DecideValueRole::COEFFICIENT, names.texts[i - 1]);
-		message = calc.If(not_finite, calc.Constant(Value(named)), message);
+		auto named = calc.RaiseInvalidValue(DecideValueRole::COEFFICIENT, names.texts[i - 1], names.places[i - 1]);
+		message = calc.If(not_finite, named, message);
 	}
 	// A constant that is not finite fails on every row, so it is named before any column's value.
 	for (idx_t i = names.constants.size(); i > 0; i--) {
 		auto constant = calc.Cast(calc.Of(*names.constants[i - 1]), LogicalType::DOUBLE);
 		auto not_finite = calc.Cmp(ExpressionType::COMPARE_EQUAL, calc.Fn("isfinite", constant), calc.Bool(false));
-		auto named = DecideInvalidValueMessage(DecideValueRole::CONSTANT, names.constant_texts[i - 1]);
-		message = calc.If(not_finite, calc.Constant(Value(named)), message);
+		auto named = calc.RaiseInvalidValue(DecideValueRole::CONSTANT, names.constant_texts[i - 1],
+		                                    names.constant_places[i - 1]);
+		message = calc.If(not_finite, named, message);
 	}
 	return message;
 }
@@ -97,33 +98,55 @@ ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number
 	return DirectNumberMessage(calc, number, names, nullptr);
 }
 
-//! The texts at the leaves of a message.
-static void MessageTexts(const Expression &message, std::set<string> &texts) {
+//! A leaf of a message that is no text: the call that raises a value's error where it is evaluated
+//! (ExpressionBuilder::RaiseInvalidValue), which a row that reaches it never returns from.
+static bool IsRaisingLeaf(const Expression &message) {
+	return message.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION;
+}
+
+//! The texts and the calls that raise at the leaves of a message.
+static void MessageLeaves(const ExpressionBuilder &calc, const Expression &message, std::set<string> &texts,
+                          vector<ExprPtr> &raises) {
 	if (message.GetExpressionClass() == ExpressionClass::BOUND_CASE) {
 		auto &branch = message.Cast<BoundCaseExpression>();
 		for (auto &check : branch.case_checks) {
-			MessageTexts(*check.then_expr, texts);
+			MessageLeaves(calc, *check.then_expr, texts, raises);
 		}
-		MessageTexts(*branch.else_expr, texts);
+		MessageLeaves(calc, *branch.else_expr, texts, raises);
 		return;
 	}
-	// The caller promises a CASE over constants.
+	if (IsRaisingLeaf(message)) {
+		if (std::none_of(raises.begin(), raises.end(), [&](const ExprPtr &known) { return known->Equals(message); })) {
+			raises.push_back(calc.Of(message));
+		}
+		return;
+	}
+	// The caller promises a CASE over constants and the calls that raise.
 	auto &value = message.Cast<BoundConstantExpression>().value;
 	if (!value.IsNull()) {
 		texts.insert(StringValue::Get(value));
 	}
 }
 
-//! `message` with each text replaced by its code.
-static unique_ptr<Expression> MessageWithCodes(const Expression &message, const std::map<string, idx_t> &codes) {
+//! `message` with each text and each call replaced by its code.
+static unique_ptr<Expression> MessageWithCodes(const Expression &message, const std::map<string, idx_t> &codes,
+                                               const DirectMessageCodes &known) {
 	if (message.GetExpressionClass() == ExpressionClass::BOUND_CASE) {
 		auto &branch = message.Cast<BoundCaseExpression>();
 		auto result = make_uniq<BoundCaseExpression>(DirectMessageCodes::Type());
 		for (auto &check : branch.case_checks) {
-			result->case_checks.push_back({check.when_expr->Copy(), MessageWithCodes(*check.then_expr, codes)});
+			result->case_checks.push_back({check.when_expr->Copy(), MessageWithCodes(*check.then_expr, codes, known)});
 		}
-		result->else_expr = MessageWithCodes(*branch.else_expr, codes);
+		result->else_expr = MessageWithCodes(*branch.else_expr, codes, known);
 		return std::move(result);
+	}
+	if (IsRaisingLeaf(message)) {
+		// MessageLeaves collected every call of the message.
+		idx_t j = 0;
+		while (!known.raises[j]->Equals(message)) {
+			j++;
+		}
+		return make_uniq<BoundConstantExpression>(Value::UINTEGER(NumericCast<uint32_t>(known.texts.size() + j)));
 	}
 	auto &value = message.Cast<BoundConstantExpression>().value;
 	return make_uniq<BoundConstantExpression>(
@@ -133,21 +156,26 @@ static unique_ptr<Expression> MessageWithCodes(const Expression &message, const 
 
 ExprPtr DirectEncodeMessage(const ExpressionBuilder &calc, const ExprPtr &message, DirectMessageCodes &codes) {
 	std::set<string> texts;
-	MessageTexts(*message, texts);
+	codes.raises.clear();
+	MessageLeaves(calc, *message, texts, codes.raises);
 	codes.texts.assign(texts.begin(), texts.end());
 	std::map<string, idx_t> code_of;
 	for (idx_t i = 0; i < codes.texts.size(); i++) {
 		code_of[codes.texts[i]] = i;
 	}
-	return calc.Wrap(MessageWithCodes(*message, code_of));
+	return calc.Wrap(MessageWithCodes(*message, code_of, codes));
 }
 
 ExprPtr DirectDecodeMessage(const ExpressionBuilder &calc, const DirectMessageCodes &codes, const ExprPtr &code) {
 	auto message = calc.Constant(Value(LogicalType::VARCHAR));
+	auto is = [&](idx_t i) {
+		return calc.Cmp(ExpressionType::COMPARE_EQUAL, code, calc.Constant(Value::UINTEGER(NumericCast<uint32_t>(i))));
+	};
+	for (idx_t j = codes.raises.size(); j > 0; j--) {
+		message = calc.If(is(codes.texts.size() + j - 1), codes.raises[j - 1], message);
+	}
 	for (idx_t i = codes.texts.size(); i > 0; i--) {
-		auto is_code =
-		    calc.Cmp(ExpressionType::COMPARE_EQUAL, code, calc.Constant(Value::UINTEGER(NumericCast<uint32_t>(i - 1))));
-		message = calc.If(is_code, calc.Constant(Value(codes.texts[i - 1])), message);
+		message = calc.If(is(i - 1), calc.Constant(Value(codes.texts[i - 1])), message);
 	}
 	return message;
 }
@@ -188,11 +216,11 @@ unique_ptr<Expression> DirectCheckNumber(Optimizer &optimizer, ColumnBinding num
 }
 
 unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding,
-                                                 const string &written) {
+                                                 const string &written, optional_idx place) {
 	ExpressionBuilder calc(optimizer.context);
 	auto bound = calc.Col(LogicalType::DOUBLE, bound_binding);
-	return DirectRaiseIf(calc, calc.Out(calc.Fn("isnan", bound)),
-	                     DirectErrorPredicate(optimizer, DecideInvalidValueMessage(DecideValueRole::BOUND, written)));
+	auto raise = calc.Cast(calc.RaiseInvalidValue(DecideValueRole::BOUND, written, place), LogicalType::BOOLEAN);
+	return DirectRaiseIf(calc, calc.Out(calc.Fn("isnan", bound)), calc.Out(raise));
 }
 
 } // namespace duckdb

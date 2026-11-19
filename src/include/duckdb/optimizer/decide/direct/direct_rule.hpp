@@ -213,6 +213,9 @@ struct DirectIR {
 	//! Prints an expression of the source as the user wrote it, for a message that names a value (RenderDecideSource).
 	//! It reads the DECIDE node the IR was read from, which outlives the IR.
 	std::function<string(const Expression &)> render;
+	//! Where an expression of the source stands in the query, as the error that names it points (invalid for one the
+	//! query text holds no place for).
+	std::function<optional_idx(const Expression &)> place;
 	idx_t decide_index;
 	vector<DirectIRDecision> decisions;
 	vector<DirectIRKeyedScope> keyed_scopes;

@@ -32,12 +32,11 @@ fails loudly with an objective mismatch. After changing a case or `_s2_constrain
 """
 
 import math
-import re
 
 import pytest
 
 from comparison.compare import compare_solutions
-from decidb_cli import DeciDBCliError
+from decidb_cli import DeciDBCliError, _assert_error_location
 from solver.types import ObjSense, VarType
 
 from ._direct_differential import error_class
@@ -837,8 +836,18 @@ def test_s2_a_nan_cap_raises_the_solver_error_before_the_first_row_leaves(decidb
             # Two checks fail: the NaN the reducer reads and the NaN it gives. Error order is not owed, so either
             # message is the solver's; each is its own text, whichever check the thread meets first.
             for error in (solver_error, direct_error):
-                assert re.search(
-                    r"DECIDE: the bound (cap|MAX\(cap\) by \(div(, dept)?\)) is NaN on some rows", str(error.value)
-                )
+                message = str(error.value)
+                for at in ("cap", "MAX(cap) by (div, dept)", "MAX(cap) by (div)"):
+                    try:
+                        _assert_error_location(message, at)
+                        break
+                    except AssertionError:
+                        continue
+                else:
+                    raise AssertionError(f"The error points at neither the cap nor its reducer:\n{message}")
         else:
-            assert str(direct_error.value) == str(solver_error.value)
+            # The outer query differs, so the text it quotes does: the message is the same, and each points at the cap.
+            assert str(direct_error.value).splitlines()[0] == str(solver_error.value).splitlines()[0]
+            _assert_error_location(
+                str(direct_error.value), "SUM(cap) - SUM(cap)" if name == "aggregate_cap_of_a_nan_sum" else "<= cap"
+            )

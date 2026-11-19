@@ -70,11 +70,9 @@ public:
 	//! `program` on each of `node`'s entries `reads` marks, as stage 08 reads a coefficient or a bound
 	//! (ExtractDoubleColumn): signed, and 0 on the others and where it is NULL, which `nulls` marks; with no `nulls` a
 	//! NULL is an internal error, as for an objective's coefficient. A value or an error on an entry it does not read
-	//! is never read. A coefficient computed from `inputs` (DecideTerm::inputs, computed at `site`) names the first of
-	//! them that is not finite where it fails.
-	vector<double> Numbers(idx_t node, idx_t program, const vector<bool> &reads, vector<bool> *nulls,
-	                       const DecideTermSite *site = nullptr,
-	                       const vector<unique_ptr<Expression>> *inputs = nullptr);
+	//! is never read. A coefficient DeciDB composed names the first of its parts (DecideProgram::parts) that is not
+	//! finite where it fails.
+	vector<double> Numbers(idx_t node, idx_t program, const vector<bool> &reads, vector<bool> *nulls);
 	//! Of the entries of `node` that `reads` marks, those at which `program` is NULL, which is what a definition
 	//! reads for its absence on the rows it keeps, and what its evaluation raised there, raised: no value is checked,
 	//! which the clause's read of the program does (Numbers). Empty where the program is NULL on no entry.

@@ -4,6 +4,7 @@
 
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/enums/expression_type.hpp"
+#include "duckdb/common/optional_idx.hpp"
 #include "duckdb/planner/column_binding.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/expression.hpp"
@@ -11,6 +12,7 @@
 namespace duckdb {
 
 class ClientContext;
+enum class DecideValueRole : uint8_t;
 enum class DirectDomain : uint8_t;
 struct DirectIR;
 struct DirectPart;
@@ -132,6 +134,10 @@ public:
 	ExprPtr Fn(const string &name, const ExprPtr &a, const ExprPtr &b) const;
 	//! A scalar function of any number of arguments.
 	ExprPtr Fn(const string &name, const vector<ExprPtr> &args) const;
+	//! The call that raises the error of a NaN or infinite value (DecideInvalidValueError), `written` as the user wrote
+	//! it, at `place` in the query (invalid for none): NULL where it is not reached, so it stands as the branch of a
+	//! CASE that tests the value.
+	ExprPtr RaiseInvalidValue(DecideValueRole role, const string &written, optional_idx place) const;
 	//! `a IS NULL`.
 	ExprPtr IsNull(const ExprPtr &a) const;
 	//! `a` converted to `type`; `a` itself when it already has that type.
