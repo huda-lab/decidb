@@ -734,14 +734,13 @@ public:
 		return index;
 	}
 
-	//! The bodies from what stage 05 lowered, then the order and ranks they read.
+	//! The bodies from what stage 05 lowered, then the order they read.
 	unique_ptr<DecideTree> Finish() {
 		sources.link_nodes = link_nodes;
 		sources.record_nodes = record_nodes;
 		tree->frame_nodes = frame_nodes;
 		CompileDecideTree(context, op, *tree, sources);
 		PostOrder();
-		ErrorRanks();
 		tree->Validate();
 		return std::move(tree);
 	}
@@ -807,163 +806,6 @@ private:
 	//! Canonical function-link roots live in `sources.reducer_nodes` by expression address. Keep their ASTs alive until
 	//! the linear form builder has resolved those reducers; otherwise the address map holds pointers into freed copies.
 	vector<unique_ptr<Expression>> retained_function_links;
-	//! Each gate a helper's G or a frame's O inherits from the nodes above it (RemoveInheritedPathGates): the node
-	//! holding it, then the node inheriting it.
-	vector<pair<idx_t, idx_t>> inherited_gates;
-
-	//! Where each keyed scope's classes and each auxiliary's definitions are read: every scope in turn, a helper's once
-	//! the definitions of the auxiliaries its members read are, then every decision's definitions in turn. The other
-	//! recursions number nothing earlier
-	//! here: from a decision into its own scope, since the declared scopes come before the rewrites' helpers and a
-	//! nested helper before its reader, and from a definition into what it reads, since the rewrites number a nested
-	//! auxiliary first. Per scope and per clause, its place.
-	void KeyedMappingOrder(vector<idx_t> &scope_order, vector<idx_t> &definition_order) const {
-		vector<vector<idx_t>> definitions(op.decide_variables.size());
-		for (auto root : sources.clause_roots) {
-			auto &body = tree->nodes[root]->compiled;
-			if (body.clause && body.clause_index < tree->constraint_count &&
-			    body.clause->defined_var < definitions.size()) {
-				definitions[body.clause->defined_var].push_back(body.clause_index);
-			}
-		}
-		scope_order.assign(op.keyed_scopes.size(), DConstants::INVALID_INDEX);
-		definition_order.assign(tree->constraint_count, DConstants::INVALID_INDEX);
-		vector<bool> reached(definitions.size(), false);
-		idx_t next = 0;
-		auto read = [&](idx_t variable) {
-			if (variable >= definitions.size() || reached[variable]) {
-				return;
-			}
-			reached[variable] = true;
-			for (auto c : definitions[variable]) {
-				definition_order[c] = next++;
-			}
-		};
-		for (idx_t scope = 0; scope < op.keyed_scopes.size(); scope++) {
-			const auto link = op.keyed_scopes[scope].value_link;
-			if (link != DConstants::INVALID_INDEX) {
-				for (auto &term : tree->nodes[link_nodes[link]]->compiled.members) {
-					read(term.variable_index);
-				}
-			}
-			scope_order[scope] = next++;
-		}
-		for (idx_t variable = 0; variable < definitions.size(); variable++) {
-			read(variable);
-		}
-	}
-
-	//! A node's errors rank at the earliest phase that reads it, in the order of the phases: a bound's reducer is read
-	//! after the data checks on the rows, a definition where its auxiliary's absence is resolved, a helper's rows where
-	//! its classes are, a composed MIN/MAX clause after the objective, and the objective's composed terms after the
-	//! composed clauses.
-	void ErrorRanks() {
-		vector<idx_t> scope_order, definition_order;
-		KeyedMappingOrder(scope_order, definition_order);
-		vector<bool> assigned(tree->nodes.size(), false);
-		std::function<void(idx_t, DecideErrorRank)> visit = [&](idx_t index, DecideErrorRank rank) {
-			auto &node = *tree->nodes[index];
-			auto &aggregates = tree->frame_aggregate_nodes;
-			const auto aggregate = idx_t(std::find(aggregates.begin(), aggregates.end(), index) - aggregates.begin());
-			// Where its clause evaluates it, if not where it is first computed.
-			DecideErrorRank evaluated;
-			if (node.value_check) {
-				rank = {DecideErrorPhase::SOURCE_CHECK, 0, rank.clause, 0};
-			} else if (std::find(record_nodes.begin(), record_nodes.end(), index) != record_nodes.end()) {
-				rank = {DecideErrorPhase::SOURCE_CHECK, 1, rank.clause, 0};
-			} else if (node.kind == DecideNodeKind::FRAME) {
-				rank = {DecideErrorPhase::FRAMES, 1, node.frame, 0};
-				if (node.link != DConstants::INVALID_INDEX) {
-					// A range frame's helper reads its members' coefficients after every clause.
-					evaluated = {DecideErrorPhase::VALUE_LINKS, 0, node.link, 0};
-				}
-			} else if (aggregate < aggregates.size()) {
-				// A reducer over data reading frames is computed once every frame's columns are, in its column's
-				// order, before any keyed mapping.
-				rank = {DecideErrorPhase::FRAMES, 1, op.frames.size() + aggregate, 0};
-			} else if (node.kind == DecideNodeKind::FUNCTION) {
-				// F's route and its `when` are the first reads of an ABS instance; its envelope bodies
-				// keep their own clause ranks below it.
-			} else if (node.defined_var != DConstants::INVALID_INDEX) {
-				// Each auxiliary's absence is resolved in turn, reading its definitions in their order (D88), then
-				// each definition is evaluated again at its place among the clauses.
-				evaluated = {node.compiled.phase, 0, node.compiled.order, 0};
-				rank = {DecideErrorPhase::KEYED_MAPPING, definition_order[node.compiled.order], node.compiled.order, 0};
-			} else if (node.link != DConstants::INVALID_INDEX) {
-				// A helper's rows (its path's `when`s, its reducer's, its members' NULL tests and its `by`
-				// key) are read where its classes are built, and its members' coefficients after every clause. The
-				// nodes holding its path's `when`s read them there too (DecideNode::when_rank), and a reader's sigma
-				// leaves the key's errors to it (DecideDescent::Signature).
-				evaluated = {DecideErrorPhase::VALUE_LINKS, 0, node.link, 0};
-				const auto scope = op.variable_scopes[node.value_var].keyed_scope_idx;
-				rank = {DecideErrorPhase::KEYED_MAPPING, scope_order[scope], node.link, 0};
-			} else if (node.compiled.phase != DecideErrorPhase::INVALID) {
-				// A body stage 05 lowered ranks by the list it was lowered from: a constraint by its place
-				// there, the objective, the composed clauses, then the objective's composed terms.
-				rank = {node.compiled.phase, 0, node.compiled.order, 0};
-			}
-			if (assigned[index] && !(rank < node.value_rank)) {
-				return;
-			}
-			assigned[index] = true;
-			node.route_rank = node.value_rank = rank;
-			node.clause_rank = evaluated.phase == DecideErrorPhase::INVALID ? rank : evaluated;
-			if (node.kind == DecideNodeKind::FRAME) {
-				// A frame's timelines are built and checked, frame after frame, before any frame's values are read
-				// (language/guide.md §5.6).
-				node.route_rank.step = 0;
-			}
-			for (auto child : node.children) {
-				visit(child, rank);
-			}
-		};
-		for (auto root : tree->roots) {
-			auto &node = *tree->nodes[root];
-			DecideErrorRank rank {DecideErrorPhase::CONSTRAINTS, 0, node.source_clause_id, 0};
-			if (node.source_clause_id == DConstants::INVALID_INDEX) {
-				rank.clause = root;
-			}
-			if (node.objective) {
-				rank.phase = DecideErrorPhase::OBJECTIVE;
-			}
-			visit(root, rank);
-			if (node.objective && op.objective_signature != DConstants::INVALID_INDEX) {
-				// An objective with a signature is checked to be produced once (D72, language/guide.md §7.3), and the
-				// check reads its kept rows and its signature before it counts its instances.
-				node.route_rank.phase = DecideErrorPhase::SCOPE_CHECK;
-			} else if (ReadsWhenInComposedFilters(node)) {
-				// Its `when` is the first part of its first composed term's filter, read at the terms' rank, window by
-				// window, before any term's own filter, which ranks after it (DecideNode::filter_group).
-				node.route_rank = tree->nodes[node.compiled.composed[0]]->route_rank;
-				node.filter_group = 0;
-			}
-		}
-		WhenRanks();
-	}
-
-	//! A gate a helper's G or a frame's O inherits is read where that node's rows are read: where the helper's classes
-	//! are built and where every frame is built, which may come before the clause holding it (language/guide.md §7.3).
-	//! Its holder reads it at the earliest of those ranks and its own (DecideNode::when_rank).
-	void WhenRanks() {
-		for (auto &node : tree->nodes) {
-			node->when_rank = node->route_rank;
-		}
-		for (auto &gate : inherited_gates) {
-			auto &holder = *tree->nodes[gate.first];
-			auto &reader = tree->nodes[gate.second]->route_rank;
-			if (reader < holder.when_rank) {
-				holder.when_rank = reader;
-			}
-		}
-	}
-
-	//! Whether a root's `when` is read only in its composed terms' filters, in front of each term's own
-	//! (ScopeComposedTerms): a composed clause's, and the objective's where the objective has no term to carry it
-	//! (LogicalDecide::retained_objective_when).
-	bool ReadsWhenInComposedFilters(const DecideNode &node) const {
-		return !node.compiled.composed.empty() &&
-		       (!node.objective || op.retained_objective_when != DConstants::INVALID_INDEX);
-	}
 
 	string Text(const Expression &expression) const {
 		return RenderDecideSource(expression, DecidePlanNames(op.source_text, op.keyed_scopes, op.keys, op.decide_index,
@@ -1299,15 +1141,8 @@ private:
 		if (node.per == DecideTreePer::ROW) {
 			node.key = node.facts->group_key;
 			node.per = node.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
-			node.key_block = DecideBlock::BY_KEY;
 		} else {
 			node.holds_rows_in_no_class = true;
-		}
-		for (auto child : node.children) {
-			auto &reducer = *tree->nodes[child];
-			if (reducer.kind == DecideNodeKind::REDUCER && reducer.key == node.facts->group_key) {
-				reducer.key_block = DecideBlock::BY_KEY;
-			}
 		}
 	}
 
@@ -1406,7 +1241,7 @@ private:
 			return Read(owner, Frame(frame, &expression), expression.return_type, expression.GetAlias());
 		}
 		if (expression.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			auto reducer = Aggregate(expression.Cast<BoundAggregateExpression>());
+			auto reducer = Aggregate(owner, expression.Cast<BoundAggregateExpression>());
 			sources.reducer_nodes[&expression] = reducer;
 			return Read(owner, reducer, expression.return_type, expression.GetAlias());
 		}
@@ -1486,9 +1321,15 @@ private:
 		return result;
 	}
 
-	idx_t Aggregate(const BoundAggregateExpression &aggregate) {
+	//! The G of a reducer `owner` reads. One the objective's own expression holds, or a reducer of that expression
+	//! does, is of the objective (DecideNode::of_objective); a frame's column is not.
+	idx_t Aggregate(idx_t owner, const BoundAggregateExpression &aggregate) {
 		auto index = NewNode(DecideNodeKind::REDUCER);
 		auto &node = *tree->nodes[index];
+		auto &holder = *tree->nodes[owner];
+		const auto enclosing = holder.parent;
+		const bool in_objective =
+		    holder.objective || (enclosing != DConstants::INVALID_INDEX && tree->nodes[enclosing]->of_objective);
 		node.aggregate = DecideTreeReducerName(aggregate);
 		node.text = Text(aggregate);
 		node.decision_value = HasDecision(aggregate);
@@ -1503,6 +1344,7 @@ private:
 			node.text = op.frame_aggregates[frame_aggregate].text;
 			tree->frame_aggregate_nodes[frame_aggregate] = index;
 		}
+		node.of_objective = in_objective && frame_aggregate == DConstants::INVALID_INDEX;
 		node.function = unique_ptr_cast<Expression, BoundAggregateExpression>(aggregate.Copy());
 		auto operand = NewNode(DecideNodeKind::SCOPE);
 		Edge(index, operand);
@@ -1582,9 +1424,6 @@ private:
 		node.key = link.group_key;
 		node.text = link.label;
 		node.decision_value = true;
-		// A helper's `by` key is read on every row its path keeps, after its reducer's `when` and its members' NULL
-		// tests: a row the key raises on still reaches them.
-		node.key_block = DecideBlock::BY_KEY;
 		Gates(index, link.when.get());
 		if (link.value_var < tree->value_nodes.size()) {
 			tree->value_nodes[link.value_var] = index;
@@ -1773,7 +1612,6 @@ private:
 	//! Record tables carry a complete path predicate. Descent already inherited
 	//! the parent's reach, so a path part guaranteed on every incoming edge is
 	//! not another written `when` of the child. Own operand filters stay intact.
-	//! Each gate removed is read by the ancestors holding it (inherited_gates).
 	void RemoveInheritedPathGates() {
 		vector<vector<idx_t>> parents(tree->nodes.size());
 		for (idx_t i = 0; i < tree->nodes.size(); i++) {
@@ -1781,8 +1619,8 @@ private:
 				parents[child].push_back(i);
 			}
 		}
-		std::function<bool(idx_t, const Expression &, vector<bool> &, vector<idx_t> &)> inherited =
-		    [&](idx_t index, const Expression &condition, vector<bool> &visiting, vector<idx_t> &holders) {
+		std::function<bool(idx_t, const Expression &, vector<bool> &)> inherited =
+		    [&](idx_t index, const Expression &condition, vector<bool> &visiting) {
 			    if (parents[index].empty() || tree->nodes[index]->root || visiting[index]) {
 				    return false;
 			    }
@@ -1792,9 +1630,7 @@ private:
 				    for (auto &gate : tree->nodes[parent]->when) {
 					    holds = holds || gate->Equals(condition);
 				    }
-				    if (holds) {
-					    holders.push_back(parent);
-				    } else if (!inherited(parent, condition, visiting, holders)) {
+				    if (!holds && !inherited(parent, condition, visiting)) {
 					    visiting[index] = false;
 					    return false;
 				    }
@@ -1809,14 +1645,7 @@ private:
 			}
 			auto end = std::remove_if(node.when.begin(), node.when.end(), [&](const unique_ptr<Expression> &gate) {
 				vector<bool> visiting(tree->nodes.size(), false);
-				vector<idx_t> holders;
-				if (!inherited(i, *gate, visiting, holders)) {
-					return false;
-				}
-				for (auto holder : holders) {
-					inherited_gates.emplace_back(holder, i);
-				}
-				return true;
+				return inherited(i, *gate, visiting);
 			});
 			node.when.erase(end, node.when.end());
 		}

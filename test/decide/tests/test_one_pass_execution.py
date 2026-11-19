@@ -125,10 +125,10 @@ DUMP_SHAPES = {
     ),
     # An F node of an ABS that needs no Big-M: ToString's FUNCTION and ABS arms, no indicator.
     "an-abs": ("DECIDE x(REAL), y(REAL)", "x <= 9 AND x >= abs(y)"),
-    # An F node of a Boolean product: ToString's BOOLEAN_PRODUCT arm; the helper of a sum under it, PhaseName's
-    # VALUE_LINKS.
+    # An F node of a Boolean product: ToString's BOOLEAN_PRODUCT arm; the helper of a sum under it, BodyKindName's
+    # VALUE_LINK.
     "a-boolean-product": ("DECIDE x(INT), b(BOOL)", "x <= 9 AND x + b * sum(when t.p: x) by (t.g) <= 5"),
-    # A composed MIN/MAX clause: PhaseName's COMPOSED and Head's root.
+    # A composed MIN/MAX clause: BodyKindName's COMPOSED and Head's root.
     "a-composed-clause": ("DECIDE x(REAL)", "x <= 4 AND sum(x) + max(ln(t.c) * x) <= 100"),
     # A query-wide scale, read as a program column of its operand: ProgramLines' columns.
     "a-program-column": ("DECIDE x(REAL)", "x <= 9 AND (SELECT 2.0) * sum(t.c * x) by (t.g) <= 5"),

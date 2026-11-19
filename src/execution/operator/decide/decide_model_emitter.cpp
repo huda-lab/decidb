@@ -27,10 +27,9 @@ static idx_t Parts(const DecideConstraint &clause) {
 DecideModelEmitter::DecideModelEmitter(const PhysicalDecide &op, ClientContext &context, const DecideTree &tree,
                                        const DecideDescent &descent, DecideTreeColumns &columns,
                                        DecideGlobalSinkState &gstate, vector<SolverInput::KeyValues> &key_values,
-                                       const DecideSourceNames &names, idx_t num_rows, DecideErrorLedger &errors,
-                                       DataChunk &first)
+                                       const DecideSourceNames &names, idx_t num_rows, DataChunk &first)
     : op(op), context(context), tree(tree), descent(descent), columns(columns), gstate(gstate), key_values(key_values),
-      names(names), num_rows(num_rows), errors(errors), first(first) {
+      names(names), num_rows(num_rows), first(first) {
 }
 
 SolverInput::KeyValues DecideGroupKeyValues(const DecideTree &tree, const DecideDescent &descent, idx_t node) {
@@ -504,12 +503,8 @@ void DecideModelEmitter::DefinitionAbsence(idx_t root, idx_t variable) {
 		}
 	}
 	// What it reads unreduced is NULL on a row it keeps, which its NULL tests keep too (DecideNode::member_tests):
-	// its bound, then each term's coefficient, then each product group's forms' terms', which are read in that order,
-	// so what one raises ranks there (DecideNode::value_rank). It reads no group's weight.
-	auto rank = tree.nodes[root]->value_rank;
-	idx_t position = 0;
+	// its bound, then each term's coefficient, then each product group's forms' terms'. It reads no group's weight.
 	auto null_rows = [&](idx_t node, idx_t program) {
-		rank.position = position++;
 		auto reads = columns.Tested(node);
 		const auto &rows = descent.Containers()[node].rows;
 		for (idx_t entry = 0; entry < reads.size(); entry++) {
@@ -517,7 +512,7 @@ void DecideModelEmitter::DefinitionAbsence(idx_t root, idx_t variable) {
 				reads[entry] = false;
 			}
 		}
-		const auto nulls = columns.NullEntries(node, program, reads, rank);
+		const auto nulls = columns.NullEntries(node, program, reads);
 		if (nulls.empty()) {
 			return;
 		}
@@ -728,11 +723,7 @@ void DecideModelEmitter::CheckDomain(idx_t root, const EvaluatedConstraint &eval
 		}
 		auto refusal = DecideDomainRefusal(box, domain.is_bool, domain.is_aux, domain.name, written_bound);
 		if (!refusal.empty()) {
-			// After every part of the clause, as a tightest frame bound's check is.
-			auto rank = tree.nodes[root]->clause_rank;
-			rank.part = 1;
-			errors.Add(rank, ErrorData(InvalidInputException(refusal)));
-			return;
+			throw InvalidInputException(refusal);
 		}
 	}
 }
@@ -1160,26 +1151,17 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 	ScaleAvgTerms(clause, filters, num_rows, evaluated);
 	Polynomial(root, filters, null_rows, evaluated);
 	if (!bound_null.empty()) {
-		// Taken once every rule that drops an instance has run but the next, which reads `null_rows`, after every part
-		// of the clause.
-		try {
-			// The classes of a `per K:` that names them, which an `=` bound that disagrees names beside its group.
-			vector<idx_t> class_ids;
-			vector<GroupName> class_names;
-			if (clause.scope.per == DecideClauseScope::PerRole::NAMES_CLASSES &&
-			    evaluated.comparison_type == ExpressionType::COMPARE_EQUAL) {
-				KeyClasses(root, class_ids, class_names);
-			}
-			TakeTightestFrameBound(evaluated.comparison_type, RenderDecideSource(*clause.rhs_expr, names), kept,
-			                       bound_null, kept_row_group_ids, evaluated.row_group_ids, evaluated.num_groups,
-			                       evaluated.group_names, class_ids, class_names, key_values,
-			                       evaluated.rhs_values.MutableDense(), null_rows);
-		} catch (std::exception &ex) {
-			// After every part of the clause: its terms and its product groups are part 0.
-			auto rank = tree.nodes[root]->clause_rank;
-			rank.part = 1;
-			errors.Add(rank, ErrorData(ex));
+		// Taken once every rule that drops an instance has run but the next, which reads `null_rows`.
+		// The classes of a `per K:` that names them, which an `=` bound that disagrees names beside its group.
+		vector<idx_t> class_ids;
+		vector<GroupName> class_names;
+		if (clause.scope.per == DecideClauseScope::PerRole::NAMES_CLASSES &&
+		    evaluated.comparison_type == ExpressionType::COMPARE_EQUAL) {
+			KeyClasses(root, class_ids, class_names);
 		}
+		TakeTightestFrameBound(evaluated.comparison_type, RenderDecideSource(*clause.rhs_expr, names), kept, bound_null,
+		                       kept_row_group_ids, evaluated.row_group_ids, evaluated.num_groups, evaluated.group_names,
+		                       class_ids, class_names, key_values, evaluated.rhs_values.MutableDense(), null_rows);
 	}
 	DecideAbsence::SkipNullInstances(null_rows, true, num_rows, evaluated.row_group_ids, evaluated.num_groups);
 	if (counted) {
@@ -1370,8 +1352,7 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 				surviving[variant] = read.second;
 			}
 		}
-		errors.Add(DecideErrorRank {DecideErrorPhase::SCOPE_CHECK},
-		           ErrorData(InvalidInputException(ObjectiveDifference(root, surviving))));
+		throw InvalidInputException(ObjectiveDifference(root, surviving));
 	}
 	// The rows its `when` keeps.
 	vector<bool> kept(num_rows, false);
@@ -1593,19 +1574,10 @@ vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(idx_t root, con
 		const auto &reducer = *tree.nodes[reducer_node];
 		auto evaluated = DecideComposedTerm(reducer.aggregate, spec.sign, spec.is_easy, reducer.text);
 		if (spec.scale) {
-			// A value the whole query shares, read on the input's first rows, whatever the clause
-			// keeps: before the term's members, which follow its predecessor's (DecideErrorRank::part).
-			try {
-				evaluated.scale = DecideQueryWideScale(
-				    FirstRowValue(*spec.scale), spec.scale_divides, what,
-				    {DecideValueRole::COEFFICIENT, *spec.scale, names, context, clause}, null_factor);
-			} catch (std::exception &ex) {
-				auto rank = tree.nodes[reducer_node]->clause_rank;
-				rank.part = t;
-				rank.expression = DecideBlockExpression(DecideBlock::TERMS, 0, false);
-				rank.row = 0;
-				errors.Add(rank, ErrorData(ex));
-			}
+			// A value the whole query shares, read on the input's first rows, whatever the clause keeps.
+			evaluated.scale =
+			    DecideQueryWideScale(FirstRowValue(*spec.scale), spec.scale_divides, what,
+			                         {DecideValueRole::COEFFICIENT, *spec.scale, names, context, clause}, null_factor);
 		}
 		// Its members are its G's: the entries of its operand its member tests keep, and a relation-qualified one's
 		// first of each class (language/guide.md §5.1). Every other row reads 0.
@@ -1713,7 +1685,7 @@ void DecideModelEmitter::ValueLinks() {
 			}
 		}
 		// Read a term over the entries its own filter keeps, including entries that have no group. Those terms
-		// are evaluated before rows without a helper value are dropped, so their errors keep the same rank and message.
+		// are evaluated before rows without a helper value are dropped.
 		vector<idx_t> variables(body.members.size(), DConstants::INVALID_INDEX);
 		vector<vector<double>> coefficients(body.members.size());
 		for (idx_t t = 0; t < body.members.size(); t++) {

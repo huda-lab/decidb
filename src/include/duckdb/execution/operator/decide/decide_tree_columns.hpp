@@ -10,7 +10,6 @@
 
 #pragma once
 
-#include "duckdb/common/decide_error_ledger.hpp"
 #include "duckdb/execution/operator/decide/decide_absence.hpp"
 #include "duckdb/execution/operator/decide/decide_debug.hpp"
 #include "duckdb/execution/operator/decide/decide_descent.hpp"
@@ -59,13 +58,13 @@ private:
 DecideTreeInjection ReadDecideTreeInjection(const DecideTree &tree, const DecideDebug &debug);
 
 //! A node's programs on its entries (DecideNode::programs), computed once its descent is finished: each program's
-//! values on every entry, and the entries its evaluation raised on, with the error, which is held in the ledger at its
-//! rank when the program is read (DecideEvaluateWindow).
+//! values on every entry, and the entries its evaluation raised on, with the error, which a read of the entry raises
+//! (DecideEvaluateWindow): an entry nothing reads raises nothing.
 class DecideTreeColumns {
 public:
 	DecideTreeColumns(const DecideTree &tree, const DecideDescent &descent, ClientContext &context,
 	                  const DecideSourceNames &names, std::function<string(idx_t source_clause_id)> written_clause,
-	                  DecideErrorLedger &errors, const DecideDebug &debug);
+	                  const DecideDebug &debug);
 	~DecideTreeColumns();
 
 	//! `program` on each of `node`'s entries `reads` marks, as stage 08 reads a coefficient or a bound
@@ -77,10 +76,9 @@ public:
 	                       const DecideTermSite *site = nullptr,
 	                       const vector<unique_ptr<Expression>> *inputs = nullptr);
 	//! Of the entries of `node` that `reads` marks, those at which `program` is NULL, which is what a definition
-	//! reads for its absence on the rows it keeps, and what its evaluation raised there, held at
-	//! `rank` in the window of its entry's row: no value is checked, which the clause's read of the program does
-	//! (Numbers). Empty where the program is NULL on no entry.
-	vector<bool> NullEntries(idx_t node, idx_t program, const vector<bool> &reads, DecideErrorRank rank);
+	//! reads for its absence on the rows it keeps, and what its evaluation raised there, raised: no value is checked,
+	//! which the clause's read of the program does (Numbers). Empty where the program is NULL on no entry.
+	vector<bool> NullEntries(idx_t node, idx_t program, const vector<bool> &reads);
 	//! `program` on entry `entry` of `node`, as written: what a variant's name reads (DecideBody::names). What it
 	//! raises is never read: the descent read the same key, and the clause the same value.
 	Value ValueAt(idx_t node, idx_t program, idx_t entry);
@@ -102,8 +100,7 @@ public:
 	//! positions (SelectDecideFramePeers), and each frame's columns
 	//! (SkipDecideFrameNullReads, ComputeDecideFrameColumns), every expression they read a program on the frame's O
 	//! (DecideFrameColumnPrograms): read once the descent is finished, before any program that reads a frame. What a
-	//! frame refuses is held at its rank: its range's limit and its partition (D75) where its rows are routed, a
-	//! position of two payloads it reads (D73) once the decisions' classes are known.
+	//! frame refuses is raised: its range's limit and its partition (D75), a position of two payloads it reads (D73).
 	void ReadFrames(const vector<DecideFrameSpec> &frames, idx_t num_rows, vector<DecideFrameMap> &maps);
 	//! Frame column `column`'s value at `row` (DecideFrameReads::columns), as ReadFrames computed it.
 	Value FrameValue(idx_t column, idx_t row) const;
@@ -115,9 +112,9 @@ public:
 	vector<bool> FirstOfEachInstance(idx_t node, const vector<bool> &reads) const;
 
 	//! The value of a G over data in each of its slots: its function folded over its operand's members there
-	//! (DecideAggregateStates), NULL where the fold raised, whose error is held at the G's rank.
+	//! (DecideAggregateStates).
 	const vector<Value> &Folds(idx_t reducer);
-	//! Each data check's message, a hidden root's, where it is not NULL, at the check's rank.
+	//! Each data check's message, a hidden root's, where it is not NULL, raised.
 	void CheckData();
 
 	//! Each node's programs the evaluation computed, on each of its entries by its row, with the entry's instance
@@ -133,7 +130,6 @@ private:
 	ClientContext &context;
 	const DecideSourceNames &names;
 	std::function<string(idx_t)> written_clause;
-	DecideErrorLedger &errors;
 	vector<unique_ptr<NodeColumns>> nodes;
 	DecideAbsence absence;
 	const vector<DecideFrameMap> *frame_maps = nullptr;
@@ -178,16 +174,15 @@ private:
 	//! (DecideFrameRead).
 	DecideFrameValues FrameRows(idx_t node, idx_t program, const vector<bool> &rows);
 	//! D73, frame after frame, position after position: a position of two payloads a frame reads is refused, once the
-	//! decisions' classes are known (FRAME_PEERS).
+	//! decisions' classes are known.
 	void CheckPositions(const vector<DecideFrameSpec> &frames);
 	//! Each entry of `node`'s value of its hole `hole`, a vector over its entries: the fold of the hole's G in the slot
 	//! the entry's row reads, or a frame's column at the entry's row.
 	unique_ptr<Vector> HoleValues(idx_t node, idx_t hole);
 	//! Which of its entries the node's member tests keep, and the errors they raise.
 	void ReadTests(idx_t node, NodeColumns &columns);
-	//! Holds each error of `program` on an entry `reads` marks, at its rank.
+	//! Raises the error of `program` on the first entry `reads` marks that has one.
 	void Report(idx_t node, idx_t program, const vector<bool> &reads);
-	DecideErrorRank Rank(idx_t node, idx_t program, idx_t entry, bool value) const;
 };
 
 } // namespace duckdb

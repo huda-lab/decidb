@@ -129,19 +129,6 @@ def test_a_collated_group_is_spelled_by_its_least_spelling_in_any_piece(decidb_c
     assert [row["group"] for row in found if row["edit_source"] == "expanded_group"] == ["t.g = 'B'"], found
 
 
-def test_an_error_ranks_at_its_rebased_row(decidb_cli):
-    """Rows 2100 and 4100 fail to cast, in pieces of 2048 rows: the first raised ranks first. Unrebased, row 4100's
-    piece would place it in the input's first window, before row 2100's (DecideErrorLedger::Rebase)."""
-    sql = """SELECT i, x FROM (SELECT i, CASE i WHEN 2100 THEN 'first' WHEN 4100 THEN 'second' ELSE '1' END AS s
-        FROM range(4200) r(i)) t
-        DECIDE x(INT) SUCH THAT x <= 1 AND sum(x) by (CAST(t.s AS INT)) <= 10 MAXIMIZE sum(x)"""
-    cli = decidb_cli.without_verify_serializer()
-    whole = cli.execute_raw(SETUP + sql)
-    split = cli.execute_raw(_debug("split=2048") + sql)
-    assert "'first'" in whole.stderr, whole.stderr
-    assert split.stderr == whole.stderr
-
-
 # ---------------------------------------------------------------------------
 # Real threads
 # ---------------------------------------------------------------------------

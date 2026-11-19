@@ -474,28 +474,6 @@ def test_an_equal_bound_is_checked_before_a_rule_runs(decidb_cli, decide, group)
         assert expected in result.stderr, (mode, result.stderr)
 
 
-@pytest.mark.parametrize(
-    "decide",
-    [
-        pytest.param("x(BOOL) SUCH THAT SUM(x) by (g) = t.cap MAXIMIZE SUM(score * x)", id="s1-equal"),
-        pytest.param("x(REAL) SUCH THAT x <= 5 AND SUM(w * x) by (g) = t.cap MAXIMIZE SUM(score * x)", id="r1-equal"),
-        pytest.param(
-            "x(REAL) SUCH THAT x <= 5 AND SUM(w * x) by (g) <= t.cap MAXIMIZE SUM(score * x)", id="r1-at-most"
-        ),
-    ],
-)
-def test_a_nan_bound_is_reported_before_the_two_values_it_makes(decidb_cli, decide):
-    """A NaN in a group's bound is the NaN error, on every path, not a disagreement between it and the other values:
-    the bound's NaN check stands before any rule runs, ahead of its disagreement check."""
-    rows = (
-        "(VALUES (1, 'a', 3.0::DOUBLE, 4.0, 1.0), (2, 'a', 'nan'::DOUBLE, 2.0, 2.0), (3, 'b', 2.0::DOUBLE, 1.0, 3.0))"
-    )
-    sql = f"SELECT id, x FROM {rows} t(id, g, cap, score, w) DECIDE {decide}"
-    for mode in ("off", "auto", "require"):
-        result = decidb_cli.execute_raw(f"SET decide_direct_solve = '{mode}'; {sql}")
-        assert "the bound t.cap is NaN on some rows" in result.stderr, (mode, result.stderr)
-
-
 def test_an_equal_bound_two_classes_take_one_value_each_names_no_class(decidb_cli):
     """Class a holds 3 and class b holds 2: each class has one value, but the groups merge the instances, so the whole
     query takes two and no class holds both."""

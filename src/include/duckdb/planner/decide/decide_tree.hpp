@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "duckdb/common/decide_error_ledger.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
@@ -79,17 +78,8 @@ struct DecideProgram {
 	//! What a message names: stage 05's coefficient or bound as written.
 	unique_ptr<Expression> written;
 	int sign = 1;
-	//! The node whose rank its errors take (the holder of its term or bound); INVALID for the node's own.
+	//! The node whose clause a message names (the holder of its term or bound); INVALID for the node's own.
 	idx_t owner = DConstants::INVALID_INDEX;
-	//! Its place among the reads of its owner, after the descent's reads of the owner's rows: the block (a
-	//! member test in the filters, a term, the bound or an admitted end, a product group's weight or form term), a
-	//! product group or a member test's first term, and its order in the block.
-	DecideBlock block = DecideBlock::FILTERS;
-	idx_t group = 0;
-	idx_t position = 0;
-	//! The part of its owner's evaluation it lies in (DecideErrorRank::part): a composed term's place among its
-	//! clause's terms.
-	idx_t part = 0;
 	//! Programs of the same node whose results an admitted end reads as its inputs a and r (DecideAdmittedInput).
 	vector<idx_t> arguments;
 };
@@ -110,6 +100,9 @@ struct DecideGroupSites {
 	DecideTermSite weight;
 	vector<DecideTermSite> left, right;
 };
+
+//! The stage-05 list a body was copied from (DecideBody::kind); NONE for a node of entries.
+enum class DecideBodyKind : uint8_t { NONE, CONSTRAINT, OBJECTIVE, COMPOSED, VALUE_LINK };
 
 //! f(e1..ep, G1..Gq): the records stage 05's lowering (LowerDecideTree) writes for what a node holds, so a term keeps
 //! its identity, order, label and inputs; and where each is computed, parallel to its term vectors.
@@ -150,9 +143,9 @@ struct DecideBody {
 	//! A G over data's operand: its function's arguments, programs on it, which the G folds per slot; empty for any
 	//! other.
 	vector<idx_t> arguments;
-	//! The rank its errors take among the stage-05 lists the body was copied from: constraints by their place, the
-	//! objective, composed clauses, then the objective's composed terms.
-	DecideErrorPhase phase = DecideErrorPhase::INVALID;
+	//! The stage-05 list the body was copied from, and its place there: constraints by their place, the objective,
+	//! composed clauses, then the objective's composed terms.
+	DecideBodyKind kind = DecideBodyKind::NONE;
 	idx_t order = DConstants::INVALID_INDEX;
 };
 
@@ -171,18 +164,6 @@ struct DecideNode {
 	vector<idx_t> dependencies;
 	vector<DecideTreeRead> child_reads;
 	string text;
-	//! Stable reporting priority, independent of when top-down/bottom-up visits the node: of what routes its rows and
-	//! of what it computes. A frame's differ, since its timeline is checked before any value is read, and so do the
-	//! objective's when the scope check reads its kept rows (D72).
-	DecideErrorRank route_rank {DecideErrorPhase::CONSTRAINTS, 0, 0, 0};
-	DecideErrorRank value_rank {DecideErrorPhase::CONSTRAINTS, 0, 0, 0};
-	//! Where its clause or objective is evaluated, which reads its programs as numbers and checks each: its
-	//! value_rank, but a definition's at its place among the clauses, since a definition is first computed where its
-	//! auxiliary's absence is resolved.
-	DecideErrorRank clause_rank {DecideErrorPhase::CONSTRAINTS, 0, 0, 0};
-	//! Where its `when` is read: its route_rank, or earlier where a helper's G or a frame's O below it inherits a gate
-	//! of it, which is read where that node's rows are, before the clause.
-	DecideErrorRank when_rank;
 	vector<unique_ptr<Expression>> when;
 	//! Generated NULL membership tests are computed after descent, never gates.
 	vector<unique_ptr<Expression>> member_tests;
@@ -254,19 +235,11 @@ struct DecideNode {
 	//! reads every row its `when` keeps, and its `per K'` keeps no value of a row in no class of K' (§5.3). So does an
 	//! O an anchor in no timeline (§5.6, D75).
 	bool holds_rows_in_no_class = false;
-	//! Where its key is read: a grouped clause's root and its G's of its `by` key read it where the kept rows are
-	//! grouped, after their terms, and a helper's G after its members' rows (DecideBlock::BY_KEY), so a row the key
-	//! raises on still reaches them; any other key routes its node's rows (ROUTE).
-	DecideBlock key_block = DecideBlock::ROUTE;
+	//! A G of a reducer written in the objective: its operand is read in place, on the rows of each group alone (D81),
+	//! so a row in no class of its key stops there. A helper's, a composed term's, a frame's and a record's are not.
+	bool of_objective = false;
 	//! A hidden root's non-NULL string is the data check's error message.
 	bool value_check = false;
-	//! A reducer's own `when` is read inside the filter of its terms, window by window, before any term is
-	//! computed: on a node that holds terms, the first of them (DecideProgram::group), which its `when` ranks under;
-	//! INVALID on a node whose rows are routed before any term is read.
-	idx_t filter_group = DConstants::INVALID_INDEX;
-	//! The part of its owner's evaluation that filter is read in (DecideErrorRank::part): 0, but 1 for a node of the
-	//! objective's product groups alone, whose filters are read after the objective's linear terms.
-	idx_t filter_part = 0;
 	//! Immutable clause metadata shared with term lowering. Its term vectors are
 	//! empty: the graph's bodies and child results supply the model's terms.
 	unique_ptr<DecideConstraint> facts;
@@ -382,7 +355,7 @@ public:
 	void TakeFrameReads(DecideFrameReads frame_reads);
 	//! The tree so far, which the solver gate reads once the clauses are lowered.
 	const DecideTree &Tree() const;
-	//! Numbers the clauses and compiles the bodies, orders the nodes and ranks their errors, and validates the tree.
+	//! Numbers the clauses and compiles the bodies, orders the nodes, and validates the tree.
 	unique_ptr<DecideTree> Finish();
 
 private:

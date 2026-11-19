@@ -89,7 +89,7 @@ public:
 	DecideModelEmitter(const PhysicalDecide &op, ClientContext &context, const DecideTree &tree,
 	                   const DecideDescent &descent, DecideTreeColumns &columns, DecideGlobalSinkState &gstate,
 	                   vector<SolverInput::KeyValues> &key_values, const DecideSourceNames &names, idx_t num_rows,
-	                   DecideErrorLedger &errors, DataChunk &first);
+	                   DataChunk &first);
 
 	//! Each declared decision's classes, numbered by its key's values, each relation-qualified reducer's, its classes
 	//! split by its body's values, and each helper's, the groups that hold a member, a row in none in a class of its
@@ -127,7 +127,6 @@ private:
 	vector<SolverInput::KeyValues> &key_values;
 	const DecideSourceNames &names;
 	idx_t num_rows;
-	DecideErrorLedger &errors;
 	//! The input's first chunk, where a value the whole query shares is read (FirstRowValue).
 	DataChunk &first;
 	//! Per value-link node, its helper's members, read once where its classes are (HelperMapping), which ValueLinks

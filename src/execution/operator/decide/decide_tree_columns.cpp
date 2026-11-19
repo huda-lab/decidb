@@ -125,9 +125,9 @@ struct DecideTreeColumns::NodeColumns {
 
 DecideTreeColumns::DecideTreeColumns(const DecideTree &tree, const DecideDescent &descent, ClientContext &context,
                                      const DecideSourceNames &names, std::function<string(idx_t)> written_clause,
-                                     DecideErrorLedger &errors, const DecideDebug &debug)
+                                     const DecideDebug &debug)
     : tree(tree), descent(descent), context(context), names(names), written_clause(std::move(written_clause)),
-      errors(errors), nodes(tree.nodes.size()), absence(tree), injection(ReadDecideTreeInjection(tree, debug)) {
+      nodes(tree.nodes.size()), absence(tree), injection(ReadDecideTreeInjection(tree, debug)) {
 }
 
 DecideTreeColumns::~DecideTreeColumns() {
@@ -293,14 +293,12 @@ void DecideTreeColumns::CarryFrameErrors(idx_t index, idx_t program, ProgramColu
 void DecideTreeColumns::ReadTests(idx_t index, NodeColumns &columns) {
 	const idx_t count = descent.Containers()[index].Count();
 	// An entry whose member test is false is no member: its reducer reads no term on its row. A test that raises
-	// where an entry was reached raises, as it does reading the reducer's filter. A test is `X IS NOT NULL`, so
-	// it is NULL only where it raised: that entry is no member either, so its undefined value is never read, and its
-	// error ranks before every read of the node's other programs.
+	// where an entry was reached raises, as it does reading the reducer's filter.
 	columns.tested.assign(count, true);
 	for (auto p : tree.nodes[index]->tests) {
 		auto &column = columns.programs[p];
-		for (auto &error : column.errors) {
-			errors.Add(Rank(index, p, error.first, false), error.second);
+		if (!column.errors.empty()) {
+			column.errors.begin()->second.Throw();
 		}
 		UnifiedVectorFormat format;
 		column.values->ToUnifiedFormat(count, format);
@@ -315,28 +313,10 @@ void DecideTreeColumns::ReadTests(idx_t index, NodeColumns &columns) {
 	}
 }
 
-//! The order inside its owner's evaluation, under the
-//! owner's rank: a block runs over every window of the input's rows before the next, a window executes every
-//! expression of its block before it checks any value, and then the program's group and its order in the block. The
-//! descent's reads of the owner's rows (a `when`, a key) number in order of reading from 0, below every block, so a
-//! block's bits are one above its stage (DecideProgram::stage). A window's number stays below 2^54 for any row, under
-//! the block's bits. A member test ranks under its own node, whose terms' owner reaches it.
-DecideErrorRank DecideTreeColumns::Rank(idx_t node, idx_t p, idx_t entry, bool value) const {
-	auto &program = tree.nodes[node]->programs[p];
-	auto rank = tree.nodes[program.owner == DConstants::INVALID_INDEX ? node : program.owner]->clause_rank;
-	const auto row = descent.Containers()[node].rows[entry];
-	rank.expression = DecideBlockExpression(program.block, row, value);
-	rank.group = program.group;
-	rank.position = program.position;
-	rank.part = program.part;
-	rank.row = row;
-	return rank;
-}
-
 void DecideTreeColumns::Report(idx_t node, idx_t program, const vector<bool> &reads) {
 	for (auto &error : Computed(node).programs[program].errors) {
 		if (reads[error.first]) {
-			errors.Add(Rank(node, program, error.first, false), error.second);
+			error.second.Throw();
 		}
 	}
 }
@@ -408,20 +388,13 @@ vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, const vector<bool
 			base = start;
 			ExtractDoubleColumn(window, size, program.sign, out, source, nulls, &reads, start);
 		} catch (std::exception &) {
-			// The entry that fails, which the window raises first: each entry of the window alone. The ledger
-			// raises at once what stops the query wherever it is raised.
+			// The entry that fails, which the window raises first: each entry of the window alone, so the message
+			// reads that entry's own inputs. It raises at once.
 			for (idx_t i = 0; i < size; i++) {
 				Vector one(window.GetType(), 1);
 				VectorOperations::Copy(window, one, i + 1, i, 0);
-				try {
-					base = start + i;
-					ExtractDoubleColumn(one, 1, program.sign, out, source, nulls, &reads, start + i);
-				} catch (std::exception &entry_ex) {
-					errors.Add(Rank(node, p, start + i, true), ErrorData(entry_ex));
-					// Entries are in row order, so no later window's value ranks before it.
-					out.resize(count, 0.0);
-					return out;
-				}
+				base = start + i;
+				ExtractDoubleColumn(one, 1, program.sign, out, source, nulls, &reads, start + i);
 			}
 			throw InternalException("DECIDE tree: %s fails on its window and on no entry of it",
 			                        program.written->ToString());
@@ -430,18 +403,13 @@ vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, const vector<bool
 	return out;
 }
 
-vector<bool> DecideTreeColumns::NullEntries(idx_t node, idx_t program, const vector<bool> &reads,
-                                            DecideErrorRank rank) {
+vector<bool> DecideTreeColumns::NullEntries(idx_t node, idx_t program, const vector<bool> &reads) {
 	auto &computed = Computed(node).programs[program];
 	auto &rows = descent.Containers()[node].rows;
-	// A definition's reads execute together, a window at a time: one block, whose window ranks first.
 	for (auto &error : computed.errors) {
-		if (!reads[error.first]) {
-			continue;
+		if (reads[error.first]) {
+			error.second.Throw();
 		}
-		rank.row = rows[error.first];
-		rank.expression = DecideBlockExpression(DecideBlock::TERMS, rank.row, false);
-		errors.Add(rank, error.second);
 	}
 	auto &column = *computed.values;
 	const auto count = rows.size();
@@ -555,14 +523,9 @@ const vector<Value> &DecideTreeColumns::Folds(idx_t reducer) {
 		result.assign(slot_count, Value(injection.data).DefaultCastAs(node.function->return_type));
 		return result;
 	}
-	try {
-		DecideAggregateStates states(context, *node.function, slot_count);
-		states.Update(values, read, slots);
-		result = states.Finalize();
-	} catch (std::exception &ex) {
-		errors.Add(node.value_rank, ErrorData(ex));
-		result.assign(slot_count, Value(node.function->return_type));
-	}
+	DecideAggregateStates states(context, *node.function, slot_count);
+	states.Update(values, read, slots);
+	result = states.Finalize();
 	return result;
 }
 
@@ -577,17 +540,15 @@ void DecideTreeColumns::CheckData() {
 		// The check stands for a side plan's, which DuckDB evaluates a chunk at a time: a window that raises raises
 		// what its whole evaluation meets first, as the side plan's chunk would.
 		auto &column = Computed(root).programs[check];
-		for (auto &raised : column.window_errors) {
-			errors.Add(Rank(root, check, raised.first, false), raised.second);
+		if (!column.window_errors.empty()) {
+			column.window_errors.begin()->second.Throw();
 		}
 		auto &messages = *column.values;
 		UnifiedVectorFormat format;
 		messages.ToUnifiedFormat(rows.size(), format);
 		for (idx_t e = 0; e < rows.size(); e++) {
 			if (format.validity.RowIsValid(format.sel->get_index(e))) {
-				auto rank = node.value_rank;
-				rank.row = rows[e];
-				errors.Add(rank, ErrorData(InvalidInputException(messages.GetValue(e).ToString())));
+				throw InvalidInputException(messages.GetValue(e).ToString());
 			}
 		}
 	}
@@ -681,13 +642,8 @@ void DecideTreeColumns::CheckPartition(const DecideFrameSpec &frame, idx_t node)
 		auto timeline = [&](idx_t anchor) {
 			return descent.Label(tree.nodes[node]->key, container.groups.Key(container.Slot(anchor)));
 		};
-		auto rank = tree.nodes[node]->route_rank;
-		rank.expression = DecideBlockExpression(DecideBlock::FILTERS, 0, false) + 1;
-		rank.row = container.rows[e];
-		errors.Add(rank, ErrorData(InvalidInputException(DecideFramePartitionMessage(
-		                     frame, names, descent.Label(frame.partition_key, partition(earlier)), timeline(earlier),
-		                     timeline(e)))));
-		return;
+		throw InvalidInputException(DecideFramePartitionMessage(
+		    frame, names, descent.Label(frame.partition_key, partition(earlier)), timeline(earlier), timeline(e)));
 	}
 }
 
@@ -701,27 +657,7 @@ void DecideTreeColumns::ReadFrames(const vector<DecideFrameSpec> &frames, idx_t 
 	frame_peers.resize(frames.size());
 	for (idx_t f = 0; f < frames.size(); f++) {
 		const auto node = tree.frame_nodes[f];
-		try {
-			maps.push_back(FrameMap(frames[f], node, num_rows, frame_peers[f]));
-		} catch (std::exception &ex) {
-			ErrorData error(ex);
-			if (DecideErrorStopsTheQuery(error)) {
-				throw;
-			}
-			auto rank = tree.nodes[node]->route_rank;
-			rank.expression = DecideBlockExpression(DecideBlock::FILTERS, 0, false);
-			errors.Add(rank, error);
-			// The error ranks before any read of the frame's values: its anchors read nothing meanwhile.
-			DecideFrameMap absent;
-			absent.range = frames[f].range;
-			absent.anchors.assign(num_rows, false);
-			absent.timeline.assign(num_rows, DConstants::INVALID_INDEX);
-			absent.peer = absent.selected_peer = absent.window = absent.timeline;
-			absent.absent.assign(num_rows, true);
-			absent.peer_begin.push_back(0);
-			maps.push_back(std::move(absent));
-			frame_peers[f].clear();
-		}
+		maps.push_back(FrameMap(frames[f], node, num_rows, frame_peers[f]));
 		CheckPartition(frames[f], node);
 	}
 	// What each frame reads, each expression a program on the frame's O.
@@ -820,13 +756,8 @@ void DecideTreeColumns::CheckPositions(const vector<DecideFrameSpec> &frames) {
 			// Named by its timeline's values and its order key's least spelling (D69).
 			auto named = descent.Label(tree.nodes[node]->key, container.groups.Key(peers[peer].slot));
 			named.push_back(container.Order(timelines.named_by[position]));
-			auto rank = tree.nodes[node]->route_rank;
-			rank.phase = DecideErrorPhase::FRAME_PEERS;
-			rank.expression = peer;
 			const auto entries = timelines.first_entry[position + 1] - timelines.first_entry[position];
-			errors.Add(rank,
-			           ErrorData(InvalidInputException(DecideAmbiguousPositionMessage(frames[f], entries, named))));
-			break;
+			throw InvalidInputException(DecideAmbiguousPositionMessage(frames[f], entries, named));
 		}
 	}
 }

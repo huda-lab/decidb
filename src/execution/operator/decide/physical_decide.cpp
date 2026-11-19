@@ -623,10 +623,6 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	}
 	descent->Finish();
 	DecideProfileScope::Counter("execution.descent_rows", static_cast<double>(gstate.descent_rows));
-	// One ledger for the evaluation: what the descent's routing raised, then what the programs raise where a read
-	// reaches them, each at its rank; the least is raised once every phase has run.
-	DecideErrorLedger errors;
-	errors.Append(descent->Errors());
 	if (debug.bodies) {
 		fprintf(stderr, "DECIDB_BODIES_BEGIN\n%sDECIDB_BODIES_END\n", tree->BodiesToString().c_str());
 	}
@@ -640,13 +636,12 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	phase.Next("execution.tree_model");
 	const auto names = Names();
 	DecideTreeColumns columns(
-	    *tree, *descent, context, names, [&](idx_t clause) { return WrittenClause(clause); }, errors, debug);
+	    *tree, *descent, context, names, [&](idx_t clause) { return WrittenClause(clause); }, debug);
 	// The frames' timelines and the columns they read, before any program reads one (language/guide.md §5.6).
 	columns.ReadFrames(frames, num_rows, gstate.frame_maps);
-	// What the data checks and the data reducers no clause reads raise, at their ranks, before any clause is read.
+	// What the data checks and the data reducers no clause reads raise, before any clause is read.
 	columns.CheckData();
-	DecideModelEmitter emitter(*this, context, *tree, *descent, columns, gstate, key_values, names, num_rows, errors,
-	                           first);
+	DecideModelEmitter emitter(*this, context, *tree, *descent, columns, gstate, key_values, names, num_rows, first);
 	emitter.KeyedMappings(keyed_mappings);
 	emitter.Constraints();
 	// A relation-qualified reducer reads each class's first entry, its first row, so the objective's columns are
@@ -655,16 +650,13 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	ScaleObjectiveAvg(gstate, num_rows, evaluated);
 	emitter.Composed(evaluated);
 	// What the data left of each clause is reported once its clauses, its objective and its composed clauses are
-	// read, unless one raised.
-	if (!errors.HasErrorBefore(DecideErrorPhase::VALUE_LINKS)) {
-		ReportSkippedInstances(gstate);
-	}
+	// read.
+	ReportSkippedInstances(gstate);
 	emitter.ValueLinks();
 	// The bottom-up values the evaluation computed, each node's programs on its entries.
 	if (debug.values) {
 		fprintf(stderr, "DECIDB_VALUES_BEGIN\n%sDECIDB_VALUES_END\n", columns.Dump().c_str());
 	}
-	errors.ThrowIfAny();
 }
 
 //===--------------------------------------------------------------------===//

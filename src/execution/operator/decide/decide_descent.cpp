@@ -340,7 +340,7 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
       decision_recorded(tree.keyed_scopes.size()), decision_layouts(tree.keyed_scopes.size()),
       decision_class_layouts(tree.keyed_scopes.size()), thread_local_classes(tree.keyed_scopes.size(), false),
       merged_classes(tree.keyed_scopes.size()), enclosing(tree.nodes.size(), DConstants::INVALID_INDEX),
-      spellings(tree.keys.size()), failed_rows(tree.nodes.size()) {
+      spellings(tree.keys.size()) {
 	// The paths that reach each node, roots first: a node reached by one reads each of a window's rows once.
 	vector<idx_t> paths(tree.nodes.size(), 0);
 	std::function<void(idx_t)> reach = [&](idx_t node) {
@@ -531,62 +531,11 @@ void DecideDescent::Evaluate(const Expression &expression, DataChunk &chunk, con
 		sliced.Slice(chunk, selection, rows.size());
 	}
 	auto &selected = rows.size() != chunk.size() ? sliced : chunk;
-	auto rank = current_rank;
-	current_rank.expression++;
-	try {
-		auto &executor = executors[&expression];
-		if (!executor) {
-			executor = make_uniq<ExpressionExecutor>(context, expression);
-		}
-		executor->ExecuteExpression(selected, result);
-		return;
-	} catch (std::exception &ex) {
-		ErrorData error(ex);
-		if (error.Type() == ExceptionType::INTERRUPT || error.Type() == ExceptionType::OUT_OF_MEMORY ||
-		    error.Type() == ExceptionType::FATAL || error.Type() == ExceptionType::INTERNAL) {
-			throw;
-		}
-		// An executor that raised is not read again.
-		executors.erase(&expression);
+	auto &executor = executors[&expression];
+	if (!executor) {
+		executor = make_uniq<ExpressionExecutor>(context, expression);
 	}
-	// A failed vector identifies neither the bad row nor the other rows' values. Retry that selection row by row
-	// and retain reached errors until the bottom-up reporting order is known.
-	Vector retried(expression.return_type);
-	result.Reference(retried);
-	for (idx_t i = 0; i < rows.size(); i++) {
-		if (Failed(rows.rows[i])) {
-			FlatVector::SetNull(result, i, true);
-			continue;
-		}
-		SelectionVector one(1);
-		one.set_index(0, i);
-		DataChunk input;
-		input.InitializeEmpty(selected.GetTypes());
-		input.Slice(selected, one, 1);
-		try {
-			ExpressionExecutor executor(context, expression);
-			Vector value(expression.return_type);
-			executor.ExecuteExpression(input, value);
-			result.SetValue(i, value.GetValue(0));
-		} catch (std::exception &ex) {
-			ErrorData error(ex);
-			if (error.Type() == ExceptionType::INTERNAL) {
-				throw;
-			}
-			raised++;
-			rank.row = active_row_base + rows.rows[i];
-			if (read_block != DecideBlock::ROUTE) {
-				rank.expression = DecideBlockExpression(read_block, rank.row, false);
-			}
-			errors.Add(rank, error);
-			// A read made before the terms keeps the row from them; one made after them leaves the row in no
-			// class of the key, so its terms are still computed.
-			if (active_node < failed_rows.size() && read_block <= DecideBlock::FILTERS) {
-				failed_rows[active_node].insert(rank.row);
-			}
-			FlatVector::SetNull(result, i, true);
-		}
-	}
+	executor->ExecuteExpression(selected, result);
 }
 
 //! SQL's three truth values are kept until the whole predicate is complete.
@@ -601,7 +550,7 @@ vector<uint8_t> DecideDescent::Truth(const Expression &expression, DataChunk &ch
 			Reach unresolved;
 			vector<idx_t> positions;
 			for (idx_t i = 0; i < rows.size(); i++) {
-				if (!Failed(rows.rows[i]) && ((is_and && result[i] != 0) || (!is_and && result[i] != 1))) {
+				if ((is_and && result[i] != 0) || (!is_and && result[i] != 1)) {
 					unresolved.Add(rows.rows[i], rows.parents[i]);
 					positions.push_back(i);
 				}
@@ -668,14 +617,6 @@ void DecideDescent::KeyReads::Reset(idx_t window) {
 	}
 }
 
-void DecideDescent::KeyReads::CopyInto(Allocator &allocator, KeyReads &copy, idx_t room) const {
-	copy.values.Initialize(allocator, values.GetTypes(), MaxValue<idx_t>(values.size() + room, 1));
-	copy.values.Append(values, true);
-	copy.spelled = spelled;
-	copy.whole = whole;
-	copy.position = position;
-}
-
 const DecideDescent::Reach &DecideDescent::KeyReads::Missing(const Reach &rows, Reach &own) const {
 	if (whole) {
 		return own;
@@ -738,28 +679,19 @@ void DecideDescent::ReadKey(idx_t key, DataChunk &chunk, const Reach &rows, cons
 	values.Initialize(Allocator::Get(context), DescentKeyTypes(tree, key), MaxValue<idx_t>(missing.size(), 1));
 	spelled.spelled.resize(elements.size());
 	spelled.sort_keys.resize(elements.size());
-	// A held row counts as read again, so the ranks of what the node reads next are those of a read of every row.
 	auto evaluate = [&](const Expression &expression, Vector &result) {
-		if (missing.empty()) {
-			current_rank.expression += rows.empty() ? 0 : 1;
-			return;
+		if (!missing.empty()) {
+			Evaluate(expression, chunk, missing, result);
 		}
-		Evaluate(expression, chunk, missing, result);
 	};
 	// A collated column groups under its collation and is named by its spelling, read as GROUP BY reads both (D69).
-	// The spelling is the same read of the column, at its rank: a row it fails on failed the grouping first.
 	bool collated = false;
 	for (idx_t c = 0; c < elements.size(); c++) {
 		auto &element = elements[c];
-		if (read_block != DecideBlock::ROUTE) {
-			current_rank.position = c;
-		}
-		const auto rank = current_rank.expression;
 		evaluate(element.Grouping(), values.data[c]);
 		if (!element.collated) {
 			continue;
 		}
-		current_rank.expression = rank;
 		Vector spelling(element.expression->return_type);
 		evaluate(*element.expression, spelling);
 		collated = true;
@@ -789,21 +721,14 @@ void DecideDescent::Key(idx_t key, DataChunk &chunk, const Reach &rows, DataChun
 	if (held.values.ColumnCount() == 0) {
 		held.Initialize(Allocator::Get(context), DescentKeyTypes(tree, key), elements.size(), chunk.size());
 	}
-	// The rows no read of the window holds yet, which this read evaluates. What it evaluates joins the held reads,
-	// unless it raised on a row: then it is read beside them, this once, and each later read of the row raises anew.
+	// The rows no read of the window holds yet, which this read evaluates. What it evaluates joins the held reads.
 	Reach own;
 	auto &missing = held.Missing(rows, own);
 	DataChunk evaluated;
 	KeySpellings spelled;
-	const auto raised_before = raised;
 	ReadKey(key, chunk, rows, missing, evaluated, spelled);
-	KeyReads once;
-	auto &source = raised == raised_before ? held : once;
-	if (raised != raised_before) {
-		held.CopyInto(Allocator::Get(context), once, missing.size());
-	}
-	source.Hold(evaluated, spelled, missing, chunk.size());
-	source.Slice(rows, chunk.size(), values);
+	held.Hold(evaluated, spelled, missing, chunk.size());
+	held.Slice(rows, chunk.size(), values);
 	for (idx_t c = 0; c < elements.size(); c++) {
 		if (elements[c].null_mode != DecideKeyNullMode::NO_GROUP || rows.empty()) {
 			continue;
@@ -827,8 +752,8 @@ void DecideDescent::Key(idx_t key, DataChunk &chunk, const Reach &rows, DataChun
 	read->sort_keys.assign(elements.size(), vector<string>());
 	for (idx_t c = 0; c < elements.size(); c++) {
 		for (idx_t i = 0; i < rows.size() && elements[c].collated; i++) {
-			read->spelled[c].push_back(source.spelled.spelled[c][source.At(rows, i)]);
-			read->sort_keys[c].push_back(source.spelled.sort_keys[c][source.At(rows, i)]);
+			read->spelled[c].push_back(held.spelled.spelled[c][held.At(rows, i)]);
+			read->sort_keys[c].push_back(held.spelled.sort_keys[c][held.At(rows, i)]);
 		}
 	}
 }
@@ -899,12 +824,9 @@ void DecideDescent::Signature(idx_t node_index, DataChunk &chunk, const Reach &r
 		case DecideSignatureFieldKind::BY_KEY:
 		case DecideSignatureFieldKind::FRAME: {
 			// A field naming another node -- a reducer's `by` key, a frame's timeline and position -- reads that
-			// node's values as a `by` key's read, which keeps the row: the node raises what it raises, where it
-			// is read (a helper's G where the helper's classes are built, a frame's O where every frame is built
-			// before any clause, language/guide.md §5.6).
-			const auto block = read_block;
-			const auto position = current_rank.position;
-			read_block = DecideBlock::BY_KEY;
+			// node's values as a `by` key's read: the node raises what it raises, where it is read (a helper's G
+			// where the helper's classes are built, a frame's O where every frame is built before any clause,
+			// language/guide.md §5.6).
 			const DecideNode *frame = nullptr;
 			if (field.kind == DecideSignatureFieldKind::FRAME) {
 				frame = DescentFrameNode(tree, field.frame);
@@ -921,8 +843,6 @@ void DecideDescent::Signature(idx_t node_index, DataChunk &chunk, const Reach &r
 			if (frame && DescentFrameReadsOrder(*frame)) {
 				Evaluate(*frame->over, chunk, rows, values.data[column++]);
 			}
-			read_block = block;
-			current_rank.position = position;
 			break;
 		}
 		case DecideSignatureFieldKind::DECISION: {
@@ -1420,20 +1340,9 @@ void DecideDescent::Store(idx_t node_index, DataChunk &chunk, const Reach &store
 		FrameOrder(node, layout, chunk, stored, values);
 	}
 	values.SetCardinality(stored.size());
-	// An entry per row no read failed on.
-	SelectionVector unfailed;
+	// An entry per row.
 	const SelectionVector *kept = FlatVector::IncrementalSelectionVector();
-	idx_t kept_count = stored.size();
-	if (active_failed && !active_failed->empty()) {
-		unfailed.Initialize(MaxValue<idx_t>(stored.size(), 1));
-		kept_count = 0;
-		for (idx_t i = 0; i < stored.size(); i++) {
-			if (!Failed(stored.rows[i])) {
-				unfailed.set_index(kept_count++, i);
-			}
-		}
-		kept = &unfailed;
-	}
+	const idx_t kept_count = stored.size();
 	if (kept_count == 0) {
 		return;
 	}
@@ -1483,37 +1392,15 @@ void DecideDescent::Store(idx_t node_index, DataChunk &chunk, const Reach &store
 	container.values.Append(values, *kept, kept_count);
 }
 
-const DecideDescent::Reach &DecideDescent::Unfailed(const Reach &rows, Reach &kept) const {
-	if (!active_failed || active_failed->empty()) {
-		return rows;
-	}
-	kept.Reserve(rows.size());
-	for (idx_t i = 0; i < rows.size(); i++) {
-		if (!Failed(rows.rows[i])) {
-			kept.Add(rows.rows[i], rows.parents[i]);
-		}
-	}
-	return kept;
-}
-
 const DecideDescent::Reach *DecideDescent::Gate(const DecideNode &node, DataChunk &chunk, const Reach *reaching,
                                                 Reach &own) {
 	for (idx_t k = 0; k < node.when.size(); k++) {
-		// A reducer's own `when` is read in its terms' filter, at its place there (DecideNode::filter_group,
-		// filter_part).
-		const auto filter = node.filter_group != DConstants::INVALID_INDEX;
-		read_block = filter ? DecideBlock::FILTERS : DecideBlock::ROUTE;
-		current_rank.part = node.filter_part;
-		current_rank.group = filter ? node.filter_group : 0;
-		current_rank.position = filter ? k : 0;
 		containers[active_node].when_rows[k] += reaching->size();
 		auto truth = Truth(*node.when[k], chunk, *reaching);
-		read_block = DecideBlock::ROUTE;
-		current_rank.part = current_rank.group = current_rank.position = 0;
 		Reach kept;
 		kept.Reserve(reaching->size());
 		for (idx_t i = 0; i < reaching->size(); i++) {
-			if (truth[i] == 1 && !Failed(reaching->rows[i])) {
+			if (truth[i] == 1) {
 				kept.Add(reaching->rows[i], reaching->parents[i]);
 			}
 		}
@@ -1533,27 +1420,22 @@ const DecideDescent::Reach &DecideDescent::HoldKeyed(idx_t node_index, DataChunk
 	unsafe_vector<bool> present;
 	KeySpellings spelled;
 	DataChunk keys;
-	// A grouped clause's keys are read where its kept rows are grouped, after its terms (DecideNode::key_block).
-	read_block = node.key_block;
 	Key(node.key, chunk, rows, keys, present, &spelled);
-	read_block = DecideBlock::ROUTE;
-	current_rank.position = 0;
 	const auto scope = IsScopeNode(node);
 	// A reducer's operand is read on every row its G reads, except the objective's, which is read in place, on the
 	// rows of each group alone (D81).
-	const auto reducer = node.kind == DecideNodeKind::REDUCER && node.value_rank.phase != DecideErrorPhase::OBJECTIVE;
+	const auto reducer = node.kind == DecideNodeKind::REDUCER && !node.of_objective;
 	// A row in no class of the key stops here, unless the node holds such rows or is a reducer; an E's still reaches
 	// its children, since `per` never gates them.
 	auto unclassed = [&](idx_t i) {
 		return !present[i] && !node.holds_rows_in_no_class && !reducer;
 	};
-	// The rows that take a slot: those no read failed on, in a class of the key or held anyway.
+	// The rows that take a slot: those in a class of the key or held anyway.
 	const auto count = rows.size();
-	const auto none_failed = !active_failed || active_failed->empty();
 	unsafe_vector<idx_t> grouped;
 	grouped.reserve(count);
 	for (idx_t i = 0; i < count; i++) {
-		if ((none_failed || !Failed(rows.rows[i])) && !unclassed(i)) {
+		if (!unclassed(i)) {
 			grouped.push_back(i);
 		}
 	}
@@ -1625,10 +1507,6 @@ const DecideDescent::Reach &DecideDescent::HoldKeyed(idx_t node_index, DataChunk
 void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base, const Reach &incoming) {
 	auto &node = *tree.nodes[node_index];
 	active_node = node_index;
-	active_failed = &failed_rows[node_index];
-	active_row_base = row_base;
-	// Its `when` first, at its place (DecideNode::when_rank), then the rest at its own rank.
-	current_rank = node.when_rank;
 	if (context.interrupted) {
 		throw InterruptException();
 	}
@@ -1651,9 +1529,6 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base, co
 		return;
 	}
 	auto &rows = *reaching;
-	current_rank.phase = node.route_rank.phase;
-	current_rank.step = node.route_rank.step;
-	current_rank.clause = node.route_rank.clause;
 	if (rows.empty()) {
 		return;
 	}
@@ -1662,18 +1537,13 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base, co
 	if (container.groups.per_row) {
 		// An E per row: each row it holds is a slot of its own, its entry, and its children read every row it holds,
 		// as `per` never gates them.
-		current_rank.position = 0;
-		Reach unfailed;
-		auto &stored = Unfailed(rows, unfailed);
-		Store(node_index, chunk, stored, {}, row_base);
+		Store(node_index, chunk, rows, {}, row_base);
 	} else {
 		children = &HoldKeyed(node_index, chunk, rows, row_base, own_children);
 	}
-	Reach unfailed;
-	auto &reached = Unfailed(*children, unfailed);
-	container.rows_out += reached.size();
+	container.rows_out += children->size();
 	for (auto child : node.children) {
-		Visit(child, chunk, row_base, reached);
+		Visit(child, chunk, row_base, *children);
 	}
 }
 
@@ -2084,8 +1954,7 @@ void DecideDescent::Merge(MergedPart &part) {
 		part.routed_target[n] = container.routed.size() + planned_routed[n];
 		planned_routed[n] += theirs.routed.size();
 	}
-	// The groups each key's reads spelled, and what the rows raised, at their rows here. What a visit reads of the
-	// rows a read failed on is not merged: no row is visited after a merge.
+	// The groups each key's reads spelled, at their rows here.
 	for (idx_t key = 0; key < spellings.size(); key++) {
 		for (auto &bucket : other.spellings[key]) {
 			auto &held = spellings[key][bucket.first];
@@ -2101,8 +1970,6 @@ void DecideDescent::Merge(MergedPart &part) {
 			}
 		}
 	}
-	other.errors.Rebase(offset);
-	errors.Append(other.errors);
 }
 
 idx_t DecideDescent::PartParent(const MergedPart &part, idx_t node, idx_t slot) const {

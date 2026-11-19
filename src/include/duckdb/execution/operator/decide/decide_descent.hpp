@@ -212,9 +212,9 @@ public:
 	//! The descents of `parts`, each of the same tree with the row its rows start at, in the order the rows were
 	//! placed (a descent per thread, each over the rows its thread received), merged into the first: a part's rows are
 	//! rebased; its slots, classes, entries and instances are found again in the merged maps, in the order the part
-	//! made them, which is its rows' order, so they number as one descent over every row would; and its errors take
-	//! their ranks at their rows. The maps merge one part after another; then each node's entries and routed rows are
-	//! copied in parallel, a task per window of the merged containers.
+	//! made them, which is its rows' order, so they number as one descent over every row would. The maps merge one
+	//! part after another; then each node's entries and routed rows are copied in parallel, a task per window of the
+	//! merged containers.
 	static unique_ptr<DecideDescent> MergeAll(vector<pair<unique_ptr<DecideDescent>, idx_t>> parts,
 	                                          ClientContext &context);
 	void Finish();
@@ -243,9 +243,6 @@ public:
 	//! row's entries with their signatures. At chunk size 1 a step per row is the deck's animation (`decide_debug`
 	//! `steps`).
 	string Step() const;
-	const DecideErrorLedger &Errors() const {
-		return errors;
-	}
 
 private:
 	//! The rows of a window reaching a node: each row of the window, and the enclosing slot it arrives in.
@@ -296,8 +293,7 @@ private:
 		DataChunk values;
 	};
 	//! A key's values on the window's rows read so far: a key is evaluated once on a row of the window, by the first
-	//! node that reads it there, and every later read of it on the row slices these. A row a read raised on is not
-	//! held, so each node reading it raises at its own rank.
+	//! node that reads it there, and every later read of it on the row slices these.
 	struct KeyReads {
 		DataChunk values;
 		KeySpellings spelled;
@@ -309,8 +305,6 @@ private:
 		void Initialize(Allocator &allocator, const vector<LogicalType> &types, idx_t columns, idx_t window);
 		//! Holds nothing, for the window of `window` rows that starts.
 		void Reset(idx_t window);
-		//! A copy that holds what this one holds.
-		void CopyInto(Allocator &allocator, KeyReads &copy, idx_t room) const;
 		//! The rows of `rows` this does not hold, `rows` itself where it holds none.
 		const Reach &Missing(const Reach &rows, Reach &own) const;
 		//! Holds the values and spellings `read` and `spelled` evaluated on `missing`, of a window of `window` rows.
@@ -343,8 +337,6 @@ private:
 	vector<unsafe_vector<idx_t>> own_slots;
 	//! Per key, its values on the window's rows read so far.
 	vector<KeyReads> key_reads;
-	//! How many reads raised: a read that raised on a row holds none of its values.
-	idx_t raised = 0;
 	//! The slots HoldKeyed finds for a node's rows, until its children are visited.
 	unsafe_vector<idx_t> slot_buffer;
 	//! Per node of an empty key, its slot by enclosing slot plus one, 0 for none: INVALID where none is made yet.
@@ -390,19 +382,7 @@ private:
 	//! Whether another descent was merged in, whose classes the layouts' dictionaries and recorded rows do not hold:
 	//! no row follows.
 	bool merged = false;
-	DecideErrorLedger errors;
-	DecideErrorRank current_rank;
 	idx_t active_node = DConstants::INVALID_INDEX;
-	idx_t active_row_base = 0;
-	//! The block in which the visit's read ranks, by the row's window: a reducer's own `when` in the term
-	//! filters, a grouped clause's key in its grouping; ROUTE for a read that routes the node's rows.
-	DecideBlock read_block = DecideBlock::ROUTE;
-	vector<unordered_set<idx_t>> failed_rows;
-	//! The active node's failed rows, null before any node is visited.
-	const unordered_set<idx_t> *active_failed = nullptr;
-	bool Failed(idx_t row) const {
-		return active_failed && !active_failed->empty() && active_failed->count(active_row_base + row);
-	}
 	//! A set E's entries of the current window, inserted once every root has descended (DecideNodeContainer::routed).
 	vector<unique_ptr<Pending>> pending;
 	//! What MergeAll copies of a part once every part's maps are merged: where each node's entries and routed rows go,
@@ -433,8 +413,7 @@ private:
 	//! What a keyed node holds of `rows`: each row's slot by its key and the entries of those its key classes, and the
 	//! rows its children read, in `own_children` for a G's or O's, which reach them in their slots.
 	const Reach &HoldKeyed(idx_t node, DataChunk &chunk, const Reach &rows, idx_t row_base, Reach &own_children);
-	//! `expression` on `rows` into `result`, a vector of its type; a row it fails on is NULL, its error held at the
-	//! read's rank.
+	//! `expression` on `rows` into `result`, a vector of its type; an error is raised at once.
 	void Evaluate(const Expression &expression, DataChunk &chunk, const Reach &rows, Vector &result);
 	vector<uint8_t> Truth(const Expression &expression, DataChunk &chunk, const Reach &rows);
 	//! The values of `key` on `rows`, a column per element into `values`, and which hold no NULL that leaves a row in
@@ -442,7 +421,7 @@ private:
 	void Key(idx_t key, DataChunk &chunk, const Reach &rows, DataChunk &values, unsafe_vector<bool> &present,
 	         KeySpellings *read = nullptr);
 	//! The values of `key` on `missing`, the rows of `rows` it holds no read of, into `values`, a collated column's
-	//! spellings into `spelled`; with none missing, the ranks advance as if `rows` were read.
+	//! spellings into `spelled`.
 	void ReadKey(idx_t key, DataChunk &chunk, const Reach &rows, const Reach &missing, DataChunk &values,
 	             KeySpellings &spelled);
 	void Spell(idx_t key, const vector<vector<Value>> &groups, const vector<vector<Value>> &spelled,
@@ -474,8 +453,6 @@ private:
 	                DataChunk &values);
 	//! An O's timelines (DecideNodeTimelines), once every row is appended and its slots are ranked.
 	void Timelines(idx_t node);
-	//! `rows` without those a read failed on: `rows` itself where none failed, else `kept`.
-	const Reach &Unfailed(const Reach &rows, Reach &kept) const;
 };
 
 } // namespace duckdb
