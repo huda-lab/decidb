@@ -19,18 +19,14 @@ class Deserializer;
 
 //! What a span of the DECIDE text is. The values are the parser's PGDecideSpanRole.
 enum class DecideSpanRole : uint8_t {
-	//! The input of a BETWEEN and its bounds (`lo AND hi`), anchored at the BETWEEN. The bound halves carry its
-	//! location, so the clause is quoted whole.
-	BETWEEN_INPUT = 0,
-	BETWEEN_BOUNDS = 1,
 	//! A `per` key, anchored at the `per` (a reducer's own, at the location the reducer binds at); a reducer's `by`
 	//! key, anchored at the `by`.
-	PER = 2,
-	BY = 3,
+	PER = 0,
+	BY = 1,
 	//! The objective, anchored at the start of the tail (`tail_start`).
-	OBJECTIVE = 4,
+	OBJECTIVE = 2,
 	//! An expression of the tail, anchored at the query location its parsed expression took.
-	EXPR = 5
+	EXPR = 3
 };
 
 //! How tightly the text of an EXPR span binds, which decides whether it needs parentheses as an operand: the level of

@@ -1259,8 +1259,6 @@ typedef enum PGObjectiveSense {
  * the transformer gives the parsed node as its query location; start/end bound the text (end is just past it).
  */
 typedef enum PGDecideSpanRole {
-	PG_DECIDE_SPAN_BETWEEN_INPUT,  /* the input of a BETWEEN (`x` of `x BETWEEN lo AND hi`), anchored at BETWEEN */
-	PG_DECIDE_SPAN_BETWEEN_BOUNDS, /* the bounds of a BETWEEN, from the lower through the upper (`lo AND hi`) */
 	PG_DECIDE_SPAN_PER,            /* a `per` key */
 	PG_DECIDE_SPAN_BY,             /* a reducer's `by` key */
 	PG_DECIDE_SPAN_OBJECTIVE,      /* the objective, anchored at the start of the tail */

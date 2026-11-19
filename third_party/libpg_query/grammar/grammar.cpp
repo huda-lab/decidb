@@ -753,21 +753,6 @@ noteDecideReducerKey(PGNode *scope_node, int anchor, core_yyscan_t yyscanner)
 }
 
 /*
- * DeciDB: the sides of a BETWEEN, anchored at its keyword: the input, and the text from the lower bound through the
- * upper one (`lo AND hi`). A message quotes the clause as `input BETWEEN lo AND hi`.
- */
-static PGNode *
-noteDecideBetween(PGNode *between, YYLTYPE op, YYLTYPE input, YYLTYPE lower, YYLTYPE upper, core_yyscan_t yyscanner)
-{
-	YYLTYPE bounds = lower;
-
-	bounds.end = upper.end;
-	noteDecideSpan(yyscanner, op.start, PG_DECIDE_SPAN_BETWEEN_INPUT, input);
-	noteDecideSpan(yyscanner, op.start, PG_DECIDE_SPAN_BETWEEN_BOUNDS, bounds);
-	return between;
-}
-
-/*
  * DeciDB: fold a scope around the body it governs. WHEN applies first and PER
  * second, so PER is the outer node. PER ROW is the default written out: it names
  * no key, but it keeps a node of its own, so the clause follows the scoping
