@@ -849,3 +849,82 @@ class DeciDBCli:
                 f"stdout: {result.stdout[:500]}\n"
                 f"stderr: {result.stderr[:500]}"
             )
+
+    def assert_error_at(
+        self,
+        sql: str,
+        *,
+        kind: str,
+        at: str | None = None,
+        word: str | None = None,
+        timeout: float = 120,
+        expect_number_range: bool | dict[str, bool] = False,
+    ) -> None:
+        """Assert that *sql* fails with an error of class *kind* that points at *at*, and nothing else.
+
+        The kind is the DuckDB error class that opens the message (``Parser Error``, ``Binder Error``, ...).
+        The location is what the message quotes from the query (``_assert_error_location``): the caret line, or a quoted
+        fragment where there is no caret. The wording of a message lives in ``language/errors.md``; a test of it
+        does not repeat it here. *word* is one more word the message must contain, for two errors of one kind at
+        one place. Runs the query as ``execute_raw`` does.
+        """
+        result = self.execute_raw(sql, timeout=timeout, expect_number_range=expect_number_range)
+        message = _error_message(result.stderr)
+        assert (
+            message is not None
+        ), f"Expected an error but stderr had none.\nstdout: {result.stdout[:500]}\nstderr: {result.stderr[:500]}"
+        header = message.splitlines()[0]
+        assert header.startswith(f"{kind}:"), f"Expected a {kind}, the error is:\n{message[:500]}"
+        if word is not None:
+            assert word in message, f"The error does not contain {word!r}:\n{message[:500]}"
+        _assert_error_location(message, at)
+
+
+#: The line of a caret block that quotes the query, and the caret line under it.
+_CARET_SOURCE_LINE = re.compile(r"^LINE \d+: ")
+_CARET_LINE = re.compile(r"^ *\^$")
+
+#: A quoted fragment of a message: single or double quotes, not an apostrophe inside a word.
+_QUOTED_FRAGMENT = re.compile(r"""(?<!\w)'([^'\n]*)'(?!\w)|(?<!\w)"([^"\n]*)"(?!\w)""")
+
+
+def _error_message(stderr: str) -> str | None:
+    """The error in ``stderr``, from its first line on, or None when stderr holds no error. Lines the CLI prints in
+    front of it (a warning, a solver preamble) are not part of it."""
+    found = _ERROR_HEADER.search(stderr)
+    return stderr[found.start() :].strip() if found else None
+
+
+def _caret_location(message: str) -> tuple[str, int] | None:
+    """The query line a message quotes under ``LINE n:`` as the CLI prints it, and the column of the caret in it, or
+    None when the message has no caret. The line may be clipped, with ``...`` at the clip, when the query line is long.
+    """
+    lines = message.splitlines()
+    for source, caret in zip(lines, lines[1:]):
+        prefix = _CARET_SOURCE_LINE.match(source)
+        if prefix and _CARET_LINE.match(caret):
+            return source[prefix.end() :], caret.index("^") - prefix.end()
+    return None
+
+
+def _assert_error_location(message: str, at: str | None) -> None:
+    """Check ``at`` against where ``message`` points into the query: the caret's column falls inside an occurrence of
+    ``at`` on the quoted query line; with no caret, ``at`` lies inside a quoted fragment of the message. A message
+    that points somewhere needs ``at``, so a test cannot drop the location; ``at`` needs a message that points."""
+    caret = _caret_location(message)
+    if caret is not None:
+        line, column = caret
+        if at is None:
+            raise AssertionError(f"The error points into the query; say where with at=.\n{message[:500]}")
+        starts = [i for i in range(len(line)) if line.startswith(at, i)]
+        assert any(
+            start <= column < start + len(at) for start in starts
+        ), f"The error points at column {column} of\n{line}\nwhich is not inside {at!r}.\n{message[:500]}"
+        return
+    fragments = [quoted for pair in _QUOTED_FRAGMENT.findall(message) for quoted in pair if quoted]
+    if at is None:
+        assert not fragments, f"The error quotes {fragments}; say where with at=.\n{message[:500]}"
+        return
+    assert any(
+        at in fragment for fragment in fragments
+    ), f"The error neither points into the query nor quotes {at!r}.\n{message[:500]}"
