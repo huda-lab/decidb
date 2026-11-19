@@ -483,13 +483,13 @@ private:
 		};
 		if (!condition.limit.constant) {
 			auto limit = calc.Cast(calc.Wrap(over_state(*condition.limit.data.value)), LogicalType::DOUBLE);
-			raw.limit = p1.Add(calc.Out(DirectOnKeptRows(calc, eligible, limit)));
+			raw.limit = p1.Add(calc.Out(DecideOnKeptRows(calc, eligible, limit)));
 		}
 		// A constant slope is the plan's literal (Factor): no column and no check.
 		if (!condition.constant_slope) {
 			// The slope of the limit's square is read and checked on the rows the clause keeps, as the limit is.
 			auto slope =
-			    DirectOnKeptRows(calc, eligible, calc.Wrap(DirectSumOf(optimizer, condition.slope.linear, over_state)));
+			    DecideOnKeptRows(calc, eligible, calc.Wrap(DirectSumOf(optimizer, condition.slope.linear, over_state)));
 			raw.slope = p1.Add(calc.Out(slope));
 			if (auto check =
 			        DirectCheckNumber(optimizer, raw.slope, condition.slope.linear_names, condition.slope.linear)) {

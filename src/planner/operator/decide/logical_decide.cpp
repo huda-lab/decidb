@@ -351,10 +351,8 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 			}
 		}
 	}
-	for (auto &check : scope_checks) {
-		if (check.value) {
-			callback(&check.value);
-		}
+	for (auto &check : value_checks) {
+		callback(&check);
 	}
 	for (auto &signature : signatures) {
 		if (signature.rows) {
@@ -382,9 +380,6 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 		if (retained.aggregate.reads) {
 			callback(&retained.aggregate.reads);
 		}
-	}
-	for (auto &check : retained_row_checks) {
-		callback(&check);
 	}
 	for (auto &expression : retained_expressions) {
 		callback(&expression);

@@ -190,13 +190,6 @@ struct DirectIRObjective {
 	DirectIRScope scope;
 };
 
-//! A run-time scope check the solver makes before it reads a value, which the plan makes on the source rows: the input
-//! evaluates `invalid`, a per-row check (BOOLEAN) that is true on a valid row and raises on any other, over source
-//! columns only.
-struct DirectRowCheck {
-	unique_ptr<Expression> invalid;
-};
-
 //! The two sides of a source that is a complete cross product: every row of one side meets every row of the other. Both
 //! are empty when the source is not a cross product.
 struct DirectIRCrossProduct {
@@ -227,8 +220,9 @@ struct DirectIR {
 	vector<vector<ColumnBinding>> keys;
 	vector<DirectIRConstraint> constraints;
 	DirectIRObjective objective;
-	//! The scope checks the plan makes on the source rows, which the rule driver adds above every rule's plan.
-	vector<DirectRowCheck> row_checks;
+	//! The value checks (LogicalDecide::value_checks) the plan makes on the source rows, which the rule driver adds
+	//! above every rule's plan.
+	vector<unique_ptr<Expression>> row_checks;
 	//! NOT_PROVED when the DECIDE operator owes the rows a check the plan cannot make: a reducer's own `per` whose
 	//! classes split by the variants of its body (KeyedScopeInfo::signature).
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;

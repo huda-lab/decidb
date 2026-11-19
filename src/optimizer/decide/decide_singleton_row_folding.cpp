@@ -7,12 +7,12 @@
 // into a column box. See decide_optimizer.cpp.
 //
 //===----------------------------------------------------------------------===//
+#include "duckdb/optimizer/decide/decide_expression_builder.hpp"
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
 
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
-#include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"

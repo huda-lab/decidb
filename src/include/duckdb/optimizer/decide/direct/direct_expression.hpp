@@ -5,6 +5,7 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/common/optional_idx.hpp"
+#include "duckdb/optimizer/decide/decide_expression_builder.hpp"
 #include "duckdb/planner/column_binding.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/expression.hpp"
@@ -30,10 +31,6 @@ bool DirectReferencesOnlySource(const Expression &expr, const vector<ColumnBindi
 
 //! True when the expression mentions at least one column.
 bool DirectHasColumnReference(const Expression &expr);
-
-//! Strips the DECIDE tags from every alias in `expr`: a plan prints an expression by its alias, so a tag would reach
-//! EXPLAIN. A user's own name (a column's) stays.
-void DirectStripTags(Expression &expr);
 
 //! Re-points every source column reference at the same position in a projection over the source. Returns false,
 //! leaving the expression partly rewritten, when a reference is not a source column.
@@ -109,64 +106,5 @@ bool DirectIsWholeNumbered(DirectDomain domain);
 //! A coefficient or value the plan evaluates per row: numeric, deterministic, independent of the decisions, over the
 //! source. It may raise when evaluated; the plan evaluates it on the rows that read it, as the solver does.
 bool DirectProveValue(const DirectIR &ir, const Expression &expr);
-
-//! `x >= v`, `x > v`, and `x = v` all bound a count from below; `x <= v`, `x < v`, and `x = v` from above.
-bool DirectIsLowerBound(ExpressionType comparison);
-bool DirectIsUpperBound(ExpressionType comparison);
-
-//! Expressions as values, so the per-row algebra reads like the algebra. Each operation copies its operands.
-using ExprPtr = std::shared_ptr<Expression>;
-
-class ExpressionBuilder {
-public:
-	explicit ExpressionBuilder(ClientContext &context_p);
-
-	ExprPtr Wrap(unique_ptr<Expression> expr) const;
-	unique_ptr<Expression> Out(const ExprPtr &expr) const;
-	//! A copy of an existing expression, to combine with others.
-	ExprPtr Of(const Expression &expr) const;
-	ExprPtr Num(double value) const;
-	ExprPtr Bool(bool value) const;
-	//! A constant of exactly this value and type (`Num` always makes a DOUBLE). A NULL of a type is `Value(type)`.
-	ExprPtr Constant(const Value &value) const;
-	ExprPtr Col(const LogicalType &type, ColumnBinding binding) const;
-	ExprPtr Fn(const string &name, const ExprPtr &a) const;
-	ExprPtr Fn(const string &name, const ExprPtr &a, const ExprPtr &b) const;
-	//! A scalar function of any number of arguments.
-	ExprPtr Fn(const string &name, const vector<ExprPtr> &args) const;
-	//! The call that raises the error of a NaN or infinite value (DecideInvalidValueError), `written` as the user wrote
-	//! it, at `place` in the query (invalid for none), which the call carries as its own query location: NULL where it
-	//! is not reached, so it stands as the branch of a CASE that tests the value.
-	ExprPtr RaiseInvalidValue(DecideValueRole role, const string &written, optional_idx place) const;
-	//! The same for a `written` computed at run time (an answer's value), a VARCHAR expression.
-	ExprPtr RaiseInvalidValue(DecideValueRole role, const ExprPtr &written, optional_idx place) const;
-	//! `a IS NULL`.
-	ExprPtr IsNull(const ExprPtr &a) const;
-	//! `a` converted to `type`; `a` itself when it already has that type.
-	ExprPtr Cast(const ExprPtr &a, const LogicalType &type) const;
-	//! The first value that is not NULL, of the first value's type.
-	ExprPtr Coalesce(const vector<ExprPtr> &values) const;
-	ExprPtr Add(const ExprPtr &a, const ExprPtr &b) const;
-	ExprPtr Sub(const ExprPtr &a, const ExprPtr &b) const;
-	ExprPtr Mul(const ExprPtr &a, const ExprPtr &b) const;
-	ExprPtr Div(const ExprPtr &a, const ExprPtr &b) const;
-	ExprPtr Neg(const ExprPtr &a) const;
-	ExprPtr Cmp(ExpressionType type, const ExprPtr &a, const ExprPtr &b) const;
-	ExprPtr If(const ExprPtr &condition, const ExprPtr &then_value, const ExprPtr &else_value) const;
-	ExprPtr Min(const vector<ExprPtr> &values) const;
-	ExprPtr Max(const vector<ExprPtr> &values) const;
-	//! `b` where `a` is true, and false elsewhere (a NULL `a` is false), as a CASE: `b` is evaluated only where `a`
-	//! holds.
-	ExprPtr And(const ExprPtr &a, const ExprPtr &b) const;
-	//! True unless `a` is true (a NULL `a` gives true).
-	ExprPtr Not(const ExprPtr &a) const;
-	//! True when any condition is true; false for none.
-	ExprPtr Any(const vector<ExprPtr> &conditions) const;
-
-private:
-	ClientContext &context;
-
-	ExprPtr Extremum(const char *name, const vector<ExprPtr> &values) const;
-};
 
 } // namespace duckdb

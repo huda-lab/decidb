@@ -139,7 +139,7 @@ void StripTagsAbove(LogicalOperator &op, const LogicalOperator &source) {
 	if (&op == &source) {
 		return;
 	}
-	LogicalOperatorVisitor::EnumerateExpressions(op, [](unique_ptr<Expression> *expr) { DirectStripTags(**expr); });
+	LogicalOperatorVisitor::EnumerateExpressions(op, [](unique_ptr<Expression> *expr) { DecideStripTags(**expr); });
 	for (auto &child : op.children) {
 		StripTagsAbove(*child, source);
 	}

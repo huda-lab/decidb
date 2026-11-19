@@ -123,13 +123,13 @@ DirectQuadraticColumns DirectLayoutQuadraticPart(Optimizer &optimizer, const Exp
 	ExprPtr kept;
 	if (part.kept) {
 		columns.has_mask = true;
-		kept = calc.Wrap(DirectActiveWhen(calc, over ? over(*part.kept).get() : part.kept.get()));
+		kept = calc.Wrap(DecideActiveWhen(calc, over ? over(*part.kept).get() : part.kept.get()));
 		columns.mask = p1.Add(calc.Out(kept));
 	}
 	auto on_kept = [&](const ExprPtr &value) {
-		return p1.Add(calc.Out(DirectOnKeptRows(calc, kept, value)));
+		return p1.Add(calc.Out(DecideOnKeptRows(calc, kept, value)));
 	};
-	auto check_number = [&](ColumnBinding number, const DirectNumberNames &names,
+	auto check_number = [&](ColumnBinding number, const DecideNumberNames &names,
 	                        const vector<DirectSignedValue> &values, const DirectFactor &factor = DirectFactor()) {
 		if (auto check = DirectCheckNumber(optimizer, number, names, values, factor)) {
 			checks.push_back(std::move(check));
@@ -187,10 +187,10 @@ DirectLayoutBoundClauses(Optimizer &optimizer, const ExpressionBuilder &calc, Di
 		DirectBoundColumns columns;
 		ExprPtr kept;
 		if (clause.when) {
-			kept = calc.Wrap(DirectActiveWhen(calc, over ? over(*clause.when).get() : clause.when.get()));
+			kept = calc.Wrap(DecideActiveWhen(calc, over ? over(*clause.when).get() : clause.when.get()));
 		}
 		auto on_kept = [&](const ExprPtr &value) {
-			return DirectOnKeptRows(calc, kept, value);
+			return DecideOnKeptRows(calc, kept, value);
 		};
 		auto coefficient = p1.Add(calc.Out(on_kept(calc.Wrap(DirectSumOf(optimizer, clause.coefficient, over)))));
 		auto rhs = p1.Add(calc.Out(on_kept(calc.Cast(into(*clause.rhs), LogicalType::DOUBLE))));
@@ -445,18 +445,6 @@ unique_ptr<LogicalOperator> DirectHeldRows::Close(unique_ptr<LogicalOperator> de
 // DECIDE semantics every aggregate rule shares
 //===--------------------------------------------------------------------===//
 
-unique_ptr<Expression> DirectActiveWhen(const ExpressionBuilder &calc, const Expression *when) {
-	return calc.Out(when ? calc.If(calc.Wrap(when->Copy()), calc.Bool(true), calc.Bool(false)) : calc.Bool(true));
-}
-
-ExprPtr DirectOnKeptRows(const ExpressionBuilder &calc, const ExprPtr &kept, const ExprPtr &value) {
-	return kept ? calc.If(kept, value, calc.Constant(Value(value->return_type))) : value;
-}
-
-ExprPtr DirectCheckOnKeptRows(const ExpressionBuilder &calc, const ExprPtr &kept, const ExprPtr &check) {
-	return kept ? calc.If(kept, check, calc.Bool(true)) : check;
-}
-
 unique_ptr<Expression> DirectAggregateOf(const Expression &function, vector<unique_ptr<Expression>> arguments,
                                          unique_ptr<Expression> reads) {
 	auto result = function.Copy();
@@ -560,18 +548,18 @@ unique_ptr<LogicalOperator> DirectAddInstanceFlag(Optimizer &optimizer, unique_p
                                                   const Expression *when, const vector<DirectKeyElement> &classes,
                                                   const vector<DirectKeyElement> &groups, ColumnBinding &flag) {
 	ExpressionBuilder calc(optimizer.context);
-	auto active = calc.Wrap(DirectActiveWhen(calc, when));
+	auto active = calc.Wrap(DecideActiveWhen(calc, when));
 	auto in_class = active;
 	for (auto &key : classes) {
 		if (key.no_group) {
-			auto value = DirectOnKeptRows(calc, active, calc.Of(*key.grouping));
+			auto value = DecideOnKeptRows(calc, active, calc.Of(*key.grouping));
 			in_class = calc.If(calc.IsNull(value), calc.Bool(false), in_class);
 		}
 	}
 	// One flag per `by` group: a class's reducers read its group, so a group no class reaches has no instance.
 	auto any_class = DirectWindowExtremum(optimizer, "bool_or", calc.Out(in_class));
 	for (auto &group : groups) {
-		any_class->partitions.push_back(calc.Out(DirectOnKeptRows(calc, active, calc.Of(*group.grouping))));
+		any_class->partitions.push_back(calc.Out(DecideOnKeptRows(calc, active, calc.Of(*group.grouping))));
 	}
 	auto index = optimizer.binder.GenerateTableIndex();
 	auto window = make_uniq<LogicalWindow>(index);
@@ -621,12 +609,12 @@ ExprPtr DirectClassPresent(const ExpressionBuilder &calc, const DirectClassKey &
 static DirectScopeColumns ProjectOneScope(const ExpressionBuilder &calc, DirectScopeInput &scope, idx_t state_index,
                                           vector<unique_ptr<Expression>> &expressions) {
 	DirectScopeColumns columns;
-	auto active = calc.Wrap(DirectActiveWhen(calc, scope.when));
+	auto active = calc.Wrap(DecideActiveWhen(calc, scope.when));
 	auto eligible = active;
 	vector<ExprPtr> key_values;
 	for (auto &key : *scope.keys) {
 		auto value = calc.Of(*key.grouping);
-		key_values.push_back(scope.when ? DirectOnKeptRows(calc, active, value) : value);
+		key_values.push_back(scope.when ? DecideOnKeptRows(calc, active, value) : value);
 		if (key.no_group) {
 			eligible = calc.If(calc.IsNull(key_values.back()), calc.Bool(false), eligible);
 		}
@@ -729,7 +717,7 @@ ExprPtr DirectFixedValueCheck(ClientContext &context, const ExpressionBuilder &c
 	DirectRowBound bound;
 	bound.value = over(*fixed.value);
 	if (fixed.when) {
-		bound.kept = DirectActiveWhen(calc, over(*fixed.when).get());
+		bound.kept = DecideActiveWhen(calc, over(*fixed.when).get());
 	}
 	bound.reject_nan = fixed.reject_nan;
 	bound.coefficient = fixed.coefficient;
@@ -853,11 +841,11 @@ ExprPtr DirectLinearScore::Check(const ExpressionBuilder &calc, Optimizer &optim
 		// Every part has a term (PartIsFiniteConstant finds it).
 		D_ASSERT(part_scores[p]);
 		if (!PartIsFiniteConstant(optimizer, p)) {
-			checks.push_back(calc.Out(DirectNumberCheck(calc, part_scores[p], part_names[p])));
+			checks.push_back(calc.Out(DecideNumberCheck(calc, part_scores[p], part_names[p])));
 		}
 	}
 	// The score adds the parts, each checked before: past a DOUBLE it names the objective.
-	checks.push_back(calc.Out(DirectNumberCheck(calc, combined_score, objective_written)));
+	checks.push_back(calc.Out(DecideNumberCheck(calc, combined_score, objective_written)));
 	return calc.Wrap(DirectAllHold(calc, std::move(checks)));
 }
 
@@ -875,7 +863,7 @@ ExprPtr DirectLinearScore::Combined(const ExpressionBuilder &calc, Optimizer &op
 		if (auto &kept = part_kept[part.part]) {
 			// A row the part drops reads no coefficient, so nothing in it can raise, and scores 0.
 			auto over_state = over(*kept);
-			term = calc.If(calc.Wrap(DirectActiveWhen(calc, over_state.get())), term, calc.Num(0.0));
+			term = calc.If(calc.Wrap(DecideActiveWhen(calc, over_state.get())), term, calc.Num(0.0));
 		}
 		combined_score = combined_score ? calc.Add(combined_score, term) : term;
 		part_scores[part.part] = part_scores[part.part] ? calc.Add(part_scores[part.part], term) : term;

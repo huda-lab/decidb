@@ -239,12 +239,12 @@ bool DirectReadCountLimit(const DirectIR &ir, ClientContext &context, const Dire
 	return true;
 }
 
-DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedValue> &values,
+DecideNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedValue> &values,
                                 const DecideClauseRef &clause) {
-	DirectNumberNames names;
+	DecideNumberNames names;
 	names.clause = clause;
 	for (auto &value : values) {
-		DirectNameValue(names, *value.expr, value.sign, ir.render(*value.expr), ir.place(*value.expr));
+		DecideNameValue(names, *value.expr, value.sign, ir.render(*value.expr), ir.place(*value.expr));
 	}
 	return names;
 }
@@ -328,7 +328,7 @@ bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, con
 //! The weight of a square or an absolute value: the term's sign and its coefficient (1 when it has none), which a rule
 //! that needs it constant folds (DirectFoldConstantSum).
 static bool DirectReadWeight(const DirectIR &ir, const DecideSplitTerm &term, const DecideClauseRef &clause,
-                             vector<DirectSignedValue> &weight, DirectNumberNames &names) {
+                             vector<DirectSignedValue> &weight, DecideNumberNames &names) {
 	if (term.coefficient && !DirectProveValue(ir, *term.coefficient)) {
 		return false;
 	}

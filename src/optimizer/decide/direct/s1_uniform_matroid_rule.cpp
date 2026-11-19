@@ -97,7 +97,7 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 		DirectCountLimit count;
 		if (!DirectReadCountBody(context, factor->PlainSum()->terms, negated) ||
 		    !DirectReadCountLimit(ir, context, *factor, negated, count) ||
-		    (!DirectIsLowerBound(count.comparison) && !DirectIsUpperBound(count.comparison))) {
+		    (!DecideIsLowerBound(count.comparison) && !DecideIsUpperBound(count.comparison))) {
 			return false;
 		}
 		// A source-valued bound has one value per group already. The plan evaluates it on the rows of the groups, as
@@ -115,14 +115,14 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 			condition.impossible |= impossible;
 			return true;
 		};
-		if (DirectIsLowerBound(count.comparison)) {
+		if (DecideIsLowerBound(count.comparison)) {
 			idx_t lower;
 			if (!fold_side(false, lower)) {
 				return false;
 			}
 			condition.lower = std::max(condition.lower, lower);
 		}
-		if (DirectIsUpperBound(count.comparison)) {
+		if (DecideIsUpperBound(count.comparison)) {
 			idx_t upper;
 			if (!fold_side(true, upper)) {
 				return false;
@@ -167,8 +167,8 @@ public:
 	    : DirectRankedPrefix(optimizer_p, source_bindings_p, source_types_p, {condition_p.scope}, condition_p.fixed),
 	      condition(condition_p) {
 		for (auto &bound : condition.source_bounds) {
-			source_lower |= DirectIsLowerBound(bound.comparison);
-			source_upper |= DirectIsUpperBound(bound.comparison);
+			source_lower |= DecideIsLowerBound(bound.comparison);
+			source_upper |= DecideIsUpperBound(bound.comparison);
 		}
 		has_lower = condition.lower || source_lower;
 		has_upper = condition.has_upper || source_upper;
@@ -270,7 +270,7 @@ private:
 	ExprPtr SourceLimit(idx_t index, bool upper) const {
 		auto &bound = condition.source_bounds[index];
 		// Every caller asks for a side the bound has: an upper limit of an upper bound, a lower of a lower bound.
-		D_ASSERT(upper ? DirectIsUpperBound(bound.comparison) : DirectIsLowerBound(bound.comparison));
+		D_ASSERT(upper ? DecideIsUpperBound(bound.comparison) : DecideIsLowerBound(bound.comparison));
 		return DirectInclusiveRowsExpr(calc, bound.comparison, upper,
 		                               [&]() { return calc.Col(LogicalType::DOUBLE, bound_columns[index]); });
 	}
@@ -280,7 +280,7 @@ private:
 		vector<ExprPtr> limits;
 		limits.push_back(calc.Constant(Value::BIGINT(NumericCast<int64_t>(condition.lower))));
 		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
-			if (DirectIsLowerBound(condition.source_bounds[i].comparison)) {
+			if (DecideIsLowerBound(condition.source_bounds[i].comparison)) {
 				limits.push_back(SourceLimit(i, false));
 			}
 		}
@@ -294,7 +294,7 @@ private:
 			limits.push_back(calc.Constant(Value::BIGINT(NumericCast<int64_t>(condition.upper))));
 		}
 		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
-			if (DirectIsUpperBound(condition.source_bounds[i].comparison)) {
+			if (DecideIsUpperBound(condition.source_bounds[i].comparison)) {
 				limits.push_back(SourceLimit(i, true));
 			}
 		}
@@ -337,7 +337,7 @@ private:
 			}
 			if (source_lower) {
 				for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
-					if (!DirectIsLowerBound(condition.source_bounds[i].comparison)) {
+					if (!DecideIsLowerBound(condition.source_bounds[i].comparison)) {
 						continue;
 					}
 					group_checks.push_back(must_not_hold(calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO,

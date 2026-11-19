@@ -386,7 +386,6 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<string>(214, "canonical_objective", canonical_objective);
 	/* [Deleted] (vector<string>) "source_fragments" */
 	serializer.WritePropertyWithDefault<vector<DecideSourceColumnName>>(216, "source_columns", source_columns);
-	serializer.WritePropertyWithDefault<vector<DecideScopeCheck>>(218, "scope_checks", scope_checks);
 	/* [Deleted] (bool) "scoped_objective" */
 	serializer.WritePropertyWithDefault<vector<DecideKey>>(220, "keys", keys);
 	serializer.WritePropertyWithDefault<bool>(221, "objective_canonical_differs", objective_canonical_differs);
@@ -394,6 +393,7 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<vector<DecideSignature>>(223, "signatures", signatures);
 	serializer.WritePropertyWithDefault<idx_t>(224, "objective_signature", objective_signature, DConstants::INVALID_INDEX);
 	serializer.WritePropertyWithDefault<vector<DecideFrameSpec>>(225, "frames", frames);
+	serializer.WritePropertyWithDefault<vector<unique_ptr<Expression>>>(226, "value_checks", value_checks);
 }
 
 unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserializer) {
@@ -415,7 +415,6 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithDefault<string>(214, "canonical_objective", result->canonical_objective);
 	deserializer.ReadDeletedProperty<vector<string>>(215, "source_fragments");
 	deserializer.ReadPropertyWithDefault<vector<DecideSourceColumnName>>(216, "source_columns", result->source_columns);
-	deserializer.ReadPropertyWithDefault<vector<DecideScopeCheck>>(218, "scope_checks", result->scope_checks);
 	deserializer.ReadDeletedProperty<bool>(219, "scoped_objective");
 	deserializer.ReadPropertyWithDefault<vector<DecideKey>>(220, "keys", result->keys);
 	deserializer.ReadPropertyWithDefault<bool>(221, "objective_canonical_differs", result->objective_canonical_differs);
@@ -423,6 +422,7 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithDefault<vector<DecideSignature>>(223, "signatures", result->signatures);
 	deserializer.ReadPropertyWithExplicitDefault<idx_t>(224, "objective_signature", result->objective_signature, DConstants::INVALID_INDEX);
 	deserializer.ReadPropertyWithDefault<vector<DecideFrameSpec>>(225, "frames", result->frames);
+	deserializer.ReadPropertyWithDefault<vector<unique_ptr<Expression>>>(226, "value_checks", result->value_checks);
 	return std::move(result);
 }
 

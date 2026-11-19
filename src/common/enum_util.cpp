@@ -1211,24 +1211,6 @@ DecideKeyNullMode EnumUtil::FromString<DecideKeyNullMode>(const char *value) {
 	    StringUtil::StringToEnum(GetDecideKeyNullModeValues(), 2, "DecideKeyNullMode", value));
 }
 
-const StringUtil::EnumStringLiteral *GetDecideScopeCheckKindValues() {
-	static constexpr StringUtil::EnumStringLiteral values[] {
-	    {static_cast<uint32_t>(DecideScopeCheckKind::VALUE_IS_VALID), "VALUE_IS_VALID"}};
-	return values;
-}
-
-template <>
-const char *EnumUtil::ToChars<DecideScopeCheckKind>(DecideScopeCheckKind value) {
-	return StringUtil::EnumToString(GetDecideScopeCheckKindValues(), 1, "DecideScopeCheckKind",
-	                                static_cast<uint32_t>(value));
-}
-
-template <>
-DecideScopeCheckKind EnumUtil::FromString<DecideScopeCheckKind>(const char *value) {
-	return static_cast<DecideScopeCheckKind>(
-	    StringUtil::StringToEnum(GetDecideScopeCheckKindValues(), 1, "DecideScopeCheckKind", value));
-}
-
 const StringUtil::EnumStringLiteral *GetDecideFrameAnchorValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 		{ static_cast<uint32_t>(DecideFrameAnchor::FIRST), "FIRST" },

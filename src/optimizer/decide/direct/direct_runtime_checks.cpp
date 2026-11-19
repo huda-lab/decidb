@@ -53,60 +53,18 @@ unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer) {
 	return DirectErrorPredicate(optimizer, DecideUnboundedMessage());
 }
 
-void DirectNameValue(DirectNumberNames &names, const Expression &value, int sign, const string &text,
-                     optional_idx place) {
-	const bool constant = DecideUnguarded(value).IsFoldable();
-	if (constant && !place.IsValid()) {
-		return;
-	}
-	if (names.values == 0) {
-		names.first_sign = sign;
-		names.text = text;
-		names.place = place;
-	} else {
-		const string front = names.values == 1 && names.first_sign < 0 ? "-" : "";
-		names.text = front + names.text + (sign < 0 ? " - " : " + ") + text;
-		names.place = optional_idx();
-	}
-	names.constant = names.constant && constant;
-	names.values++;
-}
-
-//! The call that raises for a number that is not finite: it names the expression of the query the number stands for
-//! and carries its place, and for a number the plan computes it names the clause (TOO_LARGE), at the clause's place.
-static ExprPtr NotFiniteRaise(const ExpressionBuilder &calc, const DirectNumberNames &names) {
-	if (names.values > 0) {
-		return calc.RaiseInvalidValue(names.constant ? DecideValueRole::CONSTANT : DecideValueRole::COEFFICIENT,
-		                              names.text, names.place);
-	}
-	return calc.RaiseInvalidValue(DecideValueRole::TOO_LARGE, names.clause.Noun(), names.clause.place);
-}
-
-ExprPtr DirectNumberCheck(const ExpressionBuilder &calc, const ExprPtr &number, const DirectNumberNames &names) {
-	// The gate is one BOOLEAN per row, and the raise stands in the branch of the rows that fail alone, as a CASE
-	// evaluates a branch only where it is chosen. A NULL number is skipped.
-	return calc.If(calc.Fn("isfinite", number), calc.Bool(true),
-	               calc.If(calc.IsNull(number), calc.Bool(true), NotFiniteRaise(calc, names)));
-}
-
-ExprPtr DirectNumberCheck(const ExpressionBuilder &calc, const ExprPtr &number, const DecideClauseRef &clause) {
-	DirectNumberNames names;
-	names.clause = clause;
-	return DirectNumberCheck(calc, number, names);
-}
-
 unique_ptr<Expression> DirectRaiseTooLarge(Optimizer &optimizer, const ExprPtr &number, const DecideClauseRef &clause) {
 	ExpressionBuilder calc(optimizer.context);
-	return calc.Out(DirectNumberCheck(calc, number, clause));
+	return calc.Out(DecideNumberCheck(calc, number, clause));
 }
 
-unique_ptr<Expression> DirectCheckNumber(Optimizer &optimizer, ColumnBinding number, const DirectNumberNames &names,
+unique_ptr<Expression> DirectCheckNumber(Optimizer &optimizer, ColumnBinding number, const DecideNumberNames &names,
                                          const vector<DirectSignedValue> &values, const DirectFactor &factor) {
 	if (DirectIsFiniteWhereKept(optimizer, values, factor)) {
 		return nullptr;
 	}
 	ExpressionBuilder calc(optimizer.context);
-	return calc.Out(DirectNumberCheck(calc, calc.Col(LogicalType::DOUBLE, number), names));
+	return calc.Out(DecideNumberCheck(calc, calc.Col(LogicalType::DOUBLE, number), names));
 }
 
 unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding,

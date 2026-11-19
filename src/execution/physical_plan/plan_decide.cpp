@@ -166,11 +166,6 @@ static void NameInputColumns(PhysicalDecide &decide_op, LogicalDecide &op,
 			harvest_key(key);
 		}
 	}
-	for (auto &check : decide_op.scope_checks) {
-		if (check.value) {
-			harvest(*check.value);
-		}
-	}
 	for (auto &signature : decide_op.signatures) {
 		if (signature.rows) {
 			harvest(*signature.rows);
@@ -306,7 +301,6 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	// Resolved like every other expression the operator owns (EnumerateExpressions).
 	decide_op->keys = std::move(op.keys);
 	decide_op->frames = std::move(op.frames);
-	decide_op->scope_checks = std::move(op.scope_checks);
 	decide_op->signatures = std::move(op.signatures);
 	decide_op->objective_signature = op.objective_signature;
 

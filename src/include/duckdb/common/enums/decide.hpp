@@ -105,12 +105,6 @@ inline idx_t JoinDecideKeys(idx_t a, idx_t b) {
 	return a == b ? a : DECIDE_ROW_KEY;
 }
 
-//! What a run-time scope check (LogicalDecide::scope_checks) asks of the rows.
-//!   VALUE_IS_VALID — every row holds a value the model can read: a computed message, NULL on a valid row
-//! An empty group is no check: it skips its constraint (deck p. 56). A value that varies within a class is a variant,
-//! not an error (D70, LogicalDecide::signatures); 1 was the retired determination check.
-enum class DecideScopeCheckKind : uint8_t { VALUE_IS_VALID = 3 };
-
 //! What one field of a variant signature (LogicalDecide::signatures) compares, at a row:
 //!   VALUE    — a data expression, by value (NULL a value)
 //!   DECISION — a decision, by instance: a per-row one by its row, a keyed one by its class

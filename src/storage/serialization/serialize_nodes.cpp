@@ -526,38 +526,6 @@ DecideKeyElement DecideKeyElement::Deserialize(Deserializer &deserializer) {
 	return result;
 }
 
-void DecideScopeCheck::Serialize(Serializer &serializer) const {
-	serializer.WriteProperty<DecideScopeCheckKind>(100, "kind", kind);
-	/* [Deleted] (unique_ptr<Expression>) "rows" */
-	/* [Deleted] (vector<unique_ptr<Expression>>) "key_expressions" */
-	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(103, "value", value);
-	/* [Deleted] (idx_t) "decision" */
-	/* [Deleted] (unique_ptr<Expression>) "filter" */
-	/* [Deleted] (string) "subject" */
-	/* [Deleted] (string) "object" */
-	/* [Deleted] (string) "context" */
-	/* [Deleted] (vector<string>) "key_names" */
-	/* [Deleted] (idx_t) "key" */
-	/* [Deleted] (vector<idx_t>) "key_order" */
-}
-
-DecideScopeCheck DecideScopeCheck::Deserialize(Deserializer &deserializer) {
-	DecideScopeCheck result;
-	deserializer.ReadProperty<DecideScopeCheckKind>(100, "kind", result.kind);
-	deserializer.ReadDeletedProperty<unique_ptr<Expression>>(101, "rows");
-	deserializer.ReadDeletedProperty<vector<unique_ptr<Expression>>>(102, "key_expressions");
-	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(103, "value", result.value);
-	deserializer.ReadDeletedProperty<idx_t>(104, "decision");
-	deserializer.ReadDeletedProperty<unique_ptr<Expression>>(105, "filter");
-	deserializer.ReadDeletedProperty<string>(106, "subject");
-	deserializer.ReadDeletedProperty<string>(107, "object");
-	deserializer.ReadDeletedProperty<string>(108, "context");
-	deserializer.ReadDeletedProperty<vector<string>>(109, "key_names");
-	deserializer.ReadDeletedProperty<idx_t>(110, "key");
-	deserializer.ReadDeletedProperty<vector<idx_t>>(111, "key_order");
-	return result;
-}
-
 void DecideSignature::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(100, "rows", rows);
 	serializer.WritePropertyWithDefault<idx_t>(101, "key", key, DConstants::INVALID_INDEX);

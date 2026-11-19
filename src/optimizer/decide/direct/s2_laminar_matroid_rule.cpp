@@ -240,7 +240,7 @@ private:
 			auto eligible = levels[i].scoped ? Column(LogicalType::BOOLEAN, state.scopes[i].eligible) : nullptr;
 			for (auto &data_cap : condition.levels[i].data_caps) {
 				auto value = calc.Wrap(over_state(*data_cap.limit.data.value));
-				cap_columns[i].push_back(p1.Add(calc.Out(DirectOnKeptRows(calc, eligible, value))));
+				cap_columns[i].push_back(p1.Add(calc.Out(DecideOnKeptRows(calc, eligible, value))));
 			}
 		}
 		layout.rank_key = score_column;

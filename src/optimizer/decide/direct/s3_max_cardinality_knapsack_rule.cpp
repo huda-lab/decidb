@@ -293,12 +293,12 @@ private:
 		ExprPtr kept_when;
 		auto &when = levels[0].scope.when;
 		if (when) {
-			kept_when = calc.Wrap(DirectActiveWhen(calc, over_state(*when).get()));
+			kept_when = calc.Wrap(DecideActiveWhen(calc, over_state(*when).get()));
 			if (DropsRowsFromObjective()) {
 				kept = p1.Add(kept_when);
 			}
 		}
-		auto weight_value = DirectOnKeptRows(calc, kept_when, calc.Wrap(DirectSumOf(optimizer, values, over_state)));
+		auto weight_value = DecideOnKeptRows(calc, kept_when, calc.Wrap(DirectSumOf(optimizer, values, over_state)));
 		weight = p1.Add(weight_value);
 		if (HasFixes()) {
 			fixed_weight = p1.Add(calc.If(FixedOne(state), weight_value, calc.Constant(Value(LogicalType::DOUBLE))));
@@ -309,7 +309,7 @@ private:
 		if (!condition.limit.constant) {
 			auto eligible = levels[0].scoped ? Column(LogicalType::BOOLEAN, state.scopes[0].eligible) : nullptr;
 			auto value = calc.Cast(calc.Wrap(over_state(*condition.limit.data.value)), LogicalType::DOUBLE);
-			limit = p1.Add(calc.Out(DirectOnKeptRows(calc, eligible, value)));
+			limit = p1.Add(calc.Out(DecideOnKeptRows(calc, eligible, value)));
 		}
 		layout.rank_key = weight;
 		return layout;

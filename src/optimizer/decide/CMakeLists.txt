@@ -3,6 +3,7 @@ add_library_unity(
   OBJECT
   decide_singleton_row_folding.cpp
   decide_answer_choice.cpp
+  decide_expression_builder.cpp
   decide_linear_form.cpp
   decide_optimizer.cpp
   decide_rewrite_abs.cpp
@@ -14,7 +15,8 @@ add_library_unity(
   decide_rewrite_notequal_avg.cpp
   decide_rewrite_rhs_bounds.cpp
   decide_rewrite_scoped.cpp
-  decide_solver_gate.cpp)
+  decide_solver_gate.cpp
+  decide_value_checks.cpp)
 add_subdirectory(direct)
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:duckdb_optimizer_decide>

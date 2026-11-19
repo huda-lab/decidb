@@ -50,7 +50,7 @@ struct DirectBoundClause {
 	unique_ptr<Expression> rhs;
 	//! What a message calls them: the coefficient's values and its clause (DirectNamesOf), and the right side as the
 	//! user wrote it and where (DirectIR::render, DirectIR::place).
-	DirectNumberNames coefficient_names;
+	DecideNumberNames coefficient_names;
 	string rhs_text;
 	optional_idx rhs_place;
 	//! The values of the decision the clause admits (DecideSingletonRow): DOUBLE, ±infinity on an open side.
@@ -187,7 +187,7 @@ struct DirectLinearPart {
 	vector<DirectLinearTerm> terms;
 	//! For each decision, what a message names for the part's like terms on it (DirectNamesOf): the values of the
 	//! solver path's one coefficient of the decision, and the part's clause.
-	vector<DirectNumberNames> names;
+	vector<DecideNumberNames> names;
 };
 
 //! `number` oriented as a minimum: times the part's sign and its factor (DirectFactor). The canonicalizer writes every
@@ -199,10 +199,10 @@ inline double DirectOriented(const DirectLinearPart &part, double number) {
 //! The terms of `part` that name `decision`, each as a signed value.
 vector<DirectSignedValue> DirectValuesOn(const DirectLinearPart &part, idx_t decision);
 
-//! What a message names for a number computed from `values` (DirectNumberNames): each value printed as the user wrote
+//! What a message names for a number computed from `values` (DecideNumberNames): each value printed as the user wrote
 //! it, in reading order, and `clause`; the value's place when there is one value. A constant the query text holds no
 //! place for is no value of the user's: a number made of only those names the clause.
-DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedValue> &values,
+DecideNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedValue> &values,
                                 const DecideClauseRef &clause);
 
 //! Whether a number computed from `values` (with the part's `factor`) needs no invalid-value check: the
@@ -243,7 +243,7 @@ bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const Dire
 struct DirectConstantTerm {
 	int sign = 1;
 	unique_ptr<Expression> value;
-	DirectNumberNames value_names;
+	DecideNumberNames value_names;
 };
 
 //! A linear form in one decision, `SUM(linear) * x[decision] + SUM(constant)`: its slopes and its constants, each a
@@ -253,8 +253,8 @@ struct DirectLinearForm {
 	vector<DirectSignedValue> linear;
 	vector<DirectSignedValue> constant;
 	//! What a message names for the sums of the two (DirectNamesOf).
-	DirectNumberNames linear_names;
-	DirectNumberNames constant_names;
+	DecideNumberNames linear_names;
+	DecideNumberNames constant_names;
 };
 
 //! `weight * f(inner)`, where `f` is set by the reader that fills it: DirectReadSquareTerm reads `f(x) = x^2` and
@@ -264,7 +264,7 @@ struct DirectWeightedForm {
 	//! The values whose sum is the weight: one, the term's sign and its coefficient (1 when it has none).
 	vector<DirectSignedValue> weight;
 	//! What a message names for the weight (DirectNamesOf).
-	DirectNumberNames weight_names;
+	DecideNumberNames weight_names;
 	DirectLinearForm inner;
 };
 

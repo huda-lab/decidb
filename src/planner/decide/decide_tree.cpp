@@ -220,7 +220,7 @@ public:
 		PrepareAbsFunctions();
 		PrepareL0IndicatorFunctions();
 		LowerDefinitionFunctionBodies();
-		for (auto &check : op.retained_row_checks) {
+		for (auto &check : op.value_checks) {
 			auto index = NewNode(DecideNodeKind::SCOPE);
 			auto &node = *tree->nodes[index];
 			node.root = node.hidden = node.value_check = true;

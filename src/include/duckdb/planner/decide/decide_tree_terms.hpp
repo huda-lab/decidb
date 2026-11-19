@@ -102,7 +102,7 @@ struct DecideProductGroup {
 //! does. Built from the borrowed DecideEnclosingScope (decide_constraint_walk.hpp) the clause sat under, and carried
 //! by every holder of such a clause (DecideConstraint, LogicalDecide::ComposedMinMaxConstraint) as this one parameter
 //! object. A clause reads only the rows its `when` keeps (a NULL on another row is never evaluated), and
-//! LogicalDecide::scope_checks have passed before it is evaluated.
+//! LogicalDecide::value_checks have passed before it is evaluated.
 struct DecideClauseScope {
 	//! The clause's `when`, or null for every row.
 	unique_ptr<Expression> when;

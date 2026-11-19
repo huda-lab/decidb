@@ -651,8 +651,8 @@ private:
 		}
 		auto values = DirectValuesOn(condition.weights, 0);
 		auto &read = condition.scope.when ? condition.scope.when : condition.present;
-		auto kept = read ? calc.Wrap(DirectActiveWhen(calc, over(*read).get())) : nullptr;
-		auto weight = p1.Add(calc.Out(DirectOnKeptRows(calc, kept, calc.Wrap(DirectSumOf(optimizer, values, over)))));
+		auto kept = read ? calc.Wrap(DecideActiveWhen(calc, over(*read).get())) : nullptr;
+		auto weight = p1.Add(calc.Out(DecideOnKeptRows(calc, kept, calc.Wrap(DirectSumOf(optimizer, values, over)))));
 		if (auto check = DirectCheckNumber(optimizer, weight, condition.weights.names[0], values)) {
 			checks.push_back(std::move(check));
 		}
@@ -692,7 +692,7 @@ private:
 		ColumnBinding limit;
 		if (!condition.limit.constant) {
 			auto value = calc.Cast(calc.Wrap(over(*condition.limit.data.value)), LogicalType::DOUBLE);
-			limit = p1.Add(calc.Out(DirectOnKeptRows(calc, eligible, value)));
+			limit = p1.Add(calc.Out(DecideOnKeptRows(calc, eligible, value)));
 		}
 		auto plan = p1.Finish(std::move(state.plan));
 

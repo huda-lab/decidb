@@ -146,8 +146,6 @@ public:
 	//! input chunk.
 	vector<DecideFrameSpec> frames;
 
-	//! The run-time checks of the values the bounds read, which a plan under the node has made by now.
-	vector<DecideScopeCheck> scope_checks;
 	//! The variant signatures (LogicalDecide::signatures), their expressions resolved against the input chunk, and the
 	//! objective's, INVALID_INDEX for none.
 	vector<DecideSignature> signatures;

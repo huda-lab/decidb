@@ -4,6 +4,7 @@
 
 #include "duckdb/common/common.hpp"
 #include "duckdb/optimizer/column_binding_replacer.hpp"
+#include "duckdb/optimizer/decide/decide_value_checks.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/planner/column_binding.hpp"
@@ -315,19 +316,6 @@ private:
 // DECIDE semantics every aggregate rule shares
 //===--------------------------------------------------------------------===//
 
-//! Whether a clause's `when` holds on a row: true without one, and false when it is false or NULL.
-unique_ptr<Expression> DirectActiveWhen(const ExpressionBuilder &calc, const Expression *when);
-
-//! `value` on a row where `kept` is true, and NULL on any other; `value` itself when `kept` is null (every row is
-//! kept). Nothing is computed on a row a `when` drops, so a value that raises (a logarithm of 0, an overflow) raises
-//! only on a kept row, as on the solver path.
-ExprPtr DirectOnKeptRows(const ExpressionBuilder &calc, const ExprPtr &kept, const ExprPtr &value);
-
-//! The same for a check (a BOOLEAN that is true or raises): it holds on a row `kept` drops, so the row raises nothing
-//! (a row a `when` drops raises nothing). The guard stays inside the expression, where no pushdown can move the check
-//! below it.
-ExprPtr DirectCheckOnKeptRows(const ExpressionBuilder &calc, const ExprPtr &kept, const ExprPtr &check);
-
 //===--------------------------------------------------------------------===//
 // Scope projection and data-valued bounds
 //===--------------------------------------------------------------------===//
@@ -510,7 +498,7 @@ struct DirectLinearScore {
 
 	vector<Term> terms;
 	//! What a message names for each reducer's share of the score (DirectNamesOf).
-	vector<DirectNumberNames> part_names;
+	vector<DecideNumberNames> part_names;
 	//! The rows each reducer reads (DirectObjectivePartKept), null for every row: any other row scores 0 in it.
 	vector<unique_ptr<Expression>> part_kept;
 	//! The objective, which the score names once every share is fine and their sum is not.

@@ -11,7 +11,6 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/decide/decide_optimizer_internal.hpp"
 #include "duckdb/optimizer/decide/decide_answer_choice.hpp"
-#include "duckdb/optimizer/decide/direct/direct_row_checks.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_between_expression.hpp"
@@ -104,8 +103,25 @@ void DecideOptimizer::OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr
 	}
 }
 
-void DecideOptimizer::RetainRowChecks(LogicalDecide &decide) {
-	DirectRetainRowChecks(decide, DirectTakeRowChecks(optimizer.context, decide));
+void DecideOptimizer::RetainBoundAggregates(LogicalDecide &decide) {
+	// The tree computes each record on the rows it reads (language/guide.md §6.1), so the source stays the original
+	// relation, with no side table joined in front of it. A read of a reducer is quoted as the reducer is written: the
+	// bound-side rewrite gave its placeholder the reducer's location (DecideReplaces).
+	for (auto &aggregate : decide.bound_aggregates) {
+		LogicalDecide::RetainedBoundAggregate retained;
+		retained.placeholder = make_uniq<BoundColumnRefExpression>(aggregate.function->return_type, aggregate.column);
+		retained.aggregate.column = aggregate.column;
+		retained.aggregate.function = aggregate.function->Copy();
+		retained.aggregate.reads = aggregate.reads ? aggregate.reads->Copy() : nullptr;
+		retained.aggregate.key = aggregate.key;
+		retained.aggregate.counts_classes = aggregate.counts_classes;
+		retained.aggregate.class_key = aggregate.class_key;
+		for (auto &argument : aggregate.arguments) {
+			retained.aggregate.arguments.push_back(argument->Copy());
+		}
+		decide.retained_bound_aggregates.push_back(std::move(retained));
+	}
+	decide.bound_aggregates.clear();
 }
 
 void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &root) {
@@ -143,8 +159,7 @@ void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &r
 	// Products outside ABS need the helper it just allocated; the first bilinear pass has already handled products
 	// inside ABS's operand and everywhere else.
 	RunPass("optimizer.bilinear_abs_factors", [&] { RewriteBilinear(decide); });
-	// After every pass that adds a check: RewriteAbs refuses a bad value of an ABS term where it is read.
-	RunPass("optimizer.retain_row_checks", [&] { RetainRowChecks(decide); });
+	RunPass("optimizer.retain_bound_aggregates", [&] { RetainBoundAggregates(decide); });
 	// Must stay last among the rewrites: RewriteInDomain emits a floor-lowering bound
 	// that is itself a singleton-row bound, and every auxiliary variable must exist before the
 	// box is sized.
@@ -188,15 +203,12 @@ void decide_rewrite::AddValueCheck(LogicalDecide &decide, unique_ptr<Expression>
 		return;
 	}
 	// Expression::Equals ignores the place a check carries (its query location): two checks of one value stand once.
-	for (auto &stood : decide.scope_checks) {
-		if (stood.kind == DecideScopeCheckKind::VALUE_IS_VALID && stood.value->Equals(*check)) {
+	for (auto &stood : decide.value_checks) {
+		if (stood->Equals(*check)) {
 			return;
 		}
 	}
-	DecideScopeCheck added;
-	added.kind = DecideScopeCheckKind::VALUE_IS_VALID;
-	added.value = std::move(check);
-	decide.scope_checks.push_back(std::move(added));
+	decide.value_checks.push_back(std::move(check));
 }
 
 void decide_rewrite::CopySourceClauseTag(const string &from_alias, Expression &to) {

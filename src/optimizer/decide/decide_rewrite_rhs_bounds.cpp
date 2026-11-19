@@ -40,9 +40,7 @@
 #include "duckdb/common/exception/binder_exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/decide/decide_optimizer_internal.hpp"
-#include "duckdb/optimizer/decide/direct/direct_expression.hpp"
-#include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
-#include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
+#include "duckdb/optimizer/decide/decide_value_checks.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
@@ -186,7 +184,7 @@ private:
 		if (comparison.type == ExpressionType::COMPARE_EQUAL) {
 			AddDisagreementCheck(comparison, *comparison.right, text, SpanOf(location), OwnWhens(*comparison.left));
 		}
-		auto function = DirectIsUpperBound(comparison.type) ? "min" : "max";
+		auto function = DecideIsUpperBound(comparison.type) ? "min" : "max";
 		comparison.right =
 		    calc.Out(InGroup(comparison, RecordOver(function, *comparison.right, GroupKeyIndex(comparison))));
 		// The bound is replaced by a column of its value, which a message quotes as it quotes the bound.
@@ -369,7 +367,7 @@ private:
 		if (!nan) {
 			return nullptr;
 		}
-		return calc.Out(DirectCheckOnKeptRows(calc, reads, InKey(PathKeyOf(reducer, path), nan, calc.Bool(true))));
+		return calc.Out(DecideCheckOnKeptRows(calc, reads, InKey(PathKeyOf(reducer, path), nan, calc.Bool(true))));
 	}
 
 	//! The reducer's value on a row, given the column that holds its aggregate: NULL on a row whose written `by` column
@@ -462,7 +460,7 @@ private:
 	//! The check of an `=` bound over a group (`bound`, a value that may differ between the kept rows of a group,
 	//! written as `text`, at `place` in the query; `reads`, the own `when` of each reducer of the clause that has one):
 	//! the group takes one value. A `per K:` makes one instance per class of each group and the groups merge them, so
-	//! the bound holds one value in each group, which holds each class's. The check stands in `scope_checks`, made
+	//! the bound holds one value in each group, which holds each class's. The check stands in `value_checks`, made
 	//! over the source and the aggregates' side tables before any rule runs, so every path states it. A group where
 	//! some reducer reads no row holds no instance (language/guide.md §7.4). The bound's NaN check stands before it
 	//! (RewriteBound), so it reads valid values.
@@ -483,7 +481,7 @@ private:
 			}
 		}
 		AddValueCheck(
-		    calc.Out(DirectCheckOnKeptRows(calc, Kept(),
+		    calc.Out(DecideCheckOnKeptRows(calc, Kept(),
 		                                   BoundDisagreement(text, place, RecordOver("min", bound, by),
 		                                                     RecordOver("max", bound, by), held, names, values))));
 	}
@@ -538,7 +536,7 @@ private:
 		if (!nan) {
 			return nullptr;
 		}
-		return calc.Out(DirectCheckOnKeptRows(calc, rows, nan));
+		return calc.Out(DecideCheckOnKeptRows(calc, rows, nan));
 	}
 
 	//! Where a message about the expression at `location` points: the span the query text holds for it, none for a
@@ -595,7 +593,7 @@ private:
 
 	//! Whether the clause's `when` keeps the row (NULL keeps none); null when it has none.
 	ExprPtr Kept() const {
-		return when ? calc.Wrap(DirectActiveWhen(calc, when)) : nullptr;
+		return when ? calc.Wrap(DecideActiveWhen(calc, when)) : nullptr;
 	}
 
 	//! The rows a reducer reads: the clause's kept rows that pass its own `filter` (`when`); null for every row.
@@ -603,7 +601,7 @@ private:
 		if (!filter) {
 			return Kept();
 		}
-		auto own = calc.Wrap(DirectActiveWhen(calc, filter));
+		auto own = calc.Wrap(DecideActiveWhen(calc, filter));
 		return when ? calc.If(Kept(), own, calc.Bool(false)) : own;
 	}
 
@@ -612,7 +610,7 @@ private:
 	ExprPtr Reads(const DecideReducerPath &path, const Expression *filter) const {
 		auto rows = Reads(filter);
 		for (auto *condition : path.conditions) {
-			auto enclosing = calc.Wrap(DirectActiveWhen(calc, condition));
+			auto enclosing = calc.Wrap(DecideActiveWhen(calc, condition));
 			rows = rows ? calc.If(rows, enclosing, calc.Bool(false)) : enclosing;
 		}
 		return rows;

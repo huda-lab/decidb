@@ -163,31 +163,13 @@ private:
 		return !predicate || DirectReferencesOnlySource(*predicate, source_bindings);
 	}
 
-	//! A scope check as the plan makes it. The bound-side rewrite makes every check over the source and the bounds'
-	//! placeholders, so the plan makes each one.
-	DirectRowCheck ReadRowCheck(const DecideScopeCheck &check) const {
-		D_ASSERT(check.kind == DecideScopeCheckKind::VALUE_IS_VALID && CheckablePredicate(check.value.get()));
-		DirectRowCheck row_check;
-		row_check.invalid = check.value->Copy();
-		return row_check;
-	}
-
+	//! The value checks as the plan makes them. Every check reads the source and the bounds' columns, so the plan
+	//! makes each one.
 	void ReadRowChecks(DirectIR &ir) const {
-		for (auto &check : decide.scope_checks) {
-			ir.row_checks.push_back(ReadRowCheck(check));
+		for (auto &check : decide.value_checks) {
+			D_ASSERT(CheckablePredicate(check.get()));
+			ir.row_checks.push_back(check->Copy());
 		}
-	}
-
-public:
-	//! Moves the scope checks out of the node: the solver path keeps them on it (DirectRetainRowChecks).
-	vector<DirectRowCheck> TakeRowChecks() {
-		source_bindings = decide.SourceBindings();
-		vector<DirectRowCheck> taken;
-		for (auto &check : decide.scope_checks) {
-			taken.push_back(ReadRowCheck(check));
-		}
-		decide.scope_checks.clear();
-		return taken;
 	}
 
 private:
@@ -544,10 +526,6 @@ private:
 };
 
 } // namespace
-
-vector<DirectRowCheck> DirectTakeRowChecks(ClientContext &context, LogicalDecide &decide) {
-	return DirectFrontEnd(context, decide).TakeRowChecks();
-}
 
 DirectIR DirectIR::Read(ClientContext &context, LogicalDecide &decide) {
 	return DirectFrontEnd(context, decide).Read();

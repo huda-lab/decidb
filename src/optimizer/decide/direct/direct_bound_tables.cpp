@@ -63,7 +63,7 @@ private:
 		ExprPtr reads = record.reads ? Over(*record.reads) : nullptr;
 		vector<unique_ptr<Expression>> arguments;
 		for (auto &argument : record.arguments) {
-			arguments.push_back(calc.Out(DirectOnKeptRows(calc, reads, Over(*argument))));
+			arguments.push_back(calc.Out(DecideOnKeptRows(calc, reads, Over(*argument))));
 		}
 		vector<unique_ptr<Expression>> aggregates;
 		aggregates.push_back(

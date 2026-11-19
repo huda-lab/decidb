@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
 
+#include "duckdb/optimizer/decide/decide_value_checks.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
@@ -19,9 +20,6 @@
 #include "duckdb/common/profiler.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
-#include "duckdb/optimizer/decide/direct/direct_expression.hpp"
-#include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
-#include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic_render.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
@@ -328,7 +326,7 @@ static DecideClauseRef AbsWrittenClause(const LogicalDecide &decide, const strin
 //! Refuses an argument of an ABS whose data is NaN or infinite where the ABS is read, on the rows it is read on, before
 //! the lowering turns the data into a bound on the auxiliary. The data is the sum of the argument's terms that hold no
 //! decision (`-v` in `ABS(x - v)`). A row where it is not finite raises the error every other number the model reads
-//! raises (DirectNumberCheck, as the direct-solve plans): the data, as the user wrote it, where it stands. A
+//! raises (DecideNumberCheck, as the direct-solve plans): the data, as the user wrote it, where it stands. A
 //! coefficient of a decision is a coefficient of the lowered row, which the solver path refuses by name already.
 static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, const Expression &argument,
                              const Expression *rows, const DecideClauseRef &clause) {
@@ -337,7 +335,7 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 	ExpressionBuilder calc(context);
 	// The tree evaluates the check, so a frame marker keeps its tag and is read at the row the frame selects (`Of`
 	// strips it, which would read the marker as a reducer over the rows).
-	DirectNumberNames names;
+	DecideNumberNames names;
 	names.clause = clause;
 	ExprPtr total;
 	for (auto &term : terms) {
@@ -349,7 +347,7 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 		value = term.sign < 0 ? calc.Neg(value) : value;
 		total = total ? calc.Add(total, value) : value;
 		if (term.coefficient) {
-			DirectNameValue(
+			DecideNameValue(
 			    names, *term.coefficient, term.sign,
 			    RenderDecideSource(*term.coefficient, decide.source_text, decide.keyed_scopes, &decide.keys),
 			    DecideSpanLocation(decide.source_text, DecideUnguarded(*term.coefficient).GetQueryLocation()));
@@ -359,13 +357,14 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 		return;
 	}
 	double constant;
-	if (total->IsFoldable() && TryEvaluateFoldableDouble(context, *calc.Out(total), constant, DIRECT_CONSTANT) &&
+	if (total->IsFoldable() &&
+	    TryEvaluateFoldableDouble(context, *calc.Out(total), constant, FOLD_STABLE | FOLD_CATCH_DUCKDB_ERRORS) &&
 	    std::isfinite(constant)) {
 		return;
 	}
-	auto check = DirectNumberCheck(calc, total, names);
-	ExprPtr kept = rows ? calc.Wrap(DirectActiveWhen(calc, rows)) : nullptr;
-	AddValueCheck(decide, calc.Out(DirectCheckOnKeptRows(calc, kept, check)));
+	auto check = DecideNumberCheck(calc, total, names);
+	ExprPtr kept = rows ? calc.Wrap(DecideActiveWhen(calc, rows)) : nullptr;
+	AddValueCheck(decide, calc.Out(DecideCheckOnKeptRows(calc, kept, check)));
 }
 
 // ---------------------------------------------------------------------------

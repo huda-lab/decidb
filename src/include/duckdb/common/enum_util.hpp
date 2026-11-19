@@ -134,8 +134,6 @@ enum class DecideExpression : uint8_t;
 
 enum class DecideKeyNullMode : uint8_t;
 
-enum class DecideScopeCheckKind : uint8_t;
-
 enum class DecideSignatureFieldKind : uint8_t;
 
 enum class DecideSense : uint8_t;
@@ -577,9 +575,6 @@ const char* EnumUtil::ToChars<DecideExpression>(DecideExpression value);
 
 template <>
 const char *EnumUtil::ToChars<DecideKeyNullMode>(DecideKeyNullMode value);
-
-template <>
-const char *EnumUtil::ToChars<DecideScopeCheckKind>(DecideScopeCheckKind value);
 
 template <>
 const char *EnumUtil::ToChars<DecideSignatureFieldKind>(DecideSignatureFieldKind value);
@@ -1166,9 +1161,6 @@ DecideExpression EnumUtil::FromString<DecideExpression>(const char *value);
 
 template <>
 DecideKeyNullMode EnumUtil::FromString<DecideKeyNullMode>(const char *value);
-
-template <>
-DecideScopeCheckKind EnumUtil::FromString<DecideScopeCheckKind>(const char *value);
 
 template <>
 DecideSignatureFieldKind EnumUtil::FromString<DecideSignatureFieldKind>(const char *value);

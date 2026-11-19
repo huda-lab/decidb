@@ -174,18 +174,6 @@ struct DecideFrameSpec {
 	static DecideFrameSpec Deserialize(Deserializer &deserializer);
 };
 
-//! One run-time requirement of a value a bound reads (language/guide.md §7.3), appended by the bound-side rewrite
-//! (DecideOptimizer::RewriteRhsAggregates) and made under the DECIDE node before any model is built.
-struct DecideScopeCheck {
-	DecideScopeCheckKind kind = DecideScopeCheckKind::VALUE_IS_VALID;
-	//! VALUE_IS_VALID: a BOOLEAN check, true on a row whose value is valid; it raises on any other row.
-	unique_ptr<Expression> value;
-
-	//! Generated from `storage/serialization/nodes.json`.
-	void Serialize(Serializer &serializer) const;
-	static DecideScopeCheck Deserialize(Deserializer &deserializer);
-};
-
 //! One field of a variant signature: a value the scoped expression's body reads once per instance
 //! (language/guide.md §7.1; D70, D83).
 struct DecideSignatureField {
@@ -640,9 +628,11 @@ public:
 	//! Every frame selector written in the clause, indexed by FRAME_TAG_PREFIX tags.
 	vector<DecideFrameSpec> frames;
 
-	//! The run-time requirements of the values the bounds read: the optimizer's right-hand-side rewrite appends the
-	//! VALUE_IS_VALID checks of the bounds it computes, which a plan under the node makes before any model is built.
-	vector<DecideScopeCheck> scope_checks;
+	//! The run-time requirements of the values the clauses read (language/guide.md §7.3), in the order the solver makes
+	//! them: each a BOOLEAN over the source row and the bounds' columns, true on a row whose value is valid and raising
+	//! on any other. The bound-side rewrite and the ABS rewrite append them (decide_rewrite::AddValueCheck); a direct
+	//! plan makes them on the source rows, and the tree evaluates them on the rows it reads.
+	vector<unique_ptr<Expression>> value_checks;
 
 	//! The variant signature of every scoped expression with a field (D70), indexed by SIGNATURE_TAG_PREFIX on a
 	//! `per K:` wrapper and by KeyedScopeInfo::signature for a reducer's own `per`. Built by the planner, right after
@@ -664,8 +654,6 @@ public:
 		unique_ptr<Expression> placeholder;
 	};
 	vector<RetainedBoundAggregate> retained_bound_aggregates;
-	//! The checks side plans execute, retained for tree execution.
-	vector<unique_ptr<Expression>> retained_row_checks;
 	//! Semantic expressions before a destructive algebraic rewrite. Enumerated so their source bindings stay live.
 	vector<unique_ptr<Expression>> retained_expressions;
 	//! The objective's `when` when RewriteComposedMinMaxObjectiveTop left no term beside its MIN/MAX terms, for the

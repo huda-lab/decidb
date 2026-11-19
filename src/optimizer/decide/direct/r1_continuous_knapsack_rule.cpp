@@ -194,10 +194,10 @@ bool Rule::ProveLimit(const DirectIR &ir, ClientContext &context, const DirectIR
 	}
 	// The binder refuses `<`, `>` and `<>` over a REAL decision, so the comparison is `<=`, `>=` or `=`.
 	auto comparison = ir_node.comparison;
-	if (DirectIsUpperBound(comparison)) {
+	if (DecideIsUpperBound(comparison)) {
 		condition.upper = std::min(condition.upper, limit.number);
 	}
-	if (DirectIsLowerBound(comparison)) {
+	if (DecideIsLowerBound(comparison)) {
 		condition.lower = std::max(condition.lower, limit.number);
 	}
 	return true;
@@ -775,16 +775,16 @@ private:
 		};
 		for (auto &limit : condition.data_limits) {
 			auto value = calc.Cast(calc.Wrap(over_state(*limit.value)), LogicalType::DOUBLE);
-			raw.rows.limits.push_back(p1.Add(calc.Out(DirectOnKeptRows(calc, eligible, value))));
+			raw.rows.limits.push_back(p1.Add(calc.Out(DecideOnKeptRows(calc, eligible, value))));
 		}
-		auto number = [&](ColumnBinding binding, const DirectNumberNames &names) {
-			return DirectNumberCheck(calc, DoubleColumn(binding), names);
+		auto number = [&](ColumnBinding binding, const DecideNumberNames &names) {
+			return DecideNumberCheck(calc, DoubleColumn(binding), names);
 		};
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
 			auto &clause = condition.clauses[j];
 			auto on_kept = [&](ExprPtr value) {
-				return clause.when ? DirectOnKeptRows(
-				                         calc, calc.Wrap(DirectActiveWhen(calc, OverState(*clause.when).get())), value)
+				return clause.when ? DecideOnKeptRows(
+				                         calc, calc.Wrap(DecideActiveWhen(calc, OverState(*clause.when).get())), value)
 				                   : value;
 			};
 			Raw::Clause laid;
@@ -795,11 +795,11 @@ private:
 			laid.ends.upper = p1.Add(calc.Out(on_kept(calc.Of(*OverState(*clause.upper)))));
 			if (clause.when) {
 				laid.ends.has_when = true;
-				laid.ends.when = p1.Add(calc.Wrap(DirectActiveWhen(calc, OverState(*clause.when).get())));
+				laid.ends.when = p1.Add(calc.Wrap(DecideActiveWhen(calc, OverState(*clause.when).get())));
 			}
 			raw.clauses.push_back(laid);
 			auto read_on = [&](ExprPtr check) {
-				return clause.when ? DirectCheckOnKeptRows(calc, BoolColumn(laid.ends.when), check) : check;
+				return clause.when ? DecideCheckOnKeptRows(calc, BoolColumn(laid.ends.when), check) : check;
 			};
 			if (!DirectIsFiniteWhereKept(optimizer, clause.coefficient)) {
 				raw.checks.push_back(read_on(number(laid.coefficient, clause.coefficient_names)));
@@ -827,7 +827,7 @@ private:
 				auto value = calc.Wrap(DirectSumOf(optimizer, values, over_state));
 				// A row the part drops reads no value, so nothing in it can raise, and its value in the part is 0.
 				if (auto &kept = condition.objective_kept[p]) {
-					value = calc.If(calc.Wrap(DirectActiveWhen(calc, OverState(*kept).get())), value, Zero());
+					value = calc.If(calc.Wrap(DecideActiveWhen(calc, OverState(*kept).get())), value, Zero());
 				}
 				raw.values.back().push_back(p1.Add(calc.Out(value)));
 				if (!DirectIsFiniteWhereKept(optimizer, values)) {
@@ -934,7 +934,7 @@ private:
 			auto l = DoubleColumn(from.items[k].l), u = DoubleColumn(from.items[k].u);
 			auto w = DoubleColumn(from.items[k].w), v = DoubleColumn(from.items[k].v);
 			// An item's value sums its parts' values, each checked before: past a DOUBLE it names the objective.
-			checks.push_back(calc.Out(DirectNumberCheck(calc, v, condition.objective_written)));
+			checks.push_back(calc.Out(DecideNumberCheck(calc, v, condition.objective_written)));
 			auto empty = DirectBoxIsEmpty(calc, l, u);
 			auto anchor = calc.If(empty, Zero(), calc.Min({calc.Max({Zero(), l}), u}));
 			auto free_of_budget = Equal(w, Zero());
@@ -946,7 +946,7 @@ private:
 			// The -infinity of an item outside the ranking is a mark, not a number computed: past a DOUBLE, a price
 			// names the budget.
 			checks.push_back(calc.Out(
-			    DirectNumberCheck(calc, calc.If(free_of_budget, NullDouble(), price), condition.budget_written)));
+			    DecideNumberCheck(calc, calc.If(free_of_budget, NullDouble(), price), condition.budget_written)));
 			item.empty = p4.Add(calc.Out(empty));
 			item.a = p4.Add(calc.Out(anchor));
 			item.wz = p4.Add(calc.Out(free_of_budget));
@@ -1145,7 +1145,7 @@ private:
 		vector<ExprPtr> sides {calc.Num(upper ? condition.upper : condition.lower)};
 		for (idx_t j = 0; j < limits.size(); j++) {
 			auto comparison = condition.data_limits[j].comparison;
-			if (upper ? DirectIsUpperBound(comparison) : DirectIsLowerBound(comparison)) {
+			if (upper ? DecideIsUpperBound(comparison) : DecideIsLowerBound(comparison)) {
 				sides.push_back(limits[j]);
 			}
 		}
@@ -1194,7 +1194,7 @@ private:
 		auto in_group = condition.scope.Scoped() ? GroupExists(key) : nullptr;
 		vector<ExprPtr> limits;
 		for (auto &value : limit_values) {
-			limits.push_back(DirectOnKeptRows(calc, in_group, DoubleColumn(value)));
+			limits.push_back(DecideOnKeptRows(calc, in_group, DoubleColumn(value)));
 		}
 		auto lower = LimitOf(false, limits), upper = LimitOf(true, limits);
 		auto verdict = VerdictOf(totals, lower, upper, condition.scope.Scoped() ? GroupExists(key) : nullptr);
