@@ -226,7 +226,8 @@ private:
 			group->location = location;
 			Record(comparison, std::move(group));
 			if (equal) {
-				AddDisagreementCheck(comparison, *comparison.right, text, OwnWhens(*comparison.left));
+				AddDisagreementCheck(comparison, *comparison.right, text,
+				                     DecideSpanLocation(decide.source_text, location), OwnWhens(*comparison.left));
 			}
 			return;
 		}
@@ -565,13 +566,16 @@ private:
 
 	//! The error a row raises for an `=` bound that takes two values (`low` and `high`) in its group: the one text of
 	//! DecideBoundDisagreementMessage, read from `names` (the key's columns as the query writes them) and `values`
-	//! (their value on the row), and NULL where the values agree or where one of `held` is not true: a group whose
-	//! reducers do not each read a row holds no instance, and constrains nothing.
-	ExprPtr BoundDisagreement(const string &text, const ExprPtr &low, const ExprPtr &high, const vector<ExprPtr> &held,
-	                          const vector<string> &names, const vector<ExprPtr> &values) const {
+	//! (their value on the row), pointing at `place` (the bound's span in the query, invalid for none); NULL where the
+	//! values agree or where one of `held` is not true: a group whose reducers do not each read a row holds no
+	//! instance, and constrains nothing.
+	ExprPtr BoundDisagreement(const string &text, optional_idx place, const ExprPtr &low, const ExprPtr &high,
+	                          const vector<ExprPtr> &held, const vector<string> &names,
+	                          const vector<ExprPtr> &values) const {
 		D_ASSERT(names.size() == values.size());
-		vector<ExprPtr> arguments {calc.Constant(Value(text)), calc.Cast(low, LogicalType::DOUBLE),
-		                           calc.Cast(high, LogicalType::DOUBLE)};
+		vector<ExprPtr> arguments {
+		    calc.Constant(Value(text)), calc.Cast(low, LogicalType::DOUBLE), calc.Cast(high, LogicalType::DOUBLE),
+		    calc.Constant(place.IsValid() ? Value::UBIGINT(place.GetIndex()) : Value(LogicalType::UBIGINT))};
 		for (idx_t i = 0; i < names.size(); i++) {
 			arguments.push_back(calc.Constant(Value(names[i])));
 			arguments.push_back(values[i]);
@@ -586,46 +590,31 @@ private:
 	}
 
 	//! The check of an `=` bound over a group (`bound`, a value that may differ between the kept rows of a group,
-	//! written as `text`; `reads`, the own `when` of each reducer of the clause that has one): the group takes one
-	//! value. A `per K:` makes one instance per class of each group and the groups merge them, so the bound holds one
-	//! value in each class and in each group; the finer is checked first, so two values of one class name it. The
-	//! checks stand in `scope_checks`, made over the source and the aggregates' side tables before any rule runs, so
-	//! every path states them. A group where some reducer reads no row holds no instance (language/guide.md §7.4). The
-	//! bound's NaN check stands before these (RewriteBound), so they read valid values.
+	//! written as `text`, at `place` in the query; `reads`, the own `when` of each reducer of the clause that has one):
+	//! the group takes one value. A `per K:` makes one instance per class of each group and the groups merge them, so
+	//! the bound holds one value in each group, which holds each class's. The check stands in `scope_checks`, made
+	//! over the source and the aggregates' side tables before any rule runs, so every path states it. A group where
+	//! some reducer reads no row holds no instance (language/guide.md §7.4). The bound's NaN check stands before it
+	//! (RewriteBound), so it reads valid values.
 	void AddDisagreementCheck(const BoundComparisonExpression &comparison, const Expression &bound, const string &text,
-	                          const vector<const Expression *> &reads) {
+	                          optional_idx place, const vector<const Expression *> &reads) {
 		const auto by = GroupKeyIndex(comparison);
 		vector<ExprPtr> held;
 		for (auto *read : reads) {
 			held.push_back(RecordOver("bool_or", *read, by));
 		}
-		// A key's columns as the query writes them, each once, with their value on the row.
+		// The key's columns as the query writes them, each once, with their value on the row.
 		vector<string> names;
 		vector<ExprPtr> values;
-		auto name = [&](idx_t key_index) {
-			for (auto &element : DecideKeyElements(decide.keys, key_index)) {
-				if (std::find(names.begin(), names.end(), element.name) == names.end()) {
-					names.push_back(element.name);
-					values.push_back(calc.Of(*element.expression));
-				}
+		for (auto &element : DecideKeyElements(decide.keys, by)) {
+			if (std::find(names.begin(), names.end(), element.name) == names.end()) {
+				names.push_back(element.name);
+				values.push_back(calc.Of(*element.expression));
 			}
-		};
-		auto check = [&](idx_t key) {
-			AddValueCheck(
-			    calc.Out(DirectOnKeptRows(calc, Kept(),
-			                              BoundDisagreement(text, RecordOver("min", bound, key),
-			                                                RecordOver("max", bound, key), held, names, values))));
-		};
-		const auto within_class = FindOrCreateDecidePathKey({by, class_key}, decide.keys);
-		if (within_class != by) {
-			name(by);
-			name(class_key);
-			check(within_class);
-			names.clear();
-			values.clear();
 		}
-		name(by);
-		check(by);
+		AddValueCheck(calc.Out(DirectOnKeptRows(calc, Kept(),
+		                                        BoundDisagreement(text, place, RecordOver("min", bound, by),
+		                                                          RecordOver("max", bound, by), held, names, values))));
 	}
 
 	//! Records a left-over bound's aggregates over the group of its clause, so the comparison reads the bound as one

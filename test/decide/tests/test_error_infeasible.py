@@ -210,7 +210,7 @@ class TestInfeasibleModels:
         would mean a different constraint), unlike `<>` (C3), which keeps every
         excluded value instead of contradicting.
         """
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
             SELECT id, grp, x FROM (
                 VALUES (1, 'a', 500), (2, 'a', 350)
@@ -219,13 +219,14 @@ class TestInfeasibleModels:
             SUCH THAT sum(x) by (grp) = cap
             MAXIMIZE SUM(x)
         """,
-            match=r"(?i)cannot hold two different values.*infeasible",
+            kind="Invalid Input Error",
+            at="cap",
         )
 
     def test_equal_bound_varying_within_a_per_class_cannot_hold(self, decidb_cli):
         """The `per grp:` spelling of the clause above is one instance per variant of the class
         (D70): the class's total equals 500 and 350 at once, the same contradiction."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
             SELECT id, grp, x FROM (
                 VALUES (1, 'a', 500), (2, 'a', 350)
@@ -234,7 +235,8 @@ class TestInfeasibleModels:
             SUCH THAT per grp: sum(x) by (grp) = cap
             MAXIMIZE SUM(x)
         """,
-            match=r"(?i)cannot hold two different values.*infeasible",
+            kind="Invalid Input Error",
+            at="cap",
         )
 
     def test_user_overridden_negative_lower_is_feasible(self, decidb_cli):

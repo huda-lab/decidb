@@ -376,8 +376,7 @@ def test_nested_casts_that_change_nothing_print_as_the_outer(decidb_cli):
     bound = "CAST(CAST(t.w AS DOUBLE) AS DOUBLE)"
     sql = f"""SELECT id, x FROM (VALUES (0, 'a', 1.0::DOUBLE), (1, 'a', 2.0::DOUBLE)) t(id, g, w) DECIDE x(REAL)
         SUCH THAT sum(x) by (t.g) = {bound} MAXIMIZE sum(x)"""
-    result = decidb_cli.execute_raw(sql)
-    assert f"`{bound}` takes more than one value here (1 and 2), in the group t.g = 'a'" in result.stderr, result.stderr
+    decidb_cli.assert_error_at(sql, kind="Invalid Input Error", at=bound)
 
 
 @pytest.mark.parametrize(
@@ -399,39 +398,54 @@ def test_nested_casts_that_change_nothing_print_as_the_outer(decidb_cli):
 )
 def test_an_equal_bound_with_two_values_names_its_group_on_every_path(decidb_cli, keys, rows, group):
     """The group the two values differ in is named as the query writes its key (DescribeKeyValues). The solver, the
-    rewrite's plan and a direct rule's plan state one text: `off` is the solver, `auto` and `require` a rule."""
+    rewrite's plan and a direct rule's plan state one text, at the bound: `off` is the solver, `auto` and `require` a
+    rule."""
     sql = f"""SELECT id, x FROM (VALUES {rows}) t(id, g, h, cap, score) DECIDE x(BOOL)
         SUCH THAT SUM(x) by ({keys}) = t.cap MAXIMIZE SUM(t.score * x)"""
-    expected = f"`t.cap` takes more than one value here (1 and 2), in the group {group} — an `=` bound"
     for mode in ("off", "auto", "require"):
-        result = decidb_cli.execute_raw(f"SET decide_direct_solve = '{mode}'; {sql}")
-        assert expected in result.stderr, (mode, result.stderr)
+        decidb_cli.assert_error_at(
+            f"SET decide_direct_solve = '{mode}'; {sql}",
+            kind="Invalid Input Error",
+            at="t.cap",
+            word=f"(1 and 2) in the group {group}",
+        )
 
 
 CLASS_BOUND_ROWS = "(VALUES (1, 'a', 1, 3), (2, 'a', 1, 4), (3, 'b', 1, 2), (4, 'b', 2, 5)) t(id, g, h, cap)"
 
 
 @pytest.mark.parametrize(
-    "clause, group",
+    "clause",
     [
-        # Class a holds 3 and 4 and class b holds 2: the group of the whole query takes (2 and 4), which no class does.
-        pytest.param("per g: sum(x) = t.cap", "g = 'a'", id="the-class-is-named"),
+        # Class a holds 3 and 4 and class b holds 2: the group of the whole query takes 2 and 4.
+        pytest.param("per g: sum(x) = t.cap", id="per-class-whole-query-group"),
         # Class a's rows read 3 and 4 in the group h = 1, where class b reads 2.
-        pytest.param("per g: sum(x) by (h) = t.cap", "h = 1, g = 'a'", id="the-by-key-and-the-class"),
+        pytest.param("per g: sum(x) by (h) = t.cap", id="per-class-by-group"),
         # The class lies in the `by` group: one group of the key is one class.
-        pytest.param("per g: sum(x) by (g, h) = t.cap", "g = 'a', h = 1", id="a-class-within-the-by-key"),
+        pytest.param("per g: sum(x) by (g, h) = t.cap", id="a-class-within-the-by-key"),
     ],
 )
-def test_an_equal_bound_names_the_class_whose_two_values_it_takes(decidb_cli, clause, group):
-    """`per K:` is one instance per class and the groups merge them: the two values are one class's, not two classes'."""
+def test_an_equal_bound_under_per_takes_one_value_in_each_by_group(decidb_cli, clause):
+    """`per K:` is one instance per class and the groups merge them, so the bound holds one value in each `by` group:
+    one check per group raises when it takes two, whatever the classes of K are."""
     sql = f"""SELECT id, x FROM {CLASS_BOUND_ROWS} DECIDE x(INT) SUCH THAT x >= 0 AND x <= 10 AND {clause}
         MAXIMIZE SUM(x)"""
     for mode in ("off", "auto"):
-        result = decidb_cli.execute_raw(f"SET decide_direct_solve = '{mode}'; {sql}")
-        assert f"takes more than one value here (3 and 4), in the group {group} — an `=` bound" in result.stderr, (
-            mode,
-            result.stderr,
-        )
+        decidb_cli.assert_error_at(f"SET decide_direct_solve = '{mode}'; {sql}", kind="Invalid Input Error", at="t.cap")
+
+
+def test_an_equal_bound_in_a_macro_tail_names_its_group_with_no_caret(decidb_cli):
+    """A tail a table macro expanded has locations relative to the macro body, not to the query, so the message points
+    at no place there: it quotes the bound as it prints."""
+    create = (
+        "CREATE TEMP MACRO m(c) AS TABLE SELECT id, x FROM (VALUES (1, 'a', 1), (2, 'a', 2)) t(id, g, cap) "
+        "DECIDE x(INT) SUCH THAT x <= 9 AND sum(x) by (g) = c MAXIMIZE sum(x)"
+    )
+    cli = decidb_cli.without_verify_serializer()  # a TEMP MACRO cannot be replayed by the serializer round trip
+    for mode in ("off", "auto"):
+        message = cli.execute_raw(f"SET decide_direct_solve = '{mode}'; {create}; SELECT * FROM m(cap)").stderr
+        assert "takes two values (1 and 2) in the group g = 'a'" in message, (mode, message)
+        assert "LINE" not in message, (mode, message)
 
 
 RULE_BOUND_ROWS = (
@@ -441,47 +455,44 @@ RULE_BOUND_ROWS = (
 
 
 @pytest.mark.parametrize(
-    "decide, group",
+    "decide, values",
     [
-        # S1 (the ranked prefix): a count limit by group, and one per class.
-        pytest.param("x(BOOL) SUCH THAT SUM(x) by (g) = t.cap MAXIMIZE SUM(score * x)", "g = 'a'", id="s1-by-group"),
-        pytest.param("x(BOOL) SUCH THAT per g: SUM(x) = t.cap MAXIMIZE SUM(score * x)", "g = 'a'", id="s1-per-class"),
+        # S1 (the ranked prefix): a count limit by group, and one per class (whose group is the whole query).
+        pytest.param(
+            "x(BOOL) SUCH THAT SUM(x) by (g) = t.cap MAXIMIZE SUM(score * x)",
+            "(3 and 4) in the group g = 'a'",
+            id="s1-by-group",
+        ),
+        pytest.param("x(BOOL) SUCH THAT per g: SUM(x) = t.cap MAXIMIZE SUM(score * x)", "(2 and 4)", id="s1-per-class"),
         # R1 (the continuous knapsack): the budget by group, per class, and by group and class.
         pytest.param(
             "x(REAL) SUCH THAT x <= 5 AND SUM(w * x) by (g) = t.cap MAXIMIZE SUM(score * x)",
-            "g = 'a'",
+            "(3 and 4) in the group g = 'a'",
             id="r1-by-group",
         ),
         pytest.param(
             "x(REAL) SUCH THAT x <= 5 AND per g: SUM(w * x) = t.cap MAXIMIZE SUM(score * x)",
-            "g = 'a'",
+            "(2 and 4)",
             id="r1-per-class",
         ),
         pytest.param(
             "x(REAL) SUCH THAT x <= 5 AND per h: SUM(w * x) by (g) = t.cap MAXIMIZE SUM(score * x)",
-            "g = 'a', h = 'p'",
+            "(3 and 4) in the group g = 'a'",
             id="r1-by-group-and-class",
         ),
     ],
 )
-def test_an_equal_bound_is_checked_before_a_rule_runs(decidb_cli, decide, group):
+def test_an_equal_bound_is_checked_before_a_rule_runs(decidb_cli, decide, values):
     """The bound-side rewrite checks an `=` bound before any rule runs, so `require` (a rule takes each of these) states
     what `off` does. R4, N1 and A2 take no `=` bound: their budget, ball and ends are `<=` and `>=`."""
     sql = f"SELECT id, x FROM {RULE_BOUND_ROWS} DECIDE {decide}"
-    expected = f"`t.cap` takes more than one value here (3 and 4), in the group {group} — an `=` bound"
     for mode in ("off", "auto", "require"):
-        result = decidb_cli.execute_raw(f"SET decide_direct_solve = '{mode}'; {sql}")
-        assert expected in result.stderr, (mode, result.stderr)
-
-
-def test_an_equal_bound_two_classes_take_one_value_each_names_no_class(decidb_cli):
-    """Class a holds 3 and class b holds 2: each class has one value, but the groups merge the instances, so the whole
-    query takes two and no class holds both."""
-    sql = """SELECT id, x FROM (VALUES (1, 'a', 3), (2, 'a', 3), (3, 'b', 2)) t(id, g, cap) DECIDE x(INT)
-        SUCH THAT x >= 0 AND x <= 10 AND per g: sum(x) = t.cap MAXIMIZE SUM(x)"""
-    for mode in ("off", "auto"):
-        result = decidb_cli.execute_raw(f"SET decide_direct_solve = '{mode}'; {sql}")
-        assert "`t.cap` takes more than one value here (2 and 3) — an `=` bound" in result.stderr, (mode, result.stderr)
+        decidb_cli.assert_error_at(
+            f"SET decide_direct_solve = '{mode}'; {sql}",
+            kind="Invalid Input Error",
+            at="t.cap",
+            word=f"takes two values {values}",
+        )
 
 
 @pytest.mark.correctness

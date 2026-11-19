@@ -17,8 +17,7 @@ from decidb_cli import DeciDBCliError
 ERROR_CLASSES = [
     (r"(?i)parser error|syntax error", "parser"),
     (r"decide_direct_solve=require", "direct_not_applied"),
-    # Before "infeasible": an `=` bound that disagrees within a group ends "so this DECIDE query is infeasible".
-    (r"takes more than one value here", "equality_varies"),
+    (r"takes two values", "equality_varies"),
     (r"(?i)infeasible", "infeasible"),
     # A NaN bound reads "the bound v is NaN on some rows" on both paths.
     (r"(?i)is NULL|NULL or NaN|contains NULL|the bound .* is NaN on some rows", "null_bound"),

@@ -85,6 +85,12 @@ optional_idx DecideClauseLocation(const vector<ConstraintSourceInfo> &sources, i
 	return source_clause_id < sources.size() ? sources[source_clause_id].location : optional_idx();
 }
 
+optional_idx DecideSpanLocation(const DecideSourceText &text, optional_idx location) {
+	string ignored_text;
+	int ignored_binding;
+	return text.CutExpr(location, ignored_text, ignored_binding) ? location : optional_idx();
+}
+
 unordered_map<string, string> DecideClauseErrorInfo(const vector<ConstraintSourceInfo> &sources,
                                                     idx_t source_clause_id) {
 	auto location = DecideClauseLocation(sources, source_clause_id);

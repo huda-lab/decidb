@@ -151,16 +151,15 @@ inline string DecideDomainRefusal(const DecideBoundBox &box, bool is_bool, bool 
 	                          written_bound(true, box.upper), name);
 }
 
-//! The error of an `=` bound that takes two values (`low` and `high`) in one group: `written` is the bound as written,
-//! `names` the group's key columns as the query writes them and `values` the group's value of each. Without a key (a
-//! bound over the whole query) it names no group. The solver path and the direct-solve plans
-//! (`__internal_decide_bound_disagreement`) both build it here.
+//! The error of an `=` bound that takes two values (`low` and `high`) in one `by` group: `written` is the bound as the
+//! query writes it, `names` the group's key columns as the query writes them and `values` the group's value of each.
+//! Without a key (a bound over the whole query) it names no group. The solver path, the frame bound and the
+//! direct-solve plans (`__internal_decide_bound_disagreement`) all build it here.
 inline string DecideBoundDisagreementMessage(const string &written, double low, double high,
                                              const vector<string> &names, const vector<Value> &values) {
 	auto group = DescribeKeyValues(names, values);
-	return "`" + written + "` takes more than one value here (" + StringUtil::Format("%g and %g", low, high) + ")" +
-	       (group.empty() ? string() : ", in the group " + group) +
-	       " — an `=` bound cannot hold two different values at once, so this DECIDE query is infeasible.";
+	return "the = bound '" + written + "' takes two values (" + StringUtil::Format("%g and %g", low, high) + ")" +
+	       (group.empty() ? string() : " in the group " + group);
 }
 
 } // namespace duckdb

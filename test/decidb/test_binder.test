@@ -127,7 +127,7 @@ SELECT l_quantity FROM lineitem DECIDE x(INT), y(INT) SUCH THAT x <= y AND y <= 
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x) = l_quantity MAXIMIZE SUM(x) LIMIT 1;
 ----
-<REGEX>:.*takes more than one value here.*
+<REGEX>:Invalid Input Error: the = bound 'l_quantity' takes two values.*
 
 # Bind objective with constant offset
 statement ok

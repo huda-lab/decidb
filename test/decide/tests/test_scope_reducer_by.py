@@ -313,8 +313,9 @@ def test_tightest_bound_per_group_without_per(decidb_cli, scope_solver):
     ships = _judged(decidb_cli, scope_solver, sql, model, clauses, MAXIMIZE_SHIP)
     assert sum(ships[:4]) == 25
 
-    result = decidb_cli.execute_raw(_ship_query("sum(ship) by (D.region) = D.capacity"))
-    assert "an `=` bound cannot hold two different values at once" in result.stderr, result.stderr
+    decidb_cli.assert_error_at(
+        _ship_query("sum(ship) by (D.region) = D.capacity"), kind="Invalid Input Error", at="D.capacity"
+    )
 
     sql = _ship_query("ship <= 9 AND sum(ship) by (D.region) <> D.capacity - 2")
     model_ne = ScopedModel(joined(), SHIP)

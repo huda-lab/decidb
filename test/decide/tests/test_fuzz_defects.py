@@ -94,5 +94,4 @@ def test_an_equal_bound_of_a_group_with_an_instance_takes_one_value(decidb_cli):
     sql = """SET decide_direct_solve = 'off';
         SELECT id, x FROM (VALUES (1, 'a', true, 3), (2, 'b', true, 4), (3, 'b', true, 5)) t(id, g, p, c) DECIDE x(INT)
         SUCH THAT x <= 9 AND sum(when t.p: x) by (t.g) = t.c MAXIMIZE sum(x) ORDER BY id"""
-    result = decidb_cli.execute_raw(sql)
-    assert "takes more than one value here (4 and 5), in the group t.g = 'b'" in result.stderr, result.stderr
+    decidb_cli.assert_error_at(sql, kind="Invalid Input Error", at="t.c", word="(4 and 5) in the group t.g = 'b'")

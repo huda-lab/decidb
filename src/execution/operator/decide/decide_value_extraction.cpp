@@ -982,10 +982,9 @@ string DecideFrameDifference(const DecideSignatureField &field, const DecideFram
 	           : string();
 }
 
-void TakeTightestFrameBound(ExpressionType comparison, const string &written, const vector<bool> &kept,
-                            const vector<bool> &bound_null, const vector<idx_t> &kept_groups,
+void TakeTightestFrameBound(ExpressionType comparison, const string &written, optional_idx place,
+                            const vector<bool> &kept, const vector<bool> &bound_null, const vector<idx_t> &kept_groups,
                             const vector<idx_t> &instances, idx_t num_groups, const vector<GroupName> &group_names,
-                            const vector<idx_t> &class_ids, const vector<GroupName> &class_names,
                             const vector<SolverInput::KeyValues> &key_values, vector<double> &rhs,
                             vector<bool> &null_rows) {
 	const bool one_group = kept_groups.empty();
@@ -1021,57 +1020,26 @@ void TakeTightestFrameBound(ExpressionType comparison, const string &written, co
 	const bool upper = comparison == ExpressionType::COMPARE_LESSTHAN ||
 	                   comparison == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
 	                   comparison == ExpressionType::COMPARE_EQUAL;
-	// An `=` bound holds one value in each class of each group (a `per K:` makes one instance per class), and the
-	// groups merge the classes' instances, so it holds one value in each group too. The finer disagreement is named
-	// first: its two values come from one class, which the message names beside the group.
-	auto disagreement = [&](idx_t group, idx_t cls, double low, double high) {
+	// An `=` bound holds one value in each group: a `per K:` makes one instance per class and the groups merge them.
+	auto disagreement = [&](idx_t group, double low, double high) {
 		vector<string> names;
 		vector<Value> values;
-		auto append = [&](const GroupName &name) {
-			if (name.key_values == DConstants::INVALID_INDEX) {
-				return;
-			}
-			auto &key = key_values[name.key_values];
-			auto read = key.values_of(name.group);
+		if (group < group_names.size() && group_names[group].key_values != DConstants::INVALID_INDEX) {
+			auto &key = key_values[group_names[group].key_values];
+			auto read = key.values_of(group_names[group].group);
 			for (idx_t i = 0; i < read.size(); i++) {
 				if (std::find(names.begin(), names.end(), key.names[i]) == names.end()) {
 					names.push_back(key.names[i]);
 					values.push_back(read[i]);
 				}
 			}
-		};
-		if (group < group_names.size()) {
-			append(group_names[group]);
 		}
-		if (cls != DConstants::INVALID_INDEX) {
-			append(class_names[cls]);
+		auto message = DecideBoundDisagreementMessage(written, low, high, names, values);
+		if (!place.IsValid()) {
+			throw InvalidInputException(message);
 		}
-		throw InvalidInputException(DecideBoundDisagreementMessage(written, low, high, names, values));
+		throw InvalidInputException(message, Exception::InitializeExtraInfo(place));
 	};
-	if (comparison == ExpressionType::COMPARE_EQUAL && !class_ids.empty()) {
-		std::map<std::pair<idx_t, idx_t>, std::pair<double, double>> extremes;
-		for (idx_t row = 0; row < kept.size(); row++) {
-			const idx_t group = group_of(row);
-			if (!kept[row] || bound_null[row] || group == DConstants::INVALID_INDEX ||
-			    class_ids[row] == DConstants::INVALID_INDEX) {
-				continue;
-			}
-			auto found = extremes.emplace(std::make_pair(group, class_ids[row]), std::make_pair(rhs[row], rhs[row]));
-			auto &range = found.first->second;
-			range.first = MinValue(range.first, rhs[row]);
-			range.second = MaxValue(range.second, rhs[row]);
-		}
-		for (idx_t row = 0; row < kept.size(); row++) {
-			const idx_t group = group_of(row);
-			if (!kept[row] || group == DConstants::INVALID_INDEX || class_ids[row] == DConstants::INVALID_INDEX) {
-				continue;
-			}
-			auto found = extremes.find(std::make_pair(group, class_ids[row]));
-			if (found != extremes.end() && found->second.first != found->second.second) {
-				disagreement(group, class_ids[row], found->second.first, found->second.second);
-			}
-		}
-	}
 	for (idx_t row = 0; row < kept.size(); row++) {
 		const idx_t group = group_of(row);
 		if (!kept[row] || group == DConstants::INVALID_INDEX) {
@@ -1082,7 +1050,7 @@ void TakeTightestFrameBound(ExpressionType comparison, const string &written, co
 			continue;
 		}
 		if (comparison == ExpressionType::COMPARE_EQUAL && least[group] != greatest[group]) {
-			disagreement(group, DConstants::INVALID_INDEX, least[group], greatest[group]);
+			disagreement(group, least[group], greatest[group]);
 		}
 		rhs[row] = upper ? least[group] : greatest[group];
 	}

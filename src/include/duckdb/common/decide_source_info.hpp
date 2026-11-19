@@ -172,6 +172,11 @@ string QuoteClauseLhs(const ConstraintSourceInfo &source, const DecideSourceText
 //! (the objective's, a row no clause claims) or a clause with no location.
 optional_idx DecideClauseLocation(const vector<ConstraintSourceInfo> &sources, idx_t source_clause_id);
 
+//! Where an error about the expression at `location` points: `location` when the query text holds a span for it, and
+//! invalid otherwise (a statement built without the text, a clause a table macro's tail expanded, whose locations are
+//! relative to the macro body), so no caret lands on text the user did not write there.
+optional_idx DecideSpanLocation(const DecideSourceText &text, optional_idx location);
+
 //! The extra info of an exception about the clause `source_clause_id`, so DuckDB prints the caret under its span
 //! (`Exception::InitializeExtraInfo`; `ClientContext::ProcessError` adds the `LINE n:` block). Empty where the clause
 //! has no span.

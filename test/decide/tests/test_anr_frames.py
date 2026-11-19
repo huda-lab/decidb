@@ -1101,13 +1101,12 @@ class TestPointErrors:
     def test_an_equal_frame_bound_with_two_values_in_a_group(self, decidb_cli):
         """D85 under `=`: a group's anchors reading two values bound one instance two ways, the
         message a column bound gives (the frame named as written)."""
-        result = decidb_cli.execute_raw(
-            _edge("sum(x) by (t.product) = at(previous: t.v) over (t.period within t.product)")
+        decidb_cli.assert_error_at(
+            _edge("sum(x) by (t.product) = at(previous: t.v) over (t.period within t.product)"),
+            kind="Invalid Input Error",
+            at="at(previous: t.v) over (t.period within t.product)",
+            word="(4 and 6) in the group t.product = 'A'",
         )
-        assert (
-            "`at(previous: t.v) over (t.period within t.product)` takes more than one value here (4 and 6), "
-            "in the group t.product = 'A'" in result.stderr
-        ), result.stderr
 
     @pytest.mark.correctness
     @pytest.mark.parametrize(
@@ -2364,9 +2363,10 @@ class TestATightestFrameBound:
         """Group a's `previous` reads 3 and 4, and `=` holds one value."""
         sql = f"""SELECT id, x {table('t', TIGHT, TIGHT_ROWS)} DECIDE x(REAL)
             SUCH THAT x <= 100 AND sum(x) by (t.g) = at(previous: t.c) {OVER_S} MAXIMIZE sum(x)"""
-        result = decidb_cli.execute_raw(sql)
-        assert "takes more than one value here (3 and 4), in the group t.g = 'a'" in result.stderr, result.stderr
-        assert_no_internal_leak(result, "an = frame bound with two values")
+        decidb_cli.assert_error_at(
+            sql, kind="Invalid Input Error", at="at(previous: t.c)", word="(3 and 4) in the group t.g = 'a'"
+        )
+        assert_no_internal_leak(decidb_cli.execute_raw(sql), "an = frame bound with two values")
 
     # `previous` reads NULL, 3, 4 in group a and NULL, 2 in group b; each class of `k` lies in one timeline.
     CLASSED_TIGHT = ("id", "g", "s", "c", "k")
@@ -2379,32 +2379,29 @@ class TestATightestFrameBound:
     )
 
     @pytest.mark.parametrize(
-        "clause, group",
+        "clause, values",
         [
-            # The class `k = 'p'` holds both values: it is named, as the group of the whole query has no key.
-            pytest.param("per t.k: sum(x) = {frame}", "t.k = 'p'", id="the-class-is-named"),
-            # The class and the `by` key name the group together.
-            pytest.param("per t.k: sum(x) by (t.g) = {frame}", "t.g = 'a', t.k = 'p'", id="the-by-key-and-the-class"),
-            # A class key that is the `by` key names its column once.
-            pytest.param("per t.g: sum(x) by (t.g) = {frame}", "t.g = 'a'", id="a-column-of-both-is-named-once"),
+            # The class `k = 'p'` holds 3 and 4, and the group of the whole query (no key) takes 2 and 4.
+            pytest.param("per t.k: sum(x) = {frame}", "(2 and 4)", id="per-class-whole-query-group"),
+            # The `by` group a takes 3 and 4.
+            pytest.param(
+                "per t.k: sum(x) by (t.g) = {frame}", "(3 and 4) in the group t.g = 'a'", id="per-class-by-group"
+            ),
+            # A class key that is the `by` key: one check, the group named once.
+            pytest.param(
+                "per t.g: sum(x) by (t.g) = {frame}", "(3 and 4) in the group t.g = 'a'", id="class-is-by-key"
+            ),
         ],
     )
-    def test_an_equal_bound_names_the_class_whose_two_values_it_takes(self, decidb_cli, clause, group):
-        """`per K:` is one instance per class, and the groups merge them: the two values come from one class."""
+    def test_an_equal_bound_under_per_takes_one_value_in_each_by_group(self, decidb_cli, clause, values):
+        """`per K:` is one instance per class, and the groups merge them, so the bound holds one value in each `by`
+        group: one check per group raises when it takes two, whatever the classes of K are."""
         frame = f"at(previous: t.c) {OVER_S}"
         sql = f"""SELECT id, x {table('t', self.CLASSED_TIGHT, self.CLASSED_TIGHT_ROWS)} DECIDE x(REAL)
             SUCH THAT x <= 100 AND {clause.format(frame=frame)} MAXIMIZE sum(x)"""
-        result = decidb_cli.execute_raw(sql)
-        assert f"takes more than one value here (3 and 4), in the group {group} —" in result.stderr, result.stderr
-
-    def test_an_equal_bound_two_classes_take_one_value_each_names_no_class(self, decidb_cli):
-        """`previous` reads NULL, 3 in class p and 4 in class q: each class holds one value, but the groups merge the
-        classes' instances, so the group of the whole query takes two and no class holds both."""
-        rows = ((1, "a", 1, 3.0, "p"), (2, "a", 2, 4.0, "p"), (3, "a", 3, 9.0, "q"), (4, "b", 1, 2.0, "r"))
-        sql = f"""SELECT id, x {table('t', self.CLASSED_TIGHT, rows)} DECIDE x(REAL)
-            SUCH THAT x <= 100 AND per t.k: sum(x) = at(previous: t.c) {OVER_S} MAXIMIZE sum(x)"""
-        result = decidb_cli.execute_raw(sql)
-        assert "takes more than one value here (3 and 4) — an `=` bound" in result.stderr, result.stderr
+        decidb_cli.assert_error_at(
+            sql, kind="Invalid Input Error", at="at(previous: t.c)", word=f"takes two values {values}"
+        )
 
     @pytest.mark.parametrize(
         "clause, total",
@@ -2434,9 +2431,10 @@ class TestATightestFrameBound:
         """Group a reads `next` 4 and 9 among its kept rows, though the reducer keeps only the rows of 9 and of NULL."""
         sql = f"""SELECT id, x {table('t', TIGHT, TIGHT_ROWS)} DECIDE x(REAL) SUCH THAT x <= 100
             AND sum(when t.c > 3: x) by (t.g) = at(next: t.c) {OVER_S} MAXIMIZE sum(x)"""
-        result = decidb_cli.execute_raw(sql)
-        assert "takes more than one value here (4 and 9), in the group t.g = 'a'" in result.stderr, result.stderr
-        assert_no_internal_leak(result, "an = frame bound over a filtered anchor")
+        decidb_cli.assert_error_at(
+            sql, kind="Invalid Input Error", at="at(next: t.c)", word="(4 and 9) in the group t.g = 'a'"
+        )
+        assert_no_internal_leak(decidb_cli.execute_raw(sql), "an = frame bound over a filtered anchor")
 
 
 CLASSED = ("id", "g", "k", "s", "c")
@@ -2528,9 +2526,10 @@ class TestAFrameBoundReadsOnlyInstances:
         """`first` reads 3 and 2, so 3 - 10 and 2 - 10 are two values, and `=` holds one."""
         sql = f"""SELECT id, x {table('t', TIGHT, TIGHT_ROWS)} DECIDE x(REAL) SUCH THAT x >= -50 AND x <= 100
             AND -sum(x) = at(first: t.c) {OVER_S} - 10 MAXIMIZE sum(x)"""
-        result = decidb_cli.execute_raw(sql)
-        assert "takes more than one value here (-8 and -7)" in result.stderr, result.stderr
-        assert_no_internal_leak(result, "a rebuilt = frame bound")
+        decidb_cli.assert_error_at(
+            sql, kind="Invalid Input Error", at="at(first: t.c) over (t.s within t.g) - 10", word="(-8 and -7)"
+        )
+        assert_no_internal_leak(decidb_cli.execute_raw(sql), "a rebuilt = frame bound")
 
     @pytest.mark.parametrize(
         "clause, total",
@@ -2557,8 +2556,9 @@ class TestAFrameBoundReadsOnlyInstances:
         """The same clause with a factor that has a value: group a holds an instance, whose two values are an error."""
         sql = f"""SELECT id, x {table('t', TIGHT, TIGHT_ROWS)} DECIDE x(REAL)
             SUCH THAT x <= 100 AND (SELECT 2.0::DOUBLE) * sum(x) by (t.g) = at(previous: t.c) {OVER_S} MAXIMIZE sum(x)"""
-        result = decidb_cli.execute_raw(sql)
-        assert "takes more than one value here (3 and 4), in the group t.g = 'a'" in result.stderr, result.stderr
+        decidb_cli.assert_error_at(
+            sql, kind="Invalid Input Error", at="at(previous: t.c)", word="(3 and 4) in the group t.g = 'a'"
+        )
 
     @pytest.mark.parametrize(
         "bound, c, total",

@@ -8,6 +8,7 @@
 
 #include "duckdb/execution/operator/decide/decide_model_emitter.hpp"
 
+#include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/execution/operator/decide/decide_global_sink_state.hpp"
 #include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
@@ -1152,16 +1153,10 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 	Polynomial(root, filters, null_rows, evaluated);
 	if (!bound_null.empty()) {
 		// Taken once every rule that drops an instance has run but the next, which reads `null_rows`.
-		// The classes of a `per K:` that names them, which an `=` bound that disagrees names beside its group.
-		vector<idx_t> class_ids;
-		vector<GroupName> class_names;
-		if (clause.scope.per == DecideClauseScope::PerRole::NAMES_CLASSES &&
-		    evaluated.comparison_type == ExpressionType::COMPARE_EQUAL) {
-			KeyClasses(root, class_ids, class_names);
-		}
-		TakeTightestFrameBound(evaluated.comparison_type, RenderDecideSource(*clause.rhs_expr, names), kept, bound_null,
-		                       kept_row_group_ids, evaluated.row_group_ids, evaluated.num_groups, evaluated.group_names,
-		                       class_ids, class_names, key_values, evaluated.rhs_values.MutableDense(), null_rows);
+		TakeTightestFrameBound(evaluated.comparison_type, RenderDecideSource(*clause.rhs_expr, names),
+		                       DecideSpanLocation(op.source_text, clause.rhs_expr->GetQueryLocation()), kept,
+		                       bound_null, kept_row_group_ids, evaluated.row_group_ids, evaluated.num_groups,
+		                       evaluated.group_names, key_values, evaluated.rhs_values.MutableDense(), null_rows);
 	}
 	DecideAbsence::SkipNullInstances(null_rows, true, num_rows, evaluated.row_group_ids, evaluated.num_groups);
 	if (counted) {

@@ -16,8 +16,8 @@
     },
     {
         "name": "__internal_decide_bound_disagreement",
-        "parameters": "written,low,high,names_and_values...",
-        "description": "The error text of an `=` bound that takes two values in one group, the group named by its key columns",
+        "parameters": "written,low,high,place,names_and_values...",
+        "description": "Raises the error of an `=` bound that takes two values in one group, the group named by its key columns, at its place in the query",
         "example": "",
         "type": "scalar_function"
     },

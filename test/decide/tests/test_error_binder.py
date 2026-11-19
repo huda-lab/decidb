@@ -282,14 +282,15 @@ class TestBinderErrors:
         """`SUM(x) = l_quantity` (C2): a bare column is a legal `=` bound in general
         (C1), but `l_quantity` genuinely varies across `lineitem`, so the single
         group's `=` constraint contradicts itself and is refused as infeasible."""
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
                 SUCH THAT SUM(x) = l_quantity
                 MAXIMIZE SUM(x) LIMIT 1
             """,
-            match=r"cannot hold two different values.*infeasible",
+            kind="Invalid Input Error",
+            at="l_quantity",
         )
 
     def test_objective_with_addition_succeeds(self, decidb_cli):
@@ -733,7 +734,7 @@ class TestBinderErrors:
         `<=`/`>=` collapse to the tightest bound; `=` cannot, so it is refused
         (C2) as a contradiction, with the two conflicting values named.
         """
-        decidb_cli.assert_error(
+        decidb_cli.assert_error_at(
             """
                 SELECT ps_partkey, ps_suppkey, x
                 FROM partsupp
@@ -743,7 +744,8 @@ class TestBinderErrors:
                                     WHERE p_partkey = ps_partkey)
                 MAXIMIZE SUM(x)
             """,
-            match=r"takes more than one value here.*cannot hold two different values.*infeasible",
+            kind="Invalid Input Error",
+            at="(SELECT CAST(p_size AS INTEGER) FROM part",
         )
 
     # --- Division with a DECIDE variable in the divisor ---
