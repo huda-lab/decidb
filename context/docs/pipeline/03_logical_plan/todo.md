@@ -10,12 +10,3 @@ files.
   lines.
 - **Change.** One `PlanDecide` function runs them; `CreatePlan` calls it.
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "plan or canonical"` passes.
-
-## PLAN-8 — The objective's canonical layer is compared as two renderings
-
-- **Problem.** `objective_canonical_differs` (`plan_select_node.cpp`) is found by comparing the objective's text before
-  and after canonicalization, while a clause's is reported by the canonicalizer. A rendering that changes without the
-  objective changing would print a second layer.
-- **Change.** `CanonicalizeObjective` reports "changed", as `CanonicalizeTree` does for a clause, and the comparison of
-  two renderings goes.
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "explain"` passes with no golden change.

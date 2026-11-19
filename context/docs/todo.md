@@ -10,15 +10,6 @@ Each phase is one architectural change. Phases run in order; groups
 inside a phase run in order; measurement runs fit between phases. `(decision)` marks a task whose **Decision needed**
 the owner rules first.
 
-# Phase 1 — Finish errors
-
-The rules: `language/errors.md` § How DECIDE throws an error. A task here removes code or fixes a real fault; none
-improves a wording or a caret.
-
-## 1.2 Other cleanups filed in Phase 1 (one lane)
-- [ ] PLAN-8 The objective's canonical layer is compared as two renderings — pipeline/03_logical_plan/todo.md § PLAN-8
-- [ ] INF-5 Three label formatters no test reaches — diagnostics/infeasible/todo.md § INF-5
-
 # Phase 2 — Direct solve is a separate layer
 
 ## 2.1 Bounds and the driver (parallel: FW-5, OPT-21 | FW-6)
