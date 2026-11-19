@@ -33,11 +33,9 @@ namespace duckdb {
 //! but one the model computes across rows (a sum over rows, a square, the fixed terms moved to the bound side), which
 //! no expression of the query holds: past a DOUBLE it names the clause. INTEGER_ANSWER is no number the query holds
 //! either but an answer the solver reads back for a whole-numbered decision, past what a DOUBLE counts exactly; its
-//! `written` is the decision and its value (DecideWholeNumberRangeBefore). MESSAGE is no refusal of a number but one a
-//! direct plan carries as a string until its check chain raises it, so the least of several can be raised in order:
-//! `written` is the message, with the place it points at in front (DecideLocatedMessage). The solver path
-//! (ThrowInvalidValue) and the direct-solve plans (DirectNumberMessage) apply the one rule.
-enum class DecideValueRole : uint8_t { COEFFICIENT, BOUND, TOO_LARGE, CONSTANT, INTEGER_ANSWER, MESSAGE };
+//! `written` is the decision and its value (DecideWholeNumberRangeBefore). The solver path (ThrowInvalidValue) and the
+//! direct-solve plans (the checks of direct_runtime_checks.hpp) apply the one rule.
+enum class DecideValueRole : uint8_t { COEFFICIENT, BOUND, TOO_LARGE, CONSTANT, INTEGER_ANSWER };
 
 //! The error for a NaN or infinite value, the one text every site that refuses one raises. `written` is the value as
 //! the user wrote it (cut from the query where it stands, or the tree rendered where no text was cut); the error
@@ -60,30 +58,12 @@ inline string DecideInvalidValueMessage(DecideValueRole role, const string &writ
 	return "'" + written + "' is NaN or infinite on some rows";
 }
 
-//! A refusal a direct plan carries as a string value: `message` with the `place` it points at (a position in the query)
-//! in front, which DecideLocatedError reads back where the plan raises it. A refusal with no place is the message.
-inline string DecideLocatedMessage(const string &message, optional_idx place) {
-	return place.IsValid() ? to_string(place.GetIndex()) + '\x1f' + message : message;
-}
-
-//! The error of a message DecideLocatedMessage made.
-inline InvalidInputException DecideLocatedError(const string &located) {
-	auto separator = located.find('\x1f');
-	if (separator == string::npos) {
-		return InvalidInputException(located);
-	}
-	return InvalidInputException(located.substr(separator + 1), Exception::InitializeExtraInfo(optional_idx(
-	                                                                std::stoull(located.substr(0, separator)))));
-}
-
 //! The error for a NaN or infinite value, raised where the value stands: the message of DecideInvalidValueMessage,
 //! with `place` (the value's span in the query, invalid for a value the query text holds none for) as its position,
-//! so DuckDB prints the caret under it. The solver path and the direct-solve plans both throw it here, as the SQL
-//! function `__internal_decide_invalid_value` does.
+//! so DuckDB prints the caret under it. The solver path throws it here; a direct-solve plan raises it with the SQL
+//! function `__internal_decide_invalid_value`, which reads `place` from its own expression
+//! (Expression::query_location).
 inline InvalidInputException DecideInvalidValueError(DecideValueRole role, const string &written, optional_idx place) {
-	if (role == DecideValueRole::MESSAGE) {
-		return DecideLocatedError(written);
-	}
 	auto message = DecideInvalidValueMessage(role, written);
 	return place.IsValid() ? InvalidInputException(message, Exception::InitializeExtraInfo(place))
 	                       : InvalidInputException(message);
@@ -200,7 +180,8 @@ inline DecideDomainRefusal DecideRefuseDomain(const DecideBoundBox &box, bool is
 //! The error of an `=` bound that takes two values (`low` and `high`) in one `by` group: `written` is the bound as the
 //! query writes it, `names` the group's key columns as the query writes them and `values` the group's value of each.
 //! Without a key (a bound over the whole query) it names no group. The solver path, the frame bound and the
-//! direct-solve plans (`__internal_decide_bound_disagreement`) all build it here.
+//! direct-solve plans (`__internal_decide_bound_disagreement`, which reads the bound's place from its own expression)
+//! all build it here.
 inline string DecideBoundDisagreementMessage(const string &written, double low, double high,
                                              const vector<string> &names, const vector<Value> &values) {
 	auto group = DescribeKeyValues(names, values);

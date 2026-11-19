@@ -632,8 +632,8 @@ private:
 		vector<unique_ptr<Expression>> checks;
 		checks.push_back(calc.Out(Boolean(coefficients.valid)));
 		checks.push_back(DirectRaiseTooLarge(optimizer, Factor(coefficients.q), condition.limit_written));
-		for (auto &message : limit_values.messages) {
-			checks.push_back(DirectRaiseMessage(optimizer, calc, message));
+		for (auto &check : limit_values.checks) {
+			checks.push_back(calc.Out(check));
 		}
 		result.valid = p3.Add(DirectAllHold(calc, std::move(checks)));
 		return result;

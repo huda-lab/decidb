@@ -145,6 +145,26 @@ def test_a_coefficient_that_is_not_finite_is_named_as_written_on_both_paths(deci
     assert direct == solver
 
 
+# A raise call carries its own place (its `query_location`), so a plan that serializes keeps the caret. The harness runs
+# the query again on the plan's deserialized copy (`PRAGMA verify_serializer`). The cases reach three raises: a direct
+# plan's coefficient check and bound check (`RaiseInvalidValue`), and the solver path's check of a coefficient, which the
+# DECIDE node keeps as a scope check.
+SERIALIZED_CARET_CASES = [
+    ("direct_coefficient", "require", "x(REAL) SUCH THAT b * x <= 5 MAXIMIZE SUM(a * x)", "b"),
+    ("solver_coefficient", "off", "x(REAL) SUCH THAT b * x <= 5 MAXIMIZE SUM(a * x)", "b"),
+    ("direct_bound", "require", "x(REAL) SUCH THAT x <= b MAXIMIZE SUM(a * x)", "b"),
+]
+
+
+@pytest.mark.error
+@pytest.mark.parametrize(
+    "mode,decide,at", [c[1:] for c in SERIALIZED_CARET_CASES], ids=[c[0] for c in SERIALIZED_CARET_CASES]
+)
+def test_a_serialized_plan_keeps_the_caret_of_an_invalid_value(decidb_cli, mode, decide, at):
+    sql = f"SET decide_direct_solve='{mode}'; {_query(decide, NAN)}"
+    decidb_cli.with_verify_serializer().assert_error_at(sql, kind=INVALID_INPUT, at=at)
+
+
 class At(str):
     """The expression of the query an error points at (`_points_at`), where a case expects the error of a value that is
     not finite rather than a clause named as too large."""
@@ -620,7 +640,7 @@ def _derived_query(decide, outcome):
 
 # (name, DECIDE clauses, the expression the error points at). Each derives a coefficient from the values it reads at a
 # different place: like terms merged or a reducer's factor applied on the solver path, and the sum the direct plan
-# checks (DirectNumberMessage). The coefficient DeciDB makes stands where the user's text it replaces stands
+# checks (DirectNumberCheck). The coefficient DeciDB makes stands where the user's text it replaces stands
 # (DecideReplaces): the sum of the like terms, or the scaled reducer. The same query raises the same error when every
 # value is finite and the sum is not, and when a value is infinite, on every path that takes it.
 DERIVED_BOTH_PATHS = [

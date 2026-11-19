@@ -434,6 +434,15 @@ def test_an_equal_bound_under_per_takes_one_value_in_each_by_group(decidb_cli, c
         decidb_cli.assert_error_at(f"SET decide_direct_solve = '{mode}'; {sql}", kind="Invalid Input Error", at="t.cap")
 
 
+def test_a_serialized_plan_keeps_the_caret_of_an_equal_bound_that_takes_two_values(decidb_cli):
+    """The raising call carries the bound's place as its own query location, which the plan's serialized copy keeps."""
+    sql = f"""SELECT id, x FROM {CLASS_BOUND_ROWS} DECIDE x(INT) SUCH THAT x >= 0 AND x <= 10 AND sum(x) by (g) = t.cap
+        MAXIMIZE SUM(x)"""
+    decidb_cli.with_verify_serializer().assert_error_at(
+        f"SET decide_direct_solve = 'off'; {sql}", kind="Invalid Input Error", at="t.cap"
+    )
+
+
 def test_an_equal_bound_in_a_macro_tail_names_its_group_with_no_caret(decidb_cli):
     """A tail a table macro expanded has locations relative to the macro body, not to the query, so the message points
     at no place there: it quotes the bound as it prints."""

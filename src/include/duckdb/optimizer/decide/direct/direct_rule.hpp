@@ -198,7 +198,8 @@ struct DirectIRObjective {
 };
 
 //! A run-time scope check the solver makes before it reads a value, which the plan makes on the source rows: the input
-//! raises `invalid`, a per-row message that is NULL on a valid row, over source columns only.
+//! evaluates `invalid`, a per-row check (BOOLEAN) that is true on a valid row and raises on any other, over source
+//! columns only.
 struct DirectRowCheck {
 	unique_ptr<Expression> invalid;
 };

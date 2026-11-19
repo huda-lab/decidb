@@ -534,12 +534,11 @@ struct ItemColumns {
 	vector<ColumnBinding> sources;
 	//! The class key of the row's group (DirectClassKey). Empty without a scope.
 	vector<ColumnBinding> keys;
-	//! The message each check of a raw value or of a limit read from the data raises on the row (VARCHAR, NULL when it
-	//! passes).
-	vector<ColumnBinding> messages;
-	//! The message of each item's price past a DOUBLE (VARCHAR, NULL when finite): a number the plan computes from the
-	//! checked values. Raised after every check of a value read; the group sums are checked after it (GroupTotals).
-	vector<ColumnBinding> computed_messages;
+	//! Whether every check of the row holds (BOOLEAN; unset when no value can fail): the checks of the raw values and
+	//! of the limits read from the data, then of each item's value and price past a DOUBLE, numbers the plan computes
+	//! from the checked values. A row that fails raises where its check is evaluated; the group sums are checked
+	//! after it (GroupTotals).
+	ColumnBinding valid;
 	//! What the aggregates of each limit read from the data read on the row, per data limit and per input.
 	vector<vector<DirectGroupInputColumns>> limits;
 	//! The items of the row, one per decision.
@@ -630,8 +629,7 @@ public:
 		ItemColumns items;
 		items.sources = last.carried.source;
 		items.keys = last.carried.keys;
-		items.messages = last.messages;
-		items.computed_messages = last.computed_messages;
+		items.valid = last.valid;
 		items.limits = last.limits;
 		for (auto &bindings : last.items) {
 			ItemExprs item;
@@ -674,10 +672,8 @@ private:
 		DirectCarried carried;
 		//! What the aggregates of each data limit read on the row, per data limit and per input.
 		vector<vector<DirectGroupInputColumns>> limits;
-		//! The message of each check of a raw value or of a limit read from the data (VARCHAR; NULL when it passes).
-		vector<ColumnBinding> messages;
-		//! The message of each item's price past a DOUBLE.
-		vector<ColumnBinding> computed_messages;
+		//! Whether every check of the row holds so far (BOOLEAN; unset until a stage makes one).
+		ColumnBinding valid;
 		vector<ItemBindings> items;
 	};
 
@@ -692,8 +688,8 @@ private:
 		vector<Clause> clauses;
 		//! Each decision's value in each objective part; unset where the part does not name the decision.
 		vector<vector<ColumnBinding>> values;
-		//! The message of each check, as an expression over P1.
-		vector<ExprPtr> messages;
+		//! Each check of a raw value or of a limit read from the data, as an expression over P1.
+		vector<ExprPtr> checks;
 	};
 
 	const Condition &condition;
@@ -750,9 +746,9 @@ private:
 				to.limits.back().push_back(moved);
 			}
 		}
-		to.messages = stage.Forward(from.messages, vector<LogicalType>(from.messages.size(), LogicalType::VARCHAR));
-		to.computed_messages = stage.Forward(from.computed_messages,
-		                                     vector<LogicalType>(from.computed_messages.size(), LogicalType::VARCHAR));
+		if (from.valid.table_index != DConstants::INVALID_INDEX) {
+			to.valid = stage.Forward({from.valid}, {LogicalType::BOOLEAN})[0];
+		}
 		for (auto &item : from.items) {
 			ItemBindings moved;
 			auto forward = [&](ColumnBinding ItemBindings::*column, const LogicalType &type) {
@@ -800,13 +796,13 @@ private:
 			    DirectLayoutGroupInputs(optimizer, calc, p1, *limit_bounds[j], eligible, over_state, nullptr));
 			for (auto &input : limit_bounds[j]->inputs) {
 				if (input.invalid) {
-					auto message = p1.Add(calc.Out(calc.Wrap(OverState(*input.invalid))));
-					raw.messages.push_back(calc.Col(LogicalType::VARCHAR, message));
+					auto check = p1.Add(calc.Out(calc.Wrap(OverState(*input.invalid))));
+					raw.checks.push_back(calc.Col(LogicalType::BOOLEAN, check));
 				}
 			}
 		}
 		auto number = [&](ColumnBinding binding, const DirectNumberNames &names) {
-			return DirectNumberMessage(calc, DoubleColumn(binding), names);
+			return DirectNumberCheck(calc, DoubleColumn(binding), names);
 		};
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
 			auto &clause = condition.clauses[j];
@@ -826,16 +822,15 @@ private:
 				laid.ends.when = p1.Add(calc.Wrap(DirectActiveWhen(calc, OverState(*clause.when).get())));
 			}
 			raw.clauses.push_back(laid);
-			auto read_on = [&](ExprPtr message) {
-				return clause.when ? DirectOnKeptRows(calc, BoolColumn(laid.ends.when), message) : message;
+			auto read_on = [&](ExprPtr check) {
+				return clause.when ? DirectCheckOnKeptRows(calc, BoolColumn(laid.ends.when), check) : check;
 			};
 			if (!DirectIsFiniteWhereKept(optimizer, clause.coefficient)) {
-				raw.messages.push_back(read_on(number(laid.coefficient, clause.coefficient_names)));
+				raw.checks.push_back(read_on(number(laid.coefficient, clause.coefficient_names)));
 			}
-			raw.messages.push_back(
-			    read_on(calc.If(calc.Fn("isnan", DoubleColumn(laid.rhs)),
-			                    calc.RaiseInvalidValue(DecideValueRole::BOUND, clause.rhs_text, clause.rhs_place),
-			                    calc.Constant(Value(LogicalType::VARCHAR)))));
+			raw.checks.push_back(read_on(calc.If(
+			    calc.Fn("isnan", DoubleColumn(laid.rhs)),
+			    calc.RaiseInvalidValue(DecideValueRole::BOUND, clause.rhs_text, clause.rhs_place), calc.Bool(true))));
 		}
 		for (idx_t k = 0; k < DecisionCount(); k++) {
 			ItemBindings item;
@@ -844,7 +839,7 @@ private:
 			item.w = p1.Add(calc.Out(scoped ? calc.If(eligible, weight, Zero()) : weight));
 			raw.rows.items.push_back(item);
 			if (!weights.empty() && !DirectIsFiniteWhereKept(optimizer, weights)) {
-				raw.messages.push_back(number(item.w, condition.budget.names[k]));
+				raw.checks.push_back(number(item.w, condition.budget.names[k]));
 			}
 			raw.values.emplace_back();
 			for (idx_t p = 0; p < condition.objective.size(); p++) {
@@ -860,7 +855,7 @@ private:
 				}
 				raw.values.back().push_back(p1.Add(calc.Out(value)));
 				if (!DirectIsFiniteWhereKept(optimizer, values)) {
-					raw.messages.push_back(number(raw.values.back().back(), condition.objective[p].names[k]));
+					raw.checks.push_back(number(raw.values.back().back(), condition.objective[p].names[k]));
 				}
 			}
 		}
@@ -885,13 +880,17 @@ private:
 		return condition.objective.empty() ? value : calc.Neg(value);
 	}
 
-	//! P2: the message of every check of a raw value, each clause's bounds (`clause_bounds`, with the clause's `when`
+	//! P2: whether every check of a raw value holds, each clause's bounds (`clause_bounds`, with the clause's `when`
 	//! carried on), and each decision's v.
 	RowColumns AddBoundsAndValue(const Raw &raw, vector<DirectBoundColumns> &clause_bounds) {
 		DirectProjectionStage p2(binder.GenerateTableIndex());
 		auto rows = Forward(p2, raw.rows);
-		for (auto &message : raw.messages) {
-			rows.messages.push_back(p2.Add(calc.Out(message)));
+		if (!raw.checks.empty()) {
+			vector<unique_ptr<Expression>> checks;
+			for (auto &check : raw.checks) {
+				checks.push_back(calc.Out(check));
+			}
+			rows.valid = p2.Add(DirectAllHold(calc, std::move(checks)));
 		}
 		for (auto &clause : raw.clauses) {
 			ExprPtr lower, upper;
@@ -943,15 +942,28 @@ private:
 		return rows;
 	}
 
-	//! P4: whether the box is empty, the anchor (0 clamped into the box; 0 on an empty box, where it is never read),
-	//! whether the item is outside the ranking (w = 0, or its row belongs to no budget), and its break-even price.
+	//! P4: the checks of each item's value and price past a DOUBLE, whether the box is empty, the anchor (0 clamped
+	//! into the box; 0 on an empty box, where it is never read), whether the item is outside the ranking (w = 0, or its
+	//! row belongs to no budget), and its break-even price.
 	RowColumns AddAnchorAndPrice(const RowColumns &from) {
 		DirectProjectionStage p4(binder.GenerateTableIndex());
 		auto rows = Forward(p4, from);
+		// The checks of the row so far hold first; then the numbers this stage's values make.
+		vector<unique_ptr<Expression>> checks;
+		if (from.valid.table_index != DConstants::INVALID_INDEX) {
+			checks.push_back(calc.Out(BoolColumn(from.valid)));
+		}
 		for (idx_t k = 0; k < DecisionCount(); k++) {
 			auto &item = rows.items[k];
 			auto l = DoubleColumn(from.items[k].l), u = DoubleColumn(from.items[k].u);
 			auto w = DoubleColumn(from.items[k].w), v = DoubleColumn(from.items[k].v);
+			// An item's value sums its parts' values, each checked before: past a DOUBLE it names the objective.
+			DirectNumberNames merged;
+			merged.clause = condition.objective_written;
+			for (auto &part : condition.objective) {
+				DirectNameMerge(merged, *condition.source_text, part.names[k]);
+			}
+			checks.push_back(calc.Out(DirectNumberCheck(calc, v, merged)));
 			auto empty = DirectBoxIsEmpty(calc, l, u);
 			auto anchor = calc.If(empty, Zero(), calc.Min({calc.Max({Zero(), l}), u}));
 			auto free_of_budget = Equal(w, Zero());
@@ -962,9 +974,8 @@ private:
 			auto price = calc.If(free_of_budget, NegativeInfinity(), calc.Add(calc.Div(v, w), Zero()));
 			// The -infinity of an item outside the ranking is a mark, not a number computed: past a DOUBLE, a price
 			// names the budget.
-			auto too_large =
-			    DirectNumberMessage(calc, calc.If(free_of_budget, NullDouble(), price), condition.budget_written);
-			rows.computed_messages.push_back(p4.Add(calc.Out(too_large)));
+			checks.push_back(calc.Out(
+			    DirectNumberCheck(calc, calc.If(free_of_budget, NullDouble(), price), condition.budget_written)));
 			item.empty = p4.Add(calc.Out(empty));
 			item.a = p4.Add(calc.Out(anchor));
 			item.wz = p4.Add(calc.Out(free_of_budget));
@@ -974,6 +985,7 @@ private:
 			item.imprecise =
 			    p4.Add(calc.Out(calc.And(calc.Not(Equal(v, Zero())), DirectBelowNormalRange(calc, price))));
 		}
+		rows.valid = p4.Add(DirectAllHold(calc, std::move(checks)));
 		plan = p4.Finish(std::move(plan));
 		return rows;
 	}
@@ -1175,8 +1187,8 @@ private:
 	}
 
 	//! Stage 2. The aggregate sums stage 1's values over the group (the sums of TotalInputs, the number of rows, the
-	//! MIN and MAX of the limits read from the data, and the check of every row's raw values and v: a NULL or NaN
-	//! raises here). The projection after it gives the group's limits L and U, and tests the verdicts: the data
+	//! MIN and MAX of the limits read from the data, and whether every row's checks held: a NaN or an infinity raises
+	//! in the row's stage). The projection after it gives the group's limits L and U, and tests the verdicts: the data
 	//! checks, then infeasible, then unbounded; a source with no row
 	//! has no verdict.
 	Stage<TotalColumns> GroupTotals() {
@@ -1188,26 +1200,11 @@ private:
 			key.push_back(aggregate.Group(calc.Out(KeyColumn(i, items.columns.keys))));
 		}
 		auto rows = aggregate.Add(DirectHashAggregate(optimizer, calc, "count_star", nullptr));
-		// The least message of each check in the group; the group raises them below.
-		vector<ColumnBinding> messages;
-		for (auto message : items.columns.messages) {
-			messages.push_back(
-			    aggregate.Add(DirectHashAggregate(optimizer, calc, "min", calc.Col(LogicalType::VARCHAR, message))));
-		}
-		// An item's value sums its parts' values, each checked before: past a DOUBLE it names the objective.
-		vector<ColumnBinding> value_messages;
-		for (idx_t d = 0; d < items.columns.decisions.size(); d++) {
-			DirectNumberNames merged;
-			merged.clause = condition.objective_written;
-			for (auto &part : condition.objective) {
-				DirectNameMerge(merged, *condition.source_text, part.names[d]);
-			}
-			value_messages.push_back(aggregate.Add(DirectHashAggregate(
-			    optimizer, calc, "min", DirectNumberMessage(calc, items.columns.decisions[d].v, merged))));
-		}
-		for (auto message : items.columns.computed_messages) {
-			value_messages.push_back(
-			    aggregate.Add(DirectHashAggregate(optimizer, calc, "min", calc.Col(LogicalType::VARCHAR, message))));
+		// Whether every check of every row of the group held, which each row's evaluation has raised already.
+		ColumnBinding rows_valid;
+		if (items.columns.valid.table_index != DConstants::INVALID_INDEX) {
+			rows_valid =
+			    aggregate.Add(DirectHashAggregate(optimizer, calc, "bool_and", BoolColumn(items.columns.valid)));
 		}
 		vector<ColumnBinding> sums;
 		for (idx_t slot = 0; slot < TOTAL_COUNT; slot++) {
@@ -1235,19 +1232,17 @@ private:
 		auto verdict = VerdictOf(totals, lower, upper, condition.scope.Scoped() ? GroupExists(key) : nullptr);
 		auto has_rows = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, calc.Col(LogicalType::BIGINT, rows),
 		                         calc.Constant(Value::BIGINT(0)));
-		// The row messages, what the limits give (a NaN limit, an `=` limit that takes two values in a group), the
-		// messages of the numbers the plan computes, then infeasible and unbounded.
+		// The row checks, what the limits give (a NaN limit), then infeasible and unbounded. The checks of the numbers
+		// the plan computes per row are in the row checks.
 		vector<unique_ptr<Expression>> checks;
-		for (auto message : messages) {
-			checks.push_back(DirectRaiseMessage(optimizer, calc, calc.Col(LogicalType::VARCHAR, message)));
+		if (rows_valid.table_index != DConstants::INVALID_INDEX) {
+			// A group of no row holds no check.
+			checks.push_back(calc.Out(calc.Coalesce({BoolColumn(rows_valid), calc.Bool(true)})));
 		}
 		for (auto &limit : limits) {
-			for (auto &message : limit.messages) {
-				checks.push_back(DirectRaiseMessage(optimizer, calc, message));
+			for (auto &check : limit.checks) {
+				checks.push_back(calc.Out(check));
 			}
-		}
-		for (auto message : value_messages) {
-			checks.push_back(DirectRaiseMessage(optimizer, calc, calc.Col(LogicalType::VARCHAR, message)));
 		}
 		// The group's sums of the finite parts: the spend of the anchors and the finite rooms. An item's own part past
 		// a DOUBLE makes its sum so. The sums of the rooms at price zero are parts of these, and the running sums of

@@ -11,17 +11,10 @@
 
 namespace duckdb {
 
-unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, unique_ptr<Expression> message) {
-	ExpressionBuilder calc(optimizer.context);
-	// Raised as the located error its message carries (DecideLocatedMessage), `error()` where it carries no place.
-	return calc.Out(
-	    calc.Cast(calc.RaiseInvalidValue(DecideValueRole::MESSAGE, calc.Wrap(std::move(message)), optional_idx()),
-	              LogicalType::BOOLEAN));
-}
-
 unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, const string &message) {
 	ExpressionBuilder calc(optimizer.context);
-	return DirectErrorPredicate(optimizer, calc.Out(calc.Constant(Value(message))));
+	// `error()` raises its text as an Invalid Input Error with no place.
+	return calc.Out(calc.Cast(calc.Fn("error", calc.Constant(Value(message))), LogicalType::BOOLEAN));
 }
 
 unique_ptr<Expression> DirectRaiseUnless(const ExpressionBuilder &calc, unique_ptr<Expression> ok,
@@ -96,54 +89,38 @@ void DirectNameValue(DirectNumberNames &names, const DecideSourceText &source, c
 	DirectNameMerge(names, source, one);
 }
 
-//! What a number that is not finite is called: the expression of the query it stands for, and its clause when it has
-//! none.
-static ExprPtr NotFiniteMessage(const ExpressionBuilder &calc, const DirectNumberNames &names) {
+//! The call that raises for a number that is not finite: it names the expression of the query the number stands for
+//! and carries its place, and for a number the plan computes it names the clause (TOO_LARGE), at the clause's place.
+static ExprPtr NotFiniteRaise(const ExpressionBuilder &calc, const DirectNumberNames &names) {
 	if (names.named) {
 		return calc.RaiseInvalidValue(names.constant ? DecideValueRole::CONSTANT : DecideValueRole::COEFFICIENT,
 		                              names.text, names.place);
 	}
-	// A message, not a raise: it is raised where the plan's check chain says (DirectErrorPredicate).
-	return calc.Constant(Value(DecideLocatedMessage(
-	    DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, names.clause.Noun()), names.clause.place)));
+	return calc.RaiseInvalidValue(DecideValueRole::TOO_LARGE, names.clause.Noun(), names.clause.place);
 }
 
-ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const DirectNumberNames &names) {
-	auto none = calc.Constant(Value(LogicalType::VARCHAR));
-	return calc.If(calc.IsNull(number), none,
-	               calc.If(calc.Fn("isfinite", number), none, NotFiniteMessage(calc, names)));
+ExprPtr DirectNumberCheck(const ExpressionBuilder &calc, const ExprPtr &number, const DirectNumberNames &names) {
+	// The gate is one BOOLEAN per row, and the raise stands in the branch of the rows that fail alone, as a CASE
+	// evaluates a branch only where it is chosen. A NULL number is skipped.
+	return calc.If(calc.Fn("isfinite", number), calc.Bool(true),
+	               calc.If(calc.IsNull(number), calc.Bool(true), NotFiniteRaise(calc, names)));
 }
 
-ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const DecideClauseRef &clause) {
+ExprPtr DirectNumberCheck(const ExpressionBuilder &calc, const ExprPtr &number, const DecideClauseRef &clause) {
 	DirectNumberNames names;
 	names.clause = clause;
-	return DirectNumberMessage(calc, number, names);
-}
-
-unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const ExpressionBuilder &calc, const ExprPtr &message) {
-	return DirectRaiseUnless(calc, calc.Out(calc.IsNull(message)), DirectErrorPredicate(optimizer, calc.Out(message)));
-}
-
-//! The check of a number: true when it is finite, and otherwise the error `bad` names unless the number is NULL. The
-//! gate is one BOOLEAN per row, and `bad` is built on the rows that fail alone, as a CASE evaluates a branch only where
-//! it is chosen.
-static unique_ptr<Expression> RaiseUnlessFinite(Optimizer &optimizer, const ExpressionBuilder &calc,
-                                                const ExprPtr &number, const ExprPtr &bad) {
-	auto raise = calc.Wrap(
-	    DirectRaiseUnless(calc, calc.Out(calc.IsNull(number)), DirectErrorPredicate(optimizer, calc.Out(bad))));
-	return calc.Out(calc.If(calc.Fn("isfinite", number), calc.Bool(true), raise));
+	return DirectNumberCheck(calc, number, names);
 }
 
 unique_ptr<Expression> DirectRaiseTooLarge(Optimizer &optimizer, const ExprPtr &number, const DecideClauseRef &clause) {
-	DirectNumberNames names;
-	names.clause = clause;
-	return DirectRaiseNotFinite(optimizer, number, names);
+	ExpressionBuilder calc(optimizer.context);
+	return calc.Out(DirectNumberCheck(calc, number, clause));
 }
 
 unique_ptr<Expression> DirectRaiseNotFinite(Optimizer &optimizer, const ExprPtr &number,
                                             const DirectNumberNames &names) {
 	ExpressionBuilder calc(optimizer.context);
-	return RaiseUnlessFinite(optimizer, calc, number, NotFiniteMessage(calc, names));
+	return calc.Out(DirectNumberCheck(calc, number, names));
 }
 
 unique_ptr<Expression> DirectCheckNumber(Optimizer &optimizer, ColumnBinding number, const DirectNumberNames &names,
@@ -152,16 +129,15 @@ unique_ptr<Expression> DirectCheckNumber(Optimizer &optimizer, ColumnBinding num
 		return nullptr;
 	}
 	ExpressionBuilder calc(optimizer.context);
-	auto column = calc.Col(LogicalType::DOUBLE, number);
-	return RaiseUnlessFinite(optimizer, calc, column, NotFiniteMessage(calc, names));
+	return calc.Out(DirectNumberCheck(calc, calc.Col(LogicalType::DOUBLE, number), names));
 }
 
 unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding,
                                                  const string &written, optional_idx place) {
 	ExpressionBuilder calc(optimizer.context);
 	auto bound = calc.Col(LogicalType::DOUBLE, bound_binding);
-	auto raise = calc.Cast(calc.RaiseInvalidValue(DecideValueRole::BOUND, written, place), LogicalType::BOOLEAN);
-	return DirectRaiseIf(calc, calc.Out(calc.Fn("isnan", bound)), calc.Out(raise));
+	return DirectRaiseIf(calc, calc.Out(calc.Fn("isnan", bound)),
+	                     calc.Out(calc.RaiseInvalidValue(DecideValueRole::BOUND, written, place)));
 }
 
 } // namespace duckdb

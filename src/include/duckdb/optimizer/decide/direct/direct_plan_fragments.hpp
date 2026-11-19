@@ -323,6 +323,11 @@ unique_ptr<Expression> DirectActiveWhen(const ExpressionBuilder &calc, const Exp
 //! only on a kept row, as on the solver path.
 ExprPtr DirectOnKeptRows(const ExpressionBuilder &calc, const ExprPtr &kept, const ExprPtr &value);
 
+//! The same for a check (a BOOLEAN that is true or raises): it holds on a row `kept` drops, so the row raises nothing
+//! (a row a `when` drops raises nothing). The guard stays inside the expression, where no pushdown can move the check
+//! below it.
+ExprPtr DirectCheckOnKeptRows(const ExpressionBuilder &calc, const ExprPtr &kept, const ExprPtr &check);
+
 //===--------------------------------------------------------------------===//
 // Scope projection and data-valued bounds
 //===--------------------------------------------------------------------===//
@@ -383,8 +388,8 @@ ExprPtr DirectGroupCountLimitRows(const ExpressionBuilder &calc, Optimizer &opti
 
 //! The group bound of a raw `rhs`, which may differ between the rows of a group: the group's tightest value. `<=` reads
 //! the MIN of `rhs`, `>=` its MAX, `=` both; that they agree is the bound-side rewrite's scope check, made before any
-//! rule runs, and it speaks about valid values: a NaN `rhs` is `invalid`'s error. `invalid` is the message a row raises
-//! for a NaN `rhs` (null for none), `text` the bound as written.
+//! rule runs, and it speaks about valid values: a NaN `rhs` is `invalid`'s error. `invalid` is the check a row makes of
+//! a NaN `rhs` (BOOLEAN: true, or the raise; null for none), `text` the bound as written.
 unique_ptr<DecideGroupBound> DirectTightestBound(Optimizer &optimizer, ExpressionType comparison,
                                                  unique_ptr<Expression> rhs, const string &text,
                                                  unique_ptr<Expression> invalid);
@@ -394,8 +399,8 @@ unique_ptr<DecideGroupBound> DirectTightestBound(Optimizer &optimizer, Expressio
 bool DirectGroupBoundIsReadable(const DirectIR &ir, const DecideGroupBound &bound);
 
 //! What the rule projects before its group aggregate for one input of the bound: whether the row is one the aggregate
-//! reads (the row is eligible and passes the input's own `when`), its argument on those rows, and the message it
-//! raises. A member is null when the input has none.
+//! reads (the row is eligible and passes the input's own `when`), its argument on those rows, and the check it
+//! makes (true, or the raise). A member is null when the input has none.
 struct DirectGroupInput {
 	ExprPtr reads;
 	ExprPtr argument;
@@ -465,12 +470,12 @@ private:
 };
 
 //! What the rule reads of the bound once its group is computed, over the results: the limit as an upper and as a lower
-//! one (null for a side the bound does not give), and the messages that group raises, in the order the solver checks
-//! them (a NaN limit, then an `=` bound that takes two values). Each is NULL outside a group (`eligible`).
+//! one (null for a side the bound does not give), and the checks of that group (a NaN limit raises), each true outside
+//! a group (`eligible`). The limits are NULL outside a group.
 struct DirectGroupValues {
 	ExprPtr upper;
 	ExprPtr lower;
-	vector<ExprPtr> messages;
+	vector<ExprPtr> checks;
 };
 
 //! Adds the bound's aggregates to the rule's group aggregate. `inputs` says where the rule projected each input's reads
@@ -485,8 +490,8 @@ DirectGroupValues DirectAddGroupBound(const ExpressionBuilder &calc, const Decid
                                       const ExprPtr &eligible);
 
 //! Lays out the inputs of the bound (DirectGroupInputs) as columns of `stage`, and returns where each one's reads and
-//! argument are (DirectAddGroupBound takes them). Each message an input raises is a column of `stage` too, and its
-//! check goes to the end of `checks`; a null `checks` leaves the messages to the caller.
+//! argument are (DirectAddGroupBound takes them). Each check an input makes is a column of `stage` too, and
+//! goes to the end of `checks`; a null `checks` leaves the checks to the caller.
 vector<DirectGroupInputColumns>
 DirectLayoutGroupInputs(Optimizer &optimizer, const ExpressionBuilder &calc, DirectProjectionStage &stage,
                         const DecideGroupBound &bound, const ExprPtr &eligible,
@@ -592,21 +597,21 @@ struct DirectRowBound {
 	optional_idx place;
 };
 
-//! The message a row raises for a per-row bound that is NaN or, for a coefficient, infinite, on a row its clause keeps;
-//! NULL when the bound is valid, or skips the instance it reaches.
-ExprPtr DirectRowBoundMessage(ClientContext &context, const ExpressionBuilder &calc, const DirectRowBound &bound);
+//! The check of a per-row bound that must not be NaN or, for a coefficient, infinite, on a row its clause keeps: it
+//! raises there, and is true when the bound is valid, or skips the instance it reaches.
+ExprPtr DirectRowBoundCheck(ClientContext &context, const ExpressionBuilder &calc, const DirectRowBound &bound);
 
 //! The same for a value that fixes a decision (DirectSourceFixedValue); `over` re-points the value and its `when` at
 //! the projection the plan reads them in.
-ExprPtr DirectFixedValueMessage(ClientContext &context, const ExpressionBuilder &calc,
-                                const DirectSourceFixedValue &fixed,
-                                const std::function<unique_ptr<Expression>(const Expression &)> &over);
+ExprPtr DirectFixedValueCheck(ClientContext &context, const ExpressionBuilder &calc,
+                              const DirectSourceFixedValue &fixed,
+                              const std::function<unique_ptr<Expression>(const Expression &)> &over);
 
 //! The linear score of a ranked rule (S1, and S2 after it): an objective of `SUM(coefficient * x)` terms over one
 //! Boolean decision, which each source row scores as the signed sum of its coefficients, the best row having the least
 //! score (the objective is a minimization, so a maximized part carries a negative sign). `Prove` is the condition's
-//! part and fills the score; the rest is the layout of the score column in the rule's row projection, and the message
-//! of a score that fails. Every function that lays the score out takes `over`, which re-points an expression over the
+//! part and fills the score; the rest is the layout of the score column in the rule's row projection, and the check of
+//! a score that fails. Every function that lays the score out takes `over`, which re-points an expression over the
 //! source at the rows the rule reads.
 struct DirectLinearScore {
 	//! One term of the score: `sign * coefficient * factor`, of the reducer `part`.
@@ -642,10 +647,10 @@ struct DirectLinearScore {
 	ExprPtr Combined(const ExpressionBuilder &calc, Optimizer &optimizer, const Over &over,
 	                 vector<ExprPtr> &part_scores) const;
 
-	//! The message of a score that fails: a reducer whose coefficient fails is named before the score they make
-	//! together, which names the objective.
-	ExprPtr Message(const ExpressionBuilder &calc, Optimizer &optimizer, const Over &over,
-	                const ExprPtr &combined_score, const vector<ExprPtr> &part_scores) const;
+	//! The check of a score that fails: a reducer whose coefficient fails is named before the score they make together,
+	//! which names the objective. True when the score holds.
+	ExprPtr Check(const ExpressionBuilder &calc, Optimizer &optimizer, const Over &over, const ExprPtr &combined_score,
+	              const vector<ExprPtr> &part_scores) const;
 
 private:
 	//! Whether reducer `part` scores a finite constant on every row, which no row can fail (DirectIsFiniteWhereKept).

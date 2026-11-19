@@ -453,6 +453,10 @@ ExprPtr DirectOnKeptRows(const ExpressionBuilder &calc, const ExprPtr &kept, con
 	return kept ? calc.If(kept, value, calc.Constant(Value(value->return_type))) : value;
 }
 
+ExprPtr DirectCheckOnKeptRows(const ExpressionBuilder &calc, const ExprPtr &kept, const ExprPtr &check) {
+	return kept ? calc.If(kept, check, calc.Bool(true)) : check;
+}
+
 static unique_ptr<BoundWindowExpression>
 DirectWindowOfAggregate(const Expression &function, unique_ptr<Expression> argument, unique_ptr<Expression> reads) {
 	auto &aggregate = function.Cast<BoundAggregateExpression>();
@@ -712,32 +716,32 @@ DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> 
 	return DirectProjectScopes(binder, std::move(input), std::move(scopes), std::move(extra));
 }
 
-ExprPtr DirectRowBoundMessage(ClientContext &context, const ExpressionBuilder &calc, const DirectRowBound &bound) {
-	auto none = calc.Constant(Value(LogicalType::VARCHAR));
-	auto message = none;
+ExprPtr DirectRowBoundCheck(ClientContext &context, const ExpressionBuilder &calc, const DirectRowBound &bound) {
+	auto passes = calc.Bool(true);
+	auto check = passes;
 	auto as_double = calc.Cast(calc.Of(*bound.value), LogicalType::DOUBLE);
 	if (std::isfinite(DirectMagnitudeBound(context, *bound.value))) {
 		// A value of an exact type is never NaN or infinite, so the row raises nothing.
-		return none;
+		return passes;
 	}
 	if (bound.coefficient) {
-		message = calc.If(calc.Fn("isfinite", as_double), none,
-		                  calc.RaiseInvalidValue(DecideValueRole::COEFFICIENT, bound.written, bound.place));
+		check = calc.If(calc.Fn("isfinite", as_double), passes,
+		                calc.RaiseInvalidValue(DecideValueRole::COEFFICIENT, bound.written, bound.place));
 	} else if (bound.reject_nan) {
-		message = calc.If(calc.Fn("isnan", as_double),
-		                  calc.RaiseInvalidValue(DecideValueRole::BOUND, bound.written, bound.place), none);
+		check = calc.If(calc.Fn("isnan", as_double),
+		                calc.RaiseInvalidValue(DecideValueRole::BOUND, bound.written, bound.place), passes);
 	}
 	// A NULL value skips the instance it reaches.
-	message = calc.If(calc.IsNull(calc.Of(*bound.value)), none, message);
+	check = calc.If(calc.IsNull(calc.Of(*bound.value)), passes, check);
 	if (bound.kept) {
-		message = calc.If(calc.Of(*bound.kept), message, none);
+		check = calc.If(calc.Of(*bound.kept), check, passes);
 	}
-	return message;
+	return check;
 }
 
-ExprPtr DirectFixedValueMessage(ClientContext &context, const ExpressionBuilder &calc,
-                                const DirectSourceFixedValue &fixed,
-                                const std::function<unique_ptr<Expression>(const Expression &)> &over) {
+ExprPtr DirectFixedValueCheck(ClientContext &context, const ExpressionBuilder &calc,
+                              const DirectSourceFixedValue &fixed,
+                              const std::function<unique_ptr<Expression>(const Expression &)> &over) {
 	DirectRowBound bound;
 	bound.value = over(*fixed.value);
 	if (fixed.when) {
@@ -747,7 +751,7 @@ ExprPtr DirectFixedValueMessage(ClientContext &context, const ExpressionBuilder 
 	bound.coefficient = fixed.coefficient;
 	bound.written = fixed.written;
 	bound.place = fixed.place;
-	return DirectRowBoundMessage(context, calc, bound);
+	return DirectRowBoundCheck(context, calc, bound);
 }
 
 //===--------------------------------------------------------------------===//
@@ -916,8 +920,7 @@ DirectLayoutGroupInputs(Optimizer &optimizer, const ExpressionBuilder &calc, Dir
 			column.argument = stage.Add(calc.Out(input.argument));
 		}
 		if (input.invalid && checks) {
-			auto message = calc.Col(LogicalType::VARCHAR, stage.Add(calc.Out(input.invalid)));
-			checks->push_back(DirectRaiseMessage(optimizer, calc, message));
+			checks->push_back(calc.Out(calc.Col(LogicalType::BOOLEAN, stage.Add(calc.Out(input.invalid)))));
 		}
 		columns.push_back(column);
 	}
@@ -957,7 +960,11 @@ DirectGroupValues DirectAddGroupBound(const ExpressionBuilder &calc, const Decid
 		values.lower = over_results(*bound.lower);
 	}
 	if (bound.invalid) {
-		values.messages.push_back(over_results(*bound.invalid));
+		auto copy = bound.invalid->Copy();
+		DirectReplaceColumns(copy, placeholders, results);
+		// Outside a group there is no value to check, and the check holds.
+		auto check = calc.Wrap(std::move(copy));
+		values.checks.push_back(eligible ? calc.If(eligible, check, calc.Bool(true)) : check);
 	}
 	return values;
 }
@@ -1021,18 +1028,19 @@ bool DirectLinearScore::PartIsFiniteConstant(Optimizer &optimizer, idx_t part) c
 	return DirectIsFiniteWhereKept(optimizer, values, scaling->factor);
 }
 
-ExprPtr DirectLinearScore::Message(const ExpressionBuilder &calc, Optimizer &optimizer, const Over &over,
-                                   const ExprPtr &combined_score, const vector<ExprPtr> &part_scores) const {
-	vector<ExprPtr> candidates;
+ExprPtr DirectLinearScore::Check(const ExpressionBuilder &calc, Optimizer &optimizer, const Over &over,
+                                 const ExprPtr &combined_score, const vector<ExprPtr> &part_scores) const {
+	// A reducer whose coefficient fails is named before the score they make together.
+	vector<unique_ptr<Expression>> checks;
 	for (idx_t p = 0; p < part_scores.size(); p++) {
 		// Every part has a term (PartIsFiniteConstant finds it).
 		D_ASSERT(part_scores[p]);
 		if (!PartIsFiniteConstant(optimizer, p)) {
-			candidates.push_back(DirectNumberMessage(calc, part_scores[p], part_names[p]));
+			checks.push_back(calc.Out(DirectNumberCheck(calc, part_scores[p], part_names[p])));
 		}
 	}
-	candidates.push_back(DirectNumberMessage(calc, combined_score, combined_names));
-	return calc.Coalesce(candidates);
+	checks.push_back(calc.Out(DirectNumberCheck(calc, combined_score, combined_names)));
+	return calc.Wrap(DirectAllHold(calc, std::move(checks)));
 }
 
 ExprPtr DirectLinearScore::Combined(const ExpressionBuilder &calc, Optimizer &optimizer, const Over &over,

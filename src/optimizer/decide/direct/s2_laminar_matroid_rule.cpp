@@ -185,7 +185,7 @@ public:
 	    : DirectRankedPrefix(optimizer_p, source_bindings_p, source_types_p, ScopesOf(condition_p), condition_p.fixed),
 	      condition(condition_p), fixed_count(condition_p.levels.size()), group_ok(condition_p.levels.size()),
 	      cap_bounds(condition_p.levels.size()), cap_index(condition_p.levels.size()) {
-		has_score_message = condition.score.CanFail(optimizer);
+		has_score_check = condition.score.CanFail(optimizer);
 		// Each cap read from the data is one group bound of its level: the group's tightest value, whether the clause
 		// gave the plan the group's aggregates or one value per row (DirectDataLimit::GroupBound).
 		for (idx_t i = 0; i < condition.levels.size(); i++) {
@@ -199,7 +199,7 @@ public:
 private:
 	const Condition &condition;
 	//! Whether a score can fail: be NaN or infinite, or the sum of the parts' scores pass a DOUBLE.
-	bool has_score_message = false;
+	bool has_score_check = false;
 	//! P1: the row's score.
 	ColumnBinding score_column;
 	//! W1, per level: the count of the group's rows fixed to 1; set only with fixed rows.
@@ -242,9 +242,9 @@ private:
 		};
 		auto combined_score = condition.score.Combined(calc, optimizer, over_state, part_scores);
 		score_column = p1.Add(calc.Out(combined_score));
-		if (has_score_message) {
-			layout.checks_below.push_back(DirectRaiseMessage(
-			    optimizer, calc, condition.score.Message(calc, optimizer, over_state, combined_score, part_scores)));
+		if (has_score_check) {
+			layout.checks_below.push_back(
+			    calc.Out(condition.score.Check(calc, optimizer, over_state, combined_score, part_scores)));
 		}
 		layout.rank_key = score_column;
 		return layout;

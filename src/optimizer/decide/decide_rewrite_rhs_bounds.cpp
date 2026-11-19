@@ -210,7 +210,7 @@ private:
 		if (reduces) {
 			InClassOnly(comparison.right);
 		}
-		auto invalid = InvalidValueMessage(*comparison.right, text, SpanOf(location), Kept());
+		auto invalid = InvalidValueCheck(*comparison.right, text, SpanOf(location), Kept());
 		if (reduces) {
 			// An `=` bound owes a disagreement check, which must be a scope check (it is class-aware and runs before
 			// any rule), so its NaN check stands with it, ahead of it, and every path raises the same error of the two.
@@ -288,7 +288,7 @@ private:
 		}
 		// The group's one value is not yet limited to the rows the clause keeps: the solver path does that, a rule's
 		// group is those rows.
-		auto nan = NanMessage(*comparison.right, text, SpanOf(location));
+		auto nan = NanCheck(*comparison.right, text, SpanOf(location));
 		group->invalid = nan ? calc.Out(nan) : nullptr;
 		Record(comparison, std::move(group));
 	}
@@ -302,8 +302,8 @@ private:
 		auto &reducer = expr->Cast<BoundAggregateExpression>();
 		DecideGroupBound::Input input;
 		// A group bound holds no nested reducer (ReadsOnlyGroupReducers): its argument is data.
-		input.invalid = ArgumentMessage(reducer, reducer.children.empty() ? nullptr : reducer.children[0].get(),
-		                                Reads(reducer.filter.get()), DecideReducerPath());
+		input.invalid = ArgumentCheck(reducer, reducer.children.empty() ? nullptr : reducer.children[0].get(),
+		                              Reads(reducer.filter.get()), DecideReducerPath());
 		if (!reducer.children.empty()) {
 			input.argument = std::move(reducer.children[0]);
 			reducer.children.clear();
@@ -392,7 +392,7 @@ private:
 			ReplaceReducers(arguments.back(), path.Below(reducer));
 		}
 		auto reads = Reads(path, reducer.filter.get());
-		AddValueCheck(ArgumentMessage(reducer, arguments.empty() ? nullptr : arguments[0].get(), reads, path));
+		AddValueCheck(ArgumentCheck(reducer, arguments.empty() ? nullptr : arguments[0].get(), reads, path));
 		auto function = reducer.Copy();
 		auto &aggregate = function->Cast<BoundAggregateExpression>();
 		aggregate.children.clear();
@@ -429,7 +429,7 @@ private:
 		// hide it (an L0 count's SIGN reads it as 0), so its body is checked as a reducer over data's is, at the rows
 		// the reducer reads.
 		if (DecideWrittenNormBody(reducer)) {
-			AddValueCheck(ArgumentMessage(reducer, reducer.children[0].get(), Reads(path, reducer.filter.get()), path));
+			AddValueCheck(ArgumentCheck(reducer, reducer.children[0].get(), Reads(path, reducer.filter.get()), path));
 		}
 		auto marker = reducer.Copy();
 		auto &aggregate = marker->Cast<BoundAggregateExpression>();
@@ -472,13 +472,15 @@ private:
 		return decide.bound_aggregates.back().column;
 	}
 
-	//! The message a row raises for a NaN in what a reducer reads: its argument (or a norm's written body: `SIGN(NaN)`
-	//! is 0) on the rows it reads. A reducer reads its argument as the same SQL aggregate does: it skips a NULL. A NaN
-	//! is an error, except to COUNT, which counts it, and so is an infinity where the value is read as a coefficient
-	//! (`read_as`). Null when there is none to raise. `argument` is the argument with
-	//! the reducers inside it replaced by their columns, `reads` the rows it reads and `path` the reducers around it.
-	unique_ptr<Expression> ArgumentMessage(const BoundAggregateExpression &reducer, const Expression *argument,
-	                                       const ExprPtr &reads, const DecideReducerPath &path) {
+	//! The check of what a reducer reads, which raises for a NaN in it: its argument (or a norm's written body:
+	//! `SIGN(NaN)` is 0) on the rows it reads. A reducer reads its argument as the same SQL aggregate does: it skips a
+	//! NULL. A NaN is an error, except to COUNT, which counts it, and so is an infinity where the value is read as a
+	//! coefficient
+	//! (`read_as`). The check is true on any other row, and null when there is none to make. `argument` is the argument
+	//! with the reducers inside it replaced by their columns, `reads` the rows it reads and `path` the reducers around
+	//! it.
+	unique_ptr<Expression> ArgumentCheck(const BoundAggregateExpression &reducer, const Expression *argument,
+	                                     const ExprPtr &reads, const DecideReducerPath &path) {
 		auto name = StringUtil::Lower(reducer.function.name);
 		D_ASSERT(name == "count" || name == "count_star" || name == "min" || name == "max" || name == "arg_min" ||
 		         name == "arg_max" || name == "sum" || name == "avg");
@@ -494,11 +496,11 @@ private:
 		auto body = DecideWrittenNormBody(reducer);
 		auto checked = body ? body : argument;
 		auto &named = body ? *body : *reducer.children[0];
-		auto nan = NanMessage(*checked, Written(named), SpanOf(named.GetQueryLocation()), read_as);
+		auto nan = NanCheck(*checked, Written(named), SpanOf(named.GetQueryLocation()), read_as);
 		if (!nan) {
 			return nullptr;
 		}
-		return calc.Out(DirectOnKeptRows(calc, reads, InKey(PathKeyOf(reducer, path), nan)));
+		return calc.Out(DirectCheckOnKeptRows(calc, reads, InKey(PathKeyOf(reducer, path), nan, calc.Bool(true))));
 	}
 
 	//! The reducer's value on a row, given the column that holds its aggregate: NULL on a row whose written `by` column
@@ -536,12 +538,13 @@ private:
 		return InKey(GroupKeyIndex(tagged), std::move(value));
 	}
 
-	//! `value` on a row in a group of the key `key_index`, NULL on a row in none; `value` for the whole query.
-	ExprPtr InKey(idx_t key_index, ExprPtr value) const {
+	//! `value` on a row in a group of the key `key_index`, `outside` (NULL when null) on a row in none; `value` for the
+	//! whole query.
+	ExprPtr InKey(idx_t key_index, ExprPtr value, const ExprPtr &outside = nullptr) const {
 		for (auto &element : DecideKeyElements(decide.keys, key_index)) {
 			if (element.null_mode == DecideKeyNullMode::NO_GROUP) {
-				value =
-				    calc.If(calc.IsNull(calc.Of(*element.expression)), calc.Constant(Value(value->return_type)), value);
+				value = calc.If(calc.IsNull(calc.Of(*element.expression)),
+				                outside ? outside : calc.Constant(Value(value->return_type)), value);
 			}
 		}
 		return value;
@@ -561,29 +564,30 @@ private:
 		return calc.Col(type, RecordAggregate(std::move(record), Kept()));
 	}
 
-	//! The error a row raises for an `=` bound that takes two values (`low` and `high`) in its group: the one text of
+	//! The check of an `=` bound that takes two values (`low` and `high`) in its group: the row raises the one text of
 	//! DecideBoundDisagreementMessage, read from `names` (the key's columns as the query writes them) and `values`
-	//! (their value on the row), pointing at `place` (the bound's span in the query, invalid for none); NULL where the
-	//! values agree or where one of `held` is not true: a group whose reducers do not each read a row holds no
-	//! instance, and constrains nothing.
+	//! (their value on the row), pointing at `place` (the bound's span in the query, invalid for none, which the
+	//! raising call carries); the check is true where the values agree or where one of `held` is not true: a group
+	//! whose reducers do not each read a row holds no instance, and constrains nothing.
 	ExprPtr BoundDisagreement(const string &text, optional_idx place, const ExprPtr &low, const ExprPtr &high,
 	                          const vector<ExprPtr> &held, const vector<string> &names,
 	                          const vector<ExprPtr> &values) const {
 		D_ASSERT(names.size() == values.size());
-		vector<ExprPtr> arguments {
-		    calc.Constant(Value(text)), calc.Cast(low, LogicalType::DOUBLE), calc.Cast(high, LogicalType::DOUBLE),
-		    calc.Constant(place.IsValid() ? Value::UBIGINT(place.GetIndex()) : Value(LogicalType::UBIGINT))};
+		vector<ExprPtr> arguments {calc.Constant(Value(text)), calc.Cast(low, LogicalType::DOUBLE),
+		                           calc.Cast(high, LogicalType::DOUBLE)};
 		for (idx_t i = 0; i < names.size(); i++) {
 			arguments.push_back(calc.Constant(Value(names[i])));
 			arguments.push_back(values[i]);
 		}
 		auto message = calc.Fn("__internal_decide_bound_disagreement", arguments);
+		// The call carries its own place, as a cast does.
+		message->SetQueryLocation(place);
 		auto disagree = calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, low, high);
 		for (auto &read : held) {
 			disagree =
 			    calc.If(calc.Cmp(ExpressionType::COMPARE_EQUAL, read, calc.Bool(true)), disagree, calc.Bool(false));
 		}
-		return calc.If(disagree, message, calc.Constant(Value(LogicalType::VARCHAR)));
+		return calc.If(disagree, message, calc.Bool(true));
 	}
 
 	//! The check of an `=` bound over a group (`bound`, a value that may differ between the kept rows of a group,
@@ -609,9 +613,10 @@ private:
 				values.push_back(calc.Of(*element.expression));
 			}
 		}
-		AddValueCheck(calc.Out(DirectOnKeptRows(calc, Kept(),
-		                                        BoundDisagreement(text, place, RecordOver("min", bound, by),
-		                                                          RecordOver("max", bound, by), held, names, values))));
+		AddValueCheck(
+		    calc.Out(DirectCheckOnKeptRows(calc, Kept(),
+		                                   BoundDisagreement(text, place, RecordOver("min", bound, by),
+		                                                     RecordOver("max", bound, by), held, names, values))));
 	}
 
 	//! Records a left-over bound's aggregates over the group of its clause, so the comparison reads the bound as one
@@ -642,7 +647,7 @@ private:
 		}
 		if (group.invalid) {
 			DirectReplaceColumns(group.invalid, placeholders, values);
-			messages.push_back(calc.Out(DirectOnKeptRows(calc, Kept(), calc.Wrap(std::move(group.invalid)))));
+			messages.push_back(calc.Out(DirectCheckOnKeptRows(calc, Kept(), calc.Wrap(std::move(group.invalid)))));
 		}
 		comparison.right = std::move(DirectIsUpperBound(comparison.type) ? group.upper : group.lower);
 		DirectReplaceColumns(comparison.right, placeholders, values);
@@ -696,16 +701,16 @@ private:
 		return one;
 	}
 
-	//! The error a row raises for a NaN `value` among `rows` (every row when null), and NULL elsewhere: the one error
-	//! of DecideInvalidValueMessage, naming the bound as `written` and pointing at `place`; null when `value` cannot be
-	//! NaN. A NULL bound skips its instance (deck p. 50) and infinity is a value.
-	unique_ptr<Expression> InvalidValueMessage(const Expression &value, const string &written, optional_idx place,
-	                                           const ExprPtr &rows) const {
-		auto nan = NanMessage(value, written, place);
+	//! The check of a `value` among `rows` (every row when null): a row with a NaN raises the one error of
+	//! DecideInvalidValueMessage, naming the bound as `written` and pointing at `place`, and any other row holds; null
+	//! when `value` cannot be NaN. A NULL bound skips its instance (deck p. 50) and infinity is a value.
+	unique_ptr<Expression> InvalidValueCheck(const Expression &value, const string &written, optional_idx place,
+	                                         const ExprPtr &rows) const {
+		auto nan = NanCheck(value, written, place);
 		if (!nan) {
 			return nullptr;
 		}
-		return calc.Out(DirectOnKeptRows(calc, rows, nan));
+		return calc.Out(DirectCheckOnKeptRows(calc, rows, nan));
 	}
 
 	//! Where a message about the expression at `location` points: the span the query text holds for it, none for a
@@ -714,10 +719,11 @@ private:
 		return DecideSpanLocation(decide.source_text, location);
 	}
 
-	//! The error a row raises for a `value` its `role` refuses -- a NaN bound, a coefficient that is not finite -- and
-	//! NULL elsewhere; null when `value` cannot be either. `written` is the value as the query writes it, at `place`.
-	ExprPtr NanMessage(const Expression &value, const string &written, optional_idx place,
-	                   DecideValueRole role = DecideValueRole::BOUND) const {
+	//! The check of a `value` its `role` refuses -- a NaN bound, a coefficient that is not finite --: the row raises,
+	//! and any other holds; null when `value` cannot be either. `written` is the value as the query writes it, at
+	//! `place`.
+	ExprPtr NanCheck(const Expression &value, const string &written, optional_idx place,
+	                 DecideValueRole role = DecideValueRole::BOUND) const {
 		if (value.return_type != LogicalType::FLOAT && value.return_type != LogicalType::DOUBLE) {
 			return nullptr;
 		}
@@ -728,8 +734,7 @@ private:
 		auto refused = role == DecideValueRole::BOUND
 		                   ? calc.Fn("isnan", number)
 		                   : calc.Cmp(ExpressionType::COMPARE_EQUAL, calc.Fn("isfinite", number), calc.Bool(false));
-		return calc.If(std::move(refused), calc.RaiseInvalidValue(role, written, place),
-		               calc.Constant(Value(LogicalType::VARCHAR)));
+		return calc.If(std::move(refused), calc.RaiseInvalidValue(role, written, place), calc.Bool(true));
 	}
 
 	void AddValueCheck(unique_ptr<Expression> message) {

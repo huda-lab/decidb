@@ -371,11 +371,11 @@ public:
 		auto need_column = c1.Add(Double(need));
 		auto unlimited_column = c1.Add(unlimited_weight);
 		auto valid_column = c1.Add(Boolean(valid));
-		// The group's limit can fail as a value (a NaN limit, which the solver names); its message is a column of the
+		// The group's limit can fail as a value (a NaN limit, which the solver names); its check is a column of the
 		// group's row.
-		vector<ColumnBinding> messages;
-		for (auto &message : limit_values.messages) {
-			messages.push_back(c1.Add(message));
+		vector<ColumnBinding> limit_checks;
+		for (auto &check : limit_values.checks) {
+			limit_checks.push_back(c1.Add(check));
 		}
 		vector<ColumnBinding> keys1;
 		for (idx_t i = 0; i < keys.size(); i++) {
@@ -411,8 +411,8 @@ public:
 		c2.Add(Double(star));
 		vector<unique_ptr<Expression>> checks;
 		checks.push_back(calc.Out(Boolean(valid_column)));
-		for (auto &message : messages) {
-			checks.push_back(DirectRaiseMessage(optimizer, calc, calc.Col(LogicalType::VARCHAR, message)));
+		for (auto &check : limit_checks) {
+			checks.push_back(calc.Out(Boolean(check)));
 		}
 		auto has_rows = calc.Not(calc.IsNull(Boolean(valid_column)));
 		auto no_budget =

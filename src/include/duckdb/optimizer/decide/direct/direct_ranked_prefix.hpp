@@ -230,8 +230,8 @@ private:
 	//! Lays out in `p1` what each registered group bound reads, and appends the checks of what it reads to `checks`.
 	void LayoutGroupInputs(DirectProjectionStage &p1, const DirectScopeState &state,
 	                       vector<unique_ptr<Expression>> &checks);
-	//! Appends the check of each message the group bounds raise to `checks`.
-	void AppendGroupMessages(vector<unique_ptr<Expression>> &checks) const;
+	//! Appends the check each group bound makes (a NaN limit raises) to `checks`.
+	void AppendGroupChecks(vector<unique_ptr<Expression>> &checks) const;
 	bool HasGroupBounds() const;
 	Stage ProjectRows(unique_ptr<LogicalOperator> rows);
 	//! The rank of the rows of `level`: ROW_NUMBER over the level's group in the first level, which ranks every row not

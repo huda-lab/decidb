@@ -16,14 +16,14 @@
     },
     {
         "name": "__internal_decide_bound_disagreement",
-        "parameters": "written,low,high,place,names_and_values...",
+        "parameters": "written,low,high,names_and_values...",
         "description": "Raises the error of an `=` bound that takes two values in one group, the group named by its key columns, at its place in the query",
         "example": "",
         "type": "scalar_function"
     },
     {
         "name": "__internal_decide_invalid_value",
-        "parameters": "role,written,place",
+        "parameters": "role,written",
         "description": "Raises the error of a NaN or infinite value the model cannot read, at its place in the query",
         "example": "",
         "type": "scalar_function"

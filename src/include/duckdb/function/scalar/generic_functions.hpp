@@ -35,7 +35,7 @@ struct GetVariableFun {
 
 struct InternalDecideBoundDisagreementFun {
 	static constexpr const char *Name = "__internal_decide_bound_disagreement";
-	static constexpr const char *Parameters = "written,low,high,place,names_and_values...";
+	static constexpr const char *Parameters = "written,low,high,names_and_values...";
 	static constexpr const char *Description = "Raises the error of an `=` bound that takes two values in one group, the group named by its key columns, at its place in the query";
 	static constexpr const char *Example = "";
 
@@ -44,7 +44,7 @@ struct InternalDecideBoundDisagreementFun {
 
 struct InternalDecideInvalidValueFun {
 	static constexpr const char *Name = "__internal_decide_invalid_value";
-	static constexpr const char *Parameters = "role,written,place";
+	static constexpr const char *Parameters = "role,written";
 	static constexpr const char *Description = "Raises the error of a NaN or infinite value the model cannot read, at its place in the query";
 	static constexpr const char *Example = "";
 

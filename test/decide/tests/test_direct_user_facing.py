@@ -361,12 +361,10 @@ def test_a1_a_nan_upper_end_raises_though_no_static_end_clamps_it(decidb_cli):
 
 
 def _checked_numbers(plan):
-    """How many numbers a plan checks: each raises the error of a coefficient or constant that is not finite (roles 0
-    and 3 of the invalid-value error), or the one of a sum past a DOUBLE."""
+    """How many numbers a plan checks: each raises the error of a coefficient or constant that is not finite, or of a
+    sum past a DOUBLE (roles 0, 3 and 2 of the invalid-value error)."""
     text = "".join(plan.replace("│", "").split())
-    return text.count("computesanumbertoolargeforaDOUBLE") + len(
-        re.findall(r"__internal_decide_invalid_value\((?:0|3),", text)
-    )
+    return len(re.findall(r"__internal_decide_invalid_value\((?:0|2|3),", text))
 
 
 def _r1_too_large_checks(cli, decisions, constraint, objective):
@@ -560,7 +558,7 @@ def test_a1_a_part_factor_that_overflows_an_exact_value_keeps_the_check(decidb_c
         ("r1_weight", "DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND q AND SUM(p * x) <= 4 MAXIMIZE SUM(q * x)"),
         ("r1_objective", "DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND q AND SUM(x) <= 4 MAXIMIZE SUM(p * x)"),
         ("s1_score", "DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(p * x)"),
-        # DirectRowBoundMessage: the coefficient of a row that fixes x.
+        # DirectRowBoundCheck: the coefficient of a row that fixes x.
         ("s1_fixing_coefficient", "DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 AND p * x = q MAXIMIZE SUM(q * x)"),
     ],
 )

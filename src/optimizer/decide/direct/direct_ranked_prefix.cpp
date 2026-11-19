@@ -119,11 +119,11 @@ void DirectRankedPrefix::LayoutGroupInputs(DirectProjectionStage &p1, const Dire
 	}
 }
 
-void DirectRankedPrefix::AppendGroupMessages(vector<unique_ptr<Expression>> &checks) const {
+void DirectRankedPrefix::AppendGroupChecks(vector<unique_ptr<Expression>> &checks) const {
 	for (auto &level : levels) {
 		for (auto &values : level.bound_values) {
-			for (auto &message : values.messages) {
-				checks.push_back(DirectRaiseMessage(optimizer, calc, message));
+			for (auto &check : values.checks) {
+				checks.push_back(calc.Out(check));
 			}
 		}
 	}
@@ -164,8 +164,7 @@ DirectRankedPrefix::Stage DirectRankedPrefix::ProjectRows(unique_ptr<LogicalOper
 	key_fixed_zero = columns.fixed_zero;
 	// The checks of the rows the clauses fix: each value a row fixes, and a row fixed to both values.
 	for (auto &fixed_value : fixed.source_values) {
-		checks_below.push_back(DirectRaiseMessage(
-		    optimizer, calc, DirectFixedValueMessage(optimizer.context, calc, fixed_value, over_state)));
+		checks_below.push_back(calc.Out(DirectFixedValueCheck(optimizer.context, calc, fixed_value, over_state)));
 	}
 	if (HasFixes()) {
 		auto both = calc.If(FixedOne(state), FixedZero(state), calc.Bool(false));
@@ -222,7 +221,7 @@ void DirectRankedPrefix::RankRows(Stage &rows) {
 }
 
 void DirectRankedPrefix::HoistGroupValues(Stage &ranked, ColumnBindingReplacer &forwarded) {
-	// PL: what each group bound gives (its limits and its messages) is computed once per row, here, and P2 reads the
+	// PL: what each group bound gives (its limits and its checks) is computed once per row, here, and P2 reads the
 	// columns (loop-invariant code motion): the expressions are arithmetic over the group's aggregates, and a rule
 	// reads them at several places, some of them under a CASE, where DuckDB's common subexpression elimination does not
 	// look. P2 reads P1's and W1's columns too, so PL forwards every column W1 has, and P2's expressions are re-pointed
@@ -243,8 +242,8 @@ void DirectRankedPrefix::HoistGroupValues(Stage &ranked, ColumnBindingReplacer &
 		for (auto &values : level.bound_values) {
 			hoist(values.upper);
 			hoist(values.lower);
-			for (auto &message : values.messages) {
-				hoist(message);
+			for (auto &check : values.checks) {
+				hoist(check);
 			}
 		}
 	}
@@ -279,7 +278,7 @@ DirectRankedPrefix::Stage DirectRankedPrefix::ProjectPrefix(Stage ranked) {
 	}
 	auto checks = std::move(ranked.checks);
 	AppendChecks(checks, LayoutPrefix(p2, input));
-	AppendGroupMessages(checks);
+	AppendGroupChecks(checks);
 	if (!checks.empty()) {
 		second.valid = p2.Add(DirectAllHold(calc, std::move(checks)));
 	}

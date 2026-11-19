@@ -13,12 +13,12 @@ class Optimizer;
 
 //! Makes the IR's row checks (DirectRowCheck) on the reads of `reader`, where the solver makes them: before a value is
 //! read. Each check is a side aggregate over its own read of the source, pruned to the columns it reads, that comes to
-//! one row: its message, NULL when it holds. A projection over their cross product, the verdict, raises the first
-//! message in the order given, and gates the reader (DirectSourceReader::Gate): every later read passes its rows only
-//! once the verdict holds. This is DuckDB's plan of an uncorrelated scalar subquery, the verdict a one-row CTE. A check
-//! that is not a row check is not in `checks`; with none, the reader stays ungated.
+//! one row: true when the check holds on every row, and a row that does not raises where the check is evaluated. A
+//! projection over their cross product, the verdict, gates the reader (DirectSourceReader::Gate): every later read
+//! passes its rows only once the verdict holds. This is DuckDB's plan of an uncorrelated scalar subquery, the verdict a
+//! one-row CTE. A check that is not a row check is not in `checks`; with none, the reader stays ungated.
 //!
-//! A value check takes the least message a row raises.
+//! A value check is a BOOLEAN expression over the source row (DirectRowCheck::invalid) that raises on a refused value.
 void DirectAddRowChecks(Optimizer &optimizer, DirectSourceReader &reader, const vector<DirectRowCheck> &checks);
 
 //! The solver path's checks and records: the tree evaluates them on the rows it reads, so each is kept on `decide`

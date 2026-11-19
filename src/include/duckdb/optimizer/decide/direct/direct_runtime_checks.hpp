@@ -15,15 +15,13 @@ class ExpressionBuilder;
 class Optimizer;
 struct DirectSignedValue;
 
-//! Runtime checks of direct-solve plans and the messages they raise: BOOLEAN expressions that evaluate to true for an
-//! acceptable value and raise the solver's error otherwise, and the text of those errors. None of them knows which
-//! problem class it is serving.
+//! Runtime checks of direct-solve plans: BOOLEAN expressions that evaluate to true for an acceptable value and raise
+//! the solver's error otherwise. A check raises where its value is found, and the call that raises carries its own
+//! place in the query (Expression::query_location), so no place travels as row data. None of them knows which problem
+//! class it is serving.
 
-//! A BOOLEAN expression that raises the message as an error when evaluated.
+//! A BOOLEAN expression that raises the message as an error, with no place, when evaluated.
 unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, const string &message);
-
-//! The same, with a message computed per row. The message is evaluated only on a row where the predicate is reached.
-unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, unique_ptr<Expression> message);
 
 //! A check that is true when `ok` is true and raises `error` otherwise; a NULL `ok` raises.
 unique_ptr<Expression> DirectRaiseUnless(const ExpressionBuilder &calc, unique_ptr<Expression> ok,
@@ -40,9 +38,6 @@ unique_ptr<Expression> DirectWarnIf(const ExpressionBuilder &calc, unique_ptr<Ex
 //! nonzero number there holds fewer significant bits, and a product or quotient taken below it may have become 0, so a
 //! rule that computed it from a nonzero value has lost precision and passes that to DirectWarnIf.
 ExprPtr DirectBelowNormalRange(const ExpressionBuilder &calc, const ExprPtr &value);
-
-//! A check that raises `message` as an error on a row where it is not NULL, and is true otherwise.
-unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const ExpressionBuilder &calc, const ExprPtr &message);
 
 //! What a message names for a number a plan checks, as the solver path names it (ThrowInvalidValue): the expression of
 //! the query the number stands for, as the user wrote it, and where it stands (the error points at it). One value is
@@ -67,25 +62,25 @@ void DirectNameValue(DirectNumberNames &names, const DecideSourceText &source, c
 //! Adds the name of another number to `names`: the number is made of both.
 void DirectNameMerge(DirectNumberNames &names, const DecideSourceText &source, const DirectNumberNames &other);
 
-//! The message of a number the solver refuses (NaN or infinite), NULL for a valid number; a NULL number skips what it
+//! The check of a number the solver refuses (NaN or infinite): true for a valid number, and a NULL number skips what it
 //! reaches, so it is valid. A number with a name raises where the name stands; one with none, the plan's own
-//! arithmetic, names `names.clause` past a DOUBLE (TOO_LARGE).
-ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const DirectNumberNames &names);
+//! arithmetic, raises TOO_LARGE at `names.clause`, past a DOUBLE.
+ExprPtr DirectNumberCheck(const ExpressionBuilder &calc, const ExprPtr &number, const DirectNumberNames &names);
 
-//! The message of a number the plan computes from values it checked before: past a DOUBLE it names `clause`
-//! (TOO_LARGE), as the solver path names a number it computes (AddCoefficient).
-ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const DecideClauseRef &clause);
+//! The check of a number the plan computes from values it checked before: past a DOUBLE it raises TOO_LARGE at
+//! `clause`, as the solver path does for a number it computes (AddCoefficient).
+ExprPtr DirectNumberCheck(const ExpressionBuilder &calc, const ExprPtr &number, const DecideClauseRef &clause);
 
-//! The check of a number the plan computes from values checked before it: it raises TOO_LARGE naming `clause` when
+//! The check of a number the plan computes from values checked before it: it raises TOO_LARGE at `clause` when
 //! `number` (a DOUBLE) is past the DOUBLE range, and passes a NULL.
 unique_ptr<Expression> DirectRaiseTooLarge(Optimizer &optimizer, const ExprPtr &number, const DecideClauseRef &clause);
 
 //! The same for a number the plan computes from values it checked before, which `names` calls (a name with a place
-//! raises where the number stands, as DirectNumberMessage does; one without names `names.clause`).
+//! raises where the number stands, as DirectNumberCheck does; one without names `names.clause`).
 unique_ptr<Expression> DirectRaiseNotFinite(Optimizer &optimizer, const ExprPtr &number,
                                             const DirectNumberNames &names);
 
-//! The check of a raw value of a projection: `number`, a DOUBLE column. It raises what DirectNumberMessage names.
+//! The check of a raw value of a projection: `number`, a DOUBLE column. It raises what DirectNumberCheck names.
 //! `values` are what the number is made of (with the part's `factor`). Null when they are finite constants, which no
 //! row can fail (DirectIsFiniteWhereKept).
 unique_ptr<Expression> DirectCheckNumber(Optimizer &optimizer, ColumnBinding number, const DirectNumberNames &names,

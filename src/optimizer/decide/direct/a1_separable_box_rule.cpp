@@ -457,9 +457,9 @@ private:
 	unique_ptr<Expression> OutOfRangeError(const Decision &decision, ColumnBinding value) const {
 		vector<ExprPtr> parts {calc.Constant(Value(DecideWholeNumberRangeBefore(decision.name))),
 		                       calc.Fn("printf", calc.Constant(Value("%.0f")), calc.Wrap(RoundedAnswer(value)))};
-		return DirectErrorPredicate(optimizer,
-		                            calc.Out(calc.RaiseInvalidValue(DecideValueRole::INTEGER_ANSWER,
-		                                                            calc.Fn("concat", parts), decision.declaration)));
+		return calc.Out(calc.Cast(
+		    calc.RaiseInvalidValue(DecideValueRole::INTEGER_ANSWER, calc.Fn("concat", parts), decision.declaration),
+		    LogicalType::BOOLEAN));
 	}
 
 	//! The condition every row must meet. It is true, or the row raises the error that applies: a coefficient the

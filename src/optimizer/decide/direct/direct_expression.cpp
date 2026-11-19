@@ -213,9 +213,10 @@ ExprPtr ExpressionBuilder::RaiseInvalidValue(DecideValueRole role, const string 
 	return RaiseInvalidValue(role, Constant(Value(written)), place);
 }
 ExprPtr ExpressionBuilder::RaiseInvalidValue(DecideValueRole role, const ExprPtr &written, optional_idx place) const {
-	return Fn("__internal_decide_invalid_value",
-	          {Constant(Value::INTEGER(static_cast<int32_t>(role))), written,
-	           Constant(place.IsValid() ? Value::UBIGINT(place.GetIndex()) : Value(LogicalType::UBIGINT))});
+	auto raise = Fn("__internal_decide_invalid_value", {Constant(Value::INTEGER(static_cast<int32_t>(role))), written});
+	// The call carries its own place, as a cast does; the function reads it from its expression.
+	raise->SetQueryLocation(place);
+	return raise;
 }
 ExprPtr ExpressionBuilder::IsNull(const ExprPtr &a) const {
 	auto is_null = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NULL, LogicalType::BOOLEAN);

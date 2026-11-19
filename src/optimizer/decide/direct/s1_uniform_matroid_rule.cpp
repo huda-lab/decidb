@@ -175,7 +175,7 @@ public:
 		}
 		has_lower = condition.lower || source_lower;
 		has_upper = condition.has_upper || source_upper;
-		has_score_message = condition.score.CanFail(optimizer);
+		has_score_check = condition.score.CanFail(optimizer);
 	}
 
 private:
@@ -187,7 +187,7 @@ private:
 	//! Whether a score can fail: be NaN or infinite, or the sum of the parts' scores pass a DOUBLE. A score made of
 	//! values of exact types, whose bounds sum below the range of a DOUBLE (DirectScaledMagnitude), cannot, and the
 	//! plan has no check for it.
-	bool has_score_message = false;
+	bool has_score_check = false;
 	//! Each source-valued count bound's index among the builder's group bounds; unset for a bound read per row.
 	vector<idx_t> group_bound;
 	//! P1: the row's score, and each source-valued count bound's value (unset for a bound of the group's aggregates).
@@ -243,9 +243,9 @@ private:
 			}
 			bound_columns.push_back(p1.Add(calc.Out(calc.Cast(calc.Wrap(std::move(value)), LogicalType::DOUBLE))));
 		}
-		if (has_score_message) {
-			layout.checks_below.push_back(DirectRaiseMessage(
-			    optimizer, calc, condition.score.Message(calc, optimizer, over_state, combined_score, part_scores)));
+		if (has_score_check) {
+			layout.checks_below.push_back(
+			    calc.Out(condition.score.Check(calc, optimizer, over_state, combined_score, part_scores)));
 		}
 		layout.rank_key = score_column;
 		return layout;

@@ -327,8 +327,8 @@ static DecideClauseRef AbsWrittenClause(const LogicalDecide &decide, const strin
 
 //! Refuses an argument of an ABS whose data is NaN or infinite where the ABS is read, on the rows it is read on, before
 //! the lowering turns the data into a bound on the auxiliary. The data is the sum of the argument's terms that hold no
-//! decision (`-v` in `ABS(x - v)`). A row where it is not finite raises the message every other number the model reads
-//! raises (DirectNumberMessage, as the direct-solve plans): the data, as the user wrote it, where it stands. A
+//! decision (`-v` in `ABS(x - v)`). A row where it is not finite raises the error every other number the model reads
+//! raises (DirectNumberCheck, as the direct-solve plans): the data, as the user wrote it, where it stands. A
 //! coefficient of a decision is a coefficient of the lowered row, which the solver path refuses by name already.
 static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, const Expression &argument,
                              const Expression *rows, const DecideClauseRef &clause) {
@@ -362,9 +362,9 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 	    std::isfinite(constant)) {
 		return;
 	}
-	auto message = DirectNumberMessage(calc, total, names);
+	auto check = DirectNumberCheck(calc, total, names);
 	ExprPtr kept = rows ? calc.Wrap(DirectActiveWhen(calc, rows)) : nullptr;
-	AddValueCheck(decide, calc.Out(DirectOnKeptRows(calc, kept, message)));
+	AddValueCheck(decide, calc.Out(DirectCheckOnKeptRows(calc, kept, check)));
 }
 
 // ---------------------------------------------------------------------------

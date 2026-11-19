@@ -497,21 +497,14 @@ void DecideTreeColumns::CheckData() {
 		if (!node.value_check) {
 			continue;
 		}
-		auto &rows = descent.Containers()[root].rows;
 		const auto check = node.compiled.check;
-		// The check stands for a side plan's, which DuckDB evaluates a chunk at a time: a window that raises raises
-		// what its whole evaluation meets first, as the side plan's chunk would.
+		// The check raises where it finds a value the model cannot read, as its own call
+		// (`__internal_decide_invalid_value`) does when evaluated. It stands for a side plan's, which DuckDB evaluates
+		// a chunk at a time: a window that raises raises what its whole evaluation meets first, as the side plan's
+		// chunk would.
 		auto &column = Computed(root).programs[check];
 		if (!column.window_errors.empty()) {
 			column.window_errors.begin()->second.Throw();
-		}
-		auto &messages = *column.values;
-		UnifiedVectorFormat format;
-		messages.ToUnifiedFormat(rows.size(), format);
-		for (idx_t e = 0; e < rows.size(); e++) {
-			if (format.validity.RowIsValid(format.sel->get_index(e))) {
-				throw InvalidInputException(messages.GetValue(e).ToString());
-			}
 		}
 	}
 }

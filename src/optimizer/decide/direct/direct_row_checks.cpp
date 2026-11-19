@@ -20,11 +20,11 @@ namespace duckdb {
 
 namespace {
 
-//! One check's plan over its own read of the source: an aggregate that comes to one row, whose one column is the
-//! message the check raises, NULL when it holds.
+//! One check's plan over its own read of the source: an aggregate that comes to one row, whose one column is true when
+//! the check holds on every row (a row it refuses raises where the check is evaluated).
 struct CheckPlan {
 	unique_ptr<LogicalOperator> plan;
-	ColumnBinding message;
+	ColumnBinding holds;
 };
 
 //! Builds each check as aggregates over a read of the source, pruned by the optimizer to the columns the check reads.
@@ -59,13 +59,13 @@ private:
 		return optimizer.BindAggregateFunction(name, std::move(children));
 	}
 
-	//! A value check: the least message any row raises.
+	//! A value check: every row evaluates it, and the one that finds a value the model cannot read raises.
 	CheckPlan ValueCheck(const DirectRowCheck &check) {
 		vector<unique_ptr<Expression>> aggregates;
-		aggregates.push_back(Aggregate("min", {Over(*check.invalid)}));
+		aggregates.push_back(Aggregate("bool_and", {Over(*check.invalid)}));
 		auto aggregate = DirectAggregateOver(optimizer, std::move(read.plan), {}, std::move(aggregates));
-		auto message = ColumnBinding(aggregate->aggregate_index, 0);
-		return {std::move(aggregate), message};
+		auto holds = ColumnBinding(aggregate->aggregate_index, 0);
+		return {std::move(aggregate), holds};
 	}
 };
 
@@ -78,16 +78,17 @@ void DirectAddRowChecks(Optimizer &optimizer, DirectSourceReader &reader, const 
 	ExpressionBuilder calc(optimizer.context);
 	RowCheckBuilder builder(optimizer, reader);
 	unique_ptr<LogicalOperator> verdicts;
-	vector<unique_ptr<Expression>> raised;
+	vector<unique_ptr<Expression>> checked;
 	for (auto &check : checks) {
 		auto built = builder.Build(check);
-		raised.push_back(DirectRaiseMessage(optimizer, calc, calc.Col(LogicalType::VARCHAR, built.message)));
+		// A source with no row has no value to refuse: the aggregate is NULL there and the check holds.
+		checked.push_back(calc.Out(calc.Coalesce({calc.Col(LogicalType::BOOLEAN, built.holds), calc.Bool(true)})));
 		verdicts =
 		    verdicts ? LogicalCrossProduct::Create(std::move(verdicts), std::move(built.plan)) : std::move(built.plan);
 	}
-	// One row: true, or the error of the first check that fails, in the order given.
+	// One row: true once every check has been evaluated, or the error one of them raised.
 	vector<unique_ptr<Expression>> verdict_columns;
-	verdict_columns.push_back(DirectAllHold(calc, std::move(raised)));
+	verdict_columns.push_back(DirectAllHold(calc, std::move(checked)));
 	auto verdict = make_uniq<LogicalProjection>(optimizer.binder.GenerateTableIndex(), std::move(verdict_columns));
 	verdict->children.push_back(std::move(verdicts));
 	reader.Gate(std::move(verdict));
