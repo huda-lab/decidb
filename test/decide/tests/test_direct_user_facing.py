@@ -993,7 +993,7 @@ def test_s1_null_source_bound_is_no_bound_on_both_paths(decidb_cli, cap_type):
             DECIDE x(BOOL) SUCH THAT SUM(x)<=cap MAXIMIZE SUM(score*x)
         ) q
     """
-    solver = _run(decidb_cli, sql, mode="off", expect_warnings=["'SUM(x) <= cap' constrains nothing"])
+    solver = _run(decidb_cli, sql, mode="off", expect_warnings=["'SUM(x)<=cap' constrains nothing"])
     assert _run(decidb_cli, sql, mode="require") == solver
 
 

@@ -805,8 +805,7 @@ static ClauseEdit MakeDropEdit(const SolverModel &model, const RemovalGroupInfo 
 	edit.kind = ClauseEditKind::DROP;
 	edit.edit_source = "remove_only";
 	if (group.source_clause_id < model.constraint_sources.size()) {
-		const auto &source = model.constraint_sources[group.source_clause_id];
-		edit.label = QuoteWrittenClause(source);
+		edit.label = QuoteWrittenClause(model.constraint_sources, group.source_clause_id, model.source_text);
 	} else {
 		edit.label = "constraint " + to_string(group.id);
 	}

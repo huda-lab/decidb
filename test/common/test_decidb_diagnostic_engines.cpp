@@ -184,9 +184,6 @@ SolverModel MakeNotEqualModel() {
 	source.canonical_lhs = "x";
 	source.canonical_rhs = "3";
 	source.canonical_cmp = "<>";
-	source.written_lhs = "x";
-	source.written_rhs = "3";
-	source.written_cmp = "<>";
 	m.constraint_sources.push_back(std::move(source));
 	return m;
 }
@@ -1192,7 +1189,6 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 
 		SolverModel model = MakeNotEqualModel(); // col 1 = disjunction binary, indicator_col = 1
 		model.constraint_sources[0].canonical_lhs = "SUM(x)";
-		model.constraint_sources[0].written_lhs = "SUM(x)";
 		for (char sense : {'<', '>'}) { // pin x == 3 (the forbidden value)
 			ModelConstraint pin;
 			pin.indices = {0};
@@ -1221,21 +1217,20 @@ ConstraintSourceInfo MakeSource(const string &lhs, const string &cmp, const stri
 	source.canonical_lhs = lhs;
 	source.canonical_cmp = cmp;
 	source.canonical_rhs = rhs;
-	source.written_lhs = lhs;
-	source.written_cmp = cmp;
-	source.written_rhs = rhs;
 	return source;
 }
 
-//! `x BETWEEN 18 AND 25` as two sources: the `>=` half at id 0, the `<=` half at id 1, both quoting the whole clause.
+//! `x BETWEEN 18 AND 25` as two sources: the `>=` half at id 0, the `<=` half at id 1, both quoting the whole clause
+//! from the span the BETWEEN has in the query text.
 SolverModel MakeBetweenModel() {
 	SolverModel model;
+	model.source_text.text = "x BETWEEN 18 AND 25";
+	model.source_text.spans = {0, static_cast<idx_t>(DecideSpanRole::EXPR), 0, model.source_text.text.size(), 0};
 	model.constraint_sources.push_back(MakeSource("x", ">=", "18"));
 	model.constraint_sources.push_back(MakeSource("x", "<=", "25"));
 	for (idx_t id = 0; id < 2; id++) {
 		auto &half = model.constraint_sources[id];
-		half.written_cmp = "BETWEEN";
-		half.written_rhs = "18 AND 25";
+		half.location = 0;
 		half.between_partner = 1 - id;
 		half.between_upper = id == 1;
 	}

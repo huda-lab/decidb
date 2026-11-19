@@ -32,14 +32,15 @@ inline void DecideReplaces(Expression &replacement, const Expression &replaced) 
 //! Assign stable source ids to bound comparisons before planning rewrites them.
 //! `keys` lets a reducer print its
 //! `per K` and `by (...)`; every renderer below takes it for the same reason.
-//! `text` is the query's text: each comparison's two sides are cut from it as the user wrote them.
-//! `frames` gives each frame over decisions its spelling (DecideFrameSpec::spelling).
+//! Each clause gets its span (`ConstraintSourceInfo::location`); `text` is the query's text, which renders the sides of
+//! a clause whose sides canonicalization merges, and an IN. `frames` gives each frame over decisions its spelling
+//! (DecideFrameSpec::spelling).
 vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constraints, const DecideSourceText &text,
                                                             const vector<KeyedScopeInfo> &keyed_scopes,
                                                             idx_t decide_index, const vector<DecideKey> *keys,
                                                             const vector<DecideFrameSpec> &frames);
 
-//! Rebuild canonical display templates after PlanSubqueries and canonicalization. `decide_index` tells a decision
+//! Render each clause's canonical sides after PlanSubqueries and canonicalization. `decide_index` tells a decision
 //! from data: the plan layer reprints the decision structure and quotes the data.
 //! `frames` gives each frame over decisions its spelling (DecideFrameSpec::spelling).
 void FinalizeConstraintSourceInfo(const Expression &constraints, vector<ConstraintSourceInfo> &sources,

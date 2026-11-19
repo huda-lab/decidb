@@ -122,8 +122,8 @@ DecideSourceNames PhysicalDecide::Names() const {
 }
 
 string PhysicalDecide::WrittenClause(idx_t source_clause_id) const {
-	return DecideWrittenClause(constraint_sources, DecideWrittenObjective(written_sense, written_objective),
-	                           source_clause_id);
+	return DecideWrittenClause(constraint_sources, source_text,
+	                           DecideWrittenObjective(written_sense, written_objective), source_clause_id);
 }
 
 SolverBackend PhysicalDecide::PlannedSolverBackend() const {
@@ -923,6 +923,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// `x OP const` / BETWEEN constraints; those comparisons were skipped in
 	// AnalyzeConstraint so we don't re-emit them as per-row model rows.
 	solver_input.constraint_sources = constraint_sources;
+	solver_input.source_text = source_text;
 	solver_input.objective_written = DecideWrittenObjective(written_sense, written_objective);
 	// A variable the query never explicitly lowered gets the default lower bound 0 and
 	// stays non-negative. A variable with an explicit (possibly negative) lower bound

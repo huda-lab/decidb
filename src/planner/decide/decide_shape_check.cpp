@@ -130,7 +130,7 @@ void DecideShapeCheck::CheckConstraints(const Expression &constraints,
 		idx_t source_id = DConstants::INVALID_INDEX;
 		TryParseSourceClauseTag(leaf.GetAlias(), source_id);
 		D_ASSERT(source_id < sources.size());
-		auto clause = "the SUCH THAT clause `" + QuoteWrittenClause(sources[source_id]) + "`";
+		auto clause = "the SUCH THAT clause `" + QuoteWrittenClause(sources, source_id, names.text) + "`";
 		auto &comparison = leaf.Cast<BoundComparisonExpression>();
 		CheckSide(*comparison.left, clause);
 		CheckSide(*comparison.right, clause);

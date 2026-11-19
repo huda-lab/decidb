@@ -391,10 +391,10 @@ public:
 	//! to orient, so it needs no registry -- there is exactly one of it -- but a plan
 	//! that shows what became of a constraint owes the same account of the objective.
 	//! Both are captured in Binder::CreatePlan around the single CanonicalizeObjective
-	//! call. `written_objective` is the text the user wrote (the parser's OBJECTIVE span), as a clause's
-	//! `written_lhs` is; `canonical_objective` is DeciDB's rendering of the canonical objective, which the plan's
+	//! call. `written_objective` is the text the user wrote (the parser's OBJECTIVE span), as a clause is cut by its
+	//! `location`; `canonical_objective` is DeciDB's rendering of the canonical objective, which the plan's
 	//! rewrite rows are compared with. `objective_canonical_differs` says canonicalization changed it, judged on
-	//! the renderings before and after, as a clause's `canonical_differs` is.
+	//! the renderings before and after (a clause's `canonical_differs` is reported by the canonicalizer instead).
 	string written_objective;
 	string canonical_objective;
 	bool objective_canonical_differs = false;

@@ -100,7 +100,7 @@ static NECollapse ClassifyNEConstraint(const EvaluatedConstraint &ec, idx_t num_
 //! diagnosis renders `SUM(x) <> 0` rather than an internal column.
 static string NotEqualClauseLabel(const SolverInput &input, const EvaluatedConstraint &ec) {
 	// The tag carries the index minted beside the source (RewriteNotEqual), so it is always in range.
-	return QuoteWrittenClause(input.constraint_sources[input.ne_clause_sources[ec.ne_clause_idx]]);
+	return QuoteWrittenClause(input.constraint_sources, input.ne_clause_sources[ec.ne_clause_idx], input.source_text);
 }
 
 //! One per-row `<>`, in whichever shape its own reachable range earns.

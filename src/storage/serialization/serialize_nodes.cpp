@@ -416,15 +416,12 @@ void ConstraintSourceInfo::Serialize(Serializer &serializer) const {
 	serializer.WriteProperty<ConstraintSourceRhsKind>(104, "rhs_kind", rhs_kind);
 	serializer.WritePropertyWithDefault<string>(105, "source_lhs", source_lhs);
 	serializer.WritePropertyWithDefault<string>(106, "source_rhs", source_rhs);
-	serializer.WritePropertyWithDefault<string>(107, "written_lhs", written_lhs);
-	serializer.WritePropertyWithDefault<string>(108, "written_rhs", written_rhs);
-	serializer.WritePropertyWithDefault<string>(109, "written_cmp", written_cmp);
 	serializer.WritePropertyWithDefault<bool>(110, "canonical_differs", canonical_differs, false);
 	serializer.WritePropertyWithDefault<idx_t>(111, "between_partner", between_partner, DConstants::INVALID_INDEX);
 	serializer.WritePropertyWithDefault<bool>(112, "between_upper", between_upper, false);
 	serializer.WritePropertyWithDefault<bool>(113, "source_rhs_reads_data", source_rhs_reads_data, false);
-	serializer.WritePropertyWithDefault<string>(114, "spelled_lhs", spelled_lhs);
-	serializer.WritePropertyWithDefault<string>(115, "spelled_rhs", spelled_rhs);
+	serializer.WritePropertyWithDefault<optional_idx>(116, "location", location, optional_idx());
+	serializer.WritePropertyWithDefault<optional_idx>(117, "lhs_location", lhs_location, optional_idx());
 }
 
 ConstraintSourceInfo ConstraintSourceInfo::Deserialize(Deserializer &deserializer) {
@@ -436,15 +433,12 @@ ConstraintSourceInfo ConstraintSourceInfo::Deserialize(Deserializer &deserialize
 	deserializer.ReadProperty<ConstraintSourceRhsKind>(104, "rhs_kind", result.rhs_kind);
 	deserializer.ReadPropertyWithDefault<string>(105, "source_lhs", result.source_lhs);
 	deserializer.ReadPropertyWithDefault<string>(106, "source_rhs", result.source_rhs);
-	deserializer.ReadPropertyWithDefault<string>(107, "written_lhs", result.written_lhs);
-	deserializer.ReadPropertyWithDefault<string>(108, "written_rhs", result.written_rhs);
-	deserializer.ReadPropertyWithDefault<string>(109, "written_cmp", result.written_cmp);
 	deserializer.ReadPropertyWithExplicitDefault<bool>(110, "canonical_differs", result.canonical_differs, false);
 	deserializer.ReadPropertyWithExplicitDefault<idx_t>(111, "between_partner", result.between_partner, DConstants::INVALID_INDEX);
 	deserializer.ReadPropertyWithExplicitDefault<bool>(112, "between_upper", result.between_upper, false);
 	deserializer.ReadPropertyWithExplicitDefault<bool>(113, "source_rhs_reads_data", result.source_rhs_reads_data, false);
-	deserializer.ReadPropertyWithDefault<string>(114, "spelled_lhs", result.spelled_lhs);
-	deserializer.ReadPropertyWithDefault<string>(115, "spelled_rhs", result.spelled_rhs);
+	deserializer.ReadPropertyWithExplicitDefault<optional_idx>(116, "location", result.location, optional_idx());
+	deserializer.ReadPropertyWithExplicitDefault<optional_idx>(117, "lhs_location", result.lhs_location, optional_idx());
 	return result;
 }
 

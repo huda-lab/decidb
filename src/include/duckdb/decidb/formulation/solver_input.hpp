@@ -582,6 +582,8 @@ struct SolverInput {
 	// Constraints
 	vector<EvaluatedConstraint> constraints;
 	vector<ConstraintSourceInfo> constraint_sources;
+	//! The query text the clauses' spans cut (LogicalDecide::source_text).
+	DecideSourceText source_text;
 	//! The objective as the user wrote it, sense in front (`MAXIMIZE sum(a * x)`): what a message about a number the
 	//! objective, or a row a rewrite added for it, computes names (DecideWrittenClause). Empty for no objective.
 	string objective_written;
@@ -795,8 +797,8 @@ struct SolverInput {
 //! (OBJECTIVE_ROW_TAG leaves no source id), so it names the objective.
 string DecideWrittenClause(const SolverInput &input, idx_t source_clause_id);
 //! The same, before a SolverInput holds the sources and the objective (DecideWrittenObjective).
-string DecideWrittenClause(const vector<ConstraintSourceInfo> &sources, const string &objective_written,
-                           idx_t source_clause_id);
+string DecideWrittenClause(const vector<ConstraintSourceInfo> &sources, const DecideSourceText &text,
+                           const string &objective_written, idx_t source_clause_id);
 
 //! The column box a derived constant is valid against.
 //!

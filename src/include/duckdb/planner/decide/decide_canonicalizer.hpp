@@ -245,8 +245,10 @@ public:
 
 	//! Canonicalize a whole SUCH THAT tree: AND-conjunctions plus the `when` and `per K:`
 	//! wrappers. Descends only into the constraint child of a wrapper, never into its
-	//! condition or key columns. Pure -- `constraints` is untouched.
-	unique_ptr<Expression> CanonicalizeTree(const Expression &constraints) const;
+	//! condition or key columns. Pure -- `constraints` is untouched. With `sources`, it reports in each clause's
+	//! `canonical_differs` whether canonicalization changed that clause (the clause tag names it).
+	unique_ptr<Expression> CanonicalizeTree(const Expression &constraints,
+	                                        vector<ConstraintSourceInfo> *sources = nullptr) const;
 
 	//! Canonicalize one comparison a function made after the tree was canonicalized (an ABS envelope, an L0 link, a
 	//! body definition row): the same spelling as a clause, without the shape the tree stamps on a written clause.

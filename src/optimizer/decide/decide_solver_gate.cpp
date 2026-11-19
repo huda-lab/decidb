@@ -134,7 +134,7 @@ string FirstQuadraticClause(const LogicalDecide &op, const DecideTree &tree) {
 		if (!constraint->product_groups.empty()) {
 			// A quadratic row without a source clause is an engine bug, not a query to refuse.
 			D_ASSERT(constraint->source_clause_id < op.constraint_sources.size());
-			return QuoteWrittenClause(op.constraint_sources[constraint->source_clause_id]);
+			return QuoteWrittenClause(op.constraint_sources, constraint->source_clause_id, op.source_text);
 		}
 	}
 	throw InternalException("DECIDE solver gate found no quadratic clause to name");

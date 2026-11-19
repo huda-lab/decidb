@@ -147,7 +147,7 @@ void PhysicalDecide::CheckDecisionDomains() {
 				for (const auto &bound : *bounds) {
 					if (bound.decide_var_idx == var && bound.sense != (upper ? '>' : '<') && bound.k == k &&
 					    bound.source_clause_id < constraint_sources.size()) {
-						return QuoteWrittenClause(constraint_sources[bound.source_clause_id]);
+						return QuoteWrittenClause(constraint_sources, bound.source_clause_id, source_text);
 					}
 				}
 			}

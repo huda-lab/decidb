@@ -1,4 +1,5 @@
 #include "duckdb/common/decide_source_info.hpp"
+#include "duckdb/common/exception.hpp"
 
 namespace duckdb {
 
@@ -7,12 +8,18 @@ static string AttachDecideQualifier(const string &clause, const string &qualifie
 	return qualifier.empty() ? clause : qualifier + " " + clause;
 }
 
-//! The clause as written (its canonical form where nothing was moved), without its qualifier: `lhs cmp rhs`.
-static string WrittenDecideComparison(const ConstraintSourceInfo &source) {
-	const string &lhs = source.written_lhs.empty() ? source.canonical_lhs : source.written_lhs;
-	const string &rhs = source.written_rhs.empty() ? source.canonical_rhs : source.written_rhs;
-	const string &cmp = source.written_cmp.empty() ? source.canonical_cmp : source.written_cmp;
-	return cmp.empty() || rhs.empty() ? lhs : lhs + " " + cmp + " " + rhs;
+//! The clause as canonicalization spells it, without its qualifier: `lhs cmp rhs`.
+static string CanonicalDecideComparison(const ConstraintSourceInfo &source) {
+	return source.canonical_cmp.empty() || source.canonical_rhs.empty()
+	           ? source.canonical_lhs
+	           : source.canonical_lhs + " " + source.canonical_cmp + " " + source.canonical_rhs;
+}
+
+//! The text of the expression written at `location`; `fallback` where the query text holds none.
+static string CutWrittenSide(optional_idx location, const DecideSourceText &text, const string &fallback) {
+	string cut;
+	int ignored;
+	return text.CutExpr(location, cut, ignored) ? cut : fallback;
 }
 
 static constexpr idx_t SPAN_ENTRY_SIZE = 5;
@@ -45,12 +52,43 @@ bool DecideSourceText::CutEntry(optional_idx location, DecideSpanRole role, stri
 	return true;
 }
 
-string QuoteWrittenClause(const ConstraintSourceInfo &source) {
-	return AttachDecideQualifier(WrittenDecideComparison(source), source.qualifier);
+string QuoteWrittenClause(const vector<ConstraintSourceInfo> &sources, idx_t source_clause_id,
+                          const DecideSourceText &text) {
+	auto &source = sources[source_clause_id];
+	string clause;
+	int ignored;
+	if (!text.CutExpr(source.location, clause, ignored)) {
+		clause = CanonicalDecideComparison(source);
+		// Without the text a BETWEEN reads its sides off its two halves: `x >= 1` and `x <= 3` are `x BETWEEN 1 AND 3`.
+		if (source.between_partner != DConstants::INVALID_INDEX) {
+			auto &lower = source.between_upper ? sources[source.between_partner] : source;
+			auto &upper = source.between_upper ? source : sources[source.between_partner];
+			clause = lower.canonical_lhs + " BETWEEN " + lower.canonical_rhs + " AND " + upper.canonical_rhs;
+		}
+	}
+	return AttachDecideQualifier(clause, source.qualifier);
 }
 
 string QuoteEditedClause(const ConstraintSourceInfo *source, const string &lhs, const string &cmp, const string &rhs) {
 	return AttachDecideQualifier(lhs + " " + cmp + " " + rhs, source ? source->qualifier : string());
+}
+
+string QuoteCanonicalLhs(const ConstraintSourceInfo &source, const DecideSourceText &text) {
+	return CutWrittenSide(source.lhs_location, text, source.canonical_lhs);
+}
+
+string QuoteClauseLhs(const ConstraintSourceInfo &source, const DecideSourceText &text) {
+	return source.source_lhs.empty() ? QuoteCanonicalLhs(source, text) : source.source_lhs;
+}
+
+optional_idx DecideClauseLocation(const vector<ConstraintSourceInfo> &sources, idx_t source_clause_id) {
+	return source_clause_id < sources.size() ? sources[source_clause_id].location : optional_idx();
+}
+
+unordered_map<string, string> DecideClauseErrorInfo(const vector<ConstraintSourceInfo> &sources,
+                                                    idx_t source_clause_id) {
+	auto location = DecideClauseLocation(sources, source_clause_id);
+	return location.IsValid() ? Exception::InitializeExtraInfo(location) : unordered_map<string, string>();
 }
 
 } // namespace duckdb

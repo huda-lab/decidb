@@ -316,7 +316,7 @@ static string AbsWrittenClause(const LogicalDecide &decide, const string &clause
 	idx_t source_clause_id;
 	if (TryParseSourceClauseTag(clause_alias, source_clause_id) &&
 	    source_clause_id < decide.constraint_sources.size()) {
-		return QuoteWrittenClause(decide.constraint_sources[source_clause_id]);
+		return QuoteWrittenClause(decide.constraint_sources, source_clause_id, decide.source_text);
 	}
 	if (HasDecideTag(clause_alias, OBJECTIVE_ROW_TAG)) {
 		return DecideWrittenObjective(decide.written_sense, decide.written_objective);

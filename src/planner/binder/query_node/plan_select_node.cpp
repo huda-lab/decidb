@@ -186,7 +186,8 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 			// The algebra of every clause, judged once on the one spelling canonicalization wrote.
 			DecideShapeCheck shape_check(context, statement.decide_index, message_names);
 			if (statement.decide_constraints) {
-				statement.decide_constraints = canonicalizer.CanonicalizeTree(*statement.decide_constraints);
+				statement.decide_constraints =
+				    canonicalizer.CanonicalizeTree(*statement.decide_constraints, &statement.decide_constraint_sources);
 				canonicalizer.PlaceFrames(*statement.decide_constraints, frame_placement);
 				canonicalizer.BuildConstraintSignatures(*statement.decide_constraints, signatures);
 				canonicalizer.VerifyCanonical(*statement.decide_constraints);

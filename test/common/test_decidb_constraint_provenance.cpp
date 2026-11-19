@@ -227,9 +227,10 @@ duckdb::unique_ptr<Expression> TaggedRow(idx_t source_id, int64_t n) {
 	return std::move(row);
 }
 
+//! A clause with no span, which a plan quotes by its canonical rendering.
 ConstraintSourceInfo WrittenClause(const string &text) {
 	ConstraintSourceInfo source;
-	source.written_lhs = text;
+	source.canonical_lhs = text;
 	return source;
 }
 
@@ -276,14 +277,13 @@ TEST_CASE("A plan lists a clause by its source id, wherever the walk meets its r
 		CHECK(unattributed.empty());
 	}
 	SECTION("a BETWEEN prints its lower half first even when the walk meets the upper half first") {
-		ConstraintSourceInfo lower = WrittenClause("x BETWEEN 1 AND 3");
-		lower.spelled_lhs = "x";
+		ConstraintSourceInfo lower = WrittenClause("x");
 		lower.canonical_cmp = ">=";
-		lower.spelled_rhs = "1";
+		lower.canonical_rhs = "1";
 		lower.between_partner = 1;
 		ConstraintSourceInfo upper = lower;
 		upper.canonical_cmp = "<=";
-		upper.spelled_rhs = "3";
+		upper.canonical_rhs = "3";
 		upper.between_partner = 0;
 		upper.between_upper = true;
 		duckdb::vector<duckdb::unique_ptr<Expression>> rows;

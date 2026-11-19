@@ -1531,21 +1531,6 @@
         "type": "string"
       },
       {
-        "id": 107,
-        "name": "written_lhs",
-        "type": "string"
-      },
-      {
-        "id": 108,
-        "name": "written_rhs",
-        "type": "string"
-      },
-      {
-        "id": 109,
-        "name": "written_cmp",
-        "type": "string"
-      },
-      {
         "id": 110,
         "name": "canonical_differs",
         "type": "bool",
@@ -1570,14 +1555,16 @@
         "default": "false"
       },
       {
-        "id": 114,
-        "name": "spelled_lhs",
-        "type": "string"
+        "id": 116,
+        "name": "location",
+        "type": "optional_idx",
+        "default": "optional_idx()"
       },
       {
-        "id": 115,
-        "name": "spelled_rhs",
-        "type": "string"
+        "id": 117,
+        "name": "lhs_location",
+        "type": "optional_idx",
+        "default": "optional_idx()"
       }
     ],
     "pointer_type": "none"

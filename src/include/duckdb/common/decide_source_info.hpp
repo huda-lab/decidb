@@ -8,6 +8,8 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/optional_idx.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include <map>
 
 namespace duckdb {
@@ -101,73 +103,44 @@ enum class ConstraintSourceRhsKind : uint8_t {
 	DATA_EXPRESSION = 1
 };
 
-//! Stable, solver-neutral display provenance for one canonical source comparison.
-//! The vector that owns these entries is indexed by source_clause_id.
+//! One clause of the DECIDE tail, indexed by source_clause_id: where the user wrote it and what canonicalization made
+//! of it. The clause's text is not kept: it is cut from the query by its span (`DecideSourceText`), as a compiler cuts
+//! a diagnostic's source line, and a clause's location is the one a later stage points an error at.
 struct ConstraintSourceInfo {
-	//! Canonical user-facing pieces after canonicalization: the canonical clause, with each term canonicalization only
-	//! respelled quoted as written (`x * w` stays `x * w`), so a diagnosis edits text the user can find.
+	//! The clause's span: the query location of its comparison (an IN's own; a BETWEEN's, which its two halves share),
+	//! as `Expression::query_location`. `DecideSourceText::CutExpr` cuts the clause as written from it. Invalid for a
+	//! clause the parser gave no location.
+	optional_idx location;
+	//! The span of the canonical left side: where the user wrote the term canonicalization left there, or respelled
+	//! (`x * w` canonicalizes to `w * x` and keeps the span of `x * w`), so a diagnosis edits text the user can find.
+	//! Invalid for a side canonicalization built.
+	optional_idx lhs_location;
+	//! The clause after canonicalization, as a plan shows the canonical layer: every product in the one spelling
+	//! (`w * x`) and the decision structure reprinted. The right side is data, so a located node is cut as written.
 	string canonical_lhs;
 	string canonical_rhs;
-	//! The two sides as canonicalization spells them, every product in the one spelling (`w * x`): the canonical layer
-	//! a plan shows. They differ from canonical_lhs/rhs only in the respelled terms.
-	string spelled_lhs;
-	string spelled_rhs;
-	//! The comparison operator after canonicalization. Stored beside the two sides
-	//! because canonicalization may flip it when it moves a term across the relation,
-	//! and a plan that shows the canonical layer has to show the flipped operator too.
+	//! The comparison operator after canonicalization, which may flip when a term moves across the relation.
 	string canonical_cmp;
 	string qualifier;
 	ConstraintSourceRhsKind rhs_kind = ConstraintSourceRhsKind::NUMERIC_FALLBACK;
-	//! The clause as WRITTEN, captured before canonicalization moved anything.
-	//!
-	//! Canonicalization is free to move a decision-bearing term across the
-	//! comparison, and usually there is nothing to see: `SUM(x) >= 100` is already
-	//! canonical, so re-rendering the canonical tree reproduces what the user typed.
-	//! But a bound that CONTAINS a decision genuinely has to move --
-	//! `ship <= capacity * open` becomes `ship - capacity * open <= 0` -- and
-	//! re-rendering then shows the user algebra they never wrote, against a clause
-	//! they cannot find in their own query.
-	//!
-	//! These two fields keep the written spelling so a diagnosis can quote it. The
-	//! offset a repair computes is valid against EITHER form: moving a term across
-	//! the comparison does not change what adding a constant to the bound means, so
-	//! `<canonical_rhs> + d` and `<source_rhs> + d` relax by the same amount.
-	//! Empty when the source and canonical forms agree, which is the common case.
+	//! Whether canonicalization changed the clause, as the canonicalizer reports it (DecideCanonicalizer::
+	//! CanonicalizeTree), so a plan shows the canonical layer under the written one.
+	bool canonical_differs = false;
+	//! The two sides of a clause whose sides BOTH read a decision (`ship <= capacity * open`), as DeciDB renders them
+	//! before canonicalization; empty for any other clause. Canonicalization has to merge such sides
+	//! (`ship - capacity * open <= 0`), a clause the query does not contain, against a bound that is not in it either,
+	//! so a diagnosis quotes these. They are DeciDB's rendering, not the query text: an edit pastes back as SQL meaning
+	//! the same clause, so `sum(x) by ()` quotes as `sum(x)`.
 	string source_lhs;
 	string source_rhs;
 	//! Whether `source_rhs` reads data. What canonicalization leaves of such a bound can be a literal
 	//! (`ship - capacity * open <= 0`), and the repair tier follows the bound the user wrote, not that literal.
 	bool source_rhs_reads_data = false;
-
-	//! The clause exactly as WRITTEN, recorded unconditionally for plan display.
-	//!
-	//! `source_lhs`/`source_rhs` above answer a narrower question -- "should a repair
-	//! quote the written form instead of the canonical one?" -- so they are populated
-	//! only for the one rewrite a user cannot recognize, and cleared again when the
-	//! two forms agree. EXPLAIN needs the opposite: the written spelling for EVERY
-	//! clause, so a plan can show what became of it. Rendered once in
-	//! `InitializeConstraintSourceInfo` and assigned to both, since it is one
-	//! spelling serving two readers rather than two concepts.
-	string written_lhs;
-	string written_rhs;
-	//! Whether canonicalization changed the clause, so a plan shows the canonical layer under the written one. The
-	//! written text is what the user typed (`SUM(x)`, `x::INT`), which DeciDB's rendering of the canonical clause
-	//! spells differently, so the two cannot be compared as strings: FinalizeConstraintSourceInfo compares the
-	//! renderings of the clause before and after canonicalization instead.
-	bool canonical_differs = false;
-	//! DeciDB's rendering of the two sides before canonicalization: scratch between InitializeConstraintSourceInfo and
-	//! FinalizeConstraintSourceInfo, empty after it and not serialized.
-	string rendered_lhs;
-	string rendered_rhs;
-	//! The comparison operator as written (`<=`, `>=`, `=`, `<>`). Kept beside the
-	//! two sides because canonicalization may flip it along with them.
-	string written_cmp;
 	//! The other half of a BETWEEN (the Composite pattern: one written clause, two comparisons). The binder splits
 	//! `x BETWEEN lo AND hi` into `x >= lo` and `x <= hi`. Each half keeps its own source id, because the canonical
-	//! text, the bound kind and the source spelling above are written once per id and the halves differ in them.
-	//! Both halves link to each other, `between_upper` tells them apart, and their `written_*` hold the whole clause
-	//! (`x`, `BETWEEN`, `lo AND hi`), so a message that quotes either quotes what the user wrote. INVALID_INDEX for a
-	//! clause that is not a BETWEEN half.
+	//! text and the bound kind are written once per id and the halves differ in them. Both halves link to each other
+	//! and share the BETWEEN's `location`, so a message that quotes either quotes what the user wrote;
+	//! `between_upper` tells them apart. INVALID_INDEX for a clause that is not a BETWEEN half.
 	idx_t between_partner = DConstants::INVALID_INDEX;
 	bool between_upper = false;
 
@@ -176,13 +149,33 @@ struct ConstraintSourceInfo {
 	static ConstraintSourceInfo Deserialize(Deserializer &deserializer);
 };
 
-//! The clause as the user wrote it (its canonical form where nothing was moved), `when c per K:` qualifier in front.
-//! Every message that quotes a clause goes through this or QuoteEditedClause, so none can quote one without its
-//! qualifier (Information Expert: the source holds the qualifier).
-string QuoteWrittenClause(const ConstraintSourceInfo &source);
+//! The clause `source_clause_id` as the user wrote it, `when c per K:` qualifier in front. Every message that quotes a
+//! clause goes through this or QuoteEditedClause, so none can quote one without its qualifier (Information Expert: the
+//! source holds the qualifier). A clause the query text holds no span for (a statement built without it) quotes its
+//! canonical rendering, a BETWEEN its two halves' as one clause.
+string QuoteWrittenClause(const vector<ConstraintSourceInfo> &sources, idx_t source_clause_id,
+                          const DecideSourceText &text);
 
 //! A clause DeciDB edited: `lhs cmp rhs` with the clause's qualifier in front. A null source (a row with no clause)
 //! quotes bare.
 string QuoteEditedClause(const ConstraintSourceInfo *source, const string &lhs, const string &cmp, const string &rhs);
+
+//! The left side of a clause after canonicalization, as a message quotes it: as written where canonicalization left or
+//! respelled it, as it spells it where it built it.
+string QuoteCanonicalLhs(const ConstraintSourceInfo &source, const DecideSourceText &text);
+
+//! The left side of a clause as an edit quotes it: QuoteCanonicalLhs, except that a clause whose sides canonicalization
+//! merged quotes the left side it was written with (`source_lhs`).
+string QuoteClauseLhs(const ConstraintSourceInfo &source, const DecideSourceText &text);
+
+//! Where a later stage points an error about the clause `source_clause_id`: its span, invalid for an id no clause owns
+//! (the objective's, a row no clause claims) or a clause with no location.
+optional_idx DecideClauseLocation(const vector<ConstraintSourceInfo> &sources, idx_t source_clause_id);
+
+//! The extra info of an exception about the clause `source_clause_id`, so DuckDB prints the caret under its span
+//! (`Exception::InitializeExtraInfo`; `ClientContext::ProcessError` adds the `LINE n:` block). Empty where the clause
+//! has no span.
+unordered_map<string, string> DecideClauseErrorInfo(const vector<ConstraintSourceInfo> &sources,
+                                                    idx_t source_clause_id);
 
 } // namespace duckdb

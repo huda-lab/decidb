@@ -1732,11 +1732,45 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTreeInternal(const Expre
 	return constraints.Copy();
 }
 
-unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTree(const Expression &constraints) const {
+//! Whether canonicalization changed each clause: the comparison of `canonical` that carries a source clause tag against
+//! the one of `written` that carries the same tag, on the bound tree. A clause the canonicalizer leaves alone comes
+//! back equal.
+static void ReportChangedClauses(const Expression &written, const Expression &canonical,
+                                 vector<ConstraintSourceInfo> &sources) {
+	unordered_map<idx_t, const BoundComparisonExpression *> before;
+	ForEachConstraintLeaf(written, [&](const Expression &leaf) {
+		idx_t source_id = DConstants::INVALID_INDEX;
+		if (leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON &&
+		    TryParseSourceClauseTag(leaf.GetAlias(), source_id)) {
+			before[source_id] = &leaf.Cast<BoundComparisonExpression>();
+		}
+	});
+	ForEachConstraintLeaf(canonical, [&](const Expression &leaf) {
+		idx_t source_id = DConstants::INVALID_INDEX;
+		if (leaf.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON ||
+		    !TryParseSourceClauseTag(leaf.GetAlias(), source_id) || source_id >= sources.size()) {
+			return;
+		}
+		auto found = before.find(source_id);
+		if (found == before.end()) {
+			return;
+		}
+		auto &after = leaf.Cast<BoundComparisonExpression>();
+		auto &was = *found->second;
+		sources[source_id].canonical_differs = was.type != after.type || !Expression::Equals(*was.left, *after.left) ||
+		                                       !Expression::Equals(*was.right, *after.right);
+	});
+}
+
+unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTree(const Expression &constraints,
+                                                             vector<ConstraintSourceInfo> *sources) const {
 	auto desugared = DesugarNorms(constraints);
 	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : constraints);
 	auto result = CanonicalizeTreeInternal(*written);
 	ValidateCanonicalTree(*result);
+	if (sources) {
+		ReportChangedClauses(constraints, *result, *sources);
+	}
 	return result;
 }
 

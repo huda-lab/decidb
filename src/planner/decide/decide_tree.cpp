@@ -817,7 +817,7 @@ private:
 	//! objective.
 	string RootText(idx_t source) const {
 		if (source < op.constraint_sources.size()) {
-			return QuoteWrittenClause(op.constraint_sources[source]);
+			return QuoteWrittenClause(op.constraint_sources, source, op.source_text);
 		}
 		return DecideWrittenObjective(op.written_sense, op.written_objective);
 	}

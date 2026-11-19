@@ -29,16 +29,16 @@ double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint, const v
 	return offset;
 }
 
-string DecideWrittenClause(const vector<ConstraintSourceInfo> &sources, const string &objective_written,
-                           idx_t source_clause_id) {
+string DecideWrittenClause(const vector<ConstraintSourceInfo> &sources, const DecideSourceText &text,
+                           const string &objective_written, idx_t source_clause_id) {
 	if (source_clause_id < sources.size()) {
-		return QuoteWrittenClause(sources[source_clause_id]);
+		return QuoteWrittenClause(sources, source_clause_id, text);
 	}
 	return objective_written;
 }
 
 string DecideWrittenClause(const SolverInput &input, idx_t source_clause_id) {
-	return DecideWrittenClause(input.constraint_sources, input.objective_written, source_clause_id);
+	return DecideWrittenClause(input.constraint_sources, input.source_text, input.objective_written, source_clause_id);
 }
 
 static uint64_t PackQKey(int row, int col) {
@@ -1389,6 +1389,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
 	// Moved last: every row above names its clause from them (DecideWrittenClause).
 	model.constraint_sources = std::move(input.constraint_sources);
+	model.source_text = std::move(input.source_text);
 	return model;
 }
 

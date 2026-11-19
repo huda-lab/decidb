@@ -505,8 +505,8 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 		REQUIRE(after->variable_scopes[i].keyed_scope_idx == before->variable_scopes[i].keyed_scope_idx);
 	}
 
-	// Display provenance, including the source_lhs/source_rhs pair the old serializer
-	// never wrote at all.
+	// Display provenance: the span of each clause and of its canonical left side, and the sides canonicalization
+	// merged.
 	REQUIRE(after->constraint_sources.size() == before->constraint_sources.size());
 	REQUIRE(!after->constraint_sources.empty());
 	bool saw_written_form = false;
@@ -519,13 +519,16 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 		REQUIRE(a.canonical_cmp == b.canonical_cmp);
 		REQUIRE(a.qualifier == b.qualifier);
 		REQUIRE(a.rhs_kind == b.rhs_kind);
+		REQUIRE(a.canonical_differs == b.canonical_differs);
 		REQUIRE(a.source_lhs == b.source_lhs);
 		REQUIRE(a.source_rhs == b.source_rhs);
-		REQUIRE(a.written_lhs == b.written_lhs);
-		REQUIRE(a.written_rhs == b.written_rhs);
-		REQUIRE(a.written_cmp == b.written_cmp);
+		REQUIRE(a.source_rhs_reads_data == b.source_rhs_reads_data);
+		REQUIRE(a.location == b.location);
+		REQUIRE(a.lhs_location == b.lhs_location);
 		REQUIRE(a.between_partner == b.between_partner);
 		REQUIRE(a.between_upper == b.between_upper);
+		// Every clause of this query was written, so it has a span.
+		REQUIRE(b.location.IsValid());
 		saw_written_form = saw_written_form || !b.source_rhs.empty();
 		saw_between_halves = saw_between_halves || b.between_partner != DConstants::INVALID_INDEX;
 	}
@@ -549,6 +552,41 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 	REQUIRE(after->decide_variables.size() == before->decide_variables.size());
 	REQUIRE(after->decide_constraints != nullptr);
 	REQUIRE(after->decide_objective != nullptr);
+}
+
+TEST_CASE("A clause is stored with its span, and the canonicalizer reports whether it changed it", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	SetUp(con);
+
+	auto plan = con.ExtractPlan("SELECT s_key, ship FROM site DECIDE ship(INT) "
+	                            "SUCH THAT SUM(ship) <= 100 AND 50 >= SUM(ship) AND ship BETWEEN 1 AND 5 "
+	                            "MAXIMIZE SUM(ship)");
+	auto *decide = FindDecide(*plan);
+	REQUIRE(decide != nullptr);
+	auto &sources = decide->constraint_sources;
+	REQUIRE(sources.size() == 4);
+	// The span cuts the clause as written, whatever its canonical form (`50 >= SUM(ship)` is `SUM(ship) <= 50`).
+	REQUIRE(QuoteWrittenClause(sources, 0, decide->source_text) == "SUM(ship) <= 100");
+	REQUIRE(QuoteWrittenClause(sources, 1, decide->source_text) == "50 >= SUM(ship)");
+	// The two halves of a BETWEEN share the BETWEEN's span.
+	REQUIRE(QuoteWrittenClause(sources, 2, decide->source_text) == "ship BETWEEN 1 AND 5");
+	REQUIRE(QuoteWrittenClause(sources, 3, decide->source_text) == "ship BETWEEN 1 AND 5");
+	REQUIRE(sources[2].location == sources[3].location);
+	// A clause canonicalization left alone, and one it turned around.
+	REQUIRE(!sources[0].canonical_differs);
+	REQUIRE(sources[1].canonical_differs);
+	REQUIRE(sources[1].canonical_cmp == "<=");
+
+	// A later stage points an error at the clause: DuckDB prints the caret from the `position` of the extra info.
+	auto location = DecideClauseLocation(sources, 1);
+	REQUIRE(location.IsValid());
+	REQUIRE(location == sources[1].location);
+	auto info = DecideClauseErrorInfo(sources, 1);
+	REQUIRE(info["position"] == to_string(location.GetIndex()));
+	// No clause owns the objective's rows, so there is nowhere to point.
+	REQUIRE(!DecideClauseLocation(sources, DConstants::INVALID_INDEX).IsValid());
+	REQUIRE(DecideClauseErrorInfo(sources, DConstants::INVALID_INDEX).empty());
 }
 
 TEST_CASE("Keyed declarations share one scope per key and survive a serialization round trip", "[decidb]") {

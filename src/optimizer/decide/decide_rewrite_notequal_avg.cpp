@@ -58,8 +58,9 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 		// its F helper (RewriteBilinear tags it before this pass); a product or a power of decisions still here has no
 		// formulation, and dropping its terms would change the answer.
 		if (!splitter.IsLinear(*comp.left)) {
-			throw BinderException(comp, "DECIDE: <> over a product or a power of decisions is not supported yet: %s",
-			                      QuoteWrittenClause(decide.constraint_sources[SourceClauseOf(comp, decide)]));
+			throw BinderException(
+			    comp, "DECIDE: <> over a product or a power of decisions is not supported yet: %s",
+			    QuoteWrittenClause(decide.constraint_sources, SourceClauseOf(comp, decide), decide.source_text));
 		}
 		// No indicator variable. Whether a `<>` even HAS a disjunction to switch is a
 		// question about evaluated data — a range that lies wholly on one side of `K`

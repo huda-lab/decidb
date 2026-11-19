@@ -446,13 +446,9 @@ string SourceAwareLhs(const SolverModel &model, const ModelConstraint &row, cons
 	if (!source) {
 		return FormatLhs(row, columns);
 	}
-	// The written spelling wins when canonicalization moved a term across the
-	// comparison, so a diagnosis names a clause the user can find in their query
-	// rather than the algebra stage 04 produced. Only set when the two forms differ.
-	if (!source->source_lhs.empty()) {
-		return source->source_lhs;
-	}
-	return !source->canonical_lhs.empty() ? source->canonical_lhs : FormatLhs(row, columns);
+	// The written spelling wins when canonicalization merged the sides of the clause (`source_lhs`), so a diagnosis
+	// names a clause the user can find in their query rather than the algebra stage 04 produced.
+	return !source->canonical_lhs.empty() ? QuoteClauseLhs(*source, model.source_text) : FormatLhs(row, columns);
 }
 
 //! The bound to quote beside SourceAwareLhs. When the written spelling is in play the
@@ -467,7 +463,8 @@ string SourceWrittenRhs(const SolverModel &model, const ConstraintProvenance &pr
 string SourceAwareQuadraticLhs(const SolverModel &model, const SolverModel::QuadraticConstraint &row,
                                const vector<ColumnProvenance> &columns) {
 	auto source = FindConstraintSource(model, row.provenance);
-	return source && !source->canonical_lhs.empty() ? source->canonical_lhs : FormatQuadraticLhs(row, columns);
+	return source && !source->canonical_lhs.empty() ? QuoteCanonicalLhs(*source, model.source_text)
+	                                                : FormatQuadraticLhs(row, columns);
 }
 
 string SourceAwareRhs(const SolverModel &model, const ConstraintProvenance &provenance, double fallback) {
@@ -512,8 +509,8 @@ static string MakeClauseLabel(const ConstraintProvenance &prov, const Constraint
 }
 
 //! The left side a half is edited and quoted with.
-static const string &HalfLhs(const ConstraintSourceInfo &source) {
-	return source.source_lhs.empty() ? source.canonical_lhs : source.source_lhs;
+static string HalfLhs(const SolverModel &model, const ConstraintSourceInfo &source) {
+	return QuoteClauseLhs(source, model.source_text);
 }
 
 //! The bound of a half as the clause states it, for the end of a range an edit leaves where it is.
@@ -527,10 +524,10 @@ bool IsRangeEnd(const SolverModel &model, idx_t source_clause_id, char sense) {
 	}
 	auto &source = model.constraint_sources[source_clause_id];
 	if (source.between_partner == DConstants::INVALID_INDEX) {
-		return source.written_cmp == "=" && sense != '=';
+		return source.canonical_cmp == "=" && sense != '=';
 	}
 	// The halves read as one range when they share a left side and each bounds the side its half names.
-	return HalfLhs(source) == HalfLhs(model.constraint_sources[source.between_partner]) &&
+	return HalfLhs(model, source) == HalfLhs(model, model.constraint_sources[source.between_partner]) &&
 	       sense == (source.between_upper ? '<' : '>');
 }
 
@@ -569,7 +566,7 @@ vector<ClauseEdit> SpellRangeEdits(vector<ClauseEdit> edits, const SolverModel &
 			                  : model.constraint_sources[lower.between_partner];
 			ranges.push_back({out.size(), root, edit.moved.lhs, HalfBound(lower), HalfBound(upper)});
 			found = ranges.size() - 1;
-			edit.label = QuoteWrittenClause(source);
+			edit.label = QuoteWrittenClause(model.constraint_sources, id, model.source_text);
 			out.push_back(std::move(edit));
 		} else {
 			out[ranges[found].at].amount += edit.amount;
@@ -683,7 +680,7 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model, co
 	auto record = [&](const ConstraintProvenance &prov, const string &lhs, double rhs, char sense) {
 		ClauseEdit base;
 		base.label = IsRangeEnd(model, prov.source_clause_id, sense)
-		                 ? QuoteWrittenClause(*FindConstraintSource(model, prov))
+		                 ? QuoteWrittenClause(model.constraint_sources, prov.source_clause_id, model.source_text)
 		                 : MakeClauseLabel(prov, FindConstraintSource(model, prov), lhs, rhs, sense);
 		base.group = FormatPerGroupKey(model, prov.group_name);
 		for (auto &finding : FanOutByClass(std::move(base), prov, model, expanded)) {

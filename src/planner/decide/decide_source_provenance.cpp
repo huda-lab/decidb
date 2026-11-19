@@ -647,18 +647,10 @@ static bool ReadsRowData(const Expression &expr, idx_t decide_index) {
 	return reads;
 }
 
-//! Link the two halves of `input BETWEEN lo AND hi` into the clause the user wrote: each points at the other, and both
-//! carry the whole clause as their written sides. The sides come from the text the parser kept (`input`, `lo AND hi`);
-//! without it (a macro argument was substituted into the tail), from the halves' own rendered sides.
-static void LinkBetweenHalves(ConstraintSourceInfo &lower, ConstraintSourceInfo &upper, idx_t lower_id, idx_t upper_id,
-                              const string *input, const string *bounds) {
-	string whole_input = input ? *input : lower.written_lhs;
-	string whole_bounds = bounds ? *bounds : lower.written_rhs + " AND " + upper.written_rhs;
-	for (auto *half : {&lower, &upper}) {
-		half->written_lhs = whole_input;
-		half->written_cmp = "BETWEEN";
-		half->written_rhs = whole_bounds;
-	}
+//! Link the two halves of `input BETWEEN lo AND hi` into the clause the user wrote: each points at the other. Both
+//! carry the BETWEEN's location, so the clause is quoted whole.
+static void LinkBetweenHalves(ConstraintSourceInfo &lower, ConstraintSourceInfo &upper, idx_t lower_id,
+                              idx_t upper_id) {
 	lower.between_partner = upper_id;
 	upper.between_partner = lower_id;
 	upper.between_upper = true;
@@ -669,12 +661,9 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
                                                             idx_t decide_index, const vector<DecideKey> *keys,
                                                             const vector<DecideFrameSpec> &frames) {
 	vector<ConstraintSourceInfo> result;
-	// DeciDB's own rendering of a side, and the clause as the user wrote it: a message quotes every located node.
 	RenderContext ctx {text, keyed_scopes, keys};
 	ctx.decide_index = decide_index;
 	ctx.frames = &frames;
-	auto written_ctx = ctx;
-	written_ctx.written = true;
 	// The `>=` half of the BETWEEN being visited: its `<=` half is the next comparison the walk reaches.
 	idx_t lower_half = DConstants::INVALID_INDEX;
 	VisitSourceComparisons(constraints, ctx, DecideEnclosingScope(),
@@ -685,50 +674,26 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 		                       auto alias = cmp.GetAlias();
 		                       AddDecideTag(alias, MakeSourceClauseTag(source_id));
 		                       cmp.SetAlias(std::move(alias));
-		                       // Rendered HERE, on the bound-but-not-yet-canonical tree, because
-		                       // this is the last point at which the written spelling still
-		                       // exists -- but only for the one rewrite that leaves algebra the
-		                       // user cannot recognize, which is when BOTH sides bear decisions.
-		                       //
-		                       // That is the case the canonicalizer cannot resolve by moving a
-		                       // side: it has to MERGE them, and `ship <= capacity * open`
-		                       // becomes `ship - capacity * open <= 0` -- a clause the query
-		                       // does not contain, against a literal bound that is not in it
-		                       // either.
-		                       //
-		                       // When only one side bears decisions the rewrite is a clean move
-		                       // and the leftover bound folds into something BETTER than what
-		                       // was written: `(SELECT 7) >= x + 2` becomes `x <= 5`, turning an
-		                       // opaque subquery into a number the user can edit. Quoting the
-		                       // written form there would take that away, so this stays quiet.
-		                       //
-		                       // EXPLAIN asks a wider question than a repair does -- it wants
-		                       // the written spelling of EVERY clause, so a plan can show what
-		                       // became of it -- so the render happens unconditionally and the
-		                       // narrower diagnostic signal is assigned from it.
+		                       // The last point at which the clause is as written: whether canonicalization has to
+		                       // merge the sides. That is the one rewrite that leaves algebra the user cannot
+		                       // recognize, when BOTH sides bear decisions: `ship <= capacity * open`
+		                       // becomes `ship - capacity * open <= 0`, a clause the query does not contain, against a
+		                       // literal bound that is not in it either. When only one side bears decisions the
+		                       // rewrite is a clean move and the leftover bound folds into something BETTER than what
+		                       // was written: `(SELECT 7) >= x + 2` becomes `x <= 5`, turning an opaque subquery into a
+		                       // number the user can edit.
 		                       ConstraintSourceInfo info;
-		                       // A scope written in front belongs to the clause as written:
-		                       // canonicalization drops the `per K:` of a clause in the
-		                       // aggregate shape, which still holds (its scope checks).
-		                       info.rendered_lhs = RenderSource(*cmp.left, ctx);
-		                       info.rendered_rhs = RenderSource(*cmp.right, ctx);
-		                       info.written_lhs = RenderSource(*cmp.left, written_ctx);
-		                       info.written_rhs = RenderSource(*cmp.right, written_ctx);
-		                       info.written_cmp = DecideComparisonOperator(cmp.type);
+		                       // A scope written in front belongs to the clause as written: canonicalization drops the
+		                       // `per K:` of a clause in the aggregate shape, which still holds (its scope checks).
 		                       info.qualifier = qualifier;
+		                       info.location = cmp.GetQueryLocation();
 		                       if (ReferencesDecideVariable(*cmp.left, decide_index) &&
 		                           ReferencesDecideVariable(*cmp.right, decide_index)) {
 			                       // What an edit quotes stays DeciDB's own rendering.
-			                       info.source_lhs = info.rendered_lhs;
-			                       info.source_rhs = info.rendered_rhs;
+			                       info.source_lhs = RenderSource(*cmp.left, ctx);
+			                       info.source_rhs = RenderSource(*cmp.right, ctx);
 			                       info.source_rhs_reads_data = ReadsRowData(*cmp.right, decide_index);
 		                       }
-		                       // The halves of a BETWEEN carry its location, not their sides': the whole clause is the
-		                       // input and the text from the lower bound through the upper one.
-		                       string left, right;
-		                       bool cut = (between_lower || between_upper) &&
-		                                  text.Cut(cmp.GetQueryLocation(), DecideSpanRole::BETWEEN_INPUT, left) &&
-		                                  text.Cut(cmp.GetQueryLocation(), DecideSpanRole::BETWEEN_BOUNDS, right);
 		                       if (between_lower) {
 			                       lower_half = source_id;
 		                       } else if (between_upper) {
@@ -736,8 +701,7 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 				                       throw InternalException("DECIDE: the upper half of a BETWEEN came without "
 				                                               "its lower half; the binder emits them in order");
 			                       }
-			                       LinkBetweenHalves(result[lower_half], info, lower_half, source_id,
-			                                         cut ? &left : nullptr, cut ? &right : nullptr);
+			                       LinkBetweenHalves(result[lower_half], info, lower_half, source_id);
 			                       lower_half = DConstants::INVALID_INDEX;
 		                       }
 		                       result.push_back(std::move(info));
@@ -751,8 +715,8 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 		AddDecideTag(alias, MakeSourceClauseTag(source_id));
 		in.SetAlias(std::move(alias));
 		ConstraintSourceInfo info;
+		info.location = in.GetQueryLocation();
 		info.canonical_lhs = RenderSource(in, ctx);
-		info.spelled_lhs = info.canonical_lhs;
 		info.rhs_kind = ConstraintSourceRhsKind::NUMERIC_FALLBACK;
 		// Its scope in front, as a comparison's: the IN itself shows no scope word.
 		info.qualifier = ScopedInQualifier(constraints, in, ctx);
@@ -782,8 +746,6 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 	RenderContext ctx {text, keyed_scopes, keys};
 	ctx.decide_index = decide_index;
 	ctx.frames = &frames;
-	auto written_ctx = ctx;
-	written_ctx.written = true;
 	VisitSourceComparisons(
 	    mutable_constraints, ctx, DecideEnclosingScope(), [&](BoundComparisonExpression &cmp, const string &) {
 		    // InitializeConstraintSourceInfo tagged every comparison of the clause tree.
@@ -794,15 +756,10 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 			                            "InitializeConstraintSourceInfo tags every comparison of the tree");
 		    }
 		    auto &info = sources[source_id];
-		    info.canonical_lhs = RenderSource(*cmp.left, written_ctx);
-		    info.canonical_rhs = RenderSource(*cmp.right, written_ctx);
-		    info.spelled_lhs = RenderSource(*cmp.left, ctx);
-		    info.spelled_rhs = RenderSource(*cmp.right, ctx);
+		    info.canonical_lhs = RenderSource(*cmp.left, ctx);
+		    info.canonical_rhs = RenderSource(*cmp.right, ctx);
+		    info.lhs_location = cmp.left->GetQueryLocation();
 		    info.canonical_cmp = DecideComparisonOperator(cmp.type);
-		    info.canonical_differs = info.rendered_lhs != info.spelled_lhs || info.rendered_rhs != info.spelled_rhs ||
-		                             info.written_cmp != info.canonical_cmp;
-		    info.rendered_lhs.clear();
-		    info.rendered_rhs.clear();
 		    if (!IsQueryWideBoundTag(cmp.right->GetAlias()) && !ContainsSubquerySource(*cmp.right)) {
 			    info.rhs_kind = ConstraintSourceRhsKind::DATA_EXPRESSION;
 		    } else {
@@ -1069,13 +1026,13 @@ vector<DecideClauseLayers> CollectDecideClauseLayers(const Expression &constrain
 			}
 		}
 		DecideClauseLayers layers;
-		layers.written = QuoteWrittenClause(sources[i]);
+		layers.written = QuoteWrittenClause(sources, i, names.text);
 		for (auto half : halves) {
 			printed[half] = true;
 			auto &info = sources[half];
-			string canonical = info.spelled_lhs;
+			string canonical = info.canonical_lhs;
 			if (!info.canonical_cmp.empty()) {
-				canonical += " " + info.canonical_cmp + " " + info.spelled_rhs;
+				canonical += " " + info.canonical_cmp + " " + info.canonical_rhs;
 			}
 			// The halves are the canonical reading of a BETWEEN, whether or not canonicalization moved anything.
 			if (between || info.canonical_differs) {

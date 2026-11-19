@@ -698,9 +698,8 @@ void DecideModelEmitter::CheckDomain(idx_t root, const EvaluatedConstraint &eval
 		return;
 	}
 	auto &domain = op.domains[var];
-	const auto &quoted = op.constraint_sources[clause.source_clause_id];
 	auto written_bound = [&](bool, double) {
-		return QuoteWrittenClause(quoted);
+		return QuoteWrittenClause(op.constraint_sources, clause.source_clause_id, op.source_text);
 	};
 	// The rows its term's site reads, whose members (an easy MIN's or MAX's reducer filter keeps some) each write a
 	// row.

@@ -503,6 +503,8 @@ struct SolverModel {
 	vector<SolverInput::KeyValues> key_values;
 	//! Stable source display registry, indexed by source_clause_id.
 	vector<ConstraintSourceInfo> constraint_sources;
+	//! The query text the clauses' spans cut (SolverInput::source_text).
+	DecideSourceText source_text;
 
 	//! Quadratic constraints: sum(linear) + sum(q * x_i * x_j) <sense> rhs
 	//! Used for bilinear terms in constraints (QCQP). Gurobi only.
