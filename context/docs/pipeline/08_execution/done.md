@@ -755,8 +755,8 @@ and every row of a per-row one, splits its group again. Three readers:
   over the rows the reducer reads, so its operand holds one entry per variant of each class
   (below).
 
-The `VALUE_IS_VALID` checks the bound-side rewrite (`RewriteRhsAggregates`, stage 05) appends are kept on the node
-(`DirectRetainRowChecks`) and raised by the tree before any clause is read (`DecideTreeColumns::CheckData`): a bound's
+The value checks the bound-side rewrite (`RewriteRhsAggregates`, stage 05) appends stay on the node
+(`LogicalDecide::value_checks`) and are raised by the tree before any clause is read (`DecideTreeColumns::CheckData`): a bound's
 NaN, a NaN in a bound-side reducer's argument (the reducer skips a NULL, as SQL does), or an `=` bound that takes two
 values in its group (`` `<bound>` takes more than one value here (a and b), in the group t.g = 'a' ... infeasible.``).
 An `=` bound under `per K:` is checked per group and class first, then per group (`AddDisagreementCheck`): a class
@@ -1055,8 +1055,8 @@ or one nothing satisfies (`>= +inf`) — and the model validator accepts a non-f
 two ways by spelling: canonicalization rebuilds `x + v <= K` as `x <= K - v`.
 
 The input of a **bound-side reducer** follows the same rule: `min(x) by (g) <= max(cap)
-by (g)` is a window of DuckDB's over `cap`, and its value check (a VALUE_IS_VALID scope
-check) refuses NaN only, so an infinite `cap` is a value; a NULL bound skips its instance. An infinite bound
+by (g)` is a window of DuckDB's over `cap`, and its value check refuses NaN
+only, so an infinite `cap` is a value; a NULL bound skips its instance. An infinite bound
 behaves the same in every spelling, and its direction decides what it means. `inf - inf`
 is still NaN, and still refused.
 

@@ -157,8 +157,8 @@ indexed by the `__frame_<i>__` tag on the aggregate it binds to: its anchors and
 an index into `keys`, and a range's reducer (id 121); then where the canonicalizer placed it (stage 04, ids
 113-120): `rows`, the rows its timelines read (its path's, null for every row), `timeline_key`, the names its
 messages use, and `partition_key` with `partition_subject`, its D75 check. Whether it has a value at an anchor is the
-data's to say (stage 08). `scope_checks`
-holds only the `VALUE_IS_VALID` checks the bound-side rewrite appends (stage 05).
+data's to say (stage 08). `value_checks`
+holds the value checks the bound-side rewrite and the ABS rewrite append (stage 05).
 `PlanSubqueries` runs on the key elements, the frames' order keys and fallbacks as on
 the trees, and `EnumerateExpressions` visits the key table, the frames, the signatures
 and the checks, so binding resolution and column pruning see their columns.
@@ -231,7 +231,7 @@ resolution via `ignored_bindings`; it visits every field through
 `LogicalDecide::EnumerateExpressions`, the one list of them: `decide_variables`,
 `decide_constraints`, `decide_objective`, `composed_minmax_objective_terms`,
 `composed_minmax_constraints`, `reducer_value_links` (body, own `when`, clause `when`),
-`keys`, `frames` (order key, fallback, rows), `scope_checks`, `signatures` (rows, fields' values).
+`keys`, `frames` (order key, fallback, rows), `value_checks`, `signatures` (rows, fields' values).
 
 **Any new field holding expressions that execution will evaluate must be added to
 `EnumerateExpressions`.** An optimizer rewrite that moves subexpressions out of
@@ -286,7 +286,7 @@ binding fact, and the parser cannot see it (the clause may sit inside a subquery
 `LogicalDecide` and `LogicalDecideDiagnose` are serialized by DuckDB's generator.
 The field list lives in `storage/serialization/logical_operator.json`; the structs
 it names — `DecideKey`, `DecideKeyElement`, `KeyedScopeInfo`, `DecideVarScopeInfo`,
-`ConstraintSourceInfo`, `DecideSourceColumnName`, `DecideScopeCheck`, `DecideSourceText` — have their own entries
+`ConstraintSourceInfo`, `DecideSourceColumnName`, `DecideSourceText` — have their own entries
 in `nodes.json`, and both
 directions are generated into `src/storage/serialization/serialize_*.cpp`. There is
 no hand-written copy. Adding a field means adding one JSON entry, not two mirrored

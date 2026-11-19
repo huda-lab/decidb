@@ -40,10 +40,9 @@ applies, not why.
   `rules.md`), not the solver's pick among several errors. The NULL and NaN messages come from the functions the solver
   calls (`decide_value_messages.hpp`), so a NULL score, target, coefficient or bound names the NULL columns on the
   failing row as the solver does. Neither path names a row: a row's place in the input depends on the scan. A computed value with no NULL column is quoted as written on both paths (`RenderDecideSource`), and a NULL
-  flattened subquery is named as the subquery. An `=` bound's NaN and disagreement are checked before any rule runs,
-  in the solver's order, by VALUE_IS_VALID scope checks the bound-side rewrite adds. Another bound's NaN is
-  checked by the solver's message function, at the clause's place on the solver and in the plan of a rule that
-  computes the bound, so both paths raise the solver's text.
+  flattened subquery is named as the subquery. A bound's NaN, and an `=` bound's disagreement, are checked before any
+  rule runs, in the solver's order, by the value checks the bound-side rewrite adds (`LogicalDecide::value_checks`),
+  so both paths raise the solver's text.
   Which bad row a message names is not specified when several are bad.
 - **Numeric edge cases.** Scores are compared to zero in the finite DOUBLE domain with no epsilon. Both solvers
   disagree with each other near 1e-9, so the oracle and exact enumeration are the reference, and backend comparisons

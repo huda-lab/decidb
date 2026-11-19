@@ -54,7 +54,8 @@ mark it not proved.
   default lower bound of 0. A constant lower bound under a `when` replaces it on the rows the `when` keeps
   (`DecideSingletonRow::LiftsDefaultFloor`); every other bound only intersects with it. Direct rules run before the MIN/MAX rewrite tags
   an easy extremum, so only a per-row bound reads here. The classifier is the solver's, so the two cannot disagree.
-- `row_checks` are the bound-side rewrite's `VALUE_IS_VALID` checks, each a per-row message, NULL on a valid row. The
+- `row_checks` are the node's value checks (`LogicalDecide::value_checks`), each a BOOLEAN that is true on a valid row
+  and raises on any other. The
   rule driver puts them under every rule's plan (`DirectAddRowChecks`, [framework/done.md](../framework/done.md) § Row
   checks), so a rule does not see them; the solver path keeps them on the DECIDE operator, which runs them before it
   reads a value (`DecideTreeColumns::CheckData`). An empty group needs no check: a rule reads no row there, as the solver path skips its

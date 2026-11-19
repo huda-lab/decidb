@@ -50,7 +50,7 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
    (`TakeRecomputedSource`) and builds one `DirectSourceReader` per side; each side then makes the reader's choice
    between a rescan and a copy, and no read holds the pairs.
 
-   Build every expression with the `ExpressionBuilder` (`direct_expression.hpp`); build a node by hand only when the
+   Build every expression with the `ExpressionBuilder` (`decide_expression_builder.hpp`); build a node by hand only when the
    builder has no operation for it (a window expression), and say so in a comment. A helper only your rule uses stays in
    your rule's own files until a second rule needs it. Inside the rule's namespace, names carry no `Direct` or class
    prefix (`Condition`, `PlanBuilder`); names in `namespace duckdb` keep `Direct`.
@@ -71,7 +71,7 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
   values on the rows that read them; invalid objective coefficients (NaN, infinity); infeasibility. A NULL objective
   term is dropped, as `SUM` drops it in SQL (guide § NULL), so the solver answers there and a rule must too. Nothing is
   computed on a row a `when` drops (syntax reference §6.3): a value there must not raise, on either path
-  (`DirectOnKeptRows`, which makes the value NULL there, so its check passes; `test_direct_source_values.py` checks
+  (`DecideOnKeptRows`, which makes the value NULL there, so its check passes; `test_direct_source_values.py` checks
   each place a rule masks). Silently answering where the solver refuses is a wrong answer. What
   the rule does **not** owe: the solver's choice among several errors in one query (any one of the applicable errors is
   enough), or a refusal over a number only the solver's own model computes. A square `k*(w*x + t)^2` expands to a

@@ -11,7 +11,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 
 | Path | Stage | Contents |
 |---|---|---|
-| `common/enums/decide.hpp` | all | `DecideSense`, `DecideExpression`, `DecideVarScope` (`ROW` / `ENTITY` / `SCALAR`) and `DecideVarScopeInfo`, `DecideScopeCheckKind`, `ConstraintKind`, every DECIDE tag constant and the tag helpers |
+| `common/enums/decide.hpp` | all | `DecideSense`, `DecideExpression`, `DecideVarScope` (`ROW` / `ENTITY` / `SCALAR`) and `DecideVarScopeInfo`, `ConstraintKind`, every DECIDE tag constant and the tag helpers |
 | `common/decide_source_info.hpp` | 03 | `DecideSourceText` — the DECIDE tail's text and spans; `ConstraintSourceInfo` — the source display registry entry |
 | `common/decide_solver_capabilities.hpp` | 07 answers, 03/05/06/08 read | `SolverConstructSupport`, `SolverModelClass`, `DecideModelShape` and `ClassifyDecideModel` (the one classifier of a model's shape), `IsNonconvexProductGroup` — the backend differences upstream stages branch on. In `common/` because stage 07 answers it but four stages above read it |
 | `parser/decide/decide_parsed_markers.hpp` | 01, 02 read | Predicates over the parsed DECIDE markers: `IsDecideMarker`, `IsDecideScopeMarker`, `IsDecideAggregateName`, `IsScopedReducerCall`, `TakesReducerBy`, `UnwrapReducerMarkers`, `ReducerArgumentBody` |
@@ -34,6 +34,8 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `optimizer/decide/decide_optimizer.hpp` | 05 | The rewrite passes |
 | `optimizer/decide/decide_linear_form.hpp` | 05 | Flattening into `decide.prepared`; the last DECIDE optimization pass |
 | `optimizer/decide/decide_solver_gate.hpp` | 05 | Backend choice, the native-construct mask, and the plan-time model-class gate |
+| `optimizer/decide/decide_expression_builder.hpp` | 05 | `ExpressionBuilder`: bound expressions as values, for the passes and the direct rules |
+| `optimizer/decide/decide_value_checks.hpp` | 05 | The rows a `when` keeps and the check of a number the solver refuses, for value checks and direct plans |
 | `optimizer/decide/decide_optimizer_internal.hpp` | 05 | Helpers shared by the `decide_rewrite_*.cpp` passes; internal to `src/optimizer/decide/` |
 | `execution/operator/decide/physical_decide.hpp` | 08 | `PhysicalDecide`, `Term`, `DecideConstraint`, `Objective` |
 | `execution/operator/decide/decide_frame_map.hpp` | 08 | `DecideFrameMap` — a frame's timelines, the row each anchor selects, a range's windows |

@@ -118,7 +118,7 @@ The first read:
    key](../../framework/done.md)). A row in no ball has a NULL in each column of the key compared with `=`, and no flag
    column stands in the key.
 3. `P1`, raw values: every coefficient, constant and limit, and the slope of the limit's square, each on the rows that
-   read it (`DirectOnKeptRows`).
+   read it (`DecideOnKeptRows`).
 4. `P2`: K and b of the row, oriented as a minimum, the row's factor `q = c * s^2`, and the check on every raw value. A
    slope that folds to a constant lays out no slope or `q` column: `q` is a literal in every expression that reads it
    (`Factor`), and DuckDB's rewriter, which the driver runs over the plan, folds those expressions. A constant laid out

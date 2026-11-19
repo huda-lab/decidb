@@ -39,7 +39,7 @@ named-column scan also bypass or revisit parts of the normal tree execution; the
 
 - **Problem.** `plan_decide.cpp` copies 35 fields by hand from `LogicalDecide` to `PhysicalDecide`; frames,
   signatures, keys and scopes are read from both the operator and the tree. Dead at execution: the tree's copy of the
-  singleton-row boxes, `tree.decide_index`, `PhysicalDecide::scope_checks`.
+  singleton-row boxes and `tree.decide_index`.
 - **Change.** The tree owns each fact; the operator keeps the child, the tree, the debug options and one display
   payload; the name harvest uses the tree's own enumeration of row expressions.
 - **Needs.** EXEC-20.

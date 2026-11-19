@@ -4,18 +4,6 @@ Open work in the optimizer passes. Finished work is in [done.md](done.md). How t
 [`../../direct_solve/framework/todo.md`](../../direct_solve/framework/todo.md) § How to work any task in these todo
 files.
 
-## OPT-21 — The solver path depends on no direct-solve code
-
-- **Problem.** `DecideOptimizer::RetainRowChecks` builds a whole `DirectFrontEnd` to copy one vector; a check passes
-  through `DecideScopeCheck`, `DirectRowCheck` and an `Expression`; `DecideScopeCheckKind` has one value. Pass 0
-  (`decide_rewrite_rhs_bounds.cpp`), `decide_rewrite_abs.cpp`, `decide_singleton_row_folding.cpp` and
-  `decide_optimizer.cpp` include `direct/` headers for general helpers (`ExpressionBuilder`, the number-message and
-  kept-row helpers).
-- **Change.** One vector of value checks on `LogicalDecide`; the kind enum and both wrapper types go. The general
-  helpers move to `src/optimizer/decide/`; no solver-path file includes a `direct/` header.
-- **Done when.** `grep -rln "decide/direct/" src/optimizer/decide/*.cpp` lists only the dispatch file;
-  `./test/decide/run_tests.sh -n 2 -k "bound_side_tables or abs or nan"` passes.
-
 ## OPT-24 — A rewritten MIN/MAX clause is scoped once per instance
 
 - **Problem.** `sum(a*x) + max(b*x) <= 40` builds 13 rows; the same clause with a subquery bound builds 25

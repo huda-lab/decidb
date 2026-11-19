@@ -2,8 +2,8 @@
 
 Latest full run, 2026-11-19 (the Phase 1 gate): `test/decide/run_direct_matrix.sh`, 8,452 tests in each suite; auto
 and serializer 8,450 passed, off and highs 8,448. The failures are FW-9 tests that ran only in auto: R4's coefficient
-fixture (fixed with FW-5) and two zero-divisor cases on the solver path, open with the owner. The Gurobi golden is
-identical; the HiGHS golden differs by three Phase 1 error texts, not yet regenerated. C++
+fixture and two zero-divisor cases, which now assert the kind alone (the two paths name different places), both since
+fixed. The Gurobi golden is identical; the HiGHS golden took the three Phase 1 error texts. C++
 `build/release/test/unittest "[decidb]"` 11,559 assertions in 115 cases. A debug build, 2026-11-18: `make decide-test-debug` 8,835 passed, its C++ suite 11,549 assertions in 115 cases, no assertion,
 ASan or UBSan report. It is the baseline for every direct-solve task and rule. Design: `../architecture/`.
 
@@ -38,10 +38,13 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
   [result_adapter.md](../architecture/result_adapter.md)). A rule whose plan streams sets
   `DirectSubstitute::pipelined` (A1), which keeps the single read over a source that is not copied.
 - **Plan fragments.** `direct_plan_fragments.hpp` holds free functions that each return one plan fragment (the function
-  form of a factory method). None of them knows which problem class it serves: among them `DirectActiveWhen`,
+  form of a factory method). None of them knows which problem class it serves: among them
   `DirectWindowMatchingCount`, `DirectAllRowsValid`, `DirectScaledTerm` (sign and constant factor of a coefficient),
-  `DirectSumOf` (the signed sum of proved values, each read as DOUBLE), `DirectOnKeptRows` and `DirectOverProjection` (a
-  copy of a value re-pointed at a projection over the source). A rule assembles each projection of its plan in a
+  `DirectSumOf` (the signed sum of proved values, each read as DOUBLE) and `DirectOverProjection` (a
+  copy of a value re-pointed at a projection over the source). The rows a `when` keeps (`DecideActiveWhen`,
+  `DecideOnKeptRows`, `DecideCheckOnKeptRows`) and the check of a number the solver refuses (`DecideNumberNames`,
+  `DecideNameValue`, `DecideNumberCheck`) are in `decide_value_checks.hpp`, beside the passes that use them too. A rule
+  assembles each projection of its plan in a
   `DirectProjectionStage`, which gives every column its binding as it is added and becomes a `LogicalProjection` over a
   child. S1, R1, N1 and S3 also share `DirectProveSharedScope` (the clauses read together have one `by` key, `per`
   classes and `when`, else the rule declines; each rule's condition holds the `DirectSharedScope` it proves) and
@@ -154,7 +157,7 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
   errors are `DirectInfeasibleErrorPredicate` and `DirectUnboundedErrorPredicate`, whose texts are
   `DecideInfeasibleMessage` and `DecideUnboundedMessage` (`decide_value_messages.hpp`): the solver path's, with no hint
   sentence, so the driver hands a rule no state errors. `DirectCheckNumber` checks a raw value a projection computes,
-  naming the number as the user wrote it (`DirectNumberNames`), and is null when no value it is made of can fail (Number
+  naming the number as the user wrote it (`DecideNumberNames`), and is null when no value it is made of can fail (Number
   messages, below); `DirectRaiseTooLarge` checks a number computed from values checked before it and raises at the
   clause. Both gate on one BOOLEAN per row, `isfinite(number)`, and raise through `__internal_decide_invalid_value`,
   which reads its place from its own expression, in the arm that raises only, as a `CASE` evaluates a branch only where
@@ -193,9 +196,9 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
   computed, whichever side of the product is built first, so a check raises before any rule-built raise. Gates chain: a
   rule gates the reader again on its own verdict (A1), computed from reads the row checks gate, so a bad value raises
   before a rule's own, and every read after waits for the newest verdict alone; the verdict CTEs nest oldest outermost
-  (`DirectSourceReader::Finish`). The solver path plans no side plan: it keeps the checks and the side
-  tables' records for the tree, which evaluates them on the rows it reads (`DirectRetainRowChecks`,
-  `DecideTreeColumns::CheckData`). A rule builds a plan over one read with `DirectBuildOverRead`, or over its only read with
+  (`DirectSourceReader::Finish`). The solver path plans no side plan: the checks stay on the node
+  (`LogicalDecide::value_checks`) and the side tables' records move to the tree (`DecideOptimizer::RetainBoundAggregates`),
+  which evaluates them on the rows it reads (`DecideTreeColumns::CheckData`). A rule builds a plan over one read with `DirectBuildOverRead`, or over its only read with
   `DirectBuildOverOneRead`.
 
   **Row stage.** A rule whose reads all compute the same per-row projections over the source gives the reader that
@@ -294,9 +297,10 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
     S1 declines a filtered part, a non-linear term, a second decision and a coefficient that may raise beside other
     terms, and flattens the part per term. N1 and A2 fold the objective square's slope with `DirectFoldConstantSum`; A1
     and N1 fold its weight the same way and so decline one read from the data, which A2 takes.
-- **`ExpressionBuilder`** (`direct_expression.hpp`; Fowler's Expression Builder) is a small fluent helper over bound
-  expressions that passes them as `ExprPtr`. It is the one way the direct-solve code and the right-hand-side rewrite
-  build an expression: constants (`Num`, `Bool`, and `Constant` for any other type), columns, scalar functions,
+- **`ExpressionBuilder`** (`decide_expression_builder.hpp`, in `optimizer/decide/` beside the passes that use it too;
+  Fowler's Expression Builder) is a small fluent helper over bound expressions that passes them as `ExprPtr`. It is
+  the one way the direct-solve code, the bound-side rewrite, the ABS rewrite and singleton-row folding build an
+  expression: constants (`Num`, `Bool`, and `Constant` for any other type), columns, scalar functions,
   arithmetic, comparisons, `IsNull`, `Cast`, `Coalesce`, `If`, `Min`, `Max`, `And`, `Not` and `Any`. `And` and `Not` are
   `CASE` forms that read a NULL condition as false, and `And` evaluates its second value only where the first holds. It
   takes the `ClientContext`, which it binds functions with (as DuckDB's `FunctionBinder` does), so a rule's
@@ -342,7 +346,7 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
   `DirectIsSourceOnlyValue` (which admits a value that can raise), `DirectIsSourceOnlyPredicate` (a deterministic,
   nonthrowing BOOLEAN over source columns: a `when` the plan evaluates on every row), `DirectHasColumnReference`,
   `DirectRemapSourceReferences` (re-points source columns at a projection over the source), `DirectIsWholeNumbered` (an
-  `INT` or `BOOL` decision), `DirectIsLowerBound` and `DirectIsUpperBound` (which comparisons bound a count from below
+  `INT` or `BOOL` decision), `DecideIsLowerBound` and `DecideIsUpperBound` (which comparisons bound a count from below
   and from above), `DirectPartFactor`, `DIRECT_CONSTANT`, `DIRECT_FINITE_CONSTANT`, `DirectIRConstraint::PlainSum` and
   `DirectPart::IsPlainSum` answer "may a rule use this value" once for all rules. `DirectIRConstraint::Membership` gives
   the rows an aggregate constraint covers: its sum's own `when` or the clause's `when`; with both, the rules decline
@@ -382,9 +386,9 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
     so a rule reads a data limit as it reads any source column and computes no bound itself. An `=` bound's NaN limit
     and agreement are scope checks the bound-side rewrite makes before any rule runs, in that order
     (`AddDisagreementCheck`), so every path raises the same one.
-  - Every value a bound reads is checked first, by VALUE_IS_VALID scope checks appended after the planner's: a
+  - Every value a bound reads is checked first, by value checks (`LogicalDecide::value_checks`): a
     reducer's argument (or a norm's written body: `SIGN(NaN)` is 0) on the rows the reducer reads, the bound on the
-    kept rows, and an `=` bound's agreement in its group. Each check is a per-row message, NULL on a valid row. Both
+    kept rows, and an `=` bound's agreement in its group. Each check is a BOOLEAN, true on a valid row, that raises on any other. Both
     paths make them with `DirectAddRowChecks` (above), so both paths raise the same text.
   - The solver and the direct rules read DuckDB's value, so `SUM(x) <= SUM(cap)` over the `BIGINT` values 2^60, 1, -2^60
     reads the limit 1 on `off` and `require`. Arithmetic around the aggregate (`COUNT(*) / 2`) runs in DuckDB's types.

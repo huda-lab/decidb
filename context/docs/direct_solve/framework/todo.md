@@ -53,7 +53,7 @@ solver path answers those queries, so none of them is wrong, only slower.
   the constants a rule lays out as columns and simplifies the expressions over them (built and measured). Every
   figure stayed within noise (`n1` 1.22 against 1.21, `a1` 1.12 against 1.08, `a2` 1.15 against 1.14), and it cannot
   replace a literal the rule builds with: a scoped rule (a `when`, a `by` key or a `per`) masks each raw value to NULL
-  on the rows outside a ball (`DirectOnKeptRows`), so a constant becomes a CASE over a column that no pass folds;
+  on the rows outside a ball (`DecideOnKeptRows`), so a constant becomes a CASE over a column that no pass folds;
   `n1_groups` went from 1.14 to 1.38 with N1's literal `q` deleted. A constant that decides the plan's shape, such as
   whether a value needs a mask or a check (N1's `q`, A1's floor), is a literal the rule builds with. **Ruling (owner,
   2026-11-13).**

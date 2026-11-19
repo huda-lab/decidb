@@ -12,8 +12,7 @@ the owner rules first.
 
 # Phase 2 — Direct solve is a separate layer
 
-## 2.1 Bounds and the driver (parallel: OPT-21 | FW-6)
-- [ ] OPT-21 Solver path without direct-solve code — pipeline/05_optimizer/todo.md § OPT-21
+## 2.1 Bounds and the driver (one lane)
 - [ ] FW-6 Two rules that apply to one query (decision) — direct_solve/framework/todo.md § FW-6
 
 ## 2.2 Rule plans (needs: 2.1) (one lane)

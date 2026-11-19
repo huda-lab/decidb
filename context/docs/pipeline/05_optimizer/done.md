@@ -235,7 +235,7 @@ term splitter use them:
 | 14 | `RewriteAvgToSum` | Scales AVG values into SUM terms after value and extremum rewrites. |
 | 15 | `RewriteAbs` | Allocates ABS helpers, stores the written function and lower-envelope metadata for F nodes, and adds the check of each ABS argument's data. |
 | 16 | `RewriteBilinear` (ABS factors) | Records products involving the newly allocated ABS helpers. |
-| 17 | `RetainRowChecks` | Keeps the scope checks a plan can make on the node for the tree to evaluate on the rows it reads (`DirectRetainRowChecks`, beside the direct path's `DirectAddRowChecks`). After the last pass that adds one, `RewriteAbs`. |
+| 17 | `RetainBoundAggregates` | Moves the bound records to `retained_bound_aggregates`, which the tree computes on the rows it reads; the source stays the original relation, with no side table in front of it. The value checks stay on the node (`value_checks`). |
 | 18 | `FoldSingletonRows` | Must be last of all — see below. |
 
 `RewriteComposedMinMaxObjectiveTop` runs within the composed pass for the
@@ -472,7 +472,7 @@ solver path and direct solve's A2 raise the same text, and no message names a bo
 user never wrote. The rows an ABS is read on are those its clause's `when` keeps that also
 pass the `when` of each reducer around it (`SUM(when f: ABS(x - v))`), and the envelope
 rows carry the same condition, so a row a reducer's own `when` drops is never read. The
-check is a value scope check, so `RetainRowChecks` runs after this pass.
+check is a value check (`LogicalDecide::value_checks`), which the tree evaluates on the rows it reads.
 
 `AbsPairInfo::needs_bigm` records whether the auxiliary needs an upper envelope.
 It is false when solver pressure or the clause's shape pins `aux` to `|inner|`

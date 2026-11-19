@@ -98,7 +98,7 @@ A query A1 does not apply to keeps its answer: it runs on the solver, and `requi
 ## How it works
 
 One projection per stage of `definition.md` § Relational construction, with no sort, no window and no join, and no row
-held. A raw value is NULL on a row its `when` drops (`DirectOnKeptRows`), so its check passes there.
+held. A raw value is NULL on a row its `when` drops (`DecideOnKeptRows`), so its check passes there.
 
 The solver reads every row before it returns, so a bad value on the last row raises even under an outer `LIMIT 1`. A1
 keeps that by verifying, then streaming: one read of the source runs stages 1-4 into a one-row verdict, the `bool_and`

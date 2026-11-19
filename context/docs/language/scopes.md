@@ -100,7 +100,7 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
   D83), a decision by instance, or a reducer's `by` key; one the key holds by construction (`KeyHoldsField`) is none.
   Execution numbers the rows by key and fields (a set E's instances in the descent), so a class splits only where the
   data differs.
-  The bound-side rewrite adds `VALUE_IS_VALID` checks for the data values bounds read; an empty group is no check:
+  The bound-side rewrite adds value checks (`LogicalDecide::value_checks`) for the data values bounds read; an empty group is no check:
   execution skips its instance (D68, `DecideAbsence::SkipEmptyReducers`).
 
 ## Optimizer
