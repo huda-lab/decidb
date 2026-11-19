@@ -178,7 +178,7 @@ struct DecideFrameSpec {
 //! (DecideOptimizer::RewriteRhsAggregates) and made under the DECIDE node before any model is built.
 struct DecideScopeCheck {
 	DecideScopeCheckKind kind = DecideScopeCheckKind::VALUE_IS_VALID;
-	//! VALUE_IS_VALID: the message a row raises, NULL on a row whose value is valid.
+	//! VALUE_IS_VALID: a BOOLEAN check, true on a row whose value is valid; it raises on any other row.
 	unique_ptr<Expression> value;
 
 	//! Generated from `storage/serialization/nodes.json`.
@@ -248,8 +248,8 @@ struct DecideGroupBound {
 		unique_ptr<Expression> argument;
 		//! The reducer's own `when`: only the rows it keeps are read; null for every row of the group.
 		unique_ptr<Expression> filter;
-		//! The message a row raises for a NaN argument on the rows the aggregate reads, NULL on any other row; null
-		//! when the argument cannot be NaN.
+		//! A BOOLEAN check that raises on a NaN argument of a row the aggregate reads, true on any other row; null when
+		//! the argument cannot be NaN.
 		unique_ptr<Expression> invalid;
 	};
 	//! One aggregate of the group, read by the placeholder `column`, which no operator produces.
@@ -267,7 +267,8 @@ struct DecideGroupBound {
 	//! same value on both.
 	unique_ptr<Expression> upper;
 	unique_ptr<Expression> lower;
-	//! The message for a NaN limit, over the placeholders, on any row of the group; null when it cannot be NaN.
+	//! A BOOLEAN check that raises on a NaN limit, over the placeholders, on any row of the group; null when it cannot
+	//! be NaN.
 	unique_ptr<Expression> invalid;
 	//! The bound as the user wrote it, for a message, and where it was written: the column that stands for the bound
 	//! takes that location, so a render quotes it as the bound.

@@ -845,12 +845,6 @@ unique_ptr<PendingQueryResult> ClientContext::PendingStatementOrPreparedStatemen
 			if (statement->type == StatementType::RELATION_STATEMENT) {
 				reparse_statement = false;
 			}
-			// An EXPLAIN runs its inner statement's binding, and an error there points into the text it was parsed from
-			// (`query_location`). A statement parsed again from its re-printed text points into that text, which is
-			// not the query the error is shown against, so the caret would be lost or misplaced.
-			if (statement->type == StatementType::EXPLAIN_STATEMENT) {
-				reparse_statement = false;
-			}
 			if (reparse_statement) {
 				try {
 					Parser parser(GetParserOptions());

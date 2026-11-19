@@ -39,8 +39,8 @@ struct DecideTerm {
 	//! The nearest located expression that holds the coefficient, for one with no location of its own
 	//! (DecideSplitTerm::ancestor).
 	optional_idx ancestor;
-	unique_ptr<Expression> filter;      // Optional filter: the reducer's own `when`
-	bool avg_scale = false;             // True when this term came from AVG and needs 1/N scaling
+	unique_ptr<Expression> filter; // Optional filter: the reducer's own `when`
+	bool avg_scale = false;        // True when this term came from AVG and needs 1/N scaling
 	//! An objective AVG's `by` key, into LogicalDecide::keys: it divides each row by
 	//! its group's count, not the objective's (a nested `sum(per k: avg(e) by (k))`, D81).
 	//! INVALID_INDEX for one group.

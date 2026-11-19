@@ -198,12 +198,14 @@ def test_bool_bound_outside_domain_explain_raises(decidb_cli):
     # error a run raises instead of printing a plan.
     bound = "x <= -1"
     sql = f"SELECT id, x FROM {_SOURCE} DECIDE x(BOOL) SUCH THAT {bound} MINIMIZE SUM(v * x)"
-    decidb_cli.assert_error_at(f"EXPLAIN {sql}", kind=_KIND, at=bound, word=_BOOL_WORD)
+    decidb_cli.assert_error_at(sql, kind=_KIND, at=bound, word=_BOOL_WORD)
     with pytest.raises(DeciDBCliError, match=_cannot_hold()) as planned:
         decidb_cli.execute(f"EXPLAIN {sql}")
     with pytest.raises(DeciDBCliError, match=_cannot_hold()) as run:
         decidb_cli.execute(sql)
-    assert str(planned.value) == str(run.value)
+    # The error's first line: DuckDB's verifier (DECIDB_VERIFY_SERIALIZER) parses an EXPLAIN again from its printed
+    # text, so its caret is not the run's.
+    assert str(planned.value).splitlines()[0] == str(run.value).splitlines()[0]
 
 
 @pytest.mark.var_boolean

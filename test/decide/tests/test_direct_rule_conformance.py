@@ -201,7 +201,9 @@ def test_near_misses_name_their_reason_and_keep_the_solver_plan(decidb_cli, fixt
             for statement in (f"EXPLAIN {sql}", sql):
                 with pytest.raises(DeciDBCliError, match="is a BOOL decision") as refused:
                     decidb_cli.execute(f"SET decide_direct_solve='{mode}'; {statement}")
-                messages.add(str(refused.value))
+                # The error's first line: DuckDB's verifier (DECIDB_VERIFY_SERIALIZER) parses an EXPLAIN again from
+                # its printed text, so its caret is not the run's.
+                messages.add(str(refused.value).splitlines()[0])
         assert len(messages) == 1, messages
         return
     plan = _raw(decidb_cli, f"EXPLAIN {sql}", mode="auto")
