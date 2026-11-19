@@ -360,7 +360,25 @@ static bool ContainsScalarSubqueryProvenance(const Expression &expr) {
 	return found;
 }
 
+//! What a diagnosis calls `term`'s coefficient: its expression's text, and its value when the user wrote a number.
+static CoefficientName NameCoefficient(const DecideTerm &term) {
+	CoefficientName name;
+	if (!term.coefficient) {
+		return name;
+	}
+	name.label = term.coefficient->GetName();
+	if (term.coefficient->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+		auto &value = term.coefficient->Cast<BoundConstantExpression>().value;
+		if (!value.IsNull() && value.type().IsNumeric()) {
+			name.literal = value.GetValue<double>();
+			name.is_literal = std::isfinite(name.literal);
+		}
+	}
+	return name;
+}
+
 EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constraint, idx_t repair_group_id,
+                                                  bool diagnose,
                                                   const std::function<idx_t(const DecideTerm &)> &read_variable) {
 	EvaluatedConstraint evaluated;
 	evaluated.comparison_type = constraint.comparison_type;
@@ -380,20 +398,22 @@ EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constr
 	// Initialize result storage
 	evaluated.row_coefficients.resize(constraint.lhs_terms.size());
 
-	// Store variable indices for all terms (before scanning data). Capture each term's
-	// symbolic coefficient label too (`l_extendedprice` for `buy * l_extendedprice`) so
-	// infeasible diagnosis can render a data-weighted SUM clause symbolically instead of
-	// dumping the per-row numeric fan-out.
+	// Store variable indices for all terms (before scanning data). Under DIAGNOSE, capture each term's coefficient
+	// name too (`l_extendedprice` for `buy * l_extendedprice`) so the diagnosis can render a data-weighted SUM clause
+	// symbolically instead of dumping the per-row numeric fan-out.
 	for (auto &term : constraint.lhs_terms) {
 		evaluated.variable_indices.push_back(read_variable(term));
-		evaluated.coefficient_labels.push_back(term.coefficient ? term.coefficient->GetName() : string());
+		if (diagnose) {
+			evaluated.coefficient_names.push_back(NameCoefficient(term));
+		}
 	}
 	return evaluated;
 }
 
-bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, const DecideSourceText &source_text,
-                   const vector<ConstraintSourceInfo> &constraint_sources, const vector<KeyedScopeInfo> &keyed_scopes,
-                   const vector<DecideKey> &keys, EvaluatedConstraint &evaluated) {
+bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, bool diagnose,
+                   const DecideSourceText &source_text, const vector<ConstraintSourceInfo> &constraint_sources,
+                   const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> &keys,
+                   EvaluatedConstraint &evaluated) {
 	if (constraint.rhs_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
 		auto &const_expr = constraint.rhs_expr->Cast<BoundConstantExpression>();
 		double rhs_constant = const_expr.value.GetValue<double>();
@@ -413,10 +433,10 @@ bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, const Dec
 	// keeps forward/reversed subquery spellings and arithmetic over query-wide
 	// values equivalent without re-deciding shape in the physical layer.
 	evaluated.rhs_is_shared_scalar = IsQueryWideBoundTag(constraint.rhs_expr->GetAlias());
-	// Capture the RHS symbolic name (e.g. the data column `cap_col`) so query-mode
+	// Under DIAGNOSE, capture the RHS symbolic name (e.g. the data column `cap_col`) so query-mode
 	// infeasible diagnosis can render `x <= cap_col + delta`. Only meaningful for a
 	// genuine data RHS; a shared-scalar RHS reports the numeric knob instead.
-	if (!evaluated.rhs_is_shared_scalar && !ContainsScalarSubqueryProvenance(*constraint.rhs_expr)) {
+	if (diagnose && !evaluated.rhs_is_shared_scalar && !ContainsScalarSubqueryProvenance(*constraint.rhs_expr)) {
 		evaluated.rhs_label = RenderDecideSource(*constraint.rhs_expr, source_text, keyed_scopes, &keys);
 	}
 	evaluated.rhs_values.Reserve(num_rows);

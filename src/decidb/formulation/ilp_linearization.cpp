@@ -30,7 +30,7 @@ using namespace decide_linearize; // NOLINT: internal DECIDE linearization helpe
 // no box to start from and crawls toward the answer one pivot at a time.
 
 //! Give the auxiliary at flat index `aux_idx` its diagnosis label, padding the label
-//! channel out to that column first.
+//! channel out to that column first. Only a query under DIAGNOSE keeps the labels.
 //!
 //! `global_variable_labels` is positional — entry `i` names global column `i` — but it
 //! is written only where a label exists, so it can trail the block and a bare
@@ -40,6 +40,9 @@ using namespace decide_linearize; // NOLINT: internal DECIDE linearization helpe
 //! helpers below call this instead, so a column and its label are set in one step.
 //! Unnamed columns take an empty entry, which is what the readback fills in anyway.
 static void LabelGlobalAux(SolverInput &input, const VarIndexer &indexer, idx_t aux_idx, const string &label) {
+	if (!input.diagnose) {
+		return;
+	}
 	input.global_variable_labels.resize(aux_idx - indexer.global_block_start);
 	input.global_variable_labels.push_back(label);
 }

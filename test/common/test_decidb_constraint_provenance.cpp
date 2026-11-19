@@ -17,8 +17,10 @@ namespace {
 
 // Minimal SolverInput with a trivial objective on var 0 so SolverModel::Build
 // is happy; provenance is independent of the objective. Bounds default (row-scoped vars).
-SolverInput MakeBaseInput(idx_t num_rows, idx_t num_vars) {
+// Under DIAGNOSE, which is when a row carries provenance beyond its clause.
+SolverInput MakeBaseInput(idx_t num_rows, idx_t num_vars, bool diagnose = true) {
 	SolverInput input;
+	input.diagnose = diagnose;
 	input.num_rows = num_rows;
 	input.num_decide_vars = num_vars;
 	input.variable_types.assign(num_vars, LogicalType::DOUBLE);
@@ -94,9 +96,8 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 	SECTION("per-row stamps the clause id on every emitted row") {
 		SolverInput input = MakeBaseInput(3, 1);
 		input.constraints.push_back(MakePerRow(0, 3, 5.0));
-		// `x <= 5` on one decision folds into the column box unless diagnosis is armed; provenance is what the
-		// diagnosis reads, and under it the rows are kept.
-		input.keep_singleton_rows = true;
+		// `x <= 5` on one decision folds into the column box unless the query is under DIAGNOSE; provenance is what
+		// the diagnosis reads, and under it the rows are kept.
 
 		SolverModel model = BuildModel(input);
 
@@ -112,7 +113,6 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		SolverInput input = MakeBaseInput(3, 2);
 		input.constraints.push_back(MakeAggregate({0, 1}, 3, 10.0)); // clause 0
 		input.constraints.push_back(MakePerRow(0, 3, 5.0));          // clause 1
-		input.keep_singleton_rows = true;                            // keep the per-row rows (see above)
 
 		SolverModel model = BuildModel(input);
 
@@ -163,6 +163,81 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		CHECK(model.constraints[0].provenance.source_clause_id == 7);
 		CHECK(model.constraints[0].provenance.repair_group_id == 11);
 		CHECK(model.constraints[0].provenance.shape == ElasticShape::SHARED_SCALAR);
+	}
+
+	SECTION("an ordinary query's rows name their clause and carry nothing else") {
+		SolverInput input = MakeBaseInput(2, 2, false);
+		auto aggregate = MakeAggregate({0, 1}, 2, 10.0);
+		aggregate.source_clause_id = 5;
+		aggregate.repair_group_id = 3;
+		aggregate.comparison_type = ExpressionType::COMPARE_LESSTHAN; // a strict bound remembers the typed K
+		aggregate.coefficient_names = {CoefficientName {"price", false, 0.0}, CoefficientName {"2", true, 2.0}};
+		aggregate.avg_scaled = true;
+		input.constraints.push_back(std::move(aggregate));
+		SolverInput::RawConstraint raw;
+		raw.indices = {0};
+		raw.coefficients = {1.0};
+		raw.sense = '<';
+		raw.rhs = 100.0;
+		raw.source_clause_id = 7;
+		raw.repair_group_id = 11;
+		raw.strict = true;
+		raw.rhs_label = "cap";
+		input.global_constraints.push_back(std::move(raw));
+		GeneralConstraintSpec general;
+		general.result_column = 1;
+		general.argument_columns = {0};
+		general.source_clause_id = 9;
+		general.repair_group_id = 13;
+		input.general_constraints.push_back(std::move(general));
+
+		SolverModel model = BuildModel(input);
+
+		REQUIRE(model.constraints.size() == 2);
+		CHECK(model.constraints[0].provenance.source_clause_id == 5);
+		CHECK(model.constraints[1].provenance.source_clause_id == 7);
+		REQUIRE(model.general_constraints.size() == 1);
+		CHECK(model.general_constraints[0].provenance.source_clause_id == 9);
+		for (auto *prov : {&model.constraints[0].provenance, &model.constraints[1].provenance,
+		                   &model.general_constraints[0].provenance}) {
+			CHECK(prov->repair_group_id == DConstants::INVALID_INDEX);
+			CHECK(prov->kind == ConstraintKind::USER_PARAMETER);
+			CHECK(prov->shape == ElasticShape::UNSET);
+			CHECK(!prov->strict);
+			CHECK(prov->rhs_label.empty());
+			CHECK(!prov->is_aggregate);
+		}
+		CHECK(model.constraints[0].provenance.weight_labels.empty());
+		CHECK(!model.constraints[0].provenance.avg_scaled);
+	}
+
+	SECTION("under DIAGNOSE a row carries its coefficient names and its typed bound") {
+		SolverInput input = MakeBaseInput(2, 2);
+		auto aggregate = MakeAggregate({0, 1}, 2, 10.0);
+		aggregate.comparison_type = ExpressionType::COMPARE_LESSTHAN;
+		aggregate.coefficient_names = {CoefficientName {"price", false, 0.0}, CoefficientName {"2", true, 2.0}};
+		aggregate.avg_scaled = true;
+		input.constraints.push_back(std::move(aggregate));
+		GeneralConstraintSpec general;
+		general.result_column = 1;
+		general.argument_columns = {0};
+		general.repair_group_id = 13;
+		input.general_constraints.push_back(std::move(general));
+
+		SolverModel model = BuildModel(input);
+
+		REQUIRE(model.constraints.size() == 1);
+		auto &prov = model.constraints[0].provenance;
+		CHECK(prov.strict);
+		CHECK(prov.typed_k == 10.0);
+		CHECK(prov.is_aggregate);
+		CHECK(prov.avg_scaled);
+		REQUIRE(prov.weight_labels.size() == 2);
+		CHECK(prov.weight_labels[0].first == 0);
+		CHECK(prov.weight_labels[0].second == "price");
+		REQUIRE(model.general_constraints.size() == 1);
+		CHECK(model.general_constraints[0].provenance.kind == ConstraintKind::STRUCTURAL);
+		CHECK(model.general_constraints[0].provenance.repair_group_id == 13);
 	}
 
 	SECTION("a fixed aggregate LHS offset sums every row") {

@@ -605,7 +605,7 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 	auto &clause = *body.clause;
 	auto &node = *tree.nodes[root];
 	const auto entries = descent.Containers()[root].Count();
-	auto evaluated = InitializeEvaluatedConstraint(clause, body.clause_index, [&](const DecideTerm &term) {
+	auto evaluated = InitializeEvaluatedConstraint(clause, body.clause_index, op.diagnose, [&](const DecideTerm &term) {
 		return gstate.ReadVariable(term.variable_index, term.frame_read);
 	});
 	// The rows the clause keeps, which its `when` routed and its NULL tests keep (DecideNode::member_tests: a helper's
@@ -648,7 +648,8 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 		evaluated.num_groups = 1;
 	}
 	const auto instances = CountInstances(evaluated.row_group_ids, evaluated.num_groups, num_rows, false);
-	if (DescribeBound(clause, num_rows, op.source_text, op.constraint_sources, op.keyed_scopes, op.keys, evaluated)) {
+	if (DescribeBound(clause, num_rows, op.diagnose, op.source_text, op.constraint_sources, op.keyed_scopes, op.keys,
+	                  evaluated)) {
 		scatter(columns.Numbers(root, body.rhs, tested, &nulls), evaluated.rhs_values);
 	}
 	// A term reading a decision with no instance at the row has no value there (D84), nor has an auxiliary where what
@@ -1064,7 +1065,7 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 	auto &node = *tree.nodes[root];
 	auto &body = node.compiled;
 	auto &clause = *body.clause;
-	auto evaluated = InitializeEvaluatedConstraint(clause, body.clause_index, [&](const DecideTerm &term) {
+	auto evaluated = InitializeEvaluatedConstraint(clause, body.clause_index, op.diagnose, [&](const DecideTerm &term) {
 		return gstate.ReadVariable(term.variable_index, term.frame_read);
 	});
 	// The rows the clause keeps: every row its root holds, which its `when` routed, with the entry standing for each.
@@ -1177,7 +1178,8 @@ vector<bool> DecideModelEmitter::GroupBound(idx_t root, const DecideEntryRows &r
                                             EvaluatedConstraint &evaluated) {
 	auto &body = tree.nodes[root]->compiled;
 	auto &clause = *body.clause;
-	if (!DescribeBound(clause, num_rows, op.source_text, op.constraint_sources, op.keyed_scopes, op.keys, evaluated)) {
+	if (!DescribeBound(clause, num_rows, op.diagnose, op.source_text, op.constraint_sources, op.keyed_scopes, op.keys,
+	                   evaluated)) {
 		return vector<bool>();
 	}
 	// A tightest frame bound's NULL bounds nothing, rather than leaving its instance no value (D85), and a row in no

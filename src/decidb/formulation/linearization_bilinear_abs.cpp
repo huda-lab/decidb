@@ -415,9 +415,9 @@ void LinearizeAbsMaximize(SolverInput &input) {
 		ec_ub1.variable_indices = c1.variable_indices;
 		ec_ub1.row_coefficients = c1.row_coefficients;
 		ec_ub1.variable_indices.push_back(link.y_idx);
-		// One label per entry (the builder reads them by position); the link's own term has none.
-		ec_ub1.coefficient_labels = c1.coefficient_labels;
-		ec_ub1.coefficient_labels.emplace_back();
+		// One name per entry (the builder reads them by position, under DIAGNOSE); the link's own term has none.
+		ec_ub1.coefficient_names = c1.coefficient_names;
+		ec_ub1.coefficient_names.emplace_back();
 		ec_ub1.row_coefficients.push_back(CoefficientColumn::MakeScalar(relax_neg, num_rows));
 		ec_ub1.rhs_values = ShiftRhs(c1.rhs_values, relax_neg);
 		ec_ub1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
@@ -435,8 +435,8 @@ void LinearizeAbsMaximize(SolverInput &input) {
 		ec_ub2.variable_indices = c2.variable_indices;
 		ec_ub2.row_coefficients = c2.row_coefficients;
 		ec_ub2.variable_indices.push_back(link.y_idx);
-		ec_ub2.coefficient_labels = c2.coefficient_labels;
-		ec_ub2.coefficient_labels.emplace_back();
+		ec_ub2.coefficient_names = c2.coefficient_names;
+		ec_ub2.coefficient_names.emplace_back();
 		ec_ub2.row_coefficients.push_back(CoefficientColumn::MakeScalar(-relax_pos, num_rows));
 		ec_ub2.rhs_values = c2.rhs_values;
 		ec_ub2.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;

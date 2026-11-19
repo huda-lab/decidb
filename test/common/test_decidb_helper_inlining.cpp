@@ -118,6 +118,7 @@ TEST_CASE("DeciDB helper inlining", "[decidb][formulation][inlining]") {
 
 	SECTION("a sum read by two rows of two terms each is written into them") {
 		SolverInput input = MakeInput(2);
+		input.diagnose = true; // a row records what its lowering added to the bound only for a diagnosis
 		input.reducer_value_links.push_back(SumOfX());
 		input.constraints.push_back(XLessH());
 

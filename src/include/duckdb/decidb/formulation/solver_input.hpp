@@ -184,16 +184,23 @@ struct EvaluatedProductGroup {
 	int weight_sign = 1;
 };
 
+//! What a diagnosis calls a term's coefficient: the source text of its expression, and the number when the user wrote
+//! one (`SUM(2 * x)`), the only case with a single value to quote.
+struct CoefficientName {
+	string label;
+	bool is_literal = false;
+	double literal = 0.0;
+};
+
 //! Represents an evaluated constraint ready for the solver
 struct EvaluatedConstraint {
 	vector<idx_t> variable_indices;             // Which variable for each term
 	vector<CoefficientColumn> row_coefficients; // [term_idx] = coefficient column for that term
-	//! Printable symbolic label of each term's coefficient expression (parallel to
-	//! variable_indices). For a data-weighted aggregate term like `SUM(buy * l_extendedprice)`
-	//! this is `l_extendedprice`, so infeasible diagnosis can render the summed clause
-	//! symbolically instead of dumping the per-row numeric fan-out. Empty entries (constant
-	//! coefficients / non-aggregate rows) fall back to the numeric reconstruction.
-	vector<string> coefficient_labels;
+	//! What a diagnosis calls each term's coefficient (parallel to variable_indices), filled under DIAGNOSE only: an
+	//! ordinary query holds none. For a data-weighted aggregate term like `SUM(buy * l_extendedprice)` the label is
+	//! `l_extendedprice`, so the diagnosis renders the summed clause symbolically instead of dumping the per-row
+	//! numeric fan-out; a constant coefficient carries its number.
+	vector<CoefficientName> coefficient_names;
 	CoefficientColumn rhs_values; // RHS column (logical size = num_rows)
 	//! A grouped `<>` row whose bound is NULL: still a member of its group's sum, it excludes no value
 	//! (language/guide.md §6.4). Empty for any other clause.
@@ -263,7 +270,8 @@ struct EvaluatedConstraint {
 	//! Symbolic name of a data-backed (non-shared-scalar) RHS expression (`x <= cap_col`
 	//! → "cap_col"). Lets query-mode infeasible diagnosis render a virtual offset
 	//! (`x <= cap_col + delta`) instead of a numeric representative. Empty for a shared
-	//! scalar RHS. Stamped onto ConstraintProvenance::rhs_label at the per-row builder site.
+	//! scalar RHS. Stamped onto ConstraintProvenance::rhs_label at the per-row builder site. Filled under
+	//! DIAGNOSE only.
 	string rhs_label;
 
 	//! True when this is a pure-linear AVG aggregate whose row coefficients were
@@ -786,10 +794,11 @@ struct SolverInput {
 		           : var;
 	}
 
-	//! When set (infeasible diagnosis armed), SolverModel::Build keeps each data-valued bound on one
-	//! decision as a row instead of folding it into the column box, so the elastic engine can relax
-	//! the row and quote its clause. Off by default: the fold is faster to solve.
-	bool keep_singleton_rows = false;
+	//! The query is under DIAGNOSE. SolverModel::Build then builds the state only a diagnosis reads (what each row
+	//! records of its clause beyond `source_clause_id`, ConstraintProvenance), and keeps each data-valued bound on one
+	//! decision as a row instead of folding it into the column box, so the elastic engine can relax the row and quote
+	//! its clause. An ordinary query builds none of it: the fold is faster to solve.
+	bool diagnose = false;
 };
 
 //! The clause a row of `source_clause_id` comes from, as the user wrote it (QuoteWrittenClause), for a message about a

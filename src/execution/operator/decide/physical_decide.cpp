@@ -861,6 +861,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 
 	// Construct SolverInput
 	SolverInput solver_input;
+	solver_input.diagnose = diagnose;
 	solver_input.num_rows = num_rows;
 	solver_input.num_decide_vars = num_decide_vars;
 	solver_input.keyed_mappings = std::move(keyed_mappings);
@@ -1439,7 +1440,6 @@ SolverModel PhysicalDecide::FormulateElasticModel(const ElasticFormulation &elas
                                                   vector<string> &out_global_labels) const {
 	SolverInput input = elastic.input;
 	VarIndexer indexer = elastic.var_indexer;
-	input.keep_singleton_rows = true;
 
 	OpenElasticColumnBox(input);
 	FormulateModel(input, FormulationBox::OfSolvedModel(input), indexer, evaluated);
@@ -1490,12 +1490,6 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 	solve_options.say_number_warning = [&number_warning]() {
 		number_warning.Say();
 	};
-	// Keep an inverted column box (col_lower > col_upper) alive through Build under
-	// diagnosis so the INFEASIBLE terminal can reset it to the intrinsic domain and
-	// diagnose it (Bug 1, all-column-bound conflicts). An unprefixed query keeps the
-	// fast throw.
-	solver_input.keep_singleton_rows = diagnosis_armed;
-
 	// H5: slow-solve continuation is ordinary execution behaviour, not diagnosis, so it
 	// runs with or without the prefix. The interactive prompt needs a human, so it falls
 	// back to a plain error when stdin is not a terminal (tests, benchmarks, -c pipes,
@@ -1529,9 +1523,11 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 	// MIN/MAX linking), so the labels form a contiguous prefix; pad the trailing
 	// unlabeled MIN/MAX globals with "" to keep the vector parallel with
 	// global_variable_types. (Invariant: never shrinks — only labeled globals
-	// precede the resize point.)
-	D_ASSERT(solver_input.global_variable_labels.size() <= solver_input.num_global_vars);
-	solver_input.global_variable_labels.resize(solver_input.num_global_vars);
+	// precede the resize point.) An ordinary query keeps no labels.
+	if (diagnosis_armed) {
+		D_ASSERT(solver_input.global_variable_labels.size() <= solver_input.num_global_vars);
+		solver_input.global_variable_labels.resize(solver_input.num_global_vars);
+	}
 
 	// Retained only when diagnosis is armed; the move is trivial and the model is
 	// freed when Finalize returns. SolveModel otherwise discards the built model.

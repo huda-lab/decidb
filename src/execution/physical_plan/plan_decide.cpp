@@ -27,50 +27,9 @@ static string QuoteColumnName(const string &name) {
 	return name;
 }
 
-unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op) {
-	DecideProfileScope profile("frontend.physical_decide");
-	// Stage 05 carries meaning, not just speed: it chooses the backend, reduces each data bound to its group's tightest
-	// value with its value checks, and folds bounds into column boxes. A plan it never saw (the optimizer switched off,
-	// or PRAGMA enable_verification's unoptimized run) cannot be answered, so it is refused in SQL terms.
-	if (!op.optimized) {
-		throw InvalidInputException("DECIDE needs the DECIDE optimizer. Remove 'decide_optimizer' from "
-		                            "disabled_optimizers, and run PRAGMA enable_optimizer if it is disabled.");
-	}
-	D_ASSERT(op.children.size() == 1);
-	// Both clauses are verified after ALL optimizer rewriting and before any logical
-	// expression is moved into the physical operator. The objective is checked here
-	// for the same reason the constraints are: every rewrite that touches it now
-	// re-enters through LogicalDecide::SetObjective, so a rewrite that breaks the
-	// canonical form should fail loudly rather than reach the extractor.
-	if (op.decide_constraints || op.decide_objective) {
-		DecideCanonicalizer canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.keys,
-		                                  op.is_boolean_var);
-		if (op.decide_constraints) {
-			canonicalizer.VerifyCanonical(*op.decide_constraints);
-		}
-		if (op.decide_objective) {
-			canonicalizer.VerifyCanonicalObjective(*op.decide_objective);
-		}
-	}
-	// Lower the verified clauses into the tree's terms. The pass itself is
-	// owned by stage 05 (src/optimizer/decide/decide_linear_form.cpp); it is TRIGGERED
-	// here because this is the first point at which column bindings are final. The
-	// lowered terms hold copies of the coefficient subtrees, and RemoveUnusedColumns,
-	// ColumnLifetimeAnalyzer and late materialization all rebind the operator's own
-	// expressions after the DECIDE optimizer runs -- copies taken earlier would keep
-	// bindings that no longer name the right input columns.
-	// The tree's nodes come from the final clauses (DecideTreeConstruction), then stage 05's lowering writes each
-	// clause's records into its root, each reducer's terms naming the G they range over.
-	auto construction = make_uniq<DecideTreeConstruction>(context, op);
-	LowerDecideTree(context, op, *construction);
-	// With the shape of every constraint and the objective settled, check the model
-	// class this query needs against the backend chosen for it. A model class is a
-	// gate, not an optimization -- nothing lowers a quadratic constraint into linear
-	// rows -- so an unsupported one is refused here, before the query reads a row,
-	// and the message blames the host rather than the query.
-	RequireDecideSolverSupport(op, construction->Tree());
-	// After the refusal, so a query the backend cannot answer is refused in SQL terms first.
-	auto tree = construction->Finish();
+//! The name the user wrote for each column of the DECIDE input, empty for a column they named nothing. Read off the
+//! plan before CreatePlan moves the child's expressions out; the unbounded diagnosis is its only reader.
+static vector<string> UserWrittenColumnNames(LogicalDecide &op) {
 	// Capture child column bindings BEFORE CreatePlan: several logical operators
 	// (notably LogicalProjection) move their `expressions` vector into the physical
 	// op during CreatePlan, which leaves GetColumnBindings() returning an empty
@@ -118,44 +77,15 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 			}
 		}
 	}
-	auto child_plan = CreatePlan(*op.children[0]);
-	auto decide_op = make_uniq<PhysicalDecide>(
-	    op.types, op.estimated_cardinality, std::move(child_plan), op.decide_index, std::move(op.decide_variables),
-	    std::move(op.decide_constraints), op.written_sense, std::move(op.decide_objective));
-	decide_op->tree = std::move(tree);
-	decide_op->debug = GetDecideDebug(context);
-	// The DIAGNOSE prefix, carried the last leg of parser → binder → plan → stage 08.
-	decide_op->diagnose = op.diagnose;
-	decide_op->solver_backend_name = op.solver_backend_name;
-	decide_op->use_native_constructs = op.use_native_constructs;
-	decide_op->force_native_constructs = op.force_native_constructs;
-	decide_op->num_auxiliary_vars = op.num_auxiliary_vars;
-	decide_op->is_boolean_var = op.is_boolean_var;
-	decide_op->ne_clause_sources = std::move(op.ne_clause_sources);
-	decide_op->minmax_clause_labels = std::move(op.minmax_clause_labels);
-	decide_op->aux_var_expressions = std::move(op.aux_var_expressions);
-	decide_op->constraint_sources = std::move(op.constraint_sources);
-	decide_op->written_objective = std::move(op.written_objective);
-	decide_op->canonical_objective = std::move(op.canonical_objective);
-	decide_op->objective_canonical_differs = op.objective_canonical_differs;
-	decide_op->objective_constant_offset = op.objective_constant_offset;
-	decide_op->source_text = std::move(op.source_text);
-	decide_op->rewrite_accounts = std::move(op.rewrite_accounts);
-	decide_op->singleton_row_boxes = std::move(op.singleton_row_boxes);
-	decide_op->user_singleton_row_bounds = std::move(op.user_singleton_row_bounds);
-	decide_op->member_singleton_row_bounds = std::move(op.member_singleton_row_bounds);
-	decide_op->flat_objective_agg = op.flat_objective_agg;
-	decide_op->flat_objective_is_easy = op.flat_objective_is_easy;
+	return child_userwritten_names;
+}
 
-	decide_op->keyed_scopes = std::move(op.keyed_scopes);
-	decide_op->variable_scopes = std::move(op.variable_scopes);
-	// Resolved like every other expression the operator owns (EnumerateExpressions).
-	decide_op->keys = std::move(op.keys);
-	decide_op->frames = std::move(op.frames);
-	decide_op->scope_checks = std::move(op.scope_checks);
-	decide_op->signatures = std::move(op.signatures);
-	decide_op->objective_signature = op.objective_signature;
-
+//! Name each column of the DECIDE input as the unbounded diagnosis reads it: `input_column_names` and
+//! `input_column_in_clause`, aligned with the materialized data chunk. Only a query under DIAGNOSE reads them, so only
+//! one under DIAGNOSE builds them. `child_userwritten_names` is UserWrittenColumnNames of the plan the operator was
+//! made from.
+static void NameInputColumns(PhysicalDecide &decide_op, LogicalDecide &op,
+                             const vector<string> &child_userwritten_names) {
 	// Resolve source column names for the surviving (post-pruning) child columns,
 	// positionally aligned with the materialized data chunk. Used by the unbounded
 	// diagnosis to label escaping categorical groups (affected_rows).
@@ -171,8 +101,8 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	// names. Anything still empty after that (a computed column with no user alias) is
 	// left blank on purpose: the unbounded diagnosis suppresses categorical rules over
 	// unnamed columns rather than inventing a positional `colN` the user never typed.
-	decide_op->input_column_names.assign(child_bindings.size(), string());
-	decide_op->input_column_in_clause.assign(child_bindings.size(), false);
+	decide_op.input_column_names.assign(child_userwritten_names.size(), string());
+	decide_op.input_column_in_clause.assign(child_userwritten_names.size(), false);
 	// Names are kept as SQL, as the query writes them (`t.depot`, `"my col"`), so a remedy that prints one is
 	// pasteable. A reference is quoted from the DECIDE text at its query location, as a message quotes a clause; one
 	// the text does not hold (a column only the SELECT list names, a reference rewritten without its location) keeps
@@ -181,20 +111,20 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	auto written_name = [&](const BoundReferenceExpression &ref, const string &fallback) {
 		string text;
 		int binding;
-		return decide_op->source_text.CutExpr(ref.GetQueryLocation(), text, binding) ? text : fallback;
+		return decide_op.source_text.CutExpr(ref.GetQueryLocation(), text, binding) ? text : fallback;
 	};
 	auto harvest_key = [&](idx_t key) {
-		for (auto &element : DecideKeyElements(decide_op->keys, key)) {
+		for (auto &element : DecideKeyElements(decide_op.keys, key)) {
 			auto &expr = *element.expression;
 			if (expr.GetExpressionClass() != ExpressionClass::BOUND_REF) {
 				harvest(expr);
 				continue;
 			}
 			auto &ref = expr.Cast<BoundReferenceExpression>();
-			if (ref.index < decide_op->input_column_names.size()) {
-				decide_op->input_column_in_clause[ref.index] = true;
-				if (decide_op->input_column_names[ref.index].empty()) {
-					decide_op->input_column_names[ref.index] = written_name(ref, element.name);
+			if (ref.index < decide_op.input_column_names.size()) {
+				decide_op.input_column_in_clause[ref.index] = true;
+				if (decide_op.input_column_names[ref.index].empty()) {
+					decide_op.input_column_names[ref.index] = written_name(ref, element.name);
 				}
 			}
 		}
@@ -202,12 +132,12 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	harvest = [&](const Expression &e) {
 		if (e.GetExpressionClass() == ExpressionClass::BOUND_REF) {
 			auto &r = e.Cast<BoundReferenceExpression>();
-			if (r.index < decide_op->input_column_names.size()) {
+			if (r.index < decide_op.input_column_names.size()) {
 				// Reached from the DECIDE clause, so it explains rather than correlates
 				// — recorded even when an earlier reference already supplied the name.
-				decide_op->input_column_in_clause[r.index] = true;
-				if (decide_op->input_column_names[r.index].empty()) {
-					decide_op->input_column_names[r.index] =
+				decide_op.input_column_in_clause[r.index] = true;
+				if (decide_op.input_column_names[r.index].empty()) {
+					decide_op.input_column_names[r.index] =
 					    written_name(r, QuoteColumnName(StripDecideTags(r.GetName())));
 				}
 			}
@@ -221,27 +151,27 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 			}
 		}
 	};
-	if (decide_op->decide_constraints) {
-		harvest(*decide_op->decide_constraints);
+	if (decide_op.decide_constraints) {
+		harvest(*decide_op.decide_constraints);
 	}
-	if (decide_op->decide_objective) {
-		harvest(*decide_op->decide_objective);
+	if (decide_op.decide_objective) {
+		harvest(*decide_op.decide_objective);
 	}
 	// A `by` key and a scope check read the clause's data too; an aggregate-shape clause
 	// keeps its `per` wrapper (DecideCanonicalizer::CanonicalizeTreeInternal), so its key
 	// is named above. A key only a declaration writes names no column: a column the
 	// clauses never name stays unnamed.
-	for (idx_t key = 0; key < decide_op->keys.size(); key++) {
-		if (decide_op->keys[key].written_as_by) {
+	for (idx_t key = 0; key < decide_op.keys.size(); key++) {
+		if (decide_op.keys[key].written_as_by) {
 			harvest_key(key);
 		}
 	}
-	for (auto &check : decide_op->scope_checks) {
+	for (auto &check : decide_op.scope_checks) {
 		if (check.value) {
 			harvest(*check.value);
 		}
 	}
-	for (auto &signature : decide_op->signatures) {
+	for (auto &signature : decide_op.signatures) {
 		if (signature.rows) {
 			harvest(*signature.rows);
 		}
@@ -284,16 +214,108 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 			}
 		}
 	}
-	// The refusal of a bound the decision's type cannot hold reads the plan alone, so it is raised here.
-	decide_op->CheckDecisionDomains();
 	// Back-fill SELECT-only columns from the child projection's user-written names.
 	// Only slots the DECIDE-clause harvest left empty are touched, so a name the user
 	// referenced in the clause always wins over the raw projection alias.
-	for (idx_t i = 0; i < decide_op->input_column_names.size(); i++) {
-		if (decide_op->input_column_names[i].empty() && !child_userwritten_names[i].empty()) {
-			decide_op->input_column_names[i] = QuoteColumnName(child_userwritten_names[i]);
+	for (idx_t i = 0; i < decide_op.input_column_names.size(); i++) {
+		if (decide_op.input_column_names[i].empty() && !child_userwritten_names[i].empty()) {
+			decide_op.input_column_names[i] = QuoteColumnName(child_userwritten_names[i]);
 		}
 	}
+}
+
+unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op) {
+	DecideProfileScope profile("frontend.physical_decide");
+	// Stage 05 carries meaning, not just speed: it chooses the backend, reduces each data bound to its group's tightest
+	// value with its value checks, and folds bounds into column boxes. A plan it never saw (the optimizer switched off,
+	// or PRAGMA enable_verification's unoptimized run) cannot be answered, so it is refused in SQL terms.
+	if (!op.optimized) {
+		throw InvalidInputException("DECIDE needs the DECIDE optimizer. Remove 'decide_optimizer' from "
+		                            "disabled_optimizers, and run PRAGMA enable_optimizer if it is disabled.");
+	}
+	D_ASSERT(op.children.size() == 1);
+	// Both clauses are verified after ALL optimizer rewriting and before any logical
+	// expression is moved into the physical operator. The objective is checked here
+	// for the same reason the constraints are: every rewrite that touches it now
+	// re-enters through LogicalDecide::SetObjective, so a rewrite that breaks the
+	// canonical form should fail loudly rather than reach the extractor.
+	if (op.decide_constraints || op.decide_objective) {
+		DecideCanonicalizer canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.keys,
+		                                  op.is_boolean_var);
+		if (op.decide_constraints) {
+			canonicalizer.VerifyCanonical(*op.decide_constraints);
+		}
+		if (op.decide_objective) {
+			canonicalizer.VerifyCanonicalObjective(*op.decide_objective);
+		}
+	}
+	// Lower the verified clauses into the tree's terms. The pass itself is
+	// owned by stage 05 (src/optimizer/decide/decide_linear_form.cpp); it is TRIGGERED
+	// here because this is the first point at which column bindings are final. The
+	// lowered terms hold copies of the coefficient subtrees, and RemoveUnusedColumns,
+	// ColumnLifetimeAnalyzer and late materialization all rebind the operator's own
+	// expressions after the DECIDE optimizer runs -- copies taken earlier would keep
+	// bindings that no longer name the right input columns.
+	// The tree's nodes come from the final clauses (DecideTreeConstruction), then stage 05's lowering writes each
+	// clause's records into its root, each reducer's terms naming the G they range over.
+	auto construction = make_uniq<DecideTreeConstruction>(context, op);
+	LowerDecideTree(context, op, *construction);
+	// With the shape of every constraint and the objective settled, check the model
+	// class this query needs against the backend chosen for it. A model class is a
+	// gate, not an optimization -- nothing lowers a quadratic constraint into linear
+	// rows -- so an unsupported one is refused here, before the query reads a row,
+	// and the message blames the host rather than the query.
+	RequireDecideSolverSupport(op, construction->Tree());
+	// After the refusal, so a query the backend cannot answer is refused in SQL terms first.
+	auto tree = construction->Finish();
+	// The user's names for the child's columns, read before CreatePlan moves the child's expressions out.
+	vector<string> child_userwritten_names;
+	if (op.diagnose) {
+		child_userwritten_names = UserWrittenColumnNames(op);
+	}
+	auto child_plan = CreatePlan(*op.children[0]);
+	auto decide_op = make_uniq<PhysicalDecide>(
+	    op.types, op.estimated_cardinality, std::move(child_plan), op.decide_index, std::move(op.decide_variables),
+	    std::move(op.decide_constraints), op.written_sense, std::move(op.decide_objective));
+	decide_op->tree = std::move(tree);
+	decide_op->debug = GetDecideDebug(context);
+	// The DIAGNOSE prefix, carried the last leg of parser → binder → plan → stage 08.
+	decide_op->diagnose = op.diagnose;
+	decide_op->solver_backend_name = op.solver_backend_name;
+	decide_op->use_native_constructs = op.use_native_constructs;
+	decide_op->force_native_constructs = op.force_native_constructs;
+	decide_op->num_auxiliary_vars = op.num_auxiliary_vars;
+	decide_op->is_boolean_var = op.is_boolean_var;
+	decide_op->ne_clause_sources = std::move(op.ne_clause_sources);
+	decide_op->minmax_clause_labels = std::move(op.minmax_clause_labels);
+	decide_op->aux_var_expressions = std::move(op.aux_var_expressions);
+	decide_op->constraint_sources = std::move(op.constraint_sources);
+	decide_op->written_objective = std::move(op.written_objective);
+	decide_op->canonical_objective = std::move(op.canonical_objective);
+	decide_op->objective_canonical_differs = op.objective_canonical_differs;
+	decide_op->objective_constant_offset = op.objective_constant_offset;
+	decide_op->source_text = std::move(op.source_text);
+	decide_op->rewrite_accounts = std::move(op.rewrite_accounts);
+	decide_op->singleton_row_boxes = std::move(op.singleton_row_boxes);
+	decide_op->user_singleton_row_bounds = std::move(op.user_singleton_row_bounds);
+	decide_op->member_singleton_row_bounds = std::move(op.member_singleton_row_bounds);
+	decide_op->flat_objective_agg = op.flat_objective_agg;
+	decide_op->flat_objective_is_easy = op.flat_objective_is_easy;
+
+	decide_op->keyed_scopes = std::move(op.keyed_scopes);
+	decide_op->variable_scopes = std::move(op.variable_scopes);
+	// Resolved like every other expression the operator owns (EnumerateExpressions).
+	decide_op->keys = std::move(op.keys);
+	decide_op->frames = std::move(op.frames);
+	decide_op->scope_checks = std::move(op.scope_checks);
+	decide_op->signatures = std::move(op.signatures);
+	decide_op->objective_signature = op.objective_signature;
+
+	if (op.diagnose) {
+		NameInputColumns(*decide_op, op, child_userwritten_names);
+	}
+	// The refusal of a bound the decision's type cannot hold reads the plan alone, so it is raised here.
+	decide_op->CheckDecisionDomains();
 	return std::move(decide_op);
 }
 

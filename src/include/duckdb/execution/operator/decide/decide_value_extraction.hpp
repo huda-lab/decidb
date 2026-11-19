@@ -149,18 +149,20 @@ void CountTupleTermsOncePerGroup(const vector<DecideTerm> &terms, idx_t num_rows
 idx_t CountInstances(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t num_rows, bool grouped);
 
 //! A clause's evaluation before its rows are read (EvaluatedConstraint): its facts, its repair group, and each term's
-//! decision as a row reads it (`read_variable`, DecideGlobalSinkState::ReadVariable) and coefficient as written, which
-//! a diagnosis renders a data-weighted clause with.
+//! decision as a row reads it (`read_variable`, DecideGlobalSinkState::ReadVariable). Under DIAGNOSE (`diagnose`) each
+//! term's coefficient as written too, which a diagnosis renders a data-weighted clause with.
 EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constraint, idx_t repair_group_id,
+                                                  bool diagnose,
                                                   const std::function<idx_t(const DecideTerm &)> &read_variable);
 
-//! How a repair names `constraint`'s bound (EvaluatedConstraint::rhs_label), whether one editable value stands for it
-//! on every row, and a constant's value there. A constant canonicalization left of a written bound that reads data
-//! (`x <= cap * o` is `x - cap * o <= 0`, ConstraintSourceInfo::source_rhs_reads_data) repairs as that bound does.
-//! Returns whether it is read on each row instead.
-bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, const DecideSourceText &source_text,
-                   const vector<ConstraintSourceInfo> &constraint_sources, const vector<KeyedScopeInfo> &keyed_scopes,
-                   const vector<DecideKey> &keys, EvaluatedConstraint &evaluated);
+//! How a repair names `constraint`'s bound (EvaluatedConstraint::rhs_label, under DIAGNOSE only: `diagnose`), whether
+//! one editable value stands for it on every row, and a constant's value there. A constant canonicalization left of a
+//! written bound that reads data (`x <= cap * o` is `x - cap * o <= 0`, ConstraintSourceInfo::source_rhs_reads_data)
+//! repairs as that bound does. Returns whether it is read on each row instead.
+bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, bool diagnose,
+                   const DecideSourceText &source_text, const vector<ConstraintSourceInfo> &constraint_sources,
+                   const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> &keys,
+                   EvaluatedConstraint &evaluated);
 
 //! Per-term filter state for a reducer's own `when` (constraint terms, product groups, and their objective-side
 //! equivalents all share this shape).

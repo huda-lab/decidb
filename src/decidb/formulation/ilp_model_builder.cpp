@@ -469,27 +469,30 @@ const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const Solver
 	return out;
 }
 
-//! F2: stamp the row -> clause provenance fields every constraint-builder site sets,
-//! linear or quadratic, aggregate or per-row. `group_key` defaults to INVALID_INDEX for
-//! an ungrouped aggregate row; pass the `when`/`by` group id for a grouped aggregate row,
-//! or the row's group for a per-row row. Leaves every other ConstraintProvenance
-//! field at its default -- the aggregate-only and linear-aggregate-only fields are each
-//! their own site (see StampAggregateProvenance and the avg/weight/folded-terms block in
-//! the linear aggregate branches), because a per-row or quadratic row does not carry them:
-//! FormatQuadraticLhs never reads avg_scaled/weight_labels/folded_terms, and FormatLhs's
-//! is_aggregate wrapping is meaningless off the aggregate branch. The group's name is
-//! the clause's for `group_key` (EvaluatedConstraint::NameOf), so no site names a group
-//! apart from placing a row in it.
+//! F2: stamp the row -> clause provenance every constraint-builder site sets, linear or quadratic, aggregate or
+//! per-row. Every row names its clause (`source_clause_id`): an error about a number the model computes quotes it.
+//! Everything else is what a diagnosis reads and is stamped only under DIAGNOSE (SolverInput::diagnose): an ordinary
+//! query leaves it at its default.
+//! `group_key` defaults to INVALID_INDEX for an ungrouped aggregate row; pass the `when`/`by` group id for a grouped
+//! aggregate row, or the row's group for a per-row row. `row` is the data row a per-row row was emitted at (DIAGNOSE's
+//! `row`); a row that stands for no class set is a kept row, a class of its own (D28). The aggregate-only
+//! linear fields (avg_scaled, weight_labels, folded_terms) are their own site, because a per-row or quadratic row does
+//! not carry them: FormatQuadraticLhs never reads them. The group's name is the clause's for `group_key`
+//! (EvaluatedConstraint::NameOf), so no site names a group apart from placing a row in it.
 //! `lhs_offset` is the constant part of the LHS that this site folded into the RHS
 //! (`SUM(x + c) >= K` is emitted as `SUM(x) >= K - Sum(c)`). The reconstructed clause
 //! label still renders the LHS the user wrote, constant included, so the RHS it is
 //! quoted against has to be the user's `K` and not the folded one — otherwise the report
 //! names a bound nobody typed. It rides on `rhs_mechanism_offset` alongside whatever a
 //! lowering added, because the reader needs their sum and neither alone.
-static void StampConstraintProvenance(ConstraintProvenance &provenance, const EvaluatedConstraint &eval_const,
-                                      idx_t repair_group_id, idx_t group_key = DConstants::INVALID_INDEX,
-                                      double lhs_offset = 0.0) {
+static void StampConstraintProvenance(const SolverInput &input, ConstraintProvenance &provenance,
+                                      const EvaluatedConstraint &eval_const, idx_t repair_group_id,
+                                      idx_t group_key = DConstants::INVALID_INDEX, double lhs_offset = 0.0,
+                                      idx_t row = DConstants::INVALID_INDEX) {
 	provenance.source_clause_id = eval_const.source_clause_id;
+	if (!input.diagnose) {
+		return;
+	}
 	provenance.repair_group_id = repair_group_id;
 	provenance.removal_group_id = eval_const.removal_group_id;
 	provenance.kind = eval_const.kind;
@@ -500,29 +503,44 @@ static void StampConstraintProvenance(ConstraintProvenance &provenance, const Ev
 		provenance.rhs_label = eval_const.rhs_label;
 	}
 	provenance.rhs_mechanism_offset = eval_const.rhs_mechanism_offset - lhs_offset;
-	if (group_key != DConstants::INVALID_INDEX) {
-		provenance.group_key = group_key;
-	}
+	provenance.group_key = group_key;
 	provenance.group_name = eval_const.NameOf(group_key);
-}
-
-//! The data row a per-row row was emitted at (DIAGNOSE's `row`). A row that stands for
-//! no class set is a kept row, a class of its own (D28). Stamped after `class_set`.
-static void StampDataRow(ConstraintProvenance &provenance, idx_t row) {
-	provenance.data_row = row;
-	provenance.per_kept_row = provenance.class_set == DConstants::INVALID_INDEX;
-}
-
-//! The class set group `group`'s rows stand for (D28), INVALID_INDEX for none.
-static idx_t ClassSetOf(const EvaluatedConstraint &eval_const, idx_t group) {
-	return group < eval_const.group_class_set.size() ? eval_const.group_class_set[group] : DConstants::INVALID_INDEX;
-}
-
-//! F2, aggregate sites only: reducer-placement metadata for the diagnosis renderer's
-//! SUM(...)-wrapping (Facet B). A per-row constraint has no reducer, so this is never
-//! called there.
-static void StampAggregateProvenance(ConstraintProvenance &provenance, const EvaluatedConstraint &eval_const) {
+	// Reducer-placement metadata for the diagnosis renderer's SUM(...)-wrapping (Facet B).
 	provenance.is_aggregate = eval_const.lhs_is_aggregate;
+	// The class set group `group_key`'s rows stand for (D28); an ungrouped clause has the one group 0.
+	idx_t group = group_key == DConstants::INVALID_INDEX ? 0 : group_key;
+	provenance.class_set =
+	    group < eval_const.group_class_set.size() ? eval_const.group_class_set[group] : DConstants::INVALID_INDEX;
+	if (row != DConstants::INVALID_INDEX) {
+		provenance.data_row = row;
+		provenance.per_kept_row = provenance.class_set == DConstants::INVALID_INDEX;
+	}
+}
+
+//! The provenance of a row a lowering emitted in flat columns (RawConstraint), which states what an
+//! EvaluatedConstraint's sites derive from their group columns, so a clause reads the same in a diagnosis whichever
+//! shape its rows took. Only the clause is stamped unless the query is under DIAGNOSE.
+static void StampRawProvenance(const SolverInput &input, ConstraintProvenance &provenance,
+                               const SolverInput::RawConstraint &raw) {
+	provenance.source_clause_id = raw.source_clause_id;
+	if (!input.diagnose) {
+		return;
+	}
+	provenance.kind = raw.kind;
+	provenance.shape = raw.shape;
+	provenance.repair_group_id = raw.repair_group_id;
+	provenance.removal_group_id = raw.removal_group_id;
+	// I4 (aggregate `<>`): carry the disjunction-binary column so the infeasible
+	// removal dial groups the two global rows just like a per-row `<>`.
+	provenance.indicator_col = raw.indicator_col;
+	provenance.class_set = raw.class_set;
+	provenance.group_key = raw.group_key;
+	provenance.group_name = raw.group_name;
+	provenance.is_aggregate = raw.is_aggregate;
+	provenance.rhs_mechanism_offset = raw.rhs_mechanism_offset;
+	provenance.rhs_label = raw.rhs_label;
+	provenance.strict = raw.strict;
+	provenance.typed_k = raw.typed_k;
 }
 
 //! The model class this built model demands: the facts the build settled, in the shape the plan-time prediction
@@ -795,6 +813,15 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
 	phase.Next("model.constraints");
 
+	// A strict `<` / `>` stepped the bound: under DIAGNOSE, remember the user's typed K so the diagnosis can re-quote a
+	// suggestion against `> K`, not the δ-adjusted rhs.
+	auto remember_typed_k = [&](ConstraintProvenance &provenance, double typed_k) {
+		if (input.diagnose) {
+			provenance.strict = true;
+			provenance.typed_k = typed_k;
+		}
+	};
+
 	// Helper: apply comparison sense to a constraint. A strict `<` / `>` steps the bound to the next integer, which
 	// is exact because the bind-time type gate (ValidateDecideNoIntegerStepComparisonOnReal,
 	// ValidateDecideIntegralComparisonOperands) admits only an integer-valued left-hand side.
@@ -804,21 +831,18 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 			constr.sense = '>';
 			constr.rhs = rhs;
 		} else if (cmp == ExpressionType::COMPARE_GREATERTHAN) {
-			// δ site: `> K` becomes `>= floor(K)+1`. Remember the user's typed K so
-			// diagnosis can re-quote a suggestion against `> K`, not the δ-adjusted rhs.
+			// δ site: `> K` becomes `>= floor(K)+1`.
 			constr.sense = '>';
 			constr.rhs = DecideStrictBound(true, rhs);
-			constr.provenance.strict = true;
-			constr.provenance.typed_k = rhs + lhs_offset;
+			remember_typed_k(constr.provenance, rhs + lhs_offset);
 		} else if (cmp == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
 			constr.sense = '<';
 			constr.rhs = rhs;
 		} else if (cmp == ExpressionType::COMPARE_LESSTHAN) {
-			// δ site: `< K` becomes `<= ceil(K)-1`. Remember the user's typed K.
+			// δ site: `< K` becomes `<= ceil(K)-1`.
 			constr.sense = '<';
 			constr.rhs = DecideStrictBound(false, rhs);
-			constr.provenance.strict = true;
-			constr.provenance.typed_k = rhs + lhs_offset;
+			remember_typed_k(constr.provenance, rhs + lhs_offset);
 		} else if (cmp == ExpressionType::COMPARE_EQUAL) {
 			constr.sense = '=';
 			constr.rhs = rhs;
@@ -874,7 +898,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 			}
 			return true;
 		}
-		if (input.keep_singleton_rows) {
+		if (input.diagnose) {
 			return false;
 		}
 		D_ASSERT(constr.indices.size() == 1); // a bound on one decision: one term, merged by the canonicalizer
@@ -921,51 +945,31 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		bool has_groups = !eval_const.row_group_ids.empty();
 		const string written = DecideWrittenClause(input, eval_const.source_clause_id);
 
-		// Symbolic coefficient labels for a data-weighted aggregate: map each summed decide
-		// variable to its coefficient expression (`buy → l_extendedprice`) so infeasible
-		// diagnosis can render `SUM(buy * l_extendedprice)` rather than the numeric fan-out.
+		// A data-weighted aggregate's coefficient names, under DIAGNOSE: map each summed decide variable to its
+		// coefficient expression (`buy → l_extendedprice`) so infeasible diagnosis can render
+		// `SUM(buy * l_extendedprice)` rather than the numeric fan-out. A constant coefficient has no name to map.
 		auto StampWeightLabels = [&](ConstraintProvenance &prov) {
 			for (idx_t t = 0; t < eval_const.variable_indices.size(); t++) {
 				idx_t v = eval_const.variable_indices[t];
-				if (v == DConstants::INVALID_INDEX || t >= eval_const.coefficient_labels.size() ||
-				    eval_const.coefficient_labels[t].empty()) {
+				if (v == DConstants::INVALID_INDEX || t >= eval_const.coefficient_names.size() ||
+				    eval_const.coefficient_names[t].label.empty()) {
 					continue;
 				}
-				prov.weight_labels.emplace_back(v, eval_const.coefficient_labels[t]);
+				prov.weight_labels.emplace_back(v, eval_const.coefficient_names[t].label);
 			}
 		};
 
-		// Written per-term coefficients, for the accumulating path only. There the row's
+		// Written per-term coefficients, under DIAGNOSE, for the accumulating path only. There the row's
 		// coefficient is a *sum* over the folded rows (keyed vars collapse many
 		// rows onto one column), so the reconstruction cannot recover what the user typed
-		// from the matrix alone.
-		//
-		// `coefficient_labels[t]` is the source text of the term's coefficient expression
-		// (physical_decide.cpp:3069) — "1" for a bare `SUM(keepS)`, "l_extendedprice" for
-		// `SUM(buy * l_extendedprice)`. A label that is wholly a number therefore *is* the
-		// written coefficient; anything else is data-varying and has no single value to
-		// quote (weight_labels covers that case). The column's own `IsUniform()` only
-		// catches the Scalar representation — a written constant usually materializes
-		// dense — so the label is the reliable discriminator.
-		auto ParseLiteralCoefficient = [](const string &label, double &value) -> bool {
-			if (label.empty()) {
-				return false;
-			}
-			const char *begin = label.c_str();
-			char *end = nullptr;
-			double parsed = std::strtod(begin, &end);
-			if (end != begin + label.size() || !std::isfinite(parsed)) {
-				return false;
-			}
-			value = parsed;
-			return true;
-		};
+		// from the matrix alone. A coefficient the user wrote as a number is that number; a data-varying one has no
+		// single value to quote (weight_labels covers that case).
 		// Computed once per clause, not per group: the grouped path below emits one constraint
 		// per group and would otherwise rebuild this (and its scratch set) for every one.
 		// Empty unless the clause is an aggregate that takes the accumulating path, which
 		// is the only case whose matrix coefficients are folded totals.
 		vector<FoldedAggTerm> clause_folded_terms;
-		if (is_aggregate && !TermsHaveTheirOwnColumns(eval_const, indexer)) {
+		if (input.diagnose && is_aggregate && !TermsHaveTheirOwnColumns(eval_const, indexer)) {
 			std::unordered_set<idx_t> seen;
 			for (idx_t t = 0; t < eval_const.variable_indices.size(); t++) {
 				idx_t v = eval_const.variable_indices[t];
@@ -974,11 +978,21 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 				}
 				FoldedAggTerm term;
 				term.decide_var_idx = v;
-				// A term's label is pushed with its variable, wherever an aggregate is evaluated.
-				term.has_unit = ParseLiteralCoefficient(eval_const.coefficient_labels[t], term.unit);
+				// A term's name is pushed with its variable, wherever an aggregate is evaluated.
+				term.has_unit = eval_const.coefficient_names[t].is_literal;
+				term.unit = eval_const.coefficient_names[t].literal;
 				clause_folded_terms.push_back(term);
 			}
 		}
+		// What only the linear aggregate rows carry, under DIAGNOSE.
+		auto StampAggregateTerms = [&](ConstraintProvenance &prov) {
+			if (!input.diagnose) {
+				return;
+			}
+			prov.avg_scaled = eval_const.avg_scaled;
+			StampWeightLabels(prov);
+			prov.folded_terms = clause_folded_terms;
+		};
 
 		// The rows the clause emits, read once (ClauseEmittedRows). The builder is their last reader, so it takes them
 		// from the clause, and they are freed with this iteration.
@@ -1009,13 +1023,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 				rhs -= lhs_offset;
 				ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_offset);
 				// F2 site 1: aggregate, ungrouped.
-				StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, DConstants::INVALID_INDEX,
-				                          lhs_offset);
-				StampAggregateProvenance(constr.provenance, eval_const);
-				constr.provenance.class_set = ClassSetOf(eval_const, 0);
-				constr.provenance.avg_scaled = eval_const.avg_scaled;
-				StampWeightLabels(constr.provenance);
-				constr.provenance.folded_terms = clause_folded_terms;
+				StampConstraintProvenance(input, constr.provenance, eval_const, repair_group_id,
+				                          DConstants::INVALID_INDEX, lhs_offset);
+				StampAggregateTerms(constr.provenance);
 				PushNormalizedConstraint(std::move(constr));
 
 			} else {
@@ -1047,12 +1057,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 					double group_rhs = eval_const.rhs_values.Get(flat_rows[g_begin]) - group_lhs_offset;
 					ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, group_lhs_offset);
 					// F2 site 2: grouped aggregate (`by` and/or `when`).
-					StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, g, group_lhs_offset);
-					StampAggregateProvenance(constr.provenance, eval_const);
-					constr.provenance.class_set = ClassSetOf(eval_const, g);
-					constr.provenance.avg_scaled = eval_const.avg_scaled;
-					StampWeightLabels(constr.provenance);
-					constr.provenance.folded_terms = clause_folded_terms;
+					StampConstraintProvenance(input, constr.provenance, eval_const, repair_group_id, g,
+					                          group_lhs_offset);
+					StampAggregateTerms(constr.provenance);
 					PushNormalizedConstraint(std::move(constr));
 				}
 			}
@@ -1083,12 +1090,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 				// re-emits that group as ordinary per-row rows, so this is the only site
 				// that sees it (see ilp_linearization.cpp, the NO_SOLUTION branch).
 				idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
-				StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, row_group_key,
-				                          rhs_adjustment);
 				// A scoped easy MIN/MAX's member row stands for its `by` group's classes, a
 				// `per K:` clause's row for its class; any other per-row row for its data row.
-				constr.provenance.class_set = ClassSetOf(eval_const, has_groups ? row_group_key : 0);
-				StampDataRow(constr.provenance, row);
+				StampConstraintProvenance(input, constr.provenance, eval_const, repair_group_id, row_group_key,
+				                          rhs_adjustment, row);
 				if (TryFoldPerRowBound(eval_const, row, constr)) {
 					continue;
 				}
@@ -1173,14 +1178,12 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		case ExpressionType::COMPARE_LESSTHAN:
 			qc.sense = '<';
 			qc.rhs = DecideStrictBound(false, adjusted_rhs);
-			qc.provenance.strict = true;
-			qc.provenance.typed_k = rhs;
+			remember_typed_k(qc.provenance, rhs);
 			break;
 		case ExpressionType::COMPARE_GREATERTHAN:
 			qc.sense = '>';
 			qc.rhs = DecideStrictBound(true, adjusted_rhs);
-			qc.provenance.strict = true;
-			qc.provenance.typed_k = rhs;
+			remember_typed_k(qc.provenance, rhs);
 			break;
 		default:
 			throw InternalException("Unsupported comparison type in ILP model builder (quadratic)");
@@ -1216,10 +1219,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 				double lhs_constant;
 				auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_constant, written);
 				// F2 site 4: quadratic aggregate, ungrouped.
-				StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, DConstants::INVALID_INDEX,
+				StampConstraintProvenance(input, qc.provenance, eval_const, repair_group_id, DConstants::INVALID_INDEX,
 				                          lhs_constant);
-				StampAggregateProvenance(qc.provenance, eval_const);
-				qc.provenance.class_set = ClassSetOf(eval_const, 0);
 				model.quadratic_constraints.push_back(std::move(qc));
 			} else {
 				// Groups: one QuadraticConstraint per group, reuse CSR
@@ -1238,9 +1239,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 					double lhs_constant;
 					auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, group_rhs, lhs_constant, written);
 					// F2 site 5: grouped quadratic aggregate.
-					StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, g, lhs_constant);
-					StampAggregateProvenance(qc.provenance, eval_const);
-					qc.provenance.class_set = ClassSetOf(eval_const, g);
+					StampConstraintProvenance(input, qc.provenance, eval_const, repair_group_id, g, lhs_constant);
 					model.quadratic_constraints.push_back(std::move(qc));
 				}
 			}
@@ -1256,9 +1255,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 				auto qc = BuildQuadraticConstraint(eval_const, single_row, rhs, lhs_constant, written);
 				// F2 site 6: quadratic per-row.
 				idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
-				StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, row_group_key, lhs_constant);
-				qc.provenance.class_set = ClassSetOf(eval_const, has_groups ? row_group_key : 0);
-				StampDataRow(qc.provenance, row);
+				StampConstraintProvenance(input, qc.provenance, eval_const, repair_group_id, row_group_key,
+				                          lhs_constant, row);
 				model.quadratic_constraints.push_back(std::move(qc));
 			}
 		}
@@ -1277,25 +1275,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		// Raw rows include both structural links and user-facing composed outer
 		// constraints, so their provenance is explicit on RawConstraint rather than
 		// inferred from an EvaluatedConstraint position.
-		constr.provenance.kind = raw.kind;
-		constr.provenance.shape = raw.shape;
-		constr.provenance.source_clause_id = raw.source_clause_id;
-		constr.provenance.repair_group_id = raw.repair_group_id;
-		constr.provenance.removal_group_id = raw.removal_group_id;
-		// I4 (aggregate `<>`): carry the disjunction-binary column so the infeasible
-		// removal dial groups the two global rows just like a per-row `<>`.
-		constr.provenance.indicator_col = raw.indicator_col;
-		constr.provenance.class_set = raw.class_set;
-		// The display half. A per-row clause emitted through EvaluatedConstraint gets
-		// these stamped from its group columns; one emitted in flat columns states them
-		// itself, so a clause reads the same in a diagnosis whichever shape its rows took.
-		constr.provenance.group_key = raw.group_key;
-		constr.provenance.group_name = raw.group_name;
-		constr.provenance.is_aggregate = raw.is_aggregate;
-		constr.provenance.rhs_mechanism_offset = raw.rhs_mechanism_offset;
-		constr.provenance.rhs_label = raw.rhs_label;
-		constr.provenance.strict = raw.strict;
-		constr.provenance.typed_k = raw.typed_k;
+		StampRawProvenance(input, constr.provenance, raw);
 		PushNormalizedConstraint(std::move(constr));
 	}
 
@@ -1313,17 +1293,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		ic.coefficients = std::move(spec.row.coefficients);
 		ic.sense = spec.row.sense;
 		ic.rhs = spec.row.rhs;
-		ic.provenance.kind = spec.row.kind;
-		ic.provenance.shape = spec.row.shape;
-		ic.provenance.source_clause_id = spec.row.source_clause_id;
-		ic.provenance.repair_group_id = spec.row.repair_group_id;
-		ic.provenance.removal_group_id = spec.row.removal_group_id;
-		ic.provenance.indicator_col = spec.row.indicator_col;
-		ic.provenance.group_key = spec.row.group_key;
-		ic.provenance.group_name = spec.row.group_name;
-		ic.provenance.is_aggregate = spec.row.is_aggregate;
-		ic.provenance.rhs_mechanism_offset = spec.row.rhs_mechanism_offset;
-		ic.provenance.rhs_label = spec.row.rhs_label;
+		StampRawProvenance(input, ic.provenance, spec.row);
 		model.indicator_constraints.push_back(std::move(ic));
 	}
 
@@ -1334,10 +1304,12 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		gc.kind = spec.kind;
 		gc.result_column = spec.result_column;
 		gc.argument_columns = std::move(spec.argument_columns);
-		gc.provenance.kind = ConstraintKind::STRUCTURAL;
 		gc.provenance.source_clause_id = spec.source_clause_id;
-		gc.provenance.repair_group_id = spec.repair_group_id;
-		gc.provenance.removal_group_id = spec.removal_group_id;
+		if (input.diagnose) {
+			gc.provenance.kind = ConstraintKind::STRUCTURAL;
+			gc.provenance.repair_group_id = spec.repair_group_id;
+			gc.provenance.removal_group_id = spec.removal_group_id;
+		}
 		model.general_constraints.push_back(std::move(gc));
 	}
 
