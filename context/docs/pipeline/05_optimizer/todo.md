@@ -13,7 +13,7 @@ files.
   found a NaN or infinite value and names the column or value where it stands, with the query's caret; no
   suggestion. The `inputs` kept only to choose what a message names go. `language/errors.md`, the guide and the
   stage docs quote the new text.
-- **Needs.** TEST-15 (the tests the rewording breaks move to its helper).
+- **Tests.** The tests the rewording breaks move to `assert_error_at` (`testing/oracle.md` §3.6).
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "nan or finite"` passes.
 
 ## OPT-20 — An = bound's disagreement names its group, not its class
@@ -25,7 +25,7 @@ files.
 - **Change.** By the owner's ruling (2026-11-18, `context/opa_rewrite/decisions.md` R15): one check per `by` group, on
   both bound kinds; the class-naming code (about 60 lines) and the tests that check only the class name go.
   `class_key` and `KeyClasses` have other readers and stay.
-- **Needs.** TEST-15 (the tests the rewording breaks move to its helper).
+- **Tests.** The tests the rewording breaks move to `assert_error_at` (`testing/oracle.md` §3.6).
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "bound_side_tables or anr_frames"` passes.
 
 ## OPT-21 — The solver path depends on no direct-solve code

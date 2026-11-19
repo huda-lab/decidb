@@ -11,7 +11,7 @@ Language-surface work is owned by `../../language/` (the scopes:
   this query's FROM and write the clause with per`, `write the scope in front of the constraint or inside a reducer`).
 - **Change.** By the owner's rulings (2026-11-18, `context/opa_rewrite/decisions.md` R12, R19): each says what is wrong
   and points at it, and stops. `errors.md` quotes the new text.
-- **Needs.** TEST-15 (the tests the rewording breaks move to its helper).
+- **Tests.** The tests the rewording breaks move to `assert_error_at` (`testing/oracle.md` §3.6).
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "binder or scope"` passes.
 
 ## BIND-4 — The binder judges algebra by name

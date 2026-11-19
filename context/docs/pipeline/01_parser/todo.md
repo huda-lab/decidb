@@ -23,5 +23,6 @@ todo files.
   parentheses`, `add SUCH THAT with at least one constraint`).
 - **Change.** By the owner's rulings (2026-11-18, `context/opa_rewrite/decisions.md` R12, R19): each says what is wrong
   and points at it, and stops. `errors.md` quotes the new text.
-- **Needs.** PARSE-2; TEST-15 (the tests the rewording breaks move to its helper).
+- **Needs.** PARSE-2.
+- **Tests.** The tests the rewording breaks move to `assert_error_at` (`testing/oracle.md` §3.6).
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "parser"` passes.

@@ -66,7 +66,8 @@ solver path answers those queries, so none of them is wrong, only slower.
   sentence is appended; `check_position` keeps checks where they would have stood.
 - **Change.** By the owner's rulings (2026-11-18, `context/opa_rewrite/decisions.md` R10, R12, R14): a message states
   the kind of error and where; one raising check per rule; no hint sentence. The machinery above goes.
-- **Needs.** OPT-19 (both edit the NaN naming); TEST-15 (the tests the rewording breaks move to its helper).
+- **Needs.** OPT-19 (both edit the NaN naming).
+- **Tests.** The tests the rewording breaks move to `assert_error_at` (`testing/oracle.md` §3.6).
 - **Done when.** `grep -rn "DirectMessageCodes\|check_position" src` finds nothing;
   `./test/decide/run_tests.sh -n 2 -k "direct"` passes.
 

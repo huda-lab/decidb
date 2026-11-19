@@ -28,7 +28,7 @@ named-column scan also bypass or revisit parts of the normal tree execution; the
   raised, as in SQL. A row a `when` drops, or a value no parent reads, raises nothing; nothing else is deferred.
   `DecideBlock`, the rank fields, the rank functions and `Rebase` go, with the tests that pin an order
   (`test_error_precedence.py` and the order cases in other files).
-- **Needs.** TEST-15 (the tests the change breaks move to its helper).
+- **Tests.** The tests the change breaks move to `assert_error_at` (`testing/oracle.md` §3.6).
 - **Done when.** The repro fails in time close to plain SQL's; `grep -rn "DecideBlock\|ErrorRanks" src` finds
   nothing; `./test/decide/run_tests.sh -n 2 -k "error or when or nan"` passes.
 
@@ -42,7 +42,8 @@ named-column scan also bypass or revisit parts of the normal tree execution; the
   -1 when a definition row belongs to no clause (no query reaches it today); the gap message names where without it.
 - **Change.** By the owner's rulings (2026-11-18, `context/opa_rewrite/decisions.md` R12, R19): each says what is wrong
   and points at it, and stops. `errors.md` and the guide quote the new text; the opening of `errors.md` states the rule.
-- **Needs.** EXEC-15, OPT-19, OPT-20, FW-4; TEST-15 (the tests the rewording breaks move to its helper).
+- **Needs.** EXEC-15, OPT-19, OPT-20, FW-4.
+- **Tests.** The tests the rewording breaks move to `assert_error_at` (`testing/oracle.md` §3.6).
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "error or unbounded or infeasible"` passes.
 
 ## EXEC-19 — An ordinary query builds no diagnosis state

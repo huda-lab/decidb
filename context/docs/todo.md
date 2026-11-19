@@ -12,10 +12,7 @@ the owner rules first.
 
 # Phase 1 — Errors are raised where they are found
 
-## 1.1 Error-test helper (one lane)
-- [ ] TEST-15 One helper asserts an error's kind and location — testing/todo.md § TEST-15
-
-## 1.2 Messages (needs: 1.1) (parallel: EXEC-15, OPT-20 | PARSE-2, PARSE-3 | BIND-2 | OPT-19, FW-4 | PLAN-6, EXEC-19)
+## 1.2 Messages (parallel: EXEC-15, OPT-20 | PARSE-2, PARSE-3 | BIND-2 | OPT-19, FW-4 | PLAN-6, EXEC-19)
 - [ ] EXEC-15 Raise the first error reached — pipeline/08_execution/todo.md § EXEC-15
 - [ ] OPT-20 An = bound names its group only — pipeline/05_optimizer/todo.md § OPT-20
 - [ ] PARSE-2 A removed spelling is a syntax error — pipeline/01_parser/todo.md § PARSE-2
