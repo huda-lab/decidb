@@ -281,6 +281,18 @@ main > .hero.hero--page { height: auto; min-height: 0; padding: calc(var(--nav) 
 .hw__papers { display: grid; gap: 2px; }
 .hw__paper { display: grid; gap: 2px; padding: 9px 10px; border-top: 1px solid var(--win-rule); }
 .hw__paper b { font-weight: 500; } .hw__paper span { color: var(--win-muted); font-size: var(--w-small); }
+/* the documentation: the DECIDE path, its stages arriving one by one, the page's own stages lit */
+.hw__stages { display: grid; gap: 1px; }
+.hw__stage { display: grid; grid-template-columns: 26px 128px minmax(0, 1fr); align-items: baseline; gap: var(--s-3); padding: 4px 10px;
+             border-radius: var(--r-sm); color: var(--win-muted); }
+.hw__stage b { font-weight: 500; }
+.hw__stage > span:last-child { font-size: var(--w-small); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hw__num { font: 400 var(--w-small)/1 var(--font-mono); }
+.hw__stage--exit b { padding-left: 12px; font-weight: 400; }
+.hw__stage--exit .hw__num { text-align: right; }
+.hw__stage.is-on { color: var(--win-ink); background: var(--win-row); }
+.hw__stage.is-on .hw__num, .hw__stage.is-on b { color: var(--win-accent); }
+.hw__stage.is-on > span:last-child { color: var(--win-ink); }
 
 /* ---------------------------------------------------------------- reading pages */
 /* on the reading pages a focused link or an anchor jump stops below the fixed header, never under it */
@@ -295,6 +307,31 @@ html:has(> body.doc-body) { scroll-padding-top: calc(var(--nav) + var(--s-4)); }
 
 .doc-layout { display: grid; grid-template-columns: 264px minmax(0, 760px); gap: var(--s-9); padding: var(--s-8) 0 var(--s-10); }
 .doc-layout--example { grid-template-columns: minmax(0, 760px) 280px; }
+/* the documentation: its pages on the left, the page in the middle, the page's sections on the right */
+.doc-layout--docs { grid-template-columns: 232px minmax(0, 1fr) 220px; grid-template-areas: "pages page toc"; gap: var(--s-8); }
+.doc-layout--docs > .docnav { grid-area: pages; }
+.doc-layout--docs > .prose { grid-area: page; }
+.doc-layout--docs > .toc { grid-area: toc; }
+.doc-layout--docs .toc a { font-size: var(--t-note); padding-top: 6px; padding-bottom: 6px; }
+.doc-layout--docs .toc .sub a { font-size: var(--t-small); }
+.docnav { position: sticky; top: calc(var(--nav) + var(--s-6)); align-self: start; max-height: calc(100vh - var(--nav) - var(--s-8));
+          overflow: auto; scrollbar-width: thin; }
+.docnav__group { margin: var(--s-5) 0 var(--s-2); font-size: var(--t-label); font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.docnav .toc-title + .docnav__group { margin-top: 0; }
+.docnav ul { display: grid; gap: 1px; }
+.docnav a { display: block; padding: 6px var(--s-3); margin-left: calc(-1 * var(--s-3)); border-radius: var(--r-sm); font-size: var(--t-note);
+            line-height: 1.4; color: var(--muted); transition: color 200ms var(--ease), background-color 200ms var(--ease); }
+.docnav a:hover { color: var(--ink); background: var(--p-surface); }
+.docnav a[aria-current="page"] { color: var(--ink); font-weight: 500; background: color-mix(in oklab, var(--accent) 8%, var(--bg)); }
+/* where a part lives in the source, at the end of a section */
+.prose .src { margin-top: var(--s-5); padding: var(--s-4) var(--s-5); border: 1px solid var(--line); border-radius: var(--r-md); font-size: var(--t-note); max-width: calc(37em + 2 * var(--s-5)); }
+.prose .src > strong { display: block; font-size: var(--t-label); letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.prose .src ul { margin-top: var(--s-2); padding: 0; list-style: none; }
+.prose .src li + li { margin-top: var(--s-2); }
+.prose .src code { font-size: var(--t-small); }
+/* the previous and next pages (the examples' pager); inside the article its links keep no underline */
+.prose .pager :is(a.pager__prev, a.pager__next) { text-decoration: none; }
+.pager__next:only-child { grid-column: 2; }
 /* the contents beside a reading page: its sections at reading size, the one being read marked with the accent rule
    (site.js), its part kept in the ink when the reader is in one of its sections */
 .toc { position: sticky; top: calc(var(--nav) + var(--s-6)); align-self: start; max-height: calc(100vh - var(--nav) - var(--s-8)); overflow: auto;
@@ -324,9 +361,15 @@ html:has(> body.doc-body) { scroll-padding-top: calc(var(--nav) + var(--s-4)); }
 .prose ol:not([class]) { padding-left: 1.4em; list-style: decimal; }
 .prose li + li { margin-top: var(--s-2); }
 .prose li::marker { color: var(--muted); }
-.prose a:not(.ref, .link, .anchor) { text-decoration: underline; text-decoration-color: color-mix(in oklab, var(--accent) 45%, transparent);
+.prose a:not(.ref, .link, .anchor, .src-link) { text-decoration: underline; text-decoration-color: color-mix(in oklab, var(--accent) 45%, transparent);
   text-underline-offset: 3px; text-decoration-thickness: 1px; transition: text-decoration-color var(--dur) var(--ease); }
-.prose a:not(.ref, .link, .anchor):hover { text-decoration-color: var(--accent); }
+.prose a:not(.ref, .link, .anchor, .src-link):hover { text-decoration-color: var(--accent); }
+/* a file or folder of the source (docs/): its name in the accent opens it on GitHub, the arrow says it leaves the site */
+.prose a.src-link { text-decoration: none; white-space: nowrap; }
+.prose a.src-link code { color: var(--accent); white-space: normal; box-shadow: inset 0 -1px 0 color-mix(in oklab, var(--accent) 40%, transparent);
+  transition: background-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
+.prose a.src-link:hover code { background: color-mix(in oklab, var(--accent) 10%, var(--p-surface)); box-shadow: inset 0 -1px 0 var(--accent); }
+.prose a.src-link::after { content: "\2197"; margin-left: 2px; font-size: 0.75em; color: var(--muted); }
 .prose .lead { font-size: var(--t-lead); line-height: 1.6; }
 .prose strong { font-weight: 500; }
 /* running text keeps a reading measure; code, tables and results may use the column's full width */
@@ -382,6 +425,8 @@ html:has(> body.doc-body) { scroll-padding-top: calc(var(--nav) + var(--s-4)); }
 .table-wrap th, .table-wrap td { padding: 10px var(--s-4) 10px 0; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
 .table-wrap th { font-size: var(--t-label); font-weight: 500; color: var(--muted); }
 .table-wrap td.yes { color: var(--ok-ink); }
+/* a long cell wraps at a reading measure, not at the table's full width */
+.prose .table-wrap td { max-width: 34em; }
 .table-wrap td.no { color: var(--muted); }
 
 /* notes, tags, linked references */
@@ -517,3 +562,57 @@ html:has(> body.doc-body) { scroll-padding-top: calc(var(--nav) + var(--s-4)); }
 :root[data-theme="dark"] .dg-frame { --card: var(--ground-surface); }
 .footer--statement, .frame--lit { --action: var(--p-action); --action-ink: var(--p-action-ink); }
 html:not([data-motion="off"]) :is(.footer--statement, .frame--lit) .btn--primary:hover { background: color-mix(in oklab, var(--action) 82%, var(--ground-ink)); }
+
+/* ---------------------------------------------------------------- documentation openings
+   each draws what the build ran: two plan trees, the rules EXPLAIN named, the router, the benchmark, the model */
+.hw__trees, .hw__dumps { display: grid; font: 400 var(--w-small)/18px var(--font-mono); white-space: pre; overflow: hidden; }
+.hw__rules, .hw__routes, .hw__perfs { display: grid; gap: 1px; }
+.hw__rule { display: grid; grid-template-columns: 28px minmax(0, 200px) minmax(0, 1fr); align-items: baseline; gap: var(--s-3); padding: 6px 10px; border-top: 1px solid var(--win-rule); }
+.hw__rule b { font: 500 var(--w-mono)/1 var(--font-mono); color: var(--win-accent); }
+.hw__rule code { font: 400 var(--w-small)/1.3 var(--font-mono); color: var(--win-ink); background: none; padding: 0; overflow: hidden; text-overflow: ellipsis; }
+.hw__rule span { color: var(--win-muted); font-size: var(--w-small); }
+.hw__route { display: grid; grid-template-columns: minmax(0, 1fr) 16px minmax(0, 1fr); align-items: baseline; gap: var(--s-3); padding: 9px 10px; border-top: 1px solid var(--win-rule); }
+.hw__route code { font: 400 var(--w-small)/1.4 var(--font-mono); color: var(--win-ink); background: none; padding: 0; }
+.hw__route span { color: var(--win-muted); } .hw__route b { font-weight: 500; color: var(--win-accent); }
+.hw__legend { display: flex; flex-wrap: wrap; gap: var(--s-4); align-items: center; font-size: var(--w-small); color: var(--win-muted); }
+.hw__key::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 2px; vertical-align: -1px; }
+.hw__key--r::before { background: var(--win-accent); } .hw__key--g::before { background: color-mix(in oklab, var(--win-muted) 55%, transparent); }
+.hw__perf { display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: center; gap: var(--s-3); padding: 6px 0; border-top: 1px solid var(--win-rule); }
+.hw__perf b { font: 500 var(--w-small)/1 var(--font-mono); }
+.hw__bars { display: grid; gap: 3px; }
+.hw__pline { display: flex; align-items: center; gap: 6px; }
+.hw__pbar { flex: none; display: block; height: 9px; width: calc(var(--w) * 0.82); border-radius: 2px; }
+.hw__pbar--r { background: var(--win-accent); } .hw__pbar--g { background: color-mix(in oklab, var(--win-muted) 55%, transparent); }
+.hw__pline i { font: 400 11px/1 var(--font-mono); font-style: normal; color: var(--win-ink); white-space: nowrap; }
+/* one window, two columns: a plan rewritten and on the solver, or a query beside its model */
+.hw__split { display: grid; gap: var(--s-5); align-items: start; }
+.hw__split--plan { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+.hw__split--model { grid-template-columns: max-content minmax(0, 1fr); gap: var(--s-4); }
+.hw__split--model > div + div { padding-left: var(--s-4); }
+.hw__split > div + div { padding-left: var(--s-5); border-left: 1px solid var(--win-rule); }
+.hw__col { margin-bottom: var(--s-2); font-size: var(--w-small); font-weight: 500; color: var(--win-muted); }
+.hw__split .hw__sql { font-size: 11px; line-height: 17px; white-space: pre; }
+.hw__split :is(.hw__trees, .hw__dumps) { font-size: 11px; line-height: 17px; }
+/* testing: two lanes that meet in one verdict */
+.hw__split--lanes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.hw__lane { position: relative; padding: 8px 10px; margin-top: 18px; border-radius: var(--r-sm); background: var(--win-row); font-size: var(--w-small); }
+.hw__lane + .hw__lane::before { content: "↓"; position: absolute; left: 50%; top: -17px; transform: translateX(-50%); color: var(--win-muted); font-size: 11px; }
+.hw__col + .hw__lane { margin-top: 0; }
+.hw__verdict { display: grid; gap: 4px; margin-top: var(--s-5); padding-top: var(--s-4); border-top: 1px solid var(--win-rule); font-size: var(--w-small); }
+.hw__verdict code { font: 500 var(--w-small)/1.3 var(--font-mono); color: var(--win-accent); background: none; padding: 0; }
+.hw__verdict b { font-weight: 500; }
+
+/* a laptop narrower than 1360: the bar holds six words, so the GitHub link moves to the footer only */
+@media (min-width: 1024px) and (max-width: 1359px) {
+  .nav__actions > a.nav__link { display: none; }
+}
+/* the documentation on a laptop narrower than 1200: the pages beside the text; the page's own contents give way */
+@media (min-width: 1024px) and (max-width: 1199px) {
+  .doc-layout--docs { grid-template-columns: 210px minmax(0, 1fr); grid-template-areas: "pages page"; gap: var(--s-7); }
+  .doc-layout--docs > .toc { display: none; }
+}
+@media (max-width: 1023px) {
+  .docnav { position: static; max-height: none; }
+  .doc-layout--docs { grid-template-areas: none; }
+  .doc-layout--docs > * { grid-area: auto; }
+}

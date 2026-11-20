@@ -4,6 +4,9 @@ A fixture has `setup` SQL and, for fragments (`frag`), a `template` whose {CLAUS
 Every example's setup is also a fixture under its slug.
 """
 
+import glob
+import os
+
 import examples as EX
 
 DECK_SETUP = """
@@ -114,3 +117,12 @@ FIXTURES["n1"] = {
     "setup": """CREATE TABLE Signals (name VARCHAR, score DOUBLE);
 INSERT INTO Signals VALUES ('alpha', 3), ('beta', 4), ('gamma', 0);"""
 }
+
+# the documentation pages' own databases: each docs_fixtures/<name>.py defines FIXTURES = {...}; a name may not repeat
+for _path in sorted(glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs_fixtures", "*.py"))):
+    _scope = {}
+    exec(compile(open(_path).read(), _path, "exec"), _scope)
+    for _name, _fx in _scope.get("FIXTURES", {}).items():
+        if _name in FIXTURES:
+            raise SystemExit(f"{_path}: fixture {_name!r} is already defined")
+        FIXTURES[_name] = _fx

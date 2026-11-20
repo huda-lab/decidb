@@ -256,7 +256,7 @@ ORDER BY shift, nurse;<!--/sql-->
           it, or use it in a larger query.</p>
         <h3 id="no-answer">When there is no answer</h3>
         <p>If no choice can satisfy every constraint, the query stops with an error that says what to do next:</p>
-<!--sql check="knapsack" expect="Prefix the query with DIAGNOSE" show-->SELECT item, x FROM Items
+<!--sql check="knapsack" expect="Prefix the query with DIAGNOSE" show status="the solver found no answer"-->SELECT item, x FROM Items
 DECIDE x(BOOL)
 SUCH THAT SUM(x * weight) <= 40 AND SUM(x) >= 4
 MAXIMIZE SUM(x * value);<!--/sql-->
@@ -290,7 +290,8 @@ MAXIMIZE SUM(x * value);<!--/sql-->
         </table></div>
         <p>A product with one <code>BOOL</code> factor (<code>b * x</code>) is exact on both solvers. A query the available
           solver cannot take is refused before any row is read, with a message that names the solver it needs. Some
-          queries need no solver at all: see <a href="features.html#rewriting">query rewriting</a>.</p>
+          queries need no solver at all: see <a href="features.html#rewriting">query rewriting</a>. How DeciDB builds the
+          model and hands it to each solver is in the <a href="docs/solving.html">documentation</a>.</p>
       </section>
 
       <!-- ============================================================ EXPLAIN -->
@@ -307,7 +308,8 @@ SUCH THAT ship <= S.demand
 MAXIMIZE SUM(ship);<!--/explain-->
         <p>A line marked <code>↳</code> shows what DeciDB added to model a clause, such as a helper value for
           <code>abs</code>. A query answered by <a href="features.html#rewriting">query rewriting</a> names the rule
-          instead. <code>EXPLAIN ANALYZE</code> and <code>EXPLAIN (FORMAT JSON)</code> work too.</p>
+          instead. <code>EXPLAIN ANALYZE</code> and <code>EXPLAIN (FORMAT JSON)</code> work too. The
+          <a href="docs/life-of-a-query.html">documentation</a> follows one query through every step DeciDB takes.</p>
       </section>
 
       <!-- ============================================================ REFERENCE -->

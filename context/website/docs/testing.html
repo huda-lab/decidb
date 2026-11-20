@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="en" data-type="software" data-radius="sharp" data-ground="sage" data-buttons="pill" data-motion>
+<head>
+<meta charset="utf-8">
+<script>(function(){var r=document.documentElement,t;try{t=localStorage.getItem('decidb-theme')}catch(e){}if(!r.dataset.theme)r.dataset.theme=t==='dark'?'dark':'light'})()</script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script>document.documentElement.classList.add('m-enter');setTimeout(()=>document.documentElement.classList.add('m-enter-done'),700)</script>
+<title>Testing: DeciDB documentation</title>
+<meta name="description" content="How DeciDB&#x27;s tests judge an answer against an independent solver oracle, what each suite covers, the scope grid, the golden model dumps and branch coverage.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Testing: DeciDB documentation">
+<meta property="og:description" content="How DeciDB&#x27;s tests judge an answer against an independent solver oracle, what each suite covers, the scope grid, the golden model dumps and branch coverage.">
+<meta property="og:image" content="../assets/images/share.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../assets/images/mark.svg" type="image/svg+xml">
+<meta name="theme-color" content="#ffffff">
+<!-- <link rel="canonical" href="https://huda-lab.github.io/decidb/"> once the published address is confirmed -->
+<meta name="site-kind" content="software">
+<meta name="page-type" content="software">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/system.css">
+<link rel="stylesheet" href="../assets/ui/cards.css">
+<link rel="stylesheet" href="../assets/motion/motion.css">
+<link rel="stylesheet" href="../assets/backgrounds/backgrounds.css">
+<link rel="stylesheet" href="../assets/layout/layout.css">
+<link rel="stylesheet" href="../assets/icons/icon.css">
+<style>
+:root {
+  --p-bg: #ffffff; --p-surface: #f4f4f4; --p-ink: #111111; --p-muted: #6b6b6b;
+  --p-accent: #1a4be0; --p-accent-ink: #ffffff; --p-action: #1a4be0; --p-action-ink: #ffffff;
+  --p-inv-bg: #111111; --p-inv-surface: #1e1e1e; --p-inv-ink: #ffffff; --p-inv-muted: #9a9a9a;
+  --p-inv-accent: #ffffff; --p-inv-accent-ink: #111111; --p-inv-action: #ffffff; --p-inv-action-ink: #111111;
+  --font-display: "Geist", system-ui, sans-serif;
+  --font-text: "Geist", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --display-weight: 500;
+  --display-tracking: -0.035em;
+  --display-tracking-xl: -0.045em;
+}
+/* the evening grade (a tech page may take it): light is the default; the nav's switch sets data-theme to dark and the
+   head script remembers it; the page tokens go dark, the lit ground (sage) and the panels' painted grounds stay light, as the
+   kit keeps them */
+:root[data-theme="dark"] {
+  --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
+  --p-accent: #7d9dff; --p-accent-ink: #0e0f10; --p-action: #3463f0; --p-action-ink: #ffffff;
+  --p-inv-bg: #f4f4f2; --p-inv-surface: #e8e8e6; --p-inv-ink: #111111; --p-inv-muted: #5c5c5c;
+  --p-inv-accent: #1a4be0; --p-inv-accent-ink: #ffffff; --p-inv-action: #111111; --p-inv-action-ink: #ffffff;
+}
+</style>
+<link rel="stylesheet" href="../assets/css/site.css">
+</head>
+<body class="doc-body">
+<header class="nav">
+  <div class="wrap nav__bar">
+    <a class="skip-link" href="#top">Skip to content</a>
+    <a class="nav__logo" href="../index.html"><img class="logo logo--light" src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42"><img class="logo logo--dark" src="../assets/images/logo-dark.svg" alt="DeciDB" width="140" height="42" loading="lazy"><img class="logo logo--mark" src="../assets/images/mark.svg" alt="DeciDB" width="40" height="32" loading="lazy"></a>
+    <nav class="nav__links" aria-label="Main">
+      <div class="nav__item"><a class="nav__link" href="../getting-started.html">Get started</a></div><div class="nav__item"><a class="nav__link" href="../guide.html">Guide</a></div><div class="nav__item"><a class="nav__link" href="../examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="../examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="../examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="../examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="../examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="../examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="../examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Query rewriting</p><a href="../examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="../examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="../examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="../features.html"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="../about.html">About</a></div><div class="nav__item"><a class="nav__link" href="../docs/index.html" aria-current="page">Documentation</a></div><div class="nav__item"><a class="nav__link" href="../features.html">Novel features</a></div>
+    </nav>
+    <div class="nav__actions">
+      <button class="btn btn--secondary theme-toggle" type="button" aria-pressed="false" data-theme-toggle hidden><svg class="theme-toggle__sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="theme-toggle__moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg><span class="theme-toggle__label">Dark theme</span></button>
+      <a class="nav__link" href="https://github.com/huda-lab/decidb">GitHub</a>
+      <a class="btn btn--primary" href="../getting-started.html#install">Install DeciDB</a>
+    </div>
+    <button class="nav__toggle" type="button" aria-expanded="false" aria-label="Menu">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M2 5h14M2 13h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+</header>
+<main id="top">
+<section class="hero hero--page" data-enter aria-labelledby="page-h">
+  <div class="wrap"><div class="hero-text hero-split grid">
+    <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="../index.html">Home</a><span aria-hidden="true">/</span><a href="../docs/index.html">Documentation</a><span aria-hidden="true">/</span>Testing</nav><h1 id="page-h">Testing</h1><p class="hero__lead">How a test decides that an answer is right, what each suite covers, and how DeciDB measures which code its tests reach.</p></div>
+    <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="25" data-ui-pause-host><div class="ui ui-hw hw hw--page hw--mid" role="img" aria-label="A correctness test: DeciDB answers the query, a hand-written gurobipy model answers the same problem on the same rows, and compare_solutions requires the objectives to agree within 1e-4."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · a correctness test</span></div><div class="hw__page"><div data-ly-steps="260"><div class="hw__split hw__split--lanes"><div><div class="hw__col">DeciDB</div><div class="hw__lane" data-step>the DECIDE query</div><div class="hw__lane" data-step>the decidb binary</div><div class="hw__lane" data-step>its rows and objective</div></div><div><div class="hw__col">The oracle</div><div class="hw__lane" data-step>the same rows, read by stock DuckDB</div><div class="hw__lane" data-step>a gurobipy model written by hand</div><div class="hw__lane" data-step>Gurobi&#x27;s optimum</div></div></div><div class="hw__verdict" data-step><code>compare_solutions</code><span>objective within 1e-4: <b>identical</b> when every decision matches, <b>optimal</b> when only the objective does</span></div></div></div></div></div>
+  </div></div>
+</section>
+<div class="container"><div class="doc-layout doc-layout--docs"><nav class="docnav" aria-label="Documentation pages"><div class="toc-title">Documentation</div><p class="docnav__group">Start here</p><ul><li><a href="index.html">Overview</a></li><li><a href="life-of-a-query.html">Life of a query</a></li></ul><p class="docnav__group">The pipeline</p><ul><li><a href="front-end.html">Parser, binder and plan</a></li><li><a href="canonical-form.html">Canonicalizer and optimizer</a></li><li><a href="solving.html">Model, solvers and execution</a></li></ul><p class="docnav__group">Novel features</p><ul><li><a href="rewriting.html">Query rewriting</a></li><li><a href="rewrite-rules.html">The rewrite rules</a></li><li><a href="diagnose.html">DIAGNOSE</a></li></ul><p class="docnav__group">Quality</p><ul><li><a href="testing.html" aria-current="page">Testing</a></li><li><a href="performance.html">Performance</a></li></ul></nav>
+<nav class="toc" aria-label="On this page">
+  <div class="toc-title">On this page</div>
+  <ul>
+    <li><a href="#oracle">How a test judges an answer</a></li>
+    <li class="sub"><a href="#agreement">What agreement means</a></li>
+    <li class="sub"><a href="#independent">Why the oracle is independent</a></li>
+    <li class="sub"><a href="#oracle-cache">The oracle cache</a></li>
+    <li><a href="#scope-suite">The scope suite</a></li>
+    <li class="sub"><a href="#grid">The combination grid</a></li>
+    <li><a href="#suites">The suites</a></li>
+    <li class="sub"><a href="#models">Golden model dumps</a></li>
+    <li class="sub"><a href="#rewrite-tests">Testing a rewrite</a></li>
+    <li class="sub"><a href="#guards">Guards on every run</a></li>
+    <li><a href="#settings">Running the suite</a></li>
+    <li><a href="#coverage">Coverage</a></li>
+    <li class="sub"><a href="#coverage-levels">What each area's tests check</a></li>
+    <li class="sub"><a href="#branch-coverage">Branch coverage</a></li>
+  </ul>
+</nav>
+<article class="prose">
+
+  <!-- ============================================================ ORACLE -->
+  <section id="oracle">
+    <h2><a class="anchor" href="#oracle">How a test judges an answer</a></h2>
+    <p class="lead">A correctness test never compares DeciDB's answer with a number its author worked out. It states
+      the same problem a second time, to a solver DeciDB does not touch, and requires the two answers to agree.</p>
+    <p>The second statement is the oracle: a test oracle, the standard name for the source of truth a test checks a
+      result against. In DeciDB's suite it is a model written by hand in Python with <code>gurobipy</code>, Gurobi's
+      Python interface. This is differential testing (McKeeman, 1998): two independent implementations of one problem,
+      run on the same input, must agree. Each correctness test takes five steps:</p>
+    <ol class="steps">
+      <li><strong>Run DeciDB.</strong> The query goes to the DeciDB command-line binary, and the test reads the rows it
+        prints.</li>
+      <li><strong>Read the same data elsewhere.</strong> The test reads the input rows with stock DuckDB, never through
+        DeciDB. For the tests over TPC-H tables that is a database of its own at scale factor 0.01, made by the same
+        deterministic generator as DeciDB's, so the rows are identical.</li>
+      <li><strong>State the model.</strong> The test builds the model in Python from those rows: one variable per
+        decision, one constraint per clause, the objective.</li>
+      <li><strong>Solve it</strong> with Gurobi.</li>
+      <li><strong>Compare.</strong> <code>compare_solutions</code> checks the objective and the decision vector.</li>
+    </ol>
+    <p>A knapsack over TPC-H's <code>lineitem</code> table shows the shape. The query is ordinary DECIDE SQL:</p>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">test_var_boolean.py: the query</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
+<span class="tk-k">FROM</span> lineitem
+<span class="tk-k">WHERE</span> l_orderkey &lt; <span class="tk-n">100</span>
+<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * l_quantity) &lt;= <span class="tk-n">100</span>
+<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * l_extendedprice)</code></pre></div>
+    <p>The oracle states the same problem as numbers, with no DECIDE clause, no DeciDB code, and none of DeciDB's
+      choices about how to write a clause:</p>
+<div class="code" data-lang="python"><div class="code__head"><span class="code__title">test_var_boolean.py: the oracle</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>    oracle_solver.create_model(<span class="tk-s">&quot;q01_knapsack&quot;</span>)
+    vnames = [f<span class="tk-s">&quot;x_{i}&quot;</span> <span class="tk-k">for</span> i <span class="tk-k">in</span> range(len(data))]
+    <span class="tk-k">for</span> vn <span class="tk-k">in</span> vnames:
+        oracle_solver.add_variable(vn, VarType.BINARY)
+
+    oracle_solver.add_constraint(
+        {vnames[i]: data[i][3] <span class="tk-k">for</span> i <span class="tk-k">in</span> range(len(data))},
+        <span class="tk-s">&quot;&lt;=&quot;</span>,
+        100.0,
+        name=<span class="tk-s">&quot;capacity&quot;</span>,
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][2] <span class="tk-k">for</span> i <span class="tk-k">in</span> range(len(data))},
+        ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()</code></pre></div>
+
+    <h3 id="agreement"><a class="anchor" href="#agreement">What agreement means</a></h3>
+    <p><code>compare_solutions</code> makes two checks:</p>
+    <ul>
+      <li><strong>The objective.</strong> It recomputes DeciDB's objective from DeciDB's own rows, never from a value
+        DeciDB reports, and requires it to match the oracle's within 1e-4. A linear objective is recomputed from a
+        coefficient per row; a quadratic one from a function the test supplies.</li>
+      <li><strong>The decision vector.</strong> It sorts both answers by their data columns and compares them row by
+        row. The result is <code>identical</code> when the vectors match, and <code>optimal</code> when they differ but
+        reach the same objective: an alternate optimum, which is a right answer too.</li>
+    </ul>
+    <p>A query with no answer is judged the same way. <code>assert_infeasible</code> checks that DeciDB reports the
+      query infeasible or unbounded, and the test states the model to the oracle as well and checks that Gurobi agrees.
+      That catches DeciDB calling a feasible problem infeasible, not only the reverse.</p>
+
+    <h3 id="independent"><a class="anchor" href="#independent">Why the oracle is independent</a></h3>
+    <p>The oracle shares nothing with DeciDB's model builder, on purpose. A test that reused DeciDB's own code to state
+      the expected model would agree with DeciDB whenever both are wrong in the same way, a lockstep bug. The bugs that
+      matter most in an optimizer are exactly of that kind: a wrong coefficient, a constraint pointing the wrong way, a
+      Big-M too small to switch a row off. Each one returns a plausible answer that is not the optimum.</p>
+    <ul>
+      <li><strong>No shared data path.</strong> The oracle reads its rows with stock DuckDB from a separate file. No
+        DeciDB parser, binder or coefficient evaluation stands between the data and the model.</li>
+      <li><strong>No shared formulation.</strong> Where DeciDB writes a construct with Big-M rows, the oracle states the
+        construct's meaning with a different tool. For <code>&lt;&gt;</code>, <code>add_ne_indicator</code> uses Gurobi's
+        native indicator constraints, which need no M at all. Mirroring DeciDB's rows would only test that the
+        mirror matches.</li>
+      <li><strong>No worked answers.</strong> A hand-computed expected answer checks only the instance its author
+        thought through. An encoding bug that happens to give the same number passes. The suite forbids them.</li>
+      <li><strong>Each clause as the query writes it.</strong> The oracle states <code>x + 3 &lt;= 10</code> as a
+        constraint row, <code>x &lt;= 10 - 3</code>, never as the bound <code>x &lt;= 7</code> on the variable itself.
+        Moving a row into a bound is a simplification DeciDB makes, and the oracle must not repeat it.</li>
+    </ul>
+    <p>The oracle's solver is Gurobi only. HiGHS is never an oracle fallback, since HiGHS is one of the two backends
+      under test. The oracle sets Gurobi's <code>NonConvex</code> parameter to 2 whenever a model has a quadratic term,
+      so convex and non-convex quadratic models are stated the same way.</p>
+
+    <h3 id="oracle-cache"><a class="anchor" href="#oracle-cache">The oracle cache</a></h3>
+    <p>An oracle solve is deterministic for a given test and database, so its result is cached on disk. Each entry is
+      keyed by the test's id and a hash of the test function's source and the database file. Changing a test's body
+      invalidates only that test's entry. On a hit, the model-building calls do nothing and the solve returns the cached
+      result, so a rerun spends no Gurobi time on the tests that did not change.</p>
+    <p>A run of the whole suite that passes removes the entries it did not use. A run filtered with <code>-k</code> or
+      <code>-m</code> keeps them, which is why a focused run always passes one of the two.</p>
+
+    <div class="src"><strong>In the source</strong><ul>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/comparison/compare.py"><code>test/decide/comparison/compare.py</code></a>: <code>compare_solutions</code>,
+        <code>assert_infeasible</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/solver/gurobi_backend.py"><code>test/decide/solver/gurobi_backend.py</code></a>: the oracle's Gurobi wrapper</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/_oracle_helpers.py"><code>test/decide/tests/_oracle_helpers.py</code></a>: <code>add_ne_indicator</code>, <code>add_in_domain</code>
+        and the other shared oracle pieces</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/conftest.py"><code>test/decide/conftest.py</code></a>: the fixtures <code>decidb_cli</code>, <code>duckdb_conn</code>,
+        <code>oracle_solver</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/oracle_cache.py"><code>test/decide/oracle_cache.py</code></a>: <code>CachedOracleSolver</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/context/docs/testing/oracle.md"><code>context/docs/testing/oracle.md</code></a>: the full framework, and how to add a test</li>
+    </ul></div>
+  </section>
+
+  <!-- ============================================================ SCOPE SUITE -->
+  <section id="scope-suite">
+    <h2><a class="anchor" href="#scope-suite">The scope suite</a></h2>
+    <p class="lead">The scope language (<code>when</code>, <code>per</code>, <code>by</code>) has its own oracle, which
+      reads no SQL at all. It builds the model the language defines from a plain description of the clauses.</p>
+    <p>A scope test describes its query to <code>ScopedModel</code> as Python data: the result rows, the decisions with
+      their keys, and each clause with its scope. The oracle then follows the language's definition step by step. It
+      keeps the rows a <code>when</code> keeps, splits them into the classes of the <code>per</code> key, generates the
+      clause once per class, and evaluates each reducer over its <code>by</code> group. It solves the result with Gurobi
+      through the same interface as the main oracle.</p>
+    <p>The SQL string and the oracle's statement sit side by side. In the combination grid, each body is a pair of
+      functions: one writes the SQL, the other states the same clause to the oracle.</p>
+<div class="code" data-lang="python"><div class="code__head"><span class="code__title">test_scope_combinations.py: one clause, two statements</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>    <span class="tk-s">&quot;one-reducer&quot;</span>: (
+        lambda agg, inner: f<span class="tk-s">&quot;{agg}({inner}x) by (t.g) &lt;= t.cap&quot;</span>,
+        lambda agg, inner: ((_reduce(agg, inner, (<span class="tk-s">&quot;g&quot;</span>,)),), <span class="tk-s">&quot;&lt;=&quot;</span>, (CAP,)),
+    ),</code></pre></div>
+    <p><code>judge_scoped</code> then checks DeciDB's answer against the same clauses: every row of a decision's class
+      shows one value, a whole-numbered decision is whole and within its bounds, every generated clause holds, and the
+      objective reaches the oracle's optimum. The solver and the judge build their clauses with the same code, so they
+      cannot drift apart. And because the oracle never sees the SQL, a test that keeps passing after its SQL is
+      respelled shows that the two spellings mean the same thing.</p>
+    <p>Some shapes the scope oracle cannot state: a product of decisions, a square, an <code>ABS</code>, an
+      <code>AVG</code> under <code>&lt;&gt;</code>. For those, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/_brute_force.py"><code>_brute_force.py</code></a> gives each solver column a
+      small whole-number domain, enumerates every assignment, and keeps the best one that satisfies the constraints,
+      written as plain Python.</p>
+
+    <h3 id="grid"><a class="anchor" href="#grid">The combination grid</a></h3>
+    <p><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_scope_combinations.py"><code>test_scope_combinations.py</code></a> crosses every part of the scope language with every other. A decision is
+      per row or keyed. The scope in front of the clause is one of eight spellings: no <code>per</code>,
+      <code>per row</code>, <code>per ()</code> or a key, each with or without a <code>when</code>. The clause body is a per-row bound alone, one reducer, a decision beside a reducer, or two reducers
+      with different <code>by</code> keys. The reducer is <code>SUM</code>, <code>AVG</code>, <code>MIN</code> or
+      <code>MAX</code>, with one of four scopes of its own. That makes 2 × 8 × (1 + 3 × 4 × 4) = 784 cells.</p>
+    <p>Each cell has two allowed outcomes: the oracle's optimum, or the error the language defines for that data, with
+      the same phrase in its message. Never a message that the shape is not supported, never a wrong answer, never an
+      internal error. The grid exists to find bugs that only a combination shows. It is kept whole under one rule: no
+      two cells reach the same set of branches in the DECIDE code.</p>
+    <p>The other scope suites each cover one part of the language: declarations (<a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_scope_declare.py"><code>test_scope_declare.py</code></a>),
+      clause generation, reducers with a <code>by</code> and with their own scope, the objective, the rule that a key
+      must determine what its clause reads (<a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_scope_determination.py"><code>test_scope_determination.py</code></a>), the value rewrite, bare clauses,
+      the language specification's eight worked examples as written and in fully explicit form, the EXPLAIN and DIAGNOSE
+      text, and every removed spelling's message (<a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_scope_removed_syntax.py"><code>test_scope_removed_syntax.py</code></a>).</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/_scope_oracle.py"><code>test/decide/tests/_scope_oracle.py</code></a>: <code>ScopedModel</code>, <code>solve_scoped</code>,
+        <code>judge_scoped</code>, <code>ScopeError</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/_brute_force.py"><code>test/decide/tests/_brute_force.py</code></a>: <code>optimum</code>, <code>judge</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/_scope_cases.py"><code>test/decide/tests/_scope_cases.py</code></a>: the shared relations and helpers</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/decide/tests"><code>test/decide/tests/test_scope_*.py</code></a>: the suites</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/context/docs/testing/scope_suite.md"><code>context/docs/testing/scope_suite.md</code></a>: what each suite covers</li>
+    </ul></div>
+  </section>
+
+  <!-- ============================================================ SUITES -->
+  <section id="suites">
+    <h2><a class="anchor" href="#suites">The suites</a></h2>
+    <p class="lead">Each suite answers one question about the system. The Python suite judges answers; the C++ and SQL
+      logic tests check internal pieces; the golden dumps check the model itself.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Suite</th><th scope="col">Where</th><th scope="col">How it judges</th></tr></thead>
+      <tbody>
+        <tr><td>Features: variable types, constraint operators, <code>when</code>, <code>per</code>, MIN and MAX, AVG,
+          ABS, bilinear and quadratic terms, subqueries, joins, edge cases</td>
+          <td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/decide/tests"><code>test/decide/tests/test_*.py</code></a>, one file or more per area</td><td>The solver oracle</td></tr>
+        <tr><td>The scope language</td><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/decide/tests"><code>test_scope_*.py</code></a></td><td>The scope oracle, brute force, model
+          size</td></tr>
+        <tr><td>Query rewriting</td><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/decide/tests"><code>test_direct_*.py</code></a></td><td>The oracle, the solver path and the
+          rewritten path must agree (<a href="#rewrite-tests">below</a>)</td></tr>
+        <tr><td>DIAGNOSE</td><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/decide/tests"><code>test_query_diagnostics_*.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/decide/tests"><code>test_diagnosis_*.py</code></a></td>
+          <td>Invariants every diagnosis must keep (below the table)</td></tr>
+        <tr><td>Errors</td><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/decide/tests"><code>test_error_*.py</code></a></td><td>An invalid query fails with the right
+          message</td></tr>
+        <tr><td>EXPLAIN</td><td><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_explain.py"><code>test/decide/tests/test_explain.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_scope_explain_diagnose.py"><code>test_scope_explain_diagnose.py</code></a></td><td>Pinned
+          output text</td></tr>
+        <tr><td>The model DeciDB builds</td><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/decide/golden"><code>test/decide/golden/</code></a></td><td>A diff against a committed
+          model (<a href="#models">below</a>)</td></tr>
+        <tr><td>Internal pieces: the canonical verifier, plan serialization, the DIAGNOSE router, the backend registry,
+          the IR and the rule driver</td><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/common"><code>test/common/test_decidb_*.cpp</code></a>, run as
+          <code>unittest "[decidb]"</code></td><td>C++ assertions</td></tr>
+        <tr><td>Every spelling parses and binds; parse errors are exact</td><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/decidb"><code>test/decidb/*.test</code></a></td>
+          <td>SQL logic tests</td></tr>
+        <tr><td>Standard SQL is unchanged, and the edits to DuckDB hold</td><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/sql"><code>test/sql/</code></a>,
+          <a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/optimizer"><code>test/optimizer/</code></a></td><td>DuckDB's own suite</td></tr>
+      </tbody>
+    </table></div>
+    <p>The DIAGNOSE suites need their own judge, because a diagnosis can go wrong while its numbers stay right: the
+      solve still fails and a diagnosis still appears, but it blames text the user never wrote. Two invariants are
+      checked mechanically. Every identifier and number in a reported edit comes from the user's query, not from an
+      internal constant such as a Big-M. And an infeasible query under <code>DIAGNOSE</code> comes back with a repair
+      that, applied to the query, makes it solve, or with a statement that it could not be analyzed; a sweep across
+      scales and clause shapes checks this.</p>
+
+    <h3 id="models"><a class="anchor" href="#models">Golden model dumps</a></h3>
+    <p>Every test above asks what the answer is. Two different models routinely share an optimum, so a change can
+      alter which rows are emitted, how large a Big-M is or how an auxiliary is bounded, and every answer stays the same.
+      The golden dumps make such a change visible. They are characterization tests: they record what the system does
+      and fail on any difference, right or wrong, so a person reads it.</p>
+    <p><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/golden/corpus.sql"><code>corpus.sql</code></a> holds 112 queries, each there for the shape of its constraints, not for its answer. With
+      <code>DECIDB_DUMP_MODEL</code> set, DeciDB writes the exact model it hands the backend: columns with their bounds
+      and integrality, rows with their senses and coefficients, and the native constraints. There is one baseline per
+      backend, because the backend is part of the model: Gurobi states some constructs natively where HiGHS receives
+      them lowered to linear rows. The Gurobi baseline holds 112 models and the HiGHS baseline 109; the other three
+      queries are refused on HiGHS, and that refusal is recorded too.</p>
+    <p><code>make decide-test</code> runs <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/golden/check.sh"><code>check.sh</code></a> before any Python test and fails on any difference. When
+      a difference is intended, <code>capture.sh --solver gurobi</code> and <code>--solver highs</code> regenerate the
+      baselines, and they are committed with the change that caused them. A missing baseline fails; it does not
+      skip.</p>
+
+    <h3 id="rewrite-tests"><a class="anchor" href="#rewrite-tests">Testing a rewrite</a></h3>
+    <p>A rewrite rule replaces the solver with an algorithm, so its tests check that the algorithm and the solver agree.
+      Every rule ships three kinds:</p>
+    <ol class="steps">
+      <li><strong>A differential oracle test</strong> (<code>test_direct_&lt;id&gt;_&lt;slug&gt;.py</code>). Each case
+        runs three times: on the independent oracle, on DeciDB with rewriting off (the solver's path), and on DeciDB
+        with rewriting required (so the test fails if the rule does not apply). Both DeciDB runs must satisfy every
+        constraint and reach the oracle's objective, or all three must call the case infeasible. Bad data goes to an
+        error table where both paths must fail.</li>
+      <li><strong>The conformance suite</strong> (<a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_rule_conformance.py"><code>test_direct_rule_conformance.py</code></a>). It checks what every
+        rule owes the user whatever its algorithm: the result's columns and rows, prepared statements, serialization,
+        <code>EXPLAIN</code>, the error under <code>require</code>, the solver path under <code>off</code>, a forced
+        backend and <code>DIAGNOSE</code>. A rule joins it by adding one fixture. Each fixture also lists near misses,
+        queries one step outside the rule's shape, which must decline and still answer as the solver does.</li>
+      <li><strong>C++ cases</strong> for each branch where the rule's condition declines
+        (<a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/common/test_decidb_direct_decline.cpp"><code>test_decidb_direct_decline.cpp</code></a>), and a test that runs every rule against every other rule's
+        shapes, since two rules must never apply to one query.</li>
+    </ol>
+
+    <h3 id="guards"><a class="anchor" href="#guards">Guards on every run</a></h3>
+    <ul>
+      <li><strong>The skip audit.</strong> Every allowed reason to skip a test is declared in advance: no Gurobi, no
+        database, no binary, no solver and no cached answer, and one known case of Gurobi nondeterminism on a
+        non-convex quadratic model. A skip with any other reason fails the run. A skip because DeciDB refused a query
+        is never declarable: it would hide a shape that stopped working behind a green run. The audit prints passed plus
+        skipped, a total that stays the same between runs.</li>
+      <li><strong>The leak guard.</strong> Every query run through the test wrapper fails its test if the output holds an
+        internal error or an internal tag name.</li>
+      <li><strong>The removed-spelling guard.</strong> Every query fails its test if DeciDB answers that a spelling is
+        removed, except in the one suite written to check those messages. A scanner also keeps removed spellings out of
+        every test file, the golden corpus and the benchmark queries.</li>
+    </ul>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/decide/golden"><code>test/decide/golden/</code></a>: <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/golden/corpus.sql"><code>corpus.sql</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/golden/check.sh"><code>check.sh</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/golden/capture.sh"><code>capture.sh</code></a>, the
+        baselines</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/_direct_oracle_common.py"><code>test/decide/tests/_direct_oracle_common.py</code></a>: <code>agree_with_oracle</code>, the three-way
+        comparison</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/_direct_rule_fixtures.py"><code>test/decide/tests/_direct_rule_fixtures.py</code></a>: one fixture per rule</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/_diagnostic_invariants.py"><code>test/decide/tests/_diagnostic_invariants.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_diagnosis_repair_sweep.py"><code>test_diagnosis_repair_sweep.py</code></a>: the
+        DIAGNOSE invariants</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/conftest.py"><code>test/decide/conftest.py</code></a>: <code>_DECLARED_SKIPS</code>, the skip audit</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/_output_helpers.py"><code>test/decide/tests/_output_helpers.py</code></a>: <code>assert_no_internal_leak</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_no_old_spellings_remain.py"><code>test/decide/tests/test_no_old_spellings_remain.py</code></a>: the removed-spelling scanner</li>
+    </ul></div>
+  </section>
+
+  <!-- ============================================================ SETTINGS -->
+  <section id="settings">
+    <h2><a class="anchor" href="#settings">Running the suite</a></h2>
+    <p class="lead">The same suite runs under several settings, because one DeciDB build answers a query in several
+      ways: on Gurobi or HiGHS, rewritten or solved, with or without a serialization round trip.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Command</th><th scope="col">What it checks</th></tr></thead>
+      <tbody>
+        <tr><td><code>./test/decide/run_tests.sh -k &lt;pattern&gt;</code></td><td>The tests a change touches, while
+          developing</td></tr>
+        <tr><td><code>make decide-test</code></td><td>The golden models, then the whole Python suite, as each host picks
+          its solver</td></tr>
+        <tr><td><code>DECIDB_FORCE_SOLVER=highs make decide-test</code></td><td>Every query on HiGHS, the solver every
+          build has</td></tr>
+        <tr><td><code>DECIDB_TEST_DIRECT_SOLVE=off make decide-test</code></td><td>Every query on the solver's path,
+          with query rewriting off</td></tr>
+        <tr><td><code>DECIDB_VERIFY_SERIALIZER=1 make decide-test</code></td><td>Every plan survives DuckDB's
+          serialization round trip</td></tr>
+        <tr><td><code>build/release/test/unittest "[decidb]"</code></td><td>The C++ tests</td></tr>
+        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/run_direct_matrix.sh"><code>test/decide/run_direct_matrix.sh</code></a></td><td>The five checks from <code>make decide-test</code>
+          down, with one summary line each</td></tr>
+      </tbody>
+    </table></div>
+    <p>A forced backend name that DeciDB does not know is refused, never ignored, so a typo cannot run the default
+      solver under a name that promises another. The Python suite runs on several workers at once with
+      <code>pytest-xdist</code>, since much of its time is solver time limits, not work.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/run_tests.sh"><code>test/decide/run_tests.sh</code></a>: the virtual environment, the Gurobi license check, the runner</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/decidb_cli.py"><code>test/decide/decidb_cli.py</code></a>: how each setting reaches every query</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/run_direct_matrix.sh"><code>test/decide/run_direct_matrix.sh</code></a>: the matrix</li>
+      <li><code>Makefile</code>: <code>decide-test</code>, <code>decide-golden</code>,
+        <code>decide-coverage</code></li>
+    </ul></div>
+  </section>
+
+  <!-- ============================================================ COVERAGE -->
+  <section id="coverage">
+    <h2><a class="anchor" href="#coverage">Coverage</a></h2>
+    <p class="lead">Coverage is read two ways: what each feature's tests check, kept as a written map, and which
+      branches of the code the tests run, measured by an instrumented build.</p>
+
+    <h3 id="coverage-levels"><a class="anchor" href="#coverage-levels">What each area's tests check</a></h3>
+    <p>For each feature area, the internal docs list the scenarios its tests cover and the pairs of features tested
+      together. Each test checks at one of five levels:</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Level</th><th scope="col">What it shows</th></tr></thead>
+      <tbody>
+        <tr><td>Oracle</td><td>The answer is optimal: objective and vector agree with an independent model</td></tr>
+        <tr><td>Scope oracle</td><td>The answer is optimal under the scope language's own definition, or brute
+          force</td></tr>
+        <tr><td>Constraint only</td><td>The constraints hold; allowed only for a query with no objective</td></tr>
+        <tr><td>Expected failure</td><td>A known defect or an unbuilt feature, kept so that the fix is noticed</td></tr>
+        <tr><td>Error test</td><td>An invalid query is refused with the right message</td></tr>
+      </tbody>
+    </table></div>
+    <p>Open gaps are ranked by risk. The highest is an optimizer rewrite meeting another feature, such as a Big-M under
+      a <code>per</code> scope or a quadratic matrix with <code>per</code>, since two features that each pass alone can
+      still fail together.</p>
+
+    <h3 id="branch-coverage"><a class="anchor" href="#branch-coverage">Branch coverage</a></h3>
+    <p><code>make decide-coverage</code> builds an instrumented copy of DeciDB in <code>build/coverage</code> with
+      Clang's source-based coverage, limited to the files it names. By default those are the query rewriting code and
+      the data-bound pass. It then runs the Python suite with one profile per test, and the C++ tests as one more
+      profile.</p>
+    <p>The unit it counts is the arm: one outcome of one branch condition, the true side or the false side of an
+      <code>if</code>, a <code>&amp;&amp;</code> or a loop test. <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/coverage_report.py"><code>coverage_report.py</code></a> reports, for each
+      test, the arms it reaches and the arms only it reaches. With <code>--unreached</code> it also lists every arm no
+      test reaches. <code>coverage_report.py compare OLD NEW</code> lists the arms an older run reached and a newer run
+      does not, matching arms by their condition text so that code that moved still matches.</p>
+    <p>The measurements back four rules for tests:</p>
+    <ul>
+      <li>Every decision point a change adds gets a test that reaches it and fails if that branch is removed.</li>
+      <li>A grid case must reach an arm no other case reaches, or it is redundant.</li>
+      <li>When code is deleted, the tests that only reached it are deleted too.</li>
+      <li>An arm no test reaches is either deleted or listed with its reason. Each listed one checks a promise another
+        component makes, which no query can break.</li>
+    </ul>
+    <p>Branch coverage shows which branches a test runs, not whether its assertion would catch a wrong value there.
+      That second question is the oracle's.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>Makefile</code>: <code>decide-coverage-build</code>, <code>decide-coverage</code>,
+        <code>COVERAGE_SOURCES</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/run_coverage.sh"><code>test/decide/run_coverage.sh</code></a>: one profile per test</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/coverage_report.py"><code>test/decide/coverage_report.py</code></a>: <code>report</code>, <code>compare</code>,
+        <code>merge-cpp</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/context/docs/testing/coverage.md"><code>context/docs/testing/coverage.md</code></a>: the map of each area's scenarios and pairs</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/context/docs/testing/README.md"><code>context/docs/testing/README.md</code></a>: the coverage levels and risk priorities</li>
+    </ul></div>
+  </section>
+
+<nav class="pager" aria-label="Documentation"><a class="pager__prev" href="diagnose.html"><small>Previous</small>DIAGNOSE</a><a class="pager__next" href="performance.html"><small>Next</small>Performance</a></nav></article>
+
+</div></div>
+</main>
+<footer class="footer closing footer--statement g2m" id="contact" aria-labelledby="close-h">
+  <div class="wrap">
+    <div class="closing__cta close--word">
+      <div class="section-head--split">
+        <div><h2 id="close-h">Run your first DECIDE query</h2><p class="t-lead">Python wheels and command-line builds for macOS, Linux and Windows.</p></div>
+        <a class="btn btn--primary" href="../getting-started.html#install">Install DeciDB<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a>
+      </div>
+      <p class="close__word" aria-hidden="true">DeciDB</p>
+    </div>
+    <div class="closing__links">
+      <div class="grid">
+        <div class="span-4 stack-4">
+          <a class="nav__logo" href="../index.html"><img src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
+          <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
+        </div>
+        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Get started</a></li><li><a href="../guide.html">Guide</a></li><li><a href="../docs/index.html">Documentation</a></li><li><a href="../features.html">Novel features</a></li><li><a href="../examples.html">Examples</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="../examples/knapsack.html">Knapsack</a></li><li><a href="../examples/facility-location.html">Depots</a></li><li><a href="../examples/fair-allocation.html">Fair allocation</a></li><li><a href="../examples/diagnose.html">DIAGNOSE</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Project</h3><ul><li><a href="../about.html">About</a></li><li><a href="../about.html#research">Papers</a></li><li><a href="https://github.com/huda-lab/decidb">GitHub</a></li><li><a href="https://huda-lab.github.io/">HUDA Lab</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Contact</h3><ul><li><a href="mailto:support@decidb.com">Email the team</a></li><li><a href="https://github.com/huda-lab/decidb/issues">Report an issue</a></li></ul></div>
+      </div>
+      <div class="footer__legal">
+        <span>&copy; 2026 HUDA Lab, NYU Abu Dhabi and UMass Amherst</span>
+        <span>Product names and logos are trademarks of their owners.</span>
+      </div>
+    </div>
+  </div>
+</footer>
+<script type="module" src="../assets/system.js"></script>
+<script type="module" src="../assets/motion/motion.js"></script>
+<script type="module" src="../assets/layout/layout.js"></script>
+<script src="../assets/js/site.js" defer></script>
+</body>
+</html>

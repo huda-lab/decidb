@@ -1,0 +1,653 @@
+<!doctype html>
+<html lang="en" data-type="software" data-radius="sharp" data-ground="sage" data-buttons="pill" data-motion>
+<head>
+<meta charset="utf-8">
+<script>(function(){var r=document.documentElement,t;try{t=localStorage.getItem('decidb-theme')}catch(e){}if(!r.dataset.theme)r.dataset.theme=t==='dark'?'dark':'light'})()</script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script>document.documentElement.classList.add('m-enter');setTimeout(()=>document.documentElement.classList.add('m-enter-done'),700)</script>
+<title>DIAGNOSE internals: DeciDB documentation</title>
+<meta name="description" content="How DeciDB&#x27;s DIAGNOSE works inside: the router that reads the solver&#x27;s status, the elastic model behind the smallest edit, and the ray that names a runaway.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="DIAGNOSE internals: DeciDB documentation">
+<meta property="og:description" content="How DeciDB&#x27;s DIAGNOSE works inside: the router that reads the solver&#x27;s status, the elastic model behind the smallest edit, and the ray that names a runaway.">
+<meta property="og:image" content="../assets/images/share.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../assets/images/mark.svg" type="image/svg+xml">
+<meta name="theme-color" content="#ffffff">
+<!-- <link rel="canonical" href="https://huda-lab.github.io/decidb/"> once the published address is confirmed -->
+<meta name="site-kind" content="software">
+<meta name="page-type" content="software">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/system.css">
+<link rel="stylesheet" href="../assets/ui/cards.css">
+<link rel="stylesheet" href="../assets/motion/motion.css">
+<link rel="stylesheet" href="../assets/backgrounds/backgrounds.css">
+<link rel="stylesheet" href="../assets/layout/layout.css">
+<link rel="stylesheet" href="../assets/icons/icon.css">
+<style>
+:root {
+  --p-bg: #ffffff; --p-surface: #f4f4f4; --p-ink: #111111; --p-muted: #6b6b6b;
+  --p-accent: #1a4be0; --p-accent-ink: #ffffff; --p-action: #1a4be0; --p-action-ink: #ffffff;
+  --p-inv-bg: #111111; --p-inv-surface: #1e1e1e; --p-inv-ink: #ffffff; --p-inv-muted: #9a9a9a;
+  --p-inv-accent: #ffffff; --p-inv-accent-ink: #111111; --p-inv-action: #ffffff; --p-inv-action-ink: #111111;
+  --font-display: "Geist", system-ui, sans-serif;
+  --font-text: "Geist", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --display-weight: 500;
+  --display-tracking: -0.035em;
+  --display-tracking-xl: -0.045em;
+}
+/* the evening grade (a tech page may take it): light is the default; the nav's switch sets data-theme to dark and the
+   head script remembers it; the page tokens go dark, the lit ground (sage) and the panels' painted grounds stay light, as the
+   kit keeps them */
+:root[data-theme="dark"] {
+  --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
+  --p-accent: #7d9dff; --p-accent-ink: #0e0f10; --p-action: #3463f0; --p-action-ink: #ffffff;
+  --p-inv-bg: #f4f4f2; --p-inv-surface: #e8e8e6; --p-inv-ink: #111111; --p-inv-muted: #5c5c5c;
+  --p-inv-accent: #1a4be0; --p-inv-accent-ink: #ffffff; --p-inv-action: #111111; --p-inv-action-ink: #ffffff;
+}
+</style>
+<link rel="stylesheet" href="../assets/css/site.css">
+</head>
+<body class="doc-body">
+<header class="nav">
+  <div class="wrap nav__bar">
+    <a class="skip-link" href="#top">Skip to content</a>
+    <a class="nav__logo" href="../index.html"><img class="logo logo--light" src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42"><img class="logo logo--dark" src="../assets/images/logo-dark.svg" alt="DeciDB" width="140" height="42" loading="lazy"><img class="logo logo--mark" src="../assets/images/mark.svg" alt="DeciDB" width="40" height="32" loading="lazy"></a>
+    <nav class="nav__links" aria-label="Main">
+      <div class="nav__item"><a class="nav__link" href="../getting-started.html">Get started</a></div><div class="nav__item"><a class="nav__link" href="../guide.html">Guide</a></div><div class="nav__item"><a class="nav__link" href="../examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="../examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="../examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="../examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="../examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="../examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="../examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Query rewriting</p><a href="../examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="../examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="../examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="../features.html"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="../about.html">About</a></div><div class="nav__item"><a class="nav__link" href="../docs/index.html" aria-current="page">Documentation</a></div><div class="nav__item"><a class="nav__link" href="../features.html">Novel features</a></div>
+    </nav>
+    <div class="nav__actions">
+      <button class="btn btn--secondary theme-toggle" type="button" aria-pressed="false" data-theme-toggle hidden><svg class="theme-toggle__sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="theme-toggle__moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg><span class="theme-toggle__label">Dark theme</span></button>
+      <a class="nav__link" href="https://github.com/huda-lab/decidb">GitHub</a>
+      <a class="btn btn--primary" href="../getting-started.html#install">Install DeciDB</a>
+    </div>
+    <button class="nav__toggle" type="button" aria-expanded="false" aria-label="Menu">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M2 5h14M2 13h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+</header>
+<main id="top">
+<section class="hero hero--page" data-enter aria-labelledby="page-h">
+  <div class="wrap"><div class="hero-text hero-split grid">
+    <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="../index.html">Home</a><span aria-hidden="true">/</span><a href="../docs/index.html">Documentation</a><span aria-hidden="true">/</span>DIAGNOSE</nav><h1 id="page-h">Inside DIAGNOSE</h1><p class="hero__lead">How a failed solve is routed by its status, how the smallest edit and the runaway decision are computed, and what the two engines share.</p></div>
+    <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="26" data-ui-pause-host><div class="ui ui-hw hw hw--page hw--mid" role="img" aria-label="The DIAGNOSE router: OPTIMAL, SUBOPTIMAL leads to one row: state feasible; INFEASIBLE leads to elastic model: the smallest edit; UNBOUNDED leads to ray: the decision that needs a limit; INF_OR_UNBD leads to a probe with no objective, then one of the two; TIME_LIMIT, ITERATION_LIMIT, OTHER leads to undiagnosed: the plain error."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · DIAGNOSE · the router</span></div><div class="hw__page"><div class="hw__q">The solver says</div><div class="hw__routes" data-ly-steps="300"><div class="hw__route" data-step><code>OPTIMAL, SUBOPTIMAL</code><span aria-hidden="true">→</span><b>one row: state feasible</b></div><div class="hw__route" data-step><code>INFEASIBLE</code><span aria-hidden="true">→</span><b>elastic model: the smallest edit</b></div><div class="hw__route" data-step><code>UNBOUNDED</code><span aria-hidden="true">→</span><b>ray: the decision that needs a limit</b></div><div class="hw__route" data-step><code>INF_OR_UNBD</code><span aria-hidden="true">→</span><b>a probe with no objective, then one of the two</b></div><div class="hw__route" data-step><code>TIME_LIMIT, ITERATION_LIMIT, OTHER</code><span aria-hidden="true">→</span><b>undiagnosed: the plain error</b></div></div></div></div></div>
+  </div></div>
+</section>
+<div class="container"><div class="doc-layout doc-layout--docs"><nav class="docnav" aria-label="Documentation pages"><div class="toc-title">Documentation</div><p class="docnav__group">Start here</p><ul><li><a href="index.html">Overview</a></li><li><a href="life-of-a-query.html">Life of a query</a></li></ul><p class="docnav__group">The pipeline</p><ul><li><a href="front-end.html">Parser, binder and plan</a></li><li><a href="canonical-form.html">Canonicalizer and optimizer</a></li><li><a href="solving.html">Model, solvers and execution</a></li></ul><p class="docnav__group">Novel features</p><ul><li><a href="rewriting.html">Query rewriting</a></li><li><a href="rewrite-rules.html">The rewrite rules</a></li><li><a href="diagnose.html" aria-current="page">DIAGNOSE</a></li></ul><p class="docnav__group">Quality</p><ul><li><a href="testing.html">Testing</a></li><li><a href="performance.html">Performance</a></li></ul></nav>
+<nav class="toc" aria-label="On this page">
+  <div class="toc-title">On this page</div>
+  <ul>
+    <li><a href="#router">The router</a></li>
+    <li class="sub"><a href="#trigger">From prefix to operator</a></li>
+    <li class="sub"><a href="#statuses">From status to terminal</a></li>
+    <li class="sub"><a href="#inf-or-unbd">Infeasible or unbounded</a></li>
+    <li><a href="#infeasible">The infeasible engine</a></li>
+    <li class="sub"><a href="#elastic">The elastic model</a></li>
+    <li class="sub"><a href="#smallest">Finding the smallest edit</a></li>
+    <li class="sub"><a href="#slack-scope">Slack scope</a></li>
+    <li class="sub"><a href="#achievable">The achievable objective</a></li>
+    <li class="sub"><a href="#columns">Where each column comes from</a></li>
+    <li><a href="#unbounded">The unbounded engine</a></li>
+    <li class="sub"><a href="#ray">The ray</a></li>
+    <li class="sub"><a href="#naming">Naming the runaway</a></li>
+    <li><a href="#foundations">Shared foundations</a></li>
+    <li class="sub"><a href="#solver-result">A status, not an exception</a></li>
+    <li class="sub"><a href="#provenance">Provenance</a></li>
+    <li class="sub"><a href="#handoff">The findings relation</a></li>
+  </ul>
+</nav>
+<article class="prose">
+  <section id="router">
+    <h2><a class="anchor" href="#router">The router</a></h2>
+    <p class="lead">A solve can end four ways: solved, infeasible, unbounded or stopped by a limit. The router is the one
+      place that decides what each ending turns into: the query's rows, a diagnosis engine, or the plain error.</p>
+    <p>This page explains how <code>DIAGNOSE</code> works inside. What it returns and how to read it are on the
+      <a href="../features.html#diagnose">Novel features page</a>; the Guide shows
+      <a href="../guide.html#no-answer">when to reach for it</a>.</p>
+    <p>Three terms recur. <strong>Infeasible</strong> means no assignment of the decisions meets every constraint.
+      <strong>Unbounded</strong> means the objective can improve forever, because nothing stops some decision from
+      growing. A <strong>terminal</strong> is one leaf of the router's decision tree: where a run ends up.</p>
+
+    <h3 id="trigger"><a class="anchor" href="#trigger">From prefix to operator</a></h3>
+    <p><code>DIAGNOSE</code> is a statement prefix, built the way DuckDB builds <code>SUMMARIZE</code>: one grammar
+      alternative and a flag. The flag travels with the plan and is never read from a session setting, so a query
+      without the prefix never pays for a diagnosis.</p>
+    <ol class="steps">
+      <li><strong>Parser.</strong> <code>DIAGNOSE SelectStmt</code> is an alternative of <code>VariableShowStmt</code>
+        and sets <code>is_diagnose</code>. The transformer makes a <code>ShowRef</code> of type <code>DIAGNOSE</code>,
+        so <code>FROM (DIAGNOSE ...)</code> works through the grammar's existing parenthesized form.</li>
+      <li><strong>Binder.</strong> <code>Binder::BindDiagnose</code> binds the inner query unchanged and counts its
+        DECIDE operators. A query with none, or with more than one, is refused here: one relation cannot say which
+        solve it describes. It sets <code>LogicalDecide::diagnose</code> on the one operator and puts a
+        <code>LogicalDecideDiagnose</code> above it, whose output columns are fixed at this point.</li>
+      <li><strong>Optimizer.</strong> A query under the prefix keeps the solver path: query rewriting does not run,
+        because a rewritten query has no model to diagnose. The solver backend is chosen here, once, and every
+        diagnostic solve later runs on that same backend.</li>
+      <li><strong>Execution.</strong> <code>PhysicalDecide::diagnose</code> arms what the engines need: ray extraction,
+        rows for one-decision clauses that would otherwise become column bounds, and a copy of the model input to
+        formulate the repair model from.</li>
+    </ol>
+    <p>Why an operator and not a different result? The decision columns are bound into the query's output before the
+      solve runs, so a failed solve cannot switch the result's columns at run time. A prefix declares the findings'
+      columns at bind time instead, which makes <code>DIAGNOSE</code> a different statement, as
+      <code>EXPLAIN</code> is.</p>
+
+    <h3 id="statuses"><a class="anchor" href="#statuses">From status to terminal</a></h3>
+    <p>The solve facade, <code>SolveModel</code>, returns a status rather than throwing (see
+      <a href="#solver-result">A status, not an exception</a>). Before the router sees that status, the facade settles
+      what it can:</p>
+    <ol class="steps">
+      <li><strong>Proven before solving.</strong> A model whose own bounds contradict, such as
+        <code>x &gt;= 5 AND x &lt;= 1</code> folded into one column, is answered <code>INFEASIBLE</code> without
+        reaching a backend (<code>SolverModel::ProvesInfeasible</code>). The model is kept, so the clause can still be
+        named.</li>
+      <li><strong>Solve</strong> on the backend the optimizer chose.</li>
+      <li><strong>Settle an ambiguous status</strong> with a second, zero-objective solve (next section).</li>
+      <li><strong>Catch a false optimum.</strong> No MIP solver represents an unbounded integer: both backends cap an
+        integer column near 2e9 and report the answer as optimal. An optimum on that ceiling, for a column the query
+        left open, is reported as <code>UNBOUNDED</code>.</li>
+      <li><strong>Find a ray</strong>, under the prefix only, for an unbounded result (see <a href="#ray">The ray</a>).</li>
+    </ol>
+    <p><code>RouteSolveResult</code> then maps the status and the prefix flag to a terminal. It is a pure function:
+      it runs no engine and touches no DuckDB operator, so its whole decision tree is tested without a solver.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Solver status</th><th scope="col">With <code>DIAGNOSE</code></th><th scope="col">Without</th></tr></thead>
+      <tbody>
+        <tr><td><code>OPTIMAL</code>, <code>SUBOPTIMAL</code></td><td><code>SOLVED</code></td><td><code>SOLVED</code></td></tr>
+        <tr><td><code>INFEASIBLE</code></td><td><code>INFEASIBLE</code></td><td><code>UNDIAGNOSED</code></td></tr>
+        <tr><td><code>UNBOUNDED</code></td><td><code>UNBOUNDED</code></td><td><code>UNDIAGNOSED</code></td></tr>
+        <tr><td><code>INF_OR_UNBD</code>, a ray found</td><td><code>UNBOUNDED</code></td><td><code>UNDIAGNOSED</code></td></tr>
+        <tr><td><code>INF_OR_UNBD</code>, no ray</td><td><code>INFEASIBLE</code></td><td><code>UNDIAGNOSED</code></td></tr>
+        <tr><td><code>TIME_LIMIT</code>, <code>ITERATION_LIMIT</code>, <code>OTHER</code></td><td><code>UNDIAGNOSED</code></td><td><code>UNDIAGNOSED</code></td></tr>
+      </tbody>
+    </table></div>
+    <p><code>SUBOPTIMAL</code> is a feasible answer Gurobi could not prove best; it is delivered with a warning. A time
+      limit or Ctrl-C is not a diagnosis at all: the operator handles it before the router runs, with or without the
+      prefix. <code>UNDIAGNOSED</code> raises the plain error, which states the outcome and, for an infeasible or
+      unbounded query, names the prefix.</p>
+    <p><code>PhysicalDecide::Finalize</code> calls the router once and switches on the terminal. That switch is the
+      only dispatch site. <code>SOLVED</code> stores the solution; <code>UNBOUNDED</code> and <code>INFEASIBLE</code>
+      run their engine and hand its findings up; <code>UNDIAGNOSED</code> throws. Each engine is a free function whose
+      dependencies arrive as callbacks (dependency injection): the infeasible engine's solver call, the unbounded
+      engine's categorical candidates. So an engine can change behind its terminal without touching the router, and is
+      tested without DuckDB's operators. Under the prefix, a query that solves returns one row:</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">DIAGNOSE</span>
+<span class="tk-k">SELECT</span> item, x <span class="tk-k">FROM</span> Items
+<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">50</span>
+<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>1 row</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="dec">state</th><th scope="col" class="">clause</th><th scope="col" class="">suggested_change</th><th scope="col" class="">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td class="dec">feasible</td><td class="null">NULL</td><td class="null">NULL</td><td class="null">NULL</td><td class="null">NULL</td><td class="null">NULL</td><td class="null">NULL</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
+
+    <h3 id="inf-or-unbd"><a class="anchor" href="#inf-or-unbd">Infeasible or unbounded</a></h3>
+    <p>Some solvers stop at an ambiguous answer, <code>INF_OR_UNBD</code>: "infeasible or unbounded". HiGHS gives it
+      for an unbounded integer model. An improving direction alone does not settle it, because a model with no
+      solution can have one: <code>x - y &lt;= -10 AND y - x &lt;= -10</code> has no solution, yet raising
+      <code>x</code> and <code>y</code> together leaves both rows unchanged and improves <code>MAXIMIZE x</code>
+      forever.</p>
+    <p>So <code>DisambiguateInfOrUnbd</code> solves a copy of the model with its objective replaced by zero. That copy
+      cannot be unbounded. If it solves, the region is not empty and the original is <code>UNBOUNDED</code>; if it is
+      infeasible, so is the original. Every solve goes through this step: the primary solve and every diagnostic one.</p>
+    <p>When the zero-objective solve cannot decide either (it hits a limit or fails), the status stays
+      <code>INF_OR_UNBD</code> and the router lets the ray choose. A ray sends the run to the unbounded engine; if that
+      engine cannot name a decision, its finding keeps <code>state = 'infeasible or unbounded'</code> rather than hide
+      the doubt. No ray means no improving direction, so the run goes to the infeasible engine.</p>
+<div class="code" data-lang="text"><div class="code__head"><span class="code__title">src/decidb/diagnostics/decide_router.cpp</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>case SolverStatus::INF_OR_UNBD:
+	if (!armed) {
+		return DiagnosisTerminal::UNDIAGNOSED;
+	}
+	return result.ray.empty() ? DiagnosisTerminal::INFEASIBLE : DiagnosisTerminal::UNBOUNDED;</code></pre></div>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/third_party/libpg_query/grammar/statements/variable_show.y"><code>third_party/libpg_query/grammar/statements/variable_show.y</code></a>: the <code>DIAGNOSE</code> alternative</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/planner/binder/tableref/bind_showref.cpp"><code>src/planner/binder/tableref/bind_showref.cpp</code></a>: <code>Binder::BindDiagnose</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_answer_choice.cpp"><code>src/optimizer/decide/decide_answer_choice.cpp</code></a>: a <code>DIAGNOSE</code> query keeps the solver path</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/diagnostics/decide_router.cpp"><code>src/decidb/diagnostics/decide_router.cpp</code></a>: <code>RouteSolveResult</code> and <code>DiagnosisTerminal</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/solver/ilp_solver.cpp"><code>src/decidb/solver/ilp_solver.cpp</code></a>: <code>SolveModel</code>, <code>DisambiguateInfOrUnbd</code>,
+        <code>RejectIntegerCeilingOptimum</code>, <code>ThrowDecideSolveError</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/solver/probe_models.cpp"><code>src/decidb/solver/probe_models.cpp</code></a>: <code>MakeZeroObjectiveProbeModel</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/execution/operator/decide/physical_decide.cpp"><code>src/execution/operator/decide/physical_decide.cpp</code></a>: <code>PhysicalDecide::Finalize</code>, the
+        switch on the terminal</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/common/test_decidb_router.cpp"><code>test/common/test_decidb_router.cpp</code></a>: every leaf with and without the prefix;
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_diagnose_trigger.py"><code>test/decide/tests/test_diagnose_trigger.py</code></a>: the prefix end to end</li>
+    </ul></div>
+  </section>
+
+  <section id="infeasible">
+    <h2><a class="anchor" href="#infeasible">The infeasible engine</a></h2>
+    <p class="lead">An infeasible query has no answer as written. The infeasible engine builds a second optimization,
+      the elastic model, whose optimum is the smallest edit to the user's own clauses that gives the query an
+      answer.</p>
+
+    <h3 id="elastic"><a class="anchor" href="#elastic">The elastic model</a></h3>
+    <p>The <strong>elastic model</strong> is the standard tool of infeasibility analysis. Each constraint gets a
+      <strong>slack</strong>: a new variable, zero or more, that lets its bound stretch. The model's objective
+      minimizes the stretch. When the conflict lies in rows that can stretch, the elastic model has a solution although
+      the query has none, and the slacks above zero name the clauses to loosen and by how much.</p>
+<div class="code" data-lang="text"><div class="code__head"><span class="code__title">Slack on each relaxable row</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>a·x &lt;= b   becomes   a·x - s &lt;= b            s &gt;= 0
+a·x &gt;= b   becomes   a·x + s &gt;= b            s &gt;= 0
+a·x  = b   becomes   a·x - s⁺ + s⁻ = b       s⁺, s⁻ &gt;= 0</code></pre></div>
+    <p>A slack is continuous and uncapped, even on an integer bound. Only rows the user can edit get one. Each model
+      row carries a role (<code>ConstraintKind</code>):</p>
+    <dl class="reads">
+      <dt><code>USER_PARAMETER</code></dt><dd>a row of a clause the user wrote, carrying a bound they can change. It gets a slack.</dd>
+      <dt><code>USER_MECHANISM</code></dt><dd>a helper row of a user clause, such as the rows a <code>&lt;&gt;</code>
+        or a hard <code>MAX</code> lowers into. It stays rigid.</dd>
+      <dt><code>STRUCTURAL</code></dt><dd>a definition the formulation adds, such as a McCormick envelope for a product
+        of decisions. It stays rigid.</dd>
+    </dl>
+    <p>A slack on a mechanism row would be measured in the mechanism's units, and it would name a clause the user never
+      typed. So the repair goes to rows that carry the user's own bound.</p>
+    <p>One clause often becomes many rows. <code>per category: SUM(x) by (category) &gt;= 3</code> becomes one row
+      per category. The engine puts the slack on the knob the user edits, not on each row: the rows of one clause share
+      one slack, which settles at the largest shortfall. That one number is the edit to the literal that fixes every
+      row. This is why DeciDB builds the elastic model itself instead of calling Gurobi's <code>feasRelax</code>,
+      which puts one slack on each row; it also means the engine runs the same way on HiGHS.</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">DIAGNOSE</span>
+<span class="tk-k">SELECT</span> item, x <span class="tk-k">FROM</span> Items
+<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-p">per</span> category: <span class="tk-f">SUM</span>(x) <span class="tk-p">by</span> (category) &gt;= <span class="tk-n">3</span>
+<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>2 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="num dec">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td>infeasible</td><td>per category: SUM(x) by (category) &gt;= 3</td><td class="dec">per category: SUM(x) by (category) &gt;= 2</td><td class="num dec">1.0</td><td class="null">NULL</td><td class="null">NULL</td><td>source_literal</td><td class="null">NULL</td><td class="null">NULL</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">395.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
+    <p>The bag has three <code>tech</code> items and two <code>gear</code> items. The <code>gear</code> row can reach
+      2, so the shared slack is 1 and the literal moves from 3 to 2. One slack gives one edit: the literal the user
+      wrote, not a separate number per category.</p>
+    <p><strong>The repair model is formulated, not patched.</strong> The constants a lowering derives, such as a Big-M
+      (a large constant that switches a row off when a binary is 0), are sized from each decision's range as the query
+      states it. A repair often widens that range, so slacks added to the solved model would be capped by constants
+      sized for the old range. Instead, <code>FormulateElasticModel</code> runs the formulation pass again on the model
+      input as it stands before any constant is derived, with each column's range widened by
+      <code>OpenElasticColumnBox</code>. A column widens by ten times its own magnitude, or by what one row demands of
+      it (the row's bound divided by the column's coefficient), whichever is larger. The widening is per column, so a
+      large number in one clause does not inflate the constants of an unrelated column. A type's own range, such as a
+      <code>BOOL</code>'s 0 and 1, never widens.</p>
+
+    <h3 id="smallest"><a class="anchor" href="#smallest">Finding the smallest edit</a></h3>
+    <p>"Smallest" is lexicographic: a priority order where each step keeps the optimum of the steps before it.
+      <code>DiagnoseInfeasible</code> runs these steps:</p>
+    <ol class="steps">
+      <li><strong>Unreachable bounds.</strong> A clause that demands that a sum reach <code>+inf</code> or <code>-inf</code>
+        cannot be repaired by any finite amount. Each one is reported as <code>unreachable_bound</code>, with no amount,
+        and no elastic model is built.</li>
+      <li><strong>Fewest removed clauses.</strong> Some clauses have no bound to loosen: <code>&lt;&gt;</code>,
+        <code>IN (...)</code> and a constraint with an L0 <code>norm</code>. Each is one removal group, dropped whole
+        with every row it lowers into, or kept. The engine tries no removal, then each single removal, then each pair,
+        and stops at the first count with a repair: an exact search by increasing cardinality.</li>
+      <li><strong>Least data offset.</strong> A bound read from a column, such as <code>ship &lt;= available</code>, has
+        no literal to edit; loosening it says the data conflicts. This total is minimized and frozen, as a row of the
+        model, before the next step, so an editable literal wins whenever one alone can restore an answer.</li>
+      <li><strong>Least editable loosening, weighted.</strong> Slacks of different clauses are in different units: a
+        count of items, kilograms, dollars. Each editable slack is weighted by <code>ref / rms(a)</code>, where
+        <code>rms(a)</code> is the root-mean-square of the row's coefficients (its typical magnitude) and
+        <code>ref</code> is the smallest such value. The objective then measures how far a boundary moves per unit of
+        decision, so a count floor is not gutted to zero when a dollar budget is the clause that is actually tight.
+        The root-mean-square, unlike the plain vector length, does not grow with the number of terms, so a many-term
+        floor is not made cheaper to loosen for its length alone.</li>
+      <li><strong>Best objective.</strong> Among the repairs of that size, pick the one best for the query's own
+        objective (<a href="#achievable">The achievable objective</a>).</li>
+      <li><strong>Ties by written order.</strong> When two repairs tie on every step above, one more solve weights each
+        slack by its clause's position and prefers the earlier clause (<code>BuildTieBreakModel</code>), so Gurobi and
+        HiGHS name the same clause in common ties.</li>
+      <li><strong>Certified amounts.</strong> A solver returns slacks with rounding noise: an exact 7 can arrive as
+        7.00000028. The engine prints the tidiest reading of the amounts (rounded to nearest, noise dropped) only if
+        the elastic model, with every slack fixed at those amounts, still solves. Otherwise it rounds outward. The
+        last reading keeps every amount and repairs by construction, so a printed edit always works.</li>
+    </ol>
+    <p>A clause that can only be dropped shows step 2. This decision must be neither 0 nor 1, which no
+      <code>BOOL</code> can be:</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">DIAGNOSE</span>
+<span class="tk-k">SELECT</span> item, x <span class="tk-k">FROM</span> Items
+<span class="tk-k">WHERE</span> item = <span class="tk-s">&#x27;Lens&#x27;</span>
+<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> x &lt;&gt; <span class="tk-n">0</span> <span class="tk-k">AND</span> x &lt;&gt; <span class="tk-n">1</span>
+<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>2 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="dec">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td>infeasible</td><td>x &lt;&gt; 1</td><td class="dec">remove this clause</td><td class="null dec">NULL</td><td class="null">NULL</td><td class="null">NULL</td><td>remove_only</td><td class="null">NULL</td><td class="null">NULL</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">75.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
+    <p>Dropping either clause is one removal. Without <code>x &lt;&gt; 1</code> the lens is taken and the bag is worth
+      75; without <code>x &lt;&gt; 0</code> it would be worth 0. Candidates of the same size and the same repair cost
+      are compared by their objective, so the engine reports the better drop.</p>
+    <p>Two other outcomes have no edit. If the elastic model itself has no solution, the conflict lies in rigid rows,
+      and one <code>rigid_conflict</code> finding says that loosening the written clauses cannot fix it. If there is
+      nothing to loosen or drop at all, one <code>undiagnosed</code> finding says so.</p>
+
+    <h3 id="slack-scope"><a class="anchor" href="#slack-scope">Slack scope</a></h3>
+    <p>The setting <code>diagnose_decide_infeasible_slack_scope</code> answers two different questions with the same
+      engine. <code>query</code>, the default, answers "which literal in my SQL do I change?" <code>expanded</code>
+      answers "which generated rows or classes are tight?"</p>
+    <p>The whole difference is how <code>BuildElasticModel</code> groups slacks. Two small functions decide it:
+      <code>folds()</code> says whether a row shares a slack, and <code>block_key()</code> says with which rows. In the
+      <code>query</code> scope the key is the clause's repair group alone, so every class of a <code>per</code> clause
+      shares one slack, and a bound read from data folds into one offset. In the <code>expanded</code> scope the key
+      adds the row's class, so each <code>per</code> class gets its own slack, and a data bound keeps one slack per row.
+      The bag above, under <code>expanded</code>, reports one finding for <code>gear</code>, with <code>gear</code> in
+      the <code>group</code> column.</p>
+    <p>A bound read from data shows the difference best. Two order lines ask for more than their stock:</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">DIAGNOSE</span>
+<span class="tk-k">SELECT</span> line, ship <span class="tk-k">FROM</span> Lines
+<span class="tk-k">DECIDE</span> ship(<span class="tk-k">INT</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> ship &gt;= ordered <span class="tk-k">AND</span> ship &lt;= available
+<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(ship);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>2 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="num dec">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td>infeasible</td><td>ship &lt;= available</td><td class="dec">ship &lt;= available + 7</td><td class="num dec">7.0</td><td class="null">NULL</td><td class="null">NULL</td><td>virtual_offset</td><td class="null">NULL</td><td class="null">NULL</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">128.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
+    <p>There is no literal to edit, so the <code>query</code> scope reports a <strong>virtual offset</strong>: the
+      column plus a constant, sized to the worst shortfall (line L2 orders 25 and has 18). The <code>expanded</code>
+      scope reports each conflicting row at its own values, with its position in the query's rows, counting from 0, in
+      <code>row</code>:</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">DIAGNOSE</span>
+<span class="tk-k">SELECT</span> line, ship <span class="tk-k">FROM</span> Lines
+<span class="tk-k">DECIDE</span> ship(<span class="tk-k">INT</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> ship &gt;= ordered <span class="tk-k">AND</span> ship &lt;= available
+<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(ship);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>3 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="num dec">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="num dec">row</th></tr></thead><tbody><tr><td>infeasible</td><td>ship &lt;= 18</td><td class="dec">ship &lt;= 25</td><td class="num dec">7.0</td><td class="null">NULL</td><td class="null">NULL</td><td>expanded_row</td><td class="null">NULL</td><td class="num dec">1</td></tr><tr><td>infeasible</td><td>ship &lt;= 12</td><td class="dec">ship &lt;= 15</td><td class="num dec">3.0</td><td class="null">NULL</td><td class="null">NULL</td><td>expanded_row</td><td class="null">NULL</td><td class="num dec">3</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">110.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null dec">NULL</td></tr></tbody></table></div></div></div>
+    <p>The expanded scope counts each kept row of a clause without a <code>per</code> key as a class of its own. For a
+      data bound that profile is the point. An aggregate with no <code>per</code> key, such as
+      <code>SUM(x * weight) &lt;= 40</code>, repeats its one edit on each kept row.</p>
+
+    <h3 id="achievable"><a class="anchor" href="#achievable">The achievable objective</a></h3>
+    <p>The steps above find how much repair is needed, but several repairs often cost the same. In the order lines
+      above, lowering the floor <code>ship &gt;= ordered</code> by 7 is the same size of edit as raising the cap, and
+      it also restores an answer, but it leaves the total at 100. Raising the cap gives 128.</p>
+    <p>So a second stage (<code>BuildStage2Model</code>) freezes the repair budgets found so far as rows of the model
+      (data offset at most its minimum, editable loosening at most its minimum), restores the query's own objective,
+      and solves again. It reports the edit of that solution together with its objective, so the edit and the number
+      agree: the cap, and 128.</p>
+    <ul>
+      <li>The value is shown as the query states it. The model always minimizes, so a <code>MAXIMIZE</code> value is
+        negated back, and the objective's constant term, which no solver receives, is added back.</li>
+      <li>If the repaired model is unbounded, the engine keeps the edit and adds an <code>unbounded_after_fix</code>
+        finding: the fix works, but the objective can then grow without limit. It does not hand over to the
+        unbounded engine, since the edit is the part the user can act on.</li>
+      <li>A query with no objective has no second stage and no <code>achievable_objective</code> row. Its ties go to
+        the earlier clause.</li>
+    </ul>
+
+    <h3 id="columns"><a class="anchor" href="#columns">Where each column comes from</a></h3>
+    <p>Every finding is one row of a fixed nine-column relation. The engines fill a typed
+      <code>DiagnosticFinding</code>; this is what each column holds, and which code fills it.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Column</th><th scope="col">Infeasible finding</th><th scope="col">Unbounded finding</th></tr></thead>
+      <tbody>
+        <tr><td><code>state</code></td><td><code>infeasible</code></td><td><code>unbounded</code>, or
+          <code>infeasible or unbounded</code> when the status stays ambiguous and no decision can be named</td></tr>
+        <tr><td><code>clause</code></td><td>the clause as written, its <code>when</code> and <code>per</code> in front,
+          from the source registry; in the expanded scope, a data row's own bound (<code>ship &lt;= 18</code>)</td>
+          <td>the runaway decision's name</td></tr>
+        <tr><td><code>suggested_change</code></td><td>the clause with its bound moved (<code>MakeLoosenEdit</code>), the
+          column plus an offset (<code>MakeVirtualOffsetEdit</code>), <code>remove this clause</code>, or a reason</td>
+          <td><code>x &lt;= &lt;cap&gt;</code> or <code>x &gt;= &lt;floor&gt;</code>, scoped by a <code>when</code>
+          when that is sound</td></tr>
+        <tr><td><code>amount</code></td><td>the slack: how far the bound moves; on the
+          <code>achievable_objective</code> row, the objective</td><td>how many instances escape</td></tr>
+        <tr><td><code>total</code></td><td>NULL</td><td>how many instances the decision or slice has</td></tr>
+        <tr><td><code>scope</code></td><td>NULL</td><td><code>row</code>, or <code>keyed</code> for a keyed decision's
+          classes</td></tr>
+        <tr><td><code>edit_source</code></td><td colspan="2">the kind of finding (below)</td></tr>
+        <tr><td><code>group</code></td><td>the <code>per</code> key value of an <code>expanded_group</code>
+          finding</td><td>the slice, such as <code>region = 'West'</code></td></tr>
+        <tr><td><code>row</code></td><td>an <code>expanded_row</code> finding's position in the query's rows, from
+          0</td><td>NULL</td></tr>
+      </tbody>
+    </table></div>
+    <dl class="reads">
+      <dt><code>source_literal</code></dt><dd>a literal bound moved.</dd>
+      <dt><code>virtual_offset</code></dt><dd>a bound read from data, offset by a constant (<code>query</code>
+        scope).</dd>
+      <dt><code>expanded_row</code>, <code>expanded_group</code></dt><dd>one edit per kept row, or per
+        <code>per</code> class (<code>expanded</code> scope).</dd>
+      <dt><code>remove_only</code></dt><dd>a clause that can only be dropped.</dd>
+      <dt><code>achievable_objective</code></dt><dd>the objective after the edit, in <code>amount</code>.</dd>
+      <dt><code>unbounded_after_fix</code></dt><dd>the edit works, but the objective then grows without limit.</dd>
+      <dt><code>unreachable_bound</code></dt><dd>a bound at <code>+inf</code> or <code>-inf</code> that no assignment
+        reaches.</dd>
+      <dt><code>rigid_conflict</code></dt><dd>loosening the written clauses cannot fix the conflict.</dd>
+      <dt><code>undiagnosed</code></dt><dd>an engine ran and has nothing to report; <code>suggested_change</code>
+        says why, such as running out of time.</dd>
+      <dt><code>runaway_+inf</code>, <code>runaway_-inf</code></dt><dd>a decision that grows, or falls, without
+        limit.</dd>
+    </dl>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/diagnostics/decide_diagnostic_engines.cpp"><code>src/decidb/diagnostics/decide_diagnostic_engines.cpp</code></a>: <code>DiagnoseInfeasible</code>,
+        <code>BuildElasticModel</code>, <code>BuildStage2Model</code>, <code>BuildTieBreakModel</code>,
+        <code>ReadElasticEdits</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/diagnostics/decide_diagnostic_render.cpp"><code>src/decidb/diagnostics/decide_diagnostic_render.cpp</code></a>: <code>MakeLoosenEdit</code>,
+        <code>MakeVirtualOffsetEdit</code>, <code>FanOutByClass</code>, <code>CollectUnreachableClauses</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/diagnostics/decide_diagnostic.cpp"><code>src/decidb/diagnostics/decide_diagnostic.cpp</code></a>: <code>BuildInfeasibleDiagnostic</code>,
+        <code>BuildElasticInfeasibleDiagnostic</code>, <code>BuildUnreachableBoundDiagnostic</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/execution/operator/decide/physical_decide.cpp"><code>src/execution/operator/decide/physical_decide.cpp</code></a>: <code>FormulateElasticModel</code>,
+        <code>OpenElasticColumnBox</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/common/enums/decide.hpp"><code>src/include/duckdb/common/enums/decide.hpp</code></a>: <code>ConstraintKind</code>,
+        <code>IsRelaxableForElastic</code>, <code>ElasticShape</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/common/test_decidb_diagnostic_engines.cpp"><code>test/common/test_decidb_diagnostic_engines.cpp</code></a>: the elastic transform, shared slacks and tiers
+        on small models</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_query_diagnostics_relation.py"><code>test/decide/tests/test_query_diagnostics_relation.py</code></a>: end to end on both backends; its
+        <code>_apply_reported_fix</code> applies every reported edit and checks that the query then solves</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_diagnosis_repair_sweep.py"><code>test/decide/tests/test_diagnosis_repair_sweep.py</code></a>: across magnitudes and clause shapes, either a
+        repair that works or an explicit finding that the repair model could not be analyzed, never a repair that leaves the query infeasible</li>
+    </ul></div>
+  </section>
+
+  <section id="unbounded">
+    <h2><a class="anchor" href="#unbounded">The unbounded engine</a></h2>
+    <p class="lead">An unbounded query can improve its objective without limit. The fix is always a bound, so the
+      engine's job is to name the decision that needs one and the rows where it escapes. The value of the bound is
+      the user's to choose.</p>
+
+    <h3 id="ray"><a class="anchor" href="#ray">The ray</a></h3>
+    <p>A <strong>ray</strong> (a recession direction) is a direction <code>d</code> along which any feasible point can
+      move forever, staying feasible and improving the objective. Its nonzero entries are the escaping columns.
+      Solver ray APIs exist but differ: Gurobi's returns a ray for continuous models only, and HiGHS's costs an extra
+      solve. DeciDB builds a small linear program of its own from the model instead
+      (<code>BuildUnboundedRayFallbackModel</code>), which runs on either backend:</p>
+<div class="code" data-lang="text"><div class="code__head"><span class="code__title">The ray model</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>minimize    c·d                    the model&#x27;s own objective
+subject to  aⱼ·d  (&lt;=, =, &gt;=) 0    each linear row, its bound replaced by 0
+            0 &lt;= dᵢ &lt;= 1           column i open above
+           -1 &lt;= dᵢ &lt;= 0           column i open below
+           -1 &lt;= dᵢ &lt;= 1           column i open both ways
+                 dᵢ  = 0           column i bounded on both sides, or in a non-linear part
+            d continuous</code></pre></div>
+    <p>Replacing every bound by 0 keeps only the directions the feasible region extends in forever. The unit box keeps
+      this program bounded, so it always finishes. A ray exists when the program improves the objective by more than
+      <code>DIAGNOSTIC_RAY_EPSILON</code> (1e-8). A column with both bounds finite is fixed at 0, so every nonzero entry
+      is already a suspect, with no further filter.</p>
+    <p>A column inside a square, a product, a native general constraint or an indicator is held at 0. Along such a ray
+      every non-linear part keeps its value, so the ray is a true escape and never an artifact of relaxing a square.
+      The cost: a runaway inside a square finds no ray, and the engine reports one <code>undiagnosed</code> finding
+      saying a non-linear term prevents naming the decision.</p>
+    <p>The integer ceiling the facade catches (<a href="#statuses">From status to terminal</a>) needs no ray model:
+      the pinned column is the escaping direction, and the facade hands it over as the ray.</p>
+
+    <h3 id="naming"><a class="anchor" href="#naming">Naming the runaway</a></h3>
+    <p>Each solver column maps back to a decision and an instance: the row, for a decision per row, or the class, for
+      a keyed decision (<a href="#provenance">Provenance</a>). <code>DiagnoseUnbounded</code> groups the escaping
+      columns by decision. When only some instances escape, it looks for a categorical column that explains which.</p>
+    <ul>
+      <li>A <strong>candidate</strong> column has from 2 to <code>max(diagnose_decide_min_categories,
+        diagnose_decide_categorical_ratio × rows)</code> distinct values (defaults 20 and 0.1), which keeps out
+        continuous and id-like columns on large tables.</li>
+      <li>For each value, the share of its instances that escape is its <strong>escape rate</strong>. A value whose
+        rate reaches <code>diagnose_decide_escape_rate</code> (default 0.8) becomes a slice finding.</li>
+      <li>Slices that pick out exactly the same escaping instances state one fact, so they collapse to one: a column
+        the DECIDE clause reads wins over one that only rides along in the <code>SELECT</code>.</li>
+      <li>If whole slices (rate 1) cover every escaping instance, the suggested cap is scoped with a
+        <code>when</code>, so pasting it back does not cap rows that already have a bound. Otherwise the cap stays
+        global: capping extra rows is only over-restrictive, while missing one runaway would leave the query
+        unbounded.</li>
+    </ul>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">DIAGNOSE</span>
+<span class="tk-k">SELECT</span> region, ship <span class="tk-k">FROM</span> Routes
+<span class="tk-k">DECIDE</span> ship(<span class="tk-k">REAL</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-p">when</span> region &lt;&gt; <span class="tk-s">&#x27;West&#x27;</span>: ship &lt;= <span class="tk-n">100</span>
+<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(ship * margin);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>1 row</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="num">amount</th><th scope="col" class="num">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="dec">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td>unbounded</td><td>ship</td><td class="dec">when region = &#x27;West&#x27;: ship &lt;= &lt;cap&gt;</td><td class="num">2.0</td><td class="num">2</td><td>row</td><td>runaway_+inf</td><td class="dec">region = &#x27;West&#x27;</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
+    <p>The cap exempts the West, and both West routes escape: 2 of 2, so the slice <code>region = 'West'</code>
+      covers every runaway and the cap is scoped to it. The objective reads <code>margin</code>, but each margin value
+      holds one escaping route out of three, below the threshold, so it explains nothing and is not reported.</p>
+    <p>Column names come from the clause's own column references and, for the rest, from the names the binder
+      resolved (<code>LogicalDecide::source_columns</code>), so a column reads the same through a table, a
+      <code>VALUES</code> alias list or a CTE. A computed column with no <code>AS</code> name gets none and is never
+      used as a slice.</p>
+    <div class="note"><strong>A decision, not a clause</strong><p>The ray names a missing bound. It cannot blame a
+      clause: a constraint with its sign flipped has the same escaping direction as one never written. So an unbounded
+      finding prescribes a bound to add and never points at an existing clause.</p></div>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/solver/probe_models.cpp"><code>src/decidb/solver/probe_models.cpp</code></a>: <code>BuildUnboundedRayFallbackModel</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/solver/ilp_solver.cpp"><code>src/decidb/solver/ilp_solver.cpp</code></a>: <code>AttachUnboundedRayIfRequested</code>,
+        <code>RejectIntegerCeilingOptimum</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/diagnostics/decide_diagnostic_engines.cpp"><code>src/decidb/diagnostics/decide_diagnostic_engines.cpp</code></a>: <code>DiagnoseUnbounded</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/diagnostics/decide_diagnostic.cpp"><code>src/decidb/diagnostics/decide_diagnostic.cpp</code></a>: <code>CharacterizeEscape</code>,
+        <code>BuildUnboundedDiagnostic</code>, <code>BuildUndiagnosedDiagnostic</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/execution/operator/decide/physical_decide.cpp"><code>src/execution/operator/decide/physical_decide.cpp</code></a>: <code>UnboundedCandidateProvider</code>, the
+        categorical candidates</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/execution/physical_plan/plan_decide.cpp"><code>src/execution/physical_plan/plan_decide.cpp</code></a>: column names, and which columns the clause reads</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/decidb/diagnostics/diagnostic_constants.hpp"><code>src/include/duckdb/decidb/diagnostics/diagnostic_constants.hpp</code></a>:
+        <code>DIAGNOSTIC_RAY_EPSILON</code>, <code>INTEGER_SOLVER_CEILING</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/common/test_decidb_probe_models.cpp"><code>test/common/test_decidb_probe_models.cpp</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/common/test_decidb_escape_characterization.cpp"><code>test/common/test_decidb_escape_characterization.cpp</code></a>,
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_query_diagnostics_unbounded_variables.py"><code>test/decide/tests/test_query_diagnostics_unbounded_variables.py</code></a>,
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_query_diagnostics_escaping_instances.py"><code>test/decide/tests/test_query_diagnostics_escaping_instances.py</code></a></li>
+    </ul></div>
+  </section>
+
+  <section id="foundations">
+    <h2><a class="anchor" href="#foundations">Shared foundations</a></h2>
+    <p class="lead">Both engines stand on the same base: a solve that returns its status, a map from every model row
+      and column back to the user's query, and a handoff that turns findings into the statement's answer.</p>
+
+    <h3 id="solver-result"><a class="anchor" href="#solver-result">A status, not an exception</a></h3>
+    <p>Every solve returns a <code>SolverResult</code>: a <code>SolverStatus</code> (<code>OPTIMAL</code>,
+      <code>INFEASIBLE</code>, <code>UNBOUNDED</code>, <code>INF_OR_UNBD</code>, <code>TIME_LIMIT</code>,
+      <code>SUBOPTIMAL</code>, <code>ITERATION_LIMIT</code> or <code>OTHER</code>), the solution, the objective, the
+      ray when one is extracted, and whether a diagnostic solve ran out of time. Each backend maps its own codes to
+      these and returns; only a genuine API error throws. The plain message of a query without the prefix is written
+      in one place, <code>ThrowDecideSolveError</code>.</p>
+    <p>Diagnosis adds solves: the zero-objective probe, the ray program, the elastic passes. Each runs through
+      <code>SolvePreparedModel</code> with a budget of the smaller of 60 seconds and the query's own time limit, and
+      with the same Ctrl-C check as the primary solve. When diagnosis runs out of time, its finding says so instead of
+      guessing. Each runs on the backend the primary solve used, chosen once at planning: a failure is
+      diagnosed on the solver that produced it.</p>
+
+    <h3 id="provenance"><a class="anchor" href="#provenance">Provenance</a></h3>
+    <p>A diagnosis reports in terms of clauses, but the solver sees rows and columns. <strong>Provenance</strong> is
+      the record, on every row and column, of where it came from. Each model row carries a
+      <code>ConstraintProvenance</code>, stamped where the model builder emits the row, with separate identities for
+      separate questions:</p>
+    <dl class="reads">
+      <dt><code>source_clause_id</code></dt><dd>which written clause to quote.</dd>
+      <dt><code>repair_group_id</code></dt><dd>which rows share one slack.</dd>
+      <dt><code>removal_group_id</code></dt><dd>which rows are dropped together.</dd>
+      <dt><code>group_key</code>, <code>class_set</code>, <code>data_row</code></dt><dd>which <code>by</code> group,
+        <code>per</code> classes or data row the row stands for.</dd>
+      <dt><code>kind</code>, <code>shape</code></dt><dd>the row's role, and whether its bound is one literal shared by
+        every row (<code>SHARED_SCALAR</code>) or read from data (<code>PER_ROW_DATA</code>).</dd>
+    </dl>
+    <p>Columns carry a <code>ColumnProvenance</code>: a user decision, an auxiliary or a global helper, with the
+      decision's name and its instance. The unbounded engine reads it to name a runaway.</p>
+    <p><strong>A clause is quoted as written.</strong> The canonicalizer rewrites clauses into one shape, decisions on
+      the left (<a href="canonical-form.html#canonicalizer">Canonical form</a>). When both sides of a comparison hold
+      decisions, the canonical row is a clause the user never typed:</p>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> depot, ship, open <span class="tk-k">FROM</span> Depots
+<span class="tk-k">DECIDE</span> ship(<span class="tk-k">REAL</span>), open(<span class="tk-k">BOOL</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> ship <span class="tk-k">BETWEEN</span> <span class="tk-n">0</span> <span class="tk-k">AND</span> capacity * open
+      <span class="tk-k">AND</span> ship &gt;= demand
+<span class="tk-k">MINIMIZE</span> <span class="tk-f">SUM</span>(open)</code></pre></div><div class="code" data-lang="text"><div class="code__head"><span class="code__title">EXPLAIN: the DECIDE node</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>DECIDE
+  Variables: ship, open
+  Objective: MINIMIZE SUM(open)
+  Constraints:
+    ship BETWEEN 0 AND capacity * open
+      ≡ ship &gt;= 0
+      ≡ ship - capacity * open &lt;= 0.0
+    ship &gt;= demand</code></pre></div>
+    <p>So the binder records each clause's written text in a source registry (<code>ConstraintSourceInfo</code>)
+      before canonicalization runs, and a finding quotes that text, as a compiler underlines the source in an error
+      rather than reprinting its syntax tree. An offset added to a bound means the same in either form, so the repair
+      reads against the written clause:</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">DIAGNOSE</span>
+<span class="tk-k">SELECT</span> depot, ship, open <span class="tk-k">FROM</span> Depots
+<span class="tk-k">DECIDE</span> ship(<span class="tk-k">REAL</span>), open(<span class="tk-k">BOOL</span>)
+<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> ship <span class="tk-k">BETWEEN</span> <span class="tk-n">0</span> <span class="tk-k">AND</span> capacity * open
+      <span class="tk-k">AND</span> ship &gt;= demand
+<span class="tk-k">MINIMIZE</span> <span class="tk-f">SUM</span>(open);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>2 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="num dec">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td>infeasible</td><td>ship BETWEEN 0 AND capacity * open</td><td class="dec">ship BETWEEN 0 AND capacity * open + 20</td><td class="num dec">20.0</td><td class="null">NULL</td><td class="null">NULL</td><td>virtual_offset</td><td class="null">NULL</td><td class="null">NULL</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">1.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
+    <p>The North depot needs 30 and holds 10, so the bound moves by 20.</p>
+
+    <h3 id="handoff"><a class="anchor" href="#handoff">The findings relation</a></h3>
+    <p>An engine returns a <code>DecideDiagnostic</code>: one state and a list of findings, each with real types
+      (<code>amount</code> a DOUBLE, <code>row</code> a BIGINT). Getting it to the user takes two operators in the same
+      plan:</p>
+    <ol class="steps">
+      <li><strong>Write.</strong> <code>PhysicalDecide</code> writes the diagnosis to a state that lives for one
+        statement (<code>DecideDiagnosticState</code>, a DuckDB <code>ClientContextState</code>) and emits no rows. A
+        solve that succeeds clears that state instead.</li>
+      <li><strong>Take.</strong> <code>PhysicalDecideDiagnose</code>, directly above, is a sink that swallows the
+        query's rows. In its <code>Finalize</code> it takes the diagnosis (<code>TakeDecideDiagnostic</code>), which
+        clears it, or finds none and reports <code>feasible</code>.</li>
+      <li><strong>Emit.</strong> As a source, it emits one row per finding (<code>RenderDecideDiagnostic</code>) in the
+        columns <code>GetDecideDiagnoseSchema</code> defines.</li>
+    </ol>
+    <p>Because the state lives for one statement, there is no stale diagnosis and no id to manage, and the result
+      composes like any relation: the <a href="../examples/diagnose.html">DIAGNOSE example</a> filters it in a
+      subquery. Four session settings tune the engines; they change how a diagnosis is computed, never whether one
+      runs.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Setting</th><th scope="col">Default</th><th scope="col">What it changes</th></tr></thead>
+      <tbody>
+        <tr><td><code>diagnose_decide_infeasible_slack_scope</code></td><td><code>query</code></td><td>one edit per
+          SQL literal, or <code>expanded</code>: one per row or class</td></tr>
+        <tr><td><code>diagnose_decide_escape_rate</code></td><td>0.8</td><td>the share of a slice that must escape to
+          be reported</td></tr>
+        <tr><td><code>diagnose_decide_categorical_ratio</code></td><td>0.1</td><td>distinct values, as a share of the
+          rows, for a column to count as categorical</td></tr>
+        <tr><td><code>diagnose_decide_min_categories</code></td><td>20</td><td>the floor on that count, so small tables
+          still qualify</td></tr>
+      </tbody>
+    </table></div>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/decidb/solver/solver_result.hpp"><code>src/include/duckdb/decidb/solver/solver_result.hpp</code></a>: <code>SolverResult</code>,
+        <code>SolverStatus</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/decidb/solver/solver_config.hpp"><code>src/include/duckdb/decidb/solver/solver_config.hpp</code></a>:
+        <code>ResolveDecideDiagnosticTimeLimit</code>, the 60-second cap</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/decidb/formulation/ilp_model.hpp"><code>src/include/duckdb/decidb/formulation/ilp_model.hpp</code></a>: <code>ConstraintProvenance</code>,
+        <code>ColumnProvenance</code>; <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/formulation/ilp_model_builder.cpp"><code>src/decidb/formulation/ilp_model_builder.cpp</code></a>:
+        <code>StampConstraintProvenance</code>, <code>BuildColumnProvenance</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/common/decide_source_info.hpp"><code>src/include/duckdb/common/decide_source_info.hpp</code></a>: <code>ConstraintSourceInfo</code>;
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/planner/decide/decide_source_provenance.cpp"><code>src/planner/decide/decide_source_provenance.cpp</code></a>: <code>InitializeConstraintSourceInfo</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/diagnostics/decide_diagnostic.cpp"><code>src/decidb/diagnostics/decide_diagnostic.cpp</code></a>: <code>TakeDecideDiagnostic</code>,
+        <code>GetDecideDiagnoseSchema</code>, <code>RenderDecideDiagnostic</code>,
+        <code>RegisterDecideDiagnosticOptions</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/execution/operator/decide/physical_decide_diagnose.cpp"><code>src/execution/operator/decide/physical_decide_diagnose.cpp</code></a> and
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/planner/operator/decide/logical_decide_diagnose.cpp"><code>src/planner/operator/decide/logical_decide_diagnose.cpp</code></a>: the prefix's operator pair</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/common/test_decidb_constraint_provenance.cpp"><code>test/common/test_decidb_constraint_provenance.cpp</code></a>,
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/common/test_decidb_variable_provenance.cpp"><code>test/common/test_decidb_variable_provenance.cpp</code></a>,
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_diagnosis_written_clause.py"><code>test/decide/tests/test_diagnosis_written_clause.py</code></a></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/_diagnostic_invariants.py"><code>test/decide/tests/_diagnostic_invariants.py</code></a>: on every diagnostics test, a blamed clause uses
+        only the user's own names and coefficients and no internal name, and both backends agree</li>
+    </ul></div>
+  </section>
+<nav class="pager" aria-label="Documentation"><a class="pager__prev" href="rewrite-rules.html"><small>Previous</small>The rewrite rules</a><a class="pager__next" href="testing.html"><small>Next</small>Testing</a></nav></article>
+
+</div></div>
+</main>
+<footer class="footer closing footer--statement g2m" id="contact" aria-labelledby="close-h">
+  <div class="wrap">
+    <div class="closing__cta close--word">
+      <div class="section-head--split">
+        <div><h2 id="close-h">Run your first DECIDE query</h2><p class="t-lead">Python wheels and command-line builds for macOS, Linux and Windows.</p></div>
+        <a class="btn btn--primary" href="../getting-started.html#install">Install DeciDB<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a>
+      </div>
+      <p class="close__word" aria-hidden="true">DeciDB</p>
+    </div>
+    <div class="closing__links">
+      <div class="grid">
+        <div class="span-4 stack-4">
+          <a class="nav__logo" href="../index.html"><img src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
+          <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
+        </div>
+        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Get started</a></li><li><a href="../guide.html">Guide</a></li><li><a href="../docs/index.html">Documentation</a></li><li><a href="../features.html">Novel features</a></li><li><a href="../examples.html">Examples</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="../examples/knapsack.html">Knapsack</a></li><li><a href="../examples/facility-location.html">Depots</a></li><li><a href="../examples/fair-allocation.html">Fair allocation</a></li><li><a href="../examples/diagnose.html">DIAGNOSE</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Project</h3><ul><li><a href="../about.html">About</a></li><li><a href="../about.html#research">Papers</a></li><li><a href="https://github.com/huda-lab/decidb">GitHub</a></li><li><a href="https://huda-lab.github.io/">HUDA Lab</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Contact</h3><ul><li><a href="mailto:support@decidb.com">Email the team</a></li><li><a href="https://github.com/huda-lab/decidb/issues">Report an issue</a></li></ul></div>
+      </div>
+      <div class="footer__legal">
+        <span>&copy; 2026 HUDA Lab, NYU Abu Dhabi and UMass Amherst</span>
+        <span>Product names and logos are trademarks of their owners.</span>
+      </div>
+    </div>
+  </div>
+</footer>
+<script type="module" src="../assets/system.js"></script>
+<script type="module" src="../assets/motion/motion.js"></script>
+<script type="module" src="../assets/layout/layout.js"></script>
+<script src="../assets/js/site.js" defer></script>
+</body>
+</html>

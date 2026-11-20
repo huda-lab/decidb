@@ -18,8 +18,13 @@ Macros inside a fragment:
   <!--sql check="FIXTURE"-->QUERY<!--/sql-->                              run, show only the query
   <!--sql check="FIXTURE" frag-->CONSTRAINTS<!--/sql-->                   splice into the fixture's template
   <!--sql check="FIXTURE" expect="text" show-->QUERY<!--/sql-->          must fail with that text; show the error
+                                                                         (status="..." says when it failed)
   <!--sql run="FIXTURE" direct="RULE"-->QUERY<!--/sql-->                 EXPLAIN must name this direct-solve rule
   <!--explain check="FIXTURE"-->QUERY<!--/explain-->                     the query, then its EXPLAIN DECIDE node
+  <!--plan check="FIXTURE"-->QUERY<!--/plan-->                           the query, then the operators of its plan
+  <!--model check="FIXTURE" lines="row,ind"-->QUERY<!--/model-->          the query, then the model it builds (DECIDB_DUMP_MODEL)
+  env="NAME=value" on sql and model runs the binary with that variable set (DECIDB_FORCE_SOLVER=highs); a model
+  block with `dump-only` shows the dump without the query
   <!--sql-->QUERY<!--/sql-->                                              shown only (grammar sketches)
   <!--bash-->, <!--python-->, <!--text-->                                  other code blocks
 Fixtures (named databases) are in fixtures.py; every example's setup is one too.
@@ -57,14 +62,16 @@ esc = html.escape
 # ---------------------------------------------------------------- running SQL
 
 
-def run_sql(sql, json_mode=True):
-    """Run SQL on a fresh in-memory database. Returns (ok, stdout, stderr)."""
+def run_sql(sql, json_mode=True, env=None):
+    """Run SQL on a fresh in-memory database, with extra environment variables if given. Returns (ok, stdout,
+    stderr)."""
     global RUNS
     RUNS += 1
     args = [BIN, ":memory:"]
     if json_mode:
         args.append("-json")
-    p = subprocess.run(args, input=sql, capture_output=True, text=True, timeout=300)
+    full_env = {**os.environ, **(env or {})}
+    p = subprocess.run(args, input=sql, capture_output=True, text=True, timeout=300, env=full_env)
     err = p.stderr.strip()
     ok = p.returncode == 0 and not re.search(r"\b(Error|error):", err) and "Error:" not in p.stdout
     return ok, p.stdout, err
@@ -81,26 +88,26 @@ def parse_json_rows(out):
     return json.loads(arrays[-1])
 
 
-def explain_text(setup, query):
-    ok, out, err = run_sql(setup + "\nEXPLAIN " + query.rstrip().rstrip(";") + ";", json_mode=False)
-    return out if ok else ""
-
-
 def explain_fields(setup, query):
-    """The direct-solve lines of EXPLAIN's plan box, joined back into one value each."""
-    fields, key, inside = {}, None, False
-    for line in explain_text(setup, query).splitlines():
-        cell = line.strip().strip("│").strip()
-        if cell.startswith("Direct solve") and cell.endswith(":"):
-            key, inside = cell[:-1], True
-            fields[key] = ""
-            continue
-        if inside:
-            if not cell or cell.startswith("~"):
-                inside = False
-                continue
-            fields[key] = (fields[key] + " " + cell).strip()
-    return fields
+    """The direct-solve lines of a query's EXPLAIN, read from its JSON form so no value is cut by the plan box."""
+
+    def find(n):
+        ei = n.get("extra_info") or {}
+        if isinstance(ei, dict) and any(k.startswith("Direct solve") for k in ei):
+            return {
+                k: " ".join(v) if isinstance(v, list) else str(v) for k, v in ei.items() if k.startswith("Direct solve")
+            }
+        for c in n.get("children", []):
+            got = find(c)
+            if got:
+                return got
+        return None
+
+    for n in plan_json(setup, query.rstrip().rstrip(";")) or []:
+        got = find(n)
+        if got:
+            return got
+    return {}
 
 
 def direct_rule(setup, query):
@@ -261,9 +268,9 @@ def result_table(rows, dec=(), on=None, note=None, max_rows=40):
     )
 
 
-def error_box(message):
+def error_box(message, status="refused before solving"):
     return (
-        '<div class="output output--error"><div class="output__head"><span>Error</span><span>refused before solving</span></div>'
+        f'<div class="output output--error"><div class="output__head"><span>Error</span><span>{esc(status)}</span></div>'
         f"<pre>{esc(message)}</pre></div>"
     )
 
@@ -294,7 +301,7 @@ def expand_sql(attrs, code, page):
     setup = fx["setup"]
     query = fx["template"].replace("{CLAUSES}", code.strip()) if has_flag(attrs, "frag") else code
     sql = setup + "\n" + query.rstrip().rstrip(";") + ";\n"
-    ok, out, err = run_sql(sql)
+    ok, out, err = run_sql(sql, env=env_of(attrs))
     if expect is not None:
         msg = err + out
         if ok or expect not in msg:
@@ -302,7 +309,8 @@ def expand_sql(attrs, code, page):
             return code_block(code, "sql", title)
         if has_flag(attrs, "show"):
             first = msg.strip().splitlines()[0]
-            return f'<div class="qr">{code_block(code, "sql", title)}{error_box(first)}</div>'
+            box = error_box(first, attr(attrs, "status", "refused before solving"))
+            return f'<div class="qr">{code_block(code, "sql", title)}{box}</div>'
         return code_block(code, "sql", title)
     if not ok:
         FAILURES.append(f"{where(page, code)}\n    {err[:400] or out[:400]}")
@@ -320,7 +328,95 @@ def expand_sql(attrs, code, page):
     return code_block(code, "sql", title, "ok")
 
 
-MACRO = re.compile(r'<!--(sql|bash|python|text|explain)(\s(?:[^>"]|"[^"]*")*)?-->(.*?)<!--/\1-->', re.S)
+MACRO = re.compile(r'<!--(sql|bash|python|text|explain|plan|model)(\s(?:[^>"]|"[^"]*")*)?-->(.*?)<!--/\1-->', re.S)
+
+
+def plan_json(setup, query):
+    """The operator tree of EXPLAIN (FORMAT JSON) for a query, or None."""
+    ok, out, err = run_sql(setup + "\nEXPLAIN (FORMAT JSON) " + query + ";", json_mode=False)
+    if not ok:
+        return None
+    try:
+        return json.loads(out[out.index("[") : out.rindex("]") + 1])
+    except ValueError:
+        return None
+
+
+def plan_lines(nodes):
+    """The plan as an indented tree of operator names. A run of plain projections, one feeding the next, is one line
+    ("PROJECTION x3"); a scan names its table, a DECIDE node its decisions, a rewritten query its rule."""
+
+    def note(n):
+        ei = n.get("extra_info") or {}
+        if not isinstance(ei, dict):
+            return ""
+        if n["name"] == "DECIDE":
+            return f"decisions: {ei.get('Variables', '')}"
+        if ei.get("Direct solve rule"):
+            return f"query rewriting, rule {ei['Direct solve rule']}"
+        if "SCAN" in n["name"] and ei.get("Table"):
+            return ei["Table"]
+        return ""
+
+    out = []
+
+    def walk(n, lead, last, top):
+        run = 1
+        while n["name"] == "PROJECTION" and not note(n) and len(n.get("children", [])) == 1:
+            c = n["children"][0]
+            if c["name"] != "PROJECTION" or note(c):
+                break
+            n, run = c, run + 1
+        name = n["name"].strip() + (f" x{run}" if run > 1 else "")
+        extra = note(n)
+        out.append(("" if top else lead + ("└─ " if last else "├─ ")) + name + (f"   {extra}" if extra else ""))
+        kids = n.get("children", [])
+        for i, c in enumerate(kids):
+            walk(c, "" if top else lead + ("   " if last else "│  "), i == len(kids) - 1, False)
+
+    for n in nodes:
+        walk(n, "", True, True)
+    return out
+
+
+def env_of(attrs):
+    """The environment a block asks for: env="A=1 B=2"."""
+    return dict(pair.split("=", 1) for pair in (attr(attrs, "env", "") or "").split() if "=" in pair)
+
+
+def expand_model(attrs, code, page):
+    """Show a query, then the solver model DeciDB builds for it, as DECIDB_DUMP_MODEL prints it. lines= keeps only the
+    lines that start with those words (an excerpt); dump-only leaves the query out."""
+    fx = FX.FIXTURES[attr(attrs, "check")]
+    query = code.strip().rstrip(";")
+    env = {"DECIDB_DUMP_MODEL": "1", **env_of(attrs)}
+    ok, out, err = run_sql(fx["setup"] + "\n" + query + ";", json_mode=False, env=env)
+    m = re.search(r"=== DECIDB MODEL DUMP ===\n(.*?)\n=== END MODEL DUMP ===", err, re.S)
+    if not ok or not m:
+        FAILURES.append(f"{where(page, code)}\n    no model dump: {err[:300]}")
+        return code_block(code, "sql", attr(attrs, "title"))
+    dump = m.group(0).splitlines()
+    keep = [w for w in (attr(attrs, "lines", "") or "").split(",") if w]
+    if keep:
+        dump = [line for line in dump if any(line.lstrip().startswith(w) for w in keep)]
+    env_words = " ".join(f"{k}={v}" for k, v in env.items())
+    shown = code_block("\n".join(dump), "text", attr(attrs, "label", env_words + (", an excerpt" if keep else "")))
+    if has_flag(attrs, "dump-only"):
+        return shown
+    return code_block(code, "sql", attr(attrs, "title"), "ok") + shown
+
+
+def expand_plan(attrs, code, page):
+    """Show a query, then the operators DuckDB runs for it, from its EXPLAIN."""
+    fx = FX.FIXTURES[attr(attrs, "check")]
+    query = code.strip().rstrip(";")
+    nodes = plan_json(fx["setup"], query)
+    if not nodes:
+        FAILURES.append(f"{where(page, code)}\n    EXPLAIN gave no plan")
+        return code_block(code, "sql", attr(attrs, "title"))
+    return code_block(code, "sql", attr(attrs, "title"), "ok") + code_block(
+        "\n".join(plan_lines(nodes)), "text", attr(attrs, "label", "EXPLAIN: the operators")
+    )
 
 
 def expand_explain(attrs, code, page):
@@ -358,9 +454,16 @@ def expand_explain(attrs, code, page):
     if not node:
         FAILURES.append(f"{where(page, code)}\n    EXPLAIN gave no DECIDE node: {err[:300] or out[:300]}")
         return code_block(code, "sql", attr(attrs, "title"))
-    lines = ["DECIDE", f"  Variables: {node.get('Variables', '')}"]
-    if node.get("Objective"):
-        lines.append(f"  Objective: {node['Objective']}")
+
+    def flat(v):
+        return v if isinstance(v, list) else [v]
+
+    variables = node.get("Variables", "")
+    lines = ["DECIDE", f"  Variables: {', '.join(flat(variables))}"]
+    objective = flat(node.get("Objective") or [])
+    if objective:
+        lines.append(f"  Objective: {objective[0]}")
+        lines += ["  " + o for o in objective[1:]]
     cons = node.get("Constraints", [])
     if isinstance(cons, str):
         cons = [cons]
@@ -379,11 +482,15 @@ def expand(fragment, page, root=""):
             return expand_sql(attrs, code, page)
         if kind == "explain":
             return expand_explain(attrs, code, page)
+        if kind == "plan":
+            return expand_plan(attrs, code, page)
+        if kind == "model":
+            return expand_model(attrs, code, page)
         return code_block(code, kind, attr(attrs, "title"))
 
     text = MACRO.sub(sub, fragment)
     text = re.sub(r"<th(?=[ >])(?![^>]*scope=)", '<th scope="col"', text)
-    left = re.search(r"<!--/?(sql|bash|python|text|explain)\b", text)
+    left = re.search(r"<!--/?(sql|bash|python|text|explain|plan|model|meta)\b", text)
     if left:
         FAILURES.append(f"{page}: unexpanded macro near {text[left.start():left.start() + 120]!r}")
     return text.replace("{{GITHUB}}", GITHUB)
@@ -425,9 +532,10 @@ ARROW = (
 )
 NAV_WORDS = [
     ("getting-started.html", "Get started"),
-    ("documentation.html", "Guide"),
+    ("guide.html", "Guide"),
     ("examples.html", "Examples"),
     ("about.html", "About"),
+    ("docs/index.html", "Documentation"),
     ("features.html", "Novel features"),
 ]
 MENU_COLS = [
@@ -562,7 +670,7 @@ def footer_links(root):
           <a class="nav__logo" href="{root}index.html"><img src="{root}assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
           <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
         </div>
-        {col("Learn", [(f"{root}getting-started.html", "Get started"), (f"{root}documentation.html", "Guide"), (f"{root}features.html", "Novel features"), (f"{root}examples.html", "Examples")])}
+        {col("Learn", [(f"{root}getting-started.html", "Get started"), (f"{root}guide.html", "Guide"), (f"{root}docs/index.html", "Documentation"), (f"{root}features.html", "Novel features"), (f"{root}examples.html", "Examples")])}
         {col("Examples", [(f"{root}examples/knapsack.html", "Knapsack"), (f"{root}examples/facility-location.html", "Depots"), (f"{root}examples/fair-allocation.html", "Fair allocation"), (f"{root}examples/diagnose.html", "DIAGNOSE")])}
         {col("Project", [(f"{root}about.html", "About"), (f"{root}about.html#research", "Papers"), (GITHUB, "GitHub"), ("https://huda-lab.github.io/", "HUDA Lab")])}
         {col("Contact", [("mailto:support@decidb.com", "Email the team"), (f"{GITHUB}/issues", "Report an issue")])}
@@ -748,10 +856,10 @@ PAGES = [
         "getting-started.html",
     ),
     (
-        "documentation.html",
+        "guide.html",
         "DECIDE language guide: DeciDB",
         "The DECIDE language guide: decisions, keyed and query-wide declarations, per/when/by scopes, reducers, objectives, NULL rules, EXPLAIN and DIAGNOSE.",
-        "documentation.html",
+        "guide.html",
     ),
     (
         "features.html",
@@ -766,6 +874,176 @@ PAGES = [
         "about.html",
     ),
 ]
+
+
+# ---------------------------------------------------------------- the documentation (docs/)
+
+# how DeciDB is built, for a reader who wants the mechanism: one page per part, in reading order. Each source is
+# pages/docs/<page>, a <!--meta--> block (title, description, h1, lede), then its contents (nav.toc) and its article.
+DOCS = [
+    ("Start here", [("index.html", "Overview"), ("life-of-a-query.html", "Life of a query")]),
+    (
+        "The pipeline",
+        [
+            ("front-end.html", "Parser, binder and plan"),
+            ("canonical-form.html", "Canonicalizer and optimizer"),
+            ("solving.html", "Model, solvers and execution"),
+        ],
+    ),
+    (
+        "Novel features",
+        [
+            ("rewriting.html", "Query rewriting"),
+            ("rewrite-rules.html", "The rewrite rules"),
+            ("diagnose.html", "DIAGNOSE"),
+        ],
+    ),
+    ("Quality", [("testing.html", "Testing"), ("performance.html", "Performance")]),
+]
+DOC_PAGES = [d for _, items in DOCS for d in items]
+
+
+def doc_meta(src, name):
+    """A docs page's <!--meta--> block as a dict, and the page without it."""
+    m = re.match(r"\s*<!--meta\n(.*?)\n-->\n", src, re.S)
+    if not m:
+        FAILURES.append(f"docs/{name}: no <!--meta--> block at the top")
+        return {}, src
+    meta = {}
+    for line in m.group(1).splitlines():
+        key, _, value = line.partition(":")
+        if key.strip():
+            meta[key.strip()] = value.strip()
+    for key in ("title", "description", "h1", "lede"):
+        if not meta.get(key):
+            FAILURES.append(f"docs/{name}: the meta block has no {key}")
+    return meta, src[m.end() :]
+
+
+def docs_nav(current):
+    """The documentation's pages, beside every docs page; the page being read is marked."""
+    groups = []
+    for group, items in DOCS:
+        links = "".join(
+            f'<li><a href="{slug}"{" aria-current=\"page\"" if slug == current else ""}>{esc(label)}</a></li>'
+            for slug, label in items
+        )
+        groups.append(f'<p class="docnav__group">{esc(group)}</p><ul>{links}</ul>')
+    return (
+        '<nav class="docnav" aria-label="Documentation pages"><div class="toc-title">Documentation</div>'
+        + "".join(groups)
+        + "</nav>"
+    )
+
+
+def docs_pager(i):
+    """The previous and next pages, at the foot of each docs page."""
+    cells = []
+    if i > 0:
+        slug, label = DOC_PAGES[i - 1]
+        cells.append(f'<a class="pager__prev" href="{slug}"><small>Previous</small>{esc(label)}</a>')
+    if i + 1 < len(DOC_PAGES):
+        slug, label = DOC_PAGES[i + 1]
+        cells.append(f'<a class="pager__next" href="{slug}"><small>Next</small>{esc(label)}</a>')
+    return f'<nav class="pager" aria-label="Documentation">{"".join(cells)}</nav>'
+
+
+# the branch the documentation describes: every file or folder name it writes links to that branch on GitHub
+SOURCE_REF = "direct-solve-prototype"
+SOURCE_ROOTS = ("src/", "test/", "third_party/", "benchmark/", "context/", "scripts/", "tools/", "extension/")
+_SOURCE_TREE = []
+
+
+def source_tree():
+    """The files and folders of SOURCE_REF, read once from git (origin/SOURCE_REF must be fetched)."""
+    if not _SOURCE_TREE:
+        p = subprocess.run(
+            ["git", "-C", REPO, "ls-tree", "-r", "--name-only", f"origin/{SOURCE_REF}"], capture_output=True, text=True
+        )
+        if p.returncode != 0:
+            FAILURES.append(
+                f"source links: cannot list origin/{SOURCE_REF} (git fetch origin {SOURCE_REF}): {p.stderr[:200]}"
+            )
+            _SOURCE_TREE.append((set(), set()))
+        else:
+            files = set(p.stdout.split())
+            dirs = {f.rsplit("/", i)[0] for f in files for i in range(1, f.count("/") + 1)}
+            _SOURCE_TREE.append((files, dirs))
+    return _SOURCE_TREE[0]
+
+
+def source_url(name):
+    """The GitHub address of a file or folder name as the docs write it, or None. A full path is looked up as it is;
+    a folder ends with / or names a folder; a short name links when exactly one file ends with it; a pattern (*)
+    links to the one folder that holds every match."""
+    files, dirs = source_tree()
+    blob, tree = f"{GITHUB}/blob/{SOURCE_REF}/", f"{GITHUB}/tree/{SOURCE_REF}/"
+    name = name.strip()
+    if "*" in name:
+        pat = re.compile("(^|.*/)" + re.escape(name).replace(r"\*", "[^/]*") + "$")
+        homes = {f.rsplit("/", 1)[0] for f in files if pat.match(f)}
+        return tree + homes.pop() if len(homes) == 1 else None
+    bare = name.rstrip("/")
+    if bare in files and not name.endswith("/"):
+        return blob + bare
+    if bare in dirs:
+        return tree + bare
+    ends = [f for f in (dirs if name.endswith("/") else files) if f.endswith("/" + bare)]
+    if len(ends) == 1:
+        return (tree if name.endswith("/") else blob) + ends[0]
+    return None
+
+
+def link_sources(text, page):
+    """Every inline <code> that names a file or folder of the source links to it on GitHub (not inside a link or a
+    code block). A full path under the source roots that names nothing fails the build."""
+    looks = re.compile(r"[\w.\-/*]+")
+
+    def one(m):
+        name = m.group(1)
+        if not looks.fullmatch(name) or not (
+            "/" in name or re.search(r"\.(cpp|hpp|h|py|y|json|md|sh|test|list|sql)$", name)
+        ):
+            return m.group(0)
+        url = source_url(name)
+        if url:
+            return f'<a class="src-link" href="{url}"><code>{name}</code></a>'
+        if name.startswith(SOURCE_ROOTS[:3]):
+            FAILURES.append(f"{page}: {name} is not in origin/{SOURCE_REF}")
+        return m.group(0)
+
+    parts = re.split(r"(<a\b.*?</a>|<pre\b.*?</pre>)", text, flags=re.S)
+    return "".join(p if i % 2 else re.sub(r"<code>([^<]+)</code>", one, p) for i, p in enumerate(parts))
+
+
+def docs_page(i):
+    slug, label = DOC_PAGES[i]
+    name = f"docs/{slug}"
+    path = os.path.join(HERE, "pages", "docs", slug)
+    if not os.path.exists(path):
+        FAILURES.append(f"{name}: no source at pages/{name}")
+        return None
+    meta, body = doc_meta(open(path).read(), slug)
+    body = link_sources(expand(body, name, "../"), name)
+    if "</article>" not in body:
+        FAILURES.append(f"{name}: no <article> in the page")
+    body = body.replace("</article>", docs_pager(i) + "</article>")
+    hero = heroes.docs(sys.modules[__name__], slug, label, meta)
+    main = (
+        f'{hero}\n<div class="container"><div class="doc-layout doc-layout--docs">'
+        f"{docs_nav(slug)}\n{body}\n</div></div>"
+    )
+    return page(meta.get("title", label), meta.get("description", ""), main, "docs/index.html", root="../")
+
+
+def redirect(to, title):
+    """A moved page: the old address sends the reader on (the guide was documentation.html)."""
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>{esc(title)}</title>
+<meta name="robots" content="noindex"><link rel="canonical" href="{to}">
+<meta http-equiv="refresh" content="0; url={to}"></head>
+<body><p>This page moved to <a href="{to}">{esc(title)}</a>.</p></body></html>
+"""
 
 
 def write_page(path, text):
@@ -789,6 +1067,7 @@ def copy_assets():
 
 def main():
     os.makedirs(os.path.join(OUT, "examples"), exist_ok=True)
+    os.makedirs(os.path.join(OUT, "docs"), exist_ok=True)
     copy_assets()
     write_page(os.path.join(OUT, "index.html"), home.render(sys.modules[__name__]))
     for name, title, desc, active in PAGES:
@@ -798,13 +1077,18 @@ def main():
             .replace("<!--hero-->", heroes.PAGES[name](sys.modules[__name__]))
         )
         write_page(os.path.join(OUT, name), page(title, desc, expand(frag, name), active))
+    write_page(os.path.join(OUT, "documentation.html"), redirect("guide.html", "The DECIDE guide"))
+    for i in range(len(DOC_PAGES)):
+        text = docs_page(i)
+        if text:
+            write_page(os.path.join(OUT, "docs", DOC_PAGES[i][0]), text)
     write_page(os.path.join(OUT, "examples.html"), examples_index())
     exs = EX.EXAMPLES
     for i, ex in enumerate(exs):
         prev_ex = exs[i - 1] if i > 0 else None
         next_ex = exs[i + 1] if i + 1 < len(exs) else None
         write_page(os.path.join(OUT, "examples", ex["slug"] + ".html"), example_page(ex, prev_ex, next_ex))
-    print(f"built {len(PAGES) + 2 + len(exs)} pages, ran {RUNS} queries on {BIN}")
+    print(f"built {len(PAGES) + 2 + len(DOC_PAGES) + len(exs)} pages, ran {RUNS} queries on {BIN}")
     if FAILURES:
         print(f"\n{len(FAILURES)} FAILURES:")
         for f_ in FAILURES:

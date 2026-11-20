@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en" data-type="software" data-radius="sharp" data-ground="sage" data-buttons="pill" data-motion>
+<head>
+<meta charset="utf-8">
+<script>(function(){var r=document.documentElement,t;try{t=localStorage.getItem('decidb-theme')}catch(e){}if(!r.dataset.theme)r.dataset.theme=t==='dark'?'dark':'light'})()</script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script>document.documentElement.classList.add('m-enter');setTimeout(()=>document.documentElement.classList.add('m-enter-done'),700)</script>
+<title>Performance: DeciDB documentation</title>
+<meta name="description" content="How DeciDB is benchmarked, on which machine and data, where a DECIDE query spends its time, what query rewriting saves, and which questions are open.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Performance: DeciDB documentation">
+<meta property="og:description" content="How DeciDB is benchmarked, on which machine and data, where a DECIDE query spends its time, what query rewriting saves, and which questions are open.">
+<meta property="og:image" content="../assets/images/share.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../assets/images/mark.svg" type="image/svg+xml">
+<meta name="theme-color" content="#ffffff">
+<!-- <link rel="canonical" href="https://huda-lab.github.io/decidb/"> once the published address is confirmed -->
+<meta name="site-kind" content="software">
+<meta name="page-type" content="software">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/system.css">
+<link rel="stylesheet" href="../assets/ui/cards.css">
+<link rel="stylesheet" href="../assets/motion/motion.css">
+<link rel="stylesheet" href="../assets/backgrounds/backgrounds.css">
+<link rel="stylesheet" href="../assets/layout/layout.css">
+<link rel="stylesheet" href="../assets/icons/icon.css">
+<style>
+:root {
+  --p-bg: #ffffff; --p-surface: #f4f4f4; --p-ink: #111111; --p-muted: #6b6b6b;
+  --p-accent: #1a4be0; --p-accent-ink: #ffffff; --p-action: #1a4be0; --p-action-ink: #ffffff;
+  --p-inv-bg: #111111; --p-inv-surface: #1e1e1e; --p-inv-ink: #ffffff; --p-inv-muted: #9a9a9a;
+  --p-inv-accent: #ffffff; --p-inv-accent-ink: #111111; --p-inv-action: #ffffff; --p-inv-action-ink: #111111;
+  --font-display: "Geist", system-ui, sans-serif;
+  --font-text: "Geist", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --display-weight: 500;
+  --display-tracking: -0.035em;
+  --display-tracking-xl: -0.045em;
+}
+/* the evening grade (a tech page may take it): light is the default; the nav's switch sets data-theme to dark and the
+   head script remembers it; the page tokens go dark, the lit ground (sage) and the panels' painted grounds stay light, as the
+   kit keeps them */
+:root[data-theme="dark"] {
+  --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
+  --p-accent: #7d9dff; --p-accent-ink: #0e0f10; --p-action: #3463f0; --p-action-ink: #ffffff;
+  --p-inv-bg: #f4f4f2; --p-inv-surface: #e8e8e6; --p-inv-ink: #111111; --p-inv-muted: #5c5c5c;
+  --p-inv-accent: #1a4be0; --p-inv-accent-ink: #ffffff; --p-inv-action: #111111; --p-inv-action-ink: #ffffff;
+}
+</style>
+<link rel="stylesheet" href="../assets/css/site.css">
+</head>
+<body class="doc-body">
+<header class="nav">
+  <div class="wrap nav__bar">
+    <a class="skip-link" href="#top">Skip to content</a>
+    <a class="nav__logo" href="../index.html"><img class="logo logo--light" src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42"><img class="logo logo--dark" src="../assets/images/logo-dark.svg" alt="DeciDB" width="140" height="42" loading="lazy"><img class="logo logo--mark" src="../assets/images/mark.svg" alt="DeciDB" width="40" height="32" loading="lazy"></a>
+    <nav class="nav__links" aria-label="Main">
+      <div class="nav__item"><a class="nav__link" href="../getting-started.html">Get started</a></div><div class="nav__item"><a class="nav__link" href="../guide.html">Guide</a></div><div class="nav__item"><a class="nav__link" href="../examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="../examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="../examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="../examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="../examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="../examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="../examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Query rewriting</p><a href="../examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="../examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="../examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="../features.html"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="../about.html">About</a></div><div class="nav__item"><a class="nav__link" href="../docs/index.html" aria-current="page">Documentation</a></div><div class="nav__item"><a class="nav__link" href="../features.html">Novel features</a></div>
+    </nav>
+    <div class="nav__actions">
+      <button class="btn btn--secondary theme-toggle" type="button" aria-pressed="false" data-theme-toggle hidden><svg class="theme-toggle__sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="theme-toggle__moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg><span class="theme-toggle__label">Dark theme</span></button>
+      <a class="nav__link" href="https://github.com/huda-lab/decidb">GitHub</a>
+      <a class="btn btn--primary" href="../getting-started.html#install">Install DeciDB</a>
+    </div>
+    <button class="nav__toggle" type="button" aria-expanded="false" aria-label="Menu">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M2 5h14M2 13h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+</header>
+<main id="top">
+<section class="hero hero--page" data-enter aria-labelledby="page-h">
+  <div class="wrap"><div class="hero-text hero-split grid">
+    <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="../index.html">Home</a><span aria-hidden="true">/</span><a href="../docs/index.html">Documentation</a><span aria-hidden="true">/</span>Performance</nav><h1 id="page-h">Performance</h1><p class="hero__lead">The benchmarks that measure DeciDB, the machine and data behind each number, and what they show about where a DECIDE query spends its time.</p></div>
+    <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="22" data-ui-pause-host><div class="ui ui-hw hw hw--page hw--mid" role="img" aria-label="Seconds at 800,000 rows, rewritten against Gurobi: A1 0.028 s against 0.353 s; A2 0.026 s against 0.077 s; A2 abs 0.039 s against 12.322 s; N1 0.032 s against 3.295 s; R1 0.12 s against 1.386 s; S1 0.044 s against 3.046 s; S3 0.207 s against 22.978 s."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · benchmark · 800,000 rows</span></div><div class="hw__page"><div class="hw__legend"><span class="hw__key hw__key--r">rewritten</span><span class="hw__key hw__key--g">Gurobi</span><span>seconds, log scale</span></div><div class="hw__perfs" data-ly-steps="220"><div class="hw__perf" data-step><b>A1</b><div class="hw__bars"><span class="hw__pline"><span class="hw__pbar hw__pbar--r" style="--w:11.2%"></span><i>0.028 s</i></span><span class="hw__pline"><span class="hw__pbar hw__pbar--g" style="--w:38.7%"></span><i>0.353 s</i></span></div></div><div class="hw__perf" data-step><b>A2</b><div class="hw__bars"><span class="hw__pline"><span class="hw__pbar hw__pbar--r" style="--w:10.4%"></span><i>0.026 s</i></span><span class="hw__pline"><span class="hw__pbar hw__pbar--g" style="--w:22.2%"></span><i>0.077 s</i></span></div></div><div class="hw__perf" data-step><b>A2 abs</b><div class="hw__bars"><span class="hw__pline"><span class="hw__pbar hw__pbar--r" style="--w:14.8%"></span><i>0.039 s</i></span><span class="hw__pline"><span class="hw__pbar hw__pbar--g" style="--w:77.3%"></span><i>12.322 s</i></span></div></div><div class="hw__perf" data-step><b>N1</b><div class="hw__bars"><span class="hw__pline"><span class="hw__pbar hw__pbar--r" style="--w:12.6%"></span><i>0.032 s</i></span><span class="hw__pline"><span class="hw__pbar hw__pbar--g" style="--w:62.9%"></span><i>3.295 s</i></span></div></div><div class="hw__perf" data-step><b>R1</b><div class="hw__bars"><span class="hw__pline"><span class="hw__pbar hw__pbar--r" style="--w:27.0%"></span><i>0.12 s</i></span><span class="hw__pline"><span class="hw__pbar hw__pbar--g" style="--w:53.5%"></span><i>1.386 s</i></span></div></div><div class="hw__perf" data-step><b>S1</b><div class="hw__bars"><span class="hw__pline"><span class="hw__pbar hw__pbar--r" style="--w:16.1%"></span><i>0.044 s</i></span><span class="hw__pline"><span class="hw__pbar hw__pbar--g" style="--w:62.1%"></span><i>3.046 s</i></span></div></div><div class="hw__perf" data-step><b>S3</b><div class="hw__bars"><span class="hw__pline"><span class="hw__pbar hw__pbar--r" style="--w:32.9%"></span><i>0.207 s</i></span><span class="hw__pline"><span class="hw__pbar hw__pbar--g" style="--w:84.0%"></span><i>22.978 s</i></span></div></div></div></div></div></div>
+  </div></div>
+</section>
+<div class="container"><div class="doc-layout doc-layout--docs"><nav class="docnav" aria-label="Documentation pages"><div class="toc-title">Documentation</div><p class="docnav__group">Start here</p><ul><li><a href="index.html">Overview</a></li><li><a href="life-of-a-query.html">Life of a query</a></li></ul><p class="docnav__group">The pipeline</p><ul><li><a href="front-end.html">Parser, binder and plan</a></li><li><a href="canonical-form.html">Canonicalizer and optimizer</a></li><li><a href="solving.html">Model, solvers and execution</a></li></ul><p class="docnav__group">Novel features</p><ul><li><a href="rewriting.html">Query rewriting</a></li><li><a href="rewrite-rules.html">The rewrite rules</a></li><li><a href="diagnose.html">DIAGNOSE</a></li></ul><p class="docnav__group">Quality</p><ul><li><a href="testing.html">Testing</a></li><li><a href="performance.html" aria-current="page">Performance</a></li></ul></nav>
+<nav class="toc" aria-label="On this page">
+  <div class="toc-title">On this page</div>
+  <ul>
+    <li><a href="#benchmarks">The benchmarks</a></li>
+    <li class="sub"><a href="#tpch-suite">The TPC-H suite</a></li>
+    <li class="sub"><a href="#profiler">The pipeline profiler</a></li>
+    <li class="sub"><a href="#direct-bench">The direct-solve benchmark</a></li>
+    <li class="sub"><a href="#machine">Machine and scale</a></li>
+    <li><a href="#findings">What the measurements show</a></li>
+    <li class="sub"><a href="#fixed-costs">Fixed costs</a></li>
+    <li class="sub"><a href="#stages">The stages and the solver</a></li>
+    <li class="sub"><a href="#memory">Memory</a></li>
+    <li class="sub"><a href="#design">Designs measured against an alternative</a></li>
+    <li class="sub"><a href="#rewriting-saves">What query rewriting saves</a></li>
+    <li class="sub"><a href="#open">Open questions</a></li>
+  </ul>
+</nav>
+<article class="prose">
+  <section id="benchmarks">
+    <h2><a class="anchor" href="#benchmarks">The benchmarks</a></h2>
+    <p class="lead">Each benchmark answers one question. All of them run the release command-line binary
+      (<code>build/release/decidb</code>), live under <a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/benchmark/decide"><code>benchmark/decide/</code></a>, and write their results to
+      <a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/benchmark/decide/results"><code>benchmark/decide/results/</code></a>.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Benchmark</th><th scope="col">Question it answers</th><th scope="col">Run</th></tr></thead>
+      <tbody>
+        <tr><td>TPC-H suite</td><td>How long does each DECIDE query of a fixed set take on the solver path, and did a
+          change make it slower?</td><td><code>make decide-bench</code></td></tr>
+        <tr><td>Pipeline profiler</td><td>Inside the solver path, which stage takes the time and the memory, on Gurobi
+          and on HiGHS?</td><td><code>python3 benchmark/decide/profile_pipeline.py</code></td></tr>
+        <tr><td>Direct-solve benchmark</td><td>How much faster is query rewriting than the solver on the same query,
+          as the data grows?</td><td><code>python3 benchmark/decide/direct_solve/run.py</code></td></tr>
+        <tr><td>DIAGNOSE examples</td><td>What does a user read, with and without <code>DIAGNOSE</code>, for each
+          example query on each backend?</td><td><code>python3 benchmark/decide/diagnose_examples/run.py</code></td></tr>
+        <tr><td>Archived profilers</td><td>One question about one rewrite rule each, such as result delivery through
+          the C++ API</td><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/benchmark/decide/direct_solve/archive"><code>benchmark/decide/direct_solve/archive/</code></a>, each with <code>-h</code></td></tr>
+        <tr><td>Scale tests</td><td>Does DECIDE still match an independent solver on a few hundred to a few thousand
+          rows?</td><td><code>./test/decide/run_tests.sh -m large_scale</code></td></tr>
+      </tbody>
+    </table></div>
+    <p>Two terms recur. The <strong>solver path</strong> is the pipeline that builds a model and hands it to Gurobi or
+      HiGHS (<a href="solving.html#model">Model, solvers and execution</a>). <strong>Query rewriting</strong>, also
+      called direct solve, answers some DECIDE queries with ordinary DuckDB operators and no solver
+      (<a href="rewriting.html#recognize">Query rewriting</a>). The benchmarks keep the two apart, so a number always
+      says which path it measures.</p>
+
+    <h3 id="tpch-suite"><a class="anchor" href="#tpch-suite">The TPC-H suite</a></h3>
+    <p><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/benchmark/decide/run_benchmarks.py"><code>run_benchmarks.py</code></a> runs eleven DECIDE queries, Q1 to Q11, on two generated TPC-H databases. It sets
+      <code>decide_direct_solve = 'off'</code>, so every query takes the solver path. Together the queries cover the
+      language with as few queries as possible: each bundles several features (decision types, problem classes,
+      constraint and objective forms, <code>when</code>, <code>per</code> and <code>by</code>) and lists them in a
+      <code>-- TAGS:</code> header.</p>
+    <ul>
+      <li><strong>Data.</strong> <code>make decide-bench-setup</code> builds <code>medium.db</code> (TPC-H scale 0.085)
+        and <code>large.db</code> (scale 0.17) with DuckDB's <code>dbgen</code>, then pins <code>lineitem</code> to
+        exactly 500,000 and 1,000,000 rows.</li>
+      <li><strong>Scale tiers.</strong> Each query runs at the largest size that completes in reasonable time, set by
+        measurement. Q1, Q4, Q8 and Q10 read the full <code>lineitem</code>; queries over <code>orders</code> or
+        <code>partsupp</code> read their full table. Q3 (an L0 covering problem) and Q5 (quadratic constraints) read a
+        row prefix, because their solve grows faster than their rows. Q9 reads a prefix too.</li>
+      <li><strong>A run.</strong> Each iteration is a fresh <code>decidb</code> process on the database, opened
+        read-only, under <code>/usr/bin/time</code>. Wall time therefore includes process start, opening the database
+        and printing the result. The runner keeps every run and reports the median wall time, its standard deviation
+        and the median peak memory.</li>
+      <li><strong>Stage timers.</strong> With <code>DECIDB_BENCH=1</code> the engine prints
+        <code>optimizer_ms</code>, <code>model_construction_ms</code>, <code>solver_ms</code> and the model's size:
+        variables, clauses handed to the builder (<code>total_constraint_specs</code>) and matrix rows
+        (<code>total_constraint_rows</code>). A clause with <code>per</code> becomes one row per class, so the two
+        counts are different units and are never added.</li>
+      <li><strong>Comparing commits.</strong> Results are stored per commit; <code>--compare</code> prints each query's
+        change in median time and peak memory against an earlier commit's file.</li>
+    </ul>
+    <p>A full run, three iterations at both sizes, takes about 17 minutes, mostly Q10, Q6 and Q4.
+      <code>--sizes medium --queries Q1,Q5</code> narrows it while working on one change.</p>
+
+    <h3 id="profiler"><a class="anchor" href="#profiler">The pipeline profiler</a></h3>
+    <p><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/benchmark/decide/profile_pipeline.py"><code>profile_pipeline.py</code></a> runs Q1 to Q11 and four more shapes, P1 to P4, once per backend, three times
+      each. Every run is a fresh process with one backend forced (<code>DECIDB_FORCE_SOLVER</code>), so no run can
+      fall back to the other solver. The P queries isolate one effect of model size each over <code>lineitem</code>:
+      a bounded LP (P1), a separable convex QP (P2), the same QP with one budget that couples every decision (P3),
+      and a Boolean problem with one row per <code>l_orderkey</code> (P4).</p>
+    <p>The run sets <code>DECIDB_PROFILE=1</code>, and the engine prints one JSON line per span: a named, nested
+      interval of work such as <code>execution.evaluate_constraints</code>. Markers around the measured statement keep
+      setup out. The query runs as <code>CREATE TEMP TABLE result AS ...</code>, which produces every output row
+      without formatting millions of them for a terminal. The script sums the spans into one column per stage:</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Column</th><th scope="col">What it covers</th></tr></thead>
+      <tbody>
+        <tr><td><code>parse_bind_ms</code>, <code>canonicalize_ms</code>, <code>plan_ms</code></td><td>the front end
+          and physical planning</td></tr>
+        <tr><td><code>rewrite_ms</code></td><td>the DECIDE optimizer: the choice between a rewrite rule and a solver,
+          and the formulation passes</td></tr>
+        <tr><td><code>input_ms</code></td><td>collecting the input rows</td></tr>
+        <tr><td><code>extraction_ms</code></td><td>evaluating the clauses into coefficients, and formulating</td></tr>
+        <tr><td><code>model_build_ms</code></td><td>building the solver-neutral model</td></tr>
+        <tr><td><code>backend_load_ms</code></td><td>handing the model to Gurobi or HiGHS</td></tr>
+        <tr><td><code>solve_ms</code></td><td>the solver's own call</td></tr>
+        <tr><td><code>readback_ms</code></td><td>reading the solution back into rows, and cleanup</td></tr>
+      </tbody>
+    </table></div>
+    <p><code>non_solver_ms</code> is the statement's wall time minus <code>solve_ms</code>: everything DeciDB does
+      that is not the solver. Each run also records the model's size, the solver's iterations and nodes, and the
+      process's peak memory, which is recorded and never acted on: there is no memory cap or early stop.</p>
+    <p><strong>A correctness signal.</strong> Speed means nothing if the answer is wrong. After a sweep, the profiler
+      compares the optimum of every successful run of a query, across both backends and all repeats. Two proven optima
+      of the same model may differ only by the feasibility tolerance, so a spread above
+      <code>1e-6 × max(1, |objective|)</code> is flagged. A run stopped at its time limit reports a best-so-far answer,
+      not an optimum, and is skipped.</p>
+
+    <h3 id="direct-bench"><a class="anchor" href="#direct-bench">The direct-solve benchmark</a></h3>
+    <p><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/benchmark/decide/direct_solve/run.py"><code>direct_solve/run.py</code></a> times each rewrite rule against Gurobi on the same query, as the data grows.
+      Gurobi is the solver direct solve competes with; HiGHS is not measured here. Most queries read one TPC-H table,
+      <code>partsupp</code>, with one decision per row and no joins or filters, so the time measures the optimization
+      and not other operators. The O1 query pairs <code>supplier</code> with itself, and S2 reads
+      <code>customer</code>.</p>
+    <ul>
+      <li><strong>Modes.</strong> <code>direct</code> sets <code>decide_direct_solve = 'require'</code>, so a query the
+        rule does not take fails instead of falling back to the solver, and a speedup can never be the solver timed
+        against itself. <code>gurobi</code> sets <code>'off'</code> and forces Gurobi. Both run DuckDB on 32 threads,
+        the most Gurobi uses by default.</li>
+      <li><strong>Agreement.</strong> At every size, every finished run's objective must match direct solve's within
+        1e-6, relative. A mismatch stops the sweep, so no wrong answer is timed further.</li>
+      <li><strong>Sizes.</strong> Scale factors double from 0.125 (100,000 <code>partsupp</code> rows) to 512
+        (409,600,000 rows), smallest first. A solver runs the next size only if its median at the previous size stayed
+        within a budget (7,200 seconds by default). The databases up to scale 512 take about 270 GB of disk.</li>
+      <li><strong>Against a hand-written plan.</strong> <code>--compare</code> runs each rule's plan beside a query an
+        expert would write in SQL for the same answer, carrying the same checks, in one process. Its measure is
+        <strong>summed operator CPU</strong>, the time of every operator added up, which compares the work of two plans
+        independent of how well each one uses threads. A test, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_comparators.py"><code>test_direct_comparators.py</code></a>, checks that
+        each hand plan gives its rule's answer.</li>
+    </ul>
+
+    <h3 id="machine"><a class="anchor" href="#machine">Machine and scale</a></h3>
+    <p>The direct-solve measurements name their machine: an 11-core Apple M3 Pro, where Gurobi uses 32 threads by
+      default. The pipeline profiler's numbers all come from one machine with 18 GiB of memory. Load, the 1-minute
+      load average, is reported beside each measurement, because other work often ran beside it.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Benchmark</th><th scope="col">Data</th><th scope="col">Repeats</th></tr></thead>
+      <tbody>
+        <tr><td>TPC-H suite</td><td><code>lineitem</code> at 500,000 and 1,000,000 rows</td><td>3 per query and size,
+          median</td></tr>
+        <tr><td>Pipeline profiler</td><td><code>large.db</code>: 1,000,000 <code>lineitem</code> rows</td><td>3 per
+          query and backend, median</td></tr>
+        <tr><td>Direct-solve benchmark</td><td><code>partsupp</code> at 100,000 to 800,000 rows (scale 0.125 to 1) in
+          the published runs</td><td>3 per mode and size, median</td></tr>
+        <tr><td>Scale tests</td><td>about 500 and about 2,200 rows, checked against the oracle solver</td><td>with the
+          test suite</td></tr>
+      </tbody>
+    </table></div>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/benchmark/decide/run_benchmarks.py"><code>benchmark/decide/run_benchmarks.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/benchmark/decide/generate_databases.py"><code>generate_databases.py</code></a>,
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/benchmark/decide/view_results.py"><code>view_results.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/benchmark/decide/queries/q1_ilp_selection.sql"><code>queries/q1_ilp_selection.sql</code></a> to <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/benchmark/decide/queries/q11_lp_allocation.sql"><code>q11_lp_allocation.sql</code></a>:
+        the TPC-H suite</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/benchmark/decide/profile_pipeline.py"><code>benchmark/decide/profile_pipeline.py</code></a> and <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/benchmark/decide/queries/p1_lp_row_bound.sql"><code>queries/p1_lp_row_bound.sql</code></a> to
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/benchmark/decide/queries/p4_per_high_cardinality.sql"><code>p4_per_high_cardinality.sql</code></a>: the pipeline profiler</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/benchmark/decide/direct_solve/run.py"><code>benchmark/decide/direct_solve/run.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/benchmark/decide/direct_solve/queries"><code>direct_solve/queries/</code></a>,
+        <a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/benchmark/decide/direct_solve/hand"><code>direct_solve/hand/</code></a>: the direct-solve benchmark and its hand-written plans</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/common/decide_profile.hpp"><code>src/include/duckdb/common/decide_profile.hpp</code></a>: <code>DecideProfileScope</code>, the spans;
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/execution/operator/decide/physical_decide.cpp"><code>src/execution/operator/decide/physical_decide.cpp</code></a> and
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_optimizer.cpp"><code>src/optimizer/decide/decide_optimizer.cpp</code></a>: the <code>DECIDB_BENCH</code> lines</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_pipeline_profile.py"><code>test/decide/tests/test_pipeline_profile.py</code></a>: span summing, stage columns and the objective
+        check; <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_comparators.py"><code>test_direct_comparators.py</code></a>; <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_large_scale.py"><code>test_large_scale.py</code></a>: the scale tests</li>
+    </ul></div>
+  </section>
+
+  <section id="findings">
+    <h2><a class="anchor" href="#findings">What the measurements show</a></h2>
+    <p class="lead">On a hard model the solver dominates: loading the model is under 2% of any solve that takes over 5
+      seconds. On an easy model the solver is quick, and loading the model costs as much as solving it. Query
+      rewriting, where a rule applies, removes both.</p>
+    <p>Unless a number says otherwise, it comes from the pipeline profiler on <code>large.db</code>, on builds of 30
+      October 2026, one query at a time with a 3-second solver limit, as the median of three interleaved runs.
+      Instrumentation is not a factor: the same statements with and without profiling differ by -1.3% to +2.6%, with
+      no consistent sign, inside run-to-run noise, and peak memory is unchanged.</p>
+
+    <h3 id="fixed-costs"><a class="anchor" href="#fixed-costs">Fixed costs</a></h3>
+    <p>Each process and each statement pays a few costs before any data is read. Measured in fresh processes at a load
+      of 2.2 to 2.6:</p>
+    <ul>
+      <li>An empty process that opens <code>large.db</code> and runs <code>SELECT 1</code>: 18 ms.</li>
+      <li>Parsing, binding and canonicalizing a DECIDE statement: 0.1 to 0.3 ms.</li>
+      <li>The DECIDE optimizer: 5.1 to 5.3 ms on a process's first statement when Gurobi can be chosen, then 0.15 to
+        0.25 ms. The difference is a one-time check that the Gurobi library and its license are present, 4.8 to 5.1
+        ms per process.</li>
+      <li>A Gurobi environment, created per query: 0.6 to 0.8 ms. Reusing it would save under 1 ms a query, so nothing
+        is cached.</li>
+    </ul>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Whole statement (ms)</th><th scope="col">Gurobi: first / repeats</th><th scope="col">HiGHS: first / repeats</th></tr></thead>
+      <tbody>
+        <tr><td>Q11, a linear allocation</td><td>161 / 150 to 152</td><td>139 / 132 to 133</td></tr>
+        <tr><td>P1, a bounded LP over 1,000,000 rows</td><td>340 / 315 to 321</td><td>251 / 246 to 256</td></tr>
+        <tr><td>Q8, a keyed feasibility problem over a join of 1,000,000 <code>lineitem</code> rows</td><td>664 / 632 to 634</td><td>827 / 780
+          to 795</td></tr>
+      </tbody>
+    </table></div>
+    <p>A process's first statement costs 5 to 47 ms more than a repeat: 5 ms is the Gurobi check, and the rest is
+      spread over execution (warm caches, the allocator) in no single span.</p>
+
+    <h3 id="stages"><a class="anchor" href="#stages">The stages and the solver</a></h3>
+    <p>Follow a query through the solver path. The medians below are Gurobi's, on <code>large.db</code>, from builds of
+      30 October 2026.</p>
+    <ol class="steps">
+      <li><strong>Extraction</strong> turns clauses into coefficients. Its cost follows grouping: on P4, whose
+        <code>per l_orderkey</code> clause has 250,000 classes, 114 of its 121 ms of constraint evaluation go to the
+        <code>when</code>, <code>per</code> and <code>by</code> grouping (load 2.2 to 3.0).</li>
+      <li><strong>Formulation</strong> lowers constructs such as <code>ABS</code> and <code>MIN</code>/<code>MAX</code>
+        into rows. By cost: <code>ABS</code>, then composed <code>MIN</code>/<code>MAX</code>, then products of
+        decisions, then <code>&lt;&gt;</code>, then a <code>MIN</code>/<code>MAX</code> objective. Q10, the heaviest
+        query, spends 308 ms here.</li>
+      <li><strong>The neutral model build</strong> takes 26 to 60 ns per nonzero coefficient. Q10's model, 5 million
+        variables, 6 million rows and 14 million nonzeros, takes 657 ms.</li>
+      <li><strong>Backend load.</strong> Gurobi's model creation costs about 85 ns per column, and adding rows about
+        110 ns per row: 85 ms for P1's 1 million columns, 660 ms for Q10's 6 million rows.</li>
+      <li><strong>Solve.</strong> On every query whose solve takes over 5 seconds, loading is under 2% of the solve.
+        Q10's solve takes 72 seconds.</li>
+      <li><strong>Readback and cleanup.</strong> Reading the backend's answer takes 0.3 to 3 ms; turning it into rows,
+        0.4 ms (Q11, 136,000 rows) to 17.8 ms (Q8, 1 million rows); destroying the model, 0.7 to 17 ms. Less than 10
+        ms of each statement falls outside every span.</li>
+    </ol>
+    <p>So the balance depends on the model. On a hard model such as Q10, formulation takes 308 ms and the neutral
+      build 657 ms, against a 72-second solve. On an easy one the order flips: P1's Gurobi load takes 91 ms against a
+      34 ms solve, and P4's 121 ms against 216 ms. There, Gurobi's model creation dominates the load, and it is
+      already a single call. No solver tuning is implemented: these numbers measure the solvers as DeciDB configures
+      them, with an optimality gap of 0.</p>
+
+    <h3 id="memory"><a class="anchor" href="#memory">Memory</a></h3>
+    <ul>
+      <li>On <code>medium.db</code> (500,000 <code>lineitem</code> rows), the largest peak across 90 runs is 6,525 MiB,
+        on Q10 with HiGHS at 2.5 million variables; the median is 668 MiB. The machine's 18 GiB hold this scale with
+        room to spare.</li>
+      <li>On Q3 and Q10 the peak falls inside Gurobi's solve, after DeciDB hands over the model. The stages before it
+        hold less than the solve adds.</li>
+      <li>Q10's model build adds about 340 bytes per model row beyond 12 bytes per nonzero, so the per-row structure
+        (each row's provenance record, among others) holds the memory, not the coefficients.</li>
+    </ul>
+
+    <h3 id="design"><a class="anchor" href="#design">Designs measured against an alternative</a></h3>
+    <p>Several choices in the pipeline are standard database techniques. Each one below is measured against the plain
+      alternative on the same query and machine. These ran with a 3-second solver limit, often beside other work, at
+      loads from 2.5 to 18, where single spans can swing up to 3 times, so read them as large effects, not small
+      ones.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Design</th><th scope="col">Against</th><th scope="col">Measured</th></tr></thead>
+      <tbody>
+        <tr><td>Group ids from DuckDB's aggregate hash table; a label formatted only for a group a message names</td>
+          <td>comparing each row with its group's stored value; a label for every group</td><td>Q8 keyed mapping 1,169
+          ms against 257 ms; peak 1,172 MiB against about 860 MiB</td></tr>
+        <tr><td>A group keeps its first row and reads its key values from it when printed (late materialization)</td>
+          <td>one stored value per group per key column (250,000 groups × 9 columns on Q8)</td><td>Q8 keyed mapping
+          264 ms against 167 ms; peak 834 MiB against 526 MiB</td></tr>
+        <tr><td>Composed <code>MIN</code>/<code>MAX</code> coefficients read a chunk at a time, like every other
+          clause</td><td>one value at a time, with a cast per value</td><td>Q4, 489 ms against 21 ms</td></tr>
+        <tr><td>Row buffers that grow geometrically</td><td>reserving exactly the needed size at each flush, which
+          copies the whole buffer each time</td><td>a 1,000,000-row join with a <code>per l_orderkey</code> clause,
+          6.2 s against 0.98 s</td></tr>
+        <tr><td>A determination check as a grouped aggregate on its own read of the source</td><td>three window
+          operators over the DECIDE source, each holding every row and column</td><td>the same join, passing: 0.98 s
+          and 1,543 MiB against 0.56 s and 817 MiB</td></tr>
+        <tr><td>Rows packed once into HiGHS's compressed row matrix and moved into the solver</td><td>packing through
+          intermediate copies of the matrix</td><td>Q10 load 1,164 ms against 699 ms; memory added during load 1,816
+          MiB against 1,026 MiB</td></tr>
+      </tbody>
+    </table></div>
+    <p>One idea measured to save nothing: folding constant subexpressions in a rewritten plan. DuckDB evaluates a
+      constant subtree once per chunk of rows, not once per row, so on 1,000,000 <code>lineitem</code> rows (medians of
+      9) the A1 plan took 0.119 s without the fold and 0.118 s with it, and S1 0.044 s both ways. What does cost per
+      row is the operation a constant decides, such as a multiplication by <code>1.0</code>, and DuckDB's own
+      expression rewriter removes those.</p>
+
+    <h3 id="rewriting-saves"><a class="anchor" href="#rewriting-saves">What query rewriting saves</a></h3>
+    <p>A rewritten query builds no model, so it pays for none of the stages above: no extraction into a matrix, no
+      formulation, no load, no solve. On P1, a bounded LP over 1,000,000 rows of <code>large.db</code>, the default
+      configuration answers by rewriting in 113 to 119 ms, against 315 to 340 ms with Gurobi forced and 246 to 256 ms
+      with HiGHS forced (one process running the statement three times, load 2.2 to 2.6).</p>
+    <p>The direct-solve benchmark measures each rule against Gurobi. On the 11-core Apple M3 Pro, 9 to 12 November
+      2026, at 800,000 <code>partsupp</code> rows, median of 3 fresh processes, with every objective agreeing:</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Rule</th><th scope="col">Query</th><th scope="col">Rewritten</th><th scope="col">Gurobi</th><th scope="col">Speedup</th><th scope="col">Peak memory,
+        rewritten / Gurobi</th></tr></thead>
+      <tbody>
+        <tr><td><a href="rewrite-rules.html#a1">A1</a></td><td>a target per row inside its range</td><td>0.028 s</td>
+          <td>0.353 s</td><td>12.5x</td><td>28 / 456 MiB</td></tr>
+        <tr><td><a href="rewrite-rules.html#a2">A2</a></td><td>one shared value closest to every row</td><td>0.026 s</td>
+          <td>0.077 s</td><td>3.0x</td><td>29 / 76 MiB</td></tr>
+        <tr><td>A2</td><td>one value per supplier, by absolute distance</td><td>0.039 s</td><td>12.322 s</td><td>313x</td>
+          <td>107 / 4,517 MiB</td></tr>
+        <tr><td><a href="rewrite-rules.html#n1">N1</a></td><td>one limit on a sum of squares</td><td>0.032 s</td>
+          <td>3.295 s</td><td>102x</td><td>40 / 727 MiB</td></tr>
+        <tr><td><a href="rewrite-rules.html#r1">R1</a></td><td>a shipping cap per part</td><td>0.120 s</td><td>1.386 s</td>
+          <td>11.5x</td><td>345 / 855 MiB</td></tr>
+        <tr><td><a href="rewrite-rules.html#s1">S1</a></td><td>the two best offers per supplier</td><td>0.044 s</td>
+          <td>3.046 s</td><td>70.0x</td><td>not reported</td></tr>
+        <tr><td><a href="rewrite-rules.html#s3">S3</a></td><td>the most offers under one cost budget</td><td>0.207 s</td>
+          <td>22.978 s</td><td>110.8x</td><td>103 / 665 MiB</td></tr>
+      </tbody>
+    </table></div>
+    <p>The solver's time grows with the rows, while the rewritten plan stays close to the cost of starting a process
+      and opening the database, about 20 ms, which these times include. Across the published sweeps every rewritten
+      query is ahead of Gurobi at every size measured; at 800,000 rows the speedups run from 3.0x to 313x. Two more
+      rules use other data: <a href="rewrite-rules.html#o1">O1</a>, pairing 1,600 suppliers with 1,600 (2,560,000
+      pairs), takes 0.057 s against Gurobi's 11.732 s, 206x; <a href="rewrite-rules.html#s2">S2</a>, over 150,000
+      <code>customer</code> rows, 0.052 s against 0.425 s, 8.2x.</p>
+    <p>Against a plan written by hand in SQL for the same answer, the plans of A1, A2, N1, O1, R1, S1, S2 and S3 use
+      from 0.96 to 2.87 times the hand plan's summed operator CPU, on the same machine at scale 1 (O1 at 3,200
+      suppliers a side, S2 at scales 1 and 2). The extra is the work a general rule owes: checks over every row or
+      group before the first row is returned, which a hand plan for TPC-H's data can skip because that data cannot
+      trip them. Planning a rewrite adds 0.09 to 1.19 ms.</p>
+
+    <h3 id="open"><a class="anchor" href="#open">Open questions</a></h3>
+    <ul>
+      <li><strong>A second machine.</strong> Every number here comes from one machine. The sweep needs repeating on
+        another host before any number is read as general.</li>
+      <li><strong>Solver behavior at scale.</strong> Scale ladders and repetitions on both backends, with solver logs
+        for the slow cases, are not run. A timeout is never read as infeasibility, and small-model behavior is never
+        extrapolated.</li>
+      <li><strong>Where memory stops fitting.</strong> The <code>large.db</code> sweep of 30 October 2026 (90 runs: 63
+        finished, 18 at the solver's limit, 3 past the process limit, 6 refused by a backend) records peak memory
+        beside model size, but which stage holds the memory as models grow is not yet analyzed.</li>
+      <li><strong>Direct solve at large scale.</strong> The benchmark runs up to scale 512 (409.6 million rows), but
+        the published results stop at 800,000 <code>partsupp</code> rows (scale 1).</li>
+      <li><strong>Q9's prefix.</strong> Q9 solves near-linearly (120,000 rows in 2.8 s of solver time, measured 18
+        August 2026), so the 15,000-row prefix it runs at on <code>large.db</code> is smaller than it needs to be. Its
+        tier is not yet re-chosen.</li>
+      <li><strong>A helper decision's box.</strong> Bounding each <code>MIN</code>/<code>MAX</code> helper by its own
+        group's reach showed no benefit over one shared box on the one pair of queries measured. A model where that
+        bound decides the relaxation (many groups, an objective on the helper) is not measured.</li>
+    </ul>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>benchmark/decide/results/pipeline_profile_large.csv</code> and
+        <code>pipeline_profile_raw_large/</code>: the profiler's results and raw spans, kept locally (not in the
+        repository)</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/benchmark/decide/results/direct_solve"><code>benchmark/decide/results/direct_solve/</code></a>: each direct-solve sweep's CSV and a manifest with the
+        commit, binary, versions, thread count and machine</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/solver/ilp_solver.cpp"><code>src/decidb/solver/ilp_solver.cpp</code></a>: <code>SolveModel</code>, whose spans separate the neutral
+        build, the backend session and cleanup</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_answer_choice.cpp"><code>src/optimizer/decide/decide_answer_choice.cpp</code></a>: where a query takes a rewrite rule or the solver
+        path</li>
+    </ul></div>
+  </section>
+<nav class="pager" aria-label="Documentation"><a class="pager__prev" href="testing.html"><small>Previous</small>Testing</a></nav></article>
+
+</div></div>
+</main>
+<footer class="footer closing footer--statement g2m" id="contact" aria-labelledby="close-h">
+  <div class="wrap">
+    <div class="closing__cta close--word">
+      <div class="section-head--split">
+        <div><h2 id="close-h">Run your first DECIDE query</h2><p class="t-lead">Python wheels and command-line builds for macOS, Linux and Windows.</p></div>
+        <a class="btn btn--primary" href="../getting-started.html#install">Install DeciDB<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a>
+      </div>
+      <p class="close__word" aria-hidden="true">DeciDB</p>
+    </div>
+    <div class="closing__links">
+      <div class="grid">
+        <div class="span-4 stack-4">
+          <a class="nav__logo" href="../index.html"><img src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
+          <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
+        </div>
+        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Get started</a></li><li><a href="../guide.html">Guide</a></li><li><a href="../docs/index.html">Documentation</a></li><li><a href="../features.html">Novel features</a></li><li><a href="../examples.html">Examples</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="../examples/knapsack.html">Knapsack</a></li><li><a href="../examples/facility-location.html">Depots</a></li><li><a href="../examples/fair-allocation.html">Fair allocation</a></li><li><a href="../examples/diagnose.html">DIAGNOSE</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Project</h3><ul><li><a href="../about.html">About</a></li><li><a href="../about.html#research">Papers</a></li><li><a href="https://github.com/huda-lab/decidb">GitHub</a></li><li><a href="https://huda-lab.github.io/">HUDA Lab</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Contact</h3><ul><li><a href="mailto:support@decidb.com">Email the team</a></li><li><a href="https://github.com/huda-lab/decidb/issues">Report an issue</a></li></ul></div>
+      </div>
+      <div class="footer__legal">
+        <span>&copy; 2026 HUDA Lab, NYU Abu Dhabi and UMass Amherst</span>
+        <span>Product names and logos are trademarks of their owners.</span>
+      </div>
+    </div>
+  </div>
+</footer>
+<script type="module" src="../assets/system.js"></script>
+<script type="module" src="../assets/motion/motion.js"></script>
+<script type="module" src="../assets/layout/layout.js"></script>
+<script src="../assets/js/site.js" defer></script>
+</body>
+</html>

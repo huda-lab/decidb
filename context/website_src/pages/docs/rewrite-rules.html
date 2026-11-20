@@ -1,0 +1,602 @@
+<!--meta
+title: The rewrite rules: DeciDB documentation
+description: The nine problem classes DeciDB answers by query rewriting: the shape each needs, its algorithm, why the answer is exact, and what it costs.
+h1: The rewrite rules
+lede: The nine classes DeciDB rewrites: the shape each needs, the algorithm that answers it, why the answer is exact, and what it costs.
+-->
+<nav class="toc" aria-label="On this page">
+  <div class="toc-title">On this page</div>
+  <ul>
+    <li><a href="#overview">The nine rules</a></li>
+    <li><a href="#s1">S1: rows by score</a></li>
+    <li><a href="#s2">S2: nested quotas</a></li>
+    <li><a href="#s3">S3: as many rows as fit</a></li>
+    <li><a href="#a1">A1: each row on its own</a></li>
+    <li><a href="#a2">A2: one shared value</a></li>
+    <li><a href="#r1">R1: fill a budget by value</a></li>
+    <li><a href="#r4">R4: a fair split</a></li>
+    <li><a href="#n1">N1: inside a sum of squares</a></li>
+    <li><a href="#o1">O1: match by position</a></li>
+    <li><a href="#not-built">Not built yet</a></li>
+  </ul>
+</nav>
+<article class="prose">
+
+  <section id="overview">
+    <h2><a class="anchor" href="#overview">The nine rules</a></h2>
+    <p class="lead">Each rule answers one class of problem with a known exact algorithm. The rule id (S1, A1, and so
+      on) and the rule name are what <code>EXPLAIN</code> prints.</p>
+    <p>How a rule recognizes its class, builds its plan and hands back DECIDE's columns is on
+      <a href="rewriting.html#recognize">Query rewriting</a>. This page covers what each rule answers. Every section
+      ends with a runnable query; the site's build runs it and checks that <code>EXPLAIN</code> names the rule.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Rule</th><th>EXPLAIN name</th><th>Answers</th><th>Plan shape</th></tr></thead>
+      <tbody>
+        <tr><td><a href="#s1">S1</a></td><td><code>S1_UNIFORM_MATROID</code></td><td>choose rows by score, with limits
+          on how many</td><td>ranked prefix</td></tr>
+        <tr><td><a href="#s2">S2</a></td><td><code>S2_LAMINAR_MATROID</code></td><td>the best rows under quotas that
+          nest</td><td>ranked prefix, one level per quota</td></tr>
+        <tr><td><a href="#s3">S3</a></td><td><code>S3_MAX_CARDINALITY_KNAPSACK</code></td><td>as many rows as fit one
+          budget</td><td>ranked prefix</td></tr>
+        <tr><td><a href="#a1">A1</a></td><td><code>A1_SEPARABLE_BOX</code></td><td>each row's best value in its own
+          range</td><td>verify then stream</td></tr>
+        <tr><td><a href="#a2">A2</a></td><td><code>A2_SINGLE_FACILITY_LOCATION</code></td><td>one shared value closest
+          to every row</td><td>group then join</td></tr>
+        <tr><td><a href="#r1">R1</a></td><td><code>R1_CONTINUOUS_KNAPSACK</code></td><td>fill one budget in order of
+          value per unit</td><td>group then join, with a price window</td></tr>
+        <tr><td><a href="#r4">R4</a></td><td><code>R4_MAX_MIN_FAIRNESS</code></td><td>raise the smallest share as high
+          as one budget allows</td><td>group then join</td></tr>
+        <tr><td><a href="#n1">N1</a></td><td><code>N1_EUCLIDEAN_BALL</code></td><td>stay inside one sum of
+          squares</td><td>group then join</td></tr>
+        <tr><td><a href="#o1">O1</a></td><td><code>O1_MONGE_ASSIGNMENT</code></td><td>match two tables one to one by
+          position</td><td>verify, rank each side, pair</td></tr>
+      </tbody>
+    </table></div>
+    <div class="note"><strong>How the timings are measured</strong>
+      <p>Every timing on this page comes from <code>benchmark/decide/direct_solve/run.py</code> on an 11-core Apple M3
+        Pro, over TPC-H tables (most over the 800,000 rows of <code>partsupp</code> at scale factor 1), in November
+        2026. <em>Against Gurobi</em> runs a fresh <code>decidb</code> process per run and takes the median
+        of 3; the times include about 20 ms of process start and database open, and the two objectives agreed within
+        1e-6. <em>Against a hand-written plan</em> sums the CPU time of every operator, best of 5 in one process, beside
+        a SQL query an expert wrote for the same answer with the same checks; a ratio of 1.0 means the rule's plan costs
+        what that SQL costs. <a href="performance.html#benchmarks">Performance</a> describes the harness.</p></div>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/optimizer/decide/direct/&lt;id&gt;_&lt;slug&gt;_rule.cpp</code>: one file per rule, such as
+        <code>s1_uniform_matroid_rule.cpp</code></li>
+      <li><code>test/decide/tests/test_direct_&lt;id&gt;_&lt;slug&gt;.py</code>: each rule's differential test against
+        an independent oracle</li>
+      <li><code>test/decide/tests/_direct_rule_fixtures.py</code>: each rule's fixture for the shared conformance
+        suite</li>
+      <li><code>test/common/test_decidb_direct_decline.cpp</code>: each rule's applying and declining shapes
+        (<code>S1AppliesShapes</code>, <code>S1DeclineShapes</code>, and so on)</li>
+      <li><code>benchmark/decide/direct_solve/queries/</code> and <code>hand/</code>: the benchmark queries and their
+        hand-written comparators</li>
+    </ul></div>
+  </section>
+
+  <section id="s1">
+    <h2><a class="anchor" href="#s1">S1: choose rows by score</a></h2>
+    <p class="lead">S1 answers "choose rows by score, with limits on how many": one <code>BOOL</code> per row, a count
+      limit per group or over all rows, and a linear score.</p>
+    <p>Its class is the <strong>uniform matroid</strong>: the family of every set of at most <em>k</em> items. On a
+      matroid, choosing items greedily by weight gives an optimum.</p>
+    <p><strong>The shape.</strong> A query is S1 when it has:</p>
+    <ul>
+      <li>one decision, a <code>BOOL</code> per row;</li>
+      <li>count limits on <code>SUM(x)</code> (<code>&lt;=</code>, <code>&lt;</code>, <code>&gt;=</code>,
+        <code>&gt;</code>, <code>=</code>, or several forming one interval), all with the same <code>by</code> key and
+        the same <code>when</code>. The body's constant coefficients must add up to exactly 1 or -1, so
+        <code>SUM(2*x - x)</code> and <code>SUM(-x)</code> are counts;</li>
+      <li>limits that are constants below 1e20 in magnitude, values of the row, or aggregates of the group, such as
+        <code>SUM(x) &lt;= 0.1 * COUNT(*)</code> for the best tenth of the rows;</li>
+      <li>a linear objective <code>SUM(score * x)</code>, maximized or minimized, or none;</li>
+      <li>other clauses only to fix single rows: <code>x = 1</code>, <code>x &lt;= flag</code>, under a
+        <code>when</code> or not.</li>
+    </ul>
+    <p><strong>The algorithm.</strong> For each group, with lower limit <em>L</em> and upper limit <em>U</em>:</p>
+    <ol class="steps">
+      <li><strong>Score.</strong> Compute each row's score, oriented so that a positive score improves the
+        objective.</li>
+      <li><strong>Rank.</strong> Number the rows by score, best first, with <code>ROW_NUMBER</code> over the
+        group.</li>
+      <li><strong>Size.</strong> With <em>p</em> rows of positive score, take <em>k</em> =
+        <code>LEAST(U, GREATEST(L, p))</code> rows, less the rows fixed to 1.</li>
+      <li><strong>Choose.</strong> Set <code>x = 1</code> on the rows ranked within <em>k</em>.</li>
+    </ol>
+    <p><strong>Why it is exact.</strong> For any fixed count <em>m</em>, the <em>m</em> best scores are optimal:
+      swapping a chosen row for an unchosen one with a higher score cannot lower the total. The total grows while the
+      next score is positive and shrinks once it is negative, so the best count with no limit is <em>p</em>, and
+      clamping <em>p</em> into [<em>L</em>, <em>U</em>] gives the best count within the limits. A group with
+      <em>L</em> &gt; <em>U</em> raises the solver's infeasible error.</p>
+    <p><strong>Cost.</strong> One read of the source and one sort per group, in a window that holds every row. Over
+      800,000 rows, with each supplier keeping its two offers with the most stock (measured 2026-11-12), the plan takes
+      1.05 times the CPU of the hand-written plan, and 0.044 s against Gurobi's 3.046 s, 70 times faster. A limit read
+      from the data, such as the best tenth of all rows, adds a held-rows stage that checks every group before the
+      first row leaves: 1.72 times the hand plan's CPU, and 14.5 times faster than Gurobi.</p>
+    <p>In this example each genre gets one or two films, and only films rated above 8 improve the objective:</p>
+<!--sql title="One or two films per genre, preferring those rated above 8" run="shortlist" direct="S1_UNIFORM_MATROID" dec="pick" on="pick"-->SELECT title, genre, rating, pick
+FROM Films
+DECIDE pick(BOOL)
+SUCH THAT SUM(pick) by (genre) >= 1
+      AND SUM(pick) by (genre) <= 2
+MAXIMIZE SUM((rating - 8) * pick)
+ORDER BY genre, rating DESC;<!--/sql-->
+    <p>Drama and Sci-fi each have two films rated above 8, so <em>p</em> = 2 and both are chosen. Comedy has none, so
+      <em>p</em> = 0 and the lower limit sets <em>k</em> = 1: its best film, Second Helping at exactly 8, is chosen at
+      no cost to the objective.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp</code>: the rule</li>
+      <li><code>src/optimizer/decide/direct/direct_ranked_prefix.cpp</code>: the ranked-prefix plan it builds on</li>
+      <li><code>src/optimizer/decide/direct/direct_bound_reader.cpp</code>: <code>DirectReadCountBody</code>,
+        <code>DirectReadFixedValues</code>, the count-limit readers</li>
+      <li><code>test/decide/tests/test_direct_s1_uniform_matroid.py</code>: the differential test</li>
+    </ul></div>
+  </section>
+
+  <section id="s2">
+    <h2><a class="anchor" href="#s2">S2: the best rows under nested quotas</a></h2>
+    <p class="lead">S2 answers "the best rows under nested quotas": upper count limits whose groups nest, such as teams
+      inside divisions inside a company-wide total.</p>
+    <p>A family of sets is <strong>laminar</strong> when any two of its sets are either disjoint or one contains the
+      other. Upper quotas over a laminar family form a <strong>laminar matroid</strong>, where a greedy choice is still
+      exact if it runs level by level, finest first.</p>
+    <p><strong>The shape.</strong> A query is S2 when it has:</p>
+    <ul>
+      <li>one <code>BOOL</code> per row and a linear score, as S1 reads them;</li>
+      <li>two or more upper count limits (<code>SUM(x) &lt;= k</code> or <code>&lt; k</code>) on different scopes,
+        where a scope is a clause's <code>by</code> key, <code>when</code> and <code>per</code>. Clauses with the same
+        scope form one level, whose cap is the least of theirs;</li>
+      <li>levels that form a chain: each coarser level's <code>by</code> key is a subset of the finer one's, compared
+        as sets, with no <code>when</code> or the same one;</li>
+      <li>caps that are constants below 1e20, values of the row, or aggregates of the group.</li>
+    </ul>
+    <p>The nesting is proved from the query's text; the data is never consulted. <code>by (department)</code> beside
+      <code>by (division)</code> declines even when every department lies in one division, because the rule is chosen
+      once, when the plan is built, and the IR holds no functional dependencies.</p>
+    <p><strong>The algorithm.</strong></p>
+    <ol class="steps">
+      <li><strong>Finest level.</strong> Rank each group's rows by score and keep those ranked within the group's
+        remaining cap (its cap less its rows fixed to 1).</li>
+      <li><strong>Each coarser level.</strong> Rank, in its own groups, only the rows the level before it keeps
+        (<code>ROW_NUMBER</code> partitioned by the group and the previous level's keep flag), and keep those within
+        its cap.</li>
+      <li><strong>Choose.</strong> A row is chosen when the last level keeps it and its score improves the
+        objective.</li>
+    </ol>
+    <p><strong>Why it is exact.</strong> Within a finest group of cap <em>q</em>, only its <em>q</em> best positive
+      rows can ever be useful. Once a quota's children are processed, any feasible selection can be swapped for one at
+      least as good that uses only their survivors, so the parent loses nothing by ranking only the survivors. Each
+      stage only removes rows, so a quota met below stays met. Ranking each level over all of its rows would be wrong:
+      a division of cap 2 holding scores 9, 8 and 7, where 9 and 8 share a department of cap 1, must choose 9 and
+      7.</p>
+    <p><strong>Cost.</strong> One sort per level. Over TPC-H <code>customer</code> at 150,000 rows, with at most 2
+      per nation and market segment, 5 per nation and 100 overall (measured 2026-11-12), the plan takes 1.41 times the
+      CPU of a hand-written chain of <code>ROW_NUMBER</code> stages, and 0.052 s against Gurobi's 0.425 s. The linear
+      relaxation of laminar quotas is integral, so Gurobi solves at its root node; its cost is building the model,
+      which grows with the rows.</p>
+<!--sql title="At most one hire per team, two per division, four in all" run="nested-quotas" direct="S2_LAMINAR_MATROID" dec="hire" on="hire"-->SELECT name, division, team, score, hire
+FROM Candidates
+DECIDE hire(BOOL)
+SUCH THAT SUM(hire) by (division, team) <= 1
+      AND SUM(hire) by (division) <= 2
+      AND SUM(hire) <= 4
+MAXIMIZE SUM(score * hire);<!--/sql-->
+    <p>The team level drops Bo, Fa and Io, the second candidates of their teams. The division level keeps Ada and Jo
+      in Product, above Cy. The company level keeps the four best survivors, Ed, Ada, Jo and Hu, and drops Gu.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/optimizer/decide/direct/s2_laminar_matroid_rule.cpp</code>: the rule; <code>Contains</code>
+        proves that one scope nests in another</li>
+      <li><code>src/optimizer/decide/direct/direct_ranked_prefix.cpp</code>: one level of the builder per quota
+        scope</li>
+      <li><code>test/decide/tests/test_direct_s2_laminar_matroid.py</code>: the differential test, including the
+        counter-example above</li>
+    </ul></div>
+  </section>
+
+  <section id="s3">
+    <h2><a class="anchor" href="#s3">S3: as many rows as fit one budget</a></h2>
+    <p class="lead">S3 answers "as many rows as fit one budget": every chosen row is worth the same, rows differ in
+      weight, and one budget limits the total weight. Its mirror, "the fewest rows that reach a minimum", is S3 too.</p>
+    <p>The class is the <strong>maximum-cardinality knapsack</strong>. A knapsack whose rows have different values is
+      the general 0-1 knapsack, which has no greedy answer and stays on the solver.</p>
+    <p><strong>The shape.</strong> A query is S3 when it has:</p>
+    <ul>
+      <li>one <code>BOOL</code> per row;</li>
+      <li>exactly one aggregate clause, <code>SUM(w*x) &lt;= B</code> with a maximized count, or
+        <code>SUM(w*x) &gt;= B</code> with a minimized count, per <code>by</code> group or over all rows;</li>
+      <li>weights of any sign, zero included. Constant weights that add up to exactly 1 or -1 make the body a count,
+        which is S1's, so S3 declines it and the two rules stay disjoint;</li>
+      <li>a limit that is a constant below 1e20, a value of the row (the group's tightest), or an aggregate of the
+        group;</li>
+      <li>an objective that is a positive constant times the count, and other clauses only to fix single rows.</li>
+    </ul>
+    <p><strong>The algorithm.</strong> For each group:</p>
+    <ol class="steps">
+      <li><strong>Sort.</strong> Order the free rows by weight, lightest first (heaviest first for a minimum).</li>
+      <li><strong>Running total.</strong> One window computes the running total of the weights and each row's rank.
+        Both share one partition and one order, so DuckDB sorts once and a row's rank is the position at which its
+        total is summed; two sorts could order tied rows differently.</li>
+      <li><strong>Size.</strong> A second window finds <em>k</em>: the largest rank whose total, plus the total of the
+        rows fixed to 1, fits <em>B</em> (for a minimum, the smallest rank that reaches it). The empty prefix
+        counts.</li>
+      <li><strong>Choose.</strong> Set <code>x = 1</code> on the rows ranked within <em>k</em>.</li>
+    </ol>
+    <p><strong>Why it is exact.</strong> Among all sets of <em>k</em> rows, the <em>k</em> lightest have the smallest
+      total, so some <em>k</em> rows fit exactly when the <em>k</em> lightest do. The longest prefix that fits is
+      therefore the largest count. With negative weights the running totals fall before they rise, so the plan takes the
+      largest rank that fits rather than stopping at the first that does not.</p>
+    <p><strong>Cost.</strong> One sort per group and two windows, over one read. With a budget of 5,000 per supplier
+      (measured 2026-11-12), the plan takes 1.53 times the CPU of a hand-written plan that cuts the running total at
+      the first row over budget. That cut is correct for TPC-H's positive costs only; the rule pays for the largest
+      fitting rank, which negative weights need. Against Gurobi at 800,000 rows: 0.094 s against 4.770 s (50.5 times)
+      with a budget per supplier, and 0.207 s against 22.978 s (110.8 times) with one budget over all rows, in a fourth
+      to a sixth of Gurobi's peak memory.</p>
+<!--sql title="Fit as many tickets as possible into 20 story points" run="sprint-planning" direct="S3_MAX_CARDINALITY_KNAPSACK" dec="take" on="take"-->SELECT ticket, points, take
+FROM Backlog
+DECIDE take(BOOL)
+SUCH THAT SUM(points * take) <= 20
+MAXIMIZE SUM(take)
+ORDER BY points;<!--/sql-->
+    <p>The running totals of the sorted points are 1, 3, 6, 9, 14 and 19. The next ticket brings the total to 27, so
+      the six smallest tickets are the answer.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/optimizer/decide/direct/s3_max_cardinality_knapsack_rule.cpp</code>: the rule</li>
+      <li><code>src/optimizer/decide/direct/direct_plan_fragments.cpp</code>: <code>DirectRunningSum</code></li>
+      <li><code>test/decide/tests/test_direct_s3_max_cardinality_knapsack.py</code>: the differential test, with
+        ties under a parallel sort</li>
+    </ul></div>
+  </section>
+
+  <section id="a1">
+    <h2><a class="anchor" href="#a1">A1: each row on its own</a></h2>
+    <p class="lead">A1 answers problems in which no clause or objective term links two rows: each decision is
+      optimized alone, inside its own range.</p>
+    <p>The class is the <strong>separable box-constrained problem</strong>: separable because the objective is a sum
+      of terms that each read one decision, and box-constrained because each decision has only its own lower and upper
+      bound.</p>
+    <p><strong>The shape.</strong> A query is A1 when it has:</p>
+    <ul>
+      <li>one or more <code>BOOL</code>, <code>INT</code> or <code>REAL</code> decisions per row;</li>
+      <li>only per-row bounds: a decision compared with a constant, a column or a deterministic expression of the row,
+        with a coefficient, an offset and a <code>when</code> allowed (<code>2*x + 1 &lt;= cap</code>). No aggregate
+        clause;</li>
+      <li>an objective of linear terms and at most one square <code>k*(w*x + t)^2</code> per decision, with
+        <code>k</code> a nonzero constant, or no objective.</li>
+    </ul>
+    <p><strong>The algorithm.</strong> A chain of projections, with no sort, window or join:</p>
+    <ol class="steps">
+      <li><strong>Read.</strong> Each bound clause becomes a lower and an upper end on its row, and the objective
+        becomes <code>a*x^2 + b*x</code> per decision.</li>
+      <li><strong>Box.</strong> The row's box is the <code>GREATEST</code> of the lower ends and the
+        <code>LEAST</code> of the upper ends, within the decision's own box: [0, 1] for <code>BOOL</code>, and [0, ∞)
+        for <code>INT</code> and <code>REAL</code> unless a constant lower bound replaces the 0. An <code>INT</code> or
+        <code>BOOL</code> box is rounded inward.</li>
+      <li><strong>Answer.</strong> Where the objective, as a minimization, is convex, the turning point
+        <code>-b / (2a)</code> clamped into the box; otherwise the better end. For a whole number, the first integer
+        whose next step no longer improves.</li>
+      <li><strong>Verify, then stream.</strong> A first read checks every row (an empty box is infeasible; an improving
+        direction with no finite end is unbounded) into a one-row verdict, and a second read releases each row as it
+        is computed (<a href="rewriting.html#every-row">every row is read</a>).</li>
+    </ol>
+    <p><strong>Why it is exact.</strong> The objective is a sum of independent terms, and every clause touches one
+      decision, so improving one decision cannot change another's options or contribution. The best value of each
+      decision together is a global optimum. A linear or quadratic function of one variable on an interval has its
+      optimum at an end or at the turning point.</p>
+    <p><strong>Cost.</strong> Two reads and no held rows. Shipping each of 800,000 offers as close to 5,000 units as its
+      stock allows (measured 2026-11-09) takes 1.14 times the CPU of a hand-written plan that also reads the table
+      twice, and 0.028 s against Gurobi's 0.353 s, 12.5 times faster, in a sixteenth of its peak memory.</p>
+    <p>Here each order's profit is <code>margin * qty - 0.125 * qty^2</code>, which peaks at 4 times the margin:</p>
+<!--sql title="Each order picks its most profitable quantity in its range" run="a1" direct="A1_SEPARABLE_BOX" dec="qty"-->SELECT sku, margin, min_qty, max_qty, qty
+FROM Orders
+DECIDE qty(INT)
+SUCH THAT qty BETWEEN min_qty AND max_qty
+MAXIMIZE SUM(margin * qty - 0.125 * POWER(qty, 2));<!--/sql-->
+    <p>A-100 peaks at 16 and C-300 at 10, both inside their ranges. B-200 and D-400 have negative margins, so their
+      peaks lie below their ranges and each takes its lower end.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/optimizer/decide/direct/a1_separable_box_rule.cpp</code>: the rule</li>
+      <li><code>src/optimizer/decide/direct/direct_bound_reader.cpp</code>: <code>DirectRowBox</code>,
+        <code>DirectStaticFloor</code>, the per-row bounds</li>
+      <li><code>src/optimizer/decide/direct/direct_plan_fragments.cpp</code>: <code>DirectTurningPoint</code>,
+        <code>DirectMinimizeOnInterval</code></li>
+      <li><code>test/decide/tests/test_direct_a1_separable_box.py</code>: the differential test, with exact
+        <code>Fraction</code> arithmetic on random rows</li>
+    </ul></div>
+  </section>
+
+  <section id="a2">
+    <h2><a class="anchor" href="#a2">A2: one shared value closest to every row</a></h2>
+    <p class="lead">A2 answers problems where many rows share one <code>REAL</code> decision, for the whole query or
+      per key, and the objective measures its distance to a value on each row.</p>
+    <p>The class is <strong>single-facility location in one dimension</strong>: place one point to be as close as
+      possible to many points on a line.</p>
+    <p><strong>The shape.</strong> A query is A2 when it has:</p>
+    <ul>
+      <li>one <code>REAL</code> decision, query-wide (<code>per ():</code>) or keyed (<code>per K:</code>; see
+        <a href="../guide.html#how-many">the Guide</a>);</li>
+      <li>bounds that reduce to one interval per class: the largest lower end and the smallest upper end over the
+        class's rows;</li>
+      <li>one minimized loss of <code>w*c + t</code>, where the slope <code>w</code> is a nonzero constant: squared
+        (<code>SUM(k * POWER(...))</code>, any weight <code>k</code>), absolute (<code>SUM(k * ABS(...))</code>,
+        <code>k</code> a positive constant) or maximum absolute (<code>MAX(k * ABS(...))</code>).</li>
+    </ul>
+    <p><strong>The algorithm.</strong> Group then join: one hash aggregate per class computes the loss's statistics,
+      and the class's answer, on one row, joins back to its rows on the class key.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Loss</th><th>Answer before clamping</th></tr></thead>
+      <tbody>
+        <tr><td>squared</td><td>the weighted mean <code>-b / (2a)</code>, from the sums <code>a</code> and
+          <code>b</code> of the expanded squares; an end of the interval when the total weight <code>a</code> is 0 or
+          less</td></tr>
+        <tr><td>absolute</td><td>a median: the point nearest 0 between the lower and the upper median
+          (<code>quantile_disc</code>)</td></tr>
+        <tr><td>maximum absolute</td><td>the midpoint of the least and the greatest value</td></tr>
+      </tbody>
+    </table></div>
+    <p>The answer is then clamped into the class's interval. Each loss is a Strategy (<code>SquareLoss</code>,
+      <code>AbsoluteLoss</code>, <code>MaxAbsoluteLoss</code>) that fills in its columns at each stage of one
+      plan-builder skeleton, a Template Method.</p>
+    <p><strong>Why it is exact.</strong> The mean minimizes the squared distance, a median the absolute distance, and
+      the midpoint of the extremes the largest distance. With a positive total weight each loss is a convex function
+      of one variable, so its minimum on an interval is its unconstrained minimum clamped into the interval. A squared
+      loss whose total weight is 0 or less is linear or concave, and its minimum lies at an end. Where several points
+      are optimal, A2 returns the one nearest 0.</p>
+    <p><strong>Cost.</strong> One hash aggregate and one join, on every thread, and no window. With one squared loss
+      over 800,000 rows (measured 2026-11-09), the plan takes 1.16 times the CPU of a hand-written plan, and 0.026 s
+      against Gurobi's 0.077 s. The absolute loss is where the gap opens: the solver path adds a helper decision per row
+      for each <code>ABS</code>, and keyed it takes 12.322 s against 0.039 s rewritten, 313 times faster, in a fortieth
+      of Gurobi's peak memory.</p>
+<!--sql title="One depot per highway, closest in squared distance" run="depot-placement" direct="A2_SINGLE_FACILITY_LOCATION" dec="depot"-->SELECT highway, store, mile, depot
+FROM Stores
+DECIDE per highway: depot(REAL)
+SUCH THAT depot <= 100
+MINIMIZE SUM(POWER(depot - mile, 2));<!--/sql-->
+    <p>Each depot sits at its highway's mean mile: (3 + 8 + 9 + 20) / 4 = 10 on I-10, and (2 + 6 + 40) / 3 = 16 on
+      I-95. The store at mile 40 pulls the I-95 depot to 16. With the absolute distance of the
+      <a href="../examples/depot-placement.html">depot example</a>, the depot moves to the median, mile 6.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/optimizer/decide/direct/a2_single_facility_location_rule.cpp</code>: the rule, its
+        <code>PlanBuilder</code> and the three losses</li>
+      <li><code>src/optimizer/decide/direct/direct_plan_fragments.cpp</code>: <code>DirectJoinClassAnswers</code>,
+        <code>DirectClassKey</code></li>
+      <li><code>test/decide/tests/test_direct_a2_single_facility_location.py</code>: the differential test, one case
+        per branch of the plan</li>
+    </ul></div>
+  </section>
+
+  <section id="r1">
+    <h2><a class="anchor" href="#r1">R1: fill a budget by value per unit</a></h2>
+    <p class="lead">R1 answers problems where <code>REAL</code> amounts, each with its own range, share one budget. The
+      best plan fills the budget in order of value per unit of budget.</p>
+    <p>The class is the <strong>continuous (fractional) knapsack</strong>: a knapsack whose items can be taken in
+      part.</p>
+    <p><strong>The shape.</strong> A query is R1 when it has:</p>
+    <ul>
+      <li>one or more <code>REAL</code> decisions per row, with any per-row bounds; a bound of magnitude 1e20 or more is
+        no bound, as on the solver;</li>
+      <li>one budget, <code>L &lt;= SUM(w*x) &lt;= U</code>, written with <code>&lt;=</code>, <code>&gt;=</code>,
+        <code>=</code> or <code>BETWEEN</code>, per <code>by</code> group or over all rows. The weight <code>w</code> is
+        read per row and may have any sign or be zero. The limits may be constants, columns or aggregates;</li>
+      <li>a linear objective, or none.</li>
+    </ul>
+    <p><strong>The algorithm.</strong> Each item has a break-even price <code>t = v / w</code>, its value per unit of
+      budget. At a price per unit of budget, an item whose <code>t</code> is above the price belongs at the end of its
+      range that spends more, and one below it at the end that spends less. Spending falls as the price rises, so one
+      sort by <code>t</code> finds the price at which spending meets the budget. Items tied at that price share what is
+      left in proportion to their room, so the answer is the same on every run. The plan has five stages:</p>
+    <ol class="steps">
+      <li><strong>Items.</strong> Each row's values: its ends, weight, value, price and room.</li>
+      <li><strong>Group totals.</strong> A hash aggregate per group: the spend at a zero price, the room in each
+        direction, and the verdicts (infeasible, unbounded).</li>
+      <li><strong>Price.</strong> One window ordered by <code>t</code> over the narrow items, then an aggregate that
+        picks the group's price.</li>
+      <li><strong>Sums at the price.</strong> A hash aggregate of what the items above, below and at the price
+        spend.</li>
+      <li><strong>Answer.</strong> Each row joins its group's numbers and computes its amount.</li>
+    </ol>
+    <p><strong>Why it is exact.</strong> A price certifies the answer, as a Lagrange multiplier does. Take a price
+      <em>λ</em> and an assignment <em>x</em> within the budget in which every item sits at the end its net value
+      <code>v - λw</code> prefers, where <em>λ</em> &gt; 0 only if the budget is spent to its upper limit and
+      <em>λ</em> &lt; 0 only if it is spent to its lower limit. For any
+      feasible <em>y</em>, Σ<em>v·y</em> = Σ(<em>v</em> − <em>λw</em>)<em>y</em> + <em>λ</em>Σ<em>w·y</em> ≤
+      Σ(<em>v</em> − <em>λw</em>)<em>x</em> + <em>λ</em>Σ<em>w·x</em> = Σ<em>v·x</em>. The plan builds exactly such
+      an <em>x</em> at the price it finds. The argument uses no sign of a weight and no order between items.</p>
+    <p><strong>Cost.</strong> One sort of the narrow items, several hash aggregates and joins. With one budget over
+      800,000 rows (measured 2026-11-09), the plan takes 0.96 times the CPU of a hand-written plan. With a budget per
+      part it takes 1.93 times, because each group's checks must raise before any row is released, even under
+      <code>LIMIT</code>, so the plan aggregates every row of each group and joins the verdict back. Against Gurobi it
+      at 800,000 rows: 0.092 s against 1.132 s with one budget, and 0.120 s against 1.386 s with a budget per
+      part, 11.5 to 12.3 times faster.</p>
+<!--sql title="Fill a 1,000 kg truck by value per kg" run="r1" direct="R1_CONTINUOUS_KNAPSACK" dec="kg"-->SELECT good, value_per_kg, available_kg, ROUND(kg, 1) AS kg
+FROM Cargo
+DECIDE kg(REAL)
+SUCH THAT kg <= available_kg AND SUM(kg) <= 1000
+MAXIMIZE SUM(value_per_kg * kg);<!--/sql-->
+    <p>Saffron, coffee and tea come first by value per kg and are taken whole, 502 kg. Rice is the item at the price:
+      it fills the remaining 498 kg. Sugar, below the price, stays at 0.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/optimizer/decide/direct/r1_continuous_knapsack_rule.cpp</code>: the rule and its five
+        stages</li>
+      <li><code>src/optimizer/decide/direct/direct_bound_reader.cpp</code>: <code>DirectReadLimit</code>, the budget's
+        limits</li>
+      <li><code>test/decide/tests/test_direct_r1_continuous_knapsack.py</code>: the differential test</li>
+    </ul></div>
+  </section>
+
+  <section id="r4">
+    <h2><a class="anchor" href="#r4">R4: a fair split of one budget</a></h2>
+    <p class="lead">R4 answers <code>MAXIMIZE MIN(c * x)</code> under one budget and a cap per row: raise the smallest
+      normalized share as high as the budget and the caps allow.</p>
+    <p>The class is <strong>weighted max-min fair allocation</strong>. In <code>MIN(x / need)</code> the coefficient
+      <code>c</code> is <code>1 / need</code>, so the objective is the smallest share of need served.</p>
+    <p><strong>The shape.</strong> A query is R4 when it has:</p>
+    <ul>
+      <li>one <code>REAL</code> decision, per row or per key;</li>
+      <li>the objective <code>MAXIMIZE MIN(c * x)</code>: one plain <code>MIN</code> over one term whose coefficient
+        is read from the row (see <a href="../guide.html#worst-case">the worst case</a> in the Guide);</li>
+      <li>one budget, <code>SUM(w*x) &lt;= B</code>, the only aggregate clause, with a weight of any sign, per
+        <code>by</code> group or over all rows;</li>
+      <li>a box from 0 to a cap: the lower bound is 0, and every other clause is an upper bound on the row.</li>
+    </ul>
+    <p><strong>The algorithm.</strong> Every row the <code>MIN</code> reads must reach a common level <em>s</em>, so
+      <code>x &gt;= s / c</code>. Two things bound <em>s</em>. The budget allows <em>s</em> ≤ <em>B</em> /
+      <em>N</em>, where <em>N</em> is the sum of <code>w / c</code> over the rows with a positive weight. Each cap
+      allows <em>s</em> ≤ <code>cap * c</code>. The level is the smaller bound, and a row with a positive weight takes
+      exactly <code>s / c</code>. A row with a negative weight takes its cap, which frees budget for the others. One
+      hash aggregate per budget group computes the sums, and a second read joins each row to its group's level.</p>
+    <p><strong>Why it is exact.</strong> Any assignment whose smallest share is <em>s</em> spends at least
+      <em>s</em>·<em>N</em> of the budget and must respect <em>s</em> ≤ <code>cap * c</code> on every row. The plan
+      takes the highest level both bounds allow and gives every row exactly that level, which meets the budget and every
+      cap. Leftover budget stays unused, since the objective has no preference for where it goes.</p>
+    <p><strong>Cost.</strong> One hash aggregate and one join, no sort. Over 800,000 rows of <code>partsupp</code>
+      with the weight read from <code>ps_supplycost</code>, the plan takes 1.03 times the CPU of a hand-written plan
+      and answers in 0.026 s. Gurobi takes 2,158 s on the same query: it is fast while a cap sets the level and slow once
+      the budget binds, because the max-min objective becomes one helper variable bounded by every row.</p>
+<!--sql title="Split 100 units so the worst-served program gets the most" run="fair-allocation" direct="R4_MAX_MIN_FAIRNESS" dec="alloc,share"-->SELECT program, need, max_alloc,
+       ROUND(alloc, 2) AS alloc, ROUND(alloc / need, 3) AS share
+FROM Programs
+DECIDE alloc(REAL)
+SUCH THAT alloc <= max_alloc AND SUM(alloc) <= 100
+MAXIMIZE MIN(alloc / need);<!--/sql-->
+    <p>The needs add up to 110, so the budget alone would allow a level of 100 / 110 = 0.909. Shelter's cap allows only
+      25 / 30 = 0.833, which is smaller, so every program gets 83.3% of its need and 8.33 units stay unspent.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/optimizer/decide/direct/r4_max_min_fairness_rule.cpp</code>: the rule; the comment above
+        <code>PlanBuilder</code> lays out its stages</li>
+      <li><code>test/decide/tests/test_direct_r4_max_min_fairness.py</code>: the differential test</li>
+    </ul></div>
+  </section>
+
+  <section id="n1">
+    <h2><a class="anchor" href="#n1">N1: stay inside one sum of squares</a></h2>
+    <p class="lead">N1 answers problems with one limit <code>SUM(POWER(x, 2)) &lt;= B</code> on <code>REAL</code>
+      decisions: the feasible set is a ball around zero, or an ellipsoid when each row weighs its square.</p>
+    <p>The class is <strong>Euclidean-ball projection</strong> (the nearest point of a ball to a target) and the
+      <strong>support function</strong> of an ellipsoid (the best point of it for a linear objective).</p>
+    <p><strong>The shape.</strong> A query is N1 when it has:</p>
+    <ul>
+      <li>one <code>REAL</code> decision per row;</li>
+      <li>exactly one aggregate clause, <code>SUM(c * POWER(s * x, 2)) &lt;= B</code>, with <code>c</code> a positive
+        constant and <code>s</code> a constant or a value of the row. <code>POWER(x, 2)</code>, <code>x * x</code> and
+        <code>norm(x, 2)</code> all read this way;</li>
+      <li>a box of exactly [0, ∞) or (−∞, ∞). Any other bound declines, even one that would not bind, because the
+        answer is then the projection onto a clipped ball, which one scale does not give;</li>
+      <li>a linear objective, one convex square per row with its linear terms (a squared distance to a target), or no
+        objective. A slope that differs between rows admits only a linear objective.</li>
+    </ul>
+    <p><strong>The algorithm.</strong> With a target <em>y</em> (from the square), the answer is <em>y</em> when it lies
+      inside the ball, and otherwise <em>y</em> scaled toward zero to the ball's surface. With a linear objective of
+      direction <em>d</em>, the answer is <em>d</em> scaled to the surface. On [0, ∞), negative parts of <em>y</em> or
+      <em>d</em> become 0 first. One hash aggregate per ball computes the squared length <em>h</em>, its square root is
+      taken once per ball, and every row joins its ball's scale.</p>
+    <p><strong>Why it is exact.</strong> The nearest point of a ball to an outside target lies on the segment from the
+      center to the target, so projecting is scaling. For a linear objective, <em>d·x</em> ≤ ‖<em>d</em>‖·‖<em>x</em>‖ ≤
+      ‖<em>d</em>‖·√<em>B</em> by the Cauchy–Schwarz inequality, with equality when <em>x</em> points along <em>d</em>
+      and reaches the surface. A weight per row becomes a ball again after substituting <code>z = sqrt(q) * x</code>.
+      On [0, ∞), setting a coordinate with a negative target to 0 keeps the point feasible and brings it no farther from
+      the target.</p>
+    <p><strong>Cost.</strong> One hash aggregate and one join. Over 800,000 rows (measured 2026-11-09), the plan takes
+      0.032 s and 40 MiB at its peak against Gurobi's 3.295 s and 727 MiB, 102 times faster; against a hand-written
+      plan it takes 1.29 times the CPU. N1 also answers on a machine without a Gurobi license, where the
+      solver path refuses a quadratic limit.</p>
+<!--sql title="The point nearest the scores inside a ball of radius 2" run="n1" direct="N1_EUCLIDEAN_BALL" dec="x"-->SELECT name, score, ROUND(x, 3) AS x
+FROM Signals
+DECIDE x(REAL)
+SUCH THAT SUM(POWER(x, 2)) <= 4
+MINIMIZE SUM(POWER(x - score, 2));<!--/sql-->
+    <p>The target (3, 4, 0) has length 5, outside the ball of radius 2, so it is scaled by 2 / 5 to (1.2, 1.6, 0).</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/optimizer/decide/direct/n1_euclidean_ball_rule.cpp</code>: the rule</li>
+      <li><code>src/optimizer/decide/direct/direct_plan_fragments.cpp</code>: <code>DirectProveSharedScope</code>, the
+        ball's scope</li>
+      <li><code>test/decide/tests/test_direct_n1_euclidean_ball.py</code>: the differential test</li>
+    </ul></div>
+  </section>
+
+  <section id="o1">
+    <h2><a class="anchor" href="#o1">O1: match two tables by position</a></h2>
+    <p class="lead">O1 answers one-to-one matchings: a <code>BOOL</code> for every pair of a cross product, each row of
+      each side matched exactly once, and a cost that is a distance between positions or a product.</p>
+    <p>The class is the <strong>Monge assignment</strong>. A cost is Monge when uncrossing two pairs never raises it;
+      for such a cost the matching in sorted order is optimal, with no search.</p>
+    <p><strong>The shape.</strong> A query is O1 when it has:</p>
+    <ul>
+      <li>a source that is a cross product of two tables; a <code>WHERE</code> on one side is allowed, since filter
+        pushdown places it inside that side;</li>
+      <li>one <code>BOOL</code> per pair, and exactly two clauses, <code>per K: SUM(x) by (K) = 1</code>, one per
+        side, with no <code>when</code> (see <a href="../guide.html#per">per</a> in the Guide);</li>
+      <li>one cost: <code>ABS(a - b)</code> or <code>POWER(a - b, 2)</code>, minimized; or <code>a * b</code>,
+        maximized or minimized;</li>
+      <li>positions declared <code>NOT NULL</code> on their tables, and a key that determines the position: the whole
+        row (<code>per d</code>) or a key column of its table.</li>
+    </ul>
+    <p><strong>The algorithm.</strong></p>
+    <ol class="steps">
+      <li><strong>Verify.</strong> Check the cost's coefficient on every pair into a one-row verdict.</li>
+      <li><strong>Rank.</strong> Rank each side by position, with a window on that side's own rows, below the cross
+        product. This is eager aggregation (Yan and Larson) applied to windows: a step whose keys come from one side
+        runs on that side's n rows, not on the pairs.</li>
+      <li><strong>Pair.</strong> Over the cross product, set <code>x = 1</code> where the two ranks are equal (opposite,
+        for a minimized product), and raise the solver's infeasible error when the two sides, both nonempty, hold different
+        numbers of classes.</li>
+    </ol>
+    <p><strong>Why it is exact.</strong> For positions <em>a</em> ≤ <em>a′</em> and <em>b</em> ≤ <em>b′</em>, pairing
+      in order costs no more than crossing the pairs, for both the absolute and the squared distance. Any crossed
+      matching can be uncrossed one pair at a time without getting worse, which ends at the sorted matching. For a
+      product, the rearrangement inequality gives equal ranks for a maximum and opposite ranks for a minimum. The
+      positions must be declared <code>NOT NULL</code>: <code>SUM</code> drops a NULL term, so a NULL position would
+      make its row free, and ranking would no longer place it. A declared constraint holds for every row; statistics
+      would not prove it.</p>
+    <p><strong>Cost.</strong> One sort of each side's n rows, while the solver builds one binary per pair, n² in all.
+      With 1,600 suppliers a side, 2,560,000 pairs (measured 2026-11-10), the plan takes 0.057 s and 30 MiB against
+      Gurobi's 11.732 s and 5,060 MiB, 206 times faster. Against a hand-written plan at 10,240,000 pairs it takes 2.87
+      times the CPU, for the check of every pair's coefficient and the class ranks the rule needs for duplicate
+      rows.</p>
+<!--sql title="Match four drivers to four pickups along a road" run="matching" direct="O1_MONGE_ASSIGNMENT"-->SELECT driver, pickup, driver_km, pickup_km FROM (
+    SELECT d.driver, p.pickup, d.km AS driver_km, p.km AS pickup_km, x
+    FROM Drivers d CROSS JOIN Pickups p
+    DECIDE x(BOOL)
+    SUCH THAT per d: SUM(x) by (d) = 1
+          AND per p: SUM(x) by (p) = 1
+    MINIMIZE SUM(ABS(d.km - p.km) * x)
+) WHERE x = 1
+ORDER BY driver;<!--/sql-->
+    <p>Both sides sorted by kilometer and paired by rank: 1 + 1.5 + 2.5 + 1 = 6 km in total.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/optimizer/decide/direct/o1_monge_assignment_rule.cpp</code>: the rule; <code>CheckPairs</code>
+        is the verdict over the pairs</li>
+      <li><code>src/optimizer/decide/direct/direct_ir.cpp</code>: the IR's <code>cross_product</code>,
+        <code>not_null</code> and <code>keys</code></li>
+      <li><code>test/decide/tests/test_direct_o1_monge_assignment.py</code>: the differential test</li>
+    </ul></div>
+  </section>
+
+  <section id="not-built">
+    <h2><a class="anchor" href="#not-built">Not built yet</a></h2>
+    <p class="lead">Nine more classes have a written definition and correctness argument but no rule. A query of one
+      of these shapes goes to the solver.</p>
+    <dl class="reads">
+      <dt>A3</dt><dd>multilinear optimization over a box: products such as <code>x*y</code> in a small bounded group,
+        linear in each decision when the others are fixed</dd>
+      <dt>A4</dt><dd>bounded-variable least squares, such as fitting a line under bounds on its coefficients</dd>
+      <dt>A5</dt><dd>monotone optimization: every decision has a direction that improves the objective and eases every
+        constraint</dd>
+      <dt>A6</dt><dd>rank-one bounded least squares: decisions that matter only through one weighted sum inside a
+        squared error</dd>
+      <dt>S4</dt><dd>cardinality-constrained bottleneck knapsack: exactly <em>k</em> rows within one budget, scored by
+        the best reward chosen</dd>
+      <dt>R2</dt><dd>discrete separable convex resource allocation: whole units among bounded <code>INT</code>
+        decisions</dd>
+      <dt>R3</dt><dd>continuous quadratic knapsack: one resource among <code>REAL</code> decisions with convex quadratic
+        penalties</dd>
+      <dt>O2</dt><dd>Monge transportation: divisible amounts between ordered sources and destinations with equal
+        totals</dd>
+      <dt>D1</dt><dd>block-diagonal decomposition: a query made of independent subproblems, split and each
+        rewritten</dd>
+    </dl>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>context/docs/direct_solve/rules/&lt;id&gt;_&lt;slug&gt;/definition.md</code>: each class's worked
+        example, recognition, construction and correctness argument</li>
+    </ul></div>
+  </section>
+</article>

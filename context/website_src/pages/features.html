@@ -87,6 +87,8 @@ MAXIMIZE SUM(score * x);<!--/sql-->
         </table></div>
         <p>When several answers are equally good, the rewritten query may return a different one than the solver would;
           the objective is the same.</p>
+        <p>How DeciDB proves a query's shape and builds the plan that replaces the solver is in the documentation:
+          <a href="docs/rewriting.html">query rewriting</a> and <a href="docs/rewrite-rules.html">the rewrite rules</a>.</p>
       </section>
 
       <!-- ============================================================ DIAGNOSE -->
@@ -95,7 +97,7 @@ MAXIMIZE SUM(score * x);<!--/sql-->
         <p class="lead">A query with no answer usually has one rule that is too tight. Put <code>DIAGNOSE</code> in front
           of it and DeciDB tells you which clause to change and by how much.</p>
         <p>This bag must weigh 40 kg or less and hold at least four items, and no four items are that light:</p>
-<!--sql check="knapsack" expect="Prefix the query with DIAGNOSE" show-->SELECT item, x FROM Items
+<!--sql check="knapsack" expect="Prefix the query with DIAGNOSE" show status="the solver found no answer"-->SELECT item, x FROM Items
 DECIDE x(BOOL)
 SUCH THAT SUM(x * weight) <= 40 AND SUM(x) >= 4
 MAXIMIZE SUM(x * value);<!--/sql-->
@@ -127,6 +129,7 @@ MAXIMIZE SUM(x * value);<!--/sql-->
         <p>When nothing stops the objective from growing forever, the query stops and <code>DIAGNOSE</code> names the
           decision that needs a limit, with how many of its values escape. The
           <a href="examples/diagnose.html">DIAGNOSE example</a> shows the full answer for the bag above.</p>
+        <p>How DeciDB finds the smallest change is in the documentation: <a href="docs/diagnose.html">inside DIAGNOSE</a>.</p>
       </section>
     </article>
   </div>

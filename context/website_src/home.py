@@ -90,7 +90,7 @@ def hero(b, ex_by_slug):
       <div class="hero__c">
         <h1 id="hero-h">Optimization in DuckDB</h1>
         <p class="hero__lead">Add DECIDE to a SQL query and get the best values back as rows.</p>
-        <div class="btn-row"><a class="btn btn--primary" href="getting-started.html#install">Install DeciDB</a><a class="btn btn--secondary" href="documentation.html">Read the guide</a></div>
+        <div class="btn-row"><a class="btn btn--primary" href="getting-started.html#install">Install DeciDB</a><a class="btn btn--secondary" href="guide.html">Read the guide</a></div>
       </div>
       <div class="hero__window" data-fx="grain-gradient" data-fx-seed="7" data-ui-pause-host>
         <div class="ly-piece ui ui-hw hw" role="img" aria-label="{esc(label)}">
@@ -311,7 +311,7 @@ def statement(b):
         <p>Three clauses added to a SELECT. The rows stay in DuckDB from the scan to the answer.</p>
       </div>
       <div class="grid parts">{cols}</div>
-      <p class="group__end"><a class="link" href="documentation.html">Read the guide, clause by clause{b.ARROW}</a></p>
+      <p class="group__end"><a class="link" href="guide.html">Read the guide, clause by clause{b.ARROW}</a></p>
     </div>
   </section>"""
 
@@ -343,7 +343,7 @@ def solvers(b):
           <li>A command-line shell for macOS, Linux and Windows</li>
           <li>You state the rules and the goal; DeciDB writes the model the solver reads</li>
         </ul>
-        <p class="split-col__end"><a class="link" href="documentation.html#solvers">See which solver takes what{b.ARROW}</a></p>
+        <p class="split-col__end"><a class="link" href="guide.html#solvers">See which solver takes what{b.ARROW}</a></p>
       </div>
       <div class="frame frame--split frame--lit span-6 start-7 dg-frame">
         <div class="dg" data-diagram data-dg-still><script type="application/json">{json.dumps(spec)}</script></div>
