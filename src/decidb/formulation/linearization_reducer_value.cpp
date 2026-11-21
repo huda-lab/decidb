@@ -156,8 +156,8 @@ bool EveryGroupSingleton(const ReducerValueLinkSpec &link) {
 bool IsPlainLinearRow(const SolverInput &input, const EvaluatedConstraint &ec) {
 	const bool exact_abs_pair =
 	    ec.abs_aux_idx != DConstants::INVALID_INDEX &&
-	    std::any_of(input.abs_maximize_links.begin(), input.abs_maximize_links.end(),
-	                [&](const AbsMaximizeLinkSpec &link) { return link.aux_idx == ec.abs_aux_idx; });
+	    std::any_of(input.abs_links.begin(), input.abs_links.end(),
+	                [&](const AbsLinkSpec &link) { return link.exact && link.aux_idx == ec.abs_aux_idx; });
 	return ec.ne_clause_idx == DConstants::INVALID_INDEX && !exact_abs_pair && ec.product_groups.empty() &&
 	       ec.admitted_lower.Empty();
 }

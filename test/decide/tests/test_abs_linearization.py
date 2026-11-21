@@ -2197,9 +2197,12 @@ def test_abs_auxiliary_takes_the_scope_its_argument_reads(
     argument: one for a query-wide argument and one per key for a keyed one, with its envelope
     rows once per instance. A reducer is one value per group of its own `by`, which its helper's
     scope names, so an argument holding one has a column per group: one shared column would have
-    to equal both groups' |SUM(d) - 4|, one per row repeats a group's. Gurobi states the ABS natively and HiGHS
-    lowers it by its sign. Judged against every assignment on both solvers."""
+    to equal both groups' |SUM(d) - 4|, one per row repeats a group's. Gurobi (forced) states the ABS natively and
+    HiGHS lowers it by its sign. Judged against every assignment on both solvers."""
     cli = request.getfixturevalue(cli_fixture)
+    if cli_fixture == "decidb_cli_gurobi":
+        # The native arm, which the default takes only where no Big-M exists.
+        cli = cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "force"})
     sql = f"""
         SELECT id, d FROM {_SCOPE_ROWS}
         DECIDE {declare} SUCH THAT {clause} MAXIMIZE SUM(w * d) ORDER BY id"""
@@ -2501,8 +2504,9 @@ def test_a_shared_abs_pays_for_the_exact_encoding_only_where_a_reader_needs_it(
 # A hard MIN or MAX is encoded with a Big-M over its members, which needs each member's box, and a helper its members
 # read is boxed by its own members in turn. The ABS in such a body takes the exact envelope although the helper that
 # holds it is pushed down alone. Judged by enumeration over t(id, g) = (1, a), (2, a), (3, b); the definition
-# case, a body that squares, is stated natively (a lowered MIN has no Big-M over a squared body) and read from the
-# model: the MIN is one general constraint, and each of the three rows' ABS is another.
+# case, a body that squares, is stated natively (a lowered MIN has no Big-M over a squared body; the ABS is forced
+# native, its lowering being the default) and read from the model: the MIN is one general constraint, and each of the
+# three rows' ABS is another.
 
 
 @_NESTED_SOLVERS
@@ -2523,6 +2527,6 @@ def test_abs_in_a_helper_a_hard_min_reads_is_boxed(request, cli_fixture):
 
 
 def test_abs_in_a_definition_a_hard_min_reads_is_boxed(decidb_cli_gurobi, tmp_path):
-    cli = decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "on"})
+    cli = decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "force"})
     dump = cli.dump_model(_shared_sql("x + min(abs(x - 3) + power(x, 2)) <= 12"), tmp_path / "model.dump")
     assert int(re.search(r"^num_genconstrs: (\d+)", dump, re.MULTILINE).group(1)) == 1 + _SHARED_ROWS

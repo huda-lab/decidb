@@ -93,7 +93,6 @@ TEST_CASE("DeciDB solver registry", "[decidb][solver][registry]") {
 		CHECK(!highs_constructs.abs);
 		CHECK(!highs_constructs.min_max);
 		CHECK(!highs_constructs.not_equal);
-		CHECK(!highs_constructs.bilinear);
 
 		// Gurobi takes every model class DeciDB can build. Its construct flags are
 		// declared as they are implemented, each with the loader symbol behind it,

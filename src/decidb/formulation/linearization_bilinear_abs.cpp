@@ -43,9 +43,9 @@ void DeriveBilinearAuxiliaryBounds(SolverInput &input, const FormulationBox &box
 			}
 			// An ABS helper is named by the ABS the user wrote.
 			string name = var_names[blame];
-			for (const auto &abs : input.abs_written) {
-				if (abs.first == blame) {
-					name = abs.second;
+			for (const auto &abs : input.abs_links) {
+				if (abs.aux_idx == blame) {
+					name = abs.written;
 				}
 			}
 			throw InvalidInputException(
@@ -154,39 +154,6 @@ void LinearizeBilinear(SolverInput &input, const VarIndexer &indexer, const Form
 
 namespace {
 
-//! Index of the two tagged lower-bound rows an ABS auxiliary was given by stage 05:
-//! C1 (`aux >= inner`, ABS_UB_POS) and C2 (`aux >= -inner`, ABS_UB_NEG). Both phases
-//! below start from this map, keyed by the link's AUXILIARY — the one index both the
-//! lowering and the native arm have, since only the lowering arm allocates a sign
-//! indicator.
-struct AbsConstraintPair {
-	idx_t c1 = DConstants::INVALID_INDEX;
-	idx_t c2 = DConstants::INVALID_INDEX;
-};
-
-unordered_map<idx_t, AbsConstraintPair> BuildAbsTagMap(const SolverInput &input) {
-	unordered_map<idx_t, AbsConstraintPair> abs_tag_map;
-	for (idx_t ci = 0; ci < input.constraints.size(); ci++) {
-		auto &ec = input.constraints[ci];
-		if (ec.abs_aux_idx == DConstants::INVALID_INDEX) {
-			continue;
-		}
-		// Contract with stage 05: an envelope row holds no aggregate, because RewriteScopedReducers gives every
-		// reducer a function reads a helper decision. The three phases below read each row per row.
-		if (ec.lhs_is_aggregate) {
-			throw InternalException("DECIDE ABS envelope row for auxiliary %llu holds a raw aggregate: the value "
-			                        "rewrite did not replace its reducers",
-			                        ec.abs_aux_idx);
-		}
-		if (ec.abs_is_pos_bound) {
-			abs_tag_map[ec.abs_aux_idx].c1 = ci;
-		} else {
-			abs_tag_map[ec.abs_aux_idx].c2 = ci;
-		}
-	}
-	return abs_tag_map;
-}
-
 //! The largest value some clause requires `aux` to reach, or 0 when nothing does.
 //!
 //! Every Big-M and every derived column ceiling in this file is sized from the decision
@@ -262,23 +229,205 @@ static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t nu
 	return demanded;
 }
 
+//! Whether the ABS is read on row `r`: the `when` of its clause and its group keep the row.
+bool AbsReadsRow(const EvaluatedConstraint &operand, idx_t r) {
+	return operand.row_group_ids.empty() || operand.row_group_ids[r] != DConstants::INVALID_INDEX;
+}
+
+//! The expression inside the ABS on row `r`, as the operand row `aux + sum_{t != aux} c_t x_t >= k` states it:
+//!   inner_r = k - sum_{t != aux} c_t[r] * x_t
+//! `columns` and `coefficients` are the sum's terms, each column once (two terms may land on one column -- a frame read
+//! selecting the row itself (`abs(x - at(last: x) over (...))` at the last period) -- and a row states a column once,
+//! or the solver refuses it), and `k` is the bound with the operand row's constant terms moved across (a frame's `else`
+//! read as data is a term of no decision). Both arms read the argument here and only state it differently.
+double ReadAbsArgument(const AbsLinkSpec &link, const VarIndexer &indexer, idx_t r, const DecideClauseRef &written,
+                       SparseCoeffAccumulator &argument, vector<int> &columns, vector<double> &coefficients) {
+	const auto &operand = link.operand;
+	argument.BeginSparse(operand.variable_indices.size(), written);
+	for (idx_t t = 0; t < operand.variable_indices.size(); t++) {
+		idx_t v = operand.variable_indices[t];
+		if (v == DConstants::INVALID_INDEX || v == link.aux_idx) {
+			continue;
+		}
+		double coef = operand.row_coefficients[t].Get(r);
+		if (coef != 0.0) {
+			argument.Add(static_cast<int>(indexer.Get(v, r)), coef);
+		}
+	}
+	argument.Flush(columns, coefficients);
+	return DecideRowEffectiveBound(operand, r, written);
+}
+
+//! The row's provenance, which every row of an ABS carries as the clause it was written in does.
+void StampAbsRow(SolverInput::RawConstraint &row, const EvaluatedConstraint &operand, idx_t r) {
+	row.kind = ConstraintKind::STRUCTURAL;
+	row.source_clause_id = operand.source_clause_id;
+	row.repair_group_id = operand.repair_group_id;
+	row.removal_group_id = operand.removal_group_id;
+	row.StampGroup(operand, operand.row_group_ids.empty() ? DConstants::INVALID_INDEX : operand.row_group_ids[r]);
+}
+
+//! The lowered form: a sign indicator `y` per instance of the auxiliary and two Big-M rows that pin `aux = |inner|`
+//! from above, which the lower envelope (EmitAbsEnvelopes) pins from below:
+//!   aux - inner <= A1 * (1 - y)     (y = 1 pins aux = inner)
+//!   aux + inner <= A2 * y           (y = 0 pins aux = -inner)
+//! The two sign rows relax by what the deactivated branch needs, each on its own: `y = 1` pins `aux = inner`, so the
+//! row `aux + inner <= A2 * y` must admit `2 * inner` up to `2 * hi`; `y = 0` pins `aux = -inner`, so `aux - inner <=
+//! A1 * (1 - y)` must admit `-2 * inner` up to `-2 * lo`. A side the interval never reaches needs nothing. The interval
+//! was derived, and the auxiliary's box narrowed to it, by DeriveAbsAuxiliaryBounds, which runs before every
+//! linearizer because they all read column boxes; one that is unbounded is stated natively or refused there.
+void ExpandAbs(SolverInput &input, const VarIndexer &indexer, const AbsLinkSpec &link) {
+	D_ASSERT(!link.range_unbounded);
+	const auto &operand = link.operand;
+	const auto written = DecideWrittenClause(input, operand.source_clause_id);
+	const double relax_neg = 2.0 * std::max(0.0, -link.inner_lo); // A1
+	const double relax_pos = 2.0 * std::max(0.0, link.inner_hi);  // A2
+	SparseCoeffAccumulator argument;
+	for (idx_t r = 0; r < input.num_rows; r++) {
+		if (!AbsReadsRow(operand, r)) {
+			continue;
+		}
+		vector<int> columns;
+		vector<double> coefficients;
+		const double k = ReadAbsArgument(link, indexer, r, written, argument, columns, coefficients);
+		const int aux = static_cast<int>(indexer.Get(link.aux_idx, r));
+		const int sign = static_cast<int>(AddGlobalBinaryAux(input, indexer, 0.0, link.label));
+
+		// `aux + sum c x + A1 * y <= k + A1`, which is `aux - inner <= A1 * (1 - y)`.
+		SolverInput::RawConstraint pin_inner;
+		pin_inner.indices.push_back(aux);
+		pin_inner.coefficients.push_back(1.0);
+		pin_inner.indices.insert(pin_inner.indices.end(), columns.begin(), columns.end());
+		pin_inner.coefficients.insert(pin_inner.coefficients.end(), coefficients.begin(), coefficients.end());
+		pin_inner.indices.push_back(sign);
+		pin_inner.coefficients.push_back(relax_neg);
+		pin_inner.sense = '<';
+		pin_inner.rhs = k + relax_neg;
+		StampAbsRow(pin_inner, operand, r);
+		input.global_constraints.push_back(std::move(pin_inner));
+
+		// `aux - sum c x - A2 * y <= -k`, which is `aux + inner <= A2 * y`.
+		SolverInput::RawConstraint pin_negated;
+		pin_negated.indices.push_back(aux);
+		pin_negated.coefficients.push_back(1.0);
+		for (idx_t t = 0; t < columns.size(); t++) {
+			pin_negated.indices.push_back(columns[t]);
+			pin_negated.coefficients.push_back(-coefficients[t]);
+		}
+		pin_negated.indices.push_back(sign);
+		pin_negated.coefficients.push_back(-relax_pos);
+		pin_negated.sense = '<';
+		pin_negated.rhs = -k;
+		StampAbsRow(pin_negated, operand, r);
+		input.global_constraints.push_back(std::move(pin_negated));
+	}
+}
+
+//! The native form: one column `t` per active row, an equality row `t = inner`, and a `GeneralConstraintSpec` saying
+//! `aux = |t|`. The general constraint relates two VARIABLES, so the linear half has to be a row either way. That is
+//! the whole shape of a native construct here; it replaces the two Big-M rows and the sign indicator, which is the
+//! point, since those are what needed a finite M. The lower envelope stays: it is exact (`aux >= inner`,
+//! `aux >= -inner`), implied by `aux = |t|`, and it carries the clause provenance the elastic engine reads.
+void StateAbsNatively(SolverInput &input, const VarIndexer &indexer, const InstanceBox &instances,
+                      const AbsLinkSpec &link) {
+	const auto &operand = link.operand;
+	const auto written = DecideWrittenClause(input, operand.source_clause_id);
+	SparseCoeffAccumulator argument;
+	for (idx_t r = 0; r < input.num_rows; r++) {
+		if (!AbsReadsRow(operand, r)) {
+			continue; // row excluded by `when` or its group: no ABS to express here
+		}
+		// `t = inner`, boxed by THIS ROW's own reach -- the same per-row walk native MIN/MAX boxes its argument
+		// columns with, rather than one table-wide magnitude reused for every row. The wider box is not free: a slack
+		// continuous column costs the root LP relaxation, and the ABS interval is the cover over rows, so every row but
+		// the extreme one was being given more room than it can reach.
+		//
+		// The bracket is read off the operand row exactly as the link row below states it, and negating the variable
+		// walk swaps its two ends. Skipping the auxiliary is what makes this the range of the expression rather than
+		// of the row.
+		auto vars = DecideRowSignedRange(operand, r, input.lower_bounds, input.upper_bounds, link.aux_idx, &instances);
+		vector<int> columns;
+		vector<double> coefficients;
+		const double k = ReadAbsArgument(link, indexer, r, written, argument, columns, coefficients);
+		// Each end on its own. A row open on one side still contributes its closed side, and a row whose contributors
+		// are all bounded gets a real box even when some other row's are not -- which the one interval could not
+		// express, being one number for the whole link. Free only where nothing at all is derivable, which is
+		// precisely the query this arm exists to answer and the only case that earns a free column.
+		AuxRange inner_range;
+		inner_range.CoverRowEnds(k - vars.hi, k - vars.lo, vars.hi_open, vars.lo_open, DConstants::INVALID_INDEX);
+		// `ABS(x)` is the common shape, and there `t = x`: one column and one equality row per data row to restate a
+		// column that already exists. The operand row spells the argument as `inner = k - sum c_t x_t`, so a renaming
+		// is one non-auxiliary column with coefficient -1 and a zero bound. Anything else -- `ABS(x - target)`,
+		// `ABS(2 * x)` -- is a genuine expression, and a general constraint relates columns, so it still earns one.
+		bool renaming = columns.size() == 1 && coefficients[0] == -1.0 && k == 0.0;
+
+		idx_t t_idx = DConstants::INVALID_INDEX;
+		if (renaming) {
+			t_idx = static_cast<idx_t>(columns[0]);
+		} else {
+			t_idx = AddGlobalContinuousAux(input, indexer, inner_range, 0.0);
+
+			// `t - inner = 0` with `inner = k - sum c_t x_t` is `t + sum c_t x_t = k`.
+			SolverInput::RawConstraint link_row;
+			link_row.indices.push_back(static_cast<int>(t_idx));
+			link_row.coefficients.push_back(1.0);
+			link_row.indices.insert(link_row.indices.end(), columns.begin(), columns.end());
+			link_row.coefficients.insert(link_row.coefficients.end(), coefficients.begin(), coefficients.end());
+			link_row.sense = '=';
+			link_row.rhs = k;
+			link_row.kind = ConstraintKind::STRUCTURAL;
+			link_row.source_clause_id = operand.source_clause_id;
+			link_row.repair_group_id = operand.repair_group_id;
+			link_row.removal_group_id = operand.removal_group_id;
+			input.global_constraints.push_back(std::move(link_row));
+		}
+
+		GeneralConstraintSpec gc;
+		gc.kind = GeneralConstraintKind::ABS;
+		gc.result_column = static_cast<int>(indexer.Get(link.aux_idx, r));
+		gc.argument_columns.push_back(static_cast<int>(t_idx));
+		gc.source_clause_id = operand.source_clause_id;
+		gc.repair_group_id = operand.repair_group_id;
+		gc.removal_group_id = operand.removal_group_id;
+		input.general_constraints.push_back(std::move(gc));
+	}
+}
+
 } // namespace
+
+void EmitAbsEnvelopes(SolverInput &input) {
+	input.constraints.reserve(input.constraints.size() + 2 * input.abs_links.size());
+	for (auto &link : input.abs_links) {
+		// Contract with stage 05: an envelope row holds no aggregate, because RewriteScopedReducers gives every reducer
+		// a function reads a helper decision. Every pass below reads the rows per row.
+		for (auto *row : {&link.operand, &link.negated}) {
+			if (row->lhs_is_aggregate) {
+				throw InternalException("DECIDE ABS envelope row for auxiliary %llu holds a raw aggregate: the value "
+				                        "rewrite did not replace its reducers",
+				                        link.aux_idx);
+			}
+		}
+		// `aux >= inner` stays on the link, which the rows of an exact ABS are read from.
+		input.constraints.push_back(link.operand);
+		input.constraints.push_back(std::move(link.negated));
+	}
+}
 
 void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names,
                               bool refuse_when_unbounded) {
-	if (input.abs_maximize_links.empty()) {
+	if (input.abs_links.empty()) {
 		return;
 	}
 	const idx_t num_rows = input.num_rows;
 	// A helper among the members is read at its own instance's reach, as the model builder boxes its column.
 	const InstanceBox instances {input, indexer, /*reach=*/true};
-	auto abs_tag_map = BuildAbsTagMap(input);
 
-	for (auto &link : input.abs_maximize_links) {
-		auto it = abs_tag_map.find(link.aux_idx);
-		D_ASSERT(it != abs_tag_map.end() && it->second.c1 != DConstants::INVALID_INDEX &&
-		         it->second.c2 != DConstants::INVALID_INDEX);
-		const auto &c1 = input.constraints[it->second.c1];
+	for (auto &link : input.abs_links) {
+		// An ABS that its clause or the objective pins is held by the lower envelope alone: it has no Big-M to size.
+		if (!link.exact) {
+			continue;
+		}
+		const auto &c1 = link.operand;
 
 		// The reach of the expression inside ABS, `inner = k_r - sum_{t != aux} c_t x_t`, over every
 		// row: the signed interval [lo, hi], by the same walk `<>`, MIN/MAX and the native arm
@@ -358,211 +507,20 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
 	}
 }
 
-void LinearizeAbsMaximize(SolverInput &input) {
-	if (input.abs_maximize_links.empty()) {
-		return;
-	}
-	const idx_t num_rows = input.num_rows;
-
-	// For each link, find the two tagged lower-bound EvaluatedConstraints
-	// (C1: aux >= inner tagged ABS_UB_POS, C2: aux >= -inner tagged ABS_UB_NEG) and emit:
-	//   C_ub1: derived from C1, add y with coeff +A1, comparison <=, rhs[r] += A1
-	//   C_ub2: derived from C2, add y with coeff -A2, comparison <=, rhs unchanged
-	// Together with C1/C2 these force aux = |inner| under MAXIMIZE.
-	auto abs_tag_map = BuildAbsTagMap(input);
-
-	// Reserve up-front so the two push_back calls per link cannot reallocate
-	// input.constraints. With capacity guaranteed, references to existing C1/C2 stay
-	// valid across appends and we don't need defensive copies of their fields.
-	input.constraints.reserve(input.constraints.size() + 2 * input.abs_maximize_links.size());
-
-	for (auto &link : input.abs_maximize_links) {
-		auto it = abs_tag_map.find(link.aux_idx);
-		D_ASSERT(it != abs_tag_map.end() && it->second.c1 != DConstants::INVALID_INDEX &&
-		         it->second.c2 != DConstants::INVALID_INDEX);
-		// This arm is the only one that switches the envelope with a binary, so it is
-		// the only one stage 05 allocates one for. Reaching here without it would mean
-		// the gate routed a lowering the plan had already decided against.
-		D_ASSERT(link.y_idx != DConstants::INVALID_INDEX);
-
-		const auto &c1 = input.constraints[it->second.c1];
-		const auto &c2 = input.constraints[it->second.c2];
-
-		// M was derived — and the auxiliary's box narrowed to it — by
-		// DeriveAbsAuxiliaryBounds, which runs before every linearizer because they all
-		// read column boxes. An unbounded range was refused there; reaching here with
-		// one would mean the gate routed a lowering it had already declined.
-		D_ASSERT(!link.range_unbounded);
-		// The two sign rows relax by what the deactivated branch needs, each on its own:
-		// `y = 1` pins `aux = inner`, so the row `aux + inner <= A2 * y` must admit `2 * inner`
-		// up to `2 * hi`; `y = 0` pins `aux = -inner`, so `aux - inner <= A1 * (1 - y)` must
-		// admit `-2 * inner` up to `-2 * lo`. A side the interval never reaches needs nothing.
-		const double relax_neg = 2.0 * std::max(0.0, -link.inner_lo); // A1
-		const double relax_pos = 2.0 * std::max(0.0, link.inner_hi);  // A2
-
-		auto ShiftRhs = [&](const CoefficientColumn &src, double delta) {
-			if (src.IsUniform()) {
-				return CoefficientColumn::MakeScalar(src.UniformValue() + delta, num_rows);
-			}
-			auto out = CoefficientColumn::MakeDense(num_rows, 0.0);
-			for (idx_t r = 0; r < num_rows; r++) {
-				out.Set(r, src.Get(r) + delta);
-			}
-			return out;
-		};
-
-		// C_ub1: same as C1 but add y_idx with coeff +A1, flip to <=, rhs[r] += A1
-		EvaluatedConstraint ec_ub1;
-		ec_ub1.variable_indices = c1.variable_indices;
-		ec_ub1.row_coefficients = c1.row_coefficients;
-		ec_ub1.variable_indices.push_back(link.y_idx);
-		// One name per entry (the builder reads them by position, under DIAGNOSE); the link's own term has none.
-		ec_ub1.coefficient_names = c1.coefficient_names;
-		ec_ub1.coefficient_names.emplace_back();
-		ec_ub1.row_coefficients.push_back(CoefficientColumn::MakeScalar(relax_neg, num_rows));
-		ec_ub1.rhs_values = ShiftRhs(c1.rhs_values, relax_neg);
-		ec_ub1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
-		ec_ub1.row_group_ids = c1.row_group_ids;
-		ec_ub1.num_groups = c1.num_groups;
-		ec_ub1.group_names = c1.group_names;
-		ec_ub1.kind = ConstraintKind::STRUCTURAL;
-		ec_ub1.source_clause_id = c1.source_clause_id;
-		ec_ub1.repair_group_id = c1.repair_group_id;
-		ec_ub1.removal_group_id = c1.removal_group_id;
-		input.constraints.push_back(std::move(ec_ub1));
-
-		// C_ub2: same as C2 but add y_idx with coeff -A2, flip to <=, rhs unchanged
-		EvaluatedConstraint ec_ub2;
-		ec_ub2.variable_indices = c2.variable_indices;
-		ec_ub2.row_coefficients = c2.row_coefficients;
-		ec_ub2.variable_indices.push_back(link.y_idx);
-		ec_ub2.coefficient_names = c2.coefficient_names;
-		ec_ub2.coefficient_names.emplace_back();
-		ec_ub2.row_coefficients.push_back(CoefficientColumn::MakeScalar(-relax_pos, num_rows));
-		ec_ub2.rhs_values = c2.rhs_values;
-		ec_ub2.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
-		ec_ub2.row_group_ids = c2.row_group_ids;
-		ec_ub2.num_groups = c2.num_groups;
-		ec_ub2.group_names = c2.group_names;
-		ec_ub2.kind = ConstraintKind::STRUCTURAL;
-		ec_ub2.source_clause_id = c2.source_clause_id;
-		ec_ub2.repair_group_id = c2.repair_group_id;
-		ec_ub2.removal_group_id = c2.removal_group_id;
-		input.constraints.push_back(std::move(ec_ub2));
-	}
-}
-
-void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
-	if (input.abs_maximize_links.empty()) {
-		return;
-	}
-	const idx_t num_rows = input.num_rows;
+void EmitAbsConstraints(SolverInput &input, const VarIndexer &indexer, NativeConstructPolicy policy) {
 	const InstanceBox instances {input, indexer, /*reach=*/true};
-	auto abs_tag_map = BuildAbsTagMap(input);
-
-	for (auto &link : input.abs_maximize_links) {
-		auto it = abs_tag_map.find(link.aux_idx);
-		D_ASSERT(it != abs_tag_map.end() && it->second.c1 != DConstants::INVALID_INDEX);
-		const auto &c1 = input.constraints[it->second.c1];
-
-		// C1 is `aux + sum_t c_t x_t >= k`, the row spelling of `aux >= inner` with
-		// inner's constant part moved to the bound. So the expression inside ABS is
-		//   inner_r = k_r - sum_{t != aux} c_t[r] * x_t
-		// and the argument column below is pinned to exactly that.
-		//
-		// The general constraint relates two VARIABLES, so the linear half has to be a
-		// row either way. That is the whole shape of a native construct here: one free
-		// column `t`, one equality row `t = inner`, and one `aux = |t|` record. It
-		// replaces the two Big-M rows and the binary sign indicator — which is the
-		// point, since those are what needed a finite M.
-		//
-		// C1 and C2 stay. They are exact (`aux >= inner`, `aux >= -inner`), implied by
-		// `aux = |t|`, and they carry the clause provenance the elastic engine reads.
-		// Dropping them would be a separate optimization that costs diagnosis.
-		const auto written = DecideWrittenClause(input, c1.source_clause_id);
-		SparseCoeffAccumulator argument;
-		for (idx_t r = 0; r < num_rows; r++) {
-			if (!c1.row_group_ids.empty() && c1.row_group_ids[r] == DConstants::INVALID_INDEX) {
-				continue; // row excluded by `when` or its group: no ABS to express here
-			}
-			// `t = inner`, boxed by THIS ROW's own reach — the same per-row walk native
-			// MIN/MAX boxes its argument columns with, rather than one table-wide
-			// magnitude reused for every row. The wider box is not free: a slack
-			// continuous column costs the root LP relaxation (see the note at the top of
-			// this file), and the ABS interval is the cover over rows, so every row but the
-			// extreme one was being given more room than it can reach.
-			//
-			// The bracket is read off C1 exactly as the link row below states it. C1 is
-			// `aux + sum_{v != aux} c_v x_v >= k`, so the column is
-			//   inner_r = k_r - sum_{v != aux} c_v x_v
-			// and negating the variable walk swaps its two ends. Skipping the auxiliary
-			// is what makes this the range of the expression rather than of the row.
-			auto vars = DecideRowSignedRange(c1, r, input.lower_bounds, input.upper_bounds, link.aux_idx, &instances);
-			// The bound with C1's constant terms moved across: a frame's `else` read as data
-			// (`abs(x - at(previous else t.w: y) over (...))`) is a term of no decision.
-			double k = DecideRowEffectiveBound(c1, r, written);
-			// Each end on its own. A row open on one side still contributes its closed
-			// side, and a row whose contributors are all bounded gets a real box even
-			// when some other row's are not — which the one interval could not express, being
-			// one number for the whole link. Free only where nothing at all is derivable,
-			// which is precisely the query this arm exists to answer and the only case
-			// that earns a free column. The bracket carries the constant, as `k` here.
-			AuxRange inner_range;
-			inner_range.CoverRowEnds(k - vars.hi, k - vars.lo, vars.hi_open, vars.lo_open, DConstants::INVALID_INDEX);
-			// The argument's columns, each once: two terms may land on one column -- a frame
-			// read selecting the row itself (`abs(x - at(last: x) over (...))` at the last
-			// period) -- and a row states a column once, or the solver refuses it.
-			argument.BeginSparse(c1.variable_indices.size(), written);
-			for (idx_t t = 0; t < c1.variable_indices.size(); t++) {
-				idx_t v = c1.variable_indices[t];
-				if (v == DConstants::INVALID_INDEX || v == link.aux_idx) {
-					continue;
-				}
-				double coef = c1.row_coefficients[t].Get(r);
-				if (coef != 0.0) {
-					argument.Add(static_cast<int>(indexer.Get(v, r)), coef);
-				}
-			}
-			vector<int> columns;
-			vector<double> coefficients;
-			argument.Flush(columns, coefficients);
-			// `ABS(x)` is the common shape, and there `t = x`: one column and one
-			// equality row per data row to restate a column that already exists. C1
-			// spells the argument as `inner = k - sum c_t x_t`, so a renaming is one
-			// non-auxiliary column with coefficient -1 and a zero bound. Anything else —
-			// `ABS(x - target)`, `ABS(2 * x)` — is a genuine expression, and a general
-			// constraint relates columns, so it still earns one.
-			bool renaming = columns.size() == 1 && coefficients[0] == -1.0 && k == 0.0;
-
-			idx_t t_idx = DConstants::INVALID_INDEX;
-			if (renaming) {
-				t_idx = static_cast<idx_t>(columns[0]);
-			} else {
-				t_idx = AddGlobalContinuousAux(input, indexer, inner_range, 0.0);
-
-				// `t - inner = 0` with `inner = k - sum c_t x_t` is `t + sum c_t x_t = k`.
-				SolverInput::RawConstraint link_row;
-				link_row.indices.push_back(static_cast<int>(t_idx));
-				link_row.coefficients.push_back(1.0);
-				link_row.indices.insert(link_row.indices.end(), columns.begin(), columns.end());
-				link_row.coefficients.insert(link_row.coefficients.end(), coefficients.begin(), coefficients.end());
-				link_row.sense = '=';
-				link_row.rhs = k;
-				link_row.kind = ConstraintKind::STRUCTURAL;
-				link_row.source_clause_id = c1.source_clause_id;
-				link_row.repair_group_id = c1.repair_group_id;
-				link_row.removal_group_id = c1.removal_group_id;
-				input.global_constraints.push_back(std::move(link_row));
-			}
-
-			GeneralConstraintSpec gc;
-			gc.kind = GeneralConstraintKind::ABS;
-			gc.result_column = static_cast<int>(indexer.Get(link.aux_idx, r));
-			gc.argument_columns.push_back(static_cast<int>(t_idx));
-			gc.source_clause_id = c1.source_clause_id;
-			gc.repair_group_id = c1.repair_group_id;
-			gc.removal_group_id = c1.removal_group_id;
-			input.general_constraints.push_back(std::move(gc));
+	for (auto &link : input.abs_links) {
+		if (!link.exact) {
+			continue;
+		}
+		// THE CHOICE, made once: the ABS is a pseudo-operation the backend either declares (legal: stated natively) or
+		// not (expanded into its indicator and Big-M rows), as a legalization pass decides per operation. The same rule
+		// as a MIN or MAX (NativeConstructPolicy): where a Big-M exists the expansion is the smaller model, so native
+		// is the fallback for an ABS whose reach is open, the one query the lowering must refuse.
+		if (policy.Use(link.range_unbounded)) {
+			StateAbsNatively(input, indexer, instances, link);
+		} else {
+			ExpandAbs(input, indexer, link);
 		}
 	}
 }

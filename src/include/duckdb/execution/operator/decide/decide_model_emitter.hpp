@@ -132,8 +132,9 @@ private:
 	//! A clause in the per-row shape: one model row per kept row of its root, or under `per K:` one per variant of
 	//! each class among them (Classes).
 	EvaluatedConstraint Rows(idx_t root, bool counted);
-	//! An ABS envelope row owned by its F node; the existing row/group evaluator supplies the scoped instances.
-	EvaluatedConstraint AbsEnvelope(idx_t function, idx_t root, bool counted);
+	//! One of an ABS F node's two envelope rows, evaluated by the existing row evaluator, which supplies the scoped
+	//! instances, into the node's record (DecideGlobalSinkState::evaluated_abs_links).
+	void AbsEnvelope(idx_t function, idx_t root, bool counted);
 	//! The model rows of a clause in the per-row shape under `per K:` (DecideClauseScope::ONE_ROW_PER_CLASS), its
 	//! kept rows those its entries `tested` marks stand for: one per variant of each class of K, at its first row with
 	//! a value (D88), numbered and named by value as Variants does, and the classes each stands for under DIAGNOSE.

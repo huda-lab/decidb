@@ -161,8 +161,8 @@ private:
 	                               vector<unique_ptr<Expression>> &new_constraints,
 	                               DecideEnclosingScope scope = DecideEnclosingScope());
 
-	//! Detect ABS(expr) over decide variables, allocate the plan-time helper, and retain the written function plus its
-	//! lower-envelope metadata for the tree's ABS F node.
+	//! Detect ABS(expr) over decide variables, allocate the plan-time helper, and record each ABS
+	//! (LogicalDecide::abs_functions) for the tree's ABS F node: the shape only, which stage 06 encodes.
 	void RewriteAbs(LogicalDecide &decide);
 
 	//! Annotate bilinear products (x * y) where at least one factor is Boolean, retaining the written expression for
@@ -179,41 +179,14 @@ private:
 	//! emits can point back at the clause that produced them.
 	void FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide, const string &source_alias);
 
-	//! Carries per-ABS-node metadata through the two phases of RewriteAbs.
-	struct AbsPairInfo {
-		idx_t aux_idx;
-		unique_ptr<Expression> inner_expr;
-		//! Alias of the user comparison this ABS was written in, so the envelope rows
-		//! it generates carry the clause id back to EXPLAIN and diagnostics; the
-		//! objective's tag for an ABS in the objective.
-		string source_alias;
-		bool needs_bigm; // true = aux needs Big-M upper envelope (a constraint
-		                 //        hard direction, an objective term the sense
-		                 //        pushes up or of unknown sign, a body a helper's
-		                 //        reader pushes up, or an ABS nested inside another
-		                 //        ABS). When false aux pins to |inner| naturally
-		                 //        via solver pressure or a constraint shape that
-		                 //        upper-bounds it.
-		//! The envelope rows read only the rows the clause's `when` (a copy, or null) keeps.
-		unique_ptr<Expression> when;
-		//! The ABS as a plan prints it: the auxiliary's name there, and its account's.
-		string label;
-		//! The auxiliary's scope, ScopeOf its argument: its envelope rows are one per instance of it.
-		DecideVarScopeInfo scope;
-		//! The ABS as the user wrote it, for a message that points at it.
-		string written;
-	};
-
-	//! Helper: recursively find BoundFunctionExpression for ABS over decide vars,
-	//! allocate a helper and tag the retained function expression, and collect
-	//! AbsPairInfo entries innermost first. Whether an auxiliary is pinned exactly is
-	//! read from `exact`, which RewriteAbs filled from every body's owner; this walk decides nothing about it.
-	//! `reducer_when` is the `when` of the reducers around `expr` (null for none): a term reads only the rows it keeps,
-	//! besides those of the clause's.
+	//! Helper: recursively find BoundFunctionExpression for ABS over decide vars, allocate a helper, tag the retained
+	//! function expression and record the ABS (LogicalDecide::abs_functions), innermost first. Whether the ABS needs
+	//! its exact encoding is read from `exact`, which RewriteAbs filled from every body's owner; this walk decides
+	//! nothing about it. `reducer_when` is the `when` of the reducers around `expr` (null for none): a term reads only
+	//! the rows it keeps, besides those of the clause's.
 	void FindAbsAndAllocateAux(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                           const DecideCanonicalizer &canonicalizer, const AbsExactSet &exact,
-	                           vector<AbsPairInfo> &abs_pairs, const string &source_alias, DecideEnclosingScope scope,
-	                           const Expression *reducer_when);
+	                           const string &source_alias, DecideEnclosingScope scope, const Expression *reducer_when);
 
 	Optimizer &optimizer;
 };

@@ -4,6 +4,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/optimizer/decide/decide_optimizer_internal.hpp"
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
@@ -47,14 +48,6 @@ unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const
 		facts->kind = ConstraintKind::STRUCTURAL;
 	}
 	TryParseDecideIndexTag(comparison.alias, DEFINES_TAG_PREFIX, facts->defined_var);
-	if (ExtractDecideTagPayload(comparison.alias, ABS_UB_POS_TAG_PREFIX, payload)) {
-		facts->abs_aux_idx = std::stoull(payload);
-		facts->abs_is_pos_bound = true;
-		facts->kind = ConstraintKind::STRUCTURAL;
-	} else if (ExtractDecideTagPayload(comparison.alias, ABS_UB_NEG_TAG_PREFIX, payload)) {
-		facts->abs_aux_idx = std::stoull(payload);
-		facts->kind = ConstraintKind::STRUCTURAL;
-	}
 	if (TryParseDecideIndexTag(comparison.alias, ABS_FUNCTION_NEG_TAG_PREFIX, facts->abs_aux_idx)) {
 		facts->kind = ConstraintKind::STRUCTURAL;
 	} else if (TryParseDecideIndexTag(comparison.alias, ABS_FUNCTION_TAG_PREFIX, facts->abs_aux_idx)) {
@@ -270,12 +263,14 @@ public:
 				                            });
 			}
 		}
-		for (auto &envelope : op.abs_function_envelopes) {
-			for (auto *expression : {&envelope.positive, &envelope.negative}) {
-				if (!*expression) {
-					continue;
-				}
-				ForEachScopedConstraintLeaf(**expression,
+		for (auto &function : op.abs_functions) {
+			auto node = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(),
+			                         [&](idx_t index) { return tree->nodes[index]->value_var == function.aux_idx; });
+			if (node == tree->function_nodes.end()) {
+				throw InternalException("DECIDE tree: ABS helper %llu has no function node", function.aux_idx);
+			}
+			for (auto &expression : tree->nodes[*node]->abs_expressions) {
+				ForEachScopedConstraintLeaf(*expression,
 				                            [&](const Expression &leaf, const DecideEnclosingScope &scope) {
 					                            if (leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 						                            Root(leaf.Cast<BoundComparisonExpression>(), scope);
@@ -321,64 +316,32 @@ public:
 	}
 
 	//! Create ABS F nodes before lowering clauses, so retained function expressions can read their nodes even when
-	//! the envelope roots occur later in source order.
+	//! the envelope rows occur later in source order. The optimizer records each ABS (LogicalDecide::AbsFunction) and
+	//! this tree builds the two rows beneath its F node, as it does for a definition (MakeDefinitionExpression).
 	void PrepareAbsFunctions() {
-		struct AbsFunctionSpec {
-			idx_t aux;
-			unique_ptr<Expression> condition;
-			// Keep the LogicalDecide-owned operand alive: Lower records reducer addresses in sources.reducer_nodes.
-			const Expression *operand = nullptr;
-			idx_t source_clause;
-			string written;
-		};
-		vector<AbsFunctionSpec> specs;
-		for (auto &envelope : op.abs_function_envelopes) {
-			if (!envelope.positive) {
-				continue;
-			}
-			ForEachScopedConstraintLeaf(
-			    *envelope.positive, [&](const Expression &leaf, const DecideEnclosingScope &scope) {
-				    if (leaf.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
-					    return;
-				    }
-				    auto &comparison = leaf.Cast<BoundComparisonExpression>();
-				    idx_t aux;
-				    if (!TryParseDecideIndexTag(comparison.GetAlias(), ABS_FUNCTION_TAG_PREFIX, aux)) {
-					    return;
-				    }
-				    idx_t source = DConstants::INVALID_INDEX;
-				    TryParseSourceClauseTag(comparison.GetAlias(), source);
-				    AbsFunctionSpec spec;
-				    spec.aux = aux;
-				    spec.condition = scope.Condition() ? scope.Condition()->Copy() : nullptr;
-				    spec.operand = envelope.operand.get();
-				    spec.source_clause = source;
-				    spec.written = envelope.written;
-				    specs.push_back(std::move(spec));
-			    });
+		for (auto &function : op.abs_functions) {
+			idx_t source = DConstants::INVALID_INDEX;
+			TryParseSourceClauseTag(function.source_alias, source);
+			auto index = AbsFunctionNode(function.aux_idx, source);
+			auto &node = *tree->nodes[index];
+			node.abs_exact = function.exact;
+			node.abs_written = function.written;
+			node.abs_expressions[0] = decide_rewrite::MakeAbsRow(context, op, function, false);
+			node.abs_expressions[1] = decide_rewrite::MakeAbsRow(context, op, function, true);
 		}
-		for (auto &spec : specs) {
-			AbsFunctionNode(spec.aux, spec.source_clause);
-		}
-		for (auto &spec : specs) {
-			auto function = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(),
-			                             [&](idx_t index) { return tree->nodes[index]->value_var == spec.aux; });
-			if (function == tree->function_nodes.end() || !spec.operand) {
-				throw InternalException("DECIDE tree: ABS helper %llu has no function operand", spec.aux);
-			}
-			auto &node = *tree->nodes[*function];
-			node.abs_written = spec.written;
+		for (auto &function : op.abs_functions) {
+			auto found = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(),
+			                          [&](idx_t index) { return tree->nodes[index]->value_var == function.aux_idx; });
+			auto &node = *tree->nodes[*found];
 			if (!node.body) {
-				node.body = Lower(*function, *spec.operand);
+				node.body = Lower(*found, *function.operand);
 			}
 		}
 		// All F nodes exist now, so gates can themselves resolve nested ABS function reads.
-		for (auto &spec : specs) {
-			auto function = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(),
-			                             [&](idx_t index) { return tree->nodes[index]->value_var == spec.aux; });
-			if (function != tree->function_nodes.end()) {
-				Gates(*function, spec.condition.get());
-			}
+		for (auto &function : op.abs_functions) {
+			auto found = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(),
+			                          [&](idx_t index) { return tree->nodes[index]->value_var == function.aux_idx; });
+			Gates(*found, function.when.get());
 		}
 	}
 
@@ -623,8 +586,8 @@ public:
 		return result;
 	}
 
-	//! The ABS F node owns the helper's scope and both envelope roots RewriteAbs wrote. Its operand stays as an
-	//! expression until the function lowering compiles it; the envelope roots already carry executable row programs.
+	//! The ABS F node owns the helper's scope and both lower-envelope rows. Its operand stays as an expression until
+	//! the function lowering compiles it; the envelope roots carry executable row programs.
 	idx_t AbsFunctionNode(idx_t aux, idx_t source_clause) {
 		for (auto existing : tree->function_nodes) {
 			if (tree->nodes[existing]->value_var == aux) {
@@ -660,13 +623,6 @@ public:
 				}
 			} else if (variable_scope.IsGlobal()) {
 				node.per = DecideTreePer::ONE;
-			}
-		}
-		for (auto &link : op.abs_maximize_links) {
-			if (link.aux_idx == aux) {
-				node.abs_needs_bigm = true;
-				node.abs_indicator_var = link.y_idx;
-				break;
 			}
 		}
 		tree->function_nodes.push_back(index);
@@ -918,11 +874,11 @@ private:
 		auto index = NewNode(DecideNodeKind::SCOPE);
 		auto &node = *tree->nodes[index];
 		node.root = true;
-		// ABS envelopes are optimizer metadata rather than user clauses. They are built in their natural form
-		// (`aux >= inner` / `aux >= -inner`), which can leave decisions on both sides of the comparison. Bring
-		// these internal rows through the same canonical boundary as ordinary clauses before term extraction.
-		// PrepareAbsFunctions has already read the uncanonicalized operand from the envelope metadata, so this
-		// rewrite only changes the row's linear form, not the F node's definition.
+		// ABS envelopes are built from the optimizer's record rather than written by the user. They are in their
+		// natural form (`aux >= inner` / `aux >= -inner`), which can leave decisions on both sides of the comparison.
+		// Bring these internal rows through the same canonical boundary as ordinary clauses before term extraction.
+		// PrepareAbsFunctions has already read the uncanonicalized operand from the record, so this rewrite only
+		// changes the row's linear form, not the F node's definition.
 		idx_t abs_aux = DConstants::INVALID_INDEX;
 		const bool is_abs_envelope = TryParseAbsFunctionEnvelopeTag(comparison.GetAlias(), abs_aux);
 		idx_t l0_value = DConstants::INVALID_INDEX;
@@ -1005,20 +961,7 @@ private:
 		node.facts->rhs_expr = node.rhs->Copy();
 		idx_t abs_function = DConstants::INVALID_INDEX;
 		if (is_abs_envelope) {
-			if (node.facts->abs_is_pos_bound) {
-				abs_function = AbsFunctionNode(node.facts->abs_aux_idx, node.source_clause_id);
-			} else {
-				for (auto function : tree->function_nodes) {
-					if (tree->nodes[function]->value_var == node.facts->abs_aux_idx) {
-						abs_function = function;
-						break;
-					}
-				}
-				if (abs_function == DConstants::INVALID_INDEX) {
-					throw InternalException("DECIDE tree: ABS lower-envelope row has no positive row for helper %llu",
-					                        node.facts->abs_aux_idx);
-				}
-			}
+			abs_function = AbsFunctionNode(node.facts->abs_aux_idx, node.source_clause_id);
 			tree->nodes[abs_function]->abs_envelope_roots.push_back(index);
 			tree->nodes[abs_function]->signature.clear();
 		} else if (is_l0_link) {
@@ -1682,29 +1625,23 @@ void DecideTree::Validate() const {
 			                            node.value_var >= value_nodes.size() ||
 			                            (!variable_scopes.empty() && node.value_var >= variable_scopes.size()) ||
 			                            node.defined_var != node.value_var || !node.body;
-			const bool abs_invalid = node.function_kind == DecideFunctionKind::ABS &&
-			                         (node.product_bool_var != DConstants::INVALID_INDEX ||
-			                          node.product_other_var != DConstants::INVALID_INDEX ||
-			                          (node.abs_indicator_var != DConstants::INVALID_INDEX &&
-			                           node.abs_indicator_var >= value_nodes.size()) ||
-			                          (node.abs_indicator_var != DConstants::INVALID_INDEX && !node.abs_needs_bigm));
+			const bool abs_invalid =
+			    node.function_kind == DecideFunctionKind::ABS && (node.product_bool_var != DConstants::INVALID_INDEX ||
+			                                                      node.product_other_var != DConstants::INVALID_INDEX);
 			const bool product_invalid =
 			    node.function_kind == DecideFunctionKind::BOOLEAN_PRODUCT &&
 			    (node.product_bool_var >= value_nodes.size() || node.product_other_var >= value_nodes.size() ||
-			     node.abs_needs_bigm || node.abs_indicator_var != DConstants::INVALID_INDEX ||
-			     !node.abs_envelope_roots.empty());
+			     node.abs_exact || !node.abs_envelope_roots.empty());
 			const bool l0_invalid =
 			    node.function_kind == DecideFunctionKind::L0_INDICATOR &&
 			    (node.product_bool_var != DConstants::INVALID_INDEX ||
-			     node.product_other_var != DConstants::INVALID_INDEX || node.abs_needs_bigm ||
-			     node.abs_indicator_var != DConstants::INVALID_INDEX || !node.abs_envelope_roots.empty() ||
-			     node.l0_link_roots.size() != 3 || !(node.l0_m > 0.0));
+			     node.product_other_var != DConstants::INVALID_INDEX || node.abs_exact ||
+			     !node.abs_envelope_roots.empty() || node.l0_link_roots.size() != 3 || !(node.l0_m > 0.0));
 			const bool definition_invalid =
 			    node.function_kind == DecideFunctionKind::DEFINITION &&
 			    (node.product_bool_var != DConstants::INVALID_INDEX ||
-			     node.product_other_var != DConstants::INVALID_INDEX || node.abs_needs_bigm ||
-			     node.abs_indicator_var != DConstants::INVALID_INDEX || !node.abs_envelope_roots.empty() ||
-			     !node.l0_link_roots.empty() || node.definition_roots.size() != 1 ||
+			     node.product_other_var != DConstants::INVALID_INDEX || node.abs_exact ||
+			     !node.abs_envelope_roots.empty() || !node.l0_link_roots.empty() || node.definition_roots.size() != 1 ||
 			     node.definition_relation == DecideDefinitionRelation::INVALID);
 			if (common_invalid || abs_invalid || product_invalid || l0_invalid || definition_invalid) {
 				throw InternalException("DECIDE tree has an invalid function node %llu", i);
@@ -1885,10 +1822,7 @@ string DecideTree::ToString() const {
 		if (node.kind == DecideNodeKind::FUNCTION) {
 			if (node.function_kind == DecideFunctionKind::ABS) {
 				result << " function=abs value=x" << node.value_var << " body=(" << node.body->ToString() << ")"
-				       << (node.abs_needs_bigm ? " exact=big-m" : " exact=pressure-or-bound");
-				if (node.abs_indicator_var != DConstants::INVALID_INDEX) {
-					result << " indicator=x" << node.abs_indicator_var;
-				}
+				       << (node.abs_exact ? " exact=big-m" : " exact=pressure-or-bound");
 			} else if (node.function_kind == DecideFunctionKind::BOOLEAN_PRODUCT) {
 				result << " function=boolean_product value=x" << node.value_var << " body=(" << node.body->ToString()
 				       << ")";

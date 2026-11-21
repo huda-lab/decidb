@@ -360,10 +360,9 @@ EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constr
 	evaluated.removal_group_id = constraint.removal_group_id;
 	// Preserve whether the original LHS was an aggregate (e.g., SUM(...))
 	evaluated.lhs_is_aggregate = constraint.lhs_is_aggregate;
+	evaluated.abs_aux_idx = constraint.abs_aux_idx;
 	evaluated.lifted_floor = constraint.lifted_floor;
 	evaluated.ne_clause_idx = constraint.ne_clause_idx;
-	evaluated.abs_aux_idx = constraint.abs_aux_idx;
-	evaluated.abs_is_pos_bound = constraint.abs_is_pos_bound;
 	evaluated.kind = constraint.kind;
 
 	// Initialize result storage

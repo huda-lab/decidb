@@ -356,15 +356,12 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 	for (auto &expression : retained_expressions) {
 		callback(&expression);
 	}
-	for (auto &envelope : abs_function_envelopes) {
-		if (envelope.operand) {
-			callback(&envelope.operand);
+	for (auto &function : abs_functions) {
+		if (function.operand) {
+			callback(&function.operand);
 		}
-		if (envelope.positive) {
-			callback(&envelope.positive);
-		}
-		if (envelope.negative) {
-			callback(&envelope.negative);
+		if (function.when) {
+			callback(&function.when);
 		}
 	}
 	for (auto &group : bilinear_function_groups) {

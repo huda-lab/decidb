@@ -874,8 +874,9 @@ def test_a_helper_inside_a_hard_abs_is_boxed_with_it(decidb_cli_highs, decidb_cl
 def test_abs_around_a_sum_helper_boxes_each_row_by_its_groups_reach(decidb_cli_highs, decidb_cli_gurobi, tmp_path):
     """`x <= abs(t.w * sum(x) by (t.g) - 70) + 1` with `x <= 30`: group a's three members (weight 1) reach 90 and
     group b's two (weight 3) reach 60. Each row's ABS argument is read at its own group's reach: native on Gurobi
-    boxes it [-70, 20] in a and [-70, 110] in b, and the HiGHS lowering boxes every ABS auxiliary by the widest,
-    110, not the 200 that the cover of the two (90) would give b's rows."""
+    (forced: the lowering is its default where a Big-M exists) boxes it [-70, 20] in a and [-70, 110] in b, and the
+    HiGHS lowering boxes every ABS auxiliary by the widest, 110, not the 200 that the cover of the two (90) would give
+    b's rows."""
     columns = ("id", "g", "w", "cap")
     rows = ((1, "a", 1, 30), (2, "a", 1, 30), (3, "a", 1, 30), (4, "b", 3, 30), (5, "b", 3, 30))
     sql = f"""
@@ -884,7 +885,8 @@ def test_abs_around_a_sum_helper_boxes_each_row_by_its_groups_reach(decidb_cli_h
         SUCH THAT x <= t.cap AND x <= abs(t.w * sum(x) by (t.g) - 70) + 1
         MAXIMIZE SUM(x)
         ORDER BY id"""
-    dump = decidb_cli_gurobi.dump_model(sql, tmp_path / "gurobi.dump")
+    native = decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "force"})
+    dump = native.dump_model(sql, tmp_path / "gurobi.dump")
     assert dump_bounds(dump)[-len(rows) :] == [(-70.0, 20.0)] * 3 + [(-70.0, 110.0)] * 2
     dump = decidb_cli_highs.dump_model(sql, tmp_path / "highs.dump")
     assert [hi for lo, hi in dump_bounds(dump) if hi > 100 and lo == 0.0] == [110.0] * len(rows)

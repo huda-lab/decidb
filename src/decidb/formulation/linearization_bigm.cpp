@@ -106,7 +106,7 @@ SignedRowRange decide_linearize::DecideRowSignedRange(const EvaluatedConstraint 
 //! that the true range exceeds does not fail, it silently cuts the feasible region
 //! and returns a confidently wrong answer.
 //!
-//! `LinearizeAbsMaximize` has always refused in exactly this situation. This is the
+//! The lowered ABS (`EmitAbsConstraints`) has always refused in exactly this situation. This is the
 //! same refusal, in the same words, for the constructs that used to take a 1e6 floor
 //! instead — and it applies on every backend, so one query never answers correctly on
 //! one solver and wrongly on another.

@@ -90,6 +90,16 @@ struct CoefficientColumn {
 		return scalar_value;
 	}
 
+	//! This column with every value negated.
+	CoefficientColumn Negated() const {
+		CoefficientColumn out = *this;
+		out.scalar_value = -out.scalar_value;
+		for (auto &value : out.dense_values) {
+			value = -value;
+		}
+		return out;
+	}
+
 	//! Force Dense storage (allocates if currently Scalar).
 	//! After this, dense_values.size() == logical_size.
 	void EnsureDense() {
@@ -223,17 +233,10 @@ struct EvaluatedConstraint {
 	//! integer-step guard), we keep LHS as SUM and multiply the per-group RHS by group size
 	//! inside the deferred NE expansion.
 	bool ne_avg_rhs_scale = false;
-	//! ABS envelope tagging. `abs_aux_idx` names the ABS AUXILIARY this row bounds, and
-	//! marks the row as one of the pair RewriteAbs emitted for it: abs_is_pos_bound
-	//! distinguishes C1 (aux >= inner, true) from C2 (aux >= -inner, false). Both arms
-	//! find their rows through it -- the lowering arm to hang the Big-M upper envelope
-	//! off, the native arm to read the inner expression out of.
-	//!
-	//! It keys on the auxiliary and not on the sign indicator because the indicator only
-	//! exists on the lowering arm: a natively-stated ABS needs no binary at all, so the
-	//! only index both arms are guaranteed to have is the auxiliary's.
+	//! The ABS auxiliary this row is a lower-envelope row of (`aux >= inner` or `aux >= -inner`), or INVALID_INDEX.
+	//! EmitAbsEnvelopes writes it; the passes that read the auxiliary's box or hold its readers' helpers skip the
+	//! pair by it.
 	idx_t abs_aux_idx = DConstants::INVALID_INDEX;
-	bool abs_is_pos_bound = false;
 
 	//! The terms of degree 2. A constraint with any is built as a quadratic row, every group added to its Q.
 	vector<EvaluatedProductGroup> product_groups;
@@ -340,24 +343,34 @@ struct BilinearLinkSpec {
 	idx_t removal_group_id = DConstants::INVALID_INDEX;
 };
 
-//! Links an ABS auxiliary to its binary sign indicator. Stage 05 emits the two
-//! lower bounds (`aux >= inner`, `aux >= -inner`) and records the link; under
-//! MAXIMIZE those alone leave `aux` free to run above `|inner|`, so stage 06
-//! derives the matching Big-M upper bounds that pin it.
-struct AbsMaximizeLinkSpec {
-	idx_t aux_idx; //!< ABS auxiliary variable
-	//! Binary sign indicator, or INVALID_INDEX when the backend states ABS natively --
-	//! the native arm has no Big-M to switch, so no indicator is allocated for it.
-	idx_t y_idx;
+//! One ABS, as stage 05 recorded it (LogicalDecide::AbsFunction) and the emitter evaluated it. Stage 05 picks the
+//! shape (the auxiliary, its operand, whether the exact encoding is needed); this stage picks the encoding: every row
+//! is emitted here, as a legalization pass emits what a target cannot state natively (LLVM's legalize: the ABS is a
+//! pseudo-operation, the target either has it or has it expanded).
+//!
+//! `operand` is the evaluated row `aux >= inner` and `negated` the row `aux >= -inner`, each read per row of the
+//! auxiliary's scope. EmitAbsEnvelopes states them as the lower envelope, which pins `aux` from below and, where the
+//! clause or the objective pushes `aux` down, to exactly |inner|. An `exact` ABS is not pinned by what pushes on it, so
+//! EmitAbsConstraints adds either the backend's `aux = |t|` or the Big-M rows of a sign indicator, per
+//! NativeConstructPolicy, from `operand`.
+struct AbsLinkSpec {
+	idx_t aux_idx = DConstants::INVALID_INDEX; //!< ABS auxiliary variable
+	//! True when nothing the clause or objective pushes pins `aux` to |inner|.
+	bool exact = false;
+	//! The ABS as the user wrote it, for a refusal that points at it.
+	string written;
+	//! The ABS as a plan prints it, which a diagnosis names its indicator columns by.
+	string label;
+	EvaluatedConstraint operand;
+	EvaluatedConstraint negated;
 	//! The signed interval `[inner_lo, inner_hi]` of the expression inside ABS over every row,
 	//! filled in by DeriveAbsAuxiliaryBounds. The lowering's two sign-row constants and the
 	//! auxiliary's upper box (`max(|lo|, |hi|)`) both come from it, so it is derived once,
 	//! before any other linearizer reads that box.
 	double inner_lo = 0.0;
 	double inner_hi = 0.0;
-	//! True when no finite interval exists because a contributing variable is
-	//! unbounded. The lowering path cannot proceed (it is refused up front); the
-	//! native path does not care, because a general constraint needs no Big-M.
+	//! True when no finite interval exists because a contributing variable is unbounded: the Big-M encoding has no
+	//! constant, so only the backend's own `aux = |t|` can state this ABS (NativeConstructPolicy::Use).
 	bool range_unbounded = false;
 };
 
@@ -446,11 +459,11 @@ enum class GeneralConstraintKind : uint8_t {
 //!
 //! This is the check that a general constraint reaching a backend was declared by
 //! that backend, not the routing table for the whole capability set. The sites that
-//! DECIDE to go native read their flag directly, because they are rewriting one
-//! construct and know which one (`decide_rewrite_abs.cpp`, `physical_decide.cpp`),
-//! and two of the four construct flags — `not_equal` and `bilinear` — have no
-//! GeneralConstraintKind at all: the first is an indicator constraint, the second a
-//! native product. So the table covers the general-constraint subset and says so.
+//! DECIDE to go native read their flag directly, because they are emitting one
+//! construct and know which one (`physical_decide.cpp`, through NativeConstructPolicy),
+//! and one of the three construct flags, `not_equal`, has no GeneralConstraintKind at
+//! all: it is an indicator constraint. So the table covers the general-constraint
+//! subset and says so.
 //!
 //! Lives beside the enum rather than beside SolverConstructSupport so a kind added
 //! here without a flag cannot be missed. Such a kind reads as UNDECLARED, which the
@@ -594,9 +607,8 @@ struct SolverInput {
 	// auxiliary variables the optimizer already created; the rows that realize
 	// them need evaluated bounds, so they are derived at stage 06.
 	vector<BilinearLinkSpec> bilinear_links;
-	//! Per ABS helper, the ABS as the user wrote it, for a refusal that points at it.
-	vector<pair<idx_t, string>> abs_written;
-	vector<AbsMaximizeLinkSpec> abs_maximize_links;
+	//! Every ABS, in the order stage 05 allocated their auxiliaries (innermost first).
+	vector<AbsLinkSpec> abs_links;
 	//! The value rewrite's helper decisions, each with its evaluated definition. Consumed
 	//! (moved into `constraints` or emitted as extremum links) by the formulation pass.
 	vector<ReducerValueLinkSpec> reducer_value_links;

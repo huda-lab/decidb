@@ -96,14 +96,20 @@ public:
 				});
 			}
 		}
-		for (auto &envelope : op.abs_function_envelopes) {
-			for (auto *expression : {&envelope.positive, &envelope.negative}) {
-				if (!*expression) {
+		// An ABS's two lower-envelope rows (MakeAbsRow) are built beneath its F node, from the optimizer's record.
+		for (auto &function : op.abs_functions) {
+			for (auto index : tree.Tree().function_nodes) {
+				auto &node = *tree.Tree().nodes[index];
+				if (node.function_kind != DecideFunctionKind::ABS || node.value_var != function.aux_idx) {
 					continue;
 				}
-				ForEachScopedConstraintLeaf(
-				    **expression,
-				    [&](const Expression &leaf, const DecideEnclosingScope &scope) { AnalyzeConstraint(leaf, scope); });
+				for (auto &expression : node.abs_expressions) {
+					ForEachScopedConstraintLeaf(*expression,
+					                            [&](const Expression &leaf, const DecideEnclosingScope &scope) {
+						                            AnalyzeConstraint(leaf, scope);
+					                            });
+				}
+				break;
 			}
 		}
 		if (op.decide_objective) {

@@ -65,9 +65,6 @@ struct SolverConstructSupport {
 	bool min_max = false;
 	//! `<>` as a native indicator constraint rather than a Big-M disjunction.
 	bool not_equal = false;
-	//! A product of two decision variables handled natively rather than by
-	//! McCormick linearization.
-	bool bilinear = false;
 
 	// There is deliberately no `in_list` flag. SOS1 acceleration for `x IN (a, b, c)`
 	// was measured on the exact model shape DeciDB emits and declined: the

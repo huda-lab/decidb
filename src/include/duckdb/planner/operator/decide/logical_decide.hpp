@@ -401,30 +401,33 @@ public:
 	};
 	vector<DefinitionFunction> definition_functions;
 
-	// Links for MAXIMIZE+ABS Big-M upper-bound constraints.
-	// Produced by RewriteAbs when sense==MAXIMIZE and ABS is in the objective.
-	// At execution time, the two lower-bound EvaluatedConstraints tagged with
-	// ABS_UB_POS_TAG_PREFIX / ABS_UB_NEG_TAG_PREFIX are used to derive and emit
-	// two upper-bound constraints that pin aux = |inner| exactly.
-	struct AbsMaximizeLink {
-		idx_t aux_idx; // ABS auxiliary variable
-		idx_t y_idx;   // binary sign indicator variable
-	};
-	vector<AbsMaximizeLink> abs_maximize_links;
-
-	//! The two ABS lower-envelope expressions retained for the executable F node. Optimizer-only metadata: the
-	//! expressions are enumerated for binding liveness, but do not become ordinary DECIDE constraint-tree clauses.
-	struct AbsFunctionEnvelope {
-		//! The source operand for the F node. User expressions can be rewritten away before tree construction (for
-		//! example, when ABS is a factor of a Boolean product), so the function cannot rely on finding itself while
-		//! lowering a retained clause.
+	//! One ABS over a decision, as RewriteAbs records it: the shape and nothing of its encoding. Stage 05 allocates the
+	//! auxiliary and decides whether the exact encoding is needed (FindExactAbs); it emits no row and allocates no
+	//! indicator. The tree gives the ABS an F node and its two lower-envelope rows, `aux >= operand` and `aux >=
+	//! -operand`, read on the rows the ABS is read on (MakeAbsRow); stage 06 states them, and for an exact ABS either
+	//! the backend's `aux = |t|` or a sign indicator with its Big-M rows (EmitAbsEnvelopes, EmitAbsConstraints). The
+	//! ABS is a pseudo-operation that the lowering legalizes or expands.
+	struct AbsFunction {
+		idx_t aux_idx = DConstants::INVALID_INDEX; //!< the helper decision standing for |operand|
+		//! The bound operand. The retained function expression keeps its own copy in the clause; this one is read by
+		//! the F node, which cannot find itself while lowering a clause a rewrite has consumed (an ABS that is a factor
+		//! of a Boolean product).
 		unique_ptr<Expression> operand;
-		unique_ptr<Expression> positive;
-		unique_ptr<Expression> negative;
+		//! True when nothing the clause or the objective pushes pins `aux` to |operand| (a hard direction, an objective
+		//! sense pushing it up, an unknown sign, an ABS inside another ABS, a body its readers push up): FindExactAbs.
+		bool exact = false;
+		//! The rows the ABS is read on: the `when` its clause keeps that also passes the `when` of each reducer around
+		//! it. Null for every row.
+		unique_ptr<Expression> when;
+		//! The auxiliary's scope (ScopeOf its operand): the rows are stated once per instance of it.
+		DecideVarScopeInfo scope;
+		//! The alias of the clause the ABS was written in (the objective's carries OBJECTIVE_ROW_TAG), whose provenance
+		//! the rows it makes carry to EXPLAIN and diagnostics.
+		string source_alias;
 		//! The ABS as the user wrote it (RenderDecideSource), for a message that points at it.
 		string written;
 	};
-	vector<AbsFunctionEnvelope> abs_function_envelopes;
+	vector<AbsFunction> abs_functions;
 
 	//! The helper decisions that hold a value of either sign: a value rewrite's reducer (RewriteScopedReducers), a
 	//! definition function's output, and a product with a non-Boolean factor (AddBooleanProduct). FoldSingletonRows

@@ -556,6 +556,9 @@ void DecideModelEmitter::Constraints() {
 	vector<idx_t> abs_function_of_clause(roots.size(), DConstants::INVALID_INDEX);
 	for (auto function : tree.function_nodes) {
 		const auto &node = *tree.nodes[function];
+		if (node.function_kind != DecideFunctionKind::ABS) {
+			continue;
+		}
 		for (auto root : node.abs_envelope_roots) {
 			if (root >= tree.nodes.size()) {
 				throw InternalException("DECIDE model emitter: ABS F node has an invalid envelope root");
@@ -583,32 +586,45 @@ void DecideModelEmitter::Constraints() {
 	for (idx_t c = 0; c < num_evaluated; c++) {
 		const auto root = roots[c];
 		auto &clause = *tree.nodes[root]->compiled.clause;
-		auto evaluated = abs_function_of_clause[c] != DConstants::INVALID_INDEX
-		                     ? AbsEnvelope(abs_function_of_clause[c], root, c < num_constraints)
-		                 : clause.lhs_is_aggregate || clause.was_minmax_easy ? Groups(root, c < num_constraints)
-		                                                                     : Rows(root, c < num_constraints);
+		if (abs_function_of_clause[c] != DConstants::INVALID_INDEX) {
+			// An ABS's envelope rows are no clauses of the model: stage 06 states the rows of the ABS from them.
+			AbsEnvelope(abs_function_of_clause[c], root, c < num_constraints);
+			continue;
+		}
+		auto evaluated = clause.lhs_is_aggregate || clause.was_minmax_easy ? Groups(root, c < num_constraints)
+		                                                                   : Rows(root, c < num_constraints);
 		(c < num_constraints ? gstate.evaluated_constraints : gstate.evaluated_singleton_row_constraints)
 		    .push_back(std::move(evaluated));
 	}
 }
 
-EvaluatedConstraint DecideModelEmitter::AbsEnvelope(idx_t function, idx_t root, bool counted) {
+void DecideModelEmitter::AbsEnvelope(idx_t function, idx_t root, bool counted) {
 	if (function >= tree.nodes.size() || tree.nodes[function]->kind != DecideNodeKind::FUNCTION ||
 	    tree.nodes[function]->function_kind != DecideFunctionKind::ABS) {
 		throw InternalException("DECIDE model emitter: invalid ABS F envelope ownership");
 	}
-	const auto value_var = tree.nodes[function]->value_var;
-	const auto &envelopes = tree.nodes[function]->abs_envelope_roots;
+	auto &node = *tree.nodes[function];
+	const auto &envelopes = node.abs_envelope_roots;
 	if (root >= tree.nodes.size() || std::find(envelopes.begin(), envelopes.end(), root) == envelopes.end()) {
 		throw InternalException("DECIDE model emitter: invalid ABS F envelope ownership");
 	}
 	auto &clause = *tree.nodes[root]->compiled.clause;
-	if (clause.abs_aux_idx != value_var) {
+	if (clause.abs_aux_idx != node.value_var) {
 		throw InternalException("DECIDE model emitter: ABS F envelope belongs to a different auxiliary");
+	}
+	auto link = std::find_if(gstate.evaluated_abs_links.begin(), gstate.evaluated_abs_links.end(),
+	                         [&](const AbsLinkSpec &candidate) { return candidate.aux_idx == node.value_var; });
+	if (link == gstate.evaluated_abs_links.end()) {
+		gstate.evaluated_abs_links.emplace_back();
+		link = gstate.evaluated_abs_links.end() - 1;
+		link->aux_idx = node.value_var;
+		link->exact = node.abs_exact;
+		link->written = node.abs_written;
+		link->label = node.text;
 	}
 	// An envelope row holds no aggregate (stage 05 gives every reducer a function reads a helper decision) and is
 	// built fresh, never the easy half of a MIN/MAX: it is one row per routed instance of the F edge's scope.
-	return Rows(root, counted);
+	(clause.abs_is_pos_bound ? link->operand : link->negated) = Rows(root, counted);
 }
 
 EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {

@@ -39,9 +39,9 @@ def _warns(sql):
 #: Where the user's numbers stay under the thresholds and DeciDB derives one: at scale 1e6 the box is 5e6 and the floor
 #: 3e7 (right-hand sides and bounds, which warn from about 4.5e9), and the Big-M or McCormick constant that closes the
 #: construct is a coefficient of that size (a warning from 1e6). Backends that state the construct natively have none:
-#: Gurobi states `abs` and `<>` itself. name -> the backends whose lowered model holds the constant.
+#: Gurobi states `<>` itself. name -> the backends whose lowered model holds the constant.
 _DERIVED_COEFFICIENT_AT_1E6 = {
-    "abs": {"highs"},
+    "abs": {"highs", "gurobi"},
     "bilinear": {"highs", "gurobi"},
     "minmax": {"highs", "gurobi"},
     "ne": {"highs"},

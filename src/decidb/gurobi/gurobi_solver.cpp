@@ -96,10 +96,6 @@ const SolverConstructSupport &GurobiSolver::Constructs() {
 		// symbol table before the library is open would report every construct as
 		// unexported, and nothing later could undo that false negative. Load() is itself
 		// call_once, so asking here costs nothing on the paths that already ran it.
-		//
-		// The remaining construct (bilinear) stays false until the loader binds its
-		// symbols and stage 08 knows how to emit it: a capability may not be declared
-		// ahead of the code that honors it.
 		if (GurobiLoader::Load()) {
 			auto &api = GurobiLoader::API();
 			supported.abs = api.addgenconstrAbs != nullptr;

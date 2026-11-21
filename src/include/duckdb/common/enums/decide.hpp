@@ -541,26 +541,10 @@ inline bool TryParseFrameAggregateTag(const string &alias, idx_t &index) {
 	return true;
 }
 
-//! Tag prefix for ABS envelope constraint linking.
-//! Format: "__abs_ub_pos_<aux_idx>__" on C1 (aux >= inner)
-//!         "__abs_ub_neg_<aux_idx>__" on C2 (aux >= -inner)
-//! Set on BoundComparisonExpression.alias by RewriteAbs when the aux needs its upper
-//! side pinned as well: either (a) sense==MAXIMIZE and ABS is in the objective, or
-//! (b) ABS is in a constraint shape that does not naturally upper-bound aux
-//! (e.g. ABS(...) >= K, ABS(...) = K). Without that, solver pressure lets aux float
-//! free above |inner|.
-//!
-//! The payload is the AUXILIARY's index, because the two arms that pin it need
-//! different things: the lowering arm adds a Big-M envelope switched by a binary sign
-//! indicator, while the native arm states `aux = |t|` and allocates no binary at all.
-//! The auxiliary is the only index both arms are guaranteed to have.
-static constexpr const char *ABS_UB_POS_TAG_PREFIX = "__abs_ub_pos_";
-static constexpr const char *ABS_UB_NEG_TAG_PREFIX = "__abs_ub_neg_";
-
-//! Tag on an ABS auxiliary's positive lower-envelope row (aux >= inner), including the solver-pressure arm that has
-//! no ABS_UB_POS tag. The tree uses this row to build the ABS F node.
+//! Tag on an ABS function in a clause, and on the positive lower-envelope row the tree builds for its F node (`aux >=
+//! inner`): both name the auxiliary the ABS became.
 static constexpr const char *ABS_FUNCTION_TAG_PREFIX = "__abs_function_";
-//! Matching marker on the negative lower-envelope row (aux >= -inner), including the solver-pressure arm.
+//! Matching marker on the negative lower-envelope row (`aux >= -inner`).
 static constexpr const char *ABS_FUNCTION_NEG_TAG_PREFIX = "__abs_function_neg_";
 
 //! Tag on a written Boolean product that the optimizer has described as an F-node group. The expression remains
@@ -591,12 +575,10 @@ inline string MakeAbsFunctionNegTag(idx_t var_idx) {
 	return string(ABS_FUNCTION_NEG_TAG_PREFIX) + to_string(var_idx) + "__";
 }
 
-//! ABS envelope rows are optimizer metadata rather than written constraints. Both the Big-M arm and the exact
-//! lower-envelope arm mark the row with one of these tags; return the helper they define.
+//! The ABS lower-envelope rows are built by the tree from the optimizer's record, not written by the user; each is
+//! marked with one of these tags, and this returns the helper they define.
 inline bool TryParseAbsFunctionEnvelopeTag(const string &alias, idx_t &var_idx) {
-	return TryParseDecideIndexTag(alias, ABS_UB_POS_TAG_PREFIX, var_idx) ||
-	       TryParseDecideIndexTag(alias, ABS_UB_NEG_TAG_PREFIX, var_idx) ||
-	       TryParseDecideIndexTag(alias, ABS_FUNCTION_TAG_PREFIX, var_idx) ||
+	return TryParseDecideIndexTag(alias, ABS_FUNCTION_TAG_PREFIX, var_idx) ||
 	       TryParseDecideIndexTag(alias, ABS_FUNCTION_NEG_TAG_PREFIX, var_idx);
 }
 
@@ -609,9 +591,8 @@ static constexpr const char *L0_AUTO_INDICATOR_NAME_PREFIX = "__l0auto_ind_";
 static constexpr const char *L0_INDICATOR_NAME_PREFIX = "__l0_ind_";
 //! The 0/1 indicator of one value of an `x IN (...)` over a decision; its name continues with the decision's own.
 static constexpr const char *IN_INDICATOR_NAME_PREFIX = "__in_ind_";
-//! The auxiliary of an ABS, and the sign indicator beside it.
+//! The auxiliary of an ABS.
 static constexpr const char *ABS_AUX_NAME_PREFIX = "__abs_aux_";
-static constexpr const char *ABS_SIGN_NAME_PREFIX = "__abs_y_";
 //! The auxiliary of a bilinear product.
 static constexpr const char *BILINEAR_AUX_NAME_PREFIX = "__bilinear_aux_";
 //! The helper standing for a nonlinear reducer body.
@@ -664,8 +645,6 @@ static constexpr const char *DECIDE_TAGS[] = {WHEN_FILTER_TAG,
                                               FRAME_TIGHTEST_BOUND_TAG,
                                               FRAME_COLUMN_TAG,
                                               FRAME_AGGREGATE_TAG_PREFIX,
-                                              ABS_UB_POS_TAG_PREFIX,
-                                              ABS_UB_NEG_TAG_PREFIX,
                                               ABS_FUNCTION_TAG_PREFIX,
                                               ABS_FUNCTION_NEG_TAG_PREFIX,
                                               BILINEAR_FUNCTION_GROUP_TAG_PREFIX,
@@ -675,7 +654,6 @@ static constexpr const char *DECIDE_TAGS[] = {WHEN_FILTER_TAG,
                                               L0_INDICATOR_NAME_PREFIX,
                                               IN_INDICATOR_NAME_PREFIX,
                                               ABS_AUX_NAME_PREFIX,
-                                              ABS_SIGN_NAME_PREFIX,
                                               BILINEAR_AUX_NAME_PREFIX,
                                               BODY_NAME_PREFIX,
                                               VALUE_LINK_NAME_PREFIX};

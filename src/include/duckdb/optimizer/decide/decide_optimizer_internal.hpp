@@ -87,6 +87,13 @@ unique_ptr<Expression> ScopeRowPerClause(ClientContext &context, LogicalDecide &
 unique_ptr<Expression> ScopeRowPerInstance(const LogicalDecide &decide, unique_ptr<Expression> row,
                                            const DecideVarScopeInfo &scope);
 
+//! A lower-envelope row the tree states for a recorded ABS (LogicalDecide::AbsFunction), under its F node: `aux >=
+//! operand`, or `aux >= -operand` when `negated`, on the rows the ABS is read on, once per instance of the auxiliary's
+//! scope, attributed to the clause the ABS was written in. The emitter evaluates each per row, and stage 06 states
+//! every row of the ABS from them (EmitAbsEnvelopes, EmitAbsConstraints).
+unique_ptr<Expression> MakeAbsRow(ClientContext &context, const LogicalDecide &decide,
+                                  const LogicalDecide::AbsFunction &function, bool negated);
+
 //! Polarity analysis: the sign each subterm carries once a clause is read as one expression `E` under `E <op> 0`
 //! (`LHS - RHS`), or the objective as `E` under its sense. Walking `expr` with `sign`, a node keeps its parent's sign
 //! through `+`, casts and reducer bodies (SUM, AVG, MIN and MAX never decrease when a member grows), flips it through

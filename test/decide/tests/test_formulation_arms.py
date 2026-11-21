@@ -619,7 +619,7 @@ def test_hard_abs_clause_with_an_infinite_bound_is_infeasible(decidb_cli_gurobi,
 
 def test_native_abs_over_a_coefficient_that_is_zero_on_a_row(decidb_cli_gurobi):
     """`ABS(c * x - 3)` stated natively with `c = 0` on one row: that row's argument has no decision term, so it is
-    not a renaming of a column and earns a column of its own (EmitNativeAbs, `coef == 0.0`).
+    not a renaming of a column and earns a column of its own (StateAbsNatively, `coef == 0.0`).
     """
     cs = [0, 2, 1]
     values = ", ".join(f"({i + 1}, {c})" for i, c in enumerate(cs))

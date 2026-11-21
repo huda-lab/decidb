@@ -885,16 +885,11 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 		solver_input.bilinear_links.push_back(BilinearLinkSpec {link.aux_idx, link.bool_var_idx, link.other_var_idx,
 		                                                        link.source_clause_id, link.removal_group_id});
 	}
-	for (auto function : tree->function_nodes) {
-		const auto &node = *tree->nodes[function];
-		if (node.function_kind == DecideFunctionKind::ABS) {
-			solver_input.abs_written.emplace_back(node.value_var, node.abs_written);
-		}
-		if (node.function_kind != DecideFunctionKind::ABS || !node.abs_needs_bigm) {
-			continue;
-		}
-		solver_input.abs_maximize_links.push_back(AbsMaximizeLinkSpec {node.value_var, node.abs_indicator_var});
-	}
+	// Each ABS arrives as the record stage 05 made of it, with its two envelope rows evaluated, and they join the model
+	// here, before any pass reads the rows: implied-bound propagation reads `aux >= inner` of `ABS(x) <= 3` as a bound
+	// on x.
+	solver_input.abs_links = std::move(gstate.evaluated_abs_links);
+	EmitAbsEnvelopes(solver_input);
 	solver_input.reducer_value_links = std::move(gstate.evaluated_value_links);
 
 	// The rigid box, captured before any propagation runs and with every user-folded
@@ -1059,19 +1054,13 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 		}
 	}
 
-	// THE ROUTING, as stage 05 decided it. Whether ABS is stated natively or lowered is
-	// a FORMULATION choice, and formulation belongs to stage 05 — so this reads the
-	// decision off the plan rather than asking a backend. Native means no Big-M and
-	// therefore no bound requirement, so the answer changes what is refused, not only
-	// what is fast; that is exactly why it has to be the same answer the rewrites above
-	// were selected against. Both arms below only translate.
-	const bool native_abs = use_native_constructs.abs;
-	// MIN/MAX arrives as a POLICY rather than an answer. Stage 05 decided both halves of
-	// it — whether the backend can state the construct, and whether a declared construct
-	// is used everywhere or only as a fallback — and neither is re-decided here. What is
-	// left is a question about the data: whether THIS clause has a Big-M, which only a
-	// stage that has seen the evaluated coefficients can answer. Applying a decision to
-	// data is this layer's job; choosing the decision was not.
+	// THE ROUTING of every construct this stage may state natively, one policy for all of them. Stage 05 recorded the
+	// shape and the backend's capabilities; whether a construct the backend declares is used is decided here, once, per
+	// site, because only a stage that has seen the evaluated coefficients knows whether THIS clause has a Big-M.
+	// MIN/MAX and ABS read one rule: the lowering is the smaller model wherever a Big-M exists, so native is the
+	// fallback for a site that has none (or is forced, for the A/B tests). Applying a decision to data is this layer's
+	// job; choosing the capabilities was not.
+	const NativeConstructPolicy native_abs {use_native_constructs.abs, force_native_constructs};
 	const NativeConstructPolicy native_min_max {use_native_constructs.min_max, force_native_constructs};
 
 	// A bilinear auxiliary may itself sit inside ABS (notably the reverse link of an
@@ -1097,7 +1086,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 	// auxiliary open and answers.
 	phase.Next("formulation.abs_bounds");
 	if (solver_input.reducer_value_links.empty()) {
-		DeriveAbsAuxiliaryBounds(solver_input, var_indexer, decide_var_names, !native_abs);
+		DeriveAbsAuxiliaryBounds(solver_input, var_indexer, decide_var_names, !native_abs.available);
 	} else {
 		// The value rewrite's helper decisions are boxed by their members' reach, and a
 		// member may be an ABS auxiliary or a product with a helper (`b * sum(x)`) while an
@@ -1108,7 +1097,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 		for (auto &link : solver_input.reducer_value_links) {
 			decide_var_names[link.value_var] = link.label;
 		}
-		const idx_t max_passes = 2 * (solver_input.abs_maximize_links.size() + solver_input.bilinear_links.size() +
+		const idx_t max_passes = 2 * (solver_input.abs_links.size() + solver_input.bilinear_links.size() +
 		                              solver_input.reducer_value_links.size() + 1);
 		for (idx_t pass = 0;; pass++) {
 			auto lower = solver_input.lower_bounds;
@@ -1133,13 +1122,9 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 			}
 		}
 		DeriveBilinearAuxiliaryBounds(solver_input, box, decide_var_names);
-		DeriveAbsAuxiliaryBounds(solver_input, var_indexer, decide_var_names, !native_abs);
+		DeriveAbsAuxiliaryBounds(solver_input, var_indexer, decide_var_names, !native_abs.available);
 	}
-	if (native_abs) {
-		EmitNativeAbs(solver_input, var_indexer);
-	} else {
-		LinearizeAbsMaximize(solver_input);
-	}
+	EmitAbsConstraints(solver_input, var_indexer, native_abs);
 
 	// The helper decisions' definitions: an equality row per group for SUM/AVG, an
 	// extremum link per group for MIN/MAX. A refusal names a helper by its reducer.

@@ -7,8 +7,8 @@
 //
 // A formulation chosen at stage 05 (a `<>` disjunction, a hard MIN/MAX, an ABS
 // under MAXIMIZE, a bilinear product) reaches this stage as a *tag* on an
-// `EvaluatedConstraint`: stage 05 recorded which encoding applies and stopped,
-// because the rows that encode it and the constants that scale them are both
+// `EvaluatedConstraint` (or, for an ABS, as a record of its shape): stage 05 recorded which encoding applies and
+// stopped, because the rows that encode it and the constants that scale them are both
 // functions of the evaluated data. This unit owns that second half — it turns a
 // tagged constraint into the rows a solver can accept, and derives the Big-M
 // constants those rows need.
@@ -50,9 +50,9 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices, const vector<Co
 //! **Throws** when a contributing variable has no finite bound. No constant dominates
 //! an unbounded range, so there is no M to compute — only a guess, and a guess the
 //! true range exceeds silently cuts the feasible region rather than failing. The
-//! refusal names a column to bound, and it is the same refusal `LinearizeAbsMaximize`
-//! has always made. `var_names` supplies that name, and `construct` the text of the construct that asked for the
-//! constant (`norm(e, 0)` for the links of a count of nonzeros), which the refusal quotes.
+//! refusal names a column to bound, and it is the same refusal the lowered ABS
+//! (`EmitAbsConstraints`) has always made. `var_names` supplies that name, and `construct` the text of the construct
+//! that asked for the constant (`norm(e, 0)` for the links of a count of nonzeros), which the refusal quotes.
 //!
 //! `box` is the box the returned constant is valid for, and it is the caller's job to
 //! pass the one the constant will be used against — see `FormulationBox`. Widening a
@@ -205,25 +205,43 @@ void LinearizeBilinear(SolverInput &input, const VarIndexer &indexer, const Form
 void DeriveBilinearAuxiliaryBounds(SolverInput &input, const FormulationBox &box, const vector<string> &var_names,
                                    bool refuse_when_unbounded = true);
 
+//! The lower envelope of every ABS (SolverInput::abs_links): its two evaluated rows, `aux >= inner` (`operand`) and
+//! `aux >= -inner` (`negated`), become rows of `input.constraints` like any clause; the link keeps `operand`, which the
+//! rows of an exact ABS are read from. Called once, as the evaluated model is handed over, before any pass reads the
+//! rows: implied-bound propagation reads `ABS(x) <= 3` as `x <= 3` through them. The pair pins `aux` from below, and to
+//! exactly |inner| where what pushes on the ABS holds it down; an exact ABS is pinned from above by EmitAbsConstraints.
+//! Refuses an envelope row that holds an aggregate as an internal error: stage 05 gives every reducer a function reads
+//! a helper decision, so the rows are read per row.
+void EmitAbsEnvelopes(SolverInput &input);
+
 //! Phase 1 of the ABS auxiliary formulation, and it runs before EVERY other
-//! linearizer. For each `abs_maximize_links` entry it derives the signed interval of the
+//! linearizer. For each exact ABS (`abs_links`) it derives the signed interval of the
 //! expression inside ABS over every row (the two sign-row constants come from its ends)
 //! and narrows the auxiliary's column box to the largest |inner| it reaches — the only place that
 //! box is ever derived, since `aux >= inner` / `aux >= -inner` bound it from below
 //! only. Every other linearizer computes its Big-M from column boxes, so an auxiliary
 //! they read has to be boxed by the time they run.
 //!
-//! `refuse_when_unbounded` is the gate's answer for this construct. On the lowering
-//! path it is true: no finite Big-M exists over an unbounded contributor, and the
-//! query is refused naming a column to bound. On the native path it is false — a
-//! general constraint needs no Big-M, so the auxiliary is simply left unboxed and the
+//! `refuse_when_unbounded` is the gate's answer for this construct. Where the backend declares no native ABS it is
+//! true: no finite Big-M exists over an unbounded contributor, and the
+//! query is refused naming a column to bound. Where it does declare one it is false — a general
+//! constraint needs no Big-M, so the auxiliary is simply left unboxed (`AbsLinkSpec::range_unbounded`) and the
 //! query answers. That divergence is the capability's whole payoff.
 void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names,
                               bool refuse_when_unbounded);
 
-//! Phase 2, LOWERING path: the Big-M sign-indicator rows that pin `aux = |inner|`.
-//! Reads the range DeriveAbsAuxiliaryBounds already derived; never recomputes it.
-void LinearizeAbsMaximize(SolverInput &input);
+//! Phase 2: the rows that pin each exact ABS from above, emitted in flat columns, which is why this takes the
+//! `VarIndexer`. The ABS is a pseudo-operation that stage 05 only recorded, and this is where it is legalized or
+//! expanded (as LLVM's legalization decides per operation): `policy.Use(range_unbounded)` is the one place native
+//! against lowered is decided for ABS, by the rule MIN and MAX read too.
+//!   - Native: one column `t` per active row, an equality row `t = inner`, and a `GeneralConstraintSpec` saying
+//!     `aux = |t|`. Each `t` is boxed by ITS OWN row's reach, keeping each end it can derive independently, exactly as
+//!     `EmitExtremumLink` boxes its argument columns: a row whose contributors are all bounded gets a real box even
+//!     when another row's are not; a column is left free only where nothing is derivable at all, which is the query
+//!     this arm exists to answer.
+//!   - Lowered: a sign indicator per instance of the auxiliary and the two Big-M rows it switches, each with its own
+//!     constant from the signed interval DeriveAbsAuxiliaryBounds derived.
+void EmitAbsConstraints(SolverInput &input, const VarIndexer &indexer, NativeConstructPolicy policy);
 
 //! The value rewrite's helper decisions (SolverInput::reducer_value_links), phase 0, at the end of assembly, once the
 //! rows and the objective are final: inline each helper whose every reader can read its members in place of its
@@ -272,20 +290,6 @@ void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer);
 //! An inlined helper has no definition: its members move to SolverInput::inlined_helpers.
 void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names,
                                 NativeConstructPolicy policy);
-
-//! Phase 2, NATIVE path: one column `t` per active row, an equality row `t = inner`,
-//! and a `GeneralConstraintSpec` saying `aux = |t|`. Emitted in flat columns, which is
-//! why every construct site takes the `VarIndexer`.
-//!
-//! Each `t` is boxed by ITS OWN row's reach, keeping each end it can derive
-//! independently, exactly as `EmitExtremumLink` boxes its argument columns.
-//! A row whose contributors are all bounded gets a real box even when another row's are
-//! not; a column is left free only where nothing is derivable at all, which is the query
-//! this arm exists to answer.
-//!
-//! Called only when the chosen backend declared `SolverConstructSupport::abs`. The routing
-//! is the gate's; this only translates.
-void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer);
 
 //! The reachable range of a family of row expressions: the box every auxiliary over
 //! that family is declared with, and — as `Span()` — the only Big-M an extremum link

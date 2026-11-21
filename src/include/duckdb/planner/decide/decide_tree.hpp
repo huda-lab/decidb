@@ -183,13 +183,15 @@ struct DecideNode {
 	DecideDefinitionRelation definition_relation = DecideDefinitionRelation::INVALID;
 	//! Set on the structural clause root owned by a definition F node.
 	idx_t definition_function_owner = DConstants::INVALID_INDEX;
-	//! An ABS F node's maximize link, from RewriteAbs (LogicalDecide::abs_maximize_links): whether its exact form needs
-	//! a big-M indicator, and that indicator's variable. RewriteAbs allocates the auxiliary at plan time.
-	bool abs_needs_bigm = false;
-	idx_t abs_indicator_var = DConstants::INVALID_INDEX;
+	//! An ABS F node's record from RewriteAbs (LogicalDecide::AbsFunction): whether its exact encoding is needed. Stage
+	//! 06 chooses the encoding, so the node holds no indicator.
+	bool abs_exact = false;
 	//! An ABS F node's call as the user wrote it, which a message about its value points at.
 	string abs_written;
-	//! The two lower-envelope rows RewriteAbs wrote for this F node.
+	//! The two lower-envelope rows this F node owns, `aux >= operand` then `aux >= -operand` (MakeAbsRow), which the
+	//! tree built from the record, and the roots made of them. They carry the operand per row to stage 06, which states
+	//! every row of the ABS from them.
+	unique_ptr<Expression> abs_expressions[2];
 	vector<idx_t> abs_envelope_roots;
 	unique_ptr<DecideFrameSpec> frame_spec;
 	string aggregate;
