@@ -1443,22 +1443,6 @@ def test_the_objective_refuses_a_factor_that_varies_per_row(decidb_cli, objectiv
     )
 
 
-@pytest.mark.obj_maximize
-@pytest.mark.error_binder
-def test_the_objective_refuses_a_reducer_over_data_alone(decidb_cli):
-    decidb_cli.assert_error_at(
-        f"""
-        SELECT id, x FROM {_OBJECTIVE_ROWS}
-        DECIDE x(INT)
-        SUCH THAT x <= 5 AND SUM(x) <= 7
-        MAXIMIZE SUM(x) + AVG(w)
-    """,
-        kind="Binder Error",
-        at="AVG(w)",
-        word="'AVG(w)'",
-    )
-
-
 # The constant a spine carries is peeled off the objective under its factor, whichever way the factor is written.
 OBJECTIVE_CONSTANT_CASES = [
     pytest.param("2 * (SUM(x) - 1)", lambda sx, sy: 2 * (sx - 1), id="product"),

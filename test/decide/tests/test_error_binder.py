@@ -73,27 +73,10 @@ class TestBinderErrors:
             at="x IS NULL",
         )
 
-    @pytest.mark.parametrize("clause", ["x * avg(p) <= 25", "avg(p) * sum(x) <= 25", "sum(x) * max(p) <= 25"])
-    def test_data_only_aggregate_coefficient_rejected(self, decidb_cli, clause):
-        """A data-only aggregate (`AVG(p)`, `MAX(p)`, ... over columns only) scaling a
-        decision outside every reducer over decisions is rejected: the bound side holds it
-        (S10). Inside one it is a value of its path's group, a coefficient
-        (test_anr_nested.py)."""
-        decidb_cli.assert_error_at(
-            f"""
-                SELECT id, p, x FROM (VALUES (1,10.0),(2,20.0)) t(id, p)
-                DECIDE x(REAL)
-                SUCH THAT x <= 1 AND {clause}
-                MAXIMIZE SUM(x)
-            """,
-            kind="Binder Error",
-            at=re.search(r"(?:avg|max)\(p\)", clause).group(0),
-        )
-
     def test_data_only_aggregate_rhs_still_allowed(self, decidb_cli):
-        """Guard against over-rejecting: a data-only aggregate is fine as a constraint
-        RHS (`SUM(x) <= AVG(p)`), and a genuine DECIDE aggregate `AVG(x * p)` is fine —
-        only using the data aggregate as a *coefficient* is rejected."""
+        """A data-only aggregate is fine as a constraint RHS (`SUM(x) <= AVG(p)`), and so is a
+        genuine DECIDE aggregate `AVG(x * p)`. (As a coefficient it answers too:
+        test_binder_algebra.py.)"""
         rows, _ = decidb_cli.execute(
             """
             SELECT id, p, x FROM (VALUES (1,10.0),(2,20.0)) t(id, p)
@@ -141,7 +124,7 @@ class TestBinderErrors:
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """,
             kind="Binder Error",
-            at="l_quantity",
+            at="l_quantity <= 5",
         )
 
     def test_non_sum_avg_min_max_function_in_objective(self, decidb_cli):
@@ -167,12 +150,12 @@ class TestBinderErrors:
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """,
             kind="Binder Error",
-            at="SUM(l_quantity)",
+            at="SUM(l_quantity) <= 5",
         )
 
     @pytest.mark.parametrize("lhs", ["SUM(l_quantity) + 1", "2 * MAX(l_quantity)", "ABS(SUM(l_quantity) - 3)"])
     def test_no_decide_variable_under_arithmetic(self, decidb_cli, lhs):
-        """A reducer under arithmetic reads no decision either: refused by name, where it
+        """A reducer under arithmetic reads no decision either: the clause is refused by name, where it
         reached term extraction as an internal error."""
         decidb_cli.assert_error_at(
             f"""
@@ -182,7 +165,7 @@ class TestBinderErrors:
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """,
             kind="Binder Error",
-            at=lhs,
+            at=f"{lhs} <= 500",
         )
 
     def test_multiple_decide_variables_in_sum(self, decidb_cli):
@@ -919,70 +902,9 @@ class TestRefusalsInEverySpelling:
         )[0]
         assert sum(int(row[1]) for row in rows) == 16
 
-    # One walk over the whole constraint (`ValidateDecideNoDataAggregateFactor`) tests each `/`, with no case on a
-    # scope marker or an aggregate's name (`IsAggregateFunctionName`). The clauses differ in the dividend (a bare
-    # decision, a reducer), the divisor (`count(*)` has no argument, a sum nested in arithmetic), a reducer holding
-    # data inside a decision's body, and the side of the comparison. The scope spellings run on one clause.
-    @pytest.mark.parametrize(
-        "spelling,clause",
-        [
-            pytest.param(spelling, clause, id=f"{clause}-{spelling}")
-            for spelling, clause in [
-                ("", "x / sum(cap) <= 1"),
-                ("", "sum(x) / sum(cap) <= 1"),
-                ("per row: ", "sum(x) / sum(cap) <= 1"),
-                ("per (): ", "sum(x) / sum(cap) <= 1"),
-                ("", "sum(x) / count(*) <= 2"),
-                ("", "sum(x * cap) / sum(cap) <= 5"),
-                ("", "sum(x) / (1 + sum(cap)) <= 1"),
-                ("", "x <= sum(x) / sum(cap)"),
-            ]
-        ],
-    )
-    def test_data_only_aggregate_divisor_rejected(self, decidb_cli, spelling, clause):
-        """A data-only aggregate stays on the bound side (S10). As a divisor of a
-        decision term it is refused like the same aggregate as a multiplier, never
-        reaching term extraction ('INTERNAL Error: ... VALUE shape reached term
-        extraction')."""
-        decidb_cli.assert_error_at(
-            f"""{TABLES}
-            SELECT id, x FROM t DECIDE x(INT) SUCH THAT x <= cap AND {spelling}{clause} MAXIMIZE SUM(x)""",
-            kind="Binder Error",
-            at="count(*)" if "count(*)" in clause else "sum(cap)",
-        )
-
-    # The same walk, the other message (the divisor holds no data-only aggregate). The clauses differ in the side of
-    # the comparison, `count(*)`, a negation over the division, and a divisor that is a subquery; the five spellings
-    # run on the first clause.
-    @pytest.mark.parametrize(
-        "spelling,clause",
-        [
-            pytest.param(spelling, clause, id=f"{clause}-{spelling}")
-            for spelling, clause in [
-                (spelling, "(sum(x) + sum(cap)) / 2 <= 20") for spelling in SPELLINGS + ["per g: ", "when id > 0: "]
-            ]
-            + [
-                ("", "20 >= (sum(x) + sum(cap)) / 2"),
-                ("", "(sum(x) + count(*)) / 2 <= 5"),
-                ("", "-(sum(x) + sum(cap)) / 2 >= -20"),
-                ("", "(sum(x) + sum(cap)) / (SELECT 2) <= 20"),
-            ]
-        ],
-    )
-    def test_data_only_aggregate_in_a_divided_term_rejected(self, decidb_cli, spelling, clause):
-        """A data-only aggregate divided together with a decision term is the scaled term
-        the multiplier rule already refuses (`2 * (sum(x) - avg(cap))`); under a scope
-        spelling it, too, reached term extraction as an internal error."""
-        decidb_cli.assert_error_at(
-            f"""{TABLES}
-            SELECT id, x FROM t DECIDE x(INT) SUCH THAT x <= cap AND {spelling}{clause} MAXIMIZE SUM(x)""",
-            kind="Binder Error",
-            at="count(*)" if "count(*)" in clause else "sum(cap)",
-        )
-
     def test_data_only_aggregate_in_a_divided_term_as_a_scalar_or_moved(self, decidb_cli):
-        """The two ways out the message implies give one answer: the aggregate as a scalar
-        subquery, or moved to the bound side."""
+        """A data-only aggregate divided together with a decision term (`(sum(x) + sum(cap)) / 2`) as a scalar
+        subquery, or moved to the bound side, gives one answer."""
         query = f"""{TABLES}
             SELECT id, x FROM t DECIDE x(INT) SUCH THAT x <= cap AND per row: {{}} MAXIMIZE SUM(x)"""
         scalar = query.format("(sum(x) + (SELECT sum(cap) FROM t)) / 2 <= 20")
@@ -1000,8 +922,7 @@ class TestRefusalsInEverySpelling:
         assert decidb_cli.execute(query.format("(big AND big)"))[0] == decidb_cli.execute(query.format("big"))[0]
 
     def test_data_only_aggregate_bound_and_scalar_divisor_still_allowed(self, decidb_cli):
-        """Guard against over-rejecting: divided on the bound side, or replaced by the
-        scalar subquery the message suggests, the aggregate is one number."""
+        """Divided on the bound side, or replaced by a scalar subquery, the aggregate is one number."""
         query = f"""{TABLES}
             SELECT id, x FROM t DECIDE x(INT)
             SUCH THAT x <= cap AND per row: x <= {{}} / 3 AND per row: x / {{}} <= 0.25
@@ -1011,15 +932,15 @@ class TestRefusalsInEverySpelling:
         assert decidb_cli.execute(written)[0] == decidb_cli.execute(precomputed)[0]
 
     def test_decision_free_objective_term_named_in_sql(self, decidb_cli):
-        """The refusal of a row-varying objective term names the term in SQL, not by
-        an internal alias ('__source_fragment_0____row_varying_subquery__'). A subquery
-        prints as DuckDB renders it (logged in issues/bugs.md), so only its text is
-        pinned."""
+        """The refusal of a row-varying objective term, which stays a term the objective reads and takes more
+        than one value, names the term in SQL, not by an internal alias
+        ('__source_fragment_0____row_varying_subquery__'). A subquery prints as DuckDB renders it (logged in
+        issues/bugs.md), so only its text is pinned."""
         decidb_cli.assert_error_at(
             f"""{TABLES}
             SELECT id, x FROM t DECIDE x(INT) SUCH THAT x <= cap
             MAXIMIZE per (): sum(x) + (SELECT k FROM f WHERE f.g = t.g)""",
-            kind="Binder Error",
+            kind="Invalid Input Error",
             at="(SELECT k FROM f WHERE f.g = t.g)",
         )
 
@@ -1038,7 +959,7 @@ class TestRefusalsInEverySpelling:
     def test_a_printed_operand_reads_as_written(self, decidb_cli, term, quoted):
         result = decidb_cli.execute_raw(
             f"""SELECT id, x FROM (VALUES (1, 3, true, false), (2, 4, false, true)) t(id, cap, p, q)
-            DECIDE x(REAL) SUCH THAT x <= 7 MAXIMIZE sum(x) - {term}"""
+            DECIDE x(REAL) SUCH THAT x <= 7 MAXIMIZE {term}"""
         )
         assert quoted in result.stderr, result.stderr
 
@@ -1071,7 +992,7 @@ class TestRefusalsInEverySpelling:
         """Binding casts a factor's operand, and a cast prints its child by its alias, so the bound name held the tag
         `__written_norm_inf__`; the term's own spelling holds no internal name (D40)."""
         decidb_cli.assert_error_at(
-            f"SELECT id, x FROM (VALUES (1, 3), (2, 4)) t(id, cap) DECIDE x(REAL) SUCH THAT x <= 7 MAXIMIZE sum(x) - {term}",
+            f"SELECT id, x FROM (VALUES (1, 3), (2, 4)) t(id, cap) DECIDE x(REAL) SUCH THAT x <= 7 MAXIMIZE {term}",
             kind="Binder Error",
             at=term,
             word=f"'{term}'",
@@ -1134,14 +1055,14 @@ class TestRefusalsSpeakSql:
             word="'x BETWEEN 1 AND 2'",
         )
 
-    # One per message the objective check words: no decision (a constant, a data column), a comparison, `count(*)`.
+    # One per message the objective check words: no decision (a constant, a data column, `count(*)`), a comparison.
     @pytest.mark.parametrize(
         "objective,kind,at",
         [
             ("MAXIMIZE 3", "Binder Error", "3"),
             ("MINIMIZE cap", "Binder Error", "cap"),
             ("MAXIMIZE x > 1", "Binder Error", "x > 1"),
-            ("MAXIMIZE count(*)", "Not implemented Error", "count(*)"),
+            ("MAXIMIZE count(*)", "Binder Error", "count(*)"),
         ],
     )
     def test_unsupported_objective_is_quoted(self, decidb_cli, objective, kind, at):
@@ -1155,9 +1076,9 @@ class TestRefusalsSpeakSql:
     def test_count_star_in_a_constraint_is_quoted_as_written(self, decidb_cli):
         decidb_cli.assert_error_at(
             f"{_REFUSAL_ROWS} DECIDE x(INT) SUCH THAT x <= 5 AND count(*) <= 3 MAXIMIZE SUM(x)",
-            kind="Not implemented Error",
-            at="count(*)",
-            word="'count(*)'",
+            kind="Binder Error",
+            at="count(*) <= 3",
+            word="'count(*) <= 3' reads no decision",
         )
 
     def test_reducer_over_a_constant_is_not_a_query_wide_decision(self, decidb_cli):
@@ -1165,7 +1086,8 @@ class TestRefusalsSpeakSql:
         decidb_cli.assert_error_at(
             f"{_REFUSAL_ROWS} DECIDE x(INT) SUCH THAT x <= 5 AND SUM(1) <= 5 MAXIMIZE SUM(x)",
             kind="Binder Error",
-            at="SUM(1)",
+            at="SUM(1) <= 5",
+            word="'SUM(1) <= 5' reads no decision",
         )
 
 
@@ -1203,9 +1125,9 @@ class TestBinderRefusalBranches:
             ("abs(x)", At("Not implemented Error", "abs(x)")),
             # The same for a CASE at the top.
             ("CASE WHEN c > 1 THEN true ELSE false END", At("Not implemented Error", "CASE WHEN c > 1 THEN true")),
-            # A side of the comparison that is neither a decision nor a reducer, in GetExpressionType's default: a CASE
-            # that reads no decision, and one that reads a decision.
-            ("CASE WHEN c > 1 THEN 1 ELSE 0 END <= 3", At("Binder Error", "CASE WHEN c > 1 THEN 1 ELSE 0 END")),
+            # A comparison no side of which reads a decision (DecideShapeCheck::CheckClause), and a side over a decision
+            # that is a CASE, which the shape check's vocabulary refuses.
+            ("CASE WHEN c > 1 THEN 1 ELSE 0 END <= 3", At("Binder Error", "CASE WHEN c > 1 THEN 1 ELSE 0 END <= 3")),
             (
                 "CASE WHEN c > 1 THEN x ELSE 0 END <= 3",
                 At("Not implemented Error", "CASE WHEN c > 1 THEN x ELSE 0 END"),
@@ -1217,7 +1139,7 @@ class TestBinderRefusalBranches:
             ("when nosuch > 0: x <= 3", r'Referenced column "nosuch" not found'),
             ("SUM(when nosuch > 0: x) <= 3", r'Referenced column "nosuch" not found'),
             ("max(x, 2) <= 2", At("Binder Error", "max(x, 2)")),
-            # A COALESCE over a reducer, in the body of a sum's left side (ContainsDecideAggregate's OPERATOR case).
+            # A COALESCE over a reducer, in the body of a sum's left side (the shape check's vocabulary).
             ("COALESCE(SUM(x), 0) + 1 <= 100", At("Not implemented Error", "COALESCE(SUM(x), 0)")),
         ],
     )
@@ -1227,15 +1149,10 @@ class TestBinderRefusalBranches:
     @pytest.mark.parametrize(
         "bound",
         [
-            "sum(w) OVER ()",  # a class IsAllowedDecisionFreeBoundExpression does not list
-            "1 + sum(w) OVER ()",  # IsAllowedOperatorChildren
-            "abs(sum(w) OVER ())",  # a function's child
-            "CAST((sum(w) OVER () = 1) AS INT)",  # a comparison's child, after an allowed first one
+            "sum(w) OVER ()",  # DecideBinder's window arm
             "(EXISTS (SELECT 1))",  # a subquery that is not scalar
-            "max(w) FILTER (WHERE EXISTS (SELECT 1))",  # a reducer's filter
-            "max(w, 2)",  # a reducer with two arguments
+            "max(w, 2)",  # a reducer with two arguments (BindAggregate)
             "max(w, 2) by (k)",  # the same under a `by`
-            "abs(w) FILTER (WHERE EXISTS (SELECT 1))",  # a scalar function's filter that is not allowed
         ],
     )
     def test_bound_side(self, decidb_cli, bound):
@@ -1244,7 +1161,7 @@ class TestBinderRefusalBranches:
         )
 
     def test_bound_side_on_the_left(self, decidb_cli):
-        """The decision-free side is the left one: IsValidBound is asked of it."""
+        """The window function is on the left, the decision-free side."""
         _branch_refusal(
             decidb_cli,
             "SUCH THAT x <= 3 AND sum(w) OVER () >= SUM(x) MAXIMIZE SUM(x)",
@@ -1262,10 +1179,8 @@ class TestBinderRefusalBranches:
     @pytest.mark.parametrize(
         "argument, message",
         [
-            ("abs(x, 1)", At("Binder Error", "abs(x, 1)")),
             # A non-scalar subquery, first among a product's factors (the second is then not asked).
             ("EXISTS (SELECT 1) * x", At("Binder Error", "EXISTS (SELECT 1)")),
-            ("x * (SELECT x)", At("Binder Error", "(SELECT x)")),
             # A subquery over a per-row decision is not "a query-wide decision": IsRowInvariantExpression reads its body.
             ("2 * (SELECT x)", At("Binder Error", "(SELECT x)")),
             # The same as a call's lone argument, which a call prints with its alias.
@@ -1318,8 +1233,7 @@ class TestBinderRefusalBranches:
         [
             # A COUNT over a decision inside a nest.
             ("sum(per k: count(x) by (k))", At("Not implemented Error", "count(x)")),
-            # A nested reducer with no argument: ValidateSumArgumentInternal's one-child guard keeps it from reading
-            # children[0], and it reads as a reducer over data.
+            # A nested reducer with no argument: BindAggregate's argument count.
             ("sum(per k: max() by (k))", At("Binder Error", "sum(per k: max() by (k))")),
             # An aggregate with arguments no function takes.
             ("SUM(w * x, 2)", At("Binder Error", "SUM(w * x, 2)")),
@@ -1332,10 +1246,8 @@ class TestBinderRefusalBranches:
             ("COALESCE(SUM(x), 0)", At("Not implemented Error", "COALESCE(SUM(x), 0)")),
             ("SUM(x) + COALESCE(x, 1)", At("Not implemented Error", "COALESCE(x, 1)")),
             ("CASE WHEN c > 1 THEN 1 ELSE 2 END", At("Binder Error", "CASE WHEN c > 1 THEN 1 ELSE 2 END")),
-            ("w * 2", At("Not implemented Error", "w * 2")),
+            ("w * 2", At("Binder Error", "w * 2")),
             ("SUM(x * w) / SUM(x)", At("Not implemented Error", "SUM(x * w) / SUM(x)")),
-            # `"/"` called by name takes any number of arguments, one here.
-            ('"/"(SUM(x))', At("Not implemented Error", '"/"(SUM(x))')),
         ],
     )
     def test_objective_shape(self, decidb_cli, objective, message):

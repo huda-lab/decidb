@@ -181,17 +181,18 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 			canonicalizer.QuoteMessagesWith(message_names);
 			canonicalizer.frames = &statement.decide_frames;
 			// The algebra of every clause, judged once on the one spelling canonicalization wrote.
-			DecideShapeCheck shape_check(context, statement.decide_index, message_names);
+			DecideShapeCheck shape_check(context, statement.decide_index, message_names, statement.decide_frames);
 			if (statement.decide_constraints) {
 				statement.decide_constraints =
 				    canonicalizer.CanonicalizeTree(*statement.decide_constraints, &statement.decide_constraint_sources);
+				// Before the walks below, which read a comparison that holds a decision.
+				shape_check.CheckConstraints(*statement.decide_constraints);
 				canonicalizer.PlaceFrames(*statement.decide_constraints, frame_placement);
 				canonicalizer.BuildConstraintSignatures(*statement.decide_constraints, signatures);
 				canonicalizer.VerifyCanonical(*statement.decide_constraints);
 				FinalizeConstraintSourceInfo(*statement.decide_constraints, statement.decide_constraint_sources,
 				                             statement.decide_text, statement.keyed_scopes, statement.decide_index,
 				                             &statement.decide_keys, statement.decide_frames);
-				shape_check.CheckConstraints(*statement.decide_constraints);
 				canonicalizer.SkipNullData(*statement.decide_constraints, statement.keyed_scopes,
 				                           statement.decide_keys);
 			}
@@ -219,6 +220,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 				}
 				statement.decide_objective = canonicalizer.CanonicalizeObjective(
 				    *statement.decide_objective, statement.objective_constant_offset, statement.decide_sense);
+				shape_check.CheckObjective(*statement.decide_objective);
 				canonicalizer.PlaceObjectiveFrames(*statement.decide_objective, frame_placement);
 				canonicalizer.BuildObjectiveSignatures(*statement.decide_objective, signatures);
 				canonicalizer.VerifyCanonicalObjective(*statement.decide_objective);
@@ -226,7 +228,6 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 				// alone is no difference to show.
 				canonical_objective = RenderDecideObjective(*statement.decide_objective, objective_names,
 				                                            statement.decide_sense == DecideSense::MAXIMIZE);
-				shape_check.CheckObjective(*statement.decide_objective);
 				objective_canonical_differs = canonical_objective != rendered_objective;
 				canonicalizer.SkipNullData(*statement.decide_objective, statement.keyed_scopes, statement.decide_keys);
 			}

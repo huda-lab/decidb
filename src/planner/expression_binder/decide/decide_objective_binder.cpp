@@ -26,7 +26,6 @@ BindResult DecideObjectiveBinder::BindScopedObjective(unique_ptr<ParsedExpressio
 		body = &when->children[0];
 	}
 	ErrorData body_error;
-	is_top_expression = true;
 	BindChild(*body, depth, body_error);
 	if (body_error.HasError()) {
 		return BindResult(std::move(body_error));
@@ -35,7 +34,6 @@ BindResult DecideObjectiveBinder::BindScopedObjective(unique_ptr<ParsedExpressio
 	if (!when) {
 		return BindResult(std::move(bound));
 	}
-	is_top_expression = false;
 	auto condition_error = BindDataChild(when->children[1], depth);
 	if (condition_error.HasError()) {
 		return BindResult(std::move(condition_error));
@@ -67,110 +65,32 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 		return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
 	}
 	auto &expr = *expr_ptr;
-	// Below the objective's top, an operand that reads no decision is data, whatever its
-	// shape: a parameter `$1`, a lambda and its parameters, a comparison.
-	if (!is_top_expression && IsDataOperand(expr)) {
-		return ExpressionBinder::BindExpression(expr_ptr, depth);
-	}
-	DecideRefusal refusal;
+	// Whether the objective reads a decision, and in what shape, is judged on the bound tree after canonicalization
+	// (DecideShapeCheck). What only the parsed tree can tell is left here.
 	switch (expr.GetExpressionClass()) {
-	case ExpressionClass::COLUMN_REF: {
-		// A decision is a complete objective on its own: a query-wide one has a single
-		// solver column, and any other must have one instance over the kept rows, which
-		// a scope check decides.
-		if (!is_top_expression || IsVariableExpression(expr, variables)) {
-			return ExpressionBinder::BindExpression(expr_ptr, depth);
-		}
-		break;
-	}
 	case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
-		if (is_top_expression && func.is_operator &&
-		    (func.function_name == SCOPE_PER_TAG || func.function_name == SCOPE_WHEN_TAG)) {
+		if (func.is_operator && (func.function_name == SCOPE_PER_TAG || func.function_name == SCOPE_WHEN_TAG)) {
 			return BindScopedObjective(expr_ptr, depth);
 		}
-		if (is_top_expression && GetExpressionType(expr, refusal) == DecideExpression::INVALID) {
-			return refusal.ToResult(expr);
-		}
-		is_top_expression = false;
 		return BindFunction(expr_ptr, depth);
 	}
 	case ExpressionClass::SUBQUERY:
-		return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
+	case ExpressionClass::WINDOW:
 	case ExpressionClass::DECIDE_FRAME:
-		// A frame over decisions is an objective on its own, as a decision is.
-		if (is_top_expression && !ExpressionContainsDecideVariable(expr, variables)) {
-			return BindResult(BinderException(
-			    expr, "%s", ReadsNoDecisionMessage(DecideWrittenSql(expr, qualifier_context->source_text))));
-		}
-		is_top_expression = false;
 		return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
-	case ExpressionClass::CASE:
-		// A CASE below the top binds as SQL; DecideShapeCheck refuses one over a decision.
-		if (!is_top_expression) {
-			return ExpressionBinder::BindExpression(expr_ptr, depth);
+	case ExpressionClass::COMPARISON:
+	case ExpressionClass::BETWEEN:
+	case ExpressionClass::CONJUNCTION:
+		// A comparison, BETWEEN or conjunction over a decision is a truth value, not a number.
+		if (ExpressionContainsDecideVariable(expr, variables)) {
+			return BindResult(BinderException(
+			    expr, "%s", ComparisonUsedAsNumberMessage(DecideWrittenSql(expr, qualifier_context->source_text))));
 		}
-		break;
-	case ExpressionClass::OPERATOR:
-		// The aggregate classifier already validated this reducer body before
-		// BindAggregate descends into it. A nested operator here is therefore a
-		// decision-free coefficient such as COALESCE(weight, 0); bind it with
-		// DuckDB's ordinary operator binder, matching the constraint binder.
-		if (!is_top_expression) {
-			return ExpressionBinder::BindExpression(expr_ptr, depth);
-		}
-		break;
+		return ExpressionBinder::BindExpression(expr_ptr, depth);
 	default:
-		break;
+		return ExpressionBinder::BindExpression(expr_ptr, depth);
 	}
-	auto written = DecideWrittenSql(expr, qualifier_context->source_text);
-	if (!ExpressionContainsDecideVariable(expr, variables)) {
-		return BindResult(BinderException(expr, "%s", ReadsNoDecisionMessage(written)));
-	}
-	// A comparison, BETWEEN or conjunction over a decision is a truth value, not a number.
-	if (expr.GetExpressionClass() == ExpressionClass::COMPARISON ||
-	    expr.GetExpressionClass() == ExpressionClass::BETWEEN ||
-	    expr.GetExpressionClass() == ExpressionClass::CONJUNCTION) {
-		return BindResult(BinderException(expr, "%s", ComparisonUsedAsNumberMessage(written)));
-	}
-	return BindResult(NotImplementedException(expr, "'%s' is not supported", written));
-}
-
-DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr_ptr, DecideRefusal &refusal) {
-	// A relation qualifier changes which tuples a reducer sums over, not what shape it
-	// is, so classification looks straight through it. Only a function reaches here
-	// (BindExpressionInternal).
-	auto &expr = const_cast<ParsedExpression &>(UnwrapReducerMarkers(expr_ptr));
-	auto &func = expr.Cast<FunctionExpression>();
-	auto fname = StringUtil::Lower(func.function_name);
-	DecideExpression reducer_result;
-	if (ClassifyReducerCall(func, reducer_result, refusal)) {
-		return reducer_result;
-	}
-	// Non-aggregate outer function. Only additive/scalar composition of
-	// aggregates (e.g. `SUM(x) + SUM(y)`, `-SUM(x)`, `c * SUM(x)`,
-	// `SUM(x) / K`) is allowed; wrapping an aggregate in a non-additive
-	// function (e.g. `POWER(AVG(x), 2)`, `SQRT(SUM(x))`, `LOG(...)`) is
-	// not a linearly-composable objective. Supported quadratic shape is
-	// SUM(POWER(_, 2)), not POWER(AGG(_), _).
-	bool is_additive_or_scalar = (fname == "+" || fname == "-" || fname == "*");
-	// Division is scalar only when the divisor does not contain a
-	// decide aggregate (otherwise the result is genuinely non-linear).
-	if (fname == "/" && func.children.size() == 2 && !ContainsDecideAggregate(*func.children[1])) {
-		is_additive_or_scalar = true;
-	}
-	if (is_additive_or_scalar && (ContainsDecideAggregate(expr) || ExpressionContainsDecideVariable(expr, variables))) {
-		return DecideExpression::SUM;
-	}
-	if (ContainsDecideAggregate(expr)) {
-		refusal.Set(func,
-		            StringUtil::Format("'%s' over a reducer is not supported in the objective",
-		                               DecideWrittenFunctionName(func)),
-		            true);
-		return DecideExpression::INVALID;
-	}
-	refusal.Set(func, StringUtil::Format("function '%s' is not supported here", DecideWrittenFunctionName(func)), true);
-	return DecideExpression::INVALID;
 }
 
 } // namespace duckdb

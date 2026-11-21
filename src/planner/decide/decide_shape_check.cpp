@@ -7,15 +7,18 @@
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_product_form.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
+#include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 
 namespace duckdb {
 
-DecideShapeCheck::DecideShapeCheck(ClientContext &context, idx_t decide_index, const DecideSourceNames &names)
-    : context(context), decide_index(decide_index), names(names) {
+DecideShapeCheck::DecideShapeCheck(ClientContext &context, idx_t decide_index, const DecideSourceNames &names,
+                                   const vector<DecideFrameSpec> &frames)
+    : context(context), decide_index(decide_index), names(names), frames(frames) {
 }
 
 void DecideShapeCheck::Refuse(const Expression &term, const string &problem) const {
@@ -93,14 +96,74 @@ static const Expression &HighestDegreeNode(ClientContext &context, const Express
 	return found ? HighestDegreeNode(context, *found, decide_index, degree) : term;
 }
 
+//! The first ABS over a decision under `expr`, or null.
+static const Expression *FindAbsOverDecision(const Expression &expr, idx_t decide_index) {
+	if (!BoundExpressionReferencesDecide(expr, decide_index)) {
+		return nullptr;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
+	    expr.Cast<BoundFunctionExpression>().function.name == "@") {
+		return &expr;
+	}
+	const Expression *found = nullptr;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		if (!found) {
+			found = FindAbsOverDecision(child, decide_index);
+		}
+	});
+	return found;
+}
+
+//! A frame reads its payload, and its `else`, at another row than the one its term stands on, so each is linear in the
+//! decisions: a square or a product there is a product across rows once the frame is written out (D80), and an ABS
+//! would lower into rows of its own that stand at the anchor.
+void DecideShapeCheck::CheckFramePart(const Expression &part) const {
+	if (DecideDegreeOf(context, part, decide_index).degree > 1) {
+		throw BinderException(part, "'%s' squares or multiplies decisions inside a frame, which is not allowed",
+		                      RenderDecideSource(part, names));
+	}
+	auto abs = FindAbsOverDecision(part, decide_index);
+	if (abs) {
+		throw NotImplementedException(*abs,
+		                              "'%s' inside a frame is not linear in the decisions, which is not supported",
+		                              RenderDecideSource(*abs, names));
+	}
+}
+
+void DecideShapeCheck::CheckFrames(const Expression &expr) const {
+	idx_t frame;
+	if (TryGetDecideFrame(expr, frame)) {
+		CheckFramePart(*expr.Cast<BoundAggregateExpression>().children[0]);
+		if (frames[frame].fallback) {
+			CheckFramePart(*frames[frame].fallback);
+		}
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { CheckFrames(child); });
+}
+
 void DecideShapeCheck::CheckSide(const Expression &side) const {
 	CheckVocabulary(side);
+	CheckFrames(side);
 	for (auto &atom : ReadCanonicalAtoms(side, decide_index)) {
 		auto degree = DecideDegreeOf(context, *atom.term, decide_index).degree;
 		if (degree > 2) {
 			throw NotImplementedException(HighestDegreeNode(context, *atom.term, decide_index, degree),
 			                              "a term of degree %llu is not supported", static_cast<uint64_t>(degree));
 		}
+	}
+}
+
+void DecideShapeCheck::CheckClause(const Expression &whole, const vector<const Expression *> &sides) const {
+	bool reads_decision = false;
+	for (auto side : sides) {
+		reads_decision = reads_decision || BoundExpressionReferencesDecide(*side, decide_index);
+	}
+	if (!reads_decision) {
+		throw BinderException(whole, "'%s' reads no decision", RenderDecideSource(whole, names));
+	}
+	for (auto side : sides) {
+		CheckSide(*side);
 	}
 }
 
@@ -111,13 +174,20 @@ void DecideShapeCheck::CheckConstraints(const Expression &constraints) const {
 			return;
 		}
 		auto &comparison = leaf.Cast<BoundComparisonExpression>();
-		CheckSide(*comparison.left);
-		CheckSide(*comparison.right);
+		CheckClause(comparison, {comparison.left.get(), comparison.right.get()});
 	});
 }
 
 void DecideShapeCheck::CheckObjective(const Expression &objective) const {
-	CheckSide(objective);
+	// The objective is the body of its clause: a `when` only chooses the rows.
+	const Expression *body = &objective;
+	if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+		auto &conjunction = body->Cast<BoundConjunctionExpression>();
+		if (IsWhenFilterWrapper(conjunction) && conjunction.children.size() == 2) {
+			body = conjunction.children[0].get();
+		}
+	}
+	CheckClause(*body, {body});
 }
 
 } // namespace duckdb

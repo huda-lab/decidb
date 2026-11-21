@@ -2609,7 +2609,7 @@ def test_a_frame_text_holds_no_tag(decidb_cli):
     frame = "at(next else 0: abs(CAST(t.v AS DOUBLE))) over (t.id)"
     sql = f"""SELECT id, x FROM (VALUES (1, 1.0::DOUBLE), (2, 2.0::DOUBLE)) t(id, v) DECIDE x(REAL)
         SUCH THAT x <= 7 MAXIMIZE sum(x) - {frame}"""
-    decidb_cli.assert_error_at(sql, kind="Binder Error", at=frame, word=f"'{frame}'")
+    decidb_cli.assert_error_at(sql, kind="Invalid Input Error", at=frame, word=f"'{frame}'")
 
 
 def test_a_frame_order_key_holds_no_tag(decidb_cli):

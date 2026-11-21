@@ -332,7 +332,7 @@ class TestCaseAnswersEverywhere:
         assert _dot([_case(r[1]) for r in _ROWS], _x(rows, cols)) == pytest.approx(expected)
 
     # Positions a refusal that has nothing to do with CASE reaches first: a reducer's FILTER is not supported yet,
-    # and a per-row value outside a reducer is no term of an objective.
+    # and a per-row value outside a reducer is a term of the objective that takes more than one value.
     _REFUSED_FIRST = {
         "aggregate bound, in a reducer's FILTER": (
             f"SUM(x) <= SUM(id) FILTER (WHERE {_CASE} = 1)",
@@ -346,8 +346,8 @@ class TestCaseAnswersEverywhere:
             "Not implemented Error",
             "SUM(x) FILTER",
         ),
-        "objective term": ("SUM(x) <= 3", f"SUM(x) + {_CASE}", "Binder Error", _CASE),
-        "objective under when": ("SUM(x) <= 3", f"when id > 2: SUM(x) + {_CASE}", "Binder Error", _CASE),
+        "objective term": ("SUM(x) <= 3", f"SUM(x) + {_CASE}", "Invalid Input Error", _CASE),
+        "objective under when": ("SUM(x) <= 3", f"when id > 2: SUM(x) + {_CASE}", "Invalid Input Error", _CASE),
     }
 
     @pytest.mark.parametrize("position", list(_REFUSED_FIRST))

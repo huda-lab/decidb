@@ -253,22 +253,14 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 		                                      &statement.decide_text);
 	}
 
+	// A `<`, `>` or `<>` over a REAL decision has no exact encoding — all three
+	// are encoded by stepping the bound one integer unit — and the declared type
+	// says so without reading a row. Rejecting here names the variable and quotes
+	// the clause; the model builder keeps only the value half of the refusal (a
+	// data column yielding a fractional coefficient).
 	if (statement.decide_constraints) {
-		// An aggregate over data that scales a decision is refused before symbolic
-		// normalization could distribute the decision into it.
-		ValidateDecideNoDataAggregateFactor(context, *statement.decide_constraints, decide_variable_names,
-		                                    &statement.decide_text);
-		// A `<`, `>` or `<>` over a REAL decision has no exact encoding — all three
-		// are encoded by stepping the bound one integer unit — and the declared type
-		// says so without reading a row. Rejecting here names the variable and quotes
-		// the clause; the model builder keeps only the value half of the refusal (a
-		// data column yielding a fractional coefficient).
 		ValidateDecideNoIntegerStepComparisonOnReal(*statement.decide_constraints, decide_variable_names, var_types,
 		                                            &statement.decide_text);
-	}
-	if (statement.decide_objective) {
-		ValidateDecideNoDataAggregateFactor(context, *statement.decide_objective, decide_variable_names,
-		                                    &statement.decide_text);
 	}
 
 	bind_context.AddGenericBinding(result.decide_index, "decide_variables", var_names, var_types);

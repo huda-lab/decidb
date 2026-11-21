@@ -75,6 +75,7 @@ public:
 		D_ASSERT(decide.decide_constraints);
 		Walk(*decide.decide_constraints, DecideEnclosingScope());
 		if (decide.decide_objective) {
+			in_objective = true;
 			WalkObjective(decide.decide_objective);
 		}
 	}
@@ -378,6 +379,13 @@ private:
 		auto result = calc.Out(InKey(key, column));
 		NameAsWritten(*result, reducer);
 		MarkReducerValue(*result);
+		if (in_objective && key == DConstants::INVALID_INDEX) {
+			// The objective is produced once: a reducer over data with no `by` is one value for the whole query, as a
+			// subquery is, so it may scale a reducer there.
+			auto alias = result->GetAlias();
+			AddDecideTag(alias, QUERY_WIDE_VALUE_TAG);
+			result->SetAlias(std::move(alias));
+		}
 		return result;
 	}
 
@@ -646,6 +654,8 @@ private:
 	//! What the reducers being rewritten are read as: a bound's value, or a coefficient's inside a reducer over
 	//! decisions.
 	DecideValueRole read_as = DecideValueRole::BOUND;
+	//! The objective is being rewritten, which is produced once.
+	bool in_objective = false;
 	vector<ReducerColumn> reducer_columns;
 };
 

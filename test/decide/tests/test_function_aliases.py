@@ -134,16 +134,13 @@ def test_alias_objective_composition_of_a_reducer_reads_the_primary(decidb_cli, 
 
 
 @pytest.mark.var_integer
-@pytest.mark.error
 @pytest.mark.correctness
-def test_alias_data_aggregate_factor_is_refused_as_its_operator_is(decidb_cli):
-    """`multiply(avg(v), SUM(x))` is refused as `avg(v) * SUM(x)` is: a data aggregate does not multiply a reducer.
-    (Inside a reducer, `SUM(avg(v) * x)`, it is a coefficient.)"""
-    sql = "SELECT id, x FROM {t} DECIDE x(INT) SUCH THAT x <= 4 MAXIMIZE {e}"
-    for written in ("avg(v) * SUM(x)", "multiply(avg(v), SUM(x))"):
-        decidb_cli.assert_error_at(
-            sql.format(t=_T, e=written), kind="Binder Error", at="avg(v)", word="'avg(v)' reduces data"
-        )
+def test_alias_data_aggregate_factor_reads_the_primary(decidb_cli):
+    """`multiply(avg(v), SUM(x))` is `avg(v) * SUM(x)`: a data aggregate is one value that scales a reducer."""
+    sql = "SELECT id, x FROM {t} DECIDE x(INT) SUCH THAT x <= 4 MAXIMIZE {e} ORDER BY id"
+    assert _rows(decidb_cli, sql.format(t=_T, e="multiply(avg(v), SUM(x))")) == _rows(
+        decidb_cli, sql.format(t=_T, e="avg(v) * SUM(x)")
+    )
 
 
 @pytest.mark.var_integer

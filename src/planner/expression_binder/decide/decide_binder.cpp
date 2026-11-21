@@ -224,47 +224,6 @@ static void ValidateScopeData(const ParsedExpression &expr, const case_insensiti
 	ValidateNoScopeSpelling(expr, text);
 }
 
-//! A power that is no first power: `power(e, k)`, `pow`, `e ** k`, `e ^ k` with `k` other
-//! than the constant 1.
-static bool IsNonlinearPower(const FunctionExpression &func) {
-	auto name = StringUtil::Lower(func.function_name);
-	bool power = (func.is_operator && (name == "**" || name == "^")) ||
-	             (!func.is_operator && (name == "power" || name == "pow"));
-	if (!power || func.children.size() != 2) {
-		return false;
-	}
-	auto &exponent = *func.children[1];
-	if (exponent.GetExpressionClass() == ExpressionClass::CONSTANT) {
-		auto &value = exponent.Cast<ConstantExpression>().value;
-		return value.IsNull() || !value.type().IsNumeric() || value.GetValue<double>() != 1.0;
-	}
-	return true;
-}
-
-//! Whether `expr` squares or multiplies decisions: a product with a decision in two of
-//! its factors, or a power of a decision other than the first.
-static bool MultipliesDecisions(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
-	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
-		auto &func = expr.Cast<FunctionExpression>();
-		if (IsNonlinearPower(func) && ExpressionContainsDecideVariable(*func.children[0], variables)) {
-			return true;
-		}
-		if (func.is_operator && func.function_name == "*") {
-			idx_t factors = 0;
-			for (auto &child : func.children) {
-				factors += ExpressionContainsDecideVariable(*child, variables) ? 1 : 0;
-			}
-			if (factors > 1) {
-				return true;
-			}
-		}
-	}
-	bool found = false;
-	ParsedExpressionIterator::EnumerateChildren(
-	    expr, [&](const ParsedExpression &child) { found = found || MultipliesDecisions(child, variables); });
-	return found;
-}
-
 //! A frame's order key or `within` key: data only, with no frame or window inside.
 static void ValidateFrameKey(const ParsedExpression &key, const case_insensitive_map_t<idx_t> &variables,
                              const DecideSourceText *text) {
@@ -301,35 +260,6 @@ static void ValidateFramePayload(const ParsedExpression &expr, const DecideFrame
 	    expr, [&](const ParsedExpression &child) { ValidateFramePayload(child, frame, text); });
 }
 
-//! The first node of `expr` that holds a decision and reads it other than linearly: a call
-//! other than `+`, `-`, `*` and `/` over one (`abs(x - 3)`), or a decision divisor. A data
-//! subtree, whatever it computes, is a coefficient. Null when `expr` is linear.
-static optional_ptr<const ParsedExpression> FindNonlinearDecisionUse(const ParsedExpression &expr,
-                                                                     const case_insensitive_map_t<idx_t> &variables) {
-	if (!ExpressionContainsDecideVariable(expr, variables) ||
-	    expr.GetExpressionClass() == ExpressionClass::COLUMN_REF) {
-		return nullptr;
-	}
-	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
-		return &expr;
-	}
-	auto &func = expr.Cast<FunctionExpression>();
-	auto name = func.function_name;
-	if (!func.is_operator || (name != "+" && name != "-" && name != "*" && name != "/")) {
-		return &expr;
-	}
-	if (name == "/" && func.children.size() == 2 && ExpressionContainsDecideVariable(*func.children[1], variables)) {
-		return &expr;
-	}
-	for (auto &child : func.children) {
-		auto found = FindNonlinearDecisionUse(*child, variables);
-		if (found) {
-			return found;
-		}
-	}
-	return nullptr;
-}
-
 static void ValidateFrame(const DecideFrameExpression &frame, const case_insensitive_map_t<idx_t> &variables,
                           const DecideSourceText *text) {
 	ValidateFrameKey(*frame.order, variables, text);
@@ -340,21 +270,6 @@ static void ValidateFrame(const DecideFrameExpression &frame, const case_insensi
 		if (value) {
 			ValidateFramePayload(*value, frame, text);
 			ValidateNoScopeSpelling(*value, text);
-			// A frame's term is linear: its payload is read at another row, and a square
-			// there is a product across rows once the frame is written out (D80).
-			if (MultipliesDecisions(*value, variables)) {
-				throw BinderException(*value,
-				                      "'%s' squares or multiplies decisions inside a frame, which is not allowed",
-				                      DecideWrittenSql(*value, text));
-			}
-			// So is anything else over a decision a rewrite would lower into rows of its own:
-			// those rows stand at the anchor, while the frame reads its payload elsewhere.
-			auto nonlinear = FindNonlinearDecisionUse(*value, variables);
-			if (nonlinear) {
-				throw NotImplementedException(
-				    *nonlinear, "'%s' inside a frame is not linear in the decisions, which is not supported",
-				    DecideWrittenSql(*nonlinear, text));
-			}
 		}
 	}
 	// A frame reads a decision through its payload: the layers below see a frame's payload,
@@ -593,10 +508,6 @@ string ArgumentCountMessage(const string &call, idx_t count) {
 	return StringUtil::Format("'%s' has %llu argument%s", call, count, count == 1 ? "" : "s");
 }
 
-string ReadsNoDecisionMessage(const string &expression) {
-	return StringUtil::Format("'%s' reads no decision", expression);
-}
-
 string SubqueryNotScalarMessage() {
 	return "a subquery in a DECIDE clause is not scalar";
 }
@@ -612,14 +523,6 @@ static string NotANumberMessage(const string &fallback_text) {
 
 string FractionalComparisonMessage(const string &comparison, const string &operand) {
 	return StringUtil::Format("'%s' compares '%s', which can take fractional values", comparison, operand);
-}
-
-BindResult DecideRefusal::ToResult(const ParsedExpression &fallback) const {
-	auto &node = at ? *at : fallback;
-	if (not_implemented) {
-		return BindResult(NotImplementedException(node, "%s", message));
-	}
-	return BindResult(BinderException(node, "%s", message));
 }
 
 void ThrowIfOuterColumn(Binder &binder, const ColumnRefExpression &column) {
@@ -793,88 +696,6 @@ bool ContainsDecideAggregate(const ParsedExpression &expr) {
 		return ContainsDecideAggregate(*cast.child);
 	}
 	return false;
-}
-
-// True when the function name resolves to an AGGREGATE in the catalog. These
-// are rejected (with an aggregate-specific error) in BindAggregate, so we must
-// not also false-flag them here as "non-linear scalars".
-static bool IsAggregateFunctionName(ClientContext &context, const FunctionExpression &func) {
-	auto entry = Catalog::GetEntry(context, CatalogType::SCALAR_FUNCTION_ENTRY, func.catalog, func.schema,
-	                               func.function_name, OnEntryNotFound::RETURN_NULL);
-	return entry && entry->type == CatalogType::AGGREGATE_FUNCTION_ENTRY;
-}
-
-// The first aggregate over table columns only (no DECIDE variable anywhere in its
-// argument) in `expr` -- e.g. `AVG(price)`, `MIN(cost)` -- or null. Such a
-// value needs the whole row set, so it is a scalar the query must pre-compute,
-// not a per-row coefficient. Recurses so nested forms (`AVG(p) * 2`) are caught,
-// but not into a reducer over decisions: its operand is a scoped expression of
-// its own (deck p. 29), checked where the walk reaches it, so in
-// `2 * sum(x - avg(v) by (h)) by (g)` the `avg` scales no decision.
-static optional_ptr<const ParsedExpression> FindDataOnlyAggregate(ClientContext &context, const ParsedExpression &expr,
-                                                                  const case_insensitive_map_t<idx_t> &variables) {
-	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
-		auto &func = expr.Cast<const FunctionExpression>();
-		if (IsAggregateFunctionName(context, func)) {
-			return ExpressionContainsDecideVariable(expr, variables) ? nullptr : &expr;
-		}
-	}
-	optional_ptr<const ParsedExpression> found;
-	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
-		if (!found) {
-			found = FindDataOnlyAggregate(context, child, variables);
-		}
-	});
-	return found;
-}
-
-//! `in_reducer`: `expr` stands in the argument of a reducer over decisions. There a reducer over data alone is a value
-//! of its path's group, a coefficient like any data (language/guide.md §5.5; deck p. 51), so it may scale or divide a
-//! decision.
-static void ValidateDecideNoDataAggregateFactor(ClientContext &context, const ParsedExpression &expr,
-                                                const case_insensitive_map_t<idx_t> &variables,
-                                                const DecideSourceText *text, bool in_reducer) {
-	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
-		auto &func = expr.Cast<const FunctionExpression>();
-		if (!in_reducer && func.function_name == "*" && ExpressionContainsDecideVariable(expr, variables)) {
-			// A data-only aggregate multiplied by a decision variable
-			// (`SUM(avg(p) * x)`) is not a per-row coefficient: the aggregate
-			// spans all rows. Symbolic normalization would silently distribute the
-			// variable into it (`avg(p)*x` -> `avg(p*x)`, a different constraint) and
-			// return a wrong optimum, so reject it here — before normalization —
-			// consistent with the direct `SUM(sum(p) * x)` rejection.
-			auto data_aggregate = FindDataOnlyAggregate(context, expr, variables);
-			if (data_aggregate) {
-				throw BinderException(*data_aggregate, "'%s' reduces data, which cannot multiply a decision",
-				                      DecideWrittenSql(*data_aggregate, text));
-			}
-		}
-		// A data-only aggregate stays on the bound side (S10). Like the multiplier
-		// above, it may not share a scaled term with a decision: as the divisor, or
-		// inside the dividend (`(sum(x) + sum(cap)) / 2`).
-		if (!in_reducer && func.function_name == "/" && ExpressionContainsDecideVariable(expr, variables)) {
-			auto data_aggregate = FindDataOnlyAggregate(context, expr, variables);
-			if (data_aggregate) {
-				auto divisor = FindDataOnlyAggregate(context, *func.children[1], variables);
-				auto &culprit = divisor ? *divisor : *data_aggregate;
-				throw BinderException(culprit, "'%s' reduces data, which cannot %s a decision",
-				                      DecideWrittenSql(culprit, text), divisor ? "divide" : "be divided together with");
-			}
-		}
-	}
-	bool below = in_reducer;
-	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
-		auto &func = expr.Cast<const FunctionExpression>();
-		below = below || (IsAggregateFunctionName(context, func) && ExpressionContainsDecideVariable(expr, variables));
-	}
-	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
-		ValidateDecideNoDataAggregateFactor(context, child, variables, text, below);
-	});
-}
-
-void ValidateDecideNoDataAggregateFactor(ClientContext &context, const ParsedExpression &expr,
-                                         const case_insensitive_map_t<idx_t> &variables, const DecideSourceText *text) {
-	ValidateDecideNoDataAggregateFactor(context, expr, variables, text, false);
 }
 
 //! Does this node reduce whatever is under it to an integer, whatever that operand's
@@ -1286,89 +1107,6 @@ void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t deci
 	});
 }
 
-string DecideWrittenFunctionName(const FunctionExpression &func) {
-	return StringUtil::CIEquals(func.function_name, "count_star") ? "count(*)"
-	                                                              : DecideWrittenName(func.alias, func.function_name);
-}
-
-//! A reducer's argument, read for what only the binder can see: a subquery that is not scalar or that reads a
-//! decision, a truth value over a decision, and an ABS of the wrong arity. Sets `has_decide_variable` when the
-//! argument reads a decision. Its algebra is DecideShapeCheck's, after canonicalization.
-static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
-                                        const DecideSourceText *text, bool &has_decide_variable,
-                                        DecideRefusal &refusal) {
-	switch (expr.GetExpressionClass()) {
-	case ExpressionClass::COLUMN_REF:
-		if (IsVariableExpression(expr, variables)) {
-			has_decide_variable = true;
-		}
-		return true;
-	case ExpressionClass::FUNCTION: {
-		auto &func = expr.Cast<FunctionExpression>();
-		auto func_name_lower = StringUtil::Lower(func.function_name);
-		if (func.is_operator) {
-			break;
-		}
-		if (func_name_lower == "@" && func.children.size() != 1) {
-			refusal.Set(expr, ArgumentCountMessage(DecideWrittenSql(expr, text), func.children.size()));
-			return false;
-		}
-		if (IsDecideAggregateName(func.function_name)) {
-			// A nested reducer (language/guide.md §5.5): its body is held to the rule of any reducer's.
-			if (func.children.size() == 1 && ExpressionContainsDecideVariable(*func.children[0], variables)) {
-				auto &body = const_cast<ParsedExpression &>(ReducerArgumentBody(*func.children[0]));
-				return ValidateSumArgumentInternal(body, variables, text, has_decide_variable, refusal);
-			}
-			// One over data alone is a value of its path's group (RewriteRhsAggregates).
-			return true;
-		}
-		break;
-	}
-	case ExpressionClass::SUBQUERY: {
-		auto &subquery = expr.Cast<SubqueryExpression>();
-		if (subquery.subquery_type != SubqueryType::SCALAR) {
-			refusal.Set(expr, SubqueryNotScalarMessage());
-			return false;
-		}
-		if (ExpressionContainsDecideVariable(expr, variables)) {
-			refusal.Set(expr, SubqueryReadsDecisionMessage());
-			return false;
-		}
-		return true;
-	}
-	case ExpressionClass::COMPARISON:
-	case ExpressionClass::BETWEEN:
-	case ExpressionClass::CONJUNCTION:
-		// A truth value over a decision is no term of a sum; over data it is a 0/1 coefficient.
-		if (ExpressionContainsDecideVariable(expr, variables)) {
-			refusal.Set(expr, ComparisonUsedAsNumberMessage(DecideWrittenSql(expr, text)));
-			return false;
-		}
-		return true;
-	default:
-		break;
-	}
-	bool valid = true;
-	ParsedExpressionIterator::EnumerateChildren(expr, [&](ParsedExpression &child) {
-		valid = valid && ValidateSumArgumentInternal(child, variables, text, has_decide_variable, refusal);
-	});
-	return valid;
-}
-
-bool ValidateSumArgument(ParsedExpression &reducer, ParsedExpression &argument,
-                         const case_insensitive_map_t<idx_t> &variables, const DecideSourceText *text,
-                         DecideRefusal &refusal) {
-	bool has_decide_variable = false;
-	if (!ValidateSumArgumentInternal(argument, variables, text, has_decide_variable, refusal)) {
-		return false;
-	}
-	if (!has_decide_variable) {
-		refusal.Set(reducer, ReadsNoDecisionMessage(DecideWrittenSql(reducer, text)));
-		return false;
-	}
-	return true;
-}
-
 DecideBinder::DecideBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables,
                            const case_insensitive_set_t &scalar_variables,
                            optional_ptr<DecideQualifierContext> qualifier_context)
@@ -1416,6 +1154,7 @@ bool DecideBinder::IsDataOperand(const ParsedExpression &expr) const {
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::FUNCTION:
 	case ExpressionClass::SUBQUERY:
+	case ExpressionClass::WINDOW:
 		return false;
 	default:
 		// A frame selector over data is a value read at another row, which only the DECIDE binder reads.
@@ -1452,44 +1191,6 @@ bool DecideBinder::IsRowInvariantExpression(const ParsedExpression &expr) const 
 	return invariant;
 }
 
-bool DecideBinder::ClassifyReducerCall(FunctionExpression &func, DecideExpression &result, DecideRefusal &refusal) {
-	auto fname = StringUtil::Lower(func.function_name);
-	auto text = qualifier_context->source_text;
-	if (fname == "norm") {
-		if (func.children.empty()) {
-			refusal.Set(func, ArgumentCountMessage(DecideWrittenSql(func, text), 0));
-			result = DecideExpression::INVALID;
-		} else if (!ValidateSumArgument(func, *func.children.front(), variables, text, refusal)) {
-			result = DecideExpression::INVALID;
-		} else {
-			result = DecideExpression::SUM;
-		}
-		return true;
-	}
-	if (IsDecideAggregateName(fname)) {
-		// A reducer takes one argument: MAX(x, n) and MIN(x, n) are DuckDB's top-n aggregates, which return a list.
-		if (func.children.size() != 1) {
-			refusal.Set(func, ArgumentCountMessage(DecideWrittenSql(func, text), func.children.size()));
-			result = DecideExpression::INVALID;
-			return true;
-		}
-		// The value reduced is the argument's body; a `when` or `per` in front of it only
-		// chooses the rows.
-		auto &body = const_cast<ParsedExpression &>(ReducerArgumentBody(*func.children.front()));
-		if (ExpressionContainsDecideVariable(body, variables) && IsRowInvariantExpression(body)) {
-			refusal.Set(func, StringUtil::Format("'%s' is a query-wide decision, so '%s' has no rows to reduce",
-			                                     DecideWrittenSql(body, text), DecideWrittenSql(func, text)));
-			result = DecideExpression::INVALID;
-		} else if (!ValidateSumArgument(func, body, variables, text, refusal)) {
-			result = DecideExpression::INVALID;
-		} else {
-			result = DecideExpression::SUM;
-		}
-		return true;
-	}
-	return false;
-}
-
 BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) {
 	ErrorData error;
 
@@ -1500,6 +1201,22 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 	if (!IsDecideAggregateName(func.name) && func.name != "count" && func.name != "count_star") {
 		return BindResult(NotImplementedException(aggr, "'%s' is not supported in a DECIDE clause",
 		                                          DecideWrittenSql(aggr, qualifier_context->source_text)));
+	}
+
+	// A reducer takes one argument: MAX(x, n) and MIN(x, n) are DuckDB's top-n aggregates, which return a list.
+	if (IsDecideAggregateName(func.name) && aggr.children.size() != 1) {
+		return BindResult(BinderException(
+		    aggr, "%s",
+		    ArgumentCountMessage(DecideWrittenSql(aggr, qualifier_context->source_text), aggr.children.size())));
+	}
+	// A reducer whose body holds the same value on every row (`sum(y)` over a query-wide `y`) reads one of two ways,
+	// once or once per row, which are different problems. A norm counts a body's rows by definition, and a frame's
+	// range reduces the rows of its frame.
+	if (IsDecideAggregateName(func.name) && !binding_frame_range && !HasDecideTag(aggr.alias, NORM_MARKER_TAG_PREFIX) &&
+	    ExpressionContainsDecideVariable(*aggr.children[0], variables) && IsRowInvariantExpression(*aggr.children[0])) {
+		auto text = qualifier_context->source_text;
+		return BindResult(BinderException(aggr, "'%s' is a query-wide decision, so '%s' has no rows to reduce",
+		                                  DecideWrittenSql(*aggr.children[0], text), DecideWrittenSql(aggr, text)));
 	}
 
 	// COUNT over a DECIDE variable is degenerate: decision variables are never null, so
@@ -1798,7 +1515,9 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 		arguments.push_back(std::move(frame.payload));
 		unique_ptr<ParsedExpression> call = make_uniq<FunctionExpression>(name, std::move(arguments));
 		call->SetQueryLocation(frame.GetQueryLocation());
+		binding_frame_range = true;
 		auto bound = BindFunction(call, depth);
+		binding_frame_range = false;
 		if (bound.HasError()) {
 			return bound;
 		}
@@ -2039,6 +1758,9 @@ BindResult DecideBinder::BindExpressionInternal(unique_ptr<ParsedExpression> &ex
 	auto &expr = *expr_ptr;
 	if (expr.GetExpressionClass() == ExpressionClass::DECIDE_FRAME) {
 		return BindDecideFrame(expr.Cast<DecideFrameExpression>(), depth);
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::WINDOW) {
+		return BindUnsupportedExpression(expr, depth, "a window function is not allowed in a DECIDE clause");
 	}
 	// The constraints and objective binders call this for a frame, at any depth, and for a subquery they met at depth
 	// 0, and bind every other class themselves.

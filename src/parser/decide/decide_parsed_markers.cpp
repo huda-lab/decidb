@@ -55,14 +55,6 @@ const ParsedExpression &UnwrapReducerMarkers(const ParsedExpression &expr) {
 	return *result;
 }
 
-const ParsedExpression &ReducerArgumentBody(const ParsedExpression &argument) {
-	const ParsedExpression *body = &argument;
-	while (IsDecideScopeMarker(*body)) {
-		body = body->Cast<FunctionExpression>().children[0].get();
-	}
-	return *body;
-}
-
 string WithoutEnclosingParentheses(const string &text) {
 	if (text.size() < 2 || text.front() != '(' || text.back() != ')') {
 		return text;

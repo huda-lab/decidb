@@ -36,9 +36,6 @@ bool TakesReducerBy(const ParsedExpression &expr);
 //! The call under a reducer's `by` and colon-form markers.
 const ParsedExpression &UnwrapReducerMarkers(const ParsedExpression &expr);
 
-//! A reducer argument's body under the scopes written in front of it.
-const ParsedExpression &ReducerArgumentBody(const ParsedExpression &argument);
-
 //! `text` without the one pair of parentheses that encloses all of it, else `text` itself.
 string WithoutEnclosingParentheses(const string &text);
 

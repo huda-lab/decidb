@@ -1174,25 +1174,6 @@ DebugInitialize EnumUtil::FromString<DebugInitialize>(const char *value) {
 	return static_cast<DebugInitialize>(StringUtil::StringToEnum(GetDebugInitializeValues(), 3, "DebugInitialize", value));
 }
 
-const StringUtil::EnumStringLiteral *GetDecideExpressionValues() {
-	static constexpr StringUtil::EnumStringLiteral values[] {
-		{ static_cast<uint32_t>(DecideExpression::INVALID), "INVALID" },
-		{ static_cast<uint32_t>(DecideExpression::VARIABLE), "VARIABLE" },
-		{ static_cast<uint32_t>(DecideExpression::SUM), "SUM" }
-	};
-	return values;
-}
-
-template<>
-const char* EnumUtil::ToChars<DecideExpression>(DecideExpression value) {
-	return StringUtil::EnumToString(GetDecideExpressionValues(), 3, "DecideExpression", static_cast<uint32_t>(value));
-}
-
-template<>
-DecideExpression EnumUtil::FromString<DecideExpression>(const char *value) {
-	return static_cast<DecideExpression>(StringUtil::StringToEnum(GetDecideExpressionValues(), 3, "DecideExpression", value));
-}
-
 const StringUtil::EnumStringLiteral *GetDecideKeyNullModeValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 	    {static_cast<uint32_t>(DecideKeyNullMode::NO_GROUP), "NO_GROUP"},

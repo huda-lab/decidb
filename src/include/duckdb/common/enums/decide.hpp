@@ -22,8 +22,6 @@ class Deserializer;
 
 enum class DecideSense : uint8_t { MAXIMIZE = 0, MINIMIZE = 1, FEASIBILITY = 2 };
 
-enum class DecideExpression : uint8_t { INVALID = 0, VARIABLE, SUM };
-
 //! How one DECIDE declaration maps onto solver columns.
 //!   ROW        — `x(INT)`, `per row: x(INT)` one column per result row
 //!   KEYED      — `per K: x(INT)`             one column per distinct value of the key

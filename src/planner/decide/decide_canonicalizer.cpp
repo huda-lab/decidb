@@ -1330,12 +1330,11 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 			decision_atoms.push_back(std::move(atom));
 			continue;
 		}
-		// A decision-free additive term shifts the objective without moving its
-		// argmax/argmin, so it is peeled here and the body downstream is pure decision
-		// algebra. Peeling it requires knowing its value, which is exactly the
-		// foldable case; a row-varying or query-executed term has no single value to
-		// fold and does not belong in an objective at all. A factor distributed onto
-		// it (`2 * (sum(x) - 1)`) is part of its value.
+		// A decision-free additive term shifts the objective without moving its argmax/argmin. One whose value is
+		// known before the query runs is peeled here, and the body downstream is pure decision algebra. A factor
+		// distributed onto it (`2 * (sum(x) - 1)`) is part of its value. Any other (a column, a data reducer, a
+		// subquery) stays a term: it is one value, which the model adds to its constant, and one that differs
+		// between the kept rows is a second objective (D72), which execution refuses.
 		double value = 0;
 		unique_ptr<Expression> scaled;
 		if (atom.scale) {
@@ -1343,7 +1342,8 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 			                            : BindOp("*", atom.scale->Copy(), atom.expr->Copy());
 		}
 		if (!TryEvaluateFoldableDouble(context, scaled ? *scaled : *atom.expr, value, FOLD_PLAIN)) {
-			throw BinderException(*atom.expr, "%s", ReadsNoDecisionMessage(Quote(*atom.expr)));
+			decision_atoms.push_back(std::move(atom));
+			continue;
 		}
 		out_constant_offset += (negate ? -atom.sign : atom.sign) * value;
 	}

@@ -17,7 +17,9 @@
 //     query runs;
 //   - a division by a decision;
 //   - a CASE over a decision (a CASE over data is a per-row coefficient);
-//   - a term of degree above 2, which no backend takes.
+//   - a term of degree above 2, which no backend takes;
+//   - a clause that reads no decision at all (a comparison, or the objective's body);
+//   - a square, a product or an ABS of decisions inside a frame.
 // Each refusal states what the model does not take and points at the term.
 //
 //===----------------------------------------------------------------------===//
@@ -32,10 +34,12 @@ namespace duckdb {
 
 class ClientContext;
 struct DecideSourceNames;
+struct DecideFrameSpec;
 
 class DecideShapeCheck {
 public:
-	DecideShapeCheck(ClientContext &context, idx_t decide_index, const DecideSourceNames &names);
+	DecideShapeCheck(ClientContext &context, idx_t decide_index, const DecideSourceNames &names,
+	                 const vector<DecideFrameSpec> &frames);
 
 	//! Judge every comparison of the canonical constraint tree.
 	void CheckConstraints(const Expression &constraints) const;
@@ -43,8 +47,14 @@ public:
 	void CheckObjective(const Expression &objective) const;
 
 private:
-	//! One side of a comparison, or the objective: its vocabulary, then the degree of each term.
+	//! One clause of the query, `whole`, read as `sides`: a comparison and its two sides, or the objective's body. It
+	//! raises when no side reads a decision, then judges each side.
+	void CheckClause(const Expression &whole, const vector<const Expression *> &sides) const;
+	//! One side of a comparison, or the objective: its vocabulary, its frames, then the degree of each term.
 	void CheckSide(const Expression &side) const;
+	//! The frames under `expr`: each reads its payload and `else` linearly.
+	void CheckFrames(const Expression &expr) const;
+	void CheckFramePart(const Expression &part) const;
 	//! Refuse the first decision-bearing node under `expr` the model has no reading for.
 	void CheckVocabulary(const Expression &expr) const;
 	[[noreturn]] void Refuse(const Expression &term, const string &problem) const;
@@ -52,6 +62,8 @@ private:
 	ClientContext &context;
 	idx_t decide_index;
 	const DecideSourceNames &names;
+	//! The frame selectors (LogicalDecide::frames), whose `else` stands in no bound tree.
+	const vector<DecideFrameSpec> &frames;
 };
 
 } // namespace duckdb

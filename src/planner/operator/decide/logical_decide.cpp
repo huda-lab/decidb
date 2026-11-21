@@ -281,6 +281,8 @@ void LogicalDecide::SetObjective(ClientContext &context, unique_ptr<Expression> 
 		return;
 	}
 	DecideCanonicalizer canonicalizer(context, decide_index, variable_scopes, keyed_scopes, keys, is_boolean_var);
+	DecideSourceNames names {source_text, keyed_scopes, keys};
+	canonicalizer.QuoteMessagesWith(names);
 	decide_objective = canonicalizer.CanonicalizeObjective(*objective, objective_constant_offset);
 	canonicalizer.VerifyCanonicalObjective(*decide_objective);
 }

@@ -30,7 +30,6 @@ protected:
 	BindResult BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression);
 
 private:
-	DecideExpression GetExpressionType(ParsedExpression &expr, DecideRefusal &refusal) override;
 	//! Binds `[when c] [per ()]: objective`: `per ()` is the objective's only key and adds
 	//! nothing; `when c` becomes the WHEN wrapper.
 	BindResult BindScopedObjective(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);

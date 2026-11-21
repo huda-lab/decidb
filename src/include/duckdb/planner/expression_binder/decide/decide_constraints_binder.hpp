@@ -27,7 +27,6 @@ protected:
 
 private:
 	BindResult BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression);
-	DecideExpression GetExpressionType(ParsedExpression &expr, DecideRefusal &refusal) override;
 	BindResult BindComparison(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
 	BindResult BindOperator(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
 	BindResult BindBetween(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);

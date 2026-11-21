@@ -187,7 +187,7 @@ def test_table_macro_parameters(decidb_cli, oracle_solver):
 @pytest.mark.parametrize(
     "bound",
     [
-        pytest.param("4 * CAST(b > 0 AND b < 5 AS INT)", id="and"),  # IsAllowedDecisionFreeBoundExpression: AND
+        pytest.param("4 * CAST(b > 0 AND b < 5 AS INT)", id="and"),  # a conjunction over data is data
         pytest.param("4 * CAST(b BETWEEN 1 AND 3 AS INT)", id="between"),  # and a BETWEEN
     ],
 )
@@ -205,7 +205,7 @@ def test_a_truth_value_over_data_in_a_bound(decidb_cli, oracle_solver, bound):
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_a_conjunction_in_a_reducer_coefficient(decidb_cli, oracle_solver):
-    """ValidateSumArgumentInternal reads a truth value over data as a 0/1 coefficient, a conjunction too."""
+    """A truth value over data in a reducer's body is a 0/1 coefficient, a conjunction too."""
     rows, cols = decidb_cli.execute(
         f"""
         SELECT id, x FROM {_TABLE} DECIDE x(INT)
@@ -237,8 +237,7 @@ def test_a_function_over_a_decision_that_folds_to_a_constant(decidb_cli, oracle_
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_an_operator_over_data_beside_a_reducer(decidb_cli, oracle_solver):
-    """`COALESCE(cap, 0) + SUM(x) <= 10`: the data term moves to the bound, which is the tightest row's (ContainsDecideAggregate
-    reads through the COALESCE, an operator, to the reducer beside it)."""
+    """`COALESCE(cap, 0) + SUM(x) <= 10`: the data term moves to the bound, which is the tightest row's."""
     rows, cols = decidb_cli.execute(
         f"""
         SELECT id, x FROM {_TABLE} DECIDE x(INT)
