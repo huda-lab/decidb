@@ -22,7 +22,7 @@ using namespace decide_linearize; // NOLINT: internal DECIDE linearization helpe
 //===--------------------------------------------------------------------===//
 
 //! The ±1 band is only semantically exact when the LHS is integer-valued, which the bind-time type gate
-//! (ValidateDecideNoIntegerStepComparisonOnReal, ValidateDecideIntegralComparisonOperands) guarantees. With
+//! (DecideShapeCheck::CheckIntegerStep) guarantees. With
 //! such an LHS and a non-integer K, `LHS <> K` is a tautology (no integer can equal K). The ±1 Big-M rewrite would
 //! emit `LHS <= K-1 ∨ LHS >= K+1`, which on the integer lattice wrongly excludes
 //! floor(K) and ceil(K) — both of which the original predicate accepted. Treat such

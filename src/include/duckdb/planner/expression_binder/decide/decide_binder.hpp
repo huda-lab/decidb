@@ -43,10 +43,6 @@ string ArgumentCountMessage(const string &call, idx_t count);
 //! A subquery in a clause that is not scalar, or that reads a decision.
 string SubqueryNotScalarMessage();
 string SubqueryReadsDecisionMessage();
-//! A strict or <> comparison over a quantity that can take fractional values: `<`, `>` and `<>` step the bound onto
-//! the whole numbers, which is exact only on them.
-string FractionalComparisonMessage(const string &comparison, const string &operand);
-
 //! Throws that refusal, naming `column` as written, when `column`, which did not resolve in `binder`'s own
 //! query, resolves in an outer one. The outer binders are asked only to qualify the name, as DuckDB's retry does, and
 //! bind nothing. A DECIDE clause is rebound in the outer binder by that retry, which knows no DECIDE construct, so the
@@ -126,68 +122,6 @@ void ValidateDecideScopeSpellings(const ParsedExpression &expr, const case_insen
                                   bool objective, const DecideSourceText *text);
 
 bool ContainsDecideAggregate(const ParsedExpression &expr);
-
-//! Reject a `<`, `>` or `<>` whose comparison references a REAL decision variable.
-//!
-//! All three are encoded by stepping the bound one integer unit: `< K` becomes
-//! `<= K-1`, and `<> K` becomes the disjunction `<= K-1 OR >= K+1`. Both are exact
-//! only when the compared side is confined to integer points. A REAL decision has no
-//! such confinement, so `<` would cut feasible continuous solutions and return a
-//! wrong optimum, and `<>` would excise a whole band around a point that has no
-//! width. (`{v : v != K}` over the reals is an open set, and no MILP feasible region
-//! — a finite union of closed polyhedra — can represent one, so `<>` on a continuous
-//! quantity has no correct encoding at all, not merely an inexact one.)
-//!
-//! This is the structural half of a refusal that also has a value half: a data
-//! column can produce a fractional coefficient over integer decisions, which is
-//! knowable only after the scan and stays in the model builder. The declared type
-//! is knowable here, from the query text alone, so this half rejects at bind time
-//! and can name the variable and the clause the user wrote.
-//!
-//! The rule is stated on the type of the *compared quantity*, not on every type
-//! appearing beneath it: `norm(e, 0, M)` counts nonzeros and is integer-valued by
-//! definition, so a REAL `e` underneath one is not what is being compared and does
-//! not trigger the refusal. See `IsIntegerValuedReducer`.
-//!
-//! `variable_types` is indexed as the DECIDE columns are; `variables` maps each
-//! declared name onto that index.
-void ValidateDecideNoIntegerStepComparisonOnReal(const ParsedExpression &expr,
-                                                 const case_insensitive_map_t<idx_t> &variables,
-                                                 const vector<LogicalType> &variable_types,
-                                                 const DecideSourceText *text);
-
-//! Reject a `<`, `>` or `<>` whose compared side is not provably whole-numbered from
-//! its **declared types**, naming the column and its type.
-//!
-//! The companion to the validator above, and the same refusal: that one reads the
-//! decision's declared type off the DECIDE clause, this one reads every other operand's
-//! type off the bound tree. Together they are the whole of the integrality gate — the
-//! model builder refuses nothing a user can cause.
-//!
-//! **This is a type judgement, not a value judgement.** A `DECIMAL(15,2)` column whose
-//! rows all happen to hold whole numbers is still refused, because the alternative makes
-//! a query's *validity* depend on which rows are in the table: inserting one fractional
-//! row would make a working query illegal. The declared type is the contract, and the
-//! message names the cast that states the assumption explicitly. `DECIMAL(p, 0)` carries
-//! its scale in the type and so is accepted without one.
-//!
-//! Two shapes are whole-numbered whatever they contain, and are exempt:
-//!   - `norm(e, 0, M)` counts nonzeros, so it is a count however `e` is typed.
-//!   - `AVG(e) <> K` only, whose denominator is hoisted to the right-hand side
-//!     (`SUM(e) <> K*n`), leaving an integral left side. The hoist is specific to `<>`;
-//!     `AVG(e) < K` keeps its fractional 1/n coefficients and is refused.
-//!
-//! Runs on the bound tree, because a parsed tree has no types yet.
-//! `decide_index` identifies the DECIDE binding, so a side that references no decision
-//! can be recognised as the bound `K` and skipped.
-//! `names` quotes an operand of a clause as written.
-void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t decide_index,
-                                              const DecideSourceNames &names);
-
-//! Whether every value `expr` can take is whole, by declared types, every addend counted:
-//! `sum(x + 0.5)` is not, `sum(power(x, 2))` is. The test a helper decision standing for
-//! a reducer takes (stage 05's value rewrite), by the same rules as the gate above.
-bool DecideValueIsWholeNumbered(const Expression &expr, idx_t decide_index);
 
 //! The DecideBinder is a base class for binders in DECIDE statements
 class DecideBinder : public ExpressionBinder {

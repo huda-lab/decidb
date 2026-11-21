@@ -29,6 +29,7 @@
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_reducer_path.hpp"
+#include "duckdb/planner/decide/decide_shape_check.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
@@ -211,7 +212,7 @@ struct Helpers {
 //! `<`, `>` and `<>` step onto the whole numbers, which is exact for the row only when the helper is whole. The
 //! binder admitted the clause by its own reading: a constant beside the decisions inside a SUM moves to the bound when
 //! the reducer is summed in place (`sum(x + 0.5) > 4` is `sum(x) > 4 - 0.5 * n`), but a helper holds the whole value.
-//! The message is the binder's (ValidateDecideIntegralComparisonOperands), raised at `location`: the comparison's,
+//! The message is stage 04's (DecideShapeCheck::CheckIntegerStep), raised at `location`: the comparison's,
 //! which canonicalization may have rebuilt, else the clause's.
 void RefuseFractionalStep(const BoundAggregateExpression &agg, const DecideSourceNames &names, idx_t decide_index,
                           const BoundComparisonExpression &comparison, optional_idx location) {

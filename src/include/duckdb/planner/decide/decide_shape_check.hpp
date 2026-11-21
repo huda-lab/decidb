@@ -33,8 +33,18 @@
 namespace duckdb {
 
 class ClientContext;
+class BoundComparisonExpression;
 struct DecideSourceNames;
 struct DecideFrameSpec;
+
+//! A strict or <> comparison over a quantity that can take fractional values: `<`, `>` and `<>` step the bound onto
+//! the whole numbers, which is exact only on them.
+string FractionalComparisonMessage(const string &comparison, const string &operand);
+
+//! Whether every value `expr` can take is whole, by declared types, every addend counted: `sum(x + 0.5)` is not,
+//! `sum(power(x, 2))` is. The test a helper decision standing for a reducer takes (stage 05's value rewrite), by the
+//! same rules as the integer-step check of a comparison.
+bool DecideValueIsWholeNumbered(const Expression &expr, idx_t decide_index);
 
 class DecideShapeCheck {
 public:
@@ -50,6 +60,8 @@ private:
 	//! One clause of the query, `whole`, read as `sides`: a comparison and its two sides, or the objective's body. It
 	//! raises when no side reads a decision, then judges each side.
 	void CheckClause(const Expression &whole, const vector<const Expression *> &sides) const;
+	//! A `<`, `>` or `<>` compares a side that is whole-numbered by declared types, else it is refused.
+	void CheckIntegerStep(const BoundComparisonExpression &comparison) const;
 	//! One side of a comparison, or the objective: its vocabulary, its frames, then the degree of each term.
 	void CheckSide(const Expression &side) const;
 	//! The frames under `expr`: each reads its payload and `else` linearly.

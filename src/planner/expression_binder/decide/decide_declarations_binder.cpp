@@ -253,16 +253,6 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 		                                      &statement.decide_text);
 	}
 
-	// A `<`, `>` or `<>` over a REAL decision has no exact encoding — all three
-	// are encoded by stepping the bound one integer unit — and the declared type
-	// says so without reading a row. Rejecting here names the variable and quotes
-	// the clause; the model builder keeps only the value half of the refusal (a
-	// data column yielding a fractional coefficient).
-	if (statement.decide_constraints) {
-		ValidateDecideNoIntegerStepComparisonOnReal(*statement.decide_constraints, decide_variable_names, var_types,
-		                                            &statement.decide_text);
-	}
-
 	bind_context.AddGenericBinding(result.decide_index, "decide_variables", var_names, var_types);
 	// Query-wide decisions (`per (): x`), so the constraint and objective binders can
 	// tell a query-wide decision from a per-row one.
@@ -290,12 +280,6 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 		result.decide_constraints = decide_constraints_binder.Bind(constraints);
 		if (result.decide_constraints) {
 			RefuseVolatile(*result.decide_constraints);
-			// The other half of the integer-step gate. The parsed-tree validator above
-			// read the decision's declared type off the DECIDE clause; every other
-			// operand's type is only known now that binding has resolved it. Together
-			// they are the whole refusal; the model builder raises none.
-			DecideSourceNames names {statement.decide_text, keyed_scopes, keys};
-			ValidateDecideIntegralComparisonOperands(*result.decide_constraints, result.decide_index, names);
 			result.decide_constraint_sources = InitializeConstraintSourceInfo(
 			    *result.decide_constraints, statement.decide_text, keyed_scopes, result.decide_index, &keys, frames);
 		}

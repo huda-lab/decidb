@@ -303,7 +303,7 @@ bool DecideReadSingletonRow(ClientContext &context, const LogicalDecide &decide,
 	auto type_id = decide.decide_variables[out.var_idx]->return_type.id();
 	bool whole = type_id == LogicalTypeId::INTEGER || type_id == LogicalTypeId::BIGINT;
 	// A strict bound steps onto the whole numbers (`x < 10` admits 9). The binder refuses one on a REAL, which has no
-	// such step (ValidateDecideIntegralComparisonOperands).
+	// such step (DecideShapeCheck::CheckIntegerStep).
 	D_ASSERT(whole || (type != ExpressionType::COMPARE_LESSTHAN && type != ExpressionType::COMPARE_GREATERTHAN));
 	// The right side moved onto `a * x`.
 	auto r = calc.Cast(calc.Of(*comparison.right), LogicalType::DOUBLE);

@@ -1211,6 +1211,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 		auto swapped = make_uniq<BoundComparisonExpression>(FlipComparisonExpression(cmp.type), cmp.right->Copy(),
 		                                                    cmp.left->Copy());
 		swapped->SetAlias(cmp.GetAlias());
+		DecideReplaces(*swapped, cmp);
 		return CanonicalizeComparisonInternal(*swapped);
 	}
 
@@ -1258,6 +1259,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 	// it is never copied from whichever side happened to be the original RHS.
 	auto result = make_uniq<BoundComparisonExpression>(cmp.type, std::move(new_lhs), std::move(new_rhs));
 	result->SetAlias(cmp.GetAlias());
+	DecideReplaces(*result, cmp);
 	return FinalizeBoundProvenance(std::move(result));
 }
 

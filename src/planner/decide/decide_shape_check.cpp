@@ -10,6 +10,8 @@
 #include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -154,6 +156,201 @@ void DecideShapeCheck::CheckSide(const Expression &side) const {
 	}
 }
 
+//===--------------------------------------------------------------------===//
+// Integrality of a compared side, from declared types
+//===--------------------------------------------------------------------===//
+
+string FractionalComparisonMessage(const string &comparison, const string &operand) {
+	return StringUtil::Format("'%s' compares '%s', which can take fractional values", comparison, operand);
+}
+
+//! Does this type guarantee whole-numbered values?
+//!
+//! `DECIMAL` carries its scale in the type, so `DECIMAL(15, 0)` qualifies and `DECIMAL(15, 2)` does not, whatever its
+//! rows hold. No floating type qualifies: `DOUBLE` can hold `3.0`, but nothing in the type says it must, and a rule
+//! that read the stored values would make a query's validity change when a row is inserted.
+static bool DecideTypeIsWholeNumbered(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::BOOLEAN:
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::HUGEINT:
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
+	case LogicalTypeId::UINTEGER:
+	case LogicalTypeId::UBIGINT:
+	case LogicalTypeId::UHUGEINT:
+		return true;
+	case LogicalTypeId::DECIMAL:
+		return DecimalType::GetScale(type) == 0;
+	default:
+		return false;
+	}
+}
+
+//! Is this bound node the inert `norm(e, 0, M)` marker? The L0 "norm" counts nonzeros, so its value is a count whatever
+//! `e` is typed as.
+static bool IsBoundL0NormMarker(const Expression &expr) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		return false;
+	}
+	string payload;
+	return ExtractDecideTagPayload(expr.alias, NORM_MARKER_TAG_PREFIX, payload) && StringUtil::StartsWith(payload, "0");
+}
+
+//! Is this bound node an AVG aggregate? A range frame's marker is a value of the row, which no rewrite multiplies
+//! through.
+static bool IsBoundAvgAggregate(const Expression &expr) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		return false;
+	}
+	auto &agg = expr.Cast<BoundAggregateExpression>();
+	idx_t frame;
+	return StringUtil::CIEquals(agg.function.name, "avg") && !TryParseFrameTag(agg.GetAlias(), frame);
+}
+
+//! Is `expr` provably whole-numbered from declared types alone?
+//!
+//! `allow_avg_hoist` is set only for `<>`, whose rewrite multiplies both sides by the group size and so compares
+//! `SUM(e)` against `K*n`: integral whenever `e` is. A strict comparison has no such hoist and keeps AVG's fractional
+//! 1/n coefficients.
+//!
+//! `addends_count` is set where a decision-free addend is part of the value rather than of the bound: inside a MIN or
+//! MAX (canonicalization has already moved the constant addends beside it), and under anything that is not linear in
+//! it: a power, a product of decisions, a norm of order 1, 2 or 'inf'.
+static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoist, idx_t decide_index,
+                                      bool addends_count = false) {
+	if (IsBoundL0NormMarker(expr)) {
+		return true;
+	}
+	if (allow_avg_hoist && IsBoundAvgAggregate(expr)) {
+		return DecideSideIsWholeNumbered(*expr.Cast<BoundAggregateExpression>().children[0], false, decide_index,
+		                                 addends_count);
+	}
+	switch (expr.GetExpressionClass()) {
+	case ExpressionClass::BOUND_CAST: {
+		// A cast to a whole-numbered type makes the value one; a widening cast of an already-whole operand keeps it
+		// one.
+		auto &cast = expr.Cast<BoundCastExpression>();
+		return DecideTypeIsWholeNumbered(cast.return_type) ||
+		       DecideSideIsWholeNumbered(*cast.child, allow_avg_hoist, decide_index, addends_count);
+	}
+	case ExpressionClass::BOUND_AGGREGATE: {
+		auto &agg = expr.Cast<BoundAggregateExpression>();
+		const auto &name = agg.function.name;
+		// A frame is a value of the row, every addend and its `else` part of it: whole when the type its payload and
+		// `else` share is, and a range's SUM, MIN or MAX of them; an AVG range divides.
+		idx_t frame;
+		if (TryParseFrameTag(agg.GetAlias(), frame)) {
+			return !StringUtil::CIEquals(name, "avg") && agg.children.size() == 1 &&
+			       DecideTypeIsWholeNumbered(agg.children[0]->return_type);
+		}
+		const bool extremum = StringUtil::CIEquals(name, "min") || StringUtil::CIEquals(name, "max");
+		if (extremum && agg.children.size() == 1) {
+			return DecideSideIsWholeNumbered(*agg.children[0], false, decide_index, true);
+		}
+		if (StringUtil::CIEquals(name, "sum")) {
+			return DecideSideIsWholeNumbered(*agg.children[0], false, decide_index,
+			                                 addends_count || HasDecideTag(agg.alias, NORM_MARKER_TAG_PREFIX));
+		}
+		return DecideTypeIsWholeNumbered(expr.return_type);
+	}
+	case ExpressionClass::BOUND_FUNCTION: {
+		// Sums, differences and products of whole numbers are whole. Division is not.
+		auto &func = expr.Cast<BoundFunctionExpression>();
+		const auto &name = func.function.name;
+		if (name == "+" || name == "-") {
+			for (const auto &child : func.children) {
+				// An addend that reads no decision is part of the bound: `x + 1000003.50 < K` is exactly
+				// `x < K - 1000003.50`, and `x` is still on the lattice.
+				if (!addends_count && !BoundExpressionReferencesDecide(*child, decide_index)) {
+					continue;
+				}
+				if (!DecideSideIsWholeNumbered(*child, allow_avg_hoist, decide_index, addends_count)) {
+					return false;
+				}
+			}
+			return true;
+		}
+		if (name == "*") {
+			// Every factor matters, decision-bearing or not: a fractional multiplier rescales the decision off the
+			// lattice (`0.5 * x`). A product of decisions is not linear in either factor's addends.
+			idx_t decision_factors = 0;
+			for (const auto &child : func.children) {
+				decision_factors += BoundExpressionReferencesDecide(*child, decide_index);
+			}
+			for (const auto &child : func.children) {
+				if (!DecideSideIsWholeNumbered(*child, allow_avg_hoist, decide_index,
+				                               addends_count || decision_factors > 1)) {
+					return false;
+				}
+			}
+			return true;
+		}
+		// A whole number raised to a whole power is whole, so `POWER(x, 2)` stays on the lattice though the function's
+		// return type is DOUBLE.
+		// (The vocabulary check has refused any other exponent.)
+		if (name == "**") {
+			return DecideSideIsWholeNumbered(*func.children[0], allow_avg_hoist, decide_index, true);
+		}
+		return DecideTypeIsWholeNumbered(expr.return_type);
+	}
+	default:
+		return DecideTypeIsWholeNumbered(expr.return_type);
+	}
+}
+
+bool DecideValueIsWholeNumbered(const Expression &expr, idx_t decide_index) {
+	return DecideSideIsWholeNumbered(expr, false, decide_index, /*addends_count=*/true);
+}
+
+//! The first operand that is not whole-numbered, for the message: a named leaf over the composite above it
+//! (`l_quantity`, not `sum((x * l_quantity))`), in the order the side reads.
+static bool FindFractionalOperand(const Expression &expr, bool allow_avg_hoist, idx_t decide_index,
+                                  const DecideSourceNames &names, string &out) {
+	if (DecideSideIsWholeNumbered(expr, allow_avg_hoist, decide_index)) {
+		return false;
+	}
+	// A norm is named as written, not by the definition canonicalization gave it.
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+	    DecideWrittenNormBody(expr.Cast<BoundAggregateExpression>())) {
+		out = RenderDecideSource(expr, names);
+		return true;
+	}
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		if (!found) {
+			found = FindFractionalOperand(child, allow_avg_hoist, decide_index, names, out);
+		}
+	});
+	if (found) {
+		return true;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		out = expr.Cast<BoundColumnRefExpression>().GetName();
+		return true;
+	}
+	// No fractional leaf underneath: the node itself is what produces fractions, named as written.
+	out = RenderDecideSource(expr, names);
+	return true;
+}
+
+//! `<`, `>` and `<>` step the bound onto the whole numbers, which is exact only where the compared side, the left one
+//! in the canonical form, is whole-numbered. A fractional bound is no error: no whole number equals 2.5.
+void DecideShapeCheck::CheckIntegerStep(const BoundComparisonExpression &comparison) const {
+	const auto type = comparison.type;
+	const bool strict = type == ExpressionType::COMPARE_LESSTHAN || type == ExpressionType::COMPARE_GREATERTHAN;
+	const bool not_equal = type == ExpressionType::COMPARE_NOTEQUAL;
+	string operand;
+	if ((!strict && !not_equal) || !FindFractionalOperand(*comparison.left, not_equal, decide_index, names, operand)) {
+		return;
+	}
+	const char *op = not_equal ? "<>" : type == ExpressionType::COMPARE_LESSTHAN ? "<" : ">";
+	throw NotImplementedException(comparison, "%s", FractionalComparisonMessage(op, operand));
+}
+
 void DecideShapeCheck::CheckClause(const Expression &whole, const vector<const Expression *> &sides) const {
 	bool reads_decision = false;
 	for (auto side : sides) {
@@ -175,6 +372,7 @@ void DecideShapeCheck::CheckConstraints(const Expression &constraints) const {
 		}
 		auto &comparison = leaf.Cast<BoundComparisonExpression>();
 		CheckClause(comparison, {comparison.left.get(), comparison.right.get()});
+		CheckIntegerStep(comparison);
 	});
 }
 

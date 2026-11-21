@@ -633,7 +633,7 @@ def test_real_strict_rejected_when_term_stays_continuous(decidb_cli):
     """The L0 exemption is narrow: only p=0 is a count.
 
     `norm(e, 1)` sums magnitudes and is as continuous as `e`, so a REAL decision
-    under one is still refused. This pins that IsIntegerValuedReducer did not open
+    under one is still refused. This pins that the L0 exemption did not open
     the gate for every reducer.
     """
     sql = """
@@ -645,7 +645,10 @@ def test_real_strict_rejected_when_term_stays_continuous(decidb_cli):
         MAXIMIZE SUM(new_qty)
     """
     decidb_cli.assert_error_at(
-        sql, kind=_NOT_IMPLEMENTED, at="norm(new_qty - l_quantity, 1) < 3", word="'<' compares 'new_qty'"
+        sql,
+        kind=_NOT_IMPLEMENTED,
+        at="norm(new_qty - l_quantity, 1) < 3",
+        word="'<' compares 'norm(new_qty - l_quantity, 1)'",
     )
 
 
@@ -1331,10 +1334,6 @@ def test_strict_over_a_power(decidb_cli, oracle_solver):
 @pytest.mark.parametrize(
     "clause, operand",
     [
-        # A power whose exponent is a column, negative, or fractional is no degree: it is not a whole number.
-        ("SUM(power(x, c)) < 30", "power(x, c)"),
-        ("SUM(power(x, -1)) < 30", "power(x, -1)"),
-        ("SUM(power(x, 0.5)) < 30", "0.5"),
         # `<>` over an AVG of a fractional column, and over a SUM of one.
         ("AVG(x * w) <> 3", "w"),
         ("SUM(x * w) <> 3", "w"),

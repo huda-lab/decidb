@@ -817,9 +817,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 	};
 
 	// Helper: apply comparison sense to a constraint. A strict `<` / `>` steps the bound to the next integer, which
-	// is exact because the bind-time type gate (ValidateDecideNoIntegerStepComparisonOnReal,
-	// ValidateDecideIntegralComparisonOperands) admits only an integer-valued left-hand side.
-	// `rhs` already has the LHS constant `lhs_offset` moved off it; the typed K added back.
+	// is exact because the bind-time type gate (DecideShapeCheck::CheckIntegerStep) admits only an integer-valued
+	// left-hand side. `rhs` already has the LHS constant `lhs_offset` moved off it; the typed K added back.
 	auto ApplyComparisonSense = [&](ModelConstraint &constr, ExpressionType cmp, double rhs, double lhs_offset) {
 		if (cmp == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
 			constr.sense = '>';
