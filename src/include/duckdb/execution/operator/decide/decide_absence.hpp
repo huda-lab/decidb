@@ -72,4 +72,41 @@ private:
 	const vector<DecideFrameMap> *frames = nullptr;
 };
 
+//! The one check of the rule: a term reading a decision with no instance at a row has no value there (D84), whether the
+//! term stands in a row, beside a reducer or in a reducer, and whether the decision is a keyed one or a helper no row
+//! holds a member of. Built over the terms a clause reads, once, from those that may read none; `At` is then asked per
+//! row.
+class DecideAbsentReads {
+public:
+	DecideAbsentReads(const DecideAbsence &absence, const vector<DecideTerm> &terms) : absence(absence) {
+		for (auto &term : terms) {
+			Add(term);
+		}
+	}
+	explicit DecideAbsentReads(const DecideAbsence &absence) : absence(absence) {
+	}
+	void Add(const DecideTerm &term) {
+		if (absence.MayBe(term)) {
+			may_read_none.push_back(&term);
+		}
+	}
+	//! Whether some term may read no value at some row.
+	bool Any() const {
+		return !may_read_none.empty();
+	}
+	//! Whether some term reads no value at `row`.
+	bool At(idx_t row) const {
+		for (auto term : may_read_none) {
+			if (absence.TermAt(*term, row)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+private:
+	const DecideAbsence &absence;
+	vector<const DecideTerm *> may_read_none;
+};
+
 } // namespace duckdb

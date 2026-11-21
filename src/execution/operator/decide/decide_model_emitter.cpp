@@ -570,22 +570,20 @@ void DecideModelEmitter::Constraints() {
 	}
 	// The folded bounds follow under DIAGNOSE, numbered after every other clause: only the repair model emits them.
 	const idx_t num_evaluated = num_constraints + (op.diagnose ? tree.singleton_row_count : 0);
-	// A folded bound on a helper no row holds a member of has no value wherever it is read (D84), as a clause that is a
-	// row has none: the data answers it as for that row, which reports that it constrains nothing, and the bound stays
-	// in the box.
+	// A helper no row holds a member of has no value wherever a clause reads it (D84), a folded bound included: the
+	// data answers it as for a row, which reports that it constrains nothing, and the bound stays in the box. (A folded
+	// bound on a keyed decision of the user's is not read again: it has its own reports.)
 	for (idx_t c = num_evaluated; c < roots.size() && !op.diagnose; c++) {
 		auto &clause = *tree.nodes[roots[c]]->compiled.clause;
-		const bool reads_helper =
-		    !clause.lhs_is_aggregate &&
-		    std::any_of(clause.lhs_terms.begin(), clause.lhs_terms.end(), [&](const DecideTerm &term) {
-			    if (term.variable_index >= op.variable_scopes.size() ||
-			        !op.variable_scopes[term.variable_index].IsKeyed()) {
-				    return false;
-			    }
-			    auto &scope = op.keyed_scopes[op.variable_scopes[term.variable_index].keyed_scope_idx];
-			    return scope.value_link != DConstants::INVALID_INDEX && columns.Absence().MayBe(term);
-		    });
-		if (reads_helper) {
+		DecideAbsentReads helper_reads(columns.Absence());
+		for (auto &term : clause.lhs_terms) {
+			if (term.variable_index < op.variable_scopes.size() && op.variable_scopes[term.variable_index].IsKeyed() &&
+			    op.keyed_scopes[op.variable_scopes[term.variable_index].keyed_scope_idx].value_link !=
+			        DConstants::INVALID_INDEX) {
+				helper_reads.Add(term);
+			}
+		}
+		if (!clause.lhs_is_aggregate && helper_reads.Any()) {
 			Rows(roots[c], true);
 		}
 	}
@@ -673,22 +671,12 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 	}
 	// A term reading a decision with no instance at the row has no value there (D84), nor has an auxiliary where what
 	// defines it has none (D88).
-	vector<const DecideTerm *> absent_terms;
-	for (auto &term : clause.lhs_terms) {
-		if (columns.Absence().MayBe(term)) {
-			absent_terms.push_back(&term);
-		}
-	}
+	const DecideAbsentReads absent_reads(columns.Absence(), clause.lhs_terms);
 	vector<bool> null_rows = std::move(definition_absent);
 	std::vector<bool> &nulled = null_rows;
 	const std::vector<bool> &null_entries = nulls;
-	ForEachRead(root, tested, false, [&](idx_t row, idx_t entry) {
-		bool null = null_entries[entry];
-		for (auto term : absent_terms) {
-			null = null || columns.Absence().TermAt(*term, row);
-		}
-		nulled[row] = null;
-	});
+	ForEachRead(root, tested, false,
+	            [&](idx_t row, idx_t entry) { nulled[row] = null_entries[entry] || absent_reads.At(row); });
 	if (clause.admitted_lower) {
 		Admit(body, evaluated);
 	}
@@ -966,14 +954,12 @@ void DecideModelEmitter::ReadBesideReducers(idx_t root, const DecideTerm &term, 
                                             vector<bool> &null_rows) {
 	vector<bool> nulls(descent.Containers()[root].Count(), false);
 	auto numbers = columns.Numbers(root, program, columns.Tested(root), &nulls);
-	// A term reading a decision with no instance at the row has no value there (D84): a helper no row holds a member
-	// of is such a decision.
-	const bool absent = columns.Absence().MayBe(term);
+	DecideAbsentReads absent_reads(columns.Absence());
+	absent_reads.Add(term);
 	column.AssignDense(num_rows);
 	for (auto read : rows) {
 		column.Set(read.first, numbers[read.second]);
-		null_rows[read.first] =
-		    null_rows[read.first] || nulls[read.second] || (absent && columns.Absence().TermAt(term, read.first));
+		null_rows[read.first] = null_rows[read.first] || nulls[read.second] || absent_reads.At(read.first);
 	}
 }
 
@@ -1005,8 +991,10 @@ vector<bool> DecideModelEmitter::ReadInReducer(const DecideTerm &term, const Dec
 	const auto values = numbers.data();
 	const std::vector<bool> &null_entries = nulls;
 	std::vector<bool> &nulled = null_rows;
+	DecideAbsentReads absent_reads(columns.Absence());
+	absent_reads.Add(term);
 	Filter(site.node, term.qualifier_scope_idx, reads, selected_rows, filter, members, [&](idx_t row, idx_t entry) {
-		if (columns.Absence().TermAt(term, row)) {
+		if (absent_reads.At(row)) {
 			nulled[row] = true;
 			return;
 		}
@@ -1284,12 +1272,15 @@ void DecideModelEmitter::ReadPart(const DecideTermSite &site, idx_t qualifier_sc
 	// Stage 05 leaves a weight of 1 out.
 	auto numbers = site.program == DConstants::INVALID_INDEX ? vector<double>(reads.size(), double(sign))
 	                                                         : columns.Numbers(site.node, site.program, reads, &nulls);
-	const bool absent = term && columns.Absence().MayBe(*term);
+	DecideAbsentReads absent_reads(columns.Absence());
+	if (term) {
+		absent_reads.Add(*term);
+	}
 	column.AssignDense(num_rows);
 	const auto coefficients = column.MutableDense().data();
 	ForEachTermRead(site.node, reads, qualifier_scope, selected_rows, [&](idx_t row, idx_t entry) {
 		coefficients[row] = numbers[entry];
-		null_rows[row] = null_rows[row] || nulls[entry] || (absent && columns.Absence().TermAt(*term, row));
+		null_rows[row] = null_rows[row] || nulls[entry] || absent_reads.At(row);
 	});
 }
 
