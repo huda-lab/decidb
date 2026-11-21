@@ -230,16 +230,15 @@ void LinearizeAbsMaximize(SolverInput &input);
 //! column -- linear rows of plain clauses and the linear objective, or the members of one outer helper -- where doing
 //! so adds no nonzero to the model (D89), counted on the data: an instance of `m` terms read `k` times costs `m * k`
 //! written in, against `m + 1` for its definition and `k` for its reads. `held` lists the decisions read where only a
-//! column can stand and SolverInput does not show it: a composed MIN/MAX term, a bound folded into its column's box,
-//! a flat MIN/MAX objective's terms. One read by an outer helper's members -- a nested reducer -- is written into
-//! them, each term reading an instance becoming that instance's terms; one read by rows and the objective is marked
-//! `inlined`, for the model builder to write its members where they read it. Either way its variable becomes
-//! DecideVarScope::INLINED, with no column. A MIN or MAX group of one member is that member, written in group by
-//! group (SolverInput::written_in); an outer MIN or MAX that may close natively takes only instances read once.
-//! `minmax_values` are G/O MIN/MAX outputs whose non-singleton formulas stay explicit. SUM/AVG values remain eligible
-//! for recursive expansion into their readers. A singleton MIN/MAX group may be written directly at its readers,
-//! since its reducer value is that one member (deck p. 112). Returns whether a helper was inlined or written through:
-//! the column space must then be laid out again.
+//! column can stand and SolverInput does not show it: a bound folded into its column's box. One read by an outer
+//! helper's members -- a nested reducer -- is written into them, each term reading an instance becoming that instance's
+//! terms; one read by rows and the objective is marked `inlined`, for the model builder to write its members where they
+//! read it. Either way its variable becomes DecideVarScope::INLINED, with no column. A MIN or MAX group of one member
+//! is that member, written in group by group (SolverInput::written_in); an outer MIN or MAX that may close natively
+//! takes only instances read once. `minmax_values` are G/O MIN/MAX outputs whose non-singleton formulas stay explicit.
+//! SUM/AVG values remain eligible for recursive expansion into their readers. A singleton MIN/MAX group may be written
+//! directly at its readers, since its reducer value is that one member (deck p. 112). Returns whether a helper was
+//! inlined or written through: the column space must then be laid out again.
 bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, const vector<idx_t> &minmax_values);
 
 //! The value rewrite's helper decisions (SolverInput::reducer_value_links), phase 1: box
@@ -489,11 +488,10 @@ struct ExtremumMemberSource {
 };
 
 //! `result = MIN/MAX(members)`, in flat columns. Every MIN/MAX auxiliary in the model is
-//! one of these: the flat objective's `z`, a `by` group's `z_g`, the outer `w` over
-//! those or over group sums, and each composed term's `z_k`.
+//! one of these: a helper decision's definition, per group of its path key.
 //!
-//! Two independent sides, because which of them the surrounding model already supplies
-//! differs by site and is not a property of the construct:
+//! Two independent sides, because which of them the readers of the helper already supply
+//! differs and is not a property of the construct:
 //!
 //!   - The **envelope** (`result >= member` for MAX) holds `result` at or above every
 //!     member. An objective that minimizes `result` supplies it for free.
@@ -501,9 +499,8 @@ struct ExtremumMemberSource {
 //!     member and a `SUM(y) >= 1` that makes one bind. An objective that maximizes
 //!     `result` supplies it for free.
 //!
-//! An objective-side link needs exactly one of them, and which one is the easy/hard
-//! classification stage 05 makes. A composed link sits in a *constraint*, where no
-//! optimization pressure exists at all, so its hard direction needs both.
+//! A helper needs the side its readers push it against, and both when they push it nowhere (`=`, `<>`, a
+//! factor of unknown sign); which one is the polarity stage 05 records (DecideHelperSides).
 struct ExtremumLinkSpec {
 	idx_t result_column = DConstants::INVALID_INDEX;
 	bool is_max = false;
@@ -522,13 +519,6 @@ struct ExtremumLinkSpec {
 	//! Names every column and binary this emits, through the global label channel, so a
 	//! diagnosis renders `MAX(x)` rather than an internal column.
 	string label;
-	//! The two sides can carry different provenance. A composed clause's closing rows
-	//! ARE the user's clause and are loosenable; its envelope is mechanism, and an
-	//! objective's linking rows are structural throughout.
-	ConstraintKind envelope_kind = ConstraintKind::STRUCTURAL;
-	ConstraintKind closing_kind = ConstraintKind::STRUCTURAL;
-	idx_t source_clause_id = DConstants::INVALID_INDEX;
-	idx_t removal_group_id = DConstants::INVALID_INDEX;
 };
 
 //! Emit one extremum link, in whichever form the policy and the spec call for. This is

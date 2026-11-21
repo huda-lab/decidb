@@ -28,9 +28,9 @@ static idx_t Parts(const DecideConstraint &clause) {
 DecideModelEmitter::DecideModelEmitter(const PhysicalDecide &op, ClientContext &context, const DecideTree &tree,
                                        const DecideDescent &descent, DecideTreeColumns &columns,
                                        DecideGlobalSinkState &gstate, vector<SolverInput::KeyValues> &key_values,
-                                       const DecideSourceNames &names, idx_t num_rows, DataChunk &first)
+                                       const DecideSourceNames &names, idx_t num_rows)
     : op(op), context(context), tree(tree), descent(descent), columns(columns), gstate(gstate), key_values(key_values),
-      names(names), num_rows(num_rows), first(first) {
+      names(names), num_rows(num_rows) {
 }
 
 SolverInput::KeyValues DecideGroupKeyValues(const DecideTree &tree, const DecideDescent &descent, idx_t node) {

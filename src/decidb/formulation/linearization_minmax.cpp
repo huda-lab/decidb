@@ -41,8 +41,7 @@ using namespace decide_linearize; // NOLINT: internal DECIDE linearization helpe
 //! `link` holds member `i`'s `(result - expr)`, so a renaming reads as the single coefficient `-1`. The member's reach
 //! is asked of `members` only once it is known to need a column.
 static int ExtremumArgumentColumn(SolverInput &input, const VarIndexer &indexer, const MinMaxLinkRow &link,
-                                  const ExtremumMemberSource &members, idx_t i, const string &label,
-                                  idx_t source_clause_id, idx_t removal_group_id) {
+                                  const ExtremumMemberSource &members, idx_t i, const string &label) {
 	int sole_column = -1;
 	double sole_coefficient = 0.0;
 	idx_t surviving = 0;
@@ -62,8 +61,6 @@ static int ExtremumArgumentColumn(SolverInput &input, const VarIndexer &indexer,
 	pin.sense = '=';
 	pin.rhs = link.constant;
 	pin.kind = ConstraintKind::STRUCTURAL;
-	pin.source_clause_id = source_clause_id;
-	pin.removal_group_id = removal_group_id;
 	input.global_constraints.push_back(std::move(pin));
 	return (int)t_idx;
 }
@@ -87,19 +84,13 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
 	};
 
 	// A family of one member is that member (deck p. 112): one equality pins `result` from both sides, with no
-	// indicator and no Big-M -- so a side no box bounds needs none. It takes the kind of the side the site needs,
-	// where that side is mechanism a diagnosis never loosens; a composed clause's closing rows are its user's clause,
-	// loosened one way, which an equality would not be.
-	const auto one_kind = spec.need_closing ? spec.closing_kind : spec.envelope_kind;
-	const bool kinds_agree = !(spec.need_envelope && spec.need_closing && spec.envelope_kind != spec.closing_kind);
-	if (members.count == 1 && kinds_agree && !IsRelaxableForElastic(one_kind)) {
+	// indicator and no Big-M -- so a side no box bounds needs none.
+	if (members.count == 1) {
 		auto &member = fill_member(0);
 		auto rc = member.LeftHandSide(result_col);
 		rc.sense = '=';
 		rc.rhs = member.constant;
-		rc.kind = one_kind;
-		rc.source_clause_id = spec.source_clause_id;
-		rc.removal_group_id = spec.removal_group_id;
+		rc.kind = ConstraintKind::STRUCTURAL;
 		input.global_constraints.push_back(std::move(rc));
 		return;
 	}
@@ -115,9 +106,7 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
 			auto rc = member.LeftHandSide(result_col);
 			rc.sense = sense;
 			rc.rhs = member.constant;
-			rc.kind = spec.envelope_kind;
-			rc.source_clause_id = spec.source_clause_id;
-			rc.removal_group_id = spec.removal_group_id;
+			rc.kind = ConstraintKind::STRUCTURAL;
 			input.global_constraints.push_back(std::move(rc));
 		}
 	}
@@ -133,15 +122,12 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
 		vector<int> args;
 		args.reserve(members.count);
 		for (idx_t i = 0; i < members.count; i++) {
-			args.push_back(ExtremumArgumentColumn(input, indexer, fill_member(i), members, i, spec.label,
-			                                      spec.source_clause_id, spec.removal_group_id));
+			args.push_back(ExtremumArgumentColumn(input, indexer, fill_member(i), members, i, spec.label));
 		}
 		GeneralConstraintSpec gc;
 		gc.kind = spec.is_max ? GeneralConstraintKind::MAX : GeneralConstraintKind::MIN;
 		gc.result_column = result_col;
 		gc.argument_columns = std::move(args);
-		gc.source_clause_id = spec.source_clause_id;
-		gc.removal_group_id = spec.removal_group_id;
 		input.general_constraints.push_back(std::move(gc));
 		return;
 	}
@@ -171,16 +157,12 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
 		rc.coefficients.push_back(m_coeff);
 		rc.sense = sense;
 		rc.rhs = m_coeff + member.constant;
-		rc.kind = spec.closing_kind;
-		rc.source_clause_id = spec.source_clause_id;
-		rc.removal_group_id = spec.removal_group_id;
+		rc.kind = ConstraintKind::STRUCTURAL;
 		input.global_constraints.push_back(std::move(rc));
 	}
 	sum_y.sense = '>';
 	sum_y.rhs = 1.0;
-	sum_y.kind = spec.closing_kind;
-	sum_y.source_clause_id = spec.source_clause_id;
-	sum_y.removal_group_id = spec.removal_group_id;
+	sum_y.kind = ConstraintKind::STRUCTURAL;
 	input.global_constraints.push_back(std::move(sum_y));
 }
 

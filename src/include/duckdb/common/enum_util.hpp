@@ -260,8 +260,6 @@ enum class NType : uint8_t;
 
 enum class NewLineIdentifier : uint8_t;
 
-enum class ObjectiveAggregateType : uint8_t;
-
 enum class OnConflictAction : uint8_t;
 
 enum class OnCreateConflict : uint8_t;
@@ -762,9 +760,6 @@ const char* EnumUtil::ToChars<NType>(NType value);
 
 template<>
 const char* EnumUtil::ToChars<NewLineIdentifier>(NewLineIdentifier value);
-
-template<>
-const char* EnumUtil::ToChars<ObjectiveAggregateType>(ObjectiveAggregateType value);
 
 template<>
 const char* EnumUtil::ToChars<OnConflictAction>(OnConflictAction value);
@@ -1345,9 +1340,6 @@ NType EnumUtil::FromString<NType>(const char *value);
 
 template<>
 NewLineIdentifier EnumUtil::FromString<NewLineIdentifier>(const char *value);
-
-template<>
-ObjectiveAggregateType EnumUtil::FromString<ObjectiveAggregateType>(const char *value);
 
 template<>
 OnConflictAction EnumUtil::FromString<OnConflictAction>(const char *value);

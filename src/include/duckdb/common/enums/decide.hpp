@@ -122,14 +122,6 @@ enum class DecideKeyNullMode : uint8_t { NO_GROUP = 0, VALUE = 1 };
 //! the first or last peer, or k peers before or after the anchor's.
 enum class DecideFrameAnchor : uint8_t { FIRST = 0, LAST = 1, PREVIOUS = 2, NEXT = 3 };
 
-//! Type of aggregate used in MIN/MAX objective linearization
-enum class ObjectiveAggregateType : uint8_t {
-	NONE = 0, //! No MIN/MAX objective (pure SUM or no objective)
-	SUM,      //! SUM aggregate
-	MIN_AGG,  //! MIN aggregate (suffixed to avoid MIN/MAX macro collision)
-	MAX_AGG   //! MAX aggregate
-};
-
 //! Origin/relaxability role of an emitted DECIDE matrix row.
 //!   USER_PARAMETER — carries a user-editable parameter/RHS; elastic may slacken.
 //!   USER_MECHANISM — helper row attached to a user clause; rigid.
@@ -333,15 +325,6 @@ static constexpr const char *AVG_REWRITE_TAG = "__avg_rewrite__";
 static constexpr const char *TREE_RETAINED_EXPRESSION_TAG_PREFIX = "__tree_retained_expression_";
 static constexpr const char *TREE_REDUCER_SCOPE_TAG_PREFIX = "__tree_reducer_scope_";
 static constexpr const char *TREE_REDUCER_KEY_TAG_PREFIX = "__tree_reducer_key_";
-
-//! Tag prefix marking a SUM(...) that really means a hard MIN/MAX (on
-//! BoundAggregateExpression.alias).
-//! Format: "__minmax_clause_<clause_idx>_<min|max>__", on both arms.
-//! The clause index points into `LogicalDecide::minmax_clause_labels`, which holds the
-//! text a diagnosis renders for this clause. Both parts are always present: the clause
-//! is registered where it is tagged, before either formulation is chosen, so the index
-//! does not depend on whether a Big-M disjunction or a native extremum follows.
-static constexpr const char *MINMAX_CLAUSE_TAG_PREFIX = "__minmax_clause_";
 
 //! Tag prefix linking a `<>` comparison to its clause (on BoundComparisonExpression.alias).
 //! Format: "__ne_clause_tag_<clause_idx>__", indexing `LogicalDecide::ne_clause_sources`.
@@ -663,7 +646,6 @@ static constexpr const char *DECIDE_TAGS[] = {WHEN_FILTER_TAG,
                                               TREE_RETAINED_EXPRESSION_TAG_PREFIX,
                                               TREE_REDUCER_SCOPE_TAG_PREFIX,
                                               TREE_REDUCER_KEY_TAG_PREFIX,
-                                              MINMAX_CLAUSE_TAG_PREFIX,
                                               NE_CLAUSE_TAG_PREFIX,
                                               MINMAX_EASY_REWRITE_TAG,
                                               BODY_DEFINITION_TAG,

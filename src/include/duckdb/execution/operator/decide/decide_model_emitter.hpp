@@ -88,8 +88,7 @@ class DecideModelEmitter {
 public:
 	DecideModelEmitter(const PhysicalDecide &op, ClientContext &context, const DecideTree &tree,
 	                   const DecideDescent &descent, DecideTreeColumns &columns, DecideGlobalSinkState &gstate,
-	                   vector<SolverInput::KeyValues> &key_values, const DecideSourceNames &names, idx_t num_rows,
-	                   DataChunk &first);
+	                   vector<SolverInput::KeyValues> &key_values, const DecideSourceNames &names, idx_t num_rows);
 
 	//! Each declared decision's classes, numbered by its key's values, each relation-qualified reducer's, its classes
 	//! split by its body's values, and each helper's, the groups that hold a member, a row in none in a class of its
@@ -124,8 +123,6 @@ private:
 	vector<SolverInput::KeyValues> &key_values;
 	const DecideSourceNames &names;
 	idx_t num_rows;
-	//! The input's first chunk, where a value the whole query shares is read (FirstRowValue).
-	DataChunk &first;
 	//! Per value-link node, its helper's members, read once where its classes are (HelperMapping), which ValueLinks
 	//! lists.
 	vector<LinkMembers> link_members;
@@ -245,7 +242,7 @@ private:
 	template <class F>
 	void Filter(idx_t site, idx_t qualifier_scope, const vector<bool> &reads, const vector<bool> &selected_rows,
 	            TermFilterState &filter, vector<bool> &members, F &&read);
-	//! Read entries when the qualified scope is the site's own node, as for a composed reducer's members.
+	//! Read entries when the qualified scope is the site's own node, as for a helper's members.
 	const vector<bool> &ReadEntriesOf(idx_t site, bool qualified, vector<bool> &first);
 	//! A term beside a grouped clause's reducers, on each of `rows` (the kept rows and their root's entries), a NULL
 	//! coefficient marking its row (`null_rows`).

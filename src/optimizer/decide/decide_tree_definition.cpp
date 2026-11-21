@@ -35,14 +35,13 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 // Defining a non-linear reducer body (the Plaisted-Greenbaum encoding)
 // ---------------------------------------------------------------------------
 //
-// Every extremum the later passes build reads its members as linear: the hard rows, the
-// composed terms, the objective's and the value rewrite's helpers. A body that squares or multiplies
-// decisions (`max(power(x, 2))`, once RewriteBilinear has taken the Boolean products)
-// would lose its square there. Tree preparation names such a body first: one helper decision `t`
-// per instance of the scopes the body reads (ScopeOf: per row once it reads a data column)
-// and one quadratic row defining it by the body `q` per instance, so the reducer reads the
-// bare column `t` and every later pass keeps reading linear members. RewriteAbs does the
-// same for an ABS.
+// Every extremum the later passes build reads its members as linear: the
+// value rewrite's helpers, a MIN or MAX's included, whatever clause or objective reads it. A body that squares or
+// multiplies decisions (`max(power(x, 2))`, once RewriteBilinear has taken the Boolean products) would lose its square
+// there. Tree preparation names such a body first: one helper decision `t` per instance of the scopes the body reads
+// (ScopeOf: per row once it reads a data column) and one quadratic row defining it by the body `q` per instance, so the
+// reducer reads the bare column `t` and every later pass keeps reading linear members. RewriteAbs does the same for an
+// ABS.
 //
 // The row is one-sided where the clause pushes the reducer one way, as the
 // Plaisted-Greenbaum encoding states a definition only in the polarity it occurs in. SUM,
@@ -59,7 +58,7 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 // on a helper nothing else reads always holds.
 //
 // Which bodies: every MIN or MAX's; in a constraint that holds a MIN or MAX, every SUM and
-// AVG term's too (the composed row reads them as linear); in a constraint the value rewrite
+// AVG term's too (the clause row reads them as linear); in a constraint the value rewrite
 // takes (VALUE shape), every SUM and AVG term's (the helper decision that holds the reducer
 // is defined over linear members, and it is the same epigraph form); and in the objective,
 // every reducer's under a MIN or MAX, a nested one's included. A plain constraint whose one

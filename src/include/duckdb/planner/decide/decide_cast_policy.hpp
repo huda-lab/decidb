@@ -158,8 +158,8 @@ PlanTimeSign PlanTimeSignOf(ClientContext &context, const Expression &expr, cons
 //! The sign a factor on a reducer contributes: +1, -1, or 0 when it is not known until
 //! the query runs (PlanTimeSignOf). A factor that is exactly zero reads as +1: the term
 //! vanishes and any direction is right for it. The canonicalizer and the MIN/MAX
-//! rewrite read it alike: a MIN or MAX under a factor of unknown sign takes the
-//! composed formulation.
+//! rewrite read it alike: a MIN or MAX under a factor of unknown sign is pushed
+//! neither way.
 //!
 //! Nothing depends on this for correctness -- it selects between an exact cheap
 //! linearization and an exact expensive one. 0 must therefore be treated as "assume
@@ -177,8 +177,8 @@ bool ScaleVanishesAtPlanTime(ClientContext &context, const Expression *scale, bo
 //! NONE when nothing decides it: `=`, `<>`, or a sign (0) that is not known until the
 //! query runs. A MIN or MAX pushed its cheap way -- MAX down, MIN up -- is held by its
 //! envelope alone (every member bounds it); pushed the other way it needs the closing
-//! side (some member must reach it); under NONE it needs both. The single-reducer, the
-//! composed and the value rewrites all read the direction from here.
+//! side (some member must reach it); under NONE it needs both. The easy identity and the
+//! value rewrite both read the direction from here.
 enum class ExtremumPush : uint8_t { DOWN, UP, NONE };
 
 //! The push of a comparison's whole decision side (a term of sign +1).

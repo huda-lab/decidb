@@ -39,7 +39,7 @@
 // DecideOptimizer::RewriteNorm.
 //
 // What the contract leaves out is the whole design. A quadratic `POWER(x-t,2)`, a
-// composed `MAX(x*v)`, and a filtered `sum(when c: x)` are decision-bearing terms
+// `MAX(x*v)`, and a filtered `sum(when c: x)` are decision-bearing terms
 // here, moved and merged as `x` is; the product rule respells a product's factors
 // and opens none of them. The symbolic layer this replaced had to carve out
 // structural bypasses -- quadratic bodies, nested aggregates, opaque placeholders for

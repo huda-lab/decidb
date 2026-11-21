@@ -206,11 +206,8 @@ public:
 
 	explicit DecideLocalSinkState(ClientContext &context, const PhysicalDecide &op)
 	    : data(context, op.children[0]->GetTypes()), split(op.debug.split) {
-		first_input_row.Initialize(context, op.children[0]->GetTypes(), 1);
 		data.InitializeAppend(append_state);
 	}
-	DataChunk first_input_row;
-	bool has_first_input_row = false;
 };
 
 //! A thread's rows placed after those already placed, and its descent kept with the row they start at, which
@@ -221,10 +218,6 @@ static void MergeDecideDescent(DecideGlobalSinkState &gstate, DecideLocalSinkSta
 		return;
 	}
 	lock_guard<mutex> guard(gstate.lock);
-	if (!gstate.has_first_input_row && lstate.has_first_input_row) {
-		lstate.first_input_row.Copy(gstate.first_input_row);
-		gstate.has_first_input_row = true;
-	}
 	const auto offset = gstate.data.Count();
 	gstate.data.Combine(lstate.data);
 	lstate.data.InitializeAppend(lstate.append_state);
@@ -247,12 +240,6 @@ unique_ptr<LocalSinkState> PhysicalDecide::GetLocalSinkState(ExecutionContext &c
 static void SinkDecideRows(const DecideTree &tree, const DecideDebug &debug, ClientContext &context,
                            DecideGlobalSinkState &gstate, DecideLocalSinkState &lstate, DataChunk &chunk) {
 	const auto row_base = lstate.data.Count();
-	if (chunk.size() > 0 && !lstate.has_first_input_row) {
-		SelectionVector first_row(1);
-		first_row.set_index(0, 0);
-		chunk.Copy(lstate.first_input_row, first_row, 1);
-		lstate.has_first_input_row = true;
-	}
 	lstate.data.Append(lstate.append_state, chunk);
 	if (!lstate.descent) {
 		lstate.descent = make_uniq<DecideDescent>(tree, context);
@@ -602,16 +589,6 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	auto &descent = gstate.descent;
 	// Top-down: the descent read every chunk as Sink received it, and the buffer is never scanned to evaluate a row.
 	DecideProfileScope phase("execution.tree_descent");
-	// A value the whole query shares is read (a square's factor) against the retained input row.
-	DataChunk first;
-	if (gstate.has_first_input_row) {
-		first.Initialize(context, gstate.first_input_row.GetTypes(), 1);
-		first.Reference(gstate.first_input_row);
-	} else {
-		// Preserve the empty-input path: no row was available to retain during Sink.
-		gstate.data.InitializeScanChunk(first);
-		gstate.data.FetchChunk(0, first);
-	}
 	descent->Finish();
 	DecideProfileScope::Counter("execution.descent_rows", static_cast<double>(gstate.descent_rows));
 	if (debug.bodies) {
@@ -631,7 +608,7 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	columns.ReadFrames(frames, num_rows, gstate.frame_maps);
 	// What the data checks and the data reducers no clause reads raise, before any clause is read.
 	columns.CheckData();
-	DecideModelEmitter emitter(*this, context, *tree, *descent, columns, gstate, key_values, names, num_rows, first);
+	DecideModelEmitter emitter(*this, context, *tree, *descent, columns, gstate, key_values, names, num_rows);
 	emitter.KeyedMappings(keyed_mappings);
 	emitter.Constraints();
 	// A relation-qualified reducer reads each class's first entry, its first row, so the objective's columns are

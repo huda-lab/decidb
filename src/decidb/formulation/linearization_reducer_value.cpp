@@ -956,8 +956,6 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 			}
 			spec.written = written;
 			spec.label = link.label;
-			spec.envelope_kind = ConstraintKind::STRUCTURAL;
-			spec.closing_kind = ConstraintKind::STRUCTURAL;
 			ExtremumMemberSource source;
 			source.count = span.last - span.first;
 			source.fill_link = [&](idx_t i, MinMaxLinkRow &member) {

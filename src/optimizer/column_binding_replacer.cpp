@@ -22,7 +22,7 @@ void ColumnBindingReplacer::VisitOperator(LogicalOperator &op) {
 	}
 	VisitOperatorChildren(op);
 	if (op.type == LogicalOperatorType::LOGICAL_DECIDE) {
-		// LogicalDecide's expressions (constraints, objective, composed MIN/MAX terms,
+		// LogicalDecide's expressions (constraints, objective, helper decisions' reducers,
 		// keyed decisions' keys, ...) live outside the base op.expressions that the generic
 		// VisitOperatorExpressions walks -- see LogicalDecide::EnumerateExpressions, the
 		// single authoritative field list this shares with ColumnBindingResolver. Without

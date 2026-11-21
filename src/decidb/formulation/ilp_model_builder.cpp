@@ -1265,7 +1265,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		constr.coefficients = std::move(raw.coefficients);
 		constr.sense = raw.sense;
 		constr.rhs = raw.rhs;
-		// Raw rows include both structural links and user-facing composed outer
+		// Raw rows include both structural links and user-facing
 		// constraints, so their provenance is explicit on RawConstraint rather than
 		// inferred from an EvaluatedConstraint position.
 		StampRawProvenance(input, constr.provenance, raw);

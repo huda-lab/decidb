@@ -680,8 +680,7 @@ public:
 	void SetObjective(ClientContext &context, unique_ptr<Expression> objective);
 
 	//! Calls back with every expression this operator owns: decide_variables,
-	//! decide_constraints, decide_objective, the composed MIN/MAX constraint and
-	//! objective terms, the helper decisions' reducers, every key and the scope checks.
+	//! decide_constraints, decide_objective, the helper decisions' reducers, every key and the scope checks.
 	//! This is the single place that
 	//! knows LogicalDecide's expression layout -- generic DuckDB passes (the
 	//! LogicalOperatorVisitor dispatcher, ColumnBindingResolver, RemoveUnusedColumns)

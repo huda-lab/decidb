@@ -2759,26 +2759,6 @@ NewLineIdentifier EnumUtil::FromString<NewLineIdentifier>(const char *value) {
 	return static_cast<NewLineIdentifier>(StringUtil::StringToEnum(GetNewLineIdentifierValues(), 4, "NewLineIdentifier", value));
 }
 
-const StringUtil::EnumStringLiteral *GetObjectiveAggregateTypeValues() {
-	static constexpr StringUtil::EnumStringLiteral values[] {
-		{ static_cast<uint32_t>(ObjectiveAggregateType::NONE), "NONE" },
-		{ static_cast<uint32_t>(ObjectiveAggregateType::SUM), "SUM" },
-		{ static_cast<uint32_t>(ObjectiveAggregateType::MIN_AGG), "MIN_AGG" },
-		{ static_cast<uint32_t>(ObjectiveAggregateType::MAX_AGG), "MAX_AGG" }
-	};
-	return values;
-}
-
-template<>
-const char* EnumUtil::ToChars<ObjectiveAggregateType>(ObjectiveAggregateType value) {
-	return StringUtil::EnumToString(GetObjectiveAggregateTypeValues(), 4, "ObjectiveAggregateType", static_cast<uint32_t>(value));
-}
-
-template<>
-ObjectiveAggregateType EnumUtil::FromString<ObjectiveAggregateType>(const char *value) {
-	return static_cast<ObjectiveAggregateType>(StringUtil::StringToEnum(GetObjectiveAggregateTypeValues(), 4, "ObjectiveAggregateType", value));
-}
-
 const StringUtil::EnumStringLiteral *GetOnConflictActionValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 		{ static_cast<uint32_t>(OnConflictAction::THROW), "THROW" },

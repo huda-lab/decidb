@@ -552,7 +552,7 @@ struct SolverModel {
 //!   AUX        — an auxiliary decision variable from a linearization rewrite
 //!                (ABS / MIN-MAX / McCormick / <>); `label` is the user's original
 //!                source expression captured at optimizer time.
-//!   GLOBAL_AUX — an internal global-block auxiliary (e.g. composed MIN/MAX term)
+//!   GLOBAL_AUX — an internal global-block auxiliary (e.g. a MIN/MAX's indicator)
 //!                with no user-facing source; `label` is empty.
 enum class ColumnKind : uint8_t { USER, AUX, GLOBAL_AUX };
 

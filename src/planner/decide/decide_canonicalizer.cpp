@@ -1217,8 +1217,8 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 
 	// Decision terms on BOTH sides. Migrating the right-hand ones left negates
 	// them, which is only sound because the two downstream analyses consult sign, not
-	// syntactic position: ABS Big-M pinning (ClassifyAbsConstraints) and composed MIN/MAX
-	// easy-vs-hard (WalkComposedLhs).
+	// syntactic position: ABS Big-M pinning (ClassifyAbsConstraints) and a MIN/MAX's
+	// push (CollectReducerSites).
 
 	// General partition: decision terms migrate left, everything else migrates
 	// right. A term that crosses the relation flips sign.
@@ -1312,7 +1312,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 		return std::move(result);
 	}
 
-	// No decision content anywhere. Not a shape this pass owns, and not an error.
+	// No decision content anywhere. Not a shape this pass owns, and not an error: the binder refuses it.
 	if (!ReferencesDecideVar(objective)) {
 		return objective.Copy();
 	}
@@ -1585,7 +1585,7 @@ void DecideCanonicalizer::VerifyCanonicalObjectiveBody(const Expression &objecti
 			return;
 		}
 	}
-	// A decision-free objective has nothing to verify.
+	// A decision-free objective has nothing to verify: the binder refuses it.
 	if (!ReferencesDecideVar(objective)) {
 		return;
 	}
