@@ -14,6 +14,12 @@ Language-surface work is owned by `../../language/` (the scopes:
   refusals real gaps or stale gates, and is `MAXIMIZE sum(v) + 1` refused?
 - **Options.** 1. Switch each gate off and test; a gate that guards nothing goes. 2. Keep the refusals as they are.
 - **Recommendation.** 1.
+- **Rulings (owner, 2026-11-21).** The objective as a whole must read a decision, one rule and one message; a data term
+  beside a decision term is accepted, so `MAXIMIZE sum(x) + sum(v)` (refused today) is accepted and `MAXIMIZE sum(v) +
+  1` (accepted today) is refused like `MAXIMIZE sum(v)`. A constant objective is almost always a typo, and `SATISFY`
+  exists for no objective. The `abs` and `power` refusals over a reducer in the objective are switched off and tested:
+  the same expressions solve as constraints, and the hard cases (maximizing an ABS or a square) are refused later by
+  the solver checks.
 - **Change.** The binder refuses only what needs the parsed tree (scope placement, user casts, names). "Reads no
   decision", vocabulary, reducer-argument shape and degree become one check in `DecideShapeCheck` (stage 04), the
   same code for a constraint side and the objective. About 400 to 600 lines go.
