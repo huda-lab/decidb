@@ -447,8 +447,9 @@ or a subquery is not summable and its atom is not merged.
 `-`; `-(2 * max(e))` is the term `max(e)` with sign `-` and factor `2`; and a term written
 with signs around it, `-(-max(e))`, is the bare term (`IsSignedSpine`). The MIN/MAX rewrite and the value rewrite read
 a term's direction as the comparison's times the term's sign times its factor's sign (`MatchLoneSignedExtremum`,
-`CollectReducerSites`), so `-max(e)` and `-1 * max(e)` build one model. Whether a factor's sign is known before the
-query runs is `ScaleSignAtPlanTime` (`decide_cast_policy`), which this stage and the MIN/MAX rewrite share.
+`CollectReducerSites`, a visitor over `WalkPolarity`), so `-max(e)` and `-1 * max(e)` build one model. Whether a
+factor's sign is known before the query runs is `ScaleSignAtPlanTime` (`decide_cast_policy`), which this stage and the
+MIN/MAX rewrite share.
 
 **Composition reassociates, and that is accepted.** `(SUM(x) / 2) / 3` emits
 `SUM(x) / (2 * 3)`, which in double arithmetic is not bit-identical to dividing

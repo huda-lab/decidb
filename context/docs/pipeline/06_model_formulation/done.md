@@ -111,16 +111,14 @@ one type-driven path.
 - **Upper** — intersected with `min`, because the type default is a true ceiling
   (`1.0` for BOOLEAN).
 
-A box inverted by rounding alone is one point: a floor above its top by no more than one
-part in 1e9 (`DECIDE_ROUNDED_BOX_RELATIVE_TOLERANCE`, which direct solve's `DirectRowBox` reads too) is closed onto
-the top (`close_rounded_box`), since boxes are derived in
-floating point from several sources (a bound divided by its coefficient, a helper's box
-through an AVG's 1/n); a wider inversion stays, an infeasible model. Both the decision boxes and a global
-auxiliary's box are closed (`test_edge_cases.py::test_rounded_box_is_one_point`, the tolerance relative to the top
-included). Afterwards, a
-`binary` column's bounds are clamped to `[0,1]`: a BOOLEAN is 0 or 1 whatever is written
-on it (`x >= -1` widens nothing; D41 lowers a numeric decision's floor, not a
-BOOLEAN's).
+A box inverted by rounding alone is one point: a floor above its top by no more than one part in 1e9
+(`DECIDE_ROUNDED_BOX_RELATIVE_TOLERANCE`, which direct solve's `DirectRowBox` reads too) is closed onto the top, since
+boxes are derived in floating point from several sources (a bound divided by its coefficient, a helper's box through an
+AVG's 1/n); a wider inversion stays, an infeasible model. `SolverModel::Build` closes every column once its box is
+final, whatever formed or narrowed it: a decision's box, a helper's reach, a per-row bound folded in, a global
+auxiliary's box (`test_edge_cases.py::test_rounded_box_is_one_point`, the tolerance relative to the top included). A
+`binary` column's bounds are clamped to `[0,1]`: a BOOLEAN is 0 or 1 whatever is written on it (`x >= -1` widens
+nothing; D41 lowers a numeric decision's floor, not a BOOLEAN's).
 
 Bounds and type flags then expand across `NumInstances(var)` for each variable, each
 instance's floor read through `SolverInput::InstanceLower`.

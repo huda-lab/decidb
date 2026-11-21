@@ -240,6 +240,17 @@ term splitter use them:
 
 The `optimizer.decide` span of `DECIDB_PROFILE=1` times the whole block.
 
+**Every pass that reads bodies reaches them through one enumerator** (`LogicalDecide::EnumerateBodies`, the Visitor
+pattern, as DuckDB's `LogicalOperatorVisitor::EnumerateExpressions` enumerates a node's expressions). It has one fixed
+case per container, in the order objective, clauses, definitions, value links, L0 links, and hands the callback a body
+(`DecideOwnedBody`) with its expression, its owner, the push its owner gives it, the rows it is read on, the alias of
+its source clause and its enclosing scope. A pass filters by owner in its callback and loops over no container. A new
+container of bodies is added in the enumerator and nowhere else. The order is the order the columns a pass adds stand
+in, which the model dumps pin. Four walks stay outside it, each for its own reason: `FindBoxedHelpers` walks the helper
+graph by binding, not by body; folding looks a link up by its helper; the tree-side loops of the linear form and the
+solver gate read the tree, not the containers; and `RewriteInDomain` recurses on its own, because it rewrites a `when
+c:` wrapper into TRUE, which a walk over leaf bodies cannot.
+
 A later stage-05 lowering, `LowerDecideTree`, belongs to this stage but is
 **triggered during physical planning** — see §1a. It lowers each `ReducerValueLink`'s body
 into its helper's G or O.
@@ -507,17 +518,21 @@ the second, which pins nothing, and both clauses read one exact ABS. The sides a
 join a helper's readers have run (`RewriteFrameRanges`, `PrepareDefinitionFunctions`, `RewriteScopedReducers`), so
 `RewriteAbs` runs after all three.
 
-Each owner's push is read through `WalkPolarity` (`decide_optimizer.cpp`), which the definition of non-linear reducer
-bodies shares: it folds signs through `+`, unary and binary `-`, casts, aggregate bodies, and constant factors. A
-factor whose value is not known until execution, a data column as in `SUM(w * ABS(x - t))`, yields sign 0, which never
-matches the pinning direction and so forces the exact encoding, in the objective as in a constraint: `MINIMIZE
-SUM(w * ABS(x - t))` with a negative `w` on one row answers rather than reporting "unbounded", at the price of needing
-a finite box for the decisions inside the ABS on the lowering arm. A factor's sign is read by `PlanTimeSignOf`
+Each owner's push is read through `WalkPolarity` (`decide_optimizer.cpp`), the one polarity walker: the value rewrite's
+reducer sites (`CollectReducerSites`), the range frames' sides and the definition of non-linear reducer bodies read
+their push from it too. It folds signs through `+`, unary and binary `-`, casts, aggregate bodies, and constant factors.
+A factor whose value is not known until execution, a data column as in `SUM(w * ABS(x - t))`, yields sign 0, which never
+matches the pinning direction and so forces the exact encoding, in the objective as in a constraint: `MINIMIZE SUM(w *
+ABS(x - t))` with a negative `w` on one row answers rather than reporting "unbounded", at the price of needing a finite
+box for the decisions inside the ABS on the lowering arm. A factor's sign is read by `PlanTimeSignOf`
 (`decide_cast_policy`), structurally rather than only by folding: a product with a zero constant among its factors has
 sign zero whatever its data factors hold (`0 * w`), a negation flips, a quotient follows its numerator. A sign is all
-this reads: `0 * w` still varies by row as `w` does, and is NULL where `w` is. A factor of exactly
-zero is a number like any other and reads as positive, so the term it scales takes the push and the encoding it takes
-with weight 1: a zero-weighted hard MIN, MAX or ABS needs the bound its weight-1 twin needs.
+this reads: `0 * w` still varies by row as `w` does, and is NULL where `w` is. A BOOL decision as a factor is 0 or 1, so
+it is never negative and keeps the sign of the term it scales. In the value rewrite a reducer beside another reducer
+(`sum(x) * sum(y)`) reads sign 0 (`PolarityPath::beside_held`): the other factor's sign is the value of a decision
+reducer, which the walk does not know. A factor of exactly zero is a number like any other and reads as positive, so
+the term it scales takes the push and the encoding it takes with weight 1: a zero-weighted hard MIN, MAX or ABS needs
+the bound its weight-1 twin needs.
 
 **Helpers a hard extremum boxes.** A MIN or MAX link that states its closing side is encoded with a Big-M over its
 members, which needs every member boxed. An auxiliary held by pressure alone has no box. So the members of such a link,
@@ -619,16 +634,17 @@ factor squared.
 The pass records a `BilinearLink` for both Boolean rows and emits none itself; stage 06 emits the rows once per
 instance of the auxiliary (`LinearizeBilinear`, `../06_model_formulation/done.md`).
 
-**Each factor is read as an affine expression in the decisions** (`ReadAffine`): data-coefficient × decision terms and
-a data constant, through `+`, `-`, a data factor, a data divisor and casts. The product distributes over the terms, so
-`b * (x - 1)` is `b * x - b` and `(2 * b - 1) * (x - 1)` has four terms. Each pair holding a Boolean gets one auxiliary,
-and the pairs are merged (`(b + d) * (d + b)` holds `b * d` once); a Boolean squared is itself; a pair of non-Booleans
-stays a product for the Q-matrix path. A factor that is not affine is left in place. A factor that holds a reducer
-anywhere (`b * SUM(x)`, `POWER(SUM(x) - 3, 2)`, `max(x) + 1`; `DecideCanonicalizer::ContainsReducer`, the one test
-every pass asks) is not a product of variables to this pass: the value rewrite holds each reducer in a helper and
+**Each factor is read as an affine expression in the decisions**, through the term splitter
+(`DecideTermSplitter::Split`, the one reader of what a decision expression is made of): data-coefficient × decision
+terms and a data constant, through `+`, `-`, a data factor, a data divisor and casts. The product distributes over the
+terms, so `b * (x - 1)` is `b * x - b` and `(2 * b - 1) * (x - 1)` has four terms. Each pair holding a Boolean gets one
+auxiliary, and the pairs are merged (`(b + d) * (d + b)` holds `b * d` once); a Boolean squared is itself; a pair of
+non-Booleans stays a product for the Q-matrix path. A factor that is not affine is left in place. A factor that holds a
+reducer anywhere (`b * SUM(x)`, `POWER(SUM(x) - 3, 2)`, `max(x) + 1`; `DecideCanonicalizer::ContainsReducer`, the one
+test every pass asks) is not a product of variables to this pass: the value rewrite holds each reducer in a helper and
 hands the product back (`FindAndReplaceBilinear`). A frame's marker is no reducer (D80): `at(F: e)` selects one row per
-row (deck pp. 43, 71), so this pass takes `x * at(previous: x) over (t.id)` as a product. A
-body its definition F node owns is not such a reducer: `ReadAffine` reads it as its helper decision.
+row (deck pp. 43, 71), so this pass takes `x * at(previous: x) over (t.id)` as a product. A body its definition F node
+owns is not such a reducer: the splitter reads it as its helper decision.
 
 **The auxiliary's scope is `JoinScopes` of its factors' scopes**, the least upper bound, as DuckDB promotes a binary
 operator's type: Global < Keyed < Row. Two query-wide factors give one query-wide column; a query-wide factor and a
@@ -1226,8 +1242,9 @@ Each is a precondition on an earlier stage's promise ([`../architecture.md`](../
   (`AddAuxiliaryDecision`); only a `when` stands under the two-level `per`
   wrapper; a reducer's marker covers one expression (`RewriteNorm`); a comparison carries its source-clause tag
   (`SourceClauseOf`).
-- **The shape check.** A side of a degree-2 product is affine and no divisor holds a decision (`ReadAffine`); a factor's
-  form is linear (`AppendLinearTerms`); a data factor has power 1 (`FindAndReplaceBilinear`).
+- **The shape check.** A side of a degree-2 product is affine and no divisor holds a decision
+  (`DecideTermSplitter::Split`); a factor's form is linear (`AppendLinearTerms`); a data factor has power 1
+  (`FindAndReplaceBilinear`).
 - **The canonicalizer.** A NORM marker is closed (`TryParseNormMarker`); the IN marker is built over a decision with a
   domain (`RewriteInDomain`); a canonical class is never `INVALID`.
 - **Earlier rewrites.** Every reducer is a SUM before extraction; the value rewrite replaces every `VALUE` clause;

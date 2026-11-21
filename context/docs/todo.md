@@ -13,7 +13,6 @@ the owner rules first.
 # Phase 3 — Each shape and formulation has one owner
 
 ## 3.2 One route per shape in stage 05 (one lane)
-- [ ] OPT-28 One enumerator and one polarity walker — pipeline/05_optimizer/todo.md § OPT-28
 - [ ] OPT-29 No rewrite pass reruns without a cause — pipeline/05_optimizer/todo.md § OPT-29
 
 ## 3.3 Model rows (needs: 3.2) (one lane)

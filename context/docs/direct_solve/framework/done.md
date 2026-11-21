@@ -234,7 +234,7 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
     expressions. `DirectStaticFloor` lowers a decision's static floor on the rows where a lower bound under a `when`
     replaces the default of 0. `DirectClauseBounds` reads one clause's two ends on a row (no bound on a row its `when`
     drops), and `DirectRowBox` intersects them with the box. A floor above the top by rounding alone is closed onto
-    the top, as the model builder closes it (`close_rounded_box`, stage 06), with the same
+    the top, as the model builder closes every column once its box is final (stage 06), with the same
     `DECIDE_ROUNDED_BOX_RELATIVE_TOLERANCE`, so A1, A2 and R1 answer such a box as the solver does
     (`test_rounded_box_is_one_point_on_the_direct_plan`). `DirectBoxIsEmpty` is true on a row whose box no value
     satisfies. `DirectRowBox` leaves a static end that is infinite out of the `GREATEST` (lower) or `LEAST` (upper): an
