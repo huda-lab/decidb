@@ -512,8 +512,9 @@ factor whose value is not known until execution, a data column as in `SUM(w * AB
 matches the pinning direction and so forces the exact encoding, in the objective as in a constraint: `MINIMIZE
 SUM(w * ABS(x - t))` with a negative `w` on one row answers rather than reporting "unbounded", at the price of needing
 a finite box for the decisions inside the ABS on the lowering arm. A factor's sign is read by `PlanTimeSignOf`
-(`decide_cast_policy`), structurally rather than only by folding: a product with a zero constant among its factors is
-zero whatever its data factors hold (`0 * w`), a negation flips, a quotient follows its numerator. A factor of exactly
+(`decide_cast_policy`), structurally rather than only by folding: a product with a zero constant among its factors has
+sign zero whatever its data factors hold (`0 * w`), a negation flips, a quotient follows its numerator. A sign is all
+this reads: `0 * w` still varies by row as `w` does, and is NULL where `w` is. A factor of exactly
 zero is a number like any other and reads as positive, so the term it scales takes the push and the encoding it takes
 with weight 1: a zero-weighted hard MIN, MAX or ABS needs the bound its weight-1 twin needs.
 

@@ -377,11 +377,9 @@ on when the sign is unknown.
 What may be a factor (`PeelScale`, the single place that judges it):
 
 - literals and foldable expressions, uncorrelated scalar subqueries, and arithmetic
-  made entirely of query-wide values — anywhere; so too a factor that is identically
-  zero before the query runs whatever its data factors hold (`0 * w`, read by
-  `PlanTimeSignOf` in `decide_cast_policy`): it is one value, 0, for the whole query, and
-  the term it scales vanishes rather than taking the VALUE shape;
-- a row-varying column or a correlated subquery — in a constraint, where it is a term
+  made entirely of query-wide values — anywhere;
+- a row-varying column, arithmetic over one (`0 * w` varies by row as `w` does, and is NULL where `w` is, as SQL
+  reads it), or a correlated subquery — in a constraint, where it is a term
   of each row's constraint: the comparison takes the VALUE shape (§3.10), whose helper
   decision the row's factor multiplies. The objective is produced once, so there it is
   refused: *"'w' varies per row, which cannot scale a reducer in the objective"*, at the factor;
