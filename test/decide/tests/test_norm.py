@@ -524,16 +524,6 @@ _SCOPE_W = (2, 3, 4)
     "declare, clause, domains, holds, objective, sizes",
     [
         pytest.param(
-            "per (): d(INT)",
-            "d <= 3 AND norm(d - 1, 0) <= 0",
-            {"d": range(4)},
-            lambda a: a["d"] <= 3 and 3 * (a["d"] != 1) <= 0,
-            lambda a: sum(_SCOPE_W) * a["d"],
-            # d, the indicator, and the reverse link's ABS auxiliary with its native column (Gurobi) or sign (HiGHS).
-            {"decidb_cli_gurobi": (4, 7), "decidb_cli_highs": (4, 8)},
-            id="norm-l0-query-wide-is-one-indicator",
-        ),
-        pytest.param(
             "per k: d(INT)",
             "d <= 3 AND norm(d - 1, 0) <= 1",
             {f"d{i}": range(4) for i in range(3)},
@@ -550,9 +540,9 @@ def test_norm_l0_indicator_takes_the_scope_the_counted_expression_reads(
     request, cli_fixture, tmp_path, declare, clause, domains, holds, objective, sizes
 ):
     """`norm(e, 0)` counts the rows where `e` is not zero by an indicator defined by `e`: one
-    for a query-wide `e` and one per key for a keyed one, its links once per instance, while
-    the count still reads it on every row. The automatic Big-M of the links reads the box of
-    each instance. Judged against every assignment on both solvers."""
+    per key for a keyed `e`, its links once per instance, while the count still reads it on
+    every row. The automatic Big-M of the links reads the box of each instance. Judged against
+    every assignment on both solvers."""
     cli = request.getfixturevalue(cli_fixture)
     sql = f"""
         SELECT id, d FROM {_SCOPE_ROWS}

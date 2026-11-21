@@ -797,10 +797,9 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 		    ArgumentCountMessage(DecideWrittenSql(aggr, qualifier_context->source_text), aggr.children.size())));
 	}
 	// A reducer whose body holds the same value on every row (`sum(y)` over a query-wide `y`) reads one of two ways,
-	// once or once per row, which are different problems. A norm counts a body's rows by definition, and a frame's
-	// range reduces the rows of its frame.
-	if (IsDecideAggregateName(func.name) && !binding_frame_range && !HasDecideTag(aggr.alias, NORM_MARKER_TAG_PREFIX) &&
-	    ExpressionContainsDecideVariable(*aggr.children[0], variables) && IsRowInvariantExpression(*aggr.children[0])) {
+	// once or once per row, which are different problems. A norm and a frame's range reduce as any reducer does.
+	if (IsDecideAggregateName(func.name) && ExpressionContainsDecideVariable(*aggr.children[0], variables) &&
+	    IsRowInvariantExpression(*aggr.children[0])) {
 		auto text = qualifier_context->source_text;
 		return BindResult(BinderException(aggr, "'%s' is a query-wide decision, so '%s' has no rows to reduce",
 		                                  DecideWrittenSql(*aggr.children[0], text), DecideWrittenSql(aggr, text)));
@@ -1102,9 +1101,7 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 		arguments.push_back(std::move(frame.payload));
 		unique_ptr<ParsedExpression> call = make_uniq<FunctionExpression>(name, std::move(arguments));
 		call->SetQueryLocation(frame.GetQueryLocation());
-		binding_frame_range = true;
 		auto bound = BindFunction(call, depth);
-		binding_frame_range = false;
 		if (bound.HasError()) {
 			return bound;
 		}
@@ -1296,6 +1293,7 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
 		// The system's SUM by name: a norm is DECIDE syntax, so a user's `sum` macro does not capture it.
 		auto marker = make_uniq<FunctionExpression>(SYSTEM_CATALOG, DEFAULT_SCHEMA, "sum", std::move(marker_children));
 		marker->alias = function.alias;
+		marker->SetQueryLocation(function.GetQueryLocation());
 		AddDecideTag(marker->alias, string(NORM_MARKER_TAG_PREFIX) + payload + "__");
 		expr_ptr = std::move(marker);
 		auto result = BindFunction(expr_ptr, depth);

@@ -213,9 +213,6 @@ protected:
 	ErrorData BindDataChild(unique_ptr<ParsedExpression> &expr, idx_t depth);
 
 	bool is_top_expression;
-	//! Set while a frame's range reducer binds: it reduces the rows of its frame, so a body that is the same on every
-	//! row is no refusal there (BindAggregate).
-	bool binding_frame_range = false;
 	//! Set while BindDataChild binds.
 	bool binding_when_condition = false;
 	case_insensitive_map_t<idx_t> variables;

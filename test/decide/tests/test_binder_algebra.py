@@ -361,18 +361,49 @@ def test_a_reducer_over_a_query_wide_decision_and_more_reduces(decidb_cli, claus
     )
 
 
+@pytest.mark.error_binder
+@pytest.mark.error
+@pytest.mark.parametrize(
+    "clause, objective, at, body",
+    [
+        pytest.param("norm(y - 1, 0) <= 0", "MAXIMIZE sum(x)", "norm(y - 1, 0)", "y - 1", id="norm-l0"),
+        pytest.param(
+            "x <= sum(from first to last: y) over (t.id)",
+            "MAXIMIZE sum(x)",
+            "sum(from first to last: y) over (t.id)",
+            "y",
+            id="range-frame",
+        ),
+    ],
+)
+def test_a_norm_and_a_range_frame_over_a_query_wide_decision_are_refused_as_any_reducer_is(
+    decidb_cli, clause, objective, at, body
+):
+    """Reducing once and reducing once per row are different problems for a norm and for a frame's range as they are
+    for `sum(y)`, so the check `sum(y)` meets (BindAggregate) is the one they meet: the caret is on the call."""
+    decidb_cli.assert_error_at(
+        _query(clause, objective, "x(INT), per (): y(INT)"),
+        kind="Binder Error",
+        at=at,
+        word=f"'{body}' is a query-wide decision, so '{at}' has no rows to reduce",
+    )
+
+
 @pytest.mark.correctness
-def test_a_range_frame_over_a_query_wide_decision_reduces_the_rows_of_its_frame(decidb_cli):
-    """`sum(from first to last: s)` over four rows is `4 * s`: the frame is the rows it reduces, so a payload that is
-    one value is no refusal there. `s = 1` takes `min(cap, 4)` of each row for `3 + 4 + 4 + 4 - 10`."""
+def test_a_range_frame_over_a_keyed_decision_reduces_the_rows_of_its_frame(decidb_cli):
+    """A keyed body is not query-wide, so a range frame over it answers: `sum(from first to last: k) over (t.id)` is
+    `2 * k_A + 2 * k_B` for every row."""
     _judged(
         decidb_cli,
-        "s <= 2 AND x <= sum(from first to last: s) over (t.id)",
-        "MAXIMIZE sum(x) - 10 * s",
-        lambda a: all(x <= len(CAPS) * a["s"] for x in _xs(a)),
-        lambda a: sum(_xs(a)) - 10 * a["s"],
-        decide="x(INT), per (): s(INT)",
-        domains=_domains(s=range(3)),
+        "k <= 2 AND x <= sum(from first to last: k) over (t.id)",
+        "MAXIMIZE sum(x) - 3 * sum(k)",
+        lambda a: a["k0"] == a["k1"]
+        and a["k2"] == a["k3"]
+        and all(k <= 2 for k in (a["k0"], a["k2"]))
+        and all(x <= sum(a[f"k{i}"] for i in range(len(CAPS))) for x in _xs(a)),
+        lambda a: sum(_xs(a)) - 3 * sum(a[f"k{i}"] for i in range(len(CAPS))),
+        decide="x(INT), per g: k(INT)",
+        domains=_domains(k0=range(3), k1=range(3), k2=range(3), k3=range(3)),
     )
 
 
