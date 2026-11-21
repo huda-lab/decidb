@@ -924,6 +924,27 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		model.constraints.reserve(model.constraints.size() + est_rows);
 	}
 
+	// Raw rows: the helpers' definitions, ABS and bilinear links, `<>` disjunctions. They stand before the clauses that
+	// read what they define (a helper's rows before the clause that reads it, an inner helper's before an outer's), the
+	// order the solver reads them in: the same model with a clause's row ahead of its helper's envelope rows solves
+	// two orders of magnitude slower. The index/coefficient vectors move out of `input` to avoid deep copies: out of
+	// `input` to avoid deep copies — SolveModel() in ilp_solver.cpp does not read input.global_constraints after this
+	// call.
+	phase.Next("model.global_rows");
+	for (auto &raw : input.global_constraints) {
+		ModelConstraint constr;
+		constr.indices = std::move(raw.indices);
+		constr.coefficients = std::move(raw.coefficients);
+		constr.sense = raw.sense;
+		constr.rhs = raw.rhs;
+		// Raw rows include both structural links and user-facing
+		// constraints, so their provenance is explicit on RawConstraint rather than
+		// inferred from an EvaluatedConstraint position.
+		StampRawProvenance(input, constr.provenance, raw);
+		PushNormalizedConstraint(std::move(constr));
+	}
+
+	phase.Next("model.clause_rows");
 	for (auto &eval_const : input.constraints) {
 		// Skip constraints with product groups — handled in quadratic section below
 		if (!eval_const.product_groups.empty()) {
@@ -1253,23 +1274,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 				model.quadratic_constraints.push_back(std::move(qc));
 			}
 		}
-	}
-
-	// Append raw global constraints (for MIN/MAX objective linking, etc.).
-	// Move the index/coefficient vectors out of `input` to avoid deep copies —
-	// SolveModel() in ilp_solver.cpp does not read input.global_constraints after this call.
-	phase.Next("model.global_rows");
-	for (auto &raw : input.global_constraints) {
-		ModelConstraint constr;
-		constr.indices = std::move(raw.indices);
-		constr.coefficients = std::move(raw.coefficients);
-		constr.sense = raw.sense;
-		constr.rhs = raw.rhs;
-		// Raw rows include both structural links and user-facing
-		// constraints, so their provenance is explicit on RawConstraint rather than
-		// inferred from an EvaluatedConstraint position.
-		StampRawProvenance(input, constr.provenance, raw);
-		PushNormalizedConstraint(std::move(constr));
 	}
 
 	// Conditional rows the chosen backend states itself. Whatever `LowerDecideConstructs`

@@ -38,6 +38,7 @@ Covers:
   - test_max_notequal_error: MAX(x) <> K should error
 """
 
+import re
 import time
 
 import pytest
@@ -2277,3 +2278,20 @@ def test_a_max_beside_a_sum_is_a_helper_whatever_its_bound(decidb_cli, bound):
     )
     best = _brute_force_best(range(5), 3, lambda a: sum(a) + max(a) <= 9, sum, True)
     assert sum(int(r[1]) for r in rows) == best
+
+
+@pytest.mark.min_max
+def test_a_helpers_definition_rows_precede_the_clause_that_reads_it(decidb_cli, tmp_path):
+    """`sum(x) + max(x * c) <= K` reads the MAX's helper: its envelope rows come first, then the clause's row. The same
+    model with the clause's row first solves far slower on a large input, so the order is part of the model."""
+    dump = decidb_cli.dump_model(
+        """SELECT id, x FROM (VALUES (1, 3), (2, 5), (3, 2)) t(id, c)
+        DECIDE x(INT) SUCH THAT x <= 4 AND sum(x * c) + max(x * c) <= 30 MAXIMIZE sum(x)""",
+        tmp_path / "order.dump",
+    )
+    helper = max(int(m[1]) for m in re.finditer(r"^col (\d+): ", dump, re.MULTILINE))
+    rows = re.findall(r"^row (\d+): sense=\S+ rhs=\S+ nnz=(\d+) \| (.*)$", dump, re.MULTILINE)
+    reading = [int(i) for i, nnz, terms in rows if int(nnz) > 2 and f"{helper}:1" in terms.split()]
+    defining = [int(i) for i, nnz, terms in rows if int(nnz) == 2 and f"{helper}:1" in terms.split()]
+    assert reading and len(defining) == 3, dump
+    assert max(defining) < min(reading), dump
