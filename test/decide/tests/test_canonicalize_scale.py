@@ -1443,6 +1443,51 @@ def test_the_objective_refuses_a_factor_that_varies_per_row(decidb_cli, objectiv
     )
 
 
+@pytest.mark.obj_maximize
+@pytest.mark.cons_comparison
+@pytest.mark.correctness
+def test_a_zero_times_a_column_varies_per_row_as_the_column_does(decidb_cli):
+    """`0 * w` is a factor that varies per row as `w` does, zero being a number like any other. In the objective it is
+    refused at the factor with the message `w` gets. In a constraint a row where `w` is NULL reads NULL, as SQL
+    reads `0 * NULL`, and holds nothing: the rows keep their own bound where `w` has a value and `x` is free of it
+    where `w` has none."""
+    refusals = {}
+    for factor in ("0 * w", "w"):
+        refusals[factor] = decidb_cli.execute_raw(
+            f"""
+            SELECT id, x FROM {_OBJECTIVE_ROWS}
+            DECIDE x(INT)
+            SUCH THAT x <= 5 AND SUM(x) <= 7
+            MAXIMIZE SUM(x) + {factor} * SUM(x)
+        """
+        ).stderr
+    assert error_kind(refusals["w"]) == "Binder Error", refusals["w"]
+    assert error_kind(refusals["0 * w"]) == error_kind(refusals["w"]), refusals
+
+    def message(stderr):
+        return next(line for line in stderr.splitlines() if line.startswith("Binder Error"))
+
+    assert message(refusals["0 * w"]).replace("'0 * w'", "'w'") == message(refusals["w"]), refusals
+
+    weights = [2.0, None, 1.0]
+    rows = answer(
+        decidb_cli,
+        f"""
+        SELECT id, x FROM (VALUES (1, 2.0), (2, NULL), (3, 1.0)) t(id, w)
+        DECIDE x(INT)
+        SUCH THAT x >= 0 AND x <= 4 AND x + 0 * w * MAX(x) <= 2
+        MAXIMIZE SUM(x)
+        ORDER BY id
+    """,
+    )
+
+    def holds(a):
+        xs = [a[f"x{i}"] for i in range(3)]
+        return all(w is None or xs[i] + 0 * w * max(xs) <= 2 for i, w in enumerate(weights))
+
+    judge_rows(rows, {f"x{i}": range(5) for i in range(3)}, holds, lambda a: sum(a[f"x{i}"] for i in range(3)))
+
+
 # The constant a spine carries is peeled off the objective under its factor, whichever way the factor is written.
 OBJECTIVE_CONSTANT_CASES = [
     pytest.param("2 * (SUM(x) - 1)", lambda sx, sy: 2 * (sx - 1), id="product"),

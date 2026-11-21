@@ -155,12 +155,6 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 				}
 				// A BOOL decision is never negative, so it keeps the direction of the reducer it scales.
 				const int factor_sign = ScaleSignAtPlanTime(context, other.get(), name == "/", &booleans);
-				const bool zero = name != "/" && PlanTimeSignOf(context, *other) == PlanTimeSign::ZERO;
-				if (zero && !other->IsFoldable()) {
-					// 0 whatever it reads (`0 * w` with a data column `w`): the term is one value for the whole query.
-					other = BoundCastExpression::AddCastToType(
-					    context, make_uniq<BoundConstantExpression>(Value::BIGINT(0)), other->return_type);
-				}
 				CollectReducerSites(term, sign * factor_sign, context, decide_index, booleans, out,
 				                    under_decision || BoundExpressionReferencesDecide(*other, decide_index),
 				                    under_function);

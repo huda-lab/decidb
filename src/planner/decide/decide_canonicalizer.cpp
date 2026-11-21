@@ -429,11 +429,6 @@ bool DecideCanonicalizer::IsQueryWideConstant(const Expression &expr) const {
 	if (expr.IsFoldable()) {
 		return true;
 	}
-	// A factor that is identically zero before the query runs is one value for the
-	// whole query -- 0 -- whatever its data factors hold: `0 * w` does not vary by row.
-	if (PlanTimeSignOf(context, expr) == PlanTimeSign::ZERO) {
-		return true;
-	}
 	// Arithmetic over query-wide values is itself query-wide, which is what makes
 	// `2 * (SELECT k FROM p) * SUM(x)` work: neither factor folds on its own.
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
