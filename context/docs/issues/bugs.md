@@ -2,6 +2,11 @@
 
 ## Open
 
+- **An ABS over a product of two decisions drops the product.** With `decide_direct_solve='off'` and `x`, `y` INT in
+  `[1, 3]` over two rows, `sum(abs(x * y - 4)) >= 7 MINIMIZE sum(x)` returns `x = y = 1` on both rows, where the sum is
+  6. With direct solve on, `MAXIMIZE sum(abs(x * y - c))` raises an internal error. The fix is OPT-32
+  (`../pipeline/05_optimizer/todo.md`).
+
 ## Limitations (not bugs)
 
 - **Gurobi's non-convex tolerance.** On `SUM(POWER(x, 2)) BY (k) <= 25 MAXIMIZE SUM(POWER(x, 2))`, with optimum 50,
