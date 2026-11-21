@@ -21,9 +21,9 @@ decides shape, parses SQL, executes relations, or calls a solver.
 - `src/include/duckdb/optimizer/decide/decide_linear_form.hpp`
 - `src/include/duckdb/planner/decide/decide_tree_terms.hpp` — the term records, held in the tree's nodes
 
-Every constraint it emits re-enters through `LogicalDecide::AddConstraint` and
-every objective through `LogicalDecide::SetObjective`, both of which
-re-canonicalize and re-verify.
+Every constraint it emits re-enters through `LogicalDecide::AddConstraint` and every objective through
+`LogicalDecide::SetObjective`, both of which re-canonicalize and re-verify. A pass that only adds tags no
+canonicalization reads (the bilinear rewrite, `RewriteAbs`) reinstalls nothing.
 
 ---
 
@@ -227,16 +227,14 @@ term splitter use them:
 | 2 | `RewriteFrameRanges` | Each range frame over decisions becomes a helper decision per window before later rewrites copy clauses, so they read an ordinary keyed decision. |
 | 3 | `RewriteNorm` | Lowers the NORM marker, including L0 indicator metadata, and removes display tags from desugared L1/L2/infinity norms. |
 | 4 | `RewriteInDomain` | Lowers bound DECIDE-variable IN markers to indicator metadata. |
-| 5 | `RewriteBilinear` | Retains Boolean products and records their expansions and product F-node specs. |
+| 5 | `RewriteBilinear` | The one bilinear pass: retains Boolean products and records their expansions and product F-node specs. A product a later pass exposes is tagged where it appears (8, 11), through the same entry. |
 | 6 | `RewriteMinMax` | Tags the easy identity of a MIN or MAX (`max(e) <= K`) and splits an equality on one, before any pass reads the clause's direction. |
 | 7 | `DecideTreeConstruction::PrepareDefinitionFunctions` | Registers definition F-node specs and reserves scoped helper columns before the value rewrite consumes their reads. |
 | 8 | `RewriteScopedReducers` | The value rewrite: a VALUE-shape comparison's reducers, and every other MIN or MAX the easy identity left, become helper decisions. |
-| 9 | `RewriteBilinear` (nested values) | Records products exposed after nested reducer values become decisions. |
-| 10 | `RewriteNotEqual` | Creates `<>` indicators. |
-| 11 | `RewriteAvgToSum` | Scales AVG values into SUM terms after the value rewrite. |
-| 12 | `RewriteAbs` | Decides which ABS is exact from its body's owner, once the rewrites that join a helper's readers (2, 7, 8) have run. Allocates the ABS helpers, records each ABS in `abs_functions` for the tree and stage 06, and adds the check of each ABS argument's data. It emits no row and no indicator. |
-| 13 | `RewriteBilinear` (ABS factors) | Records products involving the newly allocated ABS helpers. |
-| 14 | `FoldSingletonRows` | Must be last of all — see below. |
+| 9 | `RewriteNotEqual` | Creates `<>` indicators. |
+| 10 | `RewriteAvgToSum` | Scales AVG values into SUM terms after the value rewrite. |
+| 11 | `RewriteAbs` | Decides which ABS is exact from its body's owner, once the rewrites that join a helper's readers (2, 7, 8) have run. Allocates the ABS helpers, records each ABS in `abs_functions` for the tree and stage 06, and adds the check of each ABS argument's data. It emits no row and no indicator. Hands each body whose ABS got a helper back to the bilinear entry. |
+| 12 | `FoldSingletonRows` | Must be last of all — see below. |
 
 The `optimizer.decide` span of `DECIDB_PROFILE=1` times the whole block.
 
@@ -645,6 +643,14 @@ test every pass asks) is not a product of variables to this pass: the value rewr
 hands the product back (`FindAndReplaceBilinear`). A frame's marker is no reducer (D80): `at(F: e)` selects one row per
 row (deck pp. 43, 71), so this pass takes `x * at(previous: x) over (t.id)` as a product. A body its definition F node
 owns is not such a reducer: the splitter reads it as its helper decision.
+
+**The pass runs once; a product that appears later is tagged where it appears**, through the same entry,
+`FindAndReplaceBilinear`, which leaves a product it has tagged as it is. The value rewrite hands over each VALUE-shape
+clause and the objective once their reducers are helpers. `RewriteAbs` queues each body in which it allocated an ABS
+helper, since a product with an ABS factor is affine in the decisions only once the helper exists, and hands the queue
+over after every ABS has its helper: a worklist, as LLVM's InstCombine revisits the users of a value it changed. The
+columns those products add therefore follow every ABS helper. A range frame's value link is not read
+(`BilinearReadsBody`): its payload is held as a frame reads it.
 
 **The auxiliary's scope is `JoinScopes` of its factors' scopes**, the least upper bound, as DuckDB promotes a binary
 operator's type: Global < Keyed < Row. Two query-wide factors give one query-wide column; a query-wide factor and a

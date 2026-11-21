@@ -12,13 +12,10 @@ the owner rules first.
 
 # Phase 3 — Each shape and formulation has one owner
 
-## 3.2 One route per shape in stage 05 (one lane)
-- [ ] OPT-29 No rewrite pass reruns without a cause — pipeline/05_optimizer/todo.md § OPT-29
-
-## 3.3 Model rows (needs: 3.2) (one lane)
+## 3.3 Model rows (one lane)
 - [ ] FORM-8 One record per kind of model row — pipeline/06_model_formulation/todo.md § FORM-8
 
-## 3.4 Gaps filed in Phase 3 (needs: 3.2) (one lane)
+## 3.4 Gaps filed in Phase 3 (one lane)
 - [ ] OPT-32 An ABS over a product of decisions (wrong answer) — pipeline/05_optimizer/todo.md § OPT-32
 - [ ] BIND-6 A norm and a range frame refuse a query-wide body — pipeline/02_binder/todo.md § BIND-6
 - [ ] OPT-31 A square outside a reducer in the objective — pipeline/05_optimizer/todo.md § OPT-31

@@ -44,15 +44,3 @@ files.
   installation as for any quadratic objective.
 - **Done when.** Both examples agree with the oracle on Gurobi and HiGHS (continuous); `./test/decide/run_tests.sh -n
   2 -k "quadratic or objective"` passes.
-
-## OPT-29 — No rewrite pass reruns without a cause
-
-- **Problem.** `RewriteBilinear` runs three times; the objective is canonicalized 9 times, 1 at bind and 8 in stage
-  05, and 4 of those follow passes that only add tags the canonicalizer does not read (bilinear, ABS).
-- **Change.** The 4 reinstalls after tag-only passes go. The second bilinear run goes and `RewriteScopedReducers` hands
-  the objective's products to the bilinear rewrite always; the third becomes a worklist hook in `FindAbsAndAllocateAux`
-  that tags a product once the ABS helper it reads exists (as LLVM's InstCombine revisits a new value's users).
-- **Ruling (owner, 2026-11-21).** Not one post-order traversal: the ABS encoding, value helpers, definitions, MIN/MAX,
-  `<>` and IN depend on the whole clause or query, not on one node and its children.
-- **Done when.** `RewriteBilinear` runs once (`DECIDB_PROFILE=1`); `./test/decide/run_tests.sh -n 2 -k "bilinear or abs
-  or rewrite"` passes.
