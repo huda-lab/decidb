@@ -158,6 +158,33 @@ def test_a_query_wide_decision_beside_its_own_sum(decidb_cli_gurobi, decidb_cli_
         )
 
 
+@pytest.mark.correctness
+def test_a_boolean_factor_leaves_a_range_over_decisions_pushed_down(decidb_cli_gurobi, tmp_path):
+    """WalkPolarity reads a BOOL decision as a factor that is never negative (PlanTimeSignOf with BooleanDecisions), as
+    it reads a positive data factor: `b * max(from previous to next: x) <= 2` pushes the MAX down, which its envelope
+    alone holds. Read as a factor of unknown sign it is pinned from both sides, with an indicator per window member
+    (ten more binary columns here), so the model's binary columns are the three `b`."""
+    sql = """
+        SELECT id, x, b FROM (VALUES (1), (2), (3)) t(id)
+        DECIDE x(INT), b(BOOL)
+        SUCH THAT x <= 3 AND b * max(from previous to next: x) over (t.id) <= 2 AND SUM(b) >= 1
+        MAXIMIZE SUM(x)
+        ORDER BY id"""
+
+    def window_max(a, i):
+        return max(a[f"x{j}"] for j in range(max(0, i - 1), min(3, i + 2)))
+
+    _judge(
+        decidb_cli_gurobi,
+        sql,
+        {**_per_row("x", 3), **_per_row("b", 1)},
+        lambda a: sum(a[f"b{i}"] for i in range(3)) >= 1 and all(a[f"b{i}"] * window_max(a, i) <= 2 for i in range(3)),
+        lambda a: sum(a[f"x{i}"] for i in range(3)),
+    )
+    dump = decidb_cli_gurobi.dump_model(sql, tmp_path / "model.dump")
+    assert dump.count("bin=1") == 3, dump
+
+
 # ---------------------------------------------------------------------------
 # Refusals, pinned by their kind and place
 # ---------------------------------------------------------------------------

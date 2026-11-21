@@ -117,18 +117,19 @@ struct BodySite {
 };
 
 //! The sign every reducer in `side` carries (WalkPolarity), keyed by node.
-void CollectReducerSigns(ClientContext &context, Expression &side, int sign, idx_t decide_index,
-                         unordered_map<const Expression *, int> &signs) {
+void CollectReducerSigns(ClientContext &context, const BooleanDecisions &booleans, unique_ptr<Expression> &side,
+                         int sign, unordered_map<const Expression *, int> &signs) {
+	const idx_t decide_index = booleans.decide_index;
 	PolarityHolds holds = [&](const Expression &node) {
 		return HoldsReducer(node, decide_index, false);
 	};
-	PolarityVisit visit = [&](Expression &node, int node_sign) {
-		if (AsDecisionReducer(node, decide_index)) {
-			signs[&node] = node_sign;
+	PolarityVisit visit = [&](unique_ptr<Expression> &node, int node_sign, const PolarityPath &) {
+		if (AsDecisionReducer(*node, decide_index)) {
+			signs[node.get()] = node_sign;
 		}
 		return false;
 	};
-	WalkPolarity(context, side, sign, holds, visit);
+	WalkPolarity(context, booleans, side, sign, holds, visit);
 }
 
 //! The reducers under `expr` whose body is not linear and holds no reducer. A SUM or AVG qualifies with `sums`
@@ -196,6 +197,7 @@ unique_ptr<Expression> HelperCondition(const BodySite &site) {
 void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, LogicalDecide &decide) {
 	const idx_t decide_index = decide.decide_index;
 	DecideTermSplitter splitter(context, decide);
+	const BooleanDecisions booleans {decide_index, decide.is_boolean_var};
 	vector<BodySite> sites;
 
 	if (decide.decide_constraints) {
@@ -229,8 +231,8 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 			    }
 			    // Read as `LHS - RHS <op> 0`: the relation pushes the whole expression.
 			    unordered_map<const Expression *, int> signs;
-			    CollectReducerSigns(context, *comparison.left, 1, decide_index, signs);
-			    CollectReducerSigns(context, *comparison.right, -1, decide_index, signs);
+			    CollectReducerSigns(context, booleans, comparison.left, 1, signs);
+			    CollectReducerSigns(context, booleans, comparison.right, -1, signs);
 			    const auto outer = ExtremumPushOf(comparison.type);
 			    CollectBodySites(*comparison.left, decide_index, splitter, true, extremum_clause, false, outer, signs,
 			                     source_alias, scope, sites);
@@ -246,19 +248,19 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 	const idx_t constraint_sites = sites.size();
 	if (decide.decide_objective && HoldsReducer(*decide.decide_objective, decide_index, true)) {
 		objective = std::move(decide.decide_objective);
-		Expression *body = objective.get();
+		auto *body = &objective;
 		DecideEnclosingScope scope;
-		while (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			auto &conjunction = body->Cast<BoundConjunctionExpression>();
+		while ((*body)->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+			auto &conjunction = (*body)->Cast<BoundConjunctionExpression>();
 			if (!IsConstraintWrapper(conjunction) || conjunction.children.empty()) {
 				break;
 			}
 			scope = EnterDecideScope(conjunction, scope);
-			body = conjunction.children[0].get();
+			body = &conjunction.children[0];
 		}
 		unordered_map<const Expression *, int> signs;
-		CollectReducerSigns(context, *body, 1, decide_index, signs);
-		CollectBodySites(*body, decide_index, splitter, false, false, false, ExtremumPush::DOWN, signs,
+		CollectReducerSigns(context, booleans, *body, 1, signs);
+		CollectBodySites(**body, decide_index, splitter, false, false, false, ExtremumPush::DOWN, signs,
 		                 OBJECTIVE_ROW_TAG, scope, sites);
 	}
 

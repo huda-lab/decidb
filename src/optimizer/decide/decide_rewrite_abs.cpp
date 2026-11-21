@@ -118,30 +118,33 @@ static bool ContainsAbsOverDecideVar(const Expression &expr, idx_t decide_index)
 //! "unknown", which never matches the pinning direction and so forces Big-M. That is conservative: for `w >= 0` the
 //! aux would have been pinned without it. Deciding per row at execution time would recover those rows, but exactness
 //! is one answer per ABS, given at plan time, so it cannot be chosen lazily as the code stands. A factor that is
-//! exactly zero reads as positive, as for any other term. An ABS nested inside another sits under a function that is
+//! exactly zero reads as positive, as for any other term, and a BOOL decision as a factor is never negative: an ABS
+//! under one keeps the sign of the term it scales. An ABS nested inside another sits under a function that is
 //! not monotone in it, so no pressure and no shape pins it: it carries sign 0.
-static void MarkExactAbs(ClientContext &context, Expression &expr, int sign, int pinning_sign, idx_t decide_index,
-                         AbsExactSet &exact) {
+static void MarkExactAbs(ClientContext &context, const BooleanDecisions &booleans, unique_ptr<Expression> &expr,
+                         int sign, int pinning_sign, AbsExactSet &exact) {
+	const idx_t decide_index = booleans.decide_index;
 	PolarityHolds holds = [&](const Expression &node) {
 		return ContainsAbsOverDecideVar(node, decide_index);
 	};
-	PolarityVisit visit = [&](Expression &node, int node_sign) {
-		if (!IsAbsOverDecideVar(node, decide_index)) {
+	PolarityVisit visit = [&](unique_ptr<Expression> &node, int node_sign, const PolarityPath &) {
+		if (!IsAbsOverDecideVar(*node, decide_index)) {
 			return false;
 		}
 		if (pinning_sign == 0 || node_sign != pinning_sign) {
-			exact.insert(&node);
+			exact.insert(node.get());
 		}
-		WalkPolarity(context, *node.Cast<BoundFunctionExpression>().children[0], 0, holds, visit);
+		WalkPolarity(context, booleans, node->Cast<BoundFunctionExpression>().children[0], 0, holds, visit);
 		return true;
 	};
-	WalkPolarity(context, expr, sign, holds, visit);
+	WalkPolarity(context, booleans, expr, sign, holds, visit);
 }
 
 //! A clause read as `E <op> 0` with `E = LHS - RHS`: every ABS is then a single signed term of one expression, and
 //! "does this comparison push the aux down?" is a question about that term's sign rather than about which side of the
 //! relation it happens to be written on.
-static void MarkExactAbsInClause(ClientContext &context, Expression &clause, idx_t decide_index, AbsExactSet &exact) {
+static void MarkExactAbsInClause(ClientContext &context, const BooleanDecisions &booleans, Expression &clause,
+                                 AbsExactSet &exact) {
 	// A `when` or `per` scope only affects which rows participate in the aggregate, and aux pinning is unconditional
 	// per row, so a wrapper does not change classification -- the ordinary constraint-position descent is exactly
 	// right here.
@@ -159,8 +162,8 @@ static void MarkExactAbsInClause(ClientContext &context, Expression &clause, idx
 		} else {
 			pinning_sign = 0; // equality, <>: pin nothing
 		}
-		MarkExactAbs(context, *comp.left, 1, pinning_sign, decide_index, exact);
-		MarkExactAbs(context, *comp.right, -1, pinning_sign, decide_index, exact);
+		MarkExactAbs(context, booleans, comp.left, 1, pinning_sign, exact);
+		MarkExactAbs(context, booleans, comp.right, -1, pinning_sign, exact);
 	});
 }
 
@@ -248,15 +251,15 @@ static BoxedHelpers FindBoxedHelpers(LogicalDecide &decide) {
 //! definition's.
 static AbsExactSet FindExactAbs(ClientContext &context, LogicalDecide &decide) {
 	AbsExactSet exact;
-	const idx_t decide_index = decide.decide_index;
+	const BooleanDecisions booleans {decide.decide_index, decide.is_boolean_var};
 	if (decide.decide_constraints) {
-		MarkExactAbsInClause(context, *decide.decide_constraints, decide_index, exact);
+		MarkExactAbsInClause(context, booleans, *decide.decide_constraints, exact);
 	}
 	// L0 indicator rows live as function metadata rather than in the main clause tree, but their reverse links still
 	// need the same exactness classification as ordinary constraints.
 	for (auto &indicator : decide.l0_indicator_functions) {
 		for (auto &link : indicator.links) {
-			MarkExactAbsInClause(context, *link, decide_index, exact);
+			MarkExactAbsInClause(context, booleans, *link, exact);
 		}
 	}
 	// `t >= q` holds the body down, `t <= q` up, `t = q` neither.
@@ -266,26 +269,26 @@ static AbsExactSet FindExactAbs(ClientContext &context, LogicalDecide &decide) {
 		if (definition.body) {
 			const bool down = definition.relation == ExpressionType::COMPARE_GREATERTHANOREQUALTO;
 			const bool up = definition.relation == ExpressionType::COMPARE_LESSTHANOREQUALTO;
-			MarkExactAbs(context, *definition.body, 1,
+			MarkExactAbs(context, booleans, definition.body, 1,
 			             boxed.definitions[i] ? 0
 			             : down               ? 1
 			             : up                 ? -1
 			                                  : 0,
-			             decide_index, exact);
+			             exact);
 		}
 	}
 	for (idx_t i = 0; i < decide.reducer_value_links.size(); i++) {
 		auto &link = decide.reducer_value_links[i];
-		MarkExactAbs(context, *link.inner_expr, 1, boxed.links[i] ? 0 : ValueLinkPush(link), decide_index, exact);
+		MarkExactAbs(context, booleans, link.inner_expr, 1, boxed.links[i] ? 0 : ValueLinkPush(link), exact);
 	}
 	if (decide.decide_objective) {
 		// A `when` or two-level `per` wrapper carries no sign: the body is its first child. The objective is
 		// minimized, which pushes a positive term down.
-		Expression *body = decide.decide_objective.get();
-		while (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			body = body->Cast<BoundConjunctionExpression>().children[0].get();
+		auto *body = &decide.decide_objective;
+		while ((*body)->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+			body = &(*body)->Cast<BoundConjunctionExpression>().children[0];
 		}
-		MarkExactAbs(context, *body, 1, 1, decide_index, exact);
+		MarkExactAbs(context, booleans, *body, 1, 1, exact);
 	}
 	return exact;
 }

@@ -61,21 +61,22 @@ bool HoldsRangeOverDecisions(const LogicalDecide &decide, const Expression &expr
 //! The sign each range over decisions in `expr` carries once `expr` is read as a sum (WalkPolarity): through SUM and
 //! AVG, whose members it keeps, and through a MIN or a MAX, which does not decrease when a member grows; 0 under a
 //! norm, which pins its helper from both sides (D79).
-void CollectRangeSigns(ClientContext &context, const LogicalDecide &decide, Expression &expr,
+void CollectRangeSigns(ClientContext &context, const LogicalDecide &decide, unique_ptr<Expression> &expr,
                        unordered_map<const Expression *, int> &signs) {
+	const BooleanDecisions booleans {decide.decide_index, decide.is_boolean_var};
 	PolarityHolds holds = [&](const Expression &node) {
 		return HoldsRangeOverDecisions(decide, node);
 	};
 	PolarityVisit visit;
-	visit = [&](Expression &node, int node_sign) {
-		if (RangeOverDecisions(decide, node) != DConstants::INVALID_INDEX) {
-			signs[&node] = node_sign;
+	visit = [&](unique_ptr<Expression> &node, int node_sign, const PolarityPath &) {
+		if (RangeOverDecisions(decide, *node) != DConstants::INVALID_INDEX) {
+			signs[node.get()] = node_sign;
 			return true;
 		}
-		if (node.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		if (node->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
 			return false;
 		}
-		auto &reducer = node.Cast<BoundAggregateExpression>();
+		auto &reducer = node->Cast<BoundAggregateExpression>();
 		auto name = StringUtil::Lower(reducer.function.name);
 		string norm;
 		const bool is_norm = TryParseNormMarker(reducer.GetAlias(), norm);
@@ -84,11 +85,11 @@ void CollectRangeSigns(ClientContext &context, const LogicalDecide &decide, Expr
 		}
 		const int member_sign = !is_norm && (name == "min" || name == "max") ? node_sign : 0;
 		for (auto &child : reducer.children) {
-			WalkPolarity(context, *child, member_sign, holds, visit);
+			WalkPolarity(context, booleans, child, member_sign, holds, visit);
 		}
 		return true;
 	};
-	WalkPolarity(context, expr, 1, holds, visit);
+	WalkPolarity(context, booleans, expr, 1, holds, visit);
 }
 
 //! Each point frame over decisions a product of decisions or a square reads -- a term of degree 2 -- becomes the range
@@ -232,7 +233,7 @@ void DecideOptimizer::RewriteFrameRanges(LogicalDecide &decide) {
 			                        comparison.ToString());
 		}
 		unordered_map<const Expression *, int> signs;
-		CollectRangeSigns(context, decide, *comparison.left, signs);
+		CollectRangeSigns(context, decide, comparison.left, signs);
 		idx_t source_clause_id = DConstants::INVALID_INDEX;
 		TryParseSourceClauseTag(comparison.GetAlias(), source_clause_id);
 		lifter.Lift(comparison.left, ExtremumPushOf(comparison.type), source_clause_id, signs);
@@ -255,7 +256,7 @@ void DecideOptimizer::RewriteFrameRanges(LogicalDecide &decide) {
 		body = &conjunction.children[0];
 	}
 	unordered_map<const Expression *, int> signs;
-	CollectRangeSigns(context, decide, **body, signs);
+	CollectRangeSigns(context, decide, *body, signs);
 	lifter.Lift(*body, ExtremumPush::DOWN, DConstants::INVALID_INDEX, signs);
 	decide.SetObjective(context, std::move(objective));
 }

@@ -98,16 +98,27 @@ unique_ptr<Expression> MakeAbsRow(ClientContext &context, const LogicalDecide &d
 //! (`LHS - RHS`), or the objective as `E` under its sense. Walking `expr` with `sign`, a node keeps its parent's sign
 //! through `+`, casts and reducer bodies (SUM, AVG, MIN and MAX never decrease when a member grows), flips it through
 //! `-` and a factor known negative before the query runs, and gets 0 ("unknown") under a factor whose sign only the
-//! rows decide or any other node. A factor of exactly zero reads as positive.
+//! rows decide or any other node. A factor of exactly zero reads as positive, and a BOOL decision as a factor is never
+//! negative (it is 0 or 1), so it keeps the sign of the term it scales (PlanTimeSignOf, `booleans`).
 //!
 //! `holds(node)` says whether a subtree holds anything the caller wants; a subtree that does not is skipped, and a
-//! factor that does not is read as a multiplier. `visit(node, sign)` sees each held node first and returns true when it
-//! has taken the node and its subtree (it may walk below itself, with any sign). The ABS classifier and the definition
-//! of non-linear reducer bodies read their direction from this one walk.
+//! factor that does not is read as a multiplier. `visit(slot, sign, path)` sees each held node first, through the slot
+//! that owns it, and returns true when it has taken the node and its subtree (it may walk below itself, with any sign).
+//! `path` says what else the way down to the node passed through. Every reader of a push reads it from this one walk:
+//! the ABS classifier, the reducers a value rewrite replaces, the ranges over decisions, and the definition of
+//! non-linear reducer bodies.
+struct PolarityPath {
+	//! A decision multiplies or divides the node, held or not (`b * sum(x)`).
+	bool beside_decision = false;
+	//! Another held node multiplies or divides it (`sum(x) * sum(y)`): the factor's sign is its own, not known here.
+	bool beside_held = false;
+	//! A node with no sign discipline holds it (`abs(sum(x) - 2)`, a CASE): its sign is 0 below.
+	bool inside_function = false;
+};
 using PolarityHolds = std::function<bool(const Expression &)>;
-using PolarityVisit = std::function<bool(Expression &, int)>;
-void WalkPolarity(ClientContext &context, Expression &expr, int sign, const PolarityHolds &holds,
-                  const PolarityVisit &visit);
+using PolarityVisit = std::function<bool(unique_ptr<Expression> &, int, const PolarityPath &)>;
+void WalkPolarity(ClientContext &context, const BooleanDecisions &booleans, unique_ptr<Expression> &expr, int sign,
+                  const PolarityHolds &holds, const PolarityVisit &visit, const PolarityPath &path = PolarityPath());
 
 //! Allocate an auxiliary decision column `name` of `type`: its reference in
 //! `decide_variables`, its Boolean flag, and its scope (the binder gives every declared decision one, so

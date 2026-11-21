@@ -502,50 +502,57 @@ unique_ptr<Expression> decide_rewrite::ScopeRowPerInstance(const LogicalDecide &
 	return std::move(wrapper);
 }
 
-void decide_rewrite::WalkPolarity(ClientContext &context, Expression &expr, int sign, const PolarityHolds &holds,
-                                  const PolarityVisit &visit) {
-	if (!holds(expr) || visit(expr, sign)) {
+void decide_rewrite::WalkPolarity(ClientContext &context, const BooleanDecisions &booleans,
+                                  unique_ptr<Expression> &expr, int sign, const PolarityHolds &holds,
+                                  const PolarityVisit &visit, const PolarityPath &path) {
+	if (!holds(*expr) || visit(expr, sign, path)) {
 		return;
 	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		WalkPolarity(context, *expr.Cast<BoundCastExpression>().child, sign, holds, visit);
+	auto walk = [&](unique_ptr<Expression> &child, int child_sign, const PolarityPath &child_path) {
+		WalkPolarity(context, booleans, child, child_sign, holds, visit, child_path);
+	};
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		walk(expr->Cast<BoundCastExpression>().child, sign, path);
 		return;
 	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-		auto &func = expr.Cast<BoundFunctionExpression>();
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &func = expr->Cast<BoundFunctionExpression>();
 		auto name = StringUtil::Lower(func.function.name);
 		if (name == "+") {
 			for (auto &child : func.children) {
-				WalkPolarity(context, *child, sign, holds, visit);
+				walk(child, sign, path);
 			}
 			return;
 		}
 		if (name == "-" && func.children.size() == 2) {
-			WalkPolarity(context, *func.children[0], sign, holds, visit);
-			WalkPolarity(context, *func.children[1], -sign, holds, visit);
+			walk(func.children[0], sign, path);
+			walk(func.children[1], -sign, path);
 			return;
 		}
 		if (name == "-") {
-			WalkPolarity(context, *func.children[0], -sign, holds, visit);
+			walk(func.children[0], -sign, path);
 			return;
 		}
 		if (name == "*" || name == "/") {
 			// Fold the sign of every factor beside the held one, read before the query runs
 			// (PlanTimeSignOf, which sees through products: `0 * w` is zero whatever the data
-			// column `w` holds). For division only the numerator can hold the term, but the
-			// divisor's sign still applies. A held factor is the term being walked rather
+			// column `w` holds, and which reads a BOOL decision as never negative). For division only the numerator
+			// can hold the term, but the divisor's sign still applies. A held factor is the term being walked rather
 			// than a multiplier, and never flips.
 			//
-			// A factor whose sign is not known until execution -- `w` in `SUM(w * ABS(x - t))`
-			// -- makes the whole path sign 0. A factor that is exactly zero is a number like any other: it reads
-			// as positive, so the term takes the push it takes with weight 1.
+			// A factor whose sign is not known until execution -- `w` in `SUM(w * ABS(x - t))` -- makes the whole path
+			// sign 0. A factor that is exactly zero is a number like any other: it reads as positive, so the term takes
+			// the push it takes with weight 1.
 			int factor_sign = 1;
-			for (idx_t i = 0; i < func.children.size(); i++) {
-				auto &child = *func.children[i];
-				if (holds(child)) {
+			idx_t held_count = 0;
+			idx_t decision_count = 0;
+			for (auto &child : func.children) {
+				held_count += holds(*child) ? 1 : 0;
+				decision_count += BoundExpressionReferencesDecide(*child, booleans.decide_index) ? 1 : 0;
+				if (holds(*child)) {
 					continue;
 				}
-				auto child_sign = PlanTimeSignOf(context, child);
+				auto child_sign = PlanTimeSignOf(context, *child, &booleans);
 				const bool is_divisor = name == "/";
 				if (child_sign == PlanTimeSign::UNKNOWN || (child_sign == PlanTimeSign::ZERO && is_divisor)) {
 					factor_sign = 0;
@@ -554,23 +561,28 @@ void decide_rewrite::WalkPolarity(ClientContext &context, Expression &expr, int 
 				}
 			}
 			for (auto &child : func.children) {
-				WalkPolarity(context, *child, sign * factor_sign, holds, visit);
+				auto child_path = path;
+				child_path.beside_decision |=
+				    decision_count > (BoundExpressionReferencesDecide(*child, booleans.decide_index) ? 1 : 0);
+				child_path.beside_held |= held_count > (holds(*child) ? 1 : 0);
+				walk(child, sign * factor_sign, child_path);
 			}
 			return;
 		}
 	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		// SUM, AVG, MIN and MAX never decrease when a member grows, so a member carries the
 		// reducer's sign.
-		for (auto &child : expr.Cast<BoundAggregateExpression>().children) {
-			WalkPolarity(context, *child, sign, holds, visit);
+		for (auto &child : expr->Cast<BoundAggregateExpression>().children) {
+			walk(child, sign, path);
 		}
 		return;
 	}
 	// Anything else (subqueries, CASE, operators with no sign discipline): the sign of the
 	// path is unknown.
-	ExpressionIterator::EnumerateChildren(expr,
-	                                      [&](Expression &child) { WalkPolarity(context, child, 0, holds, visit); });
+	auto below = path;
+	below.inside_function = true;
+	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) { walk(child, 0, below); });
 }
 
 } // namespace duckdb
