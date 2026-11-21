@@ -60,7 +60,7 @@ static int ExtremumArgumentColumn(SolverInput &input, const VarIndexer &indexer,
 	auto pin = link.LeftHandSide((int)t_idx);
 	pin.sense = '=';
 	pin.rhs = link.constant;
-	pin.kind = ConstraintKind::STRUCTURAL;
+	pin.provenance.kind = ConstraintKind::STRUCTURAL;
 	input.global_constraints.push_back(std::move(pin));
 	return (int)t_idx;
 }
@@ -90,7 +90,7 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
 		auto rc = member.LeftHandSide(result_col);
 		rc.sense = '=';
 		rc.rhs = member.constant;
-		rc.kind = ConstraintKind::STRUCTURAL;
+		rc.provenance.kind = ConstraintKind::STRUCTURAL;
 		input.global_constraints.push_back(std::move(rc));
 		return;
 	}
@@ -106,7 +106,7 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
 			auto rc = member.LeftHandSide(result_col);
 			rc.sense = sense;
 			rc.rhs = member.constant;
-			rc.kind = ConstraintKind::STRUCTURAL;
+			rc.provenance.kind = ConstraintKind::STRUCTURAL;
 			input.global_constraints.push_back(std::move(rc));
 		}
 	}
@@ -157,12 +157,12 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
 		rc.coefficients.push_back(m_coeff);
 		rc.sense = sense;
 		rc.rhs = m_coeff + member.constant;
-		rc.kind = ConstraintKind::STRUCTURAL;
+		rc.provenance.kind = ConstraintKind::STRUCTURAL;
 		input.global_constraints.push_back(std::move(rc));
 	}
 	sum_y.sense = '>';
 	sum_y.rhs = 1.0;
-	sum_y.kind = ConstraintKind::STRUCTURAL;
+	sum_y.provenance.kind = ConstraintKind::STRUCTURAL;
 	input.global_constraints.push_back(std::move(sum_y));
 }
 

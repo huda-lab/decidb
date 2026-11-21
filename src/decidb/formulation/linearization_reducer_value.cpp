@@ -925,7 +925,7 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 				auto rc = sum.LeftHandSide(static_cast<int>(indexer.Get(value_var, group_row)));
 				rc.sense = link.need_envelope && link.need_closing ? '=' : link.need_envelope ? '>' : '<';
 				rc.rhs = constants;
-				rc.kind = ConstraintKind::STRUCTURAL;
+				rc.provenance.kind = ConstraintKind::STRUCTURAL;
 				input.global_constraints.push_back(std::move(rc));
 				RefuseOverflowedReach(input, link, group, indexer.InstanceOf(value_var, group_row));
 				continue;

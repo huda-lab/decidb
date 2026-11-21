@@ -221,7 +221,7 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
 		if (!nonneg) {
 			continue;
 		}
-		const auto written = DecideWrittenClause(input, ec.source_clause_id);
+		const auto written = DecideWrittenClause(input, ec.origin.source_clause_id);
 		// Row e the clause emits, read as the model builder emits it (ClauseEmittedRows), over the data rows
 		// [begin, end) of `rows` (row k itself for none). A solver column's coefficient is the sum of its terms over
 		// the row's data rows, so a decision that stands in several rows of a group, or one counted once beside the

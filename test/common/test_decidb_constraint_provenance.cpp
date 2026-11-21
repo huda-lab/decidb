@@ -29,7 +29,8 @@ SolverInput MakeBaseInput(idx_t num_rows, idx_t num_vars, bool diagnose = true) 
 	return input;
 }
 
-// SUM over rows of (x[v0] + x[v1] + ...) <= rhs. Aggregate, ungrouped by default.
+// SUM over rows of (x[v0] + x[v1] + ...) <= rhs. Aggregate, ungrouped by default. Every clause the model builder reads
+// arrives numbered (the emitter numbers it), so the fixture is clause 0.
 EvaluatedConstraint MakeAggregate(const duckdb::vector<idx_t> &vars, idx_t num_rows, double rhs) {
 	EvaluatedConstraint ec;
 	ec.variable_indices = vars;
@@ -39,10 +40,11 @@ EvaluatedConstraint MakeAggregate(const duckdb::vector<idx_t> &vars, idx_t num_r
 	ec.rhs_values = CoefficientColumn::MakeScalar(rhs, num_rows);
 	ec.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
 	ec.lhs_is_aggregate = true;
+	ec.origin.repair_group_id = 0;
 	return ec;
 }
 
-// Per-row: x[v] <= rhs for every row. Non-aggregate.
+// Per-row: x[v] <= rhs for every row. Non-aggregate. Clause 0, as MakeAggregate.
 EvaluatedConstraint MakePerRow(idx_t var, idx_t num_rows, double rhs) {
 	EvaluatedConstraint ec;
 	ec.variable_indices = {var};
@@ -50,6 +52,7 @@ EvaluatedConstraint MakePerRow(idx_t var, idx_t num_rows, double rhs) {
 	ec.rhs_values = CoefficientColumn::MakeScalar(rhs, num_rows);
 	ec.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
 	ec.lhs_is_aggregate = false;
+	ec.origin.repair_group_id = 0;
 	return ec;
 }
 
@@ -68,7 +71,7 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		SolverModel model = BuildModel(input);
 
 		REQUIRE(model.constraints.size() == 1);
-		CHECK(model.constraints[0].provenance.repair_group_id == 0);
+		CHECK(model.constraints[0].provenance.origin.repair_group_id == 0);
 		CHECK(model.constraints[0].provenance.group_key == DConstants::INVALID_INDEX);
 		CHECK(model.constraints[0].provenance.kind == ConstraintKind::USER_PARAMETER);
 		CHECK(IsRelaxableForElastic(model.constraints[0].provenance.kind));
@@ -85,7 +88,7 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 
 		REQUIRE(model.constraints.size() == 2);
 		for (auto &c : model.constraints) {
-			CHECK(c.provenance.repair_group_id == 0);
+			CHECK(c.provenance.origin.repair_group_id == 0);
 			CHECK(c.provenance.kind == ConstraintKind::USER_PARAMETER);
 		}
 		// Groups emit in order g = 0, 1.
@@ -103,24 +106,9 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 
 		REQUIRE(model.constraints.size() == 3);
 		for (auto &c : model.constraints) {
-			CHECK(c.provenance.repair_group_id == 0);
+			CHECK(c.provenance.origin.repair_group_id == 0);
 			CHECK(c.provenance.group_key == DConstants::INVALID_INDEX);
 			CHECK(c.provenance.kind == ConstraintKind::USER_PARAMETER);
-		}
-	}
-
-	SECTION("distinct clauses receive distinct clause ids") {
-		SolverInput input = MakeBaseInput(3, 2);
-		input.constraints.push_back(MakeAggregate({0, 1}, 3, 10.0)); // clause 0
-		input.constraints.push_back(MakePerRow(0, 3, 5.0));          // clause 1
-
-		SolverModel model = BuildModel(input);
-
-		// 1 aggregate row + 3 per-row rows.
-		REQUIRE(model.constraints.size() == 4);
-		CHECK(model.constraints[0].provenance.repair_group_id == 0);
-		for (idx_t i = 1; i < 4; i++) {
-			CHECK(model.constraints[i].provenance.repair_group_id == 1);
 		}
 	}
 
@@ -139,7 +127,7 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		REQUIRE(model.constraints.size() == 2);
 		// The structural global row comes first, the user clause after it.
 		CHECK(model.constraints[0].provenance.kind == ConstraintKind::STRUCTURAL);
-		CHECK(model.constraints[0].provenance.repair_group_id == DConstants::INVALID_INDEX);
+		CHECK(model.constraints[0].provenance.origin.repair_group_id == DConstants::INVALID_INDEX);
 		CHECK(!IsRelaxableForElastic(model.constraints[0].provenance.kind));
 		CHECK(model.constraints[1].provenance.kind == ConstraintKind::USER_PARAMETER);
 	}
@@ -151,25 +139,25 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		raw.coefficients = {1.0};
 		raw.sense = '<';
 		raw.rhs = 5.0;
-		raw.kind = ConstraintKind::USER_PARAMETER;
-		raw.shape = ElasticShape::SHARED_SCALAR;
-		raw.source_clause_id = 7;
-		raw.repair_group_id = 11;
+		raw.provenance.kind = ConstraintKind::USER_PARAMETER;
+		raw.provenance.shape = ElasticShape::SHARED_SCALAR;
+		raw.provenance.origin.source_clause_id = 7;
+		raw.provenance.origin.repair_group_id = 11;
 		input.global_constraints.push_back(std::move(raw));
 
 		SolverModel model = BuildModel(input);
 
 		REQUIRE(model.constraints.size() == 1);
-		CHECK(model.constraints[0].provenance.source_clause_id == 7);
-		CHECK(model.constraints[0].provenance.repair_group_id == 11);
+		CHECK(model.constraints[0].provenance.origin.source_clause_id == 7);
+		CHECK(model.constraints[0].provenance.origin.repair_group_id == 11);
 		CHECK(model.constraints[0].provenance.shape == ElasticShape::SHARED_SCALAR);
 	}
 
 	SECTION("an ordinary query's rows name their clause and carry nothing else") {
 		SolverInput input = MakeBaseInput(2, 2, false);
 		auto aggregate = MakeAggregate({0, 1}, 2, 10.0);
-		aggregate.source_clause_id = 5;
-		aggregate.repair_group_id = 3;
+		aggregate.origin.source_clause_id = 5;
+		aggregate.origin.repair_group_id = 3;
 		aggregate.comparison_type = ExpressionType::COMPARE_LESSTHAN; // a strict bound remembers the typed K
 		aggregate.coefficient_names = {CoefficientName {"price", false, 0.0}, CoefficientName {"2", true, 2.0}};
 		aggregate.avg_scaled = true;
@@ -179,28 +167,26 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		raw.coefficients = {1.0};
 		raw.sense = '<';
 		raw.rhs = 100.0;
-		raw.source_clause_id = 7;
-		raw.repair_group_id = 11;
-		raw.strict = true;
-		raw.rhs_label = "cap";
+		raw.provenance.origin.source_clause_id = 7;
+		raw.provenance.origin.repair_group_id = 11;
 		input.global_constraints.push_back(std::move(raw));
 		GeneralConstraintSpec general;
 		general.result_column = 1;
 		general.argument_columns = {0};
-		general.source_clause_id = 9;
-		general.repair_group_id = 13;
+		general.provenance.origin.source_clause_id = 9;
+		general.provenance.origin.repair_group_id = 13;
 		input.general_constraints.push_back(std::move(general));
 
 		SolverModel model = BuildModel(input);
 
 		REQUIRE(model.constraints.size() == 2);
-		CHECK(model.constraints[0].provenance.source_clause_id == 7);
-		CHECK(model.constraints[1].provenance.source_clause_id == 5);
+		CHECK(model.constraints[0].provenance.origin.source_clause_id == 7);
+		CHECK(model.constraints[1].provenance.origin.source_clause_id == 5);
 		REQUIRE(model.general_constraints.size() == 1);
-		CHECK(model.general_constraints[0].provenance.source_clause_id == 9);
+		CHECK(model.general_constraints[0].provenance.origin.source_clause_id == 9);
 		for (auto *prov : {&model.constraints[0].provenance, &model.constraints[1].provenance,
 		                   &model.general_constraints[0].provenance}) {
-			CHECK(prov->repair_group_id == DConstants::INVALID_INDEX);
+			CHECK(prov->origin.repair_group_id == DConstants::INVALID_INDEX);
 			CHECK(prov->kind == ConstraintKind::USER_PARAMETER);
 			CHECK(prov->shape == ElasticShape::UNSET);
 			CHECK(!prov->strict);
@@ -221,7 +207,7 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		GeneralConstraintSpec general;
 		general.result_column = 1;
 		general.argument_columns = {0};
-		general.repair_group_id = 13;
+		general.provenance.origin.repair_group_id = 13;
 		input.general_constraints.push_back(std::move(general));
 
 		SolverModel model = BuildModel(input);
@@ -237,7 +223,7 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		CHECK(prov.weight_labels[0].second == "price");
 		REQUIRE(model.general_constraints.size() == 1);
 		CHECK(model.general_constraints[0].provenance.kind == ConstraintKind::STRUCTURAL);
-		CHECK(model.general_constraints[0].provenance.repair_group_id == 13);
+		CHECK(model.general_constraints[0].provenance.origin.repair_group_id == 13);
 	}
 
 	SECTION("a fixed aggregate LHS offset sums every row") {

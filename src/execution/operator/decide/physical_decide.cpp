@@ -881,10 +881,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	solver_input.class_sets = std::move(gstate.class_sets);
 	solver_input.key_values = std::move(key_values);
 	solver_input.ne_clause_sources = ne_clause_sources;
-	for (auto &link : gstate.evaluated_bilinear_links) {
-		solver_input.bilinear_links.push_back(BilinearLinkSpec {link.aux_idx, link.bool_var_idx, link.other_var_idx,
-		                                                        link.source_clause_id, link.removal_group_id});
-	}
+	solver_input.bilinear_links = std::move(gstate.evaluated_bilinear_links);
 	// Each ABS arrives as the record stage 05 made of it, with its two envelope rows evaluated, and they join the model
 	// here, before any pass reads the rows: implied-bound propagation reads `aux >= inner` of `ABS(x) <= 3` as a bound
 	// on x.
@@ -1048,7 +1045,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 				ec.row_coefficients[z_term].AssignScalar(num_rows, 0.0);
 				double M =
 				    DecideTightPerRowBigM(ec, box, num_rows, decide_var_names, InstanceBox {solver_input, var_indexer},
-				                          DecideWrittenClause(solver_input, ec.source_clause_id), "norm(e, 0)");
+				                          DecideWrittenClause(solver_input, ec.origin.source_clause_id), "norm(e, 0)");
 				ec.row_coefficients[z_term].AssignScalar(num_rows, M);
 			}
 		}

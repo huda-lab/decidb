@@ -192,6 +192,19 @@ struct DecideClauseRef {
 	}
 };
 
+//! Where a row of the model came from: the three ids every kind of row carries. A Value Object: a row holds it by
+//! composition (`row.origin.source_clause_id`) and copies it whole, as LLVM copies a `DebugLoc`, so a site that copies
+//! a row's origin cannot drop one of the ids.
+struct DecideRowOrigin {
+	//! The user's clause, an index into `constraint_sources`; stable display provenance.
+	idx_t source_clause_id = DConstants::INVALID_INDEX;
+	//! Atomic DROP identity: every row and native construct sharing it is omitted together.
+	idx_t removal_group_id = DConstants::INVALID_INDEX;
+	//! Elastic grouping identity, kept apart because one source comparison can emit several independently repairable
+	//! rows or directions.
+	idx_t repair_group_id = DConstants::INVALID_INDEX;
+};
+
 //! The clause `source_clause_id` as a message refers to it: its span, or for an id no clause owns (the objective's, a
 //! row no clause claims) the objective.
 DecideClauseRef DecideClauseRefOf(const vector<ConstraintSourceInfo> &sources, const DecideSourceText &text,

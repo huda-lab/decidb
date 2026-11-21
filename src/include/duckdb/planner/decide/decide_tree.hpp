@@ -169,7 +169,7 @@ struct DecideNode {
 	vector<unique_ptr<Expression>> arguments;
 	unique_ptr<BoundAggregateExpression> function;
 	DecideFunctionKind function_kind = DecideFunctionKind::INVALID;
-	//! BOOLEAN_PRODUCT: factors whose product this F node defines; the emitter turns them into a BilinearLink.
+	//! BOOLEAN_PRODUCT: factors whose product this F node defines; the emitter turns them into a BilinearLinkSpec.
 	idx_t product_bool_var = DConstants::INVALID_INDEX;
 	idx_t product_other_var = DConstants::INVALID_INDEX;
 	//! L0_INDICATOR: rows which define the indicator from its operand and the reverse ABS link.
@@ -205,8 +205,7 @@ struct DecideNode {
 	bool value_link_needs_closing = false;
 	//! A G node's relation-qualified scope, whose classes it reads at most once; INVALID_INDEX when unqualified.
 	idx_t qualifier_scope = DConstants::INVALID_INDEX;
-	idx_t source_clause_id = DConstants::INVALID_INDEX;
-	idx_t removal_group_id = DConstants::INVALID_INDEX;
+	DecideRowOrigin origin;
 	idx_t defined_var = DConstants::INVALID_INDEX;
 	ExpressionType comparison_type = ExpressionType::INVALID;
 	bool root = false;

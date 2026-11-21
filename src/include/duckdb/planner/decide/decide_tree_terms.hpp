@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/expression.hpp"
@@ -158,10 +159,9 @@ struct DecideConstraint {
 	//! reducer reads its own `by` group of the kept rows.
 	idx_t group_key = DConstants::INVALID_INDEX;
 	ConstraintKind kind = ConstraintKind::USER_PARAMETER;
-	//! Stable origin in LogicalDecide::constraint_sources.
-	idx_t source_clause_id = DConstants::INVALID_INDEX;
-	//! Atomic DROP identity, independent of display and elastic grouping provenance.
-	idx_t removal_group_id = DConstants::INVALID_INDEX;
+	//! The clause in LogicalDecide::constraint_sources and the atomic DROP group, independent of display and elastic
+	//! grouping provenance.
+	DecideRowOrigin origin;
 	//! A per-row bound on one decision: the values of the decision it admits on each row (DecideSingletonRow), as
 	//! DOUBLE expressions over the row and the inputs `admitted_a` and `admitted_r`, ±infinity on an open side. Null
 	//! for any other constraint. Stage 08 evaluates the inputs once on the rows `admitted_member` keeps (every kept

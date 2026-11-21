@@ -165,7 +165,7 @@ private:
 	//! the tree and the shared term splitter while allocating helper columns. Boolean × Boolean: w = b1 * b2,
 	//! AND-linearization (w <= b1, w <= b2, w >= b1+b2-1). Boolean × Other: w = b * x, partial McCormick (w <= x at
 	//! plan time,
-	//!   w <= U*b and w >= x-U*(1-b) at execution time via BilinearLink).
+	//!   w <= U*b and w >= x-U*(1-b) at execution time via BilinearLinkSpec).
 	//! Non-Boolean × Non-Boolean: left in place for Q matrix handling in physical operator.
 	void RewriteBilinear(LogicalDecide &decide);
 

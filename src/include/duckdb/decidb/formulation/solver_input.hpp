@@ -202,6 +202,102 @@ struct CoefficientName {
 	double literal = 0.0;
 };
 
+//! One summed decide variable of an aggregate LHS, paired with the coefficient the user
+//! wrote for it. `has_unit` is false when that coefficient is data-varying
+//! (`SUM(keepS * price)`): there is no literal to quote, and the render falls back to the
+//! symbolic name in `ConstraintProvenance::weight_labels`. See `folded_terms`.
+struct FoldedAggTerm {
+	idx_t decide_var_idx = DConstants::INVALID_INDEX;
+	double unit = 1.0;
+	bool has_unit = false;
+};
+
+//! Row → clause provenance carried by every emitted constraint (F2). Lets diagnosis
+//! report at the user-clause level instead of at raw matrix rows.
+struct ConstraintProvenance {
+	//! The clause, DROP group and elastic group the row came from; INVALID_INDEX for the id of a rigid or source-less
+	//! row.
+	DecideRowOrigin origin;
+	//! `by`/`when` group id at emission (or the row id for per-row clauses).
+	//! DConstants::INVALID_INDEX when the clause is ungrouped.
+	idx_t group_key = DConstants::INVALID_INDEX;
+	//! User parameter vs rigid mechanism/structural row (see ConstraintKind).
+	ConstraintKind kind = ConstraintKind::USER_PARAMETER;
+	//! Elastic-diagnosis shape (I2): does this row share ONE slack with its
+	//! (repair_group_id, group_key) siblings, or get its own? Relaxable user-clause
+	//! rows must be stamped explicitly by the builder site.
+	ElasticShape shape = ElasticShape::UNSET;
+	//! True when the row's coefficients were pre-scaled by 1/N_g for an AVG rewrite.
+	//! The slack is then already in the user's AVG units (report the raw slack).
+	bool avg_scaled = false;
+	//! True when the user wrote a strict `<` / `>` (a δ offset was baked into `rhs`
+	//! at build time). `typed_k` carries the user's original literal so the reported
+	//! suggestion can be re-quoted against it instead of the δ-adjusted rhs.
+	bool strict = false;
+	double typed_k = 0.0;
+	//! What a lowering added to the user's literal to build this row's RHS. The reported
+	//! clause and its suggested edit quote `rhs - rhs_mechanism_offset`, so a hard
+	//! `MAX(e) >= K` lowered to `e_i - M*y_i >= K - M` still reads as `MAX(e) >= K` and
+	//! still loosens by the slack the engine actually spent. 0.0 (the ordinary case)
+	//! means the row's RHS is the user's literal already. Distinct from `strict`/`typed_k`,
+	//! which re-quote a δ the *binder* baked in; both are resolved by `DisplayRhs`.
+	double rhs_mechanism_offset = 0.0;
+	//! Flat solver column of the `<>` disjunction binary this row belongs to.
+	//! Describes the formulation itself; atomic DROP identity lives independently in
+	//! `removal_group_id`, and display identity in `source_clause_id`.
+	idx_t indicator_col = DConstants::INVALID_INDEX;
+	//! The name of this row's group (SolverModel::key_values); none when the clause's groups
+	//! have no key. Lets infeasible diagnosis identify which group an edit belongs to and
+	//! populate the finding's `group` column, so grouped aggregates can fold to `SUM(x)`
+	//! without colliding in the relation (Facet A).
+	GroupName group_name;
+	//! The classes this row's group stands for (SolverModel::class_sets), or
+	//! INVALID_INDEX: an expanded diagnosis reports the row once per class (D28).
+	idx_t class_set = DConstants::INVALID_INDEX;
+	//! The data row a per-row model row was emitted at -- what DIAGNOSE's `row` column
+	//! reports for a row that stands for it -- or INVALID_INDEX for a group's row.
+	idx_t data_row = DConstants::INVALID_INDEX;
+	//! A per-row row of a clause that stands for no class
+	//! set (no `per` key): each kept row is a class of its own, so the expanded scope
+	//! reports it once per row rather than folding the clause's rows into one finding (D28).
+	bool per_kept_row = false;
+	//! True when the LHS was an aggregate (`SUM`/`AVG`/...). Lets the diagnosis wrap a
+	//! single-row / WHEN group's reconstruction in `SUM(...)` even when there is no
+	//! per-row fan-out to key on (distinct from SHARED_SCALAR, which a per-row
+	//! query-wide bound also carries) (Facet B).
+	bool is_aggregate = false;
+	//! Symbolic coefficient label per summed decide variable, for a data-weighted aggregate
+	//! (`SUM(buy * l_extendedprice)`): `decide_var_idx → "l_extendedprice"`. Lets infeasible
+	//! diagnosis render `SUM(buy * l_extendedprice)` instead of the per-row numeric fan-out
+	//! (`24710*buy + 56688*buy + …`) when the summed coefficients are data-varying, so there
+	//! is no single literal to quote. Empty for uniform-coefficient or non-aggregate rows.
+	vector<std::pair<idx_t, string>> weight_labels;
+	//! Symbolic name of a data-backed (PER_ROW_DATA) RHS column (`x <= cap_col` → "cap_col").
+	//! Lets query-mode infeasible diagnosis render a virtual offset (`x <= cap_col + delta`)
+	//! instead of the numeric representative RHS. Empty for a literal/shared RHS or when no
+	//! column name is available (the render then falls back to the numeric representative).
+	string rhs_label;
+	//! Per-term coefficient the user actually wrote, for an aggregate row whose terms *fold*
+	//! onto fewer solver columns than there are contributing rows. A keyed variable
+	//! (`DECIDE S.keepS`) maps every joined row of a class onto ONE column, so the builder
+	//! accumulates instead of fanning out: `SUM(keepS)` over two rows of one sensor arrives
+	//! as a single index with coefficient 2. The fan-out that `FormatSumLhs` keys on is then
+	//! structurally absent, and the reconstruction quotes a constant the user never typed
+	//! (`SUM(2*keepS)`, or `SUM(keepS * 1)` when the group mixes multiplicities). Recording
+	//! the written coefficient lets the diagnosis quote the clause as written.
+	//! Populated only on the accumulating build path; empty for row-scoped fan-out rows,
+	//! which `FormatSumLhs` already folds correctly.
+	vector<FoldedAggTerm> folded_terms;
+
+	//! The provenance of a row the model states for its own sake: a mechanism's row or a native construct, which no
+	//! parameter of the user's clause repairs.
+	static ConstraintProvenance Structural() {
+		ConstraintProvenance provenance;
+		provenance.kind = ConstraintKind::STRUCTURAL;
+		return provenance;
+	}
+};
+
 //! Represents an evaluated constraint ready for the solver
 struct EvaluatedConstraint {
 	vector<idx_t> variable_indices;             // Which variable for each term
@@ -242,27 +338,14 @@ struct EvaluatedConstraint {
 	vector<EvaluatedProductGroup> product_groups;
 	ConstraintKind kind = ConstraintKind::USER_PARAMETER;
 
-	//! Stable user-clause identity retained when one cast comparison expands to
-	//! multiple boundary rows.
-	idx_t source_clause_id = DConstants::INVALID_INDEX;
-	//! Atomic DROP identity. Every descendant row with the same id is omitted together.
-	idx_t removal_group_id = DConstants::INVALID_INDEX;
-	//! Elastic grouping identity. Kept separate because one source comparison can
-	//! produce multiple independently repairable rows/directions.
-	idx_t repair_group_id = DConstants::INVALID_INDEX;
+	//! The clause identity retained when one cast comparison expands to multiple boundary rows, the DROP group every
+	//! descendant row shares, and the elastic group of the row.
+	DecideRowOrigin origin;
 	//! True when the complete canonical RHS is one query-wide scalar value. The value
 	//! is one editable knob shared across every row this clause emits, so the elastic
 	//! engine collapses those rows to ONE shared slack (ElasticShape::SHARED_SCALAR);
 	//! a data-backed RHS stays per-row independent.
 	bool rhs_is_shared_scalar = false;
-	//! What a lowering added to the user's literal to build this row's RHS, so the
-	//! diagnosis can subtract it back off and quote the number the user typed. A hard
-	//! `MAX(e) >= K` lowers to N rows of `e_i - M*y_i >= K - M`: the clause is still one
-	//! editable K and the row still repairs by loosening it, but the row's own RHS is
-	//! `K - M` and quoting that would name a bound nobody wrote. 0.0 means the row's RHS
-	//! IS the user's literal, which is the ordinary case.
-	double rhs_mechanism_offset = 0.0;
-
 	//! Symbolic name of a data-backed (non-shared-scalar) RHS expression (`x <= cap_col`
 	//! → "cap_col"). Lets query-mode infeasible diagnosis render a virtual offset
 	//! (`x <= cap_col + delta`) instead of a numeric representative. Empty for a shared
@@ -339,8 +422,7 @@ struct BilinearLinkSpec {
 	idx_t aux_idx;       //!< auxiliary variable w
 	idx_t bool_var_idx;  //!< Boolean variable b
 	idx_t other_var_idx; //!< non-Boolean variable x
-	idx_t source_clause_id = DConstants::INVALID_INDEX;
-	idx_t removal_group_id = DConstants::INVALID_INDEX;
+	DecideRowOrigin origin;
 };
 
 //! One ABS, as stage 05 recorded it (LogicalDecide::AbsFunction) and the emitter evaluated it. Stage 05 picks the
@@ -492,14 +574,9 @@ struct GeneralConstraintSpec {
 	int result_column = -1;
 	//! Flat columns of the construct's arguments. ABS takes exactly one.
 	vector<int> argument_columns;
-	//! Clause origin, in the same loose fields `RawConstraint` uses — the full
-	//! `ConstraintProvenance` lives in stage 06's header, which includes this one.
-	//! `SolverModel::Build` stamps these into a real provenance record. A native
-	//! construct has no matrix row for the elastic engine to slacken, but it still
-	//! has to be nameable.
-	idx_t source_clause_id = DConstants::INVALID_INDEX;
-	idx_t repair_group_id = DConstants::INVALID_INDEX;
-	idx_t removal_group_id = DConstants::INVALID_INDEX;
+	//! Clause origin. `SolverModel::Build` copies it onto the model's construct. A native construct has no matrix row
+	//! for the elastic engine to slacken, but it still has to be nameable.
+	ConstraintProvenance provenance = ConstraintProvenance::Structural();
 };
 
 //! One end of an instance's reach (`SolverInput::instance_reach_lower` / `instance_reach_upper`): the value stored for
@@ -661,39 +738,18 @@ struct SolverInput {
 		vector<double> coefficients;
 		char sense; // '<' (<=), '>' (>=), '=' (==)
 		double rhs;
-		ConstraintKind kind = ConstraintKind::STRUCTURAL;
-		ElasticShape shape = ElasticShape::UNSET;
-		idx_t source_clause_id = DConstants::INVALID_INDEX;
-		idx_t repair_group_id = DConstants::INVALID_INDEX;
-		idx_t removal_group_id = DConstants::INVALID_INDEX;
-		//! Flat column of the `<>` disjunction binary this row belongs to (mirrors
-		//! ConstraintProvenance::indicator_col). This describes the disjunction;
-		//! `removal_group_id` independently groups all descendants for DROP.
-		idx_t indicator_col = DConstants::INVALID_INDEX;
-		//! The group id, its name, and whether the clause's LHS was an aggregate
-		//! — the display half of the provenance every row carries. A per-row clause
-		//! emitted through `EvaluatedConstraint` gets these from its `row_group_ids` /
-		//! `group_names`; a clause emitted in flat columns has to state them, and does
-		//! (StampGroup), so that changing a row's SHAPE never changes what diagnosis calls
-		//! it. The clause's `when c per K:` qualifier is the source registry's.
-		idx_t group_key = DConstants::INVALID_INDEX;
-		GroupName group_name;
-		bool is_aggregate = false;
+		//! The row's provenance, which the model builder copies onto the model's row (StampProvenance), and a clause's
+		//! rows state in full: a per-row clause emitted through `EvaluatedConstraint` gets its group and
+		//! `indicator_col` from its `row_group_ids` / `group_names`; a clause emitted in flat columns has to state them
+		//! (StampGroup), so that changing a row's SHAPE never changes what diagnosis calls it. `indicator_col` is the
+		//! `<>` disjunction binary the row belongs to; the DROP group the origin names independently groups all its
+		//! descendants. A row no clause owns is STRUCTURAL.
+		ConstraintProvenance provenance = ConstraintProvenance::Structural();
 		//! Place this row in group `group` of `ec`'s clause (INVALID_INDEX: none), named as `ec` names it.
 		void StampGroup(const EvaluatedConstraint &ec, idx_t group) {
-			group_key = group;
-			group_name = ec.NameOf(group);
+			provenance.group_key = group;
+			provenance.group_name = ec.NameOf(group);
 		}
-		//! What a lowering (or a folded LHS constant) added to the user's literal to
-		//! build this row's `rhs`; the reported clause quotes `rhs` minus this.
-		double rhs_mechanism_offset = 0.0;
-		//! Symbolic name of a data-backed RHS column, for a PER_ROW_DATA row. Empty for a
-		//! literal/shared bound.
-		string rhs_label;
-		//! A strict `<` / `>` stepped onto this row, and the user's literal: a diagnosis
-		//! quotes `> K` rather than the stepped `>= floor(K)+1` (ConstraintProvenance).
-		bool strict = false;
-		double typed_k = 0.0;
 	};
 	vector<RawConstraint> global_constraints;
 

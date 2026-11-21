@@ -929,7 +929,8 @@ vector<DecideFunctionRow> CollectDecideFunctionRows(const DecideTree &tree, cons
 		for (auto *roots : {&node.abs_envelope_roots, &node.l0_link_roots}) {
 			for (auto root : *roots) {
 				auto &clause = tree.nodes[root]->compiled.clause;
-				rows.push_back({tree.nodes[root]->source_clause_id, RenderFunctionRow(*clause, decide_variables, ctx)});
+				rows.push_back(
+				    {tree.nodes[root]->origin.source_clause_id, RenderFunctionRow(*clause, decide_variables, ctx)});
 			}
 		}
 	}

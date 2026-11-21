@@ -438,10 +438,9 @@ void DecideOptimizer::FoldSingletonRowsInClause(Expression &expr, const DecideEn
 		}
 	}
 	auto &comp = expr.Cast<BoundComparisonExpression>();
-	idx_t source_clause_id = DConstants::INVALID_INDEX;
-	TryParseSourceClauseTag(comp.GetAlias(), source_clause_id);
-	idx_t removal_group_id = DConstants::INVALID_INDEX;
-	TryParseRemovalGroupTag(comp.GetAlias(), removal_group_id);
+	DecideRowOrigin origin;
+	TryParseSourceClauseTag(comp.GetAlias(), origin.source_clause_id);
+	TryParseRemovalGroupTag(comp.GetAlias(), origin.removal_group_id);
 
 	DecideSingletonRow bound;
 	if (!DecideReadSingletonRow(optimizer.context, decide, comp, bound)) {
@@ -451,8 +450,7 @@ void DecideOptimizer::FoldSingletonRowsInClause(Expression &expr, const DecideEn
 		// A bound on the members of an easy extremum's `by` groups bounds each by a constant: no box takes it,
 		// since a row in no group is no member, but the domain check reads it as written.
 		if (bound.members_by_key_only && bound.constant_on_read_rows) {
-			decide.member_singleton_row_bounds.push_back(
-			    {bound.var_idx, bound.sense, bound.written_k, source_clause_id, removal_group_id});
+			decide.member_singleton_row_bounds.push_back({bound.var_idx, bound.sense, bound.written_k, origin});
 		}
 		return;
 	}
@@ -480,8 +478,7 @@ void DecideOptimizer::FoldSingletonRowsInClause(Expression &expr, const DecideEn
 	bool is_boolean = decide.is_boolean_var[bound.var_idx];
 	bool restates_domain = is_boolean && bound.lower_value <= 0.0 && bound.upper_value >= 1.0;
 	if (!restates_domain) {
-		decide.user_singleton_row_bounds.push_back(
-		    {bound.var_idx, bound.sense, bound.written_k, source_clause_id, removal_group_id});
+		decide.user_singleton_row_bounds.push_back({bound.var_idx, bound.sense, bound.written_k, origin});
 		AddDecideTag(comp.alias, SINGLETON_ROW_CLAUSE_ROWS_TAG);
 	}
 	return;

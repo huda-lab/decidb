@@ -50,14 +50,14 @@ SolverModel MakeSingleVarModel(const duckdb::vector<SingleVarRow> &rows) {
 		c.rhs = rows[i].rhs;
 		// These model query-wide RHS bounds (`x <= 5`), so they are SHARED_SCALAR — a
 		// single editable knob — not per-row data (which routes to a conflict summary).
-		c.provenance.repair_group_id = i;
+		c.provenance.origin.repair_group_id = i;
 		c.provenance.kind = rows[i].kind;
 		c.provenance.shape = ElasticShape::SHARED_SCALAR;
 		if (IsRelaxableForElastic(rows[i].kind)) {
 			// Test-built rows must satisfy the same provenance contract as rows emitted
 			// by the physical model builder. Source identity is a separate namespace
 			// from repair grouping even when both happen to be one-to-one here.
-			c.provenance.source_clause_id = m.constraint_sources.size();
+			c.provenance.origin.source_clause_id = m.constraint_sources.size();
 			m.constraint_sources.push_back(ConstraintSourceInfo());
 		}
 		m.constraints.push_back(std::move(c));
@@ -96,7 +96,7 @@ SolverModel MakeModel(idx_t num_vars, const duckdb::vector<MultiVarRow> &rows) {
 		c.coefficients = {r.coeff};
 		c.sense = r.sense;
 		c.rhs = r.rhs;
-		c.provenance.repair_group_id = r.repair_group_id;
+		c.provenance.origin.repair_group_id = r.repair_group_id;
 		c.provenance.kind = r.kind;
 		c.provenance.shape = r.shape;
 		c.provenance.group_key = r.group_key;
@@ -108,7 +108,7 @@ SolverModel MakeModel(idx_t num_vars, const duckdb::vector<MultiVarRow> &rows) {
 				m.constraint_sources.push_back(ConstraintSourceInfo());
 				source = source_by_repair_group.emplace(r.repair_group_id, source_id).first;
 			}
-			c.provenance.source_clause_id = source->second;
+			c.provenance.origin.source_clause_id = source->second;
 		}
 		m.constraints.push_back(std::move(c));
 	}
@@ -176,8 +176,8 @@ SolverModel MakeNotEqualModel() {
 		c.rhs = sense == '<' ? 2.0 : -10.0;
 		c.provenance.kind = ConstraintKind::USER_MECHANISM;
 		c.provenance.indicator_col = 1;
-		c.provenance.source_clause_id = 0;
-		c.provenance.removal_group_id = 0;
+		c.provenance.origin.source_clause_id = 0;
+		c.provenance.origin.removal_group_id = 0;
 		m.constraints.push_back(std::move(c));
 	}
 	ConstraintSourceInfo source;
@@ -687,7 +687,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		    {1.0, '<', 5.0, ConstraintKind::USER_PARAMETER},
 		    {1.0, '>', 8.0, ConstraintKind::STRUCTURAL},
 		});
-		model.constraints[0].provenance.source_clause_id = 0;
+		model.constraints[0].provenance.origin.source_clause_id = 0;
 		model.constraints[0].provenance.shape = ElasticShape::PER_ROW_DATA;
 		ConstraintSourceInfo source;
 		source.canonical_lhs = "CAST(real_x AS DOUBLE)";
@@ -719,8 +719,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		qc.q_coefficients = {1.0}; // x²
 		qc.sense = '<';
 		qc.rhs = 4.0;
-		qc.provenance.repair_group_id = 0;
-		qc.provenance.source_clause_id = 0;
+		qc.provenance.origin.repair_group_id = 0;
+		qc.provenance.origin.source_clause_id = 0;
 		qc.provenance.kind = ConstraintKind::USER_PARAMETER;
 		qc.provenance.shape = ElasticShape::SHARED_SCALAR;
 		model.constraint_sources.push_back(ConstraintSourceInfo());
@@ -762,8 +762,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 				qc.q_coefficients = {1.0};
 				qc.sense = '<';
 				qc.rhs = 4.0;
-				qc.provenance.repair_group_id = row % clauses;
-				qc.provenance.source_clause_id = row % clauses;
+				qc.provenance.origin.repair_group_id = row % clauses;
+				qc.provenance.origin.source_clause_id = row % clauses;
 				qc.provenance.kind = ConstraintKind::USER_PARAMETER;
 				qc.provenance.shape = ElasticShape::SHARED_SCALAR;
 				qc.provenance.per_kept_row = per_kept_row;
@@ -978,22 +978,22 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		model.obj_coeffs = {0.0, 0.0};
 
 		ModelConstraint linear;
-		linear.provenance.removal_group_id = 7;
+		linear.provenance.origin.removal_group_id = 7;
 		model.constraints.push_back(linear);
 		model.constraints.push_back(ModelConstraint()); // retained control row
 
 		SolverModel::QuadraticConstraint quadratic;
-		quadratic.provenance.removal_group_id = 7;
+		quadratic.provenance.origin.removal_group_id = 7;
 		model.quadratic_constraints.push_back(quadratic);
 		model.quadratic_constraints.push_back(SolverModel::QuadraticConstraint());
 
 		SolverModel::IndicatorConstraint indicator;
-		indicator.provenance.removal_group_id = 7;
+		indicator.provenance.origin.removal_group_id = 7;
 		model.indicator_constraints.push_back(indicator);
 		model.indicator_constraints.push_back(SolverModel::IndicatorConstraint());
 
 		SolverModel::GeneralConstraint general;
-		general.provenance.removal_group_id = 7;
+		general.provenance.origin.removal_group_id = 7;
 		model.general_constraints.push_back(general);
 		model.general_constraints.push_back(SolverModel::GeneralConstraint());
 
@@ -1011,8 +1011,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		impossible.sense = '<';
 		impossible.rhs = -1.0;
 		impossible.constant_fails = true;
-		impossible.provenance.source_clause_id = 0;
-		impossible.provenance.removal_group_id = 0;
+		impossible.provenance.origin.source_clause_id = 0;
+		impossible.provenance.origin.removal_group_id = 0;
 		model.constraints.push_back(std::move(impossible));
 		CHECK(model.ProvesInfeasible());
 		SolverModel dropped = DropRemovalGroups(model, std::set<idx_t> {0});
@@ -1197,7 +1197,7 @@ SolverModel MakeBetweenModel() {
 //! The loosening of one end of the clause at `source_id`, as the elastic readback builds it.
 ClauseEdit MakeEndEdit(const SolverModel &model, idx_t source_id, char sense, double bound, double amount) {
 	ConstraintProvenance prov;
-	prov.source_clause_id = source_id;
+	prov.origin.source_clause_id = source_id;
 	return decide_render::MakeLoosenEdit(model, prov, &model.constraint_sources[source_id],
 	                                     model.constraint_sources[source_id].canonical_lhs, bound, sense, amount);
 }

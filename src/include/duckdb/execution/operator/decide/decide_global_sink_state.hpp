@@ -66,7 +66,7 @@ public:
 
 	vector<EvaluatedConstraint> evaluated_constraints;
 	//! The stage-06 records the emitter materializes from BOOLEAN_PRODUCT F nodes for the unchanged linearizer.
-	vector<LogicalDecide::BilinearLink> evaluated_bilinear_links;
+	vector<BilinearLinkSpec> evaluated_bilinear_links;
 	//! One record per ABS F node, with its envelope rows evaluated; moved into SolverInput::abs_links.
 	vector<AbsLinkSpec> evaluated_abs_links;
 	//! `singleton_row_constraints`, evaluated under DIAGNOSE for the repair model alone.

@@ -129,7 +129,7 @@ struct RefusalText {
 optional_idx FirstQuadraticClauseLocation(const LogicalDecide &op, const DecideTree &tree) {
 	for (auto *constraint : HeldClauses(tree)) {
 		if (!constraint->product_groups.empty()) {
-			return DecideClauseLocation(op.constraint_sources, constraint->source_clause_id);
+			return DecideClauseLocation(op.constraint_sources, constraint->origin.source_clause_id);
 		}
 	}
 	throw InternalException("DECIDE solver gate found no quadratic clause to name");

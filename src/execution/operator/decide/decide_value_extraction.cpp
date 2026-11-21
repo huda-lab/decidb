@@ -355,9 +355,8 @@ EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constr
                                                   const std::function<idx_t(const DecideTerm &)> &read_variable) {
 	EvaluatedConstraint evaluated;
 	evaluated.comparison_type = constraint.comparison_type;
-	evaluated.source_clause_id = constraint.source_clause_id;
-	evaluated.repair_group_id = repair_group_id;
-	evaluated.removal_group_id = constraint.removal_group_id;
+	evaluated.origin = constraint.origin;
+	evaluated.origin.repair_group_id = repair_group_id;
 	// Preserve whether the original LHS was an aggregate (e.g., SUM(...))
 	evaluated.lhs_is_aggregate = constraint.lhs_is_aggregate;
 	evaluated.abs_aux_idx = constraint.abs_aux_idx;
@@ -392,8 +391,8 @@ bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, bool diag
 		// clause emits, so the elastic engine collapses them to one shared slack.
 		// A constant canonicalization left of a written bound that reads data
 		// (`x <= cap * o` is `x - cap * o <= 0`) repairs as that bound does.
-		evaluated.rhs_is_shared_scalar = constraint.source_clause_id >= constraint_sources.size() ||
-		                                 !constraint_sources[constraint.source_clause_id].source_rhs_reads_data;
+		evaluated.rhs_is_shared_scalar = constraint.origin.source_clause_id >= constraint_sources.size() ||
+		                                 !constraint_sources[constraint.origin.source_clause_id].source_rhs_reads_data;
 		return false;
 	}
 	// A bound of data, read per row. The optimizer's bound-side window rewrite made each reducer on it a

@@ -37,8 +37,8 @@ unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const
 	facts->comparison_type = comparison.type;
 	facts->rhs_expr = comparison.right->Copy();
 	facts->tightest_frame_bound = HasDecideTag(comparison.alias, FRAME_TIGHTEST_BOUND_TAG);
-	TryParseSourceClauseTag(comparison.alias, facts->source_clause_id);
-	TryParseRemovalGroupTag(comparison.alias, facts->removal_group_id);
+	TryParseSourceClauseTag(comparison.alias, facts->origin.source_clause_id);
+	TryParseRemovalGroupTag(comparison.alias, facts->origin.removal_group_id);
 	string payload;
 	if (ExtractDecideTagPayload(comparison.alias, NE_CLAUSE_TAG_PREFIX, payload)) {
 		facts->ne_clause_idx = std::stoull(payload);
@@ -346,7 +346,7 @@ public:
 	}
 
 	//! Each optimizer-allocated Boolean product becomes a rooted F node. The function's body names its two decision
-	//! factors; tree-owned BilinearLink records are handed to stage 06 by way of these nodes.
+	//! factors; tree-owned BilinearLinkSpec records are handed to stage 06 by way of these nodes.
 	void PrepareBilinearFunctions() {
 		for (auto &group : op.bilinear_function_groups) {
 			for (auto &product : group.products) {
@@ -370,8 +370,7 @@ public:
 				node.product_other_var = other_var;
 				node.root = node.hidden = node.decision_value = true;
 				node.value_var = node.defined_var = product.aux_idx;
-				node.source_clause_id = product.source_clause_id;
-				node.removal_group_id = product.removal_group_id;
+				node.origin = product.origin;
 				auto label = std::find_if(op.aux_var_expressions.begin(), op.aux_var_expressions.end(),
 				                          [&](const auto &entry) { return entry.first == product.aux_idx; });
 				node.text = label == op.aux_var_expressions.end()
@@ -448,8 +447,8 @@ public:
 			}
 			ForEachScopedConstraintLeaf(*indicator.links[0], [&](const Expression &leaf, const DecideEnclosingScope &) {
 				if (leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-					TryParseSourceClauseTag(leaf.GetAlias(), node.source_clause_id);
-					TryParseRemovalGroupTag(leaf.GetAlias(), node.removal_group_id);
+					TryParseSourceClauseTag(leaf.GetAlias(), node.origin.source_clause_id);
+					TryParseRemovalGroupTag(leaf.GetAlias(), node.origin.removal_group_id);
 				}
 			});
 			tree->function_nodes.push_back(index);
@@ -605,7 +604,7 @@ public:
 		node.defined_var = aux;
 		node.hidden = true;
 		node.decision_value = true;
-		node.source_clause_id = source_clause;
+		node.origin.source_clause_id = source_clause;
 		auto label = std::find_if(op.aux_var_expressions.begin(), op.aux_var_expressions.end(),
 		                          [&](const auto &entry) { return entry.first == aux; });
 		node.text = label == op.aux_var_expressions.end() ? "abs helper " + std::to_string(aux) : label->second;
@@ -903,9 +902,9 @@ private:
 		node.facts = ReadDecideClauseFacts(context, op, *row, scope);
 		node.comparison_type = row->type;
 		node.folded = HasDecideTag(comparison.GetAlias(), SINGLETON_ROW_BOUND_TAG);
-		TryParseSourceClauseTag(comparison.GetAlias(), node.source_clause_id);
-		node.text = RootText(node.source_clause_id);
-		TryParseRemovalGroupTag(comparison.GetAlias(), node.removal_group_id);
+		TryParseSourceClauseTag(comparison.GetAlias(), node.origin.source_clause_id);
+		node.text = RootText(node.origin.source_clause_id);
+		TryParseRemovalGroupTag(comparison.GetAlias(), node.origin.removal_group_id);
 		TryParseDecideIndexTag(comparison.GetAlias(), DEFINES_TAG_PREFIX, node.defined_var);
 		if (is_l0_link) {
 			auto function =
@@ -961,7 +960,7 @@ private:
 		node.facts->rhs_expr = node.rhs->Copy();
 		idx_t abs_function = DConstants::INVALID_INDEX;
 		if (is_abs_envelope) {
-			abs_function = AbsFunctionNode(node.facts->abs_aux_idx, node.source_clause_id);
+			abs_function = AbsFunctionNode(node.facts->abs_aux_idx, node.origin.source_clause_id);
 			tree->nodes[abs_function]->abs_envelope_roots.push_back(index);
 			tree->nodes[abs_function]->signature.clear();
 		} else if (is_l0_link) {
@@ -1510,7 +1509,7 @@ private:
 	}
 
 	//! A reader of a decision waits for what the decision is defined from (D88): the roots defining it, the G or O
-	//! holding its value, and for a product (BilinearLink) what each factor is defined from.
+	//! holding its value, and for a product (BilinearLinkSpec) what each factor is defined from.
 	void Sources(idx_t variable, idx_t reader) {
 		if (variable >= tree->definition_nodes.size()) {
 			return;

@@ -151,12 +151,10 @@ static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer, cons
 		// The provenance every shape of this clause carries. `indicator_col` is both the
 		// marker that says "remove-only `<>`" and the key that groups the clause's rows.
 		auto stamp = [&](SolverInput::RawConstraint &rc) {
-			rc.kind = ConstraintKind::USER_MECHANISM;
-			rc.shape = ElasticShape::PER_ROW_DATA;
-			rc.source_clause_id = ec.source_clause_id;
-			rc.repair_group_id = ec.repair_group_id;
-			rc.removal_group_id = ec.removal_group_id;
-			rc.indicator_col = z_col;
+			rc.provenance.kind = ConstraintKind::USER_MECHANISM;
+			rc.provenance.shape = ElasticShape::PER_ROW_DATA;
+			rc.provenance.origin = ec.origin;
+			rc.provenance.indicator_col = z_col;
 			rc.StampGroup(ec, has_groups ? ec.row_group_ids[r] : DConstants::INVALID_INDEX);
 		};
 
@@ -264,7 +262,7 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer, const vect
 		// the far side of K, one disjunct is dead and the clause is a plain inequality.
 		NECollapse collapse =
 		    ClassifyNEConstraint(ec, num_rows, input.rigid_lower_bounds, input.rigid_upper_bounds,
-		                         InstanceBox {input, indexer}, DecideWrittenClause(input, ec.source_clause_id));
+		                         InstanceBox {input, indexer}, DecideWrittenClause(input, ec.origin.source_clause_id));
 		if (collapse == NECollapse::ALWAYS_TRUE) {
 			continue; // excludes nothing reachable — drop, like the tautology case
 		}
@@ -291,7 +289,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 	const InstanceBox floors {input, var_indexer};
 	for (auto &ec : deferred_aggregate) {
 		bool has_groups = !ec.row_group_ids.empty();
-		const auto written = DecideWrittenClause(input, ec.source_clause_id);
+		const auto written = DecideWrittenClause(input, ec.origin.source_clause_id);
 		// The group's LHS, one row the clause emits (ClauseEmittedRows): a group of a grouped clause, the whole
 		// clause for an ungrouped one.
 		auto &emitted = ClauseEmittedRows(ec, input, var_indexer, written);
@@ -429,13 +427,11 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 
 				// The provenance both halves carry, whichever shape they end up in.
 				auto stamp = [&](SolverInput::RawConstraint &rc) {
-					rc.kind = ConstraintKind::USER_MECHANISM;
-					rc.source_clause_id = ec.source_clause_id;
-					rc.repair_group_id = ec.repair_group_id;
-					rc.removal_group_id = ec.removal_group_id;
-					rc.indicator_col = z_idx;
+					rc.provenance.kind = ConstraintKind::USER_MECHANISM;
+					rc.provenance.origin = ec.origin;
+					rc.provenance.indicator_col = z_idx;
 					rc.StampGroup(ec, has_groups ? g : DConstants::INVALID_INDEX);
-					rc.is_aggregate = true;
+					rc.provenance.is_aggregate = true;
 				};
 
 				// Collapsed: one plain inequality, no indicator and no disjunction left.

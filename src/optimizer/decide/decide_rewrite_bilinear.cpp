@@ -188,8 +188,8 @@ idx_t AddBooleanProduct(LogicalDecide &decide, DecideBilinearFunctionGroup &grou
 	product.aux_idx = aux_idx;
 	product.first_var_idx = first;
 	product.second_var_idx = second;
-	TryParseSourceClauseTag(clause_alias, product.source_clause_id);
-	TryParseRemovalGroupTag(clause_alias, product.removal_group_id);
+	TryParseSourceClauseTag(clause_alias, product.origin.source_clause_id);
+	TryParseRemovalGroupTag(clause_alias, product.origin.removal_group_id);
 	group.products.push_back(product);
 	return aux_idx;
 }

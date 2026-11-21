@@ -89,7 +89,7 @@ void PhysicalDecide::CheckDecisionDomains() {
 			if (bound.decide_var_idx != var) {
 				continue;
 			}
-			if (bound.removal_group_id == DConstants::INVALID_INDEX) {
+			if (bound.origin.removal_group_id == DConstants::INVALID_INDEX) {
 				written.Add(bound.sense, bound.k);
 			} else {
 				written.AddLowered(bound.sense, bound.k);
@@ -148,8 +148,8 @@ void PhysicalDecide::CheckDecisionDomains() {
 			for (auto *bounds : lists) {
 				for (const auto &bound : *bounds) {
 					if (bound.decide_var_idx == var && bound.sense != (refusal.upper ? '>' : '<') &&
-					    bound.k == refusal.k && bound.source_clause_id < constraint_sources.size()) {
-						clause = bound.source_clause_id;
+					    bound.k == refusal.k && bound.origin.source_clause_id < constraint_sources.size()) {
+						clause = bound.origin.source_clause_id;
 						break;
 					}
 				}

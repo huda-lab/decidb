@@ -86,7 +86,7 @@ static void DropTaggedEntries(vector<T> &entries, const std::set<idx_t> &dropped
 	vector<T> retained;
 	retained.reserve(entries.size());
 	for (auto &entry : entries) {
-		auto group_id = entry.provenance.removal_group_id;
+		auto group_id = entry.provenance.origin.removal_group_id;
 		if (group_id == DConstants::INVALID_INDEX || dropped.find(group_id) == dropped.end()) {
 			retained.push_back(std::move(entry));
 		}
@@ -149,13 +149,13 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 	// here -- which is also the honest answer when no editable form exists, since
 	// "relax the definition of MIN" is not a change anyone can make to their SQL.
 	auto assert_blamable_row = [&](const ConstraintProvenance &p) {
-		if (IsRelaxableForElastic(p.kind) && p.repair_group_id != DConstants::INVALID_INDEX) {
+		if (IsRelaxableForElastic(p.kind) && p.origin.repair_group_id != DConstants::INVALID_INDEX) {
 			D_ASSERT(has_explicit_shape(p));
-			D_ASSERT(p.source_clause_id != DConstants::INVALID_INDEX);
+			D_ASSERT(p.origin.source_clause_id != DConstants::INVALID_INDEX);
 		}
 	};
 	auto is_data_offset = [](const ConstraintProvenance &p) {
-		return p.shape == ElasticShape::PER_ROW_DATA && p.repair_group_id != DConstants::INVALID_INDEX;
+		return p.shape == ElasticShape::PER_ROW_DATA && p.origin.repair_group_id != DConstants::INVALID_INDEX;
 	};
 
 	// Scale-normalized editable slack weights (T1). The stage-1 objective sums slacks
@@ -197,7 +197,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 		const auto &row = elastic.constraints[r];
 		assert_blamable_row(row.provenance);
 		lin_norm[r] = rms_norm(row.coefficients);
-		if (row.provenance.removal_group_id == DConstants::INVALID_INDEX &&
+		if (row.provenance.origin.removal_group_id == DConstants::INVALID_INDEX &&
 		    IsRelaxableForElastic(row.provenance.kind) && !is_data_offset(row.provenance)) {
 			consider_ref(lin_norm[r]);
 		}
@@ -206,7 +206,8 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 		const auto &qc = elastic.quadratic_constraints[qr];
 		assert_blamable_row(qc.provenance);
 		qc_norm[qr] = rms_norm(qc.linear_coefficients);
-		if (qc.provenance.removal_group_id == DConstants::INVALID_INDEX && IsRelaxableForElastic(qc.provenance.kind)) {
+		if (qc.provenance.origin.removal_group_id == DConstants::INVALID_INDEX &&
+		    IsRelaxableForElastic(qc.provenance.kind)) {
 			consider_ref(qc_norm[qr]);
 		}
 	}
@@ -255,7 +256,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 	//   - A row of a scoped clause with no `per` key (per row): each kept row is a class
 	//     of its own (D28), so in expanded mode it keeps its own slack whatever its shape.
 	auto folds = [&](const ConstraintProvenance &p) {
-		if (p.repair_group_id == DConstants::INVALID_INDEX) {
+		if (p.origin.repair_group_id == DConstants::INVALID_INDEX) {
 			return false;
 		}
 		if (p.class_set != DConstants::INVALID_INDEX) {
@@ -274,8 +275,8 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 	// group_key). In expanded mode each group is its own slack (key includes it), so
 	// the profile breaks out per group.
 	auto block_key = [&](const ConstraintProvenance &p) -> std::pair<idx_t, idx_t> {
-		return fold_data ? std::make_pair(p.repair_group_id, static_cast<idx_t>(0))
-		                 : std::make_pair(p.repair_group_id, p.group_key);
+		return fold_data ? std::make_pair(p.origin.repair_group_id, static_cast<idx_t>(0))
+		                 : std::make_pair(p.origin.repair_group_id, p.group_key);
 	};
 	// Linear rows come first, then quadratic ones, each in row order: a slack's position is its repair rank.
 	for (bool quadratic : {false, true}) {
@@ -304,7 +305,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 		};
 		auto relaxable = [&](idx_t r) {
 			const auto &p = provenance_of(r);
-			return p.removal_group_id == DConstants::INVALID_INDEX && IsRelaxableForElastic(p.kind);
+			return p.origin.removal_group_id == DConstants::INVALID_INDEX && IsRelaxableForElastic(p.kind);
 		};
 		// A quadratic clause is always an editable literal, never a data offset: the conflict summary covers
 		// linear data-RHS rows only.
@@ -321,7 +322,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 			// Rows that share a slack are one clause's: a repair id two clauses hold welds them
 			// into one edit.
 			D_ASSERT(block.empty() ||
-			         provenance_of(block.front()).source_clause_id == provenance_of(r).source_clause_id);
+			         provenance_of(block.front()).origin.source_clause_id == provenance_of(r).origin.source_clause_id);
 			block.push_back(r);
 		}
 
@@ -470,7 +471,8 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks, 
 		// Non-empty only when canonicalization moved a term across the comparison, in
 		// which case it pairs with the written LHS that SourceAwareLhs just returned.
 		string written_rhs = SourceWrittenRhs(orig_model, prov);
-		bool data_rhs = prov.shape == ElasticShape::PER_ROW_DATA && prov.repair_group_id != DConstants::INVALID_INDEX;
+		bool data_rhs =
+		    prov.shape == ElasticShape::PER_ROW_DATA && prov.origin.repair_group_id != DConstants::INVALID_INDEX;
 		if (expanded) {
 			// Only a row that stands for its own data row expands row by row: an unreduced
 			// clause's data-derived bound, or any row of a scoped clause with no `per` key.
@@ -776,13 +778,13 @@ struct RemovalGroupInfo {
 static vector<RemovalGroupInfo> CollectRemovalGroups(const SolverModel &model) {
 	std::map<idx_t, RemovalGroupInfo> by_group;
 	auto record = [&](const ConstraintProvenance &prov) {
-		if (prov.removal_group_id == DConstants::INVALID_INDEX) {
+		if (prov.origin.removal_group_id == DConstants::INVALID_INDEX) {
 			return;
 		}
-		auto entry =
-		    by_group.emplace(prov.removal_group_id, RemovalGroupInfo {prov.removal_group_id, prov.source_clause_id});
+		auto entry = by_group.emplace(prov.origin.removal_group_id,
+		                              RemovalGroupInfo {prov.origin.removal_group_id, prov.origin.source_clause_id});
 		if (!entry.second && entry.first->second.source_clause_id == DConstants::INVALID_INDEX) {
-			entry.first->second.source_clause_id = prov.source_clause_id;
+			entry.first->second.source_clause_id = prov.origin.source_clause_id;
 		}
 	};
 	for (const auto &row : model.constraints)

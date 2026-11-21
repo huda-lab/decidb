@@ -25,6 +25,7 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/planner/column_binding_map.hpp"
 #include "duckdb/planner/expression.hpp"
 
@@ -35,13 +36,12 @@ class BoundFunctionExpression;
 class LogicalDecide;
 
 //! One Boolean product helper allocated while the optimizer annotates a written product. The tree turns this
-//! specification into a BOOLEAN_PRODUCT F node and owns the executable BilinearLink record.
+//! specification into a BOOLEAN_PRODUCT F node and owns the executable BilinearLinkSpec record.
 struct DecideBilinearFunctionProduct {
 	idx_t aux_idx = DConstants::INVALID_INDEX;
 	idx_t first_var_idx = DConstants::INVALID_INDEX;
 	idx_t second_var_idx = DConstants::INVALID_INDEX;
-	idx_t source_clause_id = DConstants::INVALID_INDEX;
-	idx_t removal_group_id = DConstants::INVALID_INDEX;
+	DecideRowOrigin origin;
 };
 
 //! An intact written product plus the expression the term splitter reads. `expansion` replaces Boolean products by

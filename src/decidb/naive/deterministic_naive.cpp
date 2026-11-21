@@ -141,7 +141,7 @@ bool ChooseHighsScale(double lo, double hi, double bound, int &exponent) {
 //! (DecideClauseRefOf).
 [[noreturn]] void ThrowUnscalableRow(const SolverModel &model, const ModelConstraint &constr) {
 	ThrowOutsideHighsWindow(
-	    DecideClauseRefOf(model.constraint_sources, model.source_text, constr.provenance.source_clause_id));
+	    DecideClauseRefOf(model.constraint_sources, model.source_text, constr.provenance.origin.source_clause_id));
 }
 
 //! Multiply each out-of-window row of the constraint matrix through by its own power of

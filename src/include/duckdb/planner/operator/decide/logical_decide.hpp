@@ -409,14 +409,6 @@ public:
 	// The source clause (index into constraint_sources) of each not-equal (<>) constraint
 	vector<idx_t> ne_clause_sources;
 
-	// The stage-06 McCormick/AND formulation record materialized from a Boolean-product F node.
-	struct BilinearLink {
-		idx_t aux_idx;       // Index of auxiliary variable w
-		idx_t bool_var_idx;  // Index of the Boolean variable b
-		idx_t other_var_idx; // Index of the non-Boolean variable x
-		idx_t source_clause_id = DConstants::INVALID_INDEX;
-		idx_t removal_group_id = DConstants::INVALID_INDEX;
-	};
 	//! The intact Boolean-product expressions and the plan-time helper allocation needed by stage 05. Executable
 	//! bilinear links are materialized from these specs as BOOLEAN_PRODUCT F nodes in DecideTree.
 	vector<DecideBilinearFunctionGroup> bilinear_function_groups;
@@ -585,8 +577,7 @@ public:
 		//! The bound as written, moved onto the decision (`2 * x <= 9` is 4.5; a strict
 		//! `x < 10` is 9). The box holds the admitted ends; the domain check reads this.
 		double k;
-		idx_t source_clause_id = DConstants::INVALID_INDEX;
-		idx_t removal_group_id = DConstants::INVALID_INDEX;
+		DecideRowOrigin origin;
 	};
 
 	//! Per-decision-variable box, sized to decide_variables. Physical execution copies

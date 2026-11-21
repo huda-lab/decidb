@@ -373,12 +373,11 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 		if (node.function_kind != DecideFunctionKind::BOOLEAN_PRODUCT) {
 			continue;
 		}
-		LogicalDecide::BilinearLink link;
+		BilinearLinkSpec link;
 		link.aux_idx = node.value_var;
 		link.bool_var_idx = node.product_bool_var;
 		link.other_var_idx = node.product_other_var;
-		link.source_clause_id = node.source_clause_id;
-		link.removal_group_id = node.removal_group_id;
+		link.origin = node.origin;
 		gstate.evaluated_bilinear_links.push_back(link);
 	}
 	// The rows defining each auxiliary (DecideConstraint::defined_var) and each helper's G, in the tree's order, which
@@ -693,7 +692,7 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 	Polynomial(root, vector<TermFilterState>(Parts(clause)), null_rows, evaluated);
 	DecideAbsence::SkipNullInstances(null_rows, false, num_rows, evaluated.row_group_ids, evaluated.num_groups);
 	if (counted) {
-		gstate.CountInstances(evaluated.source_clause_id, instances,
+		gstate.CountInstances(evaluated.origin.source_clause_id, instances,
 		                      CountInstances(evaluated.row_group_ids, evaluated.num_groups, num_rows, false));
 		if (clause.admitted_lower) {
 			CheckDomain(root, evaluated);
@@ -705,13 +704,13 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 void DecideModelEmitter::CheckDomain(idx_t root, const EvaluatedConstraint &evaluated) {
 	auto &clause = *tree.nodes[root]->compiled.clause;
 	// The box check keeps only a lowered floor of an IN's bounds, which diagnosis drops as one clause.
-	if (clause.removal_group_id != DConstants::INVALID_INDEX || !clause.admitted_lower->IsFoldable() ||
+	if (clause.origin.removal_group_id != DConstants::INVALID_INDEX || !clause.admitted_lower->IsFoldable() ||
 	    !clause.admitted_upper->IsFoldable()) {
 		return;
 	}
 	const auto var = clause.lhs_terms[0].variable_index;
 	if (var >= op.domains.size() || !op.domains[var].checked ||
-	    clause.source_clause_id >= op.constraint_sources.size()) {
+	    clause.origin.source_clause_id >= op.constraint_sources.size()) {
 		return;
 	}
 	auto &domain = op.domains[var];
@@ -737,7 +736,7 @@ void DecideModelEmitter::CheckDomain(idx_t root, const EvaluatedConstraint &eval
 		auto refusal = DecideRefuseDomain(box, domain.is_bool, domain.name);
 		if (!refusal.message.empty()) {
 			throw InvalidInputException(refusal.message,
-			                            DecideClauseErrorInfo(op.constraint_sources, clause.source_clause_id));
+			                            DecideClauseErrorInfo(op.constraint_sources, clause.origin.source_clause_id));
 		}
 	}
 }
@@ -1182,7 +1181,7 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 	}
 	DecideAbsence::SkipNullInstances(null_rows, true, num_rows, evaluated.row_group_ids, evaluated.num_groups);
 	if (counted) {
-		gstate.CountInstances(evaluated.source_clause_id, grouped_instances,
+		gstate.CountInstances(evaluated.origin.source_clause_id, grouped_instances,
 		                      CountInstances(evaluated.row_group_ids, evaluated.num_groups, num_rows, true));
 		if (clause.admitted_lower) {
 			CheckDomain(root, evaluated);

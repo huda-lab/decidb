@@ -152,7 +152,7 @@ static string FormatQuadraticLhs(const SolverModel::QuadraticConstraint &qc, con
 }
 
 const ConstraintSourceInfo *FindConstraintSource(const SolverModel &model, const ConstraintProvenance &provenance) {
-	auto source_id = provenance.source_clause_id;
+	auto source_id = provenance.origin.source_clause_id;
 	if (source_id == DConstants::INVALID_INDEX || source_id >= model.constraint_sources.size()) {
 		return nullptr;
 	}
@@ -331,7 +331,7 @@ ClauseEdit MakeLoosenEdit(const SolverModel &model, const ConstraintProvenance &
 	e.has_amount = true;
 	e.amount = std::fabs(amount);
 	e.group = FormatPerGroupKey(model, prov.group_name);
-	e.moved = {prov.source_clause_id, sense, lhs, FormatNum(new_rhs)};
+	e.moved = {prov.origin.source_clause_id, sense, lhs, FormatNum(new_rhs)};
 	return e;
 }
 
@@ -394,8 +394,8 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model, co
 	std::set<std::tuple<string, string, idx_t>> seen;
 	auto record = [&](const ConstraintProvenance &prov, const string &lhs, double rhs, char sense) {
 		ClauseEdit base;
-		base.label = IsRangeEnd(model, prov.source_clause_id, sense)
-		                 ? QuoteWrittenClause(model.constraint_sources, prov.source_clause_id, model.source_text)
+		base.label = IsRangeEnd(model, prov.origin.source_clause_id, sense)
+		                 ? QuoteWrittenClause(model.constraint_sources, prov.origin.source_clause_id, model.source_text)
 		                 : MakeClauseLabel(prov, FindConstraintSource(model, prov), lhs, rhs, sense);
 		base.group = FormatPerGroupKey(model, prov.group_name);
 		for (auto &finding : FanOutByClass(std::move(base), prov, model, expanded)) {
@@ -411,14 +411,16 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model, co
 	};
 	for (const auto &row : model.constraints) {
 		if (row.provenance.kind == ConstraintKind::STRUCTURAL ||
-		    row.provenance.removal_group_id != DConstants::INVALID_INDEX || !IsUnreachableBound(row.sense, row.rhs)) {
+		    row.provenance.origin.removal_group_id != DConstants::INVALID_INDEX ||
+		    !IsUnreachableBound(row.sense, row.rhs)) {
 			continue;
 		}
 		record(row.provenance, SourceAwareLhs(model, row, columns), row.rhs, row.sense);
 	}
 	for (const auto &row : model.quadratic_constraints) {
 		if (row.provenance.kind == ConstraintKind::STRUCTURAL ||
-		    row.provenance.removal_group_id != DConstants::INVALID_INDEX || !IsUnreachableBound(row.sense, row.rhs)) {
+		    row.provenance.origin.removal_group_id != DConstants::INVALID_INDEX ||
+		    !IsUnreachableBound(row.sense, row.rhs)) {
 			continue;
 		}
 		record(row.provenance, SourceAwareQuadraticLhs(model, row, columns), row.rhs, row.sense);
@@ -447,7 +449,7 @@ ClauseEdit MakeVirtualOffsetEdit(const SolverModel &model, const ConstraintProve
 	e.has_amount = true;
 	e.amount = std::fabs(delta);
 	e.group = FormatPerGroupKey(model, prov.group_name);
-	e.moved = {prov.source_clause_id, sense, lhs, rhs_text + op + mag};
+	e.moved = {prov.origin.source_clause_id, sense, lhs, rhs_text + op + mag};
 	return e;
 }
 

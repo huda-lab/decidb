@@ -480,15 +480,14 @@ const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const Solver
 //! names a bound nobody typed. It rides on `rhs_mechanism_offset` alongside whatever a
 //! lowering added, because the reader needs their sum and neither alone.
 static void StampConstraintProvenance(const SolverInput &input, ConstraintProvenance &provenance,
-                                      const EvaluatedConstraint &eval_const, idx_t repair_group_id,
+                                      const EvaluatedConstraint &eval_const,
                                       idx_t group_key = DConstants::INVALID_INDEX, double lhs_offset = 0.0,
                                       idx_t row = DConstants::INVALID_INDEX) {
-	provenance.source_clause_id = eval_const.source_clause_id;
+	provenance.origin.source_clause_id = eval_const.origin.source_clause_id;
 	if (!input.diagnose) {
 		return;
 	}
-	provenance.repair_group_id = repair_group_id;
-	provenance.removal_group_id = eval_const.removal_group_id;
+	provenance.origin = eval_const.origin;
 	provenance.kind = eval_const.kind;
 	// A literal RHS is one editable knob shared across every row/group this clause
 	// emits (paper §5); a data-derived RHS repairs as a symbolic offset instead.
@@ -496,7 +495,7 @@ static void StampConstraintProvenance(const SolverInput &input, ConstraintProven
 	if (!eval_const.rhs_is_shared_scalar) {
 		provenance.rhs_label = eval_const.rhs_label;
 	}
-	provenance.rhs_mechanism_offset = eval_const.rhs_mechanism_offset - lhs_offset;
+	provenance.rhs_mechanism_offset = -lhs_offset;
 	provenance.group_key = group_key;
 	provenance.group_name = eval_const.NameOf(group_key);
 	// Reducer-placement metadata for the diagnosis renderer's SUM(...)-wrapping (Facet B).
@@ -511,29 +510,18 @@ static void StampConstraintProvenance(const SolverInput &input, ConstraintProven
 	}
 }
 
-//! The provenance of a row a lowering emitted in flat columns (RawConstraint), which states what an
-//! EvaluatedConstraint's sites derive from their group columns, so a clause reads the same in a diagnosis whichever
-//! shape its rows took. Only the clause is stamped unless the query is under DIAGNOSE.
-static void StampRawProvenance(const SolverInput &input, ConstraintProvenance &provenance,
-                               const SolverInput::RawConstraint &raw) {
-	provenance.source_clause_id = raw.source_clause_id;
+//! The provenance of a row a lowering emitted in flat columns (RawConstraint) or of a native construct
+//! (GeneralConstraintSpec), which state what an EvaluatedConstraint's sites derive from their group columns, so a
+//! clause reads the same in a diagnosis whichever shape its rows took. Only the clause is copied unless the query is
+//! under DIAGNOSE, which copies the whole record (the `<>` disjunction binary's column too, so the infeasible removal
+//! dial groups the two global rows of an aggregate `<>` just like a per-row one).
+static void StampProvenance(const SolverInput &input, ConstraintProvenance &provenance,
+                            const ConstraintProvenance &stated) {
+	provenance.origin.source_clause_id = stated.origin.source_clause_id;
 	if (!input.diagnose) {
 		return;
 	}
-	provenance.kind = raw.kind;
-	provenance.shape = raw.shape;
-	provenance.repair_group_id = raw.repair_group_id;
-	provenance.removal_group_id = raw.removal_group_id;
-	// I4 (aggregate `<>`): carry the disjunction-binary column so the infeasible
-	// removal dial groups the two global rows just like a per-row `<>`.
-	provenance.indicator_col = raw.indicator_col;
-	provenance.group_key = raw.group_key;
-	provenance.group_name = raw.group_name;
-	provenance.is_aggregate = raw.is_aggregate;
-	provenance.rhs_mechanism_offset = raw.rhs_mechanism_offset;
-	provenance.rhs_label = raw.rhs_label;
-	provenance.strict = raw.strict;
-	provenance.typed_k = raw.typed_k;
+	provenance = stated;
 }
 
 //! The model class this built model demands: the facts the build settled, in the shape the plan-time prediction
@@ -922,7 +910,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		// Raw rows include both structural links and user-facing
 		// constraints, so their provenance is explicit on RawConstraint rather than
 		// inferred from an EvaluatedConstraint position.
-		StampRawProvenance(input, constr.provenance, raw);
+		StampProvenance(input, constr.provenance, raw.provenance);
 		PushNormalizedConstraint(std::move(constr));
 	}
 
@@ -933,13 +921,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 			continue;
 		}
 
-		idx_t repair_group_id = eval_const.repair_group_id != DConstants::INVALID_INDEX
-		                            ? eval_const.repair_group_id
-		                            : static_cast<idx_t>(&eval_const - input.constraints.data());
-
 		bool is_aggregate = eval_const.lhs_is_aggregate;
 		bool has_groups = !eval_const.row_group_ids.empty();
-		const auto written = DecideWrittenClause(input, eval_const.source_clause_id);
+		const auto written = DecideWrittenClause(input, eval_const.origin.source_clause_id);
 
 		// A data-weighted aggregate's coefficient names, under DIAGNOSE: map each summed decide variable to its
 		// coefficient expression (`buy → l_extendedprice`) so infeasible diagnosis can render
@@ -1019,8 +1003,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 				rhs -= lhs_offset;
 				ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_offset);
 				// F2 site 1: aggregate, ungrouped.
-				StampConstraintProvenance(input, constr.provenance, eval_const, repair_group_id,
-				                          DConstants::INVALID_INDEX, lhs_offset);
+				StampConstraintProvenance(input, constr.provenance, eval_const, DConstants::INVALID_INDEX, lhs_offset);
 				StampAggregateTerms(constr.provenance);
 				PushNormalizedConstraint(std::move(constr));
 
@@ -1053,8 +1036,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 					double group_rhs = eval_const.rhs_values.Get(flat_rows[g_begin]) - group_lhs_offset;
 					ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, group_lhs_offset);
 					// F2 site 2: grouped aggregate (`by` and/or `when`).
-					StampConstraintProvenance(input, constr.provenance, eval_const, repair_group_id, g,
-					                          group_lhs_offset);
+					StampConstraintProvenance(input, constr.provenance, eval_const, g, group_lhs_offset);
 					StampAggregateTerms(constr.provenance);
 					PushNormalizedConstraint(std::move(constr));
 				}
@@ -1085,8 +1067,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 				idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
 				// A scoped easy MIN/MAX's member row stands for its `by` group's classes, a
 				// `per K:` clause's row for its class; any other per-row row for its data row.
-				StampConstraintProvenance(input, constr.provenance, eval_const, repair_group_id, row_group_key,
-				                          rhs_adjustment, row);
+				StampConstraintProvenance(input, constr.provenance, eval_const, row_group_key, rhs_adjustment, row);
 				if (TryFoldPerRowBound(eval_const, row, constr)) {
 					continue;
 				}
@@ -1190,12 +1171,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 			continue; // Already handled as linear above
 		}
 
-		// A clause with a product group is the user's: it is numbered where it is evaluated.
-		idx_t repair_group_id = eval_const.repair_group_id;
-
 		bool is_aggregate = eval_const.lhs_is_aggregate;
 		bool has_groups = !eval_const.row_group_ids.empty();
-		const auto written = DecideWrittenClause(input, eval_const.source_clause_id);
+		const auto written = DecideWrittenClause(input, eval_const.origin.source_clause_id);
 
 		if (is_aggregate) {
 			double rhs = eval_const.rhs_values.Get(0);
@@ -1212,8 +1190,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 				double lhs_constant;
 				auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_constant, written);
 				// F2 site 4: quadratic aggregate, ungrouped.
-				StampConstraintProvenance(input, qc.provenance, eval_const, repair_group_id, DConstants::INVALID_INDEX,
-				                          lhs_constant);
+				StampConstraintProvenance(input, qc.provenance, eval_const, DConstants::INVALID_INDEX, lhs_constant);
 				model.quadratic_constraints.push_back(std::move(qc));
 			} else {
 				// Groups: one QuadraticConstraint per group, reuse CSR
@@ -1232,7 +1209,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 					double lhs_constant;
 					auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, group_rhs, lhs_constant, written);
 					// F2 site 5: grouped quadratic aggregate.
-					StampConstraintProvenance(input, qc.provenance, eval_const, repair_group_id, g, lhs_constant);
+					StampConstraintProvenance(input, qc.provenance, eval_const, g, lhs_constant);
 					model.quadratic_constraints.push_back(std::move(qc));
 				}
 			}
@@ -1248,8 +1225,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 				auto qc = BuildQuadraticConstraint(eval_const, single_row, rhs, lhs_constant, written);
 				// F2 site 6: quadratic per-row.
 				idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
-				StampConstraintProvenance(input, qc.provenance, eval_const, repair_group_id, row_group_key,
-				                          lhs_constant, row);
+				StampConstraintProvenance(input, qc.provenance, eval_const, row_group_key, lhs_constant, row);
 				model.quadratic_constraints.push_back(std::move(qc));
 			}
 		}
@@ -1269,7 +1245,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		ic.coefficients = std::move(spec.row.coefficients);
 		ic.sense = spec.row.sense;
 		ic.rhs = spec.row.rhs;
-		StampRawProvenance(input, ic.provenance, spec.row);
+		StampProvenance(input, ic.provenance, spec.row.provenance);
 		model.indicator_constraints.push_back(std::move(ic));
 	}
 
@@ -1280,12 +1256,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		gc.kind = spec.kind;
 		gc.result_column = spec.result_column;
 		gc.argument_columns = std::move(spec.argument_columns);
-		gc.provenance.source_clause_id = spec.source_clause_id;
-		if (input.diagnose) {
-			gc.provenance.kind = ConstraintKind::STRUCTURAL;
-			gc.provenance.repair_group_id = spec.repair_group_id;
-			gc.provenance.removal_group_id = spec.removal_group_id;
-		}
+		StampProvenance(input, gc.provenance, spec.provenance);
 		model.general_constraints.push_back(std::move(gc));
 	}
 
@@ -1318,7 +1289,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 	auto column_clause = [&](idx_t col) {
 		for (auto &constr : model.constraints) {
 			if (std::find(constr.indices.begin(), constr.indices.end(), (int)col) != constr.indices.end()) {
-				return constr.provenance.source_clause_id;
+				return constr.provenance.origin.source_clause_id;
 			}
 		}
 		return DConstants::INVALID_INDEX;
@@ -1335,7 +1306,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 	for (auto &constr : model.constraints) {
 		for (auto coefficient : constr.coefficients) {
 			if (!std::isfinite(coefficient)) {
-				throw too_large(constr.provenance.source_clause_id);
+				throw too_large(constr.provenance.origin.source_clause_id);
 			}
 		}
 	}
