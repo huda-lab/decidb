@@ -826,13 +826,43 @@ def test_a_root_bound_reaches_a_nested_closing_link(decidb_cli_highs, scope_solv
 @pytest.mark.error
 @pytest.mark.error_binder
 def test_a_reducer_over_decisions_multiplied_inside_a_nest_is_refused_at_the_inner_reducer(decidb_cli):
-    """`max(sum(x * y) by (t.g)) <= 70`: a nested reducer whose body multiplies decisions is refused (D80), at the
-    inner reducer as the user wrote it (`DecideRewriteScoped`, the nested-reducer refusal)."""
+    """`avg(sum(x * y) by (t.g))`: a nested reducer whose body multiplies decisions is refused (D80), at the inner
+    reducer as the user wrote it (`DecideRewriteScoped`, the nested-reducer refusal)."""
     decidb_cli.assert_error_at(
-        _bound_query("x <= 5 AND max(sum(x * y) by (t.g)) <= 70").replace("DECIDE x(INT)", "DECIDE x(INT), y(INT)"),
+        _bound_query("x <= 5 AND y <= 5")
+        .replace("MAXIMIZE SUM(x)", "MAXIMIZE avg(sum(x * y) by (t.g))")
+        .replace("DECIDE x(INT)", "DECIDE x(INT), y(INT)"),
         kind="Binder Error",
         at="sum(x * y) by (t.g)",
         word="'sum(x * y) by (t.g)' squares or multiplies decisions inside nested reducers, which is not allowed",
+    )
+
+
+@pytest.mark.correctness
+@pytest.mark.min_max
+def test_a_maximum_of_group_sums_of_products_is_bounded_like_every_assignment(decidb_cli):
+    """`max(sum(x * y) by (t.g)) <= 6` bounds each group's sum of products. It is judged against every assignment."""
+    from ._brute_force import judge_rows
+
+    domains = {f"{name}{i}": range(3) for name in "xy" for i in range(4)}
+    groups = ((0, 1, 2), (3,))
+
+    def products(a):
+        return [sum(a[f"x{i}"] * a[f"y{i}"] for i in group) for group in groups]
+
+    rows = answer(
+        decidb_cli,
+        f"""SELECT id, x, y {table('t', BOUND_COLUMNS, BOUND_ROWS)}
+        DECIDE x(INT), y(INT)
+        SUCH THAT x <= 2 AND y <= 2 AND max(sum(x * y) by (t.g)) <= 6
+        MAXIMIZE SUM(x) + SUM(y)
+        ORDER BY id""",
+    )
+    judge_rows(
+        rows,
+        domains,
+        lambda a: max(products(a)) <= 6,
+        lambda a: sum(a.values()),
     )
 
 
