@@ -17,20 +17,16 @@ Other documented edge differences remain in `done.md` §1a: the D88 variant-name
 records. Direct-solve rules and DIAGNOSE's separate
 named-column scan also bypass or revisit parts of the normal tree execution; their scope is open.
 
-## EXEC-24 — A folded bound over a decision with no instance reports as any clause does
+## EXEC-25 — A BETWEEN that constrains nothing warns once
 
-- **Problem.** A clause left with no instance warns that it constrains nothing (`ReportSkippedInstances`), but a
-  clause stage 05 folds into the box never reaches the row evaluation: `DecideModelEmitter` re-reads a folded bound
-  only when it reads a helper. With no row in a class, `per k: c BETWEEN 0 AND 10` says nothing while `c + d <= 5`
-  warns. `DecideAbsence::MayBe` is true for every keyed decision, so re-reading every folded keyed bound would add a
-  per-row pass to queries whose decisions have an instance on every row.
-- **Change.** The folded-bound read hands every term to `DecideAbsentReads`, as the row paths do, at no cost where
-  every row has a class: `MayBe` answers exactly once the classes are read, or the instances are counted where the
-  box fold reads the bound's data.
-- **Ruling (owner, 2026-11-21).** One null rule, folded bounds included. The solver path of
-  `test_a2_keyed_every_row_with_no_class_has_no_instance` gains the warning; the direct path stays as it is.
-- **Done when.** The repro warns on the solver path; a 100,000-row keyed bound with every row in a class takes no
-  longer than before; `./test/decide/run_tests.sh -k "constrains_nothing or no_instance or a2_keyed"` passes.
+- **Problem.** With `decide_direct_solve='off'` and no row in a class, `per k: c BETWEEN 0 AND 10` warns twice that
+  `'c BETWEEN 0 AND 10' constrains nothing`, once per bound, and `c + d BETWEEN 0 AND 10` does the same. By stage 05
+  the BETWEEN is two comparisons, and `ReportSkippedInstances` (`physical_decide.cpp`) reports each one, both quoting
+  the written clause.
+- **Change.** The skipped-instance report is made per clause the user wrote (its source clause id), so one written
+  clause gives one warning and one EXPLAIN ANALYZE line.
+- **Done when.** Both spellings warn once; `./test/decide/run_tests.sh -k "constrains_nothing or skipped or
+  a2_keyed"` passes.
 
 ## EXEC-20 — SolverInput is the whole contract of model building
 

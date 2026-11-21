@@ -674,10 +674,12 @@ auxiliary whose definition reads a helper made after it -- whatever order the re
 reads that one mark: a comparison skips the instance, a helper drops the member, the objective drops the term. A term's
 own read is one check, `DecideAbsentReads` (`decide_absence.hpp`), built over the terms a clause reads that may read
 none and asked per row: whether the term stands in a row (`Rows`), beside a reducer (`ReadBesideReducers`), in a
-product's part (`ReadPart`) or in a reducer (`ReadInReducer`). The evaluation of a folded bound on a helper no row holds
-a member of asks it too, so a lone `max(when val > 100: x) >= 5` over no matching row warns that it constrains nothing,
-as the SUM form does. A row a rewrite added to define an auxiliary (`ConstraintKind::STRUCTURAL`) is no instance of the
-clause: it is skipped where its own reads have no value, and the auxiliary with it.
+product's part (`ReadPart`) or in a reducer (`ReadInReducer`). Every folded bound asks it too, so a folded bound
+counts its skipped instances and, with none kept, warns that it constrains nothing, as the clause unfolded does: a lone
+`max(when val > 100: x) >= 5` over no matching row, or `per k: c BETWEEN 0 AND 10` over rows in no class. `MayBe`
+answers exactly once the classes are read, so a folded bound over a keyed decision with a class at every row reads
+nothing. A row a rewrite added to define an auxiliary (`ConstraintKind::STRUCTURAL`) is no instance of the clause: it
+is skipped where its own reads have no value, and the auxiliary with it.
 
 A frame field of a signature (D82, deck p. 99) splits by the frame's keys (`DecideDescent::Signature`): the anchor's
 peer on its timeline when it reads relative to the anchor, else its timeline, and where the anchor reaches the `else`

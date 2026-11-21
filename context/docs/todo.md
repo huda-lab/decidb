@@ -13,7 +13,6 @@ the owner rules first.
 # Phase 3 — Each shape and formulation has one owner
 
 ## 3.2 One route per shape in stage 05 (one lane)
-- [ ] EXEC-24 A folded bound over a decision with no instance warns — pipeline/08_execution/todo.md § EXEC-24
 - [ ] OPT-27 ABS is lowered in one place — pipeline/05_optimizer/todo.md § OPT-27
 - [ ] OPT-28 One enumerator and one polarity walker — pipeline/05_optimizer/todo.md § OPT-28
 - [ ] OPT-29 No rewrite pass reruns without a cause — pipeline/05_optimizer/todo.md § OPT-29
@@ -25,6 +24,7 @@ the owner rules first.
 - [ ] BIND-6 A norm and a range frame refuse a query-wide body — pipeline/02_binder/todo.md § BIND-6
 - [ ] OPT-31 A square outside a reducer in the objective — pipeline/05_optimizer/todo.md § OPT-31
 - [ ] CANON-1 A SUM or AVG keeps its data addend where its route puts it — pipeline/04_canonicalizer/todo.md § CANON-1
+- [ ] EXEC-25 A BETWEEN that constrains nothing warns once — pipeline/08_execution/todo.md § EXEC-25
 
 # Phase 4 — Model building has one contract
 
