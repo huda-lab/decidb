@@ -28,6 +28,20 @@ files.
 - **Done when.** The clause-order pair, in both orders, agrees with the oracle (infeasible); `./test/decide/run_tests.sh
   -n 2 -k "abs"` passes, and with `DECIDB_FORCE_SOLVER=highs`.
 
+## OPT-31 — A square outside a reducer in the objective is refused
+
+- **Problem.** `MINIMIZE power(sum(x) - 3, 2)` (the squared distance of a total from a target) and `MINIMIZE (y -
+  3) * (y - 3)` over a query-wide `y` are convex QPs, but the objective's linear form refuses any square outside a
+  reducer (`decide_linear_form.cpp`, `'…' multiplies decisions outside a reducer, which is not supported`). The same
+  square solves as a constraint (`power(sum(x) - 3, 2) <= 4`), and a product of two query-wide decisions is accepted
+  in the objective.
+- **Change.** A square of a linear expression outside a reducer becomes a quadratic objective term, as `sum(power(x -
+  3, 2))` is: a reducer inside it becomes a helper (the value route), and the solver checks judge convexity and the
+  installation as for any quadratic objective.
+- **Needs.** BIND-4 (which removes the binder's `power` refusal) and OPT-25.
+- **Done when.** Both examples agree with the oracle on Gurobi and HiGHS (continuous); `./test/decide/run_tests.sh -n
+  2 -k "quadratic or objective"` passes.
+
 ## OPT-24 — A rewritten clause has one instance per distinct signature
 
 - **Problem.** The value route gives a clause with no `per` one instance per row (`Helpers::ClassKeyOf`,
@@ -38,6 +52,14 @@ files.
   model.
 - **Change.** A rewritten clause has one instance per distinct signature of what it reads; the duplicate rows go.
 - **Ruling (owner, 2026-11-21).** This replaces the task's first diagnosis, which blamed the composed route.
+- **Ruling (owner, 2026-11-21): one rule in every shape.** The model states each distinct constraint once. Today the
+  aggregate shape merges equal instances (`per t.g: sum(x) + s <= t.b` over three classes with one `b` builds 1 row;
+  guide §6.2, D6) while the tree keeps one per class (`per t.g: s + u <= t.b` builds 3 identical rows, the value route
+  12 for the repro). The tree's roots key their instances by signature alone, not by class and signature, so the row
+  shape merges too. Guide §7.1's "Equal bodies in two classes stay two instances, two identical model rows" becomes
+  one model row, and `test_equal_values_in_two_classes_stay_two_instances` expects 1 model row (its oracle's 2
+  instances stay). A clause that reads a per-row decision differs on every row and keeps its path at no new cost. A
+  DIAGNOSE test whose output changes goes to the owner.
 - **Done when.** Both spellings of the repro build the same rows; `./test/decide/run_tests.sh -n 2 -k "minmax or value
   or scoped"` passes.
 

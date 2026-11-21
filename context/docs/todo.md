@@ -27,6 +27,9 @@ the owner rules first.
 ## 3.3 Model rows (needs: 3.2) (one lane)
 - [ ] FORM-8 One record per kind of model row — pipeline/06_model_formulation/todo.md § FORM-8
 
+## 3.4 Gaps filed in Phase 3 (needs: 3.2) (one lane)
+- [ ] OPT-31 A square outside a reducer in the objective — pipeline/05_optimizer/todo.md § OPT-31
+
 # Phase 4 — Model building has one contract
 
 ## 4.1 Operator and contract (parallel: EXEC-20, EXEC-21, EXEC-22 | EXEC-23 | PLAN-7)
