@@ -6,6 +6,11 @@ Current behavior and the accepted repair-tie policy are recorded in [`done.md`](
 
 Recorded so it is not lost; not to be built until the owner picks it up.
 
+- **Whether a `<>` or a quadratic row sizes the elastic boxes.** `OpenElasticColumnBox` and `DemandedAuxReach` read
+  every clause row, `<>` and quadratic rows included. A `<>` asks no reach of a column, and a quadratic row's linear
+  part leaves out its products, so both may size a box from the wrong rows. Changing it moves diagnosis constants, so
+  it waits for its own task (found while designing FORM-8, 2026-11-22).
+
 - **One row for an aggregate with no `per` in the expanded scope.** Expanded `DIAGNOSE` on `SUM(x) >= 500` over two
   rows prints two rows of amount 430, which reads like 860. That is D28 as written: a clause with no `per` key reports
   once per kept row (`expanded_row`). The owner's preferred direction is one row when the aggregate has no `per`. It

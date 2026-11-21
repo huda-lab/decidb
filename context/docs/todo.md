@@ -13,6 +13,7 @@ the owner rules first.
 # Phase 3 — Each shape and formulation has one owner
 
 ## 3.3 Model rows (one lane)
+- [ ] FORM-9 A BOOL product reads its ABS helper's box — pipeline/06_model_formulation/todo.md § FORM-9
 - [ ] FORM-8 One record per kind of model row — pipeline/06_model_formulation/todo.md § FORM-8
 
 ## 3.4 Gaps filed in Phase 3 (one lane)
