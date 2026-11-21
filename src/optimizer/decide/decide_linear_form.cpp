@@ -112,7 +112,7 @@ public:
 		// The composed MIN/MAX terms are emitted by RewriteComposedMinMax as bare
 		// inner expressions. Lower them here too, so stage 08 reads lowered terms
 		// for every construct rather than for all but one.
-		// Per composed clause and then the objective's composed terms, each term's inner terms.
+		// Per composed clause, each term's inner terms.
 		auto compose = [&](const vector<LogicalDecide::ComposedMinMaxTerm> &terms) {
 			composed_terms.emplace_back(terms.size());
 			for (idx_t t = 0; t < terms.size(); t++) {
@@ -122,7 +122,6 @@ public:
 		for (auto &spec : op.composed_minmax_constraints) {
 			compose(spec.terms);
 		}
-		compose(op.composed_minmax_objective_terms);
 		// The reducers the value rewrite lifted into helper decisions, the same way; a range frame's helper also reads
 		// its `else`, at the window's anchor.
 		const BoundConstantExpression one(Value::INTEGER(1));
@@ -523,10 +522,6 @@ private:
 			}
 			LowerFrames(spec.rhs_expr);
 			LowerFrames(spec.scope.when);
-		}
-		for (auto &term : op.composed_minmax_objective_terms) {
-			LowerFrames(term.filter);
-			LowerFrames(term.scale);
 		}
 		for (auto &spec : composed_terms) {
 			for (auto &terms : spec) {

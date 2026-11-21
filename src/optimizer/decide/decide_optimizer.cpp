@@ -38,16 +38,6 @@ namespace duckdb {
 // this file keeps the dispatcher and the helpers they share.
 using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 
-ObjectiveAggregateType decide_rewrite::StrToAggType(const string &name) {
-	if (name == "sum")
-		return ObjectiveAggregateType::SUM;
-	if (name == "min")
-		return ObjectiveAggregateType::MIN_AGG;
-	if (name == "max")
-		return ObjectiveAggregateType::MAX_AGG;
-	return ObjectiveAggregateType::NONE;
-}
-
 //! Defined below with the other NORM marker helpers; called at the end of OptimizeDecide.
 static void VerifyNormMarkersLowered(LogicalDecide &decide);
 static void VerifyExtremumBodiesLinear(ClientContext &context, LogicalDecide &decide);
@@ -399,9 +389,6 @@ static void VerifyExtremumBodiesLinear(ClientContext &context, LogicalDecide &de
 			check(*term.inner_expr);
 		}
 	}
-	for (auto &term : decide.composed_minmax_objective_terms) {
-		check(*term.inner_expr);
-	}
 	for (auto &link : decide.reducer_value_links) {
 		if (IsExtremumName(link.agg_name)) {
 			check(*link.inner_expr);
@@ -421,21 +408,6 @@ static void VerifyExtremumBodiesLinear(ClientContext &context, LogicalDecide &de
 		ExpressionIterator::EnumerateChildren(expr, hard_rows);
 	};
 	hard_rows(*decide.decide_constraints);
-	auto is_extremum_agg = [](ObjectiveAggregateType agg) {
-		return agg == ObjectiveAggregateType::MIN_AGG || agg == ObjectiveAggregateType::MAX_AGG;
-	};
-	if (decide.decide_objective && is_extremum_agg(decide.flat_objective_agg)) {
-		std::function<void(const Expression &)> bodies = [&](const Expression &expr) {
-			if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-				for (auto &child : expr.Cast<BoundAggregateExpression>().children) {
-					check(*child);
-				}
-				return;
-			}
-			ExpressionIterator::EnumerateChildren(expr, bodies);
-		};
-		bodies(*decide.decide_objective);
-	}
 }
 
 void DecideOptimizer::TagAtomicRemovalGroups(LogicalDecide &decide) {

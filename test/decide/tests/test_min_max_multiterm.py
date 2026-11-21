@@ -900,22 +900,27 @@ def test_a_composed_clause_reads_each_tuple_of_a_qualified_reducer_once(decidb_c
 @pytest.mark.min_max
 @pytest.mark.error
 @pytest.mark.parametrize(
-    "decide, clause",
+    "decide, at, word",
     [
         (
             "SUCH THAT x <= 5 AND sum(x) + max(x) / (SELECT count(*) - 3 FROM range(3)) <= 7 MAXIMIZE sum(x)",
-            "constraint",
+            "(SELECT count(*) - 3 FROM range(3))",
+            "'(SELECT count(*) - 3 FROM range(3))' divides by zero",
         ),
-        ("SUCH THAT x <= 5 MAXIMIZE sum(x) + max(x) / (SELECT count(*) - 3 FROM range(3))", "objective"),
+        (
+            "SUCH THAT x <= 5 MAXIMIZE sum(x) + max(x) / (SELECT count(*) - 3 FROM range(3))",
+            "(SELECT count(*) - 3 FROM range(3))",
+            "'1 / (SELECT count(*) - 3 FROM range(3))' is NaN or infinite on some rows",
+        ),
     ],
     ids=["constraint", "objective"],
 )
-def test_a_factor_that_divides_by_a_query_wide_zero_is_refused(decidb_cli, decide, clause):
+def test_a_factor_that_divides_by_a_query_wide_zero_is_refused(decidb_cli, decide, at, word):
     """`max(x) / (SELECT count(*) - 3 ...)` divides the extremum by a value known only when the query runs: 0 here. The
-    error points at the divisor."""
+    objective's coefficient is the reciprocal, as for any reducer."""
     decidb_cli.assert_error_at(
         f"SELECT id, x FROM (VALUES (1), (2), (3)) t(id) DECIDE x(REAL) {decide}",
         kind="Invalid Input Error",
-        at="(SELECT count(*) - 3 FROM range(3))",
-        word="'(SELECT count(*) - 3 FROM range(3))' divides by zero",
+        at=at,
+        word=word,
     )

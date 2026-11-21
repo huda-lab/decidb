@@ -121,13 +121,6 @@ public:
 	vector<LogicalDecide::UserBoundSpec> user_singleton_row_bounds;
 	vector<LogicalDecide::UserBoundSpec> member_singleton_row_bounds;
 
-	// --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
-
-	// A MIN/MAX objective: original aggregate type before rewrite to SUM
-	ObjectiveAggregateType flat_objective_agg = ObjectiveAggregateType::NONE;
-	// Pre-computed: true if easy formulation (MAXIMIZE+MIN or MINIMIZE+MAX)
-	bool flat_objective_is_easy = false;
-
 	// --- Key scopes ---
 
 	//! Every key scope: of a `per K:` decision, a reducer's `per K:` or colon-form
@@ -306,8 +299,6 @@ private:
 			bool skipped = false;
 		};
 		vector<ComposedConstraint> composed_constraints;
-		//! The composed MIN/MAX *objective*'s terms, evaluated.
-		vector<ComposedMinMaxTermData> composed_objective_terms;
 	};
 
 	//! The evaluation (language/guide.md §6.4): the tree's descent over the input (`gstate.descent`), each node's

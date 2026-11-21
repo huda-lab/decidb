@@ -65,16 +65,6 @@
 
 namespace duckdb {
 
-//! A composed objective is an objective E whose body holds its composed terms' G nodes.
-static bool TreeHasComposedObjective(const DecideTree &tree) {
-	for (auto root : tree.roots) {
-		if (tree.nodes[root]->objective && !tree.nodes[root]->compiled.composed.empty()) {
-			return true;
-		}
-	}
-	return false;
-}
-
 //! Input column `column`'s rows grouped by value as GROUP BY groups them, NULL as a value (DecideKeyMap), in a scan of
 //! their own: each row's group, and each group's value, numbered in the order the rows first read them. The diagnosis
 //! orders what it reports itself (by escape rate, column and value), so no group's number reaches a message.
@@ -161,7 +151,7 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 		}
 	}
 	accounts.insert(accounts.end(), run_time_accounts.begin(), run_time_accounts.end());
-	auto result = RenderDecideParams(*this, accounts, TreeHasComposedObjective(*tree), tree.get());
+	auto result = RenderDecideParams(*this, accounts, tree.get());
 	SetEstimatedCardinality(result, estimated_cardinality);
 	return result;
 }
@@ -1017,23 +1007,16 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// objective. The floors and implied bounds above read the helpers' columns and keep only what holds of a decision
 	// or an instance, so the column space is laid out again, and every row read against the old one is read anew.
 	phase.Next("assembly.inline_helpers");
-	// What reads a decision's column outside the rows and the objective assembled here: a composed MIN/MAX term, a
-	// bound folded into its column's box, and every term of a flat MIN/MAX objective, which its auxiliary pins.
+	// What reads a decision's column outside the rows and the objective assembled here: a composed MIN/MAX term and a
+	// bound folded into its column's box.
 	vector<idx_t> held;
 	for (auto &clause : evaluated.composed_constraints) {
 		for (auto &term : clause.terms) {
 			held.insert(held.end(), term.variables.begin(), term.variables.end());
 		}
 	}
-	for (auto &term : evaluated.composed_objective_terms) {
-		held.insert(held.end(), term.variables.begin(), term.variables.end());
-	}
 	for (auto &bound : gstate.user_singleton_row_bounds) {
 		held.push_back(bound.decide_var_idx);
-	}
-	if (flat_objective_agg != ObjectiveAggregateType::NONE) {
-		held.insert(held.end(), solver_input.objective_variable_indices.begin(),
-		            solver_input.objective_variable_indices.end());
 	}
 	vector<idx_t> minmax_values;
 	for (auto &link : solver_input.reducer_value_links) {
@@ -1250,34 +1233,9 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 	phase.Next("formulation.bilinear");
 	LinearizeBilinear(solver_input, var_indexer, box);
 
-	// Handle MIN/MAX objective: create global auxiliary variable z and linking constraints.
-	// Easy (no indicators): MINIMIZE+MAX or MAXIMIZE+MIN; hard (Big-M indicators):
-	// MINIMIZE+MIN or MAXIMIZE+MAX. A nested one is a helper decision, defined with the
-	// other helpers (D81).
-
 	// Global variables are appended at var_indexer.global_block_start.
 	// As we add more global vars, their indices are global_block_start + g
 	// where g is the position in the global vars array.
-
-	// Encode a MIN/MAX objective (`MIN(expr)`/`MAX(expr)`) into a global auxiliary and its
-	// envelope/indicator rows. Pure stage-06 work: it reads the coefficients EvaluateTree
-	// evaluated plus the flat column space, and needs no row of its own.
-	phase.Next("formulation.minmax_objective");
-	MinMaxObjectiveSpec minmax_objective_spec;
-	minmax_objective_spec.flat_agg = flat_objective_agg;
-	minmax_objective_spec.flat_is_easy = flat_objective_is_easy;
-	{
-		// The rows the objective's reducer reads -- its terms' filters, the objective's
-		// `when` folded in -- are its members, whatever their coefficients.
-		auto &members = minmax_objective_spec.member_rows;
-		members.assign(num_rows, evaluated.linear_filters.empty());
-		for (auto &filter : evaluated.linear_filters) {
-			for (idx_t row = 0; row < num_rows; row++) {
-				members[row] = members[row] || !filter.has_filter || filter.mask[row];
-			}
-		}
-	}
-	LinearizeMinMaxObjective(solver_input, var_indexer, minmax_objective_spec, decide_var_names, native_min_max);
 
 	// Composed MIN/MAX clauses. EvaluateTree evaluated each one; stage 06 owns the auxiliary,
 	// envelope and indicator emission. The linearizer fills each MIN/MAX term's `z_idx`,
@@ -1293,10 +1251,6 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 		LinearizeComposedMinMaxConstraint(solver_input, var_indexer, terms, clause.rhs, clause.comparison,
 		                                  clause.source_clause_id, clause.removal_group_id, clause.repair_group_id,
 		                                  clause.class_set, decide_var_names, native_min_max);
-	}
-	if (!evaluated.composed_objective_terms.empty()) {
-		auto terms = evaluated.composed_objective_terms;
-		LinearizeComposedMinMaxObjective(solver_input, var_indexer, terms, decide_var_names, native_min_max);
 	}
 
 	// Refresh total_vars: the row/keyed blocks were finalized before linearization,

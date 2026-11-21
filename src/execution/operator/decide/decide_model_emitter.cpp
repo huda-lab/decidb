@@ -1493,18 +1493,9 @@ void DecideModelEmitter::AvgGroups(bool avg_scale, idx_t avg_group_key, idx_t ch
 void DecideModelEmitter::Composed(PhysicalDecide::EvaluatedClauses &evaluated) {
 	// E roots own the composed G references. Keep their source order for the solver and diagnosis rows.
 	vector<idx_t> clauses;
-	idx_t objective = DConstants::INVALID_INDEX;
 	for (auto root : tree.roots) {
-		auto &node = *tree.nodes[root];
-		if (!node.compiled.composed.empty()) {
-			if (node.objective) {
-				if (objective != DConstants::INVALID_INDEX) {
-					throw InternalException("DECIDE model emitter: more than one composed objective E node");
-				}
-				objective = root;
-			} else {
-				clauses.push_back(root);
-			}
+		if (!tree.nodes[root]->compiled.composed.empty()) {
+			clauses.push_back(root);
 		}
 	}
 	std::sort(clauses.begin(), clauses.end(), [&](idx_t left, idx_t right) {
@@ -1544,13 +1535,6 @@ void DecideModelEmitter::Composed(PhysicalDecide::EvaluatedClauses &evaluated) {
 		};
 		op.FinishComposedClause(gstate, num_rows, node, null_factor, kept_rows, class_set, std::move(clause),
 		                        evaluated);
-	}
-	if (objective != DConstants::INVALID_INDEX) {
-		bool null_factor = false;
-		auto terms = ComposedTerms(objective, null_factor);
-		// A term with a NULL factor reads 0; one that reads no row is dropped.
-		terms.erase(std::remove_if(terms.begin(), terms.end(), DecideComposedTermReadsNoRow), terms.end());
-		evaluated.composed_objective_terms = std::move(terms);
 	}
 }
 

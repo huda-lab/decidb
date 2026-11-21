@@ -300,15 +300,6 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 	// The composed MIN/MAX rewrite (DecideOptimizer) lifts sub-expressions out of the
 	// objective/constraint trees into these vectors and leaves a placeholder behind, so
 	// visiting decide_objective/decide_constraints above no longer reaches them.
-	for (auto &term : composed_minmax_objective_terms) {
-		callback(&term.inner_expr);
-		if (term.filter) {
-			callback(&term.filter);
-		}
-		if (term.scale) {
-			callback(&term.scale);
-		}
-	}
 	for (auto &spec : composed_minmax_constraints) {
 		for (auto &term : spec.terms) {
 			callback(&term.inner_expr);
@@ -416,7 +407,7 @@ vector<ColumnBinding> LogicalDecide::SourceBindings() {
 }
 
 InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
-	auto result = RenderDecideParams(*this, rewrite_accounts, !composed_minmax_objective_terms.empty(), nullptr);
+	auto result = RenderDecideParams(*this, rewrite_accounts, nullptr);
 	SetParamsEstimatedCardinality(result);
 	return result;
 }

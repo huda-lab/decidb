@@ -560,32 +560,6 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
                       const ExtremumMemberSource &members, const vector<string> &var_names,
                       NativeConstructPolicy policy);
 
-//! How stage 05 classified the objective's MIN/MAX shape, as `LinearizeMinMaxObjective`
-//! needs it: `flat_*` describes a `MIN(expr)` / `MAX(expr)` objective. (A nested one is a
-//! helper decision, defined by LinearizeReducerValueLinks, D81.) The objective is a minimization, and
-//! it is *easy* when that already drives the auxiliary to the extreme (a minimized MAX:
-//! `MINIMIZE MAX(e)`, or `MAXIMIZE MIN(e)` written as `MINIMIZE MAX(-e)`) and one envelope
-//! row per row suffices; the hard direction additionally needs the per-row indicator layer.
-struct MinMaxObjectiveSpec {
-	ObjectiveAggregateType flat_agg = ObjectiveAggregateType::NONE;
-	bool flat_is_easy = false;
-	//! Exactly the rows the objective's reducer reads (its terms' filters, the
-	//! objective's `when` folded in), each a member whatever its coefficients. Sized
-	//! to the input's rows.
-	vector<bool> member_rows;
-};
-
-//! Encode a MIN/MAX *objective* — the counterpart of `LinearizeMinMaxConstraints`, which
-//! encodes a MIN/MAX *constraint*. The per-row objective is replaced by a global
-//! auxiliary `z`, pinned by envelope rows against the evaluated objective coefficients; the hard
-//! direction adds one indicator binary per active row and a `SUM(y) >= 1` pin.
-//!
-//! Runs after the flat column space exists, so it emits into `input.global_constraints`
-//! and appends its auxiliaries to the global block. Untouched when the objective carries
-//! no MIN/MAX aggregate: `input.objective_coefficients` is then left as it arrived.
-void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer, const MinMaxObjectiveSpec &spec,
-                              const vector<string> &var_names, NativeConstructPolicy native_min_max);
-
 //! One reducer term of a *composed* (additive) MIN/MAX clause — `SUM(a) + MAX(b) <= K`
 //! or the objective spelling — with everything data-dependent already evaluated by the
 //! physical layer: inner term t reads `variables[t]` (INVALID_INDEX for a constant) with
@@ -631,11 +605,5 @@ void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &ind
                                        idx_t source_clause_id, idx_t removal_group_id, idx_t repair_group_id,
                                        idx_t class_set, const vector<string> &var_names,
                                        NativeConstructPolicy native_min_max);
-
-//! Encode a composed MIN/MAX *objective*: the same auxiliary layer, and a coefficient on each
-//! auxiliary's column beside the objective the other terms already built.
-void LinearizeComposedMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
-                                      vector<ComposedMinMaxTermData> &terms, const vector<string> &var_names,
-                                      NativeConstructPolicy native_min_max);
 
 } // namespace duckdb

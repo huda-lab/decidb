@@ -114,7 +114,7 @@ struct DecideBody {
 	unique_ptr<DecideObjective> objective;
 	//! A value link's or a composed term's G: its inner terms; a frame link's else terms.
 	vector<DecideTerm> members;
-	//! A composed clause's root, or the objective's with composed terms: each term's G, in the order of its terms
+	//! A composed clause's root: each term's G, in the order of its terms
 	//! (LogicalDecide::ComposedMinMaxTerm).
 	vector<idx_t> composed;
 	//! Parallel to `composed`: each term's sign, ease and scale.
@@ -143,7 +143,7 @@ struct DecideBody {
 	//! other.
 	vector<idx_t> arguments;
 	//! The stage-05 list the body was copied from, and its place there: constraints by their place, the objective,
-	//! composed clauses, then the objective's composed terms.
+	//! then composed clauses.
 	DecideBodyKind kind = DecideBodyKind::NONE;
 	idx_t order = DConstants::INVALID_INDEX;
 };
@@ -314,7 +314,7 @@ struct DecideTreeSources {
 	vector<idx_t> clause_roots;
 	std::unordered_map<const Expression *, idx_t> root_of;
 	idx_t objective_root = DConstants::INVALID_INDEX;
-	//! [spec][term] -> the composed term's G; the objective's composed terms last.
+	//! [spec][term] -> the composed term's G.
 	vector<vector<idx_t>> composed_reducers;
 	//! [spec] -> the composed clause's root.
 	vector<idx_t> composed_roots;
@@ -345,8 +345,8 @@ public:
 	void TakeClause(const Expression &leaf, unique_ptr<DecideConstraint> clause, bool singleton_row);
 	//! The objective's records, into the objective's root.
 	void TakeObjective(unique_ptr<DecideObjective> objective);
-	//! Composed term `term` of composed clause `spec` -- the objective's composed terms last -- its inner terms, into
-	//! its G (DecideTreeSources::composed_reducers).
+	//! Composed term `term` of composed clause `spec`, its inner terms, into its G
+	//! (DecideTreeSources::composed_reducers).
 	void TakeComposedTerms(idx_t spec, idx_t term, vector<DecideTerm> terms);
 	//! A helper's member terms and its frame's `else` terms, into its G or O (DecideTreeSources::link_nodes).
 	void TakeLinkTerms(idx_t link, vector<DecideTerm> members, vector<DecideTerm> fallback);

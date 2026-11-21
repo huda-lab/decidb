@@ -500,11 +500,11 @@ DERIVED_TOO_LARGE = [
         "y(REAL) SUCH THAT y <= 5 AND 2e308 * MAX(y) + SUM(y) <= 10 MAXIMIZE SUM(y)",
         At("2e308"),
     ),
-    # The reciprocal of a finite factor on the objective's MIN/MAX: the objective check at the hand-off.
+    # The reciprocal of a finite factor on the objective's MIN/MAX: a number DeciDB made, as for a sum.
     (
         "reciprocal_on_an_extremum_in_the_objective",
         "y(REAL) SUCH THAT y <= 5 MINIMIZE MAX(y) / (SELECT 1e-310)",
-        "MAX(y) / (SELECT 1e-310)",
+        None,
     ),
 ]
 

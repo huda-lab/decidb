@@ -44,7 +44,7 @@ bool MayHaveIntegralColumn(const LogicalDecide &op) {
 	if (!op.minmax_clause_labels.empty()) {
 		return true;
 	}
-	if (!op.composed_minmax_constraints.empty() || !op.composed_minmax_objective_terms.empty()) {
+	if (!op.composed_minmax_constraints.empty()) {
 		return true;
 	}
 	for (auto &link : op.reducer_value_links) {
@@ -52,10 +52,7 @@ bool MayHaveIntegralColumn(const LogicalDecide &op) {
 			return true;
 		}
 	}
-	auto is_minmax = [](ObjectiveAggregateType agg) {
-		return agg == ObjectiveAggregateType::MIN_AGG || agg == ObjectiveAggregateType::MAX_AGG;
-	};
-	return is_minmax(op.flat_objective_agg);
+	return false;
 }
 
 //! How many distinct columns a product group's forms read; a constant term carries INVALID_INDEX. A decision read

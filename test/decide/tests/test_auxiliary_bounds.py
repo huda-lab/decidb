@@ -21,7 +21,7 @@ is derivable") is asserted without a count in
 `test_native_auxiliaries_are_boxed_too`.
 
 Covers one query per auxiliary-creation site:
-  - test_flat_minmax_objective_auxiliary_is_boxed: flat `z`, both directions
+  - test_flat_minmax_objective_auxiliary_is_boxed: an objective's MIN/MAX helper, both directions
   - test_a_nested_objectives_helpers_are_boxed: a nested objective's helper per group, and
     the outer helper over them (D81)
   - test_composed_minmax_term_auxiliaries_are_boxed: composed `z_k` per term
@@ -80,16 +80,16 @@ _GROUPED_ROWS = "(VALUES (1,'a',3),(2,'a',5),(3,'b',2)) t(id,g,c)"
 @pytest.mark.parametrize(
     "sense,extra,box",
     [
-        # hard direction: indicators + Big-M. The model minimizes the negation, so the box is the mirror image.
-        ("MAXIMIZE", "AND SUM(x) <= 6", (-20.0, 0.0)),
+        # hard direction: indicators + Big-M
+        ("MAXIMIZE", "AND SUM(x) <= 6", (0.0, 20.0)),
         ("MINIMIZE", "AND SUM(x) >= 3", (0.0, 20.0)),  # easy direction: one-sided envelope pin
     ],
 )
 def test_flat_minmax_objective_auxiliary_is_boxed(decidb_cli, tmp_path, sense, extra, box):
-    """The flat `MAXIMIZE/MINIMIZE MAX(expr)` auxiliary — the site the cliff was found on.
+    """The `MAXIMIZE/MINIMIZE MAX(expr)` helper — the site the cliff was found on.
 
     Both directions are checked: the hard one because it is where the cost showed up, the
-    easy one because its auxiliary is created by the same call and would regress silently
+    easy one because its helper is created by the same call and would regress silently
     (the one-sided pin plus outer pressure still lands on the right answer).
     """
     dump = _lowering(decidb_cli).dump_model(
@@ -100,9 +100,7 @@ def test_flat_minmax_objective_auxiliary_is_boxed(decidb_cli, tmp_path, sense, e
         """,
         tmp_path / f"flat_{sense.lower()}.dump",
     )
-    assert _assert_all_boxed(dump, 1) == [
-        (2, *box)
-    ], f"flat MIN/MAX auxiliary is not boxed by the per-row range:\n{dump}"
+    assert _helper_columns(dump, 2) == [box], f"MIN/MAX helper is not boxed by the per-row range:\n{dump}"
 
 
 def _helper_columns(dump: str, decisions: int) -> list[tuple[float, float]]:
@@ -185,9 +183,8 @@ def test_composed_minmax_term_auxiliaries_are_boxed(decidb_cli, tmp_path):
         ("open above only", "(VALUES (1,3),(2,5)) t(id,c)", "MINIMIZE", (0.0, 1e30)),
         # A negative coefficient swaps which end of `x`'s box feeds which end of the term:
         # the open ceiling on `x` opens the expression's FLOOR, and 0 becomes its ceiling.
-        # Blaming the side without respecting sign would get this backwards. The model minimizes the negation of
-        # a MAXIMIZE objective, which mirrors the box: the floor is 0 and the ceiling is open.
-        ("open below only", "(VALUES (1,-3),(2,-5)) t(id,c)", "MAXIMIZE", (0.0, 1e30)),
+        # Blaming the side without respecting sign would get this backwards.
+        ("open below only", "(VALUES (1,-3),(2,-5)) t(id,c)", "MAXIMIZE", (-1e30, 0.0)),
         # Both signs in one family: the extremum ranges over a term open above and a term
         # open below, so nothing is derivable and the column is free. This is the case the
         # test was originally written for.
@@ -249,10 +246,10 @@ def test_native_auxiliaries_are_boxed_too(decidb_cli, tmp_path):
         """,
         tmp_path / "native.dump",
     )
-    cols = _continuous_columns(dump)
+    cols = _helper_columns(dump, 2)
     assert cols, f"no auxiliary columns at all:\n{dump}"
-    for idx, lb, ub in cols:
-        assert lb > -1e20 and ub < 1e20, f"auxiliary col {idx} left free at [{lb}, {ub}]:\n{dump}"
+    for lb, ub in cols:
+        assert lb > -1e20 and ub < 1e20, f"auxiliary left free at [{lb}, {ub}]:\n{dump}"
 
 
 @pytest.mark.min_max
@@ -346,11 +343,11 @@ def test_a_family_on_one_side_of_zero_is_not_stretched_to_zero(decidb_cli, tmp_p
 @pytest.mark.correctness
 @pytest.mark.parametrize(
     "sense, box",
-    [("MAXIMIZE MIN", (-20.0, -10.0)), ("MINIMIZE MAX", (10.0, 20.0))],  # the first is minimized as its negation
+    [("MAXIMIZE MIN", (10.0, 20.0)), ("MINIMIZE MAX", (10.0, 20.0))],
 )
 def test_an_objective_extremum_over_a_family_above_zero_is_boxed_by_it(decidb_cli, tmp_path, sense, box):
     dump = _lowering(decidb_cli).dump_model(
         f"SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(INT) SUCH THAT x >= 5 AND x <= 10 {sense}(2 * x)",
         tmp_path / "objective_family.dump",
     )
-    assert [(lb, ub) for _, lb, ub in _assert_all_boxed(dump, 1)] == [box], dump
+    assert _helper_columns(dump, 2) == [box], dump

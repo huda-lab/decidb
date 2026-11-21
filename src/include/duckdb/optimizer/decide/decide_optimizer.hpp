@@ -160,16 +160,10 @@ private:
 	void RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                                       DecideEnclosingScope scope = DecideEnclosingScope());
 
-	//! Detect a composed MIN/MAX objective (MIN/MAX terms beside other terms, or one under a factor).
-	//! Extracts the MIN/MAX terms into decide.composed_minmax_objective_terms and leaves the
-	//! others as the objective, a zero placeholder when there are none. Must run before
-	//! RewriteMinMax (which handles single top-level MIN/MAX objectives).
-	void RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide);
-
-	//! Rewrite MIN/MAX aggregates in constraints and objectives.
-	//! Constraints: easy cases (MAX<=K, MIN>=K) keep the reducer, tagged, and bound each
-	//! member; hard cases create an extremum column. Objectives: detect a MIN/MAX objective,
-	//! set metadata, rewrite to SUM (a nested one is a helper decision by now, D81).
+	//! Rewrite MIN/MAX aggregates in constraints.
+	//! Easy cases (MAX<=K, MIN>=K) keep the reducer, tagged, and bound each
+	//! member; hard cases create an extremum column. An objective's MIN/MAX is a helper decision by now
+	//! (RewriteScopedReducers).
 	void RewriteMinMax(LogicalDecide &decide);
 
 	//! Top-level constraint-side MIN/MAX rewrite
@@ -180,14 +174,6 @@ private:
 	void RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                               vector<unique_ptr<Expression>> &new_constraints,
 	                               DecideEnclosingScope scope = DecideEnclosingScope());
-
-	//! Objective-side MIN/MAX detection and rewriting.
-	void RewriteMinMaxObjective(LogicalDecide &decide);
-	//! The tree half of RewriteMinMaxObjective, split out so the objective can be
-	//! detached, rewritten, and reinstalled through LogicalDecide::SetObjective. It
-	//! cannot detach at the end instead: the rewrite writes through a pointer that
-	//! walks INTO the tree past `per`/`when` wrappers and casts, and it has early returns.
-	void RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_ptr<Expression> &objective);
 
 	//! Detect ABS(expr) over decide variables, allocate the plan-time helper, and retain the written function plus its
 	//! lower-envelope metadata for the tree's ABS F node.

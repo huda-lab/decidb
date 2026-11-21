@@ -142,15 +142,13 @@ static void NumberClauses(DecideTree &tree, const vector<idx_t> &roots) {
 	}
 }
 
-//! The composed clauses, which are evaluated after the objective, then the objective's composed terms (the last
-//! slot): each term's G holds its inner terms (LowerDecideTree), and the root holding them each term's G and spec.
+//! The composed clauses, which are evaluated after the objective: each term's G holds its inner terms
+//! (LowerDecideTree), and the root holding them each term's G and spec.
 static void ComposedBodies(const LogicalDecide &op, DecideTree &tree, const DecideTreeSources &sources) {
 	for (idx_t spec = 0; spec < sources.composed_reducers.size(); spec++) {
 		auto &reducers = sources.composed_reducers[spec];
-		const auto holder =
-		    spec < sources.composed_roots.size() ? sources.composed_roots[spec] : sources.objective_root;
-		auto &terms = spec < sources.composed_roots.size() ? op.composed_minmax_constraints[spec].terms
-		                                                   : op.composed_minmax_objective_terms;
+		const auto holder = sources.composed_roots[spec];
+		auto &terms = op.composed_minmax_constraints[spec].terms;
 		auto &holder_body = tree.nodes[holder]->compiled;
 		holder_body.composed = reducers;
 		for (auto &term : terms) {

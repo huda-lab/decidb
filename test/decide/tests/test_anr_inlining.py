@@ -207,7 +207,7 @@ class TestIntoMembers:
         assert q_terms == ["q 0,0:-1", "q 1,1:-1", "q 2,2:-1"], dump
 
     def test_a_composed_max_objective_term_leaves_the_group_sums_linear(self, decidb_cli, tmp_path):
-        """A composed MAX beside the sum of group SUMs keeps their linear coefficients and its own seven rows."""
+        """A MAX beside the sum of group SUMs keeps their linear coefficients and its own four rows."""
         sql = """
             SELECT id, x FROM (VALUES (1, 'a', 2.0), (2, 'a', 3.0), (3, 'b', 4.0)) t(id, g, w)
             DECIDE x(REAL)
@@ -215,14 +215,11 @@ class TestIntoMembers:
             MAXIMIZE sum(per t.g: sum(t.w * x) by (t.g)) + max(per t.g: x)
             ORDER BY id"""
         dump = decidb_cli.dump_model(sql, tmp_path / "objective-composed.dump")
-        assert dump_counts(dump) == {"num_vars": 7, "num_rows": 7}
+        assert dump_counts(dump) == {"num_vars": 7, "num_rows": 4}
         columns = [line for line in dump.splitlines() if line.startswith("col ")]
         coefficients = [float(line.split(" obj=", 1)[1]) for line in columns]
         assert coefficients == [-2.0, -3.0, -4.0, -1.0, 0.0, 0.0, 0.0], dump
         assert _rows(dump) == {
-            (">", 0.0, frozenset({(0, -1.0), (3, 1.0)})),
-            (">", 0.0, frozenset({(1, -1.0), (3, 1.0)})),
-            (">", 0.0, frozenset({(2, -1.0), (3, 1.0)})),
             ("<", 10.0, frozenset({(0, -1.0), (3, 1.0), (4, 10.0)})),
             ("<", 10.0, frozenset({(1, -1.0), (3, 1.0), (5, 10.0)})),
             ("<", 10.0, frozenset({(2, -1.0), (3, 1.0), (6, 10.0)})),

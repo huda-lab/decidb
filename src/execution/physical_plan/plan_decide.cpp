@@ -199,9 +199,6 @@ static void NameInputColumns(PhysicalDecide &decide_op, LogicalDecide &op,
 		}
 		harvest_key(spec.scope.class_key);
 	}
-	for (auto &term : op.composed_minmax_objective_terms) {
-		harvest_composed_term(term);
-	}
 	for (auto &link : op.reducer_value_links) {
 		for (auto *expr : {link.inner_expr.get(), link.filter.get(), link.when.get()}) {
 			if (expr) {
@@ -293,8 +290,6 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	decide_op->singleton_row_boxes = std::move(op.singleton_row_boxes);
 	decide_op->user_singleton_row_bounds = std::move(op.user_singleton_row_bounds);
 	decide_op->member_singleton_row_bounds = std::move(op.member_singleton_row_bounds);
-	decide_op->flat_objective_agg = op.flat_objective_agg;
-	decide_op->flat_objective_is_easy = op.flat_objective_is_easy;
 
 	decide_op->keyed_scopes = std::move(op.keyed_scopes);
 	decide_op->variable_scopes = std::move(op.variable_scopes);

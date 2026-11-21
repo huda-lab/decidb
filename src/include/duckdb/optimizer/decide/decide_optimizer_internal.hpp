@@ -38,7 +38,6 @@ namespace decide_rewrite {
 void AddValueCheck(LogicalDecide &decide, unique_ptr<Expression> check);
 
 //! Map an aggregate's SQL name onto the objective aggregate enum.
-ObjectiveAggregateType StrToAggType(const string &name);
 
 //! Whether a lower-cased aggregate name is MIN or MAX.
 inline bool IsExtremumName(const string &name) {

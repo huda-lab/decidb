@@ -573,11 +573,6 @@ public:
 	};
 	vector<RewriteAccount> rewrite_accounts;
 
-	//! Composed MIN/MAX objective: additive sum of SUM/AVG/MIN/MAX terms in the objective.
-	//! Populated by DecideOptimizer::RewriteComposedMinMaxObjective. Empty when the
-	//! objective is a single aggregate (handled by RewriteMinMaxObjective) or plain linear.
-	vector<ComposedMinMaxTerm> composed_minmax_objective_terms;
-
 	// --- Singleton-row variable bounds (set by DecideOptimizer::FoldSingletonRows) ---
 
 	//! A user-written simple bound that was folded into a decision column's box instead
@@ -604,14 +599,6 @@ public:
 	//! A bound on the members of an easy extremum's `by` groups, a constant on each (`max(x) by (g) <= -5`): no box
 	//! takes it, since a row in no group is no member, but the domain check reads it as written.
 	vector<UserBoundSpec> member_singleton_row_bounds;
-
-	// --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
-
-	// A MIN/MAX objective: original aggregate type before rewrite to SUM. A nested one is
-	// a helper decision instead (RewriteScopedReducers, D81).
-	ObjectiveAggregateType flat_objective_agg = ObjectiveAggregateType::NONE;
-	// Pre-computed: true if easy formulation (MAXIMIZE+MIN or MINIMIZE+MAX)
-	bool flat_objective_is_easy = false;
 
 	// --- Key scopes ---
 
@@ -650,10 +637,6 @@ public:
 	vector<DecideBoundAggregate> bound_aggregates;
 	//! Semantic expressions before a destructive algebraic rewrite. Enumerated so their source bindings stay live.
 	vector<unique_ptr<Expression>> retained_expressions;
-	//! The objective's `when` when RewriteComposedMinMaxObjectiveTop left no term beside its MIN/MAX terms, for the
-	//! tree's objective root (language/guide.md §4): an index into retained_expressions, which keeps its bindings live;
-	//! INVALID otherwise. Never serialized (the optimizer creates it).
-	idx_t retained_objective_when = DConstants::INVALID_INDEX;
 
 	//! A reducer over data whose argument reads a frame (language/guide.md §5.6): no side table can read a frame, whose
 	//! values execution computes, so the reducer stays in the tree, tagged with its entry (FRAME_AGGREGATE_TAG_PREFIX)

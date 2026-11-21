@@ -1312,10 +1312,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 		return std::move(result);
 	}
 
-	// No decision content anywhere. Not a shape this pass owns -- and a legitimate
-	// input rather than an error: RewriteComposedMinMaxObjectiveTop installs a
-	// constant placeholder objective and supplies the coefficients from
-	// composed_minmax_objective_terms instead.
+	// No decision content anywhere. Not a shape this pass owns, and not an error.
 	if (!ReferencesDecideVar(objective)) {
 		return objective.Copy();
 	}
@@ -1613,8 +1610,7 @@ void DecideCanonicalizer::VerifyCanonicalObjectiveBody(const Expression &objecti
 			return;
 		}
 	}
-	// A decision-free objective is the composed MIN/MAX placeholder, which supplies
-	// its coefficients from composed_minmax_objective_terms instead of from the tree.
+	// A decision-free objective has nothing to verify.
 	if (!ReferencesDecideVar(objective)) {
 		return;
 	}

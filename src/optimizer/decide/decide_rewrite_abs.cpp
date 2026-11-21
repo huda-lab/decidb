@@ -258,7 +258,7 @@ void decide_rewrite::TagAbsForBigM(ClientContext &context, LogicalDecide &decide
 	if (decide.decide_objective) {
 		ClassifyAbsObjective(context, *decide.decide_objective, decide.decide_index);
 	}
-	// Composed MIN/MAX has already lifted its aggregate bodies out of the clause and objective trees. Apply the
+	// Composed MIN/MAX has already lifted its aggregate bodies out of the clause trees. Apply the
 	// same polarity rule to those retained bodies: an easy extremum passes the outer sign to its members, while a
 	// hard extremum needs every ABS member boxed for its indicator formulation.
 	auto classify_composed = [&](LogicalDecide::ComposedMinMaxTerm &term, int pinning_sign) {
@@ -288,10 +288,6 @@ void decide_rewrite::TagAbsForBigM(ClientContext &context, LogicalDecide &decide
 		for (auto &term : constraint.terms) {
 			classify_composed(term, pinning_sign);
 		}
-	}
-	// The objective is minimized, which pushes a positive term down.
-	for (auto &term : decide.composed_minmax_objective_terms) {
-		classify_composed(term, 1);
 	}
 }
 
@@ -422,9 +418,6 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 		for (auto &term : constraint.terms) {
 			collect_composed(term, source_alias);
 		}
-	}
-	for (auto &term : decide.composed_minmax_objective_terms) {
-		collect_composed(term, OBJECTIVE_ROW_TAG);
 	}
 	// A reducer value helper's body, which belongs to no clause, has auxiliaries pinned exactly
 	// (TagAbsForBigM). The body is read on the rows its path and its own `when` keep, so its envelope rows and the

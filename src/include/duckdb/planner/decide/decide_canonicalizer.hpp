@@ -315,9 +315,7 @@ public:
 	//! objective without moving its argmax/argmin, but must be added back to report an
 	//! objective VALUE.
 	//!
-	//! An objective with no decision content at all is returned unchanged: the
-	//! optimizer's composed MIN/MAX rewrite deliberately installs a constant
-	//! placeholder and supplies coefficients from its own spec.
+	//! An objective with no decision content at all is returned unchanged.
 	//!
 	//! The result is always a minimization. `sense` is the direction the objective was written in: MAXIMIZE writes
 	//! `f` as `-f`, the flip carried by the sign of each term, never by a factor, and it is the last step (the

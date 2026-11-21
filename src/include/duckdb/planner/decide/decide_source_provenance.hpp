@@ -217,15 +217,13 @@ string RenderDecideObjectiveLayers(const string &sense_prefix, const string &wri
 //! constraints through the clause walker, so `when`/`per` wrappers print as written rather than as a generic
 //! conjunction. LogicalDecide::ParamsToString and PhysicalDecide::ParamsToString both call it and add their own
 //! cardinality. Extract Method as a function template: the two operators carry these fields under the same names, so it
-//! moves no field. Three facts each operator knows its own way are its parameters: the rewrite `accounts` (the physical
-//! operator's add what the data made of each clause, which EXPLAIN ANALYZE prints), whether the objective is composed
-//! (`composed_objective`: the logical operator's composed terms, the physical operator's tree), and the `tree` itself,
-//! whose F nodes own the rows its rewrites added (the logical operator has none). It lives here, beside the renderers
+//! moves no field. Two facts each operator knows its own way are its parameters: the rewrite `accounts` (the physical
+//! operator's add what the data made of each clause, which EXPLAIN ANALYZE prints) and the `tree` itself, whose F nodes
+//! own the rows its rewrites added (the logical operator has none). It lives here, beside the renderers
 //! it calls, because this header is already included by both operators and the body adds no include.
 template <class OP>
-InsertionOrderPreservingMap<string> RenderDecideParams(const OP &op,
-                                                       const vector<LogicalDecide::RewriteAccount> &accounts,
-                                                       bool composed_objective, const DecideTree *tree) {
+InsertionOrderPreservingMap<string>
+RenderDecideParams(const OP &op, const vector<LogicalDecide::RewriteAccount> &accounts, const DecideTree *tree) {
 	InsertionOrderPreservingMap<string> result;
 
 	// Variables (exclude auxiliary variables)
@@ -267,13 +265,6 @@ InsertionOrderPreservingMap<string> RenderDecideParams(const OP &op,
 		string sense_prefix = maximize ? "MAXIMIZE " : "MINIMIZE ";
 		vector<string> objective_strs;
 		CollectDecideExpressionStrings(*op.decide_objective, names, objective_strs, nullptr, maximize);
-		// A MIN/MAX objective leaves a carrier in the tree -- a SUM standing for the
-		// extremum, or what the composed objective keeps (its 0.0 placeholder or the terms
-		// beside its reducers) -- that its accounts describe and a row would misread. An AVG's sum stays, under its
-		// account, as in a constraint.
-		if (op.flat_objective_agg != ObjectiveAggregateType::NONE || composed_objective) {
-			objective_strs.clear();
-		}
 		result["Objective"] = RenderDecideObjectiveLayers(sense_prefix, op.written_objective, op.canonical_objective,
 		                                                  op.objective_canonical_differs, objective_strs,
 		                                                  objective_accounts, objective_rows);

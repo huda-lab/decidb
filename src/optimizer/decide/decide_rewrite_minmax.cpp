@@ -89,7 +89,6 @@ static void KeepTreeReducerScope(Expression &carrier, const BoundAggregateExpres
 
 void DecideOptimizer::RewriteComposedMinMax(LogicalDecide &decide) {
 	RewriteComposedMinMaxInConstraint(decide.decide_constraints, decide);
-	RewriteComposedMinMaxObjectiveTop(decide);
 }
 
 // True if the expression (after unwrapping casts) is a BOUND_FUNCTION named `name`. `-` is both binary and unary.
@@ -152,19 +151,16 @@ static bool AdditiveContainsMinMax(const Expression &e, idx_t decide_index) {
 // `outer_push` is which way the outer comparison or objective drives the LHS, and decides
 // each MIN/MAX term's easy/hard classification; NONE (an outer `=`) classifies every
 // MIN/MAX term hard, with its auxiliary pinned from both sides.
-//! `names` quotes a refused term as written. `beside`, given for the objective, takes each term that is not a MIN or
-//! MAX (`sum(x)` and `s` in `max(x) + sum(x) + s`) with its sign: a constraint's terms share the row its MIN/MAX
-//! auxiliaries stand in, but an objective has no such row, so its other terms stay on the objective's own path.
+//! `names` quotes a refused term as written.
 static void WalkComposedLhs(ClientContext &context, LogicalDecide &decide, idx_t source_clause_id, const Expression &e,
                             int sign, idx_t decide_index, ExtremumPush outer_push,
-                            vector<LogicalDecide::ComposedMinMaxTerm> &out_terms, const DecideSourceNames &names,
-                            optional_ptr<vector<pair<int, const Expression *>>> beside = nullptr) {
+                            vector<LogicalDecide::ComposedMinMaxTerm> &out_terms, const DecideSourceNames &names) {
 	auto &u = (*UnwrapDecideCasts(e, decide_index));
 	if (IsFunctionNode(u, decide_index, "+")) {
 		auto &fn = u.Cast<BoundFunctionExpression>();
 		for (auto &child : fn.children) {
-			WalkComposedLhs(context, decide, source_clause_id, *child, sign, decide_index, outer_push, out_terms, names,
-			                beside);
+			WalkComposedLhs(context, decide, source_clause_id, *child, sign, decide_index, outer_push, out_terms,
+			                names);
 		}
 		return;
 	}
@@ -177,14 +173,14 @@ static void WalkComposedLhs(ClientContext &context, LogicalDecide &decide, idx_t
 		auto &fn = u.Cast<BoundFunctionExpression>();
 		if (fn.children.size() == 2) {
 			WalkComposedLhs(context, decide, source_clause_id, *fn.children[0], sign, decide_index, outer_push,
-			                out_terms, names, beside);
+			                out_terms, names);
 			WalkComposedLhs(context, decide, source_clause_id, *fn.children[1], -sign, decide_index, outer_push,
-			                out_terms, names, beside);
+			                out_terms, names);
 			return;
 		}
 		// A leading negative term is a unary minus (DecideCanonicalizer), not `0 - term`.
 		WalkComposedLhs(context, decide, source_clause_id, *fn.children[0], -sign, decide_index, outer_push, out_terms,
-		                names, beside);
+		                names);
 		return;
 	}
 	// A factor on this term (`2 * MIN(...)`) rides alongside it rather than being
@@ -200,11 +196,6 @@ static void WalkComposedLhs(ClientContext &context, LogicalDecide &decide, idx_t
 	                                            ? &u.Cast<BoundAggregateExpression>()
 	                                            : nullptr;
 	auto name = found ? StringUtil::Lower(found->function.name) : string();
-	// The objective's path takes every other term, a frame's among them.
-	if (beside && !IsExtremumName(name)) {
-		beside->emplace_back(sign, &e);
-		return;
-	}
 	if (!found) {
 		// The term as the user wrote it, not as a plan reprints it.
 		auto written_names = names;
@@ -384,97 +375,12 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 	expr = MakeTrueExpression(comp.GetAlias());
 }
 
-void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
-	if (!decide.decide_objective) {
-		return;
-	}
-	auto &obj = *decide.decide_objective;
-
-	// `MAXIMIZE when c:` folds into the terms.
-	const Expression *body = &obj;
-	const Expression *scoped_when = nullptr;
-	if (obj.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = obj.Cast<BoundConjunctionExpression>();
-		if (IsWhenFilterWrapper(conj) && AdditiveContainsMinMax(*conj.children[0], decide.decide_index)) {
-			body = conj.children[0].get();
-			scoped_when = conj.children[1].get();
-		}
-	}
-
-	// Additive (+/-) with a MIN/MAX leaf, OR a lone MIN/MAX carrying a factor.
-	//
-	// The second case is here rather than on the flat path because the flat path
-	// replaces the whole objective with its auxiliary at coefficient 1.0 -- it has
-	// nowhere to put a factor. The composed path already carries one per term, and a
-	// one-term composition is a perfectly good degenerate case. A lone MIN/MAX with no
-	// factor, signed or not (`MAXIMIZE MIN(e)` is `-MIN(e)`), still goes to the flat path,
-	// which keeps its cheaper encoding and the box it derives for its auxiliary.
-	ScaledAggregateMatch lone_match;
-	int lone_sign;
-	if (MatchLoneSignedExtremum(*body, decide.decide_index, lone_sign, lone_match)) {
-		if (!lone_match.aggregate) {
-			return;
-		}
-	} else {
-		if (!IsFunctionNode(*body, decide.decide_index, "+") && !IsFunctionNode(*body, decide.decide_index, "-")) {
-			return;
-		}
-		if (!AdditiveContainsMinMax(*body, decide.decide_index)) {
-			return;
-		}
-	}
-
-	// The objective is minimized, which pushes each term DOWN; a term's own sign and its factor's turn that into the
-	// term's direction.
-	vector<LogicalDecide::ComposedMinMaxTerm> terms;
-	vector<pair<int, const Expression *>> beside;
-	// An objective always has a direction, so no term needs the both-sides pin here.
-	auto names = DecidePlanNames(decide.source_text, decide.keyed_scopes, decide.keys, decide.decide_index,
-	                             decide.aux_var_expressions, decide.frames);
-	WalkComposedLhs(optimizer.context, decide, DConstants::INVALID_INDEX, *body, /*sign=*/1, decide.decide_index,
-	                ExtremumPush::DOWN, terms, names, beside);
-	ScopeComposedTerms(terms, scoped_when);
-
-	decide.composed_minmax_objective_terms = std::move(terms);
-
-	// The objective keeps the terms beside its MIN/MAX terms, under its `when`, and the physical layer adds each
-	// auxiliary's coefficient to theirs; with none it is a zero placeholder.
-	unique_ptr<Expression> rest;
-	for (auto &term : beside) {
-		auto copy = term.second->Copy();
-		if (!rest) {
-			rest = term.first > 0 ? std::move(copy) : optimizer.BindScalarFunction("-", std::move(copy));
-		} else {
-			rest = optimizer.BindScalarFunction(term.first > 0 ? "+" : "-", std::move(rest), std::move(copy));
-		}
-	}
-	const bool has_rest = rest != nullptr;
-	if (!rest) {
-		rest = make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
-	}
-	if (scoped_when && has_rest) {
-		auto &conj = obj.Cast<BoundConjunctionExpression>();
-		auto wrapper = make_uniq<BoundConjunctionExpression>(conj.type);
-		wrapper->children.push_back(std::move(rest));
-		wrapper->children.push_back(scoped_when->Copy());
-		wrapper->SetAlias(conj.GetAlias());
-		rest = std::move(wrapper);
-	} else if (scoped_when) {
-		// The terms carry the `when` (ScopeComposedTerms) and the objective has none left; the tree's objective root
-		// still reaches only its rows, so it keeps a copy of the `when` and the objective itself stays without one.
-		decide.retained_objective_when = decide.retained_expressions.size();
-		decide.retained_expressions.push_back(scoped_when->Copy());
-	}
-	decide.SetObjective(optimizer.context, std::move(rest));
-}
-
 // ---------------------------------------------------------------------------
 // MIN/MAX linearization
 // ---------------------------------------------------------------------------
 
 void DecideOptimizer::RewriteMinMax(LogicalDecide &decide) {
 	RewriteMinMaxConstraints(decide);
-	RewriteMinMaxObjective(decide);
 }
 
 void DecideOptimizer::RewriteMinMaxConstraints(LogicalDecide &decide) {
@@ -671,78 +577,6 @@ unique_ptr<Expression> DecideOptimizer::EmitHardMinMaxClause(LogicalDecide &deci
 	auto new_sum = BindSumOver(optimizer, inner.Copy(), filter);
 	new_sum->alias = string(MINMAX_CLAUSE_TAG_PREFIX) + to_string(clause_idx) + "_" + agg_name + "__";
 	return new_sum;
-}
-
-void DecideOptimizer::RewriteMinMaxObjective(LogicalDecide &decide) {
-	if (!decide.decide_objective) {
-		return;
-	}
-	// Detach, rewrite, reinstall through the boundary. The rewrite itself is
-	// unchanged; it just operates on a local tree now, so whatever it produces is
-	// re-canonicalized exactly like an optimizer-generated constraint is.
-	auto objective = std::move(decide.decide_objective);
-	RewriteMinMaxObjectiveTree(decide, objective);
-	decide.SetObjective(optimizer.context, std::move(objective));
-}
-
-void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_ptr<Expression> &objective) {
-	// Navigate through the `when` wrapper to find the actual aggregate. A nested reducer is a helper decision by now
-	// (RewriteScopedReducers, D81), so nothing else wraps it.
-	unique_ptr<Expression> *obj_owner = &objective;
-	Expression *obj_expr = objective.get();
-
-	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = obj_expr->Cast<BoundConjunctionExpression>();
-		if (!IsWhenFilterWrapper(conj)) {
-			throw InternalException("DECIDE: objective wrapper '%s' is not a `when`; BindObjective promises that only "
-			                        "a `when` wraps the objective",
-			                        conj.ToString());
-		}
-		obj_owner = &conj.children[0];
-		obj_expr = conj.children[0].get();
-	}
-
-	// The objective is one term, `[-] outer(...)`: the canonicalizer carries a MAXIMIZE objective's flip by the sign of
-	// the term. The sign stays on the term, where extraction reads it into every coefficient below, and each extremum
-	// under a negative one is the other one over the negated terms: `-max(e)` is `min(-e)`.
-	int sign = 1;
-	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-		auto &negation = obj_expr->Cast<BoundFunctionExpression>();
-		if (negation.function.name == "-" && negation.children.size() == 1) {
-			sign = -1;
-			obj_owner = &negation.children[0];
-			obj_expr = negation.children[0].get();
-		}
-	}
-
-	// The flat form is a bare MIN or MAX, signed or not: a factor on it is the composed rewrite's, which claimed it.
-	if (obj_expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-		return;
-	}
-	auto &outer_agg = obj_expr->Cast<BoundAggregateExpression>();
-	auto outer_name = StringUtil::Lower(outer_agg.function.name);
-
-	// What the model minimizes: the reducer as written, or the other extremum under a negative sign.
-	auto minimized = [&](const string &written) -> string {
-		return sign < 0 && IsExtremumName(written) ? (written == "max" ? "min" : "max") : written;
-	};
-
-	// Flat MIN/MAX objective.
-	//
-	// A FACTOR on it never reaches here: this path replaces the whole objective with
-	// its auxiliary at coefficient 1.0, so there is nowhere to put one.
-	// RewriteComposedMinMaxObjectiveTop claims the scaled case first (it runs earlier
-	// and carries a per-term scale), leaving this path a bare shape, signed or not, and its cheaper
-	// encoding.
-	if (IsExtremumName(outer_name)) {
-		decide.flat_objective_agg = StrToAggType(minimized(outer_name));
-		decide.flat_objective_is_easy = IsEasyExtremum(minimized(outer_name) == "max", ExtremumPush::DOWN);
-		AddRewriteAccount(decide, DConstants::INVALID_INDEX, LogicalDecide::RewriteAccount::Kind::HELPER,
-		                  RenderForPlan(outer_agg, decide));
-		auto new_sum = BindSumOver(optimizer, outer_agg.children[0]->Copy(), outer_agg.filter.get());
-		KeepTreeReducerScope(*new_sum, outer_agg);
-		*obj_owner = std::move(new_sum);
-	}
 }
 
 } // namespace duckdb

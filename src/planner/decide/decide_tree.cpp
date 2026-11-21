@@ -304,7 +304,6 @@ public:
 				                            });
 			}
 		}
-		idx_t objective_root = DConstants::INVALID_INDEX;
 		if (op.decide_objective) {
 			const Expression *body = op.decide_objective.get();
 			const Expression *condition = nullptr;
@@ -315,27 +314,14 @@ public:
 					condition = wrapper.children[1].get();
 				}
 			}
-			if (!condition && op.retained_objective_when < op.retained_expressions.size()) {
-				condition = op.retained_expressions[op.retained_objective_when].get();
-			}
 			auto index = NewNode(DecideNodeKind::SCOPE);
-			objective_root = sources.objective_root = index;
+			sources.objective_root = index;
 			auto &node = *tree->nodes[index];
 			node.root = node.objective = true;
 			node.per = DecideTreePer::ONE;
 			node.text = op.written_objective.empty() ? Text(*body) : op.written_objective;
 			Gates(index, condition);
 			node.body = Lower(index, *body);
-			if (op.flat_objective_agg == ObjectiveAggregateType::MIN_AGG ||
-			    op.flat_objective_agg == ObjectiveAggregateType::MAX_AGG) {
-				for (auto child : node.children) {
-					if (tree->nodes[child]->kind == DecideNodeKind::REDUCER) {
-						tree->nodes[child]->aggregate =
-						    op.flat_objective_agg == ObjectiveAggregateType::MIN_AGG ? "min" : "max";
-						break;
-					}
-				}
-			}
 			UseSignature(node, op.objective_signature);
 			tree->roots.push_back(index);
 		}
@@ -371,22 +357,6 @@ public:
 			}
 			GroupClass(node);
 			tree->roots.push_back(index);
-		}
-		if (!op.composed_minmax_objective_terms.empty()) {
-			auto index = objective_root;
-			if (index == DConstants::INVALID_INDEX) {
-				index = NewNode(DecideNodeKind::SCOPE);
-				tree->roots.push_back(index);
-			}
-			auto &node = *tree->nodes[index];
-			node.root = node.objective = true;
-			node.per = DecideTreePer::ONE;
-			node.text = op.written_objective.empty() ? "composed objective" : op.written_objective;
-			sources.composed_reducers.emplace_back();
-			for (auto &term : op.composed_minmax_objective_terms) {
-				Composed(index, term, sources.composed_reducers.back());
-			}
-			UseSignature(node, op.objective_signature);
 		}
 		// A helper or data check can outlive the reading clause (D88). Preserve
 		// that definition as an explicit root rather than relying on registry order.
