@@ -14,6 +14,7 @@ import itertools
 import pytest
 
 from . import _anr_oracle as anr
+from ._brute_force import judge_rows
 from ._output_helpers import assert_no_internal_leak
 from ._scope_cases import (
     SHIP,
@@ -140,6 +141,37 @@ def test_a_keyed_decision_with_one_instance_counts_once(decidb_cli, scope_solver
     )
 
 
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "objective, value, maximize",
+    [
+        pytest.param(
+            "MAXIMIZE when S.priority: sum(ship) + s * s",
+            lambda a: sum(a[f"ship{i}"] for i in (0, 2, 4)) + a["s"] ** 2,
+            True,
+            id="square-of-a-query-wide-decision-beside-a-reducer",
+        ),
+        pytest.param(
+            "MINIMIZE 0 * sum(ship) + power(sum(ship) - 5, 2)",
+            lambda a: (sum(a[f"ship{i}"] for i in range(5)) - 5) ** 2,
+            False,
+            id="square-of-a-reducer-and-more",
+        ),
+    ],
+)
+def test_a_square_outside_a_reducer_is_read_once_in_the_objective(decidb_cli, objective, value, maximize):
+    """The square of `s`, which is for the whole query, or of a reducer's helper decision, is one term of the objective
+    beside the reducers. The shipments are bounded by 2 so every assignment can be tried."""
+    sql = f"""
+        SELECT shipmentID, ship, s {from_clause()}
+        DECIDE ship(INT), per (): s(INT)
+        SUCH THAT ship <= 2 AND s <= 5
+        {objective}
+        ORDER BY shipmentID"""
+    domains = {**{f"ship{i}": range(3) for i in range(5)}, "s": range(6)}
+    judge_rows(answer(decidb_cli, sql), domains, lambda a: True, value, maximize)
+
+
 @pytest.mark.error
 @pytest.mark.parametrize(
     "objective, kind, at, word",
@@ -167,20 +199,6 @@ def test_a_keyed_decision_with_one_instance_counts_once(decidb_cli, scope_solver
             "'D.region' in by (D.region) takes more than one value over the kept rows ('East', 'West'), so the "
             "objective would be produced more than once",
             id="top-level-by",
-        ),
-        pytest.param(
-            "MAXIMIZE when S.priority: sum(ship) + s * s",
-            "Not implemented Error",
-            "s * s",
-            "'s * s' multiplies decisions outside a reducer, which is not supported",
-            id="product-outside-a-reducer",
-        ),
-        pytest.param(
-            "MINIMIZE 0 * sum(ship) + power(sum(ship) - 5, 2)",
-            "Not implemented Error",
-            "power(sum(ship) - 5, 2)",
-            "'power(sum(ship) - 5, 2)' multiplies decisions outside a reducer, which is not supported",
-            id="square-of-a-reducer-and-more",
         ),
         pytest.param(
             "MAXIMIZE sum(ship) - sum(ship) * max(ship)",

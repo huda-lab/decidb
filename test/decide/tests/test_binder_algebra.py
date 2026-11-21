@@ -149,23 +149,39 @@ def test_an_abs_over_a_reducer_in_the_objective_solves(decidb_cli, objective, va
     _judged(decidb_cli, "x >= 1", objective, lambda a: True, value, maximize=False, domains=domains)
 
 
-@pytest.mark.error
+@pytest.mark.correctness
 @pytest.mark.parametrize(
-    "decide, objective, at",
+    "decide, objective, value, domains",
     [
-        pytest.param("x(INT)", "MINIMIZE power(sum(x) - 3, 2)", "power(sum(x) - 3, 2)", id="of-a-reducer"),
         pytest.param(
-            "x(INT), per (): y(INT)", "MINIMIZE power(y - 3, 2) + sum(x)", "power(y - 3, 2)", id="of-a-decision"
+            "x(INT)",
+            "MINIMIZE power(sum(x) - 3, 2)",
+            lambda a: (sum(_xs(a)) - 3) ** 2,
+            {},
+            id="of-a-reducer",
+        ),
+        pytest.param(
+            "x(INT), per (): y(INT)",
+            "MINIMIZE power(y - 3, 2) + sum(x)",
+            lambda a: (a["y"] - 3) ** 2 + sum(_xs(a)),
+            {"y": range(6)},
+            id="of-a-decision",
         ),
     ],
 )
-def test_a_power_outside_a_reducer_in_the_objective_is_refused_by_the_one_rule(decidb_cli, decide, objective, at):
-    """A square outside a reducer in the objective has one refusal, whatever it squares."""
-    decidb_cli.assert_error_at(
-        _query("x >= 1 AND x <= 3", objective, decide),
-        kind="Not implemented Error",
-        at=at,
-        word="multiplies decisions outside a reducer",
+def test_a_power_outside_a_reducer_in_the_objective_solves(decidb_cli, decide, objective, value, domains):
+    """A square outside a reducer in the objective is read once when it squares query-wide decisions: a reducer is a
+    helper decision (the value route), and `y` is declared for the whole query."""
+    clauses = "x >= 1 AND x <= 3" + (" AND y <= 5" if domains else "")
+    _judged(
+        decidb_cli,
+        clauses,
+        objective,
+        lambda a: all(1 <= v <= 3 for v in _xs(a)),
+        value,
+        maximize=False,
+        decide=decide,
+        domains=_domains(**domains),
     )
 
 

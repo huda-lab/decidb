@@ -2622,3 +2622,135 @@ def test_highs_square_of_opposite_forms_over_integers_is_a_miqp_refusal(decidb_c
         at=f"SUM({_OPPOSITE_FORMS})",
         word="squaring a decision that is not REAL is not supported on this installation",
     )
+
+
+# ---------------------------------------------------------------------------
+# A square outside a reducer in the objective (OPT-31)
+# ---------------------------------------------------------------------------
+
+_SOLVERS = ["decidb_cli_gurobi", "decidb_cli_highs"]
+
+
+@pytest.mark.correctness
+@pytest.mark.quadratic
+@pytest.mark.obj_minimize
+@pytest.mark.parametrize("cli_fixture", _SOLVERS)
+def test_a_square_of_a_reducer_in_the_objective_matches_oracle(request, oracle_solver, cli_fixture):
+    """MINIMIZE power(sum(x) - 3, 2): the reducer is a helper decision (the value route, as in a constraint) and the
+    square is of that one query-wide decision, so the objective is a quadratic in one column and HiGHS takes it. The
+    cap keeps the optimum at a total of 2, a distance of 1 from the target."""
+    cli = request.getfixturevalue(cli_fixture)
+    sql = """
+        SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
+        DECIDE x(REAL)
+        SUCH THAT x >= 0 AND x <= 2 AND SUM(x) <= 2
+        MINIMIZE power(sum(x) - 3, 2)
+    """
+    rows, cols = cli.execute(sql)
+    names = [f"x_{i}" for i in range(4)]
+    oracle_solver.create_model("square_of_a_reducer")
+    for name in names:
+        oracle_solver.add_variable(name, VarType.CONTINUOUS, lb=0.0, ub=2.0)
+    oracle_solver.add_constraint({name: 1.0 for name in names}, "<=", 2.0, name="cap")
+    # (sum(x) - 3)^2 = sum_ij x_i x_j - 6 sum(x) + 9
+    oracle_solver.set_quadratic_objective(
+        {name: -6.0 for name in names},
+        {(names[i], names[j]): 1.0 if i == j else 2.0 for i in range(4) for j in range(i, 4)},
+        ObjSense.MINIMIZE,
+        9.0,
+    )
+    xi = cols.index("x")
+    _solve_and_compare(oracle_solver, rows, cols, lambda rs, cs: (sum(float(r[xi]) for r in rs) - 3.0) ** 2)
+
+
+@pytest.mark.correctness
+@pytest.mark.quadratic
+@pytest.mark.obj_minimize
+@pytest.mark.parametrize("cli_fixture", _SOLVERS)
+@pytest.mark.parametrize("square", ["(y - 3) * (y - 3)", "power(y - 3, 2)"])
+def test_a_square_of_a_query_wide_decision_in_the_objective_matches_oracle(request, oracle_solver, cli_fixture, square):
+    """MINIMIZE (y - 3) * (y - 3) over one decision for the query: read once, on the first kept row, as a product of
+    two query-wide decisions is. The bound keeps the optimum at y = 2, a distance of 1 from the target."""
+    cli = request.getfixturevalue(cli_fixture)
+    sql = f"""
+        SELECT id, y FROM (VALUES (1), (2), (3)) t(id)
+        DECIDE per (): y(REAL)
+        SUCH THAT y >= 0 AND y <= 2
+        MINIMIZE {square}
+    """
+    rows, cols = cli.execute(sql)
+    oracle_solver.create_model("square_of_a_query_wide_decision")
+    oracle_solver.add_variable("y", VarType.CONTINUOUS, lb=0.0, ub=2.0)
+    oracle_solver.set_quadratic_objective({"y": -6.0}, {("y", "y"): 1.0}, ObjSense.MINIMIZE, 9.0)
+    yi = cols.index("y")
+    _solve_and_compare(oracle_solver, rows, cols, lambda rs, cs: (float(rs[0][yi]) - 3.0) ** 2)
+
+
+@pytest.mark.correctness
+@pytest.mark.quadratic
+@pytest.mark.obj_maximize
+@pytest.mark.parametrize(
+    "objective, optimum",
+    [
+        pytest.param("power(sum(x) - 3, 2)", 25.0, id="square-of-a-reducer"),
+        pytest.param("sum(power(x - 3, 2))", 36.0, id="reducer-of-squares"),
+    ],
+)
+def test_maximizing_a_square_is_answered_on_gurobi(decidb_cli_gurobi, objective, optimum):
+    """Both spellings of a maximized convex square are non-convex: Gurobi answers (at a total of 8 and of 0 over the four
+    rows, objectives 25 and 36)."""
+    sql = f"""
+        SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
+        DECIDE x(REAL)
+        SUCH THAT x >= 0 AND x <= 2
+        MAXIMIZE {objective}
+    """
+    rows, cols = decidb_cli_gurobi.execute(sql)
+    xs = [float(r[cols.index("x")]) for r in rows]
+    value = (sum(xs) - 3.0) ** 2 if objective.startswith("power") else sum((x - 3.0) ** 2 for x in xs)
+    assert value == pytest.approx(optimum, abs=1e-3)
+
+
+@pytest.mark.quadratic
+@pytest.mark.error
+@pytest.mark.parametrize("objective", ["power(sum(x) - 3, 2)", "sum(power(x - 3, 2))"])
+def test_maximizing_a_square_is_refused_on_highs(decidb_cli_highs, objective):
+    """The two spellings of the maximized square get the one refusal on HiGHS, which solves only a convex one."""
+    sql = f"""
+        SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
+        DECIDE x(REAL)
+        SUCH THAT x >= 0 AND x <= 2
+        MAXIMIZE {objective}
+    """
+    decidb_cli_highs.assert_error_at(
+        sql,
+        kind="Not implemented Error",
+        at=objective,
+        word="maximizing a squared decision is not supported on this installation",
+    )
+
+
+@pytest.mark.quadratic
+@pytest.mark.error
+@pytest.mark.parametrize(
+    "decide, objective",
+    [
+        pytest.param("x(REAL)", "x * x", id="a-square-of-a-per-row-decision"),
+        pytest.param("x(REAL), per id: z(REAL)", "power(z - 3, 2)", id="a-square-of-a-keyed-decision"),
+        pytest.param("x(REAL)", "power(sum(x) by (id) - 3, 2)", id="a-square-of-a-group-sum"),
+    ],
+)
+def test_a_square_of_decisions_with_more_than_one_instance_stays_refused_outside_a_reducer(
+    decidb_cli, decide, objective
+):
+    """The square of a decision that is not for the query as a whole has no once-only reading: a per-row decision, one
+    per key, and the helper of a reducer with a `by` (one per group) keep the refusal."""
+    sql = f"""
+        SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
+        DECIDE {decide}
+        SUCH THAT x >= 0 AND x <= 2
+        MINIMIZE {objective}
+    """
+    decidb_cli.assert_error_at(
+        sql, kind="Not implemented Error", at=objective, word="multiplies decisions outside a reducer"
+    )

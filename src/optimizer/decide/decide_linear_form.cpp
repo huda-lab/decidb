@@ -726,6 +726,16 @@ private:
 		}
 	}
 
+	//! Whether decision `var_idx` is query-wide: declared `per ()`, or a helper decision holding a reducer with no `by`
+	//! (`power(sum(x) - 3, 2)` reads the helper of `sum(x)`), one group of every row. No binder scope has the empty
+	//! key, so a keyed scope with it is a helper's. A decision that has several instances over the kept rows is refused
+	//! when the objective is read (DecideObjectiveTwice).
+	bool IsQueryWideDecision(idx_t var_idx) const {
+		auto &scope = op.variable_scopes[var_idx];
+		return scope.IsGlobal() ||
+		       (scope.IsKeyed() && op.keyed_scopes[scope.keyed_scope_idx].key == DConstants::INVALID_INDEX);
+	}
+
 	//! Every decision `expr` reads is query-wide: one column each, whichever row reads it.
 	bool ReadsOnlyQueryWideDecisions(const Expression &expr) const {
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
@@ -736,7 +746,7 @@ private:
 				throw InternalException("DECIDE objective term '%s' holds a data column beside a product of decisions",
 				                        expr.ToString());
 			}
-			return op.variable_scopes[var_idx].IsGlobal();
+			return IsQueryWideDecision(var_idx);
 		}
 		bool all = true;
 		EnumerateChildrenConst(
@@ -1003,9 +1013,9 @@ private:
 			}
 			// The objective reads a decision outside its reducers once, on the first kept row
 			// (a scope check made sure it has one instance there), a query-wide one included.
-			// A product of decisions has no once-only reading in the model -- except a product
-			// of two query-wide decisions (`s * u`), one `NONE` term execution counts once
-			// (CountOnce in decide_value_extraction.cpp). A frame's marker is a tuple term read at
+			// A product or a square of decisions has no once-only reading in the model -- except
+			// one of query-wide decisions (`s * u`, `(s - 3) * (s - 3)`), one `NONE` group execution
+			// counts once (CountOnce in decide_value_extraction.cpp). A frame's marker is a tuple term read at
 			// another row, not a reducer, and splits here too.
 			if (!IsReducer(expr)) {
 				// A reducer left in a term that is not itself one (`sum(x) * max(x)`) was multiplied by another
@@ -1016,11 +1026,7 @@ private:
 				if (!holds_reducer) {
 					ExtractObjectiveBodyTerms(expr, obj, atom.sign, nullptr);
 				}
-				bool square = false;
-				for (idx_t i = group_before; i < obj.product_groups.size(); i++) {
-					square = square || obj.product_groups[i].square;
-				}
-				if (holds_reducer || square ||
+				if (holds_reducer ||
 				    (obj.product_groups.size() != group_before && !ReadsOnlyQueryWideDecisions(expr))) {
 					throw NotImplementedException(expr,
 					                              "'%s' multiplies decisions outside a reducer, which is not supported",
