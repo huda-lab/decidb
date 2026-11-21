@@ -1254,24 +1254,6 @@ def test_minmax_constraint_and_objective(decidb_cli, duckdb_conn, oracle_solver,
 # ============================================================================
 
 
-@pytest.mark.min_max
-@pytest.mark.error
-@pytest.mark.error_binder
-def test_max_notequal_error(decidb_cli):
-    """MAX(x) <> K should produce a binder error."""
-    decidb_cli.assert_error_at(
-        """
-        SELECT l_quantity FROM lineitem
-        DECIDE x(BOOL)
-        SUCH THAT MAX(x) <> 0
-        MAXIMIZE SUM(x) LIMIT 1
-    """,
-        kind="Not implemented Error",
-        at="MAX(x) <> 0",
-        word="<> on MIN or MAX is not supported",
-    )
-
-
 # ============================================================================
 # Composed MIN/MAX in additive expressions (v1: easy-direction terms only).
 # The composed LHS `T1 + T2 + ... <= K` (or >= K) is emitted as a global raw
@@ -1896,29 +1878,6 @@ def test_composed_minmax_outer_equality_min(decidb_cli):
     assert got == {1: 2, 2: 1, 3: 1}, f"expected x = (2, 1, 1), got {got}"
     total = sum(float(r[ci["v"]]) * got[int(r[ci["id"]])] for r in rows)
     assert abs(total + min(float(r[ci["v"]]) * got[int(r[ci["id"]])] for r in rows) - 37.0) < 1e-6
-
-
-@pytest.mark.min_max
-@pytest.mark.error_binder
-def test_composed_minmax_outer_not_equal_rejected(decidb_cli):
-    """`SUM(...) + MAX(...) <> K` is rejected.
-
-    `v` is whole-numbered so the generic `<>` fractional-type refusal does not
-    fire first — this reaches the composed-comparison guard, which is the one
-    being pinned. `=` is supported and appears in the message; `<>` is the
-    remaining unsupported comparison.
-    """
-    decidb_cli.assert_error_at(
-        """
-        SELECT id, v FROM (VALUES (1, 10, true), (2, 5, true)) t(id, v, w)
-        DECIDE x(BOOL)
-        SUCH THAT (SUM(x * v) + MAX(x * v)) <> 12
-        MAXIMIZE SUM(x * v)
-    """,
-        kind="Not implemented Error",
-        at="(SUM(x * v) + MAX(x * v)) <> 12",
-        word="<> on MIN or MAX is not supported",
-    )
 
 
 @pytest.mark.min_max

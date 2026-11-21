@@ -31,19 +31,6 @@ def _diagnosis(cli, sql):
 
 
 @pytest.mark.error
-@pytest.mark.min_max
-@pytest.mark.parametrize("scope", _SCOPES)
-def test_minmax_not_equal_refusal_quotes_the_scope(decidb_cli, scope):
-    """`decide_rewrite_minmax.cpp`: the `<>` refusal over a MIN/MAX points at the clause, under any scope."""
-    decidb_cli.assert_error_at(
-        _select(f"x <= 3 AND {scope} max(x) <> 2"),
-        kind="Not implemented Error",
-        at="max(x) <> 2",
-        word="<> on MIN or MAX",
-    )
-
-
-@pytest.mark.error
 @pytest.mark.parametrize("scope", ["when p per g:"])
 def test_product_not_equal_refusal_quotes_the_scope(decidb_cli, scope):
     """`decide_rewrite_notequal_avg.cpp`: the `<>` refusal over a product of decisions points at the clause."""

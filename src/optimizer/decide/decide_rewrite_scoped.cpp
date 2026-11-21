@@ -587,9 +587,6 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 			if (sites.empty()) {
 				return;
 			}
-			if (cmp.type == ExpressionType::COMPARE_NOTEQUAL) {
-				throw NotImplementedException(cmp, "<> on MIN or MAX is not supported");
-			}
 		}
 		// When a direct outer SUM holds a simple, unfiltered nest in the same clause scope, keep the outer aggregate
 		// in the clause. Its G node then reads the nested G values directly, instead of introducing a second helper
