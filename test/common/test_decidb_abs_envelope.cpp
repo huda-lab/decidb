@@ -137,6 +137,22 @@ TEST_CASE("DeciDB ABS rows are stated from the envelope rows", "[decidb][formula
 		                InvalidInputException);
 	}
 
+	SECTION("an ABS that is not exact is boxed by its reach, and refuses an open one nowhere") {
+		SolverInput input = AbsInput(false);
+		input.abs_links[0].exact = false;
+		EmitAbsEnvelopes(input);
+		auto indexer = VarIndexer::Build(input);
+		DeriveAbsAuxiliaryBounds(input, indexer, names, /*refuse_when_unbounded=*/true);
+		CHECK(input.upper_bounds[1] == 3.0); // |x| over [-3, 2]
+
+		SolverInput open = AbsInput(false, 1e30);
+		open.abs_links[0].exact = false;
+		EmitAbsEnvelopes(open);
+		auto open_indexer = VarIndexer::Build(open);
+		CHECK_NOTHROW(DeriveAbsAuxiliaryBounds(open, open_indexer, names, /*refuse_when_unbounded=*/true));
+		CHECK(open.upper_bounds[1] == 1e30); // left open: a reader that needs the box refuses it
+	}
+
 	SECTION("a forced policy states it natively wherever the backend declares it") {
 		SolverInput input = AbsInput(false);
 		EmitAbsEnvelopes(input);

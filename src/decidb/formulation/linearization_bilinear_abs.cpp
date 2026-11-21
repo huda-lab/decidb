@@ -166,10 +166,11 @@ namespace {
 //! and to weaken the ABS on HiGHS, one repair worth five times the other).
 //!
 //! So a clause that asks the auxiliary for more than the box can supply sizes the
-//! ceiling itself. Note when that fires: only when the demand EXCEEDS the box, which is
-//! exactly when the clause cannot be met as written. A query that solves reaches its own
-//! bound by definition, so its ceiling and its Big-M are untouched and no tightness is
-//! traded away. A looser M is valid in any case — it only ever slackens the deactivated
+//! ceiling itself. It fires when the demand EXCEEDS the box. The demand covers the worst
+//! value the rest of the row's box allows, so on a row with other variable terms
+//! (`ABS(x - 3) <= ABS(x - 9)`) it can widen a query that solves: the worst case is a
+//! point another row may exclude, and it is kept so that a repair stays representable. A
+//! looser M is valid in any case — it only ever slackens the deactivated
 //! arm of a disjunction — whereas a too-small one cuts off legal answers.
 static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t num_rows) {
 	double demanded = 0.0;
@@ -423,10 +424,6 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
 	const InstanceBox instances {input, indexer, /*reach=*/true};
 
 	for (auto &link : input.abs_links) {
-		// An ABS that its clause or the objective pins is held by the lower envelope alone: it has no Big-M to size.
-		if (!link.exact) {
-			continue;
-		}
 		const auto &c1 = link.operand;
 
 		// The reach of the expression inside ABS, `inner = k_r - sum_{t != aux} c_t x_t`, over every
@@ -463,10 +460,11 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
 
 		if (abs_unbounded) {
 			link.range_unbounded = true;
-			if (!refuse_when_unbounded) {
-				// The native path is about to hand Gurobi `aux = |t|`, which needs no
-				// Big-M and therefore no bound. Leave the auxiliary's box open and
-				// carry on: this is exactly the query the capability buys back.
+			if (!link.exact || !refuse_when_unbounded) {
+				// An ABS that is not exact has no Big-M to size: nothing here needs its box, and a reader that does
+				// (a product, a MIN or MAX, a `<>`) refuses the open column through its own check. An exact one on
+				// the native path is about to hand Gurobi `aux = |t|`, which needs no Big-M and therefore no bound.
+				// Leave the auxiliary's box open and carry on: this is exactly the query the capability buys back.
 				continue;
 			}
 			// The row's own auxiliary (`c1.abs_aux_idx` is `link.aux_idx`) is skipped: an offending member is named,
@@ -501,6 +499,10 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
 		// here, before any other linearizer reads it, so an outer MIN/MAX or `<>` over
 		// this auxiliary gets a tight Big-M instead of an unbounded column it must
 		// refuse. Never widens: an implied bound already tighter than `reach` stands.
+		//
+		// This holds for an ABS that is not exact too, though it has no Big-M to size. Every reader of such an ABS
+		// pushes it down, so its value is |inner| at any answer, which `reach` bounds; the box is a bound on that
+		// value, not a constraint the reader needs to hold it.
 		if (reach < input.upper_bounds[link.aux_idx]) {
 			input.upper_bounds[link.aux_idx] = reach;
 		}

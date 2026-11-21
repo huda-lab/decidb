@@ -1073,57 +1073,46 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 		bilinear_declared_boxes.push_back(
 		    {link.aux_idx, {solver_input.lower_bounds[link.aux_idx], solver_input.upper_bounds[link.aux_idx]}});
 	}
-	// A factor that is a helper decision of the value rewrite (`b * sum(x)`) has no box until its members' boxes
-	// are derived below, so with helpers the refusal waits for them.
-	DeriveBilinearAuxiliaryBounds(solver_input, box, decide_var_names,
-	                              /*refuse_when_unbounded=*/solver_input.reducer_value_links.empty());
-
-	// ABS FIRST, and the order is load-bearing. Deriving an ABS auxiliary's range is
-	// also what boxes its column, and every linearizer below computes its Big-M from
-	// column boxes — run them first and an outer MIN/MAX or `<>` over ABS(...) sees an
-	// unbounded column and refuses a query whose bound was there to be computed. Only
-	// the LOWERING path refuses an underivable range; the native path leaves the
-	// auxiliary open and answers.
+	// THE ORDER, one for every query, and it is load-bearing. Deriving an ABS auxiliary's range is also what boxes its
+	// column, and every linearizer below computes its Big-M from column boxes: run them first and an outer MIN/MAX,
+	// `<>` or product over ABS(...) sees an unbounded column and refuses a query whose bound was there to be computed.
+	// The boxes are each other's inputs. A product's box is its factor's (`b * abs(x)` reads the ABS's), an ABS may
+	// hold a product or a helper decision of the value rewrite in its operand, and a helper decision (`b * sum(x)`,
+	// `sum(abs(x))`) is boxed by its members' reach, which may be an ABS auxiliary or a product with a helper; a
+	// helper's box also bounds the helpers it is defined from (DeriveReducerMemberBounds). Every derivation only
+	// tightens, so alternating them settles in as many passes as the constructs nest. The refusals are decided last,
+	// on the settled boxes, naming a helper by its reducer: a product refuses a factor with no finite top, and the
+	// lowering of an exact ABS refuses an operand with no finite reach (the native path leaves it open and answers).
 	phase.Next("formulation.abs_bounds");
-	if (solver_input.reducer_value_links.empty()) {
-		DeriveAbsAuxiliaryBounds(solver_input, var_indexer, decide_var_names, !native_abs.available);
-	} else {
-		// The value rewrite's helper decisions are boxed by their members' reach, and a
-		// member may be an ABS auxiliary or a product with a helper (`b * sum(x)`) while an
-		// ABS may hold a helper: each box is the other's input. A helper's box also bounds
-		// the helpers it is defined from (DeriveReducerMemberBounds). Every derivation only
-		// tightens, so alternating them settles in as many passes as the constructs nest. The
-		// refusals are decided last, on the settled boxes, naming a helper by its reducer.
-		for (auto &link : solver_input.reducer_value_links) {
-			decide_var_names[link.value_var] = link.label;
-		}
-		const idx_t max_passes = 2 * (solver_input.abs_links.size() + solver_input.bilinear_links.size() +
-		                              solver_input.reducer_value_links.size() + 1);
-		for (idx_t pass = 0;; pass++) {
-			auto lower = solver_input.lower_bounds;
-			auto upper = solver_input.upper_bounds;
-			auto reach_lower = solver_input.instance_reach_lower;
-			auto reach_upper = solver_input.instance_reach_upper;
-			DeriveBilinearAuxiliaryBounds(solver_input, box, decide_var_names, /*refuse_when_unbounded=*/false);
-			DeriveAbsAuxiliaryBounds(solver_input, var_indexer, decide_var_names, /*refuse_when_unbounded=*/false);
-			DeriveReducerValueBounds(solver_input, var_indexer);
-			DeriveReducerMemberBounds(solver_input, var_indexer);
-			if (lower == solver_input.lower_bounds && upper == solver_input.upper_bounds &&
-			    reach_lower == solver_input.instance_reach_lower && reach_upper == solver_input.instance_reach_upper) {
-				break;
-			}
-			// Each pass leaves valid boxes, only tighter ones: one that still moves after as many passes as the
-			// constructs nest is closing in by ever smaller steps, so the boxes stand as they are. Clauses that
-			// contradict each other make a box cross, and from there each pass pushes its ends further apart: the
-			// passes still bound every helper a later one reads, and the solver reports the crossed box as for any
-			// empty one (DIAGNOSE formulates its own).
-			if (pass == max_passes) {
-				break;
-			}
-		}
-		DeriveBilinearAuxiliaryBounds(solver_input, box, decide_var_names);
-		DeriveAbsAuxiliaryBounds(solver_input, var_indexer, decide_var_names, !native_abs.available);
+	for (auto &link : solver_input.reducer_value_links) {
+		decide_var_names[link.value_var] = link.label;
 	}
+	const idx_t max_passes = 2 * (solver_input.abs_links.size() + solver_input.bilinear_links.size() +
+	                              solver_input.reducer_value_links.size() + 1);
+	for (idx_t pass = 0;; pass++) {
+		auto lower = solver_input.lower_bounds;
+		auto upper = solver_input.upper_bounds;
+		auto reach_lower = solver_input.instance_reach_lower;
+		auto reach_upper = solver_input.instance_reach_upper;
+		DeriveBilinearAuxiliaryBounds(solver_input, box, decide_var_names, /*refuse_when_unbounded=*/false);
+		DeriveAbsAuxiliaryBounds(solver_input, var_indexer, decide_var_names, /*refuse_when_unbounded=*/false);
+		DeriveReducerValueBounds(solver_input, var_indexer);
+		DeriveReducerMemberBounds(solver_input, var_indexer);
+		if (lower == solver_input.lower_bounds && upper == solver_input.upper_bounds &&
+		    reach_lower == solver_input.instance_reach_lower && reach_upper == solver_input.instance_reach_upper) {
+			break;
+		}
+		// Each pass leaves valid boxes, only tighter ones: one that still moves after as many passes as the
+		// constructs nest is closing in by ever smaller steps, so the boxes stand as they are. Clauses that
+		// contradict each other make a box cross, and from there each pass pushes its ends further apart: the
+		// passes still bound every helper a later one reads, and the solver reports the crossed box as for any
+		// empty one (DIAGNOSE formulates its own).
+		if (pass == max_passes) {
+			break;
+		}
+	}
+	DeriveBilinearAuxiliaryBounds(solver_input, box, decide_var_names);
+	DeriveAbsAuxiliaryBounds(solver_input, var_indexer, decide_var_names, !native_abs.available);
 	EmitAbsConstraints(solver_input, var_indexer, native_abs);
 
 	// The helper decisions' definitions: an equality row per group for SUM/AVG, an

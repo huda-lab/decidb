@@ -222,18 +222,21 @@ void DeriveBilinearAuxiliaryBounds(SolverInput &input, const FormulationBox &box
 void EmitAbsEnvelopes(SolverInput &input);
 
 //! Phase 1 of the ABS auxiliary formulation, and it runs before EVERY other
-//! linearizer. For each exact ABS (`abs_links`) it derives the signed interval of the
-//! expression inside ABS over every row (the two sign-row constants come from its ends)
+//! linearizer. For every ABS (`abs_links`), exact or not, it derives the signed interval of the
+//! expression inside ABS over every row (the two sign-row constants of an exact ABS come from its ends)
 //! and narrows the auxiliary's column box to the largest |inner| it reaches — the only place that
 //! box is ever derived, since `aux >= inner` / `aux >= -inner` bound it from below
 //! only. Every other linearizer computes its Big-M from column boxes, so an auxiliary
-//! they read has to be boxed by the time they run.
+//! they read has to be boxed by the time they run. An ABS that is not exact is pushed down by every reader, so its
+//! value is |inner| and the box holds it.
 //!
-//! `refuse_when_unbounded` is the gate's answer for this construct. Where the backend declares no native ABS it is
-//! true: no finite Big-M exists over an unbounded contributor, and the
+//! `refuse_when_unbounded` is the gate's answer for this construct, and it refuses only an exact ABS. Where the backend
+//! declares no native ABS it is true: no finite Big-M exists over an unbounded contributor, and the
 //! query is refused naming a column to bound. Where it does declare one it is false — a general
 //! constraint needs no Big-M, so the auxiliary is simply left unboxed (`AbsLinkSpec::range_unbounded`) and the
-//! query answers. That divergence is the capability's whole payoff.
+//! query answers. That divergence is the capability's whole payoff. An ABS that is not exact has no Big-M, so an open
+//! reach leaves its box open whatever the flag says; a reader that needs the box (a product, a MIN or MAX, a `<>`)
+//! refuses it through its own check.
 void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names,
                               bool refuse_when_unbounded);
 
