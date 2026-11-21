@@ -456,11 +456,6 @@ original literal (so a suggestion can be re-quoted against it). Outside `DIAGNOS
 alone. The flat column of the `<>` disjunction binary the row belongs to (`indicator_col`) is stated by the lowering
 that allocates it.
 
-`FoldedAggTerm` pairs each summed decide variable with the coefficient the user
-wrote for it. `has_unit` is false when that coefficient is data-varying — there is
-no literal to quote, so rendering falls back to the symbolic name in
-`weight_labels`.
-
 Six emission sites build a row from its clause's provenance -- linear and quadratic, each in ungrouped
 aggregate / grouped aggregate / per-row shape -- and one free function in `ilp_model_builder.cpp` places the row, so
 that no site stamps a group without its name:
@@ -474,17 +469,13 @@ that no site stamps a group without its name:
   `per K:` clause's row from its class, and the row sets `data_row` (the row it was emitted at, DIAGNOSE's `row`) and
   `per_kept_row` (a row with no class set: each kept row is a class of its own). A clause that reads a MIN/MAX helper
   is one of the aggregate rows, so its class set is the same.
-- The two linear aggregate sites also set `weight_labels` and `folded_terms`.
 
 No site stamps the clause's `when c per K:` qualifier: a diagnosis reads it from the
 source registry by `source_clause_id` (`FindConstraintSource`,
 `decide_diagnostic_render.cpp`), the one place it lives.
 
-`weight_labels` and `folded_terms` stay hand-stamped at exactly the two **linear**-aggregate sites and are never set
-on the quadratic ones. That is not leftover drift: `FormatQuadraticLhs` (stage 07's diagnosis renderer) never reads
-those two fields. It reconstructs a quadratic row's LHS from `linear_coefficients`/`q_coefficients` directly, the same
-way `FormatLhs` (the linear renderer) reads `folded_terms`/`weight_labels`. Stamping them on a `QuadraticConstraint`
-would be dead weight with no reader. The comment marking the six sites numbers them 1-6 in emission order.
+The comment marking the six sites numbers them 1-6 in emission order. No site stamps a term's coefficient or name:
+a diagnosis quotes the clause as written (`SourceAwareLhs`, `../../diagnostics/infeasible/done.md`).
 
 ---
 
