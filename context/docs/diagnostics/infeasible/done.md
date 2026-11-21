@@ -71,18 +71,15 @@ taken structurally.
 
 **Direction decides.** Only the out-of-reach spellings are findings. `Ax <= +inf` and
 `Ax >= -inf` are vacuous — they constrain nothing and can never be why a solve failed — so
-`IsUnreachableBound` classifies by the direction the infinity points, the same rule
-`ClassifyMinMaxBound` applies upstream.
+`IsUnreachableBound` classifies by the direction the infinity points.
 
 **Which rows are read.** The gate is *does this row trace back to a clause the user wrote*,
-not *is it elastically editable*. They are different questions: a hard MIN/MAX clause is
-stamped `USER_MECHANISM` wholesale at `decide_linear_form.cpp` (it *will* fan into Big-M
-rows), so a relaxability gate would miss `MIN(x) <= -inf` entirely. Only `STRUCTURAL` rows
-are excluded, as internal definitions with no user text to quote. Reading a
-`USER_MECHANISM` row is safe because a helper's bound is derived as `K ± M` with both terms
-finite by construction — `ClassifyMinMaxBound` sends a group to the Big-M rewrite only when
-`K` is finite, and `DecideTightPerRowBigM` refuses a non-finite `M` — so an infinite bound
-on a mechanism row is always a user bound re-emitted per row.
+not *is it elastically editable*. They are different questions: a `USER_MECHANISM` row is
+not editable and is still the user's clause, so a relaxability gate would miss it. Only
+`STRUCTURAL` rows are excluded, as internal definitions with no user text to quote. A
+`MIN`/`MAX` clause is the user's own row over the helper, so `max(x) >= inf` is read like any
+aggregate row. Reading a `USER_MECHANISM` row is safe because `DecideTightPerRowBigM`
+refuses a non-finite `M`, so an infinite bound on a mechanism row is always a user bound.
 
 **Both backends give this verdict, because neither reads the row.** HiGHS spells a one-sided
 row bound by pairing the user's bound with its own ±1e30 infinity sentinel, so `Ax >= +inf`
@@ -243,8 +240,8 @@ the rest of the engine are unchanged. `BuildElasticModel(base, slack_scope)`:
   collector both read): per value of its `per` key (`expanded_group`, the value in
   `group`), or per kept row when it has no `per` key (`expanded_row`, the row in `row`);
   `per ()` (a `WHOLE_CLAUSE` class set) is one finding (`source_literal` or
-  `virtual_offset`). The aggregate row of a `by` group, the hard MIN/MAX bound row, the
-  easy MIN/MAX's member rows and a composed clause's row all carry their group's classes.
+  `virtual_offset`). The aggregate row of a `by` group (one that reads a MIN/MAX helper included) and the
+  easy MIN/MAX's member rows carry their group's classes.
   A row that carries classes folds within its group in both scopes (`folds()`), so an
   easy MIN/MAX's members, bound by their group's tightest value, share one slack and the
   group's bound moves once. A per-row row of a clause with no `per` key keeps its own
@@ -343,29 +340,26 @@ spent on one of them and billed to the other: a repair that does not repair
 (`SUM(y) >= 100` loosened to `>= 81.6` on a query where `y <= 2` caps `SUM(y)` at 8,
 because the slack the engine spent was the bound's). Execution numbers every clause it
 evaluates once: the lowered clauses first, then (under `DIAGNOSE`) the folded bounds'
-clauses, then the composed MIN/MAX clauses, each taking its position in that order. No
+clauses, each taking its position in that order. No
 count of the model's rows is the id space, since formulation drops rows (a natively
 stated construct, a `<>` moved into indicator rows), so the ids are fixed before
 formulation runs. Pinned by `TestNativeConstructDiagnosis` in
 `test/decide/tests/test_query_diagnostics_relation.py`, which applies the reported edit and
 re-runs the query, and compares the native and lowered arms against each other.
 
-**A grouped MIN/MAX clause folds like any other.** `LinearizeMinMaxConstraints`
-emits one bound row per group, all carrying the user's single literal, and stamps them
-from `EvaluatedConstraint::rhs_is_shared_scalar` — the same flag the linear builder reads,
-so the native and lowered arms classify one clause identically. Left `UNSET` those rows
+**A grouped MIN/MAX clause folds like any other.** Its clause row is one aggregate row per group,
+all carrying the user's single literal, stamped from `EvaluatedConstraint::rhs_is_shared_scalar` — the flag
+every aggregate row reads, so the native and lowered arms classify one clause identically. Left `UNSET` those rows
 would never fold, and an infeasible `per g: max(e) by (g) >= K` would report one edit per
 group against the same clause text in the `query` scope; only the loosest of them would
 repair anything. A genuinely per-group bound still stamps `PER_ROW_DATA` and reports a
 virtual offset.
 
-**A hard MIN/MAX clause is loosenable on both arms.** `MAX(e) >= K` lowers to N rows of
-`e_i - M*y_i >= K - M` plus a rigid `SUM(y) >= 1`. The N rows are the clause: lowering `K`
-moves all of them together, so they are stamped `USER_PARAMETER` and share one slack, and
-the disjunction row stays rigid (slackening it would satisfy the clause with no row at
-all, a repair with no SQL edit behind it). Were the N rows rigid too, the clause would have
-no loosenable row and the diagnosis would fall back to whatever column bound sat nearby, so
-the same SQL would repair differently on each backend.
+**A MIN/MAX clause is loosenable on both arms.** `MAX(e) >= K` is one clause row over the helper, `z >= K`, stamped
+`USER_PARAMETER` as a SUM's row is: lowering `K` moves that row. The link's rows (the envelope, the Big-M rows
+`z - e_i <= M*(1 - y_i)` for a MAX, and the disjunction `SUM(y) >= 1`) stay rigid: slackening them would satisfy the
+clause with no row at all, a repair with no SQL edit behind it, and their slack is in the helper's units. The clause
+row is the same on both arms, so the same SQL repairs the same way on each backend.
 
 **An `=` on a MIN/MAX is a range.** Its two halves keep the clause's source id as the ends of a range: a finding
 quotes the clause as written and suggests `max(e) BETWEEN lo AND hi` with the end that moved, which always repairs.
@@ -541,9 +535,8 @@ channels, read off `ConstraintProvenance` and the source registry (no change to 
   DeciDB's messages do (`DecideSqlLiteral`: `'NULL'` quoted, NULL bare); a written key
   keeps its spelling, where an empty-string key renders `''` so it is not confused with
   "ungrouped". `StampConstraintProvenance` derives the name from the group key it stamps, so no
-  emission site stamps a group without its name. A hard MIN/MAX whose bound no row in a group can
-  reach is re-emitted as ordinary per-row rows (`linearization_minmax.cpp`, the `NO_SOLUTION`
-  branch), so a grouped failure names the group it sits in (`per g: min(x) by (g) <= -inf`, group
+  emission site stamps a group without its name. A grouped MIN/MAX
+  clause is an aggregate row, so a failure names the group it sits in (`per g: min(x) by (g) <= -inf`, group
   `0`) rather than sending the user through every group. In the expanded scope the classes a row
   stands for (`class_set`, read by `FanOutByClass`) supply the `group` values; `group_name` names
   the group of a row that carries none. In the query scope one edit folded across a clause's
@@ -574,15 +567,15 @@ grouped clause — see "An easy MIN/MAX over one decision is a column bound" abo
 ### Rigid shapes
 
 `<>` indicator rows (`USER_MECHANISM`), McCormick bilinear links (`STRUCTURAL`) and every
-MIN/MAX **closing** row (`USER_MECHANISM`, both the hard and the composed path) are not
+MIN/MAX **closing** row (`STRUCTURAL`) are not
 relaxable (`IsRelaxableForElastic`), so the elastic transform attaches no slack to them: a `<>`
 or bilinear conflict is resolved by loosening an editable bound, and a conflict reachable only
 through those rigid rows produces an `undiagnosed` finding (the empty-block guard). `<>` is
 remove-only; removal is the exact atomic DROP below.
 
 **A Big-M row is never an editable knob.** A row carrying a Big-M states some construct's
-*mechanism*, and slack on it is measured in that mechanism's units, not the user's. A composed
-MIN/MAX lowers to an envelope, closing rows and an outer row; only the outer row is the user's
+*mechanism*, and slack on it is measured in that mechanism's units, not the user's. A MIN/MAX
+lowers to a helper with an envelope and closing rows, and a clause row that reads it; only the clause row is the user's
 clause. Making the closing rows relaxable would break both halves of a diagnosis:
 
 - *The name.* `ExtremumLinkSpec` carries no `source_clause_id`, so a blamed closing row has no
@@ -590,14 +583,14 @@ clause. Making the closing rows relaxable would break both halves of a diagnosis
   row's own coefficients, reporting `MIN((x + c)) - x - 110*MIN((x + c)) >= -110` — a string
   appearing nowhere in the query.
 - *The number.* Slack on a closing row lets the auxiliary `z` leave its extremum; the user's
-  bound moves by that slack times the coefficient `z` carries in the outer row. For
+  bound moves by that slack times the coefficient `z` carries in the clause row. For
   `3*MIN(x + c) + SUM(x) <= 22` the engine would report 8 where the real repair is 24, and the
   suggested `<= 30` re-solves to infeasible.
 
-Relaxing the outer row is mathematically equivalent — lowering `z` by `s/a` and raising the
+Relaxing the clause row is mathematically equivalent — lowering `z` by `s/a` and raising the
 bound by `s` admit the same solutions — and is already in the user's own units, so repair goes
-there. `EmitComposedMinMaxOuter` stamps it `USER_PARAMETER` + `SHARED_SCALAR` with a
-`repair_group_id` and a `source_clause_id`.
+there. The clause row is an ordinary aggregate row: it carries `USER_PARAMETER`, a `repair_group_id` and a
+`source_clause_id`, as a SUM's does.
 
 The guard that makes this structural is `assert_blamable_row` in the elastic transform: a
 relaxable row must carry an explicit `ElasticShape` **and** a `source_clause_id`. Without the
@@ -605,14 +598,13 @@ latter the renderer can only fabricate, so a row that cannot name a clause is no
 can be told to edit. `D_ASSERT` is debug-only, so the release-build backstop is the Python
 invariant helper described in `../foundations/done.md`.
 
-**What the tags are called.** The pipeline aliases that carry this linkage are
-`MINMAX_CLAUSE_TAG_PREFIX` (`__minmax_clause_<clause_idx>_<min|max>__`) and
-`NE_CLAUSE_TAG_PREFIX` (`__ne_clause_tag_<clause_idx>__`), both in
+**What the tag is called.** The pipeline alias that carries this linkage is
+`NE_CLAUSE_TAG_PREFIX` (`__ne_clause_tag_<clause_idx>__`) in
 `common/enums/decide.hpp`. The payload is a **clause** index — into
-`LogicalDecide::minmax_clause_labels` / `ne_clause_labels`, which hold the text a diagnosis
+`LogicalDecide::ne_clause_labels`, which holds the text a diagnosis
 renders — and not an indicator index. The distinction matters because an indicator is allocated by the formulation and a
 clause is not: the clause is registered where it is *tagged*, before either arm is chosen, so
-both parts of the payload are always present. There is one spelling per tag, and the reader
+the payload is always present. There is one spelling of the tag, and the reader
 asserts it.
 
 **Tests.** C++ structural (`test_decidb_diagnostic_engines.cpp`), beside the slack-scope folds
@@ -640,7 +632,7 @@ constraint-side comparison containing an L0 `norm`. The optimizer assigns one
 written-order `removal_group_id` to the source comparison before any rewrite. Objective-side
 L0 is deliberately excluded. Every descendant row or native construct copies that identity,
 including IN cardinality/link rows, a folded bound's clause rows, ABS/McCormick descendants,
-composed MIN/MAX extraction, and backend lowering.
+and backend lowering.
 
 `source_clause_id`, `repair_group_id`, and `removal_group_id` are separate namespaces:
 display identity does not decide elastic sharing, and neither decides atomic omission.
@@ -648,17 +640,16 @@ Removable descendants remain rigid and receive no slack. A candidate DROP physic
 all matching linear, quadratic, indicator, and native-general constraints from a copied
 `SolverModel`; column declarations and the ordinary solve model are unchanged.
 
-**Label channel for global-block columns (aggregate `<>`, composed MIN/MAX).** A per-row `<>`
+**Label channel for global-block columns (aggregate `<>`, extremum links).** A per-row `<>`
 indicator is a decide-var column, so `BuildColumnProvenance` already names it from `var_labels`.
 An aggregate `<>` binary lives in the global block, which `BuildColumnProvenance` otherwise
 leaves unnamed — so a dropped aggregate `<>` would have an empty subject.
 `SolverInput::global_variable_labels` (parallel to `global_variable_types`) carries the user
 source text of a labeled global: the clause text `SUM(x) <> K` for an aggregate-`<>` binary
-(looked up from `aux_var_expressions` at that site), and the aggregate text `MAX(x)` for a
-composed-MIN/MAX z (both allocation sites build it from the term's `agg_name` +
-`RenderDecideSource` of the term's `inner_expr`) — so the composed outer pin renders `SUM(x) + MAX(x) <= -1`, never
-an internal `colN`. Other global aux (single-term MIN/MAX objective z, McCormick) stay
-unlabeled, which is an empty entry rather than a missing one.
+(looked up from `aux_var_expressions` at that site), and the reducer text `MAX(x)` for the binaries and member columns
+of an extremum link (`ExtremumLinkSpec::label`, the helper's `ReducerValueLink::label`). A helper's own column is a
+decision, named from `var_labels`, so a clause that reads it renders `SUM(x) + MAX(x) <= -1`, never an internal `colN`.
+Other global aux (McCormick) stay unlabeled, which is an empty entry rather than a missing one.
 
 The channel is positional — entry `i` names global column `i` — and it is kept aligned at
 the point of allocation, not at the point of labelling. `AddGlobalContinuousAux` and
@@ -747,7 +738,7 @@ per variable (a minimum-cardinality-2 set, differential-checked); an **objective
 tie** (`x <> 0 AND x <> 1 AND y ≤ 5 MAXIMIZE SUM(y)`, where the objective only touches the free
 `y`) drops the earliest-declared `x <> 0` on **both** backends — the solver-agnostic tie-break
 guarantee; `x <> 5 AND 5 ≤ x ≤ 5` prefers loosening. IN (singleton, multi-value, negative,
-and under a `when`) and L0 (explicit/auto, directional/equality, composed MIN/MAX, and prepared
+and under a `when`) and L0 (explicit/auto, directional/equality, and prepared
 bilinear replay) each report one source-level DROP on both backends; objective L0 is excluded,
 and the removed setting is rejected.
 
@@ -882,11 +873,6 @@ states ABS natively and bakes in no constant, so it sees both; a lowered Big-M e
 1 makes the box repair infeasible inside the elastic model. It is a formulation split, not a
 solver one: `DECIDB_NATIVE_CONSTRUCTS=off` gives the lowered answer on Gurobi too.
 
-MIN/MAX has the same blind spot without the disagreement. `per g: max(x + c) by (g) >= 25`
-over `x` in `[0, 9]` boxes the extremum column at the family's own reach, so **every** arm
-would advise loosening the MAX, worth 36, when `x <= 23` is the same size of edit and worth 92.
-A cross-backend check cannot catch a blind spot both arms share.
-
 **The rule.** A clause that demands more of an auxiliary than the box can supply sizes that
 auxiliary itself. Note when it fires: only when the demand *exceeds* the box, which is only
 when the clause cannot be met as written. A query that solves reaches its own bound by
@@ -902,19 +888,11 @@ deactivated arm of a disjunction, whereas a too-small one cuts off legal answers
   usually **not** a row — `ABS(x) >= 5` is a simple `var OP const` comparison, so
   `FoldSingletonRows` folds it into the auxiliary's own box — which is why the helper reads
   `lower_bounds[aux]` first and only then walks the rows. Otherwise the ceiling would sit *under* the floor: an empty column no widening of `x` could repair.
-- **MIN/MAX** — `LinearizeMinMaxConstraints` widens `group.family` to cover the clause's bound
-  before the extremum column is boxed, so both the column and the closing Big-M (`family.Span()`)
-  follow.
-- **MIN/MAX, native arm** — one level further down, and it needs the opposite treatment. The
-  lowering emits the closing side alone (`z <= max`), so `K` is a fine ceiling for `z`. A
-  general constraint states `z = MAX(t..)` as an **equality**, so `z` must hold whatever the
-  members actually reach — and a member may have to go past `K` to get the extremum there
-  (`MAX(x + c) >= 25` is met at `x = 23` with `c = 4`, an expression of 27). Boxing `z` and the member columns at 25 would cap `x` at 21 and cost three units of
-objective (89 instead of 92). There is no derivable number — how far the
-  repair travels is not known until it is solved — so on the native arm the demanded end is
-  **opened** and the pin row tying each member column to its expression does the constraining.
-  The native arm derives no Big-M from the family, so an open end costs it nothing but a looser
-  root relaxation on a query that cannot solve anyway.
+
+**MIN/MAX needs no such rule.** `per g: max(x + c) by (g) >= 25` over `x` in `[0, 9]` has its helper boxed by its
+members' reach (`DeriveReducerValueBounds`), derived afresh by every formulation, so the widened `x` of a repair widens
+the extremum column and the closing Big-M with it. Every arm then advises `x <= 23`, worth 92, rather than loosening the
+MAX, worth 36.
 
 **The elastic model is a formulation, not a matrix patch.** Patching the *solved*
 `SolverModel` (re-opening its column box and appending slack columns) would keep its Big-M and
@@ -1114,7 +1092,7 @@ and then applies its reported edits: query-mode data uses `virtual_offset`, expa
 ## Tests
 
 `TestUnreachableBound` in `test/decide/tests/test_query_diagnostics_relation.py` covers the
-pre-solve verdict: the bare, aggregate, and hard MIN/MAX spellings each name their clause and
+pre-solve verdict: the bare, aggregate, and MIN/MAX spellings each name their clause and
 emit `unreachable_bound` with no edit rows; one clause over three relation rows reports once;
 two out-of-reach bounds are two findings; a vacuous `x <= +inf` is not a finding and the real
 conflict beside it still gets an ordinary loosen edit; and a merely far-out-of-reach finite

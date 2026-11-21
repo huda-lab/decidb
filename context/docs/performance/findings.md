@@ -67,8 +67,10 @@ environment would save under 1 ms a query, so nothing is cached.
 ## Input and extraction
 
 DuckDB operator profiles expose scans, joins, sorting and output-table writing. Per-chunk accumulators measure sink append and solution-to-row mapping without logging every chunk. Sink-combine timing includes its lock wait.
-
-Finalize spans separate the merge of the threads' descents (`execution.descent_merge`), the descent's routing of the rows (`execution.tree_descent`) and the evaluation of each node's programs into the columns stage 06 reads (`execution.tree_model`: the keyed-decision mapping, constraints, objective, composed MIN/MAX clauses and the helper decisions' members), then `execution.assemble_input` and `execution.formulate`.
+ Finalize spans separate the merge of the threads' descents (`execution.descent_merge`), the descent's routing of the
+rows (`execution.tree_descent`) and the evaluation of each node's programs into the columns stage 06 reads
+(`execution.tree_model`: the keyed-decision mapping, constraints, objective and the helper decisions' members), then
+`execution.assemble_input` and `execution.formulate`.
 
 Per-query costs on these spans come from the measurement runs ([todo.md § PERF-6](todo.md#perf-6--solver-execution)).
 
@@ -154,6 +156,9 @@ Both backends are forced explicitly; no silent fallback is accepted. Gurobi `opt
 
 Optional native logs expose versions, reductions and progress where available. Counters include iteration/node counts and objectives; Gurobi additionally reports bound/gap where available. Native solver internals are not all separately timed by these API-level spans.
 
+Q4 at the medium tier solves in 4.8 s, every MIN/MAX a helper with its definition rows before the clause rows that read
+it ([`../pipeline/06_model_formulation/done.md`](../pipeline/06_model_formulation/done.md) § Row order).
+
 Q5/Q7 require quadratic constraints and are rejected by the current forced-HiGHS contract before execution; they are capability exclusions. P2/P3 cover supported convex QP on both. A 1,000-row pilot ran all 28 supported pairs, with two expected HiGHS refusals; it is a pilot, not a baseline.
 
 ## Output and cleanup
@@ -203,11 +208,11 @@ interleaved runs beside other work (load 8-18, single spans swing up to 3x).
   read for it, and the objective sites treat an identity filter as none. Term filters
   select kept rows with a per-row `vector<bool>`: a `SelectionVector` path would let DuckDB's conjunction `Select`
   reorder AND/OR operands, and DECIDE reads them left to right.
-- **Composed MIN/MAX coefficients are read a chunk at a time.** `DecideModelEmitter::ComposedTerms` reads a term's inner
-  coefficients in one scan through `DecideTreeColumns::Numbers`, the vectorized reader every other clause uses. Reading
-  them row by row (box a `Value`, cast it to `DOUBLE` through a fresh `Vector`, unbox it, one scan per inner term; a
-  stack sample put the phase's whole time in the cast) costs Q4's composed MIN/MAX evaluation 489 ms against 21 ms on
-  Gurobi, 21 ms on HiGHS; no other span differs.
+- **A helper's member coefficients are read a chunk at a time.** The model emitter reads a MIN/MAX helper's member
+  coefficients in one scan through `DecideTreeColumns::Numbers`, the vectorized reader every other clause uses
+  (`DecideModelEmitter::ValueLinks`). Reading them row by row (box a `Value`, cast it to `DOUBLE` through a fresh
+  `Vector`, unbox it, one scan per inner term; a stack sample put the phase's whole time in the cast) cost Q4's MIN/MAX
+  evaluation 489 ms against 21 ms on Gurobi, 21 ms on HiGHS; no other span differed.
 - **A group keeps its row, not its key values.** A group keeps its first row (for a collated column, the row of its
   least spelling); groups number through DuckDB's sort key instead of a `Value` comparator, and a message reads a
   group's values at its row when it names it (late materialization), not one `Value` per group per key column.

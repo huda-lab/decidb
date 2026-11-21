@@ -1,7 +1,7 @@
 # Stage 05 — DECIDE optimizer
 
 Chooses the **mathematical formulation** for every construct the solver cannot take
-literally: ABS, MIN/MAX, AVG, `<>`, bilinear products, and composed reducers, and
+literally: ABS, MIN/MAX, AVG, `<>`, bilinear products, and nested reducers, and
 then **lowers the finished clauses into the tree's terms** (stage 08's `DecideTree`), which execution
 consumes. It assumes canonical input and produces canonical output; it never
 decides shape, parses SQL, executes relations, or calls a solver.
@@ -71,10 +71,9 @@ One consequence is recorded where it lands: **stage 05 allocates no indicator va
 for a MIN/MAX or a `<>` at all.** A stage that cannot see the data cannot know which arm a
 clause takes, so allocating here would give the native arm a binary per data row that
 nothing references. Both constructs allocate their binaries in the pass that emits the
-rows reading them, in the global block:
-`EmitHardMinMaxClause` and `FindNotEqualConstraints` record only the **marking** — which
-clause this is, what it reduces with, and the text to call it in a diagnosis — and the
-clause index rides the tag.
+rows reading them, in the global block. A MIN/MAX is a helper decision here and stage 06 emits its extremum link
+(`EmitExtremumLink`); `FindNotEqualConstraints` records only the **marking** — which clause this is and the text to
+call it in a diagnosis — and the clause index rides the tag.
 
 The choice is made **once** and rides the plan: `LogicalDecide` → `PhysicalDecide` →
 the solve → every diagnostic re-solve. Nothing downstream selects again — stage 08
@@ -152,8 +151,7 @@ report once the rows are in, and it must never predict less. Where it cannot be 
 it over-reports. `MayHaveIntegralColumn` is exact: every helper this stage adds carries
 its own type, read like a declared decision, and of the two lowerings that add a binary
 during execution, a `<>` is admitted over whole-numbered decisions only and a MIN/MAX
-held by indicator rows leaves a mark (a hard clause label, a composed term, a MIN/MAX
-value link or objective). A continuous helper (an ABS envelope beside
+held by indicator rows leaves a mark (a MIN/MAX value link). A continuous helper (an ABS envelope beside
 `SUM(POWER(...))`) therefore leaves the QP continuous, and HiGHS takes it.
 A square of a form over two decisions counts as coupled whatever its coefficients turn out to be, and a product counts
 as coupled without checking whether the built Q ends up with a nonzero off-diagonal. Direct solve's reader errs the
@@ -214,7 +212,7 @@ ordinary operators (`../../direct_solve/README.md`); a node they leave takes the
 below.
 
 `DecideOptimizer::RewriteForSolver` runs the passes below, and the order is load-bearing. The table includes the
-tree's early definition-function preparation (8), which reserves helper indices before the MIN/MAX rewrites and the
+tree's early definition-function preparation (9), which reserves helper indices before the value rewrite and the
 term splitter use them:
 
 | # | Pass | Why here |
@@ -226,23 +224,21 @@ term splitter use them:
 | 5 | `RewriteInDomain` | Lowers bound DECIDE-variable IN markers to indicator metadata. |
 | 6 | `TagAbsForBigM` (normalized expressions) | Classifies ABS nodes introduced by normalization before their F-node metadata is collected. |
 | 7 | `RewriteBilinear` | Retains Boolean products and records their expansions and product F-node specs. |
-| 8 | `DecideTreeConstruction::PrepareDefinitionFunctions` | Registers definition F-node specs and reserves scoped helper columns before value and MIN/MAX rewrites consume their reads. |
-| 9 | `RewriteScopedReducers` | The value rewrite: a VALUE-shape comparison's reducers become helper decisions. |
-| 10 | `RewriteBilinear` (nested values) | Records products exposed after nested reducer values become decisions. |
-| 11 | `RewriteComposedMinMax` | Detects composed (additive, mixed-reducer) MIN/MAX before single-term MIN/MAX handling. |
-| 12 | `RewriteMinMax` | Classifies and rewrites single top-level MIN/MAX in constraints and objectives. |
-| 13 | `RewriteNotEqual` | Creates `<>` indicators. |
-| 14 | `RewriteAvgToSum` | Scales AVG values into SUM terms after value and extremum rewrites. |
-| 15 | `RewriteAbs` | Allocates ABS helpers, stores the written function and lower-envelope metadata for F nodes, and adds the check of each ABS argument's data. |
-| 16 | `RewriteBilinear` (ABS factors) | Records products involving the newly allocated ABS helpers. |
-| 17 | `FoldSingletonRows` | Must be last of all — see below. |
+| 8 | `RewriteMinMax` | Tags the easy identity of a MIN or MAX (`max(e) <= K`) and splits an equality on one, before any pass reads the clause's direction. |
+| 9 | `DecideTreeConstruction::PrepareDefinitionFunctions` | Registers definition F-node specs and reserves scoped helper columns before the value rewrite consumes their reads. |
+| 10 | `RewriteScopedReducers` | The value rewrite: a VALUE-shape comparison's reducers, and every other MIN or MAX the easy identity left, become helper decisions. |
+| 11 | `RewriteBilinear` (nested values) | Records products exposed after nested reducer values become decisions. |
+| 12 | `RewriteNotEqual` | Creates `<>` indicators. |
+| 13 | `RewriteAvgToSum` | Scales AVG values into SUM terms after the value rewrite. |
+| 14 | `RewriteAbs` | Allocates ABS helpers, stores the written function and lower-envelope metadata for F nodes, and adds the check of each ABS argument's data. |
+| 15 | `RewriteBilinear` (ABS factors) | Records products involving the newly allocated ABS helpers. |
+| 16 | `FoldSingletonRows` | Must be last of all — see below. |
 
-`RewriteComposedMinMaxObjectiveTop` runs within the composed pass for the
-objective side. The `optimizer.decide` span of `DECIDB_PROFILE=1` times the whole block.
+The `optimizer.decide` span of `DECIDB_PROFILE=1` times the whole block.
 
 A later stage-05 lowering, `LowerDecideTree`, belongs to this stage but is
 **triggered during physical planning** — see §1a. It lowers each `ReducerValueLink`'s body
-into its helper's G or O, as it does a composed term's into its G.
+into its helper's G or O.
 
 ---
 
@@ -257,7 +253,7 @@ reducer produced.
 
 The output goes into the tree under construction (`DecideTreeConstruction`), not into a model of its own: each
 clause's `DecideConstraint` into the root the tree made of its comparison (`TakeClause`; a folded bound's into its
-folded root), the optional `DecideObjective` into the objective's root, each composed term's and each helper's terms
+folded root), the optional `DecideObjective` into the objective's root, each helper's terms
 into its G or O, and the frame columns they read into `DecideTree::frame_reads`. So every construct reaches execution
 as lowered terms rather than one path re-deriving its own, and the solver gate reads its model class off the same
 records (`RequireDecideSolverSupport`). This is the tree's lowering, one IR: the records stage 08 reads
@@ -370,7 +366,7 @@ or, for a range, its `REDUCED` column (the frame's reducer over the window's val
 frame over decisions (stage 04) by its `DEFINED` column, TRUE where each of the frame's `READ` and `FALLBACK` columns
 holds a value. A frame over decisions inside a `MIN`/`MAX` of several terms is a term
 like any other (`DecideBody::members`), its `frame_read` set: stage 08 hands stage 06 the variable each term
-reads (`ComposedMinMaxTermData::variables`), a frame read among them. A range over decisions reaches no term: it is a
+reads (`ReducerValueMembers::variables`), a frame read among them. A range over decisions reaches no term: it is a
 helper by now (§2, `RewriteFrameRanges`), whose link also reads the range's `else` as terms, each coefficient a
 FALLBACK column (`DecideBody::fallback`). What a signature reads of a reached `else` is recorded per frame
 (`DecideFrameReads::fallback_columns`).
@@ -378,9 +374,8 @@ FALLBACK column (`DecideBody::fallback`). What a signature reads of a reached `e
 ### Like-term collection
 
 After flattening, every list that becomes a **linear** solver row is grouped:
-constraint `lhs_terms`, the objective's `terms`, each composed
-MIN/MAX term's inner terms, and each value link's terms and `else` terms. `2*ship + 3*ship` becomes one term with
-coefficient `2 + 3`. A term contributes `sign * coefficient`, so a group merges as
+constraint `lhs_terms`, the objective's `terms`, and each value link's terms and `else` terms. `2*ship + 3*ship`
+becomes one term with coefficient `2 + 3`. A term contributes `sign * coefficient`, so a group merges as
 `sign_first * (coef_first ± coef_next ± ...)`, taking `-` exactly when a term's
 sign differs from the group's.
 
@@ -501,7 +496,7 @@ decisions inside the ABS on the lowering arm. A factor's sign is read by
 product with a zero constant among its factors is zero whatever its data factors hold
 (`0 * w`), a negation flips, a quotient follows its numerator. A factor that is exactly
 zero makes the term vanish: nothing pins it and nothing boxes it, and neither is
-anything nested in it. The MIN/MAX rewrites' `ScaleSignAtPlanTime` and
+anything nested in it. The easy identity's and the value rewrite's `ScaleSignAtPlanTime` and
 `ScaleVanishesAtPlanTime` read the same classifier, so every pass agrees on what a
 factor does. A MIN or MAX on the path pushed its
 hard way (`MINIMIZE min(abs(e))`, `MAXIMIZE -min(abs(e))`, `min(abs(e)) <= K`) also
@@ -509,8 +504,8 @@ yields sign 0 beneath it: the extremum is encoded with a Big-M over its members,
 needs each member's box, and an auxiliary held by pressure alone has none. Pushed its
 cheap way (`MINIMIZE max(abs(e))`) the extremum's envelope bounds every member and the
 plain envelope stands. A MIN or MAX under a factor that is exactly zero
-(`ScaleVanishesAtPlanTime`) is classified easy in every direction by the composed
-rewrite: the term vanishes, nothing pushes its extremum, and the cheap envelope asks for
+(`ScaleVanishesAtPlanTime`) takes the envelope side alone in every direction in the value rewrite
+(`ReducerSite::vanishes`): the term vanishes, nothing pushes its extremum, and the cheap envelope asks for
 no member box, so `sum(x) + 0 * min(abs(x - 2)) <= 5` and `MAXIMIZE 0 * -min(abs(x - 2))`
 answer instead of demanding a bound on the ABS auxiliary.
 
@@ -566,9 +561,8 @@ aggregate, because the binder rejects `SUM(norm(...))` before this pass runs.
 
 **The marker must not outlive this layer**, and `VerifyNormMarkersLowered` asserts
 that over `LogicalDecide::EnumerateExpressions` at the end of `OptimizeDecide` —
-after the composed MIN/MAX pass, which lifts sub-expressions out of the trees into
-its own vectors. This assertion is not defence in depth. The marker is a real `SUM`
-aggregate with the order recorded in its alias, so an unlowered one is not
+after the value rewrite, which lifts reducers out of the trees into helpers. This assertion is not defence in depth. The
+marker is a real `SUM` aggregate with the order recorded in its alias, so an unlowered one is not
 recognisably broken downstream: extraction reads it as the `SUM(e)` it is built on,
 the norm silently leaves the model, and the query returns a confident wrong answer.
 
@@ -638,8 +632,8 @@ one auxiliary and one row set, not one per row. The ABS Big-M and the L0 auto bo
 
 ### Non-linear reducer bodies — definition F-node preparation
 
-Every extremum the later passes build reads its members as linear: the hard rows, the
-composed terms, the flat objective, and the value rewrite's links. A body
+Every extremum the later passes build reads its members as linear: a MIN or MAX is a helper of the value rewrite,
+whatever clause or objective reads it. A body
 that squares or multiplies decisions (`max(power(x, 2))`, `min(x * y)`) would lose its
 square there. `DecideTreeConstruction::PrepareDefinitionFunctions`
 (`decide_tree_definition.cpp`) registers one helper decision `t` per row (`__body_<n>__`,
@@ -669,16 +663,15 @@ values and answers `x = 2` there, where the MAX is 4. The definition belongs to 
 (§ The value rewrite).
 
 **Which bodies.** Every MIN or MAX whose body is not linear (`DecideDegreeOf`). In
-a constraint that holds a MIN or MAX, every SUM and AVG term too, since the composed row
+a constraint that holds a MIN or MAX, every SUM and AVG term too, since the clause row
 reads them as linear (`sum(power(x, 2)) + max(x) <= 30`); and in a constraint of the VALUE shape, whose helper is
 defined over linear members (`sum(power(x, 2)) + gcap * s <= 30`). A SUM or AVG that no MIN or MAX reads needs no
 native MIN/MAX: its rows are quadratic, which the model-class gate refuses on HiGHS. In the objective, a reducer
 nested under a MIN or MAX (`max(per g: sum(power(x - t, 2)) by (g))`), which the value rewrite then holds in a
 helper over the defined members; a SUM beside a MIN or MAX stays on the
-objective's own quadratic path. A plain constraint whose one MIN or MAX is pushed its
-cheap way (`max(power(x, 2)) <= 16`) is left alone: `RewriteMinMax` bounds each member,
-which is one quadratic row per member with no helper. `IsCheapLoneExtremum` reads that
-shape as `RewriteMinMaxInConstraint` does.
+objective's own quadratic path. A clause `RewriteMinMax` tagged
+easy (`max(power(x, 2)) <= 16`, `MINMAX_EASY_REWRITE_TAG`) is left alone: it bounds each member, which is one
+quadratic row per member with no helper.
 
 The row holds on the rows the reducer reads: the clause's `when` and the reducer's own
 filter (`max(when g = 'A': power(x, 2))`), through `ScopeHelperRow`. It is a structural
@@ -706,10 +699,9 @@ restates the body the reducer already prints. The row carries the source clause 
 first clause that reads the helper (`CopySourceClauseTag`), so a refusal can quote it, and
 no removal group (§ The value rewrite).
 
-**Exit contract.** `VerifyExtremumBodiesLinear` runs after `RewriteMinMax` and raises an
-internal error when any member an extremum reads is not linear: a composed term, a MIN/MAX
-value link, a hard MIN/MAX row (`MINMAX_CLAUSE_TAG_PREFIX`) or a MIN/MAX objective. The
-cheap half (`MINMAX_EASY_REWRITE_TAG`) bounds each member in its own quadratic row and is
+**Exit contract.** `VerifyExtremumBodiesLinear` runs after the value rewrite and raises an
+internal error when a member of a MIN/MAX value link is not linear. The easy identity
+(`MINMAX_EASY_REWRITE_TAG`) bounds each member in its own quadratic row, holds no link, and is
 exempt. A body tree preparation misses fails there by name instead of losing its square. Tests:
 `test_minmax_body_definition.py`.
 
@@ -724,8 +716,9 @@ Only a reducer over decisions counts (`ContainsDecisionReducer`): a reducer over
 Stage 04 decides the shape once
 (`CanonicalConstraintClass::VALUE`, `VALUE_REWRITE_TAG`, stage 04 §3.10); this pass reads
 the tag and turns the clause into an ordinary per-row one, so stage 06 needs no new
-constraint path. It runs after the ABS and bilinear rewrites, whose auxiliaries may stand
-in a reducer's body, and before the MIN/MAX passes, which never see these reducers.
+constraint path. It runs after the bilinear rewrite, whose auxiliaries may stand in a reducer's body, and after
+`RewriteMinMax`, which leaves the clauses of the easy identity with their reducer. A clause in any other shape takes
+the same pass for its MIN and MAX only (§ MIN/MAX).
 
 For each decision reducer `agg([when c'] [per K']: e) by (G)` on the comparison's left
 side (`CollectReducerSites`; a data-only reducer is a number and stays) the pass:
@@ -855,72 +848,50 @@ the objective): the AVG scaled into a sum, the `norm` lowerings (a sum of absolu
 values, a sum of squares, a maximum of absolute values), the ABS auxiliary and how it is
 pinned (solver pressure, a sign indicator, or the native absolute value), the Boolean
 product (AND rows or McCormick), the `IN` and L0 indicators, the value helper (per group
-or query-wide), a MIN/MAX in its cheap direction (a bound on each member), the extremum
-column of a hard MIN/MAX, of a composed term and of an objective's level (pinned by
-indicator rows or not), and the `<>` disjunction. The renderer words them in one place
+or query-wide, a MIN/MAX's among them), a MIN/MAX in its cheap direction (a bound on each member), and the `<>`
+disjunction. The renderer words them in one place
 (`RenderDecideRewriteAccount`, `../03_logical_plan/done.md`). The passes start the
 objective's walk with `OBJECTIVE_ROW_TAG` as its source alias, which
 `CopyClauseProvenanceTags` carries onto every row they add for it, so EXPLAIN can print
 those rows under the objective.
 
-### MIN/MAX — `RewriteMinMax`
+### MIN/MAX — one route
 
-**Constraints.** An *easy* direction (`MAX(...) <= K`, `MIN(...) >= K`) holds when every
-member does, so it needs no Big-M: the comparison keeps its reducer and is tagged
-`MINMAX_EASY_REWRITE_TAG`, and the linear form emits one row per member. The reducer's
-`when` picks the members, while a bound-side reducer is reduced over every kept row of the
-`by` group; hoisting the `when` onto the clause would reduce the bound over the members
-only. A `max(x) <= K` over one decision with no `when` and no reducer filter is then a
-column bound, which bound absorption folds into the box (below). A *hard* direction
-rewrites to a `SUM` tagged with the clause (`EmitHardMinMaxClause`), which keeps the
-reducer's `by`; stage 06 creates the extremum column and any binaries its link needs.
-Equality splits into both: the easy half is a copy of the comparison under the clause's
-`when` and `per K:` (`ScopeRowPerClause`), the hard half the rebuilt `SUM`. Which way a clause pushes a term —
-down under `<=` for a positive term, up for a negative one, the mirror under `>=`, nowhere
-under `=` or an unknown sign — is read once, in `ExtremumPushOf` (`decide_cast_policy.hpp`),
-by this pass, the composed pass and the value rewrite alike; MAX pushed down and MIN pushed
-up are the cheap directions. A factor of unknown sign leaves the clause to the composed
-pass, which claims it first. `<>` on a MIN/MAX is refused.
+**Every MIN or MAX over decisions is a helper decision,** but for the easy identity below. In a constraint of any shape
+and in the objective alike, `RewriteScopedReducers` replaces each site by a helper with one instance per `by` group (the
+value rewrite's own helper, above), and the clause or the objective reads the helper where the reducer stood. A SUM or
+AVG beside it stays in the clause's aggregate row; in the VALUE shape it becomes a helper too. So `sum(a*x) - max(b*x)
+<= 40` is one row over the SUM's terms and the MAX's helper, and `MAXIMIZE sum(x) + max(b*x)` is an objective over both.
+Nothing about a MIN or MAX depends on the terms beside it, on a `by` key or on a bound that is not a constant, so no
+shape takes a route of its own.
 
-Stage 06 takes the extremum the hard half names over its members' coefficients and states
-the clause's own relation over it, so a negative factor goes inside the hard half's
-reducer (`build_hard_lhs`): the hard `-2 * MAX(e) <= K` is stated as `MIN(-2 * e) <= K`.
-A positive one stays outside.
+**The helper's definition is one-sided**, the epigraph auxiliary of the Plaisted–Greenbaum encoding: the side its
+readers push it against. Which way a clause pushes a term — down under `<=` for a positive term, up for a negative one,
+the mirror under `>=`, nowhere under `=`, `<>` or an unknown sign — is read once, in `ExtremumPushOf`
+(`decide_cast_policy.hpp`), by the easy identity and the value rewrite alike, and `DecideHelperSides` turns it into the
+sides. A MAX pushed down and a MIN pushed up are the cheap directions: the envelope alone holds (`helper >= member` for
+a MAX, every member bounds it). Pushed the other way a MIN or MAX needs the closing side (some member reaches the
+helper), which stage 06 states with indicators or natively; with no push it needs both. The objective is a minimization,
+so its push is down times the term's sign: `MINIMIZE max(x)` takes the envelope, `MAXIMIZE max(x)` the closing side. A
+factor that is exactly zero takes the envelope alone, since the term vanishes. A factor stays outside the reducer (§3),
+so a negative one reverses the push and an unknown one gives none. Stage 06 emits one extremum link per group
+(`EmitExtremumLink`, [`../06_model_formulation/done.md`](../06_model_formulation/done.md)); a shared helper takes every
+side any of its readers needs.
 
-**Objectives.** The flat form is detected and the easy/hard classification is
-precomputed into typed metadata — `flat_objective_agg` / `flat_objective_is_easy` — so the
-physical layer reads the decision rather than re-deriving it. A nested one is a helper
-decision by now (the value rewrite, D81). `RewriteMinMaxObjectiveTree` is split out from
-`RewriteMinMaxObjective` because the rewrite writes through a pointer that walks *into*
-the tree past the `when` wrapper and casts, and has early returns: the objective must be
-detached, rewritten, and reinstalled through `SetObjective`.
+**`<>` on a MIN or MAX** needs both sides and is read on the helper, as on any decision (`RewriteNotEqual`, below).
 
-### Composed MIN/MAX — `RewriteComposedMinMax`
-
-An additive LHS mixing `SUM`/`AVG` with `MIN`/`MAX` terms cannot go through the
-single-term path. Each term's metadata is extracted into
-`composed_minmax_constraints` (or `composed_minmax_objective_terms`) as a
-`ComposedMinMaxTerm`, and the comparison is replaced with a no-op `TRUE`
-placeholder so the physical layer owns emission. Non-comparison leaves are legal
-under C0 precisely so that placeholder verifies.
-
-`ScopeComposedTerms` folds the clause's `when` into each term's filter, in front of the
-term's own, so stage 08 reads only the rows the clause keeps; under a `per K:` the
-clause's one row names the key's classes (`scope.per` `NAMES_CLASSES`, `class_key`, D28).
-Stage 06 steps a strict outer bound onto the lattice. The canonicalizer has refused such a
-clause with a `by` or a bound that is not a constant (stage 04 §3.10); `AssertComposable`
-asserts it. In a constraint a term beside a MIN or MAX that is no reducer is refused here, quoting it
-(*"'s' beside MIN or MAX is not supported"*).
-
-In the objective it stays where it is. A constraint's terms share the one row its MIN/MAX
-auxiliaries stand in, so the composed path owns them all; an objective has no such row. So
-`WalkComposedLhs` lifts only the objective's MIN/MAX terms and hands back every other term
-(`sum(x)` and `s` in `MAXIMIZE max(x) + sum(x) + s`, a frame such as `at(first: x) over (t.id)`), and `RewriteComposedMinMaxObjectiveTop`
-keeps those, under the objective's `when`, as the objective; with none it installs a
-**constant placeholder**, which is why a decision-free objective is legal and returned
-unchanged by the canonicalizer. They take the objective's own path, which reads their `when`,
-qualifier and AVG and counts a query-wide decision beside the reducers once.
-`LinearizeComposedMinMaxObjective` only adds each auxiliary's coefficient.
+**The easy identity — `RewriteMinMax`.** One identity holds before any helper is made, because it is a rewrite to other
+clauses and no formulation: `max(e) <= K` holds when every member does, and `min(e) >= K` the mirror, so neither needs a
+helper or a Big-M. The comparison keeps its reducer and is tagged `MINMAX_EASY_REWRITE_TAG`, and the linear form emits
+one row per member. The reducer's `when` picks the members, while a bound-side reducer is reduced over every kept row of
+the `by` group; hoisting the `when` onto the clause would reduce the bound over the members only. A `max(x) <= K` over
+one decision with no `when` and no reducer filter is then a column bound, which bound absorption folds into the box
+(below). The direction includes the term's sign and its factor's: `-2 * max(e) >= -8` is `max(e) <= 4`, the identity,
+and `max(e) >= K` is not. An equality splits as BETWEEN does: `max(e) = K` is the easy half per member, a copy of the
+comparison under the clause's `when` and `per K:` (`ScopeRowPerClause`), and the `>=` half, which stays in the clause
+for the helper. A factor whose sign is known only when the query runs gives the term no direction, so the clause takes
+the helper on both sides. The value rewrite skips a tagged clause; definition F-node preparation does too, since the
+easy half bounds each member in its own row.
 
 ### Auxiliary boxes — `AuxRange`
 
@@ -951,9 +922,7 @@ The continuous auxiliaries and the family each is boxed by:
 
 | Auxiliary | Reduces over | Box |
 | --- | --- | --- |
-| flat `z` | the objective's rows | per-row family |
-| a value helper (a nested reducer's among them) | its group's members | each instance its own group's reach (`DeriveReducerValueBounds`) |
-| `z_k` (composed term) | rows the term's filter admits | that term's own family |
+| a value helper (a MIN or MAX's and a nested reducer's among them) | its group's members | each instance its own group's reach (`DeriveReducerValueBounds`) |
 
 A helper over group sums does *not* share the per-row family: a group sum leaves any
 single row's range as soon as the group holds more than one row. Its box is read off its
@@ -971,8 +940,7 @@ count, gap and optimum.
 Each `COMPARE_NOTEQUAL` is marked, not rewritten: its clause index rides the tag
 (`NE_CLAUSE_TAG_PREFIX`) and its label, the clause as the plan prints it
 (`sum(ship) by (D.region) <> 20`), goes to `ne_clause_labels`. Stage 06 allocates the
-binaries and emits the disjunction rows once bounds are known. A hard MIN/MAX's label in
-`minmax_clause_labels` is spelled the same way (`max(ship)`).
+binaries and emits the disjunction rows once bounds are known.
 
 The two rows a `<>` becomes hold a linear left side. The pass runs after
 `RewriteBilinear`, so a product with a `BOOL` decision is already an auxiliary; a square
@@ -1157,7 +1125,7 @@ an all-constant `IN` domain whose minimum is negative — itself a foldable shap
 Fold before that pass and the floor stays at 0, the negative domain value becomes
 unreachable, and the solver returns a *different answer* rather than an error.
 Running last also guarantees every auxiliary variable created by `RewriteAbs`,
-`RewriteBilinear` and `RewriteMinMax` already exists before the box is sized.
+`RewriteBilinear` and the value rewrite already exists before the box is sized.
 
 **Why here and not stage 04.** "Bound or row" looks like shape, which stage 04 owns,
 but stage 04's contract rules it out three times: that pass is pure (it returns a new
@@ -1167,8 +1135,8 @@ solver formulation, which bound-versus-row is. Stage 05 already chooses formulat
 with types in scope and is forbidden only from evaluating *data* — a foldable literal
 is not data.
 
-**Why the comparison is tagged rather than replaced.** `RewriteComposedMinMax`
-replaces a handled comparison with a `TRUE` placeholder, but that is the wrong
+**Why the comparison is tagged rather than replaced.** `RewriteNorm` and `RewriteInDomain`
+replace a lifted clause with a `TRUE` placeholder, but that is the wrong
 precedent here: `EXPLAIN` renders the constraint list from this tree, and the user
 wrote this bound. Tagging moves the decision upstream without changing what the user
 sees.
@@ -1180,29 +1148,21 @@ sees.
 The canonicalizer peels a query-wide factor *outward* off a reducer
 (`2 * SUM(x*p)`, `2 * MAX(x*v)`) and converges every spelling onto one. A decision cannot
 be that factor: stage 04 refuses `b * SUM(x)` (*"'b' is a decision, so it cannot multiply
-SUM(x)"*). **No pass here pushes a factor back in**, except into the hard half of a
-MIN/MAX, whose factor's sign is known (§2, MIN/MAX).
+SUM(x)"*). **No pass here pushes a factor back in.**
 
 `MIN`/`MAX` are order statistics, so a negative factor turns one into the other —
 `MAX(-2x)` is `-2·MIN(x)`. Folding therefore needs the factor's sign, which an
-uncorrelated scalar subquery does not supply until the query runs. Kept outside, a
-known sign picks the easy or the hard form, and in the hard form which extremum the link
-takes: the hard half takes a negative factor inside (§2). Only an unknown sign is safe
-outside, because the composed path pins both sides. `ScaleSignAtPlanTime`
+uncorrelated scalar subquery does not supply until the query runs. Kept outside, a known sign decides which side of
+the helper the clause needs, and an unknown sign is safe: the helper is pinned from both sides. `ScaleSignAtPlanTime`
 (`decide_cast_policy`, shared with the canonicalizer) returns +1, -1, or **0 for "not
 known until the query runs"**, and 0 must be treated as "take the expensive but exact
-form", never as an error. A scale of -2 flips the direction `z` is pushed exactly as a
-subtraction would, so a known sign participates in `is_easy` alongside `sign`; an
-unknown sign forces `is_easy` false, and the indicator layer pins `z` to the true
-MIN/MAX in both directions — correct whichever sign it turns out to have.
+form", never as an error. A scale of -2 flips the direction the helper is pushed exactly as a
+subtraction would, so a known sign enters `ExtremumPushOf` alongside the term's sign; an
+unknown sign gives no push, and both sides pin the helper to the true
+MIN/MAX — correct whichever sign it turns out to have.
 
-`WalkComposedLhs` records the factor on `ComposedMinMaxTerm::scale` (with
-`scale_divides` for the `AGG / factor` spelling). Stage 08 evaluates it and stage 06
-multiplies it where the term lands: into the per-row coefficients for `SUM`/`AVG`, or into
-the auxiliary's contribution for `MIN`/`MAX`. A factor on a reducer outside the composed
-path is multiplied into every term the reducer produced by the linear form
-(`ApplyScaleToExtracted`, §1a), which distributes it over the per-row form when the
-constraint linearizes the easy way.
+The clause row reads the factor times the helper. The linear form multiplies a factor on a reducer into every term the
+reducer produced (`ApplyScaleToExtracted`, §1a), and stage 08 evaluates it.
 
 Folding without the sign check would be a silent wrong answer.
 
@@ -1242,8 +1202,7 @@ stage 07.
 - Decide which side of a comparison a term sits on — stage 04. Every pass here keeps
   to that: ABS and bilinear replace decision-bearing atoms with
   decision auxiliaries; MIN/MAX and AVG keep decision terms on the left; `<>`
-  changes only metadata; composed MIN/MAX leaves a permitted placeholder;
-  `FoldSingletonRows` only annotates.
+  changes only metadata; `FoldSingletonRows` only annotates.
 - Evaluate anything against data, or emit solver rows. Flattening produces
   coefficient *expressions*; turning them into numbers is stage 08.
 
@@ -1254,24 +1213,23 @@ stage 07.
 Each is a precondition on an earlier stage's promise ([`../architecture.md`](../architecture.md) § 3) or a typed read:
 
 - **The binder.** One scope per declared decision, and every rewrite adds a scope with its decision
-  (`AddAuxiliaryDecision`); `StrToAggType` sees sum, min or max only; only a `when` stands under the two-level `per`
+  (`AddAuxiliaryDecision`); only a `when` stands under the two-level `per`
   wrapper; a reducer's marker covers one expression (`RewriteNorm`); a comparison carries its source-clause tag
   (`SourceClauseOf`).
 - **The shape check.** A side of a degree-2 product is affine and no divisor holds a decision (`ReadAffine`); a factor's
   form is linear (`AppendLinearTerms`); a data factor has power 1 (`FindAndReplaceBilinear`).
 - **The canonicalizer.** A NORM marker is closed (`TryParseNormMarker`); the IN marker is built over a decision with a
-  domain (`RewriteInDomain`); a clause with a `by` or a non-constant bound never reaches the composed MIN/MAX rewrite
-  (`AssertComposable`); a canonical class is never `INVALID`.
+  domain (`RewriteInDomain`); a canonical class is never `INVALID`.
 - **Earlier rewrites.** Every reducer is a SUM before extraction; the value rewrite replaces every `VALUE` clause;
-  `RewriteMinMax` keeps an easy clause's reducer; `RewriteComposedMinMax` takes every extremum whose factor has no
-  plan-time sign; no NORM marker and no non-linear extremum member leave stage 05 (`VerifyNormMarkersLowered`,
-  `VerifyExtremumBodiesLinear`); the singleton-row bounds parallel the prepared constraints; `AddLowered` is asked for
+  `RewriteMinMax` keeps an easy clause's reducer; no NORM marker and no non-linear extremum member leave stage 05
+  (`VerifyNormMarkersLowered`, `VerifyExtremumBodiesLinear`); the singleton-row bounds parallel the prepared
+  constraints; `AddLowered` is asked for
   `>` and `=` only; a bound's upper end folds when its lower does (`FoldKnownBound`).
 - **The solver gate.** A non-convex class has an objective group to name, a quadratic gap a quadratic row to quote, and
   `DescribeGap` is asked only for an unmet class.
-- **Typed reads.** An `opaque` term has no coefficient to read; a null coefficient means 1; a composed left side's
-  aggregate is found before it is read; `FLOAT` beside `DOUBLE` in `IsIntegralColumnType`, as the model builder reads
-  integrality; a data column beside a product of decisions in `ReadsOnlyQueryWideDecisions`.
+- **Typed reads.** An `opaque` term has no coefficient to read; a null coefficient means 1; `FLOAT` beside
+  `DOUBLE` in `IsIntegralColumnType`, as the model builder reads integrality; a data column beside a product of
+  decisions in `ReadsOnlyQueryWideDecisions`.
 
 ## 6. Source map
 
@@ -1281,7 +1239,7 @@ Each is a precondition on an earlier stage's promise ([`../architecture.md`](../
 | `norm` / `IN` | `src/optimizer/decide/decide_rewrite_norm_in.cpp` |
 | `<>` / AVG→SUM | `src/optimizer/decide/decide_rewrite_notequal_avg.cpp` |
 | ABS | `src/optimizer/decide/decide_rewrite_abs.cpp` |
-| MIN/MAX, plain and composed | `src/optimizer/decide/decide_rewrite_minmax.cpp` |
+| The easy identity of a MIN or MAX | `src/optimizer/decide/decide_rewrite_minmax.cpp` |
 | The value rewrite (VALUE-shape reducers to helper decisions) | `src/optimizer/decide/decide_rewrite_scoped.cpp` |
 | Bilinear McCormick | `src/optimizer/decide/decide_rewrite_bilinear.cpp` |
 | Non-linear reducer body F-node preparation | `src/optimizer/decide/decide_tree_definition.cpp` |

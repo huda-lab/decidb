@@ -63,13 +63,13 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   `K·n_g` is fractional. When `K` varies inside a group, `ExpandAggregateNotEqual` (`linearization_not_equal.cpp`)
   gives each distinct value its own binary and Big-M pair against the same left side. For `AVG(x) <> K` the left side
   stays an integer `SUM` and the right is scaled (`ne_avg_rhs_scale`). The integer tolerance is `1e-9`.
-- **Composed `MIN`/`MAX`.** An additive side may mix `MIN`/`MAX` terms with `SUM`/`AVG`
-  (`sum(x * v) + max(x * v) <= 20`). Each `MIN`/`MAX` becomes an auxiliary `z_k` pinned per row by its envelope; when
-  the outer comparison pushes `z_k` the wrong way (or for `=`), an indicator layer pins it to the true extreme. Signs
-  thread through subtraction (`WalkComposedLhs`), so a subtracted `MAX` under `<=` is the hard direction. `=` is one
-  native row; `BETWEEN` works but costs two auxiliaries. A `<>` is refused. With a `by`, a non-constant bound or a
-  query-wide decision beside, the clause takes the VALUE shape instead. The bound test is foldability, not a literal
-  node, so `(0 - 3) + 0` still counts as constant. All links go through `EmitExtremumLink` (`linearization_minmax.cpp`).
+- **`MIN`/`MAX` beside other terms.** An additive side may mix `MIN`/`MAX` terms with `SUM`/`AVG`
+  (`sum(x * v) + max(x * v) <= 20`). The `SUM` and `AVG` stay in the clause's row. Each `MIN`/`MAX` is a helper decision
+  whose definition holds on the side the clause pushes it (`ExtremumPushOf`): signs thread through subtraction, so a
+  subtracted `MAX` under `<=` is pushed up and needs the closing side, and a `MIN`/`MAX` under `=`, `<>` or a factor of
+  unknown sign needs both. The clause keeps its shape: with a `by`, a non-constant bound or a query-wide decision
+  beside, the `SUM` and `AVG` become helpers too (the VALUE shape). The bound test is foldability, not a literal node,
+  so `(0 - 3) + 0` still counts as constant. All links go through `EmitExtremumLink` (`linearization_minmax.cpp`).
 - **Subqueries.** Correlated subqueries are decorrelated by DuckDB (`PlanSubqueries`) into per-row values.
   `DecideBinder::BindExpression` refuses a subquery that references a decision (`ExpressionContainsDecideVariable`).
 - **NULL.** A reducer reads its argument as the same SQL aggregate does: it skips a row whose summand is NULL, so
@@ -80,8 +80,8 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   filter's `IS NOT NULL`); the folded constant keeps its tag, and stage 08 reads no filter for it. A reducer over data
   whose every value is NULL is NULL. A NULL that reaches a constraint unreduced (a bound, an unreduced coefficient, a factor
   on an aggregate) marks its row in `ExtractDoubleColumn`'s `null_rows`, and `DecideAbsence::SkipNullInstances` cuts the instance
-  that row reaches: one row of a row constraint, the whole group of a grouped one. A composed MIN/MAX clause with a
-  NULL factor is skipped (`clause.skipped`). In the objective, `DropNullObjectiveTerms` (stage 05) reads a NULL
+  that row reaches: one row of a row constraint, the whole group of a grouped one. In the objective,
+  `DropNullObjectiveTerms` (stage 05) reads a NULL
   coefficient as 0 before like terms merge, so `NULL*SUM(x) + SUM(x)` keeps the second term; objective extraction
   then treats a NULL as an internal error. The direct-solve rules read the same filter tests (`part.filter`), guard
   their coefficients with a CASE, and open a box or limit whose value is NULL. NaN in a bound or a coefficient is an
@@ -101,10 +101,9 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
 ## Objectives
 
 - **Feasibility.** With no objective, `DecideSense::FEASIBILITY` sets every objective coefficient to zero.
-- **Composed `MIN`/`MAX` objectives** (`MAXIMIZE min(when tier: x * profit) + sum(x * revenue)`) use the same
-  auxiliary and walker as composed constraints; the sense plays the comparison's role. A keyed reducer inside keeps
-  its de-duplication (`ComposedMinMaxTerm::qualifier_scope_idx`); for `MIN`/`MAX` that is a no-op, applied anyway so
-  there is one code path.
+- **`MIN`/`MAX` objectives** (`MAXIMIZE min(when tier: x * profit) + sum(x * revenue)`) take the same helper as a
+  constraint's; the sense plays the comparison's role. A keyed reducer inside keeps its de-duplication
+  (`DecideTerm::qualifier_scope_idx`); for `MIN`/`MAX` that is a no-op, applied anyway so there is one code path.
 - **Quadratic inner in a nested objective**: `sum(per g: sum(power(x - t, 2)) by (g))` is read in place as the
   objective's own sum (D81), so it reaches the QP extractor intact. A `MIN`/`MAX` over a squared body reads a helper
   per row defined by its function F node; the model-class gate admits this on Gurobi only.

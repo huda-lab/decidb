@@ -80,10 +80,10 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `optimizer/decide/decide_rewrite_norm_in.cpp` | 05 | `norm` and DECIDE-variable `IN` |
 | `optimizer/decide/decide_rewrite_notequal_avg.cpp` | 05 | `<>` indicators and AVG→SUM |
 | `optimizer/decide/decide_rewrite_abs.cpp` | 05 | ABS Big-M tagging and linearization |
-| `optimizer/decide/decide_rewrite_minmax.cpp` | 05 | MIN/MAX, plain and composed |
+| `optimizer/decide/decide_rewrite_minmax.cpp` | 05 | The easy identity of a MIN or MAX |
 | `optimizer/decide/decide_rewrite_bilinear.cpp` | 05 | Bilinear McCormick |
 | `optimizer/decide/decide_tree_definition.cpp` | 05 | `PrepareDefinitionFunctions`: helpers for non-linear bodies |
-| `optimizer/decide/decide_rewrite_scoped.cpp` | 05 | The value rewrite (`RewriteScopedReducers`): each decision reducer of a VALUE-shape comparison becomes a helper decision per `by` group |
+| `optimizer/decide/decide_rewrite_scoped.cpp` | 05 | The value rewrite (`RewriteScopedReducers`): each decision reducer of a VALUE-shape comparison, and every other MIN or MAX over decisions, becomes a helper decision per `by` group |
 | `optimizer/decide/decide_rewrite_frames.cpp` | 05 | `RewriteFrameRanges`: a range frame over decisions becomes a helper decision per window, before any rewrite copies it |
 | `optimizer/decide/decide_singleton_row_folding.cpp` | 05 | Literal bounds folded into column boxes |
 | `optimizer/decide/decide_linear_form.cpp` | 05 | Flattens every constraint and the objective into `decide.prepared`; must run last |
@@ -101,7 +101,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `decidb/formulation/ilp_model_builder.cpp` | 06 | `SolverModel::Build` |
 | `decidb/formulation/ilp_linearization.cpp` | 06 | `LowerDecideConstructs`, global-auxiliary allocation |
 | `decidb/formulation/linearization_bigm.cpp` | 06 | Big-M sizing and the per-row range walks |
-| `decidb/formulation/linearization_minmax.cpp` | 06 | MIN/MAX: constraints, links, objectives, composed |
+| `decidb/formulation/linearization_minmax.cpp` | 06 | MIN/MAX: the extremum link of every helper |
 | `decidb/formulation/linearization_not_equal.cpp` | 06 | `<>` collapse and Big-M disjunction |
 | `decidb/formulation/linearization_bilinear_abs.cpp` | 06 | McCormick and ABS rows |
 | `decidb/formulation/linearization_reducer_value.cpp` | 06 | The value rewrite's helpers: where each is written in (`PlaceHelpers`, `InlineReducerValueLinks`, D89), their boxes and definitions |
@@ -345,11 +345,11 @@ The path:
    column pruning (`LogicalDecide::EnumerateExpressions`).
 4. **Plan creation** — binding resolution turns each key element into a chunk position,
    as it does every expression the operator owns.
-5. **Optimizer** — a helper decision of the value rewrite over a `by` key is an
-   `ENTITY` decision too: its scope names its link (`value_link`) instead of key
+5. **Optimizer** — a helper decision of the value rewrite over a `by` key (every MIN or MAX over decisions among them)
+   is an `ENTITY` decision too: its scope names its link (`value_link`) instead of key
    columns, and its entities are the `by` groups among the rows the link's clause keeps
-   (over `by ()` it is query-wide). The other rewrites' auxiliaries are row-scoped; a
-   MIN/MAX extremum is a global auxiliary stage 06 allocates.
+   (over `by ()` it is query-wide). The other rewrites' auxiliaries are row-scoped; the indicators of a
+   MIN/MAX closing side are global auxiliaries stage 06 allocates.
 6. **Execution PHASE 1.5** — composite NULL-safe key → class id → `row_to_class`;
    a NULL in a written key column is no class (the row maps to `absent_class`, fixed at 0), and a
    relation's columns compare NULL as a value.

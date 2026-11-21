@@ -137,7 +137,7 @@ In `src/execution/operator/decide/` (the tree: `decide_descent.cpp`, `decide_tre
   value. The mask is per term, so `SUM(D: a * open) + sum(b * ship)` de-duplicates only the first.
 - The tree's term records (`decide_tree_terms.hpp`) carry a clause's scope as one `DecideClauseScope` — `when`,
   `per` (`PerRole`: `NONE`, `ONE_ROW_PER_CLASS`, `NAMES_CLASSES`) and `class_key` — embedded in `DecideConstraint`
-  (beside its `group_key`) and `ComposedMinMaxConstraint`, and on `DecideObjective` as `when_condition`; an objective
+  (beside its `group_key`), and on `DecideObjective` as `when_condition`; an objective
   AVG read in place divides by the groups of its `avg_group_key`. Each key is an index into `LogicalDecide::keys`.
 
 ## Rendering

@@ -19,7 +19,7 @@ files.
   `DecomposeExtremumAddends` as it stands: that moves only foldable addends, which cannot be NULL, while a per-row
   addend has to carry its NULL tests (`SkipNullData` runs after canonicalization) and the moved data reducer enters the
   bound-reducer machinery (`RewriteRhsAggregates`).
-- **Ruling (provisional, god for the owner, 2026-11-21).** No query that solves today changes its answer; model rows
+- **Ruling (owner, 2026-11-21).** No query that solves today changes its answer; model rows
   move only for bodies with a data addend; an empty group or a NULL addend keeps its result. No list of addend shapes.
 - **Done when.** `sum(x + 0.5) + x > 4` agrees with the oracle; `grep -rn RefuseFractionalStep src` finds nothing;
   `./test/decide/run_tests.sh -n 2 -k "integer or fraction or canonical or scoped"` passes and the golden diff moves

@@ -10,12 +10,27 @@ The top-down descent, per-node containers, bottom-up evaluation and frame pass a
 nodes own ABS envelopes, Boolean products, L0 indicators and nonlinear reducer definitions. The deck's step 5,
 formulation at the nodes (pp. 111-119), is not built: stage 06 writes the rows, because D89 needs every reader and
 the implied bounds (done.md, "Departure from the deck"). Phase 6 builds it (ARCH-2, [`../todo.md`](../todo.md)):
-that means re-ruling D89 so a G can decide at its node, and replacing `InlineReducerValueLinks`, `EmitExtremumLink`
-and `LinearizeMinMaxConstraints` rather than composing records beside them.
+that means re-ruling D89 so a G can decide at its node, and replacing `InlineReducerValueLinks` and `EmitExtremumLink`
+rather than composing records beside them.
 
 Other documented edge differences remain in `done.md` §1a: the D88 variant-name edge and unreferenced hidden
 records. Direct-solve rules and DIAGNOSE's separate
 named-column scan also bypass or revisit parts of the normal tree execution; their scope is open.
+
+## EXEC-24 — A folded bound over a decision with no instance reports as any clause does
+
+- **Problem.** A clause left with no instance warns that it constrains nothing (`ReportSkippedInstances`), but a
+  clause stage 05 folds into the box never reaches the row evaluation: `DecideModelEmitter` re-reads a folded bound
+  only when it reads a helper. With no row in a class, `per k: c BETWEEN 0 AND 10` says nothing while `c + d <= 5`
+  warns. `DecideAbsence::MayBe` is true for every keyed decision, so re-reading every folded keyed bound would add a
+  per-row pass to queries whose decisions have an instance on every row.
+- **Change.** The folded-bound read hands every term to `DecideAbsentReads`, as the row paths do, at no cost where
+  every row has a class: `MayBe` answers exactly once the classes are read, or the instances are counted where the
+  box fold reads the bound's data.
+- **Ruling (owner, 2026-11-21).** One null rule, folded bounds included. The solver path of
+  `test_a2_keyed_every_row_with_no_class_has_no_instance` gains the warning; the direct path stays as it is.
+- **Done when.** The repro warns on the solver path; a 100,000-row keyed bound with every row in a class takes no
+  longer than before; `./test/decide/run_tests.sh -k "constrains_nothing or no_instance or a2_keyed"` passes.
 
 ## EXEC-20 — SolverInput is the whole contract of model building
 

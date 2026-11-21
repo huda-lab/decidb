@@ -21,15 +21,15 @@ on `PhysicalDecide`, in call order:
 
 | Method | Phase |
 |---|---|
-| `EvaluateTree` | 1–2 — the evaluation (§1a): the tree's descent, which read each chunk as `Sink` received it (`DecideDescent`), each node's programs over its entries (`DecideTreeColumns`), and the model emitter (`DecideModelEmitter`), which writes the key scopes' classes, the clauses, the objective, the composed clauses and the helper decisions' members as stage 06 reads them |
+| `EvaluateTree` | 1–2 — the evaluation (§1a): the tree's descent, which read each chunk as `Sink` received it (`DecideDescent`), each node's programs over its entries (`DecideTreeColumns`), and the model emitter (`DecideModelEmitter`), which writes the key scopes' classes, the clauses, the objective and the helper decisions' members as stage 06 reads them |
 | `BuildSolverInput` | 3a — assembles `SolverInput`, settles the column box, builds the `VarIndexer` |
 | `FormulateModel` | 3b — derives the constants and emits the rows, against a given box |
 | `FormulateElasticModel` | 3b again, under `DIAGNOSE` only — the same pass against the widened box a repair searches |
 | `FinalizeSolveResult` | 3 — calls `SolveModel`, routes the terminal (`SOLVED`/`UNBOUNDED`/`INFEASIBLE`/`TIME_LIMIT`), and finishes `gstate` |
 
-`EvaluateTree` fills one `EvaluatedClauses`: everything read off the data that a later phase still needs. It is named
-for the phase that fills it rather than for one consumer, because it carries objective terms and composed-MIN/MAX
-*constraint* clauses alike.
+`EvaluateTree` fills one `EvaluatedClauses`: everything read off the data that a later phase still needs, here the
+filter state of the objective's terms and product groups. Nothing in it depends on a variable bound, so the formulation
+pass runs twice against two boxes from the same evaluated clauses.
 
 The blocks the emitter writes through are shared functions (`decide_value_extraction.hpp`), one copy of each rule and
 its message: grouping a clause's kept rows by its shape (`GroupRowsByShape`), skipping a group whose reducer reads no
@@ -49,7 +49,7 @@ AVG-denominator division (`ScaleAvgRows`, `ScaleAvgTerms`) and the tightest fram
 | 2b | `Finalize` → `DecideDescent::MergeAll` | Merge the threads' descents: their maps in order, their entries in parallel |
 | 3 | `Finalize` → `EvaluateTree` | Settle the containers (`DecideDescent::Finish`: ranks, timelines) |
 | 4 | `EvaluateTree` → `DecideTreeColumns` | Bottom-up: the frames' timelines and columns (§4b), the data checks, each node's programs over its entries, the data reducers' folds |
-| 5 | `EvaluateTree` → `DecideModelEmitter` | The key scopes' classes (§4), the objective produced once (§4a), then the clauses, the objective, the composed clauses and the helper decisions' members (§5) |
+| 5 | `EvaluateTree` → `DecideModelEmitter` | The key scopes' classes (§4), the objective produced once (§4a), then the clauses, the objective and the helper decisions' members (§5) |
 | 6 | `Finalize` → `BuildSolverInput` → `FormulateModel` | Assemble `SolverInput` and settle the box, then linearize against it (stage 06) |
 | 7 | `Finalize` → `FinalizeSolveResult` | `SolverModel::Build` → `SolveModel` (stage 07) |
 | 8 | `GetData` | Project solution values back onto rows |
@@ -120,9 +120,9 @@ a scan of their own.
   structural rows beneath it; the stage-06 linearizers consume the evaluated rows and links. An E's σ
   is the binder's signature of its clause; a generated NULL test is
   a member test that carries its columns and adds no σ field. A root in the grouped shape (the aggregate shape, an
-  easy or a composed extremum) with no `per` is a class of its `by` key (`language/guide.md` §6.4). A root's text is
+  easy extremum) with no `per` is a class of its `by` key (`language/guide.md` §6.4). A root's text is
   its clause as written. Stage 05 then lowers each clause into the root the tree made of its comparison, the objective
-  into its root and each composed term's and helper's terms into its G or O (`LowerDecideTree`, one IR: the records
+  into its root and each helper's terms into its G or O (`LowerDecideTree`, one IR: the records
   stage 08 reads are the ones it writes), naming on each reducer's terms the G they range over (`DecideTerm::child`);
   the solver gate reads the model class off them; then `decide_tree_compile.cpp` numbers the clause roots, finds the
   node each term is computed on, and compiles each coefficient, bound, admitted end and member test into a program over
@@ -206,11 +206,11 @@ a scan of their own.
   query: a clause with a model row per kept row, or per variant of a class of its `per K:`, the folded bounds' rows a
   repair model emits, the declared decisions' classes and a relation-qualified reducer's, the objective's linear terms,
   a clause in the aggregate shape, a `<>` clause, a row defining an auxiliary, the classes a diagnosis reports a row
-  stands for, an easy and a hard MIN or MAX, a MIN or MAX objective, a composed clause and the objective's composed
-  terms, a clause's products and squares, the objective's squares and products, a product the optimizer makes an
-  auxiliary of (a McCormick link, an AND of two BOOLEANs), a helper decision of a reducer the value rewrite lifted, a
-  frame's reads and a range over decisions' helper, and a tightest frame bound. Every query runs `EvaluateTree` and then
-  the assembly, formulation and solve (`BuildSolverInput`, `FormulateModel`, `FinalizeSolveResult`).
+  stands for, an easy MIN or MAX, a clause's products and squares, the objective's squares and products, a product the
+  optimizer makes an auxiliary of (a McCormick link, an AND of two BOOLEANs), a helper decision of a reducer the value
+  rewrite lifted, a frame's reads and a range over decisions' helper, and a tightest frame bound. Every query runs
+  `EvaluateTree` and then the assembly, formulation and solve (`BuildSolverInput`, `FormulateModel`,
+  `FinalizeSolveResult`).
 - *Bottom-up* (`decide_tree_columns.hpp`): partial evaluation, as DuckDB's executor runs a projection, with no
   expression interpreted per entry. Each node's programs run over its entries, one executor per window of 2,048 entries,
   with a per-row error capture (`DecideEvaluateWindow`), and are read through `ExtractDoubleColumn`, which raises at the first value that is not finite; the failing entry is found by reading its window entry by entry
@@ -245,11 +245,7 @@ a scan of their own.
   programs are read where the auxiliary's absence is resolved (`DecideModelEmitter::ReadAbsence`), auxiliary by
   auxiliary in index order, the bound and then the coefficients together, a window at a time (`NullEntries`), and
   again where its clause is evaluated among the clauses, which checks their numbers. A reducer's filter is read before
-  its terms: the reducer's own `when`, which the descent reads, then its member tests. A composed clause's terms are
-  read one after another, each over every row before the next, after every term's filter (`ScopeComposedTerms`): the
-  clause's `when` and each term's filter, its `when` and member tests, are read window by window. The objective's `when`
-  is read so too where its composed terms alone carry it, since the objective then has no term to read it with
-  (`LogicalDecide::retained_objective_when`), unless its scope check reads it first (D72). A value error is found by
+  its terms: the reducer's own `when`, which the descent reads, then its member tests. A value error is found by
   reading its window entry by entry.
 - *Formulation* (`decide_model_emitter.hpp`): the model emitter, an Adapter onto stage 06, writes the model's evaluated
   clauses (`PhysicalDecide::EvaluatedClauses`) and the keyed mappings through the shared blocks of
@@ -296,25 +292,14 @@ a scan of their own.
   reducer's operand, whose filter (`admitted_member`) the descent routes, so no program tests it; a row no member stands
   on emits no model row and admits every value. An admitted end is never NULL, since a
   NULL coefficient or bound admits every value (`DecideReadSingletonRow`): no row's end is marked NULL, since no query
-  reaches one, and a NULL end is an internal error. A hard MIN or MAX
-  (`minmax_clause_idx`) hands stage 06 its groups' rows, over which stage 06 builds the extremum and the outer row it
-  stamps USER_PARAMETER. A MIN or MAX over a relation's classes reads every row an entry of its operand stands for as a
-  member: stage 05 gives its terms no qualifier, since a class's repeats carry its value
-  (`ReadRows`). A MIN or MAX objective's members are the rows its terms' filters keep, which stage 06 reads. A composed
-  clause's root holds each term's G (`DecideBody::composed`), and each term is a column over its G's members, a
-  relation-qualified one's first row of each class, with its name and label (`DecideComposedTerm`). A qualified
-  term's operand is the one its scope's keyed mapping reads, as a written reducer's and a helper's are
-  (`DecideTreeBuilder::Qualified`), so a scope whose classes its values split (D70) has them. A term's factor is one
-  value for the whole query, read from one representative row retained as its input chunk arrives,
-  whatever the clause keeps (`DecideQueryWideScale`). A NULL factor or a reducer over no row skips the clause
-  (`DecideComposedTermReadsNoRow`); its one instance holds where its `when` keeps a row, the rows its root holds, and
-  under DIAGNOSE it stands for the classes of its `per K:` among those rows, through
-  `PhysicalDecide::FinishComposedClause`; the objective drops a composed term over no row. A composed
-  term's G names its clause in a message, as its root does (`DecideNode::source_clause_id`). A clause's products and
-  squares are read once its rows are grouped (`DecideModelEmitter::Polynomial`), each term on the rows its site's
-  members stand for, a relation-qualified one's first of each class, the repeats left out; their filters decide the rows
-  a group emits and the groups a reducer over no row leaves no instance, as a term's do. A product's coefficient of 1,
-  which stage 05 leaves out, reads its sign. A NULL coefficient, or a factor
+  reaches one, and a NULL end is an internal error. A MIN or MAX over a relation's classes reads every row an entry of
+  its operand stands for as a member: stage 05 gives its terms no qualifier, since a class's repeats carry its value
+  (`ReadRows`). A qualified term's operand is the one its scope's keyed mapping reads, as a written reducer's and a
+  helper's are (`DecideTreeBuilder::Qualified`), so a scope whose classes its values split (D70) has them. A clause's
+  products and squares are read once its rows are grouped (`DecideModelEmitter::Polynomial`), each term on the rows its
+  site's members stand for, a relation-qualified one's first of each class, the repeats left out; their filters decide
+  the rows a group emits and the groups a reducer over no row leaves no instance, as a term's do. A product's
+  coefficient of 1, which stage 05 leaves out, reads its sign. A NULL coefficient, or a factor
   with no instance at its row, skips the row's instance. A square's weight is a program on its site, read on each row
   its reducer reads (`DecideModelEmitter::Polynomial`), as a product's weight is. The objective's squared
   terms are read as its terms are; its products on the rows they are read on, with no row dropped for a decision with
@@ -345,7 +330,7 @@ a scan of their own.
   inherits one the same way, where the frame is built). A sigma field naming a reducer's `by` key reads it as a
   `by` key's read, which keeps the row, so the node grouping by the key raises what it raises: the G, after its
   members' rows. Each helper's members are read once, with its classes, and listed from there;
-  their coefficients are read after the composed clauses. Stage 06 then writes a helper
+  their coefficients are read after the objective. Stage 06 then writes a helper
   read once where it is read (D89). A frame's term reads its decision at the row the
   frame selects, and has no value where the frame reads nothing or the decision has no instance there
   (`DecideAbsence::TermAt`, `DecideFrameReadsAbsent`), wherever a term's absence is read: a clause's
@@ -363,7 +348,7 @@ a scan of their own.
   group takes its tightest value through `GroupBound` and `TakeTightestFrameBound`, whose `=` message names the `by` group and points at the bound
   (R15). A NULL coefficient of a reducer's member or a term beside the reducers, through a
   value the whole query shares, leaves its group no value (`ReadInReducer`, `ReadBesideReducers`). No rule leaves a row
-  out of a hard MIN's or MAX's group because all its terms' filters drop it: its terms share one reducer's members, so
+  out of a MIN or MAX helper's group because all its terms' filters drop it: its terms share one reducer's members, so
   no row the tree emits is one. A reducer's member reading an
   auxiliary with no value is a helper's member in every probe, which the helper leaves out.
   Objective terms check an auxiliary's value on each row an E entry stands
@@ -388,25 +373,20 @@ remain available. A nonlinear reducer body stays at its written site with a tagg
 lowering wires that read to the child F value, and term splitting uses the reserved helper column where
 optimizer-owned MIN/MAX forms need it. Tree construction owns the definition E row. Its early preparation reserves
 plan-time indices and registers F-node specs before later optimizer consumers need them.
-
 **What the emitter reads.** A node's body is its compiled term records (`DecideBody`, `DecideTerm`,
 `DecideTermSite`); the tree holds no second form of a clause. The E emitter takes a clause's comparison from the
 clause, its right-hand side from the body's RHS program, and each term's variable and coefficient program from the
-term and its site. A flat MIN/MAX objective keeps its reducer and its ease on the operator (`flat_objective_agg`,
-`flat_objective_is_easy`); assembly passes them, with the objective's sense, to stage 06's MIN/MAX objective spec. A
-composed MIN/MAX E node holds its comparison and bound expression, and its body holds, for each reducer reference, the
-G node and a `DecideComposedSpec` (sign, ease, query-wide scale); the G's `aggregate` names the reducer. Evaluation
-gets term order, scales, scope, source identity and labels from the E/G nodes, and stage 06 gets source and removal
-groups from the evaluated E clause. The G/O emitter walks nodes in children-first order and builds stage 06's member
-formulas from their term records, node-owned helper direction, qualification scope and labels. Multi-member MIN/MAX
-results keep value columns, while SUM/AVG formulas can expand into their parent expressions; a singleton MIN/MAX group
-remains a direct member read, as on deck p. 112. F output links and Boolean-product factors are the F node's own
-fields (`value_var`, `product_bool_var`, `product_other_var`). The numeric model path lowers formulas into solver
-rows.
+term and its site. Evaluation gets term order, scales, scope, source identity and labels from the E/G nodes, and stage
+06 gets source and removal groups from the evaluated E clause. The G/O emitter walks nodes in children-first order and
+builds stage 06's member formulas from their term records, node-owned helper direction, qualification scope and labels.
+Multi-member MIN/MAX results keep value columns, while SUM/AVG formulas can expand into their parent expressions; a
+singleton MIN/MAX group remains a direct member read, as on deck p. 112. F output links and Boolean-product factors are
+the F node's own fields (`value_var`, `product_bool_var`, `product_other_var`). The numeric model path lowers formulas
+into solver rows.
 
 **Departure from the deck: formulation is stage 06's.** The deck formulates node by
 node (pp. 111-119); here the emitter hands stage 06 one record per row and per value link, and stage 06
-(`InlineReducerValueLinks`, `EmitExtremumLink`, `LinearizeMinMaxConstraints`) writes the rows. The reason is D89:
+(`InlineReducerValueLinks`, `EmitExtremumLink`) writes the rows. The reason is D89:
 whether a helper is written into its readers depends on every reader and on the implied bounds, so no single node can
 decide it. The models are the deck's: SUM inside SUM is the three rows of p. 119 over the six declared columns,
 MAX inside SUM the three rows and four envelope rows of p. 115 (`test_anr_nested.py` pins both), the frame the four
@@ -582,11 +562,11 @@ excluded rows, since the derived bound is shared across all of a variable's rows
 
 ## 3. The lowered terms
 
-Execution does **not** flatten expressions. Each clause, the objective, each composed term and each helper's reducer
+Execution does **not** flatten expressions. Each clause, the objective and each helper's reducer
 arrives in the tree node that holds it already decomposed into additive terms by `LowerDecideTree` (stage 05,
 `src/optimizer/decide/decide_linear_form.cpp`), which writes them into the tree under construction at physical
 planning: a clause's `DecideConstraint` into its root's `DecideBody::clause`, the objective's into the objective
-root's, a composed term's and a helper's members into its G or O (`DecideBody::members`, `fallback`), and the frame
+root's, a helper's members into its G or O (`DecideBody::members`, `fallback`), and the frame
 columns the terms read into `DecideTree::frame_reads`. The tree reads them where they lie: `DecideTree::Constraints()`
 by `clause_index`, `DecideTree::Objective()`.
 
@@ -598,7 +578,7 @@ type, the clause's scope (`DecideClauseScope`: `when`, `per`, `class_key`), its 
 linking it to indicators and diagnosis provenance. The
 objective arrives the same way, with its `when`, each AVG term's `avg_group_key` (an index into the key table, set
 for a nested AVG read in place), and `product_groups` alongside `terms`.
-A composed MIN/MAX term's G holds its inner terms, so no construct is left re-deriving its own.
+A helper's G holds its member terms, so no construct is left re-deriving its own.
 
 **What this stage does with it.** Evaluates the coefficient expressions against the
 materialized rows (PHASE 2), and nothing else. Which variable a term names and what
@@ -679,7 +659,6 @@ the NULL as SQL does -- `coalesce(at(previous: t.d) over (...), 1)` is 1 there -
 comparison skips it (deck p. 56). A frame over decisions is its payload's terms, each read at the selected row
 (`DecideAbsence::At`): where the frame has no value, or the decision has none at the selected row, the term
 reads an instance with no value, as below.
-
 **No value is one rule** (literal plan §6.3; D67, D68, D84, D87, D88, D90): `DecideAbsence`
 (`decide_absence.hpp`) holds its table, from a read up and never down -- a keyed decision's row in no class, a helper's
 group with no member, an auxiliary whose definition reads a decision with none, a product either of whose factors has
@@ -692,9 +671,13 @@ indicator, a product -- has none where the rows defining it (`DecideConstraint::
 stage 05 reads; a product's factors) read an instance with none (`DecideGlobalSinkState::absent_reads`). The model
 emitter (`ReadAbsence`) resolves both in the order the definitions read each other -- a helper's members may read an
 auxiliary whose definition reads a helper made after it -- whatever order the rewrites numbered them in. Every reader
-reads that one mark: a comparison skips the instance, a helper drops the member, the objective drops the term. A row a
-rewrite added to define an auxiliary (`ConstraintKind::STRUCTURAL`) is no instance of the clause: it is skipped where
-its own reads have no value, and the auxiliary with it.
+reads that one mark: a comparison skips the instance, a helper drops the member, the objective drops the term. A term's
+own read is one check, `DecideAbsentReads` (`decide_absence.hpp`), built over the terms a clause reads that may read
+none and asked per row: whether the term stands in a row (`Rows`), beside a reducer (`ReadBesideReducers`), in a
+product's part (`ReadPart`) or in a reducer (`ReadInReducer`). The evaluation of a folded bound on a helper no row holds
+a member of asks it too, so a lone `max(when val > 100: x) >= 5` over no matching row warns that it constrains nothing,
+as the SUM form does. A row a rewrite added to define an auxiliary (`ConstraintKind::STRUCTURAL`) is no instance of the
+clause: it is skipped where its own reads have no value, and the auxiliary with it.
 
 A frame field of a signature (D82, deck p. 99) splits by the frame's keys (`DecideDescent::Signature`): the anchor's
 peer on its timeline when it reads relative to the anchor, else its timeline, and where the anchor reaches the `else`
@@ -790,9 +773,7 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
 - **Kept rows first.** Its `when` is read before anything else, on every row, in one scan
   (`DecideDescent::Gate`), each window reading the parts of an AND or an OR left to right,
   each only on the rows the earlier parts leave undecided -- an AND's on the rows they keep,
-  an OR's on the rows they do not (the composed rewrite folds the clause's `when` in front
-  of a term's own).
-  Anything else, `not` included, is computed whole. Nothing is then
+  an OR's on the rows they do not. Anything else, `not` included, is computed whole. Nothing is then
   computed on a row the `when` drops: a reducer's own `when` is read on the kept rows,
   a term's coefficient on the kept rows its own `when` keeps, a bound, a `by` key and a
   class key on the kept rows: the descent passes on only the rows that reach a node, and
@@ -802,10 +783,9 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   (`keys[constraint->group_key]`), a NULL written key in no group: a group's members are the rows a
   reducer's `when` keeps (all kept rows for `<>`, whose bound values are all excluded),
   its bound the tightest over all its kept rows. A row the reducer's own `per`
-  de-duplication drops leaves the group when the clause is a hard MIN/MAX
-  (`minmax_agg_type`): the members are the rows the reducer reads, and a zeroed row
-  would be a member pinned at 0. The rows shape under `per K:` emits one row per class,
-  at its first kept row; under `when` alone, one per kept row.
+  de-duplication drops leaves the group when the reducer is a MIN or MAX (a helper's group): the members are the rows
+  the reducer reads, and a zeroed row would be a member pinned at 0. The rows shape under `per K:` emits one row per
+  class, at its first kept row; under `when` alone, one per kept row.
 - **Bound-side reducers** never reach execution: the bound-side rewrite
   (`RewriteRhsAggregates`, stage 05) made each a column of the source, a side table
   DuckDB evaluates over its own `by` groups of the kept rows, and reduced the bound of an
@@ -817,24 +797,17 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   term's filter, so reading, de-duplication and AVG denominators all follow it. A
   decision outside the reducers (`NONE`) keeps its coefficient on the first kept row only
   (`CountTupleTermsOnce`, over `CountOnce`), and so does a product of two query-wide decisions there (one inside a
-  reducer is SUM and keeps every row). `CountOnce` is the one place a term is counted
-  once, in the objective and in each group's row of an aggregate clause; stage 06 sums every
-  row. A flat MIN/MAX
-  that reads no row is dropped in formulation (D68).
-- **Composed clauses** read the rows their folded filter keeps and de-duplicate among
-  them. A clause in which some term reads no row is skipped, and an objective term that
-  reads none is dropped (D68). Each takes its repair id here, after every prepared
-  and absorbed clause (`ComposedConstraint::repair_group_id`), since formulation drops rows
-  (a `<>` moved into indicator rows) and no count of the model's rows is the id space.
+  reducer is SUM and keeps every row). `CountOnce` is the one place a term is counted once, in the objective and in
+  each group's row of an aggregate clause; stage 06 sums every row.
 - **Classes of a grouped row** (D28, `DecideGroupClassSets`, under DIAGNOSE only). The rows of a clause over `by` groups
-  -- an aggregate-shape group row, an easy MIN/MAX's member rows, a composed clause's one row -- stand for every class
-  of its `per` key in their group: with `per K:` in front (`scope.per = NAMES_CLASSES`, `class_key`) the key's values
-  among the group's kept rows (in key-value order); with no `per` (`NONE`) every kept row of the group; `per ()` the
-  whole clause (one `WHOLE_CLAUSE` set its groups share). A per-row clause under `per K:` (`ONE_ROW_PER_CLASS`) calls it
-  with its classes as the groups, so each class's row gets a set naming that class. One `SolverInput::ClassSet` per
-  group with kept rows, its `Kind` saying which, referenced from `EvaluatedConstraint::group_class_set` (a composed
-  clause's from its evaluated `class_set`, over the rows its `when` keeps); the model keeps the table and an expanded
-  diagnosis reports the group once per class (`FanOutByClass`).
+  -- an aggregate-shape group row (one that reads a MIN/MAX helper among them) and an easy MIN/MAX's member rows --
+  stand for every class of its `per` key in their group: with `per K:` in front (`scope.per = NAMES_CLASSES`,
+  `class_key`) the key's values among the group's kept rows (in key-value order); with no `per` (`NONE`) every kept row
+  of the group; `per ()` the whole clause (one `WHOLE_CLAUSE` set its groups share). A per-row clause under `per K:`
+  (`ONE_ROW_PER_CLASS`) calls it with its classes as the groups, so each class's row gets a set naming that class. One
+  `SolverInput::ClassSet` per group with kept rows, its `Kind` saying which, referenced from
+  `EvaluatedConstraint::group_class_set`; the model keeps the table and an expanded diagnosis reports the group once per
+  class (`FanOutByClass`).
 - **Helper decisions** (the value rewrite, `DecideModelEmitter::ValueLinks`): each link's
   reducer is read on the rows its path keeps and its own `when` keeps among them, less a
   row in no class of its own `per` (a NULL written key, D5) and a
@@ -990,10 +963,9 @@ Term-level filters are carried on individual terms, not on the whole constraint:
    -- in the aggregate shape every group of its kept rows by its key, from the key's
    cached grouping, whether or not a reducer reads a row of it; under a `per K:` that names classes, the groups a
    class's kept rows reach, plus one for each class whose rows reach none (a NULL `by` key), which has no value -- and
-   those left after `DecideAbsence::SkipNullInstances`, the most any of its rows holds (`ClauseInstances`). A composed
-   clause is one instance where its `when` keeps a row. `ReportSkippedInstances` turns the
-   counts into an EXPLAIN ANALYZE line under the clause and, for a clause left with none,
-   a warning on stderr; `ReportAnEmptyObjective` reads the formulated objective (its linear,
+   those left after `DecideAbsence::SkipNullInstances`, the most any of its rows holds (`ClauseInstances`).
+   `ReportSkippedInstances` turns the counts into an EXPLAIN ANALYZE line under the clause and, for a clause left with
+   none, a warning on stderr; `ReportAnEmptyObjective` reads the formulated objective (its linear,
    squared, bilinear and global coefficients) once the solved model is formulated.
 
 So one clause can carry independent filters:
@@ -1019,7 +991,7 @@ De-duplication runs **inside** each `by` group, after the clause's `when`, the r
 own `when` and the grouping. Group ids are dense in `[0, num_groups)` and class ids in
 `[0, num_classes)`, so `(group, class)` flattens into one dense index with no hashing.
 The mask is folded into the term's filter, so AVG's
-denominator counts classes. For a hard MIN/MAX, a row the de-duplication drops leaves the
+denominator counts classes. For a MIN or MAX helper, a row the de-duplication drops leaves the
 group (§4a).
 
 ### AVG scaling
@@ -1138,9 +1110,8 @@ only where a solve is about to run ([`../07_solver/done.md`](../07_solver/done.m
 
 **Only two constructs choose between two emitters.** `<>` does not choose: it is emitted once, as conditional rows, and
 `LowerDecideConstructs` turns those into Big-M rows where the backend cannot state a
-condition. Every MIN/MAX — a constraint, a flat objective, a composed term and a MIN/MAX
-helper of the value rewrite, a nested reducer's among them — goes through one
-`EmitExtremumLink`, which makes the choice once for all of them. What is left is ABS,
+condition. Every MIN/MAX — a constraint's, the objective's and a nested reducer's — is a helper of the value rewrite and
+goes through one `EmitExtremumLink`, which makes the choice once for all of them. What is left is ABS,
 where the two formulations are genuinely different objects rather than projections of
 one description: see [`../06_model_formulation/done.md`](../06_model_formulation/done.md)
 §9a and [`../07_solver/done.md`](../07_solver/done.md) §2.
@@ -1187,11 +1158,9 @@ and stage 07 ([`../07_solver/done.md`](../07_solver/done.md)). The hand-off happ
 early: `solver_input.constraints` is populated as soon as bounds are resolved, and
 the linearization passes then work on it in place.
 
-The MIN/MAX objective and the composed MIN/MAX clauses are
-emitted by stage 06, not here. What stays is the evaluation they need — a composed
-term's per-row coefficients, the query-wide factor on a reducer, its filter mask,
-the constant RHS, and the objective's member rows. The evaluated terms travel to stage 06 as
-`ComposedMinMaxTermData`; the objective's shape travels as `MinMaxObjectiveSpec`.
+A MIN or MAX is a helper decision, and stage 06 emits its extremum link, not this stage. What stays here is the
+evaluation the link needs: each helper's members per group, which travel to stage 06 as `ReducerValueLinkSpec`, and the
+clause or objective that reads the helper's column.
 
 ### Assembly and formulation are separate passes
 
@@ -1206,10 +1175,9 @@ runs before it, at the end of the evaluation (`ScaleObjectiveAvg`). It runs
 exactly once per query, because it is the pass that consumes `gstate`.
 
 `FormulateModel` **formulates**, against a `FormulationBox` handed to it: the auto-`M`
-refill for L0 links, the ABS / MIN/MAX / `<>` / bilinear linearizers, the MIN/MAX and
-composed-MIN/MAX encodings, and finally `LowerDecideConstructs` for whatever the
-chosen backend cannot state natively. It touches no `ClientContext`, scans no data,
-and evaluates no expression — it is a pure function of the evaluated clauses plus a
+refill for L0 links, the ABS / `<>` / bilinear linearizers, the helpers' definitions (every MIN/MAX's extremum link
+among them), and finally `LowerDecideConstructs` for whatever the chosen backend cannot state natively. It touches no
+`ClientContext`, scans no data, and evaluates no expression — it is a pure function of the evaluated clauses plus a
 box.
 
 That purity is the point. A Big-M or a McCormick envelope is sound only for the box

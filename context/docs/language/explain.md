@@ -49,8 +49,8 @@ reverses each term's sign and keeps its factor), so the flip of a `MAXIMIZE` obj
 
 EXPLAIN shows the model that was built, not only the query: the rows linearization emitted are part of the picture.
 An auxiliary column prints as the expression it stands for (`abs(ship - 20)`, `(open * ship)`, `max(ship)`,
-`sum(ship) by (D.region) <> 20`), never by its internal name. The labels live in `aux_var_expressions`,
-`minmax_clause_labels` and `ne_clause_labels`.
+`sum(ship) by (D.region) <> 20`), never by its internal name. The labels live in `aux_var_expressions`
+and `ne_clause_labels`.
 
 ## Rendering
 
@@ -119,7 +119,7 @@ carries it down through one helper, `DescendSourceAlias` (with `MarkFormulationC
 attach to a non-clause alias. The mapping can be:
 
 - one clause → many rows (a linearized clause);
-- one clause → no rows (`IN` and composed `MIN`/`MAX` are lifted out of the tree and leave a `TRUE` placeholder
+- one clause → no rows (`IN` is lifted out of the tree and leaves a `TRUE` placeholder
   stamped with the clause id by `MakeTrueExpression`, printed as nothing; its account line says what happened);
 - a row for the objective (`OBJECTIVE_ROW_TAG`);
 - a row with no clause, printed under `added by formulation:`. Nothing reaches this today; it makes a rewrite that

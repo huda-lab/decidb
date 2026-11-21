@@ -5,18 +5,18 @@ Language-surface work is owned by `../../language/` (the scopes:
 `../../language/errors.md`, and the scope suites in
 `../../testing/scope_suite.md`.
 
-## BIND-6 — Query-wide body refusal for a norm and a range frame
+## BIND-6 — A norm and a range frame refuse a query-wide body as any reducer does
 
-- **Decision needed (owner).** A reducer whose body is query-wide decisions only (`sum(y)` over a query-wide `y`) is
-  refused at every position: its two readings (1 or `n` times `y`) are different problems (guide §2). Does that refusal
-  cover a `norm` and a range frame's reducer?
-- **Problem.** Both solve today and are tested (`norm(d - 1, 0)` over a query-wide `d`; a range frame over a
-  query-wide payload). `BindAggregate` exempts a norm marker and `binding_frame_range`.
-- **Options.**
-  1. No exemptions: both are refused like `sum(y)`, since once and once per row are different problems for them too,
-     and their tests become refusals.
-  2. Keep the exemptions: a norm counts rows by definition and a range frame reduces its frame's rows.
-- **Recommendation.** 1, one rule with no case list.
-- **Done when.** The owner has ruled. Under 1, `norm(d - 1, 0)` and a range frame over a query-wide payload raise the
-  query-wide-body refusal, the two exemptions leave `BindAggregate`, the guide §2 sentence naming them goes, and the
-  tests that solved them expect the refusal. Under 2, the task is deleted.
+- **Problem.** A reducer whose body is query-wide decisions only (`sum(y)` over a query-wide `y`) is refused at every
+  position: its two readings (1 or `n` times `y`) are different problems (guide §2). `BindAggregate`
+  (`decide_binder.cpp`) exempts a norm marker and a range frame's reducer (`binding_frame_range`), so both solve:
+  `norm(d - 1, 0) <= 0` over a `per ()` `d` counts `n · [d ≠ 1]` (`test_norm.py`,
+  `norm-l0-query-wide-is-one-indicator`), and a range frame over a query-wide payload reduces it once per frame row.
+- **Ruling (owner, 2026-11-21).** No exemptions: a norm and a range frame's reducer over a query-wide body are refused
+  like `sum(y)`, since once and once per row are different problems for them too. One rule with no case list.
+- **Change.** The two exemptions leave the query-wide-body check in `BindAggregate`. A keyed body (`per k: d`) is not
+  query-wide and stays accepted.
+- **Done when.** `norm(d - 1, 0) <= 0` and a range frame over a query-wide payload raise *"'d' is a query-wide
+  decision, so '…' has no rows to reduce"* (Binder) at the reducer; the tests that solved them become refusal tests;
+  guide §2's sentence naming the exemptions and errors.md's clause go; `./test/decide/run_tests.sh -n 2 -k "norm or
+  frame or binder"` passes.

@@ -83,7 +83,7 @@ form `PlanSubqueries` produces. Both facts pin it to this point.
 The pass **never multiplies out a term**. It decomposes each side additively
 and asks one question of each resulting term — "does it reference a decision
 variable?" — then moves terms across the relation. A quadratic `POWER(x-t,2)`, a
-composed `MAX(x*v)` and a filtered `sum(when c: x)` are all just decision-bearing
+`MAX(x*v)` and a filtered `sum(when c: x)` are all just decision-bearing
 terms here, indistinguishable from `x`. Two looks inside a term are identities that hold for every body, so
 neither can decline: a `MIN` or `MAX` handing its constant addends to the side (§3.3), and the respelling of a
 product's factors (§3.3b), which opens none of them.
@@ -447,11 +447,10 @@ or a subquery is not summable and its atom is not merged.
 
 **Negation is a term's sign.** `-max(e) <= -cap` is emitted as written, a term of sign
 `-`; `-(2 * max(e))` is the term `max(e)` with sign `-` and factor `2`; and a term written
-with signs around it, `-(-max(e))`, is the bare term (`IsSignedSpine`). The MIN/MAX rewrite
-reads a term's direction as the comparison's times the term's sign times its factor's sign,
-as `WalkComposedLhs` does, so `-max(e)` and `-1 * max(e)` build one model. Whether a factor's
-sign is known before the query runs is `ScaleSignAtPlanTime` (`decide_cast_policy`), which
-this stage and the MIN/MAX rewrite share.
+with signs around it, `-(-max(e))`, is the bare term (`IsSignedSpine`). The MIN/MAX rewrite and the value rewrite read
+a term's direction as the comparison's times the term's sign times its factor's sign (`MatchLoneSignedExtremum`,
+`CollectReducerSites`), so `-max(e)` and `-1 * max(e)` build one model. Whether a factor's sign is known before the
+query runs is `ScaleSignAtPlanTime` (`decide_cast_policy`), which this stage and the MIN/MAX rewrite share.
 
 **Composition reassociates, and that is accepted.** `(SUM(x) / 2) / 3` emits
 `SUM(x) / (2 * 3)`, which in double arithmetic is not bit-identical to dividing
@@ -538,10 +537,7 @@ Two consequences:
   assigns, so the constant peeled from what the user wrote survives every later
   rewrite. `VerifyCanonicalObjective` asserts that re-canonicalizing a canonical
   objective peels *nothing*, which is what makes double-counting detectable.
-- **A decision-free objective is legal and returned unchanged.**
-  `RewriteComposedMinMaxObjectiveTop` installs one when the composed objective has no
-  term beside its reducers, and supplies their coefficients from
-  `composed_minmax_objective_terms`.
+- **A decision-free objective is returned unchanged.** The binder refuses one before it reaches this stage.
 
 Because objectives are canonicalized, `TryMatchScaledAggregate` needs no
 escape for `AGG * factor`: every consumer sees `factor * AGG` or `AGG / factor`.
@@ -573,14 +569,10 @@ common multiple of the counts, which is data, and widens the Big-M of the `<>`
 disjunction. A query-wide decision
 beside a reducer whose body multiplies decisions (`s + sum(b * x)`, `sum(power(x, 2)) +
 s`) stays AGGREGATE: the quadratic builder counts it once per grouped row, as the linear
-one does (stage 06). A clause
-that takes the composed MIN/MAX formulation (`TakesComposedMinMax`: a MIN or MAX over
-decisions beside another term, or alone under a factor whose sign is not known before
-the query runs) is AGGREGATE only with no `by`, a constant bound and no decision beside
-it — that formulation is one row over all of the clause's kept rows under one bound;
-otherwise it is VALUE, where each extremum is pinned per group. `PeelScale` lets a
-row-varying factor, or a `BOOL` decision, stay on a reducer as its scale (the comparison is then
-VALUE); any other decision is refused (§3.7). Refusals quote the query through
+one does (stage 06). A MIN or MAX beside another term, or under a factor whose sign is not known before the query
+runs, does not change the shape: the clause is AGGREGATE or VALUE by the rows above, and the extremum becomes a helper
+decision in either (stage 05). `PeelScale` lets a row-varying factor, or a `BOOL` decision, stay on a reducer as its
+scale (the comparison is then VALUE); any other decision is refused (§3.7). Refusals quote the query through
 `QuoteMessagesWith`: every column as written, a reducer with its
 scopes and `by`. `ClassifyCanonicalComparison` maps the shape onto
 `CanonicalConstraintClass` (`ROWS` is `PER_ROW`; `UNSUPPORTED`, or a decision on the
@@ -713,8 +705,8 @@ tags.
 They throw `InternalException`: past this boundary a non-canonical tree is an
 engine bug, not user input. Unsupported user syntax has already failed earlier,
 through binder/planning validation, or fails in the shape check (§3.11), which runs before verification.
-Non-comparison leaves stay legal so the optimizer's `TRUE` placeholders for extracted composed MIN/MAX constraints
-satisfy C0.
+Non-comparison leaves stay legal so the optimizer's `TRUE` placeholders for the clauses it lifts out (an `IN`
+clause) and for a helper's definition row satisfy C0.
 
 Verification runs at three points: immediately after user canonicalization, on
 each freshly canonicalized subtree entering `AddConstraint` / `SetObjective`, and

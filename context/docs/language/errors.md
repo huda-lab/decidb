@@ -140,8 +140,6 @@ where the message names a clause or a node the user wrote.
 | A comparison that reads no decision (`v <= 5`, `SUM(t.v) + 1 <= 500`, `abs(v) <= 5`), or an objective whose body reads none (`1 + 2`, `sum(v) + 1`) | Binder | `'v <= 5' reads no decision` | the comparison, or the objective body |
 | `AVG` under `<>` beside another term, or with its own `when` or `per` | NI | `AVG in a <> constraint beside another term, or with its own when or per, is not supported` | the comparison |
 | `<>` over a square or product of decisions not linearized first (a product with a `BOOL` is) | NI | `<> over a product or a power of decisions is not supported` | the comparison |
-| `<>` on a `MIN` or `MAX` | NI | `<> on MIN or MAX is not supported` | the comparison |
-| A term beside a `MIN` or `MAX` in a shape the rewrite does not read, or a comparison operator on a composed `MIN` or `MAX` | NI | `'q' beside MIN or MAX is not supported` · `'<>' on a composed MIN or MAX is not supported` | the term, the comparison |
 | **D80** A square or product of decisions inside nested reducers that no body definition names | Binder | `'q' squares or multiplies decisions inside nested reducers, which is not allowed` | the reducer |
 | A square, or a product of two decisions, outside a reducer in the objective, unless the two are distinct query-wide decisions or one is `BOOL` | NI | `'x * y' multiplies decisions outside a reducer, which is not supported` | the product |
 | **D80** A square or product of decisions in a frame's payload or `else` (`x * x`, `power(x, 2)`, `x ** 2`) | Binder | `'x * x' squares or multiplies decisions inside a frame, which is not allowed` | the inner node |
@@ -179,11 +177,10 @@ input depends on the scan.
 
 | Situation | Kind | Message | Caret at |
 |---|---|---|---|
-| A NaN in the data, an infinite coefficient, or an infinite value under `ABS`, `MIN` or `MAX` | Invalid Input | `'v' is NaN or infinite on some rows` | the column or expression as written, or the nearest located expression above a value DeciDB built |
+| A NaN in the data, an infinite coefficient (a factor on an aggregate that divides by zero included), or an infinite value under `ABS`, `MIN` or `MAX` | Invalid Input | `'v' is NaN or infinite on some rows` (`'1 / (SELECT 0)' is NaN or infinite on some rows`) | the column or expression as written, or the nearest located expression above a value DeciDB built |
 | A bound that is NaN on some rows | Invalid Input | `the bound 'v' is NaN on some rows` | the bound |
 | A constant coefficient that SQL computes as NaN or infinite (`x / 0`, `2e308`, `'Infinity'`) | Invalid Input | `'1 / 0' is NaN or infinite` | the constant |
 | A number past a DOUBLE that DeciDB derives across rows (`SUM(b*x)` over rows of one keyed decision, `POWER(b*x, 2)`, a bound or range DeciDB computes from the decisions' bounds) | Invalid Input | `the constraint computes a number too large for a DOUBLE` (`the objective …`) | the clause |
-| A factor on an aggregate that evaluates to 0 where DeciDB divides by it | Invalid Input | `'q' divides by zero` | the divisor |
 | An `=` bound that takes two values in a `by` group | Invalid Input | `the = bound 'cap' takes two values (5 and 7) in the group category = 'Food'` (a bound over the whole query names no group) | the bound |
 | The objective takes two values or instances over its kept rows | Invalid Input | `'D.capacity' takes more than one value over the kept rows (20, 40), so the objective would be produced more than once` (below) | the field, the key element, the declaration or the frame |
 | A range frame reading more values than `decide_frame_limit` | Invalid Input | `the frame reads more than 4 values over its ranges, above decide_frame_limit (4)` | the frame |

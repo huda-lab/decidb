@@ -19,12 +19,7 @@ files.
   `ABS_NEEDS_BIGM_TAG` go. The pattern is an inherited attribute read after the shared helpers have joined their
   readers.
 - **Ruling (owner, 2026-11-21).** This design, not a flag OR-ed inside `Helpers::Find`, which leaves definitions open.
-  It lands after OPT-25: until then a hard single MIN/MAX term reaches `RewriteAbs` as a tagged `SUM`
-  (`EmitHardMinMaxClause`) and a flat MIN/MAX objective as a `SUM` with its extremum in `flat_objective_agg`, so a
-  walk from the owners would read them as sums and give a hard extremum's members the cheap encoding. After OPT-25
-  every MIN/MAX is a value link whose sides record its readers' push. The wrong answer stays open until then
-  (`../../issues/bugs.md`).
-- **Needs.** OPT-25.
+  The wrong answer is listed in `../../issues/bugs.md`.
 - **Done when.** The clause-order pair, in both orders, agrees with the oracle (infeasible); `./test/decide/run_tests.sh
   -n 2 -k "abs"` passes, and with `DECIDB_FORCE_SOLVER=highs`.
 
@@ -38,38 +33,8 @@ files.
 - **Change.** A square of a linear expression outside a reducer becomes a quadratic objective term, as `sum(power(x -
   3, 2))` is: a reducer inside it becomes a helper (the value route), and the solver checks judge convexity and the
   installation as for any quadratic objective.
-- **Needs.** OPT-25.
 - **Done when.** Both examples agree with the oracle on Gurobi and HiGHS (continuous); `./test/decide/run_tests.sh -n
   2 -k "quadratic or objective"` passes.
-
-## OPT-25 — MIN/MAX over decisions takes one route
-
-- **Problem.** One MIN/MAX shape reaches the model by up to three routes, chosen by details of the clause: `sum + max <=
-  K` is composed or value by whether the bound is a literal, has a `by` or has a decision beside it
-  (`decide_canonicalizer.cpp`); a lone term with a factor of unknown sign, by its bound; an objective MIN/MAX is flat
-  without a factor and composed with one (`MAXIMIZE max(b*x)` builds 14 rows, `MAXIMIZE 2 * max(b*x)` 26); beside a SUM
-  it is composed unless under a function, a decision or a nest; the hard single term has its own path; `max(e) = K` is
-  split across the easy and hard routes; the easy/hard classification is read twice (`IsCheapLoneExtremum`).
-- **Change.** The deck's step-5 rule: a MIN or MAX over decisions is a helper with one-sided defining rows, chosen by
-  the direction its reader pushes it (an epigraph auxiliary, Plaisted–Greenbaum). `RewriteScopedReducers` replaces every
-  MIN/MAX site with a helper, in every clause shape and in the objective; SUM and AVG stay in place in an aggregate row
-  and become helpers in a VALUE-shape clause as today. The canonicalizer's escalation to VALUE and `TakesComposedMinMax`
-  go, with the composed and flat routes: `decide_rewrite_minmax.cpp` but the easy branch, `linearization_minmax.cpp`'s
-  composed and hard emitters, `LogicalDecide`'s composed vectors and `flat_objective_*`, `minmax_clause_labels`, the
-  tree's composed and flat roots, the model emitter's `Composed`, and the composed loops of the other passes.
-  `EmitExtremumLink` keeps one caller. Re-measure the lines (the first count, about 700, predates the review's estimate
-  of more than 1,000).
-- **The one exception.** The easy identity `max(e) <= K` (every member `e <= K`; `=` splits into `<=` and `>=` as
-  BETWEEN does) stays a stage-04 rewrite to a per-member clause, which folding takes into the bounds (D41). It is an
-  identity applied before routing, not a route: on the helper, `max(b*x) <= 8` over 12 rows costs one variable and 13
-  rows where it costs none, and leaves `x` its wider bounds.
-- **Rulings (owner, 2026-11-21).** This design; the hard single term and the flat objective are part of
-  it; `<>` on MIN/MAX is accepted on the helper, with oracle tests; the hard term's widening of the family for repair
-  advice is not carried over unless a DIAGNOSE test shows the advice get worse, which goes to the owner.
-- **Benchmark.** Against Gurobi, before and after: `benchmark/decide/queries/q4_minmax_nested.sql`,
-  `q9_maximize_max.sql`, and the repro scaled up (`context/opa_rewrite/tools/ab_bench.py` holds no MIN/MAX workload).
-- **Done when.** `grep -rn "composed" src` finds no route; `./test/decide/run_tests.sh -n 2 -k "minmax or max or
-  objective"` passes, and with `DECIDB_FORCE_SOLVER=highs`.
 
 ## OPT-27 — ABS is lowered in one place
 
@@ -85,8 +50,8 @@ files.
 
 ## OPT-28 — Stage 05's passes share one enumerator and one polarity walker
 
-- **Problem.** Stage 05 is 19 ordered passes over one tree and six side containers: 16 loops over side vectors, three
-  polarity walkers (`WalkPolarity`, `CollectReducerSites`, `WalkComposedLhs`), two `ReadAffine`.
+- **Problem.** Stage 05 is 19 ordered passes over one tree and six side containers: 16 loops over side vectors, two
+  polarity walkers (`WalkPolarity`, `CollectReducerSites`), two `ReadAffine`.
 - **Change.** `LogicalDecide::EnumerateBodies(callback(DecideBody&))`, where a body carries its expression, push, rows,
   source alias and scope, with one fixed case per container, as DuckDB's `LogicalOperatorVisitor::EnumerateExpressions`
   has one per operator; every pass that walks bodies uses it. `CollectReducerSites` folds onto `WalkPolarity`.
@@ -94,7 +59,6 @@ files.
 - **Rulings (owner, 2026-11-21).** A BOOL decision factor counts as non-negative in every reader of a push (it is 0 or
   1); today `CollectReducerSites` counts it non-negative and `WalkPolarity` unknown. The splitter replaces bilinear's
   `ReadAffine`.
-- **Needs.** OPT-25 (it deletes `WalkComposedLhs`).
 - **Done when.** `./test/decide/run_tests.sh -n 2 -k "rewrite or polarity or minmax"` passes.
 
 ## OPT-29 — No rewrite pass reruns without a cause

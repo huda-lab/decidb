@@ -12,12 +12,9 @@ the owner rules first.
 
 # Phase 3 — Each shape and formulation has one owner
 
-## 3.0 Owner decisions
-- [ ] BIND-6 Query-wide body refusal for norm and range frames (decision) — pipeline/02_binder/todo.md § BIND-6
-
 ## 3.2 One route per shape in stage 05 (one lane)
-- [ ] OPT-25 MIN/MAX over decisions takes one route — pipeline/05_optimizer/todo.md § OPT-25
 - [ ] OPT-30 A shared ABS takes its first reader's encoding (wrong answer) — pipeline/05_optimizer/todo.md § OPT-30
+- [ ] EXEC-24 A folded bound over a decision with no instance warns — pipeline/08_execution/todo.md § EXEC-24
 - [ ] OPT-27 ABS is lowered in one place — pipeline/05_optimizer/todo.md § OPT-27 (needs: OPT-30)
 - [ ] OPT-28 One enumerator and one polarity walker — pipeline/05_optimizer/todo.md § OPT-28
 - [ ] OPT-29 No rewrite pass reruns without a cause — pipeline/05_optimizer/todo.md § OPT-29
@@ -26,6 +23,7 @@ the owner rules first.
 - [ ] FORM-8 One record per kind of model row — pipeline/06_model_formulation/todo.md § FORM-8
 
 ## 3.4 Gaps filed in Phase 3 (needs: 3.2) (one lane)
+- [ ] BIND-6 A norm and a range frame refuse a query-wide body — pipeline/02_binder/todo.md § BIND-6
 - [ ] OPT-31 A square outside a reducer in the objective — pipeline/05_optimizer/todo.md § OPT-31
 - [ ] CANON-1 A SUM or AVG keeps its data addend where its route puts it — pipeline/04_canonicalizer/todo.md § CANON-1
 

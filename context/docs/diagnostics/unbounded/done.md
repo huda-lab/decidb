@@ -208,7 +208,7 @@ tested). Column names are resolved at physical-plan time (`plan_decide.cpp`) in 
 passes, both keyed to chunk indices that survive column pruning. First, names are
 harvested from the DECIDE clause's own `BoundReferenceExpression`s: the constraints and
 the objective (their `when` conditions and `per` keys included), every `by` key, the
-scope checks, composed MIN/MAX terms and helper-decision links. A declaration's key
+scope checks and helper-decision links. A declaration's key
 columns are not harvested — they carry a synthetic placeholder name — and get a name
 only from a clause that reads them or from the back-fill. Second, any still-unnamed slot is
 **back-filled from the names the binder resolved**. Those live on `LogicalDecide`

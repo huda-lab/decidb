@@ -334,12 +334,13 @@ Tests: `test/decide/tests/test_scope_objective.py`. Problem classes and solver s
   evaluated over the same rows and moved to the bound.
 - **`AVG(e)`** is `SUM(e)` divided by `n`, the number of values the reducer receives: its `by` group's kept rows that
   pass its own `when`, or the classes of its own `per`. In a constraint `AVG(e) op K` is `SUM(e) op K·n`.
-- **`MIN` and `MAX`**. The *easy* direction (`MAX(e) <= K`, `MIN(e) >= K`) bounds each member directly; with
-  no `when` and no filter, a member that is a lone decision is bounded in its column box, so `min(x) >= -5` makes `x`
-  signed (§2). The *hard* direction is the opposite one, or `=`. In the objective, `MINIMIZE MAX` and `MAXIMIZE MIN`
-  are the easy direction; `MAXIMIZE MAX` and `MINIMIZE MIN` are the hard one. On HiGHS a hard case needs every member
-  bounded, written or inferred; the message names the variable and the construct that needs its bound (*"'x' has no
-  finite bound, which MIN or MAX needs"*). Gurobi needs none.
+- **`MIN` and `MAX`**. The *easy* direction (`MAX(e) <= K`, `MIN(e) >= K`) bounds each member directly; with no `when`
+  and no filter, a member that is a lone decision is bounded in its column box, so `min(x) >= -5` makes `x` signed (§2).
+  The *hard* direction is the opposite one, and `<>`: there the `MIN` or `MAX` is a helper decision (§6.4) held on the
+  side the clause pushes it. `=` is both: its easy half bounds each member, its hard half reads the helper. In the
+  objective, `MINIMIZE MAX` and `MAXIMIZE MIN` are the easy direction; `MAXIMIZE MAX` and `MINIMIZE MIN` are the hard
+  one. On HiGHS a hard case needs every member bounded, written or inferred; the message names the variable and the
+  construct that needs its bound (*"'x' has no finite bound, which MIN or MAX needs"*). Gurobi needs none.
 - **A reducer's own filter**: `sum(when morning: x * hours) + sum(when evening: x * hours) <= 40` (§5.3).
 - **A factor on a reducer** works for every reducer, on either side: `2 * SUM(x*p)`, `SUM(x*p) / 2`, `2 * MAX(x*v)`,
   `SUM(x) + 2 * MAX(x*v)`. A negative factor reverses the relation the reducer faces (`-2 * MAX(e) >= -8` is
@@ -625,7 +626,7 @@ Tests: `test/decidb/test_frame_parser.test` (answers, parse and bind errors, ord
 examples 1, 3, 4 and 5 and the clauses of pp. 50, 52 and 53 as written, 2 and 6 with a decision added to their bound
 (the deck writes them over data alone, which a clause refuses), and the DeQL comparison with its declarations adapted;
 shapes and errors), `test/decide/tests/test_anr_composition.py`
-(members dropped, under `abs` and `norm`, the objective, composed `MIN`/`MAX`, both solvers),
+(members dropped, under `abs` and `norm`, the objective, a `MIN`/`MAX` beside a `SUM`, both solvers),
 `test/decide/tests/test_anr_diagnostics.py` (DIAGNOSE and EXPLAIN over variants, nests and frames),
 `test/common/test_decidb_plan_serialization.cpp` (a placed point and range round-trip).
 
@@ -701,9 +702,10 @@ Tuple terms and reducers mix freely on either side. Each comparison takes one of
 - **Grouped** — decision reducers sharing one `by` key, under whole-query factors, beside terms that are one value per
   group (query-wide, or keyed by the `by` key and held by it: a decision declared on the key, data that is one of the
   key's own columns): one model row per `by` group that a class reaches, under the group's tightest bound (`=`
-  refuses differing bounds; `<>` excludes each). A term beside the reducers counts once in its group's row. Data the
-  key does not hold may take several values in a class, each a variant (§7.1), so beside a reducer it takes the
-  helper-decision shape.
+  refuses differing bounds; `<>` excludes each). A term beside the reducers counts once in its group's row. A `MIN`
+  or `MAX` in such a row, in the objective, or in any other shape is a helper decision (below); `SUM` and `AVG` stay in
+  the row. Data the key does not hold may take several values in a class, each a variant (§7.1), so beside a reducer
+  it takes the helper-decision shape.
 - **Helper decision** — anything else: a term beside a reducer that varies within a group (`ship <= 0.20 * sum(ship)`,
   a decision keyed by another key), a row-varying factor, reducers with different `by`
   keys, a reducer inside another expression (`abs(sum(ship) by (g) - 40) <= 5`). Each reducer becomes a **helper

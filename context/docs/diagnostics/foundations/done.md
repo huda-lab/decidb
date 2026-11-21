@@ -185,10 +185,8 @@ user-clause level instead of raw rows.
 - **Single row-role enum:** `ConstraintKind = { USER_PARAMETER, USER_MECHANISM,
   STRUCTURAL }` (`duckdb/common/enums/decide.hpp`). `USER_PARAMETER` carries a
   user-editable parameter/RHS and is relaxable. `USER_MECHANISM` is a rigid helper
-  row attached to a user clause (for example generated `<>` and hard MIN/MAX
-  mechanism rows). `STRUCTURAL` is a synthesized definition/linking row. The
-  elastic predicate is one equality: `IsRelaxableForElastic(kind)` is true only for
-  `USER_PARAMETER`.
+  row attached to a user clause (for example generated `<>` rows). `STRUCTURAL` is a synthesized definition/linking row.
+  The elastic predicate is one equality: `IsRelaxableForElastic(kind)` is true only for `USER_PARAMETER`.
 - **Stamped at every builder fan-out site** in `ilp_model_builder.cpp` (linear
   aggregate rows, ungrouped or one per `by` group; per-row rows; the raw global push;
   and the three quadratic analogues). `clause_id` is derived by pointer arithmetic into
@@ -210,8 +208,8 @@ user-clause level instead of raw rows.
 - **Rigid rewrite rows are stamped at the source.** The optimizer tags structural
   rewrites that re-enter constraint parsing with `STRUCTURAL_CONSTRAINT_TAG`, and
   `PhysicalDecide` stamps generated McCormick / ABS envelope rows as `STRUCTURAL`;
-  generated `<>` and hard MIN/MAX mechanism rows as `USER_MECHANISM`; and composed
-  MIN/MAX outer user pins as `USER_PARAMETER`.
+  generated `<>` mechanism rows as `USER_MECHANISM`; and every MIN/MAX link row as
+  `STRUCTURAL`. The clause that reads a MIN/MAX helper is an ordinary user row.
 Tested in `test/common/test_decidb_constraint_provenance.cpp`. There is no separate
 clause → row index: the elastic engine walks `provenance` directly, and a consumer that
 needs the lookup groups by `provenance.source_clause_id`.
@@ -234,7 +232,7 @@ it represents, so the unbounded diagnosis names escaping variables.
   hook the unbounded escape characterization resolves to categorical slice findings
   (`../unbounded/done.md`). Global-block columns default to GLOBAL_AUX (unnamed)
   unless named through `SolverInput::global_variable_labels` (aggregate `<>`
-  indicators, composed MIN/MAX z's — see `../infeasible/done.md`).
+  indicators, an extremum link's binaries and member columns — see `../infeasible/done.md`).
 
 Tested in `test/common/test_decidb_variable_provenance.cpp`.
 
@@ -324,8 +322,8 @@ A diagnostics defect does not fail a test the way a wrong answer does. The solve
 the diagnosis still appears, and its numbers are often still right — what breaks is *which line
 of the user's query gets blamed*. The suite stays green while the feature's promise stops
 holding. `test/decide/tests/_diagnostic_invariants.py` asserts that promise mechanically, on
-every diagnostics test, rather than per construct: there are nine auxiliary kinds that reach the
-elastic engine (`<>` per-row and aggregate, ABS, MIN/MAX hard and composed, `norm` 0/1/inf,
+every diagnostics test, rather than per construct: there are eight auxiliary kinds that reach the
+elastic engine (`<>` per-row and aggregate, ABS, MIN/MAX, `norm` 0/1/inf,
 bilinear), and a hand-written assertion only ever guards the one its author had in mind.
 
 1. **A reported edit is made of the user's own text** (`assert_edits_are_users_text`). Every
@@ -345,7 +343,7 @@ bilinear), and a hand-written assertion only ever guards the one its author had 
 
 The helper deliberately does **not** consult the `subject_to_sql` map that `_apply_reported_fix`
 takes. That map exists so a test can *apply* a fix whose rendering differs from the typed SQL (a
-`BETWEEN` split in two, a reversed bound, a composed extremum). Honoring it would let a future
+`BETWEEN` split in two, a reversed bound). Honoring it would let a future
 author silence a fabricated clause by adding a map entry — the guard would be defeatable by the
 same edit that makes a test pass. Token grounding needs no such hatch, because a legitimate
 re-spelling reuses the query's own names and numbers.

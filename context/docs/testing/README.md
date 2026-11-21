@@ -24,7 +24,7 @@ Coverage of direct solve is in each rule's `done.md` under [../direct_solve/rule
 | Constraint operators | `=`, `<`, `<=`, `>`, `>=`, `<>`, BETWEEN, IN; per-row vs aggregate | `test_cons_*.py` |
 | `when` | `when` in front of a constraint or the objective, and a reducer's own `when` | `test_when_*.py`, `test_reducer_filter.py` |
 | `per` constraints and two-level objectives | `per K:` constraints and `outer(per k: inner(e) by (k))` | `test_per_*.py` |
-| MIN and MAX | MIN/MAX linearization (easy/hard cases, composed, two-level) | `test_min_max.py`, `test_per_objective.py` |
+| MIN and MAX | MIN/MAX linearization (easy and hard directions, beside a `SUM`, two-level) | `test_min_max.py`, `test_per_objective.py` |
 | AVG | AVG (execution-time coefficient scaling) | `test_avg.py` |
 | ABS | ABS linearization | `test_abs_linearization.py` |
 | Bilinear terms | `x * y` (McCormick for Bool × anything, Q-matrix otherwise) | `test_bilinear.py` |

@@ -73,8 +73,8 @@ where every column resolution already passes rather than at each emission site; 
 refuse it, and `NumInstances` is 0. `ResolveRead` turns it into its base at the selected row for the readers of an
 instance's box (`InstanceBox`). Its type and box are its base's, copied again wherever the boxes are rewritten
 wholesale (after the floors, the implied bounds and a diagnosis's widening, `SyncFrameReadBoxes` in stage 08), and
-`BaseVariable` maps it to its base for a table of the plan's decisions (a name, the ABS helpers the tree's `ABS` nodes name). The composed
-MIN/MAX formulation reads each term's variable through the indexer at each row (`ComposedMinMaxTermData::variables`),
+`BaseVariable` maps it to its base for a table of the plan's decisions (a name, the ABS helpers the tree's `ABS` nodes
+name). A helper's members read each term's variable through the indexer at each row (`ReducerValueMembers::variables`),
 so a frame read lands on the selected row's column there too, and its range is its base's box.
 
 **An inlined helper** (`DecideVarScope::INLINED`, §9, "Inlining a helper") is a helper decision stage 06 writes into
@@ -315,6 +315,15 @@ INFEASIBLE on it, so no backend is handed a row with no coefficients.
 Emitting nothing and throwing instead would take the whole model with it — every
 later consumer, diagnosis included, then has no model to read.
 
+### Row order
+
+The builder states every raw row (`SolverInput::global_constraints`: the helpers' definitions, the ABS and bilinear
+links, the `<>` disjunctions) before the clause rows that read what they define. `LinearizeReducerValueLinks` writes the
+links in the order they are stored, an inner helper's before an outer one's, so a definition stands before every use.
+The order is for the solver: Gurobi solves the identical 20K-row Q4 model
+(`benchmark/decide/queries/q4_minmax_nested.sql`) in 0.12s with the helper's rows first and 10.0s with the clause row
+first, and the column order makes no difference.
+
 ### Reservation
 
 Before the loop the builder sums an upper bound on `model.constraints.size()`
@@ -396,8 +405,7 @@ clause of each row (`source_clause_id`) and builds nothing else: every other fie
 stamped only under `DIAGNOSE` (`SolverInput::diagnose`). Under `DIAGNOSE` a row holds
 the source comparison for display, `repair_group_id` for elastic grouping (execution
 numbers every clause it evaluates -- the lowered clauses, then under DIAGNOSE the
-folded (singleton-row) bounds' clauses, then the composed clauses, whose id
-`LinearizeComposedMinMaxConstraint` takes as given -- so no two clauses share one), the
+folded (singleton-row) bounds' clauses -- so no two clauses share one), the
 group id (a `by` group or a `per` class) and its printable key, `ConstraintKind` (user
 parameter vs rigid mechanism row), the elastic shape (does this row share one slack with its
 siblings or get its own), whether coefficients were pre-scaled by `1/N_g` for an
@@ -427,10 +435,8 @@ each site repeating them:
   sites set it for an easy MIN/MAX's member rows from their group and for a `per K:`
   clause's row from its class, then stamp `data_row` (the row it was emitted at,
   DIAGNOSE's `row`) and `per_kept_row` (a row with no class set: each kept row is a
-  class of its own) through `StampDataRow`. A flat row copies
-  `RawConstraint::class_set`, which the hard MIN/MAX bound row carries from its group and
-  the composed clause's outer row from its evaluated clause
-  (`LinearizeComposedMinMaxConstraint`).
+  class of its own) through `StampDataRow`. A clause that reads a MIN/MAX helper is one of the aggregate rows, so its
+  class set is the same.
 - `StampAggregateProvenance(provenance, eval_const)` sets `is_aggregate`. Only the four
   aggregate sites (linear and quadratic, ungrouped and grouped) call this; a per-row
   constraint has no reducer to name.
@@ -552,7 +558,7 @@ margin covering the integer-step band of the `<>` rewrite; its per-row worst cas
 `DecideRowTermRange()`, sums each term's largest magnitude and serves only it. Every
 other Big-M is sized from the expression's **signed interval**, walked by
 `SignedRowRange::Of` (`ilp_linearization_internal.hpp`; `DecideRowSignedRange()` reads a constraint's row through it):
-ABS, `<>`, the value rewrite's helpers and every MIN/MAX auxiliary (flat, two-level and composed) share that one walk,
+ABS, `<>` and the value rewrite's helpers (every MIN/MAX among them) share that one walk,
 and terms that cancel (`c*x - c*y`) are measured together rather than each at its worst. Each end is walked on its own,
 so a decision with a positive coefficient and a floor gives the row a finite floor whatever its ceiling. An end that no
 contributing box derives is **open** (`lo_open` / `hi_open`; `Lo()` / `Hi()` read it as an infinity). An end that every
@@ -599,16 +605,13 @@ rather than answering a comparison.
 ### Extremum links — the one place a MIN/MAX auxiliary is pinned
 
 **A family of one member is that member** (deck p. 112). `EmitExtremumLink` states it as one equality,
-`result - member = constant`, with no envelope, indicator or Big-M -- so a side no box bounds needs none -- of the kind
-of the side the site needs. It does so where that side is mechanism a diagnosis never loosens: a composed clause's
-closing rows are its user's clause, loosened one way, which an equality would not be, and keep their two rows.
+`result - member = constant`, with no envelope, indicator or Big-M -- so a side no box bounds needs none.
 
 Every MIN/MAX in the model is the same statement: some auxiliary column equals the
 extremum of a family of linear expressions. `EmitExtremumLink()` is the only thing
-that writes one, and `ExtremumLinkSpec` is the only description of one. Four sites
-feed it — a hard MIN/MAX *constraint*'s `z` per group, the flat objective's `z`, each
-composed term's `z_k`, and a MIN/MAX helper of the value rewrite per group, a nested
-reducer's among them. None writes a formulation by hand.
+that writes one, and `ExtremumLinkSpec` is the only description of one. One site feeds it: a MIN/MAX helper of the value
+rewrite per group, in a constraint of any shape and in the objective, a nested reducer's among them. It writes no
+formulation by hand.
 
 A link has **two independent sides**, and which of them the surrounding model already
 supplies is a property of the *site*, not of the construct:
@@ -619,12 +622,12 @@ supplies is a property of the *site*, not of the construct:
   member and a `SUM(y) >= 1` that makes one bind. An objective that minimizes it
   supplies this for free.
 
-An objective-side link therefore needs exactly one of the two, and which one is the
-easy/hard classification stage 05 makes. A composed clause sits in a *constraint*,
-where no optimization pressure acts on the auxiliary at all, so its hard direction
-needs both. A MIN/MAX constraint needs only the closing side: `MAX(e) >= K` needs
-`z <= MAX(e)`, or a `z` inflated past every member would satisfy a bound nothing else
-does — but nothing pushes `z` down, so the envelope would be rows for nothing.
+A helper needs the side its readers push it against, and stage 05 records which (`need_envelope`, `need_closing`;
+`../05_optimizer/done.md`, "MIN/MAX"): a MAX read pushed down needs the envelope alone, read pushed up the closing side
+alone, and read both ways (`=`, `<>`, a factor whose sign is known only when the query runs) both. A clause that reads
+`MAX(e) >= K` needs `z <= MAX(e)`, the closing side: a `z` inflated past every member would satisfy a bound nothing else
+does. One that reads `MAX(e) <= K` needs the envelope, and the closing side would be rows for nothing, since nothing
+pushes `z` down.
 
 **Native is the closing side's alternative, never the envelope's.** The envelope costs
 one row per member, needs no constant to dominate anything, and is *implied* by a
@@ -642,13 +645,11 @@ helper itself to the general constraint (a sole column), so no pinned copy is ad
 05 refuses such a query on a backend with no native MIN/MAX, so the lowering arm never meets
 one.
 
-**`closing_kind` is a diagnosis-visible choice, not bookkeeping.** A closing row carries the
-Big-M, and marking it `USER_PARAMETER` offers it to the elastic engine as a clause the user
-may be told to edit. It is not one: it encodes `z = MIN/MAX(members)`, its slack is in the
-auxiliary's units rather than the user's bound's, and `ExtremumLinkSpec` carries no
-`source_clause_id` for a diagnosis to name it by. Both MIN/MAX paths therefore mark closing
-rows `USER_MECHANISM`; the user's clause is the outer row, which holds the bound in the
-user's own units and already carries its source (`../../diagnostics/infeasible/done.md`,
+**A link's rows are mechanism.** Every row of a link is `STRUCTURAL`, rigid under DIAGNOSE. A closing row carries the
+Big-M and encodes `z = MIN/MAX(members)`: offered to the elastic engine as a clause the user may edit, its slack would
+be in the auxiliary's units rather than the user's bound's, and `ExtremumLinkSpec` carries no
+`source_clause_id` for a diagnosis to name it by. The user's clause is the row that reads the helper, which holds the
+bound in the user's own units and carries its source (`../../diagnostics/infeasible/done.md`,
 "Rigid shapes").
 
 **A member becomes a column only when it is not one already** (`ExtremumArgumentColumn`,
@@ -671,55 +672,22 @@ sound only while every row carries the same one: for `MAX(x + c)` with `c` a dat
 it gives an `M` too small to be valid, and a too-small `M` cuts off legal answers rather
 than merely loosening the relaxation. Corpus queries 89–92 cover it.
 
-### MIN/MAX constraints
+**The clause reads the helper.** A MIN or MAX in a constraint is one column per group, the helper's instance, and the
+clause is an ordinary row over it, `z <op> K` with the clause's SUM and AVG terms beside it. Both arms produce that row,
+so an infeasible MIN/MAX is diagnosed identically whatever backend the host has, and the bound is never spread across a
+per-row Big-M family (`e_r - M*y_r >= K - M`), which would hide `K` inside every row. The cost is one column and one row
+per group; the link's rows carry `z` in place of the bound. The extremum column is labelled with the reducer as the plan
+prints it (`ReducerValueLink::label`), so a repair names `max(x * c)` rather than an internal column.
 
-`LinearizeMinMaxConstraints()` turns every clause stage 05 marked as a hard MIN/MAX
-into what it says: an extremum column per group, and the user's own bound as a single
-row over it.
-
-`ClassifyMinMaxBound()` runs first and reads an infinite bound by the direction it
-points, before any `M` is asked for. A hard MAX is "some active row has LHS >= K", so
-`K = -inf` holds for every assignment and the group is dropped, while `K = +inf` is out
-of every row's reach and the group is re-emitted as a plain per-row constraint carrying
-that bound — an ordinary infeasibility naming the user's clause, not a refusal. MIN is
-the mirror image. The verdict is per group because the bound-side rewrite
-(`RewriteRhsAggregates`) has already reduced a row-varying bound to the tightest one, which is also what settles a
-group whose rows mix finite and infinite bounds. A bound-side reducer is what reaches
-the mixed case from SQL — `min(x) by (g) <= max(cap) by (g)` where `cap` holds an
-infinity in one group and finite values in another — so one group drops while the group
-beside it still linearizes. A literal bound gives every group the same verdict.
-
-**The clause reads the same on both arms, and that is the point of stating it this
-way.** Both arms produce `z <op> K`, the line of SQL the user wrote, so an infeasible
-MIN/MAX is diagnosed identically whatever backend the host has. Spreading the bound
-across a per-row Big-M family (`e_r - M*y_r >= K - M`) would hide `K` inside every row.
-The cost is one column and one row per group; the per-member rows carry `z` in place
-of the bound.
-
-The outer row carries `ElasticShape::SHARED_SCALAR` for a literal bound, without which
-it does not fold: a clause with a `by` key emits one of these per group and they are all
-the same literal, so the user edits it once and every group moves. A genuinely per-group
-bound stays `PER_ROW_DATA` and reports a virtual offset. The extremum column is
-labelled with the text stage 05 recorded (`minmax_clause_labels`), the reducer as the
-plan prints it, so a repair names `max(x * c)` rather than an internal column.
-
-A strict bound steps on that row, as `ApplyComparisonSense` does for any other: `z > K`
-is `z >= floor(K) + 1`, `z < K` is `z <= ceil(K) - 1`. That is exact because the binder
-refused any member that can be fractional, a constant inside the extremum included
-(`CheckIntegerStep`, stage 04 §3.11). The row keeps the written bound
-(`RawConstraint::strict`, `typed_k`), so a diagnosis quotes `> K`. A negative factor
-arrives inside the extremum (stage 05), so the row's relation is the clause's own.
-
-**No indicator is allocated before the rows that read it.** Stage 05 records only the
-marking — `minmax_agg_type`, and a `minmax_clause_idx` naming the clause. The binaries
-a Big-M pinning needs are global-block columns `EmitExtremumLink` creates for the
-members it actually writes, so the native arm allocates none at all.
+**No indicator is allocated before the rows that read it.** Stage 05 allocates none: a MIN/MAX is a helper column there.
+The binaries a Big-M pinning needs are global-block columns `EmitExtremumLink` creates for the members it actually
+writes, so the native arm allocates none at all.
 
 ### Helper decisions of the value rewrite
 
-Stage 05 replaces each decision reducer of a VALUE-shape clause, and each range frame over
-decisions, by a helper decision (`../05_optimizer/done.md`); stage 08 lists its members per
-group -- a `by` group, or a frame's window -- into a `ReducerValueLinkSpec` (`solver_input.hpp`):
+Stage 05 replaces each decision reducer of a VALUE-shape clause, each MIN or MAX of any other clause or of the
+objective, and each range frame over decisions, by a helper decision (`../05_optimizer/done.md`); stage 08 lists its
+members per group -- a `by` group, or a frame's window -- into a `ReducerValueLinkSpec` (`solver_input.hpp`):
 `ReducerValueMembers`, per group the row it is read at and its members, each a constant and
 terms (decision, row, coefficient), with the link's label. Listed, not rows with a group each,
 because a range's windows share rows where a `by` key's groups partition them; one form for
@@ -804,17 +772,15 @@ and rows. The `SUM` and `AVG` links of a nest -- one whose outer link is a SUM o
 inlined whatever the count (`flattened`), as the deck writes a nest's sums into the rows that read them (pp. 115,
 119), so a region read by two rows is written into both however many members it has. `x >= sum(from 2 previous to previous else 0: x) over (...) - t.w` has one column and one row per input row,
 the windows written into their anchors' rows, where a helper per window doubled both.
-
 Where it may write a helper in is decided in the same pass, from every reader the model has (`PlaceHelpers`): into
-its readers, when every one is a linear row of a plain clause (no `<>`, hard MIN/MAX, Big-M ABS pair, product or
+its readers, when every one is a linear row of a plain clause (no `<>`, Big-M ABS pair, product or
 square, and no bound over one decision that may fold into its box, `admitted_lower`) or the linear objective; or into
 one outer link, when that link's members are its only reader and, if a MIN or MAX, it is pinned on one side, so each
 member stands in one row. Any other reader holds the column: a product or square in a row or the objective, a
 McCormick link, a frame read at another row, and the readers assembly passes in because `SolverInput` does not show
-them (`held`): a composed MIN/MAX term, a bound folded into the helper's box, and a flat MIN/MAX objective, whose terms
-its auxiliary pins column by column. What it counts is the data, each instance's reads as the builder states them: a
-per-row clause's kept rows, an aggregate's groups (a group's rows reading one instance sum into one row), the
-objective once, an outer SUM's groups and an outer MIN/MAX's members (each stated in a row of its own). A clause's
+them (`held`): a bound folded into the helper's box. What it counts is the data, each instance's reads as the builder
+states them: a per-row clause's kept rows, an aggregate's groups (a group's rows reading one instance sum into one row),
+the objective once, an outer SUM's groups and an outer MIN/MAX's members (each stated in a row of its own). A clause's
 read of an absent instance is an internal error; the objective's read of one is no read. Then, innermost first:
 
 - **Into another helper** (deck pp. 116–119, a group sum under a MAX). A helper read only by another link's members is
@@ -841,64 +807,19 @@ assembly, so it inlines the same helpers, and its findings name the rows as writ
 
 ### MIN/MAX objectives
 
-`LinearizeMinMaxObjective()` is the objective-side counterpart. A MIN/MAX
-objective cannot be a coefficient vector, so it becomes a global auxiliary the
-rows pin: `z` for the flat `MAXIMIZE max(e)`. A nested one,
-`outer(per k: inner(e) by (k))`, arrives as value helpers instead (D81), defined by
-`LinearizeReducerValueLinks` above. The objective is then just that auxiliary.
+A MIN/MAX objective cannot be a coefficient vector, so it is a helper decision like any other (stage 05): the objective
+reads its column with the term's coefficient, and `LinearizeReducerValueLinks` defines it above. A nested one,
+`outer(per k: inner(e) by (k))`, is one helper per level (D81).
 
-Each level is *easy* or *hard*, and that classification is exactly which of the two
-sides of an extremum link the objective supplies for free. The objective is a minimization, and
-under a negative sign stage 05 names the other extremum over the negated members: `MAXIMIZE min(e)`
-is built as `MINIMIZE max(-e)`, its auxiliary the extremum negated. Easy (a minimized MAX: `MINIMIZE`+`MAX`,
-`MAXIMIZE`+`MIN`) means the minimization already drives the auxiliary onto the extremum,
-so the closing side is free and only the envelope is emitted — no binaries. Hard
-(a minimized MIN: `MAXIMIZE`+`MAX`, `MINIMIZE`+`MIN`) pushes the auxiliary the other way, so the
-envelope is free and the closing side is emitted instead. `M` is the global span of
-the objective expression over the rows (`max_r exprmax - min_r exprmin`, constants
-included), which dominates `|z - expr_r|` at every row.
+Which sides the link emits is which of the two the objective supplies for free. The objective is a minimization, and a
+negative sign reads the other extremum: `MAXIMIZE min(e)` minimizes `-min(e)`. A MAX pushed down (`MINIMIZE max(e)`) or
+a MIN pushed up (`MAXIMIZE min(e)`) is driven onto the extremum by the minimization, so the closing side is free and
+only the envelope is emitted, with no binaries. The other two (`MAXIMIZE max(e)`, `MINIMIZE min(e)`) push the helper
+away, so the envelope is free and the closing side is emitted instead.
 
-This function builds members and specs; it emits nothing itself. Its link goes through
-`EmitExtremumLink`, so which formulation it takes is decided once, in one place, by the
-rule described above.
-
-The members are the rows the objective's reducer reads, `MinMaxObjectiveSpec::member_rows`
-(stage 08 folds the objective's `when` into the terms' filters), whatever their
-coefficients: a row whose data is 0 is the member 0, not an absent one. A flat
-objective with no member row reads no row, so it is NULL and dropped: the model keeps no
-objective term (D68). The shape flags (`flat_agg`, easy or hard) arrive from stage 05 as
-`MinMaxObjectiveSpec`; the coefficients arrive evaluated.
-
-### Composed MIN/MAX
-
-A composed clause mixes reducers additively — `SUM(a) + 2*MAX(b) <= K`, or the same
-in an objective. `LinearizeComposedMinMaxConstraint()` and
-`LinearizeComposedMinMaxObjective()` give every MIN/MAX term its own global `z_k`,
-pinned by the same `EmitExtremumLink` every other MIN/MAX uses, then compose: the constraint
-sums the `z_k`s and the SUM/AVG terms into one outer row against the constant RHS,
-the objective writes the same composition into `global_obj_coeffs` and
-`objective_coefficients`. Each `z_k` is labelled with its term as the plan prints it
-(`max(x)`) through the global-label channel, so diagnosis names the clause rather
-than an internal column.
-
-Terms arrive as `ComposedMinMaxTermData`: everything data-dependent — per-row
-coefficients, the query-wide factor the canonicalizer peeled off the reducer, the
-row mask the reducer runs over, the clause's `when` folded in — is already evaluated by
-stage 08; the scope checks have refused an empty one. The outer row steps a strict bound
-onto the lattice (`> 30` is `>= 31`), keeping the written bound for a diagnosis.
-
-A composed term needs **both** sides of its link in the hard direction, and that is the
-one place the two-flag spec earns its keep. An outer `=` needs both sides on *every*
-term — the equality drives `z_k` in neither direction, so stage 05 marks each term
-hard (`exact_pin`) and the outer row is emitted with sense `'='`, one native equality
-row rather than a pair of opposing inequalities the presolver would have to re-pair. The clause sits in a constraint, so nothing
-drives `z_k` at all: the envelope holds it against the members and the closing side
-pins it onto one. In the easy direction the outer comparison supplies the closing side
-and the envelope alone is exact. Every term's reach is walked once by
-`ComposedTermRange` and reused three times — as the auxiliary's box, as the closing
-Big-M, and as the box of any column the native arm pins — so the arms cannot disagree
-about what the term can reach. It walks each end through the one signed walk (§ Big-M constants), so a composed term
-keeps every finite end the same term keeps outside a composition.
+The members are the rows the objective's reducer reads (stage 08 folds the objective's `when` into the members),
+whatever their coefficients: a row whose data is 0 is the member 0, not an absent one. A reducer with no member row has
+no value, so the objective keeps no term for it (D68).
 
 ### `<>` disjunctions
 
@@ -1239,12 +1160,12 @@ columns still name a decide variable in that message.
 | `SolverModel::Build`, all constraint paths, Q construction | `src/decidb/formulation/ilp_model_builder.cpp` |
 | `LowerDecideConstructs`, global-auxiliary allocation, flat column boxes | `src/decidb/formulation/ilp_linearization.cpp` |
 | Implied bounds, Big-M constants, per-row range walks | `src/decidb/formulation/linearization_bigm.cpp` |
-| MIN/MAX — constraint, objective, extremum links, composed | `src/decidb/formulation/linearization_minmax.cpp` |
+| Extremum links (every MIN/MAX) | `src/decidb/formulation/linearization_minmax.cpp` |
 | `<>` collapse classification and Big-M disjunction | `src/decidb/formulation/linearization_not_equal.cpp` |
 | McCormick and ABS rows | `src/decidb/formulation/linearization_bilinear_abs.cpp` |
 | The value rewrite's helper decisions: boxes and definitions | `src/decidb/formulation/linearization_reducer_value.cpp` |
 | Helpers shared across those files | `src/include/duckdb/decidb/formulation/ilp_linearization_internal.hpp` |
-| `MinMaxObjectiveSpec`, `ComposedMinMaxTermData` — what stage 08 hands over | `src/include/duckdb/decidb/formulation/ilp_linearization.hpp` |
+| `ExtremumLinkSpec`, `ExtremumMemberSource` — what a link is stated from | `src/include/duckdb/decidb/formulation/ilp_linearization.hpp` |
 | `BilinearLinkSpec`, `AbsMaximizeLinkSpec`, `ReducerValueLinkSpec` — the formulation tags | `src/include/duckdb/decidb/formulation/solver_input.hpp` |
 | `VarIndexer`, `SolverModel`, `ModelConstraint`, provenance | `src/include/duckdb/decidb/formulation/ilp_model.hpp` |
 | `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn` | `src/include/duckdb/decidb/formulation/solver_input.hpp` |
@@ -1254,7 +1175,7 @@ columns still name a decide variable in that message.
 
 Each is a guard a stage boundary or a typed read needs:
 
-- **Stage handoffs.** The comparison type stage 05 hands over (`SolverModel::Build`, `LinearizeComposedMinMaxConstraint`:
+  - **Stage handoffs.** The comparison type stage 05 hands over (`SolverModel::Build`:
   `<>` is consumed earlier); a `<>` over a product in `LinearizeNotEqual` (the binder refuses it); the column-box
   finiteness check in `SolverModel::Build`, the one place an infinite box from any rewrite is refused (a MIN/MAX
   auxiliary's reach is coefficient times box, so `b * y` with `b = 1e308` passes a DOUBLE).

@@ -165,9 +165,8 @@ and the checks, so binding resolution and column pruning see their columns.
 
 **From the optimizer** — `num_auxiliary_vars` (the decisions it appends after the declared
 ones), `solver_backend_name`, `use_native_constructs`,
-`force_native_constructs`, `ne_clause_labels`, `minmax_clause_labels`, `bilinear_links`,
-`abs_maximize_links`, `aux_var_expressions`, `composed_minmax_constraints`,
-`composed_minmax_objective_terms`, `rewrite_accounts` (one fact per construct a rewrite
+`force_native_constructs`, `ne_clause_labels`, `bilinear_links`,
+`abs_maximize_links`, `aux_var_expressions`, `rewrite_accounts` (one fact per construct a rewrite
 replaced -- the construct as a plan prints it and what it became, `RewriteAccount::Kind`
 -- under the clause it came from, INVALID_INDEX for the objective; worded by the renderer;
 never serialized),
@@ -176,8 +175,8 @@ decisions, one per reducer over one set of rows, shared by every clause that rea
 each `ReducerValueLink` holds the reducer a helper replaced — kind, body, its own `when`
 and `per`, its path key (its `by` key under every enclosing one), its SQL as a label —
 the rows its path keeps, and the sides any reader needs; innermost first, and
-its body's terms are lowered into its node's `DecideBody::members` (`LowerDecideTree`)),
-`flat_objective_agg` / `flat_objective_is_easy`, and the folded variable box.
+its body's terms are lowered into its node's `DecideBody::members` (`LowerDecideTree`); every MIN or MAX over
+decisions is one), and the folded variable box.
 
 `optimized` marks the boundary between the first two groups and the third. It is
 set before the optimizer's first rewrite and is what takes this plan off the wire —
@@ -229,13 +228,12 @@ expression-holding fields **explicitly** rather than calling
 `VisitOperatorExpressions`, because DECIDE variables must be shielded from
 resolution via `ignored_bindings`; it visits every field through
 `LogicalDecide::EnumerateExpressions`, the one list of them: `decide_variables`,
-`decide_constraints`, `decide_objective`, `composed_minmax_objective_terms`,
-`composed_minmax_constraints`, `reducer_value_links` (body, own `when`, clause `when`),
+`decide_constraints`, `decide_objective`, `reducer_value_links` (body, own `when`, clause `when`),
 `keys`, `frames` (order key, fallback, rows), `value_checks`, `signatures` (rows, fields' values).
 
 **Any new field holding expressions that execution will evaluate must be added to
 `EnumerateExpressions`.** An optimizer rewrite that moves subexpressions out of
-`decide_objective` into a side vector — as the composed MIN/MAX rewrite does —
+`decide_objective` into a side vector (`reducer_value_links` is one)
 otherwise silently opts them out, and the operator then reads a logical index as a
 chunk position. A single-table source hides the bug entirely, because the two
 indexings coincide there; it surfaces only once a join reorders columns.
@@ -310,7 +308,7 @@ from the constructs **this host's** solver declares — the same reason
 `solver_backend_name` and `use_native_constructs` are not serialized (§4). An
 optimized DECIDE plan is an answer computed for one machine, so it declines to be
 copied rather than arriving somewhere else as a formulation that machine cannot
-honor. The composed MIN/MAX terms, the folded variable box and the prepared
+honor. The helper decisions, the folded variable box and the prepared
 linear form are all rebuilt from the canonical tree by the optimizer, in
 milliseconds, wherever the plan lands.
 
@@ -372,9 +370,8 @@ rewrite's account (`rewrite_accounts`, worded once by `RenderDecideRewriteAccoun
 "`abs(e)` becomes a helper decision"; it names what the expression became, never the
 solver's construction) is printed under its clause before the rows it left; the objective's accounts, and the rows a rewrite added for the objective (tagged
 `OBJECTIVE_ROW_TAG`, returned by `CollectDecideClauseLayers` in `objective_rows`), print
-under the objective. The hard MIN/MAX carrier (`__minmax_clause_`) prints as the reducer
-it marks, so its row repeats the clause and is left out; a MIN/MAX or composed objective
-prints its accounts and no carrier row, an AVG objective its sum under its account; an
+under the objective. A MIN or MAX prints as written in a clause and in the objective, its account under it; an AVG
+objective prints its sum under its account; an
 L0 link's constants print by the names the user writes or sets them with: an automatic bound
 (`L0_AUTO_BOUND_TAG`) as `M`, a written one (`L0_WRITTEN_BOUND_TAG`) as the number in `norm(e, 0, M)`, and the
 tolerance (`L0_TOLERANCE_TAG`) as `decide_l0_tolerance`. A rewrite's row prints its clause's scope as written
@@ -384,8 +381,8 @@ prints `v`), and prints a DOUBLE constant the rewrite wrote as a plain number (`
 An `IN` under
 a scope keeps the qualifier of the wrappers above it in its source info
 (`ScopedInQualifier`), so a suggested edit pastes back with its scope; an infinity norm
-echoes its order quoted (`norm(e, 'inf')`). The diagnosis labels of a hard MIN/MAX and
-of a `<>` (`minmax_clause_labels`, `ne_clause_labels`) are spelled as the plan prints
+echoes its order quoted (`norm(e, 'inf')`). The diagnosis labels of a MIN/MAX helper
+(`ReducerValueLink::label`) and of a `<>` (`ne_clause_labels`) are spelled as the plan prints
 the clause (`max(ship)`, `sum(ship) by (D.region) <> 20`). A quoted span is parenthesized by how
 tightly its own text binds (`DecideBinding`, recorded with the span), not by the bound node. In a reprinted node,
 parentheses follow DuckDB's precedence: a cast with no location passes its precedence to the child it hides, the right
