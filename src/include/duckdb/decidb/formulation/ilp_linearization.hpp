@@ -99,9 +99,13 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
 
 //! Whether a construct is stated natively or lowered, and the rule that decides.
 //!
-//! A general constraint (`z = MAX(t..)`) and a Big-M family encode the same thing, so
-//! where both are valid this is a pure performance question — and the answer, measured,
-//! is the lowering. Two reasons, both structural:
+//! Native is the default: where the backend declares a construct, it is used. A construct is lowered only where the
+//! lowering is MEASURED faster, and each such construct cites its measurement (`lowering_measured_faster`). A construct
+//! with no such measurement stays native wherever it is declared.
+//!
+//! MIN/MAX is lowered. A general constraint (`z = MAX(t..)`) and a Big-M family encode the same thing, so where both
+//! are valid this is a pure performance question, and the answer, measured, is the lowering. Two reasons, both
+//! structural:
 //!
 //!   - A general constraint relates COLUMNS, so every member expression that is not
 //!     already a column has to be pinned to a fresh one: an extra column and an extra
@@ -113,22 +117,25 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
 //! Measured on the Q9 benchmark shape (MAXIMIZE MAX over 5K-30K rows) the native arm ran
 //! 1.7x-3.3x slower; on a `MAX(e) >= K` constraint at 30K rows, 40x slower and growing
 //! with row count while the lowering stayed flat. Neither arm branched, so there was no
-//! search quality to buy back: the Big-M here is per-row tight.
+//! search quality to buy back: the Big-M here is per-row tight. So for MIN/MAX native is
+//! the FALLBACK, reserved for the case that has no valid Big-M at all, which is the case it
+//! was built to answer and the only one where the lowering must refuse the query.
 //!
-//! So native is the FALLBACK, not the default — reserved for the case that has no valid
-//! Big-M at all, which is the case it was built to answer and the only one where the
-//! lowering must refuse the query.
+//! ABS is not lowered. Measured on Gurobi on Q10 (one binary, 200K rows) the lowering ran 12.0-12.2 s against 12.2-12.3
+//! s native, with the same objective: a tie, so there is no gain to give up the native construct for.
 struct NativeConstructPolicy {
 	//! The backend declares this construct (stage 05, read off its capabilities).
 	bool available = false;
 	//! Test-only `DECIDB_NATIVE_CONSTRUCTS=force`: state it natively wherever it is
 	//! declared, so the A/B equivalence tests still have two arms to compare.
 	bool forced = false;
+	//! A measurement shows the lowering faster than the native construct (true for MIN/MAX, false for ABS).
+	bool lowering_measured_faster = false;
 
 	//! The rule. `big_m_underivable` is this SITE's question, not the query's: one
 	//! clause can have a derivable range while another in the same query does not.
 	bool Use(bool big_m_underivable) const {
-		return available && (forced || big_m_underivable);
+		return available && (forced || big_m_underivable || !lowering_measured_faster);
 	}
 };
 

@@ -76,17 +76,45 @@ TEST_CASE("DeciDB ABS rows are stated from the envelope rows", "[decidb][formula
 		CHECK(input.constraints.empty());
 	}
 
-	SECTION("an exact ABS with a derivable reach expands into a sign indicator and two Big-M rows") {
+	SECTION("an exact ABS with a derivable reach is stated natively where the backend declares ABS") {
 		SolverInput input = AbsInput(false);
 		EmitAbsEnvelopes(input);
 		auto indexer = VarIndexer::Build(input);
 		DeriveAbsAuxiliaryBounds(input, indexer, names, /*refuse_when_unbounded=*/false);
 		CHECK(input.abs_links[0].inner_lo == -3.0); // inner = x, over its box [-3, 2]
 		CHECK(input.abs_links[0].inner_hi == 2.0);
-		EmitAbsConstraints(input, indexer, NativeConstructPolicy {true, false});
+		EmitAbsConstraints(input, indexer, NativeConstructPolicy {true, false, false});
+		CHECK(input.general_constraints.size() == ABS_ROWS);
+		CHECK(input.global_constraints.empty());
+		CHECK(BinaryColumns(input) == 0);
+	}
+
+	SECTION("an exact ABS expands into a sign indicator and two Big-M rows where the backend declares none") {
+		SolverInput input = AbsInput(false);
+		EmitAbsEnvelopes(input);
+		auto indexer = VarIndexer::Build(input);
+		DeriveAbsAuxiliaryBounds(input, indexer, names, /*refuse_when_unbounded=*/false);
+		EmitAbsConstraints(input, indexer, NativeConstructPolicy {false, false, false});
 		CHECK(input.global_constraints.size() == 2 * ABS_ROWS);
 		CHECK(BinaryColumns(input) == ABS_ROWS);
 		CHECK(input.general_constraints.empty());
+	}
+
+	SECTION("a construct whose lowering is measured faster expands where its Big-M exists, and not where it does not") {
+		SolverInput input = AbsInput(false);
+		EmitAbsEnvelopes(input);
+		auto indexer = VarIndexer::Build(input);
+		DeriveAbsAuxiliaryBounds(input, indexer, names, /*refuse_when_unbounded=*/false);
+		EmitAbsConstraints(input, indexer, NativeConstructPolicy {true, false, true});
+		CHECK(input.global_constraints.size() == 2 * ABS_ROWS);
+		CHECK(input.general_constraints.empty());
+
+		SolverInput open = AbsInput(false, 1e30);
+		EmitAbsEnvelopes(open);
+		auto open_indexer = VarIndexer::Build(open);
+		DeriveAbsAuxiliaryBounds(open, open_indexer, names, /*refuse_when_unbounded=*/false);
+		EmitAbsConstraints(open, open_indexer, NativeConstructPolicy {true, false, true});
+		CHECK(open.general_constraints.size() == ABS_ROWS);
 	}
 
 	SECTION(
@@ -96,7 +124,7 @@ TEST_CASE("DeciDB ABS rows are stated from the envelope rows", "[decidb][formula
 		auto indexer = VarIndexer::Build(input);
 		DeriveAbsAuxiliaryBounds(input, indexer, names, /*refuse_when_unbounded=*/false);
 		CHECK(input.abs_links[0].range_unbounded);
-		EmitAbsConstraints(input, indexer, NativeConstructPolicy {true, false});
+		EmitAbsConstraints(input, indexer, NativeConstructPolicy {true, false, false});
 		// `t = x` restates a column that exists, so each row is the general constraint alone.
 		CHECK(input.general_constraints.size() == ABS_ROWS);
 		CHECK(input.global_constraints.empty());
@@ -114,7 +142,7 @@ TEST_CASE("DeciDB ABS rows are stated from the envelope rows", "[decidb][formula
 		EmitAbsEnvelopes(input);
 		auto indexer = VarIndexer::Build(input);
 		DeriveAbsAuxiliaryBounds(input, indexer, names, /*refuse_when_unbounded=*/false);
-		EmitAbsConstraints(input, indexer, NativeConstructPolicy {true, true});
+		EmitAbsConstraints(input, indexer, NativeConstructPolicy {true, true, true});
 		CHECK(input.general_constraints.size() == ABS_ROWS);
 		CHECK(BinaryColumns(input) == 0);
 	}
@@ -124,7 +152,7 @@ TEST_CASE("DeciDB ABS rows are stated from the envelope rows", "[decidb][formula
 		input.abs_links[0].exact = false;
 		EmitAbsEnvelopes(input);
 		auto indexer = VarIndexer::Build(input);
-		EmitAbsConstraints(input, indexer, NativeConstructPolicy {true, true});
+		EmitAbsConstraints(input, indexer, NativeConstructPolicy {true, true, true});
 		CHECK(input.constraints.size() == 2);
 		CHECK(input.global_constraints.empty());
 		CHECK(input.general_constraints.empty());

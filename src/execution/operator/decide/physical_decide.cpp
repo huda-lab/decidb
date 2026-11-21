@@ -1054,14 +1054,14 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 		}
 	}
 
-	// THE ROUTING of every construct this stage may state natively, one policy for all of them. Stage 05 recorded the
-	// shape and the backend's capabilities; whether a construct the backend declares is used is decided here, once, per
-	// site, because only a stage that has seen the evaluated coefficients knows whether THIS clause has a Big-M.
-	// MIN/MAX and ABS read one rule: the lowering is the smaller model wherever a Big-M exists, so native is the
-	// fallback for a site that has none (or is forced, for the A/B tests). Applying a decision to data is this layer's
-	// job; choosing the capabilities was not.
-	const NativeConstructPolicy native_abs {use_native_constructs.abs, force_native_constructs};
-	const NativeConstructPolicy native_min_max {use_native_constructs.min_max, force_native_constructs};
+	// THE ROUTING of every construct this stage may state natively, one rule for all of them (NativeConstructPolicy).
+	// Stage 05 recorded the shape and the backend's capabilities; whether a declared construct is used is decided here,
+	// per site, because only a stage that has seen the evaluated coefficients knows whether THIS clause has a Big-M.
+	// Native is the default; MIN/MAX is lowered because the lowering is measured faster, ABS is not (a measured tie).
+	const NativeConstructPolicy native_abs {use_native_constructs.abs, force_native_constructs,
+	                                        /*lowering_measured_faster=*/false};
+	const NativeConstructPolicy native_min_max {use_native_constructs.min_max, force_native_constructs,
+	                                            /*lowering_measured_faster=*/true};
 
 	// A bilinear auxiliary may itself sit inside ABS (notably the reverse link of an
 	// L0 norm). Temporarily expose its exact product box while descendant constructs

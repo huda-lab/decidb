@@ -515,8 +515,9 @@ void EmitAbsConstraints(SolverInput &input, const VarIndexer &indexer, NativeCon
 		}
 		// THE CHOICE, made once: the ABS is a pseudo-operation the backend either declares (legal: stated natively) or
 		// not (expanded into its indicator and Big-M rows), as a legalization pass decides per operation. The same rule
-		// as a MIN or MAX (NativeConstructPolicy): where a Big-M exists the expansion is the smaller model, so native
-		// is the fallback for an ABS whose reach is open, the one query the lowering must refuse.
+		// as a MIN or MAX (NativeConstructPolicy). Native is the default, and ABS has no measurement that its lowering
+		// is faster (Q10 on Gurobi: a tie), so a declared ABS is stated natively and the expansion serves a backend
+		// that declares none.
 		if (policy.Use(link.range_unbounded)) {
 			StateAbsNatively(input, indexer, instances, link);
 		} else {

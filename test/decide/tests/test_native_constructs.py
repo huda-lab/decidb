@@ -20,16 +20,17 @@ and states an equality (so the backend expands both directions). What it is, is
 variable, and where none exists DeciDB refuses (see ``test_unbounded_bigm``). A general
 constraint needs no bound at all.
 
-So for ABS and MIN/MAX native is the FALLBACK, taken per clause only where no Big-M exists.
-That is why their A/B runs ``force`` against ``off`` rather than the default against
+So for MIN/MAX native is the FALLBACK, taken per clause only where no Big-M exists.
+That is why its A/B runs ``force`` against ``off`` rather than the default against
 ``off`` — the default would take the lowering on these bounded shapes and the test
-would compare the lowering with itself.
+would compare the lowering with itself. A construct is lowered only where the lowering is
+measured faster; for ABS it is not (Q10, a tie), so a declared ABS is native by default.
 
 Covers:
   - test_native_and_lowered_agree: the A/B, over the ABS-maximize shapes
   - test_minmax_native_and_lowered_agree: the A/B, over the MIN/MAX shapes
   - test_native_replaces_rows_with_a_general_constraint: the model really changed
-  - test_abs_prefers_the_lowering_when_a_big_m_exists: the gate for ABS, read off the model
+  - test_abs_is_native_by_default_when_a_big_m_exists: the gate for ABS, read off the model
   - test_minmax_prefers_the_lowering_when_a_big_m_exists: the gate, read off the model
   - test_native_abs_needs_no_bound: the payoff — refused when lowered, answered native
   - test_native_minmax_needs_no_bound: the same payoff on MIN/MAX
@@ -141,13 +142,13 @@ def test_native_replaces_rows_with_a_general_constraint(decidb_cli_gurobi):
 
 
 @pytest.mark.obj_maximize
-def test_abs_prefers_the_lowering_when_a_big_m_exists(decidb_cli_gurobi):
-    """Which arm a bounded ABS takes, read off the model: the one rule MIN/MAX read.
+def test_abs_is_native_by_default_when_a_big_m_exists(decidb_cli_gurobi):
+    """Which arm a bounded ABS takes, read off the model.
 
-    Both arms pin `aux = |inner|`, so where both exist it is a performance question and the lowering wins
-    it (see `test_minmax_prefers_the_lowering_when_a_big_m_exists`). `x` is bounded here, so a Big-M exists and the
-    default takes the lowering; the fallback stays reachable on demand, and `test_native_abs_needs_no_bound` covers
-    the case it exists for.
+    Native is the default, and a construct is lowered only where the lowering is measured faster. For MIN/MAX it is
+    (`test_minmax_prefers_the_lowering_when_a_big_m_exists`); for ABS it is not: on Q10 (one binary, 200K rows) the
+    lowering ran 12.0-12.2 s against 12.2-12.3 s native, a tie. `x` is bounded here, so a Big-M exists, and the default
+    still states the ABS natively; the lowering stays reachable (`off`, and any backend that declares no ABS).
     """
     sql = f"SELECT id, x FROM {_FIXTURE} DECIDE x(REAL) " "SUCH THAT x >= 0 AND x <= 10 MAXIMIZE SUM(ABS(x - target))"
 
@@ -158,12 +159,11 @@ def test_abs_prefers_the_lowering_when_a_big_m_exists(decidb_cli_gurobi):
 
     # `on` is the shipping policy spelled out, as in the MIN/MAX test.
     default = dump_of({"DECIDB_NATIVE_CONSTRUCTS": "on"})
-    forced = dump_of({"DECIDB_NATIVE_CONSTRUCTS": "force"})
     lowered = dump_of({"DECIDB_NATIVE_CONSTRUCTS": "off"})
 
-    assert "num_genconstrs: 0" in default, default
-    assert default == lowered, f"default arm is not the lowering:\n{default}\n---\n{lowered}"
-    assert re.search(r"^gen \d+: kind=abs ", forced, re.MULTILINE), forced
+    assert re.search(r"^gen \d+: kind=abs ", default, re.MULTILINE), default
+    assert "num_genconstrs: 0" in lowered, lowered
+    assert default != lowered
 
 
 @pytest.mark.correctness
