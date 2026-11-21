@@ -10,11 +10,6 @@ Each phase is one architectural change. Phases run in order; groups
 inside a phase run in order; measurement runs fit between phases. `(decision)` marks a task whose **Decision needed**
 the owner rules first.
 
-# Phase 2 — Direct solve is a separate layer
-
-## 2.1 Rule plans (one lane)
-- [ ] FW-7 Direct rules forward columns by hand — direct_solve/framework/todo.md § FW-7
-
 # Phase 3 — Each shape and formulation has one owner
 
 ## 3.1 Binder and first rewrites (parallel: BIND-4, BIND-5 | OPT-24 | OPT-27)

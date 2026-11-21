@@ -56,16 +56,8 @@ solver path answers those queries, so none of them is wrong, only slower.
   on the rows outside a ball (`DecideOnKeptRows`), so a constant becomes a CASE over a column that no pass folds;
   `n1_groups` went from 1.14 to 1.38 with N1's literal `q` deleted. A constant that decides the plan's shape, such as
   whether a value needs a mask or a check (N1's `q`, A1's floor), is a literal the rule builds with. **Ruling (owner,
-  2026-11-13).**
-
-## FW-7 — Direct rules forward columns by hand
-
-- **Decision needed.** Each projection stage of a non-ranked rule has a struct of bindings and forwards them by hand
-  (R1: 17 fields at five stages); `direct_plan_fragments` is 1,711 lines over 11 topics; `DirectCanSkipSourceOutput`
-  is a case list over operator types. R1's plan alone is 1,348 lines.
-- **Options.** 1. A stage builder that forwards every column and leaves pruning to DuckDB (about 400 lines go).
-  2. Only the shared row-box fragment (about 80 lines go). Either way, the owner rules whether R1 keeps its breadth.
-- **Recommendation.** 1, leaving `DirectRankedPrefix` alone: DuckDB's own column pruning is the standard tool, and it
-  removes a case list.
-- **Ruling (owner, 2026-11-21).** Option 1, leaving `DirectRankedPrefix` alone. R1 keeps its breadth.
-- **Done when.** `DECIDB_TEST_DIRECT_SOLVE=off` and the default pass `./test/decide/run_tests.sh -n 2 -k "direct"`.
+  2026-11-13).** Not done either (FW-7, closed on evidence): a stage chain that forwards every column of a rule's
+  projection stages and leaves pruning to DuckDB. A gated read carries the gate's own column, so the chain must forward
+  the columns the rule names: a second forwarding helper, not the end of forwarding. It fits A1, A2 and N1 of the nine
+  rules; measured, the helper adds 97 lines and A1's conversion removes 32, and the projection over the rules it fits
+  is about 40 lines removed. The owner's ruling for it (2026-11-21) came before the measurement.
