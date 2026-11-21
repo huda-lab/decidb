@@ -648,21 +648,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		}
 	}
 
-	// A box inverted by rounding alone is one point. Boxes are derived in floating point
-	// from several sources -- a bound divided by its coefficient (`3 * x <= 0.3` is
-	// `x <= 0.0999...` beside `x >= 0.1`), a helper's box through an AVG's 1/n -- and a
-	// floor above its top by no more than DECIDE_ROUNDED_BOX_RELATIVE_TOLERANCE is, in
-	// exact arithmetic, equal to it. Left inverted it reads as an infeasible model; a wider inversion still is one.
-	auto close_rounded_box = [](double &lower, double &upper) {
-		if (lower > upper &&
-		    lower - upper <= DECIDE_ROUNDED_BOX_RELATIVE_TOLERANCE * MaxValue<double>(1.0, std::abs(upper))) {
-			lower = upper;
-		}
-	};
-	for (idx_t var = 0; var < num_decide_vars; var++) {
-		close_rounded_box(per_var_lower[var], per_var_upper[var]);
-	}
-
 	// Expand per-variable config to all solver variables
 	model.col_lower.resize(total_vars);
 	model.col_upper.resize(total_vars);
@@ -718,7 +703,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		auto gtype = input.global_variable_types[g];
 		model.col_lower[var_idx] = input.global_lower_bounds[g];
 		model.col_upper[var_idx] = input.global_upper_bounds[g];
-		close_rounded_box(model.col_lower[var_idx], model.col_upper[var_idx]);
 		model.is_integer[var_idx] = gtype != LogicalType::DOUBLE;
 		model.is_binary[var_idx] = (gtype == LogicalType::BOOLEAN);
 	}
@@ -1303,6 +1287,20 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 			gc.provenance.removal_group_id = spec.removal_group_id;
 		}
 		model.general_constraints.push_back(std::move(gc));
+	}
+
+	// A box inverted by rounding alone is one point. Boxes are derived in floating point from several sources -- a
+	// bound divided by its coefficient (`3 * x <= 0.3` is `x <= 0.0999...` beside `x >= 0.1`), a helper's reach, a
+	// per-row bound folded in above -- and a floor above its top by no more than DECIDE_ROUNDED_BOX_RELATIVE_TOLERANCE
+	// is, in exact arithmetic, equal to it. Left inverted it reads as an infeasible model; a wider inversion still is
+	// one. Applied to every column once its box is final, whatever formed or narrowed it.
+	for (idx_t col = 0; col < total_vars; col++) {
+		double &lower = model.col_lower[col];
+		const double upper = model.col_upper[col];
+		if (lower > upper &&
+		    lower - upper <= DECIDE_ROUNDED_BOX_RELATIVE_TOLERANCE * MaxValue<double>(1.0, std::abs(upper))) {
+			lower = upper;
+		}
 	}
 
 	//===--------------------------------------------------------------------===//

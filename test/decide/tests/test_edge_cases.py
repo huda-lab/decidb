@@ -1115,7 +1115,8 @@ _ROUNDED_BOX = {
     # The same box at a magnitude where the gap (1.2e-7) is far past 1e-9 and inside one part in 1e9 of the cap:
     # the tolerance is relative to the cap
     "tolerance_scales_with_cap": ("3", "1962965963.1", "654321987.7", "MAXIMIZE SUM(x)", True),
-    # SolverModel::Build, a global auxiliary's box: MAX(x)'s column is boxed from the inverted decision box
+    # SolverModel::Build, a helper's box: MAX(x)'s column is a helper decision whose reach is formed from the inverted
+    # decision box
     "auxiliary_box": ("3", "0.3", "0.1", "MINIMIZE MAX(x)", True),
     # An inversion of 1e-4 is a real one: no tolerance closes it
     "wide_inversion_stays_infeasible": ("3", "0.2997", "0.1", "MAXIMIZE SUM(x)", False),
@@ -1131,9 +1132,9 @@ def test_rounded_box_is_one_point(decidb_cli, oracle_solver, case):
 
     `3 * x <= 0.3` folds to `x <= 0.0999...` (0.3 / 3 rounds below 0.1) and `x >= 0.1` is the floor, so the
     box is inverted by 1.4e-17 although the two bounds are, in exact arithmetic, one point. The model builder
-    closes a box inverted by at most one part in 1e9 (`close_rounded_box`); without it every case here but the last
-    is answered infeasible on both backends, while the oracle, which holds the row to its feasibility tolerance,
-    solves it. The last case is the other side of the tolerance: a gap of 1e-4 is infeasible for both.
+    closes every column's box inverted by at most one part in 1e9 once the box is final; without it every case here
+    but the last is answered infeasible on both backends, while the oracle, which holds the row to its feasibility
+    tolerance, solves it. The last case is the other side of the tolerance: a gap of 1e-4 is infeasible for both.
     """
     coefficient, rhs, floor, objective, feasible = _ROUNDED_BOX[case]
     # The solver path: the model builder is what is under test, and direct solve answers a single-decision box on its

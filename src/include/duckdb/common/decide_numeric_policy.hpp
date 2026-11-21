@@ -44,8 +44,8 @@ constexpr double DECIDE_OPTIMALITY_TOLERANCE = 1e-6;
 
 //! How far a decision's lower end may sit above its upper end, relative to the upper end's magnitude (at least 1), and
 //! still be one point. Boxes are derived in floating point (`3 * x <= 0.3` is `x <= 0.0999...` beside `x >= 0.1`), so a
-//! floor above its top by rounding alone is, in exact arithmetic, equal to it. The model builder (`close_rounded_box`)
-//! and direct solve (`DirectRowBox`) close such a box onto its top; a wider inversion stays empty.
+//! floor above its top by rounding alone is, in exact arithmetic, equal to it. The model builder (every column, once
+//! its box is final) and direct solve (`DirectRowBox`) close such a box onto its top; a wider inversion stays empty.
 constexpr double DECIDE_ROUNDED_BOX_RELATIVE_TOLERANCE = 1e-9;
 
 //! A coefficient of this magnitude or more: an integer column accepted this far from a whole number moves the row by
