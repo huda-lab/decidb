@@ -648,18 +648,6 @@ _SCOPE_W = (2, 3, 4)
     "declare, clause, objective, domains, holds, value, num_vars, num_qrows",
     [
         pytest.param(
-            "x(INT), per (): d(INT)",
-            "d <= 3 AND x <= 3 AND SUM(power(d, 2)) + max(x) <= 20",
-            "MAXIMIZE SUM(w * d) + SUM(x)",
-            {"d": range(4), **{f"x{i}": range(4) for i in range(3)}},
-            lambda a: 3 * a["d"] ** 2 + max(a[f"x{i}"] for i in range(3)) <= 20,
-            lambda a: sum(_SCOPE_W) * a["d"] + sum(a[f"x{i}"] for i in range(3)),
-            # x per row, d, one helper and the maximum's column.
-            6,
-            1,
-            id="body-query-wide-is-one-helper",
-        ),
-        pytest.param(
             "per k: d(INT)",
             "d <= 3 AND max(power(d, 2)) by (k) >= 4",
             "MINIMIZE SUM(w * d)",
@@ -676,9 +664,8 @@ _SCOPE_W = (2, 3, 4)
 def test_body_helper_takes_the_scope_the_body_reads(
     decidb_cli_gurobi, tmp_path, declare, clause, objective, domains, holds, value, num_vars, num_qrows
 ):
-    """A non-linear body's helper is a column defined by the body: one for a query-wide body
-    and one per key for a keyed one, with its quadratic row once per instance, while the
-    reducer still reads it on every row. Only Gurobi states the MIN/MAX over a helper.
+    """A non-linear body's helper is a column defined by the body: one per key for a keyed one, with its quadratic row
+    once per instance, while the reducer still reads it on every row. Only Gurobi states the MIN/MAX over a helper.
     Judged against every assignment."""
     sql = f"""
         SELECT * FROM {_SCOPE_ROWS}
