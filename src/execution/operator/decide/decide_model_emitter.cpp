@@ -590,10 +590,20 @@ void DecideModelEmitter::Constraints() {
 			AbsEnvelope(abs_function_of_clause[c], root, c < num_constraints);
 			continue;
 		}
-		auto evaluated = clause.lhs_is_aggregate || clause.was_minmax_easy ? Groups(root, c < num_constraints)
-		                                                                   : Rows(root, c < num_constraints);
-		(c < num_constraints ? gstate.evaluated_constraints : gstate.evaluated_singleton_row_constraints)
-		    .push_back(std::move(evaluated));
+		Route(clause.lhs_is_aggregate || clause.was_minmax_easy ? Groups(root, c < num_constraints)
+		                                                        : Rows(root, c < num_constraints),
+		      c >= num_constraints);
+	}
+}
+
+void DecideModelEmitter::Route(EmittedClause &&clause, bool folded) {
+	if (folded) {
+		gstate.evaluated_singleton_row_constraints.push_back(std::move(clause.row));
+	} else if (clause.row.comparison_type == ExpressionType::COMPARE_NOTEQUAL) {
+		gstate.evaluated_not_equals.push_back(
+		    {std::move(clause.row), std::move(clause.no_exclusion), clause.avg_rhs_scale});
+	} else {
+		gstate.evaluated_constraints.push_back(std::move(clause.row));
 	}
 }
 
@@ -623,17 +633,19 @@ void DecideModelEmitter::AbsEnvelope(idx_t function, idx_t root, bool counted) {
 	}
 	// An envelope row holds no aggregate (stage 05 gives every reducer a function reads a helper decision) and is
 	// built fresh, never the easy half of a MIN/MAX: it is one row per routed instance of the F edge's scope.
-	(clause.abs_is_pos_bound ? link->operand : link->negated) = Rows(root, counted);
+	(clause.abs_is_pos_bound ? link->operand : link->negated) = Rows(root, counted).row;
 }
 
-EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
+EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {
 	auto &body = tree.nodes[root]->compiled;
 	auto &clause = *body.clause;
 	auto &node = *tree.nodes[root];
 	const auto entries = descent.Containers()[root].Count();
-	auto evaluated = InitializeEvaluatedConstraint(clause, body.clause_index, op.diagnose, [&](const DecideTerm &term) {
+	EmittedClause result;
+	result.row = InitializeEvaluatedConstraint(clause, body.clause_index, op.diagnose, [&](const DecideTerm &term) {
 		return gstate.ReadVariable(term.variable_index, term.frame_read);
 	});
+	auto &evaluated = result.row;
 	// The rows the clause keeps, which its `when` routed and its NULL tests keep (DecideNode::member_tests: a helper's
 	// row reads a reducer's body on the reducer's members), with the entry standing for each: one model row stands on
 	// each, or under `per K:` on one row of each variant of a class.
@@ -698,7 +710,7 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 			CheckDomain(root, evaluated);
 		}
 	}
-	return evaluated;
+	return result;
 }
 
 void DecideModelEmitter::CheckDomain(idx_t root, const EvaluatedConstraint &evaluated) {
@@ -1083,13 +1095,15 @@ bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const DecideEntryRows &row
 	return has_local_filters;
 }
 
-EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
+EmittedClause DecideModelEmitter::Groups(idx_t root, bool counted) {
 	auto &node = *tree.nodes[root];
 	auto &body = node.compiled;
 	auto &clause = *body.clause;
-	auto evaluated = InitializeEvaluatedConstraint(clause, body.clause_index, op.diagnose, [&](const DecideTerm &term) {
+	EmittedClause result;
+	result.row = InitializeEvaluatedConstraint(clause, body.clause_index, op.diagnose, [&](const DecideTerm &term) {
 		return gstate.ReadVariable(term.variable_index, term.frame_read);
 	});
+	auto &evaluated = result.row;
 	// The rows the clause keeps: every row its root holds, which its `when` routed, with the entry standing for each.
 	const auto rows = DecideEntryRows(tree, descent, root);
 	vector<bool> kept(num_rows, false);
@@ -1165,11 +1179,11 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 	if (clause.lhs_is_aggregate) {
 		CountTupleTermsOncePerGroup(clause.lhs_terms, num_rows, evaluated);
 	}
-	const auto bound_null = GroupBound(root, rows, null_rows, evaluated);
+	const auto bound_null = GroupBound(root, rows, null_rows, result);
 	if (clause.admitted_lower) {
 		Admit(body, evaluated);
 	}
-	HoistAvgIntoNotEqualBound(clause, filters, evaluated);
+	result.avg_rhs_scale = HoistAvgIntoNotEqualBound(clause, filters);
 	ScaleAvgTerms(clause, filters, num_rows, evaluated);
 	Polynomial(root, filters, null_rows, evaluated);
 	if (!bound_null.empty()) {
@@ -1187,13 +1201,14 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 			CheckDomain(root, evaluated);
 		}
 	}
-	return evaluated;
+	return result;
 }
 
 vector<bool> DecideModelEmitter::GroupBound(idx_t root, const DecideEntryRows &rows, vector<bool> &null_rows,
-                                            EvaluatedConstraint &evaluated) {
+                                            EmittedClause &result) {
 	auto &body = tree.nodes[root]->compiled;
 	auto &clause = *body.clause;
+	auto &evaluated = result.row;
 	if (!DescribeBound(clause, num_rows, op.diagnose, op.source_text, op.constraint_sources, op.keyed_scopes, op.keys,
 	                   evaluated)) {
 		return vector<bool>();
@@ -1218,7 +1233,7 @@ vector<bool> DecideModelEmitter::GroupBound(idx_t root, const DecideEntryRows &r
 	// every value of its bound rather than a tightest one.
 	const auto excludes = evaluated.comparison_type == ExpressionType::COMPARE_NOTEQUAL;
 	D_ASSERT(!excludes || (clause.lhs_is_aggregate && !tightest));
-	std::vector<bool> &marked = tightest ? bound_null : excludes ? evaluated.no_exclusion : null_rows;
+	std::vector<bool> &marked = tightest ? bound_null : excludes ? result.no_exclusion : null_rows;
 	if (excludes) {
 		marked.assign(num_rows, false);
 	}

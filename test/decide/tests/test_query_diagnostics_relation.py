@@ -1692,7 +1692,7 @@ class TestDiagnosticsRelation:
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_prepared_l0_bilinear_removal_metadata_survives_replay(self, request, cli_fixture):
-        """The serialized BilinearLink keeps source/removal provenance for the
+        """The serialized BilinearLinkSpec keeps source/removal provenance for the
         execution-time McCormick descendants inside an L0 group."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (

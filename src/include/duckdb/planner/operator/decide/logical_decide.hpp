@@ -406,9 +406,6 @@ public:
 	// should also push_back their boolean status.
 	vector<bool> is_boolean_var;
 
-	// The source clause (index into constraint_sources) of each not-equal (<>) constraint
-	vector<idx_t> ne_clause_sources;
-
 	//! The intact Boolean-product expressions and the plan-time helper allocation needed by stage 05. Executable
 	//! bilinear links are materialized from these specs as BOOLEAN_PRODUCT F nodes in DecideTree.
 	vector<DecideBilinearFunctionGroup> bilinear_function_groups;

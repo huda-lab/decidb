@@ -326,10 +326,6 @@ static constexpr const char *TREE_RETAINED_EXPRESSION_TAG_PREFIX = "__tree_retai
 static constexpr const char *TREE_REDUCER_SCOPE_TAG_PREFIX = "__tree_reducer_scope_";
 static constexpr const char *TREE_REDUCER_KEY_TAG_PREFIX = "__tree_reducer_key_";
 
-//! Tag prefix linking a `<>` comparison to its clause (on BoundComparisonExpression.alias).
-//! Format: "__ne_clause_tag_<clause_idx>__", indexing `LogicalDecide::ne_clause_sources`.
-static constexpr const char *NE_CLAUSE_TAG_PREFIX = "__ne_clause_tag_";
-
 //! Tag marking a comparison whose LHS is an easy-direction MIN/MAX reducer
 //! (MAX(e) <= K, MIN(e) >= K). The reducer stays in the tree: the linear form expands it
 //! to one row per member, the bound reduced over each `by` group, and bound absorption
@@ -618,7 +614,6 @@ static constexpr const char *DECIDE_TAGS[] = {WHEN_FILTER_TAG,
                                               TREE_RETAINED_EXPRESSION_TAG_PREFIX,
                                               TREE_REDUCER_SCOPE_TAG_PREFIX,
                                               TREE_REDUCER_KEY_TAG_PREFIX,
-                                              NE_CLAUSE_TAG_PREFIX,
                                               MINMAX_EASY_REWRITE_TAG,
                                               BODY_DEFINITION_TAG,
                                               STRUCTURAL_CONSTRAINT_TAG,

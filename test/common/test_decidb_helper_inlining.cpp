@@ -212,9 +212,7 @@ TEST_CASE("DeciDB helper inlining", "[decidb][formulation][inlining]") {
 		     }},
 		    {"a row of a <> clause", 2,
 		     [&](SolverInput &input) {
-			     auto ec = row_over(1);
-			     ec.ne_clause_idx = 0;
-			     input.constraints.push_back(std::move(ec));
+			     input.not_equals.push_back({row_over(1), {}, false});
 		     }},
 		    {"a bound stage 08 may fold into a box", 2,
 		     [&](SolverInput &input) {

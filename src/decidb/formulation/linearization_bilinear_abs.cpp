@@ -179,9 +179,9 @@ static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t nu
 	// it puts there IS the demand, and without this the ceiling below is set under it —
 	// an empty column, which no widening of `x` can repair.
 	demanded = MaxValue<double>(demanded, input.lower_bounds[aux_idx]);
-	for (const auto &ec : input.constraints) {
+	input.ForEachClauseRow([&](const EvaluatedConstraint &ec) {
 		if (ec.abs_aux_idx == aux_idx) {
-			continue; // the definitional pair: it states what the auxiliary IS, not what was asked of it
+			return; // the definitional pair: it states what the auxiliary IS, not what was asked of it
 		}
 		idx_t term = DConstants::INVALID_INDEX;
 		for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
@@ -191,7 +191,7 @@ static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t nu
 			}
 		}
 		if (term == DConstants::INVALID_INDEX) {
-			continue;
+			return;
 		}
 		bool pushes_up = ec.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
 		                 ec.comparison_type == ExpressionType::COMPARE_GREATERTHAN ||
@@ -225,7 +225,7 @@ static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t nu
 				demanded = MaxValue<double>(demanded, (k - hi) / a);
 			}
 		}
-	}
+	});
 	return demanded;
 }
 

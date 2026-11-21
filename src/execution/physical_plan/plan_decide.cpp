@@ -258,7 +258,6 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	decide_op->force_native_constructs = op.force_native_constructs;
 	decide_op->num_auxiliary_vars = op.num_auxiliary_vars;
 	decide_op->is_boolean_var = op.is_boolean_var;
-	decide_op->ne_clause_sources = std::move(op.ne_clause_sources);
 	decide_op->aux_var_expressions = std::move(op.aux_var_expressions);
 	decide_op->constraint_sources = std::move(op.constraint_sources);
 	decide_op->written_objective = std::move(op.written_objective);

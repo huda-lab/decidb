@@ -269,8 +269,8 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 		decide_op->objective_signature = signatures.objective;
 		decide_op->keys = std::move(statement.decide_keys);
 		decide_op->frames = std::move(statement.decide_frames);
-		// ne_clause_sources, ABS aux vars, and MIN/MAX indicator links +
-		// objective types are created by DecideOptimizer (runs after plan creation)
+		// ABS aux vars, MIN/MAX indicator links and objective types are created by DecideOptimizer (runs after plan
+		// creation)
 		decide_op->AddChild(std::move(root));
 		root = std::move(decide_op);
 	}

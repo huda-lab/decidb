@@ -100,8 +100,7 @@ static NECollapse ClassifyNEConstraint(const EvaluatedConstraint &ec, idx_t num_
 //! The clause a `<>` came from, quoted as written, naming every binary it allocates so a
 //! diagnosis renders `SUM(x) <> 0` rather than an internal column.
 static string NotEqualClauseLabel(const SolverInput &input, const EvaluatedConstraint &ec) {
-	// The tag carries the index minted beside the source (RewriteNotEqual), so it is always in range.
-	return QuoteWrittenClause(input.constraint_sources, input.ne_clause_sources[ec.ne_clause_idx], input.source_text);
+	return QuoteWrittenClause(input.constraint_sources, ec.origin.source_clause_id, input.source_text);
 }
 
 //! One per-row `<>`, in whichever shape its own reachable range earns.
@@ -195,33 +194,25 @@ static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer, cons
 }
 
 static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_indexer,
-                                    vector<EvaluatedConstraint> &deferred_aggregate, const vector<string> &var_names);
+                                    const vector<const NotEqualClause *> &deferred_aggregate,
+                                    const vector<string> &var_names);
 
 void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names) {
 	const idx_t num_rows = input.num_rows;
 
 	// The aggregate spelling is collected on this walk and finished below: it needs one
 	// global binary per GROUP, which the per-row loop has no notion of.
-	vector<EvaluatedConstraint> deferred_aggregate;
-	vector<EvaluatedConstraint> new_constraints;
-	for (auto &ec : input.constraints) {
-		if (ec.ne_clause_idx == DConstants::INVALID_INDEX) {
-			new_constraints.push_back(std::move(ec));
-			continue;
-		}
-		if (!ec.product_groups.empty()) {
-			throw InternalException("DECIDE: a '<>' over a product or a power of decisions reached the model builder. "
-			                        "Its rows hold the linear terms only, so building it would drop the rest; stage 05 "
-			                        "refuses it (FindNotEqualConstraints).");
-		}
+	vector<const NotEqualClause *> deferred_aggregate;
+	for (auto &clause : input.not_equals) {
+		auto &ec = clause.row;
 		if (ec.lhs_is_aggregate) {
 			// Aggregate NE: defer to after var_indexer is built. Expanded with a
 			// single global z per group, whose Big-M comes from that group's SUMMED
 			// range — a single per-row bound would be far too small. The per-group
 			// integer-RHS check (for AVG <> where the rescaled K*N_g may or may not
 			// be integer) lives in the deferred expansion; we don't filter here.
-			deferred_aggregate.push_back(ec); // copy before the loop moves on
-			continue;                         // not added to new_constraints
+			deferred_aggregate.push_back(&clause);
+			continue;
 		}
 
 		// Per-row NE: expand inline with the row-scoped indicator variable.
@@ -268,9 +259,10 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer, const vect
 		}
 		EmitNotEqualRows(input, indexer, ec, collapse, NotEqualClauseLabel(input, ec));
 	}
-	input.constraints = std::move(new_constraints);
 
 	ExpandAggregateNotEqual(input, indexer, deferred_aggregate, var_names);
+	// Every `<>` is expanded: what is left of them is the rows and binaries above.
+	input.not_equals.clear();
 }
 
 //! The AGGREGATE spelling of `<>`. It cannot expand against the row-scoped indicator
@@ -280,14 +272,16 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer, const vect
 //! stage 05 recorded for the indicator, so a dropped aggregate `<>` can be named in a
 //! repair.
 static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_indexer,
-                                    vector<EvaluatedConstraint> &deferred_aggregate, const vector<string> &var_names) {
+                                    const vector<const NotEqualClause *> &deferred_aggregate,
+                                    const vector<string> &var_names) {
 	if (deferred_aggregate.empty()) {
 		return;
 	}
 	const idx_t num_rows = input.num_rows;
 
 	const InstanceBox floors {input, var_indexer};
-	for (auto &ec : deferred_aggregate) {
+	for (auto *clause : deferred_aggregate) {
+		const auto &ec = clause->row;
 		bool has_groups = !ec.row_group_ids.empty();
 		const auto written = DecideWrittenClause(input, ec.origin.source_clause_id);
 		// The group's LHS, one row the clause emits (ClauseEmittedRows): a group of a grouped clause, the whole
@@ -340,7 +334,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 			// runs once, identically to before this supported more than one.
 			vector<double> distinct_rhs;
 			for (idx_t k = g_begin; k < g_end; k++) {
-				if (!ec.no_exclusion.empty() && ec.no_exclusion[flat_rows[k]]) {
+				if (!clause->no_exclusion.empty() && clause->no_exclusion[flat_rows[k]]) {
 					continue;
 				}
 				double raw = ec.rhs_values.Get(flat_rows[k]);
@@ -359,7 +353,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 			// reused for every value in `distinct_rhs`.
 			// A term beside the reducers enters the group's row once: execution kept its coefficient on one row of
 			// the group (CountOnce), so the per-row ranges count it once too.
-			// The clause is linear: LinearizeNotEqual throws on a product group before it defers one.
+			// The clause is linear: stage 05 refuses a `<>` over a product (RewriteNotEqual).
 			double grp_lo = 0.0;
 			double grp_hi = 0.0;
 			for (idx_t k = g_begin; k < g_end; k++) {
@@ -380,7 +374,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 				// Base (unscaled) value. For AVG(x) <> K we store the original K in
 				// rhs_values and multiply by the group size here.
 				double rhs = distinct_rhs[vi];
-				if (ec.ne_avg_rhs_scale) {
+				if (clause->avg_rhs_scale) {
 					rhs *= static_cast<double>(g_size);
 				}
 				rhs -= fixed_offset;

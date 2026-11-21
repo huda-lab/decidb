@@ -39,9 +39,7 @@ unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const
 	facts->tightest_frame_bound = HasDecideTag(comparison.alias, FRAME_TIGHTEST_BOUND_TAG);
 	TryParseSourceClauseTag(comparison.alias, facts->origin.source_clause_id);
 	TryParseRemovalGroupTag(comparison.alias, facts->origin.removal_group_id);
-	string payload;
-	if (ExtractDecideTagPayload(comparison.alias, NE_CLAUSE_TAG_PREFIX, payload)) {
-		facts->ne_clause_idx = std::stoull(payload);
+	if (comparison.type == ExpressionType::COMPARE_NOTEQUAL) {
 		facts->kind = ConstraintKind::USER_MECHANISM;
 	}
 	if (HasDecideTag(comparison.alias, STRUCTURAL_CONSTRAINT_TAG)) {

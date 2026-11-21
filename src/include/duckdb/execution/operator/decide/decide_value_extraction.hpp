@@ -206,10 +206,9 @@ void ScaleAvgTerms(const DecideConstraint &constraint, const vector<TermFilterSt
 
 //! An AVG under `<>`: dividing its terms by their group's count gives fractional coefficients, which the `<>`
 //! expansion's integer step refuses. So a left side of linear terms that are all AVG keeps them as sums, and the
-//! bound is multiplied by each group's count instead (EvaluatedConstraint::ne_avg_rhs_scale): `filters` then scale
-//! nothing. A mixed left side, or one with a product group, keeps the division, which may still be refused.
-void HoistAvgIntoNotEqualBound(const DecideConstraint &constraint, vector<TermFilterState> &filters,
-                               EvaluatedConstraint &evaluated);
+//! bound is multiplied by each group's count instead (NotEqualClause::avg_rhs_scale, which this returns): `filters`
+//! then scale nothing. A mixed left side keeps the division, which may still be refused.
+bool HoistAvgIntoNotEqualBound(const DecideConstraint &constraint, vector<TermFilterState> &filters);
 
 //! The bound of a clause over groups that reads a frame and may differ within a group (FRAME_TIGHTEST_BOUND_TAG, D85):
 //! each group's instance takes its tightest value among all its kept rows where the bound has one, a row its reducers'

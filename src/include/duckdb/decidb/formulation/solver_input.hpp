@@ -308,9 +308,6 @@ struct EvaluatedConstraint {
 	//! numeric fan-out; a constant coefficient carries its number.
 	vector<CoefficientName> coefficient_names;
 	CoefficientColumn rhs_values; // RHS column (logical size = num_rows)
-	//! A grouped `<>` row whose bound is NULL: still a member of its group's sum, it excludes no value
-	//! (language/guide.md §6.4). Empty for any other clause.
-	vector<bool> no_exclusion;
 	//! A per-row bound on one decision: the values it admits on each row (DecideConstraint::admitted_lower and
 	//! admitted_upper), ±infinity on an open side. Logical size 0 for any other constraint.
 	CoefficientColumn admitted_lower;
@@ -320,15 +317,6 @@ struct EvaluatedConstraint {
 	idx_t lifted_floor = DConstants::INVALID_INDEX;
 	ExpressionType comparison_type;
 	bool lhs_is_aggregate = false; // True if original LHS was an aggregate (e.g., SUM(...))
-	//! Which `<>` clause this row is, as an index into `ne_clause_sources`. A tag, not
-	//! a variable: the disjunction binaries are allocated by the pass that emits the
-	//! rows reading them.
-	idx_t ne_clause_idx = DConstants::INVALID_INDEX;
-	//! AVG(x) <> K path: original LHS was AVG; instead of dividing LHS coefficients by the
-	//! AVG denominator (which would produce fractional coefficients and trip the NE
-	//! integer-step guard), we keep LHS as SUM and multiply the per-group RHS by group size
-	//! inside the deferred NE expansion.
-	bool ne_avg_rhs_scale = false;
 	//! The ABS auxiliary this row is a lower-envelope row of (`aux >= inner` or `aux >= -inner`), or INVALID_INDEX.
 	//! EmitAbsEnvelopes writes it; the passes that read the auxiliary's box or hold its readers' helpers skip the
 	//! pair by it.
@@ -393,6 +381,22 @@ struct EvaluatedConstraint {
 	GroupName NameOf(idx_t group) const {
 		return group < group_names.size() ? group_names[group] : GroupName();
 	}
+};
+
+//! A `<>` clause, as the emitter evaluates it. It waits in `SolverInput::not_equals` until `LinearizeNotEqual` expands
+//! it into the conditional rows and the binaries that carry its disjunction, as LLVM's LegalizeDAG legalizes a
+//! pseudo-operation before instruction selection: the model builder never sees one. The list says which clause is a
+//! `<>`, and `row.origin.source_clause_id` names it.
+struct NotEqualClause {
+	EvaluatedConstraint row;
+	//! A grouped `<>` row whose bound is NULL: still a member of its group's sum, it excludes no value
+	//! (language/guide.md §6.4). Empty for any other clause.
+	vector<bool> no_exclusion;
+	//! AVG(x) <> K path: original LHS was AVG; instead of dividing LHS coefficients by the
+	//! AVG denominator (which would produce fractional coefficients and trip the NE
+	//! integer-step guard), we keep LHS as SUM and multiply the per-group RHS by group size
+	//! inside the deferred NE expansion.
+	bool avg_rhs_scale = false;
 };
 
 //! Sum decision-free LHS terms over a row range: the fixed part of the row a clause emits for those rows. `written`
@@ -672,6 +676,20 @@ struct SolverInput {
 
 	// Constraints
 	vector<EvaluatedConstraint> constraints;
+	//! The `<>` clauses (`SUM(x) <> 0`), until `LinearizeNotEqual` consumes them. The disjunction binary of each is
+	//! labelled by quoting its source clause, so the diagnostics and model inspection can name it.
+	vector<NotEqualClause> not_equals;
+	//! Every clause row of the model, whichever list holds it: what a pass reads that asks of a row only what the row
+	//! says (its bound, its terms), not how it is built.
+	template <class F>
+	void ForEachClauseRow(F &&visit) const {
+		for (auto &row : constraints) {
+			visit(row);
+		}
+		for (auto &clause : not_equals) {
+			visit(clause.row);
+		}
+	}
 	vector<ConstraintSourceInfo> constraint_sources;
 	//! The query text the clauses' spans cut (LogicalDecide::source_text).
 	DecideSourceText source_text;
@@ -798,11 +816,6 @@ struct SolverInput {
 		RawConstraint row;
 	};
 	vector<IndicatorConstraintSpec> indicator_constraints;
-
-	//! The source clause of each `<>` clause (`SUM(x) <> 0`), indexed by
-	//! `EvaluatedConstraint::ne_clause_idx`. The disjunction binary is labelled by quoting it, so the
-	//! diagnostics and model inspection can name the clause.
-	vector<idx_t> ne_clause_sources;
 
 	//! Constructs left native for the backend, in flat columns. Emitted at stage 08
 	//! once the VarIndexer exists — like `global_constraints`, and for the same reason.

@@ -90,9 +90,6 @@ public:
 	// intrinsic domain, not a user-editable bound. Indexed by decide_variables position.
 	vector<bool> is_boolean_var;
 
-	// The source clause (index into constraint_sources) of each not-equal (<>) constraint
-	vector<idx_t> ne_clause_sources;
-
 	// F6: auxiliary variable index -> user's original source expression string
 	// (ABS(...) / MIN/MAX(...) / product / <>), for naming an escaping aux column
 	// in the unbounded diagnosis. Sparse; only auxiliary variables appear.

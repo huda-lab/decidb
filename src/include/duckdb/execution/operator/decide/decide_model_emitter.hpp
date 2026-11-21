@@ -15,6 +15,16 @@ namespace duckdb {
 
 class DecideGlobalSinkState;
 
+//! One clause as the emitter reads it: the row, and what only some kinds of clause carry. `Constraints` routes it to
+//! the list of its kind (Route), so a row never says what kind it is.
+struct EmittedClause {
+	EvaluatedConstraint row;
+	//! A grouped `<>` row's NULL bounds (NotEqualClause::no_exclusion).
+	vector<bool> no_exclusion;
+	//! A `<>` whose AVG scales its bound (NotEqualClause::avg_rhs_scale).
+	bool avg_rhs_scale = false;
+};
+
 //! The variants of a signature over the rows a node holds (language/guide.md §7.1, D70), numbered by value, and the
 //! classes of its key, numbered by the key's values: each row's, INVALID_INDEX for a row the node does not
 //! hold in a class.
@@ -131,7 +141,10 @@ private:
 	vector<idx_t> ClauseRoots() const;
 	//! A clause in the per-row shape: one model row per kept row of its root, or under `per K:` one per variant of
 	//! each class among them (Classes).
-	EvaluatedConstraint Rows(idx_t root, bool counted);
+	EmittedClause Rows(idx_t root, bool counted);
+	//! Puts an evaluated clause in the list of its kind: a folded bound's among the repair model's rows, a `<>` in
+	//! `evaluated_not_equals`, any other in `evaluated_constraints`.
+	void Route(EmittedClause &&clause, bool folded);
 	//! One of an ABS F node's two envelope rows, evaluated by the existing row evaluator, which supplies the scoped
 	//! instances, into the node's record (DecideGlobalSinkState::evaluated_abs_links).
 	void AbsEnvelope(idx_t function, idx_t root, bool counted);
@@ -179,8 +192,7 @@ private:
 	//! A grouped clause's bound on each of `rows` (its kept rows and their root's entries), a NULL one marking its row
 	//! in `null_rows`; for a tightest frame bound (D85) the rows where it bounds nothing instead, which are returned
 	//! (TakeTightestFrameBound): empty for any other bound, and for one the whole clause shares (DescribeBound).
-	vector<bool> GroupBound(idx_t root, const DecideEntryRows &rows, vector<bool> &null_rows,
-	                        EvaluatedConstraint &evaluated);
+	vector<bool> GroupBound(idx_t root, const DecideEntryRows &rows, vector<bool> &null_rows, EmittedClause &clause);
 	//! A bound on one decision: the values it admits on each row its term is read on, which the model builder folds
 	//! into the decision's column.
 	void Admit(const DecideBody &body, EvaluatedConstraint &evaluated);
@@ -194,7 +206,7 @@ private:
 	//! A clause in the grouped shape, the aggregate shape or a MIN or MAX: one model row per group of its `by` key, its
 	//! kept rows grouped as GroupRowsByShape groups them, or one per member of an easy MIN or MAX; its instances
 	//! `counted` unless it is a folded bound's, which only a repair model emits.
-	EvaluatedConstraint Groups(idx_t root, bool counted);
+	EmittedClause Groups(idx_t root, bool counted);
 	//! A clause's product groups (EvaluatedConstraint::product_groups), once its rows are grouped: each group's weight
 	//! and its forms' coefficients on the rows its site's members stand for, its weight 0 on every other row and
 	//! divided by its AVG's count (`filters`: the terms', then the groups'); a NULL coefficient or a form's decision

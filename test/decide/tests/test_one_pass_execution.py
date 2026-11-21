@@ -251,9 +251,9 @@ def test_a_root_per_row_keeps_the_window_of_the_helper_it_defines(decidb_cli):
 
 
 def test_a_product_has_no_value_where_a_factor_has_none(decidb_cli):
-    """D88 through a product (BilinearLink): group b keeps no row for `sum(when t.c: x)`, so the factor has no value on
-    row 2, nor has `b * sum(...)`, and row 2's comparison is skipped: x2 keeps its cap of 9 and b2 earns 1. Row 1 reads
-    x1 + b1 * x1 <= 5, where b1 = 0, x1 = 5 earns 5 and b1 = 1, x1 = 2 earns 3. Reached: the factor check of
+    """D88 through a product (BilinearLinkSpec): group b keeps no row for `sum(when t.c: x)`, so the factor has no value
+    on row 2, nor has `b * sum(...)`, and row 2's comparison is skipped: x2 keeps its cap of 9 and b2 earns 1. Row 1
+    reads x1 + b1 * x1 <= 5, where b1 = 0, x1 = 5 earns 5 and b1 = 1, x1 = 2 earns 3. Reached: the factor check of
     DecisionRead, which answered x2 = 5 without it, and the dependency of a product's reader on its factor's G in the
     tree builder's Sources, without which that G is read before it is computed."""
     sql = """SET decide_direct_solve='off';

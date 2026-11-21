@@ -65,6 +65,8 @@ public:
 	//===--------------------------------------------------------------------===//
 
 	vector<EvaluatedConstraint> evaluated_constraints;
+	//! The `<>` clauses, evaluated; moved into SolverInput::not_equals.
+	vector<NotEqualClause> evaluated_not_equals;
 	//! The stage-06 records the emitter materializes from BOOLEAN_PRODUCT F nodes for the unchanged linearizer.
 	vector<BilinearLinkSpec> evaluated_bilinear_links;
 	//! One record per ABS F node, with its envelope rows evaluated; moved into SolverInput::abs_links.

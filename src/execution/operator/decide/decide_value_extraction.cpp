@@ -361,7 +361,6 @@ EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constr
 	evaluated.lhs_is_aggregate = constraint.lhs_is_aggregate;
 	evaluated.abs_aux_idx = constraint.abs_aux_idx;
 	evaluated.lifted_floor = constraint.lifted_floor;
-	evaluated.ne_clause_idx = constraint.ne_clause_idx;
 	evaluated.kind = constraint.kind;
 
 	// Initialize result storage
@@ -597,21 +596,20 @@ void ScaleAvgTerms(const DecideConstraint &constraint, const vector<TermFilterSt
 	evaluated.avg_scaled = all_avg;
 }
 
-void HoistAvgIntoNotEqualBound(const DecideConstraint &constraint, vector<TermFilterState> &filters,
-                               EvaluatedConstraint &evaluated) {
-	if (constraint.ne_clause_idx == DConstants::INVALID_INDEX || !constraint.lhs_is_aggregate ||
-	    !constraint.product_groups.empty() || constraint.lhs_terms.empty()) {
-		return;
+bool HoistAvgIntoNotEqualBound(const DecideConstraint &constraint, vector<TermFilterState> &filters) {
+	if (constraint.comparison_type != ExpressionType::COMPARE_NOTEQUAL || !constraint.lhs_is_aggregate ||
+	    constraint.lhs_terms.empty()) {
+		return false;
 	}
 	for (idx_t term_idx = 0; term_idx < constraint.lhs_terms.size(); term_idx++) {
 		if (!filters[term_idx].avg_scale) {
-			return;
+			return false;
 		}
 	}
-	evaluated.ne_avg_rhs_scale = true;
 	for (idx_t term_idx = 0; term_idx < constraint.lhs_terms.size(); term_idx++) {
 		filters[term_idx].avg_scale = false;
 	}
+	return true;
 }
 
 vector<idx_t> DecideGroupClassSets(const DecideClauseScope &scope, idx_t num_rows, const vector<bool> &kept_rows,

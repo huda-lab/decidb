@@ -878,9 +878,9 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// Everything below this point is stage 06 working on the evaluated model, so
 	// hand the constraints and the formulation links over before the first pass.
 	solver_input.constraints = std::move(gstate.evaluated_constraints);
+	solver_input.not_equals = std::move(gstate.evaluated_not_equals);
 	solver_input.class_sets = std::move(gstate.class_sets);
 	solver_input.key_values = std::move(key_values);
-	solver_input.ne_clause_sources = ne_clause_sources;
 	solver_input.bilinear_links = std::move(gstate.evaluated_bilinear_links);
 	// Each ABS arrives as the record stage 05 made of it, with its two envelope rows evaluated, and they join the model
 	// here, before any pass reads the rows: implied-bound propagation reads `aux >= inner` of `ABS(x) <= 3` as a bound
@@ -1121,7 +1121,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 	// condition is stated to the backend or encoded with a Big-M is settled once, by
 	// LowerDecideConstructs at the end of this function.
 	phase.Next("formulation.not_equal");
-	if (!ne_clause_sources.empty()) {
+	if (!solver_input.not_equals.empty()) {
 		LinearizeNotEqual(solver_input, var_indexer, decide_var_names);
 	}
 
@@ -1204,7 +1204,7 @@ static void OpenElasticColumnBox(SolverInput &input) {
 	// measured in price-weighted units states its demand in the column's units and not in
 	// its own.
 	vector<double> row_demand(input.num_decide_vars, 0.0);
-	for (const auto &ec : input.constraints) {
+	input.ForEachClauseRow([&](const EvaluatedConstraint &ec) {
 		for (idx_t r = 0; r < input.num_rows; r++) {
 			if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
 				continue;
@@ -1228,7 +1228,7 @@ static void OpenElasticColumnBox(SolverInput &input) {
 				}
 			}
 		}
-	}
+	});
 
 	for (idx_t var = 0; var < input.num_decide_vars; var++) {
 		// A BOOLEAN's 0/1 domain is intrinsic and never widens: a "repair" that let an
@@ -1312,7 +1312,8 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 	// builder. A per-row spec still expands to one row per data row and a grouped spec to one
 	// row per group, so this is not a matrix row count — the row count is read back off
 	// the built model (`solve_result.model_constraint_rows`) after the solve below.
-	size_t constraint_specs = solver_input.constraints.size() + solver_input.global_constraints.size();
+	size_t constraint_specs =
+	    solver_input.constraints.size() + solver_input.not_equals.size() + solver_input.global_constraints.size();
 
 	// H3: the statement's DIAGNOSE prefix, and nothing else, arms diagnosis. Under it,
 	// pre-extract the unbounded ray so it is ready if the solve turns out unbounded, and

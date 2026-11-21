@@ -158,8 +158,7 @@ bool IsPlainLinearRow(const SolverInput &input, const EvaluatedConstraint &ec) {
 	    ec.abs_aux_idx != DConstants::INVALID_INDEX &&
 	    std::any_of(input.abs_links.begin(), input.abs_links.end(),
 	                [&](const AbsLinkSpec &link) { return link.exact && link.aux_idx == ec.abs_aux_idx; });
-	return ec.ne_clause_idx == DConstants::INVALID_INDEX && !exact_abs_pair && ec.product_groups.empty() &&
-	       ec.admitted_lower.Empty();
+	return !exact_abs_pair && ec.product_groups.empty() && ec.admitted_lower.Empty();
 }
 
 //! Where a helper is read (D89): whether a reader holds its column, whether rows or the objective read it, and the one
@@ -226,6 +225,12 @@ vector<HelperPlace> PlaceHelpers(const SolverInput &input, const vector<idx_t> &
 			read(var, plain);
 		}
 		read_products(ec.product_groups);
+	}
+	// A `<>` reads the columns of its decisions: the disjunction is stated on them.
+	for (auto &clause : input.not_equals) {
+		for (auto var : clause.row.variable_indices) {
+			read(var, false);
+		}
 	}
 	for (auto var : input.objective_variable_indices) {
 		read(var, true);

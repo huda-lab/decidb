@@ -38,9 +38,8 @@ namespace duckdb {
 
 void DecideOptimizer::RewriteNotEqual(LogicalDecide &decide) {
 	// Walk the bound constraint tree and find all COMPARE_NOTEQUAL expressions.
-	// For each one, create an auxiliary BOOLEAN indicator variable.
 	// The constraint expression itself is NOT modified — the physical operator
-	// matches COMPARE_NOTEQUAL constraints with ne_clause_labels at execution time.
+	// reads each COMPARE_NOTEQUAL constraint at execution time.
 	DecideTermSplitter splitter(optimizer.context, decide);
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
 		if (body.owner != DecideOwnedBody::Owner::CLAUSE ||
@@ -64,15 +63,11 @@ void DecideOptimizer::RewriteNotEqual(LogicalDecide &decide) {
 		// row-scoped binary per data row now meant allocating one for every clause
 		// that turned out to need none.
 		//
-		// What stage 05 owns is the marking: which clause this is, and the text to
-		// call it in a diagnosis, spelled as the plan prints the clause. The clause index
-		// rides the tag; stage 06 allocates the binaries for the disjunctions it actually
-		// emits, and labels them here.
-		idx_t clause_idx = decide.ne_clause_sources.size();
-		decide.ne_clause_sources.push_back(SourceClauseOf(comp, decide));
+		// What stage 05 owns is the account: the text to call the clause in a diagnosis,
+		// spelled as the plan prints it. Stage 06 allocates the binaries for the
+		// disjunctions it actually emits, and labels them with the clause.
 		AddRewriteAccount(decide, comp.alias, LogicalDecide::RewriteAccount::Kind::NOT_EQUAL,
 		                  RenderForPlan(comp, decide));
-		AddDecideTag(comp.alias, string(NE_CLAUSE_TAG_PREFIX) + to_string(clause_idx) + "__");
 	});
 }
 
