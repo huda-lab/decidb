@@ -79,7 +79,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `optimizer/decide/direct/` | 05 | Direct solve: the IR, the rules (S1, A1, R1, N1, A2), and the plan fragments that replace the DECIDE node; `../direct_solve/README.md` |
 | `optimizer/decide/decide_rewrite_norm_in.cpp` | 05 | `norm` and DECIDE-variable `IN` |
 | `optimizer/decide/decide_rewrite_notequal_avg.cpp` | 05 | `<>` indicators and AVG→SUM |
-| `optimizer/decide/decide_rewrite_abs.cpp` | 05 | ABS Big-M tagging and linearization |
+| `optimizer/decide/decide_rewrite_abs.cpp` | 05 | `RewriteAbs`: which ABS is exact, and the record stage 06 and the tree read |
 | `optimizer/decide/decide_rewrite_minmax.cpp` | 05 | The easy identity of a MIN or MAX |
 | `optimizer/decide/decide_rewrite_bilinear.cpp` | 05 | Bilinear McCormick |
 | `optimizer/decide/decide_tree_definition.cpp` | 05 | `PrepareDefinitionFunctions`: helpers for non-linear bodies |

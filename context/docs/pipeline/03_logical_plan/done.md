@@ -166,7 +166,7 @@ and the checks, so binding resolution and column pruning see their columns.
 **From the optimizer** — `num_auxiliary_vars` (the decisions it appends after the declared
 ones), `solver_backend_name`, `use_native_constructs`,
 `force_native_constructs`, `ne_clause_labels`, `bilinear_links`,
-`abs_maximize_links`, `aux_var_expressions`, `rewrite_accounts` (one fact per construct a rewrite
+`abs_functions`, `aux_var_expressions`, `rewrite_accounts` (one fact per construct a rewrite
 replaced -- the construct as a plan prints it and what it became, `RewriteAccount::Kind`
 -- under the clause it came from, INVALID_INDEX for the objective; worded by the renderer;
 never serialized),
@@ -191,8 +191,8 @@ plan from here. What the plan carries is the *answers*, never the solver:
 - `solver_backend_name` — the registered identifier (`"gurobi"`, `"highs"`).
 - `use_native_constructs` — a `SolverConstructSupport`, which constructs this backend
   can state itself.
-- `force_native_constructs` — the policy over them: whether a declared construct is used
-  wherever it is declared, or only where the lowering has no valid Big-M. It defaults to false.
+- `force_native_constructs` — the policy over them: whether every declared construct is stated natively (test-only),
+  or a construct is lowered where its lowering is measured faster. It defaults to false.
 
 The third is a policy rather than a fact, and that is deliberate. Applying it needs a
 per-clause test on evaluated coefficients, which no stage before execution can run — so

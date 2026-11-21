@@ -36,19 +36,18 @@ which settles two things and records both on the plan:
 |---|---|
 | `LogicalDecide::solver_backend_name` | *Which* backend, from `SelectSolverBackend()`. A name, not a handle — see [`../03_logical_plan/done.md`](../03_logical_plan/done.md) §4. |
 | `LogicalDecide::use_native_constructs` | *Which constructs the backend can state itself*, read once off that backend's `SolverConstructSupport`. |
-| `LogicalDecide::force_native_constructs` | *The policy* governing them: use a declared construct everywhere, or only as a fallback. False ships; true is the test-only `DECIDB_NATIVE_CONSTRUCTS=force`. |
+| `LogicalDecide::force_native_constructs` | *The policy* governing them: a declared construct is used unless its lowering is measured faster. False ships; true is the test-only `DECIDB_NATIVE_CONSTRUCTS=force`, which states every declared construct natively. |
 
 All three happen here, ahead of every pass, and the rest are the reason for the first.
 The passes below decide **how to express** a construct, and the right answer depends
-on what the backend accepts natively — a solver with a native `ABS` needs no Big-M
-envelope, so lowering it would be work that only loses accuracy.
+on what the backend accepts natively. A solver with a native `ABS` states it without a Big-M, and the rule below says
+when stage 06 takes that over the lowering.
 
 **Choosing a formulation is this stage's job, and it is settled here rather than
 where the rows are built.** Stage 08 reads the fields above and translates; it does not
 read `Constructs()` itself. Deciding here keeps the layer boundary and lets a rewrite
-*see* the choice. Seeing it matters — a rewrite that knows ABS will be stated
-natively can skip the sign indicator that only a Big-M envelope has a use for (§ABS
-below), which is not expressible while the arm is picked two stages later.
+*see* the choice. Seeing it matters where a rewrite must refuse a query that no form of the backend can state: a
+non-linear body's MIN/MAX on a backend with no native MIN/MAX.
 
 **Capability is not the same question as policy, and MIN/MAX is where they come
 apart.** A general constraint and a Big-M family encode the same thing, so where both
@@ -61,18 +60,24 @@ rows, the native arm is 1.8x slower; on a `MAX(e) >= K` constraint at the same s
 and its cost grows with row count while the lowering stays flat. Neither arm branches, so
 there is no search quality to buy back.
 
-So for MIN/MAX, native is the **fallback**: taken only where the lowering has no valid
-Big-M, which is the case it was built to answer and the only one where the lowering
-must refuse the query outright. Whether a given clause has a Big-M depends on evaluated
-coefficients, so stage 08 answers *that* — it applies this policy to data only it can
-see, exactly as the `<>` range collapse does. It does not re-decide the policy.
+So for MIN/MAX the lowering is taken wherever a Big-M exists, and native is reserved for the case with no valid
+Big-M, which is the case it was built to answer and the only one where the lowering must refuse the query outright.
+Whether a given clause has a Big-M depends on evaluated coefficients, so stage 08 answers *that* — it applies this
+policy to data only it can see, exactly as the `<>` range collapse does. It does not re-decide the policy.
+
+**One rule serves every construct (`NativeConstructPolicy`): native is the default, and a declared construct is lowered
+only where its lowering is measured faster.** MIN/MAX is lowered by the measurement above. An exact ABS is not: on
+Gurobi on Q10 (200K rows) the lowering ran 12.0-12.2 s against 12.2-12.3 s native with the same objective, a tie, so
+there is no gain to give up the native construct for. Where no finite Big-M exists, native is the only form of either
+construct, and a backend without the native construct refuses that case.
 
 One consequence is recorded where it lands: **stage 05 allocates no indicator variable
-for a MIN/MAX or a `<>` at all.** A stage that cannot see the data cannot know which arm a
-clause takes, so allocating here would give the native arm a binary per data row that
-nothing references. Both constructs allocate their binaries in the pass that emits the
+for a MIN/MAX, an ABS or a `<>` at all.** A stage that cannot see the data cannot know which form a
+clause takes, so allocating here would give the native form a binary per data row that
+nothing references. Each construct allocates its binaries in the pass that emits the
 rows reading them, in the global block. A MIN/MAX is a helper decision here and stage 06 emits its extremum link
-(`EmitExtremumLink`); `FindNotEqualConstraints` records only the **marking** — which clause this is and the text to
+(`EmitExtremumLink`); an ABS is a record here and stage 06 emits its rows (`EmitAbsEnvelopes`, `EmitAbsConstraints`);
+`FindNotEqualConstraints` records only the **marking** — which clause this is and the text to
 call it in a diagnosis — and the clause index rides the tag.
 
 The choice is made **once** and rides the plan: `LogicalDecide` → `PhysicalDecide` →
@@ -228,7 +233,7 @@ term splitter use them:
 | 9 | `RewriteBilinear` (nested values) | Records products exposed after nested reducer values become decisions. |
 | 10 | `RewriteNotEqual` | Creates `<>` indicators. |
 | 11 | `RewriteAvgToSum` | Scales AVG values into SUM terms after the value rewrite. |
-| 12 | `RewriteAbs` | Decides each ABS's encoding from its body's owner, once the rewrites that join a helper's readers (2, 7, 8) have run. Allocates the ABS helpers, stores the written function and lower-envelope metadata for F nodes, and adds the check of each ABS argument's data. |
+| 12 | `RewriteAbs` | Decides which ABS is exact from its body's owner, once the rewrites that join a helper's readers (2, 7, 8) have run. Allocates the ABS helpers, records each ABS in `abs_functions` for the tree and stage 06, and adds the check of each ABS argument's data. It emits no row and no indicator. |
 | 13 | `RewriteBilinear` (ABS factors) | Records products involving the newly allocated ABS helpers. |
 | 14 | `FoldSingletonRows` | Must be last of all — see below. |
 
@@ -425,9 +430,14 @@ inlining relies on. Where a helper is written in is stage 06's alone, decided fr
 
 ### ABS linearization — `RewriteAbs`
 
-Detects `BoundFunctionExpression` for `ABS` over decision variables, creates
-auxiliary `REAL` variables, replaces the ABS nodes with references to them, and
-emits `aux >= inner` and `aux >= -inner`.
+Detects `BoundFunctionExpression` for `ABS` over decision variables and allocates an auxiliary for each (INTEGER when
+the operand is integral, else DOUBLE). The ABS node stays in its clause as a tagged function that term extraction reads
+as the auxiliary. Each ABS is recorded in `LogicalDecide::abs_functions`: the auxiliary, the operand, whether it is
+exact, the rows it is read on, its scope, the clause it was written in, and its text as written. Stage 05 emits no row,
+allocates no sign indicator and reads no `use_native_constructs`. An ABS is a pseudo-operation, as in LLVM's
+legalization: stage 06 either states it natively or expands it (`../06_model_formulation/done.md`, "ABS"). The tree
+gives each ABS an F node and builds its two envelope rows, `aux >= inner` and `aux >= -inner`, beneath it
+(`PrepareAbsFunctions`, `MakeAbsRow`), as it does for a definition; EXPLAIN prints both.
 
 **A NaN or infinite value is named where it stands.** Its message says the value is NaN or infinite and quotes it as
 the user wrote it, with the caret on it (`DecideInvalidValueError`, `common/decide_value_messages.hpp`); it names no
@@ -469,11 +479,11 @@ check is a value check (`LogicalDecide::value_checks`), which the tree evaluates
 Whether an ABS needs its exact (Big-M) encoding is an inherited attribute, in the sense of an attribute grammar: the
 push of the body that holds it, read from the body's owner and handed down to the ABS. `FindExactAbs`, which
 `RewriteAbs` calls first, walks every owner once and collects, into an `AbsExactSet`, the ABS nodes their owner's push
-does not pin; `FindAbsAndAllocateAux` reads the set. `AbsPairInfo::needs_bigm` records the answer for one ABS: whether
-the auxiliary needs an upper envelope. It is false when the owner's push holds `aux` at `|inner|` by solver pressure or
+does not pin; `FindAbsAndAllocateAux` reads the set. `AbsFunction::exact` records the answer for one ABS: whether the
+auxiliary needs its upper side pinned. It is false when the owner's push holds `aux` at `|inner|` by solver pressure or
 by the clause's shape: an objective term the minimization pushes down, or a constraint shape that upper-bounds `aux`.
-When true, `abs_maximize_links` carries the auxiliary and a binary sign indicator, and execution derives the two
-upper-bound rows from the tagged lower-bound constraints.
+When true, stage 06 pins the auxiliary from above, with the backend's absolute value or a sign indicator and its Big-M
+rows (`EmitAbsConstraints`).
 
 The owners, and the push each gives its body:
 
@@ -515,11 +525,12 @@ the helper itself; the exact encoding is what boxes it. A MIN or MAX pushed its 
 states the envelope side alone, which bounds every member, so the plain envelope stands.
 
 The two envelope rows keep the clause's `when` (`ScopeHelperRow`), so they read only the
-rows the clause keeps; the objective's keep the objective's `when`.
+rows the clause keeps; the objective's keep the objective's `when`. The rows an ABS is read on are stored on its record,
+and `MakeAbsRow` applies them.
 
 **An ABS inside an ABS.** `FindAbsAndAllocateAux` rewrites the argument before the node, so
 an inner ABS becomes its own auxiliary first and the outer's envelope rows refer to it
-(term extraction would read an ABS left in a row as its argument, losing the sign). The pairs are appended innermost
+(term extraction would read an ABS left in a row as its argument, losing the sign). The records are appended innermost
 first, the order `DeriveAbsAuxiliaryBounds` boxes them in: the outer range needs the inner box. An ABS beneath another
 is pinned exactly, because the outer ABS is not monotone in it: over `x` in `[-1, 1]`,
 `abs(abs(x) - 2) <= 0` with an inner auxiliary held by its lower envelope alone would hold
@@ -624,7 +635,7 @@ its scope the same way, from the leaves its expression reads (`ScopeOf`: a decis
 is query-wide, any other column and any reducer is row data, since a reducer's value differs between groups; a reducer
 the value rewrite holds in a helper brings the helper's own scope, one class per group, so
 `sum(per t.g: abs(sum(x) by (t.g) - 4))` reads one ABS per class of g, where one per row made each row a variant): the ABS
-auxiliary and its sign indicator, the `__body_` helper, the L0 norm's and the IN's indicators. Their defining rows are
+auxiliary, the `__body_` helper, the L0 norm's and the IN's indicators. Their defining rows are
 emitted once per instance (`ScopeRowPerInstance`, outside the clause's `when`), so `ABS(s - 4)` over a query-wide `s` is
 one auxiliary and one row set, not one per row. The ABS Big-M and the L0 auto bound take their maximum over the rows
 (`InstanceBox`), which holds for a shared column. `AddAuxiliaryDecision` registers a keyed auxiliary in
@@ -833,20 +844,17 @@ A body that multiplies decisions (a square, a product of two non-Booleans) is de
 by its definition F node, so the helper's members are linear; the model class decides whether
 a backend takes the rows.
 
-Every auxiliary decision column the passes allocate — an ABS auxiliary and its sign
-indicator, a McCormick product, an L0 and an `IN` indicator, a value helper — goes
-through `AddAuxiliaryDecision` (`decide_optimizer_internal.hpp`): the column reference,
-its Boolean flag, its scope (recorded only once some decision is not row-scoped, the
-convention every reader follows) and its label (F6). The label is the expression the
-column stands for, rendered as a plan prints it (`RenderForPlan`, which sees the labels
-of the auxiliaries earlier passes made): `abs(e)` under the name the call was written with (`@(e)`),
-`(e >= 0)` for the sign indicator, `(b * x)`, `(e <> 0)` for an L0 indicator, `(x = v)`
-for an `IN` indicator, `sum(e) by (g)` for a helper. Each rewrite also records what it
+Every auxiliary decision column the passes allocate — an ABS auxiliary, a McCormick product, an L0 and an `IN`
+indicator, a value helper — goes through `AddAuxiliaryDecision` (`decide_optimizer_internal.hpp`): the column
+reference, its Boolean flag, its scope (recorded only once some decision is not row-scoped, the convention every reader
+follows) and its label (F6). The label is the expression the column stands for, rendered as a plan prints it
+(`RenderForPlan`, which sees the labels of the auxiliaries earlier passes made): `abs(e)` under the name the call was
+written with (`@(e)`), `(b * x)`, `(e <> 0)` for an L0 indicator, `(x = v)` for an `IN` indicator, `sum(e) by (g)` for
+a helper. Each rewrite also records what it
 made of a construct as a fact (`AddRewriteAccount` → `LogicalDecide::rewrite_accounts`:
 the subject as the plan prints it and a `RewriteAccount::Kind`, under the clause id or
 the objective): the AVG scaled into a sum, the `norm` lowerings (a sum of absolute
-values, a sum of squares, a maximum of absolute values), the ABS auxiliary and how it is
-pinned (solver pressure, a sign indicator, or the native absolute value), the Boolean
+values, a sum of squares, a maximum of absolute values), the ABS auxiliary, the Boolean
 product (AND rows or McCormick), the `IN` and L0 indicators, the value helper (per group
 or query-wide, a MIN/MAX's among them), a MIN/MAX in its cheap direction (a bound on each member), and the `<>`
 disjunction. The renderer words them in one place

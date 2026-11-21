@@ -140,8 +140,7 @@ Construct flags declared today:
 | `min_max` | Gurobi | `GRBaddgenconstrMin` + `GRBaddgenconstrMax` |
 | `not_equal` | Gurobi | `GRBaddgenconstrIndicator` |
 
-`bilinear` stays false until the loader binds its symbols and stage 08 knows how to emit
-it: a capability may not be declared ahead of the code that honors it.
+A capability is declared only once the code that honors it exists.
 
 There is deliberately **no** `in_list` field. SOS1 acceleration for `x IN (a, b, c)` is
 measured and declined — the formulation's LP relaxation is already integral, so there is
@@ -150,11 +149,12 @@ is redundant work at the root and gives no meaningful win. A measured-and-reject
 capability is not a field: a permanently-false flag nobody reads cannot be told apart
 from one whose implementation is merely still pending.
 
-Native ABS is used whenever the backend declares it. On Gurobi the native arm measures
-about 7% slower at 500K rows, because Gurobi's presolve expands it into a larger
-formulation, but DeciDB does not route around a vendor's presolve choice: the native model is the smaller, direct statement and supports
-unbounded contributors that the Big-M lowering must refuse. Revisit only with new solver
-evidence.
+Native is the default for every construct, and a declared construct is lowered only where its lowering is measured
+faster (`NativeConstructPolicy::lowering_measured_faster`). MIN/MAX is. ABS is not: on Gurobi on Q10 (200K rows) the
+lowered form ran 12.0-12.2 s against 12.2-12.3 s native, with the same objective, a tie. So an exact ABS is stated
+natively whenever the backend declares it. DeciDB does not route around a vendor's presolve choice: the native model is
+the smaller, direct statement and supports unbounded contributors that the Big-M lowering must refuse. Revisit only
+with new solver evidence.
 
 Which construct flag gates a given `GeneralConstraintKind` is one table,
 `DeclaresGeneralConstraint`, kept beside that enum in `solver_input.hpp` — so a kind

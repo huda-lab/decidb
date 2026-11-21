@@ -33,20 +33,9 @@ files.
 - **Done when.** Both examples agree with the oracle on Gurobi and HiGHS (continuous); `./test/decide/run_tests.sh -n
   2 -k "quadratic or objective"` passes.
 
-## OPT-27 — ABS is lowered in one place
-
-- **Problem.** `RewriteAbs` emits two comparison rows as expressions; stage 06 finds them back by index
-  (`BuildAbsTagMap`), recovers the operand from one of them and clones them. ABS is the only construct whose
-  indicator is allocated in stage 05, so a rewrite pass reads `use_native_constructs`; native against lowered is
-  decided in three places under two policies. `SolverConstructSupport::bilinear` is never read.
-- **Change.** Stage 05 records each ABS (helper, operand, exact or not) and stage 06 emits every row: stage 05 picks
-  the shape, stage 06 the encoding. `bilinear` goes. About 150 lines go.
-- **Done when.** `grep -rn "BuildAbsTagMap" src` finds nothing; `./test/decide/run_tests.sh -n 2 -k "abs"` passes,
-  and with `DECIDB_FORCE_SOLVER=highs`.
-
 ## OPT-28 — Stage 05's passes share one enumerator and one polarity walker
 
-- **Problem.** Stage 05 is 19 ordered passes over one tree and six side containers: 16 loops over side vectors, two
+- **Problem.** Stage 05 is 13 ordered passes over one tree and six side containers: 16 loops over side vectors, two
   polarity walkers (`WalkPolarity`, `CollectReducerSites`), two `ReadAffine`.
 - **Change.** `LogicalDecide::EnumerateBodies(callback(DecideBody&))`, where a body carries its expression, push, rows,
   source alias and scope, with one fixed case per container, as DuckDB's `LogicalOperatorVisitor::EnumerateExpressions`

@@ -135,9 +135,10 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   `SparseCoeffAccumulator`, then one reused `MinMaxLinkRow` per link: `EmitExtremumLink` asks an
   `ExtremumMemberSource` for each member as it emits the row, so no member is staged), because a
   column can reach one row more than once (a distributed term, a keyed or query-wide variable) and both solvers reject
-  a repeated column index. Constants fold into the row's bound. On Gurobi the hard cases are general constraints with
-  no Big-M; the choice is made once at execution from the backend's capability table, and both paths reach the same
-  optimum. Classification and scaffolding: `RewriteMinMaxConstraints` (`decide_rewrite_minmax.cpp`).
+  a repeated column index. Constants fold into the row's bound. On Gurobi the hard cases take the Big-M lowering where
+  one exists and a general constraint where none does; the choice is made once per site at execution
+  (`NativeConstructPolicy`), and both paths reach the same optimum. Classification and scaffolding:
+  `RewriteMinMaxConstraints` (`decide_rewrite_minmax.cpp`).
 - **The colon form.** `SUM(D: e)` binds onto the exact key scope `sum(per D: e)` uses, so the two share one
   `KeyedMapping` and one de-duplication mask, and read one value per variant of each tuple alike (D71). A composite qualifier's key is every named
   relation's stored columns, sorted by binding, so order does not matter. The grammar reads the qualifier as an
@@ -153,13 +154,14 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   - *Path A* — the comparison pushes `d` down (`ABS(e) <= K`, `SUM(ABS(e)) <= K`, `MINIMIZE SUM(ABS(e))`): the
     envelope alone is exact.
   - *Path B* — anything else (`ABS(e) >= K`, `=`, `<>`, `BETWEEN`, `IN`, a subtracted ABS, `MAXIMIZE SUM(ABS(e))`, a
-    data weight of unknown sign, an ABS under a hard `MIN`/`MAX` or in a helper one reads, an ABS inside an ABS): a
-    sign binary and two Big-M rows pin `d = |e|`, so every decision in `e` needs a finite bound, written or inferred.
-    On Gurobi Path B is a native absolute-value constraint with no Big-M.
+    data weight of unknown sign, an ABS under a hard `MIN`/`MAX` or in a helper one reads, an ABS inside an ABS):
+    `d = |e|` is pinned from above. On Gurobi that is a native absolute-value constraint, which needs no bound.
+    Elsewhere it is a sign binary and two Big-M rows, so every decision in `e` needs a finite bound, written or
+    inferred.
   - A factor of exactly zero reads as positive, like any other number. `ABS` over data is plain SQL.
-  - Code: `FindExactAbs` and `RewriteAbs` (`decide_rewrite_abs.cpp`); links in
-    `LogicalDecide::abs_maximize_links` (both Path B users, objective and constraint). Tests:
-    `test_abs_linearization.py`.
+  - Code: `FindExactAbs` and `RewriteAbs` (`decide_rewrite_abs.cpp`) record each ABS in
+    `LogicalDecide::abs_functions`; `EmitAbsConstraints` (`linearization_bilinear_abs.cpp`) emits Path B, objective
+    and constraint alike. Tests: `test_abs_linearization.py`.
 - **Other functions and operators over a decision** are refused by the shape check (`decide_shape_check.cpp`), once,
   after canonicalization and before any rewrite, in every position (per row, inside a reducer, inside `ABS`). It allows
   `+`, `-`, `*`, a division by data, `POWER` with a whole exponent known before the query runs, `ABS` and the reducers;

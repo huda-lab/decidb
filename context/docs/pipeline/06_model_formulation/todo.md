@@ -10,6 +10,5 @@ files.
   (`IsPlainLinearRow`). The provenance triple (source clause, removal group, repair group) is declared in 13 structs and
   copied field by field at three sites, one of which drops three fields.
 - **Change.** Plain rows plus one typed list per construct; one provenance value type.
-- **Needs.** OPT-27.
 - **Done when.** `grep -rn "IsPlainLinearRow" src` finds nothing; `./test/decide/run_tests.sh -n 2 -k "minmax or abs
   or diagnose"` passes.

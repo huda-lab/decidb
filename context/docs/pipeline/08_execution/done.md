@@ -1072,11 +1072,11 @@ in which this stage calls the linearizers (ABS first) is load-bearing for it: se
 
 Whether a construct is lowered is a **formulation** choice, and formulation belongs to
 stage 05. This stage reads the answer off the operator and applies it. `FormulateModel`
-reads `use_native_constructs.abs` and a `NativeConstructPolicy` built from
-`use_native_constructs.min_max` and `force_native_constructs`; derives the ABS auxiliary
-boxes (refusing an unbounded contributor on the lowering arm only); emits ABS natively
-(`EmitNativeAbs`) or lowered (`LinearizeAbsMaximize`); then runs the value-link, MIN/MAX,
-`<>` and bilinear linearizers, and last `LowerDecideConstructs`.
+builds a `NativeConstructPolicy` for ABS and one for MIN/MAX from `use_native_constructs` and
+`force_native_constructs`; hands over the ABS records with their envelope rows (`EmitAbsEnvelopes`); derives the ABS
+auxiliary boxes (refusing an unbounded contributor only where the backend declares no native ABS); states each exact ABS
+natively or lowered (`EmitAbsConstraints`); then runs the value-link, MIN/MAX, `<>` and bilinear linearizers, and last
+`LowerDecideConstructs`.
 
 `use_native_constructs` is a `SolverConstructSupport` copied from
 `LogicalDecide::use_native_constructs`, which stage 05 filled in from the chosen
@@ -1094,9 +1094,9 @@ instance map before the first box pass, and every construct site emits in flat
 columns at the point it decides something, instead of stashing a decision for a
 second pass to execute.
 
-**MIN/MAX arrives as a policy, not an answer** (`NativeConstructPolicy`: the capability,
-plus whether a declared construct is used everywhere or only as a fallback; why native is
-the fallback is [`../05_optimizer/done.md`](../05_optimizer/done.md) §0). Whether a given
+**A construct arrives as a policy, not an answer** (`NativeConstructPolicy`: the capability, whether its lowering is
+measured faster, and the test-only force; the one rule is in [`../05_optimizer/done.md`](../05_optimizer/done.md) §0).
+Whether a given
 clause has a valid Big-M is a question about evaluated coefficients, so this stage answers
 it per clause, from the reach of that clause's own family. One statement can have a
 bounded clause and an unbounded one, and each gets the formulation it can use.
@@ -1105,16 +1105,17 @@ bounded clause and an unbounded one, and each gets the formulation it can use.
 construct down its lowering path, `force` states every declared one natively, and `on`
 (the default, and what an unset variable means) is the default policy. For MIN/MAX the
 A/B has to be `force` against `off`: on a bounded shape the default *is* the lowering,
-so comparing it against `off` would compare the lowering with itself.
+so comparing it against `off` would compare the lowering with itself. For ABS the default is native, so the default
+against `off` compares the two forms.
 
 The backend itself reaches this stage as a **name**, resolved by `PlannedSolverBackend()`
 only where a solve is about to run ([`../07_solver/done.md`](../07_solver/done.md) §2).
 
-**Only two constructs choose between two emitters.** `<>` does not choose: it is emitted once, as conditional rows, and
+**Each construct chooses in one place.** `<>` does not choose: it is emitted once, as conditional rows, and
 `LowerDecideConstructs` turns those into Big-M rows where the backend cannot state a
 condition. Every MIN/MAX — a constraint's, the objective's and a nested reducer's — is a helper of the value rewrite and
-goes through one `EmitExtremumLink`, which makes the choice once for all of them. What is left is ABS,
-where the two formulations are genuinely different objects rather than projections of
+goes through one `EmitExtremumLink`, which makes the choice once for all of them. An ABS makes it in
+`EmitAbsConstraints`, where the two formulations are genuinely different objects rather than projections of
 one description: see [`../06_model_formulation/done.md`](../06_model_formulation/done.md)
 §9a and [`../07_solver/done.md`](../07_solver/done.md) §2.
 
@@ -1122,15 +1123,13 @@ Only the *hard* directions need a choice at all. `MAX(e) <= K`, `MIN(e) >= K`,
 `MINIMIZE MAX`, `MAXIMIZE MIN` are exact with a one-sided envelope plus outer pressure:
 no Big-M, so nothing to replace.
 
-Both ABS arms read the same stage-05 tag (`abs_aux_idx`, `abs_is_pos_bound`) — stage 05
-tags rather than fully lowering, because the Big-M constants are functions of evaluated
-data, and that tag *is* the native-construct record. Neither arm decides anything, which
-is what keeps the two comparable.
+Both ABS forms read the same record (`AbsLinkSpec`), which stage 05 keeps rather than lowering, because the Big-M
+constants are functions of evaluated data. Neither form decides anything, which is what keeps the two comparable;
+`EmitAbsConstraints` does.
 
 A member that is already a column is passed through, not copied, and the native
 columns that remain are boxed per row wherever a range is derivable:
-[`../06_model_formulation/done.md`](../06_model_formulation/done.md) §9a and "ABS under
-MAXIMIZE".
+[`../06_model_formulation/done.md`](../06_model_formulation/done.md) §9a and "ABS".
 
 ### Output
 

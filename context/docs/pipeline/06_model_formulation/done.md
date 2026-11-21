@@ -589,7 +589,7 @@ same query answers correctly on Gurobi and wrongly on HiGHS, with no story for t
 divergence — and a query's legality is not a property of the machine it runs on.
 
 It fires only when the bound is genuinely unknowable. A box from implied-bound
-propagation counts, and so does an ABS auxiliary's box: `LinearizeAbsMaximize`
+propagation counts, and so does an ABS auxiliary's box: `DeriveAbsAuxiliaryBounds`
 narrows the auxiliary's column to the range it pins it to, so an outer MIN/MAX over
 `ABS(...)` sees a finite column. **That is why ABS is linearized first** — every
 linearizer after it derives its `M` from column boxes, so an auxiliary they read must
@@ -634,8 +634,9 @@ one row per member, needs no constant to dominate anything, and is *implied* by 
 general constraint rather than contradicted by it. So where a spec asks for it, it is
 emitted on both arms. The choice — `result = MIN/MAX(cols)` stated for the backend, or
 the Big-M family that encodes it — is made once, inside `EmitExtremumLink`, and the
-rule is `NativeConstructPolicy`: native is the fallback, taken where the family's reach
-is underivable and there is therefore no Big-M at all.
+rule is `NativeConstructPolicy`, the one rule an ABS reads too (§ABS): native is the default, and a declared
+construct is lowered only where the lowering is measured faster. The lowering is measured faster for MIN/MAX, so a
+MIN/MAX is stated natively where the family's reach is underivable and there is therefore no Big-M at all.
 
 A member stage 05 defined for a non-linear body (`max(power(x, 2))`) is a helper column
 with no box (`../05_optimizer/done.md`, "Non-linear reducer bodies"), so its family is
@@ -960,58 +961,76 @@ exact whether a clause caps it, floors it or equates it, and whether the objecti
 of `e` strictly between 0 and the tolerance has no feasible indicator. An auto `M` is the span of `e` over the rows and
 is refused where `e` has no finite bound.
 
-### ABS under MAXIMIZE
+### ABS
 
-Stage 05 emits `aux >= inner` and `aux >= -inner` and tags them via `abs_aux_idx` /
-`abs_is_pos_bound`. Where the term's sign in the minimization pushes `aux` down (a positive
-ABS under `MINIMIZE`), those two alone pin `aux = |inner|`. Where it pushes `aux` up (a positive
-ABS under `MAXIMIZE`, which arrives negated) they do not — `aux` is free to run
-above `|inner|` — so `LinearizeAbsMaximize()` pairs the tagged rows and derives the
-matching Big-M upper bounds that close it.
+Stage 05 records each ABS (`LogicalDecide::abs_functions`) and emits no row. The tree builds its two envelope rows,
+`aux >= inner` and `aux >= -inner`, beneath the ABS's F node, as it does for a definition, and the emitter evaluates
+both into `SolverInput::abs_links` (`AbsLinkSpec`: the auxiliary, whether the ABS is exact, the ABS as written and as a
+plan prints it, the two rows). Every row of an ABS is emitted in this stage. The ABS is a pseudo-operation, as in LLVM's
+legalization: the lowering either states it natively (legal) or expands it.
+
+**The envelope is emitted at hand-over.** `EmitAbsEnvelopes` moves both rows into `input.constraints` as the evaluated
+model is handed over, before any pass reads the rows, so implied-bound propagation reads `ABS(x) <= 3` as `x <= 3`
+through them. The pair holds `aux` at or above `|inner|`. Where what pushes on the ABS holds `aux` down (a positive ABS
+under `MINIMIZE`), the pair alone pins `aux = |inner|`. Where it pushes `aux` up (a positive ABS under `MAXIMIZE`, which
+arrives negated, or a hard direction) the pair does not, `aux` is free to run above `|inner|`, and stage 05 marks the
+ABS exact. Only an exact ABS gets the rows below.
 
 **An envelope row holds no aggregate.** Stage 05 gives every reducer a function reads a helper decision
 (`../05_optimizer/done.md`, the objective's value rewrite), so each envelope row is one instance of its F edge's scope,
-built by `DecideModelEmitter::Rows`, and the phases below read it per row. `BuildAbsTagMap`, where they take the rows,
-refuses a row that holds an aggregate as an internal error (`test/common/test_decidb_abs_envelope.cpp`).
+built by `DecideModelEmitter::Rows`, and the phases below read it per row. `EmitAbsEnvelopes` refuses a row that holds
+an aggregate as an internal error (`test/common/test_decidb_abs_envelope.cpp`).
 
 **Each sign row has its own M.** `DeriveAbsAuxiliaryBounds` takes the signed interval
-`[lo, hi]` of `inner` over every row (`AbsMaximizeLinkSpec::inner_lo` / `inner_hi`). The
+`[lo, hi]` of `inner` over every row (`AbsLinkSpec::inner_lo` / `inner_hi`). The
 row `aux + inner <= A2·y` holds `2·inner` when `y = 1` pins `aux = inner`, so
 `A2 = 2·max(0, hi)`; the row `aux - inner <= A1·(1 - y)` holds `-2·inner` when `y = 0`
 pins `aux = -inner`, so `A1 = 2·max(0, -lo)`. One shared constant, `hi - lo`, is too
 small for an interval that is not symmetric (`[-1, 100]` needs 200 on one side), and a
 side the interval never reaches needs no relaxation at all.
 
-The tag keys on the **auxiliary**, not on a sign indicator, because
-only the lowering arm has a sign indicator: see "one binary, on one arm only" below.
+The link is keyed by the **auxiliary**, since only the lowered form has a sign indicator: see "one binary, on one
+form only" below.
 
 This site is **strict about bounds**: a contributing variable with no finite bound is
 named and refused, and the indicator paths make the same refusal in the same words. An infinity in the bound carries the constant part of the expression the user
 wrote inside `ABS()`, so that refusal names the expression and the row, not the
 linearization.
 
-**Two arms, one tag.** `DeriveAbsAuxiliaryBounds` is phase 1 and runs on both paths;
-phase 2 is either `LinearizeAbsMaximize` (the Big-M rows) or `EmitNativeAbs` (a column
-`t`, an equality row `t = inner`, and a `GeneralConstraint` saying `aux = |t|`).
-Stage 08 routes on the arm **stage 05 chose** (`use_native_constructs.abs`); both arms
-read the same stage-05 tag, which is what makes them comparable. The native arm runs
-later than the lowering one — after the `VarIndexer` exists — because a general
-constraint names flat columns.
+**One decision, made once.** `DeriveAbsAuxiliaryBounds` is phase 1 and runs for both forms. `EmitAbsConstraints` is
+phase 2, and the one place native against lowered is decided for an ABS: `policy.Use(link.range_unbounded)`, the rule
+MIN/MAX read (`NativeConstructPolicy`). Native is the default: a backend that declares the construct states it
+natively, and a construct is lowered only where the lowering is measured faster. MIN/MAX is: on the Q9 shape the native
+form ran 1.7x-3.3x slower, and 40x slower on `MAX(e) >= K` at 30K rows. ABS is not: on Gurobi on Q10 (200K rows) the
+lowered form ran 12.0-12.2 s against 12.2-12.3 s native, with the same objective, a tie. So an exact ABS is stated
+natively wherever the backend declares it, and expanded on a backend that does not (HiGHS, or Gurobi under
+`DECIDB_NATIVE_CONSTRUCTS=off`). Native is the only form for an ABS with no finite Big-M, and a backend without it
+refuses that case. `DECIDB_NATIVE_CONSTRUCTS=force` states every declared construct natively; for an ABS that changes
+nothing.
 
-`refuse_when_unbounded` is the one place the arms differ in *outcome*: the lowering
-path has no finite `M` over an unbounded contributor and refuses, while the native path
-leaves the auxiliary unboxed and answers. That divergence is the capability's payoff.
+- **Native** (`StateAbsNatively`): a column `t` per active row, an equality row `t = inner`, and a general constraint
+  `aux = |t|`. The envelope stays: it is implied by `aux = |t|` and carries the clause provenance the elastic engine
+  reads.
+- **Lowered** (`ExpandAbs`): a sign indicator `y` per instance of the auxiliary and the two Big-M rows above, which pin
+  `aux` from above.
 
-**One binary, on one arm only.** The sign indicator `__abs_y_N__` exists to switch the
-Big-M envelope, and the native arm emits no envelope — it states `aux = |t|`. Stage 05
-therefore allocates it only on the lowering arm. It is a **row-scoped** variable, so
-on the native arm it would cost one free binary *per data row*, referenced by no row and
-no general constraint: presolved away by the solver, so never a wrong answer, but built,
-stored and marshalled across the solver API for every row of the input. Suppressing it is only expressible because stage 05 owns the
-formulation choice — the arm is known at the moment the variable would be allocated.
-`AbsMaximizeLinkSpec::y_idx` is `INVALID_INDEX` on the native arm.
+Phase 2 runs after the `VarIndexer` exists, because both forms emit in flat columns and a general constraint names them.
 
-**Each `t` is boxed by its own row.** `EmitNativeAbs` brackets the argument column from
+`refuse_when_unbounded` is the one place the forms differ in *outcome*: the lowered form
+has no finite `M` over an unbounded contributor, and where the backend declares no native ABS
+`DeriveAbsAuxiliaryBounds` refuses, naming a column to bound. Where it declares one, the auxiliary is left unboxed
+(`AbsLinkSpec::range_unbounded`), the native form states it, and the query answers. That divergence is the capability's
+payoff.
+
+**One binary, on one form only.** The sign indicator exists to switch the Big-M rows, and the native form states
+`aux = |t|` with none. `ExpandAbs` allocates it with `AddGlobalBinaryAux`, one global binary per instance of the
+auxiliary, as MIN/MAX does, and labels it with the ABS as a plan prints it, which a diagnosis names it by. Stage 05
+allocates none: an indicator allocated before the form is known is row-scoped, and on the native form it would cost one
+free binary *per data row*, referenced by no row and no general constraint. The solver presolves it away, so it is never
+a wrong answer, but it is built, stored and marshalled across the solver API for every row of the input. An ABS that is
+not exact has no indicator either.
+
+**Each `t` is boxed by its own row.** `StateAbsNatively` brackets the argument column from
 the row's own C1: `inner_r = k_r - sum_{v != aux} c_v x_v`, walked with
 `DecideRowSignedRange` (skipping the auxiliary) and folded in with
 `AuxRange::CoverRowEnds` — the same per-row walk every MIN/MAX auxiliary uses, keeping each end it can derive
@@ -1019,19 +1038,19 @@ independently. One interval per link, the **cover over rows**, would hand every 
 but the extreme one more room than it can reach, and a single unbounded row would leave
 every row's column free. A slack continuous column is a measured cost at the root LP relaxation, which is
 why this is worth doing rather than a tidiness. A column is left free only where
-nothing at all is derivable — which is exactly the query the native arm exists to
+nothing at all is derivable — which is exactly the query the native form exists to
 answer.
 
 **The argument is read whole.** `k` is C1's bound with its constant terms moved across
-(`DecideRowEffectiveBound`), in phase 1's interval and in the row `t = inner` alike: a
-frame's `else` read as data (`abs(x - at(previous else 50: x) over (...))`) is a term of
+(`DecideRowEffectiveBound`), in phase 1's interval and in the row `t = inner` alike (`ReadAbsArgument`, which both
+forms read): a frame's `else` read as data (`abs(x - at(previous else 50: x) over (...))`) is a term of
 no decision, and read off the bound alone it was left out -- `|x1 - 50|` read as `|x1|`.
 The argument's columns are summed per column before the row is written: a frame read
 that selects the anchor itself (`abs(x - at(last: x) over (...))` at the last period)
 lands on the column its other term reads, and a solver refuses a row naming a column
 twice.
 
-Phase 1 also **narrows the auxiliary's column box** to `max(|lo|, |hi|)`, on both arms. The
+Phase 1 also **narrows the auxiliary's column box** to `max(|lo|, |hi|)`, for both forms. The
 formulation pins `aux = |inner|`, so that is a valid upper bound — and the only one anything
 derives, since `aux >= inner` / `aux >= -inner` bound the auxiliary from below only.
 That box is why this runs before every other linearizer ("Big-M constants" above).
@@ -1166,7 +1185,7 @@ columns still name a decide variable in that message.
 | The value rewrite's helper decisions: boxes and definitions | `src/decidb/formulation/linearization_reducer_value.cpp` |
 | Helpers shared across those files | `src/include/duckdb/decidb/formulation/ilp_linearization_internal.hpp` |
 | `ExtremumLinkSpec`, `ExtremumMemberSource` — what a link is stated from | `src/include/duckdb/decidb/formulation/ilp_linearization.hpp` |
-| `BilinearLinkSpec`, `AbsMaximizeLinkSpec`, `ReducerValueLinkSpec` — the formulation tags | `src/include/duckdb/decidb/formulation/solver_input.hpp` |
+| `BilinearLinkSpec`, `AbsLinkSpec`, `ReducerValueLinkSpec` — the formulation tags | `src/include/duckdb/decidb/formulation/solver_input.hpp` |
 | `VarIndexer`, `SolverModel`, `ModelConstraint`, provenance | `src/include/duckdb/decidb/formulation/ilp_model.hpp` |
 | `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn` | `src/include/duckdb/decidb/formulation/solver_input.hpp` |
 | Golden model corpus (the characterization oracle) | `test/decide/golden/` |

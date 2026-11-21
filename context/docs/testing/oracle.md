@@ -523,8 +523,8 @@ The fixture is four rows on purpose: shapes carrying a Big-M encoding stay insta
 ### One baseline per backend
 
 The backend is part of the answer, not an ambient fact about the host. Gurobi states
-ABS, MIN/MAX and `<>` natively while HiGHS lowers all three, so the two build genuinely
-different models from identical SQL — 112 models against 109. Entries 86 and 87 (MIN/MAX
+ABS and `<>` natively, and MIN/MAX where no Big-M exists, while HiGHS lowers all three, so the two build
+genuinely different models from identical SQL — 112 models against 109. Entries 86 and 87 (MIN/MAX
 over a range open on one side) reach a model only where MIN/MAX is stated natively, and
 entry 33 (a quadratic constraint) needs Gurobi; on HiGHS those three are the refusals
 recorded in `baseline.highs.dump.results`.
