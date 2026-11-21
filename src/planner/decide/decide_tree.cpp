@@ -89,6 +89,29 @@ unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const
 		facts->scope.per = DecideClauseScope::PerRole::ONE_ROW_PER_CLASS;
 	}
 	facts->lhs_is_aggregate = !facts->was_minmax_easy && shape == CanonicalConstraintClass::AGGREGATE;
+	// A clause no `per` made a class root is one row per kept row, but its rows are the same row wherever they agree on
+	// what it reads: one that reads no per-row decision (a query-wide or a keyed one is the same on the rows of one
+	// instance) is one class, as `per ()` is, whose instances are its distinct sigmas (language/guide.md §6.2). One
+	// that reads a per-row decision differs on every row and keeps its path.
+	if (facts->scope.per == DecideClauseScope::PerRole::NONE && facts->kind == ConstraintKind::USER_PARAMETER &&
+	    facts->defined_var == DConstants::INVALID_INDEX && !facts->was_minmax_easy && !facts->lhs_is_aggregate) {
+		vector<DecideSignatureField> fields;
+		canonicalizer.CollectSignatureFields(comparison, DConstants::INVALID_INDEX, fields);
+		bool per_row = false;
+		for (auto &field : fields) {
+			if (field.kind != DecideSignatureFieldKind::DECISION) {
+				continue;
+			}
+			const auto &variable =
+			    field.decision < op.variable_scopes.size() ? op.variable_scopes[field.decision] : DecideVarScopeInfo();
+			const bool keyed = variable.IsKeyed() || (variable.scope == DecideVarScope::INLINED &&
+			                                          variable.keyed_scope_idx < op.keyed_scopes.size());
+			per_row = per_row || (!variable.IsGlobal() && !keyed);
+		}
+		if (!per_row) {
+			facts->scope.per = DecideClauseScope::PerRole::ONE_ROW_PER_CLASS;
+		}
+	}
 	for (auto &atom : ReadCanonicalAtoms(*comparison.left, op.decide_index)) {
 		auto expression = atom.scaled ? static_cast<const Expression *>(atom.scale.aggregate) : atom.term;
 		expression = UnwrapDecideCasts(*expression, op.decide_index);
@@ -1094,6 +1117,10 @@ private:
 			}
 		}
 		UseSignature(node, signature);
+		if (!scope.per_wrapper && node.facts->scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
+			// Its sigma stays what it reads (UseSignature), whose distinct values are its instances.
+			node.per = DecideTreePer::ONE;
+		}
 		sources.clause_roots.push_back(index);
 		auto end = std::remove_if(node.signature.begin(), node.signature.end(), [&](const DecideSignatureField &field) {
 			return field.kind == DecideSignatureFieldKind::DECISION && field.decision == node.defined_var;

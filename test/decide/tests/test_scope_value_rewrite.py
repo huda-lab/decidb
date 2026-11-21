@@ -260,35 +260,35 @@ def test_a_term_beside_a_reducer_is_one_row_per_group_when_the_by_key_determines
 
 @pytest.mark.correctness
 @pytest.mark.parametrize(
-    "clause, reducers, bound, helpers",
+    "clause, reducers, bound, counts",
     [
         pytest.param(
             "sum(ship) by (D.depotID) + sum(ship) by (D.region) <= 50",
             (("depotID",), ("region",)),
             50,
-            2,
+            # One row per (depot, region): D1 East, D2 East and D3 West.
+            {"num_vars": 5, "num_rows": 3},
             id="two-keys",
         ),
         pytest.param(
             "sum(ship) by (D.depotID) + sum(ship) by (D.region) + sum(ship) <= 90",
             (("depotID",), ("region",), ()),
             90,
-            2 + 1,
+            # The query's total keeps its column and its definition.
+            {"num_vars": 6, "num_rows": 4},
             id="three-keys",
         ),
     ],
 )
-def test_reducers_with_different_by_keys(decidb_cli, scope_solver, tmp_path, clause, reducers, bound, helpers):
+def test_reducers_with_different_by_keys(decidb_cli, scope_solver, tmp_path, clause, reducers, bound, counts):
     """Each reducer reads its own group; the row adds the helpers, one per group of every
-    key, defined once. Where that costs more nonzeros than writing a helper's members into
-    the rows that read it, it is written in (D89): each depot's sum, at most two shipments
-    read by as many rows. The region sums (East's is four shipments read by four rows) and
-    the query's total keep their columns and definitions."""
+    key, defined once, and the clause is one row per distinct (depot, region): shipments
+    of one depot read the same groups, so their rows are one. Where a helper costs more
+    nonzeros than writing its members into the rows that read it, it is written in (D89):
+    each depot's sum and each region's. The query's total keeps its column and its
+    definition."""
     sql = _ship_query(clause)
-    assert dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump")) == {
-        "num_vars": len(SHIPMENTS) + helpers,
-        "num_rows": len(SHIPMENTS) + helpers,
-    }
+    assert dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump")) == counts
     model = ScopedModel(joined(), SHIP)
     clauses = [SHIP_BOUND, Scoped(tuple(_ship_reduce(by=by) for by in reducers), "<=", (const(bound),))]
     _judged(decidb_cli, scope_solver, sql, model, clauses)

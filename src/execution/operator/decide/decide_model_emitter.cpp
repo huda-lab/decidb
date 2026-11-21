@@ -742,7 +742,7 @@ void DecideModelEmitter::Classes(idx_t root, const vector<bool> &tested, Evaluat
 	if (clause.scope.class_key != DConstants::INVALID_INDEX) {
 		KeyClasses(root, class_ids, class_names);
 	}
-	if (variants.count > variants.num_classes) {
+	if (signature && variants.count > variants.num_classes) {
 		op.RecordVariants(*signature, "constraints", variants.count, variants.num_classes);
 		evaluated.group_names = NameVariants(root, *signature, class_of, first_rows, variants_per_class);
 	} else {
@@ -763,8 +763,10 @@ void DecideModelEmitter::Classes(idx_t root, const vector<bool> &tested, Evaluat
 		    named = class_names;
 	    },
 	    gstate.class_sets);
-	DecideNameVariantClassSets(class_of, variants_per_class, evaluated.group_names, evaluated.group_class_set,
-	                           gstate.class_sets);
+	if (signature) {
+		DecideNameVariantClassSets(class_of, variants_per_class, evaluated.group_names, evaluated.group_class_set,
+		                           gstate.class_sets);
+	}
 }
 
 vector<Value> DecideModelEmitter::Identity(idx_t node, idx_t entry) const {
