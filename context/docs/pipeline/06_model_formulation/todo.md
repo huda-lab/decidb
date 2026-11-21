@@ -4,24 +4,6 @@ Open work in the linearizations this stage emits. Finished work is in [done.md](
 [`../../direct_solve/framework/todo.md`](../../direct_solve/framework/todo.md) § How to work any task in these todo
 files.
 
-## FORM-9 — A product with a BOOL decision reads its ABS helper's box
-
-- **Problem.** With `x` INT in `[0, 6]` and `b` BOOL over three rows, `sum(b * abs(x - 2)) >= 5` and `MINIMIZE
-  sum(b * abs(x - 2))` are refused: `'abs(x - 2)' has no finite upper bound, which its product with a BOOL decision
-  needs`. The product's McCormick rows need the ABS helper's top, which `x`'s box gives (4). Two causes. An ABS that is
-  not exact gets no box (`DeriveAbsAuxiliaryBounds`, `linearization_bilinear_abs.cpp`). And in a query with no value
-  helper, `DeriveBilinearAuxiliaryBounds` refuses before any ABS box is derived (`physical_decide.cpp`): only a query
-  with a helper alternates the derivations and refuses on the settled boxes.
-- **Change.** Every query alternates the derivations and decides the refusals on the settled boxes; the branch for a
-  query with no helper goes. Every ABS is boxed by its operand's reach where the reach is finite. An open reach is
-  refused only by what needs a box: an exact ABS's Big-M, or a reader such as a product, a MIN or MAX, or a `<>`. The
-  box of an ABS that is not exact is sound: its readers push it down to the operand's absolute value, which the box
-  holds.
-- **Ruling (owner, 2026-11-22).** Fix both causes.
-- **Done when.** Both queries agree with the oracle;
-  `test_a_boolean_times_an_abs_is_linearized_once_the_abs_has_its_helper` passes without its `x <= 0.6 * sum(x)`
-  clause; `./test/decide/run_tests.sh -k "abs or bilinear"` passes.
-
 ## FORM-8 — One record per kind of model row
 
 - **Problem.** `EvaluatedConstraint` has about ten construct-specific fields, so readers carry skip lists

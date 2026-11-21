@@ -874,10 +874,11 @@ states ABS natively and bakes in no constant, so it sees both; a lowered Big-M e
 solver one: `DECIDB_NATIVE_CONSTRUCTS=off` gives the lowered answer on Gurobi too.
 
 **The rule.** A clause that demands more of an auxiliary than the box can supply sizes that
-auxiliary itself. Note when it fires: only when the demand *exceeds* the box, which is only
-when the clause cannot be met as written. A query that solves reaches its own bound by
-definition, so its ceilings and Big-Ms are untouched. A looser M is valid in any case; it only slackens the
-deactivated arm of a disjunction, whereas a too-small one cuts off legal answers.
+auxiliary itself. It fires when the demand *exceeds* the box. The demand covers the worst value the rest of the row's
+box allows, so on a row with other variable terms (`ABS(x - 3) <= ABS(x - 9)`) it widens a query that solves: the
+worst case is a point another row may exclude, and it is kept so that a repair stays representable. A looser M is
+valid in any case; it only slackens the deactivated arm of a disjunction, whereas a too-small one cuts off legal
+answers.
 
 **Where it lands.**
 - **ABS** — `DemandedAuxReach` (`linearization_bilinear_abs.cpp`) returns the largest value any clause

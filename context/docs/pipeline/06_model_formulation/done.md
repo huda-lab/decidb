@@ -707,11 +707,11 @@ derives it from its widened members. The model builder, the closing Big-M, `Flat
 (through `FormulationBox::InstanceUpper` / `InstanceLower`) and the ABS argument boxes read
 the instance box (`InstanceBox` with `reach` set); the `<>` range collapse keeps the rigid
 view (`InstanceBox` default) and never reads a reach. A member may be an ABS
-auxiliary, a product with a helper (`b * sum(x)`) or hold one, so when a model has helpers
-`FormulateModel` alternates `DeriveBilinearAuxiliaryBounds` and `DeriveAbsAuxiliaryBounds`
-(neither refusing) with this derivation and its backward half until no box moves, and only
-then runs the two that refuse (a bilinear factor with no ceiling names the unbounded member,
-not the helper). The backward half, `DeriveReducerMemberBounds`, lets a helper's box bound
+auxiliary, a product with a helper (`b * sum(x)`) or hold one, and a product's factor may be an ABS auxiliary, so for
+every model `FormulateModel` alternates `DeriveBilinearAuxiliaryBounds` and `DeriveAbsAuxiliaryBounds` (neither
+refusing) with this derivation and its backward half until no box moves, and only then runs the two that refuse (a
+bilinear factor with no ceiling names the unbounded member, not the helper). A model with none of these constructs
+settles in one pass. The backward half, `DeriveReducerMemberBounds`, lets a helper's box bound
 the helpers it is defined from (a nest, guide §5.5): each term of a SUM or AVG is at most the
 helper's top less every other term's floor where the definition states `value >= members`,
 at least its floor less every other's top where it states `value <= members`; a MAX's
@@ -946,9 +946,9 @@ instance, one whose own `L >= 0` included, so the product reaches the negative v
 `b = 0`. The floor is the product's range, not the default 0, so a floor written on the product holds, a `when` floor
 lowers the product's other rows with it, and `b * x + 3 <= 1` is not refused as never negative. A missing finite
 upper bound on `x` is refused by name, since there is no envelope without it; where `x` is an ABS helper the refusal
-quotes the `ABS(...)` as the user wrote it (the tree's `ABS` node carries that text), never the helper. A factor that is a
-helper has no box until its members' are derived, so the refusal waits for them and names the
-member.
+quotes the `ABS(...)` as the user wrote it (the tree's `ABS` node carries that text), never the helper. A factor that is
+a helper or an ABS auxiliary has no box until the derivations above settle, so the refusal is decided on the settled
+boxes and names the member.
 
 ### L0 counts
 
@@ -978,6 +978,12 @@ ABS exact. Only an exact ABS gets the rows below.
 (`../05_optimizer/done.md`, the objective's value rewrite), so each envelope row is one instance of its F edge's scope,
 built by `DecideModelEmitter::Rows`, and the phases below read it per row. `EmitAbsEnvelopes` refuses a row that holds
 an aggregate as an internal error (`test/common/test_decidb_abs_envelope.cpp`).
+
+**Every ABS is boxed, exact or not.** `DeriveAbsAuxiliaryBounds` narrows each auxiliary's column to the largest
+`|inner|` any row reaches. An ABS that is not exact has no Big-M to size, but a reader may need its top: a product with
+a BOOL decision (`sum(b * abs(x - 2))` under MINIMIZE), a MIN or MAX, a `<>`. The box is sound for it: every reader
+pushes it down, so its value is `|inner|`, which the top holds. An open reach leaves its box open, and a reader that
+needs the box refuses it through its own check.
 
 **Each sign row has its own M.** `DeriveAbsAuxiliaryBounds` takes the signed interval
 `[lo, hi]` of `inner` over every row (`AbsLinkSpec::inner_lo` / `inner_hi`). The
@@ -1014,7 +1020,7 @@ nothing.
 
 Phase 2 runs after the `VarIndexer` exists, because both forms emit in flat columns and a general constraint names them.
 
-`refuse_when_unbounded` is the one place the forms differ in *outcome*: the lowered form
+`refuse_when_unbounded` is the one place the forms differ in *outcome*, for an exact ABS: the lowered form
 has no finite `M` over an unbounded contributor, and where the backend declares no native ABS
 `DeriveAbsAuxiliaryBounds` refuses, naming a column to bound. Where it declares one, the auxiliary is left unboxed
 (`AbsLinkSpec::range_unbounded`), the native form states it, and the query answers. That divergence is the capability's

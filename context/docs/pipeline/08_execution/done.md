@@ -1073,8 +1073,9 @@ in which this stage calls the linearizers (ABS first) is load-bearing for it: se
 Whether a construct is lowered is a **formulation** choice, and formulation belongs to
 stage 05. This stage reads the answer off the operator and applies it. `FormulateModel`
 builds a `NativeConstructPolicy` for ABS and one for MIN/MAX from `use_native_constructs` and
-`force_native_constructs`; hands over the ABS records with their envelope rows (`EmitAbsEnvelopes`); derives the ABS
-auxiliary boxes (refusing an unbounded contributor only where the backend declares no native ABS); states each exact ABS
+`force_native_constructs`; hands over the ABS records with their envelope rows (`EmitAbsEnvelopes`); derives every ABS
+auxiliary's box with the product and helper boxes until none moves, then decides the refusals (an exact ABS refuses an
+unbounded contributor only where the backend declares no native ABS); states each exact ABS
 natively or lowered (`EmitAbsConstraints`); then runs the value-link, MIN/MAX, `<>` and bilinear linearizers, and last
 `LowerDecideConstructs`.
 
