@@ -463,7 +463,7 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 		}
 		vector<LogicalType> instance {LogicalType::UBIGINT};
 		instance.insert(instance.end(), signature_types[n].begin(), signature_types[n].end());
-		instance_maps[n] = make_uniq<DecideKeyMap>(context, instance, numbered);
+		instance_maps[n] = make_uniq<DecideKeyMap>(context, instance, numbered && !node.merges_classes);
 		auto entry = instance;
 		entry.insert(entry.end(), columns.begin(), columns.end());
 		entry.insert(entry.end(), node.dependencies.size(), LogicalType::UBIGINT);
@@ -1242,6 +1242,10 @@ void DecideDescent::InsertDistinct(Pending &batch, idx_t row_base) {
 		signatures.data[c].Slice(probe.data[c], selection, created.size());
 	}
 	signatures.SetCardinality(created.size());
+	if (node.merges_classes) {
+		// The slot leaves the instance key and the entry keeps it: a merged instance is named by its first class.
+		signatures.data[0].Reference(Value::UBIGINT(0));
+	}
 	unsafe_vector<idx_t> instances(created.size());
 	idx_t next_instance = container.instance_entries.size();
 	instance_maps[batch.node]->FindOrCreate(signatures, instances.data(), next_instance);
@@ -1922,6 +1926,9 @@ void DecideDescent::Merge(MergedPart &part) {
 				signatures.data[c].Slice(probe.data[c], selection, created.size());
 			}
 			signatures.SetCardinality(created.size());
+			if (tree.nodes[n]->merges_classes) {
+				signatures.data[0].Reference(Value::UBIGINT(0));
+			}
 			unsafe_vector<idx_t> instance_ids(created.size());
 			idx_t next_instance = container.instance_entries.size();
 			instance_maps[n]->FindOrCreate(signatures, instance_ids.data(), next_instance);

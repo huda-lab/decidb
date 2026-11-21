@@ -224,6 +224,9 @@ struct DecideNode {
 	idx_t defined_var = DConstants::INVALID_INDEX;
 	ExpressionType comparison_type = ExpressionType::INVALID;
 	bool root = false;
+	//! A clause root whose instances are its distinct sigmas over every class: classes whose rows agree on all they
+	//! read are one instance (language/guide.md §7.1). See DecideCanonicalizer::MergesClasses.
+	bool merges_classes = false;
 	bool objective = false;
 	bool hidden = false;
 	bool decision_value = false;

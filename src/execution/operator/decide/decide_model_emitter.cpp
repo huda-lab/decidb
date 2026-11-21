@@ -773,7 +773,8 @@ vector<Value> DecideModelEmitter::Identity(idx_t node, idx_t entry) const {
 	auto &container = descent.Containers()[node];
 	auto &fields = tree.nodes[node]->signature;
 	const auto starts = SignatureStarts(tree, *tree.nodes[node]);
-	auto identity = container.groups.Key(container.Slot(entry));
+	// A clause that merges classes tells its variants apart by what its rows read, not by their class.
+	auto identity = tree.nodes[node]->merges_classes ? vector<Value>() : container.groups.Key(container.Slot(entry));
 	const auto read = descent.Signature(node, entry);
 	const auto row = container.rows[entry];
 	for (idx_t i = 0; i < fields.size(); i++) {

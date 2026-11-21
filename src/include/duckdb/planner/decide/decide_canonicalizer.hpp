@@ -265,6 +265,11 @@ public:
 	//! decision by instance, a reducer's `by` key, a frame by its keys, and data by each column it reads.
 	void CollectSignatureFields(const Expression &expr, idx_t key, vector<DecideSignatureField> &fields) const;
 
+	//! Whether the classes of `per` key `key` that agree on every field `clause` reads are one instance. Not where it
+	//! reads a field the key holds by construction (a column of the key, or a function of its columns), which the
+	//! signature leaves out though its value differs between classes, or a frame, which reads another row.
+	bool MergesClasses(const Expression &clause, idx_t key) const;
+
 	//! Where every frame selector of the canonical SUCH THAT tree stands (language/guide.md §5.6): the rows its
 	//! timelines read, which are its scoped expression's path rows (§5.5); the key they are grouped by, the path's
 	//! `by` keys then `within`; the comparison it is written in; and whether it is inside a reducer

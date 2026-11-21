@@ -112,14 +112,13 @@ def test_a_row_in_no_by_group_is_a_variant_with_no_value(decidb_cli, scope_solve
 
 @pytest.mark.correctness
 def test_equal_values_in_two_classes_stay_two_instances(decidb_cli, tmp_path):
-    """Two classes whose bodies agree are two instances, and the model keeps both rows: a
-    row the formulation does not merge, harmless since they are one constraint. Two
-    decisions keep the clause a row rather than a bound folded into one column's box."""
+    """Two classes whose bodies agree are two instances (the oracle's), and the model states them once: they are one
+    constraint. Two decisions keep the clause a row rather than a bound folded into one column's box."""
     rows = ((1, "a", "p", 5, 0), (2, "b", "p", 5, 0))
     sql = _query("x(INT), per (): s(INT), per (): u(INT)", "x <= 1 AND per t.g: s + u <= t.b", rows, "MAXIMIZE s")
     model = AnrModel(table_rows(COLUMNS, rows), [Decision("x"), Decision("s", ()), Decision("u", ())])
     assert len(model.instances(clause(le(Var("s") + Var("u"), Col("b")), per=("g",)))) == 2
-    assert dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump"))["num_rows"] == 2
+    assert dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump"))["num_rows"] == 1
 
 
 @pytest.mark.correctness

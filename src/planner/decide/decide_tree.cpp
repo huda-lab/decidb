@@ -1117,6 +1117,14 @@ private:
 			}
 		}
 		UseSignature(node, signature);
+		if (scope.per_wrapper && node.key != DConstants::INVALID_INDEX &&
+		    node.facts->kind == ConstraintKind::USER_PARAMETER &&
+		    node.facts->defined_var == DConstants::INVALID_INDEX &&
+		    node.facts->scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
+			DecideCanonicalizer canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.keys,
+			                                  op.is_boolean_var);
+			node.merges_classes = canonicalizer.MergesClasses(*row, node.key);
+		}
 		if (!scope.per_wrapper && node.facts->scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
 			// Its sigma stays what it reads (UseSignature), whose distinct values are its instances.
 			node.per = DecideTreePer::ONE;

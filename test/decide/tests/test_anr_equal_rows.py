@@ -103,3 +103,50 @@ def test_a_clause_over_a_per_row_decision_keeps_a_row_per_row(decidb_cli, scope_
     ]
     objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", X), lambda r: {"s": 1}))
     _judged(decidb_cli, scope_solver, sql, [Decision("x"), Decision("s", GLOBAL)], clauses, objective)
+
+
+# `per K:` classes that agree on everything the clause reads are one instance, so one row.
+KEYED_COLUMNS = ("id", "g", "b")
+
+
+def _keyed(rows, clause_sql, decide="per (): s(INT), per (): u(INT)"):
+    return f"""SELECT id, s, u {table('t', KEYED_COLUMNS, rows)} DECIDE {decide}
+        SUCH THAT s <= 3 AND u <= 3 AND {clause_sql} MAXIMIZE s + u ORDER BY id"""
+
+
+@pytest.mark.correctness
+def test_classes_that_agree_on_what_a_clause_reads_are_one_row(decidb_cli, scope_solver, tmp_path):
+    """`per t.g: s + u <= t.b` over three classes with one `b` is one constraint, which the model states once."""
+    rows = ((1, "a", 5), (2, "b", 5), (3, "c", 5))
+    sql = _keyed(rows, "per t.g: s + u <= t.b")
+    assert dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump"))["num_rows"] == 1
+    clauses = [
+        Scoped((lambda r: {"s": 1},), "<=", (const(3),)),
+        Scoped((lambda r: {"u": 1},), "<=", (const(3),)),
+        Scoped((lambda r: {"s": 1, "u": 1},), "<=", (lambda r: {CONSTANT: r["b"]},), per=("g",)),
+    ]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (lambda r: {"s": 1, "u": 1},))
+    model = ScopedModel(table_rows(KEYED_COLUMNS, rows), [Decision("s", GLOBAL), Decision("u", GLOBAL)])
+    assert model.judge_scoped(answer(decidb_cli, sql), clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective), abs=1e-4
+    )
+
+
+@pytest.mark.correctness
+def test_classes_that_differ_in_a_field_their_key_holds_stay_two_rows(decidb_cli, scope_solver, tmp_path):
+    """`per t.g: s <= length(t.g)` reads a function of the key, which the signature leaves out because the key holds it:
+    the classes 'a' and 'bb' agree on every field the signature has and are two constraints, not one."""
+    rows = ((1, "a", 0), (2, "bb", 0))
+    sql = _keyed(rows, "per t.g: s + u <= length(t.g)")
+    assert dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump"))["num_rows"] == 2
+    length = lambda r: float(len(r["g"]))  # noqa: E731
+    clauses = [
+        Scoped((lambda r: {"s": 1},), "<=", (const(3),)),
+        Scoped((lambda r: {"u": 1},), "<=", (const(3),)),
+        Scoped((lambda r: {"s": 1, "u": 1},), "<=", (lambda r: {CONSTANT: length(r)},), per=("g",)),
+    ]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (lambda r: {"s": 1, "u": 1},))
+    model = ScopedModel(table_rows(KEYED_COLUMNS, rows), [Decision("s", GLOBAL), Decision("u", GLOBAL)])
+    assert model.judge_scoped(answer(decidb_cli, sql), clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective), abs=1e-4
+    )

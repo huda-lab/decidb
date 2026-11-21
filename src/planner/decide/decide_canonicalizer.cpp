@@ -1836,6 +1836,16 @@ bool DecideCanonicalizer::KeyHoldsField(idx_t key, const DecideSignatureField &f
 	return false;
 }
 
+bool DecideCanonicalizer::MergesClasses(const Expression &clause, idx_t key) const {
+	if (ContainsDecideFrame(clause)) {
+		return false;
+	}
+	vector<DecideSignatureField> fields;
+	CollectSignatureFields(clause, DConstants::INVALID_INDEX, fields);
+	return std::none_of(fields.begin(), fields.end(),
+	                    [&](const DecideSignatureField &field) { return KeyHoldsField(key, field); });
+}
+
 void DecideCanonicalizer::CollectSignatureFields(const Expression &expr, idx_t key,
                                                  vector<DecideSignatureField> &fields) const {
 	auto add = [&](DecideSignatureField field) {
