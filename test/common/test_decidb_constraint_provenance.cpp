@@ -137,11 +137,11 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		SolverModel model = BuildModel(input);
 
 		REQUIRE(model.constraints.size() == 2);
-		// User clause first, structural global row appended last.
-		CHECK(model.constraints[0].provenance.kind == ConstraintKind::USER_PARAMETER);
-		CHECK(model.constraints[1].provenance.kind == ConstraintKind::STRUCTURAL);
-		CHECK(model.constraints[1].provenance.repair_group_id == DConstants::INVALID_INDEX);
-		CHECK(!IsRelaxableForElastic(model.constraints[1].provenance.kind));
+		// The structural global row comes first, the user clause after it.
+		CHECK(model.constraints[0].provenance.kind == ConstraintKind::STRUCTURAL);
+		CHECK(model.constraints[0].provenance.repair_group_id == DConstants::INVALID_INDEX);
+		CHECK(!IsRelaxableForElastic(model.constraints[0].provenance.kind));
+		CHECK(model.constraints[1].provenance.kind == ConstraintKind::USER_PARAMETER);
 	}
 
 	SECTION("raw rows preserve source identity separately from repair grouping") {
@@ -194,8 +194,8 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		SolverModel model = BuildModel(input);
 
 		REQUIRE(model.constraints.size() == 2);
-		CHECK(model.constraints[0].provenance.source_clause_id == 5);
-		CHECK(model.constraints[1].provenance.source_clause_id == 7);
+		CHECK(model.constraints[0].provenance.source_clause_id == 7);
+		CHECK(model.constraints[1].provenance.source_clause_id == 5);
 		REQUIRE(model.general_constraints.size() == 1);
 		CHECK(model.general_constraints[0].provenance.source_clause_id == 9);
 		for (auto *prov : {&model.constraints[0].provenance, &model.constraints[1].provenance,
@@ -207,8 +207,8 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 			CHECK(prov->rhs_label.empty());
 			CHECK(!prov->is_aggregate);
 		}
-		CHECK(model.constraints[0].provenance.weight_labels.empty());
-		CHECK(!model.constraints[0].provenance.avg_scaled);
+		CHECK(model.constraints[1].provenance.weight_labels.empty());
+		CHECK(!model.constraints[1].provenance.avg_scaled);
 	}
 
 	SECTION("under DIAGNOSE a row carries its coefficient names and its typed bound") {

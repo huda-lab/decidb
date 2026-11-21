@@ -2447,15 +2447,13 @@ class TestNativeConstructDiagnosis:
 
 @pytest.mark.query_diagnostics
 class TestComposedClauseRepairIdentity:
-    """A composed MIN/MAX clause's row shares no slack with another clause.
+    """Each clause's rows keep their own repair id.
 
-    The elastic engine gives the rows of one repair id one shared slack. A composed
-    clause's row used to take `constraints.size() + global_constraints.size()` as its id,
-    but formulation moves a `<>` out of the linear clauses into indicator rows without
-    freeing its id, so that count landed on a live clause and the two shared a slack: the
-    diagnosis loosened `SUM(z) >= 10` to `>= 7` though `MAX(y) + SUM(z) <= 4` caps the
-    sum at 4, and the edited query stayed infeasible. Execution now numbers the composed
-    clauses after every other clause.
+    The elastic engine gives the rows of one repair id one shared slack. Formulation moves a `<>` out of the
+    linear clauses into indicator rows, and those rows stay with their clause's id, so no other clause shares
+    their slack. Two repairs of size 6 tie here, loosening `MAX(y) + SUM(z) <= 4` to `<= 10` or `SUM(z) >= 10`
+    to `>= 4`; the tie-break takes the clause emitted first, which is the MAX clause in written order. Applying
+    the reported repair makes the query feasible.
     """
 
     _SQL = (
@@ -2470,7 +2468,9 @@ class TestComposedClauseRepairIdentity:
         cli = request.getfixturevalue(cli_fixture)
         rows = _rows(_diagnose(cli, self._SQL))
         edits = _clause_edits(rows)
-        assert [(e["subject"], e.get("suggested_change")) for e in edits] == [("SUM(z) >= 10", "SUM(z) >= 4")], rows
+        assert [(e["subject"], e.get("suggested_change")) for e in edits] == [
+            ("MAX(y) + SUM(z) <= 4", "MAX(y) + SUM(z) <= 10")
+        ], rows
         _apply_reported_fix(cli, self._SQL, rows)
 
 
