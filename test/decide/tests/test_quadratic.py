@@ -2116,6 +2116,25 @@ class TestHighsRejection:
             word="squaring a decision that is not REAL is not supported on this installation",
         )
 
+    def test_highs_refuses_a_square_beside_an_exact_abs_as_beside_an_int_decision(self, decidb_cli_highs):
+        """An exact ABS lowers with a sign indicator, so the plan-time check reads it as an integral column: a
+        squared REAL decision beside `ABS(x - 1) >= 0.5` is the MIQP refusal a declared `INT` decision beside it gives,
+        not an internal error from the built model."""
+        cli = decidb_cli_highs.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
+
+        def refusal(decisions, clause):
+            sql = f"""
+                SELECT id, x FROM (VALUES (1), (2)) t(id)
+                DECIDE {decisions}
+                SUCH THAT x <= 5 AND {clause}
+                MINIMIZE SUM(POWER(x - 1.2, 2))
+            """
+            stderr = cli.execute_raw(sql).stderr
+            return next(line for line in stderr.splitlines() if line.startswith("Not implemented Error")), stderr
+
+        beside_abs, stderr = refusal("x(REAL)", "ABS(x - 1) >= 0.5")
+        assert beside_abs == refusal("x(REAL), z(INT)", "z <= 2")[0], stderr
+
     def test_highs_quadratic_constraint_rejected(self, decidb_cli_highs):
         """A squared term in SUCH THAT is a quadratic constraint (QCQP), HiGHS-rejected."""
         sql = """
