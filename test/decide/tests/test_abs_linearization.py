@@ -2530,3 +2530,31 @@ def test_abs_in_a_definition_a_hard_min_reads_is_boxed(decidb_cli_gurobi, tmp_pa
     cli = decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "force"})
     dump = cli.dump_model(_shared_sql("x + min(abs(x - 3) + power(x, 2)) <= 12"), tmp_path / "model.dump")
     assert int(re.search(r"^num_genconstrs: (\d+)", dump, re.MULTILINE).group(1)) == 1 + _SHARED_ROWS
+
+
+# A Boolean times an ABS is a product the bilinear rewrite reads once the ABS has its helper (RewriteAbs hands each such
+# product to it, as a worklist). Left to the first bilinear pass, the product is not affine in the decisions yet, and
+# the model keeps it as a quadratic row.
+
+
+@pytest.mark.correctness
+def test_a_boolean_times_an_abs_is_linearized_once_the_abs_has_its_helper(decidb_cli, tmp_path):
+    """`sum(b * abs(x - 2)) >= 5` over three rows, two of which `b` may pick: the answer is judged against every
+    assignment, and the model holds no quadratic row, the product's helper standing for it. `x <= 0.6 * sum(x)` is a
+    reducer helper, whose box settles the ABS's before the product reads it."""
+    sql = """SELECT id, x, b FROM (VALUES (1), (2), (3)) t(id)
+        DECIDE x(INT), b(BOOL)
+        SUCH THAT x >= 0 AND x <= 6 AND sum(b * abs(x - 2)) >= 5 AND x <= 0.6 * sum(x) AND sum(b) <= 2
+        MINIMIZE sum(x) ORDER BY id"""
+    dump = decidb_cli.dump_model(sql, tmp_path / "model.dump")
+    assert re.search(r"^num_qrows: 0$", dump, re.MULTILINE), dump
+    domains = {**{f"x{i}": range(7) for i in range(3)}, **{f"b{i}": range(2) for i in range(3)}}
+    judge_rows(
+        answer(decidb_cli, sql),
+        domains,
+        lambda a: sum(a[f"b{i}"] * abs(a[f"x{i}"] - 2) for i in range(3)) >= 5
+        and all(a[f"x{i}"] <= 0.6 * sum(a[f"x{j}"] for j in range(3)) for i in range(3))
+        and sum(a[f"b{i}"] for i in range(3)) <= 2,
+        lambda a: sum(a[f"x{i}"] for i in range(3)),
+        False,
+    )

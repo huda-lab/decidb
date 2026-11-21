@@ -17,6 +17,16 @@ namespace duckdb {
 //! The ABS nodes whose auxiliary needs the exact (Big-M) encoding.
 using AbsExactSet = unordered_set<const Expression *>;
 
+//! The products that read an ABS helper allocated in this pass, each as its slot in the body and the source alias its
+//! parent gives it: the worklist RewriteAbs hands to RewriteBilinear's entry once every ABS has its helper.
+struct AbsProductWorklist {
+	struct Item {
+		unique_ptr<Expression> *slot;
+		string source_alias;
+	};
+	vector<Item> items;
+};
+
 class DecideCanonicalizer;
 class LogicalDecide;
 class Optimizer;
@@ -180,9 +190,11 @@ private:
 	//! its exact encoding is read from `exact`, which RewriteAbs filled from every body's owner; this walk decides
 	//! nothing about it. `rows` is the rows the expression is read on (DecideOwnedBody::rows, null for every row),
 	//! which the `when` of each reducer around an ABS narrows further.
+	//! `products` collects the product nodes that read an ABS allocated below them (null: the body is not one a product
+	//! is tagged in).
 	void FindAbsAndAllocateAux(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                           const DecideCanonicalizer &canonicalizer, const AbsExactSet &exact,
-	                           const string &source_alias, const Expression *rows);
+	                           const string &source_alias, const Expression *rows, AbsProductWorklist *products);
 
 	Optimizer &optimizer;
 };

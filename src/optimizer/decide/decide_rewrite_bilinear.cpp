@@ -43,25 +43,26 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 // Bilinear McCormick linearization (Boolean × anything)
 // ---------------------------------------------------------------------------
 
+bool decide_rewrite::BilinearReadsBody(const LogicalDecide &decide, const DecideOwnedBody &body) {
+	return body.owner != DecideOwnedBody::Owner::VALUE_LINK ||
+	       decide.reducer_value_links[body.index].frame == DConstants::INVALID_INDEX;
+}
+
 void DecideOptimizer::RewriteBilinear(LogicalDecide &decide) {
-	// The second visit after ABS allocation can find products that include the newly tagged ABS helper. Products
-	// already annotated by the first visit remain intact and are skipped by FindAndReplaceBilinear.
+	// The one pass over the bodies as they stand when the McCormick rows are decided. A product that appears later is
+	// tagged where it appears, through FindAndReplaceBilinear: the value rewrite hands over the products its helpers
+	// expose (RewriteScopedReducers), and RewriteAbs those that read an ABS helper (AbsProductWorklist).
 	//
 	// The bodies that stand outside the written clauses have the same bilinear semantics as any other row: L0's three
 	// structural links, which the indicator F node owns and lowers later; definition bodies, which survive outside the
-	// clause list and receive the post-ABS product pass here too; and a retained reducer's body, which can acquire
-	// products of decisions when RewriteScopedReducers replaces the reducers nested in it with value helpers (a range's
-	// helper holds its payload as a frame reads it).
+	// clause list; and a retained reducer's body.
+	//
+	// The tags this pass adds are read by no canonicalization, so the objective is not reinstalled.
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
-		if (body.owner == DecideOwnedBody::Owner::VALUE_LINK &&
-		    decide.reducer_value_links[body.index].frame != DConstants::INVALID_INDEX) {
-			return;
+		if (BilinearReadsBody(decide, body)) {
+			FindAndReplaceBilinear(body.expr, decide, body.source_alias);
 		}
-		FindAndReplaceBilinear(body.expr, decide, body.source_alias);
 	});
-	if (decide.decide_objective) {
-		decide.SetObjective(optimizer.context, std::move(decide.decide_objective));
-	}
 }
 
 // A factor of a product is read as an affine expression in the decisions: `sum of coefficient * decision + constant`,

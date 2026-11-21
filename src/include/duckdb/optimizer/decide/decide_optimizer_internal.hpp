@@ -128,6 +128,10 @@ void WalkPolarity(ClientContext &context, const BooleanDecisions &booleans, uniq
 idx_t AddAuxiliaryDecision(LogicalDecide &decide, const string &name, const LogicalType &type, bool is_boolean,
                            DecideVarScopeInfo scope, const string &label);
 
+//! Whether the bilinear rewrite reads `body`: every body but a range frame's value link, whose payload is held as a
+//! frame reads it.
+bool BilinearReadsBody(const LogicalDecide &decide, const DecideOwnedBody &body);
+
 //! The scope of a column defined by two others (a product's auxiliary): their least upper bound, as DuckDB promotes
 //! the type of a binary operator. Two query-wide scopes join to a query-wide one, a query-wide scope and a keyed one
 //! to the keyed one, two of the same keyed scope to it, and anything else to a column per row.

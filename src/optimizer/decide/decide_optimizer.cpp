@@ -100,7 +100,8 @@ void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &r
 	// Nested reducers remain in their written positions; the tree lowers them as G nodes beneath their readers.
 	RunPass("optimizer.norm", [&] { RewriteNorm(decide); });
 	RunPass("optimizer.in_domain", [&] { RewriteInDomain(decide); });
-	// McCormick linearization for Boolean × anything bilinear products
+	// McCormick linearization for Boolean × anything bilinear products, the one pass over the bodies as they stand. A
+	// product a later pass exposes is handed to its entry where it appears (RewriteScopedReducers, RewriteAbs).
 	RunPass("optimizer.bilinear", [&] { RewriteBilinear(decide); });
 	// A MIN/MAX in its cheap direction keeps its reducer, tagged, before any pass reads the clause's direction.
 	RunPass("optimizer.minmax", [&] { RewriteMinMax(decide); });
@@ -109,17 +110,12 @@ void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &r
 	DecideTreeConstruction::PrepareDefinitionFunctions(optimizer.context, decide);
 	// The value rewrite: a VALUE-shape clause's reducers, and every other MIN/MAX, become helper decisions
 	RunPass("optimizer.scoped_reducers", [&] { RewriteScopedReducers(decide); });
-	// Reducers now nested in retained G bodies are decision variables; tag any products those substitutions exposed.
-	RunPass("optimizer.bilinear_nested_values", [&] { RewriteBilinear(decide); });
 	VerifyExtremumBodiesLinear(optimizer.context, decide);
 	RunPass("optimizer.not_equal", [&] { RewriteNotEqual(decide); });
 	RunPass("optimizer.avg", [&] { RewriteAvgToSum(decide); });
 	// Last of the rewrites that join a helper's readers: each ABS takes its encoding from the push its body's owner
 	// gives it.
 	RunPass("optimizer.abs", [&] { RewriteAbs(decide); });
-	// Products outside ABS need the helper it just allocated; the first bilinear pass has already handled products
-	// inside ABS's operand and everywhere else.
-	RunPass("optimizer.bilinear_abs_factors", [&] { RewriteBilinear(decide); });
 	// Must stay last among the rewrites: RewriteInDomain emits a floor-lowering bound
 	// that is itself a singleton-row bound, and every auxiliary variable must exist before the
 	// box is sized.

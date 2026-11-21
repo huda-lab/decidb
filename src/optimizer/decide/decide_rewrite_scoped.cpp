@@ -500,8 +500,8 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	Helpers helpers {optimizer.context, decide, {}, {}};
 
 	// A Boolean factor on a reducer (`b * sum(x)`, canonicalization admits no other decision) is now a product with
-	// the helper. The bilinear rewrite ran before this pass, so it never saw the product: annotate it for the same
-	// tree-owned product F node used by ordinary Boolean products.
+	// the helper. The bilinear rewrite ran before this pass, so it never saw the product: this hands it over, through
+	// the one entry (FindAndReplaceBilinear), for the same tree-owned product F node used by ordinary Boolean products.
 	auto HandProductsToBilinear = [&](unique_ptr<Expression> &expr, const string &source_alias) {
 		FindAndReplaceBilinear(expr, decide, source_alias);
 	};
@@ -634,9 +634,9 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 				               DConstants::INVALID_INDEX, site);
 			}
 		}
-		if (products) {
-			HandProductsToBilinear(body.expr, OBJECTIVE_ROW_TAG);
-		}
+		// Every product in the objective, whatever shape it was read in: a reducer a helper replaced inside a function
+		// or a nest may stand under a Boolean factor without the shape tag.
+		HandProductsToBilinear(body.expr, OBJECTIVE_ROW_TAG);
 	};
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
 		if (body.owner == DecideOwnedBody::Owner::CLAUSE) {

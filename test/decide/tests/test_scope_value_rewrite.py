@@ -1266,3 +1266,28 @@ def test_highs_builds_the_same_answers(decidb_cli_highs, scope_solver, clause, c
     result = _judged(decidb_cli_highs, scope_solver, _ship_query(clause), model, [SHIP_BOUND] + clauses)
     if ships is not None:
         assert result == ships
+
+
+# A reducer a function reads is a helper decision in the objective, and a Boolean beside it is a product with that
+# helper. The bilinear rewrite ran before the helper existed, so the value rewrite hands the product over
+# (RewriteScopedReducers): without it the model keeps a quadratic row.
+
+
+@pytest.mark.correctness
+def test_an_objective_product_a_nested_reducer_exposes_is_linearized(decidb_cli, tmp_path):
+    """`abs(b * sum(x) - 2.5)` with a query-wide `b`: the sum is read by the ABS, so it is a helper, and `b * helper`
+    is a product the model states without a quadratic row. Judged against every assignment."""
+    sql = """SELECT id, x, b FROM (VALUES (1), (2), (3)) t(id)
+        DECIDE x(INT), per (): b(BOOL)
+        SUCH THAT x >= 0 AND x <= 4 AND sum(x) <= 6
+        MINIMIZE abs(b * sum(x) - 2.5) ORDER BY id"""
+    dump = decidb_cli.dump_model(sql, tmp_path / "model.dump")
+    assert re.search(r"^num_qrows: 0$", dump, re.MULTILINE), dump
+    domains = {**{f"x{i}": range(5) for i in range(3)}, "b": range(2)}
+    judge_rows(
+        answer(decidb_cli, sql),
+        domains,
+        lambda a: sum(a[f"x{i}"] for i in range(3)) <= 6,
+        lambda a: abs(a["b"] * sum(a[f"x{i}"] for i in range(3)) - 2.5),
+        False,
+    )
