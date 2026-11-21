@@ -317,16 +317,6 @@ void decide_rewrite::AddRewriteAccount(LogicalDecide &decide, const string &clau
 	AddRewriteAccount(decide, source_clause_id, kind, std::move(subject));
 }
 
-//! The user clause a rewrite is currently standing inside. A comparison carrying a
-//! source id starts a new one; every other node inherits its parent's. This is what lets
-//! a row emitted deep inside a clause still name the clause it came from.
-string decide_rewrite::DescendSourceAlias(const Expression &expr, const string &inherited) {
-	idx_t provenance_id;
-	return TryParseSourceClauseTag(expr.GetAlias(), provenance_id) || HasDecideTag(expr.GetAlias(), OBJECTIVE_ROW_TAG)
-	           ? expr.GetAlias()
-	           : inherited;
-}
-
 //! Does `expr` hold a NORM marker anywhere beneath it?
 //!
 //! Only the L0 counts over decisions are still markers here (`0_auto`, `0_<double>`): canonicalization replaced every
@@ -369,11 +359,12 @@ static void VerifyNormMarkersLowered(LogicalDecide &decide) {
 //! member in its own quadratic row and is exempt.
 static void VerifyExtremumBodiesLinear(ClientContext &context, LogicalDecide &decide) {
 	DecideTermSplitter splitter(context, decide);
-	for (auto &link : decide.reducer_value_links) {
-		if (IsExtremumName(link.agg_name) && !splitter.IsLinear(*link.inner_expr)) {
-			throw InternalException("DECIDE MIN/MAX member '%s' is not linear", link.inner_expr->ToString());
+	decide.EnumerateBodies([&](DecideOwnedBody &body) {
+		if (body.owner == DecideOwnedBody::Owner::VALUE_LINK &&
+		    IsExtremumName(decide.reducer_value_links[body.index].agg_name) && !splitter.IsLinear(*body.expr)) {
+			throw InternalException("DECIDE MIN/MAX member '%s' is not linear", body.expr->ToString());
 		}
-	}
+	});
 }
 
 void DecideOptimizer::TagAtomicRemovalGroups(LogicalDecide &decide) {
@@ -391,14 +382,18 @@ void DecideOptimizer::TagAtomicRemovalGroups(LogicalDecide &decide) {
 		return source.between_upper ? source.between_partner : source_id;
 	};
 	std::set<idx_t> removable_clauses;
-	ForEachConstraintLeaf(*decide.decide_constraints, [&](Expression &node) {
-		if (is_removable(node)) {
-			removable_clauses.insert(clause_of(node));
+	decide.EnumerateBodies([&](DecideOwnedBody &body) {
+		if (body.owner == DecideOwnedBody::Owner::CLAUSE && is_removable(*body.expr)) {
+			removable_clauses.insert(clause_of(*body.expr));
 		}
 	});
 	idx_t next_group = 0;
 	std::map<idx_t, idx_t> group_of_clause;
-	ForEachConstraintLeaf(*decide.decide_constraints, [&](Expression &node) {
+	decide.EnumerateBodies([&](DecideOwnedBody &body) {
+		if (body.owner != DecideOwnedBody::Owner::CLAUSE) {
+			return;
+		}
+		auto &node = *body.expr;
 		auto clause = clause_of(node);
 		if (removable_clauses.count(clause) == 0) {
 			return;
@@ -513,6 +508,13 @@ void decide_rewrite::WalkPolarity(ClientContext &context, const BooleanDecisions
 	};
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
 		walk(expr->Cast<BoundCastExpression>().child, sign, path);
+		return;
+	}
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+		// A comparison is read as `LEFT - RIGHT <op> 0`: its relation pushes the one expression both sides make.
+		auto &comparison = expr->Cast<BoundComparisonExpression>();
+		walk(comparison.left, sign, path);
+		walk(comparison.right, -sign, path);
 		return;
 	}
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {

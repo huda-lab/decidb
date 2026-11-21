@@ -73,11 +73,13 @@ public:
 	void Run() {
 		// The parser requires a SUCH THAT clause with at least one constraint.
 		D_ASSERT(decide.decide_constraints);
-		Walk(*decide.decide_constraints, DecideEnclosingScope());
-		if (decide.decide_objective) {
-			in_objective = true;
-			WalkObjective(decide.decide_objective);
-		}
+		decide.EnumerateBodies([&](DecideOwnedBody &body) {
+			if (body.owner == DecideOwnedBody::Owner::CLAUSE) {
+				ReadClause(*body.expr, body.scope);
+			} else if (body.owner == DecideOwnedBody::Owner::OBJECTIVE) {
+				ReadObjective(body.expr, body.rows);
+			}
+		});
 	}
 
 private:
@@ -88,18 +90,9 @@ private:
 	};
 
 	//! A `per K:` wrapper groups no reducer: its clause is read like any other. Its key says which rows are in a class.
-	void Walk(Expression &expr, DecideEnclosingScope scope) {
-		scope = EnterDecideScope(expr, scope);
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			auto &conjunction = expr.Cast<BoundConjunctionExpression>();
-			for (idx_t i = 0; i < conjunction.children.size(); i++) {
-				if (IsConstraintChild(conjunction, i)) {
-					Walk(*conjunction.children[i], scope);
-				}
-			}
-			return;
-		}
+	void ReadClause(Expression &expr, const DecideEnclosingScope &scope) {
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+			in_objective = false;
 			when = scope.Condition();
 			class_key = scope.PerKey();
 			auto &comparison = expr.Cast<BoundComparisonExpression>();
@@ -112,8 +105,9 @@ private:
 
 	//! The objective, under its `when c:`: an objective is produced once, so it has no `per` key. Its condition holds
 	//! no reducer.
-	void WalkObjective(unique_ptr<Expression> &expr) {
-		when = EnterDecideScope(*expr, DecideEnclosingScope()).Condition();
+	void ReadObjective(unique_ptr<Expression> &expr, const Expression *objective_when) {
+		in_objective = true;
+		when = objective_when;
 		class_key = DConstants::INVALID_INDEX;
 		read_as = DecideValueRole::COEFFICIENT;
 		ReplaceDataUnderDecisions(expr, nullptr);

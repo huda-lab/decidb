@@ -41,16 +41,13 @@ void DecideOptimizer::RewriteNotEqual(LogicalDecide &decide) {
 	// For each one, create an auxiliary BOOLEAN indicator variable.
 	// The constraint expression itself is NOT modified — the physical operator
 	// matches COMPARE_NOTEQUAL constraints with ne_clause_labels at execution time.
-	FindNotEqualConstraints(*decide.decide_constraints, decide);
-}
-
-void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &decide) {
 	DecideTermSplitter splitter(optimizer.context, decide);
-	ForEachConstraintLeaf(expr, [&](Expression &node) {
-		if (node.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+	decide.EnumerateBodies([&](DecideOwnedBody &body) {
+		if (body.owner != DecideOwnedBody::Owner::CLAUSE ||
+		    body.expr->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
 			return;
 		}
-		auto &comp = node.Cast<BoundComparisonExpression>();
+		auto &comp = body.expr->Cast<BoundComparisonExpression>();
 		if (comp.type != ExpressionType::COMPARE_NOTEQUAL) {
 			return;
 		}
@@ -84,15 +81,17 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 // ---------------------------------------------------------------------------
 
 void DecideOptimizer::RewriteAvgToSum(LogicalDecide &decide) {
-	// Rewrites mutate in place, so each clause is detached, rewritten, and
-	// reinstalled through the boundary rather than edited where it sits.
+	// Rewrites mutate in place, so the constraints and the objective are rewritten where they sit and reinstalled
+	// through the boundary.
+	decide.EnumerateBodies([&](DecideOwnedBody &body) {
+		if (body.owner == DecideOwnedBody::Owner::CLAUSE || body.owner == DecideOwnedBody::Owner::OBJECTIVE) {
+			RewriteAvgInExpression(body.expr, decide, body.source_alias);
+		}
+	});
 	auto constraints = std::move(decide.decide_constraints);
-	RewriteAvgInExpression(constraints, decide, string());
 	decide.AddConstraint(optimizer.context, std::move(constraints));
 	if (decide.decide_objective) {
-		auto objective = std::move(decide.decide_objective);
-		RewriteAvgInExpression(objective, decide, OBJECTIVE_ROW_TAG);
-		decide.SetObjective(optimizer.context, std::move(objective));
+		decide.SetObjective(optimizer.context, std::move(decide.decide_objective));
 	}
 }
 

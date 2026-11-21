@@ -416,88 +416,75 @@ bool DecideWrittenBox::ContradictsDomain(bool is_bool) const {
 	return DecideBoxContradictsDomain(box, is_bool);
 }
 
-void DecideOptimizer::FoldSingletonRowsInExpression(Expression &expr, LogicalDecide &decide) {
-	switch (expr.GetExpressionClass()) {
-	case ExpressionClass::BOUND_CONJUNCTION: {
-		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		// `when c:` -- a conditional per-row constraint must NOT contribute to a global
-		// bound: `when c: x <= 0` does not mean `x <= 0` everywhere. This is why the pass keeps
-		// its own descent rather than using ForEachConstraintLeaf -- it asks the shared
-		// predicate what a wrapper is, then deliberately answers differently.
-		if (IsWhenFilterWrapper(conj)) {
-			break;
-		}
-		// `per K:` with a column the user wrote in K: a row whose K is NULL there is in no class and takes no instance
-		// of the clause (language/guide.md §6.2), which a box on the whole column would give it. The clause stays a
-		// row, which the row's class decides.
-		if (IsPerClassWrapper(conj)) {
-			auto &elements = DecideKeyElements(decide.keys, PerWrapperKey(conj));
-			if (std::any_of(elements.begin(), elements.end(), [](const DecideKeyElement &element) {
-				    return element.null_mode == DecideKeyNullMode::NO_GROUP;
-			    })) {
-				break;
-			}
-		}
-		for (auto &child : conj.children) {
-			FoldSingletonRowsInExpression(*child, decide);
-		}
-		break;
+void DecideOptimizer::FoldSingletonRowsInClause(Expression &expr, const DecideEnclosingScope &scope,
+                                                LogicalDecide &decide) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+		return;
 	}
+	// `when c:` -- a conditional per-row constraint must NOT contribute to a global bound: `when c: x <= 0` does not
+	// mean `x <= 0` everywhere.
+	if (scope.when_wrapper) {
+		return;
+	}
+	// `per K:` with a column the user wrote in K: a row whose K is NULL there is in no class and takes no instance of
+	// the clause (language/guide.md §6.2), which a box on the whole column would give it. The clause stays a row, which
+	// the row's class decides.
+	if (scope.per_wrapper) {
+		auto &elements = DecideKeyElements(decide.keys, scope.PerKey());
+		if (std::any_of(elements.begin(), elements.end(), [](const DecideKeyElement &element) {
+			    return element.null_mode == DecideKeyNullMode::NO_GROUP;
+		    })) {
+			return;
+		}
+	}
+	auto &comp = expr.Cast<BoundComparisonExpression>();
+	idx_t source_clause_id = DConstants::INVALID_INDEX;
+	TryParseSourceClauseTag(comp.GetAlias(), source_clause_id);
+	idx_t removal_group_id = DConstants::INVALID_INDEX;
+	TryParseRemovalGroupTag(comp.GetAlias(), removal_group_id);
 
-	case ExpressionClass::BOUND_COMPARISON: {
-		auto &comp = expr.Cast<BoundComparisonExpression>();
-		idx_t source_clause_id = DConstants::INVALID_INDEX;
-		TryParseSourceClauseTag(comp.GetAlias(), source_clause_id);
-		idx_t removal_group_id = DConstants::INVALID_INDEX;
-		TryParseRemovalGroupTag(comp.GetAlias(), removal_group_id);
-
-		DecideSingletonRow bound;
-		if (!DecideReadSingletonRow(optimizer.context, decide, comp, bound)) {
-			break;
-		}
-		if (!bound.folds) {
-			// A bound on the members of an easy extremum's `by` groups bounds each by a constant: no box takes it,
-			// since a row in no group is no member, but the domain check reads it as written.
-			if (bound.members_by_key_only && bound.constant_on_read_rows) {
-				decide.member_singleton_row_bounds.push_back(
-				    {bound.var_idx, bound.sense, bound.written_k, source_clause_id, removal_group_id});
-			}
-			break;
-		}
-		// The comparison stays in the tree so EXPLAIN keeps rendering what the user
-		// wrote; the tag is what stops it also becoming a model row. The box takes the
-		// admitted ends (`x <= 42.9999999` admits 42 for an INT), tightening
-		// unconditionally: a BOOLEAN restatement is a harmless no-op against its
-		// intrinsic box. A `-inf` floor writes the solver's "no bound", which frees `x`
-		// below as `x >= -1e30` does (D41).
-		AddDecideTag(comp.alias, SINGLETON_ROW_BOUND_TAG);
-		auto &box = decide.singleton_row_boxes[bound.var_idx];
-		if (bound.sense != '>') {
-			DecideFoldSingletonRow(box, '<', bound.upper_value);
-		}
-		if (bound.sense != '<') {
-			DecideFoldSingletonRow(box, '>', bound.lower_value);
-		}
-		// A bound that merely restates a BOOLEAN's intrinsic [0,1] box is not a
-		// loosenable parameter: the domain is applied to the solver column directly and
-		// never synthesized as a constraint, so such a bound only exists because the
-		// user wrote it redundantly. A genuine pin (`x <= 0`, `x >= 1`, `x = 1`) is
-		// recorded. Only a recorded bound is loosened by a diagnosis, and a clause is one
-		// knob per kept row or class in an expanded diagnosis (D28), which one column
-		// bound cannot say, so a recorded one is flattened for the repair model too.
-		bool is_boolean = decide.is_boolean_var[bound.var_idx];
-		bool restates_domain = is_boolean && bound.lower_value <= 0.0 && bound.upper_value >= 1.0;
-		if (!restates_domain) {
-			decide.user_singleton_row_bounds.push_back(
+	DecideSingletonRow bound;
+	if (!DecideReadSingletonRow(optimizer.context, decide, comp, bound)) {
+		return;
+	}
+	if (!bound.folds) {
+		// A bound on the members of an easy extremum's `by` groups bounds each by a constant: no box takes it,
+		// since a row in no group is no member, but the domain check reads it as written.
+		if (bound.members_by_key_only && bound.constant_on_read_rows) {
+			decide.member_singleton_row_bounds.push_back(
 			    {bound.var_idx, bound.sense, bound.written_k, source_clause_id, removal_group_id});
-			AddDecideTag(comp.alias, SINGLETON_ROW_CLAUSE_ROWS_TAG);
 		}
-		break;
+		return;
 	}
-
-	default:
-		break;
+	// The comparison stays in the tree so EXPLAIN keeps rendering what the user
+	// wrote; the tag is what stops it also becoming a model row. The box takes the
+	// admitted ends (`x <= 42.9999999` admits 42 for an INT), tightening
+	// unconditionally: a BOOLEAN restatement is a harmless no-op against its
+	// intrinsic box. A `-inf` floor writes the solver's "no bound", which frees `x`
+	// below as `x >= -1e30` does (D41).
+	AddDecideTag(comp.alias, SINGLETON_ROW_BOUND_TAG);
+	auto &box = decide.singleton_row_boxes[bound.var_idx];
+	if (bound.sense != '>') {
+		DecideFoldSingletonRow(box, '<', bound.upper_value);
 	}
+	if (bound.sense != '<') {
+		DecideFoldSingletonRow(box, '>', bound.lower_value);
+	}
+	// A bound that merely restates a BOOLEAN's intrinsic [0,1] box is not a
+	// loosenable parameter: the domain is applied to the solver column directly and
+	// never synthesized as a constraint, so such a bound only exists because the
+	// user wrote it redundantly. A genuine pin (`x <= 0`, `x >= 1`, `x = 1`) is
+	// recorded. Only a recorded bound is loosened by a diagnosis, and a clause is one
+	// knob per kept row or class in an expanded diagnosis (D28), which one column
+	// bound cannot say, so a recorded one is flattened for the repair model too.
+	bool is_boolean = decide.is_boolean_var[bound.var_idx];
+	bool restates_domain = is_boolean && bound.lower_value <= 0.0 && bound.upper_value >= 1.0;
+	if (!restates_domain) {
+		decide.user_singleton_row_bounds.push_back(
+		    {bound.var_idx, bound.sense, bound.written_k, source_clause_id, removal_group_id});
+		AddDecideTag(comp.alias, SINGLETON_ROW_CLAUSE_ROWS_TAG);
+	}
+	return;
 }
 
 void DecideOptimizer::FoldSingletonRows(LogicalDecide &decide) {
@@ -537,7 +524,11 @@ void DecideOptimizer::FoldSingletonRows(LogicalDecide &decide) {
 		decide.singleton_row_boxes[var].lower_written = true;
 	}
 
-	FoldSingletonRowsInExpression(*decide.decide_constraints, decide);
+	decide.EnumerateBodies([&](DecideOwnedBody &body) {
+		if (body.owner == DecideOwnedBody::Owner::CLAUSE) {
+			FoldSingletonRowsInClause(*body.expr, body.scope, decide);
+		}
+	});
 }
 
 } // namespace duckdb

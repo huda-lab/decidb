@@ -7,7 +7,7 @@
 // decide_optimizer.cpp and its decide_rewrite_*.cpp siblings. Internal to
 // layer 5 — nothing outside src/optimizer/decide/ includes this. The nested
 // namespace keeps deliberately short names (StrToAggType, MakeTrueExpression,
-// DescendSourceAlias) out of `duckdb`; each rewrite file pulls it in with a
+// ScopeOf) out of `duckdb`; each rewrite file pulls it in with a
 // file-scope `using namespace decide_rewrite;`.
 //
 //===----------------------------------------------------------------------===//
@@ -63,9 +63,6 @@ void CopyClauseProvenanceTags(const string &from_alias, Expression &to);
 //! (DEFINES_TAG_PREFIX).
 void MarkFormulationConstraint(Expression &expr, const string &source_alias, idx_t defined = DConstants::INVALID_INDEX);
 
-//! Walk down to the nearest source alias on `expr`, falling back to `inherited`.
-string DescendSourceAlias(const Expression &expr, const string &inherited);
-
 //! A TRUE placeholder standing in for a clause a rewrite has consumed.
 unique_ptr<Expression> MakeTrueExpression(const string &source_alias);
 
@@ -94,19 +91,7 @@ unique_ptr<Expression> ScopeRowPerInstance(const LogicalDecide &decide, unique_p
 unique_ptr<Expression> MakeAbsRow(ClientContext &context, const LogicalDecide &decide,
                                   const LogicalDecide::AbsFunction &function, bool negated);
 
-//! Polarity analysis: the sign each subterm carries once a clause is read as one expression `E` under `E <op> 0`
-//! (`LHS - RHS`), or the objective as `E` under its sense. Walking `expr` with `sign`, a node keeps its parent's sign
-//! through `+`, casts and reducer bodies (SUM, AVG, MIN and MAX never decrease when a member grows), flips it through
-//! `-` and a factor known negative before the query runs, and gets 0 ("unknown") under a factor whose sign only the
-//! rows decide or any other node. A factor of exactly zero reads as positive, and a BOOL decision as a factor is never
-//! negative (it is 0 or 1), so it keeps the sign of the term it scales (PlanTimeSignOf, `booleans`).
-//!
-//! `holds(node)` says whether a subtree holds anything the caller wants; a subtree that does not is skipped, and a
-//! factor that does not is read as a multiplier. `visit(slot, sign, path)` sees each held node first, through the slot
-//! that owns it, and returns true when it has taken the node and its subtree (it may walk below itself, with any sign).
-//! `path` says what else the way down to the node passed through. Every reader of a push reads it from this one walk:
-//! the ABS classifier, the reducers a value rewrite replaces, the ranges over decisions, and the definition of
-//! non-linear reducer bodies.
+//! What the way down to a node passed through, besides the sign it carries (WalkPolarity).
 struct PolarityPath {
 	//! A decision multiplies or divides the node, held or not (`b * sum(x)`).
 	bool beside_decision = false;
@@ -117,6 +102,21 @@ struct PolarityPath {
 };
 using PolarityHolds = std::function<bool(const Expression &)>;
 using PolarityVisit = std::function<bool(unique_ptr<Expression> &, int, const PolarityPath &)>;
+
+//! Polarity analysis: the sign each subterm carries once a clause is read as one expression `E` under `E <op> 0`
+//! (`LHS - RHS`, so a comparison walks its right side with the sign flipped), or the objective as `E` under its sense.
+//! Walking `expr` with `sign`, a node keeps its parent's sign through `+`, casts and reducer bodies (SUM, AVG, MIN and
+//! MAX never decrease when a member grows), flips it through `-` and a factor known negative before the query runs, and
+//! gets 0 ("unknown") under a factor whose sign only the rows decide or any other node. A factor of exactly zero reads
+//! as positive, and a BOOL decision as a factor is never negative (it is 0 or 1), so it keeps the sign of the term it
+//! scales (PlanTimeSignOf, `booleans`).
+//!
+//! `holds(node)` says whether a subtree holds anything the caller wants; a subtree that does not is skipped, and a
+//! factor that does not is read as a multiplier. `visit(slot, sign, path)` sees each held node first, through the slot
+//! that owns it, and returns true when it has taken the node and its subtree (it may walk below itself, with any sign).
+//! `path` says what else the way down to the node passed through. Every reader of a push reads it from this one walk:
+//! the ABS classifier, the reducers a value rewrite replaces, the ranges over decisions, and the definition of
+//! non-linear reducer bodies.
 void WalkPolarity(ClientContext &context, const BooleanDecisions &booleans, unique_ptr<Expression> &expr, int sign,
                   const PolarityHolds &holds, const PolarityVisit &visit, const PolarityPath &path = PolarityPath());
 

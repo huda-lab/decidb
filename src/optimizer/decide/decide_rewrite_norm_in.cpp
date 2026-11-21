@@ -137,12 +137,16 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 	    };
 
 	// Lowering swaps a marker for a `SUM` of indicators under the factor the canonicalizer peeled, so each clause is
-	// detached, lowered, and reinstalled through the canonicalizing boundary rather than left as it was edited.
-	auto objective = std::move(decide.decide_objective);
-	rewrite(objective, OBJECTIVE_ROW_TAG, DecideEnclosingScope());
-	decide.SetObjective(optimizer.context, std::move(objective));
+	// lowered where it sits and the whole is reinstalled through the canonicalizing boundary.
+	decide.EnumerateBodies([&](DecideOwnedBody &body) {
+		if (body.owner == DecideOwnedBody::Owner::CLAUSE || body.owner == DecideOwnedBody::Owner::OBJECTIVE) {
+			rewrite(body.expr, body.source_alias, body.scope);
+		}
+	});
+	if (decide.decide_objective) {
+		decide.SetObjective(optimizer.context, std::move(decide.decide_objective));
+	}
 	auto constraints = std::move(decide.decide_constraints);
-	rewrite(constraints, string(), DecideEnclosingScope());
 	decide.AddConstraint(optimizer.context, std::move(constraints));
 }
 
@@ -254,13 +258,6 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 		    expr = MakeTrueExpression(clause_alias);
 	    };
 	rewrite(decide.decide_constraints, DecideEnclosingScope(), string());
-	// An L0 count's links stand beside the constraints, where the tree's indicator F node reads them, and are walked
-	// as the constraints are.
-	for (auto &indicator : decide.l0_indicator_functions) {
-		for (auto &link : indicator.links) {
-			rewrite(link, DecideEnclosingScope(), string());
-		}
-	}
 	for (auto &constraint : generated)
 		decide.AddConstraint(optimizer.context, std::move(constraint));
 }

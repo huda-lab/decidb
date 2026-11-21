@@ -46,29 +46,21 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 void DecideOptimizer::RewriteBilinear(LogicalDecide &decide) {
 	// The second visit after ABS allocation can find products that include the newly tagged ABS helper. Products
 	// already annotated by the first visit remain intact and are skipped by FindAndReplaceBilinear.
+	//
+	// The bodies that stand outside the written clauses have the same bilinear semantics as any other row: L0's three
+	// structural links, which the indicator F node owns and lowers later; definition bodies, which survive outside the
+	// clause list and receive the post-ABS product pass here too; and a retained reducer's body, which can acquire
+	// products of decisions when RewriteScopedReducers replaces the reducers nested in it with value helpers (a range's
+	// helper holds its payload as a frame reads it).
+	decide.EnumerateBodies([&](DecideOwnedBody &body) {
+		if (body.owner == DecideOwnedBody::Owner::VALUE_LINK &&
+		    decide.reducer_value_links[body.index].frame != DConstants::INVALID_INDEX) {
+			return;
+		}
+		FindAndReplaceBilinear(body.expr, decide, body.source_alias);
+	});
 	if (decide.decide_objective) {
-		auto objective = std::move(decide.decide_objective);
-		FindAndReplaceBilinear(objective, decide, OBJECTIVE_ROW_TAG);
-		decide.SetObjective(optimizer.context, std::move(objective));
-	}
-	FindAndReplaceBilinear(decide.decide_constraints, decide, string());
-	// L0's three structural links stay outside the written clause tree, but their operands have the same bilinear
-	// semantics as any other constraint row. They remain owned by the indicator F node and are lowered there later.
-	for (auto &indicator : decide.l0_indicator_functions) {
-		for (auto &link : indicator.links) {
-			FindAndReplaceBilinear(link, decide, string());
-		}
-	}
-	// Definition bodies survive outside the clause list and receive the post-ABS product pass here too.
-	for (auto &definition : decide.definition_functions) {
-		FindAndReplaceBilinear(definition.body, decide, string());
-	}
-	// A retained reducer's body can acquire products of decisions when RewriteScopedReducers replaces the reducers
-	// nested in it with value helpers. Visit those bodies on the same post-rewrite pass as the definition F bodies.
-	for (auto &link : decide.reducer_value_links) {
-		if (link.frame == DConstants::INVALID_INDEX) {
-			FindAndReplaceBilinear(link.inner_expr, decide, string());
-		}
+		decide.SetObjective(optimizer.context, std::move(decide.decide_objective));
 	}
 }
 

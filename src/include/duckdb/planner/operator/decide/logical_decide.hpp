@@ -15,6 +15,7 @@
 #include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/decide_solver_capabilities.hpp"
 #include "duckdb/common/decide_numeric_policy.hpp"
+#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_tree_terms.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 
@@ -270,6 +271,50 @@ struct DecideSourceColumnName {
 //! (`named`) is the optimizer's, and its column is named as the column it reads.
 ColumnBinding DecideSourceColumnKey(const LogicalOperator &source, const ColumnBinding &binding,
                                     const vector<DecideSourceColumnName> &named);
+
+//! One expression the optimizer reads or rewrites, with what its owner says about it (LogicalDecide::EnumerateBodies).
+//! A clause is read one comparison at a time, since a relation pushes the comparison it stands in and not the clause
+//! beside it; every other owner holds one expression.
+struct DecideOwnedBody {
+	enum class Owner : uint8_t {
+		//! A leaf of the SUCH THAT tree: a comparison, or the placeholder an earlier rewrite left.
+		CLAUSE,
+		//! The body of a nonlinear reducer's definition (LogicalDecide::definition_functions).
+		DEFINITION,
+		//! The objective, below its `when` and `per` wrappers.
+		OBJECTIVE,
+		//! The members of a reducer's helper decision (LogicalDecide::reducer_value_links).
+		VALUE_LINK,
+		//! One of the three rows an L0 indicator stands for, a leaf as a clause's is
+		//! (LogicalDecide::l0_indicator_functions).
+		L0_LINK,
+	};
+
+	DecideOwnedBody(Owner owner, idx_t index, unique_ptr<Expression> &expr) : owner(owner), index(index), expr(expr) {
+	}
+
+	Owner owner;
+	//! The entry of the owner's container the body belongs to: a definition, a link or an indicator. INVALID_INDEX for
+	//! a clause and the objective.
+	idx_t index;
+	//! The slot that owns the expression, so a rewrite may replace the expression itself.
+	unique_ptr<Expression> &expr;
+	//! The sign a term of `expr` must carry, read as a sum from sign +1 (the way a comparison reads as `LHS - RHS`), to
+	//! be pushed down by its owner: +1 under `<=`, `<` and the minimized objective, -1 under `>=` and `>`, and 0 when
+	//! nothing is pushed (`=`, `<>`, a leaf that is no comparison). A definition `t >= q` pushes `q` down, `t <= q` up;
+	//! a value link its sides, as the members of its helper are read (ReducerValueLink::need_envelope, need_closing).
+	int push = 0;
+	//! The rows the body is read on: the `when` of its clause, of its definition or its link, which a reducer's own
+	//! `when` in the body narrows further. Null for every row. Borrowed from the clause or the container, or from
+	//! `kept_rows` when the owner keeps two conditions (a link's `when` and its own filter).
+	const Expression *rows = nullptr;
+	unique_ptr<Expression> kept_rows;
+	//! The alias of the clause the body was written in (the source clause's, or OBJECTIVE_ROW_TAG), which every row
+	//! made of it carries on to a message. A body with no clause of its own (a helper's) has none of the two.
+	string source_alias;
+	//! The `when` and `per` wrappers around a clause or the objective; none for the other owners.
+	DecideEnclosingScope scope;
+};
 
 class LogicalDecide : public LogicalOperator {
 public:
@@ -689,6 +734,18 @@ public:
 	//! LogicalOperatorVisitor dispatcher, ColumnBindingResolver, RemoveUnusedColumns)
 	//! call through it instead of each re-listing these fields by hand, so no visitor can miss one.
 	void EnumerateExpressions(const std::function<void(unique_ptr<Expression> *)> &callback);
+	//! Calls back with every body the optimizer's passes read or rewrite: the objective, the clauses, the definitions,
+	//! the value links and the L0 links, in that order (DecideOwnedBody). The order is the one the columns a pass adds
+	//! stand in, which the model dumps pin. The Visitor pattern, as DuckDB's
+	//! `LogicalOperatorVisitor::EnumerateExpressions` gives one: this is the single place that knows which containers
+	//! hold a body and what each says about it, so a pass that reads bodies filters by `owner` in its callback instead
+	//! of looping over the containers itself, and a container that gains a body is added here and in no pass.
+	//!
+	//! The callback may replace the expression in `body.expr` and append to `decide_variables` and the other
+	//! containers, but not to the container of the body it was handed. A pass that rewrote the objective hands it back
+	//! through SetObjective once the enumeration is over, and one that rewrote a clause through AddConstraint, the
+	//! canonicalizing boundaries.
+	void EnumerateBodies(const std::function<void(DecideOwnedBody &)> &callback);
 	//! The columns the node's expressions read from its input: the child's, then the placeholders of the bound
 	//! aggregates the path has not built yet (bound_aggregates).
 	vector<ColumnBinding> SourceBindings();

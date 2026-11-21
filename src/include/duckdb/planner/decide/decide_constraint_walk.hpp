@@ -104,6 +104,26 @@ inline DecideEnclosingScope EnterDecideScope(const Expression &node, DecideEnclo
 	return scope;
 }
 
+//! The user clause a walk is currently standing inside. A comparison carrying a source id starts a new one, and so does
+//! the objective's row; every other node inherits its parent's (`inherited`). This is what lets a row emitted deep
+//! inside a clause still name the clause it came from.
+inline string DescendSourceAlias(const Expression &expr, const string &inherited) {
+	idx_t provenance_id;
+	return TryParseSourceClauseTag(expr.GetAlias(), provenance_id) || HasDecideTag(expr.GetAlias(), OBJECTIVE_ROW_TAG)
+	           ? expr.GetAlias()
+	           : inherited;
+}
+
+//! The rows two conditions both keep, a copy of each as a conjunction so every conjunct keeps its tags (a reducer's
+//! NULL test, SKIP_NULL_TAG); a null condition keeps every row, so the other stands alone, and null for both.
+inline unique_ptr<Expression> DecideRowsKeptByBoth(const Expression *first, const Expression *second) {
+	if (!first || !second) {
+		const Expression *only = first ? first : second;
+		return only ? only->Copy() : nullptr;
+	}
+	return make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, first->Copy(), second->Copy());
+}
+
 //! Visit every node that belongs to the constraint tree, parents before children,
 //! skipping wrapper metadata. `visitor` returns false to stop the walk; the return
 //! value is false iff it did.

@@ -140,50 +140,6 @@ static void MarkExactAbs(ClientContext &context, const BooleanDecisions &boolean
 	WalkPolarity(context, booleans, expr, sign, holds, visit);
 }
 
-//! A clause read as `E <op> 0` with `E = LHS - RHS`: every ABS is then a single signed term of one expression, and
-//! "does this comparison push the aux down?" is a question about that term's sign rather than about which side of the
-//! relation it happens to be written on.
-static void MarkExactAbsInClause(ClientContext &context, const BooleanDecisions &booleans, Expression &clause,
-                                 AbsExactSet &exact) {
-	// A `when` or `per` scope only affects which rows participate in the aggregate, and aux pinning is unconditional
-	// per row, so a wrapper does not change classification -- the ordinary constraint-position descent is exactly
-	// right here.
-	ForEachConstraintLeaf(clause, [&](Expression &node) {
-		if (node.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
-			return; // a structural constant: BETWEEN and IN are comparisons by now
-		}
-		auto &comp = node.Cast<BoundComparisonExpression>();
-		auto t = comp.type;
-		int pinning_sign;
-		if (t == ExpressionType::COMPARE_LESSTHAN || t == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
-			pinning_sign = 1; // E bounded above: a positive term is pushed down
-		} else if (t == ExpressionType::COMPARE_GREATERTHAN || t == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-			pinning_sign = -1; // E bounded below: a negative term is pushed down
-		} else {
-			pinning_sign = 0; // equality, <>: pin nothing
-		}
-		MarkExactAbs(context, booleans, comp.left, 1, pinning_sign, exact);
-		MarkExactAbs(context, booleans, comp.right, -1, pinning_sign, exact);
-	});
-}
-
-//! The sign a term of a value link's members must carry to be pushed down, from the sides the link states
-//! (ReducerValueLink::need_envelope, need_closing), which join every reader's push (RewriteScopedReducers): `value >=
-//! members` of a SUM, AVG or MAX holds the members down, `value <= members` of a MIN holds them up, and `value <=
-//! members` of a SUM or AVG holds them up as well, the sign it reads them with the other way round. A MIN or MAX's
-//! closing side is the hard direction, encoded with a Big-M over its members, and both sides read the members from
-//! both directions: no sign is pinned, which is 0.
-static int ValueLinkPush(const LogicalDecide::ReducerValueLink &link) {
-	if (link.need_envelope == link.need_closing) {
-		return 0;
-	}
-	const bool extremum = IsExtremumName(link.agg_name);
-	if (link.need_envelope) {
-		return link.agg_name == "min" ? -1 : 1;
-	}
-	return extremum ? 0 : -1;
-}
-
 //! The helpers whose box a hard extremum needs: the MIN or MAX links stating their closing side, which encode it with a
 //! Big-M over their members, and every helper those members read, whose own members box it in turn. A helper held by
 //! pressure alone has no box, so the ABS in the body of such a helper takes the exact envelope whatever pushes the
@@ -248,62 +204,18 @@ static BoxedHelpers FindBoxedHelpers(LogicalDecide &decide) {
 
 //! The ABS nodes, in every body of `decide`, that their owners do not pin (MarkExactAbs). The owners are read in the
 //! form the rewrites leave them in: a reducer that became a helper is its link's, and a reducer's non-linear body its
-//! definition's.
+//! definition's. A body's owner gives it its push (DecideOwnedBody::push), but for a body a hard extremum boxes, which
+//! every reader of the helper reads from both directions.
 static AbsExactSet FindExactAbs(ClientContext &context, LogicalDecide &decide) {
 	AbsExactSet exact;
 	const BooleanDecisions booleans {decide.decide_index, decide.is_boolean_var};
-	if (decide.decide_constraints) {
-		MarkExactAbsInClause(context, booleans, *decide.decide_constraints, exact);
-	}
-	// L0 indicator rows live as function metadata rather than in the main clause tree, but their reverse links still
-	// need the same exactness classification as ordinary constraints.
-	for (auto &indicator : decide.l0_indicator_functions) {
-		for (auto &link : indicator.links) {
-			MarkExactAbsInClause(context, booleans, *link, exact);
-		}
-	}
-	// `t >= q` holds the body down, `t <= q` up, `t = q` neither.
 	const auto boxed = FindBoxedHelpers(decide);
-	for (idx_t i = 0; i < decide.definition_functions.size(); i++) {
-		auto &definition = decide.definition_functions[i];
-		if (definition.body) {
-			const bool down = definition.relation == ExpressionType::COMPARE_GREATERTHANOREQUALTO;
-			const bool up = definition.relation == ExpressionType::COMPARE_LESSTHANOREQUALTO;
-			MarkExactAbs(context, booleans, definition.body, 1,
-			             boxed.definitions[i] ? 0
-			             : down               ? 1
-			             : up                 ? -1
-			                                  : 0,
-			             exact);
-		}
-	}
-	for (idx_t i = 0; i < decide.reducer_value_links.size(); i++) {
-		auto &link = decide.reducer_value_links[i];
-		MarkExactAbs(context, booleans, link.inner_expr, 1, boxed.links[i] ? 0 : ValueLinkPush(link), exact);
-	}
-	if (decide.decide_objective) {
-		// A `when` or two-level `per` wrapper carries no sign: the body is its first child. The objective is
-		// minimized, which pushes a positive term down.
-		auto *body = &decide.decide_objective;
-		while ((*body)->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			body = &(*body)->Cast<BoundConjunctionExpression>().children[0];
-		}
-		MarkExactAbs(context, booleans, *body, 1, 1, exact);
-	}
+	decide.EnumerateBodies([&](DecideOwnedBody &body) {
+		const bool is_boxed = (body.owner == DecideOwnedBody::Owner::DEFINITION && boxed.definitions[body.index]) ||
+		                      (body.owner == DecideOwnedBody::Owner::VALUE_LINK && boxed.links[body.index]);
+		MarkExactAbs(context, booleans, body.expr, 1, is_boxed ? 0 : body.push, exact);
+	});
 	return exact;
-}
-
-//! The rows an ABS is read on: those the clause's `when` keeps that also pass the `when` of each reducer around the
-//! ABS (`SUM(when f: ABS(x - v))`), as the reducer reads its own term. Null for every row.
-static unique_ptr<Expression> AbsReadRows(const Expression *clause_when, const Expression *reducer_when) {
-	if (!clause_when || !reducer_when) {
-		const Expression *only = clause_when ? clause_when : reducer_when;
-		return only ? only->Copy() : nullptr;
-	}
-	// A conjunction, as every scope condition is, so each conjunct keeps its tags (a reducer's NULL test,
-	// SKIP_NULL_TAG).
-	return make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, clause_when->Copy(),
-	                                             reducer_when->Copy());
 }
 
 //! The clause an ABS was written in, or the objective: what a message about a number computed from the ABS' argument
@@ -396,40 +308,15 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	const auto exact = FindExactAbs(optimizer.context, decide);
 	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.variable_scopes,
 	                                  decide.keyed_scopes, decide.keys, decide.is_boolean_var);
-	if (decide.decide_constraints) {
-		FindAbsAndAllocateAux(decide.decide_constraints, decide, canonicalizer, exact, string(), DecideEnclosingScope(),
-		                      nullptr);
-	}
-	// A definition body has left the ordinary clause list; its F node still needs the same ABS helpers and envelopes.
-	for (auto &definition : decide.definition_functions) {
-		if (!definition.body) {
-			continue;
-		}
-		auto scoped = ScopeHelperRow(definition.body->Copy(), definition.condition.get());
-		auto scope = EnterDecideScope(*scoped, DecideEnclosingScope());
-		string alias = MakeDefinesTag(definition.value_var);
-		AddDecideTag(alias, BODY_DEFINITION_TAG);
-		FindAbsAndAllocateAux(definition.body, decide, canonicalizer, exact, alias, scope, nullptr);
-	}
+	// Every body is read on the rows its owner keeps, and a reducer around the ABS narrows them further. A definition
+	// body has left the ordinary clause list, an L0 indicator's reverse link stands beside it, and a reducer value
+	// helper's body belongs to no clause; each still needs the same ABS helpers and envelopes as an ABS written in a
+	// clause.
+	decide.EnumerateBodies([&](DecideOwnedBody &body) {
+		FindAbsAndAllocateAux(body.expr, decide, canonicalizer, exact, body.source_alias, body.rows);
+	});
 	if (decide.decide_objective) {
-		auto objective = std::move(decide.decide_objective);
-		FindAbsAndAllocateAux(objective, decide, canonicalizer, exact, OBJECTIVE_ROW_TAG, DecideEnclosingScope(),
-		                      nullptr);
-		decide.SetObjective(optimizer.context, std::move(objective));
-	}
-	// A reducer value helper's body belongs to no clause: it is read on the rows its path and its own `when` keep, so
-	// its row and the check of its values are made for those.
-	for (auto &link : decide.reducer_value_links) {
-		auto link_rows = AbsReadRows(link.when.get(), link.filter.get());
-		FindAbsAndAllocateAux(link.inner_expr, decide, canonicalizer, exact, string(), DecideEnclosingScope(),
-		                      link_rows.get());
-	}
-	// `norm(e, 0)` owns its forward and reverse indicator links as tree metadata. The reverse link's `ABS(e)` still
-	// needs the same plan-time helper allocation as an ABS written in a clause.
-	for (auto &indicator : decide.l0_indicator_functions) {
-		for (auto &link : indicator.links) {
-			FindAbsAndAllocateAux(link, decide, canonicalizer, exact, string(), DecideEnclosingScope(), nullptr);
-		}
+		decide.SetObjective(optimizer.context, std::move(decide.decide_objective));
 	}
 }
 
@@ -461,13 +348,11 @@ unique_ptr<Expression> decide_rewrite::MakeAbsRow(ClientContext &context, const 
 
 void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                             const DecideCanonicalizer &canonicalizer, const AbsExactSet &exact,
-                                            const string &source_alias, DecideEnclosingScope scope,
-                                            const Expression *reducer_when) {
+                                            const string &source_alias, const Expression *rows) {
 	if (!expr) {
 		return;
 	}
 	auto clause_alias = DescendSourceAlias(*expr, source_alias);
-	scope = EnterDecideScope(*expr, scope);
 	idx_t definition_aux;
 	if (TryParseDecideIndexTag(expr->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
 		return; // its body is visited through DefinitionFunction metadata below
@@ -478,8 +363,8 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		auto &reducer = expr->Cast<BoundAggregateExpression>();
 		if (reducer.filter) {
-			reducer_rows = AbsReadRows(reducer_when, reducer.filter.get());
-			reducer_when = reducer_rows.get();
+			reducer_rows = DecideRowsKeptByBoth(rows, reducer.filter.get());
+			rows = reducer_rows.get();
 		}
 	}
 
@@ -503,7 +388,7 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 		// Innermost first: an ABS inside this one gets its helper first. The copied
 		// operand retains that tagged function, which term extraction resolves to the
 		// inner helper before building this function's envelope rows.
-		FindAbsAndAllocateAux(func.children[0], decide, canonicalizer, exact, clause_alias, scope, reducer_when);
+		FindAbsAndAllocateAux(func.children[0], decide, canonicalizer, exact, clause_alias, rows);
 
 		// A column defined by its argument: one per instance of the scopes the argument reads.
 		auto aux_scope = ScopeOf(decide, canonicalizer, *func.children[0]);
@@ -516,7 +401,7 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 		const bool needs_exact = exact.count(&func) > 0;
 
 		// The rows the ABS is read on: its row, and the check of its values, are made for those only.
-		auto read_rows = AbsReadRows(scope.Condition(), reducer_when);
+		auto read_rows = rows ? rows->Copy() : nullptr;
 		AddAbsValueCheck(optimizer.context, decide, *func.children[0], read_rows.get(),
 		                 AbsWrittenClause(decide, clause_alias));
 
@@ -539,7 +424,7 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 	}
 
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		FindAbsAndAllocateAux(child, decide, canonicalizer, exact, clause_alias, scope, reducer_when);
+		FindAbsAndAllocateAux(child, decide, canonicalizer, exact, clause_alias, rows);
 	});
 }
 

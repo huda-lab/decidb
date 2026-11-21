@@ -254,6 +254,28 @@ def test_a_boolean_product_expands_to_a_product_of_two_integers_too(decidb_cli_g
 
 
 @pytest.mark.correctness
+def test_a_reducer_beside_another_reducer_is_pinned_from_both_sides(decidb_cli_gurobi):
+    """WalkPolarity gives a reducer beside another held reducer no sign (`PolarityPath::beside_held`): `sum(x)` may be
+    negative, so `sum(x) * sum(y) <= -3` is not held down by a helper that is only at least its sum. Pinned one way, the
+    helpers satisfy the row for sums that do not (`sum(x) = sum(y) = -4` has a product of 16)."""
+    sql = """
+        SELECT id, x, y FROM (VALUES (1), (2)) t(id)
+        DECIDE x(INT), y(INT)
+        SUCH THAT x >= -2 AND x <= 2 AND y >= -2 AND y <= 2 AND SUM(x) * SUM(y) <= -3
+        MINIMIZE SUM(x) + 2 * SUM(y)
+        ORDER BY id"""
+    domains = {**{f"x{i}": range(-2, 3) for i in range(2)}, **{f"y{i}": range(-2, 3) for i in range(2)}}
+    _judge(
+        decidb_cli_gurobi,
+        sql,
+        domains,
+        lambda a: (a["x0"] + a["x1"]) * (a["y0"] + a["y1"]) <= -3,
+        lambda a: a["x0"] + a["x1"] + 2 * (a["y0"] + a["y1"]),
+        False,
+    )
+
+
+@pytest.mark.correctness
 @pytest.mark.parametrize(
     "factor, holds",
     [

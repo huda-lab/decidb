@@ -486,7 +486,11 @@ void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
 		}
 		ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) { visit(child); });
 	};
-	visit(decide.decide_objective);
+	decide.EnumerateBodies([&](DecideOwnedBody &body) {
+		if (body.owner == DecideOwnedBody::Owner::OBJECTIVE) {
+			visit(body.expr);
+		}
+	});
 }
 
 void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
@@ -502,18 +506,9 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		FindAndReplaceBilinear(expr, decide, source_alias);
 	};
 
-	std::function<void(unique_ptr<Expression> &, DecideEnclosingScope)> rewrite = [&](unique_ptr<Expression> &expr,
-	                                                                                  DecideEnclosingScope scope) {
-		scope = EnterDecideScope(*expr, scope);
-		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			auto &conj = expr->Cast<BoundConjunctionExpression>();
-			for (idx_t i = 0; i < conj.children.size(); i++) {
-				if (IsConstraintChild(conj, i)) {
-					rewrite(conj.children[i], scope);
-				}
-			}
-			return;
-		}
+	// The clause leaves are rewritten where they sit, the comparisons among them: a placeholder or a bound `IN` is no
+	// clause for a reducer to stand in.
+	auto rewrite_clause = [&](unique_ptr<Expression> &expr, const DecideEnclosingScope &scope) {
 		if (expr->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
 			return;
 		}
@@ -607,7 +602,6 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		RemoveDecideTag(alias, VALUE_REWRITE_TAG);
 		cmp.SetAlias(std::move(alias));
 	};
-	rewrite(decide.decide_constraints, DecideEnclosingScope());
 
 	// The objective is one expression under its sense (`MAXIMIZE b * sum(x)`): a reducer under a Boolean decision
 	// takes a helper decision the same way, and so does a reducer that holds a reducer, the canonicalizer's tag on it
@@ -619,20 +613,12 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	// canonicalizer folded a MAXIMIZE into the term signs), so the push is down times the term's sign, as for the body
 	// definitions. A reducer no decision multiplies, no function reads and none nests in stays in the objective as it
 	// is.
-	if (decide.decide_objective) {
-		auto objective = std::move(decide.decide_objective);
-		auto *body = &objective;
-		DecideEnclosingScope scope;
-		while ((*body)->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			auto &conjunction = (*body)->Cast<BoundConjunctionExpression>();
-			scope = EnterDecideScope(conjunction, scope);
-			body = &conjunction.children[0];
-		}
-		const bool products = HasDecideTag((*body)->GetAlias(), VALUE_REWRITE_TAG);
-		auto sites = CollectReducerSites(optimizer.context, booleans, *body);
+	auto rewrite_objective = [&](DecideOwnedBody &body) {
+		const bool products = HasDecideTag(body.expr->GetAlias(), VALUE_REWRITE_TAG);
+		auto sites = CollectReducerSites(optimizer.context, booleans, body.expr);
 		DecideReducerPath path;
-		if (scope.Condition()) {
-			path.conditions.push_back(scope.Condition());
+		if (body.scope.Condition()) {
+			path.conditions.push_back(body.scope.Condition());
 		}
 		for (auto &site : sites) {
 			const bool nest = HasDecideTag((*site.slot)->GetAlias(), VALUE_REWRITE_TAG);
@@ -644,14 +630,23 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 			// refusal unless the product is a Boolean one (`products`).
 			if (nest || (site.IsExtremum() && !site.under_decision) || site.under_function ||
 			    (products && site.under_decision)) {
-				ReplaceReducer(helpers, names, booleans, path, Helpers::ClassKeyOf(scope), ExtremumPush::DOWN,
+				ReplaceReducer(helpers, names, booleans, path, Helpers::ClassKeyOf(body.scope), ExtremumPush::DOWN,
 				               DConstants::INVALID_INDEX, site);
 			}
 		}
 		if (products) {
-			HandProductsToBilinear(*body, OBJECTIVE_ROW_TAG);
+			HandProductsToBilinear(body.expr, OBJECTIVE_ROW_TAG);
 		}
-		decide.SetObjective(optimizer.context, std::move(objective));
+	};
+	decide.EnumerateBodies([&](DecideOwnedBody &body) {
+		if (body.owner == DecideOwnedBody::Owner::CLAUSE) {
+			rewrite_clause(body.expr, body.scope);
+		} else if (body.owner == DecideOwnedBody::Owner::OBJECTIVE) {
+			rewrite_objective(body);
+		}
+	});
+	if (decide.decide_objective) {
+		decide.SetObjective(optimizer.context, std::move(decide.decide_objective));
 	}
 }
 

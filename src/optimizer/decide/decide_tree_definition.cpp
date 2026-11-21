@@ -200,69 +200,45 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 	const BooleanDecisions booleans {decide_index, decide.is_boolean_var};
 	vector<BodySite> sites;
 
-	if (decide.decide_constraints) {
-		std::function<void(Expression &, const string &, DecideEnclosingScope)> walk =
-		    [&](Expression &expr, const string &inherited, DecideEnclosingScope scope) {
-			    auto source_alias = DescendSourceAlias(expr, inherited);
-			    scope = EnterDecideScope(expr, scope);
-			    if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-				    auto &conj = expr.Cast<BoundConjunctionExpression>();
-				    for (idx_t i = 0; i < conj.children.size(); i++) {
-					    if (IsConstraintChild(conj, i)) {
-						    walk(*conj.children[i], source_alias, scope);
-					    }
-				    }
-				    return;
-			    }
-			    if (expr.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
-				    return;
-			    }
-			    // A MIN or MAX in the constraint, or any reducer the value rewrite holds in a helper decision.
-			    const bool extremum_clause = HoldsReducer(expr, decide_index, true);
-			    if (!extremum_clause &&
-			        !(HasDecideTag(expr.GetAlias(), VALUE_REWRITE_TAG) && HoldsReducer(expr, decide_index, false))) {
-				    return;
-			    }
-			    auto &comparison = expr.Cast<BoundComparisonExpression>();
-			    // A MIN or MAX pushed its cheap way (`max(q) <= K`, RewriteMinMax) bounds each member: one quadratic
-			    // row per member, and no helper.
-			    if (HasDecideTag(comparison.alias, MINMAX_EASY_REWRITE_TAG)) {
-				    return;
-			    }
-			    // Read as `LHS - RHS <op> 0`: the relation pushes the whole expression.
-			    unordered_map<const Expression *, int> signs;
-			    CollectReducerSigns(context, booleans, comparison.left, 1, signs);
-			    CollectReducerSigns(context, booleans, comparison.right, -1, signs);
-			    const auto outer = ExtremumPushOf(comparison.type);
-			    CollectBodySites(*comparison.left, decide_index, splitter, true, extremum_clause, false, outer, signs,
-			                     source_alias, scope, sites);
-			    CollectBodySites(*comparison.right, decide_index, splitter, true, extremum_clause, false, outer, signs,
-			                     source_alias, scope, sites);
-		    };
-		walk(*decide.decide_constraints, string(), DecideEnclosingScope());
-	}
-
-	// The objective reads as one minimized expression; a `when` carries no sign,
-	// and the `when` keeps the rows its helper rows read. It is detached while its reducers are rewritten.
-	unique_ptr<Expression> objective;
-	const idx_t constraint_sites = sites.size();
-	if (decide.decide_objective && HoldsReducer(*decide.decide_objective, decide_index, true)) {
-		objective = std::move(decide.decide_objective);
-		auto *body = &objective;
-		DecideEnclosingScope scope;
-		while ((*body)->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			auto &conjunction = (*body)->Cast<BoundConjunctionExpression>();
-			if (!IsConstraintWrapper(conjunction) || conjunction.children.empty()) {
-				break;
+	// The objective reads as one minimized expression; a `when` carries no sign, and the `when` keeps the rows its
+	// helper rows read. Its reducers are rewritten in place, so it goes back through the boundary when any is.
+	bool objective_defined = false;
+	decide.EnumerateBodies([&](DecideOwnedBody &body) {
+		if (body.owner == DecideOwnedBody::Owner::CLAUSE) {
+			auto &expr = *body.expr;
+			if (expr.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+				return;
 			}
-			scope = EnterDecideScope(conjunction, scope);
-			body = &conjunction.children[0];
+			// A MIN or MAX in the constraint, or any reducer the value rewrite holds in a helper decision.
+			const bool extremum_clause = HoldsReducer(expr, decide_index, true);
+			if (!extremum_clause &&
+			    !(HasDecideTag(expr.GetAlias(), VALUE_REWRITE_TAG) && HoldsReducer(expr, decide_index, false))) {
+				return;
+			}
+			auto &comparison = expr.Cast<BoundComparisonExpression>();
+			// A MIN or MAX pushed its cheap way (`max(q) <= K`, RewriteMinMax) bounds each member: one quadratic row
+			// per member, and no helper.
+			if (HasDecideTag(comparison.alias, MINMAX_EASY_REWRITE_TAG)) {
+				return;
+			}
+			// Read as `LHS - RHS <op> 0`: the relation pushes the whole expression.
+			unordered_map<const Expression *, int> signs;
+			CollectReducerSigns(context, booleans, comparison.left, 1, signs);
+			CollectReducerSigns(context, booleans, comparison.right, -1, signs);
+			const auto outer = ExtremumPushOf(comparison.type);
+			CollectBodySites(*comparison.left, decide_index, splitter, true, extremum_clause, false, outer, signs,
+			                 body.source_alias, body.scope, sites);
+			CollectBodySites(*comparison.right, decide_index, splitter, true, extremum_clause, false, outer, signs,
+			                 body.source_alias, body.scope, sites);
+		} else if (body.owner == DecideOwnedBody::Owner::OBJECTIVE && HoldsReducer(*body.expr, decide_index, true)) {
+			unordered_map<const Expression *, int> signs;
+			CollectReducerSigns(context, booleans, body.expr, 1, signs);
+			const idx_t before = sites.size();
+			CollectBodySites(*body.expr, decide_index, splitter, false, false, false, ExtremumPush::DOWN, signs,
+			                 body.source_alias, body.scope, sites);
+			objective_defined = sites.size() > before;
 		}
-		unordered_map<const Expression *, int> signs;
-		CollectReducerSigns(context, booleans, *body, 1, signs);
-		CollectBodySites(**body, decide_index, splitter, false, false, false, ExtremumPush::DOWN, signs,
-		                 OBJECTIVE_ROW_TAG, scope, sites);
-	}
+	});
 
 	if (!decide.use_native_constructs.min_max) {
 		for (auto &site : sites) {
@@ -361,12 +337,8 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 		}
 	}
 
-	if (objective) {
-		if (sites.size() > constraint_sites) {
-			decide.SetObjective(context, std::move(objective));
-		} else {
-			decide.decide_objective = std::move(objective);
-		}
+	if (objective_defined) {
+		decide.SetObjective(context, std::move(decide.decide_objective));
 	}
 	for (auto &row : rows) {
 		decide.AddConstraint(context, std::move(row));

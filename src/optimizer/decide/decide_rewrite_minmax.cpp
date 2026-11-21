@@ -77,27 +77,19 @@ static const BoundAggregateExpression *MatchLoneSignedExtremum(const Expression 
 
 void DecideOptimizer::RewriteMinMax(LogicalDecide &decide) {
 	vector<unique_ptr<Expression>> new_constraints;
-	RewriteMinMaxInConstraint(decide.decide_constraints, decide, new_constraints);
+	decide.EnumerateBodies([&](DecideOwnedBody &body) {
+		if (body.owner == DecideOwnedBody::Owner::CLAUSE) {
+			RewriteMinMaxInClause(body.expr, decide, new_constraints, body.scope);
+		}
+	});
 	for (auto &nc : new_constraints) {
 		decide.AddConstraint(optimizer.context, std::move(nc));
 	}
 }
 
-void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
-                                                vector<unique_ptr<Expression>> &new_constraints,
-                                                DecideEnclosingScope scope) {
-	// The `when` and `per K:` travel with the clause they hold, so a row this rewrite adds for the clause keeps the
-	// clause's rows and classes. A wrapper's key or condition children are data (decide_constraint_walk.hpp).
-	scope = EnterDecideScope(*expr, scope);
-	if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = expr->Cast<BoundConjunctionExpression>();
-		for (idx_t i = 0; i < conj.children.size(); i++) {
-			if (IsConstraintChild(conj, i)) {
-				RewriteMinMaxInConstraint(conj.children[i], decide, new_constraints, scope);
-			}
-		}
-		return;
-	}
+void DecideOptimizer::RewriteMinMaxInClause(unique_ptr<Expression> &expr, LogicalDecide &decide,
+                                            vector<unique_ptr<Expression>> &new_constraints,
+                                            const DecideEnclosingScope &scope) {
 	// A clause in the VALUE shape holds its reducers in helpers, whatever their direction.
 	if (expr->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON ||
 	    HasDecideTag(expr->GetAlias(), VALUE_REWRITE_TAG)) {

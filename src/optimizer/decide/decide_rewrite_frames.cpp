@@ -195,13 +195,14 @@ private:
 } // namespace
 
 void DecideOptimizer::RewriteFrameRanges(LogicalDecide &decide) {
+	using Owner = DecideOwnedBody::Owner;
+	auto &context = optimizer.context;
 	if (!decide.frames.empty()) {
-		if (decide.decide_constraints) {
-			PointsInQuadraticTermsAsRanges(optimizer.context, decide, *decide.decide_constraints, false);
-		}
-		if (decide.decide_objective) {
-			PointsInQuadraticTermsAsRanges(optimizer.context, decide, *decide.decide_objective, false);
-		}
+		decide.EnumerateBodies([&](DecideOwnedBody &body) {
+			if (body.owner == Owner::CLAUSE || body.owner == Owner::OBJECTIVE) {
+				PointsInQuadraticTermsAsRanges(context, decide, *body.expr, false);
+			}
+		});
 	}
 	bool any = false;
 	for (auto &frame : decide.frames) {
@@ -210,24 +211,27 @@ void DecideOptimizer::RewriteFrameRanges(LogicalDecide &decide) {
 	if (!any) {
 		return;
 	}
-	auto &context = optimizer.context;
 	RangeLifter lifter(context, decide);
-	std::function<void(unique_ptr<Expression> &)> rewrite = [&](unique_ptr<Expression> &expr) {
-		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			auto &conj = expr->Cast<BoundConjunctionExpression>();
-			for (idx_t i = 0; i < conj.children.size(); i++) {
-				if (IsConstraintChild(conj, i)) {
-					rewrite(conj.children[i]);
-				}
+	bool lifted_objective = false;
+	decide.EnumerateBodies([&](DecideOwnedBody &body) {
+		if (body.owner == Owner::OBJECTIVE) {
+			if (!HoldsRangeOverDecisions(decide, *body.expr)) {
+				return;
 			}
+			// The objective's ranges, pushed down through their signs: the canonicalizer wrote the objective as a
+			// minimization, a MAXIMIZE's flip in the signs of its terms. A `when` carries no sign.
+			unordered_map<const Expression *, int> signs;
+			CollectRangeSigns(context, decide, body.expr, signs);
+			lifter.Lift(body.expr, ExtremumPush::DOWN, DConstants::INVALID_INDEX, signs);
+			lifted_objective = true;
 			return;
 		}
-		if (expr->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON ||
-		    !HoldsRangeOverDecisions(decide, *expr)) {
+		if (body.owner != Owner::CLAUSE || body.expr->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON ||
+		    !HoldsRangeOverDecisions(decide, *body.expr)) {
 			return;
 		}
 		// Canonicalization put every decision on the left.
-		auto &comparison = expr->Cast<BoundComparisonExpression>();
+		auto &comparison = body.expr->Cast<BoundComparisonExpression>();
 		if (HoldsRangeOverDecisions(decide, *comparison.right)) {
 			throw InternalException("DECIDE: a canonical comparison holds a range over decisions on its bound: %s",
 			                        comparison.ToString());
@@ -237,28 +241,10 @@ void DecideOptimizer::RewriteFrameRanges(LogicalDecide &decide) {
 		idx_t source_clause_id = DConstants::INVALID_INDEX;
 		TryParseSourceClauseTag(comparison.GetAlias(), source_clause_id);
 		lifter.Lift(comparison.left, ExtremumPushOf(comparison.type), source_clause_id, signs);
-	};
-	if (decide.decide_constraints) {
-		rewrite(decide.decide_constraints);
+	});
+	if (lifted_objective) {
+		decide.SetObjective(context, std::move(decide.decide_objective));
 	}
-	if (!decide.decide_objective || !HoldsRangeOverDecisions(decide, *decide.decide_objective)) {
-		return;
-	}
-	// The objective's ranges, pushed down through their signs: the canonicalizer wrote the objective as a minimization,
-	// a MAXIMIZE's flip in the signs of its terms. A `when` carries no sign.
-	auto objective = std::move(decide.decide_objective);
-	auto *body = &objective;
-	while ((*body)->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conjunction = (*body)->Cast<BoundConjunctionExpression>();
-		if (!IsConstraintWrapper(conjunction) || conjunction.children.empty()) {
-			break;
-		}
-		body = &conjunction.children[0];
-	}
-	unordered_map<const Expression *, int> signs;
-	CollectRangeSigns(context, decide, *body, signs);
-	lifter.Lift(*body, ExtremumPush::DOWN, DConstants::INVALID_INDEX, signs);
-	decide.SetObjective(context, std::move(objective));
 }
 
 } // namespace duckdb
