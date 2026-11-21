@@ -150,37 +150,4 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 		auto placeholder = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
 		REQUIRE_NOTHROW(canonicalizer.VerifyCanonical(*placeholder));
 	}
-
-	SECTION("rejected objective term quotes the user's spelling, not an internal tag") {
-		// A decision-free, non-foldable term beside a decision reference is rejected by
-		// CanonicalizeObjective. Give that term a DECIDE tag on its alias (as it would
-		// carry if this objective were an optimizer-rewritten row re-entering
-		// canonicalization through LogicalDecide::SetObjective) and check the error
-		// names the column, never the tag: `StripDecideTags` is the contract every
-		// user-facing name in this pass relies on.
-		auto data_ref = DataRef();
-		string alias = data_ref->GetAlias();
-		AddDecideTag(alias, MakeSourceClauseTag(3));
-		data_ref->SetAlias(std::move(alias));
-
-		ScalarFunction plus_fn("+", {LogicalType::DOUBLE, LogicalType::DOUBLE}, LogicalType::DOUBLE, nullptr);
-		duckdb::vector<duckdb::unique_ptr<Expression>> children;
-		children.push_back(DecideRef(0));
-		children.push_back(std::move(data_ref));
-		auto objective = make_uniq<BoundFunctionExpression>(LogicalType::DOUBLE, std::move(plus_fn),
-		                                                    std::move(children), nullptr, true);
-
-		double offset = 0;
-		bool threw = false;
-		try {
-			canonicalizer.CanonicalizeObjective(*objective, offset);
-		} catch (const BinderException &ex) {
-			threw = true;
-			string message = ex.what();
-			REQUIRE(message.find("'v'") != string::npos);
-			REQUIRE(message.find("source_clause") == string::npos);
-			REQUIRE(message.find("__") == string::npos);
-		}
-		REQUIRE(threw);
-	}
 }

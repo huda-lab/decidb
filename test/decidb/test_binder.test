@@ -49,17 +49,17 @@ SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT x BETWEEN 2 AND 4 MAXIMI
 statement ok
 SELECT l_quantity FROM lineitem DECIDE x(REAL) SUCH THAT x <= 1 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 
-# LHS is not decide variable
+# A comparison that reads no decision
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT l_quantity <= 5 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-<REGEX>:Binder Error: '[a-zA-Z_][a-zA-Z0-9_]*' is not a decision.*
+<REGEX>:Binder Error: 'l_quantity <= 5' reads no decision.*
 
-# LHS is unsupported aggregate function
+# A reducer that is not a decision reducer, on the left
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT COUNT(l_quantity) <= 5 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-<REGEX>:Not implemented Error: function 'count' is not supported here.*
+<REGEX>:Binder Error: 'COUNT\(l_quantity\) <= 5' reads no decision.*
 
 # Triple product in SUM
 statement error
@@ -71,7 +71,7 @@ SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x*x*x) <= 5 MAXIMIZE
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(l_quantity) <= 5  MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-<REGEX>:Binder Error: 'SUM\(l_quantity\)' reads no decision.*
+<REGEX>:Binder Error: 'SUM\(l_quantity\) <= 5' reads no decision.*
 
 # Repeated DECIDE variable in linear SUM
 statement ok
@@ -147,4 +147,4 @@ SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x) <= (SELECT SUM(l_
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x) <= (SELECT l_quantity+x FROM lineitem) MAXIMIZE SUM(x) LIMIT 1;
 ----
-<REGEX>:Binder Error: '\(SELECT l_quantity\+x FROM lineitem\)' is not data or a reducer.*
+<REGEX>:Binder Error: a subquery in a DECIDE clause reads a decision.*

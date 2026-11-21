@@ -139,19 +139,23 @@ def test_an_equality_on_a_max_divided_by_data_splits_into_its_two_halves(decidb_
 
 @pytest.mark.correctness
 def test_a_query_wide_decision_beside_its_own_sum(decidb_cli_gurobi, decidb_cli_highs):
-    """CollectLikeTerms: `s` and `SUM(s)` name one column but are different contributions (`reduction` differs), so
-    they stay apart."""
+    """CollectLikeTerms: `s` and `SUM(id * s)` name one column but are different contributions (`reduction` differs),
+    so they stay apart: `s + 6 * s <= 10`. Judged against every value of `s`."""
     sql = f"""
         SELECT id, s FROM {_ROWS}
         DECIDE per (): s(INT)
-        SUCH THAT s <= 9 AND s + SUM(s) <= 10
+        SUCH THAT s <= 9 AND s + SUM(id * s) <= 10
         MAXIMIZE s
         ORDER BY id"""
+    ids = (1, 2, 3)
     for cli in (decidb_cli_gurobi, decidb_cli_highs):
         rows, columns = cli.execute(sql)
-        values = {row[columns.index("s")] for row in rows}
-        # `s + 3 * s <= 10`: the largest whole s is 2.
-        assert values == {2}
+        judge_rows(
+            [dict(zip(columns, row)) for row in rows],
+            {"s": range(10)},
+            lambda a: a["s"] + sum(ids) * a["s"] <= 10,
+            lambda a: a["s"],
+        )
 
 
 # ---------------------------------------------------------------------------
