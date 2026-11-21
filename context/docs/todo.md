@@ -29,6 +29,7 @@ the owner rules first.
 
 ## 3.4 Gaps filed in Phase 3 (needs: 3.2) (one lane)
 - [ ] OPT-31 A square outside a reducer in the objective — pipeline/05_optimizer/todo.md § OPT-31
+- [ ] CANON-1 A SUM or AVG keeps its data addend where its route puts it — pipeline/04_canonicalizer/todo.md § CANON-1
 
 # Phase 4 — Model building has one contract
 
