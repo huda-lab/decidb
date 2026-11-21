@@ -1935,7 +1935,7 @@ def _rows_of(a, name):
 SCOPE_CASES = [
     pytest.param(
         "per (): b(BOOL), per (): s(INT)",
-        "SUM(s) + 3 * SUM(b)",
+        "4 * s + 12 * b",
         "s <= 3 AND b * s >= 2",
         {"b": range(2), "s": range(4)},
         lambda a: a["b"] * a["s"] >= 2,
@@ -1946,7 +1946,7 @@ SCOPE_CASES = [
     ),
     pytest.param(
         "per (): b(BOOL), per t.g: y(INT)",
-        "SUM(y) + 3 * SUM(b)",
+        "SUM(y) + 12 * b",
         "y <= 3 AND b * y >= 2",
         {"b": range(2), **{f"y{i}": range(4) for i in range(4)}},
         lambda a: _alike_within(a, "y", _GROUP_OF_ROW) and all(a["b"] * y >= 2 for y in _rows_of(a, "y")),
@@ -1970,7 +1970,7 @@ SCOPE_CASES = [
     ),
     pytest.param(
         "x(INT), per (): b(BOOL)",
-        "SUM(x) + 3 * SUM(b)",
+        "SUM(x) + 12 * b",
         "x <= 3 AND b * x >= 2",
         {"b": range(2), **{f"x{i}": range(4) for i in range(4)}},
         lambda a: all(a["b"] * x >= 2 for x in _rows_of(a, "x")),
@@ -2023,7 +2023,7 @@ AND_CASES = [
     pytest.param(
         "per (): b(BOOL), per (): c(BOOL)",
         "b * c <= 0",
-        "SUM(b) + 2 * SUM(c)",
+        "4 * b + 8 * c",
         {"b": range(2), "c": range(2)},
         lambda a: a["b"] * a["c"] <= 0,
         lambda a: 4 * a["b"] + 8 * a["c"],
@@ -2034,7 +2034,7 @@ AND_CASES = [
     pytest.param(
         "per t.g: b(BOOL), per (): c(BOOL)",
         "b * c <= 0",
-        "SUM(b) + 2 * SUM(c)",
+        "SUM(b) + 8 * c",
         {**{f"b{i}": range(2) for i in range(4)}, "c": range(2)},
         lambda a: _alike_within(a, "b", _GROUP_OF_ROW) and all(a[f"b{i}"] * a["c"] <= 0 for i in range(4)),
         lambda a: sum(_rows_of(a, "b")) + 8 * a["c"],

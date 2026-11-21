@@ -321,6 +321,9 @@ def test_a_reducer_takes_one_argument_wherever_it_stands(decidb_cli, clause, obj
     [
         pytest.param("sum(y) <= 4", "MAXIMIZE sum(x)", "sum(y)", id="alone"),
         pytest.param("sum(y) + sum(x) <= 9", "MAXIMIZE sum(x)", "sum(y)", id="beside-another-term"),
+        pytest.param(
+            "sum(y) by (g) + sum(x) <= 9", "MAXIMIZE sum(x)", "sum(y) by (g)", id="with-by-beside-another-term"
+        ),
         pytest.param("y <= 3", "MAXIMIZE sum(y)", "sum(y)", id="objective"),
         pytest.param("y <= 3", "MAXIMIZE sum(x) + sum(y)", "sum(y)", id="objective-beside-another-term"),
     ],

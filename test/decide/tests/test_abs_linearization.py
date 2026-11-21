@@ -2247,9 +2247,9 @@ _SCOPE_W = (2, 3, 4)
         ),
         pytest.param(
             "per (): d(INT)",
-            "d <= 3 AND ABS(SUM(d) by (k) - 4) >= 1",
+            "d <= 3 AND ABS(SUM(w * d) by (k) - 4) >= 1",
             {"d": range(4)},
-            lambda a: a["d"] <= 3 and abs(2 * a["d"] - 4) >= 1 and abs(a["d"] - 4) >= 1,
+            lambda a: a["d"] <= 3 and abs(5 * a["d"] - 4) >= 1 and abs(4 * a["d"] - 4) >= 1,
             lambda a: sum(_SCOPE_W) * a["d"],
             # The reducer's helper per group of k and an auxiliary per group, with its native argument column on
             # Gurobi and its sign on HiGHS, and d: 7. Two envelope rows per auxiliary and a definition per helper,
