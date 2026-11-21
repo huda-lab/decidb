@@ -494,8 +494,6 @@ _PUSH_CASES = [
     ("pushed down", "sum(x) + max(power(x, 2)) <= 20 MAXIMIZE sum(x)", ">="),
     # An equality is the pair of its relations: the easy one bounds each member, the other pushes the helper up.
     ("pushed neither way", "max(power(x, 2)) = 25 MAXIMIZE sum(x)", "<="),
-    # A term under a factor of exactly zero is never walked, so nothing records a push for it.
-    ("not reached by the polarity walk", "sum(x) + 0 * max(power(x, 2)) <= 5 MAXIMIZE sum(x)", "="),
 ]
 
 

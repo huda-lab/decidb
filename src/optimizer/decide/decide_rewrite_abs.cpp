@@ -117,9 +117,8 @@ static bool ContainsAbsOverDecideVar(const Expression &expr, idx_t decide_index)
 //! "unknown", which never matches the pinning direction and so forces Big-M. That is conservative: for `w >= 0` the
 //! aux would have been pinned without it. Deciding per row at execution time would recover those rows, but the
 //! indicator is allocated at plan time, so it cannot be chosen lazily as the code stands. A factor that is exactly
-//! zero makes the term vanish: nothing pushes its auxiliary anywhere, so nothing has to pin it, and asking for the
-//! exact envelope would demand a finite box the term has no use for. An ABS nested inside another sits under a
-//! function that is not monotone in it, so no pressure and no shape pins it: it carries sign 0.
+//! zero reads as positive, as for any other term. An ABS nested inside another sits under a function that is not
+//! monotone in it, so no pressure and no shape pins it: it carries sign 0.
 static void MarkExactAbs(ClientContext &context, Expression &expr, int sign, int pinning_sign, idx_t decide_index,
                          AbsExactSet &exact) {
 	PolarityHolds holds = [&](const Expression &node) {
@@ -433,8 +432,9 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	//     hard direction: ABS(...) >= K, ABS = K, ABS <> K, BETWEEN, etc.).
 	//   - ABS sits inside another ABS: the outer one is not monotone in it, so no
 	//     pressure or shape pins it (sign 0 in FindExactAbs).
-	//   Every one of these is decided in FindExactAbs and read here as pair.needs_bigm;
-	//   a term under a factor of exactly zero is dead and gets no envelope at all.
+	//   - ABS sits in a helper's body that its readers push up, or that a hard MIN
+	//     or MAX reads, whose Big-M needs every member boxed (FindBoxedHelpers).
+	//   Every one of these is decided in FindExactAbs and read here as pair.needs_bigm.
 	//
 	// A positive ABS under MINIMIZE, a negative one under MAXIMIZE, and a sound
 	// constraint shape (e.g. ABS <= K) skip the upper envelope — solver pressure /
@@ -559,7 +559,7 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 		                                     aux_type, false, aux_scope, label);
 
 		// FindExactAbs is the one place that decides exactness: for an ABS in a clause or the objective, in a helper's
-		// body, in another ABS (which it reads as unknown sign) and for a dead one (which it leaves out).
+		// body, and in another ABS (which it reads as unknown sign).
 		const bool needs_bigm = exact.count(&func) > 0;
 
 		// The rows the ABS is read on: the envelope rows, and the check of its values, are made for those only.

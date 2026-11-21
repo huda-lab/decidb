@@ -176,10 +176,6 @@ int ScaleSignAtPlanTime(ClientContext &context, const Expression *scale, bool di
 	}
 }
 
-bool ScaleVanishesAtPlanTime(ClientContext &context, const Expression *scale, bool divides) {
-	return scale && !divides && PlanTimeSignOf(context, *scale) == PlanTimeSign::ZERO;
-}
-
 ExtremumPush ExtremumPushOf(ExpressionType comparison) {
 	switch (comparison) {
 	case ExpressionType::COMPARE_LESSTHAN:

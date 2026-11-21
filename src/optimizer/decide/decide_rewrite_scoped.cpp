@@ -98,9 +98,6 @@ struct ReducerSite {
 	//! A function that is no sum or product holds the reducer (`abs(sum(x) - 2)`): the function reads its value, so
 	//! the value has to be a column of its own.
 	bool under_function;
-	//! A factor that is exactly zero holds the reducer (`0 * max(x)`): the term vanishes, nothing pushes the helper
-	//! either way, and its envelope alone is right whatever the sense.
-	bool vanishes;
 
 	bool IsExtremum() const {
 		return IsExtremumName(StringUtil::Lower((*slot)->Cast<BoundAggregateExpression>().function.name));
@@ -109,7 +106,7 @@ struct ReducerSite {
 
 void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &context, idx_t decide_index,
                          const BooleanDecisions &booleans, vector<ReducerSite> &out, bool under_decision = false,
-                         bool under_function = false, bool vanishes = false) {
+                         bool under_function = false) {
 	if (!BoundExpressionReferencesDecide(*expr, decide_index)) {
 		return; // data holds no decision reducer
 	}
@@ -117,35 +114,33 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 	case ExpressionClass::BOUND_AGGREGATE: {
 		idx_t frame;
 		if (!TryGetDecideFrame(*expr, frame)) {
-			out.push_back(
-			    {&expr, sign, under_decision, under_function, vanishes}); // a frame is a tuple term of the row
+			out.push_back({&expr, sign, under_decision, under_function}); // a frame is a tuple term of the row
 		}
 		return;
 	}
 	case ExpressionClass::BOUND_CAST:
 		CollectReducerSites(expr->Cast<BoundCastExpression>().child, sign, context, decide_index, booleans, out,
-		                    under_decision, under_function, vanishes);
+		                    under_decision, under_function);
 		return;
 	case ExpressionClass::BOUND_FUNCTION: {
 		auto &func = expr->Cast<BoundFunctionExpression>();
 		auto &name = func.function.name;
 		if (name == "+") {
 			for (auto &child : func.children) {
-				CollectReducerSites(child, sign, context, decide_index, booleans, out, under_decision, under_function,
-				                    vanishes);
+				CollectReducerSites(child, sign, context, decide_index, booleans, out, under_decision, under_function);
 			}
 			return;
 		}
 		if (name == "-" && func.children.size() == 2) {
 			CollectReducerSites(func.children[0], sign, context, decide_index, booleans, out, under_decision,
-			                    under_function, vanishes);
+			                    under_function);
 			CollectReducerSites(func.children[1], -sign, context, decide_index, booleans, out, under_decision,
-			                    under_function, vanishes);
+			                    under_function);
 			return;
 		}
 		if (name == "-") {
 			CollectReducerSites(func.children[0], -sign, context, decide_index, booleans, out, under_decision,
-			                    under_function, vanishes);
+			                    under_function);
 			return;
 		}
 		if (name == "*" || name == "/") {
@@ -160,7 +155,7 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 				}
 				// A BOOL decision is never negative, so it keeps the direction of the reducer it scales.
 				const int factor_sign = ScaleSignAtPlanTime(context, other.get(), name == "/", &booleans);
-				const bool zero = ScaleVanishesAtPlanTime(context, other.get(), name == "/");
+				const bool zero = name != "/" && PlanTimeSignOf(context, *other) == PlanTimeSign::ZERO;
 				if (zero && !other->IsFoldable()) {
 					// 0 whatever it reads (`0 * w` with a data column `w`): the term is one value for the whole query.
 					other = BoundCastExpression::AddCastToType(
@@ -168,7 +163,7 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 				}
 				CollectReducerSites(term, sign * factor_sign, context, decide_index, booleans, out,
 				                    under_decision || BoundExpressionReferencesDecide(*other, decide_index),
-				                    under_function, vanishes || zero);
+				                    under_function);
 			}
 			return;
 		}
@@ -179,7 +174,7 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 	}
 	// Any other node (ABS, POWER, CASE, ...): the sign of what it holds is not known.
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		CollectReducerSites(child, 0, context, decide_index, booleans, out, under_decision, true, vanishes);
+		CollectReducerSites(child, 0, context, decide_index, booleans, out, under_decision, true);
 	});
 }
 
@@ -265,10 +260,6 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	const ExtremumPush push = ExtremumPushOf(outer, site.sign);
 	bool need_envelope, need_closing;
 	DecideHelperSides(agg_name, push, need_envelope, need_closing);
-	if (site.vanishes) {
-		need_envelope = true;
-		need_closing = false;
-	}
 
 	// A member is pushed as the helper is, through the sign it carries in the argument: a SUM or AVG is linear in it,
 	// and a MIN or MAX does not decrease when it grows, so either passes its push on (D79).
@@ -280,7 +271,6 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	for (auto &inner : nested) {
 		// The binder refuses a decision times a reducer inside a reducer (D80).
 		D_ASSERT(!inner.under_decision);
-		inner.vanishes = inner.vanishes || site.vanishes;
 		ReplaceReducer(helpers, names, booleans, below, class_key, push, source_clause_id, inner);
 	}
 	// A reducer value link's member program is linear. A quadratic outer SUM whose direct G can emit the Q row stays

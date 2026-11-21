@@ -91,7 +91,7 @@ unique_ptr<Expression> ScopeRowPerInstance(const LogicalDecide &decide, unique_p
 //! (`LHS - RHS`), or the objective as `E` under its sense. Walking `expr` with `sign`, a node keeps its parent's sign
 //! through `+`, casts and reducer bodies (SUM, AVG, MIN and MAX never decrease when a member grows), flips it through
 //! `-` and a factor known negative before the query runs, and gets 0 ("unknown") under a factor whose sign only the
-//! rows decide or any other node. A term under a factor of exactly zero vanishes and is not walked.
+//! rows decide or any other node. A factor of exactly zero reads as positive.
 //!
 //! `holds(node)` says whether a subtree holds anything the caller wants; a subtree that does not is skipped, and a
 //! factor that does not is read as a multiplier. `visit(node, sign)` sees each held node first and returns true when it

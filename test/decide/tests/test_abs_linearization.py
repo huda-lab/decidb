@@ -1979,7 +1979,7 @@ def test_abs_objective_explain_says_how_it_is_pinned(decidb_cli, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# An ABS under a hard MIN/MAX, and under a zero factor
+# An ABS under a hard MIN/MAX
 # ---------------------------------------------------------------------------
 
 _HARD_SOLVERS = pytest.mark.parametrize(
@@ -2017,82 +2017,12 @@ def test_abs_under_an_extremum_objective(request, cli_fixture, extra_env, object
 
 @_HARD_SOLVERS
 @pytest.mark.correctness
-@pytest.mark.parametrize(
-    "objective",
-    ["MAXIMIZE 0 * -min(abs(x - 2))", "MAXIMIZE 0 * max(abs(x - 2))", "MINIMIZE 0 * min(abs(x - 2)) + 0 * sum(x)"],
-)
-def test_abs_under_a_vanishing_extremum_objective(request, cli_fixture, extra_env, objective):
-    """A MIN or MAX over ABS under a factor of exactly zero contributes nothing: the cheap
-    envelope stands whichever way the sense pushes, and no member box is demanded. The
-    objective is then 0 whatever the decisions, which stderr says."""
-    cli = request.getfixturevalue(cli_fixture).with_env(extra_env)
-    rows = answer(cli, _signed_objective(objective), ["the objective is 0 whatever the decisions"])
-    judge_rows(rows, _SIGNED_DOMAINS, lambda a: True, lambda a: 0.0, True)
-
-
-@_HARD_SOLVERS
-@pytest.mark.correctness
-@pytest.mark.parametrize("dead", ["0 * min(abs(x - 2))", "0 * w * min(abs(x - 2))", "(0 * w) * max(abs(x - 2))"])
-def test_abs_under_a_vanishing_extremum_constraint(request, cli_fixture, extra_env, dead):
-    """`sum(x) + 0 * min(abs(x - 2)) <= 5` is `sum(x) <= 5`: the vanished MIN asks for
-    nothing, neither an indicator nor a box on its members. A factor `0 * w` with a data
-    column is zero whatever `w` holds, so it is one value for the whole query, not a
-    row-varying factor."""
-    cli = request.getfixturevalue(cli_fixture).with_env(extra_env)
-    sql = f"""SELECT id, x FROM (VALUES (1, 3, 1), (2, 3, 1), (3, 2, 2)) t(id, cap, w)
-        DECIDE x(INT) SUCH THAT x <= cap AND sum(x) + {dead} <= 5 MAXIMIZE sum(x) ORDER BY id"""
-    judge_rows(answer(cli, sql), _SIGNED_DOMAINS, lambda a: _total(a) <= 5, _total, True)
-
-
-@_HARD_SOLVERS
-@pytest.mark.correctness
 def test_abs_under_a_hard_min_constraint(request, cli_fixture, extra_env):
     """`min(abs(x - 1)) <= 1` is the hard direction of a MIN: some member must reach 1."""
     cli = request.getfixturevalue(cli_fixture).with_env(extra_env)
     sql = f"""SELECT id, x FROM {_SIGNED_ROWS}
         DECIDE x(INT) SUCH THAT x <= cap AND min(abs(x - 1)) <= 1 MAXIMIZE sum(x) ORDER BY id"""
     judge_rows(answer(cli, sql), _SIGNED_DOMAINS, lambda a: min(abs(a[n] - 1) for n in a) <= 1, _total, True)
-
-
-# Each case is a place the zero factor sits: outside the reducer, inside it, over a nested ABS, over a reducer, and four
-# spellings of a data column that multiplies to zero. WalkPolarity returns at a zero factor before it reads the sense
-# (decide_optimizer.cpp), so the senses alternate down the list rather than crossing it.
-_ZERO_FACTOR_CASES = [
-    (sense, maximize, dead)
-    for (sense, maximize), dead in zip(
-        [("MAXIMIZE -sum(x)", True), ("MINIMIZE sum(x)", False)] * 4,
-        [
-            "0 * sum(abs(x - 1))",
-            "sum(0 * abs(x - 1))",
-            "sum(0 * -abs(abs(x) - 2))",
-            "0 * abs(sum(x) - 4)",
-            "sum(0 * w * -abs(x - 2))",
-            "sum(w * 0 * abs(x - 2))",
-            "sum(-(0 * w) * abs(x - 2))",
-            "sum((0 * w) / 3 * abs(x - 2))",
-        ],
-    )
-]
-
-
-@_HARD_SOLVERS
-@pytest.mark.correctness
-@pytest.mark.parametrize("sense, maximize, dead", _ZERO_FACTOR_CASES)
-def test_abs_under_a_zero_factor_needs_no_bound(request, cli_fixture, extra_env, dead, sense, maximize):
-    """An ABS under a factor of exactly zero -- outside or inside the reducer, nested in
-    another ABS, over a reducer, or under a product with a data column that is zero
-    whatever the column holds -- contributes nothing, so no auxiliary of it needs pinning
-    or a box: the query answers although x has no upper bound."""
-    cli = request.getfixturevalue(cli_fixture).with_env(extra_env)
-    sql = f"""SELECT id, x FROM (VALUES (1, 1), (2, 1), (3, 2)) t(id, w)
-        DECIDE x(INT) SUCH THAT sum(x) >= 0 {sense} + {dead} ORDER BY id"""
-    judge_rows(
-        answer(cli, sql),
-        {f"x{i}": range(4) for i in range(3)},
-        lambda a: True,
-        lambda a: -_total(a) if maximize else _total(a),
-        maximize,
-    )
 
 
 # ---------------------------------------------------------------------------

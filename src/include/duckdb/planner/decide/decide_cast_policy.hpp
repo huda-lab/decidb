@@ -146,8 +146,8 @@ bool TryEvaluateFoldableDouble(ClientContext &context, const Expression &expr, d
 enum class PlanTimeSign : uint8_t { ZERO, POSITIVE, NEGATIVE, UNKNOWN };
 
 //! The decisions declared BOOL (LogicalDecide::is_boolean_var, by decide-column index). A BOOL is in {0, 1}, so as a
-//! factor it is never negative: it keeps the direction of the term it scales (its sign reads POSITIVE; where it is 0
-//! the term vanishes and any direction is right for it). Without it a decision's sign is UNKNOWN.
+//! factor it is never negative: it keeps the direction of the term it scales (its sign reads POSITIVE). Without it a
+//! decision's sign is UNKNOWN.
 struct BooleanDecisions {
 	idx_t decide_index;
 	const vector<bool> &is_boolean;
@@ -156,8 +156,8 @@ struct BooleanDecisions {
 PlanTimeSign PlanTimeSignOf(ClientContext &context, const Expression &expr, const BooleanDecisions *booleans = nullptr);
 
 //! The sign a factor on a reducer contributes: +1, -1, or 0 when it is not known until
-//! the query runs (PlanTimeSignOf). A factor that is exactly zero reads as +1: the term
-//! vanishes and any direction is right for it. The canonicalizer and the MIN/MAX
+//! the query runs (PlanTimeSignOf). A factor that is exactly zero reads as +1, as any
+//! other number does. The canonicalizer and the MIN/MAX
 //! rewrite read it alike: a MIN or MAX under a factor of unknown sign is pushed
 //! neither way.
 //!
@@ -166,11 +166,6 @@ PlanTimeSign PlanTimeSignOf(ClientContext &context, const Expression &expr, cons
 //! the expensive one", never as an error.
 int ScaleSignAtPlanTime(ClientContext &context, const Expression *scale, bool divides,
                         const BooleanDecisions *booleans = nullptr);
-
-//! True when a factor on a reducer is exactly zero before the query runs
-//! (PlanTimeSignOf), so the term vanishes: nothing pushes its extremum anywhere, and the
-//! cheap formulation is right in every direction. A divisor is never a vanishing factor.
-bool ScaleVanishesAtPlanTime(ClientContext &context, const Expression *scale, bool divides);
 
 //! The way a comparison drives a term on its decision side, read before the query runs.
 //! `<=` and `<` push a positive term DOWN and a negative one UP; `>=` and `>` the mirror.

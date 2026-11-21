@@ -987,9 +987,6 @@ private:
 			// A factor left outside a reducer (`2 * SUM(x*p)`): extract the reducer, then
 			// multiply the factor into everything it produced.
 			if (atom.scaled) {
-				if (ScaleVanishesAtPlanTime(context, atom.scale.scale, atom.scale.divides)) {
-					continue;
-				}
 				auto obj_scale = atom.scale.scale;
 				idx_t linear_before = obj.terms.size();
 				idx_t group_before = obj.product_groups.size();

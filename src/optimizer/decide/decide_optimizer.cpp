@@ -537,8 +537,8 @@ void decide_rewrite::WalkPolarity(ClientContext &context, Expression &expr, int 
 			// than a multiplier, and never flips.
 			//
 			// A factor whose sign is not known until execution -- `w` in `SUM(w * ABS(x - t))`
-			// -- makes the whole path sign 0. A factor that is exactly zero makes the term
-			// vanish: nothing pushes it anywhere, so it is not walked.
+			// -- makes the whole path sign 0. A factor that is exactly zero is a number like any other: it reads
+			// as positive, so the term takes the push it takes with weight 1.
 			int factor_sign = 1;
 			for (idx_t i = 0; i < func.children.size(); i++) {
 				auto &child = *func.children[i];
@@ -547,10 +547,7 @@ void decide_rewrite::WalkPolarity(ClientContext &context, Expression &expr, int 
 				}
 				auto child_sign = PlanTimeSignOf(context, child);
 				const bool is_divisor = name == "/";
-				if (child_sign == PlanTimeSign::ZERO && !is_divisor) {
-					return;
-				}
-				if (child_sign == PlanTimeSign::UNKNOWN || child_sign == PlanTimeSign::ZERO) {
+				if (child_sign == PlanTimeSign::UNKNOWN || (child_sign == PlanTimeSign::ZERO && is_divisor)) {
 					factor_sign = 0;
 				} else if (child_sign == PlanTimeSign::NEGATIVE) {
 					factor_sign = -factor_sign;
