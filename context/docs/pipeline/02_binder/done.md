@@ -149,8 +149,8 @@ Four layers refuse a DECIDE query, each for what only it can see:
 | Layer | Refuses |
 |---|---|
 | Parser (stage 01) | Syntax: the grammar's own errors (a missing type, a comma between constraints), a removed spelling among them. |
-| Binder (this stage) | Binding: names, scopes, aggregation levels, function resolution. A shape the language allows and DeciDB does not handle is *"is not supported"* (Not implemented Error); a nesting the language keeps out is *"is not allowed"* (D80). What only this stage can see: cast authorship, the declared types an integer step needs, a truth value read as a number. |
-| Shape check (stage 04, `DecideShapeCheck`) | Algebra: the function and operator vocabulary over a decision, exponents, division by a decision, `CASE` over a decision, degree (`../04_canonicalizer/done.md` §3.11). |
+| Binder (this stage) | Binding: names, scopes, aggregation levels, function resolution. A shape the language allows and DeciDB does not handle is *"is not supported"* (Not implemented Error); a nesting the language keeps out is *"is not allowed"* (D80). What only this stage can see: cast authorship, a reducer's kind, argument count and body, a window function, a truth value read as a number. |
+| Shape check (stage 04, `DecideShapeCheck`) | Algebra: a clause that reads no decision, the function and operator vocabulary over a decision, exponents, division by a decision, `CASE` over a decision, degree, a square or `ABS` of decisions in a frame, and the integer step of `<`, `>` and `<>` (`../04_canonicalizer/done.md` §3.11). |
 | Solver gate (stage 05, `RequireDecideSolverSupport`) | What the chosen backend cannot take: quadratic rows on HiGHS, non-convexity, MIQP, a singular Q. |
 
 **What this stage refuses.** Each of these needs the parsed tree, the declared types or the binding context:
@@ -163,22 +163,22 @@ Four layers refuse a DECIDE query, each for what only it can see:
 - a volatile function, below;
 - a user-written cast over a decision (`ValidateDecideNoExplicitDecisionCasts`): authorship is observable only on
   the parsed tree (`../04_canonicalizer/done.md` §3.6);
-- an aggregate over table columns that multiplies or divides a decision (`ValidateDecideNoDataAggregateFactor`);
-- a NULL beside a decision, a reducer with no argument, a reducer inside a reducer, a non-scalar subquery or one that
-  reads a decision (§4a, §4);
+- a NULL beside a decision, a reducer with the wrong number of arguments, a reducer whose body is query-wide decisions
+  only, a reducer inside a reducer, a window function in a clause, a non-scalar subquery or one that reads a decision
+  (§3, §4a, §4);
 - a comparison, `BETWEEN` or conjunction that reads a decision, used as a number (*"'x > 1' is a comparison used as a
   number"*), and an `OR` between constraints (§4);
-- `<`, `>` and `<>` over a `REAL` decision or a fractional operand (§4): the rule is stated on declared types, which
-  only this stage reads without reading a row;
-- every *"is not supported"* shape (§4a, §5).
+- the *"is not supported"* shapes of binding: an aggregate that is not a reducer, `COUNT` over a decision, a constraint
+  that is no comparison, `IN` on a reducer, a norm order, a scope inside a subquery (§3, §4, §4a).
 
 **Why the algebra is not judged here.** The binder sees the tree as the user wrote it, and one polynomial has many
 spellings: `2*x*x`, `x*2*x`, `w*x*x` and `(x-t)*(x-t)` are products with different trees. A judgement on that tree
-needs a recognizer per spelling, a list of cases that keeps growing, and each gap in it refuses a legal query. After
+needs a recognizer per spelling, a list of cases that keeps growing, and each gap in it refuses a legal query. That
+holds for what a side is made of (a function, a data reducer used as a factor) as much as for degree. After
 canonicalization every product has one spelling (`../04_canonicalizer/done.md` §3.3b), so the shape check reads each
 shape one way and carries no list of cases. The check runs before any optimizer rewrite, so whether a query is legal
-cannot depend on what a rewrite did, as the integrality gate (§4) cannot. A refusal underlines the term: a respelled
-node keeps the source location of the term it replaces.
+cannot depend on what a rewrite did. A refusal underlines the term: a respelled node keeps the source location of the
+term it replaces.
 
 The binder keeps no definition of degree. `DecideDegreeOf` (`decide_product_form.cpp`) is the one, and the shape check
 the one place that refuses on it.
@@ -201,7 +201,7 @@ bound tree would reach the post-binding validators with no location.
 `DecideBinder::PreserveQueryLocation` stamps it in each `BindExpression`
 override — filling only an empty location, so an inner node keeps its own span
 rather than being widened to its parent's. The shape check needs this to point a
-caret at a term, and so do the integrality gate's two refusals (§4).
+caret at a term, the integer step included.
 
 The location is also the key of the node's text. The parser kept a span of the query for every expression of the
 DECIDE tail (`../01_parser/done.md` §3), `DecideSourceText`, indexed by the parsed node's query location, so a bound
@@ -226,10 +226,9 @@ function, scalar or aggregate, to its primary. A subquery is left as written.
   lookup resolves a name as the binder does, so a user's macro of the same name is the function called and is left
   as written.
 - **An alias answers as its primary does.** Every check from here on matches one name per function: the objective's
-  composition of a reducer (`+`, `-`, `*`, §5), the refusal of an aggregate over table columns that multiplies a
-  decision, the whole-number check of a strict comparison (§4), `IsBoundAvgAggregate`, the shape check, and every
-  rewrite and direct-solve rule. So `multiply(x, v)` answers as `x * v`, `MINIMIZE multiply(sum(x), 2)` as
-  `MINIMIZE sum(x) * 2`, `add(x, 0.5) < 3` as `x + 0.5 < 3`, and `multiply(avg(v), x)` is refused as `avg(v) * x` is.
+  composition of a reducer (`+`, `-`, `*`, §5), the whole-number check of a strict comparison, `IsBoundAvgAggregate`,
+  the shape check, and every rewrite and direct-solve rule. So `multiply(x, v)` answers as `x * v`,
+  `MINIMIZE multiply(sum(x), 2)` as `MINIMIZE sum(x) * 2`, and `add(x, 0.5) < 3` as `x + 0.5 < 3`.
   A function DECIDE accepts over a decision is accepted under each of its names.
 - **The written name is display only.** The call keeps the name the user wrote in a tag (`__written_name_<name>__`,
   `WRITTEN_NAME_TAG_PREFIX`). `DecideWrittenName` reads it: the DECIDE renderer, `ToString` of a bound function or
@@ -237,21 +236,26 @@ function, scalar or aggregate, to its primary. A subquery is left as written.
   only in the tag are equal, so `pow(v, 2)` and `power(v, 2)` in one product are a square, and `mean` and `avg` of one
   body share a helper.
 
-The respelling runs here, not in the canonicalizer, because the checks above read names on the bound tree before
-stage 04 runs: respelled after them, `multiply(avg(v), x)` would pass the refusal of `avg(v) * x`. A plan reads the
-written name from the tag, since cutting it from the source text fails for an infix `^` (owner's rulings, 2026-11-10).
+The respelling runs here, not in the canonicalizer, because the binder's own checks read names (a reducer's kind, a
+norm) before stage 04 runs. A plan reads the written name from the tag, since cutting it from the source text fails
+for an infix `^` (owner's rulings, 2026-11-10).
 
 ---
 
 ## 3. Reducers
 
-`IsDecideAggregateName` recognizes `SUM`, `AVG`, `MIN`, `MAX` as DECIDE reducers, and
-`DecideBinder::ClassifyReducerCall` is the one place both clause binders ask whether a call is one. A reducer takes
-exactly one argument: `max(x, 2)` is DuckDB's top-n aggregate, which returns a list, and is refused in the objective
-as in a constraint (*"'max(x, 2)' has 2 arguments"*). A subquery in a reducer's body counts as
-query-wide only when its own body names no per-row decision (`ReadsRowDecision`).
-`DecideBinder::BindAggregate` binds them; the optimizer, not the binder, decides
-their formulation. `norm(e, p)` binds as an inert `SUM` marker tagged with its order
+`IsDecideAggregateName` recognizes `SUM`, `AVG`, `MIN`, `MAX` as DECIDE reducers, and `DecideBinder::BindAggregate`
+binds them for both clause binders; the optimizer, not the binder, decides their formulation. Two rules hold at every
+position, a constraint side, beside another term, under a `by` or in the objective:
+
+- A reducer takes exactly one argument: `max(x, 2)` is DuckDB's top-n aggregate, which returns a list
+  (*"'max(x, 2)' has 2 arguments"*).
+- A reducer whose body is query-wide decisions only (`IsRowInvariantExpression`: every leaf a literal, a query-wide
+  decision or a subquery that names no per-row decision, `ReadsRowDecision`) is refused: *"'cap' is a query-wide
+  decision, so 'sum(cap)' has no rows to reduce"*. Once and once per row are different problems, and neither reading is
+  chosen silently. `sum(x + cap)` and `sum(cost * cap)` are not refused. A `norm` marker, which counts its body's rows
+  by definition, and a range frame's reducer (`binding_frame_range`), which reduces the rows of its frame, are not
+  refused. `norm(e, p)` binds as an inert `SUM` marker tagged with its order
 (`NORM_MARKER_TAG_PREFIX`), which stage 05 lowers. `COUNT` binds as data only:
 `COUNT(x)` over a decision is refused (*"COUNT over a decision is not supported"*).
 
@@ -276,7 +280,7 @@ Nothing is checked against the body at bind time: a body that reads more than `D
 relation, a per-row decision -- is one value per variant of each tuple (D71), which the signature of stage 04 records,
 as for `per`. Refused at bind time: a qualifier that is not a relation name, a relation not in the FROM clause, a
 qualifier on anything but `SUM`, `AVG`, `MIN`, `MAX` or `norm`, and on the decision side a body of query-wide decisions
-alone (`ClassifyReducerCall`, as for any reducer). `norm` binds as a `SUM` marker, so `norm(D: e, p)` carries the tag
+alone (`BindAggregate`, as for any reducer). `norm` binds as a `SUM` marker, so `norm(D: e, p)` carries the tag
 like `SUM(D: e)`; stage 04's definition of orders 1, 2 and `'inf'` and stage 05's L0 lowering keep the alias, so every
 order reads each row of `D` once.
 
@@ -300,14 +304,14 @@ and `sum(per D, T: ...)` share one scope and one `KeyedMapping`.
 
 ## 4. Constraints
 
-`DecideConstraintsBinder` classifies each side of a comparison and type-checks it
-**without moving anything**. `GetExpressionType` returns a `DecideExpression`
-telling the binder whether a side is decision-bearing, and `IsSupportedComparison`
-gates the operator set (`=`, `<`, `<=`, `>`, `>=`, `<>`, plus `BETWEEN` via
-`BindBetween`).
-
-The binder asks only whether *either* side bears a decision. It does not flip
+`DecideConstraintsBinder` dispatches on the shape of each parsed constraint **without moving anything**.
+`IsSupportedComparison` gates the operator set (`=`, `<`, `<=`, `>`, `>=`, `<>`, plus `BETWEEN` via `BindBetween`). It
+classifies no side: whether a side reads a decision, what it is made of, and which side holds the decisions are judged
+on the bound tree, after canonicalization, by the shape check (`../04_canonicalizer/done.md` §3.11). It does not flip
 `5 >= x` into `x <= 5` — the canonicalizer does that on the bound tree.
+
+A constraint that is no comparison is refused at its node: a bare decision or frame as *"'x' is not a comparison"*, any
+other shape (`x IS NULL`, `x + 1`) as *"'x IS NULL' is not supported"* (Not implemented Error).
 
 Dedicated binding methods: `BindComparison`, `BindOperator`, `BindBetween`,
 `BindConjunction`, `BindScopedConstraint` (§4a).
@@ -319,29 +323,22 @@ list reaches `BindConjunction`: a conjunction inside an operand is data or refus
 operands, below), and an `OR` in a `when` condition, a reducer's `when` or a subquery is
 data.
 
-`GetExpressionType`'s `norm`/`SUM`/`AVG`/`MIN`/`MAX` classification is shared with
-`DecideObjectiveBinder` through `DecideBinder::ClassifyReducerCall` — the base class
-both subclasses already derive from. The argument validator (`ValidateSumArgument`) is the same for both: it reads
-what only the binder sees (a nested reducer over data, a subquery that is not scalar or reads a decision, a truth
-value over a decision, an `ABS` of the wrong arity) and judges no algebra. Each
-subclass keeps its own fallthrough for a non-reducer function — the shapes a
-constraint's left-hand side and an objective body accept past that point diverge.
+Both clause binders bind a reducer through `DecideBinder::BindAggregate`, the base class both derive from, so the
+reducer rules of §3 are the same in a constraint and in the objective. A reducer's body is bound as it stands and
+judged for algebra by the shape check.
 
 ### What may be a bound
 
-When one side reduces (`SUM`, `AVG`, `MIN`, `MAX`), the side that carries no decision
-is the bound, and `IsAllowedDecisionFreeBoundExpression` decides which shapes it may
-take: constants, data columns, operators and functions over allowed operands, casts,
-scalar subqueries, and data-only reducers with their own `when`, `per` and `by`. A data
-column is a bound like any other: a clause with no `per` is generated once per kept
-row, so the tightest row's value binds; under `per K:` each of its values in a class is a
-variant (D70, stage 04, "Variant signatures"), so the tightest binds again. Arithmetic composes freely, `-`
-included: a bound is evaluated as an expression over the row, so subtraction is no
-different from addition, and `-5.0::DOUBLE` is a negative bound like any other. A colon-form or `by` marker recurses
-into child 0 only: its relations or key are not values on that side. A data-only
-reducer never shares a scaled term with a decision (S10): `ValidateDecideNoDataAggregateFactor`
-refuses `x * avg(cap)`, `sum(x) / sum(cap)` and `(sum(x) + sum(cap)) / 2` on the parsed
-tree.
+When one side reduces (`SUM`, `AVG`, `MIN`, `MAX`), the side that carries no decision is the bound. The binder keeps no
+list of the shapes it may take: any operand that reads no decision is data (Data operands, below), so a bound is
+constants, data columns, operators and functions over data, casts, scalar subqueries, parameters, and data-only
+reducers with their own `when`, `per` and `by`. A data column is a bound like any other: a clause with no `per` is
+generated once per kept row, so the tightest row's value binds; under `per K:` each of its values in a class is a
+variant (D70, stage 04, "Variant signatures"), so the tightest binds again. Arithmetic composes freely, `-` included: a
+bound is evaluated as an expression over the row, so subtraction is no different from addition, and `-5.0::DOUBLE` is a
+negative bound like any other. A data-only reducer scales a decision as any data does (`x * avg(cap) <= 8`,
+`sum(x) / sum(cap) <= 2`): the binder holds no rule on it, and the product reaches the canonicalizer as data times a
+decision.
 
 ### Data operands
 
@@ -349,19 +346,16 @@ Below a clause's top, an operand that reads no decision is data, and DuckDB bind
 its own rules (`DecideBinder::IsDataOperand`). The shape does not matter: a comparison
 read as 0/1 (`x <= 4 * CAST(cap > 2 AS INT)`), a lambda and its parameters
 (`sum(x * list_reduce([cap, b], (a, z) -> a + z))`), a prepared statement's `$1`. A
-function and a subquery keep their DECIDE handling: a function may be a reducer or a
-scope marker, and a subquery has the checks below. A CASE that reads no decision is data, as a
-`COALESCE` over data is: DuckDB binds and evaluates it per row, and a clause reads its value as a coefficient. A
-CASE that reads a decision binds like any other node and is refused by the shape check (stage 04, §3.11) with one
-message, which quotes the clause and names the alternatives (a scope in front, `per`, or a CTE).
+function, a subquery and a window function keep their DECIDE handling: a function may be a reducer or a scope marker, a
+subquery has the checks below, and a window function is refused wherever it stands in a clause (*"a window function is
+not allowed in a DECIDE clause"*, as DuckDB's `WhereBinder` refuses one in `WHERE`; in a `when`, a `by` or a frame's
+order key the message names that position, §4a). A CASE that reads no decision is data, as a `COALESCE` over data is:
+DuckDB binds and evaluates it per row, and a clause reads its value as a coefficient. A CASE that reads a decision
+binds like any other node and is refused by the shape check (stage 04, §3.11): *"CASE over a decision is not
+supported"*.
 
-The rule holds in four places, one per walk that reads an operand:
-
-- `DecideConstraintsBinder` and `DecideObjectiveBinder`, before their dispatch.
-- The reducer-argument validator (`ValidateSumArgument`): a shape it does not list is a
-  per-row coefficient when it reads no decision, as a data-only operator is.
-- The bound check (`IsAllowedDecisionFreeBoundExpression`): a parameter is one value, and
-  a comparison, conjunction, `BETWEEN`, lambda or `CASE` is allowed when every part is.
+The rule holds in `DecideConstraintsBinder` and `DecideObjectiveBinder`, before their dispatch. A reducer's body binds
+through them, so it holds there too.
 
 A comparison, `BETWEEN` or conjunction that reads a decision, below the top, is neither a
 constraint nor data. `x <= (x > 1 AND cap > 1)` has a meaning in SQL (DuckDB casts the
@@ -412,107 +406,26 @@ Correlation is observed later, in
 `plan_select_node.cpp`, at the only point where it is still visible — see
 [`../03_logical_plan/done.md`](../03_logical_plan/done.md).
 
-### `<`, `>` and `<>` over a REAL decision
+### `<`, `>` and `<>`
 
-All three are encoded by stepping the bound one integer unit: `< K` becomes `<= K-1`,
-and `<> K` becomes the disjunction `<= K-1 OR >= K+1`. Both are exact only when the
-compared side lands on integers.
-
-For `<` the step cuts feasible points: `SUM(x) = 4.7` satisfies `< 5` but not `<= 4`.
-For `<>` the problem is worse than inexact — `{v : v != K}` over the reals is an **open**
-set, and every MILP feasible region is a finite union of closed polyhedra, so `<>` on a
-continuous quantity has no correct encoding at all. Excluding a single point from a
-continuous range rules out nothing a solver can act on.
-
-The declared type settles that without reading a row, so
-`ValidateDecideNoIntegerStepComparisonOnReal` rejects all three here, naming the
-variable and quoting the clause. It runs on the parsed tree beside the other DECIDE
-validators, and it checks **comparisons in constraint position only** — descending
-through conjunctions and through the constraint child of a `when` / `per` scope, the
-same way `DecideConstraintsBinder` dispatches. A comparison nested inside an operand is
-a boolean value, not a model row, and is left to the type checks.
-
-Both sides are read, because canonicalization has not run yet and `5 > SUM(x)` is as
-likely a spelling as `SUM(x) < 5`. Reading a side is not moving one.
-
-The advice differs by operator because the repair does. `<` has an exact restatement
-(`<= K-1`), so the message offers it. `<>` has none, so the message says to declare the
-decision `INT` if the quantity is a whole number, or to name the range actually meant.
-The clause is quoted from the query's text (`DecideWrittenSql`), not printed through `ToString()`, which renders
-`COMPARE_NOTEQUAL` as `!=`: a clause quoted back to the user reads the way they wrote it.
-
-**The rule is stated on the type of the compared quantity, not on every type beneath
-it.** `norm(e, 0, M)` counts nonzeros, so its value lands on the integer lattice however
-`e` is declared, and the integer step is exact over it. `IsIntegerValuedReducer` stops the
-search there, so `norm(x, 0, M) < 3` and `norm(x, 0, M) <> 3` are both **accepted** over a
-REAL `x`. Only p=0 qualifies: `norm(e, 1)` sums magnitudes, `norm(e, 2)` is a length and
-`norm(e, 'inf')` a maximum, each as continuous as `e`.
-
-What DECIDE accepts does not depend on which linearization a term receives. L0
-integrality is not a linearization choice: it is the definition of the reducer, so the
-type that matters is the count's, not `e`'s. `<` and `<>` answer alike.
-
-### The rest of the compared expression
-
-`ValidateDecideIntegralComparisonOperands` completes the same refusal for every operand
-that is not a decision: data columns, literals, and the reducers over them. It runs on the
-**bound** tree, immediately after `DecideConstraintsBinder`, because a parsed tree carries
-no types yet.
-
-**It is a type judgement, not a value judgement.** `l_quantity` is `DECIMAL(15,2)` in
-TPC-H and every row of it holds a whole number, so `SUM(x * l_quantity) < 100` would in
-fact step exactly — and it is refused anyway. The alternative, reading the stored values,
-makes a query's *validity* depend on the table's contents: the same query is legal today
-and illegal tomorrow because someone inserted `0.05`. Whether a query is well-formed
-should follow from the query and the schema.
-
-The message therefore says what the comparison reads and why it is refused, and points at the comparison; the user
-may cast the column, which states the assumption the rewrite depends on (`l_quantity::BIGINT`):
-
-> '<' compares 'l_quantity', which can take fractional values
-
-`DECIMAL(p, 0)` carries its scale in the type and needs no cast. The rule is "scale > 0,
-or a floating type", not "any DECIMAL".
-
-Four things are deliberately **not** refused:
-
-- **The bound `K`.** Only a side referencing a decision is a compared quantity; the other
-  side is the bound. A fractional `K` is not an error but a *tautology* — no whole number
-  equals 2.5 — so `SUM(x) <> 2.5` is dropped, and an infinite `K` reads the same way.
-  Refusing here would turn two well-defined outcomes into errors.
-- **A decision-free addend.** `x + 1000003.50 < K` is exactly `x < K - 1000003.50`; a
-  fractional offset moves the bound, it does not move the lattice. A *multiplier* is
-  different — `0.5 * x` rescales the decision off the lattice — so every factor of a
-  product is checked whether or not it carries a decision. Where the side is not linear
-  in the addend it counts toward the value (§4a).
-- **`POWER(e, n)` with a whole, non-negative constant `n`**, which returns `DOUBLE` but
-  stays on the lattice when `e` does. Its exponent is read through the binder's inserted
-  casts.
-- **`AVG(e) <> K`**, whose denominator is hoisted to the right-hand side as
-  `SUM(e) <> K*n`, leaving an integral left side. The hoist is specific to `<>`;
-  `AVG(e) < K` keeps its fractional `1/n` coefficients and is refused.
-
-Both halves of the gate answer to one rule, in one layer, before any data is read. The
-model builder's remaining checks are `InternalException` invariants.
+The integer step of a strict or `<>` comparison is judged in stage 04, on the canonical left side
+(`../04_canonicalizer/done.md` §3.11). The binder does not read it: the rule needs every operand's declared type on the
+bound tree and the bound on the right, whichever way the user wrote the comparison (`5 > SUM(x)`).
 
 ### A refusal states its kind and points at its node
 
 Every binder message states the kind of error and where it is, and stops (R12, R19). The kind follows the cause:
 Binder Error for a query wrong in the language, Not implemented Error for a shape DeciDB does not handle
-(`../../language/errors.md`). A refusal is built by `DecideRefusal`, which carries the message, the node it points at
-and the kind, and raises it at that node (`DecideRefusal::ToResult`); a throw site passes the node to the exception, as
-DuckDB's own binder errors do. A constraint shape the binder does not read is `'q' is not supported` when it reads a
-decision and `'q' reads no decision` when it does not; a constraint that is no comparison is `'q' is not a comparison`. A
-function on either side is named as the user wrote it (`DecideWrittenFunctionName`): `count(*)`, not DuckDB's internal
-`count_star`. A reducer whose body holds no decision (`sum(1)`, `sum(cap)`) is `'q' reads no decision`; a body that holds
-only a query-wide decision is *"'cap' is a query-wide decision, so 'sum(cap)' has no rows to reduce"*. Every binder message that quotes a clause takes its text from
+(`../../language/errors.md`). A throw site passes the node to the exception, as DuckDB's own binder errors do, so the
+caret stands on it. A constraint that is no comparison is `'q' is not a comparison` for a bare decision or frame and
+`'q' is not supported` for any other shape. Every binder message that quotes a clause takes its text from
 `DecideWrittenSql`, which cuts the expression's span from `DecideSourceText` by its query location. A parsed node with
 no span (a statement built without the parser's text) is printed from a copy stripped of the binders' tags, since a call
 prints its arguments' aliases.
 
 **Ruling (owner, 2026-11-19).** A comparison, `BETWEEN` or conjunction a constraint cannot use as a number is `'q' is a
-comparison used as a number`; any other shape no case names is `'q' is not supported` (Not implemented Error), at its
-node.
+comparison used as a number`; a constraint that is none of the comparisons is `'q' is not supported` (Not implemented
+Error), at its node.
 
 **Ruling (owner, 2026-11-19).** `CorrelatedColumnInfo` carries an optional query location, so the refusal of a
 correlated column left after binding points at the column (a core edit, `../architecture.md` § Edits to existing DuckDB
@@ -548,18 +461,15 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
   frame's order key"*. Each reads rows the scope has not chosen yet, so
   `ValidateScopeData` refuses them with a caret, in that order, before execution sees the
   query. A `per` key cannot hold one: the grammar takes only columns and relations there;
-- a reducer nests in another to any depth (D79-D81, guide §5.5), and its body is held to
-  the rule of any reducer's (`ValidateSumArgumentInternal` reads through a nested
-  reducer's `by` and qualifier). `ValidateScopePlacement` refuses what a nest may not hold
-  (D80), a norm rewritten before the value rewrite reads the path, so the inner reducer
-  would lose the enclosing `when` and `by`: *"norm inside a reducer is not allowed"* and *"a reducer inside norm is not
-  allowed"*. An ABS, a square or a
-  product with a decision around a nested reducer binds: the tree keeps the inner reducer as
-  its own G node and the enclosing function reads that value. A reducer over data alone added
-  inside one over decisions binds as data (`ValidateSumArgumentInternal`), a value of its
-  path's group that stage 05 computes (`RewriteRhsAggregates`), under a `*` or `/` that holds a
-  decision too (`sum(avg(cap) * x)`), a coefficient; outside every reducer over decisions
-  (`x * avg(cap) <= 3`) `ValidateDecideNoDataAggregateFactor` refuses it with its remedy.
+- a reducer nests in another to any depth (D79-D81, guide §5.5), and its body is bound by the rules of §3 as any
+  reducer's. `ValidateScopePlacement` refuses what a nest may not hold (D80), a norm rewritten before the value rewrite
+  reads the path, so the inner reducer would lose the enclosing `when` and `by`: *"norm inside a reducer is not
+  allowed"* and *"a reducer inside norm is not allowed"*. An ABS, a square or a product with a decision around a nested
+  reducer binds: the tree keeps the inner reducer as its own G node and the enclosing function reads that value. A
+  reducer over data alone added inside one over decisions binds as data, a value of its path's group that stage 05
+  computes (`RewriteRhsAggregates`), under a `*` or `/` that holds a decision too (`sum(avg(cap) * x)`), a coefficient;
+  outside every reducer over decisions (`x * avg(cap) <= 3`) it is a factor on the decision as any data is, and the
+  binder holds no rule on it.
 
 | Written | Bound |
 |---|---|
@@ -591,17 +501,6 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
   reducers binds: a query-wide one is one column, and any other must have one instance
   over the kept rows, a run-time check. The objective's
   expressions are located like a constraint's.
-- A strict comparison over a fractional operand names a reducer as written, scopes and
-  `by` included (*"'avg(ship) by (D.region)' has type DOUBLE ..."*). A decision-free
-  addend belongs to the bound where the side is linear in it. A `MIN` or `MAX` that is a term
-  of the side hands its constant addends to the bound in stage 04 (`max(x + 0.5) > 3` is
-  `max(x) > 2.5`), so only the terms that stay count; `SplitExtremumBody` is the one split both
-  stages read. A column addend stays (`max(x + w) > 3` is refused). `DecideSideIsWholeNumbered`'s
-  `addends_count` makes an addend part of the value under a power, in a product of decisions
-  and in a norm of order 1, 2 or `'inf'` (`POWER(x + 0.25, 2) < 11`, `POWER(max(x + 0.5), 2) > 6`,
-  `(x + 0.5) * y < 5`, `norm(x + 0.5, 'inf') > 3`).
-  `DecideValueIsWholeNumbered` exports the same test with every addend counted, for the
-  value rewrite's helper decisions (stage 05).
 - A scalar function over a decision that binds to a NULL constant (`x + NULL`: DuckDB
   folds it) is refused in `DecideBinder::BindFunction`, where the SQL is still at hand:
     *"'x + NULL' is NULL whatever the decisions are"*, at the expression. The decision would be gone from the bound tree.
@@ -613,16 +512,16 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 
 `ValidateDecideScopeSpellings` reads a frame before it binds (`ValidateFrame`, `decide_binder.cpp`; D80): its order
 key and `within` key take data only (*"'x' is a decision, which a frame's order key and within cannot read"*),
-no window, no reducer and no frame; its payload and fallback hold no reducer and no other frame and square or
-multiply no decision (*"'x * x' squares or multiplies decisions inside a frame, which is not allowed"*); a frame over decisions a decision
-multiplies, or squared, binds: stage 05 makes it the range of its one position, a helper per position
-(`RewriteFrameRanges`); a frame over data is a coefficient read at another row, as a column is one read at the row. A payload or fallback not linear in the decisions otherwise -- `abs(x - 3)`, a decision
-divisor -- is refused too (`FindNonlinearDecisionUse`: *"'abs(x - 3)' inside a frame is not linear in the decisions, which is not
-supported"*): the rewrite rows of an `abs` would stand at the anchor while the
-frame reads another row. So is an `else` that reads a decision beside a payload that reads none, which no layer below
-would see: the marker's children are the payload's (*"else 's' reads a decision while the payload reads none, which is not
-supported"*). `ValidateScopeData` refuses a frame in a `when`, a key or a `by`
-(`ValidateNoFrame`: *"a frame selector is not allowed in when, per, by, within or an order key"*).
+no window, no reducer and no frame; its payload and fallback hold no reducer and no other frame. Whether they square,
+multiply or take an `ABS` of decisions is judged after canonicalization (stage 04, `../04_canonicalizer/done.md`
+§3.11): the payload is read at another row than the anchor, so a square there would be a product across rows and an
+`abs` would lower into rows that stand at the anchor. A frame over decisions that a decision multiplies, or squared,
+binds: stage 05 makes it the range of its one position, a helper per position (`RewriteFrameRanges`); a frame over data
+is a coefficient read at another row, as a column is one read at the row. An `else` that reads a decision beside a
+payload that reads none is refused here, which no layer below would see: the marker's children are the payload's
+(*"else 's' reads a decision while the payload reads none, which is not supported"*). `ValidateScopeData` refuses a
+frame in a `when`, a key or a `by` (`ValidateNoFrame`: *"a frame selector is not allowed in when, per, by, within or an
+order key"*).
 
 `DecideBinder::BindDecideFrame` binds the frame onto the aggregate that reads its payload at the selected rows: the
 range's reducer (`sum`, `avg`, `min`, `max` or `count`), else `first`, which reads the one row a point selects. It
@@ -647,9 +546,7 @@ A range's `else` is one of the values its reducer reads, so payload and `else` t
 reducer is bound again over it (`BindFrameAggregate`, the catalog aggregate over a bound payload, a point's `first`
 too): `else 0.5` over a whole payload sums decimals, and the `else` takes the type the bound reducer reads, which its
 overload may widen (`sum` of a FLOAT reads a DOUBLE). The range's reducer name is recorded
-(`DecideFrameSpec::reducer`). A frame is a value of the row to the strict-comparison check
-(`DecideSideIsWholeNumbered`): whole when the type its payload and `else` share is, an AVG range never; and an AVG
-range is no AVG the `<>` hoist multiplies through (`IsBoundAvgAggregate`), so under `<>` it is refused as fractional.
+(`DecideFrameSpec::reducer`).
 
 ## 5. Objective
 
@@ -660,10 +557,12 @@ rewriting: the objective's shape — its additive spine, its reducer scales, its
 constant offset — is decided once by `DecideCanonicalizer::CanonicalizeObjective` on
 the bound tree, alongside constraints.
 
-A body it cannot read is refused in SQL terms, at the body: a body with no decision is *"'3' reads no decision"*, a
-comparison used as a number is *"'x > 1' is a comparison used as a number"*, any other shape that reads a decision
-*"'q' is not supported"*. A decision-free operand below the top is data (§4, Data
-operands).
+The binder judges nothing about an objective's body that the parsed tree alone cannot tell. A comparison, `BETWEEN` or
+conjunction over a decision is a truth value, not a number: *"'x > 1' is a comparison used as a number"*. A window
+function is refused (*"a window function is not allowed in a DECIDE clause"*), and a reducer is bound by the rules of
+§3. Whether the body reads a decision (*"'3' reads no decision"*), in what shape, and whether a decision-free term is a
+constant or a value over the kept rows are judged on the canonical objective, by stage 04 (`../04_canonicalizer/done.md`
+§3.9, §3.11). A decision-free operand below the top is data (§4, Data operands).
 
 ---
 
@@ -681,8 +580,9 @@ the select list is bound before any exists, so an auxiliary never appears in
 ## 7. What this stage does not do
 
 - Move a term across a comparison or flip a relation — stage 04.
-- Judge the algebra: the function and operator vocabulary over a decision, exponents, division by a decision, `CASE`
-  over a decision, degree — the shape check, stage 04 (`../04_canonicalizer/done.md` §3.11).
+- Judge the algebra: whether a clause reads a decision, the function and operator vocabulary over a decision, exponents,
+  division by a decision, `CASE` over a decision, degree, a square or `ABS` in a frame, the integer step of `<`, `>` and
+  `<>` — the shape check, stage 04 (`../04_canonicalizer/done.md` §3.11).
 - Pick a linearization (ABS envelope, MIN/MAX easy vs hard, McCormick) — stage 05.
 - Evaluate anything against data — stage 08.
 

@@ -511,8 +511,8 @@ reason objectives get a boundary instead of their own normalizer.
 | ID | Rule | Shared with |
 |---|---|---|
 | **O0** | A `when` wrapper recurses into child 0 only. | C0, same predicate |
-| **O1** | The body is an additive spine whose every term references a decision. | — |
-| **O2** | A decision-free additive term is folded into `objective_constant_offset`. It shifts the objective without moving `argmax`/`argmin`. One that does not fold to a constant is rejected here. | — |
+| **O1** | The body reads a decision as a whole (the shape check refuses one that reads none, §3.11); a term of the spine may read none. | — |
+| **O2** | A decision-free additive term whose value is known before the query runs is folded into `objective_constant_offset`. It shifts the objective without moving `argmax`/`argmin`. Any other (a column, a data reducer, a subquery) stays a term: it is one value over the kept rows, which the model adds once, and one that differs between kept rows is a second objective (D72), which execution refuses. | — |
 | **O3** | The spine contains only `+`, binary `-`, unary `-`, and binder casts over decision algebra. Data casts are atoms. | C4, verbatim |
 | **O4** | A factor on a decision-bearing reducer is one query-wide value, sits outside the reducer, and has one spelling (in a constraint it may vary by row, which makes the comparison VALUE, §3.10). | C6, same `PeelScale` |
 | **O5** | Structural tags survive rebuilding. The result is a fixed point. | C7 |
@@ -616,26 +616,37 @@ VALUE comparison is stamped `VALUE_REWRITE_TAG`, which the rewrite reads and rem
 `DecideShapeCheck` (`decide_shape_check.cpp`) is the one place the algebra of a clause is judged. It is the
 semantic-analysis pass of a compiler front end: the parser has refused syntax and the binder has refused what only it
 sees (`../02_binder/done.md` §2), and what remains is whether the model has a reading for each term. It runs in
-`Binder::CreatePlan`, right after the constraints' source info is finalized and, for the objective, right after it is
-canonicalized. It reads the one spelling of §3.3b, so a shape has one reading whichever way the user wrote it, and it
-runs only on what the user wrote.
+`Binder::CreatePlan` right after canonicalization, the constraints' after `CanonicalizeTree` and the objective's after
+`CanonicalizeObjective`, and before frame placement, the signatures and `VerifyCanonical`. It reads the one spelling of
+§3.3b, so a shape has one reading whichever way the user wrote it, and it runs only on what the user wrote. A
+comparison the canonicalizer rebuilds (a side swap, a moved term) keeps the location of the one it replaces, so a
+refusal keeps its caret.
 
-It refuses, for each clause as written:
+For each comparison, and for the objective's body under its `when`, it refuses:
+
+1. A clause that reads no decision, as a whole: `'v <= 5' reads no decision`, `'sum(v) + 1 <= 500' reads no decision`,
+   `'abs(v) <= 5' reads no decision`, and for the objective `'1 + 2' reads no decision`, `'sum(v) + 1' reads no
+   decision` (a Binder Error quoting the comparison or the objective body).
+2. Per side, a shape the model has no reading for:
 
 | Refused | Message |
 |---|---|
 | A function over a decision outside the vocabulary (`+`, `-`, `*`, a division by data, a whole-exponent `POWER`, `ABS`, the reducers and DeciDB's markers, each under any name DuckDB registers for it, §3.3c) | `function 'sqrt' over a decision is not supported` |
-| An operator over a decision outside it (`%`, `COALESCE`) | `operator '%' over a decision is not supported` |
+| An operator over a decision outside it (`%`, `COALESCE`, `IS NULL`) | `operator '%' over a decision is not supported` |
 | A `POWER` over a decision whose exponent is not a whole number known before the query runs | `the exponent '0.5' of POWER over a decision is not a constant whole number` |
 | A division by a decision | `division by a decision is not supported` |
 | A `CASE` over a decision (a `CASE` over data is a per-row coefficient, as `COALESCE` over data is) | `CASE over a decision is not supported`. The first word is the user's: `if(c, a, b)` binds as a CASE and is refused as `IF over a decision ...` (`WrittenConditional` reads it off the node's span) |
 | A term of degree above 2 | `a term of degree 3 is not supported` |
+| A square or product of decisions in a frame's payload or `else` (`x * x`, `power(x, 2)`, `x ** 2`): a Binder Error, D80 | `'x * x' squares or multiplies decisions inside a frame, which is not allowed` |
+| An `ABS` over a decision in a frame's payload or `else`, which would lower into rows that stand at the anchor while the frame reads another row | `'abs(x - 3)' inside a frame is not linear in the decisions, which is not supported` |
 
-Every refusal is a Not implemented Error that states what is unsupported and carries the source location of the node, so the
-caret underlines it; the sentence quotes no clause. The degree refusal underlines the smallest product of the highest
-degree. The vocabulary is judged
-before the degree, the constraints before the objective, and a binder refusal comes before all of them: when a query
-has two refusals, the one the pipeline reaches first is reported.
+3. The integer step of `<`, `>` and `<>` (below).
+
+A refusal states what is unsupported and carries the source location of the node, so the caret underlines it. Each is
+a Not implemented Error except the two Binder Errors named. The degree refusal underlines the smallest product of the
+highest degree. A comparison is judged whole before the next, the vocabulary before the degree, the constraints before
+the objective, and a binder refusal comes before all of them: when a query has two refusals, the one the pipeline
+reaches first is reported.
 
 Degree is read by `DecideDegreeOf` (`decide_product_form.cpp`), the one definition: a decision is 1, data is 0, a
 reducer has the degree of what it reduces, `+`, `-` and `ABS` take the largest child, `*` the sum, a whole-exponent
@@ -644,6 +655,36 @@ term not a polynomial. Degree is not an occurrence count: `(x + y) * z` has thre
 
 The check reads and never rewrites. Nothing downstream repeats it: the clauses an optimizer rewrite emits are not
 checked, and term extraction (stage 05) raises an internal error for a decision-bearing term it cannot read.
+
+**The integer step** (`CheckIntegerStep`). `<`, `>` and `<>` are encoded by stepping the bound one integer unit: `< K`
+becomes `<= K-1`, and `<> K` becomes `<= K-1 OR >= K+1`. Both are exact only when the compared side lands on integers.
+For `<` the step cuts feasible points (`SUM(x) = 4.7` satisfies `< 5` but not `<= 4`). For `<>` there is no encoding at
+all: `{v : v != K}` over the reals is an open set, and every MILP feasible region is a finite union of closed
+polyhedra. The canonical form puts the bound on the right (§3.5), so the compared side is the left one and the check
+reads only it; the binder, which sees `5 > SUM(x)` as written, could not. The rule is stated on declared types, not on
+values:
+
+- every decision is `INT` or `BOOL`, and every column, literal and reducer has an integer type or `DECIMAL(p, 0)`.
+  `DOUBLE` and `DECIMAL(p, s>0)` fail whatever the rows hold, because a rule that read values would make a query's
+  validity change when someone inserts a fractional row. A `REAL` decision fails by its declaration.
+- `norm(e, 0, M)` counts nonzeros and is whole whatever `e` is. Only order 0 qualifies: `norm(e, 1)`, `norm(e, 2)` and
+  `norm(e, 'inf')` are as continuous as `e`.
+- `AVG(e) <> K` is whole, since the denominator is hoisted to the right (`SUM(e) <> K*n`). The hoist is specific to
+  `<>`: `AVG(e) < K` keeps its fractional `1/n` coefficients and is refused.
+
+Three things are not refused. The bound `K` is the other side: a fractional `K` is no error, since `<` rounds it and
+`<>` over it is a tautology (no whole number equals 2.5), so the clause is dropped. A decision-free addend moves the
+bound and not the lattice (`x + 1000003.50 < K`), except where the side is not linear in it (under a power, in a
+product of decisions, in a norm of order 1, 2 or `'inf'`, inside a `MIN` or `MAX`), where it counts toward the value
+(`POWER(x + 0.25, 2) < 11` is refused). A multiplier is never an addend, so every factor of a product is checked
+(`0.5 * x`). `POWER(e, n)` with a whole `n` stays on the lattice when `e` does. A frame is a value of its row: whole
+when the type its payload and `else` share is, and an `AVG` range never.
+
+The message names the first fractional leaf in the order the side reads (`'<' compares 'v', which can take fractional
+values`), a norm as written, and points at the comparison. The same test, with every addend counted, decides whether a
+helper decision standing for a reducer is `INTEGER` (`DecideValueIsWholeNumbered`, stage 05), and stage 05 raises this
+message for a helper that can be fractional (`RefuseFractionalStep`), since a data addend that stage 04 moved to the
+bound lies inside the helper's value: `sum(x + 0.5) > 4` solves and `sum(x + 0.5) + x > 4` is refused.
 
 ---
 
@@ -671,9 +712,9 @@ tags.
 
 They throw `InternalException`: past this boundary a non-canonical tree is an
 engine bug, not user input. Unsupported user syntax has already failed earlier,
-through binder/planning validation, or fails right after, in the shape check (§3.11). Non-comparison leaves stay legal
-so the optimizer's `TRUE` placeholders for extracted composed MIN/MAX constraints satisfy
-C0.
+through binder/planning validation, or fails in the shape check (§3.11), which runs before verification.
+Non-comparison leaves stay legal so the optimizer's `TRUE` placeholders for extracted composed MIN/MAX constraints
+satisfy C0.
 
 Verification runs at three points: immediately after user canonicalization, on
 each freshly canonicalized subtree entering `AddConstraint` / `SetObjective`, and

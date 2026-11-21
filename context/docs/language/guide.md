@@ -150,10 +150,11 @@ MINIMIZE max_shortfall
 - **In constraints**: compared against row data (`ship <= max_shortfall`) it makes one row per kept row, all
   referencing the same column. It is one instance under every key (§7.1), so it may stand beside a reducer or be its
   bound under any `per`, and it counts once.
-- **Inside a reducer**: a body of query-wide decisions only (`sum(cap)`, `sum(cap1 + cap2)`) is refused as a
-  constraint's whole decision side. There is one column and nothing to reduce, and the two plausible readings
-  (coefficient 1 or `n`) are different problems, so neither is chosen silently; write `cap`. A body mixing it with row
-  data is ordinary scalar-times-vector: `sum(cost * cap)` is `(Σ cost) · cap`, and `sum(x + cap)` is
+- **Inside a reducer**: a body of query-wide decisions only (`sum(cap)`, `sum(cap1 + cap2)`) is refused wherever the
+  reducer stands: a constraint side, beside another term, under a `by`, in the objective. There is one column and
+  nothing to reduce, and the two plausible readings (coefficient 1 or `n`) are different problems, so neither is
+  chosen silently; write `cap`. A `norm` over such a body and a range frame's reducer are not refused. A body mixing it
+  with row data is ordinary scalar-times-vector: `sum(cost * cap)` is `(Σ cost) · cap`, and `sum(x + cap)` is
   `sum(x) + n · cap`, where `n` is the number of values the reducer reads.
 - **In the objective**: bare (`MINIMIZE max_shortfall`), as an additive term counted once
   (`MINIMIZE max_shortfall - sum(ship)`), or inside a reducer with row data (`sum(cost * cap)`).
@@ -191,13 +192,13 @@ data and unaffected.
 
 - **Operators**: `=`, `<`, `<=`, `>`, `>=`, `<>`, `BETWEEN` (two constraints under one scope), `IN`.
 - **Strict `<`, `>` and `<>` need a whole-numbered side.** `LHS < K` becomes `LHS <= ceil(K) - 1`, and `<>` becomes
-  `LHS <= K - 1 OR LHS >= K + 1`; both are exact only on integers. The rule is checked on **declared types** at bind
-  time: every decision is `INT`/`BOOL` and every column, literal and reducer has an integer type or `DECIMAL(p, 0)`.
-  `DOUBLE` and `DECIMAL(p, s>0)` fail whatever values they hold, so inserting one fractional row can never make a
-  working query illegal. Not refused: the bound itself (rounded; for `<>` a fractional bound excludes nothing and is
-  dropped), a decision-free offset, `POWER(e, n)` with whole `n`, and an L0 count. A fractional multiplier
-  (`SUM(0.5 * x) < 5`) is refused, and so is an offset under anything non-linear (`POWER(x + 0.25, 2) < 11`). The
-  message names the offender and the cast that fixes it.
+  `LHS <= K - 1 OR LHS >= K + 1`; both are exact only on integers. The rule is checked on **declared types**, on the
+  left side once the query is in canonical form (the bound is on the right): every decision is `INT`/`BOOL` and every
+  column, literal and reducer has an integer type or `DECIMAL(p, 0)`. `DOUBLE` and `DECIMAL(p, s>0)` fail whatever
+  values they hold, so inserting one fractional row can never make a working query illegal. Not refused: the bound
+  itself (rounded; for `<>` a fractional bound excludes nothing and is dropped), a decision-free offset, `POWER(e, n)`
+  with whole `n`, and an L0 count. A fractional multiplier (`SUM(0.5 * x) < 5`) is refused, and so is an offset under
+  anything non-linear (`POWER(x + 0.25, 2) < 11`). The message names the fractional operand, a `norm` as written.
 - **`<>`** works per row and on reducers. Its cost depends on where `K` falls in the left side's reachable range:
   interior costs one extra yes/no decision, and on HiGHS needs a finite bound on the left side, written or inferred; a
   range wholly on one side collapses to one plain inequality (`SUM(x) <> 0` over non-negative decisions is
@@ -218,6 +219,8 @@ data and unaffected.
   A comparison that reads a decision, used as a number (`x <= (x > 1)`), is refused: *"'x > 1' is a comparison used as a number"*.
 - **Subqueries**: scalar subqueries, uncorrelated or correlated, may be bounds or factors. A correlated one becomes a
   per-row value and follows the bound rule of §5. A subquery cannot reference the enclosing query's decisions.
+- **Window functions**: a window function is refused wherever it stands in a DECIDE clause, as DuckDB refuses one in
+  `WHERE`; in a `when`, a `by` or a frame's order key it is refused with that position named.
 - **Nested DECIDE**: a scalar bound subquery may hold its own `DECIDE`; it solves first and its one-row result is the
   outer bound. A refusal of the inner query reaches the user as its own message.
 - **Outer queries**: a DECIDE solves one problem, so it cannot read a column of an outer query (a `LATERAL` subquery,
@@ -282,8 +285,16 @@ MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))      -- a nested reducer (
 
 - **Produced once.** No `per` means `per ()`; any other `per` is a parse error.
 - **`when c`** filters the rows for the whole objective; a term that reads no row is dropped (D68).
-- **Body**: reducers (`SUM`, `AVG`, `MIN`, `MAX`, `norm`), decisions outside them, and sums of those, with at least one
-  decision.
+- **Body**: reducers (`SUM`, `AVG`, `MIN`, `MAX`, `norm`), decisions outside them, data terms, and sums of those. The
+  body must read a decision as a whole (*"'sum(v) + 1' reads no decision"*).
+  - A **data term** is a decision-free addend (`MAXIMIZE sum(x) + sum(v)`, `+ (SELECT 100)`, `2 * (sum(x) - sum(v))`).
+    One known before the query runs joins the objective's constant. Any other (a column, a data reducer, a subquery)
+    is added once at its one value over the kept rows; a column that differs between kept rows stops the query
+    (*"'w' takes more than one value over the kept rows (1, 4), so the objective would be produced more than once"*,
+    §7.3). `DIAGNOSE`'s achievable objective includes it.
+  - `ABS` of a reducer expression solves (`MINIMIZE abs(sum(x) - 2)`). A `POWER` of one is refused
+    (*"'power(sum(x) - 3, 2)' multiplies decisions outside a reducer, which is not supported"*), and so is any other
+    function (`sqrt(sum(x))`) or a division by a reducer over decisions (`sum(x) / sum(x)`).
   - A decision outside the reducers is legal when it has one instance over the kept rows, and counts once: any
     `per ()` decision, or a per-row or keyed one when the `when` keeps one row or class (`MAXIMIZE when id = 3: x`).
     Otherwise the objective would be produced more than once, an error (§7.3). Not beside a `MIN` or `MAX`.
@@ -342,8 +353,10 @@ Tests: `test/decide/tests/test_scope_objective.py`. Problem classes and solver s
     `MAX` (§6.4). An `INT` or `REAL` decision as the factor is refused, even a query-wide one (*"'s' is an INT decision, which cannot scale
     a reducer"*): `s * sum(x)` is written `sum(s * x)`, a bilinear term. In the objective `b` must be one instance over the kept rows, as a decision beside a
     reducer must.
-  - A **data-only reducer** may not share a scaled term with a decision (`x * avg(cap)`, `sum(x) / sum(cap)`); compute
-    it as an uncorrelated subquery instead.
+  - A **data-only reducer** is a factor like any other data (`x * avg(cap) <= 8`, `sum(x) / sum(cap) <= 2`), on either
+    side, with a `by`, under `<` and `<>`. In the objective one with no `by` is one value
+    (`MAXIMIZE sum(x) * avg(v)`); one with a `by` varies per row, so it cannot scale a reducer there
+    (*"'avg(v) by (g)' varies per row, which cannot scale a reducer in the objective"*).
 - **Either side may carry the decision.** `5 >= x` and `x <= 5` are one constraint, and a reducer may sit on both
   sides (`SUM(x*v) <= SUM(y*v)`). A query-wide decision may be an additive term (`sum(ship) - max_shortfall <= cap`)
   or the bound; a per-row or keyed decision beside a reducer gives the helper-decision shape (§6.4).
@@ -504,10 +517,10 @@ per t.g: sum(per t.h: max(per t.k: sum(x) by (t.g, t.h, t.k)) by (t.g, t.h)) by 
   a helper hold (*"'q' squares or multiplies decisions inside nested reducers, which is not allowed"*).
 - **A reducer over data alone scaling a decision** inside a reducer over decisions is a value of its path's group, a
   coefficient as any data is: `sum(avg(t.p) * x) <= 25` over p = 10, 30 is `20 (x1 + x2) <= 25`, and `x / max(t.v) by
-  (t.h)` divides by each group's largest value. Outside every reducer over decisions the rule of §5 refuses it
-  (*"'avg(cap)' reduces data, which cannot multiply a decision"*). A factor on a reducer over decisions scales that reducer, not a reducer over data in its operand,
-  which is a term of the operand's own scope: `2 * sum(x - avg(t.v) by (t.h)) by (t.g)` is linear, as `sum(2 * x - 2 *
-  avg(t.v) by (t.h)) by (t.g)` is.
+  (t.h)` divides by each group's largest value. Outside every reducer over decisions it is a factor as §5 gives it. A
+  factor on a reducer over decisions scales that reducer, not a reducer over data in its operand, which is a term of
+  the operand's own scope: `2 * sum(x - avg(t.v) by (t.h)) by (t.g)` is linear, as `sum(2 * x - 2 * avg(t.v) by (t.h))
+  by (t.g)` is.
 
 Tests: `test/decide/tests/test_anr_nested.py` (the fixtures, the deck's example 9 as written among them, a grid of
 nests at depth 2 and 3, the bounds through a nest), `test_scope_objective.py` (the objective).
@@ -648,8 +661,9 @@ per D.depotID: sum(ship) by (D.region) <= D.capacity
 
 ### 6.2 `per K` — how many constraints
 
-- `per K:` makes one constraint per class among the kept rows; no `per` (or `per row:`) one per kept row; `per ():`
-  exactly one.
+- `per K:` makes one constraint per class among the kept rows, and classes the clause reads alike share one; no `per`
+  (or `per row:`) one per kept row, or one per distinct signature when the body reads no per-row decision; `per ():`
+  exactly one (§7.1).
 - **One scope, one constraint**: in `per g: A AND B` only `A` is scoped.
 - Key elements are columns and relations, as in §2.3. Several columns are written without parentheses (`per a, b:`).
 - **A NULL key is no class** (D5): a row whose written `per` column is NULL gets no constraint from the clause. A
@@ -756,9 +770,16 @@ its classes the same way (D71, §5.3).
 - **Where the key fixes every one of them**, each class has one variant and the model is one constraint per class
   (deck p. 39). A value the key's own columns hold (one of them, or a function of them), a decision keyed on them and a
   `by` key inside the key never split a class.
-- **`per row`**, or no `per`, has one row per class, so one instance per kept row.
+- **`per row`**, or no `per`, whose body reads no per-row decision has one instance per distinct signature, as `per ()`
+  has: a query-wide or keyed decision is one value on the rows of its instance. `sum(a*x) + sum(b*x) by (g) <=
+  (SELECT 40)` is one model row per `g`, and `s + u <= t.c` over query-wide `s` and `u` one per distinct `c`. A body
+  that reads a per-row decision keeps one row per kept row.
+- **`per K`** makes one instance per class, and classes whose rows agree on everything the clause reads share it, so
+  the model states each distinct constraint once: `per t.g: s + u <= t.b` over three classes with one `b` is one row.
+  A clause that reads a field its key holds (`per t.g: s + u <= length(t.g)`) or a frame keeps one row per class.
+- **A `per` inside a reducer** keeps one value per class: the values keep their multiplicity, and only a constraint
+  merges.
 - **NULL** is one value of a field. The variant that reads a NULL bound or coefficient skips its instance (§3).
-- **Equal bodies in two classes** stay two instances, two identical model rows.
 - **The objective is produced once** (§4, D72): its one class must hold one variant, else the query stops (§7.3).
 
 ```sql
@@ -776,10 +797,10 @@ per (): sum(ship) <= networkCapacity
 ```
 
 `EXPLAIN ANALYZE` prints, under a clause whose classes held more than one variant, how many instances they made
-(§9): *"↳ per t.g: 2 constraints from 1 class, one per distinct (t.a) within a class"*. A plain `EXPLAIN` reads no data,
-so it cannot count them. Tests: `test/decide/tests/test_scope_variants.py`, `test_anr_variants.py` (the deck's pp.
-26, 27 and 34-36 as written among its fixtures), `test_scope_variant_paths.py` and the scope grid
-(`test_scope_combinations.py`).
+(§9): *"↳ per t.g: 2 constraints from 1 class, one per distinct (t.a) within a class"*. It prints no such line for a
+clause with no `per` whose instances merged. A plain `EXPLAIN` reads no data, so it cannot count them. Tests:
+`test/decide/tests/test_scope_variants.py`, `test_anr_variants.py` (the deck's pp. 26, 27 and 34-36 as written among
+its fixtures), `test_scope_variant_paths.py` and the scope grid (`test_scope_combinations.py`).
 
 ### 7.2 NULL and empty sets
 

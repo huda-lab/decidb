@@ -316,8 +316,8 @@ In execution order:
 | 1 | `RefuseQualifiedDecisionReferences` | Refuses a decision referenced through a relation, `D.x`, in a `when`, a key or a `by` (`../02_binder/done.md` §1). |
 | 2 | `ValidateDecideScopeSpellings` | Where `when`, `per` and `by` may stand (`../02_binder/done.md` §4a). |
 | 3 | `ValidateDecideNoExplicitDecisionCasts` | Rejects a user-written cast over a decision, in `SUCH THAT` and the objective; only the parsed tree shows who wrote a cast (`../04_canonicalizer/done.md` §3.6). |
-| 4 | `ValidateDecideNoDataAggregateFactor` | Rejects a data-only reducer scaling a decision (`x * avg(cap)`, `sum(x) / sum(cap)`), before symbolic normalization could distribute the decision into it. Every other refusal of algebra is the shape check's (`../04_canonicalizer/done.md` §3.11). |
-| 5 | `ValidateDecideNoIntegerStepComparisonOnReal` | Rejects `<`, `>` and `<>` over a `REAL` decision, in the constraints (`../02_binder/done.md` §4). |
+
+Every refusal of algebra is the shape check's (`../04_canonicalizer/done.md` §3.11).
 
 `norm()` and DECIDE-variable `IN (...)` are deliberately not rewritten here.
 The binder retains bound markers, and stage 05 chooses the indicator and linking

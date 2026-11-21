@@ -38,23 +38,22 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   diagnostic labeller. `Get()` ignores the row for them. A query-wide coefficient counts **once per
   model row** when it stands beside a reducer, and over the counted rows when it is inside one: execution keeps the
   first on one row (`CountOnce`) and the model builder sums every row. A reducer whose body is row-invariant is refused
-  in `ClassifyReducerCall` via
-  `IsRowInvariantExpression` (`decide_binder.cpp`). Under DIAGNOSE a query-wide decision has one instance, so an
-  unbounded report carries no escape count. Tests: `test_global_scope.py`, `test_scalar_var_in_aggregate.py`.
+  at every position in `BindAggregate` via `IsRowInvariantExpression` (`decide_binder.cpp`). Under DIAGNOSE a
+  query-wide decision has one instance, so an unbounded report carries no escape count. Tests:
+  `test_global_scope.py`, `test_scalar_var_in_aggregate.py`.
 - **Keyed decisions** resolve as in [scopes.md](scopes.md#binder); `KeyedScopeInfo` (`logical_decide.hpp`) holds the
   key as written, its bindings and types, the relations it reads (`source_table_indices`) and the decisions declared
   on it. Physical index resolution is in `plan_decide.cpp`.
 
 ## Constraints
 
-- **Side does not matter.** `BindComparison` (`decide_constraints_binder.cpp`) classifies both sides and accepts when
-  either holds a decision; the canonicalizer then moves decision terms left and data right. This happens before
-  bounds fold into column boxes, so diagnostics still see the canonical bound.
-- **A bound column is like a subquery.** `IsAllowedDecisionFreeBoundExpression` accepts a plain column exactly as it
-  accepts a scalar subquery; `RewriteRhsAggregates` reduces either per group and does not care where the value came
-  from.
-- **Strict bounds and `<>`.** A `REAL` decision is refused by `ValidateDecideNoIntegerStepComparisonOnReal` on the
-  parsed tree; any other fractional operand by `ValidateDecideIntegralComparisonOperands` on the bound tree. A
+- **Side does not matter.** `BindComparison` (`decide_constraints_binder.cpp`) classifies no side; the canonicalizer
+  moves decision terms left and data right, and the shape check refuses a comparison that holds no decision. This
+  happens before bounds fold into column boxes, so diagnostics still see the canonical bound.
+- **A bound column is like a subquery.** Both read no decision, so both are data; `RewriteRhsAggregates` reduces either
+  per group and does not care where the value came from.
+- **Strict bounds and `<>`.** A `REAL` decision or any other fractional operand is refused by the shape check's
+  integer step (`DecideShapeCheck::CheckIntegerStep`) on the canonical left side. A
   McCormick auxiliary for `BOOL × INT` is declared `INTEGER` (`decide_rewrite_bilinear.cpp`) so the product still
   counts as whole-numbered. The model builder keeps a value check for a coefficient that evaluates fractional
   (`IsEvalConstraintLhsIntegerValued`).

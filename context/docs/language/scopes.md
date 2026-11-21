@@ -52,8 +52,8 @@ the clause the user wrote.
   tagged with its `by` key.
 - A `CASE WHEN` that reads no decision is data wherever it stands, a per-row coefficient as `COALESCE` over data is; a
   `when` condition, a key and a `by` key are SQL over the rows and accept one. A `CASE` over a decision is refused by
-  the shape check after canonicalization, with one message that quotes the clause
-  (`../pipeline/04_canonicalizer/done.md` §3.11).
+  the shape check after canonicalization (*"CASE over a decision is not supported"*,
+  `../pipeline/04_canonicalizer/done.md` §3.11).
 
 ## Canonicalizer — shape and checks
 
@@ -73,8 +73,8 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
 - **VALUE.** The comparison is stamped `VALUE_REWRITE_TAG`. `DecideOptimizer::RewriteScopedReducers`
   (`decide_rewrite_scoped.cpp`) replaces each decision reducer with a helper decision (`__value_<n>__`, reused for a
   repeated occurrence in the same clause) and records it in `LogicalDecide::reducer_value_links`. The helper is
-  `INTEGER` when the reducer's value is whole (`DecideValueIsWholeNumbered`, the same test the binder's strict-bound
-  gate uses), query-wide for `by ()`, otherwise keyed on its own `by` groups among the clause's kept rows. A
+  `INTEGER` when the reducer's value is whole (`DecideValueIsWholeNumbered`, the same test stage 04's integer step
+  uses), query-wide for `by ()`, otherwise keyed on its own `by` groups among the clause's kept rows. A
   `MIN`/`MAX` helper gets the envelope side its rows push it toward, the closing side otherwise, both for `=`, `<>` or
   an unknown sign (`ExtremumPushOf`). Stage 06 (`linearization_reducer_value.cpp`) boxes each helper by its members'
   reach (`DeriveReducerValueBounds`, alternated with the ABS bound derivation to a fixed point) and emits its

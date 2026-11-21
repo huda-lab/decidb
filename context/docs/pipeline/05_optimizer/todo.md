@@ -38,36 +38,9 @@ files.
 - **Change.** A square of a linear expression outside a reducer becomes a quadratic objective term, as `sum(power(x -
   3, 2))` is: a reducer inside it becomes a helper (the value route), and the solver checks judge convexity and the
   installation as for any quadratic objective.
-- **Needs.** BIND-4 (which removes the binder's `power` refusal) and OPT-25.
+- **Needs.** OPT-25.
 - **Done when.** Both examples agree with the oracle on Gurobi and HiGHS (continuous); `./test/decide/run_tests.sh -n
   2 -k "quadratic or objective"` passes.
-
-## OPT-24 — A rewritten clause has one instance per distinct signature
-
-- **Problem.** The value route gives a clause with no `per` one instance per row (`Helpers::ClassKeyOf`,
-  `decide_rewrite_scoped.cpp`; a tree root with no `per`, `decide_tree.cpp`), so identical rows repeat: `sum(a*x) +
-  max(b*x) <= (SELECT 40)` builds 25 rows where 13 hold the same model
-  (`context/opa_rewrite/repro/minmax_two_models.sql`, which labels the 25-row model "value route"), and `sum(a*x) +
-  sum(b*x) by (g) <= 40` builds 12 rows of which 3 are distinct. Under `per ():` the same clause builds the 13-row
-  model.
-- **Change.** A rewritten clause has one instance per distinct signature of what it reads; the duplicate rows go.
-- **Ruling (owner, 2026-11-21).** This replaces the task's first diagnosis, which blamed the composed route.
-- **Ruling (owner, 2026-11-21): one rule in every shape.** The model states each distinct constraint once. Today the
-  aggregate shape merges equal instances (`per t.g: sum(x) + s <= t.b` over three classes with one `b` builds 1 row;
-  guide §6.2, D6) while the tree keeps one per class (`per t.g: s + u <= t.b` builds 3 identical rows, the value route
-  12 for the repro). The tree's roots key their instances by signature alone, not by class and signature, so the row
-  shape merges too. Guide §7.1's "Equal bodies in two classes stay two instances, two identical model rows" becomes
-  one model row, and `test_equal_values_in_two_classes_stay_two_instances` expects 1 model row (its oracle's 2
-  instances stay). A clause that reads a per-row decision differs on every row and keeps its path at no new cost. A
-  DIAGNOSE test whose output changes goes to the owner.
-- **Ruling (provisional, god for the owner, 2026-11-21): `per K` merges on every field.** A `per K` root's signature
-  leaves out the fields its key holds (`KeyHoldsField`: `length(t.g)` under `per t.g`, a `by` key inside the key), so
-  dropping the class from the instance key merged unequal classes (42 failures, wrong answers in `test_anr_nested`). A
-  root's identity across classes reads every field it reads, collected once; the naming list (variants, EXPLAIN
-  ANALYZE) is that list minus the fields the key holds. If that is not a small change, two collected lists will do.
-  Owner to confirm.
-- **Done when.** Both spellings of the repro build the same rows; `./test/decide/run_tests.sh -n 2 -k "minmax or value
-  or scoped"` passes.
 
 ## OPT-25 — MIN/MAX over decisions takes one route
 
@@ -90,12 +63,11 @@ files.
   BETWEEN does) stays a stage-04 rewrite to a per-member clause, which folding takes into the bounds (D41). It is an
   identity applied before routing, not a route: on the helper, `max(b*x) <= 8` over 12 rows costs one variable and 13
   rows where it costs none, and leaves `x` its wider bounds.
-- **Rulings (owner, 2026-11-21).** This design; the hard single term and the flat objective (once OPT-26) are part of
+- **Rulings (owner, 2026-11-21).** This design; the hard single term and the flat objective are part of
   it; `<>` on MIN/MAX is accepted on the helper, with oracle tests; the hard term's widening of the family for repair
   advice is not carried over unless a DIAGNOSE test shows the advice get worse, which goes to the owner.
 - **Benchmark.** Against Gurobi, before and after: `benchmark/decide/queries/q4_minmax_nested.sql`,
   `q9_maximize_max.sql`, and the repro scaled up (`context/opa_rewrite/tools/ab_bench.py` holds no MIN/MAX workload).
-- **Needs.** OPT-24.
 - **Done when.** `grep -rn "composed" src` finds no route; `./test/decide/run_tests.sh -n 2 -k "minmax or max or
   objective"` passes, and with `DECIDB_FORCE_SOLVER=highs`.
 

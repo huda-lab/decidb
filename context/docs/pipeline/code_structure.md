@@ -16,7 +16,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `common/decide_solver_capabilities.hpp` | 07 answers, 03/05/06/08 read | `SolverConstructSupport`, `SolverModelClass`, `DecideModelShape` and `ClassifyDecideModel` (the one classifier of a model's shape), `IsNonconvexProductGroup` — the backend differences upstream stages branch on. In `common/` because stage 07 answers it but four stages above read it |
 | `parser/decide/decide_parsed_markers.hpp` | 01, 02 read | Predicates over the parsed DECIDE markers: `IsDecideMarker`, `IsDecideScopeMarker`, `IsDecideAggregateName`, `IsScopedReducerCall`, `TakesReducerBy`, `UnwrapReducerMarkers`, `ReducerArgumentBody` |
 | `parser/expression/decide_frame_expression.hpp` | 01 | `DecideFrameExpression` — a parsed frame selector, a point or a range (guide §5.6) |
-| `planner/expression_binder/decide/decide_binder.hpp` | 02 | Base decision binder; `ValidateSumArgument`, `ValidateDecideScopeSpellings`, `FindOrCreateKeyScope`, `ValidateDecideNoExplicitDecisionCasts`, `ValidateDecideNoDataAggregateFactor`, the integrality gate and `DecideValueIsWholeNumbered` |
+| `planner/expression_binder/decide/decide_binder.hpp` | 02 | Base decision binder; `BindAggregate`, `ValidateDecideScopeSpellings`, `FindOrCreateKeyScope`, `ValidateDecideNoExplicitDecisionCasts` |
 | `planner/expression_binder/decide/decide_constraints_binder.hpp` | 02 | `SUCH THAT` |
 | `planner/expression_binder/decide/decide_objective_binder.hpp` | 02 | `MAXIMIZE` / `MINIMIZE` |
 | `planner/expression_binder/decide/decide_declarations_binder.hpp` | 02 | `DecideDeclarationsBinder` — the whole DECIDE clause: declarations, scopes, then `SUCH THAT` and the objective |
@@ -69,7 +69,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `planner/operator/decide/logical_decide_diagnose.cpp` | 03 | The DIAGNOSE node: EXPLAIN strings and serialization |
 | `planner/decide/decide_canonicalizer.cpp` | 04 | The one shape boundary |
 | `planner/decide/decide_product_form.cpp` | 04 | `NormalizeProducts` and the readers of the product spelling, `DecideDegreeOf` |
-| `planner/decide/decide_shape_check.cpp` | 04 | `DecideShapeCheck`: vocabulary, exponents, divisors, `CASE` and degree, run once in `plan_select_node.cpp` |
+| `planner/decide/decide_shape_check.cpp` | 04 | `DecideShapeCheck`: reads-a-decision, vocabulary, exponents, divisors, `CASE`, degree, frames and the integer step, run once in `plan_select_node.cpp` |
 | `planner/decide/decide_term_split.cpp` | 04/05 | `DecideTermSplitter` |
 | `planner/decide/decide_reducer_path.cpp` | 04 | The path rule (`DecideReducerPath`, `FindOrCreateDecidePathKey`) |
 | `planner/decide/decide_source_provenance.cpp` | 03 | Source display capture and rendering |
@@ -146,12 +146,10 @@ classDiagram
         +BindOperator()
         +BindConjunction()
         +BindScopedConstraint()
-        +GetExpressionType()
     }
     class DecideObjectiveBinder {
         +BindExpression()
         +BindScopedObjective()
-        +GetExpressionType()
     }
 
     ExpressionBinder <|-- DecideBinder
@@ -159,8 +157,7 @@ classDiagram
     DecideBinder <|-- DecideObjectiveBinder
 ```
 
-`ValidateSumArgument()`, `ValidateDecideScopeSpellings()`,
-`ValidateDecideNoDataAggregateFactor()`, `ValidateDecideNoExplicitDecisionCasts()` and
+`ValidateDecideScopeSpellings()`, `ValidateDecideNoExplicitDecisionCasts()` and
 `FindOrCreateKeyScope()` are free functions declared in `decide_binder.hpp`, not
 methods.
 
@@ -223,8 +220,7 @@ classDiagram
 
 
 ### `src/planner/expression_binder/decide/decide_binder.cpp` — stage 02
-- **`ValidateSumArgument()`** — what only the binder sees in a reducer's argument (a nested reducer over data, a
-  subquery that is not scalar, a truth value over a decision); it judges no algebra.
+- **`DecideBinder::BindAggregate()`** — a reducer's kind, argument count and query-wide body; it judges no algebra.
 - **`ValidateDecideScopeSpellings()`** — where `when`, `per` and `by` may stand.
 - **`FindOrCreateKeyScope()`** — the one key scope per set of key columns.
 - **`ValidateDecideNoExplicitDecisionCasts()`** — the cast authorship boundary.
@@ -243,8 +239,9 @@ classDiagram
 - **`DecideDegreeOf()`** — polynomial degree, not occurrence count: the one definition.
 
 ### `src/planner/decide/decide_shape_check.cpp` — stage 04
-- **`DecideShapeCheck::CheckConstraints()` / `CheckObjective()`** — the algebra of each clause, judged once on the
-  canonical spelling; every refusal quotes the clause as written and carries the term's location.
+- **`DecideShapeCheck::CheckConstraints()` / `CheckObjective()`** — the algebra of each comparison and of the
+  objective's body, judged once on the canonical spelling by `CheckClause()`; every refusal carries the node's
+  location.
 
 ### `src/include/duckdb/planner/decide/decide_constraint_walk.hpp` — stage 04
 Header-only, and the one place that answers "which children of this node are

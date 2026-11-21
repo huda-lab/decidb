@@ -190,7 +190,10 @@ a scan of their own.
   Each slot of a collated key also keeps its own least spelling over the rows its node holds in it
   (`DecideNodeGroups::spellings`), which names a variant's class. A set E keeps one entry per distinct slot, σ,
   carried columns and reads, found by one probe of its entries' `DecideKeyMap`, at least one per variant; its instances
-  are its distinct (slot, σ). It records each row it keeps with the entry standing for it
+  are its distinct (slot, σ). A clause root whose classes agree on everything it reads (`DecideNode::merges_classes`,
+  from `DecideCanonicalizer::MergesClasses`) leaves the slot out of the instance key and keeps it in the entry
+  (`InsertDistinct`, `Merge`): its instances are its distinct σ over every class, and a merged instance is named by its
+  first class. It records each row it keeps with the entry standing for it
   (`DecideNodeContainer::routed`): a pair per kept row, which the objective's root, a grouped or class root and a
   relation-qualified reducer's operand read. A grouped root under `per K:` holds a kept row in no class of K too, in a
   slot of its own (`DecideNodeGroups::in_a_class`), since the row still lies in a group whose row reads it. So does an O
@@ -745,12 +748,17 @@ and every row of a per-row one, splits its group again. Three readers:
   frame's two positions read first and last in its own order, `DecideFrameDifference`) or a decision with two instances,
   in one message (`DecideObjectiveTwiceMessage`).
 - The model emitter (`Classes`) emits a per-row clause under `per K:` (`ONE_ROW_PER_CLASS`) once per variant of each
-  class, at the variant's first row, which stands for the variant's rows: they agree on every field. Where a class holds
-  more than one variant the clause records an EXPLAIN ANALYZE line (`RecordVariants`, printed by `ParamsToString` from
-  `run_time_accounts`, which a plain EXPLAIN never fills) and names each variant for a diagnosis by its class's key
-  values followed by its own field values (`DecideModelEmitter::NameVariants`: a key-values entry of its own, numbered
-  by variant; a collated key column quotes the class's least spelling, D69). Under DIAGNOSE such a variant's row stands
-  for its own class set.
+  class, at the variant's first row, which stands for the variant's rows: they agree on every field. A clause with no
+  `per` (or `per row:`) that reads no per-row decision is read as `per ()` is, once per distinct signature over the kept
+  rows: a query-wide or keyed decision is one value on the rows of its instance, and one that reads a per-row decision
+  keeps a row per kept row. Classes of a `per K:` clause that agree on everything it reads are one variant and one model
+  row; a clause that reads a field its key holds (a column of the key, or a function of one) or a frame keeps a row per
+  class, which costs rows and no answer. Where a class holds more than one variant the clause records an EXPLAIN
+  ANALYZE line (`RecordVariants`, printed by `ParamsToString` from `run_time_accounts`, which a plain EXPLAIN never
+  fills); a clause with no `per` has no binder signature and records none. The emitter names each variant for a
+  diagnosis by its class's key values followed by its own field values (`DecideModelEmitter::NameVariants`: a
+  key-values entry of its own, numbered by variant; a collated key column quotes the class's least spelling, D69).
+  Under DIAGNOSE such a variant's row stands for its own class set.
 - A reducer's variant scope (`KeyedScopeInfo::signature`) takes the signature's numbering
   over the rows the reducer reads, so its operand holds one entry per variant of each class
   (below).

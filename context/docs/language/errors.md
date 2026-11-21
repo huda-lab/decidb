@@ -70,28 +70,21 @@ keeps ([guide.md §5.5](guide.md#55-reducers-inside-reducers--the-path-rule)).
 |---|---|---|---|
 | `OR` between constraints | NI | `OR between SUCH THAT constraints is not supported` | the `OR` |
 | A comparison, `BETWEEN` or conjunction that reads a decision, used as a number (`x <= (x > 1)`, a `CASE WHEN x > 1`) | Binder | `'q' is a comparison used as a number` | the inner comparison |
-| A side or term of a shape the binder does not read (a `NOT`, an `IS NULL`, a `CASE`) that reads a decision | NI | `'q' is not supported` | the side |
-| The same shape reading no decision | Binder | `'q' reads no decision` | the side |
-| A constraint that is not a comparison (`SUCH THAT x`) | Binder | `'q' is not a comparison` | the term |
-| A column that is not a decision where one must stand | Binder | `'c' is not a decision` | the column |
-| A side that is neither data nor a reducer (a subquery that is not a value) | Binder | `'q' is not data or a reducer` | that side |
+| A constraint that is none of the comparisons (`x IS NULL`, `x LIKE 'a'`, `x + 1`) | NI | `'x IS NULL' is not supported` | the constraint |
+| A bare decision as a constraint (`SUCH THAT x`) | Binder | `'q' is not a comparison` | the term |
 | `IN` on a reducer | NI | `IN on 'q' is not supported` | the `IN` |
 | An `IN` list that reads a decision | Binder | `an IN list reads a decision` | the `IN` |
-| A comparison whose reducers, under arithmetic, read no decision (`SUM(t.v) + 1 <= 500`), or an objective term with none | Binder | `'q' reads no decision` | the side, or the objective term |
-| A function in the objective that is not `+`, `-`, `*` or `/` by data, over a reducer (`sqrt(sum(x))`, `sum(x) / sum(x)`) | NI | `'sqrt' over a reducer is not supported in the objective` | the call |
-| A function a constraint side or the objective does not read, over no reducer | NI | `function 'f' is not supported here` | the call |
 | A reducer that is not `SUM`, `AVG`, `MIN`, `MAX`, `norm` or `COUNT`, or one with `FILTER` | NI | `'q' is not supported in a DECIDE clause` | the aggregate |
 | `COUNT` over a decision | NI | `COUNT over a decision is not supported` | the call |
-| A reducer or `norm` with the wrong number of arguments | Binder | `'sum()' has 0 arguments` (`1 argument`) | the call |
+| A reducer or `norm` with the wrong number of arguments, at any position (`x <= max(v, 2)`: DuckDB's two-argument `MAX` is not a reducer) | Binder | `'sum()' has 0 arguments` (`1 argument`; `'max(v, 2)' has 2 arguments`) | the call |
+| A window function anywhere in a clause | Binder | `a window function is not allowed in a DECIDE clause` | the window call |
 | A `norm` whose order is not a constant | Binder | `the order of 'q' is not a constant` | the order |
 | A `norm` order other than 0, 1, 2 or `'inf'` | NI | `norm order '3' is not supported` | the order |
 | A bound on a `norm` that is not of order 0, or one that is not a positive constant | Binder | `only norm order 0 takes a bound` · `the bound of 'q' is not a positive constant` | the argument |
 | A subquery in a clause that is not scalar, or that reads a decision | Binder | `a subquery in a DECIDE clause is not scalar` · `a subquery in a DECIDE clause reads a decision` | the subquery |
-| A reducer over query-wide decisions only | Binder | `'cap' is a query-wide decision, so 'sum(cap)' has no rows to reduce` | the reducer |
-| A data-only reducer scaling a decision (`x * avg(cap)`, `sum(x) / sum(cap)`) | Binder | `'avg(cap)' reduces data, which cannot multiply a decision` (`divide`, `be divided together with`) | the reducer |
+| A reducer over query-wide decisions only, wherever it stands (a side, beside another term, under a `by`, in the objective); a `norm` and a range frame's reducer are not refused | Binder | `'cap' is a query-wide decision, so 'sum(cap)' has no rows to reduce` | the reducer |
 | A cast over a decision | Binder | `'x::DOUBLE' casts a decision` | the cast |
 | A NULL beside a decision | Binder | `'x + NULL' is NULL whatever the decisions are` | the expression |
-| `<`, `>` or `<>` on a side that can take fractional values | NI | `'<' compares 'q', which can take fractional values` | the comparison |
 | A decision whose name is a column's or another decision's | Binder | `decision 'x' has the name of a column` · `decision 'x' is declared twice` | the declaration |
 | A name DECIDE reserves | Binder | `'q' is not allowed as a name in DECIDE` | the name |
 
@@ -120,8 +113,6 @@ keeps ([guide.md §5.5](guide.md#55-reducers-inside-reducers--the-path-rule)).
 |---|---|---|---|
 | **D80** A frame in a `when`, a `per`, a `by`, a `within` or an order key | Binder | `a frame selector is not allowed in when, per, by, within or an order key` | the frame |
 | **D80** A reducer or a frame inside a frame's payload or fallback | Binder | `a reducer inside 'q' is not allowed` · `a frame selector inside 'q' is not allowed` | the inner node |
-| **D80** A square or product of decisions in a frame's payload | Binder | `'x * x' squares or multiplies decisions inside a frame, which is not allowed` | the inner node |
-| A frame's payload not linear in the decisions (`abs`, a decision divisor) | NI | `'abs(x - 3)' inside a frame is not linear in the decisions, which is not supported` | the node |
 | A frame's `else` that reads a decision while its payload reads none | NI | `else 'x' reads a decision while the payload reads none, which is not supported` | the `else` value |
 | A frame's `else` that is not a number | Binder | `else ''a'' is not a number` | the `else` value |
 | A range's `else` over a collated payload, whose `min` or `max` compares text under the collation | Binder | `else '0' stands in a collated text payload` | the `else` value |
@@ -144,19 +135,21 @@ where the message names a clause or a node the user wrote.
 | Situation | Kind | Message | Caret at |
 |---|---|---|---|
 | An `INT` or `REAL` decision as a factor on a reducer, or a `BOOL` one on a reducer inside another expression | Binder | `'s' is an INT decision, which cannot scale a reducer` (`a REAL`, `a BOOL`; `divide`; `a reducer inside another expression`; a compound factor reads `'b - c' reads a decision, which cannot scale a reducer`) | the factor |
-| A row-varying factor on a reducer in the objective | Binder | `'weight' varies per row, which cannot scale a reducer in the objective` | the factor |
+| A row-varying factor on a reducer in the objective (a column, or a data reducer with a `by`) | Binder | `'weight' varies per row, which cannot scale a reducer in the objective` (`'avg(v) by (g)' varies per row, …`) | the factor |
 | A bound that is NULL | Binder | `the bound 'q' is NULL` | the bound |
-| A comparison whose reducers read no decision, found after rewriting | Binder | `'q' reads no decision` | the term |
+| A comparison that reads no decision (`v <= 5`, `SUM(t.v) + 1 <= 500`, `abs(v) <= 5`), or an objective whose body reads none (`1 + 2`, `sum(v) + 1`) | Binder | `'v <= 5' reads no decision` | the comparison, or the objective body |
 | `AVG` under `<>` beside another term, or with its own `when` or `per` | NI | `AVG in a <> constraint beside another term, or with its own when or per, is not supported` | the comparison |
 | `<>` over a square or product of decisions not linearized first (a product with a `BOOL` is) | NI | `<> over a product or a power of decisions is not supported` | the comparison |
 | `<>` on a `MIN` or `MAX` | NI | `<> on MIN or MAX is not supported` | the comparison |
 | A term beside a `MIN` or `MAX` in a shape the rewrite does not read, or a comparison operator on a composed `MIN` or `MAX` | NI | `'q' beside MIN or MAX is not supported` · `'<>' on a composed MIN or MAX is not supported` | the term, the comparison |
 | **D80** A square or product of decisions inside nested reducers that no body definition names | Binder | `'q' squares or multiplies decisions inside nested reducers, which is not allowed` | the reducer |
 | A square, or a product of two decisions, outside a reducer in the objective, unless the two are distinct query-wide decisions or one is `BOOL` | NI | `'x * y' multiplies decisions outside a reducer, which is not supported` | the product |
-| `<`, `>` or `<>` on a helper whose value can be fractional | NI | `'>' compares 'sum(ship + 0.5) by (D.region)', which can take fractional values` | the comparison |
+| **D80** A square or product of decisions in a frame's payload or `else` (`x * x`, `power(x, 2)`, `x ** 2`) | Binder | `'x * x' squares or multiplies decisions inside a frame, which is not allowed` | the inner node |
+| A frame's payload with an `ABS` over a decision | NI | `'abs(x - 3)' inside a frame is not linear in the decisions, which is not supported` | the node |
+| `<`, `>` or `<>` on a side that can take fractional values: a `REAL` decision, a fractional coefficient (`SUM(x * v)` over a `DOUBLE` `v`), an offset under a non-linear term, or a helper standing for a reducer | NI | `'<' compares 'x', which can take fractional values` (`'>' compares 'sum(ship + 0.5) by (D.region)', …`) | the comparison |
 | A `CASE`, `if` or `iif` over a decision (a `CASE` over data is a per-row coefficient) | NI | `CASE over a decision is not supported` (`IF`, `IIF` as written) | the conditional |
 | A function over a decision outside `+`, `-`, `*`, `/` by data, `POWER`, `ABS` and the reducers (`sqrt`, `exp`, `floor`) | NI | `function 'sqrt' over a decision is not supported` | the call |
-| An operator over a decision outside that vocabulary (`%`, `COALESCE`) | NI | `operator '%' over a decision is not supported` | the operator |
+| An operator over a decision outside that vocabulary (`%`, `COALESCE`, `IS NULL`) | NI | `operator '%' over a decision is not supported` | the operator |
 | `POWER(e, n)` over a decision with `n` not a whole number known before the query runs | NI | `the exponent '0.5' of POWER over a decision is not a constant whole number` | the `POWER` |
 | Division by a decision | NI | `division by a decision is not supported` | the `/` |
 | A term of degree above 2 (three decisions in one product, `POWER(x, 3)`) | NI | `a term of degree 3 is not supported` | the term |
@@ -271,9 +264,9 @@ clause: `the constraint computes a number too large for a DOUBLE`, `the objectiv
 **Ruling (owner, 2026-11-19).** A constraint that is none of the comparisons the rows above name is `'q' is not
 supported` (Not implemented Error) at its node.
 
-**Ruling (owner, 2026-11-19).** A side of a shape no row names splits by what it reads: a side that reads a decision is
-`'q' is not supported` (Not implemented Error) and one that reads none is `'q' reads no decision` (Binder Error). A
-`CASE WHEN c > 1 THEN x ELSE 0 END` compared with a bound reads a decision, so it is the first.
+**Ruling (owner, 2026-11-19).** A comparison that reads no decision is `'q' reads no decision` (Binder Error), quoting
+the whole comparison. A side that reads a decision in a shape the model does not take is named by its own row of §3: a
+`CASE WHEN c > 1 THEN x ELSE 0 END` compared with a bound is `CASE over a decision is not supported`.
 
 **Ruling (owner, 2026-11-19).** `else ''a'' is not a number` keeps the doubled quote: the fallback text carries its own
 quotes and the sentence adds its own.

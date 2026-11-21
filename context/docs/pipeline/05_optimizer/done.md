@@ -732,7 +732,7 @@ side (`CollectReducerSites`; a data-only reducer is a number and stays) the pass
 
 1. allocates a **helper decision** `__value_<n>__` through `AddAuxiliaryDecision`. It is
    INTEGER when the reducer's value is whole by declared types, every constant inside
-   counted (`DecideValueIsWholeNumbered`, shared with stage 02), so a strict bound on the
+   counted (`DecideValueIsWholeNumbered`, shared with stage 04's integer step), so a strict bound on the
    rewritten row still steps on the lattice; else DOUBLE. It is keyed by a scope of its
    own (`KeyedScopeInfo::value_link`), whose classes are the groups of its path key among
    the rows its path keeps, built by stage 08: a path key `by ()` throughout is one class,
@@ -745,7 +745,9 @@ side (`CollectReducerSites`; a data-only reducer is a number and stays) the pass
 3. replaces the reducer node by a reference to the helper, in place, as `RewriteAbs` does.
 
 The comparison then holds no decision reducer and the tag is removed: it is one row per
-kept row, or per class under `per K:`. Stage 06 states each helper's definition per group,
+kept row, or per class under `per K:`, and instances that read the same values are one row (a clause with no `per` that
+reads no per-row decision has one instance per distinct signature, `per K` classes that agree on everything the clause
+reads share one; `../08_execution/done.md` §4a). Stage 06 states each helper's definition per group,
 a row for SUM/AVG and an extremum link for MIN/MAX
 ([`../06_model_formulation/done.md`](../06_model_formulation/done.md), "Helper decisions of
 the value rewrite"). Deck example 1 costs N rows and one helper, rather than N rows of N
@@ -753,10 +755,11 @@ terms. The user-facing account of the three shapes is
 [`../../language/guide.md`](../../language/guide.md) §6.4.
 
 A strict `<`, `>` or a `<>` steps onto the whole numbers, which is exact for the rewritten
-row only when the helper is whole, so over a helper that can be fractional it is refused
-here, with the binder's message (*"'>' compares 'sum(ship + 0.5)', which can take fractional values"*). The aggregate shape accepts the same
-reducer, because there its constant moves to the bound when the reducer is summed in place
-(`sum(x + 0.5) > 4` is `sum(x) > 4 - 0.5 * n`).
+row only when the helper is whole. Stage 04 judges the step on the comparison as written, where a data addend inside a
+`SUM` moves to the bound when the reducer is summed in place (`sum(x + 0.5) > 4` is `sum(x) > 4 - 0.5 * n`) and passes.
+A helper holds the whole value, so over one that can be fractional the step is refused here (`RefuseFractionalStep`),
+with stage 04's message (*"'>' compares 'sum(x + 0.5)', which can take fractional values"*): `sum(x + 0.5) + x > 4` is
+refused and `sum(x + 0.5) > 4` is not.
 
 **Nested reducers** (guide §5.5, D79-D81). The reducers inside a reducer's argument are
 replaced first, each by a helper keyed by its path (`DecideReducerPath`,
@@ -1058,7 +1061,7 @@ candidates (2^52 for BIGINT, the INTEGER maximum for INTEGER) the rounded quotie
 answer. No copy of DuckDB's DECIMAL or DOUBLE rules is written, so none can drift from it.
 The coefficient's sign picks the side: `-x <= 2` bounds below. A zero coefficient admits
 every value or none, as `0 <op> r` evaluates. A strict `x < 10` on a whole-numbered
-decision admits 9, by the same check; the binder refuses a strict comparison on a REAL.
+decision admits 9, by the same check; stage 04 refuses a strict comparison on a REAL.
 
 A bound folds when its coefficient and right side fold to numbers at plan time. A side
 that is data (a column, a subquery, a column factor) is a data bound: the linear form

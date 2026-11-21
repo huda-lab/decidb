@@ -336,15 +336,13 @@ backend does the same for its COO arrays.
 `'>'` and `'<'` mean `>=` and `<=` — standard ILP convention. Strict inequalities
 are converted by adjusting the RHS (`DecideStrictBound`), which is exact for an
 integer-valued left side and not for a continuous one. The builder checks nothing here:
-the whole integer-step refusal is stated on declared types at stage 02, by
-`ValidateDecideNoIntegerStepComparisonOnReal` for the decision and
-`ValidateDecideIntegralComparisonOperands` for every other operand, so only an
+the whole integer-step refusal is stated on declared types in stage 04's shape check (`CheckIntegerStep`), so only an
 integer-valued left side reaches a strict comparison.
 
-Whether a coefficient may be fractional is a *type* judgement made at bind time, not a
+Whether a coefficient may be fractional is a *type* judgement made at plan time, not a
 value check here: reading values would make a query's **validity** depend on the table's
 contents, so inserting one fractional row could make a working query illegal. See
-`../02_binder/done.md` §4 for the rule and what it costs.
+`../04_canonicalizer/done.md` §3.11 for the rule and what it costs.
 
 A strict `<` / `>` over a REAL variable is also deliberately not folded into
 column bounds upstream (stage 05), for the same reason the step is unsafe.
@@ -708,7 +706,7 @@ plan prints it, so a repair names `max(x * c)` rather than an internal column.
 A strict bound steps on that row, as `ApplyComparisonSense` does for any other: `z > K`
 is `z >= floor(K) + 1`, `z < K` is `z <= ceil(K) - 1`. That is exact because the binder
 refused any member that can be fractional, a constant inside the extremum included
-(`ValidateDecideIntegralComparisonOperands`, stage 02 §4). The row keeps the written bound
+(`CheckIntegerStep`, stage 04 §3.11). The row keeps the written bound
 (`RawConstraint::strict`, `typed_k`), so a diagnosis quotes `> K`. A negative factor
 arrives inside the extremum (stage 05), so the row's relation is the clause's own.
 
@@ -921,7 +919,7 @@ Two guards run before anything is emitted:
 
 - **The left side is linear and integer-valued.** The ±1 band is exact only on the integer
   lattice; on a continuous quantity it would cut the feasible points in `(K-1, K+1)`. The
-  stage 02 type gate admits only an integer-valued left side, so the builder does not
+  stage 04 integer-step check admits only an integer-valued left side, so the builder does not
   check it. A product or a power of decisions on the left raises an `InternalException`:
   stage 05 refuses it.
 - **`NEIsIntegerValuedRhs`** *drops* a comparison whose bound no integer can equal,
