@@ -322,8 +322,6 @@ struct EvaluatedConstraint {
 	//! pair by it.
 	idx_t abs_aux_idx = DConstants::INVALID_INDEX;
 
-	//! The terms of degree 2. A constraint with any is built as a quadratic row, every group added to its Q.
-	vector<EvaluatedProductGroup> product_groups;
 	ConstraintKind kind = ConstraintKind::USER_PARAMETER;
 
 	//! The clause identity retained when one cast comparison expands to multiple boundary rows, the DROP group every
@@ -397,6 +395,14 @@ struct NotEqualClause {
 	//! integer-step guard), we keep LHS as SUM and multiply the per-group RHS by group size
 	//! inside the deferred NE expansion.
 	bool avg_rhs_scale = false;
+};
+
+//! A clause with terms of degree 2: the row, which holds its linear terms, and the product groups, every one added to
+//! the Q of the quadratic row the model builder states. Its list is a block of its own in the model
+//! (`SolverModel::quadratic_constraints`), as a backend states quadratic rows apart from linear ones.
+struct QuadraticClause {
+	EvaluatedConstraint row;
+	vector<EvaluatedProductGroup> products;
 };
 
 //! Sum decision-free LHS terms over a row range: the fixed part of the row a clause emits for those rows. `written`
@@ -679,6 +685,8 @@ struct SolverInput {
 	//! The `<>` clauses (`SUM(x) <> 0`), until `LinearizeNotEqual` consumes them. The disjunction binary of each is
 	//! labelled by quoting its source clause, so the diagnostics and model inspection can name it.
 	vector<NotEqualClause> not_equals;
+	//! The clauses with terms of degree 2, in the order of their clauses.
+	vector<QuadraticClause> quadratics;
 	//! Every clause row of the model, whichever list holds it: what a pass reads that asks of a row only what the row
 	//! says (its bound, its terms), not how it is built.
 	template <class F>
@@ -687,6 +695,9 @@ struct SolverInput {
 			visit(row);
 		}
 		for (auto &clause : not_equals) {
+			visit(clause.row);
+		}
+		for (auto &clause : quadratics) {
 			visit(clause.row);
 		}
 	}

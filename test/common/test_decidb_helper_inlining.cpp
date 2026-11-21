@@ -223,9 +223,7 @@ TEST_CASE("DeciDB helper inlining", "[decidb][formulation][inlining]") {
 		     }},
 		    {"a product in a row", 2,
 		     [&](SolverInput &input) {
-			     auto ec = row_over(0);
-			     ec.product_groups.push_back(ProductOf({0}, {1}));
-			     input.constraints.push_back(std::move(ec));
+			     input.quadratics.push_back({row_over(0), {ProductOf({0}, {1})}});
 		     }},
 		    {"a square in the objective", 2,
 		     [](SolverInput &input) {

@@ -883,8 +883,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 	{
 		idx_t est_rows = input.global_constraints.size();
 		for (auto &ec : input.constraints) {
-			if (!ec.product_groups.empty())
-				continue;
 			if (ec.lhs_is_aggregate) {
 				bool ec_has_groups = !ec.row_group_ids.empty();
 				est_rows += ec_has_groups ? std::max<idx_t>(ec.num_groups, 1) : 1;
@@ -916,11 +914,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
 	phase.Next("model.clause_rows");
 	for (auto &eval_const : input.constraints) {
-		// Skip constraints with product groups — handled in quadratic section below
-		if (!eval_const.product_groups.empty()) {
-			continue;
-		}
-
 		bool is_aggregate = eval_const.lhs_is_aggregate;
 		bool has_groups = !eval_const.row_group_ids.empty();
 		const auto written = DecideWrittenClause(input, eval_const.origin.source_clause_id);
@@ -1076,16 +1069,16 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		}
 	}
 
-	// Build quadratic constraints from product groups. These constraints were skipped in
-	// the linear loop above. A single QuadraticConstraint holds linear terms and every
+	// Build quadratic constraints from product groups. A single QuadraticConstraint holds linear terms and every
 	// group's Q entries, all accumulated together.
 
 	// Helper: build QuadraticConstraint from one set of rows (aggregate or per-row).
 	// lhs_constant: out, the constant part of the LHS folded into the bound (the linear
 	// path's `lhs_offset`), for the stamp call. written: the clause, for a sum past a DOUBLE.
-	auto BuildQuadraticConstraint = [&](const EvaluatedConstraint &ec, const vector<idx_t> &row_set, double rhs,
+	auto BuildQuadraticConstraint = [&](const QuadraticClause &clause, const vector<idx_t> &row_set, double rhs,
 	                                    double &lhs_constant,
 	                                    const DecideClauseRef &written) -> SolverModel::QuadraticConstraint {
+		const auto &ec = clause.row;
 		SolverModel::QuadraticConstraint qc;
 		std::unordered_map<int, double> linear_accum;
 		std::unordered_map<uint64_t, double> q_accum;
@@ -1110,7 +1103,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		// Product groups: each adds its rank-one update to Q, its cross terms to the linear part,
 		// and its constant to the RHS (AddProductGroupRow). GRBaddqconstr reads x^T Q x with no
 		// 1/2 factor, which is the monomial convention Q is held in.
-		for (auto &group : ec.product_groups) {
+		for (auto &group : clause.products) {
 			for (idx_t row : row_set) {
 				AddProductGroupRow(
 				    group, row, indexer, q_accum,
@@ -1166,11 +1159,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 	};
 
 	phase.Next("model.quadratic_constraints");
-	for (auto &eval_const : input.constraints) {
-		if (eval_const.product_groups.empty()) {
-			continue; // Already handled as linear above
-		}
-
+	for (auto &quadratic : input.quadratics) {
+		auto &eval_const = quadratic.row;
 		bool is_aggregate = eval_const.lhs_is_aggregate;
 		bool has_groups = !eval_const.row_group_ids.empty();
 		const auto written = DecideWrittenClause(input, eval_const.origin.source_clause_id);
@@ -1188,7 +1178,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 				vector<idx_t> all_rows(num_rows);
 				std::iota(all_rows.begin(), all_rows.end(), 0);
 				double lhs_constant;
-				auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_constant, written);
+				auto qc = BuildQuadraticConstraint(quadratic, all_rows, rhs, lhs_constant, written);
 				// F2 site 4: quadratic aggregate, ungrouped.
 				StampConstraintProvenance(input, qc.provenance, eval_const, DConstants::INVALID_INDEX, lhs_constant);
 				model.quadratic_constraints.push_back(std::move(qc));
@@ -1207,7 +1197,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 					// is the wrong row to read once the RHS varies by group.
 					double group_rhs = eval_const.rhs_values.Get(flat_rows[g_begin]);
 					double lhs_constant;
-					auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, group_rhs, lhs_constant, written);
+					auto qc = BuildQuadraticConstraint(quadratic, group_rows_slice, group_rhs, lhs_constant, written);
 					// F2 site 5: grouped quadratic aggregate.
 					StampConstraintProvenance(input, qc.provenance, eval_const, g, lhs_constant);
 					model.quadratic_constraints.push_back(std::move(qc));
@@ -1222,7 +1212,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 				vector<idx_t> single_row {row};
 				double rhs = eval_const.rhs_values.Get(row);
 				double lhs_constant;
-				auto qc = BuildQuadraticConstraint(eval_const, single_row, rhs, lhs_constant, written);
+				auto qc = BuildQuadraticConstraint(quadratic, single_row, rhs, lhs_constant, written);
 				// F2 site 6: quadratic per-row.
 				idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
 				StampConstraintProvenance(input, qc.provenance, eval_const, row_group_key, lhs_constant, row);

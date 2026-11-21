@@ -23,6 +23,8 @@ struct EmittedClause {
 	vector<bool> no_exclusion;
 	//! A `<>` whose AVG scales its bound (NotEqualClause::avg_rhs_scale).
 	bool avg_rhs_scale = false;
+	//! The terms of degree 2 (QuadraticClause::products).
+	vector<EvaluatedProductGroup> products;
 };
 
 //! The variants of a signature over the rows a node holds (language/guide.md §7.1, D70), numbered by value, and the
@@ -143,7 +145,8 @@ private:
 	//! each class among them (Classes).
 	EmittedClause Rows(idx_t root, bool counted);
 	//! Puts an evaluated clause in the list of its kind: a folded bound's among the repair model's rows, a `<>` in
-	//! `evaluated_not_equals`, any other in `evaluated_constraints`.
+	//! `evaluated_not_equals`, one with terms of degree 2 in `evaluated_quadratics`, any other in
+	//! `evaluated_constraints`.
 	void Route(EmittedClause &&clause, bool folded);
 	//! One of an ABS F node's two envelope rows, evaluated by the existing row evaluator, which supplies the scoped
 	//! instances, into the node's record (DecideGlobalSinkState::evaluated_abs_links).
@@ -207,12 +210,11 @@ private:
 	//! kept rows grouped as GroupRowsByShape groups them, or one per member of an easy MIN or MAX; its instances
 	//! `counted` unless it is a folded bound's, which only a repair model emits.
 	EmittedClause Groups(idx_t root, bool counted);
-	//! A clause's product groups (EvaluatedConstraint::product_groups), once its rows are grouped: each group's weight
+	//! A clause's product groups (EmittedClause::products), once its rows are grouped: each group's weight
 	//! and its forms' coefficients on the rows its site's members stand for, its weight 0 on every other row and
 	//! divided by its AVG's count (`filters`: the terms', then the groups'); a NULL coefficient or a form's decision
 	//! with no instance leaves an instance no value (`null_rows`).
-	void Polynomial(idx_t root, const vector<TermFilterState> &filters, vector<bool> &null_rows,
-	                EvaluatedConstraint &evaluated);
+	void Polynomial(idx_t root, const vector<TermFilterState> &filters, vector<bool> &null_rows, EmittedClause &result);
 	//! A group's weight or one of its form terms at its site `site`, its column on each row its site's members stand
 	//! for, a relation-qualified one's first of each class, which it is computed on once the repeats are left out
 	//! (language/guide.md §5.1): a NULL coefficient there, or the decision of `term` (none for a weight) with no

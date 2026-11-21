@@ -602,6 +602,8 @@ void DecideModelEmitter::Route(EmittedClause &&clause, bool folded) {
 	} else if (clause.row.comparison_type == ExpressionType::COMPARE_NOTEQUAL) {
 		gstate.evaluated_not_equals.push_back(
 		    {std::move(clause.row), std::move(clause.no_exclusion), clause.avg_rhs_scale});
+	} else if (!clause.products.empty()) {
+		gstate.evaluated_quadratics.push_back({std::move(clause.row), std::move(clause.products)});
 	} else {
 		gstate.evaluated_constraints.push_back(std::move(clause.row));
 	}
@@ -633,7 +635,9 @@ void DecideModelEmitter::AbsEnvelope(idx_t function, idx_t root, bool counted) {
 	}
 	// An envelope row holds no aggregate (stage 05 gives every reducer a function reads a helper decision) and is
 	// built fresh, never the easy half of a MIN/MAX: it is one row per routed instance of the F edge's scope.
-	(clause.abs_is_pos_bound ? link->operand : link->negated) = Rows(root, counted).row;
+	auto envelope = Rows(root, counted);
+	D_ASSERT(envelope.products.empty());
+	(clause.abs_is_pos_bound ? link->operand : link->negated) = std::move(envelope.row);
 }
 
 EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {
@@ -701,7 +705,7 @@ EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {
 		Admit(body, evaluated);
 	}
 	// Its product groups, which no reducer filters.
-	Polynomial(root, vector<TermFilterState>(Parts(clause)), null_rows, evaluated);
+	Polynomial(root, vector<TermFilterState>(Parts(clause)), null_rows, result);
 	DecideAbsence::SkipNullInstances(null_rows, false, num_rows, evaluated.row_group_ids, evaluated.num_groups);
 	if (counted) {
 		gstate.CountInstances(evaluated.origin.source_clause_id, instances,
@@ -1185,7 +1189,7 @@ EmittedClause DecideModelEmitter::Groups(idx_t root, bool counted) {
 	}
 	result.avg_rhs_scale = HoistAvgIntoNotEqualBound(clause, filters);
 	ScaleAvgTerms(clause, filters, num_rows, evaluated);
-	Polynomial(root, filters, null_rows, evaluated);
+	Polynomial(root, filters, null_rows, result);
 	if (!bound_null.empty()) {
 		// Taken once every rule that drops an instance has run but the next, which reads `null_rows`.
 		TakeTightestFrameBound(evaluated.comparison_type, RenderDecideSource(*clause.rhs_expr, names),
@@ -1308,9 +1312,10 @@ void DecideModelEmitter::ReadPart(const DecideTermSite &site, idx_t qualifier_sc
 }
 
 void DecideModelEmitter::Polynomial(idx_t root, const vector<TermFilterState> &filters, vector<bool> &null_rows,
-                                    EvaluatedConstraint &evaluated) {
+                                    EmittedClause &result) {
 	auto &body = tree.nodes[root]->compiled;
 	auto &clause = *body.clause;
+	auto &evaluated = result.row;
 	for (idx_t g = 0; g < clause.product_groups.size(); g++) {
 		auto &group = clause.product_groups[g];
 		auto &sites = body.groups[g];
@@ -1336,7 +1341,7 @@ void DecideModelEmitter::Polynomial(idx_t root, const vector<TermFilterState> &f
 			ScaleAvgRows(out.weight, filter.has_filter, filter.mask, num_rows, evaluated.row_group_ids,
 			             evaluated.num_groups);
 		}
-		evaluated.product_groups.push_back(std::move(out));
+		result.products.push_back(std::move(out));
 	}
 }
 

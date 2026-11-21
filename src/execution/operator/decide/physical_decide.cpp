@@ -879,6 +879,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// hand the constraints and the formulation links over before the first pass.
 	solver_input.constraints = std::move(gstate.evaluated_constraints);
 	solver_input.not_equals = std::move(gstate.evaluated_not_equals);
+	solver_input.quadratics = std::move(gstate.evaluated_quadratics);
 	solver_input.class_sets = std::move(gstate.class_sets);
 	solver_input.key_values = std::move(key_values);
 	solver_input.bilinear_links = std::move(gstate.evaluated_bilinear_links);
@@ -1312,8 +1313,8 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 	// builder. A per-row spec still expands to one row per data row and a grouped spec to one
 	// row per group, so this is not a matrix row count — the row count is read back off
 	// the built model (`solve_result.model_constraint_rows`) after the solve below.
-	size_t constraint_specs =
-	    solver_input.constraints.size() + solver_input.not_equals.size() + solver_input.global_constraints.size();
+	size_t constraint_specs = solver_input.constraints.size() + solver_input.not_equals.size() +
+	                          solver_input.quadratics.size() + solver_input.global_constraints.size();
 
 	// H3: the statement's DIAGNOSE prefix, and nothing else, arms diagnosis. Under it,
 	// pre-extract the unbounded ray so it is ready if the solve turns out unbounded, and

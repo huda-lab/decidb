@@ -149,8 +149,8 @@ bool EveryGroupSingleton(const ReducerValueLinkSpec &link) {
 	return true;
 }
 
-//! Whether `ec` is a linear row that can read a helper's members in place of its column: no `<>`, exact
-//! Big-M ABS pair, product or square, and no bound stage 08 may fold into its decision's box, which would be lost with
+//! Whether `ec` is a linear row that can read a helper's members in place of its column: no exact
+//! Big-M ABS pair, and no bound stage 08 may fold into its decision's box, which would be lost with
 //! the column. A one-sided ABS lower envelope is otherwise a plain linear row, so a reducer used by its operand can
 //! inline there just as it can in a user-written linear row.
 bool IsPlainLinearRow(const SolverInput &input, const EvaluatedConstraint &ec) {
@@ -158,7 +158,7 @@ bool IsPlainLinearRow(const SolverInput &input, const EvaluatedConstraint &ec) {
 	    ec.abs_aux_idx != DConstants::INVALID_INDEX &&
 	    std::any_of(input.abs_links.begin(), input.abs_links.end(),
 	                [&](const AbsLinkSpec &link) { return link.exact && link.aux_idx == ec.abs_aux_idx; });
-	return !exact_abs_pair && ec.product_groups.empty() && ec.admitted_lower.Empty();
+	return !exact_abs_pair && ec.admitted_lower.Empty();
 }
 
 //! Where a helper is read (D89): whether a reader holds its column, whether rows or the objective read it, and the one
@@ -224,13 +224,19 @@ vector<HelperPlace> PlaceHelpers(const SolverInput &input, const vector<idx_t> &
 		for (auto var : ec.variable_indices) {
 			read(var, plain);
 		}
-		read_products(ec.product_groups);
 	}
 	// A `<>` reads the columns of its decisions: the disjunction is stated on them.
 	for (auto &clause : input.not_equals) {
 		for (auto var : clause.row.variable_indices) {
 			read(var, false);
 		}
+	}
+	// A quadratic row reads its linear terms' columns, and its products' forms'.
+	for (auto &clause : input.quadratics) {
+		for (auto var : clause.row.variable_indices) {
+			read(var, false);
+		}
+		read_products(clause.products);
 	}
 	for (auto var : input.objective_variable_indices) {
 		read(var, true);

@@ -189,9 +189,6 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
 		    ec.comparison_type != ExpressionType::COMPARE_EQUAL) {
 			continue;
 		}
-		if (!ec.product_groups.empty()) {
-			continue;
-		}
 		// Soundness requires every term to be non-negative — both the variable
 		// lower bounds (x >= 0) AND the coefficients (a >= 0) — so that dropping
 		// the other terms to derive x_t <= K/a_t is valid. Constraints with any
