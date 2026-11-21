@@ -312,53 +312,22 @@ TEST_CASE("Direct rule driver offers a rule no IR the front end could not read",
 	}
 }
 
-TEST_CASE("Direct rule driver treats two rules that apply to one query as an internal error", "[decidb]") {
+TEST_CASE("Direct rule driver takes the first of two rules that apply in a release build", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	SECTION("two rules that apply are named") {
-		InstallRules(con, [] {
-			RuleList rules;
-			rules.push_back(make_uniq<StubRule>("STUB_FIRST", true, 0));
-			rules.push_back(make_uniq<StubRule>("STUB_SECOND", true, 1));
-			return rules;
-		});
-		auto result = con.Query(QUERY);
-		REQUIRE(result->HasError());
-		auto &message = result->GetError();
-		REQUIRE(message.find("STUB_FIRST") != string::npos);
-		REQUIRE(message.find("STUB_SECOND") != string::npos);
-		REQUIRE(message.find("rules must be disjoint") != string::npos);
-	}
-	SECTION("a rule that does not apply is not named") {
-		InstallRules(con, [] {
-			RuleList rules;
-			rules.push_back(make_uniq<StubRule>("STUB_FIRST", true, 0));
-			rules.push_back(make_uniq<StubRule>("STUB_NOT_APPLIED", false, 0));
-			rules.push_back(make_uniq<StubRule>("STUB_SECOND", true, 1));
-			return rules;
-		});
-		auto result = con.Query(QUERY);
-		REQUIRE(result->HasError());
-		auto &message = result->GetError();
-		REQUIRE(message.find("STUB_FIRST") != string::npos);
-		REQUIRE(message.find("STUB_SECOND") != string::npos);
-		REQUIRE(message.find("STUB_NOT_APPLIED") == string::npos);
-	}
-	SECTION("every rule that applies is named when more than two apply") {
-		InstallRules(con, [] {
-			RuleList rules;
-			rules.push_back(make_uniq<StubRule>("STUB_FIRST", true, 0));
-			rules.push_back(make_uniq<StubRule>("STUB_SECOND", true, 1));
-			rules.push_back(make_uniq<StubRule>("STUB_THIRD", true, 1));
-			return rules;
-		});
-		auto result = con.Query(QUERY);
-		REQUIRE(result->HasError());
-		auto &message = result->GetError();
-		REQUIRE(message.find("STUB_FIRST") != string::npos);
-		REQUIRE(message.find("STUB_SECOND") != string::npos);
-		REQUIRE(message.find("STUB_THIRD") != string::npos);
-	}
+	InstallRules(con, [] {
+		RuleList rules;
+		rules.push_back(make_uniq<StubRule>("STUB_FIRST", true, 0));
+		rules.push_back(make_uniq<StubRule>("STUB_SECOND", true, 1));
+		return rules;
+	});
+	auto result = con.Query(QUERY);
+#if defined(DEBUG) || defined(DUCKDB_FORCE_ASSERT)
+	// Two rules that apply are a bug in the rules, which the debug build's assertion catches.
+	REQUIRE(result->HasError());
+#else
+	REQUIRE(CHECK_COLUMN(result, 1, {0, 0, 0}));
+#endif
 }
 
 TEST_CASE("Direct rule driver treats a broken rule as an internal error", "[decidb]") {

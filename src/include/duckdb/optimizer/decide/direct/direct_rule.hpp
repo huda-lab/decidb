@@ -268,7 +268,7 @@ bool DirectIRIsReadable(const DirectIR &ir);
 //! The lifecycle the rule driver runs: CheckCondition, then Apply. CheckCondition checks the query's shape and then
 //! establishes what the plan relies on; when the condition does not hold it returns null and leaves the DECIDE node
 //! untouched. Summary is the one line the rule adds to the EXPLAIN annotation. Rules are disjoint: each requires
-//! IR the others forbid, so at most one applies to a query, and the rule driver raises an internal error when two do.
+//! IR the others forbid, so at most one applies to a query. A debug build asserts it; a release build takes the first.
 class DirectSolveRule {
 public:
 	virtual ~DirectSolveRule() = default;

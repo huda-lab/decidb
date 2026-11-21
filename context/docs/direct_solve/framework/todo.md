@@ -58,16 +58,6 @@ solver path answers those queries, so none of them is wrong, only slower.
   whether a value needs a mask or a check (N1's `q`, A1's floor), is a literal the rule builds with. **Ruling (owner,
   2026-11-13).**
 
-## FW-6 — Two rules that apply to one query
-
-- **Decision needed.** `direct_rule_driver.cpp` raises an INTERNAL error when more than one rule applies. Nine
-  boundary probes found no overlap; the exposure is 36 rule pairs.
-- **Options.** 1. Assert no overlap in a debug build and take the first match in release. 2. Decline: the solver
-  path answers. 3. Keep the error.
-- **Recommendation.** 1: an overlap is a rule bug, which a debug build catches, and a user never sees an INTERNAL
-  error for it.
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "direct and driver"` passes.
-
 ## FW-7 — Direct rules forward columns by hand
 
 - **Decision needed.** Each projection stage of a non-ranked rule has a struct of bindings and forwards them by hand
@@ -77,4 +67,5 @@ solver path answers those queries, so none of them is wrong, only slower.
   2. Only the shared row-box fragment (about 80 lines go). Either way, the owner rules whether R1 keeps its breadth.
 - **Recommendation.** 1, leaving `DirectRankedPrefix` alone: DuckDB's own column pruning is the standard tool, and it
   removes a case list.
+- **Ruling (owner, 2026-11-21).** Option 1, leaving `DirectRankedPrefix` alone. R1 keeps its breadth.
 - **Done when.** `DECIDB_TEST_DIRECT_SOLVE=off` and the default pass `./test/decide/run_tests.sh -n 2 -k "direct"`.

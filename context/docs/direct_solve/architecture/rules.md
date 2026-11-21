@@ -25,8 +25,9 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
   saves nothing.
 - **Rules are disjoint.** The rule driver runs CheckCondition for every rule, and the rules are told apart by the
   IR they require: S1 needs a `SUM(x)` count bound, A1 forbids any aggregate constraint. At most one rule applies to a
-  query. If two or more do, the rule driver raises an internal error naming them, because the overlap is a bug in the
-  rules and no ordering is safe to pick. The rule driver test covers this with stub rules.
+  query. Two that apply are a bug in the rules: a debug build asserts after the first match that no later rule
+  applies, and a release build takes the first, so a user never sees an internal error for it. The rule driver test
+  covers both with stub rules.
 - **Apply** builds the substitute, a relational plan. An unexpected failure here is an internal error, never a silent
   fallback.
 

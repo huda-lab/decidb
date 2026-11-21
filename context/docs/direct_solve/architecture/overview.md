@@ -14,7 +14,7 @@ bound, canonical LogicalDecide
    -> IR             the front end reads the problem into one form    (ir.md)
    -> CheckCondition each rule checks its applicability condition     (rules.md)
         no rule applies: the solver path runs as before
-        two rules apply: internal error, the rules must be disjoint
+        two rules apply: a rule bug; debug asserts, release takes the first
    -> Apply          build the substitute, a relational plan
    -> result adapter   keep DECIDE's output columns and bindings      (result_adapter.md)
    -> canonicalize   simplify what lowering leaves in the plan        (../framework/done.md)
@@ -77,8 +77,8 @@ Names follow [the glossary](../../glossary.md).
   wide columns are fetched by row id after the plan has chosen its rows.
 
 **Departure from Cascades: rules are disjoint, not chosen by cost.** Cascades lets several rules apply and keeps the
-cheapest plan. Here, rules are told apart by the IR they require, and two rules applying to one query is an internal
-error naming both: the overlap is a bug in the rules, and no ordering is safe to pick (`rules.md`).
+cheapest plan. Here, rules are told apart by the IR they require, so two rules applying to one query is a bug in the
+rules: a debug build asserts that none does, and a release build takes the first rule that applies (`rules.md`).
 
 ## Code
 

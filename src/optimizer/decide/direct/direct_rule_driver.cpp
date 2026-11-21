@@ -215,39 +215,30 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	D_ASSERT(decide.children.size() == 1 && decide.children[0]);
 	auto ir = DirectIR::Read(optimizer.context, decide);
 	auto &source = *decide.children[0];
-	struct AppliedCandidate {
-		const DirectSolveRule *rule;
-		unique_ptr<DirectApplicabilityCondition> condition;
-	};
-	vector<AppliedCandidate> applied;
 	// An IR the front end could not read is offered to no rule, which leaves the node as a query no rule applies to.
 	auto rules = DirectIRIsReadable(ir) ? RulesFor(optimizer.context) : vector<unique_ptr<DirectSolveRule>>();
+	optional_ptr<const DirectSolveRule> selected;
+	unique_ptr<DirectApplicabilityCondition> condition;
 	for (auto &rule : rules) {
-		auto condition = rule->CheckCondition(ir, optimizer.context);
-		if (!condition) {
+		if (selected) {
+			// Rules tell queries apart by the IR they require, so a second rule that applies is a bug in the rules,
+			// which a debug build catches here. A release build takes the first rule that applies.
+			D_ASSERT(!rule->CheckCondition(ir, optimizer.context));
 			continue;
 		}
-		applied.push_back({rule.get(), std::move(condition)});
+		condition = rule->CheckCondition(ir, optimizer.context);
+		if (condition) {
+			selected = rule.get();
+		}
 	}
-	if (applied.empty()) {
+	if (!selected) {
 		// A query no rule applies to leaves the DECIDE node, and its EXPLAIN output, exactly as the solver path has it.
 		return false;
 	}
-	// Every rule ran, so a second rule that applies is seen. Rules tell queries apart by the IR they require; two rules
-	// that apply to one query mean the rules overlap, which no ordering or cost can settle safely.
-	if (applied.size() > 1) {
-		vector<string> names;
-		for (auto &candidate : applied) {
-			names.push_back(candidate.rule->Name());
-		}
-		throw InternalException("Direct solve rules %s %s applied to one query; rules must be disjoint",
-		                        StringUtil::Join(names, ", "), names.size() == 2 ? "both" : "all");
-	}
-	auto &selected = applied[0];
 	DirectExplainAnnotation annotation;
 	annotation.mode = ModeName(mode);
-	annotation.rule = selected.rule->Name();
-	annotation.condition = selected.rule->Summary();
+	annotation.rule = selected->Name();
+	annotation.condition = selected->Summary();
 	direct_profile.Next("optimizer.direct.construct");
 	// The replacement answers with the DECIDE node's outputs: every source column, then one column per decision.
 	source.ResolveOperatorTypes();
@@ -275,11 +266,11 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	// its copy decision once, from the real total. The bounds join every read, and the checks gate every read the rule
 	// takes.
 	DirectSourceReader reader(optimizer, std::move(decide.children[0]),
-	                          selected.condition->source_reads + decide.bound_aggregates.size() + ir.row_checks.size(),
+	                          condition->source_reads + decide.bound_aggregates.size() + ir.row_checks.size(),
 	                          late_materialization.stored_columns);
 	DirectAddBoundTables(optimizer, reader, decide);
 	DirectAddRowChecks(optimizer, reader, ir.row_checks);
-	auto substitute = selected.rule->Apply(reader, optimizer, *selected.condition);
+	auto substitute = selected->Apply(reader, optimizer, *condition);
 	// A rule passes every column of its read along: the node's source columns, then the source row id and the bounds'
 	// values. The node's outputs have neither of the last, so the adapter is not told of them.
 	auto read_only = reader.SourceBindings().size() - source_columns;

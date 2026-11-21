@@ -12,11 +12,8 @@ the owner rules first.
 
 # Phase 2 — Direct solve is a separate layer
 
-## 2.1 Bounds and the driver (one lane)
-- [ ] FW-6 Two rules that apply to one query (decision) — direct_solve/framework/todo.md § FW-6
-
-## 2.2 Rule plans (needs: 2.1) (one lane)
-- [ ] FW-7 Direct rules forward columns by hand (decision) — direct_solve/framework/todo.md § FW-7
+## 2.1 Rule plans (one lane)
+- [ ] FW-7 Direct rules forward columns by hand — direct_solve/framework/todo.md § FW-7
 
 # Phase 3 — Each shape and formulation has one owner
 

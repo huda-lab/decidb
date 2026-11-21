@@ -27,8 +27,9 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
   checks the slot map. Rules are listed in `direct_registry.cpp`; a test seam replaces the list per connection. The
   rule driver first checks that the front end read the whole IR (`DirectIRIsReadable`: every
   constraint and the objective proved, a finite offset); an IR that fails is offered to no rule, so each
-  rule checks only what concerns its own class. Otherwise the driver runs CheckCondition for every rule (disjoint
-  rules: [rules.md](../architecture/rules.md)).
+  rule checks only what concerns its own class. Otherwise the driver takes the first rule whose CheckCondition
+  applies; a debug build runs the rest and asserts that none applies (disjoint rules:
+  [rules.md](../architecture/rules.md)).
 - **Result adapter** ([result_adapter.md](../architecture/result_adapter.md)). It serializes, prunes outputs only when
   skipping is proved safe, and always keeps the rule's validated columns live. What a rule hands it (a child, a slot
   map that fits the DECIDE outputs, the validated columns and the source row id) is checked in release builds and a
