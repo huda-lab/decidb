@@ -35,7 +35,6 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
-#include "duckdb/planner/decide/decide_product_form.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
@@ -313,16 +312,24 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	// body has left the ordinary clause list, an L0 indicator's reverse link stands beside it, and a reducer value
 	// helper's body belongs to no clause; each still needs the same ABS helpers and envelopes as an ABS written in a
 	// clause.
-	AbsProductWorklist worklist;
+	struct Revisit {
+		unique_ptr<Expression> *slot;
+		string source_alias;
+	};
+	vector<Revisit> worklist;
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
-		FindAbsAndAllocateAux(body.expr, decide, canonicalizer, exact, body.source_alias, body.rows,
-		                      BilinearReadsBody(decide, body) ? &worklist : nullptr);
+		const auto helpers_before = decide.abs_functions.size();
+		FindAbsAndAllocateAux(body.expr, decide, canonicalizer, exact, body.source_alias, body.rows);
+		if (decide.abs_functions.size() != helpers_before && BilinearReadsBody(decide, body)) {
+			worklist.push_back({&body.expr, body.source_alias});
+		}
 	});
-	// A product with an ABS factor was not affine in the decisions until its helper existed, so the bilinear rewrite
-	// left it. Each such product is handed to it now, in the order found, so the columns it adds follow every ABS
+	// Worklist, as LLVM's InstCombine revisits the users of a value it changed: a body whose ABS just got its helper
+	// is handed to the bilinear entry again, because a product with an ABS factor was not affine in the decisions
+	// until the helper existed. The bodies go in the order found, so the columns the products add follow every ABS
 	// helper. The pass tags and records only: the objective is not reinstalled.
-	for (auto &item : worklist.items) {
-		FindAndReplaceBilinear(*item.slot, decide, item.source_alias);
+	for (auto &revisit : worklist) {
+		FindAndReplaceBilinear(*revisit.slot, decide, revisit.source_alias);
 	}
 }
 
@@ -354,8 +361,7 @@ unique_ptr<Expression> decide_rewrite::MakeAbsRow(ClientContext &context, const 
 
 void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                             const DecideCanonicalizer &canonicalizer, const AbsExactSet &exact,
-                                            const string &source_alias, const Expression *rows,
-                                            AbsProductWorklist *products) {
+                                            const string &source_alias, const Expression *rows) {
 	if (!expr) {
 		return;
 	}
@@ -395,7 +401,7 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 		// Innermost first: an ABS inside this one gets its helper first. The copied
 		// operand retains that tagged function, which term extraction resolves to the
 		// inner helper before building this function's envelope rows.
-		FindAbsAndAllocateAux(func.children[0], decide, canonicalizer, exact, clause_alias, rows, products);
+		FindAbsAndAllocateAux(func.children[0], decide, canonicalizer, exact, clause_alias, rows);
 
 		// A column defined by its argument: one per instance of the scopes the argument reads.
 		auto aux_scope = ScopeOf(decide, canonicalizer, *func.children[0]);
@@ -430,18 +436,9 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 		return;
 	}
 
-	// Worklist, as LLVM's InstCombine revisits the users of a value it just changed: a product that reads an ABS
-	// helper allocated below it is queued once the helper exists, which the bilinear rewrite needs to read it. The
-	// outermost product is the entry: the bilinear entry looks through everything below it, as it does for a body.
-	const bool reads_helpers = products && IsDecideProductNode(optimizer.context, *expr, decide.decide_index);
-	const auto helpers_before = decide.abs_functions.size();
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		FindAbsAndAllocateAux(child, decide, canonicalizer, exact, clause_alias, rows,
-		                      reads_helpers ? nullptr : products);
+		FindAbsAndAllocateAux(child, decide, canonicalizer, exact, clause_alias, rows);
 	});
-	if (reads_helpers && decide.abs_functions.size() != helpers_before) {
-		products->items.push_back({&expr, source_alias});
-	}
 }
 
 } // namespace duckdb

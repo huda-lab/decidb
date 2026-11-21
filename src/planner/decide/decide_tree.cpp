@@ -1583,7 +1583,6 @@ void DecideTreeConstruction::TakeObjective(unique_ptr<DecideObjective> objective
 	builder->TakeObjective(std::move(objective));
 }
 
-
 void DecideTreeConstruction::TakeLinkTerms(idx_t link, vector<DecideTerm> members, vector<DecideTerm> fallback) {
 	builder->TakeLinkTerms(link, std::move(members), std::move(fallback));
 }
