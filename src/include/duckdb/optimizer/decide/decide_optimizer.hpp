@@ -67,8 +67,6 @@ private:
 	//! is answered, and for the solver the formulation passes. A rule that answers the query replaces `op`. The whole
 	//! stage is one profile span, whichever way the query is answered.
 	void OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOperator> &root);
-	//! Keeps the bound records for the tree, which computes them on the rows it reads (retained_bound_aggregates).
-	void RetainBoundAggregates(LogicalDecide &decide);
 	//! The passes that formulate the query for the solver chosen, in order.
 	void RewriteForSolver(LogicalDecide &decide, LogicalOperator &root);
 	//! Before any one-to-many rewrite, assign written-order identities to source clauses

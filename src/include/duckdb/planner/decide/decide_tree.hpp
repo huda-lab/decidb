@@ -317,7 +317,7 @@ struct DecideTreeSources {
 	vector<idx_t> composed_roots;
 	//! [link] -> its helper's G, or its O for a frame.
 	vector<idx_t> link_nodes;
-	//! [record] -> its G (LogicalDecide::retained_bound_aggregates).
+	//! [record] -> its G (LogicalDecide::bound_aggregates).
 	vector<idx_t> record_nodes;
 };
 

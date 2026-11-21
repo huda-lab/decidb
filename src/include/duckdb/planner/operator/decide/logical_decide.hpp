@@ -240,6 +240,8 @@ struct DecideBoundAggregate {
 	bool counts_classes = false;
 	idx_t class_key = DConstants::INVALID_INDEX;
 
+	//! Whether `expression` reads the reducer's value: a reference to its placeholder column.
+	bool IsReadBy(const Expression &expression) const;
 	bool Equals(const DecideBoundAggregate &other) const {
 		return key == other.key && counts_classes == other.counts_classes && class_key == other.class_key &&
 		       Expression::Equals(function, other.function) && Expression::ListEquals(arguments, other.arguments) &&
@@ -642,18 +644,10 @@ public:
 	//! the objective has no field.
 	idx_t objective_signature = DConstants::INVALID_INDEX;
 
-	//! The reducers the bounds read from the data, in the order the bound-side rewrite met them. Empty once the path
-	//! has built their side tables (DirectSourceReader::AddSideTable).
+	//! The reducers the bounds read from the data, in the order the bound-side rewrite met them. The tree computes each
+	//! on the rows it reads (language/guide.md §6.1); a direct plan builds each as a side table
+	//! (DirectSourceReader::AddSideTable) and empties the list. Never serialized (the optimizer creates it).
 	vector<DecideBoundAggregate> bound_aggregates;
-
-	//! The solver path reads a data reducer from a side table. Keep the reducer's semantics and its resolved result
-	//! reference so the executable graph can compute it independently. Enumerated with the
-	//! operator's live expressions; never serialized (the optimizer creates it).
-	struct RetainedBoundAggregate {
-		DecideBoundAggregate aggregate;
-		unique_ptr<Expression> placeholder;
-	};
-	vector<RetainedBoundAggregate> retained_bound_aggregates;
 	//! Semantic expressions before a destructive algebraic rewrite. Enumerated so their source bindings stay live.
 	vector<unique_ptr<Expression>> retained_expressions;
 	//! The objective's `when` when RewriteComposedMinMaxObjectiveTop left no term beside its MIN/MAX terms, for the

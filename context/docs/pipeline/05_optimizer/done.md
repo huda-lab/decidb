@@ -235,8 +235,7 @@ term splitter use them:
 | 14 | `RewriteAvgToSum` | Scales AVG values into SUM terms after value and extremum rewrites. |
 | 15 | `RewriteAbs` | Allocates ABS helpers, stores the written function and lower-envelope metadata for F nodes, and adds the check of each ABS argument's data. |
 | 16 | `RewriteBilinear` (ABS factors) | Records products involving the newly allocated ABS helpers. |
-| 17 | `RetainBoundAggregates` | Moves the bound records to `retained_bound_aggregates`, which the tree computes on the rows it reads; the source stays the original relation, with no side table in front of it. The value checks stay on the node (`value_checks`). |
-| 18 | `FoldSingletonRows` | Must be last of all — see below. |
+| 17 | `FoldSingletonRows` | Must be last of all — see below. |
 
 `RewriteComposedMinMaxObjectiveTop` runs within the composed pass for the
 objective side. The `optimizer.decide` span of `DECIDB_PROFILE=1` times the whole block.

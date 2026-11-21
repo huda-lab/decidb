@@ -198,8 +198,8 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
   rule gates the reader again on its own verdict (A1), computed from reads the row checks gate, so a bad value raises
   before a rule's own, and every read after waits for the newest verdict alone; the verdict CTEs nest oldest outermost
   (`DirectSourceReader::Finish`). The solver path plans no side plan: the checks stay on the node
-  (`LogicalDecide::value_checks`) and the side tables' records move to the tree (`DecideOptimizer::RetainBoundAggregates`),
-  which evaluates them on the rows it reads (`DecideTreeColumns::CheckData`). A rule builds a plan over one read with `DirectBuildOverRead`, or over its only read with
+  (`LogicalDecide::value_checks`) and the tree reads the side tables' records (`LogicalDecide::bound_aggregates`) and
+  evaluates them on the rows it reads (`DecideTreeColumns::CheckData`). A rule builds a plan over one read with `DirectBuildOverRead`, or over its only read with
   `DirectBuildOverOneRead`.
 
   **Row stage.** A rule whose reads all compute the same per-row projections over the source gives the reader that

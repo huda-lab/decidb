@@ -206,7 +206,7 @@ public:
 		}
 		link_nodes.assign(op.reducer_value_links.size(), DConstants::INVALID_INDEX);
 		frame_nodes.assign(op.frames.size(), DConstants::INVALID_INDEX);
-		record_nodes.assign(op.retained_bound_aggregates.size(), DConstants::INVALID_INDEX);
+		record_nodes.assign(op.bound_aggregates.size(), DConstants::INVALID_INDEX);
 		tree->frame_aggregate_nodes.assign(op.frame_aggregates.size(), DConstants::INVALID_INDEX);
 	}
 
@@ -372,7 +372,7 @@ public:
 				AddOrphan(Link(i));
 			}
 		}
-		for (idx_t i = 0; i < op.retained_bound_aggregates.size(); i++) {
+		for (idx_t i = 0; i < op.bound_aggregates.size(); i++) {
 			if (record_nodes[i] == DConstants::INVALID_INDEX) {
 				AddOrphan(Record(i));
 			}
@@ -944,7 +944,7 @@ private:
 				auto record = FindRecord(*copy.value);
 				if (record != DConstants::INVALID_INDEX) {
 					copy.kind = DecideSignatureFieldKind::BY_KEY;
-					copy.key = op.retained_bound_aggregates[record].aggregate.key;
+					copy.key = op.bound_aggregates[record].key;
 					copy.value.reset();
 				} else {
 					copy.value = Resolve(*copy.value);
@@ -1181,8 +1181,8 @@ private:
 	}
 
 	idx_t FindRecord(const Expression &expression) const {
-		for (idx_t i = 0; i < op.retained_bound_aggregates.size(); i++) {
-			if (op.retained_bound_aggregates[i].placeholder->Equals(expression)) {
+		for (idx_t i = 0; i < op.bound_aggregates.size(); i++) {
+			if (op.bound_aggregates[i].IsReadBy(expression)) {
 				return i;
 			}
 		}
@@ -1445,7 +1445,7 @@ private:
 		if (record_nodes[record_index] != DConstants::INVALID_INDEX) {
 			return record_nodes[record_index];
 		}
-		auto &record = op.retained_bound_aggregates[record_index].aggregate;
+		auto &record = op.bound_aggregates[record_index];
 		auto index = NewNode(DecideNodeKind::REDUCER);
 		record_nodes[record_index] = index;
 		auto &node = *tree->nodes[index];

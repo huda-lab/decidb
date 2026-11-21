@@ -346,8 +346,8 @@ private:
 				return nullptr;
 			}
 			auto &type = leaf_expression.return_type;
-			for (idx_t record = 0; record < op.retained_bound_aggregates.size(); record++) {
-				if (op.retained_bound_aggregates[record].placeholder->Equals(leaf_expression)) {
+			for (idx_t record = 0; record < op.bound_aggregates.size(); record++) {
+				if (op.bound_aggregates[record].IsReadBy(leaf_expression)) {
 					return Hole(site, record_nodes[record], type);
 				}
 			}

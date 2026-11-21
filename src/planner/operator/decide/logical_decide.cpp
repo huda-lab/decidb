@@ -14,6 +14,11 @@
 
 namespace duckdb {
 
+bool DecideBoundAggregate::IsReadBy(const Expression &expression) const {
+	return expression.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
+	       expression.Cast<BoundColumnRefExpression>().binding == column;
+}
+
 DecideKeyElement DecideKeyElement::Copy() const {
 	DecideKeyElement result;
 	result.expression = expression->Copy();
@@ -370,15 +375,6 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 		}
 		if (aggregate.reads) {
 			callback(&aggregate.reads);
-		}
-	}
-	for (auto &retained : retained_bound_aggregates) {
-		callback(&retained.placeholder);
-		for (auto &argument : retained.aggregate.arguments) {
-			callback(&argument);
-		}
-		if (retained.aggregate.reads) {
-			callback(&retained.aggregate.reads);
 		}
 	}
 	for (auto &expression : retained_expressions) {

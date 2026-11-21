@@ -103,27 +103,6 @@ void DecideOptimizer::OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr
 	}
 }
 
-void DecideOptimizer::RetainBoundAggregates(LogicalDecide &decide) {
-	// The tree computes each record on the rows it reads (language/guide.md §6.1), so the source stays the original
-	// relation, with no side table joined in front of it. A read of a reducer is quoted as the reducer is written: the
-	// bound-side rewrite gave its placeholder the reducer's location (DecideReplaces).
-	for (auto &aggregate : decide.bound_aggregates) {
-		LogicalDecide::RetainedBoundAggregate retained;
-		retained.placeholder = make_uniq<BoundColumnRefExpression>(aggregate.function->return_type, aggregate.column);
-		retained.aggregate.column = aggregate.column;
-		retained.aggregate.function = aggregate.function->Copy();
-		retained.aggregate.reads = aggregate.reads ? aggregate.reads->Copy() : nullptr;
-		retained.aggregate.key = aggregate.key;
-		retained.aggregate.counts_classes = aggregate.counts_classes;
-		retained.aggregate.class_key = aggregate.class_key;
-		for (auto &argument : aggregate.arguments) {
-			retained.aggregate.arguments.push_back(argument->Copy());
-		}
-		decide.retained_bound_aggregates.push_back(std::move(retained));
-	}
-	decide.bound_aggregates.clear();
-}
-
 void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &root) {
 	RunPass("optimizer.tag_groups", [&] { TagAtomicRemovalGroups(decide); });
 	// A range over decisions becomes a helper before any rewrite copies it.
@@ -159,7 +138,6 @@ void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &r
 	// Products outside ABS need the helper it just allocated; the first bilinear pass has already handled products
 	// inside ABS's operand and everywhere else.
 	RunPass("optimizer.bilinear_abs_factors", [&] { RewriteBilinear(decide); });
-	RunPass("optimizer.retain_bound_aggregates", [&] { RetainBoundAggregates(decide); });
 	// Must stay last among the rewrites: RewriteInDomain emits a floor-lowering bound
 	// that is itself a singleton-row bound, and every auxiliary variable must exist before the
 	// box is sized.
