@@ -223,6 +223,11 @@ struct ConstraintProvenance {
 	idx_t group_key = DConstants::INVALID_INDEX;
 	//! User parameter vs rigid mechanism/structural row (see ConstraintKind).
 	ConstraintKind kind = ConstraintKind::USER_PARAMETER;
+	//! True when the clause's complete canonical RHS is one query-wide scalar value. The value is one editable knob
+	//! shared across every row the clause emits, so the model builder gives its rows `shape` SHARED_SCALAR and the
+	//! elastic engine collapses them to ONE shared slack; a data-backed RHS stays per-row independent. Read off the
+	//! clause by the emitter, on the record an EvaluatedConstraint carries.
+	bool rhs_is_shared_scalar = false;
 	//! Elastic-diagnosis shape (I2): does this row share ONE slack with its
 	//! (repair_group_id, group_key) siblings, or get its own? Relaxable user-clause
 	//! rows must be stamped explicitly by the builder site.
@@ -322,29 +327,16 @@ struct EvaluatedConstraint {
 	//! (`aux >= inner`, `aux >= -inner`) define its auxiliary.
 	idx_t defined_var = DConstants::INVALID_INDEX;
 
-	ConstraintKind kind = ConstraintKind::USER_PARAMETER;
+	//! What the emitter knows of the clause for a diagnosis: `kind`, `rhs_is_shared_scalar`, `rhs_label` and
+	//! `avg_scaled`. The model builder copies it into each row it states under DIAGNOSE and completes it with what
+	//! only it knows (the group's key and name, the class set, the LHS offset, the data row and the `shape`); outside
+	//! DIAGNOSE it copies the source clause only. Its `origin` stays unset: the row's own `origin` below is the
+	//! clause's.
+	ConstraintProvenance provenance;
 
 	//! The clause identity retained when one cast comparison expands to multiple boundary rows, the DROP group every
 	//! descendant row shares, and the elastic group of the row.
 	DecideRowOrigin origin;
-	//! True when the complete canonical RHS is one query-wide scalar value. The value
-	//! is one editable knob shared across every row this clause emits, so the elastic
-	//! engine collapses those rows to ONE shared slack (ElasticShape::SHARED_SCALAR);
-	//! a data-backed RHS stays per-row independent.
-	bool rhs_is_shared_scalar = false;
-	//! Symbolic name of a data-backed (non-shared-scalar) RHS expression (`x <= cap_col`
-	//! → "cap_col"). Lets query-mode infeasible diagnosis render a virtual offset
-	//! (`x <= cap_col + delta`) instead of a numeric representative. Empty for a shared
-	//! scalar RHS. Stamped onto ConstraintProvenance::rhs_label at the per-row builder site. Filled under
-	//! DIAGNOSE only.
-	string rhs_label;
-
-	//! True when this is a pure-linear AVG aggregate whose row coefficients were
-	//! pre-scaled by 1/N_g for the AVG→SUM rewrite. Propagated to the row provenance
-	//! so infeasible diagnosis renders the clause as `AVG(...)` (and the slack is
-	//! already in the user's AVG units — report it raw). I2.d.
-	bool avg_scaled = false;
-
 	//! Row→group mapping: the clause's `by` groups, classes or kept rows.
 	//! Empty = all rows in one implicit group (fast path: no `when`, no key)
 	//! DConstants::INVALID_INDEX = row excluded (dropped by the `when`, or outside its group)

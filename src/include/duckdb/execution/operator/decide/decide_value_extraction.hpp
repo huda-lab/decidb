@@ -140,10 +140,11 @@ EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constr
                                                   bool diagnose,
                                                   const std::function<idx_t(const DecideTerm &)> &read_variable);
 
-//! How a repair names `constraint`'s bound (EvaluatedConstraint::rhs_label, under DIAGNOSE only: `diagnose`), whether
-//! one editable value stands for it on every row, and a constant's value there. A constant canonicalization left of a
-//! written bound that reads data (`x <= cap * o` is `x - cap * o <= 0`, ConstraintSourceInfo::source_rhs_reads_data)
-//! repairs as that bound does. Returns whether it is read on each row instead.
+//! How a repair names `constraint`'s bound (ConstraintProvenance::rhs_label of the row's record, under DIAGNOSE only:
+//! `diagnose`), whether one editable value stands for it on every row, and a constant's value there. A constant
+//! canonicalization left of a written bound that reads data (`x <= cap * o` is `x - cap * o <= 0`,
+//! ConstraintSourceInfo::source_rhs_reads_data) repairs as that bound does. Returns whether it is read on each row
+//! instead.
 bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, bool diagnose,
                    const DecideSourceText &source_text, const vector<ConstraintSourceInfo> &constraint_sources,
                    const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> &keys,

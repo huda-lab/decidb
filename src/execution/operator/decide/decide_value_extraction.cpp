@@ -361,7 +361,7 @@ EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constr
 	evaluated.lhs_is_aggregate = constraint.lhs_is_aggregate;
 	evaluated.defined_var = constraint.defined_var;
 	evaluated.lifted_floor = constraint.lifted_floor;
-	evaluated.kind = constraint.kind;
+	evaluated.provenance.kind = constraint.kind;
 
 	// Initialize result storage
 	evaluated.row_coefficients.resize(constraint.lhs_terms.size());
@@ -390,8 +390,9 @@ bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, bool diag
 		// clause emits, so the elastic engine collapses them to one shared slack.
 		// A constant canonicalization left of a written bound that reads data
 		// (`x <= cap * o` is `x - cap * o <= 0`) repairs as that bound does.
-		evaluated.rhs_is_shared_scalar = constraint.origin.source_clause_id >= constraint_sources.size() ||
-		                                 !constraint_sources[constraint.origin.source_clause_id].source_rhs_reads_data;
+		evaluated.provenance.rhs_is_shared_scalar =
+		    constraint.origin.source_clause_id >= constraint_sources.size() ||
+		    !constraint_sources[constraint.origin.source_clause_id].source_rhs_reads_data;
 		return false;
 	}
 	// A bound of data, read per row. The optimizer's bound-side window rewrite made each reducer on it a
@@ -400,12 +401,13 @@ bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, bool diag
 	// Canonicalization classifies the complete rebuilt bound. This is what
 	// keeps forward/reversed subquery spellings and arithmetic over query-wide
 	// values equivalent without re-deciding shape in the physical layer.
-	evaluated.rhs_is_shared_scalar = IsQueryWideBoundTag(constraint.rhs_expr->GetAlias());
+	evaluated.provenance.rhs_is_shared_scalar = IsQueryWideBoundTag(constraint.rhs_expr->GetAlias());
 	// Under DIAGNOSE, capture the RHS symbolic name (e.g. the data column `cap_col`) so query-mode
 	// infeasible diagnosis can render `x <= cap_col + delta`. Only meaningful for a
 	// genuine data RHS; a shared-scalar RHS reports the numeric knob instead.
-	if (diagnose && !evaluated.rhs_is_shared_scalar && !ContainsScalarSubqueryProvenance(*constraint.rhs_expr)) {
-		evaluated.rhs_label = RenderDecideSource(*constraint.rhs_expr, source_text, keyed_scopes, &keys);
+	if (diagnose && !evaluated.provenance.rhs_is_shared_scalar &&
+	    !ContainsScalarSubqueryProvenance(*constraint.rhs_expr)) {
+		evaluated.provenance.rhs_label = RenderDecideSource(*constraint.rhs_expr, source_text, keyed_scopes, &keys);
 	}
 	evaluated.rhs_values.Reserve(num_rows);
 	return true;
@@ -593,7 +595,7 @@ void ScaleAvgTerms(const DecideConstraint &constraint, const vector<TermFilterSt
 			all_avg = false;
 		}
 	}
-	evaluated.avg_scaled = all_avg;
+	evaluated.provenance.avg_scaled = all_avg;
 }
 
 bool HoistAvgIntoNotEqualBound(const DecideConstraint &constraint, vector<TermFilterState> &filters) {

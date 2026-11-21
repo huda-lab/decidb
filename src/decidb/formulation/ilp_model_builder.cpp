@@ -463,14 +463,31 @@ const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const Solver
 	return out;
 }
 
-//! F2: stamp the row -> clause provenance every constraint-builder site sets, linear or quadratic, aggregate or
-//! per-row. Every row names its clause (`source_clause_id`): an error about a number the model computes quotes it.
-//! Everything else is what a diagnosis reads and is stamped only under DIAGNOSE (SolverInput::diagnose): an ordinary
-//! query leaves it at its default.
+//! F2: the provenance a row of `eval_const` starts from, whether linear or quadratic, aggregate or per-row. Every row
+//! names its clause (`source_clause_id`): an error about a number the model computes quotes it. Everything else is what
+//! a diagnosis reads and is stamped only under DIAGNOSE (SolverInput::diagnose): an ordinary query leaves it at its
+//! default. Under DIAGNOSE the row starts as a copy of the record the emitter filled (EvaluatedConstraint::provenance),
+//! with the row's origin and the `shape` its RHS reads (a literal RHS is one editable knob shared across every row or
+//! group this clause emits (paper §5); a data-derived RHS repairs as a symbolic offset instead). A site builds the row
+//! from it, which may remember a typed K (`remember_typed_k`), and then places the row (StampConstraintProvenance).
+static ConstraintProvenance ClauseProvenance(const SolverInput &input, const EvaluatedConstraint &eval_const) {
+	ConstraintProvenance provenance;
+	provenance.origin.source_clause_id = eval_const.origin.source_clause_id;
+	if (!input.diagnose) {
+		return provenance;
+	}
+	provenance = eval_const.provenance;
+	provenance.origin = eval_const.origin;
+	provenance.shape = provenance.rhs_is_shared_scalar ? ElasticShape::SHARED_SCALAR : ElasticShape::PER_ROW_DATA;
+	return provenance;
+}
+
+//! F2: what only the builder knows of a row it states, stamped only under DIAGNOSE: the group the row sits in and its
+//! name, the classes it stands for, the constant of the LHS the site folded into the RHS, and the data row.
 //! `group_key` defaults to INVALID_INDEX for an ungrouped aggregate row; pass the `when`/`by` group id for a grouped
 //! aggregate row, or the row's group for a per-row row. `row` is the data row a per-row row was emitted at (DIAGNOSE's
 //! `row`); a row that stands for no class set is a kept row, a class of its own (D28). The aggregate-only
-//! linear fields (avg_scaled, weight_labels, folded_terms) are their own site, because a per-row or quadratic row does
+//! linear fields (weight_labels, folded_terms) are their own site, because a per-row or quadratic row does
 //! not carry them: FormatQuadraticLhs never reads them. The group's name is the clause's for `group_key`
 //! (EvaluatedConstraint::NameOf), so no site names a group apart from placing a row in it.
 //! `lhs_offset` is the constant part of the LHS that this site folded into the RHS
@@ -483,17 +500,8 @@ static void StampConstraintProvenance(const SolverInput &input, ConstraintProven
                                       const EvaluatedConstraint &eval_const,
                                       idx_t group_key = DConstants::INVALID_INDEX, double lhs_offset = 0.0,
                                       idx_t row = DConstants::INVALID_INDEX) {
-	provenance.origin.source_clause_id = eval_const.origin.source_clause_id;
 	if (!input.diagnose) {
 		return;
-	}
-	provenance.origin = eval_const.origin;
-	provenance.kind = eval_const.kind;
-	// A literal RHS is one editable knob shared across every row/group this clause
-	// emits (paper §5); a data-derived RHS repairs as a symbolic offset instead.
-	provenance.shape = eval_const.rhs_is_shared_scalar ? ElasticShape::SHARED_SCALAR : ElasticShape::PER_ROW_DATA;
-	if (!eval_const.rhs_is_shared_scalar) {
-		provenance.rhs_label = eval_const.rhs_label;
 	}
 	provenance.rhs_mechanism_offset = -lhs_offset;
 	provenance.group_key = group_key;
@@ -962,7 +970,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 			if (!input.diagnose) {
 				return;
 			}
-			prov.avg_scaled = eval_const.avg_scaled;
 			StampWeightLabels(prov);
 			prov.folded_terms = clause_folded_terms;
 		};
@@ -982,6 +989,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 			if (!has_groups) {
 				// No `when`, no groups: one constraint summing all rows, the clause's one emitted row.
 				ModelConstraint constr;
+				constr.provenance = ClauseProvenance(input, eval_const);
 				constr.indices = std::move(emitted.columns);
 				constr.coefficients = std::move(emitted.values);
 
@@ -1016,6 +1024,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 						continue;
 					}
 					ModelConstraint constr;
+					constr.provenance = ClauseProvenance(input, eval_const);
 					copy_emitted_row(g, constr);
 
 					// Read this group's own bound. The guard above still proves every
@@ -1043,6 +1052,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 					continue;
 				}
 				ModelConstraint constr;
+				constr.provenance = ClauseProvenance(input, eval_const);
 				copy_emitted_row(row, constr);
 				// LHS terms that don't reference a DECIDE variable (row-varying
 				// data or constants, e.g., the `+3` in `x + 3 <= K` or the `col`
@@ -1080,6 +1090,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 	                                    const DecideClauseRef &written) -> SolverModel::QuadraticConstraint {
 		const auto &ec = clause.row;
 		SolverModel::QuadraticConstraint qc;
+		qc.provenance = ClauseProvenance(input, ec);
 		std::unordered_map<int, double> linear_accum;
 		std::unordered_map<uint64_t, double> q_accum;
 		double rhs_adjustment = 0.0;
