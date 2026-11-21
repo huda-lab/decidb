@@ -62,7 +62,7 @@ too-open one.
   Gurobi `feasRelax` is an *accelerator*, never a dependency.
 - **A native construct must still be reachable** — every matrix, quadratic, indicator,
   and native-general descendant of a drop-only source clause carries the same
-  `removal_group_id`. Diagnosis removes that complete group before solving a candidate,
+  removal group (`origin.removal_group_id`). Diagnosis removes that complete group before solving a candidate,
   so native and lowered formulations have the same repair semantics.
 - **A repair the model cannot represent is a repair the diagnosis cannot offer.** The
   rows a lowering emits are sized from the decision box *as the query states it*, and the

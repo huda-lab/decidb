@@ -167,10 +167,10 @@ Every emitted matrix row records where it came from, so diagnosis reports at the
 user-clause level instead of raw rows.
 
 - **`ConstraintProvenance`** on `ModelConstraint` and `SolverModel::QuadraticConstraint`
-  (`src/include/duckdb/decidb/formulation/ilp_model.hpp`). Three separate identities:
-  `source_clause_id` indexes the source display registry `SolverModel::constraint_sources`,
-  `repair_group_id` is the elastic grouping identity, and `removal_group_id` the atomic DROP
-  identity (`INVALID_INDEX` for synthetic rows); `group_key` is the
+  (`src/include/duckdb/decidb/formulation/solver_input.hpp`). Three separate identities, held as one value
+  (`origin`, a `DecideRowOrigin`): `source_clause_id` indexes the source display registry
+  `SolverModel::constraint_sources`, `repair_group_id` is the elastic grouping identity, and `removal_group_id` the
+  atomic DROP identity (`INVALID_INDEX` for synthetic rows); `group_key` is the
   group the row was emitted for — a reducer's `by` group in the aggregate shape, a
   `per K:` class in the per-row shape, the one group of a clause with a `when` — and
   INVALID when the clause is ungrouped; `kind` is the row role. Beside it, `data_row`
@@ -193,15 +193,13 @@ user-clause level instead of raw rows.
   `input.constraints` so it survives `continue` skips. Evaluated constraints default
   to `USER_PARAMETER` unless the planner/operator stamps a rigid role; raw generated
   constraints default to `STRUCTURAL` unless explicitly marked as user mechanism or
-  user parameter. The six evaluated-constraint sites share the field-setting through
-  three free functions: `StampConstraintProvenance` (the fields common to all six:
-  `source_clause_id`, `repair_group_id`, `removal_group_id`, `kind`, `shape`/`rhs_label`,
-  `rhs_mechanism_offset`, and `group_key`/`group_name` where grouped),
-  `StampAggregateProvenance` (`is_aggregate`, the four aggregate sites only) and
-  `StampDataRow` (`data_row` and `per_kept_row`, the two per-row sites) — see
-  `../../pipeline/06_model_formulation/done.md` §7 for why `avg_scaled` /
-  `weight_labels` / `folded_terms` stay linear-only rather than becoming a shared
-  field. The builder stamps no clause text: a clause's `when c per K:` qualifier lives
+  user parameter. The six evaluated-constraint sites start each row from the record the emitter filled
+  (`ClauseProvenance`: `origin`, `kind`, `shape`, `rhs_label`, `avg_scaled`) and place it through one free function,
+  `StampConstraintProvenance` (`group_key`/`group_name` where grouped, `is_aggregate`, `rhs_mechanism_offset`,
+  `class_set`, and for the per-row sites `data_row` and `per_kept_row`). A raw row and a native construct carry a
+  provenance of their own, which `StampProvenance` copies whole. See
+  `../../pipeline/06_model_formulation/done.md` §7 for why `weight_labels` / `folded_terms` stay linear-only rather
+  than becoming a shared field. The builder stamps no clause text: a clause's `when c per K:` qualifier lives
   in the source registry alone (`ConstraintSourceInfo::qualifier`, built by
   `InitializeConstraintSourceInfo` in `decide_source_provenance.cpp`), and the
   diagnosis renderer reads it there through `FindConstraintSource`.
@@ -212,7 +210,7 @@ user-clause level instead of raw rows.
   `STRUCTURAL`. The clause that reads a MIN/MAX helper is an ordinary user row.
 Tested in `test/common/test_decidb_constraint_provenance.cpp`. There is no separate
 clause → row index: the elastic engine walks `provenance` directly, and a consumer that
-needs the lookup groups by `provenance.source_clause_id`.
+needs the lookup groups by `provenance.origin.source_clause_id`.
 
 ## Variable provenance (column → name / instance)
 

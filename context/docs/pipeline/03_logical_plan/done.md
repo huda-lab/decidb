@@ -165,7 +165,7 @@ and the checks, so binding resolution and column pruning see their columns.
 
 **From the optimizer** — `num_auxiliary_vars` (the decisions it appends after the declared
 ones), `solver_backend_name`, `use_native_constructs`,
-`force_native_constructs`, `ne_clause_labels`, `bilinear_links`,
+`force_native_constructs`, `bilinear_function_groups`,
 `abs_functions`, `aux_var_expressions`, `rewrite_accounts` (one fact per construct a rewrite
 replaced -- the construct as a plan prints it and what it became, `RewriteAccount::Kind`
 -- under the clause it came from, INVALID_INDEX for the objective; worded by the renderer;
@@ -381,9 +381,9 @@ prints `v`), and prints a DOUBLE constant the rewrite wrote as a plain number (`
 An `IN` under
 a scope keeps the qualifier of the wrappers above it in its source info
 (`ScopedInQualifier`), so a suggested edit pastes back with its scope; an infinity norm
-echoes its order quoted (`norm(e, 'inf')`). The diagnosis labels of a MIN/MAX helper
-(`ReducerValueLink::label`) and of a `<>` (`ne_clause_labels`) are spelled as the plan prints
-the clause (`max(ship)`, `sum(ship) by (D.region) <> 20`). A quoted span is parenthesized by how
+echoes its order quoted (`norm(e, 'inf')`). The diagnosis label of a MIN/MAX helper
+(`ReducerValueLink::label`) is spelled as the plan prints the clause (`max(ship)`), and a `<>`'s binary is labelled by
+its clause as written (`QuoteWrittenClause`). A quoted span is parenthesized by how
 tightly its own text binds (`DecideBinding`, recorded with the span), not by the bound node. In a reprinted node,
 parentheses follow DuckDB's precedence: a cast with no location passes its precedence to the child it hides, the right
 operand of a non-associative operator keeps its parentheses (`x * (cap % 7)`, `a ** (b ** c)`), a negated negative

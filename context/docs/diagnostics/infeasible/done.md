@@ -132,7 +132,7 @@ stage 1E:  E* = min Σ αᵢ s_edit    subject to D ≤ D*, fixed G
   column box by `DecideOptimizer::FoldSingletonRows` (`decide_singleton_row_folding.cpp`)
   and becomes no row of the solved model, so on its own the row-based engine could not
   see it. The pass records each folded bound as a `UserBoundSpec {decide_var_idx, sense,
-  k, strict, typed_k, source_clause_id, removal_group_id}` (a comparison → one spec, a
+  k, origin}` (a comparison → one spec, a
   `BETWEEN` → two) and tags its comparison `SINGLETON_ROW_CLAUSE_ROWS_TAG` beside
   `SINGLETON_ROW_BOUND_TAG`. Stage 05's linear form flattens such a clause aside
   (into its folded root, `DecideNode::folded`, one per recorded bound, which it
@@ -310,11 +310,11 @@ one slack per row.** `DiagnoseInfeasible` calls it, solves via the injected call
 reads each block back. Exposing it is also the structural test seam.
 
 **Shape marker (`ConstraintProvenance::shape`, `decide.hpp::ElasticShape`).** `UNSET` is the
-invalid default; `BuildElasticModel` asserts that every relaxable row with a user `source_clause_id`
+invalid default; `BuildElasticModel` asserts that every relaxable row with a user `origin.source_clause_id`
 has been stamped explicitly. `SHARED_SCALAR` = the complete canonical RHS is one editable
 query-wide value shared across every row the clause emits; `PER_ROW_DATA` = genuine per-row or
-per-group **data** RHS (`x <= col`). Set in `ilp_model_builder.cpp`: linear and quadratic
-builder sites read `EvaluatedConstraint::rhs_is_shared_scalar`. Physical evaluation sets it
+per-group **data** RHS (`x <= col`). Physical evaluation (`DescribeBound`) sets it on
+`EvaluatedConstraint::provenance`, which every linear and quadratic builder site copies into its rows. It sets it
 directly for constants and otherwise consumes the canonical RHS's `QUERY_WIDE_BOUND_TAG`;
 foldable composite expressions receive that tag at canonicalization. A constant is shared unless
 it is what canonicalization left of a written bound that reads data: `x <= cap * o` becomes
@@ -348,7 +348,7 @@ formulation runs. Pinned by `TestNativeConstructDiagnosis` in
 re-runs the query, and compares the native and lowered arms against each other.
 
 **A grouped MIN/MAX clause folds like any other.** Its clause row is one aggregate row per group,
-all carrying the user's single literal, stamped from `EvaluatedConstraint::rhs_is_shared_scalar` — the flag
+all carrying the user's single literal, stamped from `EvaluatedConstraint::provenance.shape` — the shape
 every aggregate row reads, so the native and lowered arms classify one clause identically. Left `UNSET` those rows
 would never fold, and an infeasible `per g: max(e) by (g) >= K` would report one edit per
 group against the same clause text in the `query` scope; only the loosest of them would
@@ -578,7 +578,7 @@ remove-only; removal is the exact atomic DROP below.
 lowers to a helper with an envelope and closing rows, and a clause row that reads it; only the clause row is the user's
 clause. Making the closing rows relaxable would break both halves of a diagnosis:
 
-- *The name.* `ExtremumLinkSpec` carries no `source_clause_id`, so a blamed closing row has no
+- *The name.* `ExtremumLinkSpec` carries no source clause, so a blamed closing row has no
   clause to name. `SourceAwareLhs` would fall back to `FormatLhs` and rebuild the text from the
   row's own coefficients, reporting `MIN((x + c)) - x - 110*MIN((x + c)) >= -110` — a string
   appearing nowhere in the query.
@@ -590,22 +590,19 @@ clause. Making the closing rows relaxable would break both halves of a diagnosis
 Relaxing the clause row is mathematically equivalent — lowering `z` by `s/a` and raising the
 bound by `s` admit the same solutions — and is already in the user's own units, so repair goes
 there. The clause row is an ordinary aggregate row: it carries `USER_PARAMETER`, a `repair_group_id` and a
-`source_clause_id`, as a SUM's does.
+`source_clause_id` in its origin, as a SUM's does.
 
 The guard that makes this structural is `assert_blamable_row` in the elastic transform: a
-relaxable row must carry an explicit `ElasticShape` **and** a `source_clause_id`. Without the
+relaxable row must carry an explicit `ElasticShape` **and** a source clause. Without the
 latter the renderer can only fabricate, so a row that cannot name a clause is not one the user
 can be told to edit. `D_ASSERT` is debug-only, so the release-build backstop is the Python
 invariant helper described in `../foundations/done.md`.
 
-**What the tag is called.** The pipeline alias that carries this linkage is
-`NE_CLAUSE_TAG_PREFIX` (`__ne_clause_tag_<clause_idx>__`) in
-`common/enums/decide.hpp`. The payload is a **clause** index — into
-`LogicalDecide::ne_clause_labels`, which holds the text a diagnosis
-renders — and not an indicator index. The distinction matters because an indicator is allocated by the formulation and a
-clause is not: the clause is registered where it is *tagged*, before either arm is chosen, so
-the payload is always present. There is one spelling of the tag, and the reader
-asserts it.
+**What names a `<>`'s clause.** A `<>` carries no tag. Its row waits in `SolverInput::not_equals`, and its
+`origin.source_clause_id` indexes the source registry, which holds the text a diagnosis renders. The label of each
+binary the formulation allocates is that clause quoted as written (`QuoteWrittenClause`). The payload is a **clause**
+and not an indicator: an indicator is allocated by the formulation and a clause is not, so the clause is registered
+before either arm is chosen and is always present.
 
 **Tests.** C++ structural (`test_decidb_diagnostic_engines.cpp`), beside the slack-scope folds
 above: one shared slack spans all N rows with the correct sign; `USER_MECHANISM`/`STRUCTURAL` rows are never slackened; a data-offset tier
@@ -629,7 +626,7 @@ McCormick rows stay rigid.
 
 Exact atomic DROP handles clauses that cannot be meaningfully loosened: `<>`, `IN (...)`, and every
 constraint-side comparison containing an L0 `norm`. The optimizer assigns one
-written-order `removal_group_id` to the source comparison before any rewrite. Objective-side
+written-order removal group (`origin.removal_group_id`) to the source comparison before any rewrite. Objective-side
 L0 is deliberately excluded. Every descendant row or native construct copies that identity,
 including IN cardinality/link rows, a folded bound's clause rows, ABS/McCormick descendants,
 and backend lowering.
@@ -1061,7 +1058,7 @@ collected from **both comparison sides** before flattening. The flattened value 
 `DecideCanonicalizer` then classifies the complete rebuilt RHS after side swapping and term
 migration: an all-query-wide bound receives `QUERY_WIDE_BOUND_TAG`; any row-varying component
 keeps it `PER_ROW_DATA`. Physical evaluation consumes that root classification through
-`rhs_is_shared_scalar` rather than inferring provenance from the original RHS position.
+the row's `shape` rather than inferring provenance from the original RHS position.
 Diagnostics therefore treat `x <= (SELECT 5)` and `(SELECT 5) >= x` identically, while mixed or
 correlated bounds remain data-backed and never expose the internal `SUBQUERY` placeholder.
 

@@ -49,8 +49,8 @@ reverses each term's sign and keeps its factor), so the flip of a `MAXIMIZE` obj
 
 EXPLAIN shows the model that was built, not only the query: the rows linearization emitted are part of the picture.
 An auxiliary column prints as the expression it stands for (`abs(ship - 20)`, `(open * ship)`, `max(ship)`,
-`sum(ship) by (D.region) <> 20`), never by its internal name. The labels live in `aux_var_expressions`
-and `ne_clause_labels`.
+`sum(ship) by (D.region) <> 20`), never by its internal name. The labels live in `aux_var_expressions`, and a `<>`'s
+binary is labelled by quoting its clause (`QuoteWrittenClause`).
 
 ## Rendering
 

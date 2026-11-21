@@ -105,7 +105,7 @@ supported; a signed variable needs a finite lower bound.
 | Degree guard and the other refusals of algebra | `DecideShapeCheck` (`decide_shape_check.cpp`) |
 | Term reading | `DecideTermSplitter::Split` (`decide_term_split.cpp`) |
 | Prepared product groups | `ExtractObjectiveBodyTerms`, `ExtractConstraintTerms`, `ReadProductGroup` (`decide_linear_form.cpp`) |
-| Product rewrite | `RewriteBilinear` (`decide_rewrite_bilinear.cpp`), once, before `RewriteMinMax`; a product a later pass exposes through `FindAndReplaceBilinear`; `LogicalDecide::BilinearLink`, `is_boolean_var` |
+| Product rewrite | `RewriteBilinear` (`decide_rewrite_bilinear.cpp`), once, before `RewriteMinMax`; a product a later pass exposes through `FindAndReplaceBilinear`; `BilinearLinkSpec`, `is_boolean_var` |
 | McCormick corners | `physical_decide.cpp` |
 | Q and quadratic constraints | `ilp_model_builder.cpp` (`AddProductGroupRow`, `BuildQuadraticConstraint`, `nonconvex_quadratic`) |
 | Model class | `ClassifyDecideModel`, `IsNonconvexProductGroup` (`decide_solver_capabilities.hpp`) |

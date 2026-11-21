@@ -17,7 +17,7 @@ SQL-expression canonicalization and knows nothing about any backend.
   `linearization_bilinear_abs.cpp`
 - `src/include/duckdb/decidb/formulation/ilp_linearization_internal.hpp` — the helpers
   those files share
-- `src/include/duckdb/decidb/formulation/ilp_model.hpp` — `VarIndexer`, `SolverModel`, provenance
+- `src/include/duckdb/decidb/formulation/ilp_model.hpp` — `VarIndexer`, `SolverModel`, `ModelConstraint`
 - `src/include/duckdb/decidb/formulation/solver_input.hpp` — the input contract
 
 `Build()` takes `SolverInput` by **non-const** reference so raw global constraints
@@ -190,6 +190,41 @@ negation, carried by every term's sign and the constant offset (`DecideCanonical
 
 Each `EvaluatedConstraint` becomes one or more `ModelConstraint`s.
 
+### One list per kind of row
+
+Execution puts each clause row in the list of its kind (`DecideModelEmitter::Route`, `../08_execution/done.md`), and
+each reader of `SolverInput` reads the lists it needs, without a test for the kind of a row:
+
+- **`constraints`** holds every linear row: a clause's, a per-row bound (Path 3), an ABS envelope (§9 ABS), and under
+  `DIAGNOSE` an elastic folded row (a bound the optimizer folded into the column box, kept for the repair model).
+- **`not_equals`** (`NotEqualClause`) holds a `<>`: its row, the rows of a grouped `<>` whose bound is NULL
+  (`no_exclusion`: members of the group's sum that exclude no value) and whether it is an `AVG` (`avg_rhs_scale`). It
+  waits there until `LinearizeNotEqual` expands it into conditional rows and binaries, and is empty after. A `<>` is a
+  pseudo-operation, and the expansion legalizes it before the model is built, as LLVM's LegalizeDAG does before
+  instruction selection. The kind is the list, and the comparison's own `COMPARE_NOTEQUAL`, so the clause carries no
+  tag and no index.
+- **`quadratics`** (`QuadraticClause`) holds a clause with terms of degree 2: its row, which holds the linear terms,
+  and its product groups. The builder states them as one block, in their order, in `SolverModel::quadratic_constraints`.
+- **`bilinear_links`**, **`abs_links`** and **`reducer_value_links`** hold the formulations stage 05 chose.
+
+The lists are one per kind, as `SolverModel` and the backend APIs keep them. DuckDB keeps one list of a class
+hierarchy (`BoundConstraint`) and tests each constraint's kind where it reads it. Stage 06 departs from that because
+these kinds live for different spans: a `<>` is used up before the build, and a quadratic row goes to a backend list of
+its own. One list would test the kind at every reader. The model dumps keep the row order of `constraints`.
+
+**A row that defines an auxiliary says so.** `EvaluatedConstraint::defined_var` is the auxiliary the row defines
+(from the DEFINES tag), or `INVALID_INDEX`: the two lower-envelope rows of an ABS (`aux >= inner`, `aux >= -inner`)
+define its auxiliary. A pass that asks what a clause demands of a column skips the rows that define it by that field
+(`DemandedAuxReach`), and `EmitAbsEnvelopes` refuses an envelope row that does not define its auxiliary. The model row
+carries no ABS mark. `FindUnboundedContributor` takes the column it skips as an argument. `PlaceHelpers` reads
+`constraints`, `not_equals`, `quadratics` and the exact `abs_links` in a loop each, as it reads `bilinear_links`, so no
+row is tested for its kind.
+
+Two passes read every clause row whichever list holds it, through `SolverInput::ForEachClauseRow`:
+`OpenElasticColumnBox` (the elastic box of a column) and `DemandedAuxReach` (what a row demands of an ABS auxiliary).
+Both ask of a row only its bound and its terms. Whether a `<>` or a quadratic row should size those boxes is open
+(`../../diagnostics/infeasible/todo.md`).
+
 ### Emitted rows
 
 `ClauseEmittedRows` builds a clause's rows once and keeps them on the clause, for every
@@ -283,12 +318,12 @@ never reads an inlined helper: such a row holds the helper's column (`admitted_l
 
 ### Quadratic and bilinear constraints
 
-Constraints with product groups (a square or a product of two decisions) go through the quadratic
-constraint builder into `model.quadratic_constraints`. Linear fixed LHS terms use
-the same `INVALID_INDEX` convention and are subtracted from the RHS over the
-selected row set before the quadratic constraint is finalized. A decision beside the
-reducers enters once per row set, because execution left it on one row (`CountOnce`):
-`SUM(POWER(x, 2)) + s <= 30` is not `... + n*s`.
+Clauses with product groups (a square or a product of two decisions) are in `SolverInput::quadratics`. The builder
+reads that list in a loop of its own, through the quadratic constraint builder, into
+`model.quadratic_constraints`. Linear fixed LHS terms use the same `INVALID_INDEX` convention and are subtracted from
+the RHS over the selected row set before the quadratic constraint is finalized. A decision beside the reducers enters
+once per row set, because execution left it on one row (`CountOnce`): `SUM(POWER(x, 2)) + s <= 30` is not
+`... + n*s`.
 
 ### Normalization on emission
 
@@ -304,7 +339,7 @@ DuckDB's own comparison instead, through the values the classifier admits (all o
 none), so `-1e-10` fails as SQL says. The verdict is stored on the row
 (`ModelConstraint::constant_fails`) and read by `ProvesInfeasible`. The row stays
 coefficient-free and keeps its own
-`source_clause_id`, which is what lets the infeasible-diagnosis engine name the
+`origin.source_clause_id`, which is what lets the infeasible-diagnosis engine name the
 clause and report a least-change repair (`SUM(0 * x) <= 0`) instead of a bare
 status. The infeasibility is decided by DeciDB, not by a solver:
 `SolverModel::ProvesInfeasible` reads the model's rows, and `SolveModel` answers
@@ -397,60 +432,59 @@ than a point. Gurobi handles that. HiGHS is declared not to support the
 
 ## 7. Provenance carried on every row
 
-`ConstraintProvenance` (`ilp_model.hpp`) travels with each emitted constraint so
+`ConstraintProvenance` (`solver_input.hpp`) travels with each emitted constraint so
 diagnosis can report at the **user-clause** level rather than at raw matrix rows. An ordinary query records the
-clause of each row (`source_clause_id`) and builds nothing else: every other field is what a diagnosis reads, and is
-stamped only under `DIAGNOSE` (`SolverInput::diagnose`). Under `DIAGNOSE` a row holds
-the source comparison for display, `repair_group_id` for elastic grouping (execution
-numbers every clause it evaluates -- the lowered clauses, then under DIAGNOSE the
-folded (singleton-row) bounds' clauses -- so no two clauses share one), the
-group id (a `by` group or a `per` class) and its printable key, `ConstraintKind` (user
-parameter vs rigid mechanism row), the elastic shape (does this row share one slack with its
-siblings or get its own), whether coefficients were pre-scaled by `1/N_g` for an
-AVG rewrite, whether the user wrote a strict comparison (with the original literal
-kept so a suggestion can be re-quoted against it), and the flat column of the `<>`
-disjunction binary the row belongs to.
+clause of each row (`origin.source_clause_id`) and builds nothing else: every other field is what a diagnosis reads,
+and is stamped only under `DIAGNOSE` (`SolverInput::diagnose`).
+
+**One origin value.** `DecideRowOrigin` (`decide_source_info.hpp`) holds the three ids of where a row came from: the
+source clause (display), the removal group (the atomic DROP identity) and the repair group (elastic grouping;
+execution numbers every clause it evaluates -- the lowered clauses, then under DIAGNOSE the folded (singleton-row)
+bounds' clauses -- so no two clauses share one). It is a Value Object, held by composition and copied whole, as LLVM
+copies a `DebugLoc`, so a site that copies an origin cannot drop one of the ids. Every record that describes a row (a
+clause row, a `RawConstraint`, a `GeneralConstraintSpec`, a bilinear link) holds its origin as `provenance.origin` (the
+link, as `origin`). The model builder copies a raw row's or a construct's provenance whole (`StampProvenance`), under
+`DIAGNOSE`; otherwise it copies the source clause only.
+
+**A clause row carries its provenance from the emitter.** `EvaluatedConstraint::provenance` holds the origin and the
+clause-level facts execution reads off the clause: the `kind` (user parameter vs rigid mechanism row), the elastic
+`shape` (does this row share one slack with its siblings or get its own; `DescribeBound` sets it, from whether the
+clause's whole right side is one query-wide scalar), the `rhs_label` of a data-backed bound, and whether coefficients
+were pre-scaled by `1/N_g` for an AVG rewrite (`avg_scaled`). Under `DIAGNOSE` the builder starts each row it states
+from that record (`ClauseProvenance`) and adds what only it knows: the group's key and name, the class set, the LHS
+offset, the data row, whether the LHS was an aggregate, and the strict comparison's original literal (so a suggestion
+can be re-quoted against it). Outside `DIAGNOSE` the row starts from the source clause alone. The flat column of the
+`<>` disjunction binary the row belongs to (`indicator_col`) is stated by the lowering that allocates it.
 
 `FoldedAggTerm` pairs each summed decide variable with the coefficient the user
 wrote for it. `has_unit` is false when that coefficient is data-varying — there is
 no literal to quote, so rendering falls back to the symbolic name in
 `weight_labels`.
 
-Six emission sites stamp this struct — linear and quadratic, each in ungrouped
-aggregate / grouped aggregate / per-row shape — and two free functions in
-`ilp_model_builder.cpp` own the fields common across that shape matrix rather than
-each site repeating them:
+Six emission sites build a row from its clause's provenance -- linear and quadratic, each in ungrouped
+aggregate / grouped aggregate / per-row shape -- and one free function in `ilp_model_builder.cpp` places the row, so
+that no site stamps a group without its name:
 
-- `StampConstraintProvenance(provenance, eval_const, repair_group_id, group_key)` sets
-  `source_clause_id`, `repair_group_id`, `kind`, `shape` + `rhs_label`, and — only when
-  the caller passes a real group — `group_key` and the `group_name` derived from it, so
-  no site stamps a group without its name. All six sites call this; the four aggregate
-  sites then set
-  `class_set` from `EvaluatedConstraint::group_class_set` (`ClassSetOf`), the index of
-  the group's classes in `SolverModel::class_sets` (moved from `SolverInput::class_sets`
-  by `Build`; D28), each of a `Kind`: `KEY_VALUES` (a `per K:`'s values), `KEPT_ROWS` (no
-  `per` key) or `WHOLE_CLAUSE` (`per ()`, one class with no key value). The per-row
-  sites set it for an easy MIN/MAX's member rows from their group and for a `per K:`
-  clause's row from its class, then stamp `data_row` (the row it was emitted at,
-  DIAGNOSE's `row`) and `per_kept_row` (a row with no class set: each kept row is a
-  class of its own) through `StampDataRow`. A clause that reads a MIN/MAX helper is one of the aggregate rows, so its
-  class set is the same.
-- `StampAggregateProvenance(provenance, eval_const)` sets `is_aggregate`. Only the four
-  aggregate sites (linear and quadratic, ungrouped and grouped) call this; a per-row
-  constraint has no reducer to name.
+- `StampConstraintProvenance(provenance, eval_const, group_key, lhs_offset, row)` sets the `group_key` and the
+  `group_name` derived from it, `is_aggregate`, the folded LHS offset (`rhs_mechanism_offset`), and `class_set` from
+  `EvaluatedConstraint::group_class_set` (`ClassSetOf`), the index of the group's classes in
+  `SolverModel::class_sets` (moved from `SolverInput::class_sets` by `Build`; D28), each of a `Kind`: `KEY_VALUES` (a
+  `per K:`'s values), `KEPT_ROWS` (no `per` key) or `WHOLE_CLAUSE` (`per ()`, one class with no key value). The
+  per-row sites pass the row they emit: an easy MIN/MAX's member rows take their class set from their group and a
+  `per K:` clause's row from its class, and the row sets `data_row` (the row it was emitted at, DIAGNOSE's `row`) and
+  `per_kept_row` (a row with no class set: each kept row is a class of its own). A clause that reads a MIN/MAX helper
+  is one of the aggregate rows, so its class set is the same.
+- The two linear aggregate sites also set `weight_labels` and `folded_terms`.
 
 No site stamps the clause's `when c per K:` qualifier: a diagnosis reads it from the
 source registry by `source_clause_id` (`FindConstraintSource`,
 `decide_diagnostic_render.cpp`), the one place it lives.
 
-`avg_scaled`, `weight_labels` and `folded_terms` stay hand-stamped at exactly the
-two **linear**-aggregate sites and are never set on the quadratic ones. That is
-not leftover drift: `FormatQuadraticLhs` (stage 07's diagnosis renderer) never
-reads those three fields — it reconstructs a quadratic row's LHS from
-`linear_coefficients`/`q_coefficients` directly, the same way `FormatLhs` (the
-linear renderer) reads `avg_scaled`/`folded_terms`/`weight_labels`. Stamping them
-on a `QuadraticConstraint` would be dead weight with no reader. The comment
-marking the six sites numbers them 1-6 in emission order.
+`weight_labels` and `folded_terms` stay hand-stamped at exactly the two **linear**-aggregate sites and are never set
+on the quadratic ones. That is not leftover drift: `FormatQuadraticLhs` (stage 07's diagnosis renderer) never reads
+those two fields. It reconstructs a quadratic row's LHS from `linear_coefficients`/`q_coefficients` directly, the same
+way `FormatLhs` (the linear renderer) reads `folded_terms`/`weight_labels`. Stamping them on a `QuadraticConstraint`
+would be dead weight with no reader. The comment marking the six sites numbers them 1-6 in emission order.
 
 ---
 
@@ -647,7 +681,7 @@ one.
 **A link's rows are mechanism.** Every row of a link is `STRUCTURAL`, rigid under DIAGNOSE. A closing row carries the
 Big-M and encodes `z = MIN/MAX(members)`: offered to the elastic engine as a clause the user may edit, its slack would
 be in the auxiliary's units rather than the user's bound's, and `ExtremumLinkSpec` carries no
-`source_clause_id` for a diagnosis to name it by. The user's clause is the row that reads the helper, which holds the
+source clause for a diagnosis to name it by. The user's clause is the row that reads the helper, which holds the
 bound in the user's own units and carries its source (`../../diagnostics/infeasible/done.md`,
 "Rigid shapes").
 
@@ -840,8 +874,8 @@ Two guards run before anything is emitted:
 - **The left side is linear and integer-valued.** The ±1 band is exact only on the integer
   lattice; on a continuous quantity it would cut the feasible points in `(K-1, K+1)`. The
   stage 04 integer-step check admits only an integer-valued left side, so the builder does not
-  check it. A product or a power of decisions on the left raises an `InternalException`:
-  stage 05 refuses it.
+  check it. A product or a power of decisions on the left never arrives: stage 05 refuses
+  it.
 - **`NEIsIntegerValuedRhs`** *drops* a comparison whose bound no integer can equal,
   because every assignment already satisfies it. Emitting the pair anyway would
   wrongly exclude `floor(K)` and `ceil(K)`. An infinite `K` is the same case for the
@@ -851,11 +885,11 @@ A per-row spelling with a row-varying bound masks only its non-integer rows, via
 `row_group_ids`, instead of dropping the whole constraint.
 
 **The binary is allocated where the disjunction is written**, one global per emitted
-instance, and labelled with the clause text stage 05 recorded (`ne_clause_labels`).
-Stage 05 records only the marking, `ne_clause_idx`, and allocates nothing: a row-scoped
-Boolean per data row would be wrong for three of the four things a `<>` can become — an aggregate spelling needs one binary per *group*, a collapsed one needs a
-column but no disjunction, and a dropped one needs nothing. None of those is knowable
-before the data is seen.
+instance, and labelled with its clause as written (`QuoteWrittenClause`, by the clause's
+`origin.source_clause_id`). Stage 05 records only the plan's account of the clause and allocates nothing: a
+row-scoped Boolean per data row would be wrong for three of the four things a `<>` can become. An aggregate spelling
+needs one binary per *group*, a collapsed one needs a column but no disjunction, and a dropped one needs nothing. None
+of those is knowable before the data is seen.
 
 #### The range collapse
 
@@ -903,7 +937,7 @@ across active rows, and a mixed one keeps the disjunction unsplit.
 
 A collapsed row **still allocates its binary**, appearing in no row, because the ordinary
 formulation keeps the same column layout across equivalent `<>` shapes. Atomic DROP does
-not depend on that column: the source comparison's `removal_group_id` is propagated to
+not depend on that column: the source comparison's `origin.removal_group_id` is propagated to
 every emitted descendant and the diagnostic candidate physically omits the whole group.
 A row dropped as a tautology allocates nothing at all.
 
@@ -1117,7 +1151,7 @@ no Big-M, and they carry the clause provenance the elastic engine reads.
 A `<>` clause has no scalar row of its own. Its two disjunction rows *are* the clause, both
 `USER_MECHANISM`; a conditional row — `binary == value` implies this row — states that
 semantic form directly. Exact grouped removal filters the indicator representation with
-the same `removal_group_id` used for matrix, quadratic, and native-general constraints.
+the same `origin.removal_group_id` used for matrix, quadratic, and native-general constraints.
 That is why the two native lists remain separate: one relates columns, the other conditions
 a row.
 
@@ -1190,18 +1224,18 @@ columns still name a decide variable in that message.
 | Helpers shared across those files | `src/include/duckdb/decidb/formulation/ilp_linearization_internal.hpp` |
 | `ExtremumLinkSpec`, `ExtremumMemberSource` — what a link is stated from | `src/include/duckdb/decidb/formulation/ilp_linearization.hpp` |
 | `BilinearLinkSpec`, `AbsLinkSpec`, `ReducerValueLinkSpec` — the formulation tags | `src/include/duckdb/decidb/formulation/solver_input.hpp` |
-| `VarIndexer`, `SolverModel`, `ModelConstraint`, provenance | `src/include/duckdb/decidb/formulation/ilp_model.hpp` |
-| `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn` | `src/include/duckdb/decidb/formulation/solver_input.hpp` |
+| `VarIndexer`, `SolverModel`, `ModelConstraint` | `src/include/duckdb/decidb/formulation/ilp_model.hpp` |
+| `SolverInput`, `EvaluatedConstraint`, `NotEqualClause`, `QuadraticClause`, `ConstraintProvenance`, `CoefficientColumn` | `src/include/duckdb/decidb/formulation/solver_input.hpp` |
+| `DecideRowOrigin` | `src/include/duckdb/common/decide_source_info.hpp` |
 | Golden model corpus (the characterization oracle) | `test/decide/golden/` |
 
 ## Arms no test reaches, kept (BLOAT-30)
 
 Each is a guard a stage boundary or a typed read needs:
 
-  - **Stage handoffs.** The comparison type stage 05 hands over (`SolverModel::Build`:
-  `<>` is consumed earlier); a `<>` over a product in `LinearizeNotEqual` (the binder refuses it); the column-box
-  finiteness check in `SolverModel::Build`, the one place an infinite box from any rewrite is refused (a MIN/MAX
-  auxiliary's reach is coefficient times box, so `b * y` with `b = 1e308` passes a DOUBLE).
+  - **Stage handoffs.** The comparison type stage 05 hands over (`SolverModel::Build`: `<>` is consumed earlier); the
+  column-box finiteness check in `SolverModel::Build`, the one place an infinite box from any rewrite is refused (a
+  MIN/MAX auxiliary's reach is coefficient times box, so `b * y` with `b = 1e308` passes a DOUBLE).
 - **Typed reads.** A coefficient label read back as an optional weight label and as a number (`strtod` accepts `""`,
   `inf`, `nan`); an empty `row_group_ids` meaning every row is kept (`ResolveLiftedFloors`); an empty group's first row
   in `DecidePropagateImpliedBounds`.

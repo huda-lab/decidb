@@ -611,7 +611,7 @@ emitted once per instance of it (`ScopeRowPerInstance`: under `per K:` for a sco
 `K`, `per ()` for a query-wide one). `per g: x IN (1, 2)` over a keyed `x` and three rows in
 two classes is four indicators, not six; a data domain stays per row. They are
 structural (`MarkFormulationConstraint`): a repair never loosens one on its own, and a
-DROP removes them with their clause, whose `removal_group_id` they carry. A row that defines
+DROP removes them with their clause, whose removal group (`origin.removal_group_id`) they carry. A row that defines
 an auxiliary standing for a value -- an ABS's envelope, a body helper's definition, an L0
 indicator's links -- also names it (`DEFINES_TAG_PREFIX`, read into
 `DecideConstraint::defined_var`), so stage 08 gives the auxiliary no value where the row reads
@@ -823,7 +823,7 @@ and two helpers pinned on different sides would let the pair drift apart; two cl
 holding the same reducer (`x <= 0.5 * sum(x) AND x >= 0.1 * sum(x)`) would say the same
 thing twice. The definition belongs to no clause: it is the
 definition of an auxiliary, not a constraint any clause wrote, so it carries no
-`source_clause_id` or `removal_group_id`. A DROP of a clause that reads the helper leaves
+source clause or removal group. A DROP of a clause that reads the helper leaves
 it, which is harmless, since an equality on a helper nothing else reads always holds, and
 DIAGNOSE reads it as part of the fixed model like every untagged structural row. Each
 clause that reads the helper still accounts for it in its own plan, once.
@@ -969,17 +969,15 @@ count, gap and optimum.
 
 ### `<>` — `RewriteNotEqual`
 
-Each `COMPARE_NOTEQUAL` is marked, not rewritten: its clause index rides the tag
-(`NE_CLAUSE_TAG_PREFIX`) and its label, the clause as the plan prints it
-(`sum(ship) by (D.region) <> 20`), goes to `ne_clause_labels`. Stage 06 allocates the
-binaries and emits the disjunction rows once bounds are known.
+Each `COMPARE_NOTEQUAL` is accounted for, not rewritten: the pass records the clause as the plan prints it
+(`sum(ship) by (D.region) <> 20`) as a rewrite account, and tags nothing. Stage 06 reads the kind off the comparison
+(`COMPARE_NOTEQUAL`), allocates the binaries and emits the disjunction rows once bounds are known.
 
 The two rows a `<>` becomes hold a linear left side. The pass runs after
 `RewriteBilinear`, so a product with a `BOOL` decision is already an auxiliary; a square
 or a product of decisions still on the left (`DecideDegreeOf` above 1) has no
 formulation and is refused here (*"<> over a product or a power of decisions is not
-supported"*, at the comparison). `LinearizeNotEqual` (stage 06) throws an
-`InternalException` if one reaches it.
+supported"*, at the comparison). This is the only check: stage 06 does not repeat it.
 
 ### AVG → SUM — `RewriteAvgToSum`
 
@@ -1246,8 +1244,8 @@ Each is a precondition on an earlier stage's promise ([`../architecture.md`](../
 
 - **The binder.** One scope per declared decision, and every rewrite adds a scope with its decision
   (`AddAuxiliaryDecision`); only a `when` stands under the two-level `per`
-  wrapper; a reducer's marker covers one expression (`RewriteNorm`); a comparison carries its source-clause tag
-  (`SourceClauseOf`).
+  wrapper; a reducer's marker covers one expression (`RewriteNorm`); a comparison of a clause carries its
+  source-clause tag, which `TagAtomicRemovalGroups` reads (`SourceClauseOf`) to find its clause.
 - **The shape check.** A side of a degree-2 product is affine and no divisor holds a decision
   (`DecideTermSplitter::Split`); a factor's form is linear (`AppendLinearTerms`); a data factor has power 1
   (`FindAndReplaceBilinear`).

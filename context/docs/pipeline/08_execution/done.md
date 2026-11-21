@@ -536,7 +536,7 @@ checked, and a query whose rows all have a NULL key solves. A row's admitted end
 floor is the lowest any `when` or `per` lowers the decision to; instance floors are built in stage 06, after the
 emitter, and the lowest floor never refuses a query that solves. Only a bound whose admitted ends fold (`IsFoldable`),
 one written as a constant, is checked; a bound that reads the data stays the solver's and DIAGNOSE's, and an IN's
-bounds stay diagnosis's under a `when` as they do without one (its `removal_group_id`). The refusal
+bounds stay diagnosis's under a `when` as they do without one (its removal group). The refusal
 points at the clause (*"the constraint cannot hold: 'x' is a BOOL decision"*), under DIAGNOSE too. Which rows
 an instance keeps is known only from the data, so direct solve declines every such bound the domain cannot hold
 (`DirectContradictsDomain`), and both paths name the clause.
@@ -1136,9 +1136,23 @@ columns that remain are boxed per row wherever a range is derivable:
 
 A `SolverInput` carrying `num_rows`, `num_decide_vars`, `variable_types`
 (reported as `BOOLEAN` wherever `is_boolean_var` is set), resolved
-`lower_bounds` / `upper_bounds`, the `EvaluatedConstraint` vector, objective
+`lower_bounds` / `upper_bounds`, the clause rows (`constraints`, `not_equals` and `quadratics`), objective
 coefficient and variable-index arrays, keyed mappings, and the objective's constant. The objective is a
 minimization and carries no sense.
+
+**One list per kind of row.** The emitter reads each clause into an `EmittedClause`: the row
+(`EvaluatedConstraint`) and what only some kinds of clause carry, which are a `<>`'s NULL bounds and AVG scaling and a
+quadratic clause's product groups. `Groups` (the aggregate shape) and `Rows` (the per-row shape) return it, and one
+`DecideModelEmitter::Route` puts it in the list of its kind, so a row never says what kind it is. A folded bound's
+clause goes among the repair model's rows (`evaluated_singleton_row_constraints`, under `DIAGNOSE` only). A
+`COMPARE_NOTEQUAL` goes to `evaluated_not_equals`, a clause with product groups to `evaluated_quadratics`, and any
+other to `evaluated_constraints`. `BuildSolverInput` moves them to `SolverInput::constraints`, `not_equals` and
+`quadratics` (`../06_model_formulation/done.md` § 4). An ABS's envelope rows go to the ABS's record instead
+(`AbsEnvelope`, `evaluated_abs_links`).
+
+The row starts from its clause: `InitializeEvaluatedConstraint` sets its `provenance` from the tree's constraint (the
+`origin` with the repair group execution numbers, and the `kind`), `DescribeBound` sets the `shape` and the `rhs_label`
+of its bound, and the AVG scaling sets `avg_scaled`. The model builder copies that record into each row it states.
 
 When the objective is quadratic, the same evaluation runs on `product_groups` **in
 addition to** `terms`, not instead of: the linear terms fill `objective_coefficients` /
@@ -1327,8 +1341,8 @@ Each is a guard the type system or a stage boundary needs, or a path only a nond
   without `null_rows` (the canonicalizer promises no NULL there); the backend the plan
   names by string (`PlannedSolverBackend`); a bound side that must be foldable (the optimizer asserts it); the solution
   index read from a backend (`GetData`); the sink state's `written_bound` fallback and its
-  `bound.source_clause_id < constraint_sources.size()` test (a recorded singleton-row bound indexes `constraint_sources`
-  through the source-clause tag the binder stamps on every written comparison and rewrites copy,
+  `bound.origin.source_clause_id < constraint_sources.size()` test (a recorded singleton-row bound indexes
+  `constraint_sources` through the source-clause tag the binder stamps on every written comparison and rewrites copy,
   `CopyClauseProvenanceTags`; a bound with no source names the variable and its value).
 - **Loops.** The settling loop's pass bound, and the fixed-point comparison that must read every value it writes.
 - **The OS.** `getrusage` failing, a process past 1 GiB, and Windows' zero peak memory.
