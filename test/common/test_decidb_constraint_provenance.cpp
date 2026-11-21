@@ -40,7 +40,8 @@ EvaluatedConstraint MakeAggregate(const duckdb::vector<idx_t> &vars, idx_t num_r
 	ec.rhs_values = CoefficientColumn::MakeScalar(rhs, num_rows);
 	ec.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
 	ec.lhs_is_aggregate = true;
-	ec.origin.repair_group_id = 0;
+	ec.provenance.origin.repair_group_id = 0;
+	ec.provenance.shape = ElasticShape::PER_ROW_DATA;
 	return ec;
 }
 
@@ -52,7 +53,8 @@ EvaluatedConstraint MakePerRow(idx_t var, idx_t num_rows, double rhs) {
 	ec.rhs_values = CoefficientColumn::MakeScalar(rhs, num_rows);
 	ec.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
 	ec.lhs_is_aggregate = false;
-	ec.origin.repair_group_id = 0;
+	ec.provenance.origin.repair_group_id = 0;
+	ec.provenance.shape = ElasticShape::PER_ROW_DATA;
 	return ec;
 }
 
@@ -156,8 +158,8 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 	SECTION("an ordinary query's rows name their clause and carry nothing else") {
 		SolverInput input = MakeBaseInput(2, 2, false);
 		auto aggregate = MakeAggregate({0, 1}, 2, 10.0);
-		aggregate.origin.source_clause_id = 5;
-		aggregate.origin.repair_group_id = 3;
+		aggregate.provenance.origin.source_clause_id = 5;
+		aggregate.provenance.origin.repair_group_id = 3;
 		aggregate.comparison_type = ExpressionType::COMPARE_LESSTHAN; // a strict bound remembers the typed K
 		aggregate.coefficient_names = {CoefficientName {"price", false, 0.0}, CoefficientName {"2", true, 2.0}};
 		aggregate.provenance.avg_scaled = true;

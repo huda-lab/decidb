@@ -199,7 +199,7 @@ static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t nu
 		bool pushes_down = ec.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
 		                   ec.comparison_type == ExpressionType::COMPARE_LESSTHAN ||
 		                   ec.comparison_type == ExpressionType::COMPARE_EQUAL;
-		const auto written = DecideWrittenClause(input, ec.origin.source_clause_id);
+		const auto written = DecideWrittenClause(input, ec.provenance.origin.source_clause_id);
 		for (idx_t r = 0; r < num_rows; r++) {
 			if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
 				continue; // row excluded by `when` or its group: this clause asks nothing here
@@ -261,7 +261,7 @@ double ReadAbsArgument(const AbsLinkSpec &link, const VarIndexer &indexer, idx_t
 //! The row's provenance, which every row of an ABS carries as the clause it was written in does.
 void StampAbsRow(SolverInput::RawConstraint &row, const EvaluatedConstraint &operand, idx_t r) {
 	row.provenance.kind = ConstraintKind::STRUCTURAL;
-	row.provenance.origin = operand.origin;
+	row.provenance.origin = operand.provenance.origin;
 	row.StampGroup(operand, operand.row_group_ids.empty() ? DConstants::INVALID_INDEX : operand.row_group_ids[r]);
 }
 
@@ -277,7 +277,7 @@ void StampAbsRow(SolverInput::RawConstraint &row, const EvaluatedConstraint &ope
 void ExpandAbs(SolverInput &input, const VarIndexer &indexer, const AbsLinkSpec &link) {
 	D_ASSERT(!link.range_unbounded);
 	const auto &operand = link.operand;
-	const auto written = DecideWrittenClause(input, operand.origin.source_clause_id);
+	const auto written = DecideWrittenClause(input, operand.provenance.origin.source_clause_id);
 	const double relax_neg = 2.0 * std::max(0.0, -link.inner_lo); // A1
 	const double relax_pos = 2.0 * std::max(0.0, link.inner_hi);  // A2
 	SparseCoeffAccumulator argument;
@@ -329,7 +329,7 @@ void ExpandAbs(SolverInput &input, const VarIndexer &indexer, const AbsLinkSpec 
 void StateAbsNatively(SolverInput &input, const VarIndexer &indexer, const InstanceBox &instances,
                       const AbsLinkSpec &link) {
 	const auto &operand = link.operand;
-	const auto written = DecideWrittenClause(input, operand.origin.source_clause_id);
+	const auto written = DecideWrittenClause(input, operand.provenance.origin.source_clause_id);
 	SparseCoeffAccumulator argument;
 	for (idx_t r = 0; r < input.num_rows; r++) {
 		if (!AbsReadsRow(operand, r)) {
@@ -374,7 +374,7 @@ void StateAbsNatively(SolverInput &input, const VarIndexer &indexer, const Insta
 			link_row.sense = '=';
 			link_row.rhs = k;
 			link_row.provenance.kind = ConstraintKind::STRUCTURAL;
-			link_row.provenance.origin = operand.origin;
+			link_row.provenance.origin = operand.provenance.origin;
 			input.global_constraints.push_back(std::move(link_row));
 		}
 
@@ -382,7 +382,7 @@ void StateAbsNatively(SolverInput &input, const VarIndexer &indexer, const Insta
 		gc.kind = GeneralConstraintKind::ABS;
 		gc.result_column = static_cast<int>(indexer.Get(link.aux_idx, r));
 		gc.argument_columns.push_back(static_cast<int>(t_idx));
-		gc.provenance.origin = operand.origin;
+		gc.provenance.origin = operand.provenance.origin;
 		input.general_constraints.push_back(std::move(gc));
 	}
 }
@@ -433,7 +433,7 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
 		double lo = 0.0;
 		double hi = 0.0;
 		bool seen_row = false;
-		const auto written = DecideWrittenClause(input, c1.origin.source_clause_id);
+		const auto written = DecideWrittenClause(input, c1.provenance.origin.source_clause_id);
 		for (idx_t r = 0; r < num_rows; r++) {
 			// The link's bound carries the constant part of the expression the user wrote inside ABS, with C1's
 			// constant terms moved across, where a frame's `else` read as data stands. It is finite: an infinity there
@@ -468,7 +468,7 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
 			// DOUBLE.
 			idx_t bad = FindUnboundedContributor(c1, input.lower_bounds, input.upper_bounds, link.aux_idx);
 			ThrowUnboundedBigMNaming(bad != DConstants::INVALID_INDEX, bad, var_names, "ABS",
-			                         DecideWrittenClause(input, c1.origin.source_clause_id));
+			                         DecideWrittenClause(input, c1.provenance.origin.source_clause_id));
 		}
 
 		// A clause may demand more of the auxiliary than the box can supply, and then

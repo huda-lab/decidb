@@ -708,7 +708,7 @@ EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {
 	Polynomial(root, vector<TermFilterState>(Parts(clause)), null_rows, result);
 	DecideAbsence::SkipNullInstances(null_rows, false, num_rows, evaluated.row_group_ids, evaluated.num_groups);
 	if (counted) {
-		gstate.CountInstances(evaluated.origin.source_clause_id, instances,
+		gstate.CountInstances(evaluated.provenance.origin.source_clause_id, instances,
 		                      CountInstances(evaluated.row_group_ids, evaluated.num_groups, num_rows, false));
 		if (clause.admitted_lower) {
 			CheckDomain(root, evaluated);
@@ -1199,7 +1199,7 @@ EmittedClause DecideModelEmitter::Groups(idx_t root, bool counted) {
 	}
 	DecideAbsence::SkipNullInstances(null_rows, true, num_rows, evaluated.row_group_ids, evaluated.num_groups);
 	if (counted) {
-		gstate.CountInstances(evaluated.origin.source_clause_id, grouped_instances,
+		gstate.CountInstances(evaluated.provenance.origin.source_clause_id, grouped_instances,
 		                      CountInstances(evaluated.row_group_ids, evaluated.num_groups, num_rows, true));
 		if (clause.admitted_lower) {
 			CheckDomain(root, evaluated);

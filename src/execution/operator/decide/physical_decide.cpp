@@ -1044,9 +1044,9 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 				// The link is normalized to `M*z - inner >= rhs`, so the indicator
 				// coefficient is positive.
 				ec.row_coefficients[z_term].AssignScalar(num_rows, 0.0);
-				double M =
-				    DecideTightPerRowBigM(ec, box, num_rows, decide_var_names, InstanceBox {solver_input, var_indexer},
-				                          DecideWrittenClause(solver_input, ec.origin.source_clause_id), "norm(e, 0)");
+				double M = DecideTightPerRowBigM(
+				    ec, box, num_rows, decide_var_names, InstanceBox {solver_input, var_indexer},
+				    DecideWrittenClause(solver_input, ec.provenance.origin.source_clause_id), "norm(e, 0)");
 				ec.row_coefficients[z_term].AssignScalar(num_rows, M);
 			}
 		}

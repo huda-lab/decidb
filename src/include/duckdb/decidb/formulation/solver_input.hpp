@@ -223,11 +223,6 @@ struct ConstraintProvenance {
 	idx_t group_key = DConstants::INVALID_INDEX;
 	//! User parameter vs rigid mechanism/structural row (see ConstraintKind).
 	ConstraintKind kind = ConstraintKind::USER_PARAMETER;
-	//! True when the clause's complete canonical RHS is one query-wide scalar value. The value is one editable knob
-	//! shared across every row the clause emits, so the model builder gives its rows `shape` SHARED_SCALAR and the
-	//! elastic engine collapses them to ONE shared slack; a data-backed RHS stays per-row independent. Read off the
-	//! clause by the emitter, on the record an EvaluatedConstraint carries.
-	bool rhs_is_shared_scalar = false;
 	//! Elastic-diagnosis shape (I2): does this row share ONE slack with its
 	//! (repair_group_id, group_key) siblings, or get its own? Relaxable user-clause
 	//! rows must be stamped explicitly by the builder site.
@@ -327,16 +322,12 @@ struct EvaluatedConstraint {
 	//! (`aux >= inner`, `aux >= -inner`) define its auxiliary.
 	idx_t defined_var = DConstants::INVALID_INDEX;
 
-	//! What the emitter knows of the clause for a diagnosis: `kind`, `rhs_is_shared_scalar`, `rhs_label` and
-	//! `avg_scaled`. The model builder copies it into each row it states under DIAGNOSE and completes it with what
-	//! only it knows (the group's key and name, the class set, the LHS offset, the data row and the `shape`); outside
-	//! DIAGNOSE it copies the source clause only. Its `origin` stays unset: the row's own `origin` below is the
-	//! clause's.
+	//! What the emitter knows of the clause: its `origin` (the clause identity retained when one cast comparison
+	//! expands to multiple boundary rows, the DROP group every descendant row shares, and the elastic group of the
+	//! row), and for a diagnosis its `kind`, `shape`, `rhs_label` and `avg_scaled`. The model builder copies it into
+	//! each row it states under DIAGNOSE and completes it with what only it knows (the group's key and name, the class
+	//! set, the LHS offset and the data row); outside DIAGNOSE it copies the source clause only.
 	ConstraintProvenance provenance;
-
-	//! The clause identity retained when one cast comparison expands to multiple boundary rows, the DROP group every
-	//! descendant row shares, and the elastic group of the row.
-	DecideRowOrigin origin;
 	//! Row→group mapping: the clause's `by` groups, classes or kept rows.
 	//! Empty = all rows in one implicit group (fast path: no `when`, no key)
 	//! DConstants::INVALID_INDEX = row excluded (dropped by the `when`, or outside its group)
@@ -376,7 +367,7 @@ struct EvaluatedConstraint {
 //! A `<>` clause, as the emitter evaluates it. It waits in `SolverInput::not_equals` until `LinearizeNotEqual` expands
 //! it into the conditional rows and the binaries that carry its disjunction, as LLVM's LegalizeDAG legalizes a
 //! pseudo-operation before instruction selection: the model builder never sees one. The list says which clause is a
-//! `<>`, and `row.origin.source_clause_id` names it.
+//! `<>`, and `row.provenance.origin.source_clause_id` names it.
 struct NotEqualClause {
 	EvaluatedConstraint row;
 	//! A grouped `<>` row whose bound is NULL: still a member of its group's sum, it excludes no value

@@ -100,7 +100,7 @@ static NECollapse ClassifyNEConstraint(const EvaluatedConstraint &ec, idx_t num_
 //! The clause a `<>` came from, quoted as written, naming every binary it allocates so a
 //! diagnosis renders `SUM(x) <> 0` rather than an internal column.
 static string NotEqualClauseLabel(const SolverInput &input, const EvaluatedConstraint &ec) {
-	return QuoteWrittenClause(input.constraint_sources, ec.origin.source_clause_id, input.source_text);
+	return QuoteWrittenClause(input.constraint_sources, ec.provenance.origin.source_clause_id, input.source_text);
 }
 
 //! One per-row `<>`, in whichever shape its own reachable range earns.
@@ -152,7 +152,7 @@ static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer, cons
 		auto stamp = [&](SolverInput::RawConstraint &rc) {
 			rc.provenance.kind = ConstraintKind::USER_MECHANISM;
 			rc.provenance.shape = ElasticShape::PER_ROW_DATA;
-			rc.provenance.origin = ec.origin;
+			rc.provenance.origin = ec.provenance.origin;
 			rc.provenance.indicator_col = z_col;
 			rc.StampGroup(ec, has_groups ? ec.row_group_ids[r] : DConstants::INVALID_INDEX);
 		};
@@ -251,9 +251,9 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer, const vect
 
 		// Range collapse, decided before anything is emitted. When the LHS cannot reach
 		// the far side of K, one disjunct is dead and the clause is a plain inequality.
-		NECollapse collapse =
-		    ClassifyNEConstraint(ec, num_rows, input.rigid_lower_bounds, input.rigid_upper_bounds,
-		                         InstanceBox {input, indexer}, DecideWrittenClause(input, ec.origin.source_clause_id));
+		NECollapse collapse = ClassifyNEConstraint(ec, num_rows, input.rigid_lower_bounds, input.rigid_upper_bounds,
+		                                           InstanceBox {input, indexer},
+		                                           DecideWrittenClause(input, ec.provenance.origin.source_clause_id));
 		if (collapse == NECollapse::ALWAYS_TRUE) {
 			continue; // excludes nothing reachable — drop, like the tautology case
 		}
@@ -283,7 +283,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 	for (auto *clause : deferred_aggregate) {
 		const auto &ec = clause->row;
 		bool has_groups = !ec.row_group_ids.empty();
-		const auto written = DecideWrittenClause(input, ec.origin.source_clause_id);
+		const auto written = DecideWrittenClause(input, ec.provenance.origin.source_clause_id);
 		// The group's LHS, one row the clause emits (ClauseEmittedRows): a group of a grouped clause, the whole
 		// clause for an ungrouped one.
 		auto &emitted = ClauseEmittedRows(ec, input, var_indexer, written);
@@ -422,7 +422,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 				// The provenance both halves carry, whichever shape they end up in.
 				auto stamp = [&](SolverInput::RawConstraint &rc) {
 					rc.provenance.kind = ConstraintKind::USER_MECHANISM;
-					rc.provenance.origin = ec.origin;
+					rc.provenance.origin = ec.provenance.origin;
 					rc.provenance.indicator_col = z_idx;
 					rc.StampGroup(ec, has_groups ? g : DConstants::INVALID_INDEX);
 					rc.provenance.is_aggregate = true;

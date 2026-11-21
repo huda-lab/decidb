@@ -466,19 +466,15 @@ const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const Solver
 //! F2: the provenance a row of `eval_const` starts from, whether linear or quadratic, aggregate or per-row. Every row
 //! names its clause (`source_clause_id`): an error about a number the model computes quotes it. Everything else is what
 //! a diagnosis reads and is stamped only under DIAGNOSE (SolverInput::diagnose): an ordinary query leaves it at its
-//! default. Under DIAGNOSE the row starts as a copy of the record the emitter filled (EvaluatedConstraint::provenance),
-//! with the row's origin and the `shape` its RHS reads (a literal RHS is one editable knob shared across every row or
-//! group this clause emits (paper §5); a data-derived RHS repairs as a symbolic offset instead). A site builds the row
-//! from it, which may remember a typed K (`remember_typed_k`), and then places the row (StampConstraintProvenance).
+//! default. Under DIAGNOSE the row starts as a copy of the record the emitter filled (EvaluatedConstraint::provenance).
+//! A site builds the row from it, which may remember a typed K (`remember_typed_k`), and then places the row
+//! (StampConstraintProvenance).
 static ConstraintProvenance ClauseProvenance(const SolverInput &input, const EvaluatedConstraint &eval_const) {
-	ConstraintProvenance provenance;
-	provenance.origin.source_clause_id = eval_const.origin.source_clause_id;
-	if (!input.diagnose) {
-		return provenance;
+	if (input.diagnose) {
+		return eval_const.provenance;
 	}
-	provenance = eval_const.provenance;
-	provenance.origin = eval_const.origin;
-	provenance.shape = provenance.rhs_is_shared_scalar ? ElasticShape::SHARED_SCALAR : ElasticShape::PER_ROW_DATA;
+	ConstraintProvenance provenance;
+	provenance.origin.source_clause_id = eval_const.provenance.origin.source_clause_id;
 	return provenance;
 }
 
@@ -924,7 +920,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 	for (auto &eval_const : input.constraints) {
 		bool is_aggregate = eval_const.lhs_is_aggregate;
 		bool has_groups = !eval_const.row_group_ids.empty();
-		const auto written = DecideWrittenClause(input, eval_const.origin.source_clause_id);
+		const auto written = DecideWrittenClause(input, eval_const.provenance.origin.source_clause_id);
 
 		// A data-weighted aggregate's coefficient names, under DIAGNOSE: map each summed decide variable to its
 		// coefficient expression (`buy → l_extendedprice`) so infeasible diagnosis can render
@@ -1174,7 +1170,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		auto &eval_const = quadratic.row;
 		bool is_aggregate = eval_const.lhs_is_aggregate;
 		bool has_groups = !eval_const.row_group_ids.empty();
-		const auto written = DecideWrittenClause(input, eval_const.origin.source_clause_id);
+		const auto written = DecideWrittenClause(input, eval_const.provenance.origin.source_clause_id);
 
 		if (is_aggregate) {
 			double rhs = eval_const.rhs_values.Get(0);

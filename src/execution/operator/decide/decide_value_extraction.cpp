@@ -355,8 +355,8 @@ EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constr
                                                   const std::function<idx_t(const DecideTerm &)> &read_variable) {
 	EvaluatedConstraint evaluated;
 	evaluated.comparison_type = constraint.comparison_type;
-	evaluated.origin = constraint.origin;
-	evaluated.origin.repair_group_id = repair_group_id;
+	evaluated.provenance.origin = constraint.origin;
+	evaluated.provenance.origin.repair_group_id = repair_group_id;
 	// Preserve whether the original LHS was an aggregate (e.g., SUM(...))
 	evaluated.lhs_is_aggregate = constraint.lhs_is_aggregate;
 	evaluated.defined_var = constraint.defined_var;
@@ -390,9 +390,9 @@ bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, bool diag
 		// clause emits, so the elastic engine collapses them to one shared slack.
 		// A constant canonicalization left of a written bound that reads data
 		// (`x <= cap * o` is `x - cap * o <= 0`) repairs as that bound does.
-		evaluated.provenance.rhs_is_shared_scalar =
-		    constraint.origin.source_clause_id >= constraint_sources.size() ||
-		    !constraint_sources[constraint.origin.source_clause_id].source_rhs_reads_data;
+		const bool shared = constraint.origin.source_clause_id >= constraint_sources.size() ||
+		                    !constraint_sources[constraint.origin.source_clause_id].source_rhs_reads_data;
+		evaluated.provenance.shape = shared ? ElasticShape::SHARED_SCALAR : ElasticShape::PER_ROW_DATA;
 		return false;
 	}
 	// A bound of data, read per row. The optimizer's bound-side window rewrite made each reducer on it a
@@ -401,11 +401,12 @@ bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, bool diag
 	// Canonicalization classifies the complete rebuilt bound. This is what
 	// keeps forward/reversed subquery spellings and arithmetic over query-wide
 	// values equivalent without re-deciding shape in the physical layer.
-	evaluated.provenance.rhs_is_shared_scalar = IsQueryWideBoundTag(constraint.rhs_expr->GetAlias());
+	evaluated.provenance.shape =
+	    IsQueryWideBoundTag(constraint.rhs_expr->GetAlias()) ? ElasticShape::SHARED_SCALAR : ElasticShape::PER_ROW_DATA;
 	// Under DIAGNOSE, capture the RHS symbolic name (e.g. the data column `cap_col`) so query-mode
 	// infeasible diagnosis can render `x <= cap_col + delta`. Only meaningful for a
 	// genuine data RHS; a shared-scalar RHS reports the numeric knob instead.
-	if (diagnose && !evaluated.provenance.rhs_is_shared_scalar &&
+	if (diagnose && evaluated.provenance.shape != ElasticShape::SHARED_SCALAR &&
 	    !ContainsScalarSubqueryProvenance(*constraint.rhs_expr)) {
 		evaluated.provenance.rhs_label = RenderDecideSource(*constraint.rhs_expr, source_text, keyed_scopes, &keys);
 	}
