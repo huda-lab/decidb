@@ -646,7 +646,7 @@ EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {
 	auto &node = *tree.nodes[root];
 	const auto entries = descent.Containers()[root].Count();
 	EmittedClause result;
-	result.row = InitializeEvaluatedConstraint(clause, body.clause_index, op.diagnose, [&](const DecideTerm &term) {
+	result.row = InitializeEvaluatedConstraint(clause, body.clause_index, [&](const DecideTerm &term) {
 		return gstate.ReadVariable(term.variable_index, term.frame_read);
 	});
 	auto &evaluated = result.row;
@@ -1104,7 +1104,7 @@ EmittedClause DecideModelEmitter::Groups(idx_t root, bool counted) {
 	auto &body = node.compiled;
 	auto &clause = *body.clause;
 	EmittedClause result;
-	result.row = InitializeEvaluatedConstraint(clause, body.clause_index, op.diagnose, [&](const DecideTerm &term) {
+	result.row = InitializeEvaluatedConstraint(clause, body.clause_index, [&](const DecideTerm &term) {
 		return gstate.ReadVariable(term.variable_index, term.frame_read);
 	});
 	auto &evaluated = result.row;

@@ -194,24 +194,6 @@ struct EvaluatedProductGroup {
 	int weight_sign = 1;
 };
 
-//! What a diagnosis calls a term's coefficient: the source text of its expression, and the number when the user wrote
-//! one (`SUM(2 * x)`), the only case with a single value to quote.
-struct CoefficientName {
-	string label;
-	bool is_literal = false;
-	double literal = 0.0;
-};
-
-//! One summed decide variable of an aggregate LHS, paired with the coefficient the user
-//! wrote for it. `has_unit` is false when that coefficient is data-varying
-//! (`SUM(keepS * price)`): there is no literal to quote, and the render falls back to the
-//! symbolic name in `ConstraintProvenance::weight_labels`. See `folded_terms`.
-struct FoldedAggTerm {
-	idx_t decide_var_idx = DConstants::INVALID_INDEX;
-	double unit = 1.0;
-	bool has_unit = false;
-};
-
 //! Row → clause provenance carried by every emitted constraint (F2). Lets diagnosis
 //! report at the user-clause level instead of at raw matrix rows.
 struct ConstraintProvenance {
@@ -263,28 +245,11 @@ struct ConstraintProvenance {
 	//! per-row fan-out to key on (distinct from SHARED_SCALAR, which a per-row
 	//! query-wide bound also carries) (Facet B).
 	bool is_aggregate = false;
-	//! Symbolic coefficient label per summed decide variable, for a data-weighted aggregate
-	//! (`SUM(buy * l_extendedprice)`): `decide_var_idx → "l_extendedprice"`. Lets infeasible
-	//! diagnosis render `SUM(buy * l_extendedprice)` instead of the per-row numeric fan-out
-	//! (`24710*buy + 56688*buy + …`) when the summed coefficients are data-varying, so there
-	//! is no single literal to quote. Empty for uniform-coefficient or non-aggregate rows.
-	vector<std::pair<idx_t, string>> weight_labels;
 	//! Symbolic name of a data-backed (PER_ROW_DATA) RHS column (`x <= cap_col` → "cap_col").
 	//! Lets query-mode infeasible diagnosis render a virtual offset (`x <= cap_col + delta`)
 	//! instead of the numeric representative RHS. Empty for a literal/shared RHS or when no
 	//! column name is available (the render then falls back to the numeric representative).
 	string rhs_label;
-	//! Per-term coefficient the user actually wrote, for an aggregate row whose terms *fold*
-	//! onto fewer solver columns than there are contributing rows. A keyed variable
-	//! (`DECIDE S.keepS`) maps every joined row of a class onto ONE column, so the builder
-	//! accumulates instead of fanning out: `SUM(keepS)` over two rows of one sensor arrives
-	//! as a single index with coefficient 2. The fan-out that `FormatSumLhs` keys on is then
-	//! structurally absent, and the reconstruction quotes a constant the user never typed
-	//! (`SUM(2*keepS)`, or `SUM(keepS * 1)` when the group mixes multiplicities). Recording
-	//! the written coefficient lets the diagnosis quote the clause as written.
-	//! Populated only on the accumulating build path; empty for row-scoped fan-out rows,
-	//! which `FormatSumLhs` already folds correctly.
-	vector<FoldedAggTerm> folded_terms;
 
 	//! The provenance of a row the model states for its own sake: a mechanism's row or a native construct, which no
 	//! parameter of the user's clause repairs.
@@ -299,12 +264,7 @@ struct ConstraintProvenance {
 struct EvaluatedConstraint {
 	vector<idx_t> variable_indices;             // Which variable for each term
 	vector<CoefficientColumn> row_coefficients; // [term_idx] = coefficient column for that term
-	//! What a diagnosis calls each term's coefficient (parallel to variable_indices), filled under DIAGNOSE only: an
-	//! ordinary query holds none. For a data-weighted aggregate term like `SUM(buy * l_extendedprice)` the label is
-	//! `l_extendedprice`, so the diagnosis renders the summed clause symbolically instead of dumping the per-row
-	//! numeric fan-out; a constant coefficient carries its number.
-	vector<CoefficientName> coefficient_names;
-	CoefficientColumn rhs_values; // RHS column (logical size = num_rows)
+	CoefficientColumn rhs_values;               // RHS column (logical size = num_rows)
 	//! A per-row bound on one decision: the values it admits on each row (DecideConstraint::admitted_lower and
 	//! admitted_upper), ±infinity on an open side. Logical size 0 for any other constraint.
 	CoefficientColumn admitted_lower;

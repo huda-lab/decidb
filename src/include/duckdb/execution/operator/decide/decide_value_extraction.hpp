@@ -134,10 +134,8 @@ void CountTupleTermsOncePerGroup(const vector<DecideTerm> &terms, idx_t num_rows
 idx_t CountInstances(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t num_rows, bool grouped);
 
 //! A clause's evaluation before its rows are read (EvaluatedConstraint): its facts, its repair group, and each term's
-//! decision as a row reads it (`read_variable`, DecideGlobalSinkState::ReadVariable). Under DIAGNOSE (`diagnose`) each
-//! term's coefficient as written too, which a diagnosis renders a data-weighted clause with.
+//! decision as a row reads it (`read_variable`, DecideGlobalSinkState::ReadVariable).
 EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constraint, idx_t repair_group_id,
-                                                  bool diagnose,
                                                   const std::function<idx_t(const DecideTerm &)> &read_variable);
 
 //! How a repair names `constraint`'s bound (ConstraintProvenance::rhs_label of the row's record, under DIAGNOSE only:

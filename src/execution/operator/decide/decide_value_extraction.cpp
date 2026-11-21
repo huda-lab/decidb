@@ -333,25 +333,7 @@ static bool ContainsScalarSubqueryProvenance(const Expression &expr) {
 	return found;
 }
 
-//! What a diagnosis calls `term`'s coefficient: its expression's text, and its value when the user wrote a number.
-static CoefficientName NameCoefficient(const DecideTerm &term) {
-	CoefficientName name;
-	if (!term.coefficient) {
-		return name;
-	}
-	name.label = term.coefficient->GetName();
-	if (term.coefficient->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-		auto &value = term.coefficient->Cast<BoundConstantExpression>().value;
-		if (!value.IsNull() && value.type().IsNumeric()) {
-			name.literal = value.GetValue<double>();
-			name.is_literal = std::isfinite(name.literal);
-		}
-	}
-	return name;
-}
-
 EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constraint, idx_t repair_group_id,
-                                                  bool diagnose,
                                                   const std::function<idx_t(const DecideTerm &)> &read_variable) {
 	EvaluatedConstraint evaluated;
 	evaluated.comparison_type = constraint.comparison_type;
@@ -366,14 +348,9 @@ EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constr
 	// Initialize result storage
 	evaluated.row_coefficients.resize(constraint.lhs_terms.size());
 
-	// Store variable indices for all terms (before scanning data). Under DIAGNOSE, capture each term's coefficient
-	// name too (`l_extendedprice` for `buy * l_extendedprice`) so the diagnosis can render a data-weighted SUM clause
-	// symbolically instead of dumping the per-row numeric fan-out.
+	// Store variable indices for all terms (before scanning data).
 	for (auto &term : constraint.lhs_terms) {
 		evaluated.variable_indices.push_back(read_variable(term));
-		if (diagnose) {
-			evaluated.coefficient_names.push_back(NameCoefficient(term));
-		}
 	}
 	return evaluated;
 }

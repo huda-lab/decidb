@@ -161,7 +161,6 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		aggregate.provenance.origin.source_clause_id = 5;
 		aggregate.provenance.origin.repair_group_id = 3;
 		aggregate.comparison_type = ExpressionType::COMPARE_LESSTHAN; // a strict bound remembers the typed K
-		aggregate.coefficient_names = {CoefficientName {"price", false, 0.0}, CoefficientName {"2", true, 2.0}};
 		input.constraints.push_back(std::move(aggregate));
 		SolverInput::RawConstraint raw;
 		raw.indices = {0};
@@ -194,14 +193,12 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 			CHECK(prov->rhs_label.empty());
 			CHECK(!prov->is_aggregate);
 		}
-		CHECK(model.constraints[1].provenance.weight_labels.empty());
 	}
 
-	SECTION("under DIAGNOSE a row carries its coefficient names and its typed bound") {
+	SECTION("under DIAGNOSE a row carries its typed bound") {
 		SolverInput input = MakeBaseInput(2, 2);
 		auto aggregate = MakeAggregate({0, 1}, 2, 10.0);
 		aggregate.comparison_type = ExpressionType::COMPARE_LESSTHAN;
-		aggregate.coefficient_names = {CoefficientName {"price", false, 0.0}, CoefficientName {"2", true, 2.0}};
 		input.constraints.push_back(std::move(aggregate));
 		GeneralConstraintSpec general;
 		general.result_column = 1;
@@ -216,9 +213,6 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		CHECK(prov.strict);
 		CHECK(prov.typed_k == 10.0);
 		CHECK(prov.is_aggregate);
-		REQUIRE(prov.weight_labels.size() == 2);
-		CHECK(prov.weight_labels[0].first == 0);
-		CHECK(prov.weight_labels[0].second == "price");
 		REQUIRE(model.general_constraints.size() == 1);
 		CHECK(model.general_constraints[0].provenance.kind == ConstraintKind::STRUCTURAL);
 		CHECK(model.general_constraints[0].provenance.origin.repair_group_id == 13);

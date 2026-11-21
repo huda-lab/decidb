@@ -482,10 +482,8 @@ static ConstraintProvenance ClauseProvenance(const SolverInput &input, const Eva
 //! name, the classes it stands for, the constant of the LHS the site folded into the RHS, and the data row.
 //! `group_key` defaults to INVALID_INDEX for an ungrouped aggregate row; pass the `when`/`by` group id for a grouped
 //! aggregate row, or the row's group for a per-row row. `row` is the data row a per-row row was emitted at (DIAGNOSE's
-//! `row`); a row that stands for no class set is a kept row, a class of its own (D28). The aggregate-only
-//! linear fields (weight_labels, folded_terms) are their own site, because a per-row or quadratic row does
-//! not carry them: FormatQuadraticLhs never reads them. The group's name is the clause's for `group_key`
-//! (EvaluatedConstraint::NameOf), so no site names a group apart from placing a row in it.
+//! `row`); a row that stands for no class set is a kept row, a class of its own (D28). The group's name is the
+//! clause's for `group_key` (EvaluatedConstraint::NameOf), so no site names a group apart from placing a row in it.
 //! `lhs_offset` is the constant part of the LHS that this site folded into the RHS
 //! (`SUM(x + c) >= K` is emitted as `SUM(x) >= K - Sum(c)`). The reconstructed clause
 //! label still renders the LHS the user wrote, constant included, so the RHS it is
@@ -922,54 +920,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		bool has_groups = !eval_const.row_group_ids.empty();
 		const auto written = DecideWrittenClause(input, eval_const.provenance.origin.source_clause_id);
 
-		// A data-weighted aggregate's coefficient names, under DIAGNOSE: map each summed decide variable to its
-		// coefficient expression (`buy → l_extendedprice`) so infeasible diagnosis can render
-		// `SUM(buy * l_extendedprice)` rather than the numeric fan-out. A constant coefficient has no name to map.
-		auto StampWeightLabels = [&](ConstraintProvenance &prov) {
-			for (idx_t t = 0; t < eval_const.variable_indices.size(); t++) {
-				idx_t v = eval_const.variable_indices[t];
-				if (v == DConstants::INVALID_INDEX || t >= eval_const.coefficient_names.size() ||
-				    eval_const.coefficient_names[t].label.empty()) {
-					continue;
-				}
-				prov.weight_labels.emplace_back(v, eval_const.coefficient_names[t].label);
-			}
-		};
-
-		// Written per-term coefficients, under DIAGNOSE, for the accumulating path only. There the row's
-		// coefficient is a *sum* over the folded rows (keyed vars collapse many
-		// rows onto one column), so the reconstruction cannot recover what the user typed
-		// from the matrix alone. A coefficient the user wrote as a number is that number; a data-varying one has no
-		// single value to quote (weight_labels covers that case).
-		// Computed once per clause, not per group: the grouped path below emits one constraint
-		// per group and would otherwise rebuild this (and its scratch set) for every one.
-		// Empty unless the clause is an aggregate that takes the accumulating path, which
-		// is the only case whose matrix coefficients are folded totals.
-		vector<FoldedAggTerm> clause_folded_terms;
-		if (input.diagnose && is_aggregate && !TermsHaveTheirOwnColumns(eval_const, indexer)) {
-			std::unordered_set<idx_t> seen;
-			for (idx_t t = 0; t < eval_const.variable_indices.size(); t++) {
-				idx_t v = eval_const.variable_indices[t];
-				if (v == DConstants::INVALID_INDEX || !seen.insert(v).second) {
-					continue;
-				}
-				FoldedAggTerm term;
-				term.decide_var_idx = v;
-				// A term's name is pushed with its variable, wherever an aggregate is evaluated.
-				term.has_unit = eval_const.coefficient_names[t].is_literal;
-				term.unit = eval_const.coefficient_names[t].literal;
-				clause_folded_terms.push_back(term);
-			}
-		}
-		// What only the linear aggregate rows carry, under DIAGNOSE.
-		auto StampAggregateTerms = [&](ConstraintProvenance &prov) {
-			if (!input.diagnose) {
-				return;
-			}
-			StampWeightLabels(prov);
-			prov.folded_terms = clause_folded_terms;
-		};
-
 		// The rows the clause emits, read once (ClauseEmittedRows). The builder is their last reader, so it takes them
 		// from the clause, and they are freed with this iteration.
 		ClauseEmittedRows(eval_const, input, indexer, written);
@@ -1001,7 +951,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 				ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_offset);
 				// F2 site 1: aggregate, ungrouped.
 				StampConstraintProvenance(input, constr.provenance, eval_const, DConstants::INVALID_INDEX, lhs_offset);
-				StampAggregateTerms(constr.provenance);
 				PushNormalizedConstraint(std::move(constr));
 
 			} else {
@@ -1035,7 +984,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 					ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, group_lhs_offset);
 					// F2 site 2: grouped aggregate (`by` and/or `when`).
 					StampConstraintProvenance(input, constr.provenance, eval_const, g, group_lhs_offset);
-					StampAggregateTerms(constr.provenance);
 					PushNormalizedConstraint(std::move(constr));
 				}
 			}

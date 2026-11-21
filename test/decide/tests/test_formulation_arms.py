@@ -161,8 +161,8 @@ def test_quadratic_clause_whose_square_terms_cancel_across_rows(decidb_cli_gurob
 
 @pytest.mark.correctness
 def test_aggregate_over_a_query_wide_decision_and_a_data_term(decidb_cli_gurobi, decidb_cli_highs):
-    """`SUM(x + c)` over a query-wide `x`: the clause's columns are shared, so its folded terms are read
-    (`clause_folded_terms`), and the data-only term has no decision to fold (`v == INVALID_INDEX`).
+    """`SUM(x + c)` over a query-wide `x`: the clause's columns are shared, so the row sums its terms per column,
+    and the data-only term has no decision to read (`v == INVALID_INDEX`).
     """
     cs = [0, 2, 1]
     values = ", ".join(f"({i + 1}, {c})" for i, c in enumerate(cs))
