@@ -277,8 +277,10 @@ private:
 			// A term with no coefficient is 1 where the row is read, guarded like one that has a coefficient.
 			term.coefficient = guard(*calc.Num(1));
 		}
+		// An ABS's argument is guarded term by term as a part's terms are: a term of degree 2 there has no coefficient
+		// of its own, only the forms it multiplies, and HasUnknownTerm declines it afterwards.
 		for (auto &inner : term.inner) {
-			inner.coefficient = guard(*inner.coefficient);
+			GuardCoefficients(calc, valid, inner);
 		}
 	}
 

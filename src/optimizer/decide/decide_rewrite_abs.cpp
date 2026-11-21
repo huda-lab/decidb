@@ -277,6 +277,24 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 	AddValueCheck(decide, calc.Out(DecideCheckOnKeptRows(calc, kept, check)));
 }
 
+//! Reads each ABS in `expr` as the bodies stand once the bilinear entry has run over them: the record keeps the operand
+//! with the products it tagged (the copy taken when the ABS got its helper has not), and an operand that still holds a
+//! product or a power of decisions is refused, at the ABS.
+static void SettleAbsOperands(const Expression &expr, LogicalDecide &decide, const DecideTermSplitter &splitter) {
+	idx_t aux_idx;
+	if (TryParseDecideIndexTag(expr.GetAlias(), ABS_FUNCTION_TAG_PREFIX, aux_idx)) {
+		auto &operand = *expr.Cast<BoundFunctionExpression>().children[0];
+		RequireLinearOperand(splitter, operand, expr, "ABS");
+		for (auto &function : decide.abs_functions) {
+			if (function.aux_idx == aux_idx) {
+				function.operand = operand.Copy();
+			}
+		}
+	}
+	ExpressionIterator::EnumerateChildren(expr,
+	                                      [&](const Expression &child) { SettleAbsOperands(child, decide, splitter); });
+}
+
 // ---------------------------------------------------------------------------
 // ABS recording (allocate helpers, retain their function nodes, record each ABS for the tree and stage 06)
 // ---------------------------------------------------------------------------
@@ -331,6 +349,11 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	for (auto &revisit : worklist) {
 		FindAndReplaceBilinear(*revisit.slot, decide, revisit.source_alias);
 	}
+	// The rows of an ABS state its operand as a linear form (EmitAbsEnvelopes, EmitAbsConstraints). A product with a
+	// BOOL factor is linear once the bilinear entry has tagged it, which for a product with an ABS factor happens just
+	// above, so the record's operand and the refusal wait for the worklist.
+	DecideTermSplitter splitter(optimizer.context, decide);
+	decide.EnumerateBodies([&](DecideOwnedBody &body) { SettleAbsOperands(*body.expr, decide, splitter); });
 }
 
 unique_ptr<Expression> decide_rewrite::MakeAbsRow(ClientContext &context, const LogicalDecide &decide,

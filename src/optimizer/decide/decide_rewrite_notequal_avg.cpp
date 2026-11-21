@@ -53,9 +53,7 @@ void DecideOptimizer::RewriteNotEqual(LogicalDecide &decide) {
 		// The two rows a `<>` becomes hold a linear left side only. A product with a BOOL decision is linear through
 		// its F helper (RewriteBilinear tags it before this pass); a product or a power of decisions still here has no
 		// formulation, and dropping its terms would change the answer.
-		if (!splitter.IsLinear(*comp.left)) {
-			throw NotImplementedException(comp, "<> over a product or a power of decisions is not supported");
-		}
+		RequireLinearOperand(splitter, *comp.left, comp, "<>");
 		// No indicator variable. Whether a `<>` even HAS a disjunction to switch is a
 		// question about evaluated data — a range that lies wholly on one side of `K`
 		// collapses to a plain inequality — and an aggregate spelling needs one binary

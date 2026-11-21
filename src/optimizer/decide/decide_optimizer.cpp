@@ -297,6 +297,13 @@ idx_t decide_rewrite::SourceClauseOf(const Expression &comparison, const Logical
 	return source_id;
 }
 
+void decide_rewrite::RequireLinearOperand(const DecideTermSplitter &splitter, const Expression &operand,
+                                          const Expression &at, const string &construct) {
+	if (!splitter.IsLinear(operand)) {
+		throw NotImplementedException(at, construct + " over a product or a power of decisions is not supported");
+	}
+}
+
 void decide_rewrite::AddRewriteAccount(LogicalDecide &decide, idx_t source_clause_id,
                                        LogicalDecide::RewriteAccount::Kind kind, string subject) {
 	LogicalDecide::RewriteAccount account;

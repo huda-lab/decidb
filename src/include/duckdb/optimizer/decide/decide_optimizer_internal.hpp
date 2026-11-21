@@ -26,6 +26,7 @@ namespace duckdb {
 
 class ClientContext;
 class DecideCanonicalizer;
+class DecideTermSplitter;
 class LogicalDecide;
 class Optimizer;
 
@@ -160,6 +161,13 @@ string RenderForPlan(const Expression &expr, const LogicalDecide &decide);
 //! user's constraints is tagged when the binder registers the sources, so a stage-05 refusal quotes its clause
 //! through QuoteWrittenClause (qualifier included) rather than rendering the comparison.
 idx_t SourceClauseOf(const Expression &comparison, const LogicalDecide &decide);
+
+//! Refuses `operand`, which `construct` (`<>`, ABS) reads as a linear form, when it holds a product or a power of
+//! decisions. The refusal is the construct's: `at` is the expression the caret points at. It runs after the bilinear
+//! rewrite has tagged the products with a BOOL factor, which are linear through their helper and stay accepted; a
+//! product it leaves has no formulation, and dropping its terms would change the answer.
+void RequireLinearOperand(const DecideTermSplitter &splitter, const Expression &operand, const Expression &at,
+                          const string &construct);
 
 //! Record what a rewrite made of `subject` (as RenderForPlan prints it), for EXPLAIN
 //! (LogicalDecide::rewrite_accounts): under the clause `source_clause_id`, or the

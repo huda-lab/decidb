@@ -2578,3 +2578,89 @@ def test_a_boolean_times_an_abs_the_objective_pushes_down_is_boxed(decidb_cli, t
         lambda a: sum(a[f"b{i}"] * abs(a[f"x{i}"] - 2) for i in range(3)),
         False,
     )
+
+
+# ===========================================================================
+# An ABS over a product of decisions
+# ===========================================================================
+#
+# An ABS states its operand as a linear form (EmitAbsEnvelopes, EmitAbsConstraints), so a product or a power of
+# decisions inside it has no formulation: it is refused at the ABS, as `<>` refuses one, never solved without the
+# product (which answered 1, 1 where the clause needs a sum of 7). A product with a BOOL decision is linear through
+# its helper and answers.
+
+_ABS_PRODUCT_REFUSAL = "ABS over a product or a power of decisions is not supported"
+_ABS_PRODUCT_CASES = [
+    pytest.param(
+        "x >= 1 AND x <= 3 AND y >= 1 AND y <= 3 AND sum(abs(x * y - 4)) >= 7 MINIMIZE sum(x)",
+        "abs(x * y - 4)",
+        id="product-in-a-clause",
+    ),
+    pytest.param(
+        "x >= 0 AND x <= 3 AND y >= 0 AND y <= 3 MAXIMIZE sum(abs(x * y - 4))",
+        "abs(x * y - 4)",
+        id="product-in-the-objective",
+    ),
+    pytest.param("x >= 0 AND x <= 3 MINIMIZE sum(abs(power(x, 2) - 4))", "abs(power(x, 2) - 4)", id="power"),
+    pytest.param(
+        "x >= 0 AND x <= 3 AND y >= 0 AND y <= 3 MAXIMIZE sum(abs(abs(x * y) - 1))",
+        "abs(x * y)",
+        id="inside-another-abs-points-at-the-inner",
+    ),
+    pytest.param(
+        "x >= 0 AND x <= 3 AND y >= 0 AND y <= 3 MAXIMIZE sum(abs(y * abs(x - 2) - 1))",
+        "abs(y * abs(x - 2) - 1)",
+        id="factor-is-another-abs-and-a-decision-that-is-not-bool",
+    ),
+]
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("mode", ["off", "auto"])
+@pytest.mark.parametrize("body, abs_call", _ABS_PRODUCT_CASES)
+def test_abs_over_a_product_or_power_is_refused_at_the_abs(decidb_cli, mode, body, abs_call):
+    sql = f"SET decide_direct_solve='{mode}'; SELECT id, x, y FROM (VALUES (1), (2)) t(id) DECIDE x(INT), y(INT) SUCH THAT {body} ORDER BY id"
+    decidb_cli.assert_error_at(sql, kind="Not implemented Error", at=abs_call, word=_ABS_PRODUCT_REFUSAL)
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("mode", ["off", "auto"])
+def test_abs_over_a_product_with_nullable_data_is_refused_not_crashed(decidb_cli, mode):
+    """A SUM over a nullable column reads each of its terms as 0 on a NULL row (the direct front end's
+    GuardCoefficients); the terms of degree 2 inside an ABS have no coefficient of their own, which it read as a
+    pointer. The shape is declined there and refused at the ABS."""
+    sql = f"""SET decide_direct_solve='{mode}';
+        CREATE TEMP TABLE nullable_target AS SELECT * FROM (VALUES (1, 4.0), (2, NULL), (3, 2.0)) v(id, c);
+        SELECT id, x, y FROM nullable_target
+        DECIDE x(INT), y(INT) SUCH THAT x >= 0 AND x <= 3 AND y >= 0 AND y <= 3
+        MAXIMIZE sum(abs(x * y - c)) ORDER BY id"""
+    decidb_cli.assert_error_at(sql, kind="Not implemented Error", at="abs(x * y - c)", word=_ABS_PRODUCT_REFUSAL)
+
+
+_BOOL_PRODUCT_DOMAINS = {**{f"b{i}": range(2) for i in range(2)}, **{f"x{i}": range(4) for i in range(2)}}
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("mode", ["off", "auto"])
+@pytest.mark.parametrize(
+    "operand, value",
+    [
+        pytest.param("b * x - 1", lambda b, x: b * x - 1, id="bool-times-a-decision"),
+        pytest.param("b * abs(x - 2) - 1", lambda b, x: b * abs(x - 2) - 1, id="bool-times-another-abs"),
+    ],
+)
+@pytest.mark.parametrize("sense, maximize", [("MAXIMIZE", True), ("MINIMIZE", False)])
+def test_abs_over_a_bool_product_still_answers(decidb_cli, mode, operand, value, sense, maximize):
+    """A product with a BOOL decision is linear once the bilinear rewrite has tagged it, which for a factor that is an
+    ABS happens after that ABS has its helper: the refusal waits for it, so both answer, judged over every
+    assignment."""
+    sql = f"""SET decide_direct_solve='{mode}';
+        SELECT id, b, x FROM (VALUES (1), (2)) t(id) DECIDE b(BOOL), x(INT)
+        SUCH THAT x >= 0 AND x <= 3 AND b + x <= 4 {sense} sum(abs({operand})) ORDER BY id"""
+    judge_rows(
+        answer(decidb_cli, sql),
+        _BOOL_PRODUCT_DOMAINS,
+        lambda a: all(a[f"b{i}"] + a[f"x{i}"] <= 4 for i in range(2)),
+        lambda a: sum(abs(value(a[f"b{i}"], a[f"x{i}"])) for i in range(2)),
+        maximize,
+    )
