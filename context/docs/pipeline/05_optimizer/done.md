@@ -449,6 +449,20 @@ legalization: stage 06 either states it natively or expands it (`../06_model_for
 gives each ABS an F node and builds its two envelope rows, `aux >= inner` and `aux >= -inner`, beneath it
 (`PrepareAbsFunctions`, `MakeAbsRow`), as it does for a definition; EXPLAIN prints both.
 
+**The operand is recorded once the bodies are final.** `RewriteAbs` ends with `RecordAbsOperands`, run over every body
+after the bilinear worklist drains, and it is the only place `AbsFunction::operand` is set. A copy taken when the
+helper is allocated would miss the tags the bilinear entry puts on a product: a product with a `BOOL` factor is linear
+once the entry tags it, and a product with an `ABS` factor is tagged only by the worklist described in the bilinear
+section. An operand that still holds a square or a product of decisions is refused at the ABS with a
+`NotImplementedException`, *"ABS over a product or a power of decisions is not supported"*. The test is
+`RequireLinearOperand`, which asks `DecideTermSplitter::IsLinear` and which `RewriteNotEqual` calls too. The refusal
+stands because the rows of an ABS state its operand as a linear form (`AbsEnvelope` in the emitter asserts the
+envelope holds no product), so a product there needs a route of its own. The direct front end guards the terms inside
+an ABS as it guards a part's terms (`GuardCoefficients` recurses into `term.inner`); a term of degree 2 there has no
+coefficient of its own and the front end declines it (`HasUnknownTerm`), so the solver path refuses it here.
+
+**Ruling (owner, 2026-11-21).** Keep the product where it fits the one constraint path, else refuse.
+
 **A NaN or infinite value is named where it stands.** Its message says the value is NaN or infinite and quotes it as
 the user wrote it, with the caret on it (`DecideInvalidValueError`, `common/decide_value_messages.hpp`); it names no
 row and suggests no edit. A coefficient keeps no list of the inputs it was merged from: the solver path throws the
@@ -977,7 +991,8 @@ The two rows a `<>` becomes hold a linear left side. The pass runs after
 `RewriteBilinear`, so a product with a `BOOL` decision is already an auxiliary; a square
 or a product of decisions still on the left (`DecideDegreeOf` above 1) has no
 formulation and is refused here (*"<> over a product or a power of decisions is not
-supported"*, at the comparison). This is the only check: stage 06 does not repeat it.
+supported"*, at the comparison). The test is `RequireLinearOperand`, which an ABS's operand takes too (see
+`RewriteAbs`, above). This is the only check: stage 06 does not repeat it.
 
 ### AVG → SUM — `RewriteAvgToSum`
 

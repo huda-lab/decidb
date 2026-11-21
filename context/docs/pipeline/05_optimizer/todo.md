@@ -4,22 +4,6 @@ Open work in the optimizer passes. Finished work is in [done.md](done.md). How t
 [`../../direct_solve/framework/todo.md`](../../direct_solve/framework/todo.md) § How to work any task in these todo
 files.
 
-## OPT-32 — An ABS over a product of two decisions drops the product
-
-- **Problem.** A wrong answer, and a crash. With `decide_direct_solve='off'` and `x`, `y` INT in `[1, 3]` over two
-  rows, `sum(abs(x * y - 4)) >= 7 MINIMIZE sum(x)` returns `x = y = 1` on both rows, where the sum is 6; over `[0, 3]`,
-  `MAXIMIZE sum(abs(x * y - 4))` returns 0 on every row, where 10 is the optimum. The ABS rows are linear, and a
-  product of two decisions neither of which is BOOL (`RewriteBilinear` takes a BOOL factor) is left out of them. With
-  direct solve on, `MAXIMIZE sum(abs(x * y - c))` raises an internal error in `DirectFrontEnd::GuardCoefficients`,
-  which reads a NULL coefficient.
-- **Change.** The ABS rows keep the product: they are quadratic rows and take the path every quadratic constraint
-  takes (Gurobi solves them; the solver gate refuses them elsewhere). If that needs a case of its own, the shape check
-  refuses a product of decisions under ABS instead, as it refuses one under any other function. The direct front end
-  declines the shape rather than reading a NULL.
-- **Ruling (owner, 2026-11-21).** This order: keep the product where it fits the one constraint path, else refuse.
-- **Done when.** Both examples agree with the oracle, or are refused with a `Not implemented Error`; the direct path
-  answers or declines; `./test/decide/run_tests.sh -k "abs or quadratic"` passes.
-
 ## OPT-33 — The refusal of a squared objective beside a whole number names what the query holds
 
 - **Problem.** With `DECIDB_FORCE_SOLVER=highs` and `decide_direct_solve='off'`, a squared objective in a model with a

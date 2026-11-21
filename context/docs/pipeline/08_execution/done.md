@@ -1152,7 +1152,7 @@ other to `evaluated_constraints`. `BuildSolverInput` moves them to `SolverInput:
 
 The row starts from its clause: `InitializeEvaluatedConstraint` sets its `provenance` from the tree's constraint (the
 `origin` with the repair group execution numbers, and the `kind`), `DescribeBound` sets the `shape` and the `rhs_label`
-of its bound, and the AVG scaling sets `avg_scaled`. The model builder copies that record into each row it states.
+of its bound. The model builder copies that record into each row it states.
 
 When the objective is quadratic, the same evaluation runs on `product_groups` **in
 addition to** `terms`, not instead of: the linear terms fill `objective_coefficients` /

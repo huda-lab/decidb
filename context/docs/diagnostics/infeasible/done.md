@@ -380,15 +380,12 @@ nowhere in the query, whose suggested edit could not be pasted back over anythin
 `ConstraintProvenance::rhs_mechanism_offset`, the lowering's part stamped by the
 linearizer and the folded constant added by the builder site that folded it.
 
-**Edit conversion (the D3 helper).** Reading the slack support is centralized in
-`MakeLoosenEdit` (a literal knob) and
-`MakeVirtualOffsetEdit` (a query-mode data offset,
-`x <= col + delta`) in `decide_diagnostic_render.cpp` — the one place per-shape rendering
-lives: they render the sense, re-quote a strict `<`/`>` against the typed literal, and format
-the suggestion. The LHS is rendered shape-aware by `FormatLhs` — plain `FormatTerms`,
-AVG-collapsing (`FormatAvgLhs`), or SUM-collapsing (`FormatSumLhs`) — or `FormatQuadraticLhs`
-for a quadratic constraint. A `ClauseEdit` carries a `ClauseEditKind` (`LOOSEN` vs `DROP`,
-`decide_diagnostic.hpp`), `edit_source`, and optional `group` / `row` identity.
+**Edit conversion (the D3 helper).** Reading the slack support is centralized in `MakeLoosenEdit` (a literal knob) and
+`MakeVirtualOffsetEdit` (a query-mode data offset, `x <= col + delta`) in `decide_diagnostic_render.cpp` — the one place
+per-shape rendering lives: they render the sense, re-quote a strict `<`/`>` against the typed literal, and format the
+suggestion. The LHS is quoted from the query text (`SourceAwareLhs`, `SourceAwareQuadraticLhs`) when the row's source
+clause has one, and otherwise listed from the row's terms (`FormatTerms`, `FormatQuadraticLhs`). A `ClauseEdit` carries
+a `ClauseEditKind` (`LOOSEN` vs `DROP`, `decide_diagnostic.hpp`), `edit_source`, and optional `group` / `row` identity.
 
 ### Data bounds and the editable-knob preference
 
@@ -440,81 +437,37 @@ preferred when it can restore feasibility.
   is the sole enforcer. Never opens past 1 (that would unbound the variable). With this, E loosens
   the budget and reaches a nonzero objective; without it, the normalized weights point at the right
   clause but the model still can't buy anything.
-- **Data-weighted SUM renders symbolically (`SUM(buy * l_extendedprice)`).** A data-VARYING summed
-  term has no single literal coefficient to quote, and the raw per-row fan-out
-  (`24710*buy + 56688*buy + …`) is unreadable. The coefficient's source-column name is carried
-  from the binder (`Term::coefficient->GetName()` at evaluation in `physical_decide.cpp`) through
-  `EvaluatedConstraint::coefficient_names` → `ConstraintProvenance::weight_labels`
-  (`ilp_model_builder.cpp`, stamped at the aggregate emission sites) → `FormatSumLhs`, which renders
-  `SUM(var * label)` when a fanned variable is data-varying and a label is present (else it still
-  falls back to the raw form). Uniform-coefficient sums are unaffected (they still fold to
-  `SUM(c*var)`).
 
-### AVG, strict and quadratic clauses in the user's units
+### Aggregate, strict and quadratic clauses in the user's units
 
-- **AVG.** The AVG→SUM rewrite pre-scales row coefficients by `1/N_g`
-  (`ScaleAvgRows`, `physical_decide.cpp`), so the slack is **already in AVG units** — reported raw, no
-  `/N_g`. A pure-AVG row is tagged `provenance.avg_scaled` (set in `physical_decide.cpp` when
-  every linear term is AVG-scaled, propagated at the aggregate provenance sites in
-  `ilp_model_builder.cpp`); `FormatLhs` then collapses the `1/N`-scaled terms back to `AVG(x)`
-  (inner coeff = stored coeff × the variable's term count) instead of rendering `0.5*x + 0.5*x`.
-  A **data-varying** AVG coefficient (`AVG(buy * p_retailprice)`, price differs per row) has no
-  single literal to re-quote, so `FormatAvgLhs` bails and the row renders through `FormatSumLhs` —
-  but `FormatLhs` passes `agg_name = "AVG"` for any `avg_scaled` row, so the wrapper stays `AVG(...)`
-  rather than mislabeling the user's AVG constraint (and its suggested edit, quoted in AVG units) as
-  `SUM`.
-- **SUM.** An aggregate `SUM` over rows emits one solver column per row for the same decide
-  variable, so a plain reconstruction reads `x + x + x`. `FormatSumLhs` collapses the per-row
-  fan-out back to `SUM(c*var)` for a uniform coefficient, and to `SUM(var * col)` for a
-  **data-varying** coefficient (`SUM(buy * l_extendedprice)`) using the symbolic column name carried
-  in `provenance.weight_labels` (see the "data-weighted SUM renders symbolically" note above); it
-  only falls back to the raw numeric reconstruction when a data-varying term has *no* label.
-  **Grouped aggregates fold too**: every group of `per grp: sum(x) by (grp) >= 5` renders
-  as that one clause, kept distinguishable by the `group` column (see "Group identity"
-  below). A **single-row aggregate group** (one a `when` narrows to a single row) has no
-  fan-out for `FormatSumLhs` to fold, so `FormatLhs` wraps the reconstruction in `SUM(...)`
-  explicitly when `provenance.is_aggregate` and there is no multi-column fan (`HasVarFan`)
-  — `when g = 'a': sum(x) >= 99` never reads as a bare `x >= 99`.
-- **Keyed SUM (the fold).** A **keyed** decision (`DECIDE per S: keepS(BOOL)`) maps every
-  joined row of a class onto *one* solver column, so the builder **accumulates** instead of
-  fanning out: `sum(keepS)` over two alert rows of one sensor reaches the matrix as a single
-  index with coefficient `2`. The per-row fan-out every rule above keys on is then
-  structurally absent, and reconstructing from the matrix quotes arithmetic the user never
-  wrote — `SUM(2*keepS)` when the group holds one class, or `SUM(keepS * 1)` when the group
-  mixes join multiplicities (the differing per-class totals read as a data-varying weight,
-  so the coefficient's *source text* gets rendered as if it were a column). Both fail the
-  pasteable-edit test and leak the keyed/per-row distinction. The accumulating build sites
-  therefore stamp `provenance.folded_terms` — the coefficient the user actually wrote per
-  summed decide variable, taken from `CoefficientColumn::IsUniform()` or, when the constant
-  materializes dense, from a `coefficient_names` entry that holds the user's literal (`CoefficientName::is_literal`,
-  `literal`: the number the user wrote, carried as a number). `FormatLhs` consults `FormatFoldedSumLhs` **before** the matrix-inference
-  paths, since those misread accumulated rows; it declines (returning false) for any row it
-  cannot reconstruct whole — an auxiliary column, an unstamped variable, or a data-varying
-  term with no symbolic name — leaving the paths below unchanged. `folded_terms` is
-  populated only on the accumulating path, so a per-row fan-out never diverts there. AVG
-  rows are excluded: their coefficients are additionally 1/N pre-scaled, so the recorded
-  unit is not quotable in AVG units. Genuinely data-weighted keyed clauses still render
-  symbolically (`SUM(keepS * cost)`).
+- **Aggregates.** A clause is quoted as the user wrote it (`SourceAwareLhs`, `SourceAwareRhs`, `SourceWrittenRhs`), so
+  an AVG, a data-weighted, grouped or keyed SUM reads as written whatever the matrix holds: 1/N-scaled coefficients, a
+  per-row fan-out of one decision across solver columns, or a keyed decision folded onto one column with an accumulated
+  coefficient. Rebuilding the text from the matrix would quote arithmetic the user never wrote (`0.5*x + 0.5*x`,
+  `SUM(2*keepS)`). A row with no source clause lists its terms (`FormatTerms`). A grouped clause renders as that one
+  clause for every group, kept distinguishable by the `group` column (see "Group identity" below). An AVG row's slack is
+  already in AVG units, because the AVG→SUM rewrite pre-scales row coefficients by `1/N_g` (coefficient evaluation
+  divides the terms of an AVG-tagged reducer by the rows it reads in its group), so it is reported raw, with no `/N_g`.
 - **Strict `<` / `>`.** The δ offset (`< K → <= ceil(K)-1`, `> K → >= floor(K)+1`) is baked into
   `rhs` at the δ site (`ApplyComparisonSense`, `ilp_model_builder.cpp`), which also sets
   `provenance.strict` + `provenance.typed_k` (the user's literal: a constant moved off the body,
   as in `SUM(x - 5) < 3`, is added back). `MakeLoosenEdit` re-quotes the
   suggestion against `typed_k` and renders `<` / `>`, e.g. `x < 10` → `x < 16`.
-- **Quadratic.** `BuildElasticModel` loops `model.quadratic_constraints` and slacks the **linear
-  RHS only** (never the Q matrix): `e(x) + xᵀQx ≤ K` loosens to `… ≤ K + s`. The `BlockSlackRef`
-  carries a `quadratic` flag (its `rows` then index `quadratic_constraints`); `FormatQuadraticLhs`
-  renders `POWER(x, 2)` / `x*y` terms. Quadratic slacks are always editable-weighted (a quadratic
-  is always a LOOSEN edit, never a data conflict). QCQP is Gurobi-only. A constant in the
-  quadratic body (`SUM(POWER(x - 5, 2)) <= 3`) is folded into the bound as on the linear path,
-  and stamped as `lhs_offset` the same way, so the echo and the suggestion quote the written
-  `3`, not the folded `-72`; a strict `<` / `>` keeps the typed literal as `typed_k`.
+- **Quadratic.** `BuildElasticModel` loops `model.quadratic_constraints` and slacks the **linear RHS only** (never the
+  Q matrix): `e(x) + xᵀQx ≤ K` loosens to `… ≤ K + s`. The `BlockSlackRef` carries a `quadratic` flag (its `rows` then
+  index `quadratic_constraints`); a quadratic row is quoted as written (`SourceAwareQuadraticLhs`), and a row with no
+  source clause lists its terms (`FormatQuadraticLhs`: `POWER(x, 2)` / `x*y`). Quadratic slacks are always
+  editable-weighted (a quadratic is always a LOOSEN edit, never a data conflict). QCQP is Gurobi-only. A constant in the
+  quadratic body (`SUM(POWER(x - 5, 2)) <= 3`) is folded into the bound as on the linear path, and stamped as
+  `lhs_offset` the same way, so the echo and the suggestion quote the written `3`, not the folded `-72`; a strict `<` /
+  `>` keeps the typed literal as `typed_k`.
 
 ### Group identity (group label + scope)
 
 A clause over `per` classes or `by` groups (`per grp: sum(x) by (grp) >= 5`) emits one row
 per group (how a clause becomes model rows: `../../language/guide.md`
 §6.4), so each group can get its own edit. Each edit is **self-identifying**, which is
-what lets the SUM fold above apply without two groups colliding in the relation. Three
+what lets one clause quote serve every group without two groups colliding in the relation. Three
 channels, read off `ConstraintProvenance` and the source registry (no change to the solve):
 
 - **`group_name`** — which group of which key the row belongs to, from which the group's
@@ -544,8 +497,8 @@ channels, read off `ConstraintProvenance` and the source registry (no change to 
   read from the name's group number, not its text. The `clause` stays in the user's spelling, so a
   finding never relies on relation row order to tie `suggested_change`/`amount` to a group and
   never appends implementation-only `[group: ...]` text to the clause.
-- **`is_aggregate`** — set from `eval_const.lhs_is_aggregate` at the aggregate emission sites;
-  drives the single-row `SUM(...)` wrapper in `FormatLhs` (see the AVG section above).
+- **`is_aggregate`** — set from `eval_const.lhs_is_aggregate` at the aggregate emission sites; the expanded
+  scope reads it to tell a data-bound row that stands for one data row from a row that stands for a group.
 - **The scope (`qualifier`)** — the `when c per K:` text in front of the clause, built once
   per clause on the bound tree by `InitializeConstraintSourceInfo`
   (`decide_source_provenance.cpp`, `VisitSourceComparisons`) and kept in the source
@@ -579,7 +532,7 @@ lowers to a helper with an envelope and closing rows, and a clause row that read
 clause. Making the closing rows relaxable would break both halves of a diagnosis:
 
 - *The name.* `ExtremumLinkSpec` carries no source clause, so a blamed closing row has no
-  clause to name. `SourceAwareLhs` would fall back to `FormatLhs` and rebuild the text from the
+  clause to name. `SourceAwareLhs` would fall back to `FormatTerms` and list the
   row's own coefficients, reporting `MIN((x + c)) - x - 110*MIN((x + c)) >= -110` — a string
   appearing nowhere in the query.
 - *The number.* Slack on a closing row lets the auxiliary `z` leave its extremum; the user's

@@ -179,8 +179,8 @@ user-clause level instead of raw rows.
   drive the elastic engine's slack placement: `shape` (`ElasticShape::UNSET`
   / `SHARED_SCALAR` / `PER_ROW_DATA`) decides whether a clause's rows share **one** slack;
   `UNSET` is the invalid default, and `BuildElasticModel` asserts that any relaxable
-  user-clause row has been explicitly stamped before diagnosis reads it. `avg_scaled` /
-  `strict` / `typed_k` carry the per-shape unit info for reporting (see
+  user-clause row has been explicitly stamped before diagnosis reads it. `strict` /
+  `typed_k` carry the per-shape unit info for reporting (see
   `../infeasible/done.md`).
 - **Single row-role enum:** `ConstraintKind = { USER_PARAMETER, USER_MECHANISM,
   STRUCTURAL }` (`duckdb/common/enums/decide.hpp`). `USER_PARAMETER` carries a
@@ -194,7 +194,7 @@ user-clause level instead of raw rows.
   to `USER_PARAMETER` unless the planner/operator stamps a rigid role; raw generated
   constraints default to `STRUCTURAL` unless explicitly marked as user mechanism or
   user parameter. The six evaluated-constraint sites start each row from the record the emitter filled
-  (`ClauseProvenance`: `origin`, `kind`, `shape`, `rhs_label`, `avg_scaled`) and place it through one free function,
+  (`ClauseProvenance`: `origin`, `kind`, `shape`, `rhs_label`) and place it through one free function,
   `StampConstraintProvenance` (`group_key`/`group_name` where grouped, `is_aggregate`, `rhs_mechanism_offset`,
   `class_set`, and for the per-row sites `data_row` and `per_kept_row`). A raw row and a native construct carry a
   provenance of their own, which `StampProvenance` copies whole. See

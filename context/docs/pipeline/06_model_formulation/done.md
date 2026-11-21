@@ -449,12 +449,12 @@ link, as `origin`). The model builder copies a raw row's or a construct's proven
 **A clause row carries its provenance from the emitter.** `EvaluatedConstraint::provenance` holds the origin and the
 clause-level facts execution reads off the clause: the `kind` (user parameter vs rigid mechanism row), the elastic
 `shape` (does this row share one slack with its siblings or get its own; `DescribeBound` sets it, from whether the
-clause's whole right side is one query-wide scalar), the `rhs_label` of a data-backed bound, and whether coefficients
-were pre-scaled by `1/N_g` for an AVG rewrite (`avg_scaled`). Under `DIAGNOSE` the builder starts each row it states
-from that record (`ClauseProvenance`) and adds what only it knows: the group's key and name, the class set, the LHS
-offset, the data row, whether the LHS was an aggregate, and the strict comparison's original literal (so a suggestion
-can be re-quoted against it). Outside `DIAGNOSE` the row starts from the source clause alone. The flat column of the
-`<>` disjunction binary the row belongs to (`indicator_col`) is stated by the lowering that allocates it.
+clause's whole right side is one query-wide scalar), and the `rhs_label` of a data-backed bound. Under `DIAGNOSE` the
+builder starts each row it states from that record (`ClauseProvenance`) and adds what only it knows: the group's key and
+name, the class set, the LHS offset, the data row, whether the LHS was an aggregate, and the strict comparison's
+original literal (so a suggestion can be re-quoted against it). Outside `DIAGNOSE` the row starts from the source clause
+alone. The flat column of the `<>` disjunction binary the row belongs to (`indicator_col`) is stated by the lowering
+that allocates it.
 
 `FoldedAggTerm` pairs each summed decide variable with the coefficient the user
 wrote for it. `has_unit` is false when that coefficient is data-varying — there is

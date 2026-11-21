@@ -140,6 +140,7 @@ where the message names a clause or a node the user wrote.
 | A comparison that reads no decision (`v <= 5`, `SUM(t.v) + 1 <= 500`, `abs(v) <= 5`), or an objective whose body reads none (`1 + 2`, `sum(v) + 1`) | Binder | `'v <= 5' reads no decision` | the comparison, or the objective body |
 | `AVG` under `<>` beside another term, or with its own `when` or `per` | NI | `AVG in a <> constraint beside another term, or with its own when or per, is not supported` | the comparison |
 | `<>` over a square or product of decisions not linearized first (a product with a `BOOL` is) | NI | `<> over a product or a power of decisions is not supported` | the comparison |
+| An `ABS` over a square or product of decisions not linearized first (a product with a `BOOL` is) | NI | `ABS over a product or a power of decisions is not supported` | the ABS |
 | **D80** A square or product of decisions inside nested reducers that no body definition names | Binder | `'q' squares or multiplies decisions inside nested reducers, which is not allowed` | the reducer |
 | A square, or a product of two decisions, outside a reducer in the objective, unless the two are distinct query-wide decisions or one is `BOOL` | NI | `'x * y' multiplies decisions outside a reducer, which is not supported` | the product |
 | **D80** A square or product of decisions in a frame's payload or `else` (`x * x`, `power(x, 2)`, `x ** 2`) | Binder | `'x * x' squares or multiplies decisions inside a frame, which is not allowed` | the inner node |

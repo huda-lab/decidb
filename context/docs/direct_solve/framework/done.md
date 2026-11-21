@@ -401,12 +401,13 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
   arrives as the tests `DecideCanonicalizer::SkipNullData` added to its filter; the IR moves them out of `part.filter`
   into the part's tests, and `GuardCoefficients` reads a coefficient as 0 on a row they fail, so the SUM adds nothing
   for it: every coefficient, a square's weight and the implicit 1 of a term with no coefficient among them, each tagged
-  as a guard so a rule that needs the constant reads through it (`DecideUnguarded`). A NULL limit or per-row bound is
-  open: S1's `SourceLimit` reads it as no limit, R1's limits pass over it through `MIN`/`MAX`/`LEAST`/`GREATEST`, and
-  `DirectRowBoundMessage` and the singleton-row box (`AdmittedInterval`) give the instance no bound. The driver strips
-  every tag from the operators above the source (`StripTagsAbove`), and an aggregate built from a reducer
-  (`DirectAggregateOf`, for a side table, on either path) drops the reducer's alias, which carries its
-  tags, so EXPLAIN never prints one.
+  as a guard so a rule that needs the constant reads through it (`DecideUnguarded`). The guarded coefficients include
+  the terms inside an ABS; a product inside an ABS has no coefficient of its own, and the front end declines it. A NULL
+  limit or per-row bound is open: S1's `SourceLimit` reads it as no limit, R1's limits pass over it through
+  `MIN`/`MAX`/`LEAST`/`GREATEST`, and `DirectRowBoundMessage` and the singleton-row box (`AdmittedInterval`) give the
+  instance no bound. The driver strips every tag from the operators above the source (`StripTagsAbove`), and an
+  aggregate built from a reducer (`DirectAggregateOf`, for a side table, on either path) drops the reducer's alias,
+  which carries its tags, so EXPLAIN never prints one.
 - **Number messages.** Both paths raise one text, `DecideInvalidValueMessage` (`decide_value_messages.hpp`), from the
   value's `DecideValueRole` and its text as written: the cut query text, or `DirectIR::render` where none was cut
   (`NULL_GUARD_TAG` keeps a NULL guard out of the text), with the caret on the value
