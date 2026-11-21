@@ -97,15 +97,9 @@ void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &r
 	RunPass("optimizer.tag_groups", [&] { TagAtomicRemovalGroups(decide); });
 	// A range over decisions becomes a helper before any rewrite copies it.
 	RunPass("optimizer.frame_ranges", [&] { RewriteFrameRanges(decide); });
-	// Preserve the polarity of ABS nodes in the written expression before the other rewrites move them into helper
-	// bodies. The later pass classifies ABS introduced by those rewrites.
-	RunPass("optimizer.tag_abs_source", [&] { TagAbsForBigM(optimizer.context, decide); });
 	// Nested reducers remain in their written positions; the tree lowers them as G nodes beneath their readers.
 	RunPass("optimizer.norm", [&] { RewriteNorm(decide); });
 	RunPass("optimizer.in_domain", [&] { RewriteInDomain(decide); });
-	// Classify ABS while the written reducer and clause context are still intact; later rewrites may move the function
-	// into a helper body.
-	RunPass("optimizer.tag_abs", [&] { TagAbsForBigM(optimizer.context, decide); });
 	// McCormick linearization for Boolean × anything bilinear products
 	RunPass("optimizer.bilinear", [&] { RewriteBilinear(decide); });
 	// A MIN/MAX in its cheap direction keeps its reducer, tagged, before any pass reads the clause's direction.
@@ -120,6 +114,8 @@ void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &r
 	VerifyExtremumBodiesLinear(optimizer.context, decide);
 	RunPass("optimizer.not_equal", [&] { RewriteNotEqual(decide); });
 	RunPass("optimizer.avg", [&] { RewriteAvgToSum(decide); });
+	// Last of the rewrites that join a helper's readers: each ABS takes its encoding from the push its body's owner
+	// gives it.
 	RunPass("optimizer.abs", [&] { RewriteAbs(decide); });
 	// Products outside ABS need the helper it just allocated; the first bilinear pass has already handled products
 	// inside ABS's operand and everywhere else.

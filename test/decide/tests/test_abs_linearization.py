@@ -19,12 +19,13 @@ Covers:
 
 import re
 import time
+from itertools import product
 
 import pytest
 
 from decidb_cli import DeciDBCliError, _last_complete_model_dump
 from solver.types import VarType, ObjSense, SolverStatus
-from ._brute_force import judge_rows
+from ._brute_force import assert_none_feasible, judge_rows
 from ._scope_cases import answer, dump_counts, error_of
 
 
@@ -2429,3 +2430,169 @@ def test_a_boolean_times_an_unbounded_abs_names_the_abs_as_written(decidb_cli):
         word="'abs( x-score )' has no finite upper bound, which its product with a BOOL decision needs",
     )
     assert "__abs_aux" not in decidb_cli.execute_raw(sql).stderr
+
+
+# ---------------------------------------------------------------------------
+# A body that several readers share takes the encoding every one of them needs
+# ---------------------------------------------------------------------------
+#
+# A reducer a clause cannot keep in place is a helper decision, defined once however many clauses read it: a value
+# link for a SUM, AVG, MIN or MAX, a definition for a body that squares or multiplies (RewriteScopedReducers,
+# PrepareDefinitionFunctions). The ABS in its body is pinned from the sides the helper states, which join every
+# reader's push, not from the clause that read it first. `abs(x - 3)` is `3 - x` over x in [0, 3], so the left side
+# of every clause below is at most 12 (sum), 6 (max, min), or 30 (the definitions), and a clause that asks for more is
+# infeasible: an auxiliary held by its lower envelope alone floats above |x - 3| and satisfies it. Judged by
+# enumeration over three rows, on both solvers; the definitions square a decision, which HiGHS has no row for.
+
+_SHARED_ROWS = 3
+_SHARED_DOMAINS = {f"x{i}": range(4) for i in range(_SHARED_ROWS)}
+_SHARED_SOLVERS = pytest.mark.parametrize(
+    "cli_fixture, extra_env",
+    [
+        ("decidb_cli_gurobi", {"DECIDB_TEST_DIRECT_SOLVE": "off"}),
+        ("decidb_cli_gurobi", {"DECIDB_TEST_DIRECT_SOLVE": "off", "DECIDB_NATIVE_CONSTRUCTS": "off"}),
+        ("decidb_cli_highs", {"DECIDB_TEST_DIRECT_SOLVE": "off"}),
+    ],
+    ids=["gurobi", "gurobi-lowered", "highs"],
+)
+
+
+def _shared_sql(clause):
+    return f"""SELECT id, x FROM (VALUES (1), (2), (3)) t(id)
+        DECIDE x(INT) SUCH THAT x >= 0 AND x <= 3 AND {clause} MAXIMIZE sum(x) ORDER BY id"""
+
+
+def _judge_shared(cli, clause, feasible):
+    """The answer is the enumerated optimum of the clause, or the error that says no assignment holds it."""
+    if any(
+        feasible({f"x{i}": v for i, v in enumerate(values)})
+        for values in product(*[_SHARED_DOMAINS[f"x{i}"] for i in range(_SHARED_ROWS)])
+    ):
+        judge_rows(answer(cli, _shared_sql(clause)), _SHARED_DOMAINS, feasible, _total, True)
+    else:
+        assert_none_feasible(_SHARED_DOMAINS, feasible)
+        assert "infeasible" in error_of(cli, _shared_sql(clause))
+
+
+def _shared_between(reducer, low=None, high=None):
+    """`x + reducer` on every row lies in [low, high] (an end left out is open); `reducer` reads the assignment."""
+    return lambda a: all(
+        (low is None or a[f"x{i}"] + reducer(a) >= low) and (high is None or a[f"x{i}"] + reducer(a) <= high)
+        for i in range(_SHARED_ROWS)
+    )
+
+
+def _total_distance(a):
+    return sum(abs(a[f"x{i}"] - 3) for i in range(_SHARED_ROWS))
+
+
+def _farthest(a):
+    return max(abs(a[f"x{i}"] - 3) for i in range(_SHARED_ROWS))
+
+
+def _nearest(a):
+    return min(abs(a[f"x{i}"] - 3) for i in range(_SHARED_ROWS))
+
+
+def _squared_total(a):
+    return sum(abs(a[f"x{i}"] - 3) + a[f"x{i}"] ** 2 for i in range(_SHARED_ROWS))
+
+
+@_SHARED_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize("swapped", [False, True], ids=["upper-first", "lower-first"])
+def test_a_shared_abs_in_a_sum_is_pinned_whichever_clause_reads_it_first(request, cli_fixture, extra_env, swapped):
+    """`x + sum(abs(x - 3))` is read by a clause that pushes it down and one that pushes it up. The helper holding the
+    sum states both sides, so the ABS in its body is pinned exactly for both, in either order of the clauses: the left
+    side is at most 12, and `>= 50` is infeasible (it was answered `x = 3` when the `<=` clause came first)."""
+    cli = request.getfixturevalue(cli_fixture).with_env(extra_env)
+    clauses = ["x + sum(abs(x - 3)) <= 100", "x + sum(abs(x - 3)) >= 50"]
+    clause = " AND ".join(reversed(clauses) if swapped else clauses)
+    _judge_shared(cli, clause, _shared_between(_total_distance, low=50, high=100))
+
+
+@_SHARED_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "clause, sub, bound",
+    [
+        pytest.param("x + sum(abs(x - 3)) >= 11", _total_distance, 11, id="sum-pushed-up"),
+        pytest.param("x + max(abs(x - 3)) >= 5", _farthest, 5, id="max-pushed-up"),
+        pytest.param("x + min(abs(x - 3)) >= 5", _nearest, 5, id="min-pushed-up"),
+    ],
+)
+def test_an_abs_in_a_helper_pushed_up_is_pinned_exactly(request, cli_fixture, extra_env, clause, sub, bound):
+    """A helper its reader pushes up holds its members up: a SUM or AVG by its closing side, a MAX by it (the hard
+    direction), a MIN by its envelope. The ABS under it is pinned exactly in each, and the clause, which no
+    assignment holds, is infeasible; a floating auxiliary would satisfy it."""
+    cli = request.getfixturevalue(cli_fixture).with_env(extra_env)
+    _judge_shared(cli, clause, _shared_between(sub, low=bound))
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("swapped", [False, True], ids=["upper-first", "lower-first"])
+def test_a_shared_abs_in_a_definition_is_pinned_whichever_clause_reads_it_first(decidb_cli_gurobi, swapped):
+    """The same pair over `sum(abs(x - 3) + power(x, 2))`, a body a definition holds (`t = q` when two readers push it
+    opposite ways): the left side is at most 30, so `>= 50` is infeasible in either order."""
+    cli = decidb_cli_gurobi.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
+    clauses = ["x + sum(abs(x - 3) + power(x, 2)) <= 100", "x + sum(abs(x - 3) + power(x, 2)) >= 50"]
+    clause = " AND ".join(reversed(clauses) if swapped else clauses)
+    _judge_shared(cli, clause, _shared_between(_squared_total, low=50, high=100))
+
+
+# What a helper's readers do not need they do not pay for: the exact encoding is one sign binary per instance of the
+# ABS (the lowered arm), so a body held down by every reader, or held up through a negative member, adds none.
+
+_SHARED_BINARIES = [
+    pytest.param("x + sum(abs(x - 3)) <= 100", 0, id="sum-pushed-down"),
+    pytest.param("x + sum(0 - abs(x - 3)) >= -20", 0, id="sum-pushed-up-by-a-negative-member"),
+    pytest.param("x + sum(abs(x - 3)) >= 5", _SHARED_ROWS, id="sum-pushed-up"),
+    pytest.param("x + max(abs(x - 3)) <= 100", 0, id="max-pushed-down"),
+    pytest.param("x + min(0 - abs(x - 3)) >= -20", 0, id="min-pushed-up-by-a-negative-member"),
+    pytest.param("x + sum(abs(x - 3) + power(x, 2)) <= 100", 0, id="definition-pushed-down"),
+    pytest.param("x + sum(abs(x - 3) + power(x, 2)) >= 5", _SHARED_ROWS, id="definition-pushed-up"),
+    pytest.param("x + sum(0 - abs(x - 3) + power(x, 2)) >= -50", 0, id="definition-pushed-up-by-a-negative-member"),
+    pytest.param(
+        "x + sum(0 - abs(x - 3) + power(x, 2)) <= 50", _SHARED_ROWS, id="definition-pushed-down-by-a-negative-member"
+    ),
+]
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("clause, binaries", _SHARED_BINARIES)
+def test_a_shared_abs_pays_for_the_exact_encoding_only_where_a_reader_needs_it(
+    decidb_cli_gurobi, tmp_path, clause, binaries
+):
+    cli = decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
+    dump = cli.dump_model(_shared_sql(clause), tmp_path / "model.dump")
+    assert len(re.findall(r"^col \d+: .* bin=1 ", dump, re.MULTILINE)) == binaries
+
+
+# A hard MIN or MAX is encoded with a Big-M over its members, which needs each member's box, and a helper its members
+# read is boxed by its own members in turn. The ABS in such a body takes the exact envelope although the helper that
+# holds it is pushed down alone. Judged by enumeration over t(id, g) = (1, a), (2, a), (3, b); the definition
+# case, a body that squares, is stated natively (a lowered MIN has no Big-M over a squared body) and read from the
+# model: the MIN is one general constraint, and each of the three rows' ABS is another.
+
+
+@_NESTED_SOLVERS
+@pytest.mark.correctness
+def test_abs_in_a_helper_a_hard_min_reads_is_boxed(request, cli_fixture):
+    """`min(sum(abs(x - 3)) by (g)) <= 2`: the MIN is pushed down, its hard way, so the sum it reads needs a box, and
+    the ABS under the sum is pinned exactly to give it one."""
+    cli = request.getfixturevalue(cli_fixture)
+    sql = """SELECT id, x FROM (VALUES (1, 'a'), (2, 'a'), (3, 'b')) t(id, g)
+        DECIDE x(INT) SUCH THAT x >= 0 AND x <= 3 AND min(sum(abs(x - 3)) by (g)) <= 2 MAXIMIZE sum(x) ORDER BY id"""
+    judge_rows(
+        answer(cli, sql),
+        _SHARED_DOMAINS,
+        lambda a: min(abs(a["x0"] - 3) + abs(a["x1"] - 3), abs(a["x2"] - 3)) <= 2,
+        _total,
+        True,
+    )
+
+
+def test_abs_in_a_definition_a_hard_min_reads_is_boxed(decidb_cli_gurobi, tmp_path):
+    cli = decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "on"})
+    dump = cli.dump_model(_shared_sql("x + min(abs(x - 3) + power(x, 2)) <= 12"), tmp_path / "model.dump")
+    assert int(re.search(r"^num_genconstrs: (\d+)", dump, re.MULTILINE).group(1)) == 1 + _SHARED_ROWS

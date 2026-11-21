@@ -600,15 +600,6 @@ inline bool TryParseAbsFunctionEnvelopeTag(const string &alias, idx_t &var_idx) 
 	       TryParseDecideIndexTag(alias, ABS_FUNCTION_NEG_TAG_PREFIX, var_idx);
 }
 
-//! Tag set on BoundFunctionExpression.alias for ABS occurrences inside a
-//! constraint shape that does not naturally upper-bound the auxiliary
-//! (i.e. hard-direction ABS). Read by FindAbsAndAllocateAux, propagated to
-//! AbsPairInfo::needs_bigm so RewriteAbs pins the auxiliary's upper side too --
-//! with a sign-indicator y and a Big-M envelope on the lowering arm, or with a
-//! native `aux = |t|` on a backend that states ABS itself. The tag is set by
-//! TagAbsForBigM (formerly ValidateAbsConstraintDirection).
-static constexpr const char *ABS_NEEDS_BIGM_TAG = "__abs_needs_bigm__";
-
 //! The name prefixes a rewrite gives a helper decision it adds (AddAuxiliaryDecision), and the names the parser gives a
 //! part of a clause it sets aside while it converts a removed spelling. Each is the opening of a name `<prefix><n>__`.
 //! They are tags in a decision's or a column's name, so DecideNameContainsTag refuses a user name that holds one.
@@ -680,7 +671,6 @@ static constexpr const char *DECIDE_TAGS[] = {WHEN_FILTER_TAG,
                                               BILINEAR_FUNCTION_GROUP_TAG_PREFIX,
                                               L0_INDICATOR_FUNCTION_TAG_PREFIX,
                                               DEFINITION_FUNCTION_TAG_PREFIX,
-                                              ABS_NEEDS_BIGM_TAG,
                                               L0_AUTO_INDICATOR_NAME_PREFIX,
                                               L0_INDICATOR_NAME_PREFIX,
                                               IN_INDICATOR_NAME_PREFIX,

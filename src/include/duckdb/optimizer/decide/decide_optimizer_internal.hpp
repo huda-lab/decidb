@@ -102,11 +102,6 @@ using PolarityVisit = std::function<bool(Expression &, int)>;
 void WalkPolarity(ClientContext &context, Expression &expr, int sign, const PolarityHolds &holds,
                   const PolarityVisit &visit);
 
-//! Mark the ABS nodes, in the constraints and the objective, that need a Big-M
-//! envelope: those whose sign under the relation or the sense does not push the
-//! auxiliary down, or is not known until the query runs. Must run before RewriteAbs.
-void TagAbsForBigM(ClientContext &context, LogicalDecide &decide);
-
 //! Allocate an auxiliary decision column `name` of `type`: its reference in
 //! `decide_variables`, its Boolean flag, and its scope (the binder gives every declared decision one, so
 //! `variable_scopes` stays parallel to `decide_variables`). A keyed auxiliary is one of its keyed scope's

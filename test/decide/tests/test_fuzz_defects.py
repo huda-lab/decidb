@@ -30,7 +30,7 @@ CASES = {
         SUCH THAT x <= 3 AND sum(abs(sum(abs(x)))) <= 4 MAXIMIZE sum(t.id * x) ORDER BY id""",
         [0, 2],
     ),
-    # The same body under `>=`: its ABS is pinned exactly (TagAbsForBigM over the helpers' bodies), so |x1| + |x2| >=
+    # The same body under `>=`: its ABS is pinned exactly (RewriteAbs, from the sides of the helper's value link), so |x1| + |x2| >=
     # 2 costs the cheaper x1 two units. Pinned from below alone, the helper's value grew past 2 with x at 0.
     "an-abs-in-a-lifted-reducer-pushed-up": (
         """SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(INT)

@@ -33,6 +33,14 @@ def optimum(
     return best
 
 
+def assert_none_feasible(domains: Mapping[str, range], feasible: Callable[[Assignment], bool]) -> None:
+    """The query is infeasible: no assignment of ``domains`` satisfies ``feasible``."""
+    names = list(domains)
+    for values in product(*(domains[name] for name in names)):
+        assignment = dict(zip(names, values))
+        assert not feasible(assignment), f"a feasible assignment exists: {assignment}"
+
+
 def judge(
     assignment: Assignment, feasible: Callable[[Assignment], bool], objective: Callable[[Assignment], float]
 ) -> float:

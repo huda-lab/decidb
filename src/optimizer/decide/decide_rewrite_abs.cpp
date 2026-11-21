@@ -3,7 +3,7 @@
 //
 // src/optimizer/decide/decide_rewrite_abs.cpp
 //
-// DECIDE ABS handling: Big-M tagging and ABS linearization. See decide_optimizer.cpp.
+// DECIDE ABS handling: which encoding each ABS takes, and ABS linearization. See decide_optimizer.cpp.
 //
 //===----------------------------------------------------------------------===//
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
@@ -44,7 +44,7 @@ namespace duckdb {
 using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 
 // ---------------------------------------------------------------------------
-// ABS soundness handling (must run BEFORE RewriteAbs)
+// ABS soundness handling
 // ---------------------------------------------------------------------------
 //
 // DeciDB's ABS linearization replaces `ABS(e)` with an auxiliary `aux` and
@@ -66,29 +66,25 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 //      pressure or constraint shape. Used for an objective ABS the sense
 //      pushes up, and for any constraint shape outside category 2.
 //
-// This pass walks the constraint tree and the objective, classifies each
-// ABS by the sign it carries, and tags the ABS function expressions that
-// nothing pins with ABS_NEEDS_BIGM_TAG. RewriteAbs reads the tag and
-// propagates to AbsPairInfo::needs_bigm; Phase 2 then allocates the y
-// indicator and emits the upper-envelope at execution time (the existing
-// AbsMaximizeLink path).
+// Which one an ABS takes is an inherited attribute: the push of the body that holds it, read from the body's owner and
+// passed down to the ABS. The owners are the clauses (the relation pushes the whole side: `<=` pushes a positive term
+// down), the objective (minimized, which pushes a positive term down), a definition (`t >= q` pushes `q` down, `t <= q`
+// up, `=` neither) and a value link (its sides, ValueLinkPush). A body several readers share, a helper's, is owned by
+// the one definition that holds every side any reader needs, so the attribute is read only once the rewrites that
+// join the readers have run (RewriteScopedReducers, RewriteFrameRanges, PrepareDefinitionFunctions), and every reader
+// of the body gets the one encoding.
 //
-// The objective reads like a constraint: `MINIMIZE E` pins what `E <= K`
-// pins and `MAXIMIZE E` what `E >= K` pins, so `MINIMIZE sum(abs(e))` and
-// `MAXIMIZE -abs(e)` are held by pressure while `MAXIMIZE sum(abs(e))` and
-// `MINIMIZE -abs(e)` are not. A term under a factor whose sign is unknown
-// until the query runs (a data column weight) is not pinned either:
-// `MINIMIZE sum(w * abs(e))` with one negative `w` was called unbounded.
+// The objective reads like a constraint: `MINIMIZE E` pins what `E <= K` pins and `MAXIMIZE E` what `E >= K` pins, so
+// `MINIMIZE sum(abs(e))` and `MAXIMIZE -abs(e)` are held by pressure while `MAXIMIZE sum(abs(e))` and
+// `MINIMIZE -abs(e)` are not. A term under a factor whose sign is unknown until the query runs (a data column weight)
+// is not pinned either: `MINIMIZE sum(w * abs(e))` with one negative `w` was called unbounded.
 //
-// Aggregates over ABS (`SUM`, `AVG`, `MIN`, `MAX`) compose under the same
-// rule. When the aggregate constraint upper-bounds the aggregate value
-// (e.g. `SUM(ABS) <= K`, `MAX(ABS) <= K`), individual auxes are pinned
-// transitively and Big-M is not needed. Otherwise we Big-M each aux and
-// the aggregate then operates on pinned auxes. One exception: a MIN or MAX
-// pushed its hard way (`MIN(ABS) <= K`, `MINIMIZE MIN(ABS)`) is encoded with
-// a Big-M over its members, which needs every member's box, and an auxiliary
-// held by pressure alone has none -- so an ABS under a hard extremum always
-// takes the exact envelope, which boxes it.
+// Aggregates over ABS compose under the same rule: when the push on the aggregate's value is the one the aggregate's
+// members share, the auxes underneath are pinned transitively and Big-M is not needed. A MIN or MAX in a clause is a
+// helper decision (a value link) but for the easy identity, which bounds each member; a helper pushed its hard way
+// is encoded with a Big-M over its members, which needs every member's box, and an auxiliary held by pressure alone
+// has none, so its members, and the members of every helper they read, always take the exact envelope, which boxes
+// them (FindBoxedHelpers).
 // ---------------------------------------------------------------------------
 
 //! `abs(e)` with a decision in `e`.
@@ -113,151 +109,185 @@ static bool ContainsAbsOverDecideVar(const Expression &expr, idx_t decide_index)
 	return found;
 }
 
-// Walk an expression tree and tag every BoundFunctionExpression for ABS over
-// a decide var with ABS_NEEDS_BIGM_TAG, an ABS nested inside another included.
-// Used on the side of a comparison that does not upper-bound aux (or on entire
-// BETWEEN/IN/equality/<> subtrees).
-static void TagAbsSubtreeForBigM(Expression &expr, idx_t decide_index) {
-	if (IsAbsOverDecideVar(expr, decide_index)) {
-		AddDecideTag(expr.alias, ABS_NEEDS_BIGM_TAG);
-	}
-	ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) { TagAbsSubtreeForBigM(child, decide_index); });
-}
-
-// Collect every ABS-over-decide-var node together with the sign it carries once
-// the constraint is expanded additively (WalkPolarity). `pinning_sign` is the sign
-// the relation or the sense pushes down (+1 under `<=` and MINIMIZE, -1 under `>=`
-// and MAXIMIZE, 0 when nothing is pushed), which a MIN or MAX on the path needs to
-// tell its cheap direction from its hard one.
-//
-// A factor whose sign is not known until execution -- a data column, as in
-// `SUM(w * ABS(x - t))` -- yields sign 0, "unknown", which never matches the
-// pinning direction and so forces Big-M. That is conservative: for `w >= 0` the
-// aux would have been pinned without it. Deciding per row at execution time
-// would recover those rows, but the indicator is allocated at plan time, so it
-// cannot be chosen lazily as the code stands. A factor that is exactly zero makes
-// the term vanish: nothing pushes its auxiliary anywhere, so nothing has to pin it,
-// and asking for the exact envelope would demand a finite box the term has no use for.
-static void CollectAbsWithSign(ClientContext &context, Expression &expr, int sign, idx_t decide_index,
-                               vector<std::pair<Expression *, int>> &out, int pinning_sign) {
+//! Marks, in `exact`, the ABS nodes of `expr` that its push does not pin. `pinning_sign` is the sign a term must carry
+//! to be pushed down (+1 under `<=` and MINIMIZE, -1 under `>=`, 0 when nothing is pushed); the sign each ABS carries
+//! is the one `expr` gives it once expanded additively (WalkPolarity).
+//!
+//! A factor whose sign is not known until execution -- a data column, as in `SUM(w * ABS(x - t))` -- yields sign 0,
+//! "unknown", which never matches the pinning direction and so forces Big-M. That is conservative: for `w >= 0` the
+//! aux would have been pinned without it. Deciding per row at execution time would recover those rows, but the
+//! indicator is allocated at plan time, so it cannot be chosen lazily as the code stands. A factor that is exactly
+//! zero makes the term vanish: nothing pushes its auxiliary anywhere, so nothing has to pin it, and asking for the
+//! exact envelope would demand a finite box the term has no use for. An ABS nested inside another sits under a
+//! function that is not monotone in it, so no pressure and no shape pins it: it carries sign 0.
+static void MarkExactAbs(ClientContext &context, Expression &expr, int sign, int pinning_sign, idx_t decide_index,
+                         AbsExactSet &exact) {
 	PolarityHolds holds = [&](const Expression &node) {
 		return ContainsAbsOverDecideVar(node, decide_index);
 	};
 	PolarityVisit visit = [&](Expression &node, int node_sign) {
-		if (node.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-			if (!IsAbsOverDecideVar(node, decide_index)) {
-				return false;
-			}
-			// The ABS node itself is the unit that gets tagged. An ABS nested inside it
-			// sits under a function that is not monotone in it, so no pressure and no
-			// shape pins it: it is collected with sign 0, which never classifies as pinned.
-			out.emplace_back(&node, node_sign);
-			WalkPolarity(context, *node.Cast<BoundFunctionExpression>().children[0], 0, holds, visit);
-			return true;
-		}
-		if (node.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		if (!IsAbsOverDecideVar(node, decide_index)) {
 			return false;
 		}
-		// Aggregates compose: when the constraint bounds the aggregate's value in
-		// the pinning direction, the auxes underneath are pinned transitively --
-		// through a SUM or AVG, and through a MIN or MAX pushed its cheap way (a MAX
-		// pushed down, a MIN pushed up), whose envelope every member bounds. Pushed
-		// the other way an extremum is hard: it is encoded with a Big-M over its
-		// members, which needs each member's box, and an auxiliary held by pressure
-		// alone has none. So an ABS under a hard extremum reads as unknown sign and
-		// takes the exact envelope, which boxes it: `MINIMIZE min(abs(x - 1))`,
-		// `MAXIMIZE -min(abs(x - 1))`, `min(abs(x - 1)) <= K`.
-		auto &agg = node.Cast<BoundAggregateExpression>();
-		auto agg_name = StringUtil::Lower(agg.function.name);
-		if ((agg_name != "min" && agg_name != "max") || node_sign == 0 || pinning_sign == 0) {
-			return false;
+		if (pinning_sign == 0 || node_sign != pinning_sign) {
+			exact.insert(&node);
 		}
-		const auto push = node_sign == pinning_sign ? ExtremumPush::DOWN : ExtremumPush::UP;
-		if (IsEasyExtremum(agg_name == "max", push)) {
-			return false;
-		}
-		for (auto &child : agg.children) {
-			WalkPolarity(context, *child, 0, holds, visit);
-		}
+		WalkPolarity(context, *node.Cast<BoundFunctionExpression>().children[0], 0, holds, visit);
 		return true;
 	};
 	WalkPolarity(context, expr, sign, holds, visit);
 }
 
-static void ClassifyAbsConstraints(ClientContext &context, Expression &expr, idx_t decide_index) {
-	// A `when` or `per` scope only affects which rows participate in the aggregate, and aux
-	// pinning is unconditional per row, so a wrapper does not change classification --
-	// the ordinary constraint-position descent is exactly right here.
-	ForEachConstraintLeaf(expr, [&](Expression &node) {
-		if (node.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-			auto &comp = node.Cast<BoundComparisonExpression>();
-			auto t = comp.type;
-			// Read the constraint as `E <op> 0` with `E = LHS - RHS`: every ABS is then
-			// a single signed term of one expression, and "does this comparison push the
-			// aux down?" is a question about that term's sign rather than about which
-			// side of the relation it happens to be written on. That distinction is
-			// invisible before canonicalization -- which never moved a term across the
-			// relation until it ran ahead of this pass -- and load-bearing after it.
-			int pinning_sign;
-			if (t == ExpressionType::COMPARE_LESSTHAN || t == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
-				pinning_sign = 1; // E bounded above: a positive term is pushed down
-			} else if (t == ExpressionType::COMPARE_GREATERTHAN || t == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-				pinning_sign = -1; // E bounded below: a negative term is pushed down
-			} else {
-				pinning_sign = 0; // equality, <>: pin nothing, exactly as before
-			}
+//! A clause read as `E <op> 0` with `E = LHS - RHS`: every ABS is then a single signed term of one expression, and
+//! "does this comparison push the aux down?" is a question about that term's sign rather than about which side of the
+//! relation it happens to be written on.
+static void MarkExactAbsInClause(ClientContext &context, Expression &clause, idx_t decide_index, AbsExactSet &exact) {
+	// A `when` or `per` scope only affects which rows participate in the aggregate, and aux pinning is unconditional
+	// per row, so a wrapper does not change classification -- the ordinary constraint-position descent is exactly
+	// right here.
+	ForEachConstraintLeaf(clause, [&](Expression &node) {
+		if (node.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+			return; // a structural constant: BETWEEN and IN are comparisons by now
+		}
+		auto &comp = node.Cast<BoundComparisonExpression>();
+		auto t = comp.type;
+		int pinning_sign;
+		if (t == ExpressionType::COMPARE_LESSTHAN || t == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
+			pinning_sign = 1; // E bounded above: a positive term is pushed down
+		} else if (t == ExpressionType::COMPARE_GREATERTHAN || t == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
+			pinning_sign = -1; // E bounded below: a negative term is pushed down
+		} else {
+			pinning_sign = 0; // equality, <>: pin nothing
+		}
+		MarkExactAbs(context, *comp.left, 1, pinning_sign, decide_index, exact);
+		MarkExactAbs(context, *comp.right, -1, pinning_sign, decide_index, exact);
+	});
+}
 
-			vector<std::pair<Expression *, int>> signed_abs;
-			CollectAbsWithSign(context, *comp.left, 1, decide_index, signed_abs, pinning_sign);
-			CollectAbsWithSign(context, *comp.right, -1, decide_index, signed_abs, pinning_sign);
-			for (auto &entry : signed_abs) {
-				if (pinning_sign == 0 || entry.second != pinning_sign) {
-					TagAbsSubtreeForBigM(*entry.first, decide_index);
+//! The sign a term of a value link's members must carry to be pushed down, from the sides the link states
+//! (ReducerValueLink::need_envelope, need_closing), which join every reader's push (RewriteScopedReducers): `value >=
+//! members` of a SUM, AVG or MAX holds the members down, `value <= members` of a MIN holds them up, and `value <=
+//! members` of a SUM or AVG holds them up as well, the sign it reads them with the other way round. A MIN or MAX's
+//! closing side is the hard direction, encoded with a Big-M over its members, and both sides read the members from
+//! both directions: no sign is pinned, which is 0.
+static int ValueLinkPush(const LogicalDecide::ReducerValueLink &link) {
+	if (link.need_envelope == link.need_closing) {
+		return 0;
+	}
+	const bool extremum = IsExtremumName(link.agg_name);
+	if (link.need_envelope) {
+		return link.agg_name == "min" ? -1 : 1;
+	}
+	return extremum ? 0 : -1;
+}
+
+//! The helpers whose box a hard extremum needs: the MIN or MAX links stating their closing side, which encode it with a
+//! Big-M over their members, and every helper those members read, whose own members box it in turn. A helper held by
+//! pressure alone has no box, so the ABS in the body of such a helper takes the exact envelope whatever pushes the
+//! helper itself.
+struct BoxedHelpers {
+	vector<bool> links;
+	vector<bool> definitions;
+};
+
+static BoxedHelpers FindBoxedHelpers(LogicalDecide &decide) {
+	BoxedHelpers boxed {vector<bool>(decide.reducer_value_links.size(), false),
+	                    vector<bool>(decide.definition_functions.size(), false)};
+	auto binding_of = [&](idx_t var) {
+		return decide.decide_variables[var]->Cast<BoundColumnRefExpression>().binding;
+	};
+	std::function<void(const Expression &)> demand = [&](const Expression &expr) {
+		// A non-linear body stays where it was written, tagged as a read of its definition's helper.
+		idx_t defined;
+		if (TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, defined)) {
+			for (idx_t i = 0; i < decide.definition_functions.size(); i++) {
+				auto &definition = decide.definition_functions[i];
+				if (!boxed.definitions[i] && definition.value_var == defined) {
+					boxed.definitions[i] = true;
+					if (definition.body) {
+						demand(*definition.body);
+					}
 				}
 			}
 			return;
 		}
-		// Other top-level shapes (BETWEEN, IN, equality, <>): no per-side direction
-		// analysis available — tag every ABS in the subtree for Big-M to be safe.
-		TagAbsSubtreeForBigM(node, decide_index);
-	});
-}
-
-// The objective read as one signed expression. It is minimized, which pushes a
-// positive term down; every ABS whose sign is the other one, or is not known until
-// the query runs, needs the exact envelope. This is the comparison rule above with
-// the minimization standing in for the relation.
-static void ClassifyAbsObjective(ClientContext &context, Expression &objective, idx_t decide_index) {
-	// A `when` or two-level `per` wrapper carries no sign: the body is its first child.
-	Expression *body = &objective;
-	while (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conjunction = body->Cast<BoundConjunctionExpression>();
-		body = conjunction.children[0].get();
-	}
-	const int pinning_sign = 1;
-	vector<std::pair<Expression *, int>> signed_abs;
-	CollectAbsWithSign(context, *body, 1, decide_index, signed_abs, pinning_sign);
-	for (auto &entry : signed_abs) {
-		if (entry.second != pinning_sign) {
-			TagAbsSubtreeForBigM(*entry.first, decide_index);
+		if (expr.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+			ExpressionIterator::EnumerateChildren(expr, demand);
+			return;
+		}
+		auto &binding = expr.Cast<BoundColumnRefExpression>().binding;
+		for (idx_t i = 0; i < decide.reducer_value_links.size(); i++) {
+			auto &link = decide.reducer_value_links[i];
+			if (!boxed.links[i] && binding_of(link.value_var) == binding) {
+				boxed.links[i] = true;
+				demand(*link.inner_expr);
+			}
+		}
+		for (idx_t i = 0; i < decide.definition_functions.size(); i++) {
+			auto &definition = decide.definition_functions[i];
+			if (!boxed.definitions[i] && binding_of(definition.value_var) == binding) {
+				boxed.definitions[i] = true;
+				if (definition.body) {
+					demand(*definition.body);
+				}
+			}
+		}
+	};
+	for (idx_t i = 0; i < decide.reducer_value_links.size(); i++) {
+		auto &link = decide.reducer_value_links[i];
+		if (!boxed.links[i] && IsExtremumName(link.agg_name) && link.need_closing) {
+			boxed.links[i] = true;
+			demand(*link.inner_expr);
 		}
 	}
+	return boxed;
 }
 
-void decide_rewrite::TagAbsForBigM(ClientContext &context, LogicalDecide &decide) {
+//! The ABS nodes, in every body of `decide`, that their owners do not pin (MarkExactAbs). The owners are read in the
+//! form the rewrites leave them in: a reducer that became a helper is its link's, and a reducer's non-linear body its
+//! definition's.
+static AbsExactSet FindExactAbs(ClientContext &context, LogicalDecide &decide) {
+	AbsExactSet exact;
+	const idx_t decide_index = decide.decide_index;
 	if (decide.decide_constraints) {
-		ClassifyAbsConstraints(context, *decide.decide_constraints, decide.decide_index);
+		MarkExactAbsInClause(context, *decide.decide_constraints, decide_index, exact);
 	}
 	// L0 indicator rows live as function metadata rather than in the main clause tree, but their reverse links still
 	// need the same exactness classification as ordinary constraints.
 	for (auto &indicator : decide.l0_indicator_functions) {
 		for (auto &link : indicator.links) {
-			ClassifyAbsConstraints(context, *link, decide.decide_index);
+			MarkExactAbsInClause(context, *link, decide_index, exact);
 		}
 	}
-	if (decide.decide_objective) {
-		ClassifyAbsObjective(context, *decide.decide_objective, decide.decide_index);
+	// `t >= q` holds the body down, `t <= q` up, `t = q` neither.
+	const auto boxed = FindBoxedHelpers(decide);
+	for (idx_t i = 0; i < decide.definition_functions.size(); i++) {
+		auto &definition = decide.definition_functions[i];
+		if (definition.body) {
+			const bool down = definition.relation == ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+			const bool up = definition.relation == ExpressionType::COMPARE_LESSTHANOREQUALTO;
+			MarkExactAbs(context, *definition.body, 1,
+			             boxed.definitions[i] ? 0
+			             : down               ? 1
+			             : up                 ? -1
+			                                  : 0,
+			             decide_index, exact);
+		}
 	}
+	for (idx_t i = 0; i < decide.reducer_value_links.size(); i++) {
+		auto &link = decide.reducer_value_links[i];
+		MarkExactAbs(context, *link.inner_expr, 1, boxed.links[i] ? 0 : ValueLinkPush(link), decide_index, exact);
+	}
+	if (decide.decide_objective) {
+		// A `when` or two-level `per` wrapper carries no sign: the body is its first child. The objective is
+		// minimized, which pushes a positive term down.
+		Expression *body = decide.decide_objective.get();
+		while (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+			body = body->Cast<BoundConjunctionExpression>().children[0].get();
+		}
+		MarkExactAbs(context, *body, 1, 1, decide_index, exact);
+	}
+	return exact;
 }
 
 //! The rows an ABS is read on: those the clause's `when` keeps that also pass the `when` of each reducer around the
@@ -343,10 +373,11 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	// Each entry records the aux index, a copy of the inner expression, and the clause
 	// the ABS node was written in (the objective's rows carry OBJECTIVE_ROW_TAG).
 	vector<AbsPairInfo> abs_pairs;
+	const auto exact = FindExactAbs(optimizer.context, decide);
 	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.variable_scopes,
 	                                  decide.keyed_scopes, decide.keys, decide.is_boolean_var);
 	if (decide.decide_constraints) {
-		FindAbsAndAllocateAux(decide.decide_constraints, decide, canonicalizer, abs_pairs, string(),
+		FindAbsAndAllocateAux(decide.decide_constraints, decide, canonicalizer, exact, abs_pairs, string(),
 		                      DecideEnclosingScope(), nullptr);
 	}
 	// A definition body has left the ordinary clause list; its F node still needs the same ABS helpers and envelopes.
@@ -358,27 +389,27 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 		auto scope = EnterDecideScope(*scoped, DecideEnclosingScope());
 		string alias = MakeDefinesTag(definition.value_var);
 		AddDecideTag(alias, BODY_DEFINITION_TAG);
-		FindAbsAndAllocateAux(definition.body, decide, canonicalizer, abs_pairs, alias, scope, nullptr);
+		FindAbsAndAllocateAux(definition.body, decide, canonicalizer, exact, abs_pairs, alias, scope, nullptr);
 	}
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
-		FindAbsAndAllocateAux(objective, decide, canonicalizer, abs_pairs, OBJECTIVE_ROW_TAG, DecideEnclosingScope(),
-		                      nullptr);
+		FindAbsAndAllocateAux(objective, decide, canonicalizer, exact, abs_pairs, OBJECTIVE_ROW_TAG,
+		                      DecideEnclosingScope(), nullptr);
 		decide.SetObjective(optimizer.context, std::move(objective));
 	}
-	// A reducer value helper's body, which belongs to no clause, has auxiliaries pinned exactly
-	// (TagAbsForBigM). The body is read on the rows its path and its own `when` keep, so its envelope rows and the
-	// check of its values are made for those.
+	// A reducer value helper's body belongs to no clause: it is read on the rows its path and its own `when` keep, so
+	// its envelope rows and the check of its values are made for those.
 	for (auto &link : decide.reducer_value_links) {
 		auto link_rows = AbsReadRows(link.when.get(), link.filter.get());
-		FindAbsAndAllocateAux(link.inner_expr, decide, canonicalizer, abs_pairs, string(), DecideEnclosingScope(),
-		                      link_rows.get());
+		FindAbsAndAllocateAux(link.inner_expr, decide, canonicalizer, exact, abs_pairs, string(),
+		                      DecideEnclosingScope(), link_rows.get());
 	}
 	// `norm(e, 0)` owns its forward and reverse indicator links as tree metadata. The reverse link's `ABS(e)` still
 	// needs the same plan-time helper allocation as an ABS written in a clause; its envelope is then another F node.
 	for (auto &indicator : decide.l0_indicator_functions) {
 		for (auto &link : indicator.links) {
-			FindAbsAndAllocateAux(link, decide, canonicalizer, abs_pairs, string(), DecideEnclosingScope(), nullptr);
+			FindAbsAndAllocateAux(link, decide, canonicalizer, exact, abs_pairs, string(), DecideEnclosingScope(),
+			                      nullptr);
 		}
 	}
 
@@ -396,13 +427,13 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	// Big-M is required when:
 	//   - the objective's sense pushes the auxiliary up: a positive ABS term under
 	//     MAXIMIZE, a negative one under MINIMIZE, or one under a factor whose sign
-	//     is not known until the query runs (TagAbsForBigM reads the objective by
+	//     is not known until the query runs (FindExactAbs reads the objective by
 	//     sign, as it reads a constraint).
 	//   - ABS appears in a constraint shape that does not upper-bound aux (the
 	//     hard direction: ABS(...) >= K, ABS = K, ABS <> K, BETWEEN, etc.).
 	//   - ABS sits inside another ABS: the outer one is not monotone in it, so no
-	//     pressure or shape pins it (collected with sign 0 by TagAbsForBigM).
-	//   Every one of these is decided in TagAbsForBigM and read here as pair.needs_bigm;
+	//     pressure or shape pins it (sign 0 in FindExactAbs).
+	//   Every one of these is decided in FindExactAbs and read here as pair.needs_bigm;
 	//   a term under a factor of exactly zero is dead and gets no envelope at all.
 	//
 	// A positive ABS under MINIMIZE, a negative one under MAXIMIZE, and a sound
@@ -476,9 +507,9 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 }
 
 void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, LogicalDecide &decide,
-                                            const DecideCanonicalizer &canonicalizer, vector<AbsPairInfo> &abs_pairs,
-                                            const string &source_alias, DecideEnclosingScope scope,
-                                            const Expression *reducer_when) {
+                                            const DecideCanonicalizer &canonicalizer, const AbsExactSet &exact,
+                                            vector<AbsPairInfo> &abs_pairs, const string &source_alias,
+                                            DecideEnclosingScope scope, const Expression *reducer_when) {
 	if (!expr) {
 		return;
 	}
@@ -519,18 +550,17 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 		// Innermost first: an ABS inside this one gets its helper first. The copied
 		// operand retains that tagged function, which term extraction resolves to the
 		// inner helper before building this function's envelope rows.
-		FindAbsAndAllocateAux(func.children[0], decide, canonicalizer, abs_pairs, clause_alias, scope, reducer_when);
+		FindAbsAndAllocateAux(func.children[0], decide, canonicalizer, exact, abs_pairs, clause_alias, scope,
+		                      reducer_when);
 
 		// A column defined by its argument: one per instance of the scopes the argument reads.
 		auto aux_scope = ScopeOf(decide, canonicalizer, *func.children[0]);
 		idx_t aux_idx = AddAuxiliaryDecision(decide, string(ABS_AUX_NAME_PREFIX) + to_string(abs_pairs.size()) + "__",
 		                                     aux_type, false, aux_scope, label);
 
-		// Read the Big-M marker TagAbsForBigM set on the BoundFunctionExpression
-		// alias before the rewrite: the one place that decides exactness, for a
-		// constraint and for the objective, for an ABS nested in another (which it
-		// collects as unknown sign) and for a dead one (which it leaves untagged).
-		const bool needs_bigm = HasDecideTag(func.alias, ABS_NEEDS_BIGM_TAG);
+		// FindExactAbs is the one place that decides exactness: for an ABS in a clause or the objective, in a helper's
+		// body, in another ABS (which it reads as unknown sign) and for a dead one (which it leaves out).
+		const bool needs_bigm = exact.count(&func) > 0;
 
 		// The rows the ABS is read on: the envelope rows, and the check of its values, are made for those only.
 		auto read_rows = AbsReadRows(scope.Condition(), reducer_when);
@@ -549,7 +579,7 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 	}
 
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		FindAbsAndAllocateAux(child, decide, canonicalizer, abs_pairs, clause_alias, scope, reducer_when);
+		FindAbsAndAllocateAux(child, decide, canonicalizer, exact, abs_pairs, clause_alias, scope, reducer_when);
 	});
 }
 
