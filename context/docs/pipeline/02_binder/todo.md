@@ -38,6 +38,15 @@ Language-surface work is owned by `../../language/` (the scopes:
   5. The degree and linearity checks inside a frame (`MultipliesDecisions`, `IsNonlinearPower`,
      `FindNonlinearDecisionUse`) are in this task: they move to stage 04's degree check.
   6. (BIND-5) One integer-step check, in stage 04.
+- **Ruling (provisional, god for the owner, 2026-11-21).** A window function in a DECIDE clause is Binder `a window
+  function is not allowed in a DECIDE clause`, as DuckDB's `WhereBinder` refuses one in WHERE; `power(x, 2)` in a frame
+  payload takes the same class and text as `x ** 2` (Binder, D80). Owner to confirm.
+- **Decision needed (owner).** Do ruling 4's refusal of a query-wide body cover a `norm` and a range frame's reducer?
+  Today both solve and are tested (`norm(d - 1, 0)` over a query-wide `d`; a range frame over a query-wide payload),
+  and BIND-4 keeps that: `BindAggregate` exempts a norm marker and `binding_frame_range`. Options: 1. no exemptions:
+  both are refused like `sum(y)`, since once and once per row are different problems for them too, and their tests
+  become refusals; 2. keep the exemptions: a norm counts rows by definition and a range frame reduces its frame's
+  rows. Recommendation: 1, one rule with no case list. Nothing is built on either choice until the owner rules.
 - **Change: semantic analysis after binding** (the compiler front-end split). The binder keeps what needs the parsed
   tree: names (`RefuseDecideTagInName`), user casts, scope placement and frame binding, key resolution, outer columns,
   qualified decisions, volatile calls, `BindAggregate`'s kind, COUNT and FILTER checks, qualifiers, `norm` arguments,
@@ -82,6 +91,16 @@ Language-surface work is owned by `../../language/` (the scopes:
 - **Ruling (owner, 2026-11-21).** One check, in stage 04: the bound half moves into `CheckClause` (the left side of a
   `<`, `>` or `<>`, since the canonical form puts the bound on the right) and stage 05's copy goes. If a test shows a
   case only stage 05 catches, stop and report.
+- **Ruling (provisional, god for the owner, 2026-11-21).** The one stage-04 check cannot see what stage 05's
+  `RefuseFractionalStep` sees: `sum(x + 0.5) > 4` solves (the aggregate row moves `0.5 * n` to the bound) while `sum(x +
+  0.5) + x > 4` is refused, because the value route's helper holds the constant. The two routes put a reducer's addend
+  in different places. Fix the cause: stage 04 splits a SUM or AVG body's data addend out by linearity, constant or
+  per-row, with the reducer's `when` and `by` (`sum(x + 0.5)` is `sum(x) + sum(0.5)`, `avg(x + d)` is `avg(x) +
+  avg(d)`), extending the split MIN/MAX already has (`DecomposeExtremumAddends`), not a second pass and no list of
+  addend shapes. Then one stage-04 check holds for both routes, stage 05's goes, and `sum(x + 0.5) + x > 4` solves. No
+  query that solves today changes its answer; model rows move only for bodies with a data addend (read the golden
+  diff); an empty-group or NULL case that changes stops the work. If the split does not fit as an extension of that
+  one function, keep stage 05's check and file the split as one task. Owner to confirm.
 - **Change.** The parsed half goes (the bound half refuses a REAL decision, a DOUBLE column, already). The bound half
   moves to stage 04 and drops three duplicate helpers: `SideReferencesDecision` (`BoundExpressionReferencesDecide`),
   `TryGetConstantExponent` (`TryGetDecideWholeExponent`), `DecideExtremumBodyIsWholeNumbered` (the canonical form has

@@ -60,6 +60,12 @@ files.
   one model row, and `test_equal_values_in_two_classes_stay_two_instances` expects 1 model row (its oracle's 2
   instances stay). A clause that reads a per-row decision differs on every row and keeps its path at no new cost. A
   DIAGNOSE test whose output changes goes to the owner.
+- **Ruling (provisional, god for the owner, 2026-11-21): `per K` merges on every field.** A `per K` root's signature
+  leaves out the fields its key holds (`KeyHoldsField`: `length(t.g)` under `per t.g`, a `by` key inside the key), so
+  dropping the class from the instance key merged unequal classes (42 failures, wrong answers in `test_anr_nested`). A
+  root's identity across classes reads every field it reads, collected once; the naming list (variants, EXPLAIN
+  ANALYZE) is that list minus the fields the key holds. If that is not a small change, two collected lists will do.
+  Owner to confirm.
 - **Done when.** Both spellings of the repro build the same rows; `./test/decide/run_tests.sh -n 2 -k "minmax or value
   or scoped"` passes.
 
