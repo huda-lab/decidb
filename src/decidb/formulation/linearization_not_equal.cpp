@@ -268,9 +268,8 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer, const vect
 //! The AGGREGATE spelling of `<>`. It cannot expand against the row-scoped indicator
 //! the per-row spelling uses: it needs one *global* binary per group, and the group's
 //! Big-M must cover the summed range over its rows rather than a single row's, which a
-//! per-row bound would silently cap. `aux_var_expressions` supplies the clause text
-//! stage 05 recorded for the indicator, so a dropped aggregate `<>` can be named in a
-//! repair.
+//! per-row bound would silently cap. The indicator is named by the clause as the user
+//! wrote it (NotEqualClauseLabel), so a dropped aggregate `<>` can be named in a repair.
 static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_indexer,
                                     const vector<const NotEqualClause *> &deferred_aggregate,
                                     const vector<string> &var_names) {

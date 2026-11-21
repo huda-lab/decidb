@@ -587,16 +587,12 @@ void ScaleAvgRows(CoefficientColumn &col, bool has_filter, const vector<bool> &f
 
 void ScaleAvgTerms(const DecideConstraint &constraint, const vector<TermFilterState> &filters, idx_t num_rows,
                    EvaluatedConstraint &evaluated) {
-	bool all_avg = !constraint.lhs_terms.empty() && constraint.product_groups.empty();
 	for (idx_t term_idx = 0; term_idx < constraint.lhs_terms.size(); term_idx++) {
 		if (filters[term_idx].avg_scale) {
 			ScaleAvgRows(evaluated.row_coefficients[term_idx], filters[term_idx].has_filter, filters[term_idx].mask,
 			             num_rows, evaluated.row_group_ids, evaluated.num_groups);
-		} else {
-			all_avg = false;
 		}
 	}
-	evaluated.provenance.avg_scaled = all_avg;
 }
 
 bool HoistAvgIntoNotEqualBound(const DecideConstraint &constraint, vector<TermFilterState> &filters) {

@@ -227,9 +227,6 @@ struct ConstraintProvenance {
 	//! (repair_group_id, group_key) siblings, or get its own? Relaxable user-clause
 	//! rows must be stamped explicitly by the builder site.
 	ElasticShape shape = ElasticShape::UNSET;
-	//! True when the row's coefficients were pre-scaled by 1/N_g for an AVG rewrite.
-	//! The slack is then already in the user's AVG units (report the raw slack).
-	bool avg_scaled = false;
 	//! True when the user wrote a strict `<` / `>` (a δ offset was baked into `rhs`
 	//! at build time). `typed_k` carries the user's original literal so the reported
 	//! suggestion can be re-quoted against it instead of the δ-adjusted rhs.
@@ -324,7 +321,7 @@ struct EvaluatedConstraint {
 
 	//! What the emitter knows of the clause: its `origin` (the clause identity retained when one cast comparison
 	//! expands to multiple boundary rows, the DROP group every descendant row shares, and the elastic group of the
-	//! row), and for a diagnosis its `kind`, `shape`, `rhs_label` and `avg_scaled`. The model builder copies it into
+	//! row), and for a diagnosis its `kind`, `shape` and `rhs_label`. The model builder copies it into
 	//! each row it states under DIAGNOSE and completes it with what only it knows (the group's key and name, the class
 	//! set, the LHS offset and the data row); outside DIAGNOSE it copies the source clause only.
 	ConstraintProvenance provenance;

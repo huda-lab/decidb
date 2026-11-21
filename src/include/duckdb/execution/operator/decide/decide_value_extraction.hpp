@@ -199,9 +199,7 @@ vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_row
 void ScaleAvgRows(CoefficientColumn &col, bool has_filter, const vector<bool> &filter_mask, idx_t num_rows,
                   const vector<idx_t> &row_group_ids, idx_t num_groups);
 
-//! Each AVG term of `constraint` divided by the rows its filter reads in its group (ScaleAvgRows); the clause is
-//! `avg_scaled` when every linear term was, a pure AVG left side, which the model builder tags so a diagnosis renders
-//! it as `AVG(...)` (a mixed left side, or one with a product group, has no clean AVG re-quote).
+//! Each AVG term of `constraint` divided by the rows its filter reads in its group (ScaleAvgRows).
 void ScaleAvgTerms(const DecideConstraint &constraint, const vector<TermFilterState> &filters, idx_t num_rows,
                    EvaluatedConstraint &evaluated);
 
