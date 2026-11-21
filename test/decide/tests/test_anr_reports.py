@@ -9,6 +9,8 @@ The solver path reports these; a query direct solve answers prints nothing, so e
 runs on the solver path.
 """
 
+import re
+
 import pytest
 
 from ._output_helpers import assert_no_internal_leak
@@ -144,6 +146,30 @@ def test_a_class_whose_by_key_is_null_holds_one_instance_with_no_value(decidb_cl
         and not rest.strip()
     ), result.stderr
     assert "↳itsoneinstancehasnovalueandisskipped" in _profile(decidb_cli, sql)
+
+
+@pytest.mark.correctness
+def test_a_folded_bound_counts_its_skipped_instances_as_any_clause_does(decidb_cli):
+    """`c <= 5` is folded into the box and never reaches the row evaluation, `c + d <= 5` is not: where a row has no
+    class of the `per` key, both read no value there, so both say the same under the clause and neither warns, a class
+    holding the other rows. A decision with a class at every row has nothing to say."""
+    rows = ((1, "a", 1.0), (2, "b", 2.0), (3, None, 3.0))
+
+    def sql(decisions, clause, rows):
+        return (
+            f"SELECT id {table('t', ('id', 'k', 'v'), rows)} DECIDE per t.k: {decisions} "
+            f"SUCH THAT {clause} MINIMIZE sum(power(c - t.v, 2))"
+        )
+
+    skipped = re.compile(r"↳\d+of\d+instanceshavenovalueandareskipped")
+
+    def line(query):
+        assert not _run(decidb_cli, query).stderr.strip()
+        return skipped.findall(_profile(decidb_cli, query))
+
+    folded = line(sql("c(REAL)", "c <= 5", rows))
+    assert folded and folded == line(sql("c(REAL), d(REAL)", "c + d <= 5", rows))
+    assert not line(sql("c(REAL)", "c <= 5", rows[:2]))
 
 
 @pytest.mark.correctness

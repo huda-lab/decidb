@@ -46,8 +46,9 @@ public:
 	bool At(idx_t variable, idx_t row) const;
 	//! Whether `term` reads, at `row`, no value: its decision's (At), or a frame's selection (DecideFrameReadsAbsent).
 	bool TermAt(const DecideTerm &term, idx_t row) const;
-	//! Whether At can hold at some row: a keyed decision, an auxiliary some row of its definition leaves with none (so
-	//! far), a product whose factor may have none. A decision that cannot is read at every row.
+	//! Whether At can hold at some row: a keyed decision some row is in no class of (any, until the classes are read),
+	//! an auxiliary some row of its definition leaves with none (so far), a product whose factor may have none. A
+	//! decision that cannot is read at every row.
 	bool MayBe(idx_t variable) const;
 	//! Whether TermAt can hold at some row: a term of such a decision, or of a frame.
 	bool MayBe(const DecideTerm &term) const;

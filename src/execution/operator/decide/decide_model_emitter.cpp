@@ -570,20 +570,13 @@ void DecideModelEmitter::Constraints() {
 	}
 	// The folded bounds follow under DIAGNOSE, numbered after every other clause: only the repair model emits them.
 	const idx_t num_evaluated = num_constraints + (op.diagnose ? tree.singleton_row_count : 0);
-	// A helper no row holds a member of has no value wherever a clause reads it (D84), a folded bound included: the
-	// data answers it as for a row, which reports that it constrains nothing, and the bound stays in the box. (A folded
-	// bound on a keyed decision of the user's is not read again: it has its own reports.)
+	// A decision with no instance has no value wherever a clause reads it (D84), a folded bound included: the data
+	// answers it as for a row, which counts the bound's skipped instances and warns when it constrains nothing, and the
+	// bound stays in the box. A clause whose decisions have an instance at every row reads nothing here.
 	for (idx_t c = num_evaluated; c < roots.size() && !op.diagnose; c++) {
 		auto &clause = *tree.nodes[roots[c]]->compiled.clause;
-		DecideAbsentReads helper_reads(columns.Absence());
-		for (auto &term : clause.lhs_terms) {
-			if (term.variable_index < op.variable_scopes.size() && op.variable_scopes[term.variable_index].IsKeyed() &&
-			    op.keyed_scopes[op.variable_scopes[term.variable_index].keyed_scope_idx].value_link !=
-			        DConstants::INVALID_INDEX) {
-				helper_reads.Add(term);
-			}
-		}
-		if (!clause.lhs_is_aggregate && helper_reads.Any()) {
+		const DecideAbsentReads absent_reads(columns.Absence(), clause.lhs_terms);
+		if (!clause.lhs_is_aggregate && absent_reads.Any()) {
 			Rows(roots[c], true);
 		}
 	}

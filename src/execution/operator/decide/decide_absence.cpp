@@ -71,7 +71,9 @@ bool DecideAbsence::MayBe(idx_t variable) const {
 			return true;
 		}
 	}
-	return tree.variable_scopes[variable].IsKeyed();
+	// A keyed decision whose classes cover every row has no row with none. Before the classes are read, any may.
+	auto &scope = tree.variable_scopes[variable];
+	return scope.IsKeyed() && (!classes || (*classes)[scope.keyed_scope_idx].absent_class != DConstants::INVALID_INDEX);
 }
 
 bool DecideAbsence::MayBe(const DecideTerm &term) const {
