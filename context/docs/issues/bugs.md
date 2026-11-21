@@ -1,5 +1,12 @@
 # Known bugs
 
+## Open
+
+- **A shared ABS takes the encoding its first reader needs.** With `decide_direct_solve='off'` and `t` = ids 1..3,
+  `x <= 3 AND x >= 0 AND x + sum(abs(x - 3)) <= 100 AND x + sum(abs(x - 3)) >= 50 MAXIMIZE sum(x)` returns `x = 3` on
+  every row, where the left side is at most 12; with the two clauses swapped it is infeasible. Both backends. The fix
+  is OPT-30 (`../pipeline/05_optimizer/todo.md`), after OPT-25.
+
 ## Limitations (not bugs)
 
 - **Gurobi's non-convex tolerance.** On `SUM(POWER(x, 2)) BY (k) <= 25 MAXIMIZE SUM(POWER(x, 2))`, with optimum 50,

@@ -19,6 +19,12 @@ files.
   `ABS_NEEDS_BIGM_TAG` go. The pattern is an inherited attribute read after the shared helpers have joined their
   readers.
 - **Ruling (owner, 2026-11-21).** This design, not a flag OR-ed inside `Helpers::Find`, which leaves definitions open.
+  It lands after OPT-25: until then a hard single MIN/MAX term reaches `RewriteAbs` as a tagged `SUM`
+  (`EmitHardMinMaxClause`) and a flat MIN/MAX objective as a `SUM` with its extremum in `flat_objective_agg`, so a
+  walk from the owners would read them as sums and give a hard extremum's members the cheap encoding. After OPT-25
+  every MIN/MAX is a value link whose sides record its readers' push. The wrong answer stays open until then
+  (`../../issues/bugs.md`).
+- **Needs.** OPT-25.
 - **Done when.** The clause-order pair, in both orders, agrees with the oracle (infeasible); `./test/decide/run_tests.sh
   -n 2 -k "abs"` passes, and with `DECIDB_FORCE_SOLVER=highs`.
 

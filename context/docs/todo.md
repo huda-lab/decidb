@@ -12,15 +12,15 @@ the owner rules first.
 
 # Phase 3 — Each shape and formulation has one owner
 
-## 3.1 Binder and first rewrites (one lane)
-- [ ] OPT-30 A shared ABS takes its first reader's encoding (wrong answer) — pipeline/05_optimizer/todo.md § OPT-30
-- [ ] OPT-27 ABS is lowered in one place — pipeline/05_optimizer/todo.md § OPT-27 (needs: OPT-30)
+## 3.1 Binder and duplicate rows (one lane)
 - [ ] BIND-4 The binder judges algebra by name — pipeline/02_binder/todo.md § BIND-4
 - [ ] BIND-5 Two binder gates for wording — pipeline/02_binder/todo.md § BIND-5 (needs: BIND-4)
 - [ ] OPT-24 A rewritten clause has one instance per distinct signature — pipeline/05_optimizer/todo.md § OPT-24
 
-## 3.2 MIN/MAX route and passes (needs: 3.1) (one lane)
+## 3.2 One route per shape in stage 05 (needs: 3.1) (one lane)
 - [ ] OPT-25 MIN/MAX over decisions takes one route — pipeline/05_optimizer/todo.md § OPT-25
+- [ ] OPT-30 A shared ABS takes its first reader's encoding (wrong answer) — pipeline/05_optimizer/todo.md § OPT-30
+- [ ] OPT-27 ABS is lowered in one place — pipeline/05_optimizer/todo.md § OPT-27 (needs: OPT-30)
 - [ ] OPT-28 One enumerator and one polarity walker — pipeline/05_optimizer/todo.md § OPT-28
 - [ ] OPT-29 No rewrite pass reruns without a cause — pipeline/05_optimizer/todo.md § OPT-29
 
