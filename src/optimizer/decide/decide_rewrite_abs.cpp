@@ -258,37 +258,6 @@ void decide_rewrite::TagAbsForBigM(ClientContext &context, LogicalDecide &decide
 	if (decide.decide_objective) {
 		ClassifyAbsObjective(context, *decide.decide_objective, decide.decide_index);
 	}
-	// Composed MIN/MAX has already lifted its aggregate bodies out of the clause trees. Apply the
-	// same polarity rule to those retained bodies: an easy extremum passes the outer sign to its members, while a
-	// hard extremum needs every ABS member boxed for its indicator formulation.
-	auto classify_composed = [&](LogicalDecide::ComposedMinMaxTerm &term, int pinning_sign) {
-		if (!term.inner_expr || ScaleVanishesAtPlanTime(context, term.scale.get(), term.scale_divides)) {
-			return;
-		}
-		const int sign = term.sign * ScaleSignAtPlanTime(context, term.scale.get(), term.scale_divides);
-		if (term.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND && !term.is_easy) {
-			pinning_sign = 0;
-		}
-		vector<std::pair<Expression *, int>> signed_abs;
-		CollectAbsWithSign(context, *term.inner_expr, sign, decide.decide_index, signed_abs, pinning_sign);
-		for (auto &entry : signed_abs) {
-			if (pinning_sign == 0 || entry.second != pinning_sign) {
-				TagAbsSubtreeForBigM(*entry.first, decide.decide_index);
-			}
-		}
-	};
-	for (auto &constraint : decide.composed_minmax_constraints) {
-		int pinning_sign = constraint.outer_cmp == ExpressionType::COMPARE_LESSTHAN ||
-		                           constraint.outer_cmp == ExpressionType::COMPARE_LESSTHANOREQUALTO
-		                       ? 1
-		                   : constraint.outer_cmp == ExpressionType::COMPARE_GREATERTHAN ||
-		                           constraint.outer_cmp == ExpressionType::COMPARE_GREATERTHANOREQUALTO
-		                       ? -1
-		                       : 0;
-		for (auto &term : constraint.terms) {
-			classify_composed(term, pinning_sign);
-		}
-	}
 }
 
 //! The rows an ABS is read on: those the clause's `when` keeps that also pass the `when` of each reducer around the
@@ -396,28 +365,6 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 		FindAbsAndAllocateAux(objective, decide, canonicalizer, abs_pairs, OBJECTIVE_ROW_TAG, DecideEnclosingScope(),
 		                      nullptr);
 		decide.SetObjective(optimizer.context, std::move(objective));
-	}
-	// Composed MIN/MAX owns the reducer bodies after its rewrite, so visit those copies as well. Their filters are
-	// carried as the F node's `when`, and their source clause survives in the composed record for plan provenance.
-	auto collect_composed = [&](LogicalDecide::ComposedMinMaxTerm &term, const string &source_alias) {
-		if (!term.inner_expr) {
-			return;
-		}
-		auto scoped = ScopeHelperRow(term.inner_expr->Copy(), term.filter.get());
-		auto scope = EnterDecideScope(*scoped, DecideEnclosingScope());
-		FindAbsAndAllocateAux(term.inner_expr, decide, canonicalizer, abs_pairs, source_alias, scope, nullptr);
-	};
-	for (auto &constraint : decide.composed_minmax_constraints) {
-		string source_alias;
-		if (constraint.source_clause_id != DConstants::INVALID_INDEX) {
-			AddDecideTag(source_alias, MakeSourceClauseTag(constraint.source_clause_id));
-		}
-		if (constraint.removal_group_id != DConstants::INVALID_INDEX) {
-			AddDecideTag(source_alias, MakeRemovalGroupTag(constraint.removal_group_id));
-		}
-		for (auto &term : constraint.terms) {
-			collect_composed(term, source_alias);
-		}
 	}
 	// A reducer value helper's body, which belongs to no clause, has auxiliaries pinned exactly
 	// (TagAbsForBigM). The body is read on the rows its path and its own `when` keep, so its envelope rows and the

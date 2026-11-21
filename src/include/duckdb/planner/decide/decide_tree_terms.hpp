@@ -18,7 +18,7 @@ namespace duckdb {
 // The tree's term records
 //===--------------------------------------------------------------------===//
 //
-// What stage 05's lowering (LowerDecideTree) makes of each clause, the objective, a composed term and a helper's
+// What stage 05's lowering (LowerDecideTree) makes of each clause, the objective and a helper's
 // reducer, held in the node that holds it (DecideBody): additive terms, which stage 08 evaluates against the
 // relational input without re-deriving their shape.
 //
@@ -100,7 +100,7 @@ struct DecideProductGroup {
 
 //! The scope of a clause that has left the constraint tree, owned: the rows its `when` keeps and what its `per K:`
 //! does. Built from the borrowed DecideEnclosingScope (decide_constraint_walk.hpp) the clause sat under, and carried
-//! by every holder of such a clause (DecideConstraint, LogicalDecide::ComposedMinMaxConstraint) as this one parameter
+//! by every holder of such a clause (DecideConstraint) as this one parameter
 //! object. A clause reads only the rows its `when` keeps (a NULL on another row is never evaluated), and
 //! LogicalDecide::value_checks have passed before it is evaluated.
 struct DecideClauseScope {
@@ -108,7 +108,7 @@ struct DecideClauseScope {
 	unique_ptr<Expression> when;
 	//! What the clause's `per K:` / `per ()` does. ONE_ROW_PER_CLASS: the per-row shape emits one row per class of
 	//! `class_key` and variant of `signature` among the kept rows, the variant's first (`per ()` is one class).
-	//! NAMES_CLASSES: the aggregate shape, the scoped easy MIN/MAX and the composed MIN/MAX emit their own rows, and
+	//! NAMES_CLASSES: the aggregate shape and the scoped easy MIN/MAX emit their own rows, and
 	//! the key only names the classes each row stands for, which a diagnosis reports one by one (D28). NONE: no `per`
 	//! written, so every kept row of a group is a class of its own.
 	enum class PerRole : uint8_t { NONE, ONE_ROW_PER_CLASS, NAMES_CLASSES };
@@ -145,8 +145,6 @@ struct DecideConstraint {
 	bool lhs_is_aggregate = false;  // True if original LHS was an aggregate (e.g., SUM(...))
 	bool was_minmax_easy = false;   // An easy-direction MIN/MAX kept its reducer (MINMAX_EASY_REWRITE_TAG): one row per
 	                                // member, the bound reduced over each `by` group.
-	idx_t minmax_clause_idx = DConstants::INVALID_INDEX; // index into LogicalDecide::minmax_clause_labels
-	string minmax_agg_type;                              // "min" or "max" (empty if not minmax)
 	idx_t ne_clause_idx = DConstants::INVALID_INDEX;     // index into LogicalDecide::ne_clause_sources
 	idx_t abs_aux_idx = DConstants::INVALID_INDEX;       // ABS auxiliary this envelope row bounds
 	bool abs_is_pos_bound = false;                       // true=C1 (aux >= inner), false=C2 (aux >= -inner)

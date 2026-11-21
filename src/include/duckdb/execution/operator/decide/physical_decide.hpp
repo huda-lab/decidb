@@ -93,9 +93,6 @@ public:
 	// The source clause (index into constraint_sources) of each not-equal (<>) constraint
 	vector<idx_t> ne_clause_sources;
 
-	// Links from MIN/MAX indicator variables: (agg_name "min"/"max", indicator_idx)
-	vector<string> minmax_clause_labels;
-
 	// F6: auxiliary variable index -> user's original source expression string
 	// (ABS(...) / MIN/MAX(...) / product / <>), for naming an escaping aux column
 	// in the unbounded diagnosis. Sparse; only auxiliary variables appear.
@@ -270,35 +267,12 @@ private:
 	//! with no column at all replaces its plan line (ParamsToString), which says it becomes one.
 	void ReportInlinedHelpers(const SolverInput &input) const;
 
-	//! Everything EvaluateTree reads off the data that a later step still needs. It carries
-	//! objective terms *and* composed-MIN/MAX constraint clauses, so it is named for the
-	//! step that produces it rather than for one of its consumers. Nothing here depends
+	//! Everything EvaluateTree reads off the data that a later step still needs. Nothing here depends
 	//! on a variable bound, which is what lets the formulation pass run twice against
 	//! two different boxes from the same evaluated clauses.
 	struct EvaluatedClauses {
 		//! Filter state for the objective's linear terms and its product groups.
 		vector<TermFilterState> linear_filters, group_filters;
-
-		//! One composed MIN/MAX *constraint*, evaluated. Source identity and repair metadata came from its E node.
-		struct ComposedConstraint {
-			vector<ComposedMinMaxTermData> terms;
-			double rhs = 0.0;
-			//! Comparison owned by the composed clause's E node.
-			ExpressionType comparison = ExpressionType::INVALID;
-			//! Source and removal groups owned by the composed clause's E node.
-			idx_t source_clause_id = DConstants::INVALID_INDEX;
-			idx_t removal_group_id = DConstants::INVALID_INDEX;
-			//! Its repair group, numbered after every clause of `constraints` and
-			//! `singleton_row_constraints`, so its slack is shared with no other clause.
-			idx_t repair_group_id = DConstants::INVALID_INDEX;
-			//! The classes its one row stands for (SolverInput::class_sets), under
-			//! DIAGNOSE; INVALID_INDEX for none.
-			idx_t class_set = DConstants::INVALID_INDEX;
-			//! A NULL factor made its one instance NULL, or its `per K:` has no class among
-			//! the kept rows: no row is emitted.
-			bool skipped = false;
-		};
-		vector<ComposedConstraint> composed_constraints;
 	};
 
 	//! The evaluation (language/guide.md §6.4): the tree's descent over the input (`gstate.descent`), each node's
@@ -310,16 +284,6 @@ private:
 
 	//! Then each AVG term is divided by the rows it reads, or by those of its own group (D81).
 	static void ScaleObjectiveAvg(DecideGlobalSinkState &gstate, idx_t num_rows, EvaluatedClauses &evaluated);
-
-	//! The tail of a composed clause's evaluation once its bound and terms are in `clause`: its one
-	//! instance is skipped where a factor is NULL (`null_factor`) or a term reads no row (deck pp. 50, 56), repaired in
-	//! a group after every other clause, and held where its `when` keeps a row, counted unless skipped. The rows its
-	//! `when` keeps (`kept_rows`) are read only under DIAGNOSE or once it is skipped; under DIAGNOSE `class_set` gives
-	//! the classes its one row stands for among them (D28). Appends the clause to `evaluated`.
-	void FinishComposedClause(DecideGlobalSinkState &gstate, idx_t num_rows, const DecideNode &node, bool null_factor,
-	                          const std::function<vector<bool>()> &kept_rows,
-	                          const std::function<idx_t(const vector<bool> &)> &class_set,
-	                          EvaluatedClauses::ComposedConstraint clause, EvaluatedClauses &evaluated) const;
 
 	//! BuildSolverInput: build `SolverInput` out of what EvaluateTree evaluated — variable
 	//! types and the column box, implied-bound propagation, the objective transfer, and

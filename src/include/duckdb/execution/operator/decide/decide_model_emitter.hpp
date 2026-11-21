@@ -100,11 +100,8 @@ public:
 	//! The objective's linear terms and its product groups, each on the rows it reads, and each one's filter of those
 	//! rows in `evaluated`, which the qualifiers and AVG then read; none without an objective.
 	void Objective(PhysicalDecide::EvaluatedClauses &evaluated);
-	//! The composed MIN/MAX clauses, then the objective's composed terms, each term a column over the members of its G
-	//! (DecideBody::composed), read after the objective.
-	void Composed(PhysicalDecide::EvaluatedClauses &evaluated);
 	//! Each helper's members (DecideGlobalSinkState::evaluated_value_links), per group of its `by` key that holds
-	//! one, listed after the composed clauses.
+	//! one, listed after the objective.
 	void ValueLinks();
 
 private:
@@ -200,12 +197,6 @@ private:
 	//! kept rows grouped as GroupRowsByShape groups them, or one per member of an easy MIN or MAX; its instances
 	//! `counted` unless it is a folded bound's, which only a repair model emits.
 	EvaluatedConstraint Groups(idx_t root, bool counted);
-	//! The composed terms `terms` that `root`, a composed clause's or the objective's, holds: each read on the members
-	//! of its G, its factor on the input's `first` chunk; `null_factor` set by a NULL one.
-	vector<ComposedMinMaxTermData> ComposedTerms(idx_t root, bool &null_factor);
-	//! A factor the whole query shares (a composed term's), read on the input's first row, whatever a
-	//! clause keeps.
-	Value FirstRowValue(const Expression &factor);
 	//! A clause's product groups (EvaluatedConstraint::product_groups), once its rows are grouped: each group's weight
 	//! and its forms' coefficients on the rows its site's members stand for, its weight 0 on every other row and
 	//! divided by its AVG's count (`filters`: the terms', then the groups'); a NULL coefficient or a form's decision

@@ -104,24 +104,20 @@ void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &r
 	RunPass("optimizer.norm", [&] { RewriteNorm(decide); });
 	RunPass("optimizer.in_domain", [&] { RewriteInDomain(decide); });
 	// Classify ABS while the written reducer and clause context are still intact; later rewrites may move the function
-	// into a helper body or a composed MIN/MAX term.
+	// into a helper body.
 	RunPass("optimizer.tag_abs", [&] { TagAbsForBigM(optimizer.context, decide); });
 	// McCormick linearization for Boolean × anything bilinear products
 	RunPass("optimizer.bilinear", [&] { RewriteBilinear(decide); });
+	// A MIN/MAX in its cheap direction keeps its reducer, tagged, before any pass reads the clause's direction.
+	RunPass("optimizer.minmax", [&] { RewriteMinMax(decide); });
 	// Reserve the plan-time columns and F-node specs before later MIN/MAX rewrites and term splitting consume them.
 	// The tree owns the definition functions and emits their E rows when its instances are known.
 	DecideTreeConstruction::PrepareDefinitionFunctions(optimizer.context, decide);
-	// The value rewrite: a VALUE-shape clause's reducers become helper decisions
+	// The value rewrite: a VALUE-shape clause's reducers, and every other MIN/MAX, become helper decisions
 	RunPass("optimizer.scoped_reducers", [&] { RewriteScopedReducers(decide); });
 	// Reducers now nested in retained G bodies are decision variables; tag any products those substitutions exposed.
 	RunPass("optimizer.bilinear_nested_values", [&] { RewriteBilinear(decide); });
-	// Detect composed MIN/MAX before single-term MIN/MAX rewrite
-	RunPass("optimizer.composed_minmax", [&] { RewriteComposedMinMax(decide); });
-	// Classify + rewrite min/max (creates indicators and SUM nodes)
-	RunPass("optimizer.minmax", [&] {
-		RewriteMinMax(decide);
-		VerifyExtremumBodiesLinear(optimizer.context, decide);
-	});
+	VerifyExtremumBodiesLinear(optimizer.context, decide);
 	RunPass("optimizer.not_equal", [&] { RewriteNotEqual(decide); });
 	RunPass("optimizer.avg", [&] { RewriteAvgToSum(decide); });
 	RunPass("optimizer.abs", [&] { RewriteAbs(decide); });
@@ -369,45 +365,19 @@ static void VerifyNormMarkersLowered(LogicalDecide &decide) {
 	});
 }
 
-//! The MIN/MAX rewrites' exit contract: every member an extremum reads is linear.
+//! The MIN/MAX rewrites' exit contract: every member an extremum helper reads is linear.
 //!
-//! The hard rows, the composed terms, the value links and the MIN/MAX objectives all read a
-//! member as a linear form; a square there is dropped without a word and the extremum is of
-//! something else. Definition F-node preparation registers every such body before they run, so
-//! a non-linear member here is a body the tree preparation missed. The cheap half of a MIN/MAX
-//! (MINMAX_EASY_REWRITE_TAG) bounds each member in its own quadratic row and is exempt.
+//! The value links read a member as a linear form; a square there is dropped without a word and the extremum is of
+//! something else. Definition F-node preparation registers every such body before they run, so a non-linear member
+//! here is a body the tree preparation missed. The cheap half of a MIN/MAX (MINMAX_EASY_REWRITE_TAG) bounds each
+//! member in its own quadratic row and is exempt.
 static void VerifyExtremumBodiesLinear(ClientContext &context, LogicalDecide &decide) {
-	const idx_t decide_index = decide.decide_index;
 	DecideTermSplitter splitter(context, decide);
-	auto check = [&](const Expression &body) {
-		if (!splitter.IsLinear(body)) {
-			throw InternalException("DECIDE MIN/MAX member '%s' is not linear", body.ToString());
-		}
-	};
-	for (auto &constraint : decide.composed_minmax_constraints) {
-		for (auto &term : constraint.terms) {
-			check(*term.inner_expr);
-		}
-	}
 	for (auto &link : decide.reducer_value_links) {
-		if (IsExtremumName(link.agg_name)) {
-			check(*link.inner_expr);
+		if (IsExtremumName(link.agg_name) && !splitter.IsLinear(*link.inner_expr)) {
+			throw InternalException("DECIDE MIN/MAX member '%s' is not linear", link.inner_expr->ToString());
 		}
 	}
-	std::function<void(const Expression &)> hard_rows = [&](const Expression &expr) {
-		if (HasDecideTag(expr.GetAlias(), MINMAX_EASY_REWRITE_TAG)) {
-			return;
-		}
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
-		    expr.GetAlias().find(MINMAX_CLAUSE_TAG_PREFIX) != string::npos) {
-			for (auto &child : expr.Cast<BoundAggregateExpression>().children) {
-				check(*child);
-			}
-			return;
-		}
-		ExpressionIterator::EnumerateChildren(expr, hard_rows);
-	};
-	hard_rows(*decide.decide_constraints);
 }
 
 void DecideOptimizer::TagAtomicRemovalGroups(LogicalDecide &decide) {

@@ -41,12 +41,6 @@ bool MayHaveIntegralColumn(const LogicalDecide &op) {
 			return true;
 		}
 	}
-	if (!op.minmax_clause_labels.empty()) {
-		return true;
-	}
-	if (!op.composed_minmax_constraints.empty()) {
-		return true;
-	}
 	for (auto &link : op.reducer_value_links) {
 		if (link.agg_name == "min" || link.agg_name == "max") {
 			return true;

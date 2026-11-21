@@ -142,37 +142,6 @@ static void NumberClauses(DecideTree &tree, const vector<idx_t> &roots) {
 	}
 }
 
-//! The composed clauses, which are evaluated after the objective: each term's G holds its inner terms
-//! (LowerDecideTree), and the root holding them each term's G and spec.
-static void ComposedBodies(const LogicalDecide &op, DecideTree &tree, const DecideTreeSources &sources) {
-	for (idx_t spec = 0; spec < sources.composed_reducers.size(); spec++) {
-		auto &reducers = sources.composed_reducers[spec];
-		const auto holder = sources.composed_roots[spec];
-		auto &terms = op.composed_minmax_constraints[spec].terms;
-		auto &holder_body = tree.nodes[holder]->compiled;
-		holder_body.composed = reducers;
-		for (auto &term : terms) {
-			DecideComposedSpec read;
-			read.sign = term.sign;
-			read.is_easy = term.is_easy;
-			read.scale = term.scale ? term.scale->Copy() : nullptr;
-			read.scale_divides = term.scale_divides;
-			holder_body.composed_specs.push_back(std::move(read));
-		}
-		for (idx_t t = 0; t < reducers.size(); t++) {
-			auto &body = tree.nodes[reducers[t]]->compiled;
-			body.kind = DecideBodyKind::COMPOSED;
-			body.order = spec;
-			SiteMembers(tree, reducers[t], body);
-		}
-	}
-	for (idx_t spec = 0; spec < sources.composed_roots.size(); spec++) {
-		auto &body = tree.nodes[sources.composed_roots[spec]]->compiled;
-		body.kind = DecideBodyKind::COMPOSED;
-		body.order = spec;
-	}
-}
-
 //! Each helper's G or O holds its reducer's members and a frame's else terms (LowerDecideTree).
 static void LinkBodies(DecideTree &tree, const vector<idx_t> &link_nodes) {
 	for (idx_t link = 0; link < link_nodes.size(); link++) {
@@ -540,7 +509,7 @@ static void CompileObjective(DecideProgramCompiler &compiler, idx_t root, Decide
 	}
 }
 
-//! A composed term's or a helper's members, then a frame helper's else terms.
+//! A helper's members, then a frame helper's else terms.
 static void CompileMembers(DecideProgramCompiler &compiler, idx_t holder, DecideBody &body) {
 	for (idx_t t = 0; t < body.members.size(); t++) {
 		compiler.AddTerm(body.members[t], body.linear[t], holder);
@@ -604,7 +573,6 @@ void CompileDecideTree(ClientContext &context, const LogicalDecide &op, DecideTr
 		body.order = 0;
 		decide_tree_compile::SiteObjective(tree, sources.objective_root, body);
 	}
-	decide_tree_compile::ComposedBodies(op, tree, sources);
 	decide_tree_compile::LinkBodies(tree, sources.link_nodes);
 	decide_tree_compile::CompilePrograms(context, op, tree, sources.record_nodes);
 	decide_tree_compile::BindLayout(tree);
@@ -622,8 +590,6 @@ static string BodyKindName(DecideBodyKind kind) {
 		return "constraints";
 	case DecideBodyKind::OBJECTIVE:
 		return "objective";
-	case DecideBodyKind::COMPOSED:
-		return "composed";
 	case DecideBodyKind::VALUE_LINK:
 		return "links";
 	default:
@@ -671,13 +637,12 @@ static void Groups(std::ostringstream &out, const vector<DecideProductGroup> &gr
 	}
 }
 
-//! What a node's block holds: a clause, the objective, a composed clause, a G's members, or entries with programs.
+//! What a node's block holds: a clause, the objective, a G's members, or entries with programs.
 static string Head(const DecideNode &node) {
 	auto &body = node.compiled;
 	string head = body.clause                         ? "clause " + to_string(body.clause_index)
 	              : body.objective                    ? "objective"
 	              : body.kind == DecideBodyKind::NONE ? "entries"
-	              : node.root                         ? "composed " + to_string(body.order)
 	                                                  : "members";
 	if (body.kind != DecideBodyKind::NONE) {
 		head += " body=" + BodyKindName(body.kind) + ":" + to_string(body.order);

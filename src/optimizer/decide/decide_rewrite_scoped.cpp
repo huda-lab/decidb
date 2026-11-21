@@ -101,6 +101,10 @@ struct ReducerSite {
 	//! A factor that is exactly zero holds the reducer (`0 * max(x)`): the term vanishes, nothing pushes the helper
 	//! either way, and its envelope alone is right whatever the sense.
 	bool vanishes;
+
+	bool IsExtremum() const {
+		return IsExtremumName(StringUtil::Lower((*slot)->Cast<BoundAggregateExpression>().function.name));
+	}
 };
 
 void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &context, idx_t decide_index,
@@ -156,10 +160,15 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 				}
 				// A BOOL decision is never negative, so it keeps the direction of the reducer it scales.
 				const int factor_sign = ScaleSignAtPlanTime(context, other.get(), name == "/", &booleans);
+				const bool zero = ScaleVanishesAtPlanTime(context, other.get(), name == "/");
+				if (zero && !other->IsFoldable()) {
+					// 0 whatever it reads (`0 * w` with a data column `w`): the term is one value for the whole query.
+					other = BoundCastExpression::AddCastToType(
+					    context, make_uniq<BoundConstantExpression>(Value::BIGINT(0)), other->return_type);
+				}
 				CollectReducerSites(term, sign * factor_sign, context, decide_index, booleans, out,
 				                    under_decision || BoundExpressionReferencesDecide(*other, decide_index),
-				                    under_function,
-				                    vanishes || ScaleVanishesAtPlanTime(context, other.get(), name == "/"));
+				                    under_function, vanishes || zero);
 			}
 			return;
 		}
@@ -555,8 +564,14 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 			}
 			return;
 		}
-		if (expr->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON ||
-		    !HasDecideTag(expr->GetAlias(), VALUE_REWRITE_TAG)) {
+		if (expr->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+			return;
+		}
+		// A clause in the VALUE shape holds every decision reducer in a helper. In any other shape SUM and AVG stay in
+		// the clause's aggregate row and each MIN or MAX becomes a helper, but for the easy identity, which keeps its
+		// reducer (RewriteMinMax).
+		const bool value_shape = HasDecideTag(expr->GetAlias(), VALUE_REWRITE_TAG);
+		if (!value_shape && HasDecideTag(expr->GetAlias(), MINMAX_EASY_REWRITE_TAG)) {
 			return;
 		}
 		auto &cmp = expr->Cast<BoundComparisonExpression>();
@@ -565,6 +580,17 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		// Canonicalization put every decision reducer on the left.
 		vector<ReducerSite> sites;
 		CollectReducerSites(cmp.left, 1, optimizer.context, decide.decide_index, booleans, sites);
+		if (!value_shape) {
+			sites.erase(
+			    std::remove_if(sites.begin(), sites.end(), [](const ReducerSite &site) { return !site.IsExtremum(); }),
+			    sites.end());
+			if (sites.empty()) {
+				return;
+			}
+			if (cmp.type == ExpressionType::COMPARE_NOTEQUAL) {
+				throw NotImplementedException(cmp, "<> on MIN or MAX is not supported");
+			}
+		}
 		// When a direct outer SUM holds a simple, unfiltered nest in the same clause scope, keep the outer aggregate
 		// in the clause. Its G node then reads the nested G values directly, instead of introducing a second helper
 		// whose members merely copy the outer SUM. This also lets the ordinary term splitter emit the outer SUM's
@@ -627,7 +653,9 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 			ReplaceReducer(helpers, names, booleans, path, Helpers::ClassKeyOf(scope), ExtremumPushOf(cmp.type),
 			               source_clause_id, site);
 		}
-		HandProductsToBilinear(cmp.left, cmp.GetAlias());
+		if (value_shape) {
+			HandProductsToBilinear(cmp.left, cmp.GetAlias());
+		}
 		// One row per class from here on: the shape tag has done its work.
 		auto alias = cmp.GetAlias();
 		RemoveDecideTag(alias, VALUE_REWRITE_TAG);
@@ -669,9 +697,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 			}
 			// A MIN or MAX takes a helper in every shape; one a decision multiplies stays for the objective's own
 			// refusal unless the product is a Boolean one (`products`).
-			const bool extremum =
-			    IsExtremumName(StringUtil::Lower(site.slot->get()->Cast<BoundAggregateExpression>().function.name));
-			if (nest || (extremum && !site.under_decision) || site.under_function ||
+			if (nest || (site.IsExtremum() && !site.under_decision) || site.under_function ||
 			    (products && site.under_decision)) {
 				ReplaceReducer(helpers, names, booleans, path, Helpers::ClassKeyOf(scope), ExtremumPush::DOWN,
 				               DConstants::INVALID_INDEX, site);

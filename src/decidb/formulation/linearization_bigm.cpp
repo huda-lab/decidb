@@ -192,12 +192,6 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
 		if (!ec.product_groups.empty()) {
 			continue;
 		}
-		// A row that means something other than what its terms say: a hard MIN/MAX
-		// (marked by its aggregate name, which both arms carry). A `<>` disjunction and an ABS
-		// envelope are not `<=` or `=` rows, so the comparison above has passed them by.
-		if (!ec.minmax_agg_type.empty()) {
-			continue;
-		}
 		// Soundness requires every term to be non-negative — both the variable
 		// lower bounds (x >= 0) AND the coefficients (a >= 0) — so that dropping
 		// the other terms to derive x_t <= K/a_t is valid. Constraints with any

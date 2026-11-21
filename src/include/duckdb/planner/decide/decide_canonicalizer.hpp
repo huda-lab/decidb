@@ -523,10 +523,6 @@ private:
 	enum class ScopedShape : uint8_t { ROWS, AGGREGATE, VALUE, UNSUPPORTED };
 	//! `data_key` is the scope of the clause's data (ScopeKeyOf).
 	ScopedShape ClassifyScoped(const BoundComparisonExpression &comparison, idx_t data_key, idx_t &group_key) const;
-	//! Whether a comparison's decision side takes the composed MIN/MAX formulation
-	//! (RewriteComposedMinMaxInConstraint): a MIN or MAX over decisions beside another
-	//! term, or alone under a factor whose sign is not known before the query runs.
-	bool TakesComposedMinMax(const vector<Atom> &atoms) const;
 
 	//! Whether the key `key` holds `field` by construction: one class shows one value of it.
 	bool KeyHoldsField(idx_t key, const DecideSignatureField &field) const;

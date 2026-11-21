@@ -211,17 +211,6 @@ static string RenderFunction(const BoundFunctionExpression &func, const RenderCo
 	return result;
 }
 
-//! The reducer a hard MIN/MAX's carrier stands for: the optimizer rebuilds `max(e)` as a
-//! `sum` tagged `__minmax_clause_<i>_max__` (EmitHardMinMaxClause), which stage 06 reads
-//! as the extremum; a plan prints the reducer, not the carrier. Empty for any other.
-static string MinMaxCarrierName(const BoundAggregateExpression &agg) {
-	string payload;
-	if (!ExtractDecideTagPayload(agg.GetAlias(), MINMAX_CLAUSE_TAG_PREFIX, payload)) {
-		return string();
-	}
-	return payload.substr(payload.find('_') + 1);
-}
-
 //! The order a `norm` marker carries (`1`, `2`, `inf`, `0_auto`, `0_<m>`) as the user
 //! wrote it after the body -- `'inf'` (a string literal: `inf` alone names a column),
 //! `0`, or `0, <m>` -- or empty for a plain reducer.
@@ -300,17 +289,15 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 		}
 	}
 	auto order = NormOrder(agg);
-	auto carrier = MinMaxCarrierName(agg);
-	if (carrier.empty() && order.empty() && agg.children.empty()) {
+	if (order.empty() && agg.children.empty()) {
 		// `count(*)` binds as `count_star()`; it takes no scope inside it.
 		idx_t group_key;
 		bool has_by = ctx.keys && TryParseGroupKeyTag(agg.GetAlias(), group_key);
 		return "count(*)" + (has_by ? " by (" + ByText(agg, ctx, group_key) + ")" : string());
 	}
-	string result = (!carrier.empty() ? carrier
-	                 : order.empty()  ? StringUtil::Lower(DecideWrittenName(agg.GetAlias(), agg.function.name))
-	                                  : string("norm")) +
-	                "(";
+	string result =
+	    (order.empty() ? StringUtil::Lower(DecideWrittenName(agg.GetAlias(), agg.function.name)) : string("norm")) +
+	    "(";
 	idx_t scope_idx;
 	if (ctx.keys && TryParseQualifiedReducerTag(agg.GetAlias(), scope_idx)) {
 		// The key as this reducer wrote it, else as the key was first written.
@@ -802,7 +789,7 @@ static void PushClause(vector<string> &out, vector<idx_t> *out_source_ids, strin
 	}
 }
 
-//! The residue of a clause the optimizer lifted out of the tree (composed MIN/MAX
+//! The residue of a clause the optimizer lifted out of the tree (a NORM or IN lowering
 //! replaces its comparison with a TRUE placeholder). It carries no information, and
 //! printing it as a bare `true` only makes a clause look like it vanished.
 static bool IsTruePlaceholder(const Expression &expr) {

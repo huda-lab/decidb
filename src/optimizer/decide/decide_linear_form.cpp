@@ -109,21 +109,8 @@ public:
 		if (op.decide_objective) {
 			AnalyzeObjective(op.decide_objective);
 		}
-		// The composed MIN/MAX terms are emitted by RewriteComposedMinMax as bare
-		// inner expressions. Lower them here too, so stage 08 reads lowered terms
-		// for every construct rather than for all but one.
-		// Per composed clause, each term's inner terms.
-		auto compose = [&](const vector<LogicalDecide::ComposedMinMaxTerm> &terms) {
-			composed_terms.emplace_back(terms.size());
-			for (idx_t t = 0; t < terms.size(); t++) {
-				ExtractLinearTerms(*terms[t].inner_expr, composed_terms.back()[t]);
-			}
-		};
-		for (auto &spec : op.composed_minmax_constraints) {
-			compose(spec.terms);
-		}
-		// The reducers the value rewrite lifted into helper decisions, the same way; a range frame's helper also reads
-		// its `else`, at the window's anchor.
+		// The reducers the value rewrite lifted into helper decisions are lowered too; a range frame's helper also
+		// reads its `else`, at the window's anchor.
 		const BoundConstantExpression one(Value::INTEGER(1));
 		link_terms.resize(op.reducer_value_links.size());
 		link_fallbacks.resize(op.reducer_value_links.size());
@@ -144,11 +131,6 @@ public:
 			DropNullObjectiveTerms(*lowered_objective);
 			CollectLikeTerms(lowered_objective->terms);
 			SettleWeightSigns(lowered_objective->product_groups);
-		}
-		for (auto &spec : composed_terms) {
-			for (auto &terms : spec) {
-				CollectLikeTerms(terms);
-			}
 		}
 		for (idx_t l = 0; l < link_terms.size(); l++) {
 			CollectLikeTerms(link_terms[l]);
@@ -177,11 +159,6 @@ public:
 		}
 		if (lowered_objective) {
 			tree.TakeObjective(std::move(lowered_objective));
-		}
-		for (idx_t spec = 0; spec < composed_terms.size(); spec++) {
-			for (idx_t t = 0; t < composed_terms[spec].size(); t++) {
-				tree.TakeComposedTerms(spec, t, std::move(composed_terms[spec][t]));
-			}
 		}
 		for (idx_t l = 0; l < link_terms.size(); l++) {
 			tree.TakeLinkTerms(l, std::move(link_terms[l]), std::move(link_fallbacks[l]));
@@ -514,19 +491,6 @@ private:
 			LowerFrames(lowered_objective->when_condition);
 			LowerFrames(lowered_objective->terms);
 			LowerFrames(lowered_objective->product_groups);
-		}
-		for (auto &spec : op.composed_minmax_constraints) {
-			for (auto &term : spec.terms) {
-				LowerFrames(term.filter);
-				LowerFrames(term.scale);
-			}
-			LowerFrames(spec.rhs_expr);
-			LowerFrames(spec.scope.when);
-		}
-		for (auto &spec : composed_terms) {
-			for (auto &terms : spec) {
-				LowerFrames(terms);
-			}
 		}
 		for (idx_t l = 0; l < link_terms.size(); l++) {
 			LowerFrames(link_terms[l]);
@@ -1134,9 +1098,7 @@ private:
 	//! The clauses in leaf order and the objective, lowered, until Build hands them to the tree.
 	vector<pair<LoweredClause, unique_ptr<DecideConstraint>>> lowered_clauses;
 	unique_ptr<DecideObjective> lowered_objective;
-	//! [spec][term]: a composed term's inner terms, each composed clause's and then the objective's
-	//! (DecideTreeSources::composed_reducers); [link]: a helper's member terms and its frame's `else` terms.
-	vector<vector<vector<DecideTerm>>> composed_terms;
+	//! [link]: a helper's member terms and its frame's `else` terms.
 	vector<vector<DecideTerm>> link_terms;
 	vector<vector<DecideTerm>> link_fallbacks;
 	//! The frame columns the lowering reads (DecideTree::frame_reads).

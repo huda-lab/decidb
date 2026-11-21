@@ -163,30 +163,6 @@ void CollectBodySites(Expression &expr, idx_t decide_index, const DecideTermSpli
 	                 source_alias, scope});
 }
 
-//! A plain constraint whose one MIN or MAX is pushed its cheap way (`max(q) <= K`, `-2 * min(q) <= K`, `-max(q) >= K`):
-//! the MIN/MAX rewrite bounds each member, so a non-linear body is one quadratic row per member. Read as
-//! RewriteMinMaxInConstraint reads it; a factor whose sign only the rows decide goes to the composed rewrite, which
-//! needs the definition.
-bool IsCheapLoneExtremum(ClientContext &context, BoundComparisonExpression &comparison, idx_t decide_index) {
-	auto atoms = ReadCanonicalAtoms(*comparison.left, decide_index);
-	if (atoms.size() != 1) {
-		return false;
-	}
-	auto &atom = atoms[0];
-	auto &term = *UnwrapDecideCasts(*atom.term, decide_index);
-	const BoundAggregateExpression *agg = atom.scale.aggregate;
-	if (!atom.scaled && term.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-		agg = &term.Cast<BoundAggregateExpression>();
-	}
-	if (!agg || !IsExtremumName(StringUtil::Lower(agg->function.name)) ||
-	    (atom.scale.scale && BoundExpressionReferencesDecide(*atom.scale.scale, decide_index))) {
-		return false;
-	}
-	const int direction = atom.sign * ScaleSignAtPlanTime(context, atom.scale.scale, atom.scale.divides);
-	return IsEasyExtremum(StringUtil::Lower(agg->function.name) == "max",
-	                      ExtremumPushOf(ExtremumPushOf(comparison.type), direction));
-}
-
 //! Copies of one reducer under one `when`: they share a helper.
 bool SameReducer(const BodySite &a, const BodySite &b) {
 	if (WithoutWrittenName(a.reducer->alias) != WithoutWrittenName(b.reducer->alias) ||
@@ -247,7 +223,9 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 				    return;
 			    }
 			    auto &comparison = expr.Cast<BoundComparisonExpression>();
-			    if (IsCheapLoneExtremum(context, comparison, decide_index)) {
+			    // A MIN or MAX pushed its cheap way (`max(q) <= K`, RewriteMinMax) bounds each member: one quadratic
+			    // row per member, and no helper.
+			    if (HasDecideTag(comparison.alias, MINMAX_EASY_REWRITE_TAG)) {
 				    return;
 			    }
 			    // Read as `LHS - RHS <op> 0`: the relation pushes the whole expression.

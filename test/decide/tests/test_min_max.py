@@ -1917,7 +1917,7 @@ def test_composed_minmax_outer_not_equal_rejected(decidb_cli):
     """,
         kind="Not implemented Error",
         at="(SUM(x * v) + MAX(x * v)) <> 12",
-        word="'<>' on a composed MIN or MAX is not supported",
+        word="<> on MIN or MAX is not supported",
     )
 
 
@@ -2283,3 +2283,38 @@ def test_an_extremum_past_every_row_bound_is_infeasible(request, cli_fixture, na
     cli.assert_error_at(sql, kind="Invalid Input Error", word="infeasible")
     diagnosis = cli.execute_raw("DIAGNOSE " + sql)
     assert diagnosis.returncode == 0 and "infeasible" in diagnosis.stdout, diagnosis.stderr
+
+
+def _brute_force_best(domain, rows, feasible, objective, maximize):
+    """The best objective over every assignment of `domain` to `rows` rows that `feasible` accepts: the exhaustive
+    answer, from no solver."""
+    import itertools
+
+    values = [objective(a) for a in itertools.product(domain, repeat=rows) if feasible(a)]
+    return max(values) if maximize else min(values)
+
+
+@pytest.mark.min_max
+@pytest.mark.correctness
+@pytest.mark.parametrize("sense", ["MAXIMIZE", "MINIMIZE"])
+def test_an_equality_on_an_extremum_is_both_of_its_relations(decidb_cli, sense):
+    """`max(x) = 3` is `max(x) <= 3` (every member, RewriteMinMax) and `max(x) >= 3` (the helper): dropping the first
+    lets MAXIMIZE past 3, dropping the second lets MINIMIZE reach 0."""
+    rows, _ = decidb_cli.execute(
+        f"SELECT id, x FROM (VALUES (1), (2), (3)) t(id) DECIDE x(INT) SUCH THAT x <= 5 AND max(x) = 3 {sense} sum(x)"
+    )
+    best = _brute_force_best(range(6), 3, lambda a: max(a) == 3, sum, sense == "MAXIMIZE")
+    assert sum(int(r[1]) for r in rows) == best
+
+
+@pytest.mark.min_max
+@pytest.mark.correctness
+@pytest.mark.parametrize("bound", ["9", "(SELECT 9)"])
+def test_a_max_beside_a_sum_is_a_helper_whatever_its_bound(decidb_cli, bound):
+    """A MAX beside a SUM takes a helper in the aggregate row, for a literal bound and a subquery's alike."""
+    rows, _ = decidb_cli.execute(
+        f"SELECT id, x FROM (VALUES (1), (2), (3)) t(id) DECIDE x(INT) SUCH THAT x <= 4 AND sum(x) + max(x) <= {bound} "
+        "MAXIMIZE sum(x)"
+    )
+    best = _brute_force_best(range(5), 3, lambda a: sum(a) + max(a) <= 9, sum, True)
+    assert sum(int(r[1]) for r in rows) == best

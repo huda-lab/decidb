@@ -151,7 +151,7 @@ def test_a_nested_objectives_helpers_are_boxed(decidb_cli, tmp_path, objective, 
 @pytest.mark.min_max
 @pytest.mark.correctness
 def test_composed_minmax_term_auxiliaries_are_boxed(decidb_cli, tmp_path):
-    """Each composed term's `z_k` is boxed by that term's own reach, not a shared range.
+    """Each MIN/MAX term's helper is boxed by that term's own reach, not a shared range.
 
     `MAX(x)` and `MIN(y)` sit in one constraint over different variables with different
     caps, so their auxiliaries must be boxed independently — [0,4] and [0,6] here.
@@ -165,11 +165,10 @@ def test_composed_minmax_term_auxiliaries_are_boxed(decidb_cli, tmp_path):
         """,
         tmp_path / "composed.dump",
     )
-    aux = _assert_all_boxed(dump, 2)
-    assert [(lb, ub) for _, lb, ub in aux] == [
+    assert _helper_columns(dump, 4) == [
         (0.0, 4.0),
         (0.0, 6.0),
-    ], f"composed z_k auxiliaries are not boxed by their own terms:\n{dump}"
+    ], f"the MIN/MAX helpers are not boxed by their own terms:\n{dump}"
 
 
 @pytest.mark.min_max
@@ -272,16 +271,16 @@ def test_half_open_range_keeps_its_closed_side(decidb_cli_gurobi, tmp_path):
     dump = decidb_cli_gurobi.dump_model(
         f"""
             SELECT id, x FROM {_ROWS}
-            DECIDE x(INT) SUCH THAT MAX(x) >= 3 AND x >= 0
+            DECIDE x(INT) SUCH THAT MAX(x) + SUM(x) >= 3 AND x >= 0
             MINIMIZE SUM(x)
         """,
         tmp_path / "half_open.dump",
     )
-    aux = _continuous_columns(dump)
+    aux = _helper_columns(dump, 2)
     assert aux, f"no auxiliary columns at all:\n{dump}"
-    for idx, lb, ub in aux:
-        assert lb == 0.0, f"auxiliary col {idx} threw away its derived floor: [{lb}, {ub}]\n{dump}"
-        assert ub >= 1e20, f"auxiliary col {idx} was given a ceiling nothing derived: [{lb}, {ub}]\n{dump}"
+    for lb, ub in aux:
+        assert lb == 0.0, f"auxiliary threw away its derived floor: [{lb}, {ub}]\n{dump}"
+        assert ub >= 1e20, f"auxiliary was given a ceiling nothing derived: [{lb}, {ub}]\n{dump}"
 
 
 @pytest.mark.min_max
@@ -289,8 +288,9 @@ def test_half_open_range_keeps_its_closed_side(decidb_cli_gurobi, tmp_path):
 @pytest.mark.parametrize(
     "rows,expected",
     [
-        # Positive coefficients: `x >= 0` with no ceiling floors the term at 0 and leaves its ceiling open.
-        ("(VALUES (1,3),(2,5)) t(id,c)", (0.0, 1e30)),
+        # Positive coefficients: `x >= 0` with no ceiling floors the term at 0 and leaves its ceiling open, but for the
+        # clause's own row, which holds the helper under 10 (DeriveReducerMemberBounds).
+        ("(VALUES (1,3),(2,5)) t(id,c)", (0.0, 10.0)),
         # Negative coefficients swap the ends: the open ceiling on `x` opens the term's floor, and 0 is its ceiling.
         ("(VALUES (1,-3),(2,-5)) t(id,c)", (-1e30, 0.0)),
     ],
@@ -311,8 +311,7 @@ def test_composed_minmax_term_keeps_the_end_its_decision_can_derive(decidb_cli, 
         """,
         tmp_path / "composed_half_open.dump",
     )
-    aux = _continuous_columns(dump)
-    assert [(lb, ub) for _, lb, ub in aux] == [expected], f"composed z_k box is not {expected}:\n{dump}"
+    assert _helper_columns(dump, 2) == [expected], f"the MIN/MAX helper's box is not {expected}:\n{dump}"
 
 
 # A family's range is the cover of its members, not the cover of its members and 0. The two differ exactly when every
@@ -322,8 +321,10 @@ def test_composed_minmax_term_keeps_the_end_its_decision_can_derive(decidb_cli, 
 @pytest.mark.parametrize(
     "decide, box, big_m",
     [
-        pytest.param("x >= 5 AND x <= 10 AND max(2 * x) >= 16", (10.0, 20.0), 10.0, id="constraint-above-zero"),
-        pytest.param("x >= -10 AND x <= -5 AND max(2 * x) >= -16", (-20.0, -10.0), 10.0, id="constraint-below-zero"),
+        pytest.param("x >= 5 AND x <= 10 AND sum(x) - max(2 * x) <= 0", (10.0, 20.0), 10.0, id="constraint-above-zero"),
+        pytest.param(
+            "x >= -10 AND x <= -5 AND sum(x) - max(2 * x) <= 0", (-20.0, -10.0), 10.0, id="constraint-below-zero"
+        ),
     ],
 )
 def test_a_family_on_one_side_of_zero_is_not_stretched_to_zero(decidb_cli, tmp_path, decide, box, big_m):
@@ -333,7 +334,7 @@ def test_a_family_on_one_side_of_zero_is_not_stretched_to_zero(decidb_cli, tmp_p
         f"SELECT x FROM (VALUES (1), (2)) t(id) DECIDE x(INT) SUCH THAT {decide} MINIMIZE SUM(x)",
         tmp_path / "family.dump",
     )
-    assert [(lb, ub) for _, lb, ub in _assert_all_boxed(dump, 1)] == [box], dump
+    assert _helper_columns(dump, 2) == [box], dump
     binary = int(re.search(r"^col (\d+): .* bin=1", dump, re.M)[1])
     closing = re.search(rf"^row \d+: sense=\S+ rhs=\S+ nnz=3 \| .*\b{binary}:(\S+)", dump, re.M)
     assert abs(float(closing[1])) == big_m, dump

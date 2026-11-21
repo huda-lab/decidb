@@ -149,7 +149,7 @@ bool EveryGroupSingleton(const ReducerValueLinkSpec &link) {
 	return true;
 }
 
-//! Whether `ec` is a linear row that can read a helper's members in place of its column: no hard MIN/MAX, `<>`, exact
+//! Whether `ec` is a linear row that can read a helper's members in place of its column: no `<>`, exact
 //! Big-M ABS pair, product or square, and no bound stage 08 may fold into its decision's box, which would be lost with
 //! the column. A one-sided ABS lower envelope is otherwise a plain linear row, so a reducer used by its operand can
 //! inline there just as it can in a user-written linear row.
@@ -158,8 +158,8 @@ bool IsPlainLinearRow(const SolverInput &input, const EvaluatedConstraint &ec) {
 	    ec.abs_aux_idx != DConstants::INVALID_INDEX &&
 	    std::any_of(input.abs_maximize_links.begin(), input.abs_maximize_links.end(),
 	                [&](const AbsMaximizeLinkSpec &link) { return link.aux_idx == ec.abs_aux_idx; });
-	return ec.minmax_agg_type.empty() && ec.ne_clause_idx == DConstants::INVALID_INDEX && !exact_abs_pair &&
-	       ec.product_groups.empty() && ec.admitted_lower.Empty();
+	return ec.ne_clause_idx == DConstants::INVALID_INDEX && !exact_abs_pair && ec.product_groups.empty() &&
+	       ec.admitted_lower.Empty();
 }
 
 //! Where a helper is read (D89): whether a reader holds its column, whether rows or the objective read it, and the one

@@ -602,7 +602,7 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	auto &descent = gstate.descent;
 	// Top-down: the descent read every chunk as Sink received it, and the buffer is never scanned to evaluate a row.
 	DecideProfileScope phase("execution.tree_descent");
-	// A value the whole query shares is read (a composed term's or a square's factor) against the retained input row.
+	// A value the whole query shares is read (a square's factor) against the retained input row.
 	DataChunk first;
 	if (gstate.has_first_input_row) {
 		first.Initialize(context, gstate.first_input_row.GetTypes(), 1);
@@ -638,9 +638,7 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	// qualified as they are read.
 	emitter.Objective(evaluated);
 	ScaleObjectiveAvg(gstate, num_rows, evaluated);
-	emitter.Composed(evaluated);
-	// What the data left of each clause is reported once its clauses, its objective and its composed clauses are
-	// read.
+	// What the data left of each clause is reported once its clauses and its objective are read.
 	ReportSkippedInstances(gstate);
 	emitter.ValueLinks();
 	// The bottom-up values the evaluation computed, each node's programs on its entries.
@@ -790,38 +788,6 @@ void PhysicalDecide::ScaleObjectiveAvg(DecideGlobalSinkState &gstate, idx_t num_
 }
 
 //===--------------------------------------------------------------------===//
-// EvaluateTree: composed MIN/MAX clauses
-//===--------------------------------------------------------------------===//
-
-void PhysicalDecide::FinishComposedClause(DecideGlobalSinkState &gstate, idx_t num_rows, const DecideNode &node,
-                                          bool null_factor, const std::function<vector<bool>()> &kept_rows,
-                                          const std::function<idx_t(const vector<bool> &)> &class_set,
-                                          EvaluatedClauses::ComposedConstraint clause,
-                                          EvaluatedClauses &evaluated) const {
-	// A NULL factor makes the clause's one instance NULL, which is skipped (deck p. 50), as does a reducer over no row.
-	clause.skipped = null_factor || std::any_of(clause.terms.begin(), clause.terms.end(), DecideComposedTermReadsNoRow);
-	clause.repair_group_id = tree->constraint_count + tree->singleton_row_count + evaluated.composed_constraints.size();
-	clause.source_clause_id = node.source_clause_id;
-	clause.removal_group_id = node.removal_group_id;
-	// A `per K:` holds once per class: with every kept row's K NULL there is none, so no instance (D5). `kept_rows`
-	// gives only the kept rows in a class (DecideTreePer::KEY), while its reducers read every kept row.
-	const bool names_classes = node.facts && node.facts->scope.per == DecideClauseScope::PerRole::NAMES_CLASSES;
-	vector<bool> kept(num_rows, true);
-	if (names_classes || (node.facts && node.facts->scope.when && (diagnose || clause.skipped))) {
-		kept = kept_rows();
-	}
-	// Its one instance, where its `when` keeps a row (in a class of its `per K:`).
-	const idx_t instances = std::find(kept.begin(), kept.end(), true) != kept.end() ? 1 : 0;
-	clause.skipped = clause.skipped || (names_classes && instances == 0);
-	gstate.CountInstances(node.source_clause_id, instances, clause.skipped ? 0 : instances);
-	// The classes its one row stands for (D28), under DIAGNOSE.
-	if (diagnose) {
-		clause.class_set = class_set(kept);
-	}
-	evaluated.composed_constraints.push_back(std::move(clause));
-}
-
-//===--------------------------------------------------------------------===//
 // Finalize: BuildSolverInput
 //===--------------------------------------------------------------------===//
 
@@ -937,7 +903,6 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	solver_input.constraints = std::move(gstate.evaluated_constraints);
 	solver_input.class_sets = std::move(gstate.class_sets);
 	solver_input.key_values = std::move(key_values);
-	solver_input.minmax_clause_labels = minmax_clause_labels;
 	solver_input.ne_clause_sources = ne_clause_sources;
 	for (auto &link : gstate.evaluated_bilinear_links) {
 		solver_input.bilinear_links.push_back(BilinearLinkSpec {link.aux_idx, link.bool_var_idx, link.other_var_idx,
@@ -1007,14 +972,9 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// objective. The floors and implied bounds above read the helpers' columns and keep only what holds of a decision
 	// or an instance, so the column space is laid out again, and every row read against the old one is read anew.
 	phase.Next("assembly.inline_helpers");
-	// What reads a decision's column outside the rows and the objective assembled here: a composed MIN/MAX term and a
-	// bound folded into its column's box.
+	// What reads a decision's column outside the rows and the objective assembled here: a bound folded into its
+	// column's box.
 	vector<idx_t> held;
-	for (auto &clause : evaluated.composed_constraints) {
-		for (auto &term : clause.terms) {
-			held.insert(held.end(), term.variables.begin(), term.variables.end());
-		}
-	}
 	for (auto &bound : gstate.user_singleton_row_bounds) {
 		held.push_back(bound.decide_var_idx);
 	}
@@ -1209,14 +1169,6 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 	phase.Next("formulation.value_links");
 	LinearizeReducerValueLinks(solver_input, var_indexer, decide_var_names, native_min_max);
 
-	// Encode every hard MIN/MAX constraint stage 05 tagged. Native states `z = MAX(t..)`
-	// directly and needs no Big-M, so it also needs no bound on the contributing
-	// variables; the lowering arm's indicator family does. Both read the same tag and
-	// make the same bound classification first.
-	if (!minmax_clause_labels.empty()) {
-		LinearizeMinMaxConstraints(solver_input, var_indexer, decide_var_names, native_min_max);
-	}
-
 	// Encode `<>` as the disjunction it is: two conditional rows per instance. Whether a
 	// condition is stated to the backend or encoded with a Big-M is settled once, by
 	// LowerDecideConstructs at the end of this function.
@@ -1236,22 +1188,6 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 	// Global variables are appended at var_indexer.global_block_start.
 	// As we add more global vars, their indices are global_block_start + g
 	// where g is the position in the global vars array.
-
-	// Composed MIN/MAX clauses. EvaluateTree evaluated each one; stage 06 owns the auxiliary,
-	// envelope and indicator emission. The linearizer fills each MIN/MAX term's `z_idx`,
-	// so it is handed a mutable copy — the evaluated clauses stay reusable for a second
-	// formulation against a different box.
-	phase.Next("formulation.composed_minmax");
-	for (idx_t i = 0; i < evaluated.composed_constraints.size(); i++) {
-		auto terms = evaluated.composed_constraints[i].terms;
-		auto &clause = evaluated.composed_constraints[i];
-		if (clause.skipped) {
-			continue;
-		}
-		LinearizeComposedMinMaxConstraint(solver_input, var_indexer, terms, clause.rhs, clause.comparison,
-		                                  clause.source_clause_id, clause.removal_group_id, clause.repair_group_id,
-		                                  clause.class_set, decide_var_names, native_min_max);
-	}
 
 	// Refresh total_vars: the row/keyed blocks were finalized before linearization,
 	// but global aux vars were appended by the construct sites above.

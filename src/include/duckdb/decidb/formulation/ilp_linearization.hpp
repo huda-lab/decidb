@@ -132,22 +132,6 @@ struct NativeConstructPolicy {
 	}
 };
 
-//! Encode every MIN/MAX *constraint* stage 05 tagged, routing each clause between the
-//! two formulations `NativeConstructPolicy` describes. Both arms make the same bound
-//! classification first — a vacuous or unreachable bound is settled by the direction it
-//! points, not by an encoding — and then:
-//!
-//!   - **Lowered** (`MAX(e) >= K` -> `e_r - M*y_r >= K - M` per row, plus `SUM(y) >= 1`)
-//!     rewrites the clause in place, in the per-row representation it arrived in.
-//!   - **Native** states `z = MAX(t..)` for the backend: a column per member expression
-//!     (or the member's own column, where the expression is nothing but one), one
-//!     extremum column per group, and the user's bound as a single row over it. No Big-M,
-//!     so no contributing variable needs a finite bound.
-//!
-//! Untagged constraints pass through unchanged.
-void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names,
-                                NativeConstructPolicy policy);
-
 //! Encode every constraint stage 05 tagged with a `<>` indicator as the disjunction it
 //! is: `z == 0 => LHS <= K-1` and `z == 1 => LHS >= K+1`, a pair of CONDITIONAL ROWS.
 //! That is the only spelling this emits. Whether the chosen backend states a condition
@@ -295,7 +279,7 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 //! why every construct site takes the `VarIndexer`.
 //!
 //! Each `t` is boxed by ITS OWN row's reach, keeping each end it can derive
-//! independently, exactly as `LinearizeMinMaxConstraints` boxes its argument columns.
+//! independently, exactly as `EmitExtremumLink` boxes its argument columns.
 //! A row whose contributors are all bounded gets a real box even when another row's are
 //! not; a column is left free only where nothing is derivable at all, which is the query
 //! this arm exists to answer.
@@ -559,51 +543,5 @@ struct ExtremumLinkSpec {
 void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const ExtremumLinkSpec &spec,
                       const ExtremumMemberSource &members, const vector<string> &var_names,
                       NativeConstructPolicy policy);
-
-//! One reducer term of a *composed* (additive) MIN/MAX clause — `SUM(a) + MAX(b) <= K`
-//! or the objective spelling — with everything data-dependent already evaluated by the
-//! physical layer: inner term t reads `variables[t]` (INVALID_INDEX for a constant) with
-//! coefficient `per_term_coefs[t][row]` at each row. `z_idx` is filled in by the linearizer.
-struct ComposedMinMaxTermData {
-	//! MIN/MAX reducer (gets a global auxiliary) vs SUM/AVG (folds into the outer row).
-	bool is_minmax = false;
-	//! Lowercase reducer name: "min", "max", "sum" or "avg".
-	string agg_name;
-	//! Sign this term carries in the additive composition.
-	int sign = 1;
-	//! Factor the canonicalizer peeled off this reducer, already evaluated. It stays
-	//! outside the aggregate all the way to here, which is what makes its sign
-	//! irrelevant to correctness.
-	double scale = 1.0;
-	//! True when the optimization/comparison direction already drives the auxiliary to
-	//! the extremum, so the one-sided envelope pin suffices and no indicators are needed.
-	bool is_easy = true;
-	//! Rows this term reduces over: the term's `WHEN` mask, folded with the relation
-	//! qualifier's de-duplication mask. Sized `SolverInput::num_rows`.
-	vector<bool> filter_mask;
-	//! The variable each inner term reads, as execution numbers it: a decision, or the read
-	//! of one at the row a frame selects (SolverInput::frame_reads), which the indexer
-	//! resolves at each row. INVALID_INDEX for a constant term.
-	vector<idx_t> variables;
-	//! Evaluated per-row coefficient of each inner term, already scaled by its sign.
-	vector<vector<double>> per_term_coefs;
-	//! Flat column of this term's global auxiliary; assigned by the linearizer.
-	idx_t z_idx = DConstants::INVALID_INDEX;
-	//! User source text (`MAX(x)`) naming this term's global auxiliary in diagnostics.
-	string label;
-};
-
-//! Encode one composed MIN/MAX *constraint*: a global auxiliary and its pinning rows per
-//! MIN/MAX term, then one outer row summing the auxiliaries and the SUM/AVG terms against
-//! `rhs_val`. `terms` is mutated in place — each MIN/MAX term's `z_idx` is filled in.
-//! The outer row carries the clause's identity as execution numbered it: its repair group
-//! (`repair_group_id`, which no other clause shares) and `class_set`
-//! (SolverInput::class_sets, or INVALID_INDEX), the classes it stands for, which an
-//! expanded diagnosis reports one by one.
-void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &indexer,
-                                       vector<ComposedMinMaxTermData> &terms, double rhs_val, ExpressionType outer_cmp,
-                                       idx_t source_clause_id, idx_t removal_group_id, idx_t repair_group_id,
-                                       idx_t class_set, const vector<string> &var_names,
-                                       NativeConstructPolicy native_min_max);
 
 } // namespace duckdb

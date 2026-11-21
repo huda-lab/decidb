@@ -83,16 +83,6 @@ struct DecideProgram {
 	vector<idx_t> arguments;
 };
 
-//! What a composed root reads of one of its terms beside the term's G, whose `aggregate` names its reducer
-//! (LogicalDecide::ComposedMinMaxTerm): its sign, whether a MIN or MAX of it needs no indicator, and the query-wide
-//! factor outside its reducer, which multiplies it or divides it.
-struct DecideComposedSpec {
-	int sign = 1;
-	bool is_easy = true;
-	unique_ptr<Expression> scale;
-	bool scale_divides = false;
-};
-
 //! Where a product group's weight and each term of its forms are computed (DecideProductGroup): all on its site, the
 //! operand of the G its reducer ranges over, else its holder.
 struct DecideGroupSites {
@@ -101,7 +91,7 @@ struct DecideGroupSites {
 };
 
 //! The stage-05 list a body was copied from (DecideBody::kind); NONE for a node of entries.
-enum class DecideBodyKind : uint8_t { NONE, CONSTRAINT, OBJECTIVE, COMPOSED, VALUE_LINK };
+enum class DecideBodyKind : uint8_t { NONE, CONSTRAINT, OBJECTIVE, VALUE_LINK };
 
 //! f(e1..ep, G1..Gq): the records stage 05's lowering (LowerDecideTree) writes for what a node holds, so a term keeps
 //! its identity, order, label and inputs; and where each is computed, parallel to its term vectors.
@@ -112,13 +102,8 @@ struct DecideBody {
 	idx_t clause_index = DConstants::INVALID_INDEX;
 	//! The objective root's objective.
 	unique_ptr<DecideObjective> objective;
-	//! A value link's or a composed term's G: its inner terms; a frame link's else terms.
+	//! A value link's G: its inner terms; a frame link's else terms.
 	vector<DecideTerm> members;
-	//! A composed clause's root: each term's G, in the order of its terms
-	//! (LogicalDecide::ComposedMinMaxTerm).
-	vector<idx_t> composed;
-	//! Parallel to `composed`: each term's sign, ease and scale.
-	vector<DecideComposedSpec> composed_specs;
 	vector<DecideTerm> fallback;
 	vector<DecideTermSite> linear, fallback_sites;
 	//! Per product group of the clause or the objective, where it is computed.
@@ -142,8 +127,7 @@ struct DecideBody {
 	//! A G over data's operand: its function's arguments, programs on it, which the G folds per slot; empty for any
 	//! other.
 	vector<idx_t> arguments;
-	//! The stage-05 list the body was copied from, and its place there: constraints by their place, the objective,
-	//! then composed clauses.
+	//! The stage-05 list the body was copied from, and its place there: constraints by their place, the objective.
 	DecideBodyKind kind = DecideBodyKind::NONE;
 	idx_t order = DConstants::INVALID_INDEX;
 };
@@ -314,10 +298,6 @@ struct DecideTreeSources {
 	vector<idx_t> clause_roots;
 	std::unordered_map<const Expression *, idx_t> root_of;
 	idx_t objective_root = DConstants::INVALID_INDEX;
-	//! [spec][term] -> the composed term's G.
-	vector<vector<idx_t>> composed_reducers;
-	//! [spec] -> the composed clause's root.
-	vector<idx_t> composed_roots;
 	//! [link] -> its helper's G, or its O for a frame.
 	vector<idx_t> link_nodes;
 	//! [record] -> its G (LogicalDecide::bound_aggregates).
@@ -345,9 +325,6 @@ public:
 	void TakeClause(const Expression &leaf, unique_ptr<DecideConstraint> clause, bool singleton_row);
 	//! The objective's records, into the objective's root.
 	void TakeObjective(unique_ptr<DecideObjective> objective);
-	//! Composed term `term` of composed clause `spec`, its inner terms, into its G
-	//! (DecideTreeSources::composed_reducers).
-	void TakeComposedTerms(idx_t spec, idx_t term, vector<DecideTerm> terms);
 	//! A helper's member terms and its frame's `else` terms, into its G or O (DecideTreeSources::link_nodes).
 	void TakeLinkTerms(idx_t link, vector<DecideTerm> members, vector<DecideTerm> fallback);
 	//! The frame columns the lowered terms read.

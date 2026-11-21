@@ -297,25 +297,8 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 	if (decide_objective) {
 		callback(&decide_objective);
 	}
-	// The composed MIN/MAX rewrite (DecideOptimizer) lifts sub-expressions out of the
-	// objective/constraint trees into these vectors and leaves a placeholder behind, so
-	// visiting decide_objective/decide_constraints above no longer reaches them.
-	for (auto &spec : composed_minmax_constraints) {
-		for (auto &term : spec.terms) {
-			callback(&term.inner_expr);
-			if (term.filter) {
-				callback(&term.filter);
-			}
-			if (term.scale) {
-				callback(&term.scale);
-			}
-		}
-		if (spec.scope.when) {
-			callback(&spec.scope.when);
-		}
-		callback(&spec.rhs_expr);
-	}
-	// The value rewrite lifts each reducer it replaces out of the constraint tree too.
+	// The value rewrite lifts each reducer it replaces out of the constraint and objective trees, so visiting them
+	// above no longer reaches it.
 	for (auto &link : reducer_value_links) {
 		for (auto *expr : {&link.inner_expr, &link.filter, &link.when}) {
 			if (*expr) {

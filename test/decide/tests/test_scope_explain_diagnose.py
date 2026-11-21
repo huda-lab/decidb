@@ -154,7 +154,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
         pytest.param(
             "ship(INT)",
             "per D.region: max(ship) by (D.region) = 12",
-            "max(ship)by(D.region)becomesahelperdecision" "↳max(ship)by(D.region)becomesaboundoneachmember",
+            "max(ship)by(D.region)becomesaboundoneachmember" "↳max(ship)by(D.region)becomesahelperdecisionpergroup",
             "perD.region:max(ship)by(D.region)>=12",
             None,
             id="max-equality",

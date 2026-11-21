@@ -492,7 +492,8 @@ def _member_relations(dump):
 _PUSH_CASES = [
     ("pushed up", "max(power(x, 2)) >= 49 MINIMIZE sum(x)", "<="),
     ("pushed down", "sum(x) + max(power(x, 2)) <= 20 MAXIMIZE sum(x)", ">="),
-    ("pushed neither way", "max(power(x, 2)) = 25 MAXIMIZE sum(x)", "="),
+    # An equality is the pair of its relations: the easy one bounds each member, the other pushes the helper up.
+    ("pushed neither way", "max(power(x, 2)) = 25 MAXIMIZE sum(x)", "<="),
     # A term under a factor of exactly zero is never walked, so nothing records a push for it.
     ("not reached by the polarity walk", "sum(x) + 0 * max(power(x, 2)) <= 5 MAXIMIZE sum(x)", "="),
 ]
@@ -545,15 +546,16 @@ def test_helper_is_defined_on_the_rows_the_reducer_reads(decidb_cli_gurobi, name
 
 
 _EXPLAIN_CASES = [
-    ("at most", "max(power(x, 2)) >= 49 MINIMIZE sum(x)"),
-    ("at least", "sum(x) + max(power(x, 2)) <= 20 MAXIMIZE sum(x)"),
-    ("equal to", "max(power(x, 2)) = 25 MAXIMIZE sum(x)"),
+    ("at most", "max(power(x, 2)) >= 49 MINIMIZE sum(x)", "at most"),
+    ("at least", "sum(x) + max(power(x, 2)) <= 20 MAXIMIZE sum(x)", "at least"),
+    # An equality is the pair of its relations: the helper holds the `>=` half, so it is at most its value.
+    ("at most", "max(power(x, 2)) = 25 MAXIMIZE sum(x)", "equal to"),
 ]
 
 
 @pytest.mark.min_max
 @pytest.mark.quadratic
-@pytest.mark.parametrize("side,clause", _EXPLAIN_CASES, ids=[c[0] for c in _EXPLAIN_CASES])
+@pytest.mark.parametrize("side,clause", [c[:2] for c in _EXPLAIN_CASES], ids=[c[2] for c in _EXPLAIN_CASES])
 def test_explain_states_the_side_and_hides_the_row(decidb_cli_gurobi, side, clause):
     """The account line says how the helper holds the body; the defining row, which restates the body, is left out."""
     out = decidb_cli_gurobi.execute_raw(

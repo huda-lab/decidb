@@ -34,11 +34,10 @@ class Optimizer;
 //!   - RewriteAbs: detects ABS(expr) over decide vars, creates auxiliary REAL vars,
 //!     replaces ABS nodes with aux var refs, generates linearization constraints
 //!   - RewriteBilinear: McCormick linearization for Boolean × anything products
-//!   - RewriteScopedReducers: the value rewrite of a scoped comparison -- each decision
-//!     reducer of a VALUE-shape comparison becomes a helper decision defined per group
-//!   - RewriteComposedMinMax: detects composed MIN/MAX before the single-term pass
-//!   - RewriteMinMax: classifies MIN/MAX constraints as easy/hard, rewrites to per-row
-//!     or SUM+indicator, handles a MIN/MAX objective
+//!   - RewriteMinMax: the easy identity of a MIN/MAX constraint (`max(e) <= K` holds when every member does), and
+//!     an equality's split into its two relations. Runs before the passes that read a clause's direction
+//!   - RewriteScopedReducers: each decision reducer of a VALUE-shape comparison, and every other MIN/MAX in a
+//!     constraint or the objective, becomes a helper decision defined per group
 //!   - RewriteNotEqual: creates indicator variables for <> constraints
 //!   - RewriteAvgToSum: rewrites AVG(expr) → SUM(expr) with alias tag for RHS scaling
 //!   - FoldSingletonRows: folds simple `x OP const` bounds into the column box.
@@ -148,29 +147,13 @@ private:
 	//! helper is pinned on the side its comparison pushes it, through SUM, AVG, MIN and MAX (D79).
 	void RewriteFrameRanges(LogicalDecide &decide);
 
-	//! Detect composed MIN/MAX constraints — additive LHS mixing SUM/AVG/MIN/MAX terms.
-	//! Extracts each term's metadata into decide.composed_minmax_constraints and replaces
-	//! the comparison with a no-op placeholder so the physical layer owns emission.
-	//! Must run before RewriteMinMax (which handles single top-level MIN/MAX).
-	void RewriteComposedMinMax(LogicalDecide &decide);
-
-	//! Helper: walk the constraint tree looking for composed MIN/MAX comparisons. `scope` encloses `expr`: its `when`
-	//! is folded into a composed clause's terms, and its `per K:` names the classes the clause's one row stands for
-	//! (D28).
-	void RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
-	                                       DecideEnclosingScope scope = DecideEnclosingScope());
-
-	//! Rewrite MIN/MAX aggregates in constraints.
-	//! Easy cases (MAX<=K, MIN>=K) keep the reducer, tagged, and bound each
-	//! member; hard cases create an extremum column. An objective's MIN/MAX is a helper decision by now
-	//! (RewriteScopedReducers).
+	//! The easy identity of a MIN or MAX in a constraint: a lone `max(e) <= K` or `min(e) >= K` keeps its reducer,
+	//! tagged, and bounds each member; an equality is split into that and the other relation, which the helper takes.
+	//! The other MIN/MAX clauses are RewriteScopedReducers'.
 	void RewriteMinMax(LogicalDecide &decide);
 
-	//! Top-level constraint-side MIN/MAX rewrite
-	void RewriteMinMaxConstraints(LogicalDecide &decide);
-
-	//! Helper: recursively walk bound constraint tree, classifying and rewriting MIN/MAX. `scope` encloses `expr`; a
-	//! row this rewrite adds for the clause (an equality's easy half) keeps its `when` and `per K:`.
+	//! Helper: recursively walk the bound constraint tree. `scope` encloses `expr`; a row this rewrite adds for the
+	//! clause (an equality's easy half) keeps its `when` and `per K:`.
 	void RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                               vector<unique_ptr<Expression>> &new_constraints,
 	                               DecideEnclosingScope scope = DecideEnclosingScope());
@@ -226,15 +209,6 @@ private:
 	void FindAbsAndAllocateAux(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                           const DecideCanonicalizer &canonicalizer, vector<AbsPairInfo> &abs_pairs,
 	                           const string &source_alias, DecideEnclosingScope scope, const Expression *reducer_when);
-
-	//! Helper: register a hard MIN/MAX clause and produce the corresponding SUM(inner)
-	//! aggregate tagged with MINMAX_CLAUSE_TAG_PREFIX. Records the clause's diagnosis
-	//! text in decide.minmax_clause_labels; the tag carries its index, which is how stage 06
-	//! names the column it pins. Allocates no
-	//! variable — the binaries a Big-M pinning needs are global-block columns, created by
-	//! the pass that emits the rows reading them.
-	unique_ptr<Expression> EmitHardMinMaxClause(LogicalDecide &decide, const string &agg_name, const Expression &inner,
-	                                            const Expression *filter);
 
 	Optimizer &optimizer;
 };

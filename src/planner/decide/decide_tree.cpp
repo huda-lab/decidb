@@ -26,13 +26,6 @@
 namespace duckdb {
 
 string DecideTreeReducerName(const BoundAggregateExpression &aggregate) {
-	string payload;
-	if (ExtractDecideTagPayload(aggregate.GetAlias(), MINMAX_CLAUSE_TAG_PREFIX, payload)) {
-		auto separator = payload.find('_');
-		if (separator != string::npos) {
-			return payload.substr(separator + 1);
-		}
-	}
 	return HasDecideTag(aggregate.GetAlias(), AVG_REWRITE_TAG) ? "avg" : StringUtil::Lower(aggregate.function.name);
 }
 
@@ -110,20 +103,6 @@ unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const
 		}
 		if (!per_row) {
 			facts->scope.per = DecideClauseScope::PerRole::ONE_ROW_PER_CLASS;
-		}
-	}
-	for (auto &atom : ReadCanonicalAtoms(*comparison.left, op.decide_index)) {
-		auto expression = atom.scaled ? static_cast<const Expression *>(atom.scale.aggregate) : atom.term;
-		expression = UnwrapDecideCasts(*expression, op.decide_index);
-		if (expression->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
-		    ExtractDecideTagPayload(expression->GetAlias(), MINMAX_CLAUSE_TAG_PREFIX, payload)) {
-			auto separator = payload.find('_');
-			if (separator == string::npos) {
-				throw InternalException("DECIDE extremum carrier has no semantic reducer name");
-			}
-			facts->minmax_clause_idx = std::stoull(payload.substr(0, separator));
-			facts->minmax_agg_type = payload.substr(separator + 1);
-			facts->kind = ConstraintKind::USER_MECHANISM;
 		}
 	}
 	const bool folded = HasDecideTag(comparison.alias, SINGLETON_ROW_BOUND_TAG);
@@ -323,39 +302,6 @@ public:
 			Gates(index, condition);
 			node.body = Lower(index, *body);
 			UseSignature(node, op.objective_signature);
-			tree->roots.push_back(index);
-		}
-		// Composed comparisons have already left the final AST. Their records are
-		// semantic roots, not prepared coefficients; reconstruct their G/E operands.
-		for (auto &composed : op.composed_minmax_constraints) {
-			auto index = NewNode(DecideNodeKind::SCOPE);
-			auto &node = *tree->nodes[index];
-			node.root = true;
-			node.comparison_type = composed.outer_cmp;
-			node.facts = make_uniq<DecideConstraint>();
-			node.facts->comparison_type = composed.outer_cmp;
-			node.facts->kind = ConstraintKind::USER_MECHANISM;
-			node.facts->source_clause_id = composed.source_clause_id;
-			node.facts->removal_group_id = composed.removal_group_id;
-			node.source_clause_id = composed.source_clause_id;
-			node.removal_group_id = composed.removal_group_id;
-			node.text = RootText(composed.source_clause_id);
-			Scope(index, composed.scope);
-			node.facts->scope.when = composed.scope.when ? composed.scope.when->Copy() : nullptr;
-			node.facts->scope.per = composed.scope.per;
-			node.facts->scope.class_key = composed.scope.class_key;
-			node.facts->scope.signature = composed.scope.signature;
-			node.facts->lhs_is_aggregate = true;
-			if (composed.rhs_expr) {
-				node.rhs = Lower(index, *composed.rhs_expr);
-				node.facts->rhs_expr = node.rhs->Copy();
-			}
-			sources.composed_roots.push_back(index);
-			sources.composed_reducers.emplace_back();
-			for (auto &term : composed.terms) {
-				Composed(index, term, sources.composed_reducers.back());
-			}
-			GroupClass(node);
 			tree->roots.push_back(index);
 		}
 		// A helper or data check can outlive the reading clause (D88). Preserve
@@ -770,10 +716,6 @@ public:
 		tree->nodes[sources.objective_root]->compiled.objective = std::move(objective);
 	}
 
-	void TakeComposedTerms(idx_t spec, idx_t term, vector<DecideTerm> terms) {
-		tree->nodes[sources.composed_reducers[spec][term]]->compiled.members = std::move(terms);
-	}
-
 	void TakeLinkTerms(idx_t link, vector<DecideTerm> members, vector<DecideTerm> fallback) {
 		auto &body = tree->nodes[link_nodes[link]]->compiled;
 		body.members = std::move(members);
@@ -1134,7 +1076,7 @@ private:
 		}
 	}
 
-	//! A clause in the grouped shape (the aggregate shape, an easy or a composed extremum) is one model row per group
+	//! A clause in the grouped shape (the aggregate shape, an easy extremum) is one model row per group
 	//! of its `by` key (language/guide.md §6.4), so a root no `per` made a class root is a class of that key, one for
 	//! `by ()`. Its sigma stays what it reads: a frame bound's position still tells a group's anchors apart, and the
 	//! group takes their tightest value (D85). A `per K:` keeps its class, which names the classes a row stands for,
@@ -1382,7 +1324,7 @@ private:
 
 	//! A relation-qualified reducer's operand, once its body is lowered: its instances are its qualifier's classes
 	//! split by the values its body reads (D70, D71), the keyed mapping of the qualifier's scope
-	//! (DecideModelEmitter::SignatureMapping), whichever reducer it is, a written one, a helper's or a composed term's.
+	//! (DecideModelEmitter::SignatureMapping), whichever reducer it is, a written one or a helper's.
 	void Qualified(idx_t operand, idx_t scope) {
 		UseSignature(*tree->nodes[operand], op.keyed_scopes[scope].signature);
 		tree->qualified_operands[scope] = operand;
@@ -1530,64 +1472,6 @@ private:
 		}
 		node.signature = std::move(payload_signature);
 		return index;
-	}
-
-	void Composed(idx_t owner, const LogicalDecide::ComposedMinMaxTerm &term, vector<idx_t> &reducers) {
-		auto reducer = NewNode(DecideNodeKind::REDUCER);
-		reducers.push_back(reducer);
-		auto &node = *tree->nodes[reducer];
-		// Its message names its clause, as its root's does.
-		node.source_clause_id = tree->nodes[owner]->source_clause_id;
-		node.aggregate = term.agg_name;
-		node.qualifier_scope = term.qualifier_scope_idx;
-		node.text = term.inner_expr ? term.agg_name + "(" + Text(*term.inner_expr) + ")" : term.agg_name;
-		node.decision_value = true;
-		auto operand = NewNode(DecideNodeKind::SCOPE);
-		Edge(reducer, operand);
-		auto &entry = *tree->nodes[operand];
-		entry.text = node.text + " operand";
-		Gates(operand, term.filter.get());
-		// ScopeComposedTerms prepends the clause/objective predicate to each
-		// lowered term. It belongs to the root E in this graph, so remove only
-		// that known prefix; a repeated predicate written by the operand stays.
-		auto &inherited = tree->nodes[owner]->when;
-		bool prefix = entry.when.size() >= inherited.size();
-		for (idx_t i = 0; prefix && i < inherited.size(); i++) {
-			prefix = entry.when[i]->Equals(*inherited[i]);
-		}
-		if (prefix) {
-			entry.when.erase(entry.when.begin(), entry.when.begin() + inherited.size());
-		}
-		if (term.qualifier_scope_idx < op.keyed_scopes.size()) {
-			entry.key = op.keyed_scopes[term.qualifier_scope_idx].key;
-			entry.per = entry.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
-		}
-		if (term.inner_expr) {
-			entry.body = Lower(operand, *term.inner_expr);
-		}
-		if (term.qualifier_scope_idx < op.keyed_scopes.size()) {
-			Qualified(operand, term.qualifier_scope_idx);
-		}
-		auto value = Read(owner, reducer, LogicalType::DOUBLE, node.text);
-		if (term.scale) {
-			vector<unique_ptr<Expression>> scaled;
-			scaled.push_back(std::move(value));
-			scaled.push_back(Lower(owner, *term.scale));
-			value = DecideRebindOperator(context, term.scale_divides ? "/" : "*", std::move(scaled));
-		}
-		if (term.sign < 0) {
-			vector<unique_ptr<Expression>> negated;
-			negated.push_back(std::move(value));
-			value = DecideRebindOperator(context, "-", std::move(negated));
-		}
-		if (tree->nodes[owner]->body) {
-			vector<unique_ptr<Expression>> added;
-			added.push_back(std::move(tree->nodes[owner]->body));
-			added.push_back(std::move(value));
-			tree->nodes[owner]->body = DecideRebindOperator(context, "+", std::move(added));
-		} else {
-			tree->nodes[owner]->body = std::move(value);
-		}
 	}
 
 	void AddOrphan(idx_t child) {
@@ -1756,9 +1640,6 @@ void DecideTreeConstruction::TakeObjective(unique_ptr<DecideObjective> objective
 	builder->TakeObjective(std::move(objective));
 }
 
-void DecideTreeConstruction::TakeComposedTerms(idx_t spec, idx_t term, vector<DecideTerm> terms) {
-	builder->TakeComposedTerms(spec, term, std::move(terms));
-}
 
 void DecideTreeConstruction::TakeLinkTerms(idx_t link, vector<DecideTerm> members, vector<DecideTerm> fallback) {
 	builder->TakeLinkTerms(link, std::move(members), std::move(fallback));

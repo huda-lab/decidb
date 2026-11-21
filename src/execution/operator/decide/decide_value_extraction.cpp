@@ -361,8 +361,6 @@ EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constr
 	// Preserve whether the original LHS was an aggregate (e.g., SUM(...))
 	evaluated.lhs_is_aggregate = constraint.lhs_is_aggregate;
 	evaluated.lifted_floor = constraint.lifted_floor;
-	evaluated.minmax_clause_idx = constraint.minmax_clause_idx;
-	evaluated.minmax_agg_type = constraint.minmax_agg_type;
 	evaluated.ne_clause_idx = constraint.ne_clause_idx;
 	evaluated.abs_aux_idx = constraint.abs_aux_idx;
 	evaluated.abs_is_pos_bound = constraint.abs_is_pos_bound;
@@ -543,52 +541,6 @@ vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_row
 		}
 	}
 	return kept_groups;
-}
-
-ComposedMinMaxTermData DecideComposedTerm(const string &agg_name, int sign, bool is_easy, const string &label) {
-	ComposedMinMaxTermData evaluated;
-	evaluated.is_minmax = agg_name == "min" || agg_name == "max";
-	evaluated.agg_name = agg_name;
-	evaluated.sign = sign;
-	evaluated.is_easy = is_easy;
-	if (evaluated.is_minmax) {
-		evaluated.label = label;
-	}
-	return evaluated;
-}
-
-double DecideQueryWideScale(const Value &value, bool divides, const ValueSource &source, bool &is_null) {
-	if (value.IsNull()) {
-		is_null = true;
-		return 0.0;
-	}
-	double v = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-	if (!std::isfinite(v)) {
-		ThrowInvalidValue(source);
-	}
-	if (divides) {
-		if (v == 0.0) {
-			// The divisor, where it stands in the query.
-			throw InvalidInputException("'" + RenderDecideSource(source.value, source.names) + "' divides by zero",
-			                            Exception::InitializeExtraInfo(DecideSpanLocation(
-			                                source.names.text, DecideUnguarded(source.value).GetQueryLocation())));
-		}
-		return 1.0 / v;
-	}
-	return v;
-}
-
-bool DecideComposedTermReadsNoRow(const ComposedMinMaxTermData &term) {
-	return std::find(term.filter_mask.begin(), term.filter_mask.end(), true) == term.filter_mask.end();
-}
-
-double DecideComposedBound(ClientContext &context, const Expression &rhs) {
-	if (!rhs.IsFoldable()) {
-		throw InternalException("DECIDE: a composed MIN/MAX clause reached execution with a bound that is "
-		                        "not a constant: %s",
-		                        rhs.ToString());
-	}
-	return ExpressionExecutor::EvaluateScalar(context, rhs).DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
 }
 
 void ScaleAvgRows(CoefficientColumn &col, bool has_filter, const vector<bool> &filter_mask, idx_t num_rows,

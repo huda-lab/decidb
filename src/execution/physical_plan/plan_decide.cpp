@@ -178,27 +178,8 @@ static void NameInputColumns(PhysicalDecide &decide_op, LogicalDecide &op,
 			harvest_key(field.key);
 		}
 	}
-	// A lifted reducer's expressions live beside the tree: a composed term's and a helper
-	// decision's (reducer_value_links). The columns they read explain the answer too.
-	auto harvest_composed_term = [&](const LogicalDecide::ComposedMinMaxTerm &term) {
-		for (auto *expr : {term.inner_expr.get(), term.filter.get(), term.scale.get()}) {
-			if (expr) {
-				harvest(*expr);
-			}
-		}
-	};
-	for (auto &spec : op.composed_minmax_constraints) {
-		for (auto &term : spec.terms) {
-			harvest_composed_term(term);
-		}
-		if (spec.rhs_expr) {
-			harvest(*spec.rhs_expr);
-		}
-		if (spec.scope.when) {
-			harvest(*spec.scope.when);
-		}
-		harvest_key(spec.scope.class_key);
-	}
+	// A lifted reducer's expressions live beside the tree: a helper decision's (reducer_value_links). The columns
+	// they read explain the answer too.
 	for (auto &link : op.reducer_value_links) {
 		for (auto *expr : {link.inner_expr.get(), link.filter.get(), link.when.get()}) {
 			if (expr) {
@@ -278,7 +259,6 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	decide_op->num_auxiliary_vars = op.num_auxiliary_vars;
 	decide_op->is_boolean_var = op.is_boolean_var;
 	decide_op->ne_clause_sources = std::move(op.ne_clause_sources);
-	decide_op->minmax_clause_labels = std::move(op.minmax_clause_labels);
 	decide_op->aux_var_expressions = std::move(op.aux_var_expressions);
 	decide_op->constraint_sources = std::move(op.constraint_sources);
 	decide_op->written_objective = std::move(op.written_objective);

@@ -570,6 +570,25 @@ void DecideModelEmitter::Constraints() {
 	}
 	// The folded bounds follow under DIAGNOSE, numbered after every other clause: only the repair model emits them.
 	const idx_t num_evaluated = num_constraints + (op.diagnose ? tree.singleton_row_count : 0);
+	// A folded bound on a helper no row holds a member of has no value wherever it is read (D84), as a clause that is a
+	// row has none: the data answers it as for that row, which reports that it constrains nothing, and the bound stays
+	// in the box.
+	for (idx_t c = num_evaluated; c < roots.size() && !op.diagnose; c++) {
+		auto &clause = *tree.nodes[roots[c]]->compiled.clause;
+		const bool reads_helper =
+		    !clause.lhs_is_aggregate &&
+		    std::any_of(clause.lhs_terms.begin(), clause.lhs_terms.end(), [&](const DecideTerm &term) {
+			    if (term.variable_index >= op.variable_scopes.size() ||
+			        !op.variable_scopes[term.variable_index].IsKeyed()) {
+				    return false;
+			    }
+			    auto &scope = op.keyed_scopes[op.variable_scopes[term.variable_index].keyed_scope_idx];
+			    return scope.value_link != DConstants::INVALID_INDEX && columns.Absence().MayBe(term);
+		    });
+		if (reads_helper) {
+			Rows(roots[c], true);
+		}
+	}
 	for (idx_t c = 0; c < num_evaluated; c++) {
 		const auto root = roots[c];
 		auto &clause = *tree.nodes[root]->compiled.clause;
@@ -753,11 +772,13 @@ void DecideModelEmitter::Classes(idx_t root, const vector<bool> &tested, Evaluat
 	if (!op.diagnose) {
 		return;
 	}
-	// Each variant's row stands for its class (D28), and is named as its own where its class has more than one.
+	// Each variant's row stands for the classes of every kept row it reads (D28), as an aggregate row's group does:
+	// two classes that read one value of a helper are one row. It is named as its own where its class has more than
+	// one.
 	vector<bool> kept(num_rows, false);
 	ForEachRead(root, tested, false, [&](idx_t row, idx_t) { kept[row] = true; });
 	evaluated.group_class_set = DecideGroupClassSets(
-	    clause.scope, num_rows, kept, evaluated.row_group_ids, variants.count,
+	    clause.scope, num_rows, kept, variants.of_row, variants.count,
 	    [&](vector<idx_t> &ids, vector<GroupName> &named) {
 		    ids = class_ids;
 		    named = class_names;
@@ -945,10 +966,14 @@ void DecideModelEmitter::ReadBesideReducers(idx_t root, const DecideTerm &term, 
                                             vector<bool> &null_rows) {
 	vector<bool> nulls(descent.Containers()[root].Count(), false);
 	auto numbers = columns.Numbers(root, program, columns.Tested(root), &nulls);
+	// A term reading a decision with no instance at the row has no value there (D84): a helper no row holds a member
+	// of is such a decision.
+	const bool absent = columns.Absence().MayBe(term);
 	column.AssignDense(num_rows);
 	for (auto read : rows) {
 		column.Set(read.first, numbers[read.second]);
-		null_rows[read.first] = null_rows[read.first] || nulls[read.second];
+		null_rows[read.first] =
+		    null_rows[read.first] || nulls[read.second] || (absent && columns.Absence().TermAt(term, read.first));
 	}
 }
 
@@ -1250,15 +1275,6 @@ void DecideModelEmitter::Admit(const DecideBody &body, EvaluatedConstraint &eval
 	}
 }
 
-Value DecideModelEmitter::FirstRowValue(const Expression &factor) {
-	auto lowered = TransformToChunkExpression(factor, context);
-	ExpressionExecutor executor(context, *lowered);
-	DataChunk value;
-	value.Initialize(context, {lowered->return_type});
-	executor.Execute(first, value);
-	return value.data[0].GetValue(0);
-}
-
 void DecideModelEmitter::ReadPart(const DecideTermSite &site, idx_t qualifier_scope, int sign, const DecideTerm *term,
                                   CoefficientColumn &column, vector<bool> &null_rows) {
 	vector<bool> first, selected_rows;
@@ -1488,97 +1504,6 @@ void DecideModelEmitter::AvgGroups(bool avg_scale, idx_t avg_group_key, idx_t ch
 	for (idx_t e = 0; e < members.Count(); e++) {
 		filter.avg_group_ids[members.rows[e]] = members.parent_slots[e];
 	}
-}
-
-void DecideModelEmitter::Composed(PhysicalDecide::EvaluatedClauses &evaluated) {
-	// E roots own the composed G references. Keep their source order for the solver and diagnosis rows.
-	vector<idx_t> clauses;
-	for (auto root : tree.roots) {
-		if (!tree.nodes[root]->compiled.composed.empty()) {
-			clauses.push_back(root);
-		}
-	}
-	std::sort(clauses.begin(), clauses.end(), [&](idx_t left, idx_t right) {
-		return tree.nodes[left]->compiled.order < tree.nodes[right]->compiled.order;
-	});
-	for (idx_t c = 0; c < clauses.size(); c++) {
-		const auto root = clauses[c];
-		auto &node = *tree.nodes[root];
-		if (node.compiled.order != c || !node.facts) {
-			throw InternalException("DECIDE model emitter: composed E nodes have invalid order or no clause facts");
-		}
-		if (!node.rhs) {
-			throw InternalException("DECIDE model emitter: composed E node has no bound expression");
-		}
-		PhysicalDecide::EvaluatedClauses::ComposedConstraint clause;
-		clause.comparison = node.facts->comparison_type;
-		clause.rhs = DecideComposedBound(context, *node.rhs);
-		bool null_factor = false;
-		clause.terms = ComposedTerms(root, null_factor);
-		// The rows its `when` keeps are those its root holds in a class of its `per K:`. A `per K:` root routes a row
-		// in none to an unclassed slot (holds_rows_in_no_class), which is no instance, as the aggregate path counts it.
-		auto kept_rows = [&]() {
-			vector<bool> kept(num_rows, false);
-			auto &container = descent.Containers()[root];
-			for (auto read : DecideEntryRows(tree, descent, root)) {
-				if (container.groups.InAClass(container.Slot(read.second))) {
-					kept[read.first] = true;
-				}
-			}
-			return kept;
-		};
-		auto class_set = [&](const vector<bool> &kept) {
-			auto classes = [&](vector<idx_t> &class_ids, vector<GroupName> &class_names) {
-				KeyClasses(root, class_ids, class_names);
-			};
-			return DecideGroupClassSets(node.facts->scope, num_rows, kept, {}, 1, classes, gstate.class_sets)[0];
-		};
-		op.FinishComposedClause(gstate, num_rows, node, null_factor, kept_rows, class_set, std::move(clause),
-		                        evaluated);
-	}
-}
-
-vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(idx_t root, bool &null_factor) {
-	auto &body = tree.nodes[root]->compiled;
-	if (body.composed_specs.size() != body.composed.size()) {
-		throw InternalException("DECIDE model emitter: composed E node has no spec for each term");
-	}
-	vector<ComposedMinMaxTermData> result;
-	for (idx_t t = 0; t < body.composed.size(); t++) {
-		auto &spec = body.composed_specs[t];
-		const auto reducer_node = body.composed[t];
-		const auto &reducer = *tree.nodes[reducer_node];
-		auto evaluated = DecideComposedTerm(reducer.aggregate, spec.sign, spec.is_easy, reducer.text);
-		if (spec.scale) {
-			// A value the whole query shares, read on the input's first rows, whatever the clause keeps.
-			evaluated.scale = DecideQueryWideScale(FirstRowValue(*spec.scale), spec.scale_divides,
-			                                       {DecideValueRole::COEFFICIENT, *spec.scale, names}, null_factor);
-		}
-		// Its members are its G's: the entries of its operand its member tests keep, and a relation-qualified one's
-		// first of each class (language/guide.md §5.1). Every other row reads 0.
-		auto &members = tree.nodes[reducer_node]->compiled;
-		const auto site = DecideTreeOperand(tree, reducer_node);
-		const auto qualified = tree.nodes[reducer_node]->qualifier_scope != DConstants::INVALID_INDEX;
-		vector<bool> first;
-		const auto &reads = ReadEntriesOf(site, qualified, first);
-		const auto rows = ReadRows(site, reads, qualified);
-		evaluated.filter_mask.assign(num_rows, false);
-		for (auto read : rows) {
-			evaluated.filter_mask[read.first] = true;
-		}
-		for (idx_t i = 0; i < members.members.size(); i++) {
-			auto &inner = members.members[i];
-			auto &site_info = members.linear[i];
-			evaluated.variables.push_back(gstate.ReadVariable(inner.variable_index, inner.frame_read));
-			auto numbers = columns.Numbers(site, site_info.program, reads, nullptr);
-			evaluated.per_term_coefs.emplace_back(num_rows, 0.0);
-			for (auto read : rows) {
-				evaluated.per_term_coefs.back()[read.first] = numbers[read.second];
-			}
-		}
-		result.push_back(std::move(evaluated));
-	}
-	return result;
 }
 
 void DecideModelEmitter::FrameMembers(idx_t node, ReducerValueMembers &out) {

@@ -1394,9 +1394,6 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 	// expression, a product of decisions beside a reducer.
 	bool value = false;
 	bool first_reducer = true;
-	// A decision beside the reducers counts once per group, in a linear, bilinear or
-	// quadratic row alike (CountOnce).
-	bool decision_beside = false;
 	// The join of the scopes of the terms beside the reducers (ScopeKeyOf).
 	idx_t beside_key = DConstants::INVALID_INDEX;
 	// `<>` excludes an AVG's value by scaling the bound with the number of rows in the
@@ -1409,7 +1406,6 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 			if (!DecideDegreeOf(context, *atom.expr, decide_index).IsLinear()) {
 				value = true; // `sum(x) + b * s`: the product beside the reducer is a term of each row
 			}
-			decision_beside = decision_beside || ReferencesDecideVar(*atom.expr);
 			beside_key = JoinDecideKeys(beside_key, ScopeKeyOf(*atom.expr, data_key));
 			continue;
 		}
@@ -1450,28 +1446,7 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 	if (cmp.type == ExpressionType::COMPARE_NOTEQUAL && has_avg && !only_plain_avgs) {
 		return ScopedShape::UNSUPPORTED;
 	}
-	// A MIN or MAX beside another term, or under a factor of unknown sign, takes the
-	// composed formulation where that applies: one row over all of the clause's kept rows,
-	// under one bound, with nothing but reducers in it. With a `by`, a bound that is not
-	// a constant, or a decision beside it, the value rewrite pins the extremum per group.
-	if (!value && TakesComposedMinMax(lhs_atoms) &&
-	    (group_key != DConstants::INVALID_INDEX || !cmp.right->IsFoldable() || decision_beside)) {
-		value = true;
-	}
 	return value ? ScopedShape::VALUE : ScopedShape::AGGREGATE;
-}
-
-bool DecideCanonicalizer::TakesComposedMinMax(const vector<Atom> &atoms) const {
-	bool has_minmax = false;
-	for (auto &atom : atoms) {
-		auto *root = UnwrapDecideCasts(*atom.expr, decide_index);
-		if (root->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			auto name = StringUtil::Lower(root->Cast<BoundAggregateExpression>().function.name);
-			has_minmax = has_minmax || name == "min" || name == "max";
-		}
-	}
-	return has_minmax &&
-	       (atoms.size() > 1 || ScaleSignAtPlanTime(context, atoms[0].scale.get(), atoms[0].scale_divides) == 0);
 }
 
 CanonicalConstraintClass DecideCanonicalizer::ClassifyCanonicalComparison(const Expression &expr) const {

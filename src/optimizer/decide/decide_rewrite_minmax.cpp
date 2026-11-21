@@ -3,7 +3,7 @@
 //
 // src/optimizer/decide/decide_rewrite_minmax.cpp
 //
-// DECIDE MIN/MAX rewrites, plain and composed. See decide_optimizer.cpp.
+// The easy identity of a MIN or MAX in a constraint. See decide_optimizer.cpp.
 //
 //===----------------------------------------------------------------------===//
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
@@ -31,7 +31,6 @@
 #include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
-#include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
 #include "duckdb/optimizer/decide/decide_optimizer_internal.hpp"
 
@@ -39,65 +38,20 @@ namespace duckdb {
 
 using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 
-//! Retain tree semantics without changing the flat carrier's term extraction.
-static void KeepTreeReducerScope(Expression &carrier, const BoundAggregateExpression &original) {
-	idx_t index;
-	if (TryParseQualifiedReducerTag(original.GetAlias(), index)) {
-		AddDecideTag(carrier.alias, string(TREE_REDUCER_SCOPE_TAG_PREFIX) + to_string(index) + "__");
-	}
-	if (TryParseGroupKeyTag(original.GetAlias(), index)) {
-		AddDecideTag(carrier.alias, string(TREE_REDUCER_KEY_TAG_PREFIX) + to_string(index) + "__");
-	}
-}
-
 // ---------------------------------------------------------------------------
-// A factor sitting on a reducer
+// The easy identity
 // ---------------------------------------------------------------------------
 //
-// The canonicalizer peels a factor OUTWARD off a reducer (`2 * SUM(x*p)`) and
-// converges every spelling onto one. It stays outside from there: nothing pushes
-// it back into the reducer's body.
+// A MIN or MAX over decisions is a helper decision (RewriteScopedReducers) with one side of its definition, the side
+// its reader pushes it against (the epigraph auxiliary, Plaisted-Greenbaum). One identity is applied before that,
+// because it is no route but a rewrite to other clauses: `max(e) <= K` holds when every member `e <= K` does, and
+// `min(e) >= K` the mirror, so the clause keeps its reducer, tagged (MINMAX_EASY_REWRITE_TAG), and the linear form
+// states one row per member, which bound absorption folds into the column's box (D41). An equality is the pair of its
+// two relations, as BETWEEN is: the easy one by this identity, the other left in place for the helper.
 //
-// WHY IT STAYS OUTSIDE. `MIN`/`MAX` are order statistics, not linear functionals.
-// They commute with a POSITIVE factor only -- `MAX(-2x)` is `-2*MIN(x)`, not
-// `-2*MAX(x)` -- so pushing a factor in requires knowing its sign, and a scalar
-// subquery's sign is not known until the query runs. Leaving the factor outside
-// makes the sign irrelevant to CORRECTNESS: it only selects which linearization is
-// cheaper. An unknown sign then costs performance instead of failing.
-//
-// (A previous version of this pass did fold, swapping MIN/MAX for a negative
-// factor. It was exact, but it made the sign load-bearing for correctness and so
-// had nothing to fall back on when the sign was unknown.)
-//
-// Where the factor is finally applied depends on the term:
-//   SUM/AVG   -- multiplied into the per-row coefficients
-//               (`PhysicalDecide::ApplyScaleToExtracted`)
-//   MIN/MAX   -- multiplied into the auxiliary's contribution
-//               (`ComposedMinMaxTerm::scale`), or distributed over the per-row
-//               form when the constraint linearizes the easy way.
-
-// ---------------------------------------------------------------------------
-// Composed MIN/MAX constraints (additive LHS mixing SUM/AVG/MIN/MAX terms)
-// ---------------------------------------------------------------------------
-//
-// Single-term `MIN/MAX(expr) CMP K` is handled by RewriteMinMax below. When a
-// MIN/MAX appears *inside* an additive LHS (e.g. `SUM(a*x) + MAX(b*x) <= K`),
-// we extract the full constraint shape into decide.composed_minmax_constraints
-// and replace the comparison with a TRUE placeholder. The physical layer
-// allocates global auxiliaries (z_k per MIN/MAX term) and emits the pinning
-// constraints at sink-finalize time.
-
-void DecideOptimizer::RewriteComposedMinMax(LogicalDecide &decide) {
-	RewriteComposedMinMaxInConstraint(decide.decide_constraints, decide);
-}
-
-// True if the expression (after unwrapping casts) is a BOUND_FUNCTION named `name`. `-` is both binary and unary.
-static bool IsFunctionNode(const Expression &e, idx_t decide_index, const char *name) {
-	auto &u = (*UnwrapDecideCasts(e, decide_index));
-	if (u.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION)
-		return false;
-	return StringUtil::Lower(u.Cast<BoundFunctionExpression>().function.name) == name;
-}
+// The factor on a reducer stays outside it (the canonicalizer peels it outward): MIN and MAX are order statistics, so
+// they commute with a positive factor only, and the sign is part of the direction. A factor whose sign is not known
+// until the query runs gives the term no direction, and the clause takes the helper pinned from both sides.
 
 //! The aggregate of a left side that is one signed MIN or MAX term, `[-] [factor *] min/max(e)`, else null. Its sign
 //! is `sign` and its factor `match.scale`, if any: the term's direction is the comparison's times both.
@@ -121,272 +75,9 @@ static const BoundAggregateExpression *MatchLoneSignedExtremum(const Expression 
 	return &agg;
 }
 
-// True if any MIN/MAX aggregate over a decide var appears at or below the node.
-// Recurses through any function node's children (not just +/-), so shapes like
-// `2 * MIN(...)` are detected and can be rejected with a clean binder error.
-static bool AdditiveContainsMinMax(const Expression &e, idx_t decide_index) {
-	auto &u = (*UnwrapDecideCasts(e, decide_index));
-	if (u.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-		auto &agg = u.Cast<BoundAggregateExpression>();
-		auto name = StringUtil::Lower(agg.function.name);
-		if (IsExtremumName(name)) {
-			return true;
-		}
-	}
-	if (u.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-		auto &fn = u.Cast<BoundFunctionExpression>();
-		for (auto &child : fn.children) {
-			if (AdditiveContainsMinMax(*child, decide_index)) {
-				return true;
-			}
-		}
-	}
-	return false;
-}
-
-// Walk the additive LHS, emitting a ComposedMinMaxTerm for each leaf aggregate.
-// Throws BinderException on the shapes the composed form does not take (non-aggregate
-// leaves, nested subtraction/scaling, non-SUM/AVG/MIN/MAX aggregates).
-//
-// `outer_push` is which way the outer comparison or objective drives the LHS, and decides
-// each MIN/MAX term's easy/hard classification; NONE (an outer `=`) classifies every
-// MIN/MAX term hard, with its auxiliary pinned from both sides.
-//! `names` quotes a refused term as written.
-static void WalkComposedLhs(ClientContext &context, LogicalDecide &decide, idx_t source_clause_id, const Expression &e,
-                            int sign, idx_t decide_index, ExtremumPush outer_push,
-                            vector<LogicalDecide::ComposedMinMaxTerm> &out_terms, const DecideSourceNames &names) {
-	auto &u = (*UnwrapDecideCasts(e, decide_index));
-	if (IsFunctionNode(u, decide_index, "+")) {
-		auto &fn = u.Cast<BoundFunctionExpression>();
-		for (auto &child : fn.children) {
-			WalkComposedLhs(context, decide, source_clause_id, *child, sign, decide_index, outer_push, out_terms,
-			                names);
-		}
-		return;
-	}
-	if (IsFunctionNode(u, decide_index, "-")) {
-		// Subtraction flips the direction each term is pushed. `sign` already
-		// carries that through to the easy/hard classification below, and the
-		// physical layer is sign-generic, so descending is all that is required.
-		// This has to work: canonicalization moves decision terms onto the LHS,
-		// and a term that crosses the relation arrives negated.
-		auto &fn = u.Cast<BoundFunctionExpression>();
-		if (fn.children.size() == 2) {
-			WalkComposedLhs(context, decide, source_clause_id, *fn.children[0], sign, decide_index, outer_push,
-			                out_terms, names);
-			WalkComposedLhs(context, decide, source_clause_id, *fn.children[1], -sign, decide_index, outer_push,
-			                out_terms, names);
-			return;
-		}
-		// A leading negative term is a unary minus (DecideCanonicalizer), not `0 - term`.
-		WalkComposedLhs(context, decide, source_clause_id, *fn.children[0], -sign, decide_index, outer_push, out_terms,
-		                names);
-		return;
-	}
-	// A factor on this term (`2 * MIN(...)`) rides alongside it rather than being
-	// pushed into the aggregate. Its sign joins the easy/hard classification below.
-	ScaledAggregateMatch scale_match;
-	const BoundAggregateExpression *scaled_agg =
-	    TryMatchScaledAggregate(u, decide_index, scale_match) ? scale_match.aggregate : nullptr;
-	auto scale = scale_match.scale;
-	bool scale_divides = scale_match.divides;
-
-	const BoundAggregateExpression *found = scaled_agg ? scaled_agg
-	                                        : u.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE
-	                                            ? &u.Cast<BoundAggregateExpression>()
-	                                            : nullptr;
-	auto name = found ? StringUtil::Lower(found->function.name) : string();
-	if (!found) {
-		// The term as the user wrote it, not as a plan reprints it.
-		auto written_names = names;
-		written_names.written = true;
-		throw NotImplementedException(e, "'%s' beside MIN or MAX is not supported",
-		                              RenderDecideSource(e, written_names));
-	}
-	auto &agg = *found;
-
-	LogicalDecide::ComposedMinMaxTerm term;
-	term.kind = IsExtremumName(name) ? LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND
-	                                 : LogicalDecide::ComposedMinMaxTerm::SUM_KIND;
-	term.agg_name = name;
-	term.sign = sign;
-	term.inner_expr = agg.children[0]->Copy();
-	if (agg.filter) {
-		term.filter = agg.filter->Copy();
-	}
-	if (scale) {
-		term.scale = scale->Copy();
-		term.scale_divides = scale_divides;
-	}
-	// Carry the relation qualifier (`SUM(D: ...)`) off the tag the binder stamped on the
-	// aggregate. Without this the composed path reduces over join-result rows and a
-	// qualified reducer silently reverts to row semantics.
-	TryParseQualifiedReducerTag(agg.alias, term.qualifier_scope_idx);
-	if (term.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) {
-		bool is_max = (name == "max");
-		// A negative FACTOR flips which way z is pushed exactly as a subtraction does,
-		// so the two combine into one effective sign. `-2 * MAX(e)` under `<=` pushes
-		// MAX up, the hard direction, just as `- MAX(e)` would.
-		// An outer `=` holds the LHS from both sides, and a factor whose sign is not known
-		// until the query runs leaves the direction open (ExtremumPush::NONE either way):
-		// neither has a cheap direction, so the indicator layer pins z to the true MIN/MAX
-		// from both sides -- right for an equality, and right for either sign.
-		// A factor that is exactly zero makes the term vanish: nothing pushes z, so the
-		// cheap envelope is right whichever way the clause faces, and it asks for no
-		// member box (`sum(x) + 0 * min(abs(x - 2)) <= 5` was refused for one).
-		int scale_sign = ScaleSignAtPlanTime(context, scale, scale_divides);
-		term.is_easy = ScaleVanishesAtPlanTime(context, scale, scale_divides) ||
-		               IsEasyExtremum(is_max, ExtremumPushOf(outer_push, sign * scale_sign));
-		AddRewriteAccount(decide, source_clause_id, LogicalDecide::RewriteAccount::Kind::HELPER,
-		                  RenderForPlan(agg, decide));
-	}
-	out_terms.push_back(std::move(term));
-}
-
-//! A composed clause reads only the rows its `when` keeps: the condition joins each
-//! term's own `when`. A non-empty `by` would group the clause, which composed rows are
-//! not.
-static void ScopeComposedTerms(vector<LogicalDecide::ComposedMinMaxTerm> &terms, const Expression *when) {
-	for (auto &term : terms) {
-		if (!when) {
-			continue;
-		}
-		if (!term.filter) {
-			term.filter = when->Copy();
-			continue;
-		}
-		auto both = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		both->children.push_back(when->Copy());
-		both->children.push_back(std::move(term.filter));
-		term.filter = std::move(both);
-	}
-}
-
-//! The composed formulation is one row over all of a clause's kept rows, and its bound
-//! is one number: the canonicalizer sends a clause with a `by` or another bound to the
-//! value rewrite instead (DecideCanonicalizer::ClassifyScoped).
-static void AssertComposable(const BoundComparisonExpression &comparison) {
-	idx_t group_key;
-	if (TryParseGroupKeyTag(comparison.GetAlias(), group_key) || !comparison.right->IsFoldable()) {
-		throw InternalException("DECIDE: a composed MIN/MAX clause reached the rewrite with a by key or a "
-		                        "bound that is not constant: %s",
-		                        comparison.ToString());
-	}
-}
-
-void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
-                                                        DecideEnclosingScope scope) {
-	// Walk through AND conjunctions and the `when` / `per K:` wrappers. Inside `when c:` a
-	// composed clause's terms read the rows `c` keeps; a `per K:` over a composed clause
-	// names the classes its one row stands for (the checks hold K to it) and adds no row,
-	// so it keeps the placeholder the rewrite leaves.
-	scope = EnterDecideScope(*expr, scope);
-	if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = expr->Cast<BoundConjunctionExpression>();
-		for (idx_t i = 0; i < conj.children.size(); i++) {
-			if (IsConstraintChild(conj, i)) {
-				RewriteComposedMinMaxInConstraint(conj.children[i], decide, scope);
-			}
-		}
-		// The `when c:` folds into the terms, which then read only the rows it keeps; the
-		// wrapper goes with the clause it held.
-		if (IsWhenFilterWrapper(conj)) {
-			auto &inner = *conj.children[0];
-			if (inner.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-				expr = std::move(conj.children[0]); // the placeholder of a composed clause
-			}
-		}
-		return;
-	}
-
-	if (expr->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
-		return;
-	}
-	auto &comp = expr->Cast<BoundComparisonExpression>();
-
-	// Additive (+/-) with a MIN/MAX leaf, OR a lone MIN/MAX whose factor has a sign
-	// this stage cannot know.
-	//
-	// The second case matters because the single-term rewrite has only two shapes: an
-	// "easy" per-row fan-out (`∀i e_i <= K`) and a "hard" indicator form (`∃i e_i >=
-	// K`). Those encode OPPOSITE quantifiers, so choosing between them requires the
-	// factor's sign — with the sign unknown there is no safe default, and guessing
-	// "hard" silently drops the ∀ half. The composed path emits the envelope pin AND
-	// the indicator layer, which together pin the auxiliary to the true MIN/MAX in both
-	// directions, so multiplying it by a factor of either sign stays exact.
-	// A lone signed MIN or MAX (`-max(e)`, `2 * min(e)`) is the single-term rewrite's, which reads its sign and its
-	// factor's; only a factor of unknown sign comes here.
-	ScaledAggregateMatch lone_match;
-	int lone_sign;
-	if (MatchLoneSignedExtremum(*comp.left, decide.decide_index, lone_sign, lone_match)) {
-		if (ScaleSignAtPlanTime(optimizer.context, lone_match.scale, lone_match.divides) != 0) {
-			return;
-		}
-	} else {
-		if (!IsFunctionNode(*comp.left, decide.decide_index, "+") &&
-		    !IsFunctionNode(*comp.left, decide.decide_index, "-")) {
-			return;
-		}
-		if (!AdditiveContainsMinMax(*comp.left, decide.decide_index)) {
-			return;
-		}
-	}
-
-	auto cmp_type = comp.type;
-	// An equality has no cheap direction: it holds the LHS from both sides, so every
-	// MIN/MAX term needs its auxiliary pinned exactly rather than pushed one way. That
-	// costs the indicator layer on every term, but it is still cheaper than the
-	// `BETWEEN K AND K` spelling users reached for while `=` was rejected -- two
-	// comparisons allocate two auxiliaries and pay for the indicator layer on one of
-	// them anyway, plus a redundant second envelope.
-	bool exact_pin = (cmp_type == ExpressionType::COMPARE_EQUAL);
-	if (!exact_pin && cmp_type != ExpressionType::COMPARE_LESSTHAN &&
-	    cmp_type != ExpressionType::COMPARE_LESSTHANOREQUALTO && cmp_type != ExpressionType::COMPARE_GREATERTHAN &&
-	    cmp_type != ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-		// BETWEEN never reaches here: it is already a pair of directional comparisons by this point.
-		throw NotImplementedException(
-		    comp,
-		    "'" + (cmp_type == ExpressionType::COMPARE_NOTEQUAL ? string("<>") : ExpressionTypeToOperator(cmp_type)) +
-		        "' on a composed MIN or MAX is not supported");
-	}
-
-	const ExtremumPush outer_push = ExtremumPushOf(cmp_type);
-
-	auto names = DecidePlanNames(decide.source_text, decide.keyed_scopes, decide.keys, decide.decide_index,
-	                             decide.aux_var_expressions, decide.frames);
-	AssertComposable(comp);
-	LogicalDecide::ComposedMinMaxConstraint spec;
-	spec.outer_cmp = cmp_type;
-	spec.rhs_expr = comp.right->Copy();
-	TryParseSourceClauseTag(comp.GetAlias(), spec.source_clause_id);
-	TryParseRemovalGroupTag(comp.GetAlias(), spec.removal_group_id);
-
-	WalkComposedLhs(optimizer.context, decide, spec.source_clause_id, *comp.left, /*sign=*/1, decide.decide_index,
-	                outer_push, spec.terms, names);
-	ScopeComposedTerms(spec.terms, scope.Condition());
-	// The classes its one row stands for (D28): its `per` key's values, or with no `per`
-	// every row its `when` keeps.
-	spec.scope = DecideClauseScope(scope);
-
-	decide.composed_minmax_constraints.push_back(std::move(spec));
-
-	// Replace the comparison with a TRUE placeholder so the normal constraint path is a
-	// no-op. It carries the clause id so the plan still knows where the clause was written.
-	expr = MakeTrueExpression(comp.GetAlias());
-}
-
-// ---------------------------------------------------------------------------
-// MIN/MAX linearization
-// ---------------------------------------------------------------------------
-
 void DecideOptimizer::RewriteMinMax(LogicalDecide &decide) {
-	RewriteMinMaxConstraints(decide);
-}
-
-void DecideOptimizer::RewriteMinMaxConstraints(LogicalDecide &decide) {
 	vector<unique_ptr<Expression>> new_constraints;
 	RewriteMinMaxInConstraint(decide.decide_constraints, decide, new_constraints);
-
 	for (auto &nc : new_constraints) {
 		decide.AddConstraint(optimizer.context, std::move(nc));
 	}
@@ -395,9 +86,8 @@ void DecideOptimizer::RewriteMinMaxConstraints(LogicalDecide &decide) {
 void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                                 vector<unique_ptr<Expression>> &new_constraints,
                                                 DecideEnclosingScope scope) {
-	// The `when` and `per K:` travel with the clause they hold, so a row this rewrite adds
-	// for the clause keeps the clause's rows and classes. A wrapper's key or condition
-	// children are data (decide_constraint_walk.hpp).
+	// The `when` and `per K:` travel with the clause they hold, so a row this rewrite adds for the clause keeps the
+	// clause's rows and classes. A wrapper's key or condition children are data (decide_constraint_walk.hpp).
 	scope = EnterDecideScope(*expr, scope);
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr->Cast<BoundConjunctionExpression>();
@@ -408,15 +98,13 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		}
 		return;
 	}
-
-	if (expr->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+	// A clause in the VALUE shape holds its reducers in helpers, whatever their direction.
+	if (expr->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON ||
+	    HasDecideTag(expr->GetAlias(), VALUE_REWRITE_TAG)) {
 		return;
 	}
 	auto &comp = expr->Cast<BoundComparisonExpression>();
 
-	// The term's sign and any factor peeled onto it. The factor STAYS OUTSIDE the aggregate and the sign
-	// outside the factor; all they do here is contribute to the easy/hard classification, and ride along on
-	// whichever form is emitted.
 	ScaledAggregateMatch scale_match;
 	int term_sign;
 	auto *found = MatchLoneSignedExtremum(*comp.left, decide.decide_index, term_sign, scale_match);
@@ -424,111 +112,35 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		return;
 	}
 	auto &agg = *found;
-	auto fname = StringUtil::Lower(agg.function.name);
-	auto scale = scale_match.scale;
-	bool scale_divides = scale_match.divides;
-
-	bool is_max = (fname == "max");
-	auto cmp_type = comp.type;
-
-	// A negative sign or factor reverses the relation the aggregate faces: `-2 * MAX(e) >= -8` and
-	// `-MAX(e) >= -8` are `MAX(e) <= 4` and `MAX(e) <= 8`, the cheap direction, not the expensive one.
-	// Classify against the flipped relation rather than the written one.
-	//
-	// An unknown sign (a scalar subquery factor) makes the cheap direction
-	// undecidable, so take the expensive one -- it pins the auxiliary to the true
-	// MIN/MAX in both directions and is therefore right for either sign.
-	int scale_sign = ScaleSignAtPlanTime(optimizer.context, scale, scale_divides);
-
-	// Neither of this path's two encodings is safe without the sign. "Easy" fans the
-	// bound out over EVERY row; "hard" asserts SOME row attains it. Those are opposite
-	// quantifiers, and a negative factor swaps which one the constraint means, so a
-	// factor whose value is not known until the query runs cannot pick between them.
-	// RewriteComposedMinMax claims that shape first (it runs earlier and emits both
-	// halves), so scale_sign is never 0 here.
+	const bool is_max = StringUtil::CIEquals(agg.function.name, "max");
+	// A negative sign or factor reverses the relation the aggregate faces: `-2 * MAX(e) >= -8` and `-MAX(e) >= -8` are
+	// `MAX(e) <= 4` and `MAX(e) <= 8`, the cheap direction, not the expensive one. A factor whose sign is not known
+	// has no direction.
+	const int scale_sign = ScaleSignAtPlanTime(optimizer.context, scale_match.scale, scale_match.divides);
 	if (scale_sign == 0) {
-		throw InternalException("DECIDE: a MIN/MAX factor of unknown sign reached the single-term rewrite; "
-		                        "RewriteComposedMinMax promises to take it");
+		return;
 	}
-	// Classify: easy (`MAX(expr) <= K` is every row's `expr <= K`; `MIN(expr) >= K` the
-	// mirror) against hard (`MAX(expr) >= K` needs an indicator: some row reaches K).
-	// `=` is neither and is split below.
 	const int direction = term_sign * scale_sign;
-	const ExtremumPush push = ExtremumPushOf(ExtremumPushOf(cmp_type), direction);
-	const bool is_easy = IsEasyExtremum(is_max, push);
-	const bool is_hard = push != ExtremumPush::NONE && !is_easy;
-
-	if (cmp_type == ExpressionType::COMPARE_NOTEQUAL) {
-		// A `norm(e, 'inf')` reaches here lowered onto a MAX.
-		throw NotImplementedException(comp, "<> on MIN or MAX is not supported");
+	const auto cmp_type = comp.type;
+	const bool is_easy = IsEasyExtremum(is_max, ExtremumPushOf(ExtremumPushOf(cmp_type), direction));
+	if (!is_easy && cmp_type != ExpressionType::COMPARE_EQUAL) {
+		return;
 	}
-
-	// Re-attach the peeled factor to whatever form is emitted below. `scale * e` keeps
-	// the factor on the left, matching the one spelling canonicalization produces.
-	auto apply_scale = [&](unique_ptr<Expression> inner) -> unique_ptr<Expression> {
-		if (!scale) {
-			return inner;
-		}
-		return scale_divides ? optimizer.BindScalarFunction("/", std::move(inner), scale->Copy())
-		                     : optimizer.BindScalarFunction("*", scale->Copy(), std::move(inner));
-	};
-
-	// A clause keeps its reducer through the easy direction: its `when` picks the members
-	// its rows are emitted for, while its bound is reduced over every kept row of the `by`
-	// group (the linear form expands it). Hoisting the `when` onto the clause would reduce
-	// the bound over the members only.
-	// The hard reducer the indicators pin is rebuilt as a SUM; it keeps its `by`.
-	auto keep_group_key = [&](unique_ptr<Expression> hard_lhs) {
-		idx_t group_key;
-		if (TryParseGroupKeyTag(agg.alias, group_key)) {
-			AddDecideTag(hard_lhs->alias, MakeGroupKeyTag(group_key));
-		}
-		KeepTreeReducerScope(*hard_lhs, agg);
-		return hard_lhs;
-	};
-	// The hard side. Stage 06 takes the extremum the tag names over the members'
-	// coefficients -- the sign and the factor included -- and states the clause's own
-	// relation over it, which is the clause only when the factor is inside the reducer
-	// and the extremum is the one the whole term's direction names: with a negative factor
-	// `s * MAX(e)` is `MIN(s * e)`, and a negative sign takes the other extremum again, so
-	// `-(s * MAX(e))` is `MAX(-(s * e))`. The sign stays a sign, in front of the sum.
-	const string hard_name = direction > 0 ? fname : (is_max ? "min" : "max");
-	auto build_hard_lhs = [&]() -> unique_ptr<Expression> {
-		unique_ptr<Expression> lhs;
-		if (scale_sign > 0) {
-			lhs = apply_scale(
-			    keep_group_key(EmitHardMinMaxClause(decide, hard_name, *agg.children[0], agg.filter.get())));
-		} else {
-			auto scaled_body = apply_scale(agg.children[0]->Copy());
-			lhs = keep_group_key(EmitHardMinMaxClause(decide, hard_name, *scaled_body, agg.filter.get()));
-		}
-		return term_sign < 0 ? optimizer.BindScalarFunction("-", std::move(lhs)) : std::move(lhs);
-	};
-
-	// What the plan says the reducer became: an extremum column for the hard direction, a
-	// bound on each member for the cheap one, both for an equality.
-	if (is_hard || cmp_type == ExpressionType::COMPARE_EQUAL) {
-		AddRewriteAccount(decide, comp.alias, LogicalDecide::RewriteAccount::Kind::HELPER, RenderForPlan(agg, decide));
-	}
-	if (is_easy || cmp_type == ExpressionType::COMPARE_EQUAL) {
-		AddRewriteAccount(decide, comp.alias, LogicalDecide::RewriteAccount::Kind::EXTREMUM_EACH_MEMBER,
-		                  RenderForPlan(agg, decide));
-	}
+	AddRewriteAccount(decide, comp.alias, LogicalDecide::RewriteAccount::Kind::EXTREMUM_EACH_MEMBER,
+	                  RenderForPlan(agg, decide));
 
 	if (cmp_type == ExpressionType::COMPARE_EQUAL) {
-		// Equality: split into easy + hard parts
-		// MAX(expr) = K → (expr <= K) AND (MAX(expr) >= K)
-		// MIN(expr) = K → (expr >= K) AND (MIN(expr) <= K)
-
-		// Easy part: per-row bound. A negative sign or factor reverses it, for the same reason
-		// it reverses the classification above.
+		// MAX(expr) = K is (expr <= K) AND (MAX(expr) >= K), and MIN(expr) = K is (expr >= K) AND (MIN(expr) <= K). A
+		// negative sign or factor reverses both, for the same reason it reverses the classification above.
 		auto easy_cmp_type =
 		    is_max ? ExpressionType::COMPARE_LESSTHANOREQUALTO : ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+		auto other_cmp_type =
+		    is_max ? ExpressionType::COMPARE_GREATERTHANOREQUALTO : ExpressionType::COMPARE_LESSTHANOREQUALTO;
 		if (direction < 0) {
 			easy_cmp_type = FlipComparisonExpression(easy_cmp_type);
+			other_cmp_type = FlipComparisonExpression(other_cmp_type);
 		}
-		// The easy half keeps the reducer (MINMAX_EASY_REWRITE_TAG): the linear form
-		// expands it to one row per member.
+		// The easy half is a copy of the comparison; the other keeps the original, which the helper takes.
 		unique_ptr<Expression> easy =
 		    make_uniq<BoundComparisonExpression>(easy_cmp_type, comp.left->Copy(), comp.right->Copy());
 		easy->alias = comp.alias;
@@ -537,46 +149,12 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		// front as written.
 		easy = ScopeRowPerClause(optimizer.context, decide, std::move(easy), scope, comp.alias);
 		new_constraints.push_back(std::move(easy));
-		auto hard_cmp_type =
-		    is_max ? ExpressionType::COMPARE_GREATERTHANOREQUALTO : ExpressionType::COMPARE_LESSTHANOREQUALTO;
-		if (direction < 0) {
-			hard_cmp_type = FlipComparisonExpression(hard_cmp_type);
-		}
-		comp.left = build_hard_lhs();
-		comp.type = hard_cmp_type;
+		comp.type = other_cmp_type;
 		return;
 	}
-
-	if (is_easy) {
-		// The reducer stays: the linear form bounds each member (its `when` chooses the
-		// members, its `by` the rows the bound is reduced over); bound absorption folds a
-		// bare `max(x) <= K` into the column box (D41).
-		AddDecideTag(comp.alias, MINMAX_EASY_REWRITE_TAG);
-		return;
-	}
-
-	comp.left = build_hard_lhs();
-}
-
-unique_ptr<Expression> DecideOptimizer::EmitHardMinMaxClause(LogicalDecide &decide, const string &agg_name,
-                                                             const Expression &inner, const Expression *filter) {
-	// No indicator variable. `MAX(e) >= K` now becomes an extremum COLUMN and the user's
-	// own bound as a single row over it, whichever way that column is then pinned, and the
-	// binaries a Big-M pinning needs are global-block columns stage 06 allocates for the
-	// rows it actually emits. A row-scoped binary per data row, created here before anyone
-	// knows whether it will be read, is exactly what that removed.
-	//
-	// What stage 05 still owns is the marking: which clause this is, what it reduces with,
-	// and the text to call it in a diagnosis, spelled as the plan prints the reducer. The
-	// clause index rides the tag.
-	idx_t clause_idx = decide.minmax_clause_labels.size();
-	decide.minmax_clause_labels.push_back(agg_name + "(" + RenderForPlan(inner, decide) + ")");
-
-	// Build a SUM(inner) aggregate tagged as a hard MIN/MAX. The aggregate name is the
-	// marking; the clause index rides along so stage 06 can name what it emits.
-	auto new_sum = BindSumOver(optimizer, inner.Copy(), filter);
-	new_sum->alias = string(MINMAX_CLAUSE_TAG_PREFIX) + to_string(clause_idx) + "_" + agg_name + "__";
-	return new_sum;
+	// The reducer stays: the linear form bounds each member (its `when` chooses the members, its `by` the rows the
+	// bound is reduced over); bound absorption folds a bare `max(x) <= K` into the column box (D41).
+	AddDecideTag(comp.alias, MINMAX_EASY_REWRITE_TAG);
 }
 
 } // namespace duckdb

@@ -192,25 +192,6 @@ vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_row
                                vector<idx_t> *kept_row_group_ids, EvaluatedConstraint &evaluated,
                                idx_t &grouped_instances);
 
-//! A composed MIN/MAX term's evaluation before its rows are read (ComposedMinMaxTermData): its reducer, sign and
-//! direction, and the reducer node's source label, so a diagnosis over its extremum column reads `max(ship)`.
-ComposedMinMaxTermData DecideComposedTerm(const string &agg_name, int sign, bool is_easy, const string &label);
-
-//! A composed term's factor (LogicalDecide::ComposedMinMaxTerm::scale), one value for the whole query by construction
-//! (the canonicalizer refuses one that varies by row), as read on a row: a NULL one makes its clause's instance NULL,
-//! which sets `is_null` and reads 0; one the model cannot read is refused, named by `source`; a divisor of 0 is a
-//! division by zero, named by `source` too.
-double DecideQueryWideScale(const Value &value, bool divides, const ValueSource &source, bool &is_null);
-
-//! Whether a composed term reads no row: a reducer over none is NULL (deck p. 56), so its clause is skipped and its
-//! objective term dropped.
-bool DecideComposedTermReadsNoRow(const ComposedMinMaxTermData &term);
-
-//! A composed clause's E-owned bound: one constant by construction, which the optimizer asserts (AssertComposable)
-//! and the value rewrite leaves no other shape for. Decided by foldability, since canonicalization rebuilds the bound
-//! side as an additive chain, so a constant arrives as `(0 - 3) + 0` just as legitimately as `-3`.
-double DecideComposedBound(ClientContext &context, const Expression &rhs);
-
 //! AVG denominator scaling, shared by the constraint and objective sides: a linear term's coefficient, or a product
 //! group's weight, which multiplies the whole product. The rows a term reads are its filter: a clause's `when` is
 //! folded into it upstream.

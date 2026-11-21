@@ -184,8 +184,8 @@ struct DecideClauseLayers {
 //! Association runs on `source_clause_id`, which the binder stamps on every written
 //! comparison and the optimizer copies onto the rows it emits. The mapping is not
 //! one-to-one in either direction and the result tolerates both: a linearized clause
-//! owns several rows, a clause the optimizer extracted into `composed_minmax_constraints`
-//! owns none in the tree, and a row carrying no id at all is returned in `unattributed`.
+//! owns several rows, a clause the optimizer lifted out of the tree owns none, and a row carrying no id at all is
+//! returned in `unattributed`.
 //! `accounts` (LogicalDecide::rewrite_accounts) are printed under their clause before its
 //! rows, and `function_rows` (CollectDecideFunctionRows) follow the rows of the constraint list, each behind the
 //! qualifier its clause was written with; the objective's (INVALID_INDEX), behind `objective_qualifier`

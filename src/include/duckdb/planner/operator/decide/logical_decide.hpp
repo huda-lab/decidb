@@ -364,9 +364,6 @@ public:
 	// The source clause (index into constraint_sources) of each not-equal (<>) constraint
 	vector<idx_t> ne_clause_sources;
 
-	// Links from MIN/MAX indicator variables: (agg_name "min"/"max", indicator_idx)
-	vector<string> minmax_clause_labels;
-
 	// The stage-06 McCormick/AND formulation record materialized from a Boolean-product F node.
 	struct BilinearLink {
 		idx_t aux_idx;       // Index of auxiliary variable w
@@ -442,51 +439,6 @@ public:
 	//! unbounded diagnosis to name an escaping aux column by its source expression
 	//! rather than its internal __abs_aux_N__ name.
 	vector<pair<idx_t, string>> aux_var_expressions;
-
-	//! Composed MIN/MAX constraint: additive LHS with one or more MIN/MAX terms alongside
-	//! SUM/AVG terms. Each term becomes a global auxiliary at execution time (MIN/MAX) or
-	//! is summed into the outer ILP row (SUM/AVG). See DecideOptimizer::RewriteComposedMinMax.
-	struct ComposedMinMaxTerm {
-		enum Kind { SUM_KIND, MINMAX_KIND };
-		Kind kind;
-		string agg_name;                   // "sum", "avg", "min", "max"
-		int sign;                          // +1 or -1 (from subtraction)
-		unique_ptr<Expression> inner_expr; // The expression inside the aggregate
-		unique_ptr<Expression> filter;     // Aggregate-local WHEN filter (optional)
-		//! Factor the canonicalizer peeled off this reducer (`2 * MAX(x*v)`), or nullptr
-		//! for none. It stays OUTSIDE the reducer: MIN/MAX are order statistics, so
-		//! pushing a factor in only commutes for a positive one, and the value may not
-		//! be known until the query runs. The physical layer evaluates it once (it is
-		//! query-wide by construction) and multiplies it into this term's contribution.
-		//!
-		//! Its sign, when known at plan time, participates in `is_easy` exactly as
-		//! `sign` does -- a scale of -2 flips the direction z is pushed just as a
-		//! subtraction would. When the sign is NOT known, `is_easy` is forced false:
-		//! the indicator layer pins z to the true MIN/MAX in both directions, which is
-		//! correct whichever sign the factor turns out to have.
-		unique_ptr<Expression> scale;
-		//! true when the term was `AGG(...) / scale` rather than `scale * AGG(...)`.
-		bool scale_divides = false;
-		bool is_easy = true; // For MIN/MAX: easy (no Big-M) or hard (indicator).
-		//! Keyed scope this term's reducer is qualified by (`SUM(D: ...)`), or
-		//! INVALID_INDEX when unqualified. Mirrors `Term::qualifier_scope_idx`; the
-		//! physical layer folds the matching de-duplication mask into `filter`'s mask so a
-		//! qualified reducer keeps its identity semantics inside a composed clause.
-		idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
-	};
-	struct ComposedMinMaxConstraint {
-		vector<ComposedMinMaxTerm> terms;
-		unique_ptr<Expression> rhs_expr; // RHS expression (typically scalar constant)
-		ExpressionType outer_cmp;        // Outer comparison (<=, >=, <, >, =)
-		idx_t source_clause_id = DConstants::INVALID_INDEX;
-		idx_t removal_group_id = DConstants::INVALID_INDEX;
-		//! The clause's `when`, also folded into each term's filter, and the classes its one
-		//! row stands for, which an expanded diagnosis reports one by one (D28) -- the values
-		//! of its `per K:` key among the rows its `when` keeps (NAMES_CLASSES; `per ()` names
-		//! none), or those rows themselves with no `per` (NONE).
-		DecideClauseScope scope;
-	};
-	vector<ComposedMinMaxConstraint> composed_minmax_constraints;
 
 	//! A decision reducer of a scoped comparison in the VALUE shape
 	//! (CanonicalConstraintClass::VALUE), replaced by the helper decision `value_var`
