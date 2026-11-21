@@ -13,7 +13,6 @@ the owner rules first.
 # Phase 3 — Each shape and formulation has one owner
 
 ## 3.4 Gaps filed in Phase 3 (one lane)
-- [ ] BIND-6 A norm and a range frame refuse a query-wide body — pipeline/02_binder/todo.md § BIND-6
 - [ ] FORM-10 Two diagnosis fields that nothing reads — pipeline/06_model_formulation/todo.md § FORM-10
 - [ ] OPT-31 A square outside a reducer in the objective — pipeline/05_optimizer/todo.md § OPT-31
 - [ ] CANON-1 A SUM or AVG keeps its data addend where its route puts it — pipeline/04_canonicalizer/todo.md § CANON-1

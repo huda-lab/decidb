@@ -253,11 +253,11 @@ position, a constraint side, beside another term, under a `by` or in the objecti
 - A reducer whose body is query-wide decisions only (`IsRowInvariantExpression`: every leaf a literal, a query-wide
   decision or a subquery that names no per-row decision, `ReadsRowDecision`) is refused: *"'cap' is a query-wide
   decision, so 'sum(cap)' has no rows to reduce"*. Once and once per row are different problems, and neither reading is
-  chosen silently. `sum(x + cap)` and `sum(cost * cap)` are not refused. A `norm` marker, which counts its body's rows
-  by definition, and a range frame's reducer (`binding_frame_range`), which reduces the rows of its frame, are not
-  refused. `norm(e, p)` binds as an inert `SUM` marker tagged with its order
-(`NORM_MARKER_TAG_PREFIX`), which stage 05 lowers. `COUNT` binds as data only:
-`COUNT(x)` over a decision is refused (*"COUNT over a decision is not supported"*).
+  chosen silently. `sum(x + cap)` and `sum(cost * cap)` are not refused. The same rule holds for a `norm` and for a
+  range frame's reducer, with no exemption (owner ruling, 2026-11-21): once and once per row are different problems for
+  them too. `norm(e, p)` binds as an inert `SUM` marker tagged with its order (`NORM_MARKER_TAG_PREFIX`), which stage
+  05 lowers; the marker takes the location of the `norm(...)` call, so an error at the marker points at it. `COUNT`
+  binds as data only: `COUNT(x)` over a decision is refused (*"COUNT over a decision is not supported"*).
 
 ### A reducer's own `when` and `per`
 

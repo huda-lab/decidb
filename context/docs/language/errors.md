@@ -82,7 +82,7 @@ keeps ([guide.md §5.5](guide.md#55-reducers-inside-reducers--the-path-rule)).
 | A `norm` order other than 0, 1, 2 or `'inf'` | NI | `norm order '3' is not supported` | the order |
 | A bound on a `norm` that is not of order 0, or one that is not a positive constant | Binder | `only norm order 0 takes a bound` · `the bound of 'q' is not a positive constant` | the argument |
 | A subquery in a clause that is not scalar, or that reads a decision | Binder | `a subquery in a DECIDE clause is not scalar` · `a subquery in a DECIDE clause reads a decision` | the subquery |
-| A reducer over query-wide decisions only, wherever it stands (a side, beside another term, under a `by`, in the objective); a `norm` and a range frame's reducer are not refused | Binder | `'cap' is a query-wide decision, so 'sum(cap)' has no rows to reduce` | the reducer |
+| A reducer over query-wide decisions only, wherever it stands (a side, beside another term, under a `by`, in the objective), a `norm` and a range frame's reducer included | Binder | `'cap' is a query-wide decision, so 'sum(cap)' has no rows to reduce` | the reducer |
 | A cast over a decision | Binder | `'x::DOUBLE' casts a decision` | the cast |
 | A NULL beside a decision | Binder | `'x + NULL' is NULL whatever the decisions are` | the expression |
 | A decision whose name is a column's or another decision's | Binder | `decision 'x' has the name of a column` · `decision 'x' is declared twice` | the declaration |

@@ -152,10 +152,10 @@ MINIMIZE max_shortfall
   bound under any `per`, and it counts once.
 - **Inside a reducer**: a body of query-wide decisions only (`sum(cap)`, `sum(cap1 + cap2)`) is refused wherever the
   reducer stands: a constraint side, beside another term, under a `by`, in the objective. There is one column and
-  nothing to reduce, and the two plausible readings (coefficient 1 or `n`) are different problems, so neither is
-  chosen silently; write `cap`. A `norm` over such a body and a range frame's reducer are not refused. A body mixing it
-  with row data is ordinary scalar-times-vector: `sum(cost * cap)` is `(Σ cost) · cap`, and `sum(x + cap)` is
-  `sum(x) + n · cap`, where `n` is the number of values the reducer reads.
+  nothing to reduce, and the two plausible readings (coefficient 1 or `n`) are different problems, so neither is chosen
+  silently; write `cap`. A `norm` and a range frame's reducer over such a body are refused too. A body mixing it with
+  row data is ordinary scalar-times-vector: `sum(cost * cap)` is `(Σ cost) · cap`, and `sum(x + cap)` is `sum(x) + n ·
+  cap`, where `n` is the number of values the reducer reads.
 - **In the objective**: bare (`MINIMIZE max_shortfall`), as an additive term counted once
   (`MINIMIZE max_shortfall - sum(ship)`), or inside a reducer with row data (`sum(cost * cap)`).
 
