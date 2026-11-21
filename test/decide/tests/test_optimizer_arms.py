@@ -253,6 +253,36 @@ def test_a_boolean_product_expands_to_a_product_of_two_integers_too(decidb_cli_g
     )
 
 
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "factor, holds",
+    [
+        pytest.param("(b + 1) * x >= 2", lambda x, b: (b + 1) * x >= 2, id="a-constant-of-one-stays-a-constant"),
+        pytest.param("(b - 1) * x <= -2", lambda x, b: (b - 1) * x <= -2, id="a-negative-constant-keeps-its-sign"),
+        pytest.param("(3 - b) * x >= 2", lambda x, b: (3 - b) * x >= 2, id="a-negated-decision-keeps-its-sign"),
+    ],
+)
+def test_a_factor_of_a_product_is_read_term_by_term(decidb_cli_gurobi, factor, holds):
+    """FindAndReplaceBilinear reads each side of a degree-2 product through the term splitter: its constant terms (a
+    literal 1 beside a decision is a constant, one on a bare decision is the decision's own coefficient) and its sign
+    (`3 - b` is `3` and `-b`)."""
+    sql = f"""
+        SELECT id, x, b FROM (VALUES (1), (2)) t(id)
+        DECIDE x(INT), b(BOOL)
+        SUCH THAT x <= 3 AND {factor}
+        MINIMIZE SUM(x) + SUM(b)
+        ORDER BY id"""
+    domains = {**{f"x{i}": range(4) for i in range(2)}, **{f"b{i}": range(2) for i in range(2)}}
+    _judge(
+        decidb_cli_gurobi,
+        sql,
+        domains,
+        lambda a: all(holds(a[f"x{i}"], a[f"b{i}"]) for i in range(2)),
+        lambda a: sum(a[f"x{i}"] + a[f"b{i}"] for i in range(2)),
+        False,
+    )
+
+
 #: A MIN or MAX over a squared body is defined by a helper per row (DefineNonlinearReducerBodies), stated natively.
 _SQUARE_BODY_CASES = [
     # Two clauses read the same reducer under different `when`s: one helper each (SameReducer, `when` against none).

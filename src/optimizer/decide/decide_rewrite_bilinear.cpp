@@ -29,6 +29,7 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
+#include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
@@ -71,28 +72,12 @@ void DecideOptimizer::RewriteBilinear(LogicalDecide &decide) {
 	}
 }
 
-//! Recursively find all DECIDE variable indices referenced in an expression
-static void CollectDecideVarIndices(const Expression &expr, idx_t decide_index, vector<idx_t> &out) {
-	idx_t definition_aux;
-	if (TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
-		out.push_back(definition_aux);
-		return;
-	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-		auto &colref = expr.Cast<BoundColumnRefExpression>();
-		if (colref.binding.table_index == decide_index) {
-			out.push_back(colref.binding.column_index);
-		}
-	}
-	ExpressionIterator::EnumerateChildren(
-	    expr, [&](const Expression &child) { CollectDecideVarIndices(child, decide_index, out); });
-}
-
 // A factor of a product is read as an affine expression in the decisions: `sum of coefficient * decision + constant`,
 // each coefficient and the constant decision-free (data, possibly a column that varies by row). `b * (x - 1)` is read
 // as `b * x - b`, `(2 * b) * x` as `2 * (b * x)`. Reading the factors this way is what lets one product rewrite stand
 // for every shape of factor: the product distributes over the terms, each product of two decisions is linearized once,
-// and every other term stays linear.
+// and every other term stays linear. The terms are the term splitter's (DecideTermSplitter::Split), the one reader of
+// what a decision expression is made of.
 namespace {
 
 //! One term of an affine expression: `coefficient * decision`; a null coefficient is 1.
@@ -126,114 +111,40 @@ unique_ptr<Expression> AddCoefficients(Optimizer &optimizer, unique_ptr<Expressi
 	return optimizer.BindScalarFunction("+", std::move(a), std::move(b));
 }
 
-//! `into += other`. A decision may stand in several terms: the product merges them by pair.
-void AddAffine(Optimizer &optimizer, Affine &into, Affine other) {
-	for (auto &term : other.terms) {
-		into.terms.push_back(std::move(term));
-	}
-	if (other.constant) {
-		into.constant = into.constant
-		                    ? optimizer.BindScalarFunction("+", std::move(into.constant), std::move(other.constant))
-		                    : std::move(other.constant);
-	}
-}
-
-//! `affine * factor` for a decision-free `factor` (null: 1), or `affine / factor` with `divides`.
-void ScaleAffine(Optimizer &optimizer, Affine &affine, const Expression &factor, bool divides) {
-	auto scale = [&]() -> unique_ptr<Expression> {
-		if (!divides) {
-			return factor.Copy();
-		}
-		return optimizer.BindScalarFunction("/", make_uniq<BoundConstantExpression>(Value::DOUBLE(1.0)), factor.Copy());
-	};
-	for (auto &term : affine.terms) {
-		term.coefficient = MultiplyCoefficients(optimizer, scale(), std::move(term.coefficient));
-	}
-	if (affine.constant) {
-		affine.constant = MultiplyCoefficients(optimizer, scale(), std::move(affine.constant));
-	}
-}
-
-//! Read `expr` as an affine expression in the decisions. A side of a degree-2 product always is one: the shape check
-//! refuses a degree above two before the optimizer runs, ProductReader splits every `*` of decision-bearing factors
-//! into factors, the binder refuses a decision in a divisor, and BuildDecideProductForm spells a product with its data
-//! factors first. A shape outside that is a broken promise of those stages. A function the optimizer gave a helper
-//! decision (a definition, an ABS once RewriteAbs tagged it) reads as that decision. An ABS over decisions that is not
-//! tagged yet is the one side that is not affine: the pass after RewriteAbs reads it (false until then).
-bool ReadAffine(Optimizer &optimizer, const Expression &expr, idx_t decide_index, Affine &out) {
-	idx_t function_aux;
-	if (TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, function_aux)) {
-		out.terms.push_back({function_aux, nullptr});
-		return true;
-	}
-	vector<idx_t> vars;
-	CollectDecideVarIndices(expr, decide_index, vars);
-	if (vars.empty()) {
-		out.constant = expr.Copy();
-		return true;
-	}
-	if (auto *colref = GetBareDecideColumnRef(expr, decide_index)) {
-		out.terms.push_back({colref->binding.column_index, nullptr});
-		return true;
-	}
-	auto *cur = UnwrapDecideCasts(expr, decide_index);
-	if (TryParseDecideIndexTag(cur->GetAlias(), ABS_FUNCTION_TAG_PREFIX, function_aux)) {
-		out.terms.push_back({function_aux, nullptr});
-		return true;
-	}
-	if (cur->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
-	    cur->Cast<BoundFunctionExpression>().function.name == "@") {
-		return false;
-	}
-	if (cur->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
-		throw InternalException("DECIDE bilinear factor '%s' is not affine in the decisions", expr.ToString());
-	}
-	auto &func = cur->Cast<BoundFunctionExpression>();
-	const auto name = StringUtil::Lower(func.function.name);
-	auto bears_decision = [&](idx_t child) {
-		vector<idx_t> child_vars;
-		CollectDecideVarIndices(*func.children[child], decide_index, child_vars);
-		return !child_vars.empty();
-	};
-	if ((name == "+" || name == "-") && func.children.size() == 2) {
-		Affine left, right;
-		if (!ReadAffine(optimizer, *func.children[0], decide_index, left) ||
-		    !ReadAffine(optimizer, *func.children[1], decide_index, right)) {
+//! The terms of one side of a product, as an affine expression. False for an ABS over decisions that is not tagged yet:
+//! the one side of a degree-2 product that is not affine, which the pass after RewriteAbs reads. Anything else the
+//! splitter does not read as a constant or a linear term is a broken promise of the stages before: the shape check
+//! refuses a degree above two, the binder refuses a decision in a divisor, and a function the optimizer gave a helper
+//! decision (a definition, an ABS once RewriteAbs tagged it) reads as that decision. `side` is the expression the terms
+//! were read from.
+bool AffineFromTerms(Optimizer &optimizer, vector<DecideSplitTerm> &terms, const Expression &side, Affine &out) {
+	for (auto &term : terms) {
+		if (term.IsAbs()) {
 			return false;
 		}
-		if (name == "-") {
-			ScaleAffine(optimizer, right, BoundConstantExpression(Value::INTEGER(-1)), false);
+		if (!term.IsConstant() && !term.IsLinear()) {
+			throw InternalException("DECIDE bilinear factor '%s' is not affine in the decisions", side.ToString());
 		}
-		AddAffine(optimizer, out, std::move(left));
-		AddAffine(optimizer, out, std::move(right));
-		return true;
 	}
-	if (name == "-") {
-		if (!ReadAffine(optimizer, *func.children[0], decide_index, out)) {
-			return false;
+	for (auto &term : terms) {
+		// A bare decision's coefficient is the literal 1, which stays out of the products.
+		auto coefficient = std::move(term.coefficient);
+		if (coefficient && coefficient->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
+		    coefficient->Cast<BoundConstantExpression>().value == Value::INTEGER(1) && term.IsLinear()) {
+			coefficient = nullptr;
 		}
-		ScaleAffine(optimizer, out, BoundConstantExpression(Value::INTEGER(-1)), false);
-		return true;
-	}
-	if (name == "*") {
-		if (bears_decision(0) || !bears_decision(1)) {
-			throw InternalException("DECIDE bilinear factor '%s' is not a data factor times a form", expr.ToString());
+		if (term.sign < 0) {
+			coefficient = MultiplyCoefficients(optimizer, make_uniq<BoundConstantExpression>(Value::INTEGER(-1)),
+			                                   std::move(coefficient));
 		}
-		if (!ReadAffine(optimizer, *func.children[1], decide_index, out)) {
-			return false;
+		if (term.IsLinear()) {
+			out.terms.push_back({term.var_a, std::move(coefficient)});
+		} else {
+			out.constant = out.constant
+			                   ? optimizer.BindScalarFunction("+", std::move(out.constant), std::move(coefficient))
+			                   : std::move(coefficient);
 		}
-		ScaleAffine(optimizer, out, *func.children[0], false);
-		return true;
 	}
-	if (name != "/" || bears_decision(1)) {
-		throw InternalException("DECIDE: bilinear factor '%s' is not a division by data; the shape check and the "
-		                        "binder promise a factor of +, -, *, / with no decision in a divisor",
-		                        expr.ToString());
-	}
-	if (!ReadAffine(optimizer, *func.children[0], decide_index, out)) {
-		return false;
-	}
-	ScaleAffine(optimizer, out, *func.children[1], true);
 	return true;
 }
 
@@ -333,8 +244,12 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 				return std::any_of(affine.terms.begin(), affine.terms.end(),
 				                   [&](const AffineTerm &term) { return is_bool(term.var); });
 			};
-			if (ReadAffine(optimizer, *sides[0], decide.decide_index, left) &&
-			    ReadAffine(optimizer, *sides[1], decide.decide_index, right) && (has_bool(left) || has_bool(right))) {
+			DecideTermSplitter splitter(optimizer.context, decide);
+			vector<DecideSplitTerm> left_terms, right_terms;
+			splitter.Split(*sides[0], 1, left_terms);
+			splitter.Split(*sides[1], 1, right_terms);
+			if (AffineFromTerms(optimizer, left_terms, *sides[0], left) &&
+			    AffineFromTerms(optimizer, right_terms, *sides[1], right) && (has_bool(left) || has_bool(right))) {
 				// The terms of the product: `coefficient * first * second` for a pair of decisions (`second` is
 				// INVALID for one decision, both INVALID for the constant), merged by the pair.
 				struct ProductTerm {
