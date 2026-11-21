@@ -795,11 +795,10 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
 - **De-duplication** for a reducer's own `per` keeps the first row of each class among
   the rows its `when` keeps (its operand's first entry of each instance, `FirstOfEachInstance`), within each group:
   a class whose first joined row the `when` drops is still counted.
-- **The objective**: its `when` is folded into every
-  term's filter, so reading, de-duplication and AVG denominators all follow it. A
-  decision outside the reducers (`NONE`) keeps its coefficient on the first kept row only
-  (`CountTupleTermsOnce`, over `CountOnce`), and so does a product of two query-wide decisions there (one inside a
-  reducer is SUM and keeps every row). `CountOnce` is the one place a term is counted once, in the objective and in
+- **The objective**: its `when` is folded into every term's filter, so reading, de-duplication and AVG denominators all
+  follow it. A decision outside the reducers (`NONE`) keeps its coefficient on the first kept row only
+  (`CountTupleTermsOnce`, over `CountOnce`), and so does a product or a square of query-wide decisions there (one inside
+  a reducer is SUM and keeps every row). `CountOnce` is the one place a term is counted once, in the objective and in
   each group's row of an aggregate clause; stage 06 sums every row.
 - **Classes of a grouped row** (D28, `DecideGroupClassSets`, under DIAGNOSE only). The rows of a clause over `by` groups
   -- an aggregate-shape group row (one that reads a MIN/MAX helper among them) and an easy MIN/MAX's member rows --

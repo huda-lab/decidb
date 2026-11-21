@@ -307,19 +307,19 @@ second. So is a term that holds a decision under anything but a bare reference
 (term extraction, `DecideLinearFormBuilder`): no rewrite lowered it, and reading it as its decision would drop the
 construct without a word.
 
-The objective's `when` wrapper gives `DecideObjective::when_condition`. An AVG term with a
-`by` key -- a `sum(per K: avg(e) by (G))` the value rewrite read in place -- carries it as
-`avg_group_key`, so execution divides each row by its `G` group's count; like terms merge
-only with the same one (`TermsAreLike`). A decision outside the objective's reducers
-— query-wide or not — is a `NONE` term, counted once at execution, and so is a product of
-two query-wide decisions (`MAXIMIZE SUM(x) + s * u`, a product group with `reduction`
-NONE; inside a reducer it is SUM and weighted by every row, `SUM(w * s * u)`). Any other
-product of decisions left there is refused (*"'x * y' multiplies decisions outside a reducer,
-which is not supported"*), since it has no once-only reading in the model. So is a term that is not itself a
-reducer but holds one (`sum(x) * max(x)`, `(sum(x) + 1) * max(x)`, `0 * sum(x) + power(sum(x) - 3, 2)`): no rewrite
-held its reducers in helper decisions, so they cannot be read as terms (`ExtractAggregateObjectiveTerms`). As the
-whole objective, `power(sum(x) - 3, 2)` is the binder's: the aggregate must be the outermost function.
-`RewriteBilinear` has already linearized a product with a `BOOL` decision by then.
+The objective's `when` wrapper gives `DecideObjective::when_condition`. An AVG term with a `by` key -- a
+`sum(per K: avg(e) by (G))` the value rewrite read in place -- carries it as `avg_group_key`, so execution divides each
+row by its `G` group's count; like terms merge only with the same one (`TermsAreLike`). A decision outside the
+objective's reducers — query-wide or not — is a `NONE` term, counted once at execution, and so is a product or a square
+of query-wide decisions (`MAXIMIZE SUM(x) + s * u`, `MINIMIZE (s - 3) * (s - 3)`, a product group with `reduction` NONE;
+inside a reducer it is SUM and weighted by every row, `SUM(w * s * u)`). A decision is query-wide when it is declared
+`per ()` or is the helper of a reducer with no `by`, a keyed scope with the empty key (`IsQueryWideDecision`):
+`power(sum(x) - 3, 2)` reads the helper the value rewrite holds `sum(x)` in. A helper with more than one instance over
+the kept rows is refused when the objective is read (`DecideObjectiveTwice`). Any other product of decisions left there
+is refused (*"'x * y' multiplies decisions outside a reducer, which is not supported"*), since it has no once-only
+reading in the model. So is a term that is not itself a reducer but holds one (`sum(x) * max(x)`,
+`(sum(x) + 1) * max(x)`): no rewrite held its reducers in helper decisions, so they cannot be read as terms
+(`ExtractAggregateObjectiveTerms`). `RewriteBilinear` has already linearized a product with a `BOOL` decision by then.
 
 ### Terms of degree 2 — product groups
 

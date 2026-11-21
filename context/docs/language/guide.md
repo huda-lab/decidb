@@ -292,14 +292,13 @@ MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))      -- a nested reducer (
     is added once at its one value over the kept rows; a column that differs between kept rows stops the query
     (*"'w' takes more than one value over the kept rows (1, 4), so the objective would be produced more than once"*,
     §7.3). `DIAGNOSE`'s achievable objective includes it.
-  - `ABS` of a reducer expression solves (`MINIMIZE abs(sum(x) - 2)`). A `POWER` of one is refused
-    (*"'power(sum(x) - 3, 2)' multiplies decisions outside a reducer, which is not supported"*), and so is any other
-    function (`sqrt(sum(x))`) or a division by a reducer over decisions (`sum(x) / sum(x)`).
+  - `ABS` and `POWER` of a reducer expression solve (`MINIMIZE abs(sum(x) - 2)`, `MINIMIZE power(sum(x) - 3, 2)`). Any
+    other function (`sqrt(sum(x))`) or a division by a reducer over decisions (`sum(x) / sum(x)`) is refused.
   - A decision outside the reducers is legal when it has one instance over the kept rows, and counts once: any
     `per ()` decision, or a per-row or keyed one when the `when` keeps one row or class (`MAXIMIZE when id = 3: x`).
     Otherwise the objective would be produced more than once, an error (§7.3). Not beside a `MIN` or `MAX`.
-  - A product of two query-wide decisions counts once (Gurobi). Any other product of two decisions outside a reducer
-    is refused unless one is `BOOL`.
+  - A product or a square of query-wide decisions counts once (`s * u`, `(s - 3) * (s - 3)`), and the solver takes it as
+    any quadratic objective. Any other product of decisions outside a reducer is refused unless one is `BOOL`.
   - A factor on a reducer must be one value over the kept rows (§5).
 - **`by` on a top-level reducer** must be one group over the kept rows: `by ()`, or a `Γ` with one value there
   (`MAXIMIZE when g = 'A': sum(x) by (g)`).
