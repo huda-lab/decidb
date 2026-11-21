@@ -1702,7 +1702,7 @@ row 3: sense=< rhs=0 nnz=2 | 2:-0.6 3:0.4
 === DECIDB MODEL DUMP ===
 sense: minimize
 num_vars: 5
-num_rows: 5
+num_rows: 3
 num_qrows: 0
 num_genconstrs: 0
 num_indconstrs: 0
@@ -1712,10 +1712,8 @@ col 2: lb=0 ub=10 int=1 bin=0 obj=-1
 col 3: lb=0 ub=10 int=1 bin=0 obj=-1
 col 4: lb=0 ub=25 int=1 bin=0 obj=0
 row 0: sense=< rhs=25 nnz=3 | 0:1 1:1 4:1
-row 1: sense=< rhs=25 nnz=3 | 0:1 1:1 4:1
-row 2: sense=< rhs=25 nnz=3 | 2:1 3:1 4:1
-row 3: sense=< rhs=25 nnz=3 | 2:1 3:1 4:1
-row 4: sense=> rhs=0 nnz=5 | 0:-1 1:-1 2:-1 3:-1 4:1
+row 1: sense=< rhs=25 nnz=3 | 2:1 3:1 4:1
+row 2: sense=> rhs=0 nnz=5 | 0:-1 1:-1 2:-1 3:-1 4:1
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
 sense: minimize
