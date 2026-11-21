@@ -927,9 +927,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 	// Raw rows: the helpers' definitions, ABS and bilinear links, `<>` disjunctions. They stand before the clauses that
 	// read what they define (a helper's rows before the clause that reads it, an inner helper's before an outer's), the
 	// order the solver reads them in: the same model with a clause's row ahead of its helper's envelope rows solves
-	// two orders of magnitude slower. The index/coefficient vectors move out of `input` to avoid deep copies: out of
-	// `input` to avoid deep copies — SolveModel() in ilp_solver.cpp does not read input.global_constraints after this
-	// call.
+	// two orders of magnitude slower. The index/coefficient vectors move out of `input` to avoid deep copies:
+	// SolveModel() in ilp_solver.cpp does not read input.global_constraints after this call.
 	phase.Next("model.global_rows");
 	for (auto &raw : input.global_constraints) {
 		ModelConstraint constr;
