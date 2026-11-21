@@ -212,27 +212,25 @@ ordinary operators (`../../direct_solve/README.md`); a node they leave takes the
 below.
 
 `DecideOptimizer::RewriteForSolver` runs the passes below, and the order is load-bearing. The table includes the
-tree's early definition-function preparation (9), which reserves helper indices before the value rewrite and the
+tree's early definition-function preparation (7), which reserves helper indices before the value rewrite and the
 term splitter use them:
 
 | # | Pass | Why here |
 |---|---|---|
 | 1 | `TagAtomicRemovalGroups` | Gives each source clause a written-order identity before any one-to-many rewrite, so a diagnostic repair removes a clause's rows together. |
 | 2 | `RewriteFrameRanges` | Each range frame over decisions becomes a helper decision per window before later rewrites copy clauses, so they read an ordinary keyed decision. |
-| 3 | `TagAbsForBigM` (written expressions) | Records the polarity of ABS nodes before rewrites move them into function bodies. |
-| 4 | `RewriteNorm` | Lowers the NORM marker, including L0 indicator metadata, and removes display tags from desugared L1/L2/infinity norms. |
-| 5 | `RewriteInDomain` | Lowers bound DECIDE-variable IN markers to indicator metadata. |
-| 6 | `TagAbsForBigM` (normalized expressions) | Classifies ABS nodes introduced by normalization before their F-node metadata is collected. |
-| 7 | `RewriteBilinear` | Retains Boolean products and records their expansions and product F-node specs. |
-| 8 | `RewriteMinMax` | Tags the easy identity of a MIN or MAX (`max(e) <= K`) and splits an equality on one, before any pass reads the clause's direction. |
-| 9 | `DecideTreeConstruction::PrepareDefinitionFunctions` | Registers definition F-node specs and reserves scoped helper columns before the value rewrite consumes their reads. |
-| 10 | `RewriteScopedReducers` | The value rewrite: a VALUE-shape comparison's reducers, and every other MIN or MAX the easy identity left, become helper decisions. |
-| 11 | `RewriteBilinear` (nested values) | Records products exposed after nested reducer values become decisions. |
-| 12 | `RewriteNotEqual` | Creates `<>` indicators. |
-| 13 | `RewriteAvgToSum` | Scales AVG values into SUM terms after the value rewrite. |
-| 14 | `RewriteAbs` | Allocates ABS helpers, stores the written function and lower-envelope metadata for F nodes, and adds the check of each ABS argument's data. |
-| 15 | `RewriteBilinear` (ABS factors) | Records products involving the newly allocated ABS helpers. |
-| 16 | `FoldSingletonRows` | Must be last of all — see below. |
+| 3 | `RewriteNorm` | Lowers the NORM marker, including L0 indicator metadata, and removes display tags from desugared L1/L2/infinity norms. |
+| 4 | `RewriteInDomain` | Lowers bound DECIDE-variable IN markers to indicator metadata. |
+| 5 | `RewriteBilinear` | Retains Boolean products and records their expansions and product F-node specs. |
+| 6 | `RewriteMinMax` | Tags the easy identity of a MIN or MAX (`max(e) <= K`) and splits an equality on one, before any pass reads the clause's direction. |
+| 7 | `DecideTreeConstruction::PrepareDefinitionFunctions` | Registers definition F-node specs and reserves scoped helper columns before the value rewrite consumes their reads. |
+| 8 | `RewriteScopedReducers` | The value rewrite: a VALUE-shape comparison's reducers, and every other MIN or MAX the easy identity left, become helper decisions. |
+| 9 | `RewriteBilinear` (nested values) | Records products exposed after nested reducer values become decisions. |
+| 10 | `RewriteNotEqual` | Creates `<>` indicators. |
+| 11 | `RewriteAvgToSum` | Scales AVG values into SUM terms after the value rewrite. |
+| 12 | `RewriteAbs` | Decides each ABS's encoding from its body's owner, once the rewrites that join a helper's readers (2, 7, 8) have run. Allocates the ABS helpers, stores the written function and lower-envelope metadata for F nodes, and adds the check of each ABS argument's data. |
+| 13 | `RewriteBilinear` (ABS factors) | Records products involving the newly allocated ABS helpers. |
+| 14 | `FoldSingletonRows` | Must be last of all — see below. |
 
 The `optimizer.decide` span of `DECIDB_PROFILE=1` times the whole block.
 
@@ -468,67 +466,69 @@ pass the `when` of each reducer around it (`SUM(when f: ABS(x - v))`), and the e
 rows carry the same condition, so a row a reducer's own `when` drops is never read. The
 check is a value check (`LogicalDecide::value_checks`), which the tree evaluates on the rows it reads.
 
-`AbsPairInfo::needs_bigm` records whether the auxiliary needs an upper envelope.
-It is false when solver pressure or the clause's shape pins `aux` to `|inner|`
-naturally — an objective term the minimization pushes down (a positive ABS under
-`MINIMIZE`, a negative one under `MAXIMIZE`), or a constraint shape that already
-upper-bounds `aux`. When true (a constraint hard direction, an objective term the
-minimization pushes up, or a term of unknown sign), `abs_maximize_links` carries the
-auxiliary and a binary sign indicator, and execution derives the two upper-bound
-rows from the tagged lower-bound constraints.
+Whether an ABS needs its exact (Big-M) encoding is an inherited attribute, in the sense of an attribute grammar: the
+push of the body that holds it, read from the body's owner and handed down to the ABS. `FindExactAbs`, which
+`RewriteAbs` calls first, walks every owner once and collects, into an `AbsExactSet`, the ABS nodes their owner's push
+does not pin; `FindAbsAndAllocateAux` reads the set. `AbsPairInfo::needs_bigm` records the answer for one ABS: whether
+the auxiliary needs an upper envelope. It is false when the owner's push holds `aux` at `|inner|` by solver pressure or
+by the clause's shape: an objective term the minimization pushes down, or a constraint shape that upper-bounds `aux`.
+When true, `abs_maximize_links` carries the auxiliary and a binary sign indicator, and execution derives the two
+upper-bound rows from the tagged lower-bound constraints.
 
-`TagAbsForBigM` decides this by reading a constraint as `E <op> 0` and asking
-whether each ABS term's signed position pushes its auxiliary down, and the
-objective the same way with the minimization standing in for the relation: the objective
-`E` pins what `E <= K` pins, and a `MAXIMIZE E` arrives as `-E`. So `MINIMIZE -abs(e)` and
-`MAXIMIZE abs(e)` take the envelope, `MAXIMIZE -abs(e)` does not. Reading the objective's direction alone
-would call `MINIMIZE 0 * sum(x) - abs(sum(x) - 9)` unbounded.
-`CollectAbsWithSign` reads each ABS term's sign from the polarity walk
-`WalkPolarity` (`decide_optimizer.cpp`), which the definition of non-linear reducer bodies
-shares: it folds signs through `+`, unary and binary `-`, casts, aggregate bodies, and
-constant factors. A factor whose value is not known until
-execution — a data column, as in `SUM(w * ABS(x - t))` — yields sign 0, which
-never matches the pinning direction and so forces Big-M, in the objective as in a
-constraint: `MINIMIZE SUM(w * ABS(x - t))` with a negative `w` on one row answers
-rather than reporting "unbounded", at the price of needing a finite box for the
-decisions inside the ABS on the lowering arm. A factor's sign is read by
-`PlanTimeSignOf` (`decide_cast_policy`), structurally rather than only by folding: a
-product with a zero constant among its factors is zero whatever its data factors hold
-(`0 * w`), a negation flips, a quotient follows its numerator. A factor that is exactly
-zero makes the term vanish: nothing pins it and nothing boxes it, and neither is
-anything nested in it. The easy identity's and the value rewrite's `ScaleSignAtPlanTime` and
-`ScaleVanishesAtPlanTime` read the same classifier, so every pass agrees on what a
-factor does. A MIN or MAX on the path pushed its
-hard way (`MINIMIZE min(abs(e))`, `MAXIMIZE -min(abs(e))`, `min(abs(e)) <= K`) also
-yields sign 0 beneath it: the extremum is encoded with a Big-M over its members, which
-needs each member's box, and an auxiliary held by pressure alone has none. Pushed its
-cheap way (`MINIMIZE max(abs(e))`) the extremum's envelope bounds every member and the
-plain envelope stands. A MIN or MAX under a factor that is exactly zero
-(`ScaleVanishesAtPlanTime`) takes the envelope side alone in every direction in the value rewrite
-(`ReducerSite::vanishes`): the term vanishes, nothing pushes its extremum, and the cheap envelope asks for
-no member box, so `sum(x) + 0 * min(abs(x - 2)) <= 5` and `MAXIMIZE 0 * -min(abs(x - 2))`
-answer instead of demanding a bound on the ABS auxiliary.
+The owners, and the push each gives its body:
+
+- **A clause** (and an L0 indicator's links, which are clauses too) reads as `E <op> 0`. `<=` pushes a positive term
+  down and a negative one up, `>=` the mirror, `=` and `<>` push nothing.
+- **The objective** is a minimization and pushes a positive term down: the objective `E` pins what `E <= K` pins, and
+  a `MAXIMIZE E` arrives as `-E`. So `MINIMIZE -abs(e)` and `MAXIMIZE abs(e)` take the exact encoding and
+  `MAXIMIZE -abs(e)` does not. Reading the objective's direction alone would call `MINIMIZE 0 * sum(x) -
+  abs(sum(x) - 9)` unbounded.
+- **A definition** (the body of a non-linear reducer, held by its helper `t`) pushes by its relation: `t >= q` pushes
+  `q` down, `t <= q` up, `t = q` neither.
+- **A value link** (a reducer that became a helper) pushes its members by the sides it states, `ValueLinkPush`. A link
+  that states both sides or neither pushes nothing. The envelope side alone (`value >= members` of a SUM, AVG or MAX)
+  holds the members down; for a MIN it is `value <= members`, which holds them up. The closing side alone holds a
+  SUM's or AVG's members up and a MIN's or MAX's none, since its closing side is the hard direction.
+
+A body that several readers share, a helper's, has one owner: the definition that holds every side any reader needs.
+So `x + sum(abs(x - 3)) <= 100` and `x + sum(abs(x - 3)) >= 50` share one helper pushed down by the first and up by
+the second, which pins nothing, and both clauses read one exact ABS. The sides are known only after the rewrites that
+join a helper's readers have run (`RewriteFrameRanges`, `PrepareDefinitionFunctions`, `RewriteScopedReducers`), so
+`RewriteAbs` runs after all three.
+
+Each owner's push is read through `WalkPolarity` (`decide_optimizer.cpp`), which the definition of non-linear reducer
+bodies shares: it folds signs through `+`, unary and binary `-`, casts, aggregate bodies, and constant factors. A
+factor whose value is not known until execution, a data column as in `SUM(w * ABS(x - t))`, yields sign 0, which never
+matches the pinning direction and so forces the exact encoding, in the objective as in a constraint: `MINIMIZE
+SUM(w * ABS(x - t))` with a negative `w` on one row answers rather than reporting "unbounded", at the price of needing
+a finite box for the decisions inside the ABS on the lowering arm. A factor's sign is read by `PlanTimeSignOf`
+(`decide_cast_policy`), structurally rather than only by folding: a product with a zero constant among its factors is
+zero whatever its data factors hold (`0 * w`), a negation flips, a quotient follows its numerator. A factor of exactly
+zero is a number like any other and reads as positive, so the term it scales takes the push and the encoding it takes
+with weight 1: a zero-weighted hard MIN, MAX or ABS needs the bound its weight-1 twin needs.
+
+**Helpers a hard extremum boxes.** A MIN or MAX link that states its closing side is encoded with a Big-M over its
+members, which needs every member boxed. An auxiliary held by pressure alone has no box. So the members of such a link,
+and every helper those members read, transitively through value links, column references and definition-tagged
+bodies (`FindBoxedHelpers`), count as boxed, and an ABS in any of those bodies takes the exact encoding whatever pushes
+the helper itself; the exact encoding is what boxes it. A MIN or MAX pushed its cheap way (`MINIMIZE max(abs(e))`)
+states the envelope side alone, which bounds every member, so the plain envelope stands.
 
 The two envelope rows keep the clause's `when` (`ScopeHelperRow`), so they read only the
 rows the clause keeps; the objective's keep the objective's `when`.
 
 **An ABS inside an ABS.** `FindAbsAndAllocateAux` rewrites the argument before the node, so
 an inner ABS becomes its own auxiliary first and the outer's envelope rows refer to it
-(term extraction would read an ABS left in a row as its argument, losing the sign). The pairs are appended innermost first, the order `DeriveAbsAuxiliaryBounds`
-boxes them in: the outer range needs the inner box. An ABS beneath another is pinned
-exactly, because the outer ABS is not monotone in it: over `x` in `[-1, 1]`,
+(term extraction would read an ABS left in a row as its argument, losing the sign). The pairs are appended innermost
+first, the order `DeriveAbsAuxiliaryBounds` boxes them in: the outer range needs the inner box. An ABS beneath another
+is pinned exactly, because the outer ABS is not monotone in it: over `x` in `[-1, 1]`,
 `abs(abs(x) - 2) <= 0` with an inner auxiliary held by its lower envelope alone would hold
-at 2. `TagAbsForBigM` is the one place that decides this, as it decides every other
-pinning: `CollectAbsWithSign` records an ABS and then descends into its argument with
-sign 0, so a nested ABS never classifies as pinned, and `TagAbsSubtreeForBigM` tags the
-nested ones under a BETWEEN, IN or equality too. The rewrite only reads the tag. So a
-dead ABS -- under a factor of exactly zero, which the walk skips -- and everything nested
-in it get no envelope and demand no box (`MINIMIZE sum(0 * -abs(abs(x) - 2))` answers with
-no upper bound on `x`). The label is rendered before the argument is rewritten, so each
+at 2. `MarkExactAbs` records an ABS and then descends into its argument with sign 0, so a nested ABS never classifies
+as pinned, under any owner. The label is rendered before the argument is rewritten, so each
 account names the ABS as written.
 
-That is deliberately conservative: a row whose `w` happens to be positive gets
-an envelope it does not need. Assuming such a factor positive is unsound, since
+The exact encoding for a data factor of unknown sign is deliberately conservative: a row whose `w` happens to be
+positive gets an envelope it does not need. Assuming such a factor positive is unsound, since
 a negative `w` makes enlarging the auxiliary *relax* the row, and the constraint
 silently stops binding. The cost, measured on a weighted-ABS
 constraint over TPC-H `lineitem`, comparing a literal coefficient (pinned, no
@@ -873,8 +873,8 @@ sides. A MAX pushed down and a MIN pushed up are the cheap directions: the envel
 a MAX, every member bounds it). Pushed the other way a MIN or MAX needs the closing side (some member reaches the
 helper), which stage 06 states with indicators or natively; with no push it needs both. The objective is a minimization,
 so its push is down times the term's sign: `MINIMIZE max(x)` takes the envelope, `MAXIMIZE max(x)` the closing side. A
-factor that is exactly zero takes the envelope alone, since the term vanishes. A factor stays outside the reducer (§3),
-so a negative one reverses the push and an unknown one gives none. Stage 06 emits one extremum link per group
+factor stays outside the reducer (§3), so a negative one reverses the push and an unknown one gives none; a factor of
+exactly zero reads as positive. Stage 06 emits one extremum link per group
 (`EmitExtremumLink`, [`../06_model_formulation/done.md`](../06_model_formulation/done.md)); a shared helper takes every
 side any of its readers needs.
 

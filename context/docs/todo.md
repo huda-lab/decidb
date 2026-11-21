@@ -13,9 +13,8 @@ the owner rules first.
 # Phase 3 — Each shape and formulation has one owner
 
 ## 3.2 One route per shape in stage 05 (one lane)
-- [ ] OPT-30 A shared ABS takes its first reader's encoding (wrong answer) — pipeline/05_optimizer/todo.md § OPT-30
 - [ ] EXEC-24 A folded bound over a decision with no instance warns — pipeline/08_execution/todo.md § EXEC-24
-- [ ] OPT-27 ABS is lowered in one place — pipeline/05_optimizer/todo.md § OPT-27 (needs: OPT-30)
+- [ ] OPT-27 ABS is lowered in one place — pipeline/05_optimizer/todo.md § OPT-27
 - [ ] OPT-28 One enumerator and one polarity walker — pipeline/05_optimizer/todo.md § OPT-28
 - [ ] OPT-29 No rewrite pass reruns without a cause — pipeline/05_optimizer/todo.md § OPT-29
 

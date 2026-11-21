@@ -153,11 +153,11 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   - *Path A* — the comparison pushes `d` down (`ABS(e) <= K`, `SUM(ABS(e)) <= K`, `MINIMIZE SUM(ABS(e))`): the
     envelope alone is exact.
   - *Path B* — anything else (`ABS(e) >= K`, `=`, `<>`, `BETWEEN`, `IN`, a subtracted ABS, `MAXIMIZE SUM(ABS(e))`, a
-    data weight of unknown sign, an ABS under a hard `MIN`/`MAX`, an ABS inside an ABS): a sign binary and two Big-M
-    rows pin `d = |e|`, so every decision in `e` needs a finite bound, written or inferred. On Gurobi Path B is a
-    native absolute-value constraint with no Big-M.
-  - A factor of exactly zero needs neither. `ABS` over data is plain SQL.
-  - Code: `TagAbsForBigM` / `CollectAbsWithSign` and `RewriteAbs` (`decide_rewrite_abs.cpp`); links in
+    data weight of unknown sign, an ABS under a hard `MIN`/`MAX` or in a helper one reads, an ABS inside an ABS): a
+    sign binary and two Big-M rows pin `d = |e|`, so every decision in `e` needs a finite bound, written or inferred.
+    On Gurobi Path B is a native absolute-value constraint with no Big-M.
+  - A factor of exactly zero reads as positive, like any other number. `ABS` over data is plain SQL.
+  - Code: `FindExactAbs` and `RewriteAbs` (`decide_rewrite_abs.cpp`); links in
     `LogicalDecide::abs_maximize_links` (both Path B users, objective and constraint). Tests:
     `test_abs_linearization.py`.
 - **Other functions and operators over a decision** are refused by the shape check (`decide_shape_check.cpp`), once,

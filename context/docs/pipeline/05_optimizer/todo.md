@@ -4,25 +4,6 @@ Open work in the optimizer passes. Finished work is in [done.md](done.md). How t
 [`../../direct_solve/framework/todo.md`](../../direct_solve/framework/todo.md) § How to work any task in these todo
 files.
 
-## OPT-30 — A shared ABS takes the encoding its first reader needs
-
-- **Problem.** A wrong answer. With `decide_direct_solve='off'` and `t` = ids 1..3, `x <= 3 AND x >= 0 AND x + sum(abs(x
-  - 3)) <= 100 AND x + sum(abs(x - 3)) >= 50 MAXIMIZE sum(x)` returns `x = 3` on every row (the left side is at most
-  12); with the two clauses swapped it is infeasible, on Gurobi and HiGHS. `TagAbsForBigM` decides whether an ABS needs
-  its exact (Big-M) encoding from the clause it is written in (`decide_rewrite_abs.cpp`); the value rewrite then shares
-  one helper across both clauses (`decide_rewrite_scoped.cpp`, `Helpers::Find`) and keeps the first clause's body, whose
-  ABS is pushed down only, so the second clause reads a lower envelope alone. Definition families share bodies the same
-  way (`decide_tree_definition.cpp`).
-- **Change.** `RewriteAbs` decides each ABS's encoding once, walking every body from its owner with the push the owner
-  gives it: a comparison from its relation, the objective down, a definition from its relation, a value link from its
-  joined need flags (both sides mean Big-M). Both `TagAbsForBigM` passes, `TagAbsSubtreeForBigM` and
-  `ABS_NEEDS_BIGM_TAG` go. The pattern is an inherited attribute read after the shared helpers have joined their
-  readers.
-- **Ruling (owner, 2026-11-21).** This design, not a flag OR-ed inside `Helpers::Find`, which leaves definitions open.
-  The wrong answer is listed in `../../issues/bugs.md`.
-- **Done when.** The clause-order pair, in both orders, agrees with the oracle (infeasible); `./test/decide/run_tests.sh
-  -n 2 -k "abs"` passes, and with `DECIDB_FORCE_SOLVER=highs`.
-
 ## OPT-31 — A square outside a reducer in the objective is refused
 
 - **Problem.** `MINIMIZE power(sum(x) - 3, 2)` (the squared distance of a total from a target) and `MINIMIZE (y -
@@ -44,7 +25,6 @@ files.
   decided in three places under two policies. `SolverConstructSupport::bilinear` is never read.
 - **Change.** Stage 05 records each ABS (helper, operand, exact or not) and stage 06 emits every row: stage 05 picks
   the shape, stage 06 the encoding. `bilinear` goes. About 150 lines go.
-- **Needs.** OPT-30, which decides each ABS's encoding once in stage 05.
 - **Done when.** `grep -rn "BuildAbsTagMap" src` finds nothing; `./test/decide/run_tests.sh -n 2 -k "abs"` passes,
   and with `DECIDB_FORCE_SOLVER=highs`.
 
@@ -63,9 +43,8 @@ files.
 
 ## OPT-29 — No rewrite pass reruns without a cause
 
-- **Problem.** `RewriteBilinear` runs three times and `TagAbsForBigM` twice (OPT-30 deletes it); the objective is
-  canonicalized 9 times, 1 at bind and 8 in stage 05, and 4 of those follow passes that only add tags the canonicalizer
-  does not read (bilinear, ABS).
+- **Problem.** `RewriteBilinear` runs three times; the objective is canonicalized 9 times, 1 at bind and 8 in stage
+  05, and 4 of those follow passes that only add tags the canonicalizer does not read (bilinear, ABS).
 - **Change.** The 4 reinstalls after tag-only passes go. The second bilinear run goes and `RewriteScopedReducers` hands
   the objective's products to the bilinear rewrite always; the third becomes a worklist hook in `FindAbsAndAllocateAux`
   that tags a product once the ABS helper it reads exists (as LLVM's InstCombine revisits a new value's users).
