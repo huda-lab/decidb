@@ -25,6 +25,7 @@ the owner rules first.
 - [ ] OPT-31 A square outside a reducer in the objective — pipeline/05_optimizer/todo.md § OPT-31
 - [ ] CANON-1 A SUM or AVG keeps its data addend where its route puts it — pipeline/04_canonicalizer/todo.md § CANON-1
 - [ ] EXEC-25 A BETWEEN that constrains nothing warns once — pipeline/08_execution/todo.md § EXEC-25
+- [ ] OPT-33 A squared objective's refusal beside a whole number (decision) — pipeline/05_optimizer/todo.md § OPT-33
 
 # Phase 4 — Model building has one contract
 

@@ -153,11 +153,12 @@ quadratic objective: a MILP with quadratic rows is QCQP, not MIQP.
 
 `DeriveDecideModelClass` is a *prediction* of what `SolverModel::ModelClass()` will
 report once the rows are in, and it must never predict less. Where it cannot be exact
-it over-reports. `MayHaveIntegralColumn` is exact: every helper this stage adds carries
-its own type, read like a declared decision, and of the two lowerings that add a binary
-during execution, a `<>` is admitted over whole-numbered decisions only and a MIN/MAX
-held by indicator rows leaves a mark (a MIN/MAX value link). A continuous helper (an ABS envelope beside
-`SUM(POWER(...))`) therefore leaves the QP continuous, and HiGHS takes it.
+it over-reports. `MayHaveIntegralColumn` reads every helper this stage adds by its own type, as a declared decision
+is read, and the three lowerings that add a binary during execution off what this stage leaves: a `<>` is admitted
+over whole-numbered decisions only, a MIN/MAX held by indicator rows leaves a value link, and an exact ABS leaves its
+record (`LogicalDecide::abs_functions`). An exact ABS is lowered only where the backend states no ABS natively, which
+stage 06 decides, so on a backend that does the check over-reports. An ABS that is not exact adds only its envelope, so
+`SUM(ABS(...))` beside `SUM(POWER(...))` under `MINIMIZE` leaves the QP continuous, and HiGHS takes it.
 A square of a form over two decisions counts as coupled whatever its coefficients turn out to be, and a product counts
 as coupled without checking whether the built Q ends up with a nonzero off-diagonal. Direct solve's reader errs the
 other way: it reports less when unsure, skipping terms under MIN and MAX and nested parts and reading integral columns
