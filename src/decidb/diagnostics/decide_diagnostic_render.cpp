@@ -381,17 +381,13 @@ vector<ClauseEdit> FanOutByClass(ClauseEdit edit, const ConstraintProvenance &pr
 //! de-duplicated on (label, group, row) — the user wrote one clause and reads one
 //! finding, or one per class it names (FanOutByClass).
 //!
-//! The gate is "does this row trace back to a clause the user wrote", not "is it
-//! elastically editable". They are different questions, and a hard MIN/MAX clause is
-//! stamped USER_MECHANISM wholesale (it *will* fan into Big-M rows), so a relaxability
-//! gate would miss `MIN(x) <= -inf` — the shape the report opened with. Only STRUCTURAL
-//! rows are excluded, as internal definitions with no user text to quote.
+//! The gate is "does this row trace back to a clause the user wrote", not "is it elastically editable". They differ
+//! for a `<>`: its rows are USER_MECHANISM, which no repair loosens (the clause is dropped whole), yet each quotes the
+//! clause as written. Only STRUCTURAL rows are excluded, as internal definitions with no user text to quote.
 //!
-//! A USER_MECHANISM row is safe to read here because its bound is derived as `K ± M`
-//! with both terms finite by construction: ClassifyMinMaxBound sends a group to the
-//! Big-M rewrite only when `K` is finite, and the links DecideTightPerRowBigM sizes carry a bound RewriteAbs read
-//! finite. So an infinite bound on a mechanism row is never a helper's own bound — it is a
-//! user bound re-emitted per row, which is exactly what we want to name.
+//! A USER_MECHANISM row is a `<>` clause's, whose bound is the user's own `K` stepped by one and finite
+//! (LinearizeNotEqual drops a clause whose bound is not whole), so no such row passes IsUnreachableBound. The gate
+//! admits the kind anyway: what it excludes is STRUCTURAL, and a bound read here that is infinite is the user's.
 vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model, const vector<ColumnProvenance> &columns,
                                                     bool expanded) {
 	vector<UnreachableClause> found;

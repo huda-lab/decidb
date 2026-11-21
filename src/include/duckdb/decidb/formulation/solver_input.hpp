@@ -658,9 +658,6 @@ struct SolverInput {
 		//! ConstraintProvenance::indicator_col). This describes the disjunction;
 		//! `removal_group_id` independently groups all descendants for DROP.
 		idx_t indicator_col = DConstants::INVALID_INDEX;
-		//! The classes this row's group stands for (SolverInput::class_sets), or
-		//! INVALID_INDEX: an expanded diagnosis reports the row once per class.
-		idx_t class_set = DConstants::INVALID_INDEX;
 		//! The group id, its name, and whether the clause's LHS was an aggregate
 		//! — the display half of the provenance every row carries. A per-row clause
 		//! emitted through `EvaluatedConstraint` gets these from its `row_group_ids` /
@@ -689,7 +686,7 @@ struct SolverInput {
 	vector<RawConstraint> global_constraints;
 
 	//! The classes a scoped clause's group stands for (language/guide.md §8.1, D28),
-	//! referenced by `EvaluatedConstraint::group_class_set` and `RawConstraint::class_set`.
+	//! referenced by `EvaluatedConstraint::group_class_set`.
 	//! Filled by execution under DIAGNOSE only; the model carries it on to the diagnosis.
 	struct ClassSet {
 		enum class Kind : uint8_t {

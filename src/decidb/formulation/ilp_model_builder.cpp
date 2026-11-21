@@ -527,7 +527,6 @@ static void StampRawProvenance(const SolverInput &input, ConstraintProvenance &p
 	// I4 (aggregate `<>`): carry the disjunction-binary column so the infeasible
 	// removal dial groups the two global rows just like a per-row `<>`.
 	provenance.indicator_col = raw.indicator_col;
-	provenance.class_set = raw.class_set;
 	provenance.group_key = raw.group_key;
 	provenance.group_name = raw.group_name;
 	provenance.is_aggregate = raw.is_aggregate;
@@ -1096,12 +1095,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
 				double rhs = eval_const.rhs_values[row] - rhs_adjustment;
 				ApplyComparisonSense(constr, eval_const.comparison_type, rhs, rhs_adjustment);
-				// F2 site 3: per-row. The group label is stamped here for the same reason
-				// the aggregate sites stamp it: a diagnosis over a grouped clause has to
-				// name the group its failure sits in, not just the clause. It matters most
-				// for a hard MIN/MAX whose bound is out of every row's reach — the rewrite
-				// re-emits that group as ordinary per-row rows, so this is the only site
-				// that sees it (see ilp_linearization.cpp, the NO_SOLUTION branch).
+				// F2 site 3: per-row. The group label is stamped here for the same reason the aggregate sites stamp
+				// it: a diagnosis over a grouped clause has to name the group its failure sits in, not just the
+				// clause (CollectUnreachableClauses reports one finding per clause, group and row).
 				idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
 				// A scoped easy MIN/MAX's member row stands for its `by` group's classes, a
 				// `per K:` clause's row for its class; any other per-row row for its data row.
