@@ -12,11 +12,11 @@ files.
   product of two decisions neither of which is BOOL (`RewriteBilinear` takes a BOOL factor) is left out of them. With
   direct solve on, `MAXIMIZE sum(abs(x * y - c))` raises an internal error in `DirectFrontEnd::GuardCoefficients`,
   which reads a NULL coefficient.
-- **Decision needed.** 1. The ABS rows keep the product: they are quadratic rows and take the path every quadratic
-  constraint takes (Gurobi solves them; the solver gate refuses them elsewhere). 2. The shape check refuses a product of
-  decisions under ABS, as it refuses one under any other function.
-- **Recommendation.** 1, if the rows carry their quadratic terms through the one constraint path with no case of their
-  own; otherwise 2. Either way the direct front end declines the shape rather than reading a NULL.
+- **Change.** The ABS rows keep the product: they are quadratic rows and take the path every quadratic constraint
+  takes (Gurobi solves them; the solver gate refuses them elsewhere). If that needs a case of its own, the shape check
+  refuses a product of decisions under ABS instead, as it refuses one under any other function. The direct front end
+  declines the shape rather than reading a NULL.
+- **Ruling (owner, 2026-11-21).** This order: keep the product where it fits the one constraint path, else refuse.
 - **Done when.** Both examples agree with the oracle, or are refused with a `Not implemented Error`; the direct path
   answers or declines; `./test/decide/run_tests.sh -k "abs or quadratic"` passes.
 
