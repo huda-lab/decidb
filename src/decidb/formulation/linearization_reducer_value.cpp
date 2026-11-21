@@ -149,18 +149,6 @@ bool EveryGroupSingleton(const ReducerValueLinkSpec &link) {
 	return true;
 }
 
-//! Whether `ec` is a linear row that can read a helper's members in place of its column: no exact
-//! Big-M ABS pair, and no bound stage 08 may fold into its decision's box, which would be lost with
-//! the column. A one-sided ABS lower envelope is otherwise a plain linear row, so a reducer used by its operand can
-//! inline there just as it can in a user-written linear row.
-bool IsPlainLinearRow(const SolverInput &input, const EvaluatedConstraint &ec) {
-	const bool exact_abs_pair =
-	    ec.abs_aux_idx != DConstants::INVALID_INDEX &&
-	    std::any_of(input.abs_links.begin(), input.abs_links.end(),
-	                [&](const AbsLinkSpec &link) { return link.exact && link.aux_idx == ec.abs_aux_idx; });
-	return !exact_abs_pair && ec.admitted_lower.Empty();
-}
-
 //! Where a helper is read (D89): whether a reader holds its column, whether rows or the objective read it, and the one
 //! other link whose members read it, if any.
 struct HelperPlace {
@@ -219,10 +207,22 @@ vector<HelperPlace> PlaceHelpers(const SolverInput &input, const vector<idx_t> &
 		read(spec.bool_var_idx, false);
 		read(spec.other_var_idx, false);
 	}
+	// A linear row reads the members of a helper it holds a term of, unless it is a bound stage 08 may fold into its
+	// decision's box, which would be lost with the column. An ABS envelope row is such a row too: a one-sided ABS is
+	// otherwise a plain linear row, so a reducer used by its operand can inline there as in a user-written one.
 	for (auto &ec : input.constraints) {
-		const bool plain = IsPlainLinearRow(input, ec);
 		for (auto var : ec.variable_indices) {
-			read(var, plain);
+			read(var, ec.admitted_lower.Empty());
+		}
+	}
+	// An exact ABS states its sign rows from the operand's columns (ExpandAbs reads the link's own copy), so the
+	// operand's variables hold their columns.
+	for (auto &link : input.abs_links) {
+		if (!link.exact) {
+			continue;
+		}
+		for (auto var : link.operand.variable_indices) {
+			read(var, false);
 		}
 	}
 	// A `<>` reads the columns of its decisions: the disjunction is stated on them.

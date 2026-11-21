@@ -134,10 +134,10 @@ SignedRowRange decide_linearize::DecideRowSignedRange(const EvaluatedConstraint 
 //! decide variable, and the range walk that discovers the openness there
 //! (`DecideRowSignedRange`) reports an infinity rather than a culprit.
 idx_t decide_linearize::FindUnboundedContributor(const EvaluatedConstraint &ec, const vector<double> &lower_bounds,
-                                                 const vector<double> &upper_bounds) {
+                                                 const vector<double> &upper_bounds, idx_t skipped) {
 	for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
 		idx_t v = ec.variable_indices[t];
-		if (v == DConstants::INVALID_INDEX || v == ec.abs_aux_idx) {
+		if (v == DConstants::INVALID_INDEX || v == skipped) {
 			continue;
 		}
 		if (DecideIsOpenAbove(upper_bounds[v]) || DecideIsOpenBelow(lower_bounds[v])) {
@@ -171,8 +171,9 @@ double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox
 	// Refuse before finishing the constant: an open contributor means there is no M
 	// to return, so the slack term below would only be computed and thrown away.
 	if (has_unbounded) {
-		ThrowUnboundedBigMNaming(true, FindUnboundedContributor(ec, lower_bounds, upper_bounds), var_names, construct,
-		                         written);
+		ThrowUnboundedBigMNaming(true,
+		                         FindUnboundedContributor(ec, lower_bounds, upper_bounds, DConstants::INVALID_INDEX),
+		                         var_names, construct, written);
 	}
 	return M + 1.0;
 }

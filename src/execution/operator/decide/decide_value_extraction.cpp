@@ -359,7 +359,7 @@ EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constr
 	evaluated.origin.repair_group_id = repair_group_id;
 	// Preserve whether the original LHS was an aggregate (e.g., SUM(...))
 	evaluated.lhs_is_aggregate = constraint.lhs_is_aggregate;
-	evaluated.abs_aux_idx = constraint.abs_aux_idx;
+	evaluated.defined_var = constraint.defined_var;
 	evaluated.lifted_floor = constraint.lifted_floor;
 	evaluated.kind = constraint.kind;
 

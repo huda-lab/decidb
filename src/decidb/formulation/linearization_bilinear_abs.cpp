@@ -180,7 +180,7 @@ static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t nu
 	// an empty column, which no widening of `x` can repair.
 	demanded = MaxValue<double>(demanded, input.lower_bounds[aux_idx]);
 	input.ForEachClauseRow([&](const EvaluatedConstraint &ec) {
-		if (ec.abs_aux_idx == aux_idx) {
+		if (ec.defined_var == aux_idx) {
 			return; // the definitional pair: it states what the auxiliary IS, not what was asked of it
 		}
 		idx_t term = DConstants::INVALID_INDEX;
@@ -400,6 +400,10 @@ void EmitAbsEnvelopes(SolverInput &input) {
 				                        "rewrite did not replace its reducers",
 				                        link.aux_idx);
 			}
+			// The passes that skip the pair read it as the rows that define the auxiliary (DemandedAuxReach).
+			if (row->defined_var != link.aux_idx) {
+				throw InternalException("DECIDE ABS envelope row for auxiliary %llu does not define it", link.aux_idx);
+			}
 		}
 		// `aux >= inner` stays on the link, which the rows of an exact ABS are read from.
 		input.constraints.push_back(link.operand);
@@ -460,9 +464,9 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
 				// Leave the auxiliary's box open and carry on: this is exactly the query the capability buys back.
 				continue;
 			}
-			// The row's own auxiliary (`c1.abs_aux_idx` is `link.aux_idx`) is skipped: an offending member is named,
-			// and with none the reach overflowed a DOUBLE.
-			idx_t bad = FindUnboundedContributor(c1, input.lower_bounds, input.upper_bounds);
+			// The row's own auxiliary is skipped: an offending member is named, and with none the reach overflowed a
+			// DOUBLE.
+			idx_t bad = FindUnboundedContributor(c1, input.lower_bounds, input.upper_bounds, link.aux_idx);
 			ThrowUnboundedBigMNaming(bad != DConstants::INVALID_INDEX, bad, var_names, "ABS",
 			                         DecideWrittenClause(input, c1.origin.source_clause_id));
 		}

@@ -24,7 +24,7 @@ EvaluatedConstraint EnvelopeRow(bool positive, bool aggregate) {
 	ec.row_coefficients.push_back(CoefficientColumn::MakeScalar(positive ? -1.0 : 1.0, ABS_ROWS));
 	ec.rhs_values = CoefficientColumn::MakeScalar(0.0, ABS_ROWS);
 	ec.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
-	ec.abs_aux_idx = 1;
+	ec.defined_var = 1;
 	ec.lhs_is_aggregate = aggregate;
 	return ec;
 }

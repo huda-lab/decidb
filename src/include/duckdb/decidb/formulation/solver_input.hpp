@@ -317,10 +317,10 @@ struct EvaluatedConstraint {
 	idx_t lifted_floor = DConstants::INVALID_INDEX;
 	ExpressionType comparison_type;
 	bool lhs_is_aggregate = false; // True if original LHS was an aggregate (e.g., SUM(...))
-	//! The ABS auxiliary this row is a lower-envelope row of (`aux >= inner` or `aux >= -inner`), or INVALID_INDEX.
-	//! EmitAbsEnvelopes writes it; the passes that read the auxiliary's box or hold its readers' helpers skip the
-	//! pair by it.
-	idx_t abs_aux_idx = DConstants::INVALID_INDEX;
+	//! The auxiliary this row defines (DecideConstraint::defined_var, from the DEFINES tag), or INVALID_INDEX: a row
+	//! that defines an auxiliary says what it is, not what was asked of it. The two lower-envelope rows of an ABS
+	//! (`aux >= inner`, `aux >= -inner`) define its auxiliary.
+	idx_t defined_var = DConstants::INVALID_INDEX;
 
 	ConstraintKind kind = ConstraintKind::USER_PARAMETER;
 

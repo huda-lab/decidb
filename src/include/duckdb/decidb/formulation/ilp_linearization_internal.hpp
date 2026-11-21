@@ -135,10 +135,10 @@ SignedRowRange DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row, co
 [[noreturn]] void ThrowUnboundedBigMNaming(bool open, idx_t bad, const vector<string> &var_names, const char *construct,
                                            const DecideClauseRef &written);
 
-//! The first term whose column is unbounded in the direction a Big-M would need,
-//! or INVALID_INDEX when every contributor is boxed.
+//! The first term whose column is unbounded in the direction a Big-M would need, or INVALID_INDEX when every
+//! contributor is boxed. The column `skipped` is not looked at (an ABS row's own auxiliary; INVALID_INDEX for none).
 idx_t FindUnboundedContributor(const EvaluatedConstraint &ec, const vector<double> &lower_bounds,
-                               const vector<double> &upper_bounds);
+                               const vector<double> &upper_bounds, idx_t skipped);
 
 //! The first decision among a helper's listed members whose box is open, which a refusal names; INVALID_INDEX when
 //! every one is boxed.
