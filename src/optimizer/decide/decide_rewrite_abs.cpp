@@ -277,10 +277,11 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 	AddValueCheck(decide, calc.Out(DecideCheckOnKeptRows(calc, kept, check)));
 }
 
-//! Reads each ABS in `expr` as the bodies stand once the bilinear entry has run over them: the record keeps the operand
-//! with the products it tagged (the copy taken when the ABS got its helper has not), and an operand that still holds a
-//! product or a power of decisions is refused, at the ABS.
-static void SettleAbsOperands(const Expression &expr, LogicalDecide &decide, const DecideTermSplitter &splitter) {
+//! Records the operand of each ABS in `expr` (LogicalDecide::AbsFunction::operand) as the bodies stand once the
+//! bilinear entry has run over them, so the record holds the products it tagged, and refuses an operand that still
+//! holds a product or a power of decisions, at the ABS. This is the only place that records an operand: a copy taken
+//! when the ABS got its helper would lack the tags of a product with an ABS factor.
+static void RecordAbsOperands(const Expression &expr, LogicalDecide &decide, const DecideTermSplitter &splitter) {
 	idx_t aux_idx;
 	if (TryParseDecideIndexTag(expr.GetAlias(), ABS_FUNCTION_TAG_PREFIX, aux_idx)) {
 		auto &operand = *expr.Cast<BoundFunctionExpression>().children[0];
@@ -292,7 +293,7 @@ static void SettleAbsOperands(const Expression &expr, LogicalDecide &decide, con
 		}
 	}
 	ExpressionIterator::EnumerateChildren(expr,
-	                                      [&](const Expression &child) { SettleAbsOperands(child, decide, splitter); });
+	                                      [&](const Expression &child) { RecordAbsOperands(child, decide, splitter); });
 }
 
 // ---------------------------------------------------------------------------
@@ -302,8 +303,9 @@ static void SettleAbsOperands(const Expression &expr, LogicalDecide &decide, con
 void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	// Find ABS(expr) nodes over decide vars and allocate their helper variables. Keep the function expressions in the
 	// user's clauses; the tree owns their value through an F node, and term extraction resolves the tagged function to
-	// the already allocated helper column. Each ABS is recorded (LogicalDecide::abs_functions) with its operand, the
-	// clause it was written in (the objective's rows carry OBJECTIVE_ROW_TAG) and whether it needs the exact encoding.
+	// the already allocated helper column. Each ABS is recorded (LogicalDecide::abs_functions) with its operand
+	// (RecordAbsOperands), the clause it was written in (the objective's rows carry OBJECTIVE_ROW_TAG) and whether it
+	// needs the exact encoding.
 	//
 	// This is the whole of stage 05's part. The lower envelope
 	//   aux >= inner  and  aux >= -inner
@@ -351,9 +353,9 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	}
 	// The rows of an ABS state its operand as a linear form (EmitAbsEnvelopes, EmitAbsConstraints). A product with a
 	// BOOL factor is linear once the bilinear entry has tagged it, which for a product with an ABS factor happens just
-	// above, so the record's operand and the refusal wait for the worklist.
+	// above, so the operand's record and the refusal wait for the worklist.
 	DecideTermSplitter splitter(optimizer.context, decide);
-	decide.EnumerateBodies([&](DecideOwnedBody &body) { SettleAbsOperands(*body.expr, decide, splitter); });
+	decide.EnumerateBodies([&](DecideOwnedBody &body) { RecordAbsOperands(*body.expr, decide, splitter); });
 }
 
 unique_ptr<Expression> decide_rewrite::MakeAbsRow(ClientContext &context, const LogicalDecide &decide,
@@ -441,11 +443,11 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 		AddAbsValueCheck(optimizer.context, decide, *func.children[0], read_rows.get(),
 		                 AbsWrittenClause(decide, clause_alias));
 
-		// Record the ABS: the F node reads its operand, and stage 06 its encoding.
+		// Record the ABS: the F node reads its operand, which RecordAbsOperands records once the bodies are final, and
+		// stage 06 its encoding.
 		AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::HELPER, std::move(label));
 		LogicalDecide::AbsFunction function;
 		function.aux_idx = aux_idx;
-		function.operand = func.children[0]->Copy();
 		function.exact = needs_exact;
 		function.when = std::move(read_rows);
 		function.scope = aux_scope;
