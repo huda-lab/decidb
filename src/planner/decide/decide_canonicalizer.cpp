@@ -17,7 +17,6 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
-#include "duckdb/planner/expression/bound_case_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
@@ -316,21 +315,6 @@ static void CollectAbsentDecisionKeys(const Expression &expr, idx_t decide_index
 	});
 }
 
-//! Each of `data` as a NULL test on `reducer`'s filter: the row is skipped where it is NULL.
-static void AddSkipNullTests(BoundAggregateExpression &reducer, vector<unique_ptr<Expression>> &data) {
-	for (auto &value : data) {
-		auto test = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NOT_NULL, LogicalType::BOOLEAN);
-		test->children.push_back(std::move(value));
-		test->SetAlias(SKIP_NULL_TAG);
-		if (!reducer.filter) {
-			reducer.filter = std::move(test);
-			continue;
-		}
-		reducer.filter = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND,
-		                                                       std::move(reducer.filter), std::move(test));
-	}
-}
-
 void DecideCanonicalizer::SkipNullData(Expression &expr, const vector<KeyedScopeInfo> &scopes,
                                        const vector<DecideKey> &keys) const {
 	ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) { SkipNullData(child, scopes, keys); });
@@ -345,7 +329,17 @@ void DecideCanonicalizer::SkipNullData(Expression &expr, const vector<KeyedScope
 		CollectNullableData(*child, decide_index, data);
 		CollectAbsentDecisionKeys(*child, decide_index, variable_scopes, scopes, keys, data);
 	}
-	AddSkipNullTests(reducer, data);
+	for (auto &value : data) {
+		auto test = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NOT_NULL, LogicalType::BOOLEAN);
+		test->children.push_back(std::move(value));
+		test->SetAlias(SKIP_NULL_TAG);
+		if (!reducer.filter) {
+			reducer.filter = std::move(test);
+			continue;
+		}
+		reducer.filter = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND,
+		                                                       std::move(reducer.filter), std::move(test));
+	}
 }
 
 //! The one walk behind both questions: whether a reducer `counts` stands anywhere in `expr`. A frame's marker and a
@@ -819,8 +813,7 @@ void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Ato
 			    Decompose(term, term_sign, out, clause, scale.get(), divides);
 			    return;
 		    }
-		    if (DecomposeExtremumAddends(term_sign, term, whole, scale, divides, out) ||
-		        DecomposeLinearAddends(clause, term_sign, term, whole, scale, divides, out)) {
+		    if (DecomposeExtremumAddends(term_sign, term, whole, scale, divides, out)) {
 			    return;
 		    }
 		    // Classify on the whole original term. The factors are decision-free and
@@ -861,93 +854,6 @@ bool DecideCanonicalizer::DecomposeExtremumAddends(int sign, const Expression &t
 		out.push_back(
 		    Atom {sign * part.first, part.second, Classify(*part.second), factor ? factor->Copy() : nullptr, divides});
 	}
-	return true;
-}
-
-bool DecideCanonicalizer::DecomposeLinearAddends(Clause clause, int sign, const Expression &term,
-                                                 const Expression &whole, unique_ptr<Expression> &scale, bool divides,
-                                                 vector<Atom> &out) const {
-	// The objective reads its body whole: there is no bound for a data part to move onto.
-	if (clause != Clause::CONSTRAINT) {
-		return false;
-	}
-	auto &reducer = *UnwrapDecideCasts(term, decide_index);
-	if (reducer.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-		return false;
-	}
-	auto &aggregate = reducer.Cast<BoundAggregateExpression>();
-	const auto &name = aggregate.function.name;
-	idx_t frame;
-	if ((name != "sum" && name != "avg") || aggregate.children.size() != 1 || !ReferencesDecideVar(aggregate) ||
-	    TryGetDecideFrame(aggregate, frame) || HasDecideTag(aggregate.GetAlias(), DATA_PART_MOVED_TAG)) {
-		return false;
-	}
-	// `sum(e)` is `sum(e - e0) + sum(e0)` where `e0` is the body with every decision set to 0: the terms of degree 0 of
-	// the term reader (a node it does not open, `abs(x)` or a reducer over decisions, is one term of degree 1). A body
-	// above degree 1 stays whole, and so does one that reads a frame, which is a value of another row.
-	auto &body = *aggregate.children[0];
-	if (!DecideDegreeOf(context, body, decide_index).IsLinear()) {
-		return false;
-	}
-	DecideTermSplitter splitter(context, decide_index, variable_scopes.size());
-	vector<DecideSplitTerm> terms;
-	splitter.Split(body, 1, terms);
-	vector<Atom> data_part;
-	bool folds = true;
-	double data_value = 0.0;
-	for (auto &part : terms) {
-		if (part.IsFrame() || (part.coefficient && ContainsDecideFrame(*part.coefficient))) {
-			return false;
-		}
-		if (part.degree == 0) {
-			D_ASSERT(part.coefficient);
-			data_part.push_back(Atom {part.sign, part.coefficient.get(), Placement::RIGHT});
-			double value;
-			if (folds && TryEvaluateFoldableDouble(context, *part.coefficient, value, FOLD_CATCH_ALL)) {
-				data_value += part.sign * value;
-			} else {
-				folds = false;
-			}
-		}
-	}
-	// No data part, or one that folds to 0: nothing to split.
-	if (data_part.empty() || (folds && data_value == 0.0)) {
-		return false;
-	}
-	auto data = BuildAdditive(data_part);
-	auto kept = RebindReducer(aggregate, name, BindOp("-", body.Copy(), data->Copy()));
-	// What is left of the body has its data part subtracted, which a second reading would find again: the tag marks it.
-	auto kept_alias = kept->GetAlias();
-	AddDecideTag(kept_alias, DATA_PART_MOVED_TAG);
-	kept->SetAlias(std::move(kept_alias));
-	// SkipNullData tests the data the kept reducer reads, all of the body's. The moved one reads the data part, which
-	// it skips where it is NULL as SQL does, but a row the kept one skips for other data of the body (`x * w + d` with
-	// `w` NULL, a NULL key of a decision) must be skipped by both: the data part is NULL on such a row.
-	vector<unique_ptr<Expression>> skipped;
-	for (auto &part : terms) {
-		if (part.degree == 1 && part.coefficient) {
-			CollectNullableData(*part.coefficient, decide_index, skipped);
-		}
-	}
-	CollectAbsentDecisionKeys(body, decide_index, variable_scopes, keyed_scopes, keys, skipped);
-	if (!skipped.empty()) {
-		unique_ptr<Expression> present;
-		for (auto &value : skipped) {
-			auto test = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NOT_NULL, LogicalType::BOOLEAN);
-			test->children.push_back(std::move(value));
-			present = present ? make_uniq_base<Expression, BoundConjunctionExpression>(
-			                        ExpressionType::CONJUNCTION_AND, std::move(present), std::move(test))
-			                  : unique_ptr<Expression>(std::move(test));
-		}
-		auto absent = make_uniq<BoundConstantExpression>(Value(data->return_type));
-		data = make_uniq<BoundCaseExpression>(std::move(present), std::move(data), std::move(absent));
-	}
-	auto moved = RebindReducer(aggregate, name, std::move(data));
-	auto *kept_expr = kept.get();
-	auto *moved_expr = moved.get();
-	auto *factor = scale.get();
-	out.push_back(Atom {sign, kept_expr, Classify(whole), factor ? factor->Copy() : nullptr, divides, std::move(kept)});
-	out.push_back(Atom {sign, moved_expr, Classify(*moved_expr), std::move(scale), divides, std::move(moved)});
 	return true;
 }
 

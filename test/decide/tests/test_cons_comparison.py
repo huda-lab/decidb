@@ -673,6 +673,24 @@ def test_integer_fractional_coeff_strict_rejected(decidb_cli):
     decidb_cli.assert_error_at(sql, kind=_NOT_IMPLEMENTED, at="SUM(0.5 * x) < 5", word="'<' compares ")
 
 
+@pytest.mark.cons_comparison
+@pytest.mark.var_integer
+@pytest.mark.parametrize("clause", ["SUM(x * (w + 0.5)) > 2", "SUM(x * (w + 0.5)) + x > 2"])
+def test_a_constant_in_a_data_factor_takes_no_strict_step(decidb_cli, clause):
+    """DecideSideIsWholeNumbered, the decision-free factor of a product: its addends count, so `x * (w + 0.5)` is
+    refused as `x * 0.5` is (it returned a wrong optimum when it was not)."""
+    sql = f"SELECT id, x FROM (VALUES (1, 0.0), (2, 0.0)) t(id, w) DECIDE x(INT) SUCH THAT x <= 5 AND {clause} MINIMIZE SUM(x)"
+    decidb_cli.assert_error_at(sql, kind=_NOT_IMPLEMENTED, at=clause, word="'>' compares 'x * (w + 0.5)'")
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.var_integer
+def test_a_whole_data_factor_with_a_constant_takes_the_strict_step(decidb_cli):
+    """The same branch, taken the other way: `wi + 1` is whole, so `x * (wi + 1)` is and `>` steps."""
+    sql = "SELECT id, x FROM (VALUES (1, 2), (2, 3)) t(id, wi) DECIDE x(INT) SUCH THAT x <= 5 AND SUM(x * (wi + 1)) > 2 MINIMIZE SUM(x)"
+    assert decidb_cli.execute(sql)[0]
+
+
 _SMALL = "SELECT id, x, y FROM (VALUES (1), (2), (3)) t(id) DECIDE x(INT), y(INT) SUCH THAT x <= 3 AND y <= 3 AND {}"
 
 

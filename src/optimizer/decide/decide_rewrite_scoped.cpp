@@ -179,6 +179,26 @@ struct Helpers {
 	}
 };
 
+//! `<`, `>` and `<>` step onto the whole numbers, which is exact for the row only when the helper is whole. The
+//! binder admitted the clause by its own reading: a constant beside the decisions inside a SUM moves to the bound when
+//! the reducer is summed in place (`sum(x + 0.5) > 4` is `sum(x) > 4 - 0.5 * n`), but a helper holds the whole value.
+//! The message is stage 04's (DecideShapeCheck::CheckIntegerStep), raised at `location`: the comparison's,
+//! which canonicalization may have rebuilt, else the clause's.
+void RefuseFractionalStep(const BoundAggregateExpression &agg, const DecideSourceNames &names, idx_t decide_index,
+                          const BoundComparisonExpression &comparison, optional_idx location) {
+	auto type = comparison.type;
+	if (DecideValueIsWholeNumbered(agg, decide_index) ||
+	    !(type == ExpressionType::COMPARE_LESSTHAN || type == ExpressionType::COMPARE_GREATERTHAN ||
+	      type == ExpressionType::COMPARE_NOTEQUAL)) {
+		return;
+	}
+	throw NotImplementedException(location,
+	                              FractionalComparisonMessage(type == ExpressionType::COMPARE_NOTEQUAL   ? "<>"
+	                                                          : type == ExpressionType::COMPARE_LESSTHAN ? "<"
+	                                                                                                     : ">",
+	                                                          RenderDecideSource(agg, names)));
+}
+
 //! Replace the reducer at `site` by its helper decision: the clause's existing one for a
 //! repeated occurrence, else a new one, recording what it holds. The reducers inside its
 //! argument are replaced first, each by a helper keyed by its path (language/guide.md §5.5), so that what the
@@ -567,6 +587,10 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 				}
 				continue;
 			}
+			RefuseFractionalStep(site.slot->get()->Cast<BoundAggregateExpression>(), names, decide.decide_index, cmp,
+			                     cmp.GetQueryLocation().IsValid() || source_clause_id == DConstants::INVALID_INDEX
+			                         ? cmp.GetQueryLocation()
+			                         : decide.constraint_sources[source_clause_id].location);
 			ReplaceReducer(helpers, names, booleans, path, Helpers::ClassKeyOf(scope), ExtremumPushOf(cmp.type),
 			               source_clause_id, site);
 		}

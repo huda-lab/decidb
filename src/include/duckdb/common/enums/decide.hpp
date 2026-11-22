@@ -437,10 +437,6 @@ static constexpr const char *ROW_VARYING_SUBQUERY_TAG = "__row_varying_subquery_
 //! it by its query location (DecideReplaces), not by this tag.
 static constexpr const char *BOUND_REDUCER_TAG = "__bound_reducer__";
 
-//! On a SUM or AVG whose body has its data part moved out beside it (DecideCanonicalizer::DecomposeLinearAddends): the
-//! body is `e - e0`, which a second reading must not split again.
-static constexpr const char *DATA_PART_MOVED_TAG = "__data_part_moved__";
-
 //! On the `IS NOT NULL` test a reducer's own `when` gains for a value its body reads
 //! (DecideCanonicalizer::SkipNullData): the query never wrote it, so no render prints it.
 static constexpr const char *SKIP_NULL_TAG = "__skip_null__";
@@ -634,7 +630,6 @@ static constexpr const char *DECIDE_TAGS[] = {WHEN_FILTER_TAG,
                                               QUERY_WIDE_VALUE_TAG,
                                               ROW_VARYING_SUBQUERY_TAG,
                                               BOUND_REDUCER_TAG,
-                                              DATA_PART_MOVED_TAG,
                                               SKIP_NULL_TAG,
                                               NULL_GUARD_TAG,
                                               SOURCE_CLAUSE_TAG_PREFIX,

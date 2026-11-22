@@ -1086,19 +1086,19 @@ def test_a_sum_helper_is_defined_on_the_side_the_clauses_push_it(
         _judged(cli, scope_solver, sql, model, [SHIP_BOUND] + clauses)
 
 
-@pytest.mark.correctness
-@pytest.mark.parametrize("op", [">", "<>", ">="])
-def test_a_helper_with_a_constant_addend_steps_on_the_decisions(decidb_cli, scope_solver, op):
-    """`sum(ship + 0.5) by (D.region)` is `sum(ship)` and a constant on the bound (CANON-1), so the helper holds whole
-    numbers and `>` and `<>` step on it; `>=` takes no step."""
-    body = lambda r: {"ship": 1, CONSTANT: 0.5}  # noqa: E731
-    _judged(
-        decidb_cli,
-        scope_solver,
+@pytest.mark.error
+@pytest.mark.parametrize("op", [">", "<>"])
+def test_a_helper_that_can_be_fractional_takes_no_step(decidb_cli, op):
+    """The helper holds the reducer's whole value, `sum(ship + 0.5)` included, so `<`, `>`
+    and `<>` cannot step it; summed in place (the aggregate shape) the constant would move
+    to the bound instead. `>=` answers."""
+    decidb_cli.assert_error_at(
         _ship_query(f"ship + sum(ship + 0.5) by (D.region) {op} 40"),
-        ScopedModel(joined(), SHIP),
-        [SHIP_BOUND, Scoped((X, Reduce("sum", body, by=("region",))), op, (const(40),))],
+        kind="Not implemented Error",
+        at=f"ship + sum(ship + 0.5) by (D.region) {op} 40",
+        word=f"'{op}' compares 'sum(ship + 0.5) by (D.region)'",
     )
+    assert decidb_cli.execute(_ship_query("ship + sum(ship + 0.5) by (D.region) >= 40"))[0]
 
 
 @pytest.mark.correctness
