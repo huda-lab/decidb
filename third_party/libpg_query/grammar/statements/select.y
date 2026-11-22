@@ -240,14 +240,6 @@ decide_per:
 				}
 			| PER_DECIDE_PAREN '(' ')'
 				{ $$ = makeDecideScope(PG_DECIDE_PER_ALL, NIL, @1, yyscanner); }
-			| PER_DECIDE_PAREN '(' expr_list ')'
-				{
-					ereport(ERROR,
-							(errcode(PG_ERRCODE_SYNTAX_ERROR),
-							 errmsg("a per key cannot be in parentheses"),
-							 parser_errposition(@2)));
-					$$ = NULL;
-				}
 			| PER_DECIDE_ROW ROW
 				{ $$ = makeDecideScope(PG_DECIDE_PER_ROW, NIL, @1, yyscanner); }
 		;
@@ -479,11 +471,6 @@ decide_body:
 decide_constraint_list:
 			decide_constraint_item
 				{ $$ = $1; }
-			| decide_constraint_list ',' decide_constraint_item
-				{
-					ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR), errmsg("SUCH THAT constraints cannot be separated by a comma"), parser_errposition(@2)));
-					$$ = $1;
-				}
 			| decide_constraint_list AND decide_constraint_item
 				{ $$ = makeAndExpr($1, $3, @2); }
 		;

@@ -1099,7 +1099,7 @@ Tests live in:
 `test_error_parser.py`: DECIDE without
 SUCH THAT, DECIDE without a variable name, MAXIMIZE/MINIMIZE without an
 objective expression, an unknown type, comma-separated `SUCH THAT`
-constraints ("SUCH THAT constraints cannot be separated by a comma").
+constraints (a syntax error at the comma).
 
 The old spellings are syntax errors (`../language/errors.md`) — `test_scope_old_forms.py`. The scoping language's own
 parse errors (a `per` key or `per row` on the objective, a parenthesized key, an

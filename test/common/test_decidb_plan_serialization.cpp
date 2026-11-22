@@ -260,7 +260,7 @@ TEST_CASE("Parsed DECIDE scope spellings survive ToString and binary round trips
 	const string once = "an objective cannot have a per key";
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x <= 1 MAXIMIZE per a: SUM(x)", once);
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x <= 1 MINIMIZE when a = 1 per row: SUM(x)", once);
-	const string parens = "a per key cannot be in parentheses";
+	const string parens = "syntax error at or near";
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT per (a, b): SUM(x) <= 1", parens);
 	rejects("SELECT a FROM t DECIDE per (a): x(INT) SUCH THAT x <= 1", parens);
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT SUM(per (a): x) <= 1", parens);

@@ -277,19 +277,19 @@ Parser Error: an objective cannot have a per key
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per (depotID, customerID): sum(ship) by (depotID) <= 100 MAXIMIZE SUM(ship);
 ----
-Parser Error: a per key cannot be in parentheses
+Parser Error: syntax error at or near
 
 # parenthesized key, one column, on a declaration
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE per (depotID): ship(INT) SUCH THAT ship <= 5 MAXIMIZE SUM(ship);
 ----
-Parser Error: a per key cannot be in parentheses
+Parser Error: syntax error at or near
 
 # parenthesized key inside a reducer
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(per (depotID): ship) <= 100 MAXIMIZE SUM(ship);
 ----
-Parser Error: a per key cannot be in parentheses
+Parser Error: syntax error at or near
 
 # an expression in a per key: arithmetic
 statement error

@@ -43,15 +43,12 @@ plan: everything before a row is read) and **run** (execution, and the formulati
 | Situation | Kind | Message | Caret at |
 |---|---|---|---|
 | `per` other than `per ()` on the objective | Parser | `an objective cannot have a per key` | `per` |
-| A parenthesized key (`per (g):`) | Parser | `a per key cannot be in parentheses` | the `(` |
 | An expression in a `per` key | Parser | `'q' in a per key is not a column or a relation` | the element |
 | An expression in a frame's `within` | Parser | `'q' in within is not a column or a relation` | the element |
 | A declaration with no type | Parser | `decision 'x' has no type` | the name |
 | A `DECIDE` with no `SUCH THAT`, or an objective where its constraints belong | Parser | `DECIDE has no SUCH THAT clause` | `DECIDE` |
 | A `SUCH THAT` with no `DECIDE` | Parser | `SUCH THAT has no DECIDE clause` | `SUCH THAT` |
 | A second `DECIDE` clause | Parser | `DECIDE appears twice` | the second `DECIDE` |
-| A comma between constraints | Parser | `SUCH THAT constraints cannot be separated by a comma` | the comma |
-| A qualifier of a reducer that is not one relation name (`sum(a.b: x)`) | Parser | `'q' before ':' in a reducer is not a relation` | the qualifier |
 | A frame's `k` or `every` that is not a positive whole number | Parser | `'0' in a frame is not a positive whole number` | the frame |
 | A frame position that is not `first`, `last`, `[k] previous` or `[k] next` | Parser | `'prev' is not a frame position` | the word |
 | A frame word that is not `every` or `cyclic` where one stands | Parser | `'cyclc' is not a frame keyword` | the word |

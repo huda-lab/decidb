@@ -71,8 +71,7 @@ DECIDE adds no keyword for a type: DuckDB quotes every keyword when it prints a 
 a keyword `BOOL` would quote a column or a `UNION` member named `bool` in every message
 and rendered query.
 
-`decide_constraint_list` joins its items with `AND`. A comma is refused with
-*"SUCH THAT constraints cannot be separated by a comma"*, at the comma.
+`decide_constraint_list` joins its items with `AND`. A comma between constraints is a plain syntax error.
 
 ### Scopes: `when`, `per`, `by`
 
@@ -99,7 +98,7 @@ decide_by     ::= BY_DECIDE '(' ')' | BY_DECIDE '(' expr_list ')'
   call, `rexpr` the key list, `NULL` for `by ()`).
 - A key element must be a column or relation name (`decideCheckKey`): anything
   else is *"'q' in a per key is not a column or a relation"*, at the element.
-  A parenthesized key is *"a per key cannot be in parentheses"*, at the `(`. A `per`
+  A parenthesized key is a plain syntax error. A `per`
   other than `()` on an objective is *"an objective cannot have a per key"*, at the
   `per`. A `WHEN` or `PER` written after a clause or a reducer is a plain syntax error,
   as is one written after a clause that already has a scope in front.
