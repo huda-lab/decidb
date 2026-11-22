@@ -581,20 +581,11 @@ void SolverModel::ClearObjective() {
 	nonconvex_quadratic = false;
 }
 
-SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
-	DecideProfileScope profile("model.build");
-	DecideProfileScope phase("model.variables_and_bounds");
-	SolverModel model;
-	model.class_sets = std::move(input.class_sets);
-	model.key_values = std::move(input.key_values);
-
-	idx_t num_rows = input.num_rows;
+//! Build, step 1: the columns. Every decision instance's box and type from the input's boxes, then the global
+//! auxiliaries' after them.
+static void BuildModelColumns(SolverModel &model, SolverInput &input, const VarIndexer &indexer) {
 	idx_t num_decide_vars = input.num_decide_vars;
-
-	// VarIndexer is built once in PhysicalDecide::Finalize() and threaded in.
 	idx_t total_vars = indexer.total_vars;
-
-	model.num_vars = total_vars;
 
 	//===--------------------------------------------------------------------===//
 	// 1. Set up variables with bounds and types
@@ -696,6 +687,13 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		model.is_integer[var_idx] = gtype != LogicalType::DOUBLE;
 		model.is_binary[var_idx] = (gtype == LogicalType::BOOLEAN);
 	}
+}
+
+//! Build, step 2: the objective, linear and quadratic.
+static void BuildModelObjective(SolverModel &model, SolverInput &input, const VarIndexer &indexer,
+                                DecideProfileScope &phase) {
+	idx_t num_rows = input.num_rows;
+	idx_t total_vars = indexer.total_vars;
 
 	//===--------------------------------------------------------------------===//
 	// 2. Set up objective function
@@ -773,12 +771,52 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 			model.q_vals.push_back(entry.second);
 		}
 	}
+}
 
-	//===--------------------------------------------------------------------===//
-	// 3. Build constraints
-	//===--------------------------------------------------------------------===//
+// Handle constraints whose LHS reduced to 0 (all coefficients cancelled or
+// all variables folded into column bounds). A tautology is dropped; a
+// violated constant constraint (`0 <= -1`) is KEPT as a coefficient-free row,
+// so the whole model still gets built and retained.
+// Keeping the row is what lets the infeasible-diagnosis engine name and relax
+// the offending clause — it stays a USER_PARAMETER row with its own source
+// provenance, and the elastic weighting already guards an all-zero row. No
+// backend ever sees it: SolverModel::ProvesInfeasible answers the model first.
+static void PushNormalizedConstraint(SolverModel &model, ModelConstraint &&constr) {
+	// A coefficient-free row that fails is kept, with its provenance, so ProvesInfeasible
+	// answers the model and diagnosis can relax the row; one that holds is a tautology.
+	constr.constant_fails = constr.indices.empty() && ConstantRowFails(constr.sense, constr.rhs);
+	if (!constr.indices.empty() || constr.constant_fails) {
+		model.constraints.push_back(std::move(constr));
+	}
+}
 
-	phase.Next("model.constraints");
+//! Build, step 3: the raw rows.
+static void BuildModelRawRows(SolverModel &model, SolverInput &input, DecideProfileScope &phase) {
+	// Raw rows: the helpers' definitions, ABS and bilinear links, `<>` disjunctions. They stand before the clauses that
+	// read what they define (a helper's rows before the clause that reads it, an inner helper's before an outer's), the
+	// order the solver reads them in: the same model with a clause's row ahead of its helper's envelope rows solves
+	// two orders of magnitude slower. The index/coefficient vectors move out of `input` to avoid deep copies:
+	// SolveModel() in ilp_solver.cpp does not read input.global_constraints after this call.
+	phase.Next("model.global_rows");
+	for (auto &raw : input.global_constraints) {
+		ModelConstraint constr;
+		constr.indices = std::move(raw.indices);
+		constr.coefficients = std::move(raw.coefficients);
+		constr.sense = raw.sense;
+		constr.rhs = raw.rhs;
+		// Raw rows include both structural links and user-facing
+		// constraints, so their provenance is explicit on RawConstraint rather than
+		// inferred from an EvaluatedConstraint position.
+		StampProvenance(input, constr.provenance, raw.provenance);
+		PushNormalizedConstraint(model, std::move(constr));
+	}
+}
+
+//! Build, step 4: the clause rows: the linear rows, the quadratic rows, then the conditional and native rows the
+//! backend states itself.
+static void BuildModelClauseRows(SolverModel &model, SolverInput &input, const VarIndexer &indexer,
+                                 DecideProfileScope &phase) {
+	idx_t num_rows = input.num_rows;
 
 	// A strict `<` / `>` stepped the bound: under DIAGNOSE, remember the user's typed K so the diagnosis can re-quote a
 	// suggestion against `> K`, not the δ-adjusted rhs.
@@ -814,23 +852,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 			constr.rhs = rhs;
 		} else {
 			throw InternalException("Unsupported comparison type in ILP model builder");
-		}
-	};
-
-	// Handle constraints whose LHS reduced to 0 (all coefficients cancelled or
-	// all variables folded into column bounds). A tautology is dropped; a
-	// violated constant constraint (`0 <= -1`) is KEPT as a coefficient-free row,
-	// so the whole model still gets built and retained.
-	// Keeping the row is what lets the infeasible-diagnosis engine name and relax
-	// the offending clause — it stays a USER_PARAMETER row with its own source
-	// provenance, and the elastic weighting already guards an all-zero row. No
-	// backend ever sees it: SolverModel::ProvesInfeasible answers the model first.
-	auto PushNormalizedConstraint = [&](ModelConstraint &&constr) {
-		// A coefficient-free row that fails is kept, with its provenance, so ProvesInfeasible
-		// answers the model and diagnosis can relax the row; one that holds is a tautology.
-		constr.constant_fails = constr.indices.empty() && ConstantRowFails(constr.sense, constr.rhs);
-		if (!constr.indices.empty() || constr.constant_fails) {
-			model.constraints.push_back(std::move(constr));
 		}
 	};
 
@@ -878,42 +899,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		return true;
 	};
 
-	// Rough upper-bound on total model.constraints rows to avoid repeated
-	// vector reallocation — aggregate w/o groups contributes 1, aggregate w/
-	// groups contributes num_groups, per-row contributes num_rows. Plus any
-	// raw global constraints appended after the main loop.
-	{
-		idx_t est_rows = input.global_constraints.size();
-		for (auto &ec : input.constraints) {
-			if (ec.lhs_is_aggregate) {
-				bool ec_has_groups = !ec.row_group_ids.empty();
-				est_rows += ec_has_groups ? std::max<idx_t>(ec.num_groups, 1) : 1;
-			} else {
-				est_rows += num_rows;
-			}
-		}
-		model.constraints.reserve(model.constraints.size() + est_rows);
-	}
-
-	// Raw rows: the helpers' definitions, ABS and bilinear links, `<>` disjunctions. They stand before the clauses that
-	// read what they define (a helper's rows before the clause that reads it, an inner helper's before an outer's), the
-	// order the solver reads them in: the same model with a clause's row ahead of its helper's envelope rows solves
-	// two orders of magnitude slower. The index/coefficient vectors move out of `input` to avoid deep copies:
-	// SolveModel() in ilp_solver.cpp does not read input.global_constraints after this call.
-	phase.Next("model.global_rows");
-	for (auto &raw : input.global_constraints) {
-		ModelConstraint constr;
-		constr.indices = std::move(raw.indices);
-		constr.coefficients = std::move(raw.coefficients);
-		constr.sense = raw.sense;
-		constr.rhs = raw.rhs;
-		// Raw rows include both structural links and user-facing
-		// constraints, so their provenance is explicit on RawConstraint rather than
-		// inferred from an EvaluatedConstraint position.
-		StampProvenance(input, constr.provenance, raw.provenance);
-		PushNormalizedConstraint(std::move(constr));
-	}
-
 	phase.Next("model.clause_rows");
 	for (auto &eval_const : input.constraints) {
 		bool is_aggregate = eval_const.lhs_is_aggregate;
@@ -951,7 +936,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 				ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_offset);
 				// F2 site 1: aggregate, ungrouped.
 				StampConstraintProvenance(input, constr.provenance, eval_const, DConstants::INVALID_INDEX, lhs_offset);
-				PushNormalizedConstraint(std::move(constr));
+				PushNormalizedConstraint(model, std::move(constr));
 
 			} else {
 				// A `when` and/or groups: one constraint per group, the group's emitted row.
@@ -984,7 +969,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 					ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, group_lhs_offset);
 					// F2 site 2: grouped aggregate (`by` and/or `when`).
 					StampConstraintProvenance(input, constr.provenance, eval_const, g, group_lhs_offset);
-					PushNormalizedConstraint(std::move(constr));
+					PushNormalizedConstraint(model, std::move(constr));
 				}
 			}
 
@@ -1018,7 +1003,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 				if (TryFoldPerRowBound(eval_const, row, constr)) {
 					continue;
 				}
-				PushNormalizedConstraint(std::move(constr));
+				PushNormalizedConstraint(model, std::move(constr));
 			}
 		}
 	}
@@ -1204,6 +1189,50 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		StampProvenance(input, gc.provenance, spec.provenance);
 		model.general_constraints.push_back(std::move(gc));
 	}
+}
+
+SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
+	DecideProfileScope profile("model.build");
+	DecideProfileScope phase("model.variables_and_bounds");
+	SolverModel model;
+	model.class_sets = std::move(input.class_sets);
+	model.key_values = std::move(input.key_values);
+
+	idx_t num_rows = input.num_rows;
+
+	// VarIndexer is built once in PhysicalDecide::Finalize() and threaded in.
+	idx_t total_vars = indexer.total_vars;
+
+	model.num_vars = total_vars;
+
+	BuildModelColumns(model, input, indexer);
+	BuildModelObjective(model, input, indexer, phase);
+
+	//===--------------------------------------------------------------------===//
+	// 3. Build constraints
+	//===--------------------------------------------------------------------===//
+
+	phase.Next("model.constraints");
+
+	// Rough upper-bound on total model.constraints rows to avoid repeated
+	// vector reallocation — aggregate w/o groups contributes 1, aggregate w/
+	// groups contributes num_groups, per-row contributes num_rows. Plus any
+	// raw global constraints appended after the main loop.
+	{
+		idx_t est_rows = input.global_constraints.size();
+		for (auto &ec : input.constraints) {
+			if (ec.lhs_is_aggregate) {
+				bool ec_has_groups = !ec.row_group_ids.empty();
+				est_rows += ec_has_groups ? std::max<idx_t>(ec.num_groups, 1) : 1;
+			} else {
+				est_rows += num_rows;
+			}
+		}
+		model.constraints.reserve(model.constraints.size() + est_rows);
+	}
+
+	BuildModelRawRows(model, input, phase);
+	BuildModelClauseRows(model, input, indexer, phase);
 
 	// A box inverted by rounding alone is one point. Boxes are derived in floating point from several sources -- a
 	// bound divided by its coefficient (`3 * x <= 0.3` is `x <= 0.0999...` beside `x >= 0.1`), a helper's reach, a
