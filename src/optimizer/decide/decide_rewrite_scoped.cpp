@@ -502,8 +502,8 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	// A Boolean factor on a reducer (`b * sum(x)`, canonicalization admits no other decision) is now a product with
 	// the helper. The bilinear rewrite ran before this pass, so it never saw the product: this hands it over, through
 	// the one entry (FindAndReplaceBilinear), for the same tree-owned product F node used by ordinary Boolean products.
-	auto HandProductsToBilinear = [&](unique_ptr<Expression> &expr, const string &source_alias) {
-		FindAndReplaceBilinear(expr, decide, source_alias);
+	auto HandProductsToBilinear = [&](unique_ptr<Expression> &expr, const DecideRowOrigin &origin) {
+		FindAndReplaceBilinear(expr, decide, origin);
 	};
 
 	// The clause leaves are rewritten where they sit, the comparisons among them: a placeholder or a bound `IN` is no
@@ -516,12 +516,11 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		// the clause's aggregate row and each MIN or MAX becomes a helper, but for the easy identity, which keeps its
 		// reducer (RewriteMinMax).
 		const bool value_shape = HasDecideTag(expr->GetAlias(), VALUE_REWRITE_TAG);
-		if (!value_shape && HasDecideTag(expr->GetAlias(), MINMAX_EASY_REWRITE_TAG)) {
+		if (!value_shape && IsEasyMinMaxRow(*expr)) {
 			return;
 		}
 		auto &cmp = expr->Cast<BoundComparisonExpression>();
-		idx_t source_clause_id = DConstants::INVALID_INDEX;
-		TryParseSourceClauseTag(cmp.GetAlias(), source_clause_id);
+		const idx_t source_clause_id = ClauseOriginOf(cmp).source_clause_id;
 		// Canonicalization put every decision reducer on the left.
 		auto sites = CollectReducerSites(optimizer.context, booleans, cmp.left);
 		if (!value_shape) {
@@ -595,7 +594,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 			               source_clause_id, site);
 		}
 		if (value_shape) {
-			HandProductsToBilinear(cmp.left, cmp.GetAlias());
+			HandProductsToBilinear(cmp.left, ClauseOriginOf(cmp));
 		}
 		// One row per class from here on: the shape tag has done its work.
 		auto alias = cmp.GetAlias();
@@ -636,7 +635,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		}
 		// Every product in the objective, whatever shape it was read in: a reducer a helper replaced inside a function
 		// or a nest may stand under a Boolean factor without the shape tag.
-		HandProductsToBilinear(body.expr, OBJECTIVE_ROW_TAG);
+		HandProductsToBilinear(body.expr, DecideRowOrigin::OfObjective());
 	};
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
 		if (body.owner == DecideOwnedBody::Owner::CLAUSE) {

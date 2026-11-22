@@ -43,11 +43,11 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.bound.variable_scopes,
 	                                  decide.bound.keyed_scopes, decide.bound.keys, decide.bound.is_boolean_var);
 
-	std::function<void(unique_ptr<Expression> &, const string &, DecideEnclosingScope)> rewrite =
-	    [&](unique_ptr<Expression> &expr, const string &source_alias, DecideEnclosingScope scope) {
+	std::function<void(unique_ptr<Expression> &, const DecideRowOrigin &, DecideEnclosingScope)> rewrite =
+	    [&](unique_ptr<Expression> &expr, const DecideRowOrigin &inherited, DecideEnclosingScope scope) {
 		    if (!expr)
 			    return;
-		    auto clause_alias = DescendSourceAlias(*expr, source_alias);
+		    const auto origin = DescendClauseOrigin(*expr, inherited);
 		    scope = EnterDecideScope(*expr, scope);
 		    string payload;
 		    if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
@@ -60,7 +60,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 			    // A norm of data reads no decision, so it stands on a bound, which the right-hand-side window rewrite
 			    // made a column before this pass; an L0 norm is desugared only there.
 			    D_ASSERT(payload == "1" || payload == "2" || payload == "inf");
-			    AddRewriteAccount(decide, clause_alias,
+			    AddRewriteAccount(decide, origin.source_clause_id,
 			                      payload == "1" ? Kind::NORM_SUM_ABS
 			                                     : (payload == "2" ? Kind::NORM_SUM_SQUARES : Kind::NORM_MAX_ABS),
 			                      RenderForPlan(*expr, decide));
@@ -78,7 +78,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 			    // drop the norm. A marker beneath another aggregate cannot occur: the binder
 			    // rejects `SUM(norm(...))` before this pass runs.
 			    ExpressionIterator::EnumerateChildren(
-			        *expr, [&](unique_ptr<Expression> &child) { rewrite(child, clause_alias, scope); });
+			        *expr, [&](unique_ptr<Expression> &child) { rewrite(child, origin, scope); });
 			    return;
 		    }
 		    auto &aggregate = expr->Cast<BoundAggregateExpression>();
@@ -101,7 +101,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		    indicator.m = m;
 		    indicator.label = RenderForPlan(aggregate, decide);
 		    auto z = MakeDecisionRef(decide, z_idx);
-		    AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::HELPER_PER_ROW,
+		    AddRewriteAccount(decide, origin.source_clause_id, LogicalDecide::RewriteAccount::Kind::HELPER_PER_ROW,
 		                      RenderForPlan(aggregate, decide));
 		    auto make_mz = [&]() {
 			    auto bound = make_uniq<BoundConstantExpression>(Value::DOUBLE(m));
@@ -112,7 +112,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		    auto add_link = [&](unique_ptr<Expression> lhs, unique_ptr<Expression> rhs) {
 			    auto link = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 			                                                     std::move(lhs), std::move(rhs));
-			    MarkFormulationConstraint(*link, clause_alias, z_idx);
+			    MarkFormulationConstraint(*link, origin, z_idx);
 			    auto alias = link->GetAlias();
 			    AddDecideTag(alias, MakeL0IndicatorFunctionTag(z_idx));
 			    link->SetAlias(std::move(alias));
@@ -140,7 +140,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 	// lowered where it sits and the whole is reinstalled through the canonicalizing boundary.
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
 		if (body.owner == DecideOwnedBody::Owner::CLAUSE || body.owner == DecideOwnedBody::Owner::OBJECTIVE) {
-			rewrite(body.expr, body.source_alias, body.scope);
+			rewrite(body.expr, body.origin, body.scope);
 		}
 	});
 	if (decide.bound.objective) {
@@ -158,26 +158,26 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 	// Every row an IN generates keeps its clause's `when` and `per`, and is one row per instance of the indicators'
 	// scope: an indicator is a column defined by the decision and its domain, so it is one per instance of their join.
 	DecideVarScopeInfo scope_of_in;
-	auto emit = [&](unique_ptr<Expression> constraint, const DecideEnclosingScope &scope, const string &source_alias) {
-		MarkFormulationConstraint(*constraint, source_alias);
+	auto emit = [&](unique_ptr<Expression> constraint, const DecideEnclosingScope &scope,
+	                const DecideRowOrigin &origin) {
+		MarkFormulationConstraint(*constraint, origin);
 		generated.push_back(ScopeRowPerInstance(
-		    decide, ScopeRowPerClause(optimizer.context, decide, std::move(constraint), scope, source_alias),
-		    scope_of_in));
+		    decide, ScopeRowPerClause(optimizer.context, decide, std::move(constraint), scope, origin), scope_of_in));
 	};
-	std::function<void(unique_ptr<Expression> &, DecideEnclosingScope, const string &)> rewrite =
-	    [&](unique_ptr<Expression> &expr, DecideEnclosingScope scope, const string &source_alias) {
-		    auto clause_alias = DescendSourceAlias(*expr, source_alias);
+	std::function<void(unique_ptr<Expression> &, DecideEnclosingScope, const DecideRowOrigin &)> rewrite =
+	    [&](unique_ptr<Expression> &expr, DecideEnclosingScope scope, const DecideRowOrigin &inherited) {
+		    const auto origin = DescendClauseOrigin(*expr, inherited);
 		    scope = EnterDecideScope(*expr, scope);
 		    if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			    auto &conj = expr->Cast<BoundConjunctionExpression>();
 			    for (idx_t i = 0; i < conj.children.size(); i++) {
 				    if (IsConstraintChild(conj, i))
-					    rewrite(conj.children[i], scope, clause_alias);
+					    rewrite(conj.children[i], scope, origin);
 			    }
 			    // A `when c:` goes with the clause it held: the placeholder stands in for both.
 			    if (IsWhenFilterWrapper(conj) &&
 			        conj.children[0]->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT)
-				    expr = MakeTrueExpression(conj.children[0]->GetAlias());
+				    expr = MakeTrueExpression(ClauseOriginOf(*conj.children[0]));
 			    return;
 		    }
 		    if (expr->GetExpressionClass() != ExpressionClass::BOUND_OPERATOR)
@@ -200,20 +200,20 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 				    emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 				                                              in.children[0]->Copy(),
 				                                              make_uniq<BoundConstantExpression>(Value::INTEGER(0))),
-				         scope, clause_alias);
-				    expr = MakeTrueExpression(clause_alias);
+				         scope, origin);
+				    expr = MakeTrueExpression(origin);
 				    return;
 			    }
 		    }
 		    if (k == 1) {
 			    emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, in.children[0]->Copy(),
 			                                              in.children[1]->Copy()),
-			         scope, clause_alias);
-			    expr = MakeTrueExpression(clause_alias);
+			         scope, origin);
+			    expr = MakeTrueExpression(origin);
 			    return;
 		    }
 		    vector<unique_ptr<Expression>> indicators;
-		    AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::HELPER_PER_VALUE,
+		    AddRewriteAccount(decide, origin.source_clause_id, LogicalDecide::RewriteAccount::Kind::HELPER_PER_VALUE,
 		                      RenderForPlan(in, decide));
 		    for (idx_t i = 0; i < k; i++) {
 			    string name = string(IN_INDICATOR_NAME_PREFIX) + target->GetName() + "_" + to_string(in_counter) + "_" +
@@ -230,7 +230,7 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 			    cardinality = optimizer.BindScalarFunction("+", std::move(cardinality), indicators[i]->Copy());
 		    emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, std::move(cardinality),
 		                                              make_uniq<BoundConstantExpression>(Value::INTEGER(1))),
-		         scope, clause_alias);
+		         scope, origin);
 		    auto linking = in.children[0]->Copy();
 		    bool all_constant = true;
 		    double min_value = 0.0;
@@ -248,16 +248,16 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 		    }
 		    emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, std::move(linking),
 		                                              make_uniq<BoundConstantExpression>(Value::INTEGER(0))),
-		         scope, clause_alias);
+		         scope, origin);
 		    if (all_constant && min_value < 0.0) {
 			    emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 			                                              in.children[0]->Copy(),
 			                                              make_uniq<BoundConstantExpression>(Value::DOUBLE(min_value))),
-			         scope, clause_alias);
+			         scope, origin);
 		    }
-		    expr = MakeTrueExpression(clause_alias);
+		    expr = MakeTrueExpression(origin);
 	    };
-	rewrite(decide.bound.constraints, DecideEnclosingScope(), string());
+	rewrite(decide.bound.constraints, DecideEnclosingScope(), DecideRowOrigin());
 	for (auto &constraint : generated)
 		decide.AddConstraint(optimizer.context, std::move(constraint));
 }

@@ -34,8 +34,8 @@ private:
 	BindResult BindOperator(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
 	BindResult BindBetween(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
 	BindResult BindConjunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
-	//! Binds `[when c] [per K]: constraint`: the constraint wrapped in a WHEN wrapper for
-	//! `c` and a PER_CLASS_TAG wrapper for `K` (no columns for `per ()`). A BETWEEN binds to
+	//! Binds `[when c] [per K]: constraint`: the constraint wrapped in a `when` wrapper for
+	//! `c` and a `per` wrapper for `K` (no columns for `per ()`). A BETWEEN binds to
 	//! two comparisons, each wrapped in the scope.
 	BindResult BindClause(DecideClause &clause);
 };

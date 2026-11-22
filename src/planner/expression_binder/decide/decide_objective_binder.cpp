@@ -1,5 +1,6 @@
 #include "duckdb/planner/expression_binder/decide/decide_objective_binder.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
@@ -22,12 +23,9 @@ unique_ptr<Expression> DecideObjectiveBinder::BindObjective(DecideClause &object
 		if (condition_error.HasError()) {
 			condition_error.Throw();
 		}
-		auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		wrapper->children.push_back(std::move(bound));
-		wrapper->children.push_back(BoundCastExpression::AddCastToType(
-		    context, std::move(BoundExpression::GetExpression(*scope.when)), LogicalType::BOOLEAN));
-		wrapper->alias = WHEN_FILTER_TAG;
-		bound = std::move(wrapper);
+		bound = MakeScopedRow(std::move(bound), BoundCastExpression::AddCastToType(
+		                                            context, std::move(BoundExpression::GetExpression(*scope.when)),
+		                                            LogicalType::BOOLEAN));
 	}
 	return bound;
 }

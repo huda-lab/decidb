@@ -833,7 +833,7 @@ struct SolverInput {
 };
 
 //! The clause a row of `source_clause_id` comes from, for a message about a number the model computes from it. A row no
-//! clause claims is one a rewrite added for the objective (OBJECTIVE_ROW_TAG leaves no source id), so it names the
+//! clause claims is one a rewrite added for the objective (such a row has no source clause), so it names the
 //! objective.
 DecideClauseRef DecideWrittenClause(const SolverInput &input, idx_t source_clause_id);
 

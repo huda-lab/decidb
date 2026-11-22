@@ -60,7 +60,7 @@ void DecideOptimizer::RewriteBilinear(LogicalDecide &decide) {
 	// The tags this pass adds are read by no canonicalization, so the objective is not reinstalled.
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
 		if (BilinearReadsBody(decide, body)) {
-			FindAndReplaceBilinear(body.expr, decide, body.source_alias);
+			FindAndReplaceBilinear(body.expr, decide, body.origin);
 		}
 	});
 }
@@ -144,7 +144,7 @@ bool AffineFromTerms(Optimizer &optimizer, vector<DecideSplitTerm> &terms, const
 //! The auxiliary `w = first * second` for two decisions, one of them Boolean (`first` and `second` are in the order
 //! the user wrote them): AND for two Booleans, else the McCormick link whose rows stage 06 emits against the other
 //! factor's box. Returns the auxiliary's decision index.
-idx_t AddBooleanProduct(LogicalDecide &decide, DecideBilinearFunctionGroup &group, const string &clause_alias,
+idx_t AddBooleanProduct(LogicalDecide &decide, DecideBilinearFunctionGroup &group, const DecideRowOrigin &origin,
                         idx_t first, idx_t second) {
 	auto is_bool = [&](idx_t var) {
 		return decide.bound.is_boolean_var[var];
@@ -178,7 +178,7 @@ idx_t AddBooleanProduct(LogicalDecide &decide, DecideBilinearFunctionGroup &grou
 	// column is floored at the product's range, min(0, the factor's floor) (LinearizeBilinear). An AND of two
 	// Booleans keeps its BOOL box.
 	decide.signed_helper_vars.push_back(aux_idx);
-	AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::HELPER, label);
+	AddRewriteAccount(decide, origin.source_clause_id, LogicalDecide::RewriteAccount::Kind::HELPER, label);
 
 	// Both kinds are linked per instance of the auxiliary by LinearizeBilinear, which reads the factors' boxes
 	// there: the McCormick rows against the other factor's box (the structural `w <= x` is not emitted here, being
@@ -188,8 +188,7 @@ idx_t AddBooleanProduct(LogicalDecide &decide, DecideBilinearFunctionGroup &grou
 	product.aux_idx = aux_idx;
 	product.first_var_idx = first;
 	product.second_var_idx = second;
-	TryParseSourceClauseTag(clause_alias, product.origin.source_clause_id);
-	TryParseRemovalGroupTag(clause_alias, product.origin.removal_group_id);
+	product.origin = origin;
 	group.products.push_back(product);
 	return aux_idx;
 }
@@ -197,7 +196,7 @@ idx_t AddBooleanProduct(LogicalDecide &decide, DecideBilinearFunctionGroup &grou
 } // namespace
 
 void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide,
-                                             const string &source_alias) {
+                                             const DecideRowOrigin &inherited) {
 	if (!expr) {
 		return;
 	}
@@ -205,7 +204,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 	if (TryParseDecideIndexTag(expr->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
 		return; // its source body is compiled from DefinitionFunction metadata, exactly once
 	}
-	auto clause_alias = DescendSourceAlias(*expr, source_alias);
+	const auto origin = DescendClauseOrigin(*expr, inherited);
 	idx_t existing_group;
 	if (TryParseDecideIndexTag(expr->GetAlias(), BILINEAR_FUNCTION_GROUP_TAG_PREFIX, existing_group)) {
 		if (existing_group >= decide.bilinear_function_groups.size()) {
@@ -316,7 +315,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					} else if (term.second == DConstants::INVALID_INDEX) {
 						factor = column(term.first);
 					} else if (is_bool(term.first) || is_bool(term.second)) {
-						factor = column(AddBooleanProduct(decide, group, clause_alias, term.first, term.second));
+						factor = column(AddBooleanProduct(decide, group, origin, term.first, term.second));
 					} else {
 						// Two decisions, neither Boolean: the Q matrix's.
 						factor = optimizer.BindScalarFunction("*", column(term.first), column(term.second));
@@ -341,7 +340,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 	}
 
 	ExpressionIterator::EnumerateChildren(
-	    *expr, [&](unique_ptr<Expression> &child) { FindAndReplaceBilinear(child, decide, clause_alias); });
+	    *expr, [&](unique_ptr<Expression> &child) { FindAndReplaceBilinear(child, decide, origin); });
 }
 
 } // namespace duckdb

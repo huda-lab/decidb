@@ -167,36 +167,12 @@ void decide_rewrite::AddValueCheck(LogicalDecide &decide, unique_ptr<Expression>
 	decide.value_checks.push_back(std::move(check));
 }
 
-void decide_rewrite::CopySourceClauseTag(const string &from_alias, Expression &to) {
-	idx_t source_id;
-	if (TryParseSourceClauseTag(from_alias, source_id)) {
-		auto alias = to.GetAlias();
-		AddDecideTag(alias, MakeSourceClauseTag(source_id));
-		to.SetAlias(std::move(alias));
-	}
-}
-
-void decide_rewrite::CopyClauseProvenanceTags(const string &from_alias, Expression &to) {
-	CopySourceClauseTag(from_alias, to);
-	auto alias = to.GetAlias();
-	idx_t removal_id;
-	if (TryParseRemovalGroupTag(from_alias, removal_id)) {
-		AddDecideTag(alias, MakeRemovalGroupTag(removal_id));
-	}
-	if (HasDecideTag(from_alias, OBJECTIVE_ROW_TAG)) {
-		AddDecideTag(alias, OBJECTIVE_ROW_TAG);
-	}
-	to.SetAlias(std::move(alias));
-}
-
-void decide_rewrite::MarkFormulationConstraint(Expression &expr, const string &source_alias, idx_t defined) {
-	auto alias = expr.GetAlias();
-	AddDecideTag(alias, STRUCTURAL_CONSTRAINT_TAG);
+void decide_rewrite::MarkFormulationConstraint(Expression &expr, const DecideRowOrigin &origin, idx_t defined) {
+	MarkStructuralRow(expr);
 	if (defined != DConstants::INVALID_INDEX) {
-		AddDecideTag(alias, MakeDefinesTag(defined));
+		SetDefinedHelper(expr, defined);
 	}
-	expr.SetAlias(std::move(alias));
-	CopyClauseProvenanceTags(source_alias, expr);
+	StampClauseOrigin(expr, origin);
 }
 
 idx_t decide_rewrite::AddAuxiliaryDecision(LogicalDecide &decide, const string &name, const LogicalType &type,
@@ -291,9 +267,8 @@ string decide_rewrite::RenderForPlan(const Expression &expr, const LogicalDecide
 }
 
 idx_t decide_rewrite::SourceClauseOf(const Expression &comparison, const LogicalDecide &decide) {
-	idx_t source_id;
-	if (!TryParseSourceClauseTag(comparison.GetAlias(), source_id) ||
-	    source_id >= decide.bound.constraint_sources.size()) {
+	const idx_t source_id = ClauseOriginOf(comparison).source_clause_id;
+	if (source_id >= decide.bound.constraint_sources.size()) {
 		throw InternalException("DECIDE: a comparison carries no source clause");
 	}
 	return source_id;
@@ -313,13 +288,6 @@ void decide_rewrite::AddRewriteAccount(LogicalDecide &decide, idx_t source_claus
 	account.kind = kind;
 	account.subject = std::move(subject);
 	decide.rewrite_accounts.push_back(std::move(account));
-}
-
-void decide_rewrite::AddRewriteAccount(LogicalDecide &decide, const string &clause_alias,
-                                       LogicalDecide::RewriteAccount::Kind kind, string subject) {
-	idx_t source_clause_id = DConstants::INVALID_INDEX;
-	TryParseSourceClauseTag(clause_alias, source_clause_id);
-	AddRewriteAccount(decide, source_clause_id, kind, std::move(subject));
 }
 
 //! Does `expr` hold a NORM marker anywhere beneath it?
@@ -360,7 +328,7 @@ static void VerifyNormMarkersLowered(LogicalDecide &decide) {
 //!
 //! The value links read a member as a linear form; a square there is dropped without a word and the extremum is of
 //! something else. Definition F-node preparation registers every such body before they run, so a non-linear member
-//! here is a body the tree preparation missed. The cheap half of a MIN/MAX (MINMAX_EASY_REWRITE_TAG) bounds each
+//! here is a body the tree preparation missed. The cheap half of a MIN/MAX (an easy MIN/MAX row) bounds each
 //! member in its own quadratic row and is exempt.
 static void VerifyExtremumBodiesLinear(ClientContext &context, LogicalDecide &decide) {
 	DecideTermSplitter splitter(context, decide);
@@ -403,9 +371,9 @@ void DecideOptimizer::TagAtomicRemovalGroups(LogicalDecide &decide) {
 		}
 		idx_t group = group_of_clause.emplace(clause, next_group).first->second;
 		next_group = std::max(next_group, group + 1);
-		auto alias = node.GetAlias();
-		AddDecideTag(alias, MakeRemovalGroupTag(group));
-		node.SetAlias(std::move(alias));
+		DecideRowOrigin removal_group;
+		removal_group.removal_group_id = group;
+		StampClauseOrigin(node, removal_group);
 	});
 }
 
@@ -419,31 +387,24 @@ void DecideOptimizer::TagAtomicRemovalGroups(LogicalDecide &decide) {
 
 //! A TRUE placeholder standing where a lifted clause used to be.
 //!
-//! `source_alias` is the alias of the clause it replaces. Carrying the clause id onto
+//! `origin` is the origin of the clause it replaces. Carrying the clause id onto
 //! the placeholder is what lets EXPLAIN keep the clause in the position it was written:
 //! the constraint tree is the only record of written order, and a lifted clause that
 //! left an anonymous `true` behind was indistinguishable from a clause that never
 //! existed, so it sorted to the end of the plan.
-unique_ptr<Expression> decide_rewrite::MakeTrueExpression(const string &source_alias) {
+unique_ptr<Expression> decide_rewrite::MakeTrueExpression(const DecideRowOrigin &origin) {
 	auto placeholder = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
-	CopyClauseProvenanceTags(source_alias, *placeholder);
+	StampClauseOrigin(*placeholder, origin);
 	return placeholder;
 }
 
 unique_ptr<Expression> decide_rewrite::ScopeHelperRow(unique_ptr<Expression> row, const Expression *when) {
-	if (!when) {
-		return row;
-	}
-	auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-	wrapper->children.push_back(std::move(row));
-	wrapper->children.push_back(when->Copy());
-	wrapper->alias = WHEN_FILTER_TAG;
-	return std::move(wrapper);
+	return MakeScopedRow(std::move(row), when ? when->Copy() : nullptr);
 }
 
 unique_ptr<Expression> decide_rewrite::ScopeRowPerClause(ClientContext &context, LogicalDecide &decide,
                                                          unique_ptr<Expression> row, const DecideEnclosingScope &scope,
-                                                         const string &source_alias) {
+                                                         const DecideRowOrigin &origin) {
 	if (!scope.per_wrapper) {
 		return ScopeHelperRow(std::move(row), scope.Condition());
 	}
@@ -452,29 +413,23 @@ unique_ptr<Expression> decide_rewrite::ScopeRowPerClause(ClientContext &context,
 	canonicalizer.frames = &decide.bound.frames;
 	vector<DecideSignatureField> fields;
 	canonicalizer.CollectSignatureFields(*row, scope.PerKey(), fields);
-	row = ScopeHelperRow(std::move(row), scope.Condition());
-	// The wrapper holds its clause only, its key is in the tag (DecideConstraintsBinder).
-	auto wrapper = make_uniq<BoundConjunctionExpression>(scope.per_wrapper->type);
-	auto alias = scope.per_wrapper->GetAlias();
-	idx_t written;
-	string text = "per " + DecideKeyText(decide.bound.keys, scope.PerKey());
-	if (TryParseSignatureTag(alias, written)) {
-		text = decide.bound.signatures[written].text;
-		RemoveDecideTag(alias, MakeSignatureTag(written));
-	}
+	// The wrapper holds its clause only and names its key (DecideConstraintsBinder).
+	DecideRowPer per;
+	per.key = scope.PerKey();
 	if (!fields.empty()) {
+		const idx_t written = PerWrapperSignature(*scope.per_wrapper);
 		DecideSignature signature;
 		signature.rows = scope.Condition() ? scope.Condition()->Copy() : nullptr;
 		signature.key = scope.PerKey();
 		signature.fields = std::move(fields);
-		signature.text = std::move(text);
-		TryParseSourceClauseTag(source_alias, signature.source_clause_id);
+		signature.text = written != DConstants::INVALID_INDEX
+		                     ? decide.bound.signatures[written].text
+		                     : "per " + DecideKeyText(decide.bound.keys, scope.PerKey());
+		signature.source_clause_id = origin.source_clause_id;
 		decide.bound.signatures.push_back(std::move(signature));
-		AddDecideTag(alias, MakeSignatureTag(decide.bound.signatures.size() - 1));
+		per.signature = decide.bound.signatures.size() - 1;
 	}
-	wrapper->alias = std::move(alias);
-	wrapper->children.push_back(std::move(row));
-	return std::move(wrapper);
+	return MakeScopedRow(std::move(row), scope.Condition() ? scope.Condition()->Copy() : nullptr, &per);
 }
 
 unique_ptr<Expression> decide_rewrite::ScopeRowPerInstance(const LogicalDecide &decide, unique_ptr<Expression> row,
@@ -491,13 +446,11 @@ unique_ptr<Expression> decide_rewrite::ScopeRowPerInstance(const LogicalDecide &
 			return row;
 		}
 	}
-	auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-	wrapper->children.push_back(std::move(row));
-	wrapper->alias = PER_CLASS_TAG;
+	DecideRowPer per;
 	if (scope.IsKeyed()) {
-		AddDecideTag(wrapper->alias, MakePerKeyTag(decide.bound.keyed_scopes[scope.keyed_scope_idx].key));
+		per.key = decide.bound.keyed_scopes[scope.keyed_scope_idx].key;
 	}
-	return std::move(wrapper);
+	return MakeScopedRow(std::move(row), nullptr, &per);
 }
 
 void decide_rewrite::WalkPolarity(ClientContext &context, const BooleanDecisions &booleans,

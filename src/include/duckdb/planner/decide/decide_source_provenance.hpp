@@ -190,7 +190,7 @@ struct DecideClauseLayers {
 //! rows, and `function_rows` (CollectDecideFunctionRows) follow the rows of the constraint list, each behind the
 //! qualifier its clause was written with; the objective's (INVALID_INDEX), behind `objective_qualifier`
 //! (DecideObjectiveQualifier), are left to RenderDecideObjectiveLayers, and so are the rows a rewrite added for the
-//! objective (OBJECTIVE_ROW_TAG), returned in `objective_rows`.
+//! objective (DecideRowOrigin::objective), returned in `objective_rows`.
 vector<DecideClauseLayers> CollectDecideClauseLayers(const Expression &constraints, const DecideSourceNames &names,
                                                      const vector<ConstraintSourceInfo> &sources,
                                                      vector<string> &unattributed, vector<string> &objective_rows,

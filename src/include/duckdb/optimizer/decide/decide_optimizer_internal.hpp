@@ -51,21 +51,14 @@ unique_ptr<Expression> BindSumOver(Optimizer &optimizer, unique_ptr<Expression> 
 //! Recognize the binder's `norm` marker alias and return its payload.
 bool TryParseNormMarker(const string &alias, string &payload);
 
-//! Carry only the source clause's id onto `to`: the clause a message about it quotes, with none of the removal or
-//! repair grouping a full copy brings.
-void CopySourceClauseTag(const string &from_alias, Expression &to);
-
-//! Carry a source clause's provenance tags onto an expression a rewrite emitted
-//! in its place, so diagnostics still name the clause the user typed.
-void CopyClauseProvenanceTags(const string &from_alias, Expression &to);
-
 //! Stamp an expression as formulation-generated (a row this layer emitted rather
-//! than one the user wrote), attributed to `source_alias`; a row defining auxiliary `defined` says so
-//! (DEFINES_TAG_PREFIX).
-void MarkFormulationConstraint(Expression &expr, const string &source_alias, idx_t defined = DConstants::INVALID_INDEX);
+//! than one the user wrote), attributed to the clause `origin`, so diagnostics still name the clause the user typed; a
+//! row defining auxiliary `defined` says so (DefinedHelperOf).
+void MarkFormulationConstraint(Expression &expr, const DecideRowOrigin &origin,
+                               idx_t defined = DConstants::INVALID_INDEX);
 
-//! A TRUE placeholder standing in for a clause a rewrite has consumed.
-unique_ptr<Expression> MakeTrueExpression(const string &source_alias);
+//! A TRUE placeholder standing in for the clause `origin`, which a rewrite has consumed.
+unique_ptr<Expression> MakeTrueExpression(const DecideRowOrigin &origin);
 
 //! `row`, which a rewrite adds for a clause, wrapped in a copy of the clause's `when` condition when it has one, so
 //! it reads only the rows the clause keeps.
@@ -75,9 +68,9 @@ unique_ptr<Expression> ScopeHelperRow(unique_ptr<Expression> row, const Expressi
 //! outermost as the binder nests it, so the row stands for the same classes (D28): a row whose key is NULL is in none.
 //! A written clause's variant signature splits its classes by the fields the clause reads (D70), which are not the
 //! fields of a row the rewrite made of it: the row gets the signature of what it reads itself, built as the binder
-//! builds one (none when it reads no field, so one instance per class). `source_alias` names the clause.
+//! builds one (none when it reads no field, so one instance per class). `origin` names the clause.
 unique_ptr<Expression> ScopeRowPerClause(ClientContext &context, LogicalDecide &decide, unique_ptr<Expression> row,
-                                         const DecideEnclosingScope &scope, const string &source_alias);
+                                         const DecideEnclosingScope &scope, const DecideRowOrigin &origin);
 
 //! `row` once per instance of `scope`: under `per K:` for a scope keyed by K, under `per ():` for a query-wide one,
 //! and as it is for one per row or for a range frame's helper, whose windows no key's classes name. A row that reads
@@ -157,8 +150,8 @@ void ReplaceWithDecision(ClientContext &context, const LogicalDecide &decide, id
 //! of an auxiliary decision, the text of a rewrite account.
 string RenderForPlan(const Expression &expr, const LogicalDecide &decide);
 
-//! The id of the source clause a written comparison carries (its `__source_clause_` tag). Every comparison of the
-//! user's constraints is tagged when the binder registers the sources, so a stage-05 refusal quotes its clause
+//! The id of the source clause a written comparison carries (ClauseOriginOf). Every comparison of the
+//! user's constraints is given one when the binder registers the sources, so a stage-05 refusal quotes its clause
 //! through QuoteWrittenClause (qualifier included) rather than rendering the comparison.
 idx_t SourceClauseOf(const Expression &comparison, const LogicalDecide &decide);
 
@@ -171,11 +164,8 @@ void RequireLinearOperand(const DecideTermSplitter &splitter, const Expression &
 
 //! Record what a rewrite made of `subject` (as RenderForPlan prints it), for EXPLAIN
 //! (LogicalDecide::rewrite_accounts): under the clause `source_clause_id`, or the
-//! objective (INVALID_INDEX). The alias form reads the clause id off a clause's alias;
-//! an alias without one is the objective's.
+//! objective (INVALID_INDEX).
 void AddRewriteAccount(LogicalDecide &decide, idx_t source_clause_id, LogicalDecide::RewriteAccount::Kind kind,
-                       string subject);
-void AddRewriteAccount(LogicalDecide &decide, const string &clause_alias, LogicalDecide::RewriteAccount::Kind kind,
                        string subject);
 
 //! The sides a helper decision holding `agg_name` (a reducer, or a range frame's reducer) pushed `push` needs: its

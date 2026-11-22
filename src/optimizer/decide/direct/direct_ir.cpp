@@ -404,8 +404,8 @@ private:
 
 	DirectIRConstraint ReadConstraint(const Expression &leaf, const DecideEnclosingScope &wrappers) const {
 		DirectIRConstraint ir_node;
-		idx_t source_id;
-		if (TryParseSourceClauseTag(leaf.GetAlias(), source_id)) {
+		const idx_t source_id = ClauseOriginOf(leaf).source_clause_id;
+		if (source_id != DConstants::INVALID_INDEX) {
 			D_ASSERT(source_id < decide.constraint_sources.size());
 			ir_node.written = DecideClauseRefOf(decide.bound.constraint_sources, decide.bound.source_text, source_id);
 		} else {

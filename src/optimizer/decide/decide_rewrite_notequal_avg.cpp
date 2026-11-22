@@ -64,7 +64,7 @@ void DecideOptimizer::RewriteNotEqual(LogicalDecide &decide) {
 		// What stage 05 owns is the account: the text to call the clause in a diagnosis,
 		// spelled as the plan prints it. Stage 06 allocates the binaries for the
 		// disjunctions it actually emits, and labels them with the clause.
-		AddRewriteAccount(decide, comp.alias, LogicalDecide::RewriteAccount::Kind::NOT_EQUAL,
+		AddRewriteAccount(decide, ClauseOriginOf(comp).source_clause_id, LogicalDecide::RewriteAccount::Kind::NOT_EQUAL,
 		                  RenderForPlan(comp, decide));
 	});
 }
@@ -78,7 +78,7 @@ void DecideOptimizer::RewriteAvgToSum(LogicalDecide &decide) {
 	// through the boundary.
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
 		if (body.owner == DecideOwnedBody::Owner::CLAUSE || body.owner == DecideOwnedBody::Owner::OBJECTIVE) {
-			RewriteAvgInExpression(body.expr, decide, body.source_alias);
+			RewriteAvgInExpression(body.expr, decide, body.origin);
 		}
 	});
 	auto constraints = std::move(decide.bound.constraints);
@@ -89,12 +89,12 @@ void DecideOptimizer::RewriteAvgToSum(LogicalDecide &decide) {
 }
 
 void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide,
-                                             const string &source_alias) {
+                                             const DecideRowOrigin &inherited) {
 	idx_t definition_aux;
 	if (TryParseDecideIndexTag(expr->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
 		return; // AVG syntax inside this body belongs to the tree F node's definition expression
 	}
-	auto clause_alias = DescendSourceAlias(*expr, source_alias);
+	const auto origin = DescendClauseOrigin(*expr, inherited);
 
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		auto &agg = expr->Cast<BoundAggregateExpression>();
@@ -103,7 +103,7 @@ void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, Logic
 		// aggregate until the frames are lowered (MakeFrameAggregate).
 		if (StringUtil::CIEquals(agg.function.name, "avg") &&
 		    BoundExpressionReferencesDecide(agg, decide.decide_index)) {
-			AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::AVG_SUM,
+			AddRewriteAccount(decide, origin.source_clause_id, LogicalDecide::RewriteAccount::Kind::AVG_SUM,
 			                  RenderForPlan(agg, decide));
 			auto new_sum = BindSumOver(optimizer, agg.children[0]->Copy(), agg.filter.get());
 
@@ -122,7 +122,7 @@ void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, Logic
 	}
 
 	ExpressionIterator::EnumerateChildren(
-	    *expr, [&](unique_ptr<Expression> &child) { RewriteAvgInExpression(child, decide, clause_alias); });
+	    *expr, [&](unique_ptr<Expression> &child) { RewriteAvgInExpression(child, decide, origin); });
 }
 
 } // namespace duckdb

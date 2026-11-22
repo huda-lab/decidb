@@ -1469,8 +1469,7 @@ void DecideCanonicalizer::ValidateCanonicalComparison(const BoundComparisonExpre
 		if (ExpressionExecutor::TryEvaluateScalar(context, *comparison.right, value) && value.IsNull()) {
 			// The bound as the user wrote it where canonicalization left it, else the clause's span.
 			auto &bound = *comparison.right;
-			idx_t source_id = DConstants::INVALID_INDEX;
-			TryParseSourceClauseTag(comparison.GetAlias(), source_id);
+			const idx_t source_id = ClauseOriginOf(comparison).source_clause_id;
 			auto place = bound.GetQueryLocation().IsValid() ? bound.GetQueryLocation()
 			             : sources                          ? DecideClauseLocation(*sources, source_id)
 			                                                : optional_idx();
@@ -1702,16 +1701,14 @@ static void ReportChangedClauses(const Expression &written, const Expression &ca
                                  vector<ConstraintSourceInfo> &sources) {
 	unordered_map<idx_t, const BoundComparisonExpression *> before;
 	ForEachConstraintLeaf(written, [&](const Expression &leaf) {
-		idx_t source_id = DConstants::INVALID_INDEX;
-		if (leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON &&
-		    TryParseSourceClauseTag(leaf.GetAlias(), source_id)) {
+		const idx_t source_id = ClauseOriginOf(leaf).source_clause_id;
+		if (leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON && source_id != DConstants::INVALID_INDEX) {
 			before[source_id] = &leaf.Cast<BoundComparisonExpression>();
 		}
 	});
 	ForEachConstraintLeaf(canonical, [&](const Expression &leaf) {
-		idx_t source_id = DConstants::INVALID_INDEX;
-		if (leaf.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON ||
-		    !TryParseSourceClauseTag(leaf.GetAlias(), source_id) || source_id >= sources.size()) {
+		const idx_t source_id = ClauseOriginOf(leaf).source_clause_id;
+		if (leaf.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON || source_id >= sources.size()) {
 			return;
 		}
 		auto found = before.find(source_id);
@@ -1956,13 +1953,11 @@ void DecideCanonicalizer::BuildConstraintSignatures(Expression &constraints, Dec
 void DecideCanonicalizer::BuildConstraintSignatures(Expression &expr, const Expression *when,
                                                     DecideSignatures &out) const {
 	if (expr.GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
-		idx_t source_clause_id = DConstants::INVALID_INDEX;
-		TryParseSourceClauseTag(expr.GetAlias(), source_clause_id);
 		DecideReducerPath path;
 		if (when) {
 			path.conditions.push_back(when);
 		}
-		SignQualifiedReducers(expr, path, Clause::CONSTRAINT, source_clause_id, out);
+		SignQualifiedReducers(expr, path, Clause::CONSTRAINT, ClauseOriginOf(expr).source_clause_id, out);
 		return;
 	}
 	auto &conj = expr.Cast<BoundConjunctionExpression>();
@@ -1989,7 +1984,7 @@ void DecideCanonicalizer::BuildConstraintSignatures(Expression &expr, const Expr
 		}
 		CollectSignatureFields(leaf, key, fields);
 		if (source_clause_id == DConstants::INVALID_INDEX) {
-			TryParseSourceClauseTag(leaf.GetAlias(), source_clause_id);
+			source_clause_id = ClauseOriginOf(leaf).source_clause_id;
 		}
 	});
 	if (fields.empty()) {
@@ -1997,9 +1992,7 @@ void DecideCanonicalizer::BuildConstraintSignatures(Expression &expr, const Expr
 	}
 	auto key_text = message_names ? RenderDecidePerKey(conj, message_names->text, &keys) : DecideKeyText(keys, key);
 	auto signature = AddSignature(out, rows, key, std::move(fields), "per " + key_text, source_clause_id);
-	auto alias = conj.GetAlias();
-	AddDecideTag(alias, MakeSignatureTag(signature));
-	conj.SetAlias(std::move(alias));
+	SetPerWrapperSignature(conj, signature);
 }
 
 void DecideCanonicalizer::BuildObjectiveSignatures(Expression &objective, DecideSignatures &out) const {

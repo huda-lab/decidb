@@ -911,8 +911,8 @@ private:
 			// tag is the decision, and it was made by FoldSingletonRows. One whose
 			// repair rows come from its clause is flattened aside, for the repair model
 			// alone (singleton_row_constraints).
-			const bool folded = HasDecideTag(written_comp.GetAlias(), SINGLETON_ROW_BOUND_TAG);
-			if (folded && !HasDecideTag(written_comp.GetAlias(), SINGLETON_ROW_CLAUSE_ROWS_TAG)) {
+			const bool folded = IsFoldedBound(written_comp);
+			if (folded && !FoldedBoundKeepsClauseRows(written_comp)) {
 				break;
 			}
 

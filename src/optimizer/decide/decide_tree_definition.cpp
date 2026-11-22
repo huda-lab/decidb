@@ -112,7 +112,7 @@ struct BodySite {
 	//! Whether a MIN or MAX reads this body, so the backend must state MIN/MAX natively: the reducer is one, sits
 	//! inside one, or sits in a constraint that holds one.
 	bool needs_native_extremum;
-	string source_alias;
+	DecideRowOrigin origin;
 	DecideEnclosingScope scope;
 };
 
@@ -137,12 +137,12 @@ void CollectReducerSigns(ClientContext &context, const BooleanDecisions &boolean
 //! the polarity walk did not reach (`signs`) is pushed neither way.
 void CollectBodySites(Expression &expr, idx_t decide_index, const DecideTermSplitter &splitter, bool sums,
                       bool extremum_clause, bool under_extremum, ExtremumPush outer,
-                      const unordered_map<const Expression *, int> &signs, const string &source_alias,
+                      const unordered_map<const Expression *, int> &signs, const DecideRowOrigin &origin,
                       const DecideEnclosingScope &scope, vector<BodySite> &sites) {
 	if (!AsDecisionReducer(expr, decide_index)) {
 		ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) {
-			CollectBodySites(child, decide_index, splitter, sums, extremum_clause, under_extremum, outer, signs,
-			                 source_alias, scope, sites);
+			CollectBodySites(child, decide_index, splitter, sums, extremum_clause, under_extremum, outer, signs, origin,
+			                 scope, sites);
 		});
 		return;
 	}
@@ -150,8 +150,8 @@ void CollectBodySites(Expression &expr, idx_t decide_index, const DecideTermSpli
 	const bool is_extremum = IsExtremumName(StringUtil::Lower(reducer.function.name));
 	auto &body = *reducer.children[0];
 	if (HoldsReducer(body, decide_index, false)) {
-		CollectBodySites(body, decide_index, splitter, sums, extremum_clause, is_extremum, outer, signs, source_alias,
-		                 scope, sites);
+		CollectBodySites(body, decide_index, splitter, sums, extremum_clause, is_extremum, outer, signs, origin, scope,
+		                 sites);
 		return;
 	}
 	if (splitter.IsLinear(body) || (!is_extremum && !sums && !under_extremum)) {
@@ -160,7 +160,7 @@ void CollectBodySites(Expression &expr, idx_t decide_index, const DecideTermSpli
 	auto sign = signs.find(&expr);
 	const auto push = sign == signs.end() ? ExtremumPush::NONE : ExtremumPushOf(outer, sign->second);
 	sites.push_back({&reducer, push, !is_extremum && !under_extremum, is_extremum || under_extremum || extremum_clause,
-	                 source_alias, scope});
+	                 origin, scope});
 }
 
 //! Copies of one reducer under one `when`: they share a helper.
@@ -218,7 +218,7 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 			auto &comparison = expr.Cast<BoundComparisonExpression>();
 			// A MIN or MAX pushed its cheap way (`max(q) <= K`, RewriteMinMax) bounds each member: one quadratic row
 			// per member, and no helper.
-			if (HasDecideTag(comparison.alias, MINMAX_EASY_REWRITE_TAG)) {
+			if (IsEasyMinMaxRow(comparison)) {
 				return;
 			}
 			// Read as `LHS - RHS <op> 0`: the relation pushes the whole expression.
@@ -227,15 +227,15 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 			CollectReducerSigns(context, booleans, comparison.right, -1, signs);
 			const auto outer = ExtremumPushOf(comparison.type);
 			CollectBodySites(*comparison.left, decide_index, splitter, true, extremum_clause, false, outer, signs,
-			                 body.source_alias, body.scope, sites);
+			                 body.origin, body.scope, sites);
 			CollectBodySites(*comparison.right, decide_index, splitter, true, extremum_clause, false, outer, signs,
-			                 body.source_alias, body.scope, sites);
+			                 body.origin, body.scope, sites);
 		} else if (body.owner == DecideOwnedBody::Owner::OBJECTIVE && HoldsReducer(*body.expr, decide_index, true)) {
 			unordered_map<const Expression *, int> signs;
 			CollectReducerSigns(context, booleans, body.expr, 1, signs);
 			const idx_t before = sites.size();
 			CollectBodySites(*body.expr, decide_index, splitter, false, false, false, ExtremumPush::DOWN, signs,
-			                 body.source_alias, body.scope, sites);
+			                 body.origin, body.scope, sites);
 			objective_defined = sites.size() > before;
 		}
 	});
@@ -290,14 +290,13 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 		decide.signed_helper_vars.push_back(helper);
 		// Each clause that reads the helper says so in its own plan, once.
 		const auto kind = equal ? Kind::BODY_EQUAL : down ? Kind::BODY_AT_LEAST : Kind::BODY_AT_MOST;
-		vector<string> told;
+		vector<std::pair<idx_t, bool>> told;
 		for (auto member : members) {
-			auto &alias = sites[member].source_alias;
-			idx_t clause = DConstants::INVALID_INDEX;
-			const string key = TryParseSourceClauseTag(alias, clause) ? to_string(clause) : alias;
+			auto &origin = sites[member].origin;
+			const auto key = std::make_pair(origin.source_clause_id, origin.objective);
 			if (std::find(told.begin(), told.end(), key) == told.end()) {
 				told.push_back(key);
-				AddRewriteAccount(decide, alias, kind, body_text);
+				AddRewriteAccount(decide, origin.source_clause_id, kind, body_text);
 			}
 		}
 
@@ -312,16 +311,14 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 		definition.condition = condition ? condition->Copy() : nullptr;
 		// A message about the row quotes the first clause that reads the helper. Only that id is kept: the row is
 		// shared by every clause that reads the helper, so it joins none of their removal groups.
-		TryParseSourceClauseTag(first.source_alias, definition.source_clause_id);
+		definition.source_clause_id = first.origin.source_clause_id;
 		decide.definition_functions.push_back(std::move(definition));
 		// Tree construction owns the function's row. This placeholder keeps its former clause-list position for
 		// EXPLAIN and source ordering until that tree attaches the row below the F node.
 		auto placeholder = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
-		auto alias = placeholder->GetAlias();
-		AddDecideTag(alias, STRUCTURAL_CONSTRAINT_TAG);
-		AddDecideTag(alias, MakeDefinesTag(helper));
-		AddDecideTag(alias, BODY_DEFINITION_TAG);
-		placeholder->SetAlias(std::move(alias));
+		MarkStructuralRow(*placeholder);
+		SetDefinedHelper(*placeholder, helper);
+		AddDecideTag(placeholder->alias, BODY_DEFINITION_TAG);
 		rows.push_back(std::move(placeholder));
 
 		for (auto member : members) {

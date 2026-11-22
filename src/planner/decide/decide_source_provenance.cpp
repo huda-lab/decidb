@@ -400,7 +400,7 @@ static bool QuoteSpan(const Expression &expr, const RenderContext &ctx, string &
 		return false;
 	}
 	// The two comparisons a BETWEEN binds to carry its location, but each is half of its value, not the whole.
-	if (HasDecideTag(expr.GetAlias(), BETWEEN_LOWER_TAG) || HasDecideTag(expr.GetAlias(), BETWEEN_UPPER_TAG)) {
+	if (BetweenHalfOf(expr) != DecideBetweenHalf::NONE) {
 		return false;
 	}
 	if (!ctx.written && BoundExpressionReferencesDecide(expr, ctx.decide_index)) {
@@ -550,8 +550,8 @@ string RenderDecidePerKey(const BoundConjunctionExpression &conj, const DecideSo
 	}
 	// A wrapper the optimizer built, or one of a statement with no source text, names the key as it was first written;
 	// `per ()` names none.
-	idx_t key;
-	if (!TryParsePerKeyTag(conj.GetAlias(), key)) {
+	const idx_t key = PerWrapperKey(conj);
+	if (key == DConstants::INVALID_INDEX) {
 		return "()";
 	}
 	D_ASSERT(keys);
@@ -670,11 +670,8 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 	VisitSourceComparisons(constraints, ctx, DecideEnclosingScope(),
 	                       [&](BoundComparisonExpression &cmp, const string &qualifier) {
 		                       idx_t source_id = result.size();
-		                       bool between_lower = HasDecideTag(cmp.GetAlias(), BETWEEN_LOWER_TAG);
-		                       bool between_upper = HasDecideTag(cmp.GetAlias(), BETWEEN_UPPER_TAG);
-		                       auto alias = cmp.GetAlias();
-		                       AddDecideTag(alias, MakeSourceClauseTag(source_id));
-		                       cmp.SetAlias(std::move(alias));
+		                       const auto between_half = BetweenHalfOf(cmp);
+		                       StampClauseOrigin(cmp, DecideRowOrigin::OfClause(source_id));
 		                       // The last point at which the clause is as written: whether canonicalization has to
 		                       // merge the sides. That is the one rewrite that leaves algebra the user cannot
 		                       // recognize, when BOTH sides bear decisions: `ship <= capacity * open`
@@ -695,9 +692,9 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 			                       info.source_rhs = RenderSource(*cmp.right, ctx);
 			                       info.source_rhs_reads_data = ReadsRowData(*cmp.right, decide_index);
 		                       }
-		                       if (between_lower) {
+		                       if (between_half == DecideBetweenHalf::LOWER) {
 			                       lower_half = source_id;
-		                       } else if (between_upper) {
+		                       } else if (between_half == DecideBetweenHalf::UPPER) {
 			                       if (lower_half == DConstants::INVALID_INDEX) {
 				                       throw InternalException("DECIDE: the upper half of a BETWEEN came without "
 				                                               "its lower half; the binder emits them in order");
@@ -712,9 +709,7 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 	// indicator/linking row can still point back to the original SQL clause.
 	VisitSourceInOperators(constraints, [&](Expression &in) {
 		idx_t source_id = result.size();
-		auto alias = in.GetAlias();
-		AddDecideTag(alias, MakeSourceClauseTag(source_id));
-		in.SetAlias(std::move(alias));
+		StampClauseOrigin(in, DecideRowOrigin::OfClause(source_id));
 		ConstraintSourceInfo info;
 		info.location = in.GetQueryLocation();
 		info.canonical_lhs = RenderSource(in, ctx);
@@ -750,8 +745,7 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 	VisitSourceComparisons(
 	    mutable_constraints, ctx, DecideEnclosingScope(), [&](BoundComparisonExpression &cmp, const string &) {
 		    // InitializeConstraintSourceInfo tagged every comparison of the clause tree.
-		    idx_t source_id = DConstants::INVALID_INDEX;
-		    TryParseSourceClauseTag(cmp.GetAlias(), source_id);
+		    const idx_t source_id = ClauseOriginOf(cmp).source_clause_id;
 		    if (source_id >= sources.size()) {
 			    throw InternalException("DECIDE: a comparison reached the clause registry without its clause tag; "
 			                            "InitializeConstraintSourceInfo tags every comparison of the tree");
@@ -791,7 +785,7 @@ DecideSourceNames DecidePlanNames(const DecideSourceText &text, const vector<Key
 }
 
 //! The source id CollectExpressionStrings reports for a row a rewrite added for the
-//! objective (OBJECTIVE_ROW_TAG): no clause's, and not INVALID_INDEX, which is a row no
+//! objective (DecideRowOrigin::objective): no clause's, and not INVALID_INDEX, which is a row no
 //! one claims.
 static constexpr idx_t OBJECTIVE_ROW_SOURCE_ID = DConstants::INVALID_INDEX - 1;
 
@@ -847,11 +841,11 @@ static void CollectExpressionStrings(const Expression &expr, const DecideSourceN
 		}
 		return;
 	}
-	// The clause a row came from: its tag, or the objective's for a row a rewrite added for it.
-	idx_t leaf_source_id = DConstants::INVALID_INDEX;
-	if (!TryParseSourceClauseTag(expr.GetAlias(), leaf_source_id) && HasDecideTag(expr.GetAlias(), OBJECTIVE_ROW_TAG)) {
-		leaf_source_id = OBJECTIVE_ROW_SOURCE_ID;
-	}
+	// The clause a row came from: its source clause, or the objective's for a row a rewrite added for it.
+	const auto origin = ClauseOriginOf(expr);
+	const idx_t leaf_source_id = origin.source_clause_id == DConstants::INVALID_INDEX && origin.objective
+	                                 ? OBJECTIVE_ROW_SOURCE_ID
+	                                 : origin.source_clause_id;
 	// A defined body's row restates the body the reducer already prints; the account line says how it is held.
 	if (IsTruePlaceholder(expr) || HasDecideTag(expr.GetAlias(), BODY_DEFINITION_TAG)) {
 		// Emitted as an empty string rather than dropped: the placeholder is the only

@@ -273,9 +273,7 @@ duckdb::unique_ptr<Expression> TaggedRow(idx_t source_id, int64_t n) {
 	auto row = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO,
 	                                                make_uniq<BoundConstantExpression>(Value::BIGINT(n)),
 	                                                make_uniq<BoundConstantExpression>(Value::BIGINT(n + 1)));
-	if (source_id != DConstants::INVALID_INDEX) {
-		row->alias = MakeSourceClauseTag(source_id);
-	}
+	StampClauseOrigin(*row, DecideRowOrigin::OfClause(source_id));
 	return std::move(row);
 }
 

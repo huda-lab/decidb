@@ -129,7 +129,7 @@ struct DecideClauseScope {
 		if (enclosing.per_wrapper) {
 			per = PerRole::NAMES_CLASSES;
 			class_key = enclosing.PerKey();
-			TryParseSignatureTag(enclosing.per_wrapper->GetAlias(), signature);
+			signature = PerWrapperSignature(*enclosing.per_wrapper);
 		}
 	}
 };
@@ -144,11 +144,11 @@ struct DecideConstraint {
 	bool tightest_frame_bound = false;
 	ExpressionType comparison_type; // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
 	bool lhs_is_aggregate = false;  // True if original LHS was an aggregate (e.g., SUM(...))
-	bool was_minmax_easy = false;   // An easy-direction MIN/MAX kept its reducer (MINMAX_EASY_REWRITE_TAG): one row per
+	bool was_minmax_easy = false;   // An easy-direction MIN/MAX kept its reducer (IsEasyMinMaxRow): one row per
 	                                // member, the bound reduced over each `by` group.
 	idx_t abs_aux_idx = DConstants::INVALID_INDEX; // ABS auxiliary this envelope row bounds
 	bool abs_is_pos_bound = false;                 // true=C1 (aux >= inner), false=C2 (aux >= -inner)
-	//! The auxiliary this row defines (DEFINES_TAG_PREFIX): it has no value on a row where the decisions the row reads
+	//! The auxiliary this row defines (DefinedHelperOf): it has no value on a row where the decisions the row reads
 	//! beside it have none (D88). INVALID_INDEX for every other row.
 	idx_t defined_var = DConstants::INVALID_INDEX;
 	//! The clause's `when` and `per`.

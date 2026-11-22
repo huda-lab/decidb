@@ -350,8 +350,8 @@ inline string MakeDefinesTag(idx_t var_idx) {
 }
 
 //! Tag marking a row a rewrite added for the objective (an ABS envelope, a product's
-//! corner rows, an L0 link), which no clause owns: the rewrites start the objective's
-//! walk with it as the source alias, and EXPLAIN prints such rows under the objective.
+//! corner rows, an L0 link), which no clause owns (DecideRowOrigin::objective): the rewrites start the
+//! objective's walk with that origin, and EXPLAIN prints such rows under the objective.
 static constexpr const char *OBJECTIVE_ROW_TAG = "__objective_row__";
 
 //! Tag on the placeholder coefficient of an automatic L0 link (`norm(e, 0)` with no

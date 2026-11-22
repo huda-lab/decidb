@@ -221,13 +221,11 @@ static AbsExactSet FindExactAbs(ClientContext &context, LogicalDecide &decide) {
 //! The clause an ABS was written in, or the objective: what a message about a number computed from the ABS' argument
 //! points at (DecideWrittenClause on the solver path). An ABS in a body that belongs to no one clause (a reducer value
 //! helper's, shared by every clause that reads it; a definition's) is a constraint of no place.
-static DecideClauseRef AbsWrittenClause(const LogicalDecide &decide, const string &clause_alias) {
-	idx_t source_clause_id;
-	if (TryParseSourceClauseTag(clause_alias, source_clause_id) &&
-	    source_clause_id < decide.bound.constraint_sources.size()) {
-		return DecideClauseRefOf(decide.bound.constraint_sources, decide.bound.source_text, source_clause_id);
+static DecideClauseRef AbsWrittenClause(const LogicalDecide &decide, const DecideRowOrigin &origin) {
+	if (origin.source_clause_id < decide.bound.constraint_sources.size()) {
+		return DecideClauseRefOf(decide.bound.constraint_sources, decide.bound.source_text, origin.source_clause_id);
 	}
-	if (HasDecideTag(clause_alias, OBJECTIVE_ROW_TAG)) {
+	if (origin.objective) {
 		return DecideClauseRefOf(decide.bound.constraint_sources, decide.bound.source_text, DConstants::INVALID_INDEX);
 	}
 	return DecideClauseRef();
@@ -305,7 +303,7 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	// Find ABS(expr) nodes over decide vars and allocate their helper variables. Keep the function expressions in the
 	// user's clauses; the tree owns their value through an F node, and term extraction resolves the tagged function to
 	// the already allocated helper column. Each ABS is recorded (LogicalDecide::abs_functions) with its operand
-	// (RecordAbsOperands), the clause it was written in (the objective's rows carry OBJECTIVE_ROW_TAG) and whether it
+	// (RecordAbsOperands), the clause it was written in (or the objective, DecideRowOrigin::objective) and whether it
 	// needs the exact encoding.
 	//
 	// This is the whole of stage 05's part. The lower envelope
@@ -335,14 +333,14 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	// clause.
 	struct Revisit {
 		unique_ptr<Expression> *slot;
-		string source_alias;
+		DecideRowOrigin origin;
 	};
 	vector<Revisit> worklist;
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
 		const auto helpers_before = decide.abs_functions.size();
-		FindAbsAndAllocateAux(body.expr, decide, canonicalizer, exact, body.source_alias, body.rows);
+		FindAbsAndAllocateAux(body.expr, decide, canonicalizer, exact, body.origin, body.rows);
 		if (decide.abs_functions.size() != helpers_before && BilinearReadsBody(decide, body)) {
-			worklist.push_back({&body.expr, body.source_alias});
+			worklist.push_back({&body.expr, body.origin});
 		}
 	});
 	// Worklist, as LLVM's InstCombine revisits the users of a value it changed: a body whose ABS just got its helper
@@ -350,7 +348,7 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	// until the helper existed. The bodies go in the order found, so the columns the products add follow every ABS
 	// helper. The pass tags and records only: the objective is not reinstalled.
 	for (auto &revisit : worklist) {
-		FindAndReplaceBilinear(*revisit.slot, decide, revisit.source_alias);
+		FindAndReplaceBilinear(*revisit.slot, decide, revisit.origin);
 	}
 	// The rows of an ABS state its operand as a linear form (EmitAbsEnvelopes, EmitAbsConstraints). A product with a
 	// BOOL factor is linear once the bilinear entry has tagged it, which for a product with an ABS factor happens just
@@ -381,17 +379,17 @@ unique_ptr<Expression> decide_rewrite::MakeAbsRow(ClientContext &context, const 
 	    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 	    make_uniq<BoundColumnRefExpression>(aux.alias, aux.return_type, aux.binding), std::move(bound));
 	AddDecideTag(row->alias, negated ? MakeAbsFunctionNegTag(function.aux_idx) : MakeAbsFunctionTag(function.aux_idx));
-	MarkFormulationConstraint(*row, function.source_alias, function.aux_idx);
+	MarkFormulationConstraint(*row, function.origin, function.aux_idx);
 	return ScopeRowPerInstance(decide, ScopeHelperRow(std::move(row), function.when.get()), function.scope);
 }
 
 void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                             const DecideCanonicalizer &canonicalizer, const AbsExactSet &exact,
-                                            const string &source_alias, const Expression *rows) {
+                                            const DecideRowOrigin &inherited, const Expression *rows) {
 	if (!expr) {
 		return;
 	}
-	auto clause_alias = DescendSourceAlias(*expr, source_alias);
+	const auto origin = DescendClauseOrigin(*expr, inherited);
 	idx_t definition_aux;
 	if (TryParseDecideIndexTag(expr->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
 		return; // its body is visited through DefinitionFunction metadata below
@@ -427,7 +425,7 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 		// Innermost first: an ABS inside this one gets its helper first. The copied
 		// operand retains that tagged function, which term extraction resolves to the
 		// inner helper before building this function's envelope rows.
-		FindAbsAndAllocateAux(func.children[0], decide, canonicalizer, exact, clause_alias, rows);
+		FindAbsAndAllocateAux(func.children[0], decide, canonicalizer, exact, origin, rows);
 
 		// A column defined by its argument: one per instance of the scopes the argument reads.
 		auto aux_scope = ScopeOf(decide, canonicalizer, *func.children[0]);
@@ -442,17 +440,18 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 		// The rows the ABS is read on: its row, and the check of its values, are made for those only.
 		auto read_rows = rows ? rows->Copy() : nullptr;
 		AddAbsValueCheck(optimizer.context, decide, *func.children[0], read_rows.get(),
-		                 AbsWrittenClause(decide, clause_alias));
+		                 AbsWrittenClause(decide, origin));
 
 		// Record the ABS: the F node reads its operand, which RecordAbsOperands records once the bodies are final, and
 		// stage 06 its encoding.
-		AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::HELPER, std::move(label));
+		AddRewriteAccount(decide, origin.source_clause_id, LogicalDecide::RewriteAccount::Kind::HELPER,
+		                  std::move(label));
 		LogicalDecide::AbsFunction function;
 		function.aux_idx = aux_idx;
 		function.exact = needs_exact;
 		function.when = std::move(read_rows);
 		function.scope = aux_scope;
-		function.source_alias = clause_alias;
+		function.origin = origin;
 		function.written =
 		    RenderDecideSource(func, decide.bound.source_text, decide.bound.keyed_scopes, &decide.bound.keys);
 		decide.abs_functions.push_back(std::move(function));
@@ -464,7 +463,7 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 	}
 
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		FindAbsAndAllocateAux(child, decide, canonicalizer, exact, clause_alias, rows);
+		FindAbsAndAllocateAux(child, decide, canonicalizer, exact, origin, rows);
 	});
 }
 

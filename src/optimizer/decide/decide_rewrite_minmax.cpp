@@ -45,7 +45,7 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 // A MIN or MAX over decisions is a helper decision (RewriteScopedReducers) with one side of its definition, the side
 // its reader pushes it against (the epigraph auxiliary, Plaisted-Greenbaum). One identity is applied before that,
 // because it is no route but a rewrite to other clauses: `max(e) <= K` holds when every member `e <= K` does, and
-// `min(e) >= K` the mirror, so the clause keeps its reducer, tagged (MINMAX_EASY_REWRITE_TAG), and the linear form
+// `min(e) >= K` the mirror, so the clause keeps its reducer, marked (MarkEasyMinMaxRow), and the linear form
 // states one row per member, which bound absorption folds into the column's box (D41). An equality is the pair of its
 // two relations, as BETWEEN is: the easy one by this identity, the other left in place for the helper.
 //
@@ -118,8 +118,8 @@ void DecideOptimizer::RewriteMinMaxInClause(unique_ptr<Expression> &expr, Logica
 	if (!is_easy && cmp_type != ExpressionType::COMPARE_EQUAL) {
 		return;
 	}
-	AddRewriteAccount(decide, comp.alias, LogicalDecide::RewriteAccount::Kind::EXTREMUM_EACH_MEMBER,
-	                  RenderForPlan(agg, decide));
+	AddRewriteAccount(decide, ClauseOriginOf(comp).source_clause_id,
+	                  LogicalDecide::RewriteAccount::Kind::EXTREMUM_EACH_MEMBER, RenderForPlan(agg, decide));
 
 	if (cmp_type == ExpressionType::COMPARE_EQUAL) {
 		// MAX(expr) = K is (expr <= K) AND (MAX(expr) >= K), and MIN(expr) = K is (expr >= K) AND (MIN(expr) <= K). A
@@ -136,17 +136,17 @@ void DecideOptimizer::RewriteMinMaxInClause(unique_ptr<Expression> &expr, Logica
 		unique_ptr<Expression> easy =
 		    make_uniq<BoundComparisonExpression>(easy_cmp_type, comp.left->Copy(), comp.right->Copy());
 		easy->alias = comp.alias;
-		AddDecideTag(easy->alias, MINMAX_EASY_REWRITE_TAG);
+		MarkEasyMinMaxRow(*easy);
 		// The clause's own `per K:` stands outermost: the easy half stands for the same classes (D28) and prints in
 		// front as written.
-		easy = ScopeRowPerClause(optimizer.context, decide, std::move(easy), scope, comp.alias);
+		easy = ScopeRowPerClause(optimizer.context, decide, std::move(easy), scope, ClauseOriginOf(comp));
 		new_constraints.push_back(std::move(easy));
 		comp.type = other_cmp_type;
 		return;
 	}
 	// The reducer stays: the linear form bounds each member (its `when` chooses the members, its `by` the rows the
 	// bound is reduced over); bound absorption folds a bare `max(x) <= K` into the column box (D41).
-	AddDecideTag(comp.alias, MINMAX_EASY_REWRITE_TAG);
+	MarkEasyMinMaxRow(comp);
 }
 
 } // namespace duckdb

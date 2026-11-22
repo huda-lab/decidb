@@ -5,6 +5,7 @@
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
+#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
@@ -74,32 +75,23 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 	}
 
 	SECTION("WHEN wrapper arity is structural") {
-		auto wrapped = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		wrapped->SetAlias(WHEN_FILTER_TAG);
-		wrapped->children.push_back(
+		auto wrapped = MakeWhenWrapperWithoutCondition(
 		    Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO, DecideRef(0), DoubleConstant(5)));
 		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(*wrapped));
 	}
 
 	SECTION("WHEN wrapper remains structural with composable metadata") {
-		auto wrapped = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		string alias = WHEN_FILTER_TAG;
-		AddDecideTag(alias, MakeSourceClauseTag(0));
-		wrapped->SetAlias(std::move(alias));
-		wrapped->children.push_back(
-		    Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO, DecideRef(0), DoubleConstant(5)));
-		wrapped->children.push_back(make_uniq<BoundConstantExpression>(Value::BOOLEAN(true)));
+		auto wrapped =
+		    MakeScopedRow(Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO, DecideRef(0), DoubleConstant(5)),
+		                  make_uniq<BoundConstantExpression>(Value::BOOLEAN(true)));
+		StampClauseOrigin(*wrapped, DecideRowOrigin::OfClause(0));
 		auto canonical = canonicalizer.CanonicalizeTree(*wrapped);
 		REQUIRE_NOTHROW(canonicalizer.VerifyCanonical(*canonical));
 	}
 
 	// C0's scope rule: every walk that carries a clause's enclosing scope reads one `when` and one `per` per clause.
 	auto when_wrapper = [&](duckdb::unique_ptr<Expression> constraint) {
-		auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		wrapper->SetAlias(WHEN_FILTER_TAG);
-		wrapper->children.push_back(std::move(constraint));
-		wrapper->children.push_back(make_uniq<BoundConstantExpression>(Value::BOOLEAN(true)));
-		return wrapper;
+		return MakeScopedRow(std::move(constraint), make_uniq<BoundConstantExpression>(Value::BOOLEAN(true)));
 	};
 	auto bound_on_x = [&]() {
 		return canonicalizer.CanonicalizeTree(
@@ -110,9 +102,8 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 		auto both = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 		both->children.push_back(bound_on_x());
 		both->children.push_back(bound_on_x());
-		auto per = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		per->SetAlias(PER_CLASS_TAG);
-		per->children.push_back(std::move(both));
+		const DecideRowPer per_all;
+		auto per = MakeScopedRow(std::move(both), nullptr, &per_all);
 		REQUIRE_THROWS_AS(canonicalizer.VerifyCanonical(*per), InternalException);
 	}
 
@@ -122,9 +113,8 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 	}
 
 	SECTION("a WHEN inside a per wrapper is one scope") {
-		auto per = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		per->SetAlias(PER_CLASS_TAG);
-		per->children.push_back(when_wrapper(bound_on_x()));
+		const DecideRowPer per_all;
+		auto per = MakeScopedRow(bound_on_x(), make_uniq<BoundConstantExpression>(Value::BOOLEAN(true)), &per_all);
 		REQUIRE_NOTHROW(canonicalizer.VerifyCanonical(*per));
 	}
 

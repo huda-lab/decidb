@@ -309,9 +309,9 @@ struct DecideOwnedBody {
 	//! `kept_rows` when the owner keeps two conditions (a link's `when` and its own filter).
 	const Expression *rows = nullptr;
 	unique_ptr<Expression> kept_rows;
-	//! The alias of the clause the body was written in (the source clause's, or OBJECTIVE_ROW_TAG), which every row
-	//! made of it carries on to a message. A body with no clause of its own (a helper's) has none of the two.
-	string source_alias;
+	//! The clause the body was written in (the source clause, or the objective), which every row made of it carries on
+	//! to a message. A body with no clause of its own (a helper's) has none of the two.
+	DecideRowOrigin origin;
 	//! The `when` and `per` wrappers around a clause or the objective; none for the other owners.
 	DecideEnclosingScope scope;
 };
@@ -487,9 +487,9 @@ public:
 		unique_ptr<Expression> when;
 		//! The auxiliary's scope (ScopeOf its operand): the rows are stated once per instance of it.
 		DecideVarScopeInfo scope;
-		//! The alias of the clause the ABS was written in (the objective's carries OBJECTIVE_ROW_TAG), whose provenance
-		//! the rows it makes carry to EXPLAIN and diagnostics.
-		string source_alias;
+		//! The clause the ABS was written in (or the objective), which the rows it makes carry to EXPLAIN and
+		//! diagnostics.
+		DecideRowOrigin origin;
 		//! The ABS as the user wrote it (RenderDecideSource), for a message that points at it.
 		string written;
 	};
@@ -598,7 +598,7 @@ public:
 
 	//! A user-written simple bound that was folded into a decision column's box instead
 	//! of being emitted as a model row. Recorded so the linear form can check that its
-	//! clause was flattened for the repair model (SINGLETON_ROW_CLAUSE_ROWS_TAG), which is what
+	//! clause was flattened for the repair model (FoldedBoundKeepsClauseRows), which is what
 	//! gives the diagnosis its rows and quotes the bound as the user wrote it.
 	struct UserBoundSpec {
 		idx_t decide_var_idx; //!< index into decide_variables

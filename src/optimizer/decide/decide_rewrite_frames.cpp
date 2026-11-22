@@ -238,9 +238,8 @@ void DecideOptimizer::RewriteFrameRanges(LogicalDecide &decide) {
 		}
 		unordered_map<const Expression *, int> signs;
 		CollectRangeSigns(context, decide, comparison.left, signs);
-		idx_t source_clause_id = DConstants::INVALID_INDEX;
-		TryParseSourceClauseTag(comparison.GetAlias(), source_clause_id);
-		lifter.Lift(comparison.left, ExtremumPushOf(comparison.type), source_clause_id, signs);
+		lifter.Lift(comparison.left, ExtremumPushOf(comparison.type), ClauseOriginOf(comparison).source_clause_id,
+		            signs);
 	});
 	if (lifted_objective) {
 		decide.SetObjective(context, std::move(decide.bound.objective));

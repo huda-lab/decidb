@@ -14,6 +14,7 @@
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/main/client_context.hpp"
 
@@ -104,8 +105,8 @@ static unique_ptr<ConjunctionExpression> ExpandBetween(const BetweenExpression &
 	                                                   between.upper->Copy());
 	lower_bound->query_location = between.query_location;
 	upper_bound->query_location = between.query_location;
-	AddDecideTag(lower_bound->alias, BETWEEN_LOWER_TAG);
-	AddDecideTag(upper_bound->alias, BETWEEN_UPPER_TAG);
+	SetBetweenHalf(*lower_bound, DecideBetweenHalf::LOWER);
+	SetBetweenHalf(*upper_bound, DecideBetweenHalf::UPPER);
 	return make_uniq<ConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(lower_bound),
 	                                        std::move(upper_bound));
 }
@@ -223,33 +224,19 @@ BindResult DecideConstraintsBinder::BindClause(DecideClause &clause) {
 	// One scope per constraint: a BETWEEN bound to the conjunction of its two halves, and
 	// each half gets the whole scope.
 	auto apply_scope = [&](unique_ptr<Expression> constraint) -> unique_ptr<Expression> {
-		if (when) {
-			unique_ptr<Expression> this_condition = std::move(condition);
-			if (!this_condition) {
-				auto parsed = condition_text->Copy();
-				auto error = bind_condition(parsed, this_condition);
-				if (error.HasError()) {
-					error.Throw();
-				}
+		unique_ptr<Expression> this_condition = std::move(condition);
+		if (when && !this_condition) {
+			auto parsed = condition_text->Copy();
+			auto error = bind_condition(parsed, this_condition);
+			if (error.HasError()) {
+				error.Throw();
 			}
-			auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-			wrapper->children.push_back(std::move(constraint));
-			wrapper->children.push_back(std::move(this_condition));
-			wrapper->alias = WHEN_FILTER_TAG;
-			constraint = std::move(wrapper);
 		}
-		if (per) {
-			auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-			wrapper->children.push_back(std::move(constraint));
-			wrapper->alias = PER_CLASS_TAG;
-			if (key != DConstants::INVALID_INDEX) {
-				AddDecideTag(wrapper->alias, MakePerKeyTag(key));
-			}
-			// The wrapper stands at its `per`, where the parser kept the key as written.
-			wrapper->SetQueryLocation(scope.location);
-			constraint = std::move(wrapper);
-		}
-		return constraint;
+		// The wrapper stands at its `per`, where the parser kept the key as written.
+		DecideRowPer written_per;
+		written_per.key = key;
+		written_per.location = scope.location;
+		return MakeScopedRow(std::move(constraint), std::move(this_condition), per ? &written_per : nullptr);
 	};
 	if (bound->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);

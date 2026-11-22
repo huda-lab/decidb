@@ -37,22 +37,21 @@ unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const
 	facts->comparison_type = comparison.type;
 	facts->rhs_expr = comparison.right->Copy();
 	facts->tightest_frame_bound = HasDecideTag(comparison.alias, FRAME_TIGHTEST_BOUND_TAG);
-	TryParseSourceClauseTag(comparison.alias, facts->origin.source_clause_id);
-	TryParseRemovalGroupTag(comparison.alias, facts->origin.removal_group_id);
+	facts->origin = ClauseOriginOf(comparison);
 	if (comparison.type == ExpressionType::COMPARE_NOTEQUAL) {
 		facts->kind = ConstraintKind::USER_MECHANISM;
 	}
-	if (HasDecideTag(comparison.alias, STRUCTURAL_CONSTRAINT_TAG)) {
+	if (IsStructuralRow(comparison)) {
 		facts->kind = ConstraintKind::STRUCTURAL;
 	}
-	TryParseDecideIndexTag(comparison.alias, DEFINES_TAG_PREFIX, facts->defined_var);
+	facts->defined_var = DefinedHelperOf(comparison);
 	if (TryParseDecideIndexTag(comparison.alias, ABS_FUNCTION_NEG_TAG_PREFIX, facts->abs_aux_idx)) {
 		facts->kind = ConstraintKind::STRUCTURAL;
 	} else if (TryParseDecideIndexTag(comparison.alias, ABS_FUNCTION_TAG_PREFIX, facts->abs_aux_idx)) {
 		facts->abs_is_pos_bound = true;
 		facts->kind = ConstraintKind::STRUCTURAL;
 	}
-	facts->was_minmax_easy = HasDecideTag(comparison.alias, MINMAX_EASY_REWRITE_TAG);
+	facts->was_minmax_easy = IsEasyMinMaxRow(comparison);
 	facts->scope = DecideClauseScope(scope);
 	TryParseGroupKeyTag(comparison.alias, facts->group_key);
 	DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes,
@@ -97,7 +96,7 @@ unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const
 			facts->scope.per = DecideClauseScope::PerRole::ONE_ROW_PER_CLASS;
 		}
 	}
-	const bool folded = HasDecideTag(comparison.alias, SINGLETON_ROW_BOUND_TAG);
+	const bool folded = IsFoldedBound(comparison);
 	DecideSingletonRow bound;
 	if (!folded && !facts->lhs_is_aggregate && DecideReadSingletonRow(context, op, comparison, bound)) {
 		facts->admitted_lower = std::move(bound.lower);
@@ -200,8 +199,8 @@ public:
 					Root(expression.Cast<BoundComparisonExpression>(), scope);
 				} else if (expression.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
 				           HasDecideTag(expression.GetAlias(), BODY_DEFINITION_TAG)) {
-					idx_t value_var = DConstants::INVALID_INDEX;
-					if (!TryParseDecideIndexTag(expression.GetAlias(), DEFINES_TAG_PREFIX, value_var)) {
+					const idx_t value_var = DefinedHelperOf(expression);
+					if (value_var == DConstants::INVALID_INDEX) {
 						throw InternalException("DECIDE tree: body-definition placeholder has no helper");
 					}
 					auto function =
@@ -290,9 +289,7 @@ public:
 	//! this tree builds the two rows beneath its F node, as it does for a definition (MakeDefinitionExpression).
 	void PrepareAbsFunctions() {
 		for (auto &function : op.abs_functions) {
-			idx_t source = DConstants::INVALID_INDEX;
-			TryParseSourceClauseTag(function.source_alias, source);
-			auto index = AbsFunctionNode(function.aux_idx, source);
+			auto index = AbsFunctionNode(function.aux_idx, function.origin.source_clause_id);
 			auto &node = *tree->nodes[index];
 			node.abs_exact = function.exact;
 			node.abs_written = function.written;
@@ -417,8 +414,7 @@ public:
 			}
 			ForEachScopedConstraintLeaf(*indicator.links[0], [&](const Expression &leaf, const DecideEnclosingScope &) {
 				if (leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-					TryParseSourceClauseTag(leaf.GetAlias(), node.origin.source_clause_id);
-					TryParseRemovalGroupTag(leaf.GetAlias(), node.origin.removal_group_id);
+					node.origin = ClauseOriginOf(leaf);
 				}
 			});
 			tree->function_nodes.push_back(index);
@@ -524,35 +520,22 @@ public:
 		auto left = BoundCastExpression::AddCastToType(context, op.bound.variables[definition.value_var]->Copy(),
 		                                               body.return_type);
 		auto row = make_uniq<BoundComparisonExpression>(definition.relation, std::move(left), body.Copy());
-		auto alias = row->GetAlias();
-		AddDecideTag(alias, STRUCTURAL_CONSTRAINT_TAG);
-		AddDecideTag(alias, MakeDefinesTag(definition.value_var));
-		AddDecideTag(alias, BODY_DEFINITION_TAG);
-		if (definition.source_clause_id != DConstants::INVALID_INDEX) {
-			AddDecideTag(alias, MakeSourceClauseTag(definition.source_clause_id));
-		}
-		row->SetAlias(std::move(alias));
-		unique_ptr<Expression> result = std::move(row);
-		if (definition.condition) {
-			auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-			wrapper->children.push_back(std::move(result));
-			wrapper->children.push_back(definition.condition->Copy());
-			wrapper->alias = WHEN_FILTER_TAG;
-			result = std::move(wrapper);
-		}
+		MarkStructuralRow(*row);
+		SetDefinedHelper(*row, definition.value_var);
+		AddDecideTag(row->alias, BODY_DEFINITION_TAG);
+		StampClauseOrigin(*row, DecideRowOrigin::OfClause(definition.source_clause_id));
+		auto condition = definition.condition ? definition.condition->Copy() : nullptr;
 		if (definition.value_var < op.bound.variable_scopes.size()) {
 			auto &scope = op.bound.variable_scopes[definition.value_var];
 			if (scope.IsGlobal() || scope.IsKeyed()) {
-				auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-				wrapper->children.push_back(std::move(result));
-				wrapper->alias = PER_CLASS_TAG;
+				DecideRowPer per;
 				if (scope.IsKeyed()) {
-					AddDecideTag(wrapper->alias, MakePerKeyTag(op.bound.keyed_scopes[scope.keyed_scope_idx].key));
+					per.key = op.bound.keyed_scopes[scope.keyed_scope_idx].key;
 				}
-				result = std::move(wrapper);
+				return MakeScopedRow(std::move(row), std::move(condition), &per);
 			}
 		}
-		return result;
+		return MakeScopedRow(std::move(row), std::move(condition));
 	}
 
 	//! The ABS F node owns the helper's scope and both lower-envelope rows. Its operand stays as an expression until
@@ -855,9 +838,8 @@ private:
 		const bool is_l0_link =
 		    TryParseDecideIndexTag(comparison.GetAlias(), L0_INDICATOR_FUNCTION_TAG_PREFIX, l0_value);
 		const bool is_definition = HasDecideTag(comparison.GetAlias(), BODY_DEFINITION_TAG);
-		idx_t definition_value = DConstants::INVALID_INDEX;
-		if (is_definition && (!TryParseDecideIndexTag(comparison.GetAlias(), DEFINES_TAG_PREFIX, definition_value) ||
-		                      definition_value >= op.bound.variables.size())) {
+		const idx_t definition_value = is_definition ? DefinedHelperOf(comparison) : DConstants::INVALID_INDEX;
+		if (is_definition && definition_value >= op.bound.variables.size()) {
 			throw InternalException("DECIDE tree: nonlinear body definition has no valid helper variable");
 		}
 		idx_t l0_function = DConstants::INVALID_INDEX;
@@ -872,11 +854,10 @@ private:
 		}
 		node.facts = ReadDecideClauseFacts(context, op, *row, scope);
 		node.comparison_type = row->type;
-		node.folded = HasDecideTag(comparison.GetAlias(), SINGLETON_ROW_BOUND_TAG);
-		TryParseSourceClauseTag(comparison.GetAlias(), node.origin.source_clause_id);
+		node.folded = IsFoldedBound(comparison);
+		node.origin = ClauseOriginOf(comparison);
 		node.text = RootText(node.origin.source_clause_id);
-		TryParseRemovalGroupTag(comparison.GetAlias(), node.origin.removal_group_id);
-		TryParseDecideIndexTag(comparison.GetAlias(), DEFINES_TAG_PREFIX, node.defined_var);
+		node.defined_var = DefinedHelperOf(comparison);
 		if (is_l0_link) {
 			auto function =
 			    std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(), [&](idx_t candidate) {
@@ -920,7 +901,7 @@ private:
 		if (scope.per_wrapper) {
 			node.key = scope.PerKey();
 			node.per = node.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
-			TryParseSignatureTag(scope.per_wrapper->GetAlias(), signature);
+			signature = PerWrapperSignature(*scope.per_wrapper);
 		}
 		sources.root_of[&comparison] = index;
 		if (!is_abs_envelope && !is_l0_link && !is_definition) {

@@ -181,7 +181,7 @@ static unique_ptr<Expression> ReadAsRow(const ExpressionBuilder &calc, const Log
 	}
 	splitter.ReplaceTaggedFunctions(source_row);
 	auto row = calc.Out(calc.Of(*source_row));
-	if (HasDecideTag(comparison.GetAlias(), MINMAX_EASY_REWRITE_TAG)) {
+	if (IsEasyMinMaxRow(comparison)) {
 		// The reducer's `by` key is on the written reducer: the copy above keeps no alias.
 		idx_t key = DConstants::INVALID_INDEX;
 		std::function<void(const Expression &)> find = [&](const Expression &node) {
@@ -438,9 +438,7 @@ void DecideOptimizer::FoldSingletonRowsInClause(Expression &expr, const DecideEn
 		}
 	}
 	auto &comp = expr.Cast<BoundComparisonExpression>();
-	DecideRowOrigin origin;
-	TryParseSourceClauseTag(comp.GetAlias(), origin.source_clause_id);
-	TryParseRemovalGroupTag(comp.GetAlias(), origin.removal_group_id);
+	const auto origin = ClauseOriginOf(comp);
 
 	DecideSingletonRow bound;
 	if (!DecideReadSingletonRow(optimizer.context, decide, comp, bound)) {
@@ -460,7 +458,7 @@ void DecideOptimizer::FoldSingletonRowsInClause(Expression &expr, const DecideEn
 	// unconditionally: a BOOLEAN restatement is a harmless no-op against its
 	// intrinsic box. A `-inf` floor writes the solver's "no bound", which frees `x`
 	// below as `x >= -1e30` does (D41).
-	AddDecideTag(comp.alias, SINGLETON_ROW_BOUND_TAG);
+	MarkFoldedBound(comp);
 	auto &box = decide.singleton_row_boxes[bound.var_idx];
 	if (bound.sense != '>') {
 		DecideFoldSingletonRow(box, '<', bound.upper_value);
@@ -479,7 +477,7 @@ void DecideOptimizer::FoldSingletonRowsInClause(Expression &expr, const DecideEn
 	bool restates_domain = is_boolean && bound.lower_value <= 0.0 && bound.upper_value >= 1.0;
 	if (!restates_domain) {
 		decide.user_singleton_row_bounds.push_back({bound.var_idx, bound.sense, bound.written_k, origin});
-		AddDecideTag(comp.alias, SINGLETON_ROW_CLAUSE_ROWS_TAG);
+		MarkFoldedBoundKeepsClauseRows(comp);
 	}
 	return;
 }

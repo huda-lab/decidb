@@ -416,16 +416,16 @@ static int ValueLinkPush(const LogicalDecide::ReducerValueLink &link) {
 
 //! Every leaf of a clause tree, with the scope and the source clause it stands in: the walk every pass over clauses
 //! makes, which descends into a wrapper's constraint and never into its condition (decide_constraint_walk.hpp).
-static void EnumerateClauseLeaves(unique_ptr<Expression> &slot, DecideEnclosingScope scope, const string &inherited,
-                                  DecideOwnedBody::Owner owner, idx_t index,
+static void EnumerateClauseLeaves(unique_ptr<Expression> &slot, DecideEnclosingScope scope,
+                                  const DecideRowOrigin &inherited, DecideOwnedBody::Owner owner, idx_t index,
                                   const std::function<void(DecideOwnedBody &)> &callback) {
-	const auto source_alias = DescendSourceAlias(*slot, inherited);
+	const auto origin = DescendClauseOrigin(*slot, inherited);
 	scope = EnterDecideScope(*slot, scope);
 	if (slot->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conjunction = slot->Cast<BoundConjunctionExpression>();
 		for (idx_t i = 0; i < conjunction.children.size(); i++) {
 			if (IsConstraintChild(conjunction, i)) {
-				EnumerateClauseLeaves(conjunction.children[i], scope, source_alias, owner, index, callback);
+				EnumerateClauseLeaves(conjunction.children[i], scope, origin, owner, index, callback);
 			}
 		}
 		return;
@@ -433,7 +433,7 @@ static void EnumerateClauseLeaves(unique_ptr<Expression> &slot, DecideEnclosingS
 	DecideOwnedBody body(owner, index, slot);
 	body.push = ComparisonPush(*slot);
 	body.rows = scope.Condition();
-	body.source_alias = source_alias;
+	body.origin = origin;
 	body.scope = scope;
 	callback(body);
 }
@@ -445,25 +445,25 @@ void LogicalDecide::EnumerateBodies(const std::function<void(DecideOwnedBody &)>
 		// pushes a positive term down.
 		auto *slot = &bound.objective;
 		DecideEnclosingScope scope;
-		string source_alias = OBJECTIVE_ROW_TAG;
+		auto origin = DecideRowOrigin::OfObjective();
 		while ((*slot)->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conjunction = (*slot)->Cast<BoundConjunctionExpression>();
 			if (!IsConstraintWrapper(conjunction)) {
 				break;
 			}
-			source_alias = DescendSourceAlias(conjunction, source_alias);
+			origin = DescendClauseOrigin(conjunction, origin);
 			scope = EnterDecideScope(conjunction, scope);
 			slot = &conjunction.children[0];
 		}
 		DecideOwnedBody body(Owner::OBJECTIVE, DConstants::INVALID_INDEX, *slot);
 		body.push = 1;
 		body.rows = scope.Condition();
-		body.source_alias = DescendSourceAlias(**slot, source_alias);
+		body.origin = DescendClauseOrigin(**slot, origin);
 		body.scope = scope;
 		callback(body);
 	}
 	if (bound.constraints) {
-		EnumerateClauseLeaves(bound.constraints, DecideEnclosingScope(), string(), Owner::CLAUSE,
+		EnumerateClauseLeaves(bound.constraints, DecideEnclosingScope(), DecideRowOrigin(), Owner::CLAUSE,
 		                      DConstants::INVALID_INDEX, callback);
 	}
 	// A definition stands apart from the clause list; `t >= q` holds the body down, `t <= q` up, `t = q` neither.
@@ -474,8 +474,6 @@ void LogicalDecide::EnumerateBodies(const std::function<void(DecideOwnedBody &)>
 		            : definition.relation == ExpressionType::COMPARE_LESSTHANOREQUALTO  ? -1
 		                                                                                : 0;
 		body.rows = definition.condition.get();
-		body.source_alias = MakeDefinesTag(definition.value_var);
-		AddDecideTag(body.source_alias, BODY_DEFINITION_TAG);
 		callback(body);
 	}
 	// A reducer value helper's body belongs to no clause: it is read on the rows its path and its own `when` keep.
@@ -490,7 +488,7 @@ void LogicalDecide::EnumerateBodies(const std::function<void(DecideOwnedBody &)>
 	// An L0 indicator's three rows stand beside the clauses, where the tree's indicator F node reads them.
 	for (idx_t i = 0; i < l0_indicator_functions.size(); i++) {
 		for (auto &link : l0_indicator_functions[i].links) {
-			EnumerateClauseLeaves(link, DecideEnclosingScope(), string(), Owner::L0_LINK, i, callback);
+			EnumerateClauseLeaves(link, DecideEnclosingScope(), DecideRowOrigin(), Owner::L0_LINK, i, callback);
 		}
 	}
 }

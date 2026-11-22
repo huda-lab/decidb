@@ -197,9 +197,9 @@ struct DecideClauseRef {
 	}
 };
 
-//! Where a row of the model came from: the three ids every kind of row carries. A Value Object: a row holds it by
-//! composition (`row.origin.source_clause_id`) and copies it whole, as LLVM copies a `DebugLoc`, so a site that copies
-//! a row's origin cannot drop one of the ids.
+//! Where a row of the model came from: the three ids every kind of row carries, and the objective's mark. A Value
+//! Object: a row holds it by composition (`row.origin.source_clause_id`) and copies it whole, as LLVM copies a
+//! `DebugLoc`, so a site that copies a row's origin cannot drop one of the ids.
 struct DecideRowOrigin {
 	//! The user's clause, an index into `constraint_sources`; stable display provenance.
 	idx_t source_clause_id = DConstants::INVALID_INDEX;
@@ -208,6 +208,22 @@ struct DecideRowOrigin {
 	//! Elastic grouping identity, kept apart because one source comparison can emit several independently repairable
 	//! rows or directions.
 	idx_t repair_group_id = DConstants::INVALID_INDEX;
+	//! A row a rewrite made for the objective (an ABS envelope, a product's corner rows, an L0 link): no clause owns
+	//! it, so it has no source clause, and EXPLAIN prints it under the objective.
+	bool objective = false;
+
+	//! The origin of a row made of the clause `source_clause_id` alone.
+	static DecideRowOrigin OfClause(idx_t source_clause_id) {
+		DecideRowOrigin origin;
+		origin.source_clause_id = source_clause_id;
+		return origin;
+	}
+	//! The origin of a row a rewrite makes for the objective.
+	static DecideRowOrigin OfObjective() {
+		DecideRowOrigin origin;
+		origin.objective = true;
+		return origin;
+	}
 };
 
 //! The clause `source_clause_id` as a message refers to it: its span, or for an id no clause owns (the objective's, a
