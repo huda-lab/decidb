@@ -512,6 +512,11 @@ it in under a second (`test_quadratic.py::test_highs_qp_it_cannot_finish_is_an_o
 Raising the limit does not scale: at 100,000 such variables the matrix needs about 20 GB.
 Gurobi solves the same model.
 
+A model with no column, where every decision has no instance, is solved: HiGHS returns `kModelEmpty` before it reads a
+bound, and `HighsSession` reads it as `OPTIMAL` with an empty solution, the answer Gurobi gives the same model. A row
+with no term that fails never reaches the session, because `SolverModel::ProvesInfeasible` answers it first
+(`test_query_diagnostics_solver_results.py::test_highs_answers_a_model_with_no_column`).
+
 An integer column is loaded with whole bounds: `ceil(lower)` and `floor(upper)`, each read
 within HiGHS's default `mip_feasibility_tolerance` (1e-6) of a whole number. Handed a
 fractional bound on an integer column whose other side is open, HiGHS answers below it

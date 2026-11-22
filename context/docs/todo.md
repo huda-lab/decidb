@@ -10,11 +10,10 @@ Each phase is one architectural change. Phases run in order; groups
 inside a phase run in order; measurement runs fit between phases. `(decision)` marks a task whose **Decision needed**
 the owner rules first.
 
-# Phase 3 — Each shape and formulation has one owner
-
-## 3.4 Gaps filed in Phase 3 (one lane)
-
 # Phase 4 — Model building has one contract
+
+## 4.0 Filed at the Phase 3 gate (one lane)
+- [ ] FORM-11 A helper's rows name their clause (decision) — pipeline/06_model_formulation/todo.md § FORM-11
 
 ## 4.1 Operator and contract (parallel: EXEC-20, EXEC-21, EXEC-22 | EXEC-23 | PLAN-7)
 - [ ] EXEC-20 SolverInput is the whole contract — pipeline/08_execution/todo.md § EXEC-20
