@@ -665,17 +665,26 @@ values:
 
 Three things are not refused. The bound `K` is the other side: a fractional `K` is no error, since `<` rounds it and
 `<>` over it is a tautology (no whole number equals 2.5), so the clause is dropped. A decision-free addend moves the
-bound and not the lattice (`x + 1000003.50 < K`), except where the side is not linear in it (under a power, in a
-product of decisions, in a norm of order 1, 2 or `'inf'`, inside a `MIN` or `MAX`), where it counts toward the value
-(`POWER(x + 0.25, 2) < 11` is refused). A multiplier is never an addend, so every factor of a product is checked
-(`0.5 * x`). `POWER(e, n)` with a whole `n` stays on the lattice when `e` does. A frame is a value of its row: whole
-when the type its payload and `else` share is, and an `AVG` range never.
+bound and not the lattice (`x + 1000003.50 < K`), except where the side is not linear in it (under a power, in a product
+of decisions, in a norm of order 1, 2 or `'inf'`, inside a `MIN` or `MAX`), where it counts toward the value (`POWER(x +
+0.25, 2) < 11` is refused). A multiplier is never an addend, so every factor of a product is checked, and so is a
+constant inside a data factor (`0.5 * x`, `x * (w + 0.5)`). `POWER(e, n)` with a whole `n` stays on the lattice when `e`
+does. A frame is a value of its row: whole when the type its payload and `else` share is, and an `AVG` range never.
 
 The message names the first fractional leaf in the order the side reads (`'<' compares 'v', which can take fractional
 values`), a norm as written, and points at the comparison. The same test, with every addend counted, decides whether a
 helper decision standing for a reducer is `INTEGER` (`DecideValueIsWholeNumbered`, stage 05), and stage 05 raises this
 message for a helper that can be fractional (`RefuseFractionalStep`), since a data addend that stage 04 moved to the
 bound lies inside the helper's value: `sum(x + 0.5) > 4` solves and `sum(x + 0.5) + x > 4` is refused.
+
+**The data addend stays in the reducer's body.** Splitting `sum(e)` into `sum(e - e0) + sum(e0)`, where `e0` is the
+body's data part, before the two routes divide would let the helper step too, but the split is not total. A body that
+reads a frame skips the rows where its frame has no row, which `sum(e0)` would count, and a frame stands in one place
+of a clause only; an L0 norm counts its body's nonzeros rather than summing it. Each needs an exception or new frame
+machinery, and a body the split leaves whole answers wrongly once the helper's refusal is gone. The shape it would admit
+(a strict bound on a reducer with a data addend, beside another term) is rare and refused with a clear message.
+
+**Ruling (owner, 2026-11-22).** The split is not made: the value route keeps its refusal (`RefuseFractionalStep`).
 
 ---
 
