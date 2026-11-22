@@ -147,6 +147,8 @@ string ExpressionTypeToString(ExpressionType type) {
 		return "ARROW";
 	case ExpressionType::BOUND_EXPANDED:
 		return "BOUND_EXPANDED";
+	case ExpressionType::BOUND_DECIDE_NULL_TEST:
+		return "BOUND_DECIDE_NULL_TEST";
 	case ExpressionType::INVALID:
 		break;
 	}
@@ -236,6 +238,8 @@ string ExpressionClassToString(ExpressionClass type) {
 		return "BOUND_EXPRESSION";
 	case ExpressionClass::BOUND_EXPANDED:
 		return "BOUND_EXPANDED";
+	case ExpressionClass::BOUND_DECIDE_NULL_TEST:
+		return "BOUND_DECIDE_NULL_TEST";
 	default:
 		return "ExpressionClass::!!UNIMPLEMENTED_CASE!!";
 	}

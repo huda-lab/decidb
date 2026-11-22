@@ -11,6 +11,7 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_decide_null_test_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 
 namespace duckdb {
@@ -52,10 +53,10 @@ bool DecideExpressionsEqual(const Expression &a, const Expression &b) {
 	return a_frames == b_frames;
 }
 
-//! The conjuncts of a reducer's filter that its `when` wrote. Its NULL tests (IsDecideNullTest) drop its own
-//! members only: a reducer inside reads its group whole.
+//! The conjuncts of a reducer's filter that its `when` wrote. Its NULL tests (BoundDecideNullTestExpression) drop its
+//! own members only: a reducer inside reads its group whole.
 static void AddWrittenConditions(const Expression &filter, vector<const Expression *> &out) {
-	if (IsDecideNullTest(filter)) {
+	if (filter.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_NULL_TEST) {
 		return;
 	}
 	if (filter.GetExpressionType() == ExpressionType::CONJUNCTION_AND) {

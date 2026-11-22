@@ -13,6 +13,7 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_decide_null_test_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
@@ -239,7 +240,7 @@ static string NormOrder(const BoundAggregateExpression &agg) {
 }
 
 static bool HoldsSkipNullTest(const Expression &expr) {
-	if (IsDecideNullTest(expr)) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_NULL_TEST) {
 		return true;
 	}
 	if (expr.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {

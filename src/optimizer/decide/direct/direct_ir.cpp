@@ -14,6 +14,7 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_decide_null_test_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
@@ -226,8 +227,8 @@ private:
 	//! else is left.
 	static unique_ptr<Expression> TakeSkipNullTests(unique_ptr<Expression> filter,
 	                                                vector<unique_ptr<Expression>> &tests) {
-		if (IsDecideNullTest(*filter)) {
-			tests.push_back(std::move(filter));
+		if (filter->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_NULL_TEST) {
+			tests.push_back(std::move(filter->Cast<BoundDecideNullTestExpression>().test));
 			return nullptr;
 		}
 		if (filter->GetExpressionType() != ExpressionType::CONJUNCTION_AND) {

@@ -124,6 +124,9 @@ void ExpressionIterator::EnumerateChildren(Expression &expr,
 		}
 		break;
 	}
+	case ExpressionClass::BOUND_DECIDE_NULL_TEST:
+		callback(expr.Cast<BoundDecideNullTestExpression>().test);
+		break;
 	case ExpressionClass::BOUND_UNNEST: {
 		auto &unnest_expr = expr.Cast<BoundUnnestExpression>();
 		callback(unnest_expr.child);

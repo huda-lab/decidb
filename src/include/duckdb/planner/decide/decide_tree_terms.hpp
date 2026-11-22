@@ -145,7 +145,7 @@ struct DecideClauseScope {
 };
 
 //! The rows two conditions both keep, a copy of each as a conjunction so every conjunct stays what it is (a reducer's
-//! NULL test, IsDecideNullTest); a null condition keeps every row, so the other stands alone, and null for both.
+//! NULL test); a null condition keeps every row, so the other stands alone, and null for both.
 inline unique_ptr<Expression> DecideRowsKeptByBoth(const Expression *first, const Expression *second) {
 	if (!first || !second) {
 		const Expression *only = first ? first : second;

@@ -150,7 +150,9 @@ enum class ExpressionType : uint8_t {
 	LAMBDA = 231,
 	POSITIONAL_REFERENCE = 232,
 	BOUND_LAMBDA_REF = 233,
-	BOUND_EXPANDED = 234
+	BOUND_EXPANDED = 234,
+	// DeciDB: a NULL test a reducer's rows gain beside its written `when`
+	BOUND_DECIDE_NULL_TEST = 235
 };
 
 //===--------------------------------------------------------------------===//
@@ -205,6 +207,8 @@ enum class ExpressionClass : uint8_t {
 	BOUND_UNNEST = 40,
 	BOUND_LAMBDA = 41,
 	BOUND_LAMBDA_REF = 42,
+	// DeciDB: a NULL test a reducer's rows gain beside its written `when` (BoundDecideNullTestExpression)
+	BOUND_DECIDE_NULL_TEST = 43,
 	//===--------------------------------------------------------------------===//
 	// Miscellaneous
 	//===--------------------------------------------------------------------===//

@@ -93,10 +93,8 @@ bool DecideFactsEqual(const Expression &a, const Expression &b);
 //===--------------------------------------------------------------------===//
 // A reducer's NULL tests
 //===--------------------------------------------------------------------===//
-//! `value IS NOT NULL`, as a test a reducer's rows gain beside its written `when` (DecideCanonicalizer::SkipNullData):
-//! the query never wrote it, so no render prints it, and it drops the reducer's own members only.
+//! `value IS NOT NULL`, as a test a reducer's rows gain beside its written `when` (BoundDecideNullTestExpression).
 unique_ptr<Expression> MakeDecideNullTest(unique_ptr<Expression> value);
-bool IsDecideNullTest(const Expression &condition);
 
 //===--------------------------------------------------------------------===//
 // The name a call was written under

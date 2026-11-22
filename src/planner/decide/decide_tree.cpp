@@ -13,6 +13,7 @@
 #include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_decide_null_test_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
@@ -698,14 +699,12 @@ private:
 		if (!condition) {
 			return;
 		}
-		if (IsDecideNullTest(*condition)) {
+		if (condition->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_NULL_TEST) {
+			auto &test = condition->Cast<BoundDecideNullTestExpression>();
 			// A test the statistics proved true (StatisticsPropagator::FoldSkipNullTests) keeps every entry: it is no
 			// member test, so no program is compiled for it and none runs per entry.
-			if (condition->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-				auto &verdict = condition->Cast<BoundConstantExpression>().value;
-				if (verdict.type().id() == LogicalTypeId::BOOLEAN && !verdict.IsNull() && verdict.GetValue<bool>()) {
-					return;
-				}
+			if (test.KeepsEveryRow()) {
+				return;
 			}
 			// An O container gathers positions before any reader's generated
 			// presence test runs. Testing that same frame here would make it
@@ -713,7 +712,7 @@ private:
 			if (node.kind == DecideNodeKind::FRAME) {
 				return;
 			}
-			node.member_tests.push_back(Lower(owner, *condition, true));
+			node.member_tests.push_back(Lower(owner, *test.test, true));
 			return;
 		}
 		if (condition->GetExpressionType() == ExpressionType::CONJUNCTION_AND) {

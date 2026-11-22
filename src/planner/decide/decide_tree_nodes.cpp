@@ -10,6 +10,7 @@
 
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/planner/expression/bound_decide_null_test_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 
 namespace duckdb {
@@ -203,12 +204,7 @@ bool DecideFactsEqual(const Expression &a, const Expression &b) {
 unique_ptr<Expression> MakeDecideNullTest(unique_ptr<Expression> value) {
 	auto test = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NOT_NULL, LogicalType::BOOLEAN);
 	test->children.push_back(std::move(value));
-	test->SetAlias(SKIP_NULL_TAG);
-	return std::move(test);
-}
-
-bool IsDecideNullTest(const Expression &condition) {
-	return HasDecideTag(condition.GetAlias(), SKIP_NULL_TAG);
+	return make_uniq<BoundDecideNullTestExpression>(std::move(test));
 }
 
 //===--------------------------------------------------------------------===//

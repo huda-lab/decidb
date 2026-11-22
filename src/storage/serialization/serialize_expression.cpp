@@ -48,6 +48,9 @@ unique_ptr<Expression> Expression::Deserialize(Deserializer &deserializer) {
 	case ExpressionClass::BOUND_CONSTANT:
 		result = BoundConstantExpression::Deserialize(deserializer);
 		break;
+	case ExpressionClass::BOUND_DECIDE_NULL_TEST:
+		result = BoundDecideNullTestExpression::Deserialize(deserializer);
+		break;
 	case ExpressionClass::BOUND_DEFAULT:
 		result = BoundDefaultExpression::Deserialize(deserializer);
 		break;
@@ -180,6 +183,17 @@ void BoundConstantExpression::Serialize(Serializer &serializer) const {
 unique_ptr<Expression> BoundConstantExpression::Deserialize(Deserializer &deserializer) {
 	auto value = deserializer.ReadProperty<Value>(200, "value");
 	auto result = duckdb::unique_ptr<BoundConstantExpression>(new BoundConstantExpression(value));
+	return std::move(result);
+}
+
+void BoundDecideNullTestExpression::Serialize(Serializer &serializer) const {
+	Expression::Serialize(serializer);
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(200, "test", test);
+}
+
+unique_ptr<Expression> BoundDecideNullTestExpression::Deserialize(Deserializer &deserializer) {
+	auto test = deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(200, "test");
+	auto result = duckdb::unique_ptr<BoundDecideNullTestExpression>(new BoundDecideNullTestExpression(std::move(test)));
 	return std::move(result);
 }
 

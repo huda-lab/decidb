@@ -162,6 +162,8 @@ unique_ptr<ExpressionState> ExpressionExecutor::InitializeState(const Expression
 		return InitializeState(expr.Cast<BoundOperatorExpression>(), state);
 	case ExpressionClass::BOUND_PARAMETER:
 		return InitializeState(expr.Cast<BoundParameterExpression>(), state);
+	case ExpressionClass::BOUND_DECIDE_NULL_TEST:
+		return InitializeState(*expr.Cast<BoundDecideNullTestExpression>().test, state);
 	default:
 		throw InternalException("Attempting to initialize state of expression of unknown type!");
 	}
@@ -221,6 +223,9 @@ void ExpressionExecutor::Execute(const Expression &expr, ExpressionState *state,
 		break;
 	case ExpressionClass::BOUND_PARAMETER:
 		Execute(expr.Cast<BoundParameterExpression>(), state, sel, count, result);
+		break;
+	case ExpressionClass::BOUND_DECIDE_NULL_TEST:
+		Execute(*expr.Cast<BoundDecideNullTestExpression>().test, state, sel, count, result);
 		break;
 	default:
 		throw InternalException("Attempting to execute expression of unknown type!");
