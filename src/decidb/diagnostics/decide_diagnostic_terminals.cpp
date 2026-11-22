@@ -362,14 +362,8 @@ DecideDiagnostic InfeasibleTerminal(ClientContext &context, const SolverResult &
                                     const ElasticFormulation &elastic, const vector<string> &var_labels,
                                     const vector<bool> &var_is_aux, SolverBackend backend,
                                     const SolveModelOptions &diagnostic_solve_options, bool negate_objective) {
-	// A residual INF_OR_UNBD is routed here only with an empty ray; normalize it
-	// so the message (and any diagnosis) reads as infeasible.
-	SolverResult terminal_result = solve_result;
-	if (terminal_result.status == SolverStatus::INF_OR_UNBD) {
-		terminal_result.status = SolverStatus::INFEASIBLE;
-	}
 	auto diag_params = GetDecideDiagnosticParams(context);
-	bool diagnostic_solve_timed_out = terminal_result.diagnostic_timed_out;
+	bool diagnostic_solve_timed_out = solve_result.diagnostic_timed_out;
 	bool diagnostic_solver_failed = false;
 	auto solve_diagnostic_model = [backend, diagnostic_solve_options, &diagnostic_solve_timed_out,
 	                               &diagnostic_solver_failed](const SolverModel &m) {
